@@ -2838,6 +2838,80 @@ pub(crate) fn eval_observed_recurrence(
     }
 }
 
+/// Evaluate the build-time observed `name := expr` on a standalone tape
+/// (`tape::eval_standalone_rule`) rather than through the reference
+/// evaluator: what a strict compiler does with an observed the whole-array
+/// overlay declines, in place of walking it per cell.
+///
+/// `expr` has its ranges resolved, as for
+/// [`eval_expression_with_extents_and_consts_shared`]. Every name in `inputs`
+/// that `expr` mentions is seeded as a known value, and `params` bind
+/// `param_names`. A causal self-reference (esm-spec §4.3.1.1) lowers as the
+/// model's own recurrence rule does, to one ordered sweep; one the lowering
+/// does not recognize is left to the caller's own diagnostic. `None` when
+/// `recurrence_only` and the observed is not such a recurrence. A scalar value
+/// comes back as a 0-d array.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn eval_observed_taped(
+    name: &str,
+    expr: &Expr,
+    inputs: &ArrMap,
+    params: &[f64],
+    param_names: &[String],
+    const_arrays: &ConstArrayScope,
+    recurrence_only: bool,
+) -> Option<Result<ArrayD<f64>, super::tape::StandaloneError>> {
+    use super::tape::StandaloneError;
+    let recurrence = expr_reads_self(expr, name);
+    if recurrence_only && !recurrence {
+        return None;
+    }
+    let rule = if recurrence {
+        let lhs = Expr::Variable(name.to_string());
+        match super::compile::lower_recurrence(name, &lhs, expr) {
+            Ok(Some(r)) => AlgebraicRule::Recurrence {
+                var: name.to_string(),
+                output_idx_names: r.idx_names,
+                output_ranges: r.ranges,
+                body: Rc::new(r.body),
+                axis: r.axis,
+                max_lag: r.max_lag,
+                lag_proven: r.lag_proven,
+            },
+            // Not a recurrence the lowering recognizes: the caller's own path
+            // reports it (`eval_observed_recurrence`'s diagnostics).
+            Ok(None) | Err(_) if recurrence_only => return None,
+            Ok(None) | Err(_) => {
+                return Some(Err(StandaloneError::Declined(
+                    "recurrence: a self-read the recurrence lowering does not recognize".into(),
+                )));
+            }
+        }
+    } else {
+        AlgebraicRule::Scalar {
+            var: name.to_string(),
+            body: Rc::new(expr.clone()),
+            declared_shape: None,
+        }
+    };
+    let mut mentioned = HashSet::new();
+    super::tape::collect_variable_names(expr, &mut mentioned);
+    let mut seeded: Vec<(&str, &ArrayD<f64>)> = inputs
+        .iter()
+        .filter(|(k, _)| k.as_str() != name && mentioned.contains(k.as_str()))
+        .map(|(k, a)| (k.as_str(), a))
+        .collect();
+    seeded.sort_by(|a, b| a.0.cmp(b.0));
+    Some(super::tape::eval_standalone_rule(
+        &rule,
+        &seeded,
+        param_names,
+        params,
+        const_arrays,
+        true,
+    ))
+}
+
 /// Does `expr` read `name` through `index` — i.e. is it a self-read of the
 /// variable this expression defines? Walks `args` and every expression sidecar,
 /// so a read inside a `faq` body, a `filter` or a `makearray` region is
@@ -5062,6 +5136,16 @@ pub(super) fn eval_faq(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
     // contract is a single scalar evaluation, not a walk.
     let is_walk = !shape.is_empty() || !contract_names.is_empty();
     if is_walk {
+        if !gates.is_empty() {
+            super::vectorized::note_overlay_decline(
+                "faq: a join gate (the overlay takes no gated `faq`; the gate drives a \
+                 per-cell enumeration)",
+            );
+        } else if ctx.recur.is_some() {
+            super::vectorized::note_overlay_decline(
+                "faq: inside a recurrence sweep (CONFORMANCE_SPEC §5.19.2)",
+            );
+        }
         note_per_cell_walk();
         // A strict caller has already been told to refuse (see
         // [`StopAtFirstCell`]): this walk's value is never read.

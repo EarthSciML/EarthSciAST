@@ -2006,6 +2006,11 @@ pub(crate) enum RingSel {
     /// `axis` (a partial `index(table, i)` whose subscript is `i + k`). Every
     /// position the box reaches is inside the table, checked at lowering.
     Axis { axis: u8, off: i64 },
+    /// Position `RingRef::lists[list][p]` for the element at position `p`
+    /// along output axis `axis`: a ring subscript that is build-time data
+    /// over a tuple list (a loop symbol of a join-gated `faq`). Every
+    /// position is inside the table, checked at lowering.
+    List { axis: u8, list: u32 },
 }
 
 /// One ring operand of an [`Instr::PolyArea`]: the table's box and how each
@@ -2016,6 +2021,8 @@ pub(crate) struct RingRef {
     /// The expected table box (validation).
     pub src_shape: DimU,
     pub sel: SmallVec<[RingSel; 3]>,
+    /// The position lists [`RingSel::List`] selectors index.
+    pub lists: Vec<Vec<u32>>,
 }
 
 impl RingRef {
@@ -2023,7 +2030,7 @@ impl RingRef {
     pub(crate) fn axes(&self) -> SmallVec<[u8; 3]> {
         let mut v: SmallVec<[u8; 3]> = SmallVec::new();
         for s in &self.sel {
-            if let RingSel::Axis { axis, .. } = s
+            if let RingSel::Axis { axis, .. } | RingSel::List { axis, .. } = s
                 && !v.contains(axis)
             {
                 v.push(*axis);

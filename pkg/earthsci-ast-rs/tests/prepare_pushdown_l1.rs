@@ -638,3 +638,217 @@ fn prepare_pushdown_l1_single_member_support_set() {
         &oracle_deaths(RR_L),
     );
 }
+
+// ---- the same document under the strict `native` ----------------------------
+
+/// Build the committed L1 document (or `doc`, a variant of it) through the
+/// pipeline under `compiler`, with the first test's mock data. Returns the
+/// build and each gated provider's call log.
+#[allow(clippy::type_complexity)]
+fn l1_build(
+    doc: &Value,
+    compiler: earthsci_ast::Compiler,
+) -> (
+    Result<earthsci_ast::EsmProblem, earthsci_ast::SimulateError>,
+    Vec<Rc<RefCell<Vec<Call>>>>,
+) {
+    const GRID: usize = 9;
+    const N_RCV: usize = 4;
+    const N_LAYER: usize = 3;
+    let (mut w, mut sv, mut ev, mut nv) = (
+        vec![0.0; GRID],
+        vec![0.0; GRID],
+        vec![0.0; GRID],
+        vec![0.0; GRID],
+    );
+    for row in 1..=3usize {
+        for col in 1..=3usize {
+            let k = (row - 1) * 3 + col - 1;
+            w[k] = (col - 1) as f64 * 2.0;
+            ev[k] = col as f64 * 2.0;
+            sv[k] = (row - 1) as f64 * 2.0;
+            nv[k] = row as f64 * 2.0;
+        }
+    }
+    let c = lcc_consts(33.0, 45.0, 40.0, -97.0);
+    let (lon, lat): (Vec<f64>, Vec<f64>) =
+        [(1.0, 1.0), (3.0, 1.0), (1.0, 3.0), (5.0, 5.0), (1.5, 1.5)]
+            .iter()
+            .map(|&(x, y)| lcc_inv(x, y, &c))
+            .unzip();
+    let mut providers: Vec<(String, Box<dyn PrepareProvider>)> = vec![
+        (
+            "ISRM.TotalPop".into(),
+            Box::new(MockConst(vec![100.0, 200.0, 300.0, 400.0])),
+        ),
+        (
+            "ISRM.MortalityRate".into(),
+            Box::new(MockConst(vec![500.0, 600.0, 700.0, 800.0])),
+        ),
+        ("ISRM.emis_lon".into(), Box::new(MockConst(lon))),
+        ("ISRM.emis_lat".into(), Box::new(MockConst(lat))),
+        (
+            "ISRM.emis_annual".into(),
+            Box::new(MockConst(vec![10.0, 20.0, 30.0, 40.0, 50.0])),
+        ),
+        (
+            "ISRM.is_VOC".into(),
+            Box::new(MockConst(vec![1.0, 0.0, 1.0, 0.0, 0.0])),
+        ),
+        (
+            "ISRM.is_NOx".into(),
+            Box::new(MockConst(vec![0.0, 1.0, 0.0, 0.0, 0.0])),
+        ),
+        (
+            "ISRM.is_NH3".into(),
+            Box::new(MockConst(vec![0.0, 0.0, 0.0, 0.0, 1.0])),
+        ),
+        ("ISRM.is_SOx".into(), Box::new(MockConst(vec![0.0; 5]))),
+        (
+            "ISRM.is_PM25".into(),
+            Box::new(MockConst(vec![0.0, 0.0, 0.0, 1.0, 0.0])),
+        ),
+    ];
+    let mut logs = Vec::new();
+    for (i, v) in ["SOA", "pNO3", "pNH4", "pSO4", "PrimaryPM25"]
+        .iter()
+        .enumerate()
+    {
+        let full = ArrayD::from_shape_fn(IxDyn(&[N_LAYER, GRID, N_RCV]), |ix| {
+            ix[0] as f64 * 1.0e6
+                + (i + 1) as f64 * 1000.0
+                + (ix[1] + 1) as f64 * 10.0
+                + (ix[2] + 1) as f64
+        });
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        logs.push(calls.clone());
+        providers.push((format!("ISRM.SR_{v}"), Box::new(MockGated { full, calls })));
+    }
+    let ca: HashMap<String, ArrayD<f64>> = [
+        ("src_W", &w),
+        ("src_S", &sv),
+        ("src_E", &ev),
+        ("src_N", &nv),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), arr1(v)))
+    .collect();
+    let built = esm_problem(
+        doc,
+        (0.0, 0.0),
+        ProblemOptions {
+            compiler: Some(compiler),
+            model_name: Some("ISRM".to_string()),
+            pushdown_rewrite: true,
+            const_arrays: ca,
+            build_providers: providers,
+            ..Default::default()
+        },
+    );
+    (built, logs)
+}
+
+fn l1_doc() -> Value {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/conformance/pushdown/fixtures/pushdown_l1.esm");
+    serde_json::from_str(&std::fs::read_to_string(&fixture).expect("read pushdown_l1.esm"))
+        .expect("parse pushdown_l1.esm")
+}
+
+/// The rewritten document's join-gated binning aggregates (`E_*`) and the
+/// rest of its build-time graph are lowered on the tape under `native`
+/// rather than walked per cell, and every field agrees with the interpreter
+/// bit for bit.
+#[test]
+fn prepare_pushdown_l1_builds_under_native_bit_identical_to_the_interpreter() {
+    let doc = l1_doc();
+    let (native, _) = l1_build(&doc, earthsci_ast::Compiler::Native);
+    let native = native.expect("native builds the L1 document");
+    let (interp, _) = l1_build(&doc, earthsci_ast::Compiler::Interpreter);
+    let interp = interp.expect("interpreter");
+    for name in [
+        "E_VOC",
+        "E_NOx",
+        "E_NH3",
+        "E_SOx",
+        "E_PM25",
+        "conc_SOA",
+        "TotalPM25",
+        "deathsK",
+        "deathsL",
+    ] {
+        let bits = |p: &earthsci_ast::EsmProblem| -> Vec<u64> {
+            observed_field(p, name)
+                .unwrap()
+                .iter()
+                .map(|x| x.to_bits())
+                .collect()
+        };
+        assert_eq!(bits(&native), bits(&interp), "{name}");
+    }
+    let report = native.compiler_report();
+    let row = report
+        .rules()
+        .iter()
+        .find(|r| r.rule == "ISRM.E_VOC")
+        .unwrap_or_else(|| panic!("no E_VOC row: {report}"));
+    assert_eq!(row.tier, "taped", "{report}");
+}
+
+/// A strict refusal whose cause has nothing to do with the gated data is
+/// raised BEFORE the gated fetch: an observed that reads no gated slab is
+/// evaluated ahead of it, so the refusal costs no fetch. The refusal names
+/// what the overlay and the tape each declined. (`probe_interp` is the rule
+/// refused once every other rule of the document lowers; until then it may
+/// be an earlier one.)
+#[test]
+fn a_native_refusal_unrelated_to_the_gated_data_comes_before_the_gated_fetch() {
+    let mut doc = l1_doc();
+    let m = &mut doc["models"]["ISRM"];
+    m["variables"]["probe_tbl"] =
+        serde_json::json!({"type": "unknown", "units": "1", "shape": ["emis_records"]});
+    m["variables"]["probe_interp"] =
+        serde_json::json!({"type": "unknown", "units": "1", "shape": ["emis_records"]});
+    let eqs = m["equations"].as_array_mut().unwrap();
+    eqs.push(serde_json::json!({"lhs": "probe_tbl", "rhs": {
+        "op": "faq", "args": [], "output_idx": ["e"], "ranges": {"e": {"from": "emis_records"}},
+        "expr": {"op": "*", "args": [2.0, {"op": "index", "args": ["emis_annual", "e"]}]}}}));
+    // `interp.linear` over a table that is not a literal `const`: neither the
+    // overlay nor the tape lowers it (esm-spec §9.2).
+    eqs.push(serde_json::json!({"lhs": "probe_interp", "rhs": {
+        "op": "faq", "args": [], "output_idx": ["e"], "ranges": {"e": {"from": "emis_records"}},
+        "expr": {"op": "fn", "name": "interp.linear",
+                 "args": ["probe_tbl", "emis_annual", {"op": "index", "args": ["emis_annual", "e"]}]}}}));
+
+    let (native, logs) = l1_build(&doc, earthsci_ast::Compiler::Native);
+    match native {
+        Err(earthsci_ast::SimulateError::Compile(
+            earthsci_ast::CompileError::CompilerRefusedRule {
+                kind, rule, reason, ..
+            },
+        )) => {
+            assert_eq!(kind, "build-time observed");
+            assert!(reason.contains("whole-array overlay declined"), "{reason}");
+            assert!(reason.contains("the tape declined it"), "{reason}");
+            if rule == "ISRM.probe_interp" {
+                assert!(reason.contains("interp.linear"), "{reason}");
+            }
+        }
+        Err(e) => panic!("expected compiler_refused_rule, got {e}"),
+        Ok(_) => panic!("expected a refusal"),
+    }
+    for calls in &logs {
+        assert!(
+            calls.borrow().is_empty(),
+            "fetched before refusing: {:?}",
+            calls.borrow()
+        );
+    }
+
+    // The interpreter builds it, fetching each gated slab once.
+    let (interp, logs) = l1_build(&doc, earthsci_ast::Compiler::Interpreter);
+    interp.expect("the interpreter builds it");
+    for calls in &logs {
+        assert_eq!(calls.borrow().len(), 1);
+    }
+}

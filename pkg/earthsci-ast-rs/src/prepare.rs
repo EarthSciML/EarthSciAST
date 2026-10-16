@@ -526,6 +526,9 @@ pub(crate) struct PipelineRule {
 pub(crate) enum Route {
     /// The whole-array overlay (tier `"vectorized"`).
     Overlay,
+    /// A standalone tape: under a strict compiler, an observed the overlay
+    /// declines is lowered on the tape and run once (tier `"taped"`).
+    Tape,
     /// The reference evaluator, walking cells one at a time, and why (tier
     /// `"oracle"`). The one route a strict compiler refuses.
     PerCell(String),
@@ -572,6 +575,24 @@ fn declared_args(expr: &Expr, out: &mut HashSet<String>) {
             node.for_each_child(&mut |c| declared_args(c, out));
         }
         _ => {}
+    }
+}
+
+/// The key columns and envelope factors every `join` in `expr` names. They
+/// are strings on the clause rather than expressions, so [`declared_args`]
+/// does not see them.
+fn join_names(expr: &Expr, out: &mut HashSet<String>) {
+    if let Expr::Operator(node) = expr {
+        for clause in node.join.iter().flatten() {
+            out.extend(clause.on.iter().flatten().cloned());
+            if let Some(ov) = &clause.overlap {
+                out.extend(ov.src_env.iter().chain(ov.tgt_env.iter()).cloned());
+            }
+        }
+        for a in &node.args {
+            join_names(a, out);
+        }
+        node.for_each_child(&mut |c| join_names(c, out));
     }
 }
 
@@ -863,11 +884,53 @@ fn producer_seed_closure(
 
 /// What [`eval_observed`] produced.
 enum Evaluated {
-    /// The dense field, and why it was walked per cell if it was.
-    Field(ArrayD<f64>, Option<String>),
+    /// The dense field, and the route that evaluated it.
+    Field(ArrayD<f64>, Route),
     /// Walked per cell under `refuse_per_cell`, and stopped at the first cell
     /// (`StopAtFirstCell`): there is no field, only the reason to refuse.
     Refused(String),
+}
+
+/// Lower one observed on a standalone tape and run it
+/// (`simulate_array::eval_observed_taped`). `None` when `recurrence_only` and
+/// the observed is not a recurrence the tape's sweep takes. Otherwise the outer
+/// `Err` is a fault the run latched — the interpreter's own diagnostic for the
+/// same document — and the inner one the tape's decline reason.
+#[allow(clippy::too_many_arguments)]
+fn compile_on_tape(
+    name: &str,
+    expr: &Expr,
+    arrays: &ArrMap,
+    param_vals: &[f64],
+    param_names: &[String],
+    const_arrays: &ConstArrayScope,
+    recurrence_only: bool,
+) -> Option<Result<Result<ArrayD<f64>, String>, String>> {
+    use crate::simulate_array::StandaloneError;
+    match crate::simulate_array::eval_observed_taped(
+        name,
+        expr,
+        arrays,
+        param_vals,
+        param_names,
+        const_arrays,
+        recurrence_only,
+    ) {
+        None => None,
+        Some(Ok(a)) => Some(Ok(Ok(a))),
+        Some(Err(StandaloneError::Declined(why))) => Some(Ok(Err(why))),
+        Some(Err(StandaloneError::Fault(msg))) => Some(Err(msg)),
+    }
+}
+
+/// The interpreter's shape for an observed's value: a scalar fills the
+/// declared rank's scalar shape (`[]` or `[1]`), an array is kept.
+fn shape_like_interpreter(a: ArrayD<f64>, rank: DeclaredRank) -> ArrayD<f64> {
+    if a.ndim() == 0 {
+        ArrayD::from_elem(IxDyn(rank.scalar_shape()), a[IxDyn(&[])])
+    } else {
+        a
+    }
 }
 
 /// Evaluate one observed through the full evaluator; returns the dense field.
@@ -915,6 +978,28 @@ fn eval_observed(
     // `esm simulate`. The self-read fell through to an unbound-name NaN and a
     // `max(x, 0)` in the body laundered it to 0.0, so the answer came back
     // finite, plausible and wrong with nothing logged.
+    // Under a strict compiler a recurrence goes to the tape's ordered sweep
+    // first (`compile_on_tape`), and is refused only if the tape declines it.
+    if refuse_per_cell
+        && let Some(tape) = compile_on_tape(
+            name,
+            &expr,
+            arrays,
+            param_vals,
+            param_names,
+            const_arrays,
+            true,
+        )
+    {
+        return tape
+            .map_err(|why| err(format!("evaluate {name}: {why}")))
+            .map(|r| match r {
+                Ok(a) => Evaluated::Field(shape_like_interpreter(a, rank), Route::Tape),
+                Err(declined) => Evaluated::Refused(format!(
+                    "{PER_CELL_RECURRENCE}, and the tape declined it: {declined}"
+                )),
+            });
+    }
     let stop = refuse_per_cell.then(crate::simulate_array::StopAtFirstCell::arm);
     let refused = || stop.is_some() && crate::simulate_array::per_cell_walk_refused();
     if let Some(res) = crate::simulate_array::eval_observed_recurrence(
@@ -931,10 +1016,11 @@ fn eval_observed(
             return Ok(Evaluated::Refused(PER_CELL_RECURRENCE.to_string()));
         }
         return res
-            .map(|a| Evaluated::Field(a, Some(PER_CELL_RECURRENCE.to_string())))
+            .map(|a| Evaluated::Field(a, Route::PerCell(PER_CELL_RECURRENCE.to_string())))
             .map_err(|e| err(format!("evaluate {name}: {e}")));
     }
     let walks_before = crate::simulate_array::per_cell_walks();
+    crate::simulate_array::take_overlay_decline();
     let val = eval_expression_with_extents_and_consts_shared(
         &expr,
         arrays,
@@ -947,7 +1033,32 @@ fn eval_observed(
     // Before the result is read: a stopped walk's value is a placeholder, and
     // so is any error computed from it.
     if refused() {
-        return Ok(Evaluated::Refused(PER_CELL_FAQ.to_string()));
+        // The overlay declined a `faq` of this observed: lower the whole
+        // observed on the tape instead, from the same inputs.
+        let overlay = crate::simulate_array::take_overlay_decline()
+            .unwrap_or("a construct it has no whole-array form for");
+        drop(stop);
+        let tape = compile_on_tape(
+            name,
+            &expr,
+            arrays,
+            param_vals,
+            param_names,
+            const_arrays,
+            false,
+        )
+        .expect("a non-recurrence always reaches the tape");
+        return match tape {
+            Err(fault) => Err(err(format!("evaluate {name}: {fault}"))),
+            Ok(Ok(a)) => Ok(Evaluated::Field(
+                shape_like_interpreter(a, rank),
+                Route::Tape,
+            )),
+            Ok(Err(declined)) => Ok(Evaluated::Refused(format!(
+                "the whole-array overlay declined a `faq` in it ({overlay}), and the tape \
+                 declined it: {declined}"
+            ))),
+        };
     }
     let val = val.map_err(|e| err(format!("evaluate {name}: {e}")))?;
     let per_cell =
@@ -956,7 +1067,7 @@ fn eval_observed(
         EvalValue::Array(a) => *a,
         EvalValue::Scalar(s) => ArrayD::from_elem(IxDyn(rank.scalar_shape()), s),
     };
-    Ok(Evaluated::Field(field, per_cell))
+    Ok(Evaluated::Field(field, Route::observed(per_cell)))
 }
 
 // --------------------------------------------------------------------------- //
@@ -975,6 +1086,16 @@ struct GatedFetchPlan {
     /// caller, which is where the batch size and `supports_selection` are known,
     /// so the whole phase can report a running count.
     n_requests: usize,
+}
+
+/// The model variable a gated provider's slab is published under (see
+/// [`BuildState::fetch_gated_providers`]).
+fn gated_target(key: &str, gate: &ProviderGate, pd_coupling: &[(String, String)]) -> String {
+    pd_coupling
+        .iter()
+        .find(|(frm, to)| frm == key || to == key)
+        .map(|(_, to)| to.rsplit('.').next().unwrap_or(to).to_string())
+        .unwrap_or_else(|| gate.applies_to[0].clone())
 }
 
 /// Resolve a gate's per-axis `selection` from the materialised value-invention
@@ -1268,6 +1389,7 @@ pub(crate) fn run_prepare(
     let mut st = BuildState::load_document(rw.rewritten.as_ref(), opts, metaparameters)?;
     let gated = st.inject_providers(const_arrays, providers, discovered, &rw.pd_gates)?;
     st.alias_pushdown_names(&rw.pd_coupling);
+    st.bind_inline_parameters(&gated);
     st.seal_const_registry();
     st.check_free_names()?;
     st.collect_observed_defs()?;
@@ -1277,6 +1399,10 @@ pub(crate) fn run_prepare(
     }
     st.invent_values()?;
     st.feed_member_factors()?;
+    st.eval_observeds_before_fetch(&gated, &rw.pd_coupling)?;
+    if st.refused.is_some() {
+        return Ok(st.finish(rw.rewritten.into_owned()));
+    }
     st.fetch_gated_providers(gated, &rw.pd_coupling)?;
     st.eval_observed_graph()?;
     Ok(st.finish(rw.rewritten.into_owned()))
@@ -1526,6 +1652,12 @@ struct BuildState<'o> {
     /// [`PreparedBuild::rules`] / [`PreparedBuild::refused`].
     rules: Vec<PipelineRule>,
     refused: Option<PipelineRule>,
+    /// The observeds evaluated ahead of the gated fetch (see
+    /// [`BuildState::eval_observeds_before_fetch`]), and the progress
+    /// counters the observed phase shares across its two passes.
+    evaluated: HashSet<String>,
+    obs_done: usize,
+    obs_total: usize,
 }
 
 impl<'o> BuildState<'o> {
@@ -1637,6 +1769,9 @@ impl<'o> BuildState<'o> {
             gated_keys: Vec::new(),
             rules: Vec::new(),
             refused: None,
+            evaluated: HashSet::new(),
+            obs_done: 0,
+            obs_total: 0,
         })
     }
 
@@ -1740,6 +1875,25 @@ impl<'o> BuildState<'o> {
     /// that now always runs, and it never overwrites an existing key.
     fn alias_pushdown_names(&mut self, pd_coupling: &[(String, String)]) {
         inject_aliases(&mut self.arrays, pd_coupling);
+    }
+
+    /// A shaped parameter whose data the document itself supplies (an inline
+    /// array, or a scalar broadcast over its grid) is build-time factor data,
+    /// bound as the compile path binds it. Runs after every provider and
+    /// alias is in place, because a caller's or a provider's array of the
+    /// same name stays authoritative, as it does there; a gated provider's
+    /// slab, fetched later, does too.
+    fn bind_inline_parameters(&mut self, gated: &[GatedProvider]) {
+        for (name, a) in
+            crate::simulate_array::inline_parameter_arrays(&self.model, &self.index_sets)
+        {
+            let gated_here = gated.iter().any(|(k, _, g)| {
+                k.rsplit('.').next() == Some(name.as_str()) || g.applies_to.contains(&name)
+            });
+            if !gated_here && !self.arrays.contains_key(&name) {
+                self.arrays.insert(name, a);
+            }
+        }
     }
 
     /// The CONST-ARRAY registry (CONFORMANCE_SPEC §5.5.5).
@@ -1904,7 +2058,7 @@ impl<'o> BuildState<'o> {
                     });
                     return Ok(());
                 }
-                Ok(Evaluated::Field(a, per_cell)) => {
+                Ok(Evaluated::Field(a, route)) => {
                     self.log(&format!(
                         "  [prepare] build-time coordinate {name} -> {:?}",
                         a.shape()
@@ -1912,7 +2066,7 @@ impl<'o> BuildState<'o> {
                     if self.record(PipelineRule {
                         name: name.clone(),
                         kind: "build-time observed",
-                        route: Route::observed(per_cell),
+                        route,
                     }) {
                         return Ok(());
                     }
@@ -2136,11 +2290,7 @@ impl<'o> BuildState<'o> {
             // is written last silently wins for all of them and every layer is
             // contracted against one arbitrary sibling's slab. Both arms below match
             // a key EXACTLY; never a name-tail expansion.
-            let target = pd_coupling
-                .iter()
-                .find(|(frm, to)| frm == &key || to == &key)
-                .map(|(_, to)| to.rsplit('.').next().unwrap_or(to).to_string())
-                .unwrap_or_else(|| gate.applies_to[0].clone());
+            let target = gated_target(&key, &gate, pd_coupling);
             self.log(&format!(
                 "  [prepare] gated fetch {key} -> {target} {:?}",
                 arr.shape()
@@ -2157,23 +2307,81 @@ impl<'o> BuildState<'o> {
         Ok(())
     }
 
+    /// Evaluate, ahead of the gated fetch, every observed that does not read a
+    /// gated slab, directly or through another observed.
+    ///
+    /// Their inputs are all in place by now, so this changes no value — only
+    /// WHEN they are evaluated. It is what lets a strict compiler refuse a
+    /// document whose refusal has nothing to do with the gated data before
+    /// the fetch moves it (a real source-receptor fetch is gigabytes). The
+    /// observeds that do read a gated slab follow the fetch, as before.
+    fn eval_observeds_before_fetch(
+        &mut self,
+        gated: &[GatedProvider],
+        pd_coupling: &[(String, String)],
+    ) -> Result<(), PrepareError> {
+        // A gate that does not name exactly one variable is refused by the
+        // fetch itself, with its own message; nothing is moved ahead of that.
+        if gated.is_empty() || gated.iter().any(|(_, _, g)| g.applies_to.len() != 1) {
+            return Ok(());
+        }
+        let mut after: HashSet<String> = gated
+            .iter()
+            .map(|(key, _, gate)| gated_target(key, gate, pd_coupling))
+            .collect();
+        let seeds = after.clone();
+        // `order` is dependency order, so one pass closes the set.
+        for name in &self.order {
+            let mut reads = HashSet::new();
+            declared_args(&self.defs[name], &mut reads);
+            join_names(&self.defs[name], &mut reads);
+            if reads.iter().any(|r| after.contains(r)) {
+                after.insert(name.clone());
+            }
+        }
+        for s in &seeds {
+            after.remove(s);
+        }
+        self.eval_observeds(&after, false)
+    }
+
     /// Evaluate the whole observed graph in dependency order.
     ///
     /// Every observed that still needs evaluating, counted up front: `order`
     /// includes the coordinate pre-pass's products, and a `total` that a `continue`
     /// silently makes unreachable is a bar that never fills.
     fn eval_observed_graph(&mut self) -> Result<(), PrepareError> {
+        self.eval_observeds(&HashSet::new(), true)
+    }
+
+    /// One pass over the pending observeds, skipping `skip` and what an
+    /// earlier pass evaluated. The last pass (`last`) moves every evaluated
+    /// observed into `fields`; so does any pass that ends in a refusal.
+    fn eval_observeds(&mut self, skip: &HashSet<String>, last: bool) -> Result<(), PrepareError> {
         let pending: Vec<String> = self
             .order
             .iter()
             .filter(|n| !self.fields.contains_key(*n))
             .cloned()
             .collect();
-        let n_pending = pending.len();
-        for (i, name) in pending.iter().enumerate() {
-            self.report(PreparePhase::Observeds, i, Some(n_pending), name.as_str())?;
+        if self.obs_done == 0 {
+            self.obs_total = pending.len();
+        }
+        let n_pending = self.obs_total;
+        for name in pending.iter() {
+            if skip.contains(name) || self.evaluated.contains(name) {
+                continue;
+            }
+            self.report(
+                PreparePhase::Observeds,
+                self.obs_done,
+                Some(n_pending),
+                name.as_str(),
+            )?;
+            self.obs_done += 1;
+            self.evaluated.insert(name.clone());
             let t = std::time::Instant::now();
-            let (a, per_cell) = match eval_observed(
+            let (a, route) = match eval_observed(
                 name,
                 &self.defs[name],
                 &self.arrays,
@@ -2185,7 +2393,7 @@ impl<'o> BuildState<'o> {
                 DeclaredRank::of(&self.model, name),
                 self.opts.refuse_per_cell,
             )? {
-                Evaluated::Field(a, per_cell) => (a, per_cell),
+                Evaluated::Field(a, route) => (a, route),
                 Evaluated::Refused(why) => {
                     self.record(PipelineRule {
                         name: name.clone(),
@@ -2203,7 +2411,7 @@ impl<'o> BuildState<'o> {
             if self.record(PipelineRule {
                 name: name.clone(),
                 kind: "build-time observed",
-                route: Route::observed(per_cell),
+                route,
             }) {
                 break;
             }
@@ -2211,6 +2419,9 @@ impl<'o> BuildState<'o> {
             // read it; each is MOVED into `fields` after the loop rather than held
             // in both maps at once.
             self.arrays.insert(name.clone(), a);
+        }
+        if !last && self.refused.is_none() {
+            return Ok(());
         }
         for name in &pending {
             if let Some(a) = self.arrays.remove(name) {
@@ -2311,9 +2522,9 @@ fn document_has_unresolved_mount(doc: &JsonValue) -> bool {
 
 #[cfg(test)]
 mod first_cell_stop_tests {
-    //! A strict compiler's refusal of a per-cell pipeline observed comes after
-    //! ONE cell of the walk, not after all of them — counted with the
-    //! evaluator's per-cell test hook, never timed.
+    //! A strict compiler never walks a pipeline observed past its first cell:
+    //! the walk stops there and the observed is lowered on the tape instead —
+    //! counted with the evaluator's per-cell test hook, never timed.
 
     use crate::compile_error::CompileError;
     use crate::problem::{Compiler, ProblemOptions, esm_problem};
@@ -2385,34 +2596,31 @@ mod first_cell_stop_tests {
         )
     }
 
-    /// The refusal of `d` under `native` — (kind, rule, reason) — and how many
-    /// cells the per-cell walks evaluated on the way to it.
-    fn refused(d: &Value) -> ((&'static str, String, String), u64) {
-        let before = per_cell_cells();
-        let err = build(d, Compiler::Native).expect_err("native refuses a per-cell walk");
-        let cells = per_cell_cells() - before;
-        match err {
-            SimulateError::Compile(CompileError::CompilerRefusedRule {
-                kind,
-                rule,
-                reason,
-                ..
-            }) => ((kind, rule, reason), cells),
-            other => panic!("expected compiler_refused_rule, got {other:?}"),
-        }
-    }
-
     const LARGE: usize = 200_000;
 
+    /// `native`'s build of `d` and the cells the per-cell walks evaluated on
+    /// the way to it.
+    fn native_cells(d: &Value) -> (crate::problem::EsmProblem, u64) {
+        let before = per_cell_cells();
+        let prob = build(d, Compiler::Native).expect("native builds it on the tape");
+        (prob, per_cell_cells() - before)
+    }
+
+    fn bits(p: &crate::problem::EsmProblem, name: &str) -> Vec<u64> {
+        crate::problem::observed_field(p, name)
+            .expect("field")
+            .iter()
+            .map(|x| x.to_bits())
+            .collect()
+    }
+
     #[test]
-    fn a_large_prefix_scan_is_refused_after_one_cell() {
-        let (small, _) = refused(&cumulative(3));
-        let (large, cells) = refused(&cumulative(LARGE));
-        // The same refusal, naming the same observed for the same reason.
-        assert_eq!(large, small);
-        assert_eq!(large.0, "build-time observed");
-        assert_eq!(large.1, "Rel.cum");
-        assert_eq!(cells, 1, "the walk must stop at its first cell");
+    fn a_large_prefix_scan_is_taped_after_at_most_one_walked_cell() {
+        let (native, cells) = native_cells(&cumulative(LARGE));
+        assert!(
+            cells <= 1,
+            "the walk must stop at its first cell, walked {cells}"
+        );
 
         // The reference evaluator still walks every cell, to the same answer.
         let before = per_cell_cells();
@@ -2421,22 +2629,20 @@ mod first_cell_stop_tests {
         let cum = crate::problem::observed_field(&prob, "Rel.cum").expect("cum");
         let n = LARGE as f64;
         assert_eq!(cum.iter().last().copied(), Some(5.0 * n * (n + 1.0)));
+        assert_eq!(bits(&native, "Rel.cum"), bits(&prob, "Rel.cum"));
     }
 
     #[test]
-    fn a_large_recurrence_is_refused_after_one_cell() {
-        let (small, _) = refused(&recurrence(3));
-        let (large, cells) = refused(&recurrence(LARGE));
-        assert_eq!(large, small);
-        assert_eq!(large.1, "Rel.s");
-        assert!(large.2.contains("causal self-reference"), "{}", large.2);
-        assert_eq!(cells, 1, "the sweep must stop at its first cell");
+    fn a_large_recurrence_is_taped_without_a_walked_cell() {
+        let (native, cells) = native_cells(&recurrence(LARGE));
+        assert_eq!(cells, 0, "a recurrence goes straight to the tape's sweep");
 
         let before = per_cell_cells();
         let prob = build(&recurrence(LARGE), Compiler::Interpreter).expect("interpreter");
         assert_eq!(per_cell_cells() - before, LARGE as u64);
         let s = crate::problem::observed_field(&prob, "Rel.s").expect("s");
         assert_eq!(s.iter().last().copied(), Some(LARGE as f64));
+        assert_eq!(bits(&native, "Rel.s"), bits(&prob, "Rel.s"));
     }
 
     /// A record-to-cell binning producer whose record coordinate `X` is a
@@ -2507,7 +2713,7 @@ mod first_cell_stop_tests {
     }
 
     #[test]
-    fn a_large_per_cell_coordinate_is_refused_after_one_cell() {
+    fn a_large_per_cell_coordinate_is_taped_after_at_most_one_walked_cell() {
         let run = |n: usize, compiler: Compiler| {
             let (d, const_arrays) = binning(n);
             let before = per_cell_cells();
@@ -2523,27 +2729,21 @@ mod first_cell_stop_tests {
             );
             (r, per_cell_cells() - before)
         };
-        let reason = |r: Result<crate::problem::EsmProblem, SimulateError>| match r {
-            Err(SimulateError::Compile(CompileError::CompilerRefusedRule {
-                kind,
-                rule,
-                reason,
-                ..
-            })) => (kind, rule, reason),
-            other => panic!("expected compiler_refused_rule, got {other:?}"),
-        };
-        let (small, _) = run(3, Compiler::Native);
-        let (large, cells) = run(LARGE, Compiler::Native);
-        let large = reason(large);
-        assert_eq!(large, reason(small));
-        assert_eq!(large.0, "build-time observed");
-        assert_eq!(large.1, "Rel.X");
-        assert_eq!(cells, 1, "the coordinate pass must stop at its first cell");
+        let (native, cells) = run(LARGE, Compiler::Native);
+        let native = native.expect("native builds it on the tape");
+        assert!(
+            cells <= 1,
+            "the coordinate pass must stop at its first cell, walked {cells}"
+        );
+        assert_eq!(native.members()["bins"].len(), LARGE, "one record per cell");
 
         let (interp, cells) = run(1000, Compiler::Interpreter);
         let prob = interp.expect("the interpreter builds it");
         assert_eq!(cells, 1000);
         assert_eq!(prob.members()["bins"].len(), 1000, "one record per cell");
+        let (native_small, _) = run(1000, Compiler::Native);
+        let native_small = native_small.expect("native");
+        assert_eq!(native_small.members()["bins"], prob.members()["bins"]);
     }
 
     /// A document error in the first cell is still the document's error, not

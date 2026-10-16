@@ -86,6 +86,19 @@ struct TupleList {
     cols: Vec<Vec<f64>>,
 }
 
+/// The `(positions, keys)` of a 1-D data column keyed by each value's bits,
+/// `-0.0` folded onto `+0.0` so that every pair `==` admits shares a key.
+fn float_key_column(a: &ndarray::ArrayD<f64>) -> Option<(Vec<i64>, Vec<crate::relational::Key>)> {
+    if a.ndim() != 1 {
+        return None;
+    }
+    let keys = a
+        .iter()
+        .map(|&v| crate::relational::Key::Int((if v == 0.0 { 0.0 } else { v }).to_bits() as i64))
+        .collect();
+    Some(((1..=a.len() as i64).collect(), keys))
+}
+
 /// One contracted dimension's enumeration source within one output cell.
 enum Src<'a> {
     Range(i64, i64),
@@ -109,17 +122,11 @@ impl TapeBuilder<'_> {
         join: Option<&[JoinClause]>,
     ) -> LResult<LV> {
         // A scalar reduction may be `bool_and_or`; an array-valued one may not
-        // (CONFORMANCE_SPEC §5.6.1).
+        // (CONFORMANCE_SPEC §5.6.1), outside the build pipeline.
         let combine_op = if ranges.is_empty() {
             scalar_combine_op(reduce)
         } else {
-            let Some(op) = reduce_combine_op(reduce) else {
-                bail_tape!(
-                    "contracted: an array-valued bool_and_or reduction (the numeric \
-                     evaluators reject it, CONFORMANCE_SPEC §5.6.1)"
-                );
-            };
-            op
+            self.array_combine_op(reduce, "contracted")?
         };
         // With nothing contracted the interpreter returns the body itself,
         // not `identity ⊕ body` (they differ on a `-0.0` term): each output
@@ -381,16 +388,37 @@ impl TapeBuilder<'_> {
     }
 
     /// The build-time value of the variable `name` — an observed whose value
-    /// the build knows — as `(shape, row-major values)`; a scalar has an
-    /// empty shape and one value.
+    /// the build knows, or a CONST-cadence observed it can fold
+    /// ([`Self::fold_const_observed`]) — as `(shape, row-major values)`; a
+    /// scalar has an empty shape and one value.
     pub(super) fn known_named(&self, name: &str) -> Option<(DimU, Rc<Vec<f64>>)> {
         match self.obs_defined.get(name)? {
             ObsVal::Taped(LV::Lit(x)) => Some((DimU::new(), Rc::new(vec![*x]))),
             ObsVal::Taped(LV::Arr(s)) => {
                 let shape = self.slots[*s as usize].shape.clone();
-                Some((shape, self.known_values(*s)?))
+                match self.known_values(*s) {
+                    Some(v) => Some((shape, v)),
+                    None => self.fold_const_observed(name),
+                }
             }
             _ => None,
+        }
+    }
+
+    /// Why an observed's value is not build-time data, for a refusal that
+    /// names it: empty for a name that is not one of this program's
+    /// observeds.
+    fn not_foldable_note(&self, name: &str) -> &'static str {
+        if self
+            .observed_rules
+            .iter()
+            .any(|r| observed_rule_var(r) == name)
+        {
+            " (an observed whose value reads a parameter, a state, the time or a forcing \
+             input, directly or through another observed, so it is not constant at build \
+             time; CONFORMANCE_SPEC §5.5.8)"
+        } else {
+            ""
         }
     }
 
@@ -453,11 +481,21 @@ impl TapeBuilder<'_> {
             if g.cols_l.len() != g.cols_r.len() || g.cols_l.is_empty() {
                 continue;
             }
-            let side = |cols: &[crate::join::KeyColumn]| -> LResult<_> {
+            // `exact_ints`: each data column must hold exact integers, which is
+            // what the interpreter drives on. A clause over other values is
+            // not a gate there — the filter's `==` decides every pair of the
+            // full product — so here it drives on the values' bits instead
+            // (`float_key_column`): the same pairs the filter admits, and
+            // a NaN pair the filter then rejects, so the walk is still the
+            // filtered product's order-preserving subsequence.
+            let side = |cols: &[crate::join::KeyColumn], exact_ints: bool| -> LResult<_> {
                 let mut parts = Vec::with_capacity(cols.len());
                 for c in cols {
                     parts.push(match c {
                         crate::join::KeyColumn::Const { positions, values } => {
+                            if !exact_ints {
+                                return Ok(None);
+                            }
                             const_key_column(positions, values)
                         }
                         crate::join::KeyColumn::Column(name) => {
@@ -472,25 +510,44 @@ impl TapeBuilder<'_> {
                                 })
                                 .ok_or_else(|| Bail {
                                     reason: format!(
-                                        "aggregate: join key column `{name}` is not build-time data"
+                                        "aggregate: join key column `{name}` is not build-time \
+                                         data{}",
+                                        self.not_foldable_note(name)
                                     ),
                                 })?;
-                            data_key_column(&a).ok_or_else(|| Bail {
-                                reason: format!(
-                                    "aggregate: join key column `{name}` is not a 1-D column of \
-                                     exact integers"
+                            let col = if exact_ints {
+                                data_key_column(&a)
+                            } else {
+                                float_key_column(&a)
+                            };
+                            match col {
+                                Some(col) => col,
+                                None if exact_ints => return Ok(None),
+                                None => bail_tape!(
+                                    "aggregate: join key column `{name}` is not a 1-D column"
                                 ),
-                            })?
+                            }
                         }
                     });
                 }
-                composite_side_keys(parts).ok_or_else(|| Bail {
+                composite_side_keys(parts).map(Some).ok_or_else(|| Bail {
                     reason: "aggregate: a composite join key's columns disagree in length"
                         .to_string(),
                 })
             };
-            let (pos_l, keys_l) = side(&g.cols_l)?;
-            let (pos_r, keys_r) = side(&g.cols_r)?;
+            let sides = match (side(&g.cols_l, true)?, side(&g.cols_r, true)?) {
+                (Some(l), Some(r)) => Some((l, r)),
+                _ => match (side(&g.cols_l, false)?, side(&g.cols_r, false)?) {
+                    (Some(l), Some(r)) => Some((l, r)),
+                    _ => None,
+                },
+            };
+            let Some(((pos_l, keys_l), (pos_r, keys_r))) = sides else {
+                bail_tape!(
+                    "aggregate: a join clause pairs a literal key with a column that is not \
+                     exact integers"
+                );
+            };
             let (index, n_src, n_tgt) = index_from_sides((pos_l, keys_l, pos_r, keys_r));
             gates.push(BuiltGate {
                 sym_src: g.sym_l.clone(),
@@ -545,6 +602,52 @@ impl TapeBuilder<'_> {
         Ok(Some(LV::Arr(out)))
     }
 
+    /// The per-tuple values of a subscript over the list, when the build
+    /// knows them: a literal, a loop symbol, a gather of known data, or
+    /// arithmetic (`+ - * /`) of those, folded with the interpreter's own
+    /// kernel ([`apply_binary`], left to right as `eval` folds an n-ary node)
+    /// so the positions are the ones `eval_index_args` computes. Arithmetic
+    /// emits nothing: only the positions it yields are used.
+    pub(super) fn tuple_known_values(
+        &mut self,
+        e: &Expr,
+        bx: &LBox,
+    ) -> LResult<Option<Rc<Vec<f64>>>> {
+        let m = bx.shape[0];
+        if let Expr::Operator(n) = e
+            && matches!(n.op.as_str(), "+" | "-" | "*" | "/")
+            && !n.args.is_empty()
+            && n.expr.is_none()
+        {
+            let mut parts = Vec::with_capacity(n.args.len());
+            for a in &n.args {
+                match self.tuple_known_values(a, bx)? {
+                    Some(v) => parts.push(v),
+                    None => return Ok(None),
+                }
+            }
+            let mut acc: Vec<f64> = if n.op == "-" && parts.len() == 1 {
+                parts[0].iter().map(|&x| -x).collect()
+            } else {
+                (*parts[0]).clone()
+            };
+            if n.op == "-" && parts.len() > 2 || n.op == "/" && parts.len() != 2 {
+                return Ok(None);
+            }
+            for p in &parts[1..] {
+                for (a, &b) in acc.iter_mut().zip(p.iter()) {
+                    *a = apply_binary(&n.op, *a, b);
+                }
+            }
+            return Ok(Some(Rc::new(acc)));
+        }
+        Ok(match self.lower_expr(e, bx)? {
+            LV::Lit(x) => Some(Rc::new(vec![x; m])),
+            LV::Arr(s) => self.known_values(s).filter(|v| v.len() == m),
+            _ => None,
+        })
+    }
+
     /// `index` inside a tuple-list body: the base is an array the body does
     /// not iterate (a variable, an inline literal, or a standalone
     /// expression), and every subscript is build-time data over the list, so
@@ -596,15 +699,10 @@ impl TapeBuilder<'_> {
         // Each subscript's per-tuple values.
         let mut sub_vals: Vec<Rc<Vec<f64>>> = Vec::with_capacity(subs.len());
         for e in subs {
-            let v = self.lower_expr(e, bx)?;
-            sub_vals.push(match v {
-                LV::Lit(x) => Rc::new(vec![x; m]),
-                LV::Arr(s) => match self.known_values(s) {
-                    Some(vals) if vals.len() == m => vals,
-                    _ => bail_tape!("index: a subscript that is not build-time data over the list"),
-                },
-                _ => bail_tape!("index: a subscript that is not build-time data over the list"),
-            });
+            match self.tuple_known_values(e, bx)? {
+                Some(vals) => sub_vals.push(vals),
+                None => bail_tape!("index: a subscript that is not build-time data over the list"),
+            }
         }
         let n_src: usize = src_shape.iter().product();
         if n_src >= GATHER_GHOST as usize {

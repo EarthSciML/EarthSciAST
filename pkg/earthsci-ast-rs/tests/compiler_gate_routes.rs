@@ -204,18 +204,24 @@ fn native_refuses_a_state_free_rule_the_tape_cannot_lower() {
 // ---------------------------------------------------------------------------
 
 /// The pipeline evaluates the observed graph through the reference evaluator
-/// whatever the compiler. Its rows say so, and a strict compiler refuses the
-/// first observed it would have to walk per cell — here the prefix-scan sweep
-/// of `cum`.
+/// whatever the compiler, and its rows say so. Under a strict compiler an
+/// observed it would have to walk per cell — here the prefix-scan sweep of
+/// `cum` — is lowered on a standalone tape instead, reported `"taped"`, and
+/// agrees with the interpreter bit for bit.
 #[test]
-fn the_build_pipeline_refuses_a_per_cell_observed_under_native() {
+fn the_build_pipeline_tapes_a_per_cell_observed_under_native() {
     let doc = relational_cumulative();
-    let err = build_json(&doc, with_pipeline(Compiler::Native)).expect_err("per cell");
-    let (compiler, kind, rule, reason) = refusal(err);
-    assert_eq!(compiler, "native");
-    assert_eq!(kind, "build-time observed");
-    assert_eq!(rule, "Rel.cum");
-    assert!(reason.contains("per cell"), "{reason}");
+    let native = build_json(&doc, with_pipeline(Compiler::Native)).expect("native builds");
+    let row = native
+        .compiler_report()
+        .rules()
+        .iter()
+        .find(|r| r.rule == "Rel.cum")
+        .unwrap_or_else(|| panic!("no row: {}", native.compiler_report()))
+        .clone();
+    assert_eq!(row.kind, "build-time observed");
+    assert_eq!(row.tier, "taped");
+    assert!(row.reason.is_none());
 
     // The interpreter takes it, and its rows say which evaluator served each
     // observed: the pipeline keeps the overlay under every compiler.
@@ -239,6 +245,9 @@ fn the_build_pipeline_refuses_a_per_cell_observed_under_native() {
     assert_eq!(tier_of("Rel.left"), "vectorized");
     assert_eq!(tier_of("Rel.cum"), "oracle");
     assert_eq!(values(&prob, "Rel.cum"), vec![10.0, 30.0, 60.0]);
+    let bits =
+        |p: &EsmProblem| -> Vec<u64> { values(p, "Rel.cum").iter().map(|x| x.to_bits()).collect() };
+    assert_eq!(bits(&native), bits(&prob));
 }
 
 /// A rank-0 reduction — the shape of every total over ingested rows — is not a

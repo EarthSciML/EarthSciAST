@@ -406,6 +406,9 @@ pub(super) fn run_reference(
                             RingSel::Axis { axis, off } => {
                                 (pos[axis as usize] as i64 + off) as usize
                             }
+                            RingSel::List { axis, list } => {
+                                r.lists[list as usize][pos[axis as usize]] as usize
+                            }
                         };
                         view = view.index_axis_move(Axis(0), i);
                     }
