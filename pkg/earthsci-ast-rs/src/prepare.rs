@@ -882,6 +882,16 @@ fn producer_seed_closure(
     needed
 }
 
+/// The text of an evaluation failure, as the build error states it once:
+/// the evaluator's own `InterpreterBuildError` is reported by its details,
+/// since the pipeline's error already says the build failed.
+fn evaluation_failure(e: &crate::compile_error::CompileError) -> String {
+    match e {
+        crate::compile_error::CompileError::InterpreterBuildError { details } => details.clone(),
+        other => other.to_string(),
+    }
+}
+
 /// What [`eval_observed`] produced.
 enum Evaluated {
     /// The dense field, and the route that evaluated it.
@@ -1017,7 +1027,7 @@ fn eval_observed(
         }
         return res
             .map(|a| Evaluated::Field(a, Route::PerCell(PER_CELL_RECURRENCE.to_string())))
-            .map_err(|e| err(format!("evaluate {name}: {e}")));
+            .map_err(|e| err(format!("evaluate {name}: {}", evaluation_failure(&e))));
     }
     let walks_before = crate::simulate_array::per_cell_walks();
     crate::simulate_array::take_overlay_decline();
@@ -1060,7 +1070,7 @@ fn eval_observed(
             ))),
         };
     }
-    let val = val.map_err(|e| err(format!("evaluate {name}: {e}")))?;
+    let val = val.map_err(|e| err(format!("evaluate {name}: {}", evaluation_failure(&e))))?;
     let per_cell =
         (crate::simulate_array::per_cell_walks() != walks_before).then(|| PER_CELL_FAQ.to_string());
     let field = match val {
@@ -2828,13 +2838,7 @@ mod first_cell_stop_tests {
         let native = run(Compiler::Native);
         let err = run(Compiler::Interpreter);
         assert!(err.to_string().contains("OOB"), "{err}");
-        // The fault itself, as the interpreter states it (the two routes
-        // wrap it in different build-error prefixes).
-        let fault = |e: &SimulateError| {
-            let m = e.to_string();
-            m[m.find("E_TREEWALK").expect("a named fault")..].to_string()
-        };
-        assert_eq!(fault(&native), fault(&err));
+        assert_eq!(native.to_string(), err.to_string());
     }
 }
 
