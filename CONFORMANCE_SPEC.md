@@ -1605,10 +1605,9 @@ above) is build-time constant when it is any of:
   node;
 * a **const-cadence computed observed**: an unknown whose defining equation
   computes it — a `faq`, a `makearray` or any other expression — from nothing
-  but index symbols, index-set sizes, literals, inline `const` arrays and other
-  columns this list admits. Its §5.7 cadence class is `CONST`: it reads no
-  state, not the independent variable, and no scalar parameter (a value a
-  caller can rebind after the build through the parameter vector).
+  but index symbols, index-set sizes, literals, inline `const` arrays, scalar
+  parameters (baked, below) and other columns this list admits. It reads no
+  state and not the independent variable.
 
 The last case is build-time data exactly as the first three are: its value is
 fixed once the document and its build-time inputs are, so it can be evaluated
@@ -1626,9 +1625,24 @@ column), and
 (an ingested column against a computed key, which a binding evaluates on its
 build-time path).
 
-A column whose value depends on a state, on the independent variable or on a
-scalar parameter is not build-time constant and cannot key a gate built once:
-the match set would go stale as soon as that value moved.
+**A scalar parameter feeding a key column is BAKED (normative).** A key
+computed from a scalar parameter — a relational port's `runYearID` or
+`runCountyID` selecting the rows of one year or county — is build-time data like
+any other input above: the parameter's value at the build (its
+`parameter_overrides` entry or its `default`) is folded into the key column and
+so into the match set. The parameter is then a **baked parameter**, the same
+status a scalar parameter has when value invention reads it (a skolem bin
+width): a `remake` that changes it MUST be refused, naming the parameter and
+telling the caller to build a new Problem, rather than silently keeping the
+match set built from the old value. This holds identically under every compiler
+— the interpreter bakes the parameter exactly as `native` does, so the two
+agree on which `remake` calls succeed — and in every binding. A parameter that
+feeds no key column, value-invention input or other build-time product stays
+re-bindable as before.
+
+A column whose value depends on a state or on the independent variable is not
+build-time constant and cannot key a gate built once: the match set would go
+stale as soon as that value moved.
 
 **The lowered key comparison is EXACT, not the document's working precision
 (normative).** The paragraph above makes the `filter` the load-bearing part of
