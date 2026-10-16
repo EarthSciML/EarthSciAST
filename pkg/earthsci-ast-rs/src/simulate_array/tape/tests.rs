@@ -1818,8 +1818,9 @@ fn ab_wholesale_makearray_and_elementwise_observeds() {
 /// the shape recorded for `m` must be that box. A scalar claim compiles `m`'s
 /// readers against a scalar: `s` below as a scalar kernel (which then panics on
 /// the scalar read of the published array), or the literal `index(m, 2)` as
-/// the scalar-base NaN. The parameter index is what keeps `m` off the tape
-/// (`wholesale: non-literal index argument`).
+/// the scalar-base NaN. The over-rank read at a parameter subscript is what
+/// keeps `m` off the tape (`wholesale: computed subscripts whose count is not
+/// the source rank`); the oracle reads it as the zero ghost.
 fn fallback_ifelse_array_condition_doc(reader: serde_json::Value) -> serde_json::Value {
     let n = 3;
     json!({
@@ -1836,7 +1837,7 @@ fn fallback_ifelse_array_condition_doc(reader: serde_json::Value) -> serde_json:
             },
             "equations": [
                 {"lhs": "m", "rhs": {"op": "ifelse", "args": [
-                    {"op": ">", "args": ["psi", {"op": "index", "args": ["psi", "p"]}]},
+                    {"op": ">", "args": ["psi", {"op": "index", "args": ["psi", "p", 1]}]},
                     1.0,
                     0.0
                 ]}},
@@ -1857,7 +1858,7 @@ fn check_fallback_ifelse_array_condition(reader: serde_json::Value) {
         report
             .fallbacks
             .iter()
-            .any(|(name, reason)| name == "m" && reason.contains("non-literal index")),
+            .any(|(name, reason)| name == "m" && reason.contains("computed subscripts")),
         "`m` must be the declined rule this test is about: {:?}",
         report.fallbacks
     );

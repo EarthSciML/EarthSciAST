@@ -5341,7 +5341,7 @@ impl<'m> TapeBuilder<'m> {
             // A subscript known only at run time (`Ri1[kpbl1 - 1]`): read
             // through a one-element computed-subscript gather.
             if subs.len() != shape.len() {
-                bail_tape!("wholesale: a partial index with a computed subscript");
+                bail_tape!("wholesale: computed subscripts whose count is not the source rank");
             }
             if subs.iter().any(|s| self.lv_box(s).is_some()) {
                 bail_tape!("wholesale: an array-valued index argument");
