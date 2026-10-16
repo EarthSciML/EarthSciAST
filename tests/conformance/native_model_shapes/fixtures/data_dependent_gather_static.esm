@@ -1,0 +1,789 @@
+{
+ "esm": "1.2.0",
+ "metadata": {
+  "name": "data_dependent_gather_static",
+  "description": "Gathers whose subscript is itself data: `c[j[i]]` into an inline `const` array (the rrtm_setcoef `jt` shape), `b[ix[k]]` through a parameter index array and `tbl[idx[i]]` through a `const` one (the isrm member-index gather), `fld[layer[r]*4 + c]` (the isrm per-record layer offset), and an inline `const` selector `const([1,0])[d]` (the isrm ring vertex selector). Static variant: no state, so every value is a build-time observed.",
+  "authors": [
+   "EarthSciML Authors and Contributors"
+  ],
+  "tags": [
+   "native",
+   "conformance"
+  ]
+ },
+ "index_sets": {
+  "rows": {
+   "kind": "interval",
+   "size": 4
+  },
+  "n5": {
+   "kind": "interval",
+   "size": 5
+  },
+  "k3": {
+   "kind": "interval",
+   "size": 3
+  },
+  "recs": {
+   "kind": "interval",
+   "size": 3
+  },
+  "cells": {
+   "kind": "interval",
+   "size": 4
+  },
+  "all": {
+   "kind": "interval",
+   "size": 12
+  },
+  "xy": {
+   "kind": "interval",
+   "size": 2
+  }
+ },
+ "models": {
+  "DataDependentGather": {
+   "tolerance": {
+    "rel": 1e-12,
+    "abs": 1e-12
+   },
+   "variables": {
+    "jp": {
+     "type": "parameter",
+     "units": "1",
+     "default": [
+      4.0,
+      3.0,
+      2.0,
+      1.0
+     ],
+     "shape": [
+      "rows"
+     ]
+    },
+    "j": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "rows"
+     ]
+    },
+    "y_inline": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "rows"
+     ]
+    },
+    "ix": {
+     "type": "parameter",
+     "units": "1",
+     "default": [
+      1.0,
+      3.0,
+      5.0
+     ],
+     "shape": [
+      "k3"
+     ]
+    },
+    "b": {
+     "type": "parameter",
+     "units": "1",
+     "default": [
+      10.0,
+      20.0,
+      30.0,
+      40.0,
+      50.0
+     ],
+     "shape": [
+      "n5"
+     ]
+    },
+    "out_ix": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "k3"
+     ]
+    },
+    "idx_c": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "rows"
+     ]
+    },
+    "tbl": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "n5"
+     ]
+    },
+    "y_named": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "rows"
+     ]
+    },
+    "hit": {
+     "type": "parameter",
+     "units": "1",
+     "default": [
+      [
+       1.0,
+       0.0,
+       0.0,
+       0.0
+      ],
+      [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ],
+      [
+       0.0,
+       1.0,
+       0.0,
+       0.0
+      ]
+     ],
+     "shape": [
+      "recs",
+      "cells"
+     ]
+    },
+    "fld": {
+     "type": "parameter",
+     "units": "1",
+     "default": [
+      100.0,
+      101.0,
+      102.0,
+      103.0,
+      104.0,
+      105.0,
+      106.0,
+      107.0,
+      108.0,
+      109.0,
+      110.0,
+      111.0
+     ],
+     "shape": [
+      "all"
+     ]
+    },
+    "layer": {
+     "type": "parameter",
+     "units": "1",
+     "default": [
+      0.0,
+      2.0,
+      1.0
+     ],
+     "shape": [
+      "recs"
+     ]
+    },
+    "out_layer": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "recs"
+     ]
+    },
+    "xs": {
+     "type": "parameter",
+     "units": "1",
+     "default": [
+      1.0,
+      2.0,
+      3.0
+     ],
+     "shape": [
+      "k3"
+     ]
+    },
+    "ys": {
+     "type": "parameter",
+     "units": "1",
+     "default": [
+      10.0,
+      20.0,
+      30.0
+     ],
+     "shape": [
+      "k3"
+     ]
+    },
+    "out_xy": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "k3",
+      "xy"
+     ]
+    },
+    "sel": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "k3",
+      "xy"
+     ]
+    }
+   },
+   "equations": [
+    {
+     "lhs": "j",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "r"
+      ],
+      "ranges": {
+       "r": {
+        "from": "rows"
+       }
+      },
+      "expr": {
+       "op": "floor",
+       "args": [
+        {
+         "op": "index",
+         "args": [
+          "jp",
+          "r"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "y_inline",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "rows"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        {
+         "op": "const",
+         "args": [],
+         "value": [
+          10.0,
+          20.0,
+          30.0,
+          40.0
+         ]
+        },
+        {
+         "op": "index",
+         "args": [
+          "j",
+          "i"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "out_ix",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "k"
+      ],
+      "ranges": {
+       "k": {
+        "from": "k3"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        "b",
+        {
+         "op": "index",
+         "args": [
+          "ix",
+          "k"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "idx_c",
+     "rhs": {
+      "op": "const",
+      "args": [],
+      "value": [
+       3.0,
+       1.0,
+       2.0,
+       3.0
+      ]
+     }
+    },
+    {
+     "lhs": "tbl",
+     "rhs": {
+      "op": "const",
+      "args": [],
+      "value": [
+       1.0,
+       2.0,
+       4.0,
+       8.0,
+       16.0
+      ]
+     }
+    },
+    {
+     "lhs": "y_named",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "rows"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        "tbl",
+        {
+         "op": "index",
+         "args": [
+          "idx_c",
+          "i"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "out_layer",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "r"
+      ],
+      "ranges": {
+       "r": {
+        "from": "recs"
+       },
+       "c": {
+        "from": "cells"
+       }
+      },
+      "reduce": "+",
+      "expr": {
+       "op": "*",
+       "args": [
+        {
+         "op": "index",
+         "args": [
+          "hit",
+          "r",
+          "c"
+         ]
+        },
+        {
+         "op": "index",
+         "args": [
+          "fld",
+          {
+           "op": "+",
+           "args": [
+            {
+             "op": "*",
+             "args": [
+              {
+               "op": "index",
+               "args": [
+                "layer",
+                "r"
+               ]
+              },
+              4
+             ]
+            },
+            "c"
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "out_xy",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "c",
+       "d"
+      ],
+      "ranges": {
+       "c": {
+        "from": "k3"
+       },
+       "d": {
+        "from": "xy"
+       }
+      },
+      "expr": {
+       "op": "+",
+       "args": [
+        {
+         "op": "*",
+         "args": [
+          {
+           "op": "index",
+           "args": [
+            {
+             "op": "const",
+             "args": [],
+             "value": [
+              1.0,
+              0.0
+             ]
+            },
+            "d"
+           ]
+          },
+          {
+           "op": "index",
+           "args": [
+            "xs",
+            "c"
+           ]
+          }
+         ]
+        },
+        {
+         "op": "*",
+         "args": [
+          {
+           "op": "index",
+           "args": [
+            {
+             "op": "const",
+             "args": [],
+             "value": [
+              0.0,
+              1.0
+             ]
+            },
+            "d"
+           ]
+          },
+          {
+           "op": "index",
+           "args": [
+            "ys",
+            "c"
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "sel",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "c",
+       "d"
+      ],
+      "ranges": {
+       "c": {
+        "from": "k3"
+       },
+       "d": {
+        "from": "xy"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        {
+         "op": "const",
+         "args": [],
+         "value": [
+          1.0,
+          0.0
+         ]
+        },
+        "d"
+       ]
+      }
+     }
+    }
+   ],
+   "tests": [
+    {
+     "id": "values",
+     "time_span": {
+      "start": 0.0,
+      "end": 0.0
+     },
+     "assertions": [
+      {
+       "variable": "y_inline",
+       "time": 0.0,
+       "expected": 40.0,
+       "coords": {
+        "rows": 1
+       }
+      },
+      {
+       "variable": "y_inline",
+       "time": 0.0,
+       "expected": 30.0,
+       "coords": {
+        "rows": 2
+       }
+      },
+      {
+       "variable": "y_inline",
+       "time": 0.0,
+       "expected": 20.0,
+       "coords": {
+        "rows": 3
+       }
+      },
+      {
+       "variable": "y_inline",
+       "time": 0.0,
+       "expected": 10.0,
+       "coords": {
+        "rows": 4
+       }
+      },
+      {
+       "variable": "out_ix",
+       "time": 0.0,
+       "expected": 10.0,
+       "coords": {
+        "k3": 1
+       }
+      },
+      {
+       "variable": "out_ix",
+       "time": 0.0,
+       "expected": 30.0,
+       "coords": {
+        "k3": 2
+       }
+      },
+      {
+       "variable": "out_ix",
+       "time": 0.0,
+       "expected": 50.0,
+       "coords": {
+        "k3": 3
+       }
+      },
+      {
+       "variable": "y_named",
+       "time": 0.0,
+       "expected": 4.0,
+       "coords": {
+        "rows": 1
+       }
+      },
+      {
+       "variable": "y_named",
+       "time": 0.0,
+       "expected": 1.0,
+       "coords": {
+        "rows": 2
+       }
+      },
+      {
+       "variable": "y_named",
+       "time": 0.0,
+       "expected": 2.0,
+       "coords": {
+        "rows": 3
+       }
+      },
+      {
+       "variable": "y_named",
+       "time": 0.0,
+       "expected": 4.0,
+       "coords": {
+        "rows": 4
+       }
+      },
+      {
+       "variable": "out_layer",
+       "time": 0.0,
+       "expected": 100.0,
+       "coords": {
+        "recs": 1
+       }
+      },
+      {
+       "variable": "out_layer",
+       "time": 0.0,
+       "expected": 111.0,
+       "coords": {
+        "recs": 2
+       }
+      },
+      {
+       "variable": "out_layer",
+       "time": 0.0,
+       "expected": 105.0,
+       "coords": {
+        "recs": 3
+       }
+      },
+      {
+       "variable": "out_xy",
+       "time": 0.0,
+       "expected": 1.0,
+       "coords": {
+        "k3": 1,
+        "xy": 1
+       }
+      },
+      {
+       "variable": "out_xy",
+       "time": 0.0,
+       "expected": 10.0,
+       "coords": {
+        "k3": 1,
+        "xy": 2
+       }
+      },
+      {
+       "variable": "out_xy",
+       "time": 0.0,
+       "expected": 2.0,
+       "coords": {
+        "k3": 2,
+        "xy": 1
+       }
+      },
+      {
+       "variable": "out_xy",
+       "time": 0.0,
+       "expected": 20.0,
+       "coords": {
+        "k3": 2,
+        "xy": 2
+       }
+      },
+      {
+       "variable": "out_xy",
+       "time": 0.0,
+       "expected": 3.0,
+       "coords": {
+        "k3": 3,
+        "xy": 1
+       }
+      },
+      {
+       "variable": "out_xy",
+       "time": 0.0,
+       "expected": 30.0,
+       "coords": {
+        "k3": 3,
+        "xy": 2
+       }
+      },
+      {
+       "variable": "sel",
+       "time": 0.0,
+       "expected": 1.0,
+       "coords": {
+        "k3": 1,
+        "xy": 1
+       }
+      },
+      {
+       "variable": "sel",
+       "time": 0.0,
+       "expected": 0.0,
+       "coords": {
+        "k3": 1,
+        "xy": 2
+       }
+      },
+      {
+       "variable": "sel",
+       "time": 0.0,
+       "expected": 1.0,
+       "coords": {
+        "k3": 2,
+        "xy": 1
+       }
+      },
+      {
+       "variable": "sel",
+       "time": 0.0,
+       "expected": 0.0,
+       "coords": {
+        "k3": 2,
+        "xy": 2
+       }
+      },
+      {
+       "variable": "sel",
+       "time": 0.0,
+       "expected": 1.0,
+       "coords": {
+        "k3": 3,
+        "xy": 1
+       }
+      },
+      {
+       "variable": "sel",
+       "time": 0.0,
+       "expected": 0.0,
+       "coords": {
+        "k3": 3,
+        "xy": 2
+       }
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

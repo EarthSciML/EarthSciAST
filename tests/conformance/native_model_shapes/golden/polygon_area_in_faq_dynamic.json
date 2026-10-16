@@ -1,0 +1,61 @@
+{
+  "fixture": "polygon_area_in_faq_dynamic",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "values",
+      "assertion_idx": 1,
+      "variable": "out",
+      "actual": 0.375
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 2,
+      "variable": "out",
+      "actual": 0.375
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 3,
+      "variable": "out",
+      "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 4,
+      "variable": "out_gated",
+      "actual": 0.375
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 5,
+      "variable": "out_gated",
+      "actual": 0.375
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 6,
+      "variable": "out_gated",
+      "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 7,
+      "variable": "acc",
+      "actual": 0.37499999999999994
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 8,
+      "variable": "acc",
+      "actual": 0.37499999999999994
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 9,
+      "variable": "acc",
+      "actual": 0.0
+    }
+  ]
+}

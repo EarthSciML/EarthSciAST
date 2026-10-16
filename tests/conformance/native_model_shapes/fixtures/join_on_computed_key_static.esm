@@ -1,0 +1,421 @@
+{
+ "esm": "1.2.0",
+ "metadata": {
+  "name": "join_on_computed_key_static",
+  "description": "A value-equality `join` whose key column is a const-cadence COMPUTED observed (CONFORMANCE_SPEC §5.5.8, build-time constant): both sides computed from an index (moves F57_control), and a computed key `want7[k] = k + 7` against a parameter data column, counting and summing the matches. Static variant: no state, so every value is a build-time observed.",
+  "authors": [
+   "EarthSciML Authors and Contributors"
+  ],
+  "tags": [
+   "native",
+   "conformance"
+  ]
+ },
+ "index_sets": {
+  "rows": {
+   "kind": "interval",
+   "size": 4
+  },
+  "keys": {
+   "kind": "interval",
+   "size": 2
+  },
+  "keys3": {
+   "kind": "interval",
+   "size": 3
+  }
+ },
+ "models": {
+  "JoinOnComputedKey": {
+   "tolerance": {
+    "rel": 1e-12,
+    "abs": 1e-12
+   },
+   "variables": {
+    "row_key": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "rows"
+     ]
+    },
+    "want": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "keys"
+     ]
+    },
+    "want7": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "keys3"
+     ]
+    },
+    "tbl_month": {
+     "type": "parameter",
+     "units": "1",
+     "default": [
+      8.0,
+      10.0,
+      8.0,
+      3.0
+     ],
+     "shape": [
+      "rows"
+     ]
+    },
+    "val": {
+     "type": "parameter",
+     "units": "1",
+     "default": [
+      1.0,
+      2.0,
+      4.0,
+      8.0
+     ],
+     "shape": [
+      "rows"
+     ]
+    },
+    "total": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "keys"
+     ]
+    },
+    "wsum": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "keys"
+     ]
+    },
+    "total7": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "keys3"
+     ]
+    },
+    "count7": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "keys3"
+     ]
+    }
+   },
+   "equations": [
+    {
+     "lhs": "row_key",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "r"
+      ],
+      "ranges": {
+       "r": {
+        "from": "rows"
+       }
+      },
+      "expr": {
+       "op": "-",
+       "args": [
+        "r",
+        {
+         "op": "*",
+         "args": [
+          2,
+          {
+           "op": "floor",
+           "args": [
+            {
+             "op": "/",
+             "args": [
+              {
+               "op": "-",
+               "args": [
+                "r",
+                1
+               ]
+              },
+              2
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "want",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "k"
+      ],
+      "ranges": {
+       "k": {
+        "from": "keys"
+       }
+      },
+      "expr": "k"
+     }
+    },
+    {
+     "lhs": "want7",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "k"
+      ],
+      "ranges": {
+       "k": {
+        "from": "keys3"
+       }
+      },
+      "expr": {
+       "op": "+",
+       "args": [
+        "k",
+        7.0
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "total",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "k"
+      ],
+      "ranges": {
+       "k": {
+        "from": "keys"
+       },
+       "r": {
+        "from": "rows"
+       }
+      },
+      "semiring": "sum_product",
+      "join": [
+       {
+        "on": [
+         [
+          "want",
+          "row_key"
+         ]
+        ]
+       }
+      ],
+      "expr": 1.0
+     }
+    },
+    {
+     "lhs": "wsum",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "k"
+      ],
+      "ranges": {
+       "k": {
+        "from": "keys"
+       },
+       "r": {
+        "from": "rows"
+       }
+      },
+      "semiring": "sum_product",
+      "join": [
+       {
+        "on": [
+         [
+          "want",
+          "row_key"
+         ]
+        ]
+       }
+      ],
+      "expr": {
+       "op": "index",
+       "args": [
+        "val",
+        "r"
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "total7",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "k"
+      ],
+      "ranges": {
+       "k": {
+        "from": "keys3"
+       },
+       "r": {
+        "from": "rows"
+       }
+      },
+      "semiring": "sum_product",
+      "join": [
+       {
+        "on": [
+         [
+          "want7",
+          "tbl_month"
+         ]
+        ]
+       }
+      ],
+      "expr": {
+       "op": "index",
+       "args": [
+        "val",
+        "r"
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "count7",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "k"
+      ],
+      "ranges": {
+       "k": {
+        "from": "keys3"
+       },
+       "r": {
+        "from": "rows"
+       }
+      },
+      "semiring": "sum_product",
+      "join": [
+       {
+        "on": [
+         [
+          "want7",
+          "tbl_month"
+         ]
+        ]
+       }
+      ],
+      "expr": 1.0
+     }
+    }
+   ],
+   "tests": [
+    {
+     "id": "values",
+     "time_span": {
+      "start": 0.0,
+      "end": 0.0
+     },
+     "assertions": [
+      {
+       "variable": "total",
+       "time": 0.0,
+       "expected": 2.0,
+       "coords": {
+        "keys": 1
+       }
+      },
+      {
+       "variable": "total",
+       "time": 0.0,
+       "expected": 2.0,
+       "coords": {
+        "keys": 2
+       }
+      },
+      {
+       "variable": "wsum",
+       "time": 0.0,
+       "expected": 5.0,
+       "coords": {
+        "keys": 1
+       }
+      },
+      {
+       "variable": "wsum",
+       "time": 0.0,
+       "expected": 10.0,
+       "coords": {
+        "keys": 2
+       }
+      },
+      {
+       "variable": "total7",
+       "time": 0.0,
+       "expected": 5.0,
+       "coords": {
+        "keys3": 1
+       }
+      },
+      {
+       "variable": "total7",
+       "time": 0.0,
+       "expected": 0.0,
+       "coords": {
+        "keys3": 2
+       }
+      },
+      {
+       "variable": "total7",
+       "time": 0.0,
+       "expected": 2.0,
+       "coords": {
+        "keys3": 3
+       }
+      },
+      {
+       "variable": "count7",
+       "time": 0.0,
+       "expected": 2.0,
+       "coords": {
+        "keys3": 1
+       }
+      },
+      {
+       "variable": "count7",
+       "time": 0.0,
+       "expected": 0.0,
+       "coords": {
+        "keys3": 2
+       }
+      },
+      {
+       "variable": "count7",
+       "time": 0.0,
+       "expected": 1.0,
+       "coords": {
+        "keys3": 3
+       }
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

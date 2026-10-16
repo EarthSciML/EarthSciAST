@@ -57,6 +57,7 @@ tests/conformance/
 │   ├── fixtures/<id>.esm           #   one document authored here (six more are REFERENCED)
 │   └── golden/<id>.json            #   the Julia-INTERPRETER actual for every assertion
 ├── bool_and_or_reductions/         # scalar `bool_and_or` reductions run everywhere (CONFORMANCE_SPEC §5.6.1, §5.45.4)
+├── native_model_shapes/            # downstream-model shapes native must run, static and dynamic (CONFORMANCE_SPEC §5.45.4)
 │   ├── README.md                   #   the contract, and the divergence it closed
 │   ├── manifest.json               #   `"runner": "inline_tests"`
 │   ├── fixtures/<id>.esm           #   one document: three scalar reductions, one filtered

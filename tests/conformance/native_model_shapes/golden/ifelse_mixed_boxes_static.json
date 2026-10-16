@@ -1,0 +1,103 @@
+{
+  "fixture": "ifelse_mixed_boxes_static",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "values",
+      "assertion_idx": 1,
+      "variable": "y_off",
+      "actual": 20.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 2,
+      "variable": "y_off",
+      "actual": 40.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 3,
+      "variable": "y_off",
+      "actual": 60.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 4,
+      "variable": "y_off",
+      "actual": 80.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 5,
+      "variable": "y_on",
+      "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 6,
+      "variable": "y_on",
+      "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 7,
+      "variable": "y_on",
+      "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 8,
+      "variable": "y_on",
+      "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 9,
+      "variable": "strain",
+      "actual": 0.25
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 10,
+      "variable": "strain",
+      "actual": 0.5
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 11,
+      "variable": "strain",
+      "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 12,
+      "variable": "strain",
+      "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 13,
+      "variable": "y_scalar_branch",
+      "actual": 100.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 14,
+      "variable": "y_scalar_branch",
+      "actual": 100.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 15,
+      "variable": "y_scalar_branch",
+      "actual": 100.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 16,
+      "variable": "y_scalar_branch",
+      "actual": 100.0
+    }
+  ]
+}

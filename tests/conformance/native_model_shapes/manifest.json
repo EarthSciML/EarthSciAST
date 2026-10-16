@@ -1,0 +1,554 @@
+{
+ "category": "native_model_shapes",
+ "runner": "inline_tests",
+ "version": "1.0",
+ "description": "The document shapes the downstream models (EqWeFiC, eqice, moves.esm, isrm.esm) need and the native compiler refused or mis-evaluated on 2026-10-15: computed and data-dependent subscripts, reversed / offset / clamped / mod-floor subscripts into const arrays, a rank-0 faq nested in an array faq, an ifelse with a scalar condition and branches of different shapes, an out-of-range const subscript in a branch no cell takes, an initial condition gathered from a const array, a join keyed on a computed observed, an overlap-gated faq, and polygon_intersection_area in a faq. Each shape has a STATIC variant (no state: every rule is a build-time observed) and a DYNAMIC one (the same rules read by a right-hand side). Every value is checked against a hand computation in the document's own `tests` block; the goldens are the Julia interpreter's actuals.",
+ "reference_binding": "julia",
+ "reference_compiler": "interpreter",
+ "bindings_required": [
+  "julia",
+  "rust"
+ ],
+ "scope_excluded": {
+  "python": "Outside the native-models round that added this tier (its plan covers Julia and Rust). README.md records what Python answered on 2026-10-15; bringing it in is a separate decision.",
+  "go": "No simulator and no inline-test runner, so a tier that DRIVES one cannot be run here (API_SPEC.md §3, capability profiles). This is an exclusion from the CATEGORY, not from the rule.",
+  "typescript": "No simulator and no inline-test runner, so a tier that DRIVES one cannot be run here (API_SPEC.md §3, capability profiles). This is an exclusion from the CATEGORY, not from the rule."
+ },
+ "integrators": {
+  "julia": {
+   "algorithm": "Tsit5",
+   "reltol": 1e-12,
+   "abstol": 1e-14
+  },
+  "rust": {
+   "solver": "Erk",
+   "reltol": 1e-12,
+   "abstol": 1e-14
+  }
+ },
+ "tolerances": {
+  "golden_rtol": 1e-10,
+  "golden_atol": 1e-12,
+  "detail": "Every static value is exact arithmetic on small integers and halves. The dynamic variants integrate a constant tendency from zero, a state rising at rate one, or (nested_scalar_reduction) a linear decay, so an integrator contributes nothing near this floor."
+ },
+ "fixtures": [
+  {
+   "id": "computed_scalar_index_static",
+   "path": "fixtures/computed_scalar_index_static.esm",
+   "model": "ComputedScalarIndex",
+   "golden": "golden/computed_scalar_index_static.json",
+   "tags": [
+    "index",
+    "computed-subscript",
+    "scalar",
+    "static"
+   ],
+   "note": "Authored here; see README.md for the downstream documents it stands for.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "computed_scalar_index_dynamic",
+   "path": "fixtures/computed_scalar_index_dynamic.esm",
+   "model": "ComputedScalarIndex",
+   "golden": "golden/computed_scalar_index_dynamic.json",
+   "tags": [
+    "index",
+    "computed-subscript",
+    "scalar",
+    "dynamic"
+   ],
+   "note": "Authored here; see README.md for the downstream documents it stands for.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "const_subscript_maps_static",
+   "path": "fixtures/const_subscript_maps_static.esm",
+   "model": "ConstSubscriptMaps",
+   "golden": "golden/const_subscript_maps_static.json",
+   "tags": [
+    "index",
+    "const-array",
+    "reversed",
+    "offset",
+    "clamp",
+    "static"
+   ],
+   "note": "Authored here; see README.md for the downstream documents it stands for.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "const_subscript_maps_dynamic",
+   "path": "fixtures/const_subscript_maps_dynamic.esm",
+   "model": "ConstSubscriptMaps",
+   "golden": "golden/const_subscript_maps_dynamic.json",
+   "tags": [
+    "index",
+    "const-array",
+    "reversed",
+    "offset",
+    "clamp",
+    "dynamic"
+   ],
+   "note": "Authored here; see README.md for the downstream documents it stands for.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "data_dependent_gather_static",
+   "path": "fixtures/data_dependent_gather_static.esm",
+   "model": "DataDependentGather",
+   "golden": "golden/data_dependent_gather_static.json",
+   "tags": [
+    "index",
+    "gather",
+    "index-array",
+    "const-array",
+    "static"
+   ],
+   "note": "Authored here; see README.md for the downstream documents it stands for.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "data_dependent_gather_dynamic",
+   "path": "fixtures/data_dependent_gather_dynamic.esm",
+   "model": "DataDependentGather",
+   "golden": "golden/data_dependent_gather_dynamic.json",
+   "tags": [
+    "index",
+    "gather",
+    "index-array",
+    "const-array",
+    "dynamic"
+   ],
+   "note": "Authored here; see README.md for the downstream documents it stands for.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "mod_floor_unflatten_static",
+   "path": "fixtures/mod_floor_unflatten_static.esm",
+   "model": "ModFloorUnflatten",
+   "golden": "golden/mod_floor_unflatten_static.json",
+   "tags": [
+    "index",
+    "mod-floor",
+    "unflatten",
+    "static"
+   ],
+   "note": "Authored here; see README.md for the downstream documents it stands for.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "mod_floor_unflatten_dynamic",
+   "path": "fixtures/mod_floor_unflatten_dynamic.esm",
+   "model": "ModFloorUnflatten",
+   "golden": "golden/mod_floor_unflatten_dynamic.json",
+   "tags": [
+    "index",
+    "mod-floor",
+    "unflatten",
+    "dynamic"
+   ],
+   "note": "Authored here; see README.md for the downstream documents it stands for.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "nested_scalar_reduction_static",
+   "path": "fixtures/nested_scalar_reduction_static.esm",
+   "model": "NestedScalarReduction",
+   "golden": "golden/nested_scalar_reduction_static.json",
+   "tags": [
+    "faq",
+    "nested",
+    "rank-0",
+    "static"
+   ],
+   "note": "Authored here; see README.md for the downstream documents it stands for.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "nested_scalar_reduction_dynamic",
+   "path": "fixtures/nested_scalar_reduction_dynamic.esm",
+   "model": "NestedScalarReduction",
+   "golden": "golden/nested_scalar_reduction_dynamic.json",
+   "tags": [
+    "faq",
+    "nested",
+    "rank-0",
+    "dynamic"
+   ],
+   "note": "Authored here; see README.md for the downstream documents it stands for.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "ifelse_mixed_boxes_static",
+   "path": "fixtures/ifelse_mixed_boxes_static.esm",
+   "model": "IfelseMixedBoxes",
+   "golden": "golden/ifelse_mixed_boxes_static.json",
+   "tags": [
+    "ifelse",
+    "scalar-condition",
+    "broadcast",
+    "static"
+   ],
+   "note": "Authored here; see README.md for the downstream documents it stands for.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "ifelse_mixed_boxes_dynamic",
+   "path": "fixtures/ifelse_mixed_boxes_dynamic.esm",
+   "model": "IfelseMixedBoxes",
+   "golden": "golden/ifelse_mixed_boxes_dynamic.json",
+   "tags": [
+    "ifelse",
+    "scalar-condition",
+    "broadcast",
+    "dynamic"
+   ],
+   "note": "Authored here; see README.md for the downstream documents it stands for.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "guarded_out_of_range_static",
+   "path": "fixtures/guarded_out_of_range_static.esm",
+   "model": "GuardedOutOfRange",
+   "golden": "golden/guarded_out_of_range_static.json",
+   "tags": [
+    "index",
+    "const-array",
+    "guarded",
+    "esm-spec-4.3.3",
+    "static"
+   ],
+   "note": "Authored here; see README.md for the downstream documents it stands for.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "guarded_out_of_range_dynamic",
+   "path": "fixtures/guarded_out_of_range_dynamic.esm",
+   "model": "GuardedOutOfRange",
+   "golden": "golden/guarded_out_of_range_dynamic.json",
+   "tags": [
+    "index",
+    "const-array",
+    "guarded",
+    "esm-spec-4.3.3",
+    "dynamic"
+   ],
+   "note": "Authored here; see README.md for the downstream documents it stands for.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "join_on_computed_key_static",
+   "path": "fixtures/join_on_computed_key_static.esm",
+   "model": "JoinOnComputedKey",
+   "golden": "golden/join_on_computed_key_static.json",
+   "tags": [
+    "faq",
+    "join",
+    "on",
+    "computed-key",
+    "conformance-5.5.8",
+    "static"
+   ],
+   "note": "Authored here; see README.md for the downstream documents it stands for.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "join_on_computed_key_dynamic",
+   "path": "fixtures/join_on_computed_key_dynamic.esm",
+   "model": "JoinOnComputedKey",
+   "golden": "golden/join_on_computed_key_dynamic.json",
+   "tags": [
+    "faq",
+    "join",
+    "on",
+    "computed-key",
+    "conformance-5.5.8",
+    "dynamic"
+   ],
+   "note": "Authored here; see README.md for the downstream documents it stands for.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "overlap_join_binning_static",
+   "path": "fixtures/overlap_join_binning_static.esm",
+   "model": "OverlapJoinBinning",
+   "golden": "golden/overlap_join_binning_static.json",
+   "tags": [
+    "faq",
+    "join",
+    "overlap",
+    "conformance-5.5.6",
+    "static"
+   ],
+   "note": "Authored here; see README.md for the downstream documents it stands for.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "overlap_join_binning_dynamic",
+   "path": "fixtures/overlap_join_binning_dynamic.esm",
+   "model": "OverlapJoinBinning",
+   "golden": "golden/overlap_join_binning_dynamic.json",
+   "tags": [
+    "faq",
+    "join",
+    "overlap",
+    "conformance-5.5.6",
+    "dynamic"
+   ],
+   "note": "Authored here; see README.md for the downstream documents it stands for.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "polygon_area_in_faq_static",
+   "path": "fixtures/polygon_area_in_faq_static.esm",
+   "model": "PolygonAreaInFaq",
+   "golden": "golden/polygon_area_in_faq_static.json",
+   "tags": [
+    "faq",
+    "geometry",
+    "polygon_intersection_area",
+    "static"
+   ],
+   "note": "Authored here; see README.md for the downstream documents it stands for.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "polygon_area_in_faq_dynamic",
+   "path": "fixtures/polygon_area_in_faq_dynamic.esm",
+   "model": "PolygonAreaInFaq",
+   "golden": "golden/polygon_area_in_faq_dynamic.json",
+   "tags": [
+    "faq",
+    "geometry",
+    "polygon_intersection_area",
+    "dynamic"
+   ],
+   "note": "Authored here; see README.md for the downstream documents it stands for.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "ic_const_gather",
+   "path": "fixtures/ic_const_gather.esm",
+   "model": "IcConstGather",
+   "golden": "golden/ic_const_gather.json",
+   "tags": [
+    "ic",
+    "gather",
+    "const-array",
+    "dynamic"
+   ],
+   "note": "Authored here; see README.md for the downstream documents it stands for.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  }
+ ]
+}
