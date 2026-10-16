@@ -4005,6 +4005,15 @@ impl<'m> TapeBuilder<'m> {
                  contraction"
             );
         }
+        // A body that reads only some of the box's axes reduces to the same
+        // value along the others: reduce over the axes it reads, once per
+        // position of those, and broadcast along the rest.
+        let read: SmallVec<[usize; 4]> = (0..bx.syms.len())
+            .filter(|&a| nested_aggregate_capture(spec, std::iter::once(&bx.syms[a])).is_some())
+            .collect();
+        if read.len() < bx.syms.len() {
+            return self.lower_nested_scalar_reduction_on(node, spec, bx, &read);
+        }
         let nc = spec.contract_names.len();
         if nc == 0 {
             bail_tape!("aggregate: a rank-0 output with no contracted index reads its box");
@@ -4099,6 +4108,67 @@ impl<'m> TapeBuilder<'m> {
         };
         self.emit(instr, sec);
         Ok(LV::Arr(out))
+    }
+
+    /// [`Self::lower_nested_scalar_reduction`] over the sub-box of `bx`'s
+    /// axes `read` (ascending), the only ones the body reads, broadcast back
+    /// over `bx` by one [`Instr::Gather`]. Every cell's value is the fold the
+    /// oracle computes there; cells that differ only along an axis the body
+    /// does not read share it.
+    fn lower_nested_scalar_reduction_on(
+        &mut self,
+        node: &Arc<ExpressionNode>,
+        spec: &ArrayOpSpec,
+        bx: &LBox,
+        read: &[usize],
+    ) -> LResult<LV> {
+        let sub_syms: Vec<String> = read.iter().map(|&a| bx.syms[a].clone()).collect();
+        let sub = LBox {
+            syms: &sub_syms,
+            lo: read.iter().map(|&a| bx.lo[a]).collect(),
+            shape: read.iter().map(|&a| bx.shape[a]).collect(),
+            cnames: &[],
+            cvals: SmallVec::new(),
+            tuple: 0,
+            visit: if bx.visit.is_empty() {
+                SmallVec::new()
+            } else {
+                (0..bx.shape.len())
+                    .filter_map(|k| read.iter().position(|&a| a == bx.visit_axis(k)))
+                    .map(|p| p as u8)
+                    .collect()
+            },
+        };
+        self.push_scope();
+        let v = self.lower_nested_scalar_reduction(node, spec, &sub);
+        self.pop_scope();
+        let v = v?;
+        let (s, o) = self
+            .lv_box(&v)
+            .expect("a reduction that reads its box is an array over it");
+        if s != sub.shape || o != sub.lo {
+            bail_tape!("aggregate: a rank-0 output's box does not match its read axes");
+        }
+        let mapped: SmallVec<[bool; 4]> = (0..bx.shape.len()).map(|a| read.contains(&a)).collect();
+        let segs: SmallVec<[SmallVec<[(usize, usize, usize); 2]>; 4]> = bx
+            .shape
+            .iter()
+            .map(|&n| {
+                let mut one = SmallVec::new();
+                one.push((0usize, n, 0usize));
+                one
+            })
+            .collect();
+        let mapped_src: SmallVec<[usize; 4]> = (0..read.len()).collect();
+        Ok(self.emit_gather(
+            &v,
+            SmallVec::new(),
+            &mapped_src,
+            mapped,
+            segs,
+            &bx.shape,
+            &bx.lo,
+        ))
     }
 
     // -- faq (the try_eval_faq_vectorized mirror) ---------------------
