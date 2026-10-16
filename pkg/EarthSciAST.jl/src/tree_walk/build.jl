@@ -3816,7 +3816,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
             end
         end
         for (k, e) in published
-            inspect.observed_exprs[String(k)] = e
+            _is_hoisted_name(String(k)) || (inspect.observed_exprs[String(k)] = e)
         end
         # ALSO publish the UN-inlined per-observed definitions, so a build-time
         # field evaluation can materialize each producer once in dependency order
@@ -3824,7 +3824,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
         # BuildInspection docstring). `observed_exprs` above is left exactly as
         # it was, so callers that do not know about this field are unaffected.
         for (k, e) in raw_obs
-            inspect.observed_defs[String(k)] = e
+            _is_hoisted_name(String(k)) || (inspect.observed_defs[String(k)] = e)
         end
         # Keyed by the PRODUCER id (`"emis_src_cells_faq" => 9`), exactly as the
         # build holds it. A consumer resolving a `kind:"derived"` axis follows the
@@ -4600,6 +4600,11 @@ function _build_evaluator_impl_inner(model::Model;
             _template_sites = translated
         end
     end
+    # ---- Nested reductions lifted to internal observeds (hoist.jl) ----
+    # Only where array observeds are factored: the interpreter inlines them, so
+    # it builds the authored body.
+    _array_obs_inline_forced() ||
+        ((model, index_sets, _) = _hoist_nested_reductions(model, index_sets))
     _has_value_invention = !isempty(_vi_vars)
     # ---- Caller-key canonicalization (esm-spec §6.6) ----
     # A spec-spelled LOCAL override key (`pert_amp`) is rewritten onto the
