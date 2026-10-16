@@ -1550,6 +1550,13 @@ func propagateExprNode(node ExprNode, env map[string]Unit, elements bool) (*Unit
 		}
 		expVal, ok := toFloat64(node.Args[1])
 		if !ok {
+			// A CONSTANT-EXPRESSION exponent (`3/2`, `-(1)`, a `const` in "1")
+			// is read by value: it folds to an exact rational and is used
+			// exactly as a literal exponent of that value (esm-spec §4.8.3).
+			if exp, folded := constantExponentValue(node.Args[1]); folded {
+				r := base.PowerRat(exp)
+				return &r, nil
+			}
 			// SYMBOLIC exponent (`x^alpha`, alpha a parameter): the result's
 			// dimension depends on alpha's runtime VALUE, so it is genuinely
 			// undeterminable. Assuming the base's dimension (as this did) is a
@@ -1566,6 +1573,24 @@ func propagateExprNode(node ExprNode, env map[string]Unit, elements bool) (*Unit
 		}
 		r := base.PowerRat(exp)
 		return &r, nil
+
+	case "faq":
+		// The checker does not model the array operators, so the faq's own unit
+		// is undeterminable (esm-spec §4.8.4) -- but the expressions it evaluates
+		// are checked like any other (§4.8.3): its `filter`, a boolean whose
+		// value never enters the result, and its `expr` body. A mismatch in
+		// either is reported (EarthSciAST#414).
+		if node.Filter != nil {
+			if _, err := propagateDimensionIn(node.Filter, env, elements); err != nil {
+				return nil, err
+			}
+		}
+		if node.Expr != nil {
+			if _, err := propagateDimensionIn(node.Expr, env, elements); err != nil {
+				return nil, err
+			}
+		}
+		return nil, nil
 
 	case "sqrt":
 		if len(node.Args) != 1 {
@@ -2013,6 +2038,10 @@ func derivativeTimeMismatch(state, rhs *Unit) error {
 // promotes the promotable ones to structural errors.
 func validateModelUnits(modelName string, model *Model, basePath string, file *ESMFile, result *StructuralValidationResult) {
 	env, bad := buildModelUnitEnv(model)
+	// A scoped reference — into a subsystem or a top-level component, mounted
+	// by {ref} or written inline — has the units its target declares (esm-spec
+	// §4.8.4, EarthSciAST#414). Every check below reads this one env.
+	addScopedReferenceUnits(env, file, model.Subsystems)
 	for _, name := range sortedKeys(bad) {
 		result.UnitWarnings = append(result.UnitWarnings, UnitWarning{
 			// The defect is carried by the VARIABLE declaration, so the pointer
@@ -2466,8 +2495,9 @@ func checkDefaultUnits(modelName string, model *Model, result *StructuralValidat
 // Matches the Julia/Python/TS/Rust checks. Skipped for dimensionless species
 // (mol/mol, ppm, …) because atmospheric-chemistry rate expressions commonly
 // bake a number-density factor into the rate constant.
-func validateReactionRateUnits(_ string, system *ReactionSystem, basePath string, result *StructuralValidationResult) {
+func validateReactionRateUnits(_ string, system *ReactionSystem, basePath string, file *ESMFile, result *StructuralValidationResult) {
 	env, _ := buildSystemUnitEnv(system)
+	addScopedReferenceUnits(env, file, system.Subsystems)
 
 	timeUnit := Unit{Dim: Dimension{dimTime: ratInt(1)}, Scale: 1.0}
 
@@ -2662,8 +2692,9 @@ func rateIsExplicitLaw(rx Reaction) bool {
 // validateReactionSystemUnits runs dimensional analysis over a reaction
 // system. Rate expressions whose dimensions cannot be determined are skipped;
 // rate expressions that surface a concrete inconsistency produce a warning.
-func validateReactionSystemUnits(_ string, system *ReactionSystem, basePath string, result *StructuralValidationResult) {
+func validateReactionSystemUnits(_ string, system *ReactionSystem, basePath string, file *ESMFile, result *StructuralValidationResult) {
 	env, bad := buildSystemUnitEnv(system)
+	addScopedReferenceUnits(env, file, system.Subsystems)
 	for _, name := range sortedKeys(bad) {
 		result.UnitWarnings = append(result.UnitWarnings, UnitWarning{
 			Path:    fmt.Sprintf("%s/%s/units", basePath, name),
@@ -2687,4 +2718,258 @@ func validateReactionSystemUnits(_ string, system *ReactionSystem, basePath stri
 			result.UnitWarnings = append(result.UnitWarnings, *w)
 		}
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Scoped references across mounts (esm-spec §4.8.4, EarthSciAST#414)
+// ---------------------------------------------------------------------------
+
+// rawMemberUnits is the declared unit string of every member of a raw
+// (map-shaped) component: a model's `variables`, a reaction system's `species`
+// and `parameters`. A member with no `units` (or a non-string one) is absent.
+func rawMemberUnits(comp map[string]any) map[string]string {
+	out := map[string]string{}
+	for _, section := range []string{"variables", "species", "parameters"} {
+		members, ok := comp[section].(map[string]any)
+		if !ok {
+			continue
+		}
+		for name, m := range members {
+			obj, ok := m.(map[string]any)
+			if !ok {
+				continue
+			}
+			if s, ok := obj["units"].(string); ok {
+				out[name] = s
+			}
+		}
+	}
+	return out
+}
+
+// subsystemAsMap returns a resolved subsystem as a raw map, or false for an
+// unresolved {"ref": ...} edge (nothing is known about it) or a value that is
+// not a component at all.
+func subsystemAsMap(raw any) (map[string]any, bool) {
+	if isSubsystemRefStub(raw) {
+		return nil, false
+	}
+	if m, ok := raw.(map[string]any); ok {
+		return m, true
+	}
+	m, ok := decodeSubsystemAs[map[string]any](raw)
+	if !ok || m == nil || isSubsystemRefStub(m) {
+		return nil, false
+	}
+	return m, true
+}
+
+// collectScopedSubsystemUnits registers `<prefix>.<sub>.<member>` for every
+// member of every resolved subsystem in subsystems, recursively (a scoped
+// reference is a dot path of arbitrary depth, esm-spec §4.9.2).
+func collectScopedSubsystemUnits(prefix string, subsystems map[string]any, out map[string]string) {
+	for _, subName := range sortedKeys(subsystems) {
+		sub, ok := subsystemAsMap(subsystems[subName])
+		if !ok {
+			continue
+		}
+		path := subName
+		if prefix != "" {
+			path = prefix + "." + subName
+		}
+		for name, u := range rawMemberUnits(sub) {
+			out[path+"."+name] = u
+		}
+		if nested, ok := sub["subsystems"].(map[string]any); ok {
+			collectScopedSubsystemUnits(path, nested, out)
+		}
+	}
+}
+
+// scopedReferenceUnits maps every scoped name an expression in a component can
+// make to its target's declared unit string (esm-spec §4.8.4, §4.9.2). A
+// mounted component is, after resolution, identical to an inline one (§4.7),
+// so a variable reached across a `subsystems.<k>` or top-level `models.<k>`
+// {ref} mount carries the units its declaration states, exactly as a local one
+// does. Two kinds of path are covered, with the precedence the
+// reference-integrity check uses: `<System>.<member>` rooted at a top-level
+// model or reaction system (and down through its subsystems), and
+// `<sub>.<member>` relative to the component's own subsystems, which wins on a
+// collision. file may be nil.
+func scopedReferenceUnits(file *ESMFile, ownSubsystems map[string]any) map[string]string {
+	out := map[string]string{}
+	if file != nil {
+		for _, name := range sortedKeys(file.Models) {
+			m := file.Models[name]
+			for vname, v := range m.Variables {
+				if v.Units != nil {
+					out[name+"."+vname] = *v.Units
+				}
+			}
+			collectScopedSubsystemUnits(name, m.Subsystems, out)
+		}
+		for _, name := range sortedKeys(file.ReactionSystems) {
+			rs := file.ReactionSystems[name]
+			for sname, sp := range rs.Species {
+				if sp.Units != nil {
+					out[name+"."+sname] = *sp.Units
+				}
+			}
+			for pname, p := range rs.Parameters {
+				if p.Units != nil {
+					out[name+"."+pname] = *p.Units
+				}
+			}
+			collectScopedSubsystemUnits(name, rs.Subsystems, out)
+		}
+	}
+	collectScopedSubsystemUnits("", ownSubsystems, out)
+	return out
+}
+
+// addScopedReferenceUnits extends a component's unit environment with its
+// scoped references (see scopedReferenceUnits). The component's own bare names
+// are never overwritten; a scoped target whose unit string is empty or does
+// not parse is skipped (an unparseable one is reported at its own
+// declaration).
+func addScopedReferenceUnits(env map[string]Unit, file *ESMFile, ownSubsystems map[string]any) {
+	for name, s := range scopedReferenceUnits(file, ownSubsystems) {
+		if _, own := env[name]; own || s == "" {
+			continue
+		}
+		u, err := ParseUnit(s)
+		if err != nil {
+			continue
+		}
+		env[name] = u
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Constant exponents (esm-spec §4.8.3 `^`)
+// ---------------------------------------------------------------------------
+
+// foldRat reduces num/den and reports whether it fits the Rat representation
+// (int32 numerator and denominator) with a nonzero denominator.
+func foldRat(num, den int64) (Rat, bool) {
+	if den == 0 {
+		return Rat{}, false
+	}
+	if den < 0 {
+		num, den = -num, -den
+	}
+	if g := gcd64(num, den); g > 1 {
+		num, den = num/g, den/g
+	}
+	if num > math.MaxInt32 || num < math.MinInt32 || den > math.MaxInt32 {
+		return Rat{}, false
+	}
+	return Rat{Num: int32(num), Den: int32(den)}, true
+}
+
+// literalExponentRat converts a numeric literal exponent to an exact rational
+// exactly as the `^` rule converts a literal exponent (ratFromFloat).
+func literalExponentRat(v any) (Rat, bool) {
+	if _, isBool := v.(bool); isBool {
+		return Rat{}, false
+	}
+	f, ok := toFloat64(v)
+	if !ok {
+		return Rat{}, false
+	}
+	r, err := ratFromFloat(f)
+	if err != nil {
+		return Rat{}, false
+	}
+	return r.fix(), true
+}
+
+// constantExponentValue is the exact rational value of a CONSTANT-EXPRESSION
+// exponent, or false when the exponent is symbolic (esm-spec §4.8.3 `^`). It
+// folds a numeric literal; a `const` with no `units`, or with units that are
+// dimensionless at exact scale 1; and `+`, `*` (one or more operands), `-`
+// (unary negation, or a left fold of two or more) and `/` (exactly two
+// operands, nonzero divisor) over constant expressions, nested to any depth.
+// Anything else — a variable, an expression containing one, a dimensional or
+// scaled (`%`) const, any other operator, a Rat overflow — does not fold.
+func constantExponentValue(expr Expression) (Rat, bool) {
+	var node ExprNode
+	switch e := expr.(type) {
+	case ExprNode:
+		node = e
+	case *ExprNode:
+		if e == nil {
+			return Rat{}, false
+		}
+		node = *e
+	case string:
+		// A name is a variable reference, never a constant.
+		return Rat{}, false
+	default:
+		return literalExponentRat(expr)
+	}
+	if node.Op == "const" {
+		if node.Units != nil {
+			u, err := ParseUnit(*node.Units)
+			if err != nil || !isPureNumber(&u) {
+				return Rat{}, false
+			}
+		}
+		if _, isNode := node.Value.(ExprNode); isNode {
+			return Rat{}, false
+		}
+		if _, isStr := node.Value.(string); isStr {
+			return Rat{}, false
+		}
+		return literalExponentRat(node.Value)
+	}
+	if len(node.Args) == 0 {
+		return Rat{}, false
+	}
+	vals := make([]Rat, len(node.Args))
+	for i, a := range node.Args {
+		v, ok := constantExponentValue(a)
+		if !ok {
+			return Rat{}, false
+		}
+		vals[i] = v
+	}
+	switch node.Op {
+	case "+":
+		acc := Rat{Num: 0, Den: 1}
+		for _, v := range vals {
+			var ok bool
+			if acc, ok = foldRat(int64(acc.Num)*int64(v.Den)+int64(v.Num)*int64(acc.Den), int64(acc.Den)*int64(v.Den)); !ok {
+				return Rat{}, false
+			}
+		}
+		return acc, true
+	case "*":
+		acc := Rat{Num: 1, Den: 1}
+		for _, v := range vals {
+			var ok bool
+			if acc, ok = foldRat(int64(acc.Num)*int64(v.Num), int64(acc.Den)*int64(v.Den)); !ok {
+				return Rat{}, false
+			}
+		}
+		return acc, true
+	case "-":
+		if len(vals) == 1 {
+			return foldRat(-int64(vals[0].Num), int64(vals[0].Den))
+		}
+		acc := vals[0]
+		for _, v := range vals[1:] {
+			var ok bool
+			if acc, ok = foldRat(int64(acc.Num)*int64(v.Den)-int64(v.Num)*int64(acc.Den), int64(acc.Den)*int64(v.Den)); !ok {
+				return Rat{}, false
+			}
+		}
+		return acc, true
+	case "/":
+		if len(vals) != 2 || vals[1].Num == 0 {
+			return Rat{}, false
+		}
+		return foldRat(int64(vals[0].Num)*int64(vals[1].Den), int64(vals[0].Den)*int64(vals[1].Num))
+	}
+	return Rat{}, false
 }

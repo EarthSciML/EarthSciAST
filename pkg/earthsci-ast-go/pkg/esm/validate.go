@@ -351,8 +351,8 @@ func ValidateStructuralWithCodes(file *ESMFile) *StructuralValidationResult {
 	}
 	for _, systemName := range sortedKeys(file.ReactionSystems) {
 		system := file.ReactionSystems[systemName]
-		validateReactionSystemUnits(systemName, &system, fmt.Sprintf("/reaction_systems/%s", systemName), result)
-		validateReactionRateUnits(systemName, &system, fmt.Sprintf("/reaction_systems/%s", systemName), result)
+		validateReactionSystemUnits(systemName, &system, fmt.Sprintf("/reaction_systems/%s", systemName), file, result)
+		validateReactionRateUnits(systemName, &system, fmt.Sprintf("/reaction_systems/%s", systemName), file, result)
 	}
 	result.StructuralErrors = append(result.StructuralErrors, promoteUnitFindings(result.UnitWarnings)...)
 
