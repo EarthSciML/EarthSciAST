@@ -315,6 +315,10 @@ function _fast_ckey!(key::Vector{Int}, fk::_FastKey, loop::Vector{Int})
     return key
 end
 
+# One lane read's guards, outermost first: each a condition node of the branch
+# template and the truth value the read needs it to have.
+const _GuardPath = Vector{Tuple{_Node,Bool}}
+
 # Reusable caches for the per-cell signature (branch template memo + branch-key
 # guard memo + a scratch IOBuffer), shared across the whole equation's sweep.
 mutable struct _AffineSig
@@ -346,11 +350,15 @@ mutable struct _AffineSig
     # The scan key in closed form (`_FastKey`), `false` where the body has none,
     # `nothing` until the first keyed cell decides.
     fast_key::Union{Nothing,Bool,_FastKey}
+    # Per branch key, the guard paths each lane is read under
+    # (`_lane_guard_paths`), built only when a lane is out of range somewhere.
+    lane_guards::Dict{String,Vector{Vector{_GuardPath}}}
 end
 _AffineSig() = _AffineSig(Dict{String,_StencilBranch}(), IdDict{OpExpr,Bool}(), IOBuffer(), Int[],
                           Dict{String,Vector{Vector{Bool}}}(), Int[], Dict{String,Any}(),
                           IdDict{OpExpr,Nothing}(), IdDict{Any,Bool}(), Dict{String,Int}(),
-                          Dict{String,Vector{Union{Nothing,_LaneEval}}}(), nothing, nothing)
+                          Dict{String,Vector{Union{Nothing,_LaneEval}}}(), nothing, nothing,
+                          Dict{String,Vector{Vector{_GuardPath}}}())
 
 # Whether `e` reaches an `index` of a `makearray` or `faq` producer, through the
 # same children `_branch_key!` descends into.
@@ -1411,6 +1419,187 @@ end
     return _eval_const_int(rec.idx_args[d], _set_env!(env, idx_names, loop), const_arrays)
 end
 
+# ── GUARDED OUT-OF-RANGE LANES ─────────────────────────────────────────────
+#
+# The box processor reads every lane at every cell it derives, but a body may
+# read a const lane only under a guard: `ifelse(i > n, 0, c[i])` reads `c[i]`
+# at no cell where `i > n`. The interpreter raises E_TREEWALK_CONSTARRAY_OOB
+# where an out-of-range read is EVALUATED and nowhere else, so a lane that is
+# out of range at some cell of a box is lowered cell by cell: in range, its
+# value (a slot, for a state lane whose subscript gathers through a const
+# table); out of range, the guards it is read under decide at that cell —
+#   * a guard that is not taken there: the cell never reads the lane, so its
+#     table entry is a filler no evaluation reaches;
+#   * every guard taken (or none): the read happens, and the build raises the
+#     exact error the per-cell resolution raises;
+#   * a guard that depends on the state, a parameter, time or a live buffer:
+#     only the run time knows, and the equation declines to the tiers that
+#     gather at run time and raise there (the whole-array nest).
+# A guard is decided by evaluating its compiled condition with the lanes it
+# reads replaced by their values at the cell, through `_eval_node` itself, so
+# the decision is the one the kernel would make.
+
+_is_const_oob(err) = err isa TreeWalkError && err.code == "E_TREEWALK_CONSTARRAY_OOB"
+
+# Every guard path each lane sentinel of `tmpl` is read under (`ifelse`
+# branches, the short-circuited operands of `and` / `or`). A lane with no
+# recorded path — one inside a template sub-kernel, or past the walk budget —
+# has unknown guards, which `_lane_guard_at` treats as a run-time guard.
+function _lane_guard_paths(tmpl::_Node, nlanes::Int)
+    paths = [_GuardPath[] for _ in 1:nlanes]
+    stack = Tuple{_Node,Bool}[]
+    seen = Set{Tuple{UInt,UInt}}()
+    budget = Ref(1_000_000)
+    function visit(n::_Node)
+        (budget[] -= 1) < 0 && return
+        key = (objectid(n), hash(Tuple{UInt,Bool}[(objectid(c), b) for (c, b) in stack]))
+        key in seen && return
+        push!(seen, key)
+        if n.kind === _NK_STATE && n.idx < 0
+            r = -n.idx
+            if r < _SUBCALL_SENT_BASE && r <= nlanes
+                p = copy(stack)
+                any(q -> length(q) == length(p) &&
+                         all(i -> q[i][1] === p[i][1] && q[i][2] == p[i][2], eachindex(p)),
+                    paths[r]) || push!(paths[r], p)
+            end
+            return
+        end
+        ch = n.children
+        if n.kind === _NK_OP && n.op === :ifelse && length(ch) == 3
+            visit(ch[1])
+            push!(stack, (ch[1], true)); visit(ch[2]); pop!(stack)
+            push!(stack, (ch[1], false)); visit(ch[3]); pop!(stack)
+        elseif n.kind === _NK_OP && (n.op === :and || n.op === :or)
+            for c in ch
+                visit(c)
+                push!(stack, (c, n.op === :and))
+            end
+            for _ in ch; pop!(stack); end
+        else
+            for c in ch
+                visit(c)
+            end
+        end
+    end
+    visit(tmpl)
+    budget[] < 0 && foreach(empty!, paths)
+    return paths
+end
+
+# A guard condition with every lane it reads replaced by that lane's value at
+# the cell (`env`), or `nothing` when it reads anything the build does not know.
+function _guard_at_cell(n::_Node, recipes, env, var_map, const_arrays)
+    k = n.kind
+    k === _NK_LITERAL && return n
+    if k === _NK_STATE
+        n.idx < 0 || return nothing
+        r = -n.idx
+        r >= _SUBCALL_SENT_BASE && return nothing
+        rec = recipes[r]
+        rec.kind in (LANE_LOOPLIT, LANE_CONST, LANE_EXPRTBL) || return nothing
+        v = try
+            _eval_recipe(rec, env, var_map, const_arrays)
+        catch err
+            (err isa TreeWalkError || err isa _StencilFallback) && return nothing
+            rethrow()
+        end
+        return _mknode(kind=_NK_LITERAL, literal=Float64(v))
+    elseif k === _NK_OP || k === _NK_CONST_GATHER
+        ch = Vector{_Node}(undef, length(n.children))
+        for i in eachindex(ch)
+            c = _guard_at_cell(n.children[i], recipes, env, var_map, const_arrays)
+            c === nothing && return nothing
+            ch[i] = c
+        end
+        return _mknode(kind=k, op=n.op, literal=n.literal, idx=n.idx, sym=n.sym,
+                       payload=n.payload, children=ch)
+    end
+    return nothing
+end
+
+# Whether a lane read under `paths` happens at the cell `env`: `:taken`,
+# `:not_taken`, or `:unknown` when a guard is decided only at run time.
+function _lane_guard_at(paths::Vector{_GuardPath}, recipes, env, var_map, const_arrays)
+    isempty(paths) && return :unknown
+    unknown = false
+    for p in paths
+        st = :taken
+        for (c, want) in p
+            g = _guard_at_cell(c, recipes, env, var_map, const_arrays)
+            v = g === nothing ? nothing :
+                try
+                    _eval_node(g, Float64[], NamedTuple(), 0.0)
+                catch err
+                    err isa TreeWalkError || rethrow()
+                    nothing
+                end
+            if v === nothing
+                st = :unknown
+            elseif (v != 0) != want
+                st = :not_taken
+                break
+            end
+        end
+        st === :taken && return :taken
+        st === :unknown && (unknown = true)
+    end
+    return unknown ? :unknown : :not_taken
+end
+
+# The lowering of a const or state lane that is out of range at some cell of
+# the box (see the section note): a dense box-local table, as
+# `_materialize_const_box` / `_materialize_state_tbl` build, whose entries at
+# the cells that never read the lane are fillers — a const lane's first
+# in-range value (so a lane uniform where it is read still folds to a
+# literal), a state lane's ghost slot 0.
+function _guarded_lane_repl(rec::_LaneRecipe, paths::Vector{_GuardPath}, recipes,
+                            idx_names, box, D, var_map, const_arrays)
+    s, off, len = _box_local_addr(box, D)
+    state = rec.kind == LANE_STATE
+    tbl = state ? Vector{Int}(undef, len) : Vector{Float64}(undef, len)
+    unread = falses(len)
+    le = _lane_evaluator(rec, collect(String, idx_names), var_map, const_arrays)
+    env = Dict{String,Int}()
+    loop = Vector{Int}(undef, D)
+    j = 0
+    for I in CartesianIndices(ntuple(d -> UnitRange{Int}(box[d]), D))
+        j += 1
+        @inbounds for d in 1:D
+            loop[d] = I[d]
+        end
+        if le !== nothing
+            v, ok = _lane_eval(le, loop)
+            if ok
+                tbl[j] = v
+                continue
+            end
+        end
+        _set_env!(env, idx_names, loop)
+        v = try
+            _eval_recipe(rec, env, var_map, const_arrays)
+        catch err
+            _is_const_oob(err) || rethrow()
+            g = _lane_guard_at(paths, recipes, env, var_map, const_arrays)
+            g === :taken && rethrow()
+            g === :unknown && throw(_StencilFallback(
+                "a const subscript is out of range under a run-time guard"))
+            unread[j] = true
+            nothing
+        end
+        v === nothing || (tbl[j] = v)
+    end
+    if state
+        tbl[unread] .= 0
+        return _AccRepl(_AccStateTblBox(tbl, s, off))
+    end
+    first_read = findfirst(!, unread)
+    tbl[unread] .= first_read === nothing ? 0.0 : tbl[first_read]
+    v1 = tbl[1]
+    all(x -> isequal(x, v1), tbl) && return _LitRepl(v1)
+    return _AccRepl(_AccConstBox(tbl, s, off))
+end
+
 # Does `pred(loop)` hold at EVERY cell of the box? The exact counterpart of a
 # corner check, for a lane whose subscripts are not structurally affine
 # (`_affine_idx_expr`): such a subscript can be arbitrary data (an
@@ -1514,10 +1703,18 @@ function _process_affine_box!(kernels, spine_cache, flat_cache, box, idx_names,
     evs = _box_lane_evals!(sig, bkey, recipes, idx_names, var_map, const_arrays)
     lane_repl = Vector{_LaneRepl}(undef, length(recipes))
     for k in eachindex(recipes)
-        lane_repl[k] = @_bench :lane_repl _derive_lane_repl(recipes[k], idx_names, rep, corners, thin,
-                                         oln_rep, base, strides, D, var_map,
-                                         const_arrays, flat_cache, box,
-                                         !any(nonaff[k]); le=evs[k])
+        lane_repl[k] = try
+            @_bench :lane_repl _derive_lane_repl(recipes[k], idx_names, rep, corners, thin,
+                                                 oln_rep, base, strides, D, var_map,
+                                                 const_arrays, flat_cache, box,
+                                                 !any(nonaff[k]); le=evs[k])
+        catch err
+            (_is_const_oob(err) && recipes[k].kind in (LANE_CONST, LANE_STATE)) || rethrow()
+            paths = get!(() -> _lane_guard_paths(tmpl, length(recipes)),
+                         sig.lane_guards, bkey)[k]
+            _guarded_lane_repl(recipes[k], paths, recipes, idx_names, box, D,
+                               var_map, const_arrays)
+        end
     end
 
     spine, acc, cse, subs = @_bench_hot :spine_lower get!(spine_cache, string(bkey, '#', _lane_repl_key(lane_repl))) do
