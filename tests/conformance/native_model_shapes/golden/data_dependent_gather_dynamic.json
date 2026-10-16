@@ -1,0 +1,187 @@
+{
+  "fixture": "data_dependent_gather_dynamic",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "values",
+      "assertion_idx": 1,
+      "variable": "y_inline",
+      "actual": 40.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 2,
+      "variable": "y_inline",
+      "actual": 30.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 3,
+      "variable": "y_inline",
+      "actual": 20.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 4,
+      "variable": "y_inline",
+      "actual": 10.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 5,
+      "variable": "out_ix",
+      "actual": 10.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 6,
+      "variable": "out_ix",
+      "actual": 30.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 7,
+      "variable": "out_ix",
+      "actual": 50.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 8,
+      "variable": "y_named",
+      "actual": 4.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 9,
+      "variable": "y_named",
+      "actual": 1.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 10,
+      "variable": "y_named",
+      "actual": 2.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 11,
+      "variable": "y_named",
+      "actual": 4.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 12,
+      "variable": "out_layer",
+      "actual": 100.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 13,
+      "variable": "out_layer",
+      "actual": 111.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 14,
+      "variable": "out_layer",
+      "actual": 105.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 15,
+      "variable": "out_xy",
+      "actual": 1.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 16,
+      "variable": "out_xy",
+      "actual": 10.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 17,
+      "variable": "out_xy",
+      "actual": 2.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 18,
+      "variable": "out_xy",
+      "actual": 20.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 19,
+      "variable": "out_xy",
+      "actual": 3.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 20,
+      "variable": "out_xy",
+      "actual": 30.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 21,
+      "variable": "sel",
+      "actual": 1.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 22,
+      "variable": "sel",
+      "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 23,
+      "variable": "sel",
+      "actual": 1.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 24,
+      "variable": "sel",
+      "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 25,
+      "variable": "sel",
+      "actual": 1.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 26,
+      "variable": "sel",
+      "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 27,
+      "variable": "acc",
+      "actual": 39.99999999999999
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 28,
+      "variable": "acc",
+      "actual": 29.99999999999999
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 29,
+      "variable": "acc",
+      "actual": 19.999999999999996
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 30,
+      "variable": "acc",
+      "actual": 9.999999999999998
+    }
+  ]
+}

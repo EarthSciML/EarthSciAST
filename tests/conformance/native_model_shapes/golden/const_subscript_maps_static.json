@@ -1,0 +1,187 @@
+{
+  "fixture": "const_subscript_maps_static",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "values",
+      "assertion_idx": 1,
+      "variable": "rev_inline",
+      "actual": 50.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 2,
+      "variable": "rev_inline",
+      "actual": 40.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 3,
+      "variable": "rev_inline",
+      "actual": 30.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 4,
+      "variable": "rev_inline",
+      "actual": 20.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 5,
+      "variable": "rev_inline",
+      "actual": 10.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 6,
+      "variable": "rev_named",
+      "actual": 16.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 7,
+      "variable": "rev_named",
+      "actual": 8.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 8,
+      "variable": "rev_named",
+      "actual": 4.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 9,
+      "variable": "rev_named",
+      "actual": 2.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 10,
+      "variable": "rev_named",
+      "actual": 1.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 11,
+      "variable": "rev_param",
+      "actual": 5.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 12,
+      "variable": "rev_param",
+      "actual": 3.75
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 13,
+      "variable": "rev_param",
+      "actual": 2.5
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 14,
+      "variable": "rev_param",
+      "actual": 1.25
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 15,
+      "variable": "off_param",
+      "actual": 2.5
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 16,
+      "variable": "off_param",
+      "actual": 3.75
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 17,
+      "variable": "off_param",
+      "actual": 5.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 18,
+      "variable": "off_inline",
+      "actual": 30.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 19,
+      "variable": "off_inline",
+      "actual": 40.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 20,
+      "variable": "off_inline",
+      "actual": 50.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 21,
+      "variable": "clamp_inline",
+      "actual": 20.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 22,
+      "variable": "clamp_inline",
+      "actual": 30.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 23,
+      "variable": "clamp_inline",
+      "actual": 40.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 24,
+      "variable": "clamp_inline",
+      "actual": 50.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 25,
+      "variable": "clamp_inline",
+      "actual": 50.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 26,
+      "variable": "clamp_low",
+      "actual": 10.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 27,
+      "variable": "clamp_low",
+      "actual": 10.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 28,
+      "variable": "clamp_low",
+      "actual": 20.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 29,
+      "variable": "clamp_low",
+      "actual": 30.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 30,
+      "variable": "clamp_low",
+      "actual": 40.0
+    }
+  ]
+}
