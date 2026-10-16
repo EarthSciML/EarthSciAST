@@ -1477,10 +1477,23 @@ fn propagate_ifelse_dim(
     }
 }
 
-/// Array operators: propagate the element dimension. Shape and indexing are
-/// orthogonal to dimension (see gt-t5c / gt-vt3 — shapes are a separate
-/// concern from unit checking). `faq` is the unified Functional
-/// Aggregate Query op (RFC §5.6).
+/// Array operators carry their ELEMENT's unit (esm-spec §4.8.3, "Array
+/// operators"). Shape and indexing are orthogonal to dimension (gt-t5c /
+/// gt-vt3); what an array holds is not. The same rules serve the checker and
+/// the evaluation path's angle conversion, so the two cannot disagree.
+///
+/// * `index`, `reshape`, `transpose` — the unit of the source array
+///   (`args[0]`); the subscripts are not part of it.
+/// * `concat` — its operands agree like those of `+`.
+/// * `makearray` — its region `values` agree like the operands of `+`: an
+///   undeterminable region is skipped, two determinable ones that disagree
+///   are a provable mismatch.
+/// * `broadcast` — the unit of `{op: fn, args}`.
+/// * `faq` — decided by its ⊕ (see [`faq_unit`]); `filter` and `expr` are
+///   always walked for findings.
+///
+/// A node with nothing to read a unit from is UNDETERMINABLE, never
+/// dimensionless (§4.8.4).
 fn propagate_array_dim(
     op: &ExpressionNode,
     env: &HashMap<String, Unit>,
@@ -1495,52 +1508,36 @@ fn propagate_array_dim(
             if let Some(filter) = &op.filter {
                 propagate_dim(filter, env, findings);
             }
-            // The body is the scalar expression evaluated for each tuple of
-            // loop-index values; its dimension is the array's element
-            // dimension.
-            if let Some(body) = &op.expr {
-                return propagate_dim(body, env, findings);
-            }
-            // Fallback: infer from the first positional arg.
-            match op.args.first() {
-                Some(first) => propagate_dim(first, env, findings),
-                None => Dim::Known(Unit::dimensionless()),
+            match &op.expr {
+                Some(body) => {
+                    let body = propagate_dim(body, env, findings);
+                    faq_unit(op, body)
+                }
+                None => Dim::Unknown,
             }
         }
         "makearray" => {
-            // Element dimension is determined by any per-region `values`
-            // entry. All regions must share dimensions.
-            let Some(values) = &op.values else {
-                return Dim::Known(Unit::dimensionless());
-            };
-            let dims: Vec<Dim> = values
-                .iter()
-                .map(|v| propagate_dim(v, env, findings))
-                .collect();
-            let mut resolved = dims.iter().filter_map(Dim::known);
-            let Some(first) = resolved.next().cloned() else {
-                return if values.is_empty() {
-                    Dim::Known(Unit::dimensionless())
-                } else {
-                    Dim::Unknown
+            let mut first: Option<Unit> = None;
+            for value in op.values.iter().flatten() {
+                let dim = propagate_dim(value, env, findings);
+                let Some(unit) = dim.known() else {
+                    continue;
                 };
-            };
-            let mut mismatched = false;
-            for other in resolved {
-                if !first.same_unit(other) {
-                    mismatched = true;
-                    findings.push(UnitFinding::error(format!(
-                        "'makearray' regions must share units: {} vs {}",
-                        describe_scaled(&first),
-                        describe_scaled(other)
-                    )));
+                match &first {
+                    None => first = Some(unit.clone()),
+                    Some(f) if !f.same_unit(unit) => {
+                        findings.push(UnitFinding::error(format!(
+                            "'makearray' regions must share units: {} vs {}",
+                            describe_scaled(f),
+                            describe_scaled(unit)
+                        )));
+                    }
+                    _ => {}
                 }
             }
-            if mismatched || dims.iter().any(|d| d.known().is_none()) {
-                return Dim::Unknown;
-            }
-            Dim::Known(first)
+            first.map_or(Dim::Unknown, Dim::Known)
         }
+        "concat" => propagate_matching_dim(op, env, findings),
         "broadcast" => {
             // Elementwise map over arrays with `fn` naming the scalar
             // operator. Construct a synthetic scalar node and recurse so we
@@ -1566,15 +1563,47 @@ fn propagate_array_dim(
             };
             propagate_operator_dim(&synthetic, env, findings)
         }
-        // "index" | "reshape" | "transpose" | "concat"
-        _ => {
-            // Shape-only reorderings: element dimension is inherited from
-            // the first positional arg (the source array).
-            match op.args.first() {
-                Some(first) => propagate_dim(first, env, findings),
-                None => Dim::Known(Unit::dimensionless()),
+        // "index" | "reshape" | "transpose": the source array's unit.
+        _ => match op.args.first() {
+            Some(first) => propagate_dim(first, env, findings),
+            None => Dim::Unknown,
+        },
+    }
+}
+
+/// The unit of an `faq` node whose body has unit `body` (esm-spec §4.8.3).
+///
+/// The ⊗ of the semiring is written by the author inside `expr`, so it is
+/// already typed; `join` clauses are key equalities and contribute no factor.
+/// What remains is the ⊕ reduction over the contracted indices:
+///
+/// * `+`, `max`, `min` (`sum_product`, `max_product`, `min_sum`, `max_sum`,
+///   or `reduce` `+`/`max`/`min`) — the body's unit;
+/// * `*` (`reduce: "*"`) — the body's unit only when the body is a pure
+///   number, otherwise undeterminable: the power is the range length;
+/// * `∨` (`bool_and_or`) — dimensionless, a boolean;
+/// * value invention (`distinct`, or a `key`) — undeterminable: the result
+///   is ids, not a quantity. So is an unknown ⊕ spelling, which is rejected
+///   elsewhere.
+fn faq_unit(op: &ExpressionNode, body: Dim) -> Dim {
+    if op.distinct == Some(true) || op.key.is_some() {
+        return Dim::Unknown;
+    }
+    match crate::faq::effective_reduce_kind(op.semiring.as_deref(), op.reduce.as_deref()) {
+        Ok(
+            crate::faq::ReduceKind::Sum | crate::faq::ReduceKind::Max | crate::faq::ReduceKind::Min,
+        ) => body,
+        Ok(crate::faq::ReduceKind::Product) => {
+            if body.known().is_some_and(Unit::is_pure_number) {
+                body
+            } else {
+                Dim::Unknown
             }
         }
+        Ok(crate::faq::ReduceKind::Or | crate::faq::ReduceKind::And) => {
+            Dim::Known(Unit::dimensionless())
+        }
+        Err(_) => Dim::Unknown,
     }
 }
 
@@ -4564,5 +4593,70 @@ mod tests {
         assert!(bad.iter().any(UnitFinding::is_error), "{bad:?}");
         let ok = check_expression_dimensions(&faq(op("<=", vec![var("x"), var("y")])), None, &env);
         assert!(!ok.iter().any(UnitFinding::is_error), "{ok:?}");
+    }
+
+    fn faq_node(body: Expr, semiring: Option<&str>, reduce: Option<&str>) -> ExpressionNode {
+        ExpressionNode {
+            op: "faq".to_string(),
+            expr: Some(Box::new(body)),
+            semiring: semiring.map(str::to_string),
+            reduce: reduce.map(str::to_string),
+            ..ExpressionNode::default()
+        }
+    }
+
+    #[test]
+    fn array_operators_carry_their_element_unit() {
+        let env = env_of(&[("v", "h"), ("w", "1"), ("a", "m"), ("b", "kg")]);
+        let var = |n: &str| Expr::Variable(n.into());
+        let unit = |e: &Expr| propagate_dim(e, &env, &mut Vec::new());
+        let h = parse_unit("h").unwrap();
+        let idx = op("index", vec![var("v"), var("i")]);
+        assert_eq!(unit(&idx).known(), Some(&h));
+        assert!(unit(&op("index", vec![])).known().is_none());
+        // faq by semiring.
+        for (sr, rd) in [
+            (Some("sum_product"), None),
+            (Some("max_product"), None),
+            (Some("min_sum"), None),
+            (None, Some("max")),
+            (None, None),
+        ] {
+            let f = Expr::operator(faq_node(idx.clone(), sr, rd));
+            assert_eq!(unit(&f).known(), Some(&h), "{sr:?} {rd:?}");
+        }
+        let prod = Expr::operator(faq_node(idx.clone(), None, Some("*")));
+        assert!(unit(&prod).known().is_none());
+        let wprod = Expr::operator(faq_node(
+            op("index", vec![var("w"), var("i")]),
+            None,
+            Some("*"),
+        ));
+        assert!(unit(&wprod).known().is_some_and(Unit::is_pure_number));
+        let any = Expr::operator(faq_node(idx.clone(), Some("bool_and_or"), None));
+        assert!(unit(&any).known().is_some_and(Unit::is_dimensionless));
+        let mut distinct = faq_node(idx.clone(), None, None);
+        distinct.distinct = Some(true);
+        assert!(unit(&Expr::operator(distinct)).known().is_none());
+        // makearray: a literal region is skipped; disagreeing regions are a mismatch.
+        let mk = |values: Vec<Expr>| {
+            Expr::operator(ExpressionNode {
+                op: "makearray".to_string(),
+                values: Some(values),
+                ..ExpressionNode::default()
+            })
+        };
+        assert_eq!(
+            unit(&mk(vec![var("v"), Expr::Number(0.0)])).known(),
+            Some(&h)
+        );
+        assert!(unit(&mk(vec![])).known().is_none());
+        let mut f = Vec::new();
+        propagate_dim(&mk(vec![var("a"), var("b")]), &env, &mut f);
+        assert!(f.iter().any(UnitFinding::is_error), "{f:?}");
+        // concat agrees like +.
+        let mut f = Vec::new();
+        propagate_dim(&op("concat", vec![var("a"), var("b")]), &env, &mut f);
+        assert!(f.iter().any(UnitFinding::is_error), "{f:?}");
     }
 }
