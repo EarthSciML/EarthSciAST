@@ -618,6 +618,31 @@ using Unitful
 
         good = ReactionSystem(species, [rxn]; parameters=[Parameter("k", 0.1; units="L/(mol*s)")])
         @test EarthSciAST.validate_reaction_system_dimensions(good) == true
+
+        # A scoped rate constant has its target's units: relative to the
+        # system's own subsystems, then through a top-level component.
+        V = EarthSciAST.validate_reaction_rate_units
+        md = EarthSciAST.Metadata("scoped-rate")
+        rates(u) = ReactionSystem(Species[], Reaction[];
+                                  parameters=[Parameter("k", 0.1; units=u)])
+        scoped_rxn = Reaction("R1", [SE("A", 1), SE("B", 1)], [SE("C", 1)], VarExpr("Rates.k"))
+        rel(u) = ReactionSystem(species, [scoped_rxn]; subsystems=Dict("Rates" => rates(u)))
+        @test length(V(rel("1/s"), "/rs")) == 1
+        @test isempty(V(rel("L/(mol*s)"), "/rs"))
+        top = ReactionSystem(species, [scoped_rxn])
+        for (u, n) in (("1/s", 1), ("L/(mol*s)", 0))
+            file = EarthSciAST.EsmFile("0.1.0", md;
+                reaction_systems=Dict("Chem" => top, "Rates" => rates(u)))
+            @test length(V(top, "/rs"; file=file)) == n
+            @test length(V(top, "/rs"; toplevel=EarthSciAST._toplevel_scoped_units(file))) == n
+            @test count(e -> e.path == "/reaction_systems/Chem/reactions/0",
+                        EarthSciAST.validate_structural(file)) == n
+        end
+        @test isempty(V(top, "/rs"))   # no document: unknown, skipped
+        # A relative member with no units shadows the top-level one: skipped.
+        file = EarthSciAST.EsmFile("0.1.0", md;
+            reaction_systems=Dict("Chem" => rel(nothing), "Rates" => rates("1/s")))
+        @test isempty(V(rel(nothing), "/rs"; file=file))
     end
 
     @testset "File Validation" begin
@@ -749,6 +774,17 @@ using Unitful
         @test any(occursin("Exponent must be dimensionless", m)
                   for m in F(pow("L", cnst(2; units="m")), var_units))
         @test !isempty(F(pow("L", VarExpr("z")), var_units))
+        # An angle-bearing const exponent is not a number: not folded, refused.
+        for u in ("rad", "sr")
+            @test C(cnst(2; units=u)) === nothing
+            @test C(OpExpr("+", E[IntExpr(1), cnst(2; units=u)])) === nothing
+            for base in ("L", "n")
+                @test any(occursin("Exponent must be dimensionless", m)
+                          for m in F(pow(base, cnst(2; units=u)), var_units))
+            end
+        end
+        @test any(occursin("Exponent must be dimensionless", m)
+                  for m in F(pow("L", VarExpr("ang")), Dict(var_units..., "ang" => "deg")))
     end
 
     # esm-spec §4.8.3: an faq's `filter` and `expr` body are walked with the
@@ -829,6 +865,46 @@ using Unitful
             subsystems=Dict("Sub" => leaf))
         @test isempty(codes(own))
 
+        # A relative member with NO units still occupies its dotted name: it
+        # shadows the top-level `Sub.p`, and looks up as unknown — no finding.
+        bare = EarthSciAST.Model(Dict("p" => MV(P; default=1.0)), EarthSciAST.Equation[])
+        rel_bare = EarthSciAST.Model(
+            Dict("probe" => MV(U; units="m")),
+            [EarthSciAST.Equation(VarExpr("probe"), VarExpr("Sub.p"))];
+            subsystems=Dict("Sub" => bare))
+        kg_sub = EarthSciAST.Model(Dict("p" => MV(P; units="kg", default=1.0)),
+                                   EarthSciAST.Equation[])
+        file = EarthSciAST.EsmFile("0.1.0", md; models=Dict("Sub" => kg_sub, "Probe" => rel_bare))
+        @test EarthSciAST.scoped_reference_units(file, rel_bare)["Sub.p"] === nothing
+        @test isempty(codes(rel_bare; file=file))
+        @test isempty(EarthSciAST.validate_model_unit_consistency(rel_bare, "/models/Probe";
+                                                                  file=file))
+        # ... as does a nested one (`Sub.inner.q` with no units).
+        nested = EarthSciAST.Model(
+            Dict("probe" => MV(U; units="m")),
+            [EarthSciAST.Equation(VarExpr("probe"), VarExpr("Sub.inner.q"))];
+            subsystems=Dict("Sub" => EarthSciAST.Model(Dict{String, EarthSciAST.ModelVariable}(),
+                EarthSciAST.Equation[]; subsystems=Dict("inner" => EarthSciAST.Model(
+                    Dict("q" => MV(P; default=1.0)), EarthSciAST.Equation[])))))
+        kg_inner = EarthSciAST.Model(Dict{String, EarthSciAST.ModelVariable}(),
+            EarthSciAST.Equation[]; subsystems=Dict("inner" => EarthSciAST.Model(
+                Dict("q" => MV(P; units="kg", default=1.0)), EarthSciAST.Equation[])))
+        file = EarthSciAST.EsmFile("0.1.0", md; models=Dict("Sub" => kg_inner, "Probe" => nested))
+        @test isempty(codes(nested; file=file))
+        # Without the shadow the top-level unit applies and mismatches.
+        plain = top_probe("m", VarExpr("Sub.p"))
+        file = EarthSciAST.EsmFile("0.1.0", md; models=Dict("Sub" => kg_sub, "Probe" => plain))
+        @test codes(plain; file=file) == bad
+
+        # The document-wide part, built once and passed as `toplevel`, gives
+        # exactly the findings `file` does.
+        tl = EarthSciAST._toplevel_scoped_units(file)
+        @test codes(plain; toplevel=tl) == codes(plain; file=file)
+        errs(; kw...) = [(e.path, e.message, e.error_type) for e in
+                         EarthSciAST.validate_model_unit_consistency(plain, "/models/Probe"; kw...)]
+        @test length(errs(; file=file)) == 1
+        @test errs(; toplevel=tl) == errs(; file=file)
+
         # A reaction system's species and parameters are reachable too.
         rs = EarthSciAST.ReactionSystem([EarthSciAST.Species("O3"; units="mol/m^3")],
                                         EarthSciAST.Reaction[];
@@ -858,6 +934,18 @@ using Unitful
         @test D(OpExpr("index", E[V("x"), IntExpr(1)]), vu) == u"m"
         @test D(OpExpr("index", E[]), vu) === nothing
         @test D(OpExpr("index", E[V("undeclared"), V("i")]), vu) === nothing
+        # Every operand is walked: a mismatch inside a subscript or a shape
+        # operand is reported, while the unit is still the source array's.
+        bad_sub = OpExpr("+", E[V("x"), V("z")])
+        for op in ("index", "reshape", "transpose")
+            @test length(F(OpExpr(op, E[V("x"), bad_sub]), vu)) == 1
+            @test D(OpExpr(op, E[V("x"), bad_sub]), vu) == u"m"
+            # A dimensional subscript is not itself an error.
+            @test isempty(F(OpExpr(op, E[V("x"), V("z")]), vu))
+        end
+        @test length(F(OpExpr("faq", E[bad_sub]; expr_body=V("x"), output_idx=String[]), vu)) == 1
+        @test length(F(OpExpr("makearray", E[bad_sub]), vu)) == 1
+        @test length(F(OpExpr("broadcast", E[bad_sub]), vu)) == 1
         # ... and is then checked like any other operand.
         @test !isempty(F(OpExpr("+", E[OpExpr("index", E[V("x"), V("i")]), V("z")]), vu))
 

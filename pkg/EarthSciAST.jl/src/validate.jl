@@ -456,11 +456,15 @@ function validate_structural(file::EsmFile)::Vector{StructuralError}
     append!(errors, _validate_inline_tests(file))
 
     # 3. Validate reaction system consistency
+    # The document-wide part of every component's scoped-reference units
+    # (esm-spec §4.8.4), built once for the whole pass.
+    scoped_toplevel = _toplevel_scoped_units(file)
     if file.reaction_systems !== nothing
         for (rs_name, rs) in file.reaction_systems
             append!(errors, validate_reaction_consistency(rs, "/reaction_systems/$rs_name";
                                                           indep=_indep_var(file)))
-            append!(errors, validate_reaction_rate_units(rs, "/reaction_systems/$rs_name"))
+            append!(errors, validate_reaction_rate_units(rs, "/reaction_systems/$rs_name";
+                                                         toplevel=scoped_toplevel))
         end
     end
 
@@ -550,7 +554,8 @@ function validate_structural(file::EsmFile)::Vector{StructuralError}
             # is why `validate()` accepted every dimensionally-inconsistent
             # fixture in the shared corpus.
             append!(errors, validate_model_unit_consistency(
-                _units_view(file, model_name, model), "/models/$model_name"; file=file))
+                _units_view(file, model_name, model), "/models/$model_name";
+                toplevel=scoped_toplevel))
         end
     end
 
@@ -1797,7 +1802,7 @@ function _units_view(file::EsmFile, model_name::AbstractString, model::Model)
 end
 
 """
-    validate_model_unit_consistency(model::Model, path::String; file=nothing) -> Vector{StructuralError}
+    validate_model_unit_consistency(model::Model, path::String; file=nothing, toplevel=nothing) -> Vector{StructuralError}
 
 Promote every units finding in `model` to a structural error under its own
 esm-spec §4.8.4 code — `unit_inconsistency` for a PROVABLE dimensional
@@ -1807,22 +1812,26 @@ all. The findings (and the "provable vs unknown" discipline that makes them
 trustworthy) come from [`model_unit_findings`](@ref) in units.jl; this function
 only attaches the model's JSON pointer and recurses into subsystems. `file`,
 the document holding `model`, lets a scoped reference into a top-level
-component be typed from its target's declaration (esm-spec §4.8.4).
+component be typed from its target's declaration (esm-spec §4.8.4); `toplevel`
+is that document-wide map already built (`_toplevel_scoped_units`), in place of
+`file`.
 
 This is what wires the units engine into `validate()`. Before the 2026-07-14
 audit the engine had no caller outside its own test file.
 """
 function validate_model_unit_consistency(model::Model, path::String;
-                                         file=nothing)::Vector{StructuralError}
+                                         file=nothing,
+                                         toplevel=nothing)::Vector{StructuralError}
     errors = StructuralError[]
+    toplevel === nothing && (toplevel = _toplevel_scoped_units(file))
 
-    for f in model_unit_findings(model; file=file)
+    for f in model_unit_findings(model; toplevel=toplevel)
         push!(errors, StructuralError("$path/$(f.subpath)", f.message, f.code))
     end
 
     for (subsys_name, subsys) in model_subsystems(model)
         append!(errors, validate_model_unit_consistency(subsys, "$path/subsystems/$subsys_name";
-                                                        file=file))
+                                                        toplevel=toplevel))
     end
 
     return errors
@@ -3251,7 +3260,7 @@ function validate_reaction_consistency(rs::ReactionSystem, path::String;
 end
 
 """
-    validate_reaction_rate_units(rs::ReactionSystem, path::String) -> Vector{StructuralError}
+    validate_reaction_rate_units(rs::ReactionSystem, path::String; file=nothing, toplevel=nothing) -> Vector{StructuralError}
 
 Enforce the mass-action dimensional constraint from spec §7.4: for each reaction,
 rate * prod(substrate^stoichiometry) must have dimensions of species/time. The
@@ -3260,9 +3269,18 @@ reference concentration unit is taken from the first substrate (matching TS/Pyth
 The check is skipped when the reference concentration unit is dimensionless
 (mol/mol, ppm, …) because atmospheric-chemistry rate expressions commonly bake
 a number-density factor into rate constants.
+
+A scoped rate or substrate (`Sub.k`, `Other.A`) has the units its target
+declares, with the precedence [`model_unit_findings`](@ref) uses: the system's
+own names, then paths relative to its own subsystems, then the top-level
+components of `file` (or the prebuilt `toplevel` map).
 """
-function validate_reaction_rate_units(rs::ReactionSystem, path::String)::Vector{StructuralError}
+function validate_reaction_rate_units(rs::ReactionSystem, path::String;
+                                      file=nothing,
+                                      toplevel=nothing)::Vector{StructuralError}
     errors = StructuralError[]
+    toplevel === nothing && (toplevel = _toplevel_scoped_units(file))
+    scoped = _UnitEnv(Dict{String, String}(), _relative_scoped_units(rs), toplevel)
 
     # Build name → unit-string map using ONLY explicitly declared units.
     # Mirrors Python's conservative scope: skip when any relevant unit is
@@ -3286,7 +3304,8 @@ function validate_reaction_rate_units(rs::ReactionSystem, path::String)::Vector{
         # literals, which defeats literal dimensional analysis.
         isa(reaction.rate, VarExpr) || continue
         rate_name = reaction.rate.name
-        rate_units_str = get(param_units, rate_name, get(species_units, rate_name, nothing))
+        rate_units_str = get(param_units, rate_name,
+                             get(species_units, rate_name, get(scoped, rate_name, nothing)))
         rate_units_str === nothing && continue
         rate_dim = parse_units(rate_units_str)
         rate_dim === nothing && continue
@@ -3306,7 +3325,8 @@ function validate_reaction_rate_units(rs::ReactionSystem, path::String)::Vector{
         total_order = 0.0
         fractional_substrate = false
         for substrate in substrates_field
-            sp_units_str = get(species_units, substrate.species, nothing)
+            sp_units_str = get(species_units, substrate.species,
+                               get(scoped, substrate.species, nothing))
             if sp_units_str === nothing
                 resolvable = false
                 break
@@ -3335,7 +3355,8 @@ function validate_reaction_rate_units(rs::ReactionSystem, path::String)::Vector{
         expected_dim = species_dim / time_unit
         full_dim = rate_dim * substrate_dim
         if dimension(full_dim) != dimension(expected_dim)
-            first_sp_units = get(species_units, substrates_field[1].species, "")
+            first_sp = substrates_field[1].species
+            first_sp_units = get(species_units, first_sp, get(scoped, first_sp, ""))
             order_str = isinteger(total_order) ? string(Int(total_order)) : string(total_order)
             push!(errors, StructuralError(
                 "$path/reactions/$(i-1)",
@@ -3349,7 +3370,8 @@ function validate_reaction_rate_units(rs::ReactionSystem, path::String)::Vector{
 
     # Recurse into subsystems
     for (subsys_name, subsys) in rs.subsystems
-        append!(errors, validate_reaction_rate_units(subsys, "$path/subsystems/$subsys_name"))
+        append!(errors, validate_reaction_rate_units(subsys, "$path/subsystems/$subsys_name";
+                                                     toplevel=toplevel))
     end
 
     return errors
