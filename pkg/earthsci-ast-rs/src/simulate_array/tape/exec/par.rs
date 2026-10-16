@@ -229,8 +229,10 @@ pub(super) fn split_ways(fs: &FusedSpec, ways: usize) -> usize {
     }
     let n: usize = fs.shape.iter().product();
     let by_work = |n: usize| fused_ways(n, || fused_cost(fs), ways);
+    // A pre-reduction splits only when every worker gets at least one whole
+    // range of columns: below that the fork costs more than it saves.
     if let Some(p) = &fs.pre {
-        return if p.n_inner >= ways * reduce_cells_floor() || forced() {
+        return if p.n_inner >= ways * super::fused::pre_cols(p.rows) || forced() {
             by_work(n + p.rows * p.n_inner)
         } else {
             1

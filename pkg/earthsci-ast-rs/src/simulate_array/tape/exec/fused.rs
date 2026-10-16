@@ -1027,7 +1027,7 @@ pub(super) struct PreTile {
 
 /// Inner positions per range of a [`PreReduce`]: as many whole columns as
 /// keep a range's source (`rows` elements each) within a few tens of KiB.
-fn pre_cols(rows: usize) -> usize {
+pub(super) fn pre_cols(rows: usize) -> usize {
     ((16384 / rows.max(1)) / 8 * 8).max(8)
 }
 
