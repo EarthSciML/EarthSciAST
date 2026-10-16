@@ -85,6 +85,11 @@
 //!   (`E_TREEWALK_CONSTARRAY_OOB`, `E_TREEWALK_INDEX_ON_SCALAR`) exactly as
 //!   the per-cell oracle's `latch_gather_fault` does at the same point: the
 //!   FIRST fault latched in an evaluation wins, and the caller drains it.
+//! * [`Instr::FaultScan`] is the same latch for faults the oracle meets only
+//!   where it evaluates them (an `ifelse` arm, a filtered term): it finds the
+//!   first cell, in the oracle's visiting order, at which a candidate faults
+//!   AND every condition that leads to it holds, and latches that fault — or
+//!   nothing ([`FaultScanSpec::first`]).
 //!
 //! Array operands within one instruction share one box (shape + 1-based
 //! origin), checked at lowering time — the same precondition `vec_combine`
@@ -385,6 +390,10 @@ pub(crate) enum Instr {
     /// oracle substitutes there (`NaN`) is carried by the ordinary
     /// instructions around it.
     Fault { fault: u32 },
+    /// Latch the first fault of `fault_scans[spec]` the per-cell oracle would
+    /// have met, if any ([`FaultScanSpec::first`]). Defines no slot; reads the
+    /// candidates' conditions.
+    FaultScan { spec: u32 },
     /// A causal self-reference sweep (esm-spec §4.3.1.1) over
     /// `sweeps[spec]`: the next `body_len` instructions are the recurrence's
     /// cell body, lowered once over the sweep position, and they run once per
@@ -480,6 +489,7 @@ impl Instr {
             Instr::JmpIfZero { .. }
             | Instr::Sweep { .. }
             | Instr::Fault { .. }
+            | Instr::FaultScan { .. }
             | Instr::Export { .. }
             | Instr::DyWrite { .. }
             | Instr::Fused { .. }
@@ -623,6 +633,13 @@ impl Instr {
             Instr::JmpIfZero { cond, .. } => op(cond),
             Instr::Sweep { spec } => op(&t.sweeps[*spec as usize].result),
             Instr::Fault { .. } => {}
+            Instr::FaultScan { spec } => {
+                for c in &t.fault_scans[*spec as usize].cands {
+                    for pc in &c.path {
+                        op(&pc.op);
+                    }
+                }
+            }
             Instr::Export { slot, .. } => f(*slot),
             Instr::DyWrite { write } => f(t.dy_writes[*write as usize].slot),
             Instr::Fused { spec } => {
@@ -665,6 +682,7 @@ impl Instr {
             Instr::SegReduce { .. } => "SegReduce",
             Instr::Reshape { .. } => "Reshape",
             Instr::Fault { .. } => "Fault",
+            Instr::FaultScan { .. } => "FaultScan",
             Instr::Sweep { .. } => "Sweep",
             Instr::ScalarRead { .. } => "ScalarRead",
             Instr::JmpIfZero { .. } => "JmpIfZero",
@@ -1459,6 +1477,258 @@ impl SweepSpec {
     }
 }
 
+/// The order key of one fault: where the per-cell oracle meets it, compared
+/// lexicographically (the lowering's `FaultKey`).
+pub(crate) type FaultOrderKey = SmallVec<[i64; 12]>;
+
+/// The constant part of one [`Instr::FaultScan`]: every fault of one rule
+/// whose firing depends on which cells the oracle evaluates, plus the rule's
+/// unconditional fault if it has one.
+#[derive(Clone, Debug)]
+pub(crate) struct FaultScanSpec {
+    pub cands: Vec<FaultCand>,
+}
+
+/// One candidate fault of a [`FaultScanSpec`].
+#[derive(Clone, Debug)]
+pub(crate) struct FaultCand {
+    /// The key ahead of the cell part: the enclosing evaluations' positions.
+    pub prefix: FaultOrderKey,
+    /// The box the faulting read is evaluated over, in LOGICAL coordinates
+    /// (the program's axis reversal does not apply): empty `shape` with
+    /// `cells == false` is a single evaluation.
+    pub cells: bool,
+    pub shape: DimU,
+    pub lo: DimI,
+    /// The box's axes in the oracle's visiting order, slowest first.
+    pub visit: SmallVec<[u8; 4]>,
+    /// The bound contraction tuple of the box, after the cell in the key.
+    pub cvals: SmallVec<[i64; 4]>,
+    /// The fault's position among the rule's faults at one cell.
+    pub seq: i64,
+    /// What leads the oracle to the read, outermost first.
+    pub path: Vec<PathCond>,
+    pub what: FaultWhat,
+}
+
+/// One condition on a [`FaultCand`]'s path: `op` must be nonzero (`want`)
+/// or zero (`!want`) — the oracle's `c != 0.0` arm test, and
+/// `filter_excludes` for a filter.
+#[derive(Clone, Debug)]
+pub(crate) struct PathCond {
+    pub op: Operand,
+    pub want: bool,
+    /// `op` is a slot over exactly the candidate's box, read at each cell;
+    /// otherwise a scalar.
+    pub array: bool,
+}
+
+/// Which cells of a [`FaultCand`]'s box fault, and with what message.
+#[derive(Clone, Debug)]
+pub(crate) enum FaultWhat {
+    /// Every cell, with `faults[msg]`.
+    Every(u32),
+    /// An out-of-range const-array gather (`E_TREEWALK_CONSTARRAY_OOB`):
+    /// `index_into`'s first source dim out of range with no policy.
+    ConstOob {
+        name: String,
+        /// Per source dim, in dim order.
+        dims: SmallVec<[OobDim; 4]>,
+    },
+}
+
+/// One source dim of a [`FaultWhat::ConstOob`] gather.
+#[derive(Clone, Debug)]
+pub(crate) struct OobDim {
+    /// The dim's extent.
+    pub n: i64,
+    /// Whether an out-of-range subscript faults (no boundary policy).
+    pub error: bool,
+    pub sub: OobSub,
+}
+
+/// The 1-based subscript of an [`OobDim`] at a cell.
+#[derive(Clone, Debug)]
+pub(crate) enum OobSub {
+    /// The same at every cell.
+    Fixed(i64),
+    /// Read along box axis `axis`: `raw[p]` at position `p`.
+    Axis { axis: u8, raw: Vec<i64> },
+}
+
+impl OobDim {
+    fn raw_at(&self, cell: &[usize]) -> i64 {
+        match &self.sub {
+            OobSub::Fixed(r) => *r,
+            OobSub::Axis { axis, raw } => raw[cell[*axis as usize]],
+        }
+    }
+
+    fn faults(&self, raw: i64) -> bool {
+        self.error && (raw < 1 || raw > self.n)
+    }
+}
+
+impl FaultCand {
+    /// The message the oracle latches at `cell` (0-based), or `None` where
+    /// the read is in range.
+    fn message_at(&self, cell: &[usize], faults: &[String]) -> Option<String> {
+        match &self.what {
+            FaultWhat::Every(m) => Some(faults[*m as usize].clone()),
+            FaultWhat::ConstOob { name, dims } => dims.iter().enumerate().find_map(|(d, od)| {
+                let raw = od.raw_at(cell);
+                od.faults(raw).then(|| {
+                    crate::simulate_array::eval::const_oob_message(name, raw, od.n, d)
+                })
+            }),
+        }
+    }
+
+    /// Per box axis, the positions at which some source dim read along it
+    /// faults; `None` when every cell faults.
+    fn faulting_positions(&self) -> Option<Vec<Vec<bool>>> {
+        let FaultWhat::ConstOob { dims, .. } = &self.what else {
+            return None;
+        };
+        let mut at: Vec<Vec<bool>> = self.shape.iter().map(|&n| vec![false; n]).collect();
+        for od in dims {
+            match &od.sub {
+                OobSub::Fixed(r) if od.faults(*r) => return None,
+                OobSub::Fixed(_) => {}
+                OobSub::Axis { axis, raw } => {
+                    for (p, &r) in raw.iter().enumerate() {
+                        if od.faults(r) {
+                            at[*axis as usize][p] = true;
+                        }
+                    }
+                }
+            }
+        }
+        Some(at)
+    }
+
+    /// The key of the fault at `cell`.
+    fn key(&self, cell: Option<&[usize]>) -> FaultOrderKey {
+        let mut key = self.prefix.clone();
+        if let Some(cell) = cell {
+            for &a in &self.visit {
+                key.push(self.lo[a as usize] + cell[a as usize] as i64);
+            }
+        }
+        key.extend(self.cvals.iter().copied());
+        key.push(self.seq);
+        key
+    }
+
+    /// The first fault of this candidate the oracle meets: the first cell in
+    /// visiting order that faults and that every condition on `path` admits.
+    /// `cond(op, at)` reads a condition operand: with `at = (shape, cell)`,
+    /// the element at the 0-based logical `cell` of a slot over the logical
+    /// box `shape` (see [`slab_flat`]); otherwise the scalar.
+    fn first(
+        &self,
+        faults: &[String],
+        cond: &mut impl FnMut(&Operand, Option<(&[usize], &[usize])>) -> f64,
+    ) -> Option<(FaultOrderKey, String)> {
+        // Scalars first, outermost first: an inner condition may sit in a
+        // branch an outer scalar one skipped, and is read only past it.
+        for pc in self.path.iter().filter(|pc| !pc.array) {
+            if (cond(&pc.op, None) != 0.0) != pc.want {
+                return None;
+            }
+        }
+        if !self.cells {
+            let msg = self.message_at(&[], faults)?;
+            return Some((self.key(None), msg));
+        }
+        if self.shape.contains(&0) {
+            return None;
+        }
+        let pos = self.faulting_positions();
+        let rank = self.shape.len();
+        let mut cell: SmallVec<[usize; 4]> = SmallVec::from_elem(0, rank);
+        // Depth-first over the visiting order. Below a level whose position
+        // faults on its own, every cell is a candidate; otherwise the last
+        // level visits only its faulting positions.
+        let mut found = None;
+        self.walk(0, false, &pos, &mut cell, &mut |c| {
+            if !self
+                .path
+                .iter()
+                .filter(|pc| pc.array)
+                .all(|pc| (cond(&pc.op, Some((&self.shape, c))) != 0.0) == pc.want)
+            {
+                return false;
+            }
+            match self.message_at(c, faults) {
+                Some(m) => {
+                    found = Some((self.key(Some(c)), m));
+                    true
+                }
+                None => false,
+            }
+        });
+        found
+    }
+
+    /// Visit the cells below `level` in visiting order until `f` accepts one.
+    fn walk(
+        &self,
+        level: usize,
+        hit: bool,
+        pos: &Option<Vec<Vec<bool>>>,
+        cell: &mut SmallVec<[usize; 4]>,
+        f: &mut impl FnMut(&[usize]) -> bool,
+    ) -> bool {
+        if level == self.visit.len() {
+            return f(cell);
+        }
+        let a = self.visit[level] as usize;
+        let last = level + 1 == self.visit.len();
+        for p in 0..self.shape[a] {
+            let here = match pos {
+                None => true,
+                Some(at) => hit || at[a][p],
+            };
+            if last && !here {
+                continue;
+            }
+            cell[a] = p;
+            if self.walk(level + 1, here, pos, cell, f) {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+/// The slab offset of the 0-based LOGICAL `cell` of an array slot over the
+/// logical box `shape`: row-major, or — in a program stored axis-reversed
+/// ([`TapeProgram::col_major`]) — column-major.
+pub(crate) fn slab_flat(shape: &[usize], cell: &[usize], col_major: bool) -> usize {
+    if col_major {
+        (0..shape.len()).rev().fold(0, |o, d| o * shape[d] + cell[d])
+    } else {
+        (0..shape.len()).fold(0, |o, d| o * shape[d] + cell[d])
+    }
+}
+
+impl FaultScanSpec {
+    /// The fault the per-cell oracle latches first among the candidates, if
+    /// any fires. The single definition every executor calls.
+    pub(crate) fn first(
+        &self,
+        faults: &[String],
+        mut cond: impl FnMut(&Operand, Option<(&[usize], &[usize])>) -> f64,
+    ) -> Option<String> {
+        self.cands
+            .iter()
+            .filter_map(|c| c.first(faults, &mut cond))
+            .min_by(|a, b| a.0.cmp(&b.0))
+            .map(|(_, m)| m)
+    }
+}
+
 /// How an [`Instr::ScalarRead`] resolves its subscripts.
 #[derive(Clone, Debug)]
 pub(crate) enum ScalarReadKind {
@@ -1589,6 +1859,7 @@ pub(crate) struct SlotTables<'a> {
     pub sweeps: &'a [SweepSpec],
     pub scalar_reads: &'a [ScalarReadSpec],
     pub lanes: &'a [LaneSpec],
+    pub fault_scans: &'a [FaultScanSpec],
 }
 
 /// One forcing-buffer entry the program reads ([`Instr::LoadForcing`]).
@@ -2081,6 +2352,8 @@ pub(crate) struct TapeProgram {
     /// Fail-closed fault messages (`Instr::Fault` indexes here), each the
     /// text the per-cell oracle latches at the same point.
     pub faults: Vec<String>,
+    /// Conditional fault scans (`Instr::FaultScan` indexes here).
+    pub fault_scans: Vec<FaultScanSpec>,
     /// Recurrence sweeps (`Instr::Sweep` indexes here).
     pub sweeps: Vec<SweepSpec>,
     /// Run-time-subscript reads (`Instr::ScalarRead` indexes here).
@@ -2127,6 +2400,7 @@ impl TapeProgram {
             sweeps: &self.sweeps,
             scalar_reads: &self.scalar_reads,
             lanes: &self.lanes,
+            fault_scans: &self.fault_scans,
         }
     }
 

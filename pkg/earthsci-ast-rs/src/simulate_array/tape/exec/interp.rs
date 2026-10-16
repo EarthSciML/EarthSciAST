@@ -178,6 +178,18 @@ pub(super) fn run_range(
             Instr::Fault { fault } => {
                 latch_gather_fault(prog.faults[*fault as usize].clone());
             }
+            Instr::FaultScan { spec } => {
+                let scan = &prog.fault_scans[*spec as usize];
+                let first = scan.first(&prog.faults, |op, cell| match (op, cell) {
+                    (Operand::Slot(s), Some((shape, c))) => unsafe {
+                        *slab_ptr.add(slot_off[*s as usize] + slab_flat(shape, c, prog.col_major))
+                    },
+                    _ => resolve_scalar(op, env, slab_ptr, slot_off),
+                });
+                if let Some(msg) = first {
+                    latch_gather_fault(msg);
+                }
+            }
             Instr::Sweep { spec } => {
                 let sw = &prog.sweeps[*spec as usize];
                 debug_assert!(sweep.is_none(), "recurrence sweeps do not nest");
@@ -328,6 +340,7 @@ pub(super) fn is_straight(ins: &Instr) -> bool {
         ins,
         Instr::LoadForcing { .. }
             | Instr::Fault { .. }
+            | Instr::FaultScan { .. }
             | Instr::Sweep { .. }
             | Instr::ScalarRead { .. }
             | Instr::JmpIfZero { .. }
