@@ -51,7 +51,8 @@ export interface UnitResult {
    * `null` is not "dimensionless" — it is "this analysis cannot say", and it is
    * the value returned for an unknown variable, an unparseable unit
    * declaration, and any operator whose dimensional semantics this module does
-   * not model (`index`, `fn`, `faq`, `makearray`, `table_lookup`, ...).
+   * not model (`fn`, `table_lookup`, an faq under `reduce: "*"` with a
+   * dimensional body, ...).
    * Keeping the two apart is what stops a structural op from being *assumed*
    * dimensionless and thereby manufacturing a false mismatch against a
    * dimensional operand. `null` propagates through every combining rule, and a
@@ -94,11 +95,10 @@ export interface UnitWarning {
    *   registry gap is a false rejection.)
    * - `analysis` — the checker cannot DETERMINE a dimension: a symbolic
    *   exponent (`x^n`, whose dimension depends on `n`'s runtime value), an
-   *   operator with no dimensional rule (`faq`, `index`, `fn`,
-   *   `table_lookup`), a malformed arity, an unknown variable. Genuinely
-   *   undeterminable — a statement about the checker, not the file. → WARNING,
-   *   and the dimension is reported UNKNOWN and the check SKIPPED, never assumed
-   *   dimensionless.
+   *   operator with no dimensional rule (`fn`, `table_lookup`), a malformed
+   *   arity, an unknown variable. Genuinely undeterminable — a statement
+   *   about the checker, not the file. → WARNING, and the dimension is
+   *   reported UNKNOWN and the check SKIPPED, never assumed dimensionless.
    *
    * An unknown VARIABLE is an `analysis` finding here and nothing more: it is
    * separately a hard `undefined_variable` error, so the units layer does not
@@ -363,72 +363,107 @@ export function checkDimensions(
   expr: Expression,
   unitBindings: Map<string, ParsedUnit>,
 ): UnitResult {
-  return checkDimensionsMemo(expr, unitBindings, new Map(), false)
+  return checkDimensionsMemo(expr, unitBindings, new Map())
 }
 
 /**
- * The EVALUATION-PATH reading of {@link checkDimensions}: the same rules, plus
- * an array operator carrying its ELEMENT's unit. The checker has no rule for
- * the array operators (esm-spec §4.8.4: they are undeterminable there), but an
- * evaluator that meets `cos(index(lat, i))` with `lat` in `deg` reads a number
- * in degrees all the same, and §4.8.3 requires it converted. Only the angle
- * rewrite (`flatten.ts` `normalizeAngleArguments`) calls it, so no checker
- * verdict depends on it.
+ * The EVALUATION-PATH reading of {@link checkDimensions}, used by the angle
+ * rewrite (`flatten.ts` `normalizeAngleArguments`): an evaluator that meets
+ * `cos(index(lat, i))` with `lat` in `deg` reads a number in degrees, and
+ * §4.8.3 requires it converted. The checker now types the array operators
+ * itself (rules A1-A6, esm-spec §4.8.3), so the two readings are ONE: this is
+ * {@link checkDimensions} under another name, kept so the rewrite and the
+ * checker can never disagree about an array element's unit.
  */
 export function checkElementDimensions(
   expr: Expression,
   unitBindings: Map<string, ParsedUnit>,
 ): UnitResult {
-  return checkDimensionsMemo(expr, unitBindings, new Map(), true)
+  return checkDimensions(expr, unitBindings)
 }
 
-/** The array operators whose ELEMENT unit {@link checkElementDimensions} carries. */
-const ARRAY_ELEMENT_OPS: ReadonlySet<string> = new Set([
-  'faq',
-  'makearray',
-  'index',
-  'reshape',
-  'transpose',
-  'concat',
-  'broadcast',
-])
+/** The ⊕ of an `faq`, read from `semiring` if present, else `reduce` (default `+`). */
+type FaqReduce = 'sum' | 'max' | 'min' | 'product' | 'or' | null
+
+function faqReduceKind(node: ExpressionNode): FaqReduce {
+  const n = node as { semiring?: unknown; reduce?: unknown }
+  if (n.semiring !== undefined && n.semiring !== null) {
+    switch (n.semiring) {
+      case 'sum_product':
+        return 'sum'
+      case 'max_product':
+      case 'max_sum':
+        return 'max'
+      case 'min_sum':
+        return 'min'
+      case 'bool_and_or':
+        return 'or'
+      default:
+        return null
+    }
+  }
+  switch (n.reduce ?? '+') {
+    case '+':
+      return 'sum'
+    case 'max':
+      return 'max'
+    case 'min':
+      return 'min'
+    case '*':
+      return 'product'
+    default:
+      return null
+  }
+}
 
 /**
- * The element unit of an array operator under the evaluation-path reading. The
- * rules are the Rust binding's `propagate_array_dim` (units.rs), case for case,
- * so every binding's angle rewrite folds the factor into the same arguments: an
- * `faq` has its body's unit; a `makearray` has the unit its value regions share;
- * a `broadcast` has the unit of its `fn` applied to its operands; `index`,
- * `reshape`, `transpose` and `concat` have their source array's.
+ * A6: the unit of an `faq` node whose `expr` body has unit `body` (`undefined`
+ * when the node has no `expr`). The ⊗ is written by the author inside `expr`,
+ * so it is already typed; `join` clauses are key equalities and contribute no
+ * factor. What remains is the ⊕ over the contracted indices.
  */
-function arrayElementDimensions(
-  node: ExpressionNode,
-  unitBindings: Map<string, ParsedUnit>,
-  memo: Map<object, UnitResult>,
-): ParsedUnit | null {
-  const element = (e: Expression): ParsedUnit | null =>
-    checkDimensionsMemo(e, unitBindings, memo, true).dimensions
-  const args = node.args ?? []
-  switch (node.op) {
-    case 'faq':
-      if (node.expr !== undefined) return element(node.expr as Expression)
-      return args.length > 0 ? element(args[0] as Expression) : dimensionless()
-    case 'makearray': {
-      const values = (node.values ?? []) as Expression[]
-      if (values.length === 0) return dimensionless()
-      const dims = values.map(element)
-      const known = dims.filter((d): d is ParsedUnit => d !== null)
-      if (known.length === 0 || known.length !== dims.length) return null
-      const first = known[0]
-      return known.every((d) => sameUnit(first, d)) ? first : null
-    }
-    case 'broadcast':
-      if (node.fn === undefined) return null
-      return checkDimensionsMemo({ op: node.fn, args } as ExpressionNode, unitBindings, memo, true)
-        .dimensions
+function faqUnit(node: ExpressionNode, body: ParsedUnit | null | undefined): ParsedUnit | null {
+  const n = node as { distinct?: unknown; key?: unknown }
+  // Value invention: the result is ids / an index set, not a quantity.
+  if (n.distinct === true || (n.key !== undefined && n.key !== null)) return null
+  if (body === undefined) return null
+  switch (faqReduceKind(node)) {
+    case 'sum':
+    case 'max':
+    case 'min':
+      return body
+    case 'product':
+      // The power is the range length, which the checker does not know.
+      return body !== null && isPureNumber(body) ? body : null
+    case 'or':
+      return dimensionless()
     default:
-      return args.length > 0 ? element(args[0] as Expression) : dimensionless()
+      // An unknown ⊕ spelling; it is rejected elsewhere.
+      return null
   }
+}
+
+/**
+ * The shared rule of `+`-like agreement (A3 `concat`, A4 `makearray`): every
+ * DETERMINABLE operand must agree with the first in dimension and in exact
+ * scale; undeterminable operands are skipped. Returns the shared unit, or
+ * `null` when no operand is determinable.
+ */
+function agreeingUnit(
+  dims: ReadonlyArray<ParsedUnit | null>,
+  mismatch: (first: ParsedUnit, other: ParsedUnit, scaleOnly: boolean) => void,
+): ParsedUnit | null {
+  let first: ParsedUnit | null = null
+  for (const other of dims) {
+    if (other === null) continue
+    if (first === null) {
+      first = other
+      continue
+    }
+    if (!dimsEqual(first.dims, other.dims)) mismatch(first, other, false)
+    else if (!first.exact.equals(other.exact)) mismatch(first, other, true)
+  }
+  return first
 }
 
 /**
@@ -447,7 +482,6 @@ function checkDimensionsMemo(
   expr: Expression,
   unitBindings: Map<string, ParsedUnit>,
   memo: Map<object, UnitResult>,
-  elements: boolean,
 ): UnitResult {
   const isNode = typeof expr === 'object' && expr !== null
   if (isNode) {
@@ -456,7 +490,7 @@ function checkDimensionsMemo(
       return { dimensions: hit.dimensions, warnings: [], diagnostics: [] }
     }
   }
-  const res = computeDimensions(expr, unitBindings, memo, elements)
+  const res = computeDimensions(expr, unitBindings, memo)
   if (isNode) memo.set(expr, res)
   return res
 }
@@ -465,7 +499,6 @@ function computeDimensions(
   expr: Expression,
   unitBindings: Map<string, ParsedUnit>,
   memo: Map<object, UnitResult>,
-  elements: boolean,
 ): UnitResult {
   const diagnostics: UnitDiagnostic[] = []
   // Record a diagnostic with its classification made EXPLICIT here (not
@@ -524,26 +557,50 @@ function computeDimensions(
   const op = node.op
   const args = node.args ?? []
 
-  if (elements && ARRAY_ELEMENT_OPS.has(op)) {
-    return finish(arrayElementDimensions(node, unitBindings, memo))
+  // Walk a sub-expression, recording its findings; returns its unit.
+  const walk = (part: Expression): ParsedUnit | null => {
+    const r = checkDimensionsMemo(part, unitBindings, memo)
+    diagnostics.push(...r.diagnostics)
+    return r.dimensions
   }
 
   if (op === 'faq') {
-    // The checker does not model the array operators, so the faq's OWN unit is
-    // undeterminable (esm-spec §4.8.4) — but the expressions it evaluates are
-    // checked like any other (§4.8.3, EarthSciAST#414): its `filter`, a boolean
-    // whose value never reaches the node's unit, and its `expr` body. A
-    // provable mismatch inside either is recorded here.
-    for (const part of [node.filter, node.expr, ...args]) {
-      if (part === undefined || part === null) continue
-      diagnostics.push(
-        ...checkDimensionsMemo(part as Expression, unitBindings, memo, elements).diagnostics,
-      )
-    }
-    return unknown()
+    // A6. The filter (a boolean whose value never reaches the node's unit), the
+    // body and any operands are ALWAYS walked for findings (§4.8.3,
+    // EarthSciAST#414); the node's unit is decided by its ⊕.
+    if (node.filter !== undefined && node.filter !== null) walk(node.filter as Expression)
+    const hasExpr = node.expr !== undefined && node.expr !== null
+    const body = hasExpr ? walk(node.expr as Expression) : undefined
+    for (const arg of args) walk(arg)
+    return finish(faqUnit(node, body))
   }
 
-  const argResults = args.map((arg) => checkDimensionsMemo(arg, unitBindings, memo, elements))
+  if (op === 'makearray') {
+    // A4. The regions' `values` agree like the operands of `+`: an
+    // undeterminable value (a bare literal) is skipped; disagreement between
+    // two determinable ones is a provable mismatch.
+    for (const arg of args) walk(arg)
+    const values = (node.values ?? []) as Expression[]
+    const shared = agreeingUnit(values.map(walk), (first, other, scaleOnly) =>
+      warn(
+        `'makearray' regions must share units, got ${scaleOnly ? formatUnit(first) : formatDims(first.dims)} and ${scaleOnly ? formatUnit(other) : formatDims(other.dims)}`,
+        ERROR_CODES.DIMENSIONAL_MISMATCH,
+      ),
+    )
+    return finish(shared)
+  }
+
+  if (op === 'broadcast') {
+    // A5. The unit of `{op: fn, args}` under the ordinary rules; the synthetic
+    // node walks (and reports on) the operands itself.
+    if (node.fn === undefined || node.fn === null) {
+      for (const arg of args) walk(arg)
+      return unknown()
+    }
+    return finish(walk({ op: node.fn, args } as ExpressionNode))
+  }
+
+  const argResults = args.map((arg) => checkDimensionsMemo(arg, unitBindings, memo))
   for (const r of argResults) diagnostics.push(...r.diagnostics)
 
   // `get(i)` is the i-th operand's dimension, or `null` when indeterminate.
@@ -928,6 +985,26 @@ function computeDimensions(
     case 'Pre':
       return finish(get(0))
 
+    case 'index':
+    case 'reshape':
+    case 'transpose':
+      // A1/A2: the unit of the source array; subscripts and shape operands are
+      // walked (above) but are not part of the unit. No operand: undeterminable.
+      return finish(argDims.length > 0 ? get(0) : null)
+
+    case 'concat':
+      // A3: like n-ary `+` — determinable operands agree in dimension and scale.
+      return finish(
+        agreeingUnit(argDims, (first, other, scaleOnly) =>
+          warn(
+            scaleOnly
+              ? `Incompatible scales in 'concat': ${formatUnit(first)} vs ${formatUnit(other)}`
+              : `Incompatible dimensions in 'concat': ${formatDims(first.dims)} vs ${formatDims(other.dims)}`,
+            ERROR_CODES.DIMENSIONAL_MISMATCH,
+          ),
+        ),
+      )
+
     case 'const': {
       // A `const` that DECLARES its units has that unit (esm-spec §4.8.5);
       // without `units` it is undeterminable, like a bare literal. An
@@ -939,8 +1016,8 @@ function computeDimensions(
     }
 
     default:
-      // Structural / not-dimensionally-modelled ops (`index`, `fn`,
-      // `faq`, `const`, `makearray`, `table_lookup`, `faq`, ...) AND
+      // Structural / not-dimensionally-modelled ops (`fn`,
+      // `table_lookup`, ...) AND
       // every OPEN-TIER rewrite-target op — the spatial-calculus sugar
       // `grad`/`div`/`laplacian`/`integral` and any user op such as
       // `godunov_hamiltonian`. These sugar ops carry NO dimensional rule
