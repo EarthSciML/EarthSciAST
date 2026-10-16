@@ -1,0 +1,500 @@
+{
+ "esm": "1.2.0",
+ "metadata": {
+  "name": "guarded_out_of_range_static",
+  "description": "An out-of-range subscript into a const array (inline, named, and a parameter with inline data) inside an `ifelse` branch the guard switches off at exactly the cells where it would be out of range, and one excluded by a `faq` filter: the chem_vertical_mixing `rho_w` shape. No cell takes the out-of-range branch, so nothing may fault; the cases where the branch IS taken are in tests/conformance/const_array_gather_bounds/. Static variant: no state, so every value is a build-time observed.",
+  "authors": [
+   "EarthSciML Authors and Contributors"
+  ],
+  "tags": [
+   "native",
+   "conformance"
+  ]
+ },
+ "index_sets": {
+  "rows": {
+   "kind": "interval",
+   "size": 4
+  },
+  "nodes": {
+   "kind": "interval",
+   "size": 5
+  }
+ },
+ "models": {
+  "GuardedOutOfRange": {
+   "tolerance": {
+    "rel": 1e-12,
+    "abs": 1e-12
+   },
+   "variables": {
+    "p": {
+     "type": "parameter",
+     "units": "1",
+     "default": [
+      1.0,
+      2.0,
+      3.0,
+      4.0
+     ],
+     "shape": [
+      "rows"
+     ]
+    },
+    "tbl": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "rows"
+     ]
+    },
+    "y_const": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "nodes"
+     ]
+    },
+    "y_named": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "nodes"
+     ]
+    },
+    "y_param": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "nodes"
+     ]
+    },
+    "y_filt": {
+     "type": "unknown",
+     "units": "1"
+    }
+   },
+   "equations": [
+    {
+     "lhs": "tbl",
+     "rhs": {
+      "op": "const",
+      "args": [],
+      "value": [
+       10.0,
+       20.0,
+       30.0,
+       40.0
+      ]
+     }
+    },
+    {
+     "lhs": "y_const",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "nodes"
+       }
+      },
+      "expr": {
+       "op": "ifelse",
+       "args": [
+        {
+         "op": "<=",
+         "args": [
+          "i",
+          1
+         ]
+        },
+        0.0,
+        {
+         "op": "ifelse",
+         "args": [
+          {
+           "op": ">",
+           "args": [
+            "i",
+            4
+           ]
+          },
+          0.0,
+          {
+           "op": "*",
+           "args": [
+            0.5,
+            {
+             "op": "+",
+             "args": [
+              {
+               "op": "index",
+               "args": [
+                {
+                 "op": "const",
+                 "args": [],
+                 "value": [
+                  10.0,
+                  20.0,
+                  30.0,
+                  40.0
+                 ]
+                },
+                "i"
+               ]
+              },
+              {
+               "op": "index",
+               "args": [
+                {
+                 "op": "const",
+                 "args": [],
+                 "value": [
+                  10.0,
+                  20.0,
+                  30.0,
+                  40.0
+                 ]
+                },
+                {
+                 "op": "-",
+                 "args": [
+                  "i",
+                  1
+                 ]
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "y_named",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "nodes"
+       }
+      },
+      "expr": {
+       "op": "ifelse",
+       "args": [
+        {
+         "op": "<=",
+         "args": [
+          "i",
+          1
+         ]
+        },
+        0.0,
+        {
+         "op": "ifelse",
+         "args": [
+          {
+           "op": ">",
+           "args": [
+            "i",
+            4
+           ]
+          },
+          0.0,
+          {
+           "op": "*",
+           "args": [
+            0.5,
+            {
+             "op": "+",
+             "args": [
+              {
+               "op": "index",
+               "args": [
+                "tbl",
+                "i"
+               ]
+              },
+              {
+               "op": "index",
+               "args": [
+                "tbl",
+                {
+                 "op": "-",
+                 "args": [
+                  "i",
+                  1
+                 ]
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "y_param",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "nodes"
+       }
+      },
+      "expr": {
+       "op": "ifelse",
+       "args": [
+        {
+         "op": "<=",
+         "args": [
+          "i",
+          1
+         ]
+        },
+        0.0,
+        {
+         "op": "ifelse",
+         "args": [
+          {
+           "op": ">",
+           "args": [
+            "i",
+            4
+           ]
+          },
+          0.0,
+          {
+           "op": "*",
+           "args": [
+            0.5,
+            {
+             "op": "+",
+             "args": [
+              {
+               "op": "index",
+               "args": [
+                "p",
+                "i"
+               ]
+              },
+              {
+               "op": "index",
+               "args": [
+                "p",
+                {
+                 "op": "-",
+                 "args": [
+                  "i",
+                  1
+                 ]
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "y_filt",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [],
+      "ranges": {
+       "j": {
+        "from": "nodes"
+       }
+      },
+      "filter": {
+       "op": "<=",
+       "args": [
+        "j",
+        4
+       ]
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        {
+         "op": "const",
+         "args": [],
+         "value": [
+          10.0,
+          20.0,
+          30.0,
+          40.0
+         ]
+        },
+        "j"
+       ]
+      }
+     }
+    }
+   ],
+   "tests": [
+    {
+     "id": "values",
+     "time_span": {
+      "start": 0.0,
+      "end": 0.0
+     },
+     "assertions": [
+      {
+       "variable": "y_const",
+       "time": 0.0,
+       "expected": 0.0,
+       "coords": {
+        "nodes": 1
+       }
+      },
+      {
+       "variable": "y_const",
+       "time": 0.0,
+       "expected": 15.0,
+       "coords": {
+        "nodes": 2
+       }
+      },
+      {
+       "variable": "y_const",
+       "time": 0.0,
+       "expected": 25.0,
+       "coords": {
+        "nodes": 3
+       }
+      },
+      {
+       "variable": "y_const",
+       "time": 0.0,
+       "expected": 35.0,
+       "coords": {
+        "nodes": 4
+       }
+      },
+      {
+       "variable": "y_const",
+       "time": 0.0,
+       "expected": 0.0,
+       "coords": {
+        "nodes": 5
+       }
+      },
+      {
+       "variable": "y_named",
+       "time": 0.0,
+       "expected": 0.0,
+       "coords": {
+        "nodes": 1
+       }
+      },
+      {
+       "variable": "y_named",
+       "time": 0.0,
+       "expected": 15.0,
+       "coords": {
+        "nodes": 2
+       }
+      },
+      {
+       "variable": "y_named",
+       "time": 0.0,
+       "expected": 25.0,
+       "coords": {
+        "nodes": 3
+       }
+      },
+      {
+       "variable": "y_named",
+       "time": 0.0,
+       "expected": 35.0,
+       "coords": {
+        "nodes": 4
+       }
+      },
+      {
+       "variable": "y_named",
+       "time": 0.0,
+       "expected": 0.0,
+       "coords": {
+        "nodes": 5
+       }
+      },
+      {
+       "variable": "y_param",
+       "time": 0.0,
+       "expected": 0.0,
+       "coords": {
+        "nodes": 1
+       }
+      },
+      {
+       "variable": "y_param",
+       "time": 0.0,
+       "expected": 1.5,
+       "coords": {
+        "nodes": 2
+       }
+      },
+      {
+       "variable": "y_param",
+       "time": 0.0,
+       "expected": 2.5,
+       "coords": {
+        "nodes": 3
+       }
+      },
+      {
+       "variable": "y_param",
+       "time": 0.0,
+       "expected": 3.5,
+       "coords": {
+        "nodes": 4
+       }
+      },
+      {
+       "variable": "y_param",
+       "time": 0.0,
+       "expected": 0.0,
+       "coords": {
+        "nodes": 5
+       }
+      },
+      {
+       "variable": "y_filt",
+       "time": 0.0,
+       "expected": 100.0
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

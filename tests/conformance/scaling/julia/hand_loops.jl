@@ -580,3 +580,146 @@ end
 end
 
 HAND_LOOPS["unstructured_gather"] = HandLoop(_gather_setup, _gather_row!)
+
+# ---------------------------------------------------------------------------
+# Gather through a computed index array: D(u[i]) = -rate[cls[i]] u[i] + emis[cls[i]],
+# cls[i] = 1 + mod(7919 i - 1, 64)
+# ---------------------------------------------------------------------------
+#
+# The two tables are the document's own inline `const` arrays, in document order.
+
+function _inline_consts!(out, x)
+    if x isa AbstractDict
+        get(x, "op", nothing) == "const" && push!(out, Float64.(x["value"]))
+        foreach(v -> _inline_consts!(out, v), values(x))
+    elseif x isa AbstractVector
+        foreach(v -> _inline_consts!(out, v), x)
+    end
+    return out
+end
+
+function _gidx_setup(prob, doc, entry)
+    n = Int(entry["n_cells"])
+    o = _block_offset(prob.var_map, "Classes.u", (n,))
+    rate, emis = _inline_consts!(Vector{Float64}[], doc["models"]["Classes"]["equations"])
+    m = length(rate)
+    cls = Int32[(7919 * i - 1) % m + 1 for i in 1:n]
+    return (; n, o, cls, rate, emis, nrows = cld(n, _BLOCK))
+end
+
+@inline function _gidx_row!(du, u, t, st, r)
+    (; n, o, cls, rate, emis) = st
+    @inbounds for i in ((r-1)*_BLOCK+1):min(r * _BLOCK, n)
+        c = cls[i]
+        du[o+i] = -rate[c] * u[o+i] + emis[c]
+    end
+    return nothing
+end
+
+HAND_LOOPS["gather_index"] = HandLoop(_gidx_setup, _gidx_row!)
+
+# ---------------------------------------------------------------------------
+# Column search: cnt[c] = #{l : u[c,l] > 1},
+# D(u[c,l]) = -0.1 u[c,l] + 0.01 u[c, max(1, cnt[c])]
+# ---------------------------------------------------------------------------
+#
+# Native lays u out column-major, so the columns of one level are contiguous:
+# a row is a block of columns, counted level by level into a per-column
+# buffer, then updated level by level.
+
+function _csearch_setup(prob, doc, entry)
+    nc, nl = _shape(entry, "ncol"), _shape(entry, "nlev")
+    o = _block_offset(prob.var_map, "Column.u", (nc, nl))
+    return (; nc, nl, o, cnt = zeros(nc), nrows = cld(nc, _BLOCK))
+end
+
+@inline function _csearch_row!(du, u, t, st, r)
+    (; nc, nl, o, cnt) = st
+    qs = ((r-1)*_BLOCK+1):min(r * _BLOCK, nc)
+    @inbounds begin
+        for q in qs
+            cnt[q] = 0.0
+        end
+        for l in 1:nl, q in qs
+            cnt[q] += ifelse(u[o+q+(l-1)*nc] > 1.0, 1.0, 0.0)
+        end
+        for l in 1:nl, q in qs
+            sel = u[o+q+(Int(max(1.0, cnt[q]))-1)*nc]
+            du[o+q+(l-1)*nc] = -0.1 * u[o+q+(l-1)*nc] + 0.01 * sel
+        end
+    end
+    return nothing
+end
+
+HAND_LOOPS["column_search"] = HandLoop(_csearch_setup, _csearch_row!)
+
+# ---------------------------------------------------------------------------
+# Column sum nested in a 3-D faq: D(u[i,j,k]) = -0.1 u[i,j,k] + 0.001 sum_l u[i,j,l]
+# ---------------------------------------------------------------------------
+#
+# The sum does not depend on k, so it is computed once per column, into a
+# per-column buffer in level order (the document's fold order), then applied.
+
+function _csum_setup(prob, doc, entry)
+    s, nl = _shape(entry, "side"), _shape(entry, "nlev")
+    nc = s * s
+    o = _block_offset(prob.var_map, "Columns.u", (s, s, nl))
+    return (; nc, nl, o, acc = zeros(nc), nrows = cld(nc, _BLOCK))
+end
+
+@inline function _csum_row!(du, u, t, st, r)
+    (; nc, nl, o, acc) = st
+    qs = ((r-1)*_BLOCK+1):min(r * _BLOCK, nc)
+    @inbounds begin
+        for q in qs
+            acc[q] = 0.0
+        end
+        for l in 1:nl, q in qs
+            acc[q] += u[o+q+(l-1)*nc]
+        end
+        for l in 1:nl, q in qs
+            du[o+q+(l-1)*nc] = -0.1 * u[o+q+(l-1)*nc] + 0.001 * acc[q]
+        end
+    end
+    return nothing
+end
+
+HAND_LOOPS["column_sum"] = HandLoop(_csum_setup, _csum_row!)
+
+# ---------------------------------------------------------------------------
+# Join on computed keys: D(u[i]) = -0.1 u[i] + 0.001 agg[i],
+# agg[i] = sum over rows r with rkey[r] == ckey[i], in row order, of 1 + 0.5 sin(r)
+# ---------------------------------------------------------------------------
+#
+# The join is the document's build-time work; the hand loop does it once in
+# setup, the way a person would (bucket the rows by key), and reads agg per call.
+
+function _join_setup(prob, doc, entry)
+    n = Int(entry["n_cells"])
+    nr = Int(doc["index_sets"]["rows"]["size"])
+    K = _shape(entry, "keys")
+    o = _block_offset(prob.var_map, "Join.u", (n,))
+    bucket = [Int[] for _ in 1:K]
+    for r in 1:nr
+        push!(bucket[(7919 * (r - 1)) % K + 1], r)
+    end
+    agg = zeros(n)
+    for i in 1:n
+        a = 0.0
+        for r in bucket[(i - 1) % K + 1]
+            a += 1 + 0.5 * sin(r)
+        end
+        agg[i] = a
+    end
+    return (; n, o, agg, nrows = cld(n, _BLOCK))
+end
+
+@inline function _join_row!(du, u, t, st, r)
+    (; n, o, agg) = st
+    @inbounds for i in ((r-1)*_BLOCK+1):min(r * _BLOCK, n)
+        du[o+i] = -0.1 * u[o+i] + 0.001 * agg[i]
+    end
+    return nothing
+end
+
+HAND_LOOPS["join_keyed"] = HandLoop(_join_setup, _join_row!)

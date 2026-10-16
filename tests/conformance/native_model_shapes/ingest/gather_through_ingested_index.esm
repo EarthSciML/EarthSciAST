@@ -1,0 +1,254 @@
+{
+ "esm": "1.2.0",
+ "metadata": {
+  "name": "gather_through_ingested_index",
+  "description": "A gather whose subscript is an INGESTED index column (rows.parquet `ix`, 2, 4, 1, 3), into an inline `const` array and, offset by one, into a named `const` observed: the isrm member-index gather on the build-time path.",
+  "authors": [
+   "EarthSciML Authors and Contributors"
+  ],
+  "tags": [
+   "native",
+   "conformance"
+  ]
+ },
+ "data_sources": {
+  "rows_table": {
+   "kind": "static",
+   "source": {
+    "url_template": "./data/rows.parquet"
+   },
+   "extent": {
+    "metaparameter": "n_rows"
+   },
+   "metadata": {
+    "esio_format": "parquet",
+    "note": "Committed beside this document; a test may override the URL."
+   }
+  }
+ },
+ "metaparameters": {
+  "n_rows": {
+   "type": "integer",
+   "default": 0,
+   "description": "Rows in rows.parquet, discovered by the source's own extent (4)."
+  }
+ },
+ "index_sets": {
+  "rows": {
+   "kind": "interval",
+   "size": "n_rows"
+  },
+  "n5": {
+   "kind": "interval",
+   "size": 5
+  }
+ },
+ "models": {
+  "GatherThroughIngestedIndex": {
+   "tolerance": {
+    "rel": 1e-12,
+    "abs": 1e-12
+   },
+   "variables": {
+    "m_ix": {
+     "type": "parameter",
+     "units": "1",
+     "default": 0.0,
+     "shape": [
+      "rows"
+     ],
+     "update": {
+      "kind": "data",
+      "source": "rows_table",
+      "from": {
+       "file_variable": "ix"
+      }
+     }
+    },
+    "b": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "n5"
+     ]
+    },
+    "g_const": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "rows"
+     ]
+    },
+    "g_param": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "rows"
+     ]
+    }
+   },
+   "equations": [
+    {
+     "lhs": "b",
+     "rhs": {
+      "op": "const",
+      "args": [],
+      "value": [
+       5.0,
+       6.0,
+       7.0,
+       8.0,
+       9.0
+      ]
+     }
+    },
+    {
+     "lhs": "g_const",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "r"
+      ],
+      "ranges": {
+       "r": {
+        "from": "rows"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        {
+         "op": "const",
+         "args": [],
+         "value": [
+          10.0,
+          20.0,
+          30.0,
+          40.0
+         ]
+        },
+        {
+         "op": "index",
+         "args": [
+          "m_ix",
+          "r"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "g_param",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "r"
+      ],
+      "ranges": {
+       "r": {
+        "from": "rows"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        "b",
+        {
+         "op": "+",
+         "args": [
+          {
+           "op": "index",
+           "args": [
+            "m_ix",
+            "r"
+           ]
+          },
+          1
+         ]
+        }
+       ]
+      }
+     }
+    }
+   ],
+   "tests": [
+    {
+     "id": "values",
+     "time_span": {
+      "start": 0.0,
+      "end": 0.0
+     },
+     "assertions": [
+      {
+       "variable": "g_const",
+       "time": 0.0,
+       "expected": 20.0,
+       "coords": {
+        "rows": 1
+       }
+      },
+      {
+       "variable": "g_const",
+       "time": 0.0,
+       "expected": 40.0,
+       "coords": {
+        "rows": 2
+       }
+      },
+      {
+       "variable": "g_const",
+       "time": 0.0,
+       "expected": 10.0,
+       "coords": {
+        "rows": 3
+       }
+      },
+      {
+       "variable": "g_const",
+       "time": 0.0,
+       "expected": 30.0,
+       "coords": {
+        "rows": 4
+       }
+      },
+      {
+       "variable": "g_param",
+       "time": 0.0,
+       "expected": 7.0,
+       "coords": {
+        "rows": 1
+       }
+      },
+      {
+       "variable": "g_param",
+       "time": 0.0,
+       "expected": 9.0,
+       "coords": {
+        "rows": 2
+       }
+      },
+      {
+       "variable": "g_param",
+       "time": 0.0,
+       "expected": 6.0,
+       "coords": {
+        "rows": 3
+       }
+      },
+      {
+       "variable": "g_param",
+       "time": 0.0,
+       "expected": 8.0,
+       "coords": {
+        "rows": 4
+       }
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

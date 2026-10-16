@@ -1,0 +1,275 @@
+{
+ "esm": "1.2.0",
+ "metadata": {
+  "name": "computed_scalar_index_static",
+  "description": "A scalar `index` whose subscript is computed: from a scalar parameter (`x[floor(kp) - 1]`), from a column search that counts the levels below a height (`kpbl`, the YSU `brdn1 = Ri1[kpbl1 - 1]` shape), into an inline `const` array, and (dynamic variant) from a state, so the subscript changes during the run. Static variant: no state, so every value is a build-time observed.",
+  "authors": [
+   "EarthSciML Authors and Contributors"
+  ],
+  "tags": [
+   "native",
+   "conformance"
+  ]
+ },
+ "index_sets": {
+  "lev": {
+   "kind": "interval",
+   "size": 5
+  }
+ },
+ "models": {
+  "ComputedScalarIndex": {
+   "tolerance": {
+    "rel": 1e-12,
+    "abs": 1e-12
+   },
+   "variables": {
+    "p": {
+     "type": "parameter",
+     "units": "1",
+     "default": [
+      1.5,
+      2.5,
+      4.0,
+      7.0,
+      11.0
+     ],
+     "shape": [
+      "lev"
+     ]
+    },
+    "z": {
+     "type": "parameter",
+     "units": "m",
+     "default": [
+      100.0,
+      300.0,
+      600.0,
+      1000.0,
+      1500.0
+     ],
+     "shape": [
+      "lev"
+     ]
+    },
+    "hpbl": {
+     "type": "parameter",
+     "units": "m",
+     "default": 700.0
+    },
+    "kp": {
+     "type": "parameter",
+     "units": "1",
+     "default": 3.0
+    },
+    "x": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "lev"
+     ]
+    },
+    "k": {
+     "type": "unknown",
+     "units": "1"
+    },
+    "kpbl": {
+     "type": "unknown",
+     "units": "1"
+    },
+    "s_param": {
+     "type": "unknown",
+     "units": "1"
+    },
+    "s_search": {
+     "type": "unknown",
+     "units": "1"
+    },
+    "s_below": {
+     "type": "unknown",
+     "units": "1"
+    },
+    "s_const": {
+     "type": "unknown",
+     "units": "1"
+    }
+   },
+   "equations": [
+    {
+     "lhs": "x",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "l"
+      ],
+      "ranges": {
+       "l": {
+        "from": "lev"
+       }
+      },
+      "expr": {
+       "op": "*",
+       "args": [
+        2.0,
+        {
+         "op": "index",
+         "args": [
+          "p",
+          "l"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "k",
+     "rhs": {
+      "op": "floor",
+      "args": [
+       "kp"
+      ]
+     }
+    },
+    {
+     "lhs": "kpbl",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [],
+      "ranges": {
+       "l": {
+        "from": "lev"
+       }
+      },
+      "expr": {
+       "op": "ifelse",
+       "args": [
+        {
+         "op": "<",
+         "args": [
+          {
+           "op": "index",
+           "args": [
+            "z",
+            "l"
+           ]
+          },
+          "hpbl"
+         ]
+        },
+        1.0,
+        0.0
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "s_param",
+     "rhs": {
+      "op": "index",
+      "args": [
+       "x",
+       {
+        "op": "-",
+        "args": [
+         "k",
+         1
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "lhs": "s_search",
+     "rhs": {
+      "op": "index",
+      "args": [
+       "x",
+       "kpbl"
+      ]
+     }
+    },
+    {
+     "lhs": "s_below",
+     "rhs": {
+      "op": "index",
+      "args": [
+       "x",
+       {
+        "op": "-",
+        "args": [
+         "kpbl",
+         1
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "lhs": "s_const",
+     "rhs": {
+      "op": "index",
+      "args": [
+       {
+        "op": "const",
+        "args": [],
+        "value": [
+         0.1,
+         0.2,
+         0.3,
+         0.4,
+         0.5
+        ]
+       },
+       {
+        "op": "+",
+        "args": [
+         "kpbl",
+         1
+        ]
+       }
+      ]
+     }
+    }
+   ],
+   "tests": [
+    {
+     "id": "values",
+     "time_span": {
+      "start": 0.0,
+      "end": 0.0
+     },
+     "assertions": [
+      {
+       "variable": "s_param",
+       "time": 0.0,
+       "expected": 5.0
+      },
+      {
+       "variable": "s_search",
+       "time": 0.0,
+       "expected": 8.0
+      },
+      {
+       "variable": "s_below",
+       "time": 0.0,
+       "expected": 5.0
+      },
+      {
+       "variable": "s_const",
+       "time": 0.0,
+       "expected": 0.4
+      },
+      {
+       "variable": "kpbl",
+       "time": 0.0,
+       "expected": 3.0
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

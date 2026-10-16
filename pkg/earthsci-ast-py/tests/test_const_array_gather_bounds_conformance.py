@@ -44,6 +44,9 @@ def test_manifest_requires_python() -> None:
 
 @pytest.mark.parametrize("fixture", _manifest()["fixtures"], ids=lambda f: f["id"])
 def test_fixture(fixture: dict) -> None:
+    skip = fixture.get("skip_bindings", {}).get("python")
+    if skip:
+        pytest.skip(skip)
     results = run_inline_tests(str(_ROOT / fixture["path"]), model_name=fixture["model"])
     assert len(results) == 1
     r = results[0]

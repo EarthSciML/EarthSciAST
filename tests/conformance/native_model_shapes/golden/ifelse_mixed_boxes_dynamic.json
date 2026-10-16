@@ -1,0 +1,175 @@
+{
+  "fixture": "ifelse_mixed_boxes_dynamic",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "values",
+      "assertion_idx": 1,
+      "variable": "y_off",
+      "actual": 20.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 2,
+      "variable": "y_off",
+      "actual": 40.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 3,
+      "variable": "y_off",
+      "actual": 60.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 4,
+      "variable": "y_off",
+      "actual": 80.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 5,
+      "variable": "y_on",
+      "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 6,
+      "variable": "y_on",
+      "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 7,
+      "variable": "y_on",
+      "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 8,
+      "variable": "y_on",
+      "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 9,
+      "variable": "strain",
+      "actual": 0.25
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 10,
+      "variable": "strain",
+      "actual": 0.5
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 11,
+      "variable": "strain",
+      "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 12,
+      "variable": "strain",
+      "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 13,
+      "variable": "y_scalar_branch",
+      "actual": 100.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 14,
+      "variable": "y_scalar_branch",
+      "actual": 100.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 15,
+      "variable": "y_scalar_branch",
+      "actual": 100.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 16,
+      "variable": "y_scalar_branch",
+      "actual": 100.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 17,
+      "variable": "y_state",
+      "actual": 20.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 18,
+      "variable": "y_state",
+      "actual": 40.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 19,
+      "variable": "y_state",
+      "actual": 60.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 20,
+      "variable": "y_state",
+      "actual": 80.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 21,
+      "variable": "y_state",
+      "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 22,
+      "variable": "y_state",
+      "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 23,
+      "variable": "y_state",
+      "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 24,
+      "variable": "y_state",
+      "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 25,
+      "variable": "acc",
+      "actual": 0.4999999999999999
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 26,
+      "variable": "acc",
+      "actual": 0.9999999999999998
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 27,
+      "variable": "acc",
+      "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 28,
+      "variable": "acc",
+      "actual": 0.0
+    }
+  ]
+}
