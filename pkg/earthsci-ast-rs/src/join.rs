@@ -1126,6 +1126,80 @@ fn code_lookup(positions: &[i64], codes: &[i64], sym: &str) -> Expr {
     })
 }
 
+/// Every name read, directly or through the observeds they are defined by, by
+/// the KEY COLUMNS of the `on` joins in `roots` (CONFORMANCE_SPEC §5.5.8).
+///
+/// A scalar parameter among them is build-time data: its value decides the
+/// match set, which is built once, so the build bakes it and a later
+/// substitution of it is refused rather than served stale. `definition` gives
+/// an observed's defining expression; a name with none is a leaf.
+pub(crate) fn join_key_cone<'e>(
+    roots: impl IntoIterator<Item = &'e Expr>,
+    definition: impl Fn(&str) -> Option<&'e Expr>,
+) -> HashSet<String> {
+    fn key_columns(e: &Expr, out: &mut Vec<String>) {
+        if let Expr::Operator(n) = e {
+            for clause in n.join.iter().flatten() {
+                out.extend(clause.on.iter().flatten().cloned());
+            }
+            for a in &n.args {
+                key_columns(a, out);
+            }
+            n.for_each_child(&mut |c| key_columns(c, out));
+        }
+    }
+    fn reads(e: &Expr, out: &mut Vec<String>) {
+        match e {
+            Expr::Variable(v) => out.push(v.clone()),
+            Expr::Operator(n) => {
+                for clause in n.join.iter().flatten() {
+                    out.extend(clause.on.iter().flatten().cloned());
+                }
+                for a in &n.args {
+                    reads(a, out);
+                }
+                n.for_each_child(&mut |c| reads(c, out));
+            }
+            _ => {}
+        }
+    }
+    let mut frontier: Vec<String> = Vec::new();
+    for r in roots {
+        key_columns(r, &mut frontier);
+    }
+    let mut seen: HashSet<String> = HashSet::new();
+    while let Some(name) = frontier.pop() {
+        if !seen.insert(name.clone()) {
+            continue;
+        }
+        if let Some(def) = definition(&name) {
+            reads(def, &mut frontier);
+        }
+    }
+    seen
+}
+
+/// The scalar parameters of `model` a join key column reads, directly or
+/// through observeds ([`join_key_cone`]): the parameters a build bakes. A
+/// data-fed parameter is not one: its values arrive from a provider.
+pub(crate) fn join_key_parameters(model: &Model) -> Vec<String> {
+    let defs = crate::classification::observed_definitions(model);
+    let cone = join_key_cone(model.equations.iter().map(|eq| &eq.rhs), |n| defs.get(n));
+    let mut out: Vec<String> = model
+        .variables
+        .iter()
+        .filter(|(name, var)| {
+            cone.contains(name.as_str())
+                && var.var_type == crate::types::VariableType::Parameter
+                && var.shape.as_ref().is_none_or(|s| s.is_empty())
+                && var.update.is_none()
+        })
+        .map(|(name, _)| name.clone())
+        .collect();
+    out.sort();
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1682,78 +1756,4 @@ mod tests {
         };
         assert!(node.filter.is_none(), "no join ⇒ no synthesized filter");
     }
-}
-
-/// Every name read, directly or through the observeds they are defined by, by
-/// the KEY COLUMNS of the `on` joins in `roots` (CONFORMANCE_SPEC §5.5.8).
-///
-/// A scalar parameter among them is build-time data: its value decides the
-/// match set, which is built once, so the build bakes it and a later
-/// substitution of it is refused rather than served stale. `definition` gives
-/// an observed's defining expression; a name with none is a leaf.
-pub(crate) fn join_key_cone<'e>(
-    roots: impl IntoIterator<Item = &'e Expr>,
-    definition: impl Fn(&str) -> Option<&'e Expr>,
-) -> HashSet<String> {
-    fn key_columns(e: &Expr, out: &mut Vec<String>) {
-        if let Expr::Operator(n) = e {
-            for clause in n.join.iter().flatten() {
-                out.extend(clause.on.iter().flatten().cloned());
-            }
-            for a in &n.args {
-                key_columns(a, out);
-            }
-            n.for_each_child(&mut |c| key_columns(c, out));
-        }
-    }
-    fn reads(e: &Expr, out: &mut Vec<String>) {
-        match e {
-            Expr::Variable(v) => out.push(v.clone()),
-            Expr::Operator(n) => {
-                for clause in n.join.iter().flatten() {
-                    out.extend(clause.on.iter().flatten().cloned());
-                }
-                for a in &n.args {
-                    reads(a, out);
-                }
-                n.for_each_child(&mut |c| reads(c, out));
-            }
-            _ => {}
-        }
-    }
-    let mut frontier: Vec<String> = Vec::new();
-    for r in roots {
-        key_columns(r, &mut frontier);
-    }
-    let mut seen: HashSet<String> = HashSet::new();
-    while let Some(name) = frontier.pop() {
-        if !seen.insert(name.clone()) {
-            continue;
-        }
-        if let Some(def) = definition(&name) {
-            reads(def, &mut frontier);
-        }
-    }
-    seen
-}
-
-/// The scalar parameters of `model` a join key column reads, directly or
-/// through observeds ([`join_key_cone`]): the parameters a build bakes. A
-/// data-fed parameter is not one: its values arrive from a provider.
-pub(crate) fn join_key_parameters(model: &Model) -> Vec<String> {
-    let defs = crate::classification::observed_definitions(model);
-    let cone = join_key_cone(model.equations.iter().map(|eq| &eq.rhs), |n| defs.get(n));
-    let mut out: Vec<String> = model
-        .variables
-        .iter()
-        .filter(|(name, var)| {
-            cone.contains(name.as_str())
-                && var.var_type == crate::types::VariableType::Parameter
-                && var.shape.as_ref().is_none_or(|s| s.is_empty())
-                && var.update.is_none()
-        })
-        .map(|(name, _)| name.clone())
-        .collect();
-    out.sort();
-    out
 }
