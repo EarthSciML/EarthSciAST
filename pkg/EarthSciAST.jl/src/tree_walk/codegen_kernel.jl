@@ -1606,6 +1606,25 @@ function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbo
     jlo = _cg_name(ctx, "jl")
     jhi = _cg_name(ctx, "jh")
     j0, j1, _ = axis(2)
+    # A row of a rank-2/3 box whose cell value is one affine reduction runs the
+    # reduction interchanged, as the rank-1 case above does (Float64 only).
+    rowinter = (cellfn === nothing && sm === nothing) ?
+        _cg_areduce_interchanged(ctx, K, kc, iv, oln, olnexpr, :($ilo:$ihi)) : nothing
+    rowloop = quote
+        for $iv in $ilo:$ihi
+            local $oln = $olnexpr
+            $(body...)
+            $(tv1...)
+        end
+    end
+    rowinter === nothing ||
+        (rowloop = quote
+            if _cgT === Float64 && eltype(du) === Float64
+                $rowinter
+            else
+                $rowloop
+            end
+        end)
     if nd == 2
         return quote
             $(hdr...)
@@ -1616,11 +1635,7 @@ function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbo
                 for $jv in $jlo:$jhi
                     local $ilo = $jv == $jlo ? $i0 + rem($av, $ni) : $i0
                     local $ihi = $jv == $jhi ? $i0 + rem($ohi, $ni) : $i1
-                    for $iv in $ilo:$ihi
-                        local $oln = $olnexpr
-                        $(body...)
-                        $(tv1...)
-                    end
+                    $rowloop
                     $(nv...)
                 end
             end
@@ -1648,11 +1663,7 @@ function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbo
                 for $jv in $jlo:$jhi
                     local $ilo = ($kv == $klo && $jv == $jlo) ? $i0 + rem($av, $ni) : $i0
                     local $ihi = ($kv == $khi && $jv == $jhi) ? $i0 + rem($ohi, $ni) : $i1
-                    for $iv in $ilo:$ihi
-                        local $oln = $olnexpr
-                        $(body...)
-                        $(tv1...)
-                    end
+                    $rowloop
                     $(nv...)
                 end
                 $(nv...)
@@ -1847,8 +1858,13 @@ end
 # invariant) along the cell axis and strided along the innermost reduced axis
 # than the other way round. Returns the nest, or `nothing` when it does not
 # apply.
+_cg_areduce_interchanged(ctx::_CGCtx, K::_AccKernel, kc::_CGKernCtx,
+                         iv::Symbol, oln::Symbol, olnexpr, i0, av, bv) =
+    _cg_areduce_interchanged(ctx, K, kc, iv, oln, olnexpr, :(($i0 + $av):($i0 + $bv - 1)))
+# The same nest over one row `rng` of the leading cell axis, for a box of rank 2
+# or 3 whose rows the caller walks.
 function _cg_areduce_interchanged(ctx::_CGCtx, K::_AccKernel, kc::_CGKernCtx,
-                                  iv::Symbol, oln::Symbol, olnexpr, i0, av, bv)
+                                  iv::Symbol, oln::Symbol, olnexpr, rng)
     nd = K.spine
     nd.kind === _NK_AREDUCE || return nothing
     isempty(K.cse.recipes) || return nothing
@@ -1865,7 +1881,7 @@ function _cg_areduce_interchanged(ctx::_CGCtx, K::_AccKernel, kc::_CGKernCtx,
     cap = _codegen_fn_node_cap()
     cap > 0 && _cg_expr_size(body) > cap && return nothing
     loop = quote
-        for $iv in ($i0 + $av):($i0 + $bv - 1)
+        for $iv in $rng
             local $oln = $olnexpr
             du[$oln] = $fnsym(du[$oln], $body)
         end
@@ -1877,7 +1893,7 @@ function _cg_areduce_interchanged(ctx::_CGCtx, K::_AccKernel, kc::_CGKernCtx,
         loop = Expr(:for, :($(js[r]) = $lo:$hi), Expr(:block, loop))
     end
     return quote
-        for $iv in ($i0 + $av):($i0 + $bv - 1)
+        for $iv in $rng
             du[$olnexpr] = $(nd.literal)
         end
         $loop
