@@ -1,0 +1,84 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "UnitsFaqFilterConsistent",
+    "description": "esm-spec §4.8.3 (EarthSciAST#414): an faq's `filter` is walked with the comparison rule. Here it compares two lengths, and the body is a dimensionless count, so the document must validate. tests/invalid/units_faq_filter_mismatch.esm is the same shape with a mass.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "created": "2026-10-15T00:00:00Z"
+  },
+  "index_sets": {
+    "rows": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "models": {
+    "Probe": {
+      "variables": {
+        "x": {
+          "type": "parameter",
+          "units": "m",
+          "default": 2.0,
+          "description": "A length."
+        },
+        "z": {
+          "type": "parameter",
+          "units": "kg",
+          "default": 4.0,
+          "description": "A mass."
+        },
+        "v": {
+          "type": "parameter",
+          "units": "m",
+          "shape": [
+            "rows"
+          ],
+          "default": 1.0,
+          "description": "A length per row."
+        },
+        "y": {
+          "type": "parameter",
+          "units": "m",
+          "default": 3.0,
+          "description": "Another length."
+        },
+        "n_short": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Counts the rows for which x <= y (two lengths)."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "n_short",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "semiring": "sum_product",
+            "output_idx": [],
+            "ranges": {
+              "i": {
+                "from": "rows"
+              }
+            },
+            "filter": {
+              "op": "<=",
+              "args": [
+                "x",
+                "y"
+              ]
+            },
+            "expr": {
+              "op": "const",
+              "args": [],
+              "value": 1.0,
+              "units": "1"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

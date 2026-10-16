@@ -1,0 +1,78 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "UnitsFaqFilterMismatch",
+    "description": "Invalid (EarthSciAST#414 hole 2): an faq's `filter` compares x [m] with z [kg]. A filter is a boolean expression like any other and is walked with the §4.8.3 comparison rule, so the comparison is a provable mismatch even though the filter's value never reaches the node's unit.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "created": "2026-10-15T00:00:00Z"
+  },
+  "index_sets": {
+    "rows": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "models": {
+    "Probe": {
+      "variables": {
+        "x": {
+          "type": "parameter",
+          "units": "m",
+          "default": 2.0,
+          "description": "A length."
+        },
+        "z": {
+          "type": "parameter",
+          "units": "kg",
+          "default": 4.0,
+          "description": "A mass."
+        },
+        "v": {
+          "type": "parameter",
+          "units": "m",
+          "shape": [
+            "rows"
+          ],
+          "default": 1.0,
+          "description": "A length per row."
+        },
+        "n_short": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Invalid: counts the rows whose filter compares a length with a mass."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "n_short",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "semiring": "sum_product",
+            "output_idx": [],
+            "ranges": {
+              "i": {
+                "from": "rows"
+              }
+            },
+            "filter": {
+              "op": "<=",
+              "args": [
+                "x",
+                "z"
+              ]
+            },
+            "expr": {
+              "op": "const",
+              "args": [],
+              "value": 1.0,
+              "units": "1"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,72 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "UnitsFaqBodyMismatch",
+    "description": "Invalid: an faq's `expr` adds x [m] to z [kg]. The faq node's own unit may be undeterminable in a binding that does not model array operators (esm-spec §4.8.4), but the provable mismatch inside its body is still reported (§4.8.3).",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "created": "2026-10-15T00:00:00Z"
+  },
+  "index_sets": {
+    "rows": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "models": {
+    "Probe": {
+      "variables": {
+        "x": {
+          "type": "parameter",
+          "units": "m",
+          "default": 2.0,
+          "description": "A length."
+        },
+        "z": {
+          "type": "parameter",
+          "units": "kg",
+          "default": 4.0,
+          "description": "A mass."
+        },
+        "v": {
+          "type": "parameter",
+          "units": "m",
+          "shape": [
+            "rows"
+          ],
+          "default": 1.0,
+          "description": "A length per row."
+        },
+        "total": {
+          "type": "unknown",
+          "units": "m",
+          "description": "Invalid: sums x + z, a length plus a mass, over the rows."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "total",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "semiring": "sum_product",
+            "output_idx": [],
+            "ranges": {
+              "i": {
+                "from": "rows"
+              }
+            },
+            "expr": {
+              "op": "+",
+              "args": [
+                "x",
+                "z"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

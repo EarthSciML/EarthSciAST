@@ -3668,5 +3668,94 @@
     ],
     "is_valid": false,
     "notes": "User ruling 2026-10-02 (esm-spec 6.3.1): a parameter under D(...) on an equation's left-hand side is invalid, like a bare or indexed definition of one."
+  },
+  "units_mount_subsystem_wrong_dimension.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/Probe/variables/probe",
+        "code": "unit_inconsistency",
+        "message": "Declared units of kg do not match the expression's units of kPa"
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.4 (EarthSciAST#414): a scoped reference into a `subsystems.<k>` {ref} mount has the units its target declares; before the fix every binding treated it as undeterminable and accepted the wrong declaration. Pinned at the observed variable's declaration, as tests/invalid/units_scale_mismatch_equation.esm pins its mismatch."
+  },
+  "units_mount_subsystem_scale_mismatch.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/Probe/variables/probe",
+        "code": "unit_inconsistency",
+        "message": "Declared units of Pa do not match the expression's units of kPa"
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.4 (EarthSciAST#414): a scoped reference into a `subsystems.<k>` {ref} mount has the units its target declares; before the fix every binding treated it as undeterminable and accepted the wrong declaration. \u00a74.8.3: agreement means dimension AND scale, so kPa vs Pa is a mismatch. Pinned at the observed variable's declaration, as tests/invalid/units_scale_mismatch_equation.esm pins its mismatch."
+  },
+  "units_mount_toplevel_wrong_dimension.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/Probe/variables/probe",
+        "code": "unit_inconsistency",
+        "message": "Declared units of kg do not match the expression's units of kPa"
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.4 (EarthSciAST#414): a scoped reference into a top-level `models.<k>` {ref} mount has the units its target declares; before the fix every binding treated it as undeterminable and accepted the wrong declaration. Pinned at the observed variable's declaration, as tests/invalid/units_scale_mismatch_equation.esm pins its mismatch."
+  },
+  "units_mount_toplevel_scale_mismatch.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/Probe/variables/probe",
+        "code": "unit_inconsistency",
+        "message": "Declared units of Pa do not match the expression's units of kPa"
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.4 (EarthSciAST#414): a scoped reference into a top-level `models.<k>` {ref} mount has the units its target declares; before the fix every binding treated it as undeterminable and accepted the wrong declaration. \u00a74.8.3: agreement means dimension AND scale, so kPa vs Pa is a mismatch. Pinned at the observed variable's declaration, as tests/invalid/units_scale_mismatch_equation.esm pins its mismatch."
+  },
+  "units_faq_filter_mismatch.esm": {
+    "schema_errors": [],
+    "is_valid": false,
+    "structural_errors": [
+      {
+        "path": "/models/Probe/variables/n_short",
+        "code": "unit_inconsistency",
+        "message": "Incompatible dimensions in '<=': length vs mass"
+      }
+    ],
+    "notes": "esm-spec \u00a74.8.3 (EarthSciAST#414): an faq's `filter` is walked with the same operator rules as its `expr`. The same comparison written in the body under ifelse was already refused by Rust; written in the filter it was accepted everywhere. The operands are scalar parameters so that the finding does not depend on whether a binding types array operators (\u00a74.8.4)."
+  },
+  "units_faq_body_mismatch.esm": {
+    "schema_errors": [],
+    "is_valid": false,
+    "structural_errors": [
+      {
+        "path": "/models/Probe/variables/total",
+        "code": "unit_inconsistency",
+        "message": "Incompatible dimensions in '+': length vs mass"
+      }
+    ],
+    "notes": "esm-spec \u00a74.8.3 / \u00a74.8.4: a node whose own unit is undeterminable still has the subexpressions it evaluates checked, as `and`/`or`/`not` already are. Rust walked an faq body; the other four bindings returned 'unknown' for the faq without looking inside it."
+  },
+  "units_constant_exponent_mismatch.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/Powers/variables/T_32",
+        "code": "unit_inconsistency",
+        "message": "Declared units of K^2 do not match the expression's units of K^(3/2)"
+      },
+      {
+        "path": "/models/Powers/variables/L_const",
+        "code": "unit_inconsistency",
+        "message": "Declared units of m do not match the expression's units of m^(1/2)"
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.3 `^`: a constant-expression exponent (3/2) and a const exponent declaring a dimensionless unit at scale 1 are folded to exact rationals and used exactly as a literal exponent is. A symbolic exponent (a variable) stays undeterminable (\u00a74.8.4)."
   }
 }
