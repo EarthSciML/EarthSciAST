@@ -2790,13 +2790,12 @@ mod first_cell_stop_tests {
         }
     }
 
-    /// A document error that first appears in a LATER cell is not reached by a
-    /// walk that stops after its first: native refuses, and says that the
-    /// cells it did not evaluate are the interpreter's to check, which then
-    /// reports the document's own error. Here the gather is out of range only
-    /// at the last output cell.
+    /// A document error that first appears in a LATER cell: the gather is out
+    /// of range only at the last output cell. Native evaluates the whole
+    /// observed without a per-cell walk (a computed-subscript gather) and
+    /// raises the same error the interpreter raises.
     #[test]
-    fn a_refusal_says_the_later_cells_were_not_evaluated() {
+    fn an_error_in_a_later_cell_is_the_interpreters_error() {
         let d = doc(
             3,
             json!({
@@ -2826,17 +2825,16 @@ mod first_cell_stop_tests {
             )
             .expect_err("the last cell gathers out of range")
         };
-        match run(Compiler::Native) {
-            SimulateError::Compile(CompileError::CompilerRefusedRule { reason, .. }) => {
-                assert!(
-                    reason.ends_with(crate::simulate_array::ONE_CELL_NOTE),
-                    "{reason}"
-                );
-            }
-            other => panic!("expected compiler_refused_rule, got {other:?}"),
-        }
+        let native = run(Compiler::Native);
         let err = run(Compiler::Interpreter);
         assert!(err.to_string().contains("OOB"), "{err}");
+        // The fault itself, as the interpreter states it (the two routes
+        // wrap it in different build-error prefixes).
+        let fault = |e: &SimulateError| {
+            let m = e.to_string();
+            m[m.find("E_TREEWALK").expect("a named fault")..].to_string()
+        };
+        assert_eq!(fault(&native), fault(&err));
     }
 }
 
