@@ -556,6 +556,10 @@ pub(crate) struct TapeBuilder<'m> {
     sweeps: Vec<SweepSpec>,
     /// Run-time-subscript reads (`Instr::ScalarRead` indexes here).
     scalar_reads: Vec<ScalarReadSpec>,
+    /// Parallel to `faults`: each one's rule and [`FaultKey`].
+    fault_order: Vec<(u32, FaultKey)>,
+    /// Computed-subscript gathers (`Instr::DataGather` indexes here).
+    data_gathers: Vec<DataGatherSpec>,
     /// The recurrence whose cell body is being lowered, if any.
     sweep: Option<SweepCtx>,
     state_vars: Vec<StateRef>,
@@ -685,6 +689,7 @@ struct RuleTxn {
     fault_scans: usize,
     sweeps: usize,
     scalar_reads: usize,
+    data_gathers: usize,
     dy_writes: usize,
     stream_lens: [usize; 3],
     hoist_journal: usize,
@@ -713,6 +718,7 @@ struct SubTxn {
     /// Length of the open recurrence body, if any.
     sweep_body: Option<usize>,
     scalar_reads: usize,
+    data_gathers: usize,
     hoist_journal: usize,
     forcing_journal: usize,
     fault_first: Option<(FaultKey, String)>,
@@ -774,6 +780,8 @@ impl<'m> TapeBuilder<'m> {
             fault_scans: Vec::new(),
             sweeps: Vec::new(),
             scalar_reads: Vec::new(),
+            fault_order: Vec::new(),
+            data_gathers: Vec::new(),
             sweep: None,
             state_vars,
             state_ix,
@@ -922,6 +930,7 @@ impl<'m> TapeBuilder<'m> {
             assemblies: &self.assemblies,
             sweeps: &self.sweeps,
             scalar_reads: &self.scalar_reads,
+            data_gathers: &self.data_gathers,
             lanes: &[],
             fault_scans: &self.fault_scans,
         }
@@ -983,6 +992,7 @@ impl<'m> TapeBuilder<'m> {
                 | Instr::PolyArea { .. }
                 | Instr::IndexGather { .. }
                 | Instr::TableGather { .. }
+                | Instr::DataGather { faults: false, .. }
                 | Instr::SegReduce { .. }
                 | Instr::Reshape { .. }
         )
@@ -2639,7 +2649,12 @@ impl<'m> TapeBuilder<'m> {
             && out_ndim == 1
             && (0..n).any(|d| classify_axis_role(&node.args[1 + d], &vb).is_none())
         {
-            return self.lower_const_data_gather(node, bx, &arg0, &src_shape, &src_origin);
+            if let Some(v) =
+                self.lower_const_data_gather(node, bx, &arg0, &src_shape, &src_origin)?
+            {
+                return Ok(v);
+            }
+            return self.lower_data_gather(node, bx, &arg0);
         }
         let mut mapped: SmallVec<[Option<(usize, AxisIndex)>; 4]> =
             (0..out_ndim).map(|_| None).collect();
@@ -2658,9 +2673,10 @@ impl<'m> TapeBuilder<'m> {
                 }
                 Some(AxisRole::Const(idx1)) => fixed_raw.push((d, idx1)),
                 None if data_axis.is_none() && !const_base => data_axis = Some(d),
-                _ => bail_tape!(
-                    "index: axis {d} is neither an affine/wrap map of an unclaimed output symbol nor a constant select"
-                ),
+                // A second computed subscript, a computed subscript into a
+                // const array, or a repeated output symbol (a diagonal): no
+                // segment form, so every subscript is evaluated per element.
+                _ => return self.lower_data_gather(node, bx, &arg0),
             }
         }
         if const_base {
@@ -2686,7 +2702,12 @@ impl<'m> TapeBuilder<'m> {
             }
         }
         if let Some(d) = data_axis {
-            return self.lower_index_gather(node, bx, &arg0, d, &mapped, &fixed, any_fixed_oob);
+            if let Some(v) =
+                self.lower_index_gather(node, bx, &arg0, d, &mapped, &fixed, any_fixed_oob)?
+            {
+                return Ok(v);
+            }
+            return self.lower_data_gather(node, bx, &arg0);
         }
 
         // A fixed axis out of bounds ⇒ every read is the Dirichlet ghost 0.
@@ -2763,8 +2784,10 @@ impl<'m> TapeBuilder<'m> {
     /// build-time data rather than an affine map of the box. Each cell's
     /// source position is resolved here, as `index_into` resolves it (the
     /// subscript rounded; out of range obeys `c`'s boundary policy), into one
-    /// [`Instr::TableGather`]. A subscript the build cannot evaluate, or a
-    /// position out of range under the `error` policy, is a refusal.
+    /// [`Instr::TableGather`]. `None` when a subscript is not build-time
+    /// data, or a position is out of range under the `error` policy: the
+    /// caller then evaluates the subscripts per element instead
+    /// ([`Self::lower_data_gather`]), which faults where the oracle does.
     fn lower_const_data_gather(
         &mut self,
         node: &Arc<ExpressionNode>,
@@ -2772,7 +2795,7 @@ impl<'m> TapeBuilder<'m> {
         base: &LV,
         src_shape: &[usize],
         src_origin: &[i64],
-    ) -> LResult<LV> {
+    ) -> LResult<Option<LV>> {
         if src_origin.iter().any(|&o| o != 1) {
             bail_tape!("index: const-array gather on a source not at origin 1");
         }
@@ -2785,14 +2808,16 @@ impl<'m> TapeBuilder<'m> {
         for e in &node.args[1..] {
             match self.build_time_subscript(e, bx)? {
                 Some(v) => sub_vals.push(v),
-                None => bail_tape!("index: a const-array subscript that is not build-time data"),
+                None => return Ok(None),
             }
         }
         let n_src: usize = src_shape.iter().product();
         if n_src >= GATHER_GHOST as usize {
-            bail_tape!("index: gather source too large for a position table");
+            return Ok(None);
         }
-        let pos = self.const_positions(name, src_shape, &sub_vals, m)?;
+        let Ok(pos) = self.const_positions(name, src_shape, &sub_vals, m) else {
+            return Ok(None);
+        };
         let vals = match base {
             LV::Arr(s) => self
                 .known_values(*s)
@@ -2815,7 +2840,189 @@ impl<'m> TapeBuilder<'m> {
         if let Some(v) = vals {
             self.known.insert(out, Known::Vals(std::rc::Rc::new(v)));
         }
-        Ok(LV::Arr(out))
+        Ok(Some(LV::Arr(out)))
+    }
+
+    /// `index(base, s…)` with every subscript evaluated per element of the
+    /// box: one [`Instr::DataGather`]. This is the oracle's per-cell
+    /// `eval_index` for any subscript the segment and table gathers have no
+    /// form for — a reversed or parameter-offset axis, a data-dependent
+    /// `c[j[i]]`, a clamp, a `mod`/`floor` unflattening.
+    fn lower_data_gather(
+        &mut self,
+        node: &Arc<ExpressionNode>,
+        bx: &LBox,
+        base: &LV,
+    ) -> LResult<LV> {
+        let mut subs: SmallVec<[LV; 4]> = SmallVec::new();
+        for e in &node.args[1..] {
+            subs.push(self.lower_expr(e, bx)?);
+        }
+        self.emit_data_gather(&node.args[0], base, &subs, Some(bx))
+    }
+
+    /// How an `index` on `base` (a source of extents `shape`) resolves an
+    /// out-of-range subscript: the declared boundary policy of a const array
+    /// (`error` for an empty axis, whatever is declared), else the zero
+    /// ghost.
+    fn gather_kind(&self, base: &Expr, shape: &[usize]) -> ScalarReadKind {
+        if !self.const_arrays.is_const_base(base) {
+            return ScalarReadKind::ZeroGhost;
+        }
+        let name = match base {
+            Expr::Variable(v) => v.clone(),
+            _ => INLINE_CONST_NAME.to_string(),
+        };
+        let policy = (0..shape.len())
+            .map(|d| {
+                if shape[d] == 0 {
+                    BoundaryKind::Error
+                } else {
+                    self.const_arrays.boundary(&name, d)
+                }
+            })
+            .collect();
+        ScalarReadKind::ConstArray { name, policy }
+    }
+
+    /// Emit the [`Instr::DataGather`] of `src` (the value of `base`) at the
+    /// subscripts `subs`, over `bx` (`None`: one scalar read, the wholesale
+    /// path). A const-array source whose policy can fault records where the
+    /// oracle reaches each element ([`FaultOrder`]), so the latch keeps the
+    /// fault the oracle raises first; where the oracle evaluates only some
+    /// elements (an elementwise `ifelse` arm, a filtered term, a recurrence
+    /// body) that order is not the element order, and the rule is refused.
+    fn emit_data_gather(
+        &mut self,
+        base: &Expr,
+        src: &LV,
+        subs: &[LV],
+        bx: Option<&LBox>,
+    ) -> LResult<LV> {
+        let Some((src_shape, src_origin)) = self.lv_box(src) else {
+            bail_tape!("index: computed subscripts on a source with no axes");
+        };
+        if src_origin.iter().any(|&o| o != 1) {
+            bail_tape!("index: computed-subscript read of a source not at origin 1");
+        }
+        if subs.len() != src_shape.len() {
+            bail_tape!(
+                "index: {} computed subscripts on a rank-{} source",
+                subs.len(),
+                src_shape.len()
+            );
+        }
+        let (shape, lo): (DimU, DimI) = match bx {
+            Some(b) => (b.shape.clone(), b.lo.clone()),
+            None => (DimU::new(), DimI::new()),
+        };
+        let mut want = self.lv_cadence(src);
+        for s in subs {
+            if let Some((ss, so)) = self.lv_box(s)
+                && (ss != shape || so != lo)
+            {
+                bail_tape!("index: a computed subscript's box is not the output box");
+            }
+            want = want.max(self.lv_cadence(s));
+        }
+        let kind = self.gather_kind(base, &src_shape);
+        let faults = matches!(&kind, ScalarReadKind::ConstArray { policy, .. }
+            if policy.iter().any(|p| matches!(p, BoundaryKind::Error)));
+        let lazy = faults && self.lazy_depth > 0;
+        let order = if lazy {
+            // The oracle reads this gather only at the cells its conditions
+            // admit: the rule's `FaultScan` checks those cells, and the
+            // instruction itself only reads `NaN` where one would fault.
+            let ScalarReadKind::ConstArray { name, policy } = &kind else {
+                unreachable!("only a const-array gather faults");
+            };
+            let dims = subs
+                .iter()
+                .zip(policy.iter())
+                .zip(src_shape.iter())
+                .map(|((s, p), &n)| OobDim {
+                    n: n as i64,
+                    error: matches!(p, BoundaryKind::Error),
+                    sub: match s {
+                        LV::Lit(v) => OobSub::Fixed(subscript_of(*v)),
+                        other => OobSub::Data {
+                            op: self.op_of(other),
+                            array: self.lv_box(other).is_some(),
+                        },
+                    },
+                })
+                .collect();
+            let what = FaultWhat::ConstOob {
+                name: name.clone(),
+                dims,
+            };
+            let msg = format!("E_TREEWALK_CONSTARRAY_OOB: const array '{name}'");
+            match bx {
+                Some(b) => {
+                    let first: SmallVec<[i64; 4]> = SmallVec::from_elem(0, b.shape.len());
+                    self.note_fault(Some((b, &first)), msg, Some(what))?;
+                }
+                None => self.note_fault(None, msg, Some(what))?,
+            }
+            None
+        } else if faults {
+            if self.sweep.is_some() {
+                bail_tape!(
+                    "fault: `E_TREEWALK_CONSTARRAY_OOB` of a computed-subscript gather inside \
+                     a recurrence body"
+                );
+            }
+            let (axes, tail) = match bx {
+                Some(b) => {
+                    let axes: SmallVec<[u8; 4]> = if b.syms.is_empty() {
+                        SmallVec::new()
+                    } else {
+                        (0..b.shape.len()).map(|k| b.visit_axis(k) as u8).collect()
+                    };
+                    (
+                        axes,
+                        b.cvals.iter().copied().collect::<SmallVec<[i64; 8]>>(),
+                    )
+                }
+                None => (SmallVec::new(), SmallVec::new()),
+            };
+            let mut tail = tail;
+            tail.push(self.fault_seq);
+            self.fault_seq += 1;
+            Some(FaultOrder {
+                rule: self.cur_rule,
+                head: self.fault_prefix.clone(),
+                axes,
+                lo: lo.clone(),
+                tail,
+            })
+        } else {
+            None
+        };
+        let faults = order.is_some();
+        let spec = tape_index(self.data_gathers.len(), "computed-subscript gathers")?;
+        self.data_gathers.push(DataGatherSpec {
+            subs: subs.iter().map(|s| self.op_of(s)).collect(),
+            kind,
+            src_shape,
+            shape: shape.clone(),
+            order,
+            reversed: false,
+        });
+        let sec = self.placement(want);
+        let out = self.new_slot(&shape, &lo, shape.is_empty(), sec);
+        let instr = Instr::DataGather {
+            src: self.src_of(src),
+            spec,
+            out,
+            faults,
+        };
+        self.emit(instr, sec);
+        Ok(if shape.is_empty() {
+            LV::Scalar(out)
+        } else {
+            LV::Arr(out)
+        })
     }
 
     /// Flat row-major source positions of a const-array gather whose
@@ -2885,7 +3092,9 @@ impl<'m> TapeBuilder<'m> {
                     None => return Ok(None),
                 }
             }
-            let pos = self.const_positions(name, &shape, &subs, m)?;
+            let Ok(pos) = self.const_positions(name, &shape, &subs, m) else {
+                return Ok(None);
+            };
             return Ok(Some(pos.iter().map(|&p| vals[p as usize]).collect()));
         }
         Ok(None)
@@ -3660,13 +3869,13 @@ impl<'m> TapeBuilder<'m> {
         mapped: &[Option<(usize, AxisIndex)>],
         fixed: &[(usize, i64)],
         any_fixed_oob: bool,
-    ) -> LResult<LV> {
+    ) -> LResult<Option<LV>> {
         let (src_shape, src_origin) = self.lv_box(base).expect("an array base");
         if src_origin.iter().any(|&o| o != 1) {
             bail_tape!("index: data subscript into a base that is not origin-1");
         }
         if any_fixed_oob {
-            bail_tape!("index: data subscript with an out-of-range fixed axis");
+            return Ok(None);
         }
         let mut axes: SmallVec<[GatherAxis; 4]> =
             SmallVec::from_elem(GatherAxis::Fixed(0), src_shape.len());
@@ -3677,13 +3886,13 @@ impl<'m> TapeBuilder<'m> {
         for (a, m) in mapped.iter().enumerate() {
             let Some((d, ax)) = m else { continue };
             let AxisIndex::Affine(k) = ax else {
-                bail_tape!("index: data subscript with a periodic-wrap axis");
+                return Ok(None);
             };
             // 0-based source position `p + off` at output position p.
             let off = bx.lo[a] + k - src_origin[*d];
             let last = off + bx.shape[a] as i64 - 1;
             if off < 0 || last >= src_shape[*d] as i64 {
-                bail_tape!("index: data subscript with a shifted axis that leaves the source");
+                return Ok(None);
             }
             axes[*d] = GatherAxis::Affine { axis: a as u8, off };
         }
@@ -3691,7 +3900,7 @@ impl<'m> TapeBuilder<'m> {
         if let Some((s, o)) = self.lv_box(&sub)
             && (s != bx.shape || o != bx.lo)
         {
-            bail_tape!("index: data subscript box does not match the output box");
+            return Ok(None);
         }
         let cad = self.lv_cadence(base).max(self.lv_cadence(&sub));
         let sec = self.placement(cad);
@@ -3709,7 +3918,7 @@ impl<'m> TapeBuilder<'m> {
             out,
         };
         self.emit(instr, sec);
-        Ok(LV::Arr(out))
+        Ok(Some(LV::Arr(out)))
     }
 
     /// The first cell (0-based, in `bx`) at which an out-of-range const gather
@@ -5290,13 +5499,28 @@ impl<'m> TapeBuilder<'m> {
         if origin.iter().any(|&o| o != 1) {
             bail_tape!("wholesale: index base is not origin-1");
         }
-        let mut raw: SmallVec<[i64; 4]> = SmallVec::new();
+        let mut subs: SmallVec<[LV; 4]> = SmallVec::new();
         for a in idx_args {
-            match self.lower_wholesale(a)? {
-                LV::Lit(f) => raw.push(f.round() as i64),
-                _ => bail_tape!("wholesale: non-literal index argument"),
-            }
+            subs.push(self.lower_wholesale(a)?);
         }
+        if subs.iter().any(|s| !matches!(s, LV::Lit(_))) {
+            // A subscript known only at run time (`Ri1[kpbl1 - 1]`): read
+            // through a one-element computed-subscript gather.
+            if subs.len() != shape.len() {
+                bail_tape!("wholesale: computed subscripts whose count is not the source rank");
+            }
+            if subs.iter().any(|s| self.lv_box(s).is_some()) {
+                bail_tape!("wholesale: an array-valued index argument");
+            }
+            return self.emit_data_gather(base, &basev, &subs, None);
+        }
+        let raw: SmallVec<[i64; 4]> = subs
+            .iter()
+            .map(|s| match s {
+                LV::Lit(f) => f.round() as i64,
+                _ => unreachable!("every subscript is a literal here"),
+            })
+            .collect();
         if raw.len() > shape.len() {
             return Ok(LV::Lit(f64::NAN)); // `index_into`'s over-index arm
         }
@@ -6146,6 +6370,7 @@ impl<'m> TapeBuilder<'m> {
             if let Some((key, msg)) = first {
                 let m = tape_index(self.faults.len(), "faults")?;
                 self.faults.push(msg);
+                self.fault_order.push((self.cur_rule, key.clone()));
                 let (seq, prefix) = key
                     .split_last()
                     .expect("a fault key ends with its sequence");
@@ -6173,7 +6398,10 @@ impl<'m> TapeBuilder<'m> {
                 }
             }
             let spec = tape_index(self.fault_scans.len(), "fault scans")?;
-            self.fault_scans.push(FaultScanSpec { cands });
+            self.fault_scans.push(FaultScanSpec {
+                rule: self.cur_rule,
+                cands,
+            });
             self.push_stream(
                 Instr::FaultScan { spec },
                 crate::precision::active(),
@@ -6181,11 +6409,12 @@ impl<'m> TapeBuilder<'m> {
             );
             return Ok(());
         }
-        let Some((_, msg)) = first else {
+        let Some((key, msg)) = first else {
             return Ok(());
         };
         let fault = tape_index(self.faults.len(), "faults")?;
         self.faults.push(msg);
+        self.fault_order.push((self.cur_rule, key));
         let instr = (Instr::Fault { fault }, crate::precision::active());
         let stream = &mut self.streams[Cadence::Const as usize];
         match stream.last_mut() {
@@ -6227,6 +6456,7 @@ impl<'m> TapeBuilder<'m> {
             fault_scans: self.fault_scans.len(),
             sweeps: self.sweeps.len(),
             scalar_reads: self.scalar_reads.len(),
+            data_gathers: self.data_gathers.len(),
             dy_writes: self.dy_writes.len(),
             stream_lens: [
                 self.streams[0].len(),
@@ -6255,9 +6485,11 @@ impl<'m> TapeBuilder<'m> {
         self.known.retain(|s, _| *s < n_slots);
         self.tuple_frames.clear();
         self.faults.truncate(txn.faults);
+        self.fault_order.truncate(txn.faults);
         self.fault_scans.truncate(txn.fault_scans);
         self.sweeps.truncate(txn.sweeps);
         self.scalar_reads.truncate(txn.scalar_reads);
+        self.data_gathers.truncate(txn.data_gathers);
         self.sweep = None;
         self.dy_writes.truncate(txn.dy_writes);
         for s in 0..3 {
@@ -6310,6 +6542,7 @@ impl<'m> TapeBuilder<'m> {
             branch_len: self.branch_bufs.last().map(Vec::len),
             sweep_body: self.sweep.as_ref().map(|sw| sw.body.len()),
             scalar_reads: self.scalar_reads.len(),
+            data_gathers: self.data_gathers.len(),
             hoist_journal: self.hoist_journal.len(),
             forcing_journal: self.forcing_journal.len(),
             fault_first: self.fault_first.clone(),
@@ -6344,6 +6577,7 @@ impl<'m> TapeBuilder<'m> {
             buf.truncate(n);
         }
         self.scalar_reads.truncate(txn.scalar_reads);
+        self.data_gathers.truncate(txn.data_gathers);
         if let (Some(sw), Some(n)) = (self.sweep.as_mut(), txn.sweep_body) {
             sw.body.truncate(n);
             sw.body_slots.retain(|s| *s < n_slots);
@@ -6864,6 +7098,8 @@ impl<'m> TapeBuilder<'m> {
             fault_scans: std::mem::take(&mut self.fault_scans),
             sweeps: std::mem::take(&mut self.sweeps),
             scalar_reads: std::mem::take(&mut self.scalar_reads),
+            fault_order: std::mem::take(&mut self.fault_order),
+            data_gathers: std::mem::take(&mut self.data_gathers),
             state_vars: std::mem::take(&mut self.state_vars),
             forcings: std::mem::take(&mut self.forcings),
             dy_writes: std::mem::take(&mut self.dy_writes),
@@ -7003,6 +7239,7 @@ fn color_slab(prog: &mut TapeProgram) {
                 | Instr::PolyArea { .. }
                 | Instr::IndexGather { .. }
                 | Instr::TableGather { .. }
+                | Instr::DataGather { .. }
                 | Instr::SegReduce { .. }
                 | Instr::Reshape { .. }
                 | Instr::Sweep { .. }

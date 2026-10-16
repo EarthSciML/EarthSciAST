@@ -1992,7 +1992,14 @@ thread_local! {
     /// drain the latch and report it. This is the same "fail closed, do not
     /// silently substitute a number" contract the Julia reference gets from
     /// `throw` and Python from raising.
-    static CONST_OOB: RefCell<Option<String>> = const { RefCell::new(None) };
+    static CONST_OOB: RefCell<Option<LatchedFault>> = const { RefCell::new(None) };
+}
+
+/// The latched fault and, for one the tape latched through
+/// [`latch_ordered_fault`], where it sits in its rule's evaluation order.
+struct LatchedFault {
+    msg: String,
+    order: Option<(u32, SmallVec<[i64; 12]>)>,
 }
 
 /// Take (and clear) the pending fail-closed gather diagnostic, if any.
@@ -2006,7 +2013,7 @@ thread_local! {
 /// share one latch rather than adding a second one that a future drain site
 /// could forget.
 pub fn take_const_array_oob() -> Option<String> {
-    CONST_OOB.with(|c| c.borrow_mut().take())
+    CONST_OOB.with(|c| c.borrow_mut().take().map(|l| l.msg))
 }
 
 /// Latch the FIRST fail-closed gather diagnostic of this evaluation. The
@@ -2016,7 +2023,35 @@ pub(crate) fn latch_gather_fault(msg: String) {
     CONST_OOB.with(|c| {
         let mut slot = c.borrow_mut();
         if slot.is_none() {
-            *slot = Some(msg);
+            *slot = Some(LatchedFault { msg, order: None });
+        }
+    });
+}
+
+/// Latch a fault the tape raises in rule `rule` at `key`, the position the
+/// per-cell oracle reaches it in that rule (the tape's `FaultKey`: nested box
+/// cells in visiting order, then expression order). The tape evaluates a rule
+/// instruction by instruction over whole boxes rather than cell by cell, so
+/// two faults of ONE rule can reach the latch in the opposite order to the
+/// oracle's: within a rule the smaller key replaces the latched one, which is
+/// the fault the oracle latches first. Across rules, and against a fault
+/// latched without a position, the first one latched stays.
+pub(crate) fn latch_ordered_fault(rule: u32, key: &[i64], msg: impl FnOnce() -> String) {
+    CONST_OOB.with(|c| {
+        let mut slot = c.borrow_mut();
+        let replace = match &*slot {
+            None => true,
+            Some(LatchedFault {
+                order: Some((r, k)),
+                ..
+            }) => *r == rule && key < &k[..],
+            Some(_) => false,
+        };
+        if replace {
+            *slot = Some(LatchedFault {
+                msg: msg(),
+                order: Some((rule, key.iter().copied().collect())),
+            });
         }
     });
 }

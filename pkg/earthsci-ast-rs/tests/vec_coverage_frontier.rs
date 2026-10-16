@@ -269,7 +269,8 @@ fn frontier_nested_aggregate_capturing_enclosing_index_falls_back() {
     );
 }
 
-/// **Gate C1 — clamped ("replicate-edge") index.**
+/// **Gate C1 — clamped ("replicate-edge") index.** Implemented through the
+/// per-element gather (each clamped subscript evaluated over the box).
 ///
 /// `index(u, max(1, min(N, i-1)))` is the zero-gradient / clamp-to-edge
 /// boundary idiom. `classify_axis_index` accepts an affine map or a periodic
@@ -285,14 +286,15 @@ fn frontier_nested_aggregate_capturing_enclosing_index_falls_back() {
 /// of these, and it is the only construct standing between the ESD
 /// `duo_swe_freestream` case and a vectorized RHS.
 #[test]
-fn frontier_clamped_index_falls_back() {
+fn frontier_clamped_index_vectorizes() {
     let rhs = r#"{"op": "index", "args": ["u",
         {"op": "max", "args": [1, {"op": "min", "args": [6,
             {"op": "-", "args": ["i", 1]}]}]}]}"#;
-    check("clamped index", &rule_model(6, rhs), false);
+    check("clamped index", &rule_model(6, rhs), true);
 }
 
-/// **Gate C2 — indirect (data-dependent) gather.**
+/// **Gate C2 — indirect (data-dependent) gather.** Implemented: the overlay
+/// evaluates the subscripts over the box and reads per element.
 ///
 /// `index(phi, index(cellsOnEdge, e, 2))`: the inner `index` is itself an
 /// affine map of an output symbol, so it evaluates to a whole-array vector of
@@ -304,7 +306,7 @@ fn frontier_clamped_index_falls_back() {
 /// (`fv_gradient_edge`, `fv_divergence_cell`, `fv_laplacian_cell`) is built on
 /// it, as is the `mpas_l0_to_octants_sphere` regrid.
 #[test]
-fn frontier_indirect_gather_falls_back() {
+fn frontier_indirect_gather_vectorizes() {
     // `nbr[i] = 7 - i` is the reversal permutation over 1..6: a legitimate
     // index vector, produced (like MPAS `cellsOnEdge`) as an ordinary observed
     // rather than a literal, so the fixture isolates the GATHER and does not
@@ -414,7 +416,7 @@ fn frontier_indirect_gather_falls_back() {
           }
         }
         "#;
-    check("indirect gather", json, false);
+    check("indirect gather", json, true);
 }
 
 // **Gate C3 — non-static (ragged / derived) contraction bound** — deliberately

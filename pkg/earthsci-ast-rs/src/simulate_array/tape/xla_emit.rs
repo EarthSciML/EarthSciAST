@@ -1295,6 +1295,14 @@ impl<'a> Emitter<'a> {
                 return Err(self.err("JmpIfZero reached emit_one (handled by emit_range)"));
             }
             Instr::Sweep { .. } => return Err(self.err(RECURRENCE_REFUSAL)),
+            Instr::DataGather { faults, .. } => {
+                return Err(self.err(if *faults {
+                    "a computed-subscript const-array gather (`DataGather`) can raise a \
+                     fail-closed fault, which a compiled program cannot report"
+                } else {
+                    "a computed-subscript gather (`DataGather`) has no XLA lowering yet"
+                }));
+            }
             Instr::ScalarRead { .. } => {
                 // Only a recurrence body holds one, and the sweep is refused
                 // before its body is reached; this arm keeps the refusal named
