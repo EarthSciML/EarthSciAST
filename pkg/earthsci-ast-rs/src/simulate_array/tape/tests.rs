@@ -3751,3 +3751,176 @@ fn ab_recurrence_sweep() {
     assert_eq!(body_len(&small), body_len(&large));
     assert_eq!(small.instrs.len(), large.instrs.len());
 }
+
+// ---------------------------------------------------------------------------
+// Nested rank-0 reductions, mixed-box branches, faults behind conditions.
+// ---------------------------------------------------------------------------
+
+/// A 2-D document over `x(3) × y(2)` with one state `u` and `D(u) = rhs`.
+fn doc_2d(vars: serde_json::Value, rhs_expr: serde_json::Value) -> serde_json::Value {
+    let mut variables = json!({"u": {"type": "unknown", "units": "1", "default": 0.5,
+                                     "shape": ["x", "y"]}});
+    for (k, v) in vars.as_object().expect("variables") {
+        variables[k] = v.clone();
+    }
+    json!({
+        "esm": "1.2.0",
+        "metadata": {"name": "lazy_shapes", "authors": ["tape tests"]},
+        "index_sets": {"x": {"kind": "interval", "size": 3}, "y": {"kind": "interval", "size": 2}},
+        "models": {"M": {
+            "variables": variables,
+            "equations": [{
+                "lhs": {"op": "faq", "args": [], "output_idx": ["i", "j"],
+                        "expr": {"op": "D", "args": [{"op": "index", "args": ["u", "i", "j"]}],
+                                 "wrt": "t"},
+                        "ranges": {"i": [1, 3], "j": [1, 2]}},
+                "rhs": {"op": "faq", "args": [], "output_idx": ["i", "j"],
+                        "ranges": {"i": [1, 3], "j": [1, 2]}, "expr": rhs_expr}
+            }]
+        }}
+    })
+}
+
+fn u_at(i: serde_json::Value, j: serde_json::Value) -> serde_json::Value {
+    json!({"op": "index", "args": ["u", i, j]})
+}
+
+#[test]
+fn a_rank_0_faq_nested_in_a_box_is_taped_per_cell_and_once() {
+    // Per cell: sum_k u[i, k] * w[k] (reads the box's `i`), filtered k != j.
+    let per_cell = json!({"op": "faq", "args": [], "output_idx": [],
+        "ranges": {"k": [1, 2]},
+        "filter": {"op": "!=", "args": ["k", "j"]},
+        "expr": {"op": "*", "args": [u_at(json!("i"), json!("k")),
+                                     {"op": "index", "args": ["w", "k"]}]}});
+    // Per row, broadcast along j: sum_k u[i, k] (reads `i` only).
+    let per_row = json!({"op": "faq", "args": [], "output_idx": [],
+        "ranges": {"k": [1, 2]}, "expr": u_at(json!("i"), json!("k"))});
+    // Once: sum_{a, b} u[a, b] (reads nothing of the box).
+    let once = json!({"op": "faq", "args": [], "output_idx": [],
+        "ranges": {"a": [1, 3], "b": [1, 2]}, "expr": u_at(json!("a"), json!("b"))});
+    let doc = doc_2d(
+        json!({"w": {"type": "parameter", "units": "1", "shape": ["y"], "default": [0.25, -3.0]}}),
+        json!({"op": "+", "args": [
+            {"op": "*", "args": [per_cell, u_at(json!("i"), json!("j"))]},
+            {"op": "*", "args": [once, 1e-3]},
+            {"op": "*", "args": [per_row, u_at(json!("i"), json!("j")), 0.5]}]}),
+    );
+    let prog = ab_check(doc, -2.0, 2.0);
+    assert!(
+        prog.instrs
+            .iter()
+            .any(|i| matches!(i, Instr::Reduce { .. }))
+            || prog.fused.iter().any(|f| f.reduce.is_some()),
+        "the reductions are folds, not unrolled terms"
+    );
+}
+
+#[test]
+fn a_scalar_condition_joins_a_scalar_arm_and_an_array_arm() {
+    for flag in [0.0, 1.0] {
+        let doc = doc_2d(
+            json!({"flag": {"type": "parameter", "units": "1", "default": flag}}),
+            json!({"op": "ifelse", "args": [
+                {"op": ">", "args": ["flag", 0.5]}, -1.5, u_at(json!("i"), json!("j"))]}),
+        );
+        ab_check(doc, -2.0, 2.0);
+    }
+}
+
+/// `D(u[i,j]) = ifelse(u[i,j] > 0, c[i, j + 1], 0) + ifelse(u[i,j] < -1, c[i - 1, j], 0)`
+/// over a 3×2 inline `c`: the first arm reads past `c` at `j = 2`, the
+/// second before it at `i = 1`. Whether — and which — fault the oracle
+/// latches depends on the state.
+fn guarded_doc() -> serde_json::Value {
+    let c = json!({"op": "const", "args": [], "value": [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]});
+    let read = |di: i64, dj: i64| {
+        json!({"op": "index", "args": [c.clone(),
+            {"op": "+", "args": ["i", di]}, {"op": "+", "args": ["j", dj]}]})
+    };
+    doc_2d(
+        json!({}),
+        json!({"op": "+", "args": [
+            {"op": "ifelse", "args": [{"op": ">", "args": [u_at(json!("i"), json!("j")), 0.0]},
+                                      read(0, 1), 0.0]},
+            {"op": "ifelse", "args": [{"op": "<", "args": [u_at(json!("i"), json!("j")), -1.0]},
+                                      read(-1, 0), 0.0]}]}),
+    )
+}
+
+#[test]
+fn a_fault_behind_a_state_condition_fires_where_the_oracle_reaches_it() {
+    let compiled = compile(guarded_doc());
+    let n = compiled.state_variable_names().len();
+    let params = HashMap::new();
+    let param_vec = compiled.debug_resolve_params(&params);
+    let progs = [
+        taped(compiled.build_tape_opts(&HashSet::new(), Some(default_cfg()))).0,
+        taped(compiled.build_tape_opts(&HashSet::new(), None)).0,
+        taped(compiled.build_tape_layout(&HashSet::new(), Some(default_cfg()), false)).0,
+    ];
+    assert!(
+        progs[0]
+            .instrs
+            .iter()
+            .any(|i| matches!(i, Instr::FaultScan { .. })),
+        "the guarded reads lower to a fault scan"
+    );
+    // Hand-picked states (column-major `u`): none reached, only the j = 2
+    // read, only the i = 1 read, both (the oracle meets (1, 1)'s first),
+    // plus seeded ones.
+    let mut states: Vec<Vec<f64>> = vec![
+        vec![-0.5; n],
+        vec![-0.5, -0.5, -0.5, -0.5, 0.5, -0.5],
+        vec![-2.0, -0.5, -0.5, -0.5, -0.5, -0.5],
+        vec![-2.0, -0.5, -0.5, 0.5, 0.5, 0.5],
+        vec![0.5, -0.5, -0.5, 0.5, -0.5, -0.5],
+    ];
+    states.extend((0..6).map(|s| seeded_state(n, s, -2.0, 2.0)));
+    let mut fired = [false; 2];
+    for state in &states {
+        crate::simulate_array::take_const_array_oob();
+        let (dy_ref, _) = compiled.debug_eval_rhs(state, 0.0, &params, true);
+        let want = crate::simulate_array::take_const_array_oob();
+        fired[usize::from(want.is_some())] = true;
+        for (k, prog) in progs.iter().enumerate() {
+            let mut dy = vec![0.0f64; n];
+            run_reference(prog, &compiled, state, &param_vec, 0.0, &mut dy);
+            assert_eq!(
+                crate::simulate_array::take_const_array_oob(),
+                want,
+                "program {k} ref"
+            );
+            let mut scratch = super::super::RhsScratch::new(&compiled.var_shapes);
+            scratch.install_tape(std::rc::Rc::new(match k {
+                0 => taped(compiled.build_tape_opts(&HashSet::new(), Some(default_cfg()))).0,
+                1 => taped(compiled.build_tape_opts(&HashSet::new(), None)).0,
+                _ => {
+                    taped(compiled.build_tape_layout(&HashSet::new(), Some(default_cfg()), false)).0
+                }
+            }));
+            let mut dy_fast = vec![0.0f64; n];
+            compiled.debug_eval_rhs_into(
+                state,
+                0.0,
+                &param_vec,
+                &mut dy_fast,
+                &mut scratch,
+                &mut RhsStats::default(),
+            );
+            assert_eq!(
+                crate::simulate_array::take_const_array_oob(),
+                want,
+                "program {k} fast"
+            );
+            let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+            assert_eq!(bits(&dy_fast), bits(&dy_ref), "program {k}: dy");
+            assert_eq!(bits(&dy), bits(&dy_ref), "program {k}: reference dy");
+        }
+    }
+    assert_eq!(
+        fired,
+        [true, true],
+        "the states cover both a fault and none"
+    );
+}

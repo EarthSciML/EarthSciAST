@@ -112,6 +112,7 @@ fn reversible(prog: &TapeProgram) -> bool {
         | Instr::ConstArray { .. }
         | Instr::LoadForcing { .. }
         | Instr::Fault { .. }
+        | Instr::FaultScan { .. }
         | Instr::JmpIfZero { .. }
         | Instr::Export { .. } => true,
         Instr::Reduce { axes, .. } => axes.len() <= 1,

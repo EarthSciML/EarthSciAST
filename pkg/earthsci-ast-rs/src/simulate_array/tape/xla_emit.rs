@@ -1281,6 +1281,16 @@ impl<'a> Emitter<'a> {
                     self.prog.faults[*fault as usize]
                 )));
             }
+            Instr::FaultScan { .. } => {
+                // As for `Instr::Fault`: the program may raise a fail-closed
+                // fault, depending on which cells it evaluates, and has no
+                // channel to report it through.
+                return Err(self.err(
+                    "the program may raise a fail-closed evaluation fault (a read the \
+                     interpreter evaluates only where a condition holds), which a compiled \
+                     program cannot report",
+                ));
+            }
             Instr::JmpIfZero { .. } => {
                 return Err(self.err("JmpIfZero reached emit_one (handled by emit_range)"));
             }

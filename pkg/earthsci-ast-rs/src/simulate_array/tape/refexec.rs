@@ -539,6 +539,26 @@ pub(super) fn run_reference(
                     prog.faults[*fault as usize].clone(),
                 );
             }
+            Instr::FaultScan { spec } => {
+                let scan = &prog.fault_scans[*spec as usize];
+                let first = scan.first(&prog.faults, |op, at| match (op, at) {
+                    (Operand::Slot(s), Some((shape, cell))) => {
+                        let Some(RefVal::Arr(a)) = &slots[*s as usize] else {
+                            panic!("an array condition reads an array slot");
+                        };
+                        // The array's own walk is the slab order.
+                        let k = super::ir::slab_flat(shape, cell, prog.col_major);
+                        *a.iter().nth(k).expect("the cell is in the box")
+                    }
+                    _ => match resolve(prog, &slots, &state_arrays, params, t, op) {
+                        RefVal::Scalar(v) => v,
+                        RefVal::Arr(_) => panic!("a scalar condition reads a scalar"),
+                    },
+                });
+                if let Some(msg) = first {
+                    crate::simulate_array::eval::latch_gather_fault(msg);
+                }
+            }
             Instr::Sweep { spec } => {
                 let sw = &prog.sweeps[*spec as usize];
                 assert!(sweep.is_none(), "recurrence sweeps do not nest");

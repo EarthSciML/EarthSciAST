@@ -172,7 +172,7 @@ fn place(
                 super::par::ways_for(d.elems(), ways)
             }
         }
-        Instr::Gather { out, .. } => {
+        Instr::Gather { out, .. } | Instr::Reduce { out, .. } => {
             let d = &prog.slots[*out as usize];
             if d.scalar {
                 1
