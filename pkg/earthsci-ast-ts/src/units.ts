@@ -1037,11 +1037,12 @@ function computeDimensions(
 }
 
 /**
- * Register a unit binding under BOTH its scoped key (`Scope.name`) and its bare
- * short name (`name`). The scoped key always reflects this component; the bare
- * key is FIRST-WINS — an earlier component's short name is never overwritten by
- * a later collision, matching the legacy resolution order where the
- * first-declared short name shadows later ones. No-op when `units` is absent.
+ * Register a unit binding under its bare short name (`name`). The bare key is
+ * FIRST-WINS — an earlier component's short name is never overwritten by a later
+ * collision, matching the legacy resolution order where the first-declared short
+ * name shadows later ones. The scoped key (`Scope.name`) is not bound here: it
+ * comes from {@link topLevelScopedUnits}, so a component-relative path of the
+ * same spelling can shadow it. No-op when `units` is absent.
  *
  * When `units` is present but UNPARSEABLE, the declaration names no real unit,
  * which is a defect in the FILE: an `unparseable_unit` finding is recorded (a
@@ -1053,7 +1054,6 @@ function computeDimensions(
  */
 function addBinding(
   bindings: Map<string, ParsedUnit>,
-  scope: string,
   name: string,
   units: string | undefined,
   warnings: UnitWarning[],
@@ -1075,7 +1075,6 @@ function addBinding(
     })
     return
   }
-  bindings.set(`${scope}.${name}`, parsed)
   if (!bindings.has(name)) bindings.set(name, parsed)
 }
 
@@ -1166,7 +1165,7 @@ function reportUnparseableVariableUnits(
  * their `observed` variable expressions checked.
  *
  * BINDINGS: the shared top-level environment (top-level models' variables +
- * reaction systems' species/parameters, scoped key + bare first-wins) is used
+ * reaction systems' species/parameters, bare first-wins) is used
  * for EVERY component, including subsystems. Subsystem-local declarations are
  * deliberately NOT added, so a name defined only inside a subsystem stays an
  * "Unknown variable" and keeps the mismatch-suppression in `checkAndReport`.
@@ -1192,7 +1191,8 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
   const warnings: UnitWarning[] = []
 
   // Shared binding environment: top-level models' variables + reaction systems'
-  // species/parameters (scoped key + bare first-wins). This is the ONLY
+  // species/parameters, bare first-wins (scoped keys are added per component by
+  // `withScopedReferenceUnits`). This is the ONLY bare-name
   // environment — subsystem-local declarations are never added (see the
   // docstring's BINDINGS note), so a subsystem-only name stays unbound and its
   // equation-level mismatch is suppressed.
@@ -1203,7 +1203,6 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
         for (const [varName, variable] of Object.entries(model.variables)) {
           addBinding(
             unitBindings,
-            modelName,
             varName,
             variable.units,
             warnings,
@@ -1219,7 +1218,6 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
         for (const [speciesName, species] of Object.entries(system.species)) {
           addBinding(
             unitBindings,
-            systemName,
             speciesName,
             species.units,
             warnings,
@@ -1231,7 +1229,6 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
         for (const [paramName, param] of Object.entries(system.parameters)) {
           addBinding(
             unitBindings,
-            systemName,
             paramName,
             param.units,
             warnings,
@@ -1245,6 +1242,9 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
   // Reaction-rate / stoichiometry dimensional check lives in validate.ts
   // (`validateReactionRateUnits`) so it can emit a structured
   // `unit_inconsistency` error with typed details instead of a prose warning.
+
+  // `Scope.member` paths into every top-level component, built once per document.
+  const scopedTopLevel = topLevelScopedUnits(file)
 
   forEachComponent(
     file,
@@ -1270,6 +1270,7 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
         bindingsForComponent(unitBindings, scopedName, component),
         file,
         component,
+        scopedTopLevel,
       )
 
       // Flag any unparseable variable-unit declarations in this component. For
@@ -1411,16 +1412,18 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
 }
 
 /** Declared unit strings of a component's own members: a model's `variables`,
- * a reaction system's `species` and `parameters`. */
-function componentMemberUnits(component: unknown): Array<[string, string]> {
-  const out: Array<[string, string]> = []
+ * a reaction system's `species` and `parameters`. A member that declares no
+ * `units` maps to `null` — it still names that member, so its scoped name
+ * resolves to it (dimension unknown) rather than to anything else. */
+function componentMemberUnits(component: unknown): Array<[string, string | null]> {
+  const out: Array<[string, string | null]> = []
   const c = component as Record<string, unknown>
   for (const key of ['variables', 'species', 'parameters']) {
     const table = c[key]
     if (table === null || typeof table !== 'object' || Array.isArray(table)) continue
     for (const [name, decl] of Object.entries(table as Record<string, { units?: unknown }>)) {
       const units = decl?.units
-      if (typeof units === 'string' && units) out.push([name, units])
+      out.push([name, typeof units === 'string' && units ? units : null])
     }
   }
   return out
@@ -1440,41 +1443,35 @@ function resolvedSubsystems(component: unknown): Array<[string, unknown]> {
 
 /** Register `<prefix>.<member>` for every member of `component` and,
  * recursively, of every resolved subsystem it carries. */
-function collectScopedUnits(prefix: string, component: unknown, out: Map<string, string>): void {
+function collectScopedUnits(
+  prefix: string,
+  component: unknown,
+  out: Map<string, string | null>,
+): void {
   for (const [name, units] of componentMemberUnits(component)) out.set(`${prefix}.${name}`, units)
   for (const [subName, sub] of resolvedSubsystems(component)) {
     collectScopedUnits(`${prefix}.${subName}`, sub, out)
   }
 }
 
-/**
- * Scoped name -> declared unit string, for every scoped reference an expression
- * in `component` can make (esm-spec §4.8.4, §4.9.2; EarthSciAST#414).
- *
- * A mounted component is, after resolution, the same as one written inline
- * (§4.7 "Resolution timing"), so a variable reached across a `{ref}` mount edge
- * — a `subsystems.<k>` mount or a top-level `models.<k>` mount — carries the
- * units its declaration states. Two kinds of path are covered: (a)
- * `<System>.<member>` naming a top-level model or reaction system, recursively
- * through its subsystems; (b) `<sub>.<member>` relative to `component`'s own
- * subsystems, recursively, which wins over (a) on a collision. An unresolved
- * `{ref}` subsystem contributes nothing. Mirrors Python's
- * `scoped_reference_units`.
- */
-export function scopedReferenceUnits(
-  file: EsmFile | undefined,
-  component: unknown,
-): Map<string, string> {
-  const out = new Map<string, string>()
-  if (file) {
-    for (const table of [file.models, file.reaction_systems]) {
-      for (const [name, entry] of Object.entries((table ?? {}) as Record<string, unknown>)) {
-        if (entry === null || typeof entry !== 'object') continue
-        if (isReferenceStub(entry as Parameters<typeof isReferenceStub>[0])) continue
-        collectScopedUnits(name, entry, out)
-      }
+/** `<System>.<member>` for every top-level model and reaction system,
+ * recursively through their resolved subsystems. */
+function topLevelScopedUnitStrings(file: EsmFile | undefined): Map<string, string | null> {
+  const out = new Map<string, string | null>()
+  if (!file) return out
+  for (const table of [file.models, file.reaction_systems]) {
+    for (const [name, entry] of Object.entries((table ?? {}) as Record<string, unknown>)) {
+      if (entry === null || typeof entry !== 'object') continue
+      if (isReferenceStub(entry as Parameters<typeof isReferenceStub>[0])) continue
+      collectScopedUnits(name, entry, out)
     }
   }
+  return out
+}
+
+/** `<sub>.<member>` relative to `component`'s own resolved subsystems. */
+function relativeScopedUnitStrings(component: unknown): Map<string, string | null> {
+  const out = new Map<string, string | null>()
   for (const [subName, sub] of resolvedSubsystems(component)) {
     collectScopedUnits(subName, sub, out)
   }
@@ -1482,25 +1479,70 @@ export function scopedReferenceUnits(
 }
 
 /**
+ * The document-wide part of the scoped-reference environment: every
+ * `<System>.<member>` path (see {@link scopedReferenceUnits}), parsed. `null`
+ * marks a member with no or an unparseable unit — the name is taken, its
+ * dimension unknown. It depends only on the document, so a validation pass
+ * builds it once and hands it to every {@link withScopedReferenceUnits} call.
+ */
+export function topLevelScopedUnits(file: EsmFile | undefined): Map<string, ParsedUnit | null> {
+  const out = new Map<string, ParsedUnit | null>()
+  for (const [name, units] of topLevelScopedUnitStrings(file)) {
+    out.set(name, units === null ? null : tryParseUnit(units))
+  }
+  return out
+}
+
+/**
+ * Scoped name -> declared unit string, for every scoped reference an expression
+ * in `component` can make (esm-spec §4.8.4, §4.9.2; EarthSciAST#414); `null`
+ * for a member that declares no units.
+ *
+ * A mounted component is, after resolution, the same as one written inline
+ * (§4.7 "Resolution timing"), so a variable reached across a `{ref}` mount edge
+ * — a `subsystems.<k>` mount or a top-level `models.<k>` mount — carries the
+ * units its declaration states. Two kinds of path are covered: (a)
+ * `<System>.<member>` naming a top-level model or reaction system, recursively
+ * through its subsystems; (b) `<sub>.<member>` relative to `component`'s own
+ * subsystems, recursively, which wins over (a) on a collision — even when the
+ * relative member declares no units. An unresolved `{ref}` subsystem
+ * contributes nothing. Mirrors Python's `scoped_reference_units`.
+ */
+export function scopedReferenceUnits(
+  file: EsmFile | undefined,
+  component: unknown,
+): Map<string, string | null> {
+  const out = topLevelScopedUnitStrings(file)
+  for (const [name, units] of relativeScopedUnitStrings(component)) out.set(name, units)
+  return out
+}
+
+/**
  * `bindings` extended with every scoped reference of `component` (see
- * {@link scopedReferenceUnits}). A name `bindings` already binds WITHOUT a dot
- * — the component's own bare names — is never overwritten; a scoped key is
- * (re)bound to the declared unit, and left unbound when that unit does not
- * parse (it is reported at its own declaration).
+ * {@link scopedReferenceUnits}). A name `bindings` already binds is never
+ * overwritten. A component-relative path takes precedence over the top-level
+ * path of the same spelling; a path whose unit is missing or does not parse
+ * stays unbound (dimension unknown — an unparseable unit is reported at its own
+ * declaration). `topLevel` is {@link topLevelScopedUnits}`(file)`; pass it in to
+ * build it once per document.
  */
 export function withScopedReferenceUnits(
   bindings: Map<string, ParsedUnit>,
   file: EsmFile | undefined,
   component: unknown,
+  topLevel: Map<string, ParsedUnit | null> = topLevelScopedUnits(file),
 ): Map<string, ParsedUnit> {
-  const scoped = scopedReferenceUnits(file, component)
-  if (scoped.size === 0) return bindings
+  const relative = relativeScopedUnitStrings(component)
+  if (relative.size === 0 && topLevel.size === 0) return bindings
   const view = new Map(bindings)
-  for (const [name, units] of scoped) {
-    if (!name.includes('.') && view.has(name)) continue
-    const parsed = tryParseUnit(units)
-    if (parsed === null) view.delete(name)
-    else view.set(name, parsed)
+  for (const [name, units] of relative) {
+    if (view.has(name)) continue
+    const parsed = units === null ? null : tryParseUnit(units)
+    if (parsed !== null) view.set(name, parsed)
+  }
+  for (const [name, parsed] of topLevel) {
+    if (view.has(name) || relative.has(name)) continue
+    if (parsed !== null) view.set(name, parsed)
   }
   return view
 }
@@ -1538,9 +1580,8 @@ function dedupeUnparseable(warnings: UnitWarning[]): UnitWarning[] {
  * environment, with every BARE name this component declares rebound to THIS
  * component's own units.
  *
- * The shared table publishes each declaration twice — under its scoped key
- * (`ChemicalKinetics.B`) and, first-writer-wins, under its bare name (`B`). The
- * bare half is a single flat namespace across the whole file, so when two models
+ * The shared table publishes each declaration, first-writer-wins, under its bare
+ * name (`B`). That is a single flat namespace across the whole file, so when two models
  * both declare `B`, one model's units silently answered for the other's. That is
  * not a hypothetical: in `tests/valid/units_dimensional_analysis.esm`,
  * `ElectromagneticFields.B` reached the table first, so `ChemicalKinetics`' rate

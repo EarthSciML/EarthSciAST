@@ -10,6 +10,7 @@ import {
   checkDimensions,
   tryParseUnit,
   withScopedReferenceUnits,
+  topLevelScopedUnits,
   isDimensionless,
   dimsEqual,
   type CanonicalDims,
@@ -244,16 +245,19 @@ export function validateReactionRateUnits(
   reactionSystem: ReactionSystem,
   systemPath: string,
   esmFile?: EsmFile,
+  scopedTopLevel?: Map<string, ParsedUnit | null>,
 ): StructuralError[] {
   const errors: StructuralError[] = []
   if (!reactionSystem.reactions) return errors
 
   // Scoped references (`Other.k`, `Sub.k`) carry their target's declared units
-  // (esm-spec §4.8.4, EarthSciAST#414).
+  // (esm-spec §4.8.4, EarthSciAST#414). `scopedTopLevel` lets a caller that
+  // checks many systems build the document-wide part once.
   const bindings = withScopedReferenceUnits(
     buildReactionSystemUnitBindings(reactionSystem),
     esmFile,
     reactionSystem,
+    scopedTopLevel ?? topLevelScopedUnits(esmFile),
   )
   const speciesMap = reactionSystem.species || {}
 

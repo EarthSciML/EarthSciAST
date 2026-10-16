@@ -9,6 +9,8 @@ import {
   dimsEqual,
   constantExponentValue,
   scopedReferenceUnits,
+  topLevelScopedUnits,
+  withScopedReferenceUnits,
   type ParsedUnit,
   type CanonicalDims,
 } from './units.js'
@@ -16,7 +18,8 @@ import { loadString } from './parse.js'
 import { validateText } from './validate.js'
 import { readFixture, fixturesDir } from './test-helpers.js'
 import { readFileSync } from 'node:fs'
-import type { Expression, EsmFile } from './types.js'
+import type { Expression, EsmFile, ReactionSystem } from './types.js'
+import { validateReactionRateUnits } from './validate/reaction-checks.js'
 import { ExactScale } from './unit-conversion.js'
 
 /** A parsed unit's dimensions, scale and offset — its exact scale is pinned in unit-exact-scale.test.ts. */
@@ -1083,6 +1086,145 @@ describe('scoped references, faq filters and constant exponents', () => {
 
     it('leaves a reference into an unresolved {ref} stub undeterminable', () => {
       expect(unitErrors(doc('Gone.x', 'kg'))).toHaveLength(0)
+    })
+  })
+
+  describe('a component-relative path wins even when it declares no units', () => {
+    // Model A mounts a subsystem B whose x declares no units; a top-level model
+    // B declares x in kg. Inside A, `B.x` is the subsystem's x (unknown), not
+    // the top-level one.
+    const doc = (subUnits: string | undefined, withSub = true): EsmFile =>
+      ({
+        esm: '1.2.0',
+        metadata: { name: 'shadow' },
+        models: {
+          A: {
+            variables: { y: { type: 'unknown', units: 'm' } },
+            equations: [{ lhs: 'y', rhs: 'B.x' }],
+            ...(withSub
+              ? {
+                  subsystems: {
+                    B: {
+                      variables: {
+                        x: {
+                          type: 'parameter',
+                          default: 1,
+                          ...(subUnits === undefined ? {} : { units: subUnits }),
+                        },
+                      },
+                      equations: [],
+                    },
+                  },
+                }
+              : {}),
+          },
+          B: {
+            variables: { x: { type: 'parameter', units: 'kg', default: 1 } },
+            equations: [],
+          },
+        },
+      }) as unknown as EsmFile
+    const unitErrors = (file: EsmFile) =>
+      validateUnits(file).filter((w) => w.code === 'dimensional_mismatch')
+
+    it('records the unitless relative member as taking its name', () => {
+      const file = doc(undefined)
+      const scoped = scopedReferenceUnits(file, file.models!.A)
+      expect(scoped.has('B.x')).toBe(true)
+      expect(scoped.get('B.x')).toBeNull()
+    })
+
+    it('skips the check instead of using the top-level declaration', () => {
+      expect(unitErrors(doc(undefined))).toHaveLength(0)
+      // An unparseable relative unit shadows the same way (it is reported at
+      // its own declaration, not as a mismatch here).
+      expect(unitErrors(doc('not_a_unit'))).toHaveLength(0)
+    })
+
+    it('still checks against the relative unit when it has one, and the top-level one otherwise', () => {
+      expect(unitErrors(doc('m'))).toHaveLength(0)
+      expect(unitErrors(doc('s')).length).toBeGreaterThan(0)
+      expect(unitErrors(doc(undefined, false)).length).toBeGreaterThan(0)
+    })
+
+    it('applies to the reaction-rate check too', () => {
+      const rs = (subUnits: string | undefined): EsmFile =>
+        ({
+          esm: '1.2.0',
+          metadata: { name: 'shadow-rs' },
+          reaction_systems: {
+            Chem: {
+              species: { A: { units: 'mol/L' } },
+              parameters: {},
+              reactions: [
+                {
+                  id: 'r1',
+                  substrates: [{ species: 'A', stoichiometry: 1 }],
+                  products: [],
+                  rate: 'B.k',
+                },
+              ],
+              subsystems: {
+                B: {
+                  species: {},
+                  parameters: { k: subUnits === undefined ? {} : { units: subUnits } },
+                  reactions: [],
+                },
+              },
+            },
+            B: { species: {}, parameters: { k: { units: 'kg' } }, reactions: [] },
+          },
+        }) as unknown as EsmFile
+      const check = (file: EsmFile) =>
+        validateReactionRateUnits(
+          file.reaction_systems!.Chem as ReactionSystem,
+          '/reaction_systems/Chem',
+          file,
+        )
+      expect(check(rs(undefined))).toHaveLength(0)
+      expect(check(rs('1/s'))).toHaveLength(0)
+      expect(check(rs('kg'))).toHaveLength(1)
+    })
+  })
+
+  describe('withScopedReferenceUnits never overwrites an existing binding', () => {
+    const file = {
+      esm: '1.2.0',
+      metadata: { name: 'keep' },
+      models: {
+        Top: {
+          variables: {
+            p: { type: 'parameter', units: 'kg', default: 1 },
+            bad: { type: 'parameter', units: 'not_a_unit', default: 1 },
+          },
+          equations: [],
+        },
+        Probe: { variables: {}, equations: [] },
+      },
+    } as unknown as EsmFile
+
+    it('keeps a pre-bound name, scoped or bare', () => {
+      const view = withScopedReferenceUnits(
+        env({ 'Top.p': 'm', 'Top.bad': 's', p: 'K' }),
+        file,
+        file.models!.Probe,
+      )
+      expect(view.get('Top.p')).toEqual(parseUnit('m'))
+      expect(view.get('Top.bad')).toEqual(parseUnit('s'))
+      expect(view.get('p')).toEqual(parseUnit('K'))
+    })
+
+    it('binds a free scoped name, and leaves an unparseable one unbound', () => {
+      const view = withScopedReferenceUnits(env({}), file, file.models!.Probe)
+      expect(view.get('Top.p')).toEqual(parseUnit('kg'))
+      expect(view.has('Top.bad')).toBe(false)
+    })
+
+    it('gives the same view whether or not the top-level table is passed in', () => {
+      const prebuilt = topLevelScopedUnits(file)
+      const a = withScopedReferenceUnits(env({}), file, file.models!.Probe, prebuilt)
+      const b = withScopedReferenceUnits(env({}), file, file.models!.Probe)
+      expect([...a.entries()]).toEqual([...b.entries()])
     })
   })
 

@@ -25,7 +25,7 @@ import {
   stripNumericLiterals,
 } from '../numeric-literal.js'
 import { ERROR_CODES } from '../errors.js'
-import { type UnitWarning, validateUnits } from '../units.js'
+import { type UnitWarning, topLevelScopedUnits, validateUnits } from '../units.js'
 import { forEachComponent } from '../traverse.js'
 import type { EsmFile } from '../types.js'
 import type { ValidationError, ValidationResult, StructuralError } from './types.js'
@@ -283,6 +283,8 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
   // Validate reaction systems. Unresolved SubsystemRef entries are reported by
   // validateSubsystemRefs below; they carry no species/reactions to validate.
   if (esmFile.reaction_systems) {
+    // The document-wide part of every rate check's scoped-reference environment.
+    const scopedTopLevel = topLevelScopedUnits(esmFile)
     for (const [systemName, reactionSystem] of Object.entries(esmFile.reaction_systems)) {
       if ('ref' in reactionSystem) continue
       const systemPath = `/reaction_systems/${systemName}`
@@ -322,7 +324,7 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
           implicitNames(esmFile),
         ),
       )
-      errors.push(...validateReactionRateUnits(reactionSystem, systemPath, esmFile))
+      errors.push(...validateReactionRateUnits(reactionSystem, systemPath, esmFile, scopedTopLevel))
       errors.push(...validateReactionSystemICs(reactionSystem, systemName, systemPath))
       // §4.3.4: a reaction system's `constraint_equations` and event bodies are
       // expression positions like any other, so a `broadcast` node hiding in
@@ -338,7 +340,9 @@ function performStructuralValidation(esmFile: EsmFile): StructuralError[] {
           if ('ref' in subsystem) continue
           const subsystemPath = `${systemPath}/subsystems/${subsystemName}`
           errors.push(...validateReactionConsistency(subsystem, subsystemPath, esmFile))
-          errors.push(...validateReactionRateUnits(subsystem, subsystemPath, esmFile))
+          errors.push(
+            ...validateReactionRateUnits(subsystem, subsystemPath, esmFile, scopedTopLevel),
+          )
         }
       }
     }
