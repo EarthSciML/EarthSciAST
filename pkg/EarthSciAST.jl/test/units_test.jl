@@ -453,7 +453,9 @@ using Unitful
         # An op with NO dimensional rule is UNDETERMINABLE — never
         # dimensionless. Reporting it as dimensionless would poison every
         # equation containing a structural op.
-        for op in ("faq", "index", "fn", "table_lookup")
+        # (An `faq` with no `expr` is undeterminable too; `index` is typed, see
+        # "Array operators carry a unit".)
+        for op in ("faq", "fn", "table_lookup")
             @test EarthSciAST.get_expression_dimensions(
                 OpExpr(op, E[VarExpr("x")]), var_units) === nothing
             @test isempty(F(OpExpr(op, E[VarExpr("x")]), var_units))
@@ -750,8 +752,8 @@ using Unitful
     end
 
     # esm-spec §4.8.3: an faq's `filter` and `expr` body are walked with the
-    # ordinary operator rules; the faq's own unit stays undeterminable (the
-    # checker does not model the array operators, §4.8.4).
+    # ordinary operator rules; the faq's own unit is its body's under the
+    # default `reduce` "+".
     @testset "faq filter and body are walked" begin
         E = EarthSciAST.ASTExpr
         D = EarthSciAST.get_expression_dimensions
@@ -762,11 +764,11 @@ using Unitful
         good = faq(body=OpExpr("+", E[VarExpr("x"), VarExpr("y")]),
                    filter=OpExpr("<=", E[VarExpr("x"), VarExpr("y")]))
         @test isempty(F(good, var_units))
-        @test D(good, var_units) === nothing
+        @test D(good, var_units) == u"m"
 
         bad_filter = faq(body=VarExpr("x"), filter=OpExpr("<=", E[VarExpr("x"), VarExpr("z")]))
         @test length(F(bad_filter, var_units)) == 1
-        @test D(bad_filter, var_units) === nothing
+        @test (@test_logs (:warn,) D(bad_filter, var_units)) == u"m"
 
         bad_body = faq(body=OpExpr("+", E[VarExpr("x"), VarExpr("z")]))
         @test length(F(bad_body, var_units)) == 1
@@ -841,6 +843,134 @@ using Unitful
         @test codes(m2; file=file2) == bad
     end
 
+    # esm-spec §4.8.3 (RULES A1-A6): the checker types the array operators.
+    @testset "Array operators carry a unit" begin
+        E = EarthSciAST.ASTExpr
+        D(e, vu) = EarthSciAST._expr_dimensions!(String[], e, vu)
+        F = EarthSciAST.expression_unit_findings
+        vu = Dict("x" => "m", "y" => "m", "km" => "km", "z" => "kg", "w" => "1",
+                  "pct" => "percent", "ang" => "rad", "L" => "cd")
+        V = VarExpr
+        cnst(v, u) = OpExpr("const", E[]; value=v, units=u)
+
+        # A1 index: the array's unit; the subscripts are not part of it.
+        @test D(OpExpr("index", E[V("x"), V("z")]), vu) == u"m"
+        @test D(OpExpr("index", E[V("x"), IntExpr(1)]), vu) == u"m"
+        @test D(OpExpr("index", E[]), vu) === nothing
+        @test D(OpExpr("index", E[V("undeclared"), V("i")]), vu) === nothing
+        # ... and is then checked like any other operand.
+        @test !isempty(F(OpExpr("+", E[OpExpr("index", E[V("x"), V("i")]), V("z")]), vu))
+
+        # A2 reshape / transpose: args[1]'s unit; no args undeterminable.
+        for op in ("reshape", "transpose")
+            @test D(OpExpr(op, E[V("z")]), vu) == u"kg"
+            @test D(OpExpr(op, E[]), vu) === nothing
+        end
+
+        # A3 concat: like an n-ary `+`.
+        @test D(OpExpr("concat", E[V("x"), V("y")]; axis=1), vu) == u"m"
+        @test D(OpExpr("concat", E[NumExpr(0.0), V("y")]; axis=1), vu) == u"m"
+        @test D(OpExpr("concat", E[NumExpr(0.0), V("undeclared")]; axis=1), vu) === nothing
+        @test D(OpExpr("concat", E[]; axis=1), vu) === nothing
+        let f = F(OpExpr("concat", E[V("x"), V("z")]; axis=1), vu)
+            @test length(f) == 1 && occursin("'concat'", only(f))
+        end
+        # Scale, not only dimension: m vs km is a mismatch.
+        @test length(F(OpExpr("concat", E[V("x"), V("km")]; axis=1), vu)) == 1
+        @test D(OpExpr("concat", E[V("x"), V("z")]; axis=1), vu) === nothing
+
+        # A4 makearray: the regions' values agree like `+` operands.
+        mk(vals) = OpExpr("makearray", E[]; regions=[[Any[1, 1]] for _ in vals],
+                          values=E[vals...])
+        @test D(mk([cnst(1.0, "cd"), cnst(2.0, "cd")]), vu) == u"cd"
+        # A bare-literal region is skipped: the result is the other region's unit.
+        @test D(mk([cnst(1.0, "cd"), NumExpr(0.0)]), vu) == u"cd"
+        @test isempty(F(mk([cnst(1.0, "cd"), NumExpr(0.0)]), vu))
+        @test D(mk([NumExpr(0.0), NumExpr(1.0)]), vu) === nothing
+        let f = F(mk([V("x"), V("z")]), vu)
+            @test length(f) == 1 && occursin("'makearray' regions must share units", only(f))
+        end
+        @test length(F(mk([V("x"), V("km")]), vu)) == 1
+        # No / empty `values`: undeterminable, never dimensionless.
+        @test D(mk(E[]), vu) === nothing
+        @test D(OpExpr("makearray", E[]), vu) === nothing
+
+        # A5 broadcast: `{op: fn, args}` under the ordinary rules.
+        @test D(OpExpr("broadcast", E[V("x"), V("y")]; fn="+"), vu) == u"m"
+        @test D(OpExpr("broadcast", E[V("x"), V("z")]; fn="*"), vu) == u"m*kg"
+        @test length(F(OpExpr("broadcast", E[V("x"), V("z")]; fn="+"), vu)) == 1
+        @test D(OpExpr("broadcast", E[V("x"), V("y")]), vu) === nothing
+
+        # A6 faq: the unit is decided by its ⊕.
+        faq(body; kw...) = OpExpr("faq", E[]; expr_body=body, output_idx=String[], kw...)
+        for sr in ("sum_product", "max_product", "min_sum", "max_sum")
+            @test D(faq(V("x"); semiring=sr), vu) == u"m"
+        end
+        for r in ("+", "max", "min")
+            @test D(faq(V("z"); reduce=r), vu) == u"kg"
+        end
+        @test D(faq(V("z")), vu) == u"kg"                     # default reduce "+"
+        # reduce "*": the body's unit only for a pure number.
+        @test D(faq(V("w"); reduce="*"), vu) == Unitful.NoUnits
+        @test D(faq(V("x"); reduce="*"), vu) === nothing      # dimensional body
+        @test D(faq(V("pct"); reduce="*"), vu) === nothing    # scaled dimensionless
+        @test D(faq(V("ang"); reduce="*"), vu) === nothing    # an angle
+        @test D(faq(NumExpr(2.0); reduce="*"), vu) === nothing
+        # ... and a dimensional body under reduce "*" provokes no finding either.
+        @test isempty(F(OpExpr("+", E[faq(V("x"); reduce="*"), V("z")]), vu))
+        # `semiring` supersedes `reduce`.
+        @test D(faq(V("x"); semiring="sum_product", reduce="*"), vu) == u"m"
+        # bool_and_or: dimensionless, whatever the body is.
+        @test D(faq(V("x"); semiring="bool_and_or"), vu) == Unitful.NoUnits
+        @test D(faq(OpExpr(">", E[V("L"), V("L")]); semiring="bool_and_or"), vu) ==
+              Unitful.NoUnits
+        # Value invention: undeterminable.
+        let n = faq(V("x"))
+            n.distinct = true
+            @test D(n, vu) === nothing
+        end
+        let n = faq(V("x"))
+            n.key = OpExpr("skolem", E[V("i")])
+            @test D(n, vu) === nothing
+        end
+        # No `expr`; unknown spellings.
+        @test D(OpExpr("faq", E[V("x")]; output_idx=String[]), vu) === nothing
+        @test D(faq(V("x"); semiring="log_sum_exp"), vu) === nothing
+        @test D(faq(V("x"); reduce="or"), vu) === nothing
+        # The filter and body are still walked under every ⊕.
+        bad_filter = OpExpr("<=", E[V("x"), V("z")])
+        for kw in ((reduce="*",), (semiring="bool_and_or",), (semiring="sum_product",))
+            @test length(F(faq(V("x"); filter=bad_filter, kw...), vu)) == 1
+        end
+        let n = faq(OpExpr("+", E[V("x"), V("z")]))
+            n.distinct = true
+            @test length(F(n, vu)) == 1
+        end
+        # An faq's unit takes part in the enclosing expression.
+        @test length(F(OpExpr("+", E[faq(OpExpr("index", E[V("x"), V("i")])), V("z")]), vu)) == 1
+    end
+
+    # The angle rewrite reads array operators by the checker's rules.
+    @testset "angle rewrite agrees with the checker on array operators" begin
+        E = EarthSciAST.ASTExpr
+        vu = Dict("lat" => "deg", "r" => "rad")
+        N = EarthSciAST._normalize_angle_expr
+        idx = OpExpr("index", E[VarExpr("lat"), VarExpr("i")])
+        out = N(OpExpr("cos", E[idx]), vu)
+        @test out.args[1] isa OpExpr && out.args[1].op == "*"
+        @test out.args[1].args[2] isa NumExpr && out.args[1].args[2].value == pi / 180
+        # A makearray with a bare-literal region takes its other region's unit.
+        mk = OpExpr("makearray", E[]; regions=[[Any[1, 1]], [Any[2, 2]]],
+                    values=E[VarExpr("lat"), NumExpr(0.0)])
+        @test N(OpExpr("sin", E[mk]), vu).args[1].op == "*"
+        # reduce "*" over degrees is undeterminable, so nothing is rewritten.
+        prod = OpExpr("faq", E[]; expr_body=idx, reduce="*", output_idx=String[])
+        @test N(OpExpr("sin", E[prod]), vu).args[1] === prod
+        # A `rad` element is left alone.
+        ridx = OpExpr("index", E[VarExpr("r"), VarExpr("i")])
+        @test N(OpExpr("cos", E[ridx]), vu).args[1] === ridx
+    end
+
     # The shared fixtures for the three rules, through the public front door
     # (`load_path`, so every {ref} mount resolves, then `validate`).
     @testset "Mount / faq / constant-exponent unit fixtures" begin
@@ -848,7 +978,9 @@ using Unitful
         for f in ("units_mount_leaf.esm", "units_mount_subsystem_consistent.esm",
                   "units_mount_toplevel_consistent.esm", "units_faq_filter_consistent.esm",
                   "units_constant_exponent_folding.esm",
-                  "units_symbolic_exponent_undeterminable.esm")
+                  "units_symbolic_exponent_undeterminable.esm",
+                  "units_array_mount_leaf.esm", "units_array_operators_consistent.esm",
+                  "units_array_mount_index_faq_consistent.esm")
             @testset "valid: $f" begin
                 r = EarthSciAST.validate(EarthSciAST.load_path(joinpath(tests_root, "valid", f)))
                 @test r.is_valid
@@ -863,7 +995,14 @@ using Unitful
                 "units_faq_filter_mismatch.esm" => ["/models/Probe/variables/n_short"],
                 "units_faq_body_mismatch.esm" => ["/models/Probe/variables/total"],
                 "units_constant_exponent_mismatch.esm" => ["/models/Powers/variables/T_32",
-                                                           "/models/Powers/variables/L_const"])
+                                                           "/models/Powers/variables/L_const"],
+                "units_array_index_filter_mismatch.esm" => ["/models/Probe/variables/p_count"],
+                "units_array_mount_index_faq_mismatch.esm" => ["/models/Mount/variables/total"],
+                "units_array_concat_mismatch.esm" => ["/models/Probe/variables/joined"],
+                "units_array_makearray_mismatch.esm" => ["/models/Probe/variables/mixed"],
+                "units_array_reshape_mismatch.esm" => ["/models/Probe/variables/out"],
+                "units_array_transpose_mismatch.esm" => ["/models/Probe/variables/out"],
+                "units_array_broadcast_mismatch.esm" => ["/models/Probe/variables/out"])
             @testset "invalid: $f" begin
                 r = EarthSciAST.validate(EarthSciAST.load_path(joinpath(tests_root, "invalid", f)))
                 @test !r.is_valid

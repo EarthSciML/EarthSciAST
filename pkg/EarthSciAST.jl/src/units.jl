@@ -1497,59 +1497,80 @@ const _DIMENSION_RULES = let rules = Dict{String, Function}(
     rules
 end
 
-# The EVALUATION-PATH unit environment: the declared units, plus the reading
-# that an array operator carries its ELEMENT's unit. The checker has no rule
-# for the array operators (esm-spec §4.8.4: they are undeterminable there), but
-# an evaluator that meets `cos(index(lat, i))` with `lat` in `deg` reads a
-# number in degrees all the same, and §4.8.3 requires it converted. Only the
-# angle rewrite (`_normalize_angle_expr`, flatten.jl) builds one of these, so
-# no checker verdict moves.
-struct _ElementUnits{D<:AbstractDict} <: AbstractDict{String, String}
-    units::D
-end
-Base.get(e::_ElementUnits, k, default) = get(e.units, k, default)
-Base.haskey(e::_ElementUnits, k) = haskey(e.units, k)
-Base.getindex(e::_ElementUnits, k) = e.units[k]
-Base.length(e::_ElementUnits) = length(e.units)
-Base.iterate(e::_ElementUnits, state...) = iterate(e.units, state...)
-
+# The array operators (esm-spec §4.8.3). The CHECKER and the evaluation path
+# (the angle rewrite, `_normalize_angle_expr` in flatten.jl) read them by the
+# same rules, so `cos(index(lat, i))` with `lat` in `deg` is converted exactly
+# where the checker says the argument is in degrees. The rules are the same,
+# case for case, as the Rust binding's `propagate_array_dim` (units.rs):
+#
+# * `index`, `reshape`, `transpose` — the unit of the source array, `args[1]`
+#   (the subscripts are not part of the unit); no args: undeterminable.
+# * `concat` — like an n-ary `+`: determinable operands agree in dimension AND
+#   scale, undeterminable ones are skipped.
+# * `makearray` — its regions' `values` agree like the operands of `+`.
+# * `broadcast(fn=F, args)` — the unit of `{op: F, args}`.
+# * `faq` — its `filter` and `expr` are always walked for findings; its own unit
+#   is decided by its ⊕ (`_faq_unit`).
 const _ARRAY_ELEMENT_OPS = Set(["faq", "makearray", "index", "reshape",
                                 "transpose", "concat", "broadcast"])
 
-# The element unit of an array operator, under an `_ElementUnits` environment.
-# The same rules, case for case, as the Rust binding's `propagate_array_dim`
-# (units.rs), so every binding's angle rewrite folds the factor into the same
-# arguments: an `faq` has its body's unit; a `makearray` has the unit its value
-# regions share; a `broadcast` has the unit of its `fn` applied to its operands;
-# `index`, `reshape`, `transpose` and `concat` have their source array's.
 function _array_element_rule(expr, var_units, findings)
     if expr.op == "faq"
-        expr.expr_body !== nothing &&
-            return _expr_dimensions!(findings, expr.expr_body, var_units)
-        isempty(expr.args) && return Unitful.NoUnits
-        return _expr_dimensions!(findings, expr.args[1], var_units)
+        # The `filter` is a boolean whose value never reaches the faq's unit,
+        # but it is an expression like any other (EarthSciAST#414).
+        expr.filter !== nothing && _expr_dimensions!(findings, expr.filter, var_units)
+        body = expr.expr_body === nothing ? nothing :
+            _expr_dimensions!(findings, expr.expr_body, var_units)
+        return _faq_unit(expr, body)
     elseif expr.op == "makearray"
-        (expr.values === nothing || isempty(expr.values)) && return Unitful.NoUnits
-        dims = [_expr_dimensions!(findings, v, var_units) for v in expr.values]
-        known = filter(!isnothing, dims)
-        isempty(known) && return nothing
-        first_dim = known[1]
-        mismatched = false
-        for dim in known[2:end]
-            if !_same_unit(dim, first_dim)
-                push!(findings, "'makearray' regions must share units: " *
-                                "'$(_ustr(first_dim))' vs '$(_ustr(dim))'")
-                mismatched = true
-            end
-        end
-        (mismatched || length(known) != length(dims)) && return nothing
-        return first_dim
+        expr.values === nothing && return nothing
+        return _same_dimensions_over(expr.values, var_units, findings,
+            (first_dim, dim) -> "'makearray' regions must share units: " *
+                "'$(_ustr(first_dim))' vs '$(_ustr(dim))'")
+    elseif expr.op == "concat"
+        return _same_dimensions_over(expr.args, var_units, findings,
+            (first_dim, dim) -> "Incompatible dimensions/scales in 'concat': " *
+                "'$(_ustr(first_dim))' vs '$(_ustr(dim))'")
     elseif expr.op == "broadcast"
         expr.fn === nothing && return nothing
         return _expr_dimensions!(findings, OpExpr(expr.fn, expr.args), var_units)
     end
-    isempty(expr.args) && return Unitful.NoUnits
+    # index / reshape / transpose
+    isempty(expr.args) && return nothing
     return _expr_dimensions!(findings, expr.args[1], var_units)
+end
+
+# The unit of an `faq` node whose `expr` has unit `body`. The ⊗ is written by
+# the author inside `expr`, so it is already typed; `join` clauses are key
+# equalities and contribute no factor. What remains is the ⊕ over the
+# contracted indices, from `semiring` when present, else `reduce` (default "+"):
+#
+# * `sum_product`, `max_product`, `min_sum`, `max_sum`, or `reduce` `+`/`max`/
+#   `min` — the body's unit;
+# * `reduce: "*"` — the body's unit only when it is a pure number (dimensionless
+#   at exact scale 1); otherwise undeterminable, as the power is the range length;
+# * `bool_and_or` — dimensionless, a boolean;
+# * value invention (`distinct: true`, or a `key`) — undeterminable: the result
+#   is ids, not a quantity. So is a missing `expr` and an unknown ⊕ spelling
+#   (rejected elsewhere).
+const _FAQ_BODY_UNIT_SEMIRINGS = ("sum_product", "max_product", "min_sum", "max_sum")
+const _FAQ_BODY_UNIT_REDUCES = ("+", "max", "min")
+
+function _faq_unit(expr, body)
+    (expr.distinct === true || expr.key !== nothing) && return nothing
+    expr.expr_body === nothing && return nothing
+    if expr.semiring !== nothing
+        expr.semiring == "bool_and_or" && return Unitful.NoUnits
+        return expr.semiring in _FAQ_BODY_UNIT_SEMIRINGS ? body : nothing
+    end
+    r = expr.reduce === nothing ? "+" : expr.reduce
+    r in _FAQ_BODY_UNIT_REDUCES && return body
+    if r == "*"
+        (body !== nothing && _is_pure_number(body) && !_is_angle_bearing(body)) &&
+            return body
+        return nothing
+    end
+    return nothing
 end
 
 # The engine proper. Returns the expression's dimension, or `nothing` when it
@@ -1571,18 +1592,8 @@ function _expr_dimensions!(findings::Vector{String}, expr::ASTExpr,
     elseif expr isa OpExpr
         rule = get(_DIMENSION_RULES, expr.op, nothing)
         rule !== nothing && return rule(expr, var_units, findings)
-        var_units isa _ElementUnits && expr.op in _ARRAY_ELEMENT_OPS &&
+        expr.op in _ARRAY_ELEMENT_OPS &&
             return _array_element_rule(expr, var_units, findings)
-        if expr.op == "faq"
-            # The checker does not model the array operators, so the faq's own
-            # unit stays undeterminable (esm-spec §4.8.4) — but the expressions
-            # it evaluates are checked like any other (§4.8.3): its `filter`, a
-            # boolean whose value never reaches the faq's unit, and its `expr`
-            # body. A provable mismatch in either is a finding (EarthSciAST#414).
-            expr.filter !== nothing && _expr_dimensions!(findings, expr.filter, var_units)
-            expr.expr_body !== nothing && _expr_dimensions!(findings, expr.expr_body, var_units)
-            return nothing
-        end
         # Operator without a dimensional rule (comparisons, aggregate ops,
         # registered-function calls, …): degrade silently — the result is
         # unknown, not an authoring error.

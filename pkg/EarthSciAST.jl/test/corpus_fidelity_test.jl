@@ -116,6 +116,8 @@ include("testutils.jl")
             "esm-spec §4.7: the `subsystems.<k>` {ref} mount is replaced in place by the referenced component",
         "tests/valid/units_mount_toplevel_consistent.esm" =>
             "esm-spec §4.7: a top-level `models.<k>` mount consumed at load — the component is spliced in under its mount key",
+        "tests/valid/units_array_mount_index_faq_consistent.esm" =>
+            "esm-spec §4.7: a top-level `models.<k>` mount consumed at load — the component is spliced in under its mount key and its index sets merged",
         "tests/valid/toplevel_ref_index_set_merge.esm" =>
             "esm-spec §4.7: the top-level `models.<k>` twin of subsystem_index_set_merge.esm — the component is spliced in under its mount key and its index sets merged",
         "tests/valid/toplevel_ref_metaparameter_axis.esm" =>
