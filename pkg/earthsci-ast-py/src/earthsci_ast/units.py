@@ -1011,8 +1011,8 @@ def scaled_dimensionless_message(op: str, scale: ExactScale) -> str:
 #: dimensionless ratio.
 _CIRCULAR_FUNCS = frozenset({"sin", "cos", "tan"})
 
-#: The array operators whose ELEMENT unit the evaluation-path reading carries
-#: (`UnitValidator._type_array_element`).
+#: The array operators that carry their ELEMENT's unit, in the checker and on
+#: the evaluation path (`UnitValidator._type_array_element`, esm-spec §4.8.3).
 _ARRAY_ELEMENT_OPS = frozenset(
     {"faq", "makearray", "index", "reshape", "transpose", "concat", "broadcast"}
 )
@@ -1260,10 +1260,6 @@ class UnitValidator:
 
         self.ureg = ureg
         self.known_units: dict[str, pint.Quantity] = {}
-        # The EVALUATION-PATH reading, set only by `normalize_angle_arguments`:
-        # an array operator carries its ELEMENT's unit (see `_type_array_element`).
-        # The checker leaves it off, so no checker verdict depends on it.
-        self.element_units = False
         # The document being validated, so a component's scoped references
         # (`Leaf.p`, `sub.v`) can be typed from their targets' declarations.
         self._document: EsmFile | None = None
@@ -1757,20 +1753,11 @@ class UnitValidator:
                 return None
             return _Typed(unit.dimensionality, exact_scale_of(unit))
 
-        if self.element_units and node.op in _ARRAY_ELEMENT_OPS:
+        if node.op in _ARRAY_ELEMENT_OPS:
+            # Array operators carry their ELEMENT's unit (esm-spec §4.8.3,
+            # "Array operators"), in the checker and on the evaluation path
+            # alike.
             return self._type_array_element(node)
-
-        if node.op == "faq":
-            # The checker does not model the array operators, so the faq's own
-            # unit is undeterminable (esm-spec §4.8.4) -- but the expressions it
-            # evaluates are checked like any other (§4.8.3): its `filter`, a
-            # boolean over the node's ranges, and its `expr` body. A mismatch in
-            # either raises here (EarthSciAST#414).
-            if node.filter is not None:
-                self._type(node.filter)
-            if node.expr is not None:
-                self._type(node.expr)
-            return None
 
         if not node.args:
             return None
@@ -1899,43 +1886,83 @@ class UnitValidator:
         return None
 
     def _type_array_element(self, node: ExprNode) -> _Typed | None:
-        """The ELEMENT unit of an array operator, on the evaluation path only.
+        """The ELEMENT unit of an array operator (esm-spec §4.8.3, "Array
+        operators") -- the same rules in every binding:
 
-        The checker has no rule for the array operators (esm-spec §4.8.4: they
-        are undeterminable there), but an evaluator that meets
-        ``cos(index(lat, i))`` with ``lat`` in ``deg`` reads a number in degrees
-        all the same, and §4.8.3 requires it converted. The rules are the Rust
-        binding's ``propagate_array_dim`` (units.rs), case for case, so every
-        binding's angle rewrite folds the factor into the same arguments: an
-        ``faq`` has its body's unit; a ``makearray`` has the unit its value
-        regions share; a ``broadcast`` has the unit of its ``fn`` applied to its
-        operands; ``index``, ``reshape``, ``transpose`` and ``concat`` have their
-        source array's.
+        * ``index``, ``reshape``, ``transpose``: the source array's unit
+          (``args[0]``); the subscripts are not part of it.
+        * ``concat``: its operands agree like those of ``+``.
+        * ``makearray``: its region ``values`` agree like the operands of
+          ``+`` -- an undeterminable region is skipped.
+        * ``broadcast``: the unit of ``{op: fn, args}``.
+        * ``faq``: ``filter`` and ``expr`` are always walked; the node's unit
+          is decided by its ⊕ (:meth:`_faq_unit`).
+
+        A node with nothing to read a unit from is undeterminable (``None``),
+        never dimensionless (§4.8.4).
         """
         op = node.op
         if op == "faq":
-            if node.expr is not None:
-                return self._type(node.expr)
-            return self._type(node.args[0]) if node.args else self._dimensionless
+            if node.filter is not None:
+                self._type(node.filter)
+            if node.expr is None:
+                return None
+            return self._faq_unit(node, self._type(node.expr))
         if op == "makearray":
-            if not node.values:
-                return self._dimensionless
-            typed = [self._type(v) for v in node.values]
+            typed = [self._type(v) for v in (node.values or [])]
             known = [t for t in typed if t is not None]
             if not known:
                 return None
             first = known[0]
-            if len(known) != len(typed) or any(
-                not self._dimensions_compatible(first.dim, t.dim) or first.scale != t.scale
-                for t in known[1:]
-            ):
-                return None
+            for t in known[1:]:
+                if not self._dimensions_compatible(first.dim, t.dim) or first.scale != t.scale:
+                    raise DimensionalMismatchError(
+                        f"'makearray' regions must share units: {first.dim} at scale "
+                        f"{first.scale} vs {t.dim} at scale {t.scale}"
+                    )
             return first
+        if op == "concat":
+            return self._agree([self._type(a) for a in node.args], op)
         if op == "broadcast":
             if node.fn is None:
                 return None
             return self._type_node(ExprNode(op=node.fn, args=list(node.args)))
-        return self._type(node.args[0]) if node.args else self._dimensionless
+        # index / reshape / transpose
+        return self._type(node.args[0]) if node.args else None
+
+    def _faq_unit(self, node: ExprNode, body: _Typed | None) -> _Typed | None:
+        """The unit of an ``faq`` whose body has unit ``body``. The ⊗ is
+        written by the author inside ``expr`` and ``join`` clauses contribute no
+        factor, so only the ⊕ matters: ``+``/``max``/``min`` keep the body's
+        unit; ``*`` keeps it only for a pure-number body (the power is the range
+        length); ``bool_and_or`` is dimensionless; value invention
+        (``distinct`` or a ``key``) and an unknown spelling are
+        undeterminable."""
+        if node.distinct is True or node.key is not None:
+            return None
+        if node.semiring is not None:
+            kind = {
+                "sum_product": "+",
+                "max_product": "max",
+                "min_sum": "min",
+                "max_sum": "max",
+                "bool_and_or": "or",
+            }.get(node.semiring)
+        else:
+            kind = node.reduce or "+"
+        if kind in ("+", "max", "min"):
+            return body
+        if kind == "*":
+            if (
+                body is not None
+                and self._dimensions_compatible(body.dim, self._dimensionless.dim)
+                and body.scale.is_one()
+            ):
+                return body
+            return None
+        if kind == "or":
+            return self._dimensionless
+        return None
 
     def _dimensions_compatible(self, dim1: UnitsContainer, dim2: UnitsContainer) -> bool:
         """Check whether two DIMENSIONALITY containers denote the same dimension.
@@ -2019,9 +2046,8 @@ def normalize_angle_arguments(expr: Expr, env: dict[str, Any], _validator=None) 
     if validator is None:
         validator = UnitValidator()
         validator.known_units = env
-        # An array element carries its array's declared unit on this path, so
-        # `cos(index(lat, i))` with `lat` in `deg` is converted like `cos(lat)`.
-        validator.element_units = True
+        # An array element carries its array's declared unit (esm-spec §4.8.3),
+        # so `cos(index(lat, i))` with `lat` in `deg` is converted like `cos(lat)`.
 
     # Children first, so a nested `sin(theta [deg])` inside another argument is
     # converted too. IDENTITY-PRESERVING: ``map_children`` always rebuilds, and

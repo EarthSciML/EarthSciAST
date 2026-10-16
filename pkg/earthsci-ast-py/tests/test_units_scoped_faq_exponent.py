@@ -101,16 +101,62 @@ def test_an_faq_filter_is_walked():
         v._type(node)
 
 
-def test_an_faq_body_is_walked_and_its_own_unit_stays_unknown():
+def test_an_faq_body_is_walked_and_has_its_body_unit():
     v = _validator({"x": "m", "y": "m", "z": "kg"})
     bad = ExprNode(op="faq", args=[], expr=_op("+", "x", "z"))
     with pytest.raises(DimensionalMismatchError):
         v._type(bad)
     ok = ExprNode(op="faq", args=[], filter=_op("<=", "x", "y"), expr="x")
-    assert v._type(ok) is None
+    assert v._type(ok).dim == parse_unit("m").dimensionality
+
+
+def _faq(body, **kw) -> ExprNode:
+    return ExprNode(op="faq", args=[], expr=body, **kw)
+
+
+def test_array_operators_carry_their_element_unit():
+    v = _validator({"v": "h", "w": "1", "a": "m", "b": "kg"})
+    h = parse_unit("h").dimensionality
+    idx = _op("index", "v", "i")
+    assert v._type(idx).dim == h
+    assert v._type(ExprNode(op="index", args=[])) is None
+    for kw in (
+        {"semiring": "sum_product"},
+        {"semiring": "max_product"},
+        {"semiring": "min_sum"},
+        {"reduce": "max"},
+        {},
+    ):
+        assert v._type(_faq(idx, **kw)).dim == h, kw
+    assert v._type(_faq(idx, reduce="*")) is None
+    assert v._type(_faq(_op("index", "w", "i"), reduce="*")).scale.is_one()
+    assert v._type(_faq(idx, semiring="bool_and_or")).dim == parse_unit("1").dimensionality
+    assert v._type(_faq(idx, distinct=True)) is None
+    assert v._type(ExprNode(op="faq", args=[])) is None
+    mk = lambda *vals: ExprNode(op="makearray", args=[], values=list(vals))  # noqa: E731
+    assert v._type(mk("v", 0.0)).dim == h
+    assert v._type(mk()) is None
+    with pytest.raises(DimensionalMismatchError):
+        v._type(mk("a", "b"))
+    with pytest.raises(DimensionalMismatchError):
+        v._type(_op("concat", "a", "b"))
+    assert (
+        v._type(ExprNode(op="reshape", args=["a"], shape=[1])).dim == parse_unit("m").dimensionality
+    )
+    assert v._type(_op("transpose", "a")).dim == parse_unit("m").dimensionality
+    assert (
+        v._type(ExprNode(op="broadcast", args=["a", "a"], fn="*")).dim
+        == parse_unit("m^2").dimensionality
+    )
+    with pytest.raises(DimensionalMismatchError):
+        v._type(ExprNode(op="broadcast", args=["a", "b"], fn="+"))
 
 
 VALID = [
+    "units_array_mount_leaf.esm",
+    "units_array_mount_index_faq_consistent.esm",
+    "units_array_operators_consistent.esm",
+    "makearray_empty_region_min_extent.esm",
     "units_mount_leaf.esm",
     "units_mount_subsystem_consistent.esm",
     "units_mount_toplevel_consistent.esm",
@@ -120,6 +166,13 @@ VALID = [
 ]
 
 INVALID = {
+    "units_array_index_filter_mismatch.esm": ["/models/Probe/variables/p_count"],
+    "units_array_mount_index_faq_mismatch.esm": ["/models/Mount/variables/total"],
+    "units_array_concat_mismatch.esm": ["/models/Probe/variables/joined"],
+    "units_array_makearray_mismatch.esm": ["/models/Probe/variables/mixed"],
+    "units_array_reshape_mismatch.esm": ["/models/Probe/variables/out"],
+    "units_array_transpose_mismatch.esm": ["/models/Probe/variables/out"],
+    "units_array_broadcast_mismatch.esm": ["/models/Probe/variables/out"],
     "units_mount_subsystem_wrong_dimension.esm": ["/models/Probe/variables/probe"],
     "units_mount_subsystem_scale_mismatch.esm": ["/models/Probe/variables/probe"],
     "units_mount_toplevel_wrong_dimension.esm": ["/models/Probe/variables/probe"],
