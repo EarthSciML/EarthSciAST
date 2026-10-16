@@ -1873,6 +1873,54 @@ fn lower_inline_array_parameters(
     Ok(dense)
 }
 
+/// The values [`lower_inline_array_parameters`] gives each shaped parameter
+/// the document supplies — inline array data, or one scalar broadcast over
+/// its declared grid — as dense arrays, without rewriting the model. The
+/// build pipeline binds these, as the compile path does, so an observed it
+/// evaluates can read them. A parameter whose data does not resolve to its
+/// declared shape is left out: the compile path reports it.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn inline_parameter_arrays(
+    model: &Model,
+    index_sets: &HashMap<String, IndexSet>,
+) -> Vec<(String, ArrayD<f64>)> {
+    let mut out = Vec::new();
+    for (name, var) in &model.variables {
+        if var.var_type != VariableType::Parameter {
+            continue;
+        }
+        let Some(default) = var.default.as_ref() else {
+            continue;
+        };
+        let declared = var.shape.as_deref().unwrap_or(&[]);
+        if declared.is_empty() {
+            continue;
+        }
+        let want = resolve_declared_shape(declared, index_sets);
+        let (shape, values) = if default.is_array() {
+            match default.to_dense() {
+                Ok((shape, values)) if want.as_ref().is_none_or(|w| *w == shape) => (shape, values),
+                _ => continue,
+            }
+        } else {
+            if var.update.is_some() {
+                continue;
+            }
+            let (Some(want), Some(scalar)) = (want, default.as_scalar()) else {
+                continue;
+            };
+            let n = want.iter().copied().product::<usize>().max(1);
+            (want, vec![scalar; n])
+        };
+        let prec = crate::precision::active();
+        let values: Vec<f64> = values.into_iter().map(|v| prec.round(v)).collect();
+        if let Ok(a) = ArrayD::from_shape_vec(IxDyn(&shape), values) {
+            out.push((name.clone(), a));
+        }
+    }
+    out
+}
+
 /// Re-nest a row-major dense buffer into the nested JSON array a `const` node
 /// carries. The inverse of [`crate::types::InlineValue::to_dense`].
 fn dense_to_json(shape: &[usize], values: &[f64]) -> JsonValue {

@@ -5188,9 +5188,9 @@ mod tests {
     }
 
     /// The retry carries the caller's compiler (issue #484), whatever the
-    /// default is. Asked directly, a strict compiler refuses the pipeline's
-    /// cell-by-cell sweep of `cum`, so the retry has nothing to hand back,
-    /// while the interpreter's retry answers.
+    /// default is. Asked directly, the interpreter's retry sweeps `cum` cell by
+    /// cell and a strict compiler's lowers it on the tape; both answer, bit for
+    /// bit the same.
     #[test]
     fn the_pipeline_retry_is_built_on_the_named_compiler() {
         let file = load_string(&shaped_static_with_cumulative().to_string()).expect("loads");
@@ -5211,6 +5211,13 @@ mod tests {
             (0.0, 10.0),
             bindings(crate::problem::Compiler::Native).as_ref(),
         );
-        assert!(native.is_none(), "{native:?}");
+        let bits = |f: &Option<Vec<(String, ndarray::ArrayD<f64>)>>| -> Vec<u64> {
+            f.as_ref()
+                .and_then(|f| f.iter().find(|(k, _)| k == "cum"))
+                .map(|(_, a)| a.iter().map(|x| x.to_bits()).collect())
+                .unwrap_or_default()
+        };
+        assert!(!bits(&native).is_empty(), "{native:?}");
+        assert_eq!(bits(&native), bits(&interp));
     }
 }

@@ -93,7 +93,13 @@ fn tape_index(n: usize, table: &str) -> LResult<u32> {
 
 type LResult<T> = Result<T, Bail>;
 
+mod standalone;
 mod tuples;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use standalone::StandaloneError;
+#[cfg(not(target_arch = "wasm32"))]
+pub(in crate::simulate_array) use standalone::{collect_variable_names, eval_standalone_rule};
 
 /// What a build knows about the forcing buffer: the box a read of each name
 /// it can serve compiles against, and which of them a provider refreshes
@@ -502,6 +508,19 @@ pub(crate) struct TapeBuilder<'m> {
     /// written from ([`ArrayCompiled::inline_param_arrays`]), so the tape takes
     /// the numbers directly rather than reading the literal's JSON back.
     inline_params: Option<&'m HashMap<String, (Vec<usize>, Vec<f64>)>>,
+    /// The program's observed rules, so a CONST-cadence observed the build
+    /// must know (a join key column) can be folded from its own rule
+    /// ([`TapeBuilder::fold_const_observed`]). Empty for a standalone rule.
+    observed_rules: &'m [AlgebraicRule],
+    /// Lower an array-valued `bool_and_or` reduction as one crisp scalar
+    /// reduction per output cell, as the build pipeline's reference
+    /// evaluator walks it ([`Self::array_combine_op`]). Set only for a
+    /// pipeline observed on a standalone tape; everywhere else the compile
+    /// path rejects the construct (CONFORMANCE_SPEC §5.6.1) before a tape is
+    /// built, and the tape declines it too.
+    array_bool_reductions: bool,
+    /// [`TapeBuilder::fold_const_observed`]'s memo.
+    folded: std::cell::RefCell<FxHashMap<String, Option<(DimU, std::rc::Rc<Vec<f64>>)>>>,
 
     // Program under construction -------------------------------------------
     slots: Vec<SlotDesc>,
@@ -740,6 +759,9 @@ impl<'m> TapeBuilder<'m> {
             const_arrays,
             f32_document,
             inline_params: None,
+            observed_rules: &[],
+            array_bool_reductions: false,
+            folded: std::cell::RefCell::new(FxHashMap::default()),
             slots: Vec::new(),
             plans: Vec::new(),
             regions: Vec::new(),
@@ -3632,6 +3654,7 @@ impl<'m> TapeBuilder<'m> {
             );
         }
         let mut sel: SmallVec<[RingSel; 3]> = SmallVec::new();
+        let mut lists: Vec<Vec<u32>> = Vec::new();
         for (d, sub) in subs.iter().enumerate() {
             let extent = tshape[d] as i64;
             let s = match bx {
@@ -3654,6 +3677,30 @@ impl<'m> TapeBuilder<'m> {
                         }
                     }
                     Some(AxisRole::Const(i1)) => Self::ring_fixed(i1, extent, d)?,
+                    // A tuple-list body: the subscript's per-tuple values, when
+                    // the build knows them (a loop symbol of the join).
+                    _ if bx.tuple != 0 => {
+                        let Some(vals) = self.tuple_known_values(sub, bx)? else {
+                            bail_tape!(
+                                "geometry: ring subscript {d} is not build-time data over the list"
+                            );
+                        };
+                        let mut pos = Vec::with_capacity(vals.len());
+                        for &v in vals.iter() {
+                            let i1 = v.round() as i64;
+                            if i1 < 1 || i1 > extent {
+                                bail_tape!(
+                                    "geometry: ring subscript {d} leaves its table (1..{extent})"
+                                );
+                            }
+                            pos.push((i1 - 1) as u32);
+                        }
+                        lists.push(pos);
+                        RingSel::List {
+                            axis: 0,
+                            list: (lists.len() - 1) as u32,
+                        }
+                    }
                     _ => bail_tape!(
                         "geometry: ring subscript {d} is neither affine in one output symbol nor constant"
                     ),
@@ -3670,6 +3717,7 @@ impl<'m> TapeBuilder<'m> {
             RingRef {
                 src_shape: tshape,
                 sel,
+                lists,
             },
         )))
     }
@@ -4523,12 +4571,7 @@ impl<'m> TapeBuilder<'m> {
         reduce: ReduceKind,
         filter: Option<&Expr>,
     ) -> LResult<LV> {
-        let Some(combine_op) = reduce_combine_op(reduce) else {
-            bail_tape!(
-                "contracted: an array-valued bool_and_or reduction (the numeric evaluators \
-                 reject it, CONFORMANCE_SPEC §5.6.1)"
-            );
-        };
+        let combine_op = self.array_combine_op(reduce, "contracted")?;
         let nc = contract_names.len();
         if nc == 0 {
             bail_tape!("contracted: no contracted index");
@@ -5823,12 +5866,7 @@ impl<'m> TapeBuilder<'m> {
         body: &Expr,
         reduce: ReduceKind,
     ) -> LResult<LV> {
-        let Some(combine_op) = reduce_combine_op(reduce) else {
-            bail_tape!(
-                "scan: an array-valued bool_and_or reduction (the numeric evaluators reject it, \
-                 CONFORMANCE_SPEC §5.6.1)"
-            );
-        };
+        let combine_op = self.array_combine_op(reduce, "scan")?;
         let full_lo: DimI = ranges.iter().map(|(l, _)| *l).collect();
         let full_shape: DimU = ranges
             .iter()
@@ -6209,6 +6247,7 @@ pub(super) fn build_tape_program(
         forcing,
     );
     b.inline_params = Some(&compiled.inline_param_arrays);
+    b.observed_rules = observed_rules;
 
     // ---- observed rules, in dependency order -------------------------------
     for (i, rule) in observed_rules.iter().enumerate() {
@@ -6709,6 +6748,22 @@ impl<'m> TapeBuilder<'m> {
             sec,
         );
         LV::Arr(out)
+    }
+
+    /// The kernel that folds an array-valued reduction: [`reduce_combine_op`],
+    /// or — under [`Self::array_bool_reductions`] — the scalar fold
+    /// [`scalar_combine_op`], which is what the pipeline's reference evaluator
+    /// runs at each cell of an array-valued `bool_and_or` (a crisp fold, so
+    /// the box-wide fold matches it cell for cell).
+    fn array_combine_op(&self, reduce: ReduceKind, site: &str) -> LResult<BinCode> {
+        match reduce_combine_op(reduce) {
+            Some(op) => Ok(op),
+            None if self.array_bool_reductions => Ok(scalar_combine_op(reduce)),
+            None => bail_tape!(
+                "{site}: an array-valued bool_and_or reduction (the numeric evaluators reject \
+                 it, CONFORMANCE_SPEC §5.6.1)"
+            ),
+        }
     }
 
     /// Lower one RHS rule, emitting its `DyWrite`.

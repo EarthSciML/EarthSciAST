@@ -39,6 +39,7 @@ unsafe fn read_ring(t: &RingTable, r: &RingRef, pos: &[usize], buf: &mut Vec<(f6
         let i = match *s {
             RingSel::Fixed(i) => i as i64,
             RingSel::Axis { axis, off } => pos[axis as usize] as i64 + off,
+            RingSel::List { axis, list } => r.lists[list as usize][pos[axis as usize]] as i64,
         };
         base += t.strides[d] * i;
     }

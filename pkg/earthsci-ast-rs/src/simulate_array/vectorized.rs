@@ -67,17 +67,43 @@ impl Drop for OverlayGuard {
     }
 }
 
+thread_local! {
+    /// The first overlay decline since the last [`take_overlay_decline`].
+    static OVERLAY_DECLINE: std::cell::Cell<Option<&'static str>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Record why the overlay left a node, keeping the first reason since the
+/// last [`take_overlay_decline`]: the outermost node's deepest decline, which
+/// is what sent its evaluation to the per-cell walk.
+pub(super) fn note_overlay_decline(site: &'static str) {
+    OVERLAY_DECLINE.with(|c| {
+        if c.get().is_none() {
+            c.set(Some(site));
+        }
+    });
+}
+
+/// Take (and clear) the recorded overlay decline. The build pipeline reads it
+/// to name, in a strict compiler's refusal, the construct the overlay did not
+/// take.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn take_overlay_decline() -> Option<&'static str> {
+    OVERLAY_DECLINE.with(|c| c.take())
+}
+
 /// Leave the overlay: `$site` has no whole-array form, so the caller walks it
 /// per cell — and, under `native`, the tape's own lowering refuses the rule
 /// and names the reason (`crate::simulate_array::tape::ir`'s decline
-/// taxonomy). The site text is the reason, kept beside the return.
+/// taxonomy). The site text is the reason, recorded for
+/// [`take_overlay_decline`].
 macro_rules! bail_vec {
     ($site:literal) => {{
-        let _: &str = $site;
+        $crate::simulate_array::vectorized::note_overlay_decline($site);
         return None;
     }};
     ($site:literal, $fmt:expr) => {{
-        let _: &str = $site;
+        $crate::simulate_array::vectorized::note_overlay_decline($site);
         let _ = &$fmt;
         return None;
     }};

@@ -238,12 +238,13 @@ fn mirrored_dense_aggregate_is_candidate_driven_not_full_product() {
     );
 }
 
-/// Under the strict `native` the same gated aggregate is refused — the
-/// pipeline's reference evaluator walks it per output record — and refused
-/// after ONE record: the gate-driven walk stops at its first cell rather than
-/// enumerating every record's candidates only to throw the field away.
+/// Under the strict `native` the same gated aggregate is not walked per
+/// output record: the pipeline's reference evaluator stops at its first record
+/// (the overlay takes no gated `faq`), and the observed is lowered on a
+/// standalone tape instead, whose tuple list the same broad phase drives. The
+/// field agrees with the interpreter's bit for bit.
 #[test]
-fn native_refuses_the_gated_aggregate_after_its_first_output_cell() {
+fn native_tapes_the_gated_aggregate_after_one_output_cell_of_the_walk() {
     let g = geometry();
     let doc = mirrored_doc();
     let build = |compiler| {
@@ -263,32 +264,33 @@ fn native_refuses_the_gated_aggregate_after_its_first_output_cell() {
     };
 
     let (native, native_visits) = build(earthsci_ast::Compiler::Native);
-    match native {
-        Err(earthsci_ast::SimulateError::Compile(
-            earthsci_ast::CompileError::CompilerRefusedRule {
-                compiler,
-                kind,
-                rule,
-                reason,
-                ..
-            },
-        )) => {
-            assert_eq!(compiler, "native");
-            assert_eq!(kind, "build-time observed");
-            assert_eq!(rule, "Mirror.P");
-            assert!(reason.contains("per cell"), "{reason}");
-        }
-        other => panic!("expected compiler_refused_rule, got {other:?}"),
-    }
+    let native = native.expect("native builds the gated aggregate");
     assert_eq!(
         native_visits, 1,
-        "the refusal must come after the first output record's one candidate"
+        "the per-cell walk must stop after the first output record's one candidate"
     );
+    let row = native
+        .compiler_report()
+        .rules()
+        .iter()
+        .find(|r| r.rule == "Mirror.P")
+        .unwrap_or_else(|| panic!("no row: {}", native.compiler_report()))
+        .clone();
+    assert_eq!(row.kind, "build-time observed");
+    assert_eq!(row.tier, "taped");
 
     // The reference evaluator still walks every record.
     let (interp, interp_visits) = build(earthsci_ast::Compiler::Interpreter);
-    interp.expect("the interpreter builds it");
+    let interp = interp.expect("the interpreter builds it");
     assert_eq!(interp_visits, NPTS as u64);
+    let bits = |p: &earthsci_ast::EsmProblem| -> Vec<u64> {
+        observed_field(p, "P")
+            .expect("P materialized")
+            .iter()
+            .map(|x| x.to_bits())
+            .collect()
+    };
+    assert_eq!(bits(&native), bits(&interp));
 }
 
 // ---------------------------------------------------------------------------
