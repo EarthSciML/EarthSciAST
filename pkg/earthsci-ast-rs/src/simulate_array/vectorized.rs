@@ -87,6 +87,7 @@ pub(super) fn note_overlay_decline(site: &'static str) {
 /// Take (and clear) the recorded overlay decline. The build pipeline reads it
 /// to name, in a strict compiler's refusal, the construct the overlay did not
 /// take.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn take_overlay_decline() -> Option<&'static str> {
     OVERLAY_DECLINE.with(|c| c.take())
 }

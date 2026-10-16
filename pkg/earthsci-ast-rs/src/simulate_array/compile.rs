@@ -1879,6 +1879,7 @@ fn lower_inline_array_parameters(
 /// build pipeline binds these, as the compile path does, so an observed it
 /// evaluates can read them. A parameter whose data does not resolve to its
 /// declared shape is left out: the compile path reports it.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn inline_parameter_arrays(
     model: &Model,
     index_sets: &HashMap<String, IndexSet>,

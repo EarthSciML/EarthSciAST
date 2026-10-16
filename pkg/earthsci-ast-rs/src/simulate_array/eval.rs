@@ -2851,6 +2851,7 @@ pub(crate) fn eval_observed_recurrence(
 /// does not recognize is left to the caller's own diagnostic. `None` when
 /// `recurrence_only` and the observed is not such a recurrence. A scalar value
 /// comes back as a 0-d array.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn eval_observed_taped(
     name: &str,
     expr: &Expr,

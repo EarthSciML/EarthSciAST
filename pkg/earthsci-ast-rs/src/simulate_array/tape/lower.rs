@@ -96,7 +96,9 @@ type LResult<T> = Result<T, Bail>;
 mod standalone;
 mod tuples;
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) use standalone::StandaloneError;
+#[cfg(not(target_arch = "wasm32"))]
 pub(in crate::simulate_array) use standalone::{collect_variable_names, eval_standalone_rule};
 
 /// What a build knows about the forcing buffer: the box a read of each name
