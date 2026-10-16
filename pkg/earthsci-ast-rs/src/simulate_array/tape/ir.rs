@@ -524,6 +524,9 @@ impl Instr {
                 if let Some(r) = &fs.reduce {
                     f(r.out);
                 }
+                if let Some(p) = &fs.pre {
+                    f(p.out);
+                }
             }
             other => {
                 if let Some(o) = other.out() {
@@ -651,6 +654,13 @@ impl Instr {
                 }
                 for sc in &fs.scalars {
                     op(sc);
+                }
+                if let Some(PreReduce {
+                    src: SrcRef::Slot(s),
+                    ..
+                }) = &fs.pre
+                {
+                    op(&Operand::Slot(*s));
                 }
             }
         }
@@ -1235,10 +1245,34 @@ pub(crate) struct FusedSpec {
     /// the accumulator chunk by chunk, folding every position into a chunk
     /// before the next — the same per-output fold order.
     pub interleave: Option<Vec<FusedRun>>,
+    /// An [`Instr::Reduce`] of the leading axes of a source over this
+    /// group's box, whose result the group reads: run by the group itself,
+    /// a range of inner positions (whole columns) at a time, each range
+    /// folded and then consumed while its columns are in cache (see
+    /// [`PreReduce`]).
+    pub pre: Option<PreReduce>,
     /// Diagnostics: original instructions replaced (members incl. deleted
     /// folded gathers).
     pub n_fused_instrs: u32,
     pub n_folded_gathers: u32,
+}
+
+/// The [`Instr::Reduce`] a [`FusedSpec`] runs ahead of its own micro-ops,
+/// inner positions `[a, b)` at a time: `out[c] = init`, then `out[c] =
+/// op(out[c], src[r * n_inner + c])` for every leading position `r`
+/// ascending — the instruction's own fold, cell for cell — and then the
+/// group's elements at those inner positions, which read `out` there. The
+/// box the group runs over is the source's (`rows` leading positions of
+/// `n_inner` each), so a range's elements are exactly the ones that read the
+/// range's cells.
+#[derive(Clone, Debug)]
+pub(crate) struct PreReduce {
+    pub op: BinCode,
+    pub init: f64,
+    pub src: SrcRef,
+    pub rows: usize,
+    pub n_inner: usize,
+    pub out: SlotId,
 }
 
 /// A [`MicroOp::Scan`] along the group box's last axis (`post == 1`) whose

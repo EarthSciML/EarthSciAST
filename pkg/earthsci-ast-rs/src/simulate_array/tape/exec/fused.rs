@@ -1013,6 +1013,103 @@ pub(super) struct Resolved<'a> {
     pub(super) red: *mut f64,
     pub(super) node_elems: &'a [usize],
     pub(super) cursor: &'a mut RunCursor,
+    /// The group's [`PreReduce`], to run range by range (`None` without one,
+    /// or when its source is not contiguous and it already ran whole).
+    pub(super) pre: Option<PreTile>,
+}
+
+/// A [`PreReduce`]'s resolved source and result.
+#[derive(Clone, Copy)]
+pub(super) struct PreTile {
+    pub(super) src: *const f64,
+    pub(super) out: *mut f64,
+}
+
+/// Inner positions per range of a [`PreReduce`]: as many whole columns as
+/// keep a range's source (`rows` elements each) within a few tens of KiB.
+fn pre_cols(rows: usize) -> usize {
+    ((8192 / rows.max(1)) / 8 * 8).max(8)
+}
+
+/// Fold the cells `[a, b)` of a [`PreReduce`] (each from `init`, over every
+/// leading position in order, as `Instr::Reduce` does) from a contiguous
+/// row-major source.
+///
+/// # Safety
+/// `pt` must address the source's `rows * n_inner` elements and the result's
+/// `n_inner`.
+unsafe fn pre_fold(pre: &PreReduce, pt: PreTile, a: usize, b: usize) {
+    let n = pre.n_inner;
+    unsafe {
+        for k in a..b {
+            *pt.out.add(k) = pre.init;
+        }
+    }
+    let op = &pre.op;
+    macro_rules! fold_rows {
+        ($f:expr) => {
+            for r in 0..pre.rows {
+                unsafe {
+                    super::kernels::reduce_rows(pt.out.add(a), b - a, pt.src.add(r * n + a), 1, $f)
+                }
+            }
+        };
+    }
+    dispatch_bin_kernel!(op, fold_rows);
+}
+
+/// Run fused group `fs` over the inner positions `[lo, hi)` of its
+/// [`PreReduce`] (every leading position of them), a range of columns at a
+/// time: fold the range, then run the group's elements there.
+///
+/// # Safety
+/// As for [`run_fused_window`], with `pt` resolved for `fs.pre`.
+#[allow(clippy::too_many_arguments)]
+pub(super) unsafe fn run_pre_tiled(
+    simd: SimdLevel,
+    fs: &FusedSpec,
+    pt: PreTile,
+    svals: &[f64],
+    bases: &[*const f64],
+    whole_src: &[*const f64],
+    outs: &[(GroupIx, *mut f64)],
+    red: *mut f64,
+    idx: &[Option<IndexTable>],
+    fregs: &mut [f64],
+    cursor: &mut RunCursor,
+    node_elems: &[usize],
+    lo: usize,
+    hi: usize,
+) {
+    let pre = fs.pre.as_ref().expect("a group with a pre-reduction");
+    let period = pre.n_inner;
+    let step = pre_cols(pre.rows);
+    let mut a = lo;
+    while a < hi {
+        let b = (a + step).min(hi);
+        unsafe {
+            pre_fold(pre, pt, a, b);
+            fill_whole(fs, bases, whole_src, a, b, period);
+            run_fused_window(
+                simd,
+                fs,
+                svals,
+                bases,
+                outs,
+                red,
+                idx,
+                fregs,
+                cursor,
+                Window {
+                    lo: a,
+                    hi: b,
+                    period,
+                    node_elems,
+                },
+            );
+        }
+        a = b;
+    }
 }
 
 /// The workers of `scratch`, or a stand-in on wasm (which never splits).
@@ -1108,6 +1205,17 @@ pub(super) unsafe fn resolve_fused<'a>(
         },
         None => std::ptr::null_mut(),
     };
+    // The pre-reduction, range by range from a contiguous source; else now,
+    // whole, by the instruction's own walk.
+    let pre = fs.pre.as_ref().and_then(|p| {
+        let sv = super::resolve::resolve_src(&p.src, env, slab_ptr, slot_off);
+        let out = unsafe { slab_ptr.add(slot_off[p.out as usize]) };
+        if sv.strides[..] == super::resolve::rm_strides(&sv.shape)[..] {
+            return Some(PreTile { src: sv.ptr, out });
+        }
+        unsafe { pre_fold_strided(p, &sv, out) };
+        None
+    });
     // Zero-sized: no allocation.
     #[cfg(target_arch = "wasm32")]
     let workers: &'a mut Workers = Box::leak(Box::new(()));
@@ -1120,9 +1228,49 @@ pub(super) unsafe fn resolve_fused<'a>(
             red,
             node_elems,
             cursor,
+            pre,
         },
         workers,
     )
+}
+
+/// A [`PreReduce`] over a source that is not contiguous: every cell folded
+/// whole, in the instruction's order, through the source's strides.
+///
+/// # Safety
+/// `sv` must be a live view of the source and `out` the result's cells.
+unsafe fn pre_fold_strided(pre: &PreReduce, sv: &super::resolve::SrcView, out: *mut f64) {
+    let f = binary_kernel_of(pre.op);
+    let nd = sv.shape.len();
+    let lead = {
+        let mut k = 0usize;
+        let mut rows = 1usize;
+        while k < nd && rows < pre.rows {
+            rows *= sv.shape[k];
+            k += 1;
+        }
+        k
+    };
+    let mut idx: SmallVec<[usize; 4]> = SmallVec::from_elem(0, nd);
+    for c in 0..pre.n_inner {
+        // The inner coordinates of cell `c`, row-major.
+        let mut rest = c;
+        for d in (lead..nd).rev() {
+            idx[d] = rest % sv.shape[d];
+            rest /= sv.shape[d];
+        }
+        let mut acc = pre.init;
+        for r in 0..pre.rows {
+            let mut rest = r;
+            for d in (0..lead).rev() {
+                idx[d] = rest % sv.shape[d];
+                rest /= sv.shape[d];
+            }
+            let off: i64 = (0..nd).map(|d| sv.strides[d] * idx[d] as i64).sum();
+            acc = f(acc, unsafe { *sv.ptr.offset(off as isize) });
+        }
+        unsafe { *out.add(c) = acc };
+    }
 }
 
 /// Execute one fused group. Iterates the precompiled run schedule; each run
@@ -1155,6 +1303,7 @@ pub(super) unsafe fn exec_fused(
         red,
         node_elems,
         cursor,
+        pre,
     } = r;
     // A large group is split into windows across the caller's worker
     // threads (see `par`).
@@ -1164,11 +1313,21 @@ pub(super) unsafe fn exec_fused(
         if ways > 1 {
             unsafe {
                 _workers.run_split(
-                    fs, svals, bases, whole_src, outs, red, idx, node_elems, simd, ways,
+                    fs, svals, bases, whole_src, outs, red, idx, node_elems, simd, ways, pre,
                 )
             };
             return;
         }
+    }
+    if let Some(pt) = pre {
+        let n = fs.pre.as_ref().map_or(0, |p| p.n_inner);
+        unsafe {
+            run_pre_tiled(
+                simd, fs, pt, svals, bases, whole_src, outs, red, idx, fregs, cursor, node_elems,
+                0, n,
+            )
+        };
+        return;
     }
     // Seeded with the reduction's identity (a split's workers seed their
     // own cells).
@@ -1231,6 +1390,7 @@ pub(super) unsafe fn exec_fused_share(
             simd,
             w,
             ways,
+            r.pre,
         )
     };
 }
