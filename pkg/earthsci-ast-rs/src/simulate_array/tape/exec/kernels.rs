@@ -799,18 +799,42 @@ pub(super) unsafe fn index_gather(dst: *mut f64, spec: &IndexGatherSpec, src: &S
         Rv::S(v) => (v as *const f64, DimI::from_elem(0, nd)),
         Rv::V { ptr, strides } => (*ptr, strides.clone()),
     };
-    let n = total(shape);
-    let mut pos: DimU = DimU::from_elem(0, nd);
-    let (mut soff, mut ioff) = (base, 0i64);
-    for k in 0..n {
-        let v = unsafe { *ip.offset(ioff as isize) };
+    if shape.contains(&0) {
+        return;
+    }
+    if nd == 0 {
+        let v = unsafe { *ip };
         let x = match data_subscript(v, n_data) {
-            Some(p) => unsafe { *src.ptr.offset((soff + s_data * p as i64) as isize) },
+            Some(p) => unsafe { *src.ptr.offset((base + s_data * p as i64) as isize) },
             None => 0.0,
         };
-        unsafe { *dst.add(k) = x };
-        // Row-major odometer, carrying both running offsets.
-        let mut d = nd;
+        unsafe { *dst = x };
+        return;
+    }
+    // The last output axis runs as a tight inner loop with constant steps;
+    // the odometer advances once per row.
+    let last = nd - 1;
+    let row = shape[last];
+    let (s_step, i_step) = (step_out[last], istr[last]);
+    let rows = total(&shape[..last]);
+    let mut pos: DimU = DimU::from_elem(0, last);
+    let (mut soff, mut ioff) = (base, 0i64);
+    let mut k = 0usize;
+    for _ in 0..rows {
+        let (mut so, mut io) = (soff, ioff);
+        for _ in 0..row {
+            let v = unsafe { *ip.offset(io as isize) };
+            let x = match data_subscript(v, n_data) {
+                Some(p) => unsafe { *src.ptr.offset((so + s_data * p as i64) as isize) },
+                None => 0.0,
+            };
+            unsafe { *dst.add(k) = x };
+            k += 1;
+            so += s_step;
+            io += i_step;
+        }
+        // Row-major odometer over the leading axes.
+        let mut d = last;
         while d > 0 {
             d -= 1;
             pos[d] += 1;

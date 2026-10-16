@@ -370,3 +370,45 @@ fn guarded_run_time_subscript_faults_only_where_taken() {
         ab(&compiled, &maps);
     }
 }
+
+/// The subscript rounding is `f64::round` then the saturating conversion,
+/// the interpreter's `eval_index_args`, for every value class.
+#[test]
+fn subscript_rounding_matches_round() {
+    let mut vals = vec![
+        0.0,
+        -0.0,
+        0.5,
+        -0.5,
+        1.5,
+        -1.5,
+        2.5,
+        0.49999999999999994,
+        -0.49999999999999994,
+        1e15 + 0.5,
+        -1e15 - 0.5,
+        3.9e15 + 0.5,
+        4.0e15,
+        4.5e15,
+        1e300,
+        -1e300,
+        f64::NAN,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::MIN_POSITIVE,
+        9.2e18,
+        -9.3e18,
+    ];
+    let mut x: u64 = 0x9E3779B97F4A7C15;
+    for _ in 0..200_000 {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        let v = f64::from_bits(x);
+        vals.push(v);
+        vals.push((x % 4001) as f64 / 8.0 - 250.0);
+    }
+    for v in vals {
+        assert_eq!(super::ir::subscript_of(v), v.round() as i64, "{v:?}");
+    }
+}

@@ -1610,9 +1610,7 @@ impl OobDim {
         match &self.sub {
             OobSub::Fixed(r) => *r,
             OobSub::Axis { axis, raw } => raw[cell[*axis as usize]],
-            OobSub::Data { op, array } => {
-                subscript_of(read(op, array.then_some((shape, cell))))
-            }
+            OobSub::Data { op, array } => subscript_of(read(op, array.then_some((shape, cell)))),
         }
     }
 
@@ -1634,9 +1632,8 @@ impl FaultCand {
             FaultWhat::Every(m) => Some(faults[*m as usize].clone()),
             FaultWhat::ConstOob { name, dims } => dims.iter().enumerate().find_map(|(d, od)| {
                 let raw = od.raw_at(&self.shape, cell, read);
-                od.faults(raw).then(|| {
-                    crate::simulate_array::eval::const_oob_message(name, raw, od.n, d)
-                })
+                od.faults(raw)
+                    .then(|| crate::simulate_array::eval::const_oob_message(name, raw, od.n, d))
             }),
         }
     }
@@ -1767,7 +1764,9 @@ impl FaultCand {
 /// ([`TapeProgram::col_major`]) — column-major.
 pub(crate) fn slab_flat(shape: &[usize], cell: &[usize], col_major: bool) -> usize {
     if col_major {
-        (0..shape.len()).rev().fold(0, |o, d| o * shape[d] + cell[d])
+        (0..shape.len())
+            .rev()
+            .fold(0, |o, d| o * shape[d] + cell[d])
     } else {
         (0..shape.len()).fold(0, |o, d| o * shape[d] + cell[d])
     }
@@ -1906,7 +1905,27 @@ impl ScalarReadSpec {
 /// `f.round() as i64` (NaN reads as 0, and an out-of-range value saturates).
 #[inline]
 pub(crate) fn subscript_of(v: f64) -> i64 {
-    v.round() as i64
+    // `f64::round` is a libm call on the baseline target; below 2^52 the
+    // same value comes from the truncating conversion and the exact
+    // remainder `v - trunc(v)`, half away from zero as `round` rounds. NaN,
+    // infinities and larger magnitudes take `round` itself.
+    let i = v as i64;
+    if i as f64 == v {
+        // Already a whole number (the usual subscript): exact.
+        return i;
+    }
+    if v.abs() < 4.0e15 {
+        let f = v - i as f64;
+        if f >= 0.5 {
+            i + 1
+        } else if f <= -0.5 {
+            i - 1
+        } else {
+            i
+        }
+    } else {
+        v.round() as i64
+    }
 }
 
 /// The program tables an instruction's slot reads and definitions are found
@@ -2154,7 +2173,7 @@ impl IndexGatherSpec {
 /// values saturate), and a 1-based position outside `1..=n` is out of range.
 #[inline]
 pub(crate) fn data_subscript(v: f64, n: usize) -> Option<usize> {
-    let one_based = v.round() as i64;
+    let one_based = subscript_of(v);
     (one_based >= 1 && one_based <= n as i64).then(|| (one_based - 1) as usize)
 }
 
