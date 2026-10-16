@@ -2,7 +2,7 @@
   "esm": "1.2.0",
   "metadata": {
     "name": "UnitsFaqBodyMismatch",
-    "description": "Invalid: an faq's `expr` adds x [m] to z [kg]. The faq node's own unit may be undeterminable in a binding that does not model array operators (esm-spec §4.8.4), but the provable mismatch inside its body is still reported (§4.8.3).",
+    "description": "Invalid: an faq's `expr` adds x [m] to z [kg]. The faq's body is walked with the ordinary operator rules (esm-spec §4.8.3), so the mismatch inside it is reported.",
     "authors": [
       "EarthSciML Authors and Contributors"
     ],

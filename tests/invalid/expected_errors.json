@@ -3727,7 +3727,7 @@
         "message": "Incompatible dimensions in '<=': length vs mass"
       }
     ],
-    "notes": "esm-spec \u00a74.8.3 (EarthSciAST#414): an faq's `filter` is walked with the same operator rules as its `expr`. The same comparison written in the body under ifelse was already refused by Rust; written in the filter it was accepted everywhere. The operands are scalar parameters so that the finding does not depend on whether a binding types array operators (\u00a74.8.4)."
+    "notes": "esm-spec \u00a74.8.3 (EarthSciAST#414): an faq's `filter` is walked with the same operator rules as its `expr`. The same comparison written in the body under ifelse was already refused by Rust; written in the filter it was accepted everywhere. tests/invalid/units_array_index_filter_mismatch.esm is the same rule over index operands."
   },
   "units_faq_body_mismatch.esm": {
     "schema_errors": [],
@@ -3739,7 +3739,7 @@
         "message": "Incompatible dimensions in '+': length vs mass"
       }
     ],
-    "notes": "esm-spec \u00a74.8.3 / \u00a74.8.4: a node whose own unit is undeterminable still has the subexpressions it evaluates checked, as `and`/`or`/`not` already are. Rust walked an faq body; the other four bindings returned 'unknown' for the faq without looking inside it."
+    "notes": "esm-spec \u00a74.8.3: an faq's body is walked with the ordinary operator rules, and the mismatch inside it is reported."
   },
   "units_constant_exponent_mismatch.esm": {
     "schema_errors": [],
@@ -3757,5 +3757,89 @@
     ],
     "is_valid": false,
     "notes": "esm-spec \u00a74.8.3 `^`: a constant-expression exponent (3/2) and a const exponent declaring a dimensionless unit at scale 1 are folded to exact rationals and used exactly as a literal exponent is. A symbolic exponent (a variable) stays undeterminable (\u00a74.8.4)."
+  },
+  "units_array_index_filter_mismatch.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/Probe/variables/p_count",
+        "code": "unit_inconsistency",
+        "message": "Incompatible dimensions in '<=': luminosity vs length^2*mass*time^-3"
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.3: `index` carries the unit of its array and an faq's filter is walked, so the issue's filter repro is refused by every binding. Before, only Rust typed `index`."
+  },
+  "units_array_mount_index_faq_mismatch.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/Mount/variables/total",
+        "code": "unit_inconsistency",
+        "message": "Declared units of cd do not match the expression's units of h"
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.3/\u00a74.8.4: refused by every binding."
+  },
+  "units_array_concat_mismatch.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/Probe/variables/joined",
+        "code": "unit_inconsistency",
+        "message": "Incompatible dimensions in 'concat': length vs mass"
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.3: concat's operands agree like those of +. Rust previously typed only the first operand."
+  },
+  "units_array_makearray_mismatch.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/Probe/variables/mixed",
+        "code": "unit_inconsistency",
+        "message": "'makearray' regions must share units"
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.3: makearray regions agree like the operands of +."
+  },
+  "units_array_reshape_mismatch.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/Probe/variables/out",
+        "code": "unit_inconsistency",
+        "message": "Declared units of kg do not match the expression's units of m"
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.3: reshape has the unit of the array it reshapes."
+  },
+  "units_array_transpose_mismatch.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/Probe/variables/out",
+        "code": "unit_inconsistency",
+        "message": "Declared units of kg do not match the expression's units of m"
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.3: transpose has the unit of the array it permutes."
+  },
+  "units_array_broadcast_mismatch.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/Probe/variables/out",
+        "code": "unit_inconsistency",
+        "message": "Incompatible dimensions in '+': length vs mass"
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.3: broadcast has the unit of its fn applied to its operands, so + over m and kg is a mismatch."
   }
 }

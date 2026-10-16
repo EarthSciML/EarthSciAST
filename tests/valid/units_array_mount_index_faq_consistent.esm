@@ -1,0 +1,49 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "UnitsArrayMountIndexFaqConsistent",
+    "description": "esm-spec §4.8.3/§4.8.4: the consistent control for tests/invalid/units_array_mount_index_faq_mismatch.esm. total [h] = sum over i of index(Leaf.leaf_hours, i) through a top-level {ref} mount; must validate.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "created": "2026-10-16T00:00:00Z"
+  },
+  "models": {
+    "Leaf": {
+      "ref": "./units_array_mount_leaf.esm"
+    },
+    "Mount": {
+      "variables": {
+        "total": {
+          "type": "unknown",
+          "units": "h",
+          "description": "The leaf's hours summed over its rows, declared h.",
+          "shape": []
+        }
+      },
+      "equations": [
+        {
+          "lhs": "total",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [],
+            "ranges": {
+              "i": {
+                "from": "leaf_rows"
+              }
+            },
+            "semiring": "sum_product",
+            "expr": {
+              "op": "index",
+              "args": [
+                "Leaf.leaf_hours",
+                "i"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}
