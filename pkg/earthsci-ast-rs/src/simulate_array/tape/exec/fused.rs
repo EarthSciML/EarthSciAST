@@ -1028,7 +1028,7 @@ pub(super) struct PreTile {
 /// Inner positions per range of a [`PreReduce`]: as many whole columns as
 /// keep a range's source (`rows` elements each) within a few tens of KiB.
 fn pre_cols(rows: usize) -> usize {
-    ((8192 / rows.max(1)) / 8 * 8).max(8)
+    ((16384 / rows.max(1)) / 8 * 8).max(8)
 }
 
 /// Fold the cells `[a, b)` of a [`PreReduce`] (each from `init`, over every
@@ -1084,6 +1084,27 @@ pub(super) unsafe fn run_pre_tiled(
     let pre = fs.pre.as_ref().expect("a group with a pre-reduction");
     let period = pre.n_inner;
     let step = pre_cols(pre.rows);
+    // A box whose every column fits one range: fold it all, then run the
+    // group whole, as one window.
+    if lo == 0 && hi == period && period <= step {
+        unsafe {
+            pre_fold(pre, pt, 0, period);
+            fill_whole(fs, bases, whole_src, 0, fs.n_elems(), 0);
+            run_fused_window(
+                simd,
+                fs,
+                svals,
+                bases,
+                outs,
+                red,
+                idx,
+                fregs,
+                cursor,
+                Window::all(node_elems),
+            );
+        }
+        return;
+    }
     let mut a = lo;
     while a < hi {
         let b = (a + step).min(hi);
