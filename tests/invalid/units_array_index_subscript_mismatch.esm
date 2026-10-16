@@ -1,0 +1,67 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "UnitsArrayIndexSubscriptMismatch",
+    "description": "Invalid: index(T, a + b) adds a length to a mass inside the subscript. An index has the unit of its array, but every operand is still checked (esm-spec §4.8.3), so the mismatch inside the subscript is reported although the declared result unit matches.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "created": "2026-10-16T00:00:00Z"
+  },
+  "index_sets": {
+    "lat": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "models": {
+    "Probe": {
+      "variables": {
+        "T": {
+          "type": "parameter",
+          "units": "K",
+          "default": 290.0,
+          "description": "A temperature per latitude.",
+          "shape": [
+            "lat"
+          ]
+        },
+        "a": {
+          "type": "parameter",
+          "units": "m",
+          "default": 1.0,
+          "description": "A length."
+        },
+        "b": {
+          "type": "parameter",
+          "units": "kg",
+          "default": 1.0,
+          "description": "A mass."
+        },
+        "T_pick": {
+          "type": "unknown",
+          "units": "K",
+          "description": "Invalid: its subscript adds m to kg."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "T_pick",
+          "rhs": {
+            "op": "index",
+            "args": [
+              "T",
+              {
+                "op": "+",
+                "args": [
+                  "a",
+                  "b"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

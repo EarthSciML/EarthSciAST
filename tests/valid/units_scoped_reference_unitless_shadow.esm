@@ -1,0 +1,51 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "UnitsScopedReferenceUnitlessShadow",
+    "description": "Valid: in model A, y [m] = B.x. A's own subsystem B declares x WITHOUT units, and the top-level model B declares an x in kg. The component-relative path wins (esm-spec §4.8.4, the precedence of the reference-integrity check) even though its target has no units, so B.x is undeterminable and the check is skipped; the top-level kg must not leak through.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "created": "2026-10-16T00:00:00Z"
+  },
+  "models": {
+    "A": {
+      "variables": {
+        "y": {
+          "type": "unknown",
+          "units": "m",
+          "description": "Equal to A's own subsystem's unitless B.x."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "y",
+          "rhs": "B.x"
+        }
+      ],
+      "subsystems": {
+        "B": {
+          "variables": {
+            "x": {
+              "type": "parameter",
+              "default": 1.0,
+              "description": "Declared without units."
+            }
+          },
+          "equations": []
+        }
+      }
+    },
+    "B": {
+      "variables": {
+        "x": {
+          "type": "parameter",
+          "units": "kg",
+          "default": 1.0,
+          "description": "A mass with the same dotted name as A's subsystem member."
+        }
+      },
+      "equations": []
+    }
+  }
+}
