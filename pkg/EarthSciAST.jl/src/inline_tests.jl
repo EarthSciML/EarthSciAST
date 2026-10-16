@@ -1254,6 +1254,17 @@ function _observed_field(insp::BuildInspection, file::EsmFile,
     # evaluated in the same scope, so an observed is assertable whether or not
     # the dynamics happen to consume it (esm-spec §6.6.5 admits any shaped
     # variable; §5.23 makes a reference denote its expansion).
+    # That equation is read from the BUILD's model (expression templates
+    # expanded, which the document's may not be), with every observed it reads
+    # filled by its own observed program — compiled under a compiler that runs
+    # the array cascade, walked per cell under the interpreter — and evaluated
+    # once over the cells (`_authored_via_programs`); when that cannot serve
+    # it, the authored body below.
+    if expr === nothing && ctx !== nothing
+        got = _authored_via_programs(ctx, insp, qualified, cells, u, tval, p, String(mname),
+                                     state_arrays, state_scalars)
+        got === nothing || return (got, cells)
+    end
     if expr === nothing
         expr = _authored_observed_body(insp, file, model, String(mname),
                                        String(variable), exts;
@@ -1299,8 +1310,17 @@ function _observed_field(insp::BuildInspection, file::EsmFile,
     if raw !== nothing
         n0 = _percell_mark()
         try
+            pread = (ctx === nothing || !cascade) ? nothing : (n, ex) -> begin
+                bn = _program_build_name(ctx, String(mname) * "." * n, n)
+                bn === nothing && return nothing
+                prog = _observed_program!(ctx, bn)
+                (prog === nothing || prog.dims != ex ||
+                 (u === nothing && prog.reads_state)) && return nothing
+                _note_program_read!()
+                return _run_observed_program(ctx, prog, u, tval, p)
+            end
             ca = _materialized_obs_scope(insp, file, mname, String(variable), params;
-                                         base=const_scope, t=tval)
+                                         base=const_scope, t=tval, program_read=pread)
             if ca !== const_scope                # something actually materialized
                 return (evaluate_cellwise(raw, cells; const_arrays=ca, params=params,
                                           t=tval),
@@ -1315,6 +1335,96 @@ function _observed_field(insp::BuildInspection, file::EsmFile,
     field = evaluate_cellwise(expr, cells; const_arrays=const_scope, params=params,
                               t=tval)
     return (field, cells)
+end
+
+# An observed the build published no form of, evaluated from the build's own
+# defining equation: each observed it reads by name is filled by that
+# observed's compiled program (row-major values back into an array), a scalar
+# one bound as a value, and the body then evaluated over `cells` with those in
+# scope. `nothing` when the equation, or any observed it reads, has no such
+# form, or the body does not compile once; the caller then takes the authored
+# route.
+function _authored_via_programs(ctx, insp::BuildInspection, qualified::String, cells,
+                                u, t::Float64, p, mname::String,
+                                state_arrays::AbstractDict, state_scalars::AbstractDict,
+                                depth::Int=0)
+    # The build's model names the observed without the document's outer scope
+    # (`Flattened.M.x` asserted, `M.x` built): the longest dotted suffix it has.
+    body = nothing
+    name = qualified
+    while true
+        body = observed_definition(ctx.model, name)
+        (body !== nothing || !occursin('.', name)) && break
+        name = name[findfirst('.', name)+1:end]
+    end
+    body === nothing && return nothing
+    qualified = name
+    ca = Dict{String,Any}(String(k) => v for (k, v) in insp.const_arrays)
+    for (k, v) in state_arrays
+        ca[String(k)] = v
+    end
+    params = _param_scope_with_aliases(_params_at(insp.params, p, ctx), mname)
+    isempty(state_scalars) || (params = merge(params, Dict{String,Float64}(
+        String(k) => Float64(v) for (k, v) in state_scalars)))
+    for n in _referenced_var_names(body)
+        (haskey(ca, n) || haskey(params, n) || n == qualified) && continue
+        if !(haskey(ctx.defs, n) || haskey(ctx.discrete_caches, n))
+            # Another observed the build published nothing for: the same
+            # evaluation, recursively, over its own declared cells.
+            depth >= 16 && return nothing
+            v = get(ctx.model.variables, n, nothing)
+            (v === nothing || observed_definition(ctx.model, n) === nothing) && continue
+            ext = Int[]
+            for sname in (v.shape === nothing ? String[] : v.shape)
+                is = get(ctx.index_sets, String(sname), nothing)
+                (is isa IndexSet && is.size isa Int && is.size > 0) || return nothing
+                push!(ext, is.size)
+            end
+            vals = _authored_via_programs(ctx, insp, n, _row_major_cells(ext), u, t, p,
+                                          mname, state_arrays, state_scalars, depth + 1)
+            vals === nothing && return nothing
+            if isempty(ext)
+                params = merge(params, Dict{String,Float64}(n => Float64(vals[1])))
+            else
+                ca[n] = length(ext) == 1 ? Vector{Float64}(vals) :
+                        permutedims(reshape(Vector{Float64}(vals), reverse(ext)...),
+                                    length(ext):-1:1)
+            end
+            continue
+        end
+        prog = try
+            _observed_program!(ctx, n)
+        catch err
+            err isa EarthSciASTError || rethrow()
+            return nothing
+        end
+        (prog === nothing || (u === nothing && prog.reads_state)) && return nothing
+        vals = _run_observed_program(ctx, prog, u, t, p)
+        _array_cascade_on() ? _note_program_read!() : _note_percell!()
+        if isempty(prog.dims)
+            params = merge(params, Dict{String,Float64}(n => Float64(vals[1])))
+        else
+            d = prog.dims
+            ca[n] = length(d) == 1 ? Vector{Float64}(vals) :
+                    permutedims(reshape(Vector{Float64}(vals), reverse(d)...),
+                                length(d):-1:1)
+        end
+    end
+    # A bare array name of the target's rank reads the target's cell (§4.3.4,
+    # the name-aligned elementwise case); any other rank declines.
+    nidx = isempty(cells) ? 0 : length(cells[1])
+    syms = String["__esm_oidx_$d" for d in 1:nidx]
+    subs = Dict{String,ASTExpr}()
+    for n in _referenced_var_names(body)
+        a = get(ca, n, nothing)
+        (a isa AbstractArray && ndims(a) >= 1) || continue
+        ndims(a) == nidx || return nothing
+        subs[n] = OpExpr("index", ASTExpr[VarExpr(n), (VarExpr(x) for x in syms)...])
+    end
+    isempty(subs) || (body = _sub_preserving(body, subs))
+    ce = _cellwise_compile_once(body, nidx, ca, Dict{String,Any}(), params; t=t)
+    ce === nothing && return nothing
+    return Float64[ce(c) for c in cells]
 end
 
 """
@@ -1365,7 +1475,7 @@ function _materialized_obs_scope(insp::BuildInspection, file::EsmFile,
                                  mname::AbstractString, target::AbstractString,
                                  params::AbstractDict;
                                  base::AbstractDict=insp.const_arrays,
-                                 t::Float64=0.0)
+                                 t::Float64=0.0, program_read=nothing)
     isempty(insp.observed_defs) && return base
     model = _component_at(file, mname)
     model isa Model || return base
@@ -1462,8 +1572,12 @@ function _materialized_obs_scope(insp::BuildInspection, file::EsmFile,
         # is literally what the consumer would otherwise have recomputed inline.
         # A producer neither form can evaluate here (one reading STATE, say) just
         # stays un-materialized, and its readers inline it exactly as before.
-        vals = nothing
+        # Under a compiler that runs the array cascade, the producer's own
+        # compiled observed program first (`program_read`): one pass, no per-cell
+        # resolve.
+        vals = program_read === nothing ? nothing : program_read(n, ex)
         n0 = _percell_mark()
+        vals === nothing || @goto have_vals
         for cand in (raw_def(n), res_def(n))
             cand === nothing && continue
             vals = try
@@ -1473,6 +1587,7 @@ function _materialized_obs_scope(insp::BuildInspection, file::EsmFile,
             end
             vals === nothing || break
         end
+        @label have_vals
         # A producer left un-materialized served nothing, however it was tried.
         (vals !== nothing && length(vals) == length(cells)) ||
             (_percell_restore!(n0); continue)
