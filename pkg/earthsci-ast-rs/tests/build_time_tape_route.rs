@@ -102,19 +102,28 @@ fn an_overlap_gated_binning_faq_in_the_pipeline_is_taped() {
             {"op": "<", "args": [{"op": "index", "args": [x, "r"]}, {"op": "index", "args": [hi, "c"]}]}
         ]})
     };
-    let doc = model_doc(
-        json!({"cells": {"kind": "interval", "size": 4}, "recs": {"kind": "interval", "size": 3}}),
-        json!({"W": rect, "S": rect, "E": rect, "N": rect, "val": rect, "X": rec, "Y": rec,
-               "out": {"type": "unknown", "shape": ["recs"]}}),
-        json!([{"lhs": "out", "rhs": {
-            "op": "faq", "output_idx": ["r"], "reduce": "+",
+    let binning = |payload: Value| {
+        json!({
+            "op": "faq", "args": [], "output_idx": ["r"], "reduce": "+",
             "ranges": {"c": {"from": "cells"}, "r": {"from": "recs"}},
-            "args": ["W", "S", "E", "N", "X", "Y", "val"],
             "expr": {"op": "*", "args": [
                 {"op": "ifelse", "args": [
                     {"op": "and", "args": [within("W", "X", "E"), within("S", "Y", "N")]}, 1.0, 0.0]},
-                {"op": "index", "args": ["val", "c"]}]},
-            "join": [{"overlap": {"src_env": ["X", "Y"], "tgt_env": ["W", "S", "E", "N"], "eps": 0.0}}]}}]),
+                payload]},
+            "join": [{"overlap": {"src_env": ["X", "Y"], "tgt_env": ["W", "S", "E", "N"], "eps": 0.0}}]})
+    };
+    let doc = model_doc(
+        json!({"cells": {"kind": "interval", "size": 4}, "recs": {"kind": "interval", "size": 3},
+               "cells2": {"kind": "interval", "size": 8}}),
+        json!({"W": rect, "S": rect, "E": rect, "N": rect, "val": rect, "X": rec, "Y": rec,
+               "layered": {"type": "parameter", "default": 0.0, "shape": ["cells2"]},
+               "out": {"type": "unknown", "shape": ["recs"]},
+               "out2": {"type": "unknown", "shape": ["recs"]}}),
+        json!([{"lhs": "out", "rhs": binning(json!({"op": "index", "args": ["val", "c"]}))},
+               // isrm's `cell_at_model_layer`: the cell above `c` in layer 2
+               // of a layer-major table, `index(fld, 1*N + c)`.
+               {"lhs": "out2", "rhs": binning(json!({"op": "index", "args": ["layered",
+                   {"op": "+", "args": [{"op": "*", "args": [1, 4]}, "c"]}]}))}]),
     );
     let consts: HashMap<String, ArrayD<f64>> = [
         ("W", arr(&[4], &[0.0, 1.0, 0.0, 1.0])),
@@ -122,14 +131,19 @@ fn an_overlap_gated_binning_faq_in_the_pipeline_is_taped() {
         ("S", arr(&[4], &[0.0, 0.0, 1.0, 1.0])),
         ("N", arr(&[4], &[1.0, 1.0, 2.0, 2.0])),
         ("val", arr(&[4], &[1.0, 2.0, 3.0, 4.0])),
+        (
+            "layered",
+            arr(&[8], &[1.0, 2.0, 3.0, 4.0, 50.0, 60.0, 70.0, 80.0]),
+        ),
         ("X", arr(&[3], &[0.5, 1.5, 1.2])),
         ("Y", arr(&[3], &[0.5, 1.5, 0.2])),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), v))
     .collect();
-    let native = check_pipeline(&doc, &consts, "M.out", &["M.out"]);
+    let native = check_pipeline(&doc, &consts, "M.out", &["M.out", "M.out2"]);
     assert_eq!(values(&native, "M.out"), vec![1.0, 4.0, 2.0]);
+    assert_eq!(values(&native, "M.out2"), vec![50.0, 80.0, 60.0]);
 }
 
 /// moves' shape: a sum over the rows of an ingested table whose key column
@@ -204,6 +218,50 @@ fn polygon_intersection_area_in_a_pipeline_faq_is_taped() {
     .collect();
     let native = check_pipeline(&doc, &consts, "M.out", &["M.out"]);
     assert_eq!(values(&native, "M.out"), vec![0.375, 0.375]);
+}
+
+/// isrm's polygon binning: the area share inside a `faq` driven by an
+/// `overlap` join on the rings' bounding boxes, so each ring is read at a loop
+/// symbol of the tuple list.
+#[test]
+fn polygon_intersection_area_in_a_join_gated_pipeline_faq_is_taped() {
+    let env = |set: &str| json!({"type": "parameter", "default": 0.0, "shape": [set]});
+    let doc = model_doc(
+        json!({"cells": {"kind": "interval", "size": 3}, "recs": {"kind": "interval", "size": 2},
+               "vert": {"kind": "interval", "size": 4}, "xy": {"kind": "interval", "size": 2}}),
+        json!({"cring": {"type": "parameter", "default": 0.0, "shape": ["cells", "vert", "xy"]},
+               "pring": {"type": "parameter", "default": 0.0, "shape": ["recs", "vert", "xy"]},
+               "cx0": env("cells"), "cy0": env("cells"), "cx1": env("cells"), "cy1": env("cells"),
+               "px0": env("recs"), "py0": env("recs"), "px1": env("recs"), "py1": env("recs"),
+               "out": {"type": "unknown", "shape": ["cells"]}}),
+        json!([{"lhs": "out", "rhs": {
+            "op": "faq", "args": [], "output_idx": ["c"], "reduce": "+",
+            "ranges": {"c": {"from": "cells"}, "r": {"from": "recs"}},
+            "expr": {"op": "polygon_intersection_area", "manifold": "planar", "args": [
+                {"op": "index", "args": ["pring", "r"]}, {"op": "index", "args": ["cring", "c"]}]},
+            "join": [{"overlap": {"src_env": ["px0", "py0", "px1", "py1"],
+                                  "tgt_env": ["cx0", "cy0", "cx1", "cy1"], "eps": 0.0}}]}}]),
+    );
+    let sq = |x0: f64, y0: f64, x1: f64, y1: f64| vec![x0, y0, x1, y0, x1, y1, x0, y1];
+    let cring: Vec<f64> = [sq(0., 0., 1., 1.), sq(1., 0., 2., 1.), sq(5., 5., 6., 6.)].concat();
+    let pring: Vec<f64> = [sq(0.5, 0.25, 1.5, 1.25), sq(1.25, 0.5, 1.75, 0.75)].concat();
+    let consts: HashMap<String, ArrayD<f64>> = [
+        ("cring", arr(&[3, 4, 2], &cring)),
+        ("pring", arr(&[2, 4, 2], &pring)),
+        ("cx0", arr(&[3], &[0., 1., 5.])),
+        ("cy0", arr(&[3], &[0., 0., 5.])),
+        ("cx1", arr(&[3], &[1., 2., 6.])),
+        ("cy1", arr(&[3], &[1., 1., 6.])),
+        ("px0", arr(&[2], &[0.5, 1.25])),
+        ("py0", arr(&[2], &[0.25, 0.5])),
+        ("px1", arr(&[2], &[1.5, 1.75])),
+        ("py1", arr(&[2], &[1.25, 0.75])),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v))
+    .collect();
+    let native = check_pipeline(&doc, &consts, "M.out", &["M.out"]);
+    assert_eq!(values(&native, "M.out"), vec![0.375, 0.5, 0.0]);
 }
 
 /// A causal self-reference (esm-spec §4.3.1.1) in an ingesting document runs

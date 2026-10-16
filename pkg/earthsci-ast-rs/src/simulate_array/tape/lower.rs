@@ -3263,6 +3263,7 @@ impl<'m> TapeBuilder<'m> {
             );
         }
         let mut sel: SmallVec<[RingSel; 3]> = SmallVec::new();
+        let mut lists: Vec<Vec<u32>> = Vec::new();
         for (d, sub) in subs.iter().enumerate() {
             let extent = tshape[d] as i64;
             let s = match bx {
@@ -3285,6 +3286,30 @@ impl<'m> TapeBuilder<'m> {
                         }
                     }
                     Some(AxisRole::Const(i1)) => Self::ring_fixed(i1, extent, d)?,
+                    // A tuple-list body: the subscript's per-tuple values, when
+                    // the build knows them (a loop symbol of the join).
+                    _ if bx.tuple != 0 => {
+                        let Some(vals) = self.tuple_known_values(sub, bx)? else {
+                            bail_tape!(
+                                "geometry: ring subscript {d} is not build-time data over the list"
+                            );
+                        };
+                        let mut pos = Vec::with_capacity(vals.len());
+                        for &v in vals.iter() {
+                            let i1 = v.round() as i64;
+                            if i1 < 1 || i1 > extent {
+                                bail_tape!(
+                                    "geometry: ring subscript {d} leaves its table (1..{extent})"
+                                );
+                            }
+                            pos.push((i1 - 1) as u32);
+                        }
+                        lists.push(pos);
+                        RingSel::List {
+                            axis: 0,
+                            list: (lists.len() - 1) as u32,
+                        }
+                    }
                     _ => bail_tape!(
                         "geometry: ring subscript {d} is neither affine in one output symbol nor constant"
                     ),
@@ -3301,6 +3326,7 @@ impl<'m> TapeBuilder<'m> {
             RingRef {
                 src_shape: tshape,
                 sel,
+                lists,
             },
         )))
     }

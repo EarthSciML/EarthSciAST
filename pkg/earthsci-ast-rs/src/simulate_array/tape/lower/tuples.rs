@@ -602,6 +602,52 @@ impl TapeBuilder<'_> {
         Ok(Some(LV::Arr(out)))
     }
 
+    /// The per-tuple values of a subscript over the list, when the build
+    /// knows them: a literal, a loop symbol, a gather of known data, or
+    /// arithmetic (`+ - * /`) of those, folded with the interpreter's own
+    /// kernel ([`apply_binary`], left to right as `eval` folds an n-ary node)
+    /// so the positions are the ones `eval_index_args` computes. Arithmetic
+    /// emits nothing: only the positions it yields are used.
+    pub(super) fn tuple_known_values(
+        &mut self,
+        e: &Expr,
+        bx: &LBox,
+    ) -> LResult<Option<Rc<Vec<f64>>>> {
+        let m = bx.shape[0];
+        if let Expr::Operator(n) = e
+            && matches!(n.op.as_str(), "+" | "-" | "*" | "/")
+            && !n.args.is_empty()
+            && n.expr.is_none()
+        {
+            let mut parts = Vec::with_capacity(n.args.len());
+            for a in &n.args {
+                match self.tuple_known_values(a, bx)? {
+                    Some(v) => parts.push(v),
+                    None => return Ok(None),
+                }
+            }
+            let mut acc: Vec<f64> = if n.op == "-" && parts.len() == 1 {
+                parts[0].iter().map(|&x| -x).collect()
+            } else {
+                (*parts[0]).clone()
+            };
+            if n.op == "-" && parts.len() > 2 || n.op == "/" && parts.len() != 2 {
+                return Ok(None);
+            }
+            for p in &parts[1..] {
+                for (a, &b) in acc.iter_mut().zip(p.iter()) {
+                    *a = apply_binary(&n.op, *a, b);
+                }
+            }
+            return Ok(Some(Rc::new(acc)));
+        }
+        Ok(match self.lower_expr(e, bx)? {
+            LV::Lit(x) => Some(Rc::new(vec![x; m])),
+            LV::Arr(s) => self.known_values(s).filter(|v| v.len() == m),
+            _ => None,
+        })
+    }
+
     /// `index` inside a tuple-list body: the base is an array the body does
     /// not iterate (a variable, an inline literal, or a standalone
     /// expression), and every subscript is build-time data over the list, so
@@ -653,15 +699,10 @@ impl TapeBuilder<'_> {
         // Each subscript's per-tuple values.
         let mut sub_vals: Vec<Rc<Vec<f64>>> = Vec::with_capacity(subs.len());
         for e in subs {
-            let v = self.lower_expr(e, bx)?;
-            sub_vals.push(match v {
-                LV::Lit(x) => Rc::new(vec![x; m]),
-                LV::Arr(s) => match self.known_values(s) {
-                    Some(vals) if vals.len() == m => vals,
-                    _ => bail_tape!("index: a subscript that is not build-time data over the list"),
-                },
-                _ => bail_tape!("index: a subscript that is not build-time data over the list"),
-            });
+            match self.tuple_known_values(e, bx)? {
+                Some(vals) => sub_vals.push(vals),
+                None => bail_tape!("index: a subscript that is not build-time data over the list"),
+            }
         }
         let n_src: usize = src_shape.iter().product();
         if n_src >= GATHER_GHOST as usize {
