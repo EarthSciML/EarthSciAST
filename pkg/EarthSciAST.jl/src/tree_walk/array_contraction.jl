@@ -99,11 +99,32 @@ end
 # because that is how the walker resolves it: the leaf and its loop share one
 # `Ref`, and two loops over the same index name in different equations are
 # different objects.
+# `spans` holds, for the counters whose values the build knows, the least and
+# greatest value they take, so a gather the counter subscripts directly can
+# drop a range test that cannot fail.
 struct _CGScalarCtx
     loops::IdDict{Any,Symbol}
     entry::Any      # `nothing`, or the TABLE fold's `_ACEntries` while its term is emitted
+    spans::IdDict{Any,Tuple{Int,Int}}
 end
+_CGScalarCtx(loops, entry) = _CGScalarCtx(loops, entry, IdDict{Any,Tuple{Int,Int}}())
 _CGScalarCtx() = _CGScalarCtx(IdDict{Any,Symbol}(), nothing)
+
+# A gather subscript that is a loop counter itself: the counter's local, an
+# `Int` already (the walker's `round(Int, T(counter))` is that integer), and
+# its span when the build knows it; `nothing` for any other subscript.
+function _cg_counter_subscript(kc, c::_Node)
+    (kc isa _CGScalarCtx && c.kind === _NK_LOOPVAR) || return nothing
+    s = get(kc.loops, c.payload, nothing)
+    s === nothing && return nothing
+    return (s, get(kc.spans, c.payload, nothing))
+end
+
+# Whether a slot table is one ascending run (`tbl[k] == tbl[1] + k - 1`): a
+# state array laid out as one column-major block, whose slot is then its first
+# slot plus the offset, with no table load.
+_cg_slot_run(tbl::AbstractVector{Int}) =
+    !isempty(tbl) && all(k -> @inbounds(tbl[k]) == @inbounds(tbl[1]) + k - 1, eachindex(tbl))
 
 # ---- Scalar spine node → expression (mirrors `_eval_node`) ------------------
 function _cg_emit(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
@@ -181,8 +202,9 @@ function _cg_const_gather(ctx::_CGCtx, kc, nd::_Node)
     off = Any[1]
     for d in eachindex(children)
         sd = _cg_name(ctx, "cgs")
-        push!(binds, :($sd = _const_gather_sub($cgv, $d,
-                            round(Int, $(_cg_emit(ctx, kc, children[d]))))))
+        cs = _cg_counter_subscript(kc, children[d])
+        sub = cs === nothing ? :(round(Int, $(_cg_emit(ctx, kc, children[d])))) : cs[1]
+        push!(binds, :($sd = _const_gather_sub($cgv, $d, $sub)))
         push!(off, :(($sd - 1) * $(_cg_geo!(ctx, cg.strides[d], (cg.strides, d), true))))
     end
     return Expr(:let, Expr(:block, binds...),
@@ -265,18 +287,27 @@ end
 function _cg_state_gather_dim(ctx::_CGCtx, kc, nd::_Node,
                               sg::_StateGather, sgv::Symbol, d::Int, off::Vector{Any})
     children = nd.children
-    d > length(children) &&
-        return _cg_uread(_cg_slot_side(ctx.nst, _cg_table_extent(ctx, sg.slot_flat)...),
-                         :($sgv.slot_flat[$(_cg_foldl(:+, off)) + 1]))
+    if d > length(children)
+        side = _cg_slot_side(ctx.nst, _cg_table_extent(ctx, sg.slot_flat)...)
+        _cg_slot_run(sg.slot_flat) &&
+            return _cg_uread(side, :($(_cg_geo!(ctx, sg.slot_flat[1], (sg.slot_flat, :run))) +
+                                     $(_cg_foldl(:+, off))))
+        return _cg_uread(side, :($sgv.slot_flat[$(_cg_foldl(:+, off)) + 1]))
+    end
     sd = _cg_name(ctx, "sgs")
     lo = _cg_geo!(ctx, sg.lo[d], (sg.lo, d))
     hi = _cg_geo!(ctx, sg.hi[d], (sg.hi, d))
     sd_stride = _cg_geo!(ctx, sg.strides[d], (sg.strides, d), true)
     nxt = _cg_state_gather_dim(ctx, kc, nd, sg, sgv, d + 1,
                                push!(copy(off), :(($sd - $lo) * $sd_stride)))
-    return Expr(:let,
+    cs = _cg_counter_subscript(kc, children[d])
+    cs === nothing && return Expr(:let,
         Expr(:block, :($sd = round(Int, $(_cg_emit(ctx, kc, children[d]))))),
         Expr(:block, :(($lo <= $sd <= $hi) ? $nxt : zero(eltype(u)))))
+    span = cs[2]
+    inside = span !== nothing && sg.lo[d] <= span[1] && span[2] <= sg.hi[d]
+    return Expr(:let, Expr(:block, :($sd = $(cs[1]))),
+                Expr(:block, inside ? nxt : :(($lo <= $sd <= $hi) ? $nxt : zero(eltype(u)))))
 end
 
 # ---- One contraction → its generated function -------------------------------
@@ -424,6 +455,13 @@ function _try_codegen_array_contraction(refs::Vector{Base.RefValue{Int}},
     cv = _cg_name(ctx, "c")
     rv = _cg_name(ctx, "r")
     seek = Any[:(local $rv = $cv - 1)]
+    # The same odometer stepped instead of divided: `start` decomposes the
+    # chunk's first cell once, `step` advances it after each cell, carrying
+    # into the next dimension when one wraps. The counters take the values the
+    # division gives, cell for cell.
+    start = Any[:(local $rv = $cv - 1)]
+    stepper = Any[]
+    qs = Symbol[]
     for d in eachindex(refs)
         iv = _cg_name(ctx, "oi")
         kc.loops[refs[d]] = iv
@@ -432,13 +470,38 @@ function _try_codegen_array_contraction(refs::Vector{Base.RefValue{Int}},
         st = _cg_geo!(ctx, steps[d], (steps, d), true)
         push!(seek, :(local $iv = $lo + ($rv % $len) * $st))
         push!(seek, :($rv = div($rv, $len)))
+        qv = _cg_name(ctx, "q")
+        push!(qs, qv)
+        push!(start, :(local $qv = $rv % $len))
+        push!(start, :(local $iv = $lo + $qv * $st))
+        push!(start, :($rv = div($rv, $len)))
+        push!(stepper, (qv, iv, lo, len, st))
+        lens[d] >= 1 && (kc.spans[refs[d]] =
+            extrema((los[d], los[d] + (lens[d] - 1) * steps[d])))
+    end
+    advance = nothing
+    for (qv, iv, lo, len, st) in reverse(stepper)
+        inner = advance === nothing ? Any[] : Any[advance]
+        advance = quote
+            $qv += 1
+            $iv += $st
+            if $qv == $len
+                $qv = 0
+                $iv = $lo
+                $(inner...)
+            end
+        end
     end
     kvs = Symbol[]
     if fold !== nothing
-        for r in fold.refs
+        for (j, r) in enumerate(fold.refs)
             kv = _cg_name(ctx, "kk")
             kc.loops[r] = kv
             push!(kvs, kv)
+            if !_acfold_is_table(fold)
+                rg = fold.ranges[j]
+                isempty(rg) || (kc.spans[r] = extrema((first(rg), last(rg))))
+            end
         end
     end
     gated = entries === nothing ? nothing : _ac_param_gate(body, fold)
@@ -460,6 +523,10 @@ function _try_codegen_array_contraction(refs::Vector{Base.RefValue{Int}},
     outsv = _cg_tab!(ctx, outs)
     ln = LineNumberNode(0, Symbol("ess-array-contraction"))
     ov = _cg_name(ctx, "outs")
+    # Output slots that are one ascending run are their first slot plus the
+    # cell's ordinal, with no table load.
+    outref = (!isempty(outs) && _cg_slot_run(outs)) ?
+        :($(_cg_geo!(ctx, outs[1], (outs, :run))) + $cv - 1) : :($ov[$cv])
     av = _cg_name(ctx, "a")
     bv = _cg_name(ctx, "b")
     tv = _cg_name(ctx, "ab")
@@ -475,9 +542,15 @@ function _try_codegen_array_contraction(refs::Vector{Base.RefValue{Int}},
             local $av = $tv[1]
             local $bv = $tv[2]
             let du = $dstore
-                for $cv in ($av + 1):$bv
-                    $(seek...)
-                    du[$ov[$cv]] = $cell
+                if $av < $bv
+                    local $cv = $av + 1
+                    $(start...)
+                    while true
+                        du[$outref] = $cell
+                        $cv == $bv && break
+                        $cv += 1
+                        $(something(advance, nothing))
+                    end
                 end
             end
         end
