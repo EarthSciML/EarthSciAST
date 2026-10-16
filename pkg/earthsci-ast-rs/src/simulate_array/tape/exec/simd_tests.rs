@@ -342,6 +342,7 @@ fn drive(with_nan: bool) {
         schedule,
         reduce: None,
         interleave: None,
+        pre: None,
         n_fused_instrs: 0,
         n_folded_gathers: 0,
     };

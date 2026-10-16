@@ -648,6 +648,21 @@ pub(super) fn run_reference(
                 // operand access here stays bounds-checked slices, so an
                 // out-of-range run offset panics instead of reading UB.
                 let fs = &prog.fused[*spec as usize];
+                // A pre-reduction runs first, whole: the instruction it was,
+                // each cell folded over the leading positions in order.
+                if let Some(p) = &fs.pre {
+                    let src = resolve_src(prog, &slots, &state_arrays, &p.src);
+                    let flat: Vec<f64> = src.iter().copied().collect();
+                    let f = binary_kernel_of(p.op);
+                    let cells: Vec<f64> = (0..p.n_inner)
+                        .map(|c| (0..p.rows).fold(p.init, |acc, r| f(acc, flat[r * p.n_inner + c])))
+                        .collect();
+                    let desc = &prog.slots[p.out as usize];
+                    slots[p.out as usize] = Some(RefVal::Arr(
+                        ArrayD::from_shape_vec(IxDyn(&desc.shape[..]), cells)
+                            .expect("the pre-reduction's box"),
+                    ));
+                }
                 let svals: Vec<f64> = fs
                     .scalars
                     .iter()

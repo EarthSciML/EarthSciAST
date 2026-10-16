@@ -1942,6 +1942,115 @@ pub(super) fn fuse_program(prog: &mut TapeProgram, cfg: SuperopCfg) {
     prog.n_segment = section_counts[1] as u32;
     prog.fused = sink.fused;
     prog.fuse_stats = sink.stats;
+    absorb_pre_reductions(prog);
+}
+
+/// Hand a leading-axes [`Instr::Reduce`] to the fused group right after it
+/// when that group runs over the reduction's source box and reads its
+/// result ([`PreReduce`]): the group then folds a range of columns and
+/// consumes them while they are in cache, instead of one pass over the
+/// source to reduce and another to consume. Each cell still folds its terms
+/// in the instruction's order, and every element of the group is computed by
+/// the same micro-ops, so the program's values do not change.
+///
+/// Only outside conditional regions and recurrence bodies (whose skip
+/// counts are positional), within one section, and with no per-instruction
+/// precision.
+fn absorb_pre_reductions(prog: &mut TapeProgram) {
+    if !prog.precision.is_empty() {
+        return;
+    }
+    let n = prog.instrs.len();
+    let mut guarded = vec![false; n];
+    for i in 0..n {
+        let len = match &prog.instrs[i] {
+            Instr::JmpIfZero {
+                n_true, n_false, ..
+            } => (*n_true + *n_false) as usize,
+            Instr::Sweep { spec } => prog.sweeps[*spec as usize].body_len as usize,
+            _ => 0,
+        };
+        for g in guarded.iter_mut().skip(i + 1).take(len) {
+            *g = true;
+        }
+    }
+    let mut absorbed: Vec<(usize, u32, PreReduce)> = Vec::new();
+    for i in 0..n.saturating_sub(1) {
+        if guarded[i] || guarded[i + 1] || prog.section_of(i) != prog.section_of(i + 1) {
+            continue;
+        }
+        let Instr::Reduce {
+            op,
+            init,
+            src,
+            axes,
+            src_shape,
+            out,
+        } = &prog.instrs[i]
+        else {
+            continue;
+        };
+        let Instr::Fused { spec } = &prog.instrs[i + 1] else {
+            continue;
+        };
+        let k = axes.len();
+        if k == 0 || k >= src_shape.len() || !axes.iter().enumerate().all(|(j, &a)| a as usize == j)
+        {
+            continue;
+        }
+        let fs = &prog.fused[*spec as usize];
+        if fs.reduce.is_some()
+            || fs.pre.is_some()
+            || !fs.scan_fuse.is_empty()
+            || fs.micro.iter().any(|m| matches!(m, MicroOp::Scan { .. }))
+            || fs.shape[..] != src_shape[..]
+            || !fs
+                .inputs
+                .iter()
+                .any(|inp| matches!(inp.src, SrcRef::Slot(s) if s == *out))
+        {
+            continue;
+        }
+        let rows: usize = src_shape[..k].iter().product();
+        let n_inner: usize = src_shape[k..].iter().product();
+        if prog.slots[*out as usize].scalar || prog.slots[*out as usize].elems() != n_inner {
+            continue;
+        }
+        absorbed.push((
+            i,
+            *spec,
+            PreReduce {
+                op: *op,
+                init: *init,
+                src: *src,
+                rows,
+                n_inner,
+                out: *out,
+            },
+        ));
+    }
+    if absorbed.is_empty() {
+        return;
+    }
+    let mut drop = vec![false; n];
+    for (i, spec, pre) in absorbed {
+        drop[i] = true;
+        prog.fused[spec as usize].pre = Some(pre);
+    }
+    let (nc, ns) = (prog.n_const as usize, prog.n_segment as usize);
+    prog.n_const -= drop[..nc].iter().filter(|&&d| d).count() as u32;
+    prog.n_segment -= drop[nc..nc + ns].iter().filter(|&&d| d).count() as u32;
+    let mut k = 0usize;
+    prog.instrs.retain(|_| {
+        k += 1;
+        !drop[k - 1]
+    });
+    let mut k = 0usize;
+    prog.provenance.retain(|_| {
+        k += 1;
+        !drop[k - 1]
+    });
+    prog.fuse_stats.instrs_after = prog.instrs.len();
 }
 
 /// The rewritten program under construction.
@@ -2238,6 +2347,7 @@ fn flush_one(g: GBuilder, fx: &mut FuseCtx) {
         schedule,
         reduce,
         interleave,
+        pre: None,
         n_fused_instrs: n_members as u32,
         n_folded_gathers: (folded.len() + folded_index.len()) as u32,
     });
