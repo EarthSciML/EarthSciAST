@@ -736,7 +736,11 @@ fn observed_defs(model: &Model) -> HashMap<String, Expr> {
 /// backstop for routes that build without structural validation, which
 /// `esm_problem` does. (Its mirror image — a SCALAR default on a SHAPED parameter,
 /// which must broadcast rather than be dropped — is issue #219.)
-fn scalar_params(model: &Model, overrides: &HashMap<String, f64>) -> (Vec<f64>, Vec<String>) {
+fn scalar_params(
+    model: &Model,
+    model_name: &str,
+    overrides: &HashMap<String, f64>,
+) -> (Vec<f64>, Vec<String>) {
     let mut names: Vec<String> = model
         .variables
         .iter()
@@ -751,8 +755,12 @@ fn scalar_params(model: &Model, overrides: &HashMap<String, f64>) -> (Vec<f64>, 
     let vals = names
         .iter()
         .map(|n| {
+            // The caller may spell the key model-local, model-qualified (the
+            // spelling an inline test's `parameter_overrides` reach the build
+            // in), or by its bare tail.
             overrides
                 .get(n)
+                .or_else(|| overrides.get(&format!("{model_name}.{n}")))
                 .or_else(|| overrides.get(n.rsplit('.').next().unwrap_or(n)))
                 .copied()
                 .unwrap_or_else(|| {
@@ -919,7 +927,10 @@ fn compile_on_tape(
         None => None,
         Some(Ok(a)) => Some(Ok(Ok(a))),
         Some(Err(StandaloneError::Declined(why))) => Some(Ok(Err(why))),
-        Some(Err(StandaloneError::Fault(msg))) => Some(Err(msg)),
+        // Worded as the interpreter's own evaluation reports the same fault.
+        Some(Err(StandaloneError::Fault(details))) => Some(Err(
+            crate::compile_error::CompileError::InterpreterBuildError { details }.to_string(),
+        )),
     }
 }
 
@@ -1748,7 +1759,7 @@ impl<'o> BuildState<'o> {
         crate::simulate_array::apply_flatten_rewrites(&mut model)
             .map_err(|e| err(format!("model '{model_name}': {e}")))?;
 
-        let (param_vals, param_names) = scalar_params(&model, &opts.parameters);
+        let (param_vals, param_names) = scalar_params(&model, &model_name, &opts.parameters);
 
         Ok(BuildState {
             opts,
@@ -2790,13 +2801,12 @@ mod first_cell_stop_tests {
         }
     }
 
-    /// A document error that first appears in a LATER cell is not reached by a
-    /// walk that stops after its first: native refuses, and says that the
-    /// cells it did not evaluate are the interpreter's to check, which then
-    /// reports the document's own error. Here the gather is out of range only
-    /// at the last output cell.
+    /// A document error that first appears in a LATER cell, past where the
+    /// walk stopped, is still reported: native evaluates every cell on the
+    /// tape, which latches the same error the interpreter raises. Here the
+    /// gather is out of range only at the last output cell.
     #[test]
-    fn a_refusal_says_the_later_cells_were_not_evaluated() {
+    fn an_error_in_a_later_cell_is_reported_by_the_tape() {
         let d = doc(
             3,
             json!({
@@ -2826,17 +2836,10 @@ mod first_cell_stop_tests {
             )
             .expect_err("the last cell gathers out of range")
         };
-        match run(Compiler::Native) {
-            SimulateError::Compile(CompileError::CompilerRefusedRule { reason, .. }) => {
-                assert!(
-                    reason.ends_with(crate::simulate_array::ONE_CELL_NOTE),
-                    "{reason}"
-                );
-            }
-            other => panic!("expected compiler_refused_rule, got {other:?}"),
-        }
-        let err = run(Compiler::Interpreter);
-        assert!(err.to_string().contains("OOB"), "{err}");
+        let native = run(Compiler::Native);
+        let interp = run(Compiler::Interpreter);
+        assert!(interp.to_string().contains("OOB"), "{interp}");
+        assert_eq!(native.to_string(), interp.to_string());
     }
 }
 
