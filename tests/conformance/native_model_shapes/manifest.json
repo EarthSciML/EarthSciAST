@@ -549,6 +549,60 @@
     ]
    },
    "named_exclusions": []
+  },
+  {
+   "id": "join_on_parameter_key_static",
+   "path": "fixtures/join_on_parameter_key_static.esm",
+   "model": "JoinOnParameterKey",
+   "golden": "golden/join_on_parameter_key_static.json",
+   "tags": [
+    "faq",
+    "join",
+    "on",
+    "parameter-key",
+    "baked-parameter",
+    "conformance-5.5.8",
+    "static"
+   ],
+   "note": "Authored here (native-models round 3, the user's bake ruling); see README.md.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "join_on_parameter_key_dynamic",
+   "path": "fixtures/join_on_parameter_key_dynamic.esm",
+   "model": "JoinOnParameterKey",
+   "golden": "golden/join_on_parameter_key_dynamic.json",
+   "tags": [
+    "faq",
+    "join",
+    "on",
+    "parameter-key",
+    "baked-parameter",
+    "conformance-5.5.8",
+    "dynamic"
+   ],
+   "note": "Authored here (native-models round 3, the user's bake ruling); see README.md.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
   }
  ]
 }
