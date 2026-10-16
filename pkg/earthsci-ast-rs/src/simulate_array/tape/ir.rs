@@ -883,17 +883,43 @@ pub(crate) struct FusedInput {
     /// input is then read as the run's one element). A folded data-subscript
     /// gather is always pre-loaded.
     pub load_reg: GroupIx,
-    /// `Some((by, n))`: a folded [`Instr::IndexGather`] of a rank-1 source
-    /// of extent `n`. The element at output offset `k` is
-    /// `src[data_subscript(inputs[by][k], n)]`, the zero ghost when that is
-    /// `None`; `inputs[by]` is the subscript array, an aligned input.
-    pub index: Option<(GroupIx, usize)>,
+    /// `Some`: a folded [`Instr::IndexGather`] (see [`FoldedIndex`]);
+    /// `inputs[by]` is the subscript array, an aligned input.
+    pub index: Option<FoldedIndex>,
     /// `Some`: a folded [`Instr::Gather`] whose shifts would split the box
     /// into too many runs to fold as a shifted read (a shift along the
     /// innermost axis), read through its plan into this input's chunk
     /// register one chunk at a time (see [`ChunkGather`]). An aligned input
     /// otherwise.
     pub gather: Option<Box<ChunkGather>>,
+}
+
+/// A folded [`Instr::IndexGather`]: the element at output offset `k` is
+/// `src[p * s_data + base + s_inner * (k % period)]` with `p =
+/// data_subscript(inputs[by][k], n)`, the zero ghost when that is `None`.
+/// A rank-1 source is `s_data = 1, base = 0, s_inner = 0`; a source with a
+/// fixed axis or one read along the box's innermost axis adds them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FoldedIndex {
+    pub by: GroupIx,
+    /// The source's extent along its data axis.
+    pub n: usize,
+    /// The source's row-major stride along its data axis.
+    pub s_data: usize,
+    pub base: usize,
+    pub s_inner: usize,
+    /// The box's innermost extent (1 when `s_inner` is 0).
+    pub period: usize,
+    /// The source's element count.
+    pub src_len: usize,
+}
+
+impl FoldedIndex {
+    /// The source offset at output offset `k` for data position `p`.
+    #[inline]
+    pub(crate) fn at(&self, p: usize, k: usize) -> usize {
+        p * self.s_data + self.base + self.s_inner * (k % self.period)
+    }
 }
 
 /// A same-rank gather plan with no fixed, broadcast or permuted axes, read

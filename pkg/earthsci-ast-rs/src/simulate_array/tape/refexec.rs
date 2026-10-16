@@ -763,9 +763,12 @@ pub(super) fn run_reference(
                                             }
                                         }
                                         None => match inp.index {
-                                            Some((by, n)) => {
-                                                match data_subscript(flats[by as usize][at], n) {
-                                                    Some(p) => flats[*i as usize][p],
+                                            Some(fi) => {
+                                                match data_subscript(
+                                                    flats[fi.by as usize][at],
+                                                    fi.n,
+                                                ) {
+                                                    Some(p) => flats[*i as usize][fi.at(p, at)],
                                                     None => 0.0,
                                                 }
                                             }

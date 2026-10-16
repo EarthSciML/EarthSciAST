@@ -925,8 +925,8 @@ impl RunCursor {
 pub(super) struct IndexTable {
     /// The subscript array's slot (defined in the CONST or SEGMENT section).
     subscript: SlotId,
-    /// The gathered source's extent along its data axis.
-    n: usize,
+    /// How a data position becomes a source offset.
+    fi: FoldedIndex,
     /// One position per element of the group box, or [`GATHER_GHOST`].
     pos: Vec<u32>,
     /// No position is the ghost, so the gather is a plain indexed load.
@@ -953,13 +953,13 @@ pub(super) fn index_tables_for(prog: &TapeProgram) -> Vec<Vec<Option<IndexTable>
             .inputs
             .iter()
             .map(|inp| {
-                let (by, n) = inp.index?;
-                let SrcRef::Slot(sub) = fs.inputs[by as usize].src else {
+                let fi = inp.index?;
+                let SrcRef::Slot(sub) = fs.inputs[fi.by as usize].src else {
                     return None;
                 };
-                (primed[sub as usize] && n < GATHER_GHOST as usize).then(|| IndexTable {
+                (primed[sub as usize] && fi.src_len < GATHER_GHOST as usize).then(|| IndexTable {
                     subscript: sub,
-                    n,
+                    fi,
                     pos: vec![GATHER_GHOST; n_elems],
                     all_in: false,
                 })
@@ -990,9 +990,9 @@ pub(super) unsafe fn refill_index_tables(
             std::slice::from_raw_parts(slab_ptr.add(slot_off[t.subscript as usize]), t.pos.len())
         };
         let mut all_in = true;
-        for (p, &v) in t.pos.iter_mut().zip(sub) {
-            *p = match data_subscript(v, t.n) {
-                Some(i) => i as u32,
+        for (k, (p, &v)) in t.pos.iter_mut().zip(sub).enumerate() {
+            *p = match data_subscript(v, t.fi.n) {
+                Some(i) => t.fi.at(i, k) as u32,
                 None => {
                     all_in = false;
                     GATHER_GHOST
@@ -1765,7 +1765,7 @@ unsafe fn exec_fused_runs(
                 }
                 // A folded data-subscript gather: one random read per element,
                 // through the subscript array's aligned chunk.
-                if let Some((by, n)) = inp.index {
+                if let Some(fi) = inp.index {
                     if let Some(Some(t)) = idx.get(i) {
                         unsafe {
                             let dst = std::slice::from_raw_parts_mut(
@@ -1792,13 +1792,31 @@ unsafe fn exec_fused_runs(
                     }
                     unsafe {
                         let dst = rp.add(inp.load_reg as usize * cs);
-                        let sub = bases[by as usize].add(at);
+                        let sub = bases[fi.by as usize].add(at);
                         let src = bases[i];
-                        for k in 0..c {
-                            *dst.add(k) = match data_subscript(*sub.add(k), n) {
-                                Some(p) => *src.add(p),
-                                None => 0.0,
-                            };
+                        if fi.s_inner == 0 {
+                            let src = src.add(fi.base);
+                            for k in 0..c {
+                                *dst.add(k) = match data_subscript(*sub.add(k), fi.n) {
+                                    Some(p) => *src.add(p * fi.s_data),
+                                    None => 0.0,
+                                };
+                            }
+                        } else {
+                            // The innermost position, carried instead of
+                            // divided out per element.
+                            let mut j = (at % fi.period) * fi.s_inner + fi.base;
+                            let wrap = fi.period * fi.s_inner + fi.base;
+                            for k in 0..c {
+                                *dst.add(k) = match data_subscript(*sub.add(k), fi.n) {
+                                    Some(p) => *src.add(p * fi.s_data + j),
+                                    None => 0.0,
+                                };
+                                j += fi.s_inner;
+                                if j == wrap {
+                                    j = fi.base;
+                                }
+                            }
                         }
                     }
                     continue;

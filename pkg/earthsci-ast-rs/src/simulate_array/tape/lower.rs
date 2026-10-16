@@ -4657,17 +4657,57 @@ impl<'m> TapeBuilder<'m> {
         filter: Option<&Expr>,
     ) -> LResult<LV> {
         let nc = window.names.len();
-        if shape.is_empty() || shape.len() + nc > MAX_RANK {
+        let ns = shape.len();
+        if shape.is_empty() || ns + nc > MAX_RANK {
             bail_tape!("contracted: promoted box rank out of range");
         }
-        let mut ext_syms: Vec<String> = window.names.to_vec();
-        ext_syms.extend(idx_names.iter().cloned());
-        let mut ext_lo: DimI = window.lo.iter().copied().collect();
-        ext_lo.extend(lo.iter().copied());
-        let mut ext_shape: DimU = (0..nc)
+        // Where the contracted axes go. Leading, a fold over them is one
+        // contiguous row per tuple. A program whose state is stored
+        // axis-reversed (`layout`) stores a box reversed too, so there they
+        // go LAST: stored, they lead again, and a term that reads the state
+        // in its own axis order (`u[c, l]` summed over `l`) is the state's
+        // own layout instead of a transposed copy. Either way each output
+        // cell folds its tuples in the same order.
+        let trailing = self
+            .state_vars
+            .iter()
+            .any(|sv| !super::layout::order_free(&sv.shape));
+        let win_shape: DimU = (0..nc)
             .map(|i| (window.hi[i] - window.lo[i] + 1) as usize)
             .collect();
-        ext_shape.extend(shape.iter().copied());
+        let (ext_syms, ext_lo, ext_shape): (Vec<String>, DimI, DimU) = if trailing {
+            (
+                idx_names
+                    .iter()
+                    .chain(window.names.iter())
+                    .cloned()
+                    .collect(),
+                lo.iter().chain(window.lo.iter()).copied().collect(),
+                shape.iter().chain(win_shape.iter()).copied().collect(),
+            )
+        } else {
+            (
+                window
+                    .names
+                    .iter()
+                    .chain(idx_names.iter())
+                    .cloned()
+                    .collect(),
+                window.lo.iter().chain(lo.iter()).copied().collect(),
+                win_shape.iter().chain(shape.iter()).copied().collect(),
+            )
+        };
+        let (out_axes, red_axes): (Vec<u8>, SmallVec<[u8; 4]>) = if trailing {
+            (
+                (0..ns as u8).collect(),
+                (ns as u8..(ns + nc) as u8).collect(),
+            )
+        } else {
+            (
+                (nc as u8..(ns + nc) as u8).collect(),
+                (0..nc as u8).collect(),
+            )
+        };
         let elems = ext_shape
             .iter()
             .try_fold(1usize, |acc, &n| acc.checked_mul(n))
@@ -4684,10 +4724,7 @@ impl<'m> TapeBuilder<'m> {
             cvals: SmallVec::new(),
             tuple: 0,
             // The oracle walks the output cells, and each cell's tuples.
-            visit: (nc..ext_shape.len())
-                .chain(0..nc)
-                .map(|a| a as u8)
-                .collect(),
+            visit: out_axes.iter().chain(red_axes.iter()).copied().collect(),
         };
         let term = self
             .lower_filtered(body, filter, &bx, LV::Lit(identity))
@@ -4708,7 +4745,7 @@ impl<'m> TapeBuilder<'m> {
             op: combine_op,
             init: identity,
             src: self.src_of(&src),
-            axes: (0..nc as u8).collect(),
+            axes: red_axes,
             src_shape: ext_shape,
             out,
         };
