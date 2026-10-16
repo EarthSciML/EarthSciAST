@@ -253,8 +253,15 @@ end
         @test pick(vcat(base, [ESM_AOM.Equation(_agg(_Didx("u", _v("i"))),
                                                 _agg(_idx("g", _v("i"))))])) ==
               Set(["g"])
-        # (b) `g` as a gather SUBSCRIPT — must stay inlined.
-        @test isempty(pick(vcat(base,
+        # (b) `g` as a gather SUBSCRIPT. It reads the state, so the subscript is
+        #     a run-time gather whether `g` is inlined or read from its buffer,
+        #     and it is factored; a state-free `g` there stays inlined, where
+        #     the build resolves the subscript.
+        @test pick(vcat(base,
+            [ESM_AOM.Equation(_agg(_Didx("u", _v("i"))),
+                              _agg(_idx("M", _idx("g", _v("i")))))])) == Set(["g"])
+        free = [ESM_AOM.Equation(_v("g"), _agg(_op("+", _v("i"), _n(1.0))))]
+        @test isempty(pick(vcat(free,
             [ESM_AOM.Equation(_agg(_Didx("u", _v("i"))),
                               _agg(_idx("M", _idx("g", _v("i")))))])))
         # (c) `g` in an aggregate RANGE BOUND — must stay inlined.
