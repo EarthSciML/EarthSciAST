@@ -14,7 +14,7 @@
 use crate::EsmFile;
 use crate::op_registry::is_builtin_function_name;
 use crate::units::{
-    build_unit_env, check_equation_dimensions, check_expression_dimensions, parse_unit,
+    check_equation_dimensions, model_unit_env, check_expression_dimensions, parse_unit,
 };
 use crate::validate::{StructuralError, StructuralErrorCode, SystemInfo, UnitWarning};
 use std::collections::{HashMap, HashSet};
@@ -376,7 +376,7 @@ impl<'a> ModelCtx<'a> {
         &self,
         errors: &mut Vec<StructuralError>,
     ) -> HashMap<String, crate::units::Unit> {
-        let (unit_env, unit_parse_failures) = build_unit_env(&self.model.variables);
+        let (unit_env, unit_parse_failures) = model_unit_env(self.esm_file, self.model);
         for failure in unit_parse_failures {
             errors.push(StructuralError {
                 path: format!("{}/variables/{}", self.model_path, failure.name),
@@ -4074,6 +4074,90 @@ fn collect_subsystem_scoped_refs<'a>(
         }
         if let Some(nested) = component.get("subsystems").and_then(|v| v.as_object()) {
             collect_subsystem_scoped_refs(&path, nested.iter(), refs);
+        }
+    }
+}
+
+/// Scoped name → declared unit string for every scoped reference (esm-spec
+/// §4.9.2) an expression in a component with the given `subsystems` can make.
+///
+/// A mounted component is, after resolution, identical to one written inline
+/// (§4.7 "Resolution timing"), so a member reached across a `{ref}` mount edge
+/// — a `subsystems.<k>` mount or a top-level `models.<k>` mount — carries the
+/// units its declaration states, exactly as a local one does (§4.8.4). Two kinds
+/// of path are produced, with the precedence the reference-integrity walk uses:
+/// `<System>.<member>` for each top-level model / reaction system (and, through
+/// its subsystems, `<System>.<sub>.<member>`), and `<sub>.<member>` relative to
+/// the component's own subsystems, which wins on a collision.
+pub(crate) fn scoped_reference_units(
+    esm_file: &EsmFile,
+    subsystems: Option<&indexmap::IndexMap<String, serde_json::Value>>,
+) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    for (name, model) in esm_file.models.iter().flatten() {
+        for (var, decl) in &model.variables {
+            if let Some(units) = &decl.units {
+                out.insert(format!("{name}.{var}"), units.clone());
+            }
+        }
+        if let Some(subs) = &model.subsystems {
+            collect_subsystem_units(name, subs.iter(), &mut out);
+        }
+    }
+    for (name, rs) in esm_file.reaction_systems.iter().flatten() {
+        for (member, units) in rs
+            .species
+            .iter()
+            .map(|(k, v)| (k, &v.units))
+            .chain(rs.parameters.iter().map(|(k, v)| (k, &v.units)))
+        {
+            if let Some(units) = units {
+                out.insert(format!("{name}.{member}"), units.clone());
+            }
+        }
+        if let Some(subs) = &rs.subsystems {
+            collect_subsystem_units(name, subs.iter(), &mut out);
+        }
+    }
+    if let Some(subs) = subsystems {
+        collect_subsystem_units("", subs.iter(), &mut out);
+    }
+    out
+}
+
+/// [`scoped_reference_units`] for one raw `subsystems` map whose entries sit
+/// under the dotted `prefix` (empty at the owning component). Mirrors
+/// [`collect_subsystem_scoped_refs`]: the same members, with their units.
+fn collect_subsystem_units<'a>(
+    prefix: &str,
+    subs: impl Iterator<Item = (&'a String, &'a serde_json::Value)>,
+    out: &mut HashMap<String, String>,
+) {
+    for (sub_name, value) in subs {
+        let path = if prefix.is_empty() {
+            sub_name.clone()
+        } else {
+            format!("{prefix}.{sub_name}")
+        };
+        let component = value
+            .get("models")
+            .or_else(|| value.get("reaction_systems"))
+            .and_then(|m| m.as_object())
+            .filter(|m| m.len() == 1)
+            .and_then(|m| m.values().next())
+            .unwrap_or(value);
+        for field in ["variables", "species", "parameters"] {
+            let Some(members) = component.get(field).and_then(|v| v.as_object()) else {
+                continue;
+            };
+            for (member, decl) in members {
+                if let Some(units) = decl.get("units").and_then(|u| u.as_str()) {
+                    out.insert(format!("{path}.{member}"), units.to_string());
+                }
+            }
+        }
+        if let Some(nested) = component.get("subsystems").and_then(|v| v.as_object()) {
+            collect_subsystem_units(&path, nested.iter(), out);
         }
     }
 }

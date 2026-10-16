@@ -14,7 +14,7 @@ use earthsci_ast::extension::analysis::{
 };
 use earthsci_ast::{
     EquationDimensionVerdict, ExpressionGraphOptions, StructuralErrorCode, Unit, UnitError,
-    build_unit_env, component_exists, component_graph, equation_dimension_verdict,
+    component_exists, component_graph, equation_dimension_verdict, model_unit_env,
     expression_graph, expression_graph_with_options, parse_unit, stoichiometric_matrix, to_json,
     to_json_compact, validate, validate_text,
 };
@@ -501,7 +501,7 @@ fn analyze_model_units(esm_file: &earthsci_ast::EsmFile) {
                 model.variables.len()
             );
 
-            for (i, equation, verdict) in model_equation_verdicts(model) {
+            for (i, equation, verdict) in model_equation_verdicts(esm_file, model) {
                 let label = match equation_lhs_label(&equation.lhs) {
                     Some(lhs) => format!("Equation {} ({lhs})", i + 1),
                     None => format!("Equation {}", i + 1),
@@ -524,10 +524,11 @@ fn analyze_model_units(esm_file: &earthsci_ast::EsmFile) {
 
 /// The dimensional analyser's verdict on each of `model`'s equations, judged
 /// against the same unit environment `validate` uses.
-fn model_equation_verdicts(
-    model: &earthsci_ast::Model,
-) -> Vec<(usize, &earthsci_ast::Equation, EquationDimensionVerdict)> {
-    let (env, _) = build_unit_env(&model.variables);
+fn model_equation_verdicts<'m>(
+    esm_file: &earthsci_ast::EsmFile,
+    model: &'m earthsci_ast::Model,
+) -> Vec<(usize, &'m earthsci_ast::Equation, EquationDimensionVerdict)> {
+    let (env, _) = model_unit_env(esm_file, model);
     model
         .equations
         .iter()
@@ -3046,7 +3047,7 @@ fn run_units(file: PathBuf, check: bool) -> Result<(), Box<dyn std::error::Error
 
         let (mut consistent, mut mismatched, mut not_checked) = (0, 0, 0);
         for model in esm_file.models.iter().flat_map(|m| m.values()) {
-            for (_, _, verdict) in model_equation_verdicts(model) {
+            for (_, _, verdict) in model_equation_verdicts(&esm_file, model) {
                 match verdict {
                     EquationDimensionVerdict::Consistent(_) => consistent += 1,
                     EquationDimensionVerdict::Mismatch(_) => mismatched += 1,

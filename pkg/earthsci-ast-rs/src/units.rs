@@ -113,6 +113,56 @@ impl Rational {
         self.num == 0
     }
 
+    /// `num/den` from 64-bit parts, reduced; `None` when the reduced value does
+    /// not fit the `i32` representation (or `den` is zero).
+    fn checked_from_i64(num: i64, den: i64) -> Option<Self> {
+        if den == 0 {
+            return None;
+        }
+        let sign = if den < 0 { -1 } else { 1 };
+        let (num, den) = (num.checked_mul(sign)?, den.checked_mul(sign)?);
+        let g = gcd_i64(num.abs(), den).max(1);
+        Some(Rational {
+            num: i32::try_from(num / g).ok()?,
+            den: i32::try_from(den / g).ok()?,
+        })
+    }
+
+    /// Exact sum, or `None` on overflow of the `i32` representation.
+    fn checked_add(self, other: Self) -> Option<Self> {
+        let (a, b, c, d) = self.parts_with(other);
+        Rational::checked_from_i64(a * d + c * b, b * d)
+    }
+
+    /// Exact difference, or `None` on overflow.
+    fn checked_sub(self, other: Self) -> Option<Self> {
+        let (a, b, c, d) = self.parts_with(other);
+        Rational::checked_from_i64(a * d - c * b, b * d)
+    }
+
+    /// Exact product, or `None` on overflow.
+    fn checked_mul(self, other: Self) -> Option<Self> {
+        let (a, b, c, d) = self.parts_with(other);
+        Rational::checked_from_i64(a * c, b * d)
+    }
+
+    /// Exact quotient, or `None` on overflow or a zero divisor.
+    fn checked_div(self, other: Self) -> Option<Self> {
+        let (a, b, c, d) = self.parts_with(other);
+        Rational::checked_from_i64(a * d, b * c)
+    }
+
+    /// Both operands' parts widened to `i64`, where a product of two cannot
+    /// overflow.
+    fn parts_with(self, other: Self) -> (i64, i64, i64, i64) {
+        (
+            i64::from(self.num),
+            i64::from(self.den),
+            i64::from(other.num),
+            i64::from(other.den),
+        )
+    }
+
     /// As an `f64`, for scaling a unit's magnitude by this exponent.
     fn as_f64(self) -> f64 {
         f64::from(self.num) / f64::from(self.den)
@@ -131,6 +181,10 @@ impl std::fmt::Display for Rational {
 
 fn gcd(a: i32, b: i32) -> i32 {
     if b == 0 { a } else { gcd(b, a % b) }
+}
+
+fn gcd_i64(a: i64, b: i64) -> i64 {
+    if b == 0 { a } else { gcd_i64(b, a % b) }
 }
 
 /// One factor of an [`ExactScale`]: a prime number, or π.
@@ -996,37 +1050,90 @@ fn propagate_power_dim(
     }
 
     // The exponent is read BY VALUE, not by dimension — a literal's dimension is
-    // indeterminate, but its VALUE is exactly what a power needs. It may arrive
-    // as EITHER `Expr::Number` (JSON `2.0`) or `Expr::Integer` (JSON `2`).
-    let literal_exp = match &op.args[1] {
+    // indeterminate, but its VALUE is exactly what a power needs. A constant
+    // expression over literals (`3/2`, `-(1)`) has an exact value too, and is
+    // folded to it (esm-spec §4.8.3 `^`). Exponents are RATIONAL, so a
+    // fractional power of a dimensional quantity (`x^0.5`) propagates exactly.
+    if let Some(r) = constant_exponent(&op.args[1]) {
+        return Dim::Known(base_unit.power_rational(r));
+    }
+    match &op.args[1] {
+        Expr::Integer(_) | Expr::Number(_) => {
+            let n = literal_f64(&op.args[1]).unwrap_or(f64::NAN);
+            findings.push(UnitFinding::analysis(format!(
+                "Exponent {n} is not a representable rational, so the dimension of a \
+                 dimensional base is unknown"
+            )));
+        }
+        // Symbolic exponent (`x^n` for a parameter `n`): the resulting
+        // dimension depends on a value we do not have. Undeterminable, NOT a
+        // mismatch (§4.8.4).
+        _ => {
+            findings.push(UnitFinding::analysis(format!(
+                "Exponent of '{}' is not a constant expression, so the dimension of a \
+                 dimensional base is unknown",
+                op.op
+            )));
+        }
+    }
+    Dim::Unknown
+}
+
+/// A numeric literal's value. It may arrive as EITHER `Expr::Number` (JSON
+/// `2.0`) or `Expr::Integer` (JSON `2`).
+fn literal_f64(expr: &Expr) -> Option<f64> {
+    match expr {
         Expr::Integer(i) => Some(*i as f64),
         Expr::Number(n) => Some(*n),
         _ => None,
+    }
+}
+
+/// The exact rational value of a CONSTANT-EXPRESSION exponent (esm-spec §4.8.3
+/// `^`), or `None` when the exponent is symbolic.
+///
+/// Folds: a numeric literal; a `const` that declares no `units`, or a
+/// dimensionless unit at exact scale 1 (its value IS the pure number it
+/// denotes); and `+`, `*` (one or more operands), `-` (unary negation, or a left
+/// fold of two or more) and `/` (exactly two operands, nonzero divisor) over
+/// constant expressions, nested to any depth. Anything else — a variable, an
+/// expression containing one, a `const` at a scale other than 1 (`%`: its value
+/// and the quantity it denotes disagree), any other operator, an overflow of
+/// the rational representation — is symbolic, which leaves the power of a
+/// dimensional base undeterminable (§4.8.4).
+pub fn constant_exponent(expr: &Expr) -> Option<Rational> {
+    if let Some(n) = literal_f64(expr) {
+        return Rational::from_f64(n);
+    }
+    let Expr::Operator(node) = expr else {
+        return None;
     };
-    match literal_exp {
-        // Exponents are RATIONAL, so a fractional power of a dimensional
-        // quantity (`x^0.5`) is representable and propagates exactly.
-        Some(n) => match Rational::from_f64(n) {
-            Some(r) => Dim::Known(base_unit.power_rational(r)),
-            None => {
-                findings.push(UnitFinding::analysis(format!(
-                    "Exponent {n} is not a representable rational, so the dimension of a \
-                     dimensional base is unknown"
-                )));
-                Dim::Unknown
+    if node.op == "const" {
+        if let Some(units) = &node.units {
+            let unit = parse_unit(units).ok()?;
+            if !unit.is_pure_number() {
+                return None;
             }
-        },
-        // Symbolic exponent (`x^n` for a parameter `n`): the resulting
-        // dimension depends on a value we do not have. Undeterminable, NOT a
-        // mismatch.
-        None => {
-            findings.push(UnitFinding::analysis(format!(
-                "Exponent of '{}' is not a literal, so the dimension of a dimensional \
-                 base is unknown",
-                op.op
-            )));
-            Dim::Unknown
         }
+        return node
+            .value
+            .as_ref()
+            .and_then(serde_json::Value::as_f64)
+            .and_then(Rational::from_f64);
+    }
+    let values = node
+        .args
+        .iter()
+        .map(constant_exponent)
+        .collect::<Option<Vec<Rational>>>()?;
+    let (first, rest) = values.split_first()?;
+    match node.op.as_str() {
+        "+" => rest.iter().try_fold(*first, |acc, v| acc.checked_add(*v)),
+        "*" => rest.iter().try_fold(*first, |acc, v| acc.checked_mul(*v)),
+        "-" if rest.is_empty() => Rational::int(0).checked_sub(*first),
+        "-" => rest.iter().try_fold(*first, |acc, v| acc.checked_sub(*v)),
+        "/" if rest.len() == 1 => first.checked_div(rest[0]),
+        _ => None,
     }
 }
 
@@ -1381,6 +1488,13 @@ fn propagate_array_dim(
 ) -> Dim {
     match op.op.as_str() {
         "faq" => {
+            // The `filter` is a boolean over the node's ranges. Its value never
+            // reaches the element unit, but it is an expression like any other,
+            // so a comparison in it is checked by the §4.8.3 rules exactly as
+            // the same comparison in the body is (EarthSciAST#414).
+            if let Some(filter) = &op.filter {
+                propagate_dim(filter, env, findings);
+            }
             // The body is the scalar expression evaluated for each tuple of
             // loop-index values; its dimension is the array's element
             // dimension.
@@ -1565,6 +1679,38 @@ pub fn build_unit_env(
     // `variables` is a HashMap, so iteration order is nondeterministic; sort so
     // a multi-failure file reports its errors in a stable order.
     failures.sort_by(|a, b| a.name.cmp(&b.name));
+    (env, failures)
+}
+
+/// The unit environment a model's equations are checked against: its own
+/// declarations ([`build_unit_env`]) plus every scoped reference its
+/// expressions can make — `<sub>.<var>` into its subsystems and
+/// `<System>.<member>` into the document's top-level models and reaction
+/// systems, at any depth — each with the units its target declares.
+///
+/// A mounted component is, after resolution, identical to one written inline
+/// (esm-spec §4.7), so a variable read across a `{ref}` mount edge carries its
+/// declared units into the mounting model exactly as a local one does
+/// (§4.8.4, EarthSciAST#414); before, every such reference was undeterminable
+/// and every check that read one was skipped. The model's own names win over a
+/// scoped one, a relative `<sub>.` path wins over a top-level one, and a target
+/// whose unit string does not parse is left out (it is reported at its own
+/// declaration). The parse failures returned are the model's own.
+pub fn model_unit_env(
+    esm_file: &crate::EsmFile,
+    model: &crate::Model,
+) -> (HashMap<String, Unit>, Vec<UnitParseFailure>) {
+    let (mut env, failures) = build_unit_env(&model.variables);
+    let scoped =
+        crate::structural::scoped_reference_units(esm_file, model.subsystems.as_ref());
+    for (name, units) in scoped {
+        if env.contains_key(&name) {
+            continue;
+        }
+        if let Ok(unit) = parse_unit(&units) {
+            env.insert(name, unit);
+        }
+    }
     (env, failures)
 }
 
@@ -4333,5 +4479,88 @@ mod tests {
             matches!(result, Err(UnitError::UnknownUnit(_))),
             "expected UnknownUnit (skipped), not a false mismatch, got {result:?}"
         );
+    }
+
+    fn konst(value: f64, units: Option<&str>) -> Expr {
+        Expr::operator(ExpressionNode {
+            op: "const".to_string(),
+            value: Some(serde_json::json!(value)),
+            units: units.map(str::to_string),
+            ..ExpressionNode::default()
+        })
+    }
+
+    #[test]
+    fn constant_exponents_fold_to_exact_rationals() {
+        let int = Expr::Integer;
+        let cases = [
+            (op("/", vec![int(3), int(2)]), Rational::new(3, 2)),
+            (op("-", vec![int(1)]), Rational::int(-1)),
+            (op("-", vec![int(5), int(3)]), Rational::int(2)),
+            (
+                op(
+                    "/",
+                    vec![op("+", vec![int(1), int(2)]), op("*", vec![int(4), int(2)])],
+                ),
+                Rational::new(3, 8),
+            ),
+            (konst(1.5, None), Rational::new(3, 2)),
+            (konst(0.5, Some("1")), Rational::new(1, 2)),
+            (Expr::Number(0.25), Rational::new(1, 4)),
+        ];
+        for (expr, expected) in cases {
+            assert_eq!(constant_exponent(&expr), Some(expected), "{expr:?}");
+        }
+    }
+
+    #[test]
+    fn symbolic_exponents_do_not_fold() {
+        let int = Expr::Integer;
+        let var = |n: &str| Expr::Variable(n.into());
+        for expr in [
+            var("n"),
+            op("+", vec![var("n"), int(1)]),
+            konst(50.0, Some("%")),
+            konst(2.0, Some("m")),
+            op("/", vec![int(1), int(0)]),
+            op("/", vec![int(1), int(2), int(3)]),
+            op("sqrt", vec![int(4)]),
+            op("*", vec![int(i64::from(i32::MAX)), int(i64::from(i32::MAX))]),
+        ] {
+            assert_eq!(constant_exponent(&expr), None, "{expr:?}");
+        }
+    }
+
+    #[test]
+    fn a_folded_exponent_is_checked_and_a_symbolic_one_is_skipped() {
+        let env = env_of(&[("T", "K"), ("n", "1"), ("T_32", "K^(3/2)"), ("T_2", "K^2")]);
+        let var = |n: &str| Expr::Variable(n.into());
+        let three_halves = op("/", vec![Expr::Integer(3), Expr::Integer(2)]);
+        let pow = op("^", vec![var("T"), three_halves]);
+        let ok = check_expression_dimensions(&pow, env.get("T_32"), &env);
+        assert!(!ok.iter().any(UnitFinding::is_error), "{ok:?}");
+        let bad = check_expression_dimensions(&pow, env.get("T_2"), &env);
+        assert!(bad.iter().any(UnitFinding::is_error), "{bad:?}");
+        let sym = op("^", vec![var("T"), var("n")]);
+        let skipped = check_expression_dimensions(&sym, env.get("T_2"), &env);
+        assert!(!skipped.iter().any(UnitFinding::is_error), "{skipped:?}");
+    }
+
+    #[test]
+    fn an_faq_filter_is_dimension_checked() {
+        let env = env_of(&[("x", "m"), ("y", "m"), ("z", "kg")]);
+        let var = |n: &str| Expr::Variable(n.into());
+        let faq = |filter: Expr| {
+            Expr::operator(ExpressionNode {
+                op: "faq".to_string(),
+                filter: Some(Box::new(filter)),
+                expr: Some(Box::new(konst(1.0, Some("1")))),
+                ..ExpressionNode::default()
+            })
+        };
+        let bad = check_expression_dimensions(&faq(op("<=", vec![var("x"), var("z")])), None, &env);
+        assert!(bad.iter().any(UnitFinding::is_error), "{bad:?}");
+        let ok = check_expression_dimensions(&faq(op("<=", vec![var("x"), var("y")])), None, &env);
+        assert!(!ok.iter().any(UnitFinding::is_error), "{ok:?}");
     }
 }
