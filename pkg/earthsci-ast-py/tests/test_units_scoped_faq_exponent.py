@@ -4,12 +4,14 @@ exponents (esm-spec §4.8.3, §4.8.4; EarthSciAST#414).
 
 from __future__ import annotations
 
+import json
 from fractions import Fraction
 from pathlib import Path
 
 import pytest
 
-from earthsci_ast import validate_path
+import earthsci_ast.units as units_mod
+from earthsci_ast import load_string, validate, validate_path
 from earthsci_ast.esm_types import ExprNode
 from earthsci_ast.units import (
     PINT_AVAILABLE,
@@ -18,6 +20,7 @@ from earthsci_ast.units import (
     constant_exponent_value,
     parse_unit,
     unit_exact_scale,
+    validate_units,
 )
 
 pytestmark = pytest.mark.skipif(not PINT_AVAILABLE, reason="pint not installed")
@@ -199,3 +202,126 @@ def test_invalid_fixture(name, paths):
     found = {(e.code, e.path) for e in result.structural_errors}
     for path in paths:
         assert ("unit_inconsistency", path) in found, found
+
+
+def test_every_array_operand_is_walked():
+    # The result unit is the source array's, but a mismatch inside a subscript,
+    # a shape operand, an faq operand or a makearray operand is still reported.
+    v = _validator({"lat": "deg", "a": "m", "b": "kg"})
+    bad = _op("+", "a", "b")
+    for node in (
+        _op("index", "lat", bad),
+        ExprNode(op="reshape", args=["lat", bad], shape=[1]),
+        _op("transpose", "lat", bad),
+        ExprNode(op="faq", args=[bad], expr="lat"),
+        ExprNode(op="makearray", args=[bad], values=["lat"]),
+        ExprNode(op="broadcast", args=[bad]),
+    ):
+        with pytest.raises(DimensionalMismatchError):
+            v._type(node)
+    assert v._type(_op("index", "lat", "a")).dim == parse_unit("deg").dimensionality
+
+
+def _shadow_doc(sub_units: str | None, with_subsystem: bool = True) -> str:
+    sub_x = {"type": "unknown"}
+    if sub_units is not None:
+        sub_x["units"] = sub_units
+    a = {
+        "variables": {
+            "y": {"type": "unknown", "units": "m"},
+            "z": {"type": "unknown", "units": "m"},
+        },
+        "equations": [{"lhs": "y", "rhs": {"op": "+", "args": ["z", "B.x"]}}],
+    }
+    if with_subsystem:
+        a["subsystems"] = {"B": {"variables": {"x": sub_x}, "equations": []}}
+    doc = {
+        "esm": "1.2.0",
+        "metadata": {"name": "Shadow", "authors": ["t"]},
+        "models": {
+            "A": a,
+            "B": {"variables": {"x": {"type": "unknown", "units": "kg"}}, "equations": []},
+        },
+    }
+    return json.dumps(doc)
+
+
+@pytest.mark.parametrize(
+    "sub_units, with_subsystem, ok",
+    [
+        (None, True, True),  # the unitless relative member shadows top-level B.x
+        ("m", True, True),
+        ("s", True, False),
+        (None, False, False),  # no subsystem: B.x is the top-level kg declaration
+    ],
+)
+def test_a_relative_path_shadows_a_top_level_one_even_without_units(sub_units, with_subsystem, ok):
+    esm_file = load_string(_shadow_doc(sub_units, with_subsystem))
+    assert validate_units(esm_file).is_valid is ok
+    observed = [e for e in validate(esm_file).structural_errors if e.code == "unit_inconsistency"]
+    assert (not observed) is ok, observed
+
+
+def test_the_document_does_not_leak_into_a_later_standalone_call():
+    v = UnitValidator()
+    assert not v.validate_esm_file(load_string(_shadow_doc(None, False))).is_valid
+    # Standalone, the model has no document: B.x is undeterminable.
+    model = load_string(_shadow_doc(None, False)).models["A"]
+    assert v.validate_model(model).is_valid
+
+
+def test_top_level_scoped_units_are_built_once_per_document(monkeypatch):
+    built = []
+    real_init = units_mod.ScopedUnits.__init__
+
+    def counting_init(self, esm_file):
+        built.append(esm_file)
+        real_init(self, esm_file)
+
+    monkeypatch.setattr(units_mod.ScopedUnits, "__init__", counting_init)
+    esm_file = load_string(_shadow_doc("m"))
+    UnitValidator().validate_esm_file(esm_file)
+    assert built == [esm_file]
+
+
+def _scoped_rate_doc(k_units: str | None) -> str:
+    k = {"type": "parameter", "default": 0.1}
+    if k_units is not None:
+        k["units"] = k_units
+    doc = {
+        "esm": "1.2.0",
+        "metadata": {"name": "ScopedRate", "authors": ["t"]},
+        "models": {"Rates": {"variables": {"k": k}, "equations": []}},
+        "reaction_systems": {
+            "Chem": {
+                "species": {
+                    "A": {"units": "mol/L", "default": 1.0},
+                    "B": {"units": "mol/L", "default": 0.0},
+                },
+                "parameters": {},
+                "reactions": [
+                    {
+                        "id": "R1",
+                        "substrates": [{"species": "A", "stoichiometry": 1}],
+                        "products": [{"species": "B", "stoichiometry": 1}],
+                        "rate": "Rates.k",
+                    }
+                ],
+            }
+        },
+    }
+    return json.dumps(doc)
+
+
+@pytest.mark.parametrize("k_units, ok", [("L/(mol*s)", False), ("1/s", True), (None, True)])
+def test_a_scoped_reaction_rate_is_mass_action_checked(k_units, ok):
+    errors = [
+        e
+        for e in validate(load_string(_scoped_rate_doc(k_units))).structural_errors
+        if e.code == "unit_inconsistency"
+    ]
+    assert (not errors) is ok, errors
+    if not ok:
+        assert errors[0].path == "/reaction_systems/Chem/reactions/0"
+        assert errors[0].details["rate_units"] == "L/(mol*s)"
+        assert errors[0].details["expected_rate_units"] == "1/s"

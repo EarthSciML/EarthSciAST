@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import math
 import re
+from collections import ChainMap
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from fractions import Fraction
 from typing import Any, NamedTuple
@@ -1117,16 +1119,16 @@ class UnitConversionResult:
 # ---------------------------------------------------------------------------
 
 
-def _component_member_units(component: Any) -> dict[str, str]:
+def _component_member_units(component: Any) -> dict[str, str | None]:
     """Declared unit strings of a component's own members: a model's
-    ``variables``, a reaction system's ``species`` and ``parameters``."""
-    out: dict[str, str] = {}
+    ``variables``, a reaction system's ``species`` and ``parameters``. A
+    member that declares no units maps to ``None``: it still occupies its
+    name (see :class:`ScopedUnits`)."""
+    out: dict[str, str | None] = {}
     variables = getattr(component, "variables", None)
     if isinstance(variables, dict):
         for name, var in variables.items():
-            units = getattr(var, "units", None)
-            if units:
-                out[name] = units
+            out[name] = getattr(var, "units", None) or None
     for attr in ("species", "parameters"):
         members = getattr(component, attr, None)
         if isinstance(members, dict):
@@ -1136,27 +1138,41 @@ def _component_member_units(component: Any) -> dict[str, str]:
         else:
             continue
         for name, member in items:
-            units = getattr(member, "units", None)
-            if isinstance(name, str) and units:
-                out[name] = units
+            if isinstance(name, str):
+                out[name] = getattr(member, "units", None) or None
     return out
 
 
-def _collect_scoped_units(prefix: str, component: Any, out: dict[str, str]) -> None:
+class ScopedUnit(NamedTuple):
+    """A scoped reference's target: its declared unit string and the parsed
+    unit (``None`` when it declares none or an unparseable one -- the
+    reference is then undeterminable)."""
+
+    units: str | None
+    unit: Any
+
+
+def _collect_scoped_units(prefix: str, component: Any, out: dict[str, ScopedUnit]) -> None:
     """Register ``<prefix>.<member>`` for every member of ``component`` and,
     recursively, of every subsystem it carries (esm-spec §4.9.2: a scoped
-    reference is a dot path of arbitrary depth)."""
+    reference is a dot path of arbitrary depth). An unparseable unit is
+    reported at its own declaration, not here."""
     for name, units in _component_member_units(component).items():
-        out[f"{prefix}.{name}"] = units
+        unit = None
+        if units is not None:
+            try:
+                unit = parse_unit(units)
+            except UnparseableUnitError:
+                unit = None
+        out[f"{prefix}.{name}"] = ScopedUnit(units, unit)
     for sub_name, sub in (getattr(component, "subsystems", None) or {}).items():
         if isinstance(sub, dict):
             continue  # an unresolved {"ref": ...} edge: nothing is known about it
         _collect_scoped_units(f"{prefix}.{sub_name}", sub, out)
 
 
-def scoped_reference_units(esm_file: EsmFile | None, component: Any) -> dict[str, str]:
-    """Scoped name -> declared unit string, for every scoped reference an
-    expression in ``component`` can make (esm-spec §4.9.2).
+class ScopedUnits:
+    """The units every scoped reference in a document carries (esm-spec §4.9.2).
 
     A mounted component is, after resolution, the same as one written inline
     (§4.7 "Resolution timing"), so a variable reached across a ``{ref}`` mount
@@ -1165,19 +1181,33 @@ def scoped_reference_units(esm_file: EsmFile | None, component: Any) -> dict[str
     (§4.8.4). Two kinds of path are covered, with the same precedence the
     reference-integrity check uses: ``<System>.<member>`` naming a top-level
     model or reaction system (and its subsystems), and ``<sub>.<member>``
-    relative to ``component``'s own subsystems, which wins on a collision.
+    relative to a component's own subsystems, which wins on a collision -- even
+    when the relative member declares no units, in which case the reference
+    is undeterminable and its check is skipped.
+
+    The top-level paths are built once per document; :meth:`for_component`
+    overlays only that component's relative paths.
     """
-    out: dict[str, str] = {}
-    if esm_file is not None:
-        for name, model in (esm_file.models or {}).items():
-            _collect_scoped_units(name, model, out)
-        for name, rs in (esm_file.reaction_systems or {}).items():
-            _collect_scoped_units(name, rs, out)
-    for sub_name, sub in (getattr(component, "subsystems", None) or {}).items():
-        if isinstance(sub, dict):
-            continue
-        _collect_scoped_units(sub_name, sub, out)
-    return out
+
+    def __init__(self, esm_file: EsmFile | None):
+        self._top: dict[str, ScopedUnit] = {}
+        if esm_file is not None:
+            for name, model in (esm_file.models or {}).items():
+                _collect_scoped_units(name, model, self._top)
+            for name, rs in (esm_file.reaction_systems or {}).items():
+                _collect_scoped_units(name, rs, self._top)
+
+    def for_component(self, component: Any) -> Mapping[str, ScopedUnit]:
+        """Scoped name -> target for the references an expression in
+        ``component`` can make."""
+        relative: dict[str, ScopedUnit] = {}
+        for sub_name, sub in (getattr(component, "subsystems", None) or {}).items():
+            if isinstance(sub, dict):
+                continue
+            _collect_scoped_units(sub_name, sub, relative)
+        if not relative:
+            return self._top
+        return ChainMap(relative, self._top)
 
 
 # ---------------------------------------------------------------------------
@@ -1260,9 +1290,9 @@ class UnitValidator:
 
         self.ureg = ureg
         self.known_units: dict[str, pint.Quantity] = {}
-        # The document being validated, so a component's scoped references
-        # (`Leaf.p`, `sub.v`) can be typed from their targets' declarations.
-        self._document: EsmFile | None = None
+        # Targets of the current component's scoped references (`Leaf.p`,
+        # `sub.v`), consulted after `known_units` (see ScopedUnits).
+        self.scoped_units: Mapping[str, ScopedUnit] = {}
 
     def validate_esm_file(self, esm_file: EsmFile) -> UnitValidationResult:
         """
@@ -1275,17 +1305,20 @@ class UnitValidator:
             UnitValidationResult with validation status and any issues found
         """
         result = UnitValidationResult(is_valid=True)
-        self._document = esm_file
+        scoped = ScopedUnits(esm_file)
 
         if esm_file.models:
             self._merge_component_results(
-                esm_file.models.values(), self.validate_model, "Model", result
+                esm_file.models.values(),
+                lambda m: self.validate_model(m, scoped),
+                "Model",
+                result,
             )
 
         if esm_file.reaction_systems:
             self._merge_component_results(
                 esm_file.reaction_systems.values(),
-                self.validate_reaction_system,
+                lambda rs: self.validate_reaction_system(rs, scoped),
                 "ReactionSystem",
                 result,
             )
@@ -1313,12 +1346,16 @@ class UnitValidator:
             )
             result.unit_registry.update(sub.unit_registry)
 
-    def validate_model(self, model: Model) -> UnitValidationResult:
+    def validate_model(
+        self, model: Model, scoped: ScopedUnits | None = None
+    ) -> UnitValidationResult:
         """
         Validate unit consistency within a model.
 
         Args:
             model: The model to validate
+            scoped: The containing document's :class:`ScopedUnits`; without
+                one only paths into the model's own subsystems are typed
 
         Returns:
             UnitValidationResult for the model
@@ -1329,6 +1366,7 @@ class UnitValidator:
         # name reused in another model/reaction system cannot collide during
         # bare-name dimension lookups in _get_expression_dimension.
         self.known_units = {}
+        self.scoped_units = (scoped or ScopedUnits(None)).for_component(model)
 
         if not model.variables:
             return result
@@ -1351,11 +1389,6 @@ class UnitValidator:
                         UNIT_FINDING_UNPARSEABLE,
                         f"Invalid unit '{var_info.units}' for variable '{var_name}': {e}",
                     )
-
-        # Scoped references reach across subsystem and top-level mounts and
-        # carry their targets' declared units (esm-spec §4.8.4). An unparseable
-        # target unit is reported at its own declaration, not here.
-        self._register_scoped_units(model)
 
         # Validate equations. An observed unknown's DEFINING equation is
         # skipped here and typed below instead, under the VARIABLE's name --
@@ -1391,12 +1424,16 @@ class UnitValidator:
         result.is_valid = len(result.errors) == 0
         return result
 
-    def validate_reaction_system(self, rs: ReactionSystem) -> UnitValidationResult:
+    def validate_reaction_system(
+        self, rs: ReactionSystem, scoped: ScopedUnits | None = None
+    ) -> UnitValidationResult:
         """
         Validate unit consistency within a reaction system.
 
         Args:
             rs: The reaction system to validate
+            scoped: The containing document's :class:`ScopedUnits` (see
+                :meth:`validate_model`)
 
         Returns:
             UnitValidationResult for the reaction system
@@ -1405,7 +1442,7 @@ class UnitValidator:
 
         # Scope the known-units registry to this component (see validate_model).
         self.known_units = {}
-        self._register_scoped_units(rs)
+        self.scoped_units = (scoped or ScopedUnits(None)).for_component(rs)
 
         # Register species units
         if rs.species:
@@ -1452,16 +1489,13 @@ class UnitValidator:
         result.is_valid = len(result.errors) == 0
         return result
 
-    def _register_scoped_units(self, component: Any) -> None:
-        """Add every resolvable scoped reference of ``component`` to
-        ``known_units`` (see :func:`scoped_reference_units`)."""
-        for name, units in scoped_reference_units(self._document, component).items():
-            if name in self.known_units:
-                continue
-            try:
-                self.known_units[name] = parse_unit(units)
-            except UnparseableUnitError:
-                continue
+    def _unit_of(self, name: str):
+        """The unit of a name: a component-local declaration, else a scoped
+        reference's target (esm-spec §4.8.4); ``None`` when undeterminable."""
+        if name in self.known_units:
+            return self.known_units[name]
+        target = self.scoped_units.get(name)
+        return target.unit if target is not None else None
 
     def validate_equation(self, equation, equation_id: str) -> UnitValidationResult:
         """
@@ -1623,8 +1657,8 @@ class UnitValidator:
             return None
 
         if isinstance(expr, str):
-            if expr in self.known_units:
-                unit = self.known_units[expr]
+            unit = self._unit_of(expr)
+            if unit is not None:
                 return _Typed(unit.dimensionality, exact_scale_of(unit))
             # Undeclared symbol: unknown dimension, so it is skipped rather
             # than assumed dimensionless.
@@ -1873,9 +1907,9 @@ class UnitValidator:
             # a dimensional mismatch by Go, Julia, Rust and TypeScript and
             # silently accepted by Python (EarthSciAST#407).
             wrt = getattr(node, "wrt", None) or op_registry.STRUCTURAL_DERIVATIVE_WRT
-            if args[0] is None or wrt not in self.known_units:
+            wrt_unit = self._unit_of(wrt)
+            if args[0] is None or wrt_unit is None:
                 return None
-            wrt_unit = self.known_units[wrt]
             return _Typed(
                 args[0].dim / wrt_unit.dimensionality, args[0].scale / exact_scale_of(wrt_unit)
             )
@@ -1890,13 +1924,17 @@ class UnitValidator:
         operators") -- the same rules in every binding:
 
         * ``index``, ``reshape``, ``transpose``: the source array's unit
-          (``args[0]``); the subscripts are not part of it.
+          (``args[0]``); the subscripts and shape operands are walked for
+          findings but are not part of it.
         * ``concat``: its operands agree like those of ``+``.
         * ``makearray``: its region ``values`` agree like the operands of
           ``+`` -- an undeterminable region is skipped.
         * ``broadcast``: the unit of ``{op: fn, args}``.
-        * ``faq``: ``filter`` and ``expr`` are always walked; the node's unit
-          is decided by its ⊕ (:meth:`_faq_unit`).
+        * ``faq``: ``filter``, ``expr`` and any ``args`` are always walked;
+          the node's unit is decided by its ⊕ (:meth:`_faq_unit`).
+
+        Every operand is walked, so a mismatch inside a subscript
+        (``index(lat, a + b)``) is reported.
 
         A node with nothing to read a unit from is undeterminable (``None``),
         never dimensionless (§4.8.4).
@@ -1905,10 +1943,15 @@ class UnitValidator:
         if op == "faq":
             if node.filter is not None:
                 self._type(node.filter)
+            body = self._type(node.expr) if node.expr is not None else None
+            for a in node.args:
+                self._type(a)
             if node.expr is None:
                 return None
-            return self._faq_unit(node, self._type(node.expr))
+            return self._faq_unit(node, body)
         if op == "makearray":
+            for a in node.args:
+                self._type(a)
             typed = [self._type(v) for v in (node.values or [])]
             known = [t for t in typed if t is not None]
             if not known:
@@ -1925,10 +1968,13 @@ class UnitValidator:
             return self._agree([self._type(a) for a in node.args], op)
         if op == "broadcast":
             if node.fn is None:
+                for a in node.args:
+                    self._type(a)
                 return None
             return self._type_node(ExprNode(op=node.fn, args=list(node.args)))
         # index / reshape / transpose
-        return self._type(node.args[0]) if node.args else None
+        typed = [self._type(a) for a in node.args]
+        return typed[0] if typed else None
 
     def _faq_unit(self, node: ExprNode, body: _Typed | None) -> _Typed | None:
         """The unit of an ``faq`` whose body has unit ``body``. The ⊗ is

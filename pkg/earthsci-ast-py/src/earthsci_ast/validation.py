@@ -891,7 +891,7 @@ def _validate_reaction_rate_dimensions(
         # that disagreed with every other unit check in the package — silently
         # skipping (parse_dim -> None) exactly the atmospheric-chemistry rates it
         # exists to verify.
-        from .units import PINT_AVAILABLE, unit_dimensionality
+        from .units import PINT_AVAILABLE, ScopedUnits, unit_dimensionality
 
         if not PINT_AVAILABLE:
             return
@@ -914,9 +914,11 @@ def _validate_reaction_rate_dimensions(
         except Exception:
             return None
 
+    scoped = ScopedUnits(esm_file)
     for rs_name, rs in esm_file.reaction_systems.items():
         species_units = {sp.name: sp.units for sp in rs.species}
         param_units = {p.name: p.units for p in rs.parameters}
+        scoped_units = scoped.for_component(rs)
 
         for r_idx, reaction in enumerate(rs.reactions):
             reaction_path = f"/reaction_systems/{rs_name}/reactions/{r_idx}"
@@ -926,12 +928,16 @@ def _validate_reaction_rate_dimensions(
             # defeat literal dimensional analysis.
             if not isinstance(rate, str):
                 continue
-            if "." in rate or rate in _BUILTIN_SYMBOLS:
+            if rate in _BUILTIN_SYMBOLS:
                 continue
             if rate in param_units:
                 rate_units_str = param_units[rate]
             elif rate in species_units:
                 rate_units_str = species_units[rate]
+            elif rate in scoped_units:
+                # A scoped reference has the units its target declares
+                # (esm-spec §4.8.4); one that declares none is skipped.
+                rate_units_str = scoped_units[rate].units
             else:
                 continue  # undefined refs flagged elsewhere
             rate_dim = parse_dim(rate_units_str)
@@ -1092,11 +1098,11 @@ def _validate_observed_dimensions(
         from .units import (
             PINT_AVAILABLE,
             DimensionalMismatchError,
+            ScopedUnits,
             UnitValidator,
             UnparseableUnitError,
             exact_scale_of,
             parse_unit,
-            scoped_reference_units,
         )
 
         if not PINT_AVAILABLE:
@@ -1104,6 +1110,11 @@ def _validate_observed_dimensions(
     except ImportError:
         return
 
+    # A scoped reference -- into a subsystem or a top-level component, mounted
+    # by {ref} or written inline -- has the units its target declares
+    # (esm-spec §4.8.4, EarthSciAST#414). Treating it as undeterminable
+    # skipped every check across a mount edge.
+    scoped = ScopedUnits(esm_file)
     for model in esm_file.models.values():
         # Seed the typer with every declared unit in THIS model, so bare-name
         # operands resolve (and a name reused in another model cannot collide).
@@ -1115,20 +1126,10 @@ def _validate_observed_dimensions(
                 known[name] = parse_unit(var.units)
             except UnparseableUnitError:
                 continue  # reported by _check_unparseable_units; not our finding
-        # A scoped reference -- into a subsystem or a top-level component, mounted
-        # by {ref} or written inline -- has the units its target declares
-        # (esm-spec §4.8.4, EarthSciAST#414). Treating it as undeterminable
-        # skipped every check across a mount edge.
-        for name, units in scoped_reference_units(esm_file, model).items():
-            if name in known:
-                continue
-            try:
-                known[name] = parse_unit(units)
-            except UnparseableUnitError:
-                continue
 
         validator = UnitValidator()
         validator.known_units = known
+        validator.scoped_units = scoped.for_component(model)
 
         # An observed unknown's DEFINING EXPRESSION now lives in the equations,
         # as the RHS of its bare-variable-LHS equation (esm-spec §6.3.1). The
