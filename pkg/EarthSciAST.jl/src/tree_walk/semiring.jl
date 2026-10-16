@@ -493,11 +493,13 @@ end
 #     `_resolve_index_of_makearray` the body's own `index(col, l)` would use, so
 #     the gate and the lowered body cannot disagree about the column;
 #   * a CONST-CADENCE computed observed: one whose value depends only on index
-#     symbols, inline constants and build-time data (const arrays, ingested
-#     columns) — never on a state, `t` or a tunable parameter — so it is as
+#     symbols, inline constants, build-time data (const arrays, ingested
+#     columns) and scalar parameters — never on a state or `t` — so it is as
 #     constant at build time as the storages above
-#     (`_const_cadence_column_values`).
-# Anything else (a live state, a parameter-dependent observed) is a build error
+#     (`_const_cadence_column_values`). A parameter it reads is baked: its
+#     value at the build is folded into the gate, and the parameter is
+#     recorded as read at build, so a `remake` that changes it is refused.
+# Anything else (a live state, a time-dependent observed) is a build error
 # rather than a silently ungated product.
 function _join_key_column_values(col::String, positions::Vector{Int}, vi_maps,
                                  const_arrays::AbstractDict, obs_defs::AbstractDict,
@@ -543,8 +545,9 @@ end
 # const-cadence computed observed, or `nothing` when it is not one. The
 # definition is closed over the observeds it reads (inlined, as the right-hand
 # side would), its index-set ranges resolved, and then it must reference
-# nothing but its own binders and build-time arrays — the same test the
-# affine tier's value-table lane applies (`_exprtbl_evaluable`). It is
+# nothing but its own binders, build-time arrays and scalar parameters — the
+# test the affine tier's value-table lane applies (`_exprtbl_evaluable`), with
+# the parameters admitted as build-time values. It is
 # compiled ONCE with its output index bound and read at each position, the
 # compile-once evaluator `observed_field` uses, so the gate holds exactly the
 # values the column reads elsewhere. The gate is built from these values like
@@ -561,12 +564,25 @@ function _const_cadence_column_values(col::String, defn::ASTExpr, positions::Vec
     end
     reads_other(e) && return nothing                       # a cycle through observeds
     e = _resolve_isr(e, index_sets)
-    _exprtbl_evaluable(e, Set{String}(), const_arrays) || return nothing
-    ce = _cellwise_compile_once_impl(e, 1, const_arrays, Dict{String,Any}(),
-                                     Dict{String,Float64}())
+    # Scalar parameters are build-time here: their values at this build are
+    # folded into the gate, and each one read is recorded as read at build.
+    params = _join_params()
+    used = Dict{String,Float64}(n => params[n] for n in _referenced_var_names(e)
+                                if haskey(params, n) && !haskey(const_arrays, n))
+    _exprtbl_evaluable(e, Set{String}(keys(used)), const_arrays) || return nothing
+    ce = _cellwise_compile_once_impl(e, 1, const_arrays, Dict{String,Any}(), used)
     ce === nothing && return nothing
+    foreach(_record_param_read, keys(used))
     return Any[ce(Int[p]) for p in positions]
 end
+
+# The build's scalar parameter values while its join gates resolve
+# (`_with_join_params`), empty outside one.
+const _JOIN_PARAMS_KEY = :earthsci_join_params
+_join_params()::AbstractDict{String,Float64} =
+    get(task_local_storage(), _JOIN_PARAMS_KEY, Dict{String,Float64}())
+_with_join_params(f, params::AbstractDict) =
+    task_local_storage(f, _JOIN_PARAMS_KEY, Dict{String,Float64}(params))
 
 # One cell of a document-literal `makearray` key column, as a raw value.
 function _join_literal_at(mk::OpExpr, p::Int, const_arrays::AbstractDict)

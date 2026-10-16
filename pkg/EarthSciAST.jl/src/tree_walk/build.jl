@@ -3531,12 +3531,19 @@ function _build_partition_and_materialize(model::Model, cls;
         haskey(join_key_arrays, n) || (join_key_arrays[n] = a)
     end
     join_obs_defs = observed_definitions(model)
-    equations = _resolve_join_gates(ode_equations, index_sets, vi_maps,
-                                    join_key_arrays, join_var_shapes, join_obs_defs)
+    # A key column computed from scalar parameters folds their values into the
+    # match set, so each one it reads is recorded as read at build
+    # (`:structural`: a `remake` that changes it is refused).
+    equations, init_equations = _with_param_reads(param_reads) do
+        _with_join_params(param_scope) do
+            (_resolve_join_gates(ode_equations, index_sets, vi_maps,
+                                 join_key_arrays, join_var_shapes, join_obs_defs),
+             _resolve_join_gates(model.initialization_equations,
+                                 index_sets, vi_maps, join_key_arrays,
+                                 join_var_shapes, join_obs_defs))
+        end
+    end
     _translate_equation_sites!(template_sites, ode_equations, equations)
-    init_equations = _resolve_join_gates(model.initialization_equations,
-                                         index_sets, vi_maps, join_key_arrays,
-                                         join_var_shapes, join_obs_defs)
 
     # ---- Resolve index-set references in ranges (RFC §5.2) ----
     # Rewrite any `ranges[*]` `{from: <name>}` reference against the document's
@@ -6411,7 +6418,7 @@ Parameter NAME → what KIND of parameter it is in the build that produced `x`
 | class | where its value is consumed | overridable at solve time? |
 |---|---|---|
 | `:numeric` | the runtime `p` vector | **yes** — swap `p` (`remake`), differentiable |
-| `:structural` | BUILD time (setup geometry, value-invention extents, binning coordinates, `ic()` folds) | no — rebuild the problem |
+| `:structural` | BUILD time (setup geometry, value-invention extents, binning coordinates, join key columns, `ic()` folds) | no — rebuild the problem |
 | `:const_folded` | frozen into the build's const arrays and inlined into the RHS | no — rebuild with new data |
 | `:forcing` | a live buffer a discrete provider rewrites in place | no — write the buffer |
 
