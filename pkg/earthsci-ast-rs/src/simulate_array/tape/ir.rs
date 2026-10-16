@@ -1533,7 +1533,7 @@ pub(crate) enum FaultWhat {
     ConstOob {
         name: String,
         /// Per source dim, in dim order.
-        dims: SmallVec<[OobDim; 4]>,
+        dims: Vec<OobDim>,
     },
 }
 
