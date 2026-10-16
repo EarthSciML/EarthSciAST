@@ -1701,8 +1701,7 @@ pub fn model_unit_env(
     model: &crate::Model,
 ) -> (HashMap<String, Unit>, Vec<UnitParseFailure>) {
     let (mut env, failures) = build_unit_env(&model.variables);
-    let scoped =
-        crate::structural::scoped_reference_units(esm_file, model.subsystems.as_ref());
+    let scoped = crate::structural::scoped_reference_units(esm_file, model.subsystems.as_ref());
     for (name, units) in scoped {
         if env.contains_key(&name) {
             continue;
@@ -4525,7 +4524,10 @@ mod tests {
             op("/", vec![int(1), int(0)]),
             op("/", vec![int(1), int(2), int(3)]),
             op("sqrt", vec![int(4)]),
-            op("*", vec![int(i64::from(i32::MAX)), int(i64::from(i32::MAX))]),
+            op(
+                "*",
+                vec![int(i64::from(i32::MAX)), int(i64::from(i32::MAX))],
+            ),
         ] {
             assert_eq!(constant_exponent(&expr), None, "{expr:?}");
         }

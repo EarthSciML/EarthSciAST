@@ -14,8 +14,8 @@ use earthsci_ast::extension::analysis::{
 };
 use earthsci_ast::{
     EquationDimensionVerdict, ExpressionGraphOptions, StructuralErrorCode, Unit, UnitError,
-    component_exists, component_graph, equation_dimension_verdict, model_unit_env,
-    expression_graph, expression_graph_with_options, parse_unit, stoichiometric_matrix, to_json,
+    component_exists, component_graph, equation_dimension_verdict, expression_graph,
+    expression_graph_with_options, model_unit_env, parse_unit, stoichiometric_matrix, to_json,
     to_json_compact, validate, validate_text,
 };
 use std::collections::{BTreeMap, HashMap};

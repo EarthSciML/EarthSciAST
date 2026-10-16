@@ -14,7 +14,7 @@
 use crate::EsmFile;
 use crate::op_registry::is_builtin_function_name;
 use crate::units::{
-    check_equation_dimensions, model_unit_env, check_expression_dimensions, parse_unit,
+    check_equation_dimensions, check_expression_dimensions, model_unit_env, parse_unit,
 };
 use crate::validate::{StructuralError, StructuralErrorCode, SystemInfo, UnitWarning};
 use std::collections::{HashMap, HashSet};
