@@ -2406,7 +2406,21 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
             // through its plan inside its box's group, chunk by chunk or (for
             // short rows) the whole box at once. Absorbed either way, so the
             // program does not depend on the box's extents.
-            if out_desc.shape == plan_ref.shape && foldable_plan(plan_ref) {
+            // A broadcast (an output axis the source lacks) reads that axis
+            // with source stride 0, the other axes in order.
+            let chunk_strides = if foldable_plan(plan_ref) {
+                Some(rm_strides(&plan_ref.src_shape))
+            } else if plan_ref.fixed_desc.is_empty() {
+                match broadcast_fold(plan_ref) {
+                    Some(ShiftedGeom::Segs { strides, .. }) => Some(strides),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            if out_desc.shape == plan_ref.shape
+                && let Some(strides) = chunk_strides
+            {
                 flush_hazards(ins, None, &mut open, fx);
                 let shape = out_desc.shape.clone();
                 let gi = find_or_open(&mut open, shape, prog.provenance[i], prec_at(prog, i), fx);
@@ -2418,7 +2432,7 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
                 }
                 let g = ChunkGather {
                     segs,
-                    strides: rm_strides(&plan_ref.src_shape),
+                    strides,
                     shape: plan_ref.shape.clone(),
                     whole: plan_ref
                         .shape

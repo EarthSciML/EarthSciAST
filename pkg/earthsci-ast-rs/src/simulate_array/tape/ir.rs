@@ -1577,9 +1577,8 @@ impl FaultCand {
             FaultWhat::Every(m) => Some(faults[*m as usize].clone()),
             FaultWhat::ConstOob { name, dims } => dims.iter().enumerate().find_map(|(d, od)| {
                 let raw = od.raw_at(cell);
-                od.faults(raw).then(|| {
-                    crate::simulate_array::eval::const_oob_message(name, raw, od.n, d)
-                })
+                od.faults(raw)
+                    .then(|| crate::simulate_array::eval::const_oob_message(name, raw, od.n, d))
             }),
         }
     }
@@ -1707,7 +1706,9 @@ impl FaultCand {
 /// ([`TapeProgram::col_major`]) — column-major.
 pub(crate) fn slab_flat(shape: &[usize], cell: &[usize], col_major: bool) -> usize {
     if col_major {
-        (0..shape.len()).rev().fold(0, |o, d| o * shape[d] + cell[d])
+        (0..shape.len())
+            .rev()
+            .fold(0, |o, d| o * shape[d] + cell[d])
     } else {
         (0..shape.len()).fold(0, |o, d| o * shape[d] + cell[d])
     }

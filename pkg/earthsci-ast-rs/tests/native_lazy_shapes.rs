@@ -85,10 +85,7 @@ fn agree(text: &str) -> Vec<(bool, String)> {
             "native and the interpreter disagree"
         );
     }
-    oracle
-        .into_iter()
-        .map(|r| (r.passed, r.message))
-        .collect()
+    oracle.into_iter().map(|r| (r.passed, r.message)).collect()
 }
 
 fn all_pass(rs: &[(bool, String)]) {
@@ -157,7 +154,11 @@ fn a_guard_that_keeps_every_out_of_range_read_untaken_raises_nothing() {
     let text = doc(
         json!({"y": unknown(&["nodes"])}),
         json!([{"lhs": "y", "rhs": faq(&["i"], &["nodes"], body)}]),
-        json!([at("y", "nodes", 1, 0.0), at("y", "nodes", 2, 15.0), at("y", "nodes", 5, 0.0)]),
+        json!([
+            at("y", "nodes", 1, 0.0),
+            at("y", "nodes", 2, 15.0),
+            at("y", "nodes", 5, 0.0)
+        ]),
     );
     all_pass(&agree(&text));
 }
@@ -167,7 +168,11 @@ fn a_guard_that_reaches_an_out_of_range_read_raises_it() {
     // y[i] over nodes(5) = ifelse(i > 4, c[i], 0): taken at i = 5.
     let body = op(
         "ifelse",
-        vec![op(">", vec![json!("i"), json!(4)]), ix(c4(), json!("i")), json!(0)],
+        vec![
+            op(">", vec![json!("i"), json!(4)]),
+            ix(c4(), json!("i")),
+            json!(0),
+        ],
     );
     let text = doc(
         json!({"y": unknown(&["nodes"])}),
@@ -207,8 +212,12 @@ fn two_guards(a: f64, b: f64) -> String {
         json!({"p": param_rows(), "a": scalar_param(a), "b": scalar_param(b),
                "y": unknown(&["rows"])}),
         json!([{"lhs": "y", "rhs": faq(&["i"], &["rows"], body)}]),
-        json!([at("y", "rows", 2, if a < 2.0 { 30.0 } else { 0.0 }
-                   + if b > 2.0 { 10.0 } else { 0.0 })]),
+        json!([at(
+            "y",
+            "rows",
+            2,
+            if a < 2.0 { 30.0 } else { 0.0 } + if b > 2.0 { 10.0 } else { 0.0 }
+        )]),
     )
 }
 
