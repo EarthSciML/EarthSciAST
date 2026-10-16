@@ -930,6 +930,10 @@ pub(super) fn shares(prog: &TapeProgram, ins: &Instr) -> bool {
     match ins {
         Instr::Fused { .. } | Instr::Assemble { .. } => true,
         Instr::Copy { out, .. } => !prog.slots[*out as usize].scalar,
+        Instr::Reduce { axes, out, .. } => {
+            !prog.slots[*out as usize].scalar
+                && axes.iter().enumerate().all(|(k, &a)| a as usize == k)
+        }
         Instr::DyWrite { write } => {
             let w = &prog.dy_writes[*write as usize];
             w.scatter.is_none() && w.scalar_flat.is_none()
@@ -1006,6 +1010,45 @@ pub(super) unsafe fn exec_share(
                     asm_covered[*table as usize],
                 )
             };
+        }
+        // The leading axes folded out of a contiguous source: worker `w`
+        // owns a run of output cells and folds each of them whole, row by
+        // row in the serial order.
+        Instr::Reduce {
+            op,
+            init,
+            src,
+            axes,
+            out,
+            ..
+        } => {
+            let sv = resolve_src(src, env, slab_ptr, slot_off);
+            let n_out = prog.slots[*out as usize].elems();
+            let dst = unsafe { slab_ptr.add(slot_off[*out as usize]) };
+            if sv.strides[..] != rm_strides(&sv.shape)[..] {
+                // Not the contiguous layout the split assumes: one worker
+                // runs it whole.
+                if w == 0 {
+                    unsafe { exec_straight(cx, ins, scratch, 1) };
+                }
+                return;
+            }
+            let (lo, hi) = super::par::share_at(n_out, w, ways, dst);
+            let rows: usize = sv.shape[..axes.len()].iter().product();
+            unsafe {
+                for k in lo..hi {
+                    *dst.add(k) = *init;
+                }
+            }
+            let src = sv.ptr;
+            macro_rules! fold_rows {
+                ($f:expr) => {
+                    for r in 0..rows {
+                        unsafe { reduce_rows(dst.add(lo), hi - lo, src.add(r * n_out + lo), 1, $f) }
+                    }
+                };
+            }
+            dispatch_bin_kernel!(op, fold_rows);
         }
         Instr::Copy { a, out } => {
             let desc = &prog.slots[*out as usize];

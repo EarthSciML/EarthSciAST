@@ -889,6 +889,31 @@ are `clamp(M, 5) = 40`, `periodic(M, 5) = 10`, `periodic(M, 0) = 40`. (Bead
 `ess-gj4`; enables the covariant-FV connection-term metric gathers of the
 discretization RFC to run unmodified through the evaluator.)
 
+**A guarded read faults only where it is taken (normative).** The `error`
+policy applies to reads that are PERFORMED. For each output cell, a read inside
+an `ifelse` branch the condition does not select, or inside a `faq` term the
+node's `filter` excludes, is not performed: it MUST NOT raise
+`E_TREEWALK_CONSTARRAY_OOB`, and it contributes nothing (the unselected branch
+has no value; the excluded term is the semiring's `0̄`). A read in a selected
+branch or an admitted term that is out of range MUST raise the error, with the
+same code as an unguarded read, so a guard that admits even one out-of-range
+cell fails the run. This holds under every compiler: a compiled or vectorized
+tier that evaluates both branches or every term for speed MUST mask the fault
+per cell, never surface it for a cell that did not take the read, and never
+drop it for a cell that did. The motivating shape is a staggered-grid average
+whose boundary cells are switched off by the guard,
+`ifelse(i <= 1, 0, ifelse(i > N, 0, 0.5 (c[i] + c[i-1])))`.
+
+Cross-binding conformance: the `guarded_*` fixtures of
+`tests/conformance/const_array_gather_bounds/` (an `ifelse` branch and a `faq`
+filter, on an inline and a named const, each not taken and taken) and
+`tests/conformance/native_model_shapes/` `guarded_out_of_range_*` (the same
+guard over every cell, static and on the right-hand-side path). **Python is
+non-conforming here as of 2026-10-15**: both its compilers evaluate the
+untaken branch and fault. It is exempt from the not-taken fixtures (each
+records the reason in the manifest's `skip_bindings`) until it is brought in
+line; the taken cases already conform.
+
 #### 5.5.6 Spatial overlap join-gate and gated-select pushdown (normative)
 
 > Projection-pushdown Phase 2a/3a. Reference implementations: Julia

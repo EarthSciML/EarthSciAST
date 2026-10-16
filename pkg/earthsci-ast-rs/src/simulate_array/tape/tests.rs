@@ -3794,6 +3794,9 @@ fn a_rank_0_faq_nested_in_a_box_is_taped_per_cell_and_once() {
         "filter": {"op": "!=", "args": ["k", "j"]},
         "expr": {"op": "*", "args": [u_at(json!("i"), json!("k")),
                                      {"op": "index", "args": ["w", "k"]}]}});
+    // Per row, broadcast along j: sum_k u[i, k] (reads `i` only).
+    let per_row = json!({"op": "faq", "args": [], "output_idx": [],
+        "ranges": {"k": [1, 2]}, "expr": u_at(json!("i"), json!("k"))});
     // Once: sum_{a, b} u[a, b] (reads nothing of the box).
     let once = json!({"op": "faq", "args": [], "output_idx": [],
         "ranges": {"a": [1, 3], "b": [1, 2]}, "expr": u_at(json!("a"), json!("b"))});
@@ -3801,7 +3804,8 @@ fn a_rank_0_faq_nested_in_a_box_is_taped_per_cell_and_once() {
         json!({"w": {"type": "parameter", "units": "1", "shape": ["y"], "default": [0.25, -3.0]}}),
         json!({"op": "+", "args": [
             {"op": "*", "args": [per_cell, u_at(json!("i"), json!("j"))]},
-            {"op": "*", "args": [once, 1e-3]}]}),
+            {"op": "*", "args": [once, 1e-3]},
+            {"op": "*", "args": [per_row, u_at(json!("i"), json!("j")), 0.5]}]}),
     );
     let prog = ab_check(doc, -2.0, 2.0);
     assert!(

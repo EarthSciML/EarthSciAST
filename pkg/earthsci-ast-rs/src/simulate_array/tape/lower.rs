@@ -4188,9 +4188,10 @@ impl<'m> TapeBuilder<'m> {
     /// sort at the box's first cell, where the oracle meets them first.
     ///
     /// A body that does read them is a reduction PER CELL: the body over the
-    /// box extended by the contracted axes (they lead, in `contract_names`
-    /// order) and one [`Instr::Reduce`] folding those axes away, which visits
-    /// each cell's terms in the oracle's order. An excluded tuple is skipped
+    /// box extended by the contracted axes (after the box's, in
+    /// `contract_names` order) and one [`Instr::Reduce`] folding those axes
+    /// away: its row-major walk visits each cell's terms in the oracle's
+    /// order. An excluded tuple is skipped
     /// as [`Self::lower_scalar_reduction`] skips it.
     fn lower_nested_scalar_reduction(
         &mut self,
@@ -4216,16 +4217,29 @@ impl<'m> TapeBuilder<'m> {
                  contraction"
             );
         }
+        // A body that reads only some of the box's axes reduces to the same
+        // value along the others: reduce over the axes it reads, once per
+        // position of those, and broadcast along the rest.
+        let read: SmallVec<[usize; 4]> = (0..bx.syms.len())
+            .filter(|&a| nested_aggregate_capture(spec, std::iter::once(&bx.syms[a])).is_some())
+            .collect();
+        if read.len() < bx.syms.len() {
+            return self.lower_nested_scalar_reduction_on(node, spec, bx, &read);
+        }
         let nc = spec.contract_names.len();
         if nc == 0 {
             bail_tape!("aggregate: a rank-0 output with no contracted index reads its box");
         }
         let combine_op = scalar_combine_op(spec.reduce);
         let identity = spec.reduce.identity();
-        let mut ext_syms: Vec<String> = spec.contract_names.clone();
-        ext_syms.extend(bx.syms.iter().cloned());
-        let mut ext_lo = DimI::new();
-        let mut ext_shape = DimU::new();
+        // The box's axes, then the contracted ones: a read of the body that
+        // follows the box (`u[i, j, l]`) is then the source's own layout, not
+        // a transposing gather.
+        let nb = bx.shape.len();
+        let mut ext_syms: Vec<String> = bx.syms.to_vec();
+        ext_syms.extend(spec.contract_names.iter().cloned());
+        let mut ext_lo: DimI = bx.lo.clone();
+        let mut ext_shape: DimU = bx.shape.clone();
         for d in &spec.contract_dims {
             let (l, n) = match d {
                 ContractDim::Static(l, h) => (*l, (h - l + 1).max(0) as usize),
@@ -4241,14 +4255,12 @@ impl<'m> TapeBuilder<'m> {
             ext_shape.push(n);
         }
         // An empty window enumerates no tuple: the fold is the identity.
-        if ext_shape.contains(&0) {
+        if ext_shape[nb..].contains(&0) {
             return Ok(self.emit_fill(&LV::Lit(identity), &bx.shape, &bx.lo, Cadence::Const));
         }
-        if nc + bx.shape.len() > MAX_RANK {
+        if nc + nb > MAX_RANK {
             bail_tape!("aggregate: a rank-0 output's promoted box rank out of range");
         }
-        ext_lo.extend(bx.lo.iter().copied());
-        ext_shape.extend(bx.shape.iter().copied());
         let elems = ext_shape
             .iter()
             .try_fold(1usize, |acc, &n| acc.checked_mul(n))
@@ -4257,9 +4269,9 @@ impl<'m> TapeBuilder<'m> {
             bail_tape!("aggregate: a rank-0 output's promoted box is too large");
         }
         // The oracle walks the box's cells, then each cell's tuples.
-        let visit: SmallVec<[u8; 4]> = (0..bx.shape.len())
-            .map(|k| (nc + bx.visit_axis(k)) as u8)
-            .chain((0..nc).map(|a| a as u8))
+        let visit: SmallVec<[u8; 4]> = (0..nb)
+            .map(|k| bx.visit_axis(k) as u8)
+            .chain((nb..nb + nc).map(|a| a as u8))
             .collect();
         let ebx = LBox {
             syms: &ext_syms,
@@ -4299,17 +4311,125 @@ impl<'m> TapeBuilder<'m> {
             Some(_) => bail_tape!("aggregate: a rank-0 output's term box does not match its box"),
         };
         let sec = self.placement(self.lv_cadence(&src));
+        // A term that is the state array read whole, in its own layout (the
+        // column sum `u[i, j, l]`), is folded from the state in place.
+        let src_ref = match self.identity_state_gather(&src) {
+            Some(ix) => SrcRef::State(ix),
+            None => self.src_of(&src),
+        };
         let out = self.new_slot(&bx.shape, &bx.lo, false, sec);
         let instr = Instr::Reduce {
             op: combine_op,
             init: identity,
-            src: self.src_of(&src),
-            axes: (0..nc as u8).collect(),
+            src: src_ref,
+            axes: (nb as u8..(nb + nc) as u8).collect(),
             src_shape: ext_shape,
             out,
         };
         self.emit(instr, sec);
         Ok(LV::Arr(out))
+    }
+
+    /// The state array `lv` copies element for element, when the instruction
+    /// that defines it (in the open branch or the current rule's chunks) is a
+    /// gather of a whole state over its own box: no fixed or broadcast axis,
+    /// no permutation, one full segment per axis.
+    fn identity_state_gather(&self, lv: &LV) -> Option<u32> {
+        let LV::Arr(slot) = lv else {
+            return None;
+        };
+        let defs = self.branch_bufs.iter().flatten().chain(
+            self.streams
+                .iter()
+                .filter_map(|st| st.last().filter(|c| c.rule == self.cur_rule))
+                .flat_map(|c| c.instrs.iter()),
+        );
+        for (instr, _) in defs {
+            let Instr::Gather {
+                src: SrcRef::State(ix),
+                plan,
+                out,
+            } = instr
+            else {
+                continue;
+            };
+            if out != slot {
+                continue;
+            }
+            let p = &self.plans[*plan as usize];
+            let whole = p.fixed_desc.is_empty()
+                && p.mapped.iter().all(|&m| m)
+                && p.perm.iter().enumerate().all(|(i, &d)| i == d)
+                && p.shape == p.src_shape
+                && p.origin == p.src_origin
+                && p.segs
+                    .iter()
+                    .zip(&p.shape)
+                    .all(|(s, &n)| s[..] == [(0usize, n, 0usize)]);
+            return whole.then_some(*ix);
+        }
+        None
+    }
+
+    /// [`Self::lower_nested_scalar_reduction`] over the sub-box of `bx`'s
+    /// axes `read` (ascending), the only ones the body reads, broadcast back
+    /// over `bx` by one [`Instr::Gather`]. Every cell's value is the fold the
+    /// oracle computes there; cells that differ only along an axis the body
+    /// does not read share it.
+    fn lower_nested_scalar_reduction_on(
+        &mut self,
+        node: &Arc<ExpressionNode>,
+        spec: &ArrayOpSpec,
+        bx: &LBox,
+        read: &[usize],
+    ) -> LResult<LV> {
+        let sub_syms: Vec<String> = read.iter().map(|&a| bx.syms[a].clone()).collect();
+        let sub = LBox {
+            syms: &sub_syms,
+            lo: read.iter().map(|&a| bx.lo[a]).collect(),
+            shape: read.iter().map(|&a| bx.shape[a]).collect(),
+            cnames: &[],
+            cvals: SmallVec::new(),
+            tuple: 0,
+            visit: if bx.visit.is_empty() {
+                SmallVec::new()
+            } else {
+                (0..bx.shape.len())
+                    .filter_map(|k| read.iter().position(|&a| a == bx.visit_axis(k)))
+                    .map(|p| p as u8)
+                    .collect()
+            },
+        };
+        self.push_scope();
+        let v = self.lower_nested_scalar_reduction(node, spec, &sub);
+        self.pop_scope();
+        let v = v?;
+        let (s, o) = self
+            .lv_box(&v)
+            .expect("a reduction that reads its box is an array over it");
+        if s != sub.shape || o != sub.lo {
+            bail_tape!("aggregate: a rank-0 output's box does not match its read axes");
+        }
+        let mapped: SmallVec<[bool; 4]> = (0..bx.shape.len()).map(|a| read.contains(&a)).collect();
+        let segs: SmallVec<[SmallVec<[(usize, usize, usize); 2]>; 4]> = bx
+            .shape
+            .iter()
+            .map(|&n| {
+                let mut one = SmallVec::new();
+                one.push((0usize, n, 0usize));
+                one
+            })
+            .collect();
+        let mapped_src: SmallVec<[usize; 4]> = (0..read.len()).collect();
+        Ok(self.emit_gather(
+            &v,
+            SmallVec::new(),
+            &mapped_src,
+            mapped,
+            segs,
+            &bx.shape,
+            &bx.lo,
+        ))
     }
 
     // -- faq (the try_eval_faq_vectorized mirror) ---------------------

@@ -225,6 +225,23 @@ fn covered_nested_aggregate_shadowing_enclosing_index() {
     );
 }
 
+/// **Gate C4 — an inline array `const` as a gather source.**
+///
+/// `eval_vec_index` takes an inline array literal as its source at the
+/// all-1s origin the oracle reads it at — element for element the values the
+/// oracle's `eval_const` produces. (A bare array literal outside an `index`
+/// is still declined: the oracle scalarizes it.)
+#[test]
+fn inline_array_const_gather_vectorizes() {
+    let rhs = r#"{"op": "*", "args": [
+        {"op": "index", "args": ["u", "i"]},
+        {"op": "index", "args": [
+            {"op": "const", "args": [], "value": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]},
+            "i"]}
+    ]}"#;
+    check("array-valued const", &rule_model(6, rhs), true);
+}
+
 // ---------------------------------------------------------------------------
 // FRONTIER — constructs still on the per-cell oracle. Each is an inventory
 // entry; a failure here means the gate was implemented.
@@ -400,31 +417,6 @@ fn frontier_indirect_gather_vectorizes() {
         }
         "#;
     check("indirect gather", json, true);
-}
-
-/// **Gate C4 — array-valued `const`.** Implemented as an `index` base.
-///
-/// `eval_vec_op`'s `const` arm returns a `VecValue::Scalar` for a numeric
-/// literal and bails outright for an array literal, so an inlined constant
-/// TABLE — a metric term, a panel-connectivity map — takes the whole enclosing
-/// expression to the oracle.
-///
-/// This is the cheapest entry in the inventory: the oracle already materializes
-/// the same `ArrayD` through `eval_const`, so the whole-array form is that array
-/// copied into a pooled buffer with origin 1. No new analysis, no new
-/// numerics — element-for-element the same values the oracle reads.
-///
-/// Measured: in ESD `duo_swe_freestream`, the observed `node` — whose only
-/// recorded bail is this one — costs **134 ms of a single RHS evaluation**.
-#[test]
-fn frontier_array_valued_const_vectorizes() {
-    let rhs = r#"{"op": "*", "args": [
-        {"op": "index", "args": ["u", "i"]},
-        {"op": "index", "args": [
-            {"op": "const", "args": [], "value": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]},
-            "i"]}
-    ]}"#;
-    check("array-valued const", &rule_model(6, rhs), true);
 }
 
 // **Gate C3 — non-static (ragged / derived) contraction bound** — deliberately
