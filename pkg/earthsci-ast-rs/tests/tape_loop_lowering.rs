@@ -309,13 +309,11 @@ fn prefix_scans_along_either_axis_match_the_oracle() {
     }
 }
 
-/// A scan body the whole-box form cannot lower (a strided read of a const
-/// array, `w[2j]`: no per-axis shift of the box, and a data subscript into a
-/// const array is never lowered, because its out-of-range rule needs the
-/// subscript's values) keeps the per-step form, and still agrees with the
-/// oracle — the whole-box attempt leaves nothing behind.
+/// A scan body with a strided read of a const array, `w[2j]` (no per-axis
+/// shift of the box), takes the whole-box form through a per-element
+/// gather, and agrees with the oracle.
 #[test]
-fn a_scan_body_without_a_whole_box_form_keeps_the_per_step_form() {
+fn a_scan_body_with_a_strided_const_read_takes_the_whole_box_form() {
     let mut burden = faq(
         json!(["i"]),
         json!({"i": {"from": "x"}, "j": {"from": "x"}}),
@@ -343,8 +341,8 @@ fn a_scan_body_without_a_whole_box_form_keeps_the_per_step_form() {
         ]),
     );
     let c = check(&d);
-    assert_eq!(c.count("Scan"), 0);
-    assert!(c.count("Region") >= 11, "one region write per step");
+    assert_eq!(c.count("Region"), 0, "no per-step region writes");
+    assert_eq!(c.count("DataGather"), 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -426,10 +424,10 @@ fn a_two_index_contraction_folds_in_the_oracle_order() {
 
         // `u[i + a - b]` mixes an output and two contracted symbols: no shift
         // of the box, so the subscript is data and one IndexGather keeps the
-        // promoted box looped. Over a const array (`w[i + a - b + 3]`) a data
-        // subscript is never lowered, and the window stays unrolled.
+        // promoted box looped. Over a const array (`w[i + a - b + 3]`) the
+        // subscript is read per element (a DataGather), which loops it too.
         let w: Vec<f64> = (1..=35).map(|k| (0.37 * k as f64).sin()).collect();
-        for (base, shift, looped) in [("u", 0, true), ("w", 3, false)] {
+        for (base, shift) in [("u", 0), ("w", 3)] {
             let mut rhs = faq(
                 json!(["i"]),
                 json!({"i": [1, 30], "a": [0, 2], "b": [0, 3]}),
@@ -462,14 +460,10 @@ fn a_two_index_contraction_folds_in_the_oracle_order() {
                        {"lhs": "w", "rhs": {"op": "const", "args": [], "value": w}}]),
             );
             let c = check(&d);
-            if looped {
-                assert_eq!(
-                    c.reductions, 1,
-                    "{reduce}: a data subscript keeps it looped"
-                );
-            } else {
-                assert_eq!(c.reductions, 0, "{reduce}: the window stays unrolled");
-            }
+            assert_eq!(
+                c.reductions, 1,
+                "{reduce} {base}: a data subscript keeps it looped"
+            );
         }
     }
 }

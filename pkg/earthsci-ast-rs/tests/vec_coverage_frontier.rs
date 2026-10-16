@@ -252,7 +252,8 @@ fn frontier_nested_aggregate_capturing_enclosing_index_falls_back() {
     );
 }
 
-/// **Gate C1 — clamped ("replicate-edge") index.**
+/// **Gate C1 — clamped ("replicate-edge") index.** Implemented through the
+/// per-element gather (each clamped subscript evaluated over the box).
 ///
 /// `index(u, max(1, min(N, i-1)))` is the zero-gradient / clamp-to-edge
 /// boundary idiom. `classify_axis_index` accepts an affine map or a periodic
@@ -268,14 +269,15 @@ fn frontier_nested_aggregate_capturing_enclosing_index_falls_back() {
 /// of these, and it is the only construct standing between the ESD
 /// `duo_swe_freestream` case and a vectorized RHS.
 #[test]
-fn frontier_clamped_index_falls_back() {
+fn frontier_clamped_index_vectorizes() {
     let rhs = r#"{"op": "index", "args": ["u",
         {"op": "max", "args": [1, {"op": "min", "args": [6,
             {"op": "-", "args": ["i", 1]}]}]}]}"#;
-    check("clamped index", &rule_model(6, rhs), false);
+    check("clamped index", &rule_model(6, rhs), true);
 }
 
-/// **Gate C2 — indirect (data-dependent) gather.**
+/// **Gate C2 — indirect (data-dependent) gather.** Implemented: the overlay
+/// evaluates the subscripts over the box and reads per element.
 ///
 /// `index(phi, index(cellsOnEdge, e, 2))`: the inner `index` is itself an
 /// affine map of an output symbol, so it evaluates to a whole-array vector of
@@ -287,7 +289,7 @@ fn frontier_clamped_index_falls_back() {
 /// (`fv_gradient_edge`, `fv_divergence_cell`, `fv_laplacian_cell`) is built on
 /// it, as is the `mpas_l0_to_octants_sphere` regrid.
 #[test]
-fn frontier_indirect_gather_falls_back() {
+fn frontier_indirect_gather_vectorizes() {
     // `nbr[i] = 7 - i` is the reversal permutation over 1..6: a legitimate
     // index vector, produced (like MPAS `cellsOnEdge`) as an ordinary observed
     // rather than a literal, so the fixture isolates the GATHER and does not
@@ -397,10 +399,10 @@ fn frontier_indirect_gather_falls_back() {
           }
         }
         "#;
-    check("indirect gather", json, false);
+    check("indirect gather", json, true);
 }
 
-/// **Gate C4 — array-valued `const`.**
+/// **Gate C4 — array-valued `const`.** Implemented as an `index` base.
 ///
 /// `eval_vec_op`'s `const` arm returns a `VecValue::Scalar` for a numeric
 /// literal and bails outright for an array literal, so an inlined constant
@@ -415,14 +417,14 @@ fn frontier_indirect_gather_falls_back() {
 /// Measured: in ESD `duo_swe_freestream`, the observed `node` — whose only
 /// recorded bail is this one — costs **134 ms of a single RHS evaluation**.
 #[test]
-fn frontier_array_valued_const_falls_back() {
+fn frontier_array_valued_const_vectorizes() {
     let rhs = r#"{"op": "*", "args": [
         {"op": "index", "args": ["u", "i"]},
         {"op": "index", "args": [
             {"op": "const", "args": [], "value": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]},
             "i"]}
     ]}"#;
-    check("array-valued const", &rule_model(6, rhs), false);
+    check("array-valued const", &rule_model(6, rhs), true);
 }
 
 // **Gate C3 — non-static (ragged / derived) contraction bound** — deliberately
