@@ -1,0 +1,54 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "UnitsReactionRateScopedReferenceMismatch",
+    "description": "Invalid: the 1st-order reaction A -> B in reaction system Chem takes its rate from the scoped reference Rates.k, which the top-level model Rates declares in L/(mol*s); a 1st-order rate needs 1/s. A scoped reference has the units its target declares (esm-spec §4.8.4) in a reaction rate exactly as in a model equation, so the mass-action check (§7.4) is decided and fails.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "created": "2026-10-16T00:00:00Z"
+  },
+  "models": {
+    "Rates": {
+      "variables": {
+        "k": {
+          "type": "parameter",
+          "units": "L/(mol*s)",
+          "default": 0.1,
+          "description": "Invalid as the rate of a 1st-order reaction: a 2nd-order rate constant."
+        }
+      },
+      "equations": []
+    }
+  },
+  "reaction_systems": {
+    "Chem": {
+      "species": {
+        "A": {
+          "units": "mol/L",
+          "default": 1.0,
+          "description": "Reactant A (concentration)."
+        },
+        "B": {
+          "units": "mol/L",
+          "default": 0.0,
+          "description": "Product B (concentration)."
+        }
+      },
+      "parameters": {},
+      "reactions": [
+        {
+          "id": "R1",
+          "name": "A_to_B",
+          "substrates": [
+            {"species": "A", "stoichiometry": 1}
+          ],
+          "products": [
+            {"species": "B", "stoichiometry": 1}
+          ],
+          "rate": "Rates.k"
+        }
+      ]
+    }
+  }
+}

@@ -345,14 +345,15 @@ func ValidateStructuralWithCodes(file *ESMFile) *StructuralValidationResult {
 	// Unit/dimensional checks (code-bearing surface only). Models and systems are
 	// visited in sorted order so the emitted findings — and the structural errors
 	// promoted from them below — are deterministic across runs.
+	scoped := newScopedUnitIndex(file)
 	for _, modelName := range sortedKeys(file.Models) {
 		model := file.Models[modelName]
-		validateModelUnits(modelName, &model, fmt.Sprintf("/models/%s", modelName), file, result)
+		validateModelUnits(modelName, &model, fmt.Sprintf("/models/%s", modelName), scoped, result)
 	}
 	for _, systemName := range sortedKeys(file.ReactionSystems) {
 		system := file.ReactionSystems[systemName]
-		validateReactionSystemUnits(systemName, &system, fmt.Sprintf("/reaction_systems/%s", systemName), file, result)
-		validateReactionRateUnits(systemName, &system, fmt.Sprintf("/reaction_systems/%s", systemName), file, result)
+		validateReactionSystemUnits(systemName, &system, fmt.Sprintf("/reaction_systems/%s", systemName), scoped, result)
+		validateReactionRateUnits(systemName, &system, fmt.Sprintf("/reaction_systems/%s", systemName), scoped, result)
 	}
 	result.StructuralErrors = append(result.StructuralErrors, promoteUnitFindings(result.UnitWarnings)...)
 

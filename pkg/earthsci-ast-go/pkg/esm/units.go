@@ -32,8 +32,16 @@ type Rat struct {
 }
 
 // newRat builds a Rat in lowest terms with a positive denominator. A zero
-// denominator is treated as 1 (see the Rat doc comment).
+// denominator is treated as 1 (see the Rat doc comment). A value outside the
+// int32 range is truncated; newRatChecked reports it instead.
 func newRat(num, den int64) Rat {
+	r, _ := newRatChecked(num, den)
+	return r
+}
+
+// newRatChecked is newRat that also reports whether the reduced numerator and
+// denominator fit the Rat representation (int32).
+func newRatChecked(num, den int64) (Rat, bool) {
 	if den == 0 {
 		den = 1
 	}
@@ -43,7 +51,8 @@ func newRat(num, den int64) Rat {
 	if g := gcd64(num, den); g > 1 {
 		num, den = num/g, den/g
 	}
-	return Rat{Num: int32(num), Den: int32(den)}
+	ok := num >= math.MinInt32 && num <= math.MaxInt32 && den <= math.MaxInt32
+	return Rat{Num: int32(num), Den: int32(den)}, ok
 }
 
 func gcd64(a, b int64) int64 {
@@ -76,20 +85,38 @@ func ratInt(n int) Rat { return Rat{Num: int32(n), Den: 1} }
 
 // Add returns r + o.
 func (r Rat) Add(o Rat) Rat {
-	a, b := r.fix(), o.fix()
-	return newRat(int64(a.Num)*int64(b.Den)+int64(b.Num)*int64(a.Den), int64(a.Den)*int64(b.Den))
+	s, _ := r.AddChecked(o)
+	return s
 }
 
 // Sub returns r − o.
 func (r Rat) Sub(o Rat) Rat {
-	a, b := r.fix(), o.fix()
-	return newRat(int64(a.Num)*int64(b.Den)-int64(b.Num)*int64(a.Den), int64(a.Den)*int64(b.Den))
+	d, _ := r.SubChecked(o)
+	return d
 }
 
 // Mul returns r × o.
 func (r Rat) Mul(o Rat) Rat {
+	p, _ := r.MulChecked(o)
+	return p
+}
+
+// AddChecked returns r + o and whether it fits the Rat representation.
+func (r Rat) AddChecked(o Rat) (Rat, bool) {
 	a, b := r.fix(), o.fix()
-	return newRat(int64(a.Num)*int64(b.Num), int64(a.Den)*int64(b.Den))
+	return newRatChecked(int64(a.Num)*int64(b.Den)+int64(b.Num)*int64(a.Den), int64(a.Den)*int64(b.Den))
+}
+
+// SubChecked returns r − o and whether it fits the Rat representation.
+func (r Rat) SubChecked(o Rat) (Rat, bool) {
+	a, b := r.fix(), o.fix()
+	return newRatChecked(int64(a.Num)*int64(b.Den)-int64(b.Num)*int64(a.Den), int64(a.Den)*int64(b.Den))
+}
+
+// MulChecked returns r × o and whether it fits the Rat representation.
+func (r Rat) MulChecked(o Rat) (Rat, bool) {
+	a, b := r.fix(), o.fix()
+	return newRatChecked(int64(a.Num)*int64(b.Num), int64(a.Den)*int64(b.Den))
 }
 
 // Equal reports whether two exponents denote the same rational number,
@@ -1488,28 +1515,44 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 		// enters the result, and its `expr` body. Both are ALWAYS walked, so a
 		// mismatch in either is reported whatever the ⊕ is. The node's own unit
 		// is then decided by its ⊕ (faqUnit).
+		// Any operands are walked too.
 		if node.Filter != nil {
 			if _, err := propagateDimension(node.Filter, env); err != nil {
 				return nil, err
 			}
 		}
+		var body *Unit
+		if node.Expr != nil {
+			var err error
+			if body, err = propagateDimension(node.Expr, env); err != nil {
+				return nil, err
+			}
+		}
+		if err := walkOperands(node.Args, env); err != nil {
+			return nil, err
+		}
 		if node.Expr == nil {
 			return nil, nil
-		}
-		body, err := propagateDimension(node.Expr, env)
-		if err != nil {
-			return nil, err
 		}
 		return faqUnit(node, body), nil
 
 	case "index", "reshape", "transpose":
-		// The unit of the source array (args[0]). An index's subscripts are
-		// positions, not part of the unit. With no source the unit is
-		// undeterminable, never dimensionless.
+		// The unit of the source array (args[0]). An index's subscripts and a
+		// reshape's shape operands are positions, not part of the unit, but are
+		// still walked, so a mismatch inside one (`index(lat, a[m] + b[kg])`)
+		// is reported. With no source the unit is undeterminable, never
+		// dimensionless.
 		if len(node.Args) == 0 {
 			return nil, nil
 		}
-		return propagateDimension(node.Args[0], env)
+		src, err := propagateDimension(node.Args[0], env)
+		if err != nil {
+			return nil, err
+		}
+		if err := walkOperands(node.Args[1:], env); err != nil {
+			return nil, err
+		}
+		return src, nil
 
 	case "concat":
 		// concat's operands behave like those of an n-ary `+`: every
@@ -1521,7 +1564,11 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 	case "makearray":
 		// The region values behave like the operands of `+`. A bare-literal
 		// region is skipped and takes the other regions' unit; no determinable
-		// value (or no values at all) is undeterminable.
+		// value (or no values at all) is undeterminable. Any operands are
+		// walked first.
+		if err := walkOperands(node.Args, env); err != nil {
+			return nil, err
+		}
 		var first *Unit
 		for _, v := range node.Values {
 			u, err := propagateDimension(v, env)
@@ -1545,9 +1592,10 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 	case "broadcast":
 		// broadcast(fn=F, args) is {op: F, args} applied element-wise, so it has
 		// that node's unit under the ordinary rules. A missing fn is a structural
-		// error elsewhere; its unit is undeterminable.
+		// error elsewhere; its unit is undeterminable, but its operands are
+		// still walked.
 		if node.Fn == nil {
-			return nil, nil
+			return nil, walkOperands(node.Args, env)
 		}
 		return propagateExprNode(ExprNode{Op: *node.Fn, Args: node.Args}, env)
 
@@ -1810,6 +1858,17 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 	return nil, nil
 }
 
+// walkOperands checks every operand in args for internal consistency,
+// discarding their units; it returns the first finding.
+func walkOperands(args []any, env map[string]Unit) error {
+	for _, arg := range args {
+		if _, err := propagateDimension(arg, env); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // agreeingUnit is the `+` rule over operands args (esm-spec §4.8.3): every
 // operand whose unit is determinable must agree in dimension AND scale (a
 // disagreement is a provable mismatch), an undeterminable operand is skipped,
@@ -2051,12 +2110,12 @@ func derivativeTimeMismatch(state, rhs *Unit) error {
 // its equations, and its observed-variable expressions, appending every finding
 // to the result. Findings are CODED (see the UnitFinding* constants); the caller
 // promotes the promotable ones to structural errors.
-func validateModelUnits(modelName string, model *Model, basePath string, file *ESMFile, result *StructuralValidationResult) {
+func validateModelUnits(modelName string, model *Model, basePath string, scoped *scopedUnitIndex, result *StructuralValidationResult) {
 	env, bad := buildModelUnitEnv(model)
 	// A scoped reference — into a subsystem or a top-level component, mounted
 	// by {ref} or written inline — has the units its target declares (esm-spec
 	// §4.8.4, EarthSciAST#414). Every check below reads this one env.
-	addScopedReferenceUnits(env, file, model.Subsystems)
+	scoped.extend(env, model.Subsystems)
 	for _, name := range sortedKeys(bad) {
 		result.UnitWarnings = append(result.UnitWarnings, UnitWarning{
 			// The defect is carried by the VARIABLE declaration, so the pointer
@@ -2510,9 +2569,9 @@ func checkDefaultUnits(modelName string, model *Model, result *StructuralValidat
 // Matches the Julia/Python/TS/Rust checks. Skipped for dimensionless species
 // (mol/mol, ppm, …) because atmospheric-chemistry rate expressions commonly
 // bake a number-density factor into the rate constant.
-func validateReactionRateUnits(_ string, system *ReactionSystem, basePath string, file *ESMFile, result *StructuralValidationResult) {
+func validateReactionRateUnits(_ string, system *ReactionSystem, basePath string, scoped *scopedUnitIndex, result *StructuralValidationResult) {
 	env, _ := buildSystemUnitEnv(system)
-	addScopedReferenceUnits(env, file, system.Subsystems)
+	scoped.extend(env, system.Subsystems)
 
 	timeUnit := Unit{Dim: Dimension{dimTime: ratInt(1)}, Scale: 1.0}
 
@@ -2707,9 +2766,9 @@ func rateIsExplicitLaw(rx Reaction) bool {
 // validateReactionSystemUnits runs dimensional analysis over a reaction
 // system. Rate expressions whose dimensions cannot be determined are skipped;
 // rate expressions that surface a concrete inconsistency produce a warning.
-func validateReactionSystemUnits(_ string, system *ReactionSystem, basePath string, file *ESMFile, result *StructuralValidationResult) {
+func validateReactionSystemUnits(_ string, system *ReactionSystem, basePath string, scoped *scopedUnitIndex, result *StructuralValidationResult) {
 	env, bad := buildSystemUnitEnv(system)
-	addScopedReferenceUnits(env, file, system.Subsystems)
+	scoped.extend(env, system.Subsystems)
 	for _, name := range sortedKeys(bad) {
 		result.UnitWarnings = append(result.UnitWarnings, UnitWarning{
 			Path:    fmt.Sprintf("%s/%s/units", basePath, name),
@@ -2741,7 +2800,8 @@ func validateReactionSystemUnits(_ string, system *ReactionSystem, basePath stri
 
 // rawMemberUnits is the declared unit string of every member of a raw
 // (map-shaped) component: a model's `variables`, a reaction system's `species`
-// and `parameters`. A member with no `units` (or a non-string one) is absent.
+// and `parameters`. A member with no `units` (or a non-string one) maps to ""
+// — present, but of unknown unit.
 func rawMemberUnits(comp map[string]any) map[string]string {
 	out := map[string]string{}
 	for _, section := range []string{"variables", "species", "parameters"} {
@@ -2754,9 +2814,8 @@ func rawMemberUnits(comp map[string]any) map[string]string {
 			if !ok {
 				continue
 			}
-			if s, ok := obj["units"].(string); ok {
-				out[name] = s
-			}
+			s, _ := obj["units"].(string)
+			out[name] = s
 		}
 	}
 	return out
@@ -2781,7 +2840,8 @@ func subsystemAsMap(raw any) (map[string]any, bool) {
 
 // collectScopedSubsystemUnits registers `<prefix>.<sub>.<member>` for every
 // member of every resolved subsystem in subsystems, recursively (a scoped
-// reference is a dot path of arbitrary depth, esm-spec §4.9.2).
+// reference is a dot path of arbitrary depth, esm-spec §4.9.2). A member with
+// no units is registered as "".
 func collectScopedSubsystemUnits(prefix string, subsystems map[string]any, out map[string]string) {
 	for _, subName := range sortedKeys(subsystems) {
 		sub, ok := subsystemAsMap(subsystems[subName])
@@ -2801,86 +2861,104 @@ func collectScopedSubsystemUnits(prefix string, subsystems map[string]any, out m
 	}
 }
 
-// scopedReferenceUnits maps every scoped name an expression in a component can
-// make to its target's declared unit string (esm-spec §4.8.4, §4.9.2). A
-// mounted component is, after resolution, identical to an inline one (§4.7),
-// so a variable reached across a `subsystems.<k>` or top-level `models.<k>`
-// {ref} mount carries the units its declaration states, exactly as a local one
-// does. Two kinds of path are covered, with the precedence the
-// reference-integrity check uses: `<System>.<member>` rooted at a top-level
-// model or reaction system (and down through its subsystems), and
-// `<sub>.<member>` relative to the component's own subsystems, which wins on a
-// collision. file may be nil.
-func scopedReferenceUnits(file *ESMFile, ownSubsystems map[string]any) map[string]string {
-	out := map[string]string{}
+// scopedUnitIndex holds the units of every scoped name an expression in a
+// component can make (esm-spec §4.8.4, §4.9.2). A mounted component is, after
+// resolution, identical to an inline one (§4.7), so a variable reached across a
+// `subsystems.<k>` or top-level `models.<k>` {ref} mount carries the units its
+// declaration states, exactly as a local one does. Two kinds of path are
+// covered, with the precedence the reference-integrity check uses:
+// `<System>.<member>` rooted at a top-level model or reaction system (and down
+// through its subsystems), which is the same for every component and so is
+// built once per document; and `<sub>.<member>` relative to the component's
+// own subsystems, added per component by extend, which wins on a collision.
+type scopedUnitIndex struct {
+	// topLevel maps each top-level-rooted scoped name to its parsed unit; a
+	// target with no units, or with units that do not parse, is absent.
+	topLevel map[string]Unit
+}
+
+// newScopedUnitIndex builds the top-level part of the index for file, which
+// may be nil.
+func newScopedUnitIndex(file *ESMFile) *scopedUnitIndex {
+	raw := map[string]string{}
 	if file != nil {
 		for _, name := range sortedKeys(file.Models) {
 			m := file.Models[name]
 			for vname, v := range m.Variables {
 				if v.Units != nil {
-					out[name+"."+vname] = *v.Units
+					raw[name+"."+vname] = *v.Units
 				}
 			}
-			collectScopedSubsystemUnits(name, m.Subsystems, out)
+			collectScopedSubsystemUnits(name, m.Subsystems, raw)
 		}
 		for _, name := range sortedKeys(file.ReactionSystems) {
 			rs := file.ReactionSystems[name]
 			for sname, sp := range rs.Species {
 				if sp.Units != nil {
-					out[name+"."+sname] = *sp.Units
+					raw[name+"."+sname] = *sp.Units
 				}
 			}
 			for pname, p := range rs.Parameters {
 				if p.Units != nil {
-					out[name+"."+pname] = *p.Units
+					raw[name+"."+pname] = *p.Units
 				}
 			}
-			collectScopedSubsystemUnits(name, rs.Subsystems, out)
+			collectScopedSubsystemUnits(name, rs.Subsystems, raw)
 		}
 	}
-	collectScopedSubsystemUnits("", ownSubsystems, out)
-	return out
-}
-
-// addScopedReferenceUnits extends a component's unit environment with its
-// scoped references (see scopedReferenceUnits). The component's own bare names
-// are never overwritten; a scoped target whose unit string is empty or does
-// not parse is skipped (an unparseable one is reported at its own
-// declaration).
-func addScopedReferenceUnits(env map[string]Unit, file *ESMFile, ownSubsystems map[string]any) {
-	for name, s := range scopedReferenceUnits(file, ownSubsystems) {
-		if _, own := env[name]; own || s == "" {
+	top := make(map[string]Unit, len(raw))
+	for name, s := range raw {
+		if s == "" {
 			continue
 		}
-		u, err := ParseUnit(s)
-		if err != nil {
+		if u, err := ParseUnit(s); err == nil {
+			top[name] = u
+		}
+	}
+	return &scopedUnitIndex{topLevel: top}
+}
+
+// extend adds a component's scoped references to its unit environment env.
+// The component's own bare names are never overwritten. A path relative to the
+// component's own subsystems occupies its name even when its target has no
+// units (or units that do not parse — reported at its own declaration): it
+// then shadows a top-level target of the same dotted name and stays unknown,
+// so checks that read it are skipped. ix may be nil (no top-level part).
+func (ix *scopedUnitIndex) extend(env map[string]Unit, ownSubsystems map[string]any) {
+	own := map[string]string{}
+	collectScopedSubsystemUnits("", ownSubsystems, own)
+	for name, s := range own {
+		if _, bound := env[name]; bound || s == "" {
+			continue
+		}
+		if u, err := ParseUnit(s); err == nil {
+			env[name] = u
+		}
+	}
+	if ix == nil {
+		return
+	}
+	for name, u := range ix.topLevel {
+		if _, shadowed := own[name]; shadowed {
+			continue
+		}
+		if _, bound := env[name]; bound {
 			continue
 		}
 		env[name] = u
 	}
 }
 
+// addScopedReferenceUnits extends env with the scoped references of a
+// component of file (see scopedUnitIndex). Validating a whole document builds
+// the index once instead.
+func addScopedReferenceUnits(env map[string]Unit, file *ESMFile, ownSubsystems map[string]any) {
+	newScopedUnitIndex(file).extend(env, ownSubsystems)
+}
+
 // ---------------------------------------------------------------------------
 // Constant exponents (esm-spec §4.8.3 `^`)
 // ---------------------------------------------------------------------------
-
-// foldRat reduces num/den and reports whether it fits the Rat representation
-// (int32 numerator and denominator) with a nonzero denominator.
-func foldRat(num, den int64) (Rat, bool) {
-	if den == 0 {
-		return Rat{}, false
-	}
-	if den < 0 {
-		num, den = -num, -den
-	}
-	if g := gcd64(num, den); g > 1 {
-		num, den = num/g, den/g
-	}
-	if num > math.MaxInt32 || num < math.MinInt32 || den > math.MaxInt32 {
-		return Rat{}, false
-	}
-	return Rat{Num: int32(num), Den: int32(den)}, true
-}
 
 // literalExponentRat converts a numeric literal exponent to an exact rational
 // exactly as the `^` rule converts a literal exponent (ratFromFloat).
@@ -2954,7 +3032,7 @@ func constantExponentValue(expr Expression) (Rat, bool) {
 		acc := Rat{Num: 0, Den: 1}
 		for _, v := range vals {
 			var ok bool
-			if acc, ok = foldRat(int64(acc.Num)*int64(v.Den)+int64(v.Num)*int64(acc.Den), int64(acc.Den)*int64(v.Den)); !ok {
+			if acc, ok = acc.AddChecked(v); !ok {
 				return Rat{}, false
 			}
 		}
@@ -2963,19 +3041,19 @@ func constantExponentValue(expr Expression) (Rat, bool) {
 		acc := Rat{Num: 1, Den: 1}
 		for _, v := range vals {
 			var ok bool
-			if acc, ok = foldRat(int64(acc.Num)*int64(v.Num), int64(acc.Den)*int64(v.Den)); !ok {
+			if acc, ok = acc.MulChecked(v); !ok {
 				return Rat{}, false
 			}
 		}
 		return acc, true
 	case "-":
 		if len(vals) == 1 {
-			return foldRat(-int64(vals[0].Num), int64(vals[0].Den))
+			return Rat{Num: 0, Den: 1}.SubChecked(vals[0])
 		}
 		acc := vals[0]
 		for _, v := range vals[1:] {
 			var ok bool
-			if acc, ok = foldRat(int64(acc.Num)*int64(v.Den)-int64(v.Num)*int64(acc.Den), int64(acc.Den)*int64(v.Den)); !ok {
+			if acc, ok = acc.SubChecked(v); !ok {
 				return Rat{}, false
 			}
 		}
@@ -2984,7 +3062,8 @@ func constantExponentValue(expr Expression) (Rat, bool) {
 		if len(vals) != 2 || vals[1].Num == 0 {
 			return Rat{}, false
 		}
-		return foldRat(int64(vals[0].Num)*int64(vals[1].Den), int64(vals[0].Den)*int64(vals[1].Num))
+		// The reciprocal's sign is normalised by newRatChecked.
+		return vals[0].MulChecked(Rat{Num: vals[1].Den, Den: vals[1].Num})
 	}
 	return Rat{}, false
 }

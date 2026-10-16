@@ -3841,5 +3841,47 @@
     ],
     "is_valid": false,
     "notes": "esm-spec \u00a74.8.3: broadcast has the unit of its fn applied to its operands, so + over m and kg is a mismatch."
+  },
+  "units_reaction_rate_scoped_reference_mismatch.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/reaction_systems/Chem/reactions/0",
+        "code": "unit_inconsistency",
+        "message": "Reaction rate expression has incompatible units for reaction stoichiometry",
+        "details": {
+          "reaction_id": "R1",
+          "rate_units": "L/(mol*s)",
+          "expected_rate_units": "1/s",
+          "reaction_order": 1
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.4, \u00a77.4 (PR #508 review): the reaction-rate check sees scoped references with the same precedence as the model path, so a rate read through `Rates.k` from a top-level model is checked against the mass-action rate units. tests/invalid/units_reaction_rate_mismatch.esm is the same check on a local parameter."
+  },
+  "units_constant_exponent_angle.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/Powers/variables/x_sq",
+        "code": "unit_inconsistency",
+        "message": "exponent in '^' must be dimensionless, got rad"
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.3 `^` (PR #508 review): a const exponent is folded only when its units are dimensionless at exact scale 1. An angle (rad, sr) is not dimensionless, so the exponent is refused rather than folded to 2. tests/valid/units_constant_exponent_folding.esm pins the consts that do fold."
+  },
+  "units_array_index_subscript_mismatch.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/Probe/variables/T_pick",
+        "code": "unit_inconsistency",
+        "message": "Incompatible dimensions in '+': length vs mass"
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.3 (PR #508 review): index, reshape and transpose take the unit of args[0], but every operand is walked, so a mismatch inside a subscript is reported even though the declared result unit (K) matches the array's."
   }
 }
