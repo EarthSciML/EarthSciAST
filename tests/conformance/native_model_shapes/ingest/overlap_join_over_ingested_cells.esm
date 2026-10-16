@@ -1,0 +1,349 @@
+{
+ "esm": "1.2.0",
+ "metadata": {
+  "name": "overlap_join_over_ingested_cells",
+  "description": "A containment-binning `faq` with an `overlap` join gate whose cell envelopes are INGESTED (cells.parquet): the isrm pushdown `E_*` shape on the build-time path.",
+  "authors": [
+   "EarthSciML Authors and Contributors"
+  ],
+  "tags": [
+   "native",
+   "conformance"
+  ]
+ },
+ "data_sources": {
+  "cells_table": {
+   "kind": "static",
+   "source": {
+    "url_template": "./data/cells.parquet"
+   },
+   "extent": {
+    "metaparameter": "n_cells"
+   },
+   "metadata": {
+    "esio_format": "parquet",
+    "note": "Committed beside this document; a test may override the URL."
+   }
+  }
+ },
+ "metaparameters": {
+  "n_cells": {
+   "type": "integer",
+   "default": 0,
+   "description": "Rows in cells.parquet, discovered by the source's own extent (4)."
+  }
+ },
+ "index_sets": {
+  "cells": {
+   "kind": "interval",
+   "size": "n_cells"
+  },
+  "recs": {
+   "kind": "interval",
+   "size": 3
+  }
+ },
+ "models": {
+  "OverlapJoinOverIngestedCells": {
+   "tolerance": {
+    "rel": 1e-12,
+    "abs": 1e-12
+   },
+   "variables": {
+    "W": {
+     "type": "parameter",
+     "units": "1",
+     "default": 0.0,
+     "shape": [
+      "cells"
+     ],
+     "update": {
+      "kind": "data",
+      "source": "cells_table",
+      "from": {
+       "file_variable": "W"
+      }
+     }
+    },
+    "S": {
+     "type": "parameter",
+     "units": "1",
+     "default": 0.0,
+     "shape": [
+      "cells"
+     ],
+     "update": {
+      "kind": "data",
+      "source": "cells_table",
+      "from": {
+       "file_variable": "S"
+      }
+     }
+    },
+    "E": {
+     "type": "parameter",
+     "units": "1",
+     "default": 0.0,
+     "shape": [
+      "cells"
+     ],
+     "update": {
+      "kind": "data",
+      "source": "cells_table",
+      "from": {
+       "file_variable": "E"
+      }
+     }
+    },
+    "N": {
+     "type": "parameter",
+     "units": "1",
+     "default": 0.0,
+     "shape": [
+      "cells"
+     ],
+     "update": {
+      "kind": "data",
+      "source": "cells_table",
+      "from": {
+       "file_variable": "N"
+      }
+     }
+    },
+    "cval": {
+     "type": "parameter",
+     "units": "1",
+     "default": 0.0,
+     "shape": [
+      "cells"
+     ],
+     "update": {
+      "kind": "data",
+      "source": "cells_table",
+      "from": {
+       "file_variable": "cval"
+      }
+     }
+    },
+    "X": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "recs"
+     ]
+    },
+    "Y": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "recs"
+     ]
+    },
+    "out": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "recs"
+     ]
+    }
+   },
+   "equations": [
+    {
+     "lhs": "X",
+     "rhs": {
+      "op": "const",
+      "args": [],
+      "value": [
+       0.5,
+       1.5,
+       1.2
+      ]
+     }
+    },
+    {
+     "lhs": "Y",
+     "rhs": {
+      "op": "const",
+      "args": [],
+      "value": [
+       0.5,
+       1.5,
+       0.2
+      ]
+     }
+    },
+    {
+     "lhs": "out",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "r"
+      ],
+      "ranges": {
+       "c": {
+        "from": "cells"
+       },
+       "r": {
+        "from": "recs"
+       }
+      },
+      "reduce": "+",
+      "join": [
+       {
+        "overlap": {
+         "src_env": [
+          "X",
+          "Y"
+         ],
+         "tgt_env": [
+          "W",
+          "S",
+          "E",
+          "N"
+         ],
+         "eps": 0.0
+        }
+       }
+      ],
+      "expr": {
+       "op": "*",
+       "args": [
+        {
+         "op": "ifelse",
+         "args": [
+          {
+           "op": "and",
+           "args": [
+            {
+             "op": "<=",
+             "args": [
+              {
+               "op": "index",
+               "args": [
+                "W",
+                "c"
+               ]
+              },
+              {
+               "op": "index",
+               "args": [
+                "X",
+                "r"
+               ]
+              }
+             ]
+            },
+            {
+             "op": "<",
+             "args": [
+              {
+               "op": "index",
+               "args": [
+                "X",
+                "r"
+               ]
+              },
+              {
+               "op": "index",
+               "args": [
+                "E",
+                "c"
+               ]
+              }
+             ]
+            },
+            {
+             "op": "<=",
+             "args": [
+              {
+               "op": "index",
+               "args": [
+                "S",
+                "c"
+               ]
+              },
+              {
+               "op": "index",
+               "args": [
+                "Y",
+                "r"
+               ]
+              }
+             ]
+            },
+            {
+             "op": "<",
+             "args": [
+              {
+               "op": "index",
+               "args": [
+                "Y",
+                "r"
+               ]
+              },
+              {
+               "op": "index",
+               "args": [
+                "N",
+                "c"
+               ]
+              }
+             ]
+            }
+           ]
+          },
+          1.0,
+          0.0
+         ]
+        },
+        {
+         "op": "index",
+         "args": [
+          "cval",
+          "c"
+         ]
+        }
+       ]
+      }
+     }
+    }
+   ],
+   "tests": [
+    {
+     "id": "values",
+     "time_span": {
+      "start": 0.0,
+      "end": 0.0
+     },
+     "assertions": [
+      {
+       "variable": "out",
+       "time": 0.0,
+       "expected": 1.0,
+       "coords": {
+        "recs": 1
+       }
+      },
+      {
+       "variable": "out",
+       "time": 0.0,
+       "expected": 4.0,
+       "coords": {
+        "recs": 2
+       }
+      },
+      {
+       "variable": "out",
+       "time": 0.0,
+       "expected": 2.0,
+       "coords": {
+        "recs": 3
+       }
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

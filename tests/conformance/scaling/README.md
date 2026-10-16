@@ -92,6 +92,10 @@ between binaries built the same way. The deterministic gates do not need it.
 | `regrid` | conservative regrid: bin-skolem broad phase, inline `polygon_intersection_area`, apply every call | source cells | 10^2 .. 3162 |
 | `unstructured_gather` | the indirect gather `u[nbr[i,k]]` over a permuted periodic mesh | cells | 10^2 .. 10^6 |
 | `scalar_chemistry` | N/20 scalar Pollu boxes written as one scalar ODE per state | states | 10^2 .. 10^5 |
+| `gather_index` | a gather through a computed 64-class index array into two inline `const` tables, `-rate[cls[i]] u[i] + emis[cls[i]]` | cells | 10^2 .. 10^6 |
+| `column_search` | a per-column count of levels above a threshold used as a subscript, `u[c, max(1, cnt[c])]` (the YSU `kpbl` shape), 20 levels | cells | 10^2 .. 10^6 |
+| `column_sum` | a rank-0 column sum nested in a 3-D `faq` body, `sum_l u[i,j,l]`, 20 levels | cells | 10^2 .. 10^6 |
+| `join_keyed` | a value-equality `join` on computed keys evaluated at build, about four matching rows per cell, feeding the right-hand side | cells (= rows) | 10^2 .. 10^6 |
 
 Grid families round the side (`round(N^(1/rank))`), so `n_cells` in a result
 is the actual count and `n` is the nominal ladder value. `source_receptor` and
@@ -106,6 +110,15 @@ their indices, so a compiler must materialize them and read them on every
 call, as it would a loaded array, rather than serve every element from one
 value. (Rust's tape computes both in its build-once section and gathers them
 per call.)
+
+Two hand loops do less work than a literal reading of their document, because
+a person writing the loop would: `column_sum`'s computes each column's sum once
+and applies it to the column's 20 cells (the sum does not depend on the output
+level, and the fold order over levels is the document's), and `join_keyed`'s
+does the join once at setup, bucketing the rows by key, and reads the sums on
+every call (the join reads no state, so it is build-time work). A compiler
+that recomputes either per cell or per call is slower than the reference by
+that work, which is the point.
 
 ## The measured state
 
@@ -124,7 +137,8 @@ Canonical order (bindings map their own state layout onto it by element name):
 |---|---|
 | `stencil_*`, `transport_3d` | the one state variable, row-major (last axis fastest) |
 | `chemistry_grid` | species in the mechanism's declaration order (the vendored file's order), each row-major over (lon, lat) |
-| `prefix_scan`, `unstructured_gather` | `u[1..N]` |
+| `prefix_scan`, `unstructured_gather`, `gather_index`, `join_keyed` | `u[1..N]` |
+| `column_search`, `column_sum` | the one state variable, row-major (levels fastest) |
 | `source_receptor` | `c[1..N]`, then `e[1..N]` |
 | `regrid` | `F_src[1..N]`, then `F_tgt[1..N]` |
 | `scalar_chemistry` | box-major: box 1's 20 species in declaration order, then box 2's, ... |

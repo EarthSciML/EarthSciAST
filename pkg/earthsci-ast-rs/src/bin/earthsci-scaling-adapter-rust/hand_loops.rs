@@ -63,6 +63,20 @@ pub enum HandLoop {
     Unstructured { kappa: f64, nbr: Vec<[usize; 4]> },
     /// Independent Pollu boxes, box-major state.
     ScalarChemistry { boxes: usize },
+    /// `du[i] = -rate[cls[i]] u[i] + emis[cls[i]]`, `cls` 0-based.
+    GatherIndex {
+        cls: Vec<u32>,
+        rate: Vec<f64>,
+        emis: Vec<f64>,
+    },
+    /// Per column: `cnt` = levels whose state exceeds 1, then
+    /// `du[c, l] = -0.1 u[c, l] + 0.01 u[c, max(1, cnt)]`; level-fastest state.
+    ColumnSearch { ncol: usize, nlev: usize },
+    /// Per column: `s = sum_l u[c, l]` once, then
+    /// `du[c, k] = -0.1 u[c, k] + 0.001 s`; level-fastest state.
+    ColumnSum { ncol: usize, nlev: usize },
+    /// `du[i] = -0.1 u[i] + 0.001 agg[i]`, the join's sums computed at setup.
+    JoinKeyed { agg: Vec<f64> },
 }
 
 impl HandLoop {
@@ -76,6 +90,9 @@ impl HandLoop {
             HandLoop::Regrid { weights, .. } => weights.len(),
             HandLoop::Unstructured { nbr, .. } => nbr.len(),
             HandLoop::ScalarChemistry { boxes } => *boxes,
+            HandLoop::GatherIndex { cls, .. } => cls.len(),
+            HandLoop::ColumnSearch { ncol, .. } | HandLoop::ColumnSum { ncol, .. } => *ncol,
+            HandLoop::JoinKeyed { agg } => agg.len(),
         }
     }
 
@@ -171,6 +188,44 @@ impl HandLoop {
                         acc += kappa * (u[m] - uc);
                     }
                     du.set(c, acc);
+                }
+            }
+            HandLoop::GatherIndex { cls, rate, emis } => {
+                for i in lo..hi {
+                    let c = cls[i] as usize;
+                    du.set(i, -rate[c] * u[i] + emis[c]);
+                }
+            }
+            HandLoop::ColumnSearch { nlev, .. } => {
+                let l = *nlev;
+                for c in lo..hi {
+                    let col = &u[c * l..(c + 1) * l];
+                    let mut cnt = 0.0f64;
+                    for &v in col {
+                        cnt += if v > 1.0 { 1.0 } else { 0.0 };
+                    }
+                    let sel = col[cnt.max(1.0) as usize - 1];
+                    for (k, &v) in col.iter().enumerate() {
+                        du.set(c * l + k, -0.1 * v + 0.01 * sel);
+                    }
+                }
+            }
+            HandLoop::ColumnSum { nlev, .. } => {
+                let l = *nlev;
+                for c in lo..hi {
+                    let col = &u[c * l..(c + 1) * l];
+                    let mut s = 0.0f64;
+                    for &v in col {
+                        s += v;
+                    }
+                    for (k, &v) in col.iter().enumerate() {
+                        du.set(c * l + k, -0.1 * v + 0.001 * s);
+                    }
+                }
+            }
+            HandLoop::JoinKeyed { agg } => {
+                for i in lo..hi {
+                    du.set(i, -0.1 * u[i] + 0.001 * agg[i]);
                 }
             }
             HandLoop::ScalarChemistry { .. } => {

@@ -1,0 +1,297 @@
+{
+ "esm": "1.2.0",
+ "metadata": {
+  "name": "recurrence_in_ingesting_doc",
+  "description": "A causal self-reference (esm-spec §4.3.1.1) in a document that ingests a column the recurrence never reads (moves finding F24b): ingesting puts every rule on the build-time path, and the recurrence must still give [1, 2, 4, 8] and its clamped twin [1, 3, 7, 15].",
+  "authors": [
+   "EarthSciML Authors and Contributors"
+  ],
+  "tags": [
+   "native",
+   "conformance"
+  ]
+ },
+ "data_sources": {
+  "rows_table": {
+   "kind": "static",
+   "source": {
+    "url_template": "./data/rows.parquet"
+   },
+   "extent": {
+    "metaparameter": "n_rows"
+   },
+   "metadata": {
+    "esio_format": "parquet",
+    "note": "Committed beside this document; a test may override the URL."
+   }
+  }
+ },
+ "metaparameters": {
+  "n_rows": {
+   "type": "integer",
+   "default": 0,
+   "description": "Rows in rows.parquet, discovered by the source's own extent (4)."
+  }
+ },
+ "index_sets": {
+  "rows": {
+   "kind": "interval",
+   "size": "n_rows"
+  },
+  "steps": {
+   "kind": "interval",
+   "size": 4
+  }
+ },
+ "models": {
+  "RecurrenceInIngestingDoc": {
+   "tolerance": {
+    "rel": 1e-12,
+    "abs": 1e-12
+   },
+   "variables": {
+    "m_month": {
+     "type": "parameter",
+     "units": "1",
+     "default": 0.0,
+     "shape": [
+      "rows"
+     ],
+     "update": {
+      "kind": "data",
+      "source": "rows_table",
+      "from": {
+       "file_variable": "monthID"
+      }
+     }
+    },
+    "m_sum": {
+     "type": "unknown",
+     "units": "1"
+    },
+    "s_value": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "steps"
+     ]
+    },
+    "s_clamped": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "steps"
+     ]
+    }
+   },
+   "equations": [
+    {
+     "lhs": "m_sum",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [],
+      "ranges": {
+       "j": {
+        "from": "rows"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        "m_month",
+        "j"
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "s_value",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "k"
+      ],
+      "ranges": {
+       "k": {
+        "from": "steps"
+       }
+      },
+      "expr": {
+       "op": "ifelse",
+       "args": [
+        {
+         "op": "<=",
+         "args": [
+          "k",
+          1
+         ]
+        },
+        1.0,
+        {
+         "op": "*",
+         "args": [
+          {
+           "op": "index",
+           "args": [
+            "s_value",
+            {
+             "op": "-",
+             "args": [
+              "k",
+              1
+             ]
+            }
+           ]
+          },
+          2.0
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "s_clamped",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "k"
+      ],
+      "ranges": {
+       "k": {
+        "from": "steps"
+       }
+      },
+      "expr": {
+       "op": "ifelse",
+       "args": [
+        {
+         "op": "<=",
+         "args": [
+          "k",
+          1
+         ]
+        },
+        1.0,
+        {
+         "op": "+",
+         "args": [
+          {
+           "op": "*",
+           "args": [
+            {
+             "op": "max",
+             "args": [
+              {
+               "op": "index",
+               "args": [
+                "s_clamped",
+                {
+                 "op": "-",
+                 "args": [
+                  "k",
+                  1
+                 ]
+                }
+               ]
+              },
+              0.0
+             ]
+            },
+            2.0
+           ]
+          },
+          1.0
+         ]
+        }
+       ]
+      }
+     }
+    }
+   ],
+   "tests": [
+    {
+     "id": "values",
+     "time_span": {
+      "start": 0.0,
+      "end": 0.0
+     },
+     "assertions": [
+      {
+       "variable": "m_sum",
+       "time": 0.0,
+       "expected": 29.0
+      },
+      {
+       "variable": "s_value",
+       "time": 0.0,
+       "expected": 1.0,
+       "coords": {
+        "steps": 1
+       }
+      },
+      {
+       "variable": "s_value",
+       "time": 0.0,
+       "expected": 2.0,
+       "coords": {
+        "steps": 2
+       }
+      },
+      {
+       "variable": "s_value",
+       "time": 0.0,
+       "expected": 4.0,
+       "coords": {
+        "steps": 3
+       }
+      },
+      {
+       "variable": "s_value",
+       "time": 0.0,
+       "expected": 8.0,
+       "coords": {
+        "steps": 4
+       }
+      },
+      {
+       "variable": "s_clamped",
+       "time": 0.0,
+       "expected": 1.0,
+       "coords": {
+        "steps": 1
+       }
+      },
+      {
+       "variable": "s_clamped",
+       "time": 0.0,
+       "expected": 3.0,
+       "coords": {
+        "steps": 2
+       }
+      },
+      {
+       "variable": "s_clamped",
+       "time": 0.0,
+       "expected": 7.0,
+       "coords": {
+        "steps": 3
+       }
+      },
+      {
+       "variable": "s_clamped",
+       "time": 0.0,
+       "expected": 15.0,
+       "coords": {
+        "steps": 4
+       }
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

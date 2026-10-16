@@ -1,0 +1,757 @@
+{
+ "esm": "1.2.0",
+ "metadata": {
+  "name": "const_subscript_maps_dynamic",
+  "description": "Subscripts into a const array other than a plain shift: reversed (`c[6 - i]`, the madronich `ze[(NLEV+2) - i]` shape), offset by a scalar parameter (`p[o + i]`), and clamped by min/max (the cloud_grid `ze[min(NN, max(1, i+1))]` shape), on an inline `const` base, a named `const` observed, and a shaped parameter carrying inline data. Dynamic variant: the same rules beside a state whose right-hand side reads them, so they are lowered on the run-time path.",
+  "authors": [
+   "EarthSciML Authors and Contributors"
+  ],
+  "tags": [
+   "native",
+   "conformance"
+  ]
+ },
+ "index_sets": {
+  "n5": {
+   "kind": "interval",
+   "size": 5
+  },
+  "n4": {
+   "kind": "interval",
+   "size": 4
+  },
+  "n3": {
+   "kind": "interval",
+   "size": 3
+  }
+ },
+ "models": {
+  "ConstSubscriptMaps": {
+   "tolerance": {
+    "rel": 1e-12,
+    "abs": 1e-12
+   },
+   "variables": {
+    "p": {
+     "type": "parameter",
+     "units": "1",
+     "default": [
+      1.25,
+      2.5,
+      3.75,
+      5.0
+     ],
+     "shape": [
+      "n4"
+     ]
+    },
+    "o": {
+     "type": "parameter",
+     "units": "1",
+     "default": 1.0
+    },
+    "tbl": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "n5"
+     ]
+    },
+    "rev_inline": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "n5"
+     ]
+    },
+    "rev_named": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "n5"
+     ]
+    },
+    "rev_param": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "n4"
+     ]
+    },
+    "off_param": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "n3"
+     ]
+    },
+    "off_inline": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "n3"
+     ]
+    },
+    "clamp_inline": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "n5"
+     ]
+    },
+    "clamp_low": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "n5"
+     ]
+    },
+    "acc": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "n5"
+     ],
+     "default": 0.0
+    }
+   },
+   "equations": [
+    {
+     "lhs": "tbl",
+     "rhs": {
+      "op": "const",
+      "args": [],
+      "value": [
+       1.0,
+       2.0,
+       4.0,
+       8.0,
+       16.0
+      ]
+     }
+    },
+    {
+     "lhs": "rev_inline",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "n5"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        {
+         "op": "const",
+         "args": [],
+         "value": [
+          10.0,
+          20.0,
+          30.0,
+          40.0,
+          50.0
+         ]
+        },
+        {
+         "op": "-",
+         "args": [
+          6,
+          "i"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "rev_named",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "n5"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        "tbl",
+        {
+         "op": "-",
+         "args": [
+          6,
+          "i"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "rev_param",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "n4"
+       }
+      },
+      "expr": {
+       "op": "*",
+       "args": [
+        1.0,
+        {
+         "op": "index",
+         "args": [
+          "p",
+          {
+           "op": "-",
+           "args": [
+            5,
+            "i"
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "off_param",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "n3"
+       }
+      },
+      "expr": {
+       "op": "*",
+       "args": [
+        1.0,
+        {
+         "op": "index",
+         "args": [
+          "p",
+          {
+           "op": "+",
+           "args": [
+            "o",
+            "i"
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "off_inline",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "n3"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        {
+         "op": "const",
+         "args": [],
+         "value": [
+          10.0,
+          20.0,
+          30.0,
+          40.0,
+          50.0
+         ]
+        },
+        {
+         "op": "+",
+         "args": [
+          {
+           "op": "+",
+           "args": [
+            "o",
+            1
+           ]
+          },
+          "i"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "clamp_inline",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "n5"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        {
+         "op": "const",
+         "args": [],
+         "value": [
+          10.0,
+          20.0,
+          30.0,
+          40.0,
+          50.0
+         ]
+        },
+        {
+         "op": "min",
+         "args": [
+          5,
+          {
+           "op": "max",
+           "args": [
+            1,
+            {
+             "op": "+",
+             "args": [
+              "i",
+              1
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "clamp_low",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "n5"
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        {
+         "op": "const",
+         "args": [],
+         "value": [
+          10.0,
+          20.0,
+          30.0,
+          40.0,
+          50.0
+         ]
+        },
+        {
+         "op": "max",
+         "args": [
+          1,
+          {
+           "op": "-",
+           "args": [
+            "i",
+            1
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "n5"
+       }
+      },
+      "expr": {
+       "op": "D",
+       "args": [
+        {
+         "op": "index",
+         "args": [
+          "acc",
+          "i"
+         ]
+        }
+       ],
+       "wrt": "t"
+      }
+     },
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "n5"
+       }
+      },
+      "expr": {
+       "op": "+",
+       "args": [
+        {
+         "op": "index",
+         "args": [
+          "rev_inline",
+          "i"
+         ]
+        },
+        {
+         "op": "index",
+         "args": [
+          "clamp_inline",
+          "i"
+         ]
+        }
+       ]
+      }
+     }
+    }
+   ],
+   "tests": [
+    {
+     "id": "values",
+     "time_span": {
+      "start": 0.0,
+      "end": 1.0
+     },
+     "assertions": [
+      {
+       "variable": "rev_inline",
+       "time": 1.0,
+       "expected": 50.0,
+       "coords": {
+        "n5": 1
+       }
+      },
+      {
+       "variable": "rev_inline",
+       "time": 1.0,
+       "expected": 40.0,
+       "coords": {
+        "n5": 2
+       }
+      },
+      {
+       "variable": "rev_inline",
+       "time": 1.0,
+       "expected": 30.0,
+       "coords": {
+        "n5": 3
+       }
+      },
+      {
+       "variable": "rev_inline",
+       "time": 1.0,
+       "expected": 20.0,
+       "coords": {
+        "n5": 4
+       }
+      },
+      {
+       "variable": "rev_inline",
+       "time": 1.0,
+       "expected": 10.0,
+       "coords": {
+        "n5": 5
+       }
+      },
+      {
+       "variable": "rev_named",
+       "time": 1.0,
+       "expected": 16.0,
+       "coords": {
+        "n5": 1
+       }
+      },
+      {
+       "variable": "rev_named",
+       "time": 1.0,
+       "expected": 8.0,
+       "coords": {
+        "n5": 2
+       }
+      },
+      {
+       "variable": "rev_named",
+       "time": 1.0,
+       "expected": 4.0,
+       "coords": {
+        "n5": 3
+       }
+      },
+      {
+       "variable": "rev_named",
+       "time": 1.0,
+       "expected": 2.0,
+       "coords": {
+        "n5": 4
+       }
+      },
+      {
+       "variable": "rev_named",
+       "time": 1.0,
+       "expected": 1.0,
+       "coords": {
+        "n5": 5
+       }
+      },
+      {
+       "variable": "rev_param",
+       "time": 1.0,
+       "expected": 5.0,
+       "coords": {
+        "n4": 1
+       }
+      },
+      {
+       "variable": "rev_param",
+       "time": 1.0,
+       "expected": 3.75,
+       "coords": {
+        "n4": 2
+       }
+      },
+      {
+       "variable": "rev_param",
+       "time": 1.0,
+       "expected": 2.5,
+       "coords": {
+        "n4": 3
+       }
+      },
+      {
+       "variable": "rev_param",
+       "time": 1.0,
+       "expected": 1.25,
+       "coords": {
+        "n4": 4
+       }
+      },
+      {
+       "variable": "off_param",
+       "time": 1.0,
+       "expected": 2.5,
+       "coords": {
+        "n3": 1
+       }
+      },
+      {
+       "variable": "off_param",
+       "time": 1.0,
+       "expected": 3.75,
+       "coords": {
+        "n3": 2
+       }
+      },
+      {
+       "variable": "off_param",
+       "time": 1.0,
+       "expected": 5.0,
+       "coords": {
+        "n3": 3
+       }
+      },
+      {
+       "variable": "off_inline",
+       "time": 1.0,
+       "expected": 30.0,
+       "coords": {
+        "n3": 1
+       }
+      },
+      {
+       "variable": "off_inline",
+       "time": 1.0,
+       "expected": 40.0,
+       "coords": {
+        "n3": 2
+       }
+      },
+      {
+       "variable": "off_inline",
+       "time": 1.0,
+       "expected": 50.0,
+       "coords": {
+        "n3": 3
+       }
+      },
+      {
+       "variable": "clamp_inline",
+       "time": 1.0,
+       "expected": 20.0,
+       "coords": {
+        "n5": 1
+       }
+      },
+      {
+       "variable": "clamp_inline",
+       "time": 1.0,
+       "expected": 30.0,
+       "coords": {
+        "n5": 2
+       }
+      },
+      {
+       "variable": "clamp_inline",
+       "time": 1.0,
+       "expected": 40.0,
+       "coords": {
+        "n5": 3
+       }
+      },
+      {
+       "variable": "clamp_inline",
+       "time": 1.0,
+       "expected": 50.0,
+       "coords": {
+        "n5": 4
+       }
+      },
+      {
+       "variable": "clamp_inline",
+       "time": 1.0,
+       "expected": 50.0,
+       "coords": {
+        "n5": 5
+       }
+      },
+      {
+       "variable": "clamp_low",
+       "time": 1.0,
+       "expected": 10.0,
+       "coords": {
+        "n5": 1
+       }
+      },
+      {
+       "variable": "clamp_low",
+       "time": 1.0,
+       "expected": 10.0,
+       "coords": {
+        "n5": 2
+       }
+      },
+      {
+       "variable": "clamp_low",
+       "time": 1.0,
+       "expected": 20.0,
+       "coords": {
+        "n5": 3
+       }
+      },
+      {
+       "variable": "clamp_low",
+       "time": 1.0,
+       "expected": 30.0,
+       "coords": {
+        "n5": 4
+       }
+      },
+      {
+       "variable": "clamp_low",
+       "time": 1.0,
+       "expected": 40.0,
+       "coords": {
+        "n5": 5
+       }
+      },
+      {
+       "variable": "acc",
+       "time": 1.0,
+       "expected": 70.0,
+       "coords": {
+        "n5": 1
+       }
+      },
+      {
+       "variable": "acc",
+       "time": 1.0,
+       "expected": 70.0,
+       "coords": {
+        "n5": 2
+       }
+      },
+      {
+       "variable": "acc",
+       "time": 1.0,
+       "expected": 70.0,
+       "coords": {
+        "n5": 3
+       }
+      },
+      {
+       "variable": "acc",
+       "time": 1.0,
+       "expected": 70.0,
+       "coords": {
+        "n5": 4
+       }
+      },
+      {
+       "variable": "acc",
+       "time": 1.0,
+       "expected": 60.0,
+       "coords": {
+        "n5": 5
+       }
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

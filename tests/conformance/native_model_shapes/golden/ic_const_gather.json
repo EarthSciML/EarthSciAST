@@ -1,0 +1,133 @@
+{
+  "fixture": "ic_const_gather",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "values",
+      "assertion_idx": 1,
+      "variable": "u",
+      "actual": 1.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 2,
+      "variable": "u",
+      "actual": 2.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 3,
+      "variable": "u",
+      "actual": 3.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 4,
+      "variable": "u",
+      "actual": 4.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 5,
+      "variable": "u",
+      "actual": 5.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 6,
+      "variable": "u",
+      "actual": 6.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 7,
+      "variable": "u",
+      "actual": 1.9999999999999998
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 8,
+      "variable": "u",
+      "actual": 3.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 9,
+      "variable": "u",
+      "actual": 4.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 10,
+      "variable": "u",
+      "actual": 5.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 11,
+      "variable": "u",
+      "actual": 6.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 12,
+      "variable": "u",
+      "actual": 7.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 13,
+      "variable": "v",
+      "actual": 30.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 14,
+      "variable": "v",
+      "actual": 20.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 15,
+      "variable": "v",
+      "actual": 10.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 16,
+      "variable": "w",
+      "actual": 30.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 17,
+      "variable": "w",
+      "actual": 10.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 18,
+      "variable": "w",
+      "actual": 20.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 19,
+      "variable": "w",
+      "actual": 31.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 20,
+      "variable": "w",
+      "actual": 11.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 21,
+      "variable": "w",
+      "actual": 21.0
+    }
+  ]
+}

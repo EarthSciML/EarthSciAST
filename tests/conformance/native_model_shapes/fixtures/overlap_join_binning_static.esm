@@ -1,0 +1,453 @@
+{
+ "esm": "1.2.0",
+ "metadata": {
+  "name": "overlap_join_binning_static",
+  "description": "A containment-binning `faq` carrying a spatial `overlap` join gate (CONFORMANCE_SPEC §5.5.6), the isrm pushdown `E_*` shape, beside the same body with no gate, which must give the same values. Static variant: no state, so every value is a build-time observed.",
+  "authors": [
+   "EarthSciML Authors and Contributors"
+  ],
+  "tags": [
+   "native",
+   "conformance"
+  ]
+ },
+ "index_sets": {
+  "cells": {
+   "kind": "interval",
+   "size": 4
+  },
+  "recs": {
+   "kind": "interval",
+   "size": 3
+  }
+ },
+ "models": {
+  "OverlapJoinBinning": {
+   "tolerance": {
+    "rel": 1e-12,
+    "abs": 1e-12
+   },
+   "variables": {
+    "W": {
+     "type": "parameter",
+     "units": "1",
+     "default": [
+      0.0,
+      1.0,
+      0.0,
+      1.0
+     ],
+     "shape": [
+      "cells"
+     ]
+    },
+    "E": {
+     "type": "parameter",
+     "units": "1",
+     "default": [
+      1.0,
+      2.0,
+      1.0,
+      2.0
+     ],
+     "shape": [
+      "cells"
+     ]
+    },
+    "S": {
+     "type": "parameter",
+     "units": "1",
+     "default": [
+      0.0,
+      0.0,
+      1.0,
+      1.0
+     ],
+     "shape": [
+      "cells"
+     ]
+    },
+    "N": {
+     "type": "parameter",
+     "units": "1",
+     "default": [
+      1.0,
+      1.0,
+      2.0,
+      2.0
+     ],
+     "shape": [
+      "cells"
+     ]
+    },
+    "cval": {
+     "type": "parameter",
+     "units": "1",
+     "default": [
+      1.0,
+      2.0,
+      3.0,
+      4.0
+     ],
+     "shape": [
+      "cells"
+     ]
+    },
+    "X": {
+     "type": "parameter",
+     "units": "1",
+     "default": [
+      0.5,
+      1.5,
+      1.2
+     ],
+     "shape": [
+      "recs"
+     ]
+    },
+    "Y": {
+     "type": "parameter",
+     "units": "1",
+     "default": [
+      0.5,
+      1.5,
+      0.2
+     ],
+     "shape": [
+      "recs"
+     ]
+    },
+    "out": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "recs"
+     ]
+    },
+    "out_nojoin": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "recs"
+     ]
+    }
+   },
+   "equations": [
+    {
+     "lhs": "out",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "r"
+      ],
+      "ranges": {
+       "c": {
+        "from": "cells"
+       },
+       "r": {
+        "from": "recs"
+       }
+      },
+      "reduce": "+",
+      "join": [
+       {
+        "overlap": {
+         "src_env": [
+          "X",
+          "Y"
+         ],
+         "tgt_env": [
+          "W",
+          "S",
+          "E",
+          "N"
+         ],
+         "eps": 0.0
+        }
+       }
+      ],
+      "expr": {
+       "op": "*",
+       "args": [
+        {
+         "op": "ifelse",
+         "args": [
+          {
+           "op": "and",
+           "args": [
+            {
+             "op": "<=",
+             "args": [
+              {
+               "op": "index",
+               "args": [
+                "W",
+                "c"
+               ]
+              },
+              {
+               "op": "index",
+               "args": [
+                "X",
+                "r"
+               ]
+              }
+             ]
+            },
+            {
+             "op": "<",
+             "args": [
+              {
+               "op": "index",
+               "args": [
+                "X",
+                "r"
+               ]
+              },
+              {
+               "op": "index",
+               "args": [
+                "E",
+                "c"
+               ]
+              }
+             ]
+            },
+            {
+             "op": "<=",
+             "args": [
+              {
+               "op": "index",
+               "args": [
+                "S",
+                "c"
+               ]
+              },
+              {
+               "op": "index",
+               "args": [
+                "Y",
+                "r"
+               ]
+              }
+             ]
+            },
+            {
+             "op": "<",
+             "args": [
+              {
+               "op": "index",
+               "args": [
+                "Y",
+                "r"
+               ]
+              },
+              {
+               "op": "index",
+               "args": [
+                "N",
+                "c"
+               ]
+              }
+             ]
+            }
+           ]
+          },
+          1.0,
+          0.0
+         ]
+        },
+        {
+         "op": "index",
+         "args": [
+          "cval",
+          "c"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "out_nojoin",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "r"
+      ],
+      "ranges": {
+       "c": {
+        "from": "cells"
+       },
+       "r": {
+        "from": "recs"
+       }
+      },
+      "reduce": "+",
+      "expr": {
+       "op": "*",
+       "args": [
+        {
+         "op": "ifelse",
+         "args": [
+          {
+           "op": "and",
+           "args": [
+            {
+             "op": "<=",
+             "args": [
+              {
+               "op": "index",
+               "args": [
+                "W",
+                "c"
+               ]
+              },
+              {
+               "op": "index",
+               "args": [
+                "X",
+                "r"
+               ]
+              }
+             ]
+            },
+            {
+             "op": "<",
+             "args": [
+              {
+               "op": "index",
+               "args": [
+                "X",
+                "r"
+               ]
+              },
+              {
+               "op": "index",
+               "args": [
+                "E",
+                "c"
+               ]
+              }
+             ]
+            },
+            {
+             "op": "<=",
+             "args": [
+              {
+               "op": "index",
+               "args": [
+                "S",
+                "c"
+               ]
+              },
+              {
+               "op": "index",
+               "args": [
+                "Y",
+                "r"
+               ]
+              }
+             ]
+            },
+            {
+             "op": "<",
+             "args": [
+              {
+               "op": "index",
+               "args": [
+                "Y",
+                "r"
+               ]
+              },
+              {
+               "op": "index",
+               "args": [
+                "N",
+                "c"
+               ]
+              }
+             ]
+            }
+           ]
+          },
+          1.0,
+          0.0
+         ]
+        },
+        {
+         "op": "index",
+         "args": [
+          "cval",
+          "c"
+         ]
+        }
+       ]
+      }
+     }
+    }
+   ],
+   "tests": [
+    {
+     "id": "values",
+     "time_span": {
+      "start": 0.0,
+      "end": 0.0
+     },
+     "assertions": [
+      {
+       "variable": "out",
+       "time": 0.0,
+       "expected": 1.0,
+       "coords": {
+        "recs": 1
+       }
+      },
+      {
+       "variable": "out",
+       "time": 0.0,
+       "expected": 4.0,
+       "coords": {
+        "recs": 2
+       }
+      },
+      {
+       "variable": "out",
+       "time": 0.0,
+       "expected": 2.0,
+       "coords": {
+        "recs": 3
+       }
+      },
+      {
+       "variable": "out_nojoin",
+       "time": 0.0,
+       "expected": 1.0,
+       "coords": {
+        "recs": 1
+       }
+      },
+      {
+       "variable": "out_nojoin",
+       "time": 0.0,
+       "expected": 4.0,
+       "coords": {
+        "recs": 2
+       }
+      },
+      {
+       "variable": "out_nojoin",
+       "time": 0.0,
+       "expected": 2.0,
+       "coords": {
+        "recs": 3
+       }
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

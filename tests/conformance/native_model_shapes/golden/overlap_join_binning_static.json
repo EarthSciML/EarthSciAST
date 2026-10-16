@@ -1,0 +1,43 @@
+{
+  "fixture": "overlap_join_binning_static",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "values",
+      "assertion_idx": 1,
+      "variable": "out",
+      "actual": 1.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 2,
+      "variable": "out",
+      "actual": 4.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 3,
+      "variable": "out",
+      "actual": 2.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 4,
+      "variable": "out_nojoin",
+      "actual": 1.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 5,
+      "variable": "out_nojoin",
+      "actual": 4.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 6,
+      "variable": "out_nojoin",
+      "actual": 2.0
+    }
+  ]
+}
