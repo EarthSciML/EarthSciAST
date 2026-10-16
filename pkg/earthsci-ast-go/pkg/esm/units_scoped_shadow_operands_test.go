@@ -117,10 +117,9 @@ func TestArrayOperatorsWalkEveryOperand(t *testing.T) {
 	wantMismatch(t, "makearray args", ExprNode{Op: "makearray", Args: []any{bad}, Values: []any{"a"}}, env)
 	wantMismatch(t, "broadcast without fn", ExprNode{Op: "broadcast", Args: []any{bad}}, env)
 	wantUnit(t, "broadcast without fn", ExprNode{Op: "broadcast", Args: []any{"a"}}, env, "")
-	// As in TypeScript, a missing body leaves the ⊕ to decide: bool_and_or is
-	// dimensionless whatever the body.
+	// As in TypeScript, a missing body leaves the unit unknown whatever the ⊕.
 	boolSR := "bool_and_or"
-	wantUnit(t, "faq bool_and_or, no expr", ExprNode{Op: "faq", Semiring: &boolSR}, env, "1")
+	wantUnit(t, "faq bool_and_or, no expr", ExprNode{Op: "faq", Semiring: &boolSR}, env, "")
 }
 
 func TestRatChecked(t *testing.T) {

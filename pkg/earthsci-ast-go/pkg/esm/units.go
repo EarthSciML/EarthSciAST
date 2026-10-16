@@ -1531,6 +1531,9 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 		if err := walkOperands(node.Args, env); err != nil {
 			return nil, err
 		}
+		if node.Expr == nil {
+			return nil, nil
+		}
 		return faqUnit(node, body), nil
 
 	case "index", "reshape", "transpose":
