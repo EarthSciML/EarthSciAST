@@ -491,11 +491,20 @@ end
 #   * a document-LITERAL array observed still carrying its defining expression
 #     (`const` / `makearray`), materialised here through the SAME
 #     `_resolve_index_of_makearray` the body's own `index(col, l)` would use, so
-#     the gate and the lowered body cannot disagree about the column.
-# Anything else (a live state, a runtime-materialised observed) is a build error
+#     the gate and the lowered body cannot disagree about the column;
+#   * a CONST-CADENCE computed observed: one whose value depends only on index
+#     symbols, inline constants, build-time data (const arrays, ingested
+#     columns) and scalar parameters — never on a state or `t` — so it is as
+#     constant at build time as the storages above
+#     (`_const_cadence_column_values`). A parameter it reads is baked: its
+#     value at the build is folded into the gate, and the parameter is
+#     recorded as read at build, so a `remake` that changes it is refused.
+# Anything else (a live state, a time-dependent observed) is a build error
 # rather than a silently ungated product.
 function _join_key_column_values(col::String, positions::Vector{Int}, vi_maps,
-                                 const_arrays::AbstractDict, obs_defs::AbstractDict)
+                                 const_arrays::AbstractDict, obs_defs::AbstractDict,
+                                 index_sets::AbstractDict=Dict{String,Any}(),
+                                 var_shapes::AbstractDict=Dict{String,Vector{String}}())
     if haskey(vi_maps.maps, col)
         # Deliberately UNVALIDATED: a skolem bin id is whatever the value-
         # invention front door minted (an integer, a tuple), it is only ever
@@ -511,13 +520,18 @@ function _join_key_column_values(col::String, positions::Vector{Int}, vi_maps,
             arr = _const_op_to_array((defn::OpExpr).value)
         elseif defn isa OpExpr && (defn::OpExpr).op == "makearray"
             return Any[_join_literal_at(defn::OpExpr, p, const_arrays) for p in positions]
+        elseif defn !== nothing
+            vals = _const_cadence_column_values(col, defn, positions, const_arrays,
+                                                obs_defs, index_sets, vi_maps, var_shapes)
+            vals === nothing || return vals
         end
     end
     arr === nothing && throw(TreeWalkError("E_TREEWALK_JOIN_UNKNOWN_KEY",
         "join key column '$col' has no build-time data: §5.5.8 requires a key " *
         "column to be build-time constant by the time the gate is built (a " *
-        "const array, a document-literal array observed, or a value-invention " *
-        "map buffer) — it is none of those"))
+        "const array, a document-literal array observed, a value-invention " *
+        "map buffer, or an observed computed from those alone) — it is none of " *
+        "those"))
     ndims(arr) == 1 || throw(TreeWalkError("E_TREEWALK_JOIN_UNKNOWN_KEY",
         "join key column '$col' is $(ndims(arr))-D; §5.5.8 admits a 1-D column"))
     for p in positions
@@ -528,6 +542,90 @@ function _join_key_column_values(col::String, positions::Vector{Int}, vi_maps,
     return Any[arr[p] for p in positions]
 end
 
+# The values of key column `col` at `positions` when its definition `defn` is a
+# const-cadence computed observed, or `nothing` when it is not one. The
+# definition is closed over the observeds it reads (inlined, as the right-hand
+# side would), its index-set ranges resolved, and then it must reference
+# nothing but its own binders, build-time arrays and scalar parameters — the
+# test the affine tier's value-table lane applies (`_exprtbl_evaluable`), with
+# the parameters admitted as build-time values. It is
+# compiled ONCE with its output index bound and read at each position, the
+# compile-once evaluator `observed_field` uses, so the gate holds exactly the
+# values the column reads elsewhere. The gate is built from these values like
+# any other key column, so it still drives the enumeration.
+function _const_cadence_column_values(col::String, defn::ASTExpr, positions::Vector{Int},
+                                      const_arrays::AbstractDict, obs_defs::AbstractDict,
+                                      index_sets::AbstractDict, vi_maps=_EMPTY_VI_MAPS,
+                                      var_shapes::AbstractDict=Dict{String,Vector{String}}())
+    others = Dict{String,ASTExpr}(String(k) => v for (k, v) in obs_defs if String(k) != col)
+    reads_other(x) = any(n -> haskey(others, n), _referenced_var_names(x))
+    e = defn
+    for _ in 0:length(others)
+        reads_other(e) || break
+        e = _sub_preserving(e, others)
+    end
+    reads_other(e) && return nothing                       # a cycle through observeds
+    # A column computed through joins of its own (a MOVES key that is the
+    # latest year at or before the run year): its gates are built first, from
+    # their own key columns, by the same resolution.
+    gated = e isa OpExpr && _expr_has_join(e::OpExpr)
+    gated && (e = _resolve_join_in_expr(e, index_sets, vi_maps, const_arrays,
+                                        var_shapes, obs_defs))
+    e = _resolve_isr(e, index_sets)
+    # Scalar parameters are build-time here: their values at this build are
+    # folded into the gate, and each one read is recorded as read at build.
+    params = _join_params()
+    used = Dict{String,Float64}(n => params[n] for n in _referenced_var_names(e)
+                                if haskey(params, n) && !haskey(const_arrays, n))
+    _exprtbl_evaluable(e, Set{String}(keys(used)), const_arrays) || return nothing
+    ce = _cellwise_compile_once_impl(e, 1, const_arrays, Dict{String,Any}(), used)
+    if ce === nothing
+        # A gated reduction, or a `makearray` read at the position, has no
+        # symbolic compile-once form (each binds concrete positions), so such
+        # a column is resolved at each of its positions.
+        vals = Any[]
+        psyms = Set{Symbol}(Symbol(k) for k in keys(used))
+        pnt = NamedTuple{Tuple(Symbol(k) for k in keys(used))}(Tuple(values(used)))
+        for p in positions
+            v = try
+                r = _resolve_indices(_key_at_cell(e, p),
+                                     Dict{String,Tuple{Vector{Int},Vector{Int}}}(),
+                                     Dict{String,Int}(), const_arrays)
+                _eval_node(_compile(r, Dict{String,Int}(), psyms, Dict{String,Any}()),
+                           Float64[], pnt, 0.0)
+            catch err
+                err isa EarthSciASTError || rethrow()
+                return nothing
+            end
+            push!(vals, v)
+        end
+        foreach(_record_param_read, keys(used))
+        return _computed_keys(vals)
+    end
+    foreach(_record_param_read, keys(used))
+    return _computed_keys(Any[ce(Int[p]) for p in positions])
+end
+
+# An array-valued key definition read at position `p`: every array producer and
+# inline array `const` it combines elementwise is indexed there
+# (`_index_at_cell`, extended to the inline literal).
+function _key_at_cell(e::ASTExpr, p::Int)
+    e isa OpExpr || return e
+    o = e::OpExpr
+    (_is_array_producer(o) || (o.op == "const" && o.value isa AbstractVector)) &&
+        return OpExpr("index", ASTExpr[o, IntExpr(Int64(p))])
+    (o.op == "faq" || o.op == "makearray" || o.op == "index") && return o
+    return reconstruct(o; args=ASTExpr[_key_at_cell(a, p) for a in o.args])
+end
+
+# The build's scalar parameter values while its join gates resolve
+# (`_with_join_params`), empty outside one.
+const _JOIN_PARAMS_KEY = :earthsci_join_params
+_join_params()::AbstractDict{String,Float64} =
+    get(task_local_storage(), _JOIN_PARAMS_KEY, Dict{String,Float64}())
+_with_join_params(f, params::AbstractDict) =
+    task_local_storage(f, _JOIN_PARAMS_KEY, Dict{String,Float64}(params))
+
 # One cell of a document-literal `makearray` key column, as a raw value.
 function _join_literal_at(mk::OpExpr, p::Int, const_arrays::AbstractDict)
     r = _resolve_index_of_makearray(mk, ASTExpr[IntExpr(Int64(p))],
@@ -535,6 +633,22 @@ function _join_literal_at(mk::OpExpr, p::Int, const_arrays::AbstractDict)
                                     Dict{String,Int}(), const_arrays)
     r isa NumExpr && return (r::NumExpr).value
     r isa IntExpr && return (r::IntExpr).value
+    # A scalar `const` literal (what an `enum` lowers to) is a literal too.
+    (r isa OpExpr && (r::OpExpr).op == "const" && (r::OpExpr).value isa Real &&
+     !((r::OpExpr).value isa Bool)) && return (r::OpExpr).value
+    # A cell computed from literals and scalar parameters (an enum product, a
+    # MOVES run-year key): evaluated, its parameters baked, as
+    # `_const_cadence_column_values` evaluates a computed column.
+    params = _join_params()
+    used = Dict{String,Float64}(n => params[n] for n in _referenced_var_names(r)
+                                if haskey(params, n) && !haskey(const_arrays, n))
+    if _exprtbl_evaluable(r, Set{String}(keys(used)), const_arrays)
+        ce = _cellwise_compile_once_impl(r, 0, const_arrays, Dict{String,Any}(), used)
+        if ce !== nothing
+            foreach(_record_param_read, keys(used))
+            return ce(Int[])
+        end
+    end
     throw(TreeWalkError("E_TREEWALK_JOIN_UNKNOWN_KEY",
         "join key column cell $p of a `makearray` observed did not reduce to a " *
         "build-time literal (got a $(typeof(r))); §5.5.8 requires the key column " *
@@ -569,10 +683,25 @@ function _join_key_sym_pos_vals(key::String, ranges::AbstractDict,
     end
     sym = _join_key_column_sym(key, ranges, sym_to_set, var_shapes, vi_maps, pick, order)
     positions = _join_key_positions(sym, ranges, index_sets)
-    raw = _join_key_column_values(key, positions, vi_maps, const_arrays, obs_defs)
+    raw = _join_key_column_values(key, positions, vi_maps, const_arrays, obs_defs,
+                                  index_sets, var_shapes)
     haskey(vi_maps.maps, key) && return (sym, positions, raw)
+    raw isa _ComputedKeys && return (sym, positions, raw.vals)
     return (sym, positions, Any[_validated_key_datum(v, key) for v in raw])
 end
+
+# The values of a COMPUTED key column (`_const_cadence_column_values`). A
+# computed value need not be an integer ID: a reduction over no rows gives its
+# identity (a min over nothing is +Inf, a MOVES "earliest year after" that has
+# none). Such a value is a key that equals what it equals as a number — the
+# equality the per-pair test of the dense evaluators applies — so it matches
+# nothing that is an ID; an integral value is the ID it names.
+struct _ComputedKeys
+    vals::Vector{Any}
+end
+_computed_keys(vals) = _ComputedKeys(Any[(v isa Real && isfinite(v) && v == round(v) &&
+                                         abs(v) < 9.0e15) ? Int(v) : Float64(v)
+                                        for v in vals])
 
 # Map an OVERLAP-gate env-factor list to the aggregate range symbol its axis
 # runs over (Phase 2a): the env factors are 1-D const-array buffers, so — exactly

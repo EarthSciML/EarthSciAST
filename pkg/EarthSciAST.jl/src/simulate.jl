@@ -1798,7 +1798,8 @@ end
 function _param_class_refusal(name::AbstractString, cls::Symbol)
     what = cls === :structural ?
         "STRUCTURAL: its value is read at BUILD time (setup geometry, " *
-        "value-invention index-set extents, binning coordinates, ic() folds), " *
+        "value-invention index-set extents, binning coordinates, join key columns, " *
+        "ic() folds), " *
         "where it can decide the SHAPE of the problem — length(u0), the compiled " *
         "kernels. A value swapped into `p` at solve time would contradict the one " *
         "already baked into the build" :

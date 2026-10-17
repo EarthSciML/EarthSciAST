@@ -409,7 +409,12 @@ _current_rule_label(fallback::AbstractString = "(unnamed rule)") =
      String(fallback) : rec.current)
 
 function _finish_report(rec::_BuildRecord)
-    return CompilerReport(rec.plan.name, copy(rec.rules), copy(rec.tally))
+    # A nested reduction the build lifted into an internal observed
+    # (tree_walk/hoist.jl) reports under the variable it was lifted from.
+    rules = CompilerRuleRecord[_is_hoisted_name(r.rule) ?
+        CompilerRuleRecord(_hoist_public_label(r.rule), r.kind, r.tier, r.declines) : r
+        for r in rec.rules]
+    return CompilerReport(rec.plan.name, rules, copy(rec.tally))
 end
 
 # ---------------------------------------------------------------------------

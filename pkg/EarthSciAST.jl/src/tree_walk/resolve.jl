@@ -448,7 +448,7 @@ function _resolve_index_of_faq(faq_expr::OpExpr, idx_args::Vector{ASTExpr},
     idx_exprs = Dict{String,ASTExpr}()
     for d in 1:nd
         a = idx_args[d]
-        if _refs_bound_sym(a, bound_syms)
+        if _subscript_is_runtime(a, const_arrays)
             symbolic[d] = true
             idx_exprs[output_idx_strs[d]] = a           # keep symbolic
         else
@@ -1087,6 +1087,127 @@ _refs_bound_sym(e::OpExpr, bound_syms::Set{String}) =
     any(a -> _refs_bound_sym(a, bound_syms), e.args)
 _refs_bound_sym(::ASTExpr, ::Set{String}) = false
 
+# True iff a subscript's value is known only at run time: it references a name
+# no integer environment binds here — a bound output-index symbol, or a
+# parameter, a state, an observed or `t` (esm-spec §4.3.2 lets a subscript be
+# any integer-valued expression) — or reads an array producer. After loop substitution every other name a
+# subscript holds is an array in an `index` head position or a binder of a
+# producer inside it. `local` holds names that do not count: a producer's own
+# binders, and for a caller that keeps bound symbols on its own path, those.
+function _subscript_is_runtime(e::ASTExpr, local_names::Set{String},
+                               const_arrays::Union{Nothing,AbstractDict}=nothing)::Bool
+    e isa VarExpr && return !((e::VarExpr).name in local_names)
+    e isa OpExpr || return false
+    o = e::OpExpr
+    # An array producer read at the subscript (`c[j[i]]` with `j` an inlined
+    # faq) has no integer evaluation; resolved, it is the producer's body at
+    # that subscript, evaluated in floating point as the run time would.
+    _is_array_producer(o) && return true
+    inner = local_names
+    binders = String[]
+    o.output_idx === nothing || for x in o.output_idx
+        x isa AbstractString && push!(binders, String(x))
+    end
+    o.ranges === nothing || for k in keys(o.ranges)
+        push!(binders, String(k))
+    end
+    isempty(binders) || (inner = union(local_names, binders))
+    for (k, a) in enumerate(o.args)
+        if k == 1 && o.op == "index" && a isa VarExpr
+            # A gather from anything but a const array (a state, a
+            # materialized observed) reads a run-time value.
+            (const_arrays === nothing || haskey(const_arrays, (a::VarExpr).name)) ||
+                return true
+            continue
+        end
+        _subscript_is_runtime(a, inner, const_arrays) && return true
+    end
+    o.expr_body === nothing ||
+        (_subscript_is_runtime(o.expr_body, inner, const_arrays) && return true)
+    o.filter === nothing ||
+        (_subscript_is_runtime(o.filter, inner, const_arrays) && return true)
+    if o.values !== nothing
+        for v in o.values
+            _subscript_is_runtime(v, inner, const_arrays) && return true
+        end
+    end
+    return false
+end
+_subscript_is_runtime(e::ASTExpr, const_arrays::AbstractDict) =
+    _subscript_is_runtime(e, _EMPTY_BOUND_SYMS, const_arrays)
+
+# ── Guarded out-of-range reads ───────────────────────────────────────────────
+# esm-spec evaluates `ifelse` lazily and `and` / `or` with short circuit, so a
+# const read out of range under a branch the cell does not take is no error
+# (the interpreter raises E_TREEWALK_CONSTARRAY_OOB where a read is
+# EVALUATED). The resolve below builds every branch, so it keeps, per task,
+# the guards the node being resolved sits under: the resolved condition and
+# the truth value its branch needs. An out-of-range constant subscript is
+# then raised at build only when every guard is decided at build and taken;
+# otherwise it becomes a run-time gather that raises the same error if it is
+# ever evaluated.
+const _ResolveGuards = Vector{Tuple{ASTExpr,Bool}}
+_resolve_guards() = get!(() -> _ResolveGuards(), task_local_storage(),
+                         :esm_resolve_guards)::_ResolveGuards
+
+# Whether the read the current guards protect is certainly evaluated: every
+# guard reads only literals (so its value is the build's to know) and has the
+# value its branch needs. A guard that reads any name — a state, a parameter,
+# an observed, `t` — is decided at run time.
+function _guarded_read_taken(guards::_ResolveGuards)
+    for (c, want) in guards
+        isempty(_referenced_var_names(c)) || return false
+        v = try
+            _eval_node(_compile(c, Dict{String,Int}(), Set{Symbol}(), Dict{String,Any}()),
+                       Float64[], NamedTuple(), 0.0)
+        catch err
+            err isa EarthSciASTError || rethrow()
+            return false
+        end
+        (v != 0) == want || return false
+    end
+    return true
+end
+
+# A const read at constant subscripts the build may not raise for (see above):
+# the run-time gather, which resolves each subscript under the array's
+# boundary policy when — and only if — it is evaluated.
+_deferred_const_gather(vals::AbstractArray, name::String, subs::Vector{Int}) =
+    OpExpr("index", ASTExpr[IntExpr(Int64(i)) for i in subs];
+           value=_ConstGatherRef(vals, name))
+
+# Resolve `ifelse` / `and` / `or` with each lazily evaluated operand under its
+# guard (see above). Every other operand is resolved exactly as the generic
+# recursion does, and an unchanged node is returned as is.
+function _resolve_guarded_op(expr::OpExpr, array_var_info, var_map, const_arrays,
+                             pgather, memo, bound_syms)
+    args = expr.args
+    guards = _resolve_guards()
+    depth = length(guards)
+    new_args = Vector{ASTExpr}(undef, length(args))
+    res(a) = (a isa OpExpr || a isa VarExpr) ?
+        _resolve_indices(a, array_var_info, var_map, const_arrays, pgather, memo,
+                         bound_syms) : a
+    try
+        new_args[1] = res(args[1])
+        if expr.op == "ifelse"
+            push!(guards, (new_args[1], true))
+            new_args[2] = res(args[2])
+            guards[end] = (new_args[1], false)
+            new_args[3] = res(args[3])
+        else
+            for j in 2:length(args)
+                push!(guards, (new_args[j-1], expr.op == "and"))
+                new_args[j] = res(args[j])
+            end
+        end
+    finally
+        resize!(guards, depth)
+    end
+    all(i -> new_args[i] === args[i], eachindex(args)) && return expr
+    return reconstruct(expr; args=new_args)
+end
+
 # Gather from a build-time-constant Float64 array `vals` (registry `name`, used
 # only for CSE identity / diagnostics) at the subscript expressions
 # `idx_args_expr`. This is the ONE spelling of the const-array read, shared by
@@ -1107,11 +1228,11 @@ function _resolve_const_array_gather(vals::AbstractArray, name::String,
         throw(TreeWalkError("E_TREEWALK_CONSTARRAY_NDIM",
               "const array '$(name)' is $(ndims(vals))D " *
               "but got $(length(idx_args_expr)) indices"))
-    if any(a -> _refs_bound_sym(a, bound_syms), idx_args_expr)
+    if any(a -> _subscript_is_runtime(a, const_arrays), idx_args_expr)
         sub_nodes = Vector{ASTExpr}(undef, length(idx_args_expr))
         for d in 1:ndims(vals)
             a = idx_args_expr[d]
-            if _refs_bound_sym(a, bound_syms)
+            if _subscript_is_runtime(a, const_arrays)
                 sub_nodes[d] = _resolve_indices(a, array_var_info, var_map,
                                                 const_arrays, pgather, memo, bound_syms)
             else
@@ -1125,6 +1246,13 @@ function _resolve_const_array_gather(vals::AbstractArray, name::String,
     # Fully-constant subscripts: inline the value as a NumExpr literal.
     int_indices = [_eval_const_int(a, _EMPTY_IDX_ENV, const_arrays)
                    for a in idx_args_expr]
+    guards = _resolve_guards()
+    if !isempty(guards) &&
+       any(d -> !(1 <= int_indices[d] <= size(vals, d)) &&
+                _const_dim_boundary(vals, d) === :error, 1:ndims(vals)) &&
+       !_guarded_read_taken(guards)
+        return _deferred_const_gather(vals, name, int_indices)
+    end
     for d in 1:ndims(vals)
         int_indices[d] = _resolve_const_index(vals, name, d, int_indices[d], size(vals, d))
     end
@@ -1331,6 +1459,12 @@ function _resolve_indices_op(expr::OpExpr,
         b = _pia_operand_ring(expr.args[2], const_arrays)
         return NumExpr(_polygon_intersection_area(a, b, expr.manifold))
     end
+    if (expr.op == "ifelse" && length(expr.args) == 3 ||
+        (expr.op == "and" || expr.op == "or") && length(expr.args) >= 2) &&
+       expr.expr_body === nothing && expr.values === nothing
+        return _resolve_guarded_op(expr, array_var_info, var_map, const_arrays,
+                                   pgather, memo, bound_syms)
+    end
     if expr.op == "index"
         isempty(expr.args) &&
             throw(TreeWalkError("E_TREEWALK_INDEX_EMPTY", "index op requires at least one arg"))
@@ -1441,13 +1575,27 @@ function _resolve_indices_op(expr::OpExpr,
             # Lower to `_NK_STATE_GATHER` (the state-source loop case). Fires ONLY on
             # the loop-build path (`__esm_lv_*` names); the concrete path below is
             # untouched otherwise.
-            if any(a -> _refs_loopvar(a), idx_args)
+            # A subscript computed at run time from a parameter, a state or an
+            # observed (bound symbols keep their own path) reads its slot the
+            # same way.
+            if any(a -> _refs_loopvar(a) || _subscript_is_runtime(a, bound_syms, const_arrays),
+                   idx_args)
                 return _resolve_state_gather(vname, lo, hi, idx_args, array_var_info,
                                              var_map, const_arrays, pgather, memo, bound_syms)
             end
             # Pass const_arrays so nested index expressions like u[conn[c,k]] can be
-            # resolved: _eval_const_int will look up conn[c,k] as an integer.
-            indices = [_eval_const_int(a, _EMPTY_IDX_ENV, const_arrays) for a in idx_args]
+            # resolved: _eval_const_int will look up conn[c,k] as an integer. A
+            # lookup out of range under a guard the build cannot show taken
+            # reads its slot at run time instead (see `_resolve_guarded_op`).
+            indices = try
+                [_eval_const_int(a, _EMPTY_IDX_ENV, const_arrays) for a in idx_args]
+            catch err
+                (err isa TreeWalkError && err.code == "E_TREEWALK_CONSTARRAY_OOB" &&
+                 !isempty(_resolve_guards()) && !_guarded_read_taken(_resolve_guards())) ||
+                    rethrow()
+                return _resolve_state_gather(vname, lo, hi, idx_args, array_var_info,
+                                             var_map, const_arrays, pgather, memo, bound_syms)
+            end
             for d in 1:length(indices)
                 if indices[d] < lo[d] || indices[d] > hi[d]
                     return NumExpr(0.0)  # ghost cell

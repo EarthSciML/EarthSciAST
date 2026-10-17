@@ -1,0 +1,85 @@
+{
+  "fixture": "join_on_computed_key_dynamic",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "values",
+      "assertion_idx": 1,
+      "variable": "total",
+      "actual": 2.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 2,
+      "variable": "total",
+      "actual": 2.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 3,
+      "variable": "wsum",
+      "actual": 5.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 4,
+      "variable": "wsum",
+      "actual": 10.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 5,
+      "variable": "total7",
+      "actual": 5.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 6,
+      "variable": "total7",
+      "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 7,
+      "variable": "total7",
+      "actual": 2.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 8,
+      "variable": "count7",
+      "actual": 2.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 9,
+      "variable": "count7",
+      "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 10,
+      "variable": "count7",
+      "actual": 1.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 11,
+      "variable": "acc",
+      "actual": 4.999999999999999
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 12,
+      "variable": "acc",
+      "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 13,
+      "variable": "acc",
+      "actual": 1.9999999999999996
+    }
+  ]
+}

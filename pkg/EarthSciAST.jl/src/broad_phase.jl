@@ -77,6 +77,8 @@ function broad_phase_candidates(query_envs::AbstractVector, cell_envs::AbstractV
     out = Tuple{Int,Int}[]
     (isempty(query_envs) || isempty(cell_envs)) && return out
     e = Float64(eps)
+    length(query_envs) * length(cell_envs) > _BROAD_PHASE_GRID_MIN &&
+        (got = _broad_phase_grid(query_envs, cell_envs, e)) !== nothing && return got
     nq = length(query_envs)
     nc = length(cell_envs)
     for qi in 1:nq
@@ -117,6 +119,80 @@ end
 #   4 names → rectangles [xmin, ymin, xmax, ymax],
 #   2 names → points [x, y] → degenerate envelope (x, y, x, y),
 #   1 name  → polygon-ring factor → AABB via `_ring_xybbox` (remapped).
+# Above this many (query, cell) pairs the dependency-free path bins the cells
+# instead of testing every pair.
+const _BROAD_PHASE_GRID_MIN = 1 << 16
+
+# The same candidate vector through a uniform grid over the cells' inflated
+# envelopes, bins about the mean cell's size: each cell is filed in every bin its
+# envelope covers (one that would cover many is tested against every query
+# instead), each query gathers the cells filed in the bins it covers, and every
+# gathered pair is put to the very predicate the pairwise loop applies. Bin
+# numbers are monotone in the coordinate, so two envelopes that intersect
+# share a bin: the result is the pairwise loop's, in the same sorted order.
+# `nothing` (the caller then tests every pair) when a coordinate is not finite.
+function _broad_phase_grid(query_envs::AbstractVector, cell_envs::AbstractVector, e::Float64)
+    nc = length(cell_envs)
+    cells = Vector{NTuple{4,Float64}}(undef, nc)
+    xlo = ylo = Inf; xhi = yhi = -Inf
+    for j in 1:nc
+        a, b, c, d = _env4(cell_envs[j])
+        a -= e; b -= e; c += e; d += e
+        all(isfinite, (a, b, c, d)) || return nothing
+        cells[j] = (a, b, c, d)
+        xlo = min(xlo, a); ylo = min(ylo, b); xhi = max(xhi, c); yhi = max(yhi, d)
+    end
+    # Bins about the size of the mean cell on each axis, at most 4·nc of them.
+    sx = xhi - xlo; sy = yhi - ylo
+    mw = sum(c[3] - c[1] for c in cells) / nc
+    mh = sum(c[4] - c[2] for c in cells) / nc
+    fx = sx > 0 ? (mw > 0 ? sx / mw : sqrt(nc)) : 1.0
+    fy = sy > 0 ? (mh > 0 ? sy / mh : sqrt(nc)) : 1.0
+    shrink = max(1.0, sqrt(fx * fy / (4 * nc)))
+    gx = clamp(ceil(Int, fx / shrink), 1, 4 * nc)
+    gy = clamp(ceil(Int, fy / shrink), 1, max(1, div(4 * nc, gx)))
+    wx = sx > 0 ? sx / gx : 1.0
+    wy = sy > 0 ? sy / gy : 1.0
+    bx(x) = clamp(floor(Int, (clamp(x, xlo, xhi) - xlo) / wx) + 1, 1, gx)
+    by(y) = clamp(floor(Int, (clamp(y, ylo, yhi) - ylo) / wy) + 1, 1, gy)
+    g = gx
+    bins = [Int[] for _ in 1:gx*gy]
+    wide = Int[]
+    for j in 1:nc
+        a, b, c, d = cells[j]
+        i1, i2, k1, k2 = bx(a), bx(c), by(b), by(d)
+        if (i2 - i1 + 1) * (k2 - k1 + 1) > 64
+            push!(wide, j)
+            continue
+        end
+        for k in k1:k2, i in i1:i2
+            push!(bins[(k - 1) * g + i], j)
+        end
+    end
+    out = Tuple{Int,Int}[]
+    cand = Int[]
+    for qi in eachindex(query_envs)
+        qxmin, qymin, qxmax, qymax = _env4(query_envs[qi])
+        qxmin -= e; qymin -= e; qxmax += e; qymax += e
+        all(isfinite, (qxmin, qymin, qxmax, qymax)) || return nothing
+        empty!(cand)
+        append!(cand, wide)
+        if qxmax >= xlo && qxmin <= xhi && qymax >= ylo && qymin <= yhi
+            for k in by(qymin):by(qymax), i in bx(qxmin):bx(qxmax)
+                append!(cand, bins[(k - 1) * g + i])
+            end
+        end
+        sort!(cand); unique!(cand)
+        for cj in cand
+            cxmin, cymin, cxmax, cymax = cells[cj]
+            if qxmin <= cxmax && cxmin <= qxmax && qymin <= cymax && cymin <= qymax
+                push!(out, (qi, cj))
+            end
+        end
+    end
+    return out
+end
+
 function _envelope_vectors_from_cols(env_names::AbstractVector, cols::AbstractVector)
     k = length(env_names)
     if k == 4

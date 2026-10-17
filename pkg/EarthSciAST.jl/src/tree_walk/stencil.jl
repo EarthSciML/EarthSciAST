@@ -708,6 +708,21 @@ function _stencilize_index(e::OpExpr, ctx::_StencilCtx)
     if first_arg isa OpExpr && (_is_faq_op(first_arg.op) || first_arg.op == "makearray")
         return _stencilize_indexed(first_arg::OpExpr, idx_args, ctx)
     end
+    # A lane resolves its subscripts per cell through `_eval_const_int`, so
+    # every subscript must be an integer function of the loop indices and
+    # build-time tables. A subscript that is not (a gather through an array
+    # producer, a parameter, a state) is no lane: a const read whose whole
+    # subtree is build-time data becomes a value-table lane, and anything else
+    # declines the equation to the tiers that gather at run time.
+    if !all(a -> _lane_subscript_static(a, ctx.idxset, ctx.const_arrays), idx_args)
+        if first_arg isa OpExpr && (first_arg::OpExpr).op == "const" ||
+           first_arg isa VarExpr && haskey(ctx.const_arrays, first_arg.name)
+            lane = _try_exprtbl_lane(e, ctx)
+            lane === nothing || return lane
+        end
+        throw(_StencilFallback("index subscript is not an integer function of the " *
+                               "loop indices and build-time tables"))
+    end
     if first_arg isa VarExpr && haskey(ctx.array_var_info, first_arg.name)
         lo, hi = ctx.array_var_info[first_arg.name]
         length(idx_args) == length(lo) ||
@@ -785,6 +800,38 @@ function _stencilize_index(e::OpExpr, ctx::_StencilCtx)
                              "producer op '$((first_arg::OpExpr).op)' :: " *
                              first(sprint(show, first_arg), 160) :
                            "non-var $(typeof(first_arg))")))
+end
+
+# Whether `_eval_const_int` evaluates subscript `e` at a cell from the loop
+# indices (`idxset`) and build-time tables alone: integer literals, loop
+# names, the integer ops it implements, and gathers from a const array (by
+# name or inline) at such subscripts. Anything else (an array producer, a
+# name that is not a loop index) leaves `_eval_const_int` without a value.
+const _LANE_SUBSCRIPT_OPS = Set(["+", "-", "*", "/", "floor", "mod", "max", "min",
+                                 "ifelse", "<", "<=", ">", ">=", "==", "neg"])
+function _lane_subscript_static(e::ASTExpr, idxset::Set{String},
+                                const_arrays::AbstractDict)::Bool
+    e isa IntExpr && return true
+    e isa NumExpr && return isinteger((e::NumExpr).value)
+    e isa VarExpr && return (e::VarExpr).name in idxset
+    e isa OpExpr || return false
+    o = e::OpExpr
+    if o.op == "index"
+        isempty(o.args) && return false
+        h = o.args[1]
+        (h isa VarExpr && haskey(const_arrays, (h::VarExpr).name) ||
+         h isa OpExpr && (h::OpExpr).op == "const" && (h::OpExpr).value isa AbstractVector) ||
+            return false
+        for k in 2:length(o.args)
+            _lane_subscript_static(o.args[k], idxset, const_arrays) || return false
+        end
+        return true
+    elseif o.op == "const"
+        return o.value isa Real && !(o.value isa Bool)
+    elseif o.op in _LANE_SUBSCRIPT_OPS
+        return all(a -> _lane_subscript_static(a, idxset, const_arrays), o.args)
+    end
+    return false
 end
 
 # Symbolically index an array producer at `kargs`. For a `makearray`, select the

@@ -1,0 +1,133 @@
+{
+  "fixture": "guarded_out_of_range_dynamic",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "values",
+      "assertion_idx": 1,
+      "variable": "y_const",
+      "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 2,
+      "variable": "y_const",
+      "actual": 15.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 3,
+      "variable": "y_const",
+      "actual": 25.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 4,
+      "variable": "y_const",
+      "actual": 35.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 5,
+      "variable": "y_const",
+      "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 6,
+      "variable": "y_named",
+      "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 7,
+      "variable": "y_named",
+      "actual": 15.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 8,
+      "variable": "y_named",
+      "actual": 25.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 9,
+      "variable": "y_named",
+      "actual": 35.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 10,
+      "variable": "y_named",
+      "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 11,
+      "variable": "y_param",
+      "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 12,
+      "variable": "y_param",
+      "actual": 1.5
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 13,
+      "variable": "y_param",
+      "actual": 2.5
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 14,
+      "variable": "y_param",
+      "actual": 3.5
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 15,
+      "variable": "y_param",
+      "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 16,
+      "variable": "y_filt",
+      "actual": 100.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 17,
+      "variable": "acc",
+      "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 18,
+      "variable": "acc",
+      "actual": 14.999999999999993
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 19,
+      "variable": "acc",
+      "actual": 24.99999999999999
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 20,
+      "variable": "acc",
+      "actual": 34.999999999999986
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 21,
+      "variable": "acc",
+      "actual": 0.0
+    }
+  ]
+}
