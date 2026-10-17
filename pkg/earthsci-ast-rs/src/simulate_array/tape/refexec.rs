@@ -787,8 +787,17 @@ pub(super) fn run_reference(
                                 }
                             }
                         };
+                        let load = |src: GroupIx, v: f64| -> f64 {
+                            let fi = fs.inputs[src as usize]
+                                .index
+                                .expect("a Load reads a folded index gather");
+                            match data_subscript(v, fi.n) {
+                                Some(p) => flats[src as usize][fi.at(p, at)],
+                                None => 0.0,
+                            }
+                        };
                         for op in &fs.micro {
-                            eval_micro_op(op, &mut regs, at, &mut carries, get);
+                            eval_micro_op(op, &mut regs, at, &mut carries, get, load);
                         }
                         for (oi, &(reg, _)) in fs.outputs.iter().enumerate() {
                             outs[oi][at] = regs[reg as usize];
@@ -860,7 +869,9 @@ pub(super) fn run_reference(
                     };
                     for op in &ls.micro {
                         // A lane program holds no scan, so no carries.
-                        eval_micro_op(op, &mut regs, l, &mut [], get);
+                        eval_micro_op(op, &mut regs, l, &mut [], get, |_, _| {
+                            unreachable!("a lane program holds no load")
+                        });
                     }
                     for w in &ls.writes {
                         let v = get(&w.src, &regs);

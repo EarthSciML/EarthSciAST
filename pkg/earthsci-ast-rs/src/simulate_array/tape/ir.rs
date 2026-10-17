@@ -857,6 +857,15 @@ pub(crate) enum MicroOp {
         carry: u32,
         out: GroupIx,
     },
+    /// A folded [`Instr::IndexGather`] whose subscript the group computes:
+    /// `out = src[...]` at the data position `a` names, through input
+    /// `src`'s [`FoldedIndex`] (whose `by` is [`FoldedIndex::IN_GROUP`]) —
+    /// the same element the pre-loaded form reads for the same subscript.
+    Load {
+        a: MRef,
+        src: GroupIx,
+        out: GroupIx,
+    },
 }
 
 /// One array input of a fused group.
@@ -915,6 +924,16 @@ pub(crate) struct FoldedIndex {
 }
 
 impl FoldedIndex {
+    /// The `by` of a gather whose subscript is a register of the group,
+    /// read by a [`MicroOp::Load`] rather than pre-loaded.
+    pub(crate) const IN_GROUP: GroupIx = GroupIx::MAX;
+
+    /// Whether the executor pre-loads this gather from an aligned subscript
+    /// input (otherwise a [`MicroOp::Load`] reads it).
+    pub(crate) fn preloaded(&self) -> bool {
+        self.by != Self::IN_GROUP
+    }
+
     /// The source offset at output offset `k` for data position `p`.
     #[inline]
     pub(crate) fn at(&self, p: usize, k: usize) -> usize {

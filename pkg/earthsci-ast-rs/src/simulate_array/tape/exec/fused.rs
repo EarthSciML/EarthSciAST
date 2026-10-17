@@ -953,7 +953,7 @@ pub(super) fn index_tables_for(prog: &TapeProgram) -> Vec<Vec<Option<IndexTable>
             .inputs
             .iter()
             .map(|inp| {
-                let fi = inp.index?;
+                let fi = inp.index.filter(FoldedIndex::preloaded)?;
                 let SrcRef::Slot(sub) = fs.inputs[fi.by as usize].src else {
                     return None;
                 };
@@ -2031,6 +2031,13 @@ unsafe fn exec_fused_runs(
                         let a = msrc(a);
                         unsafe { fch1(dst_of(mi, *out), c, a, |x| x) };
                     }
+                    MicroOp::Load { a, src, out } => {
+                        let fi = fs.inputs[*src as usize]
+                            .index
+                            .expect("a Load reads a folded index gather");
+                        let a = msrc(a);
+                        unsafe { fch_load(dst_of(mi, *out), c, at, a, bases[*src as usize], &fi) };
+                    }
                     MicroOp::Scan {
                         op,
                         a,
@@ -2612,8 +2619,12 @@ pub(in crate::simulate_array::tape) fn eval_micro_op(
     at: usize,
     carries: &mut [f64],
     get: impl Fn(&MRef, &[f64]) -> f64,
+    load: impl Fn(GroupIx, f64) -> f64,
 ) {
     match op {
+        MicroOp::Load { a, src, out } => {
+            regs[*out as usize] = load(*src, get(a, regs));
+        }
         MicroOp::Bin { op, a, b, out } => {
             regs[*out as usize] = binary_kernel_of(*op)(get(a, regs), get(b, regs));
         }
@@ -2699,6 +2710,36 @@ pub(in crate::simulate_array::tape) fn eval_micro_op(
             } else {
                 binary_kernel_of(*op3)(t2, dv)
             };
+        }
+    }
+}
+
+/// `MicroOp::Load` over a chunk: element `k` (box offset `at + k`) reads
+/// `src` at the data position subscript `a` names, through `fi`, or the
+/// zero ghost.
+///
+/// # Safety
+/// `dst` must hold `c` elements, an array `a` must hold them too, and `src`
+/// must address the gather's `fi.src_len` elements.
+#[inline(always)]
+unsafe fn fch_load(dst: *mut f64, c: usize, at: usize, a: MSrc, src: *const f64, fi: &FoldedIndex) {
+    let read = |v: f64, j: usize| match data_subscript(v, fi.n) {
+        Some(p) => unsafe { *src.add(p * fi.s_data + j) },
+        None => 0.0,
+    };
+    let mut j = (at % fi.period) * fi.s_inner + fi.base;
+    let wrap = fi.period * fi.s_inner + fi.base;
+    for k in 0..c {
+        let v = match a {
+            MSrc::P(p) => unsafe { *p.add(k) },
+            MSrc::C(x) => x,
+        };
+        unsafe { *dst.add(k) = read(v, j) };
+        if fi.s_inner != 0 {
+            j += fi.s_inner;
+            if j == wrap {
+                j = fi.base;
+            }
         }
     }
 }

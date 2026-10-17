@@ -517,6 +517,7 @@ impl GBuilder {
         src: SrcRef,
         idx: &Operand,
         fold: FoldedIndex,
+        src_shape: &super::super::DimU,
         out: SlotId,
         prog: &TapeProgram,
     ) -> bool {
@@ -524,6 +525,36 @@ impl GBuilder {
             Operand::Slot(_) | Operand::State(_) => self.resolve(idx, prog),
             _ => None,
         };
+        // A subscript the group computes itself: read through a `Load`
+        // micro-op at its place in the program.
+        if let Some(ResOp::Existing(MRef::Reg(r))) = resolved {
+            let input_ix = self.inputs.len() as GroupIx;
+            self.inputs.push(FusedInput {
+                src,
+                shifted_ix: None,
+                src_shape: src_shape.clone(),
+                elem_stride: 1,
+                load_reg: GroupIx::MAX,
+                index: Some(FoldedIndex {
+                    by: FoldedIndex::IN_GROUP,
+                    ..fold
+                }),
+                gather: None,
+            });
+            let ssa = self.micro.len() as GroupIx;
+            self.micro.push(MicroOp::Load {
+                a: MRef::Reg(r),
+                src: input_ix,
+                out: ssa,
+            });
+            // An ordinary register from here on: stored like any other
+            // value of the group when something outside reads it.
+            self.val_of.insert(out, MRef::Reg(ssa));
+            self.defs.push((out, ssa));
+            self.members.insert(ix);
+            self.member_instrs.push(ix);
+            return true;
+        }
         let by = match resolved {
             Some(r @ ResOp::NewAligned(..)) => match self.commit(r) {
                 MRef::In(i) => i,
@@ -541,7 +572,7 @@ impl GBuilder {
         self.inputs.push(FusedInput {
             src,
             shifted_ix: None,
-            src_shape: SmallVec::from_elem(fold.src_len, 1),
+            src_shape: src_shape.clone(),
             elem_stride: 1,
             load_reg: GroupIx::MAX,
             index: Some(FoldedIndex { by, ..fold }),
@@ -1281,6 +1312,7 @@ fn for_each_operand(op: &MicroOp, mut f: impl FnMut(&MRef)) {
         MicroOp::Un { a, .. }
         | MicroOp::Neg { a, .. }
         | MicroOp::Mov { a, .. }
+        | MicroOp::Load { a, .. }
         | MicroOp::Scan { a, .. } => f(a),
         MicroOp::Select { cond, a, b, .. } => {
             f(cond);
@@ -1467,6 +1499,7 @@ fn for_each_operand_mut(op: &mut MicroOp, mut f: impl FnMut(&mut MRef)) {
         MicroOp::Un { a, .. }
         | MicroOp::Neg { a, .. }
         | MicroOp::Mov { a, .. }
+        | MicroOp::Load { a, .. }
         | MicroOp::Scan { a, .. } => f(a),
         MicroOp::Select { cond, a, b, .. } => {
             f(cond);
@@ -1497,6 +1530,7 @@ fn set_micro_out(op: &mut MicroOp, r: GroupIx) {
         | MicroOp::Select { out, .. }
         | MicroOp::Bin2 { out, .. }
         | MicroOp::Bin3 { out, .. }
+        | MicroOp::Load { out, .. }
         | MicroOp::Scan { out, .. } => *out = r,
     }
 }
@@ -1511,6 +1545,7 @@ pub(super) fn micro_out(op: &MicroOp) -> GroupIx {
         | MicroOp::Select { out, .. }
         | MicroOp::Bin2 { out, .. }
         | MicroOp::Bin3 { out, .. }
+        | MicroOp::Load { out, .. }
         | MicroOp::Scan { out, .. } => *out,
     }
 }
@@ -1560,6 +1595,7 @@ fn mop_label(op: &MicroOp) -> String {
         MicroOp::Neg { .. } => "Neg".to_string(),
         MicroOp::Select { .. } => "Select".to_string(),
         MicroOp::Mov { .. } => "Mov".to_string(),
+        MicroOp::Load { .. } => "Load".to_string(),
         MicroOp::Scan { op, .. } => format!("Scan({op:?})"),
         MicroOp::Bin2 { op1, op2, swap, .. } => {
             format!("Bin2({op1:?},{op2:?}{})", if *swap { ",swap" } else { "" })
@@ -1594,6 +1630,7 @@ fn merge_superops(micro: &mut Vec<MicroOp>, outputs: &mut [(GroupIx, SlotId)], c
             MicroOp::Un { a, .. }
             | MicroOp::Neg { a, .. }
             | MicroOp::Mov { a, .. }
+            | MicroOp::Load { a, .. }
             | MicroOp::Scan { a, .. } => count(a, &mut uses),
             MicroOp::Select { cond, a, b, .. } => {
                 count(cond, &mut uses);
@@ -1736,6 +1773,7 @@ fn merge_superops(micro: &mut Vec<MicroOp>, outputs: &mut [(GroupIx, SlotId)], c
             MicroOp::Un { a, out, .. }
             | MicroOp::Neg { a, out }
             | MicroOp::Mov { a, out }
+            | MicroOp::Load { a, out, .. }
             | MicroOp::Scan { a, out, .. } => {
                 *a = remap(a, &new_of);
                 *out = new_id;
@@ -1845,6 +1883,7 @@ pub(super) fn allocate_registers(
             MicroOp::Un { a, out, .. }
             | MicroOp::Neg { a, out }
             | MicroOp::Mov { a, out }
+            | MicroOp::Load { a, out, .. }
             | MicroOp::Scan { a, out, .. } => {
                 remap(a);
                 *out = phys_of[*out as usize];
@@ -2307,7 +2346,7 @@ fn flush_one(g: GBuilder, fx: &mut FuseCtx) {
     // scalar instead, except under the all-pointer Bin3 superop, which
     // needs every operand in a register.
     for inp in inputs.iter_mut() {
-        if inp.index.is_some()
+        if inp.index.is_some_and(|fi| fi.preloaded())
             || inp.gather.as_deref().is_some_and(|g| !g.whole)
             || inp.shifted_ix.is_some()
                 && inp.elem_stride != 1
@@ -2575,10 +2614,23 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
             if let Some(fold) = folded_index_of(spec_ref)
                 && !out_desc.shape.is_empty()
             {
-                flush_hazards(ins, None, &mut open, fx);
                 let shape = out_desc.shape.clone();
-                let gi = find_or_open(&mut open, shape, prog.provenance[i], prec_at(prog, i), fx);
-                if open[gi].add_folded_index_gather(i as u32, *src, idx, fold, *out, prog) {
+                let prec = prec_at(prog, i);
+                // The group over the box may keep computing while it supplies
+                // the subscript — but not when it also computes the source,
+                // which the gather reads at positions other than its own.
+                let src_in_box_group = matches!(src, SrcRef::Slot(s)
+                    if open.iter().any(|g| g.shape == shape && g.prec == prec && g.defines(*s)));
+                if src_in_box_group {
+                    flush_hazards(ins, None, &mut open, fx);
+                } else {
+                    flush_hazards(ins, Some((&shape, prec)), &mut open, fx);
+                }
+                let gi = find_or_open(&mut open, shape, prog.provenance[i], prec, fx);
+                let src_shape = spec_ref.src_shape.clone();
+                if open[gi]
+                    .add_folded_index_gather(i as u32, *src, idx, fold, &src_shape, *out, prog)
+                {
                     i += 1;
                     continue;
                 }

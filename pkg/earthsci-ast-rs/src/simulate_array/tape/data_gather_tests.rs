@@ -412,3 +412,48 @@ fn subscript_rounding_matches_round() {
         assert_eq!(super::ir::subscript_of(v), v.round() as i64, "{v:?}");
     }
 }
+
+/// A per-column count used as a subscript (`u[c, max(1, cnt[c])]`, the
+/// kpbl shape) over a column-major state: the contraction's box is laid out
+/// with the state, and the gather folds into the group that computes its
+/// subscript — and the program still agrees with the oracle.
+#[test]
+fn a_column_count_subscript_folds_into_its_group() {
+    let (nc, nl) = (5i64, 7i64);
+    let cnt = json!({"op": "faq", "args": [], "output_idx": ["c"],
+        "ranges": {"c": [1, nc], "l": [1, nl]}, "reduce": "+",
+        "expr": {"op": "ifelse", "args": [
+            {"op": ">", "args": [idx(json!("u"), &[json!("c"), json!("l")]), 0.0]}, 1.0, 0.0]}});
+    let rhs = plus(
+        json!({"op": "*", "args": [-0.1, idx(json!("u"), &[json!("c"), json!("l")])]}),
+        idx(
+            json!("u"),
+            &[
+                json!("c"),
+                json!({"op": "max", "args": [1, idx(json!("cnt"), &[json!("c")])]}),
+            ],
+        ),
+    );
+    let compiled = compile(doc(
+        json!({
+            "u": {"type": "unknown", "shape": ["c", "l"]},
+            "cnt": {"type": "unknown", "shape": ["c"]}
+        }),
+        vec![
+            json!({"lhs": "cnt", "rhs": cnt}),
+            json!({"lhs": {"op": "faq", "args": [], "output_idx": ["c", "l"],
+                    "expr": {"op": "D", "args": [idx(json!("u"), &[json!("c"), json!("l")])], "wrt": "t"},
+                    "ranges": {"c": [1, nc], "l": [1, nl]}},
+                   "rhs": {"op": "faq", "args": [], "output_idx": ["c", "l"],
+                    "ranges": {"c": [1, nc], "l": [1, nl]}, "expr": rhs}}),
+        ],
+    ));
+    let prog = ab(&compiled, &no_params());
+    assert!(prog.col_major);
+    assert_eq!(opcount(&prog, "IndexGather"), 0, "the gather is folded");
+    assert_eq!(
+        opcount(&prog, "Gather"),
+        0,
+        "no transposed copy of the state"
+    );
+}
