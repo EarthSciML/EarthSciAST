@@ -3574,7 +3574,7 @@ fn ab_index_gather_unstructured() {
         prog.fused.iter().any(|f| f
             .inputs
             .iter()
-            .any(|i| i.index.is_some_and(|(_, m)| m == n as usize))),
+            .any(|i| i.index.is_some_and(|fi| fi.n == n as usize))),
         "a fused group reads the source through the subscript"
     );
     let spec = &prog.index_gathers[0];

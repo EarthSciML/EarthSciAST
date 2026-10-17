@@ -412,3 +412,81 @@ fn subscript_rounding_matches_round() {
         assert_eq!(super::ir::subscript_of(v), v.round() as i64, "{v:?}");
     }
 }
+
+/// A per-column count used as a subscript (`u[c, max(1, cnt[c])]`, the
+/// kpbl shape) over a column-major state: the contraction's box is laid out
+/// with the state, and the gather folds into the group that computes its
+/// subscript — and the program still agrees with the oracle.
+#[test]
+fn a_column_count_subscript_folds_into_its_group() {
+    let (nc, nl) = (5i64, 7i64);
+    let cnt = json!({"op": "faq", "args": [], "output_idx": ["c"],
+        "ranges": {"c": [1, nc], "l": [1, nl]}, "reduce": "+",
+        "expr": {"op": "ifelse", "args": [
+            {"op": ">", "args": [idx(json!("u"), &[json!("c"), json!("l")]), 0.0]}, 1.0, 0.0]}});
+    let rhs = plus(
+        json!({"op": "*", "args": [-0.1, idx(json!("u"), &[json!("c"), json!("l")])]}),
+        idx(
+            json!("u"),
+            &[
+                json!("c"),
+                json!({"op": "max", "args": [1, idx(json!("cnt"), &[json!("c")])]}),
+            ],
+        ),
+    );
+    let compiled = compile(doc(
+        json!({
+            "u": {"type": "unknown", "shape": ["c", "l"]},
+            "cnt": {"type": "unknown", "shape": ["c"]}
+        }),
+        vec![
+            json!({"lhs": "cnt", "rhs": cnt}),
+            json!({"lhs": {"op": "faq", "args": [], "output_idx": ["c", "l"],
+                    "expr": {"op": "D", "args": [idx(json!("u"), &[json!("c"), json!("l")])], "wrt": "t"},
+                    "ranges": {"c": [1, nc], "l": [1, nl]}},
+                   "rhs": {"op": "faq", "args": [], "output_idx": ["c", "l"],
+                    "ranges": {"c": [1, nc], "l": [1, nl]}, "expr": rhs}}),
+        ],
+    ));
+    let prog = ab(&compiled, &no_params());
+    assert!(prog.col_major);
+    assert_eq!(opcount(&prog, "IndexGather"), 0, "the gather is folded");
+    assert_eq!(
+        opcount(&prog, "Gather"),
+        0,
+        "no transposed copy of the state"
+    );
+}
+
+/// The data-subscript bounds test is `subscript_of` then `1..=n`, for every
+/// value class, including the values a half away from a whole number.
+#[test]
+fn data_subscript_matches_round_then_range() {
+    use super::ir::{data_subscript, subscript_of};
+    let reference = |v: f64, n: usize| {
+        let r = subscript_of(v);
+        (r >= 1 && r <= n as i64).then(|| (r - 1) as usize)
+    };
+    let mut vals: Vec<f64> = vec![f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -0.0, 0.0];
+    for k in -3i64..70 {
+        for d in [-0.5f64, 0.0, 0.5] {
+            let x = k as f64 + d;
+            vals.push(x);
+            vals.push(f64::from_bits(x.to_bits().wrapping_add(1)));
+            vals.push(f64::from_bits(x.to_bits().wrapping_sub(1)));
+        }
+    }
+    let mut x: u64 = 0x2545F4914F6CDD1D;
+    for _ in 0..200_000 {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        vals.push(f64::from_bits(x));
+        vals.push((x % 1_000_003) as f64 / 7.0 - 30.0);
+    }
+    for n in [0usize, 1, 2, 5, 20, 64, 1000] {
+        for &v in &vals {
+            assert_eq!(data_subscript(v, n), reference(v, n), "{v:?} n={n}");
+        }
+    }
+}
