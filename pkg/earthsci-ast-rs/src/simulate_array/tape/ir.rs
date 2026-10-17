@@ -2269,8 +2269,9 @@ pub(crate) fn data_subscript(v: f64, n: usize) -> Option<usize> {
     // compares and a truncation instead of `subscript_of`'s saturating
     // conversion.
     if v >= 0.5 && v < n as f64 + 0.5 {
-        // SAFETY: `v + 0.5` lies in `[1, n + 1)`, which `usize` holds.
-        Some(unsafe { (v + 0.5).to_int_unchecked::<usize>() } - 1)
+        // SAFETY: `v + 0.5` lies in `[1, n + 1)`, which `i64` holds (the
+        // signed conversion is one instruction; the unsigned one is not).
+        Some(unsafe { (v + 0.5).to_int_unchecked::<i64>() } as usize - 1)
     } else {
         None
     }
