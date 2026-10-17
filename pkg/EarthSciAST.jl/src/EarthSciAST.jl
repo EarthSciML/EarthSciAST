@@ -462,4 +462,6 @@ function __init__()
     Unitful.register(EarthSciAST)
 end
 
+include("precompile_workload.jl")
+
 end # module EarthSciAST
