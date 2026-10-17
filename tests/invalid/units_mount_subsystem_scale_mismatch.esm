@@ -1,0 +1,33 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "UnitsMountSubsystemScaleMismatch",
+    "description": "Invalid (EarthSciAST#414): probe [Pa] = Leaf.p_kpa, where Leaf is a `subsystems.<k>` {ref} mount of tests/valid/units_mount_leaf.esm and p_kpa is declared kPa — pascals declared over kilopascals — same dimension, scale 1000 apart. The mounted variable's declared units cross the edge (esm-spec §4.8.4), so this is a provable mismatch.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "created": "2026-10-15T00:00:00Z"
+  },
+  "models": {
+    "Probe": {
+      "subsystems": {
+        "Leaf": {
+          "ref": "../valid/units_mount_leaf.esm"
+        }
+      },
+      "variables": {
+        "probe": {
+          "type": "unknown",
+          "units": "Pa",
+          "description": "Invalid: pascals declared over kilopascals — same dimension, scale 1000 apart."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "probe",
+          "rhs": "Leaf.p_kpa"
+        }
+      ]
+    }
+  }
+}

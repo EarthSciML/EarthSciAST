@@ -1,0 +1,72 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "UnitsConstantExponentMismatch",
+    "description": "Invalid: T^(3/2), with the exponent written as the constant expression {op: /, args: [3, 2]}, is declared K^2; and L raised to a const declaring units \"1\" is declared m. Each exponent folds to an exact rational (esm-spec §4.8.3 `^`), so each declaration is a provable mismatch. Before the fold, both exponents were read as symbolic and both equations went unchecked.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "created": "2026-10-15T00:00:00Z"
+  },
+  "models": {
+    "Powers": {
+      "variables": {
+        "T": {
+          "type": "parameter",
+          "units": "K",
+          "default": 300.0,
+          "description": "A temperature."
+        },
+        "L": {
+          "type": "parameter",
+          "units": "m",
+          "default": 2.0,
+          "description": "A length."
+        },
+        "T_32": {
+          "type": "unknown",
+          "units": "K^2",
+          "description": "Invalid: T^(3/2) declared K^2."
+        },
+        "L_const": {
+          "type": "unknown",
+          "units": "m",
+          "description": "Invalid: L^(const 0.5, units \"1\") declared m."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "T_32",
+          "rhs": {
+            "op": "^",
+            "args": [
+              "T",
+              {
+                "op": "/",
+                "args": [
+                  3,
+                  2
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "L_const",
+          "rhs": {
+            "op": "^",
+            "args": [
+              "L",
+              {
+                "op": "const",
+                "args": [],
+                "value": 0.5,
+                "units": "1"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

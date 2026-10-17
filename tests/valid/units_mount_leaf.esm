@@ -1,0 +1,30 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "UnitsMountLeaf",
+    "description": "A leaf component mounted by the units_mount_* fixtures (tests/valid and tests/invalid). It declares a pressure in kPa and an operating time in hours; the mounting documents read them as Leaf.p_kpa and Leaf.t_h, and esm-spec §4.8.4 requires their declared units to cross the mount edge (EarthSciAST#414).",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "created": "2026-10-15T00:00:00Z"
+  },
+  "models": {
+    "Leaf": {
+      "variables": {
+        "p_kpa": {
+          "type": "parameter",
+          "units": "kPa",
+          "default": 101.325,
+          "description": "A pressure, declared in kilopascals."
+        },
+        "t_h": {
+          "type": "parameter",
+          "units": "h",
+          "default": 2.0,
+          "description": "An operating time, declared in hours."
+        }
+      },
+      "equations": []
+    }
+  }
+}

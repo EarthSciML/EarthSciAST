@@ -1,0 +1,73 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "UnitsMountSubsystemConsistent",
+    "description": "esm-spec §4.7 / §4.8.4 (EarthSciAST#414): the declared units of a variable in a subsystem mounted by {ref} cross the mount edge, so Leaf.p_kpa is typed kPa in the mounting model. Every equation here agrees in dimension AND scale (kPa = kPa, kPa * Pa/kPa = Pa, h * s/h = s) and must validate. tests/invalid/units_mount_subsystem_*.esm are the same shape with a wrong declaration.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "created": "2026-10-15T00:00:00Z"
+  },
+  "models": {
+    "Probe": {
+      "subsystems": {
+        "Leaf": {
+          "ref": "./units_mount_leaf.esm"
+        }
+      },
+      "variables": {
+        "p_same": {
+          "type": "unknown",
+          "units": "kPa",
+          "description": "The mounted pressure, in the unit it is declared in."
+        },
+        "p_pa": {
+          "type": "unknown",
+          "units": "Pa",
+          "description": "The mounted pressure converted to pascals by a unit-bearing const."
+        },
+        "t_s": {
+          "type": "unknown",
+          "units": "s",
+          "description": "The mounted time converted to seconds by a unit-bearing const."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "p_same",
+          "rhs": "Leaf.p_kpa"
+        },
+        {
+          "lhs": "p_pa",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "Leaf.p_kpa",
+              {
+                "op": "const",
+                "args": [],
+                "value": 1000.0,
+                "units": "Pa/kPa"
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "t_s",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "Leaf.t_h",
+              {
+                "op": "const",
+                "args": [],
+                "value": 3600.0,
+                "units": "s/h"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

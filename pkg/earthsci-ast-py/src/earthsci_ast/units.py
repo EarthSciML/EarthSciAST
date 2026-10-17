@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import math
 import re
+from collections import ChainMap
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from fractions import Fraction
 from typing import Any, NamedTuple
@@ -1011,8 +1013,8 @@ def scaled_dimensionless_message(op: str, scale: ExactScale) -> str:
 #: dimensionless ratio.
 _CIRCULAR_FUNCS = frozenset({"sin", "cos", "tan"})
 
-#: The array operators whose ELEMENT unit the evaluation-path reading carries
-#: (`UnitValidator._type_array_element`).
+#: The array operators that carry their ELEMENT's unit, in the checker and on
+#: the evaluation path (`UnitValidator._type_array_element`, esm-spec §4.8.3).
 _ARRAY_ELEMENT_OPS = frozenset(
     {"faq", "makearray", "index", "reshape", "transpose", "concat", "broadcast"}
 )
@@ -1112,6 +1114,170 @@ class UnitConversionResult:
     error_message: str | None = None
 
 
+# ---------------------------------------------------------------------------
+# Scoped references carry their target's units (esm-spec §4.8.4, issue #414)
+# ---------------------------------------------------------------------------
+
+
+def _component_member_units(component: Any) -> dict[str, str | None]:
+    """Declared unit strings of a component's own members: a model's
+    ``variables``, a reaction system's ``species`` and ``parameters``. A
+    member that declares no units maps to ``None``: it still occupies its
+    name (see :class:`ScopedUnits`)."""
+    out: dict[str, str | None] = {}
+    variables = getattr(component, "variables", None)
+    if isinstance(variables, dict):
+        for name, var in variables.items():
+            out[name] = getattr(var, "units", None) or None
+    for attr in ("species", "parameters"):
+        members = getattr(component, attr, None)
+        if isinstance(members, dict):
+            items = list(members.items())
+        elif isinstance(members, list):
+            items = [(getattr(m, "name", None), m) for m in members]
+        else:
+            continue
+        for name, member in items:
+            if isinstance(name, str):
+                out[name] = getattr(member, "units", None) or None
+    return out
+
+
+class ScopedUnit(NamedTuple):
+    """A scoped reference's target: its declared unit string and the parsed
+    unit (``None`` when it declares none or an unparseable one -- the
+    reference is then undeterminable)."""
+
+    units: str | None
+    unit: Any
+
+
+def _collect_scoped_units(prefix: str, component: Any, out: dict[str, ScopedUnit]) -> None:
+    """Register ``<prefix>.<member>`` for every member of ``component`` and,
+    recursively, of every subsystem it carries (esm-spec §4.9.2: a scoped
+    reference is a dot path of arbitrary depth). An unparseable unit is
+    reported at its own declaration, not here."""
+    for name, units in _component_member_units(component).items():
+        unit = None
+        if units is not None:
+            try:
+                unit = parse_unit(units)
+            except UnparseableUnitError:
+                unit = None
+        out[f"{prefix}.{name}"] = ScopedUnit(units, unit)
+    for sub_name, sub in (getattr(component, "subsystems", None) or {}).items():
+        if isinstance(sub, dict):
+            continue  # an unresolved {"ref": ...} edge: nothing is known about it
+        _collect_scoped_units(f"{prefix}.{sub_name}", sub, out)
+
+
+class ScopedUnits:
+    """The units every scoped reference in a document carries (esm-spec §4.9.2).
+
+    A mounted component is, after resolution, the same as one written inline
+    (§4.7 "Resolution timing"), so a variable reached across a ``{ref}`` mount
+    edge -- a ``subsystems.<k>`` mount or a top-level ``models.<k>`` mount --
+    carries the units its declaration states, exactly as a local one does
+    (§4.8.4). Two kinds of path are covered, with the same precedence the
+    reference-integrity check uses: ``<System>.<member>`` naming a top-level
+    model or reaction system (and its subsystems), and ``<sub>.<member>``
+    relative to a component's own subsystems, which wins on a collision -- even
+    when the relative member declares no units, in which case the reference
+    is undeterminable and its check is skipped.
+
+    The top-level paths are built once per document; :meth:`for_component`
+    overlays only that component's relative paths.
+    """
+
+    def __init__(self, esm_file: EsmFile | None):
+        self._top: dict[str, ScopedUnit] = {}
+        if esm_file is not None:
+            for name, model in (esm_file.models or {}).items():
+                _collect_scoped_units(name, model, self._top)
+            for name, rs in (esm_file.reaction_systems or {}).items():
+                _collect_scoped_units(name, rs, self._top)
+
+    def for_component(self, component: Any) -> Mapping[str, ScopedUnit]:
+        """Scoped name -> target for the references an expression in
+        ``component`` can make."""
+        relative: dict[str, ScopedUnit] = {}
+        for sub_name, sub in (getattr(component, "subsystems", None) or {}).items():
+            if isinstance(sub, dict):
+                continue
+            _collect_scoped_units(sub_name, sub, relative)
+        if not relative:
+            return self._top
+        return ChainMap(relative, self._top)
+
+
+# ---------------------------------------------------------------------------
+# Constant exponents (esm-spec §4.8.3 `^`)
+# ---------------------------------------------------------------------------
+
+
+def _literal_rational(value: Any) -> Fraction | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    return Fraction(str(value))
+
+
+def constant_exponent_value(expr: Any) -> Fraction | None:
+    """The exact rational value of a CONSTANT-EXPRESSION exponent, or ``None``.
+
+    esm-spec §4.8.3 `^`: an exponent folds when it is a numeric literal; a
+    ``const`` that declares no units, or a dimensionless unit at scale 1 (its
+    value IS the pure number it denotes); or ``+``, ``*`` (one or more
+    operands), ``-`` (unary negation, or a left fold of two or more) or ``/``
+    (exactly two operands, nonzero divisor) over constant expressions, nested to
+    any depth. Anything else -- a variable, an expression containing one, a
+    ``const`` at a scale other than 1 (``%``: its value and its quantity
+    disagree), any other operator -- is SYMBOLIC and leaves the power of a
+    dimensional base undeterminable (§4.8.4).
+    """
+    literal = _literal_rational(expr)
+    if literal is not None:
+        return literal
+    if not isinstance(expr, ExprNode):
+        return None
+    op = expr.op
+    if op == "const":
+        if expr.units is not None:
+            try:
+                unit = parse_unit(expr.units)
+            except UnparseableUnitError:
+                return None
+            if unit.dimensionality or not exact_scale_of(unit).is_one():
+                return None
+        return _literal_rational(expr.value)
+    args = list(expr.args or [])
+    if not args:
+        return None
+    values = [constant_exponent_value(a) for a in args]
+    if any(v is None for v in values):
+        return None
+    if op == "+":
+        return sum(values, Fraction(0))
+    if op == "*":
+        product = Fraction(1)
+        for v in values:
+            product *= v
+        return product
+    if op == "-":
+        if len(values) == 1:
+            return -values[0]
+        result = values[0]
+        for v in values[1:]:
+            result -= v
+        return result
+    if op == "/":
+        if len(values) != 2 or values[1] == 0:
+            return None
+        return values[0] / values[1]
+    return None
+
+
 class UnitValidator:
     """Validator for dimensional consistency in ESM format structures."""
 
@@ -1124,10 +1290,9 @@ class UnitValidator:
 
         self.ureg = ureg
         self.known_units: dict[str, pint.Quantity] = {}
-        # The EVALUATION-PATH reading, set only by `normalize_angle_arguments`:
-        # an array operator carries its ELEMENT's unit (see `_type_array_element`).
-        # The checker leaves it off, so no checker verdict depends on it.
-        self.element_units = False
+        # Targets of the current component's scoped references (`Leaf.p`,
+        # `sub.v`), consulted after `known_units` (see ScopedUnits).
+        self.scoped_units: Mapping[str, ScopedUnit] = {}
 
     def validate_esm_file(self, esm_file: EsmFile) -> UnitValidationResult:
         """
@@ -1140,16 +1305,20 @@ class UnitValidator:
             UnitValidationResult with validation status and any issues found
         """
         result = UnitValidationResult(is_valid=True)
+        scoped = ScopedUnits(esm_file)
 
         if esm_file.models:
             self._merge_component_results(
-                esm_file.models.values(), self.validate_model, "Model", result
+                esm_file.models.values(),
+                lambda m: self.validate_model(m, scoped),
+                "Model",
+                result,
             )
 
         if esm_file.reaction_systems:
             self._merge_component_results(
                 esm_file.reaction_systems.values(),
-                self.validate_reaction_system,
+                lambda rs: self.validate_reaction_system(rs, scoped),
                 "ReactionSystem",
                 result,
             )
@@ -1177,12 +1346,16 @@ class UnitValidator:
             )
             result.unit_registry.update(sub.unit_registry)
 
-    def validate_model(self, model: Model) -> UnitValidationResult:
+    def validate_model(
+        self, model: Model, scoped: ScopedUnits | None = None
+    ) -> UnitValidationResult:
         """
         Validate unit consistency within a model.
 
         Args:
             model: The model to validate
+            scoped: The containing document's :class:`ScopedUnits`; without
+                one only paths into the model's own subsystems are typed
 
         Returns:
             UnitValidationResult for the model
@@ -1193,6 +1366,7 @@ class UnitValidator:
         # name reused in another model/reaction system cannot collide during
         # bare-name dimension lookups in _get_expression_dimension.
         self.known_units = {}
+        self.scoped_units = (scoped or ScopedUnits(None)).for_component(model)
 
         if not model.variables:
             return result
@@ -1250,12 +1424,16 @@ class UnitValidator:
         result.is_valid = len(result.errors) == 0
         return result
 
-    def validate_reaction_system(self, rs: ReactionSystem) -> UnitValidationResult:
+    def validate_reaction_system(
+        self, rs: ReactionSystem, scoped: ScopedUnits | None = None
+    ) -> UnitValidationResult:
         """
         Validate unit consistency within a reaction system.
 
         Args:
             rs: The reaction system to validate
+            scoped: The containing document's :class:`ScopedUnits` (see
+                :meth:`validate_model`)
 
         Returns:
             UnitValidationResult for the reaction system
@@ -1264,6 +1442,7 @@ class UnitValidator:
 
         # Scope the known-units registry to this component (see validate_model).
         self.known_units = {}
+        self.scoped_units = (scoped or ScopedUnits(None)).for_component(rs)
 
         # Register species units
         if rs.species:
@@ -1309,6 +1488,14 @@ class UnitValidator:
 
         result.is_valid = len(result.errors) == 0
         return result
+
+    def _unit_of(self, name: str):
+        """The unit of a name: a component-local declaration, else a scoped
+        reference's target (esm-spec §4.8.4); ``None`` when undeterminable."""
+        if name in self.known_units:
+            return self.known_units[name]
+        target = self.scoped_units.get(name)
+        return target.unit if target is not None else None
 
     def validate_equation(self, equation, equation_id: str) -> UnitValidationResult:
         """
@@ -1470,8 +1657,8 @@ class UnitValidator:
             return None
 
         if isinstance(expr, str):
-            if expr in self.known_units:
-                unit = self.known_units[expr]
+            unit = self._unit_of(expr)
+            if unit is not None:
                 return _Typed(unit.dimensionality, exact_scale_of(unit))
             # Undeclared symbol: unknown dimension, so it is skipped rather
             # than assumed dimensionless.
@@ -1600,7 +1787,10 @@ class UnitValidator:
                 return None
             return _Typed(unit.dimensionality, exact_scale_of(unit))
 
-        if self.element_units and node.op in _ARRAY_ELEMENT_OPS:
+        if node.op in _ARRAY_ELEMENT_OPS:
+            # Array operators carry their ELEMENT's unit (esm-spec §4.8.3,
+            # "Array operators"), in the checker and on the evaluation path
+            # alike.
             return self._type_array_element(node)
 
         if not node.args:
@@ -1694,13 +1884,13 @@ class UnitValidator:
                 and base.scale.is_one()
             ):
                 return self._dimensionless
-            if (
-                len(node.args) > 1
-                and isinstance(node.args[1], (int, float))
-                and not isinstance(node.args[1], bool)
-            ):
-                power = Fraction(str(node.args[1]))
-                return _Typed(base.dim ** node.args[1], base.scale**power)
+            # The exponent is read BY VALUE: a literal, or any constant
+            # expression over literals (`3/2`, `-(1)`), folds to an exact
+            # rational (esm-spec §4.8.3). A symbolic exponent stays unknown.
+            power = constant_exponent_value(node.args[1]) if len(node.args) > 1 else None
+            if power is not None:
+                dim_exp = power.numerator if power.denominator == 1 else float(power)
+                return _Typed(base.dim**dim_exp, base.scale**power)
             return None
 
         if op == "D":
@@ -1717,9 +1907,9 @@ class UnitValidator:
             # a dimensional mismatch by Go, Julia, Rust and TypeScript and
             # silently accepted by Python (EarthSciAST#407).
             wrt = getattr(node, "wrt", None) or op_registry.STRUCTURAL_DERIVATIVE_WRT
-            if args[0] is None or wrt not in self.known_units:
+            wrt_unit = self._unit_of(wrt)
+            if args[0] is None or wrt_unit is None:
                 return None
-            wrt_unit = self.known_units[wrt]
             return _Typed(
                 args[0].dim / wrt_unit.dimensionality, args[0].scale / exact_scale_of(wrt_unit)
             )
@@ -1730,43 +1920,95 @@ class UnitValidator:
         return None
 
     def _type_array_element(self, node: ExprNode) -> _Typed | None:
-        """The ELEMENT unit of an array operator, on the evaluation path only.
+        """The ELEMENT unit of an array operator (esm-spec §4.8.3, "Array
+        operators") -- the same rules in every binding:
 
-        The checker has no rule for the array operators (esm-spec §4.8.4: they
-        are undeterminable there), but an evaluator that meets
-        ``cos(index(lat, i))`` with ``lat`` in ``deg`` reads a number in degrees
-        all the same, and §4.8.3 requires it converted. The rules are the Rust
-        binding's ``propagate_array_dim`` (units.rs), case for case, so every
-        binding's angle rewrite folds the factor into the same arguments: an
-        ``faq`` has its body's unit; a ``makearray`` has the unit its value
-        regions share; a ``broadcast`` has the unit of its ``fn`` applied to its
-        operands; ``index``, ``reshape``, ``transpose`` and ``concat`` have their
-        source array's.
+        * ``index``, ``reshape``, ``transpose``: the source array's unit
+          (``args[0]``); the subscripts and shape operands are walked for
+          findings but are not part of it.
+        * ``concat``: its operands agree like those of ``+``.
+        * ``makearray``: its region ``values`` agree like the operands of
+          ``+`` -- an undeterminable region is skipped.
+        * ``broadcast``: the unit of ``{op: fn, args}``.
+        * ``faq``: ``filter``, ``expr`` and any ``args`` are always walked;
+          the node's unit is decided by its ⊕ (:meth:`_faq_unit`).
+
+        Every operand is walked, so a mismatch inside a subscript
+        (``index(lat, a + b)``) is reported.
+
+        A node with nothing to read a unit from is undeterminable (``None``),
+        never dimensionless (§4.8.4).
         """
         op = node.op
         if op == "faq":
-            if node.expr is not None:
-                return self._type(node.expr)
-            return self._type(node.args[0]) if node.args else self._dimensionless
+            if node.filter is not None:
+                self._type(node.filter)
+            body = self._type(node.expr) if node.expr is not None else None
+            for a in node.args:
+                self._type(a)
+            if node.expr is None:
+                return None
+            return self._faq_unit(node, body)
         if op == "makearray":
-            if not node.values:
-                return self._dimensionless
-            typed = [self._type(v) for v in node.values]
+            for a in node.args:
+                self._type(a)
+            typed = [self._type(v) for v in (node.values or [])]
             known = [t for t in typed if t is not None]
             if not known:
                 return None
             first = known[0]
-            if len(known) != len(typed) or any(
-                not self._dimensions_compatible(first.dim, t.dim) or first.scale != t.scale
-                for t in known[1:]
-            ):
-                return None
+            for t in known[1:]:
+                if not self._dimensions_compatible(first.dim, t.dim) or first.scale != t.scale:
+                    raise DimensionalMismatchError(
+                        f"'makearray' regions must share units: {first.dim} at scale "
+                        f"{first.scale} vs {t.dim} at scale {t.scale}"
+                    )
             return first
+        if op == "concat":
+            return self._agree([self._type(a) for a in node.args], op)
         if op == "broadcast":
             if node.fn is None:
+                for a in node.args:
+                    self._type(a)
                 return None
             return self._type_node(ExprNode(op=node.fn, args=list(node.args)))
-        return self._type(node.args[0]) if node.args else self._dimensionless
+        # index / reshape / transpose
+        typed = [self._type(a) for a in node.args]
+        return typed[0] if typed else None
+
+    def _faq_unit(self, node: ExprNode, body: _Typed | None) -> _Typed | None:
+        """The unit of an ``faq`` whose body has unit ``body``. The ⊗ is
+        written by the author inside ``expr`` and ``join`` clauses contribute no
+        factor, so only the ⊕ matters: ``+``/``max``/``min`` keep the body's
+        unit; ``*`` keeps it only for a pure-number body (the power is the range
+        length); ``bool_and_or`` is dimensionless; value invention
+        (``distinct`` or a ``key``) and an unknown spelling are
+        undeterminable."""
+        if node.distinct is True or node.key is not None:
+            return None
+        if node.semiring is not None:
+            kind = {
+                "sum_product": "+",
+                "max_product": "max",
+                "min_sum": "min",
+                "max_sum": "max",
+                "bool_and_or": "or",
+            }.get(node.semiring)
+        else:
+            kind = node.reduce or "+"
+        if kind in ("+", "max", "min"):
+            return body
+        if kind == "*":
+            if (
+                body is not None
+                and self._dimensions_compatible(body.dim, self._dimensionless.dim)
+                and body.scale.is_one()
+            ):
+                return body
+            return None
+        if kind == "or":
+            return self._dimensionless
+        return None
 
     def _dimensions_compatible(self, dim1: UnitsContainer, dim2: UnitsContainer) -> bool:
         """Check whether two DIMENSIONALITY containers denote the same dimension.
@@ -1850,9 +2092,8 @@ def normalize_angle_arguments(expr: Expr, env: dict[str, Any], _validator=None) 
     if validator is None:
         validator = UnitValidator()
         validator.known_units = env
-        # An array element carries its array's declared unit on this path, so
-        # `cos(index(lat, i))` with `lat` in `deg` is converted like `cos(lat)`.
-        validator.element_units = True
+        # An array element carries its array's declared unit (esm-spec §4.8.3),
+        # so `cos(index(lat, i))` with `lat` in `deg` is converted like `cos(lat)`.
 
     # Children first, so a nested `sin(theta [deg])` inside another argument is
     # converted too. IDENTITY-PRESERVING: ``map_children`` always rebuilds, and

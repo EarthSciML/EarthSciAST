@@ -3668,5 +3668,220 @@
     ],
     "is_valid": false,
     "notes": "User ruling 2026-10-02 (esm-spec 6.3.1): a parameter under D(...) on an equation's left-hand side is invalid, like a bare or indexed definition of one."
+  },
+  "units_mount_subsystem_wrong_dimension.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/Probe/variables/probe",
+        "code": "unit_inconsistency",
+        "message": "Declared units of kg do not match the expression's units of kPa"
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.4 (EarthSciAST#414): a scoped reference into a `subsystems.<k>` {ref} mount has the units its target declares; before the fix every binding treated it as undeterminable and accepted the wrong declaration. Pinned at the observed variable's declaration, as tests/invalid/units_scale_mismatch_equation.esm pins its mismatch."
+  },
+  "units_mount_subsystem_scale_mismatch.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/Probe/variables/probe",
+        "code": "unit_inconsistency",
+        "message": "Declared units of Pa do not match the expression's units of kPa"
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.4 (EarthSciAST#414): a scoped reference into a `subsystems.<k>` {ref} mount has the units its target declares; before the fix every binding treated it as undeterminable and accepted the wrong declaration. \u00a74.8.3: agreement means dimension AND scale, so kPa vs Pa is a mismatch. Pinned at the observed variable's declaration, as tests/invalid/units_scale_mismatch_equation.esm pins its mismatch."
+  },
+  "units_mount_toplevel_wrong_dimension.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/Probe/variables/probe",
+        "code": "unit_inconsistency",
+        "message": "Declared units of kg do not match the expression's units of kPa"
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.4 (EarthSciAST#414): a scoped reference into a top-level `models.<k>` {ref} mount has the units its target declares; before the fix every binding treated it as undeterminable and accepted the wrong declaration. Pinned at the observed variable's declaration, as tests/invalid/units_scale_mismatch_equation.esm pins its mismatch."
+  },
+  "units_mount_toplevel_scale_mismatch.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/Probe/variables/probe",
+        "code": "unit_inconsistency",
+        "message": "Declared units of Pa do not match the expression's units of kPa"
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.4 (EarthSciAST#414): a scoped reference into a top-level `models.<k>` {ref} mount has the units its target declares; before the fix every binding treated it as undeterminable and accepted the wrong declaration. \u00a74.8.3: agreement means dimension AND scale, so kPa vs Pa is a mismatch. Pinned at the observed variable's declaration, as tests/invalid/units_scale_mismatch_equation.esm pins its mismatch."
+  },
+  "units_faq_filter_mismatch.esm": {
+    "schema_errors": [],
+    "is_valid": false,
+    "structural_errors": [
+      {
+        "path": "/models/Probe/variables/n_short",
+        "code": "unit_inconsistency",
+        "message": "Incompatible dimensions in '<=': length vs mass"
+      }
+    ],
+    "notes": "esm-spec \u00a74.8.3 (EarthSciAST#414): an faq's `filter` is walked with the same operator rules as its `expr`. The same comparison written in the body under ifelse was already refused by Rust; written in the filter it was accepted everywhere. tests/invalid/units_array_index_filter_mismatch.esm is the same rule over index operands."
+  },
+  "units_faq_body_mismatch.esm": {
+    "schema_errors": [],
+    "is_valid": false,
+    "structural_errors": [
+      {
+        "path": "/models/Probe/variables/total",
+        "code": "unit_inconsistency",
+        "message": "Incompatible dimensions in '+': length vs mass"
+      }
+    ],
+    "notes": "esm-spec \u00a74.8.3: an faq's body is walked with the ordinary operator rules, and the mismatch inside it is reported."
+  },
+  "units_constant_exponent_mismatch.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/Powers/variables/T_32",
+        "code": "unit_inconsistency",
+        "message": "Declared units of K^2 do not match the expression's units of K^(3/2)"
+      },
+      {
+        "path": "/models/Powers/variables/L_const",
+        "code": "unit_inconsistency",
+        "message": "Declared units of m do not match the expression's units of m^(1/2)"
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.3 `^`: a constant-expression exponent (3/2) and a const exponent declaring a dimensionless unit at scale 1 are folded to exact rationals and used exactly as a literal exponent is. A symbolic exponent (a variable) stays undeterminable (\u00a74.8.4)."
+  },
+  "units_array_index_filter_mismatch.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/Probe/variables/p_count",
+        "code": "unit_inconsistency",
+        "message": "Incompatible dimensions in '<=': luminosity vs length^2*mass*time^-3"
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.3: `index` carries the unit of its array and an faq's filter is walked, so the issue's filter repro is refused by every binding. Before, only Rust typed `index`."
+  },
+  "units_array_mount_index_faq_mismatch.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/Mount/variables/total",
+        "code": "unit_inconsistency",
+        "message": "Declared units of cd do not match the expression's units of h"
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.3/\u00a74.8.4: refused by every binding."
+  },
+  "units_array_concat_mismatch.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/Probe/variables/joined",
+        "code": "unit_inconsistency",
+        "message": "Incompatible dimensions in 'concat': length vs mass"
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.3: concat's operands agree like those of +. Rust previously typed only the first operand."
+  },
+  "units_array_makearray_mismatch.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/Probe/variables/mixed",
+        "code": "unit_inconsistency",
+        "message": "'makearray' regions must share units"
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.3: makearray regions agree like the operands of +."
+  },
+  "units_array_reshape_mismatch.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/Probe/variables/out",
+        "code": "unit_inconsistency",
+        "message": "Declared units of kg do not match the expression's units of m"
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.3: reshape has the unit of the array it reshapes."
+  },
+  "units_array_transpose_mismatch.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/Probe/variables/out",
+        "code": "unit_inconsistency",
+        "message": "Declared units of kg do not match the expression's units of m"
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.3: transpose has the unit of the array it permutes."
+  },
+  "units_array_broadcast_mismatch.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/Probe/variables/out",
+        "code": "unit_inconsistency",
+        "message": "Incompatible dimensions in '+': length vs mass"
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.3: broadcast has the unit of its fn applied to its operands, so + over m and kg is a mismatch."
+  },
+  "units_reaction_rate_scoped_reference_mismatch.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/reaction_systems/Chem/reactions/0",
+        "code": "unit_inconsistency",
+        "message": "Reaction rate expression has incompatible units for reaction stoichiometry",
+        "details": {
+          "reaction_id": "R1",
+          "rate_units": "L/(mol*s)",
+          "expected_rate_units": "1/s",
+          "reaction_order": 1
+        }
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.4, \u00a77.4 (PR #508 review): the reaction-rate check sees scoped references with the same precedence as the model path, so a rate read through `Rates.k` from a top-level model is checked against the mass-action rate units. tests/invalid/units_reaction_rate_mismatch.esm is the same check on a local parameter."
+  },
+  "units_constant_exponent_angle.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/Powers/variables/x_sq",
+        "code": "unit_inconsistency",
+        "message": "exponent in '^' must be dimensionless, got rad"
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.3 `^` (PR #508 review): a const exponent is folded only when its units are dimensionless at exact scale 1. An angle (rad, sr) is not dimensionless, so the exponent is refused rather than folded to 2. tests/valid/units_constant_exponent_folding.esm pins the consts that do fold."
+  },
+  "units_array_index_subscript_mismatch.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/Probe/variables/T_pick",
+        "code": "unit_inconsistency",
+        "message": "Incompatible dimensions in '+': length vs mass"
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.3 (PR #508 review): index, reshape and transpose take the unit of args[0], but every operand is walked, so a mismatch inside a subscript is reported even though the declared result unit (K) matches the array's."
   }
 }

@@ -37,6 +37,8 @@ func canonicalFloat64String(f float64) (string, error) {
 
 var jsonMarshalerType = reflect.TypeOf((*json.Marshaler)(nil)).Elem()
 
+var jsonNumberType = reflect.TypeOf(json.Number(""))
+
 // canonicalizeForJSON walks v via reflection and returns a tree of Go
 // primitives, []interface{}, and map[string]interface{} where every
 // float encountered has been replaced with a json.Number holding its
@@ -59,6 +61,13 @@ func canonicalizeValue(rv reflect.Value) (any, error) {
 	// json.RawMessage). Check both value and addressable pointer receivers.
 	if rv.Kind() != reflect.Invalid {
 		t := rv.Type()
+		// json.Number is NOT a json.Marshaler (encoding/json special-cases
+		// it), and its Kind is String, so without this it would be re-emitted
+		// as a JSON string: a raw numeric slot such as concat's `axis` would
+		// round-trip 1 -> "1".
+		if t == jsonNumberType {
+			return rv.Interface(), nil
+		}
 		if t.Implements(jsonMarshalerType) {
 			return rv.Interface(), nil
 		}

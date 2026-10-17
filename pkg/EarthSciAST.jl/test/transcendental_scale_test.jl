@@ -182,11 +182,10 @@ end
         end
     end
 
-    # An array element carries its array's unit on the evaluation path, so
+    # An array element carries its array's unit (esm-spec §4.8.3), so
     # `cos(index(lat, i))` with `lat` in `deg` converts like `cos(lat)` does.
-    # The checker has no rule for `index` or `faq` (§4.8.4), and this rewrite
-    # used to read the argument with the checker's rules, so it left every
-    # array element unconverted and evaluated cos(60 radians) = -0.952.
+    # Before `index`/`faq` were typed, this rewrite left every array element
+    # unconverted and evaluated cos(60 radians) = -0.952.
     @testset "flatten converts a degree ARRAY ELEMENT" begin
         path = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance",
                         "scalar_operator_semantics", "fixtures", "angle_array_element.esm")

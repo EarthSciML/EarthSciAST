@@ -1,0 +1,66 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "UnitsArrayBroadcastMismatch",
+    "description": "Invalid: an element-wise broadcast of + over a length array and a mass array. esm-spec §4.8.3: broadcast has the unit of its fn applied to its operands, so + over m and kg is a mismatch.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "created": "2026-10-16T00:00:00Z"
+  },
+  "index_sets": {
+    "rows": {
+      "kind": "interval",
+      "size": 2
+    },
+    "cols": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "models": {
+    "Probe": {
+      "variables": {
+        "L": {
+          "type": "parameter",
+          "units": "m",
+          "default": 1.0,
+          "description": "A length per row.",
+          "shape": [
+            "rows"
+          ]
+        },
+        "W": {
+          "type": "parameter",
+          "units": "kg",
+          "default": 1.0,
+          "description": "A mass per row.",
+          "shape": [
+            "rows"
+          ]
+        },
+        "out": {
+          "type": "unknown",
+          "units": "m",
+          "description": "Invalid: an element-wise broadcast of + over a length array and a mass array.",
+          "shape": [
+            "rows"
+          ]
+        }
+      },
+      "equations": [
+        {
+          "lhs": "out",
+          "rhs": {
+            "op": "broadcast",
+            "fn": "+",
+            "args": [
+              "L",
+              "W"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

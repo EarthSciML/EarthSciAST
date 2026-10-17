@@ -1,0 +1,99 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "UnitsSymbolicExponentUndeterminable",
+    "description": "esm-spec §4.8.4: an exponent that is not a constant expression — a variable, an expression containing one, or a const whose declared unit is dimensionless at a scale other than 1 (its value and the quantity it denotes disagree) — leaves the power of a dimensional base UNDETERMINABLE, so the deliberately meaningless kg declarations here are skipped, not refused.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "created": "2026-10-15T00:00:00Z"
+  },
+  "models": {
+    "Powers": {
+      "variables": {
+        "T": {
+          "type": "parameter",
+          "units": "K",
+          "default": 300.0,
+          "description": "A temperature."
+        },
+        "L": {
+          "type": "parameter",
+          "units": "m",
+          "default": 2.0,
+          "description": "A length."
+        },
+        "n": {
+          "type": "parameter",
+          "units": "1",
+          "default": 2.0,
+          "description": "A dimensionless exponent parameter."
+        },
+        "pct": {
+          "type": "parameter",
+          "units": "%",
+          "default": 50.0,
+          "description": "A percentage."
+        },
+        "L_sym": {
+          "type": "unknown",
+          "units": "kg",
+          "description": "L^n: n is a variable, so the exponent is symbolic and the check is skipped (§4.8.4)."
+        },
+        "L_sym_expr": {
+          "type": "unknown",
+          "units": "kg",
+          "description": "L^(n + 1): a non-constant expression, skipped."
+        },
+        "L_pct": {
+          "type": "unknown",
+          "units": "kg",
+          "description": "L^(const 50, units \"%\"): a const at a scale other than 1 is not folded, skipped."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "L_sym",
+          "rhs": {
+            "op": "^",
+            "args": [
+              "L",
+              "n"
+            ]
+          }
+        },
+        {
+          "lhs": "L_sym_expr",
+          "rhs": {
+            "op": "^",
+            "args": [
+              "L",
+              {
+                "op": "+",
+                "args": [
+                  "n",
+                  1
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "L_pct",
+          "rhs": {
+            "op": "^",
+            "args": [
+              "L",
+              {
+                "op": "const",
+                "args": [],
+                "value": 50.0,
+                "units": "%"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

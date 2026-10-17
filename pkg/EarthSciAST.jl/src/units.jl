@@ -635,6 +635,225 @@ function _literal_value(e::ASTExpr)
     return nothing
 end
 
+# A literal exponent as an exact rational, converted the way `_power_rule`
+# always converted a literal (an integral value exactly; anything else through
+# `rationalize`). `nothing` for a non-finite value or a non-number.
+function _exponent_rational(v)::Union{Rational{Int}, Nothing}
+    (v isa Real && !(v isa Bool)) || return nothing
+    isfinite(v) || return nothing
+    try
+        return isinteger(v) ? Rational{Int}(Int(v)) : rationalize(Int, float(v))
+    catch
+        return nothing  # outside Int's range
+    end
+end
+
+"""
+    _constant_exponent_value(e) -> Union{Rational{Int}, Nothing}
+
+The exact rational value of a CONSTANT-EXPRESSION exponent (esm-spec §4.8.3
+`^`), or `nothing` when it is symbolic. It folds a numeric literal; a `const`
+that declares no `units`, or a dimensionless, non-angle unit at exact scale 1;
+and `+`,
+`*` (one or more operands), `-` (unary negation, or a left fold of two or more)
+and `/` (exactly two operands, nonzero divisor) over constant expressions,
+nested to any depth. Anything else — a variable, an expression containing one,
+a `const` that is dimensional or scaled (`%`), any other operator, an `Int`
+overflow, a division by zero — is symbolic.
+"""
+function _constant_exponent_value(e::ASTExpr)::Union{Rational{Int}, Nothing}
+    lit = _literal_value(e)
+    lit !== nothing && return _exponent_rational(lit)
+    e isa OpExpr || return nothing
+    op = e.op
+    if op == "const"
+        if e.units !== nothing
+            u = parse_units(e.units)
+            u === nothing && return nothing
+            # An angle (`rad`, `sr`) is dimensionless to Unitful but carries
+            # the angle axis the other bindings track, so it is not a number.
+            (dimension(u) == dimension(Unitful.NoUnits) && isone(_exact_scale(u)) &&
+             !_is_angle_bearing(u)) || return nothing
+        end
+        return _exponent_rational(e.value)
+    end
+    op in ("+", "*", "-", "/") || return nothing
+    isempty(e.args) && return nothing
+    vals = Rational{Int}[]
+    for a in e.args
+        v = _constant_exponent_value(a)
+        v === nothing && return nothing
+        push!(vals, v)
+    end
+    try
+        if op == "+"
+            return sum(vals)
+        elseif op == "*"
+            return prod(vals)
+        elseif op == "-"
+            length(vals) == 1 && return -vals[1]
+            return foldl(-, vals)
+        else  # "/"
+            (length(vals) == 2 && !iszero(vals[2])) || return nothing
+            return vals[1] / vals[2]
+        end
+    catch err
+        err isa OverflowError && return nothing
+        rethrow()
+    end
+end
+
+# ---------------------------------------------------------------------------
+# SCOPED REFERENCES (esm-spec §4.8.4, §4.9.2; EarthSciAST#414).
+#
+# After load a mounted component — `subsystems.<k>: {ref}` or a top-level
+# `models.<k>: {ref}` — is the same as one written inline (§4.7 "Resolution
+# timing"), so a scoped reference to one of its members carries the units the
+# member declares, exactly as a local name does. Treating `Leaf.p` as
+# undeterminable skipped every dimensional check across a mount edge.
+# ---------------------------------------------------------------------------
+
+# Scoped name → declared unit string, or `nothing` for a member whose unit is
+# undeterminable (it declares none, or one that does not resolve — reported at
+# its own declaration). A `nothing` entry still OCCUPIES its dotted name: it
+# shadows a same-named path further out, and looks up as unknown.
+const _ScopedUnits = Dict{String, Union{String, Nothing}}
+
+_scoped_unit(units) =
+    (units === nothing || isempty(units) || parse_units(units) === nothing) ? nothing : units
+
+# Every member of a component — a model's `variables`, a reaction system's
+# `species` and `parameters` — with its declared unit (see `_ScopedUnits`).
+function _component_member_units(c)::Vector{Pair{String, Union{String, Nothing}}}
+    out = Pair{String, Union{String, Nothing}}[]
+    if c isa Model
+        for (name, var) in c.variables
+            push!(out, name => _scoped_unit(var.units))
+        end
+    elseif c isa ReactionSystem
+        for s in c.species
+            push!(out, s.name => _scoped_unit(s.units))
+        end
+        for p in c.parameters
+            push!(out, p.name => _scoped_unit(p.units))
+        end
+    end
+    return out
+end
+
+# Register `<prefix>.<member>` for every member of `c` and, recursively, of
+# every RESOLVED subsystem it carries. An unresolved `SubsystemRef` contributes
+# nothing.
+function _collect_scoped_units!(out::_ScopedUnits, prefix::AbstractString, c)
+    for (name, units) in _component_member_units(c)
+        out["$prefix.$name"] = units
+    end
+    (c isa Model || c isa ReactionSystem) || return out
+    for (sub_name, sub) in c.subsystems
+        (sub isa Model || sub isa ReactionSystem) || continue
+        _collect_scoped_units!(out, "$prefix.$sub_name", sub)
+    end
+    return out
+end
+
+# The document-wide part of the scoped map: `<System>.<member>` (and deeper)
+# for every top-level model and reaction system of `file`. It does not depend
+# on the component doing the referencing, so a validation pass builds it once.
+function _toplevel_scoped_units(file)::_ScopedUnits
+    out = _ScopedUnits()
+    file === nothing && return out
+    if file.models !== nothing
+        for (name, m) in file.models
+            _collect_scoped_units!(out, name, m)
+        end
+    end
+    if file.reaction_systems !== nothing
+        for (name, rs) in file.reaction_systems
+            _collect_scoped_units!(out, name, rs)
+        end
+    end
+    return out
+end
+
+# The component-relative part: `<sub>.<member>` (and deeper) through
+# `component`'s own subsystems.
+function _relative_scoped_units(component)::_ScopedUnits
+    out = _ScopedUnits()
+    (component isa Model || component isa ReactionSystem) || return out
+    for (sub_name, sub) in component.subsystems
+        (sub isa Model || sub isa ReactionSystem) || continue
+        _collect_scoped_units!(out, sub_name, sub)
+    end
+    return out
+end
+
+"""
+    scoped_reference_units(file, component) -> Dict{String, Union{String, Nothing}}
+
+Scoped name → declared unit string, for every scoped reference an expression in
+`component` can make (esm-spec §4.9.2): `<System>.<member>` (and deeper, through
+that system's subsystems) for every top-level model and reaction system of
+`file`, and `<sub>.<member>` (and deeper) relative to `component`'s own
+subsystems — the relative path wins on a collision. A member whose unit is
+undeterminable (no `units`, or a string that does not resolve) maps to
+`nothing`, and still shadows a same-named top-level path; `file === nothing`
+contributes only the relative paths.
+"""
+scoped_reference_units(file, component)::_ScopedUnits =
+    merge(_toplevel_scoped_units(file), _relative_scoped_units(component))
+
+# A component's unit environment: its own declared names, then its relative
+# scoped paths, then the document's top-level ones. The first layer that holds
+# a name decides it, so a relative entry with no unit hides a top-level one.
+# Layered rather than merged so the shared top-level map is never copied per
+# component.
+struct _UnitEnv <: AbstractDict{String, String}
+    own::Dict{String, String}
+    relative::_ScopedUnits
+    toplevel::_ScopedUnits
+end
+
+function _lookup(env::_UnitEnv, name)::Union{String, Nothing}
+    v = get(env.own, name, nothing)
+    v === nothing || return v
+    haskey(env.relative, name) && return env.relative[name]
+    return get(env.toplevel, name, nothing)
+end
+
+function Base.get(env::_UnitEnv, name, default)
+    v = _lookup(env, name)
+    return v === nothing ? default : v
+end
+Base.haskey(env::_UnitEnv, name) = _lookup(env, name) !== nothing
+function Base.getindex(env::_UnitEnv, name)
+    v = _lookup(env, name)
+    v === nothing && throw(KeyError(name))
+    return v
+end
+
+# Iteration (display, debugging) materializes the visible bindings.
+function _materialize(env::_UnitEnv)::Dict{String, String}
+    out = Dict{String, String}()
+    for layer in (env.toplevel, env.relative, env.own), (k, v) in layer
+        if v === nothing
+            delete!(out, k)
+        else
+            out[k] = v
+        end
+    end
+    return out
+end
+Base.length(env::_UnitEnv) = length(_materialize(env))
+function Base.iterate(env::_UnitEnv)
+    d = _materialize(env)
+    r = iterate(d)
+    return r === nothing ? nothing : (r[1], (d, r[2]))
+end
+function Base.iterate(::_UnitEnv, (d, s))
+    r = iterate(d, s)
+    return r === nothing ? nothing : (r[1], (d, r[2]))
+end
+
 # ---------------------------------------------------------------------------
 # EXACT UNIT SCALES (esm-spec §4.8.1 "Scales are EXACT").
 #
@@ -1020,14 +1239,19 @@ function _power_rule(expr, var_units, findings)
 
     # The exponent is read by VALUE off the AST, not through the engine: the
     # engine reports every literal as indeterminate (fabrication #1), and a
-    # literal exponent is precisely the case that makes `^` computable.
-    power = _literal_value(expr.args[2])
+    # literal exponent is precisely the case that makes `^` computable. A
+    # CONSTANT EXPRESSION over literals (`3/2`, `-(1)`, a unitless `const`)
+    # folds to the exact rational it denotes and is used exactly as that
+    # literal would be (esm-spec §4.8.3); anything else is symbolic.
+    power = _constant_exponent_value(expr.args[2])
 
     if power === nothing
         # Non-literal exponent: it must still be dimensionless, and THAT is
-        # provable whenever its dimension is known.
+        # provable whenever its dimension is known. An angle is not: it stands
+        # in for the angle axis the other bindings track (`_is_angle_bearing`).
         exp_dim = _expr_dimensions!(findings, expr.args[2], var_units)
-        if exp_dim !== nothing && dimension(exp_dim) != dimension(Unitful.NoUnits)
+        if exp_dim !== nothing && (dimension(exp_dim) != dimension(Unitful.NoUnits) ||
+                                   _is_angle_bearing(exp_dim))
             push!(findings, "Exponent must be dimensionless, got '$(_ustr(exp_dim))'" *
                 (base_dim === nothing ? "" : " for base with units '$(_ustr(base_dim))'"))
             return nothing
@@ -1046,7 +1270,7 @@ function _power_rule(expr, var_units, findings)
     # Unitful represents rational powers, so `x^0.5` on `m^2` is `m`; a power it
     # cannot represent is unknown, not an inconsistency.
     try
-        return isinteger(power) ? base_dim^Int(power) : base_dim^rationalize(float(power))
+        return isinteger(power) ? base_dim^Int(power) : base_dim^power
     catch
         return nothing
     end
@@ -1352,59 +1576,94 @@ const _DIMENSION_RULES = let rules = Dict{String, Function}(
     rules
 end
 
-# The EVALUATION-PATH unit environment: the declared units, plus the reading
-# that an array operator carries its ELEMENT's unit. The checker has no rule
-# for the array operators (esm-spec §4.8.4: they are undeterminable there), but
-# an evaluator that meets `cos(index(lat, i))` with `lat` in `deg` reads a
-# number in degrees all the same, and §4.8.3 requires it converted. Only the
-# angle rewrite (`_normalize_angle_expr`, flatten.jl) builds one of these, so
-# no checker verdict moves.
-struct _ElementUnits{D<:AbstractDict} <: AbstractDict{String, String}
-    units::D
-end
-Base.get(e::_ElementUnits, k, default) = get(e.units, k, default)
-Base.haskey(e::_ElementUnits, k) = haskey(e.units, k)
-Base.getindex(e::_ElementUnits, k) = e.units[k]
-Base.length(e::_ElementUnits) = length(e.units)
-Base.iterate(e::_ElementUnits, state...) = iterate(e.units, state...)
-
+# The array operators (esm-spec §4.8.3). The CHECKER and the evaluation path
+# (the angle rewrite, `_normalize_angle_expr` in flatten.jl) read them by the
+# same rules, so `cos(index(lat, i))` with `lat` in `deg` is converted exactly
+# where the checker says the argument is in degrees. The rules are the same,
+# case for case, as the Rust binding's `propagate_array_dim` (units.rs):
+#
+# * `index`, `reshape`, `transpose` — the unit of the source array, `args[1]`
+#   (the subscripts are walked for findings but are not part of the unit); no
+#   args: undeterminable.
+# * `concat` — like an n-ary `+`: determinable operands agree in dimension AND
+#   scale, undeterminable ones are skipped.
+# * `makearray` — its regions' `values` agree like the operands of `+`; its
+#   operands are walked for findings.
+# * `broadcast(fn=F, args)` — the unit of `{op: F, args}`.
+# * `faq` — its `filter`, `expr` and operands are always walked for findings;
+#   its own unit is decided by its ⊕ (`_faq_unit`).
 const _ARRAY_ELEMENT_OPS = Set(["faq", "makearray", "index", "reshape",
                                 "transpose", "concat", "broadcast"])
 
-# The element unit of an array operator, under an `_ElementUnits` environment.
-# The same rules, case for case, as the Rust binding's `propagate_array_dim`
-# (units.rs), so every binding's angle rewrite folds the factor into the same
-# arguments: an `faq` has its body's unit; a `makearray` has the unit its value
-# regions share; a `broadcast` has the unit of its `fn` applied to its operands;
-# `index`, `reshape`, `transpose` and `concat` have their source array's.
 function _array_element_rule(expr, var_units, findings)
     if expr.op == "faq"
-        expr.expr_body !== nothing &&
-            return _expr_dimensions!(findings, expr.expr_body, var_units)
-        isempty(expr.args) && return Unitful.NoUnits
-        return _expr_dimensions!(findings, expr.args[1], var_units)
-    elseif expr.op == "makearray"
-        (expr.values === nothing || isempty(expr.values)) && return Unitful.NoUnits
-        dims = [_expr_dimensions!(findings, v, var_units) for v in expr.values]
-        known = filter(!isnothing, dims)
-        isempty(known) && return nothing
-        first_dim = known[1]
-        mismatched = false
-        for dim in known[2:end]
-            if !_same_unit(dim, first_dim)
-                push!(findings, "'makearray' regions must share units: " *
-                                "'$(_ustr(first_dim))' vs '$(_ustr(dim))'")
-                mismatched = true
-            end
+        # The `filter` is a boolean whose value never reaches the faq's unit,
+        # but it is an expression like any other (EarthSciAST#414).
+        expr.filter !== nothing && _expr_dimensions!(findings, expr.filter, var_units)
+        body = expr.expr_body === nothing ? nothing :
+            _expr_dimensions!(findings, expr.expr_body, var_units)
+        for a in expr.args
+            _expr_dimensions!(findings, a, var_units)
         end
-        (mismatched || length(known) != length(dims)) && return nothing
-        return first_dim
+        return _faq_unit(expr, body)
+    elseif expr.op == "makearray"
+        for a in expr.args
+            _expr_dimensions!(findings, a, var_units)
+        end
+        expr.values === nothing && return nothing
+        return _same_dimensions_over(expr.values, var_units, findings,
+            (first_dim, dim) -> "'makearray' regions must share units: " *
+                "'$(_ustr(first_dim))' vs '$(_ustr(dim))'")
+    elseif expr.op == "concat"
+        return _same_dimensions_over(expr.args, var_units, findings,
+            (first_dim, dim) -> "Incompatible dimensions/scales in 'concat': " *
+                "'$(_ustr(first_dim))' vs '$(_ustr(dim))'")
     elseif expr.op == "broadcast"
-        expr.fn === nothing && return nothing
+        if expr.fn === nothing
+            for a in expr.args
+                _expr_dimensions!(findings, a, var_units)
+            end
+            return nothing
+        end
         return _expr_dimensions!(findings, OpExpr(expr.fn, expr.args), var_units)
     end
-    isempty(expr.args) && return Unitful.NoUnits
-    return _expr_dimensions!(findings, expr.args[1], var_units)
+    # index / reshape / transpose: every operand is walked for findings, the
+    # source array alone gives the unit.
+    dims = [_expr_dimensions!(findings, a, var_units) for a in expr.args]
+    return isempty(dims) ? nothing : dims[1]
+end
+
+# The unit of an `faq` node whose `expr` has unit `body`. The ⊗ is written by
+# the author inside `expr`, so it is already typed; `join` clauses are key
+# equalities and contribute no factor. What remains is the ⊕ over the
+# contracted indices, from `semiring` when present, else `reduce` (default "+"):
+#
+# * `sum_product`, `max_product`, `min_sum`, `max_sum`, or `reduce` `+`/`max`/
+#   `min` — the body's unit;
+# * `reduce: "*"` — the body's unit only when it is a pure number (dimensionless
+#   at exact scale 1); otherwise undeterminable, as the power is the range length;
+# * `bool_and_or` — dimensionless, a boolean;
+# * value invention (`distinct: true`, or a `key`) — undeterminable: the result
+#   is ids, not a quantity. So is a missing `expr` and an unknown ⊕ spelling
+#   (rejected elsewhere).
+const _FAQ_BODY_UNIT_SEMIRINGS = ("sum_product", "max_product", "min_sum", "max_sum")
+const _FAQ_BODY_UNIT_REDUCES = ("+", "max", "min")
+
+function _faq_unit(expr, body)
+    (expr.distinct === true || expr.key !== nothing) && return nothing
+    expr.expr_body === nothing && return nothing
+    if expr.semiring !== nothing
+        expr.semiring == "bool_and_or" && return Unitful.NoUnits
+        return expr.semiring in _FAQ_BODY_UNIT_SEMIRINGS ? body : nothing
+    end
+    r = expr.reduce === nothing ? "+" : expr.reduce
+    r in _FAQ_BODY_UNIT_REDUCES && return body
+    if r == "*"
+        (body !== nothing && _is_pure_number(body) && !_is_angle_bearing(body)) &&
+            return body
+        return nothing
+    end
+    return nothing
 end
 
 # The engine proper. Returns the expression's dimension, or `nothing` when it
@@ -1426,7 +1685,7 @@ function _expr_dimensions!(findings::Vector{String}, expr::ASTExpr,
     elseif expr isa OpExpr
         rule = get(_DIMENSION_RULES, expr.op, nothing)
         rule !== nothing && return rule(expr, var_units, findings)
-        var_units isa _ElementUnits && expr.op in _ARRAY_ELEMENT_OPS &&
+        expr.op in _ARRAY_ELEMENT_OPS &&
             return _array_element_rule(expr, var_units, findings)
         # Operator without a dimensional rule (comparisons, aggregate ops,
         # registered-function calls, …): degrade silently — the result is
@@ -1618,9 +1877,15 @@ const UNIT_DIMENSION_MISMATCH = ERROR_CODES.UNIT_INCONSISTENCY
 const UNIT_PARSE_ERROR = ERROR_CODES.UNIT_PARSE_ERROR
 
 """
-    model_unit_findings(model::Model) -> Vector{UnitFinding}
+    model_unit_findings(model::Model; file=nothing, toplevel=nothing) -> Vector{UnitFinding}
 
-Every units finding in `model`. Callers prefix their JSON pointer and promote
+Every units finding in `model`. A scoped reference (`sub.v`, `Leaf.p`) has the
+units its target declares: relative to `model`'s own subsystems always, and to
+the top-level models and reaction systems of `file` (the `EsmFile` holding
+`model`) when one is given — see [`scoped_reference_units`](@ref). A caller
+checking many components of one document passes the document-wide part,
+`toplevel = _toplevel_scoped_units(file)`, built once, in place of `file`.
+Callers prefix their JSON pointer and promote
 each finding to a structural error under its own code; see
 `validate_model_unit_consistency` in validate.jl, the single structural caller.
 
@@ -1647,17 +1912,25 @@ recursion), keeping this function's pointers purely model-local.
 Iteration over `model.variables` is sorted by name so the finding order is
 deterministic regardless of Dict hashing.
 """
-function model_unit_findings(model::Model)::Vector{UnitFinding}
+function model_unit_findings(model::Model; file=nothing,
+                             toplevel=nothing)::Vector{UnitFinding}
     # Only EXPLICITLY declared units enter the environment, and only those that
     # RESOLVE. A variable with no declared units is unknown, not dimensionless;
     # one whose declared units do not resolve is reported separately below and
     # then treated as unknown, so a single bad string cannot cascade into a
     # bogus mismatch at every site that mentions the variable.
-    var_units = Dict{String, String}()
+    own_units = Dict{String, String}()
     for (name, var) in model.variables
         var.units !== nothing && !isempty(var.units) &&
-            parse_units(var.units) !== nothing && (var_units[name] = var.units)
+            parse_units(var.units) !== nothing && (own_units[name] = var.units)
     end
+    # Scoped references — into this model's own subsystems and, given the
+    # document, into its top-level components — carry their targets' declared
+    # units (esm-spec §4.8.4, EarthSciAST#414). The model's own bare names are
+    # never overwritten; an unresolvable target unit is reported at its own
+    # declaration, so it is simply left unknown here.
+    var_units = _UnitEnv(own_units, _relative_scoped_units(model),
+                         toplevel === nothing ? _toplevel_scoped_units(file) : toplevel)
 
     out = UnitFinding[]
 

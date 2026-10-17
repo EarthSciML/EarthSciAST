@@ -1,0 +1,438 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "UnitsArrayOperatorsConsistent",
+    "description": "esm-spec §4.8.3 array operators in the checker: index, reshape and transpose have their array's unit; broadcast has the unit of its fn applied to its operands; concat and makearray regions agree like + operands (a bare-literal region is skipped); an faq has its body's unit under sum_product and max_product, its body's unit under reduce * only for a pure-number body, and is dimensionless under bool_and_or; a filter is walked. Every declaration agrees, so the document must validate. The units_array_*_mismatch.esm fixtures in tests/invalid are the refusals.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "created": "2026-10-16T00:00:00Z"
+  },
+  "index_sets": {
+    "rows": {
+      "kind": "interval",
+      "size": 2
+    },
+    "one": {
+      "kind": "interval",
+      "size": 1
+    },
+    "cols": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "models": {
+    "Probe": {
+      "variables": {
+        "p_lum": {
+          "type": "unknown",
+          "units": "cd",
+          "description": "A luminosity per row.",
+          "shape": [
+            "rows"
+          ]
+        },
+        "q_lum": {
+          "type": "parameter",
+          "units": "cd",
+          "default": 3.0,
+          "description": "Another luminosity per row.",
+          "shape": [
+            "rows"
+          ]
+        },
+        "a": {
+          "type": "parameter",
+          "units": "m",
+          "default": 1.0,
+          "description": "A length.",
+          "shape": [
+            "one"
+          ]
+        },
+        "b": {
+          "type": "parameter",
+          "units": "m",
+          "default": 2.0,
+          "description": "Another length.",
+          "shape": [
+            "one"
+          ]
+        },
+        "w": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.5,
+          "description": "A dimensionless weight per row.",
+          "shape": [
+            "rows"
+          ]
+        },
+        "joined": {
+          "type": "unknown",
+          "units": "m",
+          "description": "Two lengths concatenated.",
+          "shape": [
+            "rows"
+          ]
+        },
+        "n_bright": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Rows where p_lum <= q_lum.",
+          "shape": []
+        },
+        "lum_total": {
+          "type": "unknown",
+          "units": "cd",
+          "description": "Sum of p_lum over rows.",
+          "shape": []
+        },
+        "lum_max": {
+          "type": "unknown",
+          "units": "cd",
+          "description": "Max of p_lum over rows.",
+          "shape": []
+        },
+        "w_prod": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Product of a dimensionless weight over rows (reduce *).",
+          "shape": []
+        },
+        "any_bright": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Whether any row is bright (bool_and_or).",
+          "shape": []
+        },
+        "half_known": {
+          "type": "unknown",
+          "units": "cd",
+          "description": "A makearray whose second region is a bare literal, skipped like a + operand.",
+          "shape": [
+            "rows"
+          ]
+        },
+        "L": {
+          "type": "parameter",
+          "units": "m",
+          "default": 1.0,
+          "description": "A length per row.",
+          "shape": [
+            "rows"
+          ]
+        },
+        "L2": {
+          "type": "parameter",
+          "units": "m",
+          "default": 2.0,
+          "description": "Another length per row.",
+          "shape": [
+            "rows"
+          ]
+        },
+        "M": {
+          "type": "parameter",
+          "units": "m",
+          "default": 1.0,
+          "description": "A length per (row, col).",
+          "shape": [
+            "rows",
+            "cols"
+          ]
+        },
+        "reshaped": {
+          "type": "unknown",
+          "units": "m",
+          "description": "L reshaped.",
+          "shape": [
+            "rows"
+          ]
+        },
+        "transposed": {
+          "type": "unknown",
+          "units": "m",
+          "description": "M transposed.",
+          "shape": [
+            "cols",
+            "rows"
+          ]
+        },
+        "b_sum": {
+          "type": "unknown",
+          "units": "m",
+          "description": "broadcast + over two lengths.",
+          "shape": [
+            "rows"
+          ]
+        },
+        "b_area": {
+          "type": "unknown",
+          "units": "m^2",
+          "description": "broadcast * of a length with itself.",
+          "shape": [
+            "rows"
+          ]
+        }
+      },
+      "equations": [
+        {
+          "lhs": "p_lum",
+          "rhs": {
+            "op": "makearray",
+            "args": [],
+            "regions": [
+              [
+                [
+                  1,
+                  1
+                ]
+              ],
+              [
+                [
+                  2,
+                  2
+                ]
+              ]
+            ],
+            "values": [
+              {
+                "op": "const",
+                "args": [],
+                "value": 1.0,
+                "units": "cd"
+              },
+              {
+                "op": "const",
+                "args": [],
+                "value": 2.0,
+                "units": "cd"
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "joined",
+          "rhs": {
+            "op": "concat",
+            "args": [
+              "a",
+              "b"
+            ],
+            "axis": 0
+          }
+        },
+        {
+          "lhs": "n_bright",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [],
+            "ranges": {
+              "i": {
+                "from": "rows"
+              }
+            },
+            "semiring": "sum_product",
+            "filter": {
+              "op": "<=",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "p_lum",
+                    "i"
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "q_lum",
+                    "i"
+                  ]
+                }
+              ]
+            },
+            "expr": {
+              "op": "const",
+              "args": [],
+              "value": 1.0,
+              "units": "1"
+            }
+          }
+        },
+        {
+          "lhs": "lum_total",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [],
+            "ranges": {
+              "i": {
+                "from": "rows"
+              }
+            },
+            "semiring": "sum_product",
+            "expr": {
+              "op": "index",
+              "args": [
+                "p_lum",
+                "i"
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "lum_max",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [],
+            "ranges": {
+              "i": {
+                "from": "rows"
+              }
+            },
+            "semiring": "max_product",
+            "expr": {
+              "op": "index",
+              "args": [
+                "p_lum",
+                "i"
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "w_prod",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [],
+            "ranges": {
+              "i": {
+                "from": "rows"
+              }
+            },
+            "reduce": "*",
+            "expr": {
+              "op": "index",
+              "args": [
+                "w",
+                "i"
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "any_bright",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [],
+            "ranges": {
+              "i": {
+                "from": "rows"
+              }
+            },
+            "semiring": "bool_and_or",
+            "expr": {
+              "op": ">",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "p_lum",
+                    "i"
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "q_lum",
+                    "i"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "half_known",
+          "rhs": {
+            "op": "makearray",
+            "args": [],
+            "regions": [
+              [
+                [
+                  1,
+                  1
+                ]
+              ],
+              [
+                [
+                  2,
+                  2
+                ]
+              ]
+            ],
+            "values": [
+              {
+                "op": "const",
+                "args": [],
+                "value": 1.0,
+                "units": "cd"
+              },
+              0.0
+            ]
+          }
+        },
+        {
+          "lhs": "reshaped",
+          "rhs": {
+            "op": "reshape",
+            "args": [
+              "L"
+            ],
+            "shape": [
+              2
+            ]
+          }
+        },
+        {
+          "lhs": "transposed",
+          "rhs": {
+            "op": "transpose",
+            "args": [
+              "M"
+            ]
+          }
+        },
+        {
+          "lhs": "b_sum",
+          "rhs": {
+            "op": "broadcast",
+            "fn": "+",
+            "args": [
+              "L",
+              "L2"
+            ]
+          }
+        },
+        {
+          "lhs": "b_area",
+          "rhs": {
+            "op": "broadcast",
+            "fn": "*",
+            "args": [
+              "L",
+              "L"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

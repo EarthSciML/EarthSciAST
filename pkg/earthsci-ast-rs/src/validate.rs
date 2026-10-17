@@ -406,6 +406,9 @@ pub(crate) fn validate_scoped(esm_file: &EsmFile, scope: ValidationScope) -> Val
 
     // Build system reference map for scoped reference validation
     let system_refs = build_system_reference_map(esm_file);
+    // The units of every top-level scoped reference, parsed once for all
+    // components (each layers its own names over it).
+    let document_units = crate::units::document_scoped_units(esm_file);
 
     // Validate models
     if let Some(ref models) = esm_file.models {
@@ -415,6 +418,7 @@ pub(crate) fn validate_scoped(esm_file: &EsmFile, scope: ValidationScope) -> Val
                 model_name,
                 model,
                 &system_refs,
+                &document_units,
                 scope,
                 &mut structural_errors,
                 &mut unit_warnings,
@@ -438,6 +442,7 @@ pub(crate) fn validate_scoped(esm_file: &EsmFile, scope: ValidationScope) -> Val
                 rs_name,
                 rs,
                 &system_refs,
+                &document_units,
                 &mut structural_errors,
             );
         }

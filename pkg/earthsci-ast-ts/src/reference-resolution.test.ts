@@ -30,6 +30,8 @@ import {
   E_REF_CYCLE,
 } from './reference-resolution.js'
 import { loadPath } from './parse.js'
+import { resolveSubsystemRefsSync } from './ref-loading.js'
+import { dirname } from 'node:path'
 import { fixturesDir } from './test-helpers.js'
 import type { Model } from './types.js'
 
@@ -338,6 +340,11 @@ describe('reference resolution over the shared corpus', () => {
       let doc: ReturnType<typeof loadPath>
       try {
         doc = loadPath(f)
+        // `loadPath` leaves `{ref}` stubs in place; mounting them is the
+        // separate §4.7 entry point, and it is what merges a mounted leaf's
+        // `index_sets` (tests/valid/units_array_mount_index_faq_consistent.esm
+        // ranges over an axis only its top-level-mounted leaf declares).
+        resolveSubsystemRefsSync(doc, dirname(f))
       } catch (e) {
         failures.push(`${rel}: load: ${(e as Error).message}`)
         continue

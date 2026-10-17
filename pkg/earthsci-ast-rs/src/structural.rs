@@ -14,21 +14,24 @@
 use crate::EsmFile;
 use crate::op_registry::is_builtin_function_name;
 use crate::units::{
-    build_unit_env, check_equation_dimensions, check_expression_dimensions, parse_unit,
+    ComponentUnitEnv, Unit, UnitEnv, build_unit_env, equation_findings, expression_findings,
+    parse_unit,
 };
 use crate::validate::{StructuralError, StructuralErrorCode, SystemInfo, UnitWarning};
 use std::collections::{HashMap, HashSet};
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn validate_model(
     esm_file: &EsmFile,
     model_name: &str,
     model: &crate::Model,
     system_refs: &HashMap<String, SystemInfo>,
+    document_units: &HashMap<String, Unit>,
     scope: crate::validate::ValidationScope,
     errors: &mut Vec<StructuralError>,
     warnings: &mut Vec<UnitWarning>,
 ) {
-    let ctx = ModelCtx::new(esm_file, model_name, model, system_refs);
+    let ctx = ModelCtx::new(esm_file, model_name, model, system_refs, document_units);
     if scope == crate::validate::ValidationScope::References {
         validate_model_references(&ctx, errors);
         return;
@@ -148,6 +151,9 @@ struct ModelCtx<'a> {
     model_name: &'a str,
     model: &'a crate::Model,
     system_refs: &'a HashMap<String, SystemInfo>,
+    /// The document's top-level scoped-reference units
+    /// ([`crate::units::document_scoped_units`]), built once per validation.
+    document_units: &'a HashMap<String, Unit>,
     model_path: String,
     /// The §6.3.1 classification of this model, derived once: which unknowns are
     /// ODE states, which are observed (and by which equation), and which
@@ -174,6 +180,7 @@ impl<'a> ModelCtx<'a> {
         model_name: &'a str,
         model: &'a crate::Model,
         system_refs: &'a HashMap<String, SystemInfo>,
+        document_units: &'a HashMap<String, Unit>,
     ) -> Self {
         let model_path = format!("/models/{model_name}");
         let mut defined_vars = DeclaredNames {
@@ -212,6 +219,7 @@ impl<'a> ModelCtx<'a> {
             model_name,
             model,
             system_refs,
+            document_units,
             model_path,
             class: std::cell::OnceCell::new(),
             defined_vars,
@@ -372,11 +380,10 @@ impl<'a> ModelCtx<'a> {
     /// (esm-spec §4.8.4). Coercing it to dimensionless would fabricate a
     /// dimension, and treating it as merely unknown would let a typo silently
     /// switch off every dimensional check that depends on it.
-    fn check_unit_declarations(
-        &self,
-        errors: &mut Vec<StructuralError>,
-    ) -> HashMap<String, crate::units::Unit> {
-        let (unit_env, unit_parse_failures) = build_unit_env(&self.model.variables);
+    fn check_unit_declarations(&self, errors: &mut Vec<StructuralError>) -> ComponentUnitEnv<'a> {
+        let (own, unit_parse_failures) = build_unit_env(&self.model.variables);
+        let unit_env =
+            ComponentUnitEnv::new(own, self.model.subsystems.as_ref(), self.document_units);
         for failure in unit_parse_failures {
             errors.push(StructuralError {
                 path: format!("{}/variables/{}", self.model_path, failure.name),
@@ -473,7 +480,7 @@ impl<'a> ModelCtx<'a> {
     /// consistency.
     fn check_equations(
         &self,
-        unit_env: &HashMap<String, crate::units::Unit>,
+        unit_env: &ComponentUnitEnv<'_>,
         errors: &mut Vec<StructuralError>,
         warnings: &mut Vec<UnitWarning>,
     ) {
@@ -499,7 +506,7 @@ impl<'a> ModelCtx<'a> {
             // mismatch is a hard `unit_inconsistency` error, an undeterminable
             // dimension stays a non-blocking warning. See `record_unit_findings`.
             record_unit_findings(
-                check_equation_dimensions(equation, unit_env),
+                equation_findings(equation, unit_env),
                 &eq_path,
                 &format!("Equation {eq_idx}"),
                 errors,
@@ -652,7 +659,7 @@ impl<'a> ModelCtx<'a> {
     /// `tests/invalid/expected_errors.json`.
     fn check_observed_definitions(
         &self,
-        unit_env: &HashMap<String, crate::units::Unit>,
+        unit_env: &ComponentUnitEnv<'_>,
         errors: &mut Vec<StructuralError>,
         warnings: &mut Vec<UnitWarning>,
     ) {
@@ -662,7 +669,7 @@ impl<'a> ModelCtx<'a> {
             };
             let declared = variable.units.as_deref().and_then(|u| parse_unit(u).ok());
             record_unit_findings(
-                check_expression_dimensions(rhs, declared.as_ref(), unit_env),
+                expression_findings(rhs, declared.as_ref(), unit_env),
                 &format!("{}/variables/{var_name}", self.model_path),
                 &format!("Observed variable \"{var_name}\""),
                 errors,
@@ -3327,6 +3334,7 @@ pub(crate) fn validate_reaction_system(
     rs_name: &str,
     rs: &crate::ReactionSystem,
     system_refs: &HashMap<String, SystemInfo>,
+    document_units: &HashMap<String, Unit>,
     errors: &mut Vec<StructuralError>,
 ) {
     let rs_path = format!("/reaction_systems/{rs_name}");
@@ -3543,7 +3551,7 @@ pub(crate) fn validate_reaction_system(
     }
 
     // Stoichiometric rate-dimension check (spec §7.4).
-    validate_reaction_rate_units(rs_name, rs, errors);
+    validate_reaction_rate_units(rs_name, rs, document_units, errors);
 }
 
 /// Enforce the mass-action dimensional constraint from spec §7.4: rate
@@ -3553,13 +3561,17 @@ pub(crate) fn validate_reaction_system(
 /// all bindings. Skipped when the reference concentration (first substrate) is
 /// dimensionless — mole-fraction and ppm species commonly bake a
 /// number-density factor into the rate constant.
+///
+/// A rate may read another system's quantity by scoped reference (`Other.k`,
+/// `Sub.k`); it is typed exactly as in a model ([`ComponentUnitEnv`]): the
+/// system's own species and parameters, then paths relative to its own
+/// subsystems, then the document's top-level systems.
 fn validate_reaction_rate_units(
     rs_name: &str,
     rs: &crate::ReactionSystem,
+    document_units: &HashMap<String, Unit>,
     errors: &mut Vec<StructuralError>,
 ) {
-    use crate::units::{Unit, parse_unit};
-
     // Build unit environment: species + parameters → Unit.
     //
     // A declared unit string that denotes no real unit is a hard
@@ -3605,6 +3617,7 @@ fn validate_reaction_rate_units(
         });
     }
 
+    let env = ComponentUnitEnv::new(env, rs.subsystems.as_ref(), document_units);
     let time = Unit::base(crate::units::Dimension::Time, 1, 1.0);
 
     for (rxn_idx, reaction) in rs.reactions.iter().enumerate() {
@@ -3616,7 +3629,7 @@ fn validate_reaction_rate_units(
             .unwrap_or("unnamed");
 
         // Rate dimension from expression propagation.
-        let rate_unit = match Unit::propagate(&reaction.rate, &env) {
+        let rate_unit = match Unit::propagate_in(&reaction.rate, &env) {
             Ok(u) => u,
             Err(_) => continue,
         };
@@ -3628,7 +3641,7 @@ fn validate_reaction_rate_units(
 
         // Reference concentration unit = first substrate's species units.
         let first_sp_name = &substrates[0].species;
-        let conc_unit = match env.get(first_sp_name) {
+        let conc_unit = match env.unit_of(first_sp_name) {
             Some(u) => u.clone(),
             None => continue,
         };
@@ -3644,7 +3657,7 @@ fn validate_reaction_rate_units(
         let mut resolvable = true;
         let mut fractional_substrate = false;
         for entry in substrates {
-            if !env.contains_key(&entry.species) {
+            if !env.contains(&entry.species) {
                 resolvable = false;
                 break;
             }
@@ -4074,6 +4087,97 @@ fn collect_subsystem_scoped_refs<'a>(
         }
         if let Some(nested) = component.get("subsystems").and_then(|v| v.as_object()) {
             collect_subsystem_scoped_refs(&path, nested.iter(), refs);
+        }
+    }
+}
+
+/// `<System>.<member>` → declared unit string for every member of the
+/// document's top-level models and reaction systems (and, through their
+/// subsystems, `<System>.<sub>.<member>`) that declares units (esm-spec
+/// §4.9.2).
+///
+/// A mounted component is, after resolution, identical to one written inline
+/// (§4.7 "Resolution timing"), so a member reached across a `{ref}` mount edge
+/// — a `subsystems.<k>` mount or a top-level `models.<k>` mount — carries the
+/// units its declaration states, exactly as a local one does (§4.8.4).
+pub(crate) fn toplevel_reference_units(esm_file: &EsmFile) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    let mut insert = |name: String, units: Option<&str>| {
+        if let Some(units) = units {
+            out.insert(name, units.to_string());
+        }
+    };
+    for (name, model) in esm_file.models.iter().flatten() {
+        for (var, decl) in &model.variables {
+            insert(format!("{name}.{var}"), decl.units.as_deref());
+        }
+        if let Some(subs) = &model.subsystems {
+            collect_subsystem_units(name, subs.iter(), &mut insert);
+        }
+    }
+    for (name, rs) in esm_file.reaction_systems.iter().flatten() {
+        for (member, units) in rs
+            .species
+            .iter()
+            .map(|(k, v)| (k, &v.units))
+            .chain(rs.parameters.iter().map(|(k, v)| (k, &v.units)))
+        {
+            insert(format!("{name}.{member}"), units.as_deref());
+        }
+        if let Some(subs) = &rs.subsystems {
+            collect_subsystem_units(name, subs.iter(), &mut insert);
+        }
+    }
+    out
+}
+
+/// `<sub>.<member>` → declared unit string, relative to a component whose
+/// `subsystems` map this is, at any depth. A member that declares NO units is
+/// still present (as `None`): the relative path is what the name resolves to,
+/// so it must shadow a top-level member with the same dotted name.
+pub(crate) fn subsystem_reference_units(
+    subsystems: &indexmap::IndexMap<String, serde_json::Value>,
+) -> HashMap<String, Option<String>> {
+    let mut out = HashMap::new();
+    collect_subsystem_units("", subsystems.iter(), &mut |name, units| {
+        out.insert(name, units.map(str::to_string));
+    });
+    out
+}
+
+/// Visit every member of one raw `subsystems` map whose entries sit under the
+/// dotted `prefix` (empty at the owning component), with its declared unit
+/// string if any. Mirrors [`collect_subsystem_scoped_refs`]: the same members,
+/// with their units.
+fn collect_subsystem_units<'a>(
+    prefix: &str,
+    subs: impl Iterator<Item = (&'a String, &'a serde_json::Value)>,
+    visit: &mut impl FnMut(String, Option<&str>),
+) {
+    for (sub_name, value) in subs {
+        let path = if prefix.is_empty() {
+            sub_name.clone()
+        } else {
+            format!("{prefix}.{sub_name}")
+        };
+        let component = value
+            .get("models")
+            .or_else(|| value.get("reaction_systems"))
+            .and_then(|m| m.as_object())
+            .filter(|m| m.len() == 1)
+            .and_then(|m| m.values().next())
+            .unwrap_or(value);
+        for field in ["variables", "species", "parameters"] {
+            let Some(members) = component.get(field).and_then(|v| v.as_object()) else {
+                continue;
+            };
+            for (member, decl) in members {
+                let units = decl.get("units").and_then(|u| u.as_str());
+                visit(format!("{path}.{member}"), units);
+            }
+        }
+        if let Some(nested) = component.get("subsystems").and_then(|v| v.as_object()) {
+            collect_subsystem_units(&path, nested.iter(), visit);
         }
     }
 }
