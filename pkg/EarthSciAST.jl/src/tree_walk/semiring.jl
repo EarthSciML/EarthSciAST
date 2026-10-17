@@ -518,8 +518,10 @@ function _join_key_column_values(col::String, positions::Vector{Int}, vi_maps,
         defn = get(obs_defs, col, nothing)
         if defn isa OpExpr && (defn::OpExpr).op == "const"
             arr = _const_op_to_array((defn::OpExpr).value)
-        elseif defn isa OpExpr && (defn::OpExpr).op == "makearray"
-            return Any[_join_literal_at(defn::OpExpr, p, const_arrays) for p in positions]
+        elseif defn isa OpExpr && (defn::OpExpr).op == "makearray" &&
+               all(p -> _join_literal_cell(defn::OpExpr, p, const_arrays) !== nothing,
+                   positions)
+            return Any[_join_literal_cell(defn::OpExpr, p, const_arrays) for p in positions]
         elseif defn !== nothing
             vals = _const_cadence_column_values(col, defn, positions, const_arrays,
                                                 obs_defs, index_sets, vi_maps, var_shapes)
@@ -557,65 +559,139 @@ function _const_cadence_column_values(col::String, defn::ASTExpr, positions::Vec
                                       const_arrays::AbstractDict, obs_defs::AbstractDict,
                                       index_sets::AbstractDict, vi_maps=_EMPTY_VI_MAPS,
                                       var_shapes::AbstractDict=Dict{String,Vector{String}}())
-    others = Dict{String,ASTExpr}(String(k) => v for (k, v) in obs_defs if String(k) != col)
-    reads_other(x) = any(n -> haskey(others, n), _referenced_var_names(x))
-    e = defn
-    for _ in 0:length(others)
-        reads_other(e) || break
-        e = _sub_preserving(e, others)
-    end
-    reads_other(e) && return nothing                       # a cycle through observeds
-    # A column computed through joins of its own (a MOVES key that is the
-    # latest year at or before the run year): its gates are built first, from
-    # their own key columns, by the same resolution.
-    gated = e isa OpExpr && _expr_has_join(e::OpExpr)
-    gated && (e = _resolve_join_in_expr(e, index_sets, vi_maps, const_arrays,
-                                        var_shapes, obs_defs))
-    e = _resolve_isr(e, index_sets)
-    # Scalar parameters are build-time here: their values at this build are
-    # folded into the gate, and each one read is recorded as read at build.
-    params = _join_params()
-    used = Dict{String,Float64}(n => params[n] for n in _referenced_var_names(e)
-                                if haskey(params, n) && !haskey(const_arrays, n))
-    _exprtbl_evaluable(e, Set{String}(keys(used)), const_arrays) || return nothing
-    ce = _cellwise_compile_once_impl(e, 1, const_arrays, Dict{String,Any}(), used)
-    if ce === nothing
-        # A gated reduction, or a `makearray` read at the position, has no
-        # symbolic compile-once form (each binds concrete positions), so such
-        # a column is resolved at each of its positions.
-        vals = Any[]
-        psyms = Set{Symbol}(Symbol(k) for k in keys(used))
-        pnt = NamedTuple{Tuple(Symbol(k) for k in keys(used))}(Tuple(values(used)))
-        for p in positions
-            v = try
-                r = _resolve_indices(_key_at_cell(e, p),
-                                     Dict{String,Tuple{Vector{Int},Vector{Int}}}(),
-                                     Dict{String,Int}(), const_arrays)
-                _eval_node(_compile(r, Dict{String,Int}(), psyms, Dict{String,Any}()),
-                           Float64[], pnt, 0.0)
-            catch err
-                err isa EarthSciASTError || rethrow()
-                return nothing
-            end
-            push!(vals, v)
-        end
-        foreach(_record_param_read, keys(used))
-        return _computed_keys(vals)
-    end
-    foreach(_record_param_read, keys(used))
-    return _computed_keys(Any[ce(Int[p]) for p in positions])
+    (isempty(positions) || minimum(positions) < 1) && return nothing
+    ca = Dict{String,Any}(String(k) => v for (k, v) in const_arrays)
+    vals = _cc_values(col, defn, [maximum(positions)], ca, obs_defs, index_sets, vi_maps,
+                      var_shapes, Set{String}([col]))
+    vals === nothing && return nothing
+    return _computed_keys(Any[vals[p] for p in positions])
 end
 
-# An array-valued key definition read at position `p`: every array producer and
+# The extents of an observed's declared shape, or `nothing` when a set's size
+# is not known here.
+function _cc_extents(n::String, index_sets::AbstractDict, var_shapes::AbstractDict)
+    shape = get(var_shapes, n, nothing)
+    (shape === nothing || isempty(shape)) && return nothing
+    ext = Int[]
+    for sname in shape
+        is = get(index_sets, String(sname), nothing)
+        is isa IndexSet || return nothing
+        sz = is.kind == "categorical" ?
+             (is.members === nothing ? nothing : length(is.members)) : is.size
+        (sz isa Int && sz > 0) || return nothing
+        push!(ext, sz)
+    end
+    return ext
+end
+
+# Observed `name`'s value over `1:ext`, as a column-major array, from its
+# definition `def`, or `nothing` when it is not build-time data. Every array
+# observed the definition reads is computed the same way FIRST, over its own
+# declared cells, and put in `ca` (its producer evaluated once, not once per
+# reader cell); a scalar one is inlined. Then, in order: compiled through the
+# right-hand side's cascade into a buffer and run once (setup_fill.jl) where
+# the plan compiles construction-time fills; the compile-once evaluator; and
+# only under a plan that licenses it, a resolution at each cell. Scalar
+# parameters read are baked (recorded as read at build).
+function _cc_values(name::String, def::ASTExpr, ext::Vector{Int}, ca::Dict{String,Any},
+                    obs_defs::AbstractDict, index_sets::AbstractDict, vi_maps,
+                    var_shapes::AbstractDict, stack::Set{String})
+    # A document-literal array is its value.
+    if def isa OpExpr && (def::OpExpr).op == "const" && (def::OpExpr).value isa AbstractVector
+        a = _const_op_to_array((def::OpExpr).value)
+        return size(a) == Tuple(ext) ? Array{Float64}(a) : nothing
+    end
+    e = def
+    for _ in 0:length(obs_defs)
+        subs = Dict{String,ASTExpr}()
+        for n in _referenced_var_names(e)
+            (haskey(ca, n) || !haskey(obs_defs, n)) && continue
+            n in stack && return nothing                    # a cycle through observeds
+            d = obs_defs[n]::ASTExpr
+            next = _cc_extents(n, index_sets, var_shapes)
+            if next === nothing
+                subs[n] = d
+            else
+                arr = _cc_values(n, d, next, ca, obs_defs, index_sets, vi_maps, var_shapes,
+                                 union(stack, (n,)))
+                arr === nothing && return nothing
+                ca[n] = arr
+            end
+        end
+        isempty(subs) && break
+        e = _sub_preserving(e, subs)
+    end
+    any(n -> haskey(obs_defs, n) && !haskey(ca, n), _referenced_var_names(e)) &&
+        return nothing
+    # A materialized observed named bare reads its own cell (§4.3.4, the
+    # name-aligned elementwise case): it becomes the producer that reads it
+    # there, which every route below indexes at the cell.
+    aligned = Dict{String,ASTExpr}()
+    for n in _referenced_var_names(e)
+        (haskey(obs_defs, n) && haskey(ca, n)) || continue
+        a = ca[n]
+        (a isa AbstractArray && ndims(a) == length(ext)) || continue
+        ks = String["\0cc\0$d" for d in 1:length(ext)]
+        aligned[n] = OpExpr("faq", ASTExpr[]; output_idx=Any[ks...],
+            ranges=Dict{String,Any}(ks[d] => Any[1, size(a, d)] for d in eachindex(ks)),
+            expr_body=OpExpr("index", ASTExpr[VarExpr(n), (VarExpr(k) for k in ks)...]))
+    end
+    isempty(aligned) || (e = _sub_preserving(e, aligned))
+    # Joins of its own (a MOVES key that is the latest year at or before the run
+    # year): their gates are built first, by this same resolution.
+    e isa OpExpr && _expr_has_join(e::OpExpr) &&
+        (e = _resolve_join_in_expr(e, index_sets, vi_maps, ca, var_shapes, obs_defs))
+    e = _resolve_isr(e, index_sets)
+    params = _join_params()
+    used = Dict{String,Float64}(n => params[n] for n in _referenced_var_names(e)
+                                if haskey(params, n) && !haskey(ca, n))
+    _exprtbl_evaluable(e, Set{String}(keys(used)), ca) || return nothing
+    out = _setup_fill_array(e, ext; const_arrays=ca, params=used,
+                            reg_funcs=Dict{String,Any}())
+    if out === nothing
+        cells = _row_major_cells(ext)
+        out = Array{Float64}(undef, ext...)
+        ce = _cellwise_compile_once_impl(e, length(ext), ca, Dict{String,Any}(), used)
+        if ce !== nothing
+            for c in cells
+                out[c...] = ce(c)
+            end
+        else
+            # A gated reduction, or a `makearray` read at the cell, with no
+            # symbolic compile-once form: resolved at each cell, under license.
+            _percell_evaluation_license("join key column $name",
+                                        "the join gate's key column", length(cells))
+            psyms = Set{Symbol}(Symbol(k) for k in keys(used))
+            pnt = NamedTuple{Tuple(Symbol(k) for k in keys(used))}(Tuple(values(used)))
+            for c in cells
+                v = try
+                    r = _resolve_indices(_key_at_cell(e, c),
+                                         Dict{String,Tuple{Vector{Int},Vector{Int}}}(),
+                                         Dict{String,Int}(), ca)
+                    _eval_node(_compile(r, Dict{String,Int}(), psyms, Dict{String,Any}()),
+                               Float64[], pnt, 0.0)
+                catch err
+                    err isa EarthSciASTError || rethrow()
+                    return nothing
+                end
+                out[c...] = v
+            end
+        end
+    end
+    foreach(_record_param_read, keys(used))
+    return out
+end
+
+# An array-valued key definition read at cell `c`: every array producer and
 # inline array `const` it combines elementwise is indexed there
 # (`_index_at_cell`, extended to the inline literal).
-function _key_at_cell(e::ASTExpr, p::Int)
+function _key_at_cell(e::ASTExpr, c::Vector{Int})
     e isa OpExpr || return e
     o = e::OpExpr
     (_is_array_producer(o) || (o.op == "const" && o.value isa AbstractVector)) &&
-        return OpExpr("index", ASTExpr[o, IntExpr(Int64(p))])
+        return OpExpr("index", ASTExpr[o, (IntExpr(Int64(x)) for x in c)...])
     (o.op == "faq" || o.op == "makearray" || o.op == "index") && return o
-    return reconstruct(o; args=ASTExpr[_key_at_cell(a, p) for a in o.args])
+    return reconstruct(o; args=ASTExpr[_key_at_cell(a, c) for a in o.args])
 end
 
 # The build's scalar parameter values while its join gates resolve
@@ -626,8 +702,10 @@ _join_params()::AbstractDict{String,Float64} =
 _with_join_params(f, params::AbstractDict) =
     task_local_storage(f, _JOIN_PARAMS_KEY, Dict{String,Float64}(params))
 
-# One cell of a document-literal `makearray` key column, as a raw value.
-function _join_literal_at(mk::OpExpr, p::Int, const_arrays::AbstractDict)
+# One cell of a document-literal `makearray` key column, as a raw value, or
+# `nothing` when the cell is not a literal (a computed column, which
+# `_const_cadence_column_values` then evaluates whole).
+function _join_literal_cell(mk::OpExpr, p::Int, const_arrays::AbstractDict)
     r = _resolve_index_of_makearray(mk, ASTExpr[IntExpr(Int64(p))],
                                     Dict{String,Tuple{Vector{Int},Vector{Int}}}(),
                                     Dict{String,Int}(), const_arrays)
@@ -636,23 +714,7 @@ function _join_literal_at(mk::OpExpr, p::Int, const_arrays::AbstractDict)
     # A scalar `const` literal (what an `enum` lowers to) is a literal too.
     (r isa OpExpr && (r::OpExpr).op == "const" && (r::OpExpr).value isa Real &&
      !((r::OpExpr).value isa Bool)) && return (r::OpExpr).value
-    # A cell computed from literals and scalar parameters (an enum product, a
-    # MOVES run-year key): evaluated, its parameters baked, as
-    # `_const_cadence_column_values` evaluates a computed column.
-    params = _join_params()
-    used = Dict{String,Float64}(n => params[n] for n in _referenced_var_names(r)
-                                if haskey(params, n) && !haskey(const_arrays, n))
-    if _exprtbl_evaluable(r, Set{String}(keys(used)), const_arrays)
-        ce = _cellwise_compile_once_impl(r, 0, const_arrays, Dict{String,Any}(), used)
-        if ce !== nothing
-            foreach(_record_param_read, keys(used))
-            return ce(Int[])
-        end
-    end
-    throw(TreeWalkError("E_TREEWALK_JOIN_UNKNOWN_KEY",
-        "join key column cell $p of a `makearray` observed did not reduce to a " *
-        "build-time literal (got a $(typeof(r))); §5.5.8 requires the key column " *
-        "to be build-time constant"))
+    return nothing
 end
 
 # Resolve one join-key name to `(sym, positions, values)` — the range symbol it
