@@ -457,3 +457,36 @@ fn a_column_count_subscript_folds_into_its_group() {
         "no transposed copy of the state"
     );
 }
+
+/// The data-subscript bounds test is `subscript_of` then `1..=n`, for every
+/// value class, including the values a half away from a whole number.
+#[test]
+fn data_subscript_matches_round_then_range() {
+    use super::ir::{data_subscript, subscript_of};
+    let reference = |v: f64, n: usize| {
+        let r = subscript_of(v);
+        (r >= 1 && r <= n as i64).then(|| (r - 1) as usize)
+    };
+    let mut vals: Vec<f64> = vec![f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -0.0, 0.0];
+    for k in -3i64..70 {
+        for d in [-0.5f64, 0.0, 0.5] {
+            let x = k as f64 + d;
+            vals.push(x);
+            vals.push(f64::from_bits(x.to_bits().wrapping_add(1)));
+            vals.push(f64::from_bits(x.to_bits().wrapping_sub(1)));
+        }
+    }
+    let mut x: u64 = 0x2545F4914F6CDD1D;
+    for _ in 0..200_000 {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        vals.push(f64::from_bits(x));
+        vals.push((x % 1_000_003) as f64 / 7.0 - 30.0);
+    }
+    for n in [0usize, 1, 2, 5, 20, 64, 1000] {
+        for &v in &vals {
+            assert_eq!(data_subscript(v, n), reference(v, n), "{v:?} n={n}");
+        }
+    }
+}

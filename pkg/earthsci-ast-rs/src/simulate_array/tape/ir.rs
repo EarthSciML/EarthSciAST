@@ -2259,8 +2259,21 @@ impl IndexGatherSpec {
 /// values saturate), and a 1-based position outside `1..=n` is out of range.
 #[inline]
 pub(crate) fn data_subscript(v: f64, n: usize) -> Option<usize> {
-    let one_based = subscript_of(v);
-    (one_based >= 1 && one_based <= n as i64).then(|| (one_based - 1) as usize)
+    if n >= 1 << 52 {
+        let one_based = subscript_of(v);
+        return (one_based >= 1 && one_based <= n as i64).then(|| (one_based - 1) as usize);
+    }
+    // `round(v)` lies in `1..=n` exactly when `v` lies in `[0.5, n + 0.5)`
+    // (NaN in neither), and there `floor(v + 0.5)` is `round(v)`: the sum is
+    // exact, or rounds only between two values with the same floor. Two
+    // compares and a truncation instead of `subscript_of`'s saturating
+    // conversion.
+    if v >= 0.5 && v < n as f64 + 0.5 {
+        // SAFETY: `v + 0.5` lies in `[1, n + 1)`, which `usize` holds.
+        Some(unsafe { (v + 0.5).to_int_unchecked::<usize>() } - 1)
+    } else {
+        None
+    }
 }
 
 /// Where, in its rule's per-cell evaluation, an [`Instr::DataGather`]
