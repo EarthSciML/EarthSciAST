@@ -1674,9 +1674,11 @@ A binding that implements the same lowering MUST check the same thing, and a
 binding that evaluates the whole document in one precision only is conforming
 here exactly when that precision separates its key values.
 
-**Float keys stay forbidden.** A data column reaching a binding as floating-point
-storage is admissible **only** where every value is exactly integral, and is then
-an integer ID column. Anything else is a float key, whose equality is not portable
+**Float keys stay forbidden in declared data.** A DECLARED data column — data
+supplied to the build: an ingested column, a caller-provided factor, a shaped
+parameter carrying inline data, or a `const`-defined unknown — reaching a
+binding as floating-point storage is admissible **only** where every value is
+exactly integral, and is then an integer ID column. Anything else is a float key, whose equality is not portable
 across bindings (§5.5.1 rule 1): a binding MUST NOT treat it as a key. Rejecting
 the document with a named error is the recommended behaviour and is what the
 Python reference does. The Rust reference instead declines the GATE and lets the
@@ -1684,6 +1686,21 @@ lowered equality predicate compute float equality on the same values — the
 arithmetic the (already out-of-contract) document asked for, rather than a
 silently different answer. Either is conforming; a document that can tell them
 apart is outside the contract by construction.
+
+**A computed key column compares by exact numeric equality (normative).** The
+integral-only rule above is about DATA, whose float storage may be an
+accident of a file format. It does not apply to a const-cadence computed
+observed used as a key column (the fourth case of the build-time-constant list
+above): its values are what the document's own arithmetic produced, the same in
+every binding, so a binding MUST admit it as a key whatever its values and
+compare them by exact IEEE-754 binary64 equality — the `==` the lowered
+equality predicate computes. A value matches exactly the values equal to it:
+a non-integral value matches only an identical one, `+Inf` matches only `+Inf`
+(and `-Inf` only `-Inf`), `+0` and `-0` match each other, and `NaN` matches
+nothing. Such a value is neither an error nor a reason to decline the gate; the
+gate still drives over it. The motivating case is a relational port's
+`min` over a filtered set that admits no rows, which is `+Inf` (the `min`
+identity, §5.6.1) and must simply match no row of the other side.
 
 ### 5.6 Closed Semiring Registry (normative)
 
