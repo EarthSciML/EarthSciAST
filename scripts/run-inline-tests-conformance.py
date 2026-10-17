@@ -1435,9 +1435,9 @@ def _availability_controls(
     # native is required for every fixture: leaving it out of a required
     # binding's list, or excusing its refusal with an in-scope code, is a
     # manifest error; an out-of-scope code excuses it.
-    def rejects(f):
+    def rejects(f, required=tuple(manifest["bindings_required"])):
         try:
-            _validate_ledgers(Path("<self-test>"), f["id"], f, manifest["bindings_required"])
+            _validate_ledgers(Path("<self-test>"), f["id"], f, list(required))
         except ManifestError:
             return True
         return False
@@ -1463,9 +1463,11 @@ def _availability_controls(
         f"unsupported_construct: rejected={rejects(out_of_scope)} (want True, True, False)",
     )
     # Python is outside the native rule: an in-scope code excuses its native
-    # gap, but the gap must still be a named exclusion.
+    # gap, but the gap must still be a named exclusion. Checked as if Python
+    # were required, so a tier that scope-excludes Python still tests the rule.
+    with_py = tuple(sorted(set(manifest["bindings_required"]) | {"python"}))
     py_bare = copy.deepcopy(no_native)
-    py_bare["required"] = {b: ["native"] for b in manifest["bindings_required"]}
+    py_bare["required"] = {b: ["native"] for b in with_py}
     py_bare["required"]["python"] = ["interpreter"]
     py_named = copy.deepcopy(py_bare)
     py_named["named_exclusions"] = [
@@ -1477,10 +1479,10 @@ def _availability_controls(
         }
     ]
     check(
-        rejects(py_bare) and not rejects(py_named),
+        rejects(py_bare, with_py) and not rejects(py_named, with_py),
         "control/python-native-gap-is-a-named-exclusion",
-        f"python native left out unnamed: rejected={rejects(py_bare)}; named with "
-        f"compiler_refused_rule: rejected={rejects(py_named)} (want True, False)",
+        f"python native left out unnamed: rejected={rejects(py_bare, with_py)}; named with "
+        f"compiler_refused_rule: rejected={rejects(py_named, with_py)} (want True, False)",
     )
 
 
