@@ -207,10 +207,20 @@ impl TapeBuilder<'_> {
                 ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&shape), (*vals).clone()).ok()?;
             values.push((dep.clone(), a));
         }
+        // A baked parameter is build-time data (`baked_params`); any other is
+        // constant only until the caller changes it, so is not.
+        let mut baked: Vec<&String> = reads
+            .iter()
+            .filter(|r| self.baked_params.contains_key(r.as_str()))
+            .collect();
+        baked.sort();
+        for p in baked {
+            let x = ndarray::ArrayD::from_elem(ndarray::IxDyn(&[]), self.baked_params[p]);
+            values.push((p.clone(), x));
+        }
         let inputs: Vec<(&str, &ndarray::ArrayD<f64>)> =
             values.iter().map(|(n, a)| (n.as_str(), a)).collect();
-        // No parameters: a CONST-cadence rule that reads one is constant only
-        // until the caller changes it, so it is not build-time data.
+        // No parameters beyond the baked ones.
         let a = eval_standalone_rule(rule, &inputs, &[], &[], self.const_arrays, false).ok()?;
         let shape: DimU = a.shape().iter().copied().collect();
         Some((shape, Rc::new(a.iter().copied().collect())))

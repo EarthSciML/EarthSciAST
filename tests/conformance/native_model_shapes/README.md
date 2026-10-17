@@ -21,6 +21,7 @@ is required for every fixture in Julia and Rust, as everywhere.
 | `guarded_out_of_range_*` | a const subscript that would be out of range, in an `ifelse` branch no cell takes, and one a `faq` filter excludes: nothing may fault | chem_vertical_mixing `rho_w` |
 | `ic_const_gather` | `ic(u)` defined by a `faq` gather of an inline `const` (plain, reversed, through a `const` index array) | level_set_tendency_wrffire `ic(psi)` |
 | `join_on_computed_key_*` | a value-equality `join` keyed on a const-cadence computed observed (CONFORMANCE_SPEC §5.5.8) | moves F57/F58 controls, seven moves components, gates/equijoin_driven |
+| `join_on_parameter_key_*` | a value-equality `join` whose key column is computed from a scalar parameter, which the build bakes (CONFORMANCE_SPEC §5.5.8): the default and a test's `parameter_overrides` both decide the match set | moves fuel_properties, geographic_allocation, liquid_leaking_emissions (`runYearID`, `runCountyID`) |
 | `overlap_join_binning_*` | a containment-binning `faq` with an `overlap` gate, beside the same body ungated | every isrm `E_*` rule |
 | `polygon_area_in_faq_*` | `polygon_intersection_area` as a `faq` body over partial-rank ring slices, gated and ungated | isrm polygon `E_*` rules |
 
