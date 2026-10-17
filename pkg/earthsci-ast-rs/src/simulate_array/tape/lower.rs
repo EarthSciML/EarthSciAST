@@ -2833,7 +2833,14 @@ impl<'m> TapeBuilder<'m> {
             tuple: 0,
             visit: SmallVec::new(),
         };
-        let v = self.lower_index(node, &sub)?;
+        // A scope of its own: the value-numbering frame is keyed by node,
+        // not by box, so a subexpression this lowers over the sub-box must
+        // not answer for the same node over the full box (a template's
+        // shared subscript), nor the reverse.
+        self.push_scope();
+        let v = self.lower_index(node, &sub);
+        self.pop_scope();
+        let v = v?;
         let Some((vs, vo)) = self.lv_box(&v) else {
             return Ok(Some(v));
         };

@@ -490,3 +490,37 @@ fn data_subscript_matches_round_then_range() {
         }
     }
 }
+
+/// One subscript expression shared by a gather that reads only the column
+/// axis (lowered over that sub-box) and by one that reads both axes: each
+/// is lowered over its own box, and the program agrees with the oracle.
+#[test]
+fn a_shared_subscript_serves_a_sub_box_gather_and_a_full_box_gather() {
+    let (nc, nl) = (4i64, 6i64);
+    let cnt = json!({"op": "faq", "args": [], "output_idx": ["c"],
+        "ranges": {"c": [1, nc], "l": [1, nl]}, "reduce": "+",
+        "expr": {"op": "ifelse", "args": [
+            {"op": ">", "args": [idx(json!("u"), &[json!("c"), json!("l")]), 0.0]}, 1.0, 0.0]}});
+    let sub = json!({"op": "max", "args": [1, idx(json!("cnt"), &[json!("c")])]});
+    let rhs = plus(
+        idx(json!("u"), &[json!("c"), sub.clone()]),
+        json!({"op": "*", "args": [
+            idx(json!("u"), &[json!("c"), json!({"op": "min", "args": [json!(nl), plus(sub.clone(), json!("l"))]})]),
+            sub]}),
+    );
+    let compiled = compile(doc(
+        json!({
+            "u": {"type": "unknown", "shape": ["c", "l"]},
+            "cnt": {"type": "unknown", "shape": ["c"]}
+        }),
+        vec![
+            json!({"lhs": "cnt", "rhs": cnt}),
+            json!({"lhs": {"op": "faq", "args": [], "output_idx": ["c", "l"],
+                    "expr": {"op": "D", "args": [idx(json!("u"), &[json!("c"), json!("l")])], "wrt": "t"},
+                    "ranges": {"c": [1, nc], "l": [1, nl]}},
+                   "rhs": {"op": "faq", "args": [], "output_idx": ["c", "l"],
+                    "ranges": {"c": [1, nc], "l": [1, nl]}, "expr": rhs}}),
+        ],
+    ));
+    ab(&compiled, &no_params());
+}
