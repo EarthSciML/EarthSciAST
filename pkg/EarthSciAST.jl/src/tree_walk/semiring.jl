@@ -588,11 +588,12 @@ end
 # definition `def`, or `nothing` when it is not build-time data. Every array
 # observed the definition reads is computed the same way FIRST, over its own
 # declared cells, and put in `ca` (its producer evaluated once, not once per
-# reader cell); a scalar one is inlined. Then, in order: compiled through the
-# right-hand side's cascade into a buffer and run once (setup_fill.jl) where
-# the plan compiles construction-time fills; the compile-once evaluator; and
-# only under a plan that licenses it, a resolution at each cell. Scalar
-# parameters read are baked (recorded as read at build).
+# reader cell); a scalar one is inlined. Then, in order: the compile-once
+# evaluator; compiled through the right-hand side's cascade into a buffer and
+# run once (setup_fill.jl) where the plan compiles construction-time fills (a
+# join-gated reduction, a `makearray` read at the cell); and only under a plan
+# that licenses it, a resolution at each cell. Scalar parameters read are
+# baked (recorded as read at build).
 function _cc_values(name::String, def::ASTExpr, ext::Vector{Int}, ca::Dict{String,Any},
                     obs_defs::AbstractDict, index_sets::AbstractDict, vi_maps,
                     var_shapes::AbstractDict, stack::Set{String})
@@ -646,16 +647,21 @@ function _cc_values(name::String, def::ASTExpr, ext::Vector{Int}, ca::Dict{Strin
     used = Dict{String,Float64}(n => params[n] for n in _referenced_var_names(e)
                                 if haskey(params, n) && !haskey(ca, n))
     _exprtbl_evaluable(e, Set{String}(keys(used)), ca) || return nothing
-    out = _setup_fill_array(e, ext; const_arrays=ca, params=used,
-                            reg_funcs=Dict{String,Any}())
-    if out === nothing
-        cells = _row_major_cells(ext)
-        out = Array{Float64}(undef, ext...)
-        ce = _cellwise_compile_once_impl(e, length(ext), ca, Dict{String,Any}(), used)
-        if ce !== nothing
-            for c in cells
-                out[c...] = ce(c)
-            end
+    # The compile-once evaluator first: a key column is a small table, and
+    # its one compiled tree costs no code generation, where a fill emits and
+    # compiles a function of its own.
+    cells = _row_major_cells(ext)
+    out = Array{Float64}(undef, ext...)
+    ce = _cellwise_compile_once_impl(e, length(ext), ca, Dict{String,Any}(), used)
+    if ce !== nothing
+        for c in cells
+            out[c...] = ce(c)
+        end
+    else
+        fill = _setup_fill_array(e, ext; const_arrays=ca, params=used,
+                                 reg_funcs=Dict{String,Any}())
+        if fill !== nothing
+            out = fill
         else
             # A gated reduction, or a `makearray` read at the cell, with no
             # symbolic compile-once form: resolved at each cell, under license.
