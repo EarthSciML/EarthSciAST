@@ -143,6 +143,8 @@ struct CanonVar {
     name: String,
     extents: Vec<usize>,
     default: f64,
+    /// First axis fastest instead of last (README "The measured state").
+    column_major: bool,
 }
 
 /// The first model of the document: its variables and the model itself.
@@ -174,6 +176,7 @@ fn canonical_vars(family: &str, doc: &Value) -> Result<Vec<CanonVar>, String> {
                 name: k.clone(),
                 extents: ext.clone(),
                 default: v["default"].as_f64().unwrap_or(0.0),
+                column_major: false,
             })
             .collect());
     }
@@ -193,6 +196,9 @@ fn canonical_vars(family: &str, doc: &Value) -> Result<Vec<CanonVar>, String> {
             name: name.to_string(),
             extents,
             default: v["default"].as_f64().unwrap_or(0.0),
+            // The column families are ordered the way native lays them out,
+            // so their hand loops read the layout native reads.
+            column_major: matches!(family, "column_search" | "column_sum"),
         })
     };
     let names: Vec<&str> = match family {
@@ -271,7 +277,15 @@ fn layout(names: &[String], vars: &[CanonVar]) -> Result<(Vec<usize>, Vec<f64>),
             if *i == 0 || i > e {
                 return Err(format!("state {n:?}: index outside {:?}", v.extents));
             }
-            flat = flat * e + (i - 1);
+        }
+        if v.column_major {
+            for (i, e) in idx.iter().zip(&v.extents).rev() {
+                flat = flat * e + (i - 1);
+            }
+        } else {
+            for (i, e) in idx.iter().zip(&v.extents) {
+                flat = flat * e + (i - 1);
+            }
         }
         let k = off + flat;
         if std::mem::replace(&mut seen[k], true) {

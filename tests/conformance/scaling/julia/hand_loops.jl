@@ -625,16 +625,16 @@ HAND_LOOPS["gather_index"] = HandLoop(_gidx_setup, _gidx_row!)
 #
 # Native lays u out column-major, so the columns of one level are contiguous:
 # a row is a block of columns, counted level by level into a per-column
-# buffer, then updated level by level.
+# buffer, each column's selected level read once, then updated level by level.
 
 function _csearch_setup(prob, doc, entry)
     nc, nl = _shape(entry, "ncol"), _shape(entry, "nlev")
     o = _block_offset(prob.var_map, "Column.u", (nc, nl))
-    return (; nc, nl, o, cnt = zeros(nc), nrows = cld(nc, _BLOCK))
+    return (; nc, nl, o, cnt = zeros(nc), sel = zeros(nc), nrows = cld(nc, _BLOCK))
 end
 
 @inline function _csearch_row!(du, u, t, st, r)
-    (; nc, nl, o, cnt) = st
+    (; nc, nl, o, cnt, sel) = st
     qs = ((r-1)*_BLOCK+1):min(r * _BLOCK, nc)
     @inbounds begin
         for q in qs
@@ -643,9 +643,11 @@ end
         for l in 1:nl, q in qs
             cnt[q] += ifelse(u[o+q+(l-1)*nc] > 1.0, 1.0, 0.0)
         end
+        for q in qs
+            sel[q] = u[o+q+(Int(max(1.0, cnt[q]))-1)*nc]
+        end
         for l in 1:nl, q in qs
-            sel = u[o+q+(Int(max(1.0, cnt[q]))-1)*nc]
-            du[o+q+(l-1)*nc] = -0.1 * u[o+q+(l-1)*nc] + 0.01 * sel
+            du[o+q+(l-1)*nc] = -0.1 * u[o+q+(l-1)*nc] + 0.01 * sel[q]
         end
     end
     return nothing

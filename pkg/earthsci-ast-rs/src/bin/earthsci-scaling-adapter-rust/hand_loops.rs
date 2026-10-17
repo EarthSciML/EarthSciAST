@@ -30,6 +30,9 @@ impl Out {
     }
 }
 
+/// Columns per buffer block in the column families' loops.
+const COLUMN_BLOCK: usize = 1024;
+
 /// One family's reference loop, with the data it needs prepared at build.
 pub enum HandLoop {
     /// Rank-`rank` diffusion on a `side^rank` grid, zero ghost.
@@ -70,10 +73,13 @@ pub enum HandLoop {
         emis: Vec<f64>,
     },
     /// Per column: `cnt` = levels whose state exceeds 1, then
-    /// `du[c, l] = -0.1 u[c, l] + 0.01 u[c, max(1, cnt)]`; level-fastest state.
+    /// `du[c, l] = -0.1 u[c, l] + 0.01 u[c, max(1, cnt)]`; column-fastest
+    /// state, as native lays it out, so a block of columns is counted level by
+    /// level into a buffer.
     ColumnSearch { ncol: usize, nlev: usize },
     /// Per column: `s = sum_l u[c, l]` once, then
-    /// `du[c, k] = -0.1 u[c, k] + 0.001 s`; level-fastest state.
+    /// `du[c, k] = -0.1 u[c, k] + 0.001 s`; column-fastest state, a block of
+    /// columns summed level by level into a buffer.
     ColumnSum { ncol: usize, nlev: usize },
     /// `du[i] = -0.1 u[i] + 0.001 agg[i]`, the join's sums computed at setup.
     JoinKeyed { agg: Vec<f64> },
@@ -196,30 +202,50 @@ impl HandLoop {
                     du.set(i, -rate[c] * u[i] + emis[c]);
                 }
             }
-            HandLoop::ColumnSearch { nlev, .. } => {
-                let l = *nlev;
-                for c in lo..hi {
-                    let col = &u[c * l..(c + 1) * l];
-                    let mut cnt = 0.0f64;
-                    for &v in col {
-                        cnt += if v > 1.0 { 1.0 } else { 0.0 };
+            HandLoop::ColumnSearch { ncol, nlev } => {
+                let (nc, nl) = (*ncol, *nlev);
+                let mut cnt = [0.0f64; COLUMN_BLOCK];
+                let mut sel = [0.0f64; COLUMN_BLOCK];
+                for q0 in (lo..hi).step_by(COLUMN_BLOCK) {
+                    let q1 = (q0 + COLUMN_BLOCK).min(hi);
+                    let cnt = &mut cnt[..q1 - q0];
+                    let sel = &mut sel[..q1 - q0];
+                    cnt.fill(0.0);
+                    for l in 0..nl {
+                        let row = &u[l * nc + q0..l * nc + q1];
+                        for (c, &v) in cnt.iter_mut().zip(row) {
+                            *c += if v > 1.0 { 1.0 } else { 0.0 };
+                        }
                     }
-                    let sel = col[cnt.max(1.0) as usize - 1];
-                    for (k, &v) in col.iter().enumerate() {
-                        du.set(c * l + k, -0.1 * v + 0.01 * sel);
+                    for (b, (s, c)) in sel.iter_mut().zip(cnt.iter()).enumerate() {
+                        *s = u[(c.max(1.0) as usize - 1) * nc + q0 + b];
+                    }
+                    for l in 0..nl {
+                        let row = &u[l * nc + q0..l * nc + q1];
+                        for (b, (&s, &v)) in sel.iter().zip(row).enumerate() {
+                            du.set(l * nc + q0 + b, -0.1 * v + 0.01 * s);
+                        }
                     }
                 }
             }
-            HandLoop::ColumnSum { nlev, .. } => {
-                let l = *nlev;
-                for c in lo..hi {
-                    let col = &u[c * l..(c + 1) * l];
-                    let mut s = 0.0f64;
-                    for &v in col {
-                        s += v;
+            HandLoop::ColumnSum { ncol, nlev } => {
+                let (nc, nl) = (*ncol, *nlev);
+                let mut acc = [0.0f64; COLUMN_BLOCK];
+                for q0 in (lo..hi).step_by(COLUMN_BLOCK) {
+                    let q1 = (q0 + COLUMN_BLOCK).min(hi);
+                    let acc = &mut acc[..q1 - q0];
+                    acc.fill(0.0);
+                    for l in 0..nl {
+                        let row = &u[l * nc + q0..l * nc + q1];
+                        for (a, &v) in acc.iter_mut().zip(row) {
+                            *a += v;
+                        }
                     }
-                    for (k, &v) in col.iter().enumerate() {
-                        du.set(c * l + k, -0.1 * v + 0.001 * s);
+                    for l in 0..nl {
+                        let row = &u[l * nc + q0..l * nc + q1];
+                        for (b, (a, &v)) in acc.iter().zip(row).enumerate() {
+                            du.set(l * nc + q0 + b, -0.1 * v + 0.001 * a);
+                        }
                     }
                 }
             }
