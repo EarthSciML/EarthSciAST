@@ -2604,6 +2604,9 @@ impl<'m> TapeBuilder<'m> {
                  recurrence body (a self-read is evaluated one cell at a time)"
             );
         }
+        if let Some(v) = self.lower_index_on_sub_box(node, bx)? {
+            return Ok(v);
+        }
         // See the same guard in `eval_vec_index`: a const-array gather may not
         // use the ghost-0 fill (§5.5.5).
         let const_base = self.const_arrays.is_const_base(&node.args[0]);
@@ -2784,6 +2787,106 @@ impl<'m> TapeBuilder<'m> {
             &bx.shape,
             &bx.lo,
         ))
+    }
+
+    /// A data-subscript gather that reads only some of the box's axes
+    /// (`u[c, max(1, cnt[c])]` in a `(c, l)` box): evaluated once over the
+    /// sub-box of the axes it names and broadcast along the others, as the
+    /// per-cell oracle's value at a cell depends on those axes alone. Only
+    /// where nothing in it can fault — no const-array read, no closed
+    /// function — so no fault's place in the oracle's order moves. `None`
+    /// when the gather reads every axis or does not qualify.
+    fn lower_index_on_sub_box(
+        &mut self,
+        node: &Arc<ExpressionNode>,
+        bx: &LBox,
+    ) -> LResult<Option<LV>> {
+        if bx.syms.len() < 2
+            || bx.shape.len() != bx.syms.len()
+            || self.sweep.is_some()
+            || self.const_arrays.is_const_base(&node.args[0])
+        {
+            return Ok(None);
+        }
+        let vb = bx.as_vecbox();
+        if node.args[1..]
+            .iter()
+            .all(|e| classify_axis_role(e, &vb).is_some())
+        {
+            return Ok(None);
+        }
+        let mut used = vec![false; bx.syms.len()];
+        if !self.fault_free_reads(&Expr::Operator(Arc::clone(node)), bx, &mut used) {
+            return Ok(None);
+        }
+        let keep: Vec<usize> = (0..bx.syms.len()).filter(|&a| used[a]).collect();
+        if keep.is_empty() || keep.len() == bx.syms.len() {
+            return Ok(None);
+        }
+        let syms: Vec<String> = keep.iter().map(|&a| bx.syms[a].clone()).collect();
+        let sub = LBox {
+            syms: &syms,
+            lo: keep.iter().map(|&a| bx.lo[a]).collect(),
+            shape: keep.iter().map(|&a| bx.shape[a]).collect(),
+            cnames: bx.cnames,
+            cvals: bx.cvals.clone(),
+            tuple: 0,
+            visit: SmallVec::new(),
+        };
+        let v = self.lower_index(node, &sub)?;
+        let Some((vs, vo)) = self.lv_box(&v) else {
+            return Ok(Some(v));
+        };
+        if vs != sub.shape || vo != sub.lo {
+            bail_tape!("index: a sub-box gather's box is not its sub-box");
+        }
+        // Broadcast: output axis `keep[j]` reads source axis `j`.
+        let mapped: SmallVec<[bool; 4]> = (0..bx.shape.len()).map(|a| used[a]).collect();
+        let segs: SmallVec<[SmallVec<[(usize, usize, usize); 2]>; 4]> = (0..bx.shape.len())
+            .map(|a| {
+                let mut s = SmallVec::new();
+                s.push((0usize, bx.shape[a], 0usize));
+                s
+            })
+            .collect();
+        let mapped_src: Vec<usize> = (0..keep.len()).collect();
+        Ok(Some(self.emit_gather(
+            &v,
+            SmallVec::new(),
+            &mapped_src,
+            mapped,
+            segs,
+            &bx.shape,
+            &bx.lo,
+        )))
+    }
+
+    /// Whether `e` reads nothing that can fault (no const array or array
+    /// literal, no closed function, no nested aggregate or array builder),
+    /// marking in `used` each box axis whose symbol it names.
+    fn fault_free_reads(&self, e: &Expr, bx: &LBox, used: &mut [bool]) -> bool {
+        match e {
+            Expr::Number(_) | Expr::Integer(_) => true,
+            Expr::Variable(v) => {
+                if let Some(a) = bx.syms.iter().position(|s| s == v) {
+                    used[a] = true;
+                }
+                !self.const_arrays.is_const(v)
+            }
+            Expr::Operator(n) => {
+                if matches!(
+                    n.op.as_str(),
+                    "const" | "fn" | "faq" | "aggregate" | "makearray" | "broadcast"
+                ) && !(n.op == "const" && n.value.as_ref().is_some_and(|v| v.is_number()))
+                {
+                    return false;
+                }
+                if n.op == "index" && self.const_arrays.is_const_base(&n.args[0]) {
+                    return false;
+                }
+                n.args.iter().all(|a| self.fault_free_reads(a, bx, used))
+            }
+        }
     }
 
     /// `index(c, s…)` over a rank-1 box, `c` a const array and some subscript
