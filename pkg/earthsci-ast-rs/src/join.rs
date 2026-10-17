@@ -1142,9 +1142,6 @@ pub(crate) fn join_key_cone<'e>(
             for clause in n.join.iter().flatten() {
                 out.extend(clause.on.iter().flatten().cloned());
             }
-            for a in &n.args {
-                key_columns(a, out);
-            }
             n.for_each_child(&mut |c| key_columns(c, out));
         }
     }
@@ -1154,9 +1151,6 @@ pub(crate) fn join_key_cone<'e>(
             Expr::Operator(n) => {
                 for clause in n.join.iter().flatten() {
                     out.extend(clause.on.iter().flatten().cloned());
-                }
-                for a in &n.args {
-                    reads(a, out);
                 }
                 n.for_each_child(&mut |c| reads(c, out));
             }
@@ -1205,6 +1199,34 @@ mod tests {
     use super::*;
     use crate::types::{ExpressionNode, JoinClause, RangeSpec};
     use std::collections::HashMap;
+
+    // --- join_key_cone ------------------------------------------------------
+
+    /// The cone walk visits each node once: a sum nested 64 deep (every
+    /// equation chain a coupled column builds) must not cost 2^64 visits.
+    #[test]
+    fn join_key_cone_is_linear_in_nesting_depth() {
+        let mut e = Expr::Variable("x".into());
+        for _ in 0..64 {
+            e = Expr::operator(ExpressionNode {
+                op: "+".into(),
+                args: vec![e, Expr::Number(1.0)],
+                ..Default::default()
+            });
+        }
+        assert!(join_key_cone([&e], |_| None).is_empty());
+        let defs: HashMap<&str, &Expr> = [("k", &e)].into_iter().collect();
+        let keyed = Expr::operator(ExpressionNode {
+            op: "faq".into(),
+            join: Some(vec![JoinClause {
+                on: vec![["k".into(), "id".into()]],
+                ..Default::default()
+            }]),
+            ..Default::default()
+        });
+        let cone = join_key_cone([&keyed], |n| defs.get(n).copied());
+        assert!(cone.contains("k") && cone.contains("x"), "{cone:?}");
+    }
 
     // --- JoinKey total order (§5.5.1 rule 1) -------------------------------
 
