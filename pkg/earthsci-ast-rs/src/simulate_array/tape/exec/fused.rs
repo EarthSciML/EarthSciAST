@@ -2723,23 +2723,63 @@ pub(in crate::simulate_array::tape) fn eval_micro_op(
 /// must address the gather's `fi.src_len` elements.
 #[inline(always)]
 unsafe fn fch_load(dst: *mut f64, c: usize, at: usize, a: MSrc, src: *const f64, fi: &FoldedIndex) {
-    let read = |v: f64, j: usize| match data_subscript(v, fi.n) {
-        Some(p) => unsafe { *src.add(p * fi.s_data + j) },
-        None => 0.0,
-    };
-    let mut j = (at % fi.period) * fi.s_inner + fi.base;
-    let wrap = fi.period * fi.s_inner + fi.base;
-    for k in 0..c {
-        let v = match a {
-            MSrc::P(p) => unsafe { *p.add(k) },
-            MSrc::C(x) => x,
+    let (n, s_data) = (fi.n, fi.s_data);
+    if fi.s_inner == 0 {
+        let src = unsafe { src.add(fi.base) };
+        let one = |v: f64| match data_subscript(v, n) {
+            Some(p) => unsafe { *src.add(p * s_data) },
+            None => 0.0,
         };
-        unsafe { *dst.add(k) = read(v, j) };
-        if fi.s_inner != 0 {
-            j += fi.s_inner;
-            if j == wrap {
-                j = fi.base;
+        match a {
+            MSrc::P(sub) => {
+                for k in 0..c {
+                    unsafe { *dst.add(k) = one(*sub.add(k)) };
+                }
             }
+            MSrc::C(v) => {
+                let x = one(v);
+                for k in 0..c {
+                    unsafe { *dst.add(k) = x };
+                }
+            }
+        }
+        return;
+    }
+    // The innermost position, carried instead of divided out per element.
+    let (s_inner, base) = (fi.s_inner, fi.base);
+    let wrap = fi.period * s_inner + base;
+    let mut j = (at % fi.period) * s_inner + base;
+    let mut k = 0usize;
+    while k < c {
+        // A stretch with no wrap inside it.
+        let len = ((wrap - j) / s_inner).min(c - k);
+        let row = unsafe { src.add(j) };
+        match a {
+            MSrc::P(sub) => {
+                for q in 0..len {
+                    let v = unsafe { *sub.add(k + q) };
+                    let x = match data_subscript(v, n) {
+                        Some(p) => unsafe { *row.add(p * s_data + q * s_inner) },
+                        None => 0.0,
+                    };
+                    unsafe { *dst.add(k + q) = x };
+                }
+            }
+            MSrc::C(v) => {
+                let p = data_subscript(v, n);
+                for q in 0..len {
+                    let x = match p {
+                        Some(p) => unsafe { *row.add(p * s_data + q * s_inner) },
+                        None => 0.0,
+                    };
+                    unsafe { *dst.add(k + q) = x };
+                }
+            }
+        }
+        k += len;
+        j += len * s_inner;
+        if j == wrap {
+            j = base;
         }
     }
 }
