@@ -2259,7 +2259,7 @@ impl IndexGatherSpec {
 /// values saturate), and a 1-based position outside `1..=n` is out of range.
 #[inline]
 pub(crate) fn data_subscript(v: f64, n: usize) -> Option<usize> {
-    if n >= 1 << 52 {
+    if n as u64 >= 1 << 52 {
         let one_based = subscript_of(v);
         return (one_based >= 1 && one_based <= n as i64).then(|| (one_based - 1) as usize);
     }

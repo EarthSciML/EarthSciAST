@@ -511,6 +511,7 @@ impl GBuilder {
     /// array operand of the group's box defined outside it, as a pre-loaded
     /// input. `false` (group untouched) when the subscript cannot be an
     /// aligned input.
+    #[allow(clippy::too_many_arguments)]
     fn add_folded_index_gather(
         &mut self,
         ix: u32,
@@ -2717,6 +2718,47 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
     }
 }
 
+/// The [`FoldedIndex`] of an [`Instr::IndexGather`] (its `by` still unset),
+/// when every source axis but the data axis is fixed or read along the
+/// output box's innermost axis; `None` otherwise.
+fn folded_index_of(spec: &IndexGatherSpec) -> Option<FoldedIndex> {
+    let m = spec.src_shape.len();
+    let nd = spec.shape.len();
+    let mut strides = vec![1usize; m];
+    for d in (0..m.saturating_sub(1)).rev() {
+        strides[d] = strides[d + 1] * spec.src_shape[d + 1];
+    }
+    let mut fold = FoldedIndex {
+        by: 0,
+        n: 0,
+        s_data: 1,
+        base: 0,
+        s_inner: 0,
+        period: 1,
+        src_len: spec.src_shape.iter().product(),
+    };
+    let mut inner_seen = false;
+    for (d, ax) in spec.axes.iter().enumerate() {
+        match *ax {
+            GatherAxis::Data => {
+                fold.n = spec.src_shape[d];
+                fold.s_data = strides[d];
+            }
+            GatherAxis::Fixed(i) => fold.base += strides[d] * i,
+            GatherAxis::Affine { axis, off } => {
+                if nd == 0 || axis as usize != nd - 1 || inner_seen || off < 0 {
+                    return None;
+                }
+                inner_seen = true;
+                fold.base += strides[d] * off as usize;
+                fold.s_inner = strides[d];
+                fold.period = spec.shape[nd - 1].max(1);
+            }
+        }
+    }
+    Some(fold)
+}
+
 #[cfg(test)]
 mod run_schedule_tests {
     use super::*;
@@ -3056,45 +3098,4 @@ mod run_schedule_tests {
             }
         }
     }
-}
-
-/// The [`FoldedIndex`] of an [`Instr::IndexGather`] (its `by` still unset),
-/// when every source axis but the data axis is fixed or read along the
-/// output box's innermost axis; `None` otherwise.
-fn folded_index_of(spec: &IndexGatherSpec) -> Option<FoldedIndex> {
-    let m = spec.src_shape.len();
-    let nd = spec.shape.len();
-    let mut strides = vec![1usize; m];
-    for d in (0..m.saturating_sub(1)).rev() {
-        strides[d] = strides[d + 1] * spec.src_shape[d + 1];
-    }
-    let mut fold = FoldedIndex {
-        by: 0,
-        n: 0,
-        s_data: 1,
-        base: 0,
-        s_inner: 0,
-        period: 1,
-        src_len: spec.src_shape.iter().product(),
-    };
-    let mut inner_seen = false;
-    for (d, ax) in spec.axes.iter().enumerate() {
-        match *ax {
-            GatherAxis::Data => {
-                fold.n = spec.src_shape[d];
-                fold.s_data = strides[d];
-            }
-            GatherAxis::Fixed(i) => fold.base += strides[d] * i,
-            GatherAxis::Affine { axis, off } => {
-                if nd == 0 || axis as usize != nd - 1 || inner_seen || off < 0 {
-                    return None;
-                }
-                inner_seen = true;
-                fold.base += strides[d] * off as usize;
-                fold.s_inner = strides[d];
-                fold.period = spec.shape[nd - 1].max(1);
-            }
-        }
-    }
-    Some(fold)
 }
