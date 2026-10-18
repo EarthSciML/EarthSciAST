@@ -637,6 +637,15 @@ pub(crate) struct TapeBuilder<'m> {
     /// value-numbered, so a read the oracle evaluates everywhere cannot
     /// reuse it and lose its own fault.
     lazy_fault_notes: u32,
+    /// The latest section an earlier rule latches a fault in at run time
+    /// (its [`Instr::FaultScan`], a faulting [`Instr::DataGather`]). Across
+    /// rules the first latched fault stays, so a later rule's faults run no
+    /// earlier than this: the oracle walks the rules in order, and a later
+    /// rule's fault in an earlier section would latch ahead of it.
+    fault_floor: Cadence,
+    /// The current rule's contribution to [`Self::fault_floor`], committed
+    /// when the rule lowers ([`Self::flush_rule_fault`]).
+    rule_fault_sec: Cadence,
 
     // Diagnostics ------------------------------------------------------------
     vn_scope_hits: usize,
@@ -818,6 +827,8 @@ impl<'m> TapeBuilder<'m> {
             reach: Vec::new(),
             lazy_faults: Vec::new(),
             lazy_fault_notes: 0,
+            fault_floor: Cadence::Const,
+            rule_fault_sec: Cadence::Const,
             vn_scope_hits: 0,
             vn_hoist_hits: 0,
         }
@@ -1304,6 +1315,9 @@ impl<'m> TapeBuilder<'m> {
             None => {
                 let m = tape_index(self.faults.len(), "faults").ok()?;
                 self.faults.push(msg);
+                // `fault_order` stays parallel to `faults`: a later
+                // `Instr::Fault` reads both at its own index.
+                self.fault_order.push((self.cur_rule, key.clone()));
                 FaultWhat::Every(m)
             }
         };
@@ -3125,7 +3139,13 @@ impl<'m> TapeBuilder<'m> {
             order,
             reversed: false,
         });
-        let sec = self.placement(want);
+        let mut sec = self.placement(want);
+        if faults {
+            // No earlier than an earlier rule's run-time faults; within the
+            // home section, where the rule's readers of `out` run.
+            sec = sec.max(self.fault_floor.min(self.home));
+            self.rule_fault_sec = self.rule_fault_sec.max(sec);
+        }
         let out = self.new_slot(&shape, &lo, shape.is_empty(), sec);
         let instr = Instr::DataGather {
             src: self.src_of(src),
@@ -6529,20 +6549,30 @@ impl<'m> TapeBuilder<'m> {
         self.lazy_depth = 0;
         self.reach.clear();
         self.lazy_faults.clear();
+        self.rule_fault_sec = Cadence::Const;
     }
 
     /// Emit the lowered rule's first fault (if any) as one [`Instr::Fault`],
     /// AHEAD of the rule's CONST-section instructions. It reads nothing, and
     /// the CONST section runs first, so it latches before anything else of
     /// this rule — which is where the oracle, walking the rule cell by cell,
-    /// latches its first fault — and after every earlier rule's.
+    /// latches its first fault — and after every earlier rule's. When an
+    /// earlier rule latches in a later section ([`Self::fault_floor`]), it
+    /// goes at the end of the rule in that section instead.
     ///
     /// A rule with faults at lazily evaluated positions that the first
     /// certain one does not precede gets one [`Instr::FaultScan`] instead,
     /// holding them and the certain one: it runs after everything its
     /// conditions read, at the end of the rule in the latest section any of
-    /// them is computed in.
+    /// them is computed in (or the floor, if later).
     fn flush_rule_fault(&mut self) -> LResult<()> {
+        let floor = self.fault_floor;
+        self.flush_rule_fault_at(floor)?;
+        self.fault_floor = floor.max(self.rule_fault_sec);
+        Ok(())
+    }
+
+    fn flush_rule_fault_at(&mut self, floor: Cadence) -> LResult<()> {
         let lazy = std::mem::take(&mut self.lazy_faults);
         let first = self.fault_first.take();
         let mut cands: Vec<FaultCand> = lazy
@@ -6586,11 +6616,9 @@ impl<'m> TapeBuilder<'m> {
                 rule: self.cur_rule,
                 cands,
             });
-            self.push_stream(
-                Instr::FaultScan { spec },
-                crate::precision::active(),
-                sec.min(self.home),
-            );
+            let sec = sec.min(self.home).max(floor);
+            self.push_stream(Instr::FaultScan { spec }, crate::precision::active(), sec);
+            self.rule_fault_sec = self.rule_fault_sec.max(sec);
             return Ok(());
         }
         let Some((key, msg)) = first else {
@@ -6599,6 +6627,10 @@ impl<'m> TapeBuilder<'m> {
         let fault = tape_index(self.faults.len(), "faults")?;
         self.faults.push(msg);
         self.fault_order.push((self.cur_rule, key));
+        if floor > Cadence::Const {
+            self.push_stream(Instr::Fault { fault }, crate::precision::active(), floor);
+            return Ok(());
+        }
         let instr = (Instr::Fault { fault }, crate::precision::active());
         let stream = &mut self.streams[Cadence::Const as usize];
         match stream.last_mut() {
@@ -6695,6 +6727,7 @@ impl<'m> TapeBuilder<'m> {
         self.lazy_depth = 0;
         self.reach.clear();
         self.lazy_faults.clear();
+        self.rule_fault_sec = Cadence::Const;
     }
 
     /// Forget the forcing loads recorded since `mark`: their instructions were
