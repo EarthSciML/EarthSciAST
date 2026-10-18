@@ -351,16 +351,209 @@
         "provisional": "sweep at fbb6d2cb0 with the adapter built with -C llvm-args=-align-loops=64, on the local node: cores 24-27 pinned (one NUMA node), nothing else of ours running there, median of 4 runs, 2026-10-14"
       },
       {
-        "family": "unstructured_gather",
+        "family": "column_search",
+        "n": 10000,
+        "gate": "speed",
+        "threads": "serial",
+        "measured": 1.404,
+        "reason": "the per-column count and the gather/update run as separate passes over the state through the fused executor's chunk registers, where the column-major hand loop works on a cache-resident 1024-column block; runs range 1.40-1.42; issue #509",
+        "phase": "native-models",
+        "provisional": "sweep 2026-10-17, native/models 9a44453f5 + native/models-gates hand loops (f664fd41d), local node cores 16-19, load average 3-11 (other agents on other cores), median of 5 runs"
+      },
+      {
+        "family": "column_search",
+        "n": 100000,
+        "gate": "speed",
+        "threads": "serial",
+        "measured": 1.576,
+        "reason": "the per-column count and the gather/update run as separate passes over the state through the fused executor's chunk registers, where the column-major hand loop works on a cache-resident 1024-column block; runs range 1.55-1.60; issue #509",
+        "phase": "native-models",
+        "provisional": "sweep 2026-10-17, native/models 9a44453f5 + native/models-gates hand loops (f664fd41d), local node cores 16-19, load average 3-11 (other agents on other cores), median of 5 runs"
+      },
+      {
+        "family": "column_search",
+        "n": 1000000,
+        "gate": "speed",
+        "threads": "serial",
+        "measured": 1.461,
+        "reason": "the per-column count and the gather/update run as separate passes over the state through the fused executor's chunk registers, where the column-major hand loop works on a cache-resident 1024-column block; runs range 1.34-1.95; issue #509",
+        "phase": "native-models",
+        "provisional": "sweep 2026-10-17, native/models 9a44453f5 + native/models-gates hand loops (f664fd41d), local node cores 16-19, load average 3-11 (other agents on other cores), median of 5 runs"
+      },
+      {
+        "family": "column_search",
+        "n": 10000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": 1.658,
+        "reason": "the per-column count and the gather/update run as separate passes over the state through the fused executor's chunk registers, where the column-major hand loop works on a cache-resident 1024-column block; runs range 1.63-1.73; issue #509",
+        "phase": "native-models",
+        "provisional": "sweep 2026-10-17, native/models 9a44453f5 + native/models-gates hand loops (f664fd41d), local node cores 16-19, load average 3-11 (other agents on other cores), median of 5 runs"
+      },
+      {
+        "family": "column_search",
         "n": 100000,
         "gate": "speed",
         "threads": "threaded",
-        "measured": 1.145,
-        "reason": "each of the four shares of the split fused reduction runs about 30-40% slower than a quarter of the serial call, on the calling thread and the workers alike; not wake-up, page placement, frequency, false sharing or imbalance (issue #505).; runs of one clean sweep range from 1.12 to 1.43",
-        "phase": 5,
-        "provisional": "sweep at fbb6d2cb0 with the adapter built with -C llvm-args=-align-loops=64, on the local node: cores 24-27 pinned (one NUMA node), nothing else of ours running there, median of 4 runs, 2026-10-14"
+        "measured": 1.862,
+        "reason": "the per-column count and the gather/update run as separate passes over the state through the fused executor's chunk registers, where the column-major hand loop works on a cache-resident 1024-column block; runs range 1.83-1.92; issue #509",
+        "phase": "native-models",
+        "provisional": "sweep 2026-10-17, native/models 9a44453f5 + native/models-gates hand loops (f664fd41d), local node cores 16-19, load average 3-11 (other agents on other cores), median of 5 runs"
+      },
+      {
+        "family": "column_search",
+        "n": 1000000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": 1.812,
+        "reason": "the per-column count and the gather/update run as separate passes over the state through the fused executor's chunk registers, where the column-major hand loop works on a cache-resident 1024-column block; runs range 1.73-1.97; issue #509",
+        "phase": "native-models",
+        "provisional": "sweep 2026-10-17, native/models 9a44453f5 + native/models-gates hand loops (f664fd41d), local node cores 16-19, load average 3-11 (other agents on other cores), median of 5 runs"
+      },
+      {
+        "family": "column_sum",
+        "n": 100000,
+        "gate": "speed",
+        "threads": "serial",
+        "measured": 1.296,
+        "reason": "the column sum is written to a buffer and broadcast in a second full pass over u, where the hand loop re-reads each 1024-column block from cache; runs range 1.26-1.31; issue #509",
+        "phase": "native-models",
+        "provisional": "sweep 2026-10-17, native/models 9a44453f5 + native/models-gates hand loops (f664fd41d), local node cores 16-19, load average 3-11 (other agents on other cores), median of 5 runs"
+      },
+      {
+        "family": "column_sum",
+        "n": 1000000,
+        "gate": "speed",
+        "threads": "serial",
+        "measured": 1.294,
+        "reason": "same: two full passes over u; runs range 1.15-1.33; issue #509",
+        "phase": "native-models",
+        "provisional": "sweep 2026-10-17, native/models 9a44453f5 + native/models-gates hand loops (f664fd41d), local node cores 16-19, load average 3-11 (other agents on other cores), median of 5 runs"
+      },
+      {
+        "family": "column_sum",
+        "n": 100000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": 1.373,
+        "reason": "same: two full passes over u; runs range 1.34-1.40; issue #509",
+        "phase": "native-models",
+        "provisional": "sweep 2026-10-17, native/models 9a44453f5 + native/models-gates hand loops (f664fd41d), local node cores 16-19, load average 3-11 (other agents on other cores), median of 5 runs"
+      },
+      {
+        "family": "column_sum",
+        "n": 1000000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": 1.3,
+        "reason": "same: two full passes over u; runs range 1.25-1.31; issue #509",
+        "phase": "native-models",
+        "provisional": "sweep 2026-10-17, native/models 9a44453f5 + native/models-gates hand loops (f664fd41d), local node cores 16-19, load average 3-11 (other agents on other cores), median of 5 runs"
+      },
+      {
+        "family": "join_keyed",
+        "n": 10000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": 1.403,
+        "reason": "a 3 us call (two elementwise instructions) split four ways: the fork-join cost is not amortized at 10^4 cells; serial is 0.97; runs range 1.29-1.53; issue #505",
+        "phase": "native-models",
+        "provisional": "sweep 2026-10-17, native/models 9a44453f5 + native/models-gates hand loops (f664fd41d), local node cores 16-19, load average 3-11 (other agents on other cores), median of 5 runs"
+      },
+      {
+        "family": "join_keyed",
+        "gate": "build_slope",
+        "measured": 1207.0,
+        "reason": "the build-time join (15 const-section instructions: keys, values, match set) costs about 1.2 us per row against the 20 ns budget; runs range 1052-1459 ns/state; issue #510",
+        "phase": "native-models",
+        "provisional": "sweep 2026-10-17, native/models 9a44453f5 + native/models-gates hand loops (f664fd41d), local node cores 16-19, load average 3-11 (other agents on other cores), median of 5 runs"
       }
     ],
-    "julia": []
+    "julia": [
+      {
+        "family": "gather_index",
+        "n": 1000000,
+        "gate": "speed",
+        "threads": "serial",
+        "measured": 1.468,
+        "reason": "the class index is gathered through a materialized table per call where the hand loop reads its Int32 class array; runs range 1.41-1.57; issue #511",
+        "phase": "native-models",
+        "provisional": "sweep 2026-10-17, native/models 9a44453f5 + native/models-gates hand loops (f664fd41d), local node cores 16-19, load average 3-11 (other agents on other cores), median of 5 runs"
+      },
+      {
+        "family": "gather_index",
+        "n": 1000000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": 1.589,
+        "reason": "same; runs range 1.44-1.76; issue #511",
+        "phase": "native-models",
+        "provisional": "sweep 2026-10-17, native/models 9a44453f5 + native/models-gates hand loops (f664fd41d), local node cores 16-19, load average 3-11 (other agents on other cores), median of 5 runs"
+      },
+      {
+        "family": "gather_index",
+        "n": 100000,
+        "gate": "speed",
+        "threads": "serial",
+        "measured": 1.275,
+        "reason": "same (red in 3 of 5 runs); runs range 1.17-1.38; issue #511",
+        "phase": "native-models",
+        "provisional": "sweep 2026-10-17, native/models 9a44453f5 + native/models-gates hand loops (f664fd41d), local node cores 16-19, load average 3-11 (other agents on other cores), median of 5 runs"
+      },
+      {
+        "family": "gather_index",
+        "gate": "build_slope",
+        "measured": 666.2,
+        "reason": "the build grows with N: 0.67 s at 10^6 states (index materialization per cell); runs range 623-716 ns/state; issue #511",
+        "phase": "native-models",
+        "provisional": "sweep 2026-10-17, native/models 9a44453f5 + native/models-gates hand loops (f664fd41d), local node cores 16-19, load average 3-11 (other agents on other cores), median of 5 runs"
+      },
+      {
+        "family": "join_keyed",
+        "gate": "build_slope",
+        "measured": 9073.0,
+        "reason": "the build-time join costs about 9 us per row (match set and key evaluation per position); runs range 7279-10660 ns/state; issue #510",
+        "phase": "native-models",
+        "provisional": "sweep 2026-10-17, native/models 9a44453f5 + native/models-gates hand loops (f664fd41d), local node cores 16-19, load average 3-11 (other agents on other cores), median of 5 runs"
+      },
+      {
+        "family": "column_sum",
+        "n": 1000000,
+        "gate": "speed",
+        "threads": "serial",
+        "measured": 1.251,
+        "reason": "borderline (red in 3 of 5 runs); runs range 1.07-1.31; issue #511",
+        "phase": "native-models",
+        "provisional": "sweep 2026-10-17, native/models 9a44453f5 + native/models-gates hand loops (f664fd41d), local node cores 16-19, load average 3-11 (other agents on other cores), median of 5 runs"
+      },
+      {
+        "family": "column_search",
+        "n": 10000,
+        "gate": "speed",
+        "threads": "serial",
+        "measured": 1.3,
+        "reason": "after the gather is lifted over the columns, the per-column count pass and the per-call observed level remain; runs 1.28-1.30; issue #511",
+        "phase": "native-models",
+        "provisional": "sweep 2026-10-17 at native/models c6bf6f010 (Julia column_search lift ba5090268), cores 16-19, two adapter runs, load average 4.5-10"
+      },
+      {
+        "family": "column_search",
+        "n": 1000000,
+        "gate": "speed",
+        "threads": "serial",
+        "measured": 1.37,
+        "reason": "same; runs 1.27-1.37; issue #511",
+        "phase": "native-models",
+        "provisional": "sweep 2026-10-17 at native/models c6bf6f010 (Julia column_search lift ba5090268), cores 16-19, two adapter runs, load average 4.5-10"
+      },
+      {
+        "family": "column_search",
+        "gate": "build_slope",
+        "measured": 748.0,
+        "reason": "the build grows with N: gather-table setup per cell at build; issue #511",
+        "phase": "native-models",
+        "provisional": "sweep 2026-10-17 at native/models c6bf6f010 (Julia column_search lift ba5090268), cores 16-19, two adapter runs, load average 4.5-10"
+      }
+    ]
   }
 }
