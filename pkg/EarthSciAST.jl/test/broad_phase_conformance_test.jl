@@ -240,4 +240,26 @@ _quad(x0, x1, y0, y1) = Float64[x0 y0; x1 y0; x1 y1; x0 y1]
         idx0 = ESS.build_spatial_index(cs; eps=0.0)
         @test_throws ArgumentError ESS.broad_phase_candidates(qs, idx0; eps=0.75)
     end
+
+    # ---------------------------------------------------------------------- #
+    # The binned core path (above `_BROAD_PHASE_GRID_MIN` pairs) sizes its grid
+    # from spread / mean cell width. Slivers make that ratio huge (1e300) or,
+    # with a subnormal mean width, infinite; the grid must still be sized, and
+    # the answer is the pairwise one.
+    # ---------------------------------------------------------------------- #
+    @testset "binned path: sliver cells" begin
+        pairwise(qs, cs) = sort!([(qi, cj) for qi in eachindex(qs) for cj in eachindex(cs)
+            if qs[qi][1] <= cs[cj][3] && cs[cj][1] <= qs[qi][3] &&
+               qs[qi][2] <= cs[cj][4] && cs[cj][2] <= qs[qi][4]])
+        n = 300
+        @test n * n > ESS._BROAD_PHASE_GRID_MIN
+        qs = [_env((k - 1) / n, k / n, 0.0, 1.0) for k in 1:n]
+        for w in (1e-300, 0.0)
+            # w = 0: every cell but the first is a zero-width segment and the
+            # first is 1e-320 wide, so the mean width is subnormal.
+            cs = [(x = (k - 1) / (n - 1); _env(x, x + (w == 0 && k == 1 ? 1e-320 : w),
+                                               0.0, 1.0)) for k in 1:n]
+            @test ESS.broad_phase_candidates(qs, cs) == pairwise(qs, cs)
+        end
+    end
 end

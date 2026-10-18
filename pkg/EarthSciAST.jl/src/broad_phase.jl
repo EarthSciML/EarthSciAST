@@ -123,6 +123,11 @@ end
 # instead of testing every pair.
 const _BROAD_PHASE_GRID_MIN = 1 << 16
 
+# A bin count: `ceil(r)` clamped to `1:hi`, in floating point before the
+# conversion, so a ratio that is huge (slivers over a wide spread) or not a
+# number (`Inf / Inf`) cannot fail it.
+_bin_count(r::Float64, hi::Int) = isnan(r) ? 1 : Int(clamp(ceil(r), 1.0, Float64(hi)))
+
 # The same candidate vector through a uniform grid over the cells' inflated
 # envelopes, bins about the mean cell's size: each cell is filed in every bin its
 # envelope covers (one that would cover many is tested against every query
@@ -149,8 +154,8 @@ function _broad_phase_grid(query_envs::AbstractVector, cell_envs::AbstractVector
     fx = sx > 0 ? (mw > 0 ? sx / mw : sqrt(nc)) : 1.0
     fy = sy > 0 ? (mh > 0 ? sy / mh : sqrt(nc)) : 1.0
     shrink = max(1.0, sqrt(fx * fy / (4 * nc)))
-    gx = clamp(ceil(Int, fx / shrink), 1, 4 * nc)
-    gy = clamp(ceil(Int, fy / shrink), 1, max(1, div(4 * nc, gx)))
+    gx = _bin_count(fx / shrink, 4 * nc)
+    gy = _bin_count(fy / shrink, max(1, div(4 * nc, gx)))
     wx = sx > 0 ? sx / gx : 1.0
     wy = sy > 0 ? sy / gy : 1.0
     bx(x) = clamp(floor(Int, (clamp(x, xlo, xhi) - xlo) / wx) + 1, 1, gx)
