@@ -291,3 +291,64 @@ _OP.sink_observed_names(s::_OPSink) = s.names
         @test observed_field(pi_, "h") == [5.0, 7.0, 7.0]
     end
 end
+
+# The build-definition route (`_authored_via_programs`), which serves an
+# observed the build published no form of: its dependencies are filled by
+# their programs, and a bare array name of the target's rank reads the
+# target's cell. A name already read through an explicit `index` keeps its
+# subscripts, and an array of any other rank read only that way is fine; a
+# BARE one of another rank declines before any dependency is filled.
+function _avp_doc(N)
+    idx(a...) = Dict("op" => "index", "args" => Any[a...])
+    op(o, a...) = Dict("op" => o, "args" => Any[a...])
+    over_i(body) = Dict("op" => "faq", "args" => Any[], "output_idx" => Any["i"],
+                        "ranges" => Dict("i" => Dict("from" => "cells")), "expr" => body)
+    tbl = Dict("op" => "const", "args" => Any[],
+               "value" => [[10.0 * i + j for j in 1:2] for i in 1:N])
+    return Dict{String,Any}("esm" => "1.1.0", "metadata" => Dict("name" => "avp"),
+        "index_sets" => Dict("cells" => Dict("kind" => "interval", "size" => N),
+                             "two" => Dict("kind" => "interval", "size" => 2)),
+        "models" => Dict("M" => Dict{String,Any}(
+            "variables" => Dict(
+                "x" => Dict("type" => "unknown", "shape" => Any["cells"]),
+                "y" => Dict("type" => "unknown", "shape" => Any["cells"]),
+                "z" => Dict("type" => "unknown", "shape" => Any["cells"]),
+                "v" => Dict("type" => "unknown", "shape" => Any["cells", "two"]),
+                "tbl" => Dict("type" => "unknown", "shape" => Any["cells", "two"])),
+            "equations" => Any[
+                Dict("lhs" => Dict("op" => "faq", "args" => Any[], "output_idx" => Any["i"],
+                                   "ranges" => Dict("i" => Dict("from" => "cells")),
+                                   "expr" => Dict("op" => "D", "args" => Any[idx("x", "i")],
+                                                  "wrt" => "t")),
+                     "rhs" => over_i(op("*", -0.1, idx("x", "i")))),
+                Dict("lhs" => "tbl", "rhs" => tbl),
+                Dict("lhs" => "y", "rhs" => over_i(op("*", 2.0, idx("x", "i")))),
+                Dict("lhs" => "z", "rhs" => over_i(op("+", idx("x", "i"), idx("tbl", "i", 2)))),
+                Dict("lhs" => "v", "rhs" => op("+", "tbl", "y"))])))
+end
+
+@testset "the build-definition route keeps explicit subscripts" begin
+    N = 4
+    doc = _avp_doc(N)
+    u0 = Dict{String,Any}("M.x[$i]" => 1.0 * i for i in 1:N)
+    pn = esm_problem(doc, (0.0, 1.0); u0 = u0)
+    pi = esm_problem(doc, (0.0, 1.0); u0 = u0, compiler = :interpreter)
+    ctx = _OP._obs_ctx(pn)
+    sa, ss = _OP._state_scope(pn.var_map, pn.u0)
+    route(name, ext) = _OP._with_compiler_plan(_OP._compiler_plan(:native)) do
+        _OP._counting_program_reads() do
+            _OP._authored_via_programs(ctx, pn.inspection, name, _OP._row_major_cells(ext),
+                                       pn.u0, 0.0, pn.p, "M", sa, ss)
+        end
+    end
+    for n in ("M.y", "M.z")
+        got, _ = route(n, [N])
+        @test got !== nothing
+        @test isequal(got, observed_field(pi, n; u = pi.u0, t = 0.0))
+    end
+    # `v = tbl + y` reads the rank-1 `y` bare in a rank-2 target: declined
+    # before `y`'s program runs.
+    got, nreads = route("M.v", [N, 2])
+    @test got === nothing
+    @test nreads == 0
+end

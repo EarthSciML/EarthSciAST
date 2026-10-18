@@ -1374,6 +1374,20 @@ function _authored_via_programs!(ca::Dict{String,Any}, params::Dict{String,Float
     end
     body === nothing && return nothing
     qualified = name
+    # A BARE array name of the target's rank reads the target's cell (§4.3.4,
+    # the name-aligned elementwise case); a bare one of any other rank has no
+    # cellwise reading here, so decline before filling anything it reads. A
+    # name read only as an explicit `index` target is read where it says.
+    nidx = isempty(cells) ? 0 : length(cells[1])
+    bare, targets = _bare_reads!(Set{String}(), Set{String}(), body, Set{String}())
+    for n in bare
+        a = get(ca, n, nothing)
+        v = get(ctx.model.variables, n, nothing)
+        rank = a isa AbstractArray ? ndims(a) :
+               (haskey(params, n) || v === nothing || v.shape === nothing) ? 0 :
+               length(v.shape)
+        (rank == 0 || rank == nidx) || return nothing
+    end
     for n in _referenced_var_names(body)
         (haskey(ca, n) || haskey(params, n) || n == qualified) && continue
         if !(haskey(ctx.defs, n) || haskey(ctx.discrete_caches, n))
@@ -1418,21 +1432,61 @@ function _authored_via_programs!(ca::Dict{String,Any}, params::Dict{String,Float
                                 length(d):-1:1)
         end
     end
-    # A bare array name of the target's rank reads the target's cell (§4.3.4,
-    # the name-aligned elementwise case); any other rank declines.
-    nidx = isempty(cells) ? 0 : length(cells[1])
     syms = String["__esm_oidx_$d" for d in 1:nidx]
     subs = Dict{String,ASTExpr}()
-    for n in _referenced_var_names(body)
+    for n in bare
         a = get(ca, n, nothing)
         (a isa AbstractArray && ndims(a) >= 1) || continue
         ndims(a) == nidx || return nothing
         subs[n] = OpExpr("index", ASTExpr[VarExpr(n), (VarExpr(x) for x in syms)...])
     end
-    isempty(subs) || (body = _sub_preserving(body, subs))
+    if !isempty(subs)
+        body = any(n -> n in targets, keys(subs)) ? _align_bare_reads(body, subs) :
+               _sub_preserving(body, subs)
+    end
     ce = _cellwise_compile_once(body, nidx, ca, Dict{String,Any}(), params; t=t)
     ce === nothing && return nothing
     return Float64[ce(c) for c in cells]
+end
+
+# The target of an explicit `index` read (`x` in `index(x, i)`), or `nothing`.
+_index_target(o::OpExpr) =
+    (o.op == "index" && !isempty(o.args) && o.args[1] isa VarExpr) ? o.args[1] : nothing
+
+# The names `e` reads BARE — free (no binder inside `e` binds them) and not the
+# target of an explicit `index` read — into `out`, and the explicit targets
+# into `targets`.
+function _bare_reads!(out::Set{String}, targets::Set{String}, e::ASTExpr,
+                      bound::Set{String})
+    if e isa VarExpr
+        (e::VarExpr).name in bound || push!(out, (e::VarExpr).name)
+        return out, targets
+    end
+    e isa OpExpr || return out, targets
+    o = e::OpExpr
+    b = _bound_symbols(o)
+    inner = isempty(b) ? bound : union(bound, b)
+    tgt = _index_target(o)
+    tgt === nothing || push!(targets, (tgt::VarExpr).name)
+    for c in child_exprs(o)
+        c === tgt || _bare_reads!(out, targets, c, inner)
+    end
+    return out, targets
+end
+
+# `e` with each bare read of a name in `subs` (as `_bare_reads!` finds them)
+# replaced by its entry. `_sub_preserving` does the same when no name in
+# `subs` is also an explicit target.
+function _align_bare_reads(e::ASTExpr, subs::Dict{String,ASTExpr})
+    e isa VarExpr && return get(subs, (e::VarExpr).name, e)
+    e isa OpExpr || return e
+    o = e::OpExpr
+    if _binds_any(o, subs)
+        subs = _shadowed_bindings(o, subs)
+        isempty(subs) && return o
+    end
+    tgt = _index_target(o)
+    return map_children(x -> x === tgt ? x : _align_bare_reads(x, subs), o)
 end
 
 """
