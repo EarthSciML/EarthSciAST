@@ -463,3 +463,63 @@ end
         @test all(r -> r.passed, viaopts)
     end
 end
+
+# A data gather that reads a strict subset of an array faq's output indices is
+# lifted into an internal observed filled at every cell of that subset (see
+# tree_walk/hoist.jl). Under a FILTER the original reads it only where the
+# filter passes, and a filtered-out term never faults (esm-spec §5.5.8): here
+# `k[c, cnt[c]]` is out of range at the column with cnt = 0, which the filter
+# excludes, so `:native` must build and agree with `:interpreter`. Without the
+# filter the same gather is still lifted.
+function _csel_filtered_gather_doc(filtered::Bool)
+    idx(a...) = Dict("op" => "index", "args" => Any[a...])
+    op(o, a...) = Dict("op" => o, "args" => Any[a...])
+    rng = Dict("c" => Dict("from" => "col"), "l" => Dict("from" => "lev"))
+    rng1 = Dict("c" => Dict("from" => "col"))
+    D(v, is...) = Dict("op" => "D", "args" => Any[idx(v, is...)], "wrt" => "t")
+    faq(oi, r, body) = Dict{String,Any}("op" => "faq", "args" => Any[],
+        "output_idx" => Any[oi...], "ranges" => r, "expr" => body)
+    body = op("+", op("*", -0.1, idx("u", "c", "l")), idx("k", "c", idx("cnt", "c")))
+    rhs = faq(["c", "l"], rng, body)
+    filtered && (rhs["filter"] = op(">", idx("cnt", "c"), 0))
+    K = [[10.0 * c + j for j in 1:2] for c in 1:3]
+    return Dict{String,Any}("esm" => "1.1.0", "metadata" => Dict("name" => "csel_fg"),
+        "index_sets" => Dict("col" => Dict("kind" => "interval", "size" => 3),
+                             "lev" => Dict("kind" => "interval", "size" => 2),
+                             "kk" => Dict("kind" => "interval", "size" => 2)),
+        "models" => Dict("M" => Dict{String,Any}(
+            "variables" => Dict(
+                "u" => Dict("type" => "unknown", "shape" => Any["col", "lev"]),
+                "cnt" => Dict("type" => "unknown", "shape" => Any["col"]),
+                "k" => Dict("type" => "unknown", "shape" => Any["col", "kk"])),
+            "equations" => Any[
+                Dict("lhs" => faq(["c", "l"], rng, D("u", "c", "l")), "rhs" => rhs),
+                Dict("lhs" => faq(["c"], rng1, D("cnt", "c")), "rhs" => faq(["c"], rng1, 0.0)),
+                Dict("lhs" => "k",
+                     "rhs" => Dict("op" => "const", "args" => Any[], "value" => K))])))
+end
+
+@testset "a gather under a filter is not lifted past it" begin
+    ics = Dict{String,Any}("u[$c,$l]" => 1.0 * c + l for c in 1:3 for l in 1:2)
+    for (c, n) in ((1, 2.0), (2, 0.0), (3, 1.0))
+        ics["cnt[$c]"] = n
+    end
+    doc = _csel_filtered_gather_doc(true)
+    builds = map((:native, :interpreter)) do comp
+        f!, u0, p, _t, vm = EarthSciAST._build_evaluator(doc; initial_conditions = ics,
+                                                         compiler = comp)
+        du = zeros(Float64, length(u0))
+        f!(du, u0, p, 0.0)
+        [du[vm["u[$c,$l]"]] for c in 1:3 for l in 1:2]
+    end
+    @test isequal(builds[1], builds[2])
+    @test builds[1][3:4] == [0.0, 0.0]                  # the filtered-out column
+
+    # The unfiltered document still lifts the gather (it is in range there
+    # once every column has cnt >= 1).
+    ics["cnt[2]"] = 1.0
+    insp = BuildInspection()
+    EarthSciAST._build_evaluator(_csel_filtered_gather_doc(false); initial_conditions = ics,
+                                 compiler = :native, inspect = insp)
+    @test any(r -> occursin("hoisted gather", r.rule), insp.compiler_report.rules)
+end

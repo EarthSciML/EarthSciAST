@@ -23,8 +23,9 @@
 #
 # WHAT QUALIFIES (the rule other bindings match): a `faq` with no output index
 # (a scalar reduction) and no join, reached from the body of an equation's
-# array-producing `faq` through elementwise operators only, never through an
-# `index` subscript, another producer, or a lazily evaluated operand (an
+# array-producing `faq` with no filter and no join (either leaves output cells
+# where the body is never evaluated), through elementwise operators only, never
+# through an `index` subscript, another producer, or a lazily evaluated operand (an
 # `ifelse` branch, a short-circuited `and` / `or` operand) — the lifted fill
 # evaluates it at every S-cell, which the original did too exactly when it was
 # evaluated at every output cell. Its free names may include the enclosing
@@ -220,6 +221,11 @@ function _hoist_nested_reductions(model::Model, index_sets::AbstractDict)
          (rhs::OpExpr).output_idx !== nothing && (rhs::OpExpr).ranges !== nothing &&
          (rhs::OpExpr).expr_body !== nothing) || continue
         f = rhs::OpExpr
+        # A filter or a join leaves output cells where the body is never
+        # evaluated; the lifted fill would evaluate it there, and a gather or
+        # reduction that faults at such a cell must not (esm-spec §5.5.8).
+        (f.filter === nothing && f.join === nothing && f.join_gates === nothing) ||
+            continue
         out_idx = String[String(x) for x in f.output_idx if x isa AbstractString]
         isempty(out_idx) && continue
         contracted = Set{String}(String(k) for k in keys(f.ranges) if !(String(k) in out_idx))
