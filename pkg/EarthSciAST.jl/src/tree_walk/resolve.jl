@@ -1251,6 +1251,7 @@ function _resolve_const_array_gather(vals::AbstractArray, name::String,
        any(d -> !(1 <= int_indices[d] <= size(vals, d)) &&
                 _const_dim_boundary(vals, d) === :error, 1:ndims(vals)) &&
        !_guarded_read_taken(guards)
+        memo === nothing || (memo.deferrals[] += 1)
         return _deferred_const_gather(vals, name, int_indices)
     end
     for d in 1:ndims(vals)
@@ -1434,8 +1435,12 @@ function _resolve_indices(expr::OpExpr,
     m = memo.resolve
     r = get(m, expr, nothing)
     r === nothing || return r
+    n0 = memo.deferrals[]
     r = _resolve_indices_op(expr, array_var_info, var_map, const_arrays, pgather, memo, bound_syms)
-    m[expr] = r
+    # A read deferred under a guard this node sits under is this context's
+    # answer only: the same (interned) node reached unguarded must still raise
+    # at build. A deferral under guards inside the node is the node's own.
+    (memo.deferrals[] == n0 || isempty(_resolve_guards())) && (m[expr] = r)
     return r
 end
 function _resolve_indices_op(expr::OpExpr,
