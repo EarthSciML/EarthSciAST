@@ -318,6 +318,7 @@ fn tuple_box(prog: &TapeProgram, s: SlotId, n_pairs: usize) -> bool {
 fn cell_group(fs: &FusedSpec, n_out: usize, t: &mut Touches) -> bool {
     if fs.n_elems() != n_out
         || fs.reduce.is_some()
+        || fs.pre.is_some()
         || fs.interleave.is_some()
         || !fs.scan_fuse.is_empty()
         || fs.micro.iter().any(|m| matches!(m, MicroOp::Scan { .. }))

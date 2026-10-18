@@ -925,8 +925,8 @@ impl RunCursor {
 pub(super) struct IndexTable {
     /// The subscript array's slot (defined in the CONST or SEGMENT section).
     subscript: SlotId,
-    /// The gathered source's extent along its data axis.
-    n: usize,
+    /// How a data position becomes a source offset.
+    fi: FoldedIndex,
     /// One position per element of the group box, or [`GATHER_GHOST`].
     pos: Vec<u32>,
     /// No position is the ghost, so the gather is a plain indexed load.
@@ -953,13 +953,13 @@ pub(super) fn index_tables_for(prog: &TapeProgram) -> Vec<Vec<Option<IndexTable>
             .inputs
             .iter()
             .map(|inp| {
-                let (by, n) = inp.index?;
-                let SrcRef::Slot(sub) = fs.inputs[by as usize].src else {
+                let fi = inp.index.filter(FoldedIndex::preloaded)?;
+                let SrcRef::Slot(sub) = fs.inputs[fi.by as usize].src else {
                     return None;
                 };
-                (primed[sub as usize] && n < GATHER_GHOST as usize).then(|| IndexTable {
+                (primed[sub as usize] && fi.src_len < GATHER_GHOST as usize).then(|| IndexTable {
                     subscript: sub,
-                    n,
+                    fi,
                     pos: vec![GATHER_GHOST; n_elems],
                     all_in: false,
                 })
@@ -990,9 +990,9 @@ pub(super) unsafe fn refill_index_tables(
             std::slice::from_raw_parts(slab_ptr.add(slot_off[t.subscript as usize]), t.pos.len())
         };
         let mut all_in = true;
-        for (p, &v) in t.pos.iter_mut().zip(sub) {
-            *p = match data_subscript(v, t.n) {
-                Some(i) => i as u32,
+        for (k, (p, &v)) in t.pos.iter_mut().zip(sub).enumerate() {
+            *p = match data_subscript(v, t.fi.n) {
+                Some(i) => t.fi.at(i, k) as u32,
                 None => {
                     all_in = false;
                     GATHER_GHOST
@@ -1013,6 +1013,124 @@ pub(super) struct Resolved<'a> {
     pub(super) red: *mut f64,
     pub(super) node_elems: &'a [usize],
     pub(super) cursor: &'a mut RunCursor,
+    /// The group's [`PreReduce`], to run range by range (`None` without one,
+    /// or when its source is not contiguous and it already ran whole).
+    pub(super) pre: Option<PreTile>,
+}
+
+/// A [`PreReduce`]'s resolved source and result.
+#[derive(Clone, Copy)]
+pub(super) struct PreTile {
+    pub(super) src: *const f64,
+    pub(super) out: *mut f64,
+}
+
+/// Inner positions per range of a [`PreReduce`]: as many whole columns as
+/// keep a range's source (`rows` elements each) within a few tens of KiB.
+pub(super) fn pre_cols(rows: usize) -> usize {
+    ((16384 / rows.max(1)) / 8 * 8).max(8)
+}
+
+/// Fold the cells `[a, b)` of a [`PreReduce`] (each from `init`, over every
+/// leading position in order, as `Instr::Reduce` does) from a contiguous
+/// row-major source.
+///
+/// # Safety
+/// `pt` must address the source's `rows * n_inner` elements and the result's
+/// `n_inner`.
+unsafe fn pre_fold(pre: &PreReduce, pt: PreTile, a: usize, b: usize) {
+    let n = pre.n_inner;
+    unsafe {
+        for k in a..b {
+            *pt.out.add(k) = pre.init;
+        }
+    }
+    let op = &pre.op;
+    macro_rules! fold_rows {
+        ($f:expr) => {
+            for r in 0..pre.rows {
+                unsafe {
+                    super::kernels::reduce_rows(pt.out.add(a), b - a, pt.src.add(r * n + a), 1, $f)
+                }
+            }
+        };
+    }
+    dispatch_bin_kernel!(op, fold_rows);
+}
+
+/// Run fused group `fs` over the inner positions `[lo, hi)` of its
+/// [`PreReduce`] (every leading position of them), a range of columns at a
+/// time: fold the range, then run the group's elements there.
+///
+/// # Safety
+/// As for [`run_fused_window`], with `pt` resolved for `fs.pre`.
+#[allow(clippy::too_many_arguments)]
+pub(super) unsafe fn run_pre_tiled(
+    simd: SimdLevel,
+    fs: &FusedSpec,
+    pt: PreTile,
+    svals: &[f64],
+    bases: &[*const f64],
+    whole_src: &[*const f64],
+    outs: &[(GroupIx, *mut f64)],
+    red: *mut f64,
+    idx: &[Option<IndexTable>],
+    fregs: &mut [f64],
+    cursor: &mut RunCursor,
+    node_elems: &[usize],
+    lo: usize,
+    hi: usize,
+) {
+    let pre = fs.pre.as_ref().expect("a group with a pre-reduction");
+    let period = pre.n_inner;
+    let step = pre_cols(pre.rows);
+    // A box whose every column fits one range: fold it all, then run the
+    // group whole, as one window.
+    if lo == 0 && hi == period && period <= step {
+        unsafe {
+            pre_fold(pre, pt, 0, period);
+            fill_whole(fs, bases, whole_src, 0, fs.n_elems(), 0);
+            run_fused_window(
+                simd,
+                fs,
+                svals,
+                bases,
+                outs,
+                red,
+                idx,
+                fregs,
+                cursor,
+                Window::all(node_elems),
+            );
+        }
+        return;
+    }
+    let mut a = lo;
+    while a < hi {
+        let b = (a + step).min(hi);
+        unsafe {
+            pre_fold(pre, pt, a, b);
+            fill_whole(fs, bases, whole_src, a, b, period);
+            run_fused_window(
+                simd,
+                fs,
+                svals,
+                bases,
+                outs,
+                red,
+                idx,
+                fregs,
+                cursor,
+                Window {
+                    lo: a,
+                    hi: b,
+                    period,
+                    node_elems,
+                },
+            );
+        }
+        a = b;
+    }
 }
 
 /// The workers of `scratch`, or a stand-in on wasm (which never splits).
@@ -1108,6 +1226,17 @@ pub(super) unsafe fn resolve_fused<'a>(
         },
         None => std::ptr::null_mut(),
     };
+    // The pre-reduction, range by range from a contiguous source; else now,
+    // whole, by the instruction's own walk.
+    let pre = fs.pre.as_ref().and_then(|p| {
+        let sv = super::resolve::resolve_src(&p.src, env, slab_ptr, slot_off);
+        let out = unsafe { slab_ptr.add(slot_off[p.out as usize]) };
+        if sv.strides[..] == super::resolve::rm_strides(&sv.shape)[..] {
+            return Some(PreTile { src: sv.ptr, out });
+        }
+        unsafe { pre_fold_strided(p, &sv, out) };
+        None
+    });
     // Zero-sized: no allocation.
     #[cfg(target_arch = "wasm32")]
     let workers: &'a mut Workers = Box::leak(Box::new(()));
@@ -1120,9 +1249,49 @@ pub(super) unsafe fn resolve_fused<'a>(
             red,
             node_elems,
             cursor,
+            pre,
         },
         workers,
     )
+}
+
+/// A [`PreReduce`] over a source that is not contiguous: every cell folded
+/// whole, in the instruction's order, through the source's strides.
+///
+/// # Safety
+/// `sv` must be a live view of the source and `out` the result's cells.
+unsafe fn pre_fold_strided(pre: &PreReduce, sv: &super::resolve::SrcView, out: *mut f64) {
+    let f = binary_kernel_of(pre.op);
+    let nd = sv.shape.len();
+    let lead = {
+        let mut k = 0usize;
+        let mut rows = 1usize;
+        while k < nd && rows < pre.rows {
+            rows *= sv.shape[k];
+            k += 1;
+        }
+        k
+    };
+    let mut idx: SmallVec<[usize; 4]> = SmallVec::from_elem(0, nd);
+    for c in 0..pre.n_inner {
+        // The inner coordinates of cell `c`, row-major.
+        let mut rest = c;
+        for d in (lead..nd).rev() {
+            idx[d] = rest % sv.shape[d];
+            rest /= sv.shape[d];
+        }
+        let mut acc = pre.init;
+        for r in 0..pre.rows {
+            let mut rest = r;
+            for d in (0..lead).rev() {
+                idx[d] = rest % sv.shape[d];
+                rest /= sv.shape[d];
+            }
+            let off: i64 = (0..nd).map(|d| sv.strides[d] * idx[d] as i64).sum();
+            acc = f(acc, unsafe { *sv.ptr.offset(off as isize) });
+        }
+        unsafe { *out.add(c) = acc };
+    }
 }
 
 /// Execute one fused group. Iterates the precompiled run schedule; each run
@@ -1155,6 +1324,7 @@ pub(super) unsafe fn exec_fused(
         red,
         node_elems,
         cursor,
+        pre,
     } = r;
     // A large group is split into windows across the caller's worker
     // threads (see `par`).
@@ -1164,11 +1334,21 @@ pub(super) unsafe fn exec_fused(
         if ways > 1 {
             unsafe {
                 _workers.run_split(
-                    fs, svals, bases, whole_src, outs, red, idx, node_elems, simd, ways,
+                    fs, svals, bases, whole_src, outs, red, idx, node_elems, simd, ways, pre,
                 )
             };
             return;
         }
+    }
+    if let Some(pt) = pre {
+        let n = fs.pre.as_ref().map_or(0, |p| p.n_inner);
+        unsafe {
+            run_pre_tiled(
+                simd, fs, pt, svals, bases, whole_src, outs, red, idx, fregs, cursor, node_elems,
+                0, n,
+            )
+        };
+        return;
     }
     // Seeded with the reduction's identity (a split's workers seed their
     // own cells).
@@ -1231,6 +1411,7 @@ pub(super) unsafe fn exec_fused_share(
             simd,
             w,
             ways,
+            r.pre,
         )
     };
 }
@@ -1584,7 +1765,7 @@ unsafe fn exec_fused_runs(
                 }
                 // A folded data-subscript gather: one random read per element,
                 // through the subscript array's aligned chunk.
-                if let Some((by, n)) = inp.index {
+                if let Some(fi) = inp.index {
                     if let Some(Some(t)) = idx.get(i) {
                         unsafe {
                             let dst = std::slice::from_raw_parts_mut(
@@ -1611,13 +1792,31 @@ unsafe fn exec_fused_runs(
                     }
                     unsafe {
                         let dst = rp.add(inp.load_reg as usize * cs);
-                        let sub = bases[by as usize].add(at);
+                        let sub = bases[fi.by as usize].add(at);
                         let src = bases[i];
-                        for k in 0..c {
-                            *dst.add(k) = match data_subscript(*sub.add(k), n) {
-                                Some(p) => *src.add(p),
-                                None => 0.0,
-                            };
+                        if fi.s_inner == 0 {
+                            let src = src.add(fi.base);
+                            for k in 0..c {
+                                *dst.add(k) = match data_subscript(*sub.add(k), fi.n) {
+                                    Some(p) => *src.add(p * fi.s_data),
+                                    None => 0.0,
+                                };
+                            }
+                        } else {
+                            // The innermost position, carried instead of
+                            // divided out per element.
+                            let mut j = (at % fi.period) * fi.s_inner + fi.base;
+                            let wrap = fi.period * fi.s_inner + fi.base;
+                            for k in 0..c {
+                                *dst.add(k) = match data_subscript(*sub.add(k), fi.n) {
+                                    Some(p) => *src.add(p * fi.s_data + j),
+                                    None => 0.0,
+                                };
+                                j += fi.s_inner;
+                                if j == wrap {
+                                    j = fi.base;
+                                }
+                            }
                         }
                     }
                     continue;
@@ -1831,6 +2030,13 @@ unsafe fn exec_fused_runs(
                     MicroOp::Mov { a, out } => {
                         let a = msrc(a);
                         unsafe { fch1(dst_of(mi, *out), c, a, |x| x) };
+                    }
+                    MicroOp::Load { a, src, out } => {
+                        let fi = fs.inputs[*src as usize]
+                            .index
+                            .expect("a Load reads a folded index gather");
+                        let a = msrc(a);
+                        unsafe { fch_load(dst_of(mi, *out), c, at, a, bases[*src as usize], &fi) };
                     }
                     MicroOp::Scan {
                         op,
@@ -2413,8 +2619,12 @@ pub(in crate::simulate_array::tape) fn eval_micro_op(
     at: usize,
     carries: &mut [f64],
     get: impl Fn(&MRef, &[f64]) -> f64,
+    load: impl Fn(GroupIx, f64) -> f64,
 ) {
     match op {
+        MicroOp::Load { a, src, out } => {
+            regs[*out as usize] = load(*src, get(a, regs));
+        }
         MicroOp::Bin { op, a, b, out } => {
             regs[*out as usize] = binary_kernel_of(*op)(get(a, regs), get(b, regs));
         }
@@ -2500,6 +2710,76 @@ pub(in crate::simulate_array::tape) fn eval_micro_op(
             } else {
                 binary_kernel_of(*op3)(t2, dv)
             };
+        }
+    }
+}
+
+/// `MicroOp::Load` over a chunk: element `k` (box offset `at + k`) reads
+/// `src` at the data position subscript `a` names, through `fi`, or the
+/// zero ghost.
+///
+/// # Safety
+/// `dst` must hold `c` elements, an array `a` must hold them too, and `src`
+/// must address the gather's `fi.src_len` elements.
+#[inline(always)]
+unsafe fn fch_load(dst: *mut f64, c: usize, at: usize, a: MSrc, src: *const f64, fi: &FoldedIndex) {
+    let (n, s_data) = (fi.n, fi.s_data);
+    if fi.s_inner == 0 {
+        let src = unsafe { src.add(fi.base) };
+        let one = |v: f64| match data_subscript(v, n) {
+            Some(p) => unsafe { *src.add(p * s_data) },
+            None => 0.0,
+        };
+        match a {
+            MSrc::P(sub) => {
+                for k in 0..c {
+                    unsafe { *dst.add(k) = one(*sub.add(k)) };
+                }
+            }
+            MSrc::C(v) => {
+                let x = one(v);
+                for k in 0..c {
+                    unsafe { *dst.add(k) = x };
+                }
+            }
+        }
+        return;
+    }
+    // The innermost position, carried instead of divided out per element.
+    let (s_inner, base) = (fi.s_inner, fi.base);
+    let wrap = fi.period * s_inner + base;
+    let mut j = (at % fi.period) * s_inner + base;
+    let mut k = 0usize;
+    while k < c {
+        // A stretch with no wrap inside it.
+        let len = ((wrap - j) / s_inner).min(c - k);
+        let row = unsafe { src.add(j) };
+        match a {
+            MSrc::P(sub) => {
+                for q in 0..len {
+                    let v = unsafe { *sub.add(k + q) };
+                    let x = match data_subscript(v, n) {
+                        Some(p) => unsafe { *row.add(p * s_data + q * s_inner) },
+                        None => 0.0,
+                    };
+                    unsafe { *dst.add(k + q) = x };
+                }
+            }
+            MSrc::C(v) => {
+                let p = data_subscript(v, n);
+                for q in 0..len {
+                    let x = match p {
+                        Some(p) => unsafe { *row.add(p * s_data + q * s_inner) },
+                        None => 0.0,
+                    };
+                    unsafe { *dst.add(k + q) = x };
+                }
+            }
+        }
+        k += len;
+        j += len * s_inner;
+        if j == wrap {
+            j = base;
         }
     }
 }

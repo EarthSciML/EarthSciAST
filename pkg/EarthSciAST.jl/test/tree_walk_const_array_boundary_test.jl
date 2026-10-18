@@ -155,4 +155,50 @@ const ESM = EarthSciAST
         @test_throws ESM.TreeWalkError EarthSciAST._build_evaluator(model; initial_conditions=ics,
             const_arrays=Dict("M" => M), const_array_boundaries=Dict("M" => [:reflect]))
     end
+
+    # ------------------------------------------------------------------
+    # E. An out-of-range read under a guard the build cannot decide is
+    #    deferred to run time. That is the guarded site's answer only: the
+    #    same (shared) node read with no guard still raises at build, even
+    #    when the guarded site was resolved first through the build memo.
+    # ------------------------------------------------------------------
+    @testset "E. a guarded deferral does not reach an unguarded read" begin
+        c = [1.0, 2.0, 3.0]
+        cas = Dict{String,Any}("c" => c)
+        avi = Dict{String,Tuple{Vector{Int},Vector{Int}}}()
+        vm = Dict{String,Int}()
+        oob = _idx("c", _i(5))                          # ONE node, read at both sites
+        guarded = _op("ifelse", _op(">", _v("p"), _n(0)), oob, _n(0))
+        res(e, memo) = ESM._resolve_indices(e, avi, vm, cas, ESM._EMPTY_PGATHER, memo)
+        oob_code(f) = try
+            f(); nothing
+        catch err
+            err isa ESM.TreeWalkError ? err.code : rethrow()
+        end
+
+        memo = ESM._BuildMemo()
+        @test oob_code(() -> res(guarded, memo)) === nothing      # deferred, no error
+        @test oob_code(() -> res(oob, memo)) == "E_TREEWALK_CONSTARRAY_OOB"
+        @test oob_code(() -> res(_op("+", guarded, oob), ESM._BuildMemo())) ==
+              "E_TREEWALK_CONSTARRAY_OOB"
+        # A guard the build decides as taken raises there too, memo or not.
+        taken = _op("ifelse", _op(">", _n(1), _n(0)), oob, _n(0))
+        @test oob_code(() -> res(taken, ESM._BuildMemo())) == "E_TREEWALK_CONSTARRAY_OOB"
+
+        # Through a build: the unguarded read fails the build under both
+        # compilers, whichever order the two sites are met in.
+        N = 2
+        vars = Dict("y" => ModelVariable(UnknownVariable),
+                    "p" => ModelVariable(ParameterVariable; default=1.0))
+        ics = Dict("y[$k]" => 0.0 for k in 1:N)
+        for body in (_op("+", guarded, oob), _op("+", oob, guarded))
+            model = ESM.Model(vars, [ESM.Equation(_faq1d(_D_idx("y", _v("i")), "i", 1, N),
+                                                  _faq1d(body, "i", 1, N))])
+            for comp in (:native, :interpreter)
+                @test oob_code(() -> EarthSciAST._build_evaluator(model;
+                    initial_conditions=ics, const_arrays=Dict("c" => c),
+                    compiler=comp)) == "E_TREEWALK_CONSTARRAY_OOB"
+            end
+        end
+    end
 end

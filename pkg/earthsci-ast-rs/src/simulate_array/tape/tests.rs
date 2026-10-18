@@ -1668,6 +1668,88 @@ fn ab_chunk_gathers_on_short_rows() {
     }
 }
 
+/// A column sum `H[c] = sum_r u[r, c]` read by the elementwise group over
+/// `u`'s box, three ways: at the cell's own column, one column over, and
+/// through a data subscript. A group that absorbs the sum folds and consumes
+/// one range of columns at a time (and a split hands each worker its own
+/// range), so it may absorb only a sum it reads at each cell's own column:
+/// the other two read columns another range folds.
+#[test]
+fn ab_pre_reduction_absorbed_only_for_own_column_reads() {
+    let (nc, nr) = (40i64, 3i64);
+    let perm: Vec<f64> = (0..nc).map(|c| ((c * 7 + 3) % nc + 1) as f64).collect();
+    let doc = |read: serde_json::Value| {
+        json!({
+            "esm": "1.1.0",
+            "metadata": {"name": "tape_pre_reduce_reads"},
+            "models": {"M": {
+                "variables": {
+                    "u": {"type": "unknown", "shape": ["c", "r"]},
+                    "H": {"type": "unknown", "shape": ["c"]},
+                    "w": {"type": "unknown", "shape": ["c"]}
+                },
+                "equations": [
+                    {"lhs": "w", "rhs": {"op": "const", "args": [], "value": perm}},
+                    {"lhs": "H", "rhs": {"op": "faq", "args": [], "output_idx": ["c"],
+                        "ranges": {"c": [1, nc], "l": [1, nr]},
+                        "expr": {"op": "index", "args": ["u", "c", "l"]}}},
+                    {
+                        "lhs": {"op": "faq", "args": [], "output_idx": ["c", "r"],
+                                "expr": {"op": "D", "args": [
+                                    {"op": "index", "args": ["u", "c", "r"]}], "wrt": "t"},
+                                "ranges": {"c": [1, nc], "r": [1, nr]}},
+                        "rhs": {"op": "faq", "args": [], "output_idx": ["c", "r"],
+                                "ranges": {"c": [1, nc], "r": [1, nr]},
+                                "expr": {"op": "+", "args": [
+                                    {"op": "*", "args": [-0.1,
+                                        {"op": "index", "args": ["u", "c", "r"]}]},
+                                    {"op": "*", "args": [0.25, read]}
+                                ]}}
+                    }
+                ]
+            }}
+        })
+    };
+    let reads = [
+        (
+            "own column",
+            json!({"op": "index", "args": ["H", "c"]}),
+            true,
+        ),
+        (
+            "next column",
+            json!({"op": "index", "args": ["H", {"op": "+", "args": ["c", 1]}]}),
+            false,
+        ),
+        (
+            "data subscript",
+            json!({"op": "index", "args": ["H", {"op": "index", "args": ["w", "c"]}]}),
+            false,
+        ),
+    ];
+    for (what, read, absorbs) in reads {
+        // Column-major: the sum's axis `l` leads the box.
+        let prog = ab_check(doc(read), -2.0, 2.0);
+        assert!(prog.col_major);
+        assert_eq!(
+            prog.fused.iter().any(|f| f.pre.is_some()),
+            absorbs,
+            "{what}: absorbed"
+        );
+    }
+    // The column_sum scaling family reads its column sums, broadcast along
+    // the levels, at the own column.
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/conformance/scaling/fixtures/column_sum/column_sum_N1000.esm");
+    let file = crate::parse::load_path(&path).expect("scaling fixture loads");
+    let compiled = ArrayCompiled::from_file(&file).expect("fixture compiles");
+    let prog = taped(compiled.build_tape_opts(&HashSet::new(), Some(default_cfg()))).0;
+    assert!(
+        prog.fused.iter().any(|f| f.pre.is_some()),
+        "column_sum: the column sum is absorbed"
+    );
+}
+
 /// The unstructured-mesh gather `sum_k kappa * (u[nbr[i, k]] - u[i])` over a
 /// constant neighbour table, with more cells than one executor chunk: the
 /// folded gather reads positions resolved when the CONST section runs, and
@@ -1818,8 +1900,9 @@ fn ab_wholesale_makearray_and_elementwise_observeds() {
 /// the shape recorded for `m` must be that box. A scalar claim compiles `m`'s
 /// readers against a scalar: `s` below as a scalar kernel (which then panics on
 /// the scalar read of the published array), or the literal `index(m, 2)` as
-/// the scalar-base NaN. The parameter index is what keeps `m` off the tape
-/// (`wholesale: non-literal index argument`).
+/// the scalar-base NaN. The over-rank read at a parameter subscript is what
+/// keeps `m` off the tape (`wholesale: computed subscripts whose count is not
+/// the source rank`); the oracle reads it as the zero ghost.
 fn fallback_ifelse_array_condition_doc(reader: serde_json::Value) -> serde_json::Value {
     let n = 3;
     json!({
@@ -1836,7 +1919,7 @@ fn fallback_ifelse_array_condition_doc(reader: serde_json::Value) -> serde_json:
             },
             "equations": [
                 {"lhs": "m", "rhs": {"op": "ifelse", "args": [
-                    {"op": ">", "args": ["psi", {"op": "index", "args": ["psi", "p"]}]},
+                    {"op": ">", "args": ["psi", {"op": "index", "args": ["psi", "p", 1]}]},
                     1.0,
                     0.0
                 ]}},
@@ -1857,7 +1940,7 @@ fn check_fallback_ifelse_array_condition(reader: serde_json::Value) {
         report
             .fallbacks
             .iter()
-            .any(|(name, reason)| name == "m" && reason.contains("non-literal index")),
+            .any(|(name, reason)| name == "m" && reason.contains("computed subscripts")),
         "`m` must be the declined rule this test is about: {:?}",
         report.fallbacks
     );
@@ -3573,7 +3656,7 @@ fn ab_index_gather_unstructured() {
         prog.fused.iter().any(|f| f
             .inputs
             .iter()
-            .any(|i| i.index.is_some_and(|(_, m)| m == n as usize))),
+            .any(|i| i.index.is_some_and(|fi| fi.n == n as usize))),
         "a fused group reads the source through the subscript"
     );
     let spec = &prog.index_gathers[0];
@@ -3750,4 +3833,320 @@ fn ab_recurrence_sweep() {
     let large = taped(compile(recurrence_doc(600)).build_tape_opts(&HashSet::new(), None)).0;
     assert_eq!(body_len(&small), body_len(&large));
     assert_eq!(small.instrs.len(), large.instrs.len());
+}
+
+// ---------------------------------------------------------------------------
+// Nested rank-0 reductions, mixed-box branches, faults behind conditions.
+// ---------------------------------------------------------------------------
+
+/// A 2-D document over `x(3) × y(2)` with one state `u` and `D(u) = rhs`.
+fn doc_2d(vars: serde_json::Value, rhs_expr: serde_json::Value) -> serde_json::Value {
+    let mut variables = json!({"u": {"type": "unknown", "units": "1", "default": 0.5,
+                                     "shape": ["x", "y"]}});
+    for (k, v) in vars.as_object().expect("variables") {
+        variables[k] = v.clone();
+    }
+    json!({
+        "esm": "1.2.0",
+        "metadata": {"name": "lazy_shapes", "authors": ["tape tests"]},
+        "index_sets": {"x": {"kind": "interval", "size": 3}, "y": {"kind": "interval", "size": 2}},
+        "models": {"M": {
+            "variables": variables,
+            "equations": [{
+                "lhs": {"op": "faq", "args": [], "output_idx": ["i", "j"],
+                        "expr": {"op": "D", "args": [{"op": "index", "args": ["u", "i", "j"]}],
+                                 "wrt": "t"},
+                        "ranges": {"i": [1, 3], "j": [1, 2]}},
+                "rhs": {"op": "faq", "args": [], "output_idx": ["i", "j"],
+                        "ranges": {"i": [1, 3], "j": [1, 2]}, "expr": rhs_expr}
+            }]
+        }}
+    })
+}
+
+fn u_at(i: serde_json::Value, j: serde_json::Value) -> serde_json::Value {
+    json!({"op": "index", "args": ["u", i, j]})
+}
+
+#[test]
+fn a_rank_0_faq_nested_in_a_box_is_taped_per_cell_and_once() {
+    // Per cell: sum_k u[i, k] * w[k] (reads the box's `i`), filtered k != j.
+    let per_cell = json!({"op": "faq", "args": [], "output_idx": [],
+        "ranges": {"k": [1, 2]},
+        "filter": {"op": "!=", "args": ["k", "j"]},
+        "expr": {"op": "*", "args": [u_at(json!("i"), json!("k")),
+                                     {"op": "index", "args": ["w", "k"]}]}});
+    // Per row, broadcast along j: sum_k u[i, k] (reads `i` only).
+    let per_row = json!({"op": "faq", "args": [], "output_idx": [],
+        "ranges": {"k": [1, 2]}, "expr": u_at(json!("i"), json!("k"))});
+    // Once: sum_{a, b} u[a, b] (reads nothing of the box).
+    let once = json!({"op": "faq", "args": [], "output_idx": [],
+        "ranges": {"a": [1, 3], "b": [1, 2]}, "expr": u_at(json!("a"), json!("b"))});
+    let doc = doc_2d(
+        json!({"w": {"type": "parameter", "units": "1", "shape": ["y"], "default": [0.25, -3.0]}}),
+        json!({"op": "+", "args": [
+            {"op": "*", "args": [per_cell, u_at(json!("i"), json!("j"))]},
+            {"op": "*", "args": [once, 1e-3]},
+            {"op": "*", "args": [per_row, u_at(json!("i"), json!("j")), 0.5]}]}),
+    );
+    let prog = ab_check(doc, -2.0, 2.0);
+    assert!(
+        prog.instrs
+            .iter()
+            .any(|i| matches!(i, Instr::Reduce { .. }))
+            || prog.fused.iter().any(|f| f.reduce.is_some()),
+        "the reductions are folds, not unrolled terms"
+    );
+}
+
+#[test]
+fn a_scalar_condition_joins_a_scalar_arm_and_an_array_arm() {
+    for flag in [0.0, 1.0] {
+        let doc = doc_2d(
+            json!({"flag": {"type": "parameter", "units": "1", "default": flag}}),
+            json!({"op": "ifelse", "args": [
+                {"op": ">", "args": ["flag", 0.5]}, -1.5, u_at(json!("i"), json!("j"))]}),
+        );
+        ab_check(doc, -2.0, 2.0);
+    }
+}
+
+/// `D(u[i,j]) = ifelse(u[i,j] > 0, c[i, j + 1], 0) + ifelse(u[i,j] < -1, c[i - 1, j], 0)`
+/// over a 3×2 inline `c`: the first arm reads past `c` at `j = 2`, the
+/// second before it at `i = 1`. Whether — and which — fault the oracle
+/// latches depends on the state.
+fn guarded_doc() -> serde_json::Value {
+    let c = json!({"op": "const", "args": [], "value": [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]});
+    let read = |di: i64, dj: i64| {
+        json!({"op": "index", "args": [c.clone(),
+            {"op": "+", "args": ["i", di]}, {"op": "+", "args": ["j", dj]}]})
+    };
+    doc_2d(
+        json!({}),
+        json!({"op": "+", "args": [
+            {"op": "ifelse", "args": [{"op": ">", "args": [u_at(json!("i"), json!("j")), 0.0]},
+                                      read(0, 1), 0.0]},
+            {"op": "ifelse", "args": [{"op": "<", "args": [u_at(json!("i"), json!("j")), -1.0]},
+                                      read(-1, 0), 0.0]}]}),
+    )
+}
+
+#[test]
+fn a_fault_behind_a_state_condition_fires_where_the_oracle_reaches_it() {
+    let compiled = compile(guarded_doc());
+    let n = compiled.state_variable_names().len();
+    let params = HashMap::new();
+    let param_vec = compiled.debug_resolve_params(&params);
+    let progs = [
+        taped(compiled.build_tape_opts(&HashSet::new(), Some(default_cfg()))).0,
+        taped(compiled.build_tape_opts(&HashSet::new(), None)).0,
+        taped(compiled.build_tape_layout(&HashSet::new(), Some(default_cfg()), false)).0,
+    ];
+    assert!(
+        progs[0]
+            .instrs
+            .iter()
+            .any(|i| matches!(i, Instr::FaultScan { .. })),
+        "the guarded reads lower to a fault scan"
+    );
+    // Hand-picked states (column-major `u`): none reached, only the j = 2
+    // read, only the i = 1 read, both (the oracle meets (1, 1)'s first),
+    // plus seeded ones.
+    let mut states: Vec<Vec<f64>> = vec![
+        vec![-0.5; n],
+        vec![-0.5, -0.5, -0.5, -0.5, 0.5, -0.5],
+        vec![-2.0, -0.5, -0.5, -0.5, -0.5, -0.5],
+        vec![-2.0, -0.5, -0.5, 0.5, 0.5, 0.5],
+        vec![0.5, -0.5, -0.5, 0.5, -0.5, -0.5],
+    ];
+    states.extend((0..6).map(|s| seeded_state(n, s, -2.0, 2.0)));
+    let mut fired = [false; 2];
+    for state in &states {
+        crate::simulate_array::take_const_array_oob();
+        let (dy_ref, _) = compiled.debug_eval_rhs(state, 0.0, &params, true);
+        let want = crate::simulate_array::take_const_array_oob();
+        fired[usize::from(want.is_some())] = true;
+        for (k, prog) in progs.iter().enumerate() {
+            let mut dy = vec![0.0f64; n];
+            run_reference(prog, &compiled, state, &param_vec, 0.0, &mut dy);
+            assert_eq!(
+                crate::simulate_array::take_const_array_oob(),
+                want,
+                "program {k} ref"
+            );
+            let mut scratch = super::super::RhsScratch::new(&compiled.var_shapes);
+            scratch.install_tape(std::rc::Rc::new(match k {
+                0 => taped(compiled.build_tape_opts(&HashSet::new(), Some(default_cfg()))).0,
+                1 => taped(compiled.build_tape_opts(&HashSet::new(), None)).0,
+                _ => {
+                    taped(compiled.build_tape_layout(&HashSet::new(), Some(default_cfg()), false)).0
+                }
+            }));
+            let mut dy_fast = vec![0.0f64; n];
+            compiled.debug_eval_rhs_into(
+                state,
+                0.0,
+                &param_vec,
+                &mut dy_fast,
+                &mut scratch,
+                &mut RhsStats::default(),
+            );
+            assert_eq!(
+                crate::simulate_array::take_const_array_oob(),
+                want,
+                "program {k} fast"
+            );
+            let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+            assert_eq!(bits(&dy_fast), bits(&dy_ref), "program {k}: dy");
+            assert_eq!(bits(&dy), bits(&dy_ref), "program {k}: reference dy");
+        }
+    }
+    assert_eq!(
+        fired,
+        [true, true],
+        "the states cover both a fault and none"
+    );
+}
+
+/// Two rules over the 3×2 box, `D(u[i,j]) = rhs_u` then `D(v[i,j]) = rhs_v`,
+/// with scalar parameters `p`, `q`, `r` (each `index(·, 1)` of one is an
+/// `E_TREEWALK_INDEX_ON_SCALAR` fault naming it).
+fn two_rule_doc(rhs_u: serde_json::Value, rhs_v: serde_json::Value) -> serde_json::Value {
+    let eq = |var: &str, rhs: serde_json::Value| {
+        json!({
+            "lhs": {"op": "faq", "args": [], "output_idx": ["i", "j"],
+                    "expr": {"op": "D", "args": [{"op": "index", "args": [var, "i", "j"]}],
+                             "wrt": "t"},
+                    "ranges": {"i": [1, 3], "j": [1, 2]}},
+            "rhs": {"op": "faq", "args": [], "output_idx": ["i", "j"],
+                    "ranges": {"i": [1, 3], "j": [1, 2]}, "expr": rhs}
+        })
+    };
+    let state = json!({"type": "unknown", "units": "1", "default": 0.5, "shape": ["x", "y"]});
+    let param = json!({"type": "parameter", "units": "1", "default": 2.0});
+    json!({
+        "esm": "1.2.0",
+        "metadata": {"name": "rule_faults", "authors": ["tape tests"]},
+        "index_sets": {"x": {"kind": "interval", "size": 3}, "y": {"kind": "interval", "size": 2}},
+        "models": {"M": {
+            "variables": {"u": state.clone(), "v": state,
+                          "p": param.clone(), "q": param.clone(), "r": param},
+            "equations": [eq("u", rhs_u), eq("v", rhs_v)]
+        }}
+    })
+}
+
+/// `index(name, 1)` of a scalar parameter: a fault at every evaluation.
+fn on_scalar(name: &str) -> serde_json::Value {
+    json!({"op": "index", "args": [name, 1]})
+}
+
+/// `ifelse(t > 0.5, arm, 0)`: a runtime-scalar branch the oracle takes only
+/// for `t > 0.5`.
+fn after_half(arm: serde_json::Value) -> serde_json::Value {
+    json!({"op": "ifelse", "args": [{"op": ">", "args": ["t", 0.5]}, arm, 0.0]})
+}
+
+/// Run every tape build of `doc` through both executors at each of `times`,
+/// asserting the reported fault (message, so rule) is the oracle's, and that
+/// the oracle faults at each. Returns the fused program.
+fn assert_fault_parity(doc: serde_json::Value, times: &[f64]) -> TapeProgram {
+    let compiled = compile(doc);
+    let n = compiled.state_variable_names().len();
+    let param_vec = compiled.debug_resolve_params(&HashMap::new());
+    let build = |k: usize| match k {
+        0 => taped(compiled.build_tape_opts(&HashSet::new(), Some(default_cfg()))).0,
+        1 => taped(compiled.build_tape_opts(&HashSet::new(), None)).0,
+        _ => taped(compiled.build_tape_layout(&HashSet::new(), Some(default_cfg()), false)).0,
+    };
+    let state = seeded_state(n, 7, -1.0, 1.0);
+    for &t in times {
+        crate::simulate_array::take_const_array_oob();
+        compiled.debug_eval_rhs(&state, t, &HashMap::new(), true);
+        let want = crate::simulate_array::take_const_array_oob();
+        assert!(want.is_some(), "the oracle faults at t = {t}");
+        for k in 0..3 {
+            let mut dy = vec![0.0f64; n];
+            run_reference(&build(k), &compiled, &state, &param_vec, t, &mut dy);
+            assert_eq!(
+                crate::simulate_array::take_const_array_oob(),
+                want,
+                "program {k} ref, t = {t}"
+            );
+            let mut scratch = super::super::RhsScratch::new(&compiled.var_shapes);
+            scratch.install_tape(std::rc::Rc::new(build(k)));
+            compiled.debug_eval_rhs_into(
+                &state,
+                t,
+                &param_vec,
+                &mut dy,
+                &mut scratch,
+                &mut RhsStats::default(),
+            );
+            assert_eq!(
+                crate::simulate_array::take_const_array_oob(),
+                want,
+                "program {k} fast, t = {t}"
+            );
+        }
+    }
+    build(0)
+}
+
+/// A fault in a runtime-scalar branch is a fault-scan candidate with its own
+/// message; a later rule's certain fault must still name ITS message (the
+/// message table and the fault order stay parallel).
+#[test]
+fn a_branch_fault_keeps_the_fault_tables_parallel() {
+    let prog = assert_fault_parity(
+        two_rule_doc(
+            json!({"op": "+", "args": [after_half(on_scalar("q")), u_at(json!("i"), json!("j"))]}),
+            on_scalar("r"),
+        ),
+        &[0.0],
+    );
+    assert_eq!(prog.faults.len(), prog.fault_order.len());
+    assert!(
+        prog.instrs
+            .iter()
+            .any(|i| matches!(i, Instr::FaultScan { .. }))
+    );
+}
+
+/// `c[row, j]` of an inline 3×2 const array, `row` a computed subscript.
+fn c_row(row: serde_json::Value) -> serde_json::Value {
+    let c = json!({"op": "const", "args": [], "value": [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]});
+    json!({"op": "index", "args": [c, row, "j"]})
+}
+
+/// Rule 1's fault scan runs in the CONTINUOUS section (its condition reads
+/// `t`); rule 2's certain fault would run in CONST, ahead of it. The oracle
+/// walks rule 1 first, so rule 1's fault is the one reported — the lazy one
+/// at `t = 1`, the certain one at `t = 0`.
+#[test]
+fn an_earlier_rules_fault_scan_latches_before_a_later_rules_certain_fault() {
+    assert_fault_parity(
+        two_rule_doc(
+            json!({"op": "+", "args": [after_half(on_scalar("q")), on_scalar("p")]}),
+            on_scalar("r"),
+        ),
+        &[0.0, 1.0],
+    );
+}
+
+/// The same for an earlier rule's computed-subscript gather that faults at
+/// run time (its subscript reads the state), and for a later rule's gather
+/// whose subscript reads only a parameter (computed in CONST).
+#[test]
+fn run_time_gather_faults_keep_the_rule_order() {
+    let past_end = json!({"op": "+", "args": [3,
+        {"op": ">", "args": [u_at(json!("i"), json!("j")), -5.0]}]});
+    assert_fault_parity(two_rule_doc(c_row(past_end), on_scalar("r")), &[0.0]);
+    assert_fault_parity(
+        two_rule_doc(
+            json!({"op": "+", "args": [after_half(on_scalar("q")), u_at(json!("i"), json!("j"))]}),
+            c_row(json!({"op": "+", "args": ["p", 2]})),
+        ),
+        &[0.0, 1.0],
+    );
 }

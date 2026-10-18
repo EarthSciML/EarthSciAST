@@ -639,6 +639,188 @@ def unstructured_gather(n):
     }
 
 
+def mod_index(expr, m):
+    """`1 + mod(expr - 1, m)` spelled with `floor`, the form the downstream models
+    use. Every operand is an integer below 2^53 and `m` divides exactly, so the
+    arithmetic is exact in binary64."""
+    e = op("-", expr, 1)
+    return op("+", 1, op("-", e, op("*", m, op("floor", op("/", e, m)))))
+
+
+GATHER_CLASSES = 64
+
+
+def gather_index(n):
+    """A gather through a data-dependent index array into const tables.
+
+    Each cell belongs to one of 64 classes, cls[i] = 1 + mod(7919 i - 1, 64), an
+    index array the document computes (the isrm member index and the rrtm `jt`
+    lookup are this shape). The decay rate and the source of a cell are read
+    from two inline `const` tables through it:
+    D(u[i]) = -rate[cls[i]] * u[i] + emis[cls[i]].
+    """
+    m = GATHER_CLASSES
+    rate = [0.01 * (1.0 + 0.5 * math.sin(k)) for k in range(1, m + 1)]
+    emis = [0.001 * (1.0 + math.cos(k)) for k in range(1, m + 1)]
+    cls_i = ix("cls", "i")
+    body = op(
+        "+",
+        op("*", op("-", ix({"op": "const", "args": [], "value": rate}, cls_i)), ix("u", "i")),
+        ix({"op": "const", "args": [], "value": emis}, cls_i),
+    )
+    model = {
+        "variables": {
+            "u": {"type": "unknown", "units": "1", "default": 1.0, "shape": ["cells"]},
+            "cls": {"type": "unknown", "units": "1", "shape": ["cells"]},
+        },
+        "equations": [
+            {"lhs": "cls", "rhs": faq(mod_index(op("*", 7919, "i"), m), ["i"], {"i": {"from": "cells"}})},
+            {
+                "lhs": faq_lhs("u", ["i"], {"i": {"from": "cells"}}),
+                "rhs": faq(body, ["i"], {"i": {"from": "cells"}}),
+            },
+        ],
+    }
+    desc = f"gather through a computed {m}-class index array into const tables over {n} cells"
+    return doc("gather_index", desc, {"cells": n}, {"Classes": model}), {"cells": n, "states": n}
+
+
+COLUMN_LEVELS = 20
+
+
+def column_search(n):
+    """A per-column level search whose result is a subscript (the YSU `kpbl` shape).
+
+    cnt[c] counts the levels of column c whose state exceeds 1, and every cell
+    of the column reads the state at that level (at least level 1):
+    D(u[c,l]) = -0.1 u[c,l] + 0.01 u[c, max(1, cnt[c])]. The subscript depends
+    on the state, so it is computed on every call.
+    """
+    L = COLUMN_LEVELS
+    ncol = max(1, int(round(n / L)))
+    rng = {"c": {"from": "col"}, "l": {"from": "lev"}}
+    level = op("max", 1, ix("cnt", "c"))
+    model = {
+        "variables": {
+            "u": {"type": "unknown", "units": "1", "default": 1.0, "shape": ["col", "lev"]},
+            "cnt": {"type": "unknown", "units": "1", "shape": ["col"]},
+        },
+        "equations": [
+            {
+                "lhs": "cnt",
+                "rhs": faq(
+                    op("ifelse", op(">", ix("u", "c", "l"), 1.0), 1.0, 0.0), ["c"], rng, reduce="+"
+                ),
+            },
+            {
+                "lhs": faq_lhs("u", ["c", "l"], rng),
+                "rhs": faq(
+                    op("+", op("*", -0.1, ix("u", "c", "l")), op("*", 0.01, ix("u", "c", level))),
+                    ["c", "l"],
+                    rng,
+                ),
+            },
+        ],
+    }
+    desc = f"per-column level search used as a subscript, {ncol} columns x {L} levels"
+    return doc("column_search", desc, {"col": ncol, "lev": L}, {"Column": model}), {
+        "cells": ncol * L,
+        "states": ncol * L,
+        "ncol": ncol,
+        "nlev": L,
+    }
+
+
+def column_sum(n):
+    """A rank-0 column sum nested inside a 3-D faq body.
+
+    D(u[i,j,k]) = -0.1 u[i,j,k] + 0.001 * (sum_l u[i,j,l]): the inner `faq` has
+    no output index and reads the outer i and j (the rrtm `o3_clim[L]` shape).
+    The sum is the same for every k of a column, so a compiler (like the hand
+    loop) need compute it only once per column.
+    """
+    L = COLUMN_LEVELS
+    s = max(1, int(round(math.sqrt(n / L))))
+    out = {"i": {"from": "x"}, "j": {"from": "y"}, "k": {"from": "lev"}}
+    colsum = faq(ix("u", "i", "j", "l"), [], {"l": {"from": "lev"}})
+    model = {
+        "variables": {
+            "u": {"type": "unknown", "units": "1", "default": 1.0, "shape": ["x", "y", "lev"]},
+        },
+        "equations": [
+            {
+                "lhs": faq_lhs("u", ["i", "j", "k"], out),
+                "rhs": faq(
+                    op("+", op("*", -0.1, ix("u", "i", "j", "k")), op("*", 0.001, colsum)),
+                    ["i", "j", "k"],
+                    out,
+                ),
+            },
+        ],
+    }
+    desc = f"column sum nested in a 3-D faq, {s}x{s} columns x {L} levels"
+    return doc("column_sum", desc, {"x": s, "y": s, "lev": L}, {"Columns": model}), {
+        "cells": s * s * L,
+        "states": s * s * L,
+        "side": s,
+        "nlev": L,
+    }
+
+
+def join_keyed(n):
+    """A value-equality join on computed keys, evaluated once at build (the moves
+    and isrm shape; a const-cadence computed key column, CONFORMANCE_SPEC 5.5.8).
+
+    Rows r = 1..n carry rkey[r] = 1 + mod(7919 (r - 1), K) and a value
+    rval[r] = 1 + 0.5 sin(r); cell i asks for key ckey[i] = 1 + mod(i - 1, K),
+    K = max(1, n / 4). agg[i] sums the values of the rows carrying its key, in
+    row order, about four per cell, so the gate must drive the enumeration:
+    the full product is n^2. D(u[i]) = -0.1 u[i] + 0.001 agg[i].
+    """
+    K = max(1, n // 4)
+    rows = {"r": {"from": "rows"}}
+    cells = {"i": {"from": "cells"}}
+    model = {
+        "variables": {
+            "u": {"type": "unknown", "units": "1", "default": 1.0, "shape": ["cells"]},
+            "ckey": {"type": "unknown", "units": "1", "shape": ["cells"]},
+            "rkey": {"type": "unknown", "units": "1", "shape": ["rows"]},
+            "rval": {"type": "unknown", "units": "1", "shape": ["rows"]},
+            "agg": {"type": "unknown", "units": "1", "shape": ["cells"]},
+        },
+        "equations": [
+            {"lhs": "ckey", "rhs": faq(mod_index("i", K), ["i"], cells)},
+            {
+                "lhs": "rkey",
+                "rhs": faq(mod_index(op("+", op("*", 7919, op("-", "r", 1)), 1), K), ["r"], rows),
+            },
+            {"lhs": "rval", "rhs": faq(op("+", 1, op("*", 0.5, op("sin", "r"))), ["r"], rows)},
+            {
+                "lhs": "agg",
+                "rhs": faq(
+                    ix("rval", "r"),
+                    ["i"],
+                    {"i": {"from": "cells"}, "r": {"from": "rows"}},
+                    semiring="sum_product",
+                    join=[{"on": [["ckey", "rkey"]]}],
+                ),
+            },
+            {
+                "lhs": faq_lhs("u", ["i"], cells),
+                "rhs": faq(
+                    op("+", op("*", -0.1, ix("u", "i")), op("*", 0.001, ix("agg", "i"))), ["i"], cells
+                ),
+            },
+        ],
+    }
+    desc = f"value-equality join on computed keys, {n} cells x {n} rows, {K} keys"
+    return doc("join_keyed", desc, {"cells": n, "rows": n}, {"Join": model}), {
+        "cells": n,
+        "states": n,
+        "keys": K,
+    }
+
+
 def mass_action_terms(rs, species_ref):
     """Per species, the ordered list of (net stoichiometry, rate expression).
 
@@ -771,6 +953,10 @@ FAMILIES = {
     "regrid": regrid,
     "unstructured_gather": unstructured_gather,
     "scalar_chemistry": scalar_chemistry,
+    "gather_index": gather_index,
+    "column_search": column_search,
+    "column_sum": column_sum,
+    "join_keyed": join_keyed,
 }
 
 

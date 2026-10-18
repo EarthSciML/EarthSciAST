@@ -70,6 +70,8 @@
 
 #[cfg(test)]
 mod array_tests;
+#[cfg(test)]
+mod data_gather_tests;
 mod exec;
 #[cfg(test)]
 mod forcing_tests;
@@ -97,7 +99,11 @@ pub mod xla_emit;
 pub(crate) use exec::section_primes;
 pub(in crate::simulate_array) use exec::{TapeCtx, run_tape_call};
 pub(crate) use ir::*;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use lower::StandaloneError;
 use lower::build_tape_program;
+#[cfg(not(target_arch = "wasm32"))]
+pub(in crate::simulate_array) use lower::{collect_variable_names, eval_standalone_rule};
 
 use super::ArrayCompiled;
 use std::cell::RefCell;

@@ -398,4 +398,89 @@ end
     @test visits == 0                      # nothing to visit — the driver knows
 end
 
+# A key column computed from observeds and a scalar PARAMETER (the MOVES
+# runYearID / runCountyID shape) is build-time: the parameter's value at the
+# build is folded into the match set, and it is STRUCTURAL, so `remake` refuses
+# to change it — under both compilers (CONFORMANCE_SPEC §5.5.8).
+@testset "a key column computed from a parameter is baked into the gate" begin
+    doc(off) = Dict{String,Any}(
+        "esm" => "1.2.0", "metadata" => Dict("name" => "param_key"),
+        "index_sets" => Dict("rows" => Dict("kind" => "interval", "size" => 4),
+                             "keys" => Dict("kind" => "interval", "size" => 2)),
+        "models" => Dict("M" => Dict{String,Any}(
+            "variables" => Dict(
+                "off" => Dict("type" => "parameter", "units" => "1", "default" => off),
+                "row_key" => Dict("type" => "unknown", "units" => "1", "shape" => ["rows"]),
+                "want" => Dict("type" => "unknown", "units" => "1", "shape" => ["keys"]),
+                "total" => Dict("type" => "unknown", "units" => "1", "shape" => ["keys"])),
+            "equations" => Any[
+                Dict("lhs" => "row_key", "rhs" => Dict("op" => "faq", "args" => Any[],
+                    "output_idx" => ["r"], "ranges" => Dict("r" => Dict("from" => "rows")),
+                    "expr" => Dict("op" => "-", "args" => Any["r", Dict("op" => "*",
+                        "args" => Any[2, Dict("op" => "floor", "args" => Any[Dict("op" => "/",
+                            "args" => Any[Dict("op" => "-", "args" => Any["r", 1]), 2])])])]))),
+                Dict("lhs" => "want", "rhs" => Dict("op" => "faq", "args" => Any[],
+                    "output_idx" => ["k"], "ranges" => Dict("k" => Dict("from" => "keys")),
+                    "expr" => Dict("op" => "+", "args" => Any["k", "off"]))),
+                Dict("lhs" => "total", "rhs" => Dict("op" => "faq", "args" => Any[],
+                    "semiring" => "sum_product", "output_idx" => ["k"],
+                    "ranges" => Dict("k" => Dict("from" => "keys"), "r" => Dict("from" => "rows")),
+                    "join" => Any[Dict("on" => Any[Any["want", "row_key"]])],
+                    "expr" => 1.0))])))
+    for c in (:native, :interpreter)
+        prob = esm_problem(doc(0.0), (0.0, 0.0); compiler = c)
+        @test observed_field(prob, "M.total") == [2.0, 2.0]
+        @test parameter_classes(prob)["M.off"] === :structural
+        @test_throws EarthSciAST.SimulateError remake_parameters(prob, Dict("M.off" => 1.0))
+        @test observed_field(esm_problem(doc(1.0), (0.0, 0.0); compiler = c),
+                             "M.total") == [2.0, 0.0]
+    end
+end
+
+# A key column computed through a join of its own: `has[k]` counts the rows
+# whose key is `k`, and the column `pick[k]` is `k` where there is one and 99
+# where there is none (no row carries 99). Native builds it through the
+# compiled construction-time fill — a strict compiler has no per-position
+# route, so building at all shows it took none — and both compilers agree.
+@testset "a key column computed through its own join is compiled once" begin
+    rows(k) = Dict("op" => "-", "args" => Any["r", Dict("op" => "*",
+        "args" => Any[2, Dict("op" => "floor", "args" => Any[Dict("op" => "/",
+            "args" => Any[Dict("op" => "-", "args" => Any["r", 1]), 2])])])])
+    doc = Dict{String,Any}(
+        "esm" => "1.2.0", "metadata" => Dict("name" => "gated_key"),
+        "index_sets" => Dict("rows" => Dict("kind" => "interval", "size" => 4),
+                             "keys" => Dict("kind" => "interval", "size" => 3)),
+        "models" => Dict("M" => Dict{String,Any}(
+            "variables" => Dict(
+                "row_key" => Dict("type" => "unknown", "units" => "1", "shape" => ["rows"]),
+                "kk" => Dict("type" => "unknown", "units" => "1", "shape" => ["keys"]),
+                "has" => Dict("type" => "unknown", "units" => "1", "shape" => ["keys"]),
+                "pick" => Dict("type" => "unknown", "units" => "1", "shape" => ["keys"]),
+                "total" => Dict("type" => "unknown", "units" => "1", "shape" => ["keys"])),
+            "equations" => Any[
+                Dict("lhs" => "row_key", "rhs" => Dict("op" => "faq", "args" => Any[],
+                    "output_idx" => ["r"], "ranges" => Dict("r" => Dict("from" => "rows")),
+                    "expr" => rows(0))),
+                Dict("lhs" => "kk", "rhs" => Dict("op" => "faq", "args" => Any[],
+                    "output_idx" => ["k"], "ranges" => Dict("k" => Dict("from" => "keys")),
+                    "expr" => "k")),
+                Dict("lhs" => "has", "rhs" => Dict("op" => "faq", "args" => Any[],
+                    "semiring" => "sum_product", "output_idx" => ["k"],
+                    "ranges" => Dict("k" => Dict("from" => "keys"), "r" => Dict("from" => "rows")),
+                    "join" => Any[Dict("on" => Any[Any["kk", "row_key"]])], "expr" => 1.0)),
+                Dict("lhs" => "pick", "rhs" => Dict("op" => "faq", "args" => Any[],
+                    "output_idx" => ["k"], "ranges" => Dict("k" => Dict("from" => "keys")),
+                    "expr" => Dict("op" => "ifelse", "args" => Any[
+                        Dict("op" => ">", "args" => Any[Dict("op" => "index", "args" => Any["has", "k"]), 0.0]),
+                        "k", 99.0]))),
+                Dict("lhs" => "total", "rhs" => Dict("op" => "faq", "args" => Any[],
+                    "semiring" => "sum_product", "output_idx" => ["k"],
+                    "ranges" => Dict("k" => Dict("from" => "keys"), "r" => Dict("from" => "rows")),
+                    "join" => Any[Dict("on" => Any[Any["pick", "row_key"]])], "expr" => 1.0))])))
+    for c in (:native, :interpreter)
+        prob = esm_problem(doc, (0.0, 0.0); compiler = c)
+        @test observed_field(prob, "M.total") == [2.0, 2.0, 0.0]
+    end
+end
+
 end # module

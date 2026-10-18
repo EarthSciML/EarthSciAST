@@ -23,8 +23,8 @@
 //! workers, which do the actual work.
 
 use super::fused::{
-    IndexTable, PAD_BYTES, RunCursor, Window, fill_whole, n_scans, n_shifted, run_fused_window,
-    seeds_itself,
+    IndexTable, PAD_BYTES, PreTile, RunCursor, Window, fill_whole, n_scans, n_shifted,
+    run_fused_window, run_pre_tiled, seeds_itself,
 };
 use super::pool;
 use super::resolve::{Rv, rm_strides};
@@ -177,10 +177,12 @@ pub(super) fn instr_work(prog: &TapeProgram, ins: &Instr) -> usize {
     match ins {
         Instr::Fused { spec } => {
             let fs = &prog.fused[*spec as usize];
+            let pre = fs.pre.as_ref().map_or(0, |p| p.rows * p.n_inner);
             fs.shape
                 .iter()
                 .product::<usize>()
                 .saturating_mul(fused_cost(fs))
+                .saturating_add(pre)
         }
         Instr::DyWrite { write } => {
             prog.slots[prog.dy_writes[*write as usize].slot as usize].elems()
@@ -193,7 +195,9 @@ pub(super) fn instr_work(prog: &TapeProgram, ins: &Instr) -> usize {
         | Instr::Copy { out, .. }
         | Instr::IndexGather { out, .. }
         | Instr::TableGather { out, .. }
+        | Instr::DataGather { out, .. }
         | Instr::Scan { out, .. } => prog.slots[*out as usize].elems(),
+        Instr::Reduce { src_shape, .. } => src_shape.iter().product(),
         Instr::Lanes { spec } => {
             let ls = &prog.lanes[*spec as usize];
             (ls.lanes as usize).saturating_mul(lane_cost(ls) + 1)
@@ -226,6 +230,15 @@ pub(super) fn split_ways(fs: &FusedSpec, ways: usize) -> usize {
     }
     let n: usize = fs.shape.iter().product();
     let by_work = |n: usize| fused_ways(n, || fused_cost(fs), ways);
+    // A pre-reduction splits only when every worker gets at least one whole
+    // range of columns: below that the fork costs more than it saves.
+    if let Some(p) = &fs.pre {
+        return if p.n_inner >= ways * super::fused::pre_cols(p.rows) || forced() {
+            by_work(n + p.rows * p.n_inner)
+        } else {
+            1
+        };
+    }
     match (&fs.reduce, scan_row(fs)) {
         (Some(_), Some(_)) => 1,
         // Every worker folds whole cells, so the split needs only enough
@@ -651,6 +664,7 @@ struct Shared<'a> {
     node_elems: &'a [usize],
     simd: SimdLevel,
     precision: crate::precision::Precision,
+    pre: Option<PreTile>,
 }
 
 // SAFETY: the pointers address the slab, the state and the observed arrays,
@@ -695,6 +709,7 @@ impl FusedWorkers {
         node_elems: &[usize],
         simd: SimdLevel,
         ways: usize,
+        pre: Option<PreTile>,
     ) {
         self.grow(ways);
         let g = SplitGeom::of(fs, outs, red, ways);
@@ -717,6 +732,7 @@ impl FusedWorkers {
             node_elems,
             simd,
             precision: crate::precision::active(),
+            pre,
         };
         let ws = WorkersPtr(self.workers.as_mut_ptr());
         pool::run(ways, &move |w| {
@@ -748,6 +764,7 @@ impl FusedWorkers {
         simd: SimdLevel,
         w: usize,
         ways: usize,
+        pre: Option<PreTile>,
     ) {
         self.grow(1);
         let g = SplitGeom::of(fs, outs, red, ways);
@@ -767,6 +784,7 @@ impl FusedWorkers {
             node_elems,
             simd,
             precision: crate::precision::active(),
+            pre,
         };
         unsafe { fused_share(&sh, wk, &g, w) };
     }
@@ -789,9 +807,12 @@ impl SplitGeom {
         // A reduction splits its inner positions: worker `w` takes the same
         // `[lo, hi)` of them at every leading position, so the accumulator
         // cells each worker folds into are its own.
-        let (n, period) = match &fs.reduce {
-            Some(r) => (r.n_inner, r.n_inner),
-            None => (fs.shape.iter().product(), 0),
+        // A pre-reduction splits its inner positions likewise: each worker
+        // folds and consumes whole columns of its own.
+        let (n, period) = match (&fs.reduce, &fs.pre) {
+            (Some(r), _) => (r.n_inner, r.n_inner),
+            (None, Some(p)) => (p.n_inner, p.n_inner),
+            (None, None) => (fs.shape.iter().product(), 0),
         };
         // Row starts, for a group with an absorbed scan (see `split_ways`);
         // else cache lines of the accumulator or the first output.
@@ -845,6 +866,27 @@ unsafe fn fused_share(sh: &Shared, wk: &mut FusedWorker, g: &SplitGeom, w: usize
         }
         None => sh.red,
     };
+    if let Some(pt) = sh.pre {
+        unsafe {
+            run_pre_tiled(
+                sh.simd,
+                sh.fs,
+                pt,
+                sh.svals,
+                sh.bases,
+                sh.whole_src,
+                sh.outs,
+                red,
+                sh.idx,
+                &mut wk.fregs,
+                &mut wk.cursor,
+                sh.node_elems,
+                lo,
+                hi,
+            )
+        };
+        return;
+    }
     unsafe {
         fill_whole(sh.fs, sh.bases, sh.whole_src, lo, hi, period);
         run_fused_window(

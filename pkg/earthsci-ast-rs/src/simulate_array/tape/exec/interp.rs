@@ -8,12 +8,12 @@
 use super::super::geom::{RingTable, run_poly_area};
 use super::fused::{dispatch_bin_kernel, dispatch_un_kernel, exec_fused};
 use super::kernels::{
-    copy_strided, ew_select, ew1, ew2, exec_gather, fill_strided, index_gather, reduce_axis,
-    reduce_rows, scan_axis, seg_reduce, table_gather,
+    copy_strided, data_gather, data_gather_sub, ew_select, ew1, ew2, exec_gather, fill_strided,
+    index_gather, reduce_axis, reduce_rows, scan_axis, seg_reduce, table_gather,
 };
 use super::resolve::{Rv, SrcView, resolve_rv, resolve_scalar, resolve_src, rm_strides};
 use super::*;
-use crate::simulate_array::eval::latch_gather_fault;
+use crate::simulate_array::eval::{latch_gather_fault, latch_ordered_fault};
 
 /// A resolved source viewed as a ring table.
 fn ring_table(v: &SrcView) -> RingTable<'_> {
@@ -176,7 +176,20 @@ pub(super) fn run_range(
                 load_forcing(fr, &env.forcing.borrow(), env.declared, prog.col_major, dst);
             }
             Instr::Fault { fault } => {
-                latch_gather_fault(prog.faults[*fault as usize].clone());
+                let (rule, key) = &prog.fault_order[*fault as usize];
+                latch_ordered_fault(*rule, key, || prog.faults[*fault as usize].clone());
+            }
+            Instr::FaultScan { spec } => {
+                let scan = &prog.fault_scans[*spec as usize];
+                let first = scan.first(&prog.faults, |op, cell| match (op, cell) {
+                    (Operand::Slot(s), Some((shape, c))) => unsafe {
+                        *slab_ptr.add(slot_off[*s as usize] + slab_flat(shape, c, prog.col_major))
+                    },
+                    _ => resolve_scalar(op, env, slab_ptr, slot_off),
+                });
+                if let Some((key, msg)) = first {
+                    latch_ordered_fault(scan.rule, &key, || msg);
+                }
             }
             Instr::Sweep { spec } => {
                 let sw = &prog.sweeps[*spec as usize];
@@ -328,8 +341,10 @@ pub(super) fn is_straight(ins: &Instr) -> bool {
         ins,
         Instr::LoadForcing { .. }
             | Instr::Fault { .. }
+            | Instr::FaultScan { .. }
             | Instr::Sweep { .. }
             | Instr::ScalarRead { .. }
+            | Instr::DataGather { faults: true, .. }
             | Instr::JmpIfZero { .. }
             | Instr::Export { .. }
             | Instr::Lanes { .. }
@@ -777,6 +792,31 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
             let dst = unsafe { slab_ptr.add(slot_off[*out as usize]) };
             unsafe { index_gather(dst, spec, &sv, &iv) };
         }
+        Instr::DataGather {
+            src,
+            spec,
+            out,
+            faults,
+        } => {
+            let spec = &prog.data_gathers[*spec as usize];
+            let sv = resolve_src(src, env, slab_ptr, slot_off);
+            let subs: SmallVec<[Rv; 4]> = spec
+                .subs
+                .iter()
+                .map(|o| resolve_rv(o, &spec.shape, env, slab_ptr, slot_off))
+                .collect();
+            let dst = unsafe { slab_ptr.add(slot_off[*out as usize]) };
+            let faulted = unsafe { data_gather(dst, spec, &sv, &subs) };
+            // A gather in a lazily evaluated position reads `NaN` at a fault
+            // and leaves the latching to its rule's `FaultScan`.
+            if faulted && *faults {
+                let first =
+                    spec.first_fault(|d, k| unsafe { data_gather_sub(&subs[d], &spec.shape, k) });
+                if let (Some((key, msg)), Some(order)) = (first, &spec.order) {
+                    latch_ordered_fault(order.rule, &key, || msg);
+                }
+            }
+        }
         Instr::TableGather { src, table, out } => {
             let sv = resolve_src(src, env, slab_ptr, slot_off);
             let tbl = &prog.gather_tables[*table as usize];
@@ -890,6 +930,10 @@ pub(super) fn shares(prog: &TapeProgram, ins: &Instr) -> bool {
     match ins {
         Instr::Fused { .. } | Instr::Assemble { .. } => true,
         Instr::Copy { out, .. } => !prog.slots[*out as usize].scalar,
+        Instr::Reduce { axes, out, .. } => {
+            !prog.slots[*out as usize].scalar
+                && axes.iter().enumerate().all(|(k, &a)| a as usize == k)
+        }
         Instr::DyWrite { write } => {
             let w = &prog.dy_writes[*write as usize];
             w.scatter.is_none() && w.scalar_flat.is_none()
@@ -966,6 +1010,45 @@ pub(super) unsafe fn exec_share(
                     asm_covered[*table as usize],
                 )
             };
+        }
+        // The leading axes folded out of a contiguous source: worker `w`
+        // owns a run of output cells and folds each of them whole, row by
+        // row in the serial order.
+        Instr::Reduce {
+            op,
+            init,
+            src,
+            axes,
+            out,
+            ..
+        } => {
+            let sv = resolve_src(src, env, slab_ptr, slot_off);
+            let n_out = prog.slots[*out as usize].elems();
+            let dst = unsafe { slab_ptr.add(slot_off[*out as usize]) };
+            if sv.strides[..] != rm_strides(&sv.shape)[..] {
+                // Not the contiguous layout the split assumes: one worker
+                // runs it whole.
+                if w == 0 {
+                    unsafe { exec_straight(cx, ins, scratch, 1) };
+                }
+                return;
+            }
+            let (lo, hi) = super::par::share_at(n_out, w, ways, dst);
+            let rows: usize = sv.shape[..axes.len()].iter().product();
+            unsafe {
+                for k in lo..hi {
+                    *dst.add(k) = *init;
+                }
+            }
+            let src = sv.ptr;
+            macro_rules! fold_rows {
+                ($f:expr) => {
+                    for r in 0..rows {
+                        unsafe { reduce_rows(dst.add(lo), hi - lo, src.add(r * n_out + lo), 1, $f) }
+                    }
+                };
+            }
+            dispatch_bin_kernel!(op, fold_rows);
         }
         Instr::Copy { a, out } => {
             let desc = &prog.slots[*out as usize];

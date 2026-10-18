@@ -33,6 +33,7 @@ using EarthSciAST: RefreshError, OutputError, StateSnapshot, VarGridding,
 # The declared §8.5 unit conversion, parsed once per loader variable and applied
 # at delivery (see `_convert_units`).
 using EarthSciAST: parse_unit_conversion, apply_unit_conversion
+using EarthSciAST: load_path, serialize_esm_file
 
 # Explicit imports so we can add the extension methods to these generics.
 import EarthSciAST: provider_refresh_times, provider_sample, provider_supports_selection
@@ -144,9 +145,9 @@ end
 # `data_sources`: a `select` range bound may name a `metaparameters` entry, and
 # the bindings live on the models' parameters.
 _doc_raw(doc::AbstractDict) = doc
-_doc_raw(doc::AbstractString) = _doc_raw(EarthSciAST.load_path(doc))
+_doc_raw(doc::AbstractString) = _doc_raw(load_path(doc))
 # EsmFile (or anything typed that serializes): reuse the round-trip emitter.
-_doc_raw(file) = _doc_raw(EarthSciAST.serialize_esm_file(file))
+_doc_raw(file) = _doc_raw(serialize_esm_file(file))
 
 # --------------------------------------------------------------------------- #
 # The DECLARED ingest (esm-spec §8.9). Between the bytes and a usable array sit

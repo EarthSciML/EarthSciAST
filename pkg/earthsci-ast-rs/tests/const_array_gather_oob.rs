@@ -263,11 +263,12 @@ fn off_the_end_flat_gather_through_prepare_fails_closed() {
 
 /// A const array read at a subscript that is itself const data
 /// (`gx[idx[i]]`): native resolves each cell's position at build time, and a
-/// position out of range under the default `error` policy is a refusal, not a
-/// zero ghost.
+/// position out of range under the default `error` policy reads per element
+/// at run time, raising the fault the reference evaluator raises — the two
+/// agree to the message — never a zero ghost.
 #[test]
-fn a_const_gather_at_an_out_of_range_data_subscript_is_refused_under_native() {
-    use earthsci_ast::{CompileError, Compiler, Rhs, SimulateError};
+fn a_const_gather_at_an_out_of_range_data_subscript_fails_closed_under_native() {
+    use earthsci_ast::{Alg, Compiler, SolveOptions, load_string};
     let doc = |idx: [f64; 3]| {
         json!({
             "esm": "1.1.0",
@@ -286,27 +287,47 @@ fn a_const_gather_at_an_out_of_range_data_subscript_is_refused_under_native() {
                              "expr": {"op": "D", "args": [{"op": "index", "args": ["w", "i"]}], "wrt": "t"}},
                      "rhs": {"op": "faq", "args": [], "output_idx": ["i"], "ranges": {"i": {"from": "p"}},
                              "expr": {"op": "index", "args": ["gx", {"op": "index", "args": ["idx", "i"]}]}}}
-                ]
+                ],
+                "tests": [{"id": "gather", "time_span": {"start": 0.0, "end": 1.0},
+                           "assertions": [{"variable": "w", "time": 1.0, "reduce": "max",
+                                           "expected": 30.0}]}]
             }}
         })
+        .to_string()
     };
-    let build = |d: &Value| {
-        esm_problem(
-            d,
-            (0.0, 1.0),
-            ProblemOptions {
-                compiler: Some(Compiler::Native),
-                rhs: Rhs::Always,
+    let run_with = |idx: [f64; 3], compiler| {
+        let file = load_string(&doc(idx)).expect("document loads");
+        let results = earthsci_ast::run_inline_tests_with_options(
+            &file,
+            &earthsci_ast::InlineTestOptions {
+                model_name: Some("M".to_string()),
+                solve: SolveOptions {
+                    alg: Alg::Erk,
+                    ..Default::default()
+                },
+                compiler: Some(compiler),
                 ..Default::default()
             },
-        )
+            None,
+        );
+        assert_eq!(results.len(), 1);
+        results.into_iter().next().unwrap()
     };
-    assert!(build(&doc([3.0, 1.0, 2.0])).is_ok());
-    match build(&doc([3.0, 4.0, 2.0])) {
-        Err(SimulateError::Compile(CompileError::CompilerRefusedRule { reason, .. })) => {
-            assert!(reason.contains("out of range"), "{reason}");
-        }
-        Err(e) => panic!("expected a native refusal, got {e}"),
-        Ok(_) => panic!("an out-of-range const gather built under native"),
-    }
+    let run = |idx: [f64; 3]| {
+        let r = run_with(idx, Compiler::Interpreter);
+        let native = run_with(idx, Compiler::Native);
+        assert_eq!(
+            (native.passed, &native.message, native.actual),
+            (r.passed, &r.message, r.actual),
+            "{idx:?}: native and the interpreter disagree"
+        );
+        r
+    };
+    assert!(run([3.0, 1.0, 2.0]).passed);
+    let r = run([3.0, 4.0, 2.0]);
+    assert!(
+        !r.passed && r.message.contains("E_TREEWALK_CONSTARRAY_OOB"),
+        "an out-of-range data subscript must fail closed: {}",
+        r.message
+    );
 }

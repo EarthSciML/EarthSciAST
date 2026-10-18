@@ -209,6 +209,86 @@
    "shape": {
     "boxes": 50
    }
+  },
+  {
+   "family": "gather_index",
+   "n": 100,
+   "path": "gather_index/gather_index_N100.esm",
+   "n_cells": 100,
+   "n_states": 100,
+   "shape": {}
+  },
+  {
+   "family": "gather_index",
+   "n": 1000,
+   "path": "gather_index/gather_index_N1000.esm",
+   "n_cells": 1000,
+   "n_states": 1000,
+   "shape": {}
+  },
+  {
+   "family": "column_search",
+   "n": 100,
+   "path": "column_search/column_search_N100.esm",
+   "n_cells": 100,
+   "n_states": 100,
+   "shape": {
+    "ncol": 5,
+    "nlev": 20
+   }
+  },
+  {
+   "family": "column_search",
+   "n": 1000,
+   "path": "column_search/column_search_N1000.esm",
+   "n_cells": 1000,
+   "n_states": 1000,
+   "shape": {
+    "ncol": 50,
+    "nlev": 20
+   }
+  },
+  {
+   "family": "column_sum",
+   "n": 100,
+   "path": "column_sum/column_sum_N100.esm",
+   "n_cells": 80,
+   "n_states": 80,
+   "shape": {
+    "side": 2,
+    "nlev": 20
+   }
+  },
+  {
+   "family": "column_sum",
+   "n": 1000,
+   "path": "column_sum/column_sum_N1000.esm",
+   "n_cells": 980,
+   "n_states": 980,
+   "shape": {
+    "side": 7,
+    "nlev": 20
+   }
+  },
+  {
+   "family": "join_keyed",
+   "n": 100,
+   "path": "join_keyed/join_keyed_N100.esm",
+   "n_cells": 100,
+   "n_states": 100,
+   "shape": {
+    "keys": 25
+   }
+  },
+  {
+   "family": "join_keyed",
+   "n": 1000,
+   "path": "join_keyed/join_keyed_N1000.esm",
+   "n_cells": 1000,
+   "n_states": 1000,
+   "shape": {
+    "keys": 250
+   }
   }
  ]
 }

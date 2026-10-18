@@ -1126,11 +1126,107 @@ fn code_lookup(positions: &[i64], codes: &[i64], sym: &str) -> Expr {
     })
 }
 
+/// Every name read, directly or through the observeds they are defined by, by
+/// the KEY COLUMNS of the `on` joins in `roots` (CONFORMANCE_SPEC §5.5.8).
+///
+/// A scalar parameter among them is build-time data: its value decides the
+/// match set, which is built once, so the build bakes it and a later
+/// substitution of it is refused rather than served stale. `definition` gives
+/// an observed's defining expression; a name with none is a leaf.
+pub(crate) fn join_key_cone<'e>(
+    roots: impl IntoIterator<Item = &'e Expr>,
+    definition: impl Fn(&str) -> Option<&'e Expr>,
+) -> HashSet<String> {
+    fn key_columns(e: &Expr, out: &mut Vec<String>) {
+        if let Expr::Operator(n) = e {
+            for clause in n.join.iter().flatten() {
+                out.extend(clause.on.iter().flatten().cloned());
+            }
+            n.for_each_child(&mut |c| key_columns(c, out));
+        }
+    }
+    fn reads(e: &Expr, out: &mut Vec<String>) {
+        match e {
+            Expr::Variable(v) => out.push(v.clone()),
+            Expr::Operator(n) => {
+                for clause in n.join.iter().flatten() {
+                    out.extend(clause.on.iter().flatten().cloned());
+                }
+                n.for_each_child(&mut |c| reads(c, out));
+            }
+            _ => {}
+        }
+    }
+    let mut frontier: Vec<String> = Vec::new();
+    for r in roots {
+        key_columns(r, &mut frontier);
+    }
+    let mut seen: HashSet<String> = HashSet::new();
+    while let Some(name) = frontier.pop() {
+        if !seen.insert(name.clone()) {
+            continue;
+        }
+        if let Some(def) = definition(&name) {
+            reads(def, &mut frontier);
+        }
+    }
+    seen
+}
+
+/// The scalar parameters of `model` a join key column reads, directly or
+/// through observeds ([`join_key_cone`]): the parameters a build bakes. A
+/// data-fed parameter is not one: its values arrive from a provider.
+pub(crate) fn join_key_parameters(model: &Model) -> Vec<String> {
+    let defs = crate::classification::observed_definitions(model);
+    let cone = join_key_cone(model.equations.iter().map(|eq| &eq.rhs), |n| defs.get(n));
+    let mut out: Vec<String> = model
+        .variables
+        .iter()
+        .filter(|(name, var)| {
+            cone.contains(name.as_str())
+                && var.var_type == crate::types::VariableType::Parameter
+                && var.shape.as_ref().is_none_or(|s| s.is_empty())
+                && var.update.is_none()
+        })
+        .map(|(name, _)| name.clone())
+        .collect();
+    out.sort();
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::types::{ExpressionNode, JoinClause, RangeSpec};
     use std::collections::HashMap;
+
+    // --- join_key_cone ------------------------------------------------------
+
+    /// The cone walk visits each node once: a sum nested 64 deep (every
+    /// equation chain a coupled column builds) must not cost 2^64 visits.
+    #[test]
+    fn join_key_cone_is_linear_in_nesting_depth() {
+        let mut e = Expr::Variable("x".into());
+        for _ in 0..64 {
+            e = Expr::operator(ExpressionNode {
+                op: "+".into(),
+                args: vec![e, Expr::Number(1.0)],
+                ..Default::default()
+            });
+        }
+        assert!(join_key_cone([&e], |_| None).is_empty());
+        let defs: HashMap<&str, &Expr> = [("k", &e)].into_iter().collect();
+        let keyed = Expr::operator(ExpressionNode {
+            op: "faq".into(),
+            join: Some(vec![JoinClause {
+                on: vec![["k".into(), "id".into()]],
+                ..Default::default()
+            }]),
+            ..Default::default()
+        });
+        let cone = join_key_cone([&keyed], |n| defs.get(n).copied());
+        assert!(cone.contains("k") && cone.contains("x"), "{cone:?}");
+    }
 
     // --- JoinKey total order (§5.5.1 rule 1) -------------------------------
 

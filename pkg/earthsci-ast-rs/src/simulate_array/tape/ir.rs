@@ -61,6 +61,12 @@
 //! * [`Instr::IndexGather`] is `index_into` with one subscript that is DATA:
 //!   the subscript operand is rounded (`f64::round`, then `as i64`, exactly
 //!   `eval_index_args`) and an out-of-range position reads the zero ghost.
+//! * [`Instr::DataGather`] is `index_into` once per element, every
+//!   subscript a value computed per element (or one scalar for the box):
+//!   rounded as `eval_index_args` rounds it, then the zero ghost (a state or
+//!   observed source) or the const array's boundary policy, else the
+//!   fail-closed `E_TREEWALK_CONSTARRAY_OOB` the oracle latches at its first
+//!   faulting cell.
 //! * [`Instr::TableGather`] reads its source at positions fixed at build
 //!   time (one per output element, or the ghost `+0.0`): an `index` whose
 //!   subscripts are build-time data rather than an affine map of the box.
@@ -85,6 +91,11 @@
 //!   (`E_TREEWALK_CONSTARRAY_OOB`, `E_TREEWALK_INDEX_ON_SCALAR`) exactly as
 //!   the per-cell oracle's `latch_gather_fault` does at the same point: the
 //!   FIRST fault latched in an evaluation wins, and the caller drains it.
+//! * [`Instr::FaultScan`] is the same latch for faults the oracle meets only
+//!   where it evaluates them (an `ifelse` arm, a filtered term): it finds the
+//!   first cell, in the oracle's visiting order, at which a candidate faults
+//!   AND every condition that leads to it holds, and latches that fault — or
+//!   nothing ([`FaultScanSpec::first`]).
 //!
 //! Array operands within one instruction share one box (shape + 1-based
 //! origin), checked at lowering time — the same precondition `vec_combine`
@@ -346,6 +357,21 @@ pub(crate) enum Instr {
         table: u32,
         out: SlotId,
     },
+    /// `out[k] = src[s_0[k], …, s_{n-1}[k]]` with `s_d =
+    /// data_gathers[spec].subs[d]` (a scalar operand, or an array over
+    /// `out`'s box): each subscript rounded ([`subscript_of`]) and resolved
+    /// by the spec's kind exactly as `index_into` resolves it — the zero ghost
+    /// for a state or observed source, the declared boundary policy for a
+    /// const array, and where that is `error`, `NaN` and the
+    /// `E_TREEWALK_CONSTARRAY_OOB` of the first such element in the oracle's
+    /// visiting order ([`FaultOrder`]). `faults` says the spec can fault: the
+    /// instruction then latches, so it runs on the calling thread.
+    DataGather {
+        src: SrcRef,
+        spec: u32,
+        out: SlotId,
+        faults: bool,
+    },
     /// A compressed-row reduction over the 1-D term list `src`:
     ///
     /// ```text
@@ -385,6 +411,10 @@ pub(crate) enum Instr {
     /// oracle substitutes there (`NaN`) is carried by the ordinary
     /// instructions around it.
     Fault { fault: u32 },
+    /// Latch the first fault of `fault_scans[spec]` the per-cell oracle would
+    /// have met, if any ([`FaultScanSpec::first`]). Defines no slot; reads the
+    /// candidates' conditions.
+    FaultScan { spec: u32 },
     /// A causal self-reference sweep (esm-spec §4.3.1.1) over
     /// `sweeps[spec]`: the next `body_len` instructions are the recurrence's
     /// cell body, lowered once over the sweep position, and they run once per
@@ -474,12 +504,14 @@ impl Instr {
             | Instr::PolyArea { out, .. }
             | Instr::IndexGather { out, .. }
             | Instr::TableGather { out, .. }
+            | Instr::DataGather { out, .. }
             | Instr::SegReduce { out, .. }
             | Instr::Reshape { out, .. }
             | Instr::ScalarRead { out, .. } => Some(*out),
             Instr::JmpIfZero { .. }
             | Instr::Sweep { .. }
             | Instr::Fault { .. }
+            | Instr::FaultScan { .. }
             | Instr::Export { .. }
             | Instr::DyWrite { .. }
             | Instr::Fused { .. }
@@ -513,6 +545,9 @@ impl Instr {
                 }
                 if let Some(r) = &fs.reduce {
                     f(r.out);
+                }
+                if let Some(p) = &fs.pre {
+                    f(p.out);
                 }
             }
             other => {
@@ -606,6 +641,14 @@ impl Instr {
                     op(src);
                 }
             }
+            Instr::DataGather { src, spec, .. } => {
+                if let SrcRef::Slot(s) = src {
+                    op(&Operand::Slot(*s));
+                }
+                for s in &t.data_gathers[*spec as usize].subs {
+                    op(s);
+                }
+            }
             Instr::ScalarRead { src, spec, .. } => {
                 if let SrcRef::Slot(s) = src {
                     op(&Operand::Slot(*s));
@@ -623,6 +666,20 @@ impl Instr {
             Instr::JmpIfZero { cond, .. } => op(cond),
             Instr::Sweep { spec } => op(&t.sweeps[*spec as usize].result),
             Instr::Fault { .. } => {}
+            Instr::FaultScan { spec } => {
+                for c in &t.fault_scans[*spec as usize].cands {
+                    for pc in &c.path {
+                        op(&pc.op);
+                    }
+                    if let FaultWhat::ConstOob { dims, .. } = &c.what {
+                        for od in dims {
+                            if let OobSub::Data { op: o, .. } = &od.sub {
+                                op(o);
+                            }
+                        }
+                    }
+                }
+            }
             Instr::Export { slot, .. } => f(*slot),
             Instr::DyWrite { write } => f(t.dy_writes[*write as usize].slot),
             Instr::Fused { spec } => {
@@ -634,6 +691,13 @@ impl Instr {
                 }
                 for sc in &fs.scalars {
                     op(sc);
+                }
+                if let Some(PreReduce {
+                    src: SrcRef::Slot(s),
+                    ..
+                }) = &fs.pre
+                {
+                    op(&Operand::Slot(*s));
                 }
             }
         }
@@ -662,9 +726,11 @@ impl Instr {
             Instr::PolyArea { .. } => "PolyArea",
             Instr::IndexGather { .. } => "IndexGather",
             Instr::TableGather { .. } => "TableGather",
+            Instr::DataGather { .. } => "DataGather",
             Instr::SegReduce { .. } => "SegReduce",
             Instr::Reshape { .. } => "Reshape",
             Instr::Fault { .. } => "Fault",
+            Instr::FaultScan { .. } => "FaultScan",
             Instr::Sweep { .. } => "Sweep",
             Instr::ScalarRead { .. } => "ScalarRead",
             Instr::JmpIfZero { .. } => "JmpIfZero",
@@ -791,6 +857,15 @@ pub(crate) enum MicroOp {
         carry: u32,
         out: GroupIx,
     },
+    /// A folded [`Instr::IndexGather`] whose subscript the group computes:
+    /// `out = src[...]` at the data position `a` names, through input
+    /// `src`'s [`FoldedIndex`] (whose `by` is [`FoldedIndex::IN_GROUP`]) —
+    /// the same element the pre-loaded form reads for the same subscript.
+    Load {
+        a: MRef,
+        src: GroupIx,
+        out: GroupIx,
+    },
 }
 
 /// One array input of a fused group.
@@ -817,17 +892,53 @@ pub(crate) struct FusedInput {
     /// input is then read as the run's one element). A folded data-subscript
     /// gather is always pre-loaded.
     pub load_reg: GroupIx,
-    /// `Some((by, n))`: a folded [`Instr::IndexGather`] of a rank-1 source
-    /// of extent `n`. The element at output offset `k` is
-    /// `src[data_subscript(inputs[by][k], n)]`, the zero ghost when that is
-    /// `None`; `inputs[by]` is the subscript array, an aligned input.
-    pub index: Option<(GroupIx, usize)>,
+    /// `Some`: a folded [`Instr::IndexGather`] (see [`FoldedIndex`]);
+    /// `inputs[by]` is the subscript array, an aligned input.
+    pub index: Option<FoldedIndex>,
     /// `Some`: a folded [`Instr::Gather`] whose shifts would split the box
     /// into too many runs to fold as a shifted read (a shift along the
     /// innermost axis), read through its plan into this input's chunk
     /// register one chunk at a time (see [`ChunkGather`]). An aligned input
     /// otherwise.
     pub gather: Option<Box<ChunkGather>>,
+}
+
+/// A folded [`Instr::IndexGather`]: the element at output offset `k` is
+/// `src[p * s_data + base + s_inner * (k % period)]` with `p =
+/// data_subscript(inputs[by][k], n)`, the zero ghost when that is `None`.
+/// A rank-1 source is `s_data = 1, base = 0, s_inner = 0`; a source with a
+/// fixed axis or one read along the box's innermost axis adds them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FoldedIndex {
+    pub by: GroupIx,
+    /// The source's extent along its data axis.
+    pub n: usize,
+    /// The source's row-major stride along its data axis.
+    pub s_data: usize,
+    pub base: usize,
+    pub s_inner: usize,
+    /// The box's innermost extent (1 when `s_inner` is 0).
+    pub period: usize,
+    /// The source's element count.
+    pub src_len: usize,
+}
+
+impl FoldedIndex {
+    /// The `by` of a gather whose subscript is a register of the group,
+    /// read by a [`MicroOp::Load`] rather than pre-loaded.
+    pub(crate) const IN_GROUP: GroupIx = GroupIx::MAX;
+
+    /// Whether the executor pre-loads this gather from an aligned subscript
+    /// input (otherwise a [`MicroOp::Load`] reads it).
+    pub(crate) fn preloaded(&self) -> bool {
+        self.by != Self::IN_GROUP
+    }
+
+    /// The source offset at output offset `k` for data position `p`.
+    #[inline]
+    pub(crate) fn at(&self, p: usize, k: usize) -> usize {
+        p * self.s_data + self.base + self.s_inner * (k % self.period)
+    }
 }
 
 /// A same-rank gather plan with no fixed, broadcast or permuted axes, read
@@ -1217,10 +1328,34 @@ pub(crate) struct FusedSpec {
     /// the accumulator chunk by chunk, folding every position into a chunk
     /// before the next — the same per-output fold order.
     pub interleave: Option<Vec<FusedRun>>,
+    /// An [`Instr::Reduce`] of the leading axes of a source over this
+    /// group's box, whose result the group reads: run by the group itself,
+    /// a range of inner positions (whole columns) at a time, each range
+    /// folded and then consumed while its columns are in cache (see
+    /// [`PreReduce`]).
+    pub pre: Option<PreReduce>,
     /// Diagnostics: original instructions replaced (members incl. deleted
     /// folded gathers).
     pub n_fused_instrs: u32,
     pub n_folded_gathers: u32,
+}
+
+/// The [`Instr::Reduce`] a [`FusedSpec`] runs ahead of its own micro-ops,
+/// inner positions `[a, b)` at a time: `out[c] = init`, then `out[c] =
+/// op(out[c], src[r * n_inner + c])` for every leading position `r`
+/// ascending — the instruction's own fold, cell for cell — and then the
+/// group's elements at those inner positions, which read `out` there. The
+/// box the group runs over is the source's (`rows` leading positions of
+/// `n_inner` each), so a range's elements are exactly the ones that read the
+/// range's cells.
+#[derive(Clone, Debug)]
+pub(crate) struct PreReduce {
+    pub op: BinCode,
+    pub init: f64,
+    pub src: SrcRef,
+    pub rows: usize,
+    pub n_inner: usize,
+    pub out: SlotId,
 }
 
 /// A [`MicroOp::Scan`] along the group box's last axis (`post == 1`) whose
@@ -1459,6 +1594,278 @@ impl SweepSpec {
     }
 }
 
+/// The order key of one fault: where the per-cell oracle meets it, compared
+/// lexicographically (the lowering's `FaultKey`).
+pub(crate) type FaultOrderKey = SmallVec<[i64; 12]>;
+
+/// The constant part of one [`Instr::FaultScan`]: every fault of one rule
+/// whose firing depends on which cells the oracle evaluates, plus the rule's
+/// unconditional fault if it has one.
+#[derive(Clone, Debug)]
+pub(crate) struct FaultScanSpec {
+    /// The rule the candidates belong to (the latch's order is per rule).
+    pub rule: u32,
+    pub cands: Vec<FaultCand>,
+}
+
+/// One candidate fault of a [`FaultScanSpec`].
+#[derive(Clone, Debug)]
+pub(crate) struct FaultCand {
+    /// The key ahead of the cell part: the enclosing evaluations' positions.
+    pub prefix: FaultOrderKey,
+    /// The box the faulting read is evaluated over, in LOGICAL coordinates
+    /// (the program's axis reversal does not apply): empty `shape` with
+    /// `cells == false` is a single evaluation.
+    pub cells: bool,
+    pub shape: DimU,
+    pub lo: DimI,
+    /// The box's axes in the oracle's visiting order, slowest first.
+    pub visit: SmallVec<[u8; 4]>,
+    /// The bound contraction tuple of the box, after the cell in the key.
+    pub cvals: SmallVec<[i64; 4]>,
+    /// The fault's position among the rule's faults at one cell.
+    pub seq: i64,
+    /// What leads the oracle to the read, outermost first.
+    pub path: Vec<PathCond>,
+    pub what: FaultWhat,
+}
+
+/// One condition on a [`FaultCand`]'s path: `op` must be nonzero (`want`)
+/// or zero (`!want`) — the oracle's `c != 0.0` arm test, and
+/// `filter_excludes` for a filter.
+#[derive(Clone, Debug)]
+pub(crate) struct PathCond {
+    pub op: Operand,
+    pub want: bool,
+    /// `op` is a slot over exactly the candidate's box, read at each cell;
+    /// otherwise a scalar.
+    pub array: bool,
+}
+
+/// Which cells of a [`FaultCand`]'s box fault, and with what message.
+#[derive(Clone, Debug)]
+pub(crate) enum FaultWhat {
+    /// Every cell, with `faults[msg]`.
+    Every(u32),
+    /// An out-of-range const-array gather (`E_TREEWALK_CONSTARRAY_OOB`):
+    /// `index_into`'s first source dim out of range with no policy.
+    ConstOob {
+        name: String,
+        /// Per source dim, in dim order.
+        dims: Vec<OobDim>,
+    },
+}
+
+/// One source dim of a [`FaultWhat::ConstOob`] gather.
+#[derive(Clone, Debug)]
+pub(crate) struct OobDim {
+    /// The dim's extent.
+    pub n: i64,
+    /// Whether an out-of-range subscript faults (no boundary policy).
+    pub error: bool,
+    pub sub: OobSub,
+}
+
+/// The 1-based subscript of an [`OobDim`] at a cell.
+#[derive(Clone, Debug)]
+pub(crate) enum OobSub {
+    /// The same at every cell.
+    Fixed(i64),
+    /// Read along box axis `axis`: `raw[p]` at position `p`.
+    Axis { axis: u8, raw: Vec<i64> },
+    /// Computed at run time ([`Instr::DataGather`]): `op` read at the cell
+    /// (`array`: a slot over the candidate's box) or as a scalar, then
+    /// rounded as `eval_index_args` rounds it.
+    Data { op: Operand, array: bool },
+}
+
+impl OobDim {
+    fn raw_at(
+        &self,
+        shape: &[usize],
+        cell: &[usize],
+        read: &mut impl FnMut(&Operand, Option<(&[usize], &[usize])>) -> f64,
+    ) -> i64 {
+        match &self.sub {
+            OobSub::Fixed(r) => *r,
+            OobSub::Axis { axis, raw } => raw[cell[*axis as usize]],
+            OobSub::Data { op, array } => subscript_of(read(op, array.then_some((shape, cell)))),
+        }
+    }
+
+    fn faults(&self, raw: i64) -> bool {
+        self.error && (raw < 1 || raw > self.n)
+    }
+}
+
+impl FaultCand {
+    /// The message the oracle latches at `cell` (0-based), or `None` where
+    /// the read is in range.
+    fn message_at(
+        &self,
+        cell: &[usize],
+        faults: &[String],
+        read: &mut impl FnMut(&Operand, Option<(&[usize], &[usize])>) -> f64,
+    ) -> Option<String> {
+        match &self.what {
+            FaultWhat::Every(m) => Some(faults[*m as usize].clone()),
+            FaultWhat::ConstOob { name, dims } => dims.iter().enumerate().find_map(|(d, od)| {
+                let raw = od.raw_at(&self.shape, cell, read);
+                od.faults(raw)
+                    .then(|| crate::simulate_array::eval::const_oob_message(name, raw, od.n, d))
+            }),
+        }
+    }
+
+    /// Per box axis, the positions at which some source dim read along it
+    /// faults; `None` when every cell faults.
+    fn faulting_positions(&self) -> Option<Vec<Vec<bool>>> {
+        let FaultWhat::ConstOob { dims, .. } = &self.what else {
+            return None;
+        };
+        let mut at: Vec<Vec<bool>> = self.shape.iter().map(|&n| vec![false; n]).collect();
+        for od in dims {
+            match &od.sub {
+                OobSub::Fixed(r) if od.faults(*r) => return None,
+                OobSub::Fixed(_) => {}
+                OobSub::Axis { axis, raw } => {
+                    for (p, &r) in raw.iter().enumerate() {
+                        if od.faults(r) {
+                            at[*axis as usize][p] = true;
+                        }
+                    }
+                }
+                // Known only at run time: any cell may fault.
+                OobSub::Data { .. } if od.error => return None,
+                OobSub::Data { .. } => {}
+            }
+        }
+        Some(at)
+    }
+
+    /// The key of the fault at `cell`.
+    fn key(&self, cell: Option<&[usize]>) -> FaultOrderKey {
+        let mut key = self.prefix.clone();
+        if let Some(cell) = cell {
+            for &a in &self.visit {
+                key.push(self.lo[a as usize] + cell[a as usize] as i64);
+            }
+        }
+        key.extend(self.cvals.iter().copied());
+        key.push(self.seq);
+        key
+    }
+
+    /// The first fault of this candidate the oracle meets: the first cell in
+    /// visiting order that faults and that every condition on `path` admits.
+    /// `cond(op, at)` reads a condition operand: with `at = (shape, cell)`,
+    /// the element at the 0-based logical `cell` of a slot over the logical
+    /// box `shape` (see [`slab_flat`]); otherwise the scalar.
+    fn first(
+        &self,
+        faults: &[String],
+        cond: &mut impl FnMut(&Operand, Option<(&[usize], &[usize])>) -> f64,
+    ) -> Option<(FaultOrderKey, String)> {
+        // Scalars first, outermost first: an inner condition may sit in a
+        // branch an outer scalar one skipped, and is read only past it.
+        for pc in self.path.iter().filter(|pc| !pc.array) {
+            if (cond(&pc.op, None) != 0.0) != pc.want {
+                return None;
+            }
+        }
+        if !self.cells {
+            let msg = self.message_at(&[], faults, cond)?;
+            return Some((self.key(None), msg));
+        }
+        if self.shape.contains(&0) {
+            return None;
+        }
+        let pos = self.faulting_positions();
+        let rank = self.shape.len();
+        let mut cell: SmallVec<[usize; 4]> = SmallVec::from_elem(0, rank);
+        // Depth-first over the visiting order. Below a level whose position
+        // faults on its own, every cell is a candidate; otherwise the last
+        // level visits only its faulting positions.
+        let mut found = None;
+        self.walk(0, false, &pos, &mut cell, &mut |c| {
+            if !self
+                .path
+                .iter()
+                .filter(|pc| pc.array)
+                .all(|pc| (cond(&pc.op, Some((&self.shape, c))) != 0.0) == pc.want)
+            {
+                return false;
+            }
+            match self.message_at(c, faults, cond) {
+                Some(m) => {
+                    found = Some((self.key(Some(c)), m));
+                    true
+                }
+                None => false,
+            }
+        });
+        found
+    }
+
+    /// Visit the cells below `level` in visiting order until `f` accepts one.
+    fn walk(
+        &self,
+        level: usize,
+        hit: bool,
+        pos: &Option<Vec<Vec<bool>>>,
+        cell: &mut SmallVec<[usize; 4]>,
+        f: &mut impl FnMut(&[usize]) -> bool,
+    ) -> bool {
+        if level == self.visit.len() {
+            return f(cell);
+        }
+        let a = self.visit[level] as usize;
+        let last = level + 1 == self.visit.len();
+        for p in 0..self.shape[a] {
+            let here = match pos {
+                None => true,
+                Some(at) => hit || at[a][p],
+            };
+            if last && !here {
+                continue;
+            }
+            cell[a] = p;
+            if self.walk(level + 1, here, pos, cell, f) {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+/// The slab offset of the 0-based LOGICAL `cell` of an array slot over the
+/// logical box `shape`: row-major, or — in a program stored axis-reversed
+/// ([`TapeProgram::col_major`]) — column-major.
+pub(crate) fn slab_flat(shape: &[usize], cell: &[usize], col_major: bool) -> usize {
+    if col_major {
+        (0..shape.len())
+            .rev()
+            .fold(0, |o, d| o * shape[d] + cell[d])
+    } else {
+        (0..shape.len()).fold(0, |o, d| o * shape[d] + cell[d])
+    }
+}
+
+impl FaultScanSpec {
+    /// The fault the per-cell oracle latches first among the candidates, if
+    /// any fires. The single definition every executor calls.
+    pub(crate) fn first(
+        &self,
+        faults: &[String],
+        mut cond: impl FnMut(&Operand, Option<(&[usize], &[usize])>) -> f64,
+    ) -> Option<(FaultOrderKey, String)> {
+        self.cands
+            .iter()
+            .filter_map(|c| c.first(faults, &mut cond))
+            .min_by(|a, b| a.0.cmp(&b.0))
+    }
+}
+
 /// How an [`Instr::ScalarRead`] resolves its subscripts.
 #[derive(Clone, Debug)]
 pub(crate) enum ScalarReadKind {
@@ -1577,7 +1984,27 @@ impl ScalarReadSpec {
 /// `f.round() as i64` (NaN reads as 0, and an out-of-range value saturates).
 #[inline]
 pub(crate) fn subscript_of(v: f64) -> i64 {
-    v.round() as i64
+    // `f64::round` is a libm call on the baseline target; below 2^52 the
+    // same value comes from the truncating conversion and the exact
+    // remainder `v - trunc(v)`, half away from zero as `round` rounds. NaN,
+    // infinities and larger magnitudes take `round` itself.
+    let i = v as i64;
+    if i as f64 == v {
+        // Already a whole number (the usual subscript): exact.
+        return i;
+    }
+    if v.abs() < 4.0e15 {
+        let f = v - i as f64;
+        if f >= 0.5 {
+            i + 1
+        } else if f <= -0.5 {
+            i - 1
+        } else {
+            i
+        }
+    } else {
+        v.round() as i64
+    }
 }
 
 /// The program tables an instruction's slot reads and definitions are found
@@ -1588,7 +2015,9 @@ pub(crate) struct SlotTables<'a> {
     pub assemblies: &'a [AssembleSpec],
     pub sweeps: &'a [SweepSpec],
     pub scalar_reads: &'a [ScalarReadSpec],
+    pub data_gathers: &'a [DataGatherSpec],
     pub lanes: &'a [LaneSpec],
+    pub fault_scans: &'a [FaultScanSpec],
 }
 
 /// One forcing-buffer entry the program reads ([`Instr::LoadForcing`]).
@@ -1734,6 +2163,11 @@ pub(crate) enum RingSel {
     /// `axis` (a partial `index(table, i)` whose subscript is `i + k`). Every
     /// position the box reaches is inside the table, checked at lowering.
     Axis { axis: u8, off: i64 },
+    /// Position `RingRef::lists[list][p]` for the element at position `p`
+    /// along output axis `axis`: a ring subscript that is build-time data
+    /// over a tuple list (a loop symbol of a join-gated `faq`). Every
+    /// position is inside the table, checked at lowering.
+    List { axis: u8, list: u32 },
 }
 
 /// One ring operand of an [`Instr::PolyArea`]: the table's box and how each
@@ -1744,6 +2178,8 @@ pub(crate) struct RingRef {
     /// The expected table box (validation).
     pub src_shape: DimU,
     pub sel: SmallVec<[RingSel; 3]>,
+    /// The position lists [`RingSel::List`] selectors index.
+    pub lists: Vec<Vec<u32>>,
 }
 
 impl RingRef {
@@ -1751,7 +2187,7 @@ impl RingRef {
     pub(crate) fn axes(&self) -> SmallVec<[u8; 3]> {
         let mut v: SmallVec<[u8; 3]> = SmallVec::new();
         for s in &self.sel {
-            if let RingSel::Axis { axis, .. } = s
+            if let RingSel::Axis { axis, .. } | RingSel::List { axis, .. } = s
                 && !v.contains(axis)
             {
                 v.push(*axis);
@@ -1823,8 +2259,175 @@ impl IndexGatherSpec {
 /// values saturate), and a 1-based position outside `1..=n` is out of range.
 #[inline]
 pub(crate) fn data_subscript(v: f64, n: usize) -> Option<usize> {
-    let one_based = v.round() as i64;
-    (one_based >= 1 && one_based <= n as i64).then(|| (one_based - 1) as usize)
+    if n as u64 >= 1 << 52 {
+        let one_based = subscript_of(v);
+        return (one_based >= 1 && one_based <= n as i64).then(|| (one_based - 1) as usize);
+    }
+    // `round(v)` lies in `1..=n` exactly when `v` lies in `[0.5, n + 0.5)`
+    // (NaN in neither), and there `floor(v + 0.5)` is `round(v)`: the sum is
+    // exact, or rounds only between two values with the same floor. Two
+    // compares and a truncation instead of `subscript_of`'s saturating
+    // conversion.
+    if v >= 0.5 && v < n as f64 + 0.5 {
+        // SAFETY: `v + 0.5` lies in `[1, n + 1)`, which `i64` holds (the
+        // signed conversion is one instruction; the unsigned one is not).
+        Some(unsafe { (v + 0.5).to_int_unchecked::<i64>() } as usize - 1)
+    } else {
+        None
+    }
+}
+
+/// Where, in its rule's per-cell evaluation, an [`Instr::DataGather`]
+/// element's fault sits: the key the lowering gives a fault at that cell of
+/// the gather's box (`TapeBuilder::note_fault`'s `FaultKey`), so the latch
+/// can keep the one the oracle reaches first.
+#[derive(Clone, Debug)]
+pub(crate) struct FaultOrder {
+    /// The rule ordinal the gather belongs to.
+    pub rule: u32,
+    /// The enclosing boxes' part of the key.
+    pub head: SmallVec<[i64; 12]>,
+    /// The output axes in the oracle's visiting order, slowest first; empty
+    /// when the box is evaluated once rather than per cell.
+    pub axes: SmallVec<[u8; 4]>,
+    /// The output box's 1-based origin, per axis.
+    pub lo: DimI,
+    /// The bound contraction tuple, then the site's sequence number.
+    pub tail: SmallVec<[i64; 8]>,
+}
+
+impl FaultOrder {
+    /// The key of the fault at 0-based `cell` of the output box.
+    pub(crate) fn key(&self, cell: &[usize]) -> SmallVec<[i64; 12]> {
+        let mut k = self.head.clone();
+        for &a in &self.axes {
+            k.push(self.lo[a as usize] + cell[a as usize] as i64);
+        }
+        k.extend(self.tail.iter().copied());
+        k
+    }
+}
+
+/// The constant part of one [`Instr::DataGather`].
+#[derive(Clone, Debug)]
+pub(crate) struct DataGatherSpec {
+    /// One subscript per source axis: a scalar, or an array over `shape`.
+    pub subs: SmallVec<[Operand; 4]>,
+    /// [`ScalarReadKind::ZeroGhost`] or [`ScalarReadKind::ConstArray`].
+    pub kind: ScalarReadKind,
+    /// The expected source box (validation).
+    pub src_shape: DimU,
+    /// The output box (empty for a scalar slot).
+    pub shape: DimU,
+    /// Present exactly when the kind can fault.
+    pub order: Option<FaultOrder>,
+    /// The source axes are stored reversed ([`TapeProgram::col_major`]):
+    /// axis `d` here is logical axis `subs.len() - 1 - d`, which is the one
+    /// a fault names and the order the oracle checks them in.
+    pub reversed: bool,
+}
+
+/// What one element of an [`Instr::DataGather`] reads.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum DataAt {
+    /// The source element at this row-major offset.
+    Elem(usize),
+    /// The zero ghost.
+    Ghost,
+    /// The fail-closed fault on source axis `d` at 1-based subscript `raw`.
+    Fault { d: usize, raw: i64 },
+}
+
+impl DataGatherSpec {
+    /// Resolve one element's raw subscript values `v` (one per source axis,
+    /// unrounded) to what it reads: `eval_index_args` then `index_into` —
+    /// of the axes that fault, the first in LOGICAL order is the one
+    /// reported (`index_into` stops there), and an out-of-range axis of a
+    /// zero-ghost source makes the element the ghost.
+    #[inline]
+    pub(crate) fn at(&self, v: impl Fn(usize) -> f64) -> DataAt {
+        use crate::value_invention::BoundaryKind;
+        let mut flat = 0usize;
+        let mut ghost = false;
+        let mut fault: Option<(usize, i64)> = None;
+        let m = self.src_shape.len();
+        for (d, &n) in self.src_shape.iter().enumerate() {
+            let r = subscript_of(v(d));
+            let n_i = n as i64;
+            let i = if r >= 1 && r <= n_i {
+                (r - 1) as usize
+            } else {
+                match &self.kind {
+                    ScalarReadKind::ConstArray { policy, .. } => match policy[d] {
+                        BoundaryKind::Periodic if n_i >= 1 => (r - 1).rem_euclid(n_i) as usize,
+                        BoundaryKind::Clamp if n_i >= 1 => (r.clamp(1, n_i) - 1) as usize,
+                        _ => {
+                            let logical = if self.reversed { m - 1 - d } else { d };
+                            if fault.is_none_or(|(l, _)| logical < l) {
+                                fault = Some((logical, r));
+                            }
+                            0
+                        }
+                    },
+                    _ => {
+                        ghost = true;
+                        0
+                    }
+                }
+            };
+            flat = flat * n + i;
+        }
+        match fault {
+            Some((d, raw)) => DataAt::Fault { d, raw },
+            None if ghost => DataAt::Ghost,
+            None => DataAt::Elem(flat),
+        }
+    }
+
+    /// The message of a fault [`Self::at`] reports on LOGICAL axis `d`.
+    pub(crate) fn fault_message(&self, d: usize, raw: i64) -> String {
+        let name = match &self.kind {
+            ScalarReadKind::ConstArray { name, .. } => name.as_str(),
+            _ => unreachable!("only a const-array gather faults"),
+        };
+        let m = self.src_shape.len();
+        let stored = if self.reversed { m - 1 - d } else { d };
+        let n = self.src_shape[stored] as i64;
+        crate::simulate_array::eval::const_oob_message(name, raw, n, d)
+    }
+
+    /// The fault the oracle latches first among the elements of a gather
+    /// that faulted, with its key: every element is resolved again (this
+    /// runs only after a fault) and the smallest key wins. `v(d, k)` is
+    /// subscript `d`'s raw value at row-major element `k`.
+    pub(crate) fn first_fault(
+        &self,
+        v: impl Fn(usize, usize) -> f64,
+    ) -> Option<(SmallVec<[i64; 12]>, String)> {
+        let order = self.order.as_ref()?;
+        let nd = self.shape.len();
+        let n: usize = self.shape.iter().product();
+        let mut cell: DimU = DimU::from_elem(0, nd);
+        let mut best: Option<(SmallVec<[i64; 12]>, usize, i64)> = None;
+        for k in 0..n {
+            if let DataAt::Fault { d, raw } = self.at(|d| v(d, k)) {
+                let key = order.key(&cell);
+                if best.as_ref().is_none_or(|(b, _, _)| key < *b) {
+                    best = Some((key, d, raw));
+                }
+            }
+            let mut a = nd;
+            while a > 0 {
+                a -= 1;
+                cell[a] += 1;
+                if cell[a] < self.shape[a] {
+                    break;
+                }
+                cell[a] = 0;
+            }
+        }
+        best.map(|(key, d, raw)| (key, self.fault_message(d, raw)))
+    }
 }
 
 /// One makearray region: placement of a region write within its bounding box.
@@ -2081,6 +2684,14 @@ pub(crate) struct TapeProgram {
     /// Fail-closed fault messages (`Instr::Fault` indexes here), each the
     /// text the per-cell oracle latches at the same point.
     pub faults: Vec<String>,
+    /// Parallel to `faults`: the rule each one belongs to and its position
+    /// in that rule's evaluation order (see
+    /// [`crate::simulate_array::eval::latch_ordered_fault`]).
+    pub fault_order: Vec<(u32, SmallVec<[i64; 12]>)>,
+    /// Computed-subscript gathers (`Instr::DataGather` indexes here).
+    pub data_gathers: Vec<DataGatherSpec>,
+    /// Conditional fault scans (`Instr::FaultScan` indexes here).
+    pub fault_scans: Vec<FaultScanSpec>,
     /// Recurrence sweeps (`Instr::Sweep` indexes here).
     pub sweeps: Vec<SweepSpec>,
     /// Run-time-subscript reads (`Instr::ScalarRead` indexes here).
@@ -2126,7 +2737,9 @@ impl TapeProgram {
             assemblies: &self.assemblies,
             sweeps: &self.sweeps,
             scalar_reads: &self.scalar_reads,
+            data_gathers: &self.data_gathers,
             lanes: &self.lanes,
+            fault_scans: &self.fault_scans,
         }
     }
 

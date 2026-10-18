@@ -263,11 +263,17 @@ const _STATE_SLOT_TABLES = Dict{String,Tuple{Vector{Int},Vector{Int}}}()
 # the array-cell loop) is byte-identical to the un-memoized function, and a
 # recursion that forgets to forward the memo merely stops memoizing that subtree —
 # it never changes a result.
+#
+# `deferrals` counts the guarded out-of-range const reads the resolve deferred to
+# run time (resolve.jl). Such a result depends on the guards the node was
+# resolved under, not on the node alone, so it is not memoized when any guard
+# was in force (`_resolve_indices`).
 struct _BuildMemo
     resolve::IdDict{OpExpr,ASTExpr}
     compile::IdDict{OpExpr,_Node}
+    deferrals::Base.RefValue{Int}
 end
-_BuildMemo() = _BuildMemo(IdDict{OpExpr,ASTExpr}(), IdDict{OpExpr,_Node}())
+_BuildMemo() = _BuildMemo(IdDict{OpExpr,ASTExpr}(), IdDict{OpExpr,_Node}(), Ref(0))
 const _MaybeMemo = Union{Nothing,_BuildMemo}
 
 function _mknode(; kind::UInt8, op::Symbol=Symbol(""),

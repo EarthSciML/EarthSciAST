@@ -1,0 +1,115 @@
+{
+  "fixture": "mod_floor_unflatten_static",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "values",
+      "assertion_idx": 1,
+      "variable": "y_obs",
+      "actual": 1.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 2,
+      "variable": "y_obs",
+      "actual": 4.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 3,
+      "variable": "y_obs",
+      "actual": 2.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 4,
+      "variable": "y_obs",
+      "actual": 5.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 5,
+      "variable": "y_obs",
+      "actual": 3.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 6,
+      "variable": "y_obs",
+      "actual": 6.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 7,
+      "variable": "y_param",
+      "actual": 1.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 8,
+      "variable": "y_param",
+      "actual": 4.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 9,
+      "variable": "y_param",
+      "actual": 2.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 10,
+      "variable": "y_param",
+      "actual": 5.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 11,
+      "variable": "y_param",
+      "actual": 3.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 12,
+      "variable": "y_param",
+      "actual": 6.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 13,
+      "variable": "y_const",
+      "actual": 10.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 14,
+      "variable": "y_const",
+      "actual": 40.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 15,
+      "variable": "y_const",
+      "actual": 20.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 16,
+      "variable": "y_const",
+      "actual": 50.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 17,
+      "variable": "y_const",
+      "actual": 30.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 18,
+      "variable": "y_const",
+      "actual": 60.0
+    }
+  ]
+}

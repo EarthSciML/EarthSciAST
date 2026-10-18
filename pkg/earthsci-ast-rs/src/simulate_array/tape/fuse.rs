@@ -511,12 +511,14 @@ impl GBuilder {
     /// array operand of the group's box defined outside it, as a pre-loaded
     /// input. `false` (group untouched) when the subscript cannot be an
     /// aligned input.
+    #[allow(clippy::too_many_arguments)]
     fn add_folded_index_gather(
         &mut self,
         ix: u32,
         src: SrcRef,
         idx: &Operand,
-        n: usize,
+        fold: FoldedIndex,
+        src_shape: &super::super::DimU,
         out: SlotId,
         prog: &TapeProgram,
     ) -> bool {
@@ -524,6 +526,36 @@ impl GBuilder {
             Operand::Slot(_) | Operand::State(_) => self.resolve(idx, prog),
             _ => None,
         };
+        // A subscript the group computes itself: read through a `Load`
+        // micro-op at its place in the program.
+        if let Some(ResOp::Existing(MRef::Reg(r))) = resolved {
+            let input_ix = self.inputs.len() as GroupIx;
+            self.inputs.push(FusedInput {
+                src,
+                shifted_ix: None,
+                src_shape: src_shape.clone(),
+                elem_stride: 1,
+                load_reg: GroupIx::MAX,
+                index: Some(FoldedIndex {
+                    by: FoldedIndex::IN_GROUP,
+                    ..fold
+                }),
+                gather: None,
+            });
+            let ssa = self.micro.len() as GroupIx;
+            self.micro.push(MicroOp::Load {
+                a: MRef::Reg(r),
+                src: input_ix,
+                out: ssa,
+            });
+            // An ordinary register from here on: stored like any other
+            // value of the group when something outside reads it.
+            self.val_of.insert(out, MRef::Reg(ssa));
+            self.defs.push((out, ssa));
+            self.members.insert(ix);
+            self.member_instrs.push(ix);
+            return true;
+        }
         let by = match resolved {
             Some(r @ ResOp::NewAligned(..)) => match self.commit(r) {
                 MRef::In(i) => i,
@@ -541,10 +573,10 @@ impl GBuilder {
         self.inputs.push(FusedInput {
             src,
             shifted_ix: None,
-            src_shape: SmallVec::from_elem(n, 1),
+            src_shape: src_shape.clone(),
             elem_stride: 1,
             load_reg: GroupIx::MAX,
-            index: Some((by, n)),
+            index: Some(FoldedIndex { by, ..fold }),
             gather: None,
         });
         self.val_of.insert(out, MRef::In(input_ix));
@@ -1281,6 +1313,7 @@ fn for_each_operand(op: &MicroOp, mut f: impl FnMut(&MRef)) {
         MicroOp::Un { a, .. }
         | MicroOp::Neg { a, .. }
         | MicroOp::Mov { a, .. }
+        | MicroOp::Load { a, .. }
         | MicroOp::Scan { a, .. } => f(a),
         MicroOp::Select { cond, a, b, .. } => {
             f(cond);
@@ -1467,6 +1500,7 @@ fn for_each_operand_mut(op: &mut MicroOp, mut f: impl FnMut(&mut MRef)) {
         MicroOp::Un { a, .. }
         | MicroOp::Neg { a, .. }
         | MicroOp::Mov { a, .. }
+        | MicroOp::Load { a, .. }
         | MicroOp::Scan { a, .. } => f(a),
         MicroOp::Select { cond, a, b, .. } => {
             f(cond);
@@ -1497,6 +1531,7 @@ fn set_micro_out(op: &mut MicroOp, r: GroupIx) {
         | MicroOp::Select { out, .. }
         | MicroOp::Bin2 { out, .. }
         | MicroOp::Bin3 { out, .. }
+        | MicroOp::Load { out, .. }
         | MicroOp::Scan { out, .. } => *out = r,
     }
 }
@@ -1511,6 +1546,7 @@ pub(super) fn micro_out(op: &MicroOp) -> GroupIx {
         | MicroOp::Select { out, .. }
         | MicroOp::Bin2 { out, .. }
         | MicroOp::Bin3 { out, .. }
+        | MicroOp::Load { out, .. }
         | MicroOp::Scan { out, .. } => *out,
     }
 }
@@ -1560,6 +1596,7 @@ fn mop_label(op: &MicroOp) -> String {
         MicroOp::Neg { .. } => "Neg".to_string(),
         MicroOp::Select { .. } => "Select".to_string(),
         MicroOp::Mov { .. } => "Mov".to_string(),
+        MicroOp::Load { .. } => "Load".to_string(),
         MicroOp::Scan { op, .. } => format!("Scan({op:?})"),
         MicroOp::Bin2 { op1, op2, swap, .. } => {
             format!("Bin2({op1:?},{op2:?}{})", if *swap { ",swap" } else { "" })
@@ -1594,6 +1631,7 @@ fn merge_superops(micro: &mut Vec<MicroOp>, outputs: &mut [(GroupIx, SlotId)], c
             MicroOp::Un { a, .. }
             | MicroOp::Neg { a, .. }
             | MicroOp::Mov { a, .. }
+            | MicroOp::Load { a, .. }
             | MicroOp::Scan { a, .. } => count(a, &mut uses),
             MicroOp::Select { cond, a, b, .. } => {
                 count(cond, &mut uses);
@@ -1736,6 +1774,7 @@ fn merge_superops(micro: &mut Vec<MicroOp>, outputs: &mut [(GroupIx, SlotId)], c
             MicroOp::Un { a, out, .. }
             | MicroOp::Neg { a, out }
             | MicroOp::Mov { a, out }
+            | MicroOp::Load { a, out, .. }
             | MicroOp::Scan { a, out, .. } => {
                 *a = remap(a, &new_of);
                 *out = new_id;
@@ -1845,6 +1884,7 @@ pub(super) fn allocate_registers(
             MicroOp::Un { a, out, .. }
             | MicroOp::Neg { a, out }
             | MicroOp::Mov { a, out }
+            | MicroOp::Load { a, out, .. }
             | MicroOp::Scan { a, out, .. } => {
                 remap(a);
                 *out = phys_of[*out as usize];
@@ -1942,6 +1982,240 @@ pub(super) fn fuse_program(prog: &mut TapeProgram, cfg: SuperopCfg) {
     prog.n_segment = section_counts[1] as u32;
     prog.fused = sink.fused;
     prog.fuse_stats = sink.stats;
+    absorb_pre_reductions(prog);
+}
+
+/// Hand a leading-axes [`Instr::Reduce`] to the fused group right after it
+/// when that group runs over the reduction's source box and reads its
+/// result ([`PreReduce`]): the group then folds a range of columns and
+/// consumes them while they are in cache, instead of one pass over the
+/// source to reduce and another to consume. Each cell still folds its terms
+/// in the instruction's order, and every element of the group is computed by
+/// the same micro-ops, so the program's values do not change.
+///
+/// Only outside conditional regions and recurrence bodies (whose skip
+/// counts are positional), within one section, and with no per-instruction
+/// precision.
+fn absorb_pre_reductions(prog: &mut TapeProgram) {
+    if !prog.precision.is_empty() {
+        return;
+    }
+    let n = prog.instrs.len();
+    let mut guarded = vec![false; n];
+    for i in 0..n {
+        let len = match &prog.instrs[i] {
+            Instr::JmpIfZero {
+                n_true, n_false, ..
+            } => (*n_true + *n_false) as usize,
+            Instr::Sweep { spec } => prog.sweeps[*spec as usize].body_len as usize,
+            _ => 0,
+        };
+        for g in guarded.iter_mut().skip(i + 1).take(len) {
+            *g = true;
+        }
+    }
+    let mut absorbed: Vec<(usize, u32, PreReduce)> = Vec::new();
+    for i in 0..n.saturating_sub(1) {
+        if guarded[i] || guarded[i + 1] || prog.section_of(i) != prog.section_of(i + 1) {
+            continue;
+        }
+        let Instr::Reduce {
+            op,
+            init,
+            src,
+            axes,
+            src_shape,
+            out,
+        } = &prog.instrs[i]
+        else {
+            continue;
+        };
+        let Instr::Fused { spec } = &prog.instrs[i + 1] else {
+            continue;
+        };
+        let k = axes.len();
+        if k == 0 || k >= src_shape.len() || !axes.iter().enumerate().all(|(j, &a)| a as usize == j)
+        {
+            continue;
+        }
+        let fs = &prog.fused[*spec as usize];
+        if fs.reduce.is_some()
+            || fs.pre.is_some()
+            || !fs.scan_fuse.is_empty()
+            || fs.micro.iter().any(|m| matches!(m, MicroOp::Scan { .. }))
+            || fs.shape[..] != src_shape[..]
+            || !fs
+                .inputs
+                .iter()
+                .any(|inp| matches!(inp.src, SrcRef::Slot(s) if s == *out))
+        {
+            continue;
+        }
+        let rows: usize = src_shape[..k].iter().product();
+        let n_inner: usize = src_shape[k..].iter().product();
+        if prog.slots[*out as usize].scalar
+            || prog.slots[*out as usize].elems() != n_inner
+            || !reads_own_columns(fs, *out, k, n_inner)
+        {
+            continue;
+        }
+        absorbed.push((
+            i,
+            *spec,
+            PreReduce {
+                op: *op,
+                init: *init,
+                src: *src,
+                rows,
+                n_inner,
+                out: *out,
+            },
+        ));
+    }
+    if absorbed.is_empty() {
+        return;
+    }
+    let mut drop = vec![false; n];
+    for (i, spec, pre) in absorbed {
+        drop[i] = true;
+        prog.fused[spec as usize].pre = Some(pre);
+    }
+    let (nc, ns) = (prog.n_const as usize, prog.n_segment as usize);
+    prog.n_const -= drop[..nc].iter().filter(|&&d| d).count() as u32;
+    prog.n_segment -= drop[nc..nc + ns].iter().filter(|&&d| d).count() as u32;
+    let mut k = 0usize;
+    prog.instrs.retain(|_| {
+        k += 1;
+        !drop[k - 1]
+    });
+    let mut k = 0usize;
+    prog.provenance.retain(|_| {
+        k += 1;
+        !drop[k - 1]
+    });
+    prog.fuse_stats.instrs_after = prog.instrs.len();
+}
+
+/// Whether every element of group `fs` that reads slot `out` (`n_inner`
+/// elements, the columns of the group's box past its `lead` leading axes)
+/// reads it at its own column, `out[flat % n_inner]`, or reads the zero
+/// ghost. An absorbed reduction is folded and consumed one range of columns
+/// at a time, so a read of any other column (a shifted read, a gather
+/// through a data subscript) would see a cell another range has not folded
+/// yet.
+fn reads_own_columns(fs: &FusedSpec, out: SlotId, lead: usize, n_inner: usize) -> bool {
+    fs.inputs
+        .iter()
+        .filter(|inp| matches!(inp.src, SrcRef::Slot(s) if s == out))
+        .all(|inp| {
+            if inp.index.is_some() {
+                return false;
+            }
+            if let Some(g) = &inp.gather {
+                return chunk_gather_own_columns(g, lead);
+            }
+            match inp.shifted_ix {
+                // Aligned: `out` has the box's element count, one column per
+                // element.
+                None => true,
+                Some(ix) => own_column_runs(
+                    &fs.schedule.nodes,
+                    ix as usize,
+                    inp.elem_stride,
+                    n_inner as i64,
+                    0,
+                    0,
+                ),
+            }
+        })
+}
+
+/// [`reads_own_columns`] for a [`ChunkGather`], axis by axis: each of the
+/// `lead` leading axes adds nothing to the source offset (the read is
+/// broadcast along it), and each later axis maps every position it copies
+/// to the same position at the box's own row-major stride, so the offset is
+/// the element's column.
+fn chunk_gather_own_columns(g: &ChunkGather, lead: usize) -> bool {
+    let mut stride = 1i64;
+    for a in (0..g.shape.len()).rev() {
+        let ok = if a < lead {
+            g.strides[a] == 0 || g.segs[a].iter().all(|&(_, len, so)| len == 1 && so == 0)
+        } else {
+            g.strides[a] == stride && g.segs[a].iter().all(|&(o, _, so)| so == o)
+        };
+        if !ok {
+            return false;
+        }
+        stride *= g.shape[a] as i64;
+    }
+    true
+}
+
+/// [`reads_own_columns`] for shifted input `ix` over schedule `nodes`, every
+/// run moved by `(out_d, in_d)` (see [`RunSchedule::for_each_run`]) without
+/// expanding the repetitions: a run reads its own columns when its source
+/// offset is its output offset's column and it stays within the columns,
+/// one source element per element. A repetition that moves the output by
+/// whole rows and the source not at all repeats the same columns, so its
+/// body is checked once; one that moves both by the same step keeps every
+/// run's source-minus-output difference, and its runs' columns move
+/// linearly, so its first and last repetitions bound the rest.
+fn own_column_runs(
+    nodes: &[RunNode],
+    ix: usize,
+    stride: i64,
+    n: i64,
+    out_d: i64,
+    in_d: i64,
+) -> bool {
+    let mut i = 0usize;
+    while i < nodes.len() {
+        match &nodes[i] {
+            RunNode::Run(r) => {
+                let src = r.in_off[ix];
+                if src != GHOST_OFF {
+                    let col = (r.out_off as i64 + out_d).rem_euclid(n);
+                    let len = r.len as i64;
+                    if src + in_d != col || (len > 1 && (stride != 1 || col + len > n)) {
+                        return false;
+                    }
+                }
+                i += 1;
+            }
+            RunNode::Repeat {
+                count,
+                body,
+                out_step,
+                in_step,
+            } => {
+                let body_nodes = &nodes[i + 1..i + 1 + *body as usize];
+                let s = in_step[ix];
+                let at = |k: i64| {
+                    own_column_runs(
+                        body_nodes,
+                        ix,
+                        stride,
+                        n,
+                        out_d + k * out_step,
+                        in_d + k * s,
+                    )
+                };
+                let last = *count as i64 - 1;
+                let ok = if s == 0 && out_step % n == 0 {
+                    at(0)
+                } else if s == *out_step {
+                    at(0) && at(last)
+                } else {
+                    false
+                };
+                if !ok {
+                    return false;
+                }
+                i += 1 + *body as usize;
+            }
+        }
+    }
+    true
 }
 
 /// The rewritten program under construction.
@@ -2198,7 +2472,7 @@ fn flush_one(g: GBuilder, fx: &mut FuseCtx) {
     // scalar instead, except under the all-pointer Bin3 superop, which
     // needs every operand in a register.
     for inp in inputs.iter_mut() {
-        if inp.index.is_some()
+        if inp.index.is_some_and(|fi| fi.preloaded())
             || inp.gather.as_deref().is_some_and(|g| !g.whole)
             || inp.shifted_ix.is_some()
                 && inp.elem_stride != 1
@@ -2238,6 +2512,7 @@ fn flush_one(g: GBuilder, fx: &mut FuseCtx) {
         schedule,
         reduce,
         interleave,
+        pre: None,
         n_fused_instrs: n_members as u32,
         n_folded_gathers: (folded.len() + folded_index.len()) as u32,
     });
@@ -2406,7 +2681,21 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
             // through its plan inside its box's group, chunk by chunk or (for
             // short rows) the whole box at once. Absorbed either way, so the
             // program does not depend on the box's extents.
-            if out_desc.shape == plan_ref.shape && foldable_plan(plan_ref) {
+            // A broadcast (an output axis the source lacks) reads that axis
+            // with source stride 0, the other axes in order.
+            let chunk_strides = if foldable_plan(plan_ref) {
+                Some(rm_strides(&plan_ref.src_shape))
+            } else if plan_ref.fixed_desc.is_empty() {
+                match broadcast_fold(plan_ref) {
+                    Some(ShiftedGeom::Segs { strides, .. }) => Some(strides),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            if out_desc.shape == plan_ref.shape
+                && let Some(strides) = chunk_strides
+            {
                 flush_hazards(ins, None, &mut open, fx);
                 let shape = out_desc.shape.clone();
                 let gi = find_or_open(&mut open, shape, prog.provenance[i], prec_at(prog, i), fx);
@@ -2418,7 +2707,7 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
                 }
                 let g = ChunkGather {
                     segs,
-                    strides: rm_strides(&plan_ref.src_shape),
+                    strides,
                     shape: plan_ref.shape.clone(),
                     whole: plan_ref
                         .shape
@@ -2436,7 +2725,8 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
             continue;
         }
 
-        // A rank-1 data-subscript gather: a pre-loaded input of its box's
+        // A data-subscript gather whose other source axes are fixed or read
+        // along the box's innermost axis: a pre-loaded input of its box's
         // group, when its subscript is an array defined outside that group.
         if let Instr::IndexGather {
             src,
@@ -2447,12 +2737,26 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
         {
             let spec_ref = &prog.index_gathers[*spec as usize];
             let out_desc = &prog.slots[*out as usize];
-            if spec_ref.axes[..] == [GatherAxis::Data] && !out_desc.shape.is_empty() {
-                flush_hazards(ins, None, &mut open, fx);
+            if let Some(fold) = folded_index_of(spec_ref)
+                && !out_desc.shape.is_empty()
+            {
                 let shape = out_desc.shape.clone();
-                let gi = find_or_open(&mut open, shape, prog.provenance[i], prec_at(prog, i), fx);
-                let n = spec_ref.src_shape[0];
-                if open[gi].add_folded_index_gather(i as u32, *src, idx, n, *out, prog) {
+                let prec = prec_at(prog, i);
+                // The group over the box may keep computing while it supplies
+                // the subscript — but not when it also computes the source,
+                // which the gather reads at positions other than its own.
+                let src_in_box_group = matches!(src, SrcRef::Slot(s)
+                    if open.iter().any(|g| g.shape == shape && g.prec == prec && g.defines(*s)));
+                if src_in_box_group {
+                    flush_hazards(ins, None, &mut open, fx);
+                } else {
+                    flush_hazards(ins, Some((&shape, prec)), &mut open, fx);
+                }
+                let gi = find_or_open(&mut open, shape, prog.provenance[i], prec, fx);
+                let src_shape = spec_ref.src_shape.clone();
+                if open[gi]
+                    .add_folded_index_gather(i as u32, *src, idx, fold, &src_shape, *out, prog)
+                {
                     i += 1;
                     continue;
                 }
@@ -2537,6 +2841,47 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
     for g in open.drain(..) {
         flush_one(g, fx);
     }
+}
+
+/// The [`FoldedIndex`] of an [`Instr::IndexGather`] (its `by` still unset),
+/// when every source axis but the data axis is fixed or read along the
+/// output box's innermost axis; `None` otherwise.
+fn folded_index_of(spec: &IndexGatherSpec) -> Option<FoldedIndex> {
+    let m = spec.src_shape.len();
+    let nd = spec.shape.len();
+    let mut strides = vec![1usize; m];
+    for d in (0..m.saturating_sub(1)).rev() {
+        strides[d] = strides[d + 1] * spec.src_shape[d + 1];
+    }
+    let mut fold = FoldedIndex {
+        by: 0,
+        n: 0,
+        s_data: 1,
+        base: 0,
+        s_inner: 0,
+        period: 1,
+        src_len: spec.src_shape.iter().product(),
+    };
+    let mut inner_seen = false;
+    for (d, ax) in spec.axes.iter().enumerate() {
+        match *ax {
+            GatherAxis::Data => {
+                fold.n = spec.src_shape[d];
+                fold.s_data = strides[d];
+            }
+            GatherAxis::Fixed(i) => fold.base += strides[d] * i,
+            GatherAxis::Affine { axis, off } => {
+                if nd == 0 || axis as usize != nd - 1 || inner_seen || off < 0 {
+                    return None;
+                }
+                inner_seen = true;
+                fold.base += strides[d] * off as usize;
+                fold.s_inner = strides[d];
+                fold.period = spec.shape[nd - 1].max(1);
+            }
+        }
+    }
+    Some(fold)
 }
 
 #[cfg(test)]

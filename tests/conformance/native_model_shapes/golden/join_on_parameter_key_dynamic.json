@@ -1,0 +1,79 @@
+{
+  "fixture": "join_on_parameter_key_dynamic",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "default_year",
+      "assertion_idx": 1,
+      "variable": "total",
+      "actual": 2.0
+    },
+    {
+      "test_id": "default_year",
+      "assertion_idx": 2,
+      "variable": "total",
+      "actual": 1.0
+    },
+    {
+      "test_id": "default_year",
+      "assertion_idx": 3,
+      "variable": "wsum",
+      "actual": 10.0
+    },
+    {
+      "test_id": "default_year",
+      "assertion_idx": 4,
+      "variable": "wsum",
+      "actual": 4.0
+    },
+    {
+      "test_id": "default_year",
+      "assertion_idx": 5,
+      "variable": "acc",
+      "actual": 9.999999999999998
+    },
+    {
+      "test_id": "default_year",
+      "assertion_idx": 6,
+      "variable": "acc",
+      "actual": 3.999999999999999
+    },
+    {
+      "test_id": "overridden_year",
+      "assertion_idx": 1,
+      "variable": "total",
+      "actual": 1.0
+    },
+    {
+      "test_id": "overridden_year",
+      "assertion_idx": 2,
+      "variable": "total",
+      "actual": 2.0
+    },
+    {
+      "test_id": "overridden_year",
+      "assertion_idx": 3,
+      "variable": "wsum",
+      "actual": 1.0
+    },
+    {
+      "test_id": "overridden_year",
+      "assertion_idx": 4,
+      "variable": "wsum",
+      "actual": 10.0
+    },
+    {
+      "test_id": "overridden_year",
+      "assertion_idx": 5,
+      "variable": "acc",
+      "actual": 0.9999999999999998
+    },
+    {
+      "test_id": "overridden_year",
+      "assertion_idx": 6,
+      "variable": "acc",
+      "actual": 9.999999999999998
+    }
+  ]
+}

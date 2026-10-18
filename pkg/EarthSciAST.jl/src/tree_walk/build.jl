@@ -505,17 +505,50 @@ function _collect_materialized_array_obs(model::Model, equations::Vector{Equatio
     # inlined. The gather TARGET itself is exempt: `index(obs, i…)` naming a
     # materialized observed is exactly the buffer read.
     if !isempty(out)
+        dynamic = _state_time_observeds(defs, Set{String}(ode_states(model)), out)
         hits = Set{String}()
         seen = _ObsSeen()
         for eq in equations
             _array_obs_structural_refs!(eq.lhs, out, hits, seen)
             _array_obs_structural_refs!(eq.rhs, out, hits, seen)
         end
+        # A state- or time-dependent observed read in a subscript is a
+        # run-time gather either way, so only its other structural uses keep
+        # it inlined.
+        if !isempty(dynamic)
+            setdiff!(hits, dynamic)
+            seen = _ObsSeen()
+            for eq in equations
+                _array_obs_structural_refs!(eq.lhs, dynamic, hits, seen;
+                                            runtime_subscripts=true)
+                _array_obs_structural_refs!(eq.rhs, dynamic, hits, seen;
+                                            runtime_subscripts=true)
+            end
+        end
         # esm 1.0.0: an observed's definition is an equation, so the loop above
         # has already seen every one of them.
         setdiff!(out, hits)
     end
     return out
+end
+
+# The names in `cands` whose definition reads a continuous state or `t`,
+# directly or through the other observeds in `defs`.
+function _state_time_observeds(defs::AbstractDict, state_names::Set{String},
+                               cands::Set{String})
+    memo = Dict{String,Bool}()
+    function dyn(n::String, stack::Set{String})
+        haskey(memo, n) && return memo[n]
+        (haskey(defs, n) && !(n in stack)) || return false
+        push!(stack, n)
+        d = defs[n]
+        st, tm = _def_state_time_refs(d, state_names)
+        r = st || tm || any(m -> m != n && dyn(m, stack), _referenced_var_names(d))
+        delete!(stack, n)
+        memo[n] = r
+        return r
+    end
+    return Set{String}(n for n in cands if dyn(n, Set{String}()))
 end
 
 # STRUCTURAL-POSITION scan for ARRAY observeds — `_obs_structural_refs!`
@@ -526,7 +559,7 @@ end
 # is skipped while every SUBSCRIPT (and a computed target) still flags.
 # Shares the (node, mode) visited-set discipline of `_obs_structural_refs!`.
 function _array_obs_structural_refs!(e::ASTExpr, names::Set{String}, hits::Set{String},
-                                     seen)
+                                     seen; runtime_subscripts::Bool=false)
     e isa OpExpr || return nothing
     bits = get(seen, e, 0x00)
     bits == 0x00 || return nothing   # spine-visited, or mark-all (its superset)
@@ -538,12 +571,20 @@ function _array_obs_structural_refs!(e::ASTExpr, names::Set{String}, hits::Set{S
         # or an inline array PRODUCER whose region/aggregate body is an ordinary
         # EXPRESSION position (`_resolve_index_of_{makearray,faq}` resolves
         # the selected value through `_resolve_indices`), so recurse into it
-        # rather than flagging its whole subtree.
+        # rather than flagging its whole subtree. With `runtime_subscripts`,
+        # a subscript is scanned like any expression: the caller passes only
+        # observeds that read the state or `t`, whose value no build knows, so
+        # a subscript reading them is a run-time gather (`_subscript_is_runtime`)
+        # whether they are inlined or read from their buffer.
         for k in 2:length(e.args)
-            _obs_mark_refs!(e.args[k], names, hits, seen)
+            runtime_subscripts ?
+                _array_obs_structural_refs!(e.args[k], names, hits, seen;
+                                            runtime_subscripts=true) :
+                _obs_mark_refs!(e.args[k], names, hits, seen)
         end
         isempty(e.args) ||
-            _array_obs_structural_refs!(e.args[1], names, hits, seen)
+            _array_obs_structural_refs!(e.args[1], names, hits, seen;
+                                        runtime_subscripts=runtime_subscripts)
         return nothing
     end
     if e.ranges !== nothing
@@ -563,15 +604,19 @@ function _array_obs_structural_refs!(e::ASTExpr, names::Set{String}, hits::Set{S
         end
     end
     for a in e.args
-        _array_obs_structural_refs!(a, names, hits, seen)
+        _array_obs_structural_refs!(a, names, hits, seen;
+                                    runtime_subscripts=runtime_subscripts)
     end
     e.expr_body === nothing ||
-        _array_obs_structural_refs!(e.expr_body::ASTExpr, names, hits, seen)
+        _array_obs_structural_refs!(e.expr_body::ASTExpr, names, hits, seen;
+                                    runtime_subscripts=runtime_subscripts)
     e.filter === nothing ||
-        _array_obs_structural_refs!(e.filter::ASTExpr, names, hits, seen)
+        _array_obs_structural_refs!(e.filter::ASTExpr, names, hits, seen;
+                                    runtime_subscripts=runtime_subscripts)
     if e.values !== nothing
         for v in e.values
-            _array_obs_structural_refs!(v, names, hits, seen)
+            _array_obs_structural_refs!(v, names, hits, seen;
+                                        runtime_subscripts=runtime_subscripts)
         end
     end
     return nothing
@@ -3486,12 +3531,19 @@ function _build_partition_and_materialize(model::Model, cls;
         haskey(join_key_arrays, n) || (join_key_arrays[n] = a)
     end
     join_obs_defs = observed_definitions(model)
-    equations = _resolve_join_gates(ode_equations, index_sets, vi_maps,
-                                    join_key_arrays, join_var_shapes, join_obs_defs)
+    # A key column computed from scalar parameters folds their values into the
+    # match set, so each one it reads is recorded as read at build
+    # (`:structural`: a `remake` that changes it is refused).
+    equations, init_equations = _with_param_reads(param_reads) do
+        _with_join_params(param_scope) do
+            (_resolve_join_gates(ode_equations, index_sets, vi_maps,
+                                 join_key_arrays, join_var_shapes, join_obs_defs),
+             _resolve_join_gates(model.initialization_equations,
+                                 index_sets, vi_maps, join_key_arrays,
+                                 join_var_shapes, join_obs_defs))
+        end
+    end
     _translate_equation_sites!(template_sites, ode_equations, equations)
-    init_equations = _resolve_join_gates(model.initialization_equations,
-                                         index_sets, vi_maps, join_key_arrays,
-                                         join_var_shapes, join_obs_defs)
 
     # ---- Resolve index-set references in ranges (RFC §5.2) ----
     # Rewrite any `ranges[*]` `{from: <name>}` reference against the document's
@@ -3771,7 +3823,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
             end
         end
         for (k, e) in published
-            inspect.observed_exprs[String(k)] = e
+            _is_hoisted_name(String(k)) || (inspect.observed_exprs[String(k)] = e)
         end
         # ALSO publish the UN-inlined per-observed definitions, so a build-time
         # field evaluation can materialize each producer once in dependency order
@@ -3779,7 +3831,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
         # BuildInspection docstring). `observed_exprs` above is left exactly as
         # it was, so callers that do not know about this field are unaffected.
         for (k, e) in raw_obs
-            inspect.observed_defs[String(k)] = e
+            _is_hoisted_name(String(k)) || (inspect.observed_defs[String(k)] = e)
         end
         # Keyed by the PRODUCER id (`"emis_src_cells_faq" => 9`), exactly as the
         # build holds it. A consumer resolving a `kind:"derived"` axis follows the
@@ -4555,6 +4607,11 @@ function _build_evaluator_impl_inner(model::Model;
             _template_sites = translated
         end
     end
+    # ---- Nested reductions lifted to internal observeds (hoist.jl) ----
+    # Only where array observeds are factored: the interpreter inlines them, so
+    # it builds the authored body.
+    _array_obs_inline_forced() ||
+        ((model, index_sets, _) = _hoist_nested_reductions(model, index_sets))
     _has_value_invention = !isempty(_vi_vars)
     # ---- Caller-key canonicalization (esm-spec §6.6) ----
     # A spec-spelled LOCAL override key (`pert_amp`) is rewritten onto the
@@ -6361,7 +6418,7 @@ Parameter NAME → what KIND of parameter it is in the build that produced `x`
 | class | where its value is consumed | overridable at solve time? |
 |---|---|---|
 | `:numeric` | the runtime `p` vector | **yes** — swap `p` (`remake`), differentiable |
-| `:structural` | BUILD time (setup geometry, value-invention extents, binning coordinates, `ic()` folds) | no — rebuild the problem |
+| `:structural` | BUILD time (setup geometry, value-invention extents, binning coordinates, join key columns, `ic()` folds) | no — rebuild the problem |
 | `:const_folded` | frozen into the build's const arrays and inlined into the RHS | no — rebuild with new data |
 | `:forcing` | a live buffer a discrete provider rewrites in place | no — write the buffer |
 

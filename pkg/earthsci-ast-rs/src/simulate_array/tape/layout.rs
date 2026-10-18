@@ -107,11 +107,13 @@ fn reversible(prog: &TapeProgram) -> bool {
         | Instr::LoadElem { .. }
         | Instr::TableGather { .. }
         | Instr::IndexGather { .. }
+        | Instr::DataGather { .. }
         | Instr::Scan { .. }
         | Instr::Ramp { .. }
         | Instr::ConstArray { .. }
         | Instr::LoadForcing { .. }
         | Instr::Fault { .. }
+        | Instr::FaultScan { .. }
         | Instr::JmpIfZero { .. }
         | Instr::Export { .. } => true,
         Instr::Reduce { axes, .. } => axes.len() <= 1,
@@ -225,6 +227,20 @@ fn reverse(prog: &mut TapeProgram) {
             .collect();
         g.src_shape = rev(&g.src_shape);
         g.shape = rev(&g.shape);
+    }
+    for g in &mut prog.data_gathers {
+        let n_out = g.shape.len() as u8;
+        g.subs = rev(&g.subs);
+        if let ScalarReadKind::ConstArray { policy, .. } = &mut g.kind {
+            *policy = rev(policy);
+        }
+        g.src_shape = rev(&g.src_shape);
+        g.shape = rev(&g.shape);
+        g.reversed = !g.reversed;
+        if let Some(o) = &mut g.order {
+            o.axes = o.axes.iter().map(|&a| n_out - 1 - a).collect();
+            o.lo = rev(&o.lo);
+        }
     }
     for t in &mut prog.gather_tables {
         if !order_free(&t.src_shape) {

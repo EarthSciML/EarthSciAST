@@ -87,17 +87,25 @@ pub use compile::{
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use compile::check_free_variables;
 pub(crate) use compile::data_feed_source;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use compile::inline_parameter_arrays;
 pub(crate) use compile::{model_tree_any, parse_subsystem_model};
 // The build pipeline reads the authored model, as the single-model route does,
 // so it applies the same stand-ins for `flatten`'s rewrites.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use compile::{apply_flatten_rewrites, mount_subsystems, resolve_model_self_references};
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use eval::eval_observed_taped;
 #[cfg(test)]
 pub(crate) use eval::per_cell_cells;
 pub(crate) use eval::{
     ONE_CELL_NOTE, StopAtFirstCell, eval_observed_recurrence, eval_scalar_expression,
     per_cell_walk_refused, per_cell_walks,
 };
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use tape::StandaloneError;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use vectorized::take_overlay_decline;
 // Read only by `crate::expression`'s tests.
 pub(crate) use eval::GEOMETRY_CLIP_CODE;
 #[cfg(test)]

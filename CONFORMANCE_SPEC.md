@@ -889,6 +889,31 @@ are `clamp(M, 5) = 40`, `periodic(M, 5) = 10`, `periodic(M, 0) = 40`. (Bead
 `ess-gj4`; enables the covariant-FV connection-term metric gathers of the
 discretization RFC to run unmodified through the evaluator.)
 
+**A guarded read faults only where it is taken (normative).** The `error`
+policy applies to reads that are PERFORMED. For each output cell, a read inside
+an `ifelse` branch the condition does not select, or inside a `faq` term the
+node's `filter` excludes, is not performed: it MUST NOT raise
+`E_TREEWALK_CONSTARRAY_OOB`, and it contributes nothing (the unselected branch
+has no value; the excluded term is the semiring's `0̄`). A read in a selected
+branch or an admitted term that is out of range MUST raise the error, with the
+same code as an unguarded read, so a guard that admits even one out-of-range
+cell fails the run. This holds under every compiler: a compiled or vectorized
+tier that evaluates both branches or every term for speed MUST mask the fault
+per cell, never surface it for a cell that did not take the read, and never
+drop it for a cell that did. The motivating shape is a staggered-grid average
+whose boundary cells are switched off by the guard,
+`ifelse(i <= 1, 0, ifelse(i > N, 0, 0.5 (c[i] + c[i-1])))`.
+
+Cross-binding conformance: the `guarded_*` fixtures of
+`tests/conformance/const_array_gather_bounds/` (an `ifelse` branch and a `faq`
+filter, on an inline and a named const, each not taken and taken) and
+`tests/conformance/native_model_shapes/` `guarded_out_of_range_*` (the same
+guard over every cell, static and on the right-hand-side path). **Python is
+non-conforming here as of 2026-10-15**: both its compilers evaluate the
+untaken branch and fault. It is exempt from the not-taken fixtures (each
+records the reason in the manifest's `skip_bindings`) until it is brought in
+line; the taken cases already conform.
+
 #### 5.5.6 Spatial overlap join-gate and gated-select pushdown (normative)
 
 > Projection-pushdown Phase 2a/3a. Reference implementations: Julia
@@ -1388,7 +1413,8 @@ namespacing:
    categorical set) or its integer IDs (an interval), known at build time.
 2. otherwise a **data column**: a declared **1-D variable** whose single shape
    index set names one of that node's ranges. Its values are the key values,
-   read as data.
+   read as data. The variable may be supplied data or a computed observed, as
+   long as it is build-time constant (below).
 
 A binding **MUST** support both. Case 2 is not an exotic extension: a relational
 port — EPA MOVES/NONROAD is the motivating one — joins one table's
@@ -1568,6 +1594,56 @@ binding that memoises the match set MUST NOT serve a stale one; the reference
 keys its memo on the resolved gate's identity plus the lengths and a content
 fingerprint of the data columns.
 
+**What counts as build-time constant (normative).** A data column (case 2
+above) is build-time constant when it is any of:
+
+* an array supplied to the build: a column ingested from a `data_sources`
+  entry whose source carries no `temporal` block (§5.7.2's `CONST` refinement),
+  or a factor a caller provides;
+* a shaped parameter carrying inline data (esm-spec §6.3);
+* an unknown whose defining equation's right-hand side is an array `const`
+  node;
+* a **const-cadence computed observed**: an unknown whose defining equation
+  computes it — a `faq`, a `makearray` or any other expression — from nothing
+  but index symbols, index-set sizes, literals, inline `const` arrays, scalar
+  parameters (baked, below) and other columns this list admits. It reads no
+  state and not the independent variable.
+
+The last case is build-time data exactly as the first three are: its value is
+fixed once the document and its build-time inputs are, so it can be evaluated
+once, before the gate is built. A binding MUST accept it as a key column, on
+either side of a pair, and the gate drives enumeration over it exactly as over
+any other key column (above): a computed key is not a reason to fall back to
+the full product, which would turn an `O(|matches|)` node into an `O(∏ranges)`
+one. The motivating shape is a relational port's derived key, computed from an index
+(`want[k] = k + 7`) and joined against another table's column. Cross-binding
+conformance: the shared fixtures
+`tests/conformance/native_model_shapes/fixtures/join_on_computed_key_static.esm`
+and its `_dynamic` twin (computed keys against a computed and a parameter
+column), and
+`tests/conformance/native_model_shapes/ingest/join_ingested_column_computed_key.esm`
+(an ingested column against a computed key, which a binding evaluates on its
+build-time path).
+
+**A scalar parameter feeding a key column is BAKED (normative).** A key
+computed from a scalar parameter — a relational port's `runYearID` or
+`runCountyID` selecting the rows of one year or county — is build-time data like
+any other input above: the parameter's value at the build (its
+`parameter_overrides` entry or its `default`) is folded into the key column and
+so into the match set. The parameter is then a **baked parameter**, the same
+status a scalar parameter has when value invention reads it (a skolem bin
+width): a `remake` that changes it MUST be refused, naming the parameter and
+telling the caller to build a new Problem, rather than silently keeping the
+match set built from the old value. This holds identically under every compiler
+— the interpreter bakes the parameter exactly as `native` does, so the two
+agree on which `remake` calls succeed — and in every binding. A parameter that
+feeds no key column, value-invention input or other build-time product stays
+re-bindable as before.
+
+A column whose value depends on a state or on the independent variable is not
+build-time constant and cannot key a gate built once: the match set would go
+stale as soon as that value moved.
+
 **The lowered key comparison is EXACT, not the document's working precision
 (normative).** The paragraph above makes the `filter` the load-bearing part of
 the whole construct: it is what makes a non-driving clause exact, what makes
@@ -1598,9 +1674,11 @@ A binding that implements the same lowering MUST check the same thing, and a
 binding that evaluates the whole document in one precision only is conforming
 here exactly when that precision separates its key values.
 
-**Float keys stay forbidden.** A data column reaching a binding as floating-point
-storage is admissible **only** where every value is exactly integral, and is then
-an integer ID column. Anything else is a float key, whose equality is not portable
+**Float keys stay forbidden in declared data.** A DECLARED data column — data
+supplied to the build: an ingested column, a caller-provided factor, a shaped
+parameter carrying inline data, or a `const`-defined unknown — reaching a
+binding as floating-point storage is admissible **only** where every value is
+exactly integral, and is then an integer ID column. Anything else is a float key, whose equality is not portable
 across bindings (§5.5.1 rule 1): a binding MUST NOT treat it as a key. Rejecting
 the document with a named error is the recommended behaviour and is what the
 Python reference does. The Rust reference instead declines the GATE and lets the
@@ -1608,6 +1686,21 @@ lowered equality predicate compute float equality on the same values — the
 arithmetic the (already out-of-contract) document asked for, rather than a
 silently different answer. Either is conforming; a document that can tell them
 apart is outside the contract by construction.
+
+**A computed key column compares by exact numeric equality (normative).** The
+integral-only rule above is about DATA, whose float storage may be an
+accident of a file format. It does not apply to a const-cadence computed
+observed used as a key column (the fourth case of the build-time-constant list
+above): its values are what the document's own arithmetic produced, the same in
+every binding, so a binding MUST admit it as a key whatever its values and
+compare them by exact IEEE-754 binary64 equality — the `==` the lowered
+equality predicate computes. A value matches exactly the values equal to it:
+a non-integral value matches only an identical one, `+Inf` matches only `+Inf`
+(and `-Inf` only `-Inf`), `+0` and `-0` match each other, and `NaN` matches
+nothing. Such a value is neither an error nor a reason to decline the gate; the
+gate still drives over it. The motivating case is a relational port's
+`min` over a filtered set that admits no rows, which is `+Inf` (the `min`
+identity, §5.6.1) and must simply match no row of the other side.
 
 ### 5.6 Closed Semiring Registry (normative)
 
@@ -6764,6 +6857,7 @@ binding that got better is the one way a ratchet can run backwards.
 | `value_invention_geometry` | build-time value invention (a `distinct` producer over a ragged set, an `argmin` arg-witness buffer, a bin-skolem candidate set) and setup-time polygon geometry (`intersect_polygon`, `polygon_intersection_area` over unequal rings) feeding a right-hand side, every producer input a constant factor held in the document (esm-spec §4.2) |
 | `array_expression_forms` | esm-spec §4.3.5 `index` over a `reshape` / `transpose` / `concat` (an element of the operand at other subscripts), a positional §4.3.4 `broadcast` of anonymous operands, and a §6.3.1 arrayed definition of an observed whose shape was never declared |
 | `bool_and_or_reductions` | §5.6.1 scalar (rank-0) `bool_and_or` reductions: a crisp OR over the admitted terms, 0 when none is non-zero, under every compiler |
+| `native_model_shapes` | the shapes the downstream models need from `native`: computed and data-dependent subscripts, reversed / offset / clamped / mod-floor subscripts into const arrays, a rank-0 `faq` nested in an array `faq`, an `ifelse` with a scalar condition and branches of different shapes, an out-of-range const subscript no cell takes, an initial condition gathered from a const array, a `join` keyed on a computed observed (§5.5.8), an overlap-gated `faq`, and `polygon_intersection_area` in a `faq`; each as a state-free document and as one a right-hand side reads |
 
 Each tier's `README.md` is its contract and records what did NOT move into it.
 A tier is added by writing that README, a manifest with `"runner":

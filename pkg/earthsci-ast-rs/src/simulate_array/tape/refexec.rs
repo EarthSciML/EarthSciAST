@@ -406,6 +406,9 @@ pub(super) fn run_reference(
                             RingSel::Axis { axis, off } => {
                                 (pos[axis as usize] as i64 + off) as usize
                             }
+                            RingSel::List { axis, list } => {
+                                r.lists[list as usize][pos[axis as usize]] as usize
+                            }
                         };
                         view = view.index_axis_move(Axis(0), i);
                     }
@@ -535,9 +538,79 @@ pub(super) fn run_reference(
                 slots[*out as usize] = Some(RefVal::Arr(arr));
             }
             Instr::Fault { fault } => {
-                crate::simulate_array::eval::latch_gather_fault(
-                    prog.faults[*fault as usize].clone(),
-                );
+                let (rule, key) = &prog.fault_order[*fault as usize];
+                crate::simulate_array::eval::latch_ordered_fault(*rule, key, || {
+                    prog.faults[*fault as usize].clone()
+                });
+            }
+            Instr::DataGather { src, spec, out, .. } => {
+                let spec = &prog.data_gathers[*spec as usize];
+                let sv = resolve_src(prog, &slots, &state_arrays, src);
+                assert_eq!(sv.shape(), &spec.src_shape[..], "DataGather source box");
+                // Every subscript at the output box, row-major.
+                let subs: Vec<Vec<f64>> = spec
+                    .subs
+                    .iter()
+                    .map(|o| {
+                        let v = resolve(prog, &slots, &state_arrays, params, t, o);
+                        to_shape(&v, &spec.shape).iter().copied().collect()
+                    })
+                    .collect();
+                let flat: Vec<f64> = sv.iter().copied().collect();
+                let vals: Vec<f64> = (0..spec.shape.iter().product::<usize>())
+                    .map(|k| match spec.at(|d| subs[d][k]) {
+                        DataAt::Elem(p) => flat[p],
+                        DataAt::Ghost => 0.0,
+                        DataAt::Fault { .. } => f64::NAN,
+                    })
+                    .collect();
+                if let (Some((key, msg)), Some(order)) =
+                    (spec.first_fault(|d, k| subs[d][k]), &spec.order)
+                {
+                    crate::simulate_array::eval::latch_ordered_fault(order.rule, &key, || msg);
+                }
+                let val = if prog.slots[*out as usize].scalar {
+                    RefVal::Scalar(vals[0])
+                } else {
+                    RefVal::Arr(
+                        ArrayD::from_shape_vec(IxDyn(&spec.shape[..]), vals)
+                            .expect("DataGather output box"),
+                    )
+                };
+                slots[*out as usize] = Some(val);
+            }
+            Instr::FaultScan { spec } => {
+                let scan = &prog.fault_scans[*spec as usize];
+                let first = scan.first(&prog.faults, |op, at| match (op, at) {
+                    (Operand::Slot(s), Some((shape, cell))) => {
+                        let Some(RefVal::Arr(a)) = &slots[*s as usize] else {
+                            panic!("an array condition reads an array slot");
+                        };
+                        // The array's own walk is the slab order: `k` is
+                        // its row-major position, read in O(rank).
+                        let k = super::ir::slab_flat(shape, cell, prog.col_major);
+                        match a.as_slice() {
+                            Some(s) => s[k],
+                            None => {
+                                let mut idx = vec![0usize; a.ndim()];
+                                let mut rest = k;
+                                for (i, &n) in idx.iter_mut().zip(a.shape()).rev() {
+                                    *i = rest % n;
+                                    rest /= n;
+                                }
+                                assert_eq!(rest, 0, "the cell is in the box");
+                                a[IxDyn(&idx)]
+                            }
+                        }
+                    }
+                    _ => match resolve(prog, &slots, &state_arrays, params, t, op) {
+                        RefVal::Scalar(v) => v,
+                        RefVal::Arr(_) => panic!("a scalar condition reads a scalar"),
+                    },
+                });
+                if let Some((key, msg)) = first {
+                    crate::simulate_array::eval::latch_ordered_fault(scan.rule, &key, || msg);
+                }
             }
             Instr::Sweep { spec } => {
                 let sw = &prog.sweeps[*spec as usize];
@@ -625,6 +698,21 @@ pub(super) fn run_reference(
                 // operand access here stays bounds-checked slices, so an
                 // out-of-range run offset panics instead of reading UB.
                 let fs = &prog.fused[*spec as usize];
+                // A pre-reduction runs first, whole: the instruction it was,
+                // each cell folded over the leading positions in order.
+                if let Some(p) = &fs.pre {
+                    let src = resolve_src(prog, &slots, &state_arrays, &p.src);
+                    let flat: Vec<f64> = src.iter().copied().collect();
+                    let f = binary_kernel_of(p.op);
+                    let cells: Vec<f64> = (0..p.n_inner)
+                        .map(|c| (0..p.rows).fold(p.init, |acc, r| f(acc, flat[r * p.n_inner + c])))
+                        .collect();
+                    let desc = &prog.slots[p.out as usize];
+                    slots[p.out as usize] = Some(RefVal::Arr(
+                        ArrayD::from_shape_vec(IxDyn(&desc.shape[..]), cells)
+                            .expect("the pre-reduction's box"),
+                    ));
+                }
                 let svals: Vec<f64> = fs
                     .scalars
                     .iter()
@@ -688,9 +776,12 @@ pub(super) fn run_reference(
                                             }
                                         }
                                         None => match inp.index {
-                                            Some((by, n)) => {
-                                                match data_subscript(flats[by as usize][at], n) {
-                                                    Some(p) => flats[*i as usize][p],
+                                            Some(fi) => {
+                                                match data_subscript(
+                                                    flats[fi.by as usize][at],
+                                                    fi.n,
+                                                ) {
+                                                    Some(p) => flats[*i as usize][fi.at(p, at)],
                                                     None => 0.0,
                                                 }
                                             }
@@ -709,8 +800,17 @@ pub(super) fn run_reference(
                                 }
                             }
                         };
+                        let load = |src: GroupIx, v: f64| -> f64 {
+                            let fi = fs.inputs[src as usize]
+                                .index
+                                .expect("a Load reads a folded index gather");
+                            match data_subscript(v, fi.n) {
+                                Some(p) => flats[src as usize][fi.at(p, at)],
+                                None => 0.0,
+                            }
+                        };
                         for op in &fs.micro {
-                            eval_micro_op(op, &mut regs, at, &mut carries, get);
+                            eval_micro_op(op, &mut regs, at, &mut carries, get, load);
                         }
                         for (oi, &(reg, _)) in fs.outputs.iter().enumerate() {
                             outs[oi][at] = regs[reg as usize];
@@ -782,7 +882,9 @@ pub(super) fn run_reference(
                     };
                     for op in &ls.micro {
                         // A lane program holds no scan, so no carries.
-                        eval_micro_op(op, &mut regs, l, &mut [], get);
+                        eval_micro_op(op, &mut regs, l, &mut [], get, |_, _| {
+                            unreachable!("a lane program holds no load")
+                        });
                     }
                     for w in &ls.writes {
                         let v = get(&w.src, &regs);

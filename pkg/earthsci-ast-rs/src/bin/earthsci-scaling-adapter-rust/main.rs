@@ -143,6 +143,8 @@ struct CanonVar {
     name: String,
     extents: Vec<usize>,
     default: f64,
+    /// First axis fastest instead of last (README "The measured state").
+    column_major: bool,
 }
 
 /// The first model of the document: its variables and the model itself.
@@ -174,6 +176,7 @@ fn canonical_vars(family: &str, doc: &Value) -> Result<Vec<CanonVar>, String> {
                 name: k.clone(),
                 extents: ext.clone(),
                 default: v["default"].as_f64().unwrap_or(0.0),
+                column_major: false,
             })
             .collect());
     }
@@ -193,6 +196,9 @@ fn canonical_vars(family: &str, doc: &Value) -> Result<Vec<CanonVar>, String> {
             name: name.to_string(),
             extents,
             default: v["default"].as_f64().unwrap_or(0.0),
+            // The column families are ordered the way native lays them out,
+            // so their hand loops read the layout native reads.
+            column_major: matches!(family, "column_search" | "column_sum"),
         })
     };
     let names: Vec<&str> = match family {
@@ -201,7 +207,11 @@ fn canonical_vars(family: &str, doc: &Value) -> Result<Vec<CanonVar>, String> {
         | "stencil_3d"
         | "stencil_4d"
         | "prefix_scan"
-        | "unstructured_gather" => vec!["u"],
+        | "unstructured_gather"
+        | "gather_index"
+        | "column_search"
+        | "column_sum"
+        | "join_keyed" => vec!["u"],
         "transport_3d" => vec!["q"],
         "source_receptor" => vec!["c", "e"],
         "regrid" => vec!["F_src", "F_tgt"],
@@ -267,7 +277,15 @@ fn layout(names: &[String], vars: &[CanonVar]) -> Result<(Vec<usize>, Vec<f64>),
             if *i == 0 || i > e {
                 return Err(format!("state {n:?}: index outside {:?}", v.extents));
             }
-            flat = flat * e + (i - 1);
+        }
+        if v.column_major {
+            for (i, e) in idx.iter().zip(&v.extents).rev() {
+                flat = flat * e + (i - 1);
+            }
+        } else {
+            for (i, e) in idx.iter().zip(&v.extents) {
+                flat = flat * e + (i - 1);
+            }
         }
         let k = off + flat;
         if std::mem::replace(&mut seen[k], true) {
@@ -367,8 +385,73 @@ fn build_hand_loop(family: &str, doc: &Value, shape: &Value) -> Result<HandLoop,
         "scalar_chemistry" => HandLoop::ScalarChemistry {
             boxes: shape_of("boxes")?,
         },
+        // The class index the document computes, 1 + mod(7919 i - 1, 64),
+        // 0-based; the two tables are the document's own inline `const`s.
+        "gather_index" => {
+            let (_, model) = first_model(doc)?;
+            let consts = inline_consts(&model["equations"]);
+            let [rate, emis] = <[Vec<f64>; 2]>::try_from(consts)
+                .map_err(|_| "expected the rate and emis tables")?;
+            let m = rate.len() as u64;
+            HandLoop::GatherIndex {
+                cls: (1..=set_size("cells") as u64)
+                    .map(|i| ((7919 * i - 1) % m) as u32)
+                    .collect(),
+                rate,
+                emis,
+            }
+        }
+        "column_search" => HandLoop::ColumnSearch {
+            ncol: shape_of("ncol")?,
+            nlev: shape_of("nlev")?,
+        },
+        "column_sum" => HandLoop::ColumnSum {
+            ncol: shape_of("side")? * shape_of("side")?,
+            nlev: shape_of("nlev")?,
+        },
+        "join_keyed" => HandLoop::JoinKeyed {
+            agg: join_keyed_sums(set_size("cells"), set_size("rows"), shape_of("keys")?),
+        },
         other => return Err(format!("no hand loop for family {other:?}")),
     })
+}
+
+/// Every inline `const` array in `v`, in document order.
+fn inline_consts(v: &Value) -> Vec<Vec<f64>> {
+    let mut out = Vec::new();
+    match v {
+        Value::Object(o) => {
+            if o.get("op").and_then(Value::as_str) == Some("const")
+                && let Some(a) = o.get("value").and_then(Value::as_array)
+            {
+                out.push(a.iter().filter_map(Value::as_f64).collect());
+            }
+            for x in o.values() {
+                out.extend(inline_consts(x));
+            }
+        }
+        Value::Array(a) => a.iter().for_each(|x| out.extend(inline_consts(x))),
+        _ => {}
+    }
+    out
+}
+
+/// `agg[i]` of the join_keyed family, computed the way a person would: bucket
+/// the rows by key once, then sum each cell's bucket in row order (the order
+/// the document's reduction visits them). Keys: `ckey[i] = 1 + mod(i - 1, K)`,
+/// `rkey[r] = 1 + mod(7919 (r - 1), K)`; values `rval[r] = 1 + 0.5 sin(r)`.
+fn join_keyed_sums(cells: usize, rows: usize, keys: usize) -> Vec<f64> {
+    let mut bucket: Vec<Vec<usize>> = vec![Vec::new(); keys];
+    for r in 1..=rows {
+        bucket[(7919 * (r - 1)) % keys].push(r);
+    }
+    (1..=cells)
+        .map(|i| {
+            bucket[(i - 1) % keys]
+                .iter()
+                .fold(0.0, |acc, &r| acc + (1.0 + 0.5 * (r as f64).sin()))
+        })
+        .collect()
 }
 
 /// The regrid's weights from its strip geometry. Every polygon is an axis-

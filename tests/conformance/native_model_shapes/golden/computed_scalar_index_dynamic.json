@@ -1,0 +1,55 @@
+{
+  "fixture": "computed_scalar_index_dynamic",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "values",
+      "assertion_idx": 1,
+      "variable": "s_param",
+      "actual": 5.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 2,
+      "variable": "s_search",
+      "actual": 8.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 3,
+      "variable": "s_below",
+      "actual": 5.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 4,
+      "variable": "s_const",
+      "actual": 0.4
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 5,
+      "variable": "kpbl",
+      "actual": 3.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 6,
+      "variable": "s_state",
+      "actual": 3.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 7,
+      "variable": "s_state",
+      "actual": 8.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 8,
+      "variable": "acc",
+      "actual": 10.0
+    }
+  ]
+}

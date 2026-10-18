@@ -1427,6 +1427,7 @@ function _cg_scan_consumer_cell(ctx::_CGCtx, cons, oln::Symbol, xv::Symbol)
 end
 
 function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbol})
+    ctx.scanmode === nothing && (K = _cg_fuse_leading(K))
     sm = ctx.scanmode
     _cg_note_nest!(ctx, K)
     cellfn = (sm === nothing && _cg_split_supported() && !_cg_subcall_fn_disabled() &&
@@ -1606,6 +1607,25 @@ function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbo
     jlo = _cg_name(ctx, "jl")
     jhi = _cg_name(ctx, "jh")
     j0, j1, _ = axis(2)
+    # A row of a rank-2/3 box whose cell value is one affine reduction runs the
+    # reduction interchanged, as the rank-1 case above does (Float64 only).
+    rowinter = (cellfn === nothing && sm === nothing) ?
+        _cg_areduce_interchanged(ctx, K, kc, iv, oln, olnexpr, :($ilo:$ihi)) : nothing
+    rowloop = quote
+        for $iv in $ilo:$ihi
+            local $oln = $olnexpr
+            $(body...)
+            $(tv1...)
+        end
+    end
+    rowinter === nothing ||
+        (rowloop = quote
+            if _cgT === Float64 && eltype(du) === Float64
+                $rowinter
+            else
+                $rowloop
+            end
+        end)
     if nd == 2
         return quote
             $(hdr...)
@@ -1616,11 +1636,7 @@ function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbo
                 for $jv in $jlo:$jhi
                     local $ilo = $jv == $jlo ? $i0 + rem($av, $ni) : $i0
                     local $ihi = $jv == $jhi ? $i0 + rem($ohi, $ni) : $i1
-                    for $iv in $ilo:$ihi
-                        local $oln = $olnexpr
-                        $(body...)
-                        $(tv1...)
-                    end
+                    $rowloop
                     $(nv...)
                 end
             end
@@ -1648,17 +1664,102 @@ function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbo
                 for $jv in $jlo:$jhi
                     local $ilo = ($kv == $klo && $jv == $jlo) ? $i0 + rem($av, $ni) : $i0
                     local $ihi = ($kv == $khi && $jv == $jhi) ? $i0 + rem($ohi, $ni) : $i1
-                    for $iv in $ilo:$ihi
-                        local $oln = $olnexpr
-                        $(body...)
-                        $(tv1...)
-                    end
+                    $rowloop
                     $(nv...)
                 end
                 $(nv...)
             end
         end
     end
+end
+
+# ---- Leading-axis fusion -----------------------------------------------------
+# A box whose first axis spans whole rows of everything it addresses — the
+# output, and every box-addressed read — walks its first two axes as one: a row
+# of the fused box is `len1·len2` cells long where it was `len1`, which is the
+# difference between a vectorized loop and a loop of short rows (a column field
+# whose first axes are a small horizontal grid). Cell `(i, j, …)` becomes
+# `(i + (j - j0)·len1, …)`; each address and output slot is the same integer
+# sum it was, so every cell computes the same operations on the same operands.
+# Applies when every address is affine in the first two axes with the second
+# stride `len1` times the first — the output's (`strides`) and each
+# box-addressed descriptor's (`s1`, `s2`) — and nothing reads the loop indices
+# themselves (`_AK_LOOP_IDX` on those axes), a per-lane `fn` table, or a
+# template sub-kernel.
+function _cg_fuse_leading(K::_AccKernel)
+    cs = K.cells
+    (_is_outs(cs) || _is_contig(cs)) && return K
+    nd = length(cs.strides)
+    nd >= 2 || return K
+    isempty(K.subs) || return K
+    len1 = length(cs.ranges[1])
+    (len1 >= 1 && cs.strides[2] == len1 * cs.strides[1]) || return K
+    _cellset_slab(cs, 1) && return K
+    for a in K.acc
+        k = a.kind
+        if k === _AK_CONST_BOX || k === _AK_FORCING_BOX || k === _AK_STATE_TBL_BOX ||
+           k === _AK_ARR_TBL_BOX
+            a.s2 == len1 * a.s1 || return K
+        elseif k === _AK_LOOP_IDX
+            a.dim <= 2 && return K
+        end
+    end
+    ok = Ref(true)
+    function scan(n::_Node)
+        ok[] || return
+        n.kind === _NK_SUBCALL && (ok[] = false; return)
+        if n.kind === _NK_OP && n.op === :fn
+            pl = n.payload
+            (pl isa Tuple && length(pl) == 2 &&
+             (pl[2] isa _InterpLinearLaneSpec || pl[2] isa _InterpBilinearLaneSpec ||
+              pl[2] isa _InterpSearchsortedLaneSpec)) && (ok[] = false; return)
+        end
+        foreach(scan, n.children)
+    end
+    scan(K.spine)
+    foreach(scan, K.cse.recipes)
+    foreach(scan, K.cse.inv_recipes)
+    ok[] || return K
+    j0 = first(cs.ranges[2])
+    shift(s1, s2, s3, sx) = (s1, s3, isempty(sx) ? 0 : sx[1],
+                             length(sx) > 1 ? Vector{Int}(sx[2:end]) : _AK_NO_CONN)
+    acc = _AccDesc[]
+    for a in K.acc
+        k = a.kind
+        if k === _AK_CONST_BOX || k === _AK_FORCING_BOX || k === _AK_STATE_TBL_BOX ||
+           k === _AK_ARR_TBL_BOX
+            n1, n2, n3, nx = shift(a.s1, a.s2, a.s3, a.sx)
+            push!(acc, _AccDesc(a.kind, a.arr, a.conn, a.delta, a.idx, a.width, a.col,
+                                a.dim, n1, n2, n3, a.off + (j0 - 1) * a.s2, a.v, nx))
+        elseif k === _AK_LOOP_IDX
+            push!(acc, _AccDesc(a.kind, a.arr, a.conn, a.delta, a.idx, a.width, a.col,
+                                a.dim - 1, a.s1, a.s2, a.s3, a.off, a.v, a.sx))
+        else
+            push!(acc, a)
+        end
+    end
+    memo = IdDict{_Node,_Node}()
+    function remap(n::_Node)
+        get!(memo, n) do
+            ch = _Node[remap(c) for c in n.children]
+            pl = n.payload
+            if n.kind === _NK_AREDUCE
+                sp = pl::_AReduceSpec
+                pl = _AReduceSpec(Int[d - 1 for d in sp.dims], sp.ranges)
+            end
+            _Node(n.kind, n.op, n.literal, n.idx, n.sym, pl, ch)
+        end
+    end
+    spine = remap(K.spine)
+    cse = _AccCSE(_Node[remap(r) for r in K.cse.recipes], K.cse.scratch,
+                  _Node[remap(r) for r in K.cse.inv_recipes], K.cse.inv_scratch)
+    r1 = first(cs.ranges[1])
+    ranges = vcat(UnitRange{Int}[r1:(r1 + len1 * length(cs.ranges[2]) - 1)],
+                  cs.ranges[3:end])
+    strides = Int[cs.strides[1]; cs.strides[3:end]]
+    slab = length(cs.slab) >= 2 ? Bool[false; cs.slab[3:end]] : Bool[]
+    cells = _CellSet(strides, ranges, cs.base + j0 * cs.strides[2], Int[], slab)
+    return _cg_fuse_leading(_AccKernel(cells, spine, acc, K.bound, K.zerobar, cse, K.subs))
 end
 
 # ---- Row-fused box kernels ---------------------------------------------------
@@ -1847,8 +1948,13 @@ end
 # invariant) along the cell axis and strided along the innermost reduced axis
 # than the other way round. Returns the nest, or `nothing` when it does not
 # apply.
+_cg_areduce_interchanged(ctx::_CGCtx, K::_AccKernel, kc::_CGKernCtx,
+                         iv::Symbol, oln::Symbol, olnexpr, i0, av, bv) =
+    _cg_areduce_interchanged(ctx, K, kc, iv, oln, olnexpr, :(($i0 + $av):($i0 + $bv - 1)))
+# The same nest over one row `rng` of the leading cell axis, for a box of rank 2
+# or 3 whose rows the caller walks.
 function _cg_areduce_interchanged(ctx::_CGCtx, K::_AccKernel, kc::_CGKernCtx,
-                                  iv::Symbol, oln::Symbol, olnexpr, i0, av, bv)
+                                  iv::Symbol, oln::Symbol, olnexpr, rng)
     nd = K.spine
     nd.kind === _NK_AREDUCE || return nothing
     isempty(K.cse.recipes) || return nothing
@@ -1865,7 +1971,7 @@ function _cg_areduce_interchanged(ctx::_CGCtx, K::_AccKernel, kc::_CGKernCtx,
     cap = _codegen_fn_node_cap()
     cap > 0 && _cg_expr_size(body) > cap && return nothing
     loop = quote
-        for $iv in ($i0 + $av):($i0 + $bv - 1)
+        for $iv in $rng
             local $oln = $olnexpr
             du[$oln] = $fnsym(du[$oln], $body)
         end
@@ -1877,7 +1983,7 @@ function _cg_areduce_interchanged(ctx::_CGCtx, K::_AccKernel, kc::_CGKernCtx,
         loop = Expr(:for, :($(js[r]) = $lo:$hi), Expr(:block, loop))
     end
     return quote
-        for $iv in ($i0 + $av):($i0 + $bv - 1)
+        for $iv in $rng
             du[$olnexpr] = $(nd.literal)
         end
         $loop
