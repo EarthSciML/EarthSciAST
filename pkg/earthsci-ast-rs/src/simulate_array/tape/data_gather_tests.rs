@@ -524,3 +524,56 @@ fn a_shared_subscript_serves_a_sub_box_gather_and_a_full_box_gather() {
     ));
     ab(&compiled, &no_params());
 }
+
+/// A data subscript that names the column axis and a bare array aligned with
+/// the whole `(c, l)` box (`u[c, max(1, min(nl, w))]`): the scan for a
+/// sub-box sees only `c`, and lowering over the `(c)` sub-box cannot read
+/// `w`. That route then does not apply: what it emitted is undone and the
+/// gather is lowered over the full box, so the rule builds, and its fused
+/// and unfused programs agree bit for bit.
+#[test]
+fn a_failed_sub_box_lowering_falls_back_to_the_full_box() {
+    let (nc, nl) = (4i64, 6i64);
+    let w = json!({"op": "faq", "args": [], "output_idx": ["c", "l"],
+        "ranges": {"c": [1, nc], "l": [1, nl]},
+        "expr": plus(floor(idx(json!("u"), &[json!("c"), json!("l")])), json!(3))});
+    let sub = json!({"op": "max", "args": [1, {"op": "min", "args": [nl, "w"]}]});
+    let rhs = plus(
+        json!({"op": "*", "args": [-0.1, idx(json!("u"), &[json!("c"), json!("l")])]}),
+        idx(json!("u"), &[json!("c"), sub]),
+    );
+    let compiled = compile(doc(
+        json!({
+            "u": {"type": "unknown", "shape": ["c", "l"]},
+            "w": {"type": "unknown", "shape": ["c", "l"]}
+        }),
+        vec![
+            json!({"lhs": "w", "rhs": w}),
+            json!({"lhs": {"op": "faq", "args": [], "output_idx": ["c", "l"],
+                    "expr": {"op": "D", "args": [idx(json!("u"), &[json!("c"), json!("l")])], "wrt": "t"},
+                    "ranges": {"c": [1, nc], "l": [1, nl]}},
+                   "rhs": {"op": "faq", "args": [], "output_idx": ["c", "l"],
+                    "ranges": {"c": [1, nc], "l": [1, nl]}, "expr": rhs}}),
+        ],
+    ));
+    let n = compiled.state_variable_names().len();
+    let pv = compiled.debug_resolve_params(&HashMap::new());
+    let fused = taped(compiled.build_tape_opts(
+        &HashSet::new(),
+        Some(super::fuse::SuperopCfg {
+            bin3: false,
+            ext_pairs: true,
+        }),
+    ))
+    .0;
+    let unfused = taped(compiled.build_tape_opts(&HashSet::new(), None)).0;
+    for seed in 0..3u64 {
+        let state = super::tests::seeded_state(n, seed, -2.0, 2.0);
+        let mut dy_f = vec![0.0f64; n];
+        let mut dy_u = vec![0.0f64; n];
+        super::refexec::run_reference(&fused, &compiled, &state, &pv, 0.0, &mut dy_f);
+        super::refexec::run_reference(&unfused, &compiled, &state, &pv, 0.0, &mut dy_u);
+        let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+        assert_eq!(bits(&dy_f), bits(&dy_u), "seed {seed}: fused vs unfused");
+    }
+}
