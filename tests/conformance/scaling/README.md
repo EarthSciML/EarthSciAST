@@ -138,7 +138,7 @@ Canonical order (bindings map their own state layout onto it by element name):
 | `stencil_*`, `transport_3d` | the one state variable, row-major (last axis fastest) |
 | `chemistry_grid` | species in the mechanism's declaration order (the vendored file's order), each row-major over (lon, lat) |
 | `prefix_scan`, `unstructured_gather`, `gather_index`, `join_keyed` | `u[1..N]` |
-| `column_search`, `column_sum` | the one state variable, row-major (levels fastest) |
+| `column_search`, `column_sum` | the one state variable, column-major (first axis fastest, levels slowest): the layout both bindings' native compilers give it, so the hand loops read the layout native reads |
 | `source_receptor` | `c[1..N]`, then `e[1..N]` |
 | `regrid` | `F_src[1..N]`, then `F_tgt[1..N]` |
 | `scalar_chemistry` | box-major: box 1's 20 species in declaration order, then box 2's, ... |

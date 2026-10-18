@@ -275,6 +275,10 @@ function _rowmajor(name, dims)
     return [string(name, "[", join(reverse(Tuple(I)), ","), "]") for I in rev]
 end
 
+# Column-major (first axis fastest) keys: the column families' canonical order,
+# which is the layout native gives them.
+_colmajor(name, dims) = [string(name, "[", join(Tuple(I), ","), "]") for I in CartesianIndices(dims)]
+
 function canonical_names(fam, entry)
     sh(k) = Int(entry["shape"][k])
     n = Int(entry["n_cells"])
@@ -296,9 +300,9 @@ function canonical_names(fam, entry)
     elseif fam == "gather_index"
         return _rowmajor("Classes.u", (n,))
     elseif fam == "column_search"
-        return _rowmajor("Column.u", (sh("ncol"), sh("nlev")))
+        return _colmajor("Column.u", (sh("ncol"), sh("nlev")))
     elseif fam == "column_sum"
-        return _rowmajor("Columns.u", (sh("side"), sh("side"), sh("nlev")))
+        return _colmajor("Columns.u", (sh("side"), sh("side"), sh("nlev")))
     elseif fam == "join_keyed"
         return _rowmajor("Join.u", (n,))
     elseif fam == "scalar_chemistry"
