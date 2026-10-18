@@ -1346,8 +1346,23 @@ end
 # route.
 function _authored_via_programs(ctx, insp::BuildInspection, qualified::String, cells,
                                 u, t::Float64, p, mname::String,
-                                state_arrays::AbstractDict, state_scalars::AbstractDict,
-                                depth::Int=0)
+                                state_arrays::AbstractDict, state_scalars::AbstractDict)
+    # One array scope and one parameter scope for the whole recursion: a field
+    # filled at any level is the same named observed at the same state and time
+    # wherever else it is read, so a level reuses what a deeper one filled.
+    ca = Dict{String,Any}(String(k) => v for (k, v) in insp.const_arrays)
+    for (k, v) in state_arrays
+        ca[String(k)] = v
+    end
+    params = _param_scope_with_aliases(_params_at(insp.params, p, ctx), mname)
+    for (k, v) in state_scalars
+        params[String(k)] = Float64(v)
+    end
+    return _authored_via_programs!(ca, params, ctx, qualified, cells, u, t, p, 0)
+end
+
+function _authored_via_programs!(ca::Dict{String,Any}, params::Dict{String,Float64}, ctx,
+                                 qualified::String, cells, u, t::Float64, p, depth::Int)
     # The build's model names the observed without the document's outer scope
     # (`Flattened.M.x` asserted, `M.x` built): the longest dotted suffix it has.
     body = nothing
@@ -1359,13 +1374,6 @@ function _authored_via_programs(ctx, insp::BuildInspection, qualified::String, c
     end
     body === nothing && return nothing
     qualified = name
-    ca = Dict{String,Any}(String(k) => v for (k, v) in insp.const_arrays)
-    for (k, v) in state_arrays
-        ca[String(k)] = v
-    end
-    params = _param_scope_with_aliases(_params_at(insp.params, p, ctx), mname)
-    isempty(state_scalars) || (params = merge(params, Dict{String,Float64}(
-        String(k) => Float64(v) for (k, v) in state_scalars)))
     for n in _referenced_var_names(body)
         (haskey(ca, n) || haskey(params, n) || n == qualified) && continue
         if !(haskey(ctx.defs, n) || haskey(ctx.discrete_caches, n))
@@ -1380,11 +1388,11 @@ function _authored_via_programs(ctx, insp::BuildInspection, qualified::String, c
                 (is isa IndexSet && is.size isa Int && is.size > 0) || return nothing
                 push!(ext, is.size)
             end
-            vals = _authored_via_programs(ctx, insp, n, _row_major_cells(ext), u, t, p,
-                                          mname, state_arrays, state_scalars, depth + 1)
+            vals = _authored_via_programs!(ca, params, ctx, n, _row_major_cells(ext), u,
+                                           t, p, depth + 1)
             vals === nothing && return nothing
             if isempty(ext)
-                params = merge(params, Dict{String,Float64}(n => Float64(vals[1])))
+                params[n] = Float64(vals[1])
             else
                 ca[n] = length(ext) == 1 ? Vector{Float64}(vals) :
                         permutedims(reshape(Vector{Float64}(vals), reverse(ext)...),
@@ -1402,7 +1410,7 @@ function _authored_via_programs(ctx, insp::BuildInspection, qualified::String, c
         vals = _run_observed_program(ctx, prog, u, t, p)
         _array_cascade_on() ? _note_program_read!() : _note_percell!()
         if isempty(prog.dims)
-            params = merge(params, Dict{String,Float64}(n => Float64(vals[1])))
+            params[n] = Float64(vals[1])
         else
             d = prog.dims
             ca[n] = length(d) == 1 ? Vector{Float64}(vals) :
