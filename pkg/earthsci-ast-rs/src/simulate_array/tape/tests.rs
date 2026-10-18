@@ -4030,3 +4030,41 @@ fn a_branch_fault_keeps_the_fault_tables_parallel() {
             .any(|i| matches!(i, Instr::FaultScan { .. }))
     );
 }
+
+/// `c[row, j]` of an inline 3×2 const array, `row` a computed subscript.
+fn c_row(row: serde_json::Value) -> serde_json::Value {
+    let c = json!({"op": "const", "args": [], "value": [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]});
+    json!({"op": "index", "args": [c, row, "j"]})
+}
+
+/// Rule 1's fault scan runs in the CONTINUOUS section (its condition reads
+/// `t`); rule 2's certain fault would run in CONST, ahead of it. The oracle
+/// walks rule 1 first, so rule 1's fault is the one reported — the lazy one
+/// at `t = 1`, the certain one at `t = 0`.
+#[test]
+fn an_earlier_rules_fault_scan_latches_before_a_later_rules_certain_fault() {
+    assert_fault_parity(
+        two_rule_doc(
+            json!({"op": "+", "args": [after_half(on_scalar("q")), on_scalar("p")]}),
+            on_scalar("r"),
+        ),
+        &[0.0, 1.0],
+    );
+}
+
+/// The same for an earlier rule's computed-subscript gather that faults at
+/// run time (its subscript reads the state), and for a later rule's gather
+/// whose subscript reads only a parameter (computed in CONST).
+#[test]
+fn run_time_gather_faults_keep_the_rule_order() {
+    let past_end = json!({"op": "+", "args": [3,
+        {"op": ">", "args": [u_at(json!("i"), json!("j")), -5.0]}]});
+    assert_fault_parity(two_rule_doc(c_row(past_end), on_scalar("r")), &[0.0]);
+    assert_fault_parity(
+        two_rule_doc(
+            json!({"op": "+", "args": [after_half(on_scalar("q")), u_at(json!("i"), json!("j"))]}),
+            c_row(json!({"op": "+", "args": ["p", 2]})),
+        ),
+        &[0.0, 1.0],
+    );
+}
