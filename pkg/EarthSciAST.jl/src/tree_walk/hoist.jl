@@ -31,8 +31,19 @@
 # output indices in S, which must each range over a whole declared index set,
 # and must not include the enclosing faq's contracted indices.
 #
+# DATA GATHERS are lifted by the same rule. An `index` read of a named array
+# with a subscript that reads an unknown (a state or an observed), reached the
+# same way and reading a strict subset S of the output indices,
+#
+#     D(u[c,l]) = -0.1·u[c,l] + 0.01·u[c, max(1, cnt[c])]
+#
+# becomes `G[c] = u[c, max(1, cnt[c])]`, read once per column instead of once
+# per level. A subscript that reads only parameters or build-time data is left
+# where it is: the tiers below resolve those at build.
+#
 # The lifted definition is the reduction itself with S added as its output
-# indices, so its terms and fold order are the original's, cell for cell.
+# indices (for a gather, a `faq` over S whose body is the gather), so its
+# terms and fold order are the original's, cell for cell.
 # Everything about it is internal to the build: its name carries a NUL byte,
 # which no document name can, it is added only to the build's own copy of the
 # model (observed listings, outputs and sinks read the document), and the
@@ -85,6 +96,7 @@ function _hoist_free_names!(out::Set{String}, e::ASTExpr, bound::Set{String})
 end
 
 mutable struct _HoistCtx
+    model_vars::AbstractDict                          # the model's own variables
     vars::OrderedDict{String,ModelVariable}
     eqs::Vector{Equation}
     memo::Dict{Tuple{UInt,Vector{String}},ASTExpr}   # (reduction, S-cell sets) → reader
@@ -107,6 +119,10 @@ function _hoist_walk(e::ASTExpr, out_idx::Vector{String}, ranges, contracted::Se
         r = _hoist_try(o, out_idx, ranges, contracted, owner, hc)
         return r === nothing ? o : r
     end
+    if o.op == "index" && _hoist_data_gather(o, ranges, hc)
+        r = _hoist_try(o, out_idx, ranges, contracted, owner, hc)
+        return r === nothing ? o : r
+    end
     _hoist_plain(o) || return o
     eager = (o.op == "ifelse" || o.op == "and" || o.op == "or") ? 1 : length(o.args)
     new = o.args
@@ -121,10 +137,29 @@ function _hoist_walk(e::ASTExpr, out_idx::Vector{String}, ranges, contracted::Se
     return new === o.args ? o : reconstruct(o; args=new)
 end
 
+# A DATA GATHER: an `index` read of a named array with a subscript that reads
+# a state or an observed (an unknown) — `u[c, max(1, cnt[c])]` — so which
+# element it reads is only known on the call.
+function _hoist_data_gather(g::OpExpr, ranges, hc::_HoistCtx)
+    (length(g.args) >= 2 && g.args[1] isa VarExpr) || return false
+    for a in @view g.args[2:end]
+        for n in _hoist_free_names!(Set{String}(), a, Set{String}())
+            haskey(ranges, n) && continue
+            v = get(hc.model_vars, n, nothing)
+            v isa ModelVariable && v.type == UnknownVariable && return true
+        end
+    end
+    return false
+end
+
 function _hoist_try(g::OpExpr, out_idx::Vector{String}, ranges, contracted::Set{String},
                     owner::String, hc::_HoistCtx)
-    (g.join === nothing && g.join_gates === nothing) || return nothing
-    (g.ranges === nothing || isempty(g.ranges) || g.expr_body === nothing) && return nothing
+    gather = g.op == "index"
+    if !gather
+        (g.join === nothing && g.join_gates === nothing) || return nothing
+        (g.ranges === nothing || isempty(g.ranges) || g.expr_body === nothing) &&
+            return nothing
+    end
     free = _hoist_free_names!(Set{String}(), g, Set{String}())
     any(n -> n in contracted, free) && return nothing
     S = String[s for s in out_idx if s in free]
@@ -133,24 +168,28 @@ function _hoist_try(g::OpExpr, out_idx::Vector{String}, ranges, contracted::Set{
     for s in S
         r = get(ranges, s, nothing)
         (r isa IndexSetRef && isempty(r.of)) || return nothing
-        haskey(g.ranges, s) && return nothing
+        gather || haskey(g.ranges, s) && return nothing
         push!(sets, r.from)
     end
     key = (objectid(g), vcat(S, sets))
     hit = get(hc.memo, key, nothing)
     hit === nothing || return hit
-    name = string(_HOIST_PREFIX, length(hc.memo) + 1, '\0', owner)
-    rng = Dict{String,Any}(String(k) => v for (k, v) in g.ranges)
+    name = string(_HOIST_PREFIX, gather ? "g" : "", length(hc.memo) + 1, '\0', owner)
+    rng = gather ? Dict{String,Any}() : Dict{String,Any}(String(k) => v for (k, v) in g.ranges)
+    # A gather is lifted as the faq producing it over S, its body the gather.
+    lift(oi, rg) = gather ?
+        OpExpr("faq", ASTExpr[]; output_idx=oi, ranges=rg, expr_body=g) :
+        reconstruct(g; output_idx=oi, ranges=rg)
     if isempty(S)
         rng[_HOIST_ONE_IDX] = IndexSetRef(_HOIST_ONE_SET)
-        def = reconstruct(g; output_idx=Any[_HOIST_ONE_IDX], ranges=rng)
+        def = lift(Any[_HOIST_ONE_IDX], rng)
         shape = String[_HOIST_ONE_SET]
         reader = OpExpr("index", ASTExpr[VarExpr(name), IntExpr(1)])
     else
         for (s, st) in zip(S, sets)
             rng[s] = ranges[s]
         end
-        def = reconstruct(g; output_idx=Any[S...], ranges=rng)
+        def = lift(Any[S...], rng)
         shape = sets
         reader = OpExpr("index", ASTExpr[VarExpr(name), (VarExpr(s) for s in S)...])
     end
@@ -164,14 +203,15 @@ end
 # A compiler-report rule label with every lifted name replaced by the variable
 # whose equation it was lifted from (the name ends in it, after a NUL).
 _hoist_public_label(label::AbstractString) =
-    replace(label, r"\0hoist\0\d+\0([^\0\[\]]*)" => s"\1 (hoisted reduction)")
+    replace(replace(label, r"\0hoist\0g\d+\0([^\0\[\]]*)" => s"\1 (hoisted gather)"),
+            r"\0hoist\0\d+\0([^\0\[\]]*)" => s"\1 (hoisted reduction)")
 
 # The build's copy of `model` with every qualifying nested reduction lifted
 # (see the header), the index sets with the one-cell set added when one was
 # lifted over it, and the lifted name → owning variable map. `model` itself
 # when nothing qualifies.
 function _hoist_nested_reductions(model::Model, index_sets::AbstractDict)
-    hc = _HoistCtx(OrderedDict{String,ModelVariable}(), Equation[],
+    hc = _HoistCtx(model.variables, OrderedDict{String,ModelVariable}(), Equation[],
                    Dict{Tuple{UInt,Vector{String}},ASTExpr}(), Dict{String,String}())
     eqs = model.equations
     for (i, eq) in enumerate(model.equations)
