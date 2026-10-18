@@ -7,7 +7,9 @@
 //! the fault it latches, against the per-cell oracle and the whole-array
 //! overlay, on both executors, fused and unfused ([`ab`]).
 
-use super::array_tests::{ab, compile, d_eq, doc, idx, lit, no_params, opcount, plus};
+use super::array_tests::{
+    ab, agrees_or_refuses, compile, d_eq, doc, idx, lit, no_params, opcount, plus,
+};
 use super::taped;
 use crate::simulate_array::ConstArrayScope;
 use crate::value_invention::BoundaryKind;
@@ -575,5 +577,72 @@ fn a_failed_sub_box_lowering_falls_back_to_the_full_box() {
         super::refexec::run_reference(&unfused, &compiled, &state, &pv, 0.0, &mut dy_u);
         let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
         assert_eq!(bits(&dy_f), bits(&dy_u), "seed {seed}: fused vs unfused");
+    }
+}
+
+/// A filtered array `faq` whose kept cells gather a const array through a
+/// per-column count, `k[c, cnt[c]]` under `filter = cnt[c] > 0`, directly
+/// and inside a nested reduction: a column whose count is 0 is filtered
+/// out, so its out-of-range read is never evaluated and nothing faults
+/// (esm-spec §5.5.8: a filtered-out term never faults). No part of the body
+/// may be evaluated ahead of the filter at the cells it excludes: native
+/// agrees with the oracle, or refuses the rule when it cannot place the
+/// fault behind the filter, and never raises it.
+#[test]
+fn a_filtered_out_const_gather_never_faults() {
+    let (nc, nl, nm) = (4i64, 3i64, 3i64);
+    let cnt_c = idx(json!("cnt"), &[json!("c")]);
+    let gather = idx(json!("k"), &[json!("c"), cnt_c.clone()]);
+    let nested = json!({"op": "faq", "args": [], "output_idx": [],
+        "ranges": {"m": [1, 2]},
+        "expr": {"op": "*", "args": ["m", gather.clone()]}});
+    for term in [gather, nested] {
+        let body = json!({"op": "faq", "args": [], "output_idx": ["c", "l"],
+            "ranges": {"c": [1, nc], "l": [1, nl]},
+            "filter": {"op": ">", "args": [cnt_c.clone(), 0]},
+            "expr": plus(
+                json!({"op": "*", "args": [-0.1, idx(json!("u"), &[json!("c"), json!("l")])]}),
+                term)});
+        let k: Vec<Vec<f64>> = (0..nc)
+            .map(|c| (0..nm).map(|m| (c * 10 + m) as f64 + 0.5).collect())
+            .collect();
+        let compiled = compile(doc(
+            json!({
+                "u": {"type": "unknown", "shape": ["c", "l"]},
+                "cnt": {"type": "unknown", "shape": ["c"]},
+                "k": {"type": "unknown", "shape": ["c", "m"]}
+            }),
+            vec![
+                json!({"lhs": "k", "rhs": {"op": "const", "args": [], "value": k}}),
+                json!({"lhs": {"op": "faq", "args": [], "output_idx": ["c"],
+                        "expr": {"op": "D", "args": [cnt_c.clone()], "wrt": "t"},
+                        "ranges": {"c": [1, nc]}},
+                       "rhs": {"op": "faq", "args": [], "output_idx": ["c"],
+                        "ranges": {"c": [1, nc]}, "expr": 0.0}}),
+                json!({"lhs": {"op": "faq", "args": [], "output_idx": ["c", "l"],
+                        "expr": {"op": "D", "args": [idx(json!("u"), &[json!("c"), json!("l")])], "wrt": "t"},
+                        "ranges": {"c": [1, nc], "l": [1, nl]}},
+                       "rhs": body}),
+            ],
+        ));
+        let counts = [1.0, 0.0, 3.0, 2.0];
+        let state: Vec<f64> = compiled
+            .state_variable_names()
+            .iter()
+            .enumerate()
+            .map(|(s, name)| match name.strip_prefix("cnt[") {
+                Some(rest) => counts[rest.trim_end_matches(']').parse::<usize>().unwrap() - 1],
+                None => 0.25 * s as f64 - 1.0,
+            })
+            .collect();
+        // Native either agrees with the oracle (no fault) or refuses the rule
+        // at build time for the fault it cannot place; it never faults.
+        let refused = agrees_or_refuses(&compiled, &no_params(), &[state]);
+        assert!(
+            refused.iter().all(|(rule, why)| rule == "D(u)"
+                && why.contains("E_TREEWALK_CONSTARRAY_OOB")
+                && why.contains("fault scan")),
+            "{refused:?}"
+        );
     }
 }
