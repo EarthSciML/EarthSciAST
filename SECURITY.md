@@ -115,8 +115,7 @@ The security system integrates with the automated release pipeline:
 
 - **`.github/workflows/security-scan.yml`**: Main security scanning workflow
 - Integration with existing workflows:
-  - `integrated-release-pipeline.yml`
-  - `release-publish.yml`
+  - `release-register.yml`
   - `conformance-testing.yml`
 
 ## Security Policies

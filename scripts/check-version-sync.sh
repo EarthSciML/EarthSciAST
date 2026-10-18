@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Every binding ships under ONE version number, and seven files carry it.
+# Every binding ships under ONE version number, and nine files carry it.
 #
 # Four are the package manifests the release pipeline reads. Two more are
 # hand-maintained mirrors that no manifest can derive:
@@ -17,6 +17,10 @@
 # version. v0.3.0 bumped Cargo.toml and left the lock at 0.2.0, so the release
 # job's `cargo build` rewrote it, and `cargo publish` refused the dirty tree:
 # every other registry got 0.3.0 and crates.io did not.
+#
+# The last two are the `esm-narrative` crate's manifest and its own lock entry.
+# It is not published to crates.io, but its binary ships on every GitHub
+# release beside `esm`, so it carries the release's version.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -28,6 +32,8 @@ ts=$(node -p "require('./pkg/earthsci-ast-ts/package.json').version")
 ts_const=$(sed -n "s/^export const LIBRARY_VERSION = '\(.*\)'$/\1/p" pkg/earthsci-ast-ts/src/version.ts)
 go_const=$(sed -n 's/^const LibraryVersion = "\(.*\)"$/\1/p' pkg/earthsci-ast-go/pkg/esm/version.go)
 rs_lock=$(awk '/^name = "earthsci-ast"$/ { getline; gsub(/^version = "|"$/, ""); print; exit }' pkg/earthsci-ast-rs/Cargo.lock)
+narr=$(grep -m1 '^version = ' pkg/earthsci-narrative/Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+narr_lock=$(awk '/^name = "earthsci-narrative"$/ { getline; gsub(/^version = "|"$/, ""); print; exit }' pkg/earthsci-narrative/Cargo.lock)
 
 status=0
 for pair in \
@@ -36,7 +42,9 @@ for pair in \
   "pkg/earthsci-ast-rs/Cargo.lock (earthsci-ast):$rs_lock" \
   "pkg/earthsci-ast-ts/package.json:$ts" \
   "pkg/earthsci-ast-ts/src/version.ts (LIBRARY_VERSION):$ts_const" \
-  "pkg/earthsci-ast-go/pkg/esm/version.go (LibraryVersion):$go_const"
+  "pkg/earthsci-ast-go/pkg/esm/version.go (LibraryVersion):$go_const" \
+  "pkg/earthsci-narrative/Cargo.toml:$narr" \
+  "pkg/earthsci-narrative/Cargo.lock (earthsci-narrative):$narr_lock"
 do
   file=${pair%:*}; got=${pair##*:}
   if [ "$got" != "$jl" ]; then
@@ -48,10 +56,10 @@ done
 
 if [ "$status" -ne 0 ]; then
   echo
-  echo "All seven version sites must agree. Source of truth:"
+  echo "All nine version sites must agree. Source of truth:"
   echo "  pkg/EarthSciAST.jl/Project.toml = $jl"
   echo "See RELEASING.md, 'Cutting a release'."
   exit 1
 fi
 
-echo "All seven version sites agree on $jl"
+echo "All nine version sites agree on $jl"

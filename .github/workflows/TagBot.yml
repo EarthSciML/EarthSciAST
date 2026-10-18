@@ -1,0 +1,33 @@
+name: Release 2 - TagBot
+
+# Step 2 of 3 (see release-register.yml). When General merges a registration,
+# the JuliaTagBot account comments on an issue here, and this workflow tags the
+# registered commit and creates the GitHub release from the registration's
+# release notes.
+
+on:
+  issue_comment:
+    types:
+      - created
+  workflow_dispatch:
+
+# No `permissions:` block: TagBot's README asks for the repository defaults.
+
+jobs:
+  TagBot:
+    if: github.event_name == 'workflow_dispatch' || github.actor == 'JuliaTagBot'
+    # TagBot is a container action, which ubuntu-slim cannot run.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: JuliaRegistries/TagBot@ffef3282bcacf1055e4d621a5c010959dfbe59ff # v1.25.13
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          # The tag is pushed with a deploy key rather than GITHUB_TOKEN because
+          # GitHub starts no workflow from a GITHUB_TOKEN push, and the tag push
+          # is what runs release.yml.
+          ssh: ${{ secrets.TAGBOT_SSH_KEY }}
+          subdir: pkg/EarthSciAST.jl
+          # A subdirectory package is tagged `EarthSciAST-v<version>` by
+          # default. Every other binding, the Go module tag, release.yml's
+          # trigger and the installer's download URLs all expect `v<version>`.
+          tag_prefix: NO_PREFIX

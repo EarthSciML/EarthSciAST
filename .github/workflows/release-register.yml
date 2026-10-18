@@ -1,0 +1,267 @@
+name: Release 1 - Register Julia
+
+# A release is three workflows, run in order, so that every registry publishes
+# from the ONE commit the Julia General registry accepted:
+#
+#   1. release-register.yml (this file): on a version bump, run the release
+#      gates and ask JuliaRegistrator to register that commit, with release
+#      notes. Nothing is tagged or published.
+#   2. TagBot.yml: once General merges the registration, TagBot tags the
+#      registered commit `v<version>` and creates the GitHub release.
+#   3. release.yml: that tag push publishes to crates.io, npm, PyPI and the Go
+#      proxy, and attaches the `esm` and `esm-narrative` binaries.
+#
+# General can refuse a registration -- v0.3.0 sat in AutoMerge for days because
+# a breaking release had no release notes, while every other registry had
+# already shipped it. Under this ordering nothing else has shipped at that
+# point, so the fix is a commit on main and then a manual run of this workflow,
+# which registers the same version again from the new commit. Registrator
+# updates the open registry PR in place; no version number is burned.
+
+on:
+  push:
+    branches: [ main ]
+    # A release starts with a version bump, and the Julia manifest is the
+    # source of truth for the version.
+    paths: [ 'pkg/EarthSciAST.jl/Project.toml' ]
+  workflow_dispatch:
+
+concurrency:
+  group: release-register
+  cancel-in-progress: false
+
+jobs:
+  release-analysis:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      needs_release: ${{ steps.analysis.outputs.needs_release }}
+      version: ${{ steps.analysis.outputs.version }}
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    # Every binding ships under one version number; publishing five different
+    # ones under one tag is the failure this rules out.
+    - name: Check that every version site agrees
+      run: ./scripts/check-version-sync.sh
+
+    - name: Decide whether this run registers a release
+      id: analysis
+      env:
+        EVENT: ${{ github.event_name }}
+        BEFORE: ${{ github.event.before }}
+      run: |
+        set -euo pipefail
+        VERSION=$(grep -m1 '^version = ' pkg/EarthSciAST.jl/Project.toml | sed 's/.*"\(.*\)".*/\1/')
+        echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+        skip() { echo "::notice::$1"; echo "needs_release=false" >> "$GITHUB_OUTPUT"; exit 0; }
+
+        if git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then
+          skip "v$VERSION is already tagged; nothing to register."
+        fi
+
+        # A push that edits Project.toml without changing its version (a compat
+        # bound, a new dependency) is not a release. Registering on it anyway
+        # would quietly move a pending registration onto that commit.
+        if [ "$EVENT" = push ]; then
+          git show "$BEFORE:pkg/EarthSciAST.jl/Project.toml" > old-project.toml 2>/dev/null || : > old-project.toml
+          OLD=$(grep -m1 '^version = ' old-project.toml | sed 's/.*"\(.*\)".*/\1/' || true)
+          if [ "$OLD" = "$VERSION" ]; then
+            skip "Project.toml changed but its version is still $VERSION; not a release."
+          fi
+        fi
+
+        # Once General has the version, the next step is TagBot's, and
+        # Registrator would refuse a second registration anyway.
+        VERSIONS=$(curl -sfL https://raw.githubusercontent.com/JuliaRegistries/General/master/E/EarthSciAST/Versions.toml || true)
+        if grep -qxF "[\"$VERSION\"]" <<< "$VERSIONS"; then
+          skip "EarthSciAST $VERSION is already in General. If v$VERSION is still untagged, run the TagBot workflow by hand."
+        fi
+
+        echo "needs_release=true" >> "$GITHUB_OUTPUT"
+
+  # Security scan before release
+  security-scan:
+    needs: release-analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: needs.release-analysis.outputs.needs_release == 'true'
+    outputs:
+      security_status: ${{ steps.security_check.outputs.status }}
+      vulnerabilities_found: ${{ steps.security_check.outputs.vulnerabilities }}
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install security tools
+      run: |
+        pip install --upgrade pip
+        pip install safety toml requests urllib3
+
+    - name: Run pre-release security scan
+      id: security_check
+      run: |
+        echo "Running pre-release security scan..."
+
+        # Run security scanner
+        python3 scripts/package-security-scanner.py \
+          --config .security-config.json \
+          --output pre-release-security-scan.json
+
+        SCAN_EXIT_CODE=$?
+
+        # Check for critical vulnerabilities
+        CRITICAL_VULNS=$(python3 -c "
+        import json
+        try:
+            with open('pre-release-security-scan.json', 'r') as f:
+                data = json.load(f)
+            critical_count = 0
+            for pkg in data.get('packages', {}).values():
+                for vuln in pkg.get('vulnerabilities', []):
+                    if vuln.get('severity', '').lower() in ['critical', 'high']:
+                        critical_count += 1
+            print(critical_count)
+        except:
+            print(0)
+        ")
+
+        echo "Critical vulnerabilities found: $CRITICAL_VULNS"
+        echo "vulnerabilities=$CRITICAL_VULNS" >> $GITHUB_OUTPUT
+
+        if [ "$CRITICAL_VULNS" -gt 0 ]; then
+          echo "status=blocked" >> $GITHUB_OUTPUT
+          echo "❌ Release blocked due to $CRITICAL_VULNS critical vulnerabilities"
+          exit 1
+        else
+          echo "status=passed" >> $GITHUB_OUTPUT
+          echo "✅ Security scan passed, proceeding with release"
+          exit 0
+        fi
+
+    - name: Upload security scan results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: pre-release-security-scan-${{ github.run_id }}
+        path: pre-release-security-scan.json
+        retention-days: 90
+
+  # Conformance and compiler agreement now GATE the release. They used to run
+  # against the tag after every registry had already published from it.
+  run-conformance-tests:
+    needs: release-analysis
+    if: needs.release-analysis.outputs.needs_release == 'true'
+    uses: ./.github/workflows/conformance-testing.yml
+    with:
+      release_validation: true
+      ref: ${{ github.sha }}
+    secrets: inherit
+
+  # The `mtk` leg of the compiler-agreement tier, which lives in its own
+  # workflow and so has to be called here to stay part of release validation.
+  run-mtk-compiler-agreement:
+    needs: release-analysis
+    if: needs.release-analysis.outputs.needs_release == 'true'
+    uses: ./.github/workflows/mtk-compiler.yml
+    with:
+      ref: ${{ github.sha }}
+    secrets: inherit
+
+  register-julia:
+    needs: [ release-analysis, security-scan, run-conformance-tests, run-mtk-compiler-agreement ]
+    if: needs.release-analysis.outputs.needs_release == 'true' && needs.security-scan.outputs.security_status == 'passed'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Commit comments need write access.
+    permissions:
+      contents: write
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    # Registrator takes everything under `Release notes:` as the registry PR's
+    # release notes, and TagBot later copies them into the GitHub release.
+    #
+    # General's AutoMerge refuses a breaking release (any 0.x minor bump) whose
+    # notes do not say "breaking" or "changelog", which is what stalled v0.3.0.
+    # Both headings below are always present, so the generated notes pass; a
+    # hand-written `release-notes/v<version>.md`, when there is one, goes first
+    # and is where upgrade instructions for a breaking change belong.
+    - name: Write the registration comment
+      env:
+        VERSION: ${{ needs.release-analysis.outputs.version }}
+      run: |
+        set -euo pipefail
+        # The previous release tag bounds the changelog. Taking the first line
+        # with parameter expansion, not `head`: under pipefail, `head` closing
+        # the pipe kills git with SIGPIPE.
+        PREV_TAG=$(git tag -l 'v*' --sort=-v:refname)
+        PREV_TAG=${PREV_TAG%%$'\n'*}
+        RANGE=${PREV_TAG:+$PREV_TAG..HEAD}
+
+        {
+          echo "@JuliaRegistrator register subdir=pkg/EarthSciAST.jl"
+          echo ""
+          echo "Release notes:"
+          echo ""
+          if [ -f "release-notes/v$VERSION.md" ]; then
+            cat "release-notes/v$VERSION.md"
+            echo ""
+          fi
+          echo "## Breaking changes"
+          echo ""
+          BREAKING=$(git log $RANGE --no-merges -E \
+            --grep='^[a-z]+(\([^)]*\))?!:' --grep='^BREAKING[ -]CHANGE' \
+            --pretty=format:'- %s (%h)')
+          if [ -n "$BREAKING" ]; then
+            echo "$BREAKING"
+          else
+            echo "None marked in the commit messages (\`type!:\` or \`BREAKING CHANGE:\`); see the changelog below."
+          fi
+          echo ""
+          echo "## Changelog"
+          echo ""
+          git log $RANGE -n 100 --no-merges --pretty=format:'- %s (%h)'
+          echo ""
+        } > registration-comment.md
+        cat registration-comment.md
+
+    - name: Trigger JuliaRegistrator
+      uses: peter-evans/commit-comment@v4
+      with:
+        # Registrator registers the commit it is asked on, and that commit is
+        # what TagBot tags and every other registry later publishes.
+        sha: ${{ github.sha }}
+        body-path: registration-comment.md
+
+    - name: Note what happens next
+      env:
+        VERSION: ${{ needs.release-analysis.outputs.version }}
+      run: |
+        {
+          echo "## Julia registration: EarthSciAST $VERSION"
+          echo ""
+          echo "Asked JuliaRegistrator to register"
+          echo "[this commit](https://github.com/${{ github.repository }}/commit/${{ github.sha }})."
+          echo "Its reply on the commit links the PR against"
+          echo "[General](https://github.com/JuliaRegistries/General/pulls)."
+          echo ""
+          echo "- **AutoMerge passes:** General merges it (about 15 minutes for a new"
+          echo "  version), TagBot tags \`v$VERSION\`, and \`release.yml\` publishes"
+          echo "  everything else from that tag."
+          echo "- **AutoMerge refuses:** fix the cause on main, then run this"
+          echo "  workflow by hand. It registers $VERSION again from the new commit."
+          echo ""
+          echo "If no reply appears on the commit, the JuliaRegistrator App has"
+          echo "come off this repository."
+        } >> "$GITHUB_STEP_SUMMARY"

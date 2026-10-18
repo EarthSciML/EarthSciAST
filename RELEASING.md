@@ -10,6 +10,32 @@ Five language bindings ship from this repo under one version number:
 | Rust | `earthsci-ast` | crates.io |
 | Go | `.../pkg/earthsci-ast-go` | Go module proxy |
 
+The `esm` and `esm-narrative` command-line tools ship under the same version,
+as per-platform archives attached to the GitHub release.
+
+## How a release runs
+
+Three workflows, in order, so that every registry publishes from the one
+commit the Julia General registry accepted:
+
+1. **`release-register.yml`** — on a push to `main` that changes the version in
+   `pkg/EarthSciAST.jl/Project.toml`: checks the version sites agree, runs the
+   security scan, conformance and the MTK compiler-agreement tier, then posts
+   `@JuliaRegistrator register subdir=pkg/EarthSciAST.jl` with release notes on
+   that commit. Nothing is tagged or published.
+2. **`TagBot.yml`** — when General merges the registration, TagBot tags the
+   registered commit `v<version>` and creates the GitHub release from the
+   registration's notes.
+3. **`release.yml`** — the tag push checks that the tag's
+   `pkg/EarthSciAST.jl` tree is the one General registered, then publishes to
+   PyPI, crates.io, npm and the Go proxy and attaches the binaries.
+
+The order exists because General can refuse a registration, and the other
+registries never let a version be reused. v0.3.0 is the case in point: it
+reached npm, PyPI, crates.io and Go, while its General PR sat refused by
+AutoMerge for want of release notes on a breaking release. Now a refusal costs
+nothing: nothing else has shipped yet.
+
 
 ## Package version vs. format version
 
@@ -43,22 +69,19 @@ https://pypi.org/manage/account/publishing/:
 - PyPI project name: `earthsci-ast`
 - Owner: `EarthSciML`
 - Repository: `EarthSciAST`
-- Workflow: `integrated-release-pipeline.yml`
+- Workflow: `release.yml`
 - Environment: `pypi`
 
-The workflow name is `integrated-release-pipeline.yml` because the PyPI job runs
-**directly in that workflow**, not in `release-publish.yml` where the other
-registries are handled. That split is deliberate:
+The PyPI job must stay in a workflow that is started directly, never one
+reached through `workflow_call`:
 
 > PyPI's trusted publishing does not support reusable workflows.
 
 A `workflow_call` run carries two different claims — `job_workflow_ref` (the
 reusable file) and `workflow_ref` (the caller). The OIDC exchange matches the
 first, PEP 740 attestations match the second, so **no single publisher
-configuration satisfies both**: naming `release-publish.yml` passes the token
-exchange and then fails attestation verification, and naming the caller fails the
-exchange outright. Publishing from a non-reusable workflow makes the two claims
-identical. EarthSciIO avoids the problem by having one workflow overall.
+configuration satisfies both**. `release.yml` is started by the tag push, so the
+two claims are identical.
 
 Until this exists, the publish job fails with `invalid-publisher`.
 
@@ -72,6 +95,23 @@ or reused).
 ### Julia
 Install the [JuliaRegistrator](https://github.com/JuliaRegistries/Registrator)
 GitHub App on the repository.
+
+### TagBot
+TagBot pushes the release tag with an SSH deploy key, because a tag pushed with
+`GITHUB_TOKEN` starts no workflow and `release.yml` would never run.
+
+1. `ssh-keygen -t ed25519 -N "" -C TagBot -f tagbot` (no passphrase).
+2. Repository **Settings → Deploy keys → Add deploy key**: paste `tagbot.pub`,
+   tick **Allow write access**.
+3. Repository **Settings → Secrets and variables → Actions → New repository
+   secret**: name `TAGBOT_SSH_KEY`, value the contents of `tagbot` (the private
+   key). Then delete both files.
+4. **Settings → Actions → General → Workflow permissions** must be **Read and
+   write**, which TagBot needs to create the release with `GITHUB_TOKEN`.
+
+TagBot is triggered by the JuliaTagBot account commenting on an issue in this
+repository, so issues must stay enabled. It can also be run by hand from the
+Actions tab, which tags every registered version that is still untagged.
 
 ### Go
 Nothing. The module proxy serves whatever the tag points at.
@@ -95,7 +135,7 @@ sits in a **3-day AutoMerge waiting period**.
 
 ## Cutting a release
 
-1. Bump the version in all **seven** places **in one reviewed commit**:
+1. Bump the version in all **nine** places **in one reviewed commit**:
    - `pkg/EarthSciAST.jl/Project.toml`
    - `pkg/earthsci-ast-ts/package.json` (and run `npm install --package-lock-only`)
    - `pkg/earthsci-ast-py/pyproject.toml`
@@ -106,6 +146,11 @@ sits in a **3-day AutoMerge waiting period**.
      That is how v0.3.0 reached every registry except crates.io.
    - `pkg/earthsci-ast-ts/src/version.ts` — `LIBRARY_VERSION`
    - `pkg/earthsci-ast-go/pkg/esm/version.go` — `LibraryVersion`
+   - `pkg/earthsci-narrative/Cargo.toml`, and its own entry in
+     `pkg/earthsci-narrative/Cargo.lock` (`cargo metadata --format-version 1
+     >/dev/null` in that directory). It is not published to crates.io, but the
+     `esm-narrative` binary ships on the release. Refreshing that lock also
+     updates `pkg/earthsci-typst-plugin/Cargo.lock` if you run it there too.
 
    The last two are **hand-kept mirrors**, and they are the ones that get
    forgotten. Julia (`pkgversion`), Python (`importlib.metadata`) and Rust
@@ -114,7 +159,7 @@ sits in a **3-day AutoMerge waiting period**.
    (tsconfig's `rootDir` is `./src`) and a Go module has no in-tree version
    manifest at all, so both mirror the number by hand.
 
-   `./scripts/check-version-sync.sh` checks all seven and runs in the lint job.
+   `./scripts/check-version-sync.sh` checks all nine and runs in the lint job.
    Go carries no version in its own manifest; the module version comes from
    the tag.
 
@@ -122,35 +167,56 @@ sits in a **3-day AutoMerge waiting period**.
    the bindings disagree** — it no longer guesses a version from git tags or
    commit-message keywords.
 
-2. Merge to `main`. `integrated-release-pipeline.yml` then:
-   - verifies the five versions agree,
-   - skips entirely if tag `v<version>` already exists,
-   - runs the security scan (a high/critical finding **blocks** the release),
-   - creates the GitHub release and tag,
-   - calls `release-publish.yml` to publish to each registry,
-   - builds cross-platform binaries and runs conformance.
+   For a breaking release (any 0.x minor bump), also write
+   `release-notes/v<version>.md` saying what broke and how to upgrade. It goes
+   first in the registration's release notes and from there into the GitHub
+   release. Without it the notes are generated from the commit log; they always
+   carry "Breaking changes" and "Changelog" headings, which is what General's
+   AutoMerge looks for, but they only list breaking commits marked `type!:` or
+   `BREAKING CHANGE:`.
 
-3. Nothing. Julia registration is automated — `release-publish.yml`'s
-   `julia-register` job posts
+2. Merge to `main`. `release-register.yml` runs the gates (about an hour,
+   conformance's Julia matrix being the long pole) and posts the registration
+   comment. JuliaRegistrator replies on the commit with a link to the PR
+   against [General](https://github.com/JuliaRegistries/General/pulls).
 
-   ```
-   @JuliaRegistrator register subdir=pkg/EarthSciAST.jl
-   ```
+3. **If AutoMerge passes**, there is nothing to do. General merges in about 15
+   minutes, TagBot tags `v<version>`, and `release.yml` publishes everything
+   else from that tag and attaches the binaries.
 
-   on the release commit for you. Registering a subdirectory package does
-   require the `subdir=` argument and that argument is only expressible in a
-   Registrator comment, but a workflow can post that comment: Registrator
-   whitelists `github-actions[bot]` ahead of its collaborator check
-   (`Registrator.jl` `src/commentbot/github_utils.jl:36`), and the
-   GITHUB_TOKEN recursion rule does not apply because Registrator is a GitHub
-   App consuming a webhook, not a workflow run.
+   **If AutoMerge refuses**, read its comment on the General PR, fix the cause
+   on `main` (no version bump: the version is still unpublished everywhere),
+   then run **Release 1 - Register Julia** by hand from the Actions tab. It
+   registers the same version from the new commit, and Registrator updates the
+   open PR in place. A push that leaves the version unchanged never registers by
+   itself, so unrelated work merged while a registration is pending does not
+   move it.
 
-   Watch for the registry PR at
-   <https://github.com/JuliaRegistries/General/pulls>. If none appears, the
-   JuliaRegistrator App has come off the repository — the one prerequisite CI
-   cannot satisfy for itself.
+4. **If `release.yml` fails partway**, it opens an issue. Fix the cause and run
+   **Release 3 - Publish** by hand with the tag; every step skips what already
+   published.
+
+Registration from a workflow works because Registrator whitelists
+`github-actions[bot]` ahead of its collaborator check (`Registrator.jl`
+`src/commentbot/github_utils.jl:36`), and the GITHUB_TOKEN recursion rule does
+not apply to it: Registrator is a GitHub App consuming a webhook, not a workflow
+run. If no reply appears on the commit, the JuliaRegistrator App has come off
+the repository.
 
 ## Things that were broken, and why they are worth not re-breaking
+
+- **Every registry but General published v0.3.0.** All five bindings were
+  released together, the moment the version bump reached `main`; General then
+  refused the registration (a breaking release with no release notes), and a
+  fix would have had to come from a new commit the other registries could
+  never match. Hence the register → TagBot → publish order above.
+- **Releases were validated after they shipped.** Conformance ran against the
+  tag in parallel with the publish jobs. It gates the registration now.
+- **Two workflows each created a GitHub release.** `binary-release.yml` made its
+  own beside the pipeline's (one of them a stray draft named
+  `refs/heads/main`), and two jobs overwrote each other's release notes, one of
+  them reading a `release_id` output that was never set. TagBot alone creates
+  the release now, and `release.yml` only appends below a marker.
 
 - **Both hand-kept version mirrors shipped stale in v0.2.0.** The four
   manifests were bumped; `LIBRARY_VERSION` in TypeScript and `LibraryVersion`

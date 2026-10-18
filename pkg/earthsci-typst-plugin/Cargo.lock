@@ -258,13 +258,15 @@ checksum = "e1d926b4d407d372f141f93bb444696142c29d32962ccbd3531117cf3aa0bfa9"
 
 [[package]]
 name = "earthsci-ast"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "diffsol",
+ "faer",
  "getrandom 0.3.4",
  "indexmap",
  "jsonschema",
  "ndarray",
+ "rayon",
  "rstar",
  "rustc-hash",
  "s2rst",
@@ -276,7 +278,7 @@ dependencies = [
 
 [[package]]
 name = "earthsci-narrative"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "earthsci-ast",
  "serde",
