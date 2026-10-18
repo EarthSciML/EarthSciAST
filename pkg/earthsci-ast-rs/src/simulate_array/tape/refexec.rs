@@ -586,9 +586,22 @@ pub(super) fn run_reference(
                         let Some(RefVal::Arr(a)) = &slots[*s as usize] else {
                             panic!("an array condition reads an array slot");
                         };
-                        // The array's own walk is the slab order.
+                        // The array's own walk is the slab order: `k` is
+                        // its row-major position, read in O(rank).
                         let k = super::ir::slab_flat(shape, cell, prog.col_major);
-                        *a.iter().nth(k).expect("the cell is in the box")
+                        match a.as_slice() {
+                            Some(s) => s[k],
+                            None => {
+                                let mut idx = vec![0usize; a.ndim()];
+                                let mut rest = k;
+                                for (i, &n) in idx.iter_mut().zip(a.shape()).rev() {
+                                    *i = rest % n;
+                                    rest /= n;
+                                }
+                                assert_eq!(rest, 0, "the cell is in the box");
+                                a[IxDyn(&idx)]
+                            }
+                        }
                     }
                     _ => match resolve(prog, &slots, &state_arrays, params, t, op) {
                         RefVal::Scalar(v) => v,
