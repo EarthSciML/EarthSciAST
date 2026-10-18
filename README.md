@@ -18,7 +18,7 @@ These utilities have overlapping implementations in multiple languages:
 | Capability | Julia | TypeScript | Python | Rust | Go |
 |---|:--:|:--:|:--:|:--:|:--:|
 | **Core** — parse, serialize, validate, display, canonicalize, graph, edit, flatten | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Classification** — derived variable classification | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Classification** — derived variable type and update cadence | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Simulation** — run a simulation | ✅ | — | ✅ | ✅ | — |
 | **Runtime I/O** — data-source providers, refresh cadence, output sinks, checkpoints | ✅ | — | ✅ | ✅ | — |
 | **Hardware Acceleration** – run on GPUs (experimental) | ✅ | — | - | ✅ | — |
