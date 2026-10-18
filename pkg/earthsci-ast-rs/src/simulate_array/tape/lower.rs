@@ -1304,6 +1304,9 @@ impl<'m> TapeBuilder<'m> {
             None => {
                 let m = tape_index(self.faults.len(), "faults").ok()?;
                 self.faults.push(msg);
+                // `fault_order` stays parallel to `faults`: a later
+                // `Instr::Fault` reads both at its own index.
+                self.fault_order.push((self.cur_rule, key.clone()));
                 FaultWhat::Every(m)
             }
         };

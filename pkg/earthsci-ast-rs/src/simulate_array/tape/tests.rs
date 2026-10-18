@@ -3925,3 +3925,108 @@ fn a_fault_behind_a_state_condition_fires_where_the_oracle_reaches_it() {
         "the states cover both a fault and none"
     );
 }
+
+/// Two rules over the 3×2 box, `D(u[i,j]) = rhs_u` then `D(v[i,j]) = rhs_v`,
+/// with scalar parameters `p`, `q`, `r` (each `index(·, 1)` of one is an
+/// `E_TREEWALK_INDEX_ON_SCALAR` fault naming it).
+fn two_rule_doc(rhs_u: serde_json::Value, rhs_v: serde_json::Value) -> serde_json::Value {
+    let eq = |var: &str, rhs: serde_json::Value| {
+        json!({
+            "lhs": {"op": "faq", "args": [], "output_idx": ["i", "j"],
+                    "expr": {"op": "D", "args": [{"op": "index", "args": [var, "i", "j"]}],
+                             "wrt": "t"},
+                    "ranges": {"i": [1, 3], "j": [1, 2]}},
+            "rhs": {"op": "faq", "args": [], "output_idx": ["i", "j"],
+                    "ranges": {"i": [1, 3], "j": [1, 2]}, "expr": rhs}
+        })
+    };
+    let state = json!({"type": "unknown", "units": "1", "default": 0.5, "shape": ["x", "y"]});
+    let param = json!({"type": "parameter", "units": "1", "default": 2.0});
+    json!({
+        "esm": "1.2.0",
+        "metadata": {"name": "rule_faults", "authors": ["tape tests"]},
+        "index_sets": {"x": {"kind": "interval", "size": 3}, "y": {"kind": "interval", "size": 2}},
+        "models": {"M": {
+            "variables": {"u": state.clone(), "v": state,
+                          "p": param.clone(), "q": param.clone(), "r": param},
+            "equations": [eq("u", rhs_u), eq("v", rhs_v)]
+        }}
+    })
+}
+
+/// `index(name, 1)` of a scalar parameter: a fault at every evaluation.
+fn on_scalar(name: &str) -> serde_json::Value {
+    json!({"op": "index", "args": [name, 1]})
+}
+
+/// `ifelse(t > 0.5, arm, 0)`: a runtime-scalar branch the oracle takes only
+/// for `t > 0.5`.
+fn after_half(arm: serde_json::Value) -> serde_json::Value {
+    json!({"op": "ifelse", "args": [{"op": ">", "args": ["t", 0.5]}, arm, 0.0]})
+}
+
+/// Run every tape build of `doc` through both executors at each of `times`,
+/// asserting the reported fault (message, so rule) is the oracle's, and that
+/// the oracle faults at each. Returns the fused program.
+fn assert_fault_parity(doc: serde_json::Value, times: &[f64]) -> TapeProgram {
+    let compiled = compile(doc);
+    let n = compiled.state_variable_names().len();
+    let param_vec = compiled.debug_resolve_params(&HashMap::new());
+    let build = |k: usize| match k {
+        0 => taped(compiled.build_tape_opts(&HashSet::new(), Some(default_cfg()))).0,
+        1 => taped(compiled.build_tape_opts(&HashSet::new(), None)).0,
+        _ => taped(compiled.build_tape_layout(&HashSet::new(), Some(default_cfg()), false)).0,
+    };
+    let state = seeded_state(n, 7, -1.0, 1.0);
+    for &t in times {
+        crate::simulate_array::take_const_array_oob();
+        compiled.debug_eval_rhs(&state, t, &HashMap::new(), true);
+        let want = crate::simulate_array::take_const_array_oob();
+        assert!(want.is_some(), "the oracle faults at t = {t}");
+        for k in 0..3 {
+            let mut dy = vec![0.0f64; n];
+            run_reference(&build(k), &compiled, &state, &param_vec, t, &mut dy);
+            assert_eq!(
+                crate::simulate_array::take_const_array_oob(),
+                want,
+                "program {k} ref, t = {t}"
+            );
+            let mut scratch = super::super::RhsScratch::new(&compiled.var_shapes);
+            scratch.install_tape(std::rc::Rc::new(build(k)));
+            compiled.debug_eval_rhs_into(
+                &state,
+                t,
+                &param_vec,
+                &mut dy,
+                &mut scratch,
+                &mut RhsStats::default(),
+            );
+            assert_eq!(
+                crate::simulate_array::take_const_array_oob(),
+                want,
+                "program {k} fast, t = {t}"
+            );
+        }
+    }
+    build(0)
+}
+
+/// A fault in a runtime-scalar branch is a fault-scan candidate with its own
+/// message; a later rule's certain fault must still name ITS message (the
+/// message table and the fault order stay parallel).
+#[test]
+fn a_branch_fault_keeps_the_fault_tables_parallel() {
+    let prog = assert_fault_parity(
+        two_rule_doc(
+            json!({"op": "+", "args": [after_half(on_scalar("q")), u_at(json!("i"), json!("j"))]}),
+            on_scalar("r"),
+        ),
+        &[0.0],
+    );
+    assert_eq!(prog.faults.len(), prog.fault_order.len());
+    assert!(
+        prog.instrs
+            .iter()
+            .any(|i| matches!(i, Instr::FaultScan { .. }))
+    );
+}
