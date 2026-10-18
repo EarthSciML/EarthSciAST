@@ -31,8 +31,19 @@
 # output indices in S, which must each range over a whole declared index set,
 # and must not include the enclosing faq's contracted indices.
 #
+# DATA GATHERS are lifted by the same rule. An `index` read of a named array
+# with a subscript that reads an unknown (a state or an observed), reached the
+# same way and reading a strict subset S of the output indices,
+#
+#     D(u[c,l]) = -0.1·u[c,l] + 0.01·u[c, max(1, cnt[c])]
+#
+# becomes `G[c] = u[c, max(1, cnt[c])]`, read once per column instead of once
+# per level. A subscript that reads only parameters or build-time data is left
+# where it is: the tiers below resolve those at build.
+#
 # The lifted definition is the reduction itself with S added as its output
-# indices, so its terms and fold order are the original's, cell for cell.
+# indices (for a gather, a `faq` over S whose body is the gather), so its
+# terms and fold order are the original's, cell for cell.
 # Everything about it is internal to the build: its name carries a NUL byte,
 # which no document name can, it is added only to the build's own copy of the
 # model (observed listings, outputs and sinks read the document), and the
