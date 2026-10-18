@@ -1668,6 +1668,88 @@ fn ab_chunk_gathers_on_short_rows() {
     }
 }
 
+/// A column sum `H[c] = sum_r u[r, c]` read by the elementwise group over
+/// `u`'s box, three ways: at the cell's own column, one column over, and
+/// through a data subscript. A group that absorbs the sum folds and consumes
+/// one range of columns at a time (and a split hands each worker its own
+/// range), so it may absorb only a sum it reads at each cell's own column:
+/// the other two read columns another range folds.
+#[test]
+fn ab_pre_reduction_absorbed_only_for_own_column_reads() {
+    let (nc, nr) = (40i64, 3i64);
+    let perm: Vec<f64> = (0..nc).map(|c| ((c * 7 + 3) % nc + 1) as f64).collect();
+    let doc = |read: serde_json::Value| {
+        json!({
+            "esm": "1.1.0",
+            "metadata": {"name": "tape_pre_reduce_reads"},
+            "models": {"M": {
+                "variables": {
+                    "u": {"type": "unknown", "shape": ["c", "r"]},
+                    "H": {"type": "unknown", "shape": ["c"]},
+                    "w": {"type": "unknown", "shape": ["c"]}
+                },
+                "equations": [
+                    {"lhs": "w", "rhs": {"op": "const", "args": [], "value": perm}},
+                    {"lhs": "H", "rhs": {"op": "faq", "args": [], "output_idx": ["c"],
+                        "ranges": {"c": [1, nc], "l": [1, nr]},
+                        "expr": {"op": "index", "args": ["u", "c", "l"]}}},
+                    {
+                        "lhs": {"op": "faq", "args": [], "output_idx": ["c", "r"],
+                                "expr": {"op": "D", "args": [
+                                    {"op": "index", "args": ["u", "c", "r"]}], "wrt": "t"},
+                                "ranges": {"c": [1, nc], "r": [1, nr]}},
+                        "rhs": {"op": "faq", "args": [], "output_idx": ["c", "r"],
+                                "ranges": {"c": [1, nc], "r": [1, nr]},
+                                "expr": {"op": "+", "args": [
+                                    {"op": "*", "args": [-0.1,
+                                        {"op": "index", "args": ["u", "c", "r"]}]},
+                                    {"op": "*", "args": [0.25, read]}
+                                ]}}
+                    }
+                ]
+            }}
+        })
+    };
+    let reads = [
+        (
+            "own column",
+            json!({"op": "index", "args": ["H", "c"]}),
+            true,
+        ),
+        (
+            "next column",
+            json!({"op": "index", "args": ["H", {"op": "+", "args": ["c", 1]}]}),
+            false,
+        ),
+        (
+            "data subscript",
+            json!({"op": "index", "args": ["H", {"op": "index", "args": ["w", "c"]}]}),
+            false,
+        ),
+    ];
+    for (what, read, absorbs) in reads {
+        // Column-major: the sum's axis `l` leads the box.
+        let prog = ab_check(doc(read), -2.0, 2.0);
+        assert!(prog.col_major);
+        assert_eq!(
+            prog.fused.iter().any(|f| f.pre.is_some()),
+            absorbs,
+            "{what}: absorbed"
+        );
+    }
+    // The column_sum scaling family reads its column sums, broadcast along
+    // the levels, at the own column.
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/conformance/scaling/fixtures/column_sum/column_sum_N1000.esm");
+    let file = crate::parse::load_path(&path).expect("scaling fixture loads");
+    let compiled = ArrayCompiled::from_file(&file).expect("fixture compiles");
+    let prog = taped(compiled.build_tape_opts(&HashSet::new(), Some(default_cfg()))).0;
+    assert!(
+        prog.fused.iter().any(|f| f.pre.is_some()),
+        "column_sum: the column sum is absorbed"
+    );
+}
+
 /// The unstructured-mesh gather `sum_k kappa * (u[nbr[i, k]] - u[i])` over a
 /// constant neighbour table, with more cells than one executor chunk: the
 /// folded gather reads positions resolved when the CONST section runs, and

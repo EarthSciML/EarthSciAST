@@ -2053,7 +2053,10 @@ fn absorb_pre_reductions(prog: &mut TapeProgram) {
         }
         let rows: usize = src_shape[..k].iter().product();
         let n_inner: usize = src_shape[k..].iter().product();
-        if prog.slots[*out as usize].scalar || prog.slots[*out as usize].elems() != n_inner {
+        if prog.slots[*out as usize].scalar
+            || prog.slots[*out as usize].elems() != n_inner
+            || !reads_own_columns(fs, *out, k, n_inner)
+        {
             continue;
         }
         absorbed.push((
@@ -2091,6 +2094,128 @@ fn absorb_pre_reductions(prog: &mut TapeProgram) {
         !drop[k - 1]
     });
     prog.fuse_stats.instrs_after = prog.instrs.len();
+}
+
+/// Whether every element of group `fs` that reads slot `out` (`n_inner`
+/// elements, the columns of the group's box past its `lead` leading axes)
+/// reads it at its own column, `out[flat % n_inner]`, or reads the zero
+/// ghost. An absorbed reduction is folded and consumed one range of columns
+/// at a time, so a read of any other column (a shifted read, a gather
+/// through a data subscript) would see a cell another range has not folded
+/// yet.
+fn reads_own_columns(fs: &FusedSpec, out: SlotId, lead: usize, n_inner: usize) -> bool {
+    fs.inputs
+        .iter()
+        .filter(|inp| matches!(inp.src, SrcRef::Slot(s) if s == out))
+        .all(|inp| {
+            if inp.index.is_some() {
+                return false;
+            }
+            if let Some(g) = &inp.gather {
+                return chunk_gather_own_columns(g, lead);
+            }
+            match inp.shifted_ix {
+                // Aligned: `out` has the box's element count, one column per
+                // element.
+                None => true,
+                Some(ix) => own_column_runs(
+                    &fs.schedule.nodes,
+                    ix as usize,
+                    inp.elem_stride,
+                    n_inner as i64,
+                    0,
+                    0,
+                ),
+            }
+        })
+}
+
+/// [`reads_own_columns`] for a [`ChunkGather`], axis by axis: each of the
+/// `lead` leading axes adds nothing to the source offset (the read is
+/// broadcast along it), and each later axis maps every position it copies
+/// to the same position at the box's own row-major stride, so the offset is
+/// the element's column.
+fn chunk_gather_own_columns(g: &ChunkGather, lead: usize) -> bool {
+    let mut stride = 1i64;
+    for a in (0..g.shape.len()).rev() {
+        let ok = if a < lead {
+            g.strides[a] == 0 || g.segs[a].iter().all(|&(_, len, so)| len == 1 && so == 0)
+        } else {
+            g.strides[a] == stride && g.segs[a].iter().all(|&(o, _, so)| so == o)
+        };
+        if !ok {
+            return false;
+        }
+        stride *= g.shape[a] as i64;
+    }
+    true
+}
+
+/// [`reads_own_columns`] for shifted input `ix` over schedule `nodes`, every
+/// run moved by `(out_d, in_d)` (see [`RunSchedule::for_each_run`]) without
+/// expanding the repetitions: a run reads its own columns when its source
+/// offset is its output offset's column and it stays within the columns,
+/// one source element per element. A repetition that moves the output by
+/// whole rows and the source not at all repeats the same columns, so its
+/// body is checked once; one that moves both by the same step keeps every
+/// run's source-minus-output difference, and its runs' columns move
+/// linearly, so its first and last repetitions bound the rest.
+fn own_column_runs(
+    nodes: &[RunNode],
+    ix: usize,
+    stride: i64,
+    n: i64,
+    out_d: i64,
+    in_d: i64,
+) -> bool {
+    let mut i = 0usize;
+    while i < nodes.len() {
+        match &nodes[i] {
+            RunNode::Run(r) => {
+                let src = r.in_off[ix];
+                if src != GHOST_OFF {
+                    let col = (r.out_off as i64 + out_d).rem_euclid(n);
+                    let len = r.len as i64;
+                    if src + in_d != col || (len > 1 && (stride != 1 || col + len > n)) {
+                        return false;
+                    }
+                }
+                i += 1;
+            }
+            RunNode::Repeat {
+                count,
+                body,
+                out_step,
+                in_step,
+            } => {
+                let body_nodes = &nodes[i + 1..i + 1 + *body as usize];
+                let s = in_step[ix];
+                let at = |k: i64| {
+                    own_column_runs(
+                        body_nodes,
+                        ix,
+                        stride,
+                        n,
+                        out_d + k * out_step,
+                        in_d + k * s,
+                    )
+                };
+                let last = *count as i64 - 1;
+                let ok = if s == 0 && out_step % n == 0 {
+                    at(0)
+                } else if s == *out_step {
+                    at(0) && at(last)
+                } else {
+                    false
+                };
+                if !ok {
+                    return false;
+                }
+                i += 1 + *body as usize;
+            }
+        }
+    }
+    true
 }
 
 /// The rewritten program under construction.

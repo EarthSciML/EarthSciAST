@@ -2851,15 +2851,32 @@ impl<'m> TapeBuilder<'m> {
         // not by box, so a subexpression this lowers over the sub-box must
         // not answer for the same node over the full box (a template's
         // shared subscript), nor the reverse.
+        //
+        // The sub-box is only a narrower box for a value that the scan above
+        // judged independent of the other axes; a read that scan does not
+        // see through (a bare array aligned with the full box by name) does
+        // not lower over it. That is this route not applying, not the rule
+        // failing: everything the attempt emitted is undone and the gather
+        // is lowered over the full box, which declines on its own if the
+        // gather cannot be lowered at all. Nothing in it can fault, so no
+        // fault is dropped with it.
+        let txn = self.sub_txn();
         self.push_scope();
         let v = self.lower_index(node, &sub);
         self.pop_scope();
-        let v = v?;
+        let v = match v {
+            Ok(v) => v,
+            Err(_) => {
+                self.sub_rollback(txn);
+                return Ok(None);
+            }
+        };
         let Some((vs, vo)) = self.lv_box(&v) else {
             return Ok(Some(v));
         };
         if vs != sub.shape || vo != sub.lo {
-            bail_tape!("index: a sub-box gather's box is not its sub-box");
+            self.sub_rollback(txn);
+            return Ok(None);
         }
         // Broadcast: output axis `keep[j]` reads source axis `j`.
         let mapped: SmallVec<[bool; 4]> = (0..bx.shape.len()).map(|a| used[a]).collect();
