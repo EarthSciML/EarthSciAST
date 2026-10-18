@@ -1,0 +1,66 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "UnitsArrayConcatMismatch",
+    "description": "Invalid: concat joins an array in m with one in kg. concat's operands must agree in dimension and scale like the operands of + (esm-spec §4.8.3).",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "created": "2026-10-16T00:00:00Z"
+  },
+  "index_sets": {
+    "rows": {
+      "kind": "interval",
+      "size": 2
+    },
+    "one": {
+      "kind": "interval",
+      "size": 1
+    }
+  },
+  "models": {
+    "Probe": {
+      "variables": {
+        "a": {
+          "type": "parameter",
+          "units": "m",
+          "default": 1.0,
+          "description": "A length per row.",
+          "shape": [
+            "one"
+          ]
+        },
+        "b": {
+          "type": "parameter",
+          "units": "kg",
+          "default": 2.0,
+          "description": "A mass per row.",
+          "shape": [
+            "one"
+          ]
+        },
+        "joined": {
+          "type": "unknown",
+          "units": "m",
+          "description": "Invalid: lengths and masses in one array.",
+          "shape": [
+            "rows"
+          ]
+        }
+      },
+      "equations": [
+        {
+          "lhs": "joined",
+          "rhs": {
+            "op": "concat",
+            "args": [
+              "a",
+              "b"
+            ],
+            "axis": 0
+          }
+        }
+      ]
+    }
+  }
+}

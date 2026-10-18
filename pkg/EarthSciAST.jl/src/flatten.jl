@@ -1349,10 +1349,10 @@ function _normalize_angle_arguments(states, params, observeds,
         for u in values(var_units)) || return (equations, field_ics,
                                                continuous_events, discrete_events)
 
-    # An array element carries its array's declared unit on this path, so
-    # `cos(index(lat, i))` with `lat` in `deg` is converted like `cos(lat)`.
-    element_units = _ElementUnits(var_units)
-    rewrite(e) = _normalize_angle_expr(e, element_units)
+    # An array operator carries its element's unit (the checker's rule too, so
+    # the two agree), so `cos(index(lat, i))` with `lat` in `deg` is converted
+    # like `cos(lat)`.
+    rewrite(e) = _normalize_angle_expr(e, var_units)
     equations = Equation[Equation(eq.lhs, rewrite(eq.rhs); _comment=eq._comment)
                          for eq in equations]
     field_ics = Pair{String, ASTExpr}[name => rewrite(expr) for (name, expr) in field_ics]

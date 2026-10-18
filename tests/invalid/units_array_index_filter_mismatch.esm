@@ -1,0 +1,139 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "UnitsArrayIndexFilterMismatch",
+    "description": "Invalid (EarthSciAST#414 hole 2, the issue's own repro): an faq's filter compares index(p_lum, a) [cd] with index(p_power, b) [hp]. `index` has the unit of the array it reads (esm-spec §4.8.3), so the comparison is a provable mismatch.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "created": "2026-10-16T00:00:00Z"
+  },
+  "index_sets": {
+    "lum_rows": {
+      "kind": "interval",
+      "size": 1
+    },
+    "power_rows": {
+      "kind": "interval",
+      "size": 1
+    }
+  },
+  "models": {
+    "Probe": {
+      "variables": {
+        "p_lum": {
+          "type": "unknown",
+          "units": "cd",
+          "description": "A luminosity per row.",
+          "shape": [
+            "lum_rows"
+          ]
+        },
+        "p_power": {
+          "type": "unknown",
+          "units": "hp",
+          "description": "A power per row.",
+          "shape": [
+            "power_rows"
+          ]
+        },
+        "p_count": {
+          "type": "unknown",
+          "units": "1",
+          "description": "How many pairs satisfy the predicate.",
+          "shape": []
+        }
+      },
+      "equations": [
+        {
+          "lhs": "p_lum",
+          "rhs": {
+            "op": "makearray",
+            "args": [],
+            "regions": [
+              [
+                [
+                  1,
+                  1
+                ]
+              ]
+            ],
+            "values": [
+              {
+                "op": "const",
+                "args": [],
+                "value": 1.0,
+                "units": "cd"
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "p_power",
+          "rhs": {
+            "op": "makearray",
+            "args": [],
+            "regions": [
+              [
+                [
+                  1,
+                  1
+                ]
+              ]
+            ],
+            "values": [
+              {
+                "op": "const",
+                "args": [],
+                "value": 2.0,
+                "units": "hp"
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "p_count",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [],
+            "ranges": {
+              "a": {
+                "from": "lum_rows"
+              },
+              "b": {
+                "from": "power_rows"
+              }
+            },
+            "semiring": "sum_product",
+            "filter": {
+              "op": "<=",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "p_lum",
+                    "a"
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "p_power",
+                    "b"
+                  ]
+                }
+              ]
+            },
+            "expr": {
+              "op": "const",
+              "args": [],
+              "value": 1.0,
+              "units": "1"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -3,15 +3,23 @@ import {
   parseUnit,
   tryParseUnit,
   checkDimensions,
+  checkElementDimensions,
+  isDimensionless,
   validateUnits,
   dimsEqual,
+  constantExponentValue,
+  scopedReferenceUnits,
+  topLevelScopedUnits,
+  withScopedReferenceUnits,
   type ParsedUnit,
   type CanonicalDims,
 } from './units.js'
 import { loadString } from './parse.js'
 import { validateText } from './validate.js'
-import { readFixture } from './test-helpers.js'
-import type { Expression, EsmFile } from './types.js'
+import { readFixture, fixturesDir } from './test-helpers.js'
+import { readFileSync } from 'node:fs'
+import type { Expression, EsmFile, ReactionSystem } from './types.js'
+import { validateReactionRateUnits } from './validate/reaction-checks.js'
 import { ExactScale } from './unit-conversion.js'
 
 /** A parsed unit's dimensions, scale and offset — its exact scale is pinned in unit-exact-scale.test.ts. */
@@ -618,10 +626,12 @@ describe('Unit parsing and dimensional analysis', () => {
     // dimensionless manufactured false mismatches against dimensional operands
     // all over the valid corpus.
     describe('structural operators are indeterminate, not dimensionless (T3)', () => {
+      // (The array operators `index`/`faq`/`makearray`/... are TYPED now —
+      // see the A1-A6 block below — so only their degenerate forms stay here.)
       const structural: Expression[] = [
-        { op: 'index', args: ['u', 2] },
+        { op: 'index', args: [] },
         { op: 'fn', args: ['t'], name: 'datetime.year' } as unknown as Expression,
-        { op: 'faq', args: ['A'], expr: { op: '*', args: ['A', 'w'] } } as Expression,
+        { op: 'faq', args: ['A'], expr: { op: '*', args: ['A', 'w'] }, reduce: '*' } as Expression,
         { op: 'table_lookup', args: [], table: 'kT', axes: { temp: 'T_air' } } as Expression,
         { op: 'makearray', args: [1, 2] } as unknown as Expression,
       ]
@@ -1003,6 +1013,533 @@ describe('Unit parsing and dimensional analysis', () => {
             e.path === '/models/BadUnitsModel/variables/invalid_log',
         ),
       ).toBe(true)
+    })
+  })
+})
+
+// EarthSciAST#414 + constant exponents (esm-spec §4.7, §4.8.3, §4.8.4).
+describe('scoped references, faq filters and constant exponents', () => {
+  const env = (entries: Record<string, string>): Map<string, ParsedUnit> =>
+    new Map(Object.entries(entries).map(([k, u]) => [k, parseUnit(u)]))
+  const mismatches = (r: { diagnostics: Array<{ code: string }> }) =>
+    r.diagnostics.filter((d) => d.code === 'dimensional_mismatch')
+
+  describe("R1: a scoped reference carries its target's declared units", () => {
+    const doc = (rhs: string, declared: string): EsmFile =>
+      ({
+        esm: '1.2.0',
+        metadata: { name: 'scoped' },
+        models: {
+          Leaf: {
+            variables: { p: { type: 'parameter', units: 'kPa', default: 1 } },
+            equations: [],
+            subsystems: {
+              Deep: {
+                variables: { q: { type: 'parameter', units: 'h', default: 1 } },
+                equations: [],
+              },
+            },
+          },
+          Probe: {
+            variables: { probe: { type: 'unknown', units: declared } },
+            equations: [{ lhs: 'probe', rhs }],
+            subsystems: {
+              Sub: {
+                variables: { p: { type: 'parameter', units: 'kg', default: 1 } },
+                equations: [],
+              },
+              Gone: { ref: 'nowhere.esm' },
+            },
+          },
+        },
+      }) as unknown as EsmFile
+
+    it('collects top-level, nested and own-subsystem scoped names; skips {ref} stubs', () => {
+      const file = doc('Leaf.p', 'kPa')
+      const scoped = scopedReferenceUnits(file, file.models!.Probe)
+      expect(scoped.get('Leaf.p')).toBe('kPa')
+      expect(scoped.get('Leaf.Deep.q')).toBe('h')
+      expect(scoped.get('Probe.Sub.p')).toBe('kg')
+      expect(scoped.get('Sub.p')).toBe('kg')
+      expect([...scoped.keys()].some((k) => k.startsWith('Gone.'))).toBe(false)
+      expect(scoped.has('probe')).toBe(false)
+    })
+
+    const unitErrors = (file: EsmFile) =>
+      validateUnits(file).filter((w) => w.code === 'dimensional_mismatch')
+
+    it('checks an equation across a top-level reference (dimension and scale)', () => {
+      expect(unitErrors(doc('Leaf.p', 'kPa'))).toHaveLength(0)
+      expect(unitErrors(doc('Leaf.p', 'kg')).length).toBeGreaterThan(0)
+      expect(unitErrors(doc('Leaf.p', 'Pa')).length).toBeGreaterThan(0)
+    })
+
+    it('checks a reference through a nested subsystem', () => {
+      expect(unitErrors(doc('Leaf.Deep.q', 'h'))).toHaveLength(0)
+      expect(unitErrors(doc('Leaf.Deep.q', 's')).length).toBeGreaterThan(0)
+    })
+
+    it("checks a reference relative to the component's own subsystem", () => {
+      expect(unitErrors(doc('Sub.p', 'kg'))).toHaveLength(0)
+      expect(unitErrors(doc('Sub.p', 'm')).length).toBeGreaterThan(0)
+    })
+
+    it('leaves a reference into an unresolved {ref} stub undeterminable', () => {
+      expect(unitErrors(doc('Gone.x', 'kg'))).toHaveLength(0)
+    })
+  })
+
+  describe('a component-relative path wins even when it declares no units', () => {
+    // Model A mounts a subsystem B whose x declares no units; a top-level model
+    // B declares x in kg. Inside A, `B.x` is the subsystem's x (unknown), not
+    // the top-level one.
+    const doc = (subUnits: string | undefined, withSub = true): EsmFile =>
+      ({
+        esm: '1.2.0',
+        metadata: { name: 'shadow' },
+        models: {
+          A: {
+            variables: { y: { type: 'unknown', units: 'm' } },
+            equations: [{ lhs: 'y', rhs: 'B.x' }],
+            ...(withSub
+              ? {
+                  subsystems: {
+                    B: {
+                      variables: {
+                        x: {
+                          type: 'parameter',
+                          default: 1,
+                          ...(subUnits === undefined ? {} : { units: subUnits }),
+                        },
+                      },
+                      equations: [],
+                    },
+                  },
+                }
+              : {}),
+          },
+          B: {
+            variables: { x: { type: 'parameter', units: 'kg', default: 1 } },
+            equations: [],
+          },
+        },
+      }) as unknown as EsmFile
+    const unitErrors = (file: EsmFile) =>
+      validateUnits(file).filter((w) => w.code === 'dimensional_mismatch')
+
+    it('records the unitless relative member as taking its name', () => {
+      const file = doc(undefined)
+      const scoped = scopedReferenceUnits(file, file.models!.A)
+      expect(scoped.has('B.x')).toBe(true)
+      expect(scoped.get('B.x')).toBeNull()
+    })
+
+    it('skips the check instead of using the top-level declaration', () => {
+      expect(unitErrors(doc(undefined))).toHaveLength(0)
+      // An unparseable relative unit shadows the same way (it is reported at
+      // its own declaration, not as a mismatch here).
+      expect(unitErrors(doc('not_a_unit'))).toHaveLength(0)
+    })
+
+    it('still checks against the relative unit when it has one, and the top-level one otherwise', () => {
+      expect(unitErrors(doc('m'))).toHaveLength(0)
+      expect(unitErrors(doc('s')).length).toBeGreaterThan(0)
+      expect(unitErrors(doc(undefined, false)).length).toBeGreaterThan(0)
+    })
+
+    it('applies to the reaction-rate check too', () => {
+      const rs = (subUnits: string | undefined): EsmFile =>
+        ({
+          esm: '1.2.0',
+          metadata: { name: 'shadow-rs' },
+          reaction_systems: {
+            Chem: {
+              species: { A: { units: 'mol/L' } },
+              parameters: {},
+              reactions: [
+                {
+                  id: 'r1',
+                  substrates: [{ species: 'A', stoichiometry: 1 }],
+                  products: [],
+                  rate: 'B.k',
+                },
+              ],
+              subsystems: {
+                B: {
+                  species: {},
+                  parameters: { k: subUnits === undefined ? {} : { units: subUnits } },
+                  reactions: [],
+                },
+              },
+            },
+            B: { species: {}, parameters: { k: { units: 'kg' } }, reactions: [] },
+          },
+        }) as unknown as EsmFile
+      const check = (file: EsmFile) =>
+        validateReactionRateUnits(
+          file.reaction_systems!.Chem as ReactionSystem,
+          '/reaction_systems/Chem',
+          file,
+        )
+      expect(check(rs(undefined))).toHaveLength(0)
+      expect(check(rs('1/s'))).toHaveLength(0)
+      expect(check(rs('kg'))).toHaveLength(1)
+    })
+  })
+
+  describe('withScopedReferenceUnits never overwrites an existing binding', () => {
+    const file = {
+      esm: '1.2.0',
+      metadata: { name: 'keep' },
+      models: {
+        Top: {
+          variables: {
+            p: { type: 'parameter', units: 'kg', default: 1 },
+            bad: { type: 'parameter', units: 'not_a_unit', default: 1 },
+          },
+          equations: [],
+        },
+        Probe: { variables: {}, equations: [] },
+      },
+    } as unknown as EsmFile
+
+    it('keeps a pre-bound name, scoped or bare', () => {
+      const view = withScopedReferenceUnits(
+        env({ 'Top.p': 'm', 'Top.bad': 's', p: 'K' }),
+        file,
+        file.models!.Probe,
+      )
+      expect(view.get('Top.p')).toEqual(parseUnit('m'))
+      expect(view.get('Top.bad')).toEqual(parseUnit('s'))
+      expect(view.get('p')).toEqual(parseUnit('K'))
+    })
+
+    it('binds a free scoped name, and leaves an unparseable one unbound', () => {
+      const view = withScopedReferenceUnits(env({}), file, file.models!.Probe)
+      expect(view.get('Top.p')).toEqual(parseUnit('kg'))
+      expect(view.has('Top.bad')).toBe(false)
+    })
+
+    it('gives the same view whether or not the top-level table is passed in', () => {
+      const prebuilt = topLevelScopedUnits(file)
+      const a = withScopedReferenceUnits(env({}), file, file.models!.Probe, prebuilt)
+      const b = withScopedReferenceUnits(env({}), file, file.models!.Probe)
+      expect([...a.entries()]).toEqual([...b.entries()])
+    })
+  })
+
+  describe("R2: an faq's filter and body are walked", () => {
+    const faq = (filter: Expression | undefined, expr: Expression): Expression =>
+      ({
+        op: 'faq',
+        args: [],
+        semiring: 'sum_product',
+        output_idx: [],
+        ranges: { i: { from: 'rows' } },
+        join: [],
+        ...(filter === undefined ? {} : { filter }),
+        expr,
+      }) as unknown as Expression
+    const b = env({ x: 'm', z: 'kg', y: 'm' })
+
+    it('reports a mismatch inside the filter; the filter does not reach the unit', () => {
+      const r = checkDimensions(faq({ op: '<=', args: ['x', 'z'] }, 'x'), b)
+      expect(mismatches(r)).toHaveLength(1)
+      expect(r.dimensions!.dims).toEqual({ m: 1 })
+    })
+
+    it('reports a mismatch inside the body', () => {
+      const r = checkDimensions(faq(undefined, { op: '+', args: ['x', 'z'] }), b)
+      expect(mismatches(r)).toHaveLength(1)
+    })
+
+    it('accepts a consistent filter and body', () => {
+      const r = checkDimensions(
+        faq({ op: '<=', args: ['x', 'y'] }, { op: '+', args: ['x', 'y'] }),
+        b,
+      )
+      expect(mismatches(r)).toHaveLength(0)
+      expect(r.dimensions!.dims).toEqual({ m: 1 })
+    })
+  })
+
+  describe('R3: a constant-expression exponent folds to an exact rational', () => {
+    const c = (value: number, units?: string): Expression =>
+      ({
+        op: 'const',
+        args: [],
+        value,
+        ...(units === undefined ? {} : { units }),
+      }) as unknown as Expression
+    const fold = (e: Expression) => constantExponentValue(e)
+
+    it('folds literals, unit-1 consts and + - * / to any depth', () => {
+      expect(fold(2)).toEqual({ n: 2, d: 1 })
+      expect(fold({ op: '/', args: [3, 2] })).toEqual({ n: 3, d: 2 })
+      expect(fold({ op: '-', args: [1] })).toEqual({ n: -1, d: 1 })
+      expect(fold({ op: '-', args: [5, 3, 1] })).toEqual({ n: 1, d: 1 })
+      expect(
+        fold({
+          op: '/',
+          args: [
+            { op: '+', args: [1, 2] },
+            { op: '*', args: [4, 2] },
+          ],
+        }),
+      ).toEqual({ n: 3, d: 8 })
+      expect(fold(c(0.5, '1'))).toEqual({ n: 1, d: 2 })
+      expect(fold(c(3))).toEqual({ n: 3, d: 1 })
+      expect(fold(c(2, 'dimensionless'))).toEqual({ n: 2, d: 1 })
+      expect(fold({ op: '/', args: [1, 3001] })).toEqual({ n: 1, d: 3001 })
+    })
+
+    it('does not fold variables, scaled or dimensional consts, other ops, x/0, overflow', () => {
+      expect(fold('n')).toBeNull()
+      expect(fold({ op: '+', args: ['n', 1] })).toBeNull()
+      expect(fold(c(50, '%'))).toBeNull()
+      expect(fold(c(2, 'm'))).toBeNull()
+      expect(fold({ op: 'sqrt', args: [4] })).toBeNull()
+      expect(fold({ op: '/', args: [1, 0] })).toBeNull()
+      expect(fold({ op: '/', args: [1, 2, 3] })).toBeNull()
+      expect(fold({ op: '*', args: [2 ** 40, 2 ** 40] })).toBeNull()
+    })
+
+    const b = env({ T: 'K', L: 'm', n: '1', pct: '%', km: 'km' })
+
+    it('raises dimension and exact scale to the folded value, like a literal', () => {
+      const r = checkDimensions({ op: '^', args: ['T', { op: '/', args: [3, 2] }] }, b)
+      expect(r.dimensions).not.toBeNull()
+      expect(dimsEqual(r.dimensions!.dims, { K: 1.5 })).toBe(true)
+      const k = checkDimensions({ op: '^', args: ['km', { op: '-', args: [5, 3] }] }, b)
+      expect(k.dimensions!.exact.equals(parseUnit('km^2').exact)).toBe(true)
+      const l = checkDimensions({ op: '^', args: ['L', c(0.5, '1')] }, b)
+      expect(dimsEqual(l.dimensions!.dims, { m: 0.5 })).toBe(true)
+    })
+
+    it('keeps a symbolic exponent undeterminable', () => {
+      for (const exp of ['n', { op: '+', args: ['n', 1] }, c(50, '%')] as Expression[]) {
+        const r = checkDimensions({ op: '^', args: ['L', exp] }, b)
+        expect(r.dimensions).toBeNull()
+        expect(mismatches(r)).toHaveLength(0)
+      }
+      // ...while a dimensionless scale-1 base stays dimensionless.
+      const d = checkDimensions({ op: '^', args: ['n', 'n'] }, b)
+      expect(d.dimensions).not.toBeNull()
+      expect(dimsEqual(d.dimensions!.dims, {})).toBe(true)
+    })
+
+    it('still rejects a dimensional exponent', () => {
+      const r = checkDimensions({ op: '^', args: ['L', 'T'] }, b)
+      expect(mismatches(r)).toHaveLength(1)
+    })
+  })
+
+  describe('A1-A6: the checker types the array operators', () => {
+    const b = env({ x: 'm', y: 'm', km: 'km', z: 'kg', w: '1', pct: '%', i: '1' })
+    const dims = (e: Expression) => checkDimensions(e, b).dimensions
+    const node = (o: Record<string, unknown>) => o as unknown as Expression
+    const c = (value: number, units: string) => node({ op: 'const', args: [], value, units })
+    const faq = (extra: Record<string, unknown>, expr?: Expression) =>
+      node({
+        op: 'faq',
+        args: [],
+        output_idx: [],
+        ranges: { i: { from: 'rows' } },
+        ...extra,
+        ...(expr === undefined ? {} : { expr }),
+      })
+
+    it('A1: index has the unit of its array; subscripts do not count; no args is undeterminable', () => {
+      expect(dims(node({ op: 'index', args: ['x', 'z', 2] }))!.dims).toEqual({ m: 1 })
+      expect(
+        dims(node({ op: 'index', args: ['km', 1] }))!.exact.equals(parseUnit('km').exact),
+      ).toBe(true)
+      expect(dims(node({ op: 'index', args: [] }))).toBeNull()
+      // ...and it now meets a sibling's unit: `x + index(z, 1)` is provable.
+      const r = checkDimensions({ op: '+', args: ['x', node({ op: 'index', args: ['z', 1] })] }, b)
+      expect(mismatches(r)).toHaveLength(1)
+    })
+
+    it('A2: reshape and transpose have the unit of args[0]; no args is undeterminable', () => {
+      expect(dims(node({ op: 'reshape', args: ['z'], shape: [2] }))!.dims).toEqual({ kg: 1 })
+      expect(dims(node({ op: 'transpose', args: ['x'], perm: [0] }))!.dims).toEqual({ m: 1 })
+      expect(dims(node({ op: 'reshape', args: [], shape: [2] }))).toBeNull()
+      expect(dims(node({ op: 'transpose', args: [] }))).toBeNull()
+    })
+
+    it('A3: concat operands agree like + operands', () => {
+      expect(dims(node({ op: 'concat', args: ['x', 'y'], axis: 1 }))!.dims).toEqual({ m: 1 })
+      // Undeterminable operands (a bare literal, an unknown name) are skipped.
+      expect(dims(node({ op: 'concat', args: [0, 'x'], axis: 1 }))!.dims).toEqual({ m: 1 })
+      expect(dims(node({ op: 'concat', args: [0, 1], axis: 1 }))).toBeNull()
+      expect(dims(node({ op: 'concat', args: [], axis: 1 }))).toBeNull()
+      const dim = checkDimensions(node({ op: 'concat', args: ['x', 'z'], axis: 1 }), b)
+      expect(mismatches(dim)).toHaveLength(1)
+      expect(mismatches(dim)[0]).toMatchObject({
+        message: expect.stringContaining("Incompatible dimensions in 'concat'"),
+      })
+      const scale = checkDimensions(node({ op: 'concat', args: ['x', 'km'], axis: 1 }), b)
+      expect(mismatches(scale)).toHaveLength(1)
+      expect(mismatches(scale)[0]).toMatchObject({
+        message: expect.stringContaining("Incompatible scales in 'concat'"),
+      })
+    })
+
+    it('A4: makearray values agree like + operands; a bare-literal region is skipped', () => {
+      const mk = (values?: unknown[]) =>
+        node({ op: 'makearray', args: [], regions: [], ...(values ? { values } : {}) })
+      expect(dims(mk([c(1, 'cd'), c(2, 'cd')]))!.dims).toEqual({ cd: 1 })
+      // The bare literal takes the other region's unit.
+      expect(dims(mk([c(1, 'cd'), 0.0]))!.dims).toEqual({ cd: 1 })
+      expect(dims(mk([0.0, 'x']))!.dims).toEqual({ m: 1 })
+      // No determinable value, an empty and an absent `values`: undeterminable.
+      expect(dims(mk([0.0, 1.0]))).toBeNull()
+      expect(dims(mk([]))).toBeNull()
+      expect(dims(mk())).toBeNull()
+      const bad = checkDimensions(mk([c(1, 's'), c(2, 'kg')]), b)
+      expect(mismatches(bad)).toHaveLength(1)
+      expect(mismatches(bad)[0]).toMatchObject({
+        message: expect.stringContaining("'makearray' regions must share units"),
+      })
+      // Scale disagreement is a mismatch too; and a finding INSIDE a value is reported.
+      expect(mismatches(checkDimensions(mk(['x', 'km']), b))).toHaveLength(1)
+      expect(mismatches(checkDimensions(mk([{ op: '+', args: ['x', 'z'] }]), b))).toHaveLength(1)
+    })
+
+    it('A5: broadcast has the unit of {op: fn, args}; a missing fn is undeterminable', () => {
+      expect(dims(node({ op: 'broadcast', fn: '*', args: ['x', 'z'] }))!.dims).toEqual({
+        m: 1,
+        kg: 1,
+      })
+      expect(dims(node({ op: 'broadcast', fn: 'log', args: ['w'] }))!.dims).toEqual({})
+      expect(dims(node({ op: 'broadcast', args: ['x'] }))).toBeNull()
+      const r = checkDimensions(node({ op: 'broadcast', fn: '+', args: ['x', 'z'] }), b)
+      expect(mismatches(r)).toHaveLength(1)
+    })
+
+    describe('A6: an faq has the unit its ⊕ gives its body', () => {
+      it.each(['sum_product', 'max_product', 'min_sum', 'max_sum'])(
+        'semiring %s: the body',
+        (s) => {
+          expect(dims(faq({ semiring: s }, 'x'))!.dims).toEqual({ m: 1 })
+        },
+      )
+
+      it.each(['+', 'max', 'min'])('reduce %s: the body', (r) => {
+        expect(dims(faq({ reduce: r }, 'x'))!.dims).toEqual({ m: 1 })
+      })
+
+      it('defaults to + and lets semiring take precedence over reduce', () => {
+        expect(dims(faq({}, 'x'))!.dims).toEqual({ m: 1 })
+        expect(dims(faq({ semiring: 'sum_product', reduce: '*' }, 'x'))!.dims).toEqual({ m: 1 })
+        expect(dims(faq({ semiring: 'bool_and_or', reduce: '+' }, 'x'))!.dims).toEqual({})
+      })
+
+      it('reduce *: the body only when it is a pure number', () => {
+        expect(dims(faq({ reduce: '*' }, 'w'))!.dims).toEqual({})
+        expect(dims(faq({ reduce: '*' }, 'x'))).toBeNull()
+        // A dimensionless but SCALED body is not a pure number either.
+        expect(dims(faq({ reduce: '*' }, 'pct'))).toBeNull()
+        expect(mismatches(checkDimensions(faq({ reduce: '*' }, 'x'), b))).toHaveLength(0)
+      })
+
+      it('bool_and_or is dimensionless whatever the body is', () => {
+        const r = dims(faq({ semiring: 'bool_and_or' }, 'x'))
+        expect(r).not.toBeNull()
+        expect(isDimensionless(r!)).toBe(true)
+        expect(r!.exact.isOne()).toBe(true)
+      })
+
+      it('value invention (distinct, or a key) is undeterminable', () => {
+        expect(dims(faq({ semiring: 'bool_and_or', distinct: true }, 'x'))).toBeNull()
+        expect(dims(faq({ distinct: true }, 'x'))).toBeNull()
+        expect(dims(faq({ key: 'i' }, 'x'))).toBeNull()
+        // `distinct: false` is not value invention.
+        expect(dims(faq({ distinct: false }, 'x'))!.dims).toEqual({ m: 1 })
+      })
+
+      it('no expr, or an unknown ⊕ spelling, is undeterminable', () => {
+        expect(dims(faq({ semiring: 'sum_product' }))).toBeNull()
+        expect(dims(faq({ semiring: 'bool_and_or' }))).toBeNull()
+        expect(dims(faq({ semiring: 'tropical' }, 'x'))).toBeNull()
+        expect(dims(faq({ reduce: 'mean' }, 'x'))).toBeNull()
+      })
+
+      it('always walks filter and body, whatever the ⊕', () => {
+        const filter = { op: '<=', args: ['x', 'z'] } as Expression
+        for (const extra of [{ reduce: '*' }, { semiring: 'bool_and_or' }, { distinct: true }]) {
+          expect(mismatches(checkDimensions(faq({ ...extra, filter }, 'w'), b))).toHaveLength(1)
+          expect(
+            mismatches(checkDimensions(faq(extra, { op: '+', args: ['x', 'z'] }), b)),
+          ).toHaveLength(1)
+        }
+      })
+    })
+
+    it('the evaluation path reads the same rules as the checker', () => {
+      const deg = env({ lat: 'deg' })
+      for (const e of [
+        node({ op: 'index', args: ['lat', 1] }),
+        faq({ reduce: '*' }, node({ op: 'index', args: ['lat', 'i'] })),
+        node({ op: 'makearray', args: [], regions: [], values: ['lat', 0] }),
+        node({ op: 'makearray', args: [], regions: [], values: [] }),
+        faq({ semiring: 'max_sum' }, node({ op: 'index', args: ['lat', 'i'] })),
+      ]) {
+        expect(checkElementDimensions(e, deg).dimensions).toEqual(
+          checkDimensions(e, deg).dimensions,
+        )
+      }
+    })
+  })
+
+  describe("fixture verdicts through validateText (refs resolved from the file's directory)", () => {
+    const run = (dir: 'valid' | 'invalid', name: string) => {
+      const path = fixturesDir(dir, name)
+      return validateText(readFileSync(path, 'utf-8'), { basePath: fixturesDir(dir) })
+    }
+    it.each([
+      'units_mount_leaf.esm',
+      'units_mount_subsystem_consistent.esm',
+      'units_mount_toplevel_consistent.esm',
+      'units_faq_filter_consistent.esm',
+      'units_constant_exponent_folding.esm',
+      'units_symbolic_exponent_undeterminable.esm',
+      'units_array_mount_leaf.esm',
+      'units_array_operators_consistent.esm',
+      'units_array_mount_index_faq_consistent.esm',
+      'makearray_empty_region_min_extent.esm',
+    ])('%s validates', (name) => {
+      const r = run('valid', name)
+      expect(r.structural_errors).toEqual([])
+      expect(r.is_valid).toBe(true)
+    })
+    it.each([
+      ['units_mount_subsystem_wrong_dimension.esm', ['/models/Probe/variables/probe']],
+      ['units_mount_subsystem_scale_mismatch.esm', ['/models/Probe/variables/probe']],
+      ['units_mount_toplevel_wrong_dimension.esm', ['/models/Probe/variables/probe']],
+      ['units_mount_toplevel_scale_mismatch.esm', ['/models/Probe/variables/probe']],
+      ['units_faq_filter_mismatch.esm', ['/models/Probe/variables/n_short']],
+      ['units_faq_body_mismatch.esm', ['/models/Probe/variables/total']],
+      [
+        'units_constant_exponent_mismatch.esm',
+        ['/models/Powers/variables/T_32', '/models/Powers/variables/L_const'],
+      ],
+      ['units_array_index_filter_mismatch.esm', ['/models/Probe/variables/p_count']],
+      ['units_array_mount_index_faq_mismatch.esm', ['/models/Mount/variables/total']],
+      ['units_array_concat_mismatch.esm', ['/models/Probe/variables/joined']],
+      ['units_array_makearray_mismatch.esm', ['/models/Probe/variables/mixed']],
+      ['units_array_reshape_mismatch.esm', ['/models/Probe/variables/out']],
+      ['units_array_transpose_mismatch.esm', ['/models/Probe/variables/out']],
+      ['units_array_broadcast_mismatch.esm', ['/models/Probe/variables/out']],
+    ])('%s is rejected at its pins', (name, paths) => {
+      const r = run('invalid', name)
+      expect(r.is_valid).toBe(false)
+      for (const p of paths) {
+        expect(
+          r.structural_errors.some((e) => e.code === 'unit_inconsistency' && e.path === p),
+          `${name}: no unit_inconsistency at ${p}`,
+        ).toBe(true)
+      }
     })
   })
 })

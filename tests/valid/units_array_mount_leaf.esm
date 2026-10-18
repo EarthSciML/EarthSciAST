@@ -1,0 +1,56 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "UnitsArrayMountLeaf",
+    "description": "A leaf mounted by units_array_mount_index_faq_*.esm: an operating time per row, declared in hours (EarthSciAST#414).",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "created": "2026-10-16T00:00:00Z"
+  },
+  "index_sets": {
+    "leaf_rows": {
+      "kind": "interval",
+      "size": 1
+    }
+  },
+  "models": {
+    "Leaf": {
+      "variables": {
+        "leaf_hours": {
+          "type": "unknown",
+          "units": "h",
+          "description": "An operating time per row, declared in hours.",
+          "shape": [
+            "leaf_rows"
+          ]
+        }
+      },
+      "equations": [
+        {
+          "lhs": "leaf_hours",
+          "rhs": {
+            "op": "makearray",
+            "args": [],
+            "regions": [
+              [
+                [
+                  1,
+                  1
+                ]
+              ]
+            ],
+            "values": [
+              {
+                "op": "const",
+                "args": [],
+                "value": 2.0,
+                "units": "h"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

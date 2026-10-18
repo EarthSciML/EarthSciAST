@@ -1,0 +1,57 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "UnitsArrayTransposeMismatch",
+    "description": "Invalid: transpose of an array in m declared kg. esm-spec §4.8.3: transpose has the unit of the array it permutes.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "created": "2026-10-16T00:00:00Z"
+  },
+  "index_sets": {
+    "rows": {
+      "kind": "interval",
+      "size": 2
+    },
+    "cols": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "models": {
+    "Probe": {
+      "variables": {
+        "M": {
+          "type": "parameter",
+          "units": "m",
+          "default": 1.0,
+          "description": "A length per (row, col).",
+          "shape": [
+            "rows",
+            "cols"
+          ]
+        },
+        "out": {
+          "type": "unknown",
+          "units": "kg",
+          "description": "Invalid: transpose of an array in m declared kg.",
+          "shape": [
+            "cols",
+            "rows"
+          ]
+        }
+      },
+      "equations": [
+        {
+          "lhs": "out",
+          "rhs": {
+            "op": "transpose",
+            "args": [
+              "M"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

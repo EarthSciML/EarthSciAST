@@ -1,0 +1,165 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "UnitsConstantExponentFolding",
+    "description": "esm-spec §4.8.3 `^`: an exponent that is a CONSTANT EXPRESSION — numeric literals combined by +, -, * and / (unary minus included, nested to any depth), or a const that declares no units or a dimensionless unit at scale 1 — folds to an exact rational and raises the base exactly as the literal would. Every equation here agrees with its declaration; tests/invalid/units_constant_exponent_mismatch.esm is the same shape with wrong declarations, which is what proves the exponent is folded rather than skipped.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "created": "2026-10-15T00:00:00Z"
+  },
+  "models": {
+    "Powers": {
+      "variables": {
+        "T": {
+          "type": "parameter",
+          "units": "K",
+          "default": 300.0,
+          "description": "A temperature."
+        },
+        "L": {
+          "type": "parameter",
+          "units": "m",
+          "default": 2.0,
+          "description": "A length."
+        },
+        "T_32": {
+          "type": "unknown",
+          "units": "K^(3/2)",
+          "description": "T raised to 3/2, the exponent written as the constant expression 3/2."
+        },
+        "T_neg": {
+          "type": "unknown",
+          "units": "1/K",
+          "description": "T raised to the unary negation of 1."
+        },
+        "L_nested": {
+          "type": "unknown",
+          "units": "m^(3/8)",
+          "description": "L raised to (1 + 2) / (4 * 2), a nested constant expression."
+        },
+        "L_diff": {
+          "type": "unknown",
+          "units": "m^2",
+          "description": "L raised to 5 - 3."
+        },
+        "L_const": {
+          "type": "unknown",
+          "units": "m^(1/2)",
+          "description": "L raised to a const declaring units \"1\" (esm-spec §4.8.5)."
+        },
+        "L_unitless_const": {
+          "type": "unknown",
+          "units": "m^3",
+          "description": "L raised to a const with no units."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "T_32",
+          "rhs": {
+            "op": "^",
+            "args": [
+              "T",
+              {
+                "op": "/",
+                "args": [
+                  3,
+                  2
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "T_neg",
+          "rhs": {
+            "op": "^",
+            "args": [
+              "T",
+              {
+                "op": "-",
+                "args": [
+                  1
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "L_nested",
+          "rhs": {
+            "op": "^",
+            "args": [
+              "L",
+              {
+                "op": "/",
+                "args": [
+                  {
+                    "op": "+",
+                    "args": [
+                      1,
+                      2
+                    ]
+                  },
+                  {
+                    "op": "*",
+                    "args": [
+                      4,
+                      2
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "L_diff",
+          "rhs": {
+            "op": "^",
+            "args": [
+              "L",
+              {
+                "op": "-",
+                "args": [
+                  5,
+                  3
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "L_const",
+          "rhs": {
+            "op": "^",
+            "args": [
+              "L",
+              {
+                "op": "const",
+                "args": [],
+                "value": 0.5,
+                "units": "1"
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "L_unitless_const",
+          "rhs": {
+            "op": "^",
+            "args": [
+              "L",
+              {
+                "op": "const",
+                "args": [],
+                "value": 3
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

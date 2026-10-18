@@ -18,11 +18,12 @@
     "Advection": {
       "variables": {
         "c": { "type": "unknown", "units": "kg/m^3", "shape": ["lon", "lat"], "default": 0.5, "description": "tracer" },
-        "dx": { "type": "parameter", "units": "m", "default": 2.5, "description": "grid spacing" }
+        "dx": { "type": "parameter", "units": "m", "default": 2.5, "description": "grid spacing" },
+        "u": { "type": "parameter", "units": "m/s", "default": 1.0, "description": "zonal advection velocity" }
       },
       "equations": [
         {
-          "_comment": "d(c)/dt = the discretized zonal derivative: interior centered difference over i in [2, N-1] (EMPTY at N = 2), west face i=1 and east face i=N one-sided (zero-gradient BC), per esm-spec §9.6.8.",
+          "_comment": "d(c)/dt = -u times the discretized zonal derivative: interior centered difference over i in [2, N-1] (EMPTY at N = 2), west face i=1 and east face i=N one-sided (zero-gradient BC), per esm-spec §9.6.8.",
           "lhs": { "op": "D", "args": ["c"], "wrt": "t" },
           "rhs": {
             "op": "makearray",
@@ -35,23 +36,23 @@
             "values": [
               { "op": "faq", "output_idx": ["i", "j"], "args": ["c"],
                 "ranges": { "i": [2, { "op": "-", "args": ["N", 1] }], "j": { "from": "lat" } },
-                "expr": { "op": "/", "args": [
+                "expr": { "op": "*", "args": [{ "op": "-", "args": ["u"] }, { "op": "/", "args": [
                   { "op": "-", "args": [
                     { "op": "index", "args": ["c", { "op": "+", "args": ["i", 1] }, "j"] },
                     { "op": "index", "args": ["c", { "op": "-", "args": ["i", 1] }, "j"] } ] },
-                  { "op": "*", "args": [2, "dx"] } ] } },
+                  { "op": "*", "args": [2, "dx"] } ] } ] } },
               { "op": "faq", "output_idx": ["j"], "args": ["c"],
                 "ranges": { "j": { "from": "lat" } },
-                "expr": { "op": "/", "args": [
+                "expr": { "op": "*", "args": [{ "op": "-", "args": ["u"] }, { "op": "/", "args": [
                   { "op": "-", "args": [ { "op": "index", "args": ["c", 2, "j"] },
                                          { "op": "index", "args": ["c", 1, "j"] } ] },
-                  "dx" ] } },
+                  "dx" ] } ] } },
               { "op": "faq", "output_idx": ["j"], "args": ["c"],
                 "ranges": { "j": { "from": "lat" } },
-                "expr": { "op": "/", "args": [
+                "expr": { "op": "*", "args": [{ "op": "-", "args": ["u"] }, { "op": "/", "args": [
                   { "op": "-", "args": [ { "op": "index", "args": ["c", "N", "j"] },
                                          { "op": "index", "args": ["c", { "op": "-", "args": ["N", 1] }, "j"] } ] },
-                  "dx" ] } }
+                  "dx" ] } ] } }
             ]
           }
         }

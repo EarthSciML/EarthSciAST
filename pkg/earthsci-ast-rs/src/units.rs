@@ -113,6 +113,56 @@ impl Rational {
         self.num == 0
     }
 
+    /// `num/den` from 64-bit parts, reduced; `None` when the reduced value does
+    /// not fit the `i32` representation (or `den` is zero).
+    fn checked_from_i64(num: i64, den: i64) -> Option<Self> {
+        if den == 0 {
+            return None;
+        }
+        let sign = if den < 0 { -1 } else { 1 };
+        let (num, den) = (num.checked_mul(sign)?, den.checked_mul(sign)?);
+        let g = gcd_i64(num.abs(), den).max(1);
+        Some(Rational {
+            num: i32::try_from(num / g).ok()?,
+            den: i32::try_from(den / g).ok()?,
+        })
+    }
+
+    /// Exact sum, or `None` on overflow of the `i32` representation.
+    fn checked_add(self, other: Self) -> Option<Self> {
+        let (a, b, c, d) = self.parts_with(other);
+        Rational::checked_from_i64(a * d + c * b, b * d)
+    }
+
+    /// Exact difference, or `None` on overflow.
+    fn checked_sub(self, other: Self) -> Option<Self> {
+        let (a, b, c, d) = self.parts_with(other);
+        Rational::checked_from_i64(a * d - c * b, b * d)
+    }
+
+    /// Exact product, or `None` on overflow.
+    fn checked_mul(self, other: Self) -> Option<Self> {
+        let (a, b, c, d) = self.parts_with(other);
+        Rational::checked_from_i64(a * c, b * d)
+    }
+
+    /// Exact quotient, or `None` on overflow or a zero divisor.
+    fn checked_div(self, other: Self) -> Option<Self> {
+        let (a, b, c, d) = self.parts_with(other);
+        Rational::checked_from_i64(a * d, b * c)
+    }
+
+    /// Both operands' parts widened to `i64`, where a product of two cannot
+    /// overflow.
+    fn parts_with(self, other: Self) -> (i64, i64, i64, i64) {
+        (
+            i64::from(self.num),
+            i64::from(self.den),
+            i64::from(other.num),
+            i64::from(other.den),
+        )
+    }
+
     /// As an `f64`, for scaling a unit's magnitude by this exponent.
     fn as_f64(self) -> f64 {
         f64::from(self.num) / f64::from(self.den)
@@ -131,6 +181,10 @@ impl std::fmt::Display for Rational {
 
 fn gcd(a: i32, b: i32) -> i32 {
     if b == 0 { a } else { gcd(b, a % b) }
+}
+
+fn gcd_i64(a: i64, b: i64) -> i64 {
+    if b == 0 { a } else { gcd_i64(b, a % b) }
 }
 
 /// One factor of an [`ExactScale`]: a prime number, or π.
@@ -685,6 +739,11 @@ impl Unit {
     /// * `expr` - Expression to analyse.
     /// * `env`  - Map from variable name to its [`Unit`].
     pub fn propagate(expr: &Expr, env: &HashMap<String, Unit>) -> Result<Unit, UnitError> {
+        Self::propagate_in(expr, env)
+    }
+
+    /// [`Unit::propagate`] against any [`UnitEnv`].
+    pub(crate) fn propagate_in(expr: &Expr, env: &dyn UnitEnv) -> Result<Unit, UnitError> {
         let mut findings = Vec::new();
         let dim = propagate_dim(expr, env, &mut findings);
         // A provable inconsistency outranks an undeterminable dimension.
@@ -707,7 +766,7 @@ impl Unit {
 ///
 /// Never aborts: an undeterminable subtree yields [`Dim::Unknown`] and the walk
 /// continues, so all provable mismatches in the expression are reported.
-fn propagate_dim(expr: &Expr, env: &HashMap<String, Unit>, findings: &mut Vec<UnitFinding>) -> Dim {
+fn propagate_dim(expr: &Expr, env: &dyn UnitEnv, findings: &mut Vec<UnitFinding>) -> Dim {
     match expr {
         // A BARE NUMERIC LITERAL has an INDETERMINATE dimension, not a
         // dimensionless one: nothing in the AST says whether `273.15` is a pure
@@ -726,7 +785,7 @@ fn propagate_dim(expr: &Expr, env: &HashMap<String, Unit>, findings: &mut Vec<Un
         // is dimensionless, and an exponent is read BY VALUE.
         Expr::Number(_) | Expr::Integer(_) => Dim::Unknown,
         Expr::Variable(name) => {
-            if let Some(unit) = env.get(name) {
+            if let Some(unit) = env.unit_of(name) {
                 Dim::Known(unit.clone())
             } else if name == "t" {
                 // Implicit time variable.
@@ -749,7 +808,7 @@ fn propagate_dim(expr: &Expr, env: &HashMap<String, Unit>, findings: &mut Vec<Un
 /// Propagate every argument, returning their dimensions positionally.
 fn propagate_args(
     op: &ExpressionNode,
-    env: &HashMap<String, Unit>,
+    env: &dyn UnitEnv,
     findings: &mut Vec<UnitFinding>,
 ) -> Vec<Dim> {
     op.args
@@ -797,7 +856,7 @@ fn require_min_arity(op: &ExpressionNode, n: usize, findings: &mut Vec<UnitFindi
 /// Julia (`units.jl::get_expression_dimensions`) implementations.
 fn propagate_operator_dim(
     op: &ExpressionNode,
-    env: &HashMap<String, Unit>,
+    env: &dyn UnitEnv,
     findings: &mut Vec<UnitFinding>,
 ) -> Dim {
     match op.op.as_str() {
@@ -886,7 +945,7 @@ fn propagate_operator_dim(
 /// dimensionless (§4.8.4).
 fn propagate_matching_dim(
     op: &ExpressionNode,
-    env: &HashMap<String, Unit>,
+    env: &dyn UnitEnv,
     findings: &mut Vec<UnitFinding>,
 ) -> Dim {
     let mut first: Option<Unit> = None;
@@ -927,7 +986,7 @@ fn propagate_matching_dim(
 /// `+(2)` is as undeterminable as `2`.
 fn propagate_additive_dim(
     op: &ExpressionNode,
-    env: &HashMap<String, Unit>,
+    env: &dyn UnitEnv,
     findings: &mut Vec<UnitFinding>,
 ) -> Dim {
     propagate_matching_dim(op, env, findings)
@@ -936,7 +995,7 @@ fn propagate_additive_dim(
 /// `*` / `/`: dimensions multiply / divide, no compatibility requirement.
 fn propagate_multiplicative_dim(
     op: &ExpressionNode,
-    env: &HashMap<String, Unit>,
+    env: &dyn UnitEnv,
     findings: &mut Vec<UnitFinding>,
 ) -> Dim {
     let dims = propagate_args(op, env, findings);
@@ -964,7 +1023,7 @@ fn propagate_multiplicative_dim(
 /// of dimensions are representable).
 fn propagate_power_dim(
     op: &ExpressionNode,
-    env: &HashMap<String, Unit>,
+    env: &dyn UnitEnv,
     findings: &mut Vec<UnitFinding>,
 ) -> Dim {
     if !require_arity(op, 2, findings) {
@@ -996,37 +1055,90 @@ fn propagate_power_dim(
     }
 
     // The exponent is read BY VALUE, not by dimension — a literal's dimension is
-    // indeterminate, but its VALUE is exactly what a power needs. It may arrive
-    // as EITHER `Expr::Number` (JSON `2.0`) or `Expr::Integer` (JSON `2`).
-    let literal_exp = match &op.args[1] {
+    // indeterminate, but its VALUE is exactly what a power needs. A constant
+    // expression over literals (`3/2`, `-(1)`) has an exact value too, and is
+    // folded to it (esm-spec §4.8.3 `^`). Exponents are RATIONAL, so a
+    // fractional power of a dimensional quantity (`x^0.5`) propagates exactly.
+    if let Some(r) = constant_exponent(&op.args[1]) {
+        return Dim::Known(base_unit.power_rational(r));
+    }
+    match &op.args[1] {
+        Expr::Integer(_) | Expr::Number(_) => {
+            let n = literal_f64(&op.args[1]).unwrap_or(f64::NAN);
+            findings.push(UnitFinding::analysis(format!(
+                "Exponent {n} is not a representable rational, so the dimension of a \
+                 dimensional base is unknown"
+            )));
+        }
+        // Symbolic exponent (`x^n` for a parameter `n`): the resulting
+        // dimension depends on a value we do not have. Undeterminable, NOT a
+        // mismatch (§4.8.4).
+        _ => {
+            findings.push(UnitFinding::analysis(format!(
+                "Exponent of '{}' is not a constant expression, so the dimension of a \
+                 dimensional base is unknown",
+                op.op
+            )));
+        }
+    }
+    Dim::Unknown
+}
+
+/// A numeric literal's value. It may arrive as EITHER `Expr::Number` (JSON
+/// `2.0`) or `Expr::Integer` (JSON `2`).
+fn literal_f64(expr: &Expr) -> Option<f64> {
+    match expr {
         Expr::Integer(i) => Some(*i as f64),
         Expr::Number(n) => Some(*n),
         _ => None,
+    }
+}
+
+/// The exact rational value of a CONSTANT-EXPRESSION exponent (esm-spec §4.8.3
+/// `^`), or `None` when the exponent is symbolic.
+///
+/// Folds: a numeric literal; a `const` that declares no `units`, or a
+/// dimensionless unit at exact scale 1 (its value IS the pure number it
+/// denotes); and `+`, `*` (one or more operands), `-` (unary negation, or a left
+/// fold of two or more) and `/` (exactly two operands, nonzero divisor) over
+/// constant expressions, nested to any depth. Anything else — a variable, an
+/// expression containing one, a `const` at a scale other than 1 (`%`: its value
+/// and the quantity it denotes disagree), any other operator, an overflow of
+/// the rational representation — is symbolic, which leaves the power of a
+/// dimensional base undeterminable (§4.8.4).
+pub fn constant_exponent(expr: &Expr) -> Option<Rational> {
+    if let Some(n) = literal_f64(expr) {
+        return Rational::from_f64(n);
+    }
+    let Expr::Operator(node) = expr else {
+        return None;
     };
-    match literal_exp {
-        // Exponents are RATIONAL, so a fractional power of a dimensional
-        // quantity (`x^0.5`) is representable and propagates exactly.
-        Some(n) => match Rational::from_f64(n) {
-            Some(r) => Dim::Known(base_unit.power_rational(r)),
-            None => {
-                findings.push(UnitFinding::analysis(format!(
-                    "Exponent {n} is not a representable rational, so the dimension of a \
-                     dimensional base is unknown"
-                )));
-                Dim::Unknown
+    if node.op == "const" {
+        if let Some(units) = &node.units {
+            let unit = parse_unit(units).ok()?;
+            if !unit.is_pure_number() {
+                return None;
             }
-        },
-        // Symbolic exponent (`x^n` for a parameter `n`): the resulting
-        // dimension depends on a value we do not have. Undeterminable, NOT a
-        // mismatch.
-        None => {
-            findings.push(UnitFinding::analysis(format!(
-                "Exponent of '{}' is not a literal, so the dimension of a dimensional \
-                 base is unknown",
-                op.op
-            )));
-            Dim::Unknown
         }
+        return node
+            .value
+            .as_ref()
+            .and_then(serde_json::Value::as_f64)
+            .and_then(Rational::from_f64);
+    }
+    let values = node
+        .args
+        .iter()
+        .map(constant_exponent)
+        .collect::<Option<Vec<Rational>>>()?;
+    let (first, rest) = values.split_first()?;
+    match node.op.as_str() {
+        "+" => rest.iter().try_fold(*first, |acc, v| acc.checked_add(*v)),
+        "*" => rest.iter().try_fold(*first, |acc, v| acc.checked_mul(*v)),
+        "-" if rest.is_empty() => Rational::int(0).checked_sub(*first),
+        "-" => rest.iter().try_fold(*first, |acc, v| acc.checked_sub(*v)),
+        "/" if rest.len() == 1 => first.checked_div(rest[0]),
+        _ => None,
     }
 }
 
@@ -1036,7 +1148,7 @@ fn propagate_power_dim(
 /// carries the same units as the field itself.
 fn propagate_calculus_dim(
     op: &ExpressionNode,
-    env: &HashMap<String, Unit>,
+    env: &dyn UnitEnv,
     findings: &mut Vec<UnitFinding>,
 ) -> Dim {
     // esm-spec §4.2 "Arity of `D`": a REWRITE-TARGET `D` (spatial `wrt`) MAY
@@ -1066,7 +1178,7 @@ fn propagate_calculus_dim(
     // independent variable leaves the derivative INDETERMINATE here; the
     // equation-level time-ratio rule in `check_equation_dimensions` still
     // catches derivative equations that no time unit could reconcile.
-    let (Some(arg_unit), Some(wrt_unit)) = (arg.known(), env.get(wrt)) else {
+    let (Some(arg_unit), Some(wrt_unit)) = (arg.known(), env.unit_of(wrt)) else {
         return Dim::Unknown;
     };
     Dim::Known(arg_unit.divide(wrt_unit))
@@ -1075,10 +1187,7 @@ fn propagate_calculus_dim(
 /// True when `expr` is `D(x)` taken with respect to an UNDECLARED independent
 /// variable, which makes its dimension indeterminate. Mirrors the TypeScript
 /// reference (`units.ts::derivativeOfUndeclaredTime`).
-fn derivative_of_undeclared_time<'a>(
-    expr: &'a Expr,
-    env: &HashMap<String, Unit>,
-) -> Option<&'a Expr> {
+fn derivative_of_undeclared_time<'a>(expr: &'a Expr, env: &dyn UnitEnv) -> Option<&'a Expr> {
     let Expr::Operator(op) = expr else {
         return None;
     };
@@ -1086,7 +1195,7 @@ fn derivative_of_undeclared_time<'a>(
         return None;
     }
     let wrt = crate::op_registry::derivative_wrt(op);
-    (!env.contains_key(wrt)).then(|| &op.args[0])
+    (!env.contains(wrt)).then(|| &op.args[0])
 }
 
 /// The weaker-but-still-provable rule for `d(state)/dt = rhs` when the time
@@ -1124,7 +1233,7 @@ fn derivative_time_mismatch(state: &Unit, rhs: &Unit) -> Option<String> {
 /// demands a PURE NUMBER: dimensionless AND at scale 1 (issue #409).
 fn propagate_transcendental_dim(
     op: &ExpressionNode,
-    env: &HashMap<String, Unit>,
+    env: &dyn UnitEnv,
     findings: &mut Vec<UnitFinding>,
 ) -> Dim {
     // `rad` is a real axis here, so the circular functions are NOT symmetric —
@@ -1316,7 +1425,7 @@ fn scaled_dimensionless_message(op: &str, unit: &Unit) -> String {
 /// rational, `sqrt(m^3)` is exactly `m^3/2` rather than "not representable".
 fn propagate_sqrt_dim(
     op: &ExpressionNode,
-    env: &HashMap<String, Unit>,
+    env: &dyn UnitEnv,
     findings: &mut Vec<UnitFinding>,
 ) -> Dim {
     if !require_arity(op, 1, findings) {
@@ -1335,7 +1444,7 @@ fn propagate_sqrt_dim(
 /// neither is (`ifelse(c, 1, 2)`), the result is undeterminable.
 fn propagate_ifelse_dim(
     op: &ExpressionNode,
-    env: &HashMap<String, Unit>,
+    env: &dyn UnitEnv,
     findings: &mut Vec<UnitFinding>,
 ) -> Dim {
     if !require_arity(op, 3, findings) {
@@ -1370,63 +1479,74 @@ fn propagate_ifelse_dim(
     }
 }
 
-/// Array operators: propagate the element dimension. Shape and indexing are
-/// orthogonal to dimension (see gt-t5c / gt-vt3 — shapes are a separate
-/// concern from unit checking). `faq` is the unified Functional
-/// Aggregate Query op (RFC §5.6).
+/// Array operators carry their ELEMENT's unit (esm-spec §4.8.3, "Array
+/// operators"). Shape and indexing are orthogonal to dimension (gt-t5c /
+/// gt-vt3); what an array holds is not. The same rules serve the checker and
+/// the evaluation path's angle conversion, so the two cannot disagree.
+///
+/// * `index`, `reshape`, `transpose` — the unit of the source array
+///   (`args[0]`); the subscripts and shape operands are not part of it, but
+///   are walked for findings like any other operand.
+/// * `concat` — its operands agree like those of `+`.
+/// * `makearray` — its region `values` agree like the operands of `+`: an
+///   undeterminable region is skipped, two determinable ones that disagree
+///   are a provable mismatch.
+/// * `broadcast` — the unit of `{op: fn, args}`.
+/// * `faq` — decided by its ⊕ (see [`faq_unit`]); `filter`, `expr` and any
+///   operands are always walked for findings.
+///
+/// Every operand of every array operator is walked, so a mismatch inside a
+/// subscript (`index(lat, a [m] + b [kg])`) is reported.
+///
+/// A node with nothing to read a unit from is UNDETERMINABLE, never
+/// dimensionless (§4.8.4).
 fn propagate_array_dim(
     op: &ExpressionNode,
-    env: &HashMap<String, Unit>,
+    env: &dyn UnitEnv,
     findings: &mut Vec<UnitFinding>,
 ) -> Dim {
     match op.op.as_str() {
         "faq" => {
-            // The body is the scalar expression evaluated for each tuple of
-            // loop-index values; its dimension is the array's element
-            // dimension.
-            if let Some(body) = &op.expr {
-                return propagate_dim(body, env, findings);
+            // The `filter` is a boolean over the node's ranges. Its value never
+            // reaches the element unit, but it is an expression like any other,
+            // so a comparison in it is checked by the §4.8.3 rules exactly as
+            // the same comparison in the body is (EarthSciAST#414).
+            if let Some(filter) = &op.filter {
+                propagate_dim(filter, env, findings);
             }
-            // Fallback: infer from the first positional arg.
-            match op.args.first() {
-                Some(first) => propagate_dim(first, env, findings),
-                None => Dim::Known(Unit::dimensionless()),
+            let body = op
+                .expr
+                .as_ref()
+                .map(|body| propagate_dim(body, env, findings));
+            propagate_args(op, env, findings);
+            match body {
+                Some(body) => faq_unit(op, body),
+                None => Dim::Unknown,
             }
         }
         "makearray" => {
-            // Element dimension is determined by any per-region `values`
-            // entry. All regions must share dimensions.
-            let Some(values) = &op.values else {
-                return Dim::Known(Unit::dimensionless());
-            };
-            let dims: Vec<Dim> = values
-                .iter()
-                .map(|v| propagate_dim(v, env, findings))
-                .collect();
-            let mut resolved = dims.iter().filter_map(Dim::known);
-            let Some(first) = resolved.next().cloned() else {
-                return if values.is_empty() {
-                    Dim::Known(Unit::dimensionless())
-                } else {
-                    Dim::Unknown
+            propagate_args(op, env, findings);
+            let mut first: Option<Unit> = None;
+            for value in op.values.iter().flatten() {
+                let dim = propagate_dim(value, env, findings);
+                let Some(unit) = dim.known() else {
+                    continue;
                 };
-            };
-            let mut mismatched = false;
-            for other in resolved {
-                if !first.same_unit(other) {
-                    mismatched = true;
-                    findings.push(UnitFinding::error(format!(
-                        "'makearray' regions must share units: {} vs {}",
-                        describe_scaled(&first),
-                        describe_scaled(other)
-                    )));
+                match &first {
+                    None => first = Some(unit.clone()),
+                    Some(f) if !f.same_unit(unit) => {
+                        findings.push(UnitFinding::error(format!(
+                            "'makearray' regions must share units: {} vs {}",
+                            describe_scaled(f),
+                            describe_scaled(unit)
+                        )));
+                    }
+                    _ => {}
                 }
             }
-            if mismatched || dims.iter().any(|d| d.known().is_none()) {
-                return Dim::Unknown;
-            }
-            Dim::Known(first)
+            first.map_or(Dim::Unknown, Dim::Known)
         }
+        "concat" => propagate_matching_dim(op, env, findings),
         "broadcast" => {
             // Elementwise map over arrays with `fn` naming the scalar
             // operator. Construct a synthetic scalar node and recurse so we
@@ -1440,6 +1560,7 @@ fn propagate_array_dim(
             // is only the consequence for the DIMENSION, which the checker
             // genuinely cannot determine.
             let Some(fn_name) = op.broadcast_fn.as_deref() else {
+                propagate_args(op, env, findings);
                 findings.push(UnitFinding::analysis(
                     "'broadcast' is missing its 'fn'; its dimension is unknown".to_string(),
                 ));
@@ -1452,15 +1573,47 @@ fn propagate_array_dim(
             };
             propagate_operator_dim(&synthetic, env, findings)
         }
-        // "index" | "reshape" | "transpose" | "concat"
-        _ => {
-            // Shape-only reorderings: element dimension is inherited from
-            // the first positional arg (the source array).
-            match op.args.first() {
-                Some(first) => propagate_dim(first, env, findings),
-                None => Dim::Known(Unit::dimensionless()),
+        // "index" | "reshape" | "transpose": the source array's unit.
+        _ => propagate_args(op, env, findings)
+            .into_iter()
+            .next()
+            .unwrap_or(Dim::Unknown),
+    }
+}
+
+/// The unit of an `faq` node whose body has unit `body` (esm-spec §4.8.3).
+///
+/// The ⊗ of the semiring is written by the author inside `expr`, so it is
+/// already typed; `join` clauses are key equalities and contribute no factor.
+/// What remains is the ⊕ reduction over the contracted indices:
+///
+/// * `+`, `max`, `min` (`sum_product`, `max_product`, `min_sum`, `max_sum`,
+///   or `reduce` `+`/`max`/`min`) — the body's unit;
+/// * `*` (`reduce: "*"`) — the body's unit only when the body is a pure
+///   number, otherwise undeterminable: the power is the range length;
+/// * `∨` (`bool_and_or`) — dimensionless, a boolean;
+/// * value invention (`distinct`, or a `key`) — undeterminable: the result
+///   is ids, not a quantity. So is an unknown ⊕ spelling, which is rejected
+///   elsewhere.
+fn faq_unit(op: &ExpressionNode, body: Dim) -> Dim {
+    if op.distinct == Some(true) || op.key.is_some() {
+        return Dim::Unknown;
+    }
+    match crate::faq::effective_reduce_kind(op.semiring.as_deref(), op.reduce.as_deref()) {
+        Ok(
+            crate::faq::ReduceKind::Sum | crate::faq::ReduceKind::Max | crate::faq::ReduceKind::Min,
+        ) => body,
+        Ok(crate::faq::ReduceKind::Product) => {
+            if body.known().is_some_and(Unit::is_pure_number) {
+                body
+            } else {
+                Dim::Unknown
             }
         }
+        Ok(crate::faq::ReduceKind::Or | crate::faq::ReduceKind::And) => {
+            Dim::Known(Unit::dimensionless())
+        }
+        Err(_) => Dim::Unknown,
     }
 }
 
@@ -1568,6 +1721,137 @@ pub fn build_unit_env(
     (env, failures)
 }
 
+/// Where the dimensional checker looks up the unit of a name. A name it does
+/// not know is UNDETERMINABLE, never dimensionless (esm-spec §4.8.4).
+pub(crate) trait UnitEnv {
+    /// The unit `name` carries, or `None` when it is undeterminable.
+    fn unit_of(&self, name: &str) -> Option<&Unit>;
+
+    /// Whether `name` has a known unit.
+    fn contains(&self, name: &str) -> bool {
+        self.unit_of(name).is_some()
+    }
+}
+
+impl<S: std::hash::BuildHasher> UnitEnv for HashMap<String, Unit, S> {
+    fn unit_of(&self, name: &str) -> Option<&Unit> {
+        self.get(name)
+    }
+}
+
+/// The units of every `<System>.<member>` scoped reference (esm-spec §4.9.2)
+/// into the document's top-level models and reaction systems, at any depth,
+/// each parsed once. Members that declare no units, or units that do not
+/// parse (reported at their own declaration), are left out.
+///
+/// It depends only on the document, so validation builds it once and layers
+/// each component's own names over it ([`ComponentUnitEnv`]).
+pub(crate) fn document_scoped_units(esm_file: &crate::EsmFile) -> HashMap<String, Unit> {
+    let mut parsed: HashMap<String, Option<Unit>> = HashMap::new();
+    crate::structural::toplevel_reference_units(esm_file)
+        .into_iter()
+        .filter_map(|(name, units)| {
+            parsed
+                .entry(units)
+                .or_insert_with_key(|units| parse_unit(units).ok())
+                .clone()
+                .map(|unit| (name, unit))
+        })
+        .collect()
+}
+
+/// The unit environment one component's expressions are checked against: its
+/// own declarations, then the `<sub>.<member>` paths relative to its own
+/// subsystems, then the document's top-level scoped references
+/// ([`document_scoped_units`]), in that precedence.
+///
+/// A mounted component is, after resolution, identical to one written inline
+/// (esm-spec §4.7), so a variable read across a `{ref}` mount edge carries its
+/// declared units into the mounting component exactly as a local one does
+/// (§4.8.4, EarthSciAST#414). A relative path occupies its name even when its
+/// target declares no units (or units that do not parse): it then shadows a
+/// top-level member of the same dotted name and is undeterminable, so a check
+/// that reads it is skipped rather than judged against the wrong declaration.
+pub(crate) struct ComponentUnitEnv<'d> {
+    own: HashMap<String, Unit>,
+    relative: HashMap<String, Option<Unit>>,
+    document: &'d HashMap<String, Unit>,
+}
+
+impl<'d> ComponentUnitEnv<'d> {
+    /// Layer a component's own unit environment `own` and its `subsystems`
+    /// over the document's top-level scoped units.
+    pub(crate) fn new(
+        own: HashMap<String, Unit>,
+        subsystems: Option<&indexmap::IndexMap<String, serde_json::Value>>,
+        document: &'d HashMap<String, Unit>,
+    ) -> Self {
+        let mut parsed: HashMap<String, Option<Unit>> = HashMap::new();
+        let relative = subsystems
+            .map(crate::structural::subsystem_reference_units)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(name, _)| !own.contains_key(name))
+            .map(|(name, units)| {
+                let unit = units.and_then(|units| {
+                    parsed
+                        .entry(units)
+                        .or_insert_with_key(|units| parse_unit(units).ok())
+                        .clone()
+                });
+                (name, unit)
+            })
+            .collect();
+        ComponentUnitEnv {
+            own,
+            relative,
+            document,
+        }
+    }
+
+    /// Every name with a known unit, own declarations winning, as one map.
+    pub(crate) fn into_map(self) -> HashMap<String, Unit> {
+        let mut env = self.own;
+        for (name, unit) in self.document {
+            if !env.contains_key(name) && !self.relative.contains_key(name) {
+                env.insert(name.clone(), unit.clone());
+            }
+        }
+        for (name, unit) in self.relative {
+            if let Some(unit) = unit {
+                env.entry(name).or_insert(unit);
+            }
+        }
+        env
+    }
+}
+
+impl UnitEnv for ComponentUnitEnv<'_> {
+    fn unit_of(&self, name: &str) -> Option<&Unit> {
+        if let Some(unit) = self.own.get(name) {
+            return Some(unit);
+        }
+        match self.relative.get(name) {
+            Some(unit) => unit.as_ref(),
+            None => self.document.get(name),
+        }
+    }
+}
+
+/// The unit environment a model's equations are checked against, as one map:
+/// its own declarations ([`build_unit_env`]) plus every scoped reference its
+/// expressions can make, with the precedence of [`ComponentUnitEnv`]. The
+/// parse failures returned are the model's own.
+pub fn model_unit_env(
+    esm_file: &crate::EsmFile,
+    model: &crate::Model,
+) -> (HashMap<String, Unit>, Vec<UnitParseFailure>) {
+    let document = document_scoped_units(esm_file);
+    let (own, failures) = build_unit_env(&model.variables);
+    let env = ComponentUnitEnv::new(own, model.subsystems.as_ref(), &document).into_map();
+    (env, failures)
+}
+
 /// A declared unit string that denotes no real unit.
 ///
 /// Carries the NAME of the declaration alongside the offending string so the
@@ -1622,6 +1906,11 @@ pub fn validate_equation_dimensions(
 /// when BOTH sides resolved: comparing against an unknown dimension could only
 /// ever produce a false mismatch.
 pub fn check_equation_dimensions(eq: &Equation, env: &HashMap<String, Unit>) -> Vec<UnitFinding> {
+    equation_findings(eq, env)
+}
+
+/// [`check_equation_dimensions`] against any [`UnitEnv`].
+pub(crate) fn equation_findings(eq: &Equation, env: &dyn UnitEnv) -> Vec<UnitFinding> {
     let mut findings = Vec::new();
     let lhs = propagate_dim(&eq.lhs, env, &mut findings);
     let rhs = propagate_dim(&eq.rhs, env, &mut findings);
@@ -1660,6 +1949,15 @@ pub fn check_expression_dimensions(
     expr: &Expr,
     declared: Option<&Unit>,
     env: &HashMap<String, Unit>,
+) -> Vec<UnitFinding> {
+    expression_findings(expr, declared, env)
+}
+
+/// [`check_expression_dimensions`] against any [`UnitEnv`].
+pub(crate) fn expression_findings(
+    expr: &Expr,
+    declared: Option<&Unit>,
+    env: &dyn UnitEnv,
 ) -> Vec<UnitFinding> {
     let mut findings = Vec::new();
     let actual = propagate_dim(expr, env, &mut findings);
@@ -1740,7 +2038,7 @@ pub fn equation_dimension_verdict(
 
 /// Name the innermost operand that makes `expr`'s dimension indeterminate.
 /// Called only on an expression whose dimension did not resolve.
-fn indeterminate_operand(expr: &Expr, env: &HashMap<String, Unit>) -> String {
+fn indeterminate_operand(expr: &Expr, env: &dyn UnitEnv) -> String {
     match expr {
         Expr::Number(n) => format!("operand `{n}` has an indeterminate dimension"),
         Expr::Integer(n) => format!("operand `{n}` has an indeterminate dimension"),
@@ -4333,5 +4631,196 @@ mod tests {
             matches!(result, Err(UnitError::UnknownUnit(_))),
             "expected UnknownUnit (skipped), not a false mismatch, got {result:?}"
         );
+    }
+
+    fn konst(value: f64, units: Option<&str>) -> Expr {
+        Expr::operator(ExpressionNode {
+            op: "const".to_string(),
+            value: Some(serde_json::json!(value)),
+            units: units.map(str::to_string),
+            ..ExpressionNode::default()
+        })
+    }
+
+    #[test]
+    fn constant_exponents_fold_to_exact_rationals() {
+        let int = Expr::Integer;
+        let cases = [
+            (op("/", vec![int(3), int(2)]), Rational::new(3, 2)),
+            (op("-", vec![int(1)]), Rational::int(-1)),
+            (op("-", vec![int(5), int(3)]), Rational::int(2)),
+            (
+                op(
+                    "/",
+                    vec![op("+", vec![int(1), int(2)]), op("*", vec![int(4), int(2)])],
+                ),
+                Rational::new(3, 8),
+            ),
+            (konst(1.5, None), Rational::new(3, 2)),
+            (konst(0.5, Some("1")), Rational::new(1, 2)),
+            (Expr::Number(0.25), Rational::new(1, 4)),
+        ];
+        for (expr, expected) in cases {
+            assert_eq!(constant_exponent(&expr), Some(expected), "{expr:?}");
+        }
+    }
+
+    #[test]
+    fn symbolic_exponents_do_not_fold() {
+        let int = Expr::Integer;
+        let var = |n: &str| Expr::Variable(n.into());
+        for expr in [
+            var("n"),
+            op("+", vec![var("n"), int(1)]),
+            konst(50.0, Some("%")),
+            konst(2.0, Some("m")),
+            op("/", vec![int(1), int(0)]),
+            op("/", vec![int(1), int(2), int(3)]),
+            op("sqrt", vec![int(4)]),
+            op(
+                "*",
+                vec![int(i64::from(i32::MAX)), int(i64::from(i32::MAX))],
+            ),
+        ] {
+            assert_eq!(constant_exponent(&expr), None, "{expr:?}");
+        }
+    }
+
+    #[test]
+    fn a_folded_exponent_is_checked_and_a_symbolic_one_is_skipped() {
+        let env = env_of(&[("T", "K"), ("n", "1"), ("T_32", "K^(3/2)"), ("T_2", "K^2")]);
+        let var = |n: &str| Expr::Variable(n.into());
+        let three_halves = op("/", vec![Expr::Integer(3), Expr::Integer(2)]);
+        let pow = op("^", vec![var("T"), three_halves]);
+        let ok = check_expression_dimensions(&pow, env.get("T_32"), &env);
+        assert!(!ok.iter().any(UnitFinding::is_error), "{ok:?}");
+        let bad = check_expression_dimensions(&pow, env.get("T_2"), &env);
+        assert!(bad.iter().any(UnitFinding::is_error), "{bad:?}");
+        let sym = op("^", vec![var("T"), var("n")]);
+        let skipped = check_expression_dimensions(&sym, env.get("T_2"), &env);
+        assert!(!skipped.iter().any(UnitFinding::is_error), "{skipped:?}");
+    }
+
+    #[test]
+    fn an_faq_filter_is_dimension_checked() {
+        let env = env_of(&[("x", "m"), ("y", "m"), ("z", "kg")]);
+        let var = |n: &str| Expr::Variable(n.into());
+        let faq = |filter: Expr| {
+            Expr::operator(ExpressionNode {
+                op: "faq".to_string(),
+                filter: Some(Box::new(filter)),
+                expr: Some(Box::new(konst(1.0, Some("1")))),
+                ..ExpressionNode::default()
+            })
+        };
+        let bad = check_expression_dimensions(&faq(op("<=", vec![var("x"), var("z")])), None, &env);
+        assert!(bad.iter().any(UnitFinding::is_error), "{bad:?}");
+        let ok = check_expression_dimensions(&faq(op("<=", vec![var("x"), var("y")])), None, &env);
+        assert!(!ok.iter().any(UnitFinding::is_error), "{ok:?}");
+    }
+
+    fn faq_node(body: Expr, semiring: Option<&str>, reduce: Option<&str>) -> ExpressionNode {
+        ExpressionNode {
+            op: "faq".to_string(),
+            expr: Some(Box::new(body)),
+            semiring: semiring.map(str::to_string),
+            reduce: reduce.map(str::to_string),
+            ..ExpressionNode::default()
+        }
+    }
+
+    #[test]
+    fn array_operators_carry_their_element_unit() {
+        let env = env_of(&[("v", "h"), ("w", "1"), ("a", "m"), ("b", "kg")]);
+        let var = |n: &str| Expr::Variable(n.into());
+        let unit = |e: &Expr| propagate_dim(e, &env, &mut Vec::new());
+        let h = parse_unit("h").unwrap();
+        let idx = op("index", vec![var("v"), var("i")]);
+        assert_eq!(unit(&idx).known(), Some(&h));
+        assert!(unit(&op("index", vec![])).known().is_none());
+        // faq by semiring.
+        for (sr, rd) in [
+            (Some("sum_product"), None),
+            (Some("max_product"), None),
+            (Some("min_sum"), None),
+            (None, Some("max")),
+            (None, None),
+        ] {
+            let f = Expr::operator(faq_node(idx.clone(), sr, rd));
+            assert_eq!(unit(&f).known(), Some(&h), "{sr:?} {rd:?}");
+        }
+        let prod = Expr::operator(faq_node(idx.clone(), None, Some("*")));
+        assert!(unit(&prod).known().is_none());
+        let wprod = Expr::operator(faq_node(
+            op("index", vec![var("w"), var("i")]),
+            None,
+            Some("*"),
+        ));
+        assert!(unit(&wprod).known().is_some_and(Unit::is_pure_number));
+        let any = Expr::operator(faq_node(idx.clone(), Some("bool_and_or"), None));
+        assert!(unit(&any).known().is_some_and(Unit::is_dimensionless));
+        let mut distinct = faq_node(idx.clone(), None, None);
+        distinct.distinct = Some(true);
+        assert!(unit(&Expr::operator(distinct)).known().is_none());
+        // makearray: a literal region is skipped; disagreeing regions are a mismatch.
+        let mk = |values: Vec<Expr>| {
+            Expr::operator(ExpressionNode {
+                op: "makearray".to_string(),
+                values: Some(values),
+                ..ExpressionNode::default()
+            })
+        };
+        assert_eq!(
+            unit(&mk(vec![var("v"), Expr::Number(0.0)])).known(),
+            Some(&h)
+        );
+        assert!(unit(&mk(vec![])).known().is_none());
+        let mut f = Vec::new();
+        propagate_dim(&mk(vec![var("a"), var("b")]), &env, &mut f);
+        assert!(f.iter().any(UnitFinding::is_error), "{f:?}");
+        // concat agrees like +.
+        let mut f = Vec::new();
+        propagate_dim(&op("concat", vec![var("a"), var("b")]), &env, &mut f);
+        assert!(f.iter().any(UnitFinding::is_error), "{f:?}");
+    }
+
+    #[test]
+    fn array_operators_check_every_operand() {
+        let env = env_of(&[("v", "h"), ("a", "m"), ("b", "kg")]);
+        let var = |n: &str| Expr::Variable(n.into());
+        let h = parse_unit("h").unwrap();
+        let bad = || op("+", vec![var("a"), var("b")]);
+        // A mismatch in a subscript or shape operand is reported, while the
+        // result is still the source array's unit.
+        for name in ["index", "reshape", "transpose"] {
+            let mut f = Vec::new();
+            let dim = propagate_dim(&op(name, vec![var("v"), bad()]), &env, &mut f);
+            assert_eq!(dim.known(), Some(&h), "{name}");
+            assert!(f.iter().any(UnitFinding::is_error), "{name}: {f:?}");
+            // A dimensional subscript is not itself an error.
+            let mut f = Vec::new();
+            propagate_dim(&op(name, vec![var("v"), var("a")]), &env, &mut f);
+            assert!(!f.iter().any(UnitFinding::is_error), "{name}: {f:?}");
+        }
+        // faq, makearray and a broadcast with no `fn` walk their operands too.
+        let mut fq = faq_node(var("v"), None, None);
+        fq.args = vec![bad()];
+        let mut mk = ExpressionNode {
+            op: "makearray".to_string(),
+            values: Some(vec![var("v")]),
+            ..ExpressionNode::default()
+        };
+        mk.args = vec![bad()];
+        let bc = ExpressionNode {
+            op: "broadcast".to_string(),
+            args: vec![bad()],
+            ..ExpressionNode::default()
+        };
+        for node in [fq, mk, bc] {
+            let name = node.op.clone();
+            let mut f = Vec::new();
+            propagate_dim(&Expr::operator(node), &env, &mut f);
+            assert!(f.iter().any(UnitFinding::is_error), "{name}: {f:?}");
+        }
     }
 }

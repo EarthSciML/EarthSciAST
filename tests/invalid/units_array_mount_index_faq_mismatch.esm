@@ -1,0 +1,49 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "UnitsArrayMountIndexFaqMismatch",
+    "description": "Invalid (EarthSciAST#414 hole 1, the issue's own repro): total [cd] = sum over i of index(Leaf.leaf_hours, i), where Leaf is a top-level {ref} mount and leaf_hours is declared h. The mounted unit crosses the edge (§4.8.4), index carries it and a sum_product faq has its body's unit (§4.8.3).",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "created": "2026-10-16T00:00:00Z"
+  },
+  "models": {
+    "Leaf": {
+      "ref": "../valid/units_array_mount_leaf.esm"
+    },
+    "Mount": {
+      "variables": {
+        "total": {
+          "type": "unknown",
+          "units": "cd",
+          "description": "The leaf's hours summed over its rows, declared cd.",
+          "shape": []
+        }
+      },
+      "equations": [
+        {
+          "lhs": "total",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [],
+            "ranges": {
+              "i": {
+                "from": "leaf_rows"
+              }
+            },
+            "semiring": "sum_product",
+            "expr": {
+              "op": "index",
+              "args": [
+                "Leaf.leaf_hours",
+                "i"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

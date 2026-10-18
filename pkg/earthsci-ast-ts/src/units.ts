@@ -12,6 +12,7 @@
 import type { Expression, ExpressionNode, EsmFile, Model } from './types.js'
 import {
   ExactScale,
+  exponentRatio,
   type CanonicalDims,
   type ParsedUnit,
   parseUnitForConversion,
@@ -23,7 +24,7 @@ import {
   isRewriteTargetDerivative,
   REWRITE_TARGET_DERIVATIVE_ARITY,
 } from './op-registry.js'
-import { forEachComponent, forEachEquation } from './traverse.js'
+import { forEachComponent, forEachEquation, isReferenceStub } from './traverse.js'
 import { observedDefinitions } from './classification.js'
 import { ERROR_CODES } from './errors.js'
 
@@ -50,7 +51,8 @@ export interface UnitResult {
    * `null` is not "dimensionless" — it is "this analysis cannot say", and it is
    * the value returned for an unknown variable, an unparseable unit
    * declaration, and any operator whose dimensional semantics this module does
-   * not model (`index`, `fn`, `faq`, `makearray`, `table_lookup`, ...).
+   * not model (`fn`, `table_lookup`, an faq under `reduce: "*"` with a
+   * dimensional body, ...).
    * Keeping the two apart is what stops a structural op from being *assumed*
    * dimensionless and thereby manufacturing a false mismatch against a
    * dimensional operand. `null` propagates through every combining rule, and a
@@ -93,11 +95,10 @@ export interface UnitWarning {
    *   registry gap is a false rejection.)
    * - `analysis` — the checker cannot DETERMINE a dimension: a symbolic
    *   exponent (`x^n`, whose dimension depends on `n`'s runtime value), an
-   *   operator with no dimensional rule (`faq`, `index`, `fn`,
-   *   `table_lookup`), a malformed arity, an unknown variable. Genuinely
-   *   undeterminable — a statement about the checker, not the file. → WARNING,
-   *   and the dimension is reported UNKNOWN and the check SKIPPED, never assumed
-   *   dimensionless.
+   *   operator with no dimensional rule (`fn`, `table_lookup`), a malformed
+   *   arity, an unknown variable. Genuinely undeterminable — a statement
+   *   about the checker, not the file. → WARNING, and the dimension is
+   *   reported UNKNOWN and the check SKIPPED, never assumed dimensionless.
    *
    * An unknown VARIABLE is an `analysis` finding here and nothing more: it is
    * separately a hard `undefined_variable` error, so the units layer does not
@@ -236,6 +237,111 @@ function powerUnit(base: ParsedUnit, exp: number): ParsedUnit {
   return { dims, scale: Math.pow(base.scale, exp), exact: base.exact.power(exp) }
 }
 
+/** {@link powerUnit} for an EXACT rational exponent `r.n / r.d`. */
+function powerUnitRational(base: ParsedUnit, r: Rational): ParsedUnit {
+  const exp = r.n / r.d
+  const dims: CanonicalDims = {}
+  for (const [k, v] of Object.entries(base.dims)) {
+    if (v == null || v === 0) continue
+    dims[k as keyof CanonicalDims] = v * exp
+  }
+  pruneZeros(dims)
+  return { dims, scale: Math.pow(base.scale, exp), exact: base.exact.powerRational(r.n, r.d) }
+}
+
+/** An exact rational in lowest terms with a positive denominator. */
+interface Rational {
+  n: number
+  d: number
+}
+
+function gcd(a: number, b: number): number {
+  let x = Math.abs(a)
+  let y = Math.abs(b)
+  while (y !== 0) [x, y] = [y, x % y]
+  return x
+}
+
+/**
+ * `n/d` reduced, or `null` when either part leaves the safe-integer range
+ * (the binding's rational type overflows) or `d` is zero.
+ */
+function rational(n: number, d: number): Rational | null {
+  if (!Number.isSafeInteger(n) || !Number.isSafeInteger(d) || d === 0) return null
+  const g = gcd(n, d) || 1
+  const sign = d < 0 ? -1 : 1
+  return { n: (sign * n) / g + 0, d: Math.abs(d) / g }
+}
+
+/**
+ * The exact rational value of a CONSTANT-EXPRESSION `^` exponent, or `null`
+ * when it does not fold (esm-spec §4.8.3 `^`).
+ *
+ * It folds when it is a numeric literal (converted exactly as a literal
+ * exponent always has been); a `const` that declares no units, or units that
+ * are dimensionless at exact scale 1 (`"1"`, `""`, `"dimensionless"`) — its
+ * `value` IS the pure number it denotes; or `+`, `*` (one or more operands),
+ * `-` (unary negation, or a left fold of two or more) or `/` (exactly two
+ * operands, nonzero divisor) over constant expressions, nested to any depth.
+ * Anything else — a variable, an expression containing one, a `const` whose
+ * unit is dimensional or scaled (`%`), any other op, overflow, division by
+ * zero — is SYMBOLIC, and the power stays undeterminable for a dimensional or
+ * scaled base (§4.8.4). Mirrors Python's `constant_exponent_value`.
+ */
+export function constantExponentValue(expr: Expression): Rational | null {
+  const literal = literalValue(expr)
+  if (literal !== null) return exponentRatio(literal)
+  if (typeof expr !== 'object' || expr === null) return null
+  const node = expr as ExpressionNode
+  if (node.op === 'const') {
+    const declared = (node as { units?: string }).units
+    if (declared !== undefined) {
+      const unit = tryParseUnit(declared)
+      if (unit === null || !isDimensionless(unit) || !unit.exact.isOne()) return null
+    }
+    const value = (node as { value?: unknown }).value
+    if (typeof value === 'number') return exponentRatio(value)
+    if (isNumericLiteral(value as Expression))
+      return exponentRatio((value as { value: number }).value)
+    return null
+  }
+  const args = node.args ?? []
+  if (args.length === 0) return null
+  const values: Rational[] = []
+  for (const a of args) {
+    const v = constantExponentValue(a as Expression)
+    if (v === null) return null
+    values.push(v)
+  }
+  const add = (a: Rational, b: Rational, sign: 1 | -1): Rational | null =>
+    rational(a.n * b.d + sign * b.n * a.d, a.d * b.d)
+  switch (node.op) {
+    case '+':
+    case '-': {
+      if (node.op === '-' && values.length === 1) return rational(-values[0].n, values[0].d)
+      let acc: Rational | null = values[0]
+      for (const v of values.slice(1)) {
+        acc = add(acc, v, node.op === '+' ? 1 : -1)
+        if (acc === null) return null
+      }
+      return acc
+    }
+    case '*': {
+      let acc: Rational | null = values[0]
+      for (const v of values.slice(1)) {
+        acc = rational(acc.n * v.n, acc.d * v.d)
+        if (acc === null) return null
+      }
+      return acc
+    }
+    case '/':
+      if (values.length !== 2 || values[1].n === 0) return null
+      return rational(values[0].n * values[1].d, values[0].d * values[1].n)
+    default:
+      return null
+  }
+}
+
 /**
  * Check dimensional consistency of an expression.
  *
@@ -257,72 +363,107 @@ export function checkDimensions(
   expr: Expression,
   unitBindings: Map<string, ParsedUnit>,
 ): UnitResult {
-  return checkDimensionsMemo(expr, unitBindings, new Map(), false)
+  return checkDimensionsMemo(expr, unitBindings, new Map())
 }
 
 /**
- * The EVALUATION-PATH reading of {@link checkDimensions}: the same rules, plus
- * an array operator carrying its ELEMENT's unit. The checker has no rule for
- * the array operators (esm-spec §4.8.4: they are undeterminable there), but an
- * evaluator that meets `cos(index(lat, i))` with `lat` in `deg` reads a number
- * in degrees all the same, and §4.8.3 requires it converted. Only the angle
- * rewrite (`flatten.ts` `normalizeAngleArguments`) calls it, so no checker
- * verdict depends on it.
+ * The EVALUATION-PATH reading of {@link checkDimensions}, used by the angle
+ * rewrite (`flatten.ts` `normalizeAngleArguments`): an evaluator that meets
+ * `cos(index(lat, i))` with `lat` in `deg` reads a number in degrees, and
+ * §4.8.3 requires it converted. The checker now types the array operators
+ * itself (rules A1-A6, esm-spec §4.8.3), so the two readings are ONE: this is
+ * {@link checkDimensions} under another name, kept so the rewrite and the
+ * checker can never disagree about an array element's unit.
  */
 export function checkElementDimensions(
   expr: Expression,
   unitBindings: Map<string, ParsedUnit>,
 ): UnitResult {
-  return checkDimensionsMemo(expr, unitBindings, new Map(), true)
+  return checkDimensions(expr, unitBindings)
 }
 
-/** The array operators whose ELEMENT unit {@link checkElementDimensions} carries. */
-const ARRAY_ELEMENT_OPS: ReadonlySet<string> = new Set([
-  'faq',
-  'makearray',
-  'index',
-  'reshape',
-  'transpose',
-  'concat',
-  'broadcast',
-])
+/** The ⊕ of an `faq`, read from `semiring` if present, else `reduce` (default `+`). */
+type FaqReduce = 'sum' | 'max' | 'min' | 'product' | 'or' | null
+
+function faqReduceKind(node: ExpressionNode): FaqReduce {
+  const n = node as { semiring?: unknown; reduce?: unknown }
+  if (n.semiring !== undefined && n.semiring !== null) {
+    switch (n.semiring) {
+      case 'sum_product':
+        return 'sum'
+      case 'max_product':
+      case 'max_sum':
+        return 'max'
+      case 'min_sum':
+        return 'min'
+      case 'bool_and_or':
+        return 'or'
+      default:
+        return null
+    }
+  }
+  switch (n.reduce ?? '+') {
+    case '+':
+      return 'sum'
+    case 'max':
+      return 'max'
+    case 'min':
+      return 'min'
+    case '*':
+      return 'product'
+    default:
+      return null
+  }
+}
 
 /**
- * The element unit of an array operator under the evaluation-path reading. The
- * rules are the Rust binding's `propagate_array_dim` (units.rs), case for case,
- * so every binding's angle rewrite folds the factor into the same arguments: an
- * `faq` has its body's unit; a `makearray` has the unit its value regions share;
- * a `broadcast` has the unit of its `fn` applied to its operands; `index`,
- * `reshape`, `transpose` and `concat` have their source array's.
+ * A6: the unit of an `faq` node whose `expr` body has unit `body` (`undefined`
+ * when the node has no `expr`). The ⊗ is written by the author inside `expr`,
+ * so it is already typed; `join` clauses are key equalities and contribute no
+ * factor. What remains is the ⊕ over the contracted indices.
  */
-function arrayElementDimensions(
-  node: ExpressionNode,
-  unitBindings: Map<string, ParsedUnit>,
-  memo: Map<object, UnitResult>,
-): ParsedUnit | null {
-  const element = (e: Expression): ParsedUnit | null =>
-    checkDimensionsMemo(e, unitBindings, memo, true).dimensions
-  const args = node.args ?? []
-  switch (node.op) {
-    case 'faq':
-      if (node.expr !== undefined) return element(node.expr as Expression)
-      return args.length > 0 ? element(args[0] as Expression) : dimensionless()
-    case 'makearray': {
-      const values = (node.values ?? []) as Expression[]
-      if (values.length === 0) return dimensionless()
-      const dims = values.map(element)
-      const known = dims.filter((d): d is ParsedUnit => d !== null)
-      if (known.length === 0 || known.length !== dims.length) return null
-      const first = known[0]
-      return known.every((d) => sameUnit(first, d)) ? first : null
-    }
-    case 'broadcast':
-      if (node.fn === undefined) return null
-      return checkDimensionsMemo({ op: node.fn, args } as ExpressionNode, unitBindings, memo, true)
-        .dimensions
+function faqUnit(node: ExpressionNode, body: ParsedUnit | null | undefined): ParsedUnit | null {
+  const n = node as { distinct?: unknown; key?: unknown }
+  // Value invention: the result is ids / an index set, not a quantity.
+  if (n.distinct === true || (n.key !== undefined && n.key !== null)) return null
+  if (body === undefined) return null
+  switch (faqReduceKind(node)) {
+    case 'sum':
+    case 'max':
+    case 'min':
+      return body
+    case 'product':
+      // The power is the range length, which the checker does not know.
+      return body !== null && isPureNumber(body) ? body : null
+    case 'or':
+      return dimensionless()
     default:
-      return args.length > 0 ? element(args[0] as Expression) : dimensionless()
+      // An unknown ⊕ spelling; it is rejected elsewhere.
+      return null
   }
+}
+
+/**
+ * The shared rule of `+`-like agreement (A3 `concat`, A4 `makearray`): every
+ * DETERMINABLE operand must agree with the first in dimension and in exact
+ * scale; undeterminable operands are skipped. Returns the shared unit, or
+ * `null` when no operand is determinable.
+ */
+function agreeingUnit(
+  dims: ReadonlyArray<ParsedUnit | null>,
+  mismatch: (first: ParsedUnit, other: ParsedUnit, scaleOnly: boolean) => void,
+): ParsedUnit | null {
+  let first: ParsedUnit | null = null
+  for (const other of dims) {
+    if (other === null) continue
+    if (first === null) {
+      first = other
+      continue
+    }
+    if (!dimsEqual(first.dims, other.dims)) mismatch(first, other, false)
+    else if (!first.exact.equals(other.exact)) mismatch(first, other, true)
+  }
+  return first
 }
 
 /**
@@ -341,7 +482,6 @@ function checkDimensionsMemo(
   expr: Expression,
   unitBindings: Map<string, ParsedUnit>,
   memo: Map<object, UnitResult>,
-  elements: boolean,
 ): UnitResult {
   const isNode = typeof expr === 'object' && expr !== null
   if (isNode) {
@@ -350,7 +490,7 @@ function checkDimensionsMemo(
       return { dimensions: hit.dimensions, warnings: [], diagnostics: [] }
     }
   }
-  const res = computeDimensions(expr, unitBindings, memo, elements)
+  const res = computeDimensions(expr, unitBindings, memo)
   if (isNode) memo.set(expr, res)
   return res
 }
@@ -359,7 +499,6 @@ function computeDimensions(
   expr: Expression,
   unitBindings: Map<string, ParsedUnit>,
   memo: Map<object, UnitResult>,
-  elements: boolean,
 ): UnitResult {
   const diagnostics: UnitDiagnostic[] = []
   // Record a diagnostic with its classification made EXPLICIT here (not
@@ -418,11 +557,50 @@ function computeDimensions(
   const op = node.op
   const args = node.args ?? []
 
-  if (elements && ARRAY_ELEMENT_OPS.has(op)) {
-    return finish(arrayElementDimensions(node, unitBindings, memo))
+  // Walk a sub-expression, recording its findings; returns its unit.
+  const walk = (part: Expression): ParsedUnit | null => {
+    const r = checkDimensionsMemo(part, unitBindings, memo)
+    diagnostics.push(...r.diagnostics)
+    return r.dimensions
   }
 
-  const argResults = args.map((arg) => checkDimensionsMemo(arg, unitBindings, memo, elements))
+  if (op === 'faq') {
+    // A6. The filter (a boolean whose value never reaches the node's unit), the
+    // body and any operands are ALWAYS walked for findings (§4.8.3,
+    // EarthSciAST#414); the node's unit is decided by its ⊕.
+    if (node.filter !== undefined && node.filter !== null) walk(node.filter as Expression)
+    const hasExpr = node.expr !== undefined && node.expr !== null
+    const body = hasExpr ? walk(node.expr as Expression) : undefined
+    for (const arg of args) walk(arg)
+    return finish(faqUnit(node, body))
+  }
+
+  if (op === 'makearray') {
+    // A4. The regions' `values` agree like the operands of `+`: an
+    // undeterminable value (a bare literal) is skipped; disagreement between
+    // two determinable ones is a provable mismatch.
+    for (const arg of args) walk(arg)
+    const values = (node.values ?? []) as Expression[]
+    const shared = agreeingUnit(values.map(walk), (first, other, scaleOnly) =>
+      warn(
+        `'makearray' regions must share units, got ${scaleOnly ? formatUnit(first) : formatDims(first.dims)} and ${scaleOnly ? formatUnit(other) : formatDims(other.dims)}`,
+        ERROR_CODES.DIMENSIONAL_MISMATCH,
+      ),
+    )
+    return finish(shared)
+  }
+
+  if (op === 'broadcast') {
+    // A5. The unit of `{op: fn, args}` under the ordinary rules; the synthetic
+    // node walks (and reports on) the operands itself.
+    if (node.fn === undefined || node.fn === null) {
+      for (const arg of args) walk(arg)
+      return unknown()
+    }
+    return finish(walk({ op: node.fn, args } as ExpressionNode))
+  }
+
+  const argResults = args.map((arg) => checkDimensionsMemo(arg, unitBindings, memo))
   for (const r of argResults) diagnostics.push(...r.diagnostics)
 
   // `get(i)` is the i-th operand's dimension, or `null` when indeterminate.
@@ -514,6 +692,11 @@ function computeDimensions(
       if (isDimensionless(base) && base.exact.isOne()) return finish(dimensionless())
 
       const expValue = literalValue(args[1])
+      // A CONSTANT-EXPRESSION exponent (`3/2`, `-(1)`, a unit-1 `const`) is
+      // read by VALUE exactly like a literal of the same value (esm-spec §4.8.3
+      // `^`); only an exponent that does not fold is symbolic.
+      const folded = expValue === null ? constantExponentValue(args[1]) : null
+      if (folded !== null) return finish(powerUnitRational(base, folded))
       if (expValue === null) {
         // A SYMBOLIC exponent on a dimensional base is INDETERMINATE, not
         // wrong. `k * [X]^n` — a rate law with a fitted reaction order — is
@@ -802,6 +985,26 @@ function computeDimensions(
     case 'Pre':
       return finish(get(0))
 
+    case 'index':
+    case 'reshape':
+    case 'transpose':
+      // A1/A2: the unit of the source array; subscripts and shape operands are
+      // walked (above) but are not part of the unit. No operand: undeterminable.
+      return finish(argDims.length > 0 ? get(0) : null)
+
+    case 'concat':
+      // A3: like n-ary `+` — determinable operands agree in dimension and scale.
+      return finish(
+        agreeingUnit(argDims, (first, other, scaleOnly) =>
+          warn(
+            scaleOnly
+              ? `Incompatible scales in 'concat': ${formatUnit(first)} vs ${formatUnit(other)}`
+              : `Incompatible dimensions in 'concat': ${formatDims(first.dims)} vs ${formatDims(other.dims)}`,
+            ERROR_CODES.DIMENSIONAL_MISMATCH,
+          ),
+        ),
+      )
+
     case 'const': {
       // A `const` that DECLARES its units has that unit (esm-spec §4.8.5);
       // without `units` it is undeterminable, like a bare literal. An
@@ -813,8 +1016,8 @@ function computeDimensions(
     }
 
     default:
-      // Structural / not-dimensionally-modelled ops (`index`, `fn`,
-      // `faq`, `const`, `makearray`, `table_lookup`, `faq`, ...) AND
+      // Structural / not-dimensionally-modelled ops (`fn`,
+      // `table_lookup`, ...) AND
       // every OPEN-TIER rewrite-target op — the spatial-calculus sugar
       // `grad`/`div`/`laplacian`/`integral` and any user op such as
       // `godunov_hamiltonian`. These sugar ops carry NO dimensional rule
@@ -834,11 +1037,12 @@ function computeDimensions(
 }
 
 /**
- * Register a unit binding under BOTH its scoped key (`Scope.name`) and its bare
- * short name (`name`). The scoped key always reflects this component; the bare
- * key is FIRST-WINS — an earlier component's short name is never overwritten by
- * a later collision, matching the legacy resolution order where the
- * first-declared short name shadows later ones. No-op when `units` is absent.
+ * Register a unit binding under its bare short name (`name`). The bare key is
+ * FIRST-WINS — an earlier component's short name is never overwritten by a later
+ * collision, matching the legacy resolution order where the first-declared short
+ * name shadows later ones. The scoped key (`Scope.name`) is not bound here: it
+ * comes from {@link topLevelScopedUnits}, so a component-relative path of the
+ * same spelling can shadow it. No-op when `units` is absent.
  *
  * When `units` is present but UNPARSEABLE, the declaration names no real unit,
  * which is a defect in the FILE: an `unparseable_unit` finding is recorded (a
@@ -850,7 +1054,6 @@ function computeDimensions(
  */
 function addBinding(
   bindings: Map<string, ParsedUnit>,
-  scope: string,
   name: string,
   units: string | undefined,
   warnings: UnitWarning[],
@@ -872,7 +1075,6 @@ function addBinding(
     })
     return
   }
-  bindings.set(`${scope}.${name}`, parsed)
   if (!bindings.has(name)) bindings.set(name, parsed)
 }
 
@@ -963,7 +1165,7 @@ function reportUnparseableVariableUnits(
  * their `observed` variable expressions checked.
  *
  * BINDINGS: the shared top-level environment (top-level models' variables +
- * reaction systems' species/parameters, scoped key + bare first-wins) is used
+ * reaction systems' species/parameters, bare first-wins) is used
  * for EVERY component, including subsystems. Subsystem-local declarations are
  * deliberately NOT added, so a name defined only inside a subsystem stays an
  * "Unknown variable" and keeps the mismatch-suppression in `checkAndReport`.
@@ -989,7 +1191,8 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
   const warnings: UnitWarning[] = []
 
   // Shared binding environment: top-level models' variables + reaction systems'
-  // species/parameters (scoped key + bare first-wins). This is the ONLY
+  // species/parameters, bare first-wins (scoped keys are added per component by
+  // `withScopedReferenceUnits`). This is the ONLY bare-name
   // environment — subsystem-local declarations are never added (see the
   // docstring's BINDINGS note), so a subsystem-only name stays unbound and its
   // equation-level mismatch is suppressed.
@@ -1000,7 +1203,6 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
         for (const [varName, variable] of Object.entries(model.variables)) {
           addBinding(
             unitBindings,
-            modelName,
             varName,
             variable.units,
             warnings,
@@ -1016,7 +1218,6 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
         for (const [speciesName, species] of Object.entries(system.species)) {
           addBinding(
             unitBindings,
-            systemName,
             speciesName,
             species.units,
             warnings,
@@ -1028,7 +1229,6 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
         for (const [paramName, param] of Object.entries(system.parameters)) {
           addBinding(
             unitBindings,
-            systemName,
             paramName,
             param.units,
             warnings,
@@ -1042,6 +1242,9 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
   // Reaction-rate / stoichiometry dimensional check lives in validate.ts
   // (`validateReactionRateUnits`) so it can emit a structured
   // `unit_inconsistency` error with typed details instead of a prose warning.
+
+  // `Scope.member` paths into every top-level component, built once per document.
+  const scopedTopLevel = topLevelScopedUnits(file)
 
   forEachComponent(
     file,
@@ -1059,7 +1262,16 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
       // {@link bindingsForComponent}); subsystem-local names stay unbound (see
       // the docstring's BINDINGS note), preserving the legacy
       // mismatch-suppression.
-      const bindings = bindingsForComponent(unitBindings, scopedName, component)
+      // A scoped reference — into a subsystem or a top-level component, mounted
+      // by `{ref}` or written inline — has the units its target declares
+      // (esm-spec §4.8.4, EarthSciAST#414); leaving it unbound skipped every
+      // check across a mount edge.
+      const bindings = withScopedReferenceUnits(
+        bindingsForComponent(unitBindings, scopedName, component),
+        file,
+        component,
+        scopedTopLevel,
+      )
 
       // Flag any unparseable variable-unit declarations in this component. For
       // an INLINE SUBSYSTEM this is the only pass that sees them — the top-level
@@ -1199,6 +1411,142 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
   return dedupeUnparseable(warnings)
 }
 
+/** Declared unit strings of a component's own members: a model's `variables`,
+ * a reaction system's `species` and `parameters`. A member that declares no
+ * `units` maps to `null` — it still names that member, so its scoped name
+ * resolves to it (dimension unknown) rather than to anything else. */
+function componentMemberUnits(component: unknown): Array<[string, string | null]> {
+  const out: Array<[string, string | null]> = []
+  const c = component as Record<string, unknown>
+  for (const key of ['variables', 'species', 'parameters']) {
+    const table = c[key]
+    if (table === null || typeof table !== 'object' || Array.isArray(table)) continue
+    for (const [name, decl] of Object.entries(table as Record<string, { units?: unknown }>)) {
+      const units = decl?.units
+      out.push([name, typeof units === 'string' && units ? units : null])
+    }
+  }
+  return out
+}
+
+/** The resolved (non-`{ref}`) subsystems of a component. */
+function resolvedSubsystems(component: unknown): Array<[string, unknown]> {
+  const subs = (component as { subsystems?: Record<string, unknown> }).subsystems
+  if (!subs || typeof subs !== 'object') return []
+  return Object.entries(subs).filter(
+    ([, sub]) =>
+      sub !== null &&
+      typeof sub === 'object' &&
+      !isReferenceStub(sub as Parameters<typeof isReferenceStub>[0]),
+  )
+}
+
+/** Register `<prefix>.<member>` for every member of `component` and,
+ * recursively, of every resolved subsystem it carries. */
+function collectScopedUnits(
+  prefix: string,
+  component: unknown,
+  out: Map<string, string | null>,
+): void {
+  for (const [name, units] of componentMemberUnits(component)) out.set(`${prefix}.${name}`, units)
+  for (const [subName, sub] of resolvedSubsystems(component)) {
+    collectScopedUnits(`${prefix}.${subName}`, sub, out)
+  }
+}
+
+/** `<System>.<member>` for every top-level model and reaction system,
+ * recursively through their resolved subsystems. */
+function topLevelScopedUnitStrings(file: EsmFile | undefined): Map<string, string | null> {
+  const out = new Map<string, string | null>()
+  if (!file) return out
+  for (const table of [file.models, file.reaction_systems]) {
+    for (const [name, entry] of Object.entries((table ?? {}) as Record<string, unknown>)) {
+      if (entry === null || typeof entry !== 'object') continue
+      if (isReferenceStub(entry as Parameters<typeof isReferenceStub>[0])) continue
+      collectScopedUnits(name, entry, out)
+    }
+  }
+  return out
+}
+
+/** `<sub>.<member>` relative to `component`'s own resolved subsystems. */
+function relativeScopedUnitStrings(component: unknown): Map<string, string | null> {
+  const out = new Map<string, string | null>()
+  for (const [subName, sub] of resolvedSubsystems(component)) {
+    collectScopedUnits(subName, sub, out)
+  }
+  return out
+}
+
+/**
+ * The document-wide part of the scoped-reference environment: every
+ * `<System>.<member>` path (see {@link scopedReferenceUnits}), parsed. `null`
+ * marks a member with no or an unparseable unit — the name is taken, its
+ * dimension unknown. It depends only on the document, so a validation pass
+ * builds it once and hands it to every {@link withScopedReferenceUnits} call.
+ */
+export function topLevelScopedUnits(file: EsmFile | undefined): Map<string, ParsedUnit | null> {
+  const out = new Map<string, ParsedUnit | null>()
+  for (const [name, units] of topLevelScopedUnitStrings(file)) {
+    out.set(name, units === null ? null : tryParseUnit(units))
+  }
+  return out
+}
+
+/**
+ * Scoped name -> declared unit string, for every scoped reference an expression
+ * in `component` can make (esm-spec §4.8.4, §4.9.2; EarthSciAST#414); `null`
+ * for a member that declares no units.
+ *
+ * A mounted component is, after resolution, the same as one written inline
+ * (§4.7 "Resolution timing"), so a variable reached across a `{ref}` mount edge
+ * — a `subsystems.<k>` mount or a top-level `models.<k>` mount — carries the
+ * units its declaration states. Two kinds of path are covered: (a)
+ * `<System>.<member>` naming a top-level model or reaction system, recursively
+ * through its subsystems; (b) `<sub>.<member>` relative to `component`'s own
+ * subsystems, recursively, which wins over (a) on a collision — even when the
+ * relative member declares no units. An unresolved `{ref}` subsystem
+ * contributes nothing. Mirrors Python's `scoped_reference_units`.
+ */
+export function scopedReferenceUnits(
+  file: EsmFile | undefined,
+  component: unknown,
+): Map<string, string | null> {
+  const out = topLevelScopedUnitStrings(file)
+  for (const [name, units] of relativeScopedUnitStrings(component)) out.set(name, units)
+  return out
+}
+
+/**
+ * `bindings` extended with every scoped reference of `component` (see
+ * {@link scopedReferenceUnits}). A name `bindings` already binds is never
+ * overwritten. A component-relative path takes precedence over the top-level
+ * path of the same spelling; a path whose unit is missing or does not parse
+ * stays unbound (dimension unknown — an unparseable unit is reported at its own
+ * declaration). `topLevel` is {@link topLevelScopedUnits}`(file)`; pass it in to
+ * build it once per document.
+ */
+export function withScopedReferenceUnits(
+  bindings: Map<string, ParsedUnit>,
+  file: EsmFile | undefined,
+  component: unknown,
+  topLevel: Map<string, ParsedUnit | null> = topLevelScopedUnits(file),
+): Map<string, ParsedUnit> {
+  const relative = relativeScopedUnitStrings(component)
+  if (relative.size === 0 && topLevel.size === 0) return bindings
+  const view = new Map(bindings)
+  for (const [name, units] of relative) {
+    if (view.has(name)) continue
+    const parsed = units === null ? null : tryParseUnit(units)
+    if (parsed !== null) view.set(name, parsed)
+  }
+  for (const [name, parsed] of topLevel) {
+    if (view.has(name) || relative.has(name)) continue
+    if (parsed !== null) view.set(name, parsed)
+  }
+  return view
+}
+
 /**
  * Collapse duplicate `unparseable_unit` findings.
  *
@@ -1232,9 +1580,8 @@ function dedupeUnparseable(warnings: UnitWarning[]): UnitWarning[] {
  * environment, with every BARE name this component declares rebound to THIS
  * component's own units.
  *
- * The shared table publishes each declaration twice — under its scoped key
- * (`ChemicalKinetics.B`) and, first-writer-wins, under its bare name (`B`). The
- * bare half is a single flat namespace across the whole file, so when two models
+ * The shared table publishes each declaration, first-writer-wins, under its bare
+ * name (`B`). That is a single flat namespace across the whole file, so when two models
  * both declare `B`, one model's units silently answered for the other's. That is
  * not a hypothetical: in `tests/valid/units_dimensional_analysis.esm`,
  * `ElectromagneticFields.B` reached the table first, so `ChemicalKinetics`' rate

@@ -147,11 +147,11 @@ describe('flatten converts a degree argument', () => {
   })
 })
 
-// An array element carries its array's unit on the evaluation path, so
-// `cos(index(lat, i))` with `lat` in `deg` converts like `cos(lat)` does. The
-// checker has no rule for `index` or `faq` (esm-spec §4.8.4), and the rewrite
-// used to read the argument with the checker's rules, so it left every array
-// element unconverted.
+// An array element carries its array's unit, so `cos(index(lat, i))` with
+// `lat` in `deg` converts like `cos(lat)` does. The rewrite once read the
+// argument with a checker that had no rule for `index` or `faq`, and so left
+// every array element unconverted; the checker and the rewrite now share the
+// array-operator rules (esm-spec §4.8.3).
 describe('flatten converts a degree ARRAY ELEMENT', () => {
   const fixture = (): ReturnType<typeof loadFixture> =>
     loadFixture('conformance', 'scalar_operator_semantics', 'fixtures', 'angle_array_element.esm')
@@ -198,10 +198,14 @@ describe('flatten converts a degree ARRAY ELEMENT', () => {
     const result = validate(fixture())
     expect(result.structural_errors).toEqual([])
     expect(result.is_valid).toBe(true)
-    // The checker still has no rule for an array element.
+    // The checker types an array element with the same rule the rewrite uses
+    // (esm-spec §4.8.3 `index`): the element of a `deg` array is in `deg`.
     const deg = parseUnitForConversion('deg')
     const bindings = new Map<string, ParsedUnit>([['lat', deg]])
-    expect(checkDimensions({ op: 'index', args: ['lat', 1] }, bindings).dimensions).toBeNull()
+    const el = checkDimensions({ op: 'index', args: ['lat', 1] }, bindings).dimensions
+    expect(el).not.toBeNull()
+    expect(el!.exact.equals(deg.exact)).toBe(true)
+    expect(el!.dims).toEqual(deg.dims)
   })
 })
 

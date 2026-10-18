@@ -1,0 +1,45 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "UnitsConstantExponentAngle",
+    "description": "Invalid: x raised to a const exponent declaring units \"rad\". An exponent must be dimensionless (esm-spec §4.8.3 `^`); an angle is not, so the const is neither folded to the exact rational 2 nor accepted.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "created": "2026-10-16T00:00:00Z"
+  },
+  "models": {
+    "Powers": {
+      "variables": {
+        "x": {
+          "type": "parameter",
+          "units": "m",
+          "default": 2.0,
+          "description": "A length."
+        },
+        "x_sq": {
+          "type": "unknown",
+          "units": "m^2",
+          "description": "Invalid: x^(const 2, units \"rad\") — the exponent is an angle."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "x_sq",
+          "rhs": {
+            "op": "^",
+            "args": [
+              "x",
+              {
+                "op": "const",
+                "args": [],
+                "value": 2,
+                "units": "rad"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

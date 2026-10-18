@@ -187,14 +187,12 @@ def test_flatten_converts_a_degree_array_element() -> None:
     assert result.is_valid, [e.message for e in result.structural_errors]
 
 
-def test_the_checker_still_has_no_rule_for_an_array_element() -> None:
-    """The element reading is the EVALUATION path's alone: the checker still
-    reports ``index`` as undeterminable (esm-spec §4.8.4), so no verdict moved."""
+def test_the_checker_reads_an_array_element_as_the_evaluation_path_does() -> None:
+    """An array element carries its array's unit in the checker and on the
+    evaluation path alike (esm-spec §4.8.3, "Array operators")."""
     validator = UnitValidator()
     validator.known_units = {"lat": parse_unit("deg")}
     node = ExprNode(op="index", args=["lat", 1])
-    assert validator._type(node) is None
-    validator.element_units = True
     typed = validator._type(node)
     assert typed is not None and not typed.scale.is_one(), "the element is in `deg`"
 

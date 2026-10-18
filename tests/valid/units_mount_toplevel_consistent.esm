@@ -1,0 +1,71 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "UnitsMountToplevelConsistent",
+    "description": "esm-spec §4.7 / §4.8.4 (EarthSciAST#414): the top-level `models.<k>: {ref}` mount form. The mounted component's declared units are visible to the sibling model that reads them as Leaf.p_kpa / Leaf.t_h, exactly as at a `subsystems.<k>` mount. Every equation agrees in dimension and scale and must validate.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "created": "2026-10-15T00:00:00Z"
+  },
+  "models": {
+    "Leaf": {
+      "ref": "./units_mount_leaf.esm"
+    },
+    "Probe": {
+      "variables": {
+        "p_same": {
+          "type": "unknown",
+          "units": "kPa",
+          "description": "The mounted pressure, in the unit it is declared in."
+        },
+        "p_pa": {
+          "type": "unknown",
+          "units": "Pa",
+          "description": "The mounted pressure converted to pascals by a unit-bearing const."
+        },
+        "t_s": {
+          "type": "unknown",
+          "units": "s",
+          "description": "The mounted time converted to seconds by a unit-bearing const."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "p_same",
+          "rhs": "Leaf.p_kpa"
+        },
+        {
+          "lhs": "p_pa",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "Leaf.p_kpa",
+              {
+                "op": "const",
+                "args": [],
+                "value": 1000.0,
+                "units": "Pa/kPa"
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "t_s",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "Leaf.t_h",
+              {
+                "op": "const",
+                "args": [],
+                "value": 3600.0,
+                "units": "s/h"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

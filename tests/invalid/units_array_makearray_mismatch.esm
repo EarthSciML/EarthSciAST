@@ -1,0 +1,72 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "UnitsArrayMakearrayMismatch",
+    "description": "Invalid: a makearray whose two regions are in s and in kg, and whose declaration is s. Regions must share their unit (esm-spec §4.8.3).",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "created": "2026-10-16T00:00:00Z"
+  },
+  "index_sets": {
+    "rows": {
+      "kind": "interval",
+      "size": 2
+    },
+    "one": {
+      "kind": "interval",
+      "size": 1
+    }
+  },
+  "models": {
+    "Probe": {
+      "variables": {
+        "mixed": {
+          "type": "unknown",
+          "units": "s",
+          "description": "Invalid: a time and a mass in one array.",
+          "shape": [
+            "rows"
+          ]
+        }
+      },
+      "equations": [
+        {
+          "lhs": "mixed",
+          "rhs": {
+            "op": "makearray",
+            "args": [],
+            "regions": [
+              [
+                [
+                  1,
+                  1
+                ]
+              ],
+              [
+                [
+                  2,
+                  2
+                ]
+              ]
+            ],
+            "values": [
+              {
+                "op": "const",
+                "args": [],
+                "value": 1.0,
+                "units": "s"
+              },
+              {
+                "op": "const",
+                "args": [],
+                "value": 2.0,
+                "units": "kg"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

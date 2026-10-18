@@ -25,7 +25,10 @@ function scalarModel(rhs: Expression): EsmFile {
       TestModel: {
         // `x` is an ODE state because the equation below differentiates it —
         // 1.0.0 declares only `unknown`/`parameter` and derives the rest.
-        variables: { x: { type: 'unknown', units: 'm', default: 1.0 } },
+        // Dimensionless, because the checker types `broadcast` as its `fn`
+        // applied to the operands (esm-spec §4.8.3): `broadcast(fn: log, [x])`
+        // of a length would be a real unit finding, not the arity under test.
+        variables: { x: { type: 'unknown', units: '1', default: 1.0 } },
         equations: [{ lhs: { op: 'D', args: ['x'], wrt: 't' }, rhs }],
       },
     },

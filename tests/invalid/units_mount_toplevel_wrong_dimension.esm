@@ -1,0 +1,31 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "UnitsMountToplevelWrongDimension",
+    "description": "Invalid (EarthSciAST#414): probe [kg] = Leaf.p_kpa, where Leaf is a top-level `models.<k>` {ref} mount of tests/valid/units_mount_leaf.esm and p_kpa is declared kPa — a mass declared over a pressure. The mounted variable's declared units cross the edge (esm-spec §4.8.4), so this is a provable mismatch.",
+    "authors": [
+      "EarthSciML Authors and Contributors"
+    ],
+    "created": "2026-10-15T00:00:00Z"
+  },
+  "models": {
+    "Leaf": {
+      "ref": "../valid/units_mount_leaf.esm"
+    },
+    "Probe": {
+      "variables": {
+        "probe": {
+          "type": "unknown",
+          "units": "kg",
+          "description": "Invalid: a mass declared over a pressure."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "probe",
+          "rhs": "Leaf.p_kpa"
+        }
+      ]
+    }
+  }
+}
