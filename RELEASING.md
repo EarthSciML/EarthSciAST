@@ -210,6 +210,11 @@ the repository.
   refused the registration (a breaking release with no release notes), and a
   fix would have had to come from a new commit the other registries could
   never match. Hence the register → TagBot → publish order above.
+- **The Linux `esm` only ran on the newest distributions.** It was built
+  natively on `ubuntu-latest`, so it required that runner's glibc (2.39) and
+  v0.3.0's binary would not start on RHEL 9 (2.34). The Linux builds now link
+  against glibc 2.17 with `cargo-zigbuild`, and a step fails the build if
+  either binary needs anything newer.
 - **Releases were validated after they shipped.** Conformance ran against the
   tag in parallel with the publish jobs. It gates the registration now.
 - **Two workflows each created a GitHub release.** `binary-release.yml` made its

@@ -29,8 +29,10 @@ A release runs as three workflows, in order:
    GitHub release from the registration's notes.
 3. **Publish** (`release.yml`). The tag push confirms that the tagged commit is
    the one General registered, then publishes to PyPI, crates.io, npm and the
-   Go proxy, and attaches `esm` and `esm-narrative` for Linux x64, macOS x64,
-   macOS ARM64 and Windows x64 to the release.
+   Go proxy, and attaches `esm` and `esm-narrative` for Linux x64, Linux
+   ARM64, macOS x64, macOS ARM64 and Windows x64 to the release. The Linux
+   builds are linked against glibc 2.17, so they run on any glibc-based
+   distribution from the last decade.
 
 The Julia registry goes first because it is the one that can refuse a release
 after review, while npm, PyPI and crates.io never let a version number be
