@@ -252,10 +252,19 @@ jobs:
       fail-fast: false
       matrix:
         config:
-          - { name: "Linux x64",   os: ubuntu-latest,  platform: linux-x64,   rust_target: x86_64-unknown-linux-gnu, exe: "",     archive_ext: tar.gz }
-          - { name: "macOS x64",   os: macos-latest,   platform: macos-x64,   rust_target: x86_64-apple-darwin,      exe: "",     archive_ext: tar.gz }
-          - { name: "macOS ARM64", os: macos-latest,   platform: macos-arm64, rust_target: aarch64-apple-darwin,     exe: "",     archive_ext: tar.gz }
-          - { name: "Windows x64", os: windows-latest, platform: windows-x64, rust_target: x86_64-pc-windows-gnu,    exe: ".exe", archive_ext: zip }
+          # `glibc` is the oldest glibc the Linux binaries must run on. Built
+          # natively on ubuntu-latest they required the runner's own (2.39),
+          # so v0.3.0's `esm` would not start on RHEL 9 (2.34) or anything
+          # older than Ubuntu 24.04. 2.17 is the floor Rust itself supports,
+          # and glibc is backward compatible, so these run on every glibc
+          # Linux of the last decade. A static musl build would also cover
+          # Alpine, but musl's libm can differ from glibc's in the last bit,
+          # and these binaries should compute what the crate computes.
+          - { name: "Linux x64",   os: ubuntu-latest,     platform: linux-x64,   rust_target: x86_64-unknown-linux-gnu,  exe: "",     archive_ext: tar.gz, glibc: "2.17" }
+          - { name: "Linux ARM64", os: ubuntu-24.04-arm,  platform: linux-arm64, rust_target: aarch64-unknown-linux-gnu, exe: "",     archive_ext: tar.gz, glibc: "2.17" }
+          - { name: "macOS x64",   os: macos-latest,      platform: macos-x64,   rust_target: x86_64-apple-darwin,       exe: "",     archive_ext: tar.gz }
+          - { name: "macOS ARM64", os: macos-latest,      platform: macos-arm64, rust_target: aarch64-apple-darwin,      exe: "",     archive_ext: tar.gz }
+          - { name: "Windows x64", os: windows-latest,    platform: windows-x64, rust_target: x86_64-pc-windows-gnu,     exe: ".exe", archive_ext: zip }
     steps:
       - uses: actions/checkout@v4
         with:
@@ -277,13 +286,49 @@ jobs:
         if: runner.os == 'Windows'
         run: choco install mingw
 
-      - name: Build esm
-        shell: bash
-        run: cargo build --release --manifest-path pkg/earthsci-ast-rs/Cargo.toml --target ${{ matrix.config.rust_target }} --bin esm
+      # cargo-zigbuild links against the glibc named in the target suffix
+      # (`x86_64-unknown-linux-gnu.2.28`) using zig's bundled libc stubs, and
+      # still writes to target/x86_64-unknown-linux-gnu. It finds zig through
+      # the `ziglang` wheel, so both go into one Python environment.
+      - uses: actions/setup-python@v5
+        if: matrix.config.glibc
+        with:
+          python-version: '3.12'
 
-      - name: Build esm-narrative
+      - name: Install cargo-zigbuild
+        if: matrix.config.glibc
+        run: pip install cargo-zigbuild==0.23.4 ziglang==0.17.0
+
+      - name: Build esm and esm-narrative
         shell: bash
-        run: cargo build --release --manifest-path pkg/earthsci-narrative/Cargo.toml --target ${{ matrix.config.rust_target }} --bin esm-narrative
+        env:
+          TARGET: ${{ matrix.config.rust_target }}
+          GLIBC: ${{ matrix.config.glibc }}
+        run: |
+          set -euo pipefail
+          if [ -n "$GLIBC" ]; then
+            build=(cargo zigbuild --target "$TARGET.$GLIBC")
+          else
+            build=(cargo build --target "$TARGET")
+          fi
+          "${build[@]}" --release --manifest-path pkg/earthsci-ast-rs/Cargo.toml --bin esm
+          "${build[@]}" --release --manifest-path pkg/earthsci-narrative/Cargo.toml --bin esm-narrative
+
+      - name: Check the glibc floor
+        if: matrix.config.glibc
+        env:
+          TARGET: ${{ matrix.config.rust_target }}
+          GLIBC: ${{ matrix.config.glibc }}
+        run: |
+          set -euo pipefail
+          for bin in pkg/earthsci-ast-rs/target/$TARGET/release/esm pkg/earthsci-narrative/target/$TARGET/release/esm-narrative; do
+            need=$(objdump -T "$bin" | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' | sed 's/GLIBC_//' | sort -uV | tail -n 1)
+            echo "$bin needs glibc $need"
+            if [ "$(printf '%s\n%s\n' "$need" "$GLIBC" | sort -V | tail -n 1)" != "$GLIBC" ]; then
+              echo "::error::$bin needs glibc $need, newer than the $GLIBC floor."
+              exit 1
+            fi
+          done
 
       - name: Package
         shell: bash
@@ -394,6 +439,7 @@ jobs:
           detect_platform() {
               case "$(uname -s)/$(uname -m)" in
                   Linux/x86_64|Linux/amd64)       echo linux-x64 ;;
+                  Linux/aarch64|Linux/arm64)      echo linux-arm64 ;;
                   Darwin/x86_64)                  echo macos-x64 ;;
                   Darwin/arm64)                   echo macos-arm64 ;;
                   CYGWIN*|MINGW*|MSYS*)           echo windows-x64 ;;
@@ -490,7 +536,7 @@ jobs:
             echo ""
             echo "Or download an archive, extract it and run \`install.sh\` (\`install.bat\` on Windows):"
             echo ""
-            for p in linux-x64:tar.gz macos-x64:tar.gz macos-arm64:tar.gz windows-x64:zip; do
+            for p in linux-x64:tar.gz linux-arm64:tar.gz macos-x64:tar.gz macos-arm64:tar.gz windows-x64:zip; do
               f="esm-cli-$VERSION-${p%%:*}.${p#*:}"
               echo "- [$f]($BASE/$f) ([sha256]($BASE/$f.sha256))"
             done
