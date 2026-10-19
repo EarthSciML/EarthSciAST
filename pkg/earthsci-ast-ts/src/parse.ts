@@ -282,15 +282,14 @@ function checkVersionCompatibility(
 export interface LoadOptions {
   /**
    * When `true`, numeric literals at Expression-bearing positions are
-   * decoded to tagged `NumericLiteral` leaves (see
-   * {@link losslessJsonParse}) so downstream consumers can preserve the
+   * decoded to tagged `NumericLiteral` leaves so downstream consumers can preserve the
    * integer-vs-float distinction required by the canonical form
    * (discretization RFC §5.4.1 / §5.4.6). When `false` or absent
    * (default), numeric literals decode to plain JS numbers.
    *
-   * Canonical mode only takes effect for string inputs; pre-parsed
-   * objects are returned as-is (callers that want tagged leaves should
-   * run `losslessJsonParse` themselves before passing the object in).
+   * Canonical mode only takes effect on {@link loadString} and
+   * {@link loadPath}, which decode JSON text; {@link loadDocument} takes an
+   * already-decoded object and ignores it.
    */
   canonical?: boolean
 
@@ -389,8 +388,8 @@ export function loadString(json: string, options?: LoadOptions): EsmFile {
  *
  * `options.canonical` has no effect here: canonical mode tags numeric
  * literals during JSON decoding, and this entry point does no decoding.
- * Callers who want tagged leaves should run `losslessJsonParse` on the text
- * themselves, or use {@link loadString}.
+ * Callers who want tagged leaves should pass the JSON text to
+ * {@link loadString} with `canonical: true` instead.
  *
  * @param doc - The already-parsed document
  * @param options - Optional load-time settings (see {@link LoadOptions})
