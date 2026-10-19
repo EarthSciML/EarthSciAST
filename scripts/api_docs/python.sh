@@ -11,8 +11,9 @@
 # pyproject.toml or the pinned griffe version changes.
 #
 # Environment:
-#   PYTHON           interpreter used to create the venv (default: python3;
-#                    needs >= 3.10, which griffe requires)
+#   PYTHON           interpreter used to create the venv (default: the first of
+#                    python3.13, python3.12, python3.11, python3 that is at
+#                    least 3.11, which the pinned griffe requires)
 #   API_DOCS_VENV    venv location (default: build/api-docs/venv-python)
 set -euo pipefail
 
@@ -33,7 +34,19 @@ esac
 mkdir -p build/api-docs build/tmp
 export TMPDIR="${TMPDIR:-$ROOT/build/tmp}"
 
-PYTHON="${PYTHON:-python3}"
+if [[ -z "${PYTHON:-}" ]]; then
+  for candidate in python3.13 python3.12 python3.11 python3; do
+    if command -v "$candidate" >/dev/null 2>&1 &&
+       "$candidate" -c 'import sys; sys.exit(sys.version_info < (3, 11))' 2>/dev/null; then
+      PYTHON="$candidate"
+      break
+    fi
+  done
+fi
+if [[ -z "${PYTHON:-}" ]]; then
+  echo "python.sh: needs Python >= 3.11 (set PYTHON=/path/to/python3.11)" >&2
+  exit 1
+fi
 VENV="${API_DOCS_VENV:-$ROOT/build/api-docs/venv-python}"
 VPY="$VENV/bin/python"
 
