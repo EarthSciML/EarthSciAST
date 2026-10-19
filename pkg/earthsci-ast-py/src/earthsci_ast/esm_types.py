@@ -160,7 +160,9 @@ class ExprNode:
     output: int | str | None = field(default=None, metadata={"kind": "scalar"})
 
 
-# Recursive type definition for expressions
+#: An expression (esm-spec §4): a numeric literal (``int`` or ``float``), a
+#: variable or parameter reference (``str``), or an operator node
+#: (:class:`ExprNode`) whose ``args`` are themselves expressions.
 Expr = Union[int, float, str, ExprNode]
 
 
@@ -1111,7 +1113,9 @@ class CouplingImport(BaseCouplingEntry):
     bind: dict[str, str] = field(default_factory=dict)
 
 
-# Discriminated union of all coupling entry types
+#: One entry of a document's ``coupling`` list (esm-spec §10): any of the
+#: coupling dataclasses, told apart by their ``coupling_type`` field
+#: (:class:`CouplingType`), which is the wire ``type`` discriminator.
 CouplingEntry = Union[
     OperatorComposeCoupling,
     CouplingCouple,

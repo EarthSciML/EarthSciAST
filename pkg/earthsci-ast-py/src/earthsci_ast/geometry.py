@@ -46,8 +46,11 @@ import numpy as np
 
 from .errors import EarthSciAstError
 
-# Manifolds the geometry kernel understands (matches the closed schema enum on
-# the ``intersect_polygon`` op — esm-schema.json; additive in ess-my4.4.2).
+#: The closed set of manifold names :func:`intersect_polygon` accepts, matching
+#: the ``manifold`` enum on the ``intersect_polygon`` op in esm-schema.json.
+#: ``"planar"`` clips in the flat lon-lat plane; ``"spherical"`` and
+#: ``"geodesic"`` both clip on the sphere through the optional ``spherely``
+#: dependency (see the module docstring).
 MANIFOLDS: tuple[str, ...] = ("planar", "spherical", "geodesic")
 
 # B.5 / §5.8.2 sliver floor: ``atol ≈ 1e-15·R²``. Near-tangent overlaps are the
