@@ -362,8 +362,7 @@ sol = solve(prob, Tsit5(); callback = cb, tstops = tstops)
 [`provider_sample`](@ref) protocol). Several variables may share one provider
 object; it is then sampled once per cadence boundary. The provider delivers the
 native forcing on the buffer's grid; any native→sim regrid is an ordinary
-in-model coupling expression the RHS evaluates (the obsolete `RegridApplier`
-seam was removed in v0.8.0), not a refresh-time transform.
+in-model coupling expression the RHS evaluates, not a refresh-time transform.
 
 * **DISCRETE** providers (non-empty `provider_refresh_times`) are refreshed at
   each anchor: `affect!` samples and writes the buffer in place, then

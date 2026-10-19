@@ -10,9 +10,11 @@ sys = flatten(doc)
 
 # Every name is qualified by the component it came from.
 @assert collect(keys(sys.state_variables)) == ["Heater.T", "Box.T_air"]
-@assert collect(keys(sys.parameters)) == ["Heater.rate", "Box.T_wall", "Box.k"]
+# The param_to_var variable_map replaced the parameter Box.T_wall with the
+# state Heater.T, so Box.T_wall is not a parameter of the flattened system...
+@assert collect(keys(sys.parameters)) == ["Heater.rate", "Box.k"]
 
-# The variable_map coupling replaced Box.T_wall with Heater.T.
+# ...and the equations read Heater.T where Box.T_wall was.
 equations = [to_ascii(eq) for eq in sys.equations]
 foreach(println, equations)
 @assert equations == ["D(Heater.T)/Dt = Heater.rate",

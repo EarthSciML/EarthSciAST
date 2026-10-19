@@ -2201,7 +2201,7 @@ consumed — that IS an import edge — and the top-level `expression_templates`
 `metaparameters` DECLARATIONS restored VERBATIM from a pre-folding snapshot
 (esm-spec §9.6.4 rule 5: Option A expands call sites, it does not delete
 declarations; a template-library file MUST round-trip to itself). `nothing`
-when the document carries no §9.7 machinery (the legacy fast path).
+when the document carries no §9.7 machinery (the fast path).
 
 `mount_declared` widens the §9.7.6 site-4 check to the names declared by the
 documents this one mounts — see
@@ -2453,9 +2453,8 @@ target key to a top-level system and append its imports to that system's own
 
 Diagnostics (esm-spec §9.6.6): a key naming no system the entry references is
 `template_inject_target_unknown`; a key resolving to neither a model nor a
-reaction system is `template_inject_target_not_component`. The 0.x
-`template_inject_target_is_loader` is RETIRED with esm 1.0.0: a data source is
-no longer a component, so a coupling entry cannot reference one and such a key
+reaction system is `template_inject_target_not_component`. A data source is
+not a component, so a coupling entry cannot reference one and such a key
 never reaches this resolution — it fails the `referenced` check first. Only
 top-level system targets are resolved by this binding — a nested
 `Parent.Child` key is out of scope (RFC §8.3) and reported as

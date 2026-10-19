@@ -28,10 +28,9 @@ catch e
 end
 ```
 
-The concrete subtypes keep their existing names, fields, messages and
-`Base.showerror` methods — introducing this supertype is purely ADDITIVE, and
-`EarthSciASTError <: Exception`, so every pre-existing `catch e` /
-`e isa Exception` site is unaffected.
+Each concrete subtype has its own fields, messages and `Base.showerror` method,
+and `EarthSciASTError <: Exception`, so a plain `catch e` / `e isa Exception`
+catches every one of them too.
 
 Members span the whole pipeline: load/parse (`ParseError`,
 `SchemaValidationError`, `ExpressionParseError`, `SubsystemRefError`), the
