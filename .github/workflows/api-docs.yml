@@ -62,7 +62,9 @@ jobs:
       # toolchain; the examples build on stable.
       - name: Set up Rust nightly (rustdoc JSON)
         if: matrix.binding == 'rust'
-        uses: dtolnay/rust-toolchain@nightly
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-10-01
       - name: Set up Rust stable
         if: matrix.binding == 'rust'
         uses: dtolnay/rust-toolchain@stable
