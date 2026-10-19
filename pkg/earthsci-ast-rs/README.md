@@ -19,7 +19,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-earthsci-ast = "0.8"
+earthsci-ast = "0.3"
 ```
 
 ### As a CLI Tool
@@ -41,13 +41,12 @@ wasm-pack build --target web --features wasm
 ### Library
 
 ```rust
-use earthsci_ast::{load, save, validate};
+use earthsci_ast::{load_path, to_json, validate};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Load an ESM file (parses, schema-validates, and runs the load-time
-    // lowering passes)
-    let content = std::fs::read_to_string("model.esm")?;
-    let esm_file = load(&content)?;
+    // lowering passes). `load_string` does the same from a JSON string.
+    let esm_file = load_path("model.esm")?;
 
     // Validate it (structural checks on the typed representation)
     let validation_result = validate(&esm_file);
@@ -57,28 +56,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Save it back
-    let json = save(&esm_file)?;
+    // Serialize it back (`write_path` writes it to a file)
+    let json = to_json(&esm_file)?;
     println!("{json}");
     Ok(())
 }
 ```
 
-To simulate:
+To simulate, build a problem and solve it:
 
 ```rust
-use earthsci_ast::{load, simulate, SimulateOptions};
-use std::collections::HashMap;
+use earthsci_ast::{ProblemOptions, SolveOptions, esm_problem, solve};
+use std::path::Path;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let esm_file = load(&std::fs::read_to_string("model.esm")?)?;
-    let sol = simulate(
-        &esm_file,
+    let prob = esm_problem(
+        Path::new("model.esm"),
         (0.0, 10.0),
-        &HashMap::new(), // parameter overrides
-        &HashMap::new(), // initial-condition overrides
-        &SimulateOptions::default(),
+        ProblemOptions::default(), // parameter and initial-condition overrides go here
     )?;
+    let sol = solve(&prob, &SolveOptions::default())?;
     println!("{} output points", sol.time.len());
     Ok(())
 }
@@ -179,7 +176,7 @@ cargo clippy --all-targets --features \
 - `default`: `cli`, `solve`
 - `cli`: the `esm` command-line binary (requires clap)
 - `solve`: the diffsol ODE solver behind `solve` / `init` /
-  `solve_to_completion` (building a `Problem` never needs it)
+  `solve_to_completion` (building an `EsmProblem` never needs it)
 - `wasm`: WebAssembly bindings (requires wasm-bindgen)
 - `parallel` / `simd` / `zero_copy` / `custom_alloc` / `performance`:
   opt-in experimental performance utilities in the `performance` module
@@ -224,7 +221,7 @@ and run through PJRT (`earthsci_ast::xla_runtime`), instead of being
 interpreted by the slab executor.
 
 **A caller reaches it by NAME.** `esm_problem` with `compiler:
-Some(Compiler::Xla)` builds a Problem whose right-hand side is that executable
+Some(Compiler::Xla)` builds an `EsmProblem` whose right-hand side is that executable
 (API_SPEC §5.8), and `solve` on it integrates through XLA:
 
 ```rust
@@ -258,7 +255,7 @@ Four properties are deliberate:
   hard error naming the rule and the reason, never a partly-interpreted run.
   The `compiled_rhs` conformance tier records such a model as a named
   refusal, and under `compiler = Xla` it is a `compiler_refused_rule` at
-  construction. A Problem that names `xla` and carries no compiled program
+  construction. An `EsmProblem` that names `xla` and carries no compiled program
   refuses too; the tape is never run under another compiler's name.
 * **Availability is a fact about the build, not the document.** Without the
   `xla` feature, or without an XLA runtime this process can start,
@@ -270,7 +267,7 @@ Four properties are deliberate:
   right-hand side) and `tests/conformance/compiler_agreement/README.md` (a
   whole run) are the contract. Rust is `bindings_required` for `xla` in the
   latter, on a build that has the feature and the extension.
-* **One compile per Problem.** The executable is emitted and compiled at
+* **One compile per `EsmProblem`.** The executable is emitted and compiled at
   construction and shared by every segment and every Jacobian call; nothing
   recompiles per step.
 

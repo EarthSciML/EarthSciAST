@@ -8,9 +8,11 @@
 //! the feature-gated tests in `tests/performance.rs`, and downstream
 //! experimentation:
 //! - Zero-copy JSON parsing with simd-json (`fast_parse`)
-//! - Parallel expression batch evaluation with rayon ([`ParallelEvaluator`])
+//! - Parallel expression batch evaluation with rayon (`ParallelEvaluator`,
+//!   `parallel` feature)
 //! - SIMD vector math (`simd_math`)
-//! - A bump-allocator arena for large models ([`ModelAllocator`])
+//! - A bump-allocator arena for large models (`ModelAllocator`,
+//!   `custom_alloc` feature)
 //! - A stack-based postfix expression evaluator ([`CompactExpr`])
 
 use crate::{EsmFile, Expr};

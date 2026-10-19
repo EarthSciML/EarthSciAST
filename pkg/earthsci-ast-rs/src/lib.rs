@@ -406,11 +406,8 @@ pub use performance::ParallelEvaluator;
 pub use performance::ModelAllocator;
 
 /// This crate's OWN version — NOT the `.esm` format version, which is
-/// [`SCHEMA_VERSION`]. The two are unrelated numbers and used to share a
-/// name: `VERSION` meant the package version here and the SCHEMA version in
-/// TypeScript, so the same identifier read two different things depending on
-/// which binding you were in. `VERSION` is gone; every binding now exposes
-/// exactly `SCHEMA_VERSION` and `LIBRARY_VERSION`.
+/// [`SCHEMA_VERSION`]. The two are unrelated numbers. Every binding exposes
+/// both, under these two names.
 pub const LIBRARY_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// ESM schema version supported by this implementation. Must track the
 /// version in `esm-schema.json`'s `$id` / esm-spec.md; the

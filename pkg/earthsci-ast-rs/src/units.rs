@@ -26,10 +26,9 @@ use thiserror::Error;
 /// Exponents are RATIONAL, not integer: `1/s^0.5` — the intensity of an SDE
 /// noise term — is a legitimate unit that appears in the shared corpus
 /// (`tests/fixtures/sde/*.esm`), and `sqrt` halves whatever it is given. An
-/// integer exponent could represent neither, so `sqrt(m^3)` used to be reported
-/// as "not representable" and `s^0.5` failed to parse outright — which, now that
-/// a dimensional mismatch is a HARD ERROR, would falsely reject legitimate
-/// files.
+/// integer exponent could represent neither `sqrt(m^3)` nor `s^0.5`, and since
+/// a dimensional mismatch is a hard error, legitimate files would be
+/// rejected.
 ///
 /// Always stored in lowest terms with a positive denominator, so `PartialEq`
 /// is exact dimensional equality (½ and 2/4 compare equal) and `HashMap` lookups

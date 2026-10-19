@@ -389,9 +389,8 @@ pub fn system_kind(model: &Model) -> SystemKind {
 
 /// Each observed unknown's defining RHS, keyed by name.
 ///
-/// This is where an observed's definition lives from 1.0.0: the model's
-/// `equations`, not a `variables[v].expression` field. Every site that used to
-/// read that field reads this map instead.
+/// An observed's definition lives in the model's `equations` (esm-spec
+/// §6.3.1): the equation whose left-hand side is the bare variable.
 pub fn observed_definitions(model: &Model) -> BTreeMap<String, Expr> {
     observed_definitions_of_parts(&model.variables, &model.equations)
 }
@@ -485,8 +484,7 @@ fn empty_successors<'a>(
 ///
 /// The JSON-view counterpart of [`observed_definitions`], for the passes and
 /// tools that work on `serde_json::Value` (the cadence partition, the
-/// projection-pushdown desugar, the CLI). It is the 1.0.0 replacement for
-/// reading `model["variables"][name]["expression"]`, which no longer exists.
+/// projection-pushdown desugar, the CLI).
 pub fn observed_definition_json<'a>(
     model: &'a serde_json::Value,
     name: &str,

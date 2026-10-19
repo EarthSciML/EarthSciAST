@@ -158,10 +158,10 @@ pub struct Reaction {
 
 /// Species with stoichiometric coefficient.
 ///
-/// v0.2.x permits fractional coefficients (e.g. `0.87 CH2O` in atmospheric
-/// chemistry) in addition to the historical integer case. The coefficient
-/// MUST be positive and finite — NaN / ±∞ are rejected at parse time by
-/// [`validate_stoichiometries`](crate::parse::validate_stoichiometries).
+/// Coefficients may be fractional (e.g. `0.87 CH2O` in atmospheric
+/// chemistry) as well as integer. The coefficient MUST be positive and
+/// finite: NaN, ±∞, zero and negative values are rejected when the document
+/// loads ([`load_string`](crate::load_string), [`load_path`](crate::load_path)).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoichiometricEntry {
     /// Species name
@@ -405,10 +405,10 @@ pub struct Operator {
 }
 
 /// A `variable_map` coupling `transform` (esm-spec §10.4): either one of the
-/// legacy NAMED transform strings (`"param_to_var"`, `"identity"`,
+/// NAMED transform strings (`"param_to_var"`, `"identity"`,
 /// `"additive"`, `"multiplicative"`, `"conversion_factor"`) or an Expression
 /// evaluated on the source value(s) in the flattened coupled system's scope
-/// (the v0.8.0 additive widening — the regridding form).
+/// (the regridding form).
 ///
 /// On the wire an Expression transform is always an operator-node OBJECT: the
 /// degenerate bare-reference and literal Expression spellings are not
@@ -493,12 +493,12 @@ pub enum CouplingEntry {
         /// TRI-STATE, which is why it is an `Option`: `None` is NOT `false`.
         ///
         /// * `None` — the author has not said. A zero-merge is then
-        ///   [`FlattenError::OperatorComposeNoMerge`], an ERROR (such an entry
+        ///   [`FlattenError::OperatorComposeNoMerge`](crate::FlattenError::OperatorComposeNoMerge), an ERROR (such an entry
         ///   is indistinguishable from one that is absent); a partial merge is a
         ///   warning.
         /// * `Some(true)` — the `systems[1]` equations are CONTRIBUTIONS and
         ///   every one must land; any shortfall, partial included, is
-        ///   [`FlattenError::OperatorComposeRequireMatchUnmatched`].
+        ///   [`FlattenError::OperatorComposeRequireMatchUnmatched`](crate::FlattenError::OperatorComposeRequireMatchUnmatched).
         /// * `Some(false)` — a standalone-contributing operator, DECLARED.
         ///   Unmatched equations are expected and nothing is reported.
         ///
