@@ -27,6 +27,6 @@
     }
   },
   "coupling": [
-    { "type": "variable_map", "from": "Heater.T", "to": "Box.T_wall", "transform": "identity" }
+    { "type": "variable_map", "from": "Heater.T", "to": "Box.T_wall", "transform": "param_to_var" }
   ]
 }
