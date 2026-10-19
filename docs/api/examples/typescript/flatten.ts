@@ -11,11 +11,12 @@ const flat = flatten(doc)
 
 // Variables are namespaced by the system that declared them.
 assert.deepEqual(Object.keys(flat.stateVariables), ['Heater.T', 'Box.T_air'])
-assert.deepEqual(Object.keys(flat.parameters), ['Heater.rate', 'Box.T_wall', 'Box.k'])
+assert.deepEqual(Object.keys(flat.parameters), ['Heater.rate', 'Box.k'])
 assert.equal(flat.stateVariables['Box.T_air'].units, 'K')
 
-// The variable_map coupling is resolved into the equations: the box now sees
-// the heater's temperature where it had its wall temperature.
+// The `param_to_var` variable_map replaces the box's wall-temperature
+// parameter with the heater's temperature: `Box.T_wall` is gone from the
+// parameters above, and the box equation reads `Heater.T` in its place.
 const equations = flat.equations.map((eq) => toAscii(eq))
 assert.deepEqual(equations, [
   'D(Heater.T)/Dt = Heater.rate',
