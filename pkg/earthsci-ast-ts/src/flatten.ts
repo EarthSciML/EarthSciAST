@@ -315,14 +315,9 @@ export interface LoaderField {
  * A single equation of the flattened system, with dot-namespaced Expression
  * TREES.
  *
- * ### Breaking change in `esm 1.0.0`
- *
- * `lhs` / `rhs` used to be pretty-printed STRINGS produced by a flatten-local,
- * fully-parenthesizing printer. They are now the canonical Expression AST, which
- * is what every other binding carries and what the shared corpus pins (rendered
- * through the shared `toAscii`). A caller that wants text calls `toAscii` on
- * them — one renderer for the whole toolkit rather than a second, subtly
- * different one living here.
+ * `lhs` / `rhs` are canonical Expression ASTs — what every other binding
+ * carries and what the shared corpus pins. A caller that wants text calls
+ * `toAscii` on them.
  */
 export interface FlattenedEquation {
   /** Dot-namespaced LHS, e.g. `D(Atmos.O3, t)` or a bare `Atmos.total`. */
@@ -380,21 +375,13 @@ export interface FieldInitialCondition {
  * A fully flattened representation of a coupled ESM system — the canonical
  * field set of esm-libraries-spec §4.7.5 step 4.
  *
- * ### Removed in `esm 1.0.0`
+ * WHICH unknowns are observed is {@link observedVariables}, and each one's
+ * DEFINING EXPRESSION is its equation in {@link equations}, as an AST. A
+ * coupling `variable_map` performs its substitution in place, so its effect is
+ * visible in `equations` and `parameters` rather than in a side table.
  *
- * `variables: Record<string, string>` (observed name -> expression string) is
- * gone. It predates the canonical shape and duplicated, in a bespoke string
- * form, information the canonical fields already carry: WHICH unknowns are
- * observed is {@link observedVariables} (with full metadata rather than a bare
- * name), and each one's DEFINING EXPRESSION is its equation in
- * {@link equations}, as an AST. The coupling-derived entries it also collected
- * are no longer a side table: a `variable_map` now performs the substitution and
- * the promotion the spec calls for, so its effect is visible in `equations` and
- * `parameters` instead. Nothing it held is lost.
- *
- * Python exposes a `variables` property with a DIFFERENT meaning (namespaced
- * name -> role label); this binding deliberately does not reuse the name for a
- * third thing.
+ * Python exposes a `variables` property (namespaced name -> role label); this
+ * binding has no field of that name.
  */
 export interface FlattenedSystem {
   /**

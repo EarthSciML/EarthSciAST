@@ -53,11 +53,9 @@ export interface EvaluateOptions {
 /**
  * Error carrying the stable, cross-binding `unlowered_operator` diagnostic
  * (esm-spec §4.2 / §9.6.3 constraint 6 / §9.6.8). Raised when a rewrite-target
- * op reaches evaluation/compilation without having been lowered — the uniform
- * gate that supersedes the old per-binding UnreachableSpatialOperator /
- * UnsupportedDimensionality codes. Loading stays permissive (the op namespace
- * is open); the gate fires only at evaluation, mirroring the Julia `_compile`
- * gate in tree_walk.jl.
+ * op reaches evaluation/compilation without having been lowered — one uniform
+ * gate, the same in every binding. Loading stays permissive (the op namespace
+ * is open); the gate fires only at evaluation, as in the Julia reference.
  */
 export class UnloweredOperatorError extends EsmDiagnosticError {
   declare readonly code: typeof ERROR_CODES.UNLOWERED_OPERATOR

@@ -164,7 +164,7 @@ export interface DependencyEdge {
   /**
    * PROVENANCE category of the dependency — which structural site produced it,
    * NOT a classification of the operators involved. See {@link EDGE_PROVENANCE}
-   * for the mapping. These values are historical labels and do NOT track the
+   * for the mapping. These values are fixed labels and do NOT track the
    * actual operator: an equation edge is always `'additive'` (even for
    * `w = u * v`) and an observed-definition edge is always `'multiplicative'`
    * (even for `w = u + v`), regardless of the `+`/`*`/etc. actually used. Do

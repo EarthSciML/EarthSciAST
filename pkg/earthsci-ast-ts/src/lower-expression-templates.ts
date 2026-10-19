@@ -105,12 +105,10 @@ const MAX_REWRITE_PASSES = 64
  * Shared load-time diagnostic for the §9.x machinery: expression-template
  * lowering (§9.6), template-library imports (§9.7), coupling-library imports
  * (§10.10), subsystem-ref loading, and the §9.6.4 expanded-form validators all
- * raise it as their common coded-diagnostic class — validate.ts maps it (by
- * `instanceof`) to the `expression_template_error` load-error kind. Extends the
- * neutral {@link EsmDiagnosticError} additively: the `(code, message)`
- * constructor signature, the `[code] message` text, and the public `code`
- * string property are all preserved byte-for-byte, so the emitted diagnostic is
- * unchanged and every `instanceof` check is unaffected.
+ * raise it as their common coded-diagnostic class — `validate` maps it (by
+ * `instanceof`) to the `expression_template_error` load-error kind. A subclass
+ * of {@link EsmDiagnosticError}: `code` is the specific diagnostic and the
+ * message text is `[code] message`.
  */
 export class EsmMachineryError extends EsmDiagnosticError {
   constructor(code: string, message: string) {
@@ -120,11 +118,10 @@ export class EsmMachineryError extends EsmDiagnosticError {
 }
 
 /**
- * @deprecated Historical name for {@link EsmMachineryError}, kept as a same-class
- * alias for backward compatibility. It is the SAME class object, so
+ * @deprecated Alias of {@link EsmMachineryError} — the SAME class object, so
  * `instanceof ExpressionTemplateError` and `instanceof EsmMachineryError` are
- * identical. Prefer {@link EsmMachineryError}, which reflects the class's true
- * role as the shared load-time template/coupling/import/ref machinery diagnostic.
+ * identical. Prefer {@link EsmMachineryError}, which names the class's role as
+ * the shared load-time template/coupling/import/ref machinery diagnostic.
  */
 export { EsmMachineryError as ExpressionTemplateError }
 

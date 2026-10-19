@@ -218,7 +218,7 @@ export function removeEquation(model: Model, indexOrLhs: number | Expr): Model {
 /**
  * Apply substitutions across a model.
  *
- * NOTE: despite the historical name, this does NOT touch only equations — it is
+ * NOTE: despite its name, this does NOT touch only equations — it is
  * a thin alias for {@link substituteInModel} and therefore also rewrites
  * observed-variable expressions, event expression positions, and inline
  * subsystems. See `substituteInModel` for the full list of rewritten sites.

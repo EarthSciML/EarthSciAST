@@ -60,8 +60,8 @@ export interface UnitResult {
    * mirrors the Go reference (`PropagateDimension` returns `nil, nil`).
    */
   dimensions: ParsedUnit | null
-  /** Message-only view, retained for the public `checkDimensions` API and
-   *  legacy callers that inspect warning prose. */
+  /** Message-only view, for the public `checkDimensions` API and callers that
+   *  inspect warning prose. */
   warnings: string[]
   /** Structured view of {@link warnings}: each message with its explicit
    *  classification. `validateUnits` uses these codes (not a prose regex) to
@@ -166,10 +166,7 @@ function angle(): ParsedUnit {
  *
  * `"degree"` / `"degrees"` are resolved by the canonical table as long-form
  * aliases of `deg` (esm-spec §4.8.1), i.e. as the ANGLE axis scaled by π/180 —
- * the reading the Rust, Julia and Python tables already carry. They used to be
- * short-circuited to dimensionless here, which both disagreed with those three
- * bindings and left the SINGULAR spelling unresolvable, since only the plural
- * was special-cased and neither was in the table.
+ * the reading the Rust, Julia and Python tables carry too.
  */
 export function tryParseUnit(unitStr: string): ParsedUnit | null {
   try {
@@ -189,7 +186,7 @@ export function tryParseUnit(unitStr: string): ParsedUnit | null {
  * collapsed to dimensionless — a dimensionless fallback is a *claim* about the
  * quantity, and a wrong one, which both hides real mismatches (everything
  * compares equal to everything) and manufactures false ones (against genuinely
- * dimensional operands). `J/(mol*K)` used to land in exactly that trap.
+ * dimensional operands).
  *
  * Callers that must degrade gracefully rather than throw — the validators, which
  * want to leave a dimension UNKNOWN and carry on — use {@link tryParseUnit},
