@@ -15,8 +15,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(states, ["Heater.T", "Box.T_air"]);
     assert!(flat.parameters.contains_key("Heater.rate") && flat.parameters.contains_key("Box.k"));
 
-    // The variable_map coupling substitutes the heater's state Heater.T
-    // wherever the box read its wall temperature Box.T_wall.
+    // The param_to_var coupling replaces the box's wall-temperature
+    // parameter Box.T_wall with the heater's state Heater.T: the parameter
+    // is gone, and the box's equation reads Heater.T instead.
+    assert!(!flat.parameters.contains_key("Box.T_wall"));
     for eq in &flat.equations {
         println!("{}", to_ascii(eq));
     }

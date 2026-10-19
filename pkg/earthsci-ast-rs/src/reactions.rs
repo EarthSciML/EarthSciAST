@@ -182,7 +182,7 @@ pub fn lower_reactions_to_equations(
 ///
 /// Mass action kinetics: rate law = k * product(substrates^stoichiometry)
 /// Net stoichiometry = products - substrates
-/// d[species]/dt = sum(net_stoichiometry * rate_law)
+/// `d[species]/dt = sum(net_stoichiometry * rate_law)`
 ///
 /// # Arguments
 ///
@@ -331,7 +331,7 @@ fn enhance_rate_with_mass_action(rate: &Expr, substrates: &[crate::Stoichiometri
 /// Generate stoichiometric matrix from a reaction system
 ///
 /// Creates a matrix where rows represent species and columns represent reactions.
-/// Matrix[i][j] = stoichiometric coefficient of species i in reaction j.
+/// `matrix[i][j]` is the stoichiometric coefficient of species `i` in reaction `j`.
 /// Negative values indicate reactants, positive values indicate products.
 ///
 /// # Arguments

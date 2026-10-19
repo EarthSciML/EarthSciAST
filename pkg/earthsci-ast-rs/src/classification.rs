@@ -333,12 +333,16 @@ impl Classification {
 // === The §6.3.1 API =======================================================
 
 /// Unknowns appearing under `D(·, t)` on some equation LHS.
+///
+/// Names are sorted lexicographically, not in declaration order (API_SPEC.md §5.3).
 pub fn ode_states(model: &Model) -> Vec<String> {
     Classification::of(model).ode_states
 }
 
 /// Unknowns defined by a bare-variable LHS (`y ~ f(…)`) — eliminable,
 /// materializable.
+///
+/// Names are sorted lexicographically, not in declaration order (API_SPEC.md §5.3).
 pub fn observed_unknowns(model: &Model) -> Vec<String> {
     Classification::of(model).observed_unknowns
 }
@@ -351,6 +355,8 @@ pub fn inlined_unknowns(model: &Model) -> Vec<String> {
 }
 
 /// Unknowns constrained only implicitly (`H*H*SO4 ~ Ksp`).
+///
+/// Names are sorted lexicographically, not in declaration order (API_SPEC.md §5.3).
 pub fn algebraic_unknowns(model: &Model) -> Vec<String> {
     Classification::of(model).algebraic_unknowns
 }
@@ -361,22 +367,30 @@ pub fn is_ode_state(model: &Model, name: &str) -> bool {
 }
 
 /// Parameters whose `update.kind` is `wiener` — the SDE noise sources.
+///
+/// Names are sorted lexicographically, not in declaration order (API_SPEC.md §5.3).
 pub fn brownian_parameters(model: &Model) -> Vec<String> {
     Classification::of(model).brownian_parameters
 }
 
 /// Parameters carrying any OTHER update — piecewise-constant between
 /// refreshes.
+///
+/// Names are sorted lexicographically, not in declaration order (API_SPEC.md §5.3).
 pub fn discrete_parameters(model: &Model) -> Vec<String> {
     Classification::of(model).discrete_parameters
 }
 
 /// Parameters with a `distribution` and no update — drawn once at setup.
+///
+/// Names are sorted lexicographically, not in declaration order (API_SPEC.md §5.3).
 pub fn sampled_parameters(model: &Model) -> Vec<String> {
     Classification::of(model).sampled_parameters
 }
 
 /// Parameters with neither a distribution nor an update — plain constants.
+///
+/// Names are sorted lexicographically, not in declaration order (API_SPEC.md §5.3).
 pub fn constant_parameters(model: &Model) -> Vec<String> {
     Classification::of(model).constant_parameters
 }
@@ -389,9 +403,8 @@ pub fn system_kind(model: &Model) -> SystemKind {
 
 /// Each observed unknown's defining RHS, keyed by name.
 ///
-/// This is where an observed's definition lives from 1.0.0: the model's
-/// `equations`, not a `variables[v].expression` field. Every site that used to
-/// read that field reads this map instead.
+/// An observed's definition lives in the model's `equations` (esm-spec
+/// §6.3.1): the equation whose left-hand side is the bare variable.
 pub fn observed_definitions(model: &Model) -> BTreeMap<String, Expr> {
     observed_definitions_of_parts(&model.variables, &model.equations)
 }
@@ -485,8 +498,7 @@ fn empty_successors<'a>(
 ///
 /// The JSON-view counterpart of [`observed_definitions`], for the passes and
 /// tools that work on `serde_json::Value` (the cadence partition, the
-/// projection-pushdown desugar, the CLI). It is the 1.0.0 replacement for
-/// reading `model["variables"][name]["expression"]`, which no longer exists.
+/// projection-pushdown desugar, the CLI).
 pub fn observed_definition_json<'a>(
     model: &'a serde_json::Value,
     name: &str,

@@ -126,9 +126,9 @@ pub fn supported_migration_targets(from_version: &str) -> Vec<String> {
 
 /// Deprecated alias of [`supported_migration_targets`].
 ///
-/// API_SPEC.md §8 / phase-6 G-2: Go, Julia and Python all export
-/// `supported_migration_targets`; this binding and TypeScript alone carried a
-/// `get_` prefix. Kept for one minor per API_SPEC.md §10.
+/// Every binding spells this `supported_migration_targets` (API_SPEC.md §8).
+/// This alias is deprecated and will be removed at the next major
+/// (API_SPEC.md §10).
 #[deprecated(
     since = "0.2.0",
     note = "renamed to `supported_migration_targets` (API_SPEC.md phase-6 G-2)"

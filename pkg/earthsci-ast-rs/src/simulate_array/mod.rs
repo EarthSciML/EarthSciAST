@@ -34,7 +34,7 @@
 //! * [`compile`] — the build path: array-op/spatial file detection, subsystem
 //!   mounting (esm-spec §4.6), ragged keyed-factor scoping, the staged
 //!   `from_model` lowering, and shape-inference / LHS-parsing helpers.
-//! * [`eval`] — the per-cell oracle interpreter (the correctness reference),
+//! * `eval` — the per-cell oracle interpreter (the correctness reference),
 //!   including the geometry leaf ops and standalone [`eval_expression`].
 //! * [`vectorized`] — the vectorized whole-array stencil overlay (ess-bdm):
 //!   shifted-slice `index` gathers, broadcast kernels, einsum folds.
@@ -527,12 +527,12 @@ impl<'a> RecurScope<'a> {
 /// Build/run observability record — the Rust mirror of the Julia binding's
 /// `BuildInspection` (`build_evaluator(…; inspect=BuildInspection())`). Pass
 /// one to a EsmProblem built with [`crate::problem::ProblemOptions::inspect`] (or
-/// [`ArrayCompiled::simulate_inspect`]) and the run fills it with named
+/// [`ArrayCompiled::solve_inspect`]) and the run fills it with named
 /// build-time products that are otherwise internal to the runtime:
 ///
 /// * `setup_arrays` — the STATE-FREE observed arrays, materialized once at the
 ///   initial state through the official observed machinery
-///   ([`materialize_observeds`]): the per-pair regrid geometry (`A_ij`, its
+///   (the observed-materialization pass): the per-pair regrid geometry (`A_ij`, its
 ///   row-sums `A_j`, the normalized weights `W_ij` — RFC §8.1 / esm-spec
 ///   §8.6.1), const-op mesh factors and their bare-name aliases, and every
 ///   other build-once array observed whose transitive references reach no
@@ -549,7 +549,7 @@ impl<'a> RecurScope<'a> {
 ///
 /// Filling the record never changes the run: the returned
 /// [`crate::simulate::Solution`] is identical with or without a sink (the
-/// capture is one extra read-only [`materialize_observeds`] pass at `t0`).
+/// capture is one extra read-only observed-materialization pass at `t0`).
 #[derive(Debug, Clone, Default)]
 pub struct BuildInspection {
     /// State-free observed arrays materialized at the initial state, keyed by

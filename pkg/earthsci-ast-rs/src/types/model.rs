@@ -268,9 +268,8 @@ pub struct Coordinate {
 /// `extension`, Rust-only entry in `api-surface.json` — sets both, so its ONLY
 /// observable effect is to make a valid document invalid. `graph.rs` also reads
 /// `name` for a component-node label, where it is always `None` in practice.
-/// Left in place deliberately rather than removed: deleting them changes a
-/// published API surface, which is a decision for whoever owns that surface,
-/// not a drive-by fix. Do not start populating them.
+/// They are part of the published API surface, so they stay; leave them
+/// `None`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Model {
     /// Human-readable model name. NOT a schema key — see the type-level note.

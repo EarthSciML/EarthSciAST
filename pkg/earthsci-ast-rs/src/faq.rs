@@ -383,9 +383,9 @@ pub fn is_faq_op(op: &str) -> bool {
 }
 
 /// Rewrite every `{ "from": <name> }` range reference in `model` against the
-/// document-scoped `index_sets` registry (RFC §5.2). Since v0.8.0 the registry
-/// lives on the top-level document (one registry shared by all models), so it
-/// is threaded in explicitly rather than read off the `Model`. Operates in
+/// document-scoped `index_sets` registry (RFC §5.2). The registry lives on the
+/// top-level document (one registry shared by all models), so it is passed in
+/// explicitly. Operates in
 /// place; call once on an owned model before shape inference and rule building
 /// so every downstream consumer sees only resolved [`RangeSpec::Interval`] /
 /// [`RangeSpec::RaggedDyn`] forms (never an `IndexSetRef`).

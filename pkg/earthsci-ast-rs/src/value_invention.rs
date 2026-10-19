@@ -84,7 +84,7 @@ fn is_argwitness(node: &Value) -> bool {
 }
 
 /// Per-dimension boundary policy for an out-of-range const-array stencil gather
-/// (bead ess-gj4). Mirrors the Julia `_CONST_BOUNDARY_KINDS` (`:periodic` /
+/// Mirrors the Julia `_CONST_BOUNDARY_KINDS` (`:periodic` /
 /// `:clamp` / `:error`): a gather at a 1-based index outside `1..=n` resolves
 /// declaratively per the dimension's policy instead of panicking.
 ///
@@ -1920,21 +1920,6 @@ fn vi_classification_model(
 // Public entrypoint
 // --------------------------------------------------------------------------- //
 
-/// Run the build-time value-invention engine over a raw model document.
-///
-/// `const_arrays` supplies the build-time factor arrays (the connectivity /
-/// coordinates the keys are computed from); `params` supplies scalar parameter
-/// overrides. A producer that classifies CONTINUOUS is rejected (§5.7 guard 2).
-///
-/// `const_array_boundaries` supplies an optional per-const-array, per-dimension
-/// out-of-range boundary policy (ess-gj4): a gather at a 1-based index outside
-/// `1..=n` resolves via the named dimension's [`BoundaryKind`] (periodic-wrap /
-/// edge-extend) instead of erroring. A const array absent from this map (or a
-/// dimension beyond its declared vec) keeps the throw-on-OOB default. Pass an
-/// empty map for the prior behavior.
-///
-/// A no-op (empty result) for a model with no skolem/distinct/rank node — the
-/// evaluator front-door then behaves byte-identically to before.
 /// Arm the working precision of the variable a value-invention buffer fills
 /// (esm-spec §11.3.1), for as long as the returned guard lives.
 ///
@@ -1949,6 +1934,38 @@ fn vi_variable_precision(vname: &str) -> Option<crate::precision::PrecisionGuard
     )))
 }
 
+/// Run the build-time value-invention engine over a raw model document.
+///
+/// Value invention mints new entities from data, once at setup: unique edge
+/// IDs from a mesh, dense ranks from a categorical column, bin keys from
+/// coordinates. This evaluates every value-invention aggregate in
+/// `model_json` (a `faq` with `distinct: true`, or whose body or `key` is
+/// `skolem` / `rank`, plus the arg-witness and grouped buffers that depend on
+/// them) and returns what it materialized as a [`ValueInventionResult`]. Pass
+/// that result to [`apply_value_invention`] to rewrite the model so the array
+/// runtime can compile it.
+///
+/// - `model_json` is the raw model document, not the typed [`Model`]: the
+///   typed expression tree does not keep an aggregate's `key` and `distinct`
+///   fields.
+/// - `const_arrays` supplies the build-time factor arrays (connectivity,
+///   coordinates) the keys are computed from.
+/// - `params` supplies scalar parameter overrides.
+/// - `const_array_boundaries` optionally gives a per-array, per-dimension
+///   [`BoundaryKind`] for a gather at a 1-based index outside `1..=n`
+///   (periodic wrap or edge clamp). An array absent from the map, or a
+///   dimension beyond its listed kinds, errors on an out-of-range index; pass
+///   an empty map for that everywhere.
+///
+/// A model with no `skolem`, `distinct` or `rank` node returns an empty
+/// result.
+///
+/// # Errors
+///
+/// Returns a [`ValueInventionError`] when a producer classifies as
+/// continuous (its entities would change every step, `CONFORMANCE_SPEC.md`
+/// §5.7 guard 2), when a key cannot be evaluated from the build-time data, or
+/// on an out-of-range gather with no boundary policy.
 pub fn materialize_value_invention(
     model_json: &Value,
     const_arrays: &HashMap<String, ArrayD<f64>>,
@@ -2199,8 +2216,8 @@ pub fn drop_value_invention_equations(model: &mut Model, vi_var_names: &HashSet<
 /// equations. After this the existing resolver / array compiler handles the
 /// model with no value-invention-specific path.
 ///
-/// Since v0.8.0 the `index_sets` registry is document-scoped, so it is threaded
-/// in (and mutated in place) alongside the model rather than living on it.
+/// The `index_sets` registry is document-scoped, so it is passed in (and
+/// mutated in place) alongside the model.
 pub fn apply_value_invention(
     model: &mut Model,
     index_sets: &mut HashMap<String, IndexSet>,

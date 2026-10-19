@@ -181,7 +181,7 @@ const CLOSED_FUNCTIONS: &[(&str, ClosedHandler)] = &[
     ("interp.bilinear", cf_interp_bilinear),
 ];
 
-/// The v0.3.0 closed function set. Bindings MUST reject any `fn`-op `name`
+/// The closed function set. Bindings MUST reject any `fn`-op `name`
 /// not in this set (esm-spec §9.1). Derived from [`CLOSED_FUNCTIONS`].
 pub fn closed_function_names() -> &'static HashSet<String> {
     static NAMES: OnceLock<HashSet<String>> = OnceLock::new();

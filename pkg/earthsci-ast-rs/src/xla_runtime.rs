@@ -1,6 +1,6 @@
 //! PJRT runtime for the compiled right-hand side (feature `xla`).
 //!
-//! [`crate::simulate_array::tape::xla_emit`] turns a model's tape into an
+//! `simulate_array::tape::xla_emit` turns a model's tape into an
 //! `rhs(u, p, t) -> du` XLA computation; this module compiles that computation
 //! for a device and runs it.
 //!
