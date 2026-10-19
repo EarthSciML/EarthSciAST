@@ -16,63 +16,79 @@ npm install @earthsciml/ast
 ### Basic Usage
 
 ```typescript
-import { EsmFile, Model, load, save, validate } from '@earthsciml/ast';
+import { loadString, toJson, validate } from '@earthsciml/ast';
 
-// Parse ESM file from JSON
-const esmFile = load('{"esm": "0.8.0", "metadata": {"name": "demo"}, "models": {...}}');
+// Parse an ESM document from JSON text (`loadPath` reads a file).
+const doc = loadString(`{
+  "esm": "1.2.0",
+  "metadata": { "name": "demo" },
+  "models": {
+    "Decay": {
+      "variables": {
+        "N": { "type": "unknown", "units": "1", "default": 1.0 },
+        "k": { "type": "parameter", "units": "1/s", "default": 0.1 }
+      },
+      "equations": [
+        { "lhs": { "op": "D", "args": ["N"], "wrt": "t" },
+          "rhs": { "op": "*", "args": [-1, "k", "N"] } }
+      ]
+    }
+  }
+}`);
 
-// Create a new model
-const model: Model = {
-  variables: {
-    x: { type: 'state', default: 1.0 },
-    k: { type: 'parameter', default: 0.1 },
-  },
-  equations: [{ lhs: { op: 'D', args: ['x'], wrt: 't' }, rhs: { op: '*', args: [-1, 'k', 'x'] } }],
-};
-
-// Validate an ESM structure
-const result = validate(esmFile);
+// Validate the document; problems are reported in the result, not thrown.
+const result = validate(doc);
 if (result.is_valid) {
-  console.log("Valid ESM file!");
+  console.log('Valid ESM file!');
 } else {
-  console.error("Validation errors:", result.schema_errors, result.structural_errors);
+  console.error('Validation errors:', result.schema_errors, result.structural_errors);
 }
 
-// Serialize back to JSON
-const jsonString = save(esmFile);
+// A `models` entry is a `Model`, or a `{ ref }` subsystem reference that
+// loading had no file to resolve against; narrow before using it.
+const model = doc.models!.Decay;
+if ('ref' in model) throw new Error('unresolved subsystem reference');
+console.log(Object.keys(model.variables)); // ["N", "k"]
+
+// Serialize back to JSON text (`writePath` writes a file).
+const json = toJson(doc);
 ```
 
 ### Working with Expressions
 
 ```typescript
 import { toUnicode, toLatex, substitute, freeVariables } from '@earthsciml/ast';
+import type { Expression } from '@earthsciml/ast';
 
 // Pretty-print mathematical expressions
-const expr = { op: "+", args: ["x", { op: "^", args: ["y", "2"] }] };
+const expr: Expression = { op: '+', args: ['x', { op: '^', args: ['y', 2] }] };
 console.log(toUnicode(expr)); // "x + y²"
 console.log(toLatex(expr));   // "x + y^{2}"
 
 // Analyze expressions
-const variables = freeVariables(expr); // ["x", "y"]
+const variables = freeVariables(expr); // Set { "x", "y" }
 
-// Substitute values
-const substituted = substitute(expr, { x: "2", y: "t" });
-// Result: { op: "+", args: ["2", { op: "^", args: ["t", "2"] }] }
+// Substitute expressions for variables
+const substituted = substitute(expr, { x: 2, y: 't' });
+// { op: "+", args: [2, { op: "^", args: ["t", 2] }] }
 ```
 
 ### Graph Analysis
 
 ```typescript
-import { component_graph, componentExists } from '@earthsciml/ast';
+import { loadPath, componentGraph, componentExists, toMermaid } from '@earthsciml/ast';
+
+const doc = loadPath('coupled.esm');
 
 // Analyze component dependencies
-const graph = component_graph(esmFile);
-console.log("Components:", graph.nodes.map(n => n.name));
-console.log("Coupling edges:", graph.edges.length);
+const graph = componentGraph(doc);
+console.log('Components:', graph.nodes.map((n) => n.id));
+console.log('Coupling edges:', graph.edges.length);
+console.log(toMermaid(graph));
 
 // Check for component existence
-if (componentExists(esmFile, "atmospheric_chemistry")) {
-  console.log("Found atmospheric chemistry model");
+if (componentExists(doc, 'Box')) {
+  console.log('Found the Box model');
 }
 ```
 
@@ -82,21 +98,27 @@ This package supports both ESM and CommonJS environments:
 
 ### ESM (ECMAScript Modules)
 ```typescript
-import { load, save, validate } from '@earthsciml/ast';
+import { loadString, toJson, validate } from '@earthsciml/ast';
 ```
 
 ### CommonJS
 ```javascript
-const { load, save, validate } = require('@earthsciml/ast');
+const { loadString, toJson, validate } = require('@earthsciml/ast');
 ```
 
 ## API Reference
 
+The generated API reference (built by `scripts/api_docs/typescript.sh` from
+the doc comments) covers every export. The most common entry points:
+
 ### Core Functions
 
-- **`load(input: string | object): EsmFile`** - Parse JSON string or object into ESM structure
-- **`save(esmFile: EsmFile): string`** - Serialize ESM structure to formatted JSON
-- **`validate(esmFile: EsmFile): ValidationResult`** - Validate ESM structure against schema
+- **`loadString(json: string, options?: LoadOptions): EsmFile`** - Parse JSON text into an ESM document
+- **`loadPath(path: string, options?: LoadOptions): EsmFile`** - Read and parse an `.esm` file, resolving subsystem references relative to it
+- **`toJson(file: EsmFile, options?: ToJsonOptions): string`** - Serialize a document to JSON text
+- **`writePath(file: EsmFile, path: string, options?: ToJsonOptions): void`** - Serialize a document to a file
+- **`validate(document: EsmFile, options?: ValidateOptions): ValidationResult`** - Schema and structural validation of a loaded document
+- **`validateText(text: string, options?: ValidateOptions): ValidationResult`** - The same, starting from JSON text
 
 ### Type System
 
@@ -111,18 +133,18 @@ The package provides complete TypeScript type definitions for:
 
 ### Expression Utilities
 
-- **`toUnicode(expr: Expression): string`** - Render as Unicode mathematical notation
-- **`toLatex(expr: Expression): string`** - Render as LaTeX mathematical notation
-- **`toAscii(expr: Expression): string`** - Render as plain ASCII text
-- **`substitute(expr: Expression, substitutions: Record<string, string>): Expression`** - Variable substitution
-- **`freeVariables(expr: Expression): string[]`** - Extract variable names
+- **`toUnicode(expr): string`** - Render as Unicode mathematical notation (also accepts an equation, model, reaction system, reaction or whole document)
+- **`toLatex(expr): string`** - Render as LaTeX
+- **`toAscii(expr): string`** - Render as plain ASCII text
+- **`substitute(expr: Expression, bindings: Record<string, Expression>): Expression`** - Replace variables with expressions
+- **`freeVariables(expr: Expression): Set<string>`** - Collect the variable names an expression references
 - **`simplify(expr: Expression): Expression`** - Algebraic simplification
 
 ### Graph Analysis
 
-- **`component_graph(esmFile: EsmFile): ComponentGraph`** - Build dependency graph
-- **`componentExists(esmFile: EsmFile, name: string): boolean`** - Check component existence
-- **`getComponentType(esmFile: EsmFile, name: string): string`** - Get component type
+- **`componentGraph(file: EsmFile): Graph<ComponentNode, CouplingEdge>`** - Build the component coupling graph
+- **`componentExists(esmFile: EsmFile, componentId: string): boolean`** - Check component existence
+- **`getComponentType(esmFile: EsmFile, componentId: string): ComponentNode['type'] | null`** - Get a component's type
 
 ## Development
 
@@ -150,7 +172,7 @@ npm run format:check        # Prettier check
 
 ## Schema Version
 
-This package supports ESM Format schema version **0.8.0** (exported as
+This package implements ESM Format schema version **1.2.0** (exported as
 `SCHEMA_VERSION`, derived from the embedded schema's `$id`).
 
 ## License
