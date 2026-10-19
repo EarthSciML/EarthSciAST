@@ -1,0 +1,13 @@
+{{ define "main" }}
+{{/* Generated API reference sections write their own index content, so this
+     list layout shows it without the default automatic page list. */}}
+<article class="page" data-pagefind-body>
+  <header>
+    <h1>{{ .Title }}</h1>
+    {{ with .Params.description }}<p class="lede">{{ . }}</p>{{ end }}
+  </header>
+  <section class="content">
+    {{ .Content }}
+  </section>
+</article>
+{{ end }}

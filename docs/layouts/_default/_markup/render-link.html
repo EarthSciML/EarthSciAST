@@ -1,6 +1,6 @@
 {{- $url := .Destination -}}
 {{- $isAbs := (urls.Parse $url).IsAbs -}}
-{{- if not $isAbs -}}
+{{- if and (not $isAbs) (not (strings.HasPrefix $url "#")) -}}
   {{- $frag := "" -}}
   {{- $path := $url -}}
   {{- if in $url "#" -}}

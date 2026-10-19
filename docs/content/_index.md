@@ -28,6 +28,13 @@ and multiplicative coupling, operator apply and compose, and events.
 **[Expression templates](templates/)** — `match` rewrite rules, how imports and
 metaparameters work, and how spatial discretization is expressed.
 
+**[Getting started](generated/api/guides/getting-started/)** — load, validate,
+inspect, edit, flatten and simulate a document, side by side in every binding.
+
+**[API reference](generated/api/)** — every stable operation of the Julia,
+TypeScript, Python, Rust and Go bindings, with each binding's signatures,
+documentation and runnable examples on one page.
+
 **[Narrative models](generated/narrative/)** — pages that define a model in
 their own prose, then validate, test and plot it as they are built.
 
