@@ -191,8 +191,8 @@ def parse_header(rest: str, canonical: set[str] | None) -> tuple[str, list[str],
     return rid, ops, problems
 
 
-def example_files(root: Path, binding: str) -> list[Path]:
-    base = root / "docs" / "api" / "examples" / binding
+def example_files(examples_dir: Path, binding: str) -> list[Path]:
+    base = examples_dir / binding
     if not base.is_dir():
         return []
     exts = EXTENSIONS[binding]
@@ -211,15 +211,29 @@ def canonical_names(root: Path) -> set[str]:
     return {s["name"] for s in surface["symbols"]}
 
 
-def extract(root: Path, bindings=BINDINGS, canonical: set[str] | None = None) -> ExtractResult:
-    """Extract every region of the given bindings, collecting all problems."""
+def extract(
+    root: Path,
+    bindings=BINDINGS,
+    canonical: set[str] | None = None,
+    examples_dir: Path | None = None,
+) -> ExtractResult:
+    """Extract every region of the given bindings, collecting all problems.
+
+    ``examples_dir`` defaults to ``<root>/docs/api/examples``; region paths are
+    reported relative to ``root``.
+    """
+    if examples_dir is None:
+        examples_dir = root / "docs" / "api" / "examples"
     if canonical is None:
         canonical = canonical_names(root)
     result = ExtractResult()
     for binding in bindings:
         before = len(result.regions)
-        for path in example_files(root, binding):
-            rel = path.relative_to(root).as_posix()
+        for path in example_files(examples_dir, binding):
+            try:
+                rel = path.resolve().relative_to(root.resolve()).as_posix()
+            except ValueError:
+                rel = path.as_posix()
             extract_file(binding, path, rel, canonical, result)
         seen: dict[str, Region] = {}
         for region in result.regions[before:]:
@@ -237,11 +251,12 @@ def extract(root: Path, bindings=BINDINGS, canonical: set[str] | None = None) ->
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--root", type=Path, default=Path.cwd(), help="repository root (default: cwd)")
+    ap.add_argument("--examples-dir", type=Path, help="examples directory (default: <root>/docs/api/examples)")
     ap.add_argument("--binding", choices=BINDINGS, action="append", help="limit to one binding (repeatable)")
     ap.add_argument("--json", action="store_true", help="print the extracted regions as JSON")
     args = ap.parse_args(argv)
 
-    result = extract(args.root, tuple(args.binding or BINDINGS))
+    result = extract(args.root, tuple(args.binding or BINDINGS), examples_dir=args.examples_dir)
     if args.json:
         json.dump([r.to_dict() for r in result.regions], sys.stdout, indent=2)
         sys.stdout.write("\n")
