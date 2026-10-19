@@ -266,8 +266,8 @@ func (fv FlattenedVariable) UpdateRules() []ParameterUpdate {
 }
 
 // DeclaredType is the two-type esm 1.0.0 declaration ("unknown" / "parameter")
-// the variable's derived Role was computed from. It is what a caller that used
-// to read `FlattenedSystem.Variables[name]` wants.
+// the variable's derived Role was computed from. FlattenedSystem.DeclaredTypes
+// collects it for every variable.
 func (fv FlattenedVariable) DeclaredType() string {
 	if fv.Role == "parameter" {
 		return VarTypeParameter
@@ -497,11 +497,9 @@ func (f *FlattenedSystem) Lookup(name string) (FlattenedVariable, bool) {
 // DeclaredTypes maps every flattened variable's namespaced name to its DECLARED
 // esm 1.0.0 type ("unknown" / "parameter").
 //
-// This replaces the old `Variables map[string]string` field, which held exactly
-// this and nothing else. It is a derived VIEW, not a field, because the canonical
-// field set has no room for a second, unordered, less informative copy of the
-// three variable maps — every caller of the old field gets the same answer here,
-// and a caller that wants the derived role or the metadata reads the maps.
+// It is a derived VIEW, not a field, because the canonical field set has no
+// room for a second, unordered, less informative copy of the three variable
+// lists; a caller that wants the derived role or the metadata reads those.
 func (f *FlattenedSystem) DeclaredTypes() map[string]string {
 	out := map[string]string{}
 	if f == nil {
@@ -520,12 +518,8 @@ func (f *FlattenedSystem) DeclaredTypes() map[string]string {
 // InitialValues maps each state variable to its initial value: the declared
 // scalar `default`, or 0.0 when it declares none.
 //
-// This replaces the old `InitialValues map[string]float64` field. The field
-// carried reaction-system species only; every state variable now carries its
-// own `default` (of any type) in the ordered maps, so the field was a lossy
-// projection of information the canonical shape already holds — but the numeric
-// coercion it did is genuinely useful, so it survives as this method, widened to
-// every state.
+// Every state variable carries its own `default` (of any type) in
+// StateVariables; this method is the numeric projection of those defaults.
 func (f *FlattenedSystem) InitialValues() map[string]float64 {
 	out := map[string]float64{}
 	if f == nil {

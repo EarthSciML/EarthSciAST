@@ -503,9 +503,9 @@ func (p *Parameter) SetUpdate(rules []ParameterUpdate) {
 
 // SubstrateProduct represents a substrate or product in a reaction.
 //
-// Stoichiometry MUST be a positive finite number. v0.2.x permits fractional
-// coefficients (e.g. 0.87 CH2O) in addition to the historical integer case;
-// integer-valued coefficients round-trip as integers via encoding/json because
+// Stoichiometry MUST be a positive finite number; fractional coefficients
+// (e.g. 0.87 CH2O) are allowed. Integer-valued coefficients round-trip as
+// integers via encoding/json because
 // float64(1) marshals to "1" in Go's standard encoder.
 type SubstrateProduct struct {
 	Species       string  `json:"species"`
@@ -758,8 +758,7 @@ type ContinuousEvent struct {
 // endpoint, a subsystem, or a scoped-name path root. A model consumes one by
 // declaring a PARAMETER whose `update` names the source and binds one of its
 // file variables (`update: {kind: "data", source, from}`) -- the parameter IS
-// the loaded field, and it owns the units that the 0.x loader-variable map used
-// to declare a second time.
+// the loaded field, and it owns the field's units.
 type DataSource struct {
 	Kind        string                 `json:"kind"` // "grid", "points", or "static" (esm-spec 8.1)
 	Source      DataSourceLocation     `json:"source"`
@@ -833,13 +832,11 @@ type DataSourceExtent struct {
 }
 
 // DataSourceBinding binds a PARAMETER to one file variable of a `data_sources`
-// entry, through the `from` value form of a `data` update (esm-spec 8.5). It is
-// the 0.x DataLoaderVariable minus `units`: the units are the parameter's own,
-// declared once instead of twice.
+// entry, through the `from` value form of a `data` update (esm-spec 8.5). It
+// carries no `units`: the units are the parameter's own.
 //
-// UnitConversion is a single Expression position -- `Expression` already admits
-// a bare number, so the 0.x `oneOf: [number, Expression]` spelling was
-// unsatisfiable for every plain factor. Its free names are subject to reference
+// UnitConversion is a single Expression position; `Expression` already admits
+// a bare number, so a plain factor is written as one. Its free names are subject to reference
 // integrity (esm-spec 4.9.5).
 type DataSourceBinding struct {
 	FileVariable   string     `json:"file_variable"`
@@ -905,12 +902,12 @@ func (c CouplingCouple) CouplingType() string { return c.Type }
 
 // VariableMapCoupling represents variable mapping.
 // Transform is a union (mirrors DataSourceBinding.UnitConversion): either one
-// of the legacy string kinds ("param_to_var", "identity", "additive",
+// of the named string kinds ("param_to_var", "identity", "additive",
 // "multiplicative", "conversion_factor") held as a string, or a widened
 // Expression transform held as an ExprNode (esm-spec §8.6/§10.4/§10.5 — the
 // regridding form). Expression transforms are always operator-node OBJECTS on
 // the wire; bare string/number Expression spellings are not admissible (the
-// string space is reserved for the legacy kinds).
+// string space is reserved for the named kinds).
 type VariableMapCoupling struct {
 	Type        string     `json:"type"` // "variable_map"
 	From        string     `json:"from"`
@@ -923,7 +920,7 @@ type VariableMapCoupling struct {
 
 func (v VariableMapCoupling) CouplingType() string { return v.Type }
 
-// TransformKind returns the legacy string transform kind, or "" when the
+// TransformKind returns the named string transform kind, or "" when the
 // transform is an Expression AST (or absent).
 func (v VariableMapCoupling) TransformKind() string {
 	s, _ := v.Transform.(string)
@@ -931,7 +928,7 @@ func (v VariableMapCoupling) TransformKind() string {
 }
 
 // TransformIsExpression reports whether the transform is the widened
-// Expression form (an operator node) rather than a legacy string kind.
+// Expression form (an operator node) rather than a named string kind.
 func (v VariableMapCoupling) TransformIsExpression() bool {
 	switch v.Transform.(type) {
 	case ExprNode, *ExprNode:
@@ -1146,7 +1143,7 @@ type IndexSet struct {
 
 // UnmarshalJSON decodes an index-set declaration, routing a `size` that is not
 // an integer literal into SizeExpr (see the field comment). Numbers still land
-// in Size, so every already-folded declaration decodes exactly as before.
+// in Size.
 func (s *IndexSet) UnmarshalJSON(data []byte) error {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(data, &fields); err != nil {

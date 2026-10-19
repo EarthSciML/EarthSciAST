@@ -211,7 +211,7 @@ func lowerRawEnumOps(node any, enums map[string]map[string]int, openNames map[st
 //
 // Canonical `lower_enums` (API_SPEC.md §8 item 15): the canonical name is the
 // PURE form in every binding, and the mutating twin takes a suffix (`Mut` here,
-// `!` in Julia). Go's LowerEnums used to be the mutating one.
+// `!` in Julia).
 //
 // Returns an *EnumLoweringError if any `enum` op names an undeclared enum or an
 // undeclared symbol; the returned document is nil in that case, so a caller
