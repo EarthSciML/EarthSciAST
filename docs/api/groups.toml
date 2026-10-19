@@ -1,0 +1,234 @@
+# Topic grouping of the canonical STABLE operations, for the generated API
+# reference (scripts/api_docs/render.py). Groups appear in this order.
+#
+# Each [[group]] has:
+#   id          URL slug of the topic page
+#   title       heading shown on the site
+#   description one or two sentences for the topic page and the landing page
+#   profile     optional capability profile from api-surface.json. When a
+#               binding outside that profile does not export an operation of
+#               this group, the reference gives the profile as the reason.
+#   ops         canonical names from api-surface.json. A name covers every
+#               stable kind it has (e.g. both the `esm_problem` function and
+#               type); write "name:kind" to place one kind only.
+#
+# A stable symbol in no group is rendered under "Other", and render.py warns.
+# A name here that is not a stable canonical name is an error.
+
+[[group]]
+id = "document-io"
+title = "Document I/O"
+description = "Reading a document from a path, a string or a parsed value, and serializing it back to JSON."
+profile = "core"
+ops = [
+  "load_path", "load_string", "load_document", "load_options", "loader_field",
+  "write_path", "to_json", "to_json_compact",
+  "canonical_json", "canonicalize", "canonicalize_error", "format_canonical_float",
+  "canonical_index_set_json", "emit_document", "emit_esm_string",
+]
+
+[[group]]
+id = "versions"
+title = "Versions and migration"
+description = "The format and library version constants, and migrating a document written for an older version of the format."
+profile = "core"
+ops = [
+  "schema_version", "library_version",
+  "migrate", "can_migrate", "supported_migration_targets", "migration_error",
+  "reject_expression_templates_pre_v04", "reject_solver_pre_v11",
+  "reject_template_imports_pre_v08",
+]
+
+[[group]]
+id = "validation"
+title = "Validation"
+description = "Checking a document against the schema and the structural rules of the specification, and reading the errors that result."
+profile = "core"
+ops = [
+  "validate", "validate_schema", "validate_structural", "validate_text",
+  "validate_path", "validation_result", "validation_error",
+  "schema_error", "schema_validation_error", "structural_error",
+]
+
+[[group]]
+id = "document-types"
+title = "Document types"
+description = "The in-memory types that mirror the sections of an .esm document: models, variables, equations, reaction systems, domains, events, data sources and more."
+ops = [
+  "esm_file", "metadata", "model", "model_variable", "parameter", "equation",
+  "affect_equation", "species", "reaction", "reaction_system", "reference",
+  "domain", "coordinate", "dimension", "temporal_domain", "time_span",
+  "continuous_event", "discrete_event", "discrete_event_trigger",
+  "functional_update", "parameter_update", "function_table",
+  "function_table_axis", "operator", "solver", "tolerance", "distribution",
+  "coupling_entry", "coupling_couple", "coupling_import",
+  "coupling_import_options", "coupling_role",
+  "data_source", "data_source_binding", "data_source_determinism",
+  "data_source_kind", "data_source_location", "data_source_temporal",
+  "parameter_sweep", "sweep_dimension", "sweep_range",
+  "plot", "plot_axis", "plot_series", "plot_value",
+]
+
+[[group]]
+id = "classification"
+title = "Variable classification"
+description = "Which variables of a model are integrated states, algebraic unknowns, observed quantities or parameters of each kind (esm-spec section 6.3.1)."
+profile = "classification"
+ops = [
+  "ode_states", "algebraic_unknowns", "observed_unknowns", "is_ode_state",
+  "unknowns", "parameters", "constant_parameters", "discrete_parameters",
+  "sampled_parameters", "brownian_parameters", "free_parameters",
+  "observed_definition", "observed_definitions",
+  "system_kind", "declared_system_kind", "effective_system_kind",
+  "variable_kind", "dae_info", "apply_dae_contract",
+]
+
+[[group]]
+id = "expressions"
+title = "Expressions"
+description = "Parsing, inspecting, substituting into, simplifying and evaluating expressions and equations."
+profile = "core"
+ops = [
+  "expr", "expr_node", "parse_expression", "parse_equation",
+  "expression_parse_error", "free_variables", "contains",
+  "substitute", "substitute_with_context", "substitute_in_equations",
+  "substitute_in_model", "substitute_in_model_with_context",
+  "substitute_in_reaction_system", "substitute_in_reaction_system_with_context",
+  "simplify", "expand", "evaluate", "evaluate_closed_function",
+  "closed_function_names", "closed_function_error",
+]
+
+[[group]]
+id = "display"
+title = "Display"
+description = "Rendering expressions, equations, models and whole documents for people, as plain text, Unicode or LaTeX."
+profile = "core"
+ops = ["to_ascii", "to_unicode", "to_latex", "to_julia_code"]
+
+[[group]]
+id = "editing"
+title = "Editing"
+description = "Adding, removing and renaming the parts of a document, and composing, merging and extracting components."
+profile = "core"
+ops = [
+  "add_variable", "remove_variable", "rename_variable",
+  "add_equation", "remove_equation",
+  "add_species", "remove_species", "add_reaction", "remove_reaction",
+  "add_continuous_event", "add_discrete_event", "remove_event",
+  "add_coupling", "remove_coupling", "map_variable",
+  "compose", "merge", "extract", "component_exists", "get_component_type",
+  "edit_error", "entity_not_found_error", "variable_in_use_error",
+]
+
+[[group]]
+id = "flatten"
+title = "Flatten"
+description = "Turning a coupled document into a single system of variables and equations, and the errors coupling can raise."
+profile = "core"
+ops = [
+  "flatten", "flatten_with_options", "flattened_system", "flattened_variable",
+  "flattened_equation", "flatten_metadata", "flatten_template_registries",
+  "flatten_error", "conflicting_derivative_error", "dimension_promotion_error",
+  "unmapped_domain_error", "unsupported_mapping_error",
+  "domain_unit_mismatch_error", "domain_extent_mismatch_error",
+  "slice_out_of_domain_error", "cyclic_promotion_error",
+  "couple_multiplicative_no_tendency_error",
+  "operator_compose_ambiguous_bare_name_error",
+  "operator_compose_no_merge_error", "operator_compose_require_match_error",
+]
+
+[[group]]
+id = "lowering"
+title = "Load-time lowering and templates"
+description = "The passes a loader runs before a document is usable: enum lowering, subsystem references, expression templates and coupling imports."
+profile = "core"
+ops = [
+  "lower_enums", "lower_enums_mut", "enum_lowering_error",
+  "resolve_subsystem_refs", "subsystem_ref_error", "circular_reference_error",
+  "resolve_template_machinery", "lower_expression_templates",
+  "expression_template_error", "max_template_expansion_depth",
+  "expand_coupling_imports", "expand_document", "desugar_pushdown",
+  "apply_scope_injections", "ephemeral_injected_file",
+  "is_template_library_doc", "is_coupling_library_doc",
+  "materialize_value_invention", "value_invention_result", "value_invention_error",
+]
+
+[[group]]
+id = "graphs"
+title = "Graphs"
+description = "Component, expression and reference graphs of a document, and exporting them as DOT, Mermaid or JSON."
+profile = "core"
+ops = [
+  "component_graph", "component_node", "coupling_edge", "dependency_edge",
+  "expression_graph", "expression_graph_options", "variable_node",
+  "graph", "graph_edge", "edge_kind", "vertex_kind",
+  "to_dot", "to_mermaid", "to_json_graph",
+  "build_reference_graph", "resolve_references", "reference_graph",
+  "reference_edge", "reference_vertex", "reference_resolution_error",
+]
+
+[[group]]
+id = "reactions"
+title = "Reactions"
+description = "Deriving ordinary differential equations from a reaction system, and its stoichiometric matrices."
+profile = "core"
+ops = [
+  "derive_odes", "stoichiometric_matrix", "substrate_matrix", "product_matrix",
+  "lower_reactions_to_equations",
+]
+
+[[group]]
+id = "units"
+title = "Units"
+description = "Parsing unit strings, converting between units and checking the dimensional consistency of equations."
+profile = "core"
+ops = [
+  "unit", "parse_unit", "build_unit_env", "exact_scale", "convert_units",
+  "parse_unit_conversion", "apply_unit_conversion", "unit_conversion_error",
+  "validate_units", "validate_equation_dimensions", "unit_warning",
+  "unit_finding", "unit_finding_analysis", "unit_finding_dimensional_mismatch",
+  "unit_finding_unparseable",
+]
+
+[[group]]
+id = "simulation"
+title = "Simulation"
+description = "Building a problem from a document, integrating it, and reading states and observed quantities from the solution."
+profile = "simulation"
+ops = [
+  "esm_problem", "solve", "init", "step", "remake", "solution", "integrator",
+  "return_code", "ensemble_problem", "compiler", "compiler_report",
+  "callbacks", "callback_set", "resolve_tolerances", "default_abstol",
+  "default_reltol", "observed_field", "evaluate_cellwise", "field_reduce",
+  "simulate_error", "run_inline_tests", "inline_test_options",
+  "assertion_result",
+]
+
+[[group]]
+id = "runtime-io"
+title = "Runtime I/O"
+description = "Refresh cadence, output planning and gridding: the protocol a host uses to feed data into and write results out of a running simulation."
+profile = "runtime_io"
+ops = [
+  "cadence", "cadence_error", "partition",
+  "output_plan", "output_meta", "output_error",
+  "derive_output_plan", "derive_output_meta", "derive_output_gridding",
+  "grid_plan", "var_plan", "var_gridding", "group_gridding_by_grid",
+  "plan_dimension_coordinates",
+]
+
+[[group]]
+id = "relational"
+title = "Relational keys and geometry"
+description = "Deterministic keys, ranking and grouping for relational index sets, and the polygon geometry used by regridding."
+ops = [
+  "skolem", "skolem_edge", "distinct", "rank", "ranking", "group_aggregate",
+  "float_key_error", "polygon_area", "intersect_polygon", "area_tolerance_ok",
+  "geometry_error",
+]
+
+[[group]]
+id = "errors"
+title = "Errors"
+description = "The base error type, the parse error, and the table of diagnostic codes shared by every binding. Errors specific to one operation are listed with it."
+ops = ["earth_sci_ast_error", "parse_error", "error_codes", "error_code_names"]
