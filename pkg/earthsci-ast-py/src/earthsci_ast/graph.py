@@ -402,10 +402,8 @@ def component_exists(file: EsmFile, component_id: str) -> bool:
 
 
 def component_type(file: EsmFile, component_id: str) -> str | None:
-    """``"model"``, ``"reaction_system"`` or ``None``.
-
-    The harmonized spelling of Rust's ``get_component_type`` / TypeScript's
-    ``getComponentType`` — the API drops the ``get`` prefix.
+    """The kind of component ``component_id`` names in ``file``:
+    ``"model"``, ``"reaction_system"``, or ``None`` when it names neither.
     """
     if component_id in (file.models or {}):
         return "model"
@@ -939,9 +937,7 @@ def to_json(graph: Graph[Any, Any]) -> str:
     * ``edges`` — ``{"source", "target", "data"}``, endpoints by node key with
       the edge payload under ``data``;
     * ``adjacency`` — every node key mapped to its UNDIRECTED neighbours, which
-      is what :meth:`Graph.adjacency` returns. (This used to map to
-      ``successors`` instead, so a graph's JSON export disagreed with its own
-      ``adjacency()`` — caught by the shared corpus.)
+      is what :meth:`Graph.adjacency` returns.
 
     Pinned by ``tests/conformance/graph/cases.json`` at the level of the
     top-level keys, the node ids, the edge endpoints and the adjacency map; the

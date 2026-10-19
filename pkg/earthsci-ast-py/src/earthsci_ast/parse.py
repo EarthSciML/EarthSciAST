@@ -249,9 +249,8 @@ def _bundled_schema_version() -> str:
 
 
 #: The `.esm` FORMAT version this library implements — NOT the version of the
-#: library itself, which is ``earthsci_ast.LIBRARY_VERSION``. This used to be
-#: the PRIVATE ``_CURRENT_VERSION`` tuple, unreadable by consumers and spelled
-#: differently from every other binding.
+#: library itself, which is ``earthsci_ast.LIBRARY_VERSION``. Every binding
+#: exports it under this name (API_SPEC.md §6).
 SCHEMA_VERSION: str = _bundled_schema_version()
 
 #: `SCHEMA_VERSION` as a (major, minor, patch) tuple, for the comparisons in

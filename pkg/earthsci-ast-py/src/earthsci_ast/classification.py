@@ -362,10 +362,9 @@ def is_ode_state(model: Any, name: str) -> bool:
 def observed_definitions(model: Any, bare_only: bool = False) -> dict[str, Any]:
     """Map each observed unknown to its DEFINING equation's RHS.
 
-    An observed unknown is one an equation defines with a bare-variable LHS.
-    Before 1.0.0 this lived in ``variables[v].expression``; it now lives in the
-    model's ``equations``, and this function is where the binding follows that
-    relocation. The FIRST defining equation wins, so classification does not
+    An observed unknown is one an equation defines with a bare-variable LHS;
+    its definition lives in the model's ``equations`` (esm-spec §6.3.1), and
+    this function reads it from there. The FIRST defining equation wins, so classification does not
     depend on equation order for the *set* it returns.
 
     An indexed LHS (``y[i] ~ f(i)``, the arrayed-observed form) defines its base

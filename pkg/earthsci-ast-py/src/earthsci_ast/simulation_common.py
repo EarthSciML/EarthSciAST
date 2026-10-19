@@ -66,8 +66,7 @@ class ReturnCode(str, Enum):
     §2.5.3), which is how a run reports its outcome in every simulating
     binding.
 
-    It REPLACES the ``success`` boolean / free-text ``message`` pair the Python
-    binding used to carry: a caller distinguishes "ran to ``tspan[2]``" from
+    A caller distinguishes "ran to ``tspan[2]``" from
     "stopped early, here is why" by comparing ``retcode``, never by reading
     prose.
 
