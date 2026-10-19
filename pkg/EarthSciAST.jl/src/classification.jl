@@ -19,8 +19,8 @@ Every `unknown` declared by `model`, sorted lexicographically. The union of
 [`algebraic_unknowns`](@ref), which partition it.
 
 This is the canonical cross-binding name (API_SPEC.md §8 item 6): TypeScript
-spells it `unknowns` and Python `unknowns`. [`unknown_names`](@ref) is the
-Julia-only alias this binding shipped first and keeps exported, because the
+spells it `unknowns` and Python `unknowns`. [`unknown_names`](@ref) is a
+Julia-only alias, kept exported because the
 bare name collides badly in Julia's flat namespace — `ModelingToolkit.unknowns`
 is the obvious clash, and a consumer doing `using EarthSciAST, ModelingToolkit`
 needs a spelling that cannot be ambiguous.

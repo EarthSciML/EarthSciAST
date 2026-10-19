@@ -44,10 +44,23 @@ which is the flat state vector `var_map` indexes.
 final_state(sol) = isempty(sol.u) ? Float64[] : Vector{Float64}(sol.u[end])
 
 
-# `code` is the `ERROR_CODES` registry entry when the failure has one — the
-# three `compiler` selection failures of API_SPEC §5.8 do — and `""` when it
-# does not, which is every pre-existing raise site (the one-argument
-# constructor keeps those spelled exactly as they were).
+"""
+    SimulateError(msg::AbstractString)
+    SimulateError(msg::String, code::String)
+
+Exception thrown when a simulation Problem cannot be built or run (API_SPEC
+§5.8): [`esm_problem`](@ref) given a missing file or an unsupported input, an
+override in `p` / `u0` that names no variable or collides with another, a
+document with no models, a provider or compiler that cannot serve the request,
+an [`observed_field`](@ref) read of a name that is not an evaluable observed,
+or `solve` called without the solver extension loaded.
+
+`msg` is the human-readable description. `code` is the [`ERROR_CODES`](@ref)
+value when the failure has one, such as `"compiler_unknown"` or
+`"compiler_unavailable"` for a `compiler =` selection that cannot be honoured,
+and `""` otherwise. `showerror` prints `SimulateError: <code>: <msg>`, omitting
+the code when it is empty.
+"""
 struct SimulateError <: EarthSciASTError
     msg::String
     code::String

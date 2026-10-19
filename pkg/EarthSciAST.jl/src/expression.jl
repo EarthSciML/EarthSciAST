@@ -368,26 +368,22 @@ end
 """
     substitute(expr::ASTExpr, bindings::Dict{String,ASTExpr})::ASTExpr
 
-Recursively replace variables in an expression with provided bindings.
-Supports scoped reference resolution - if a variable is not found in bindings,
-it remains unchanged. Returns a new ASTExpr object (non-mutating).
+Replace every variable named in `bindings` with its replacement expression,
+throughout `expr` (including faq bodies, filter predicates, integral bounds and
+every other sub-expression a node carries). A variable not in `bindings` is
+left unchanged. Substitution is single-pass: a replacement is inserted as is
+and never substituted again. Returns a new expression; `expr` is not modified.
 
-# Arguments
-- `expr`: The expression to perform substitution on
-- `bindings`: Dictionary mapping variable names to replacement expressions
+`bindings` must have value type `ASTExpr` exactly: a `Dict("x" => NumExpr(2.0))`
+is a `Dict{String,NumExpr}` and has no method, so build it as
+`Dict{String,ASTExpr}(...)`.
 
 # Examples
 ```julia
-# Simple substitution
-x = VarExpr("x")
-y = VarExpr("y")
-sum_expr = OpExpr("+", [x, y])
-bindings = Dict("x" => NumExpr(2.0))
-result = substitute(sum_expr, bindings)  # OpExpr("+", [NumExpr(2.0), VarExpr("y")])
-
-# Nested substitution
-nested = OpExpr("*", [OpExpr("+", [x, NumExpr(1.0)]), y])
-result = substitute(nested, bindings)  # OpExpr("*", [OpExpr("+", [NumExpr(2.0), NumExpr(1.0)]), VarExpr("y")])
+e = parse_expression("k * (T_wall - T_air)")
+bindings = Dict{String,ASTExpr}("T_wall" => NumExpr(300.5),
+                                "k" => parse_expression("2 * k0"))
+to_ascii(substitute(e, bindings))  # "2 * k0 * (300.5 - T_air)"
 ```
 """
 function substitute(expr::NumExpr, bindings::Dict{String,ASTExpr})::ASTExpr

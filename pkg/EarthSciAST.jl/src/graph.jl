@@ -311,37 +311,6 @@ function component_graph(file::EsmFile)::Graph{ComponentNode, CouplingEdge}
     return Graph{ComponentNode, CouplingEdge}(nodes, edges)
 end
 
-"""
-    expression_graph(file::EsmFile) -> Graph{VariableNode, DependencyEdge}
-    expression_graph(model::Model) -> Graph{VariableNode, DependencyEdge}
-    expression_graph(system::ReactionSystem) -> Graph{VariableNode, DependencyEdge}
-    expression_graph(equation::Equation) -> Graph{VariableNode, DependencyEdge}
-    expression_graph(reaction::Reaction) -> Graph{VariableNode, DependencyEdge}
-    expression_graph(expr::ASTExpr) -> Graph{VariableNode, DependencyEdge}
-
-Generate expression-level dependency graph showing variable relationships.
-
-Creates nodes for variables and edges for dependencies based on expressions.
-Supports different scoping levels from individual expressions to full files.
-
-# Arguments
-- Input can be EsmFile, Model, ReactionSystem, Equation, Reaction, or ASTExpr
-
-# Returns
-- `Graph{VariableNode, DependencyEdge}`: Variable dependency graph
-
-# Examples
-```julia
-# File-level analysis
-graph = expression_graph(file)
-
-# Model-level analysis
-graph = expression_graph(model)
-
-# Single equation analysis
-graph = expression_graph(equation)
-```
-"""
 # ── expression_graph ────────────────────────────────────────────────────────
 #
 # The variable-level dependency graph (esm-libraries-spec §4.8.2). One builder
@@ -582,6 +551,33 @@ function _process_coupling!(b::_ExprGraphBuilder, coupling)
     return nothing
 end
 
+"""
+    expression_graph(file::EsmFile; merge_coupled::Bool = false) -> Graph{VariableNode, DependencyEdge}
+    expression_graph(model::Model) -> Graph{VariableNode, DependencyEdge}
+    expression_graph(system::ReactionSystem) -> Graph{VariableNode, DependencyEdge}
+    expression_graph(equation::Equation) -> Graph{VariableNode, DependencyEdge}
+    expression_graph(reaction::Reaction) -> Graph{VariableNode, DependencyEdge}
+    expression_graph(expr::ASTExpr) -> Graph{VariableNode, DependencyEdge}
+
+The variable-level dependency graph (esm-libraries-spec §4.8.2): one
+[`VariableNode`](@ref) per variable, and a [`DependencyEdge`](@ref) from each
+variable an equation or reaction reads to the variable it defines.
+
+For a whole file, every model and reaction system (and their subsystems) is
+walked and node names are scoped as `Component.variable`; with
+`merge_coupled = true` each `variable_map` coupling entry also adds an edge
+from its `from` variable to its `to` variable. A standalone model, reaction
+system, equation or reaction yields bare names. An expression has no name of
+its own, so every free variable in it feeds a synthetic `expr_result` node.
+
+# Examples
+```julia
+graph = expression_graph(file)         # every component, scoped names
+graph = expression_graph(model)        # one model, bare names
+graph = expression_graph(parse_expression("k * (T_wall - T_air)"))
+[e.source.name for e in graph.edges]   # the three free variables
+```
+"""
 function expression_graph(file::EsmFile; merge_coupled::Bool=false)::Graph{VariableNode, DependencyEdge}
     # Expand at the boundary (RFC out-of-line-expression-templates §7.7): a
     # surviving `apply_expression_template` node hides its BODY's free component
@@ -601,8 +597,7 @@ function expression_graph(file::EsmFile; merge_coupled::Bool=false)::Graph{Varia
         end
     end
     # OFF by default, matching TypeScript's `mergeCoupled` and Python's
-    # `merge_coupled`. This module used to add these edges unconditionally, and
-    # under the relationship `"coupling"` — a value in no §4.8.2 vocabulary.
+    # `merge_coupled`.
     merge_coupled && _process_coupling!(b, file.coupling)
     return _graph(b)
 end
@@ -636,7 +631,6 @@ function expression_graph(expr::ASTExpr)::Graph{VariableNode, DependencyEdge}
     # variable in the expression becomes a node, and the tree structure is
     # flattened into dependency edges". The expression's VALUE has no name in
     # the document, so it gets a synthetic target every free variable feeds.
-    # This module used to return nodes only.
     b = _ExprGraphBuilder()
     result_key = _add_node!(b, _EXPR_RESULT, "observed", nothing, _DEFAULT_SYSTEM)
     for var_name in sort!(collect(free_variables(expr)))

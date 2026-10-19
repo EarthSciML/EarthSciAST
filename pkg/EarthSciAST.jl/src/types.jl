@@ -48,12 +48,6 @@ include_dependency(joinpath(dirname(@__DIR__), "Project.toml"))
 # 1. Expression Type Hierarchy
 # ========================================
 
-"""
-    abstract type ASTExpr end
-
-Abstract base type for all mathematical expressions in the ESM format.
-Expressions can be numeric literals, variable references, or operator nodes.
-"""
 # NAMING: this abstract type is spelled `ASTExpr` (not `Expr`) specifically so
 # it does NOT shadow `Core.Expr` (Julia's own AST node type) inside this module
 # or for consumers that `using EarthSciAST`. Module-internal code that builds
@@ -61,6 +55,12 @@ Expressions can be numeric literals, variable references, or operator nodes.
 # extensions), and struct fields that would naturally be called `expr` use
 # `expr_body`-style names (e.g. `OpExpr.expr_body` for the wire key "expr") to
 # keep the ESM and Julia AST vocabularies distinct.
+"""
+    abstract type ASTExpr end
+
+Abstract base type for all mathematical expressions in the ESM format.
+Expressions can be numeric literals, variable references, or operator nodes.
+"""
 abstract type ASTExpr end
 
 """
@@ -227,10 +227,28 @@ struct _OverlapJoinSpec
     eps_given::Bool
 end
 
+# `mutable struct` (not `struct`) is a deliberate PERFORMANCE choice, not a
+# licence to mutate: the build path treats `OpExpr` as an immutable value and only
+# ever copies-with-changes through `reconstruct` (fields are never assigned after
+# construction). Mutability buys true POINTER-IDENTITY for the build-time
+# memoization `IdDict{OpExpr,…}` caches (`_BuildMemo` in tree_walk/compile.jl and
+# the template-lowering caches in tree_walk/stencil.jl). With an *immutable*
+# `OpExpr`, `IdDict` falls back to `objectid`/`===`, which for an immutable struct
+# are STRUCTURAL — every memo probe would re-hash the `op` String and walk all ~35
+# fields. A mutable struct makes `objectid`/`===` (hence `IdDict` and the
+# `r !== args[i]` "did this subtree change" identity checks throughout the tree
+# walk) pointer-based, so the memos are O(1) identity caches. No custom
+# `==`/`hash` is defined: `OpExpr` is never a *value*-keyed `Dict`/`Set` key
+# anywhere (only ever an `IdDict` key), and structural `==` on trees would not
+# hold anyway — two distinct-but-equal `OpExpr`s hold `args` `Vector`s that differ
+# by identity.
 """
-    OpExpr(op::String, args::Vector{ASTExpr}; wrt, dim, int_var, lower, upper, output_idx, expr_body, reduce, ranges, regions, values, shape, perm, axis, fn)
+    OpExpr(op::String, args::Vector{ASTExpr}; kwargs...)
+    OpExpr(op::String, args::AbstractVector; kwargs...)
 
-Operator expression node containing:
+Operator expression node. `op` and `args` are positional; every other field is
+an optional keyword (default `nothing`) that only some operators use. The
+`AbstractVector` method converts `args` to `Vector{ASTExpr}`. Fields:
 - `op`: operator name (e.g., "+", "*", "log", "D", "faq")
 - `args`: vector of argument expressions
 - `wrt`: variable name for differentiation (optional; for `D`)
@@ -241,8 +259,8 @@ Operator expression node containing:
 - `output_idx`: for `faq`, list of result index symbols (String) or literal
   singleton dimensions (Int 1). Mirrors SymbolicUtils.ArrayOp.output_idx.
 - `expr_body`: for `faq`, the scalar body evaluated at each index point
-  (a nested `ASTExpr` tree). Named `expr_body` — not `expr` — to avoid shadowing
-  the `EarthSciAST.ASTExpr` abstract type.
+  (a nested `ASTExpr` tree); the wire key is `"expr"`. Named `expr_body` so the
+  field is not confused with Julia's own `Core.Expr`.
 - `reduce`: for `faq`, the reduction operator applied to
   contracted indices (one of "+", "*", "max", "min"; default "+"). Names the
   semiring ⊕ only; it is the shorthand retained for files that omit `semiring`
@@ -250,7 +268,7 @@ Operator expression node containing:
 - `semiring`: for `faq`, the named semiring `(⊕, ⊗)` with
   normative identity elements that parameterizes the reduction (closed registry:
   "sum_product", "max_product", "min_sum", "max_sum", "bool_and_or"). Absent ⇒
-  "sum_product", reproducing today's einsum semantics. When present it supersedes
+  "sum_product", the ordinary einsum semantics. When present it supersedes
   `reduce`; the ⊕/⊗ operators and BOTH identities come from the registry table,
   never the file (RFC §5.1).
 - `ranges`: for `faq`, map from index symbol name to iteration range
@@ -279,24 +297,33 @@ Operator expression node containing:
   "bin", "pair") — the human-facing name of the relation the emitted key belongs
   to. Purely documentary: it is NOT part of the emitted key (it renders as a
   trailing `label=L` named argument); `args` are the pure key components.
+- `units`: for `const`, the declared unit of `value` (esm-spec §4.8.5).
+- `table`, `table_axes`, `output`: for `table_lookup` (esm-spec §9.5), the
+  `function_tables` entry id, the per-axis input-coordinate expressions (wire
+  key `"axes"`; `args` MUST be empty), and, for a multi-output table, the
+  output selector (a 0-based integer or an output name).
+- `join`, `filter`: for `faq`, the equi-join clauses (each a list of
+  `[left, right]` key-column pairs that must compare equal) and an optional
+  boolean predicate; a combination for which the predicate is false contributes
+  the additive identity.
+- `join_gates`: internal, build-time resolution of `join`; never parsed or
+  serialized.
+- `id`, `manifold`: for `intersect_polygon`, the node-local identifier a
+  `kind: "derived"` index set names through `from_faq`, and the geometry
+  interpretation (`"planar"`, `"spherical"` or `"geodesic"`; required).
+- `distinct`, `key`: for a value-inventing `faq`, whether it produces a
+  deduplicated index set, and the `skolem` key expression it emits per
+  surviving index combination.
+- `arg`: for `argmin` / `argmax`, the index symbol whose value at the optimum
+  is returned.
+- `bindings`: for `apply_expression_template`, the parameter → argument
+  expression map (esm-spec §9.6).
+- `expect_cadence`: an optional author assertion of this node's cadence class
+  (`"const"`, `"discrete"` or `"continuous"`); carried verbatim, and an error is
+  raised only when the derived class disagrees.
+- `attrs`: named scalar attributes of an open rewrite-target op (esm-spec
+  §4.2), such as a custom scheme's parameters.
 """
-# `mutable struct` (not `struct`) is a deliberate PERFORMANCE choice, not a
-# licence to mutate: the build path treats `OpExpr` as an immutable value and only
-# ever copies-with-changes through `reconstruct` (fields are never assigned after
-# construction). Mutability buys true POINTER-IDENTITY for the build-time
-# memoization `IdDict{OpExpr,…}` caches (`_BuildMemo` in tree_walk/compile.jl and
-# the template-lowering caches in tree_walk/stencil.jl). With an *immutable*
-# `OpExpr`, `IdDict` falls back to `objectid`/`===`, which for an immutable struct
-# are STRUCTURAL — every memo probe re-hashes the `op` String and walks all ~35
-# fields, and those probes are a large share of the `build_evaluator` profile. A
-# mutable struct makes `objectid`/`===` (hence `IdDict` and the `r !== args[i]`
-# "did this subtree change" identity checks throughout the tree walk)
-# pointer-based, so the memos become the O(1) identity
-# caches they were always meant to be. No custom `==`/`hash` is defined: `OpExpr`
-# is never a *value*-keyed `Dict`/`Set` key anywhere (only ever an `IdDict` key),
-# and default `==` was already non-structural for trees — two distinct-but-equal
-# `OpExpr`s compared `false` because their `args` `Vector`s differ by identity — so
-# pointer `==` matches the pre-existing de-facto behaviour.
 mutable struct OpExpr <: ASTExpr
     op::String
     args::Vector{ASTExpr}
@@ -979,14 +1006,34 @@ Brownian, discrete, sampled, or constant follows from `distribution` and
 [`algebraic_unknowns`](@ref), [`is_ode_state`](@ref),
 [`brownian_parameters`](@ref), [`discrete_parameters`](@ref),
 [`sampled_parameters`](@ref), [`constant_parameters`](@ref),
-[`system_kind`](@ref) — never by reading a declared type. The 0.x members
-`StateVariable`, `ObservedVariable`, `BrownianVariable` and `DiscreteVariable`
-were removed in 1.0.0 with no deprecation path.
+[`system_kind`](@ref) — never by reading a declared type.
 """
 @enum ModelVariableType begin
     UnknownVariable
     ParameterVariable
 end
+
+"""
+    UnknownVariable::ModelVariableType
+
+A variable the solver solves for (wire spelling `"unknown"`, esm-spec §6.3).
+Whether it is an ODE state, an observed or an algebraic unknown is derived from
+the model's equations; see [`ode_states`](@ref), [`observed_unknowns`](@ref)
+and [`algebraic_unknowns`](@ref), and [`unknowns`](@ref) for all of them.
+"""
+UnknownVariable
+
+"""
+    ParameterVariable::ModelVariableType
+
+A variable supplied to the solver (wire spelling `"parameter"`, esm-spec §6.3):
+its value is `default` or a [`Distribution`](@ref), optionally refreshed by a
+[`ParameterUpdate`](@ref). Whether it is constant, sampled, discrete or
+Brownian is derived from those fields; see [`constant_parameters`](@ref),
+[`sampled_parameters`](@ref), [`discrete_parameters`](@ref) and
+[`brownian_parameters`](@ref), and [`parameters`](@ref) for all of them.
+"""
+ParameterVariable
 
 """
     MODEL_VARIABLE_TYPE_TABLE
