@@ -2,11 +2,11 @@
 // (docs/api/README.md §2): one entry per Go spelling that api-surface.json
 // lists, with signatures and doc comments taken from pkg/esm through go/doc.
 //
-// Usage, from the repository root:
+// It is its own module, so run it with -C; paths are relative to that
+// directory unless absolute. scripts/api_docs/go.sh is the normal entry point:
 //
-//	go run ./scripts/api_docs/extract_go -root . -out build/api-docs/go.json
-//
-// (run with -C scripts/api_docs/extract_go and absolute paths; see go.sh).
+//	go -C scripts/api_docs/extract_go run . -root "$PWD" -out "$PWD/build/api-docs/go.json"
+//	go -C scripts/api_docs/extract_go run . -root "$PWD" -check-examples "$PWD/docs/api/examples/go"
 package main
 
 import (
@@ -85,11 +85,38 @@ type extractor struct {
 func main() {
 	root := flag.String("root", ".", "repository root")
 	out := flag.String("out", "build/api-docs/go.json", "output path")
+	examples := flag.String("check-examples", "", "check the region markers of the example programs in this directory instead of extracting")
 	flag.Parse()
-	if err := run(*root, *out); err != nil {
+	var err error
+	if *examples != "" {
+		err = runCheck(*root, *examples)
+	} else {
+		err = run(*root, *out)
+	}
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "extract_go:", err)
 		os.Exit(1)
 	}
+}
+
+func readManifest(root string) (*manifest, error) {
+	raw, err := os.ReadFile(filepath.Join(root, "api-surface.json"))
+	if err != nil {
+		return nil, err
+	}
+	var m manifest
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, fmt.Errorf("api-surface.json: %w", err)
+	}
+	return &m, nil
+}
+
+func runCheck(root, dir string) error {
+	m, err := readManifest(root)
+	if err != nil {
+		return err
+	}
+	return checkRegions(dir, m)
 }
 
 func run(root, out string) error {
@@ -97,13 +124,9 @@ func run(root, out string) error {
 	if err != nil {
 		return err
 	}
-	raw, err := os.ReadFile(filepath.Join(root, "api-surface.json"))
+	m, err := readManifest(root)
 	if err != nil {
 		return err
-	}
-	var m manifest
-	if err := json.Unmarshal(raw, &m); err != nil {
-		return fmt.Errorf("api-surface.json: %w", err)
 	}
 	importPath := m.BindingProfiles["go"].Package
 	const modulePath = "github.com/EarthSciML/EarthSciAST/"
