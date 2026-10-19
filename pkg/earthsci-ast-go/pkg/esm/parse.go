@@ -87,10 +87,8 @@ func applyLoadOptions(opts []LoadOption) loadOptions {
 // validates it against the JSON schema. After parsing, it resolves any
 // subsystem references relative to the file's directory.
 //
-// It was called Load, which took a path here and in Julia but meant JSON TEXT
-// in TypeScript and Rust — same name, same argument type, opposite meanings,
-// and no type error anywhere. The three LoadPath / LoadString / LoadDocument
-// entry points say which they are.
+// It takes a filesystem path; LoadString takes JSON text and LoadDocument an
+// already-decoded document.
 func LoadPath(path string, opts ...LoadOption) (*ESMFile, error) {
 	// Read the file
 	data, err := os.ReadFile(path)

@@ -34,7 +34,6 @@ func Example_flatten() {
 	// state: Heater.T
 	// state: Box.T_air
 	// parameter: Heater.rate
-	// parameter: Box.T_wall
 	// parameter: Box.k
 	// D(Heater.T)/Dt = Heater.rate
 	// D(Box.T_air)/Dt = Box.k * (Heater.T - Box.T_air)

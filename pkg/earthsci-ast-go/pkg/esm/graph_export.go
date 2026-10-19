@@ -34,9 +34,8 @@ func (*ExpressionGraph) isGraph() {}
 
 // ToDOT renders a graph in DOT (Graphviz) format.
 //
-// Canonical `to_dot` (API_SPEC.md §8 item 8). Replaces the pair
-// ExportComponentGraphDOT / ExportExpressionGraphDOT; the emitted text is
-// byte-identical to what those produced, and is pinned across bindings by
+// Canonical `to_dot` (API_SPEC.md §8 item 8). It accepts a *ComponentGraph or
+// an *ExpressionGraph; the emitted text is pinned across bindings by
 // tests/conformance/graph/cases.json.
 func ToDOT(g Graph) (string, error) {
 	switch graph := g.(type) {
@@ -51,8 +50,8 @@ func ToDOT(g Graph) (string, error) {
 
 // ToMermaid renders a graph in Mermaid format.
 //
-// Canonical `to_mermaid` (API_SPEC.md §8 item 8). Replaces the pair
-// ExportComponentGraphMermaid / ExportExpressionGraphMermaid.
+// Canonical `to_mermaid` (API_SPEC.md §8 item 8). It accepts a
+// *ComponentGraph or an *ExpressionGraph.
 func ToMermaid(g Graph) (string, error) {
 	switch graph := g.(type) {
 	case *ComponentGraph:
@@ -68,7 +67,7 @@ func ToMermaid(g Graph) (string, error) {
 //
 // Canonical `to_json_graph` (API_SPEC.md §8 item 8) — NOT `ToJSON`, which is
 // the DOCUMENT serializer settled by §8 item 2 and cannot carry both meanings.
-// Replaces the pair ExportComponentGraphJSON / ExportExpressionGraphJSON.
+// It accepts a *ComponentGraph or an *ExpressionGraph.
 func ToJSONGraph(g Graph) (string, error) {
 	switch graph := g.(type) {
 	case *ComponentGraph:

@@ -80,7 +80,7 @@ type ValidationResult struct {
 }
 
 // ValidationMessage represents a single validation issue in the legacy
-// DetailedValidationResult surface returned by Validate/ValidateStructural.
+// DetailedValidationResult surface returned by ValidateStructural.
 type ValidationMessage struct {
 	Level   string `json:"level"`   // "error", "warning", "info"
 	Message string `json:"message"` // Human-readable description
@@ -88,8 +88,9 @@ type ValidationMessage struct {
 }
 
 // DetailedValidationResult holds the legacy (message-oriented) validation
-// results returned by Validate/ValidateStructural. New callers should prefer
-// ValidateFile, which returns the code-bearing ValidationResult.
+// results returned by ValidateStructural. New callers should prefer Validate
+// (or ValidateText for unparsed JSON), which returns the code-bearing
+// ValidationResult.
 type DetailedValidationResult struct {
 	Valid    bool                `json:"valid"`
 	Messages []ValidationMessage `json:"messages,omitempty"`
@@ -100,9 +101,8 @@ type DetailedValidationResult struct {
 //
 // Canonical `validate` (API_SPEC.md §8 items 12 and 13): the input is a TYPED
 // DOCUMENT in every binding, and the return is the four-field shape in every
-// binding. Go used to answer this name with the legacy message-oriented
-// DetailedValidationResult and put the four-field shape on a second function,
-// ValidateFile, which has been folded in here.
+// binding. ValidateStructural still offers the message-oriented
+// DetailedValidationResult form.
 //
 // SchemaErrors is always EMPTY, exactly as Rust's `validate` documents: a
 // *ESMFile can only exist by having come through LoadString/LoadPath/
@@ -159,11 +159,8 @@ func Validate(file *ESMFile) *ValidationResult {
 // check the document AS WRITTEN must pass, then — only if it passes — the
 // semantic checks Validate runs over the parsed form.
 //
-// Canonical `validate_text` (API_SPEC.md §8 item 13). It is where Go's former
-// ValidateFile(file, jsonStr) went: that function took the typed document AND
-// the text it was parsed from, and the only thing it did with the typed half
-// that Validate does not is nothing at all. Text is the only input that can
-// carry SCHEMA errors, so text is where the schema pass belongs.
+// Canonical `validate_text` (API_SPEC.md §8 item 13). Text is the only input
+// that can carry SCHEMA errors, so text is where the schema pass belongs.
 //
 // LoadOptions are forwarded to the parse. WithBasePath is the one that matters
 // for text read from disk: it is what lets relative §9.7 template-library
@@ -276,8 +273,8 @@ func validateCouplingRoleRefs(file *ESMFile) []StructuralError {
 }
 
 // StructuralValidationResult holds the code-bearing structural validation
-// output. It is the return type of the exported ValidateStructuralWithCodes and
-// the internal source that ValidateFile forwards to callers.
+// output. It is the return type of ValidateStructuralWithCodes, and the source
+// of the structural and unit findings Validate reports.
 type StructuralValidationResult struct {
 	Valid            bool              `json:"valid"`
 	StructuralErrors []StructuralError `json:"structural_errors"`
@@ -289,7 +286,7 @@ type StructuralValidationResult struct {
 // same single structural traversal as ValidateStructuralWithCodes and adapts
 // each emitted StructuralError to the legacy ValidationMessage wording (see
 // structuralErrorToLegacyMessage). Unit/dimensional checks are NOT part of this
-// legacy surface — use ValidateStructuralWithCodes/ValidateFile for those.
+// legacy surface — use ValidateStructuralWithCodes or Validate for those.
 func ValidateStructural(file *ESMFile) *DetailedValidationResult {
 	result := &DetailedValidationResult{
 		Valid:    true,
