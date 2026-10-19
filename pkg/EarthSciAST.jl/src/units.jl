@@ -1916,10 +1916,9 @@ Four families are checked:
 4. **Equations** — the two-sided balance of a derivative equation.
 5. **Defining equations** — an inconsistency inside a bare-variable-LHS
    equation's right-hand side, and the defined variable's declared units against
-   the dimension that right-hand side actually has. This is the 0.x
-   observed-`expression` rule following its expression into the equations
-   (esm-spec §6.3.1); it reports at the DEFINED VARIABLE's pointer, which is
-   where the shared corpus pins it.
+   the dimension that right-hand side actually has (esm-spec §6.3.1). It
+   reports at the DEFINED VARIABLE's pointer, which is where the shared corpus
+   pins it.
 
 Subsystems are NOT recursed here (the caller owns path construction and does the
 recursion), keeping this function's pointers purely model-local.

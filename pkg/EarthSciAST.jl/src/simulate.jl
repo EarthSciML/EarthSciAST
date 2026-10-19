@@ -854,7 +854,7 @@ The same record, off a build's inspection sink. A caller who passed
 build that REFUSED, which is the case the partial record is most wanted for and
 the one no Problem exists to carry.
 
-This is the whole of what build observability now answers about the compiler:
+This is the whole of what build observability answers about the compiler:
 the tier every rule landed on, the declines it collected getting there, and the
 build's cascade counters. `compiler_report(prob)` is the same object.
 """
@@ -869,10 +869,7 @@ order, each value the ALIASED flat host view of the exact array the build bound
 — not a copy, so a discrete-cadence refresh writing the original array is
 visible through this container. Empty for a document with no live forcing.
 
-This is where the seam lives now. It used to hang off the out-of-place build
-product (`build_evaluator(model; form = :oop)`), which meant a caller had to
-build the document a second, special way to reach it; the Problem publishes it
-whatever compiler built it. Position of a name is
+The Problem publishes it whatever compiler built it. Position of a name is
 [`forcing_buffer_index`](@ref)`(prob)[name]`, and
 [`sync_forcing!`](@ref) mirrors the container into a compiled program's device
 arrays at a cadence boundary.
@@ -1573,9 +1570,8 @@ compiled program agrees with bit for bit. The first read of a name files an
 (`:output_compiled`, or `:output_compiled_once` / `:output_percell` for the
 cellwise evaluator); an observed native cannot compile is refused by name.
 
-Two arguments (API_SPEC §5.8): build observability moved to a construction-time
-seam, so the caller no longer threads the same [`BuildInspection`](@ref) through
-the build and back into this accessor — the problem owns one. Pass your own via
+Two arguments (API_SPEC §5.8): the problem owns its own
+[`BuildInspection`](@ref), so none is passed here. Pass your own via
 `esm_problem(...; inspect = insp)` if you also want to read the sink directly.
 `u` and `t` are keywords, not arguments: the result has the rank of the field
 whatever they are, which API_SPEC §5.8 lets a binding that can overload spell

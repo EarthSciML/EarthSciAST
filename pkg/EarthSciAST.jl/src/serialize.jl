@@ -567,15 +567,12 @@ end
 Serialize an `EsmFile` to wire-form JSON. PURE — it never touches disk;
 [`write_path`](@ref) is the writer.
 
-`save` used to WRITE, here and in Python, while returning the string and
-touching nothing in TypeScript and Rust — one name, two opposite effects. No
-function in this API both writes and hands back the payload any more.
+No function in this API both writes and hands back the payload.
 
 Takes no `indent` option, unlike the Python and TypeScript twins: JSON3 emits
 the single-line form and its `indent=` keyword is a silent no-op in the pinned
-version, so `save(file, path)` has been writing UNINDENTED bytes since it was
-written, despite saying `indent=2`. Offering an option that does nothing would
-be worse than not offering it. (Byte-canonical output is a separate concern
+version, and offering an option that does nothing would be worse than not
+offering it. (Byte-canonical output is a separate concern
 with its own path — see `emit_esm_string` / esm-spec §9.6.4 rule 5.)
 
 A document carrying surviving template references emits in the canonical

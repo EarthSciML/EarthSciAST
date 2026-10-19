@@ -682,11 +682,8 @@ end
 Validate the document at `path`, INCLUDING the failures that happen while
 loading it.
 
-`validate` itself takes a TYPED document in every binding (API_SPEC.md §8
-item 13) — it used to be a second `validate` method here, which made one name
-mean "check this document" in four bindings and "read this file and check it"
-in Julia. The file convenience keeps its behaviour under a name that says it
-does I/O.
+[`validate`](@ref) itself takes a TYPED document in every binding (API_SPEC.md
+§8 item 13); this is the file convenience, under a name that says it does I/O.
 
 An unresolvable or ambiguous subsystem ref is a validation FINDING — the corpus
 pins `unresolved_subsystem_ref` / `ambiguous_subsystem_ref` at
@@ -720,11 +717,8 @@ The text twin of [`validate_path`](@ref), and the same shape: `validate` itself
 takes a TYPED document in every binding (API_SPEC.md §8 item 13), and the two
 convenience entry points that do the reading carry names that say so.
 
-Julia was the last binding without this. Phase 6 correctly declined to add it,
-because §8 item 13 scoped that row to RENAMING an existing convenience and Julia
-had no text one to rename — but at four bindings out of five (Go `ValidateText`,
-Python `validate_text`, Rust `validate_text`, TypeScript `validateText`) it is a
-parity hole rather than a rename.
+The same function exists in every binding: Go `ValidateText`, Python
+`validate_text`, Rust `validate_text`, TypeScript `validateText`.
 
 A load failure becomes a **verdict** in the returned `ValidationResult` rather
 than an exception. A caller asking "is this document valid?" wants an answer for
@@ -749,10 +743,8 @@ Anything else still propagates.
 
 !!! note
     [`validate_path`](@ref) renders only the third of those three and still
-    RAISES on schema-invalid or malformed input. That is pre-existing behaviour
-    of a `stable` function and is deliberately not changed here; the two entry
-    points therefore differ on bad input, which is recorded rather than fixed
-    silently.
+    RAISES on schema-invalid or malformed input, so the two entry points
+    differ on bad input.
 
 `base_path` anchors relative §9.7.2 template imports and §4.7 `{ref}`s, since
 text carries no location of its own. Note that `load_string` does not resolve

@@ -853,8 +853,7 @@ Three top-level keys:
 * `edges` — `{"source", "target", "data"}`, endpoints by node key with the edge
   payload under `data`;
 * `adjacency` — every node key mapped to its UNDIRECTED neighbours, matching
-  [`adjacency`](@ref). (This used to map to SUCCESSORS, so a graph's JSON export
-  disagreed with its own `adjacency` method.)
+  [`adjacency`](@ref).
 
 Pinned by `tests/conformance/graph/cases.json` at the level of the top-level
 keys, the node ids, the edge endpoints and the adjacency map; the per-node and

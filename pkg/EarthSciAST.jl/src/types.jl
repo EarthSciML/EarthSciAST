@@ -33,9 +33,7 @@ const SCHEMA_VERSION = "1.2.0"
 
 This package's OWN version, read from its `Project.toml` — NOT the `.esm`
 format version, which is [`SCHEMA_VERSION`](@ref). The two are unrelated
-numbers and used to share the name `VERSION` across bindings: it meant the
-schema version in TypeScript and the package version in Rust. Julia exported
-neither.
+numbers.
 """
 const LIBRARY_VERSION = string(pkgversion(@__MODULE__))
 # The constant is fixed when the package precompiles, and Julia decides whether
@@ -802,12 +800,10 @@ Event triggered by discrete triggers whose symbolic `affects` are
 [`AffectEquation`](@ref)s (`lhs` target name, `rhs` new-value expression) —
 the schema's `AffectEquation` shape, shared with `ContinuousEvent`.
 
-From esm 1.0.0 an event affects **unknowns only** (esm-spec §5.4, §6.3.1). The
-0.x `functional_affect` handler descriptor and the `discrete_parameters` list
-are both gone: a handler's only write channel was `modified_params`, so it now
-lives on the parameter it writes (`update.handler`, [`FunctionalUpdate`](@ref)),
-and a parameter that changes during a run declares its own
-[`ParameterUpdate`](@ref). An `affects` LHS naming a parameter is the
+An event affects **unknowns only** (esm-spec §5.4, §6.3.1). A handler that
+computes a new value lives on the parameter it writes (`update.handler`,
+[`FunctionalUpdate`](@ref)), and a parameter that changes during a run declares
+its own [`ParameterUpdate`](@ref). An `affects` LHS naming a parameter is the
 `event_affects_parameter` diagnostic.
 """
 struct DiscreteEvent <: EventType
@@ -889,10 +885,9 @@ end
     FunctionalUpdate
 
 A registered handler that computes a parameter's new value when its update
-fires (esm-spec §5.5). This is the 0.x event `functional_affect` relocated onto
-the parameter it writes: a handler's only write channel was `modified_params`,
-so moving it onto the parameter removed the write list rather than relocating
-it. `handler_id` is the sole remaining registration mechanism in the format.
+fires (esm-spec §5.5). It lives on the parameter it writes, so it carries no
+list of written variables. `handler_id` is the only registration mechanism in
+the format.
 """
 struct FunctionalUpdate
     handler_id::String
@@ -909,9 +904,8 @@ end
     DataSourceBinding
 
 Binds a parameter to one file variable of a `data_sources` entry (esm-spec
-§8.5) — the `from` value form of a `data` update. This is the 0.x
-0.x `DataLoaderVariable` minus `units`: the units are the parameter's own, declared
-once on the consumer instead of twice.
+§8.5) — the `from` value form of a `data` update. It carries no `units`: the
+units are the parameter's own, declared once on the consumer.
 """
 struct DataSourceBinding
     file_variable::String
@@ -947,11 +941,10 @@ const SHAPE_REQUIRING_UPDATE_KINDS = ("schedule", "data", "remesh")
     ParameterUpdate
 
 One rule saying WHEN a parameter refreshes and WHAT it refreshes from
-(esm-spec §5.4). One mechanism replaces three the 0.x format kept apart: the
-`brownian` variable type (now `kind: "wiener"`), the `discrete` type's
-`RefreshTrigger` (now `schedule` / `data` / `remesh`), and the
-`discrete_parameters` event lists with their `functional_affect` (now
-`condition` / `crossing`).
+(esm-spec §5.4). One mechanism covers a Wiener noise source
+(`kind: "wiener"`), a refresh on a schedule, from data or on a remesh
+(`schedule` / `data` / `remesh`), and a change when a condition holds or a
+crossing occurs (`condition` / `crossing`).
 
 Trigger fields by kind: `schedule` uses `times` / `interval` /
 `initial_offset`; `condition` and `crossing` use `when` (plus `direction` for
@@ -1936,14 +1929,13 @@ Pure I/O: locate, read, decode, slice, and filter bytes on disk. It performs no
 reprojection and no regridding — transferring native fields onto a consuming
 model's grid is an ordinary coupling expression (§8.6).
 
-**A data source is a REGISTRY ENTRY, not a component** — the 1.0.0 change. It
+**A data source is a REGISTRY ENTRY, not a component.** It
 is not a `SubsystemNode`: it exposes no variables of its own, cannot be a
 coupling endpoint or a subsystem, and cannot be the path root of a scoped
 reference. A model consumes one by declaring a PARAMETER whose
 [`ParameterUpdate`](@ref) names the source and binds one of its file variables
-([`DataSourceBinding`](@ref)), and that parameter owns the units. The 0.x
-`variables` map is therefore gone from this struct: the binding lives on the
-consumer.
+([`DataSourceBinding`](@ref)), and that parameter owns the units: the binding
+lives on the consumer, not on this struct.
 
 Carries every property esm-schema.json's `DataSource` defines — the schema sets
 `additionalProperties: false`, so the list is closed — for the reason
@@ -2087,17 +2079,10 @@ end
 
 Collection of chemical reactions with associated species, supporting hierarchical composition.
 
-Carries every property esm-schema.json's `ReactionSystem` defines. Most of
-them used to be absent, and each absence had the same shape: the field existed
-in the schema, fixtures used it, and `load` dropped it with nothing to notice —
-`subsystems` was the worst of them, because the field WAS on this struct but
-`coerce_reaction_system` never populated it and `serialize_reaction_system`
-never emitted it, so a reaction-system hierarchy silently flattened to its root
-on load.
-
-`constraint_equations` (additional algebraic/ODE constraints),
-`continuous_events` / `discrete_events` and `analyses` are the other four.
-`analyses` is kept VERBATIM for the reason [`Model`](@ref)'s is.
+Carries every property esm-schema.json's `ReactionSystem` defines, including
+`subsystems` (a reaction-system hierarchy), `constraint_equations` (additional
+algebraic/ODE constraints), `continuous_events` / `discrete_events` and
+`analyses`, all of which load and serialize. `analyses` is kept VERBATIM for the reason [`Model`](@ref)'s is.
 """
 struct ReactionSystem
     species::Vector{Species}
@@ -2133,7 +2118,7 @@ Authorship, provenance, and description metadata.
 
 Carries every property esm-schema.json's `Metadata` defines — it too sets
 `additionalProperties: false`, so the list is closed. Beyond the authorship
-block that is the three `discretize()` diagnostics (`system_class`, `dae_info`,
+block that is the three discretization diagnostics (`system_class`, `dae_info`,
 `discretized_from`; RFC §12) and `x_esd`.
 
 `x_esd`'s schema description is NORMATIVE about this struct's job: it is a
@@ -2631,7 +2616,7 @@ _stable_json(x) = string(x)
 """
     Reaction(reactants::AbstractDict{String,<:Real}, products::AbstractDict{String,<:Real}, rate::ASTExpr; reversible=false) -> Reaction
 
-Legacy constructor for backward compatibility. Creates a reaction with an
+Convenience constructor that creates a reaction with an
 auto-generated, content-derived id: the same reactants, products, and rate
 always produce the same id (deterministic across sessions and Julia versions,
 unlike `Base.hash`).

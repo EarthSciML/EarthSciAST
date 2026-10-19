@@ -135,8 +135,6 @@ the solver integrates (esm-spec §6.3.1). Sorted lexicographically.
 
 A derivative LHS may be wrapped: `D(u)`, `D(u[i])`, and a `faq` whose
 body is a `D(…)` all credit the base variable.
-
-This replaces every 0.x `variable.type == "state"` test.
 """
 function ode_states(model::Model)::Vector{String}
     out = Set{String}()
@@ -152,8 +150,7 @@ end
 """
     is_ode_state(model::Model, name::AbstractString) -> Bool
 
-Membership test for [`ode_states`](@ref) — the direct replacement for a 0.x
-`variable.type == "state"` branch.
+Membership test for [`ode_states`](@ref).
 """
 function is_ode_state(model::Model, name::AbstractString)::Bool
     v = get(model.variables, String(name), nothing)
@@ -170,10 +167,8 @@ end
 
 Each observed unknown mapped to its DEFINING EQUATION's right-hand side.
 
-This is where the 1.0.0 relocation lands: an observed's definition used to live
-in `variables[v].expression` and now lives in the model's `equations` array, as
-the bare-variable-LHS equation whose LHS names it. Every site that read
-`var.expression` for an observed reads this instead.
+An observed's definition lives in the model's `equations` array, as the
+bare-variable-LHS equation whose LHS names it; this is the way to read it.
 
 An unknown that is also an ODE state is excluded (a `D(y)` equation defines
 `y`'s dynamics, not `y` itself). Where more than one equation has the same
@@ -208,8 +203,6 @@ observed_definition(model::Model, name::AbstractString) =
 
 The unknowns defined by a bare-variable LHS (`y ~ f(…)`) — eliminable and
 materializable (esm-spec §6.3.1). Sorted lexicographically.
-
-This replaces every 0.x `variable.type == "observed"` test.
 """
 observed_unknowns(model::Model)::Vector{String} =
     sort!(collect(keys(observed_definitions(model))))
@@ -269,9 +262,8 @@ The unknowns that occupy a SOLVER SLOT — [`ode_states`](@ref) plus
 [`algebraic_unknowns`](@ref), sorted lexicographically. Equivalently, the
 unknowns minus the observed ones, which are eliminable.
 
-This is the set the 0.x declared type `state` named, and the set every
-partition, cell-enumeration, and live-state guard in the tree-walk build wants:
-an algebraic unknown is solved for exactly like an ODE state (it just has no
+This is the set every partition, cell-enumeration, and live-state guard in the
+tree-walk build wants: an algebraic unknown is solved for exactly like an ODE state (it just has no
 time derivative), so treating only `ode_states` as "the states" drops a
 declared, array-shaped algebraic unknown out of the partition it belongs to.
 It is also the CONTINUOUS half of the cadence leaf-seed table
@@ -306,8 +298,6 @@ _is_wiener(v::ModelVariable)::Bool = any(r -> r.kind == "wiener", _update_rules(
 Parameters whose `update.kind` is `"wiener"` — the SDE noise sources
 (esm-spec §6.3.1). Sorted lexicographically. Their presence is what makes
 [`system_kind`](@ref) `"sde"`.
-
-This replaces every 0.x `variable.type == "brownian"` test.
 """
 brownian_parameters(model::Model)::Vector{String} =
     sort!(String[n for (n, v) in model.variables
@@ -319,9 +309,6 @@ brownian_parameters(model::Model)::Vector{String} =
 Parameters carrying any update OTHER than `wiener` — piecewise-constant between
 refreshes (esm-spec §6.3.1). Sorted lexicographically. These are the sole seed
 of the DISCRETE cadence class (CONFORMANCE_SPEC §5.7.2).
-
-This replaces every 0.x `variable.type == "discrete"` test AND the 0.x
-`DiscreteEvent.discrete_parameters` list.
 """
 discrete_parameters(model::Model)::Vector{String} =
     sort!(String[n for (n, v) in model.variables
@@ -402,9 +389,8 @@ steady-state PDE (`laplacian(phi) ~ f`, no ∂/∂t) is a PDE rather than fallin
 through to `"nonlinear"`. `"sde"` precedes `"pde"` because there is no
 `SPDESystem` constructor to select, so a model that is both assembles as an SDE.
 
-The rule is stated over the EQUATIONS and not over a `domain` block: v0.8.0
-removed `Domain.spatial`, so `domain` says nothing about space and a
-domain-based test is not implementable.
+The rule is stated over the EQUATIONS and not over a `domain` block: `domain`
+says nothing about space, so a domain-based test is not implementable.
 
 A binding uses this derivation when the `system_kind` field is absent — see
 [`effective_system_kind`](@ref), which composes it with

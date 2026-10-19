@@ -2550,8 +2550,7 @@ record and cross-compare the numbers.
 concatenated in input order.
 
 Both kinds of test-bearing component are run: `models` first, then
-`reaction_systems`, which the schema gives the same `tests` member and which
-this runner skipped entirely until it was fixed.
+`reaction_systems`, which the schema gives the same `tests` member.
 
 Per test: `solve(esm_problem(input, (time_span.start, time_span.stop)), alg;
 reltol, abstol, saveat=<assertion times>)` with the test's `initial_conditions`
@@ -2615,12 +2614,6 @@ Passing a value explicitly overrides the document, which is why a concrete
 default here would silently have suppressed it. These are INTEGRATION
 tolerances and are a different quantity from the §6.6.4 assertion tolerance
 above.
-
-This entry was called `run_pde_tests` until it grew the ability to run a whole
-corpus. The name was always too narrow — the §6.6.5 spatial reductions are one
-assertion FORM, and the same runner has always executed the plain pointwise
-assertions of an ODE document through the same frame — so it is now
-`run_inline_tests`, with no deprecated alias.
 """
 function run_inline_tests(inputs; model_name::Union{Nothing,AbstractString}=nothing,
                           alg=nothing,
