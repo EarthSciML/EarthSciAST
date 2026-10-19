@@ -137,3 +137,66 @@ not fake one.
 
 A binding may add further regions, named after the operation they demonstrate,
 for important stable operations the scenarios do not reach.
+
+## 4. Usage guides
+
+A guide is a Markdown file in `docs/api/guides/` with Hugo front matter
+(`title`, `description`, and `weight` to order the guides; lower comes first).
+Its prose is written once for every binding. Where a step needs code, the guide
+names an example region on a line of its own:
+
+```markdown
+<!-- example: load -->
+```
+
+`render.py` replaces that line with a language-tabbed block holding the region
+of that id from every binding that has one, each linked to its source. A
+binding without the region is left out of the block, unless the region belongs
+to a capability profile the binding is outside of (for example `simulate` in
+TypeScript or Go); that binding gets a one-line note saying so. The profile is
+taken from the topic group (`groups.toml`) of the operations the region's
+`ops=` names, and can be given explicitly with `profile=`:
+
+```markdown
+<!-- example: simulate profile=simulation -->
+```
+
+The placeholder is an HTML comment, so a guide read unrendered on GitHub shows
+nothing in its place. Placeholders inside code fences are left alone. A
+placeholder whose id no binding has renders a visible "not available in this
+build" note and a warning.
+
+Write guide prose that holds in every binding: describe what an operation does
+and what the example shows, not one binding's types or error style. Link to
+reference pages by site path, e.g. `[load_path](/generated/api/ref/load_path)`.
+
+## 5. Rendering
+
+```bash
+python3 scripts/api_docs/render.py            # Python 3.11+, standard library only
+hugo server --source docs
+```
+
+`render.py` reads every `build/api-docs/<binding>.json` that exists; a binding
+whose file is missing still gets its pages, with a "not extracted in this
+build" note in its tabs, so a local build with only some toolchains works. It
+exits non-zero on a broken example region (§3), a name in `groups.toml` that is
+not a stable canonical name, or a malformed docstring file, and prints warnings
+for stable names in no group (shown under "Other"), placeholders with no region,
+and docstring files that leave out manifest spellings. `--strict` turns the
+warnings into errors.
+
+Output, all under `docs/content/generated/api/`:
+
+| Path | Page |
+|---|---|
+| `_index.md` | landing page: tiers, capability profiles, topics, bindings |
+| `ref/<name>.md` | one per stable `(name, kind)`; `<name>-<kind>` when a name has two stable kinds |
+| `topics/<group>.md` | one per `groups.toml` group |
+| `bindings/<binding>.md` | a binding's stable names mapped to their canonical pages |
+| `extension/<binding>.md` | a binding's extension-tier names, one anchor each |
+| `coverage.md` | stable names each binding exports without a docstring |
+| `guides/<guide>.md` | the guides, with placeholders filled |
+
+`python3 scripts/api_docs/regions.py [--binding <b>]` checks the example regions
+alone, and is what a binding script can call to fail fast on a bad marker.
