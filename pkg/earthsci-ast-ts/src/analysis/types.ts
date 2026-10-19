@@ -143,8 +143,7 @@ export interface DerivativeResult {
    * For {@link higherOrderDerivative}: one entry per differentiation order,
    * recording the expression at that order (`expression`) and its derivative
    * (`derivative`, i.e. the expression at the next order). These are the
-   * successive derivative steps, NOT chain-rule multiplicative factors — hence
-   * the name `derivativeSteps` rather than the former misnomer `chainComponents`.
+   * successive derivative steps, NOT chain-rule multiplicative factors.
    */
   derivativeSteps?: Array<{
     expression: Expr

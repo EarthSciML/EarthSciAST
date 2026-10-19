@@ -286,8 +286,7 @@ export interface LoadOptions {
    * {@link losslessJsonParse}) so downstream consumers can preserve the
    * integer-vs-float distinction required by the canonical form
    * (discretization RFC §5.4.1 / §5.4.6). When `false` or absent
-   * (default), numeric literals decode to plain JS numbers for
-   * backwards compatibility.
+   * (default), numeric literals decode to plain JS numbers.
    *
    * Canonical mode only takes effect for string inputs; pre-parsed
    * objects are returned as-is (callers that want tagged leaves should

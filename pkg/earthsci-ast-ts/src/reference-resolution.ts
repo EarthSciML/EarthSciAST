@@ -281,16 +281,13 @@ const AGGREGATE_OPS = new Set(['faq'])
  * @param model - the raw model object (as parsed, not the typed layer)
  * @param modelName - the model's key in the document, used in diagnostics
  * @param indexSets - the DOCUMENT-SCOPED `index_sets` registry. `esm-schema.json`
- *   declares `index_sets` only at document scope: since v0.8.0 it is a sibling
- *   of `models` rather than nested inside each model, and 1.0.0 keeps it there.
+ *   declares `index_sets` only at document scope, as a sibling of `models`.
  *   {@link resolveReferences} reads it once from the document root and threads
  *   it into every model, which is how a caller normally arrives here. It is an
  *   OPTIONAL TRAILING argument — not a separate function, and not required
- *   (API_SPEC.md §8 item 17). A model-nested `index_sets` key (pre-0.8.0) is
- *   merged ON TOP, so a model-level entry wins a key collision, matching Go and
- *   Rust exactly. Reading ONLY the nested key is the Julia bug §8 item 17
- *   records — it threw on any 1.0.0 document with a top-level registry — and
- *   this binding does not reproduce it.
+ *   (API_SPEC.md §8 item 17). A model-nested `index_sets` key (a pre-0.8.0
+ *   document) is merged ON TOP, so a model-level entry wins a key collision,
+ *   matching Go and Rust exactly.
  *
  * Throws {@link ReferenceResolutionError} on a duplicate node id, an undeclared
  * `ranges[*].from` index set, a `from_faq` naming no node, or an unresolved

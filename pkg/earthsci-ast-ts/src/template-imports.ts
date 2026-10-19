@@ -2135,7 +2135,7 @@ export function checkDataSourceExtents(
  * `lowerExpressionTemplates` with `expression_template_imports`,
  * `metaparameters`, and top-level `expression_templates` consumed (Option A
  * round-trip: none survives `parse → emit`), or `null` when the document
- * carries no §9.7 machinery (the legacy fast path).
+ * carries no §9.7 machinery and needs no rewrite.
  */
 export function resolveTemplateMachinery(
   rawData: unknown,

@@ -8,10 +8,9 @@
  * multiplicative scale factor and (for temperature) an additive offset. Conversion
  * goes through SI base: `value_SI = value * scale + offset`, then `target = (value_SI - offset_t) / scale_t`.
  *
- * This module is intentionally independent of the `DimensionalRep` used by `units.ts`
- * — that representation lacks scale tracking and treats `cm`, `J`, `Pa` as base
- * dimensions, which would make extension invasive.
+ * `units.ts` (dimensional analysis) shares this representation.
  */
+import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
 
 /**
  * Exponents over the SI base dimensions — the SAME eight axes, in the same
@@ -21,12 +20,10 @@
  * `molec` is deliberately NOT an axis. A count of discrete things carries no
  * physical dimension, so `molec` (and `individuals`, `vehicles`, `units`,
  * `count`) is a DIMENSIONLESS unit in the table below — which is what makes
- * `molec/cm^3` compare equal to `1/cm^3`, as every other binding has it. Giving
- * counts their own axis made TS the only binding that could report a mismatch
- * between the two spellings of a number density.
+ * `molec/cm^3` compare equal to `1/cm^3`, as every other binding has it.
+ *
+ * A missing key means exponent zero; `{}` is dimensionless.
  */
-import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
-
 export interface CanonicalDims {
   kg?: number
   m?: number
@@ -272,6 +269,13 @@ export interface ParsedUnit {
   exact: ExactScale
 }
 
+/**
+ * Error thrown when a unit string cannot be parsed (unknown unit name,
+ * malformed number or exponent, unbalanced parentheses, trailing input) or when
+ * {@link convertUnits} is asked to convert between incompatible dimensions.
+ * `code` is always `unit_error` ({@link ERROR_CODES}.UNIT_ERROR); the message
+ * names the offending unit string.
+ */
 export class UnitConversionError extends EsmDiagnosticError {
   constructor(message: string) {
     super(ERROR_CODES.UNIT_ERROR, message)
