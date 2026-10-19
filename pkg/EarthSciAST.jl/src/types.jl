@@ -38,6 +38,11 @@ schema version in TypeScript and the package version in Rust. Julia exported
 neither.
 """
 const LIBRARY_VERSION = string(pkgversion(@__MODULE__))
+# The constant is fixed when the package precompiles, and Julia decides whether
+# a cache is stale from the files the package includes, which Project.toml is
+# not. Without this, a cache built before a version bump survives it: CI
+# restored a 0.3.0 depot for the 0.3.1 release and LIBRARY_VERSION said 0.3.0.
+include_dependency(joinpath(dirname(@__DIR__), "Project.toml"))
 
 # ========================================
 # 1. Expression Type Hierarchy
