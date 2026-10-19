@@ -191,7 +191,7 @@ Render an expression tree as a human-readable string. Multiple output formats:
 |---|---|
 | Unicode | `∂O₃/∂t = −k·O₃·NO + j·NO₂` |
 | LaTeX | `\frac{\partial \mathrm{O_3}}{\partial t} = -k \cdot \mathrm{O_3} \cdot \mathrm{NO} + j \cdot \mathrm{NO_2}` |
-| ASCII | `d(O3)/dt = -k * O3 * NO + j * NO2` |
+| ASCII | `D(O3)/Dt = -k * O3 * NO + j * NO2` |
 | Code (language-native) | Julia: `D(O3) ~ -k * O3 * NO + j * NO2` |
 
 Minimum requirement: **Unicode** and **LaTeX**. Language-native code output is desired.
@@ -1223,16 +1223,19 @@ corresponding identity that makes `multiplicative` meaningful against nothing.
 
 #### 4.7.3 `variable_map` Resolution
 
-`variable_map` replaces a parameter in one system with a variable provided by another system. (Before 1.0.0 the typical case was a data loader; external data now arrives directly as a parameter with a `data` update, so no coupling edge is involved.)
+`variable_map` replaces a parameter in one system with a value provided by another system. (Before 1.0.0 the typical case was a data loader; external data now arrives directly as a parameter with a `data` update, so no coupling edge is involved.)
+
+Every `variable_map` transform is a **replacement** (esm-spec §10.4): the target parameter is bound to the source, optionally scaled by `factor`, and is removed from the flattened system's parameter list (§4.7.5 step 4). No transform adds a term to, or multiplies, the target's equation RHS; that term composition is a `couple` concern (§4.7.2, esm-spec §10.3).
 
 1. Resolve the `from` scoped reference to the source system and variable.
 2. Resolve the `to` scoped reference to the target system and parameter.
 3. Apply the transform:
-   - `param_to_var`: The target parameter is promoted from a constant to a time-varying variable whose value comes from the source. In the merged system, the parameter is removed from the target's parameter list and becomes a shared variable.
-   - `identity`: Direct assignment without type change.
-   - `additive`: The source value is added to the target variable's equation RHS.
-   - `multiplicative`: The target variable's equation RHS is multiplied by the source value.
-   - `conversion_factor`: Same as `param_to_var` but the source value is multiplied by the `factor` field before assignment.
+   - `param_to_var`: The target parameter is replaced by the source variable — every occurrence of `Target.param` becomes `Source.var` — so a constant parameter becomes a time-varying shared variable. Takes no `factor`.
+   - `identity`: Replacement with no change of type: `target := source`. Takes no `factor`.
+   - `additive`, `multiplicative`, `conversion_factor`: Scaled replacement, `target := factor · source`. The three are equivalent in effect and differ only in documented intent (`conversion_factor` names a unit conversion).
+   - An Expression transform: Computed replacement, `target := expression`. Flattening introduces in the target's place an observed variable of the same name, units and shape whose defining expression is the transform (esm-spec §10.4). Takes no `factor`.
+
+A `factor` on `param_to_var`, on `identity`, or alongside an Expression transform is rejected at load (esm-spec §10.4).
 
 #### 4.7.4 `operator_apply` and `callback` Resolution
 
@@ -1316,7 +1319,7 @@ All libraries (including Core tier) must implement the flattening algorithm. Fla
        too. Normative statement, the surviving-registry-body carve-out, and the
        per-surface scope: **CONFORMANCE_SPEC §5.35**.
    - **`couple`**: Apply connector equations, resolving the `from` and `to` scoped references to their namespaced equivalents.
-   - **`variable_map`**: Substitute the target parameter with the source variable. For `param_to_var`, replace all occurrences of `Target.param` with `Source.var` in the flattened equations and remove the parameter from the target's parameter list.
+   - **`variable_map`**: Replace the target parameter per §4.7.3. For every named transform, replace all occurrences of `Target.param` in the flattened equations with `Source.var` (scaled by `factor` for `additive`, `multiplicative` and `conversion_factor`) and remove the parameter from the target's parameter list. An Expression transform replaces the parameter with an observed variable of the same name (esm-spec §10.4).
    - **`operator_apply` / `callback`**: Record in the flattened system's metadata as opaque runtime references.
 
    **3a. Resolve right-hand-side structural time derivatives (esm-spec §4.2).** Rewrite every
@@ -1353,7 +1356,7 @@ All libraries (including Core tier) must implement the flattening algorithm. Fla
 4. **Collect the flattened system.** The result is a single flat system containing:
    - **All equations** from all component systems, with coupling modifications applied, using dot-namespaced variable names.
    - **All state variables** (dot-namespaced), with duplicates merged where coupling unifies them.
-   - **All parameters** (dot-namespaced), minus any that were promoted to variables by `variable_map`.
+   - **All parameters** (dot-namespaced), minus every `variable_map` target, which step 3 replaced.
    - **All events** from all component systems, with variable references rewritten to dot-namespaced form.
    - **Domain** from the file's `domain` section (if present).
    - **Metadata** recording which component systems were flattened and which coupling rules were applied.
@@ -1430,7 +1433,7 @@ TypeScript `camelCase`, others verbatim).
 |---|---|---|
 | `independent_variables` | list of name | Computed by the §4.7.6 algorithm: `["t"]` for a 0D system, `["t", <spatial axes>]` for a PDE. This is what selects `ODESystem` vs `PDESystem` downstream. NOT always `["t"]`. |
 | `state_variables` | ordered map name → variable | The **solved-for vector**: every unknown the solver advances or solves for. Differential unknowns (under `D(·,t)`, including each reaction-system species that step 1 derives a `D` equation for — which is not all of them: see §4.6.1 for the reservoir and no-reaction exceptions), PLUS `algebraic_variables`, PLUS any arrayed observed that materializes into a buffer. NOT the same set as esm-spec §6.3.1's `ode_states`. A species §4.6.1 emits no equation for is still IN this map — it is solved for either way; what changes is which half it lands in. |
-| `parameters` | ordered map name → variable | **ALL** parameters of every cadence, minus any promoted to variables by `variable_map`. |
+| `parameters` | ordered map name → variable | **ALL** parameters of every cadence, minus every `variable_map` target (§4.7.3). |
 | `observed_variables` | ordered map name → variable | Unknowns DEFINED by an equation, bare-LHS or indexed-LHS (esm-spec §6.3.1). A scalar observed is eliminated by substitution and is NOT in `state_variables`; an arrayed observed materializes into a buffer and IS. |
 | `algebraic_variables` | ordered map name → variable | Unknowns CONSTRAINED only by an expression-LHS equation (esm-spec §6.3.1). A **subset** of `state_variables` — a DAE solves for them. |
 | `brownian_parameters` | ordered map name → variable | `update.kind == "wiener"`. A **subset** of `parameters`, not a sibling bucket. |
@@ -1761,10 +1764,9 @@ Julia is the primary language for EarthSciML and has the richest integration sto
 
 - `JSON3.jl` — JSON parsing/serialization
 - `JSONSchema.jl` — schema validation
-- `ModelingToolkit.jl` — symbolic ODE systems
-- `Catalyst.jl` — reaction networks
-- `Unitful.jl` or `DynamicQuantities.jl` — unit checking
-- `EarthSciMLBase.jl` — coupled system assembly (for Full tier)
+- `Unitful.jl` — unit checking
+- `RuntimeGeneratedFunctions.jl` — the `native` compiler's generated code (API_SPEC.md §5.8)
+- `ModelingToolkit.jl`, `Catalyst.jl`, `Symbolics.jl` — weak dependencies, loaded only through the MTK/Catalyst package extensions (§5.1.3)
 
 #### 5.1.2 Core API
 
@@ -1784,15 +1786,8 @@ display(file.models["SuperFast"])
 # LaTeX
 EarthSciAST.to_latex(file.models["SuperFast"])
 
-# Print entire file summary
+# Print entire file summary (the §6.3 structured summary)
 show(file)
-# Output:
-#   ESM v0.1.0: MinimalChemAdvection
-#   Models: Advection (2 params, 1 eq)
-#   Reactions: SimpleOzone (3 species, 2 params, 2 rxns)
-#   Data Loaders: GEOSFP (u, v, T)
-#   Coupling: 4 rules
-#   Domain: lon [-130, -100], 2024-05-01 to 2024-05-03
 
 # Validation
 result = EarthSciAST.validate(file)
@@ -1800,8 +1795,9 @@ result.is_valid          # true
 result.structural_errors # []
 result.unit_warnings     # [UnitWarning("k_NO_O3 units cm^3/molec/s may be inconsistent...")]
 
-# Substitution
-new_model = substitute(file.models["SuperFast"], Dict("T" => 300.0))
+# Substitution over a model's equations
+new_model = substitute_in_equations(file.models["SuperFast"],
+                                    Dict{String,ASTExpr}("T" => NumExpr(300.0)))
 
 # Derive ODEs from reactions
 odes = derive_odes(file.reaction_systems["SimpleOzone"])
@@ -1812,7 +1808,7 @@ S = stoichiometric_matrix(file.reaction_systems["SimpleOzone"])
 
 #### 5.1.3 MTK/Catalyst Conversion (Full Tier)
 
-The key capability unique to Julia: bidirectional conversion between ESM and live MTK/Catalyst objects. As of v0.0.2 this is delivered via **Julia package extensions** (the `EarthSciASTMTKExt` and `EarthSciASTCatalystExt` submodules). Users do not need to call any availability-check function — they simply `using` `ModelingToolkit` and/or `Catalyst` and the constructors below become defined.
+The key capability unique to Julia: bidirectional conversion between ESM and live MTK/Catalyst objects. This is delivered via **Julia package extensions** (the `EarthSciASTMTKExt` and `EarthSciASTCatalystExt` submodules). Users do not need to call any availability-check function — they simply `using` `ModelingToolkit` and/or `Catalyst` and the constructors below become defined.
 
 **Weak dependencies.** `ModelingToolkit`, `Catalyst`, and `Symbolics` are declared in `[weakdeps]` of `EarthSciAST.jl`'s `Project.toml`. Loading `EarthSciAST` alone does **not** force the solver stack to load — precompilation of the main package is fast and side-effect free.
 
@@ -1847,21 +1843,11 @@ rxn_m = EarthSciAST.ReactionSystem(rxn)
 
 # Simulate
 using OrdinaryDiffEq
-prob = ODEProblem(sys, file.domain)   # or discretize() for PDESystem
+prob = ODEProblem(sys, [], tspan)     # or discretize() for PDESystem
 sol = solve(prob, Tsit5())
 ```
 
-**Fallback without MTK/Catalyst.** If the user has not imported `ModelingToolkit` or `Catalyst`, the same constructor pattern is available via `MockMTKSystem`, `MockPDESystem`, and `MockCatalystSystem` — plain-Julia struct types exported from the main package:
-
-```julia
-using EarthSciAST   # no MTK, no Catalyst
-
-mock_sys = MockMTKSystem(file.models["SuperFast"];    name=:SuperFast)
-mock_pde = MockPDESystem(file.models["Atmosphere"];   name=:Atmosphere)
-mock_cat = MockCatalystSystem(file.reaction_systems["SimpleOzone"]; name=:Ozone)
-```
-
-`MockMTKSystem(::Model)` on a PDE-shaped model raises the same `ArgumentError` that redirects the user to `MockPDESystem`, and vice versa — the dispatch semantics mirror the real constructors. These mocks are the no-MTK fallbacks called out by the §1.2 capability tiers; tier detection uses `Base.get_extension(EarthSciAST, :EarthSciASTMTKExt)` rather than an ad-hoc `check_mtk_availability` helper.
+**Without MTK/Catalyst.** If the user has not loaded `ModelingToolkit` or `Catalyst`, these constructors are simply not defined; there is no stand-in type. Tier detection uses `Base.get_extension(EarthSciAST, :EarthSciASTMTKExt)`.
 
 **Flattened system to MTK conversion details.**
 
@@ -1883,15 +1869,6 @@ D_coeff * Differential(<dim>)(V)(t, <dim>_0) ~ f(...)
 rather than emitting the slice-ODE as a pointwise source term in the lowest grid cell. This is the physically correct interpretation for surface deposition of a diffusing tracer (the surface deposition velocity has units of length/time and acts as a flux, not a volumetric source). §4.7.6.6 permits either interpretation at the spec level; the Julia library's choice is flux BC. Substitution rewrites references to `V.at_<dim>` in `f(...)` to reference the base variable `V` at the slice coordinate, so the resulting BC is self-contained.
 
 This lowering is implemented inside `EarthSciASTMTKExt`; the `EarthSciMLBase.slice_variable` primitive itself remains interpretation-agnostic.
-
-**Removed APIs (v0.0.2 breaking change, acceptable at pre-1.0).** The following names that existed in earlier pre-release versions have been deleted:
-
-- `to_mtk_system`, `to_catalyst_system`
-- `from_mtk_system`, `from_catalyst_system`
-- `check_mtk_availability`, `check_catalyst_availability`, `check_mtk_catalyst_availability`
-- `src/availability.jl` (the runtime availability-check module)
-
-Callers must migrate to the constructor-dispatch API above.
 
 #### 5.1.4 Expression Mapping
 
@@ -1974,7 +1951,7 @@ cover at minimum:
 **Dependency discipline.** The solver packages used by these tests
 (`OrdinaryDiffEqTsit5`, `OrdinaryDiffEqRosenbrock`) MUST live in
 `[extras]` + `[targets].test` only — never in `[deps]`. The runtime package
-remains lean and precompiles fast; users who only need `load`/`save`/`flatten`
+remains lean and precompiles fast; users who only need `load_path`/`write_path`/`flatten`
 do not pay the cost of the full `SciMLBase` stack.
 
 **Initial conditions and parameters.** The `EarthSciASTMTKExt`
@@ -2021,18 +1998,18 @@ pkg/earthsci-ast-ts/
 
 ```typescript
 import {
-  load, save, validate,
-  substitute, freeVariables,
-  deriveODEs, stoichiometricMatrix,
+  loadString, toJson, validate,
+  substituteInModel, freeVariables,
+  deriveOdes, stoichiometricMatrix,
   toLatex, toUnicode, toAscii,
   type EsmFile, type Expr, type Model
 } from '@earthsciml/ast';
 
-// Parse from JSON string or object
-const file: EsmFile = load(jsonString);
+// Parse from JSON text (loadPath for a file, loadDocument for a decoded object)
+const file: EsmFile = loadString(jsonString);
 
 // Serialize back
-const json: string = save(file);
+const json: string = toJson(file);
 
 // Pretty-print to strings (no DOM, no framework)
 console.log(toUnicode(file.models!['SuperFast']));
@@ -2043,23 +2020,20 @@ const latex: string = toLatex(file.models!['SuperFast']);
 
 // Validate
 const result = validate(file);
-console.log(result.isValid);           // true
-console.log(result.structuralErrors);  // []
+console.log(result.is_valid);           // true
+console.log(result.structural_errors);  // []
 
 // Substitute
-const modified = substitute(file.models!['SuperFast'], { T: 300.0 });
+const modified = substituteInModel(file.models!['SuperFast'], { T: 300.0 });
 
 // Free variables in an expression
 const vars: Set<string> = freeVariables(expr);
 
 // Derive ODEs from reactions
-const odeModel: Model = deriveODEs(file.reactionSystems!['SimpleOzone']);
+const odeModel: Model = deriveOdes(file.reaction_systems!['SimpleOzone']);
 
-// Stoichiometric matrix
-const S: number[][] = stoichiometricMatrix(file.reactionSystems!['SimpleOzone']);
-
-// Generate Julia code for backend simulation
-const juliaCode: string = toJuliaCode(file);
+// Stoichiometric matrix, with its row (species) and column (reaction) labels
+const { matrix, species, reactions } = stoichiometricMatrix(file.reaction_systems!['SimpleOzone']);
 ```
 
 **Type definitions:**
@@ -2159,10 +2133,10 @@ Python provides simulation capability via SymPy for symbolic manipulation and Sc
 #### 5.3.1 Dependencies
 
 - `jsonschema` — schema validation
-- `sympy` — symbolic math, expression representation, ODE solving
-- `scipy` — numerical ODE integration (`solve_ivp`)
+- `sympy` — symbolic math, expression representation
 - `pint` — unit validation
-- `numpy` — numerical arrays
+- `numpy` — numerical arrays, and the `native` compiler's vectorized right-hand side
+- `scipy` — numerical ODE integration (`solve_ivp`); optional, in the `simulate` extra, needed by `solve` / `init` but not by `esm_problem` (§2.5.9)
 
 #### 5.3.2 Package Structure
 
@@ -2207,7 +2181,7 @@ assert result.is_valid
 print(result.unit_warnings)
 
 # Substitute
-modified = esm.substitute(file.models["SuperFast"], {"T": 300.0})
+modified = esm.substitute_in_model(file.models["SuperFast"], {"T": 300.0})
 
 # Derive ODEs
 ode_model = esm.derive_odes(file.reaction_systems["SimpleOzone"])
@@ -2318,9 +2292,6 @@ Since SciPy's event handling is less sophisticated than DifferentialEquations.jl
 ```python
 # In Jupyter, ESM objects have rich _repr_latex_ methods
 file.models["SuperFast"]  # renders equations as LaTeX
-
-# Interactive model explorer
-esm.explore(file)  # widget showing models, reactions, coupling graph
 ```
 
 ---
@@ -2344,12 +2315,12 @@ Rust provides a high-performance, memory-safe implementation suitable for CLI to
 - `serde` + `serde_json` — serialization
 - `jsonschema` — schema validation
 - `wasm-bindgen` — optional, for WASM target
-- `diffsol` (0.11) — native-only ODE solver, behind the `simulate` feature and used by `solve()` (also gated to non-wasm targets via `cfg(not(target_arch = "wasm32"))`). `simulate()` no longer exists: phase 4 replaced it with `esm_problem(...)` + `solve(...)`, per §2.5; pulls in `faer` for the linear-algebra backend used at the call site
+- `diffsol` (0.11) — the ODE solver used by `solve()`, behind the `solve` feature (on by default; §2.5.9). It builds for native and `wasm32` targets alike, and pulls in `faer` for the linear-algebra backend used at the call site
 
 #### 5.4.2 Crate Structure
 
 ```
-esm-format/
+pkg/earthsci-ast-rs/
 ├── src/
 │   ├── lib.rs
 │   ├── types.rs        # Struct definitions with serde derives
@@ -2443,10 +2414,10 @@ esm graph model.esm --level=expression --system=SimpleOzone      # single system
 esm graph model.esm --level=expression --format=mermaid
 
 # Convert between formats
-esm convert model.esm --to=messagepack  # future binary format
+esm convert model.esm --to=compact-json
 ```
 
-#### 5.4.6 Native Simulation (`simulate()`, gt-5ws)
+#### 5.4.6 Simulation (`esm_problem` / `solve`)
 
 The Rust crate exposes a native, correctness-first simulator: a `diffsol`-backed ODE integrator driving ONE evaluator, the array runtime, which builds every document — 0-D or a discretized PDE — and evaluates it on its tape under `native` / `xla` and on its per-cell oracle under `interpreter` (API_SPEC §5.8). v1 is intentionally limited in these ways:
 
@@ -2456,7 +2427,7 @@ The Rust crate exposes a native, correctness-first simulator: a `diffsol`-backed
 - **No SDEs.** A parameter whose `update.kind` is `wiener` returns `CompileError::UnsupportedConstruct` naming the parameter, rather than integrating the noise as a constant; no binding's evaluator integrates an SDE.
 - **Future work, not yet in any binding's array evaluator.** Running continuous and discrete events and solving implicit equations on the array path is unimplemented in Julia (tree-walk), Python (NumPy interpreter) and Rust alike; each refuses all three with `unsupported_construct` instead (conformance category `tests/conformance/unsupported_construct/`). Julia's ModelingToolkit export is the one runner that executes them today.
 - **No coupling beyond Core flatten.** Anything `flatten()` itself rejects (`slice` / `project` / `regrid`, *undiscretized* spatial operators, mismatched dimension mappings) is rejected upstream and never reaches the simulator.
-- **Native only.** The whole `simulate` module is gated behind `cfg(not(target_arch = "wasm32"))`, so the WASM build (which has a separate follow-up bead for simulator exposure) does not pull in `diffsol`.
+- **Solver optional.** The ODE solver is behind the `solve` feature (on by default): a build without it still constructs a Problem but cannot `solve` it (§2.5.9). The solver also builds for `wasm32`, where `src/wasm.rs` exposes `Problem` / `Solution` handles.
 - **Build once, re-parameterize for sweeps.** An `EsmProblem` is built once by `esm_problem(file, tspan, ProblemOptions)` and re-bound to new `p` / `u0` without recompiling by `remake` (§2.5.5); `solve(&prob, &SolveOptions)` runs it.
 - **Solver options.** `SolveOptions` selects between `Alg::Bdf` (default — implicit BDF, the canonical stiff solver), `Alg::Sdirk` (TR-BDF2 SDIRK), and `Alg::Erk` (explicit Tsitouras 5(4) for non-stiff problems), plus tolerances (`abstol` / `reltol`), `maxiters`, and an optional `saveat` output grid.
 - **Finite-difference Jacobian.** The Jacobian-vector product handed to diffsol is forward-difference over the right-hand side the chosen compiler built; v1 deliberately does not generate symbolic Jacobians, since the bead is correctness-focused.
@@ -2486,7 +2457,7 @@ k.insert("Decay.k".to_string(), 0.2);
 let faster = solve(&remake(&prob, &Remake { p: k, ..Default::default() })?, &opts)?;
 ```
 
-The v1 acceptance harness includes the Robertson stiff problem (verified against Hairer & Wanner Table 1.4 reference values), an exponential-decay analytical comparison, mass-conservation invariants for autocatalysis, and round-trips from the canonical `tests/simulation/*.esm` fixtures. WASM exposure, event handling, hybrid PDE coupling, symbolic Jacobians, and sensitivity analysis are all explicit follow-up beads.
+The v1 acceptance harness includes the Robertson stiff problem (verified against Hairer & Wanner Table 1.4 reference values), an exponential-decay analytical comparison, mass-conservation invariants for autocatalysis, and round-trips from the canonical `tests/simulation/*.esm` fixtures. Event handling, hybrid PDE coupling, symbolic Jacobians, and sensitivity analysis are not implemented.
 
 ---
 
@@ -2496,12 +2467,8 @@ The v1 acceptance harness includes the Robertson stiff problem (verified against
 
 Go is useful for server-side tooling, CI/CD validation, and API backends.
 
-> This section described a "minimal scope" binding until phase 6, and was badly
-> stale: it predated the phase-5 work that roughly doubled Go's public surface.
-> Go is now the LARGEST surface of the six (383 exported spellings against
-> Rust's 323 and Julia's 298). The tier label moved from Core to Core +
-> Analysis in phase 6, when `DeriveODEs` and `StoichiometricMatrix` closed the
-> last two Analysis capabilities Go lacked.
+Go exports the largest surface of the five bindings (`api-surface.json`,
+`counts.by_binding`), most of it diagnostic-code constants.
 
 #### 5.5.1 Scope
 
@@ -2526,10 +2493,12 @@ transformation layer for backend services. Go also no longer ships a
 command-line tool: phase 6 retired its `main.go` under H-5, which makes the
 Rust `esm` binary the only CLI. Go still ships as a library.
 
-**One documented divergence.** Go's `ReactionSystem.Species` is a
-`map[string]Species`, a genuinely unordered Go map, so `DeriveODEs` emits
-species in sorted-name order where Julia, Python, TypeScript and Rust emit
-declaration order. See `API_SPEC.md` §5.10; nothing in `tests/` pins it.
+**Species order.** Go's `ReactionSystem.Species` is a `map[string]Species`, a
+genuinely unordered Go map, so `DeriveODEs` and `StoichiometricMatrix` recover
+declaration order from the key order recorded at load, the order the other four
+bindings use. A `*ReactionSystem` built directly in code has no recorded order
+and falls back to sorted names. See `API_SPEC.md` §5.10;
+`tests/conformance/reactions/species_order.json` pins it.
 
 ---
 

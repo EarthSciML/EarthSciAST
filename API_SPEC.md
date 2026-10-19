@@ -6,7 +6,7 @@
 
 `esm-schema.json` is language-neutral: it says what an ESM *document* is, once,
 and every binding conforms to that one statement. Nothing played the same role
-for the *API*. Six bindings implement one format, each documented separately in
+for the *API*. Five bindings implement one format, each documented separately in
 [`esm-libraries-spec.md`](esm-libraries-spec.md) §5 in prose that has gone stale,
 and nothing anywhere pinned the public surface. So the bindings drifted: the same
 capability acquired different names, the same name acquired different meanings,
@@ -15,13 +15,13 @@ and neither could fail a test.
 This document is the API's `esm-schema.json`. It names every public operation
 **once**, in canonical `snake_case`, and gives a mechanical rule for deriving
 each binding's spelling from that one name. `api-surface.json` carries the same
-content for machines, and six surface tests hold every binding to it.
+content for machines, and five surface tests hold every binding to it.
 
 ---
 
 ## 1. Scope, and how to read this
 
-Six packages are in scope:
+Five packages are in scope:
 
 | Binding | Package | Surface declaration |
 |---|---|---|
@@ -80,8 +80,8 @@ recognised set is:
 
 Every other binding **may** uppercase an embedded initialism but is not required
 to: `AstExpr` and `ASTExpr` are both conforming Julia, `EsmFile` and `ESMFile`
-both conforming Python. Pick one per binding and stay consistent — TypeScript
-currently is not (see §8, `derive_odes`).
+both conforming Python. Pick one per binding and stay consistent. TypeScript's
+`deriveODEs` survives only as a deprecated alias of `deriveOdes` (§8 item 5).
 
 ### 2.2 Sanctioned per-binding decorations
 
@@ -117,7 +117,8 @@ Today's rule for membership, applied mechanically by
 bindings is `stable`. Two independent implementations agreeing on a name is the
 best available evidence that the name is load-bearing rather than incidental.
 
-**262 symbols.** 66 of them are exported by all five bindings.
+`api-surface.json` carries the current count (`counts.by_tier`), and §6 lists
+every member, grouped by how many bindings export it.
 
 ### extension seam
 
@@ -127,7 +128,8 @@ Rust counterpart, a Rust performance knob that has no reason to exist in
 TypeScript. Being in this tier is not a demerit — it is a promise that the
 symbol is *reachable and documented*, and a warning that it is not portable.
 
-**641 symbols.** Known members, called out by name:
+Counted in `api-surface.json` (`counts.by_tier`). Known members, called out by
+name:
 
 - **Julia's build/inspection seam** — `BuildInspection`, `evaluate_expr`,
   `expanded_model`, `expand_flattened_refs`, `param_map`, `parameter_classes`,
@@ -154,7 +156,7 @@ each module's members.
 
 Everything else — and genuinely unreachable. **A symbol absent from
 `api-surface.json` must not be exported.** That is not a convention; it is what
-the six surface tests assert. There is no private section of the manifest,
+the five surface tests assert. There is no private section of the manifest,
 because privacy is expressed by absence.
 
 ### Capability profiles
@@ -171,10 +173,9 @@ distinguishable from "drifted away".
 
 **TypeScript and Go are deliberately non-simulating.** They read, write,
 analyse, and transform documents; they do not integrate them. A `simulate`
-missing from Go is conformance, not a gap. This matches
-`esm-libraries-spec.md` §5's own tier labels — TypeScript "Core + Analysis",
-Go "Core" — which are the one part of that section still accurate. Its label
-for Rust is not (see §11).
+missing from Go is conformance, not a gap. This matches the tier labels in
+`esm-libraries-spec.md` §5, which give TypeScript and Go "Core + Analysis" and
+no Simulation tier.
 
 ---
 
@@ -198,15 +199,15 @@ numerical ecosystem calls it:
 | `solve` | run to completion | — |
 | `init` | build a stepping iterator | — |
 
-So **Python takes `abstol` / `reltol` / `alg`, not scipy's `atol` / `rtol` /
-`method`**, and Rust's `SimulateOptions` field is `saveat`, not `output_times`.
-Neither is true today; both are in §8.
+So **Python's `solve` takes `abstol` / `reltol` / `alg`, not scipy's `atol` /
+`rtol` / `method`**, and Rust's `SolveOptions` fields are `alg` and `saveat`,
+not `solver` and `output_times`.
 
 The rationale is that these names travel with the *problem*, not the *solver*.
 A user who writes an ESM document and runs it from Julia, then from Python,
 should be tuning the same knob under the same name. Deferring to each
-language's local numerical convention is exactly how the current three-way split
-happened.
+language's local numerical convention is how three bindings end up spelling one
+knob three ways.
 
 ---
 
@@ -239,9 +240,10 @@ other two take `base_path`.
 
 Options ride on the entry points they apply to: `metaparameters` and
 `base_path` on all three; TypeScript's `canonical` (tagged numeric literals,
-decided during JSON DECODING) on `loadPath` and `loadString` only — a
-`loadDocument` caller has already decoded and should run `losslessJsonParse`
-itself.
+decided during JSON DECODING) on `loadPath` and `loadString` only. A
+`loadDocument` caller has already decoded the JSON, so the option has nothing
+to act on there; a caller who wants tagged literals passes the text to
+`loadString` with `canonical: true`.
 
 Per-binding decorations, sanctioned under §2.2:
 
@@ -291,20 +293,17 @@ and Go have no default arguments and so cannot express `to_json(file,
 indent=0)`. Python (`to_json(file, *, indent=2)`) and TypeScript
 (`toJson(file, {indent, canonical})`) also take the option, and their
 `to_json_compact` wraps it. Julia takes no `indent`: `JSON3.write` ignores the
-keyword, so `save(file, path)` has been emitting UNINDENTED bytes all along
-despite passing `indent=2`, and an option that does nothing is worse than
-none. Go additionally keeps `WritePathCompact` (extension tier), the rename of
-its `SaveCompactToFile`.
+keyword, and an option that does nothing is worse than none. Go additionally
+exports `WritePathCompact` (extension tier).
 
 The COMPACT form is byte-identical across bindings: Python pins
 `separators=(",", ":")`, since `json.dumps(indent=None)` otherwise emits
 `", "` / `": "` where serde_json, `encoding/json` and `JSON.stringify` emit
 nothing.
 
-Julia's `to_json` shares its name with the graph serializer (`to_json(::Graph)`,
-graph.jl) and dispatches on argument type. Python's graph serializer is
-re-exported as `to_json_graph`, matching the `toJsonGraph` / `to_json_graph`
-that TypeScript and Rust already used.
+The graph serializer is `to_json_graph` in all five (§8 item 8). Julia's
+`to_json` also keeps `Graph` methods, a deprecated alias of `to_json_graph`
+that dispatches on argument type and renders byte-identical output.
 
 **What it replaced:**
 
@@ -353,27 +352,38 @@ publicly. `VERSION` is **deleted** in TypeScript and Rust.
 carries `schema_errors`, `structural_errors`, `unit_warnings`, and `is_valid`.
 Total: it reports, it does not raise.
 
-**Today:** all five export it and none raises. Two divergences:
+**Today:** all five export it, all five take only a **typed (loaded)
+document**, all five return the four-field result, and none raises on an
+invalid document. JSON text goes through the separate `validate_text`, which
+also reports a load failure (malformed JSON, a schema violation, an
+unresolvable mount) as a `ValidationResult` instead of raising. Julia and
+Python also have `validate_path` for a file (§8 item 13).
 
-- **Input type.** Rust and Go accept only a typed `&EsmFile` / `*ESMFile`.
-  TypeScript accepts JSON text or an object. Julia accepts an `EsmFile` **or a
-  path**. Python accepts an `EsmFile`, JSON text, a dict, **or a path**. Go's
-  text convenience is the separate `ValidateText(jsonStr)` (§8 item 13).
-- **Return shape.** All five return the four-field result. Go's `Validate`
-  returned the legacy `*DetailedValidationResult` (`Valid` + a flat `Messages`
-  list) until phase 6, with the four-field shape on a different function,
-  `ValidateFile(file, jsonStr)`; that function is now `ValidateText(jsonStr)`
-  and `ValidateStructural` is what still returns the legacy shape.
-- Rust's and Go's `validate` perform **no schema validation at all** — their
-  `schema_errors` is empty by construction, because a typed document can only
-  exist by having already passed the schema at load.
+| Binding | `validate` | `validate_text` | `validate_path` |
+|---|---|---|---|
+| Julia | `validate(file::EsmFile)` | `validate_text(text; base_path)` | `validate_path(path)` |
+| TypeScript | `validate(document, { basePath })` — a loaded `EsmFile`, or a plain object of the same shape; a string throws a `TypeError` naming `validateText` | `validateText(text, { basePath })` | — |
+| Python | `validate(esm_file, *, base_path=None)` — anything but an `EsmFile` raises `TypeError` | `validate_text(text, *, base_path=None)` | `validate_path(path, *, base_path=None)` |
+| Rust | `validate(&EsmFile)` | `validate_text(json_str, base_path: Option<&Path>)`; `validate_complete` is its deprecated alias | — |
+| Go | `Validate(*ESMFile)` | `ValidateText(jsonStr, opts ...LoadOption)` | — |
+
+One divergence remains, in **schema errors**. Julia's `validate` re-runs the
+schema check over the re-serialized document, and TypeScript's runs it over
+whatever object it is handed, so either can report `schema_errors`. Python's,
+Rust's and Go's `validate` run **no schema check at all**: their
+`schema_errors` is empty by construction, because a typed document can only
+exist by having already passed the schema at load. In all five the schema
+check on text belongs to `validate_text`.
+
+Go's `ValidateStructural` (see below) still returns the legacy
+`*DetailedValidationResult` shape (`Valid` + a flat `Messages` list).
 
 #### `validate_schema`
 
-`validate_schema(data) -> [SchemaError]` — Julia and TypeScript return one
-structured `SchemaError{path, keyword, message}` per violation, matching AJV's
-`allErrors`. Rust's `validate_schema(&Value) -> Result<(), EsmError>` collapses
-every violation into one `"; "`-joined string. Python and Go do not export it.
+`validate_schema(data) -> [SchemaError]` — Julia and TypeScript export it and
+return one structured `SchemaError{path, keyword, message}` per violation,
+matching AJV's `allErrors`. Python, Rust and Go do not export it; their schema
+check is reached through the `load_*` entry points and `validate_text`.
 
 #### `validate_structural`
 
@@ -411,10 +421,10 @@ Divergences:
 - **`system_kind` arity.** Settled in phase 6 (§8 item 11): Go took a second
   `domain *Domain` argument that neither its `SystemKind` nor its
   `EffectiveSystemKind` body read, and has dropped it. All five now take the
-  model and nothing else. Go now exports the whole family the item rules —
-  `system_kind` (derived), `declared_system_kind` (the explicit field, nullable)
-  and `effective_system_kind` (`declared ?? derived`); the other four are
-  landing theirs.
+  model and nothing else. Julia, TypeScript, Python and Go export the whole
+  family the item rules — `system_kind` (derived), `declared_system_kind` (the
+  explicit field, nullable) and `effective_system_kind` (`declared ?? derived`).
+  Rust exports only `system_kind`.
 - **Return type.** TypeScript and Rust return a `SystemKind` enum; Julia,
   Python and Go return a bare string.
 - **`observed_definitions`** has an extra `bare_only: bool = False` parameter in
@@ -463,15 +473,12 @@ Divergences:
 **Canonical.** All three accept the full render domain: `Expr`, `Equation`,
 `Model`, `ReactionSystem`, `EsmFile`. Total.
 
-**Today the accepted domain differs three ways:**
-
-| Binding | `to_ascii` accepts | `to_unicode` / `to_latex` accept |
-|---|---|---|
-| TypeScript | `Expr`, `Equation`, `Model`, `ReactionSystem`, `Reaction`, `EsmFile` | same |
-| Python | `Expr`, `Equation`, `Model`, `ReactionSystem`, `EsmFile` | same |
-| Julia | all of the above | **`Expr`/`Equation` only — containers throw `ArgumentError`** |
-| Rust | **`&Expr` only** | `&Expr` only |
-| Go | `Expr`, `Equation`, `Model`, `ReactionSystem`, `EsmFile` | same |
+**Today** all five accept the full domain in all three renderers (§8 item 18);
+TypeScript additionally accepts a single `Reaction`. A container has no
+mathematical notation, so a `Model`, `ReactionSystem` or `EsmFile` renders as
+its esm-spec §6.3 text summary. Rust takes any `T: TextRenderable`, which
+`Expr`, `Equation` and the three containers implement; Go takes its untyped
+`Expression` and switches on the dynamic type.
 
 ### 5.6 Flatten
 
@@ -490,18 +497,15 @@ additionally overload on `Model` / `ReactionSystem` (`flatten_model` in Rust).
 
 | Canonical | Julia | TypeScript | Python | Rust | Go |
 |---|---|---|---|---|---|
-| `lower_enums` | mutates, returns file, raises **`ParseError`** | **pure**, returns new file, throws `EnumLoweringError` | mutates, returns file, raises `EnumLoweringError` | mutates a raw `&mut Value`, returns `Result<(), EnumLoweringError>` | **pure**, returns `(*ESMFile, error)` carrying `*EnumLoweringError`; `LowerEnumsMut` is the in-place twin |
-| `resolve_subsystem_refs` | `resolve_subsystem_refs!(file, base_path)`, raises `SubsystemRefError` | **`async`**, returns `Promise<void>`; the only binding that resolves remote `http(s)://` refs | mutates, returns `None` | takes a raw `&mut Value` + `&Path` | returns `error` |
+| `lower_enums` | **pure**, returns a new file; `lower_enums!` is the in-place twin; raises `EnumLoweringError` | **pure**, returns a new file, throws `EnumLoweringError` | **pure**, returns a new file; `lower_enums_mut` is the in-place twin; raises `EnumLoweringError` | **pure**, `(&EsmFile) -> Result<EsmFile, EnumLoweringError>`; `lower_enums_mut` is the in-place twin, `lower_enums_raw` the raw-`Value` seam | **pure**, returns `(*ESMFile, error)` carrying `*EnumLoweringError`; `LowerEnumsMut` is the in-place twin |
+| `resolve_subsystem_refs` | `resolve_subsystem_refs!(file, base_path)`, raises `SubsystemRefError` | **`async`**, returns `Promise<void>`; the only binding that resolves remote `http(s)://` refs | mutates, returns `None` | `(&mut EsmFile, &Path) -> Result<(), DiagnosticError>`; `resolve_subsystem_refs_raw` is the raw-`Value` seam | returns `error` |
 | `resolve_template_machinery` | `(raw, base_path; metaparameters, load_ref)` | `(rawData, basePath, {metaparameters, readFile, validateSchema})` | `(raw, base_path, metaparameters)` — no loader seam | `(&Value, &Path, &BTreeMap)` — no loader seam | **not exported** |
 | `expand_coupling_imports` | returns the coupling list | returns `CouplingEntry[] \| undefined` | returns the list | returns `Result<Option<Vec<_>>, _>` | **not exported** |
 
-> **⚠ Three cross-cutting divergences here.** (a) **Rust takes untyped raw
-> `serde_json::Value` documents** for `lower_enums`, `resolve_subsystem_refs`,
-> `resolve_template_machinery` and `prepare`, where every other binding takes a
-> typed `EsmFile`. (b) **TypeScript is the only non-mutating `lower_enums`**,
-> and the only `async` `resolve_subsystem_refs`. (c) **Julia raises `ParseError`
-> from `lower_enums`** where the other four raise a dedicated
-> `EnumLoweringError`.
+> **⚠ Two cross-cutting divergences here.** (a) **`resolve_template_machinery`
+> takes the raw, undecoded document in all four bindings that export it**, not
+> a typed `EsmFile` (§8 item 14). (b) **TypeScript's `resolve_subsystem_refs`
+> is the only `async` one**, and the only one that resolves remote refs.
 
 ### 5.8 Simulation (Julia, Python, Rust)
 
@@ -522,8 +526,12 @@ compiler_report(prob) -> per-rule tier record
 EnsembleProblem(prob, rewrite) -> EnsembleProblem
 ```
 
-A `Solution` carries `retcode` (SciML `ReturnCode`) and is indexed **by variable
-name**. Errors are `SimulateError`.
+A `Solution` carries `retcode` (SciML `ReturnCode`) and is read **by flattened
+variable name**, not by state-vector position (`esm-libraries-spec.md`
+§2.5.7). The key is the binding's own name type: Julia indexes by `Symbol`
+through `SymbolicIndexingInterface` (`sol[Symbol("Decay.N")]`; a `String` key
+is not accepted), Python by `str` (`sol["Decay.N"]`), Rust through
+`Solution::get(&str)`. Errors are `SimulateError`.
 
 **Per-binding type spelling.** The canonical name is `esm_problem`; §2.1's
 consistency rule fixes the transliteration. Julia's only other `Esm`-prefixed
@@ -831,11 +839,7 @@ a raw file whose `faq` ranges name an imported axis would otherwise report it as
 `derive_odes(system) -> Model` and `stoichiometric_matrix(system) -> Matrix`
 (rows = species, columns = reactions). All five, as of phase 6 — Go exported
 neither, so two symbols that four bindings agreed on were `stable` with a hole
-in exactly one column, which is the drift §2 and §3 exist to catch. (It is NOT
-a tier violation: `esm-libraries-spec.md` §5.5 declares Go "Core", not
-"Core + Analysis" — see §3's capability table, which says so and calls that
-label the one part of §5 still accurate. Phase 5's G-3 item named
-"Core + Analysis parity" as a GOAL; the spec never declared it as fact.)
+in exactly one column, which is the drift §2 and §3 exist to catch.
 
 Rust and Go have an error channel on `derive_odes` (`DeriveError`, `error`).
 **TypeScript alone returns a struct** from `stoichiometric_matrix` —
@@ -1248,13 +1252,11 @@ allowed to differ.
 | Rust `intern` / `performance` | Rust | Hash-consing and allocator knobs. Feature-gated (`parallel`, `custom_alloc`) and performance-shaped, not semantics-shaped. |
 | Rust `simulate_array` | Rust | The native-only spatial/PDE backend. Its surface tracks the backend, not the format. |
 | Runtime I/O | Julia, Python, Rust | Providers, refresh callbacks, sinks, checkpoints. The concrete implementations live in EarthSciIO; these are the protocol the host binds to. |
-| Go graph exporters | Go | `DOTExporter` / `JSONExporter` / `MermaidExporter` and their `New*` constructors are a Go-idiomatic object surface with no counterpart elsewhere (§8 replaces the free functions, not the exporters). |
-| Go diagnostic codes | Go | The ~84 `Code*` / `Error*` / `Role*` / `SystemKind*` constants. Their *values* are conformance-pinned by the shared fixture corpus; their Go *identifiers* are not. |
+| Go diagnostic codes | Go | The `Code*` / `Error*` / `Role*` / `SystemKind*` constants. Their *values* are conformance-pinned by the shared fixture corpus; their Go *identifiers* are not. |
 | TypeScript analysis | TypeScript | The complexity/CSE/differentiation toolkit under `src/analysis/`. A TypeScript-only authoring aid. |
 
-Go carries the largest extension surface (222 of its 383 symbols) — a direct
-consequence of §8's Go-side renames not having happened yet, plus the
-diagnostic-code constants.
+Go carries the largest extension surface, most of it the diagnostic-code
+constants.
 
 ---
 
@@ -1282,10 +1284,10 @@ deprecated alias for one minor, then removed at the next major (§10).
 | 12 | `validate` return shape | Go's `Validate` returns the legacy `DetailedValidationResult`; the four-field shape everyone else returns is Go's *other* function, `ValidateFile`. | Go's `Validate` returns the four-field `ValidationResult`; `ValidateFile` folds into it. **DONE (phase 6).** Go's `Validate` returns the four-field `ValidationResult`; `ValidateFile` folded in. `SchemaErrors` is always empty, because a `*ESMFile` can only exist by having passed the schema at load — matching Rust's documented behaviour. | Go |
 | 13 | `validate` input type | Rust and Go accept only a typed document; Julia also accepts a path; Python accepts path/text/dict/document; TypeScript accepts text/object. | `validate(file)` takes a typed document everywhere. Path and text convenience become `validate_path` / `validate_text`. **TypeScript DONE (phase 6):** `validate(document)` is typed (and throws a `TypeError` naming `validateText` if handed a string at runtime, since a JS caller has no compiler to stop them); `validateText(text)` added. TypeScript deliberately has **no** `validatePath`: `@earthsciml/ast` targets the browser as well as Node and exposes no synchronous filesystem read, so a `validatePath` here would be a Node-only stub that breaks the bundle. A caller reads the file and calls `validateText(text, { basePath })`. **CLOSED (phase 6b): Julia gained `validate_text(text; base_path)`, so the symbol is 5/5.** Phase 6's Julia agent correctly declined it at the time — this row scoped the work to RENAMING an existing convenience, and Julia had no text one to rename — but at four bindings out of five it had become a parity hole rather than a rename, which is a different question. Julia's version is the text twin of its existing `validate_path` and shares `load_failure_structural_error` with it. Its bad-input behaviour was MEASURED against the other four rather than assumed: Python's `validate_text` and Go's `ValidateText` both return `is_valid=false` with populated `schema_errors` for schema-invalid AND malformed text and neither raises, so Julia renders three channels — a `SchemaValidationError`'s structured errors straight into `schema_errors`, a codeless `ParseError` (malformed JSON) as one root `SchemaError` under the `parse` keyword, and a `(code, path)`-carrying rejection into `structural_errors`. Julia now returns the same error counts as Python on both bad inputs. **One residual, recorded not fixed:** `validate_path` renders only the third channel and still RAISES on schema-invalid or malformed input, so Julia's two convenience entry points differ on bad input. Changing `validate_path` is a behaviour change to a `stable` function nobody asked for and is left alone. | all five |
 | 14 | raw-`Value` entry points | Rust takes untyped `serde_json::Value` for `lower_enums`, `resolve_subsystem_refs`, `resolve_template_machinery` and `prepare`, where every other binding takes a typed document. | Add typed wrappers at the canonical names; keep the raw forms as `*_raw` extension seams. **PARTLY DONE, PARTLY REFUSED (phase 6).** `lower_enums` and `resolve_subsystem_refs` gained typed wrappers with `*_raw` seams. `prepare` is moot — phase 4 deleted it. `resolve_template_machinery` was REFUSED with evidence: the premise says every other binding takes a typed document, and all three measured take raw — Python `(raw: Any, …)`, Julia `(raw_data, …)`, TypeScript `(rawData: unknown, …)`. A typed wrapper would have made Rust the only non-conformant binding. | Rust |
-| 15 | `lower_enums` mutation | TypeScript is pure; Julia, Python, Rust and Go mutate in place. Julia raises `ParseError` where the rest raise `EnumLoweringError`. | Canonicalize on the pure form; mutating variants take Julia's `!`. Julia raises `EnumLoweringError`. **TypeScript VERIFIED (phase 6):** `lowerEnums(file)` returns a new document and shares unchanged subtrees with the input — it never writes through its argument — and raises `EnumLoweringError` (an `EsmDiagnosticError` subclass carrying a registry-backed `code`), not a bare `Error`. Nothing to change. | Julia, Python, Rust, Go |
+| 15 | `lower_enums` mutation | TypeScript is pure; Julia, Python, Rust and Go mutate in place. Julia raises `ParseError` where the rest raise `EnumLoweringError`. | Canonicalize on the pure form; mutating variants take Julia's `!`. Julia raises `EnumLoweringError`. **TypeScript VERIFIED (phase 6):** `lowerEnums(file)` returns a new document and shares unchanged subtrees with the input — it never writes through its argument — and raises `EnumLoweringError` (an `EsmDiagnosticError` subclass carrying a registry-backed `code`), not a bare `Error`. Nothing to change. **DONE:** `lower_enums` is pure in all five; the in-place twins are Julia's `lower_enums!` and `lower_enums_mut` in Python, Rust and Go (`LowerEnumsMut`), and Julia raises `EnumLoweringError`. | Julia, Python, Rust, Go |
 | 16 | `substitute` cycles | ~~Only Go detects substitution cycles; the other four loop.~~ **RESOLVED — the premise was false, and inverted.** The other four never looped: all four are single-pass, so a cyclic binding set terminates on its own, exactly as CONFORMANCE_SPEC.md §2.2.3 rule 1 requires. Go was the sole non-conformant binding: it expanded replacements *transitively*, which (a) silently corrupted chained renames — `substitute("a", {a: b, b: c})` returned `"c"`, not `"b"`, mis-applying every overlapping rename through `renameRawExpr` — and (b) made cyclic sets non-terminating, which was then patched with cycle detection instead of by removing the transitivity. | Go made single-pass; `SubstitutionError` / `cyclic_substitution` removed as unnecessary. Pinned cross-binding by `tests/substitution/cyclic_bindings.json`. | Go (done) |
 | 17 | `build_reference_graph` index sets | Python threads `index_sets` as a third argument, Rust via a separate function, **Julia not at all** — it reads the pre-0.8.0 nested shape. Julia and Python resolve v0.8.0 documents differently. | **Ruled (phase 6), after a correction.** The first ruling said the canonical signature was `build_reference_graph(document)`. That is not implementable: the function builds the graph of ONE MODEL and takes the model name in all four bindings that have it, and the document-level entry point already exists as `resolve_references(document)`. The Julia agent refused it and was right. Canonical is **`build_reference_graph(model, model_name, index_sets = <none>)`** — the document-scoped registry is an OPTIONAL TRAILING argument, not a separate function name and not required. Omitted, it falls back to a model-nested `index_sets` (the pre-0.8.0 shape); on a collision the model-nested one wins, which is Go's existing merge rule. Rust folds `build_reference_graph_with_index_sets` in; Python already conforms; Go's third argument becomes optional; TypeScript gains the function. **The Julia bug is real and confirmed**: Julia read `model["index_sets"]` where `esm-schema.json` declares `index_sets` only at `/properties/index_sets`, so `resolve_references` THREW `ReferenceResolutionError(E_REF_UNDECLARED_INDEX_SET)` on any 1.0.0 document with a top-level registry, where Python, Rust and Go all returned a graph. **TypeScript ADDED (phase 6):** ported from Python (the most complete of the four: it registers every node before resolving any reference, so a forward `from_faq` resolves), except for the registry rule, which follows Go and Rust: the model-nested pre-0.8.0 `index_sets` is MERGED on top of the document-scoped one, so a model-level entry wins a collision, where Python treats the two as either/or. Verified against the Python binding over all shared `tests/valid/**` fixtures — vertices, edges and topological order identical, zero mismatches, under both registry rules, because no shared fixture carries the two shapes at once. | Julia, Rust, Go, TypeScript |
-| 18 | display domain | `to_unicode` / `to_latex` accept containers in TypeScript and Python, throw on them in Julia, and accept expressions only in Rust and Go. | All three renderers accept the full domain in every binding. **TypeScript VERIFIED (phase 6):** `toUnicode` / `toLatex` / `toAscii` (and `toMathML`) all take `Expr | Equation | Model | ReactionSystem | Reaction | EsmFile`. Nothing to change. | Julia, Rust, Go |
+| 18 | display domain | `to_unicode` / `to_latex` accept containers in TypeScript and Python, throw on them in Julia, and accept expressions only in Rust and Go. | All three renderers accept the full domain in every binding. **TypeScript VERIFIED (phase 6):** `toUnicode` / `toLatex` / `toAscii` (and `toMathML`) all take `Expr | Equation | Model | ReactionSystem | Reaction | EsmFile`. Nothing to change. **DONE:** Julia, Rust and Go accept the full domain too (§5.5). | Julia, Rust, Go |
 | 19 | Go initialisms | Go has both `OpIC` and `ErrorIcInReactionSystem`; also `ToAscii` and `FmtAscii` against §2.1's `ASCII`. | `ErrorICInReactionSystem`, `ToASCII`, `FmtASCII`. **DONE (phase 6),** plus an audit finding. The three named renames landed. Go then audited all 385 exported names, every method on an exported type, and every exported struct field against §2.1, and found two further violations: `UnitWarning.LhsUnits` and `.RhsUnits`, left open for a ruling. **CLOSED (phase 6b): renamed to `LHSUnits` / `RHSUnits`.** The ruling is that Go's own house style already decided it — `FlattenedEquation.LHSString` / `.RHSString` (`pkg/esm/flatten.go`) spell the same two initialisms uppercase, so these two fields were the outliers, not the precedent. The wire contract is untouched and was VERIFIED so: the `json:"lhs_units"` / `json:"rhs_units"` tags are unchanged, and a `UnitWarning` marshal→unmarshal→marshal round trip is byte-identical before and after the rename. The `"lhs_units"` / `"rhs_units"` keys `promoteUnitFindings` writes into `StructuralError.Details` are likewise unchanged. Struct fields remain non-manifest symbols, so `api-surface.json` does not move. | Go |
 | 20 | `component_graph` alias | TypeScript exports **both** `component_graph` (snake_case, violating §2) and `componentGraph`. | **DONE (phase 6).** `component_graph` is deleted. It was kept only for the (since-deleted) editor package's web components, which had already migrated to `componentGraph`; no caller outside this binding's own tests remained. | TypeScript |
 | 21 | `compiler` | Each binding picks its build strategy by inspecting the document, and a caller can neither ask for one nor read back which ran. Julia's stable entry point always builds the tree walk, so its XLA emitter is unreachable from `esm_problem`; Rust routes on whether the document is arrayed; Python routes on document content between two pathways that disagree numerically. | `esm_problem` gains the keyword `compiler` over §5.8's closed vocabulary (`interpreter` / `native` / `xla` / `mtk` / `sympy`), defaulting to a **strict** `native`, and every Problem exposes `compiler` and `compiler_report`. Julia `compiler::Symbol`, Python `compiler: str \| None`, Rust `ProblemOptions.compiler: Option<Compiler>` over a new `Compiler` enum. Adding an optional keyword is a minor (§10). Flipping the default is a behaviour change and lands together with the conformance tier that measures what it refuses (`CONFORMANCE_SPEC.md` §5.44). **DONE.** Implemented in Julia, Rust and Python: the keyword, the strict `native` default, the three selection failures and the two readbacks are live in all three, and §5.44's compiler-agreement tier carries the goldens the refusals are measured against. The specialty members land per binding on the same one-way ratchet: Python's `sympy` and Julia's `mtk` are reachable from `esm_problem` (Julia's needs ModelingToolkit loaded and is the one compiler that runs the events and implicit equations of `CONFORMANCE_SPEC.md` §5.39); Rust's `xla` reached `esm_problem` on 2026-09-22 — the emitter over the tape now builds the Problem's right-hand side and the Jacobian differenced out of it, and rust is `bindings_required` for `xla` in that tier, on a build that has the feature and the extension. Julia's `:xla` reached `esm_problem` too: the direct StableHLO emitter builds the Problem's right-hand side, compiled once per build, and hands the solver a finite-difference Jacobian through it, so every Julia member of the vocabulary is reachable from the stable entry point. | Julia, Python, Rust |
@@ -1299,7 +1301,7 @@ deprecated alias for one minor, then removed at the next major (§10).
 
 ## 9. How the surface is enforced
 
-Six tests, one per binding, each asserting in **both** directions that the
+Five tests, one per binding, each asserting in **both** directions that the
 binding's declared surface equals `api-surface.json`:
 
 | Binding | Test | Reads |
@@ -1368,7 +1370,7 @@ python3 scripts/extract-api-surface.py --check
 A **deprecation alias** keeps the old name exported and in the manifest, in the
 same tier, for at least one minor release. The alias is a manifest entry with
 multiple spellings for that binding — the shape `apply_unit_conversion` and
-`component_graph` already use — so the surface tests keep asserting both.
+`derive_odes` already use — so the surface tests keep asserting both.
 
 Promoting `extension` → `stable` is a minor. Demoting `stable` → `extension` is
 a major, because it removes a compatibility promise.
@@ -1382,10 +1384,23 @@ The §8 SciML renames are therefore major-or-aliased, not silent.
 | Name | Binding | Since | Replacement | Removed in |
 |---|---|---|---|---|
 | `build_evaluator` | Julia | §8 item 23 | `esm_problem(input, tspan; compiler = …)`; `prob.f!` / `prob.u0` / `prob.p` / `prob.var_map`, `forcing_buffers(prob)`, `forcing_buffer_index(prob)`, `compiler_report(prob)`; `compiler = :xla` for what `form = :oop` handed a compiled backend | the next minor |
+| `to_json(::Graph)` methods | Julia | §8 item 8 | `to_json_graph` | the next major |
+| `deriveODEs` | TypeScript | §8 item 5 | `deriveOdes` | the next major |
+| `getSupportedMigrationTargets` | TypeScript | §8 item G-2 | `supportedMigrationTargets` | the next major |
+| `CLOSED_FUNCTION_NAMES` | TypeScript | §8 item 4 | `closedFunctionNames()` | the next minor |
+| the container-suffixed edit operations (`add_variable_to_model`, `remove_coupling_from_file`, `merge_esm_files`, …) | Python | §8 item 7 | the bare verbs (`add_variable`, `remove_coupling`, `merge`, …) | the next major |
+| `validate_complete` | Rust | §8 item 13 | `validate_text` | the next major |
+| `get_supported_migration_targets` | Rust | §8 item G-2 | `supported_migration_targets` | the next major |
+| `build_reference_graph_with_index_sets` | Rust | §8 item 17 | `build_reference_graph` with its trailing `index_sets` argument | the next major |
+| `ReferenceError` | Rust | §8 item 10 | `ReferenceResolutionError` | the next major |
+| `Compile` | Rust | §8 item 22 | `Rhs` | the next minor |
 
-**The alias stays exported until it is removed**, as the rule above requires.
-Its purpose is that a downstream keeps running while it migrates, and a
-downstream does reach the bare name: EarthSciASTDiff calls `build_evaluator(…)`
+The removal release follows the alias's tier in the table above: a spelling of
+a `stable` symbol leaves at a major, an `extension` one at a minor.
+
+**An alias stays exported until it is removed**, as the rule above requires.
+Its purpose is that a downstream keeps running while it migrates. For
+`build_evaluator` a downstream does reach the bare name: EarthSciASTDiff calls `build_evaluator(…)`
 after `using EarthSciAST` throughout its tests and scripts, which an unexported
 alias would answer with `UndefVarError` rather than the deprecation warning. It
 therefore stays in the manifest and in §6's count until the release that
