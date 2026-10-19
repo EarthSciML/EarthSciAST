@@ -458,9 +458,8 @@ except PackageNotFoundError:  # pragma: no cover - source-tree import
     __version__ = "0.0.0+unknown"
 
 #: This package's OWN version -- the cross-binding spelling of ``__version__``.
-#: Distinct from :data:`SCHEMA_VERSION`, the `.esm` FORMAT version. The two are
-#: unrelated numbers; `VERSION` used to mean the schema version in TypeScript
-#: and the package version in Rust, so the name is retired everywhere.
+#: Distinct from :data:`SCHEMA_VERSION`, the `.esm` FORMAT version; the two are
+#: unrelated numbers.
 LIBRARY_VERSION: str = __version__
 
 # Streamlined public API - only Core + Analysis + Simulation tier functionality

@@ -14,10 +14,10 @@ class EarthSciAstError(Exception):
 class ParseError(EarthSciAstError, ValueError):
     """Raised when JSON data cannot be parsed into ESM objects.
 
-    Surfaced by the public ``load()`` / ``_parse_expression`` path when the
-    input is structurally invalid (e.g. an operator missing a required field).
-    Subclasses ``ValueError`` as well as ``EarthSciAstError`` so existing
-    callers that ``except ValueError`` continue to catch it.
+    Raised by :func:`load_path` / :func:`load_string` / :func:`load_document`
+    when the input is structurally invalid (e.g. an operator missing a required
+    field). Subclasses ``ValueError`` as well as ``EarthSciAstError``, so
+    ``except ValueError`` catches it.
     """
 
 

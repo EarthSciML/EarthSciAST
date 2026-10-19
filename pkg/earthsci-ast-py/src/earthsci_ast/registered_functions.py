@@ -524,8 +524,8 @@ class EnumLoweringError(EarthSciAstError, ValueError):
     Carries the stable diagnostic ``code`` (``unknown_enum`` /
     ``unknown_enum_symbol``) as a structured attribute — like
     :class:`ClosedFunctionError` — instead of interpolating it into the message
-    text. Also subclasses :class:`ValueError` so callers that historically
-    caught the bare ``ValueError`` this path raised remain compatible.
+    text. Also subclasses :class:`ValueError`, so ``except ValueError`` catches
+    it.
     """
 
     def __init__(self, code: str, message: str) -> None:

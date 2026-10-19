@@ -160,7 +160,9 @@ class ExprNode:
     output: int | str | None = field(default=None, metadata={"kind": "scalar"})
 
 
-# Recursive type definition for expressions
+#: An expression (esm-spec §4): a numeric literal (``int`` or ``float``), a
+#: variable or parameter reference (``str``), or an operator node
+#: (:class:`ExprNode`) whose ``args`` are themselves expressions.
 Expr = Union[int, float, str, ExprNode]
 
 
@@ -351,17 +353,15 @@ class Distribution:
     high: float | list[float] | None = None
     # Symmetric positive-semidefinite covariance matrix, row-major. Shared by
     # normal and lognormal; mutually exclusive with std / sigma. This is how the
-    # format encodes CORRELATED noise: one vector-valued parameter with a `cov`,
-    # instead of the opaque correlation-group tags 0.x used and never gave a
-    # matrix for.
+    # format encodes CORRELATED noise: one vector-valued parameter with a `cov`.
     cov: list[list[float]] | None = None
 
 
 @dataclass
 class DataSourceBinding:
     """Binds a parameter to ONE variable of a ``data_sources`` entry (esm-spec
-    §8.5). The 0.x ``DataLoaderVariable`` minus ``units``: the units are the
-    parameter's own, declared once on the parameter instead of twice.
+    §8.5). It carries no ``units``: the units are the parameter's own, declared
+    once on the parameter.
 
     ``select`` overrides the source-level default for this parameter only, which
     is how a full-grid field and a prefix of it are both read from one
@@ -383,9 +383,9 @@ class DataSourceBinding:
 @dataclass
 class FunctionalUpdate:
     """A registered handler computing a parameter's new value when its update
-    fires (esm-spec §5.4). The 0.x event ``functional_affect`` relocated: a
-    handler's only write channel was ``modified_params``, so it now lives ON the
-    parameter it writes and needs no write list at all.
+    fires (esm-spec §5.4). It lives ON the parameter it writes, so it needs no
+    write list: ``read_vars`` / ``read_params`` name what the handler reads and
+    ``config`` carries its static configuration.
     """
 
     handler_id: str
@@ -405,11 +405,11 @@ class ParameterUpdate:
     five each take EXACTLY ONE value form — ``expression``, ``from_source``
     (wire key ``from``), or ``handler``.
 
-    Together the six subsume three constructs 0.x kept apart: the ``brownian``
-    variable type (now ``wiener``), the ``discrete`` type with its
-    ``RefreshTrigger`` (now ``schedule`` / ``data`` / ``remesh``), and the
-    ``discrete_parameters`` event lists with their ``functional_affect`` (now
-    ``condition`` / ``crossing``). It is also the SOLE seed of the DISCRETE
+    ``schedule`` fires at preset ``times`` and/or every ``interval``;
+    ``condition`` at the end of any step where ``when`` is true; ``crossing``
+    when ``when`` crosses zero (located by root-finding); ``data`` when the
+    named ``data_sources`` entry advances a record; ``remesh`` on a
+    mesh-topology change. ParameterUpdate is also the SOLE seed of the DISCRETE
     cadence class (CONFORMANCE_SPEC §5.7.2).
     """
 
@@ -826,10 +826,9 @@ class DiscreteEventTrigger:
 class DiscreteEvent:
     """An event that occurs at discrete time points.
 
-    Affects UNKNOWNS ONLY (esm-spec §5.5). From 1.0.0 a parameter carries its own
-    `update` block, so there is no `discrete_parameters` list and no
-    `functional_affect` here — a handler only ever wrote parameters, and now
-    lives on the parameter it writes.
+    Affects UNKNOWNS ONLY (esm-spec §5.5). A parameter that changes at
+    discrete times declares that in its own ``update`` block
+    (:class:`ParameterUpdate`), not here.
     """
 
     name: str
@@ -901,7 +900,7 @@ class DataSource:
     A named external data source reduced to pure I/O: it locates, reads,
     decodes, slices and filters bytes on disk (esm-spec §8).
 
-    From 1.0.0 it exposes NO variables and is NOT a component — it cannot be a
+    It exposes NO variables and is NOT a component — it cannot be a
     coupling endpoint, a subsystem, or a scoped-name path root. A model consumes
     it by declaring a PARAMETER whose ``update`` names this source and binds one
     of its ``file_variable``s (:class:`DataSourceBinding`); the parameter owns
@@ -1111,7 +1110,9 @@ class CouplingImport(BaseCouplingEntry):
     bind: dict[str, str] = field(default_factory=dict)
 
 
-# Discriminated union of all coupling entry types
+#: One entry of a document's ``coupling`` list (esm-spec §10): any of the
+#: coupling dataclasses, told apart by their ``coupling_type`` field
+#: (:class:`CouplingType`), which is the wire ``type`` discriminator.
 CouplingEntry = Union[
     OperatorComposeCoupling,
     CouplingCouple,
