@@ -1971,26 +1971,30 @@ initial-condition map that was already declared in the ESM model.
 
 #### 5.2.1 `@earthsciml/ast` — Pure TypeScript Library
 
-**Dependencies:** `ajv` (schema validation). No framework, no DOM.
+**Dependencies:** `ajv` and `ajv-formats` (schema validation). No framework, no DOM.
 
 ```
 pkg/earthsci-ast-ts/
 ├── src/
-│   ├── types.ts          # TypeScript type definitions matching JSON Schema
-│   ├── parse.ts          # JSON → typed EsmFile
-│   ├── serialize.ts      # EsmFile → JSON
-│   ├── expression.ts     # Expr type, construction, traversal
-│   ├── pretty-print.ts   # Unicode, LaTeX, ASCII string formatters
-│   ├── substitute.ts     # Expression and model-level substitution
-│   ├── validate.ts       # Schema + structural + unit validation
-│   ├── units.ts          # Unit parsing and dimensional analysis
-│   ├── reactions.ts      # Stoichiometric matrix, ODE derivation
-│   ├── edit.ts           # Model editing operations
-│   ├── codegen.ts        # Julia/Python code generation from ESM
-│   └── index.ts          # Public API
-├── schema/
-│   └── esm.schema.json   # Bundled JSON Schema
-├── tests/
+│   ├── index.ts             # the public surface: every export is named here
+│   ├── generated.ts         # types generated from esm-schema.json
+│   ├── types.ts             # the type barrel over generated.ts, plus helpers
+│   ├── embedded-schema.ts   # the schema, bundled at build time
+│   ├── parse.ts             # loadPath / loadString / loadDocument, validateSchema
+│   ├── serialize.ts         # toJson / writePath
+│   ├── validate/            # validate / validateText and the structural checks
+│   ├── expression.ts        # traversal, freeVariables, simplify
+│   ├── substitute.ts        # substitute and the model / reaction-system forms
+│   ├── pretty-print.ts      # toUnicode / toLatex / toAscii
+│   ├── flatten.ts           # flatten (§4.7.5)
+│   ├── reactions.ts         # deriveOdes, stoichiometricMatrix
+│   ├── classification.ts    # odeStates, systemKind, ... (esm-spec §6.3.1)
+│   ├── units.ts             # unit parsing and dimensional checks
+│   ├── edit.ts              # the §4 editing operations
+│   ├── graph.ts             # component and expression graphs (§4.8)
+│   ├── codegen.ts           # the scalar expression evaluator (§5.2.2)
+│   └── analysis/            # complexity, common subexpressions, differentiation
+├── scripts/                 # schema → generated.ts / embedded-schema.ts / validator
 └── package.json
 ```
 
@@ -2067,60 +2071,29 @@ type DiscreteEventTrigger =
 
 Types should be auto-generated from the JSON Schema where possible (using `json-schema-to-typescript`), then augmented with utility functions.
 
-#### 5.2.2 Code Generation
+#### 5.2.2 Expression Evaluation
 
-`@earthsciml/ast` provides code generation for backend simulation. Code generation covers **models and reaction systems** — their variables, parameters, equations, reactions, and events. Coupling and domain configuration are emitted as structured comments or stubs that the user can complete manually.
-
-**Scope:** Code generation must handle:
-
-- Model variables (state, parameter, observed) with units and defaults.
-- Model equations (ODE equations with full expression translation).
-- Reaction system species, parameters, and reactions.
-- Events (continuous and discrete) with affect equations.
-
-Code generation does **not** need to handle (these are emitted as TODO comments):
-
-- Coupling resolution (the generated code defines individual systems; the user composes them).
-- Domain setup (emitted as commented-out boilerplate with values from the file).
-- Data sources, update handlers, and operators (runtime-specific; emitted as placeholder comments with the source / `handler_id` / operator ID).
+`@earthsciml/ast` does not simulate (API_SPEC.md §3) and does not generate code for another language. What it has instead is a tree-walking scalar evaluator in `codegen.ts`, which evaluates one expression against numeric bindings for its free variables. The library uses it itself, for `simplify`'s constant folding, for resolving observed variables and for unit-conversion folding.
 
 ```typescript
-import { toJuliaCode, toPythonCode } from '@earthsciml/ast';
+import { compileExpression, evaluateExpression, UnloweredOperatorError } from '@earthsciml/ast';
 
-// Generate a self-contained Julia script
-const julia: string = toJuliaCode(file);
-// Output:
-//   using ModelingToolkit, Catalyst, EarthSciMLBase, OrdinaryDiffEq
-//   @parameters T = 298.15 [unit = u"K"] jNO2 = 0.005 [unit = u"1/s"]
-//   @species O3(t) = 40e-9 NO(t) = 0.1e-9 NO2(t) = 1e-9
-//   rxs = [
-//     Reaction(1.8e-12 * exp(-1370/T), [NO, O3], [NO2]),
-//     Reaction(jNO2, [NO2], [NO, O3]),
-//   ]
-//   @named sys = ReactionSystem(rxs, t)
-//   # TODO: Coupling — operator_compose(SimpleOzone, Advection)
-//   # TODO: Domain — lon [-130, -100], 2024-05-01 to 2024-05-03
+// Build a closure once, then call it against many bindings.
+const rate = compileExpression({ op: '*', args: ['k', { op: 'exp', args: [{ op: '/', args: [-1370, 'T'] }] }] });
+rate(new Map([['k', 1.8e-12], ['T', 298.15]]));   // 1.818e-14
 
-// Generate a self-contained Python script
-const python: string = toPythonCode(file);
-// Output:
-//   import earthsci_ast as esm
-//   file = esm.load_string('''...''')
-//   solution = esm.simulate(file, tspan=(0, 86400), ...)
+// Or evaluate in one step.
+evaluateExpression({ op: '+', args: ['a', 2] }, new Map([['a', 1]]));   // 3
+
+// An operator outside the evaluable core is refused before anything runs.
+try {
+  evaluateExpression({ op: 'grad', args: ['u'], dim: 'x' }, new Map([['u', 1]]));
+} catch (e) {
+  e instanceof UnloweredOperatorError;   // true; e.code === 'unlowered_operator'
+}
 ```
 
-**Expression-to-code mapping:**
-
-| ESM AST | Julia output | Python output |
-|---|---|---|
-| `{"op": "+", "args": ["a", "b"]}` | `a + b` | `a + b` |
-| `{"op": "*", "args": ["k", "A", "B"]}` | `k * A * B` | `k * A * B` |
-| `{"op": "D", "args": ["O3"], "wrt": "t"}` | `D(O3)` | `Derivative(O3(t), t)` |
-| `{"op": "exp", "args": [x]}` | `exp(x)` | `sp.exp(x)` |
-| `{"op": "ifelse", "args": [c, a, b]}` | `ifelse(c, a, b)` | `sp.Piecewise((a, c), (b, True))` |
-| `{"op": "Pre", "args": ["x"]}` | `Pre(x)` | `Function('Pre')(x)` |
-| `{"op": "^", "args": ["x", 2]}` | `x^2` | `x**2` |
-| `{"op": "grad", "args": ["x"], "dim": "y"}` | `Differential(y)(x)` | `sp.Derivative(x, y)` |
+Both entry points walk the whole expression before evaluating any of it (esm-spec §9.6.6). An operator outside the esm-spec §4.2 evaluable core (`grad`, `div`, `laplacian`, `integral`, a user operator, a spatial or right-hand-side `D`) raises `UnloweredOperatorError`. A core operator with no scalar rule (the array and query operators, `Pre`, an unlowered `enum`) raises `UnevaluableOperatorError`. That holds even inside an untaken `ifelse` branch. An unbound variable or a malformed node raises `EvaluatorError`. A `table_lookup` node needs the document's tables, passed as `{ functionTables: file.function_tables }`.
 
 ---
 
@@ -2141,19 +2114,25 @@ Python provides simulation capability via SymPy for symbolic manipulation and Sc
 #### 5.3.2 Package Structure
 
 ```
-earthsci_ast/
-├── __init__.py
-├── types.py          # Dataclass definitions for ESM types
-├── parse.py          # JSON → dataclasses
-├── serialize.py      # Dataclasses → JSON
-├── expression.py     # Expr ↔ SymPy conversion, pretty-print
-├── substitute.py     # Substitution operations
-├── validate.py       # Schema + structural + unit validation
-├── units.py          # Pint-based unit checking
-├── reactions.py      # Stoichiometric matrix, ODE derivation
-├── edit.py           # Model editing operations
-├── simulate.py       # SymPy → SciPy ODE solver bridge
-└── display.py        # IPython/Jupyter display integration
+pkg/earthsci-ast-py/src/earthsci_ast/
+├── __init__.py          # the public surface: `__all__`
+├── esm_types.py         # dataclasses for the ESM types
+├── parse.py             # load_path / load_string / load_document
+├── serialize.py         # to_json / write_path
+├── validation.py        # validate / validate_text / validate_path
+├── expression.py        # simplify, to_sympy / from_sympy
+├── substitute.py        # substitute and the model / reaction-system forms
+├── display.py           # to_unicode / to_latex / to_ascii, Jupyter display
+├── flatten.py           # flatten (§4.7.5) and its error taxonomy
+├── reactions.py         # derive_odes, stoichiometric_matrix
+├── classification.py    # ode_states, system_kind, ... (esm-spec §6.3.1)
+├── units.py             # Pint-based unit checking
+├── edit.py              # the §4 editing operations
+├── graph.py             # component and expression graphs (§4.8)
+├── problem.py           # esm_problem, solve, remake, init, EnsembleProblem (§2.5)
+├── simulation_array.py  # the NumPy array interpreter behind `native` / `interpreter`
+├── simulation_scalar.py # the `sympy` scalar right-hand side
+└── data_sources/        # data-source loaders (the `data` extra)
 ```
 
 #### 5.3.3 Core API
@@ -2209,83 +2188,56 @@ sympy_expr = esm.to_sympy(esm_expression)
 esm_expr = esm.from_sympy(sympy_expr)
 
 # Use SymPy's simplify
-simplified = esm.simplify(esm_expression)  # wraps sympy.simplify
+simplified = esm.simplify(esm_expression)  # constant folding plus identity rules (x + 0, x * 1, x ^ 1); does not call SymPy
 
 # Symbolic Jacobian
 J = esm.jacobian(file.models["SuperFast"])  # returns SymPy Matrix
 ```
 
-#### 5.3.5 Simulation via SciPy
+#### 5.3.5 Simulation
 
-The Python `simulate()` function consumes a `FlattenedSystem` as its canonical input (per spec §4.7.5 — the flattened representation is the API boundary between coupling resolution and any downstream backend). The `EsmFile` overload is a thin convenience wrapper that calls `flatten()` internally.
+Python follows §2.5: `esm_problem` builds a document into an `EsmProblem` once, and `solve` integrates it. Construction needs no SciPy; `solve`, `init` and stepping do, and SciPy ships in the `simulate` extra (§2.5.9).
 
 ```python
-# Simulate from a FlattenedSystem (canonical path)
-flat = esm.flatten(file)
-solution = esm.simulate(
-    flat,
-    tspan=(0, 86400),       # 1 day in seconds
-    parameters={"SimpleOzone.T": 298.15, "SimpleOzone.jNO2": 0.005},
-    initial_conditions={"SimpleOzone.O3": 40e-9, "SimpleOzone.NO": 0.1e-9},
-    method="BDF",
-)
+import earthsci_ast as esm
 
-# Convenience overload — flattens internally
-solution = esm.simulate(
+file = esm.load_path("coupled.esm")      # docs/api/examples/fixtures/coupled.esm
+
+# Build once: load, flatten, compile the right-hand side. Nothing is integrated.
+prob = esm.esm_problem(
     file,
-    tspan=(0, 86400),
-    parameters={"T": 298.15, "jNO2": 0.005},  # bare names also accepted
-    initial_conditions={"O3": 40e-9, "NO": 0.1e-9, "NO2": 1e-9},
-    method="BDF",
+    (0.0, 3600.0),               # tspan, seconds
+    p={"Box.k": 0.1},            # dot-namespaced or bare names
+    u0={"Box.T_air": 285.0},
 )
 
-# solution is a SimulationResult
-print(solution.t)     # time points
-print(solution.y)     # state trajectories (rows in solution.vars order)
-print(solution.vars)  # ["SimpleOzone.O3", "SimpleOzone.NO", "SimpleOzone.NO2"]
-solution.plot()       # matplotlib integration
+# Run it. The option names are SciML's: alg, abstol, reltol, saveat.
+sol = esm.solve(prob, reltol=1e-8, abstol=1e-10, saveat=[0.0, 600.0, 3600.0])
+assert sol.retcode == esm.ReturnCode.Success
+sol.t                 # [0., 600., 3600.]
+sol["Box.T_air"]      # [285., 595., 2095.], read by flattened name
+sol["Heater.T"]       # [300., 600., 2100.]
+prob.compiler         # "native", the default
+
+# A FlattenedSystem is accepted as input too.
+flat_prob = esm.esm_problem(esm.flatten(file), (0.0, 3600.0))
+
+# Re-parameterize without rebuilding.
+faster = esm.solve(esm.remake(prob, p={"Box.k": 0.2}), saveat=[3600.0])
+faster["Box.T_air"][-1]   # 2097.5
 ```
 
-**Parameter and initial condition lookup.** Both dot-namespaced (`"SimpleOzone.k"`) and bare names (`"k"`) are accepted. The dot-namespaced form takes precedence; the bare name acts as an unambiguous fallback. Parameters not provided fall back to the variable's `default` (or `0`).
+**Inputs.** `esm_problem` takes a path, a decoded `dict`, an `EsmFile` or a `FlattenedSystem`. `p` and `u0` accept dot-namespaced names (`"Box.k"`) or bare names (`"k"`). A key that names no single parameter or state is an error, not a silently ignored binding (esm-spec §6.6.2). A state with no `u0` entry falls back to its `ic` equation, then its declared default. The other keywords (`providers`, `metaparameters`, `callback`, `compiler`, ...) are as in §2.5.2.
 
-**Implementation approach:**
+**Solving.** `alg` is a SciPy `solve_ivp` method name and defaults to `"LSODA"`. `abstol` and `reltol` resolve per esm-spec §2.2.2: an explicit argument wins, then the document's `solver` block, then the defaults `abstol = 1e-6`, `reltol = 1e-4`. `saveat` is a list of output times or a scalar step. A run that fails comes back with a non-`Success` `retcode` and a `message`, not an exception. `remake`, `init` / `step` / `solve_all` and `EnsembleProblem` follow §2.5.5, §2.5.6 and §2.5.8. `Solution.plot()` draws the trajectories when the `plot` extra is installed.
 
-1. Call `flatten(file)` to obtain the canonical `FlattenedSystem`. This pre-resolves all coupling rules — `operator_compose` (LHS-match + sum, with `_var` placeholder expansion), `couple` connectors, and `variable_map` substitutions — and lowers reaction systems to ODEs via `derive_odes()`.
-2. Reject *undiscretized* spatial operators: if `len(flat.independent_variables) > 1`, raise `UnsupportedDimensionalityError` (see §5.4.6 for the cross-language origin of this error name in the Rust simulator). A surviving spatial independent variable means a spatial operator was never discretized into a `faq` stencil. Once discretized, the spatial axis folds into array dimensions, so `independent_variables == ["t"]` and `simulate()` integrates the PDE through the array-op interpreter like any other system.
-3. Convert each flattened equation's RHS to a SymPy expression using the dot-namespaced symbol map.
-4. Substitute parameter values, then `sympy.lambdify()` to create a fast NumPy-callable RHS function.
-5. Call `scipy.integrate.solve_ivp()`.
+**Compilers.** `compiler` selects the right-hand side over the closed vocabulary of API_SPEC.md §5.8. `"native"` (the default) is whole-box vectorized NumPy for every document. `"interpreter"` is the reference evaluator that checks the others. `"sympy"` is a lambdified SymPy scalar right-hand side, and it refuses array documents. `"xla"` and `"mtk"` raise `CompilerUnavailableError` in this binding.
 
-**Dimension promotion tier (§4.7.6).** The Python library is **Core tier** for dimension promotion: it handles broadcast and identity mappings (a flattened system whose independent variables are exactly `["t"]`). Slice, project, and regrid mappings raise `UnsupportedMappingError`. An *undiscretized* spatial operator (a spatial independent variable surviving in the flattened system) raises `UnsupportedDimensionalityError`, with a message telling the user to apply the discretization template that lowers it to a `faq` stencil. This is not a PDE-capability limit: once discretized, Python simulates the PDE natively (§5.9 cross-language PDE-simulation conformance).
+**What is refused.** Every refusal happens at construction, not mid-run:
 
-**Conflict and validation errors.** `flatten()` exposes the full Rust `FlattenError` taxonomy as Python exception classes (cross-language error-name parity per §4.7.5 and §4.7.6):
-
-- `ConflictingDerivativeError` (§4.7.5) when two systems define non-additive equations for the same dependent variable;
-- `DimensionPromotionError` (§4.7.6) when a variable or equation cannot be promoted given the available `Interface`s;
-- `UnmappedDomainError` (§4.7.6) when a coupling references a variable whose domain has no mapping rule;
-- `UnsupportedMappingError` when a `dimension_mapping` type that the Core tier does not implement (`slice`, `project`, `regrid`, or a spatial operator) is encountered;
-- `DomainUnitMismatchError` (§4.7.6) when a coupling across an `Interface` requires an undeclared unit conversion;
-- `DomainExtentMismatchError` when an `identity` mapping is asked to bridge domains with incompatible extents;
-- `SliceOutOfDomainError` when a `slice` mapping reaches outside the source variable's domain;
-- `CyclicPromotionError` when promotion rules form a cycle.
-
-`simulate()` additionally raises `UnsupportedDimensionalityError` (§5.4.6) when given a flattened system whose `independent_variables` is not exactly `["t"]`. All names match the Rust `FlattenError` enum variants and Rust `CompileError::UnsupportedDimensionalityError` so cross-language validators can interoperate.
-
-**Event handling in SciPy:**
-
-| ESM event type | SciPy mechanism |
-|---|---|
-| Continuous event | `solve_ivp` `events` parameter (zero-crossing functions) |
-| Discrete (condition) | Manual stepping with condition check |
-| Discrete (periodic) | Manual stepping at fixed intervals |
-| Discrete (preset_times) | Use `t_eval` combined with manual affect application |
-
-Since SciPy's event handling is less sophisticated than DifferentialEquations.jl, the Python simulation tier has limitations:
-
-- Direction-dependent affects (`affect_neg`) require custom zero-crossing direction detection.
-- Discrete events with complex triggers require manual integration loop management.
-- Functional affects are not supported (they are runtime-specific).
-- An *undiscretized* spatial operator (`grad`, `div`, `laplacian`) causes `simulate()` to raise `UnsupportedDimensionalityError`: it must first be rewritten to a `faq` stencil by a discretization template (`expression_templates` / `apply_expression_template`), which the Python binding applies at load time like every other binding. Once discretized, `simulate()` integrates the PDE natively — Python is one of the three PDE-simulation bindings (§5.9), not a 0D-only box-model solver.
+- A spatial independent variable surviving flatten means a spatial operator was never discretized. It raises `UnsupportedDimensionalityError` (`unlowered_operator`); apply the discretization template that lowers it to a `faq` stencil. Discretized PDEs run natively.
+- Continuous and discrete events, implicit equations and Wiener-noise parameters raise `unsupported_construct` (esm-spec §9.6.6). Only Julia's `mtk` compiler runs events and implicit equations.
+- `flatten` raises the §4.7.6.10 error taxonomy: `ConflictingDerivativeError`, `DimensionPromotionError`, `UnmappedDomainError`, `UnsupportedMappingError` (Python implements the Core dimension-promotion tier, so `slice`, `project` and `regrid` raise it), `DomainUnitMismatchError`, `DomainExtentMismatchError`, `SliceOutOfDomainError` and `CyclicPromotionError`.
 
 #### 5.3.6 Jupyter Integration
 
@@ -2322,16 +2274,28 @@ Rust provides a high-performance, memory-safe implementation suitable for CLI to
 ```
 pkg/earthsci-ast-rs/
 ├── src/
-│   ├── lib.rs
-│   ├── types.rs        # Struct definitions with serde derives
-│   ├── expression.rs   # Expr enum, pretty-print, substitution
-│   ├── validate.rs     # Schema + structural validation
-│   ├── units.rs        # Unit parsing and checking
-│   ├── reactions.rs    # Stoichiometric matrix
-│   ├── edit.rs         # Editing operations
-│   └── display.rs      # Unicode/LaTeX formatters
-├── Cargo.toml
-└── tests/
+│   ├── lib.rs              # the public surface: root `pub use` / `pub mod`
+│   ├── types/              # serde structs for the ESM types (Expr, CouplingEntry, ...)
+│   ├── parse.rs            # load_path / load_string / load_document
+│   ├── serialize.rs        # to_json / write_path
+│   ├── validate.rs         # validate / validate_text
+│   ├── expression.rs       # free_variables, simplify
+│   ├── substitute.rs       # substitution, including the `*_with_context` family
+│   ├── display.rs          # to_unicode / to_latex / to_ascii, the §6.3 summary
+│   ├── flatten.rs          # flatten (§4.7.5) and FlattenError
+│   ├── reactions.rs        # derive_odes, stoichiometric_matrix
+│   ├── classification.rs   # ode_states, system_kind, ... (esm-spec §6.3.1)
+│   ├── units.rs            # unit parsing and checking
+│   ├── edit.rs             # the §4 editing operations
+│   ├── graph.rs            # component and expression graphs (§4.8)
+│   ├── problem.rs          # esm_problem, solve, remake (§2.5)
+│   ├── simulate/           # Solution, SolveOptions, the diffsol driver
+│   ├── simulate_array/     # the array runtime and its tape
+│   ├── wasm.rs             # wasm-bindgen exports (`wasm` feature)
+│   └── bin/esm.rs          # the `esm` CLI (§5.4.5)
+├── tests/
+├── benches/
+└── Cargo.toml
 ```
 
 #### 5.4.3 Key Design Decisions
@@ -2339,22 +2303,28 @@ pkg/earthsci-ast-rs/
 **Expression type as an enum:**
 
 ```rust
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(untagged)]
+// Deserialize is hand-written: a JSON integer token becomes `Integer`, a token
+// with `.`, `e` or `E` becomes `Number`, a string `Variable`, an object `Operator`.
+#[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
-    Num(f64),
-    Var(String),
-    Node(ExprNode),
+    Integer(i64),
+    Number(f64),
+    Variable(String),
+    Operator(std::sync::Arc<ExpressionNode>),   // hash-consed; build with Expr::operator(node)
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ExprNode {
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ExpressionNode {
     pub op: String,
     pub args: Vec<Expr>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wrt: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dim: Option<String>,
+    // ... one optional field per operator-specific key in esm-schema.json:
+    // `ranges` / `reduce` / `semiring` / `join` / `filter` for `faq`,
+    // `lower` / `upper` for `integral`, `value` for `const`, `table` / `axes`
+    // for `table_lookup`, and so on.
 }
 ```
 
@@ -2362,24 +2332,29 @@ pub struct ExprNode {
 
 ```rust
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum CouplingEntry {
-    #[serde(rename = "operator_compose")]
-    OperatorCompose { systems: [String; 2], translate: Option<HashMap<String, TranslateTarget>>, description: Option<String> },
-    #[serde(rename = "variable_map")]
-    VariableMap { from: String, to: String, transform: String, description: Option<String> },
-    // ... etc
+    OperatorCompose { systems: Vec<String>, translate: Option<serde_json::Value>, lifting: Option<String>, require_match: Option<bool>, description: Option<String> },
+    Couple { systems: Vec<String>, connector: serde_json::Value, lifting: Option<String>, description: Option<String> },
+    VariableMap { from: String, to: String, transform: VariableMapTransform, factor: Option<f64>, lifting: Option<String>, description: Option<String> },
+    OperatorApply { operator: String, description: Option<String> },
+    Callback { callback_id: String, config: Option<serde_json::Value>, description: Option<String> },
+    Event { event_type: String, name: Option<String>, conditions: Option<Vec<Expr>>, trigger: Option<DiscreteEventTrigger>, affects: Option<Vec<AffectEquation>>, /* ... */ description: Option<String> },
+    CouplingImport { #[serde(rename = "ref")] reference: String, bind: Option<HashMap<String, String>>, description: Option<String> },
+}
+
+// A named transform string, or an Expression transform (esm-spec §10.4).
+pub enum VariableMapTransform {
+    Named(String),
+    Expression(ExpressionNode),
 }
 ```
 
 #### 5.4.4 WASM Target
 
-The Rust library can be compiled to WASM and used by the TypeScript library for performance-critical operations (validation, large expression manipulation). The TypeScript library would use the pure-TS implementation by default but optionally delegate to WASM:
+With the `wasm` feature the crate compiles to `wasm32` and exposes `wasm-bindgen` functions from `src/wasm.rs`, which take and return JSON text or decoded JavaScript values: `load_string`, `to_json`, `validate`, the three renderers, `substitute`, the stoichiometric matrix, the component graph and, with the `solve` feature, `solve` and the `Problem` / `Solution` handles (API_SPEC.md §5.8). This is the route to running a model in a browser.
 
-```typescript
-import { validate } from '@earthsciml/ast';
-import { validate as validateWasm } from 'esm-format-wasm'; // optional fast path
-```
+The WASM build is separate from `@earthsciml/ast`. The TypeScript package is pure TypeScript: it neither loads nor delegates to the WASM module, and it does not simulate.
 
 #### 5.4.5 CLI Tool
 
@@ -2569,33 +2544,27 @@ Follow standard LaTeX math conventions. Fractions use `\frac{}{}`, derivatives u
 
 ### 6.3 Model Summary Display
 
-When displaying a full model or file, show a structured summary:
+When displaying a full file, show a structured summary. For a document holding the `Ozone` reaction system of `docs/api/examples/fixtures/ozone.esm` and a `Photolysis` model whose rate replaces `Ozone.jNO2` through a `variable_map`, Go's `ModelSummary` prints:
 
 ```
-ESM v0.1.0: MinimalChemAdvection
-  "O3-NO-NO2 chemistry with advection and external meteorology"
-  Authors: Chris Tessum
+ESM v1.0.0: PhotolyzedOzone
+  "The NO-NO2-O3 cycle with its photolysis rate supplied by a second model."
+  Authors: EarthSciML
 
   Reaction Systems:
-    SimpleOzone (3 species, 3 parameters, 2 reactions)
-      R1: NO + O₃ → NO₂    rate: 1.8×10⁻¹² · exp(−1370/T) · M
+    Ozone (3 species, 2 parameters, 2 reactions)
+      R1: NO + O₃ → NO₂    rate: k1
       R2: NO₂ → NO + O₃    rate: jNO₂
 
   Models:
-    Advection (2 parameters, 1 equation)
-      ∂_var/∂t = −u_wind·∂_var/∂x − v_wind·∂_var/∂y
-
-  Data Loaders:
-    GEOSFP: u, v, T (gridded_data)
+    Photolysis (2 parameters, 1 equation)
+      j = j_max · cos_sza
 
   Coupling:
-    1. operator_compose: SimpleOzone + Advection
-    2. variable_map: GEOSFP.T → SimpleOzone.T
-    3. variable_map: GEOSFP.u → Advection.u_wind
-    4. variable_map: GEOSFP.v → Advection.v_wind
-
-  Domain: lon [−130, −100] (Δ0.3125°), 2024-05-01 to 2024-05-03
+    1. variable_map: Photolysis.j → Ozone.jNO2
 ```
+
+A document that declares data sources or a domain gets a section for each.
 
 ---
 
