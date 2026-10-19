@@ -6,8 +6,10 @@ on:
     paths:
       - 'docs/**'
       - 'pkg/**'
-      - 'scripts/generate_docs.py'
+      - 'scripts/api_docs/**'
+      - 'api-surface.json'
       - '.github/workflows/pages.yml'
+      - '.github/workflows/api-docs.yml'
   workflow_dispatch:
 
 # Allow only one concurrent deployment, skipping runs queued between the run
@@ -24,7 +26,17 @@ permissions:
   id-token: write
 
 jobs:
+  # One job per binding: docstrings -> build/api-docs/<binding>.json, plus its
+  # examples. A binding that fails does not block the deploy; it renders as
+  # "not extracted in this build" (docs.yml is where a failure is fatal).
+  api-docs:
+    uses: ./.github/workflows/api-docs.yml
+    with:
+      strict: false
+
   build:
+    needs: api-docs
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -40,8 +52,18 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Generate API + example documentation
-        run: python scripts/generate_docs.py --output docs/content/generated
+      # Absent when every binding failed; render.py then marks all five as
+      # not extracted.
+      - name: Download extracted docstrings
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          pattern: api-docs-*
+          path: build/api-docs
+          merge-multiple: true
+
+      - name: Render API reference and guides
+        run: python scripts/api_docs/render.py
 
       # The narrative pages are built, validated, tested and plotted here.
       # A model that does not validate, or an inline test that fails, exits

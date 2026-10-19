@@ -120,7 +120,7 @@ Fields:
 - `independent_variables::Vector{Symbol}`: `[:t]` for pure-ODE systems, or
   `[:t, :x, :y, ...]` when spatial operators are present.
 - `state_variables::OrderedDict{String, ModelVariable}`: the SOLVED-FOR VECTOR —
-  namespaced state variables and (former-reaction) species, PLUS
+  namespaced state variables and species (from lowered reactions), PLUS
   `algebraic_variables`, PLUS any arrayed observed that materializes into a
   buffer (esm-libraries-spec §4.7.5 step 4).
 - `parameters::OrderedDict{String, ModelVariable}`: namespaced parameters,

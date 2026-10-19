@@ -2712,7 +2712,7 @@ pub(crate) fn check_data_source_extents(
 /// `expression_templates` / `metaparameters` DECLARATIONS restored verbatim from
 /// a pre-folding snapshot (esm-spec §9.6.4 rule 5 — Option A expands call sites,
 /// it does not delete declarations). `Ok(None)` when the document carries no
-/// §9.7 machinery (the legacy fast path).
+/// §9.7 machinery.
 ///
 /// The document is processed as six named phases (each a helper below, in
 /// this exact order): top-level scope resolution, per-component imports,

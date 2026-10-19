@@ -30,6 +30,11 @@ import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
 /** Shared source of truth for "which op fields carry child expressions". */
 const EXPRESSION_CHILD_KEY_SET: ReadonlySet<string> = new Set(EXPRESSION_CHILD_KEYS)
 
+/**
+ * Error thrown by {@link lowerEnums} (and so by loading) when an `enum` op
+ * cannot be lowered. `code` is `enum_op_malformed`, `unknown_enum` or
+ * `unknown_enum_symbol`, as listed above; the message is `[code] message`.
+ */
 export class EnumLoweringError extends EsmDiagnosticError {
   declare code: string
   constructor(code: string, message: string) {

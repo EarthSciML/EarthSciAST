@@ -41,8 +41,9 @@ the direct route for a caller who wants the symbolic system itself. Neither
 `:mtk` nor `:xla` is the default — a document run through `esm_problem` with no
 `compiler` is run by the tree-walk build.
 
-Each runner consumes the canonical-form AST emitted by [`discretize`](@ref) and
-walks it generically — none contains per-rule-shape dispatch — and each meets
+Each runner consumes canonical-form AST, after the document's rewrite rules
+have discretized it, and walks it generically — none contains per-rule-shape
+dispatch — and each meets
 the [criteria for an official ESS simulation runner](#official-runner-criteria).
 
 ## Pathway
@@ -51,16 +52,17 @@ The pathway is the same whichever runner builds the right-hand side:
 
 ```
 .esm JSON
-  → parse / load             # JSON → AST (EarthSciAST parsers)
-  → discretize               # rule application (RFC §11)
+  → load                     # JSON → AST, applying the rewrite rules (esm-spec §9.6)
+  → flatten                  # coupled components → one system
   → SIMULATION RUNNER        # the tree-walk build, MTK.System(...), or the emitter
-  → ODEProblem / solve       # SciML solver of choice
+  → solve                    # SciML solver of choice
 ```
 
-Rule application (the canonical pipeline of `canonicalize → rule engine →
-canonicalize → DAE classification`) lives in [`discretize`](@ref). After it
-runs, the document carries canonical-form AST. The runner walks that AST
-generically; it never inspects rule kinds.
+Rule application — the expression-template rewrite rules of esm-spec §9.6,
+which is where a spatial operator is discretized — happens while the document
+loads ([`lower_expression_templates`](@ref)). After it, the document carries
+canonical-form AST. The runner walks that AST generically; it never inspects
+rule kinds.
 
 ## `tree_walk` — when MTK's compile time becomes prohibitive
 
@@ -71,7 +73,7 @@ everything a run needs:
 using EarthSciAST
 using OrdinaryDiffEqTsit5
 
-prob = esm_problem("model.esm", (0.0, 10.0))   # load → discretize → build → seed
+prob = esm_problem("model.esm", (0.0, 10.0))   # load → flatten → build → seed
 sol  = solve(prob, Tsit5())
 
 x_final = sol[Symbol("Model.x")][end]          # indexed BY NAME
@@ -79,8 +81,8 @@ x_final = sol[Symbol("Model.x")][end]          # indexed BY NAME
 
 `prob.var_map` is the state-name → index lookup, for a caller that wants to
 probe the raw state vector rather than index the solution by name; `prob.f!`,
-`prob.u0`, `prob.p` and `prob.tspan` are the same objects the old five-tuple
-handed back.
+`prob.u0`, `prob.p` and `prob.tspan` are the right-hand side, initial state,
+parameters and time span the solver receives.
 
 ### Reading observeds — `observed_field`
 
@@ -109,16 +111,10 @@ evaluator instead, the oracle the compiled program agrees with bit for bit.
 Rust's `observed_trajectory(prob, sol, name)` answers the same question for
 every saved point of a solution at once (API_SPEC §5.8).
 
-!!! note "`build_evaluator` has been retired"
-    `build_evaluator` was the public entry point here and is not any more
-    (`API_SPEC.md` §8 item 23): it is private behind `esm_problem`, with a
-    deprecated alias that warns once and forwards, kept for one minor version.
-    A caller reassembling a run out of its five-tuple reads the same values off
-    the Problem; `forcing_buffers` and `forcing_buffer_index` take the Problem;
-    the build-inspection record's compiler half is [`compiler_report`](@ref),
-    which a Problem and a `BuildInspection` both answer; and the compiled
-    right-hand side that `form = :oop` handed a backend is
-    `esm_problem(…; compiler = :xla)`.
+!!! note "`build_evaluator` is deprecated"
+    `build_evaluator` warns once and forwards; use [`esm_problem`](@ref)
+    (`API_SPEC.md` §8 item 23). Its docstring maps each of its results to the
+    field or function of the Problem that provides it.
 
 ## `:xla` — the compiled StableHLO right-hand side
 
@@ -203,11 +199,8 @@ is no parallel dispatch table. Unbound variables raise
   (`_Node`) where ops are `Symbol` (pointer compare), state references have
   their `u`-index baked in, parameter references have their `Val{sym}` type
   parameter baked in for monomorphic `NamedTuple` access, and literals are
-  pre-promoted to `Float64`. There is no symbolic simplification, tearing, or
-  codegen pass. A 4096-equation 64×64 advection model builds in well under a
-  second on commodity hardware (see `test/tree_walk_test.jl` —
-  `Large 2D advection` — which asserts `t_build < 5 s` and `t_solve < 30 s`
-  for 100 Tsit5 steps under CI padding).
+  pre-promoted to `Float64`. There is no symbolic simplification or tearing
+  pass.
 - **Per-step cost is one type-stable closure call** that iterates `rhs_list`
   and dispatches on `_Node.kind`/`_Node.op`. Observed-variable RHSes are
   inlined at build time (substituted to a fixed point), so the runtime hot
@@ -263,7 +256,7 @@ cross-binding operator codes):
 |---|---|
 | `unevaluable_operator` | An evaluable-core op the walker has no rule for (an array or value-invention op an earlier stage should have eliminated). Cross-binding code, raised at build (esm-spec §9.6.6). |
 | `unlowered_operator` | A rewrite-target op (`grad`, a spatial or right-hand-side `D`, a user op) that no rewrite rule lowered. Cross-binding code (esm-spec §9.6.6). |
-| `E_TREEWALK_UNSUPPORTED_OP` | An internal pipeline defect: the removed `call` op, or an `index` that reached compilation unresolved. |
+| `E_TREEWALK_UNSUPPORTED_OP` | An internal pipeline defect: a `call` op built in code (it is not part of the format), or an `index` that reached compilation unresolved. |
 | `E_TREEWALK_UNSUPPORTED_SHAPE` | A variable still has `shape` set — the model is not yet scalarized. |
 | `unsupported_construct` | The model declares a continuous event, a discrete event, an implicit equation (an expression LHS such as `s - f(s) ~ 0`), or Wiener noise (a parameter whose `update.kind` is `wiener`). The walker runs none of them, so `:native` and `:interpreter` both refuse; `compiler = :mtk` runs the events and implicit equations, and no compiler integrates an SDE (esm-spec §9.6.6). |
 | `E_TREEWALK_UNSUPPORTED_EQUATION` | Any other equation LHS that is neither `D(state, wrt=t)` nor an observed-variable assignment. |
@@ -304,7 +297,7 @@ and the reason for:
   equations; a loaded field has nowhere to land in it.
 * a CONTINUOUS spatial dimension. That is a PDE, and it needs
   `ModelingToolkit.PDESystem` plus a discretizer this compiler does not run. A
-  document already discretized into an `arrayop` stencil has no spatial
+  document already discretized into a `faq` stencil has no spatial
   independent variable and builds normally.
 * a geometry operator (`polygon_intersection_area`, `intersect_polygon`), which
   is resolved against loaded polygons at build time and has no symbolic form.
@@ -343,7 +336,7 @@ if and only if all of:
 2. It **consumes the AST directly** — no shortcut to imperative compute, no
    materialized rule output that bypasses the AST.
 3. It has **no per-rule-shape dispatch** in the runner itself. Rule
-   application happens in `discretize`; the runner receives canonical-form
+   application happens while the document loads; the runner receives canonical-form
    AST and walks it generically. There is no `if rule.kind == "..." then ...`
    branching inside the runner.
 4. It has a **documented use case** — when to choose it over the other

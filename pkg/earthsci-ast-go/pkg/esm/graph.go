@@ -51,9 +51,19 @@ type ComponentNode struct {
 type CouplingKind string
 
 const (
+	// CouplingKindOperatorCompose marks an edge built from an
+	// `operator_compose` coupling entry (esm-spec §10.1): matching time
+	// derivatives are identified and their right-hand sides added together.
 	CouplingKindOperatorCompose CouplingKind = "operator_compose"
-	CouplingKindCouple          CouplingKind = "couple"
-	CouplingKindVariableMap     CouplingKind = "variable_map"
+	// CouplingKindCouple marks an edge built from a `couple` coupling entry
+	// (esm-spec §10.1, §10.3): the two systems are joined through explicit
+	// connector equations.
+	CouplingKindCouple CouplingKind = "couple"
+	// CouplingKindVariableMap marks an edge built from a `variable_map`
+	// coupling entry (esm-spec §10.1, §10.4): a parameter in one system is
+	// replaced by a variable from another, or by an expression computed from
+	// it.
+	CouplingKindVariableMap CouplingKind = "variable_map"
 )
 
 // CouplingEdge represents an edge in the component graph

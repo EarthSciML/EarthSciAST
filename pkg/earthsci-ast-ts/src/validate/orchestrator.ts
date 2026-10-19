@@ -448,10 +448,7 @@ export interface ValidateOptions {
  * Validate a TYPED ESM DOCUMENT and return a structured validation result.
  *
  * API_SPEC.md §8 item 13: `validate` takes a typed document in EVERY binding.
- * It used to accept `string | object` here, so `validate(someString)` meant
- * "parse this JSON text" in TypeScript and Python but was a type error in Rust
- * and Go. The text convenience now has its own name, {@link validateText}, so
- * the argument type says which one you are calling.
+ * To validate JSON text, call {@link validateText}.
  *
  * Passing a string is rejected at compile time by the signature and at runtime
  * by an explicit guard, rather than silently doing something else.

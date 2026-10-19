@@ -674,11 +674,10 @@ pub fn resolve_tolerance(
 /// `inf`, so the comparison held for EVERY finite `expected`: an assertion on
 /// an overflowed product, a division by a zero denominator or a `log(0)`
 /// reported PASS whatever it expected, and a document that computed nothing
-/// meaningful went green. NaN never had the problem (every IEEE-754 comparison
-/// with NaN is false), which is why the hole was specific to an infinity. This
-/// is what Julia's `isapprox` has always done —
-/// `x == y || (isfinite(x) && isfinite(y) && …)` — and what this
-/// re-implementation of it dropped.
+/// meaningful would go green. NaN does not have the problem (every IEEE-754
+/// comparison with NaN is false), so the rule matters for infinities. Julia's
+/// `isapprox` behaves the same way:
+/// `x == y || (isfinite(x) && isfinite(y) && …)`.
 ///
 /// `actual == expected` keeps the one case a non-finite value legitimately
 /// matches: the SAME infinity, with the same sign. A `.esm` document cannot
@@ -2797,8 +2796,8 @@ pub fn run_inline_tests_with_base_dir(
 ///
 /// With providers bound, construction runs the deterministic build pipeline and
 /// its materialized fields answer §6.6.5 array assertions directly. A document
-/// with no differential equations therefore no longer has to integrate to be
-/// testable: `solve` reports [`crate::SimulateError::NotDynamic`], and the
+/// with no differential equations is testable without integrating: `solve`
+/// reports [`crate::SimulateError::NotDynamic`], and the
 /// assertions are evaluated against the build's own products at the asserted
 /// times.
 pub fn run_inline_tests_with_providers(

@@ -5,7 +5,7 @@
  *  - datetime.year / .month / .day / .hour / .minute / .second
  *  - datetime.day_of_year / .julian_day / .is_leap_year
  *  - interp.searchsorted
- *  - interp.linear, interp.bilinear (named tensor-interpolation primitives, esm-94w)
+ *  - interp.linear, interp.bilinear (named tensor-interpolation primitives)
  *
  * The dispatch table is closed by construction. `fn`-op nodes whose name
  * is not in this set MUST be rejected with diagnostic
@@ -15,9 +15,15 @@
  * reference implementation (pkg/EarthSciAST.jl/src/registered_functions.jl).
  */
 
-/** Stable diagnostic codes raised by the registry. */
 import { EsmDiagnosticError, ERROR_CODES } from './errors.js'
 
+/**
+ * The stable diagnostic codes a {@link ClosedFunctionError} can carry: an
+ * unrecognized function name or wrong argument count at dispatch, a non-finite
+ * input or out-of-range integer result, and the load-time validation failures of
+ * `interp.searchsorted` tables and `interp.linear` / `interp.bilinear` axes
+ * and tables (non-monotonic, NaN, length mismatch, too short, not a constant).
+ */
 export type ClosedFunctionErrorCode =
   | 'unknown_closed_function'
   | 'closed_function_arity'

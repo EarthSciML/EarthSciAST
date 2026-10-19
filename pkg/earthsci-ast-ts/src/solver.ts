@@ -20,8 +20,15 @@ import { ERROR_CODES } from './errors.js'
 import { EsmMachineryError } from './lower-expression-templates.js'
 import type { Solver } from './generated.js'
 
-/** Binding defaults (API_SPEC §5.8) — the bottom of the §2.2.2 chain. */
+/**
+ * Binding default relative tolerance (API_SPEC §5.8) — the bottom of the
+ * §2.2.2 chain, used when neither the caller nor `solver.reltol` sets one.
+ */
 export const DEFAULT_RELTOL = 1e-4
+/**
+ * Binding default absolute tolerance (API_SPEC §5.8) — the bottom of the
+ * §2.2.2 chain, used when neither the caller nor `solver.abstol` sets one.
+ */
 export const DEFAULT_ABSTOL = 1e-6
 
 function isObject(v: unknown): v is Record<string, unknown> {

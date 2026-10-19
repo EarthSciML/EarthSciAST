@@ -1244,10 +1244,7 @@ def to_json(esm_file: EsmFile, *, indent: int | None = 2) -> str:
     """
     Serialize an ESM file to a JSON string. PURE — never touches disk.
 
-    ``save(esm_file, path=None)`` used to do both: return the string AND,
-    when handed a path, write it. It was a pure function in TypeScript and
-    Rust and a disk write in Julia, under one name. Writing now lives in
-    :func:`write_path`, which returns nothing.
+    To write a file, use :func:`write_path`.
 
     Args:
         esm_file: The EsmFile object to serialize

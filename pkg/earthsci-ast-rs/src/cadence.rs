@@ -814,8 +814,8 @@ fn lhs_target_is_arrayed(eq: &Value, model: &Value) -> bool {
 /// refinement (§5.7.2) resolves a `discrete` variable's `data_ingest` source
 /// loader (DISCRETE if it has `temporal`, else CONST); the acyclic-index-set
 /// guard ([`assert_acyclic_index_sets`]) resolves derived-set `from_faq` edges.
-/// Since v0.8.0 the `index_sets` registry is document-scoped (a single registry
-/// shared by all models, a sibling of `models`), so it is merged down here.
+/// The `index_sets` registry is document-scoped (a single registry shared by
+/// all models, a sibling of `models`), so it is merged down here.
 /// Returns a clone of `model` with the two registries inserted; a registry the
 /// document does not declare — or that the model already carries — is left
 /// unchanged.

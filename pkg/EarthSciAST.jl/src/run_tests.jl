@@ -72,12 +72,44 @@ grows skip semantics.
 @enum AssertionStatus PASS FAIL ERROR SKIP
 
 """
+    PASS::AssertionStatus
+
+The assertion's sampled value is within its resolved `rtol` / `atol` of the
+expected value. An [`AssertionResult`](@ref) with this status has
+`r.passed == true`.
+"""
+PASS
+
+"""
+    FAIL::AssertionStatus
+
+The assertion ran and its sampled value is outside its resolved tolerance of
+the expected value; the result's `message` carries the difference.
+"""
+FAIL
+
+"""
+    ERROR::AssertionStatus
+
+The assertion could not be evaluated: loading, compiling, solving or sampling
+the test raised. The result's `message` carries the error text. Counts against
+the exit code exactly as [`FAIL`](@ref) does.
+"""
+ERROR
+
+"""
+    SKIP::AssertionStatus
+
+Reserved; no runner produces it. See [`AssertionStatus`](@ref).
+"""
+SKIP
+
+"""
     AssertionResult
 
 Outcome of one `(file, container, test, assertion_idx)` evaluation — the ONE
 result type both inline-test runners produce ([`run_esm_tests`](@ref) over the
-MTK engine and [`run_inline_tests`](@ref) over the tree-walk solve engine;
-`AssertionResult` is an alias of this type).
+MTK engine and [`run_inline_tests`](@ref) over the tree-walk solve engine).
 
 `message` carries the diff or error text for non-`PASS` results.
 `duration_s` is this assertion's even share of its test's wall time (solve +
@@ -88,11 +120,10 @@ test's duration (the JUnit testcase `time`).
 for a plain scalar assertion — always `nothing` from the MTK runner);
 `rtol`/`atol` are the RESOLVED §6.6.4 tolerances the pass predicate used
 (`0.0`/`0.0` on results synthesized before tolerance resolution, e.g. a
-parse/compile failure). The trailing three fields have defaults, so the
-historical 12-argument positional construction still works.
+parse/compile failure). The trailing three fields have defaults, so a
+12-argument positional construction that omits them is accepted.
 
-Virtual properties (backwards compatibility with the former
-`AssertionResult`): `r.passed` (`status == PASS`) and `r.model` (alias of
+Virtual properties: `r.passed` (`status == PASS`) and `r.model` (alias of
 `container_name`).
 """
 struct AssertionResult

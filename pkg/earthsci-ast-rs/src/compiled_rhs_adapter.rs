@@ -16,8 +16,8 @@
 //!     evaluator, the same no-scalarization kernel the simulator uses. This is
 //!     the engine that runs today.
 //!   * `compiled` — the XlaBuilder emitter over the tape
-//!     ([`crate::simulate_array::tape::xla_emit`]) run through PJRT
-//!     ([`crate::xla_runtime`]). Behind the non-default `xla` feature: a
+//!     (`simulate_array::tape::xla_emit`) run through PJRT
+//!     (`xla_runtime`). Behind the non-default `xla` feature: a
 //!     binary built without it answers `--engine compiled` with the
 //!     contract's whole-output `unavailable` form, and so does one built with
 //!     it on a machine where the PJRT client will not start. A model the

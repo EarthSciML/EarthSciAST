@@ -1,0 +1,35 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "Ozone",
+    "description": "The NO-NO2-O3 photostationary cycle as a reaction system.",
+    "authors": ["EarthSciML"]
+  },
+  "reaction_systems": {
+    "Ozone": {
+      "species": {
+        "O3": { "units": "mol/mol", "default": 4e-08, "description": "Ozone" },
+        "NO": { "units": "mol/mol", "default": 1e-09, "description": "Nitric oxide" },
+        "NO2": { "units": "mol/mol", "default": 1e-09, "description": "Nitrogen dioxide" }
+      },
+      "parameters": {
+        "k1": { "units": "1/s", "default": 0.4, "description": "NO + O3 rate, scaled to mixing ratio" },
+        "jNO2": { "units": "1/s", "default": 0.005, "description": "NO2 photolysis rate" }
+      },
+      "reactions": [
+        {
+          "id": "R1",
+          "substrates": [{ "species": "NO", "stoichiometry": 1 }, { "species": "O3", "stoichiometry": 1 }],
+          "products": [{ "species": "NO2", "stoichiometry": 1 }],
+          "rate": "k1"
+        },
+        {
+          "id": "R2",
+          "substrates": [{ "species": "NO2", "stoichiometry": 1 }],
+          "products": [{ "species": "NO", "stoichiometry": 1 }, { "species": "O3", "stoichiometry": 1 }],
+          "rate": "jNO2"
+        }
+      ]
+    }
+  }
+}

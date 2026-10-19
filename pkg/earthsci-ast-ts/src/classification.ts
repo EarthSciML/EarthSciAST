@@ -204,9 +204,7 @@ export function isOdeState(model: Model, name: string): boolean {
  * The defining form is read through the LHS's BASE NAME, so an arrayed
  * definition is observed exactly as its scalar counterpart is; only a genuine
  * expression LHS, one that names no single variable (`H*H*SO4 ~ Ksp`), is an
- * implicit constraint. §6.3.1 used to spell the criterion "a bare-variable
- * LHS", which was written for scalar equations and contradicted the semantic
- * criterion in the arrayed case.
+ * implicit constraint (esm-spec §6.3.1).
  *
  * Note that *eliminable* is not *inlineable*: a scalar observed is eliminated
  * by substituting its definition into every consumer, while an arrayed one
@@ -230,11 +228,9 @@ export function observedUnknowns(model: Model): string[] {
  * The DEFINING EXPRESSION of every observed unknown: the RHS of the equation
  * whose LHS names it, bare (`y ~ f(…)`) or indexed (`y[i] ~ f(…)`).
  *
- * This is the 1.0.0 relocation, in one place. An observed unknown's definition
- * used to live in `variables[v].expression`; it now lives in the model's
- * `equations` array. Every site that read the removed field reads this instead,
- * so the relocation is expressed once rather than in each of the ten passes
- * that used to reach for `variable.expression`.
+ * An observed unknown's definition lives in the model's `equations` array, not
+ * on its variable declaration; every pass that needs the definition reads it
+ * through this function.
  *
  * Only the first equation for a name is recorded: a second one is an unbalanced
  * system, which {@link validateEquationBalance} reports rather than this.
@@ -346,8 +342,8 @@ export function constantParameters(model: Model): string[] {
  * parameter and a spatial derivative is `sde` — not because it is not spatial,
  * but because there is no SPDESystem constructor to select.
  *
- * Detection is a property of the EQUATIONS and never of the `domain` block:
- * v0.8.0 removed `Domain.spatial`, so `domain` carries nothing spatial.
+ * Detection is a property of the EQUATIONS and never of the `domain` block,
+ * which carries nothing spatial.
  */
 export function systemKind(model: Model): SystemKind {
   if (brownianParameters(model).length > 0) return 'sde'

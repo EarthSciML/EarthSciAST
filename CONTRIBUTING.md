@@ -490,9 +490,15 @@ All contributions must include appropriate documentation:
 
 ### Building Documentation
 
+The API reference is generated from docstrings and runnable examples; see
+[`docs/api/README.md`](docs/api/README.md).
+
 ```bash
-# Generate documentation for all packages
-./scripts/generate_docs.py
+# Extract one binding's docstrings and run its examples (likewise julia,
+# typescript, rust, go), then render the reference and serve the site
+scripts/api_docs/python.sh
+python3 scripts/api_docs/render.py
+hugo server --source docs
 ```
 
 ## Release Process

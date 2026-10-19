@@ -297,7 +297,7 @@ Display formatting tests expect this output structure:
       "input": {"op": "D", "args": ["O3"], "wrt": "t"},
       "output_unicode": "∂O₃/∂t",
       "output_latex": "\\frac{\\partial \\mathrm{O_3}}{\\partial t}",
-      "output_ascii": "d(O3)/dt",
+      "output_ascii": "D(O3)/Dt",
       "success": true,
       "error": null
     }

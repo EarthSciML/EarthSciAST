@@ -9,7 +9,8 @@ This directory is the source of the documentation site, built with
 | Path | Contents |
 | --- | --- |
 | [`content/`](content/) | All documentation pages. [`content/_index.md`](content/_index.md) is the landing page and the canonical table of contents. |
-| `content/generated/` | API and example pages produced at build time by [`scripts/generate_docs.py`](../scripts/generate_docs.py). Not checked in. |
+| `content/generated/` | Pages produced at build time: the API reference and guides by [`scripts/api_docs/render.py`](../scripts/api_docs/render.py), the narrative pages by `esm-narrative`. Not checked in. |
+| [`api/`](api/) | Inputs to the API reference: the [contract](api/README.md), topic groups, example programs and usage guides. |
 | [`hugo.toml`](hugo.toml) | Site configuration. |
 | `layouts/`, `static/` | Templates and static assets (including the `lib/` standard-library `.esm` files). |
 | [`README-DOCS.md`](README-DOCS.md) | How the build and generation pipeline works. |
@@ -20,8 +21,10 @@ the index the site actually renders, so it does not drift from what is published
 ## Building locally
 
 ```bash
-# Generate the API + example pages (optional; the site builds without them)
-python3 scripts/generate_docs.py --output docs/content/generated
+# Generate the API reference (optional; the site builds without it). Uses
+# whatever build/api-docs/<binding>.json the scripts/api_docs/<binding>.sh
+# scripts have produced; see api/README.md.
+python3 scripts/api_docs/render.py
 
 # Serve at http://localhost:1313
 hugo server --source docs

@@ -342,9 +342,9 @@ def build_reference_graph(
     """Resolve the reference edges of one ``model`` dict into a graph.
 
     ``index_sets`` is the document-scoped index-set registry (RFC §5.2), which
-    as of v0.8.0 lives at the top level of the document rather than on each
-    model. :func:`resolve_references` threads the document registry in for every
-    model. Any (pre-0.8.0) model-nested ``index_sets`` key is **merged** on top
+    lives at the top level of the document rather than on each model.
+    :func:`resolve_references` threads the document registry in for every
+    model. Any model-nested ``index_sets`` key is **merged** on top
     of it — a model-level entry wins a key collision — matching Julia,
     TypeScript, Rust and Go.
 

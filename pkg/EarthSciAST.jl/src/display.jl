@@ -1611,7 +1611,7 @@ for mathematical functions.
 # Examples
 ```julia
 expr = OpExpr("*", [VarExpr("x"), NumExpr(2.0)])
-to_ascii(expr)  # Returns "x*2"
+to_ascii(expr)  # Returns "x * 2"
 
 eq = Equation(VarExpr("y"), OpExpr("+", [VarExpr("x"), NumExpr(1.0)]))
 to_ascii(eq)   # Returns "y = x + 1"
@@ -1656,22 +1656,24 @@ to_ascii(target::EsmFile) = "ESM v$(target.esm): $(target.metadata.name)"
 
 """
     to_unicode(target) -> String
-    to_latex(target) -> String
 
-Format `target` as Unicode / LaTeX mathematical notation. Parallel to
-[`to_ascii`](@ref) across its whole domain — `Nothing`, `Real`, `String`,
-`ASTExpr`, `Equation`, and the three containers `Model` / `ReactionSystem` /
-`EsmFile` — sharing its naming convention across the language bindings (see
-tests/display/RENDERING_CONTRACT.md).
+Format `target` as Unicode mathematical notation (`∂N/∂t = −λ·N`). Parallel
+to [`to_ascii`](@ref) and [`to_latex`](@ref) across the same domain —
+`Nothing`, `Real`, `String`, `ASTExpr`, `Equation`, and the three containers
+`Model` / `ReactionSystem` / `EsmFile` — following the cross-binding rendering
+contract (tests/display/RENDERING_CONTRACT.md, API_SPEC.md §8 item 18).
 
-The three renderers accept the same domain in every binding (API_SPEC.md §8
-item 18); `to_unicode` and `to_latex` used to throw `ArgumentError` on the
-containers here, so a caller could render an `EsmFile` summary in one format
-and not the other two. A container SUMMARY has no Unicode- or LaTeX-specific
-form — it is `Model(2 variables, 1 equation)`, not mathematics — so all three
-renderers return the same plain-text summary, exactly as Python's shared
-`_format` dispatch does ("container summaries are rendered as plain text for
-both LaTeX and ASCII"). The `to_ascii` summaries are unchanged.
+A bare `String` is a variable or species name: Greek-letter names become their
+symbols and chemical formulas get subscripts; `"Infinity"`, `"-Infinity"` and
+`"NaN"` render as the non-finite numbers they name. A container has no
+mathematical form, so all three renderers return the same plain-text summary,
+such as `Model(3 variables, 2 equations)`. Any other type throws an
+`ArgumentError`.
+
+# Examples
+```julia
+to_unicode(parse_equation("D(N) = -lambda * N"))  # "∂N/∂t = −λ·N"
+```
 """
 to_unicode(target) =
     throw(ArgumentError("Unsupported type for Unicode formatting: $(typeof(target))"))
@@ -1689,6 +1691,21 @@ to_unicode(target::Model) = to_ascii(target)
 to_unicode(target::ReactionSystem) = to_ascii(target)
 to_unicode(target::EsmFile) = to_ascii(target)
 
+"""
+    to_latex(target) -> String
+
+Format `target` as LaTeX mathematical notation
+(`\\frac{\\partial N}{\\partial t} = -\\lambda \\cdot N`). Accepts the same
+domain as [`to_unicode`](@ref) and [`to_ascii`](@ref), with the same handling of
+bare names, non-finite numbers and containers (a container renders as its
+plain-text summary). Any other type throws an `ArgumentError`.
+
+# Examples
+```julia
+to_latex(parse_equation("D(N) = -lambda * N"))
+# "\\frac{\\partial N}{\\partial t} = -\\lambda \\cdot N"
+```
+"""
 to_latex(target) =
     throw(ArgumentError("Unsupported type for LaTeX formatting: $(typeof(target))"))
 to_latex(::Nothing) = "nothing"

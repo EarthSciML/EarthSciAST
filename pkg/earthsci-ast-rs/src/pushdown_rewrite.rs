@@ -2140,13 +2140,11 @@ pub struct ProviderGate {
 /// matches on `to`. These pairs remain the routing that lets an array supplied
 /// under the SOURCE's spelling still reach its consumer.
 ///
-/// esm 1.0.0 moved where this is written. It used to be a `variable_map`
-/// coupling edge from a loader COMPONENT to a model parameter; a data source is
-/// no longer a component, so the binding is the consuming parameter's own
+/// Two spellings are read. A data source binds to the consuming parameter
+/// through that parameter's own
 /// `update: {kind: "data", source, from: {file_variable}}` (esm-spec §5.4,
-/// §8.5). Both spellings are read, because a document may still carry the
-/// coupling form for a NON-source producer — the pair is "what feeds what", and
-/// only the writing side changed.
+/// §8.5); a NON-source producer may still feed a parameter through a
+/// `variable_map` coupling edge. Either way the pair is "what feeds what".
 pub fn pushdown_coupling_pairs(doc: &Value) -> Vec<(String, String)> {
     let mut out = Vec::new();
 

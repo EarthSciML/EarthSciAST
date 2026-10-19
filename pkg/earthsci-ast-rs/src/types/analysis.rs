@@ -110,7 +110,7 @@ pub struct ModelTestAssertion {
     pub reference: Option<AssertionReference>,
 }
 
-/// Inline validation test for a [`Model`] (schema gt-cc1).
+/// Inline validation test for a [`Model`].
 ///
 /// Defines the run configuration — initial conditions, parameter overrides,
 /// simulation time span — and a list of scalar assertions that must hold.

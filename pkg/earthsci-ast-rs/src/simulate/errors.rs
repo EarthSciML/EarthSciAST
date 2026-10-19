@@ -67,7 +67,7 @@ pub enum SimulateError {
     /// answer does not depend on the compiler: this asks whether the
     /// DOCUMENT's inputs are bound, not what a compiler can lower. A compiler
     /// that additionally cannot lower a read of the forcing channel reports
-    /// that separately as [`SimulateError::CompilerRefusedRule`].
+    /// that separately as [`CompileError::CompilerRefusedRule`](crate::CompileError::CompilerRefusedRule).
     ///
     /// Refused rather than evaluated at the parameter's `default`, which is
     /// not a fallback value but a placeholder: a forcing at its default

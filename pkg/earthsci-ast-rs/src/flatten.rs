@@ -344,7 +344,7 @@ pub enum FlattenError {
         target: String,
     },
 
-    /// A model subsystem that structurally declares itself a [`DataSource`] —
+    /// A model subsystem that structurally declares itself a [`DataSource`](crate::DataSource) —
     /// it carries the discriminating `kind` / `source` keys — failed to
     /// deserialize as one. Distinguished from a nested model or a
     /// `{ "ref": … }` reference, which are legitimately not loaders and are
@@ -438,7 +438,7 @@ pub struct FlattenMetadata {
 
 /// Spec-compliant flattened coupled system (§4.7.5).
 ///
-/// The shape matches the Julia [`gt-xnr`] and Python [`gt-268`] siblings:
+/// The shape matches the Julia and Python flattened systems:
 /// real [`Expr`]-tree equations (not strings), ordered variable maps for
 /// deterministic iteration, and full provenance metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -634,7 +634,7 @@ pub fn flatten(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
     )
 }
 
-/// Flatten with explicit [`CouplingImportOptions`] controlling how
+/// Flatten with explicit [`CouplingImportOptions`](crate::CouplingImportOptions) controlling how
 /// `coupling_import` `ref`s resolve (esm-spec §10.10.3). When the file carries
 /// no `coupling_import` entry this is identical to [`flatten`]; otherwise the
 /// import entries are expanded into concrete edges — spliced in position — as a

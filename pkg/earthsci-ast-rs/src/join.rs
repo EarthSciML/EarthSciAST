@@ -240,9 +240,9 @@ fn next_gate_id() -> u64 {
 /// Resolve every `join.on` clause in `model` (RFC §5.3), in place. Call once on
 /// an owned model **before** [`crate::faq::resolve_aggregate_ranges`], so
 /// each aggregate range still carries its `{ "from": <index set> }` linkage and
-/// the join key columns' member values can be read. Since v0.8.0 the
-/// `index_sets` registry is document-scoped (one registry shared by all
-/// models), so it is threaded in explicitly rather than read off the `Model`.
+/// the join key columns' member values can be read. The `index_sets`
+/// registry is document-scoped (one registry shared by all models), so it is
+/// passed in explicitly.
 ///
 /// Each `[left, right]` key pair is classified (see the module docs): a pair
 /// resolving to one loop symbol is a positional no-op, a pair over two distinct

@@ -46,8 +46,11 @@ import numpy as np
 
 from .errors import EarthSciAstError
 
-# Manifolds the geometry kernel understands (matches the closed schema enum on
-# the ``intersect_polygon`` op — esm-schema.json; additive in ess-my4.4.2).
+#: The closed set of manifold names :func:`intersect_polygon` accepts, matching
+#: the ``manifold`` enum on the ``intersect_polygon`` op in esm-schema.json.
+#: ``"planar"`` clips in the flat lon-lat plane; ``"spherical"`` and
+#: ``"geodesic"`` both clip on the sphere through the optional ``spherely``
+#: dependency (see the module docstring).
 MANIFOLDS: tuple[str, ...] = ("planar", "spherical", "geodesic")
 
 # B.5 / §5.8.2 sliver floor: ``atol ≈ 1e-15·R²``. Near-tangent overlaps are the
@@ -813,7 +816,7 @@ def polygon_area(ring: np.ndarray, manifold: str, radius: float = 1.0) -> float:
     sum (``radius`` = sphere radius / characteristic length, default the unit
     sphere). Returns ``0.0`` for a degenerate (< 3 vertex) ring — an empty clip.
     This is the imperative **cross-check oracle** for the ``sum_product``
-    ``polygon_area`` FAQ: the production polygon area now routes through that FAQ
+    ``polygon_area`` FAQ: the production polygon area routes through that FAQ
     (:func:`earthsci_ast.area_faq.polygon_area_via_faq`) for both manifolds,
     and this function encodes the same formula the FAQ body does.
     """

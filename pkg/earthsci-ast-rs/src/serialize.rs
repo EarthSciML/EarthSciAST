@@ -103,8 +103,7 @@ pub fn to_json_compact(esm_file: &EsmFile) -> Result<String, EsmError> {
 ///
 /// Returns `Ok(())`, never the payload: no function in this API both writes
 /// and hands back the serialized bytes — call [`to_json`] when you want the
-/// string. (`save` used to return the string here and in TypeScript while
-/// WRITING TO DISK in Julia, under the same name.)
+/// string.
 pub fn write_path<P: AsRef<Path>>(esm_file: &EsmFile, path: P) -> Result<(), EsmError> {
     let path = path.as_ref();
     let json = to_json(esm_file)?;

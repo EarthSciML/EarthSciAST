@@ -1866,14 +1866,29 @@ struct UnitFinding
     code::String
 end
 
-# esm-spec §4.8.4. A PROVABLE dimensional inconsistency; the structural layer
-# emits it as `unit_inconsistency`.
+"""
+    UNIT_DIMENSION_MISMATCH::String
+
+The [`UnitFinding`](@ref) `code` for a PROVABLE dimensional inconsistency
+(esm-spec §4.8.4), such as adding metres to seconds. Its value is
+`"unit_inconsistency"`, the structural error the finding is reported as by
+[`validate`](@ref).
+"""
 const UNIT_DIMENSION_MISMATCH = ERROR_CODES.UNIT_INCONSISTENCY
-# A declared unit string that does not parse under the §4.8.2 grammar or names a
-# symbol outside the §4.8.1 registry. A defect in the FILE, not a limit of the
-# checker — so it is a hard error, never a warning, and never silently coerced
-# to dimensionless (which would disable every dimensional check downstream of
-# it: a typo like `"1/time"` or `"m/s2"` would simply turn the checker off).
+
+"""
+    UNIT_PARSE_ERROR::String
+
+The [`UnitFinding`](@ref) `code` for a declared unit string that does not parse
+under the esm-spec §4.8.2 grammar or names a symbol outside the §4.8.1
+registry. Its value is `"unit_parse_error"`, which is also the structural
+error code [`validate`](@ref) reports it under.
+
+A defect in the FILE, not a limit of the checker, so it is a hard error, never
+a warning, and the unit is never coerced to dimensionless (which would turn off
+every dimensional check downstream of it: a typo like `"m/s2"` would simply
+disable the checker).
+"""
 const UNIT_PARSE_ERROR = ERROR_CODES.UNIT_PARSE_ERROR
 
 """
@@ -1901,10 +1916,9 @@ Four families are checked:
 4. **Equations** — the two-sided balance of a derivative equation.
 5. **Defining equations** — an inconsistency inside a bare-variable-LHS
    equation's right-hand side, and the defined variable's declared units against
-   the dimension that right-hand side actually has. This is the 0.x
-   observed-`expression` rule following its expression into the equations
-   (esm-spec §6.3.1); it reports at the DEFINED VARIABLE's pointer, which is
-   where the shared corpus pins it.
+   the dimension that right-hand side actually has (esm-spec §6.3.1). It
+   reports at the DEFINED VARIABLE's pointer, which is where the shared corpus
+   pins it.
 
 Subsystems are NOT recursed here (the caller owns path construction and does the
 recursion), keeping this function's pointers purely model-local.
