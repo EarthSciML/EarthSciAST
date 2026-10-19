@@ -5041,7 +5041,7 @@ For `variable_map` coupling entries, `transform` specifies how the source variab
 | Transform | Description |
 |---|---|
 | `param_to_var` | Replace a constant parameter with a time-varying variable from another system. Takes no `factor`. |
-| `identity` | Direct assignment without type change. Takes no `factor`. |
+| `identity` | Replacement with no change of type: `target := source`. Takes no `factor`. |
 | `additive` | Scaled replacement: `target := factor · source`. (To *add* a source/sink term to an existing tendency, use a `couple` `additive` equation — §10.3.) |
 | `multiplicative` | Scaled replacement: `target := factor · source`. (To *scale* an existing tendency by a source, use a `couple` `multiplicative` equation — §10.3.) |
 | `conversion_factor` | Scaled replacement applying a unit conversion: `target := factor · source`. |
