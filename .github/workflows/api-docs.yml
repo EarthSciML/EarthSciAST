@@ -42,7 +42,9 @@ jobs:
         if: matrix.binding == 'julia'
         uses: julia-actions/setup-julia@v2
         with:
-          version: '1.10'
+          # The examples environment dev-links the package through
+          # Project.toml [sources], which needs Julia 1.11 or newer.
+          version: '1'
       - name: Cache Julia packages
         if: matrix.binding == 'julia'
         uses: julia-actions/cache@v2
@@ -51,7 +53,8 @@ jobs:
         if: matrix.binding == 'typescript'
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          # The examples run under Node's built-in TypeScript type stripping.
+          node-version: '22'
           cache: npm
           cache-dependency-path: pkg/earthsci-ast-ts/package-lock.json
 
