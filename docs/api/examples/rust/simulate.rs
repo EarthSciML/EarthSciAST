@@ -3,8 +3,8 @@
 use std::collections::HashMap;
 
 use earthsci_ast::{
-    ProblemOptions, ReturnCode, SolveOptions, esm_problem, observed_trajectory, remake,
-    Remake, solve,
+    ProblemOptions, Remake, ReturnCode, SolveOptions, esm_problem, observed_trajectory, remake,
+    solve,
 };
 use earthsci_ast_api_examples::fixture;
 
