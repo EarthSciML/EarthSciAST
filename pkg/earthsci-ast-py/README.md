@@ -40,24 +40,28 @@ the xarray-backed openers need it, and they say so by name if it is missing.
 ## Usage
 
 ```python
-from earthsci_ast import Expr, Model, Species, Reaction
+from earthsci_ast import Equation, ExprNode, Model, ModelVariable
 
 # Create mathematical expressions
 expr = ExprNode(op="+", args=[1, 2])
 
-# Define model variables
-var = ModelVariable(type="state", units="kg/m^3", description="Concentration")
+# Define model variables: an `unknown` the solver solves for, or a `parameter`
+var = ModelVariable(type="unknown", units="kg/m^3", description="Concentration")
 
-# Build models
-model = Model(name="MyModel")
+# Build models: dc/dt = -0.1 c
+decay = Equation(
+    lhs=ExprNode(op="D", args=["c"], wrt="t"),
+    rhs=ExprNode(op="*", args=[-0.1, "c"]),
+)
+model = Model(name="MyModel", variables={"c": var}, equations=[decay])
 ```
 
 ## Simulation interface contract
 
 The Python binding's simulation surface is one noun and one verb —
 `esm_problem(input, tspan, ...)` builds, `solve(prob, ...)` runs
-(esm-libraries-spec §2.5). There is no `simulate()`: it conflated the
-per-document build with the per-run integration, and is deleted.
+(esm-libraries-spec §2.5): the per-document build is kept apart from the
+per-run integration, so one Problem can be solved many times.
 
 This is **not** a 0-D-only ODE solver. It is a runner for the post-discretize
 canonical AST: spatial dimensions are folded into array dimensions, and the
@@ -94,20 +98,13 @@ catalog) that rewrite those operators into the canonical post-discretize form:
 - the spatial axis becomes an array dimension on each state variable;
 - the only remaining independent variable is `t`.
 
-As of schema v0.8.0 this is **not** a separate external pass: the binding runs
+This is **not** a separate external pass: the binding runs
 the template rewrite itself, at load time (the §9.6 rewrite fixpoint), and
 Python, Julia, and Rust all do it identically. The discretized document is what
 `esm_problem()` consumes. Inside the Python binding, the array-op path is
 `_simulate_with_numpy` in `simulation_array.py` (delegates to the NumPy AST
 interpreter in `numpy_interpreter.py`). It walks the AST per cell against a flat
-state vector and integrates with SciPy's `solve_ivp`. The interpreter has been
-exercised at scales up to ~10⁶ cells.
-
-> The `discretize` function exported from `earthsci_ast` itself
-> (`from earthsci_ast import discretize`) handles only the RFC §12 DAE
-> binding contract — algebraic-equation factoring, not spatial discretization.
-> Spatial discretization is a template-expression rewrite the binding applies
-> at load, before you build a Problem.
+state vector and integrates with SciPy's `solve_ivp`.
 
 ### What you do not do
 
@@ -119,7 +116,7 @@ exercised at scales up to ~10⁶ cells.
   PDEs of arbitrary dimensionality, because the post-discretize AST is
   uniform in shape regardless of the original spatial topology.
 
-### Worked example: 1-D advection (post-discretize)
+### Worked example: 1-D diffusion (post-discretize)
 
 This example uses an already-discretized document (assume the discretization
 templates have already been applied) and shows the shape `esm_problem()`
@@ -128,13 +125,12 @@ is a 1-D diffusion stencil on a 10-cell grid where the spatial axis has
 been folded into the array index of `u`:
 
 ```python
-import json
-from earthsci_ast import ReturnCode, esm_problem, solve
-from earthsci_ast.parse import load
+from earthsci_ast import ReturnCode, esm_problem, load_path, solve
 
-# Load a post-discretize PDE fixture. The 1-D spatial axis has been folded
-# into the array dimension of u, so `independent_variables == ['t']`.
-file = load("tests/fixtures/faq/03_1d_stencil_mass_conservation.esm")
+# Load a post-discretize PDE fixture (the path is relative to the repository
+# root). The 1-D spatial axis has been folded into the array dimension of u,
+# so `independent_variables == ['t']`.
+file = load_path("tests/fixtures/faq/03_1d_stencil_mass_conservation.esm")
 
 # A delta spike at u[5]; everything else zero.
 u0 = {f"u[{i}]": (1.0 if i == 5 else 0.0) for i in range(1, 11)}
@@ -161,7 +157,7 @@ nodes survive. The full pipeline for a user-authored continuous PDE is:
   → earthsci_ast.esm_problem() / solve()  (NumPy interpreter integrates with SciPy)
 ```
 
-For more end-to-end discretized fixtures, see
+For more end-to-end discretized fixtures, see the repository's
 `tests/fixtures/faq/` (1-D, 2-D, makearray, reshape, transpose,
 concat, broadcast); `tests/test_faq_simulation.py` runs every
 fixture's declared assertions through `esm_problem()` / `solve()` and is the
@@ -171,7 +167,8 @@ conformance contract for the array-op path.
 
 `solve` takes the SciML spellings in every binding (API_SPEC §4), not SciPy's:
 `alg` (not `method`), `abstol` (not `atol`), `reltol` (not `rtol`), `saveat`
-(not `t_eval`). Defaults are `reltol=1e-10`, `abstol=1e-14`. A run reports
+(not `t_eval`). Defaults are `reltol=1e-4`, `abstol=1e-6`, shared by every
+binding; pass tighter tolerances when accuracy matters. A run reports
 `sol.retcode`, a `ReturnCode` — `Success`, `MaxIters`, `Unstable`,
 `Terminated`, `Failure` — never a boolean beside a sentence.
 

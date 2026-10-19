@@ -1670,7 +1670,8 @@ def _load_ref_data(
     are authored relative to the assembler that carries the edge, not the leaf
     they land in.
 
-    ``loader_metaparameters`` are the top-level ``load()`` API bindings (esm-spec
+    ``loader_metaparameters`` are the ``metaparameters`` passed to
+    :func:`load_path` / :func:`load_string` / :func:`load_document` (esm-spec
     §9.7.6 binding site 4). Those the referenced document DECLARES are propagated
     into its close so a leaf mounted with no explicit edge ``bindings`` still
     resolves under the loader's grid (e.g. NX/NY), matching the Julia/Rust
@@ -2310,8 +2311,8 @@ def resolve_model_refs(
     Args:
         esm_file: The parsed ESM file to resolve references in (modified in place)
         base_path: The base directory for resolving relative file paths
-        loader_metaparameters: The top-level ``load()`` API metaparameter
-            bindings (esm-spec §9.7.6 binding site 4). Forwarded to each mounted
+        loader_metaparameters: The ``metaparameters`` passed to the
+            ``load_*`` entry point (esm-spec §9.7.6 binding site 4). Forwarded to each mounted
             leaf's resolution so a §9.7.10 form-A mount edge closes the leaf's
             declared metaparameters (e.g. NX/NY) under the loader's grid when the
             edge itself carries no explicit ``bindings``.

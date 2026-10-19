@@ -2342,7 +2342,7 @@ def resolve_template_machinery(
     the top-level ``expression_templates`` / ``metaparameters`` DECLARATIONS
     restored VERBATIM from a pre-folding snapshot (esm-spec §9.6.4 rule 5:
     Option A expands call sites, it does not delete declarations). ``None`` when
-    the document carries no §9.7 machinery (the legacy fast path). Does not
+    the document carries no §9.7 machinery. Does not
     mutate the input.
 
     ``mount_declared`` widens the site-4 check to the names declared by the

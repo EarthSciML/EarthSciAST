@@ -900,7 +900,7 @@ class DataSource:
     A named external data source reduced to pure I/O: it locates, reads,
     decodes, slices and filters bytes on disk (esm-spec §8).
 
-    From 1.0.0 it exposes NO variables and is NOT a component — it cannot be a
+    It exposes NO variables and is NOT a component — it cannot be a
     coupling endpoint, a subsystem, or a scoped-name path root. A model consumes
     it by declaring a PARAMETER whose ``update`` names this source and binds one
     of its ``file_variable``s (:class:`DataSourceBinding`); the parameter owns

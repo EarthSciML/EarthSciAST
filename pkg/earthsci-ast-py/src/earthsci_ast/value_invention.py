@@ -1306,10 +1306,9 @@ def materialize_value_invention(
     produced regardless.
 
     ``index_sets`` is the document-scoped index-set registry (RFC §5.2), which
-    as of v0.8.0 lives at the top level of the document rather than on each
-    model — mirrors :func:`reference_resolution.build_reference_graph`. When
-    omitted it falls back to a model-local ``model_json["index_sets"]`` key
-    (the pre-v0.8.0 behavior), so a caller need not splice the document registry
+    lives at the top level of the document rather than on each model — mirrors
+    :func:`reference_resolution.build_reference_graph`. When omitted it falls
+    back to a model-local ``model_json["index_sets"]`` key, so a caller need not splice the document registry
     onto the model dict before calling.
 
     ``const_array_boundaries`` optionally declares a per-const-array,
