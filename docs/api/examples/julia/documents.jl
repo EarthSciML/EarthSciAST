@@ -35,7 +35,7 @@ try
     load_string("{not json")
     error("expected a ParseError")
 catch e
-    @assert e isa EarthSciAST.ParseError
+    @assert e isa ParseError
     println(sprint(showerror, e))
 end
 
