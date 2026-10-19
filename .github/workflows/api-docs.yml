@@ -72,7 +72,10 @@ jobs:
         if: matrix.binding == 'rust'
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: pkg/earthsci-ast-rs
+          # rust.sh builds into these target directories, not the workspaces' own.
+          workspaces: |
+            pkg/earthsci-ast-rs -> ../../build/api-docs/rust-rustdoc-target
+            docs/api/examples/rust -> ../../../../build/api-docs/rust-examples-target
 
       - name: Set up Go
         if: matrix.binding == 'go'

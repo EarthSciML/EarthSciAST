@@ -6,7 +6,6 @@
 // directory unless absolute. scripts/api_docs/go.sh is the normal entry point:
 //
 //	go -C scripts/api_docs/extract_go run . -root "$PWD" -out "$PWD/build/api-docs/go.json"
-//	go -C scripts/api_docs/extract_go run . -root "$PWD" -check-examples "$PWD/docs/api/examples/go"
 package main
 
 import (
@@ -85,15 +84,8 @@ type extractor struct {
 func main() {
 	root := flag.String("root", ".", "repository root")
 	out := flag.String("out", "build/api-docs/go.json", "output path")
-	examples := flag.String("check-examples", "", "check the region markers of the example programs in this directory instead of extracting")
 	flag.Parse()
-	var err error
-	if *examples != "" {
-		err = runCheck(*root, *examples)
-	} else {
-		err = run(*root, *out)
-	}
-	if err != nil {
+	if err := run(*root, *out); err != nil {
 		fmt.Fprintln(os.Stderr, "extract_go:", err)
 		os.Exit(1)
 	}
@@ -109,14 +101,6 @@ func readManifest(root string) (*manifest, error) {
 		return nil, fmt.Errorf("api-surface.json: %w", err)
 	}
 	return &m, nil
-}
-
-func runCheck(root, dir string) error {
-	m, err := readManifest(root)
-	if err != nil {
-		return err
-	}
-	return checkRegions(dir, m)
 }
 
 func run(root, out string) error {

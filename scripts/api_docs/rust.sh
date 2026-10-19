@@ -115,7 +115,11 @@ examples() {
     done
     [[ "$missing" == 0 ]] || exit 1
 
-    CARGO_TARGET_DIR="$target" $cargo build --manifest-path "$dir/Cargo.toml" --examples --locked
+    # The crate's own lock file pins the examples' dependencies, so a
+    # dependency change in the crate never leaves a second lock file stale.
+    # Cargo then adds only the examples package itself (the copy is gitignored).
+    cp pkg/earthsci-ast-rs/Cargo.lock "$dir/Cargo.lock"
+    CARGO_TARGET_DIR="$target" $cargo build --manifest-path "$dir/Cargo.toml" --examples
 
     # Run from an unrelated directory: the examples find their fixtures
     # relative to their own source, never the working directory.

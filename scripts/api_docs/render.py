@@ -60,12 +60,30 @@ DEFAULT_REPO_URL = "https://github.com/EarthSciML/EarthSciAST"
 # so the layouts' render-link hook resolves them to permalinks under any base URL.
 SITE_ROOT = "/generated/api"
 
-PLACEHOLDER_RE = re.compile(r"^\s*<!--\s*example:\s*(?P<id>[A-Za-z0-9_.-]+)(?P<opts>(?:\s+\w+=\S+)*)\s*-->\s*$")
+PLACEHOLDER_RE = re.compile(
+    r"^\s*<!--\s*example:\s*(?P<id>[A-Za-z0-9_.-]+)(?P<opts>(?:\s+\w+=\S+)*)\s*-->\s*$"
+)
 API_LINK_RE = re.compile(r"\[(?P<text>[^\]\n]*)\]\(api:(?P<target>[^)\s]+)\)")
 FENCE_RE = re.compile(r"^\s{0,3}(`{3,}|~{3,})")
 ATX_RE = re.compile(r"^(\s{0,3})(#{1,6})(\s+|$)")
 CODE_SPAN_RE = re.compile(r"(`+)(.+?)\1", re.S)
 AUTOLINK_RE = re.compile(r"<(https?://[^>\s]+|mailto:[^>\s]+)>")
+
+
+def closes_fence(line: str, opener: str) -> bool:
+    """Whether ``line`` closes a code fence opened by the marker ``opener``.
+
+    CommonMark: same character, at least as long, nothing after it.
+    """
+    m = FENCE_RE.match(line)
+    if not m:
+        return False
+    marker = m.group(1)
+    return (
+        marker[0] == opener[0]
+        and len(marker) >= len(opener)
+        and not line.strip()[len(marker) :].strip()
+    )
 
 
 class RenderError(Exception):
@@ -119,10 +137,10 @@ class BindingDocs:
     package_version: str = ""
     extractor: str = ""
     by_key: dict[tuple[str, str], dict] = field(default_factory=dict)
-    by_spelling: dict[str, dict] = field(default_factory=dict)
 
     def lookup(self, spelling: str, kind: str) -> dict | None:
-        return self.by_key.get((spelling, kind)) or self.by_spelling.get(spelling)
+        # By kind as well as spelling: a type and its constructor share a spelling.
+        return self.by_key.get((spelling, kind))
 
 
 @dataclass
@@ -168,7 +186,7 @@ def load_binding_docs(api_docs: Path, binding: str, diag: Diagnostics) -> Bindin
         diag.error(f"{path}: not valid JSON: {exc}")
         return BindingDocs(binding, present=False)
     if data.get("binding") != binding:
-        diag.error(f"{path}: \"binding\" is {data.get('binding')!r}, expected {binding!r}")
+        diag.error(f'{path}: "binding" is {data.get("binding")!r}, expected {binding!r}')
     docs = BindingDocs(
         binding,
         present=True,
@@ -178,10 +196,9 @@ def load_binding_docs(api_docs: Path, binding: str, diag: Diagnostics) -> Bindin
     for i, sym in enumerate(data.get("symbols", [])):
         spelling = sym.get("spelling")
         if not isinstance(spelling, str):
-            diag.error(f"{path}: symbols[{i}] has no string \"spelling\"")
+            diag.error(f'{path}: symbols[{i}] has no string "spelling"')
             continue
         docs.by_key.setdefault((spelling, sym.get("kind", "")), sym)
-        docs.by_spelling.setdefault(spelling, sym)
     return docs
 
 
@@ -208,7 +225,9 @@ def load_groups(root: Path, stable: list[Symbol], surface: dict, diag: Diagnosti
             name, _, kind = op.partition(":")
             matches = [s for s in by_name.get(name, []) if not kind or s.kind == kind]
             if not matches:
-                diag.error(f"{path}: group {gid!r} lists {op!r}, which is not a stable canonical name")
+                diag.error(
+                    f"{path}: group {gid!r} lists {op!r}, which is not a stable canonical name"
+                )
                 continue
             for s in matches:
                 if s.group:
@@ -314,7 +333,7 @@ def clean_doc(doc: str, resolve) -> str:
         m = FENCE_RE.match(line)
         if in_fence is not None:
             out.append(line)
-            if m and m.group(1)[0] == in_fence[0] and len(m.group(1)) >= len(in_fence) and not line.strip()[len(m.group(1)) :].strip():
+            if closes_fence(line, in_fence):
                 in_fence = None
             continue
         if m:
@@ -323,7 +342,9 @@ def clean_doc(doc: str, resolve) -> str:
             continue
         h = ATX_RE.match(line)
         if h:
-            line = f"{h.group(1)}#### {line[h.end():]}".rstrip() if line[h.end():].strip() else line
+            line = (
+                f"{h.group(1)}#### {line[h.end() :]}".rstrip() if line[h.end() :].strip() else line
+            )
         line = API_LINK_RE.sub(lambda mm: resolve(mm.group("text"), mm.group("target")), line)
         out.append(_escape_html_outside_code(line))
     if in_fence is not None:
@@ -333,16 +354,33 @@ def clean_doc(doc: str, resolve) -> str:
     return text.replace("{{<", "{{&lt;").replace("{{%", "{{&#37;")
 
 
+SENTENCE_END_RE = re.compile(r"(?<=[.!?])\s")
+# A period that ends one of these does not end the sentence.
+ABBREVIATIONS = ("e.g.", "i.e.", "etc.", "vs.", "cf.")
+
+
 def first_sentence(doc: str | None, limit: int = 180) -> str:
     if not doc:
         return ""
     para = []
+    in_fence: str | None = None
     for line in doc.strip().split("\n"):
+        # Code is never the summary: Julia docstrings open with a fenced signature.
+        if in_fence is not None:
+            if closes_fence(line, in_fence):
+                in_fence = None
+            continue
+        m = FENCE_RE.match(line)
+        if m:
+            if para:
+                break
+            in_fence = m.group(1)
+            continue
         if not line.strip():
             if para:
                 break
             continue
-        if FENCE_RE.match(line) or line.lstrip().startswith(("#", "**", "- ", "* ", "|", ">")):
+        if line.lstrip().startswith(("#", "**", "- ", "* ", "|", ">")):
             if para:
                 break
             continue
@@ -350,9 +388,10 @@ def first_sentence(doc: str | None, limit: int = 180) -> str:
     text = " ".join(para)
     text = API_LINK_RE.sub(lambda m: m.group("text"), text)
     text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)
-    m = re.search(r"(?<=[.!?])\s", text)
-    if m:
-        text = text[: m.start()]
+    for m in SENTENCE_END_RE.finditer(text):
+        if not text[: m.start()].endswith(ABBREVIATIONS):
+            text = text[: m.start()]
+            break
     if len(text) > limit:
         text = text[: limit - 1].rsplit(" ", 1)[0] + "…"
     return _escape_html_outside_code(text)
@@ -366,7 +405,7 @@ def first_sentence(doc: str | None, limit: int = 180) -> str:
 class Renderer:
     def __init__(self, args, diag: Diagnostics):
         self.root: Path = args.root.resolve()
-        self.out: Path = (args.out if args.out.is_absolute() else self.root / args.out)
+        self.out: Path = args.out if args.out.is_absolute() else self.root / args.out
         self.diag = diag
         self.repo_url = args.repo_url.rstrip("/")
         self.sha = args.sha or self._git_sha()
@@ -381,8 +420,7 @@ class Renderer:
         ex_dir = args.examples_dir
         if ex_dir is not None and not ex_dir.is_absolute():
             ex_dir = self.root / ex_dir
-        canonical = {s.name for s in self.symbols}
-        extracted = regions_mod.extract(self.root, BINDINGS, canonical, examples_dir=ex_dir)
+        extracted = regions_mod.extract(self.root, BINDINGS, examples_dir=ex_dir)
         for e in extracted.errors:
             diag.error(f"example region: {e}")
         self.regions = extracted.regions
@@ -443,7 +481,7 @@ class Renderer:
             if absent:
                 self.diag.warn(
                     f"{b}.json leaves out {len(absent)} manifest spelling(s) (the contract wants "
-                    f"an entry with \"missing\": true): {', '.join(absent[:12])}"
+                    f'an entry with "missing": true): {", ".join(absent[:12])}'
                     + (" …" if len(absent) > 12 else "")
                 )
 
@@ -483,7 +521,9 @@ class Renderer:
         for p in self.surface.get("planned", []):
             if binding not in p.get("affects", []):
                 continue
-            if re.search(rf"(?<![A-Za-z0-9_]){re.escape(sym.name)}(?![A-Za-z0-9_])", p.get("canonical", "")):
+            if re.search(
+                rf"(?<![A-Za-z0-9_]){re.escape(sym.name)}(?![A-Za-z0-9_])", p.get("canonical", "")
+            ):
                 return p.get("resolution")
         return None
 
@@ -587,7 +627,11 @@ class Renderer:
         if guides:
             md.append("## Guides\n")
             for slug, title, desc in guides:
-                md.append(f"- [{title}]({SITE_ROOT}/guides/{slug}) — {desc}" if desc else f"- [{title}]({SITE_ROOT}/guides/{slug})")
+                md.append(
+                    f"- [{title}]({SITE_ROOT}/guides/{slug}) — {desc}"
+                    if desc
+                    else f"- [{title}]({SITE_ROOT}/guides/{slug})"
+                )
             md.append("")
         md.append("## Capability profiles\n")
         md.append(
@@ -637,7 +681,11 @@ class Renderer:
         for s in sorted(self.stable, key=lambda s: (s.name, s.kind)):
             g = self.group_by_id[s.group]
             marks = ["yes" if s.bindings.get(b) else "—" for b in BINDINGS]
-            md.append(f"| [{code(s.name)}]({s.page}) | {s.kind} | [{g.title}]({g.page}) | " + " | ".join(marks) + " |")
+            md.append(
+                f"| [{code(s.name)}]({s.page}) | {s.kind} | [{g.title}]({g.page}) | "
+                + " | ".join(marks)
+                + " |"
+            )
         self.write("ref/_index.md", "\n".join(md) + "\n")
 
     def render_group(self, g: Group) -> None:
@@ -653,7 +701,9 @@ class Renderer:
         order = {"function": 0, "type": 1, "error": 2, "constant": 3}
         for s in sorted(g.members, key=lambda s: (order.get(s.kind, 9), s.name)):
             who = ", ".join(LABEL[b] for b in BINDINGS if s.bindings.get(b))
-            md.append(f"| [{code(s.name)}]({s.page}) | {s.kind} | {who} | {table_cell(self.summary(s))} |")
+            md.append(
+                f"| [{code(s.name)}]({s.page}) | {s.kind} | {who} | {table_cell(self.summary(s))} |"
+            )
         md.append(f"\n[All topics]({SITE_ROOT})\n")
         self.write(f"topics/{g.id}.md", "\n".join(md))
 
@@ -691,7 +741,9 @@ class Renderer:
                 out.append(f"{code(sp)}\n")
             if entry is None:
                 if docs.present:
-                    out.append('<p class="api-absent">Not found by the documentation extractor.</p>\n')
+                    out.append(
+                        '<p class="api-absent">Not found by the documentation extractor.</p>\n'
+                    )
                 continue
             if entry.get("missing"):
                 out.append('<p class="api-absent">Not found by the documentation extractor.</p>\n')
@@ -736,7 +788,11 @@ class Renderer:
         self.write(f"ref/{s.slug}.md", "\n".join(md))
 
     def render_binding_indexes(self) -> None:
-        md = [front_matter(title="Bindings", description="Per-binding indexes of the API surface.", type="api")]
+        md = [
+            front_matter(
+                title="Bindings", description="Per-binding indexes of the API surface.", type="api"
+            )
+        ]
         for b in BINDINGS:
             md.append(f"- [{LABEL[b]}]({SITE_ROOT}/bindings/{b})")
         self.write("bindings/_index.md", "\n".join(md) + "\n")
@@ -751,14 +807,26 @@ class Renderer:
                 )
             ]
             if prof.get("package"):
-                md.append(f"**Package:** {code(prof['package'])}" + (f" {d.package_version}" if d.package_version else "") + "\n")
+                md.append(
+                    f"**Package:** {code(prof['package'])}"
+                    + (f" {d.package_version}" if d.package_version else "")
+                    + "\n"
+                )
             if d.present:
                 md.append(f"Documentation extracted with {d.extractor or 'the binding tooling'}.\n")
             else:
-                md.append(f'<p class="api-absent">{LABEL[b]} documentation was not extracted in this build.</p>\n')
-            caps = [PROFILE_LABEL.get(pid, pid) for pid, p in self.profiles.items() if b in p["bindings"]]
+                md.append(
+                    f'<p class="api-absent">{LABEL[b]} documentation was not extracted in this build.</p>\n'
+                )
+            caps = [
+                PROFILE_LABEL.get(pid, pid)
+                for pid, p in self.profiles.items()
+                if b in p["bindings"]
+            ]
             md.append(f"**Capability profiles:** {', '.join(caps)}.\n")
-            md.append(f"Extension-tier names are on the [{LABEL[b]} extension page]({SITE_ROOT}/extension/{b}).\n")
+            md.append(
+                f"Extension-tier names are on the [{LABEL[b]} extension page]({SITE_ROOT}/extension/{b}).\n"
+            )
             md.append("## Stable names\n")
             md.append(f"| {LABEL[b]} | Canonical | Kind | Summary |")
             md.append("|---|---|---|---|")
@@ -767,7 +835,12 @@ class Renderer:
                 for sp in s.bindings.get(b, []):
                     entry = d.lookup(sp, s.kind) if d.present else None
                     summ = first_sentence(entry.get("doc")) if entry else ""
-                    rows.append((sp.lower(), f"| {code(sp)} | [{code(s.name)}]({s.page}) | {s.kind} | {table_cell(summ)} |"))
+                    rows.append(
+                        (
+                            sp.lower(),
+                            f"| {code(sp)} | [{code(s.name)}]({s.page}) | {s.kind} | {table_cell(summ)} |",
+                        )
+                    )
             md.extend(r for _, r in sorted(rows))
             self.write(f"bindings/{b}.md", "\n".join(md) + "\n")
 
@@ -786,7 +859,9 @@ class Renderer:
             f"([API_SPEC.md §7]({self.repo_url}/blob/main/API_SPEC.md#7-extension-seams)).\n"
         )
         if not d.present:
-            md.append(f'<p class="api-absent">{LABEL[b]} documentation was not extracted in this build.</p>\n')
+            md.append(
+                f'<p class="api-absent">{LABEL[b]} documentation was not extracted in this build.</p>\n'
+            )
         if b == "rust":
             mods = self.surface["binding_profiles"]["rust"].get("public_modules", [])
             if mods:
@@ -828,7 +903,13 @@ class Renderer:
                 md.append(" · ".join(links) + "\n")
         self.write(f"extension/{b}.md", "\n".join(md))
         if b == BINDINGS[0]:
-            idx = [front_matter(title="Extension seams", description="Each binding's extension-tier names.", type="api")]
+            idx = [
+                front_matter(
+                    title="Extension seams",
+                    description="Each binding's extension-tier names.",
+                    type="api",
+                )
+            ]
             for bb in BINDINGS:
                 idx.append(f"- [{LABEL[bb]}]({SITE_ROOT}/extension/{bb})")
             self.write("extension/_index.md", "\n".join(idx) + "\n")
@@ -841,7 +922,9 @@ class Renderer:
                 type="api",
             )
         ]
-        md.append("| Binding | Stable names | Documented | Without a docstring | Not found by the extractor |")
+        md.append(
+            "| Binding | Stable names | Documented | Without a docstring | Not found by the extractor |"
+        )
         md.append("|---|---|---|---|---|")
         sections = []
         for b in BINDINGS:
@@ -865,13 +948,23 @@ class Renderer:
             if not undocumented and not missing:
                 sec.append("Every stable name is documented.\n")
             if undocumented:
-                sec.append("**Without a docstring:** " + ", ".join(
-                    f"[{code(sp)}]({s.page})" for sp, s in sorted(undocumented, key=lambda x: x[0].lower())
-                ) + "\n")
+                sec.append(
+                    "**Without a docstring:** "
+                    + ", ".join(
+                        f"[{code(sp)}]({s.page})"
+                        for sp, s in sorted(undocumented, key=lambda x: x[0].lower())
+                    )
+                    + "\n"
+                )
             if missing:
-                sec.append("**Not found by the extractor:** " + ", ".join(
-                    f"[{code(sp)}]({s.page})" for sp, s in sorted(missing, key=lambda x: x[0].lower())
-                ) + "\n")
+                sec.append(
+                    "**Not found by the extractor:** "
+                    + ", ".join(
+                        f"[{code(sp)}]({s.page})"
+                        for sp, s in sorted(missing, key=lambda x: x[0].lower())
+                    )
+                    + "\n"
+                )
             sections.append("\n".join(sec))
         md.append("")
         md.extend(sections)
@@ -892,7 +985,9 @@ class Renderer:
                 if s.name in ops:
                     gp = self.group_by_id[s.group].profile
                     if gp and gp != "core" and gp in self.profiles:
-                        if profile is None or len(self.profiles[gp]["bindings"]) < len(self.profiles[profile]["bindings"]):
+                        if profile is None or len(self.profiles[gp]["bindings"]) < len(
+                            self.profiles[profile]["bindings"]
+                        ):
                             profile = gp
         panels = []
         gaps = set()
@@ -926,7 +1021,7 @@ class Renderer:
             for n, line in enumerate(body.split("\n"), start=1):
                 m = FENCE_RE.match(line)
                 if in_fence is not None:
-                    if m and m.group(1)[0] == in_fence[0]:
+                    if closes_fence(line, in_fence):
                         in_fence = None
                     lines.append(line)
                     continue
@@ -952,7 +1047,13 @@ class Renderer:
             out = front_matter(title=title, description=desc or None, weight=weight, api_tabs=True)
             self.write(f"guides/{slug}.md", out + "\n".join(lines).strip("\n") + "\n")
             listing.append((slug, title, desc))
-        idx = [front_matter(title="Guides", description="Using the EarthSciAST bindings, step by step, in every language.", type="api")]
+        idx = [
+            front_matter(
+                title="Guides",
+                description="Using the EarthSciAST bindings, step by step, in every language.",
+                type="api",
+            )
+        ]
         for slug, title, desc in listing:
             idx.append(f"- [{title}]({SITE_ROOT}/guides/{slug})" + (f" — {desc}" if desc else ""))
         self.write("guides/_index.md", "\n".join(idx) + "\n")
@@ -978,12 +1079,28 @@ def _split_front_matter(text: str) -> tuple[dict, str]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("--root", type=Path, default=Path.cwd(), help="repository root (default: cwd)")
-    ap.add_argument("--api-docs", type=Path, default=Path("build/api-docs"), help="directory of <binding>.json files")
-    ap.add_argument("--examples-dir", type=Path, default=None, help="examples directory (default: docs/api/examples)")
-    ap.add_argument("--out", type=Path, default=Path("docs/content/generated/api"), help="output directory")
-    ap.add_argument("--sha", default=None, help="commit for source links (default: git rev-parse HEAD)")
+    ap.add_argument(
+        "--api-docs",
+        type=Path,
+        default=Path("build/api-docs"),
+        help="directory of <binding>.json files",
+    )
+    ap.add_argument(
+        "--examples-dir",
+        type=Path,
+        default=None,
+        help="examples directory (default: docs/api/examples)",
+    )
+    ap.add_argument(
+        "--out", type=Path, default=Path("docs/content/generated/api"), help="output directory"
+    )
+    ap.add_argument(
+        "--sha", default=None, help="commit for source links (default: git rev-parse HEAD)"
+    )
     ap.add_argument("--repo-url", default=DEFAULT_REPO_URL)
     ap.add_argument("--strict", action="store_true", help="treat warnings as errors")
     args = ap.parse_args(argv)

@@ -35,7 +35,8 @@ mkdir -p build/api-docs build/tmp
 export TMPDIR="${TMPDIR:-$ROOT/build/tmp}"
 
 if [[ -z "${PYTHON:-}" ]]; then
-  for candidate in python3.13 python3.12 python3.11 python3; do
+  # Plain python3 first: it is the one setup-python (or an active venv) put on PATH.
+  for candidate in python3 python3.13 python3.12 python3.11; do
     if command -v "$candidate" >/dev/null 2>&1 &&
        "$candidate" -c 'import sys; sys.exit(sys.version_info < (3, 11))' 2>/dev/null; then
       PYTHON="$candidate"

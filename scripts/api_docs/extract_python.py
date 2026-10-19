@@ -48,16 +48,16 @@ PUBLIC_DUNDERS = {"__getitem__", "__contains__", "__iter__", "__len__", "__call_
 
 
 def manifest_spellings(manifest: dict) -> list[tuple[str, str, str]]:
-    """Return ``(spelling, kind, tier)`` for every Python spelling, in order."""
-    seen: dict[str, tuple[str, str, str]] = {}
+    """Return ``(spelling, kind, tier)`` for every Python (spelling, kind), in order."""
+    seen: dict[tuple[str, str], tuple[str, str, str]] = {}
     for sym in manifest["symbols"]:
         binding = sym.get("bindings", {}).get("python")
         if binding is None:
             continue
         spellings = [binding] if isinstance(binding, str) else list(binding)
         for spelling in spellings:
-            seen.setdefault(spelling, (spelling, sym["kind"], sym["tier"]))
-    return sorted(seen.values(), key=lambda s: s[0].lower())
+            seen.setdefault((spelling, sym["kind"]), (spelling, sym["kind"], sym["tier"]))
+    return sorted(seen.values(), key=lambda s: (s[0].lower(), s[1]))
 
 
 # --------------------------------------------------------------------------
@@ -155,7 +155,12 @@ def class_signatures(cls, name: str) -> list[str]:
                 prefix = "@staticmethod "
             elif "classmethod" in member.labels:
                 prefix = "@classmethod "
-            sigs.append(prefix + function_signature(member, f"{name}.{mname}", method="staticmethod" not in member.labels))
+            sigs.append(
+                prefix
+                + function_signature(
+                    member, f"{name}.{mname}", method="staticmethod" not in member.labels
+                )
+            )
         else:
             ann = _ann(member.returns if member.is_function else member.annotation)
             sigs.append(f"{name}.{mname}" + (f": {ann}" if ann else "") + "  # property")
@@ -215,7 +220,9 @@ class Renderer:
         # An inline literal that wraps across a line break is one span.
         text = re.sub(
             r"``([^`]+?)``",
-            lambda m: "``" + " ".join(m.group(1).split()) + "``" if "\n" in m.group(1) else m.group(0),
+            lambda m: (
+                "``" + " ".join(m.group(1).split()) + "``" if "\n" in m.group(1) else m.group(0)
+            ),
             text,
         )
         lines = text.splitlines()
@@ -348,7 +355,9 @@ class Renderer:
             rows = []
             for r in section.value:
                 ann = _ann(r.annotation)
-                head = " ".join(x for x in [f"`{r.name}`" if r.name else "", f"`{ann}`" if ann else ""] if x)
+                head = " ".join(
+                    x for x in [f"`{r.name}`" if r.name else "", f"`{ann}`" if ann else ""] if x
+                )
                 desc = self.text(r.description or "")
                 if head:
                     rows.extend(self._bullet(head, desc))
@@ -397,7 +406,11 @@ class Renderer:
 
 def comment_doc(obj, repo_root: Path) -> str | None:
     """The ``#:`` comment block directly above an assignment, if any."""
-    path = repo_root / obj.relative_filepath if not Path(obj.filepath).is_absolute() else Path(obj.filepath)
+    path = (
+        repo_root / obj.relative_filepath
+        if not Path(obj.filepath).is_absolute()
+        else Path(obj.filepath)
+    )
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError:

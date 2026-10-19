@@ -109,7 +109,9 @@ assert list(doc.models) == ["Decay"]
 
 - The region id comes first. `ops=` lists the **canonical** names
   (`api-surface.json` `name`, never the binding spelling) of the operations the
-  region demonstrates. The renderer fails on an unknown canonical name.
+  region demonstrates, each one the binding has a spelling for.
+  `scripts/api_docs/regions.py` is the one checker of these rules; every binding
+  script and the renderer run it, and it fails on an unknown canonical name.
 - Code inside the region is shown dedented. A line ending in a `hide` comment
   (`# hide`, `// hide`) runs but is not shown; use it for setup the reader does
   not need, never to hide the assertion that proves a result.

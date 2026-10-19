@@ -2,7 +2,8 @@
 # API reference, TypeScript binding (docs/api/README.md §1):
 #   1. extract docs for every TypeScript spelling in api-surface.json
 #      -> build/api-docs/typescript.json
-#   2. type-check and run every example in docs/api/examples/typescript/
+#   2. check the example region markers (regions.py), then type-check and run
+#      every example in docs/api/examples/typescript/
 #
 # Usage: scripts/api_docs/typescript.sh [--extract-only | --examples-only]
 # Needs Node >= 22.6 (examples run with Node's TypeScript type stripping).
@@ -40,5 +41,6 @@ if [ "$mode" != "extract" ]; then
     (cd "$PKG" && npm run --silent build >"$ROOT/build/api-docs/typescript-build.log" 2>&1) || {
       cat "$ROOT/build/api-docs/typescript-build.log" >&2; exit 1; }
   fi
+  python3 "$ROOT/scripts/api_docs/regions.py" --root "$ROOT" --binding typescript >/dev/null
   node "$ROOT/scripts/api_docs/typescript_examples.mjs" "$ROOT"
 fi

@@ -10,7 +10,9 @@ The region syntax is defined in docs/api/README.md section 3:
 
 The comment token is chosen by file extension. A region id must be unique
 within one binding, regions may not nest, and every name in ``ops=`` must be a
-canonical name from api-surface.json.
+canonical name from api-surface.json that the binding has a spelling for.
+
+This is the only implementation of these rules: every binding script calls it.
 
 Usage, from the repository root:
 
@@ -63,8 +65,8 @@ class Region:
     id: str
     ops: list[str]
     path: str  # relative to the repository root
-    start_line: int  # 1-based line of the first code line inside the region
-    end_line: int  # 1-based line of the last code line inside the region
+    start_line: int  # 1-based line of the first shown code line
+    end_line: int  # 1-based line of the last shown code line
     code: str  # dedented, hide lines removed
     language: str = ""
 
@@ -102,7 +104,7 @@ def extract_file(
     binding: str,
     path: Path,
     rel: str,
-    canonical: set[str] | None,
+    canonical: dict[str, set[str]] | None,
     result: ExtractResult,
 ) -> None:
     token = COMMENT_TOKEN[path.suffix]
@@ -123,7 +125,7 @@ def extract_file(
                     f"{open_region['id']!r} (line {open_region['line']}); regions may not nest"
                 )
                 continue
-            rid, ops, problems = parse_header(m.group("rest"), canonical)
+            rid, ops, problems = parse_header(m.group("rest"), canonical, binding)
             for p in problems:
                 result.errors.append(f"{rel}:{lineno}: {p}")
             open_region = {"id": rid, "ops": ops, "line": lineno, "body": []}
@@ -133,10 +135,12 @@ def extract_file(
                 result.errors.append(f"{rel}:{lineno}: endregion without a region")
                 continue
             body = open_region["body"]
-            shown = [ln for (_, ln) in body if not hide_re.search(ln)]
-            code = "\n".join(dedent(shown))
-            first = body[0][0] if body else lineno
-            last = body[-1][0] if body else lineno
+            shown = [(n, ln) for (n, ln) in body if not hide_re.search(ln)]
+            code = "\n".join(dedent([ln for (_, ln) in shown]))
+            # The link range covers what the page shows, not hidden or blank lines.
+            visible = [n for (n, ln) in shown if ln.strip()]
+            first = visible[0] if visible else lineno
+            last = visible[-1] if visible else lineno
             if not code.strip():
                 result.errors.append(
                     f"{rel}:{open_region['line']}: region {open_region['id']!r} shows no code"
@@ -164,7 +168,9 @@ def extract_file(
         )
 
 
-def parse_header(rest: str, canonical: set[str] | None) -> tuple[str, list[str], list[str]]:
+def parse_header(
+    rest: str, canonical: dict[str, set[str]] | None, binding: str
+) -> tuple[str, list[str], list[str]]:
     """Parse ``<id> [ops=a,b]`` into (id, ops, problems)."""
     problems: list[str] = []
     parts = rest.split()
@@ -188,6 +194,10 @@ def parse_header(rest: str, canonical: set[str] | None) -> tuple[str, list[str],
                     f"region {rid!r}: ops= names {op!r}, which is not a canonical name "
                     "in api-surface.json (use the canonical name, not the binding spelling)"
                 )
+            elif binding not in canonical[op]:
+                problems.append(
+                    f"region {rid!r}: ops= names {op!r}, which has no {binding} spelling"
+                )
     return rid, ops, problems
 
 
@@ -206,15 +216,19 @@ def example_files(examples_dir: Path, binding: str) -> list[Path]:
     return files
 
 
-def canonical_names(root: Path) -> set[str]:
+def canonical_names(root: Path) -> dict[str, set[str]]:
+    """Map each canonical name in api-surface.json to the bindings that spell it."""
     surface = json.loads((root / "api-surface.json").read_text(encoding="utf-8"))
-    return {s["name"] for s in surface["symbols"]}
+    names: dict[str, set[str]] = {}
+    for s in surface["symbols"]:
+        names.setdefault(s["name"], set()).update(s["bindings"])
+    return names
 
 
 def extract(
     root: Path,
     bindings=BINDINGS,
-    canonical: set[str] | None = None,
+    canonical: dict[str, set[str]] | None = None,
     examples_dir: Path | None = None,
 ) -> ExtractResult:
     """Extract every region of the given bindings, collecting all problems.
@@ -249,10 +263,16 @@ def extract(
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("--root", type=Path, default=Path.cwd(), help="repository root (default: cwd)")
-    ap.add_argument("--examples-dir", type=Path, help="examples directory (default: <root>/docs/api/examples)")
-    ap.add_argument("--binding", choices=BINDINGS, action="append", help="limit to one binding (repeatable)")
+    ap.add_argument(
+        "--examples-dir", type=Path, help="examples directory (default: <root>/docs/api/examples)"
+    )
+    ap.add_argument(
+        "--binding", choices=BINDINGS, action="append", help="limit to one binding (repeatable)"
+    )
     ap.add_argument("--json", action="store_true", help="print the extracted regions as JSON")
     args = ap.parse_args(argv)
 

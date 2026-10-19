@@ -5,8 +5,8 @@
 #   scripts/api_docs/go.sh --extract-only   write build/api-docs/go.json only
 #   scripts/api_docs/go.sh --examples-only  run docs/api/examples/go only
 #
-# Needs only a Go toolchain (the version pkg/earthsci-ast-go/go.mod names, or
-# newer). Works from any directory; all output goes under build/.
+# Needs a Go toolchain (the version pkg/earthsci-ast-go/go.mod names, or
+# newer) and python3 for the region check. Works from any directory; all output goes under build/.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -30,7 +30,7 @@ if [[ $extract == 1 ]]; then
 fi
 
 if [[ $examples == 1 ]]; then
-  go -C "$tool" run . -root "$root" -check-examples "$root/docs/api/examples/go"
+  python3 "$root/scripts/api_docs/regions.py" --root "$root" --binding go >/dev/null
   ex="$root/docs/api/examples/go"
   go -C "$ex" vet ./...
   go -C "$ex" test -p 2 -count=1 ./...

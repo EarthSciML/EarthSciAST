@@ -56,7 +56,8 @@ class Doc:
         # Paths of types, to tell a method (whose parent is a type) from a
         # free function: newer formats list methods in `paths` too.
         self.type_paths = {
-            tuple(p["path"]) for p in self.paths.values()
+            tuple(p["path"])
+            for p in self.paths.values()
             if p.get("kind") in ("struct", "enum", "union", "trait", "type_alias")
         }
 
@@ -122,7 +123,9 @@ def fmt_constraint(c) -> str:
     binding = c.get("binding", {})
     if "equality" in binding:
         term = binding["equality"]
-        value = fmt_type(term["type"]) if "type" in term else term.get("constant", {}).get("expr", "_")
+        value = (
+            fmt_type(term["type"]) if "type" in term else term.get("constant", {}).get("expr", "_")
+        )
         return f"{name} = {value}"
     if "constraint" in binding:
         return f"{name}: " + fmt_bounds(binding["constraint"])
@@ -142,7 +145,11 @@ def fmt_bound(b) -> str:
     if "outlives" in b:
         return b["outlives"]
     if "use" in b:
-        return "use<" + ", ".join(str(x if isinstance(x, str) else next(iter(x.values()))) for x in b["use"]) + ">"
+        return (
+            "use<"
+            + ", ".join(str(x if isinstance(x, str) else next(iter(x.values()))) for x in b["use"])
+            + ">"
+        )
     return "?"
 
 
@@ -157,11 +164,16 @@ def fmt_type(t) -> str:
         return "()"
     if isinstance(t, str):
         return "_" if t == "infer" else t
-    (k, v), = t.items()
+    ((k, v),) = t.items()
     if k == "resolved_path":
         return path_name(v) + fmt_generic_args(v.get("args"))
     if k == "dyn_trait":
-        traits = [fmt_hrtb(p.get("generic_params", [])) + path_name(p["trait"]) + fmt_generic_args(p["trait"].get("args")) for p in v["traits"]]
+        traits = [
+            fmt_hrtb(p.get("generic_params", []))
+            + path_name(p["trait"])
+            + fmt_generic_args(p["trait"].get("args"))
+            for p in v["traits"]
+        ]
         if v.get("lifetime"):
             traits.append(v["lifetime"])
         return "dyn " + " + ".join(traits)
@@ -192,7 +204,11 @@ def fmt_type(t) -> str:
     if k == "qualified_path":
         self_ty = fmt_type(v["self_type"])
         trait = v.get("trait")
-        base = f"<{self_ty} as {path_name(trait)}{fmt_generic_args(trait.get('args'))}>" if trait else self_ty
+        base = (
+            f"<{self_ty} as {path_name(trait)}{fmt_generic_args(trait.get('args'))}>"
+            if trait
+            else self_ty
+        )
         return f"{base}::{v['name']}{fmt_generic_args(v.get('args'))}"
     if k == "function_pointer":
         sig = v.get("sig", v.get("decl"))
@@ -233,14 +249,21 @@ def fmt_where(generics) -> str:
     for w in generics.get("where_predicates", []):
         if "bound_predicate" in w:
             bp = w["bound_predicate"]
-            preds.append(fmt_hrtb(bp.get("generic_params", [])) + fmt_type(bp["type"]) + ": " + fmt_bounds(bp["bounds"]))
+            preds.append(
+                fmt_hrtb(bp.get("generic_params", []))
+                + fmt_type(bp["type"])
+                + ": "
+                + fmt_bounds(bp["bounds"])
+            )
         elif "lifetime_predicate" in w:
             lp = w["lifetime_predicate"]
             preds.append(lp["lifetime"] + ": " + " + ".join(lp["outlives"]))
         elif "eq_predicate" in w:
             ep = w["eq_predicate"]
             rhs = ep["rhs"]
-            rhs_s = fmt_type(rhs["type"]) if "type" in rhs else rhs.get("constant", {}).get("expr", "_")
+            rhs_s = (
+                fmt_type(rhs["type"]) if "type" in rhs else rhs.get("constant", {}).get("expr", "_")
+            )
             preds.append(fmt_type(ep["lhs"]) + " = " + rhs_s)
     return (" where " + ", ".join(preds)) if preds else ""
 
@@ -261,7 +284,9 @@ def fmt_fn(name: str, f: dict, vis: str = "pub ") -> str:
     for arg_name, ty in sig["inputs"]:
         if arg_name == "self":
             ts = fmt_type(ty)
-            args.append({"Self": "self", "&Self": "&self", "&mut Self": "&mut self"}.get(ts, f"self: {ts}"))
+            args.append(
+                {"Self": "self", "&Self": "&self", "&mut Self": "&mut self"}.get(ts, f"self: {ts}")
+            )
         else:
             args.append(f"{arg_name}: {fmt_type(ty)}")
     out = sig.get("output")
@@ -278,10 +303,17 @@ def fmt_variant(doc: Doc, v: dict) -> str:
         return name + (f" = {disc['expr']}" if disc else "")
     if "tuple" in kind:
         fields = [doc.item(i) for i in kind["tuple"]]
-        return name + "(" + ", ".join(fmt_type(f["inner"]["struct_field"]) if f else "_" for f in fields) + ")"
+        return (
+            name
+            + "("
+            + ", ".join(fmt_type(f["inner"]["struct_field"]) if f else "_" for f in fields)
+            + ")"
+        )
     if "struct" in kind:
         fields = [doc.item(i) for i in kind["struct"]["fields"]]
-        body = ", ".join(f"{f['name']}: {fmt_type(f['inner']['struct_field'])}" for f in fields if f)
+        body = ", ".join(
+            f"{f['name']}: {fmt_type(f['inner']['struct_field'])}" for f in fields if f
+        )
         return name + " { " + body + " }"
     return name
 
@@ -310,10 +342,17 @@ def declaration(doc: Doc, item: dict, name: str) -> str:
             return head + ";"
         if "tuple" in sk:
             fields = [doc.item(i) for i in sk["tuple"]]
-            inner = ", ".join(("pub " + fmt_type(f["inner"]["struct_field"])) if f else "/* private field */" for f in fields)
+            inner = ", ".join(
+                ("pub " + fmt_type(f["inner"]["struct_field"])) if f else "/* private field */"
+                for f in fields
+            )
             return f"{head}({inner}){fmt_where(v['generics'])};"
         plain = sk["plain"]
-        lines = [f"    pub {f['name']}: {fmt_type(f['inner']['struct_field'])}," for f in map(doc.item, plain["fields"]) if f]
+        lines = [
+            f"    pub {f['name']}: {fmt_type(f['inner']['struct_field'])},"
+            for f in map(doc.item, plain["fields"])
+            if f
+        ]
         if plain.get("has_stripped_fields", plain.get("fields_stripped")):
             lines.append("    /* private fields */")
         if not lines:
@@ -334,11 +373,15 @@ def declaration(doc: Doc, item: dict, name: str) -> str:
                 continue
             mk = kind_of(member)
             if mk == "function":
-                lines.append("    " + fmt_fn(member["name"], member["inner"]["function"], vis="") + ";")
+                lines.append(
+                    "    " + fmt_fn(member["name"], member["inner"]["function"], vis="") + ";"
+                )
             elif mk == "assoc_type":
                 lines.append(f"    type {member['name']};")
             elif mk == "assoc_const":
-                lines.append(f"    const {member['name']}: {fmt_type(member['inner']['assoc_const']['type'])};")
+                lines.append(
+                    f"    const {member['name']}: {fmt_type(member['inner']['assoc_const']['type'])};"
+                )
         return head + " {\n" + "\n".join(lines) + "\n}" if lines else head + " {}"
     if k == "union":
         return f"pub union {name}{fmt_generic_params(v['generics'])} {{ /* fields */ }}"
@@ -355,7 +398,11 @@ def inherent_methods(doc: Doc, item: dict, name: str) -> list[str]:
         if not impl:
             continue
         iv = impl["inner"]["impl"]
-        if iv.get("trait") is not None or iv.get("is_synthetic", iv.get("synthetic")) or iv.get("blanket_impl"):
+        if (
+            iv.get("trait") is not None
+            or iv.get("is_synthetic", iv.get("synthetic"))
+            or iv.get("blanket_impl")
+        ):
             continue
         self_ty = fmt_type(iv["for"])
         impl_generics = fmt_generic_params(iv.get("generics", {}))
@@ -378,14 +425,25 @@ HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
 REFDEF_RE = re.compile(r"^\s{0,3}\[([^\]]+)\]:\s*(\S+)\s*$")
 # Rustdoc code-block attributes that still mean "this is Rust".
 RUST_FENCE_ATTRS = {
-    "", "rust", "ignore", "no_run", "should_panic", "compile_fail", "test_harness",
-    "edition2015", "edition2018", "edition2021", "edition2024",
+    "",
+    "rust",
+    "ignore",
+    "no_run",
+    "should_panic",
+    "compile_fail",
+    "test_harness",
+    "edition2015",
+    "edition2018",
+    "edition2021",
+    "edition2024",
 }
 
 
 def is_rust_fence(info: str) -> bool:
     tokens = [t.strip() for t in re.split(r"[,\s]+", info.strip()) if t.strip()]
-    return all(t in RUST_FENCE_ATTRS or t.startswith("edition") or t.startswith("ignore-") for t in tokens)
+    return all(
+        t in RUST_FENCE_ATTRS or t.startswith("edition") or t.startswith("ignore-") for t in tokens
+    )
 
 
 class LinkResolver:
@@ -416,13 +474,25 @@ class LinkResolver:
         # spelling it has no page for as plain code.
         if path:
             segments = path["path"]
-            member = path.get("kind") in ("variant", "struct_field", "method", "assoc_const", "assoc_type")
+            member = path.get("kind") in (
+                "variant",
+                "struct_field",
+                "method",
+                "assoc_const",
+                "assoc_type",
+            )
             if member or tuple(segments[:-1]) in self.doc.type_paths:
                 return "api:" + "::".join(segments[-2:])
             return f"api:{segments[-1]}"
-        text = re.sub(r"^(fn|struct|enum|trait|type|const|constant|static|mod|macro|method|field|variant|tymethod)@", "", key.strip("`"))
+        text = re.sub(
+            r"^(fn|struct|enum|trait|type|const|constant|static|mod|macro|method|field|variant|tymethod)@",
+            "",
+            key.strip("`"),
+        )
         text = text.rstrip("!").removesuffix("()")
-        segments = [self.self_name if seg == "Self" and self.self_name else seg for seg in text.split("::")]
+        segments = [
+            self.self_name if seg == "Self" and self.self_name else seg for seg in text.split("::")
+        ]
         segments = [seg for seg in segments if seg not in ("crate", "self", "super", "Self")]
         if not segments:
             return f"api:{target['name']}" if target and target.get("name") else ""
@@ -451,14 +521,16 @@ def convert_links(text: str, resolver: LinkResolver) -> str:
         if ch == "[":
             close = find_label_end(text, i)
             if close is not None:
-                label = text[i + 1:close]
-                rest = text[close + 1:]
+                label = text[i + 1 : close]
+                rest = text[close + 1 :]
                 # [label](dest)
                 if rest.startswith("("):
                     dest_end = rest.find(")")
                     if dest_end != -1:
                         dest = rest[1:dest_end].strip()
-                        if not re.match(r"^[a-z][a-z0-9+.-]*://|^mailto:|^#|^/|.*\.(md|html)(#.*)?$", dest):
+                        if not re.match(
+                            r"^[a-z][a-z0-9+.-]*://|^mailto:|^#|^/|.*\.(md|html)(#.*)?$", dest
+                        ):
                             target = resolver.resolve(dest)
                             out.append(render_link(label, target, dest))
                             i = close + 1 + dest_end + 1
@@ -570,7 +642,7 @@ def convert_doc(doc: Doc, raw: str | None, links: dict, self_name: str | None = 
                 fence = None
                 continue
             if fence[1]:
-                body = line[len(fence[2]):] if line.startswith(fence[2]) else line
+                body = line[len(fence[2]) :] if line.startswith(fence[2]) else line
                 stripped = body.lstrip()
                 # Rustdoc hides `# ` lines in Rust examples; `##` escapes a `#`.
                 if stripped == "#" or stripped.startswith("# "):
@@ -661,12 +733,18 @@ def pick(candidates, manifest_kind: str):
             return root_item, target, tid
         if want_const and k in ("constant", "static"):
             return root_item, target, tid
-        if not want_fn and not want_const and k in ("struct", "enum", "trait", "type_alias", "union"):
+        if (
+            not want_fn
+            and not want_const
+            and k in ("struct", "enum", "trait", "type_alias", "union")
+        ):
             return root_item, target, tid
     return candidates[0] if candidates and candidates[0][1] is not None else (None, None, None)
 
 
-def native_url(doc: Doc, root_item: dict, target: dict, tid, name: str, pub_mods: set) -> str | None:
+def native_url(
+    doc: Doc, root_item: dict, target: dict, tid, name: str, pub_mods: set
+) -> str | None:
     feats = required_features(root_item.get("attrs"), target.get("attrs"))
     if feats - DOCS_RS_FEATURES:
         return None
@@ -680,13 +758,17 @@ def native_url(doc: Doc, root_item: dict, target: dict, tid, name: str, pub_mods
     path = doc.path_of(tid)
     if path and tuple(path["path"][:-1]) in pub_mods:
         module = tuple(path["path"][:-1])
-    if "doc(inline)" in attr_text(root_item.get("attrs")) or "Inline" in attr_text(root_item.get("attrs")):
+    if "doc(inline)" in attr_text(root_item.get("attrs")) or "Inline" in attr_text(
+        root_item.get("attrs")
+    ):
         module = ("earthsci_ast",)
     return DOCS_RS_ROOT + "/".join(module) + f"/{prefix}.{name}.html"
 
 
 def feature_note(root_item: dict, target: dict) -> str | None:
-    feats = sorted(required_features(root_item.get("attrs"), target.get("attrs")) - DOCS_RS_FEATURES)
+    feats = sorted(
+        required_features(root_item.get("attrs"), target.get("attrs")) - DOCS_RS_FEATURES
+    )
     if not feats:
         return None
     names = " and ".join(f"`{f}`" for f in feats)
@@ -708,7 +790,9 @@ def main() -> int:
     ap.add_argument("--rustdoc-json", required=True, type=Path)
     ap.add_argument("--manifest", required=True, type=Path)
     ap.add_argument("--cargo-toml", required=True, type=Path)
-    ap.add_argument("--extractor", required=True, help="toolchain description for the `extractor` field")
+    ap.add_argument(
+        "--extractor", required=True, help="toolchain description for the `extractor` field"
+    )
     ap.add_argument("--out", required=True, type=Path)
     args = ap.parse_args()
 
@@ -727,7 +811,7 @@ def main() -> int:
         b = sym["bindings"].get("rust")
         if b is None:
             continue
-        for s in (b if isinstance(b, list) else [b]):
+        for s in b if isinstance(b, list) else [b]:
             spellings.append((s, sym["kind"], sym["name"], sym["tier"]))
 
     entries = root_entries(doc)
@@ -737,10 +821,17 @@ def main() -> int:
     for spelling, kind, canonical, tier in spellings:
         root_item, target, tid = pick(entries.get(spelling, []), kind)
         if target is None:
-            symbols.append({
-                "spelling": spelling, "kind": kind, "signatures": [], "doc": None,
-                "source": None, "native_url": None, "missing": True,
-            })
+            symbols.append(
+                {
+                    "spelling": spelling,
+                    "kind": kind,
+                    "signatures": [],
+                    "doc": None,
+                    "source": None,
+                    "native_url": None,
+                    "missing": True,
+                }
+            )
             missing_docs.append((tier, canonical, spelling, "not found"))
             continue
         sigs = [declaration(doc, target, spelling)] + inherent_methods(doc, target, spelling)
@@ -759,14 +850,16 @@ def main() -> int:
         source = None
         if span:
             source = {"path": f"{CRATE_DIR}/{span['filename']}", "line": span["begin"][0]}
-        symbols.append({
-            "spelling": spelling,
-            "kind": kind,
-            "signatures": sigs,
-            "doc": body,
-            "source": source,
-            "native_url": native_url(doc, root_item, target, tid, spelling, pub_mods),
-        })
+        symbols.append(
+            {
+                "spelling": spelling,
+                "kind": kind,
+                "signatures": sigs,
+                "doc": body,
+                "source": source,
+                "native_url": native_url(doc, root_item, target, tid, spelling, pub_mods),
+            }
+        )
 
     out = {
         "binding": "rust",
@@ -778,8 +871,10 @@ def main() -> int:
     args.out.write_text(json.dumps(out, indent=2, ensure_ascii=False) + "\n")
 
     with_doc = sum(1 for s in symbols if s["doc"] is not None)
-    print(f"rust_extract: {len(symbols)} spellings, {with_doc} with docs, "
-          f"{len(symbols) - with_doc} without, -> {args.out}")
+    print(
+        f"rust_extract: {len(symbols)} spellings, {with_doc} with docs, "
+        f"{len(symbols) - with_doc} without, -> {args.out}"
+    )
     stable_gaps = [m for m in missing_docs if m[0] == "stable"]
     if stable_gaps:
         print(f"rust_extract: {len(stable_gaps)} stable-tier spellings have no docs:")
