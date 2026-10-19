@@ -34,7 +34,7 @@ Pkg.add("EarthSciAST")
 using EarthSciAST
 
 # Load an ESM format file
-esm_file = load("model.esm")
+esm_file = load_path("model.esm")
 
 # Access model components
 model = esm_file.models["atmosphere"]
@@ -58,14 +58,15 @@ end
 ## Simulation runners
 
 EarthSciAST.jl ships two official ESS Julia simulation runners that
-consume the canonical-form AST emitted by [`discretize`](@ref):
+consume canonical-form AST, after the document's rewrite rules have
+discretized it:
 
-- **ModelingToolkit (MTK)** — the default. Production runtime via the
-  `EarthSciASTMTKExt` package extension.
-- **`tree_walk`** — alternate runtime ([`esm_problem`](@ref)) for very
-  large discretized PDE systems whose scalar count exceeds MTK's
-  `structural_simplify` / tearing / codegen ceiling. Compile time is
-  independent of system size.
+- **`tree_walk`** — the default ([`esm_problem`](@ref), `compiler = :native`).
+  Build time is independent of system size, so it runs large discretized PDE
+  systems whose scalar count exceeds ModelingToolkit's compile budget.
+- **ModelingToolkit (MTK)** — `esm_problem(…; compiler = :mtk)` with
+  ModelingToolkit loaded, through the `EarthSciASTMTKExt` package extension.
+  The one runner that executes events and implicit equations.
 
 See [Simulation Runners](@ref) for when to choose each, performance
 characteristics, supported ops, and the public API.
