@@ -1873,6 +1873,12 @@ pub struct UnitParseFailure {
 /// This is the single-outcome view. Validation uses
 /// [`check_equation_dimensions`], which reports EVERY finding and separates
 /// provable mismatches from undeterminable dimensions.
+///
+/// A time derivative `D(x)/Dt` whose `t` declares no units has an
+/// undeterminable left-hand side (esm-spec §4.8.4), so the full comparison is
+/// skipped and the weaker rule applies: if no time unit can reconcile the two
+/// sides, the result is [`UnitError::DimensionMismatch`]; if one can, it is
+/// [`UnitError::UnknownUnit`] ("skipped"), not `Ok(())`.
 pub fn validate_equation_dimensions(
     eq: &Equation,
     env: &HashMap<String, Unit>,

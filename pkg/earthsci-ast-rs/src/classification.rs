@@ -333,12 +333,16 @@ impl Classification {
 // === The §6.3.1 API =======================================================
 
 /// Unknowns appearing under `D(·, t)` on some equation LHS.
+///
+/// Names are sorted lexicographically, not in declaration order (API_SPEC.md §5.3).
 pub fn ode_states(model: &Model) -> Vec<String> {
     Classification::of(model).ode_states
 }
 
 /// Unknowns defined by a bare-variable LHS (`y ~ f(…)`) — eliminable,
 /// materializable.
+///
+/// Names are sorted lexicographically, not in declaration order (API_SPEC.md §5.3).
 pub fn observed_unknowns(model: &Model) -> Vec<String> {
     Classification::of(model).observed_unknowns
 }
@@ -351,6 +355,8 @@ pub fn inlined_unknowns(model: &Model) -> Vec<String> {
 }
 
 /// Unknowns constrained only implicitly (`H*H*SO4 ~ Ksp`).
+///
+/// Names are sorted lexicographically, not in declaration order (API_SPEC.md §5.3).
 pub fn algebraic_unknowns(model: &Model) -> Vec<String> {
     Classification::of(model).algebraic_unknowns
 }
@@ -361,22 +367,30 @@ pub fn is_ode_state(model: &Model, name: &str) -> bool {
 }
 
 /// Parameters whose `update.kind` is `wiener` — the SDE noise sources.
+///
+/// Names are sorted lexicographically, not in declaration order (API_SPEC.md §5.3).
 pub fn brownian_parameters(model: &Model) -> Vec<String> {
     Classification::of(model).brownian_parameters
 }
 
 /// Parameters carrying any OTHER update — piecewise-constant between
 /// refreshes.
+///
+/// Names are sorted lexicographically, not in declaration order (API_SPEC.md §5.3).
 pub fn discrete_parameters(model: &Model) -> Vec<String> {
     Classification::of(model).discrete_parameters
 }
 
 /// Parameters with a `distribution` and no update — drawn once at setup.
+///
+/// Names are sorted lexicographically, not in declaration order (API_SPEC.md §5.3).
 pub fn sampled_parameters(model: &Model) -> Vec<String> {
     Classification::of(model).sampled_parameters
 }
 
 /// Parameters with neither a distribution nor an update — plain constants.
+///
+/// Names are sorted lexicographically, not in declaration order (API_SPEC.md §5.3).
 pub fn constant_parameters(model: &Model) -> Vec<String> {
     Classification::of(model).constant_parameters
 }
