@@ -22,8 +22,11 @@ for eq in flat.equations:
 heater, box = flat.equations
 assert earthsci_ast.to_ascii(heater.rhs) == "Heater.rate"
 
-# The variable_map coupling wired the heater's temperature into the box.
+# The param_to_var variable_map replaced the box's wall-temperature parameter
+# with the heater's temperature: it is gone from the equations AND from the
+# parameters.
 assert earthsci_ast.to_ascii(box.rhs) == "Box.k * (Heater.T - Box.T_air)"
 assert "Box.T_wall" not in earthsci_ast.free_variables(box.rhs)
+assert "Box.T_wall" not in flat.parameters
 assert flat.metadata.source_systems == ["Heater", "Box"]
 # endregion
