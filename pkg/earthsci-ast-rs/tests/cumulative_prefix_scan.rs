@@ -3,17 +3,16 @@
 //! A prefix reduction is an ordinary `faq` whose `filter` compares the
 //! contracted index against an output index. Evaluated literally it is a
 //! triangular double loop: `N` output cells each re-folding the window the
-//! previous cell already folded. The evaluator recognizes the FORWARD rows
-//! (`<=`, `<`) and collapses them to one `O(N)` sweep with a running
-//! accumulator.
+//! previous cell already folded. The evaluator recognizes the forward rows
+//! (`<=`, `<`) and the reverse rows (`>=`, `>`) and collapses each to one
+//! `O(N)` sweep with a running accumulator.
 //!
 //! The rewrite is only legitimate because it is **bit-identical**, so that is
-//! what these tests pin — not "close enough". The oracle folds the admitted
-//! window ascending, lowest `j` first; `accᵢ = accᵢ₋₁ ⊕ bodyᵢ` reproduces exactly
-//! that fold with exactly that association. The reverse rows (`>=`, `>`) are
-//! deliberately NOT scanned under an inexact ⊕: each reverse cell folds its own
-//! suffix from that suffix's low end, so consecutive cells share no partial
-//! result and any right-to-left accumulator would re-associate.
+//! what these tests pin — not "close enough". §4.3.1 fixes the fold order of
+//! each window: a forward window ascending, lowest `j` first, and a reverse
+//! (suffix) window descending, highest `j` first. `acc = acc_prev ⊕ body`
+//! along the sweep reproduces exactly that fold with exactly that
+//! association.
 
 use earthsci_ast::simulate_array::eval_expression;
 use ndarray::{ArrayD, IxDyn};
@@ -47,7 +46,8 @@ fn eval_with(expr: &earthsci_ast::Expr, u: &[f64]) -> Vec<f64> {
 }
 
 /// The independent reference: the triangular double loop, written out literally,
-/// folding the admitted window in ascending `j`. This is the semantics the spec
+/// folding the admitted window in ascending `j` (descending for a reverse
+/// window). This is the semantics the spec
 /// defines; the evaluator's scan must reproduce it to the bit.
 fn oracle(u: &[f64], cmp: &str, reduce: &str) -> Vec<f64> {
     let n = u.len();
@@ -60,7 +60,13 @@ fn oracle(u: &[f64], cmp: &str, reduce: &str) -> Vec<f64> {
                 "min" => f64::INFINITY,
                 _ => unreachable!(),
             };
-            for j in 1..=n {
+            // A reverse window folds from its high end (esm-spec §4.3.1).
+            let order: Vec<usize> = if cmp.starts_with('>') {
+                (1..=n).rev().collect()
+            } else {
+                (1..=n).collect()
+            };
+            for j in order {
                 let admitted = match cmp {
                     "<=" => j <= i,
                     "<" => j < i,
@@ -126,10 +132,8 @@ fn forward_scans_are_bit_identical_to_the_triangular_oracle() {
 }
 
 #[test]
-fn reverse_scans_still_match_the_oracle() {
-    // Not scanned (for + and *), but they must keep working — the detector must
-    // decline them rather than mis-handle them.
-    for n in [1usize, 5, 40] {
+fn reverse_scans_fold_each_suffix_from_the_top() {
+    for n in [1usize, 2, 5, 40, 257] {
         let u = catastrophic_values(n);
         for cmp in [">=", ">"] {
             for reduce in ["+", "*", "max", "min"] {
@@ -213,9 +217,9 @@ fn body_referencing_the_scanned_symbol_falls_back_to_the_oracle() {
 fn forward_scan_work_grows_linearly_not_quadratically() {
     use std::time::Instant;
 
-    let timed = |n: usize| -> f64 {
+    let timed = |cmp: &str, n: usize| -> f64 {
         let u = vec![1.0; n];
-        let expr = prefix_agg("<=", n as i64, "+");
+        let expr = prefix_agg(cmp, n as i64, "+");
         // Warm up, then take the best of several runs to damp scheduler noise.
         let _ = eval_with(&expr, &u);
         (0..5)
@@ -230,41 +234,50 @@ fn forward_scan_work_grows_linearly_not_quadratically() {
     // 16x in N. Quadratic would be ~256x the work; linear ~16x. The assertion
     // uses a very loose 64x ceiling so it fails ONLY on a genuine regression to
     // the triangular loop, never on a slow or contended machine.
-    let small = timed(256);
-    let large = timed(4096);
-    let ratio = large / small.max(1e-9);
-    assert!(
-        ratio < 64.0,
-        "prefix scan looks quadratic: N=256 took {small:.6}s, N=4096 took \
-         {large:.6}s (ratio {ratio:.1}x for a 16x increase in N). A linear scan \
-         should be near 16x; the triangular fallback would be near 256x."
-    );
+    // Forward and reverse alike.
+    for cmp in ["<=", ">="] {
+        let small = timed(cmp, 256);
+        let large = timed(cmp, 4096);
+        let ratio = large / small.max(1e-9);
+        assert!(
+            ratio < 64.0,
+            "[{cmp}] prefix scan looks quadratic: N=256 took {small:.6}s, N=4096 took \
+             {large:.6}s (ratio {ratio:.1}x for a 16x increase in N). A linear scan \
+             should be near 16x; the triangular fallback would be near 256x."
+        );
+    }
 }
 
-/// Diagnostic (not an assertion): the scanned `<=` against the UNSCANNED `>=` at
-/// the same `N` and the same total admitted work. Same fixture, same reducer,
-/// same number of admitted terms — the only difference is whether the pattern is
+/// Diagnostic (not an assertion): the scanned `j <= i` against the same window
+/// spelled `j <= i + 0`, which the detector does not recognize, at the same `N`
+/// and the same admitted work — the only difference is whether the pattern is
 /// recognized — so the ratio isolates the optimization from everything else.
 #[test]
 fn report_scan_versus_triangle() {
     use std::time::Instant;
-    let best = |cmp: &str, n: usize| -> f64 {
+    let best = |expr: &earthsci_ast::Expr, n: usize| -> f64 {
         let u = vec![1.0; n];
-        let expr = prefix_agg(cmp, n as i64, "+");
-        let _ = eval_with(&expr, &u);
+        let _ = eval_with(expr, &u);
         (0..5)
             .map(|_| {
                 let t0 = Instant::now();
-                let _ = eval_with(&expr, &u);
+                let _ = eval_with(expr, &u);
                 t0.elapsed().as_secs_f64()
             })
             .fold(f64::INFINITY, f64::min)
     };
     for n in [256usize, 1024, 4096] {
-        let scanned = best("<=", n);
-        let triangle = best(">=", n);
+        let scanned = best(&prefix_agg("<=", n as i64, "+"), n);
+        let unrecognized: earthsci_ast::Expr = serde_json::from_value(json!({
+            "op": "faq", "args": ["u"], "output_idx": ["i"], "reduce": "+",
+            "ranges": { "i": [1, n], "j": [1, n] },
+            "filter": { "op": "<=", "args": ["j", { "op": "+", "args": ["i", 0] }] },
+            "expr": { "op": "index", "args": ["u", "j"] }
+        }))
+        .expect("aggregate parses");
+        let triangle = best(&unrecognized, n);
         println!(
-            "N={n:5}  scanned(<=) {:>10.6}s   triangle(>=) {:>10.6}s   speedup {:>7.1}x",
+            "N={n:5}  scanned {:>10.6}s   triangle {:>10.6}s   speedup {:>7.1}x",
             scanned,
             triangle,
             triangle / scanned.max(1e-12)
@@ -326,12 +339,12 @@ fn rank_2_output_scans_one_axis_and_leaves_the_other_independent() {
     }
 }
 
-/// The mirrored spelling `i >= j` denotes the SAME forward scan as `j <= i` and
-/// must be recognized; the un-mirrored `j >= i` is a REVERSE scan and must not
-/// be. Both reduce to the same question — which side carries the contracted
-/// symbol — and getting it backwards would silently compute the complement.
+/// The mirrored spelling `i >= j` denotes the SAME forward scan as `j <= i`;
+/// the un-mirrored `j >= i` (and its mirror `i <= j`) is a REVERSE scan. Both
+/// reduce to the same question — which side carries the contracted symbol —
+/// and getting it backwards would silently compute the complement.
 #[test]
-fn mirrored_forward_spelling_matches_and_reverse_spelling_does_not() {
+fn mirrored_spellings_scan_the_same_window() {
     let u = catastrophic_values(24);
     let n = u.len() as i64;
     let mirrored = json!({
@@ -353,6 +366,17 @@ fn mirrored_forward_spelling_matches_and_reverse_spelling_does_not() {
         assert_eq!(g.to_bits(), w.to_bits(), "reverse cell {}", k + 1);
     }
     assert_ne!(got, rev, "forward and reverse windows must differ");
+    let mirrored_rev: earthsci_ast::Expr = serde_json::from_value(json!({
+        "op": "faq", "args": ["u"], "output_idx": ["i"], "reduce": "+",
+        "ranges": { "i": [1, n], "j": [1, n] },
+        "filter": { "op": "<=", "args": ["i", "j"] },   // i <= j  ==  j >= i
+        "expr": { "op": "index", "args": ["u", "j"] }
+    }))
+    .unwrap();
+    let got = eval_with(&mirrored_rev, &u);
+    for (k, (g, w)) in got.iter().zip(rev_want.iter()).enumerate() {
+        assert_eq!(g.to_bits(), w.to_bits(), "mirrored reverse cell {}", k + 1);
+    }
 }
 
 /// Scanning axis 0 of a rank-2 output, the mirror image of the axis-1 test.
@@ -474,6 +498,9 @@ fn native_builds_a_makearray_with_a_prefix_scan_region_bit_identically() {
         let body = match variant {
             "from_bottom" => json!({"op": "makearray", "args": [],
                 "regions": [[[1, n]], [[n + 1, n + 1]]], "values": [scan("<"), total]}),
+            // The reverse scan `Σ_{j>=kn}` on interfaces 1..n, zero on the top.
+            "to_top" => json!({"op": "makearray", "args": [],
+                "regions": [[[1, n]], [[n + 1, n + 1]]], "values": [scan(">="), 0.0]}),
             _ => json!({"op": "makearray", "args": [],
                 "regions": [[[1, 1]], [[2, n + 1]]], "values": [0.0, scan("<=")]}),
         };
@@ -504,7 +531,7 @@ fn native_builds_a_makearray_with_a_prefix_scan_region_bit_identically() {
             }}
         })
     };
-    for variant in ["from_bottom", "to_top"] {
+    for variant in ["from_bottom", "to_top", "shifted"] {
         for n in [5i64, 20_000] {
             let d = doc(n, variant);
             let build = |compiler| {

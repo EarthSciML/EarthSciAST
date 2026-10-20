@@ -758,16 +758,17 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
             src,
             axis,
             inclusive,
+            reverse,
             src_shape,
             out,
         } => {
             let sv = resolve_src(src, env, slab_ptr, slot_off);
             debug_assert_eq!(&sv.shape[..], &src_shape[..], "Scan source box");
             let dst = unsafe { slab_ptr.add(slot_off[*out as usize]) };
-            let (a, init, inclusive) = (*axis as usize, *init, *inclusive);
+            let (a, init, inclusive, reverse) = (*axis as usize, *init, *inclusive, *reverse);
             macro_rules! scan {
                 ($f:expr) => {
-                    unsafe { scan_axis(dst, &sv, a, init, inclusive, $f) }
+                    unsafe { scan_axis(dst, &sv, a, init, inclusive, reverse, $f) }
                 };
             }
             dispatch_bin_kernel!(op, scan);

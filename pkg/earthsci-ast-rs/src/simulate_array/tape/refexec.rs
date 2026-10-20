@@ -365,6 +365,7 @@ pub(super) fn run_reference(
                 src,
                 axis,
                 inclusive,
+                reverse,
                 src_shape,
                 out,
             } => {
@@ -373,11 +374,17 @@ pub(super) fn run_reference(
                 assert_eq!(sv.shape(), &src_shape[..], "Scan source box");
                 let ax = Axis(*axis as usize);
                 let mut o = ArrayD::<f64>::zeros(IxDyn(&src_shape[..]));
-                // One lane per position of the other axes, swept ascending —
-                // `run_prefix_scan`'s loop, written out.
+                // One lane per position of the other axes, swept ascending
+                // (descending when reverse) — `run_prefix_scan`'s loop,
+                // written out.
                 for (mut ol, sl) in o.lanes_mut(ax).into_iter().zip(sv.lanes(ax)) {
                     let mut acc = *init;
-                    for (y, &x) in ol.iter_mut().zip(sl.iter()) {
+                    let steps: Box<dyn Iterator<Item = (&mut f64, &f64)>> = if *reverse {
+                        Box::new(ol.iter_mut().rev().zip(sl.iter().rev()))
+                    } else {
+                        Box::new(ol.iter_mut().zip(sl.iter()))
+                    };
+                    for (y, &x) in steps {
                         if *inclusive {
                             acc = f(acc, x);
                             *y = acc;

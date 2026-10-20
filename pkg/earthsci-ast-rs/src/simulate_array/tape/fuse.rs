@@ -293,13 +293,16 @@ impl GBuilder {
             src,
             axis,
             inclusive,
+            reverse,
             src_shape,
             out,
         } = ins
         else {
             return false;
         };
-        if *src_shape != self.shape || *axis as usize >= self.shape.len() {
+        // A group's chunks run the scanned axis ascending; a reverse scan
+        // stays a standalone instruction.
+        if *reverse || *src_shape != self.shape || *axis as usize >= self.shape.len() {
             return false;
         }
         let operand = match src {

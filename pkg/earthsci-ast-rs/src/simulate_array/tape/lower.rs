@@ -4351,33 +4351,6 @@ impl<'m> TapeBuilder<'m> {
         {
             bail_tape!("aggregate: nested body depends on an enclosing bound index `{name}`");
         }
-        // A forward prefix scan (a `makearray` region value is the case that
-        // reaches here): the oracle evaluates this aggregate on its own, where
-        // `eval_faq` claims it as a scan, so it gets the running-fold lowering
-        // rather than the filtered triangular box `lower_faq` would build.
-        // Both fold each window ascending from the identity, so the bits
-        // agree either way; the scan is O(N) where the box is O(N^2).
-        let static_ranges = static_contract_ranges(&spec.contract_dims);
-        if let Some(scan) = detect_prefix_scan(
-            spec.idx_names,
-            &spec.ranges,
-            &spec.contract_names,
-            static_ranges.as_deref(),
-            spec.body,
-            spec.filter,
-        ) {
-            let level = self.enter_fault_level(Some(bx));
-            let v = self.lower_prefix_scan(
-                spec.idx_names,
-                &spec.ranges,
-                scan,
-                &spec.contract_names[0],
-                spec.body,
-                spec.reduce,
-            );
-            self.leave_fault_level(level);
-            return v;
-        }
         // A join gate drives the contraction: the tuple-list form.
         if spec.has_drivable_overlap() {
             return self.lower_tuple_contraction(
@@ -4683,6 +4656,30 @@ impl<'m> TapeBuilder<'m> {
         // filter runs.
         if shape.contains(&0) {
             return Ok(self.emit_zero_array(&shape, &lo));
+        }
+        // A prefix scan (a `makearray` region value, a filtered rule body):
+        // the oracle sweeps it with `run_prefix_scan`, so it gets the
+        // running-fold lowering, never the filtered triangular box below. A
+        // forward scan's bits agree either way, but the box is O(N^2); a
+        // reverse scan folds each suffix from its high end, which only the
+        // sweep reproduces.
+        let static_ranges = static_contract_ranges(contract_dims);
+        if let Some(scan) = detect_prefix_scan(
+            idx_names,
+            ranges,
+            contract_names,
+            static_ranges.as_deref(),
+            body,
+            filter,
+        ) {
+            return self.lower_prefix_scan(
+                idx_names,
+                ranges,
+                scan,
+                &contract_names[0],
+                body,
+                reduce,
+            );
         }
         self.push_scope();
         let v = if contract_names.is_empty() {
@@ -6014,7 +6011,7 @@ impl<'m> TapeBuilder<'m> {
     /// region writes, with the gate production applies before routing to the
     /// overlay (`shape` non-empty). A region value production sweeps as a
     /// prefix scan (where it declines the overlay) lowers to the same running
-    /// fold, through [`Self::lower_nested_aggregate`].
+    /// fold, through [`Self::lower_faq`].
     fn lower_wholesale_makearray(&mut self, node: &Arc<ExpressionNode>) -> LResult<LV> {
         let regions: &[Vec<[crate::types::RegionBound; 2]>] =
             node.regions.as_deref().unwrap_or(&[]);
@@ -6058,7 +6055,7 @@ impl<'m> TapeBuilder<'m> {
         Ok(self.reorigin_to_one(v?))
     }
 
-    /// A forward prefix scan (esm-spec §4.3.1): the term over the whole
+    /// A prefix scan (esm-spec §4.3.1): the term over the whole
     /// output box, then one [`Instr::Scan`] along the scanned axis — the
     /// vectorized analogue of `run_prefix_scan`, and one instruction whatever
     /// the scanned length.
@@ -6068,7 +6065,8 @@ impl<'m> TapeBuilder<'m> {
     /// and the body never reads the scanned output symbol (the detector
     /// rejects such bodies), so the term at step `i` is the body over a box
     /// whose scanned axis is named by the CONTRACTED symbol. The scan then
-    /// folds each window ascending in the same association.
+    /// folds each window in the sweep's order (ascending, or descending for a
+    /// reverse scan) in the same association.
     ///
     /// A body whose whole-box lowering bails keeps the per-step form
     /// ([`Self::lower_prefix_scan_steps`]), which binds the step position as
@@ -6139,6 +6137,7 @@ impl<'m> TapeBuilder<'m> {
             src: self.src_of(&term),
             axis,
             inclusive: scan.inclusive,
+            reverse: scan.reverse,
             src_shape: full_shape,
             out,
         };
@@ -6192,7 +6191,12 @@ impl<'m> TapeBuilder<'m> {
         // Bind BOTH the scanned output symbol and the contracted symbol to the
         // step position, exactly as `run_prefix_scan`'s `term_at` does.
         let cnames: Vec<String> = vec![idx_names[scan.axis].clone(), j_name.to_string()];
-        for i in slo..=shi {
+        let steps: Vec<i64> = if scan.reverse {
+            (slo..=shi).rev().collect()
+        } else {
+            (slo..=shi).collect()
+        };
+        for i in steps {
             self.push_scope();
             let bx = LBox {
                 syms: idx_names,

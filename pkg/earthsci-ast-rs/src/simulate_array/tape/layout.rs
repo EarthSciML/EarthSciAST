@@ -179,6 +179,7 @@ fn reverse(prog: &mut TapeProgram) {
                 src,
                 axis,
                 inclusive,
+                reverse,
                 src_shape,
                 out,
             } => {
@@ -189,6 +190,7 @@ fn reverse(prog: &mut TapeProgram) {
                     src: *src,
                     axis: n - 1 - *axis,
                     inclusive: *inclusive,
+                    reverse: *reverse,
                     src_shape: rev(src_shape),
                     out: *out,
                 })

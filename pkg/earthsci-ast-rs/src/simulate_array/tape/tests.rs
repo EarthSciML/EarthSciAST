@@ -1353,9 +1353,10 @@ fn exports_materialize_as_observed_arrays() {
     }
 }
 
-/// Forward prefix scans (inclusive `<=` and exclusive `<`), compiled as the
-/// whole-plane running fold — bit-identical to the per-cell sweep the
-/// production `eval_faq` runs for these.
+/// Forward prefix scans (inclusive `<=` and exclusive `<`) and reverse ones
+/// (`>=`, `>`, folded from the top), compiled as the whole-plane running fold
+/// — bit-identical to the per-cell sweep the production `eval_faq` runs for
+/// these.
 #[test]
 fn ab_prefix_scan_observeds() {
     let (ni, nk) = (4, 5);
@@ -1373,11 +1374,15 @@ fn ab_prefix_scan_observeds() {
             "variables": {
                 "u": {"type": "unknown", "shape": ["i", "k"]},
                 "P": {"type": "unknown", "shape": ["i", "k"]},
-                "Q": {"type": "unknown", "shape": ["i", "k"]}
+                "Q": {"type": "unknown", "shape": ["i", "k"]},
+                "R": {"type": "unknown", "shape": ["i", "k"]},
+                "S": {"type": "unknown", "shape": ["i", "k"]}
             },
             "equations": [
                 {"lhs": "P", "rhs": scan_obs("<=")},
                 {"lhs": "Q", "rhs": scan_obs("<")},
+                {"lhs": "R", "rhs": scan_obs(">=")},
+                {"lhs": "S", "rhs": scan_obs(">")},
                 {
                     "lhs": {"op": "faq", "args": [], "output_idx": ["i", "k"],
                             "expr": {"op": "D", "args": [
@@ -1389,7 +1394,11 @@ fn ab_prefix_scan_observeds() {
                                 {"op": "*", "args": [-0.1,
                                     {"op": "index", "args": ["P", "i", "k"]}]},
                                 {"op": "*", "args": [0.05,
-                                    {"op": "index", "args": ["Q", "i", "k"]}]}
+                                    {"op": "index", "args": ["Q", "i", "k"]}]},
+                                {"op": "*", "args": [0.07,
+                                    {"op": "index", "args": ["R", "i", "k"]}]},
+                                {"op": "*", "args": [-0.03,
+                                    {"op": "index", "args": ["S", "i", "k"]}]}
                             ]}}
                 }
             ]
@@ -1401,7 +1410,7 @@ fn ab_prefix_scan_observeds() {
     // per-step writes.
     assert_eq!(
         opcount(&prog, "Scan") + scan_micro_ops(&prog),
-        2,
+        4,
         "one Scan per scan observed"
     );
     assert_eq!(opcount(&prog, "Region"), 0, "no per-step region writes");
@@ -1409,8 +1418,9 @@ fn ab_prefix_scan_observeds() {
 
 /// A `makearray` whose region value is a forward prefix scan (issue #533,
 /// the column-integral shape: the running sum on the interfaces below the
-/// top and the column total, or a zero, on the remaining one). The region
-/// lowers to the O(N) running fold, never the filtered triangular box.
+/// top and the column total, or a zero, on the remaining one; or the reverse
+/// scan to the top). The region lowers to the O(N) running fold, never the
+/// filtered triangular box.
 fn makearray_scan_doc(n: i64, ni: i64, variant: &str) -> serde_json::Value {
     // `ni == 0` is the 1-D column; otherwise `ni` columns with the scan on
     // the second (non-leading) axis.
@@ -1456,8 +1466,12 @@ fn makearray_scan_doc(n: i64, ni: i64, variant: &str) -> serde_json::Value {
         "from_bottom" => json!({"op": "makearray", "args": [],
             "regions": [region(1, n), region(n + 1, n + 1)],
             "values": [scan("<"), total]}),
-        // Interface 1 holds zero, 2..n+1 the inclusive scan.
+        // Interfaces 1..n hold the reverse (suffix) scan, n+1 zero.
         "to_top" => json!({"op": "makearray", "args": [],
+            "regions": [region(1, n), region(n + 1, n + 1)],
+            "values": [scan(">="), 0.0]}),
+        // Interface 1 holds zero, 2..n+1 the inclusive scan.
+        "shifted" => json!({"op": "makearray", "args": [],
             "regions": [region(1, 1), region(2, n + 1)],
             "values": [0.0, scan("<=")]}),
         _ => unreachable!(),
@@ -1507,7 +1521,7 @@ fn makearray_scan_doc(n: i64, ni: i64, variant: &str) -> serde_json::Value {
 
 #[test]
 fn ab_makearray_prefix_scan_region() {
-    for variant in ["from_bottom", "to_top"] {
+    for variant in ["from_bottom", "to_top", "shifted"] {
         for ni in [0, 3] {
             let n = 7;
             let prog = ab_check(makearray_scan_doc(n, ni, variant), -2.0, 2.0);
@@ -1524,7 +1538,7 @@ fn ab_makearray_prefix_scan_region() {
 #[test]
 fn makearray_prefix_scan_region_is_linear_in_the_column() {
     let n = 3000;
-    for variant in ["from_bottom", "to_top"] {
+    for variant in ["from_bottom", "to_top", "shifted"] {
         let compiled = compile(makearray_scan_doc(n, 0, variant));
         let (prog, _) = taped(compiled.build_tape_opts(&HashSet::new(), Some(default_cfg())));
         let widest = prog.slots.iter().map(|s| s.elems()).max().unwrap_or(0);

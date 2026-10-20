@@ -1162,6 +1162,7 @@ impl<'a> Emitter<'a> {
                 src,
                 axis,
                 inclusive,
+                reverse,
                 src_shape,
                 out,
             } => {
@@ -1173,7 +1174,15 @@ impl<'a> Emitter<'a> {
                         &src_shape[..]
                     )));
                 }
-                let v = self.emit_scan_loop(*op, *init, &s, &have, *axis as usize, *inclusive)?;
+                let v = self.emit_scan_loop(
+                    *op,
+                    *init,
+                    &s,
+                    &have,
+                    *axis as usize,
+                    *inclusive,
+                    *reverse,
+                )?;
                 self.define(*out, v);
             }
             Instr::TableGather { src, table, out } => {
@@ -2066,6 +2075,7 @@ impl<'a> Emitter<'a> {
         dims: &[usize],
         ax: usize,
         inclusive: bool,
+        reverse: bool,
     ) -> R<XlaOp> {
         use xla::Shape;
         let full: Vec<i64> = dims.iter().map(|&x| x as i64).collect();
@@ -2093,8 +2103,15 @@ impl<'a> Emitter<'a> {
         let part = |i: i64| self.wrap(st.get_tuple_element(i), "scan body: unpack");
         let (k, s, acc, out) = (part(0)?, part(1)?, part(2)?, part(3)?);
         let zero = self.wrap(bb.c0(0i64), "scan body: zero")?;
+        // Step `k` visits plane `k`, or plane `n - 1 - k` for a reverse scan.
+        let pos = if reverse {
+            let last = self.wrap(bb.c0(n - 1), "scan body: last")?;
+            self.wrap(last.sub_(&k), "scan body: n - 1 - k")?
+        } else {
+            k.clone()
+        };
         let starts: Vec<XlaOp> = (0..full.len())
-            .map(|d| if d == ax { k.clone() } else { zero.clone() })
+            .map(|d| if d == ax { pos.clone() } else { zero.clone() })
             .collect();
         let pl = self.wrap(s.dynamic_slice(&starts, &plane), "scan body: plane")?;
         let next = self.bin(op, &acc, &pl)?;

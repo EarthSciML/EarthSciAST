@@ -623,16 +623,19 @@ pub(super) unsafe fn exec_gather(
 /// running fold of `src` along `axis`, from `init`, independently for every
 /// position of the other axes — inclusive (`dst[k] = f(dst[k-1], src[k])`,
 /// `dst[0] = f(init, src[0])`) or exclusive (`dst[0] = init`, `dst[k] =
-/// f(dst[k-1], src[k-1])`). Every position folds its window ascending, one
-/// combine per step, in `run_prefix_scan`'s association; walking the scanned
-/// axis outermost lets each step be one contiguous row of the other axes.
-/// `dst` never aliases `src` (a scan is not alias-safe in the slab coloring).
+/// f(dst[k-1], src[k-1])`). A `reverse` scan is the same with the axis walked
+/// from its high end (`k+1` for `k-1`, `len-1` for `0`). Every position folds
+/// its window in the sweep's order, one combine per step, in
+/// `run_prefix_scan`'s association; walking the scanned axis outermost lets
+/// each step be one contiguous row of the other axes. `dst` never aliases
+/// `src` (a scan is not alias-safe in the slab coloring).
 pub(super) unsafe fn scan_axis(
     dst: *mut f64,
     src: &SrcView,
     axis: usize,
     init: f64,
     inclusive: bool,
+    reverse: bool,
     f: impl Fn(f64, f64) -> f64 + Copy,
 ) {
     let shape = &src.shape;
@@ -654,6 +657,8 @@ pub(super) unsafe fn scan_axis(
         }
         unsafe { src.ptr.offset(off as isize) }
     };
+    // Step `t` of the sweep visits axis position `at(t)`.
+    let at = |t: usize| if reverse { len - 1 - t } else { t };
     unsafe {
         if contig && post == 1 {
             // A scan along the innermost axis: one running accumulator per
@@ -661,7 +666,8 @@ pub(super) unsafe fn scan_axis(
             for p in 0..pre {
                 let (s, d) = (src.ptr.add(p * len), dst.add(p * len));
                 let mut acc = init;
-                for k in 0..len {
+                for t in 0..len {
+                    let k = at(t);
                     let x = *s.add(k);
                     if inclusive {
                         acc = f(acc, x);
@@ -676,9 +682,11 @@ pub(super) unsafe fn scan_axis(
         }
         for p in 0..pre {
             let base = p * len * post;
-            for k in 0..len {
-                let row = base + k * post;
-                match (inclusive, k) {
+            for t in 0..len {
+                let row = base + at(t) * post;
+                // The row the sweep visited just before this one.
+                let prev = if t == 0 { 0 } else { base + at(t - 1) * post };
+                match (inclusive, t) {
                     (true, 0) => {
                         for q in 0..post {
                             *dst.add(row + q) = f(init, *src_at(row + q));
@@ -686,7 +694,7 @@ pub(super) unsafe fn scan_axis(
                     }
                     (true, _) => {
                         for q in 0..post {
-                            *dst.add(row + q) = f(*dst.add(row - post + q), *src_at(row + q));
+                            *dst.add(row + q) = f(*dst.add(prev + q), *src_at(row + q));
                         }
                     }
                     (false, 0) => {
@@ -696,8 +704,7 @@ pub(super) unsafe fn scan_axis(
                     }
                     (false, _) => {
                         for q in 0..post {
-                            *dst.add(row + q) =
-                                f(*dst.add(row - post + q), *src_at(row - post + q));
+                            *dst.add(row + q) = f(*dst.add(prev + q), *src_at(prev + q));
                         }
                     }
                 }

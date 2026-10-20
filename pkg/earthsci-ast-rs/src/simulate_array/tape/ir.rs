@@ -51,7 +51,7 @@
 //!   reduction bit-identical to `reduce_contraction`'s `acc = combine(acc,
 //!   term)` loop.
 //! * [`Instr::Scan`] is `run_prefix_scan` over a whole box: a running fold
-//!   along one axis, ascending, independently for every position of the
+//!   along one axis, ascending (descending for a reverse scan), independently for every position of the
 //!   other axes, writing the inclusive or exclusive partial result.
 //! * [`Instr::PolyArea`] is `eval_polygon_intersection_area` per element of
 //!   its box: each element's two rings are read out of the two ring tables
@@ -301,7 +301,7 @@ pub(crate) enum Instr {
     ///
     /// ```text
     /// acc = init
-    /// for k in 0..len(axis), ascending:
+    /// for k in 0..len(axis), ascending (descending when `reverse`):
     ///     inclusive:  acc = kernel(op)(acc, src[k]);  out[k] = acc
     ///     exclusive:  out[k] = acc;  acc = kernel(op)(acc, src[k])
     /// ```
@@ -317,6 +317,8 @@ pub(crate) enum Instr {
         src: SrcRef,
         axis: u8,
         inclusive: bool,
+        /// A reverse (`j >= i`) scan: the sweep runs from the high end down.
+        reverse: bool,
         /// The expected source (and output) box (validation).
         src_shape: DimU,
         out: SlotId,
