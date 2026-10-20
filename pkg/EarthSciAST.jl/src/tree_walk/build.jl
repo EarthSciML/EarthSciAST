@@ -5035,8 +5035,10 @@ end
 # contracted (now concrete) and/or output (still symbolic) indices and lowers to a
 # runtime `ifelse` guard the box processor verifies affine.
 function _unrolled_contraction_body(rhs_body::ASTExpr, contract_names::Vector{String},
-        contract_const, filt, oplus::String, zerobar::Float64)
-    iters = Vector{Int}[convert(Vector{Int}, c) for c in contract_const]
+        contract_const, filt, oplus::String, zerobar::Float64;
+        out_names=String[])
+    iters = _window_iters(Vector{Int}[convert(Vector{Int}, c) for c in contract_const],
+                          filt, contract_names, out_names)
     terms = ASTExpr[]
     _foreach_aggregate_term(rhs_body, contract_names, iters, nothing, filt, zerobar,
                             nothing) do term
@@ -5121,27 +5123,37 @@ function _detect_prefix_scan(idx_names::Vector{String}, range_iters,
     agg_filter isa OpExpr || return nothing
     f = agg_filter::OpExpr
     length(f.args) == 2 || return nothing
-    # `j <= i` and its mirror `i >= j` are the SAME forward scan; `j >= i` is a
-    # reverse scan and is declined by the `j_side` check below.
+    # `j <= i` and its mirror `i >= j` are the SAME forward scan; `j >= i` and
+    # `i <= j` the same REVERSE scan, which folds descending (esm-spec §4.3.1):
+    # its running accumulator walks the axis from the top, so it is the forward
+    # fold over the cells in reverse order (`_build_scan_fold`).
     local j_side::ASTExpr, i_side::ASTExpr, inclusive::Bool
+    j = contract_names[1]
+    isj(x) = x isa VarExpr && (x::VarExpr).name == j
     if f.op == "<=" || f.op == "<"
-        j_side, i_side, inclusive = f.args[1], f.args[2], f.op == "<="
+        reverse = isj(f.args[2])
+        j_side, i_side = reverse ? (f.args[2], f.args[1]) : (f.args[1], f.args[2])
+        inclusive = f.op == "<="
     elseif f.op == ">=" || f.op == ">"
-        j_side, i_side, inclusive = f.args[2], f.args[1], f.op == ">="
+        reverse = isj(f.args[1])
+        j_side, i_side = reverse ? (f.args[1], f.args[2]) : (f.args[2], f.args[1])
+        inclusive = f.op == ">="
     else
         return nothing
     end
     (j_side isa VarExpr && i_side isa VarExpr) || return nothing
-    (j_side::VarExpr).name == contract_names[1] || return nothing
+    (j_side::VarExpr).name == j || return nothing
     i_name = (i_side::VarExpr).name
     axis = findfirst(isequal(i_name), idx_names)
     axis === nothing && return nothing
-    term_iters = _scan_term_iters(range_iters, axis, citer, inclusive)
+    # A reverse scan takes the same-range shape only.
+    term_iters = reverse ? (range_iters[axis] == citer ? nothing : :decline) :
+                 _scan_term_iters(range_iters, axis, citer, inclusive)
     term_iters === :decline && return nothing
     # `_referenced_var_names` routes through the generated field walk, so a
     # reference buried in a nested aggregate's body/filter/ranges counts.
     i_name in _referenced_var_names(rhs_body) && return nothing
-    return (axis::Int, inclusive, contract_names[1], term_iters)
+    return (axis::Int, inclusive, j, term_iters, reverse)
 end
 
 # Which axis do the TERMS live on? Two shapes are admitted, and they are the
@@ -5369,9 +5381,11 @@ end
 # the per-cell substitution the per-cell build uses (`_compile_faq_percell!`).
 function _build_scan_fold(axis::Int, inclusive::Bool, idx_names::Vector{String},
         range_iters, lhs_body::OpExpr, var_map::AbstractDict{String,Int},
-        oplus::String, zerobar::Float64)
+        oplus::String, zerobar::Float64; reverse::Bool=false)
     nd = length(idx_names)
-    scan_range = range_iters[axis]
+    # A reverse scan's lanes run from the top of the axis down.
+    scan_range = reverse ? collect(Int, Iterators.reverse(range_iters[axis])) :
+                           range_iters[axis]
     len = length(scan_range)
     # Unreachable — `_try_affine_stencil` already refused an empty range before
     # the caller got here — but a `nothing` return would leave the term kernels
@@ -5730,7 +5744,10 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
     # it keeps the contracted indices as loop dims and folds them at run time,
     # so its build is O(#structural groups) whatever the contraction length.
     # Only the in-place form has it.
-    areduce0 = (rhs_list_compiled || _stencil_disabled()) ? nothing :
+    # Its loops run ascending, so a reverse window, which folds descending, is
+    # not its (`_reverse_window`).
+    areduce0 = (rhs_list_compiled || _stencil_disabled() ||
+                _reverse_window(agg_filter, contract_names, idx_names)) ? nothing :
         _affine_reduce_form(contract_names, contract_const, agg_gates,
                             rhs_oplus, rhs_zerobar)
     # A LONG contraction — as many terms as the loop floor, the length at which
@@ -5825,7 +5842,8 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
             (agg_gates === nothing && all(c -> c !== nothing, contract_const) &&
              !long_contraction) ?
                 _unrolled_contraction_body(rhs_body, contract_names, contract_const,
-                                           agg_filter, rhs_oplus, rhs_zerobar) :
+                                           agg_filter, rhs_oplus, rhs_zerobar;
+                                           out_names=idx_names) :
             nothing
         affine_body === nothing || push!(offered, scan !== nothing ? :scan : :affine)
         # The TERM build runs over the axis the TERMS live on — the output axis
@@ -5856,7 +5874,8 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
         # build costs nothing.
         if scan !== nothing && affine_kernels !== nothing
             sf = _build_scan_fold(scan[1], scan[2], idx_names, range_iters,
-                                  lhs_body, var_map, rhs_oplus, rhs_zerobar)
+                                  lhs_body, var_map, rhs_oplus, rhs_zerobar;
+                                  reverse=scan[5])
             scan_fold = _ScanFold(sf.slots, sf.len, sf.oplus, sf.zerobar,
                                   sf.inclusive, Any[affine_kernels...])
         end
@@ -6137,7 +6156,10 @@ function _try_compile_array_contraction(lhs_body::OpExpr, rhs_body::ASTExpr,
     # its term, written as it is with no fold and no seed (a pointwise filter is
     # already the term's `ifelse` guard, see `_compile_faq_equation!`).
     elementwise = isempty(contract_names)
-    table_form = !elementwise && (agg_gates !== nothing ||
+    # A reverse window folds descending, which the static form's ascending
+    # loops do not; its table lists each cell's entries from the top down.
+    rev = !elementwise && _reverse_window(agg_filter, contract_names, idx_names)
+    table_form = !elementwise && (agg_gates !== nothing || rev ||
                  (contract_const !== nothing && any(c -> c === nothing, contract_const)))
     term = (elementwise || agg_filter === nothing) ? rhs_body :
         OpExpr("ifelse", ASTExpr[agg_filter, rhs_body, NumExpr(rhs_zerobar)])
@@ -6169,7 +6191,7 @@ function _try_compile_array_contraction(lhs_body::OpExpr, rhs_body::ASTExpr,
     fold = elementwise ? nothing : table_form ?
         _array_contraction_table(contract_refs, idx_names, range_iters, contract_names,
                                  contract_ranges, contract_const, agg_gates,
-                                 rhs_oplus, rhs_zerobar, const_registry) :
+                                 rhs_oplus, rhs_zerobar, const_registry; reverse=rev) :
         _ACFold(contract_refs, Symbol(rhs_oplus), rhs_zerobar,
                 StepRange{Int,Int}[(r = _expand_int_range(contract_ranges[d]);
                                     first(r):step(r):last(r))
@@ -6256,7 +6278,7 @@ end
 function _array_contraction_table(contract_refs::Vector{Base.RefValue{Int}},
         idx_names::Vector{String}, range_iters, contract_names::Vector{String},
         contract_ranges, contract_const, agg_gates, oplus::String, zerobar::Float64,
-        const_registry::AbstractDict)
+        const_registry::AbstractDict; reverse::Bool=false)
     nc = length(contract_names)
     contract_const = _contract_lists(contract_const)
     n_cells = prod(length(r) for r in range_iters)
@@ -6270,7 +6292,8 @@ function _array_contraction_table(contract_refs::Vector{Base.RefValue{Int}},
     cells = length(range_iters) == 1 ? ((i,) for i in range_iters[1]) :
                                        Iterators.product(range_iters...)
     _ac_table_fill!(seg, cols, iters, fixed, idx_env, cells, idx_names, contract_names,
-                    contract_ranges, contract_const, agg_gates, zerobar, const_registry)
+                    contract_ranges, contract_const, agg_gates, zerobar, const_registry,
+                    reverse)
     return _ACFold(contract_refs, Symbol(oplus), zerobar, seg, cols)
 end
 
@@ -6278,7 +6301,7 @@ end
 # concrete type of the cell iterator.
 function _ac_table_fill!(seg, cols, iters, fixed, idx_env, cells, idx_names,
                          contract_names, contract_ranges, contract_const, agg_gates,
-                         zerobar, const_registry)
+                         zerobar, const_registry, reverse::Bool=false)
     nc = length(contract_names)
     c = 0
     for idx_tuple in cells
@@ -6294,7 +6317,9 @@ function _ac_table_fill!(seg, cols, iters, fixed, idx_env, cells, idx_names,
                 iters[d] = _expand_contract_range(contract_ranges[d], idx_env, const_registry)
             end
         end
-        _foreach_aggregate_term(nothing, contract_names, iters, agg_gates, nothing,
+        # A reverse window's entries run from the top down (`_reverse_window`).
+        run = reverse ? [collect(Int, Iterators.reverse(iters[1]))] : iters
+        _foreach_aggregate_term(nothing, contract_names, run, agg_gates, nothing,
                                 zerobar, idx_env) do ks
             @inbounds for d in 1:nc
                 push!(cols[d], Int(ks[d]))
@@ -6428,6 +6453,8 @@ function _compile_faq_percell!(::Union{_PerCellLicense,_OopCells}, percell_scala
             # from this cell's `idx_env`.
             filt_cell = agg_filter === nothing ? nothing :
                         _sub_preserving(agg_filter, idx_exprs)
+            cell_contract_iters = _window_iters(cell_contract_iters, agg_filter,
+                                                contract_names, idx_names)
             k_nodes = _Node[]
             _foreach_aggregate_term(sub_rhs_outer, contract_names,
                                     cell_contract_iters, agg_gates, filt_cell,

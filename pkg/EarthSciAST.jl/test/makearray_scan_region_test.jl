@@ -9,7 +9,8 @@
 # gather, where only the per-cell build takes it, and a strict compiler refused
 # them. The build now fills the makearray one region at a time and lifts the
 # filtered operand to its own observed (build.jl `_materialized_fill_equations`,
-# hoist.jl `_hoist_operand_walk`), so the forward scans take the O(N) scan fold.
+# hoist.jl `_hoist_operand_walk`), so the scans take the O(N) scan fold (a
+# reverse one descending, esm-spec §4.3.1).
 #
 # Pinned here: native builds each shape, the scan fold fired for the forward
 # scans, the right-hand side is bit-identical to the interpreter's on inputs of
@@ -128,10 +129,12 @@ end
         _msr_check(m, is; scans=1)
     end
     @testset "column, to the top: reverse scan + constant" begin
-        # A reverse scan keeps the guarded fold (scan.jl, "FORWARD ONLY"), but
-        # it builds natively and agrees bit for bit.
+        # A reverse scan folds from the top (esm-spec §4.3.1), as one
+        # descending scan fold.
         m, is = _msr_nodes_model(16, 0; filt=">=", top=:zero)
-        _msr_check(m, is; scans=0)
+        _msr_check(m, is; scans=1)
+        m, is = _msr_nodes_model(12, 7; filt=">=", top=:zero)
+        _msr_check(m, is; scans=1)
     end
     @testset "inclusive forward scan region" begin
         m, is = _msr_nodes_model(9, 0; filt="<=")
@@ -145,7 +148,7 @@ end
         m, is = _msr_centre_model(16)
         _msr_check(m, is; scans=1)
         m, is = _msr_centre_model(16; filt=">=")
-        _msr_check(m, is; scans=0)
+        _msr_check(m, is; scans=1)
     end
     @testset "a long column builds natively" begin
         m, is = _msr_nodes_model(4096, 0)

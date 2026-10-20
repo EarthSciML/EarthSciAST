@@ -165,6 +165,12 @@ function _hoist_try(g::OpExpr, out_idx::Vector{String}, ranges, contracted::Set{
     any(n -> n in contracted, free) && return nothing
     S = String[s for s in out_idx if s in free]
     length(S) == length(out_idx) && return nothing
+    # A scalar reduction whose filter bounds its index from below by an outer
+    # output index would become a reverse scan once lifted over it, folding
+    # descending (`_reverse_window`); in place it folds ascending, as the
+    # interpreter evaluates it, so it stays in place.
+    gather || !_reverse_window(g.filter, String[String(k) for k in keys(g.ranges)], S) ||
+        return nothing
     sets = String[]
     for s in S
         r = get(ranges, s, nothing)
