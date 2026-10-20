@@ -872,7 +872,11 @@ is classified by the comparison between the contracted index and the output inde
 operator's spelling: the mirrored spellings `i >= j` / `i > j` are forward scans and `i <= j` /
 `i < j` are reverse scans. The direction rule applies to a node whose `filter` is exactly one
 such comparison and which contracts that one index; every other contraction, a filtered one
-included, visits its contracted indices in increasing order.
+included, visits its contracted indices in increasing order. The output index must be the node's
+**own**: a rank-0 `faq` nested in an array body whose filter compares its contracted `j` with
+the *enclosing* body's index (`sum_{j ≥ i} …` inside a body over `i`) is not a reverse scan — it
+has no output index, so its window is fixed for each cell and is folded ascending — and neither
+is a filter that compares `j` with a constant.
 
 That order is pinned **bit-identical across the executing bindings** in both directions: each
 evaluates a scan with the sequential accumulator licensed below, in its interpreter and in its
