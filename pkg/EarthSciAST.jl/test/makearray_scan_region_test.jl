@@ -153,6 +153,51 @@ end
         @test nat[6].n_scan_folds == 1
     end
 
+    @testset "scan + total regions are one staggered scan" begin
+        # From the surface: one equation over the whole box, the scan's range
+        # extended by the total's cell. To the top (a reverse scan beside a
+        # constant) stays two regions.
+        fdef(m, is) = ESM_MSR._resolve_isr(only(e for e in m.equations
+            if e.lhs isa ESM_MSR.VarExpr && e.lhs.name == "F").rhs, is)
+        for ncol in (0, 7)
+            m, is = _msr_nodes_model(12, ncol)
+            dims = ncol == 0 ? [13] : [7, 13]
+            @test length(ESM_MSR._materialized_fill_equations("F", fdef(m, is), dims)) == 1
+        end
+        m, is = _msr_nodes_model(12, 0; filt=">=", top=:zero)
+        @test length(ESM_MSR._materialized_fill_equations("F", fdef(m, is), [13])) == 2
+        m, is = _msr_nodes_model(12, 0; filt="<=")
+        @test length(ESM_MSR._materialized_fill_equations("F", fdef(m, is), [13])) == 2
+    end
+
+    @testset "a strided fold equals the lane-by-lane fold" begin
+        # Lanes fastest, levels `nc` apart: the level-by-level walk must give
+        # every slot the bits the lane walk gives it, for each ⊕ and window.
+        nc, nk = 9, 6
+        slots = Int[c + (k - 1) * nc for c in 1:nc for k in 1:nk]
+        for (op, z) in ((:+, 0.0), (:*, 1.0), (:max, -Inf), (:min, Inf)), inc in (true, false)
+            S = ESM_MSR._ScanFold(slots, nk, op, z, inc)
+            @test (S.lstride, S.kstride) == (1, nc)
+            x = Float64[_msr_val(k) for k in 1:(nc * nk)]
+            ref = copy(x)
+            f = op === :+ ? (+) : op === :* ? (*) : op === :max ? max : min
+            for c in 1:nc
+                acc = z
+                for k in 1:nk
+                    s = c + (k - 1) * nc
+                    t = ref[s]
+                    if inc
+                        acc = f(acc, t); ref[s] = acc
+                    else
+                        ref[s] = acc; acc = f(acc, t)
+                    end
+                end
+            end
+            ESM_MSR._apply_scan_fold!(x, S)
+            @test reinterpret(UInt64, x) == reinterpret(UInt64, ref)
+        end
+    end
+
     @testset "regions that overlap or leave a gap are not split" begin
         scan = _msr_scan("<", ["k"], String[])
         ma(regs) = ESM_MSR.OpExpr("makearray", ESM_MSR.ASTExpr[];

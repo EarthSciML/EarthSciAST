@@ -2892,6 +2892,12 @@ end
     @inbounds(i <= n ? (s.u[i] = v) : (s.o[i - n] = v))
     return s
 end
+# One half of the view, when slots `lo:hi` all fall in it (scan.jl).
+function _scan_dense(du::_ObsSplitVec, lo::Int, hi::Int)
+    lo > du.n && return (du.o, du.n)
+    hi <= du.n && return (du.u, 0)
+    return (du, 0)
+end
 
 # The observed buffers. Two of them — Float64 plus a lazily-allocated `alt`
 # for the value type an AD-driven `f!` is called at — exactly like `_CSECache` /
@@ -3073,6 +3079,73 @@ function _materialized_fill_equations(name::String, def::ASTExpr, dims::Vector{I
     return split === nothing ? Equation[_materialized_fill_equation(name, def, dims)] : split
 end
 
+# A strict forward scan region beside the region holding its column total is
+# ONE staggered prefix scan (`_scan_term_iters`): with the scan's terms on
+# `1..n` along axis `d`, `F[…, k] = ⊕_{j<k} term_j` for `k ≤ n` and the total
+# `⊕_{j≤n} term_j` at `k = n+1` are the same recurrence run one step further,
+# the shape `integral_lev_nodes_cumulative_from_bottom` lowers to. Recognized,
+# the total is the scan's last accumulation instead of a second fold over the
+# column, in the same left-to-right order from the same 0̄ seed the bare
+# contraction folds in. Returns that scan as one array aggregate over the whole
+# box, or `nothing`.
+#
+# Required: two regions, the first the whole box but its last cell along `d`
+# (from 1), the second that last cell; the first value a strict forward scan
+# (`filter j < k`, no join) whose output axes are the makearray's, with `k` at
+# axis `d` and `j` drawing the same range as `k`; the second an aggregate with
+# no filter or join, of the scan's reduce, over the scan's other output axes
+# in order, contracting `j` over the same range, with the same body once its
+# output names are the scan's; and `j`'s range the constant `1..n-1` where the
+# box has `n` cells along `d`.
+function _makearray_staggered_scan(boxes, values, dims::Vector{Int})
+    (length(boxes) == 2 && length(values) == 2) || return nothing
+    nd = length(dims)
+    A, B = values
+    (A isa OpExpr && B isa OpExpr) || return nothing
+    a, b = A::OpExpr, B::OpExpr
+    (_is_faq_op(a.op) && _is_faq_op(b.op)) || return nothing
+    (a.join === nothing && a.join_gates === nothing && b.join === nothing &&
+     b.join_gates === nothing && b.filter === nothing) || return nothing
+    (a.expr_body === nothing || b.expr_body === nothing ||
+     a.ranges === nothing || b.ranges === nothing) && return nothing
+    (a.reduce == b.reduce && a.semiring == b.semiring) || return nothing
+    aout = _output_idx_strings(a)
+    bout = _output_idx_strings(b)
+    (length(aout) == nd && length(bout) == nd - 1) || return nothing
+    f = a.filter
+    (f isa OpExpr && (f::OpExpr).op == "<" && length((f::OpExpr).args) == 2) || return nothing
+    jv, kv = (f::OpExpr).args
+    (jv isa VarExpr && kv isa VarExpr) || return nothing
+    j, k = (jv::VarExpr).name, (kv::VarExpr).name
+    d = findfirst(isequal(k), aout)
+    d === nothing && return nothing
+    acon = _contracted_index_names(a.ranges, aout)
+    bcon = _contracted_index_names(b.ranges, bout)
+    (acon == [j] && bcon == [j]) || return nothing
+    same(x, y) = repr(x) == repr(y)
+    (same(a.ranges[k], a.ranges[j]) && same(b.ranges[j], a.ranges[j])) || return nothing
+    rest = [aout[e] for e in 1:nd if e != d]
+    for (x, y) in zip(bout, rest)
+        same(b.ranges[x], a.ranges[y]) || return nothing
+    end
+    n = dims[d]
+    # The terms must be exactly `1..n-1`, or the total would sum a different set.
+    jr = a.ranges[j]
+    (jr isa AbstractVector && _is_const_int_range(jr) &&
+     _expand_int_range(collect(jr)) == 1:(n - 1)) || return nothing
+    for e in 1:nd
+        want_lo, want_hi = e == d ? (1, n - 1) : (1, dims[e])
+        boxes[1][e] == (want_lo, want_hi) || return nothing
+        boxes[2][e] == (e == d ? (n, n) : (want_lo, want_hi)) || return nothing
+    end
+    ren = Dict{String,ASTExpr}(bout[i] => VarExpr(rest[i]) for i in eachindex(bout) if bout[i] != rest[i])
+    bbody = isempty(ren) ? b.expr_body : _sub_preserving(b.expr_body, ren)
+    same(bbody, a.expr_body) || return nothing
+    ranges = Dict{String,Any}(String(x) => v for (x, v) in a.ranges)
+    ranges[k] = Any[1, n]
+    return reconstruct(a; ranges=ranges)
+end
+
 _region_bound_int(x::Integer) = Int(x)
 _region_bound_int(x::ASTExpr) = _try_const_int(x, Dict{String,Any}())
 _region_bound_int(x) = nothing
@@ -3108,6 +3181,9 @@ function _makearray_region_fills(name::String, def::ASTExpr, dims::Vector{Int})
         overlap(boxes[r], boxes[s]) && return nothing
     end
     sum(prod(hi - lo + 1 for (lo, hi) in b) for b in boxes) == prod(dims) || return nothing
+    staggered = _makearray_staggered_scan(boxes, values, dims)
+    staggered === nothing ||
+        return Equation[_materialized_fill_equation(name, staggered, dims)]
     base = _materialized_fill_equation(name, def, dims)
     loops = _output_idx_strings(base.lhs::OpExpr)
     lhs_body = (base.lhs::OpExpr).expr_body
