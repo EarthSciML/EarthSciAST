@@ -2672,6 +2672,59 @@ def _eval_faq_dispatch(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
             filter_expr if (join_clauses or filter_expr is not None) else None,
         )
 
+    # A node nested in an enclosing whole-box evaluation whose body or filter
+    # reads an enclosing index symbol: that symbol is bound to an ARRAY over the
+    # enclosing box, and every tier below lays its own axes out from axis 0, so
+    # it would compare and gather the enclosing index against this node's own
+    # axes elementwise — the wrong window, silently. Only the tier that puts the
+    # enclosing box in front of this node's own axes may take it.
+    outer = _enclosing_array_refs(expr, ctx, raw_ranges)
+    if outer:
+        if not ragged_reduce:
+            nested = _eval_faq_reduce_nested(
+                expr,
+                ctx,
+                outer,
+                out_syms,
+                reduce_syms,
+                resolved,
+                raw_ranges,
+                reducer,
+                empty_zero,
+                filter_expr,
+            )
+            if nested is not None:
+                if policy is not None:
+                    policy.land("nested-reduce")
+                return nested
+        else:
+            _decline("nested-reduce", "a ragged range under an enclosing whole-box binding")
+        if ragged_reduce:
+            return _eval_faq_ragged(
+                expr,
+                ctx,
+                out_syms,
+                out_ranges_exp,
+                out_shape,
+                reduce_syms,
+                resolved,
+                reducer,
+                empty_zero,
+            )
+        return _eval_faq_scalar(
+            expr,
+            ctx,
+            out_syms,
+            out_ranges_exp,
+            out_shape,
+            reduce_syms,
+            resolved,
+            raw_ranges,
+            reducer,
+            empty_zero,
+            filter_expr,
+        )
+
     # Batched vectorized fast path for a fused geometry-leaf pure map — the planar
     # conservative-regrid narrow phase A_ij = polygon_intersection_area(src_i,
     # tgt_j). Evaluates the whole (join-admitted) candidate set in one kernel call
@@ -4394,6 +4447,114 @@ def _eval_faq_reduce_vectorized(
     with np.errstate(over="ignore", invalid="ignore"):
         out = _segmented_fold(reducer, vals, counts, empty_zero)
     return out.reshape(out_shape)
+
+
+def _enclosing_array_refs(
+    expr: ExprNode, ctx: EvalContext, raw_ranges: dict[str, Any]
+) -> dict[str, np.ndarray]:
+    """The enclosing index symbols this node reads that an enclosing whole-box
+    tier has bound to an array (not shadowed by one of the node's own ranges)."""
+    refs: dict[str, np.ndarray] = {}
+    for name, val in ctx.locals.items():
+        if name in raw_ranges or not (isinstance(val, np.ndarray) and val.ndim > 0):
+            continue
+        if _expr_mentions(expr, name):
+            refs[name] = val
+    return refs
+
+
+def _eval_faq_reduce_nested(
+    expr: ExprNode,
+    ctx: EvalContext,
+    outer: dict[str, np.ndarray],
+    out_syms: list[str],
+    reduce_syms: list[str],
+    resolved: dict[str, Any],
+    raw_ranges: dict[str, Any],
+    reducer: str,
+    empty_zero: float,
+    filter_expr: Expr | None,
+) -> np.ndarray | None:
+    """A rank-0 reduction nested in an enclosing whole-box evaluation, whose body
+    or filter reads the enclosing index symbols (``W[i] = Σ_{j ≥ i} g[j]``).
+
+    The enclosing box goes in FRONT: each enclosing symbol keeps its array over
+    the enclosing box ``S`` and gains trailing unit axes, this node's contracted
+    symbols are bound on axes after ``S``, and the body, filter and join mask
+    evaluate once over ``S × reduce``. Each enclosing cell's admitted terms are
+    then folded left to right in :func:`_cartesian` order by
+    :func:`_segmented_fold` — the per-cell walk's fold, at that cell's binding
+    of the enclosing symbols. The window is fixed per enclosing cell, so it
+    folds ascending whatever its comparison (esm-spec §4.3.1): a nested node
+    has no output index to scan. The result has shape ``S``, which the
+    enclosing tier broadcasts like any other body value.
+
+    Declines for a node with output indices of its own, an unsupported ⊕, or a
+    body / filter / join that does not evaluate over the stacked box.
+    """
+    tier = "nested-reduce"
+    if out_syms or not reduce_syms:
+        return _decline(tier, "the node has output indices of its own, or does not contract")
+    if reducer not in _REDUCE_UFUNCS and reducer != "or":
+        return _decline(tier, f"⊕ {reducer!r} has no numpy ufunc")
+    try:
+        red_ranges = _expand_reduce_ranges(resolved, reduce_syms)
+        lead = np.broadcast_shapes(*(v.shape for v in outer.values()))
+    except (NumpyInterpreterError, ValueError, TypeError, KeyError) as exc:
+        return _decline(tier, f"the boxes do not line up: {type(exc).__name__}: {exc}")
+    k, m = len(lead), len(reduce_syms)
+    red_shape = tuple(len(r) for r in red_ranges)
+    full = tuple(lead) + red_shape
+    n_rows = int(np.prod(lead, dtype=np.int64))
+    if 0 in red_shape:
+        return np.full(lead, empty_zero, dtype=float)
+    if n_rows * int(np.prod(red_shape, dtype=np.int64)) > _CONTRACTION_BOX_CAP:
+        return _decline(tier, "the stacked box is over the materialization cap")
+    join_mask = None
+    if getattr(expr, "join", None):
+        try:
+            sym_positions = {s: list(r) for s, r in zip(reduce_syms, red_ranges)}
+            gates = _resolve_join(expr, raw_ranges, sym_positions, ctx)
+            join_mask = _join_admits_mask(gates, reduce_syms, red_ranges, red_shape)
+        except (NumpyInterpreterError, IndexError, ValueError, TypeError, KeyError) as exc:
+            return _decline(tier, f"join resolution raised {type(exc).__name__}: {exc}")
+        if join_mask is None:
+            return _decline(tier, "a join key is not one of the node's contracted axes")
+    prev = dict(ctx.locals)
+    try:
+        for name, val in outer.items():
+            padded = val.reshape((1,) * (k - val.ndim) + val.shape + (1,) * m)
+            ctx.locals[name] = np.asarray(padded, dtype=float)
+        for axis, (s, r) in enumerate(zip(reduce_syms, red_ranges)):
+            shp = [1] * (k + m)
+            shp[k + axis] = len(r)
+            ctx.locals[s] = np.asarray(r, dtype=float).reshape(shp)
+        with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+            term = np.broadcast_to(
+                np.asarray(_require_real(_compile_expr(expr.expr)(ctx), "aggregate body"), float),
+                full,
+            )
+            admit = np.ones(full, dtype=bool)
+            if filter_expr is not None:
+                keep = np.asarray(_compile_expr(filter_expr)(ctx)).astype(bool)
+                admit = admit & np.broadcast_to(keep, full)
+    except (NumpyInterpreterError, IndexError, ValueError, TypeError, KeyError) as exc:
+        return _decline(
+            tier,
+            f"the body or the filter does not evaluate over the stacked box: "
+            f"{type(exc).__name__}: {exc}",
+        )
+    finally:
+        ctx.locals = prev
+    if join_mask is not None:
+        admit = admit & join_mask.reshape((1,) * k + red_shape)
+    term2d = term.reshape(n_rows, -1)
+    admit2d = admit.reshape(n_rows, -1)
+    vals = np.ascontiguousarray(term2d[admit2d], dtype=float)
+    counts = admit2d.sum(axis=1).astype(np.int64)
+    with np.errstate(over="ignore", invalid="ignore"):
+        out = _segmented_fold(reducer, vals, counts, empty_zero)
+    return out.reshape(lead)
 
 
 def _gated_box_term(

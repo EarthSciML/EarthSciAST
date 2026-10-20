@@ -238,6 +238,35 @@ end
 # entry list, `_array_contraction_table`). A filter is not applied in keys mode.
 const _AggBody = Union{ASTExpr,Nothing}
 
+# A REVERSE scan folds DESCENDING (esm-spec §4.3.1): its suffix `⊕_{j ≥ i}` is
+# the left fold `((b_N ⊕ b_{N-1}) ⊕ …) ⊕ b_i`, so one running accumulator
+# walking the axis from the top computes every cell of it exactly (the scan
+# tier's reversed fold). Every build of such an aggregate visits its terms from
+# the high end down: the callers of `_foreach_aggregate_term` hand it the
+# iterators `_window_iters` orders, judged on the filter BEFORE the output
+# indices are substituted into it.
+#
+# Whether `filt` is a reverse scan window: the one contracted index `j` alone on
+# the high side of an inequality whose other side is an output index
+# (`j >= i`, `j > i`, `i <= j`, `i < j`). A bound that is not an output index
+# (`j >= 2`, `j >= p`) is a plain filter and keeps the ascending order.
+function _reverse_window(filt, contract_names::AbstractVector{<:AbstractString},
+                         out_names)
+    length(contract_names) == 1 || return false
+    filt isa OpExpr || return false
+    f = filt::OpExpr
+    length(f.args) == 2 || return false
+    hi, lo = (f.op == ">=" || f.op == ">") ? (f.args[1], f.args[2]) :
+             (f.op == "<=" || f.op == "<") ? (f.args[2], f.args[1]) : return false
+    return hi isa VarExpr && (hi::VarExpr).name == contract_names[1] &&
+           lo isa VarExpr && (lo::VarExpr).name in out_names
+end
+
+# The contracted iterators in the order the filter `filt` visits them.
+_window_iters(iters, filt, contract_names, out_names) =
+    _reverse_window(filt, contract_names, out_names) ?
+        [collect(Int, Iterators.reverse(iters[1]))] : iters
+
 function _foreach_aggregate_term(emit!::F, body::_AggBody,
         contract_names::Vector{String}, contract_iters,
         gates, filt, zerobar::Float64,
@@ -501,6 +530,7 @@ function _resolve_index_of_faq(faq_expr::OpExpr, idx_args::Vector{ASTExpr},
     # term resolution forwards `bound_syms` so the symbolic subscripts survive
     # into `_ConstGatherRef`s (in concrete mode `bound_syms` is empty → no-op).
     filt = filt0 === nothing ? nothing : _sub_preserving(filt0, idx_exprs)
+    contract_iters = _window_iters(contract_iters, filt0, contract_names, output_idx_strs)
     terms = ASTExpr[]
     _foreach_aggregate_term(sub_body, contract_names, contract_iters,
                             gates, filt, zerobar, _out_idx_env) do term
