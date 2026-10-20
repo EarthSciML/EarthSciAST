@@ -46,8 +46,10 @@ __all__ = [
     "ENUM_VISITS",
     "OverlapIndex",
     "broad_phase_candidates",
+    "candidate_pair_array",
     "envelope_vectors_from_cols",
     "envelope_vectors",
+    "overlap_candidate_index",
     "overlap_candidate_set",
     "overlap_drive_plan",
     "overlap_driver",
@@ -190,6 +192,150 @@ def overlap_candidate_set(
     return set(broad_phase_candidates(src_envs, tgt_envs, eps=eps))
 
 
+def overlap_candidate_index(src_envs: Any, tgt_envs: Any, eps: float = 0.0) -> OverlapIndex:
+    """The OVERLAP gate's :class:`OverlapIndex`, built from
+    :func:`candidate_pair_array` — the same pair set as
+    :func:`overlap_candidate_set` without a per-pair Python step."""
+    return OverlapIndex(candidate_pair_array(src_envs, tgt_envs, eps=eps))
+
+
+#: Above this many ``query x cell`` comparisons the pair array is found through
+#: a uniform bin grid instead of the full comparison matrix.
+_DENSE_COMPARE_CAP = 1 << 16
+#: Working-set bound (entries) for one block of the full comparison matrix.
+_COMPARE_BLOCK = 1 << 22
+
+
+def _inflated(envs: Any, eps: float) -> np.ndarray:
+    a = _envs_array(envs).copy()
+    a[:, 0] -= eps
+    a[:, 1] -= eps
+    a[:, 2] += eps
+    a[:, 3] += eps
+    return a
+
+
+def _hits(q: np.ndarray, c: np.ndarray, qi: np.ndarray, cj: np.ndarray) -> np.ndarray:
+    """The closed envelope predicate for the pairs ``(qi, cj)`` (0-based)."""
+    return (
+        (q[qi, 0] <= c[cj, 2])
+        & (c[cj, 0] <= q[qi, 2])
+        & (q[qi, 1] <= c[cj, 3])
+        & (c[cj, 1] <= q[qi, 3])
+    )
+
+
+def _dense_pairs(q: np.ndarray, c: np.ndarray) -> np.ndarray:
+    nq, nc = q.shape[0], c.shape[0]
+    rows = max(1, _COMPARE_BLOCK // max(nc, 1))
+    out = []
+    for lo in range(0, nq, rows):
+        hi = min(nq, lo + rows)
+        qb = q[lo:hi]
+        hit = (
+            (qb[:, None, 0] <= c[None, :, 2])
+            & (c[None, :, 0] <= qb[:, None, 2])
+            & (qb[:, None, 1] <= c[None, :, 3])
+            & (c[None, :, 1] <= qb[:, None, 3])
+        )
+        qi, cj = np.nonzero(hit)
+        out.append(np.column_stack((qi + lo, cj)))
+    return np.concatenate(out) if out else np.empty((0, 2), dtype=np.int64)
+
+
+def _bin_span(env: np.ndarray, x0: float, y0: float, h: float) -> float:
+    """How many bins the boxes of ``env`` cover in total."""
+    nx = np.floor((env[:, 2] - x0) / h) - np.floor((env[:, 0] - x0) / h) + 1
+    ny = np.floor((env[:, 3] - y0) / h) - np.floor((env[:, 1] - y0) / h) + 1
+    return float((nx * ny).sum())
+
+
+def _bin_entries(env: np.ndarray, x0: float, y0: float, h: float, nbx: int):
+    """``(bin id, box)`` for every bin each box covers, and the entry count."""
+    ix0 = np.floor((env[:, 0] - x0) / h).astype(np.int64)
+    ix1 = np.floor((env[:, 2] - x0) / h).astype(np.int64)
+    iy0 = np.floor((env[:, 1] - y0) / h).astype(np.int64)
+    iy1 = np.floor((env[:, 3] - y0) / h).astype(np.int64)
+    nx = ix1 - ix0 + 1
+    ny = iy1 - iy0 + 1
+    per = nx * ny
+    total = int(per.sum())
+    box = np.repeat(np.arange(env.shape[0], dtype=np.int64), per)
+    first = np.zeros(env.shape[0], dtype=np.int64)
+    np.cumsum(per[:-1], out=first[1:])
+    t = np.arange(total, dtype=np.int64) - first[box]
+    bx = ix0[box] + t % nx[box]
+    by = iy0[box] + t // nx[box]
+    return by * nbx + bx, box
+
+
+def candidate_pair_array(query_envs: Any, cell_envs: Any, eps: float = 0.0) -> np.ndarray:
+    """:func:`broad_phase_candidates` as a sorted ``[K, 2]`` int64 array of
+    1-based ``(qi, cj)`` — the identical pair set, found without the per-query
+    Python loop.
+
+    Small inputs compare every pair at once. Larger ones bin both sides into a
+    uniform grid (cell size the median cell-envelope extent) and test the exact
+    closed predicate only on pairs that share a bin. Two closed envelopes that
+    intersect share a point, and the bin of that point lies in both boxes' bin
+    ranges because the bin coordinate is a monotone function of position, so the
+    binning drops no pair the predicate admits. Envelopes with a non-finite
+    coordinate, or a grid whose bin entries would outgrow the inputs, take the
+    full comparison instead.
+    """
+    q = _inflated(query_envs, float(eps))
+    c = _inflated(cell_envs, float(eps))
+    nq, nc = q.shape[0], c.shape[0]
+    if nq == 0 or nc == 0:
+        return np.empty((0, 2), dtype=np.int64)
+    pairs = None
+    if nq * nc > _DENSE_COMPARE_CAP and np.isfinite(q).all() and np.isfinite(c).all():
+        pairs = _binned_pairs(q, c)
+    if pairs is None:
+        pairs = _dense_pairs(q, c)
+    pairs = pairs.astype(np.int64) + 1
+    order = np.lexsort((pairs[:, 1], pairs[:, 0]))
+    return pairs[order]
+
+
+def _binned_pairs(q: np.ndarray, c: np.ndarray) -> np.ndarray | None:
+    ext = np.maximum(c[:, 2] - c[:, 0], c[:, 3] - c[:, 1])
+    ext = ext[ext > 0]
+    if ext.size == 0:
+        return None
+    h = float(np.median(ext))
+    x0 = float(min(q[:, 0].min(), c[:, 0].min()))
+    y0 = float(min(q[:, 1].min(), c[:, 1].min()))
+    x1 = float(max(q[:, 2].max(), c[:, 2].max()))
+    y1 = float(max(q[:, 3].max(), c[:, 3].max()))
+    nbx = int(np.floor((x1 - x0) / h)) + 1
+    nby = int(np.floor((y1 - y0) / h)) + 1
+    budget = 16 * (q.shape[0] + c.shape[0])
+    if nbx * nby > budget:
+        return None
+    if _bin_span(q, x0, y0, h) + _bin_span(c, x0, y0, h) > budget:
+        return None
+    qb, qbox = _bin_entries(q, x0, y0, h, nbx)
+    cb, cbox = _bin_entries(c, x0, y0, h, nbx)
+    corder = np.argsort(cb, kind="stable")
+    cb, cbox = cb[corder], cbox[corder]
+    lo = np.searchsorted(cb, qb, side="left")
+    hi = np.searchsorted(cb, qb, side="right")
+    n = hi - lo
+    total = int(n.sum())
+    if total > budget * 64:
+        return None
+    ent = np.repeat(np.arange(qb.size, dtype=np.int64), n)
+    first = np.zeros(qb.size, dtype=np.int64)
+    np.cumsum(n[:-1], out=first[1:])
+    pos = lo[ent] + (np.arange(total, dtype=np.int64) - first[ent])
+    qi = qbox[ent]
+    cj = cbox[pos]
+    keep = _hits(q, c, qi, cj)
+    key = np.unique(qi[keep] * c.shape[0] + cj[keep])
+    return np.column_stack((key // c.shape[0], key % c.shape[0]))
+
+
 # =========================================================================== #
 # CANDIDATE-DRIVEN ENUMERATION (projection-pushdown Wall #1) — the SHARED
 # driver policy behind BOTH overlap-gated enumeration paths.
@@ -249,13 +395,27 @@ class OverlapIndex:
     a crash).
     """
 
-    __slots__ = ("pairs", "_sorted", "_adj_l", "_adj_r")
+    __slots__ = ("_pairs", "_sorted", "_adj_l", "_adj_r", "_array")
 
     def __init__(self, pairs: Any) -> None:
-        self.pairs: set[tuple[int, int]] = pairs if isinstance(pairs, set) else set(pairs)
+        self._array: np.ndarray | None = None
+        self._pairs: set[tuple[int, int]] | None = None
+        if isinstance(pairs, np.ndarray):
+            # A sorted ``[K, 2]`` pair array (:func:`candidate_pair_array`): the
+            # set and the tuple views are built only if a per-tuple consumer asks.
+            self._array = np.asarray(pairs, dtype=np.int64).reshape(-1, 2)
+        else:
+            self._pairs = pairs if isinstance(pairs, set) else set(pairs)
         self._sorted: list[tuple[int, int]] | None = None
         self._adj_l: dict[int, list[int]] | None = None
         self._adj_r: dict[int, list[int]] | None = None
+
+    @property
+    def pairs(self) -> set[tuple[int, int]]:
+        """The candidate pairs as a set of 1-based ``(pos_src, pos_tgt)``."""
+        if self._pairs is None:
+            self._pairs = set(zip(self._array[:, 0].tolist(), self._array[:, 1].tolist()))
+        return self._pairs
 
     def __contains__(self, probe: Any) -> bool:
         try:
@@ -264,10 +424,10 @@ class OverlapIndex:
             return False
 
     def __len__(self) -> int:
-        return len(self.pairs)
+        return len(self._array) if self._pairs is None else len(self._pairs)
 
     def __bool__(self) -> bool:
-        return bool(self.pairs)
+        return len(self) > 0
 
     def __iter__(self):
         return iter(self.pairs)
@@ -276,8 +436,20 @@ class OverlapIndex:
         """The pairs ascending by ``(pos_src, pos_tgt)`` — the deterministic
         PAIR-drive order. Built once, cached."""
         if self._sorted is None:
-            self._sorted = sorted(self.pairs)
+            if self._pairs is None:
+                self._sorted = list(zip(self._array[:, 0].tolist(), self._array[:, 1].tolist()))
+            else:
+                self._sorted = sorted(self._pairs)
         return self._sorted
+
+    def pair_array(self) -> np.ndarray:
+        """The pairs as a ``[K, 2]`` int64 array, ascending by ``(pos_src,
+        pos_tgt)`` — the form a whole-array consumer drives from. Built once,
+        cached."""
+        if self._array is None:
+            arr = np.array(self.sorted_pairs(), dtype=np.int64).reshape(-1, 2)
+            self._array = arr
+        return self._array
 
     def adjacency(self, side: str) -> dict[int, list[int]]:
         """``side == "l"`` -> ``pos_l -> sorted pos_r``s; ``side == "r"`` ->
