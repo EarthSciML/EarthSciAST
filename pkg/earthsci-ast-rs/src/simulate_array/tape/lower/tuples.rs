@@ -65,6 +65,25 @@ enum DimBound {
     },
 }
 
+/// Both keyed sides of an `on` clause: `(positions, keys)`, left then right.
+type EqSidesT = (
+    Vec<i64>,
+    Vec<crate::relational::Key>,
+    Vec<i64>,
+    Vec<crate::relational::Key>,
+);
+
+/// An `on` clause the gate planner is pricing ([`TapeBuilder::build_join_gates`]).
+struct EqCand<'a> {
+    g: &'a crate::join::OnGate,
+    clause_ix: usize,
+    matches: usize,
+    n_l: usize,
+    n_r: usize,
+    /// The keyed sides, held for the cheapest candidate only.
+    sides: Option<EqSidesT>,
+}
+
 /// A join gate resolved from build-time data.
 struct BuiltGate {
     sym_src: String,
@@ -105,6 +124,87 @@ enum Src<'a> {
     List(&'a [i64]),
 }
 
+/// A tuple-list contraction with its bounds and gates resolved: what
+/// [`TapeBuilder::lower_tuple_list`] lowers, and what
+/// [`TapeBuilder::fold_tuple_contraction`] folds a sub-box of at a time.
+#[derive(Clone, Copy)]
+struct TupleSpec<'a> {
+    idx_names: &'a [String],
+    ranges: &'a [(i64, i64)],
+    body: &'a Expr,
+    contract_names: &'a [String],
+    bounds: &'a [DimBound],
+    gates: &'a [BuiltGate],
+    reduce: ReduceKind,
+    filter: Option<&'a Expr>,
+    /// Only the tuples whose ordinal in the list falls in `[start, end)`:
+    /// a window of ONE cell's run, for a cell whose run alone is over the
+    /// budget ([`TapeBuilder::fold_tuple_contraction`]).
+    window: Option<(u64, u64)>,
+    /// What each cell's fold starts from: the semiring's identity, or the
+    /// accumulator a previous window of the same cell's run left.
+    init: f64,
+}
+
+/// A build-time input of a folded tuple-list chunk: the value an observed the
+/// contraction reads has in the enclosing build.
+enum Seed {
+    Lit(f64),
+    Empty(Vec<usize>),
+    Arr(ndarray::ArrayD<f64>),
+}
+
+/// The default [`tuple_list_budget`]: about a million tuples. A tuple list
+/// costs on the order of a hundred bytes per tuple once lowered and run (its
+/// loop-symbol columns, one position table per gather, the gathered values
+/// the build knows, and the slab's per-tuple registers), so this holds what
+/// one program's tuple lists cost to roughly 100 MB however many pairs its
+/// joins match.
+pub(in crate::simulate_array) const DEFAULT_TUPLE_LIST_BUDGET: usize = 1 << 20;
+
+thread_local! {
+    static TUPLE_LIST_BUDGET: std::cell::Cell<Option<usize>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// The most tuples one program's tuple lists may hold together: a CONST
+/// contraction whose list would take the program past it is folded at build
+/// time a sub-box at a time ([`TapeBuilder::fold_tuple_contraction`]) instead
+/// of being materialized whole (`ESS_TUPLE_LIST_BUDGET`, default
+/// [`DEFAULT_TUPLE_LIST_BUDGET`]). It is the program's total and not a
+/// per-list cap because a list's arrays live as long as the program does: a
+/// hundred lists each under a per-list cap cost a hundred times it.
+///
+/// A tuning threshold, not a strategy switch: both sides of it run the same
+/// lowering on the same kernels and answer bit for bit the same; it bounds
+/// what a join that matches a large share of its product costs in memory.
+/// Thread-local (seeded from the environment once), so one test process can
+/// measure both arms.
+pub(in crate::simulate_array) fn tuple_list_budget() -> usize {
+    TUPLE_LIST_BUDGET.with(|c| match c.get() {
+        Some(v) => v,
+        None => {
+            static ENV: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+            let v = *ENV.get_or_init(|| {
+                std::env::var("ESS_TUPLE_LIST_BUDGET")
+                    .ok()
+                    .and_then(|v| v.trim().parse::<usize>().ok())
+                    .unwrap_or(DEFAULT_TUPLE_LIST_BUDGET)
+            });
+            c.set(Some(v));
+            v
+        }
+    })
+}
+
+/// Set [`tuple_list_budget`] for THIS thread, returning the previous value.
+#[cfg(test)]
+pub(in crate::simulate_array) fn set_tuple_list_budget(tuples: usize) -> usize {
+    let prev = tuple_list_budget();
+    TUPLE_LIST_BUDGET.with(|c| c.set(Some(tuples)));
+    prev
+}
+
 impl TapeBuilder<'_> {
     /// Lower a join-gated or ragged contraction as a tuple list (module
     /// docs). The result is over the output box `ranges` (a scalar for a
@@ -142,13 +242,55 @@ impl TapeBuilder<'_> {
         if shape.contains(&0) {
             bail_tape!("faq: empty output box");
         }
-        let identity = reduce.identity();
         let bounds = self.tuple_dim_bounds(idx_names, contract_dims)?;
         let gates = match join {
             Some(j) => self.build_join_gates(j)?,
             None => Vec::new(),
         };
-        let list = enumerate_tuples(idx_names, ranges, contract_names, &bounds, &gates)?;
+        let spec = TupleSpec {
+            idx_names,
+            ranges,
+            body,
+            contract_names,
+            bounds: &bounds,
+            gates: &gates,
+            reduce,
+            filter,
+            window: None,
+            init: reduce.identity(),
+        };
+        if let Some(v) = self.fold_tuple_contraction(&spec, &lo, &shape, combine_op)? {
+            return Ok(v);
+        }
+        self.lower_tuple_list(&spec, &lo, &shape, combine_op)
+    }
+
+    /// The tuple-list form itself (module docs): enumerate the admitted
+    /// tuples of `spec`'s output box, lower the filter and the body once over
+    /// that 1-D box, and fold each cell's run with one [`Instr::SegReduce`].
+    fn lower_tuple_list(
+        &mut self,
+        spec: &TupleSpec<'_>,
+        lo: &DimI,
+        shape: &DimU,
+        combine_op: BinCode,
+    ) -> LResult<LV> {
+        let &TupleSpec {
+            idx_names,
+            ranges,
+            body,
+            contract_names,
+            bounds,
+            gates,
+            filter,
+            window,
+            init,
+            ..
+        } = spec;
+        let (lo, shape) = (lo.clone(), shape.clone());
+        // The value an empty run folds to, and each run's starting point.
+        let identity = init;
+        let list = enumerate_tuples(idx_names, ranges, contract_names, bounds, gates, window)?;
         let m = *list.rows.last().expect("rows has n_out + 1 entries") as usize;
         let rank0 = ranges.is_empty();
         if m == 0 {
@@ -263,6 +405,251 @@ impl TapeBuilder<'_> {
             sec,
         );
         Ok(if rank0 { LV::Scalar(out) } else { LV::Arr(out) })
+    }
+
+    /// Fold a CONST tuple-list contraction whose list would take the program
+    /// past [`tuple_list_budget`] at build time, one output sub-box at a time,
+    /// into a single [`Instr::ConstArray`]. `None` when the list fits what is
+    /// left of the budget (which it then takes),
+    /// or when anything the contraction reads is not build-time data (a
+    /// parameter, a state, the time, a forcing input), or when a chunk would
+    /// fault: the caller then lowers the whole list as before.
+    ///
+    /// The whole list is O(tuples), and a tuple costs about a hundred bytes
+    /// lowered and run, which made peak memory track every candidate pair a
+    /// join matches — times the width of every output axis the join does not
+    /// gate — rather than the arrays a document declares (EarthSciAST#418's
+    /// shape, returned by the tape). A cell's value depends only on that
+    /// cell's run of tuples, and each chunk is the same lowering of the same
+    /// expression on the same kernels ([`super::standalone`]) over a sub-box
+    /// of whole cells, so the folded array is bit-identical to what the
+    /// materialized list computes; only the peak changes, to one chunk's.
+    fn fold_tuple_contraction(
+        &mut self,
+        spec: &TupleSpec<'_>,
+        lo: &DimI,
+        shape: &DimU,
+        combine_op: BinCode,
+    ) -> LResult<Option<LV>> {
+        // A rank-0 output is one cell: there is no sub-box to split it into.
+        if spec.ranges.is_empty() {
+            return Ok(None);
+        }
+        let budget = tuple_list_budget() as u64;
+        let counts = count_tuples(
+            spec.idx_names,
+            spec.ranges,
+            spec.contract_names,
+            spec.bounds,
+            spec.gates,
+        )?;
+        let total: u64 = counts.iter().sum();
+        if self.tuples_held.saturating_add(total) <= budget {
+            // Within what the program may hold: the caller materializes it.
+            self.tuples_held += total;
+            return Ok(None);
+        }
+        let Some(seeds) = self.tuple_fold_seeds(spec) else {
+            return Ok(None);
+        };
+        let n_cells: usize = shape.iter().product();
+        let mut strides = vec![1usize; shape.len()];
+        for d in (0..shape.len().saturating_sub(1)).rev() {
+            strides[d] = strides[d + 1] * shape[d + 1];
+        }
+        let identity = spec.reduce.identity();
+        let mut values = vec![identity; n_cells];
+        for sub in plan_chunks(spec.ranges, shape, &strides, &counts, budget) {
+            let sub_shape: Vec<usize> = sub.iter().map(|(l, h)| (h - l + 1) as usize).collect();
+            let base: usize = sub
+                .iter()
+                .zip(spec.ranges)
+                .zip(&strides)
+                .map(|(((l, _), (l0, _)), st)| (l - l0) as usize * st)
+                .sum();
+            // The sub-box's cells, row-major, as flat positions in the box.
+            let mut cells: Vec<usize> = vec![base];
+            for (&n, &st) in sub_shape.iter().zip(&strides) {
+                let mut next = Vec::with_capacity(cells.len() * n);
+                for &c in &cells {
+                    next.extend((0..n).map(|k| c + k * st));
+                }
+                cells = next;
+            }
+            if cells.iter().all(|&c| counts[c] == 0) {
+                continue; // every cell is the identity already
+            }
+            if let [c] = cells[..]
+                && counts[c] > budget
+            {
+                // One cell whose run alone is over the budget: fold it a
+                // window at a time, each window starting from the
+                // accumulator the last one left. `seg_reduce` is a left fold
+                // in list order, so this is the whole run's fold exactly.
+                let mut acc = identity;
+                let mut start = 0u64;
+                while start < counts[c] {
+                    let end = (start + budget.max(1)).min(counts[c]);
+                    let chunk = TupleSpec {
+                        ranges: &sub,
+                        window: Some((start, end)),
+                        init: acc,
+                        ..*spec
+                    };
+                    match self.eval_tuple_chunk(&chunk, &seeds, combine_op).as_deref() {
+                        Some(&[x]) => acc = x,
+                        _ => return Ok(None),
+                    }
+                    start = end;
+                }
+                values[c] = acc;
+                continue;
+            }
+            let chunk = TupleSpec {
+                ranges: &sub,
+                ..*spec
+            };
+            let Some(v) = self.eval_tuple_chunk(&chunk, &seeds, combine_op) else {
+                return Ok(None);
+            };
+            if v.len() != cells.len() {
+                return Ok(None);
+            }
+            for (&c, x) in cells.iter().zip(v) {
+                values[c] = x;
+            }
+        }
+        let data = tape_index(self.const_data.len(), "array constants")?;
+        self.const_data.push(ConstArrayData {
+            shape: shape.clone(),
+            values,
+        });
+        let sec = self.placement(Cadence::Const);
+        let out = self.new_slot(shape, lo, false, sec);
+        self.emit(Instr::ConstArray { data, out }, sec);
+        Ok(Some(LV::Arr(out)))
+    }
+
+    /// The build-time value of every observed `spec`'s body and filter read,
+    /// keyed by name; `None` when one of them has none. Names that are not
+    /// observeds are left to the chunk's own build, which declines what it
+    /// cannot resolve.
+    fn tuple_fold_seeds(&self, spec: &TupleSpec<'_>) -> Option<Vec<(String, Seed)>> {
+        let mut reads: HashSet<String> = HashSet::new();
+        standalone::collect_variable_names(spec.body, &mut reads);
+        if let Some(f) = spec.filter {
+            standalone::collect_variable_names(f, &mut reads);
+        }
+        let mut names: Vec<String> = reads
+            .into_iter()
+            .filter(|n| !spec.idx_names.contains(n) && !spec.contract_names.contains(n))
+            .filter(|n| self.obs_defined.contains_key(n.as_str()))
+            .collect();
+        names.sort();
+        let mut seeds = Vec::with_capacity(names.len());
+        for name in names {
+            let seed = match self.obs_defined.get(name.as_str())? {
+                ObsVal::Taped(LV::Lit(x)) => Seed::Lit(*x),
+                ObsVal::Taped(_) => {
+                    let (shape, vals) = self.known_named(&name)?;
+                    if shape.is_empty() {
+                        Seed::Lit(*vals.first()?)
+                    } else if vals.is_empty() {
+                        Seed::Empty(shape.to_vec())
+                    } else {
+                        Seed::Arr(
+                            ndarray::ArrayD::from_shape_vec(
+                                ndarray::IxDyn(&shape),
+                                (*vals).clone(),
+                            )
+                            .ok()?,
+                        )
+                    }
+                }
+                ObsVal::Declined => return None,
+            };
+            seeds.push((name, seed));
+        }
+        Some(seeds)
+    }
+
+    /// Lower `chunk` alone on a standalone tape over `seeds`, run it once, and
+    /// return its row-major values; `None` when it does not lower, is not
+    /// CONST, or notes a fault (whose order only the whole list places).
+    fn eval_tuple_chunk(
+        &self,
+        chunk: &TupleSpec<'_>,
+        seeds: &[(String, Seed)],
+        combine_op: BinCode,
+    ) -> Option<Vec<f64>> {
+        let var_shapes: IndexMap<String, VarShape> = IndexMap::new();
+        let discrete: HashSet<String> = HashSet::new();
+        let forcing = ForcingInputs {
+            shapes: FxHashMap::default(),
+            unsized_: HashSet::new(),
+            discrete: &discrete,
+        };
+        let name = "\u{0}tuple-list chunk".to_string();
+        let mut obs_tier: FxHashMap<String, Cadence> = FxHashMap::default();
+        obs_tier.insert(name.clone(), Cadence::Const);
+        let mut b = TapeBuilder::new(
+            &var_shapes,
+            &[],
+            obs_tier,
+            self.const_arrays,
+            self.f32_document,
+            &forcing,
+        );
+        b.array_bool_reductions = self.array_bool_reductions;
+        b.begin_rule(RuleInfo {
+            name: name.clone(),
+            kind: RuleKind::Observed(0),
+            cadence: Cadence::Const,
+        });
+        for (input, seed) in seeds {
+            let lv = match seed {
+                Seed::Lit(x) => LV::Lit(*x),
+                Seed::Empty(shape) => {
+                    let ones = DimI::from_elem(1, shape.len());
+                    let lv = b.emit_zero_array(shape, &ones);
+                    if let LV::Arr(s) = lv {
+                        b.known.insert(s, Known::Vals(Rc::new(Vec::new())));
+                    }
+                    lv
+                }
+                Seed::Arr(a) => b.emit_const_array(a).ok()?,
+            };
+            b.obs_defined.insert(input.clone(), ObsVal::Taped(lv));
+        }
+        let lo: DimI = chunk.ranges.iter().map(|(l, _)| *l).collect();
+        let shape: DimU = chunk
+            .ranges
+            .iter()
+            .map(|(l, h)| (h - l + 1) as usize)
+            .collect();
+        let v = b.lower_tuple_list(chunk, &lo, &shape, combine_op).ok()?;
+        if b.fault_notes != 0 || b.fault_first.is_some() || b.lv_cadence(&v) != Cadence::Const {
+            return None;
+        }
+        let n: usize = shape.iter().product();
+        let slot = match v {
+            LV::Lit(x) => return Some(vec![x; n]),
+            LV::Arr(s) => s,
+            _ => return None,
+        };
+        b.obs_defined
+            .insert(name.clone(), ObsVal::Taped(LV::Arr(slot)));
+        b.end_rule();
+        // The rule stands for the chunk only so that its value is exported.
+        let rule = AlgebraicRule::Scalar {
+            var: name.clone(),
+            body: Rc::new(Expr::Number(0.0)),
+            declared_shape: Some(shape.to_vec()),
+        };
+        let exports = b.compute_exports(std::slice::from_ref(&rule), true);
+        let prog = b.finish(exports, None, false);
+        let a = standalone::run_standalone_export(prog, &name, &[], &[]).ok()?;
+        Some(a.iter().copied().collect())
     }
 
     /// A join-gated aggregate with no contracted index: the gate admits or
@@ -430,11 +817,88 @@ impl TapeBuilder<'_> {
         }
     }
 
+    /// Both keyed sides of an `on` clause, `(positions, keys)` left then
+    /// right, from build-time data.
+    fn on_gate_sides(&self, g: &crate::join::OnGate) -> LResult<EqSidesT> {
+        // `exact_ints`: each data column must hold exact integers, which is
+        // what the interpreter drives on. A clause over other values is
+        // not a gate there — the filter's `==` decides every pair of the
+        // full product — so here it drives on the values' bits instead
+        // (`float_key_column`): the same pairs the filter admits, and
+        // a NaN pair the filter then rejects, so the walk is still the
+        // filtered product's order-preserving subsequence.
+        let side = |cols: &[crate::join::KeyColumn], exact_ints: bool| -> LResult<_> {
+            let mut parts = Vec::with_capacity(cols.len());
+            for c in cols {
+                parts.push(match c {
+                    crate::join::KeyColumn::Const { positions, values } => {
+                        if !exact_ints {
+                            return Ok(None);
+                        }
+                        const_key_column(positions, values)
+                    }
+                    crate::join::KeyColumn::Column(name) => {
+                        let a = self
+                            .known_named(name)
+                            .and_then(|(shape, vals)| {
+                                ndarray::ArrayD::from_shape_vec(
+                                    ndarray::IxDyn(&shape),
+                                    (*vals).clone(),
+                                )
+                                .ok()
+                            })
+                            .ok_or_else(|| Bail {
+                                reason: format!(
+                                    "aggregate: join key column `{name}` is not build-time \
+                                     data{}",
+                                    self.not_foldable_note(name)
+                                ),
+                            })?;
+                        let col = if exact_ints {
+                            data_key_column(&a)
+                        } else {
+                            float_key_column(&a)
+                        };
+                        match col {
+                            Some(col) => col,
+                            None if exact_ints => return Ok(None),
+                            None => bail_tape!(
+                                "aggregate: join key column `{name}` is not a 1-D column"
+                            ),
+                        }
+                    }
+                });
+            }
+            composite_side_keys(parts).map(Some).ok_or_else(|| Bail {
+                reason: "aggregate: a composite join key's columns disagree in length".to_string(),
+            })
+        };
+        let sides = match (side(&g.cols_l, true)?, side(&g.cols_r, true)?) {
+            (Some(l), Some(r)) => Some((l, r)),
+            _ => match (side(&g.cols_l, false)?, side(&g.cols_r, false)?) {
+                (Some(l), Some(r)) => Some((l, r)),
+                _ => None,
+            },
+        };
+        let Some(((pos_l, keys_l), (pos_r, keys_r))) = sides else {
+            bail_tape!(
+                "aggregate: a join clause pairs a literal key with a column that is not \
+                 exact integers"
+            );
+        };
+        Ok((pos_l, keys_l, pos_r, keys_r))
+    }
+
     /// Resolve every drivable clause of `join` from build-time data, most
     /// selective first (the interpreter's §5.24 order). A drivable clause
     /// whose data the build does not know is a refusal (module docs).
     fn build_join_gates(&mut self, join: &[JoinClause]) -> LResult<Vec<BuiltGate>> {
         let mut gates = Vec::new();
+        // How many distinct positions each gated symbol can still take, given
+        // the gates built so far (the interpreter's `reach`).
+        let mut reach: HashMap<String, usize> = HashMap::new();
+        let mut candidates: Vec<EqCand<'_>> = Vec::new();
+        let mut cheapest: Option<(usize, EqSidesT)> = None;
         for (clause_ix, clause) in join.iter().enumerate() {
             if let Some(ov) = &clause.overlap {
                 let (Some(sym_src), Some(sym_tgt)) = (&ov.sym_src, &ov.sym_tgt) else {
@@ -464,10 +928,15 @@ impl TapeBuilder<'_> {
                 let (src, tgt) = (env(&ov.src_env)?, env(&ov.tgt_env)?);
                 let pairs =
                     crate::broad_phase::broad_phase_candidates(&src, &tgt, ov.eps.unwrap_or(0.0));
+                let index = OverlapIndex::from_zero_based(&pairs);
+                for sym in [sym_src, sym_tgt] {
+                    let r = reach.entry(sym.clone()).or_insert(usize::MAX);
+                    *r = (*r).min(index.len());
+                }
                 gates.push(BuiltGate {
                     sym_src: sym_src.clone(),
                     sym_tgt: sym_tgt.clone(),
-                    index: OverlapIndex::from_zero_based(&pairs),
+                    index,
                     n_src: src.len(),
                     n_tgt: tgt.len(),
                     clause_ix,
@@ -481,81 +950,69 @@ impl TapeBuilder<'_> {
             if g.cols_l.len() != g.cols_r.len() || g.cols_l.is_empty() {
                 continue;
             }
-            // `exact_ints`: each data column must hold exact integers, which is
-            // what the interpreter drives on. A clause over other values is
-            // not a gate there — the filter's `==` decides every pair of the
-            // full product — so here it drives on the values' bits instead
-            // (`float_key_column`): the same pairs the filter admits, and
-            // a NaN pair the filter then rejects, so the walk is still the
-            // filtered product's order-preserving subsequence.
-            let side = |cols: &[crate::join::KeyColumn], exact_ints: bool| -> LResult<_> {
-                let mut parts = Vec::with_capacity(cols.len());
-                for c in cols {
-                    parts.push(match c {
-                        crate::join::KeyColumn::Const { positions, values } => {
-                            if !exact_ints {
-                                return Ok(None);
-                            }
-                            const_key_column(positions, values)
-                        }
-                        crate::join::KeyColumn::Column(name) => {
-                            let a = self
-                                .known_named(name)
-                                .and_then(|(shape, vals)| {
-                                    ndarray::ArrayD::from_shape_vec(
-                                        ndarray::IxDyn(&shape),
-                                        (*vals).clone(),
-                                    )
-                                    .ok()
-                                })
-                                .ok_or_else(|| Bail {
-                                    reason: format!(
-                                        "aggregate: join key column `{name}` is not build-time \
-                                         data{}",
-                                        self.not_foldable_note(name)
-                                    ),
-                                })?;
-                            let col = if exact_ints {
-                                data_key_column(&a)
-                            } else {
-                                float_key_column(&a)
-                            };
-                            match col {
-                                Some(col) => col,
-                                None if exact_ints => return Ok(None),
-                                None => bail_tape!(
-                                    "aggregate: join key column `{name}` is not a 1-D column"
-                                ),
-                            }
-                        }
-                    });
-                }
-                composite_side_keys(parts).map(Some).ok_or_else(|| Bail {
-                    reason: "aggregate: a composite join key's columns disagree in length"
-                        .to_string(),
-                })
+            // Priced before it is built, as the interpreter's planner prices
+            // it (`resolve_gates`): only the cheapest candidate's keyed sides
+            // are held while the others are counted.
+            let sides = self.on_gate_sides(g)?;
+            let matches = crate::relational::equijoin_match_count(&sides.1, &sides.3);
+            let (n_l, n_r) = (sides.0.len(), sides.2.len());
+            if cheapest.as_ref().is_none_or(|&(i, _)| {
+                let c: &EqCand<'_> = &candidates[i];
+                matches < c.matches
+            }) {
+                cheapest = Some((candidates.len(), sides));
+            }
+            candidates.push(EqCand {
+                g,
+                clause_ix,
+                matches,
+                n_l,
+                n_r,
+                sides: None,
+            });
+        }
+        if let Some((slot, sides)) = cheapest {
+            candidates[slot].sides = Some(sides);
+        }
+        // CHEAPEST FIRST, and an UNECONOMIC gate — one that would materialise
+        // more pairs than the tuples it could prune — is declined when another
+        // already drives. The tape built every gate, which is how a six-valued
+        // key against a 1.4-million-row table came to hold a 1.2-billion-pair
+        // index the interpreter never builds (EarthSciAST#418, PR #423).
+        // Declining only widens the enumeration: an `on` gate's equality is
+        // also a conjunct of the filter (`in_filter`), which masks the extra
+        // tuples, and the walk stays the product's order-preserving
+        // subsequence, so the fold is the same.
+        candidates.sort_by_key(|c| (c.matches, c.clause_ix));
+        let ratio = crate::broad_phase::gate_plan_ratio();
+        let floor = crate::broad_phase::gate_plan_floor();
+        for c in candidates {
+            let reach_of = |sym: &str, full: usize| reach.get(sym).map_or(full, |r| (*r).min(full));
+            let space = (reach_of(&c.g.sym_l, c.n_l) as u128)
+                .saturating_mul(reach_of(&c.g.sym_r, c.n_r) as u128);
+            if !gates.is_empty()
+                && c.matches >= floor
+                && (c.matches as u128) > space.saturating_mul(ratio)
+            {
+                crate::broad_phase::bump_gate_plan_declines();
+                continue;
+            }
+            let sides = match c.sides {
+                Some(s) => s,
+                None => self.on_gate_sides(c.g)?,
             };
-            let sides = match (side(&g.cols_l, true)?, side(&g.cols_r, true)?) {
-                (Some(l), Some(r)) => Some((l, r)),
-                _ => match (side(&g.cols_l, false)?, side(&g.cols_r, false)?) {
-                    (Some(l), Some(r)) => Some((l, r)),
-                    _ => None,
-                },
-            };
-            let Some(((pos_l, keys_l), (pos_r, keys_r))) = sides else {
-                bail_tape!(
-                    "aggregate: a join clause pairs a literal key with a column that is not \
-                     exact integers"
-                );
-            };
-            let (index, n_src, n_tgt) = index_from_sides((pos_l, keys_l, pos_r, keys_r));
+            let (index, n_src, n_tgt) = index_from_sides(sides);
+            for sym in [&c.g.sym_l, &c.g.sym_r] {
+                let r = reach.entry(sym.clone()).or_insert(usize::MAX);
+                *r = (*r).min(index.len());
+            }
             gates.push(BuiltGate {
-                sym_src: g.sym_l.clone(),
-                sym_tgt: g.sym_r.clone(),
+                sym_src: c.g.sym_l.clone(),
+                sym_tgt: c.g.sym_r.clone(),
                 index,
                 n_src,
                 n_tgt,
-                clause_ix,
+                clause_ix: c.clause_ix,
                 in_filter: true,
             });
         }
@@ -783,11 +1240,87 @@ fn enumerate_tuples(
     contract_names: &[String],
     bounds: &[DimBound],
     gates: &[BuiltGate],
+    window: Option<(u64, u64)>,
 ) -> LResult<TupleList> {
     let nr = idx_names.len();
     let nc = contract_names.len();
     let mut cols: Vec<Vec<f64>> = vec![Vec::new(); nr + nc];
     let mut rows: Vec<u32> = vec![0];
+    let len = std::cell::Cell::new(0usize);
+    let (lo, hi) = window.unwrap_or((0, u64::MAX));
+    let mut ord = 0u64;
+    visit_tuples(
+        idx_names,
+        ranges,
+        contract_names,
+        bounds,
+        gates,
+        &mut |cell: &[i64], t: &[i64]| {
+            ord += 1;
+            if ord <= lo || ord > hi {
+                return;
+            }
+            for (c, &v) in cell.iter().enumerate() {
+                cols[c].push(v as f64);
+            }
+            for (d, &v) in t.iter().enumerate() {
+                cols[nr + d].push(v as f64);
+            }
+            len.set(len.get() + 1);
+        },
+        &mut || {
+            let m = len.get();
+            if m > MAX_PROMOTED_ELEMS {
+                bail_tape!("contracted: tuple list too long ({m} tuples)");
+            }
+            rows.push(m as u32);
+            Ok(())
+        },
+    )?;
+    Ok(TupleList { rows, cols })
+}
+
+/// How many tuples [`enumerate_tuples`] admits in each output cell, in the
+/// same row-major cell order, without materializing a column: the price of
+/// the tuple list, paid before it is built ([`TapeBuilder::fold_tuple_contraction`]).
+fn count_tuples(
+    idx_names: &[String],
+    ranges: &[(i64, i64)],
+    contract_names: &[String],
+    bounds: &[DimBound],
+    gates: &[BuiltGate],
+) -> LResult<Vec<u64>> {
+    let mut counts: Vec<u64> = Vec::new();
+    let here = std::cell::Cell::new(0u64);
+    visit_tuples(
+        idx_names,
+        ranges,
+        contract_names,
+        bounds,
+        gates,
+        &mut |_: &[i64], _: &[i64]| here.set(here.get() + 1),
+        &mut || {
+            counts.push(here.replace(0));
+            Ok(())
+        },
+    )?;
+    Ok(counts)
+}
+
+/// The walk [`enumerate_tuples`] and [`count_tuples`] share: `tuple` sees each
+/// admitted `(cell, contracted tuple)` in list order, and `cell_done` is
+/// called once per output cell, row-major, after that cell's tuples.
+fn visit_tuples(
+    idx_names: &[String],
+    ranges: &[(i64, i64)],
+    contract_names: &[String],
+    bounds: &[DimBound],
+    gates: &[BuiltGate],
+    tuple: &mut dyn FnMut(&[i64], &[i64]),
+    cell_done: &mut dyn FnMut() -> LResult<()>,
+) -> LResult<()> {
+    let nr = idx_names.len();
+    let nc = contract_names.len();
     let placed: Vec<(GateAxis, GateAxis)> = gates
         .iter()
         .map(|g| {
@@ -875,26 +1408,13 @@ fn enumerate_tuples(
                     None => Src::Range(cell_ranges[d].0, cell_ranges[d].1),
                 })
                 .collect();
-            let mut push = |t: &[i64]| {
-                for (c, &v) in cell.iter().enumerate() {
-                    cols[c].push(v as f64);
-                }
-                for (d, &v) in t.iter().enumerate() {
-                    cols[nr + d].push(v as f64);
-                }
-            };
+            let mut push = |t: &[i64]| tuple(&cell, t);
             walk(&srcs, pair, 0, &mut cur, &mut push);
         } else if !reject {
             // No contracted index: the pointwise term, once.
-            for (c, &v) in cell.iter().enumerate() {
-                cols[c].push(v as f64);
-            }
+            tuple(&cell, &[]);
         }
-        let m = cols.first().map_or(0, Vec::len);
-        if m > MAX_PROMOTED_ELEMS {
-            bail_tape!("contracted: tuple list too long ({m} tuples)");
-        }
-        rows.push(m as u32);
+        cell_done()?;
         // Next output cell, row-major.
         let mut d = nr;
         while d > 0 {
@@ -906,7 +1426,71 @@ fn enumerate_tuples(
             cell[d] = ranges[d].0;
         }
     }
-    Ok(TupleList { rows, cols })
+    Ok(())
+}
+
+/// Split the output box `ranges` (of `shape`, row-major `strides`) into
+/// sub-boxes of whole cells holding at most `budget` tuples each, by
+/// `counts` (per cell, row-major): runs of consecutive values along the
+/// leading axis, and a value whose slice alone is over the budget split the
+/// same way along the next axis. A single cell over the budget is a chunk of
+/// its own — a cell's run is never split, so each cell still folds its own
+/// tuples in list order.
+fn plan_chunks(
+    ranges: &[(i64, i64)],
+    shape: &[usize],
+    strides: &[usize],
+    counts: &[u64],
+    budget: u64,
+) -> Vec<Vec<(i64, i64)>> {
+    fn split(
+        d: usize,
+        base: usize,
+        sub: &mut Vec<(i64, i64)>,
+        g: (&[(i64, i64)], &[usize], &[usize], &[u64], u64),
+        out: &mut Vec<Vec<(i64, i64)>>,
+    ) {
+        let (ranges, shape, strides, counts, budget) = g;
+        let run = strides[d];
+        let l0 = ranges[d].0;
+        let flush =
+            |sub: &mut Vec<(i64, i64)>, out: &mut Vec<Vec<(i64, i64)>>, a: usize, b: usize| {
+                sub[d] = (l0 + a as i64, l0 + b as i64 - 1);
+                out.push(sub.clone());
+            };
+        let (mut start, mut acc) = (0usize, 0u64);
+        for v in 0..shape[d] {
+            let c: u64 = counts[base + v * run..base + (v + 1) * run].iter().sum();
+            if c > budget && d + 1 < shape.len() {
+                if start < v {
+                    flush(sub, out, start, v);
+                }
+                sub[d] = (l0 + v as i64, l0 + v as i64);
+                split(d + 1, base + v * run, sub, g, out);
+                sub[d + 1..].copy_from_slice(&ranges[d + 1..]);
+                (start, acc) = (v + 1, 0);
+                continue;
+            }
+            if acc + c > budget && start < v {
+                flush(sub, out, start, v);
+                (start, acc) = (v, 0);
+            }
+            acc += c;
+        }
+        if start < shape[d] {
+            flush(sub, out, start, shape[d]);
+        }
+    }
+    let mut out = Vec::new();
+    let mut sub = ranges.to_vec();
+    split(
+        0,
+        0,
+        &mut sub,
+        (ranges, shape, strides, counts, budget),
+        &mut out,
+    );
+    out
 }
 
 /// The admitted cells of a gated aggregate with no contracted index, as a
@@ -1128,7 +1712,7 @@ mod tests {
             vec![gate("i", "q", &[(1, 1)], 0)],
         ];
         for gates in &gate_sets {
-            let list = enumerate_tuples(&names, &ranges, &[], &[], gates).expect("walks");
+            let list = enumerate_tuples(&names, &ranges, &[], &[], gates, None).expect("walks");
             let walked: Vec<f64> = list
                 .rows
                 .windows(2)

@@ -129,7 +129,16 @@ fn run_standalone_program(
     param_names: &[String],
     params: &[f64],
 ) -> Result<ndarray::ArrayD<f64>, StandaloneError> {
-    let name = observed_rule_var(rule).clone();
+    run_standalone_export(prog, observed_rule_var(rule), param_names, params)
+}
+
+/// Run a standalone `prog` once and return the array it exports as `name`.
+pub(super) fn run_standalone_export(
+    prog: TapeProgram,
+    name: &str,
+    param_names: &[String],
+    params: &[f64],
+) -> Result<ndarray::ArrayD<f64>, StandaloneError> {
     let var_shapes: IndexMap<String, VarShape> = IndexMap::new();
     let forcing: RefCell<HashMap<String, ndarray::ArrayD<f64>>> = RefCell::new(HashMap::new());
     let mut ctx = super::super::TapeCtx::new(Rc::new(prog));
@@ -139,7 +148,7 @@ fn run_standalone_program(
         &mut ctx,
         &RhsCall {
             rhs_rules: &[],
-            observed_rules: std::slice::from_ref(rule),
+            observed_rules: &[],
             var_shapes: &var_shapes,
             param_names,
             state: &[],
@@ -155,7 +164,7 @@ fn run_standalone_program(
         return Err(StandaloneError::Fault(msg));
     }
     ctx.exported_observeds()
-        .get(&name)
+        .get(name)
         .cloned()
         .ok_or_else(|| StandaloneError::Declined(format!("observed `{name}` was not exported")))
 }

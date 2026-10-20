@@ -437,3 +437,247 @@ fn a_tuple_gather_from_an_empty_const_axis_is_refused_under_any_policy() {
         assert!(!refused.is_empty(), "{kind:?}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// The tuple-list budget: a CONST contraction is folded a sub-box at a time.
+// ---------------------------------------------------------------------------
+
+/// F58's star join (EarthSciML/EarthSciAST#418), scaled down: `total[o, f]`
+/// sums `val[a] * w[f]` over the `n_big / n_key` fact rows sharing output row
+/// `o`'s key, for every value of a free axis `f` the join does not gate. The
+/// tuple list is `n_out * n_free * n_big / n_key` long. The values span
+/// magnitudes, so a fold in another order would show in the low bits, and a
+/// state reads the result so that the interpreter is the reference.
+fn star_join_doc(
+    n_big: usize,
+    n_key: usize,
+    n_out: usize,
+    n_free: usize,
+    reads_state: bool,
+) -> Value {
+    let key: Vec<f64> = (0..n_big).map(|a| (a % n_key + 1) as f64).collect();
+    let val: Vec<f64> = (0..n_big)
+        .map(|a| (1.0 + 0.37 * a as f64) * 10f64.powi((a % 7) as i32 - 3))
+        .collect();
+    let okey: Vec<f64> = (0..n_out).map(|o| (o % n_key + 1) as f64).collect();
+    let w: Vec<f64> = (0..n_free).map(|f| 0.5 + f as f64 / 3.0).collect();
+    let of = json!({"o": {"from": "outs"}, "f": {"from": "frees"}});
+    let factor = if reads_state {
+        idx(json!("y"), &[json!("o"), json!("f")])
+    } else {
+        idx(json!("w"), &[json!("f")])
+    };
+    json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "star_join_budget", "authors": ["tape tests"]},
+        "index_sets": {
+            "bigs": {"kind": "interval", "size": n_big},
+            "outs": {"kind": "interval", "size": n_out},
+            "frees": {"kind": "interval", "size": n_free}
+        },
+        "models": {"M": {
+            "variables": {
+                "key": {"type": "unknown", "units": "1", "shape": ["bigs"]},
+                "val": {"type": "unknown", "units": "1", "shape": ["bigs"]},
+                "okey": {"type": "unknown", "units": "1", "shape": ["outs"]},
+                "w": {"type": "unknown", "units": "1", "shape": ["frees"]},
+                "total": {"type": "unknown", "units": "1", "shape": ["outs", "frees"]},
+                "y": {"type": "unknown", "units": "1", "shape": ["outs", "frees"], "default": 1.0}
+            },
+            "equations": [
+                {"lhs": "key", "rhs": cnst(json!(key))},
+                {"lhs": "val", "rhs": cnst(json!(val))},
+                {"lhs": "okey", "rhs": cnst(json!(okey))},
+                {"lhs": "w", "rhs": cnst(json!(w))},
+                {"lhs": "total", "rhs": {"op": "faq", "args": [], "semiring": "sum_product",
+                    "output_idx": ["o", "f"],
+                    "ranges": {"o": {"from": "outs"}, "f": {"from": "frees"}, "a": {"from": "bigs"}},
+                    "join": [{"on": [["okey", "key"]]}],
+                    "expr": {"op": "*", "args": [idx(json!("val"), &[json!("a")]), factor]}}},
+                {"lhs": {"op": "faq", "args": [], "output_idx": ["o", "f"], "ranges": of,
+                         "expr": {"op": "D", "args": [idx(json!("y"), &[json!("o"), json!("f")])], "wrt": "t"}},
+                 "rhs": {"op": "faq", "args": [], "output_idx": ["o", "f"], "ranges": of,
+                         "expr": {"op": "-", "args": [
+                             idx(json!("total"), &[json!("o"), json!("f")]),
+                             idx(json!("y"), &[json!("o"), json!("f")])]}}}
+            ]
+        }}
+    })
+}
+
+/// Every element the program holds that grows with a tuple list: its
+/// constant payloads, its gather position tables, its segment tables and its
+/// slab.
+fn materialized_elems(prog: &TapeProgram) -> usize {
+    prog.const_data
+        .iter()
+        .map(|c| c.values.len())
+        .sum::<usize>()
+        + prog
+            .gather_tables
+            .iter()
+            .map(|g| g.pos.len())
+            .sum::<usize>()
+        + prog.seg_tables.iter().map(|s| s.rows.len()).sum::<usize>()
+        + prog.slab.total_elems
+}
+
+/// Over the tuple-list budget, a CONST join contraction is folded at build
+/// time a sub-box at a time and the program holds only its answer: what the
+/// program materializes no longer grows with the candidate pairs the join
+/// matches (it did, by ~115 bytes a tuple, which took F58's control from 34
+/// to 445 bytes a pair), and the answer is bit-identical to the
+/// interpreter's under both arms (`ab_check`).
+#[test]
+fn a_join_over_the_tuple_list_budget_folds_and_stops_growing_with_its_pairs() {
+    use super::lower::set_tuple_list_budget;
+    let (n_big, n_out, n_free) = (2400usize, 24usize, 3usize);
+    let mut folded = Vec::new();
+    let mut whole = Vec::new();
+    // Ten times the pairs between the two sizes, the same declared arrays.
+    for n_key in [24usize, 3] {
+        let tuples = n_out * n_free * (n_big / n_key);
+        let prev = set_tuple_list_budget(usize::MAX);
+        let prog = ab_check(star_join_doc(n_big, n_key, n_out, n_free, false), -2.0, 2.0);
+        set_tuple_list_budget(prev);
+        assert_eq!(
+            count(&prog, "SegReduce"),
+            1,
+            "n_key = {n_key}: under budget"
+        );
+        assert_eq!(prog.seg_tables[0].rows.last().copied(), Some(tuples as u32));
+        whole.push(materialized_elems(&prog));
+
+        // A budget of two cells' runs (chunks that split the free axis
+        // inside one output row), and one of a third of a cell's run (each
+        // cell folded in windows, carrying its accumulator).
+        let mut sizes = Vec::new();
+        for b in [2 * n_big / n_key, n_big / n_key / 3] {
+            let prev = set_tuple_list_budget(b);
+            let prog = ab_check(star_join_doc(n_big, n_key, n_out, n_free, false), -2.0, 2.0);
+            set_tuple_list_budget(prev);
+            assert_eq!(count(&prog, "SegReduce"), 0, "n_key = {n_key}, budget {b}");
+            assert!(prog.gather_tables.is_empty() && prog.seg_tables.is_empty());
+            sizes.push(materialized_elems(&prog));
+        }
+        assert_eq!(sizes[0], sizes[1]);
+        folded.push(sizes[0]);
+    }
+    assert!(
+        whole[1] > 5 * whole[0],
+        "the control: a whole list grows with its pairs {whole:?}"
+    );
+    assert_eq!(folded[0], folded[1], "a folded join grew with its pairs");
+    assert!(folded[1] * 10 < whole[1], "{folded:?} vs {whole:?}");
+}
+
+/// A contraction that reads a STATE is not build-time data: over the budget it
+/// keeps the whole tuple list rather than being folded, and still agrees.
+#[test]
+fn a_join_reading_a_state_is_not_folded_over_the_budget() {
+    use super::lower::set_tuple_list_budget;
+    let prev = set_tuple_list_budget(8);
+    let prog = ab_check(star_join_doc(240, 3, 6, 2, true), -2.0, 2.0);
+    set_tuple_list_budget(prev);
+    assert_eq!(count(&prog, "SegReduce"), 1);
+}
+
+/// The budget is the PROGRAM's, not a list's: two joins that each fit it
+/// alone but not together keep the first list and fold the second. A list's
+/// arrays live as long as the program, so a per-list cap would let a hundred
+/// lists cost a hundred times it.
+#[test]
+fn the_tuple_list_budget_is_shared_by_every_list_in_a_program() {
+    use super::lower::set_tuple_list_budget;
+    let (n_big, n_key, n_out, n_free) = (600usize, 6usize, 12usize, 2usize);
+    let tuples = n_out * n_free * (n_big / n_key);
+    let mut doc = star_join_doc(n_big, n_key, n_out, n_free, false);
+    let model = &mut doc["models"]["M"];
+    model["variables"]["total2"] = model["variables"]["total"].clone();
+    model["variables"]["z"] = model["variables"]["y"].clone();
+    let eqs = model["equations"].as_array_mut().unwrap();
+    let mut second = eqs[4].clone();
+    second["lhs"] = json!("total2");
+    second["rhs"]["expr"]["args"][0] = idx(json!("key"), &[json!("a")]);
+    let mut ode = eqs[5].clone();
+    ode["lhs"]["expr"]["args"][0]["args"][0] = json!("z");
+    ode["rhs"]["expr"]["args"][0]["args"][0] = json!("total2");
+    ode["rhs"]["expr"]["args"][1]["args"][0] = json!("z");
+    eqs.push(second);
+    eqs.push(ode);
+    for (budget, lists) in [(2 * tuples, 2), (tuples, 1)] {
+        let prev = set_tuple_list_budget(budget);
+        let prog = ab_check(doc.clone(), -2.0, 2.0);
+        set_tuple_list_budget(prev);
+        assert_eq!(count(&prog, "SegReduce"), lists, "budget {budget}");
+    }
+}
+
+/// The tape PRICES an `on` gate before building it, as the interpreter's
+/// planner does (PR #423): a clause whose key barely discriminates — here a
+/// constant, so it matches the whole product — is declined once a selective
+/// sibling already drives, and its equality is left to the filter. Building it
+/// anyway is how a six-valued key against a 1.4-million-row table came to
+/// hold a 1.2-billion-pair index under `native`. Same answer either way
+/// (`ab_check`), and the same tuple list, since the declined clause admits
+/// every pair.
+#[test]
+fn an_uneconomic_on_gate_is_declined_when_a_sibling_drives() {
+    let n = 200usize;
+    // `k` matches 20 of the 40 000 pairs; `c` matches all of them.
+    let kl: Vec<f64> = (1..=n).map(|i| i as f64).collect();
+    let kr: Vec<f64> = (1..=n)
+        .map(|i| if i <= 20 { i as f64 } else { (1000 + i) as f64 })
+        .collect();
+    let ones = vec![1.0f64; n];
+    let doc = json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "gate_planner", "authors": ["tape tests"]},
+        "index_sets": {"ls": {"kind": "interval", "size": n}, "rs": {"kind": "interval", "size": n}},
+        "models": {"M": {
+            "variables": {
+                "kl": {"type": "unknown", "units": "1", "shape": ["ls"]},
+                "kr": {"type": "unknown", "units": "1", "shape": ["rs"]},
+                "cl": {"type": "unknown", "units": "1", "shape": ["ls"]},
+                "cr": {"type": "unknown", "units": "1", "shape": ["rs"]},
+                "v": {"type": "unknown", "units": "1", "shape": ["rs"], "default": 1.0},
+                "total": {"type": "unknown", "units": "1", "default": 0.0}
+            },
+            "equations": [
+                {"lhs": "kl", "rhs": cnst(json!(kl))},
+                {"lhs": "kr", "rhs": cnst(json!(kr))},
+                {"lhs": "cl", "rhs": cnst(json!(ones))},
+                {"lhs": "cr", "rhs": cnst(json!(ones))},
+                {"lhs": {"op": "faq", "args": [], "output_idx": ["j"],
+                         "expr": {"op": "D", "args": [idx(json!("v"), &[json!("j")])], "wrt": "t"},
+                         "ranges": {"j": {"from": "rs"}}},
+                 "rhs": {"op": "faq", "args": [], "output_idx": ["j"], "ranges": {"j": {"from": "rs"}},
+                         "expr": {"op": "*", "args": [-0.5, idx(json!("v"), &[json!("j")])]}}},
+                {"lhs": {"op": "D", "args": ["total"], "wrt": "t"},
+                 "rhs": {"op": "faq", "args": [], "output_idx": [], "semiring": "sum_product",
+                         "ranges": {"l": {"from": "ls"}, "r": {"from": "rs"}},
+                         "join": [{"on": [["cl", "cr"]]}, {"on": [["kl", "kr"]]}],
+                         "expr": {"op": "*", "args": [
+                             idx(json!("kl"), &[json!("l")]),
+                             idx(json!("v"), &[json!("r")])]}}}
+            ]
+        }}
+    });
+    let declines = crate::broad_phase::gate_plan_declines;
+    // The default floor keeps a gate this small; with no floor it is declined.
+    let before = declines();
+    let prog = ab_check(doc.clone(), -2.0, 2.0);
+    assert_eq!(declines(), before, "under the floor nothing is declined");
+    assert_eq!(prog.seg_tables[0].rows, vec![0, 20]);
+    let prev = crate::broad_phase::set_gate_plan(4, 0);
+    let prog = ab_check(doc.clone(), -2.0, 2.0);
+    // One tape build on its own, so no interpreter evaluation is counted.
+    let compiled = super::tests::compile(doc);
+    let before = declines();
+    let built = compiled.build_tape_opts(&std::collections::HashSet::new(), None);
+    let declined = declines() - before;
+    crate::broad_phase::set_gate_plan(prev.0, prev.1);
+    assert!(built.0.is_ok());
+    assert_eq!(declined, 1, "the constant-key gate was built");
+    assert_eq!(prog.seg_tables[0].rows, vec![0, 20], "the selective gate still drives");
+}
