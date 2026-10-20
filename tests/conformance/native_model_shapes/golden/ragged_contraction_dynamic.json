@@ -1,0 +1,103 @@
+{
+  "fixture": "ragged_contraction_dynamic",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "values",
+      "assertion_idx": 1,
+      "variable": "div",
+      "actual": 2.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 2,
+      "variable": "div",
+      "actual": -0.5
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 3,
+      "variable": "div",
+      "actual": 1.5
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 4,
+      "variable": "div",
+      "actual": 12.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 5,
+      "variable": "rowsum",
+      "actual": 6.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 6,
+      "variable": "rowsum",
+      "actual": 7.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 7,
+      "variable": "rowsum",
+      "actual": 17.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 8,
+      "variable": "rowsum",
+      "actual": 6.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 9,
+      "variable": "q",
+      "actual": -1.9999999999999998
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 10,
+      "variable": "q",
+      "actual": 0.49999999999999994
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 11,
+      "variable": "q",
+      "actual": -1.4999999999999998
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 12,
+      "variable": "q",
+      "actual": -11.999999999999998
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 13,
+      "variable": "r",
+      "actual": 5.999999999999999
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 14,
+      "variable": "r",
+      "actual": 6.999999999999997
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 15,
+      "variable": "r",
+      "actual": 16.999999999999996
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 16,
+      "variable": "r",
+      "actual": 5.999999999999999
+    }
+  ]
+}

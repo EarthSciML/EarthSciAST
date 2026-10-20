@@ -200,6 +200,35 @@
     ]
    },
    "named_exclusions": []
+  },
+  {
+   "id": "overlap_gated_regrid_ode",
+   "path": "fixtures/overlap_gated_regrid_ode.esm",
+   "model": "OverlapGatedRegrid",
+   "golden": "golden/overlap_gated_regrid_ode.json",
+   "tags": [
+    "join",
+    "overlap",
+    "geometry",
+    "polygon_intersection_area",
+    "construction"
+   ],
+   "note": "Authored here for issue #535 (EarthSciDiscretizations gated regridding cases).",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "python": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
   }
  ]
 }

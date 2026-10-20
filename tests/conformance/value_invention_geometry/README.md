@@ -50,6 +50,7 @@ Authored here (every producer input a `const`-defined unknown):
 | `edge_enumeration_ode` | the size of the derived edge set a `distinct` producer invents over a ragged face-vertex set (5), and a contraction over each cell's ragged edge list |
 | `nearest_generator_ode` | an `argmin` arg-witness buffer, through a gather `gx[assign[i]]`, including the smallest-id tie-break |
 | `bin_skolem_count_ode` | the size of a bin-skolem candidate-pair set (5) |
+| `overlap_gated_regrid_ode` | a construction-time conservative regrid whose `faq` nodes carry an `overlap` join gate on the ring envelopes (A_ij by `polygon_intersection_area`, the sliver-filtered A_j and F_tgt), four of six pairs pruned (#535; EarthSciDiscretizations `conservative_overlap_gated_*`) |
 
 Referenced from `tests/valid/geometry/`: `intersect_polygon_planar_ode`
 (a clip of two const rings, area 1, `tracer = exp(-t)`),
