@@ -134,6 +134,9 @@ _cg_slot_run(tbl::AbstractVector{Int}) =
 # ---- Scalar spine node → expression (mirrors `_eval_node`) ------------------
 function _cg_emit(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
     _cg_budget!(ctx)
+    # A subtree a ragged loop computed once ahead of its row (`_cg_ragged_loop`).
+    hoisted = get(kc.loops, nd, nothing)
+    hoisted === nothing || return hoisted
     k = nd.kind
     if k === _NK_LITERAL
         return nd.literal
@@ -191,72 +194,119 @@ function _cg_emit(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
 end
 
 # `_NK_RAGGED_LOOP`, `_eval_ragged_loop` term for term: the `Float64` 0̄ for
-# an empty row (the per-cell build's literal), else the first term seeding the
-# accumulator and the rest folded into it. One emission of the body, with the
-# seed chosen per term, keeps the accumulator one type.
+# an empty row (the per-cell build's literal), else the terms folded left to
+# right from ⊕'s exact identity, `-0.0` for `+` (`-0.0 + x` is `x` for every
+# `x`, a `-0.0` term included, where `0.0 + -0.0` is `+0.0`), `1.0` for `*`,
+# `∓Inf` for max/min: the value of the first-term-seeded fold, bit for bit. The
+# seed is a `Float64`, so under a `Dual` value type the first term's partials
+# pass through `seed ⊕ term` untouched.
 #
 # Inside the whole-array nest, with bounds that read only the cell (its output
 # counters and build constants), the rows are laid out at build as entries, the
 # TABLE fold's CSR form (`_ac_ragged_entries`): cell `c` folds entries
 # `seg[c]:seg[c+1]-1`, and a gather whose subscripts are fixed per entry reads
 # a per-entry column. Elsewhere the bounds are evaluated per call.
+#
+# A subtree of the body that does not read the row's counter (`u[i]`, a
+# parameter, `area[i]`) is computed once per non-empty row, ahead of the loop
+# (`_ragged_hoists`): the same value every term would compute.
 function _cg_ragged_loop(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
     spec = nd.payload::_RaggedLoop
     ch = nd.children
     haskey(kc.loops, spec.ref) && throw(_CodegenDecline(:ragged_loop_reentered))
     fnsym = _cg_oplus_fn(nd.op)
+    seed = nd.op === :+ ? -0.0 : nd.op === :* ? 1.0 : nd.op === :max ? -Inf :
+           nd.op === :min ? Inf : throw(_CodegenDecline(:unsupported_op))
     kv = _cg_name(ctx, "rk")
     acc = _cg_name(ctx, "racc")
-    tv = _cg_name(ctx, "rt")
     en = _ac_ragged_entries(ctx, kc, nd)
+    # The row's bounds, its emptiness test, its iteration and the counter's
+    # binding per term.
     if en !== nothing
-        ev = en.ev
-        cv = kc.nest.cv
         s0 = _cg_name(ctx, "rs0")
         s1 = _cg_name(ctx, "rs1")
         segv = _ac_entry_local(ctx, en.fold.seg)
         kcolv = _ac_entry_local(ctx, en.fold.cols[1])
-        kc.loops[spec.ref] = kv
-        term = _cg_emit(ctx, _CGScalarCtx(kc.loops, en, kc.spans, kc.nest), ch[1])
-        delete!(kc.loops, spec.ref)
-        return quote
-            let $s0 = $segv[$cv], $s1 = $segv[$cv + 1] - 1
-                if $s1 < $s0
-                    $(nd.literal)
-                else
-                    local $acc
-                    for $ev in $s0:$s1
-                        local $kv = $kcolv[$ev]
-                        local $tv = $term
-                        $acc = $ev == $s0 ? $tv : $fnsym($acc, $tv)
-                    end
-                    $acc
-                end
-            end
-        end
+        cv = kc.nest.cv
+        bounds = (:($s0 = $segv[$cv]), :($s1 = $segv[$cv + 1] - 1))
+        empty = :($s1 < $s0)
+        iter = :($(en.ev) = $s0:$s1)
+        bind = :(local $kv = $kcolv[$(en.ev)])
+        tkc = _CGScalarCtx(kc.loops, en, kc.spans, kc.nest)
+    else
+        lo = _cg_name(ctx, "rlo")
+        hi = _cg_name(ctx, "rhi")
+        lox = _cg_emit(ctx, kc, ch[2])
+        hix = _cg_emit(ctx, kc, ch[3])
+        st = _cg_geo!(ctx, spec.step, (spec, :step), true)
+        bounds = (:($lo = round(Int, $lox)), :($hi = round(Int, $hix)))
+        empty = :(isempty($lo:$st:$hi))
+        iter = :($kv = $lo:$st:$hi)
+        bind = nothing
+        tkc = kc
     end
-    lo = _cg_name(ctx, "rlo")
-    hi = _cg_name(ctx, "rhi")
-    lox = _cg_emit(ctx, kc, ch[2])
-    hix = _cg_emit(ctx, kc, ch[3])
-    st = _cg_geo!(ctx, spec.step, (spec, :step), true)
+    hoists = _ragged_hoists(ch[1], spec.ref)
+    pre = Any[]
+    for h in hoists
+        hv = _cg_name(ctx, "rh")
+        push!(pre, :(local $hv = $(_cg_emit(ctx, kc, h))))
+        kc.loops[h] = hv
+    end
     kc.loops[spec.ref] = kv
-    term = _cg_emit(ctx, kc, ch[1])
-    delete!(kc.loops, spec.ref)
+    term = try
+        _cg_emit(ctx, tkc, ch[1])
+    finally
+        delete!(kc.loops, spec.ref)
+        foreach(h -> delete!(kc.loops, h), hoists)
+    end
     return quote
-        let $lo = round(Int, $lox), $hi = round(Int, $hix)
-            if isempty($lo:$st:$hi)
+        let
+            local $(bounds[1])
+            local $(bounds[2])
+            if $empty
                 $(nd.literal)
             else
-                local $acc
-                for $kv in $lo:$st:$hi
-                    local $tv = $term
-                    $acc = $kv == $lo ? $tv : $fnsym($acc, $tv)
-                end
+                $(pre...)
+                local $acc = $seed
+                $(Expr(:for, iter, Expr(:block, bind, :($acc = $fnsym($acc, $term)))))
                 $acc
             end
         end
     end
+end
+
+# The subtrees of a ragged loop's body to compute once per row: the largest
+# ones that read no counter `ref` and are not a literal or a bare counter,
+# reached through operands every term evaluates. An `ifelse` branch and an
+# `and` / `or` operand past the first are evaluated lazily, so nothing under
+# them is lifted (the row would evaluate what a term might not).
+function _ragged_hoists(body::_Node, ref)
+    out = _Node[]
+    reads = IdDict{_Node,Bool}()
+    _ragged_hoists!(out, body, ref, reads)
+    return out
+end
+function _reads_ref(nd::_Node, ref, memo::IdDict{_Node,Bool})
+    got = get(memo, nd, nothing)
+    got === nothing || return got
+    r = (nd.kind === _NK_LOOPVAR && nd.payload === ref) ||
+        (nd.kind === _NK_RAGGED_LOOP && (nd.payload::_RaggedLoop).ref === ref) ||
+        any(c -> _reads_ref(c, ref, memo), nd.children)
+    memo[nd] = r
+    return r
+end
+function _ragged_hoists!(out::Vector{_Node}, nd::_Node, ref, memo::IdDict{_Node,Bool})
+    if !_reads_ref(nd, ref, memo)
+        (nd.kind === _NK_LITERAL || nd.kind === _NK_LOOPVAR || nd.kind === _NK_TIME) ||
+            any(x -> x === nd, out) || push!(out, nd)
+        return out
+    end
+    lazy = nd.kind === _NK_OP && nd.op in (:ifelse, :and, :or)
+    for (j, c) in enumerate(nd.children)
+        lazy && j > 1 && break
+        _ragged_hoists!(out, c, ref, memo)
+    end
+    return out
 end
 
 # A ragged loop's rows as TABLE entries over the nest's cells: `_ACEntries`
