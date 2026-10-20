@@ -83,6 +83,18 @@ pub enum HandLoop {
     ColumnSum { ncol: usize, nlev: usize },
     /// `du[i] = -0.1 u[i] + 0.001 agg[i]`, the join's sums computed at setup.
     JoinKeyed { agg: Vec<f64> },
+    /// Per column: the interface field `F[k] = sum_{j < k} u[c, j] dz[j]`
+    /// (and the total at the top interface) as one running sum, then
+    /// `du[c, l] = -0.001 (F[l+1] - F[l]) / dz[l]`; column-fastest state, a
+    /// block of columns scanned level by level through a buffer.
+    MakearrayScan { ncol: usize, dz: Vec<f64> },
+    /// `du[c] = -(sum_k kappa (u[c] - u[nbr[k]]))` over each cell's own
+    /// neighbours, in CSR form: cell `c`'s are `nbr[start[c]..start[c + 1]]`.
+    Ragged {
+        kappa: f64,
+        start: Vec<u32>,
+        nbr: Vec<u32>,
+    },
 }
 
 impl HandLoop {
@@ -99,6 +111,8 @@ impl HandLoop {
             HandLoop::GatherIndex { cls, .. } => cls.len(),
             HandLoop::ColumnSearch { ncol, .. } | HandLoop::ColumnSum { ncol, .. } => *ncol,
             HandLoop::JoinKeyed { agg } => agg.len(),
+            HandLoop::MakearrayScan { ncol, .. } => *ncol,
+            HandLoop::Ragged { start, .. } => start.len() - 1,
         }
     }
 
@@ -252,6 +266,33 @@ impl HandLoop {
             HandLoop::JoinKeyed { agg } => {
                 for i in lo..hi {
                     du.set(i, -0.1 * u[i] + 0.001 * agg[i]);
+                }
+            }
+            HandLoop::MakearrayScan { ncol, dz } => {
+                let nc = *ncol;
+                let mut acc = [0.0f64; COLUMN_BLOCK];
+                for q0 in (lo..hi).step_by(COLUMN_BLOCK) {
+                    let q1 = (q0 + COLUMN_BLOCK).min(hi);
+                    let acc = &mut acc[..q1 - q0];
+                    acc.fill(0.0);
+                    for (l, &d) in dz.iter().enumerate() {
+                        let row = &u[l * nc + q0..l * nc + q1];
+                        for (b, (a, &v)) in acc.iter_mut().zip(row).enumerate() {
+                            let next = *a + v * d;
+                            du.set(l * nc + q0 + b, -0.001 * (next - *a) / d);
+                            *a = next;
+                        }
+                    }
+                }
+            }
+            HandLoop::Ragged { kappa, start, nbr } => {
+                for c in lo..hi {
+                    let uc = u[c];
+                    let mut acc = 0.0f64;
+                    for &m in &nbr[start[c] as usize..start[c + 1] as usize] {
+                        acc += kappa * (uc - u[m as usize]);
+                    }
+                    du.set(c, -acc);
                 }
             }
             HandLoop::ScalarChemistry { .. } => {

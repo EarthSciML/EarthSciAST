@@ -821,6 +821,149 @@ def join_keyed(n):
     }
 
 
+def makearray_scan(n):
+    """A column prefix scan placed by a two-region `makearray`, feeding a flux divergence.
+
+    The EarthSciDiscretizations interface integral (integral_lev_nodes_cumulative_from_bottom
+    after expansion): on each of N/20 columns of 20 layers, the interface field
+    F[c, k] = sum_{j < k} u[c, j] * dz[j] for k = 1..20 (the exclusive prefix scan
+    region) and F[c, 21] = sum_j u[c, j] * dz[j] (the column total region), then
+    D(u[c, l]) = -0.001 * (F[c, l+1] - F[c, l]) / dz[l]. The layer thickness
+    dz[l] = 100 * (1 + 0.5 * sin(l)) is non-uniform and defined by a formula of
+    its index, so a compiler must materialize and read it.
+    """
+    L = COLUMN_LEVELS
+    ncol = max(1, int(round(n / L)))
+    cl = {"c": {"from": "col"}, "l": {"from": "lev"}}
+    scan = faq(
+        op("*", ix("u", "c", "j"), ix("dz", "j")),
+        ["c", "k"],
+        {"c": {"from": "col"}, "k": {"from": "lev"}, "j": {"from": "lev"}},
+        reduce="+",
+        filter=op("<", "j", "k"),
+    )
+    total = faq(
+        op("*", ix("u", "c", "j"), ix("dz", "j")),
+        ["c"],
+        {"c": {"from": "col"}, "j": {"from": "lev"}},
+        reduce="+",
+    )
+    model = {
+        "variables": {
+            "u": {"type": "unknown", "units": "kg/m^3", "shape": ["col", "lev"], "default": 1.0},
+            "dz": {"type": "unknown", "units": "m", "shape": ["lev"]},
+            "F": {"type": "unknown", "units": "kg/m^2", "shape": ["col", "lev_nodes"]},
+        },
+        "equations": [
+            {
+                "lhs": "dz",
+                "rhs": faq(
+                    op("*", 100.0, op("+", 1, op("*", 0.5, op("sin", "l")))),
+                    ["l"],
+                    {"l": {"from": "lev"}},
+                ),
+            },
+            {
+                "lhs": "F",
+                "rhs": {
+                    "op": "makearray",
+                    "args": [],
+                    "regions": [[[1, ncol], [1, L]], [[1, ncol], [L + 1, L + 1]]],
+                    "values": [scan, total],
+                },
+            },
+            {
+                "lhs": faq_lhs("u", ["c", "l"], cl),
+                "rhs": faq(
+                    op(
+                        "/",
+                        op("*", -0.001, op("-", ix("F", "c", op("+", "l", 1)), ix("F", "c", "l"))),
+                        ix("dz", "l"),
+                    ),
+                    ["c", "l"],
+                    cl,
+                ),
+            },
+        ],
+    }
+    desc = f"two-region makearray of a column prefix scan and its total, {ncol} columns x {L} layers"
+    index_sets = {"col": ncol, "lev": L, "lev_nodes": L + 1}
+    return doc("makearray_scan", desc, index_sets, {"Column": model}), {
+        "cells": ncol * L,
+        "states": ncol * L,
+        "ncol": ncol,
+        "nlev": L,
+    }
+
+
+RAGGED_DIRS = [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (-1, -1), (1, -1)]
+
+
+def ragged_mesh(n):
+    """The ragged_contraction mesh: (side, each cell's neighbour list, 1-based).
+
+    The cells of an s x s periodic grid are renumbered by lcg_permutation, and
+    grid cell g keeps the first 5 + (g mod 3) of RAGGED_DIRS as its neighbours,
+    so the row lengths are 5, 6 and 7 (the pentagon, hexagon and heptagon cells
+    of an MPAS mesh), interleaved rather than sorted by length.
+    """
+    s = max(3, side_for(n, 2))
+    m = s * s
+    perm = lcg_permutation(m)
+    rows = [None] * m
+    for gi in range(s):
+        for gj in range(s):
+            g = gi * s + gj
+            dirs = RAGGED_DIRS[: 5 + g % 3]
+            rows[perm[g]] = [perm[((gi + a) % s) * s + (gj + b) % s] + 1 for a, b in dirs]
+    return s, rows
+
+
+def ragged_contraction(n):
+    """A neighbour sum over a ragged range bounded through an `offsets` factor.
+
+    The EarthSciDiscretizations MPAS fv_divergence_cell shape: the contracted
+    index ranges over `nbrs_of_cell`, a ragged index set whose `offsets` is the
+    per-cell neighbour count nNbr[c] (5, 6 or 7) and whose `values` is the
+    padded neighbour table cellsOnCell[c, k] (padding 0, out of range, so a
+    padded read faults instead of adding a term):
+    D(u) = -(faq_c sum_{k <= nNbr[c]} kappa * (u[c] - u[cellsOnCell[c, k]])),
+    the whole-array contraction inside an elementwise negation, as the lowered
+    u_t = -div(F) of the MPAS problems is.
+    """
+    s, rows = ragged_mesh(n)
+    m = s * s
+    width = len(RAGGED_DIRS)
+    table = [r + [0] * (width - len(r)) for r in rows]
+    body = op("*", "kappa", op("-", ix("u", "i"), ix("u", ix("cellsOnCell", "i", "k"))))
+    ragged = {"i": {"from": "cells"}, "k": {"from": "nbrs_of_cell", "of": ["i"]}}
+    model = {
+        "variables": {
+            "u": {"type": "unknown", "units": "1", "default": 1.0, "shape": ["cells"]},
+            "nNbr": {"type": "unknown", "units": "1", "shape": ["cells"]},
+            "cellsOnCell": {"type": "unknown", "units": "1", "shape": ["cells", "maxNbr"]},
+            "kappa": {"type": "parameter", "units": "1", "default": 0.1},
+        },
+        "equations": [
+            {"lhs": "nNbr", "rhs": {"op": "const", "args": [], "value": [len(r) for r in rows]}},
+            {"lhs": "cellsOnCell", "rhs": {"op": "const", "args": [], "value": table}},
+            {
+                "lhs": {"op": "D", "args": ["u"], "wrt": "t"},
+                "rhs": op("-", faq(body, ["i"], ragged, semiring="sum_product")),
+            },
+        ],
+    }
+    desc = f"ragged 5-7 neighbour sum over a permuted numbering of a {s}x{s} periodic mesh"
+    d = doc("ragged_contraction", desc, {"cells": m, "maxNbr": width}, {"Mesh": model})
+    d["index_sets"]["nbrs_of_cell"] = {
+        "kind": "ragged",
+        "of": ["cells"],
+        "offsets": "nNbr",
+        "values": "cellsOnCell",
+    }
+    return d, {"cells": m, "states": m, "side": s}
+
+
 def mass_action_terms(rs, species_ref):
     """Per species, the ordered list of (net stoichiometry, rate expression).
 
@@ -957,6 +1100,8 @@ FAMILIES = {
     "column_search": column_search,
     "column_sum": column_sum,
     "join_keyed": join_keyed,
+    "makearray_scan": makearray_scan,
+    "ragged_contraction": ragged_contraction,
 }
 
 
