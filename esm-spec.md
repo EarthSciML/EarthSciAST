@@ -742,7 +742,7 @@ result[O] = reduce over C of expr
 
 evaluated with each index taking every value in its inferred (or declared) range.
 
-**Ragged ranges (normative).** A `ranges` entry MAY instead reference a declared index set, `{"from": <name>}` or `{"from": <name>, "of": [<parent symbols>]}` (RFC semiring-faq-unified-ir §5.2). When the named set is `kind: "ragged"`, its `offsets` factor gives the per-parent LENGTH `offsets[i]` — not a cumulative offset — and its `values` factor is a PADDED `[parent, max length]` array whose row `i` holds parent `i`'s members in positions `1..offsets[i]`; entries past `offsets[i]` are padding and are never read. The range symbol `k` of `{"from": <ragged set>, "of": ["i"]}` binds the **position** `k ∈ 1..offsets[i]`, never a member. A body that needs the member gathers it explicitly — `index(values, i, k)`, e.g. `index(dvEdge, index(edgesOnCell, i, k))` for MPAS. A `faq` whose range iterates a ragged set but whose body (`expr` and `filter`) never reads that set's `values` array — by its name, or by a scoped reference ending in it — MUST be rejected by `validate()` with `ragged_values_not_gathered` (§9.6.6): such a body reads positions where members were meant, which yields a plausible wrong number rather than a failure. The rule is not decided for a body that still holds an `apply_expression_template` reference (§9.6.4), whose expansion may perform the gather, nor for a set the document does not declare itself (a §9.7.10 agnostic leaf, whose registry arrives by injection).
+**Ragged ranges (normative).** A `ranges` entry MAY instead reference a declared index set, `{"from": <name>}` or `{"from": <name>, "of": [<parent symbols>]}` (RFC semiring-faq-unified-ir §5.2). When the named set is `kind: "ragged"`, its `offsets` factor gives the per-parent LENGTH `offsets[i]` — not a cumulative offset — and its `values` factor is a PADDED `[parent, max length]` array whose row `i` holds parent `i`'s members in positions `1..offsets[i]`; entries past `offsets[i]` are padding and are never read. The range symbol `k` of `{"from": <ragged set>, "of": ["i"]}` binds the **position** `k ∈ 1..offsets[i]`, never a member. A body that needs the member gathers it explicitly — `index(values, i, k)`, e.g. `index(dvEdge, index(edgesOnCell, i, k))` for MPAS. A `faq` whose range iterates a ragged set but whose body (`expr` and `filter`) never reads that set's `values` array — by its name, or by a scoped reference ending in it — MUST be rejected by `validate()` with `ragged_values_not_gathered` (§9.6.6): such a body reads positions where members were meant, which yields a plausible wrong number rather than a failure. The rule is not decided for a body that still holds an `apply_expression_template` reference (§9.6.4), whose expansion may perform the gather, nor for a set the document does not declare itself (a §9.7.10 agnostic leaf, whose registry arrives by injection). The reduction over a ragged range visits the positions `k = 1, 2, …, offsets[i]` in increasing order, the left fold `((t_1 ⊕ t_2) ⊕ t_3) ⊕ …` of each row's own terms, as every other contraction does; a row with `offsets[i] = 0` reduces over the empty set and takes the semiring's additive identity, not an error. A binding may run each row over its own length (no dense padded box is implied) and must reach the same bits.
 
 **The one exception is value invention.** In a value-invention `faq` — `distinct: true`, a `skolem` `key`, or a `skolem` / `rank` / `distinct` / `argmin` / `argmax` body (RFC semiring-faq-unified-ir §5.5) — a range over a ragged set binds the member `values[i, k]` itself, so a symbol over `face_vertices` binds the vertex ids of its parent face. No gather is authored there and `ragged_values_not_gathered` does not apply. Positive control: `tests/valid/faq/ragged_member_gather.esm`; rejection: `tests/invalid/faq/ragged_values_not_gathered.esm`.
 
@@ -853,25 +853,31 @@ overrides it, and the refusal when three ranges draw one index set are normative
 `tests/valid/faq/join_on_self_join.esm`; the rationale is
 `docs/content/rfcs/self-join-two-ranges-over-one-index-set.md`.
 
-**Accumulation order is ascending `j` for every variant, and is normative.** A `filter`
-selects *which* combinations contribute; it never reorders them. So the reduction visits the
-contracted index in increasing order in all four rows above, and under `sum_product` the
-result is the left fold `((u_a ⊕ u_{a+1}) ⊕ u_{a+2}) ⊕ …` over the admitted window, lowest
-admitted `j` first — including the **reverse** rows, whose window is a suffix but is still
-folded from its low end upward. Floating-point `+` is not associative, so this order is what
-a prefix reduction's low bits mean.
+**Accumulation order is normative: a forward scan folds up, a reverse scan folds down.** A
+`filter` selects *which* combinations contribute; the direction of the fold is fixed by the
+variant, so that consecutive output cells always share a partial result:
 
-Note the scope of that guarantee as it stands today. The **forward** rows are pinned
-bit-identical across the executing bindings, because each evaluates them with the sequential
-accumulator licensed below (Rust's running fold, Python's `ufunc.accumulate`). The **reverse**
-rows fall through to each binding's general contraction machinery, whose summation order is
-already binding-specific — Python's dense vectorized reduce sums *pairwise*, a pre-existing
-deviation it shares with the einsum fast path. So a reverse scan is reproducible to within
-floating-point reassociation, not to the bit, until those paths are made sequential. Authors
-who need bit-level agreement across bindings should prefer a forward scan, reversing the axis
-in the data rather than in the predicate.
+- A **forward** scan (`<=` / `<`, the window a prefix ending at `i`) visits the contracted index
+  in **increasing** order. Under `sum_product` the result is the left fold
+  `((u_a ⊕ u_{a+1}) ⊕ u_{a+2}) ⊕ …` over the admitted window, lowest admitted `j` first.
+- A **reverse** scan (`>=` / `>`, the window a suffix starting at `i`) visits the contracted
+  index in **decreasing** order. The result is the left fold
+  `((u_b ⊕ u_{b−1}) ⊕ u_{b−2}) ⊕ …` over the admitted window, **highest** admitted `j` first
+  (`b` the last element of the range), ending at `j = i` (inclusive) or `j = i + 1`
+  (exclusive). A to-top column integral therefore accumulates from the top of the column
+  down, exactly as a person computing it with one running sum would.
 
-That scope is the **executing** bindings — the ones that evaluate a scan numerically. An
+Floating-point `+` is not associative, so this order is what a scan's low bits mean. A variant
+is classified by the comparison between the contracted index and the output index, not by the
+operator's spelling: the mirrored spellings `i >= j` / `i > j` are forward scans and `i <= j` /
+`i < j` are reverse scans. The direction rule applies to a node whose `filter` is exactly one
+such comparison and which contracts that one index; every other contraction, a filtered one
+included, visits its contracted indices in increasing order.
+
+That order is pinned **bit-identical across the executing bindings** in both directions: each
+evaluates a scan with the sequential accumulator licensed below, in its interpreter and in its
+compiled path alike. The guarantee covers the **executing** bindings — the ones that evaluate a
+scan numerically. An
 **export/lowering** path, which re-expresses a document in a foreign system rather than
 evaluating it (Julia's ModelingToolkit lowering is the one that exists today), is bound by
 the *window* — which `j` values contribute — but NOT by the association order, and is not
@@ -882,16 +888,17 @@ gives `[1e16, 1e16, 1, 2]`. Exactly-representable, non-cancelling data hides thi
 agreement on such a case is not evidence of order preservation. A document whose low bits
 matter must be run through an executing binding.
 
-**The `O(N)` running-accumulation optimization is licensed for forward scans only.** A
-binding MAY evaluate `<=` and `<` with a single running accumulator instead of the `O(N²)`
-triangular double loop, because `accᵢ = accᵢ₋₁ ⊕ bodyᵢ` reproduces the left fold above
-*exactly* — same order, same association, bit-identical result. It MUST NOT do so for `>=`
-and `>` under an inexact ⊕: each reverse output cell folds its own suffix from that suffix's
-low end, so consecutive cells share no partial result, and any right-to-left accumulator
-re-associates `((b_i ⊕ b_{i+1}) ⊕ b_{i+2})` into `(b_i ⊕ (b_{i+1} ⊕ b_{i+2}))` and changes the
-low bits. Reverse scans under an **exactly associative** ⊕ (`max`, `min`) are exempt, since
-re-association cannot change their result. No binding may use a reassociating scan (pairwise,
-blocked, or parallel-prefix) for an inexact ⊕ in any direction.
+**The `O(N)` running-accumulation optimization is licensed in both directions.** A binding MAY
+evaluate a scan with a single running accumulator instead of the `O(N²)` triangular double
+loop, because the accumulator reproduces the fold above *exactly* — same order, same
+association, bit-identical result: for a forward scan `accᵢ = accᵢ₋₁ ⊕ bodyᵢ`, swept from the
+low end up, and for a reverse scan `accᵢ = accᵢ₊₁ ⊕ bodyᵢ`, swept from the high end down (an
+exclusive variant publishes each cell's accumulator before folding in its own term). An
+evaluator that does not keep a running accumulator — a per-cell triangular fold, say — MUST
+still fold each cell's window in the variant's direction, so it reaches the same bits. No
+binding may use a reassociating scan (pairwise, blocked, or parallel-prefix) for an inexact ⊕
+in either direction. Under an **exactly associative** ⊕ (`max`, `min`) the order cannot change
+the result.
 
 **A cumulative sum is not a cumulative integral.** The body is summed with no measure
 weighting — the format carries no measure concept (§6.6.5 convention 2). A Riemann-sum
