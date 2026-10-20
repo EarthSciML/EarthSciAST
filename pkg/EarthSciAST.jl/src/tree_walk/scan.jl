@@ -172,7 +172,7 @@ function _scan_lanes!(du, S::_ScanFold, combine::F, l1::Int, l2::Int) where {F}
     len >= 1 || return nothing
     # A strided scan whose running value is stored exactly by `du` (the value
     # type ⊕ yields is `du`'s own) runs level by level.
-    if S.lstride == 1 && S.kstride >= l2 - l1 + 1 && l2 > l1 &&
+    if S.lstride == 1 && abs(S.kstride) >= l2 - l1 + 1 && l2 > l1 &&
        typeof(combine(z, zero(eltype(du)))) === eltype(du)
         return _scan_lanes_strided!(du, S, combine, l1, l2)
     end
@@ -206,8 +206,9 @@ function _scan_lanes!(du, S::_ScanFold, combine::F, l1::Int, l2::Int) where {F}
 end
 
 # `_scan_lanes!` over lanes `l1:l2` of a fold whose lanes are the fast axis
-# (`lstride == 1`) and whose levels lie `kstride` apart, level by level: one
-# level's lanes are contiguous independent cells, and the level below is past
+# (`lstride == 1`) and whose levels lie `kstride` apart (negative for a reverse
+# scan, whose lanes run down the axis), level by level: one
+# level's lanes are contiguous independent cells, and the level folded before it is past
 # their span, so the loop over them carries no dependence and may vectorize
 # across cells. Each lane's running value is kept in its own slot instead of a
 # local, which `du` stores exactly (the caller checks the value type), so

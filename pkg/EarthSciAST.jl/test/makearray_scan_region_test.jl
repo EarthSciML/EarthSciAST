@@ -176,17 +176,20 @@ end
     @testset "a strided fold equals the lane-by-lane fold" begin
         # Lanes fastest, levels `nc` apart: the level-by-level walk must give
         # every slot the bits the lane walk gives it, for each ⊕ and window.
+        # A reverse scan's lanes run down the axis (`kstride < 0`).
         nc, nk = 9, 6
-        slots = Int[c + (k - 1) * nc for c in 1:nc for k in 1:nk]
-        for (op, z) in ((:+, 0.0), (:*, 1.0), (:max, -Inf), (:min, Inf)), inc in (true, false)
+        for down in (false, true),
+            (op, z) in ((:+, 0.0), (:*, 1.0), (:max, -Inf), (:min, Inf)), inc in (true, false)
+            ks = down ? (nk:-1:1) : (1:nk)
+            slots = Int[c + (k - 1) * nc for c in 1:nc for k in ks]
             S = ESM_MSR._ScanFold(slots, nk, op, z, inc)
-            @test (S.lstride, S.kstride) == (1, nc)
+            @test (S.lstride, S.kstride) == (1, down ? -nc : nc)
             x = Float64[_msr_val(k) for k in 1:(nc * nk)]
             ref = copy(x)
             f = op === :+ ? (+) : op === :* ? (*) : op === :max ? max : min
             for c in 1:nc
                 acc = z
-                for k in 1:nk
+                for k in ks
                     s = c + (k - 1) * nc
                     t = ref[s]
                     if inc
