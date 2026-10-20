@@ -1,0 +1,206 @@
+{
+ "esm": "1.2.0",
+ "metadata": {
+  "name": "nested_window_reduction_static",
+  "description": "A rank-0 `faq` nested in an array body over i, whose filter compares its contracted j with the ENCLOSING index i (`sum_{j >= i} g[j]`), and one whose filter compares j with a constant. Neither is a reverse scan (esm-spec §4.3.1): the nested node has no output index, so its window is fixed per cell and folds ASCENDING. Over g = 1, -1e16, 1, 1e16 the nested sums are exactly 0, 0, 1e16, 1e16 (a top-down fold would give 1 at i = 1) and the constant-window sum is 0. Static variant: no state, so both are build-time observeds.",
+  "authors": [
+   "EarthSciML Authors and Contributors"
+  ],
+  "tags": [
+   "native",
+   "conformance",
+   "faq",
+   "nested",
+   "rank-0",
+   "fold-order"
+  ]
+ },
+ "index_sets": {
+  "lev": {
+   "kind": "interval",
+   "size": 4
+  }
+ },
+ "models": {
+  "NestedWindowReduction": {
+   "tolerance": {
+    "rel": 1e-12,
+    "abs": 1e-12
+   },
+   "variables": {
+    "W": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "lev"
+     ],
+     "description": "W[i] = sum_{j >= i} g[j], a rank-0 faq nested in a body over i: not a scan, so each cell folds its window ascending."
+    },
+    "Wc": {
+     "type": "unknown",
+     "units": "1",
+     "description": "sum_{j >= 1} g[j], a filter against a constant: folds ascending."
+    },
+    "g": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "lev"
+     ],
+     "description": "1, -1e16, 1, 1e16."
+    }
+   },
+   "equations": [
+    {
+     "lhs": "W",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "ranges": {
+       "i": {
+        "from": "lev"
+       }
+      },
+      "expr": {
+       "op": "faq",
+       "args": [],
+       "output_idx": [],
+       "reduce": "+",
+       "ranges": {
+        "j": {
+         "from": "lev"
+        }
+       },
+       "filter": {
+        "op": ">=",
+        "args": [
+         "j",
+         "i"
+        ]
+       },
+       "expr": {
+        "op": "index",
+        "args": [
+         "g",
+         "j"
+        ]
+       }
+      }
+     }
+    },
+    {
+     "lhs": "Wc",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [],
+      "reduce": "+",
+      "ranges": {
+       "j": {
+        "from": "lev"
+       }
+      },
+      "filter": {
+       "op": ">=",
+       "args": [
+        "j",
+        1
+       ]
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        "g",
+        "j"
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "g",
+     "rhs": {
+      "op": "const",
+      "args": [],
+      "value": [
+       1.0,
+       -1e+16,
+       1.0,
+       1e+16
+      ]
+     }
+    }
+   ],
+   "tests": [
+    {
+     "id": "values",
+     "time_span": {
+      "start": 0.0,
+      "end": 0.0
+     },
+     "assertions": [
+      {
+       "variable": "W",
+       "time": 0.0,
+       "expected": 0.0,
+       "coords": {
+        "lev": 1
+       },
+       "tolerance": {
+        "rel": 0.0,
+        "abs": 0.0
+       }
+      },
+      {
+       "variable": "W",
+       "time": 0.0,
+       "expected": 0.0,
+       "coords": {
+        "lev": 2
+       },
+       "tolerance": {
+        "rel": 0.0,
+        "abs": 0.0
+       }
+      },
+      {
+       "variable": "W",
+       "time": 0.0,
+       "expected": 1e+16,
+       "coords": {
+        "lev": 3
+       },
+       "tolerance": {
+        "rel": 0.0,
+        "abs": 0.0
+       }
+      },
+      {
+       "variable": "W",
+       "time": 0.0,
+       "expected": 1e+16,
+       "coords": {
+        "lev": 4
+       },
+       "tolerance": {
+        "rel": 0.0,
+        "abs": 0.0
+       }
+      },
+      {
+       "variable": "Wc",
+       "time": 0.0,
+       "expected": 0.0,
+       "tolerance": {
+        "rel": 0.0,
+        "abs": 0.0
+       }
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

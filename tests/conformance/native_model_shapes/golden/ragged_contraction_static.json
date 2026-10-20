@@ -50,6 +50,30 @@
       "assertion_idx": 8,
       "variable": "rowsum",
       "actual": 6.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 9,
+      "variable": "tend",
+      "actual": -2.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 10,
+      "variable": "tend",
+      "actual": 0.5
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 11,
+      "variable": "tend",
+      "actual": -1.5
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 12,
+      "variable": "tend",
+      "actual": -12.0
     }
   ]
 }

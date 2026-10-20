@@ -258,14 +258,15 @@ function _compile_recurrence_sweep(name::String, def::ASTExpr, dims::Vector{Int}
         contract_const = Union{Vector{Int},Nothing}[
             _is_const_int_range(r) ? collect(_expand_int_range(r)) : nothing
             for r in contract_ranges]
-        fold = if dop.join_gates !== nothing || any(c -> c === nothing, contract_const)
+        rev = _reverse_window(dop.filter, contract_names, idx_names)
+        fold = if dop.join_gates !== nothing || rev || any(c -> c === nothing, contract_const)
             # Per-cell admitted tuples, indexed by the cell's position in
             # `Iterators.product` order over the output ranges — dimension 1
             # fastest, which for a dense `1…dims` frame is the buffer offset.
             _array_contraction_table(contract_refs, idx_names,
                 [collect(1:dims[d]) for d in 1:rank], contract_names,
                 contract_ranges, contract_const, dop.join_gates, oplus, zerobar,
-                const_registry)
+                const_registry; reverse=rev)
         else
             _ACFold(contract_refs, Symbol(oplus), zerobar,
                     StepRange{Int,Int}[(r = _expand_int_range(c);
