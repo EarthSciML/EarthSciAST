@@ -488,10 +488,13 @@ function _colscan_consumer(S::_ScanFold, K::_AccKernel, sh, Ks::AbstractVector{_
         append!(later, e)
         opaque |= o
     end
-    # Slots the scan's own level writes in its kernel section, before the scan.
+    # Slots the scan's own level writes in its kernel section, before the scan
+    # (only from kernels that reach the scanned observed's slots).
     before = Set{Int}()
     for K2 in levels[li][4]
         K2 === K && continue
+        _scan_overlaps(_cg_oln_extent(K2.cells), lo - abs(S.kstride), hi + abs(S.kstride)) ||
+            continue
         _cellset_foreach_slot(s -> push!(before, s), K2.cells)
     end
     po, no = _colscan_offsets(S.inclusive, sh.rev)
@@ -535,13 +538,18 @@ function _cellset_foreach_slot(f, cs::_CellSet)
     elseif _is_contig(cs)
         foreach(f, cs.ranges[1])
     else
-        for I in CartesianIndices(Tuple(cs.ranges))
-            o = cs.base
-            for d in eachindex(cs.strides)
-                o += I[d] * cs.strides[d]
-            end
-            f(o)
+        _box_foreach_slot(f, cs.base, Tuple(cs.strides), Tuple(cs.ranges))
+    end
+    return nothing
+end
+function _box_foreach_slot(f, base::Int, st::NTuple{N,Int},
+                           rs::NTuple{N,UnitRange{Int}}) where {N}
+    for I in CartesianIndices(rs)
+        o = base
+        for d in 1:N
+            o += I[d] * st[d]
         end
+        f(o)
     end
     return nothing
 end
