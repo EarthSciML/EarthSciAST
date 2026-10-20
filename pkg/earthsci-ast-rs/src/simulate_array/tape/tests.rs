@@ -1550,6 +1550,39 @@ fn makearray_prefix_scan_region_is_linear_in_the_column() {
     }
 }
 
+/// A reverse window whose body reads the output index folds each suffix
+/// from the top cell by cell (esm-spec §4.3.1), which no tape form
+/// reproduces: native declines it, naming the shape.
+#[test]
+fn a_reverse_window_that_is_not_a_scan_is_declined() {
+    let n = 6;
+    let doc = json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "tape_reverse_window"},
+        "models": {"M": {
+            "variables": {
+                "u": {"type": "unknown", "shape": ["i"]},
+                "R": {"type": "unknown", "shape": ["i"]}
+            },
+            "equations": [
+                {"lhs": "R", "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                    "reduce": "+", "ranges": {"i": [1, n], "m": [1, n]},
+                    "filter": {"op": ">=", "args": ["m", "i"]},
+                    "expr": {"op": "*", "args": [{"op": "index", "args": ["u", "m"]}, "i"]}}},
+                d_eq("u", n, agg(n, json!({"op": "neg", "args": [
+                    {"op": "index", "args": ["R", "i"]}]})))
+            ]
+        }}
+    });
+    let declined = declined_check(doc);
+    let (_, reason) = declined
+        .declined_rules()
+        .into_iter()
+        .next()
+        .expect("a declined rule");
+    assert!(reason.contains("reverse-window"), "{reason}");
+}
+
 /// Absorbed scans (`MicroOp::Scan`) over every fused group.
 fn scan_micro_ops(prog: &TapeProgram) -> usize {
     prog.fused

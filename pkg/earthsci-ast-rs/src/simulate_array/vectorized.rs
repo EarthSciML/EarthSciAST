@@ -350,21 +350,10 @@ pub(super) fn try_eval_faq_vectorized<'a>(
     if shape.contains(&0) {
         bail_vec!("faq: empty output box");
     }
-    // A reverse scan folds each suffix from its high end (esm-spec §4.3.1);
-    // the masked contraction below folds every window ascending. A forward
-    // scan's window is ascending either way.
-    if filter.is_some()
-        && detect_prefix_scan(
-            output_idx_names,
-            output_ranges,
-            contract_names,
-            static_contract_ranges(contract_dims).as_deref(),
-            body,
-            filter,
-        )
-        .is_some_and(|scan| scan.reverse)
-    {
-        bail_vec!("faq: reverse prefix scan (folds descending)");
+    // A reverse window folds each suffix from its high end (esm-spec
+    // §4.3.1); the masked contraction below folds every window ascending.
+    if folds_from_the_top(output_idx_names, contract_names, filter) {
+        bail_vec!("faq: reverse window (folds from the top)");
     }
     // ess-cse: this box is one CSE scope. Analysing the body is idempotent (it
     // runs once per distinct body root per scratch); the scope guard closes on

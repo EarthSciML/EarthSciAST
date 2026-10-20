@@ -4753,6 +4753,16 @@ impl<'m> TapeBuilder<'m> {
         if nc == 0 {
             bail_tape!("contracted: no contracted index");
         }
+        // A reverse window the scan lowering did not claim (its body reads
+        // the output index, or its range is not the output axis's) folds
+        // each suffix from its high end, cell by cell (esm-spec §4.3.1); the
+        // forms below fold every window ascending.
+        if folds_from_the_top(idx_names, contract_names, filter) {
+            bail_tape!(
+                "contracted: a reverse-window filter that is not a prefix scan (its body reads \
+                 the output index, or its range is not the output axis)"
+            );
+        }
         if contract_dims.iter().any(|d| !self.dim_is_fixed(d)) {
             // A ragged bound varies per output cell: the tuple-list form.
             let ranges: Vec<(i64, i64)> = lo

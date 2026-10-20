@@ -3173,6 +3173,22 @@ pub(super) fn reduce_contraction(
         }
     };
     let mut acc: f64 = reduce.identity();
+    // A reverse window folds its suffix from the high end (esm-spec §4.3.1);
+    // a scan that `detect_prefix_scan` did not claim (its body reads the
+    // output index, or its range differs from the output axis) lands here.
+    if let (Some(cell), [j_name], [(lo, hi)]) = (cell, contract_names, ranges)
+        && folds_from_the_top(cell.names, contract_names, filter)
+    {
+        for j in (*lo..=*hi).rev() {
+            set_bind(&mut ctx.loop_binds, j_name, j);
+            if filter_excludes(filter, Some(cell), ctx) {
+                continue;
+            }
+            let term = eval(body, ctx).as_scalar().unwrap_or(f64::NAN);
+            acc = reduce.combine(acc, term);
+        }
+        return acc;
+    }
     // Stream the contraction product from a reused buffer — no per-tuple heap
     // allocation (this loop is the array-simulate hot path).
     let mut tuples = CartesianTuples::new(ranges);
@@ -4670,7 +4686,45 @@ pub(super) fn detect_prefix_scan(
     let [(c_lo, c_hi)] = *static_ranges? else {
         return None;
     };
+    let ScanWindow {
+        axis,
+        inclusive,
+        reverse,
+    } = scan_window(output_idx_names, j_name, filter)?;
+    let i_name = &output_idx_names[axis];
+    // Same interval, or `j = i` is not the term entering the window at step `i`.
+    if output_ranges.get(axis)? != &(c_lo, c_hi) {
+        return None;
+    }
+    // A body that reads the scanned symbol makes each cell's summand distinct.
+    if expr_references(body, i_name) {
+        return None;
+    }
+    Some(PrefixScan {
+        axis,
+        inclusive,
+        reverse,
+    })
+}
 
+/// The window a `filter` admits when it is exactly one comparison between
+/// the contracted index `j_name` and an output index (esm-spec §4.3.1): a
+/// prefix (`j <= i`, `j < i`, and the mirrored `i >= j`, `i > j`) or a
+/// suffix, a reverse window (`j >= i`, `j > i`, `i <= j`, `i < j`).
+pub(super) struct ScanWindow {
+    /// Position of the output index within the output-index tuple.
+    pub axis: usize,
+    /// The comparison admits `j = i`.
+    pub inclusive: bool,
+    /// A suffix window, folded from its high end.
+    pub reverse: bool,
+}
+
+pub(super) fn scan_window(
+    output_idx_names: &[String],
+    j_name: &str,
+    filter: &Expr,
+) -> Option<ScanWindow> {
     let Expr::Operator(node) = filter else {
         return None;
     };
@@ -4692,21 +4746,26 @@ pub(super) fn detect_prefix_scan(
     } else {
         return None;
     };
-
     let axis = output_idx_names.iter().position(|s| s == i_name)?;
-    // Same interval, or `j = i` is not the term entering the window at step `i`.
-    if output_ranges.get(axis)? != &(c_lo, c_hi) {
-        return None;
-    }
-    // A body that reads the scanned symbol makes each cell's summand distinct.
-    if expr_references(body, i_name) {
-        return None;
-    }
-    Some(PrefixScan {
+    Some(ScanWindow {
         axis,
         inclusive,
         reverse,
     })
+}
+
+/// Does this contraction fold its one contracted index from the top: is
+/// its filter a reverse window (esm-spec §4.3.1)? Every other contraction
+/// folds ascending.
+pub(super) fn folds_from_the_top(
+    output_idx_names: &[String],
+    contract_names: &[String],
+    filter: Option<&Expr>,
+) -> bool {
+    let (Some(filter), [j_name]) = (filter, contract_names) else {
+        return false;
+    };
+    scan_window(output_idx_names, j_name, filter).is_some_and(|w| w.reverse)
 }
 
 /// The variable name of a bare-string expression, else `None`. Index symbols

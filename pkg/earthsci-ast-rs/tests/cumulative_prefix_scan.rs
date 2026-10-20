@@ -207,6 +207,30 @@ fn body_referencing_the_scanned_symbol_falls_back_to_the_oracle() {
     assert_eq!(got, want);
 }
 
+/// A reverse window whose body reads the output index is not a scan (no
+/// partial result is shared), but §4.3.1 still fixes its fold order: each
+/// cell folds its suffix from the top.
+#[test]
+fn a_reverse_window_that_is_not_a_scan_still_folds_from_the_top() {
+    let u = catastrophic_values(23);
+    let n = u.len();
+    let node = json!({
+        "op": "faq", "args": ["u"], "output_idx": ["i"], "reduce": "+",
+        "ranges": { "i": [1, n], "j": [1, n] },
+        "filter": { "op": ">=", "args": ["j", "i"] },
+        "expr": { "op": "*", "args": [ { "op": "index", "args": ["u", "j"] }, "i" ] }
+    });
+    let expr: earthsci_ast::Expr = serde_json::from_value(node).unwrap();
+    let got = eval_with(&expr, &u);
+    for i in 1..=n {
+        let mut want = 0.0f64;
+        for j in (i..=n).rev() {
+            want += u[j - 1] * i as f64;
+        }
+        assert_eq!(got[i - 1].to_bits(), want.to_bits(), "cell {i}");
+    }
+}
+
 /// The whole point of recognizing the pattern: work must grow LINEARLY in `N`,
 /// not quadratically. Counting body evaluations is the machine-independent way
 /// to assert that — a wall-clock threshold would be flaky on a shared cluster.
