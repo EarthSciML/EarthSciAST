@@ -54,6 +54,14 @@ end
 
 _act_fixture(rel) = joinpath(_ACT_REPO, rel)
 
+# The steady call's allocation, behind a function barrier so the testset's
+# own scope (variables a closure captures) cannot box its arguments.
+function _act_steady_alloc(prob, u)
+    du = similar(u)
+    prob.f!(du, u, prob.p, 0.0)
+    return @allocated prob.f!(du, u, prob.p, 0.0)
+end
+
 # Expression nodes of every distinct generated function reachable from `root`
 # (the scaling tier's code-size measure, less the walked trees).
 function _act_emitted(root)
@@ -442,7 +450,7 @@ end
             "expr" => expr)
         # Rows of 5..7 edges like an MPAS mesh, one empty row, the edge ids a
         # permutation-like scatter so neighbouring cells read distant edges.
-        function mesh_doc(n; sgn_zero = false)
+        function mesh_doc(n; shifted = false)
             lens = [i == 2 ? 0 : 5 + mod(i, 3) for i in 1:n]
             mx, ne = 7, 3n
             eoc = [[k <= lens[i] ? 1 + mod(7i + 13k, ne) : 0 for k in 1:mx] for i in 1:n]
@@ -473,6 +481,17 @@ end
                         # The divergence, negated outside the sum.
                         Dict("lhs" => op("D", "u"), "rhs" => op("-", ragged(term))),
                         # A max over the row, scaled and combined outside it.
+                        shifted ?
+                        # The row's gather inside another ragged fold's term:
+                        # that fold's entries are the table's, and the inner
+                        # row keeps its per-call bounds.
+                        Dict("lhs" => op("D", "v"),
+                             "rhs" => Dict("op" => "faq", "args" => Any[],
+                                 "output_idx" => Any["i"],
+                                 "ranges" => Dict("i" => Dict("from" => "cells"),
+                                     "m" => Dict("from" => "edges_of_cell", "of" => Any["i"])),
+                                 "expr" => op("*", idx("sgn", "i", "m"),
+                                              idx(ragged(term), "i")))) :
                         Dict("lhs" => op("D", "v"),
                              "rhs" => op("+", op("*", 0.3, ragged(term, "max")),
                                          op("*", -0.2, "v")))])))
@@ -509,6 +528,9 @@ end
             @test get(tally, :array_contraction_codegen, 0) == 2
             @test !haskey(tiers, :percell_build)
             push!(nodes, _act_emitted(pn.f!))
+            if VERSION >= v"1.12"
+                @test _act_steady_alloc(pn, u) == 0
+            end
             # The empty row is 0̄: `-(0.0)` for the sum, and the scaled -Inf
             # of `max` plus the decay for the other.
             du = _act_du(pn, u)
@@ -522,6 +544,12 @@ end
             end
             dz, dzi = _act_du(pn, z), _act_du(pi_, zi)
             @test all(dz[pn.var_map[k]] === dzi[j] for (k, j) in pi_.var_map)
+            # The rows are laid out as entries at build: the call reads each
+            # gather of the row from a per-entry column.
+            src = join((string(_ACT.RuntimeGeneratedFunctions.get_expression(g.f))
+                        for g in rgens(pn.f!)), "\n")
+            @test occursin("_cgrent", src)
+            @test !occursin("_const_gather_sub", src)
             # Each contraction's cell chunks reproduce its serial pass.
             for g in rgens(pn.f!)
                 ds = fill(NaN, length(u)); g.f(ds, u, pn.p, 0.3, g.tabs, 1, 1)
@@ -530,9 +558,6 @@ end
                     g.f(dc, u, pn.p, 0.3, g.tabs, c, 3)
                 end
                 @test all(ds .=== dc)
-            end
-            if VERSION >= v"1.12"
-                @test (@allocated pn.f!(du, u, pn.p, 0.0)) == 0
             end
             seed = Float64[0.2 + 0.01 * cos(i) for i in eachindex(u)]
             seedi = similar(seed)
@@ -544,5 +569,11 @@ end
             @test all(gn[pn.var_map[k]] == gi[j] for (k, j) in pi_.var_map)
         end
         @test allequal(nodes)
+        path = joinpath(mktempdir(), "act_mpas_shift.esm")
+        open(io -> JSON3.write(io, mesh_doc(9; shifted = true)), path, "w")
+        same, tally, tiers, (pn, u), _ = _act_agree(path)
+        @test same
+        @test get(tally, :array_contraction_codegen, 0) == 2
+        @test !haskey(tiers, :percell_build)
     end
 end
