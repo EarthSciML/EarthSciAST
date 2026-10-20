@@ -4781,7 +4781,7 @@ def _eval_faq_scalar(
         )
 
     cartesian_red = _cartesian(red_ranges_exp) if reduce_syms else [()]
-    if not gates and _folds_descending(filter_expr, reduce_syms, out_syms, reducer):
+    if _folds_descending(filter_expr, reduce_syms, out_syms, reducer):
         # A reverse (to-top) scan folds its suffix window from the high end
         # (esm-spec §4.3.1).
         cartesian_red = cartesian_red[::-1]
