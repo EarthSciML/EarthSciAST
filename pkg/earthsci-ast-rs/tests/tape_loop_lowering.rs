@@ -469,11 +469,11 @@ fn a_two_index_contraction_folds_in_the_oracle_order() {
 }
 
 /// A filter that is not a prefix scan masks each excluded tuple's term. (A
-/// reverse window, `j >= i` or `j > i`, whose body reads `i` folds each
-/// suffix from the top, esm-spec §4.3.1, and is declined instead.)
+/// reverse window, `j >= i` or `j > i`, folds each suffix from the top,
+/// esm-spec §4.3.1: still one reduction, walked from its high end.)
 #[test]
 fn a_filtered_contraction_is_one_reduction() {
-    for cmp in ["<=", "!=", "<"] {
+    for cmp in [">=", "!=", ">", "<="] {
         let make = |n: i64| {
             let mut rhs = faq(
                 json!(["i"]),

@@ -1125,11 +1125,14 @@ impl<'a> Emitter<'a> {
                 let v = self.wrap(flat.reshape(&d), "forcing: reshape")?;
                 self.define(*out, v);
             }
+            // `reverse` fixes a fold order, and XLA's `reduce` pins none (module
+            // docs): either direction is measured against the tolerance class.
             Instr::Reduce {
                 op,
                 init,
                 src,
                 axes,
+                reverse: _,
                 src_shape,
                 out,
             } => {

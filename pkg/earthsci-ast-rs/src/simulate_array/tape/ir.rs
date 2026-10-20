@@ -291,6 +291,9 @@ pub(crate) enum Instr {
         src: SrcRef,
         /// Source axes folded away, ASCENDING and duplicate-free.
         axes: SmallVec<[u8; 4]>,
+        /// The one folded axis is walked from its high end: a reverse
+        /// window (esm-spec §4.3.1). Only with a single folded axis.
+        reverse: bool,
         /// The expected source box (validation).
         src_shape: DimU,
         out: SlotId,
@@ -849,11 +852,18 @@ pub(crate) enum MicroOp {
     /// flat order, which visits every lane's steps in ascending order, so
     /// every element folds the same terms in the same association as
     /// `Instr::Scan`.
+    ///
+    /// A `reverse` scan runs along the box's leading axis and restarts at the
+    /// LAST step (`row - 1`). A group holding one visits its rows from the
+    /// last, each row in ascending flat order ([`FusedSpec::rows_reversed`]),
+    /// so every lane again folds its steps in the scan's order; it holds no
+    /// forward scan and no reduction.
     Scan {
         op: BinCode,
         a: MRef,
         init: f64,
         inclusive: bool,
+        reverse: bool,
         row: u32,
         post: u32,
         carry: u32,
@@ -1410,6 +1420,20 @@ pub(crate) struct FusedReduce {
 impl FusedSpec {
     pub(crate) fn n_elems(&self) -> usize {
         self.shape.iter().product::<usize>().max(1)
+    }
+
+    /// `(rows, row elements)` when the group holds a reverse scan and so
+    /// visits its leading-axis rows from the last (see [`MicroOp::Scan`]).
+    pub(crate) fn rows_reversed(&self) -> Option<(usize, usize)> {
+        self.micro.iter().find_map(|m| match m {
+            MicroOp::Scan {
+                reverse: true,
+                row,
+                post,
+                ..
+            } => Some((*row as usize, *post as usize)),
+            _ => None,
+        })
     }
 }
 

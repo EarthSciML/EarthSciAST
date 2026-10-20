@@ -1527,10 +1527,45 @@ fn ab_makearray_prefix_scan_region() {
             let prog = ab_check(makearray_scan_doc(n, ni, variant), -2.0, 2.0);
             assert_eq!(
                 opcount(&prog, "Scan") + scan_micro_ops(&prog),
-                1,
+                scans_of(variant),
                 "[{variant}, ni={ni}] the scan region is one running fold"
             );
+            // The consumer reads the scans, so the derivative path never
+            // assembles the array (only its export does).
+            let cont = prog.section_range(Cadence::Continuous);
+            let rhs = &prog.instrs[cont.start..cont.start + prog.n_rhs as usize];
+            let assembles = rhs
+                .iter()
+                .filter(|i| matches!(i, Instr::Assemble { .. }))
+                .count();
+            assert_eq!(
+                assembles,
+                usize::from(variant == "shifted"),
+                "[{variant}, ni={ni}]"
+            );
         }
+    }
+}
+
+/// Over enough columns, a reverse scan's group visits its rows from the
+/// top, and both reverse scans of the to-top shape fold inside the
+/// consumer's group.
+#[test]
+fn ab_reverse_scans_fuse_over_many_columns() {
+    for variant in ["to_top", "from_bottom"] {
+        let prog = ab_check(makearray_scan_doc(6, 40, variant), -2.0, 2.0);
+        assert_eq!(
+            opcount(&prog, "Scan"),
+            0,
+            "[{variant}] every scan is absorbed"
+        );
+        assert_eq!(scan_micro_ops(&prog), 2, "[{variant}]");
+        let reversed = prog
+            .fused
+            .iter()
+            .filter(|f| f.rows_reversed().is_some())
+            .count();
+        assert_eq!(reversed, usize::from(variant == "to_top"), "[{variant}]");
     }
 }
 
@@ -1546,41 +1581,59 @@ fn makearray_prefix_scan_region_is_linear_in_the_column() {
             widest <= n as usize + 1,
             "[{variant}] a slot of {widest} cells: the scan was lowered as a box"
         );
-        assert_eq!(opcount(&prog, "Scan") + scan_micro_ops(&prog), 1);
+        assert_eq!(
+            opcount(&prog, "Scan") + scan_micro_ops(&prog),
+            scans_of(variant)
+        );
     }
 }
 
-/// A reverse window whose body reads the output index folds each suffix
-/// from the top cell by cell (esm-spec §4.3.1), which no tape form
-/// reproduces: native declines it, naming the shape.
+/// Running folds in [`makearray_scan_doc`]'s program: the region's scan, and
+/// for the from-bottom and to-top shapes the scan that answers the
+/// consumer's read one row up (`scan_shift`). The shifted shape's read one
+/// row up starts on its zero row, which no scan answers.
+fn scans_of(variant: &str) -> usize {
+    if variant == "shifted" { 1 } else { 2 }
+}
+
+/// A reverse window whose body reads the output index is not a scan, but
+/// still folds each cell's suffix from the top (esm-spec §4.3.1): a reverse
+/// `Reduce` over the promoted box, matching the interpreter's descending
+/// per-cell fold bit for bit.
 #[test]
-fn a_reverse_window_that_is_not_a_scan_is_declined() {
-    let n = 6;
-    let doc = json!({
-        "esm": "1.1.0",
-        "metadata": {"name": "tape_reverse_window"},
-        "models": {"M": {
-            "variables": {
-                "u": {"type": "unknown", "shape": ["i"]},
-                "R": {"type": "unknown", "shape": ["i"]}
-            },
-            "equations": [
-                {"lhs": "R", "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
-                    "reduce": "+", "ranges": {"i": [1, n], "m": [1, n]},
-                    "filter": {"op": ">=", "args": ["m", "i"]},
-                    "expr": {"op": "*", "args": [{"op": "index", "args": ["u", "m"]}, "i"]}}},
-                d_eq("u", n, agg(n, json!({"op": "neg", "args": [
-                    {"op": "index", "args": ["R", "i"]}]})))
-            ]
-        }}
-    });
-    let declined = declined_check(doc);
-    let (_, reason) = declined
-        .declined_rules()
-        .into_iter()
-        .next()
-        .expect("a declined rule");
-    assert!(reason.contains("reverse-window"), "{reason}");
+fn a_reverse_window_that_is_not_a_scan_folds_from_the_top() {
+    let n = 9;
+    let body_box = json!({"op": "*", "args": [{"op": "index", "args": ["u", "m"]}, "i"]});
+    let body_mixed = json!({"op": "*", "args": [
+        {"op": "index", "args": ["u", {"op": "+", "args": [{"op": "-", "args": ["m", "i"]}, 1]}]},
+        {"op": "+", "args": ["i", 0.25]}]});
+    for (cmp, body) in [(">=", &body_box), (">", &body_box), (">=", &body_mixed)] {
+        let doc = json!({
+            "esm": "1.1.0",
+            "metadata": {"name": "tape_reverse_window"},
+            "models": {"M": {
+                "variables": {
+                    "u": {"type": "unknown", "shape": ["i"]},
+                    "R": {"type": "unknown", "shape": ["i"]}
+                },
+                "equations": [
+                    {"lhs": "R", "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                        "reduce": "+", "ranges": {"i": [1, n], "m": [1, n]},
+                        "filter": {"op": cmp, "args": ["m", "i"]},
+                        "expr": body}},
+                    d_eq("u", n, agg(n, json!({"op": "neg", "args": [
+                        {"op": "index", "args": ["R", "i"]}]})))
+                ]
+            }}
+        });
+        let prog = ab_check(doc, -3.0, 3.0);
+        let reverse_reduces = prog
+            .instrs
+            .iter()
+            .filter(|i| matches!(i, Instr::Reduce { reverse: true, .. }))
+            .count();
+        assert!(reverse_reduces > 0, "{cmp} {body}");
+    }
 }
 
 /// Absorbed scans (`MicroOp::Scan`) over every fused group.

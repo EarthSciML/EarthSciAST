@@ -160,6 +160,7 @@ fn reverse(prog: &mut TapeProgram) {
                 init,
                 src,
                 axes,
+                reverse,
                 src_shape,
                 out,
             } => {
@@ -169,6 +170,7 @@ fn reverse(prog: &mut TapeProgram) {
                     init: *init,
                     src: *src,
                     axes: axes.iter().map(|&a| n - 1 - a).collect(),
+                    reverse: *reverse,
                     src_shape: rev(src_shape),
                     out: *out,
                 })

@@ -86,6 +86,7 @@ mod prune;
 #[cfg(test)]
 mod refexec;
 mod reroll;
+mod scan_shift;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

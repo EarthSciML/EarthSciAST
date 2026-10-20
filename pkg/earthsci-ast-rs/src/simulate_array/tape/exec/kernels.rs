@@ -713,6 +713,42 @@ pub(super) unsafe fn scan_axis(
     }
 }
 
+/// [`scan_axis`] along axis 0 of a contiguous source of `len` rows of
+/// `post` inner positions, over the inner positions `[q_lo, q_hi)` only:
+/// each is a lane of its own, so a split by inner positions runs the same
+/// folds in the same order as the whole scan.
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::too_many_arguments)]
+pub(super) unsafe fn scan_leading_cols(
+    dst: *mut f64,
+    src: *const f64,
+    len: usize,
+    post: usize,
+    init: f64,
+    inclusive: bool,
+    reverse: bool,
+    q_lo: usize,
+    q_hi: usize,
+    f: impl Fn(f64, f64) -> f64 + Copy,
+) {
+    let at = |t: usize| if reverse { len - 1 - t } else { t };
+    unsafe {
+        for t in 0..len {
+            let row = at(t) * post;
+            let prev = if t == 0 { 0 } else { at(t - 1) * post };
+            for q in q_lo..q_hi {
+                let v = match (inclusive, t) {
+                    (true, 0) => f(init, *src.add(row + q)),
+                    (true, _) => f(*dst.add(prev + q), *src.add(row + q)),
+                    (false, 0) => init,
+                    (false, _) => f(*dst.add(prev + q), *src.add(prev + q)),
+                };
+                *dst.add(row + q) = v;
+            }
+        }
+    }
+}
+
 /// `Instr::Reduce` over the LEADING axes of a contiguous row-major source:
 /// `acc[o] = f(acc[o], src[r * n + o])` for every row `r` in order — the
 /// row-major visiting order, one contiguous row at a time. `acc` holds `n`

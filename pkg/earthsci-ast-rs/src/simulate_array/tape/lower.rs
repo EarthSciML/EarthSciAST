@@ -4524,6 +4524,7 @@ impl<'m> TapeBuilder<'m> {
             init: identity,
             src: src_ref,
             axes: (nb as u8..(nb + nc) as u8).collect(),
+            reverse: false,
             src_shape: ext_shape,
             out,
         };
@@ -4753,17 +4754,12 @@ impl<'m> TapeBuilder<'m> {
         if nc == 0 {
             bail_tape!("contracted: no contracted index");
         }
-        // A reverse window the scan lowering did not claim (its body reads
-        // the output index, or its range is not the output axis's) folds
-        // each suffix from its high end, cell by cell (esm-spec §4.3.1); the
-        // forms below fold every window ascending.
-        if folds_from_the_top(idx_names, contract_names, filter) {
-            bail_tape!(
-                "contracted: a reverse-window filter that is not a prefix scan (its body reads \
-                 the output index, or its range is not the output axis)"
-            );
-        }
         if contract_dims.iter().any(|d| !self.dim_is_fixed(d)) {
+            // The tuple-list form folds each row ascending; a reverse
+            // window folds it from the top (esm-spec §4.3.1).
+            if folds_from_the_top(idx_names, contract_names, filter) {
+                bail_tape!("contracted: a reverse-window filter over a ragged range");
+            }
             // A ragged bound varies per output cell: the tuple-list form.
             let ranges: Vec<(i64, i64)> = lo
                 .iter()
@@ -4928,11 +4924,16 @@ impl<'m> TapeBuilder<'m> {
         };
         let sec = self.placement(self.lv_cadence(&src));
         let out = self.new_slot(shape, lo, false, sec);
+        // A reverse window the scan lowering did not claim (its body reads
+        // the output index, or its range is not the output axis's) folds
+        // each cell's suffix from its high end (esm-spec §4.3.1).
+        let reverse = folds_from_the_top(idx_names, window.names, filter);
         let instr = Instr::Reduce {
             op: combine_op,
             init: identity,
             src: self.src_of(&src),
             axes: red_axes,
+            reverse,
             src_shape: ext_shape,
             out,
         };
@@ -4965,8 +4966,11 @@ impl<'m> TapeBuilder<'m> {
         let (clo, chi) = (window.lo, window.hi);
         // Accumulator: identity-filled buffer over the output box.
         let mut acc = self.emit_fill(&LV::Lit(identity), shape, lo, Cadence::Const);
+        // A reverse window (one contracted name) is visited from its high
+        // end (esm-spec §4.3.1).
+        let reverse = folds_from_the_top(idx_names, contract_names, filter);
 
-        let mut cvals: SmallVec<[i64; 4]> = SmallVec::from_slice(clo);
+        let mut cvals: SmallVec<[i64; 4]> = SmallVec::from_slice(if reverse { chi } else { clo });
         loop {
             // Each contraction tuple is a DISTINCT box (and CSE scope).
             self.push_scope();
@@ -4990,6 +4994,13 @@ impl<'m> TapeBuilder<'m> {
             let term = term?;
             acc = self.emit_bin(combine_op, acc, term)?;
 
+            if reverse {
+                cvals[0] -= 1;
+                if cvals[0] < clo[0] {
+                    break;
+                }
+                continue;
+            }
             // Odometer over the window, the LAST contracted name fastest —
             // the per-cell oracle's `CartesianTuples` order.
             let mut d = nc;
@@ -6009,6 +6020,7 @@ impl<'m> TapeBuilder<'m> {
                 init: identity,
                 src: SrcRef::Slot(src_slot),
                 axes: (0..shape.len() as u8).collect(),
+                reverse: false,
                 src_shape: shape,
                 out,
             },
@@ -7387,11 +7399,15 @@ impl<'m> TapeBuilder<'m> {
             fuse_stats: FuseStats::default(),
             col_major: false,
         };
+        super::scan_shift::rewrite_scan_makearray_reads(&mut prog);
         if align_layout {
             super::layout::align_state_layout(&mut prog);
         }
         if let Some(cfg) = fuse {
             super::reroll::reroll_program(&mut prog);
+            // Output-only work first moves out of the way, so it does not
+            // split the groups of the work a derivative needs.
+            super::prune::split_output_only(&mut prog);
             super::fuse::fuse_program(&mut prog, cfg);
             super::prune::split_output_only(&mut prog);
         } else {

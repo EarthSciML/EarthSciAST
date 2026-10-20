@@ -240,13 +240,21 @@ impl GBuilder {
             init,
             src: SrcRef::Slot(src),
             axes,
+            reverse,
             src_shape,
             out,
         } = ins
         else {
             return false;
         };
-        if self.reduce.is_some()
+        // A group's chunks fold ascending; a reverse fold stays standalone,
+        // and a group that visits its rows from the last folds nothing.
+        if *reverse
+            || self
+                .micro
+                .iter()
+                .any(|m| matches!(m, MicroOp::Scan { reverse: true, .. }))
+            || self.reduce.is_some()
             || *src_shape != self.shape
             || axes.is_empty()
             || axes.iter().enumerate().any(|(k, &a)| a as usize != k)
@@ -300,9 +308,24 @@ impl GBuilder {
         else {
             return false;
         };
-        // A group's chunks run the scanned axis ascending; a reverse scan
-        // stays a standalone instruction.
-        if *reverse || *src_shape != self.shape || *axis as usize >= self.shape.len() {
+        if *src_shape != self.shape || *axis as usize >= self.shape.len() {
+            return false;
+        }
+        // A reverse scan joins a group only along its leading axis, whose
+        // rows the group then visits from the last (`FusedSpec::rows_reversed`):
+        // never beside a forward scan or a reduction, which fold ascending,
+        // and only with enough lanes per row that a row is a worthwhile pass.
+        let scans = |rev: bool| {
+            self.micro
+                .iter()
+                .any(|m| matches!(m, MicroOp::Scan { reverse, .. } if *reverse == rev))
+        };
+        if *reverse {
+            let lanes: usize = self.shape[1..].iter().product();
+            if *axis != 0 || self.reduce.is_some() || scans(false) || lanes < MIN_REVERSE_LANES {
+                return false;
+            }
+        } else if scans(true) {
             return false;
         }
         let operand = match src {
@@ -334,6 +357,7 @@ impl GBuilder {
             a,
             init: *init,
             inclusive: *inclusive,
+            reverse: *reverse,
             row: self.shape[*axis as usize] as u32,
             post,
             carry: self.n_carries,
@@ -1282,6 +1306,10 @@ impl SuperopCfg {
     }
 }
 
+/// Lanes a row of a group with a reverse scan must hold: the group visits
+/// its rows one at a time, each a pass of its own.
+const MIN_REVERSE_LANES: usize = 16;
+
 /// The (op1, op2) pairs the executor monomorphizes as [`MicroOp::Bin2`]: the
 /// full `+ - * /` square, plus the pairs the simpleclimate adjacency
 /// histogram showed material (a multiply feeding a comparison mask; the
@@ -1380,6 +1408,7 @@ fn scan_fusions(
             MicroOp::Scan {
                 post: 1,
                 op: BinCode::Add | BinCode::Mul,
+                reverse: false,
                 ..
             }
         )
@@ -1406,6 +1435,7 @@ fn scan_fusions(
             op: BinCode::Add | BinCode::Mul,
             a,
             post: 1,
+            reverse: false,
             ..
         } = op
         else {
@@ -2027,6 +2057,7 @@ fn absorb_pre_reductions(prog: &mut TapeProgram) {
             init,
             src,
             axes,
+            reverse: false,
             src_shape,
             out,
         } = &prog.instrs[i]
