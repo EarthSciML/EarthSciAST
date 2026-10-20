@@ -3058,7 +3058,8 @@ end
 #     `index(<value>, i…)` (unwrapped to the bare aggregate downstream, which is
 #     what lets `_detect_prefix_scan` see a scan);
 #   * an array producer of lower rank, as the gather at the region's
-#     non-singleton axes;
+#     non-singleton axes, unwrapped to the bare aggregate there when it
+#     contracts;
 #   * anything else (a rank-0 aggregate, a scalar expression), bare: its value
 #     does not depend on the cell.
 #
@@ -3123,7 +3124,11 @@ function _makearray_region_fills(name::String, def::ASTExpr, dims::Vector{Int})
             sel = rank == nd ? loops :
                   String[loops[d] for d in 1:nd if box[d][1] != box[d][2]]
             length(sel) == rank || return nothing
-            OpExpr("index", ASTExpr[v, (VarExpr(l) for l in sel)...])
+            g = OpExpr("index", ASTExpr[v, (VarExpr(l) for l in sel)...])
+            # The downstream unwrap sees only a gather at every loop of the
+            # equation, so a lower-rank value is unwrapped here, at its own axes.
+            rank == nd ? g : _unwrap_identity_gather(g, sel,
+                Dict{String,Any}(l => ranges[l] for l in sel))
         else
             val isa ASTExpr || return nothing
             val
