@@ -994,6 +994,19 @@ function _authored_observed_body(insp::BuildInspection, file::EsmFile, model::Mo
         renames[name] = VarExpr(qual)
     end
     isempty(renames) || (body = substitute(body, renames))
+
+    # (4) Resolve `{from}` index-set ranges as the build resolves its equations
+    # (`_resolve_index_set_ranges`): a ragged range becomes its per-cell
+    # `[1, index(offsets, of…)]` bound, the offsets factor bound by bare name
+    # to the in-scope array.
+    if _has_index_set_ref(body)
+        scope = Dict{String,Nothing}(String(k) => nothing for k in keys(insp.const_arrays))
+        for k in keys(state_arrays)
+            scope[String(k)] = nothing
+        end
+        body = _resolve_isr(body, file.index_sets, insp.derived_extents,
+                            _ragged_factor_scope(file.index_sets, scope))
+    end
     return body
 end
 

@@ -2341,6 +2341,8 @@ function _node_loop_reach(nd::_Node)
         return r
     elseif nd.kind === _NK_CONTRACTION_LOOP && pl isa _ContractLoop
         return max(length(pl.lo:pl.step:pl.hi), 1)
+    elseif nd.kind === _NK_RAGGED_LOOP && pl isa _RaggedLoop
+        return pl.reach
     end
     return 1
 end
