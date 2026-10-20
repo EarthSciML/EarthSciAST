@@ -39,15 +39,15 @@ index against an output index (esm-spec §4.3.1); the format ships no `cumsum` /
 | `25_cumulative_prefix_reduction` | `<=`, `<`, `>=` | +, max | Exclusive first cell = additive identity (empty reduction, not an error) |
 | `26_cumulative_integral_measure` | `<=` | + | Riemann-sum integral on a **non-uniform** grid; the measure is an author-supplied factor, never inferred |
 
-**Forward scans are evaluated in `O(N)`, and that is a correctness claim, not just
-a speed one.** All three executing ports recognize the forward rows (`<=`, `<`,
-and the mirrored spellings `i >= j` / `i > j`) and replace the `O(N²)` triangle
-with one running accumulator. This is legitimate only because it is
-*bit-identical*: the oracle folds the admitted window ascending, lowest `j` first,
-and `accᵢ = accᵢ₋₁ ⊕ bodyᵢ` reproduces exactly that fold with exactly that
-association. Reverse rows (`>=`, `>`) are deliberately **not** scanned under an
-inexact ⊕ — each reverse cell folds its own suffix from that suffix's low end, so
-consecutive cells share no partial result. Bit-identity is pinned against an
+**Scans are evaluated in `O(N)`, and that is a correctness claim, not just
+a speed one.** The executing ports recognize the forward rows (`<=`, `<`, and
+the mirrored spellings `i >= j` / `i > j`) and the reverse rows (`>=`, `>`, and
+`i <= j` / `i < j`) and replace the `O(N²)` triangle with one running
+accumulator. This is legitimate only because it is *bit-identical*: esm-spec
+§4.3.1 folds a forward window ascending, lowest `j` first, which
+`accᵢ = accᵢ₋₁ ⊕ bodyᵢ` reproduces exactly, and a reverse window descending,
+highest `j` first, which `accᵢ = accᵢ₊₁ ⊕ bodyᵢ` swept from the top reproduces
+exactly. Bit-identity of the forward rows is pinned against an
 independent triangular oracle, at catastrophic-cancellation magnitudes, by
 `pkg/earthsci-ast-rs/tests/cumulative_prefix_scan.rs`,
 `pkg/earthsci-ast-py/tests/test_cumulative_prefix_scan.py` and
