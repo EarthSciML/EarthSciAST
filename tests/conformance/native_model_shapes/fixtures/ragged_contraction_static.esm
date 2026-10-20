@@ -2,7 +2,7 @@
  "esm": "1.2.0",
  "metadata": {
   "name": "ragged_contraction_static",
-  "description": "Issue #534: a contraction whose range is RAGGED, bounded per output cell through an `offsets` factor (`k from edges_of_cell of [i]`, offsets nEdgesOnCell, values edgesOnCell; esm-spec §4.3.1), as in EarthSciDiscretizations' MPAS fv_divergence_cell / fv_laplacian_cell. Four cells with 3, 2, 4 and 1 edges over six edges; the padding entries of edgesOnCell are 0, out of range, so a binding that reads past a row's length faults rather than adding a term. div = 2, -0.5, 1.5, 12 and the plain neighbour sum is 6, 7, 17, 6. Static variant: no state, so both fields are build-time observeds (the construction-time route Python native refused).",
+  "description": "Issue #534: a contraction whose range is RAGGED, bounded per output cell through an `offsets` factor (`k from edges_of_cell of [i]`, offsets nEdgesOnCell, values edgesOnCell; esm-spec §4.3.1), as in EarthSciDiscretizations' MPAS fv_divergence_cell / fv_laplacian_cell. Four cells with 3, 2, 4 and 1 edges over six edges; the padding entries of edgesOnCell are 0, out of range, so a binding that reads past a row's length faults rather than adding a term. div = 2, -0.5, 1.5, 12 and the plain neighbour sum is 6, 7, 17, 6. Static variant: no state, so every field is a build-time observed (the construction-time route Python native refused), and tend = -div spells the contraction inside the negation as the dynamic q does.",
   "authors": [
    "EarthSciML Authors and Contributors"
   ],
@@ -99,6 +99,14 @@
       "cells"
      ],
      "description": "Plain ragged neighbour sum of F over the cell's own edges."
+    },
+    "tend": {
+     "type": "unknown",
+     "units": "1/m",
+     "shape": [
+      "cells"
+     ],
+     "description": "The tendency -div, spelled with the ragged contraction INSIDE an elementwise negation, the form a lowered u_t = -div(F) takes."
     },
     "F": {
      "type": "unknown",
@@ -229,6 +237,86 @@
        4.0,
        5.0,
        6.0
+      ]
+     }
+    },
+    {
+     "lhs": "tend",
+     "rhs": {
+      "op": "-",
+      "args": [
+       {
+        "op": "faq",
+        "args": [],
+        "output_idx": [
+         "i"
+        ],
+        "semiring": "sum_product",
+        "ranges": {
+         "i": {
+          "from": "cells"
+         },
+         "k": {
+          "from": "edges_of_cell",
+          "of": [
+           "i"
+          ]
+         }
+        },
+        "expr": {
+         "op": "/",
+         "args": [
+          {
+           "op": "*",
+           "args": [
+            {
+             "op": "index",
+             "args": [
+              "edgeSignOnCell",
+              "i",
+              "k"
+             ]
+            },
+            {
+             "op": "index",
+             "args": [
+              "F",
+              {
+               "op": "index",
+               "args": [
+                "edgesOnCell",
+                "i",
+                "k"
+               ]
+              }
+             ]
+            },
+            {
+             "op": "index",
+             "args": [
+              "dvEdge",
+              {
+               "op": "index",
+               "args": [
+                "edgesOnCell",
+                "i",
+                "k"
+               ]
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "op": "index",
+           "args": [
+            "areaCell",
+            "i"
+           ]
+          }
+         ]
+        }
+       }
       ]
      }
     },
@@ -412,6 +500,38 @@
        "variable": "rowsum",
        "time": 0.0,
        "expected": 6.0,
+       "coords": {
+        "cells": 4
+       }
+      },
+      {
+       "variable": "tend",
+       "time": 0.0,
+       "expected": -2.0,
+       "coords": {
+        "cells": 1
+       }
+      },
+      {
+       "variable": "tend",
+       "time": 0.0,
+       "expected": 0.5,
+       "coords": {
+        "cells": 2
+       }
+      },
+      {
+       "variable": "tend",
+       "time": 0.0,
+       "expected": -1.5,
+       "coords": {
+        "cells": 3
+       }
+      },
+      {
+       "variable": "tend",
+       "time": 0.0,
+       "expected": -12.0,
        "coords": {
         "cells": 4
        }
