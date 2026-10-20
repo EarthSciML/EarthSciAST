@@ -168,6 +168,8 @@ function _cg_emit(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
             push!(exprs, _cg_emit(ctx, kc, c))
         end
         return _cg_foldl(fnsym, exprs)
+    elseif k === _NK_RAGGED_LOOP
+        return _cg_ragged_loop(ctx, kc, nd)
     elseif k === _NK_CACHED
         # The scalar prelude's CSE scratch. A contraction body is compiled with
         # `memo=nothing` and never goes through `_cse_compile_scalar`, so this
@@ -178,6 +180,43 @@ function _cg_emit(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
         return _cg_emit_op(ctx, kc, nd)
     end
     throw(_CodegenDecline(:unknown_kind))
+end
+
+# `_NK_RAGGED_LOOP`, `_eval_ragged_loop` statement for statement: the bounds
+# in order, 0̄ for an empty row, else the first term seeding the accumulator
+# and the rest folded into it. The body is emitted twice (the peeled first
+# term and the loop), which keeps the accumulator one type.
+function _cg_ragged_loop(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
+    spec = nd.payload::_RaggedLoop
+    ch = nd.children
+    haskey(kc.loops, spec.ref) && throw(_CodegenDecline(:ragged_loop_reentered))
+    fnsym = _cg_oplus_fn(nd.op)
+    lo = _cg_name(ctx, "rlo")
+    hi = _cg_name(ctx, "rhi")
+    kv = _cg_name(ctx, "rk")
+    acc = _cg_name(ctx, "racc")
+    lox = _cg_emit(ctx, kc, ch[2])
+    hix = _cg_emit(ctx, kc, ch[3])
+    st = _cg_geo!(ctx, spec.step, (spec, :step), true)
+    kc.loops[spec.ref] = kv
+    first_term = _cg_emit(ctx, kc, ch[1])
+    rest_term = _cg_emit(ctx, kc, ch[1])
+    delete!(kc.loops, spec.ref)
+    return quote
+        let $lo = round(Int, $lox), $hi = round(Int, $hix)
+            if isempty($lo:$st:$hi)
+                _cgT($(nd.literal))
+            else
+                local $acc = let $kv = $lo
+                    $first_term
+                end
+                for $kv in ($lo + $st):$st:$hi
+                    $acc = $fnsym($acc, $rest_term)
+                end
+                $acc
+            end
+        end
+    end
 end
 
 _cg_oplus_fn(op::Symbol) =

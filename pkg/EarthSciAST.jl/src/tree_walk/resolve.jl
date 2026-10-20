@@ -469,6 +469,14 @@ function _resolve_index_of_faq(faq_expr::OpExpr, idx_args::Vector{ASTExpr},
     contract_names = _contracted_index_names(ranges_dict, output_idx_strs)
     _out_idx_env = Dict{String,Int}(output_idx_strs[d] => k_vals[d]
                                     for d in 1:nd if !symbolic[d])
+    # A ragged bound over a symbolic output index becomes a run-time loop
+    # (`_NK_RAGGED_LOOP`), which reads the bound at the cell the call is at.
+    if any_symbolic && !isempty(bound_syms) &&
+       any(n -> !_is_const_int_range(ranges_dict[n]), contract_names)
+        return _resolve_ragged_faq_loop(faq_expr, sub_body, ranges_dict, idx_exprs,
+                                        contract_names, oplus, zerobar, array_var_info,
+                                        var_map, const_arrays, pgather, bound_syms)
+    end
     contract_iters = [_expand_contract_range(ranges_dict[n], _out_idx_env, const_arrays)
                       for n in contract_names]
 
@@ -500,6 +508,70 @@ function _resolve_index_of_faq(faq_expr::OpExpr, idx_args::Vector{ASTExpr},
                                       pgather, memo, bound_syms))
     end
     return _combine_with_reducer(oplus, zerobar, terms)
+end
+
+# The symbolic form of a gather of a ragged contraction, `index(faq, i)` with
+# `i` a loop counter of the whole-array contraction tier and the contracted range
+# `[lo, hi]` an expression in `i` (a ragged set's `[1, index(offsets, i)]`):
+# one `__ragged_loop` marker whose bounds are resolved like any other subscript,
+# so the offsets read is a run-time const gather at the call's cell, and whose
+# body is resolved once with the contracted index a loop counter. Each call then
+# folds the cell's own row, `hi - lo + 1` terms, the CSR shape.
+#
+# The terms, their order and their fold are those of the per-cell expansion
+# below (`_foreach_aggregate_term` then `_combine_with_reducer`), which is what
+# the interpreter builds at a concrete cell. Taken only for one contracted
+# index with no join and no filter; anything else declines with
+# `E_TREEWALK_COMPILE_ONCE_UNSUPPORTED`, as the symbolic path always has.
+function _resolve_ragged_faq_loop(faq_expr::OpExpr, sub_body::ASTExpr, ranges_dict,
+        idx_exprs::Dict{String,ASTExpr}, contract_names::Vector{String},
+        oplus::String, zerobar::Float64, array_var_info, var_map, const_arrays,
+        pgather::AbstractDict, bound_syms::Set{String})
+    decline(why) = throw(TreeWalkError("E_TREEWALK_COMPILE_ONCE_UNSUPPORTED",
+        "ragged contraction on the symbolic compile-once path: " * why))
+    length(contract_names) == 1 || decline("more than one contracted index")
+    (faq_expr.join_gates === nothing && faq_expr.filter === nothing) ||
+        decline("a join or a filter")
+    oplus in ("+", "*", "max", "min") || decline("⊕ = $(oplus)")
+    rspec = ranges_dict[contract_names[1]]
+    rspec isa AbstractVector && length(rspec) in (2, 3) || decline("range arity")
+    step = 1
+    if length(rspec) == 3
+        rspec[2] isa Integer || decline("a step that is not a constant integer")
+        step = Int(rspec[2])
+        step == 0 && decline("a zero step")
+    end
+    bound(x) = x isa Integer ? IntExpr(Int64(x)) :
+        x isa ASTExpr ? _resolve_indices(_sub_preserving(x, idx_exprs), array_var_info,
+                                         var_map, const_arrays, pgather, nothing,
+                                         bound_syms) :
+        decline("a bound that is not an integer or an expression")
+    lo = bound(rspec[1])
+    hi = bound(rspec[end])
+    kname = _fresh_loopvar_name()
+    kref = Ref(0)
+    body = _sub_preserving(sub_body,
+                           Dict{String,ASTExpr}(contract_names[1] => VarExpr(kname)))
+    kbsyms = union(bound_syms, Set{String}((kname,)))
+    resolved = _resolve_indices(body, array_var_info, var_map, const_arrays, pgather,
+                                nothing, kbsyms)
+    _LOOPVAR_REFS[Symbol(kname)] = kref
+    return OpExpr("__ragged_loop", ASTExpr[resolved, lo, hi];
+                  value=_RaggedLoopBuild(kref, step, _ragged_reach(rspec, const_arrays),
+                                         Symbol(oplus), zerobar))
+end
+
+# The mean row length of a ragged range `[1, index(offsets, …)]` over a const
+# offsets array, for the threading verdict's work estimate; 1 when the bound is
+# any other expression.
+function _ragged_reach(rspec, const_arrays::AbstractDict)
+    hi = rspec[end]
+    (rspec[1] == 1 && hi isa OpExpr && (hi::OpExpr).op == "index" &&
+     !isempty((hi::OpExpr).args) && (hi::OpExpr).args[1] isa VarExpr) || return 1
+    arr = get(const_arrays, ((hi::OpExpr).args[1]::VarExpr).name, nothing)
+    (arr isa AbstractArray{<:Real} && !isempty(arr)) || return 1
+    m = sum(Float64, arr) / length(arr)
+    return isfinite(m) ? max(1, round(Int, m)) : 1
 end
 
 # Resolve index(makearray(regions=[...], values=[...]), k1, k2, ...) by
