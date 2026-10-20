@@ -139,6 +139,11 @@ end
     return nothing
 end
 
+# A level's folds as a plain list (the output-time observed program's levels),
+# which carry no fused scans: the folds alone.
+_apply_scan_folds!(du, u, p, t, folds::AbstractVector{_ScanFold}) =
+    _apply_scan_folds!(du, folds)
+
 # Fold lanes `l1:l2` of `S` (all of them by default); lanes are independent.
 function _apply_scan_fold!(du, S::_ScanFold, l1::Int = 1,
                            l2::Int = S.len >= 1 ? div(length(S.slots), S.len) : 0)
