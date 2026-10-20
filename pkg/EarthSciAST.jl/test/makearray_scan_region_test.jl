@@ -20,6 +20,7 @@ using Test
 include("testutils.jl")
 
 using EarthSciAST
+using ForwardDiff
 const ESM_MSR = EarthSciAST
 
 _msr_val(k) = (1.0 - 2.0 * (k % 2)) * 10.0^(((k * 7) % 17) - 8)
@@ -100,6 +101,40 @@ function _msr_centre_model(n::Int; filt="<")
     return ESM_MSR.Model(vars, eqs), Dict("lev" => ESM_MSR.IndexSet("interval"; size=n))
 end
 
+# The scaling families' shape: `ncol` columns of `n` layers, a two-region
+# makearray of a scan over the interfaces (from the surface: the strict scan
+# and its total; to the top: the inclusive reverse scan and a zero lid), and a
+# flux divergence of it as the state's right-hand side,
+# D(u[c,l]) = -0.001 (F[c,l+1] - F[c,l]) / dz[l].
+function _msr_divergence_model(n::Int, ncol::Int; top::Bool=false)
+    cv = ESM_MSR.ASTExpr[_v("c")]
+    lo_reg = Vector{Any}[Any[1, ncol], Any[1, n]]
+    hi_reg = Vector{Any}[Any[1, ncol], Any[n + 1, n + 1]]
+    F = ESM_MSR.OpExpr("makearray", ESM_MSR.ASTExpr[];
+        regions=[lo_reg, hi_reg],
+        values=ESM_MSR.ASTExpr[_msr_scan(top ? ">=" : "<", ["c", "k"], ["c"]),
+                               top ? _n(0.0) : _msr_scan(nothing, ["c"], ["c"])])
+    vars = Dict(
+        "u" => ESM_MSR.ModelVariable(ESM_MSR.UnknownVariable; shape=["col", "lev"]),
+        "dz" => ESM_MSR.ModelVariable(ESM_MSR.UnknownVariable; shape=["lev"]),
+        "F" => ESM_MSR.ModelVariable(ESM_MSR.UnknownVariable; shape=["col", "lev_nodes"]))
+    div = _op("/", _op("*", _n(-0.001),
+                       _op("-", _idx("F", cv..., _op("+", _v("i"), _i(1))),
+                                _idx("F", cv..., _v("i")))),
+              _idx("dz", _v("i")))
+    eqs = [
+        ESM_MSR.Equation(_v("dz"),
+            _msr_agg(_op("+", _n(0.5), _op("*", _n(0.25), _v("k"))), "k" => "lev")),
+        ESM_MSR.Equation(_v("F"), F),
+        ESM_MSR.Equation(_msr_agg(_Didx("u", cv..., _v("i")), "c" => "col", "i" => "lev"),
+                         _msr_agg(div, "c" => "col", "i" => "lev")),
+    ]
+    isets = Dict("lev" => ESM_MSR.IndexSet("interval"; size=n),
+                 "lev_nodes" => ESM_MSR.IndexSet("interval"; size=n + 1),
+                 "col" => ESM_MSR.IndexSet("interval"; size=ncol))
+    return ESM_MSR.Model(vars, eqs), isets
+end
+
 function _msr_check(model, isets; scans::Int)
     nat = ESM_MSR._build_evaluator_impl(model; index_sets=isets)
     ref = ESM_MSR._build_evaluator_impl(model; index_sets=isets, compiler=:interpreter)
@@ -150,6 +185,28 @@ end
         m, is = _msr_centre_model(16; filt=">=")
         _msr_check(m, is; scans=1)
     end
+    @testset "a scan's flux divergence is one pass over the columns" begin
+        # The column scan (scan_fused.jl): term, fold and the divergence that
+        # reads the interfaces below and above each layer, in one nest over the
+        # columns of each level. Bit-identical to the interpreter, and through
+        # ForwardDiff, where the nest runs column by column.
+        for top in (false, true), ncol in (3, 40)
+            m, is = _msr_divergence_model(10, ncol; top=top)
+            ESM_MSR._reset_cascade_tally!()
+            nat = ESM_MSR._build_evaluator_impl(m; index_sets=is)
+            tally = copy(ESM_MSR._CASCADE_TALLY)
+            @test get(tally, :scan_colscan, 0) == 1
+            @test get(tally, :scan_colscan_consumer, 0) == 1
+            _msr_check(m, is; scans=1)
+            ref = ESM_MSR._build_evaluator_impl(m; index_sets=is, compiler=:interpreter)
+            u = Float64[_msr_val(k) for k in eachindex(nat[2])]
+            seed = Float64[isodd(k) ? 1.0 : -0.5 for k in eachindex(u)]
+            jd(f, p) = ForwardDiff.derivative(
+                x -> (du = zeros(typeof(x), length(u)); f(du, u .+ x .* seed, p, 0.0); du), 0.0)
+            @test reinterpret(UInt64, jd(nat[1], nat[3])) == reinterpret(UInt64, jd(ref[1], ref[3]))
+        end
+    end
+
     @testset "a long column builds natively" begin
         m, is = _msr_nodes_model(4096, 0)
         nat = ESM_MSR._build_evaluator_impl(m; index_sets=is)
