@@ -603,6 +603,102 @@
     ]
    },
    "named_exclusions": []
+  },
+  {
+   "id": "makearray_prefix_scan_static",
+   "path": "fixtures/makearray_prefix_scan_static.esm",
+   "model": "MakearrayPrefixScan",
+   "golden": "golden/makearray_prefix_scan_static.json",
+   "tags": [
+    "makearray",
+    "prefix-scan",
+    "faq",
+    "static"
+   ],
+   "note": "Authored here for issue #533 (EarthSciDiscretizations integral_column_* cases); see README.md.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "makearray_prefix_scan_dynamic",
+   "path": "fixtures/makearray_prefix_scan_dynamic.esm",
+   "model": "MakearrayPrefixScan",
+   "golden": "golden/makearray_prefix_scan_dynamic.json",
+   "tags": [
+    "makearray",
+    "prefix-scan",
+    "faq",
+    "dynamic"
+   ],
+   "note": "Authored here for issue #533 (EarthSciDiscretizations integral_column_* cases); see README.md.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "ragged_contraction_static",
+   "path": "fixtures/ragged_contraction_static.esm",
+   "model": "RaggedContraction",
+   "golden": "golden/ragged_contraction_static.json",
+   "tags": [
+    "faq",
+    "ragged",
+    "offsets",
+    "static"
+   ],
+   "note": "Authored here for issue #534 (EarthSciDiscretizations divergence_mpas / laplacian_mpas cases); see README.md.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "ragged_contraction_dynamic",
+   "path": "fixtures/ragged_contraction_dynamic.esm",
+   "model": "RaggedContraction",
+   "golden": "golden/ragged_contraction_dynamic.json",
+   "tags": [
+    "faq",
+    "ragged",
+    "offsets",
+    "dynamic"
+   ],
+   "note": "Authored here for issue #534 (EarthSciDiscretizations divergence_mpas / laplacian_mpas cases); see README.md.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
   }
  ]
 }
