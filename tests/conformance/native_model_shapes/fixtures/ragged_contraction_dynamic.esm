@@ -1,0 +1,635 @@
+{
+ "esm": "1.2.0",
+ "metadata": {
+  "name": "ragged_contraction_dynamic",
+  "description": "Issue #534: a contraction whose range is RAGGED, bounded per output cell through an `offsets` factor (`k from edges_of_cell of [i]`, offsets nEdgesOnCell, values edgesOnCell; esm-spec §4.3.1), as in EarthSciDiscretizations' MPAS fv_divergence_cell / fv_laplacian_cell. Four cells with 3, 2, 4 and 1 edges over six edges; the padding entries of edgesOnCell are 0, out of range, so a binding that reads past a row's length faults rather than adding a term. div = 2, -0.5, 1.5, 12 and the plain neighbour sum is 6, 7, 17, 6. Dynamic variant: the edge flux is a state, so the contraction is lowered on the right-hand side; q accumulates -div with the contraction INLINE under the negation (the shape a lowered u_t = -div(F) takes, the form Julia native refused) and r accumulates the bare rowsum observed, both from zero over one unit of time.",
+  "authors": [
+   "EarthSciML Authors and Contributors"
+  ],
+  "tags": [
+   "native",
+   "conformance",
+   "faq",
+   "ragged"
+  ]
+ },
+ "index_sets": {
+  "cells": {
+   "kind": "interval",
+   "size": 4
+  },
+  "edges": {
+   "kind": "interval",
+   "size": 6
+  },
+  "maxEdges": {
+   "kind": "interval",
+   "size": 4
+  },
+  "edges_of_cell": {
+   "kind": "ragged",
+   "of": [
+    "cells"
+   ],
+   "offsets": "nEdgesOnCell",
+   "values": "edgesOnCell"
+  }
+ },
+ "models": {
+  "RaggedContraction": {
+   "tolerance": {
+    "rel": 1e-12,
+    "abs": 1e-12
+   },
+   "variables": {
+    "nEdgesOnCell": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "cells"
+     ],
+     "description": "offsets: each cell's edge count (3, 2, 4, 1)."
+    },
+    "edgesOnCell": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "cells",
+      "maxEdges"
+     ],
+     "description": "values: row i holds cell i's edges in positions 1..nEdgesOnCell[i]; the padding is 0, an out-of-range edge, so a read past a row's length faults."
+    },
+    "edgeSignOnCell": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "cells",
+      "maxEdges"
+     ],
+     "description": "Outward sign of each of a cell's edges."
+    },
+    "dvEdge": {
+     "type": "unknown",
+     "units": "m",
+     "shape": [
+      "edges"
+     ],
+     "description": "Edge lengths."
+    },
+    "areaCell": {
+     "type": "unknown",
+     "units": "m^2",
+     "shape": [
+      "cells"
+     ],
+     "description": "Cell areas."
+    },
+    "div": {
+     "type": "unknown",
+     "units": "1/m",
+     "shape": [
+      "cells"
+     ],
+     "description": "MPAS finite-volume divergence: sum over the cell's own edges of sign * F[edge] * dvEdge[edge], over areaCell."
+    },
+    "rowsum": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "cells"
+     ],
+     "description": "Plain ragged neighbour sum of F over the cell's own edges."
+    },
+    "F": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "edges"
+     ],
+     "description": "Edge flux as a state held constant (D(F) = 0) at 1..6, so the contraction reads a state on the right-hand side."
+    },
+    "q": {
+     "type": "unknown",
+     "units": "1/m",
+     "shape": [
+      "cells"
+     ],
+     "default": 0.0,
+     "description": "D(q) = -div with the ragged contraction inline under the negation (the lowered u_t = -div(F)), from zero at a constant rate."
+    },
+    "r": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "cells"
+     ],
+     "default": 0.0,
+     "description": "Accumulates rowsum from zero at a constant rate."
+    }
+   },
+   "equations": [
+    {
+     "lhs": "nEdgesOnCell",
+     "rhs": {
+      "op": "const",
+      "args": [],
+      "value": [
+       3,
+       2,
+       4,
+       1
+      ]
+     }
+    },
+    {
+     "lhs": "edgesOnCell",
+     "rhs": {
+      "op": "const",
+      "args": [],
+      "value": [
+       [
+        1,
+        2,
+        3,
+        0
+       ],
+       [
+        3,
+        4,
+        0,
+        0
+       ],
+       [
+        2,
+        4,
+        5,
+        6
+       ],
+       [
+        6,
+        0,
+        0,
+        0
+       ]
+      ]
+     }
+    },
+    {
+     "lhs": "edgeSignOnCell",
+     "rhs": {
+      "op": "const",
+      "args": [],
+      "value": [
+       [
+        1.0,
+        1.0,
+        -1.0,
+        0.0
+       ],
+       [
+        -1.0,
+        1.0,
+        0.0,
+        0.0
+       ],
+       [
+        1.0,
+        -1.0,
+        1.0,
+        -1.0
+       ],
+       [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+       ]
+      ]
+     }
+    },
+    {
+     "lhs": "dvEdge",
+     "rhs": {
+      "op": "const",
+      "args": [],
+      "value": [
+       1.0,
+       2.0,
+       1.0,
+       0.5,
+       2.0,
+       1.0
+      ]
+     }
+    },
+    {
+     "lhs": "areaCell",
+     "rhs": {
+      "op": "const",
+      "args": [],
+      "value": [
+       1.0,
+       2.0,
+       4.0,
+       0.5
+      ]
+     }
+    },
+    {
+     "lhs": "div",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "semiring": "sum_product",
+      "ranges": {
+       "i": {
+        "from": "cells"
+       },
+       "k": {
+        "from": "edges_of_cell",
+        "of": [
+         "i"
+        ]
+       }
+      },
+      "expr": {
+       "op": "/",
+       "args": [
+        {
+         "op": "*",
+         "args": [
+          {
+           "op": "index",
+           "args": [
+            "edgeSignOnCell",
+            "i",
+            "k"
+           ]
+          },
+          {
+           "op": "index",
+           "args": [
+            "F",
+            {
+             "op": "index",
+             "args": [
+              "edgesOnCell",
+              "i",
+              "k"
+             ]
+            }
+           ]
+          },
+          {
+           "op": "index",
+           "args": [
+            "dvEdge",
+            {
+             "op": "index",
+             "args": [
+              "edgesOnCell",
+              "i",
+              "k"
+             ]
+            }
+           ]
+          }
+         ]
+        },
+        {
+         "op": "index",
+         "args": [
+          "areaCell",
+          "i"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "rowsum",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "i"
+      ],
+      "semiring": "sum_product",
+      "ranges": {
+       "i": {
+        "from": "cells"
+       },
+       "k": {
+        "from": "edges_of_cell",
+        "of": [
+         "i"
+        ]
+       }
+      },
+      "expr": {
+       "op": "index",
+       "args": [
+        "F",
+        {
+         "op": "index",
+         "args": [
+          "edgesOnCell",
+          "i",
+          "k"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "e"
+      ],
+      "ranges": {
+       "e": {
+        "from": "edges"
+       }
+      },
+      "expr": {
+       "op": "D",
+       "args": [
+        {
+         "op": "index",
+         "args": [
+          "F",
+          "e"
+         ]
+        }
+       ],
+       "wrt": "t"
+      }
+     },
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "e"
+      ],
+      "ranges": {
+       "e": {
+        "from": "edges"
+       }
+      },
+      "expr": 0.0
+     }
+    },
+    {
+     "lhs": {
+      "op": "D",
+      "args": [
+       "q"
+      ],
+      "wrt": "t"
+     },
+     "rhs": {
+      "op": "-",
+      "args": [
+       {
+        "op": "faq",
+        "args": [],
+        "output_idx": [
+         "i"
+        ],
+        "semiring": "sum_product",
+        "ranges": {
+         "i": {
+          "from": "cells"
+         },
+         "k": {
+          "from": "edges_of_cell",
+          "of": [
+           "i"
+          ]
+         }
+        },
+        "expr": {
+         "op": "/",
+         "args": [
+          {
+           "op": "*",
+           "args": [
+            {
+             "op": "index",
+             "args": [
+              "edgeSignOnCell",
+              "i",
+              "k"
+             ]
+            },
+            {
+             "op": "index",
+             "args": [
+              "F",
+              {
+               "op": "index",
+               "args": [
+                "edgesOnCell",
+                "i",
+                "k"
+               ]
+              }
+             ]
+            },
+            {
+             "op": "index",
+             "args": [
+              "dvEdge",
+              {
+               "op": "index",
+               "args": [
+                "edgesOnCell",
+                "i",
+                "k"
+               ]
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "op": "index",
+           "args": [
+            "areaCell",
+            "i"
+           ]
+          }
+         ]
+        }
+       }
+      ]
+     }
+    },
+    {
+     "lhs": {
+      "op": "D",
+      "args": [
+       "r"
+      ],
+      "wrt": "t"
+     },
+     "rhs": "rowsum"
+    }
+   ],
+   "tests": [
+    {
+     "id": "values",
+     "initial_conditions": {
+      "F[1]": 1.0,
+      "F[2]": 2.0,
+      "F[3]": 3.0,
+      "F[4]": 4.0,
+      "F[5]": 5.0,
+      "F[6]": 6.0
+     },
+     "time_span": {
+      "start": 0.0,
+      "end": 1.0
+     },
+     "assertions": [
+      {
+       "variable": "div",
+       "time": 1.0,
+       "expected": 2.0,
+       "coords": {
+        "cells": 1
+       }
+      },
+      {
+       "variable": "div",
+       "time": 1.0,
+       "expected": -0.5,
+       "coords": {
+        "cells": 2
+       }
+      },
+      {
+       "variable": "div",
+       "time": 1.0,
+       "expected": 1.5,
+       "coords": {
+        "cells": 3
+       }
+      },
+      {
+       "variable": "div",
+       "time": 1.0,
+       "expected": 12.0,
+       "coords": {
+        "cells": 4
+       }
+      },
+      {
+       "variable": "rowsum",
+       "time": 1.0,
+       "expected": 6.0,
+       "coords": {
+        "cells": 1
+       }
+      },
+      {
+       "variable": "rowsum",
+       "time": 1.0,
+       "expected": 7.0,
+       "coords": {
+        "cells": 2
+       }
+      },
+      {
+       "variable": "rowsum",
+       "time": 1.0,
+       "expected": 17.0,
+       "coords": {
+        "cells": 3
+       }
+      },
+      {
+       "variable": "rowsum",
+       "time": 1.0,
+       "expected": 6.0,
+       "coords": {
+        "cells": 4
+       }
+      },
+      {
+       "variable": "q",
+       "time": 1.0,
+       "expected": -2.0,
+       "coords": {
+        "cells": 1
+       }
+      },
+      {
+       "variable": "q",
+       "time": 1.0,
+       "expected": 0.5,
+       "coords": {
+        "cells": 2
+       }
+      },
+      {
+       "variable": "q",
+       "time": 1.0,
+       "expected": -1.5,
+       "coords": {
+        "cells": 3
+       }
+      },
+      {
+       "variable": "q",
+       "time": 1.0,
+       "expected": -12.0,
+       "coords": {
+        "cells": 4
+       }
+      },
+      {
+       "variable": "r",
+       "time": 1.0,
+       "expected": 6.0,
+       "coords": {
+        "cells": 1
+       }
+      },
+      {
+       "variable": "r",
+       "time": 1.0,
+       "expected": 7.0,
+       "coords": {
+        "cells": 2
+       }
+      },
+      {
+       "variable": "r",
+       "time": 1.0,
+       "expected": 17.0,
+       "coords": {
+        "cells": 3
+       }
+      },
+      {
+       "variable": "r",
+       "time": 1.0,
+       "expected": 6.0,
+       "coords": {
+        "cells": 4
+       }
+      }
+     ]
+    }
+   ]
+  }
+ }
+}
