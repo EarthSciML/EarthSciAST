@@ -4351,6 +4351,33 @@ impl<'m> TapeBuilder<'m> {
         {
             bail_tape!("aggregate: nested body depends on an enclosing bound index `{name}`");
         }
+        // A forward prefix scan (a `makearray` region value is the case that
+        // reaches here): the oracle evaluates this aggregate on its own, where
+        // `eval_faq` claims it as a scan, so it gets the running-fold lowering
+        // rather than the filtered triangular box `lower_faq` would build.
+        // Both fold each window ascending from the identity, so the bits
+        // agree either way; the scan is O(N) where the box is O(N^2).
+        let static_ranges = static_contract_ranges(&spec.contract_dims);
+        if let Some(scan) = detect_prefix_scan(
+            spec.idx_names,
+            &spec.ranges,
+            &spec.contract_names,
+            static_ranges.as_deref(),
+            spec.body,
+            spec.filter,
+        ) {
+            let level = self.enter_fault_level(Some(bx));
+            let v = self.lower_prefix_scan(
+                spec.idx_names,
+                &spec.ranges,
+                scan,
+                &spec.contract_names[0],
+                spec.body,
+                spec.reduce,
+            );
+            self.leave_fault_level(level);
+            return v;
+        }
         // A join gate drives the contraction: the tuple-list form.
         if spec.has_drivable_overlap() {
             return self.lower_tuple_contraction(
@@ -5984,8 +6011,10 @@ impl<'m> TapeBuilder<'m> {
     }
 
     /// `eval_makearray` mirror (wholesale): the bounding-box assembly around
-    /// region writes, with the same gates production applies before routing to
-    /// the overlay (`shape` non-empty, no prefix-scan region value).
+    /// region writes, with the gate production applies before routing to the
+    /// overlay (`shape` non-empty). A region value production sweeps as a
+    /// prefix scan (where it declines the overlay) lowers to the same running
+    /// fold, through [`Self::lower_nested_aggregate`].
     fn lower_wholesale_makearray(&mut self, node: &Arc<ExpressionNode>) -> LResult<LV> {
         let regions: &[Vec<[crate::types::RegionBound; 2]>] =
             node.regions.as_deref().unwrap_or(&[]);
@@ -6013,9 +6042,6 @@ impl<'m> TapeBuilder<'m> {
             .collect();
         if shape.contains(&0) {
             bail_tape!("makearray: empty bounding-box axis (per-cell path)");
-        }
-        if values.iter().any(region_value_is_prefix_scan) {
-            bail_tape!("makearray: prefix-scan region value (per-cell path)");
         }
         let bx = LBox {
             syms: &[],

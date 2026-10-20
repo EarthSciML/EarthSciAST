@@ -1407,6 +1407,135 @@ fn ab_prefix_scan_observeds() {
     assert_eq!(opcount(&prog, "Region"), 0, "no per-step region writes");
 }
 
+/// A `makearray` whose region value is a forward prefix scan (issue #533,
+/// the column-integral shape: the running sum on the interfaces below the
+/// top and the column total, or a zero, on the remaining one). The region
+/// lowers to the O(N) running fold, never the filtered triangular box.
+fn makearray_scan_doc(n: i64, ni: i64, variant: &str) -> serde_json::Value {
+    // `ni == 0` is the 1-D column; otherwise `ni` columns with the scan on
+    // the second (non-leading) axis.
+    let two_d = ni > 0;
+    let at = |var: &str, k: serde_json::Value| {
+        if two_d {
+            json!({"op": "index", "args": [var, "i", k]})
+        } else {
+            json!({"op": "index", "args": [var, k]})
+        }
+    };
+    let term = json!({"op": "*", "args": [at("u", json!("j")), at("dz", json!("j"))]});
+    let (out_idx, ranges, total_out, total_ranges) = if two_d {
+        (
+            json!(["i", "k"]),
+            json!({"i": [1, ni], "k": [1, n], "j": [1, n]}),
+            json!(["i"]),
+            json!({"i": [1, ni], "j": [1, n]}),
+        )
+    } else {
+        (
+            json!(["k"]),
+            json!({"k": [1, n], "j": [1, n]}),
+            json!([]),
+            json!({"j": [1, n]}),
+        )
+    };
+    let scan = |cmp: &str| {
+        json!({"op": "faq", "args": [], "output_idx": out_idx, "reduce": "+",
+            "ranges": ranges, "filter": {"op": cmp, "args": ["j", "k"]}, "expr": term})
+    };
+    let total = json!({"op": "faq", "args": [], "output_idx": total_out, "reduce": "+",
+        "ranges": total_ranges, "expr": term});
+    let region = |lo: i64, hi: i64| {
+        if two_d {
+            json!([[1, ni], [lo, hi]])
+        } else {
+            json!([[lo, hi]])
+        }
+    };
+    let f = match variant {
+        // Interfaces 1..n hold the exclusive scan, n+1 the total.
+        "from_bottom" => json!({"op": "makearray", "args": [],
+            "regions": [region(1, n), region(n + 1, n + 1)],
+            "values": [scan("<"), total]}),
+        // Interface 1 holds zero, 2..n+1 the inclusive scan.
+        "to_top" => json!({"op": "makearray", "args": [],
+            "regions": [region(1, 1), region(2, n + 1)],
+            "values": [0.0, scan("<=")]}),
+        _ => unreachable!(),
+    };
+    let shape = |k: &str| if two_d { json!(["i", k]) } else { json!([k]) };
+    let d_lhs = if two_d {
+        json!({"op": "faq", "args": [], "output_idx": ["i", "k"],
+            "expr": {"op": "D", "args": [at("u", json!("k"))], "wrt": "t"},
+            "ranges": {"i": [1, ni], "k": [1, n]}})
+    } else {
+        json!({"op": "faq", "args": [], "output_idx": ["k"],
+            "expr": {"op": "D", "args": [at("u", json!("k"))], "wrt": "t"},
+            "ranges": {"k": [1, n]}})
+    };
+    let mut rhs_ranges = json!({"k": [1, n]});
+    if two_d {
+        rhs_ranges["i"] = json!([1, ni]);
+    }
+    json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "tape_makearray_scan"},
+        "index_sets": {
+            "i": {"kind": "interval", "size": ni.max(1)},
+            "k": {"kind": "interval", "size": n},
+            "kn": {"kind": "interval", "size": n + 1}
+        },
+        "models": {"M": {
+            "variables": {
+                "u": {"type": "unknown", "shape": shape("k")},
+                "dz": {"type": "unknown", "shape": shape("k")},
+                "F": {"type": "unknown", "shape": shape("kn")}
+            },
+            "equations": [
+                {"lhs": "dz", "rhs": {"op": "faq", "args": [], "output_idx": out_idx.clone(),
+                    "ranges": rhs_ranges.clone(),
+                    "expr": {"op": "+", "args": [0.5, {"op": "*", "args": [0.01, "k"]}]}}},
+                {"lhs": "F", "rhs": f},
+                {"lhs": d_lhs,
+                 "rhs": {"op": "faq", "args": [], "output_idx": out_idx, "ranges": rhs_ranges,
+                    "expr": {"op": "*", "args": [-0.1, {"op": "-", "args": [
+                        at("F", json!({"op": "+", "args": ["k", 1]})),
+                        at("F", json!("k"))]}]}}}
+            ]
+        }}
+    })
+}
+
+#[test]
+fn ab_makearray_prefix_scan_region() {
+    for variant in ["from_bottom", "to_top"] {
+        for ni in [0, 3] {
+            let n = 7;
+            let prog = ab_check(makearray_scan_doc(n, ni, variant), -2.0, 2.0);
+            assert_eq!(
+                opcount(&prog, "Scan") + scan_micro_ops(&prog),
+                1,
+                "[{variant}, ni={ni}] the scan region is one running fold"
+            );
+        }
+    }
+}
+
+/// The region's slab stays O(N): the triangular box would hold N^2 cells.
+#[test]
+fn makearray_prefix_scan_region_is_linear_in_the_column() {
+    let n = 3000;
+    for variant in ["from_bottom", "to_top"] {
+        let compiled = compile(makearray_scan_doc(n, 0, variant));
+        let (prog, _) = taped(compiled.build_tape_opts(&HashSet::new(), Some(default_cfg())));
+        let widest = prog.slots.iter().map(|s| s.elems()).max().unwrap_or(0);
+        assert!(
+            widest <= n as usize + 1,
+            "[{variant}] a slot of {widest} cells: the scan was lowered as a box"
+        );
+        assert_eq!(opcount(&prog, "Scan") + scan_micro_ops(&prog), 1);
+    }
+}
+
 /// Absorbed scans (`MicroOp::Scan`) over every fused group.
 fn scan_micro_ops(prog: &TapeProgram) -> usize {
     prog.fused

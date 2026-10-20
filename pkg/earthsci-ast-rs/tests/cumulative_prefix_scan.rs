@@ -449,3 +449,88 @@ fn shared_cumulative_fixtures_satisfy_their_inline_assertions() {
         }
     }
 }
+
+/// Issue #533: the column-integral shape, a `makearray` whose region value is
+/// a forward prefix scan (`F[kn] = Σ_{j<kn} f[j] dz[j]` on the interfaces
+/// below the top, the column total on the top one). Strict `native` builds it
+/// and its construction-time observed matches the reference evaluator's bits,
+/// at a column long enough that a triangular fold would be N^2 work.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn native_builds_a_makearray_with_a_prefix_scan_region_bit_identically() {
+    use earthsci_ast::{Compiler, ProblemOptions, esm_problem, observed_field};
+
+    let doc = |n: i64, variant: &str| {
+        let term = json!({"op": "*", "args": [
+            {"op": "index", "args": ["f", "j"]}, {"op": "index", "args": ["dz", "j"]}]});
+        let scan = |cmp: &str| {
+            json!({"op": "faq", "args": [], "output_idx": ["k"], "reduce": "+",
+                "ranges": {"k": {"from": "lev"}, "j": {"from": "lev"}},
+                "filter": {"op": cmp, "args": ["j", "k"]}, "expr": term})
+        };
+        let total = json!({"op": "faq", "args": [], "output_idx": [], "reduce": "+",
+            "ranges": {"j": {"from": "lev"}}, "expr": term});
+        let body = match variant {
+            "from_bottom" => json!({"op": "makearray", "args": [],
+                "regions": [[[1, n]], [[n + 1, n + 1]]], "values": [scan("<"), total]}),
+            _ => json!({"op": "makearray", "args": [],
+                "regions": [[[1, 1]], [[2, n + 1]]], "values": [0.0, scan("<=")]}),
+        };
+        json!({
+            "esm": "1.1.0",
+            "metadata": {"name": "MakearrayScan"},
+            "index_sets": {
+                "lev": {"kind": "interval", "size": n},
+                "lev_nodes": {"kind": "interval", "size": n + 1}
+            },
+            "models": {"M": {
+                "variables": {
+                    "f": {"type": "unknown", "units": "1", "shape": ["lev"]},
+                    "dz": {"type": "unknown", "units": "1", "shape": ["lev"]},
+                    "F": {"type": "unknown", "units": "1", "shape": ["lev_nodes"]},
+                    "w": {"type": "unknown", "units": "1", "shape": ["lev_nodes"]}
+                },
+                "equations": [
+                    {"lhs": {"op": "ic", "args": ["w"]}, "rhs": 0.0},
+                    {"lhs": "f", "rhs": {"op": "faq", "args": [], "output_idx": ["k"],
+                        "ranges": {"k": {"from": "lev"}},
+                        "expr": {"op": "+", "args": [1.0, {"op": "cos", "args": [
+                            {"op": "*", "args": [0.37, "k"]}]}]}}},
+                    {"lhs": "dz", "rhs": {"op": "faq", "args": [], "output_idx": ["k"],
+                        "ranges": {"k": {"from": "lev"}},
+                        "expr": {"op": "/", "args": [{"op": "+", "args": [1.0,
+                            {"op": "*", "args": [0.01, "k"]}]}, n]}}},
+                    {"lhs": "F", "rhs": body},
+                    {"lhs": {"op": "D", "args": ["w"], "wrt": "t"}, "rhs": "F"}
+                ]
+            }}
+        })
+    };
+    for variant in ["from_bottom", "to_top"] {
+        for n in [5i64, 20_000] {
+            let d = doc(n, variant);
+            let build = |compiler| {
+                esm_problem(
+                    &d,
+                    (0.0, 1.0),
+                    ProblemOptions {
+                        compiler: Some(compiler),
+                        ..Default::default()
+                    },
+                )
+                .unwrap_or_else(|e| panic!("[{variant}, n={n}, {compiler}] {e}"))
+            };
+            let bits = |p: &earthsci_ast::EsmProblem| -> Vec<u64> {
+                observed_field(p, "M.F")
+                    .expect("F")
+                    .iter()
+                    .map(|x| x.to_bits())
+                    .collect()
+            };
+            let native = bits(&build(Compiler::Native));
+            let interp = bits(&build(Compiler::Interpreter));
+            assert_eq!(native.len(), n as usize + 1);
+            assert_eq!(native, interp, "[{variant}, n={n}]");
+        }
+    }
+}
