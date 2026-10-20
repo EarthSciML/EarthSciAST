@@ -1772,9 +1772,10 @@ end
         return _eval_contraction(n, u, p, t, T)
     elseif k === _NK_LOOPVAR
         # Current value of the enclosing runtime contraction loop counter
-        # (ess-runtime-contraction). Always an INTEGER (a contracted index), so
-        # `T(::Int)` is a constant of the value type — zero derivative under AD.
-        return T((n.payload::Base.RefValue{Int})[])
+        # (ess-runtime-contraction). Always an INTEGER (a contracted index),
+        # read as a `Float64` like the literal the unroll puts in its place, so
+        # arithmetic on it differentiates as the unroll's does.
+        return Float64((n.payload::Base.RefValue{Int})[])
     elseif k === _NK_CONTRACTION_LOOP
         return _eval_contraction_loop(n, u, p, t, T)
     elseif k === _NK_RAGGED_LOOP
@@ -1902,7 +1903,8 @@ function _eval_contraction_loop(n::_Node, u, p, t, ::Type{T}) where {T}
 end
 
 # `_RaggedLoop`'s fold (see there): the bounds are evaluated first, lower then
-# upper, then the terms in range order, the first seeding the accumulator.
+# upper, then the terms in range order, the first seeding the accumulator. An
+# empty row is the `Float64` 0̄, as the per-cell build's literal for it is.
 function _eval_ragged_loop(n::_Node, u, p, t, ::Type{T}) where {T}
     spec = n.payload::_RaggedLoop
     ref = spec.ref
@@ -1911,7 +1913,7 @@ function _eval_ragged_loop(n::_Node, u, p, t, ::Type{T}) where {T}
     lo = round(Int, _eval_node(@inbounds(ch[2]), u, p, t, T))
     hi = round(Int, _eval_node(@inbounds(ch[3]), u, p, t, T))
     rng = lo:spec.step:hi
-    isempty(rng) && return T(n.literal)
+    isempty(rng) && return n.literal
     op = n.op
     ref[] = first(rng)
     s = _eval_node(body, u, p, t, T)

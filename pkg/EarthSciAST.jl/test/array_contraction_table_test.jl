@@ -423,4 +423,126 @@ end
         @test all(isequal.(dn, di))
         @test di == [i in 3:(n - 2) ? -0.5 * (0.1i + 0.3) + i : -Inf for i in 1:n]
     end
+
+    # A ragged contraction READ IN EXPRESSION POSITION (issue #534): the MPAS
+    # divergence `D(u) = -div(F)` lowers to `-(faq)` over a ragged
+    # `edges_of_cell` range, which the pointwise lift reads as
+    # `-(index(faq, i))`. With `i` a loop counter of the nest, each cell folds
+    # its own row through a run-time bound (`_NK_RAGGED_LOOP`), first-term
+    # seeded like the per-cell expansion; the code is the same at every mesh
+    # size, and no cell reaches the per-cell build.
+    @testset "a gather of a ragged contraction, MPAS-shaped" begin
+        idx(v, a...) = Dict("op" => "index", "args" => Any[v, a...])
+        op(o, a...) = Dict("op" => o, "args" => Any[a...])
+        cst(v) = Dict("op" => "const", "args" => Any[], "value" => v)
+        ragged(expr, reduce = "+") = Dict{String,Any}("op" => "faq", "args" => Any[],
+            "output_idx" => Any["i"], "reduce" => reduce,
+            "ranges" => Dict("i" => Dict("from" => "cells"),
+                             "k" => Dict("from" => "edges_of_cell", "of" => Any["i"])),
+            "expr" => expr)
+        # Rows of 5..7 edges like an MPAS mesh, one empty row, the edge ids a
+        # permutation-like scatter so neighbouring cells read distant edges.
+        function mesh_doc(n; sgn_zero = false)
+            lens = [i == 2 ? 0 : 5 + mod(i, 3) for i in 1:n]
+            mx, ne = 7, 3n
+            eoc = [[k <= lens[i] ? 1 + mod(7i + 13k, ne) : 0 for k in 1:mx] for i in 1:n]
+            sgn = [[k <= lens[i] ? (isodd(i + k) ? 1.0 : -1.0) : 0.0 for k in 1:mx]
+                   for i in 1:n]
+            term = op("/", op("*", idx("sgn", "i", "k"), idx("F", idx("eoc", "i", "k"))),
+                      op("+", 1.0, op("*", 0.1, "i")))
+            Dict{String,Any}("esm" => "1.2.0", "metadata" => Dict("name" => "act_mpas"),
+                "index_sets" => Dict(
+                    "cells" => Dict("kind" => "interval", "size" => n),
+                    "edges" => Dict("kind" => "interval", "size" => ne),
+                    "maxe" => Dict("kind" => "interval", "size" => mx),
+                    "edges_of_cell" => Dict("kind" => "ragged", "of" => Any["cells"],
+                                            "offsets" => "nE", "values" => "eoc")),
+                "models" => Dict("M" => Dict{String,Any}(
+                    "variables" => Dict(
+                        "nE" => Dict("type" => "unknown", "shape" => Any["cells"]),
+                        "eoc" => Dict("type" => "unknown", "shape" => Any["cells", "maxe"]),
+                        "sgn" => Dict("type" => "unknown", "shape" => Any["cells", "maxe"]),
+                        "F" => Dict("type" => "unknown", "shape" => Any["edges"]),
+                        "u" => Dict("type" => "unknown", "shape" => Any["cells"]),
+                        "v" => Dict("type" => "unknown", "shape" => Any["cells"])),
+                    "equations" => Any[
+                        Dict("lhs" => "nE", "rhs" => cst(lens)),
+                        Dict("lhs" => "eoc", "rhs" => cst(eoc)),
+                        Dict("lhs" => "sgn", "rhs" => cst(sgn)),
+                        Dict("lhs" => op("D", "F"), "rhs" => op("*", -0.1, "F")),
+                        # The divergence, negated outside the sum.
+                        Dict("lhs" => op("D", "u"), "rhs" => op("-", ragged(term))),
+                        # A max over the row, scaled and combined outside it.
+                        Dict("lhs" => op("D", "v"),
+                             "rhs" => op("+", op("*", 0.3, ragged(term, "max")),
+                                         op("*", -0.2, "v")))])))
+        end
+        function rgens(f)
+            out = Any[]
+            seen = IdDict{Any,Nothing}()
+            walk(x) = begin
+                T = typeof(x)
+                (isbitstype(T) || x isa AbstractString || x isa Symbol || x isa Module) &&
+                    return
+                if ismutable(x)
+                    haskey(seen, x) && return
+                    seen[x] = nothing
+                end
+                if x isa _ACT._ArrayContraction
+                    push!(out, x)
+                elseif x isa Array
+                    eltype(x) <: Number && return
+                    for i in eachindex(x); isassigned(x, i) && walk(x[i]); end
+                elseif !(x isa AbstractDict)
+                    for i in 1:nfields(x); isdefined(x, i) && walk(getfield(x, i)); end
+                end
+            end
+            walk(f)
+            return out
+        end
+        nodes = Int[]
+        for n in (9, 23)
+            path = joinpath(mktempdir(), "act_mpas.esm")
+            open(io -> JSON3.write(io, mesh_doc(n)), path, "w")
+            same, tally, tiers, (pn, u), (pi_, ui) = _act_agree(path)
+            @test same
+            @test get(tally, :array_contraction_codegen, 0) == 2
+            @test !haskey(tiers, :percell_build)
+            push!(nodes, _act_emitted(pn.f!))
+            # The empty row is 0̄: `-(0.0)` for the sum, and the scaled -Inf
+            # of `max` plus the decay for the other.
+            du = _act_du(pn, u)
+            @test du[pn.var_map["M.u[2]"]] === -0.0
+            @test du[pn.var_map["M.v[2]"]] == -Inf
+            # Signed zeros: at F = 0 every term is ±0.0, and a lone first
+            # term keeps its sign where a 0̄-seeded fold would not.
+            z = copy(u); zi = copy(ui)
+            for (k, j) in pi_.var_map
+                startswith(k, "M.F[") && (z[pn.var_map[k]] = 0.0; zi[j] = 0.0)
+            end
+            dz, dzi = _act_du(pn, z), _act_du(pi_, zi)
+            @test all(dz[pn.var_map[k]] === dzi[j] for (k, j) in pi_.var_map)
+            # Each contraction's cell chunks reproduce its serial pass.
+            for g in rgens(pn.f!)
+                ds = fill(NaN, length(u)); g.f(ds, u, pn.p, 0.3, g.tabs, 1, 1)
+                dc = fill(NaN, length(u))
+                for c in 1:3
+                    g.f(dc, u, pn.p, 0.3, g.tabs, c, 3)
+                end
+                @test all(ds .=== dc)
+            end
+            if VERSION >= v"1.12"
+                @test (@allocated pn.f!(du, u, pn.p, 0.0)) == 0
+            end
+            seed = Float64[0.2 + 0.01 * cos(i) for i in eachindex(u)]
+            seedi = similar(seed)
+            for (k, j) in pi_.var_map
+                seedi[j] = seed[pn.var_map[k]]
+            end
+            gn = ForwardDiff.derivative(s -> _act_du(pn, u .+ s .* seed), 0.0)
+            gi = ForwardDiff.derivative(s -> _act_du(pi_, ui .+ s .* seedi), 0.0)
+            @test all(gn[pn.var_map[k]] == gi[j] for (k, j) in pi_.var_map)
+        end
+        @test allequal(nodes)
+    end
 end

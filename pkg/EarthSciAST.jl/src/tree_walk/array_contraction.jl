@@ -154,9 +154,12 @@ function _cg_emit(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
     elseif k === _NK_LOOPVAR
         s = get(kc.loops, nd.payload, nothing)
         s === nothing && throw(_CodegenDecline(:loopvar_out_of_scope))
-        # `T(ref[])` — a contracted or output index is an integer, so this is a
-        # constant of the value type and carries no derivative.
-        return :(_cgT($s))
+        # A contracted or output index is an integer, read as the `Float64`
+        # the per-cell build's literal for it is: under a `Dual` value type a
+        # counter converted to the value type would take arithmetic on it
+        # through the dual rules (a division by `1 + 0.1i` differentiates as
+        # a quotient of duals) and round its partials differently.
+        return :(Float64($s))
     elseif k === _NK_CONTRACTION
         # Seeded sequential ⊕-fold in child order, `_eval_contraction` arm for
         # arm (the seed is the node's 0̄, a `Float64` there and here).
@@ -183,7 +186,8 @@ function _cg_emit(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
 end
 
 # `_NK_RAGGED_LOOP`, `_eval_ragged_loop` statement for statement: the bounds
-# in order, 0̄ for an empty row, else the first term seeding the accumulator
+# in order, the `Float64` 0̄ for an empty row (the per-cell build's literal),
+# else the first term seeding the accumulator
 # and the rest folded into it. The body is emitted twice (the peeled first
 # term and the loop), which keeps the accumulator one type.
 function _cg_ragged_loop(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
@@ -205,7 +209,7 @@ function _cg_ragged_loop(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
     return quote
         let $lo = round(Int, $lox), $hi = round(Int, $hix)
             if isempty($lo:$st:$hi)
-                _cgT($(nd.literal))
+                $(nd.literal)
             else
                 local $acc = let $kv = $lo
                     $first_term
