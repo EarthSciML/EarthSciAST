@@ -2,14 +2,15 @@
 
 A prefix reduction is an ordinary ``faq`` whose ``filter`` compares the
 contracted index against an output index. Evaluated literally it is a triangular
-double loop; the interpreter recognizes the FORWARD rows (``<=``, ``<``) and
-collapses them to one ``ufunc.accumulate`` sweep.
+double loop; the native compiler collapses it to one ``ufunc.accumulate`` sweep.
 
-The rewrite is only legitimate because it is **bit-identical** to the
-ascending-``j`` fold the spec pins as normative, so that is what these tests
-assert — not "close enough". They also pin the reverse rows as *declined*: each
-reverse cell folds its own suffix from that suffix's low end, so consecutive
-cells share no partial result and a right-to-left accumulator would re-associate.
+The rewrite is only legitimate because it is **bit-identical** to the fold order
+the spec pins as normative, so that is what these tests assert — not "close
+enough". A FORWARD window (``<=``, ``<``) folds ascending from its low end. A
+REVERSE window (``>=``, ``>``) under an inexact ⊕ (``+``, ``*``) folds
+DESCENDING from its high end, ``((b_N ⊕ b_{N-1}) ⊕ …) ⊕ b_i``, so one
+right-to-left accumulator is exactly the definition; under ``max`` / ``min`` it
+folds ascending. Both the interpreter and native must produce those bits.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from earthsci_ast.compiler import CompilerPolicy, use_policy
 from earthsci_ast.esm_types import ExprNode
 from earthsci_ast.numpy_interpreter import EvalContext, eval_expr
 
@@ -73,7 +75,8 @@ _COMBINE = {
 
 def _oracle(u: np.ndarray, cmp: str, reduce_op: str) -> np.ndarray:
     """The triangular double loop written out literally, folding the admitted
-    window in ascending ``j``. This is the semantics the spec defines."""
+    window in the order the spec defines: ascending ``j``, except a reverse
+    window under ``+`` / ``*``, which folds descending."""
     n = len(u)
     admits = {
         "<=": lambda j, i: j <= i,
@@ -82,10 +85,12 @@ def _oracle(u: np.ndarray, cmp: str, reduce_op: str) -> np.ndarray:
         ">": lambda j, i: j > i,
     }[cmp]
     combine = _COMBINE[reduce_op]
+    descending = cmp in (">=", ">") and reduce_op in ("+", "*")
+    order = range(n, 0, -1) if descending else range(1, n + 1)
     out = []
     for i in range(1, n + 1):
         acc = _IDENTITY[reduce_op]
-        for j in range(1, n + 1):
+        for j in order:
             if admits(j, i):
                 acc = combine(acc, float(u[j - 1]))
         out.append(acc)
@@ -124,16 +129,39 @@ def test_forward_scans_are_bit_identical_to_the_triangular_oracle(n, cmp, reduce
     _assert_bit_identical(got, _oracle(u, cmp, reduce_op), f"n={n} {cmp} {reduce_op}")
 
 
+@pytest.mark.parametrize("n", [1, 2, 5, 40, 257])
+@pytest.mark.parametrize("cmp", [">=", ">"])
+@pytest.mark.parametrize("reduce_op", ["+", "*"])
+@pytest.mark.parametrize("compiler", ["native", "interpreter"])
+def test_reverse_scans_fold_descending_bit_for_bit(n, cmp, reduce_op, compiler):
+    """A reverse window under ``+`` / ``*`` folds from its high end, in the
+    reference evaluator and in native's right-to-left accumulate alike."""
+    u = _catastrophic(n)
+    policy = CompilerPolicy(compiler=compiler, every_tier_off=compiler == "interpreter")
+    with use_policy(policy):
+        got = eval_expr(_prefix_agg(cmp, n, reduce_op), _ctx(u))
+    _assert_bit_identical(got, _oracle(u, cmp, reduce_op), f"{compiler} n={n} {cmp} {reduce_op}")
+    if compiler == "native":
+        assert policy.report.tiers().get("prefix-scan")
+
+
+def test_a_reverse_sum_is_not_the_ascending_fold():
+    """The catastrophic input separates the two orders, so the test above bites."""
+    u = _catastrophic(40)
+    got = np.asarray(eval_expr(_prefix_agg(">=", 40, "+"), _ctx(u)), dtype=float).ravel()
+    ascending = [sum(float(x) for x in u[i:]) for i in range(40)]
+    assert any(np.float64(g).tobytes() != np.float64(a).tobytes() for g, a in zip(got, ascending))
+
+
 @pytest.mark.parametrize("n", [1, 5, 40])
 @pytest.mark.parametrize("cmp", [">=", ">"])
-@pytest.mark.parametrize("reduce_op", ["+", "max", "min"])
-def test_reverse_scans_still_evaluate_correctly(n, cmp, reduce_op):
-    """Declined by the scan detector; they must still produce the right answer
-    through the general paths."""
+@pytest.mark.parametrize("reduce_op", ["max", "min"])
+def test_reverse_extremum_scans_still_evaluate_correctly(n, cmp, reduce_op):
+    """``max`` / ``min`` are exact in either order; the scan tier leaves their
+    reverse rows to the general paths."""
     u = _catastrophic(n)
     got = np.asarray(eval_expr(_prefix_agg(cmp, n, reduce_op), _ctx(u)), dtype=float).ravel()
-    want = _oracle(u, cmp, reduce_op)
-    assert got == pytest.approx(want, rel=1e-12, abs=0.0)
+    _assert_bit_identical(got, _oracle(u, cmp, reduce_op), f"n={n} {cmp} {reduce_op}")
 
 
 @pytest.mark.parametrize(

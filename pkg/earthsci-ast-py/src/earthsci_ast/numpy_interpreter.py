@@ -4549,15 +4549,11 @@ def _expr_mentions(node: Expr, name: str) -> bool:
     return False
 
 
-def _match_forward_prefix_filter(filter_expr: Expr | None) -> tuple[str, str, bool] | None:
-    """Match a FORWARD prefix-scan filter, returning ``(j_name, i_name, inclusive)``.
-
-    Recognizes ``j <= i`` / ``j < i`` and their mirrored spellings ``i >= j`` /
-    ``i > j``. The reverse rows are deliberately NOT matched: each reverse output
-    cell folds its own suffix from that suffix's low end, so consecutive cells
-    share no partial result and any right-to-left accumulation would re-associate
-    (esm-spec §4.3.1).
-    """
+def _match_scan_filter(filter_expr: Expr | None) -> tuple[str, str, bool] | None:
+    """Match a scan filter as ``(lo, hi, inclusive)``: the comparison ``lo <= hi``
+    (``lo < hi`` when not inclusive) between two bare symbols, in any of its
+    spellings (``a <= b``, ``a < b``, ``b >= a``, ``b > a``). Which of the two is
+    the contracted index decides the direction (:func:`_scan_direction`)."""
     if not isinstance(filter_expr, ExprNode) or len(filter_expr.args or []) != 2:
         return None
     lhs, rhs = filter_expr.args[0], filter_expr.args[1]
@@ -4571,6 +4567,40 @@ def _match_forward_prefix_filter(filter_expr: Expr | None) -> tuple[str, str, bo
     return None
 
 
+def _scan_direction(
+    filter_expr: Expr | None, reduce_syms: list[str], out_syms: list[str]
+) -> tuple[bool, str, str, bool] | None:
+    """``(forward, j, i, inclusive)`` for a cumulative-scan filter (esm-spec
+    §4.3.1) over exactly one contracted index ``j`` and an output index ``i``:
+    FORWARD for ``j <= i`` / ``j < i`` (a prefix window), REVERSE for
+    ``j >= i`` / ``j > i`` (a suffix window, "to-top"). ``None`` otherwise."""
+    if len(reduce_syms) != 1:
+        return None
+    matched = _match_scan_filter(filter_expr)
+    if matched is None:
+        return None
+    lo, hi, inclusive = matched
+    j = reduce_syms[0]
+    if lo == j and hi in out_syms:
+        return True, j, hi, inclusive
+    if hi == j and lo in out_syms:
+        return False, j, lo, inclusive
+    return None
+
+
+def _folds_descending(
+    filter_expr: Expr | None, reduce_syms: list[str], out_syms: list[str], reducer: str
+) -> bool:
+    """Whether the node is a REVERSE scan under an inexact ⊕, whose window
+    esm-spec §4.3.1 folds DESCENDING — from its high end, as
+    ``((b_N ⊕ b_{N-1}) ⊕ …) ⊕ b_i`` — so that one right-to-left running
+    accumulator is exactly the definition. Every other window folds ascending."""
+    if reducer not in ("+", "*"):
+        return False
+    d = _scan_direction(filter_expr, reduce_syms, out_syms)
+    return d is not None and not d[0]
+
+
 def _eval_faq_prefix_scan(
     expr: ExprNode,
     ctx: EvalContext,
@@ -4582,7 +4612,7 @@ def _eval_faq_prefix_scan(
     reducer: str,
     empty_zero: float,
 ) -> np.ndarray | None:
-    """`O(N)` fast path for a FORWARD cumulative (prefix) reduction, esm-spec §4.3.1.
+    """`O(N)` fast path for a cumulative (prefix or suffix) reduction, esm-spec §4.3.1.
 
     A prefix reduction reaches the general reducing paths as a full triangular
     box: ``N`` output cells × ``N`` contracted terms, of which half are masked
@@ -4592,17 +4622,20 @@ def _eval_faq_prefix_scan(
 
     It is also *more* conformant, not merely faster. ``ufunc.reduce`` over the
     dense box sums pairwise, whereas ``ufunc.accumulate`` is a sequential left
-    fold — exactly the ascending-``j`` fold the spec pins as normative and the
-    order the scalar oracle and the Rust binding use. So this path makes a prefix
-    sum bit-identical across bindings where the dense path was merely close.
+    fold — exactly the ascending-``j`` fold the spec pins as normative for a
+    forward window, and run over the reversed axis, the descending fold it pins
+    for a reverse (``j >= i``) window under ``+`` / ``*``. Both are the orders the
+    scalar oracle and the other bindings use, so this path makes a scan
+    bit-identical across bindings where the dense path was merely close.
 
     Declines (``None``) — leaving the general paths to handle it — unless every
     precondition holds. Each is a correctness requirement, not a heuristic:
 
     * exactly one contracted index, named by the filter (otherwise the admitted
       set is not a prefix of a single axis);
-    * the filter is exactly a forward comparison against an output symbol, with
-      no conjunction, so "admitted" and "j ≤ i" coincide;
+    * the filter is exactly a comparison against an output symbol, with no
+      conjunction, so "admitted" and "j ≤ i" (or "j ≥ i") coincide; a reverse
+      window only under ``+`` / ``*``, the ⊕ whose suffix folds descending;
     * the contracted range equals the scanned output range, so ``j = i`` is the
       term entering the window at step ``i``;
     * the body does not read the scanned symbol — if it did, every cell's summand
@@ -4621,17 +4654,18 @@ def _eval_faq_prefix_scan(
             "index over a non-empty output box",
         )
 
-    matched = _match_forward_prefix_filter(getattr(expr, "filter", None))
-    if matched is None:
+    direction = _scan_direction(getattr(expr, "filter", None), reduce_syms, out_syms)
+    if direction is None:
         return _decline(
             "prefix-scan",
-            "the filter is not exactly a forward comparison (a reverse scan is not matched)",
+            "the filter is not exactly a comparison of the contracted index against an "
+            "output index",
         )
-    j_name, i_name, inclusive = matched
-    if j_name != reduce_syms[0] or i_name not in out_syms:
-        return _decline(
-            "prefix-scan", "the compared symbols are not the contracted index and an output index"
-        )
+    forward, j_name, i_name, inclusive = direction
+    if not forward and reducer not in ("+", "*"):
+        # The per-cell walk folds a max/min suffix ascending; only the inexact
+        # ⊕ are defined to fold a suffix from its high end.
+        return _decline("prefix-scan", f"a reverse scan under ⊕ {reducer!r} folds ascending")
     scan_axis = out_syms.index(i_name)
 
     # `j = i` must be the newly admitted term at step `i`: same interval.
@@ -4665,15 +4699,26 @@ def _eval_faq_prefix_scan(
             f"{type(exc).__name__}: {exc}",
         )
 
-    with np.errstate(divide="ignore", invalid="ignore"):
-        acc = ufunc.accumulate(np.ascontiguousarray(terms), axis=terms.ndim - 1)
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+        if forward:
+            acc = ufunc.accumulate(np.ascontiguousarray(terms), axis=terms.ndim - 1)
+        else:
+            # A reverse scan folds each suffix from its HIGH end (§4.3.1), so one
+            # accumulator running right to left is exactly the definition.
+            rev = np.ascontiguousarray(terms[..., ::-1])
+            acc = ufunc.accumulate(rev, axis=terms.ndim - 1)[..., ::-1]
     acc = np.asarray(acc, dtype=float)
     if not inclusive:
-        # `<`: cell k sees only strictly-earlier terms, so shift right by one and
-        # seed cell 0 with the identity — the empty reduction, not an error.
+        # Strict: cell k sees only the terms strictly before (forward) or after
+        # (reverse) it, so shift by one and seed the end cell with the identity —
+        # the empty reduction, not an error.
         shifted = np.empty_like(acc)
-        shifted[..., :1] = empty_zero
-        shifted[..., 1:] = acc[..., :-1]
+        if forward:
+            shifted[..., :1] = empty_zero
+            shifted[..., 1:] = acc[..., :-1]
+        else:
+            shifted[..., -1:] = empty_zero
+            shifted[..., :-1] = acc[..., 1:]
         acc = shifted
 
     # Move the scanned axis from last position back to where it sits in out_syms.
@@ -4736,6 +4781,10 @@ def _eval_faq_scalar(
         )
 
     cartesian_red = _cartesian(red_ranges_exp) if reduce_syms else [()]
+    if not gates and _folds_descending(filter_expr, reduce_syms, out_syms, reducer):
+        # A reverse (to-top) scan folds its suffix window from the high end
+        # (esm-spec §4.3.1).
+        cartesian_red = cartesian_red[::-1]
 
     out = np.zeros(out_shape, dtype=float)
     for multi_idx, local_binding in _iter_output_cells(out_syms, out_ranges_exp, out_shape):
