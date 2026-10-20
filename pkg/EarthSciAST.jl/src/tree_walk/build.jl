@@ -5356,7 +5356,16 @@ function _scan_fold_slots!(slots::Vector{Int}, blk, var_map, vname::String,
     nd = length(outer_iters)
     cell = Vector{Int}(undef, length(forms))
     loop = Vector{Int}(undef, nd)
-    for outer in Iterators.product(outer_iters...)
+    # Behind a barrier, so the lane loop runs at the product's concrete type.
+    return _scan_fold_slots_lanes!(slots, blk, var_map, vname, forms, axis,
+                                   Iterators.product(outer_iters...), scan_range,
+                                   cell, loop, nd)
+end
+function _scan_fold_slots_lanes!(slots::Vector{Int}, blk, var_map, vname::String,
+                                 forms::Vector{Tuple{Int,Int,Int}}, axis::Int,
+                                 lanes, scan_range, cell::Vector{Int},
+                                 loop::Vector{Int}, nd::Int)
+    for outer in lanes
         for d in 1:nd
             loop[d] = outer[d]
         end
