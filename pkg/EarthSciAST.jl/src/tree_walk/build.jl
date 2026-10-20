@@ -2822,12 +2822,12 @@ function _compile_discrete_fill(name::String, def::OpExpr, dims::Vector{Int},
     blk = name => (ones(Int, nd), copy(dims))
     L = StateLayout(String[], [blk])
     avi = Dict{String,Tuple{Vector{Int},Vector{Int}}}(blk)
-    feq = _materialized_fill_equation(name, def, dims)
+    feqs = _materialized_fill_equations(name, def, dims)
     rec = _build_record()
     n0 = rec === nothing ? 0 : length(rec.rules)
     se, pcs, aks, sfs, acs = _with_own_state_slot_tables() do
         _with_rule_alias(name, name) do
-            _compile_derivative_equations(Equation[feq], resolved_obs, avi, L,
+            _compile_derivative_equations(feqs, resolved_obs, avi, L,
                 const_arrays, pgather, param_sym_set, reg_funcs, length(cvec))
         end
     end
@@ -3040,6 +3040,97 @@ function _materialized_fill_equation(name::String, def::ASTExpr, dims::Vector{In
                  expr_body=OpExpr("D", ASTExpr[OpExpr("index", idx_args)]; wrt="t"))
     rhs = OpExpr("index", ASTExpr[def, (VarExpr(l) for l in loops)...])
     return Equation(lhs, rhs)
+end
+
+# The fill equations of one materialized array observed: the single gather-form
+# equation above, or, for a `makearray` with a filtered or join-gated aggregate
+# region value, one equation per REGION.
+#
+# Why per region: with the cell index symbolic, `index(makearray(...), i…)`
+# cannot pick its region, so the whole fill declines every compile-once tier and
+# is left to the per-cell build. A region value that CONTRACTS through a filter
+# is then a per-cell triangular fold, and a strict compiler refuses it. A
+# prefix-scan region (esm-spec §4.3.1) beside a rank-0 column-total region
+# (`integral_lev_nodes_cumulative_from_bottom` in EarthSciDiscretizations) is
+# the shape. Each region's equation runs over that region's own box and carries
+# exactly the value `_resolve_index_of_makearray` picks for its cells:
+#   * an array producer of the makearray's rank, as the gather
+#     `index(<value>, i…)` (unwrapped to the bare aggregate downstream, which is
+#     what lets `_detect_prefix_scan` see a scan);
+#   * an array producer of lower rank, as the gather at the region's
+#     non-singleton axes;
+#   * anything else (a rank-0 aggregate, a scalar expression), bare: its value
+#     does not depend on the cell.
+#
+# Split only when the regions are constant, pairwise disjoint and tile the whole
+# box, so "last region wins" and the 0 default for uncovered cells never arise
+# and the per-region equations write each cell exactly once. The reference build
+# (`compiler=:interpreter`, affine tier off) keeps the one gather equation, so
+# the oracle is untouched.
+function _materialized_fill_equations(name::String, def::ASTExpr, dims::Vector{Int})
+    split = _stencil_disabled() ? nothing : _makearray_region_fills(name, def, dims)
+    return split === nothing ? Equation[_materialized_fill_equation(name, def, dims)] : split
+end
+
+_region_bound_int(x::Integer) = Int(x)
+_region_bound_int(x::ASTExpr) = _try_const_int(x, Dict{String,Any}())
+_region_bound_int(x) = nothing
+
+_is_gated_aggregate(v) = v isa OpExpr && _is_faq_op((v::OpExpr).op) &&
+    ((v::OpExpr).filter !== nothing || (v::OpExpr).join_gates !== nothing)
+
+function _makearray_region_fills(name::String, def::ASTExpr, dims::Vector{Int})
+    def isa OpExpr || return nothing
+    ma = def::OpExpr
+    ma.op == "makearray" || return nothing
+    (ma.regions === nothing || ma.values === nothing) && return nothing
+    regions, values = ma.regions, ma.values
+    (isempty(regions) || length(regions) != length(values)) && return nothing
+    any(_is_gated_aggregate, values) || return nothing
+    nd = length(dims)
+    boxes = Vector{Vector{Tuple{Int,Int}}}()
+    for region in regions
+        length(region) == nd || return nothing
+        box = Tuple{Int,Int}[]
+        for d in 1:nd
+            length(region[d]) == 2 || return nothing
+            lo = _region_bound_int(region[d][1])
+            hi = _region_bound_int(region[d][2])
+            (lo === nothing || hi === nothing) && return nothing
+            1 <= lo <= hi <= dims[d] || return nothing
+            push!(box, (lo, hi))
+        end
+        push!(boxes, box)
+    end
+    overlap(a, b) = all(max(a[d][1], b[d][1]) <= min(a[d][2], b[d][2]) for d in 1:nd)
+    for r in eachindex(boxes), s in (r + 1):length(boxes)
+        overlap(boxes[r], boxes[s]) && return nothing
+    end
+    sum(prod(hi - lo + 1 for (lo, hi) in b) for b in boxes) == prod(dims) || return nothing
+    base = _materialized_fill_equation(name, def, dims)
+    loops = _output_idx_strings(base.lhs::OpExpr)
+    lhs_body = (base.lhs::OpExpr).expr_body
+    eqs = Equation[]
+    for (box, val) in zip(boxes, values)
+        ranges = Dict{String,Any}(loops[d] => Any[box[d][1], box[d][2]] for d in 1:nd)
+        lhs = OpExpr("faq", ASTExpr[]; output_idx=Any[l for l in loops],
+                     ranges=ranges, expr_body=lhs_body)
+        rhs = if _is_array_producer(val)
+            v = val::OpExpr
+            rank = v.op == "makearray" ?
+                ((v.regions === nothing || isempty(v.regions)) ? 0 : length(v.regions[1])) :
+                length(_output_idx_strings(v))
+            sel = rank == nd ? loops :
+                  String[loops[d] for d in 1:nd if box[d][1] != box[d][2]]
+            length(sel) == rank || return nothing
+            OpExpr("index", ASTExpr[v, (VarExpr(l) for l in sel)...])
+        else
+            val isa ASTExpr || return nothing
+            val
+        end
+        push!(eqs, Equation(lhs, rhs))
+    end
+    return eqs
 end
 
 # Dependency LEVELS over the materialized observeds: level 1 reads none of them,
@@ -4020,9 +4111,9 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
                     push!(lvl_recurs, sw)
                     continue
                 end
-                feq = _materialized_fill_equation(name, mat_defs[name],
-                                                  layout.mat_dims[name])
-                se, pcs, aks, sfs, acs = _compile_derivative_equations(Equation[feq],
+                feqs = _materialized_fill_equations(name, mat_defs[name],
+                                                    layout.mat_dims[name])
+                se, pcs, aks, sfs, acs = _compile_derivative_equations(feqs,
                     resolved_obs, array_var_info, var_map, const_registry,
                     pgather, param_sym_set, reg_funcs, n_total;
                     template_sites=template_sites,
