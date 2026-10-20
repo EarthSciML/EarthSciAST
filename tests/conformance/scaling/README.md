@@ -96,6 +96,8 @@ between binaries built the same way. The deterministic gates do not need it.
 | `column_search` | a per-column count of levels above a threshold used as a subscript, `u[c, max(1, cnt[c])]` (the YSU `kpbl` shape), 20 levels | cells | 10^2 .. 10^6 |
 | `column_sum` | a rank-0 column sum nested in a 3-D `faq` body, `sum_l u[i,j,l]`, 20 levels | cells | 10^2 .. 10^6 |
 | `join_keyed` | a value-equality `join` on computed keys evaluated at build, about four matching rows per cell, feeding the right-hand side | cells (= rows) | 10^2 .. 10^6 |
+| `makearray_scan` | a two-region `makearray` placing a column prefix scan (`filter j < k`) on interfaces 1..20 and the column total on interface 21, feeding a flux divergence `-0.001 (F[c,l+1] - F[c,l]) / dz[l]`, non-uniform `dz`, 20 levels (issue #533) | cells | 10^2 .. 10^6 |
+| `ragged_contraction` | a neighbour sum over a ragged range bounded through an `offsets` factor (5, 6 or 7 neighbours per cell, a padded inline neighbour table), inside a negation, over a permuted periodic mesh (the MPAS divergence shape, issue #534) | cells | 10^2 .. 10^6 |
 
 Grid families round the side (`round(N^(1/rank))`), so `n_cells` in a result
 is the actual count and `n` is the nominal ladder value. `source_receptor` and
@@ -105,20 +107,26 @@ grows with N, which is also why the flat-code-size gate does not apply to it
 (`gate_exclusions` in the manifest).
 
 No array a hand loop reads densely is uniform in its document:
-`source_receptor`'s `K` and `prefix_scan`'s `dz` are defined by formulas of
-their indices, so a compiler must materialize them and read them on every
+`source_receptor`'s `K` and the `dz` of `prefix_scan` and `makearray_scan` are
+defined by formulas of their indices, so a compiler must materialize them and read them on every
 call, as it would a loaded array, rather than serve every element from one
 value. (Rust's tape computes both in its build-once section and gathers them
 per call.)
 
-Two hand loops do less work than a literal reading of their document, because
+Four hand loops do less work than a literal reading of their document, because
 a person writing the loop would: `column_sum`'s computes each column's sum once
 and applies it to the column's 20 cells (the sum does not depend on the output
-level, and the fold order over levels is the document's), and `join_keyed`'s
+level, and the fold order over levels is the document's); `join_keyed`'s
 does the join once at setup, bucketing the rows by key, and reads the sums on
-every call (the join reads no state, so it is build-time work). A compiler
-that recomputes either per cell or per call is slower than the reference by
-that work, which is the point.
+every call (the join reads no state, so it is build-time work);
+`makearray_scan`'s computes each column's scan as one running sum, which is
+both regions at once (each interface value, and the total, is the same left
+fold the document writes), O(levels) per column where a literal reading of the
+filter is O(levels^2); and `ragged_contraction`'s reads the neighbour table into
+CSR form at setup and runs each row over its own length, never over the padded
+width. A compiler that does any of this work per cell or per call, or over the
+padded or triangular box, is slower than the reference by that work, which is
+the point.
 
 ## The measured state
 
@@ -137,8 +145,8 @@ Canonical order (bindings map their own state layout onto it by element name):
 |---|---|
 | `stencil_*`, `transport_3d` | the one state variable, row-major (last axis fastest) |
 | `chemistry_grid` | species in the mechanism's declaration order (the vendored file's order), each row-major over (lon, lat) |
-| `prefix_scan`, `unstructured_gather`, `gather_index`, `join_keyed` | `u[1..N]` |
-| `column_search`, `column_sum` | the one state variable, column-major (first axis fastest, levels slowest): the layout both bindings' native compilers give it, so the hand loops read the layout native reads |
+| `prefix_scan`, `unstructured_gather`, `gather_index`, `join_keyed`, `ragged_contraction` | `u[1..N]` |
+| `column_search`, `column_sum`, `makearray_scan` | the one state variable, column-major (first axis fastest, levels slowest): the layout both bindings' native compilers give it, so the hand loops read the layout native reads |
 | `source_receptor` | `c[1..N]`, then `e[1..N]` |
 | `regrid` | `F_src[1..N]`, then `F_tgt[1..N]` |
 | `scalar_chemistry` | box-major: box 1's 20 species in declaration order, then box 2's, ... |

@@ -1,0 +1,55 @@
+{
+  "fixture": "ragged_contraction_static",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "values",
+      "assertion_idx": 1,
+      "variable": "div",
+      "actual": 2.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 2,
+      "variable": "div",
+      "actual": -0.5
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 3,
+      "variable": "div",
+      "actual": 1.5
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 4,
+      "variable": "div",
+      "actual": 12.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 5,
+      "variable": "rowsum",
+      "actual": 6.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 6,
+      "variable": "rowsum",
+      "actual": 7.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 7,
+      "variable": "rowsum",
+      "actual": 17.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 8,
+      "variable": "rowsum",
+      "actual": 6.0
+    }
+  ]
+}
