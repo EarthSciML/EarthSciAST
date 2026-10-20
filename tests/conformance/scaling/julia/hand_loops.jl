@@ -767,6 +767,36 @@ end
 HAND_LOOPS["makearray_scan"] = HandLoop(_mscan_setup, _mscan_row!)
 
 # ---------------------------------------------------------------------------
+# Two-region suffix scan: B[c,k] = sum_{j>=k} u[c,j] dz[j] (k = 1..L), B[c,L+1] = 0,
+# D(u[c,l]) = -0.001 (B[c,l] - B[c,l+1]) / dz[l]
+# ---------------------------------------------------------------------------
+#
+# A reverse scan folds from the top (esm-spec §4.3.1), so each column is one
+# running sum swept downward, starting from the zero lid.
+
+@inline function _sscan_row!(du, u, t, st, r)
+    (; nc, nl, o, dz, acc) = st
+    qs = ((r-1)*_BLOCK+1):min(r * _BLOCK, nc)
+    @inbounds begin
+        for q in qs
+            acc[q] = 0.0
+        end
+        for l in nl:-1:1
+            d = dz[l]
+            for q in qs
+                k = o + q + (l - 1) * nc
+                nxt = acc[q] + u[k] * d
+                du[k] = -0.001 * (nxt - acc[q]) / d
+                acc[q] = nxt
+            end
+        end
+    end
+    return nothing
+end
+
+HAND_LOOPS["suffix_scan"] = HandLoop(_mscan_setup, _sscan_row!)
+
+# ---------------------------------------------------------------------------
 # Ragged contraction: D(u[c]) = -(sum over c's own nNbr[c] neighbours m of
 # kappa (u[c] - u[m]))
 # ---------------------------------------------------------------------------
