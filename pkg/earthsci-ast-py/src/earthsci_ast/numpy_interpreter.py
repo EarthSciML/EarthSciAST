@@ -4337,17 +4337,17 @@ def _eval_faq_reduce_vectorized(
     ``A_ij`` matrix instead of a Python loop over every (source, target) pair (the
     dense ``_eval_faq_scalar`` → ``_reduce_over_gated`` walk).
 
-    Per-cell values are computed by the SAME gather the scalar path uses, so only
-    the contraction's summation order changes (numpy pairwise vs sequential), on a
-    par with the existing einsum fast path (:func:`_eval_faq_vectorized`).
+    Per-cell values are computed by the SAME gather the scalar path uses, and the
+    admitted terms of each output cell are folded left to right in the per-cell
+    walk's order (descending for a reverse scan window, esm-spec §4.3.1), so the
+    answer is the scalar path's bit for bit.
     Returns ``None`` — caller falls back to the scalar loop — for an unsupported
     ⊕, an empty index box, a join whose keys are not all box axes, or any body /
     filter that does not evaluate + broadcast cleanly over the box (e.g. a ragged
     bound or a non-array gather). ⊗ is folded by the body evaluation itself, so
     the semiring's ⊗ need not be ×.
     """
-    ufunc = _REDUCE_UFUNCS.get(reducer)
-    if ufunc is None and reducer != "or":
+    if reducer not in _REDUCE_UFUNCS and reducer != "or":
         return _decline("gated-reduce", f"⊕ {reducer!r} has no numpy ufunc")
     if not reduce_syms:
         return _decline(
@@ -4373,20 +4373,27 @@ def _eval_faq_reduce_vectorized(
     if got is None:
         return None
     term, admit = got
-    if admit is not None:
-        term = np.where(admit, term, empty_zero)
-
-    red_axes = tuple(range(len(out_syms), ndim))
-    if reducer == "or":
-        # bool_and_or's ⊕ (a scalar reduction only; the dispatcher rejects an
-        # array-valued one): 1.0 when any admitted term is non-zero — a NaN
-        # included, as in `_reduce_step` — else the identity 0.0. The result
-        # does not depend on the order the terms are visited in.
-        out = np.any(np.asarray(term) != 0.0, axis=red_axes)
-        return np.asarray(out, dtype=float).reshape(out_shape)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        out = ufunc.reduce(np.ascontiguousarray(term), axis=red_axes, initial=empty_zero)
-    return np.asarray(out, dtype=float).reshape(out_shape)
+    # Each output cell's admitted terms, in the per-cell walk's order: the
+    # contracted axes trail the box, so a row of the 2-D view runs them in
+    # `_cartesian` order (last symbol fastest), reversed for a reverse scan
+    # window (esm-spec §4.3.1). They are folded left to right by
+    # `_segmented_fold` — never by a pairwise `ufunc.reduce` — so the answer
+    # is the per-cell walk's bit for bit, forward or reverse.
+    n_out = int(np.prod(out_shape, dtype=np.int64))
+    term2d = np.broadcast_to(term, combined_shape).reshape(n_out, -1)
+    admit2d = (
+        np.ones(term2d.shape, dtype=bool)
+        if admit is None
+        else np.broadcast_to(admit, combined_shape).reshape(n_out, -1)
+    )
+    if _folds_descending(filter_expr, reduce_syms, out_syms, reducer):
+        term2d = term2d[:, ::-1]
+        admit2d = admit2d[:, ::-1]
+    vals = np.ascontiguousarray(term2d[admit2d], dtype=float)
+    counts = admit2d.sum(axis=1).astype(np.int64)
+    with np.errstate(over="ignore", invalid="ignore"):
+        out = _segmented_fold(reducer, vals, counts, empty_zero)
+    return out.reshape(out_shape)
 
 
 def _gated_box_term(

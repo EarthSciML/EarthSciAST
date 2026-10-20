@@ -279,3 +279,96 @@ def test_rank_2_output_scans_one_axis_and_leaves_the_other_independent():
     got = np.asarray(eval_expr(node, _make_ctx({"m": m})), dtype=float)
     assert got.shape == (nr, nc)
     assert got == pytest.approx(np.cumsum(m, axis=1))
+
+
+# ---------------------------------------------------------------------------
+# Scan-like windows the scan tier cannot take: the dense gated reduce must fold
+# them in the same order as the per-cell walk, bit for bit.
+# ---------------------------------------------------------------------------
+
+# 1, -1e16, 1, 1e16 separates every fold order: ascending gives 0 + 1e16 ... and
+# descending, pairwise and ascending sums all differ in where the 1s are lost.
+_SEPARATING = np.tile([1.0, -1e16, 1.0, 1e16, 3.0, -2e16, 1.0, 2e16], 4)
+
+
+def _window(cmp: str, reduce_op: str, *, body_reads_i: bool, other_range: bool, join: bool):
+    n = _SEPARATING.size
+    body = ExprNode(op="index", args=["u", "j"])
+    if body_reads_i:
+        body = ExprNode(op="*", args=[body, ExprNode(op="+", args=["i", 0.5])])
+    node = ExprNode(
+        op="faq",
+        args=["u"],
+        output_idx=["i"],
+        reduce=reduce_op,
+        ranges={"i": [1, n - 3] if other_range else [1, n], "j": [1, n]},
+        filter=ExprNode(op=cmp, args=["j", "i"]),
+        expr=body,
+    )
+    if join:
+        # Key columns over two declared index sets: a term enters the window
+        # only when the two cells' keys match, so the gate thins each window.
+        node.ranges = {"i": {"from": "rows"}, "j": {"from": "cols"}}
+        node.join = [{"on": [["ki", "kj"]]}]
+    return node
+
+
+def _window_ctx() -> EvalContext:
+    n = _SEPARATING.size
+    keys = (np.arange(n) % 3).astype(float)
+    ctx = _make_ctx({"u": _SEPARATING, "ki": keys, "kj": keys})
+    ctx.index_sets = {
+        "rows": {"kind": "interval", "size": n},
+        "cols": {"kind": "interval", "size": n},
+    }
+    ctx.var_index_sets = {"ki": "rows", "kj": "cols", "u": "cols"}
+    return ctx
+
+
+_SHAPES = {
+    "body-reads-i": dict(body_reads_i=True, other_range=False, join=False),
+    "other-range": dict(body_reads_i=False, other_range=True, join=False),
+    "join": dict(body_reads_i=False, other_range=False, join=True),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(_SHAPES))
+@pytest.mark.parametrize("cmp", ["<=", "<", ">=", ">"])
+@pytest.mark.parametrize("reduce_op", ["+", "*", "max", "min"])
+def test_windows_the_scan_tier_declines_fold_like_the_per_cell_walk(shape, cmp, reduce_op):
+    kw = _SHAPES[shape]
+    want = _per_cell(_window(cmp, reduce_op, **kw), _window_ctx())
+    policy = CompilerPolicy(compiler="native")
+    with use_policy(policy):
+        got = eval_expr(_window(cmp, reduce_op, **kw), _window_ctx())
+    assert policy.report.tiers().get("gated-reduce"), policy.report.tiers()
+    _assert_bit_identical(got, want, f"{shape} {cmp} {reduce_op}")
+
+
+def _per_cell(node: ExprNode, ctx: EvalContext) -> np.ndarray:
+    with use_policy(CompilerPolicy(compiler="interpreter", every_tier_off=True)):
+        return np.asarray(eval_expr(node, ctx), dtype=float)
+
+
+@pytest.mark.parametrize("cmp", [">=", ">"])
+def test_a_declined_reverse_window_folds_from_the_top(cmp):
+    """Against a hand fold: the other-range reverse sum is descending, and the
+    input makes ascending, descending and pairwise sums disagree."""
+    node = _window(cmp, "+", body_reads_i=False, other_range=True, join=False)
+    policy = CompilerPolicy(compiler="native")
+    with use_policy(policy):
+        got = np.asarray(eval_expr(node, _window_ctx()), dtype=float).ravel()
+    u = _SEPARATING
+    n = u.size
+    want, asc = [], []
+    for i in range(1, n - 2):
+        window = [u[j - 1] for j in range(1, n + 1) if (j >= i if cmp == ">=" else j > i)]
+        d = a = None
+        for v in reversed(window):
+            d = v if d is None else d + v
+        for v in window:
+            a = v if a is None else a + v
+        want.append(0.0 if d is None else d)
+        asc.append(0.0 if a is None else a)
+    _assert_bit_identical(got, np.asarray(want), f"declined reverse {cmp}")
+    assert want != asc
