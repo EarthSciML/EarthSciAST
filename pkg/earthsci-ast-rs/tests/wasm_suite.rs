@@ -339,6 +339,7 @@ scaling_family!(scaling_column_search, "column_search");
 scaling_family!(scaling_column_sum, "column_sum");
 scaling_family!(scaling_join_keyed, "join_keyed");
 scaling_family!(scaling_makearray_scan, "makearray_scan");
+scaling_family!(scaling_suffix_scan, "suffix_scan");
 scaling_family!(scaling_ragged_contraction, "ragged_contraction");
 
 /// The corpus geometry documents the tape lowers (`polygon_intersection_area`,

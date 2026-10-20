@@ -896,6 +896,75 @@ def makearray_scan(n):
     }
 
 
+def suffix_scan(n):
+    """A column to-top (suffix) scan placed by a two-region `makearray`.
+
+    The mirror of makearray_scan, the EarthSciDiscretizations
+    integral_lev_nodes_cumulative_to_top rule after expansion: on each of N/20
+    columns of 20 layers, B[c, k] = sum_{j >= k} u[c, j] * dz[j] for k = 1..20
+    (the inclusive reverse scan region) and B[c, 21] = 0 (the top), then
+    D(u[c, l]) = -0.001 * (B[c, l] - B[c, l+1]) / dz[l]. A reverse scan folds
+    from the top of the column down (esm-spec §4.3.1), so one running sum per
+    column, swept downward, computes it exactly.
+    """
+    L = COLUMN_LEVELS
+    ncol = max(1, int(round(n / L)))
+    cl = {"c": {"from": "col"}, "l": {"from": "lev"}}
+    scan = faq(
+        op("*", ix("u", "c", "j"), ix("dz", "j")),
+        ["c", "k"],
+        {"c": {"from": "col"}, "k": {"from": "lev"}, "j": {"from": "lev"}},
+        reduce="+",
+        filter=op(">=", "j", "k"),
+    )
+    model = {
+        "variables": {
+            "u": {"type": "unknown", "units": "kg/m^3", "shape": ["col", "lev"], "default": 1.0},
+            "dz": {"type": "unknown", "units": "m", "shape": ["lev"]},
+            "B": {"type": "unknown", "units": "kg/m^2", "shape": ["col", "lev_nodes"]},
+        },
+        "equations": [
+            {
+                "lhs": "dz",
+                "rhs": faq(
+                    op("*", 100.0, op("+", 1, op("*", 0.5, op("sin", "l")))),
+                    ["l"],
+                    {"l": {"from": "lev"}},
+                ),
+            },
+            {
+                "lhs": "B",
+                "rhs": {
+                    "op": "makearray",
+                    "args": [],
+                    "regions": [[[1, ncol], [1, L]], [[1, ncol], [L + 1, L + 1]]],
+                    "values": [scan, 0.0],
+                },
+            },
+            {
+                "lhs": faq_lhs("u", ["c", "l"], cl),
+                "rhs": faq(
+                    op(
+                        "/",
+                        op("*", -0.001, op("-", ix("B", "c", "l"), ix("B", "c", op("+", "l", 1)))),
+                        ix("dz", "l"),
+                    ),
+                    ["c", "l"],
+                    cl,
+                ),
+            },
+        ],
+    }
+    desc = f"two-region makearray of a column to-top scan and a zero lid, {ncol} columns x {L} layers"
+    index_sets = {"col": ncol, "lev": L, "lev_nodes": L + 1}
+    return doc("suffix_scan", desc, index_sets, {"Column": model}), {
+        "cells": ncol * L,
+        "states": ncol * L,
+        "ncol": ncol,
+        "nlev": L,
+    }
+
+
 RAGGED_DIRS = [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (-1, -1), (1, -1)]
 
 
@@ -1101,6 +1170,7 @@ FAMILIES = {
     "column_sum": column_sum,
     "join_keyed": join_keyed,
     "makearray_scan": makearray_scan,
+    "suffix_scan": suffix_scan,
     "ragged_contraction": ragged_contraction,
 }
 

@@ -52,7 +52,7 @@ jobs:
         family: [stencil_1d, stencil_2d, stencil_3d, stencil_4d, transport_3d, chemistry_grid,
                  prefix_scan, source_receptor, regrid, unstructured_gather, scalar_chemistry,
                  gather_index, column_search, column_sum, join_keyed, makearray_scan,
-                 ragged_contraction]
+                 suffix_scan, ragged_contraction]
     env:
       CARGO_INCREMENTAL: '0'
     defaults:
@@ -131,7 +131,7 @@ jobs:
         family: [stencil_1d, stencil_2d, stencil_3d, stencil_4d, transport_3d, chemistry_grid,
                  prefix_scan, source_receptor, regrid, unstructured_gather, scalar_chemistry,
                  gather_index, column_search, column_sum, join_keyed, makearray_scan,
-                 ragged_contraction]
+                 suffix_scan, ragged_contraction]
     steps:
       - uses: actions/checkout@v4
 

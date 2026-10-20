@@ -62,6 +62,36 @@
       "assertion_idx": 10,
       "variable": "F_top",
       "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 11,
+      "variable": "G_top",
+      "actual": 1.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 12,
+      "variable": "G_top",
+      "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 13,
+      "variable": "G_top",
+      "actual": 1e+16
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 14,
+      "variable": "G_top",
+      "actual": 1e+16
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 15,
+      "variable": "G_top",
+      "actual": 0.0
     }
   ]
 }

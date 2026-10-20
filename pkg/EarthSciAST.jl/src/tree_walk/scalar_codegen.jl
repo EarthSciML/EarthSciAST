@@ -397,7 +397,7 @@ function _cg_emit(ctx::_CGCtx, kc::_CGUnitCtx, nd::_Node)
     elseif k === _NK_LOOPVAR
         s = get(kc.loops, nd.payload, nothing)
         s === nothing && throw(_CodegenDecline(:loopvar_out_of_scope))
-        return :(_cgT($s))
+        return :(Float64($s))
     elseif k === _NK_CONTRACTION_LOOP
         # `_eval_contraction_loop`: the accumulator starts at `T(0̄)`, and each
         # step is `s ⊕= body` with the counter bound for the body's loop-var

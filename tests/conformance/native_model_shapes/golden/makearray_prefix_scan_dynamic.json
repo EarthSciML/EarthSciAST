@@ -66,60 +66,90 @@
     {
       "test_id": "values",
       "assertion_idx": 11,
+      "variable": "G_top",
+      "actual": 1.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 12,
+      "variable": "G_top",
+      "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 13,
+      "variable": "G_top",
+      "actual": 1e+16
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 14,
+      "variable": "G_top",
+      "actual": 1e+16
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 15,
+      "variable": "G_top",
+      "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 16,
       "variable": "w_bottom",
       "actual": 0.0
     },
     {
       "test_id": "values",
-      "assertion_idx": 12,
+      "assertion_idx": 17,
       "variable": "w_bottom",
       "actual": 0.4999999999999999
     },
     {
       "test_id": "values",
-      "assertion_idx": 13,
+      "assertion_idx": 18,
       "variable": "w_bottom",
-      "actual": 2.5
+      "actual": 2.4999999999999996
     },
     {
       "test_id": "values",
-      "assertion_idx": 14,
+      "assertion_idx": 19,
       "variable": "w_bottom",
-      "actual": 6.999999999999998
+      "actual": 6.999999999999997
     },
     {
       "test_id": "values",
-      "assertion_idx": 15,
+      "assertion_idx": 20,
       "variable": "w_bottom",
-      "actual": 14.999999999999993
+      "actual": 14.999999999999991
     },
     {
       "test_id": "values",
-      "assertion_idx": 16,
+      "assertion_idx": 21,
       "variable": "w_top",
-      "actual": 14.999999999999993
+      "actual": 14.999999999999991
     },
     {
       "test_id": "values",
-      "assertion_idx": 17,
+      "assertion_idx": 22,
       "variable": "w_top",
       "actual": 14.499999999999996
     },
     {
       "test_id": "values",
-      "assertion_idx": 18,
+      "assertion_idx": 23,
       "variable": "w_top",
-      "actual": 12.499999999999996
+      "actual": 12.499999999999995
     },
     {
       "test_id": "values",
-      "assertion_idx": 19,
+      "assertion_idx": 24,
       "variable": "w_top",
       "actual": 7.999999999999998
     },
     {
       "test_id": "values",
-      "assertion_idx": 20,
+      "assertion_idx": 25,
       "variable": "w_top",
       "actual": 0.0
     }

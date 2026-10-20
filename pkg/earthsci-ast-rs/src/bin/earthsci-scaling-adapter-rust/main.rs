@@ -198,7 +198,10 @@ fn canonical_vars(family: &str, doc: &Value) -> Result<Vec<CanonVar>, String> {
             default: v["default"].as_f64().unwrap_or(0.0),
             // The column families are ordered the way native lays them out,
             // so their hand loops read the layout native reads.
-            column_major: matches!(family, "column_search" | "column_sum" | "makearray_scan"),
+            column_major: matches!(
+                family,
+                "column_search" | "column_sum" | "makearray_scan" | "suffix_scan"
+            ),
         })
     };
     let names: Vec<&str> = match family {
@@ -213,6 +216,7 @@ fn canonical_vars(family: &str, doc: &Value) -> Result<Vec<CanonVar>, String> {
         | "column_sum"
         | "join_keyed"
         | "makearray_scan"
+        | "suffix_scan"
         | "ragged_contraction" => vec!["u"],
         "transport_3d" => vec!["q"],
         "source_receptor" => vec!["c", "e"],
@@ -415,6 +419,12 @@ fn build_hand_loop(family: &str, doc: &Value, shape: &Value) -> Result<HandLoop,
             agg: join_keyed_sums(set_size("cells"), set_size("rows"), shape_of("keys")?),
         },
         "makearray_scan" => HandLoop::MakearrayScan {
+            ncol: shape_of("ncol")?,
+            dz: (1..=shape_of("nlev")?)
+                .map(|l| 100.0 * (1.0 + 0.5 * (l as f64).sin()))
+                .collect(),
+        },
+        "suffix_scan" => HandLoop::SuffixScan {
             ncol: shape_of("ncol")?,
             dz: (1..=shape_of("nlev")?)
                 .map(|l| 100.0 * (1.0 + 0.5 * (l as f64).sin()))

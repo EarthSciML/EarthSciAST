@@ -165,6 +165,12 @@ function _hoist_try(g::OpExpr, out_idx::Vector{String}, ranges, contracted::Set{
     any(n -> n in contracted, free) && return nothing
     S = String[s for s in out_idx if s in free]
     length(S) == length(out_idx) && return nothing
+    # A scalar reduction whose filter bounds its index from below by an outer
+    # output index would become a reverse scan once lifted over it, folding
+    # descending (`_reverse_window`); in place it folds ascending, as the
+    # interpreter evaluates it, so it stays in place.
+    gather || !_reverse_window(g.filter, String[String(k) for k in keys(g.ranges)], S) ||
+        return nothing
     sets = String[]
     for s in S
         r = get(ranges, s, nothing)
@@ -201,10 +207,69 @@ function _hoist_try(g::OpExpr, out_idx::Vector{String}, ranges, contracted::Set{
     return reader
 end
 
+# FILTERED AGGREGATE OPERANDS of whole-array arithmetic are lifted too. An
+# array observed spelled as elementwise arithmetic over a filtered array
+# aggregate,
+#
+#     F = faq(k; j < k) f[j]·dz[j]  +  0.5·f·dz
+#
+# (a cumulative integral to each layer centre), is not itself a producer, so it
+# is inlined into its readers and its aggregate reaches the array-equation
+# cascade as `index(faq(...), i)` inside the pointwise-lifted body, where no
+# compile-once tier sees the contraction: a prefix scan becomes a per-cell
+# triangular fold. Lifted to its own observed `H = faq(...)`, the aggregate is
+# a producer the factored-observed machinery fills through the whole cascade
+# (a prefix scan as the O(N) scan fold), and `F = H + 0.5·f·dz` reads the
+# buffer. The operand is reached through elementwise operators in eager
+# positions only, carries no join, and every output range is a whole declared
+# index set, which is then the lifted observed's shape: the lifted fill
+# evaluates it at exactly the cells the whole-array arithmetic did.
+_hoist_filtered_producer(e::OpExpr) = _is_faq_op(e.op) && e.filter !== nothing &&
+    e.join === nothing && e.join_gates === nothing && e.expr_body !== nothing &&
+    e.ranges !== nothing && _is_array_producer(e) &&
+    all(x -> x isa AbstractString, e.output_idx) &&
+    all(x -> (r = get(e.ranges, String(x), nothing); r isa IndexSetRef && isempty(r.of)),
+        e.output_idx)
+
+function _hoist_operand_walk(e::ASTExpr, owner::String, hc::_HoistCtx)
+    e isa OpExpr || return e
+    o = e::OpExpr
+    _hoist_plain(o) || return o
+    eager = (o.op == "ifelse" || o.op == "and" || o.op == "or") ? 1 : length(o.args)
+    new = o.args
+    for j in 1:min(eager, length(o.args))
+        a = o.args[j]
+        b = (a isa OpExpr && _hoist_filtered_producer(a::OpExpr)) ?
+            _hoist_lift_producer(a::OpExpr, owner, hc) :
+            _hoist_operand_walk(a, owner, hc)
+        if b !== a
+            new === o.args && (new = copy(o.args))
+            new[j] = b
+        end
+    end
+    return new === o.args ? o : reconstruct(o; args=new)
+end
+
+function _hoist_lift_producer(g::OpExpr, owner::String, hc::_HoistCtx)
+    key = (objectid(g), String["\0producer"])
+    hit = get(hc.memo, key, nothing)
+    hit === nothing || return hit
+    name = string(_HOIST_PREFIX, "a", length(hc.memo) + 1, '\0', owner)
+    shape = String[(g.ranges[String(x)]::IndexSetRef).from for x in g.output_idx]
+    hc.vars[name] = ModelVariable(UnknownVariable; shape=shape)
+    push!(hc.eqs, Equation(VarExpr(name), g))
+    hc.owner[name] = owner
+    reader = VarExpr(name)
+    hc.memo[key] = reader
+    return reader
+end
+
 # A compiler-report rule label with every lifted name replaced by the variable
 # whose equation it was lifted from (the name ends in it, after a NUL).
 _hoist_public_label(label::AbstractString) =
-    replace(replace(label, r"\0hoist\0g\d+\0([^\0\[\]]*)" => s"\1 (hoisted gather)"),
+    replace(replace(replace(label,
+                r"\0hoist\0g\d+\0([^\0\[\]]*)" => s"\1 (hoisted gather)"),
+                r"\0hoist\0a\d+\0([^\0\[\]]*)" => s"\1 (hoisted aggregate)"),
             r"\0hoist\0\d+\0([^\0\[\]]*)" => s"\1 (hoisted reduction)")
 
 # The build's copy of `model` with every qualifying nested reduction lifted
@@ -217,6 +282,18 @@ function _hoist_nested_reductions(model::Model, index_sets::AbstractDict)
     eqs = model.equations
     for (i, eq) in enumerate(model.equations)
         rhs = eq.rhs
+        if rhs isa OpExpr && _hoist_plain(rhs::OpExpr) &&
+           (eq.lhs isa VarExpr || (eq.lhs isa OpExpr && (eq.lhs::OpExpr).op == "D"))
+            names = sort!(collect(_hoist_free_names!(Set{String}(), eq.lhs,
+                                                     Set{String}(["t"]))))
+            owner = eq.lhs isa VarExpr ? (eq.lhs::VarExpr).name :
+                    isempty(names) ? "" : first(names)
+            new_rhs = _hoist_operand_walk(rhs, owner, hc)
+            new_rhs === rhs && continue
+            eqs === model.equations && (eqs = copy(model.equations))
+            eqs[i] = Equation(eq.lhs, new_rhs; _comment=eq._comment)
+            continue
+        end
         (rhs isa OpExpr && _is_faq_op((rhs::OpExpr).op) &&
          (rhs::OpExpr).output_idx !== nothing && (rhs::OpExpr).ranges !== nothing &&
          (rhs::OpExpr).expr_body !== nothing) || continue
