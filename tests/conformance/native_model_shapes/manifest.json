@@ -699,6 +699,56 @@
     ]
    },
    "named_exclusions": []
+  },
+  {
+   "id": "nested_window_reduction_static",
+   "path": "fixtures/nested_window_reduction_static.esm",
+   "model": "NestedWindowReduction",
+   "golden": "golden/nested_window_reduction_static.json",
+   "tags": [
+    "faq",
+    "nested",
+    "rank-0",
+    "fold-order",
+    "static"
+   ],
+   "note": "Authored here (the coordinator's ruling on nested windows, esm-spec §4.3.1): a nested rank-0 window is not a reverse scan and folds ascending.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "nested_window_reduction_dynamic",
+   "path": "fixtures/nested_window_reduction_dynamic.esm",
+   "model": "NestedWindowReduction",
+   "golden": "golden/nested_window_reduction_dynamic.json",
+   "tags": [
+    "faq",
+    "nested",
+    "rank-0",
+    "fold-order",
+    "dynamic"
+   ],
+   "note": "Authored here (the coordinator's ruling on nested windows, esm-spec §4.3.1): a nested rank-0 window is not a reverse scan and folds ascending.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
   }
  ]
 }
