@@ -88,6 +88,11 @@ pub enum HandLoop {
     /// `du[c, l] = -0.001 (F[l+1] - F[l]) / dz[l]`; column-fastest state, a
     /// block of columns scanned level by level through a buffer.
     MakearrayScan { ncol: usize, dz: Vec<f64> },
+    /// Per column: `B[k] = sum_{j >= k} u[c, j] dz[j]` as one running sum
+    /// swept from the top down (a reverse scan folds from the top), then
+    /// `du[c, l] = -0.001 (B[l] - B[l+1]) / dz[l]`; column-fastest state, a
+    /// block of columns at a time.
+    SuffixScan { ncol: usize, dz: Vec<f64> },
     /// `du[c] = -(sum_k kappa (u[c] - u[nbr[k]]))` over each cell's own
     /// neighbours, in CSR form: cell `c`'s are `nbr[start[c]..start[c + 1]]`.
     Ragged {
@@ -111,7 +116,7 @@ impl HandLoop {
             HandLoop::GatherIndex { cls, .. } => cls.len(),
             HandLoop::ColumnSearch { ncol, .. } | HandLoop::ColumnSum { ncol, .. } => *ncol,
             HandLoop::JoinKeyed { agg } => agg.len(),
-            HandLoop::MakearrayScan { ncol, .. } => *ncol,
+            HandLoop::MakearrayScan { ncol, .. } | HandLoop::SuffixScan { ncol, .. } => *ncol,
             HandLoop::Ragged { start, .. } => start.len() - 1,
         }
     }
@@ -276,6 +281,23 @@ impl HandLoop {
                     let acc = &mut acc[..q1 - q0];
                     acc.fill(0.0);
                     for (l, &d) in dz.iter().enumerate() {
+                        let row = &u[l * nc + q0..l * nc + q1];
+                        for (b, (a, &v)) in acc.iter_mut().zip(row).enumerate() {
+                            let next = *a + v * d;
+                            du.set(l * nc + q0 + b, -0.001 * (next - *a) / d);
+                            *a = next;
+                        }
+                    }
+                }
+            }
+            HandLoop::SuffixScan { ncol, dz } => {
+                let nc = *ncol;
+                let mut acc = [0.0f64; COLUMN_BLOCK];
+                for q0 in (lo..hi).step_by(COLUMN_BLOCK) {
+                    let q1 = (q0 + COLUMN_BLOCK).min(hi);
+                    let acc = &mut acc[..q1 - q0];
+                    acc.fill(0.0);
+                    for (l, &d) in dz.iter().enumerate().rev() {
                         let row = &u[l * nc + q0..l * nc + q1];
                         for (b, (a, &v)) in acc.iter_mut().zip(row).enumerate() {
                             let next = *a + v * d;

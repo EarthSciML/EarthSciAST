@@ -305,7 +305,7 @@ function canonical_names(fam, entry)
         return _colmajor("Columns.u", (sh("side"), sh("side"), sh("nlev")))
     elseif fam == "join_keyed"
         return _rowmajor("Join.u", (n,))
-    elseif fam == "makearray_scan"
+    elseif fam == "makearray_scan" || fam == "suffix_scan"
         return _colmajor("Column.u", (sh("ncol"), sh("nlev")))
     elseif fam == "ragged_contraction"
         return _rowmajor("Mesh.u", (n,))

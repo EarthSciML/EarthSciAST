@@ -40,6 +40,7 @@ scaling_family!(column_search);
 scaling_family!(column_sum);
 scaling_family!(join_keyed);
 scaling_family!(makearray_scan);
+scaling_family!(suffix_scan);
 scaling_family!(ragged_contraction);
 
 #[test]

@@ -2,7 +2,7 @@
  "esm": "1.2.0",
  "metadata": {
   "name": "makearray_prefix_scan_dynamic",
-  "description": "Issue #533: a two-region `makearray` whose first region value is a prefix-scan `faq` (`filter j < k` / `j >= k`, `reduce \"+\"`) and whose second is the rank-0 column total (EarthSciDiscretizations column_nonuniform_1d integral_lev_nodes_cumulative_from_bottom / _to_top after template expansion). On a non-uniform column (dz = 0.5, 1, 1.5, 2) with integrand 1, 2, 3, 4 the terms are 0.5, 2, 4.5, 8: from the surface the interfaces hold 0, 0.5, 2.5, 7 and the total 15 at the top; to the top they hold 15, 14.5, 12.5, 8 and 0. Dynamic variant: the integrand is a state, so the scans are lowered on the right-hand side, and two accumulator states integrate the interface fields from zero over one unit of time.",
+  "description": "Issue #533: a two-region `makearray` whose first region value is a prefix-scan `faq` (`filter j < k` / `j >= k`, `reduce \"+\"`) and whose second is the rank-0 column total (EarthSciDiscretizations column_nonuniform_1d integral_lev_nodes_cumulative_from_bottom / _to_top after template expansion). On a non-uniform column (dz = 0.5, 1, 1.5, 2) with integrand 1, 2, 3, 4 the terms are 0.5, 2, 4.5, 8: from the surface the interfaces hold 0, 0.5, 2.5, 7 and the total 15 at the top; to the top they hold 15, 14.5, 12.5, 8 and 0. G_top pins the to-top fold ORDER (esm-spec §4.3.1: a reverse scan folds from the top): over 1, -1e16, 1, 1e16 it is exactly 1, 0, 1e16, 1e16, 0, where a bottom-up fold gives 0 at interface 1. Dynamic variant: the integrand is a state, so the scans are lowered on the right-hand side, and two accumulator states integrate the interface fields from zero over one unit of time.",
   "authors": [
    "EarthSciML Authors and Contributors"
   ],
@@ -62,6 +62,14 @@
      ],
      "description": "Integral from each interface to the top: the inclusive suffix scan on interfaces 1..4 and 0 at interface 5."
     },
+    "G_top": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "lev_nodes"
+     ],
+     "description": "Inclusive to-top scan of 1, -1e16, 1, 1e16 (no measure) on interfaces 1..4 and 0 at interface 5, asserted EXACTLY: folded from the top it is 1, 0, 1e16, 1e16; a bottom-up fold of cell 1 gives 0."
+    },
     "u": {
      "type": "unknown",
      "units": "1",
@@ -87,6 +95,14 @@
      ],
      "default": 0.0,
      "description": "Accumulates F_top from zero at a constant rate."
+    },
+    "v": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "lev"
+     ],
+     "description": "The cancellation-sensitive integrand 1, -1e16, 1, 1e16 as a state held constant (D(v) = 0)."
     }
    },
    "equations": [
@@ -306,6 +322,60 @@
      }
     },
     {
+     "lhs": "G_top",
+     "rhs": {
+      "op": "makearray",
+      "args": [],
+      "regions": [
+       [
+        [
+         1,
+         4
+        ]
+       ],
+       [
+        [
+         5,
+         5
+        ]
+       ]
+      ],
+      "values": [
+       {
+        "op": "faq",
+        "args": [],
+        "output_idx": [
+         "k"
+        ],
+        "reduce": "+",
+        "ranges": {
+         "k": {
+          "from": "lev"
+         },
+         "j": {
+          "from": "lev"
+         }
+        },
+        "filter": {
+         "op": ">=",
+         "args": [
+          "j",
+          "k"
+         ]
+        },
+        "expr": {
+         "op": "index",
+         "args": [
+          "v",
+          "j"
+         ]
+        }
+       },
+       0.0
+      ]
+     }
+    },
+    {
      "lhs": {
       "op": "faq",
       "args": [],
@@ -324,6 +394,46 @@
          "op": "index",
          "args": [
           "u",
+          "k"
+         ]
+        }
+       ],
+       "wrt": "t"
+      }
+     },
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "k"
+      ],
+      "ranges": {
+       "k": {
+        "from": "lev"
+       }
+      },
+      "expr": 0.0
+     }
+    },
+    {
+     "lhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "k"
+      ],
+      "ranges": {
+       "k": {
+        "from": "lev"
+       }
+      },
+      "expr": {
+       "op": "D",
+       "args": [
+        {
+         "op": "index",
+         "args": [
+          "v",
           "k"
          ]
         }
@@ -373,7 +483,11 @@
       "u[1]": 1.0,
       "u[2]": 2.0,
       "u[3]": 3.0,
-      "u[4]": 4.0
+      "u[4]": 4.0,
+      "v[1]": 1.0,
+      "v[2]": -1e+16,
+      "v[3]": 1.0,
+      "v[4]": 1e+16
      },
      "time_span": {
       "start": 0.0,
@@ -458,6 +572,66 @@
        "expected": 0.0,
        "coords": {
         "lev_nodes": 5
+       }
+      },
+      {
+       "variable": "G_top",
+       "time": 1.0,
+       "expected": 1.0,
+       "coords": {
+        "lev_nodes": 1
+       },
+       "tolerance": {
+        "rel": 0.0,
+        "abs": 0.0
+       }
+      },
+      {
+       "variable": "G_top",
+       "time": 1.0,
+       "expected": 0.0,
+       "coords": {
+        "lev_nodes": 2
+       },
+       "tolerance": {
+        "rel": 0.0,
+        "abs": 0.0
+       }
+      },
+      {
+       "variable": "G_top",
+       "time": 1.0,
+       "expected": 1e+16,
+       "coords": {
+        "lev_nodes": 3
+       },
+       "tolerance": {
+        "rel": 0.0,
+        "abs": 0.0
+       }
+      },
+      {
+       "variable": "G_top",
+       "time": 1.0,
+       "expected": 1e+16,
+       "coords": {
+        "lev_nodes": 4
+       },
+       "tolerance": {
+        "rel": 0.0,
+        "abs": 0.0
+       }
+      },
+      {
+       "variable": "G_top",
+       "time": 1.0,
+       "expected": 0.0,
+       "coords": {
+        "lev_nodes": 5
+       },
+       "tolerance": {
+        "rel": 0.0,
+        "abs": 0.0
        }
       },
       {
