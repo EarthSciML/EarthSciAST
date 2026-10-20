@@ -679,5 +679,9 @@ fn an_uneconomic_on_gate_is_declined_when_a_sibling_drives() {
     crate::broad_phase::set_gate_plan(prev.0, prev.1);
     assert!(built.0.is_ok());
     assert_eq!(declined, 1, "the constant-key gate was built");
-    assert_eq!(prog.seg_tables[0].rows, vec![0, 20], "the selective gate still drives");
+    assert_eq!(
+        prog.seg_tables[0].rows,
+        vec![0, 20],
+        "the selective gate still drives"
+    );
 }
