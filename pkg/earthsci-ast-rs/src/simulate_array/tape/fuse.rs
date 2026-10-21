@@ -314,7 +314,7 @@ impl GBuilder {
         // A reverse scan joins a group only along its leading axis, whose
         // rows the group then visits from the last (`FusedSpec::rows_reversed`):
         // never beside a forward scan or a reduction, which fold ascending,
-        // and only with enough lanes per row that a row is a worthwhile pass.
+        // with lanes to share a row and not too many rows.
         let scans = |rev: bool| {
             self.micro
                 .iter()
@@ -322,7 +322,12 @@ impl GBuilder {
         };
         if *reverse {
             let lanes: usize = self.shape[1..].iter().product();
-            if *axis != 0 || self.reduce.is_some() || scans(false) || lanes < MIN_REVERSE_LANES {
+            if *axis != 0
+                || self.reduce.is_some()
+                || scans(false)
+                || lanes < 2
+                || self.shape[0] > MAX_REVERSE_ROWS
+            {
                 return false;
             }
         } else if scans(true) {
@@ -1306,9 +1311,12 @@ impl SuperopCfg {
     }
 }
 
-/// Lanes a row of a group with a reverse scan must hold: the group visits
-/// its rows one at a time, each a pass of its own.
-const MIN_REVERSE_LANES: usize = 16;
+/// The most rows a group with a reverse scan may visit: it visits them one
+/// at a time, each a pass of its own, so a long scanned axis stays a
+/// standalone scan (whose kernel sweeps a row's lanes in one loop). The
+/// bound is on the scanned axis, not the box, so the choice does not change
+/// with the number of columns.
+const MAX_REVERSE_ROWS: usize = 4096;
 
 /// The (op1, op2) pairs the executor monomorphizes as [`MicroOp::Bin2`]: the
 /// full `+ - * /` square, plus the pairs the simpleclimate adjacency
