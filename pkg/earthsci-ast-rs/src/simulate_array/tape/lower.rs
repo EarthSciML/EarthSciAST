@@ -7408,6 +7408,7 @@ impl<'m> TapeBuilder<'m> {
             // Output-only work first moves out of the way, so it does not
             // split the groups of the work a derivative needs.
             super::prune::split_output_only(&mut prog);
+            super::sink::sink_const_broadcasts(&mut prog);
             super::fuse::fuse_program(&mut prog, cfg);
             super::prune::split_output_only(&mut prog);
         } else {

@@ -20,9 +20,13 @@
 //!
 //! Both folds visit the same terms in the same order from the same `init`,
 //! so each rewritten read is the value the gather read. The rewrite turns
-//! the read into a [`Instr::Copy`] of `S` or a second [`Instr::Scan`] of
-//! `t`; the assembly then has no reader on the derivative path, and the
-//! scan, its sibling and the consumer share one box and fuse into one pass.
+//! the read into a [`Instr::Copy`] of `S`, the exclusive scan combined with
+//! the term (`fold(t[..=k])` is `fold(t[..k]) ⊕ t[k]`, the kernel the scan
+//! itself applies), or, for the reverse inclusive scan, a copy of the
+//! reverse exclusive scan, the inclusive one then being split into that scan
+//! and its combine with the term. Either way one scan remains; the assembly
+//! has no reader on the derivative path, and the scan and the consumer
+//! share one box and fuse into one pass.
 
 use super::ir::*;
 use crate::simulate_array::BinCode;
@@ -30,7 +34,16 @@ use smallvec::SmallVec;
 
 /// Rewrite every read the scan answers (module docs).
 pub(super) fn rewrite_scan_makearray_reads(prog: &mut TapeProgram) {
+    // A per-variable element type rounds each kernel at its own precision;
+    // keep those programs as written.
+    if !prog.precision.is_empty() {
+        return;
+    }
     let defs = single_defs(prog);
+    let guarded = guarded_positions(prog);
+    // Reverse inclusive scans to split into the exclusive scan and the
+    // combine with the term: scan position -> the exclusive scan's slot.
+    let mut splits: std::collections::BTreeMap<usize, SlotId> = Default::default();
     for i in 0..prog.instrs.len() {
         let Instr::Gather {
             src: SrcRef::Slot(a),
@@ -40,10 +53,122 @@ pub(super) fn rewrite_scan_makearray_reads(prog: &mut TapeProgram) {
         else {
             continue;
         };
-        if let Some(new) = answer(prog, &defs, a, plan, out) {
-            prog.instrs[i] = new;
+        match answer(prog, &defs, a, plan, out) {
+            Some(Answer::Read(new)) => prog.instrs[i] = new,
+            Some(Answer::ReverseExclusive(pc)) if !guarded[pc] => {
+                let e = match splits.get(&pc) {
+                    Some(&e) => e,
+                    None => {
+                        let out = prog.instrs[pc].out().expect("a scan defines its slot");
+                        let desc = prog.slots[out as usize].clone();
+                        let e = prog.slots.len() as SlotId;
+                        prog.slots.push(desc);
+                        splits.insert(pc, e);
+                        e
+                    }
+                };
+                prog.instrs[i] = Instr::Copy {
+                    a: Operand::Slot(e),
+                    out,
+                };
+            }
+            _ => {}
         }
     }
+    if !splits.is_empty() {
+        split_reverse_inclusive(prog, &splits);
+    }
+}
+
+/// What a read the scan answers becomes.
+enum Answer {
+    /// This instruction in the gather's place.
+    Read(Instr),
+    /// A copy of the reverse EXCLUSIVE scan of the reverse inclusive scan
+    /// at this position, which is split to define it.
+    ReverseExclusive(usize),
+}
+
+/// Positions inside a conditional region or a recurrence body.
+fn guarded_positions(prog: &TapeProgram) -> Vec<bool> {
+    let mut guarded = vec![false; prog.instrs.len()];
+    for (i, ins) in prog.instrs.iter().enumerate() {
+        let len = match ins {
+            Instr::JmpIfZero {
+                n_true, n_false, ..
+            } => (*n_true + *n_false) as usize,
+            Instr::Sweep { spec } => prog.sweeps[*spec as usize].body_len as usize,
+            _ => 0,
+        };
+        for g in guarded.iter_mut().skip(i + 1).take(len) {
+            *g = true;
+        }
+    }
+    guarded
+}
+
+/// Split each reverse inclusive scan in `splits` into the reverse exclusive
+/// scan (into its new slot) and the combine of that with the term (into the
+/// scan's own slot): the inclusive scan's row `k` is the exclusive one's row
+/// `k` combined with `t[k]`, the kernel the scan applies after writing it.
+fn split_reverse_inclusive(
+    prog: &mut TapeProgram,
+    splits: &std::collections::BTreeMap<usize, SlotId>,
+) {
+    let n = prog.instrs.len();
+    let mut instrs = Vec::with_capacity(n + splits.len());
+    let mut prov = Vec::with_capacity(n + splits.len());
+    let (mut n_const, mut n_segment) = (prog.n_const, prog.n_segment);
+    for k in 0..n {
+        let Some(&e) = splits.get(&k) else {
+            instrs.push(prog.instrs[k].clone());
+            prov.push(prog.provenance[k]);
+            continue;
+        };
+        let Instr::Scan {
+            op,
+            init,
+            src,
+            axis,
+            reverse,
+            ref src_shape,
+            out,
+            ..
+        } = prog.instrs[k]
+        else {
+            unreachable!("a split position holds a scan");
+        };
+        let term = match src {
+            SrcRef::Slot(t) => Operand::Slot(t),
+            SrcRef::State(x) => Operand::State(x),
+        };
+        instrs.push(Instr::Scan {
+            op,
+            init,
+            src,
+            axis,
+            inclusive: false,
+            reverse,
+            src_shape: src_shape.clone(),
+            out: e,
+        });
+        instrs.push(Instr::Bin {
+            op,
+            a: Operand::Slot(e),
+            b: term,
+            out,
+        });
+        prov.extend([prog.provenance[k]; 2]);
+        match prog.section_of(k) {
+            Cadence::Const => n_const += 1,
+            Cadence::Segment => n_segment += 1,
+            Cadence::Continuous => {}
+        }
+    }
+    prog.instrs = instrs;
+    prog.provenance = prov;
+    prog.n_const = n_const;
+    prog.n_segment = n_segment;
 }
 
 /// The defining instruction of every slot defined exactly once.
@@ -72,7 +197,7 @@ fn answer(
     a: SlotId,
     plan: u32,
     out: SlotId,
-) -> Option<Instr> {
+) -> Option<Answer> {
     let Instr::Assemble { table, .. } = prog.instrs[defs[a as usize]?] else {
         return None;
     };
@@ -130,10 +255,10 @@ fn answer(
             if overwritten_after(prog, parts, k, r) {
                 return None;
             }
-            return Some(Instr::Copy {
+            return Some(Answer::Read(Instr::Copy {
                 a: Operand::Slot(s),
                 out,
-            });
+            }));
         }
         if win[ax] != (d0 + 1, rows) || overwritten_after(prog, parts, k, r) {
             continue;
@@ -158,16 +283,22 @@ fn answer(
         if !ends_on {
             return None;
         }
-        return Some(Instr::Scan {
-            op: sop,
-            init,
-            src,
-            axis,
-            inclusive: !inclusive,
-            reverse,
-            src_shape: src_shape.clone(),
-            out,
-        });
+        // The forward inclusive scan's row `k` is the exclusive one's row
+        // `k` combined with the term: the kernel the scan applies after
+        // writing it.
+        if !reverse {
+            let term = match src {
+                SrcRef::Slot(t) => Operand::Slot(t),
+                SrcRef::State(x) => Operand::State(x),
+            };
+            return Some(Answer::Read(Instr::Bin {
+                op: sop,
+                a: Operand::Slot(s),
+                b: term,
+                out,
+            }));
+        }
+        return defs[s as usize].map(Answer::ReverseExclusive);
     }
     None
 }

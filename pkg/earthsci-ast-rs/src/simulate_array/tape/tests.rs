@@ -1559,7 +1559,7 @@ fn ab_reverse_scans_fuse_over_many_columns() {
             0,
             "[{variant}] every scan is absorbed"
         );
-        assert_eq!(scan_micro_ops(&prog), 2, "[{variant}]");
+        assert_eq!(scan_micro_ops(&prog), scans_of(variant), "[{variant}]");
         let reversed = prog
             .fused
             .iter()
@@ -1588,12 +1588,13 @@ fn makearray_prefix_scan_region_is_linear_in_the_column() {
     }
 }
 
-/// Running folds in [`makearray_scan_doc`]'s program: the region's scan, and
-/// for the from-bottom and to-top shapes the scan that answers the
-/// consumer's read one row up (`scan_shift`). The shifted shape's read one
-/// row up starts on its zero row, which no scan answers.
-fn scans_of(variant: &str) -> usize {
-    if variant == "shifted" { 1 } else { 2 }
+/// Running folds in [`makearray_scan_doc`]'s program: the region's scan
+/// alone. The consumer's read one row up is that scan combined with the
+/// term (`scan_shift`), or for the to-top shape the reverse exclusive scan
+/// the region's inclusive one is split into; the shifted shape's starts on
+/// its zero row and reads the assembled array.
+fn scans_of(_variant: &str) -> usize {
+    1
 }
 
 /// A reverse window whose body reads the output index is not a scan, but

@@ -1990,7 +1990,16 @@ pub(super) fn fuse_program(prog: &mut TapeProgram, cfg: SuperopCfg) {
     {
         let range = fx.prog.section_range(cad);
         let start_len = fx.sink.instrs.len();
-        fuse_section(&mut fx, range);
+        if cad == Cadence::Continuous {
+            // The derivative path and the output-only work after it
+            // (`prune`) fuse apart, so a derivative call computes no
+            // output-only value inside one of its groups.
+            let cut = (range.start + fx.prog.n_rhs as usize).min(range.end);
+            fuse_section(&mut fx, range.start..cut);
+            fuse_section(&mut fx, cut..range.end);
+        } else {
+            fuse_section(&mut fx, range);
+        }
         section_counts[sec] = fx.sink.instrs.len() - start_len;
     }
 
@@ -2662,6 +2671,24 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
                 fx.sink.passthrough(prog, j);
             }
             i = zone_end;
+            continue;
+        }
+
+        // A copy of a value an open group of the same box computes is that
+        // value (a copy joining two branches sits in a conditional region,
+        // copied verbatim above).
+        if let Instr::Copy {
+            a: Operand::Slot(s),
+            out,
+        } = ins
+            && let Some(gi) = open.iter().position(|g| {
+                g.shape == prog.slots[*out as usize].shape
+                    && g.prec == prec_at(prog, i)
+                    && matches!(g.val_of.get(s), Some(MRef::Reg(_)))
+            })
+        {
+            open[gi].alias(i as u32, *s, *out);
+            i += 1;
             continue;
         }
 

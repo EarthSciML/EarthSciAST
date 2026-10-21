@@ -87,6 +87,7 @@ mod prune;
 mod refexec;
 mod reroll;
 mod scan_shift;
+mod sink;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
