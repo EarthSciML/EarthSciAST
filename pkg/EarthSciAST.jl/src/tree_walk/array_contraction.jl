@@ -174,6 +174,8 @@ function _cg_emit(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
         # cannot appear today; declining by name keeps it from being emitted as
         # a silently wrong read if it ever can.
         throw(_CodegenDecline(:cached_scalar_slot))
+    elseif k === _NK_CONTRACTION_LOOP
+        return _cg_contraction_loop(ctx, kc, nd)
     elseif k === _NK_OP
         return _cg_emit_op(ctx, kc, nd)
     end
@@ -183,6 +185,43 @@ end
 _cg_oplus_fn(op::Symbol) =
     op === :+ ? :+ : op === :* ? :* : op === :max ? :max : op === :min ? :min :
     op === :or ? :_or_combine : throw(_CodegenDecline(:unsupported_op))
+
+# `_NK_CONTRACTION_LOOP` in a nest's term: a scalar reduction nested in it
+# (`_NEST_SCALAR_LOOPS`), `_eval_contraction_loop` as a counted loop. The
+# accumulator starts at the node's `Float64` seed, which for such a loop is
+# `_first_term_seed` (resolve.jl), so the fold is the unroll's from its first
+# term; under a `Dual` value type the first term's partials pass through
+# `seed ⊕ term` untouched. The counter's span is known, so a gather it
+# subscripts drops its range test.
+function _cg_contraction_loop(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
+    spec = nd.payload::_ContractLoop
+    haskey(kc.loops, spec.ref) && throw(_CodegenDecline(:contraction_loop_reentered))
+    fnsym = _cg_oplus_fn(nd.op)
+    rng = spec.lo:spec.step:spec.hi
+    isempty(rng) && return nd.literal
+    kv = _cg_name(ctx, "lk")
+    acc = _cg_name(ctx, "lacc")
+    lo = _cg_geo!(ctx, spec.lo, (spec, :lo))
+    st = _cg_geo!(ctx, spec.step, (spec, :step), true)
+    hi = _cg_geo!(ctx, spec.hi, (spec, :hi))
+    kc.loops[spec.ref] = kv
+    kc.spans[spec.ref] = extrema((first(rng), last(rng)))
+    term = try
+        _cg_emit(ctx, kc, nd.children[1])
+    finally
+        delete!(kc.loops, spec.ref)
+        delete!(kc.spans, spec.ref)
+    end
+    return quote
+        let
+            local $acc = $(nd.literal)
+            for $kv in $lo:$st:$hi
+                $acc = $fnsym($acc, $term)
+            end
+            $acc
+        end
+    end
+end
 
 # `_NK_CONST_GATHER`: evaluate the subscripts in dimension order, resolve each on
 # its own axis through the SAME `_const_gather_sub` the walker calls (so an

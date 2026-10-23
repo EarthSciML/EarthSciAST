@@ -5743,6 +5743,26 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
         end
     end
 
+    # A whole-array `makearray` (`index(makearray(...), i…)` at this equation's
+    # own loops) that no tier above took: with the cell index symbolic the
+    # region cannot be picked, so every tier above saw the makearray rather than
+    # the value at the cell. Offered one equation per region instead
+    # (`_makearray_region_equations`), each of which goes through this cascade
+    # with its region's value as its right-hand side.
+    if !rhs_list_compiled && !_stencil_disabled()
+        parts = _makearray_region_equations(eq, lhs_op, lhs_body, idx_names, range_iters)
+        if parts !== nothing
+            for peq in parts
+                _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
+                    array_contractions, covered, peq, resolved_obs, array_var_info,
+                    var_map, const_registry, pgather, param_sym_set, reg_funcs;
+                    template_sites=template_sites, xeq=xeq, pooled_cells=pooled_cells,
+                    rhs_list_compiled=rhs_list_compiled, obs_nst=obs_nst)
+            end
+            return nothing
+        end
+    end
+
     # What is left is the per-cell build: one resolve and compile per output
     # cell, a contraction unrolled into each. In the in-place form it is the
     # interpreter's and takes a license, which a strict compiler refuses by
@@ -5794,6 +5814,130 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
         param_sym_set=param_sym_set, reg_funcs=reg_funcs,
         contraction_loop=use_contraction_loop, pooled_cells=pooled_cells)
     return nothing
+end
+
+# The equations of a whole-array `makearray` right-hand side, one per region
+# box, each over that box with the value `_resolve_index_of_makearray` picks for
+# its cells: an array producer of the makearray's rank as the gather
+# `index(<value>, i…)`; one of lower rank as the gather at the region's
+# non-singleton axes; any other value as it is, and 0 where no region covers a
+# cell. Later regions win, as there: the equation's box is cut at every region
+# bound, each piece goes to the last region that covers it, and a region's
+# pieces are one equation when they make up a box, one each otherwise. The
+# pieces depend on the number of regions only, never on the extents.
+#
+# `nothing` (the per-cell build keeps the equation) unless the right-hand side
+# is that gather at the equation's own loops, every loop a unit-step range and
+# every region bound a constant integer.
+const _MA_REGION_MAX_PIECES = 256
+
+_ma_region_bound(x::Integer) = Int(x)
+_ma_region_bound(x::AbstractFloat) = isinteger(x) ? Int(x) : nothing
+_ma_region_bound(x) = nothing
+
+function _makearray_region_equations(eq::Equation, lhs_op::OpExpr, lhs_body::OpExpr,
+                                     idx_names::Vector{String}, range_iters)
+    rhs = eq.rhs
+    rhs isa OpExpr || return nothing
+    g = rhs::OpExpr
+    nd = length(idx_names)
+    (g.op == "index" && length(g.args) == nd + 1 && nd >= 1) || return nothing
+    for d in 1:nd
+        v = g.args[d + 1]
+        (v isa VarExpr && (v::VarExpr).name == idx_names[d]) || return nothing
+    end
+    ma = g.args[1]
+    (ma isa OpExpr && (ma::OpExpr).op == "makearray") || return nothing
+    ma = ma::OpExpr
+    (ma.regions === nothing || ma.values === nothing) && return nothing
+    regions, values = ma.regions, ma.values
+    (isempty(regions) || length(regions) != length(values)) && return nothing
+    all(r -> r isa UnitRange{Int} && !isempty(r), range_iters) || return nothing
+    elo = Int[first(r) for r in range_iters]
+    ehi = Int[last(r) for r in range_iters]
+    boxes = Vector{Vector{Tuple{Int,Int}}}()
+    for region in regions
+        length(region) == nd || return nothing
+        box = Tuple{Int,Int}[]
+        for d in 1:nd
+            length(region[d]) == 2 || return nothing
+            lo = _ma_region_bound(region[d][1])
+            hi = _ma_region_bound(region[d][2])
+            (lo === nothing || hi === nothing) && return nothing
+            push!(box, (lo, hi))
+        end
+        push!(boxes, box)
+    end
+    # Cut each axis of the equation's box at every region bound inside it.
+    cuts = Vector{Vector{Int}}(undef, nd)
+    for d in 1:nd
+        c = Int[elo[d], ehi[d] + 1]
+        for b in boxes
+            lo, hi = b[d]
+            elo[d] < lo <= ehi[d] && push!(c, lo)
+            elo[d] <= hi < ehi[d] && push!(c, hi + 1)
+        end
+        cuts[d] = sort!(unique!(c))
+    end
+    npieces = prod(length(c) - 1 for c in cuts)
+    npieces <= _MA_REGION_MAX_PIECES || return nothing
+    # Each piece's region: the last whose box holds it, 0 for none.
+    owner = Dict{Int,Vector{NTuple{2,Vector{Int}}}}()
+    for I in CartesianIndices(Tuple(1:(length(c) - 1) for c in cuts))
+        plo = Int[cuts[d][I[d]] for d in 1:nd]
+        phi = Int[cuts[d][I[d] + 1] - 1 for d in 1:nd]
+        w = 0
+        for (r, b) in enumerate(boxes)
+            all(d -> b[d][1] <= plo[d] && phi[d] <= b[d][2], 1:nd) && (w = r)
+        end
+        push!(get!(owner, w, NTuple{2,Vector{Int}}[]), (plo, phi))
+    end
+    loops = idx_names
+    out = Equation[]
+    piece_eq(plo, phi, prhs) = Equation(
+        OpExpr("faq", ASTExpr[]; output_idx=Any[l for l in loops],
+               ranges=Dict{String,Any}(loops[d] => Any[plo[d], phi[d]] for d in 1:nd),
+               expr_body=lhs_body),
+        prhs; _comment=eq._comment)
+    for w in sort!(collect(keys(owner)))
+        pieces = owner[w]
+        prhs = w == 0 ? NumExpr(0.0) : _makearray_region_rhs(values[w], boxes[w], loops)
+        prhs === nothing && return nothing
+        # One equation when the pieces tile their bounding box.
+        blo = Int[minimum(p[1][d] for p in pieces) for d in 1:nd]
+        bhi = Int[maximum(p[2][d] for p in pieces) for d in 1:nd]
+        ncov = sum(prod(p[2][d] - p[1][d] + 1 for d in 1:nd) for p in pieces)
+        if ncov == prod(bhi[d] - blo[d] + 1 for d in 1:nd)
+            push!(out, piece_eq(blo, bhi, prhs))
+        else
+            for (plo, phi) in pieces
+                push!(out, piece_eq(plo, phi, prhs))
+            end
+        end
+    end
+    return out
+end
+
+# A region's value as the right-hand side of the equation over its cells (see
+# `_makearray_region_equations`); `nothing` when its rank fits neither the
+# makearray nor the region, which the per-cell build then reports.
+function _makearray_region_rhs(val::ASTExpr, box::Vector{Tuple{Int,Int}},
+                               loops::Vector{String})
+    nd = length(loops)
+    if _is_array_producer(val)
+        v = val::OpExpr
+        rank = v.op == "makearray" ?
+            ((v.regions === nothing || isempty(v.regions)) ? 0 : length(v.regions[1])) :
+            length(_output_idx_strings(v))
+        sel = rank == nd ? loops : String[loops[d] for d in 1:nd if box[d][1] != box[d][2]]
+        length(sel) == rank || return nothing
+        return OpExpr("index", ASTExpr[v, (VarExpr(l) for l in sel)...])
+    end
+    # A rank-0 aggregate stays nested in a pass-through `+`: as the bare
+    # right-hand side it would be this equation's own aggregate, folded from
+    # the 0̄ seed, where the gather unrolls it from its first term.
+    val isa OpExpr && _is_faq_op((val::OpExpr).op) && return OpExpr("+", ASTExpr[val])
+    return val
 end
 
 # Thrown to stop the refusal diagnostic's enumeration at its term cap; caught
@@ -5971,9 +6115,17 @@ function _try_compile_array_contraction(lhs_body::OpExpr, rhs_body::ASTExpr,
         OpExpr("ifelse", ASTExpr[agg_filter, rhs_body, NumExpr(rhs_zerobar)])
     body = isempty(resolved_obs) ? term : _sub_preserving(term, resolved_obs)
     # The term, resolved once with every index symbolic; the emitter writes the
-    # fold around it (array_contraction.jl, `_ACFold`).
-    got = _resolve_array_contraction_term(body, idx_names, contract_names,
+    # fold around it (array_contraction.jl, `_ACFold`). A scalar reduction nested
+    # in it stays a loop (`_NEST_SCALAR_LOOPS`).
+    got = let prev = _NEST_SCALAR_LOOPS[]
+        _NEST_SCALAR_LOOPS[] = true
+        try
+            _resolve_array_contraction_term(body, idx_names, contract_names,
                 array_var_info, var_map, const_registry, pgather)
+        finally
+            _NEST_SCALAR_LOOPS[] = prev
+        end
+    end
     if got === nothing
         _note_decline!(:array_contraction, :symbolic_body_did_not_lower)
         return nothing

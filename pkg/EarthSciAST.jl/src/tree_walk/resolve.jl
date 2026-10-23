@@ -795,6 +795,21 @@ end
 # (xcse.jl, which safely DECLINES an unknown kind → leaves it inline).
 const _ARRAY_CELL_DEPTH = Ref(0)
 
+# Set while the whole-array nest resolves its term (`_try_compile_array_contraction`).
+# A scalar reduction nested in that term then stays a loop (`_resolve_scalar_faq`)
+# instead of unrolling one term per contracted index into the nest's one body,
+# which would make the generated code as long as the reduction. The nest's
+# emitter writes it as a counted loop (`_cg_emit`, array_contraction.jl); no
+# other consumer of a symbolic resolve sees the loop node.
+const _NEST_SCALAR_LOOPS = Ref(false)
+
+# The seed that makes a fold `acc = acc ⊕ term` from it equal, bit for bit, the
+# fold from the first term the unroll writes (`_combine_with_reducer`): `-0.0`
+# for `+` (`-0.0 + x` is `x` for every `x`, `-0.0` included, where `0.0 + -0.0`
+# is `+0.0`), `1.0` for `*`, `-Inf` for max and `Inf` for min.
+_first_term_seed(oplus::String) =
+    oplus == "+" ? -0.0 : oplus == "*" ? 1.0 : oplus == "max" ? -Inf : Inf
+
 # Tier gate and coverage floor. On under `native`, but only for reductions at
 # least `_contraction_loop_min()` long — small reductions keep unrolling so the
 # vast existing small-aggregate test surface (and its CSE / stencil interactions)
@@ -820,13 +835,16 @@ end
 # `E_TREEWALK_UNBOUND_LOOP_VAR` here — caught, and we unroll (correctness first).
 function _try_build_contraction_loop(body::ASTExpr, contract_names::Vector{String},
         ranges::AbstractVector, oplus::String, zerobar::Float64,
-        array_var_info, var_map, const_arrays, pgather::AbstractDict)
+        array_var_info, var_map, const_arrays, pgather::AbstractDict;
+        # The enclosing symbolic resolve's own bound names, which the body may
+        # read (a reduction nested in the whole-array nest's term).
+        outer_syms::Set{String}=_EMPTY_BOUND_SYMS)
     names = String[_fresh_loopvar_name() for _ in contract_names]
     refs  = Base.RefValue{Int}[Ref(0) for _ in contract_names]
     subs  = Dict{String,ASTExpr}(contract_names[d] => VarExpr(names[d])
                                  for d in eachindex(contract_names))
     subbed = _sub_preserving(body, subs)
-    bsyms  = Set{String}(names)
+    bsyms  = union(Set{String}(names), outer_syms)
     resolved = try
         # memo=nothing: the symbolic (bound-sym) resolution must never share the
         # concrete RHS-build memo (same invariant the compile-once path relies on).
@@ -1015,6 +1033,24 @@ function _resolve_scalar_faq(faq_expr::OpExpr, array_var_info, var_map, const_ar
         if total >= _contraction_loop_min() && all(!isempty, ranges)
             looped = _try_build_contraction_loop(body, contract_names, ranges,
                         oplus, zerobar, array_var_info, var_map, const_arrays, pgather)
+            looped === nothing || return looped
+        end
+    end
+    # Nested in the whole-array nest's term (`_NEST_SCALAR_LOOPS`), a reduction
+    # over ONE constant range at least the loop floor long stays a loop that
+    # reads the nest's counters. It folds from `_first_term_seed`, so its value
+    # is the unroll's below bit for bit: the same terms in the same order, left
+    # to right from the first. Two or more contracted indices keep unrolling,
+    # since nested loops would group the sum by the outer index.
+    if _NEST_SCALAR_LOOPS[] && !isempty(bound_syms) && gates === nothing &&
+       filt0 === nothing && length(contract_names) == 1 &&
+       (oplus == "+" || oplus == "*" || oplus == "max" || oplus == "min") &&
+       _is_const_int_range(ranges_dict[contract_names[1]])
+        r = _expand_int_range(ranges_dict[contract_names[1]])
+        if length(r) >= _contraction_loop_min()
+            looped = _try_build_contraction_loop(body, contract_names, [r], oplus,
+                        _first_term_seed(oplus), array_var_info, var_map, const_arrays,
+                        pgather; outer_syms = bound_syms)
             looped === nothing || return looped
         end
     end
