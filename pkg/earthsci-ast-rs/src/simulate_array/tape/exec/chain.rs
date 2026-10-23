@@ -28,6 +28,10 @@ use super::*;
 /// Element-operations each worker of a split chain must get.
 const MIN_CHAIN_WORK_PER_WORKER: usize = 1 << 10;
 
+/// Element-operations the calling thread runs before the pool's workers
+/// start theirs.
+const CHAIN_LEAD_WORK: usize = 1 << 13;
+
 /// A run of instructions `[start, end)` of the continuous section that
 /// splits by the output cells of the segmented reduction at `seg`: the
 /// tuple instructions `[start, seg)`, the reduction, and optionally the
@@ -40,12 +44,14 @@ pub(in crate::simulate_array::tape) struct SegChain {
     pub(super) fused: Option<u32>,
     /// Output cells of the reduction.
     n_out: usize,
+    /// The most tuples one output cell folds.
+    max_row: usize,
     /// Estimated element-operations of the whole chain.
     work: usize,
     /// Whether nothing outside the chain reads the tuple slots its tuple
     /// instructions define, so a pass that folds them as it goes need not
     /// store them.
-    private: bool,
+    pub(super) private: bool,
     /// The chain's position in [`seg_chains`]' list.
     id: usize,
     /// How the chain's tuples drop to the unmasked ones, when it can.
@@ -243,12 +249,14 @@ fn plan_one(
             ins.for_each_read(&tables, |s| private &= !defs.contains(&s));
         }
     }
+    let max_row = rows.windows(2).map(|r| (r[1] - r[0]) as usize).max();
     Some(SegChain {
         start,
         end,
         seg,
         fused,
         n_out,
+        max_row: max_row.unwrap_or(0),
         work,
         private,
         id: 0,
@@ -539,6 +547,10 @@ impl SumOfProducts {
 #[derive(Default)]
 pub(in crate::simulate_array::tape) struct ChainScratch {
     ops: Vec<Op>,
+    /// The tuple slots a private chain keeps in `tmp` (see [`Job::bufs`]).
+    bufs: Vec<(*const f64, usize)>,
+    /// Every worker's block buffers, `Job::tmp_stride` apart.
+    tmp: Vec<f64>,
     /// Per chain, its admitted tuples (see [`CompactPlan`]), or `None`.
     compact: Vec<Option<Compacted>>,
 }
@@ -622,6 +634,18 @@ struct Job<'a> {
     /// The tuple instructions and the reduction as one pass, when they are
     /// a gather, a product and a sum.
     sop: Option<SumOfProducts>,
+    /// The most tuples a block of cells holds.
+    cap: usize,
+    /// The cells share 0 takes beyond the others' (see [`cell_share`]).
+    lead: usize,
+    /// When nothing outside the chain reads its tuple slots: each slot the
+    /// tuple instructions write, at tuple 0, with the first instruction
+    /// that writes it. A worker keeps the slot's block in its own buffer
+    /// `i` (`cap` long, at `tmp + w * tmp_stride + i * cap`) from that
+    /// instruction on, so a block's tuple values never leave the cache.
+    bufs: &'a [(*const f64, usize)],
+    tmp: *mut f64,
+    tmp_stride: usize,
     idx: &'a [Option<IndexTable>],
     simd: SimdLevel,
     precision: crate::precision::Precision,
@@ -777,6 +801,21 @@ pub(super) unsafe fn run_chain(
         None => (None, &mut fscratch.workers),
     };
     let mut sop = SumOfProducts::of(&scratch.ops, *op, *init, seg_src, seg_mask, ch.private);
+    let cap = ch.max_row.max(CHAIN_BLOCK);
+    scratch.bufs.clear();
+    if ch.private && sop.is_none() {
+        for (j, op) in scratch.ops.iter().enumerate() {
+            let dst = op.dst() as *const f64;
+            if !scratch.bufs.iter().any(|&(p, _)| std::ptr::eq(p, dst)) {
+                scratch.bufs.push((dst, j));
+            }
+        }
+    }
+    let tmp_stride = scratch.bufs.len() * cap;
+    if scratch.tmp.len() < ways * tmp_stride {
+        scratch.tmp.resize(ways * tmp_stride, 0.0);
+    }
+    let tmp = scratch.tmp.as_mut_ptr();
     let (mut rows, mut seg_mask) = (rows, seg_mask);
     // Fold only the admitted tuples. Dropping a masked term is exact: the
     // masked fold leaves the accumulator as it is for each (see
@@ -803,6 +842,13 @@ pub(super) unsafe fn run_chain(
         ways,
         idx: ch.fused.map_or(&[][..], |s| &idx_tables[s as usize][..]),
         sop,
+        cap,
+        // A quarter of a share more, at most the cells of the work the
+        // calling thread gets through while the workers wake.
+        lead: (ch.n_out / (4 * ways + 1)).min(CHAIN_LEAD_WORK * ch.n_out / ch.work.max(1)),
+        bufs: &scratch.bufs,
+        tmp,
+        tmp_stride,
         fused: resolved,
         simd,
         precision: crate::precision::active(),
@@ -814,9 +860,9 @@ pub(super) unsafe fn run_chain(
 /// The output cells `[c0, c1)` of share `w` of `ways`, cut where `at + cut`
 /// starts a cache line (as [`share_at`](super::par::share_at) cuts). Share 0
 /// runs on the calling thread, which starts it as it publishes the job,
-/// before any worker has seen it, so it takes a quarter more cells than each
-/// of the others and all finish together.
-fn cell_share(n: usize, w: usize, ways: usize, at: *const f64) -> (usize, usize) {
+/// before any worker has seen it, so it takes `lead` more cells than each of
+/// the others and all finish together.
+fn cell_share(n: usize, lead: usize, w: usize, ways: usize, at: *const f64) -> (usize, usize) {
     const ALIGN: usize = 8;
     let phase = (at as usize / std::mem::size_of::<f64>()) % ALIGN;
     let cut = |k: usize| {
@@ -825,7 +871,7 @@ fn cell_share(n: usize, w: usize, ways: usize, at: *const f64) -> (usize, usize)
         } else if k == ways {
             n
         } else {
-            let c = n * (4 * k + 1) / (4 * ways + 1);
+            let c = lead + (n - lead) * k / ways;
             ((c + phase) / ALIGN * ALIGN).saturating_sub(phase).min(n)
         }
     };
@@ -835,52 +881,151 @@ fn cell_share(n: usize, w: usize, ways: usize, at: *const f64) -> (usize, usize)
 /// Run every share of `job` on the pool.
 unsafe fn run_job(workers: &mut FusedWorkers, job: &Job) {
     workers.run_with_workers(job.ways, &|w, fregs, cursor| {
-        let (c0, c1) = cell_share(job.n_out, w, job.ways, job.seg_dst);
+        let (c0, c1) = cell_share(job.n_out, job.lead, w, job.ways, job.seg_dst);
         if c0 >= c1 {
             return;
         }
         let _p = crate::precision::enter(job.precision);
-        let (p0, p1) = (job.rows[c0] as usize, job.rows[c1] as usize);
-        let len = p1 - p0;
         let dst = unsafe { job.seg_dst.add(c0) };
         let rows = &job.rows[c0..=c1];
-        let (src, mask, init) = (job.seg_src, job.seg_mask, job.init);
+        let (mask, init) = (job.seg_mask, job.init);
         if let Some(sp) = &job.sop {
             unsafe { sp.run(rows, mask, init, dst) };
-        } else {
-            for op in job.ops {
-                unsafe { run_op(*op, p0, len) };
+            if let Some((fs, r)) = &job.fused {
+                unsafe { cell_window(job, fs, r, fregs, cursor, c0, c1) };
             }
+            return;
+        }
+        // Block by block of cells: each block's tuples through every tuple
+        // instruction, its cells folded, then the cell group over them, so a
+        // block's values are still in cache when the next step reads them.
+        // Every tuple and every cell sees the same kernels in the same order.
+        let tmp = unsafe { job.tmp.add(w * job.tmp_stride) };
+        let mut b0 = c0;
+        while b0 < c1 {
+            let q0 = job.rows[b0] as usize;
+            let mut b1 = b0 + 1;
+            while b1 < c1 && job.rows[b1 + 1] as usize - q0 <= job.cap {
+                b1 += 1;
+            }
+            let len = job.rows[b1] as usize - q0;
+            for (j, op) in job.ops.iter().enumerate() {
+                unsafe { run_op(job.block_op(*op, j, q0, tmp), 0, len) };
+            }
+            let src = job.place(job.seg_src, job.ops.len(), q0, tmp);
+            let mask = mask.map(|m| job.place(m, job.ops.len(), q0, tmp) as *const f64);
+            let rows = &job.rows[b0..=b1];
+            let dst = unsafe { job.seg_dst.add(b0) };
             macro_rules! fold {
                 ($f:expr) => {
-                    unsafe { seg_reduce(dst, src, mask, rows, init, $f) }
+                    unsafe { seg_reduce(dst, src, mask, rows, q0, init, $f) }
                 };
             }
             dispatch_bin_kernel!(&job.seg_op, fold);
-        }
-        if let Some((fs, r)) = &job.fused {
-            unsafe {
-                fill_whole(fs, r.bases, r.whole_src, c0, c1, 0);
-                run_fused_window(
-                    job.simd,
-                    fs,
-                    r.svals,
-                    r.bases,
-                    r.outs,
-                    std::ptr::null_mut(),
-                    job.idx,
-                    fregs,
-                    cursor,
-                    Window {
-                        lo: c0,
-                        hi: c1,
-                        period: 0,
-                        node_elems: r.node_elems,
-                    },
-                );
+            if let Some((fs, r)) = &job.fused {
+                unsafe { cell_window(job, fs, r, fregs, cursor, b0, b1) };
             }
+            b0 = b1;
         }
     });
+}
+
+impl Job<'_> {
+    /// Where tuple-box array `p` (at tuple 0) is read by tuple instruction
+    /// `j` in the block that starts at tuple `q0`: the buffer of a slot an
+    /// earlier instruction wrote, or `p` itself at `q0`.
+    fn place(&self, p: *const f64, j: usize, q0: usize, tmp: *mut f64) -> *mut f64 {
+        for (i, &(s, from)) in self.bufs.iter().enumerate() {
+            if std::ptr::eq(s, p) && from < j {
+                return unsafe { tmp.add(i * self.cap) };
+            }
+        }
+        unsafe { p.add(q0) as *mut f64 }
+    }
+
+    /// Tuple instruction `j` over the block at tuple `q0`, its tuple-box
+    /// operands placed as [`Job::place`] places them (its own output as a
+    /// read by the next instruction).
+    fn block_op(&self, op: Op, j: usize, q0: usize, tmp: *mut f64) -> Op {
+        let arg = |a: Arg| match a {
+            Arg::S(v) => Arg::S(v),
+            Arg::P(p) => Arg::P(self.place(p, j, q0, tmp)),
+        };
+        let dst = |d: *mut f64| self.place(d, j + 1, q0, tmp);
+        match op {
+            Op::Table { dst: d, src, pos } => Op::Table {
+                dst: dst(d),
+                src,
+                pos: unsafe { pos.add(q0) },
+            },
+            Op::Bin { op, dst: d, a, b } => Op::Bin {
+                op,
+                dst: dst(d),
+                a: arg(a),
+                b: arg(b),
+            },
+            Op::Un { op, dst: d, a } => Op::Un {
+                op,
+                dst: dst(d),
+                a: arg(a),
+            },
+            Op::Neg { dst: d, a } => Op::Neg {
+                dst: dst(d),
+                a: arg(a),
+            },
+        }
+    }
+}
+
+impl Op {
+    /// The tuple-box array the instruction writes, at tuple 0.
+    fn dst(&self) -> *mut f64 {
+        match *self {
+            Op::Table { dst, .. }
+            | Op::Bin { dst, .. }
+            | Op::Un { dst, .. }
+            | Op::Neg { dst, .. } => dst,
+        }
+    }
+}
+
+/// Tuples a chain runs through its tuple instructions, reduction and cell
+/// group at a time (more when one cell folds more).
+const CHAIN_BLOCK: usize = 512;
+
+/// The chain's cell group over cells `[c0, c1)`.
+///
+/// # Safety
+/// As for [`run_fused_window`], with `r` the group's resolved operands.
+unsafe fn cell_window(
+    job: &Job,
+    fs: &FusedSpec,
+    r: &super::fused::Resolved,
+    fregs: &mut [f64],
+    cursor: &mut super::fused::RunCursor,
+    c0: usize,
+    c1: usize,
+) {
+    unsafe {
+        fill_whole(fs, r.bases, r.whole_src, c0, c1, 0);
+        run_fused_window(
+            job.simd,
+            fs,
+            r.svals,
+            r.bases,
+            r.outs,
+            std::ptr::null_mut(),
+            job.idx,
+            fregs,
+            cursor,
+            Window {
+                lo: c0,
+                hi: c1,
+                period: 0,
+                node_elems: r.node_elems,
+            },
+        );
+    }
 }
 
 /// One tuple instruction over the tuples `[lo, lo + len)`.

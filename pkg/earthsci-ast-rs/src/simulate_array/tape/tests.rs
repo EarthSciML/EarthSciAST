@@ -1353,9 +1353,10 @@ fn exports_materialize_as_observed_arrays() {
     }
 }
 
-/// Forward prefix scans (inclusive `<=` and exclusive `<`), compiled as the
-/// whole-plane running fold — bit-identical to the per-cell sweep the
-/// production `eval_faq` runs for these.
+/// Forward prefix scans (inclusive `<=` and exclusive `<`) and reverse ones
+/// (`>=`, `>`, folded from the top), compiled as the whole-plane running fold
+/// — bit-identical to the per-cell sweep the production `eval_faq` runs for
+/// these.
 #[test]
 fn ab_prefix_scan_observeds() {
     let (ni, nk) = (4, 5);
@@ -1373,11 +1374,15 @@ fn ab_prefix_scan_observeds() {
             "variables": {
                 "u": {"type": "unknown", "shape": ["i", "k"]},
                 "P": {"type": "unknown", "shape": ["i", "k"]},
-                "Q": {"type": "unknown", "shape": ["i", "k"]}
+                "Q": {"type": "unknown", "shape": ["i", "k"]},
+                "R": {"type": "unknown", "shape": ["i", "k"]},
+                "S": {"type": "unknown", "shape": ["i", "k"]}
             },
             "equations": [
                 {"lhs": "P", "rhs": scan_obs("<=")},
                 {"lhs": "Q", "rhs": scan_obs("<")},
+                {"lhs": "R", "rhs": scan_obs(">=")},
+                {"lhs": "S", "rhs": scan_obs(">")},
                 {
                     "lhs": {"op": "faq", "args": [], "output_idx": ["i", "k"],
                             "expr": {"op": "D", "args": [
@@ -1389,7 +1394,11 @@ fn ab_prefix_scan_observeds() {
                                 {"op": "*", "args": [-0.1,
                                     {"op": "index", "args": ["P", "i", "k"]}]},
                                 {"op": "*", "args": [0.05,
-                                    {"op": "index", "args": ["Q", "i", "k"]}]}
+                                    {"op": "index", "args": ["Q", "i", "k"]}]},
+                                {"op": "*", "args": [0.07,
+                                    {"op": "index", "args": ["R", "i", "k"]}]},
+                                {"op": "*", "args": [-0.03,
+                                    {"op": "index", "args": ["S", "i", "k"]}]}
                             ]}}
                 }
             ]
@@ -1401,10 +1410,231 @@ fn ab_prefix_scan_observeds() {
     // per-step writes.
     assert_eq!(
         opcount(&prog, "Scan") + scan_micro_ops(&prog),
-        2,
+        4,
         "one Scan per scan observed"
     );
     assert_eq!(opcount(&prog, "Region"), 0, "no per-step region writes");
+}
+
+/// A `makearray` whose region value is a forward prefix scan (issue #533,
+/// the column-integral shape: the running sum on the interfaces below the
+/// top and the column total, or a zero, on the remaining one; or the reverse
+/// scan to the top). The region lowers to the O(N) running fold, never the
+/// filtered triangular box.
+fn makearray_scan_doc(n: i64, ni: i64, variant: &str) -> serde_json::Value {
+    // `ni == 0` is the 1-D column; otherwise `ni` columns with the scan on
+    // the second (non-leading) axis.
+    let two_d = ni > 0;
+    let at = |var: &str, k: serde_json::Value| {
+        if two_d {
+            json!({"op": "index", "args": [var, "i", k]})
+        } else {
+            json!({"op": "index", "args": [var, k]})
+        }
+    };
+    let term = json!({"op": "*", "args": [at("u", json!("j")), at("dz", json!("j"))]});
+    let (out_idx, ranges, total_out, total_ranges) = if two_d {
+        (
+            json!(["i", "k"]),
+            json!({"i": [1, ni], "k": [1, n], "j": [1, n]}),
+            json!(["i"]),
+            json!({"i": [1, ni], "j": [1, n]}),
+        )
+    } else {
+        (
+            json!(["k"]),
+            json!({"k": [1, n], "j": [1, n]}),
+            json!([]),
+            json!({"j": [1, n]}),
+        )
+    };
+    let scan = |cmp: &str| {
+        json!({"op": "faq", "args": [], "output_idx": out_idx, "reduce": "+",
+            "ranges": ranges, "filter": {"op": cmp, "args": ["j", "k"]}, "expr": term})
+    };
+    let total = json!({"op": "faq", "args": [], "output_idx": total_out, "reduce": "+",
+        "ranges": total_ranges, "expr": term});
+    let region = |lo: i64, hi: i64| {
+        if two_d {
+            json!([[1, ni], [lo, hi]])
+        } else {
+            json!([[lo, hi]])
+        }
+    };
+    let f = match variant {
+        // Interfaces 1..n hold the exclusive scan, n+1 the total.
+        "from_bottom" => json!({"op": "makearray", "args": [],
+            "regions": [region(1, n), region(n + 1, n + 1)],
+            "values": [scan("<"), total]}),
+        // Interfaces 1..n hold the reverse (suffix) scan, n+1 zero.
+        "to_top" => json!({"op": "makearray", "args": [],
+            "regions": [region(1, n), region(n + 1, n + 1)],
+            "values": [scan(">="), 0.0]}),
+        // Interface 1 holds zero, 2..n+1 the inclusive scan.
+        "shifted" => json!({"op": "makearray", "args": [],
+            "regions": [region(1, 1), region(2, n + 1)],
+            "values": [0.0, scan("<=")]}),
+        _ => unreachable!(),
+    };
+    let shape = |k: &str| if two_d { json!(["i", k]) } else { json!([k]) };
+    let d_lhs = if two_d {
+        json!({"op": "faq", "args": [], "output_idx": ["i", "k"],
+            "expr": {"op": "D", "args": [at("u", json!("k"))], "wrt": "t"},
+            "ranges": {"i": [1, ni], "k": [1, n]}})
+    } else {
+        json!({"op": "faq", "args": [], "output_idx": ["k"],
+            "expr": {"op": "D", "args": [at("u", json!("k"))], "wrt": "t"},
+            "ranges": {"k": [1, n]}})
+    };
+    let mut rhs_ranges = json!({"k": [1, n]});
+    if two_d {
+        rhs_ranges["i"] = json!([1, ni]);
+    }
+    json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "tape_makearray_scan"},
+        "index_sets": {
+            "i": {"kind": "interval", "size": ni.max(1)},
+            "k": {"kind": "interval", "size": n},
+            "kn": {"kind": "interval", "size": n + 1}
+        },
+        "models": {"M": {
+            "variables": {
+                "u": {"type": "unknown", "shape": shape("k")},
+                "dz": {"type": "unknown", "shape": shape("k")},
+                "F": {"type": "unknown", "shape": shape("kn")}
+            },
+            "equations": [
+                {"lhs": "dz", "rhs": {"op": "faq", "args": [], "output_idx": out_idx.clone(),
+                    "ranges": rhs_ranges.clone(),
+                    "expr": {"op": "+", "args": [0.5, {"op": "*", "args": [0.01, "k"]}]}}},
+                {"lhs": "F", "rhs": f},
+                {"lhs": d_lhs,
+                 "rhs": {"op": "faq", "args": [], "output_idx": out_idx, "ranges": rhs_ranges,
+                    "expr": {"op": "*", "args": [-0.1, {"op": "-", "args": [
+                        at("F", json!({"op": "+", "args": ["k", 1]})),
+                        at("F", json!("k"))]}]}}}
+            ]
+        }}
+    })
+}
+
+#[test]
+fn ab_makearray_prefix_scan_region() {
+    for variant in ["from_bottom", "to_top", "shifted"] {
+        for ni in [0, 3] {
+            let n = 7;
+            let prog = ab_check(makearray_scan_doc(n, ni, variant), -2.0, 2.0);
+            assert_eq!(
+                opcount(&prog, "Scan") + scan_micro_ops(&prog),
+                scans_of(variant),
+                "[{variant}, ni={ni}] the scan region is one running fold"
+            );
+            // The consumer reads the scans, so the derivative path never
+            // assembles the array (only its export does).
+            let cont = prog.section_range(Cadence::Continuous);
+            let rhs = &prog.instrs[cont.start..cont.start + prog.n_rhs as usize];
+            let assembles = rhs
+                .iter()
+                .filter(|i| matches!(i, Instr::Assemble { .. }))
+                .count();
+            assert_eq!(
+                assembles,
+                usize::from(variant == "shifted"),
+                "[{variant}, ni={ni}]"
+            );
+        }
+    }
+}
+
+/// Over enough columns, a reverse scan's group visits its rows from the
+/// top, and both reverse scans of the to-top shape fold inside the
+/// consumer's group.
+#[test]
+fn ab_reverse_scans_fuse_over_many_columns() {
+    for variant in ["to_top", "from_bottom"] {
+        let prog = ab_check(makearray_scan_doc(6, 40, variant), -2.0, 2.0);
+        assert_eq!(
+            opcount(&prog, "Scan"),
+            0,
+            "[{variant}] every scan is absorbed"
+        );
+        assert_eq!(scan_micro_ops(&prog), scans_of(variant), "[{variant}]");
+        let reversed = prog
+            .fused
+            .iter()
+            .filter(|f| f.rows_reversed().is_some())
+            .count();
+        assert_eq!(reversed, usize::from(variant == "to_top"), "[{variant}]");
+    }
+}
+
+/// The region's slab stays O(N): the triangular box would hold N^2 cells.
+#[test]
+fn makearray_prefix_scan_region_is_linear_in_the_column() {
+    let n = 3000;
+    for variant in ["from_bottom", "to_top", "shifted"] {
+        let compiled = compile(makearray_scan_doc(n, 0, variant));
+        let (prog, _) = taped(compiled.build_tape_opts(&HashSet::new(), Some(default_cfg())));
+        let widest = prog.slots.iter().map(|s| s.elems()).max().unwrap_or(0);
+        assert!(
+            widest <= n as usize + 1,
+            "[{variant}] a slot of {widest} cells: the scan was lowered as a box"
+        );
+        assert_eq!(
+            opcount(&prog, "Scan") + scan_micro_ops(&prog),
+            scans_of(variant)
+        );
+    }
+}
+
+/// Running folds in [`makearray_scan_doc`]'s program: the region's scan
+/// alone. The consumer's read one row up is that scan combined with the
+/// term (`scan_shift`), or for the to-top shape the reverse exclusive scan
+/// the region's inclusive one is split into; the shifted shape's starts on
+/// its zero row and reads the assembled array.
+fn scans_of(_variant: &str) -> usize {
+    1
+}
+
+/// A reverse window whose body reads the output index is not a scan, but
+/// still folds each cell's suffix from the top (esm-spec §4.3.1): a reverse
+/// `Reduce` over the promoted box, matching the interpreter's descending
+/// per-cell fold bit for bit.
+#[test]
+fn a_reverse_window_that_is_not_a_scan_folds_from_the_top() {
+    let n = 9;
+    let body_box = json!({"op": "*", "args": [{"op": "index", "args": ["u", "m"]}, "i"]});
+    let body_mixed = json!({"op": "*", "args": [
+        {"op": "index", "args": ["u", {"op": "+", "args": [{"op": "-", "args": ["m", "i"]}, 1]}]},
+        {"op": "+", "args": ["i", 0.25]}]});
+    for (cmp, body) in [(">=", &body_box), (">", &body_box), (">=", &body_mixed)] {
+        let doc = json!({
+            "esm": "1.1.0",
+            "metadata": {"name": "tape_reverse_window"},
+            "models": {"M": {
+                "variables": {
+                    "u": {"type": "unknown", "shape": ["i"]},
+                    "R": {"type": "unknown", "shape": ["i"]}
+                },
+                "equations": [
+                    {"lhs": "R", "rhs": {"op": "faq", "args": [], "output_idx": ["i"],
+                        "reduce": "+", "ranges": {"i": [1, n], "m": [1, n]},
+                        "filter": {"op": cmp, "args": ["m", "i"]},
+                        "expr": body}},
+                    d_eq("u", n, agg(n, json!({"op": "neg", "args": [
+                        {"op": "index", "args": ["R", "i"]}]})))
+                ]
+            }}
+        });
+        let prog = ab_check(doc, -3.0, 3.0);
+        let reverse_reduces = prog
+            .instrs
+            .iter()
+            .filter(|i| matches!(i, Instr::Reduce { reverse: true, .. }))
+            .count();
+        assert!(reverse_reduces > 0, "{cmp} {body}");
+    }
 }
 
 /// Absorbed scans (`MicroOp::Scan`) over every fused group.

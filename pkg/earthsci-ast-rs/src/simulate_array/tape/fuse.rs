@@ -240,13 +240,21 @@ impl GBuilder {
             init,
             src: SrcRef::Slot(src),
             axes,
+            reverse,
             src_shape,
             out,
         } = ins
         else {
             return false;
         };
-        if self.reduce.is_some()
+        // A group's chunks fold ascending; a reverse fold stays standalone,
+        // and a group that visits its rows from the last folds nothing.
+        if *reverse
+            || self
+                .micro
+                .iter()
+                .any(|m| matches!(m, MicroOp::Scan { reverse: true, .. }))
+            || self.reduce.is_some()
             || *src_shape != self.shape
             || axes.is_empty()
             || axes.iter().enumerate().any(|(k, &a)| a as usize != k)
@@ -293,6 +301,7 @@ impl GBuilder {
             src,
             axis,
             inclusive,
+            reverse,
             src_shape,
             out,
         } = ins
@@ -300,6 +309,28 @@ impl GBuilder {
             return false;
         };
         if *src_shape != self.shape || *axis as usize >= self.shape.len() {
+            return false;
+        }
+        // A reverse scan joins a group only along its leading axis, whose
+        // rows the group then visits from the last (`FusedSpec::rows_reversed`):
+        // never beside a forward scan or a reduction, which fold ascending,
+        // with lanes to share a row and not too many rows.
+        let scans = |rev: bool| {
+            self.micro
+                .iter()
+                .any(|m| matches!(m, MicroOp::Scan { reverse, .. } if *reverse == rev))
+        };
+        if *reverse {
+            let lanes: usize = self.shape[1..].iter().product();
+            if *axis != 0
+                || self.reduce.is_some()
+                || scans(false)
+                || lanes < 2
+                || self.shape[0] > MAX_REVERSE_ROWS
+            {
+                return false;
+            }
+        } else if scans(true) {
             return false;
         }
         let operand = match src {
@@ -331,6 +362,7 @@ impl GBuilder {
             a,
             init: *init,
             inclusive: *inclusive,
+            reverse: *reverse,
             row: self.shape[*axis as usize] as u32,
             post,
             carry: self.n_carries,
@@ -1279,6 +1311,13 @@ impl SuperopCfg {
     }
 }
 
+/// The most rows a group with a reverse scan may visit: it visits them one
+/// at a time, each a pass of its own, so a long scanned axis stays a
+/// standalone scan (whose kernel sweeps a row's lanes in one loop). The
+/// bound is on the scanned axis, not the box, so the choice does not change
+/// with the number of columns.
+const MAX_REVERSE_ROWS: usize = 4096;
+
 /// The (op1, op2) pairs the executor monomorphizes as [`MicroOp::Bin2`]: the
 /// full `+ - * /` square, plus the pairs the simpleclimate adjacency
 /// histogram showed material (a multiply feeding a comparison mask; the
@@ -1377,6 +1416,7 @@ fn scan_fusions(
             MicroOp::Scan {
                 post: 1,
                 op: BinCode::Add | BinCode::Mul,
+                reverse: false,
                 ..
             }
         )
@@ -1403,6 +1443,7 @@ fn scan_fusions(
             op: BinCode::Add | BinCode::Mul,
             a,
             post: 1,
+            reverse: false,
             ..
         } = op
         else {
@@ -1943,11 +1984,13 @@ pub(super) fn fuse_program(prog: &mut TapeProgram, cfg: SuperopCfg) {
         adj_hist: FxHashMap::default(),
         chain_hist: FxHashMap::default(),
     };
+    let chained = chained_tuple_instrs(prog);
     let mut fx = FuseCtx {
         prog,
         readers: &readers,
         sink,
         cfg,
+        chained,
     };
 
     let mut section_counts = [0usize; 3];
@@ -1957,7 +2000,16 @@ pub(super) fn fuse_program(prog: &mut TapeProgram, cfg: SuperopCfg) {
     {
         let range = fx.prog.section_range(cad);
         let start_len = fx.sink.instrs.len();
-        fuse_section(&mut fx, range);
+        if cad == Cadence::Continuous {
+            // The derivative path and the output-only work after it
+            // (`prune`) fuse apart, so a derivative call computes no
+            // output-only value inside one of its groups.
+            let cut = (range.start + fx.prog.n_rhs as usize).min(range.end);
+            fuse_section(&mut fx, range.start..cut);
+            fuse_section(&mut fx, cut..range.end);
+        } else {
+            fuse_section(&mut fx, range);
+        }
         section_counts[sec] = fx.sink.instrs.len() - start_len;
     }
 
@@ -2024,6 +2076,7 @@ fn absorb_pre_reductions(prog: &mut TapeProgram) {
             init,
             src,
             axes,
+            reverse: false,
             src_shape,
             out,
         } = &prog.instrs[i]
@@ -2260,6 +2313,48 @@ struct FuseCtx<'a> {
     readers: &'a [SmallVec<[u32; 4]>],
     sink: Sink,
     cfg: SuperopCfg,
+    /// Per instruction: a tuple instruction of a segmented-reduction chain
+    /// ([`chained_tuple_instrs`]), left as it is.
+    chained: Vec<bool>,
+}
+
+/// The elementwise tuple instructions right before each CONTINUOUS
+/// `SegReduce` (a gather of each tuple's source, arithmetic over the tuple
+/// box): the executor runs them with the reduction as one chain, block of
+/// cells by block of cells, so their values stay in cache (`exec::chain`).
+/// A fused group in their place would end the chain.
+fn chained_tuple_instrs(prog: &TapeProgram) -> Vec<bool> {
+    let mut chained = vec![false; prog.instrs.len()];
+    let cont = prog.section_range(Cadence::Continuous);
+    for seg in cont.clone() {
+        let Instr::SegReduce { table, .. } = &prog.instrs[seg] else {
+            continue;
+        };
+        let Some(&n_pairs) = prog.seg_tables[*table as usize].rows.last() else {
+            continue;
+        };
+        let tuple = |s: &SlotId| {
+            let d = &prog.slots[*s as usize];
+            !d.scalar && d.shape[..] == [n_pairs as usize]
+        };
+        let mut pc = seg;
+        while pc > cont.start {
+            let ins = &prog.instrs[pc - 1];
+            let ok = match ins {
+                Instr::TableGather { out, .. }
+                | Instr::Bin { out, .. }
+                | Instr::Un { out, .. }
+                | Instr::Neg { out, .. } => tuple(out),
+                _ => false,
+            };
+            if !ok {
+                break;
+            }
+            chained[pc - 1] = true;
+            pc -= 1;
+        }
+    }
+    chained
 }
 
 /// Finalize one group: emit either its `Fused` instruction (plus any
@@ -2586,6 +2681,12 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
     let mut i = range.start;
     while i < range.end {
         let ins = &prog.instrs[i];
+        if fx.chained[i] {
+            flush_hazards(ins, None, &mut open, fx);
+            fx.sink.passthrough(prog, i);
+            i += 1;
+            continue;
+        }
         let deferrable = match ins {
             Instr::Export { slot, .. } => Some(*slot),
             Instr::DyWrite { write } => Some(prog.dy_writes[*write as usize].slot),
@@ -2628,6 +2729,24 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
                 fx.sink.passthrough(prog, j);
             }
             i = zone_end;
+            continue;
+        }
+
+        // A copy of a value an open group of the same box computes is that
+        // value (a copy joining two branches sits in a conditional region,
+        // copied verbatim above).
+        if let Instr::Copy {
+            a: Operand::Slot(s),
+            out,
+        } = ins
+            && let Some(gi) = open.iter().position(|g| {
+                g.shape == prog.slots[*out as usize].shape
+                    && g.prec == prec_at(prog, i)
+                    && matches!(g.val_of.get(s), Some(MRef::Reg(_)))
+            })
+        {
+            open[gi].alias(i as u32, *s, *out);
+            i += 1;
             continue;
         }
 

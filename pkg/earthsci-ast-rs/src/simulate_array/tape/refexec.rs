@@ -326,6 +326,7 @@ pub(super) fn run_reference(
                 init,
                 src,
                 axes,
+                reverse,
                 src_shape,
                 out,
             } => {
@@ -345,6 +346,14 @@ pub(super) fn run_reference(
                     sv.as_standard_layout().to_owned()
                 };
                 let mut dst_idx: Vec<usize> = vec![0; keep.len()];
+                // A reverse fold walks its one folded axis from the end.
+                let sv = if *reverse {
+                    let mut r = sv;
+                    r.invert_axis(ndarray::Axis(axes[0] as usize));
+                    r.as_standard_layout().to_owned()
+                } else {
+                    sv
+                };
                 for (idx, &x) in sv.indexed_iter() {
                     for (j, &d) in keep.iter().enumerate() {
                         dst_idx[j] = idx[d];
@@ -365,6 +374,7 @@ pub(super) fn run_reference(
                 src,
                 axis,
                 inclusive,
+                reverse,
                 src_shape,
                 out,
             } => {
@@ -373,11 +383,17 @@ pub(super) fn run_reference(
                 assert_eq!(sv.shape(), &src_shape[..], "Scan source box");
                 let ax = Axis(*axis as usize);
                 let mut o = ArrayD::<f64>::zeros(IxDyn(&src_shape[..]));
-                // One lane per position of the other axes, swept ascending —
-                // `run_prefix_scan`'s loop, written out.
+                // One lane per position of the other axes, swept ascending
+                // (descending when reverse) — `run_prefix_scan`'s loop,
+                // written out.
                 for (mut ol, sl) in o.lanes_mut(ax).into_iter().zip(sv.lanes(ax)) {
                     let mut acc = *init;
-                    for (y, &x) in ol.iter_mut().zip(sl.iter()) {
+                    let steps: Box<dyn Iterator<Item = (&mut f64, &f64)>> = if *reverse {
+                        Box::new(ol.iter_mut().rev().zip(sl.iter().rev()))
+                    } else {
+                        Box::new(ol.iter_mut().zip(sl.iter()))
+                    };
+                    for (y, &x) in steps {
                         if *inclusive {
                             acc = f(acc, x);
                             *y = acc;
@@ -758,8 +774,21 @@ pub(super) fn run_reference(
                     .sum();
                 let mut carries = vec![0.0f64; n_scans];
                 let mut covered = 0usize;
-                for run in &fs.schedule.expanded() {
-                    for k in 0..run.len as usize {
+                // Box order, or, for a group with a reverse scan, its rows
+                // from the last, each row in box order.
+                let runs = fs.schedule.expanded();
+                let mut order: Vec<(usize, usize)> = runs
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(ri, run)| (0..run.len as usize).map(move |k| (ri, k)))
+                    .collect();
+                if let Some((_, len)) = fs.rows_reversed() {
+                    let at = |&(ri, k): &(usize, usize)| runs[ri].out_off as usize + k;
+                    order.sort_by_key(|e| (std::cmp::Reverse(at(e) / len), at(e)));
+                }
+                for (ri, k) in order {
+                    let run = &runs[ri];
+                    {
                         let at = run.out_off as usize + k;
                         let get = |m: &MRef, regs: &[f64]| -> f64 {
                             match m {
@@ -820,7 +849,7 @@ pub(super) fn run_reference(
                             *a = binary_kernel_of(r.op)(*a, regs[r.reg as usize]);
                         }
                     }
-                    covered += run.len as usize;
+                    covered += 1;
                 }
                 assert_eq!(covered, n, "run schedule tiles the box");
                 if let Some(r) = &fs.reduce {
