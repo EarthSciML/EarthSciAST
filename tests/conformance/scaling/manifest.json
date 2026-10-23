@@ -467,16 +467,6 @@
       },
       {
         "family": "column_sum",
-        "n": 1000000,
-        "gate": "speed",
-        "threads": "serial",
-        "measured": 1.294,
-        "reason": "same: two full passes over u; runs range 1.15-1.33; issue #509",
-        "phase": "native-models",
-        "provisional": "sweep 2026-10-17, native/models 9a44453f5 + native/models-gates hand loops (f664fd41d), local node cores 16-19, load average 3-11 (other agents on other cores), median of 5 runs"
-      },
-      {
-        "family": "column_sum",
         "n": 100000,
         "gate": "speed",
         "threads": "threaded",
@@ -512,6 +502,186 @@
         "reason": "the build-time join (15 const-section instructions: keys, values, match set) costs about 1.2 us per row against the 20 ns budget; runs range 1052-1459 ns/state; issue #510",
         "phase": "native-models",
         "provisional": "sweep 2026-10-17, native/models 9a44453f5 + native/models-gates hand loops (f664fd41d), local node cores 16-19, load average 3-11 (other agents on other cores), median of 5 runs"
+      },
+      {
+        "family": "makearray_scan",
+        "n": 10000,
+        "gate": "speed",
+        "threads": "serial",
+        "measured": 2.257,
+        "reason": "native's two-region makearray (the exclusive prefix scan region and the column-total region) trails the hand loop's single running sum per column; runs range 2.22-2.45; issue #548",
+        "phase": "native-models",
+        "provisional": "sweep 2026-10-23, native/i533-535 d3b29c968 (native/i533-535-gates at the same tree), adapter built with -C llvm-args=-align-loops=64, local node cores 10-14, load average 9-28 (other users and other jobs on other cores), median of 3 runs"
+      },
+      {
+        "family": "makearray_scan",
+        "n": 100000,
+        "gate": "speed",
+        "threads": "serial",
+        "measured": 2.123,
+        "reason": "same; runs range 2.09-2.14; issue #548",
+        "phase": "native-models",
+        "provisional": "sweep 2026-10-23, native/i533-535 d3b29c968 (native/i533-535-gates at the same tree), adapter built with -C llvm-args=-align-loops=64, local node cores 10-14, load average 9-28 (other users and other jobs on other cores), median of 3 runs"
+      },
+      {
+        "family": "makearray_scan",
+        "n": 1000000,
+        "gate": "speed",
+        "threads": "serial",
+        "measured": 2.09,
+        "reason": "same; runs range 1.80-2.35; issue #548",
+        "phase": "native-models",
+        "provisional": "sweep 2026-10-23, native/i533-535 d3b29c968 (native/i533-535-gates at the same tree), adapter built with -C llvm-args=-align-loops=64, local node cores 10-14, load average 9-28 (other users and other jobs on other cores), median of 3 runs"
+      },
+      {
+        "family": "makearray_scan",
+        "n": 10000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": 1.706,
+        "reason": "same; runs range 1.68-1.78; issue #548",
+        "phase": "native-models",
+        "provisional": "sweep 2026-10-23, native/i533-535 d3b29c968 (native/i533-535-gates at the same tree), adapter built with -C llvm-args=-align-loops=64, local node cores 10-14, load average 9-28 (other users and other jobs on other cores), median of 3 runs"
+      },
+      {
+        "family": "makearray_scan",
+        "n": 100000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": 2.521,
+        "reason": "same; runs range 2.49-2.64; issue #548",
+        "phase": "native-models",
+        "provisional": "sweep 2026-10-23, native/i533-535 d3b29c968 (native/i533-535-gates at the same tree), adapter built with -C llvm-args=-align-loops=64, local node cores 10-14, load average 9-28 (other users and other jobs on other cores), median of 3 runs"
+      },
+      {
+        "family": "makearray_scan",
+        "n": 1000000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": 2.259,
+        "reason": "same; runs range 2.18-2.39; issue #548",
+        "phase": "native-models",
+        "provisional": "sweep 2026-10-23, native/i533-535 d3b29c968 (native/i533-535-gates at the same tree), adapter built with -C llvm-args=-align-loops=64, local node cores 10-14, load average 9-28 (other users and other jobs on other cores), median of 3 runs"
+      },
+      {
+        "family": "suffix_scan",
+        "n": 10000,
+        "gate": "speed",
+        "threads": "serial",
+        "measured": 2.549,
+        "reason": "native's two-region makearray of the to-top scan trails the hand loop's single top-down running sum per column; runs range 2.54-2.92; issue #548",
+        "phase": "native-models",
+        "provisional": "sweep 2026-10-23, native/i533-535 d3b29c968 (native/i533-535-gates at the same tree), adapter built with -C llvm-args=-align-loops=64, local node cores 10-14, load average 9-28 (other users and other jobs on other cores), median of 3 runs"
+      },
+      {
+        "family": "suffix_scan",
+        "n": 100000,
+        "gate": "speed",
+        "threads": "serial",
+        "measured": 2.231,
+        "reason": "same; runs range 2.07-2.36; issue #548",
+        "phase": "native-models",
+        "provisional": "sweep 2026-10-23, native/i533-535 d3b29c968 (native/i533-535-gates at the same tree), adapter built with -C llvm-args=-align-loops=64, local node cores 10-14, load average 9-28 (other users and other jobs on other cores), median of 3 runs"
+      },
+      {
+        "family": "suffix_scan",
+        "n": 1000000,
+        "gate": "speed",
+        "threads": "serial",
+        "measured": 1.823,
+        "reason": "same; runs range 1.80-2.24; issue #548",
+        "phase": "native-models",
+        "provisional": "sweep 2026-10-23, native/i533-535 d3b29c968 (native/i533-535-gates at the same tree), adapter built with -C llvm-args=-align-loops=64, local node cores 10-14, load average 9-28 (other users and other jobs on other cores), median of 3 runs"
+      },
+      {
+        "family": "suffix_scan",
+        "n": 10000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": 1.987,
+        "reason": "same; runs range 1.98-2.06; issue #548",
+        "phase": "native-models",
+        "provisional": "sweep 2026-10-23, native/i533-535 d3b29c968 (native/i533-535-gates at the same tree), adapter built with -C llvm-args=-align-loops=64, local node cores 10-14, load average 9-28 (other users and other jobs on other cores), median of 3 runs"
+      },
+      {
+        "family": "suffix_scan",
+        "n": 100000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": 2.808,
+        "reason": "same; runs range 2.73-2.82; issue #548",
+        "phase": "native-models",
+        "provisional": "sweep 2026-10-23, native/i533-535 d3b29c968 (native/i533-535-gates at the same tree), adapter built with -C llvm-args=-align-loops=64, local node cores 10-14, load average 9-28 (other users and other jobs on other cores), median of 3 runs"
+      },
+      {
+        "family": "suffix_scan",
+        "n": 1000000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": 2.294,
+        "reason": "same; runs range 2.20-2.36; issue #548",
+        "phase": "native-models",
+        "provisional": "sweep 2026-10-23, native/i533-535 d3b29c968 (native/i533-535-gates at the same tree), adapter built with -C llvm-args=-align-loops=64, local node cores 10-14, load average 9-28 (other users and other jobs on other cores), median of 3 runs"
+      },
+      {
+        "family": "ragged_contraction",
+        "n": 10000,
+        "gate": "speed",
+        "threads": "serial",
+        "measured": 1.864,
+        "reason": "native's ragged neighbour sum trails the hand loop's CSR loop over each row's own length; runs range 1.85-2.03; issue #548",
+        "phase": "native-models",
+        "provisional": "sweep 2026-10-23, native/i533-535 d3b29c968 (native/i533-535-gates at the same tree), adapter built with -C llvm-args=-align-loops=64, local node cores 10-14, load average 9-28 (other users and other jobs on other cores), median of 3 runs"
+      },
+      {
+        "family": "ragged_contraction",
+        "n": 100000,
+        "gate": "speed",
+        "threads": "serial",
+        "measured": 2.243,
+        "reason": "same; runs range 2.23-2.57; issue #548",
+        "phase": "native-models",
+        "provisional": "sweep 2026-10-23, native/i533-535 d3b29c968 (native/i533-535-gates at the same tree), adapter built with -C llvm-args=-align-loops=64, local node cores 10-14, load average 9-28 (other users and other jobs on other cores), median of 3 runs"
+      },
+      {
+        "family": "ragged_contraction",
+        "n": 1000000,
+        "gate": "speed",
+        "threads": "serial",
+        "measured": 1.856,
+        "reason": "same; runs range 1.68-1.93; issue #548",
+        "phase": "native-models",
+        "provisional": "sweep 2026-10-23, native/i533-535 d3b29c968 (native/i533-535-gates at the same tree), adapter built with -C llvm-args=-align-loops=64, local node cores 10-14, load average 9-28 (other users and other jobs on other cores), median of 3 runs"
+      },
+      {
+        "family": "ragged_contraction",
+        "n": 10000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": 2.197,
+        "reason": "same; runs range 2.19-2.22; issue #548",
+        "phase": "native-models",
+        "provisional": "sweep 2026-10-23, native/i533-535 d3b29c968 (native/i533-535-gates at the same tree), adapter built with -C llvm-args=-align-loops=64, local node cores 10-14, load average 9-28 (other users and other jobs on other cores), median of 3 runs"
+      },
+      {
+        "family": "ragged_contraction",
+        "n": 100000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": 2.295,
+        "reason": "same; runs range 2.19-2.33; issue #548",
+        "phase": "native-models",
+        "provisional": "sweep 2026-10-23, native/i533-535 d3b29c968 (native/i533-535-gates at the same tree), adapter built with -C llvm-args=-align-loops=64, local node cores 10-14, load average 9-28 (other users and other jobs on other cores), median of 3 runs"
+      },
+      {
+        "family": "ragged_contraction",
+        "n": 1000000,
+        "gate": "speed",
+        "threads": "threaded",
+        "measured": 1.921,
+        "reason": "same; runs range 1.89-2.09; issue #548",
+        "phase": "native-models",
+        "provisional": "sweep 2026-10-23, native/i533-535 d3b29c968 (native/i533-535-gates at the same tree), adapter built with -C llvm-args=-align-loops=64, local node cores 10-14, load average 9-28 (other users and other jobs on other cores), median of 3 runs"
       }
     ],
     "julia": [
@@ -598,6 +768,22 @@
         "reason": "the build grows with N: gather-table setup per cell at build; issue #511",
         "phase": "native-models",
         "provisional": "sweep 2026-10-17 at native/models c6bf6f010 (Julia column_search lift ba5090268), cores 16-19, two adapter runs, load average 4.5-10"
+      },
+      {
+        "family": "makearray_scan",
+        "gate": "build_slope",
+        "measured": 20.61,
+        "reason": "the build sits at the 20 ns/state limit; the per-state cost left is generic build work (allocating the state-sized u0, its seeded copy and the scan's slot list, and the collection that triggers), not scan code; runs range 17.3-22.1 serial and threaded; issue #548",
+        "phase": "native-models",
+        "provisional": "sweep 2026-10-23, native/i533-535 d3b29c968 (native/i533-535-gates at the same tree), local node cores 10-14, load average 9-28 (other users and other jobs on other cores), median of 5 runs"
+      },
+      {
+        "family": "suffix_scan",
+        "gate": "build_slope",
+        "measured": 22.79,
+        "reason": "the build sits at the 20 ns/state limit; the per-state cost left is generic build work (allocating the state-sized u0, its seeded copy and the scan's slot list, and the collection that triggers), not scan code; runs range 20.0-27.9 serial and threaded; issue #548",
+        "phase": "native-models",
+        "provisional": "sweep 2026-10-23, native/i533-535 d3b29c968 (native/i533-535-gates at the same tree), local node cores 10-14, load average 9-28 (other users and other jobs on other cores), median of 5 runs"
       }
     ]
   }
