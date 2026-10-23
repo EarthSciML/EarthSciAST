@@ -1037,17 +1037,19 @@ pub(super) unsafe fn table_gather(dst: *mut f64, src: &SrcView, pos: &[u32]) {
 
 /// `Instr::SegReduce`: output cell `c` folds `src[rows[c] .. rows[c + 1]]`
 /// from `init`, in order, skipping every term whose `mask` entry is `0`.
+/// `src` and `mask` start at tuple `base`.
 pub(super) unsafe fn seg_reduce(
     dst: *mut f64,
     src: *const f64,
     mask: Option<*const f64>,
     rows: &[u32],
+    base: usize,
     init: f64,
     f: impl Fn(f64, f64) -> f64 + Copy,
 ) {
     unsafe {
         for c in 0..rows.len() - 1 {
-            let (a, b) = (rows[c] as usize, rows[c + 1] as usize);
+            let (a, b) = (rows[c] as usize - base, rows[c + 1] as usize - base);
             let mut acc = init;
             match mask {
                 None => {

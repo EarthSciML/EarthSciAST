@@ -856,7 +856,7 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
             let init = *init;
             macro_rules! fold {
                 ($f:expr) => {
-                    unsafe { seg_reduce(dst, src, mask, rows, init, $f) }
+                    unsafe { seg_reduce(dst, src, mask, rows, 0, init, $f) }
                 };
             }
             dispatch_bin_kernel!(op, fold);

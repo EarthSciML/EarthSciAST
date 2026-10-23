@@ -1984,11 +1984,13 @@ pub(super) fn fuse_program(prog: &mut TapeProgram, cfg: SuperopCfg) {
         adj_hist: FxHashMap::default(),
         chain_hist: FxHashMap::default(),
     };
+    let chained = chained_tuple_instrs(prog);
     let mut fx = FuseCtx {
         prog,
         readers: &readers,
         sink,
         cfg,
+        chained,
     };
 
     let mut section_counts = [0usize; 3];
@@ -2311,6 +2313,48 @@ struct FuseCtx<'a> {
     readers: &'a [SmallVec<[u32; 4]>],
     sink: Sink,
     cfg: SuperopCfg,
+    /// Per instruction: a tuple instruction of a segmented-reduction chain
+    /// ([`chained_tuple_instrs`]), left as it is.
+    chained: Vec<bool>,
+}
+
+/// The elementwise tuple instructions right before each CONTINUOUS
+/// `SegReduce` (a gather of each tuple's source, arithmetic over the tuple
+/// box): the executor runs them with the reduction as one chain, block of
+/// cells by block of cells, so their values stay in cache (`exec::chain`).
+/// A fused group in their place would end the chain.
+fn chained_tuple_instrs(prog: &TapeProgram) -> Vec<bool> {
+    let mut chained = vec![false; prog.instrs.len()];
+    let cont = prog.section_range(Cadence::Continuous);
+    for seg in cont.clone() {
+        let Instr::SegReduce { table, .. } = &prog.instrs[seg] else {
+            continue;
+        };
+        let Some(&n_pairs) = prog.seg_tables[*table as usize].rows.last() else {
+            continue;
+        };
+        let tuple = |s: &SlotId| {
+            let d = &prog.slots[*s as usize];
+            !d.scalar && d.shape[..] == [n_pairs as usize]
+        };
+        let mut pc = seg;
+        while pc > cont.start {
+            let ins = &prog.instrs[pc - 1];
+            let ok = match ins {
+                Instr::TableGather { out, .. }
+                | Instr::Bin { out, .. }
+                | Instr::Un { out, .. }
+                | Instr::Neg { out, .. } => tuple(out),
+                _ => false,
+            };
+            if !ok {
+                break;
+            }
+            chained[pc - 1] = true;
+            pc -= 1;
+        }
+    }
+    chained
 }
 
 /// Finalize one group: emit either its `Fused` instruction (plus any
@@ -2637,6 +2681,12 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
     let mut i = range.start;
     while i < range.end {
         let ins = &prog.instrs[i];
+        if fx.chained[i] {
+            flush_hazards(ins, None, &mut open, fx);
+            fx.sink.passthrough(prog, i);
+            i += 1;
+            continue;
+        }
         let deferrable = match ins {
             Instr::Export { slot, .. } => Some(*slot),
             Instr::DyWrite { write } => Some(prog.dy_writes[*write as usize].slot),
