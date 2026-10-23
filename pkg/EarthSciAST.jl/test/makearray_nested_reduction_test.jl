@@ -35,8 +35,8 @@ end
 _mnr_ma(regions, values) = Dict{String,Any}("op" => "makearray", "args" => Any[],
     "regions" => Any[Any[Any[r...] for r in reg] for reg in regions], "values" => Any[values...])
 
-# Σ_{j=jlo..jhi} term(i, j) for each i in 1..N, as an array faq over `i`.
-function _mnr_nested(N; term=:prod, jlo=1, jhi=N)
+# Σ_{j=jlo..jhi} term(i, j) for each i in ilo..ihi, as an array faq over `i`.
+function _mnr_nested(N; term=:prod, jlo=1, jhi=N, ilo=1, ihi=N)
     t = term === :prod ? Dict{String,Any}("op" => "*", "args" => Any[_mnr_idx("u", "i"), _mnr_idx("u", "j")]) :
         # `-(0·u[i]·u[j])`: a `-0.0` literal reads back as the integer 0.
         term === :negzero ? Dict{String,Any}("op" => "-", "args" => Any[
@@ -44,7 +44,7 @@ function _mnr_nested(N; term=:prod, jlo=1, jhi=N)
                 Dict{String,Any}("op" => "*", "args" => Any[0.0, _mnr_idx("u", "i")]),
                 _mnr_idx("u", "j")])]) :
         error("term")
-    _mnr_faq(["i"], Dict{String,Any}("i" => Any[1, N]),
+    _mnr_faq(["i"], Dict{String,Any}("i" => Any[ilo, ihi]),
              _mnr_faq(String[], Dict{String,Any}("j" => Any[jlo, jhi]), t; reduce="+"))
 end
 
@@ -114,10 +114,11 @@ _mnr_same(a, b) = length(a) == length(b) && all(a[k] === b[k] for k in eachindex
         rank0 = _mnr_faq(String[], Dict{String,Any}("j" => Any[1, N]), _mnr_idx("u", "j");
                          reduce="+")
         # Last wins: 7.5 on 1..3, the windowed sum on 2..24 except cell 12, the
-        # rank-0 total at 12; then a second document with a 0 gap at 9..14.
+        # rank-0 total at 12; then a second document with a 0 gap at 9..14. A
+        # region value's own range is its region (esm-spec §4.3.2).
         overlap = _mnr_ma([[(1, 3)], [(2, N)], [(12, 12)]],
-                          [7.5, _mnr_nested(N; jlo=3, jhi=N - 2), rank0])
-        gap = _mnr_ma([[(1, 8)], [(15, N)]], [_mnr_nested(N), 2.0])
+                          [7.5, _mnr_nested(N; jlo=3, jhi=N - 2, ilo=2), rank0])
+        gap = _mnr_ma([[(1, 8)], [(15, N)]], [_mnr_nested(N; ihi=8), 2.0])
         for rhs in (overlap, gap)
             interp, _ = _mnr_du(_mnr_doc(N, rhs), ics; compiler=:interpreter)
             nat, tally = _mnr_du(_mnr_doc(N, rhs), ics; compiler=:native)
