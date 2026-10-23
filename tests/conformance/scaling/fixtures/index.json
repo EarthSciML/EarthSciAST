@@ -289,6 +289,22 @@
    "shape": {
     "keys": 250
    }
+  },
+  {
+   "family": "makearray_nested_sum",
+   "n": 100,
+   "path": "makearray_nested_sum/makearray_nested_sum_N100.esm",
+   "n_cells": 100,
+   "n_states": 200,
+   "shape": {}
+  },
+  {
+   "family": "makearray_nested_sum",
+   "n": 1000,
+   "path": "makearray_nested_sum/makearray_nested_sum_N1000.esm",
+   "n_cells": 1000,
+   "n_states": 2000,
+   "shape": {}
   }
  ]
 }

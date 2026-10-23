@@ -278,6 +278,25 @@
         100,
         1000
       ]
+    },
+    "makearray_nested_sum": {
+      "description": "A rank-0 sum nested in an array faq that is a makearray region value, [0, nested] over one box (the EarthSciASTDiff contracted-band shape, issue #547): D(J) = makearray(0, faq_i sum_j ((0.001 (i + 2 j)) u[j]) u[i]). The sum reads the outer index, so the work per call is N^2 terms and the ladder stops at 3162, like source_receptor's.",
+      "size_meaning": "cells (2 states per index)",
+      "sizes": [
+        100,
+        1000,
+        3162
+      ],
+      "pr_sizes": [
+        100,
+        1000
+      ],
+      "gate_overrides": {
+        "speed": {
+          "min_n_states": 2000,
+          "why": "the work per call is N^2, so 2000 states (N = 1000) is already a 10^6-term call"
+        }
+      }
     }
   },
   "gates": {

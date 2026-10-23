@@ -83,6 +83,9 @@ pub enum HandLoop {
     ColumnSum { ncol: usize, nlev: usize },
     /// `du[i] = -0.1 u[i] + 0.001 agg[i]`, the join's sums computed at setup.
     JoinKeyed { agg: Vec<f64> },
+    /// `du[i] = -kd u[i]`, `dJ[i] = sum_j ((0.001 (i + 2 j)) u[j]) u[i]`
+    /// (1-based `i`, `j`), the makearray's covering region.
+    MakearrayNestedSum { n: usize, kd: f64 },
 }
 
 impl HandLoop {
@@ -99,6 +102,7 @@ impl HandLoop {
             HandLoop::GatherIndex { cls, .. } => cls.len(),
             HandLoop::ColumnSearch { ncol, .. } | HandLoop::ColumnSum { ncol, .. } => *ncol,
             HandLoop::JoinKeyed { agg } => agg.len(),
+            HandLoop::MakearrayNestedSum { n, .. } => *n,
         }
     }
 
@@ -252,6 +256,25 @@ impl HandLoop {
             HandLoop::JoinKeyed { agg } => {
                 for i in lo..hi {
                     du.set(i, -0.1 * u[i] + 0.001 * agg[i]);
+                }
+            }
+            HandLoop::MakearrayNestedSum { n, kd } => {
+                // As `SourceReceptor`'s: the sums of a block of cells advance
+                // together over j, each still in j order, so the inner loop is
+                // not one dependency chain.
+                let n = *n;
+                let (uu, _) = u.split_at(n);
+                let mut acc = vec![0.0f64; hi - lo];
+                for (j0, uj) in uu.iter().enumerate() {
+                    let jj = 2.0 * (j0 + 1) as f64;
+                    for (r, a) in acc.iter_mut().enumerate() {
+                        let i = lo + r;
+                        *a += ((0.001 * ((i + 1) as f64 + jj)) * uj) * uu[i];
+                    }
+                }
+                for (r, a) in acc.iter().enumerate() {
+                    du.set(n + lo + r, *a);
+                    du.set(lo + r, -kd * uu[lo + r]);
                 }
             }
             HandLoop::ScalarChemistry { .. } => {

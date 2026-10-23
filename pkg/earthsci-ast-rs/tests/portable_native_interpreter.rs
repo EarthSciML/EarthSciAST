@@ -39,6 +39,7 @@ scaling_family!(gather_index);
 scaling_family!(column_search);
 scaling_family!(column_sum);
 scaling_family!(join_keyed);
+scaling_family!(makearray_nested_sum);
 
 #[test]
 fn geometry_documents() {

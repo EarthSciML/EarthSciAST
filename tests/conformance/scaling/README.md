@@ -96,11 +96,12 @@ between binaries built the same way. The deterministic gates do not need it.
 | `column_search` | a per-column count of levels above a threshold used as a subscript, `u[c, max(1, cnt[c])]` (the YSU `kpbl` shape), 20 levels | cells | 10^2 .. 10^6 |
 | `column_sum` | a rank-0 column sum nested in a 3-D `faq` body, `sum_l u[i,j,l]`, 20 levels | cells | 10^2 .. 10^6 |
 | `join_keyed` | a value-equality `join` on computed keys evaluated at build, about four matching rows per cell, feeding the right-hand side | cells (= rows) | 10^2 .. 10^6 |
+| `makearray_nested_sum` | a rank-0 sum nested in an array `faq` that is a `makearray` region value, `[0, nested]` over one box, `sum_j ((0.001 (i + 2j)) u[j]) u[i]` (the EarthSciASTDiff contracted-band shape) | cells | 10^2 .. 3162 |
 
 Grid families round the side (`round(N^(1/rank))`), so `n_cells` in a result
-is the actual count and `n` is the nominal ladder value. `source_receptor` and
-`regrid` stop at 3162 because their work or their declared dense intermediates
-grow as N^2; `scalar_chemistry` stops at 10^5 because the document itself
+is the actual count and `n` is the nominal ladder value. `source_receptor`,
+`makearray_nested_sum` and `regrid` stop at 3162 because their work or their
+declared dense intermediates grow as N^2; `scalar_chemistry` stops at 10^5 because the document itself
 grows with N, which is also why the flat-code-size gate does not apply to it
 (`gate_exclusions` in the manifest).
 
@@ -140,6 +141,7 @@ Canonical order (bindings map their own state layout onto it by element name):
 | `prefix_scan`, `unstructured_gather`, `gather_index`, `join_keyed` | `u[1..N]` |
 | `column_search`, `column_sum` | the one state variable, column-major (first axis fastest, levels slowest): the layout both bindings' native compilers give it, so the hand loops read the layout native reads |
 | `source_receptor` | `c[1..N]`, then `e[1..N]` |
+| `makearray_nested_sum` | `u[1..N]`, then `J[1..N]` |
 | `regrid` | `F_src[1..N]`, then `F_tgt[1..N]` |
 | `scalar_chemistry` | box-major: box 1's 20 species in declaration order, then box 2's, ... |
 
@@ -247,7 +249,7 @@ Thresholds live in `manifest.json` under `gates`.
 | `no_steady_alloc` | deterministic | `allocs_per_call` is 0 (null on a built document fails, unless the result declares it unmeasurable). A ledger entry for it states `max_bytes_per_call`, the most it excuses, and a measure past that bound is red (`EXCEEDS`) |
 | `hand_loop_agrees` | deterministic | `hand_loop_max_abs_diff <= 1e-12 * max(1, dy_max_abs)`, so a wrong reference cannot make a slow compiler look fast. Checked against the interpreter when native refused |
 | `build_slope` | timing | `(build_s(Nmax) - build_s(Nmin)) / (n_states(Nmax) - n_states(Nmin))` under 20 ns, with `build_interleaved_diff_s` in place of the difference when the larger end has it (below), plus the document-size and dense-array allowances below, over the smallest and largest N that built with at most 10^6 cells |
-| `speed` | timing | `steady_rhs_s / hand_loop_s <= 1.25` in each result file, from 10^4 states up (below that a call takes microseconds and the ratio measures timer noise). Two families stop short of 10^4 states and lower it to 2000 through `gate_overrides`: `source_receptor`, whose work is N^2, and `regrid`, whose ladder stops at 6324 states and whose call at 2000 states is already a few microseconds. In a threaded file, a result below 10^4 cells is checked against native's own serial call instead (below) |
+| `speed` | timing | `steady_rhs_s / hand_loop_s <= 1.25` in each result file, from 10^4 states up (below that a call takes microseconds and the ratio measures timer noise). Three families stop short of 10^4 states and lower it to 2000 through `gate_overrides`: `source_receptor` and `makearray_nested_sum`, whose work is N^2, and `regrid`, whose ladder stops at 6324 states and whose call at 2000 states is already a few microseconds. In a threaded file, a result below 10^4 cells is checked against native's own serial call instead (below) |
 
 ### The build slope's two ends
 

@@ -79,6 +79,8 @@ pub const SCALING_FIXTURES: &[(&str, u64, &str)] = &[
     scaling_fixture!("column_sum", 1000),
     scaling_fixture!("join_keyed", 100),
     scaling_fixture!("join_keyed", 1000),
+    scaling_fixture!("makearray_nested_sum", 100),
+    scaling_fixture!("makearray_nested_sum", 1000),
 ];
 
 macro_rules! tier_doc {
