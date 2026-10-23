@@ -4,11 +4,10 @@
 # EarthSciDiscretizations lowers `integral(f, lev, z_sfc, lev_nodes)` to a
 # two-region `makearray` over the interfaces: the exclusive prefix scan of
 # `f·dz` on interfaces 1..N and the rank-0 column total on N+1. Its centre form
-# is `prefix_scan + 0.5·f·dz`, whole-array arithmetic over the aggregate. Both
-# used to reach the array-equation cascade with the aggregate hidden inside a
-# gather, where only the per-cell build takes it, and a strict compiler refused
-# them. The build now fills the makearray one region at a time and lifts the
-# filtered operand to its own observed (build.jl `_materialized_fill_equations`,
+# is `prefix_scan + 0.5·f·dz`, whole-array arithmetic over the aggregate. With
+# the aggregate hidden inside a gather, only the per-cell build would take
+# either shape, so the build fills the makearray one region at a time and lifts
+# the filtered operand to its own observed (build.jl `_materialized_fill_equations`,
 # hoist.jl `_hoist_operand_walk`), so the scans take the O(N) scan fold (a
 # reverse one descending, esm-spec §4.3.1).
 #
