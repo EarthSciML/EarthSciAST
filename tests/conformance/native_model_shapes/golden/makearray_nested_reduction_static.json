@@ -1,0 +1,385 @@
+{
+  "fixture": "makearray_nested_reduction_static",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "values",
+      "assertion_idx": 1,
+      "variable": "J1",
+      "actual": 6.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 2,
+      "variable": "J1",
+      "actual": 12.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 3,
+      "variable": "J1",
+      "actual": 3.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 4,
+      "variable": "J1",
+      "actual": 26.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 5,
+      "variable": "J1",
+      "actual": 13.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 6,
+      "variable": "J1",
+      "actual": 25.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 7,
+      "variable": "J1",
+      "actual": 24.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 8,
+      "variable": "J1",
+      "actual": 1.5
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 9,
+      "variable": "J1",
+      "actual": 6.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 10,
+      "variable": "J2",
+      "actual": -884136734460517.2
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 11,
+      "variable": "J2",
+      "actual": -977122206528134.8
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 12,
+      "variable": "J2",
+      "actual": -841016877100817.8
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 13,
+      "variable": "J2",
+      "actual": -1079887046060800.9
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 14,
+      "variable": "J2",
+      "actual": -929467394182625.2
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 15,
+      "variable": "J2",
+      "actual": -1027220333350191.1
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 16,
+      "variable": "J2",
+      "actual": -1193459758113014.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 17,
+      "variable": "J2",
+      "actual": -820252096419541.5
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 18,
+      "variable": "J2",
+      "actual": -884136734460516.1
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 19,
+      "variable": "J3",
+      "actual": 7.5
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 20,
+      "variable": "J3",
+      "actual": -1.999999999999999e+16
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 21,
+      "variable": "J3",
+      "actual": -4999999999999998.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 22,
+      "variable": "J3",
+      "actual": -2.999999999999998e+16
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 23,
+      "variable": "J3",
+      "actual": -1.499999999999999e+16
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 24,
+      "variable": "J3",
+      "actual": 6.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 25,
+      "variable": "J3",
+      "actual": -3.999999999999998e+16
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 26,
+      "variable": "J3",
+      "actual": -2499999999999999.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 27,
+      "variable": "J3",
+      "actual": -9999999999999996.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 28,
+      "variable": "J4",
+      "actual": 15.75
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 29,
+      "variable": "J4",
+      "actual": 31.5
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 30,
+      "variable": "J4",
+      "actual": 7.875
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 31,
+      "variable": "J4",
+      "actual": 47.25
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 32,
+      "variable": "J4",
+      "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 33,
+      "variable": "J4",
+      "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 34,
+      "variable": "J4",
+      "actual": 2.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 35,
+      "variable": "J4",
+      "actual": 2.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 36,
+      "variable": "J4",
+      "actual": 2.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 37,
+      "variable": "Z",
+      "actual": -0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 38,
+      "variable": "Z",
+      "actual": -0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 39,
+      "variable": "Z",
+      "actual": -0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 40,
+      "variable": "Z",
+      "actual": -0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 41,
+      "variable": "Z",
+      "actual": -0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 42,
+      "variable": "Z",
+      "actual": -0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 43,
+      "variable": "Z",
+      "actual": -0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 44,
+      "variable": "Z",
+      "actual": -0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 45,
+      "variable": "Z",
+      "actual": -0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 46,
+      "variable": "M",
+      "actual": 6.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 47,
+      "variable": "M",
+      "actual": 12.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 48,
+      "variable": "M",
+      "actual": 3.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 49,
+      "variable": "M",
+      "actual": 26.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 50,
+      "variable": "M",
+      "actual": 13.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 51,
+      "variable": "M",
+      "actual": 25.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 52,
+      "variable": "M",
+      "actual": 24.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 53,
+      "variable": "M",
+      "actual": 1.5
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 54,
+      "variable": "M",
+      "actual": 6.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 55,
+      "variable": "M",
+      "actual": 31.5
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 56,
+      "variable": "M",
+      "actual": 63.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 57,
+      "variable": "M",
+      "actual": 15.75
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 58,
+      "variable": "M",
+      "actual": 94.5
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 59,
+      "variable": "M",
+      "actual": 47.25
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 60,
+      "variable": "M",
+      "actual": 78.75
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 61,
+      "variable": "M",
+      "actual": 126.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 62,
+      "variable": "M",
+      "actual": 7.875
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 63,
+      "variable": "M",
+      "actual": 31.5
+    }
+  ]
+}

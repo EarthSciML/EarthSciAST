@@ -279,6 +279,56 @@
    "named_exclusions": []
   },
   {
+   "id": "makearray_nested_reduction_static",
+   "path": "fixtures/makearray_nested_reduction_static.esm",
+   "model": "MakearrayNestedReduction",
+   "golden": "golden/makearray_nested_reduction_static.json",
+   "tags": [
+    "makearray",
+    "faq",
+    "nested",
+    "rank-0",
+    "static"
+   ],
+   "note": "Authored here (issue #547); see README.md for the downstream document it stands for.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
+   "id": "makearray_nested_reduction_dynamic",
+   "path": "fixtures/makearray_nested_reduction_dynamic.esm",
+   "model": "MakearrayNestedReduction",
+   "golden": "golden/makearray_nested_reduction_dynamic.json",
+   "tags": [
+    "makearray",
+    "faq",
+    "nested",
+    "rank-0",
+    "dynamic"
+   ],
+   "note": "Authored here (issue #547); see README.md for the downstream document it stands for.",
+   "required": {
+    "julia": [
+     "interpreter",
+     "native"
+    ],
+    "rust": [
+     "interpreter",
+     "native"
+    ]
+   },
+   "named_exclusions": []
+  },
+  {
    "id": "ifelse_mixed_boxes_static",
    "path": "fixtures/ifelse_mixed_boxes_static.esm",
    "model": "IfelseMixedBoxes",
