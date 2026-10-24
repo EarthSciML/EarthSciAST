@@ -153,6 +153,16 @@ pub(crate) enum SrcRef {
     State(u32),
 }
 
+impl From<SrcRef> for Operand {
+    /// The operand reading the whole source.
+    fn from(src: SrcRef) -> Self {
+        match src {
+            SrcRef::Slot(s) => Operand::Slot(s),
+            SrcRef::State(i) => Operand::State(i),
+        }
+    }
+}
+
 /// One tape instruction. See the module docs for the semantics contract.
 #[derive(Clone, Debug)]
 pub(crate) enum Instr {
@@ -2778,6 +2788,25 @@ impl TapeProgram {
             Cadence::Segment => nc..nc + ns,
             Cadence::Continuous => nc + ns..self.instrs.len(),
         }
+    }
+
+    /// Per instruction: whether it sits inside a conditional region (a
+    /// `JmpIfZero` branch) or a recurrence body (a `Sweep`'s), which a call
+    /// may skip or repeat. The region's header itself is not inside it.
+    pub(crate) fn guarded_positions(&self) -> Vec<bool> {
+        let mut guarded = vec![false; self.instrs.len()];
+        for (pc, ins) in self.instrs.iter().enumerate() {
+            let len = match ins {
+                Instr::JmpIfZero {
+                    n_true, n_false, ..
+                } => (*n_true + *n_false) as usize,
+                Instr::Sweep { spec } => self.sweeps[*spec as usize].body_len as usize,
+                _ => 0,
+            };
+            let end = (pc + 1 + len).min(guarded.len());
+            guarded[pc + 1..end].fill(true);
+        }
+        guarded
     }
 
     /// Section an instruction index belongs to.

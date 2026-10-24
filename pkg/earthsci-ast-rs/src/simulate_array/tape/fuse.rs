@@ -333,10 +333,7 @@ impl GBuilder {
         } else if scans(true) {
             return false;
         }
-        let operand = match src {
-            SrcRef::Slot(s) => Operand::Slot(*s),
-            SrcRef::State(i) => Operand::State(*i),
-        };
+        let operand = Operand::from(*src);
         let Some(r @ (ResOp::Existing(MRef::Reg(_) | MRef::In(_)) | ResOp::NewAligned(..))) =
             self.resolve(&operand, prog)
         else {
@@ -692,6 +689,89 @@ impl GBuilder {
         self.members.insert(ix);
         self.member_instrs.push(ix);
     }
+}
+
+/// How fusion absorbs a gather into the group of its output box.
+// Returned and consumed at once; boxing the geometry would only add an
+// allocation per gather.
+#[allow(clippy::large_enum_variant)]
+enum GatherFold {
+    /// A shifted input read along precompiled runs.
+    Shifted(ShiftedGeom),
+    /// A same-rank shift whose runs would shatter the box, read through its
+    /// plan inside the group chunk by chunk or (for short rows) the whole box
+    /// at once, so the program does not depend on the box's extents. Holds
+    /// the source stride of each output axis: a broadcast (an output axis the
+    /// source lacks) reads that axis with stride 0, the other axes in order.
+    Chunk(SmallVec<[i64; 4]>),
+}
+
+/// How fusion absorbs a gather of `plan` into a box of `out_shape`, or
+/// `None` when the gather passes through materialized.
+fn gather_fold(plan: &GatherPlan, out_shape: &[usize]) -> Option<GatherFold> {
+    if out_shape != &plan.shape[..] {
+        return None;
+    }
+    let shifted = linear_fold(plan).or_else(|| {
+        let g = if foldable_plan(plan) {
+            ShiftedGeom::Segs {
+                segs: plan.segs.clone(),
+                strides: rm_strides(&plan.src_shape),
+                base: 0,
+            }
+        } else {
+            broadcast_fold(plan)?
+        };
+        fold_runs_acceptable(out_shape, &g).then_some(g)
+    });
+    if let Some(g) = shifted {
+        return Some(GatherFold::Shifted(g));
+    }
+    if foldable_plan(plan) {
+        Some(GatherFold::Chunk(rm_strides(&plan.src_shape)))
+    } else if plan.fixed_desc.is_empty() {
+        match broadcast_fold(plan) {
+            Some(ShiftedGeom::Segs { strides, .. }) => Some(GatherFold::Chunk(strides)),
+            _ => None,
+        }
+    } else {
+        None
+    }
+}
+
+/// Whether the gather at `ix`, placed just before its first reader, folds
+/// into the fused group its readers compute in (`sink`): fusion absorbs
+/// it, and every reader is arithmetic over the gather's box that joins that
+/// group. A copy alone leaves a group with nothing to compute, emitted as
+/// written, and any other reader (a `DyWrite`, a reduction, a scan, a table
+/// read, an instruction of a segmented-reduction chain) reads the gather's
+/// materialized box. `chained` is [`chained_tuple_instrs`] of `prog`.
+pub(super) fn sunk_gather_fuses(
+    prog: &TapeProgram,
+    chained: &[bool],
+    ix: usize,
+    readers: &[usize],
+) -> bool {
+    let Instr::Gather { plan, out, .. } = prog.instrs[ix] else {
+        return false;
+    };
+    let shape = &prog.slots[out as usize].shape;
+    if gather_fold(&prog.plans[plan as usize], shape).is_none() {
+        return false;
+    }
+    readers.iter().all(|&r| {
+        let ins = &prog.instrs[r];
+        let arith = matches!(
+            ins,
+            Instr::Bin { .. } | Instr::Un { .. } | Instr::Neg { .. } | Instr::Select { .. }
+        );
+        arith
+            && !chained[r]
+            && prec_at(prog, r) == prec_at(prog, ix)
+            && ins.out().is_some_and(|o| {
+                !prog.slots[o as usize].scalar && prog.slots[o as usize].shape == *shape
+            })
+    })
 }
 
 /// A gather plan is foldable as a shifted read when it is a pure constant
@@ -2053,19 +2133,7 @@ fn absorb_pre_reductions(prog: &mut TapeProgram) {
         return;
     }
     let n = prog.instrs.len();
-    let mut guarded = vec![false; n];
-    for i in 0..n {
-        let len = match &prog.instrs[i] {
-            Instr::JmpIfZero {
-                n_true, n_false, ..
-            } => (*n_true + *n_false) as usize,
-            Instr::Sweep { spec } => prog.sweeps[*spec as usize].body_len as usize,
-            _ => 0,
-        };
-        for g in guarded.iter_mut().skip(i + 1).take(len) {
-            *g = true;
-        }
-    }
+    let guarded = prog.guarded_positions();
     let mut absorbed: Vec<(usize, u32, PreReduce)> = Vec::new();
     for i in 0..n.saturating_sub(1) {
         if guarded[i] || guarded[i + 1] || prog.section_of(i) != prog.section_of(i + 1) {
@@ -2323,7 +2391,7 @@ struct FuseCtx<'a> {
 /// box): the executor runs them with the reduction as one chain, block of
 /// cells by block of cells, so their values stay in cache (`exec::chain`).
 /// A fused group in their place would end the chain.
-fn chained_tuple_instrs(prog: &TapeProgram) -> Vec<bool> {
+pub(super) fn chained_tuple_instrs(prog: &TapeProgram) -> Vec<bool> {
     let mut chained = vec![false; prog.instrs.len()];
     let cont = prog.section_range(Cadence::Continuous);
     for seg in cont.clone() {
@@ -2754,23 +2822,8 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
         if let Instr::Gather { src, plan, out } = ins {
             let plan_ref = &prog.plans[*plan as usize];
             let out_desc = &prog.slots[*out as usize];
-            let geom: Option<ShiftedGeom> = if out_desc.shape == plan_ref.shape {
-                linear_fold(plan_ref).or_else(|| {
-                    let g = if foldable_plan(plan_ref) {
-                        ShiftedGeom::Segs {
-                            segs: plan_ref.segs.clone(),
-                            strides: rm_strides(&plan_ref.src_shape),
-                            base: 0,
-                        }
-                    } else {
-                        broadcast_fold(plan_ref)?
-                    };
-                    fold_runs_acceptable(&out_desc.shape, &g).then_some(g)
-                })
-            } else {
-                None
-            };
-            if let Some(geom) = geom {
+            let fold = gather_fold(plan_ref, &out_desc.shape);
+            if let Some(GatherFold::Shifted(geom)) = fold {
                 // An identity read of a value an open group of the same box
                 // computes is that value: alias it instead of materializing
                 // the group's output to read it back.
@@ -2796,25 +2849,7 @@ fn fuse_section(fx: &mut FuseCtx, range: std::ops::Range<usize>) {
                 i += 1;
                 continue;
             }
-            // A same-rank shift whose runs would shatter the box: read it
-            // through its plan inside its box's group, chunk by chunk or (for
-            // short rows) the whole box at once. Absorbed either way, so the
-            // program does not depend on the box's extents.
-            // A broadcast (an output axis the source lacks) reads that axis
-            // with source stride 0, the other axes in order.
-            let chunk_strides = if foldable_plan(plan_ref) {
-                Some(rm_strides(&plan_ref.src_shape))
-            } else if plan_ref.fixed_desc.is_empty() {
-                match broadcast_fold(plan_ref) {
-                    Some(ShiftedGeom::Segs { strides, .. }) => Some(strides),
-                    _ => None,
-                }
-            } else {
-                None
-            };
-            if out_desc.shape == plan_ref.shape
-                && let Some(strides) = chunk_strides
-            {
+            if let Some(GatherFold::Chunk(strides)) = fold {
                 flush_hazards(ins, None, &mut open, fx);
                 let shape = out_desc.shape.clone();
                 let gi = find_or_open(&mut open, shape, prog.provenance[i], prec_at(prog, i), fx);

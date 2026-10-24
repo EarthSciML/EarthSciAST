@@ -1597,6 +1597,73 @@ fn scans_of(_variant: &str) -> usize {
     1
 }
 
+/// A column of build-time values `w[k]` read over every column of
+/// `u[i, k]`: by a product with the state, or (`"dy"`) as the derivative
+/// itself.
+fn broadcast_const_doc(reader: &str) -> serde_json::Value {
+    let wk = json!({"op": "index", "args": ["w", "k"]});
+    let rhs = match reader {
+        "product" => json!({"op": "*", "args": [wk, {"op": "index", "args": ["u", "i", "k"]}]}),
+        "dy" => wk,
+        _ => unreachable!(),
+    };
+    json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "tape_broadcast_const"},
+        "index_sets": {
+            "i": {"kind": "interval", "size": 20},
+            "k": {"kind": "interval", "size": 5}
+        },
+        "models": {"M": {
+            "variables": {
+                "u": {"type": "unknown", "shape": ["i", "k"]},
+                "w": {"type": "unknown", "shape": ["k"]}
+            },
+            "equations": [
+                {"lhs": "w", "rhs": {"op": "faq", "args": [], "output_idx": ["k"],
+                    "ranges": {"k": [1, 5]},
+                    "expr": {"op": "+", "args": [0.5, {"op": "*", "args": [0.01, "k"]}]}}},
+                {"lhs": {"op": "faq", "args": [], "output_idx": ["i", "k"],
+                    "expr": {"op": "D", "args": [{"op": "index", "args": ["u", "i", "k"]}],
+                        "wrt": "t"},
+                    "ranges": {"i": [1, 20], "k": [1, 5]}},
+                 "rhs": {"op": "faq", "args": [], "output_idx": ["i", "k"],
+                    "ranges": {"i": [1, 20], "k": [1, 5]}, "expr": rhs}}
+            ]
+        }}
+    })
+}
+
+/// A broadcast of a build-time value moves to the call only where its
+/// reader's fused group reads the small source in its place (`sink`): read
+/// by arithmetic over its box, it leaves the build-time section and folds
+/// into the reader's group; read whole by a `DyWrite`, it would be a gather
+/// writing the whole box on every call, so it stays where it runs once.
+#[test]
+fn ab_const_broadcast_sinks_only_into_a_fusing_reader() {
+    for reader in ["product", "dy"] {
+        let prog = ab_check(broadcast_const_doc(reader), -2.0, 2.0);
+        let gathers = |c: Cadence| {
+            prog.instrs[prog.section_range(c)]
+                .iter()
+                .filter(|i| matches!(i, Instr::Gather { .. }))
+                .count()
+        };
+        let (build, call) = (gathers(Cadence::Const), gathers(Cadence::Continuous));
+        if reader == "product" {
+            assert_eq!((build, call), (0, 0), "[{reader}] the broadcast folds");
+            let folded = prog
+                .fused
+                .iter()
+                .flat_map(|f| &f.inputs)
+                .any(|inp| inp.shifted_ix.is_some() || inp.gather.is_some());
+            assert!(folded, "[{reader}] read in the reader's group");
+        } else {
+            assert_eq!((build, call), (1, 0), "[{reader}] the broadcast stays");
+        }
+    }
+}
+
 /// A reverse window whose body reads the output index is not a scan, but
 /// still folds each cell's suffix from the top (esm-spec §4.3.1): a reverse
 /// `Reduce` over the promoted box, matching the interpreter's descending
@@ -4379,4 +4446,105 @@ fn run_time_gather_faults_keep_the_rule_order() {
         ),
         &[0.0, 1.0],
     );
+}
+
+/// A column `u[k]` whose right-hand side is a `+` reduction (`variant`)
+/// of terms that are all `-0.0`: `-(0 * exp(u[j]))`.
+fn neg_zero_sum_doc(variant: &str) -> serde_json::Value {
+    let n = 5;
+    let u = |k: serde_json::Value| json!({"op": "index", "args": ["u", k]});
+    let term = json!({"op": "-", "args": [
+        {"op": "*", "args": [0.0, {"op": "exp", "args": [u(json!("j"))]}]}]});
+    let sum = |out: serde_json::Value, ranges: serde_json::Value, filter: Option<&str>| {
+        let mut f = json!({"op": "faq", "args": [], "output_idx": out, "reduce": "+",
+            "ranges": ranges, "expr": term});
+        if let Some(cmp) = filter {
+            f["filter"] = json!({"op": cmp, "args": ["j", "k"]});
+        }
+        f
+    };
+    let column = |filter| sum(json!(["k"]), json!({"k": [1, n], "j": [1, n]}), filter);
+    let mut variables = json!({"u": {"type": "unknown", "shape": ["k"]}});
+    let mut equations = Vec::new();
+    let rhs = match variant {
+        "contraction" => column(None),
+        "single" => sum(json!(["k"]), json!({"k": [1, n], "j": [2, 2]}), None),
+        "weighted" => {
+            let mut f = column(None);
+            f["expr"] = json!({"op": "*", "args": [f["expr"].clone(), "k"]});
+            f
+        }
+        "inclusive_scan" => column(Some("<=")),
+        "reverse_scan" => column(Some(">=")),
+        "observed" => {
+            variables["s"] = json!({"type": "unknown", "shape": ["k"]});
+            equations.push(json!({"lhs": "s", "rhs": column(None)}));
+            json!({"op": "index", "args": ["s", "k"]})
+        }
+        "rank0" => {
+            variables["s"] = json!({"type": "unknown"});
+            equations.push(json!({"lhs": "s",
+                "rhs": sum(json!([]), json!({"j": [1, n]}), None)}));
+            json!("s")
+        }
+        "makearray_scan_total" => {
+            variables["F"] = json!({"type": "unknown", "shape": ["kn"]});
+            let f = json!({"op": "makearray", "args": [],
+                "regions": [[[1, n]], [[n + 1, n + 1]]],
+                "values": [column(Some("<")), sum(json!([]), json!({"j": [1, n]}), None)]});
+            equations.push(json!({"lhs": "F", "rhs": f}));
+            json!({"op": "index", "args": ["F", {"op": "+", "args": ["k", 1]}]})
+        }
+        _ => unreachable!(),
+    };
+    let rhs = if rhs["op"] == "faq" {
+        rhs
+    } else {
+        json!({"op": "faq", "args": [], "output_idx": ["k"], "ranges": {"k": [1, n]},
+            "expr": rhs})
+    };
+    equations.push(json!({
+        "lhs": {"op": "faq", "args": [], "output_idx": ["k"],
+            "expr": {"op": "D", "args": [u(json!("k"))], "wrt": "t"},
+            "ranges": {"k": [1, n]}},
+        "rhs": rhs}));
+    json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "tape_neg_zero_sum"},
+        "index_sets": {
+            "k": {"kind": "interval", "size": n},
+            "kn": {"kind": "interval", "size": n + 1}
+        },
+        "models": {"M": {"variables": variables, "equations": equations}}
+    })
+}
+
+/// A non-empty `+` reduction is a fold seeded from `0` (esm-spec §4.3.1), so
+/// one whose terms are all `-0.0` is `+0.0`: the interpreter and the tape
+/// alike, for a contraction (as an equation, of one term, weighted by the
+/// output index, as an observed, as a rank-0 total),
+/// a forward and a reverse inclusive scan, and the makearray of an
+/// exclusive scan and its column total.
+#[test]
+fn ab_an_all_negative_zero_sum_is_positive_zero() {
+    for variant in [
+        "contraction",
+        "single",
+        "weighted",
+        "observed",
+        "rank0",
+        "inclusive_scan",
+        "reverse_scan",
+        "makearray_scan_total",
+    ] {
+        let doc = neg_zero_sum_doc(variant);
+        ab_check(doc.clone(), -2.0, 2.0);
+        let compiled = compile(doc);
+        let n = compiled.state_variable_names().len();
+        let state = seeded_state(n, 1, -2.0, 2.0);
+        let (dy, _) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new(), false);
+        for (k, v) in dy.iter().enumerate() {
+            assert_eq!(v.to_bits(), 0, "[{variant}] dy[{k}] = {v:?}, not +0.0");
+        }
+    }
 }
