@@ -3324,6 +3324,46 @@
     "is_valid": false,
     "notes": "Rejected at load with `solver_version_too_old` (esm-spec \u00a72.2.4): the top-level `solver` block arrives at esm 1.1.0 and this document declares 1.0.0. Gated before schema validation so the author sees the version hint rather than a generic unknown-property error."
   },
+  "solver_external_version_too_old.esm": {
+    "resolver_only": true,
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": false,
+    "resolver_error_code": "solver_external_version_too_old",
+    "notes": "Rejected at load with `solver_external_version_too_old` at `/solver/external` (esm-spec \u00a72.2.4 requirement 4, \u00a72.2.5): `solver.external` arrives at esm 1.3.0 and this document declares 1.2.0. Gated before schema validation, like solver_version_too_old.esm, so the author sees the version hint. The schema is version-agnostic and admits `external`, which is what makes this the resolver's rejection. UNLIKE the schema-only `resolver_only` pins, `is_valid` is false for EVERY binding: all five parse, validate, gate, round-trip and resolve `external` (issue #538, decision 10), so there is no schema-only binding that accepts this file. The rest of the block is legal at 1.2.0."
+  },
+  "solver_external_env_var.esm": {
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": false,
+    "resolver_only": true,
+    "resolver_error_code": "solver_external_unresolved",
+    "notes": "Resolver-level invalid (esm-spec \u00a72.2.6). The document is SCHEMA-VALID \u2014 `external` is a non-empty string, so nothing in JSON Schema forbids a `${` in it \u2014 which is what makes this the resolver's rejection rather than a schema error. As with data_source_url_env_var.esm, `is_valid` is false for EVERY binding: all five resolve `external`, so there is no schema-only binding that accepts this file. Each binding refuses at load with the code in `resolver_error_code`, and the message names `/solver/external` and quotes the string `${RUNS}/x.json`. The resolution rule itself is pinned across bindings by tests/conformance/solver_external/manifest.json (CONFORMANCE_SPEC \u00a75.47)."
+  },
+  "solver_external_empty.esm": {
+    "schema_errors": [
+      {
+        "path": "/solver/external",
+        "message": "String '' is shorter than 1 character (schema: minLength 1)",
+        "keyword": "minLength"
+      }
+    ],
+    "structural_errors": [],
+    "is_valid": false,
+    "notes": "esm-schema.json $defs.Solver.external is a string with minLength 1 (esm-spec \u00a72.2.4 requirement 1). An empty string is not absence and does not normalize away like an empty block."
+  },
+  "solver_external_nonstring.esm": {
+    "schema_errors": [
+      {
+        "path": "/solver/external",
+        "message": "Expected string, got number",
+        "keyword": "type"
+      }
+    ],
+    "structural_errors": [],
+    "is_valid": false,
+    "notes": "esm-schema.json $defs.Solver.external is a string (esm-spec \u00a72.2.4 requirement 1); there is no object form."
+  },
   "arrayop_op_removed.esm": {
     "parse_error": true,
     "is_valid": false,
