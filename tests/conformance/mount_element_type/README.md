@@ -23,6 +23,8 @@ at a root. A leaf that declares no precision adopts its mounter's.
 | `subsystems.esm` | The same leaf at a `subsystems.<k>` `{ref}`. The loader writes the same fields. |
 | `root_f32.esm` | A `"Float32"` document mounting all three leaves: nothing is written for the `"Float32"` leaf or the undeclared one; the `"Float64"` leaf's variables carry `"Float64"`. |
 | `mid_none.esm`, `nested_f32.esm`, `nested_none.esm` | An intermediate assembly that declares nothing, mounting the `"Float32"` leaf, mounted in turn by a `"Float32"` root (nothing written: every edge agrees) and by an undeclared root (the leaf's edge writes `"Float32"`). |
+| `leaf_f32_sub.esm`, `deep.esm` | A `"Float32"` leaf that carries a subsystem of its own (`leaf_none.esm`), mounted under an undeclared root beside a binary64 model: the precision is written at every depth, and building the root's own model is unaffected by it. |
+| `mid_f64.esm`, `chain_f32.esm` | A `"Float32"` root mounting a `"Float64"` assembly that mounts the `"Float32"` leaf: the inner edge writes `"Float32"`, and the outer edge's `"Float64"` lands on nothing, because every variable already declares a precision. |
 | `mixed_coupling.esm` | A binary64 model reads the mounted binary32 quantity through a `variable_map`. Loads everywhere; evaluation is `mixed_element_type`. |
 | `reaction_leaf_f32.esm`, `reaction_mount.esm`, `reaction_toplevel.esm` | A `"Float32"` reaction-system leaf, mounted under a binary64 document at a reaction system's `subsystems.<k>` and at a top-level `reaction_systems.<k>`. Species and reaction parameters have no `element_type`: `element_type_uncarried`. |
 | `expected.json` | The contract. |

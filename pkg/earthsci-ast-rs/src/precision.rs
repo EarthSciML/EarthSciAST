@@ -157,7 +157,8 @@ thread_local! {
 #[derive(Debug, Default, Clone)]
 pub struct VarPrecisions {
     by_name: HashMap<String, Precision>,
-    /// The bare names that DECLARED an `element_type`, for diagnostics. The
+    /// The names that DECLARED an `element_type`, for diagnostics: `Model.name`
+    /// from [`Self::from_declarations`], the bare name from [`Self::insert`]. The
     /// table itself also records every other variable at the document's
     /// precision (see [`Self::from_declarations`]), and those are not
     /// overrides.
@@ -195,8 +196,8 @@ impl VarPrecisions {
     ///
     /// [`CompileError::UnsupportedElementType`] for a spelling that is neither
     /// `"Float64"` nor `"Float32"`, and [`CompileError::ElementTypeUncarried`]
-    /// for a SUBSYSTEM variable whose declared precision differs from
-    /// `document`: this binding's precision inference and its per-rule arming
+    /// for a SUBSYSTEM variable (of `selected`, when given) whose declared
+    /// precision differs from `document`: this binding's precision inference and its per-rule arming
     /// read top-level model variables only, so such a declaration would be
     /// evaluated in the document's precision silently.
     pub fn from_declarations(
@@ -204,7 +205,12 @@ impl VarPrecisions {
         document: Precision,
         selected: Option<&str>,
     ) -> Result<Self, CompileError> {
-        for m in models {
+        // Only the selected model's, when there is one: no other model's
+        // subsystems are evaluated by this build.
+        for m in models
+            .iter()
+            .filter(|m| selected.is_none_or(|s| s == m.model))
+        {
             for (path, et) in &m.subsystem_variables {
                 if et.is_some() && Precision::from_element_type(et.as_deref())? != document {
                     return Err(CompileError::ElementTypeUncarried {
@@ -306,7 +312,8 @@ impl VarPrecisions {
         self.by_name.get(tail).copied()
     }
 
-    /// Every (bare) name that declared an element type, in sort order.
+    /// Every name that declared an element type (spelled as `declared` records
+    /// it), in sort order.
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.declared.iter().map(String::as_str)
     }

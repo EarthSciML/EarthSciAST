@@ -1,0 +1,15 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "mount_element_type_mid_f64",
+    "description": "An intermediate assembly that declares Float64 and mounts the Float32 leaf: the leaf's edge writes Float32, because it differs from this document's Float64."
+  },
+  "domain": {
+    "element_type": "Float64"
+  },
+  "models": {
+    "Leaf": {
+      "ref": "./leaf_f32.esm"
+    }
+  }
+}

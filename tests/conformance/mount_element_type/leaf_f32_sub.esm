@@ -1,0 +1,31 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "mount_element_type_leaf_f32_sub",
+    "description": "A Float32 leaf that carries a subsystem of its own: leaf_none.esm, which declares no precision and so adopts this leaf's. Loaded alone nothing is written; mounted under a document of another precision, the leaf's precision is written at every depth, its subsystem's variables included."
+  },
+  "domain": {
+    "element_type": "Float32"
+  },
+  "models": {
+    "Outer": {
+      "variables": {
+        "y": {
+          "type": "unknown",
+          "units": "1"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "y",
+          "rhs": 2
+        }
+      ],
+      "subsystems": {
+        "Inner": {
+          "ref": "./leaf_none.esm"
+        }
+      }
+    }
+  }
+}
