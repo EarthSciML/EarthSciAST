@@ -296,6 +296,7 @@ func (r *Reaction) UnmarshalJSON(data []byte) error {
 func (mv *ModelVariable) UnmarshalJSON(data []byte) error {
 	type TempModelVariable struct {
 		Type         string          `json:"type"`
+		ElementType  *string         `json:"element_type,omitempty"`
 		Units        *string         `json:"units,omitempty"`
 		DefaultUnits *string         `json:"default_units,omitempty"`
 		Default      json.RawMessage `json:"default,omitempty"`
@@ -312,6 +313,7 @@ func (mv *ModelVariable) UnmarshalJSON(data []byte) error {
 	}
 
 	mv.Type = temp.Type
+	mv.ElementType = temp.ElementType
 	mv.Units = temp.Units
 	mv.DefaultUnits = temp.DefaultUnits
 	mv.Description = temp.Description

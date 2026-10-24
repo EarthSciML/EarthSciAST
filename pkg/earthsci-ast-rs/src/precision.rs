@@ -157,12 +157,140 @@ thread_local! {
 #[derive(Debug, Default, Clone)]
 pub struct VarPrecisions {
     by_name: HashMap<String, Precision>,
+    /// The names that DECLARED an `element_type`, for diagnostics: `Model.name`
+    /// from [`Self::from_declarations`], the bare name from [`Self::insert`]. The
+    /// table itself also records every other variable at the document's
+    /// precision (see [`Self::from_declarations`]), and those are not
+    /// overrides.
+    declared: std::collections::BTreeSet<String>,
+}
+
+/// One model's variables as [`VarPrecisions::from_declarations`] reads them:
+/// the model name, each top-level variable's name and declared
+/// `element_type` spelling, and each variable of each of its subsystems (at
+/// any depth) under its dotted path below the model.
+#[derive(Debug, Default)]
+pub struct ModelDeclarations<'a> {
+    /// The model's key in the document.
+    pub model: &'a str,
+    /// `(variable, declared element_type)` for the model's own variables.
+    pub variables: Vec<(&'a str, Option<&'a str>)>,
+    /// `(Sub.path.variable, declared element_type)` for its subsystems'.
+    pub subsystem_variables: Vec<(String, Option<String>)>,
 }
 
 impl VarPrecisions {
+    /// The per-variable table for a document (esm-spec §11.3.1).
+    ///
+    /// EMPTY — the inert fast path — when no variable declares an
+    /// `element_type`. Otherwise every model variable is recorded under its
+    /// `Model.name` spelling at its EFFECTIVE precision (its declaration, else
+    /// `document`), so a qualified lookup never falls through to a bare name
+    /// another model registered. Bare names are recorded for `selected` (the
+    /// model being built) when there is one, for the only model when there is
+    /// one, and otherwise only where every model that has the name agrees on
+    /// its precision: two models may both declare an `x`, and a mount makes that
+    /// the ordinary case (a Float32 leaf beside a Float64 assembly).
+    ///
+    /// # Errors
+    ///
+    /// [`CompileError::UnsupportedElementType`] for a spelling that is neither
+    /// `"Float64"` nor `"Float32"`, and [`CompileError::ElementTypeUncarried`]
+    /// for a SUBSYSTEM variable (of `selected`, when given) whose declared
+    /// precision differs from `document`: this binding's precision inference and its per-rule arming
+    /// read top-level model variables only, so such a declaration would be
+    /// evaluated in the document's precision silently.
+    pub fn from_declarations(
+        models: &[ModelDeclarations<'_>],
+        document: Precision,
+        selected: Option<&str>,
+    ) -> Result<Self, CompileError> {
+        // Only the selected model's, when there is one: no other model's
+        // subsystems are evaluated by this build.
+        for m in models
+            .iter()
+            .filter(|m| selected.is_none_or(|s| s == m.model))
+        {
+            for (path, et) in &m.subsystem_variables {
+                if et.is_some() && Precision::from_element_type(et.as_deref())? != document {
+                    return Err(CompileError::ElementTypeUncarried {
+                        construct: format!("subsystem variable '{}.{path}'", m.model),
+                        reason: format!(
+                            "it declares `element_type: \"{}\"` and the document evaluates in \
+                             {}, but this evaluator carries a per-variable element type on \
+                             top-level model variables only (a mounted leaf's precision reaches \
+                             a `subsystems.<k>` mount this way, esm-spec §4.7)",
+                            et.as_deref().unwrap_or_default(),
+                            document.element_type()
+                        ),
+                    });
+                }
+            }
+        }
+        let mut out = VarPrecisions::default();
+        let mut any = false;
+        let mut effective: Vec<(&str, &str, Precision)> = Vec::new();
+        for m in models {
+            for (v, et) in &m.variables {
+                // Absent means the document's — NOT `from_element_type(None)`,
+                // which is the schema default Float64.
+                let p = match et {
+                    Some(_) => Precision::from_element_type(*et)?,
+                    None => document,
+                };
+                if et.is_some() {
+                    any = true;
+                    out.declared.insert(format!("{}.{v}", m.model));
+                }
+                effective.push((m.model, v, p));
+            }
+        }
+        if !any {
+            return Ok(VarPrecisions::default());
+        }
+        let bare_from = selected.or(if models.len() == 1 {
+            Some(models[0].model)
+        } else {
+            None
+        });
+        let mut bare: HashMap<&str, Option<Precision>> = HashMap::new();
+        for (m, v, p) in &effective {
+            out.by_name.insert(format!("{m}.{v}"), *p);
+            match bare_from {
+                Some(sel) if sel == *m => {
+                    bare.insert(v, Some(*p));
+                }
+                Some(_) => {}
+                None => {
+                    let e = bare.entry(v).or_insert(Some(*p));
+                    if *e != Some(*p) {
+                        *e = None;
+                    }
+                }
+            }
+        }
+        for (v, p) in bare {
+            if let Some(p) = p {
+                out.by_name.insert(v.to_string(), p);
+            }
+        }
+        // Subsystem variables are all at `document` (anything else was refused
+        // above). Recorded under their full and their model-relative spellings
+        // so a lookup of either finds them rather than falling back to a bare
+        // top-level name of the same spelling.
+        for m in models {
+            for (path, _) in &m.subsystem_variables {
+                out.by_name.insert(format!("{}.{path}", m.model), document);
+                out.by_name.entry(path.clone()).or_insert(document);
+            }
+        }
+        Ok(out)
+    }
+
     /// Record `name`'s declared precision (also under `Model.name` when
     /// `model` is given).
     pub fn insert(&mut self, model: Option<&str>, name: &str, p: Precision) {
+        self.declared.insert(name.to_string());
         self.by_name.insert(name.to_string(), p);
         if let Some(m) = model {
             self.by_name.insert(format!("{m}.{name}"), p);
@@ -184,10 +312,10 @@ impl VarPrecisions {
         self.by_name.get(tail).copied()
     }
 
-    /// Every name with a declared element type, in no particular order. Both
-    /// spellings of a namespaced registration appear (see [`Self::insert`]).
+    /// Every name that declared an element type (spelled as `declared` records
+    /// it), in sort order.
     pub fn names(&self) -> impl Iterator<Item = &str> {
-        self.by_name.keys().map(String::as_str)
+        self.declared.iter().map(String::as_str)
     }
 
     /// Does this document declare any per-variable element type at all?
@@ -199,6 +327,45 @@ impl VarPrecisions {
     pub fn is_empty(&self) -> bool {
         self.by_name.is_empty()
     }
+}
+
+/// Every variable of every subsystem under `subsystems` (a raw
+/// `Model.subsystems` map), at any depth, as `(Sub.path.variable, declared
+/// element_type)` — the input [`VarPrecisions::from_declarations`] checks.
+#[must_use]
+pub fn subsystem_declarations(
+    subsystems: Option<&serde_json::Value>,
+) -> Vec<(String, Option<String>)> {
+    fn walk(subs: &serde_json::Value, prefix: &str, out: &mut Vec<(String, Option<String>)>) {
+        let Some(subs) = subs.as_object() else {
+            return;
+        };
+        for (name, sub) in subs {
+            let path = if prefix.is_empty() {
+                name.clone()
+            } else {
+                format!("{prefix}.{name}")
+            };
+            if let Some(vars) = sub.get("variables").and_then(serde_json::Value::as_object) {
+                for (v, d) in vars {
+                    out.push((
+                        format!("{path}.{v}"),
+                        d.get("element_type")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_string),
+                    ));
+                }
+            }
+            if let Some(nested) = sub.get("subsystems") {
+                walk(nested, &path, out);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    if let Some(subs) = subsystems {
+        walk(subs, "", &mut out);
+    }
+    out
 }
 
 /// The precision the current thread is evaluating in.

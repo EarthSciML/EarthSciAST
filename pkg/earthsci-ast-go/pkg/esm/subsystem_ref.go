@@ -57,17 +57,23 @@ func resolveSubsystemRefsWithMeta(file *ESMFile, basePath string, parentMeta, ap
 	// registry it owns is the one every §4.7 contribution merges into — so the
 	// two travel together down the walk, `rootEnv` staying fixed while
 	// `parentMeta` narrows to each nested scope.
-	return resolveSubsystemRefsInternal(file, basePath, visited, file.IndexSets, parentMeta, apiMeta, parentMeta)
+	// esm-spec §4.7 "Working precision crosses a mount": the root's effective
+	// precision is its own declaration, else the default.
+	precision := defaultElementType
+	if file.Domain != nil && file.Domain.ElementType != nil {
+		precision = *file.Domain.ElementType
+	}
+	return resolveSubsystemRefsInternal(file, basePath, visited, file.IndexSets, parentMeta, apiMeta, parentMeta, precision)
 }
 
 // resolveSubsystemRefsInternal is the recursive implementation that tracks
 // visited paths for circular reference detection and threads the importing
 // document's index_sets registry (esm-spec §4.7 index-set merge) and its closed
 // metaparameter environment (esm-spec §9.7.6 binding site 3).
-func resolveSubsystemRefsInternal(file *ESMFile, basePath string, visited map[string]bool, registry map[string]IndexSet, parentMeta, apiMeta, rootEnv map[string]int64) error {
+func resolveSubsystemRefsInternal(file *ESMFile, basePath string, visited map[string]bool, registry map[string]IndexSet, parentMeta, apiMeta, rootEnv map[string]int64, precision string) error {
 	// Top-level `models.<k>` mount edges FIRST: the component each one splices in
 	// may itself carry `subsystems`, and the walk below is what resolves those.
-	if err := inlineTopLevelModelRefs(file, basePath, visited, registry, parentMeta, apiMeta, rootEnv); err != nil {
+	if err := inlineTopLevelModelRefs(file, basePath, visited, registry, parentMeta, apiMeta, rootEnv, precision); err != nil {
 		return err
 	}
 
@@ -76,7 +82,7 @@ func resolveSubsystemRefsInternal(file *ESMFile, basePath string, visited map[st
 	// struct into file.Models is needed.
 	for modelName, model := range file.Models {
 		prefix := fmt.Sprintf("/models/%s/subsystems", modelName)
-		if err := resolveSubsystemMap(model.Subsystems, basePath, visited, registry, parentMeta, apiMeta, rootEnv, prefix, subsystemMount); err != nil {
+		if err := resolveSubsystemMap(model.Subsystems, basePath, visited, registry, parentMeta, apiMeta, rootEnv, prefix, subsystemMount, precision); err != nil {
 			return fmt.Errorf("model %q subsystems: %w", modelName, err)
 		}
 	}
@@ -85,7 +91,7 @@ func resolveSubsystemRefsInternal(file *ESMFile, basePath string, visited map[st
 	// in place).
 	for rsName, rs := range file.ReactionSystems {
 		prefix := fmt.Sprintf("/reaction_systems/%s/subsystems", rsName)
-		if err := resolveSubsystemMap(rs.Subsystems, basePath, visited, registry, parentMeta, apiMeta, rootEnv, prefix, subsystemMount); err != nil {
+		if err := resolveSubsystemMap(rs.Subsystems, basePath, visited, registry, parentMeta, apiMeta, rootEnv, prefix, subsystemMount, precision); err != nil {
 			return fmt.Errorf("reaction_system %q subsystems: %w", rsName, err)
 		}
 	}
@@ -165,7 +171,7 @@ func extractTopLevelModelRefEdges(jsonStr string) map[string]map[string]any {
 // pipeline — merging a leaf's folded axis against an unfolded importer
 // declaration is the fold-before-merge collision issue #198 reported.
 func inlineTopLevelModelRefs(file *ESMFile, basePath string, visited map[string]bool,
-	registry map[string]IndexSet, parentMeta, apiMeta, rootEnv map[string]int64) error {
+	registry map[string]IndexSet, parentMeta, apiMeta, rootEnv map[string]int64, precision string) error {
 	if len(file.topLevelModelRefs) == 0 {
 		return nil
 	}
@@ -177,7 +183,7 @@ func inlineTopLevelModelRefs(file *ESMFile, basePath string, visited map[string]
 		ref, _ := edge["ref"].(string)
 		holder := map[string]any{name: edge}
 		if err := resolveSubsystemMap(holder, basePath, visited, registry, parentMeta, apiMeta,
-			rootEnv, "/models", topLevelModelMount); err != nil {
+			rootEnv, "/models", topLevelModelMount, precision); err != nil {
 			return err
 		}
 		resolvedRaw, ok := holder[name].(map[string]any)
@@ -242,7 +248,7 @@ func inlineTopLevelModelRefs(file *ESMFile, basePath string, visited map[string]
 // inliner drops them, so the leaf's assertions are never interpreted by a
 // document that may go on to couple it.
 func inlineNestedTopLevelModelRefs(view map[string]any, basePath string, visited map[string]bool,
-	registry map[string]IndexSet, parentMeta, apiMeta, rootEnv map[string]int64, pathPrefix string) error {
+	registry map[string]IndexSet, parentMeta, apiMeta, rootEnv map[string]int64, pathPrefix string, precision string) error {
 	models, ok := view["models"].(map[string]any)
 	if !ok || len(models) == 0 {
 		return nil
@@ -265,7 +271,7 @@ func inlineNestedTopLevelModelRefs(view map[string]any, basePath string, visited
 		return nil
 	}
 	if err := resolveSubsystemMap(edges, basePath, visited, registry, parentMeta, apiMeta,
-		rootEnv, pathPrefix, topLevelModelMount); err != nil {
+		rootEnv, pathPrefix, topLevelModelMount, precision); err != nil {
 		return err
 	}
 	for name, resolved := range edges {
@@ -489,7 +495,7 @@ var (
 // then the §9.6.3 rewrite fixpoint, then nested subsystem refs recursively.
 // Working on the raw view keeps full Expression fidelity (aggregate /
 // makearray fields the typed ExprNode does not model survive intact).
-func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map[string]bool, registry map[string]IndexSet, parentMeta, apiMeta, rootEnv map[string]int64, pathPrefix string, form mountForm) (err error) {
+func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map[string]bool, registry map[string]IndexSet, parentMeta, apiMeta, rootEnv map[string]int64, pathPrefix string, form mountForm, precision string) (err error) {
 	if len(subsystems) == 0 {
 		return nil
 	}
@@ -564,6 +570,15 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 		view, err := decodeJSONView(data)
 		if err != nil {
 			return fmt.Errorf("%s %q: failed to parse referenced file %q: %w", form.noun, key, refKey, err)
+		}
+		// esm-spec §4.7 "Working precision crosses a mount": read before
+		// resolution can consume the leaf's `domain`. The leaf's own edges
+		// compare against ITS effective precision; this edge against `precision`,
+		// the mounting document's.
+		leafPrecision, leafDeclares := declaredElementTypeRaw(view)
+		leafEffective := precision
+		if leafDeclares {
+			leafEffective = leafPrecision
 		}
 
 		// Spec-version gates (esm-spec §9.6.5).
@@ -690,7 +705,7 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 					// inlined at this entry's pointer — best-effort deeper prefix (not
 					// a corpus-pinned location).
 					nestedPrefix := fmt.Sprintf("%s/%s/subsystems", pathPrefix, key)
-					if err := resolveSubsystemMap(subs, refBasePath, visited, leafRegistry, childMeta, apiMeta, childFoldEnv, nestedPrefix, subsystemMount); err != nil {
+					if err := resolveSubsystemMap(subs, refBasePath, visited, leafRegistry, childMeta, apiMeta, childFoldEnv, nestedPrefix, subsystemMount, leafEffective); err != nil {
 						return fmt.Errorf("%s %q: resolving nested refs in %q: %w", form.noun, key, refKey, err)
 					}
 				}
@@ -714,7 +729,7 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 		// same path-scoped cycle detection every other edge gets. Matches the
 		// Rust reference, which composes at both forms.
 		if err := inlineNestedTopLevelModelRefs(view, refBasePath, visited, leafRegistry, childMeta, apiMeta,
-			childFoldEnv, fmt.Sprintf("%s/%s/models", pathPrefix, key)); err != nil {
+			childFoldEnv, fmt.Sprintf("%s/%s/models", pathPrefix, key), leafEffective); err != nil {
 			return fmt.Errorf("%s %q: resolving nested refs in %q: %w", form.noun, key, refKey, err)
 		}
 
@@ -813,6 +828,12 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 		resolved, err := extractSingleSystemRaw(view, refKey)
 		if err != nil {
 			return fmt.Errorf("%s %q: %w", form.noun, key, err)
+		}
+		if leafDeclares {
+			if err := carryMountedElementType(resolved, leafPrecision, precision,
+				fmt.Sprintf("%s ref %q", form.noun, ref)); err != nil {
+				return err
+			}
 		}
 
 		subsystems[key] = resolved
@@ -1035,10 +1056,16 @@ func inlineRootRefsRaw(view map[string]any, basePath string, apiMeta map[string]
 	// before the machinery consumes the `metaparameters` block; `rootEnv` is the
 	// same thing, and stays fixed as the walk narrows into nested scopes.
 	parentMeta := metaEnvFromDecls(view["metaparameters"], apiMeta)
+	// esm-spec §4.7 "Working precision crosses a mount": the root's effective
+	// precision, which every edge it carries compares its leaf against.
+	precision := defaultElementType
+	if p, ok := declaredElementTypeRaw(view); ok {
+		precision = p
+	}
 	// Top-level `models.<k>` mount edges first: the component each one splices
 	// in may itself carry `subsystems`, and the walk below resolves those.
 	if err := inlineNestedTopLevelModelRefs(view, basePath, visited, staged, parentMeta, apiMeta,
-		parentMeta, "/models"); err != nil {
+		parentMeta, "/models", precision); err != nil {
 		return nil, err
 	}
 	for _, kind := range templateComponentKinds {
@@ -1057,7 +1084,7 @@ func inlineRootRefsRaw(view map[string]any, basePath string, apiMeta map[string]
 			}
 			prefix := fmt.Sprintf("/%s/%s/subsystems", kind, cname)
 			if err := resolveSubsystemMap(subs, basePath, visited, staged, parentMeta, apiMeta,
-				parentMeta, prefix, subsystemMount); err != nil {
+				parentMeta, prefix, subsystemMount, precision); err != nil {
 				return nil, fmt.Errorf("%s %q subsystems: %w", kind, cname, err)
 			}
 		}
@@ -1089,6 +1116,85 @@ func applyStagedIndexSets(file *ESMFile, staged map[string]IndexSet, rootEnv map
 			continue
 		}
 		file.IndexSets[n] = decl
+	}
+	return nil
+}
+
+// defaultElementType is the working precision a ROOT that declares no
+// `domain.element_type` evaluates in (esm-spec §11.3). A MOUNTED document that
+// declares none adopts its mounter's instead (esm-spec §4.7 "Working precision
+// crosses a mount").
+const defaultElementType = "Float64"
+
+// declaredElementTypeRaw is the `domain.element_type` a raw document view
+// declares, and whether it declares one.
+func declaredElementTypeRaw(view map[string]any) (string, bool) {
+	domain, ok := view["domain"].(map[string]any)
+	if !ok {
+		return "", false
+	}
+	et, ok := domain["element_type"].(string)
+	return et, ok
+}
+
+// carryMountedElementType carries a mounted document's declared working
+// precision onto the component it splices in (esm-spec §4.7 "Working precision
+// crosses a mount").
+//
+// Nothing is written when the leaf's declaration equals the mounting document's
+// EFFECTIVE precision. Otherwise every variable of the component, and of every
+// subsystem it carries at any depth, that declares no `element_type` of its own
+// gets the leaf's. A reaction system's species and parameters have no
+// `element_type`, so a component that is, or carries, one is refused with
+// `element_type_uncarried` rather than evaluated in the mounter's precision.
+func carryMountedElementType(component any, leaf, enclosing, where string) error {
+	if leaf == enclosing {
+		return nil
+	}
+	return stampElementType(component, leaf, enclosing, where, "")
+}
+
+func stampElementType(system any, leaf, enclosing, where, path string) error {
+	sys, ok := system.(map[string]any)
+	if !ok {
+		return nil
+	}
+	_, hasSpecies := sys["species"]
+	_, hasReactions := sys["reactions"]
+	if hasSpecies || hasReactions {
+		at := ""
+		if path != "" {
+			at = fmt.Sprintf(" (subsystem '%s')", path)
+		}
+		return newETErr(CodeElementTypeUncarried, fmt.Sprintf(
+			"%s: the mounted document declares `domain.element_type: %q` but the document "+
+				"mounting it evaluates in %s, and the component carries a reaction system%s whose "+
+				"species and parameters cannot declare a per-variable `element_type`; the mount "+
+				"cannot keep the leaf's precision (esm-spec §4.7 \"Working precision crosses a "+
+				"mount\"). Declare the same `domain.element_type` on the mounting document, or "+
+				"remove it from the leaf", where, leaf, enclosing, at))
+	}
+	if vars, ok := sys["variables"].(map[string]any); ok {
+		for _, raw := range vars {
+			decl, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			if _, declared := decl["element_type"]; !declared {
+				decl["element_type"] = leaf
+			}
+		}
+	}
+	if subs, ok := sys["subsystems"].(map[string]any); ok {
+		for _, name := range sortedKeys(subs) {
+			sub := name
+			if path != "" {
+				sub = path + "." + name
+			}
+			if err := stampElementType(subs[name], leaf, enclosing, where, sub); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }

@@ -1,0 +1,15 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "mount_element_type_chain_f32",
+    "description": "A Float32 root mounts mid_f64.esm, which mounts the Float32 leaf. The inner edge writes Float32 (leaf vs. the Float64 middle); the outer edge's Float64 lands on nothing, because every variable already declares a precision. The leaf stays binary32 even though the document between it and the Float32 root is Float64."
+  },
+  "domain": {
+    "element_type": "Float32"
+  },
+  "models": {
+    "Mid": {
+      "ref": "./mid_f64.esm"
+    }
+  }
+}

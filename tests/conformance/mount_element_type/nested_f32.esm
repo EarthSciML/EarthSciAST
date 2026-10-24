@@ -1,0 +1,15 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "mount_element_type_nested_f32",
+    "description": "Float32 root -> mid_none (declares nothing, so inherits Float32) -> Float32 leaf: every edge agrees, nothing is written."
+  },
+  "domain": {
+    "element_type": "Float32"
+  },
+  "models": {
+    "Mid": {
+      "ref": "./mid_none.esm"
+    }
+  }
+}

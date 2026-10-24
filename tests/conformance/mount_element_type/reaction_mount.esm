@@ -1,0 +1,50 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "mount_element_type_reaction_mount",
+    "description": "Mounts the Float32 reaction-system leaf as a subsystems.<k> of a reaction system, under a document that evaluates in Float64. The leaf's precision would have to be written onto species and reaction parameters, which have no element_type: element_type_uncarried at load."
+  },
+  "reaction_systems": {
+    "Outer": {
+      "species": {
+        "C": {
+          "units": "mol/mol",
+          "default": 1.0
+        },
+        "D": {
+          "units": "mol/mol",
+          "default": 0.0
+        }
+      },
+      "parameters": {
+        "j": {
+          "units": "1/s",
+          "default": 0.2
+        }
+      },
+      "reactions": [
+        {
+          "id": "R0",
+          "substrates": [
+            {
+              "species": "C",
+              "stoichiometry": 1
+            }
+          ],
+          "products": [
+            {
+              "species": "D",
+              "stoichiometry": 1
+            }
+          ],
+          "rate": "j"
+        }
+      ],
+      "subsystems": {
+        "Chem": {
+          "ref": "./reaction_leaf_f32.esm"
+        }
+      }
+    }
+  }
+}

@@ -101,8 +101,10 @@ end
         if results === nothing
         elseif occursin("float32", basename(path))
             # §5.19.3a: a binary32 fold is refused, never carried in binary64.
+            # The build refuses the binary32 variable itself (§5.18.2) before the
+            # recurrence is reached.
             @test all(r -> !r.passed, results)
-            @test all(r -> occursin("E_TREEWALK_UNSUPPORTED_RECURRENCE", r.message) &&
+            @test all(r -> occursin("float32_unsupported", r.message) &&
                            occursin("Float32", r.message), results)
         else
             for r in results
@@ -266,7 +268,7 @@ end
                 e
             end
             @test err isa _RS.TreeWalkError
-            @test err.code == "E_TREEWALK_UNSUPPORTED_RECURRENCE"
+            @test err.code == _RS.ERROR_CODES.FLOAT32_UNSUPPORTED
             @test occursin("Float32", err.detail)
         end
     end
