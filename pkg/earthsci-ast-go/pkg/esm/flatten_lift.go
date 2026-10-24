@@ -250,8 +250,9 @@ func applyPointwiseLift(flat *FlattenedSystem, coupling []CouplingEntry) error {
 
 		// Per-cell indexing applies inside each contribution; the `faq` wrapper
 		// goes around their sum (§4.7.5 provenance table).
-		contributions := make([]Contribution, len(eq.Contributions))
-		for k, c := range eq.Contributions {
+		in := eq.contributionList()
+		contributions := make([]Contribution, len(in))
+		for k, c := range in {
 			contributions[k] = Contribution{Expr: liftRHSToCell(c.Expr, arrayvars, loops), Origins: c.Origins}
 		}
 		wrt := DefaultIndepVar

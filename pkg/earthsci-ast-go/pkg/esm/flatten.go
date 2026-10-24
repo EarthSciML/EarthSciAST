@@ -1846,8 +1846,9 @@ func applyOperatorCompose(components map[string]*componentSystem, entry Operator
 		// `factor * (b1 + b2 + ...)` whose origins are the union: indivisible,
 		// because distributing the factor would change the arithmetic.
 		rename := map[string]Expression{bDep: targetDep}
-		bContribs := make([]Contribution, len(bEq.Contributions))
-		for k, c := range bEq.Contributions {
+		bIn := bEq.contributionList()
+		bContribs := make([]Contribution, len(bIn))
+		for k, c := range bIn {
 			bContribs[k] = Contribution{Expr: substituteExpr(c.Expr, rename), Origins: c.Origins}
 		}
 		if factor != 1.0 {
@@ -1856,7 +1857,7 @@ func applyOperatorCompose(components map[string]*componentSystem, entry Operator
 				Origins: unionOrigins(bContribs),
 			}}
 		}
-		merged := append(append([]Contribution(nil), aEq.Contributions...), bContribs...)
+		merged := append(append([]Contribution(nil), aEq.contributionList()...), bContribs...)
 		a.equations[i] = equationFrom(aEq, merged, aEq.LHS)
 		mergedPositions[i] = true
 		if targetDep != bDep {
@@ -2285,10 +2286,11 @@ func applyCouple(components map[string]*componentSystem, order []string, entry C
 		index  int
 	}
 	eqIndex := map[string]eqRef{}
-	// Which targets carry a TENDENCY (`D(x)`), as opposed to merely SOME
+	// The last TENDENCY (`D(x)`) for each target, as opposed to merely SOME
 	// defining equation: `multiplicative` is defined against an ODE right-hand
-	// side, not against an algebraic or observed definition (§10.3, §4.7.2).
-	tendencies := map[string]bool{}
+	// side, not against an algebraic or observed definition (§10.3, §4.7.2), so
+	// it both checks for and scales this equation.
+	tendencies := map[string]eqRef{}
 	for _, sysName := range order {
 		comp := components[sysName]
 		for i, eq := range comp.equations {
@@ -2298,7 +2300,7 @@ func applyCouple(components map[string]*componentSystem, order []string, entry C
 			}
 			eqIndex[dep] = eqRef{system: sysName, index: i}
 			if node, ok := asExprNode(eq.LHS); ok && node.Op == OpDerivative {
-				tendencies[dep] = true
+				tendencies[dep] = eqRef{system: sysName, index: i}
 			}
 		}
 	}
@@ -2307,7 +2309,8 @@ func applyCouple(components map[string]*componentSystem, order []string, entry C
 		if ceq.To == "" {
 			continue
 		}
-		if ceq.Transform == "multiplicative" && !tendencies[ceq.To] {
+		tendency, hasTendency := tendencies[ceq.To]
+		if ceq.Transform == "multiplicative" && !hasTendency {
 			return &CoupleMultiplicativeNoTendencyError{
 				Target: ceq.To,
 				Message: fmt.Sprintf(
@@ -2341,8 +2344,11 @@ func applyCouple(components map[string]*componentSystem, order []string, entry C
 			})
 			// The new tendency is a target for the next connector equation too.
 			eqIndex[ceq.To] = eqRef{system: ownerName, index: len(owner.equations) - 1}
-			tendencies[ceq.To] = true
+			tendencies[ceq.To] = eqRef{system: ownerName, index: len(owner.equations) - 1}
 			continue
+		}
+		if ceq.Transform == "multiplicative" {
+			ref = tendency
 		}
 		comp := components[ref.system]
 		existing := comp.equations[ref.index]
@@ -2350,13 +2356,13 @@ func applyCouple(components map[string]*componentSystem, order []string, entry C
 		switch ceq.Transform {
 		case "multiplicative":
 			contributions = []Contribution{{
-				Expr:    multiplyExprs(foldContributions(existing.Contributions), expression),
-				Origins: unionOrigins(existing.Contributions, couplingOrigin(index)),
+				Expr:    multiplyExprs(foldContributions(existing.contributionList()), expression),
+				Origins: unionOrigins(existing.contributionList(), couplingOrigin(index)),
 			}}
 		case "replacement":
 			contributions = []Contribution{authored}
 		default: // "additive" and any unrecognized transform
-			contributions = append(append([]Contribution(nil), existing.Contributions...), authored)
+			contributions = append(append([]Contribution(nil), existing.contributionList()...), authored)
 		}
 		comp.equations[ref.index] = equationFrom(existing, contributions, existing.LHS)
 	}

@@ -73,7 +73,7 @@ const provenanceSamples = 8
 // differently.
 func provenanceSample(name string, salt int) float64 {
 	h := fnv.New32a()
-	fmt.Fprintf(h, "%d:%s", salt, name)
+	_, _ = fmt.Fprintf(h, "%d:%s", salt, name)
 	v := h.Sum32()
 	return (1 + float64(v%100003)/100003) * math.Pow(10, float64(int((v>>17)%13)-6))
 }
@@ -269,5 +269,31 @@ func TestTermProvenanceLift(t *testing.T) {
 	want := `[{"component":"Chem"}] [{"component":"Src"}] [{"component":"Adv"}]`
 	if strings.Join(got, " ") != want {
 		t.Errorf("origins = %v, want %s", got, want)
+	}
+}
+
+// TestTermProvenanceEmptyContributionList pins the default for an equation
+// built outside flatten with no contribution list: it reads as ONE
+// contribution, its right-hand side, with no origins — never a panic.
+func TestTermProvenanceEmptyContributionList(t *testing.T) {
+	eq := FlattenedEquation{LHS: "y", RHS: ExprNode{Op: "+", Args: []any{"a", "b"}}}
+
+	mapped := mapContributions(eq, func(e Expression) Expression { return e }, eq.LHS)
+	if len(mapped.Contributions) != 1 {
+		t.Fatalf("contributions = %d, want 1", len(mapped.Contributions))
+	}
+	if got := ToASCII(mapped.RHS); got != ToASCII(eq.RHS) {
+		t.Errorf("RHS = %q, want %q", got, ToASCII(eq.RHS))
+	}
+	if got := originsJSON(mapped.Contributions[0]); got != "[]" {
+		t.Errorf("origins = %s, want []", got)
+	}
+
+	rebuilt := equationFrom(eq, nil, eq.LHS)
+	if got := ToASCII(rebuilt.RHS); got != ToASCII(eq.RHS) {
+		t.Errorf("equationFrom(nil) RHS = %q, want %q", got, ToASCII(eq.RHS))
+	}
+	if len(rebuilt.Contributions) != 1 {
+		t.Errorf("equationFrom(nil) contributions = %d, want 1", len(rebuilt.Contributions))
 	}
 }
