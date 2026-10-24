@@ -347,9 +347,8 @@ end
         # A VARIABLE-VALENCE contracted bound unwraps too: the whole-array
         # contraction nest takes the bare producer with each cell's admitted
         # indices as a table, where the gather form hides the contraction from
-        # it and leaves the per-cell build. The bare form's fold is seeded with
-        # 0̄ where the gather form's started from the first term, so the two
-        # differ in value only when every term of a cell is -0.0 (bare: 0.0).
+        # it and leaves the per-cell build. Both forms fold from the 0̄ seed
+        # (esm-spec §4.3.1), so they agree bit for bit.
         varb = mkagg(; filt=nothing, jrange=Any[1, "nedges"])
         @test unwrapped(varb)
         # A non-identity gather (a real reindex) is left alone.

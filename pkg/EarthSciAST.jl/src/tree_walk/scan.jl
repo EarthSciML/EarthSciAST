@@ -219,15 +219,21 @@ end
 #      its cell `k` holds the inclusive value of cell `k-1`. The last cell's
 #      term, which a strict fold reads and discards, is overwritten here too.
 function _scan_lanes_strided!(du, S::_ScanFold, combine::F, l1::Int, l2::Int) where {F}
-    s1 = S.slots[1]
-    ls = S.lstride
-    ks = S.kstride
-    len = S.len
-    first = s1 + (l1 - 1) * ls
-    last = s1 + (l2 - 1) * ls + (len - 1) * ks
-    v, off = _scan_dense(du, min(first, last), max(first, last))
-    _scan_strided_run!(v, s1 - off, ks, len, S.zerobar, S.inclusive, combine, l1, l2)
+    lo, hi = _scan_strided_extent(S, l1, l2)
+    v, off = _scan_dense(du, lo, hi)
+    _scan_strided_run!(v, S.slots[1] - off, S.kstride, S.len, S.zerobar, S.inclusive,
+                       combine, l1, l2)
     return nothing
+end
+
+# The least and greatest slot lanes `l1:l2` of `S` touch: the extremes over the
+# corners (first or last lane, first or last level), since the level stride is
+# negative for a reverse scan.
+function _scan_strided_extent(S::_ScanFold, l1::Int, l2::Int)
+    a = S.slots[1] + (l1 - 1) * S.lstride
+    b = S.slots[1] + (l2 - 1) * S.lstride
+    d = (S.len - 1) * S.kstride
+    return (min(a, b, a + d, b + d), max(a, b, a + d, b + d))
 end
 
 function _scan_strided_run!(du, s1::Int, ks::Int, len::Int, z::Float64,

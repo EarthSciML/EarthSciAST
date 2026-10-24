@@ -436,8 +436,8 @@ end
     # divergence `D(u) = -div(F)` lowers to `-(faq)` over a ragged
     # `edges_of_cell` range, which the pointwise lift reads as
     # `-(index(faq, i))`. With `i` a loop counter of the nest, each cell folds
-    # its own row through a run-time bound (`_NK_RAGGED_LOOP`), first-term
-    # seeded like the per-cell expansion; the code is the same at every mesh
+    # its own row through a run-time bound (`_NK_RAGGED_LOOP`), seeded from 0̄
+    # like the per-cell expansion; the code is the same at every mesh
     # size, and no cell reaches the per-cell build.
     @testset "a gather of a ragged contraction, MPAS-shaped" begin
         idx(v, a...) = Dict("op" => "index", "args" => Any[v, a...])
@@ -536,8 +536,8 @@ end
             du = _act_du(pn, u)
             @test du[pn.var_map["M.u[2]"]] === -0.0
             @test du[pn.var_map["M.v[2]"]] == -Inf
-            # Signed zeros: at F = 0 every term is ±0.0, and a lone first
-            # term keeps its sign where a 0̄-seeded fold would not.
+            # Signed zeros: at F = 0 every term is ±0.0, and both compilers
+            # fold them from the 0̄ seed (esm-spec §4.3.1).
             z = copy(u); zi = copy(ui)
             for (k, j) in pi_.var_map
                 startswith(k, "M.F[") && (z[pn.var_map[k]] = 0.0; zi[j] = 0.0)

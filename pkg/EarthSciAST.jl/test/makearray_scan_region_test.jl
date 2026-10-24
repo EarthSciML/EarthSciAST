@@ -157,7 +157,71 @@ function _msr_check(model, isets; scans::Int)
     return nat
 end
 
+# An observed `F` defined by the aggregate `def` over `fshape`, integrated by
+# `w` (so the right-hand side reads every cell of `F`); `u` is `lev`-shaped.
+function _msr_obs_model(def, fshape::Vector{String}, isets)
+    vars = Dict(
+        "u" => ESM_MSR.ModelVariable(ESM_MSR.UnknownVariable; shape=["lev"]),
+        "dz" => ESM_MSR.ModelVariable(ESM_MSR.UnknownVariable; shape=["lev"]),
+        "F" => ESM_MSR.ModelVariable(ESM_MSR.UnknownVariable; shape=fshape),
+        "w" => ESM_MSR.ModelVariable(ESM_MSR.UnknownVariable; shape=fshape))
+    eqs = [
+        ESM_MSR.Equation(_v("dz"),
+            _msr_agg(_op("+", _n(0.5), _op("*", _n(0.25), _v("k"))), "k" => "lev")),
+        ESM_MSR.Equation(_v("F"), def),
+        ESM_MSR.Equation(_msr_agg(_Didx("w", _v("i")), "i" => only(fshape)),
+                         _msr_agg(_idx("F", _v("i")), "i" => only(fshape))),
+        ESM_MSR.Equation(_msr_agg(_Didx("u", _v("i")), "i" => "lev"),
+                         _msr_agg(_n(0.0), "i" => "lev")),
+    ]
+    return ESM_MSR.Model(vars, eqs), isets
+end
+
+# ⊕_j u[j]·dz[j] (times `dz[k]` when `outer`) over `j ∈ lev`, output `k ∈ kset`.
+_msr_sum(kset; filt=nothing, outer=false) = ESM_MSR.OpExpr("faq", ESM_MSR.ASTExpr[];
+    output_idx=Any["k"],
+    ranges=Dict{String,Any}("j" => _msr_set("lev"), "k" => _msr_set(kset)),
+    expr_body=outer ? _op("*", _idx("u", _v("j")), _idx("dz", _v("j")), _idx("dz", _v("k"))) :
+                      _op("*", _idx("u", _v("j")), _idx("dz", _v("j"))),
+    reduce="+", filter=filt === nothing ? nothing : _op(filt, _v("j"), _v("k")))
+
+# The right-hand side at an all `-0.0` state, under both compilers, bit for bit:
+# every term is `-0.0`, and a non-empty sum of them is `+0.0` (esm-spec §4.3.1).
+function _msr_negzero(model, isets)
+    nat = ESM_MSR._build_evaluator_impl(model; index_sets=isets)
+    ref = ESM_MSR._build_evaluator_impl(model; index_sets=isets, compiler=:interpreter)
+    a = fill(NaN, length(nat[2])); b = fill(NaN, length(ref[2]))
+    nat[1](a, fill(-0.0, length(a)), nat[3], 0.0)
+    ref[1](b, fill(-0.0, length(b)), ref[3], 0.0)
+    @test reinterpret(UInt64, a) == reinterpret(UInt64, b)
+    @test !any(x -> x === -0.0, b)
+    return nat
+end
+
+
 @testset "prefix scan as a makearray region (#533)" begin
+    @testset "a sum of -0.0 terms is +0.0 in every observed form" begin
+        lev(n) = Dict("lev" => ESM_MSR.IndexSet("interval"; size=n))
+        nodes(n) = Dict("lev" => ESM_MSR.IndexSet("interval"; size=n),
+                        "lev_nodes" => ESM_MSR.IndexSet("interval"; size=n + 1))
+        # A plain contraction, every cell admitting every term.
+        _msr_negzero(_msr_obs_model(_msr_sum("lev"; outer=true), ["lev"], lev(8))...)
+        # Scans whose last (inclusive) or first (reverse inclusive) cell admits
+        # every term, and the staggered strict scan's top node.
+        for filt in ("<=", "<", ">=", ">")
+            nat = _msr_negzero(_msr_obs_model(_msr_sum("lev"; filt=filt), ["lev"], lev(8))...)
+            @test nat[6].n_scan_folds == 1
+        end
+        nat = _msr_negzero(_msr_obs_model(_msr_sum("lev_nodes"; filt="<"),
+                                          ["lev_nodes"], nodes(12))...)
+        @test nat[6].n_scan_folds == 1
+        # The makearray of a scan and its column total (one staggered scan),
+        # and the to-top form.
+        for (ncol, kw) in ((0, (;)), (7, (;)), (0, (filt=">=", top=:zero)))
+            _msr_negzero(_msr_nodes_model(12, ncol; kw...)...)
+        end
+    end
+
     @testset "column, from the surface: scan + rank-0 total" begin
         m, is = _msr_nodes_model(16, 0)
         _msr_check(m, is; scans=1)
@@ -257,6 +321,31 @@ end
             end
             ESM_MSR._apply_scan_fold!(x, S)
             @test reinterpret(UInt64, x) == reinterpret(UInt64, ref)
+        end
+    end
+
+    @testset "a reverse strided fold's extent covers every lane and level" begin
+        # Lanes 1..4 ascending, levels 4 apart running down from the top. The
+        # span is the min/max over the corners, not lane 1's first level to the
+        # last lane's last level.
+        nc, nk = 4, 3
+        slots = Int[c + (k - 1) * nc for c in 1:nc for k in nk:-1:1]
+        S = ESM_MSR._ScanFold(slots, nk, :+, 0.0, true)
+        @test S.kstride == -nc
+        @test ESM_MSR._scan_strided_extent(S, 1, nc) == extrema(slots)
+        @test ESM_MSR._scan_strided_extent(S, 2, 3) == (2, 11)
+        Sf = ESM_MSR._ScanFold(Int[c + (k - 1) * nc for c in 1:nc for k in 1:nk], nk, :+, 0.0, true)
+        @test ESM_MSR._scan_strided_extent(Sf, 1, nc) == (1, 12)
+        # On the two-buffer slot space with the state ending inside the span,
+        # the fold must stay on the whole view and give the plain vector's bits.
+        for inc in (true, false)
+            S = ESM_MSR._ScanFold(slots, nk, :+, 0.0, inc)
+            x = Float64[_msr_val(k) for k in 1:(nc * nk)]
+            ref = copy(x)
+            ESM_MSR._apply_scan_fold!(ref, S)
+            st, ob = x[1:2], x[3:end]
+            ESM_MSR._apply_scan_fold!(ESM_MSR._ObsSplitVec(st, ob, 2), S)
+            @test reinterpret(UInt64, [st; ob]) == reinterpret(UInt64, ref)
         end
     end
 

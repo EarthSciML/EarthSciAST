@@ -42,7 +42,7 @@ const _NK_LOOPVAR       = UInt8(10)  # read the current value of an enclosing ru
 const _NK_CONTRACTION_LOOP = UInt8(11)  # compile-once ⊕-reduction: iterate a static range, fold ONE body per iteration (ess-runtime-contraction)
 const _NK_STATE_GATHER = UInt8(12)  # read u at a slot computed at eval time from loop-var-dependent subscripts (ess-runtime-contraction)
 const _NK_RECUR_GATHER = UInt8(13)  # a recurrence's causal self-read: a PUBLISHED cell of its own buffer, or a fault (recurrence_sweep.jl)
-const _NK_RAGGED_LOOP  = UInt8(14)  # ⊕-reduction over a range whose bounds are evaluated per call (a ragged `offsets` bound), first-term seeded
+const _NK_RAGGED_LOOP  = UInt8(14)  # ⊕-reduction over a range whose bounds are evaluated per call (a ragged `offsets` bound), seeded from 0̄
 
 # The ONE compiled IR node — scalar spines and access-kernel spines are both trees
 # of these. `kind` selects which fields are live. The catch-all `payload::Any` slot
@@ -180,11 +180,11 @@ end
 # `_NK_RAGGED_LOOP` with `children = [body, lo, hi]`; `step` is a build constant.
 #
 # The fold is the one the per-cell build writes for the same gather,
-# `_combine_with_reducer` over the expanded terms: no term gives 0̄, otherwise
-# the first term seeds the accumulator and the rest fold into it left to right
-# (`acc = acc ⊕ term`). It is NOT seeded from 0̄, which for `+` would turn a
-# lone `-0.0` term into `+0.0`. `reach` estimates the iterations per call for
-# the threading verdict's work count (`_node_loop_reach`).
+# `_combine_with_reducer` over the expanded terms: seeded from 0̄, the terms
+# folded into it left to right (`acc = acc ⊕ term`), so no term gives 0̄ and an
+# all `-0.0` row under `+` gives `+0.0` (esm-spec §4.3.1). `reach` estimates the
+# iterations per call for the threading verdict's work count
+# (`_node_loop_reach`).
 struct _RaggedLoop
     ref::Base.RefValue{Int}
     step::Int
@@ -1903,8 +1903,8 @@ function _eval_contraction_loop(n::_Node, u, p, t, ::Type{T}) where {T}
 end
 
 # `_RaggedLoop`'s fold (see there): the bounds are evaluated first, lower then
-# upper, then the terms in range order, the first seeding the accumulator. An
-# empty row is the `Float64` 0̄, as the per-cell build's literal for it is.
+# upper, then the terms in range order, folded into the `Float64` 0̄ (a row with
+# no terms is that 0̄, as the per-cell build's literal for it is).
 function _eval_ragged_loop(n::_Node, u, p, t, ::Type{T}) where {T}
     spec = n.payload::_RaggedLoop
     ref = spec.ref
@@ -1915,8 +1915,12 @@ function _eval_ragged_loop(n::_Node, u, p, t, ::Type{T}) where {T}
     rng = lo:spec.step:hi
     isempty(rng) && return n.literal
     op = n.op
+    z = n.literal
+    # The first step is `0̄ ⊕ term` with the `Float64` 0̄, which also fixes the
+    # accumulator's type for the loop.
     ref[] = first(rng)
-    s = _eval_node(body, u, p, t, T)
+    v = _eval_node(body, u, p, t, T)
+    s = op === :+ ? z + v : op === :* ? z * v : op === :max ? max(z, v) : min(z, v)
     for k in Iterators.drop(rng, 1)
         ref[] = k
         v = _eval_node(body, u, p, t, T)
