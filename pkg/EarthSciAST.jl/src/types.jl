@@ -1346,21 +1346,11 @@ struct Solver
     reltol::Union{Float64,Nothing}
     splitting::Union{String,Nothing}
     external::Union{String,Nothing}
-    # The absolute directory a relative `external` resolves against (esm-spec
-    # §2.2.6 *D*), recorded at load: the directory of the file read, or the
-    # working directory for a string load. Not part of the wire form, so it is
-    # never emitted and takes no part in `==` / `hash`. `nothing` for a block
-    # built in memory, which resolves against the working directory at call time.
-    base_dir::Union{String,Nothing}
 
     Solver(; stiffness=nothing, abstol=nothing, reltol=nothing, splitting=nothing,
-           external=nothing, base_dir=nothing) =
-        new(stiffness, abstol, reltol, splitting, external, base_dir)
+           external=nothing) =
+        new(stiffness, abstol, reltol, splitting, external)
 end
-
-_solver_wire_fields(s::Solver) = (s.stiffness, s.abstol, s.reltol, s.splitting, s.external)
-Base.:(==)(a::Solver, b::Solver) = _solver_wire_fields(a) == _solver_wire_fields(b)
-Base.hash(s::Solver, h::UInt) = hash(_solver_wire_fields(s), hash(Solver, h))
 
 """
     Tolerance(abs::Union{Float64,Nothing}, rel::Union{Float64,Nothing})
@@ -2322,6 +2312,15 @@ struct EsmFile
     # declares none, which is NOT a synonym for any default value.
     solver::Union{Solver,Nothing}
 
+    # The absolute, dot-segment-free directory a relative `solver.external`
+    # resolves against (esm-spec §2.2.6 *D*), recorded at load: the directory of
+    # the file read, or the base a string / in-memory load was given or
+    # defaulted to (the working directory). NOT a wire field — it is never
+    # emitted, as the other bindings' `document_base` is not — and `nothing` for
+    # a document built in memory, which resolves against the working directory
+    # at call time.
+    document_base::Union{String,Nothing}
+
     # Constructor with optional parameters
     EsmFile(esm::String, metadata::Metadata;
             models=nothing,
@@ -2337,7 +2336,8 @@ struct EsmFile
             component_templates=nothing,
             coordinates=nothing,
             coupling_roles=nothing,
-            solver=nothing) =
+            solver=nothing,
+            document_base=nothing) =
         new(esm, metadata,
             models === nothing ? nothing : OrderedDict{String,Model}(models),
             reaction_systems === nothing ? nothing :
@@ -2350,7 +2350,7 @@ struct EsmFile
             expression_templates, metaparameters,
             component_templates === nothing ? nothing :
                 OrderedDict{String,Any}(component_templates),
-            coordinates, coupling_roles, solver)
+            coordinates, coupling_roles, solver, document_base)
 end
 
 # ========================================

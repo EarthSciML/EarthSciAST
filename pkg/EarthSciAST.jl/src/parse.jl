@@ -573,11 +573,11 @@ function coerce_trigger(data)::DiscreteEventTrigger
 end
 
 """
-    coerce_esm_file(data::Any; base_dir=nothing) -> EsmFile
+    coerce_esm_file(data::Any; document_base=nothing) -> EsmFile
 
 Coerce raw JSON data into properly typed EsmFile with custom union type handling.
-`base_dir` is the directory the document was read from, recorded on its
-`solver` block for [`solver_external_location`](@ref) (esm-spec §2.2.6).
+`document_base` is the absolute directory the document was read from, recorded
+beside it for [`solver_external_location`](@ref) (esm-spec §2.2.6).
 
 Accepts ANY dict-like JSON carrier — a `JSON3.Object` straight off the wire,
 the load pipeline's already-native tree, or a `Dict` assembled in Julia code
@@ -590,7 +590,8 @@ a `JSON3.read(JSON3.write(doc))` type-launder. Coercion only reads the tree, so
 inline number arrays are shared with `data` rather than copied
 (`_to_ordered_shared`).
 """
-function coerce_esm_file(data::Any; base_dir::Union{Nothing,AbstractString}=nothing)::EsmFile
+function coerce_esm_file(data::Any;
+                         document_base::Union{Nothing,AbstractString}=nothing)::EsmFile
     data = _to_ordered_shared(data)
 
     # Extract required fields
@@ -714,7 +715,7 @@ function coerce_esm_file(data::Any; base_dir::Union{Nothing,AbstractString}=noth
     # rewrites the block, and reading it here means the direct
     # `coerce_esm_file` entry point keeps it too. Typed rather than verbatim
     # because `solve` READS it (§2.2.2 resolution order).
-    solver = coerce_solver(_get_field(data, :solver, nothing); base_dir=base_dir)
+    solver = coerce_solver(_get_field(data, :solver, nothing))
 
     file = EsmFile(esm, metadata,
                   models=models,
@@ -727,7 +728,8 @@ function coerce_esm_file(data::Any; base_dir::Union{Nothing,AbstractString}=noth
                   index_sets=index_sets,
                   component_templates=component_templates,
                   coupling_roles=coupling_roles,
-                  solver=solver)
+                  solver=solver,
+                  document_base=document_base === nothing ? nothing : String(document_base))
     # Lower every `enum` op to a `const` integer using the file-local map.
     # This runs once at load time so downstream consumers (evaluators,
     # canonicalize, codegen) never see enum strings in expression trees.
@@ -744,31 +746,28 @@ declares none.
 
 Field VALUES are not re-validated here — the schema already pins the two enums,
 the two positive tolerances and the non-empty `external` string, and this runs
-after schema validation. `base_dir` is the §2.2.6 directory a relative
-`external` resolves against, recorded on the block only when it carries one. What it
+after schema validation. What it
 does is keep absence distinguishable from any default: a missing key stays
 `nothing` rather than acquiring a value the author never wrote.
 """
-function coerce_solver(data; base_dir::Union{Nothing,AbstractString}=nothing)
+function coerce_solver(data)
     data === nothing && return nothing
     data isa AbstractDict || return nothing
     _f(k) = _raw_get(data, k)  # 2-arity; absent reports as `nothing`
     _num(v) = v === nothing ? nothing : Float64(v)
     _str(v) = v === nothing ? nothing : String(v)
-    external = _str(_f("external"))
     s = Solver(stiffness=_str(_f("stiffness")),
                abstol=_num(_f("abstol")),
                reltol=_num(_f("reltol")),
                splitting=_str(_f("splitting")),
-               external=external,
-               base_dir=(external === nothing || base_dir === nothing) ? nothing :
-                        String(base_dir))
+               external=_str(_f("external")))
     # §2.2: an EMPTY block normalizes to absence at load. `{}` is legal and
     # means what omitting the block means, so the typed document never holds a
     # block with nothing set — which is what keeps the five bindings from
     # disagreeing about whether `{}` survives `parse -> emit`. A block holding
     # only `external` is not empty.
-    all(isnothing, _solver_wire_fields(s)) && return nothing
+    all(isnothing, (s.stiffness, s.abstol, s.reltol, s.splitting, s.external)) &&
+        return nothing
     return s
 end
 
