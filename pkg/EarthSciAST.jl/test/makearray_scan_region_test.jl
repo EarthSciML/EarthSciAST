@@ -260,6 +260,31 @@ end
         end
     end
 
+    @testset "a reverse strided fold's extent covers every lane and level" begin
+        # Lanes 1..4 ascending, levels 4 apart running down from the top. The
+        # span is the min/max over the corners, not lane 1's first level to the
+        # last lane's last level.
+        nc, nk = 4, 3
+        slots = Int[c + (k - 1) * nc for c in 1:nc for k in nk:-1:1]
+        S = ESM_MSR._ScanFold(slots, nk, :+, 0.0, true)
+        @test S.kstride == -nc
+        @test ESM_MSR._scan_strided_extent(S, 1, nc) == extrema(slots)
+        @test ESM_MSR._scan_strided_extent(S, 2, 3) == (2, 11)
+        Sf = ESM_MSR._ScanFold(Int[c + (k - 1) * nc for c in 1:nc for k in 1:nk], nk, :+, 0.0, true)
+        @test ESM_MSR._scan_strided_extent(Sf, 1, nc) == (1, 12)
+        # On the two-buffer slot space with the state ending inside the span,
+        # the fold must stay on the whole view and give the plain vector's bits.
+        for inc in (true, false)
+            S = ESM_MSR._ScanFold(slots, nk, :+, 0.0, inc)
+            x = Float64[_msr_val(k) for k in 1:(nc * nk)]
+            ref = copy(x)
+            ESM_MSR._apply_scan_fold!(ref, S)
+            st, ob = x[1:2], x[3:end]
+            ESM_MSR._apply_scan_fold!(ESM_MSR._ObsSplitVec(st, ob, 2), S)
+            @test reinterpret(UInt64, [st; ob]) == reinterpret(UInt64, ref)
+        end
+    end
+
     @testset "regions that overlap or leave a gap are not split" begin
         scan = _msr_scan("<", ["k"], String[])
         ma(regs) = ESM_MSR.OpExpr("makearray", ESM_MSR.ASTExpr[];
