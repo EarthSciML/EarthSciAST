@@ -4447,3 +4447,104 @@ fn run_time_gather_faults_keep_the_rule_order() {
         &[0.0, 1.0],
     );
 }
+
+/// A column `u[k]` whose right-hand side is a `+` reduction (`variant`)
+/// of terms that are all `-0.0`: `-(0 * exp(u[j]))`.
+fn neg_zero_sum_doc(variant: &str) -> serde_json::Value {
+    let n = 5;
+    let u = |k: serde_json::Value| json!({"op": "index", "args": ["u", k]});
+    let term = json!({"op": "-", "args": [
+        {"op": "*", "args": [0.0, {"op": "exp", "args": [u(json!("j"))]}]}]});
+    let sum = |out: serde_json::Value, ranges: serde_json::Value, filter: Option<&str>| {
+        let mut f = json!({"op": "faq", "args": [], "output_idx": out, "reduce": "+",
+            "ranges": ranges, "expr": term});
+        if let Some(cmp) = filter {
+            f["filter"] = json!({"op": cmp, "args": ["j", "k"]});
+        }
+        f
+    };
+    let column = |filter| sum(json!(["k"]), json!({"k": [1, n], "j": [1, n]}), filter);
+    let mut variables = json!({"u": {"type": "unknown", "shape": ["k"]}});
+    let mut equations = Vec::new();
+    let rhs = match variant {
+        "contraction" => column(None),
+        "single" => sum(json!(["k"]), json!({"k": [1, n], "j": [2, 2]}), None),
+        "weighted" => {
+            let mut f = column(None);
+            f["expr"] = json!({"op": "*", "args": [f["expr"].clone(), "k"]});
+            f
+        }
+        "inclusive_scan" => column(Some("<=")),
+        "reverse_scan" => column(Some(">=")),
+        "observed" => {
+            variables["s"] = json!({"type": "unknown", "shape": ["k"]});
+            equations.push(json!({"lhs": "s", "rhs": column(None)}));
+            json!({"op": "index", "args": ["s", "k"]})
+        }
+        "rank0" => {
+            variables["s"] = json!({"type": "unknown"});
+            equations.push(json!({"lhs": "s",
+                "rhs": sum(json!([]), json!({"j": [1, n]}), None)}));
+            json!("s")
+        }
+        "makearray_scan_total" => {
+            variables["F"] = json!({"type": "unknown", "shape": ["kn"]});
+            let f = json!({"op": "makearray", "args": [],
+                "regions": [[[1, n]], [[n + 1, n + 1]]],
+                "values": [column(Some("<")), sum(json!([]), json!({"j": [1, n]}), None)]});
+            equations.push(json!({"lhs": "F", "rhs": f}));
+            json!({"op": "index", "args": ["F", {"op": "+", "args": ["k", 1]}]})
+        }
+        _ => unreachable!(),
+    };
+    let rhs = if rhs["op"] == "faq" {
+        rhs
+    } else {
+        json!({"op": "faq", "args": [], "output_idx": ["k"], "ranges": {"k": [1, n]},
+            "expr": rhs})
+    };
+    equations.push(json!({
+        "lhs": {"op": "faq", "args": [], "output_idx": ["k"],
+            "expr": {"op": "D", "args": [u(json!("k"))], "wrt": "t"},
+            "ranges": {"k": [1, n]}},
+        "rhs": rhs}));
+    json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "tape_neg_zero_sum"},
+        "index_sets": {
+            "k": {"kind": "interval", "size": n},
+            "kn": {"kind": "interval", "size": n + 1}
+        },
+        "models": {"M": {"variables": variables, "equations": equations}}
+    })
+}
+
+/// A non-empty `+` reduction is a fold seeded from `0` (esm-spec §4.3.1), so
+/// one whose terms are all `-0.0` is `+0.0`: the interpreter and the tape
+/// alike, for a contraction (as an equation, of one term, weighted by the
+/// output index, as an observed, as a rank-0 total),
+/// a forward and a reverse inclusive scan, and the makearray of an
+/// exclusive scan and its column total.
+#[test]
+fn ab_an_all_negative_zero_sum_is_positive_zero() {
+    for variant in [
+        "contraction",
+        "single",
+        "weighted",
+        "observed",
+        "rank0",
+        "inclusive_scan",
+        "reverse_scan",
+        "makearray_scan_total",
+    ] {
+        let doc = neg_zero_sum_doc(variant);
+        ab_check(doc.clone(), -2.0, 2.0);
+        let compiled = compile(doc);
+        let n = compiled.state_variable_names().len();
+        let state = seeded_state(n, 1, -2.0, 2.0);
+        let (dy, _) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new(), false);
+        for (k, v) in dy.iter().enumerate() {
+            assert_eq!(v.to_bits(), 0, "[{variant}] dy[{k}] = {v:?}, not +0.0");
+        }
+    }
+}

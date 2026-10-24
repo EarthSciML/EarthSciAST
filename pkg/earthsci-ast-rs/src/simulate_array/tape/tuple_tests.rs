@@ -437,3 +437,22 @@ fn a_tuple_gather_from_an_empty_const_axis_is_refused_under_any_policy() {
         assert!(!refused.is_empty(), "{kind:?}");
     }
 }
+
+/// A ragged `+` contraction is seeded from `0` like every other (esm-spec
+/// §4.3.1): a row whose terms are all `-0.0` sums to `+0.0`, one term or
+/// several, on the tape and in the interpreter.
+#[test]
+fn an_all_negative_zero_ragged_row_sums_to_positive_zero() {
+    let body = json!({"op": "-", "args": [{"op": "*", "args": [0.0, {"op": "exp", "args": [
+        idx(json!("v"), &[idx(json!("cols"), &[json!("i"), json!("k")])])]}]}]});
+    for cnt in [json!([2, 3, 1]), json!([1, 1, 1])] {
+        let doc = ragged_doc(cnst(cnt), body.clone(), None);
+        let prog = ab_check(doc.clone(), -2.0, 2.0);
+        assert_eq!(count(&prog, "SegReduce"), 1);
+        let compiled = super::array_tests::compile(doc);
+        for state in states() {
+            let (dy, _) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new(), false);
+            assert!(dy.iter().all(|v| v.to_bits() == 0), "{dy:?}");
+        }
+    }
+}
