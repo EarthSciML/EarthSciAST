@@ -253,6 +253,15 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
         |e: crate::diagnostic::DiagnosticError| EsmError::SchemaValidation(e.to_string()),
     )?;
 
+    // `solver.external` arrives at esm 1.3.0, and a `${` in it is never
+    // expanded (esm-spec §2.2.4, §2.2.6). Only the ROOT's block is read: a
+    // mounted leaf's `solver` block does not cross the mount edge (§4.7).
+    crate::solver::reject_solver_external_pre_v13(&json_value)
+        .and_then(|()| crate::solver::reject_solver_external_unresolved(&json_value))
+        .map_err(|e: crate::diagnostic::DiagnosticError| {
+            EsmError::SchemaValidation(e.to_string())
+        })?;
+
     // Declared `units` on a `const` node arrive at esm 1.2.0 (esm-spec §4.8.5).
     // Ref resolution is the one step since the authored walk that can add
     // nodes; without a mount it added none, and the walk's answer stands.
@@ -386,6 +395,13 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     // own `base_path` in charge.
     if options.base_path.is_some() {
         esm_file.coupling_import_base = Some(base.to_string_lossy().into_owned());
+        // esm-spec §2.2.6: the anchor `solver_external_location` resolves a
+        // relative `solver.external` against. Made absolute now, so a later
+        // change of working directory cannot move it.
+        let absolute = crate::data_source_urls::remove_dot_segments(
+            &crate::data_source_urls::absolute_base(&base),
+        );
+        esm_file.document_base = Some(absolute.to_string_lossy().into_owned());
     }
 
     Ok(esm_file)

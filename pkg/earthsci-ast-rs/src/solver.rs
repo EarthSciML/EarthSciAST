@@ -9,8 +9,9 @@
 //! CONFORMANCE_SPEC §5.9 requirement to integrate successfully and agree within
 //! the error band is untouched by this block and is not excused by it.
 //!
-//! This module carries the parts that are NOT advisory: the spec-version gate
-//! (§2.2.4) and the §2.2.2 tolerance resolution order.
+//! This module carries the parts that are NOT advisory: the spec-version gates
+//! (§2.2.4), the §2.2.2 tolerance resolution order, and the §2.2.6 resolution
+//! of `solver.external` to a location.
 
 use crate::diagnostic::{DiagnosticError, codes, err};
 // The binding defaults (API_SPEC §5.8) live with `SolveOptions`, which is where
@@ -18,6 +19,7 @@ use crate::diagnostic::{DiagnosticError, codes, err};
 // rather than a second copy that could drift from them.
 use crate::simulate::{DEFAULT_ABSTOL, DEFAULT_RELTOL};
 use serde_json::Value;
+use std::path::{Path, PathBuf};
 
 /// Reject a top-level `solver` block in a file declaring esm < 1.1.0.
 ///
@@ -47,6 +49,118 @@ pub fn reject_solver_pre_v11(view: &Value) -> Result<(), DiagnosticError> {
              Offending path: /solver"
         ),
     ))
+}
+
+/// Reject `solver.external` in a file declaring esm < 1.3.0.
+///
+/// The field arrives at `esm: 1.3.0`, after the block itself, so it carries
+/// its own code (esm-spec §2.2.4 requirement 4). A 1.1.0 or 1.2.0 document
+/// whose block has no `external` stays valid. Below 1.1.0 the whole block is
+/// already refused by [`reject_solver_pre_v11`], which runs first.
+pub fn reject_solver_external_pre_v13(view: &Value) -> Result<(), DiagnosticError> {
+    let Some(obj) = view.as_object() else {
+        return Ok(());
+    };
+    let carries_external = obj
+        .get("solver")
+        .and_then(Value::as_object)
+        .is_some_and(|s| s.contains_key("external"));
+    if !carries_external {
+        return Ok(());
+    }
+    let Some(esm) = obj.get("esm").and_then(|v| v.as_str()) else {
+        return Ok(());
+    };
+    let Some((major, minor, _)) = crate::diagnostic::parse_semver(esm) else {
+        return Ok(());
+    };
+    if (major, minor) >= (1, 3) {
+        return Ok(());
+    }
+    Err(err(
+        codes::SOLVER_EXTERNAL_VERSION_TOO_OLD,
+        format!(
+            "`solver.external` requires esm >= 1.3.0; file declares {esm}. \
+             Offending path: /solver/external"
+        ),
+    ))
+}
+
+/// Refuse a `solver.external` containing `${` (esm-spec §2.2.6).
+///
+/// Nothing is ever substituted into the reference: numerics chosen by the
+/// environment are not reproducible, so a deployment-chosen run configuration
+/// is a call-site argument, not a variable in the document.
+fn refuse_unexpanded(external: &str) -> Result<(), DiagnosticError> {
+    if !external.contains("${") {
+        return Ok(());
+    }
+    Err(err(
+        codes::SOLVER_EXTERNAL_UNRESOLVED,
+        format!(
+            "/solver/external {external:?} carries an unexpanded '${{...}}' variable. \
+             esm-spec §2.2.6 never expands environment variables into a run-configuration \
+             reference; write a path relative to this document, or pass the run \
+             configuration at the call site."
+        ),
+    ))
+}
+
+/// The load-time half of [`refuse_unexpanded`], over the raw document. A
+/// non-string `external` is left to schema validation.
+pub(crate) fn reject_solver_external_unresolved(view: &Value) -> Result<(), DiagnosticError> {
+    match view.pointer("/solver/external").and_then(Value::as_str) {
+        Some(external) => refuse_unexpanded(external),
+        None => Ok(()),
+    }
+}
+
+/// Where the document's `solver.external` points (esm-spec §2.2.6), or
+/// `Ok(None)` when the document names no run configuration.
+///
+/// A URL (`scheme://…`) is returned unchanged. An absolute path has its dot
+/// segments removed and is prefixed `file://`. Anything else is joined onto
+/// the base first: `base` when given (a relative `base` is taken against the
+/// process working directory), otherwise the directory the document was read
+/// from ([`EsmFile::document_base`]), otherwise the process working directory.
+///
+/// Purely lexical (RFC 3986 §5.2.4): never `realpath`, never the filesystem or
+/// the network, so a location that does not exist resolves like any other.
+/// The document is not changed — `emit` writes the authored string.
+///
+/// [`EsmFile::document_base`]: crate::EsmFile::document_base
+pub fn solver_external_location(
+    file: &crate::EsmFile,
+    base: Option<&Path>,
+) -> Result<Option<String>, DiagnosticError> {
+    let Some(external) = file.solver.as_ref().and_then(|s| s.external.as_deref()) else {
+        return Ok(None);
+    };
+    refuse_unexpanded(external)?;
+    if crate::data_source_urls::is_scheme_led(external) {
+        return Ok(Some(external.to_string()));
+    }
+    let joined = if external.starts_with('/') {
+        PathBuf::from(external)
+    } else {
+        let dir = match (base, file.document_base.as_deref()) {
+            (Some(b), _) => b.to_path_buf(),
+            (None, Some(recorded)) => PathBuf::from(recorded),
+            (None, None) => PathBuf::from("."),
+        };
+        crate::data_source_urls::absolute_base(&dir).join(external)
+    };
+    let resolved = crate::data_source_urls::remove_dot_segments(&joined);
+    let Some(resolved) = resolved.to_str() else {
+        return Err(err(
+            codes::SOLVER_EXTERNAL_UNRESOLVED,
+            format!(
+                "/solver/external {external:?} resolves to a path that is not valid UTF-8 \
+                 and so cannot be spelled as a URL (esm-spec §2.2.6)."
+            ),
+        ));
+    };
+    Ok(Some(format!("file://{resolved}")))
 }
 
 /// Resolve integration tolerances most-specific first (esm-spec §2.2.2):
@@ -88,7 +202,12 @@ pub(crate) fn normalize_empty(
     solver: Option<crate::types::Solver>,
 ) -> Option<crate::types::Solver> {
     let s = solver?;
-    if s.stiffness.is_none() && s.abstol.is_none() && s.reltol.is_none() && s.splitting.is_none() {
+    if s.stiffness.is_none()
+        && s.abstol.is_none()
+        && s.reltol.is_none()
+        && s.splitting.is_none()
+        && s.external.is_none()
+    {
         return None;
     }
     Some(s)
