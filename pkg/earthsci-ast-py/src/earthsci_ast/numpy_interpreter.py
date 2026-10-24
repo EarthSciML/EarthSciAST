@@ -3152,6 +3152,77 @@ def _segmented_fold(
     return out
 
 
+def _masked_row_fold(
+    reducer: str, term2d: np.ndarray, admit2d: np.ndarray, empty_zero: float
+) -> np.ndarray:
+    """⊕-fold each row's ADMITTED terms left to right, seeded from the first
+    admitted term — :func:`_segmented_fold` over ``term2d[admit2d]``, bit for bit
+    — in a fixed number of whole-array steps rather than one per term position.
+    A row that admits nothing is the semiring identity ``empty_zero``.
+
+    * ``+`` / ``*``: a non-admitted slot becomes ``-0.0`` / ``1.0``, the exact
+      identities (``x + -0.0`` and ``x * 1.0`` are ``x`` for every ``x``, a
+      ``-0.0`` or a NaN included), so a sequential ``ufunc.accumulate`` along the
+      row is the admitted terms' fold, its first step the first admitted term.
+      ``+0.0`` would not do: ``-0.0 + 0.0`` is ``+0.0``.
+    * ``max`` / ``min``: the :func:`_reduce_step` chain replaces its accumulator
+      only by a term that strictly beats it, so it ends on the FIRST admitted
+      term equal to the NaN-skipping extremum — unless the first admitted term
+      is a NaN, which nothing beats.
+    * ``or``: 1 if any admitted term is non-zero.
+    """
+    n_rows = term2d.shape[0]
+    out = np.full(n_rows, empty_zero, dtype=float)
+    if term2d.size == 0:
+        return out
+    live = admit2d.any(axis=1)
+    if reducer == "or":
+        hit = (admit2d & (term2d != 0.0)).any(axis=1)
+        out[live] = np.where(hit[live], 1.0, 0.0)
+        return out
+    if reducer in ("+", "*"):
+        ufunc = np.add if reducer == "+" else np.multiply
+        seq = np.where(admit2d, term2d, -0.0 if reducer == "+" else 1.0)
+        acc = ufunc.accumulate(seq, axis=1, out=seq)[:, -1]
+        out[live] = acc[live]
+        return out
+    is_max = reducer == "max"
+    rows = np.arange(n_rows)
+    first = term2d[rows, np.argmax(admit2d, axis=1)]
+    extreme = (np.fmax if is_max else np.fmin).reduce(
+        np.where(admit2d, term2d, -np.inf if is_max else np.inf), axis=1
+    )
+    at = np.argmax(admit2d & (term2d == extreme[:, None]), axis=1)
+    res = np.where(np.isnan(first), first, term2d[rows, at])
+    out[live] = res[live]
+    return out
+
+
+#: About how many box elements of whole-array work one Python-level numpy step
+#: costs: :func:`_fold_admitted_rows` steps through the admitted terms when that
+#: is cheaper than a pass over the whole box.
+_FOLD_STEP_COST = 2048
+
+
+def _fold_admitted_rows(
+    reducer: str, term2d: np.ndarray, admit2d: np.ndarray, empty_zero: float
+) -> np.ndarray:
+    """⊕-fold each row's admitted terms left to right, the per-cell walk's
+    fold. Both routes give the same bits; this picks the cheaper. A sparse box
+    with short rows packs its admitted terms and steps through them
+    (:func:`_segmented_fold`, one numpy step per term position, or per row for
+    a few long ``+`` / ``*`` rows); otherwise :func:`_masked_row_fold` folds the
+    whole box in a fixed number of passes."""
+    counts = admit2d.sum(axis=1).astype(np.int64)
+    max_count = int(counts.max()) if counts.size else 0
+    n_live = int(np.count_nonzero(counts))
+    steps = min(max_count, n_live) if reducer in ("+", "*") else max_count
+    if steps * _FOLD_STEP_COST < term2d.size:
+        vals = np.ascontiguousarray(term2d[admit2d], dtype=float)
+        return _segmented_fold(reducer, vals, counts, empty_zero)
+    return _masked_row_fold(reducer, term2d, admit2d, empty_zero)
+
+
 def _row_chunks(counts: np.ndarray, cap: int) -> Iterator[tuple[int, int]]:
     """Consecutive ``[lo, hi)`` row blocks of at most ``cap`` entries each (a
     single row over the cap is its own block), so a flat-entry tier's working
@@ -4430,7 +4501,7 @@ def _eval_faq_reduce_vectorized(
     # contracted axes trail the box, so a row of the 2-D view runs them in
     # `_cartesian` order (last symbol fastest), reversed for a reverse scan
     # window (esm-spec §4.3.1). They are folded left to right by
-    # `_segmented_fold` — never by a pairwise `ufunc.reduce` — so the answer
+    # `_fold_admitted_rows` — never by a pairwise `ufunc.reduce` — so the answer
     # is the per-cell walk's bit for bit, forward or reverse.
     n_out = int(np.prod(out_shape, dtype=np.int64))
     term2d = np.broadcast_to(term, combined_shape).reshape(n_out, -1)
@@ -4442,10 +4513,8 @@ def _eval_faq_reduce_vectorized(
     if _folds_descending(filter_expr, reduce_syms, out_syms):
         term2d = term2d[:, ::-1]
         admit2d = admit2d[:, ::-1]
-    vals = np.ascontiguousarray(term2d[admit2d], dtype=float)
-    counts = admit2d.sum(axis=1).astype(np.int64)
     with np.errstate(over="ignore", invalid="ignore"):
-        out = _segmented_fold(reducer, vals, counts, empty_zero)
+        out = _fold_admitted_rows(reducer, term2d, admit2d, empty_zero)
     return out.reshape(out_shape)
 
 
@@ -4483,7 +4552,7 @@ def _eval_faq_reduce_nested(
     symbols are bound on axes after ``S``, and the body, filter and join mask
     evaluate once over ``S × reduce``. Each enclosing cell's admitted terms are
     then folded left to right in :func:`_cartesian` order by
-    :func:`_segmented_fold` — the per-cell walk's fold, at that cell's binding
+    :func:`_fold_admitted_rows` — the per-cell walk's fold, at that cell's binding
     of the enclosing symbols. The window is fixed per enclosing cell, so it
     folds ascending whatever its comparison (esm-spec §4.3.1): a nested node
     has no output index to scan. The result has shape ``S``, which the
@@ -4550,10 +4619,8 @@ def _eval_faq_reduce_nested(
         admit = admit & join_mask.reshape((1,) * k + red_shape)
     term2d = term.reshape(n_rows, -1)
     admit2d = admit.reshape(n_rows, -1)
-    vals = np.ascontiguousarray(term2d[admit2d], dtype=float)
-    counts = admit2d.sum(axis=1).astype(np.int64)
     with np.errstate(over="ignore", invalid="ignore"):
-        out = _segmented_fold(reducer, vals, counts, empty_zero)
+        out = _fold_admitted_rows(reducer, term2d, admit2d, empty_zero)
     return out.reshape(lead)
 
 
