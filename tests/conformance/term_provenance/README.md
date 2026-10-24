@@ -43,6 +43,7 @@ Two checks need more than the corpus, and live in each binding's own suite:
 | `placeholder_expansion.esm` | `_var` clones carry the operator's component (`Adv`). |
 | `couple_additive.esm` | `couple` additive onto an existing tendency (appended, `{"coupling": 1}`) and onto an unknown with no tendency (the term becomes `D(Atm.O2)`, a second term is appended to it). A parameter target takes no tendency. A later `variable_map` rewrites an input inside the coupling's contribution without changing its origin. |
 | `couple_multiplicative.esm` | `couple` multiplicative collapses the list to one contribution, origins the union in first-appearance order, then the coupling. |
+| `couple_multiplicative_tendency_first.esm` | `couple` multiplicative onto a target with `D(x) ~ f` followed by a bare `x ~ g`: the factor scales the `D(x, t)` tendency (`{"coupling": 0}` joins Chem's origin); the later bare equation is untouched. |
 | `variable_map.esm` | `variable_map` `additive` (a scaled replacement) substitutes inside the authoring contribution and adds no origin; an Expression transform's new observed is authored by the coupling entry. |
 | `pointwise_lift.esm` | The pointwise lift indexes inside each contribution and wraps the sum in one `faq`; `body(eq)` is the `faq` body. |
 | `template_reference.esm` | An expression-template reference whose body is a sum sits inside one contribution; every term of its expansion inherits that contribution's origin. The Python oracle expands at load, so the golden records the expansion. |

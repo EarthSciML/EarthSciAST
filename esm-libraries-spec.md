@@ -1208,13 +1208,16 @@ The `connector.equations` array contains the complete coupling specification, ex
      - `additive`: Add the `expression` as a source/sink term to the target variable's ODE RHS.
        If `to` has no tendency yet, `expression` BECOMES it (`D(to) ~ expression`) — an additive
        term against an absent tendency is well defined, because zero is the additive identity.
-     - `multiplicative`: Multiply the target variable's existing ODE RHS by the `expression`.
+     - `multiplicative`: Multiply the target variable's existing ODE RHS by the `expression`. That
+       RHS is the right-hand side of the LAST `D(to, t)` equation; a bare `to ~ …` equation for the
+       same variable is never scaled, even when it comes later in document order.
      - `replacement`: Replace the target variable's value with the `expression` (used for algebraic constraints).
 3. Variables referenced across systems become shared — the coupled system includes both systems' variables.
 
 **A `multiplicative` transform REQUIRES an existing tendency.** Both this section and esm-spec §10.3
-define the operation against the target's existing ODE RHS. When `to` names something with no
-`D(to)` equation in the flattened system — a parameter, an observed, an algebraic unknown, or simply
+define the operation against the target's existing ODE RHS. The check for that tendency and the
+choice of the equation to scale MUST use the same lookup (the last `D(to, t)` equation). When `to`
+names something with no `D(to)` equation in the flattened system — a parameter, an observed, an algebraic unknown, or simply
 an undefined name — there is nothing to multiply and the operation has no meaning. A library MUST
 raise `couple_multiplicative_no_tendency` naming the target; it MUST NOT silently drop the connector
 equation. Dropping it is a wrong answer delivered quietly: the document declares a coupling, the
@@ -1520,7 +1523,7 @@ How each step of this algorithm fills the list:
 | 3. `operator_compose`, match | The merged list is A's contributions followed by B's, in order, origins unchanged; on a translation match B's dependent variable is rewritten inside each of B's `expr`. With `factor ≠ 1`: when B has exactly ONE contribution it is appended as `factor * expr`; when B has MORE than one they COLLAPSE into one contribution `factor * (b1 + b2 + …)` (left fold inside) whose origins are the union of B's in first-appearance order. Distributing the factor would change the arithmetic. An unmatched equation keeps its list; an equation §4.7.1 step 4 reattributes moves with its list. |
 | 3. Merged-away rename (§4.7.1 step 4, CONFORMANCE_SPEC §5.35) | Applies inside each `expr`. |
 | 3. `couple` additive | Appends `{expression, [{"coupling": k}]}` to the list of the equation that defines `to` — the equation whose left-hand side's dependent variable is `to` (its `D(to)` tendency, or a bare-LHS definition; the last such equation in document order). When `to` is an UNKNOWN that no equation defines, the term BECOMES its tendency (§4.7.2): a new equation `D(to, t) ~ expression` whose only contribution is `{expression, [{"coupling": k}]}`, appended to the equation list of the top-level component that `to`'s first path segment names. A `to` naming a parameter, or nothing, with no defining equation is skipped. |
-| 3. `couple` multiplicative | Collapse: ONE contribution, `expr = (left fold of the list) * expression`, origins = the union of the list's origins in first-appearance order, then `{"coupling": k}`. |
+| 3. `couple` multiplicative | Applies to the LAST `D(to, t)` equation, not the last defining equation the additive row uses: a bare `to ~ …` equation, even a later one, keeps its list. Collapse: ONE contribution, `expr = (left fold of the list) * expression`, origins = the union of the list's origins in first-appearance order, then `{"coupling": k}`. |
 | 3. `couple` replacement | The list is REPLACED by `[{expression, [{"coupling": k}]}]`. |
 | 3. `couple` explicit `{lhs, rhs}` connector equation (a binding that accepts the form) | A new equation with one contribution, origin `{"coupling": k}`. |
 | 3. `variable_map`, every named transform (§4.7.3: all are replacements, `additive` and `multiplicative` included) | The substitution applies inside each `expr` (and to the left-hand side); origins unchanged; nothing is appended. |
@@ -1543,6 +1546,17 @@ nothing. An expression-template reference that survives flatten (esm-spec §9.6.
 inside one contribution; expanding it rewrites inside that contribution, and if the expansion is a
 sum every resulting term inherits the contribution's origins. A pass that only READS equations
 (a build, a compiler) is unaffected.
+
+**`rhs` is authoritative over a stale list (normative).** A flattened equation's right-hand side
+is public and a caller may edit it after flatten, leaving the list stale. A pass that rebuilds the
+right-hand side from the list on a system it did not just build itself (e.g. `esm_problem`'s
+`table_lookup` lowering of a caller-supplied flattened system) MUST first check that the list's
+left fold is structurally equal to the current `body(eq)`. If it is not, the pass MUST treat the
+list as ONE contribution, `expr = body(eq)`, origins the union of the list's origins in
+first-appearance order, and proceed from that; it MUST NOT revert the caller's edit. A spurious
+mismatch (an integer that round-tripped as a float) only coarsens provenance, so collapsing is
+always safe. An EMPTY list reads as one contribution `{body(eq), []}`. Inside flatten, where list
+and right-hand side are kept in step by construction, the check is not required.
 
 **Equality and hashing.** Provenance lives beside the expression tree, never on a node, so
 `canonical_json`, structural expression equality, node hashing, interning and CSE keys are

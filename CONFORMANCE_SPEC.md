@@ -7079,6 +7079,9 @@ malformed origin or a repeated one.
 the §4.7.5 provenance table (README there): the `systems`-order pair,
 `_var` placeholder expansion, `couple` additive onto an existing and onto an
 absent tendency, `couple` multiplicative (collapse to the union of origins),
+`couple` multiplicative onto a target whose `D(to, t)` tendency is followed by a
+bare `to ~ …` equation (`couple_multiplicative_tendency_first`: the tendency is
+scaled, the bare equation is untouched),
 `variable_map` substitution and Expression transform, the pointwise lift, a
 template reference inside a contribution, a deposition-sink-shaped term that
 reads two components, the `translate` factor over a one- and a two-contribution
@@ -7086,6 +7089,13 @@ B, and step 3a. Chained composes with the operator as `systems[0]` are the
 existing corpus case `chained_operator_compose`. Each fixture is a case of the
 flatten corpus, tier `term_provenance`, id `term_provenance_<fixture name>`, so
 no new runner is involved.
+
+**A caller-edited `rhs`.** Each binding's own suite checks that a pass that
+rebuilds right-hand sides from contributions on a caller-supplied flattened
+system (Python: `esm_problem`'s `table_lookup` lowering) keeps an `rhs` the
+caller edited after flatten and collapses the stale list to one contribution with
+the union of its origins (esm-libraries-spec §4.7.5). The corpus cannot pin it:
+it records flatten's output, where the two never disagree.
 
 **Non-vacuity.** `non_vacuity.esm` has two operators contribute structurally
 identical expressions (`Emis.flux`, each operator's parameter mapped onto one

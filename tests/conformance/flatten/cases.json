@@ -6657,6 +6657,119 @@
       "lifted_shapes": {}
     },
     {
+      "id": "term_provenance_couple_multiplicative_tendency_first",
+      "tier": "term_provenance",
+      "fixture": "conformance/term_provenance/fixtures/couple_multiplicative_tendency_first.esm",
+      "system_kind": "ode",
+      "independent_variables": [
+        "t"
+      ],
+      "state_variables": [
+        {
+          "name": "Chem.O3",
+          "role": "state",
+          "units": "mol/mol",
+          "default": 1.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Chem"
+        }
+      ],
+      "parameters": [
+        {
+          "name": "Chem.k1",
+          "role": "parameter",
+          "units": "1/s",
+          "default": 0.1,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Chem"
+        },
+        {
+          "name": "Chem.O3_ref",
+          "role": "parameter",
+          "units": "mol/mol",
+          "default": 0.04,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Chem"
+        },
+        {
+          "name": "Light.f",
+          "role": "parameter",
+          "units": "1",
+          "default": 0.5,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Light"
+        }
+      ],
+      "observed_variables": [],
+      "algebraic_variables": [],
+      "brownian_parameters": [],
+      "discrete_parameters": [],
+      "equation_count": 2,
+      "equations": [
+        {
+          "lhs": "D(Chem.O3)/Dt",
+          "rhs": "(-Chem.k1) * Chem.O3 * Light.f",
+          "source_system": "Chem",
+          "contributions": [
+            {
+              "rhs": "(-Chem.k1) * Chem.O3 * Light.f",
+              "origins": [
+                {
+                  "component": "Chem"
+                },
+                {
+                  "coupling": 0
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "lhs": "Chem.O3",
+          "rhs": "Chem.O3_ref",
+          "source_system": "Chem",
+          "contributions": [
+            {
+              "rhs": "Chem.O3_ref",
+              "origins": [
+                {
+                  "component": "Chem"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "continuous_events": [],
+      "discrete_events": [],
+      "domain": null,
+      "metadata": {
+        "source_systems": [
+          "Chem",
+          "Light"
+        ],
+        "coupling_rules": [
+          "couple(Light <-> Chem)"
+        ],
+        "operator_applies": [],
+        "callbacks": []
+      },
+      "index_sets": [],
+      "function_tables": [],
+      "template_registry": [],
+      "field_ics": [],
+      "loader_fields": [],
+      "lifted_shapes": {}
+    },
+    {
       "id": "term_provenance_variable_map",
       "tier": "term_provenance",
       "fixture": "conformance/term_provenance/fixtures/variable_map.esm",
