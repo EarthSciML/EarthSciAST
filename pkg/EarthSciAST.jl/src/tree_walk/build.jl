@@ -5421,7 +5421,12 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
         rhs_list_compiled::Bool=false,
         # The state length of the two-buffer slot space the in-place RHS runs
         # on (`_ObsSplitVec`), or 0; the contraction nests address by it.
-        obs_nst::Int=0)
+        obs_nst::Int=0,
+        # A piece of an equation split by makearray region: its report label,
+        # which names the equation it came from, and the declines that
+        # equation collected before the split.
+        rule_label::Union{Nothing,String}=nothing,
+        rule_declines::Vector{Pair{Symbol,Symbol}}=Pair{Symbol,Symbol}[])
     lhs_op = eq.lhs::OpExpr
     idx_names = _output_idx_strings(lhs_op)
     ranges_dict = _ranges_dict(lhs_op)
@@ -5484,11 +5489,15 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
     end
 
     range_iters = _output_range_iters(ranges_dict, idx_names)
-    label = _faq_debug_label(lhs_body, idx_names, range_iters)
+    label = rule_label === nothing ? _faq_debug_label(lhs_body, idx_names, range_iters) :
+        rule_label
     # Open this rule's report entry first: every tier below either lands it
     # (through the routing tally) or refuses it, and a refusal raised several
     # frames deeper reads the label from here so it can name what it refused.
     _open_rule!(label, :equation)
+    for (tier, why) in rule_declines
+        _note_decline!(tier, why)
+    end
 
     # An EMPTY output range (an index set a metaparameter sizes to 0, say) has no
     # cell to write: there is nothing for any tier to build or for the
@@ -5696,6 +5705,44 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
         scan_fold === nothing || push!(scan_folds, scan_fold)
         return nothing
     end
+    # ── A whole-array `makearray`, one equation per region ────────────────────
+    # `index(makearray(...), i…)` at this equation's own loops. The affine tier
+    # above takes most of these itself: it resolves the makearray per cell, so
+    # each cell sees its region's value, and cuts its boxes at the region
+    # bounds. What it declines comes here, ahead of the nest, which resolves the
+    # term with the cell index symbolic and so could not pick a region at all.
+    # It is offered one equation per region instead
+    # (`_makearray_region_equations`), each through this whole cascade with its
+    # region's value as its right-hand side, under a label naming this
+    # equation and with the declines it collected so far.
+    #
+    # The out-of-place form keeps the equation whole. Below this point it has
+    # the per-cell contraction loop and the static nest, which both take only a
+    # contraction at the top of the right-hand side, and a region's piece has
+    # none (`_makearray_region_rhs`): every piece would reach the per-cell build,
+    # whose cells the whole equation's per-cell build already resolves to the
+    # same values.
+    if !rhs_list_compiled && !_stencil_disabled()
+        parts = _makearray_region_equations(eq, lhs_op, lhs_body, idx_names, range_iters)
+        if parts !== nothing
+            rec = _build_record()
+            declines = rec === nothing ? Pair{Symbol,Symbol}[] : copy(rec.declines)
+            for (w, plo, phi, peq) in parts
+                where_ = join(("$(idx_names[d])=$(plo[d])..$(phi[d])"
+                               for d in eachindex(idx_names)), ", ")
+                plabel = w == 0 ? "$(label), outside every makearray region ($(where_))" :
+                    "$(label), makearray region $(w) ($(where_))"
+                _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
+                    array_contractions, covered, peq, resolved_obs, array_var_info,
+                    var_map, const_registry, pgather, param_sym_set, reg_funcs;
+                    template_sites=template_sites, xeq=xeq, pooled_cells=pooled_cells,
+                    rhs_list_compiled=rhs_list_compiled, obs_nst=obs_nst,
+                    rule_label=plabel, rule_declines=declines)
+            end
+            return nothing
+        end
+    end
+
     # ── Whole-array contraction nest (ess-array-contraction) ──────────────────
     # Offered HERE, once every affine form has declined: what is left below it
     # is the per-cell build, one resolve + `_compile` per OUTPUT CELL. The nest
@@ -5739,26 +5786,6 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
         if ac !== nothing
             _tally_cascade!(:array_contraction_codegen)
             push!(array_contractions, ac)
-            return nothing
-        end
-    end
-
-    # A whole-array `makearray` (`index(makearray(...), i…)` at this equation's
-    # own loops) that no tier above took: with the cell index symbolic the
-    # region cannot be picked, so every tier above saw the makearray rather than
-    # the value at the cell. Offered one equation per region instead
-    # (`_makearray_region_equations`), each of which goes through this cascade
-    # with its region's value as its right-hand side.
-    if !rhs_list_compiled && !_stencil_disabled()
-        parts = _makearray_region_equations(eq, lhs_op, lhs_body, idx_names, range_iters)
-        if parts !== nothing
-            for peq in parts
-                _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
-                    array_contractions, covered, peq, resolved_obs, array_var_info,
-                    var_map, const_registry, pgather, param_sym_set, reg_funcs;
-                    template_sites=template_sites, xeq=xeq, pooled_cells=pooled_cells,
-                    rhs_list_compiled=rhs_list_compiled, obs_nst=obs_nst)
-            end
             return nothing
         end
     end
@@ -5826,13 +5853,18 @@ end
 # pieces are one equation when they make up a box, one each otherwise. The
 # pieces depend on the number of regions only, never on the extents.
 #
-# `nothing` (the per-cell build keeps the equation) unless the right-hand side
-# is that gather at the equation's own loops, every loop a unit-step range and
-# every region bound a constant integer.
+# Each equation comes as `(region, lo, hi, equation)`: the region whose value it
+# takes (0 for none) and the box it covers. `nothing` (the equation stays whole)
+# unless the right-hand side is that gather at the equation's own loops, every
+# loop a unit-step range, every region bound a constant integer and every
+# region value one `_makearray_region_rhs` takes.
 const _MA_REGION_MAX_PIECES = 256
 
-_ma_region_bound(x::Integer) = Int(x)
-_ma_region_bound(x::AbstractFloat) = isinteger(x) ? Int(x) : nothing
+# A region bound as an `Int`, or `nothing` for one that is not an integer an
+# `Int` holds.
+_ma_region_bound(x::Integer) = typemin(Int) <= x <= typemax(Int) ? Int(x) : nothing
+_ma_region_bound(x::AbstractFloat) =
+    (isinteger(x) && -0x1p63 <= x < 0x1p63) ? Int(x) : nothing
 _ma_region_bound(x) = nothing
 
 function _makearray_region_equations(eq::Equation, lhs_op::OpExpr, lhs_body::OpExpr,
@@ -5893,7 +5925,7 @@ function _makearray_region_equations(eq::Equation, lhs_op::OpExpr, lhs_body::OpE
         push!(get!(owner, w, NTuple{2,Vector{Int}}[]), (plo, phi))
     end
     loops = idx_names
-    out = Equation[]
+    out = Tuple{Int,Vector{Int},Vector{Int},Equation}[]
     piece_eq(plo, phi, prhs) = Equation(
         OpExpr("faq", ASTExpr[]; output_idx=Any[l for l in loops],
                ranges=Dict{String,Any}(loops[d] => Any[plo[d], phi[d]] for d in 1:nd),
@@ -5908,10 +5940,10 @@ function _makearray_region_equations(eq::Equation, lhs_op::OpExpr, lhs_body::OpE
         bhi = Int[maximum(p[2][d] for p in pieces) for d in 1:nd]
         ncov = sum(prod(p[2][d] - p[1][d] + 1 for d in 1:nd) for p in pieces)
         if ncov == prod(bhi[d] - blo[d] + 1 for d in 1:nd)
-            push!(out, piece_eq(blo, bhi, prhs))
+            push!(out, (w, blo, bhi, piece_eq(blo, bhi, prhs)))
         else
             for (plo, phi) in pieces
-                push!(out, piece_eq(plo, phi, prhs))
+                push!(out, (w, plo, phi, piece_eq(plo, phi, prhs)))
             end
         end
     end
@@ -5920,7 +5952,8 @@ end
 
 # A region's value as the right-hand side of the equation over its cells (see
 # `_makearray_region_equations`); `nothing` when its rank fits neither the
-# makearray nor the region, which the per-cell build then reports.
+# makearray nor the region, which the per-cell build then reports, or when it
+# is a contraction `_ma_nested_contraction` does not rewrite.
 function _makearray_region_rhs(val::ASTExpr, box::Vector{Tuple{Int,Int}},
                                loops::Vector{String})
     nd = length(loops)
@@ -5931,6 +5964,10 @@ function _makearray_region_rhs(val::ASTExpr, box::Vector{Tuple{Int,Int}},
             length(_output_idx_strings(v))
         sel = rank == nd ? loops : String[loops[d] for d in 1:nd if box[d][1] != box[d][2]]
         length(sel) == rank || return nothing
+        if rank == nd && _is_faq_op(v.op)
+            v = _ma_nested_contraction(v)
+            v === nothing && return nothing
+        end
         return OpExpr("index", ASTExpr[v, (VarExpr(l) for l in sel)...])
     end
     # A rank-0 aggregate stays nested in a pass-through `+`: as the bare
@@ -5938,6 +5975,45 @@ function _makearray_region_rhs(val::ASTExpr, box::Vector{Tuple{Int,Int}},
     # the 0̄ seed, where the gather unrolls it from its first term.
     val isa OpExpr && _is_faq_op((val::OpExpr).op) && return OpExpr("+", ASTExpr[val])
     return val
+end
+
+# A region value that is an array `faq` of the makearray's rank, ready to be
+# gathered at the piece's own loops. The gather `index(<faq>, i…)` resolves it
+# as an expression (`_resolve_index_of_faq`), which folds a contraction from its
+# first term. The piece's cascade would instead unwrap that gather to the bare
+# contraction (`_unwrap_identity_gather`), which every tier folds from the 0̄
+# seed: all `-0.0` terms then sum to `+0.0` where the interpreter, which never
+# splits, has `-0.0`. So a value that contracts one index over a constant range,
+# with no join or filter, becomes the same reduction as a rank-0 `faq` nested in
+# an array `faq` over the output indices alone, which nothing unwraps: the
+# gather resolves it from its first term (`_resolve_scalar_faq`), the terms and
+# their order unchanged, and the whole-array nest keeps a long one as a loop
+# seeded to match. Any other contraction gives `nothing`, and the equation
+# stays whole.
+function _ma_nested_contraction(v::OpExpr)
+    ranges = v.ranges
+    ranges === nothing && return nothing
+    v.expr_body === nothing && return nothing
+    contracted = _contracted_index_names(ranges, _output_idx_strings(v))
+    isempty(contracted) && return v
+    length(contracted) == 1 || return nothing
+    (v.join === nothing && v.join_gates === nothing && v.filter === nothing &&
+     v.key === nothing && v.distinct !== true) || return nothing
+    c = contracted[1]
+    _is_const_int_range(ranges[c]) || return nothing
+    oplus = try
+        first(_aggregate_oplus_identity(v.semiring, v.reduce))
+    catch err
+        err isa TreeWalkError || rethrow()
+        return nothing
+    end
+    oplus in ("+", "*", "max", "min") || return nothing
+    inner = OpExpr("faq", ASTExpr[]; output_idx=Any[],
+                   ranges=Dict{String,Any}(c => ranges[c]), expr_body=v.expr_body,
+                   reduce=v.reduce, semiring=v.semiring)
+    return OpExpr("faq", ASTExpr[]; output_idx=copy(v.output_idx),
+                  ranges=Dict{String,Any}(k => r for (k, r) in ranges if k != c),
+                  expr_body=inner)
 end
 
 # The output slots of a whole-array nest whose LHS subscripts are affine, in
@@ -6137,15 +6213,8 @@ function _try_compile_array_contraction(lhs_body::OpExpr, rhs_body::ASTExpr,
     # The term, resolved once with every index symbolic; the emitter writes the
     # fold around it (array_contraction.jl, `_ACFold`). A scalar reduction nested
     # in it stays a loop (`_NEST_SCALAR_LOOPS`).
-    got = let prev = _NEST_SCALAR_LOOPS[]
-        _NEST_SCALAR_LOOPS[] = true
-        try
-            _resolve_array_contraction_term(body, idx_names, contract_names,
-                array_var_info, var_map, const_registry, pgather)
-        finally
-            _NEST_SCALAR_LOOPS[] = prev
-        end
-    end
+    got = _resolve_array_contraction_term(body, idx_names, contract_names,
+              array_var_info, var_map, const_registry, pgather; nest_scalar_loops=true)
     if got === nothing
         _note_decline!(:array_contraction, :symbolic_body_did_not_lower)
         return nothing

@@ -14,7 +14,10 @@
 #     box, overlapping regions where the last wins, a gap left at 0, and a fold
 #     whose terms are all `-0.0` (the loop's seed must not turn it into `+0.0`);
 #   * the same values as the bare `faq` with no `makearray` around it;
-#   * the route: the whole-array nest, no per-cell build;
+#   * a region value that contracts an index itself, folded from its first term
+#     as the interpreter's gather folds it, for every numeric ⊕;
+#   * the route: the whole-array nest, no per-cell build, and report rows that
+#     name the equation each region's piece came from;
 #   * node lowerings flat in N, zero allocation per steady call, and ForwardDiff
 #     through the loop.
 
@@ -35,18 +38,26 @@ end
 _mnr_ma(regions, values) = Dict{String,Any}("op" => "makearray", "args" => Any[],
     "regions" => Any[Any[Any[r...] for r in reg] for reg in regions], "values" => Any[values...])
 
+_mnr_term(term) =
+    term === :prod ? Dict{String,Any}("op" => "*", "args" => Any[_mnr_idx("u", "i"), _mnr_idx("u", "j")]) :
+    # `-(0·u[i]·u[j])`: a `-0.0` literal reads back as the integer 0.
+    term === :negzero ? Dict{String,Any}("op" => "-", "args" => Any[
+        Dict{String,Any}("op" => "*", "args" => Any[
+            Dict{String,Any}("op" => "*", "args" => Any[0.0, _mnr_idx("u", "i")]),
+            _mnr_idx("u", "j")])]) :
+    error("term")
+
 # Σ_{j=jlo..jhi} term(i, j) for each i in ilo..ihi, as an array faq over `i`.
-function _mnr_nested(N; term=:prod, jlo=1, jhi=N, ilo=1, ihi=N)
-    t = term === :prod ? Dict{String,Any}("op" => "*", "args" => Any[_mnr_idx("u", "i"), _mnr_idx("u", "j")]) :
-        # `-(0·u[i]·u[j])`: a `-0.0` literal reads back as the integer 0.
-        term === :negzero ? Dict{String,Any}("op" => "-", "args" => Any[
-            Dict{String,Any}("op" => "*", "args" => Any[
-                Dict{String,Any}("op" => "*", "args" => Any[0.0, _mnr_idx("u", "i")]),
-                _mnr_idx("u", "j")])]) :
-        error("term")
+_mnr_nested(N; term=:prod, jlo=1, jhi=N, ilo=1, ihi=N) =
     _mnr_faq(["i"], Dict{String,Any}("i" => Any[ilo, ihi]),
-             _mnr_faq(String[], Dict{String,Any}("j" => Any[jlo, jhi]), t; reduce="+"))
-end
+             _mnr_faq(String[], Dict{String,Any}("j" => Any[jlo, jhi]), _mnr_term(term);
+                      reduce="+"))
+
+# The same reduction as ONE array faq that contracts `j` itself, with no rank-0
+# faq inside: `faq_i ⊕_j term(i, j)`.
+_mnr_contracting(N; term=:prod, reduce="+", ilo=1, ihi=N) =
+    _mnr_faq(["i"], Dict{String,Any}("i" => Any[ilo, ihi], "j" => Any[1, N]), _mnr_term(term);
+             reduce=reduce)
 
 function _mnr_doc(N, rhs)
     Dict{String,Any}("esm" => "1.1.0", "metadata" => Dict("name" => "MakearrayNested"),
@@ -81,14 +92,14 @@ end
 _mnr_same(a, b) = length(a) == length(b) && all(a[k] === b[k] for k in eachindex(a))
 
 @testset "makearray region value with a nested scalar reduction (#547)" begin
-    one(N; kw...) = _mnr_ma([[(1, N)]], [_mnr_nested(N; kw...)])
-    two(N; kw...) = _mnr_ma([[(1, N)], [(1, N)]], [0, _mnr_nested(N; kw...)])
+    one_region(N; kw...) = _mnr_ma([[(1, N)]], [_mnr_nested(N; kw...)])
+    two_regions(N; kw...) = _mnr_ma([[(1, N)], [(1, N)]], [0, _mnr_nested(N; kw...)])
 
     @testset "the issue's reproducer, N=$N" for N in (6, 40)
         ics = _mnr_ics(N)
         ref, _ = _mnr_du(_mnr_doc(N, _mnr_nested(N)), ics; compiler=:interpreter)
-        for (name, rhs) in (("bare", _mnr_nested(N)), ("one region", one(N)),
-                            ("[0, nested]", two(N)))
+        for (name, rhs) in (("bare", _mnr_nested(N)), ("one region", one_region(N)),
+                            ("[0, nested]", two_regions(N)))
             interp, _ = _mnr_du(_mnr_doc(N, rhs), ics; compiler=:interpreter)
             nat, tally = _mnr_du(_mnr_doc(N, rhs), ics; compiler=:native)
             @test _mnr_same(nat, interp)
@@ -102,10 +113,68 @@ _mnr_same(a, b) = length(a) == length(b) && all(a[k] === b[k] for k in eachindex
 
     @testset "every term -0.0 stays -0.0 (N=$N)" for N in (6, 40)
         ics = _mnr_ics(N; u=k -> 1.0 + k)
-        interp, _ = _mnr_du(_mnr_doc(N, two(N; term=:negzero)), ics; compiler=:interpreter)
-        nat, _ = _mnr_du(_mnr_doc(N, two(N; term=:negzero)), ics; compiler=:native)
+        interp, _ = _mnr_du(_mnr_doc(N, two_regions(N; term=:negzero)), ics; compiler=:interpreter)
+        nat, _ = _mnr_du(_mnr_doc(N, two_regions(N; term=:negzero)), ics; compiler=:native)
         @test all(x -> x === -0.0, interp)
         @test _mnr_same(nat, interp)
+    end
+
+    # A region value that contracts `j` itself. The interpreter reads it as the
+    # gather `index(<faq>, i)`, a fold from the first term, so every `-0.0` term
+    # sums to `-0.0`; a fold from the semiring's 0̄ would give `+0.0`. The same
+    # holds for the partials under ForwardDiff, which are all `-0.0` here too.
+    # Alone in its makearray the value is the affine tier's; next to a nested
+    # reduction, which that tier declines, the equation is split by region.
+    @testset "a contracting region value folds from its first term ($reduce, N=$N)" for
+            N in (6, 40), reduce in ("+", "max", "min", "*")
+        ics = _mnr_ics(N; u=k -> 1.0 + k)
+        h = N ÷ 2
+        alone = _mnr_ma([[(1, N)], [(1, N)]],
+                        [0, _mnr_contracting(N; term=:negzero, reduce=reduce)])
+        beside = _mnr_ma([[(1, h)], [(h + 1, N)]],
+                         [_mnr_nested(N; term=:negzero, ihi=h),
+                          _mnr_contracting(N; term=:negzero, reduce=reduce, ilo=h + 1)])
+        for rhs in (alone, beside)
+            interp, _ = _mnr_du(_mnr_doc(N, rhs), ics; compiler=:interpreter)
+            nat, tally = _mnr_du(_mnr_doc(N, rhs), ics; compiler=:native)
+            reduce == "+" && @test all(x -> x === -0.0, interp)
+            @test _mnr_same(nat, interp)
+            @test get(tally, :percell_acc, 0) == 0
+            grads = map((:interpreter, :native)) do c
+                (f!, u0, p, _, vm), _ = _mnr_build(_mnr_doc(N, rhs), ics; compiler=c)
+                g(u) = (d = similar(u, eltype(u)); f!(d, u, p, 0.0); d[vm["J[3]"]])
+                ForwardDiff.gradient(g, u0)
+            end
+            @test _mnr_same(grads[1], grads[2])
+        end
+    end
+
+    # A region bound the build cannot hold as an `Int` keeps the whole equation
+    # (no split) rather than throwing out of the build.
+    @testset "a region bound past Int64 does not split" begin
+        @test _MNR._ma_region_bound(12.0) === 12
+        @test _MNR._ma_region_bound(12) === 12
+        @test _MNR._ma_region_bound(12.5) === nothing
+        @test _MNR._ma_region_bound(1e20) === nothing
+        @test _MNR._ma_region_bound(-1e20) === nothing
+        @test _MNR._ma_region_bound(2.0^63) === nothing
+        @test _MNR._ma_region_bound(-2.0^63) === typemin(Int)
+        @test _MNR._ma_region_bound(Int128(2)^70) === nothing
+        # A document cannot carry such a bound (the parser keeps integers), but
+        # a makearray built in code can.
+        N = 24
+        lhs_body = EarthSciAST.OpExpr("D", EarthSciAST.ASTExpr[EarthSciAST.OpExpr("index",
+            EarthSciAST.ASTExpr[EarthSciAST.VarExpr("J"), EarthSciAST.VarExpr("i")])]; wrt="t")
+        lhs = EarthSciAST.OpExpr("faq", EarthSciAST.ASTExpr[]; output_idx=Any["i"],
+            ranges=Dict{String,Any}("i" => Any[1, N]), expr_body=lhs_body)
+        split_at(hi) = _MNR._makearray_region_equations(
+            EarthSciAST.Equation(lhs, EarthSciAST.OpExpr("index", EarthSciAST.ASTExpr[
+                EarthSciAST.OpExpr("makearray", EarthSciAST.ASTExpr[];
+                    regions=[[Any[1, hi]]], values=EarthSciAST.ASTExpr[EarthSciAST.NumExpr(7.5)]),
+                EarthSciAST.VarExpr("i")])),
+            lhs, lhs_body, ["i"], [1:N])
+        @test split_at(1e20) === nothing
+        @test split_at(Float64(N)) isa Vector && length(split_at(Float64(N))) == 1
     end
 
     @testset "overlapping regions, a window, a gap" begin
@@ -131,9 +200,37 @@ _mnr_same(a, b) = length(a) == length(b) && all(a[k] === b[k] for k in eachindex
         @test o[1] == 7.5 && o[12] == foldl(+, (_mnr_u(j) for j in 1:N))
     end
 
+    # Each region's piece is filed under the equation it came from, with what
+    # that equation collected before it was split.
+    @testset "the report names the equation the regions came from" begin
+        N = 24
+        rhs = _mnr_ma([[(1, 3)], [(2, N)], [(12, 12)]],
+                      [7.5, _mnr_nested(N; jlo=3, jhi=N - 2, ilo=2),
+                       _mnr_faq(String[], Dict{String,Any}("j" => Any[1, N]),
+                                _mnr_idx("u", "j"); reduce="+")])
+        insp = _MNR.BuildInspection()
+        _MNR._build_evaluator(_mnr_doc(N, rhs); initial_conditions=_mnr_ics(N),
+                              compiler=:native, inspect=insp)
+        rows = [r for r in insp.compiler_report.rules if occursin("D(J)", r.rule)]
+        # Later regions win: 1 (region 1), 2..3, 4..11 and 13..24 (region 2,
+        # which do not tile a box), 12 (region 3).
+        @test length(rows) == 5
+        pieces = map(rows) do r
+            m = match(r"^D\(J\)\[(\w+)=24\], makearray region (\d) \((\w+)=(\d+)\.\.(\d+)\)$", r.rule)
+            m === nothing ? nothing :
+                (m[1] == m[3], parse(Int, m[2]), parse(Int, m[4]), parse(Int, m[5]))
+        end
+        @test sort(pieces) == [(true, 1, 1, 1), (true, 2, 2, 3), (true, 2, 4, 11),
+                               (true, 2, 13, 24), (true, 3, 12, 12)]
+        @test all(r -> r.kind === :equation, rows)
+        @test all(r -> r.tier in (:affine, :array_contraction_codegen), rows)
+        # The equation's own decline, before the split, heads every piece's.
+        @test all(r -> !isempty(r.declines) && r.declines[1].first === :affine, rows)
+    end
+
     @testset "zero-allocation steady-state f!" begin
         N = 64
-        (f!, u0, p, _, _), _ = _mnr_build(_mnr_doc(N, two(N)), _mnr_ics(N))
+        (f!, u0, p, _, _), _ = _mnr_build(_mnr_doc(N, two_regions(N)), _mnr_ics(N))
         du = similar(u0)
         # Julia >= 1.12 only: older versions box across RuntimeGeneratedFunction inner functions and @testset-scope reads.
         if VERSION >= v"1.12"
@@ -145,7 +242,7 @@ _mnr_same(a, b) = length(a) == length(b) && all(a[k] === b[k] for k in eachindex
         N = 20
         ics = _mnr_ics(N; u=k -> 0.25 * k + 0.5)
         grads = map((:interpreter, :native)) do c
-            (f!, u0, p, _, vm), _ = _mnr_build(_mnr_doc(N, two(N)), ics; compiler=c)
+            (f!, u0, p, _, vm), _ = _mnr_build(_mnr_doc(N, two_regions(N)), ics; compiler=c)
             g(u) = (d = similar(u, eltype(u)); f!(d, u, p, 0.0); d[vm["J[3]"]])
             ForwardDiff.gradient(g, u0)
         end
@@ -163,7 +260,7 @@ _mnr_same(a, b) = length(a) == length(b) && all(a[k] === b[k] for k in eachindex
             end
             _MNR._BENCH_COMPILE_CALLS[]
         end
-        for mk in (one, two)
+        for mk in (one_region, two_regions)
             @test nodes(16, mk(16)) == nodes(256, mk(256)) == nodes(1024, mk(1024))
         end
     end

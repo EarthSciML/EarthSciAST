@@ -795,13 +795,16 @@ end
 # (xcse.jl, which safely DECLINES an unknown kind → leaves it inline).
 const _ARRAY_CELL_DEPTH = Ref(0)
 
-# Set while the whole-array nest resolves its term (`_try_compile_array_contraction`).
-# A scalar reduction nested in that term then stays a loop (`_resolve_scalar_faq`)
-# instead of unrolling one term per contracted index into the nest's one body,
-# which would make the generated code as long as the reduction. The nest's
-# emitter writes it as a counted loop (`_cg_emit`, array_contraction.jl); no
-# other consumer of a symbolic resolve sees the loop node.
-const _NEST_SCALAR_LOOPS = Ref(false)
+# A member of a symbolic resolve's bound names that no index name can be: the
+# whole-array nest puts it in the bound names it resolves its term with
+# (`_resolve_array_contraction_term(...; nest_scalar_loops=true)`), and every
+# resolve of that term passes it down with them. A scalar reduction nested in
+# the term then stays a loop (`_resolve_scalar_faq`) instead of unrolling one
+# term per contracted index into the nest's one body, which would make the
+# generated code as long as the reduction. The nest's emitter writes it as a
+# counted loop (`_cg_emit`, array_contraction.jl). A resolve started anywhere
+# else has bound names without it, so it never sees the loop node.
+const _NEST_SCALAR_LOOPS = "\0nest_scalar_loops"
 
 # The seed that makes a fold `acc = acc ⊕ term` from it equal, bit for bit, the
 # fold from the first term the unroll writes (`_combine_with_reducer`): `-0.0`
@@ -947,7 +950,10 @@ end
 # drives the contracted refs from the admitted tuples instead.
 function _resolve_array_contraction_term(body::ASTExpr, out_names::Vector{String},
         contract_names::Vector{String},
-        array_var_info, var_map, const_arrays, pgather::AbstractDict)
+        array_var_info, var_map, const_arrays, pgather::AbstractDict;
+        # The whole-array nest's own resolve, whose emitter writes a nested
+        # scalar reduction as a loop (`_NEST_SCALAR_LOOPS`).
+        nest_scalar_loops::Bool=false)
     nout = length(out_names)
     all_names = vcat(out_names, contract_names)
     fresh = String[_fresh_loopvar_name() for _ in all_names]
@@ -956,6 +962,7 @@ function _resolve_array_contraction_term(body::ASTExpr, out_names::Vector{String
                                  for d in eachindex(all_names))
     subbed = _sub_preserving(body, subs)
     bsyms  = Set{String}(fresh)
+    nest_scalar_loops && push!(bsyms, _NEST_SCALAR_LOOPS)
     resolved = try
         # memo=nothing, as in `_try_build_contraction_loop`: a symbolic resolve
         # must never share the concrete RHS-build memo.
@@ -1036,13 +1043,14 @@ function _resolve_scalar_faq(faq_expr::OpExpr, array_var_info, var_map, const_ar
             looped === nothing || return looped
         end
     end
-    # Nested in the whole-array nest's term (`_NEST_SCALAR_LOOPS`), a reduction
-    # over ONE constant range at least the loop floor long stays a loop that
-    # reads the nest's counters. It folds from `_first_term_seed`, so its value
-    # is the unroll's below bit for bit: the same terms in the same order, left
-    # to right from the first. Two or more contracted indices keep unrolling,
-    # since nested loops would group the sum by the outer index.
-    if _NEST_SCALAR_LOOPS[] && !isempty(bound_syms) && gates === nothing &&
+    # Nested in the whole-array nest's term (`_NEST_SCALAR_LOOPS` among the
+    # bound names), a reduction over ONE constant range at least the loop floor
+    # long stays a loop that reads the nest's counters. It folds from
+    # `_first_term_seed`, so its value is the unroll's below bit for bit: the
+    # same terms in the same order, left to right from the first. Two or more
+    # contracted indices keep unrolling, since nested loops would group the sum
+    # by the outer index.
+    if _NEST_SCALAR_LOOPS in bound_syms && gates === nothing &&
        filt0 === nothing && length(contract_names) == 1 &&
        (oplus == "+" || oplus == "*" || oplus == "max" || oplus == "min") &&
        _is_const_int_range(ranges_dict[contract_names[1]])
