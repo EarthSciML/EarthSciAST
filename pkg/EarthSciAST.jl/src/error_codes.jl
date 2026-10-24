@@ -195,6 +195,8 @@ const ERROR_CODES = (
 
     # ── Document-scoped solver hints (esm-spec §2.2; solver.jl). ─────────
     SOLVER_VERSION_TOO_OLD = "solver_version_too_old",
+    SOLVER_EXTERNAL_VERSION_TOO_OLD = "solver_external_version_too_old",
+    SOLVER_EXTERNAL_UNRESOLVED = "solver_external_unresolved",
 
     # ── Declared units on a const node (esm-spec §4.8.5; units.jl). ──────
     CONST_UNITS_VERSION_TOO_OLD = "const_units_version_too_old",
