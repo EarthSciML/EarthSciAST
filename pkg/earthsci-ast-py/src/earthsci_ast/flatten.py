@@ -431,6 +431,24 @@ class FlattenedEquation:
         return self.rhs
 
 
+def _authoritative_contributions(eq: FlattenedEquation) -> list[Contribution]:
+    """``eq.contributions`` if they still fold to ``eq.body``, else ONE
+    contribution holding the current body with the union of the list's origins.
+
+    ``rhs`` is public and mutable, so a caller may edit it after flatten
+    (``eq.rhs = ...`` or ``dataclasses.replace(eq, rhs=...)``) and leave the
+    list stale. ``rhs`` is authoritative (esm-libraries-spec §4.7.5): any pass
+    that rebuilds an equation from its contributions on a caller-supplied
+    system reads them through here, so the caller's edit is never reverted. A
+    spurious mismatch only costs granularity; collapsing is always sound."""
+    contributions = eq.contributions
+    if not contributions:
+        return [Contribution(eq.body, [])]
+    if _fold_contributions(contributions) == eq.body:
+        return contributions
+    return [Contribution(eq.body, _union_origins(contributions))]
+
+
 def _equation_from(
     eq: FlattenedEquation,
     contributions: list[Contribution],
@@ -2332,15 +2350,17 @@ def _apply_couple(
             if dep is not None:
                 eq_index[dep] = (sys_name, i)
 
-    # Which targets carry a TENDENCY (`D(x)`), as opposed to merely some defining
-    # equation: `multiplicative` is defined against an ODE RHS (§10.3, §4.7.2).
-    tendencies: set[str] = set()
-    for comp in components.values():
-        for eq in comp.equations:
+    # The last TENDENCY (`D(x)`) of each target, as opposed to merely its last
+    # defining equation: `multiplicative` is defined against the ODE RHS
+    # (§10.3, §4.7.2), so it scales `D(x) ~ f` even when a bare `x ~ g` comes
+    # later. The presence check and the target selection both read this map.
+    tendencies: dict[str, tuple[str, int]] = {}
+    for sys_name, comp in components.items():
+        for i, eq in enumerate(comp.equations):
             if isinstance(eq.lhs, ExprNode) and eq.lhs.op == "D":
                 dep = _lhs_dependent_var(eq.lhs)
                 if dep is not None:
-                    tendencies.add(dep)
+                    tendencies[dep] = (sys_name, i)
 
     for ceq in entry.connector.equations:
         target = ceq.to_var
@@ -2375,9 +2395,9 @@ def _apply_couple(
             )
             # The new tendency is a target for the next connector equation too.
             eq_index[target] = (target.split(".", 1)[0], len(owner.equations) - 1)
-            tendencies.add(target)
+            tendencies[target] = eq_index[target]
             continue
-        sys_name, i = eq_index[target]
+        sys_name, i = tendencies[target] if ceq.transform == "multiplicative" else eq_index[target]
         comp = components[sys_name]
         existing = comp.equations[i]
 

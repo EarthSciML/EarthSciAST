@@ -349,6 +349,7 @@ CASES: list[tuple[str, str, str]] = [
             "placeholder_expansion",
             "couple_additive",
             "couple_multiplicative",
+            "couple_multiplicative_tendency_first",
             "variable_map",
             "pointwise_lift",
             "template_reference",

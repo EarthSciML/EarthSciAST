@@ -16,6 +16,7 @@ every binding; this module checks what a rendering cannot:
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import struct
 import warnings
@@ -322,3 +323,59 @@ def test_table_lookup_lowering_keeps_the_contributions():
         ok, _ = _check_invariant(lowered, after)
         assert ok
     assert changed
+
+
+def test_multiplicative_couple_scales_the_tendency_not_a_later_bare_equation():
+    """The factor applies to the last `D(to, t)` equation, the ODE right-hand
+    side, even when a bare `to ~ g` comes after it (esm-libraries-spec §4.7.2)."""
+    flat = _flatten(TP_DIR / "couple_multiplicative_tendency_first.esm")
+    d = _equation(flat, "D(Chem.O3)/Dt")
+    assert to_ascii(d.rhs) == "(-Chem.k1) * Chem.O3 * Light.f"
+    assert [_origins(c) for c in d.contributions] == [[{"component": "Chem"}, {"coupling": 0}]]
+    bare = _equation(flat, "Chem.O3")
+    assert to_ascii(bare.rhs) == "Chem.O3_ref"
+    assert [_origins(c) for c in bare.contributions] == [[{"component": "Chem"}]]
+
+
+def _edited_table_lookup_system(edit):
+    """The table-lookup fixture flattened, then its one equation's rhs edited
+    by the caller through ``edit(eq, new_rhs)``, leaving the list stale."""
+    flat = _flatten(CONFORMANCE_DIR / "function_tables" / "linear" / "fixture.esm")
+    (eq,) = flat.equations
+    origins = _origins(eq.contributions[0])
+    new_rhs = ExprNode(op="*", args=[2.0, eq.rhs])
+    flat.equations[0] = edit(eq, new_rhs)
+    return flat, origins
+
+
+@pytest.mark.parametrize(
+    "edit",
+    [
+        pytest.param(lambda eq, rhs: (setattr(eq, "rhs", rhs), eq)[1], id="assignment"),
+        pytest.param(lambda eq, rhs: dataclasses.replace(eq, rhs=rhs), id="replace"),
+    ],
+)
+def test_table_lookup_lowering_keeps_a_caller_edited_rhs(edit):
+    """`rhs` is authoritative over a stale contribution list (esm-libraries-spec
+    §4.7.5): lowering a caller-edited system must not rebuild the old rhs. The
+    list collapses to one contribution holding the edited rhs, with the union of
+    the stale list's origins."""
+    from earthsci_ast.lower_table_lookup import lower_flattened_table_lookups
+
+    flat, origins = _edited_table_lookup_system(edit)
+    (after,) = lower_flattened_table_lookups(flat).equations
+    assert isinstance(after.rhs, ExprNode) and after.rhs.op == "*"
+    assert after.rhs.args[0] == 2.0
+    assert "table_lookup" not in json.dumps(str(after.rhs))
+    assert len(after.contributions) == 1
+    assert after.contributions[0].expr == after.rhs
+    assert _origins(after.contributions[0]) == origins
+
+
+def test_an_emptied_contribution_list_reads_as_the_rhs():
+    from earthsci_ast.flatten import _authoritative_contributions
+
+    eq = FlattenedEquation(lhs="x", rhs=ExprNode(op="+", args=["a", "b"]), source_system="M")
+    eq.contributions = []
+    (only,) = _authoritative_contributions(eq)
+    assert only.expr is eq.rhs and only.origins == []

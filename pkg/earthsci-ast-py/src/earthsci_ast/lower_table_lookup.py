@@ -203,19 +203,18 @@ def _lower_flattened_equations(
 ) -> list[FlattenedEquation]:
     # The lowering applies inside each contribution and the right-hand side is
     # rebuilt from them, so per-term provenance survives it (esm-libraries-spec
-    # §4.7.5). Imported here: `flatten` imports this module's siblings at load.
-    from .flatten import Contribution, _equation_from
+    # §4.7.5). The system is caller-supplied, so a list left stale by an edited
+    # rhs is first collapsed onto that rhs rather than allowed to revert it.
+    # Imported here: `flatten` imports this module's siblings at load.
+    from .flatten import Contribution, _authoritative_contributions, _equation_from
 
     out: list[FlattenedEquation] = []
     changed = False
     for eq in eqs:
         lhs = _lower_expr(eq.lhs, tables)
-        contributions = [
-            Contribution(_lower_expr(c.expr, tables), c.origins) for c in eq.contributions
-        ]
-        if lhs is eq.lhs and all(
-            new.expr is old.expr for new, old in zip(contributions, eq.contributions)
-        ):
+        current = _authoritative_contributions(eq)
+        contributions = [Contribution(_lower_expr(c.expr, tables), c.origins) for c in current]
+        if lhs is eq.lhs and all(new.expr is old.expr for new, old in zip(contributions, current)):
             out.append(eq)
         else:
             out.append(_equation_from(eq, contributions, lhs=lhs))
