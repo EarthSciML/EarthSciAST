@@ -332,10 +332,11 @@ end
 # `_foreach_aggregate_term` — the SAME enumerator the per-cell expansion uses,
 # with the same drive plan and the same `_join_admits` test — driven with a
 # sentinel body whose substituted arguments spell the contracted tuple. The fold
-# is the left fold `_combine_with_reducer`'s ⊕ compiles to (an n-ary `+`/`*`
-# accumulates `c[1]⊕c[2]`, then one term at a time; `max`/`min` are already
-# emitted left-folded), and an empty admitted set is the semiring identity 0̄ —
-# so this agrees with the per-cell walk term for term.
+# is the left fold `_combine_with_reducer`'s ⊕ compiles to (an n-ary `+`
+# seeded with 0̄, then one term at a time; `*` accumulates `c[1]⊕c[2]` and
+# `max`/`min` are emitted left-folded, where the 0̄ seed changes no bits), and
+# an empty admitted set is the semiring identity 0̄ — so this agrees with the
+# per-cell walk term for term.
 #
 # It is a PURE EXTENSION: `nothing` on any shape it does not recognise, and the
 # caller falls through to exactly what it did before. `compiler=:interpreter`
@@ -373,7 +374,6 @@ function _gated_field(ce, out_syms::Vector{String}, contract_names::Vector{Strin
         end
         out_env = Dict{String,Int}(out_syms[d] => key[d] for d in 1:nidx)
         acc = zerobar
-        n = 0
         _foreach_aggregate_term(sentinel, contract_names, contract_iters,
                                 gates, nothing, zerobar, out_env) do term
             ks = (term::OpExpr).args
@@ -381,10 +381,9 @@ function _gated_field(ce, out_syms::Vector{String}, contract_names::Vector{Strin
                 key[nidx + d] = Int((ks[d]::IntExpr).value)
             end
             v = ce(key)
-            n += 1
-            acc = n == 1 ? v : _gated_oplus(oplus, acc, v)
+            acc = _gated_oplus(oplus, acc, v)
         end
-        out[i] = n == 0 ? zerobar : acc
+        out[i] = acc
     end
     return out
 end

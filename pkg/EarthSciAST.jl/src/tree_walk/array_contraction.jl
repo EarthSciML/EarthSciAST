@@ -193,13 +193,10 @@ function _cg_emit(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
     throw(_CodegenDecline(:unknown_kind))
 end
 
-# `_NK_RAGGED_LOOP`, `_eval_ragged_loop` term for term: the `Float64` 0̄ for
-# an empty row (the per-cell build's literal), else the terms folded left to
-# right from ⊕'s exact identity, `-0.0` for `+` (`-0.0 + x` is `x` for every
-# `x`, a `-0.0` term included, where `0.0 + -0.0` is `+0.0`), `1.0` for `*`,
-# `∓Inf` for max/min: the value of the first-term-seeded fold, bit for bit. The
-# seed is a `Float64`, so under a `Dual` value type the first term's partials
-# pass through `seed ⊕ term` untouched.
+# `_NK_RAGGED_LOOP`, `_eval_ragged_loop` term for term: the terms folded left
+# to right into the `Float64` 0̄ (the node's literal, which is also an empty
+# row's value). The seed is a `Float64`, so under a `Dual` value type the first
+# term's partials pass through `0̄ ⊕ term` untouched.
 #
 # Inside the whole-array nest, with bounds that read only the cell (its output
 # counters and build constants), the rows are laid out at build as entries, the
@@ -215,8 +212,8 @@ function _cg_ragged_loop(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
     ch = nd.children
     haskey(kc.loops, spec.ref) && throw(_CodegenDecline(:ragged_loop_reentered))
     fnsym = _cg_oplus_fn(nd.op)
-    seed = nd.op === :+ ? -0.0 : nd.op === :* ? 1.0 : nd.op === :max ? -Inf :
-           nd.op === :min ? Inf : throw(_CodegenDecline(:unsupported_op))
+    nd.op in (:+, :*, :max, :min) || throw(_CodegenDecline(:unsupported_op))
+    seed = nd.literal
     kv = _cg_name(ctx, "rk")
     acc = _cg_name(ctx, "racc")
     en = _ac_ragged_entries(ctx, kc, nd)

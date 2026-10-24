@@ -3085,8 +3085,9 @@ end
 # `⊕_{j≤n} term_j` at `k = n+1` are the same recurrence run one step further,
 # the shape `integral_lev_nodes_cumulative_from_bottom` lowers to. Recognized,
 # the total is the scan's last accumulation instead of a second fold over the
-# column, in the same left-to-right order from the same 0̄ seed the bare
-# contraction folds in. Returns that scan as one array aggregate over the whole
+# column: the same terms in the same left-to-right order from the same 0̄ seed
+# the total's own fold uses (`_combine_with_reducer` in the gather form, the
+# bare contraction's in every tier; esm-spec §4.3.1), so the same bits. Returns that scan as one array aggregate over the whole
 # box, or `nothing`.
 #
 # Required: two regions, the first the whole box but its last cell along `d`
@@ -5218,13 +5219,11 @@ end
 # join-gated or ragged producer unwraps too: the whole-array contraction nest
 # takes the bare form as a table.
 #
-# THE FOLD CHANGES WITH THE FORM. The bare form is a contraction, which every
-# tier folds from the semiring's 0̄ (`_NK_CONTRACTION` in the per-cell build,
-# the affine tier's unroll and run-time fold, the nest): `0̄ ⊕ t₁ ⊕ t₂ ⊕ …`.
-# The gather form resolved the producer as an expression, whose fold starts
-# from the first term (`_combine_with_reducer`). For `+` the two differ only
-# when every term is `-0.0`, which the 0̄ seed turns into `0.0`, under every
-# compiler alike.
+# The fold is the same in either form: the bare form is a contraction, which
+# every tier folds from the semiring's 0̄ (`_NK_CONTRACTION` in the per-cell
+# build, the affine tier's unroll and run-time fold, the nest), and the gather
+# form resolves the producer as an expression whose fold is seeded from 0̄ too
+# (`_combine_with_reducer`): `0̄ ⊕ t₁ ⊕ t₂ ⊕ …` (esm-spec §4.3.1).
 #
 # Returns the bare producer when the gather is the identity one and the
 # producer contracts or carries a filter, else `rhs` unchanged.
