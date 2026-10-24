@@ -12,6 +12,7 @@ package esm
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -65,6 +66,21 @@ func sxLoadManifest(t *testing.T) sxManifest {
 	return m
 }
 
+// sxFileURL is the §2.2.6 `file://` form of an absolute POSIX path, its
+// percent-encoding written out here rather than borrowed from the binding.
+func sxFileURL(p string) string {
+	var b strings.Builder
+	for _, c := range []byte(removeURLDotSegments(p)) {
+		if ('A' <= c && c <= 'Z') || ('a' <= c && c <= 'z') || ('0' <= c && c <= '9') ||
+			strings.IndexByte("-._~/:", c) >= 0 {
+			b.WriteByte(c)
+		} else {
+			fmt.Fprintf(&b, "%%%02X", c)
+		}
+	}
+	return "file://" + b.String()
+}
+
 // sxExpand turns a pin into the string the accessor must return.
 func sxExpand(t *testing.T, pin *sxPin) string {
 	t.Helper()
@@ -74,13 +90,13 @@ func sxExpand(t *testing.T, pin *sxPin) string {
 	case pin.Verbatim != nil:
 		return *pin.Verbatim
 	case pin.RepoPath != nil:
-		return "file://" + removeURLDotSegments(filepath.ToSlash(filepath.Join(dsuRepoRoot(t), *pin.RepoPath)))
+		return sxFileURL(filepath.ToSlash(filepath.Join(dsuRepoRoot(t), *pin.RepoPath)))
 	case pin.CwdPath != nil:
 		cwd, err := os.Getwd()
 		if err != nil {
 			t.Fatal(err)
 		}
-		return "file://" + removeURLDotSegments(filepath.ToSlash(cwd)+"/"+*pin.CwdPath)
+		return sxFileURL(filepath.ToSlash(cwd) + "/" + *pin.CwdPath)
 	}
 	t.Fatalf("a location pin must carry repo_path, cwd_path or verbatim")
 	return ""
@@ -241,7 +257,7 @@ func TestSolverExternalRoundTripKeepsTheAuthoredString(t *testing.T) {
 		t.Fatal(err)
 	}
 	absDir, _ := filepath.Abs(dir)
-	if want := "file://" + filepath.ToSlash(absDir) + "/runs/probe.run.json"; got != want {
+	if want := sxFileURL(filepath.ToSlash(absDir) + "/runs/probe.run.json"); got != want {
 		t.Errorf("location after the move = %q, want %q", got, want)
 	}
 }
@@ -342,8 +358,8 @@ func TestSolverExternalBaseEdges(t *testing.T) {
 	}
 	cwd = filepath.ToSlash(cwd)
 	for _, c := range []struct{ base, want string }{
-		{"", "file://" + removeURLDotSegments(cwd+"/run.json")},
-		{"rel/./dir", "file://" + removeURLDotSegments(cwd+"/rel/dir/run.json")},
+		{"", sxFileURL(cwd + "/run.json")},
+		{"rel/./dir", sxFileURL(cwd + "/rel/dir/run.json")},
 		{"/abs/a/../b", "file:///abs/b/run.json"},
 	} {
 		got, err := SolverExternalLocation(file, c.base)
@@ -360,6 +376,94 @@ func TestSolverExternalBaseEdges(t *testing.T) {
 	bad := "${HOME}/r.json"
 	if _, err := SolverExternalLocation(&ESMFile{SolverHints: &Solver{External: &bad}}, ""); err == nil {
 		t.Error("an in-memory `${` must be refused by the accessor")
+	}
+}
+
+// A drive-letter path is absolute on every host, for `external` and for the
+// base, and its location carries a third slash: `file:///C:/...`.
+func TestSolverExternalDriveLetterPaths(t *testing.T) {
+	for _, c := range []struct{ ext, base, want string }{
+		{`C:/proj/./runs/../x.json`, "", "file:///C:/proj/x.json"},
+		{`c:\proj\runs\x.json`, "", "file:///c:/proj/runs/x.json"},
+		{`C:/../../x.json`, "", "file:///C:/x.json"},
+		{"runs/x.json", `C:/proj/sub/..`, "file:///C:/proj/runs/x.json"},
+		{"runs/x.json", `D:\proj`, "file:///D:/proj/runs/x.json"},
+		{"../../../x.json", `C:/proj`, "file:///C:/x.json"},
+		{"/srv/x.json", `C:/proj`, "file:///srv/x.json"},
+	} {
+		ext := c.ext
+		got, err := SolverExternalLocation(&ESMFile{SolverHints: &Solver{External: &ext}}, c.base)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != c.want {
+			t.Errorf("external %q base %q: got %q, want %q", c.ext, c.base, got, c.want)
+		}
+	}
+
+	raw, err := os.ReadFile(filepath.Join(sxSuiteDir(t), "fixtures", "bare_relative.esm"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := LoadString(string(raw), WithBasePath(`C:\proj\sub`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if file.documentBase != "C:/proj/sub" {
+		t.Errorf("recorded base = %q, want C:/proj/sub", file.documentBase)
+	}
+	got, err := SolverExternalLocation(file, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "file:///C:/proj/sub/runs/probe.run.json"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func sxEnvVarDoc(t *testing.T) map[string]any {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(sxSuiteDir(t), "fixtures", "env_var.esm"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	return doc
+}
+
+func sxCode(err error) string {
+	var de DiagnosticError
+	if errors.As(err, &de) {
+		return de.DiagnosticCode()
+	}
+	return ""
+}
+
+// The refusal quotes the string exactly as authored, nothing escaped.
+func TestSolverExternalUnresolvedQuotesTheAuthoredString(t *testing.T) {
+	doc := sxEnvVarDoc(t)
+	authored := `a\b "c" ${X}/y.json`
+	doc["solver"].(map[string]any)["external"] = authored
+	text, _ := json.Marshal(doc)
+	_, err := LoadString(string(text))
+	if sxCode(err) != CodeSolverExternalUnresolved {
+		t.Fatalf("got %v, want %s", err, CodeSolverExternalUnresolved)
+	}
+	if !strings.Contains(err.Error(), `"`+authored+`"`) {
+		t.Errorf("the message must quote %q as authored; got: %s", authored, err)
+	}
+}
+
+// The `${` refusal runs before schema validation.
+func TestSolverExternalUnresolvedPrecedesSchemaValidation(t *testing.T) {
+	doc := sxEnvVarDoc(t)
+	doc["solver"].(map[string]any)["not_a_solver_key"] = true
+	text, _ := json.Marshal(doc)
+	if _, err := LoadString(string(text)); sxCode(err) != CodeSolverExternalUnresolved {
+		t.Errorf("got %v, want %s", err, CodeSolverExternalUnresolved)
 	}
 }
 

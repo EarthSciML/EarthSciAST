@@ -2,6 +2,9 @@ package esm
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -119,24 +122,89 @@ func checkSolverExternal(ext string) error {
 	}
 	return newETErr(
 		CodeSolverExternalUnresolved,
-		fmt.Sprintf("/solver/external %q carries an unexpanded '${...}' variable. "+
+		fmt.Sprintf("/solver/external: \"%s\" carries an unexpanded '${...}' variable. "+
 			"esm-spec §2.2.6 does not expand environment variables into a run-configuration "+
 			"reference: a run configuration chosen by the environment is not reproducible. "+
 			"Write a path relative to this document, or pass the run configuration at the call site", ext),
 	)
 }
 
+// driveLetterRE matches a drive-letter path, `C:/` or `C:\`, which esm-spec
+// §2.2.6 reads as absolute on every host.
+var driveLetterRE = regexp.MustCompile(`^[A-Za-z]:[/\\]`)
+
+func isAbsoluteLocationPath(p string) bool {
+	return strings.HasPrefix(p, "/") || driveLetterRE.MatchString(p)
+}
+
+// lexicalAbsolute removes the dot segments of an absolute path (RFC 3986
+// §5.2.4). A drive-letter path comes back as `C:/...`, its `\` read as `/`
+// and its drive a root that `..` does not climb above.
+func lexicalAbsolute(p string) string {
+	if driveLetterRE.MatchString(p) {
+		return p[:2] + removeURLDotSegments(strings.ReplaceAll(p[2:], "\\", "/"))
+	}
+	return removeURLDotSegments(p)
+}
+
+// absoluteDirectory returns dir as the absolute, dot-segment-free directory D
+// of esm-spec §2.2.6. A relative dir is taken against the process working
+// directory. Purely lexical: it never touches the filesystem.
+func absoluteDirectory(dir string) string {
+	d := filepath.ToSlash(dir)
+	if d == "" {
+		d = "."
+	}
+	if !isAbsoluteLocationPath(d) {
+		cwd, err := os.Getwd()
+		if err != nil {
+			cwd = "/"
+		}
+		d = filepath.ToSlash(cwd) + "/" + d
+	}
+	return lexicalAbsolute(d)
+}
+
+// fileLocationURL prefixes an absolute, dot-segment-free path with `file://`,
+// percent-encoding each byte of its UTF-8 encoding outside
+// `A-Za-z0-9-._~/:` as %XX (esm-spec §2.2.6). A drive path gets the third
+// slash: `file:///C:/...`.
+func fileLocationURL(p string) string {
+	var b strings.Builder
+	b.WriteString("file://")
+	if !strings.HasPrefix(p, "/") {
+		b.WriteByte('/')
+	}
+	const hex = "0123456789ABCDEF"
+	for i := 0; i < len(p); i++ {
+		c := p[i]
+		if ('A' <= c && c <= 'Z') || ('a' <= c && c <= 'z') || ('0' <= c && c <= '9') ||
+			strings.IndexByte("-._~/:", c) >= 0 {
+			b.WriteByte(c)
+			continue
+		}
+		b.WriteByte('%')
+		b.WriteByte(hex[c>>4])
+		b.WriteByte(hex[c&0x0F])
+	}
+	return b.String()
+}
+
 // SolverExternalLocation resolves the document's `solver.external` to a
 // location by esm-spec §2.2.6, or returns "" when the root document's `solver`
 // block carries none (an authored `external` is never empty).
 //
-// A URL (`scheme://…`) is returned unchanged. An absolute path has its dot
-// segments removed and is prefixed `file://`. Anything else is joined onto the
-// base, dot segments removed, and prefixed `file://`. The base is `base` when
-// it is non-empty — a relative one is taken against the process working
-// directory — and otherwise the directory recorded at load: the directory of
-// the file LoadPath read, the WithBasePath directory, or the working directory
-// of a bare LoadString / LoadDocument.
+// A URL (`scheme://…`) is returned unchanged. An absolute path -- `/…`, or a
+// drive-letter `C:/…` / `C:\…` -- has its dot segments removed, is
+// percent-encoded and is prefixed `file://` (`file:///C:/…` for a drive).
+// Anything else is joined onto the base, dot segments removed,
+// percent-encoded, and prefixed `file://`. Percent-encoding writes each byte of
+// the path's UTF-8 encoding outside `A-Za-z0-9-._~/:` as %XX, `%` included:
+// the input is a path, not a URL. The base is `base` when it is non-empty -- a
+// relative one is taken against the process working directory -- and
+// otherwise the directory recorded at load: the directory of the file LoadPath
+// read, the WithBasePath directory, or the working directory of a bare
+// LoadString / LoadDocument.
 //
 // Resolution is lexical and never touches the filesystem: a location that does
 // not exist resolves normally. A mounted leaf's `solver` block does not cross
@@ -152,14 +220,19 @@ func SolverExternalLocation(file *ESMFile, base string) (string, error) {
 	if urlTemplateSchemeRE.MatchString(ext) {
 		return ext, nil
 	}
-	if strings.HasPrefix(ext, "/") {
-		return "file://" + removeURLDotSegments(ext), nil
+	if isAbsoluteLocationPath(ext) {
+		return fileLocationURL(lexicalAbsolute(ext)), nil
 	}
-	if base == "" {
-		base = file.documentBase
+	var dir string
+	switch {
+	case base != "":
+		dir = absoluteDirectory(base)
+	case file.documentBase != "":
+		dir = file.documentBase
+	default:
+		dir = absoluteDirectory(".")
 	}
-	joined := strings.TrimRight(absoluteURLBase(base), "/") + "/" + ext
-	return "file://" + removeURLDotSegments(joined), nil
+	return fileLocationURL(lexicalAbsolute(dir + "/" + ext)), nil
 }
 
 // normalizeSolver maps a `solver` block with nothing set to absence

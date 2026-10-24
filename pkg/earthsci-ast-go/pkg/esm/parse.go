@@ -453,7 +453,7 @@ func LoadString(jsonStr string, opts ...LoadOption) (*ESMFile, error) {
 	// esm-spec §2.2.6: `solver.external` resolves against the directory of the
 	// file read, or the working directory for a string load. Recorded absolute,
 	// here, so a later change of working directory does not move it.
-	esmFile.documentBase = absoluteURLBase(o.basePath)
+	esmFile.documentBase = absoluteDirectory(o.basePath)
 
 	// Reattach the authored declaration blocks (see authoredDeclarationBlocks).
 	esmFile.ExpressionTemplates = authoredTemplates
