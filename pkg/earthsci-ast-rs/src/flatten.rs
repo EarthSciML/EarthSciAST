@@ -436,6 +436,39 @@ pub struct FlattenMetadata {
     pub coupling_rewritten_names: BTreeSet<String>,
 }
 
+/// Who authored one [`Contribution`] to a flattened equation
+/// (esm-libraries-spec §4.7.5, "Per-term provenance").
+///
+/// Serialized untagged, as `{"component": "<dotted path>"}` or
+/// `{"coupling": <k>}`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum TermOrigin {
+    /// The full dotted path of the model, subsystem or reaction system whose
+    /// equation contained the expression (`"Atmosphere.Chemistry"`).
+    Component { component: String },
+    /// The 0-based index of the coupling entry that wrote the expression
+    /// itself, counted in the coupling sequence AFTER `coupling_import`
+    /// expansion. Entries of every type count, including the ones that write
+    /// nothing.
+    Coupling { coupling: usize },
+}
+
+/// One summand of a flattened equation's right-hand side, with its authors
+/// (esm-libraries-spec §4.7.5, "Per-term provenance").
+///
+/// `origins` is non-empty and deduplicated in first-appearance order. It has
+/// more than one entry only where a non-additive merge (a multiplicative
+/// `couple`, or an `operator_compose` `translate` factor applied to a
+/// multi-contribution equation) collapsed several contributions into one
+/// indivisible expression. Provenance lives here, beside the expression tree,
+/// never on a node, so `expr` compares, hashes and interns as any expression.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Contribution {
+    pub expr: Expr,
+    pub origins: Vec<TermOrigin>,
+}
+
 /// Spec-compliant flattened coupled system (§4.7.5).
 ///
 /// The shape matches the Julia and Python flattened systems:
@@ -507,6 +540,15 @@ pub struct FlattenedSystem {
     /// Flattened equations in processing order. Every variable reference is
     /// dot-namespaced.
     pub equations: Vec<Equation>,
+    /// Per-term provenance (esm-libraries-spec §4.7.5): one entry per entry of
+    /// [`Self::equations`], in the same order. Entry `i` lists the summands
+    /// whose LEFT-FOLD sum is `equations[i]`'s right-hand side (or, for an
+    /// equation the pointwise lift wrapped in a `faq`, that `faq`'s body), each
+    /// with the component or coupling entry that authored it. [`flatten`]
+    /// builds every right-hand side from this list. Empty only on a system
+    /// assembled by hand rather than by [`flatten`].
+    #[serde(default)]
+    pub equation_contributions: Vec<Vec<Contribution>>,
     /// Continuous events from every component, LHS rewritten to namespaced form.
     pub continuous_events: Vec<ContinuousEvent>,
     /// Discrete events from every component, LHS rewritten to namespaced form.
@@ -574,6 +616,143 @@ impl FlattenedSystem {
             view.entry(name.clone()).or_insert_with(|| var.clone());
         }
         crate::classification::Classification::from_parts(&view, &self.equations).system_kind
+    }
+
+    /// Rewrite every equation's right-hand side with `f` INSIDE each of its
+    /// contributions, origins unchanged, and rebuild the right-hand side from
+    /// the rewritten list (esm-libraries-spec §4.7.5: a pass over flattened
+    /// equations never moves a term across a contribution boundary).
+    ///
+    /// An equation with no contribution list (a system assembled by hand) has
+    /// its right-hand side rewritten whole. Left-hand sides are not touched.
+    pub(crate) fn map_rhs_per_contribution(&mut self, mut f: impl FnMut(&Expr) -> Expr) {
+        let paired = self.equation_contributions.len() == self.equations.len();
+        for (i, eq) in self.equations.iter_mut().enumerate() {
+            if !paired {
+                eq.rhs = f(&eq.rhs);
+                continue;
+            }
+            let contributions = &mut self.equation_contributions[i];
+            let wrapped = lift_wrapper(&eq.rhs, contributions);
+            for c in contributions.iter_mut() {
+                c.expr = f(&c.expr);
+            }
+            eq.rhs = rebuild_body(wrapped, fold_contributions(contributions));
+        }
+    }
+}
+
+/// The `faq` the pointwise lift wrapped around `rhs`'s contribution sum, or
+/// `None` when `rhs` IS that sum (esm-libraries-spec §4.7.5: `body(eq)` is the
+/// `faq` body only when the lift produced the equation).
+fn lift_wrapper(rhs: &Expr, contributions: &[Contribution]) -> Option<ExpressionNode> {
+    let Expr::Operator(node) = rhs else {
+        return None;
+    };
+    if node.op != "faq" || contributions.is_empty() {
+        return None;
+    }
+    let body = fold_contributions(contributions);
+    (node.expr.as_deref() == Some(&body) && *rhs != body).then(|| ExpressionNode::clone(node))
+}
+
+/// `body`, re-wrapped in the lift's `faq` when the equation carried one.
+fn rebuild_body(wrapper: Option<ExpressionNode>, body: Expr) -> Expr {
+    match wrapper {
+        Some(mut node) => {
+            node.expr = Some(Box::new(body));
+            Expr::operator(node)
+        }
+        None => body,
+    }
+}
+
+/// The right-hand side a contribution list stands for: the LEFT fold of the
+/// contribution expressions under binary `+` (esm-libraries-spec §4.7.5, the
+/// provenance invariant).
+fn fold_contributions(contributions: &[Contribution]) -> Expr {
+    let mut iter = contributions.iter();
+    let Some(first) = iter.next() else {
+        return zero();
+    };
+    iter.fold(first.expr.clone(), |acc, c| sum_exprs(acc, c.expr.clone()))
+}
+
+/// Every origin of `contributions`, then `extra`, deduplicated in
+/// first-appearance order.
+fn union_origins(contributions: &[Contribution], extra: Option<TermOrigin>) -> Vec<TermOrigin> {
+    let mut out: Vec<TermOrigin> = Vec::new();
+    for origin in contributions
+        .iter()
+        .flat_map(|c| c.origins.iter().cloned())
+        .chain(extra)
+    {
+        if !out.contains(&origin) {
+            out.push(origin);
+        }
+    }
+    out
+}
+
+/// A flattened equation in the making: the equation, its contribution list,
+/// and whether the pointwise lift wrapped its right-hand side in a `faq`.
+///
+/// Every flatten pass edits `contributions` and rebuilds `eq.rhs` from them
+/// ([`Self::set_contributions`]), never the other way round, so the
+/// right-hand side is always the left fold of the list.
+#[derive(Debug, Clone)]
+struct FlatEq {
+    eq: Equation,
+    contributions: Vec<Contribution>,
+    lifted: bool,
+}
+
+impl FlatEq {
+    /// `eq` as written by `origin`: one contribution, its right-hand side.
+    fn authored(eq: Equation, origin: TermOrigin) -> Self {
+        let contributions = vec![Contribution {
+            expr: eq.rhs.clone(),
+            origins: vec![origin],
+        }];
+        FlatEq {
+            eq,
+            contributions,
+            lifted: false,
+        }
+    }
+
+    /// The sum the contributions stand for: `rhs`, or the lift's `faq` body.
+    fn body(&self) -> &Expr {
+        if self.lifted
+            && let Expr::Operator(node) = &self.eq.rhs
+            && let Some(body) = node.expr.as_deref()
+        {
+            return body;
+        }
+        &self.eq.rhs
+    }
+
+    /// Replace the contribution list and rebuild the right-hand side from it.
+    fn set_contributions(&mut self, contributions: Vec<Contribution>) {
+        let body = fold_contributions(&contributions);
+        self.eq.rhs = match (&self.eq.rhs, self.lifted) {
+            (Expr::Operator(node), true) => rebuild_body(Some(ExpressionNode::clone(node)), body),
+            _ => body,
+        };
+        self.contributions = contributions;
+    }
+
+    /// Apply `f` inside every contribution, origins unchanged, and rebuild.
+    fn map_contributions(&mut self, mut f: impl FnMut(&Expr) -> Expr) {
+        let mapped = self
+            .contributions
+            .iter()
+            .map(|c| Contribution {
+                expr: f(&c.expr),
+                origins: c.origins.clone(),
+            })
+            .collect();
+        self.set_contributions(mapped);
     }
 }
 
@@ -741,7 +920,7 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
     // after coupling (phase 4) so a state merged by `operator_compose` yields
     // its WHOLE tendency rather than the first contributing term.
     let time_invariant: HashSet<String> = parts.parameters.keys().cloned().collect();
-    resolve_rhs_time_derivatives(&mut parts.equations, &time_invariant);
+    resolve_rhs_time_derivatives_per_contribution(&mut parts.equations, &time_invariant);
 
     // Phase 5b″: classify the `ic` equations OUT of `equations` into
     // `field_ics` (esm-libraries-spec §4.7.5 step 4). After 5b′, so an
@@ -770,6 +949,10 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
     // off, so scanning both keeps the two passes seeing the same expressions.
     let independent_variables = derive_independent_variables(&parts);
 
+    // Phase 5g: bring a scaled ANGLE argument of `sin`/`cos`/`tan` to radians
+    // (esm-spec §4.8.3, issue #409). See [`normalize_angle_arguments`].
+    normalize_angle_arguments(&mut parts);
+
     let AssembledParts {
         state_variables,
         parameters,
@@ -787,7 +970,12 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
     let template_registry = merged_template_registry(file);
     check_registry_coupling_rewrites(&template_registry, &coupling_rewritten_names)?;
 
-    let mut flat = FlattenedSystem {
+    let (equations, equation_contributions): (Vec<Equation>, Vec<Vec<Contribution>>) = equations
+        .into_iter()
+        .map(|fe| (fe.eq, fe.contributions))
+        .unzip();
+
+    Ok(FlattenedSystem {
         independent_variables,
         state_variables,
         parameters,
@@ -797,6 +985,7 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
         discrete_parameters,
         field_ics,
         equations,
+        equation_contributions,
         continuous_events,
         discrete_events,
         domain: file.domain.clone(),
@@ -821,13 +1010,7 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
             merged_variable_renames,
             coupling_rewritten_names,
         },
-    };
-
-    // Phase 5g: bring a scaled ANGLE argument of `sin`/`cos`/`tan` to radians
-    // (esm-spec §4.8.3, issue #409). See [`normalize_angle_arguments`].
-    normalize_angle_arguments(&mut flat);
-
-    Ok(flat)
+    })
 }
 
 /// Fold the declared angle scale into every circular-trig argument, so the
@@ -848,7 +1031,10 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
 /// `sin(theta [deg])` into `sin(theta * 0.01745…)`, whose bare literal makes the
 /// product UNDETERMINABLE (§4.8.4) and silently disables the very check this
 /// change strengthens.
-fn normalize_angle_arguments(flat: &mut FlattenedSystem) {
+///
+/// Each equation is rewritten inside each of its contributions, and its
+/// right-hand side rebuilt from them (esm-libraries-spec §4.7.5).
+fn normalize_angle_arguments(flat: &mut AssembledParts) {
     let mut vars: IndexMap<String, ModelVariable> = IndexMap::new();
     for m in [
         &flat.state_variables,
@@ -874,8 +1060,12 @@ fn normalize_angle_arguments(flat: &mut FlattenedSystem) {
             *e = next;
         }
     };
-    for eq in &mut flat.equations {
-        rewrite(&mut eq.rhs);
+    for fe in &mut flat.equations {
+        fe.map_contributions(|e| {
+            let mut e = e.clone();
+            rewrite(&mut e);
+            e
+        });
     }
     for (_, e) in &mut flat.field_ics {
         rewrite(e);
@@ -1255,9 +1445,9 @@ fn derive_independent_variables(parts: &AssembledParts) -> Vec<String> {
     // starts with "t", which also drops a spatial `wrt` naming time.
     let mut out = vec!["t".to_string()];
     let mut scan = |e: &Expr| collect_spatial_dims(e, &mut out);
-    for eq in &parts.equations {
-        scan(&eq.lhs);
-        scan(&eq.rhs);
+    for fe in &parts.equations {
+        scan(&fe.eq.lhs);
+        scan(&fe.eq.rhs);
     }
     for (_, rhs) in &parts.field_ics {
         scan(rhs);
@@ -1556,6 +1746,7 @@ fn apply_coupling_entries(
             let mut one = Vec::new();
             apply_coupling_entry(
                 entry,
+                i,
                 per_system,
                 &mut one,
                 &mut merged_renames,
@@ -1689,7 +1880,7 @@ fn detect_conflicts(file: &EsmFile, per_system: &[SystemBlock]) -> Result<(), Fl
 
     let mut lhs_targets: IndexMap<String, Vec<String>> = IndexMap::new();
     for block in per_system {
-        for eq in &block.equations {
+        for FlatEq { eq, .. } in &block.equations {
             if let Some(dep) = extract_ddt_dependent(&eq.lhs) {
                 lhs_targets.entry(dep).or_default().push(block.name.clone());
             }
@@ -1727,7 +1918,7 @@ struct AssembledParts {
     parameters: IndexMap<String, ModelVariable>,
     observed_variables: IndexMap<String, ModelVariable>,
     field_ics: Vec<(String, Expr)>,
-    equations: Vec<Equation>,
+    equations: Vec<FlatEq>,
     continuous_events: Vec<ContinuousEvent>,
     discrete_events: Vec<DiscreteEvent>,
     lifted_shapes: IndexMap<String, Vec<i64>>,
@@ -1772,12 +1963,14 @@ fn assemble_output(per_system: Vec<SystemBlock>) -> AssembledParts {
 /// `(target_state, rhs)` — the downstream simulator folds them into `u0` from
 /// the data-Provider seam rather than treating them as state ODEs.
 fn extract_field_ics(parts: &mut AssembledParts) {
+    // An `ic` equation's contribution list leaves with it: `field_ics` carries
+    // none (esm-libraries-spec §4.7.5).
     let mut kept = Vec::with_capacity(parts.equations.len());
-    for eq in std::mem::take(&mut parts.equations) {
-        if let Some(target) = extract_ic_target(&eq.lhs) {
-            parts.field_ics.push((target, eq.rhs));
+    for fe in std::mem::take(&mut parts.equations) {
+        if let Some(target) = extract_ic_target(&fe.eq.lhs) {
+            parts.field_ics.push((target, fe.eq.rhs));
         } else {
-            kept.push(eq);
+            kept.push(fe);
         }
     }
     parts.equations = kept;
@@ -1843,7 +2036,8 @@ fn flattened_classification(parts: &AssembledParts) -> crate::classification::Cl
     for (name, var) in &parts.parameters {
         view.entry(name.clone()).or_insert_with(|| var.clone());
     }
-    crate::classification::Classification::from_parts(&view, &parts.equations)
+    let equations: Vec<Equation> = parts.equations.iter().map(|fe| fe.eq.clone()).collect();
+    crate::classification::Classification::from_parts(&view, &equations)
 }
 
 /// Select `names` out of `maps`, keeping each map's DOCUMENT order.
@@ -1881,7 +2075,7 @@ fn apply_variable_map_removals(
         .unwrap_or_default();
     let mut loaded_producers: HashMap<String, usize> = HashMap::new();
     if let Some(entries) = &file.coupling {
-        for entry in entries {
+        for (index, entry) in entries.iter().enumerate() {
             let CouplingEntry::VariableMap {
                 from,
                 to,
@@ -1950,11 +2144,15 @@ fn apply_variable_map_removals(
                         .map(|(gone, survivor)| (gone.clone(), Expr::Variable(survivor.clone())))
                         .collect();
                     let rhs = rename_names(&Expr::operator(node.clone()), &subs, merged_renames);
-                    parts.equations.push(Equation {
-                        comment: None,
-                        lhs: Expr::Variable(to.clone()),
-                        rhs,
-                    });
+                    // The coupling entry wrote this definition itself.
+                    parts.equations.push(FlatEq::authored(
+                        Equation {
+                            comment: None,
+                            lhs: Expr::Variable(to.clone()),
+                            rhs,
+                        },
+                        TermOrigin::Coupling { coupling: index },
+                    ));
                 }
                 VariableMapTransform::Named(_) => {}
             }
@@ -2067,51 +2265,58 @@ pub(crate) fn resolve_rhs_time_derivatives(
     if !carriers.contains(&true) {
         return false;
     }
-    let mut tables = DerivTables {
-        tendency: HashMap::new(),
-        definition: HashMap::new(),
-        time_invariant,
-    };
-    for eq in equations.iter() {
-        match &eq.lhs {
-            Expr::Operator(node) if is_structural_time_derivative(node) => {
-                if let Some(Expr::Variable(name)) = node.args.first() {
-                    tables.tendency.insert(name.clone(), eq.rhs.clone());
-                }
-            }
-            // A bare-variable LHS is a DEFINING equation — esm-spec §6.3.1's
-            // observed / algebraic form. Its right-hand side is what the chain
-            // rule differentiates.
-            Expr::Variable(name) => {
-                tables.definition.insert(name.clone(), eq.rhs.clone());
-            }
-            _ => {}
-        }
-    }
-    if tables.tendency.is_empty() && tables.definition.is_empty() {
+    let Some(tables) = DerivTables::build(equations, time_invariant) else {
         return true;
-    }
+    };
     for (eq, carries) in equations.iter_mut().zip(carriers) {
-        if !carries {
-            continue;
+        if carries {
+            let mut active = self_defined(&eq.lhs);
+            eq.rhs = tables.substitute(&eq.rhs, &mut active);
         }
-        // The quantity this equation DEFINES is not available to substitute
-        // into its own right-hand side; seeding `active` with it is what makes
-        // `D(x)/dt ~ k·D(x, t)` and `y ~ D(y, t)` terminate as unresolved
-        // rather than expand forever.
-        let mut active: Vec<String> = match &eq.lhs {
-            Expr::Operator(node) if is_structural_time_derivative(node) => {
-                match node.args.first() {
-                    Some(Expr::Variable(name)) => vec![name.clone()],
-                    _ => Vec::new(),
-                }
-            }
-            Expr::Variable(name) => vec![name.clone()],
-            _ => Vec::new(),
-        };
-        eq.rhs = tables.substitute(&eq.rhs, &mut active);
     }
     true
+}
+
+/// [`resolve_rhs_time_derivatives`] over flatten's own equations: the resolved
+/// expression replaces the `D` node INSIDE the referencing contribution, which
+/// keeps its origins (esm-libraries-spec §4.7.5); the resolved quantity's own
+/// contributions are not spliced in.
+fn resolve_rhs_time_derivatives_per_contribution(
+    equations: &mut [FlatEq],
+    time_invariant: &HashSet<String>,
+) {
+    let carriers: Vec<bool> = equations
+        .iter()
+        .map(|fe| contains_time_derivative(&fe.eq.rhs))
+        .collect();
+    if !carriers.contains(&true) {
+        return;
+    }
+    let view: Vec<Equation> = equations.iter().map(|fe| fe.eq.clone()).collect();
+    let Some(tables) = DerivTables::build(&view, time_invariant) else {
+        return;
+    };
+    for (fe, carries) in equations.iter_mut().zip(carriers) {
+        if carries {
+            let mut active = self_defined(&fe.eq.lhs);
+            fe.map_contributions(|e| tables.substitute(e, &mut active));
+        }
+    }
+}
+
+/// The quantity an equation DEFINES, which is not available to substitute into
+/// its own right-hand side; seeding `active` with it is what makes
+/// `D(x)/dt ~ k·D(x, t)` and `y ~ D(y, t)` terminate as unresolved rather than
+/// expand forever.
+fn self_defined(lhs: &Expr) -> Vec<String> {
+    match lhs {
+        Expr::Operator(node) if is_structural_time_derivative(node) => match node.args.first() {
+            Some(Expr::Variable(name)) => vec![name.clone()],
+            _ => Vec::new(),
+        },
+        Expr::Variable(name) => vec![name.clone()],
+        _ => Vec::new(),
+    }
 }
 
 /// The tendency and defining equations [`resolve_rhs_time_derivatives`] reads,
@@ -2128,7 +2333,34 @@ struct DerivTables<'a> {
     time_invariant: &'a HashSet<String>,
 }
 
-impl DerivTables<'_> {
+impl<'a> DerivTables<'a> {
+    /// The tables `equations` define, or `None` when they define nothing to
+    /// resolve against.
+    fn build(equations: &[Equation], time_invariant: &'a HashSet<String>) -> Option<Self> {
+        let mut tables = DerivTables {
+            tendency: HashMap::new(),
+            definition: HashMap::new(),
+            time_invariant,
+        };
+        for eq in equations {
+            match &eq.lhs {
+                Expr::Operator(node) if is_structural_time_derivative(node) => {
+                    if let Some(Expr::Variable(name)) = node.args.first() {
+                        tables.tendency.insert(name.clone(), eq.rhs.clone());
+                    }
+                }
+                // A bare-variable LHS is a DEFINING equation — esm-spec §6.3.1's
+                // observed / algebraic form. Its right-hand side is what the
+                // chain rule differentiates.
+                Expr::Variable(name) => {
+                    tables.definition.insert(name.clone(), eq.rhs.clone());
+                }
+                _ => {}
+            }
+        }
+        (!tables.tendency.is_empty() || !tables.definition.is_empty()).then_some(tables)
+    }
+
     /// Rewrite every structural `D` inside `expr`, leaving the ones `deriv`
     /// cannot answer exactly as authored for the gate to report.
     fn substitute(&self, expr: &Expr, active: &mut Vec<String>) -> Expr {
@@ -2360,7 +2592,10 @@ struct SystemBlock {
     /// beside it.
     parameters: IndexMap<String, ModelVariable>,
     observed_vars: IndexMap<String, ModelVariable>,
-    equations: Vec<Equation>,
+    /// The equations this block holds, each with its contribution list. Which
+    /// block an equation sits in is its slot owner (§4.7.1 step 4), not its
+    /// provenance: a reattributed equation moves here with its list.
+    equations: Vec<FlatEq>,
     continuous_events: Vec<ContinuousEvent>,
     discrete_events: Vec<DiscreteEvent>,
 }
@@ -2455,13 +2690,20 @@ fn build_model_block(system_name: &str, model: &Model) -> Result<SystemBlock, Fl
         }
     }
 
-    let equations: Vec<Equation> = model
+    let equations: Vec<FlatEq> = model
         .equations
         .iter()
-        .map(|eq| Equation {
-            lhs: namespace_expr(&eq.lhs, system_name, &sub_keys, &locals),
-            rhs: namespace_expr(&eq.rhs, system_name, &sub_keys, &locals),
-            comment: eq.comment.clone(),
+        .map(|eq| {
+            FlatEq::authored(
+                Equation {
+                    lhs: namespace_expr(&eq.lhs, system_name, &sub_keys, &locals),
+                    rhs: namespace_expr(&eq.rhs, system_name, &sub_keys, &locals),
+                    comment: eq.comment.clone(),
+                },
+                TermOrigin::Component {
+                    component: system_name.to_string(),
+                },
+            )
         })
         .collect();
 
@@ -2595,10 +2837,17 @@ fn build_reaction_block(
     let lowered = crate::reactions::lower_reactions_to_equations(&rs.reactions, &rs.species)?;
     let equations = lowered
         .into_iter()
-        .map(|eq| Equation {
-            lhs: namespace_expr(&eq.lhs, system_name, &HashSet::new(), &locals),
-            rhs: namespace_expr(&eq.rhs, system_name, &HashSet::new(), &locals),
-            comment: eq.comment,
+        .map(|eq| {
+            FlatEq::authored(
+                Equation {
+                    lhs: namespace_expr(&eq.lhs, system_name, &HashSet::new(), &locals),
+                    rhs: namespace_expr(&eq.rhs, system_name, &HashSet::new(), &locals),
+                    comment: eq.comment,
+                },
+                TermOrigin::Component {
+                    component: system_name.to_string(),
+                },
+            )
         })
         .collect();
 
@@ -2998,9 +3247,13 @@ fn extract_ddt_dependent(lhs: &Expr) -> Option<String> {
 }
 
 /// Apply a single coupling entry to the per-system blocks, mutating
-/// `coupling_rules_applied` with a human-readable description.
+/// `coupling_rules_applied` with a human-readable description. `index` is the
+/// entry's position in the coupling sequence after `coupling_import`
+/// expansion: an expression the entry writes itself carries
+/// `{"coupling": index}` (esm-libraries-spec §4.7.5).
 fn apply_coupling_entry(
     entry: &CouplingEntry,
+    index: usize,
     per_system: &mut Vec<SystemBlock>,
     coupling_rules_applied: &mut Vec<String>,
     merged_renames: &mut IndexMap<String, String>,
@@ -3044,7 +3297,7 @@ fn apply_coupling_entry(
             // the entry, so a spelling an earlier merge deleted has to be
             // resolved here — nothing else reaches them (issue #230).
             let connector = retarget_connector(connector, merged_renames);
-            apply_couple(systems, connector.as_ref(), per_system)?;
+            apply_couple(systems, connector.as_ref(), index, per_system)?;
             coupling_rules_applied.push(
                 description
                     .clone()
@@ -3275,23 +3528,24 @@ fn expand_placeholder_equations(a_idx: usize, b_idx: usize, per_system: &mut [Sy
         return;
     }
     let b_equations = std::mem::take(&mut per_system[b_idx].equations);
-    let mut expanded: Vec<Equation> = Vec::with_capacity(b_equations.len());
-    for eq in b_equations {
-        if crate::expression::contains(&eq.lhs, VAR_PLACEHOLDER)
-            || crate::expression::contains(&eq.rhs, VAR_PLACEHOLDER)
+    let mut expanded: Vec<FlatEq> = Vec::with_capacity(b_equations.len());
+    for fe in b_equations {
+        if crate::expression::contains(&fe.eq.lhs, VAR_PLACEHOLDER)
+            || crate::expression::contains(&fe.eq.rhs, VAR_PLACEHOLDER)
         {
             for state in &a_states {
                 let subs: HashMap<String, Expr> =
                     std::iter::once((VAR_PLACEHOLDER.to_string(), Expr::Variable(state.clone())))
                         .collect();
-                expanded.push(Equation {
-                    lhs: crate::substitute::substitute(&eq.lhs, &subs),
-                    rhs: crate::substitute::substitute(&eq.rhs, &subs),
-                    comment: eq.comment.clone(),
-                });
+                // Each clone keeps B's contributions, and so B's component as
+                // their origin.
+                let mut clone = fe.clone();
+                clone.eq.lhs = crate::substitute::substitute(&fe.eq.lhs, &subs);
+                clone.map_contributions(|e| crate::substitute::substitute(e, &subs));
+                expanded.push(clone);
             }
         } else {
-            expanded.push(eq);
+            expanded.push(fe);
         }
     }
     per_system[b_idx].equations = expanded;
@@ -3382,14 +3636,14 @@ fn apply_operator_compose(
 
     // Step 1: A's equations, indexed by dependent variable.
     let mut a_index: IndexMap<String, usize> = IndexMap::new();
-    for (i, eq) in per_system[a_idx].equations.iter().enumerate() {
+    for (i, FlatEq { eq, .. }) in per_system[a_idx].equations.iter().enumerate() {
         if let Some(dep) = compose_dependent(&eq.lhs) {
             a_index.insert(dep, i);
         }
     }
 
     let b_equations = std::mem::take(&mut per_system[b_idx].equations);
-    let mut surviving: Vec<Equation> = Vec::new();
+    let mut surviving: Vec<FlatEq> = Vec::new();
     // `b_dep -> target_dep` for every match that RENAMED the dependent variable
     // (step 4's "the merged-away name does not survive"). Insertion-ordered so
     // the prune below is deterministic.
@@ -3408,9 +3662,9 @@ fn apply_operator_compose(
     // contribution and is exempt by construction), and which of them did not.
     let mut authored = 0_usize;
     let mut unmatched: Vec<String> = Vec::new();
-    for b_eq in b_equations {
-        let Some(b_dep) = compose_dependent(&b_eq.lhs) else {
-            surviving.push(b_eq);
+    for b_fe in b_equations {
+        let Some(b_dep) = compose_dependent(&b_fe.eq.lhs) else {
+            surviving.push(b_fe);
             continue;
         };
         authored += 1;
@@ -3437,7 +3691,7 @@ fn apply_operator_compose(
         // Step 5: no counterpart in A, so the equation stays in B untouched.
         let Some(&i) = a_index.get(&target) else {
             unmatched.push(b_dep);
-            surviving.push(b_eq);
+            surviving.push(b_fe);
             continue;
         };
 
@@ -3450,27 +3704,40 @@ fn apply_operator_compose(
         // here — leaving `rhs_B` in B's spelling would strand that variable as
         // an unknown nothing defines. ONLY the dependent variable moves; B's
         // parameters and observeds keep their names.
-        let mut rhs_b = if target == b_dep {
-            b_eq.rhs
-        } else {
+        //
+        // B's contributions are APPENDED to A's, in order, origins unchanged
+        // (esm-libraries-spec §4.7.5). A `translate` factor scales B's one
+        // contribution; when B already carries several, they collapse into ONE
+        // `factor * (b1 + b2 + …)` whose origins are the union: indivisible,
+        // because distributing the factor would change the arithmetic.
+        let b_eq = b_fe.eq;
+        let mut b_contributions = b_fe.contributions;
+        if target != b_dep {
             let subs: HashMap<String, Expr> =
                 std::iter::once((b_dep.clone(), Expr::Variable(target.clone()))).collect();
-            crate::substitute::substitute(&b_eq.rhs, &subs)
-        };
-        if factor != 1.0 {
-            rhs_b = Expr::operator(ExpressionNode {
-                op: "*".to_string(),
-                args: vec![Expr::Number(factor), rhs_b],
-                ..Default::default()
-            });
+            for c in &mut b_contributions {
+                c.expr = crate::substitute::substitute(&c.expr, &subs);
+            }
         }
-        let rhs_a = std::mem::replace(&mut per_system[a_idx].equations[i].rhs, Expr::Integer(0));
-        per_system[a_idx].equations[i].rhs = sum_exprs(rhs_a, rhs_b);
+        if factor != 1.0 {
+            b_contributions = vec![Contribution {
+                expr: Expr::operator(ExpressionNode {
+                    op: "*".to_string(),
+                    args: vec![Expr::Number(factor), fold_contributions(&b_contributions)],
+                    ..Default::default()
+                }),
+                origins: union_origins(&b_contributions, None),
+            }];
+        }
+        let a_fe = &mut per_system[a_idx].equations[i];
+        let mut merged = std::mem::take(&mut a_fe.contributions);
+        merged.extend(b_contributions);
+        a_fe.set_contributions(merged);
         // Step 4: "the final equation for variable x has the original LHS:
         // D(x, t)". Where A defines the quantity by a bare equation and B
         // gives it a tendency, the merged equation is that tendency, spelled
         // in A's name (which the ownership rule below may still retarget).
-        let a_lhs = &per_system[a_idx].equations[i].lhs;
+        let a_lhs = &per_system[a_idx].equations[i].eq.lhs;
         if !matches!(
             crate::classification::lhs_form(a_lhs),
             crate::classification::LhsForm::Derivative(_)
@@ -3480,7 +3747,7 @@ fn apply_operator_compose(
         ) {
             let subs: HashMap<String, Expr> =
                 std::iter::once((b_dep.clone(), Expr::Variable(target.clone()))).collect();
-            per_system[a_idx].equations[i].lhs = crate::substitute::substitute(&b_eq.lhs, &subs);
+            per_system[a_idx].equations[i].eq.lhs = crate::substitute::substitute(&b_eq.lhs, &subs);
         }
         merged_positions.insert(i);
         if target != b_dep {
@@ -3771,9 +4038,9 @@ fn report_operator_compose_merge(
 /// The per-system block is this binding's analogue of the reference
 /// implementation's per-equation owner (Julia `coupling_apply.jl`, the
 /// `new_owners[j] = _component_root(dep)` line): which block an equation sits in
-/// is the only record of who authored it, and after namespacing an operator's
-/// equation for a chemistry species is textually indistinguishable from the
-/// chemistry component's own.
+/// is its SLOT OWNER, which decides what a later entry can see. It is not
+/// provenance — who authored each summand travels in the equation's contribution
+/// list, which moves with it (esm-libraries-spec §4.7.5).
 ///
 /// POSITION. §4.7.5 step 4 makes document order normative, and a relocated
 /// equation is APPENDED to the owner's block rather than inserted at the slot of
@@ -3796,14 +4063,14 @@ fn reattribute_merged_equations(
         return;
     }
     let a_name = per_system[a_idx].name.clone();
-    let mut kept: Vec<Equation> = Vec::new();
-    let mut moved: Vec<(String, Equation)> = Vec::new();
+    let mut kept: Vec<FlatEq> = Vec::new();
+    let mut moved: Vec<(String, FlatEq)> = Vec::new();
     for (i, eq) in std::mem::take(&mut per_system[a_idx].equations)
         .into_iter()
         .enumerate()
     {
         let owner = if merged_positions.contains(&i) {
-            compose_dependent(&eq.lhs).map(|dep| {
+            compose_dependent(&eq.eq.lhs).map(|dep| {
                 dep.split_once('.')
                     .map(|(root, _)| root.to_string())
                     .unwrap_or(dep)
@@ -3864,9 +4131,9 @@ fn retarget_merged_names(per_system: &mut [SystemBlock], renames: &IndexMap<Stri
         .collect();
     let ren = |expr: &Expr| rename_names(expr, &subs, renames);
     for block in per_system.iter_mut() {
-        for eq in block.equations.iter_mut() {
-            eq.lhs = ren(&eq.lhs);
-            eq.rhs = ren(&eq.rhs);
+        for fe in block.equations.iter_mut() {
+            fe.eq.lhs = ren(&fe.eq.lhs);
+            fe.map_contributions(&ren);
         }
         for var in block
             .state_vars
@@ -3962,9 +4229,13 @@ fn sum_exprs(a: Expr, b: Expr) -> Expr {
 /// a synthetic system block. The connector is an opaque JSON value in the
 /// Rust type model — we look for an `equations` array of `{lhs, rhs}`
 /// pairs, each of which may be a JSON-encoded [`Expr`].
+///
+/// Every expression a connector writes is authored by the entry, so its
+/// contribution carries `{"coupling": index}` (esm-libraries-spec §4.7.5).
 fn apply_couple(
     systems: &[String],
     connector: &serde_json::Value,
+    index: usize,
     per_system: &mut Vec<SystemBlock>,
 ) -> Result<(), FlattenError> {
     let Some(eqs_json) = connector.get("equations").and_then(|e| e.as_array()) else {
@@ -3988,13 +4259,16 @@ fn apply_couple(
         if eq_val.get("lhs").is_some() || eq_val.get("rhs").is_some() {
             let lhs = parse_connector_side(eq_val, "lhs", systems)?;
             let rhs = parse_connector_side(eq_val, "rhs", systems)?;
-            new_equations.push(Equation {
-                comment: None,
-                lhs,
-                rhs,
-            });
+            new_equations.push(FlatEq::authored(
+                Equation {
+                    comment: None,
+                    lhs,
+                    rhs,
+                },
+                TermOrigin::Coupling { coupling: index },
+            ));
         } else if eq_val.get("to").is_some() {
-            inject_connector_term(eq_val, systems, per_system)?;
+            inject_connector_term(eq_val, systems, index, per_system)?;
         } else {
             return Err(FlattenError::MalformedConnectorEquation {
                 systems: systems.join(","),
@@ -4026,8 +4300,12 @@ fn apply_couple(
 /// The target equation is found by its LHS DEPENDENT VARIABLE, read through the
 /// crate's canonical [`crate::classification::lhs_form`], so `D(x, t)`,
 /// `D(x[i], t)`, a bare `x`, and the `faq`-wrapped spellings all resolve
-/// to `x`. For an `additive` or `replacement` transform a `to` that names no
-/// equation's LHS is SKIPPED, not an error — the oracle skips it too.
+/// to `x`; when several equations define `to`, the LAST in document order
+/// takes the term. An `additive` term whose `to` is an UNKNOWN no equation
+/// defines BECOMES its tendency, a new `D(to, t) ~ term` (§4.7.2). Any other
+/// `to` that names no equation's LHS — a parameter, a name no component owns,
+/// or the target of a `replacement` — is SKIPPED, not an error, as in the
+/// oracle.
 ///
 /// `transform` selects how the term combines with the existing RHS: `additive`
 /// sums, `multiplicative` multiplies, `replacement` overwrites. An absent or
@@ -4043,6 +4321,7 @@ fn apply_couple(
 fn inject_connector_term(
     eq_val: &serde_json::Value,
     systems: &[String],
+    index: usize,
     per_system: &mut [SystemBlock],
 ) -> Result<(), FlattenError> {
     let Some(target) = eq_val.get("to").and_then(|v| v.as_str()) else {
@@ -4051,15 +4330,16 @@ fn inject_connector_term(
 
     let transform = eq_val.get("transform").and_then(|v| v.as_str());
     if transform == Some("multiplicative") {
-        let has_tendency = per_system
-            .iter()
-            .flat_map(|b| b.equations.iter())
-            .any(|eq| {
-                matches!(
-                    crate::classification::lhs_form(&eq.lhs),
-                    crate::classification::LhsForm::Derivative(ref name) if name == target
-                )
-            });
+        let has_tendency =
+            per_system
+                .iter()
+                .flat_map(|b| b.equations.iter())
+                .any(|FlatEq { eq, .. }| {
+                    matches!(
+                        crate::classification::lhs_form(&eq.lhs),
+                        crate::classification::LhsForm::Derivative(ref name) if name == target
+                    )
+                });
         if !has_tendency {
             return Err(FlattenError::CoupleMultiplicativeNoTendency {
                 target: target.to_string(),
@@ -4087,31 +4367,83 @@ fn inject_connector_term(
         },
     };
 
-    for block in per_system.iter_mut() {
-        for eq in block.equations.iter_mut() {
+    let authored = Contribution {
+        expr: term.clone(),
+        origins: vec![TermOrigin::Coupling { coupling: index }],
+    };
+
+    // The LAST equation in document order whose dependent variable is `to`.
+    let mut found: Option<(usize, usize)> = None;
+    for (b, block) in per_system.iter().enumerate() {
+        for (i, FlatEq { eq, .. }) in block.equations.iter().enumerate() {
             let dep = match crate::classification::lhs_form(&eq.lhs) {
                 crate::classification::LhsForm::Derivative(name)
                 | crate::classification::LhsForm::Bare(name) => name,
                 crate::classification::LhsForm::Expression => continue,
             };
-            if dep != target {
-                continue;
+            if dep == target {
+                found = Some((b, i));
             }
-            let existing = std::mem::replace(&mut eq.rhs, Expr::Integer(0));
-            eq.rhs = match transform {
-                Some("multiplicative") => Expr::operator(ExpressionNode {
-                    op: "*".to_string(),
-                    args: vec![existing, term],
-                    ..Default::default()
-                }),
-                Some("replacement") => term,
-                // `additive`, absent, or unrecognised.
-                _ => sum_exprs(existing, term),
-            };
-            return Ok(());
         }
     }
-    // No equation defines `to` — nothing to inject into. See the doc comment.
+
+    let Some((b, i)) = found else {
+        // No equation defines `to`. An additive term onto an UNKNOWN BECOMES
+        // its tendency (§4.7.2), filed with the top-level component `to`'s
+        // first path segment names. A parameter target, a name no component
+        // owns, or any other transform has nothing to fold into and is skipped.
+        if !matches!(transform, None | Some("additive") | Some("")) {
+            return Ok(());
+        }
+        let root = target.split('.').next().unwrap_or(target);
+        let Some(owner) = per_system
+            .iter_mut()
+            .find(|blk| blk.name == root && blk.state_vars.contains_key(target))
+        else {
+            return Ok(());
+        };
+        let lhs = Expr::operator(ExpressionNode {
+            op: "D".to_string(),
+            args: vec![Expr::Variable(target.to_string())],
+            wrt: Some("t".to_string()),
+            ..Default::default()
+        });
+        owner.equations.push(FlatEq {
+            eq: Equation {
+                comment: None,
+                lhs,
+                rhs: term,
+            },
+            contributions: vec![authored],
+            lifted: false,
+        });
+        return Ok(());
+    };
+
+    let fe = &mut per_system[b].equations[i];
+    let contributions = match transform {
+        // Non-additive: the existing list and the factor collapse into one
+        // indivisible contribution whose origins are the union.
+        Some("multiplicative") => vec![Contribution {
+            expr: Expr::operator(ExpressionNode {
+                op: "*".to_string(),
+                args: vec![fe.body().clone(), term],
+                ..Default::default()
+            }),
+            origins: union_origins(
+                &fe.contributions,
+                Some(TermOrigin::Coupling { coupling: index }),
+            ),
+        }],
+        Some("replacement") => vec![authored],
+        // `additive`, absent, or unrecognised.
+        _ => {
+            let mut list = std::mem::take(&mut fe.contributions);
+            list.push(authored);
+            list
+        }
+    };
+    fe.set_contributions(contributions);
     Ok(())
 }
 
@@ -4147,11 +4479,12 @@ fn apply_variable_map(from: &str, to: &str, factor: Option<f64>, per_system: &mu
     // scaled only for `conversion_factor`, silently dropping the factor for
     // additive / multiplicative. A factor of 1.0 is a no-op and left unwrapped.
     // (Parameter removal for param_to_var/conversion_factor is in the collection
-    // phase, so this function no longer needs `transform`.)
+    // phase, so this function no longer needs `transform`.) The factor leads,
+    // `factor * from`, as in the oracle.
     let replacement = match factor {
         Some(f) if f != 1.0 => Expr::operator(ExpressionNode {
             op: "*".to_string(),
-            args: vec![Expr::Variable(from.to_string()), Expr::Number(f)],
+            args: vec![Expr::Number(f), Expr::Variable(from.to_string())],
             wrt: None,
             dim: None,
             ..Default::default()
@@ -4170,13 +4503,14 @@ fn apply_variable_map(from: &str, to: &str, factor: Option<f64>, per_system: &mu
     // expression substitution can reach.
     let join_renames: IndexMap<String, String> =
         std::iter::once((to.to_string(), from.to_string())).collect();
+    // A substitution changes an INPUT of a term, not its author: it applies
+    // inside each contribution and adds no origin (esm-libraries-spec §4.7.5).
     for block in per_system.iter_mut() {
-        for eq in &mut block.equations {
-            eq.lhs = crate::substitute::substitute(&eq.lhs, &subs);
-            eq.rhs = rename_join_names(
-                &crate::substitute::substitute(&eq.rhs, &subs),
-                &join_renames,
-            );
+        for fe in &mut block.equations {
+            fe.eq.lhs = crate::substitute::substitute(&fe.eq.lhs, &subs);
+            fe.map_contributions(|e| {
+                rename_join_names(&crate::substitute::substitute(e, &subs), &join_renames)
+            });
         }
         // A `variable_map` also removes the mapped parameter from the system, so
         // it must reach every remaining Expression a VARIABLE carries — the
@@ -4673,15 +5007,18 @@ fn index_makearray(ma: &ExpressionNode, loops: &[String]) -> Expr {
 /// rewrites the equation into a `faq` over the grid. `loaded_producers`
 /// maps loaded field name → rank; a producer whose rank equals the grid rank is
 /// indexed per cell alongside the lifted species.
+///
+/// Per-cell indexing applies inside each contribution; the `faq` wrapper goes
+/// around their left-fold sum (esm-libraries-spec §4.7.5).
 fn apply_pointwise_lift(
-    equations: &mut [Equation],
+    equations: &mut [FlatEq],
     lifted_shapes: &mut IndexMap<String, Vec<i64>>,
     loaded_producers: &HashMap<String, usize>,
 ) -> Result<(), FlattenError> {
     // A species is lifted iff its state ODE's merged RHS carries a spatial-operator
     // makearray (the advection contribution operator_compose added).
     let mut lifted: HashSet<String> = HashSet::new();
-    for eq in equations.iter() {
+    for FlatEq { eq, .. } in equations.iter() {
         let Some(species) = extract_ddt_dependent(&eq.lhs) else {
             continue;
         };
@@ -4695,7 +5032,8 @@ fn apply_pointwise_lift(
         return Ok(());
     }
 
-    for eq in equations.iter_mut() {
+    for fe in equations.iter_mut() {
+        let eq = &fe.eq;
         let Some(species) = extract_ddt_dependent(&eq.lhs) else {
             continue;
         };
@@ -4776,15 +5114,16 @@ fn apply_pointwise_lift(
             expr: Some(Box::new(d_body)),
             ..Default::default()
         });
-        let new_rhs = Expr::operator(ExpressionNode {
+        let wrapper = ExpressionNode {
             op: "faq".to_string(),
             output_idx: Some(loops.clone()),
             ranges: Some(ranges),
-            expr: Some(Box::new(lift_rhs_to_cell(&eq.rhs, &arrayvars, &loops))),
             ..Default::default()
-        });
-        eq.lhs = new_lhs;
-        eq.rhs = new_rhs;
+        };
+        fe.eq.lhs = new_lhs;
+        fe.eq.rhs = Expr::operator(wrapper);
+        fe.lifted = true;
+        fe.map_contributions(|e| lift_rhs_to_cell(e, &arrayvars, &loops));
     }
     Ok(())
 }
@@ -5083,7 +5422,12 @@ mod tests {
             args: vec![Expr::Number(0.0)],
             ..Default::default()
         });
-        let mut equations = vec![ddt("C", makearray)];
+        let mut equations = vec![FlatEq::authored(
+            ddt("C", makearray),
+            TermOrigin::Component {
+                component: "M".to_string(),
+            },
+        )];
         let loaded_producers: HashMap<String, usize> = HashMap::new();
 
         let mut lifted_shapes: IndexMap<String, Vec<i64>> = IndexMap::new();
@@ -5186,5 +5530,35 @@ mod tests {
             }
             other => panic!("expected operator node, got {other:?}"),
         }
+    }
+
+    /// A pass over a FINISHED flattened system rewrites inside each
+    /// contribution and rebuilds the right-hand side from the list, keeping the
+    /// pointwise lift's `faq` wrapper around the sum (esm-libraries-spec §4.7.5).
+    #[test]
+    fn map_rhs_per_contribution_keeps_the_lift_wrapper() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/conformance/term_provenance/fixtures/pointwise_lift.esm");
+        let file = crate::load_path(&path).expect("loads");
+        let mut flat = flatten(&file).expect("flattens");
+        let i = flat
+            .equation_contributions
+            .iter()
+            .position(|cs| cs.len() == 3)
+            .expect("the lifted equation has three contributions");
+        let subs: HashMap<String, Expr> =
+            std::iter::once(("Src.e".to_string(), Expr::Variable("Src.e2".to_string()))).collect();
+        flat.map_rhs_per_contribution(|e| crate::substitute::substitute(e, &subs));
+
+        let contributions = &flat.equation_contributions[i];
+        assert_eq!(contributions[1].expr, Expr::Variable("Src.e2".to_string()));
+        let Expr::Operator(node) = &flat.equations[i].rhs else {
+            panic!("the lifted right-hand side is an operator");
+        };
+        assert_eq!(node.op, "faq");
+        assert_eq!(
+            node.expr.as_deref(),
+            Some(&fold_contributions(contributions))
+        );
     }
 }

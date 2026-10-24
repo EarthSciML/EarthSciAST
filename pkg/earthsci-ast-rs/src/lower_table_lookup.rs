@@ -195,8 +195,10 @@ pub(crate) fn lowered_flattened_copy(
     let mut owned = flat.clone();
     for eq in &mut owned.equations {
         eq.lhs = lower(&eq.lhs);
-        eq.rhs = lower(&eq.rhs);
     }
+    // Inside each contribution, rebuilding the right-hand side from the list
+    // (esm-libraries-spec §4.7.5).
+    owned.map_rhs_per_contribution(&mut lower);
     owned.continuous_events = flat
         .continuous_events
         .iter()
