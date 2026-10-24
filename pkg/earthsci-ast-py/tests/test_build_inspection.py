@@ -18,13 +18,9 @@ Python mirror of the Julia tree-walk seams (EarthSciAST.jl
    (the observed-assertion form): the field is read from the inspection's
    setup arrays.
 
-The ragged document builds under ``compiler="interpreter"``. A ragged contracted
-range recomputes its bound per output point through the ``offsets`` factor, so
-there is no dense box to build and no whole-box tier is even attempted — which
-is a refusal under the strict ``native`` default (``API_SPEC.md`` §5.8), and one
-of the five shapes the compiler census names as needing a whole-box
-implementation written. It is the ragged BINDING these tests are about, so they
-run it where it runs.
+The ragged document builds under the strict ``native`` default, whose
+``ragged-csr`` tier lays each cell's terms end to end; the namespaced-factor
+simulation also runs under ``compiler="interpreter"`` and must agree bit for bit.
 """
 
 from __future__ import annotations
@@ -235,19 +231,23 @@ _RAGGED_DOC = {
 
 def test_ragged_csr_simulation_namespaced_factors() -> None:
     """The flattened doc namespaces nedges -> Rag.nedges; the ragged bound and
-    the values gather still evaluate (keyed factors bind by bare name)."""
-    file = load_string(json.dumps(_RAGGED_DOC))
-    sim = simulate_states(
-        file,
-        (0.0, 1.0),
-        method="LSODA",
-        rtol=1e-10,
-        atol=1e-12,
-        saveat=[1.0],
-        compiler="interpreter",
-    )
-    u = [sim.states[-1][sim.var_map[f"Rag.u[{i}]"]] for i in (1, 2)]
-    np.testing.assert_allclose(u, [30.0, 120.0], rtol=1e-8)
+    the values gather still evaluate (keyed factors bind by bare name), and the
+    native trajectory is the interpreter's bit for bit."""
+    finals = {}
+    for compiler in ("native", "interpreter"):
+        sim = simulate_states(
+            load_string(json.dumps(_RAGGED_DOC)),
+            (0.0, 1.0),
+            method="LSODA",
+            rtol=1e-10,
+            atol=1e-12,
+            saveat=[1.0],
+            compiler=compiler,
+        )
+        finals[compiler] = np.asarray(sim.states[-1], dtype=float)
+        u = [sim.states[-1][sim.var_map[f"Rag.u[{i}]"]] for i in (1, 2)]
+        np.testing.assert_allclose(u, [30.0, 120.0], rtol=1e-8)
+    np.testing.assert_array_equal(finals["native"], finals["interpreter"])
 
 
 def test_run_inline_tests_observed_array_assertions() -> None:
@@ -260,7 +260,6 @@ def test_run_inline_tests_observed_array_assertions() -> None:
         method="LSODA",
         rtol=1e-10,
         atol=1e-12,
-        compiler="interpreter",
     )
     assert len(results) == 3
     for r in results:
@@ -279,7 +278,7 @@ def test_build_inspection_fills_setup_arrays_and_observed_exprs() -> None:
     file = load_string(json.dumps(_RAGGED_DOC))
     insp = BuildInspection()
     result = solve(
-        esm_problem(file, (0.0, 1.0), inspect=insp, compiler="interpreter"),
+        esm_problem(file, (0.0, 1.0), inspect=insp),
         alg="LSODA",
         reltol=1e-10,
         abstol=1e-12,
@@ -298,7 +297,7 @@ def test_build_inspection_never_changes_the_simulation() -> None:
     """The returned trajectory is bit-identical with and without `inspect`."""
     file = load_string(json.dumps(_RAGGED_DOC))
     plain = solve(
-        esm_problem(file, (0.0, 1.0), compiler="interpreter"),
+        esm_problem(file, (0.0, 1.0)),
         alg="LSODA",
         reltol=1e-10,
         abstol=1e-12,
@@ -308,7 +307,6 @@ def test_build_inspection_never_changes_the_simulation() -> None:
             load_string(json.dumps(_RAGGED_DOC)),
             (0.0, 1.0),
             inspect=BuildInspection(),
-            compiler="interpreter",
         ),
         alg="LSODA",
         reltol=1e-10,

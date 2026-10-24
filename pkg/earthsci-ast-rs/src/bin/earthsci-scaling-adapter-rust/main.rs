@@ -198,7 +198,10 @@ fn canonical_vars(family: &str, doc: &Value) -> Result<Vec<CanonVar>, String> {
             default: v["default"].as_f64().unwrap_or(0.0),
             // The column families are ordered the way native lays them out,
             // so their hand loops read the layout native reads.
-            column_major: matches!(family, "column_search" | "column_sum"),
+            column_major: matches!(
+                family,
+                "column_search" | "column_sum" | "makearray_scan" | "suffix_scan"
+            ),
         })
     };
     let names: Vec<&str> = match family {
@@ -211,7 +214,10 @@ fn canonical_vars(family: &str, doc: &Value) -> Result<Vec<CanonVar>, String> {
         | "gather_index"
         | "column_search"
         | "column_sum"
-        | "join_keyed" => vec!["u"],
+        | "join_keyed"
+        | "makearray_scan"
+        | "suffix_scan"
+        | "ragged_contraction" => vec!["u"],
         "transport_3d" => vec!["q"],
         "source_receptor" => vec!["c", "e"],
         "regrid" => vec!["F_src", "F_tgt"],
@@ -412,6 +418,55 @@ fn build_hand_loop(family: &str, doc: &Value, shape: &Value) -> Result<HandLoop,
         "join_keyed" => HandLoop::JoinKeyed {
             agg: join_keyed_sums(set_size("cells"), set_size("rows"), shape_of("keys")?),
         },
+        "makearray_scan" => HandLoop::MakearrayScan {
+            ncol: shape_of("ncol")?,
+            dz: (1..=shape_of("nlev")?)
+                .map(|l| 100.0 * (1.0 + 0.5 * (l as f64).sin()))
+                .collect(),
+        },
+        "suffix_scan" => HandLoop::SuffixScan {
+            ncol: shape_of("ncol")?,
+            dz: (1..=shape_of("nlev")?)
+                .map(|l| 100.0 * (1.0 + 0.5 * (l as f64).sin()))
+                .collect(),
+        },
+        // The document's own tables: the per-cell count and the padded
+        // neighbour table, read into CSR form once.
+        "ragged_contraction" => {
+            let (_, model) = first_model(doc)?;
+            let eqs = model["equations"].as_array().ok_or("no equations")?;
+            let table = |var: &str| {
+                eqs.iter()
+                    .find(|e| e["lhs"] == var)
+                    .and_then(|e| e["rhs"]["value"].as_array())
+                    .ok_or_else(|| format!("no {var} table"))
+            };
+            let counts = table("nNbr")?;
+            let rows = table("cellsOnCell")?;
+            if counts.len() != rows.len() {
+                return Err("nNbr and cellsOnCell differ in length".into());
+            }
+            let mut start = Vec::with_capacity(rows.len() + 1);
+            let mut nbr = Vec::new();
+            start.push(0u32);
+            for (count, row) in counts.iter().zip(rows) {
+                let len = count.as_u64().ok_or("an nNbr entry is not an integer")? as usize;
+                let row = row.as_array().ok_or("a cellsOnCell row is not an array")?;
+                for v in row
+                    .get(..len)
+                    .ok_or("a cellsOnCell row is shorter than its count")?
+                {
+                    let id = v.as_u64().ok_or("a cellsOnCell entry is not an integer")?;
+                    nbr.push(id as u32 - 1);
+                }
+                start.push(nbr.len() as u32);
+            }
+            HandLoop::Ragged {
+                kappa: param_default(doc, "kappa")?,
+                start,
+                nbr,
+            }
+        }
         other => return Err(format!("no hand loop for family {other:?}")),
     })
 }

@@ -172,6 +172,17 @@ fn place(
                 super::par::ways_for(d.elems(), ways)
             }
         }
+        // A scan along the leading axis splits by its lanes.
+        Instr::Scan {
+            axis: 0, src_shape, ..
+        } => {
+            let lanes: usize = src_shape.iter().skip(1).product();
+            if src_shape.len() < 2 {
+                1
+            } else {
+                super::par::lane_split_ways(lanes, src_shape.iter().product(), ways)
+            }
+        }
         Instr::Gather { out, .. } | Instr::Reduce { out, .. } => {
             let d = &prog.slots[*out as usize];
             if d.scalar {

@@ -1,0 +1,540 @@
+{
+ "esm": "1.2.0",
+ "metadata": {
+  "name": "makearray_prefix_scan_static",
+  "description": "Issue #533: a two-region `makearray` whose first region value is a prefix-scan `faq` (`filter j < k` / `j >= k`, `reduce \"+\"`) and whose second is the rank-0 column total (EarthSciDiscretizations column_nonuniform_1d integral_lev_nodes_cumulative_from_bottom / _to_top after template expansion). On a non-uniform column (dz = 0.5, 1, 1.5, 2) with integrand 1, 2, 3, 4 the terms are 0.5, 2, 4.5, 8: from the surface the interfaces hold 0, 0.5, 2.5, 7 and the total 15 at the top; to the top they hold 15, 14.5, 12.5, 8 and 0. G_top pins the to-top fold ORDER (esm-spec §4.3.1: a reverse scan folds from the top): over 1, -1e16, 1, 1e16 it is exactly 1, 0, 1e16, 1e16, 0, where a bottom-up fold gives 0 at interface 1. Static variant: no state, so both interface fields are build-time observeds.",
+  "authors": [
+   "EarthSciML Authors and Contributors"
+  ],
+  "tags": [
+   "native",
+   "conformance",
+   "makearray",
+   "prefix-scan"
+  ]
+ },
+ "index_sets": {
+  "lev": {
+   "kind": "interval",
+   "size": 4
+  },
+  "lev_nodes": {
+   "kind": "interval",
+   "size": 5
+  }
+ },
+ "models": {
+  "MakearrayPrefixScan": {
+   "tolerance": {
+    "rel": 1e-12,
+    "abs": 1e-12
+   },
+   "variables": {
+    "ze": {
+     "type": "unknown",
+     "units": "m",
+     "shape": [
+      "lev_nodes"
+     ],
+     "description": "Interface heights of a non-uniform column."
+    },
+    "dz": {
+     "type": "unknown",
+     "units": "m",
+     "shape": [
+      "lev"
+     ],
+     "description": "Layer thickness ze[k+1] - ze[k]: 0.5, 1, 1.5, 2."
+    },
+    "F_bottom": {
+     "type": "unknown",
+     "units": "m",
+     "shape": [
+      "lev_nodes"
+     ],
+     "description": "Integral from the surface to each interface: the exclusive prefix scan on interfaces 1..4 and the rank-0 column total at interface 5."
+    },
+    "F_top": {
+     "type": "unknown",
+     "units": "m",
+     "shape": [
+      "lev_nodes"
+     ],
+     "description": "Integral from each interface to the top: the inclusive suffix scan on interfaces 1..4 and 0 at interface 5."
+    },
+    "G_top": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "lev_nodes"
+     ],
+     "description": "Inclusive to-top scan of 1, -1e16, 1, 1e16 (no measure) on interfaces 1..4 and 0 at interface 5, asserted EXACTLY: folded from the top it is 1, 0, 1e16, 1e16; a bottom-up fold of cell 1 gives 0."
+    },
+    "f": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "lev"
+     ],
+     "description": "The layer integrand 1, 2, 3, 4."
+    },
+    "g": {
+     "type": "unknown",
+     "units": "1",
+     "shape": [
+      "lev"
+     ],
+     "description": "The cancellation-sensitive integrand 1, -1e16, 1, 1e16."
+    }
+   },
+   "equations": [
+    {
+     "lhs": "ze",
+     "rhs": {
+      "op": "const",
+      "args": [],
+      "value": [
+       0.0,
+       0.5,
+       1.5,
+       3.0,
+       5.0
+      ]
+     }
+    },
+    {
+     "lhs": "dz",
+     "rhs": {
+      "op": "faq",
+      "args": [],
+      "output_idx": [
+       "k"
+      ],
+      "ranges": {
+       "k": {
+        "from": "lev"
+       }
+      },
+      "expr": {
+       "op": "-",
+       "args": [
+        {
+         "op": "index",
+         "args": [
+          "ze",
+          {
+           "op": "+",
+           "args": [
+            "k",
+            1
+           ]
+          }
+         ]
+        },
+        {
+         "op": "index",
+         "args": [
+          "ze",
+          "k"
+         ]
+        }
+       ]
+      }
+     }
+    },
+    {
+     "lhs": "f",
+     "rhs": {
+      "op": "const",
+      "args": [],
+      "value": [
+       1.0,
+       2.0,
+       3.0,
+       4.0
+      ]
+     }
+    },
+    {
+     "lhs": "g",
+     "rhs": {
+      "op": "const",
+      "args": [],
+      "value": [
+       1.0,
+       -1e+16,
+       1.0,
+       1e+16
+      ]
+     }
+    },
+    {
+     "lhs": "F_bottom",
+     "rhs": {
+      "op": "makearray",
+      "args": [],
+      "regions": [
+       [
+        [
+         1,
+         4
+        ]
+       ],
+       [
+        [
+         5,
+         5
+        ]
+       ]
+      ],
+      "values": [
+       {
+        "op": "faq",
+        "args": [],
+        "output_idx": [
+         "k"
+        ],
+        "reduce": "+",
+        "ranges": {
+         "k": {
+          "from": "lev"
+         },
+         "j": {
+          "from": "lev"
+         }
+        },
+        "filter": {
+         "op": "<",
+         "args": [
+          "j",
+          "k"
+         ]
+        },
+        "expr": {
+         "op": "*",
+         "args": [
+          {
+           "op": "index",
+           "args": [
+            "f",
+            "j"
+           ]
+          },
+          {
+           "op": "index",
+           "args": [
+            "dz",
+            "j"
+           ]
+          }
+         ]
+        }
+       },
+       {
+        "op": "faq",
+        "args": [],
+        "output_idx": [],
+        "reduce": "+",
+        "ranges": {
+         "j": {
+          "from": "lev"
+         }
+        },
+        "expr": {
+         "op": "*",
+         "args": [
+          {
+           "op": "index",
+           "args": [
+            "f",
+            "j"
+           ]
+          },
+          {
+           "op": "index",
+           "args": [
+            "dz",
+            "j"
+           ]
+          }
+         ]
+        }
+       }
+      ]
+     }
+    },
+    {
+     "lhs": "F_top",
+     "rhs": {
+      "op": "makearray",
+      "args": [],
+      "regions": [
+       [
+        [
+         1,
+         4
+        ]
+       ],
+       [
+        [
+         5,
+         5
+        ]
+       ]
+      ],
+      "values": [
+       {
+        "op": "faq",
+        "args": [],
+        "output_idx": [
+         "k"
+        ],
+        "reduce": "+",
+        "ranges": {
+         "k": {
+          "from": "lev"
+         },
+         "j": {
+          "from": "lev"
+         }
+        },
+        "filter": {
+         "op": ">=",
+         "args": [
+          "j",
+          "k"
+         ]
+        },
+        "expr": {
+         "op": "*",
+         "args": [
+          {
+           "op": "index",
+           "args": [
+            "f",
+            "j"
+           ]
+          },
+          {
+           "op": "index",
+           "args": [
+            "dz",
+            "j"
+           ]
+          }
+         ]
+        }
+       },
+       0.0
+      ]
+     }
+    },
+    {
+     "lhs": "G_top",
+     "rhs": {
+      "op": "makearray",
+      "args": [],
+      "regions": [
+       [
+        [
+         1,
+         4
+        ]
+       ],
+       [
+        [
+         5,
+         5
+        ]
+       ]
+      ],
+      "values": [
+       {
+        "op": "faq",
+        "args": [],
+        "output_idx": [
+         "k"
+        ],
+        "reduce": "+",
+        "ranges": {
+         "k": {
+          "from": "lev"
+         },
+         "j": {
+          "from": "lev"
+         }
+        },
+        "filter": {
+         "op": ">=",
+         "args": [
+          "j",
+          "k"
+         ]
+        },
+        "expr": {
+         "op": "index",
+         "args": [
+          "g",
+          "j"
+         ]
+        }
+       },
+       0.0
+      ]
+     }
+    }
+   ],
+   "tests": [
+    {
+     "id": "values",
+     "time_span": {
+      "start": 0.0,
+      "end": 0.0
+     },
+     "assertions": [
+      {
+       "variable": "F_bottom",
+       "time": 0.0,
+       "expected": 0.0,
+       "coords": {
+        "lev_nodes": 1
+       }
+      },
+      {
+       "variable": "F_bottom",
+       "time": 0.0,
+       "expected": 0.5,
+       "coords": {
+        "lev_nodes": 2
+       }
+      },
+      {
+       "variable": "F_bottom",
+       "time": 0.0,
+       "expected": 2.5,
+       "coords": {
+        "lev_nodes": 3
+       }
+      },
+      {
+       "variable": "F_bottom",
+       "time": 0.0,
+       "expected": 7.0,
+       "coords": {
+        "lev_nodes": 4
+       }
+      },
+      {
+       "variable": "F_bottom",
+       "time": 0.0,
+       "expected": 15.0,
+       "coords": {
+        "lev_nodes": 5
+       }
+      },
+      {
+       "variable": "F_top",
+       "time": 0.0,
+       "expected": 15.0,
+       "coords": {
+        "lev_nodes": 1
+       }
+      },
+      {
+       "variable": "F_top",
+       "time": 0.0,
+       "expected": 14.5,
+       "coords": {
+        "lev_nodes": 2
+       }
+      },
+      {
+       "variable": "F_top",
+       "time": 0.0,
+       "expected": 12.5,
+       "coords": {
+        "lev_nodes": 3
+       }
+      },
+      {
+       "variable": "F_top",
+       "time": 0.0,
+       "expected": 8.0,
+       "coords": {
+        "lev_nodes": 4
+       }
+      },
+      {
+       "variable": "F_top",
+       "time": 0.0,
+       "expected": 0.0,
+       "coords": {
+        "lev_nodes": 5
+       }
+      },
+      {
+       "variable": "G_top",
+       "time": 0.0,
+       "expected": 1.0,
+       "coords": {
+        "lev_nodes": 1
+       },
+       "tolerance": {
+        "rel": 0.0,
+        "abs": 0.0
+       }
+      },
+      {
+       "variable": "G_top",
+       "time": 0.0,
+       "expected": 0.0,
+       "coords": {
+        "lev_nodes": 2
+       },
+       "tolerance": {
+        "rel": 0.0,
+        "abs": 0.0
+       }
+      },
+      {
+       "variable": "G_top",
+       "time": 0.0,
+       "expected": 1e+16,
+       "coords": {
+        "lev_nodes": 3
+       },
+       "tolerance": {
+        "rel": 0.0,
+        "abs": 0.0
+       }
+      },
+      {
+       "variable": "G_top",
+       "time": 0.0,
+       "expected": 1e+16,
+       "coords": {
+        "lev_nodes": 4
+       },
+       "tolerance": {
+        "rel": 0.0,
+        "abs": 0.0
+       }
+      },
+      {
+       "variable": "G_top",
+       "time": 0.0,
+       "expected": 0.0,
+       "coords": {
+        "lev_nodes": 5
+       },
+       "tolerance": {
+        "rel": 0.0,
+        "abs": 0.0
+       }
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

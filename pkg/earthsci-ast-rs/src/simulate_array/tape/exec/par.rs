@@ -128,6 +128,17 @@ pub(super) fn ways_for(n: usize, ways: usize) -> usize {
     }
 }
 
+/// The workers a scan along the leading axis of `elems` elements in `lanes`
+/// lanes splits across under call width `ways`: all of them when each worker
+/// gets whole cache lines of lanes and enough elements, else none.
+pub(super) fn lane_split_ways(lanes: usize, elems: usize, ways: usize) -> usize {
+    if ways > 1 && lanes >= ways * reduce_cells_floor() && ways_for(elems, ways) > 1 {
+        ways
+    } else {
+        1
+    }
+}
+
 /// Lanes each worker of a split lane program must get.
 const MIN_LANES_PER_WORKER: usize = 32;
 
@@ -239,6 +250,16 @@ pub(super) fn split_ways(fs: &FusedSpec, ways: usize) -> usize {
             1
         };
     }
+    // Scans along the leading axis restart once, at the box's first row, so
+    // each inner position (a column) is a lane of its own: the split takes
+    // whole columns, as a reduction's does, and every lane keeps its order.
+    if let Some(cols) = leading_scan_cols(fs) {
+        return if cols >= ways * reduce_cells_floor() {
+            by_work(n)
+        } else {
+            1
+        };
+    }
     match (&fs.reduce, scan_row(fs)) {
         (Some(_), Some(_)) => 1,
         // Every worker folds whole cells, so the split needs only enough
@@ -276,6 +297,30 @@ fn fused_ways(n: usize, cost: impl Fn() -> usize, ways: usize) -> usize {
     } else {
         1
     }
+}
+
+/// The inner positions of a group whose every absorbed scan runs along the
+/// box's leading axis (one restart, at flat offset 0, every inner position a
+/// lane) over the same lanes, and whose absorbed reduction, if any, folds
+/// into those same positions: the period a split by columns cuts at. `None`
+/// otherwise.
+pub(super) fn leading_scan_cols(fs: &FusedSpec) -> Option<usize> {
+    let n: usize = fs.shape.iter().product();
+    let mut cols = None;
+    for m in &fs.micro {
+        if let MicroOp::Scan { row, post, .. } = m {
+            let (row, post) = (*row as usize, *post as usize);
+            if row * post != n || cols.is_some_and(|c| c != post) {
+                return None;
+            }
+            cols = Some(post);
+        }
+    }
+    let cols = cols?;
+    if fs.pre.is_some() || fs.reduce.as_ref().is_some_and(|r| r.n_inner != cols) {
+        return None;
+    }
+    Some(cols)
 }
 
 /// The flat period a group's absorbed scans restart at, `row * post` (every
@@ -809,10 +854,12 @@ impl SplitGeom {
         // cells each worker folds into are its own.
         // A pre-reduction splits its inner positions likewise: each worker
         // folds and consumes whole columns of its own.
-        let (n, period) = match (&fs.reduce, &fs.pre) {
-            (Some(r), _) => (r.n_inner, r.n_inner),
-            (None, Some(p)) => (p.n_inner, p.n_inner),
-            (None, None) => (fs.shape.iter().product(), 0),
+        let lead = leading_scan_cols(fs);
+        let (n, period) = match (&fs.reduce, &fs.pre, lead) {
+            (_, _, Some(cols)) => (cols, cols),
+            (Some(r), _, _) => (r.n_inner, r.n_inner),
+            (None, Some(p), _) => (p.n_inner, p.n_inner),
+            (None, None, None) => (fs.shape.iter().product(), 0),
         };
         // Row starts, for a group with an absorbed scan (see `split_ways`);
         // else cache lines of the accumulator or the first output.
@@ -824,7 +871,8 @@ impl SplitGeom {
         SplitGeom {
             n,
             period,
-            row: scan_row(fs),
+            // A split by columns cuts anywhere: every lane restarts at row 0.
+            row: if lead.is_some() { None } else { scan_row(fs) },
             anchor,
             ways,
             // Each worker of a split reduction folds into cells of its own,
@@ -889,6 +937,32 @@ unsafe fn fused_share(sh: &Shared, wk: &mut FusedWorker, g: &SplitGeom, w: usize
     }
     unsafe {
         fill_whole(sh.fs, sh.bases, sh.whole_src, lo, hi, period);
+        // A group with a reverse scan visits its rows from the last: the
+        // share's columns of each row, one row at a time.
+        if let Some((rows, len)) = sh.fs.rows_reversed() {
+            debug_assert_eq!(period, len, "a reverse group splits by columns");
+            for r in (0..rows).rev() {
+                let win = Window {
+                    lo: r * len + lo,
+                    hi: r * len + hi,
+                    period: 0,
+                    node_elems: sh.node_elems,
+                };
+                run_fused_window(
+                    sh.simd,
+                    sh.fs,
+                    sh.svals,
+                    sh.bases,
+                    sh.outs,
+                    red,
+                    sh.idx,
+                    &mut wk.fregs,
+                    &mut wk.cursor,
+                    win,
+                );
+            }
+            return;
+        }
         run_fused_window(
             sh.simd,
             sh.fs,

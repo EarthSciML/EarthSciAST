@@ -899,7 +899,7 @@ fn scans_assemblies_and_promoted_contractions_lower() {
 }
 
 /// A prefix-scan document over `n` cells: one inclusive and one exclusive
-/// running sum, both read by the state's tendency.
+/// running sum and one reverse (suffix) sum, all read by the state's tendency.
 fn scan_doc(n: usize) -> String {
     let u_j = r#"{"op": "index", "args": ["u", "j"]}"#;
     format!(
@@ -911,7 +911,8 @@ fn scan_doc(n: usize) -> String {
     "variables": {{
       "u": {{"type": "unknown", "units": "1", "shape": ["x"], "default": 1.0}},
       "incl": {{"type": "unknown", "units": "1", "shape": ["x"]}},
-      "excl": {{"type": "unknown", "units": "1", "shape": ["x"]}}
+      "excl": {{"type": "unknown", "units": "1", "shape": ["x"]}},
+      "suff": {{"type": "unknown", "units": "1", "shape": ["x"]}}
     }},
     "equations": [
       {{"lhs": "incl", "rhs": {{"op": "faq", "args": [], "output_idx": ["i"],
@@ -922,13 +923,19 @@ fn scan_doc(n: usize) -> String {
           "ranges": {{"i": {{"from": "x"}}, "j": {{"from": "x"}}}},
           "filter": {{"op": "<", "args": ["j", "i"]}},
           "expr": {{"op": "*", "args": [{u_j}, 0.3]}}}}}},
+      {{"lhs": "suff", "rhs": {{"op": "faq", "args": [], "output_idx": ["i"],
+          "ranges": {{"i": {{"from": "x"}}, "j": {{"from": "x"}}}},
+          "filter": {{"op": ">=", "args": ["j", "i"]}},
+          "expr": {{"op": "*", "args": [{u_j}, 0.7]}}}}}},
       {{"lhs": {{"op": "faq", "args": [], "output_idx": ["i"],
                "expr": {{"op": "D", "args": [{{"op": "index", "args": ["u", "i"]}}], "wrt": "t"}},
                "ranges": {{"i": {{"from": "x"}}}}}},
        "rhs": {{"op": "faq", "args": [], "output_idx": ["i"], "ranges": {{"i": {{"from": "x"}}}},
-          "expr": {{"op": "-", "args": [
-            {{"op": "index", "args": ["incl", "i"]}},
-            {{"op": "index", "args": ["excl", "i"]}}]}}}}}}
+          "expr": {{"op": "+", "args": [
+            {{"op": "-", "args": [
+              {{"op": "index", "args": ["incl", "i"]}},
+              {{"op": "index", "args": ["excl", "i"]}}]}},
+            {{"op": "index", "args": ["suff", "i"]}}]}}}}}}
     ]
   }}}}
 }}"#
@@ -937,8 +944,8 @@ fn scan_doc(n: usize) -> String {
 
 /// `Instr::Scan` lowers to one `while` loop, so the emitted program does not
 /// grow with the scanned length — and because the loop folds plane after
-/// plane in ascending order, each running sum is the interpreter's own
-/// association, bit for bit.
+/// plane in the sweep's order (descending for the suffix sum), each running
+/// sum is the interpreter's own association, bit for bit.
 #[test]
 fn scan_lowering_is_flat_in_the_scanned_length() {
     if !runtime_available() {
@@ -968,7 +975,7 @@ fn scan_lowering_is_flat_in_the_scanned_length() {
         }
         Err(CompileRhsError::Runtime(m)) => panic!("xla runtime: {m}"),
     };
-    assert_eq!(program.opcode_count("Scan"), 2);
+    assert_eq!(program.opcode_count("Scan"), 3);
     let params: HashMap<String, f64> = HashMap::new();
     let pv = compiled.debug_resolve_params(&params);
     let m = compiled.state_variable_names().len();
