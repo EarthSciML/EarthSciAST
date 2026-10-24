@@ -393,7 +393,14 @@ export type { TemplateResolveOptions, TemplateSchemaError } from './template-imp
 // Document-scoped solver hints (esm-spec §2.2): the spec-version gate and the
 // §2.2.2 tolerance resolution order — the two parts of the block that are NOT
 // advisory. The Solver TYPE itself comes from the generated schema types.
-export { rejectSolverPreV11, resolveTolerances, DEFAULT_ABSTOL, DEFAULT_RELTOL } from './solver.js'
+export {
+  rejectSolverPreV11,
+  rejectSolverExternalPreV13,
+  solverExternalLocation,
+  resolveTolerances,
+  DEFAULT_ABSTOL,
+  DEFAULT_RELTOL,
+} from './solver.js'
 
 // Package metadata — two DIFFERENT numbers, and they used to share a name.
 // `SCHEMA_VERSION` is the `.esm` format version this build implements,
