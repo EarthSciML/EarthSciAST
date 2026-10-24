@@ -1,9 +1,10 @@
 # Range-restricted, operator-restricted right-hand sides (`range_restricted_rhs`)
 
-Fixtures for operator selection, tiles and lanes (issue #540, RFC U3):
-API_SPEC.md §5.8.1 is the surface, CONFORMANCE_SPEC.md §5.49 the gate. Every
-check is **bitwise** against the same binding's whole-domain evaluation of the
-same selected program under the same compiler, `native`. There are no rhs
+Fixtures for operator selection, tiles and lanes (issue #540, RFC U3).
+API_SPEC.md §5.8, "Range-restricted right-hand sides", is the surface;
+CONFORMANCE_SPEC.md §5.49 is the gate. Every check is **bitwise** against the
+same binding's whole-domain evaluation of the same selected program under the
+same compiler, `native`. There are no rhs
 numbers in this directory: the reference for a tile or a lane is the binding's
 own `select(prog; writes, terms)` evaluated over the whole domain.
 
@@ -143,11 +144,12 @@ sets a lane's `cells` column indexes, in order), `capacity`, `batches`,
 `negative_control`.
 
 1. `op = select(prog; selection)`; `G` as above.
-2. `lanes(op, lane_kind; lane_sets)` (Rust: `op.lanes(kind, capacity)`).
+2. Julia `lanes(op, kind, lane_sets)` with `kind` `:cells` or `:columns`; Rust
+   `op.lanes(LaneKind::Cells { sets } | LaneKind::Columns { sets }, capacity)`.
 3. For every batch: `cells` is a `capacity`-long list of global indices (each
    a `[lane_sets...]` tuple), stored as an `Int32` `[D, capacity]` matrix; `n`
    lanes are meaningful. Gather `u_L` and `aux_L` from the global state at those
-   cells in the lane layout (API_SPEC §5.8.1); prefill `du_L` with NaN; call
+   cells in the lane layout (API_SPEC §5.8); prefill `du_L` with NaN; call
    with `n`. For every lane `l <= n` and every element of every written
    variable, `du_L` equals `G` at `cells[:, l]` bitwise. Then fill the lane
    input buffers with `gather_lane_inputs!` and call the pre-gathered variant:

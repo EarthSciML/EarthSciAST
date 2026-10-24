@@ -544,10 +544,23 @@ const (
 	// Raised at build, naming the compiler, the rule (an equation or an
 	// observed, component-qualified) and the reason.
 	CodeCompilerRefusedRule = "compiler_refused_rule"
+	// CodeRangeHaloInsufficient: a tile reads an in-domain cell outside its
+	// storage box with no periodic image in it (API_SPEC §5.8,
+	// "Range-restricted right-hand sides").
+	CodeRangeHaloInsufficient = "range_halo_insufficient"
+	// CodeRangeGlobalLocality: a tile restriction or halo report meets a 0-d
+	// state write, or a contraction, scan or data-dependent gather along a
+	// decomposed axis.
+	CodeRangeGlobalLocality = "range_global_locality"
+	// CodeRangeSelectionWritesIncomplete: an operator selection's `writes`
+	// omits a variable one of its selected contributions writes.
+	CodeRangeSelectionWritesIncomplete = "range_selection_writes_incomplete"
+	// CodeRangeBoxInvalid: a malformed decomposition, tile box or lane-set list.
+	CodeRangeBoxInvalid = "range_box_invalid"
 )
 
-// The three compiler codes above are registered, never raised here: Go does not
-// simulate, and the §9.6.6 code table is cross-language uniform.
+// The compiler and range codes above are registered, never raised here: Go does
+// not simulate, and the §9.6.6 code table is cross-language uniform.
 
 // --- Spec enum literal: ModelVariable.Type (esm-spec §6.3). esm 1.0.0 declares
 // exactly TWO. Whether an unknown is a state, an observed, or an algebraic
