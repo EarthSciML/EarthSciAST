@@ -884,7 +884,8 @@ take one. A program carries the flattened system it was built from, so
   parameter vector — `RhsProgram::parameter_names()` gives its order and
   `RhsProgram::default_parameters()` the Problem's values — and `eval_into`
   returns `Result<(), SimulateError>`. `TileProgram` and `LaneProgram` are `Send
-  + Sync`. The RFC's generic `T: StateScalar`, its `ForcingSet` argument and its
+  + Sync` where that costs nothing; where it does not, the type's documentation
+  says what holds it back (U4 owns the audit). The RFC's generic `T: StateScalar`, its `ForcingSet` argument and its
   `RhsError` are U4's; here the state is `f64`, the forcing is the buffers the
   program was built against, and errors are `SimulateError`.
 
