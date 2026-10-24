@@ -12,10 +12,12 @@ accessor. Resolution is a pure string function, so it is required of all five
 bindings, and this suite pins one answer per document.
 
 The rule is the §8.2.1 table without its substitution-led row: a URL is
-unchanged; an absolute path has its dot segments removed and is prefixed
+unchanged; an absolute path (one beginning `/`, or a drive letter `C:/` /
+`C:\`) has its dot segments removed, is percent-encoded and is prefixed
 `file://`; anything else is joined onto *D* (the directory of the file read,
 the process working directory for a string load, or an explicit base), dot
-segments removed, prefixed `file://`. A `${` is refused at load.
+segments removed, percent-encoded, prefixed `file://`. A `${` in the ROOT
+document's `external` is refused at load, before schema validation.
 
 Unlike a `url_template`, the resolved location is **not** written into the
 document. The typed document keeps the authored string, `emit` writes the
@@ -29,8 +31,9 @@ accessor returns — where `data_source_url` asserts one.
 |------|------------|
 | `manifest.json` | The SHARED pin: every case, its expected `external`, location and emitted `solver` block, the refusal contract, the invariance pair and the advisory-gate fixture. |
 | `fixtures/<row>.esm` | One document per row of the §2.2.6 table: `dot_relative`, `bare_relative`, `parent_relative`, `dot_segments_collapse`, `absolute_path`, `file_url`, `https_url`. A document has one `external`, so each row is its own file. |
+| `fixtures/space_hash.esm`, `fixtures/non_ascii.esm`, `fixtures/absolute_encoded.esm`, `fixtures/url_not_reencoded.esm` | Percent-encoding: a space and a `#`, non-ASCII names, a literal pin including `%` → `%25`, and a URL whose escapes are left alone. |
 | `fixtures/env_var.esm` | `"${RUNS}/x.json"` — must be REFUSED. |
-| `fixtures/mount_*.esm`, `fixtures/leaves/leaf_with_external.esm` | A root mounting a leaf whose `solver` carries `external`, at both mount forms. The root reports its own value, or none. |
+| `fixtures/mount_*.esm`, `fixtures/leaves/*.esm` | A root mounting a leaf whose `solver` carries `external`, at both mount forms. The root reports its own value, or none. Two leaves carry an `external` that would be refused on its own — one holding `${`, one at esm 1.2.0 — and the root still loads: the leaf's block does not cross the mount, so neither load-time check applies to it. |
 | `invariance/with_external.esm`, `invariance/without_external.esm` | The same model with and without `external`, for each binding's flatten test. |
 
 The advisory-gate fixture lives with the other simulation fixtures, at
@@ -64,13 +67,23 @@ Each entry of `fixtures`:
 | `load` | `"path"`: load the fixture by its path (the binding's path loader). `"string"`: read the file's text and load it with the binding's string loader, so no file directory is recorded. |
 | `base` | `null`, or `{"repo_path": <dir>}`: the **explicit base** to pass to the accessor's base argument, made absolute against the repository root. It replaces the recorded *D*. |
 | `external` | The string the typed document holds at `solver.external` after load, or `null` when the root has none. |
-| `location` | What the accessor returns: `{"repo_path": p}` → `"file://" + <repo root>/p`; `{"cwd_path": p}` → `"file://" + <process working directory>/p`, dot segments removed; `{"verbatim": s}` → `s`; `null` → no location (`nothing` / `None` / `null` / Rust `Ok(None)` / Go `nil`, `false` or `""`, whatever that binding's accessor returns for "none"). |
+| `location` | What the accessor returns: `{"repo_path": p}` → `"file://" + encode(<repo root>/p)`; `{"cwd_path": p}` → `"file://" + encode(<process working directory>/p)`, dot segments removed; `{"verbatim": s}` → `s`, compared as written; `null` → no location (`nothing` / `None` / `null` / Rust `Ok(None)` / Go `nil`, `false` or `""`, whatever that binding's accessor returns for "none"). |
 | `solver` | The root document's `solver` block exactly as `emit` writes it, compared as parsed JSON (numbers numerically). `null` means the emitted document has no `solver` key. |
 | `expect: "refused"` + `error_code` + `message_contains` | The load MUST fail with `error_code`, and the message MUST contain every listed substring. |
 
 `repo_path` and `cwd_path` are the only way an absolute location enters an
 expectation: a resolved location is machine-specific, so a golden holding one
 would pass only on the machine that wrote it.
+
+`encode` is the esm-spec §2.2.6 percent-encoding, and a consumer applies it to
+the WHOLE expanded path — the repository root or working directory included,
+since a checkout may live under a directory whose name needs it: each byte of
+the path's UTF-8 encoding outside `A`–`Z` `a`–`z` `0`–`9` `-` `.` `_` `~` `/`
+`:` becomes `%XX`, uppercase hex. So `space_hash`'s pin
+`tests/conformance/solver_external/fixtures/runs/case #2.json` expects
+`file://<encoded repo root>/tests/conformance/solver_external/fixtures/runs/case%20%232.json`.
+Each consumer writes its own small `encode` for this; it MUST NOT call the
+binding's accessor or resolver to build an expectation.
 
 ## How a binding consumes it
 
