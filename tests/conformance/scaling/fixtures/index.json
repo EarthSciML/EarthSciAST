@@ -289,6 +289,70 @@
    "shape": {
     "keys": 250
    }
+  },
+  {
+   "family": "makearray_scan",
+   "n": 100,
+   "path": "makearray_scan/makearray_scan_N100.esm",
+   "n_cells": 100,
+   "n_states": 100,
+   "shape": {
+    "ncol": 5,
+    "nlev": 20
+   }
+  },
+  {
+   "family": "makearray_scan",
+   "n": 1000,
+   "path": "makearray_scan/makearray_scan_N1000.esm",
+   "n_cells": 1000,
+   "n_states": 1000,
+   "shape": {
+    "ncol": 50,
+    "nlev": 20
+   }
+  },
+  {
+   "family": "suffix_scan",
+   "n": 100,
+   "path": "suffix_scan/suffix_scan_N100.esm",
+   "n_cells": 100,
+   "n_states": 100,
+   "shape": {
+    "ncol": 5,
+    "nlev": 20
+   }
+  },
+  {
+   "family": "suffix_scan",
+   "n": 1000,
+   "path": "suffix_scan/suffix_scan_N1000.esm",
+   "n_cells": 1000,
+   "n_states": 1000,
+   "shape": {
+    "ncol": 50,
+    "nlev": 20
+   }
+  },
+  {
+   "family": "ragged_contraction",
+   "n": 100,
+   "path": "ragged_contraction/ragged_contraction_N100.esm",
+   "n_cells": 100,
+   "n_states": 100,
+   "shape": {
+    "side": 10
+   }
+  },
+  {
+   "family": "ragged_contraction",
+   "n": 1000,
+   "path": "ragged_contraction/ragged_contraction_N1000.esm",
+   "n_cells": 1024,
+   "n_states": 1024,
+   "shape": {
+    "side": 32
+   }
   }
  ]
 }

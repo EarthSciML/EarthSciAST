@@ -1,0 +1,37 @@
+{
+  "fixture": "nested_window_reduction_static",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "values",
+      "assertion_idx": 1,
+      "variable": "W",
+      "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 2,
+      "variable": "W",
+      "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 3,
+      "variable": "W",
+      "actual": 1e+16
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 4,
+      "variable": "W",
+      "actual": 1e+16
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 5,
+      "variable": "Wc",
+      "actual": 0.0
+    }
+  ]
+}

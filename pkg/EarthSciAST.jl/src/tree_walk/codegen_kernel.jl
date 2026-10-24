@@ -272,8 +272,9 @@ mutable struct _CGCtx
     olnext::IdDict{Any,Tuple{Int,Int}}
     subks::IdDict{Any,Bool}
     sidememo::IdDict{Any,Tuple{Int,Int}}
-    # A fused scan's consumer body (scan_fused.jl): `nothing`, or `(K, ix, v)`
-    # — kernel `K`'s descriptor `ix` reads as the local `v`.
+    # A fused scan's consumer body (scan_fused.jl): `nothing`, `(K, ix, v)` —
+    # kernel `K`'s descriptor `ix` reads as the local `v` — or `(K, Dict(ix =>
+    # v))` for several descriptors.
     subst::Any
 end
 _CGCtx(budget::Int, shared_cache::Union{Nothing,_CSECache}=nothing; nst::Int=0) =
@@ -756,7 +757,15 @@ function _cg_emit(ctx::_CGCtx, kc::_CGKernCtx, nd::_Node)
     k = nd.kind
     if k === _NK_ACCESS
         sb = ctx.subst
-        (sb !== nothing && kc.K === sb[1] && nd.idx == sb[2]) && return sb[3]
+        if sb !== nothing && kc.K === sb[1]
+            # One descriptor `(K, ix, v)`, or several `(K, Dict(ix => v))`.
+            if sb[2] isa Int
+                nd.idx == sb[2] && return sb[3]
+            else
+                v = get(sb[2], nd.idx, nothing)
+                v === nothing || return v
+            end
+        end
         return _cg_fetch(ctx, kc, kc.K.acc[nd.idx], (kc.K.acc, nd.idx))
     elseif k === _NK_LITERAL
         return nd.literal
@@ -2341,6 +2350,8 @@ function _node_loop_reach(nd::_Node)
         return r
     elseif nd.kind === _NK_CONTRACTION_LOOP && pl isa _ContractLoop
         return max(length(pl.lo:pl.step:pl.hi), 1)
+    elseif nd.kind === _NK_RAGGED_LOOP && pl isa _RaggedLoop
+        return pl.reach
     end
     return 1
 end

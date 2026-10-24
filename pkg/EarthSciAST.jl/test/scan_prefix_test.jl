@@ -172,17 +172,34 @@ end
         @test _bits(_scan_du(m).du) == _bits(b.du)
     end
 
-    @testset "reverse scan declines the rewrite and stays correct" begin
-        # `j >= i` is a genuine reverse scan: the spec fixes ascending-j
-        # accumulation for every variant, so consecutive reverse cells share no
-        # partial result and the triangular path is the only correct one.
-        for filt in (">=", ">")
-            m = _scan_model(8; filt=filt)
+    @testset "reverse scan folds descending, in one pass" begin
+        # `j >= i` / `j > i` fold from the TOP (esm-spec §4.3.1): cell i is
+        # `((0̄ ⊕ u_N) ⊕ u_{N-1}) ⊕ … ⊕ u_i`, so one accumulator walking down
+        # the axis computes every cell, and the interpreter folds the same way.
+        for filt in (">=", ">"), red in ("+", "*", "max", "min"), n in (1, 2, 8, 33)
+            m = _scan_model(n; filt=filt, reduce=red)
             a = _scan_du(m)
-            @test a.diag.n_scan_folds == 0
-            @test get(a.tally, :scan, 0) == 0
-            @test _bits(a.du) == _bits(_scan_du(m; tier=:ref).du)
+            @test a.diag.n_scan_folds == 1
+            @test get(a.tally, :scan, 0) == 1
+            ref = _scan_du(m; tier=:ref)
+            @test _bits(a.du) == _bits(ref.du)
+            if red == "+"
+                # The descending left fold, by hand.
+                u = Float64[_sc_val(k) for k in 1:(2n)]
+                uv = [u[a.vm["u[$j]"]] for j in 1:n]
+                want = [foldl(+, (uv[j] for j in n:-1:1 if (filt == ">=" ? j >= i : j > i));
+                              init=0.0) for i in 1:n]
+                @test _bits([ref.du[a.vm["c[$i]"]] for i in 1:n]) == _bits(want)
+            end
         end
+        # The mirrored spelling `i <= j` is the same reverse scan.
+        m = _scan_model(8; filt=">=")
+        mirror = _scan_model(8; filt=">=")
+        f = mirror.equations[1].rhs
+        mirror.equations[1] = ESM.Equation(mirror.equations[1].lhs,
+            ESM.reconstruct(f; filter=_op("<=", _v("i"), _v("j"))))
+        @test _bits(_scan_du(mirror).du) == _bits(_scan_du(m).du)
+        @test _scan_du(mirror).diag.n_scan_folds == 1
     end
 
     @testset "body referencing the scanned symbol declines" begin
@@ -330,9 +347,8 @@ end
         # A VARIABLE-VALENCE contracted bound unwraps too: the whole-array
         # contraction nest takes the bare producer with each cell's admitted
         # indices as a table, where the gather form hides the contraction from
-        # it and leaves the per-cell build. The bare form's fold is seeded with
-        # 0̄ where the gather form's started from the first term, so the two
-        # differ in value only when every term of a cell is -0.0 (bare: 0.0).
+        # it and leaves the per-cell build. Both forms fold from the 0̄ seed
+        # (esm-spec §4.3.1), so they agree bit for bit.
         varb = mkagg(; filt=nothing, jrange=Any[1, "nedges"])
         @test unwrapped(varb)
         # A non-identity gather (a real reindex) is left alone.

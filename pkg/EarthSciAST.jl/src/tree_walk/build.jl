@@ -2822,12 +2822,12 @@ function _compile_discrete_fill(name::String, def::OpExpr, dims::Vector{Int},
     blk = name => (ones(Int, nd), copy(dims))
     L = StateLayout(String[], [blk])
     avi = Dict{String,Tuple{Vector{Int},Vector{Int}}}(blk)
-    feq = _materialized_fill_equation(name, def, dims)
+    feqs = _materialized_fill_equations(name, def, dims)
     rec = _build_record()
     n0 = rec === nothing ? 0 : length(rec.rules)
     se, pcs, aks, sfs, acs = _with_own_state_slot_tables() do
         _with_rule_alias(name, name) do
-            _compile_derivative_equations(Equation[feq], resolved_obs, avi, L,
+            _compile_derivative_equations(feqs, resolved_obs, avi, L,
                 const_arrays, pgather, param_sym_set, reg_funcs, length(cvec))
         end
     end
@@ -2891,6 +2891,12 @@ end
     n = s.n
     @inbounds(i <= n ? (s.u[i] = v) : (s.o[i - n] = v))
     return s
+end
+# One half of the view, when slots `lo:hi` all fall in it (scan.jl).
+function _scan_dense(du::_ObsSplitVec, lo::Int, hi::Int)
+    lo > du.n && return (du.o, du.n)
+    hi <= du.n && return (du.u, 0)
+    return (du, 0)
 end
 
 # The observed buffers. Two of them — Float64 plus a lazily-allocated `alt`
@@ -3040,6 +3046,173 @@ function _materialized_fill_equation(name::String, def::ASTExpr, dims::Vector{In
                  expr_body=OpExpr("D", ASTExpr[OpExpr("index", idx_args)]; wrt="t"))
     rhs = OpExpr("index", ASTExpr[def, (VarExpr(l) for l in loops)...])
     return Equation(lhs, rhs)
+end
+
+# The fill equations of one materialized array observed: the single gather-form
+# equation above, or, for a `makearray` with a filtered or join-gated aggregate
+# region value, one equation per REGION.
+#
+# Why per region: with the cell index symbolic, `index(makearray(...), i…)`
+# cannot pick its region, so the whole fill declines every compile-once tier and
+# is left to the per-cell build. A region value that CONTRACTS through a filter
+# is then a per-cell triangular fold, and a strict compiler refuses it. A
+# prefix-scan region (esm-spec §4.3.1) beside a rank-0 column-total region
+# (`integral_lev_nodes_cumulative_from_bottom` in EarthSciDiscretizations) is
+# the shape. Each region's equation runs over that region's own box and carries
+# exactly the value `_resolve_index_of_makearray` picks for its cells:
+#   * an array producer of the makearray's rank, as the gather
+#     `index(<value>, i…)` (unwrapped to the bare aggregate downstream, which is
+#     what lets `_detect_prefix_scan` see a scan);
+#   * an array producer of lower rank, as the gather at the region's
+#     non-singleton axes, unwrapped to the bare aggregate there when it
+#     contracts;
+#   * anything else (a rank-0 aggregate, a scalar expression), bare: its value
+#     does not depend on the cell.
+#
+# Split only when the regions are constant, pairwise disjoint and tile the whole
+# box, so "last region wins" and the 0 default for uncovered cells never arise
+# and the per-region equations write each cell exactly once. The reference build
+# (`compiler=:interpreter`, affine tier off) keeps the one gather equation, so
+# the oracle is untouched.
+function _materialized_fill_equations(name::String, def::ASTExpr, dims::Vector{Int})
+    split = _stencil_disabled() ? nothing : _makearray_region_fills(name, def, dims)
+    return split === nothing ? Equation[_materialized_fill_equation(name, def, dims)] : split
+end
+
+# A strict forward scan region beside the region holding its column total is
+# ONE staggered prefix scan (`_scan_term_iters`): with the scan's terms on
+# `1..n` along axis `d`, `F[…, k] = ⊕_{j<k} term_j` for `k ≤ n` and the total
+# `⊕_{j≤n} term_j` at `k = n+1` are the same recurrence run one step further,
+# the shape `integral_lev_nodes_cumulative_from_bottom` lowers to. Recognized,
+# the total is the scan's last accumulation instead of a second fold over the
+# column: the same terms in the same left-to-right order from the same 0̄ seed
+# the total's own fold uses (`_combine_with_reducer` in the gather form, the
+# bare contraction's in every tier; esm-spec §4.3.1), so the same bits. Returns that scan as one array aggregate over the whole
+# box, or `nothing`.
+#
+# Required: two regions, the first the whole box but its last cell along `d`
+# (from 1), the second that last cell; the first value a strict forward scan
+# (`filter j < k`, no join) whose output axes are the makearray's, with `k` at
+# axis `d` and `j` drawing the same range as `k`; the second an aggregate with
+# no filter or join, of the scan's reduce, over the scan's other output axes
+# in order, contracting `j` over the same range, with the same body once its
+# output names are the scan's; and `j`'s range the constant `1..n-1` where the
+# box has `n` cells along `d`.
+function _makearray_staggered_scan(boxes, values, dims::Vector{Int})
+    (length(boxes) == 2 && length(values) == 2) || return nothing
+    nd = length(dims)
+    A, B = values
+    (A isa OpExpr && B isa OpExpr) || return nothing
+    a, b = A::OpExpr, B::OpExpr
+    (_is_faq_op(a.op) && _is_faq_op(b.op)) || return nothing
+    (a.join === nothing && a.join_gates === nothing && b.join === nothing &&
+     b.join_gates === nothing && b.filter === nothing) || return nothing
+    (a.expr_body === nothing || b.expr_body === nothing ||
+     a.ranges === nothing || b.ranges === nothing) && return nothing
+    (a.reduce == b.reduce && a.semiring == b.semiring) || return nothing
+    aout = _output_idx_strings(a)
+    bout = _output_idx_strings(b)
+    (length(aout) == nd && length(bout) == nd - 1) || return nothing
+    f = a.filter
+    (f isa OpExpr && (f::OpExpr).op == "<" && length((f::OpExpr).args) == 2) || return nothing
+    jv, kv = (f::OpExpr).args
+    (jv isa VarExpr && kv isa VarExpr) || return nothing
+    j, k = (jv::VarExpr).name, (kv::VarExpr).name
+    d = findfirst(isequal(k), aout)
+    d === nothing && return nothing
+    acon = _contracted_index_names(a.ranges, aout)
+    bcon = _contracted_index_names(b.ranges, bout)
+    (acon == [j] && bcon == [j]) || return nothing
+    same(x, y) = repr(x) == repr(y)
+    (same(a.ranges[k], a.ranges[j]) && same(b.ranges[j], a.ranges[j])) || return nothing
+    rest = [aout[e] for e in 1:nd if e != d]
+    for (x, y) in zip(bout, rest)
+        same(b.ranges[x], a.ranges[y]) || return nothing
+    end
+    n = dims[d]
+    # The terms must be exactly `1..n-1`, or the total would sum a different set.
+    jr = a.ranges[j]
+    (jr isa AbstractVector && _is_const_int_range(jr) &&
+     _expand_int_range(collect(jr)) == 1:(n - 1)) || return nothing
+    for e in 1:nd
+        want_lo, want_hi = e == d ? (1, n - 1) : (1, dims[e])
+        boxes[1][e] == (want_lo, want_hi) || return nothing
+        boxes[2][e] == (e == d ? (n, n) : (want_lo, want_hi)) || return nothing
+    end
+    ren = Dict{String,ASTExpr}(bout[i] => VarExpr(rest[i]) for i in eachindex(bout) if bout[i] != rest[i])
+    bbody = isempty(ren) ? b.expr_body : _sub_preserving(b.expr_body, ren)
+    same(bbody, a.expr_body) || return nothing
+    ranges = Dict{String,Any}(String(x) => v for (x, v) in a.ranges)
+    ranges[k] = Any[1, n]
+    return reconstruct(a; ranges=ranges)
+end
+
+_region_bound_int(x::Integer) = Int(x)
+_region_bound_int(x::ASTExpr) = _try_const_int(x, Dict{String,Any}())
+_region_bound_int(x) = nothing
+
+_is_gated_aggregate(v) = v isa OpExpr && _is_faq_op((v::OpExpr).op) &&
+    ((v::OpExpr).filter !== nothing || (v::OpExpr).join_gates !== nothing)
+
+function _makearray_region_fills(name::String, def::ASTExpr, dims::Vector{Int})
+    def isa OpExpr || return nothing
+    ma = def::OpExpr
+    ma.op == "makearray" || return nothing
+    (ma.regions === nothing || ma.values === nothing) && return nothing
+    regions, values = ma.regions, ma.values
+    (isempty(regions) || length(regions) != length(values)) && return nothing
+    any(_is_gated_aggregate, values) || return nothing
+    nd = length(dims)
+    boxes = Vector{Vector{Tuple{Int,Int}}}()
+    for region in regions
+        length(region) == nd || return nothing
+        box = Tuple{Int,Int}[]
+        for d in 1:nd
+            length(region[d]) == 2 || return nothing
+            lo = _region_bound_int(region[d][1])
+            hi = _region_bound_int(region[d][2])
+            (lo === nothing || hi === nothing) && return nothing
+            1 <= lo <= hi <= dims[d] || return nothing
+            push!(box, (lo, hi))
+        end
+        push!(boxes, box)
+    end
+    overlap(a, b) = all(max(a[d][1], b[d][1]) <= min(a[d][2], b[d][2]) for d in 1:nd)
+    for r in eachindex(boxes), s in (r + 1):length(boxes)
+        overlap(boxes[r], boxes[s]) && return nothing
+    end
+    sum(prod(hi - lo + 1 for (lo, hi) in b) for b in boxes) == prod(dims) || return nothing
+    staggered = _makearray_staggered_scan(boxes, values, dims)
+    staggered === nothing ||
+        return Equation[_materialized_fill_equation(name, staggered, dims)]
+    base = _materialized_fill_equation(name, def, dims)
+    loops = _output_idx_strings(base.lhs::OpExpr)
+    lhs_body = (base.lhs::OpExpr).expr_body
+    eqs = Equation[]
+    for (box, val) in zip(boxes, values)
+        ranges = Dict{String,Any}(loops[d] => Any[box[d][1], box[d][2]] for d in 1:nd)
+        lhs = OpExpr("faq", ASTExpr[]; output_idx=Any[l for l in loops],
+                     ranges=ranges, expr_body=lhs_body)
+        rhs = if _is_array_producer(val)
+            v = val::OpExpr
+            rank = v.op == "makearray" ?
+                ((v.regions === nothing || isempty(v.regions)) ? 0 : length(v.regions[1])) :
+                length(_output_idx_strings(v))
+            sel = rank == nd ? loops :
+                  String[loops[d] for d in 1:nd if box[d][1] != box[d][2]]
+            length(sel) == rank || return nothing
+            g = OpExpr("index", ASTExpr[v, (VarExpr(l) for l in sel)...])
+            # The downstream unwrap sees only a gather at every loop of the
+            # equation, so a lower-rank value is unwrapped here, at its own axes.
+            rank == nd ? g : _unwrap_identity_gather(g, sel,
+                Dict{String,Any}(l => ranges[l] for l in sel))
+        else
+            val isa ASTExpr || return nothing
+            val
+        end
+        push!(eqs, Equation(lhs, rhs))
+    end
+    return eqs
 end
 
 # Dependency LEVELS over the materialized observeds: level 1 reads none of them,
@@ -4020,9 +4193,9 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
                     push!(lvl_recurs, sw)
                     continue
                 end
-                feq = _materialized_fill_equation(name, mat_defs[name],
-                                                  layout.mat_dims[name])
-                se, pcs, aks, sfs, acs = _compile_derivative_equations(Equation[feq],
+                feqs = _materialized_fill_equations(name, mat_defs[name],
+                                                    layout.mat_dims[name])
+                se, pcs, aks, sfs, acs = _compile_derivative_equations(feqs,
                     resolved_obs, array_var_info, var_map, const_registry,
                     pgather, param_sym_set, reg_funcs, n_total;
                     template_sites=template_sites,
@@ -4863,8 +5036,10 @@ end
 # contracted (now concrete) and/or output (still symbolic) indices and lowers to a
 # runtime `ifelse` guard the box processor verifies affine.
 function _unrolled_contraction_body(rhs_body::ASTExpr, contract_names::Vector{String},
-        contract_const, filt, oplus::String, zerobar::Float64)
-    iters = Vector{Int}[convert(Vector{Int}, c) for c in contract_const]
+        contract_const, filt, oplus::String, zerobar::Float64;
+        out_names=String[])
+    iters = _window_iters(Vector{Int}[convert(Vector{Int}, c) for c in contract_const],
+                          filt, contract_names, out_names)
     terms = ASTExpr[]
     _foreach_aggregate_term(rhs_body, contract_names, iters, nothing, filt, zerobar,
                             nothing) do term
@@ -4949,27 +5124,37 @@ function _detect_prefix_scan(idx_names::Vector{String}, range_iters,
     agg_filter isa OpExpr || return nothing
     f = agg_filter::OpExpr
     length(f.args) == 2 || return nothing
-    # `j <= i` and its mirror `i >= j` are the SAME forward scan; `j >= i` is a
-    # reverse scan and is declined by the `j_side` check below.
+    # `j <= i` and its mirror `i >= j` are the SAME forward scan; `j >= i` and
+    # `i <= j` the same REVERSE scan, which folds descending (esm-spec §4.3.1):
+    # its running accumulator walks the axis from the top, so it is the forward
+    # fold over the cells in reverse order (`_build_scan_fold`).
     local j_side::ASTExpr, i_side::ASTExpr, inclusive::Bool
+    j = contract_names[1]
+    isj(x) = x isa VarExpr && (x::VarExpr).name == j
     if f.op == "<=" || f.op == "<"
-        j_side, i_side, inclusive = f.args[1], f.args[2], f.op == "<="
+        reverse = isj(f.args[2])
+        j_side, i_side = reverse ? (f.args[2], f.args[1]) : (f.args[1], f.args[2])
+        inclusive = f.op == "<="
     elseif f.op == ">=" || f.op == ">"
-        j_side, i_side, inclusive = f.args[2], f.args[1], f.op == ">="
+        reverse = isj(f.args[1])
+        j_side, i_side = reverse ? (f.args[1], f.args[2]) : (f.args[2], f.args[1])
+        inclusive = f.op == ">="
     else
         return nothing
     end
     (j_side isa VarExpr && i_side isa VarExpr) || return nothing
-    (j_side::VarExpr).name == contract_names[1] || return nothing
+    (j_side::VarExpr).name == j || return nothing
     i_name = (i_side::VarExpr).name
     axis = findfirst(isequal(i_name), idx_names)
     axis === nothing && return nothing
-    term_iters = _scan_term_iters(range_iters, axis, citer, inclusive)
+    # A reverse scan takes the same-range shape only.
+    term_iters = reverse ? (range_iters[axis] == citer ? nothing : :decline) :
+                 _scan_term_iters(range_iters, axis, citer, inclusive)
     term_iters === :decline && return nothing
     # `_referenced_var_names` routes through the generated field walk, so a
     # reference buried in a nested aggregate's body/filter/ranges counts.
     i_name in _referenced_var_names(rhs_body) && return nothing
-    return (axis::Int, inclusive, contract_names[1], term_iters)
+    return (axis::Int, inclusive, j, term_iters, reverse)
 end
 
 # Which axis do the TERMS live on? Two shapes are admitted, and they are the
@@ -5034,13 +5219,11 @@ end
 # join-gated or ragged producer unwraps too: the whole-array contraction nest
 # takes the bare form as a table.
 #
-# THE FOLD CHANGES WITH THE FORM. The bare form is a contraction, which every
-# tier folds from the semiring's 0̄ (`_NK_CONTRACTION` in the per-cell build,
-# the affine tier's unroll and run-time fold, the nest): `0̄ ⊕ t₁ ⊕ t₂ ⊕ …`.
-# The gather form resolved the producer as an expression, whose fold starts
-# from the first term (`_combine_with_reducer`). For `+` the two differ only
-# when every term is `-0.0`, which the 0̄ seed turns into `0.0`, under every
-# compiler alike.
+# The fold is the same in either form: the bare form is a contraction, which
+# every tier folds from the semiring's 0̄ (`_NK_CONTRACTION` in the per-cell
+# build, the affine tier's unroll and run-time fold, the nest), and the gather
+# form resolves the producer as an expression whose fold is seeded from 0̄ too
+# (`_combine_with_reducer`): `0̄ ⊕ t₁ ⊕ t₂ ⊕ …` (esm-spec §4.3.1).
 #
 # Returns the bare producer when the gather is the identity one and the
 # producer contracts or carries a filter, else `rhs` unchanged.
@@ -5172,7 +5355,16 @@ function _scan_fold_slots!(slots::Vector{Int}, blk, var_map, vname::String,
     nd = length(outer_iters)
     cell = Vector{Int}(undef, length(forms))
     loop = Vector{Int}(undef, nd)
-    for outer in Iterators.product(outer_iters...)
+    # Behind a barrier, so the lane loop runs at the product's concrete type.
+    return _scan_fold_slots_lanes!(slots, blk, var_map, vname, forms, axis,
+                                   Iterators.product(outer_iters...), scan_range,
+                                   cell, loop, nd)
+end
+function _scan_fold_slots_lanes!(slots::Vector{Int}, blk, var_map, vname::String,
+                                 forms::Vector{Tuple{Int,Int,Int}}, axis::Int,
+                                 lanes, scan_range, cell::Vector{Int},
+                                 loop::Vector{Int}, nd::Int)
+    for outer in lanes
         for d in 1:nd
             loop[d] = outer[d]
         end
@@ -5197,9 +5389,11 @@ end
 # the per-cell substitution the per-cell build uses (`_compile_faq_percell!`).
 function _build_scan_fold(axis::Int, inclusive::Bool, idx_names::Vector{String},
         range_iters, lhs_body::OpExpr, var_map::AbstractDict{String,Int},
-        oplus::String, zerobar::Float64)
+        oplus::String, zerobar::Float64; reverse::Bool=false)
     nd = length(idx_names)
-    scan_range = range_iters[axis]
+    # A reverse scan's lanes run from the top of the axis down.
+    scan_range = reverse ? collect(Int, Iterators.reverse(range_iters[axis])) :
+                           range_iters[axis]
     len = length(scan_range)
     # Unreachable — `_try_affine_stencil` already refused an empty range before
     # the caller got here — but a `nothing` return would leave the term kernels
@@ -5558,7 +5752,10 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
     # it keeps the contracted indices as loop dims and folds them at run time,
     # so its build is O(#structural groups) whatever the contraction length.
     # Only the in-place form has it.
-    areduce0 = (rhs_list_compiled || _stencil_disabled()) ? nothing :
+    # Its loops run ascending, so a reverse window, which folds descending, is
+    # not its (`_reverse_window`).
+    areduce0 = (rhs_list_compiled || _stencil_disabled() ||
+                _reverse_window(agg_filter, contract_names, idx_names)) ? nothing :
         _affine_reduce_form(contract_names, contract_const, agg_gates,
                             rhs_oplus, rhs_zerobar)
     # A LONG contraction — as many terms as the loop floor, the length at which
@@ -5653,7 +5850,8 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
             (agg_gates === nothing && all(c -> c !== nothing, contract_const) &&
              !long_contraction) ?
                 _unrolled_contraction_body(rhs_body, contract_names, contract_const,
-                                           agg_filter, rhs_oplus, rhs_zerobar) :
+                                           agg_filter, rhs_oplus, rhs_zerobar;
+                                           out_names=idx_names) :
             nothing
         affine_body === nothing || push!(offered, scan !== nothing ? :scan : :affine)
         # The TERM build runs over the axis the TERMS live on — the output axis
@@ -5684,7 +5882,8 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
         # build costs nothing.
         if scan !== nothing && affine_kernels !== nothing
             sf = _build_scan_fold(scan[1], scan[2], idx_names, range_iters,
-                                  lhs_body, var_map, rhs_oplus, rhs_zerobar)
+                                  lhs_body, var_map, rhs_oplus, rhs_zerobar;
+                                  reverse=scan[5])
             scan_fold = _ScanFold(sf.slots, sf.len, sf.oplus, sf.zerobar,
                                   sf.inclusive, Any[affine_kernels...])
         end
@@ -5965,7 +6164,10 @@ function _try_compile_array_contraction(lhs_body::OpExpr, rhs_body::ASTExpr,
     # its term, written as it is with no fold and no seed (a pointwise filter is
     # already the term's `ifelse` guard, see `_compile_faq_equation!`).
     elementwise = isempty(contract_names)
-    table_form = !elementwise && (agg_gates !== nothing ||
+    # A reverse window folds descending, which the static form's ascending
+    # loops do not; its table lists each cell's entries from the top down.
+    rev = !elementwise && _reverse_window(agg_filter, contract_names, idx_names)
+    table_form = !elementwise && (agg_gates !== nothing || rev ||
                  (contract_const !== nothing && any(c -> c === nothing, contract_const)))
     term = (elementwise || agg_filter === nothing) ? rhs_body :
         OpExpr("ifelse", ASTExpr[agg_filter, rhs_body, NumExpr(rhs_zerobar)])
@@ -5997,7 +6199,7 @@ function _try_compile_array_contraction(lhs_body::OpExpr, rhs_body::ASTExpr,
     fold = elementwise ? nothing : table_form ?
         _array_contraction_table(contract_refs, idx_names, range_iters, contract_names,
                                  contract_ranges, contract_const, agg_gates,
-                                 rhs_oplus, rhs_zerobar, const_registry) :
+                                 rhs_oplus, rhs_zerobar, const_registry; reverse=rev) :
         _ACFold(contract_refs, Symbol(rhs_oplus), rhs_zerobar,
                 StepRange{Int,Int}[(r = _expand_int_range(contract_ranges[d]);
                                     first(r):step(r):last(r))
@@ -6084,7 +6286,7 @@ end
 function _array_contraction_table(contract_refs::Vector{Base.RefValue{Int}},
         idx_names::Vector{String}, range_iters, contract_names::Vector{String},
         contract_ranges, contract_const, agg_gates, oplus::String, zerobar::Float64,
-        const_registry::AbstractDict)
+        const_registry::AbstractDict; reverse::Bool=false)
     nc = length(contract_names)
     contract_const = _contract_lists(contract_const)
     n_cells = prod(length(r) for r in range_iters)
@@ -6098,7 +6300,8 @@ function _array_contraction_table(contract_refs::Vector{Base.RefValue{Int}},
     cells = length(range_iters) == 1 ? ((i,) for i in range_iters[1]) :
                                        Iterators.product(range_iters...)
     _ac_table_fill!(seg, cols, iters, fixed, idx_env, cells, idx_names, contract_names,
-                    contract_ranges, contract_const, agg_gates, zerobar, const_registry)
+                    contract_ranges, contract_const, agg_gates, zerobar, const_registry,
+                    reverse)
     return _ACFold(contract_refs, Symbol(oplus), zerobar, seg, cols)
 end
 
@@ -6106,7 +6309,7 @@ end
 # concrete type of the cell iterator.
 function _ac_table_fill!(seg, cols, iters, fixed, idx_env, cells, idx_names,
                          contract_names, contract_ranges, contract_const, agg_gates,
-                         zerobar, const_registry)
+                         zerobar, const_registry, reverse::Bool=false)
     nc = length(contract_names)
     c = 0
     for idx_tuple in cells
@@ -6122,7 +6325,9 @@ function _ac_table_fill!(seg, cols, iters, fixed, idx_env, cells, idx_names,
                 iters[d] = _expand_contract_range(contract_ranges[d], idx_env, const_registry)
             end
         end
-        _foreach_aggregate_term(nothing, contract_names, iters, agg_gates, nothing,
+        # A reverse window's entries run from the top down (`_reverse_window`).
+        run = reverse ? [collect(Int, Iterators.reverse(iters[1]))] : iters
+        _foreach_aggregate_term(nothing, contract_names, run, agg_gates, nothing,
                                 zerobar, idx_env) do ks
             @inbounds for d in 1:nc
                 push!(cols[d], Int(ks[d]))
@@ -6256,6 +6461,8 @@ function _compile_faq_percell!(::Union{_PerCellLicense,_OopCells}, percell_scala
             # from this cell's `idx_env`.
             filt_cell = agg_filter === nothing ? nothing :
                         _sub_preserving(agg_filter, idx_exprs)
+            cell_contract_iters = _window_iters(cell_contract_iters, agg_filter,
+                                                contract_names, idx_names)
             k_nodes = _Node[]
             _foreach_aggregate_term(sub_rhs_outer, contract_names,
                                     cell_contract_iters, agg_gates, filt_cell,

@@ -297,6 +297,13 @@ pub(in crate::simulate_array) fn collect_variable_names(expr: &Expr, out: &mut H
                 collect_variable_names(a, out);
             }
             node.for_each_child(&mut |c| collect_variable_names(c, out));
+            // A ragged range reads its offsets factor by name, not through
+            // an expression.
+            for spec in node.ranges.iter().flat_map(|r| r.values()) {
+                if let Some((offsets, _)) = spec.ragged() {
+                    out.insert(offsets.to_string());
+                }
+            }
             // A join names its key columns and envelope factors as strings,
             // not as expressions.
             for clause in node.join.iter().flatten() {
