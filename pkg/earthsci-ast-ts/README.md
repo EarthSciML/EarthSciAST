@@ -20,7 +20,7 @@ import { loadString, toJson, validate } from '@earthsciml/ast';
 
 // Parse an ESM document from JSON text (`loadPath` reads a file).
 const doc = loadString(`{
-  "esm": "1.2.0",
+  "esm": "1.3.0",
   "metadata": { "name": "demo" },
   "models": {
     "Decay": {
@@ -172,7 +172,7 @@ npm run format:check        # Prettier check
 
 ## Schema Version
 
-This package implements ESM Format schema version **1.2.0** (exported as
+This package implements ESM Format schema version **1.3.0** (exported as
 `SCHEMA_VERSION`, derived from the embedded schema's `$id`).
 
 ## License
