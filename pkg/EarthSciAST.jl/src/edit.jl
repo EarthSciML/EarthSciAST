@@ -96,6 +96,7 @@ function _rebuild(file::EsmFile;
         coordinates = file.coordinates,
         coupling_roles = file.coupling_roles,
         solver = file.solver,
+        document_base = file.document_base,
     )
 end
 

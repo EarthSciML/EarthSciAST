@@ -1,0 +1,59 @@
+{
+  "esm": "1.3.0",
+  "metadata": {
+    "name": "solver_external_nonstring",
+    "description": "A non-string `solver.external`. The schema requires a string (esm-spec §2.2, §2.2.4 requirement 1), so this is a schema error at `/solver/external` (type). There is no object form of the field.",
+    "authors": [
+      "EarthSciML Test Suite"
+    ],
+    "created": "2026-10-24T00:00:00Z",
+    "tags": [
+      "solver",
+      "external",
+      "schema",
+      "negative"
+    ]
+  },
+  "solver": {
+    "external": 42
+  },
+  "models": {
+    "Decay": {
+      "variables": {
+        "A": {
+          "type": "unknown",
+          "units": "mol/m^3",
+          "default": 2.0
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.5
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "A"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "neg",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "k",
+                  "A"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

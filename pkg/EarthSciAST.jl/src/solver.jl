@@ -11,8 +11,9 @@
 # CONFORMANCE_SPEC §5.9 requirement to integrate successfully and agree within
 # the error band is untouched by this block and is not excused by it.
 #
-# This file carries the two parts that are NOT advisory: the spec-version gate
-# (§2.2.4) and the §2.2.2 tolerance resolution order. The `Solver` type itself
+# This file carries the parts that are NOT advisory: the spec-version gates
+# (§2.2.4), the §2.2.2 tolerance resolution order, and the §2.2.6 `${` refusal
+# and location of `solver.external`. The `Solver` type itself
 # lives in types.jl beside `Tolerance`, the quantity it must not be confused
 # with.
 
@@ -29,17 +30,161 @@ function reject_solver_pre_v11(raw_data)
     raw_data === nothing && return
     _is_object(raw_data) || return
     _raw_haskey(raw_data, "solver") || return
-    esm_raw = _raw_get(raw_data, "esm")
-    esm_raw === nothing && return
-    m = match(r"^(\d+)\.(\d+)\.(\d+)$", string(esm_raw))
-    m === nothing && return
-    major = parse(Int, m.captures[1])
-    minor = parse(Int, m.captures[2])
-    (major, minor) >= (1, 1) && return
+    version = _declared_minor(raw_data)
+    (version === nothing || version >= (1, 1)) && return
     throw(ExpressionTemplateError(
         ERROR_CODES.SOLVER_VERSION_TOO_OLD,
         "the top-level `solver` block requires esm >= 1.1.0; " *
-        "file declares $(string(esm_raw)). Offending path: /solver"))
+        "file declares $(string(_raw_get(raw_data, "esm"))). Offending path: /solver"))
+end
+
+# `(major, minor)` of the document's `esm` string, or `nothing` when it declares
+# none the version gates can read.
+function _declared_minor(raw_data)
+    esm_raw = _raw_get(raw_data, "esm")
+    esm_raw === nothing && return nothing
+    m = match(r"^(\d+)\.(\d+)\.(\d+)$", string(esm_raw))
+    m === nothing && return nothing
+    return (parse(Int, m.captures[1]), parse(Int, m.captures[2]))
+end
+
+"""
+    reject_solver_external_pre_v13(raw_data)
+
+Reject `solver.external` in a file declaring `esm` < 1.3.0.
+
+The field arrives at `esm: 1.3.0`; a document declaring an earlier version whose
+`solver` block carries it is rejected with `solver_external_version_too_old`
+at `/solver/external` (esm-spec §2.2.4 requirement 4). Runs before schema
+validation and after [`reject_solver_pre_v11`](@ref), so a document below 1.1.0
+reports the block itself as too new. A 1.1.0 or 1.2.0 block without `external`
+stays valid.
+"""
+function reject_solver_external_pre_v13(raw_data)
+    raw_data === nothing && return
+    _is_object(raw_data) || return
+    solver = _raw_get(raw_data, "solver")
+    (solver !== nothing && _is_object(solver)) || return
+    _raw_haskey(solver, "external") || return
+    version = _declared_minor(raw_data)
+    (version === nothing || version >= (1, 3)) && return
+    throw(ExpressionTemplateError(
+        ERROR_CODES.SOLVER_EXTERNAL_VERSION_TOO_OLD,
+        "`solver.external` requires esm >= 1.3.0; " *
+        "file declares $(string(_raw_get(raw_data, "esm"))). Offending path: /solver/external"))
+end
+
+# The §2.2.6 refusal: `external` names its run configuration literally, so a
+# `${...}` would make the numerics depend on the environment the document is
+# run in. Quoted with plain quotes rather than `repr`, which escapes the `$`.
+function _solver_external_unresolved_error(external::AbstractString)
+    return ExpressionTemplateError(
+        ERROR_CODES.SOLVER_EXTERNAL_UNRESOLVED,
+        "/solver/external: \"$(external)\" carries an unexpanded '\${...}' variable. " *
+        "esm-spec §2.2.6 does not expand environment variables into a run " *
+        "configuration's location: numerics chosen by the environment are not " *
+        "reproducible. Write a path relative to this document, or pass the run " *
+        "configuration at the call site.")
+end
+
+function _reject_solver_external_unresolved(raw_data)
+    _is_object(raw_data) || return
+    solver = _raw_get(raw_data, "solver")
+    (solver !== nothing && _is_object(solver)) || return
+    external = _raw_get(solver, "external")
+    external isa AbstractString || return
+    occursin("\${", external) && throw(_solver_external_unresolved_error(external))
+    return
+end
+
+# A drive-letter path, `C:/` or `C:\`: absolute on every host (esm-spec §2.2.6).
+const _DRIVE_PATH_RE = r"^[A-Za-z]:[/\\]"
+
+_is_absolute_location_path(p::AbstractString) =
+    startswith(p, "/") || occursin(_DRIVE_PATH_RE, p)
+
+# An absolute path with its dot segments removed (RFC 3986 §5.2.4). A
+# drive-letter path comes back as `C:/…`, its `\` read as `/` and its drive a
+# root that `..` does not climb above.
+function _lexical_absolute(p::AbstractString)
+    occursin(_DRIVE_PATH_RE, p) || return _remove_url_dot_segments(p)
+    return p[1:2] * _remove_url_dot_segments(replace(p[3:end], '\\' => '/'))
+end
+
+# `dir` as the absolute, dot-segment-free directory *D* of §2.2.6; a relative
+# `dir` is taken against the working directory. Purely lexical.
+function _absolute_directory(dir::AbstractString)
+    d = isempty(dir) ? "." : String(dir)
+    Sys.iswindows() && (d = replace(d, '\\' => '/'))
+    _is_absolute_location_path(d) && return _lexical_absolute(d)
+    return _lexical_absolute(replace(pwd(), '\\' => '/') * "/" * d)
+end
+
+# The §2.2.6 *D* a load records: the absolute directory the document was read
+# from (`load_path`), or the base a string / in-memory load was given or
+# defaulted to (`pwd()`). A URL base (a remotely loaded mount leaf, whose
+# `solver` block never crosses the mount) records nothing.
+function _solver_external_base(base_path::AbstractString)
+    match(_URL_TEMPLATE_SCHEME_RE, base_path) === nothing || return nothing
+    return _absolute_directory(base_path)
+end
+
+# `file://` plus an absolute, dot-segment-free path, each byte of its UTF-8
+# encoding outside `A-Za-z0-9-._~/:` written `%XX` (§2.2.6). A drive path gets
+# the third slash: `file:///C:/…`.
+function _file_location_url(p::AbstractString)
+    io = IOBuffer()
+    print(io, "file://")
+    startswith(p, "/") || print(io, '/')
+    for b in codeunits(String(p))
+        if (UInt8('A') <= b <= UInt8('Z')) || (UInt8('a') <= b <= UInt8('z')) ||
+           (UInt8('0') <= b <= UInt8('9')) || b in codeunits("-._~/:")
+            write(io, b)
+        else
+            print(io, '%', uppercase(string(b; base=16, pad=2)))
+        end
+    end
+    return String(take!(io))
+end
+
+"""
+    solver_external_location(file::EsmFile; base_path=nothing) -> Union{String,Nothing}
+
+Where the document's `solver.external` points (esm-spec §2.2.6), or `nothing`
+when its `solver` block carries no `external`.
+
+| Form | Test on the string | Location |
+|---|---|---|
+| URL | matches `^[A-Za-z][A-Za-z0-9+.-]*://` | unchanged |
+| Absolute path | begins with `/`, or a drive letter `C:/` / `C:\\` | dot segments removed, percent-encoded, prefixed `file://` |
+| Relative path | anything else | joined onto *D*, dot segments removed, percent-encoded, prefixed `file://` |
+
+Percent-encoding writes each byte of the path's UTF-8 encoding outside
+`A-Za-z0-9-._~/:` as `%XX`, `%` included: the input is a path, not a URL. A
+drive-letter path resolves to `file:///C:/…`.
+
+*D* is `base_path` when given (a relative `base_path` is taken against the
+working directory), else the directory recorded at load on the document — the
+directory of the file read, or the working directory for a string load — else,
+for a document built in memory, the working directory now.
+
+Purely lexical (RFC 3986 §5.2.4, never `realpath`): it never touches the
+filesystem or the network, and a location that does not exist resolves
+normally. The document keeps the authored string; this is the only place the
+resolved form appears. Only the root document's block is consulted — a mounted
+document's `solver` block does not cross the mount (§4.7).
+"""
+function solver_external_location(file::EsmFile;
+                                  base_path::Union{Nothing,AbstractString}=nothing)
+    s = file.solver
+    (s === nothing || s.external === nothing) && return nothing
+    t = s.external
+    occursin("\${", t) && throw(_solver_external_unresolved_error(t))
+    match(_URL_TEMPLATE_SCHEME_RE, t) === nothing || return t
+    _is_absolute_location_path(t) && return _file_location_url(_lexical_absolute(t))
+    base = base_path !== nothing ? _absolute_directory(base_path) :
+           something(file.document_base, _absolute_directory(pwd()))
+    return _file_location_url(_lexical_absolute(base * "/" * t))
 end
 
 """

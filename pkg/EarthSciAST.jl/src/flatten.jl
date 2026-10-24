@@ -1024,7 +1024,8 @@ Return a copy of `file` with its `coupling` vector replaced. Used to splice
 consumes.
 
 Carries the fields `flatten` reads plus `solver` (esm-spec §2.2), which is
-document-scoped configuration a caller may read back off the returned file. The
+document-scoped configuration a caller may read back off the returned file, and
+the `document_base` its `external` resolves against (§2.2.6). The
 LOAD-TIME fields — `expression_templates`, `metaparameters`,
 `component_templates`, `coupling_roles` — and `coordinates` are deliberately not
 rebuilt: nothing downstream of `flatten` consults them, and the result never
@@ -1040,7 +1041,8 @@ _with_coupling(file::EsmFile, coupling::Vector{CouplingEntry})::EsmFile =
             enums=file.enums,
             function_tables=file.function_tables,
             index_sets=file.index_sets,
-            solver=file.solver)
+            solver=file.solver,
+            document_base=file.document_base)
 
 """
     flatten(file::EsmFile; base_path=".", load_ref=nothing) -> FlattenedSystem

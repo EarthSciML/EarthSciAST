@@ -320,6 +320,12 @@ func LoadString(jsonStr string, opts ...LoadOption) (*ESMFile, error) {
 			if err := RejectSolverPreV11(preCheck); err != nil {
 				return nil, err
 			}
+			if err := RejectSolverExternalPreV13(preCheck); err != nil {
+				return nil, err
+			}
+			if err := rejectSolverExternalUnresolved(preCheck); err != nil {
+				return nil, err
+			}
 			if err := rejectConstUnitsPreV12(preCheck); err != nil {
 				return nil, err
 			}
@@ -444,6 +450,10 @@ func LoadString(jsonStr string, opts ...LoadOption) (*ESMFile, error) {
 	if o.basePathSet && o.basePath != "" {
 		esmFile.couplingImportBase = o.basePath
 	}
+	// esm-spec §2.2.6: `solver.external` resolves against the directory of the
+	// file read, or the working directory for a string load. Recorded absolute,
+	// here, so a later change of working directory does not move it.
+	esmFile.documentBase = absoluteDirectory(o.basePath)
 
 	// Reattach the authored declaration blocks (see authoredDeclarationBlocks).
 	esmFile.ExpressionTemplates = authoredTemplates

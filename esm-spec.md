@@ -1,6 +1,6 @@
 # ESM Format Specification
 
-**EarthSciML Abstract Syntax Tree Format — Version 1.2.0**
+**EarthSciML Abstract Syntax Tree Format — Version 1.3.0**
 
 > **1.0.0 is a clean break.** The five declared variable types collapse to two:
 > `unknown` (the solver solves for it; its behavior is stated by **equations**)
@@ -86,7 +86,7 @@ The full authoring stance, normatively:
 | `expression_templates` | | Top-level rewrite rules / templates — the payload of a **template-library file** (§9.7.1). Only valid in a library file; component-local templates stay inside their `model` / `reaction_system` (§9.6.1) |
 | `expression_template_imports` | | Ordered imports of template-library files (§9.7.2) — at top level, only valid in a library file layering on other libraries; inside a `model` / `reaction_system` (§9.7.2); or, as **scope-directed injection** into another component's scope, on a §4.7 subsystem-ref edge, a §10 coupling entry, or a §6.6 / §6.7 test / analysis (§9.7.10) |
 | `metaparameters` | | Document-scoped named integers bound at load (import/subsystem edges, loader API, or defaults) and admissible in `index_sets` sizes, `faq` dense ranges, and `makearray` regions (§9.7.6) |
-| `solver` | | Document-scoped, **optional**, purely **advisory** solver hints — stiffness, integration tolerances, and a splitting hint the document knows about itself (§2.2). Purely additive: a document without it validates, flattens and emits exactly as before. Arrives at esm 1.1.0 |
+| `solver` | | Document-scoped, **optional**, purely **advisory** solver hints — stiffness, integration tolerances, and a splitting hint the document knows about itself, plus a reference to an external run-configuration document (`external`, esm 1.3.0; §2.2.6) (§2.2). Purely additive: a document without it validates, flattens and emits exactly as before. Arrives at esm 1.1.0 |
 
 Spatial grid geometry is **not** a special top-level concept. Coordinates, extents, spacing, CRS parameters, connectivity, and metric arrays are ordinary data — loaded through a `data_sources` entry or declared as unknowns/parameters — and grid topology and metrics are constructed declaratively with the `faq` Functional Aggregate Query op (RFC semiring-faq-unified-ir). The `operators`, `registered_functions`, `grids`, `staggering_rules`, and `discretizations` blocks present in earlier drafts are **removed**.
 
@@ -179,8 +179,26 @@ as before, and adding it changes no dynamics and no flattened system.
 | `abstol` | number > 0 | Absolute **integration** tolerance the document asks for. |
 | `reltol` | number > 0 | Relative **integration** tolerance the document asks for. |
 | `splitting` | `"none"` \| `"lie"` \| `"strang"` | Advisory: the system tolerates or benefits from this operator-splitting convention. Carries **no** prescribed substep structure. |
+| `external` | non-empty string | A reference to a run-configuration document for this document: the schedule, the algorithm per operator, per-operator tolerances and the other settings this document deliberately does not hold. Resolved by §2.2.6. Advisory for every EarthSciAST binding, which never opens it. Arrives at esm 1.3.0. |
 
 Every field is optional, and so is the block itself.
+
+```json
+{
+  "esm": "1.3.0",
+  "solver": {
+    "stiffness": "high",
+    "reltol": 1e-4,
+    "external": "reseact.run.json"
+  }
+}
+```
+
+The referenced document's format belongs to its consumer, not to this
+specification; it identifies its own format by its contents. EarthSciAST's job
+is small and fully normative: parse and validate the field, reject it under
+`esm` < 1.3.0, round-trip it verbatim, resolve it to a location on request
+(§2.2.6), and never open, fetch or interpret the referenced file.
 
 **An empty block normalizes to absence.** `"solver": {}` is legal and means
 exactly what omitting the block means. A binding MUST normalize it away **at
@@ -191,7 +209,8 @@ verbatim round-trip of §2.2.4, and it is deliberate: the alternative — making
 container in the format that rejects an empty object (`coordinates`,
 `index_sets`, `metaparameters` and `coupling_roles` all admit one), a lone rule
 a reader would have to learn for no gain, and a trap for any tool that builds
-the block from optional inputs that all happened to be absent.
+the block from optional inputs that all happened to be absent. A block holding
+only `external` is not empty.
 
 **Absence is not a default value.** A document with no `solver` block, or with no
 `stiffness` key, has *not declared* its stiffness — it does not thereby declare
@@ -266,6 +285,12 @@ It is **not** for:
 - **Algorithm names.** `"BDF"` and `"LSODA"` are scipy identifiers; Julia would
   want `Rosenbrock23`. A document carrying one would not be portable, which is
   why there is deliberately no `alg` field.
+- **A schedule, inline.** `external` (§2.2.6) is a **location**, not an
+  algorithm and not a vocabulary. The algorithm per operator, the splitting
+  schedule and per-operator tolerances live in the referenced run-configuration
+  document, whose schema and version are its consumer's. Inlining that content
+  here would put algorithm names and a foreign schema into the `.esm` and tie
+  the run configuration's version to the format's.
 - **Binding-specific compile knobs.** `cse` is a `sympy.lambdify` concern with no
   meaning outside one binding; it belongs in that binding's harness.
 - **A DAE declaration.** `system_kind` / system class is **derived** from the
@@ -277,29 +302,119 @@ It is **not** for:
 
 #### 2.2.4 Normative requirements
 
-Advisory as the fields are, four things are **required** of every binding:
+Advisory as the fields are, six things are **required** of every binding:
 
 1. **Parse and validate.** An unknown key, an unknown enum member, a
    non-positive tolerance, or a wrong JSON type is a validation failure. This is
    schema conformance, not behavior, and is not excused by the block being
-   advisory.
+   advisory. `external` MUST be a string of length at least 1 (a schema rule),
+   and MUST NOT contain `${`, which is refused at load with
+   `solver_external_unresolved` (§2.2.6).
 2. **Round-trip verbatim**, with one exception. `solver` survives
    `parse → emit` unchanged: it is authored configuration — a peer of
    `tolerance` and `parameter_overrides` — not a load-time construct like
    `expression_template_imports` (§9.7.6), which is consumed and gone by emit
    time. The exception is the empty block: `"solver": {}` normalizes to absence
    at load (§2.2) and therefore does not round-trip, because it carries nothing
-   to preserve.
+   to preserve. `external` round-trips as authored: its resolved location
+   (§2.2.6) is exposed by an accessor and is never written back.
 3. **Change nothing.** Presence of `solver` MUST NOT alter equations, variable
-   classification, namespacing, or the flattened system.
+   classification, namespacing, or the flattened system. That includes
+   `external`: flatten does not read it.
 4. **Gate on version.** A document declaring `esm` below `1.1.0` and carrying a
-   `solver` block MUST be rejected with `solver_version_too_old`.
+   `solver` block MUST be rejected with `solver_version_too_old`. A document
+   declaring `esm` below `1.3.0` whose `solver` block carries `external` MUST be
+   rejected with `solver_external_version_too_old`, before schema validation,
+   at pointer `/solver/external`. A 1.1.0 or 1.2.0 document with a `solver`
+   block and no `external` stays valid.
+5. **Never open the referenced document.** A binding MUST NOT open, read,
+   fetch or validate the document `external` names. A missing file is its
+   consumer's error, not a load error.
+6. **Resolve on request** by §2.2.6.
 
 #### 2.2.5 Diagnostics
 
 | Code | Meaning |
 |---|---|
 | `solver_version_too_old` | File declares `esm` < 1.1.0 but carries a top-level `solver` block (§2.2.4). |
+| `solver_external_version_too_old` | File declares `esm` < 1.3.0 but `solver` carries `external` (§2.2.4). |
+| `solver_external_unresolved` | `solver.external` contains `${` (§2.2.6). |
+
+#### 2.2.6 `external`: resolving the run-configuration reference
+
+Let *D* be the directory of the file the document was read from. For a document
+loaded from a string or built in memory, *D* is the process working directory,
+as §8.2.1 already rules for a relative `ref`. A caller MAY pass an explicit base
+instead, which then replaces *D*.
+
+| Form | Test on the string | Resolved location |
+|---|---|---|
+| URL | matches `^[A-Za-z][A-Za-z0-9+.-]*://` | unchanged |
+| Absolute path | begins with `/`, or with a drive letter: `^[A-Za-z]:[/\\]` | dot segments removed, percent-encoded, prefixed `file://` |
+| Relative path | anything else | joined onto *D*, dot segments removed, percent-encoded, prefixed `file://` |
+
+This is the §8.2.1 table without its substitution-led row: there are no
+substitutions here, and `{` has no meaning.
+
+- Dot-segment removal is **lexical** (RFC 3986 §5.2.4: `.` dropped, `..`
+  removes the preceding segment, a `..` at the root dropped), never `realpath`.
+  This is the rule of §8.2.1.
+- **Percent-encoding.** The input is a path, not a URL, so a location built
+  from it is encoded: each byte of the path's UTF-8 encoding outside the set
+  `A`–`Z` `a`–`z` `0`–`9` `-` `.` `_` `~` `/` `:` is written `%XX`, with
+  uppercase hex. `%` itself becomes `%25`; `runs/case #2.json` resolves to
+  `file://`*D*`/runs/case%20%232.json`. A URL is returned exactly as authored,
+  never encoded or decoded.
+- **Drive-letter paths.** A path beginning with a drive letter, `C:/` or `C:\`,
+  is absolute, whichever operating system resolves it; the same holds for *D*.
+  Every `\` in such a path is read as `/`, the drive segment is a root that a
+  `..` does not climb above, and the location carries a third slash before the
+  drive: `C:\proj\runs\x.json` resolves to `file:///C:/proj/runs/x.json`.
+- A string containing `${` is refused at load with `solver_external_unresolved`,
+  before schema validation and right after the `solver_external_version_too_old`
+  gate. The message MUST name `/solver/external` and quote the string exactly as
+  authored, between plain double quotes with nothing escaped. A run
+  configuration chosen by the environment is not reproducible, for the reason
+  §8.2.1 gives; a deployment-chosen run configuration is a call-site argument.
+- Resolution never touches the filesystem or the network. A location that does
+  not exist resolves normally.
+
+**The resolved location is kept beside the document, not in it.** *D* is
+recorded at load, outside the wire form, and the accessor computes the location
+from it on request. The authored string is what `emit` writes, so an emitted
+document does not differ by machine — the pattern of a `coupling_import` ref
+(§10.10), not of a `url_template`, which §8.2.1 resolves into the document. The
+accessor returns no location (`nothing` / `None` / `null` / a nil) when the
+document has no `external`.
+
+A tool that writes a document to a different directory than it read it from
+must rewrite a relative `external`, as it must a verbatim `coupling_import` ref.
+
+**Mounting.** `external` describes one run of one assembly. Like the rest of a
+referenced document's `solver` block, it does not cross a mount edge (§4.7):
+only the root document's `solver` block is consulted, and a root that declares
+no `external` has none, whatever the documents it mounts declare. The two
+load-time checks on `external` are therefore checks on the root alone: a
+mounted document's `external` is not refused for carrying `${`, nor for
+appearing below esm 1.3.0, at either mount form. The schema still applies to it
+(a mounted document must be a valid ESM file), so an empty or non-string
+`external` in a mounted document is a schema error as anywhere else.
+
+**Coexistence with the other fields.**
+
+- A binding's built-in `solve()` / `init()` ignores `external`. It applies
+  `abstol` / `reltol` by the §2.2.2 chain exactly as it would without it. It
+  MAY emit an informational note that the document names a run configuration
+  it does not read. It MUST NOT fail because of `external`, and it MUST NOT
+  change its choice of integrator because `external` is present.
+- A consumer that acts on `external` SHOULD treat the referenced document as
+  more specific than the four hints. The recommended order for such a consumer
+  is: call-site argument, then an explicit run-configuration value, then the
+  document hint, then the consumer's default.
+- No combination is invalid, and there is no cross-validation: a binding cannot
+  see the run configuration, so it cannot check agreement. `splitting: "none"`
+  beside a run configuration that splits is not an EarthSciAST error; a
+  consumer MAY warn.
 
 ---
 
@@ -1450,7 +1565,7 @@ A component that cannot carry the field MUST be refused at load, not evaluated i
 
 **Scoped references** work identically for referenced subsystems as for inline subsystems. After resolution, `"Parent.RefSubsystem.variable"` works the same regardless of whether `RefSubsystem` was defined inline or loaded from a reference. That includes its **units**: a mounted variable's declared `units` cross the mount edge with it, at both mount forms, and the mounting document's expressions are dimension-checked against them (§4.8.4 "A scoped reference carries its target's units").
 
-**Resolution timing:** Libraries must resolve all references at load time, before validation or any other processing. After resolution, the in-memory representation is identical to a file with all subsystems defined inline. A component mounted at the **top level** by `{ref}` (a `models` / `reaction_systems` entry, resolved the same way) is spliced in with one deliberate exception: its `tests` are dropped, because inline tests do not cross a mount edge (§6.6). A *subsystem*'s `tests` need no such handling — a test targets a top-level component, so they are never run by the mounting document either.
+**Resolution timing:** Libraries must resolve all references at load time, before validation or any other processing. After resolution, the in-memory representation is identical to a file with all subsystems defined inline. A component mounted at the **top level** by `{ref}` (a `models` / `reaction_systems` entry, resolved the same way) is spliced in with one deliberate exception: its `tests` are dropped, because inline tests do not cross a mount edge (§6.6). A *subsystem*'s `tests` need no such handling — a test targets a top-level component, so they are never run by the mounting document either. A referenced document's top-level `solver` block, `external` included (§2.2.6), does not cross a mount edge at either form: only the root document's `solver` block is consulted.
 
 **Relation to template imports (§9.7):** `expression_template_imports` reuses this section's reference formats and resolution-timing rule but is a distinct mechanism with a distinct target kind. A subsystem `ref` MUST NOT target a template-library file (`subsystem_ref_is_template_library`), and a template import MUST NOT target a subsystem/component file (`template_import_not_library`).
 

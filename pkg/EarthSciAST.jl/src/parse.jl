@@ -573,9 +573,11 @@ function coerce_trigger(data)::DiscreteEventTrigger
 end
 
 """
-    coerce_esm_file(data::Any) -> EsmFile
+    coerce_esm_file(data::Any; document_base=nothing) -> EsmFile
 
 Coerce raw JSON data into properly typed EsmFile with custom union type handling.
+`document_base` is the absolute directory the document was read from, recorded
+beside it for [`solver_external_location`](@ref) (esm-spec §2.2.6).
 
 Accepts ANY dict-like JSON carrier — a `JSON3.Object` straight off the wire,
 the load pipeline's already-native tree, or a `Dict` assembled in Julia code
@@ -588,7 +590,8 @@ a `JSON3.read(JSON3.write(doc))` type-launder. Coercion only reads the tree, so
 inline number arrays are shared with `data` rather than copied
 (`_to_ordered_shared`).
 """
-function coerce_esm_file(data::Any)::EsmFile
+function coerce_esm_file(data::Any;
+                         document_base::Union{Nothing,AbstractString}=nothing)::EsmFile
     data = _to_ordered_shared(data)
 
     # Extract required fields
@@ -725,7 +728,8 @@ function coerce_esm_file(data::Any)::EsmFile
                   index_sets=index_sets,
                   component_templates=component_templates,
                   coupling_roles=coupling_roles,
-                  solver=solver)
+                  solver=solver,
+                  document_base=document_base === nothing ? nothing : String(document_base))
     # Lower every `enum` op to a `const` integer using the file-local map.
     # This runs once at load time so downstream consumers (evaluators,
     # canonicalize, codegen) never see enum strings in expression trees.
@@ -740,8 +744,9 @@ Coerce the top-level `solver` block (esm-spec §2.2) into the typed
 [`Solver`](@ref) carried on [`EsmFile`](@ref), or `nothing` when the document
 declares none.
 
-Field VALUES are not re-validated here — the schema already pins the two enums
-and the two positive tolerances, and this runs after schema validation. What it
+Field VALUES are not re-validated here — the schema already pins the two enums,
+the two positive tolerances and the non-empty `external` string, and this runs
+after schema validation. What it
 does is keep absence distinguishable from any default: a missing key stays
 `nothing` rather than acquiring a value the author never wrote.
 """
@@ -754,12 +759,15 @@ function coerce_solver(data)
     s = Solver(stiffness=_str(_f("stiffness")),
                abstol=_num(_f("abstol")),
                reltol=_num(_f("reltol")),
-               splitting=_str(_f("splitting")))
+               splitting=_str(_f("splitting")),
+               external=_str(_f("external")))
     # §2.2: an EMPTY block normalizes to absence at load. `{}` is legal and
     # means what omitting the block means, so the typed document never holds a
     # block with nothing set — which is what keeps the five bindings from
-    # disagreeing about whether `{}` survives `parse -> emit`.
-    all(isnothing, (s.stiffness, s.abstol, s.reltol, s.splitting)) && return nothing
+    # disagreeing about whether `{}` survives `parse -> emit`. A block holding
+    # only `external` is not empty.
+    all(isnothing, (s.stiffness, s.abstol, s.reltol, s.splitting, s.external)) &&
+        return nothing
     return s
 end
 

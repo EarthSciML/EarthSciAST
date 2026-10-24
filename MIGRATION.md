@@ -1366,6 +1366,32 @@ depended on the old behaviour to bump documents, do it explicitly.
 
 ---
 
+## esm 1.3.0: `solver.external`
+
+| Kind | What |
+|---|---|
+| `format` | **New optional `solver.external`** (esm-spec §2.2, §2.2.6): a non-empty string naming a run-configuration document, and with it the format version moves to **`esm: 1.3.0`**. |
+| `new` | `solver_external_location` (Julia, Python, Rust), `solverExternalLocation` (TypeScript), `SolverExternalLocation` (Go): the resolved location of `solver.external`, or none. `reject_solver_external_pre_v13` beside `reject_solver_pre_v11`, and the codes `solver_external_version_too_old` and `solver_external_unresolved`. |
+
+**Nothing to migrate in your documents.** The field is optional: a document
+without it validates, flattens, emits and integrates exactly as before, and a
+1.1.0 or 1.2.0 document with a `solver` block and no `external` stays valid.
+You only need `esm: 1.3.0` if you want to write `external`; carrying it under a
+lower declared version is rejected with `solver_external_version_too_old`, and
+a value containing `${` is rejected with `solver_external_unresolved`.
+
+**What it is.** A pointer to the document that holds what the `.esm`
+deliberately does not: the splitting schedule, the algorithm per operator,
+per-operator tolerances. Its format belongs to whoever reads it. No binding
+opens it — each built-in `solve()` ignores it — and `emit` writes the string you
+authored, never a resolved path. Ask the accessor for the location: a relative
+value resolves against the directory of the file the document was read from
+(the working directory for a string load, or a base you pass), lexically, like
+a `url_template` (§8.2.1) but without substitutions. A leaf's `external` does
+not cross a mount edge: only the root document's counts.
+
+---
+
 # Part V — What did NOT change
 
 Listed because knowing the boundary is what stops you over-migrating.

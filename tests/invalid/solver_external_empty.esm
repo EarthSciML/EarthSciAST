@@ -1,0 +1,59 @@
+{
+  "esm": "1.3.0",
+  "metadata": {
+    "name": "solver_external_empty",
+    "description": "An empty `solver.external`. The schema requires a string of length at least 1 (esm-spec §2.2, §2.2.4 requirement 1), so this is a schema error at `/solver/external` (minLength). An empty string is not absence: it does not normalize away like an empty block.",
+    "authors": [
+      "EarthSciML Test Suite"
+    ],
+    "created": "2026-10-24T00:00:00Z",
+    "tags": [
+      "solver",
+      "external",
+      "schema",
+      "negative"
+    ]
+  },
+  "solver": {
+    "external": ""
+  },
+  "models": {
+    "Decay": {
+      "variables": {
+        "A": {
+          "type": "unknown",
+          "units": "mol/m^3",
+          "default": 2.0
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.5
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "A"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "neg",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "k",
+                  "A"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

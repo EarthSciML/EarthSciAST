@@ -210,6 +210,13 @@ pub struct Solver {
     /// `"strang"`. Carries no prescribed substep structure.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub splitting: Option<String>,
+
+    /// Reference to an external run-configuration document (esm-spec §2.2.6),
+    /// held exactly as authored. EarthSciAST never opens it; the resolved
+    /// location comes from [`crate::solver_external_location`] and is never
+    /// written back. Arrives at esm 1.3.0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external: Option<String>,
 }
 
 /// One entry of the document-scoped [`EsmFile::coordinates`] registry
