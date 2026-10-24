@@ -947,6 +947,7 @@ reading that as a gap.
 | `can_migrate` | function | `can_migrate` | `canMigrate` | `can_migrate` | `can_migrate` | `CanMigrate` |
 | `component_node` | type | `ComponentNode` | `ComponentNode` | `ComponentNode` | `ComponentNode` | `ComponentNode` |
 | `constant_parameters` | function | `constant_parameters` | `constantParameters` | `constant_parameters` | `constant_parameters` | `ConstantParameters` |
+| `contribution` | type | `Contribution` | `Contribution` | `Contribution` | `Contribution` | `Contribution` |
 | `coupling_edge` | type | `CouplingEdge` | `CouplingEdge` | `CouplingEdge` | `CouplingEdge` | `CouplingEdge` |
 | `dependency_edge` | type | `DependencyEdge` | `DependencyEdge` | `DependencyEdge` | `DependencyEdge` | `DependencyEdge` |
 | `derive_odes` | function | `derive_odes` | `deriveODEs` / `deriveOdes` | `derive_odes` | `derive_odes` | `DeriveODEs` |
@@ -989,6 +990,7 @@ reading that as a gap.
 | `substitute` | function | `substitute` | `substitute` | `substitute` | `substitute` | `Substitute` |
 | `supported_migration_targets` | function | `supported_migration_targets` | `getSupportedMigrationTargets` / `supportedMigrationTargets` | `supported_migration_targets` | `get_supported_migration_targets` / `supported_migration_targets` | `SupportedMigrationTargets` |
 | `system_kind` | function | `system_kind` | `systemKind` | `system_kind` | `system_kind` | `SystemKind` |
+| `term_origin` | type | `TermOrigin` | `TermOrigin` | `TermOrigin` | `TermOrigin` | `TermOrigin` |
 | `to_ascii` | function | `to_ascii` | `toAscii` | `to_ascii` | `to_ascii` | `ToASCII` |
 | `to_dot` | function | `to_dot` | `toDot` | `to_dot` | `to_dot` | `ToDOT` |
 | `to_json` | function | `to_json` | `toJson` | `to_json` | `to_json` | `ToJSON` |
