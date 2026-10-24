@@ -555,11 +555,27 @@ end
         # The ORIGINS are compared for every case, including one whose equation
         # RENDERING diverges above (a `_FC_DIVERGENCES` "equations" entry is
         # about how an expression prints, never about who wrote it): the count of
-        # contributions per equation and every origin, in order.
+        # contributions per equation and every origin, in order. With no
+        # exception (§5.48): when the equation COUNTS diverge (a failure the
+        # `equation_count` check above reports), the equations are matched by
+        # their left-hand side instead, every LHS on only one side fails, and the
+        # origins of every LHS on both sides are still compared.
+        _origins(eq) = [c["origins"] for c in eq["contributions"]]
         if length(act["equations"]) == length(exp["equations"])
             for (i, (e, a)) in enumerate(zip(exp["equations"], act["equations"]))
-                @test (id, "eq", i, "origins", [c["origins"] for c in a["contributions"]]) ==
-                      (id, "eq", i, "origins", [c["origins"] for c in e["contributions"]])
+                @test (id, "eq", i, "origins", _origins(a)) ==
+                      (id, "eq", i, "origins", _origins(e))
+            end
+        else
+            by_lhs(eqs) = (d = Dict{String,Vector{Any}}();
+                           for eq in eqs push!(get!(d, String(eq["lhs"]), Any[]), _origins(eq)) end;
+                           d)
+            a_by, e_by = by_lhs(act["equations"]), by_lhs(exp["equations"])
+            @test (id, "origins: equation LHSs", sort!(collect(keys(a_by)))) ==
+                  (id, "origins: equation LHSs", sort!(collect(keys(e_by))))
+            for lhs in sort!(collect(intersect(keys(a_by), keys(e_by))))
+                @test (id, "lhs", lhs, "origins", a_by[lhs]) ==
+                      (id, "lhs", lhs, "origins", e_by[lhs])
             end
         end
         # No `ic` equation may survive in `equations` (§4.7.5 step 4, normative).

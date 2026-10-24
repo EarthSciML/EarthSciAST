@@ -285,6 +285,68 @@ end
         @test changed > 0
     end
 
+    @testset "a multiplicative couple scales the tendency, not a later bare definition" begin
+        # `D(x) ~ f` then `x ~ g`: the factor goes to the LAST `D(x)` equation,
+        # never to the bare one even though it comes later.
+        f, g, m = VarExpr("f"), VarExpr("g"), VarExpr("m")
+        A, C = TermOrigin(component="A"), TermOrigin(coupling=0)
+        eqs = Equation[Equation(OpExpr("D", ASTExpr[VarExpr("x")], wrt="t"), f),
+                       Equation(VarExpr("x"), g)]
+        cs = Vector{Contribution}[Contribution[Contribution(f, [A])],
+                                  Contribution[Contribution(g, [A])]]
+        EarthSciAST._combine_tendency_term!(eqs, cs, "x", m, "*", C;
+            owners=["A", "A"], states=Dict("x" => nothing), components=["A"])
+        @test to_ascii(eqs[1].rhs) == to_ascii(OpExpr("*", ASTExpr[f, m]))
+        @test [_tp_origins(c) for c in cs[1]] == [[(:component, "A"), (:coupling, 0)]]
+        @test eqs[2].rhs === g
+        @test [_tp_origins(c) for c in cs[2]] == [[(:component, "A")]]
+        # With only the bare definition there is no tendency to scale.
+        bare = Equation[Equation(VarExpr("x"), g)]
+        @test_throws ArgumentError EarthSciAST._combine_tendency_term!(
+            bare, Vector{Contribution}[Contribution[Contribution(g, [A])]], "x", m, "*", C;
+            owners=["A"], states=Dict("x" => nothing), components=["A"])
+    end
+
+    # ── a caller's edits between flatten and a public pass ───────────────────
+
+    _tp_table_flat() = _tp_flatten(joinpath(_TP_TESTS, "conformance", "function_tables",
+                                            "linear", "fixture.esm"))
+
+    @testset "an edited right-hand side survives a pass that rebuilds from the list" begin
+        flat = _tp_table_flat()
+        eq = flat.equations[1]
+        flat.equations[1] = Equation(eq.lhs, OpExpr("+", ASTExpr[eq.rhs, NumExpr(2.5)]))
+        lowered = EarthSciAST.lower_table_lookups(flat)
+        rhs = to_ascii(lowered.equations[1].rhs)
+        @test occursin("2.5", rhs)
+        @test !occursin("table_lookup", rhs)
+        cs = equation_contributions(lowered)[1]
+        # The stale list collapses to the current body, keeping its authors.
+        @test length(cs) == 1
+        @test _tp_origins(cs[1]) == [(:component, "M")]
+        @test to_ascii(cs[1].expr) == rhs
+    end
+
+    @testset "an emptied list is one contribution with no author" begin
+        flat = _tp_table_flat()
+        empty!(flat.equation_contributions[1])
+        lowered = EarthSciAST.lower_table_lookups(flat)
+        cs = equation_contributions(lowered)[1]
+        @test length(cs) == 1
+        @test isempty(cs[1].origins)
+        @test cs[1].expr === lowered.equations[1].rhs
+    end
+
+    @testset "equations and lists out of step are an error, not a truncation" begin
+        flat = _tp_table_flat()
+        push!(flat.equations, Equation(VarExpr("M.extra"), NumExpr(1.0)))
+        @test_throws ArgumentError EarthSciAST.lower_table_lookups(flat)
+        @test_throws ArgumentError EarthSciAST._flat_contributions(flat)
+        tflat = _tp_flatten(joinpath(_TP_DIR, "template_reference.esm"))
+        pop!(tflat.equation_contributions)
+        @test_throws ArgumentError expand_flattened_refs(tflat)
+    end
+
     # ── the types and the copy constructor ───────────────────────────────────
 
     @testset "a TermOrigin names exactly one author" begin
