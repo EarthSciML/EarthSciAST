@@ -380,6 +380,23 @@ ENUM_VISITS = [0]
 _NO_PARTNERS: list[int] = []
 
 
+def _sorted_unique_rows(pairs: np.ndarray) -> np.ndarray:
+    """An owned copy of ``pairs`` as ``[K, 2]`` int64 rows, ascending by
+    ``(pos_src, pos_tgt)`` with each pair once — the order and the set the
+    tuple views give. Already strictly ascending (what
+    :func:`candidate_pair_array` returns) costs one compare pass, not a sort."""
+    arr = np.array(pairs, dtype=np.int64).reshape(-1, 2)
+    if len(arr) < 2:
+        return arr
+    a, b = arr[:-1], arr[1:]
+    if bool(np.all((b[:, 0] > a[:, 0]) | ((b[:, 0] == a[:, 0]) & (b[:, 1] > a[:, 1])))):
+        return arr
+    arr = arr[np.lexsort((arr[:, 1], arr[:, 0]))]
+    keep = np.ones(len(arr), dtype=bool)
+    keep[1:] = np.any(arr[1:] != arr[:-1], axis=1)
+    return arr[keep]
+
+
 class OverlapIndex:
     """A resolved overlap gate's candidate pair set, plus the derived views the
     enumeration driver needs, built LAZILY and cached.
@@ -401,9 +418,9 @@ class OverlapIndex:
         self._array: np.ndarray | None = None
         self._pairs: set[tuple[int, int]] | None = None
         if isinstance(pairs, np.ndarray):
-            # A sorted ``[K, 2]`` pair array (:func:`candidate_pair_array`): the
-            # set and the tuple views are built only if a per-tuple consumer asks.
-            self._array = np.asarray(pairs, dtype=np.int64).reshape(-1, 2)
+            # A ``[K, 2]`` pair array (:func:`candidate_pair_array`): the set and
+            # the tuple views are built only if a per-tuple consumer asks.
+            self._array = _sorted_unique_rows(pairs)
         else:
             self._pairs = pairs if isinstance(pairs, set) else set(pairs)
         self._sorted: list[tuple[int, int]] | None = None
