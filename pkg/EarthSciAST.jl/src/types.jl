@@ -1316,10 +1316,14 @@ struct TimeSpan
 end
 
 """
-    Solver(; stiffness=nothing, abstol=nothing, reltol=nothing, splitting=nothing)
+    Solver(; stiffness=nothing, abstol=nothing, reltol=nothing, splitting=nothing,
+           external=nothing)
 
 Document-scoped, OPTIONAL solver hints (esm-spec §2.2) — numerics the document
-knows about *itself*, which each binding maps to its own integrator.
+knows about *itself*, which each binding maps to its own integrator — plus
+`external`, a reference to a run-configuration document (esm 1.3.0). The
+authored `external` string is what the type holds and what `emit` writes; where
+it points comes from [`solver_external_location`](@ref) (§2.2.6).
 
 Every field is ADVISORY: a binding may ignore any or all of them and still
 conform. Advisory governs the MECHANISM, never the OUTCOME — a binding that
@@ -1341,10 +1345,22 @@ struct Solver
     abstol::Union{Float64,Nothing}
     reltol::Union{Float64,Nothing}
     splitting::Union{String,Nothing}
+    external::Union{String,Nothing}
+    # The absolute directory a relative `external` resolves against (esm-spec
+    # §2.2.6 *D*), recorded at load: the directory of the file read, or the
+    # working directory for a string load. Not part of the wire form, so it is
+    # never emitted and takes no part in `==` / `hash`. `nothing` for a block
+    # built in memory, which resolves against the working directory at call time.
+    base_dir::Union{String,Nothing}
 
-    Solver(; stiffness=nothing, abstol=nothing, reltol=nothing, splitting=nothing) =
-        new(stiffness, abstol, reltol, splitting)
+    Solver(; stiffness=nothing, abstol=nothing, reltol=nothing, splitting=nothing,
+           external=nothing, base_dir=nothing) =
+        new(stiffness, abstol, reltol, splitting, external, base_dir)
 end
+
+_solver_wire_fields(s::Solver) = (s.stiffness, s.abstol, s.reltol, s.splitting, s.external)
+Base.:(==)(a::Solver, b::Solver) = _solver_wire_fields(a) == _solver_wire_fields(b)
+Base.hash(s::Solver, h::UInt) = hash(_solver_wire_fields(s), hash(Solver, h))
 
 """
     Tolerance(abs::Union{Float64,Nothing}, rel::Union{Float64,Nothing})
