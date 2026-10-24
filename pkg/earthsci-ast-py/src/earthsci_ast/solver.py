@@ -18,11 +18,10 @@ the tolerance resolution order (§2.2.2).
 from __future__ import annotations
 
 import os
-import posixpath
 import re
 from typing import TYPE_CHECKING, Any
 
-from ._data_source_urls import _SCHEME_RE, _abs_base, _remove_dot_segments
+from ._data_source_urls import _SCHEME_RE, _remove_dot_segments
 from .error_handling import (
     SOLVER_EXTERNAL_UNRESOLVED,
     SOLVER_EXTERNAL_VERSION_TOO_OLD,
@@ -145,7 +144,7 @@ def reject_solver_external_unresolved(view: Any) -> None:
         return
     raise SolverBlockError(
         SOLVER_EXTERNAL_UNRESOLVED,
-        f"/solver/external: {external!r} carries an unexpanded '${{...}}' variable. "
+        f"/solver/external: \"{external}\" carries an unexpanded '${{...}}' variable. "
         "esm-spec §2.2.6 does not expand environment variables into a run-"
         "configuration reference: a run configuration chosen by the environment "
         "is not reproducible. Write a path relative to this document, or pass "
@@ -153,15 +152,64 @@ def reject_solver_external_unresolved(view: Any) -> None:
     )
 
 
-def solver_external_location(esm_file: EsmFile, base: str | None = None) -> str | None:
+#: A drive-letter path, ``C:/`` or ``C:\\``: absolute on every host (§2.2.6).
+_DRIVE_RE = re.compile(r"^[A-Za-z]:[/\\]")
+
+#: The bytes a §2.2.6 location writes as themselves; every other byte of the
+#: path's UTF-8 encoding is written ``%XX``.
+_LOCATION_SAFE = frozenset(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~/:")
+
+
+def _is_absolute(path: str) -> bool:
+    return path.startswith("/") or _DRIVE_RE.match(path) is not None
+
+
+def _lexical_absolute(path: str) -> str:
+    """An absolute ``path`` with its dot segments removed (RFC 3986 §5.2.4).
+
+    A drive-letter path comes back as ``C:/…``, its ``\\`` read as ``/`` and
+    its drive a root that ``..`` does not climb above.
+    """
+    if _DRIVE_RE.match(path):
+        return path[:2] + _remove_dot_segments(path[2:].replace("\\", "/"))
+    return _remove_dot_segments(path)
+
+
+def _absolute_directory(path: str | os.PathLike[str]) -> str:
+    """``path`` as the absolute, dot-segment-free directory *D* of §2.2.6.
+
+    A relative ``path`` is taken against the process working directory. Purely
+    lexical: never ``realpath``, never touches the filesystem.
+    """
+    d = os.fspath(path) or "."
+    if not _is_absolute(d):
+        d = os.getcwd().replace(os.sep, "/") + "/" + d
+    return _lexical_absolute(d)
+
+
+def _file_url(path: str) -> str:
+    """``file://`` plus ``path`` (absolute, dot-segment free), percent-encoded."""
+    encoded = "".join(chr(b) if b in _LOCATION_SAFE else f"%{b:02X}" for b in path.encode("utf-8"))
+    return "file://" + ("" if path.startswith("/") else "/") + encoded
+
+
+def solver_external_location(
+    esm_file: EsmFile, base: str | os.PathLike[str] | None = None
+) -> str | None:
     """Where the document's ``solver.external`` points (esm-spec §2.2.6).
 
     Returns ``None`` when the document has no ``external``. Otherwise:
 
     - a URL (``scheme://…``) is returned unchanged;
-    - an absolute path has its dot segments removed and is prefixed ``file://``;
-    - anything else is joined onto *D*, dot segments removed, and prefixed
-      ``file://``.
+    - an absolute path (``/…``, or a drive-letter ``C:/…`` / ``C:\\…``) has
+      its dot segments removed, is percent-encoded and is prefixed ``file://``
+      (``file:///C:/…`` for a drive);
+    - anything else is joined onto *D*, dot segments removed, percent-encoded,
+      and prefixed ``file://``.
+
+    Percent-encoding writes each byte of the path's UTF-8 encoding outside
+    ``A-Za-z0-9-._~/:`` as ``%XX``, ``%`` included: the input is a path, not a
+    URL.
 
     *D* is ``base`` when given (a relative ``base`` is taken against the
     process working directory), else the directory the loader recorded: the
@@ -178,12 +226,14 @@ def solver_external_location(esm_file: EsmFile, base: str | None = None) -> str 
         return None
     if _SCHEME_RE.match(external):
         return external
-    if external.startswith("/"):
-        return "file://" + _remove_dot_segments(external)
-    d = base if base is not None else getattr(esm_file, "document_base", None)
-    if d is None:
-        d = os.getcwd()
-    return "file://" + _remove_dot_segments(posixpath.join(_abs_base(d), external))
+    if _is_absolute(external):
+        return _file_url(_lexical_absolute(external))
+    if base is not None:
+        d = _absolute_directory(base)
+    else:
+        recorded = getattr(esm_file, "document_base", None)
+        d = recorded if recorded is not None else _absolute_directory(os.getcwd())
+    return _file_url(_lexical_absolute(d + "/" + external))
 
 
 def resolve_tolerances(

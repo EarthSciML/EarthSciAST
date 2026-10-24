@@ -37,14 +37,26 @@ def _lexical(path: str) -> str:
     return posixpath.normpath(path)
 
 
+_SAFE = frozenset(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~/:")
+
+
+def _encode(path: str) -> str:
+    """The §2.2.6 percent-encoding, written out here rather than borrowed."""
+    return "".join(chr(b) if b in _SAFE else f"%{b:02X}" for b in path.encode("utf-8"))
+
+
+def _file_url(path: str) -> str:
+    return "file://" + _encode(_lexical(path))
+
+
 def _expected_location(pin: dict | None) -> str | None:
     if pin is None:
         return None
     if "verbatim" in pin:
         return pin["verbatim"]
     if "repo_path" in pin:
-        return "file://" + _lexical(str(REPO_ROOT / pin["repo_path"]))
-    return "file://" + _lexical(posixpath.join(os.getcwd(), pin["cwd_path"]))
+        return _file_url(str(REPO_ROOT / pin["repo_path"]))
+    return _file_url(posixpath.join(os.getcwd(), pin["cwd_path"]))
 
 
 def _base(pin: dict | None) -> str | None:
@@ -79,10 +91,12 @@ def test_external_resolves_as_pinned(fixture: dict) -> None:
 
 
 def test_nothing_a_fixture_names_exists_on_disk() -> None:
+    from urllib.parse import unquote
+
     for fixture in ACCEPTED:
         loc = _expected_location(fixture["location"])
         if loc is not None and loc.startswith("file://"):
-            assert not os.path.exists(loc[len("file://") :]), loc
+            assert not os.path.exists(unquote(loc[len("file://") :])), loc
 
 
 @pytest.mark.parametrize("fixture", REFUSED, ids=[f["id"] for f in REFUSED])
@@ -110,7 +124,7 @@ def test_emit_keeps_the_authored_string_so_a_move_changes_only_the_location(
 
     second = earthsci_ast.load_path(str(moved))
     assert _external(second) == fixture["external"]
-    assert earthsci_ast.solver_external_location(second) == "file://" + _lexical(
+    assert earthsci_ast.solver_external_location(second) == _file_url(
         str(tmp_path / "runs" / "probe.run.json")
     )
     assert earthsci_ast.solver_external_location(first) == _expected_location(fixture["location"])
@@ -118,9 +132,73 @@ def test_emit_keeps_the_authored_string_so_a_move_changes_only_the_location(
 
 def test_a_relative_explicit_base_is_taken_against_the_working_directory() -> None:
     loaded = earthsci_ast.load_path(str(SUITE / "fixtures" / "bare_relative.esm"))
-    assert earthsci_ast.solver_external_location(loaded, base="a/./b/../c") == (
-        "file://" + _lexical(posixpath.join(os.getcwd(), "a/c/runs/probe.run.json"))
+    assert earthsci_ast.solver_external_location(loaded, base="a/./b/../c") == _file_url(
+        posixpath.join(os.getcwd(), "a/c/runs/probe.run.json")
     )
+
+
+def test_a_pathlib_base_is_accepted_by_the_loaders_and_the_accessor(tmp_path: Path) -> None:
+    text = (SUITE / "fixtures" / "bare_relative.esm").read_text()
+    expected = _file_url(str(tmp_path / "runs" / "probe.run.json"))
+
+    from_string = earthsci_ast.load_string(text, base_path=tmp_path)
+    assert from_string.document_base == _lexical(str(tmp_path))
+    assert earthsci_ast.solver_external_location(from_string) == expected
+
+    loaded = earthsci_ast.load_path(SUITE / "fixtures" / "bare_relative.esm", base_path=tmp_path)
+    assert earthsci_ast.solver_external_location(loaded) == expected
+    assert earthsci_ast.solver_external_location(loaded, base=tmp_path / "x" / "..") == expected
+
+
+def _with_external(external: str, document_base: str | None = None) -> earthsci_ast.EsmFile:
+    from earthsci_ast.esm_types import EsmFile, Metadata, Solver
+
+    f = EsmFile(version="1.3.0", metadata=Metadata(title="m"), solver=Solver(external=external))
+    f.document_base = document_base
+    return f
+
+
+@pytest.mark.parametrize(
+    ("external", "base", "expected"),
+    [
+        ("C:/proj/./runs/../x.json", None, "file:///C:/proj/x.json"),
+        ("c:\\proj\\runs\\x.json", None, "file:///c:/proj/runs/x.json"),
+        ("C:/../../x.json", None, "file:///C:/x.json"),
+        ("runs/x.json", "C:/proj/sub/..", "file:///C:/proj/runs/x.json"),
+        ("runs/x.json", "D:\\proj", "file:///D:/proj/runs/x.json"),
+        ("../../../x.json", "C:/proj", "file:///C:/x.json"),
+        ("/srv/x.json", "C:/proj", "file:///srv/x.json"),
+    ],
+)
+def test_a_drive_letter_path_is_absolute(external: str, base: str | None, expected: str) -> None:
+    assert earthsci_ast.solver_external_location(_with_external(external), base=base) == expected
+
+
+def test_a_drive_letter_base_is_recorded_as_absolute() -> None:
+    text = (SUITE / "fixtures" / "bare_relative.esm").read_text()
+    loaded = earthsci_ast.load_string(text, base_path="C:\\proj\\sub")
+    assert loaded.document_base == "C:/proj/sub"
+    assert (
+        earthsci_ast.solver_external_location(loaded) == "file:///C:/proj/sub/runs/probe.run.json"
+    )
+
+
+def test_the_refusal_quotes_the_string_exactly_as_authored(tmp_path: Path) -> None:
+    doc = json.loads((SUITE / "fixtures" / "env_var.esm").read_text())
+    authored = 'a\\b "c" ${X}/y.json'
+    doc["solver"]["external"] = authored
+    with pytest.raises(earthsci_ast.SolverBlockError) as excinfo:
+        earthsci_ast.load_document(doc)
+    assert excinfo.value.code == "solver_external_unresolved"
+    assert f'"{authored}"' in str(excinfo.value)
+
+
+def test_the_unresolved_check_runs_before_schema_validation() -> None:
+    doc = json.loads((SUITE / "fixtures" / "env_var.esm").read_text())
+    doc["solver"]["not_a_solver_key"] = True
+    with pytest.raises(earthsci_ast.SolverBlockError) as excinfo:
+        earthsci_ast.load_document(doc)
+    assert excinfo.value.code == "solver_external_unresolved"
 
 
 def test_a_document_built_in_memory_resolves_against_the_working_directory() -> None:

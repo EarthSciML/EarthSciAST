@@ -2513,18 +2513,18 @@ def _capture_component_templates(data: Any) -> dict[str, Any]:
     return out
 
 
-def _lexical_dir(path: str) -> str:
-    """``path`` as an absolute POSIX directory, dot segments removed lexically."""
-    from ._data_source_urls import _abs_base, _remove_dot_segments
+def _lexical_dir(path: str | os.PathLike[str]) -> str:
+    """``path`` as an absolute directory, dot segments removed lexically (§2.2.6)."""
+    from .solver import _absolute_directory
 
-    return _remove_dot_segments(_abs_base(path.replace(os.sep, "/")))
+    return _absolute_directory(path)
 
 
 def load_path(
     path: str | Path,
     *,
     metaparameters: dict[str, int] | None = None,
-    base_path: str | None = None,
+    base_path: str | os.PathLike[str] | None = None,
 ) -> EsmFile:
     """Read and parse an ESM document from a filesystem path.
 
@@ -2538,6 +2538,7 @@ def load_path(
     Raises:
         FileNotFoundError: If the file path doesn't exist.
     """
+    base_path = os.fspath(base_path) if base_path is not None else None
     file_path = Path(path)
     resolved_base = base_path if base_path is not None else str(file_path.parent.resolve())
     with open(file_path) as f:
@@ -2558,13 +2559,14 @@ def load_string(
     json_text: str,
     *,
     metaparameters: dict[str, int] | None = None,
-    base_path: str | None = None,
+    base_path: str | os.PathLike[str] | None = None,
 ) -> EsmFile:
     """Parse an ESM document from JSON TEXT.
 
     Args:
         json_text: The document as a JSON string.
     """
+    base_path = os.fspath(base_path) if base_path is not None else None
     data = json.loads(json_text)
     esm_file = _load_data(
         data, base_path if base_path is not None else os.getcwd(), metaparameters, None
@@ -2582,7 +2584,7 @@ def load_document(
     document: dict,
     *,
     metaparameters: dict[str, int] | None = None,
-    base_path: str | None = None,
+    base_path: str | os.PathLike[str] | None = None,
 ) -> EsmFile:
     """Parse an ESM document that is ALREADY a Python ``dict`` — the same
     document a ``.esm`` file holds, just already ``json.load``ed.
@@ -2595,6 +2597,7 @@ def load_document(
     # shallow copy, but ``prepare_document_ops`` rewrites ``op`` values on
     # NESTED nodes, which a shallow copy still shares with the caller. Rust, Go
     # and Julia all hand the pipeline their own copy; this makes the five agree.
+    base_path = os.fspath(base_path) if base_path is not None else None
     esm_file = _load_data(
         copy.deepcopy(document),
         base_path if base_path is not None else os.getcwd(),
