@@ -1,0 +1,12 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "mount_element_type_nested_none",
+    "description": "Root declaring nothing (Float64) -> mid_none (inherits Float64) -> Float32 leaf: the leaf's edge writes Float32."
+  },
+  "models": {
+    "Mid": {
+      "ref": "./mid_none.esm"
+    }
+  }
+}

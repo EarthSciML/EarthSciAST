@@ -262,6 +262,16 @@ const ERROR_CODES = (
     # raises it; the constant exists because the code table is cross-language
     # uniform.
     MOUNT_FORM_UNSUPPORTED = "mount_form_unsupported",
+    # A declared working precision reaches a construct that cannot carry it
+    # (esm-spec §4.7 "Working precision crosses a mount", §11.3.1): a mounted
+    # leaf's `domain.element_type` that must be written onto a reaction system,
+    # whose species and parameters have no per-variable `element_type`.
+    ELEMENT_TYPE_UNCARRIED = "element_type_uncarried",
+    # A construct an evaluator cannot run at the precision it is declared in
+    # (CONFORMANCE_SPEC §5.18.2): refused rather than evaluated in binary64. The
+    # tree-walk evaluator computes in binary64 only, so it refuses every binary32
+    # variable.
+    FLOAT32_UNSUPPORTED = "float32_unsupported",
 
     # ── Enum lowering (esm-spec §9.3; registered_functions.jl, raised as
     #    `EnumLoweringError`). The two `unknown_*` values are the ones the

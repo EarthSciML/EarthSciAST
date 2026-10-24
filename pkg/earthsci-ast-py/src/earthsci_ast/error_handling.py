@@ -270,6 +270,14 @@ SUBSYSTEM_INDEX_SET_RENAME_UNSUPPORTED_MOUNT_FORM = (
 # mechanism"). Refused at `/reaction_systems/<k>` rather than coerced into an
 # empty reaction system.
 MOUNT_FORM_UNSUPPORTED = "mount_form_unsupported"
+# A declared working precision reaches a construct that cannot carry it
+# (esm-spec §4.7 "Working precision crosses a mount", §11.3.1): a mounted leaf's
+# `domain.element_type` that must be written onto a reaction system, whose
+# species and parameters have no per-variable `element_type`.
+ELEMENT_TYPE_UNCARRIED = "element_type_uncarried"
+# A construct the evaluator cannot run at the precision it is declared in
+# (CONFORMANCE_SPEC §5.18.2): refused rather than evaluated in binary64.
+FLOAT32_UNSUPPORTED = "float32_unsupported"
 
 # Scope-injection codes (esm-spec §9.7.10). `template_inject_target_is_loader`
 # is RETIRED in 1.0.0: a data source is not a component, so it can no longer be

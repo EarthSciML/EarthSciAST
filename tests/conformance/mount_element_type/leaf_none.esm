@@ -1,0 +1,60 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "mount_element_type_leaf_none",
+    "description": "A leaf that declares NO domain.element_type, and therefore no precision: mounted, its variables adopt the mounting document's."
+  },
+  "models": {
+    "Plain": {
+      "variables": {
+        "a": {
+          "type": "parameter",
+          "default": 73.5,
+          "units": "1",
+          "description": "The operand of the witness ratio."
+        },
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "description": "100*((100-a)/100)/(100-a): 0.99999994 in binary32, exactly 1 in binary64."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "x",
+          "rhs": {
+            "op": "/",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  100,
+                  {
+                    "op": "/",
+                    "args": [
+                      {
+                        "op": "-",
+                        "args": [
+                          100,
+                          "a"
+                        ]
+                      },
+                      100
+                    ]
+                  }
+                ]
+              },
+              {
+                "op": "-",
+                "args": [
+                  100,
+                  "a"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

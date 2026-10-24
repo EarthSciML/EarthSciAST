@@ -91,7 +91,7 @@ const COMPILER_VOCABULARY = ("interpreter", "native", "xla", "mtk", "sympy")
 # assertion failure.
 const REFUSAL_CODES = ("compiler_refused_rule", "compiler_unavailable",
                        "unevaluable_operator", "unlowered_operator",
-                       "unsupported_construct")
+                       "unsupported_construct", "float32_unsupported")
 
 function parse_args(args)
     manifest = nothing

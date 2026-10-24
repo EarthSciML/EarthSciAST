@@ -39,6 +39,7 @@ from jsonschema import validate
 
 from .error_handling import (
     AMBIGUOUS_SUBSYSTEM_REF,
+    ELEMENT_TYPE_UNCARRIED,
     MOUNT_FORM_UNSUPPORTED,
     SUBSYSTEM_REF_IS_COUPLING_LIBRARY,
     SUBSYSTEM_REF_IS_TEMPLATE_LIBRARY,
@@ -1955,6 +1956,58 @@ def _merge_subsystem_index_sets(
             registry[n] = decl
 
 
+# esm-spec §11.3: a document that declares no `domain.element_type` evaluates in
+# binary64 — but only at a ROOT. A mounted document that declares none adopts
+# its mounter's (esm-spec §4.7 "Working precision crosses a mount").
+_DEFAULT_ELEMENT_TYPE = "Float64"
+
+
+def _declared_element_type(esm_file: Any) -> str | None:
+    """The ``domain.element_type`` a parsed document declares, or ``None``."""
+    domain = getattr(esm_file, "domain", None)
+    return getattr(domain, "element_type", None) if domain is not None else None
+
+
+def _carry_mounted_element_type(
+    component: Any, leaf: str | None, enclosing: str, where: str
+) -> None:
+    """Carry a mounted document's declared working precision onto the component
+    it splices in (esm-spec §4.7 "Working precision crosses a mount").
+
+    A leaf that declares no ``domain.element_type`` declares no precision and
+    adopts the mounting document's, so nothing is written; nor when its
+    declaration equals the mounting document's EFFECTIVE precision. Otherwise
+    every variable of the component, and of every subsystem it carries at any
+    depth, that declares no ``element_type`` of its own gets the leaf's. A
+    reaction system cannot carry it (species and parameters have no
+    ``element_type``) and is refused with ``element_type_uncarried``.
+    """
+    if leaf is None or leaf == enclosing:
+        return
+    _stamp_element_type(component, leaf, enclosing, where, "")
+
+
+def _stamp_element_type(system: Any, leaf: str, enclosing: str, where: str, path: str) -> None:
+    if isinstance(system, ReactionSystem):
+        at = f" (subsystem '{path}')" if path else ""
+        raise SubsystemRefError(
+            f'{where}: the mounted document declares `domain.element_type: "{leaf}"` '
+            f"but the document mounting it evaluates in {enclosing}, and the component "
+            f"carries a reaction system{at} whose species and parameters cannot declare a "
+            f"per-variable `element_type`; the mount cannot keep the leaf's precision "
+            f'(esm-spec §4.7 "Working precision crosses a mount"). Declare the same '
+            f"`domain.element_type` on the mounting document, or remove it from the leaf",
+            code=ELEMENT_TYPE_UNCARRIED,
+        )
+    if not isinstance(system, Model):
+        return
+    for var in system.variables.values():
+        if getattr(var, "element_type", None) is None:
+            var.element_type = leaf
+    for name, sub in (system.subsystems or {}).items():
+        _stamp_element_type(sub, leaf, enclosing, where, f"{path}.{name}" if path else name)
+
+
 def _resolve_subsystems_generic(
     component: Any,
     base_path: str,
@@ -2088,6 +2141,7 @@ def _resolve_model_subsystems(
     *,
     api_meta: dict[str, int] | None = None,
     root_env: dict[str, int] | None = None,
+    precision: str = _DEFAULT_ELEMENT_TYPE,
 ) -> None:
     """Recursively resolve subsystem refs within a Model.
 
@@ -2120,12 +2174,17 @@ def _resolve_model_subsystems(
         # closed scope overlaid on the enclosing one (esm-spec §4.7), and the
         # loader-API bindings keep travelling down the walk (§9.7.6 site 4).
         child_env = _child_fold_env(root_env, leaf_env)
+        # esm-spec §4.7 "Working precision crosses a mount": the leaf's own
+        # edges compare against ITS effective precision.
+        leaf_precision = _declared_element_type(parsed)
+        leaf_effective = leaf_precision or precision
         resolve_model_refs(
             parsed,
             new_base,
             loader_metaparameters=api_meta,
             parent_metaparameters=child_env,
             _mount_chain=tuple(new_chain),
+            _enclosing_precision=precision,
         )
 
         # esm-spec §4.7: the mounted file's document-scoped index sets
@@ -2152,6 +2211,10 @@ def _resolve_model_subsystems(
                 new_chain,
                 api_meta=api_meta,
                 root_env=child_env,
+                precision=leaf_effective,
+            )
+            _carry_mounted_element_type(
+                sub_model, leaf_precision, precision, f"subsystem ref '{ref_str}'"
             )
             return sub_model
         raise SubsystemRefError(f"Subsystem ref '{ref_str}' does not contain a model")
@@ -2166,6 +2229,7 @@ def _resolve_model_subsystems(
                 sub_chain,
                 api_meta=api_meta,
                 root_env=root_env,
+                precision=precision,
             )
 
     _resolve_subsystems_generic(
@@ -2186,6 +2250,7 @@ def _resolve_reaction_system_subsystems(
     chain: tuple[str, ...] = (),
     *,
     api_meta: dict[str, int] | None = None,
+    precision: str = _DEFAULT_ELEMENT_TYPE,
 ) -> None:
     """Recursively resolve subsystem refs within a ReactionSystem.
 
@@ -2203,8 +2268,17 @@ def _resolve_reaction_system_subsystems(
         if parsed.reaction_systems:
             sub_rs = next(iter(parsed.reaction_systems.values()))
             sub_rs.name = sub_name
+            leaf_precision = _declared_element_type(parsed)
             _resolve_reaction_system_subsystems(
-                sub_rs, new_base, new_seen, new_chain, api_meta=api_meta
+                sub_rs,
+                new_base,
+                new_seen,
+                new_chain,
+                api_meta=api_meta,
+                precision=leaf_precision or precision,
+            )
+            _carry_mounted_element_type(
+                sub_rs, leaf_precision, precision, f"subsystem ref '{ref_str}'"
             )
             return sub_rs
         raise SubsystemRefError(f"Subsystem ref '{ref_str}' does not contain a reaction system")
@@ -2212,7 +2286,7 @@ def _resolve_reaction_system_subsystems(
     def recurse_resolved(sub_value, sub_base, sub_seen, sub_chain):
         if isinstance(sub_value, ReactionSystem):
             _resolve_reaction_system_subsystems(
-                sub_value, sub_base, sub_seen, sub_chain, api_meta=api_meta
+                sub_value, sub_base, sub_seen, sub_chain, api_meta=api_meta, precision=precision
             )
 
     _resolve_subsystems_generic(
@@ -2269,13 +2343,24 @@ def resolve_subsystem_refs(
         registry = {}
         esm_file.index_sets = registry
 
+    # esm-spec §4.7 "Working precision crosses a mount": this document's own
+    # declaration, else the root default.
+    precision = _declared_element_type(esm_file) or _DEFAULT_ELEMENT_TYPE
     for model in esm_file.models.values():
         _resolve_model_subsystems(
-            model, base_path, seen, registry, api_meta=api_meta, root_env=root_env
+            model,
+            base_path,
+            seen,
+            registry,
+            api_meta=api_meta,
+            root_env=root_env,
+            precision=precision,
         )
 
     for rs in esm_file.reaction_systems.values():
-        _resolve_reaction_system_subsystems(rs, base_path, seen, api_meta=api_meta)
+        _resolve_reaction_system_subsystems(
+            rs, base_path, seen, api_meta=api_meta, precision=precision
+        )
 
 
 def resolve_model_refs(
@@ -2284,6 +2369,7 @@ def resolve_model_refs(
     loader_metaparameters: dict[str, int] | None = None,
     parent_metaparameters: dict[str, int] | None = None,
     _mount_chain: tuple[str, ...] = (),
+    _enclosing_precision: str = _DEFAULT_ELEMENT_TYPE,
 ) -> None:
     """Resolve all top-level model references in an ESM file.
 
@@ -2336,6 +2422,10 @@ def resolve_model_refs(
     if not isinstance(registry, dict):
         registry = {}
         esm_file.index_sets = registry
+    # esm-spec §4.7 "Working precision crosses a mount": THIS document's
+    # effective precision — its own declaration, else its mounter's (the root
+    # default at depth zero). Every edge below compares its leaf against it.
+    precision = _declared_element_type(esm_file) or _enclosing_precision
     resolved_models: dict[str, Any] = {}
     for model_name, model_value in esm_file.models.items():
         # An already-parsed Model (inline definition) passes through unchanged.
@@ -2378,6 +2468,7 @@ def resolve_model_refs(
         )
 
         parsed = _parse_esm_data(ref_data)
+        leaf_precision = _declared_element_type(parsed)
 
         # The referenced document may itself be an ASSEMBLY — one whose own
         # `models.<k>` entries are `{ref}` mount edges. esm-spec §4.7's
@@ -2407,6 +2498,7 @@ def resolve_model_refs(
             loader_metaparameters=loader_metaparameters,
             parent_metaparameters=child_env,
             _mount_chain=(*_mount_chain, canonical),
+            _enclosing_precision=precision,
         )
 
         # esm-spec §4.7: the referenced file's document-scoped index sets — now
@@ -2450,6 +2542,10 @@ def resolve_model_refs(
             (canonical,),
             api_meta=loader_metaparameters,
             root_env=child_env,
+            precision=leaf_precision or precision,
+        )
+        _carry_mounted_element_type(
+            sub_model, leaf_precision, precision, f"top-level model ref '{ref_str}'"
         )
         resolved_models[model_name] = sub_model
 

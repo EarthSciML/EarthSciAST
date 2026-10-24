@@ -324,6 +324,12 @@ diagnostic_code_registry! {
     /// mechanism"). Refused at the entry rather than failing later on an
     /// incidental typed-parse error.
     MOUNT_FORM_UNSUPPORTED = "mount_form_unsupported";
+    /// A declared working precision reaches a construct that cannot carry it
+    /// (esm-spec §11.3.1, §4.7 "Working precision crosses a mount"): a mounted
+    /// leaf's `domain.element_type` over a reaction system, whose species and
+    /// parameters have no per-variable `element_type`. Refused rather than
+    /// evaluated in the mounting document's precision.
+    ELEMENT_TYPE_UNCARRIED = "element_type_uncarried";
     /// A `subsystem` ref pointing at a COUPLING library, which exports roles
     /// rather than a mountable system.
     SUBSYSTEM_REF_IS_COUPLING_LIBRARY = "subsystem_ref_is_coupling_library";
@@ -624,6 +630,7 @@ mod error_code_tests {
             "derived_index_set_unmaterialized",
             "dimensional_mismatch",
             "domain_unit_mismatch",
+            "element_type_uncarried",
             "enum_invalid_args",
             "enum_lowering_residual",
             "equation_count_mismatch",

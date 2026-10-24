@@ -1,0 +1,115 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "mount_element_type_leaf_f32",
+    "description": "A Float32 leaf (esm-spec §4.7 'Working precision crosses a mount'). Its quantities are binary32; its ten-digit key declares Float64 and must stay exact through arithmetic. Loads and passes its own inline tests standalone; every assembly in this directory mounts it."
+  },
+  "domain": {
+    "element_type": "Float32"
+  },
+  "models": {
+    "Rows": {
+      "variables": {
+        "a": {
+          "type": "parameter",
+          "default": 73.5,
+          "units": "1",
+          "description": "The operand of the witness ratio."
+        },
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "description": "100*((100-a)/100)/(100-a): 0.99999994 in binary32, exactly 1 in binary64."
+        },
+        "key": {
+          "type": "parameter",
+          "default": 2265007010,
+          "units": "1",
+          "element_type": "Float64",
+          "description": "A ten-digit category code, above binary32's exact-integer limit 2^24; binary32 would store 2265007104."
+        },
+        "key_next": {
+          "type": "unknown",
+          "units": "1",
+          "element_type": "Float64",
+          "description": "key + 5: 2265007015 in binary64, 2265007104 in binary32."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "x",
+          "rhs": {
+            "op": "/",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  100,
+                  {
+                    "op": "/",
+                    "args": [
+                      {
+                        "op": "-",
+                        "args": [
+                          100,
+                          "a"
+                        ]
+                      },
+                      100
+                    ]
+                  }
+                ]
+              },
+              {
+                "op": "-",
+                "args": [
+                  100,
+                  "a"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "key_next",
+          "rhs": {
+            "op": "+",
+            "args": [
+              "key",
+              5
+            ]
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "binary32_quantity_binary64_key",
+          "time_span": {
+            "start": 0.0,
+            "end": 0.0
+          },
+          "assertions": [
+            {
+              "variable": "x",
+              "time": 0.0,
+              "expected": 0.9999999403953552,
+              "tolerance": {
+                "rel": 0.0,
+                "abs": 0.0
+              }
+            },
+            {
+              "variable": "key_next",
+              "time": 0.0,
+              "expected": 2265007015,
+              "tolerance": {
+                "rel": 0.0,
+                "abs": 0.0
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

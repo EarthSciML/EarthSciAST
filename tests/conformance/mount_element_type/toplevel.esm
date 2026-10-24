@@ -1,0 +1,83 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "mount_element_type_toplevel",
+    "description": "The F59 case: a document that declares no domain mounts the Float32 leaf at a top-level models.<k> {ref}, beside a model of its own that uses the SAME variable names. The leaf's variables carry Float32 (its key keeps its own Float64); the assembly's own stay binary64."
+  },
+  "models": {
+    "Leaf": {
+      "ref": "./leaf_f32.esm"
+    },
+    "Host": {
+      "variables": {
+        "a": {
+          "type": "parameter",
+          "default": 73.5,
+          "units": "1",
+          "description": "The operand of the witness ratio."
+        },
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "description": "100*((100-a)/100)/(100-a): 0.99999994 in binary32, exactly 1 in binary64."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "x",
+          "rhs": {
+            "op": "/",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  100,
+                  {
+                    "op": "/",
+                    "args": [
+                      {
+                        "op": "-",
+                        "args": [
+                          100,
+                          "a"
+                        ]
+                      },
+                      100
+                    ]
+                  }
+                ]
+              },
+              {
+                "op": "-",
+                "args": [
+                  100,
+                  "a"
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "assembly_stays_binary64",
+          "time_span": {
+            "start": 0.0,
+            "end": 0.0
+          },
+          "assertions": [
+            {
+              "variable": "x",
+              "time": 0.0,
+              "expected": 1.0,
+              "tolerance": {
+                "rel": 0.0,
+                "abs": 0.0
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
