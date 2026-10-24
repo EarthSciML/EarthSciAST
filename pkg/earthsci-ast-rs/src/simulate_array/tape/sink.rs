@@ -14,8 +14,12 @@
 //! readers renamed to the second; a gather whose output-only readers cannot
 //! be renamed stays where it is. Only a gather every reader of which is in
 //! the CONTINUOUS section moves, and never into or out of a conditional
-//! region or a recurrence body, whose instruction counts are fixed. The
-//! values are the same; only where the gather runs changes.
+//! region or a recurrence body, whose instruction counts are fixed. Every
+//! reader must also be arithmetic over the broadcast box, whose group then
+//! takes the gather in: a reader that reads the box whole (a `DyWrite`, a
+//! reduction, a scan, a table read) would have the gather write the box on
+//! every call instead of once. The values are the same; only where the
+//! gather runs changes.
 
 use super::ir::*;
 
@@ -23,7 +27,8 @@ use super::ir::*;
 const MIN_BROADCAST_RATIO: usize = 4;
 
 /// Move every CONST or SEGMENT broadcast gather only the CONTINUOUS section
-/// reads to just before its first reader, one copy for the derivative path
+/// reads, and only by readers whose fused group takes it in, to just before
+/// its first reader, one copy for the derivative path
 /// and one for the output-only work (module docs). Runs after
 /// [`super::prune::split_output_only`], whose split it keeps.
 pub(super) fn sink_const_broadcasts(prog: &mut TapeProgram) {
@@ -35,6 +40,7 @@ pub(super) fn sink_const_broadcasts(prog: &mut TapeProgram) {
     let n = prog.instrs.len();
     let tables = prog.tables();
     let guarded = prog.guarded_positions();
+    let chained = super::fuse::chained_tuple_instrs(prog);
     let mut readers: Vec<Vec<usize>> = vec![Vec::new(); prog.slots.len()];
     for (i, ins) in prog.instrs.iter().enumerate() {
         ins.for_each_read(&tables, |s| {
@@ -69,6 +75,7 @@ pub(super) fn sink_const_broadcasts(prog: &mut TapeProgram) {
             || exported.contains(&out)
             || p.mapped.iter().all(|&m| m)
             || prog.slots[o].elems() < MIN_BROADCAST_RATIO * prog.slots[s].elems()
+            || !super::fuse::sunk_gather_fuses(prog, &chained, i, rs)
         {
             continue;
         }

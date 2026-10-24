@@ -1597,6 +1597,73 @@ fn scans_of(_variant: &str) -> usize {
     1
 }
 
+/// A column of build-time values `w[k]` read over every column of
+/// `u[i, k]`: by a product with the state, or (`"dy"`) as the derivative
+/// itself.
+fn broadcast_const_doc(reader: &str) -> serde_json::Value {
+    let wk = json!({"op": "index", "args": ["w", "k"]});
+    let rhs = match reader {
+        "product" => json!({"op": "*", "args": [wk, {"op": "index", "args": ["u", "i", "k"]}]}),
+        "dy" => wk,
+        _ => unreachable!(),
+    };
+    json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "tape_broadcast_const"},
+        "index_sets": {
+            "i": {"kind": "interval", "size": 20},
+            "k": {"kind": "interval", "size": 5}
+        },
+        "models": {"M": {
+            "variables": {
+                "u": {"type": "unknown", "shape": ["i", "k"]},
+                "w": {"type": "unknown", "shape": ["k"]}
+            },
+            "equations": [
+                {"lhs": "w", "rhs": {"op": "faq", "args": [], "output_idx": ["k"],
+                    "ranges": {"k": [1, 5]},
+                    "expr": {"op": "+", "args": [0.5, {"op": "*", "args": [0.01, "k"]}]}}},
+                {"lhs": {"op": "faq", "args": [], "output_idx": ["i", "k"],
+                    "expr": {"op": "D", "args": [{"op": "index", "args": ["u", "i", "k"]}],
+                        "wrt": "t"},
+                    "ranges": {"i": [1, 20], "k": [1, 5]}},
+                 "rhs": {"op": "faq", "args": [], "output_idx": ["i", "k"],
+                    "ranges": {"i": [1, 20], "k": [1, 5]}, "expr": rhs}}
+            ]
+        }}
+    })
+}
+
+/// A broadcast of a build-time value moves to the call only where its
+/// reader's fused group reads the small source in its place (`sink`): read
+/// by arithmetic over its box, it leaves the build-time section and folds
+/// into the reader's group; read whole by a `DyWrite`, it would be a gather
+/// writing the whole box on every call, so it stays where it runs once.
+#[test]
+fn ab_const_broadcast_sinks_only_into_a_fusing_reader() {
+    for reader in ["product", "dy"] {
+        let prog = ab_check(broadcast_const_doc(reader), -2.0, 2.0);
+        let gathers = |c: Cadence| {
+            prog.instrs[prog.section_range(c)]
+                .iter()
+                .filter(|i| matches!(i, Instr::Gather { .. }))
+                .count()
+        };
+        let (build, call) = (gathers(Cadence::Const), gathers(Cadence::Continuous));
+        if reader == "product" {
+            assert_eq!((build, call), (0, 0), "[{reader}] the broadcast folds");
+            let folded = prog
+                .fused
+                .iter()
+                .flat_map(|f| &f.inputs)
+                .any(|inp| inp.shifted_ix.is_some() || inp.gather.is_some());
+            assert!(folded, "[{reader}] read in the reader's group");
+        } else {
+            assert_eq!((build, call), (1, 0), "[{reader}] the broadcast stays");
+        }
+    }
+}
+
 /// A reverse window whose body reads the output index is not a scan, but
 /// still folds each cell's suffix from the top (esm-spec §4.3.1): a reverse
 /// `Reduce` over the promoted box, matching the interpreter's descending
