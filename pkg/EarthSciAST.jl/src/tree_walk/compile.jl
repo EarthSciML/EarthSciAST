@@ -1864,12 +1864,11 @@ end
 # Compile-once runtime ⊕-reduction (ess-runtime-contraction). Iterates the static
 # integer range `lo:step:hi`, writing the counter into the shared `Ref` every
 # iteration so the ONE compiled `body` (whose `_NK_LOOPVAR` leaves read that ref)
-# yields term(k); folds with ⊕ seeded from `n.literal` (0̄, or `_first_term_seed`
-# for a reduction nested in the whole-array nest's term). The iteration order is
+# yields term(k); folds with ⊕ seeded from 0̄ (`n.literal`). The iteration order is
 # `_expand_int_range`'s order — the SAME order the unroll path (`_foreach_aggregate_term`
-# → `_combine_with_reducer`) accumulates in — so a single-index loop is bit-identical
-# to the unrolled fold (modulo the leading `0̄ ⊕ ·`, itself an identity for all four
-# semirings). Nested loops (multi-index) group the sum by the outer index, a
+# → `_combine_with_reducer`) accumulates in, from the same 0̄ seed (esm-spec §4.3.1) —
+# so a single-index loop is bit-identical to the unrolled fold. Nested loops
+# (multi-index) group the sum by the outer index, a
 # reassociation within ~length·eps of the flat unroll. Zero per-call allocation: the
 # ref is built once at compile time; the fold is stack-only and type-stable in `T`.
 #

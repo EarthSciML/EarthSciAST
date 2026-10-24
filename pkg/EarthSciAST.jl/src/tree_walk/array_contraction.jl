@@ -374,12 +374,13 @@ _cg_oplus_fn(op::Symbol) =
 # step, for every emitter that writes one (the nest's term below, the scalar
 # codegen tier's units). The accumulator starts at the node's `Float64` seed as
 # it is, not converted to the value type, and each step is `acc = acc ⊕ term`
-# with the counter bound for the term's loop-var leaves. With the seed
-# `_first_term_seed` (resolve.jl) the fold is the unroll's from its first term,
-# and under a `Dual` value type the first term's partials pass through
-# `seed ⊕ term` untouched. `lo`, `st` and `hi` are the range's bounds as the
-# caller emits them; `span`, when given, is the counter's least and greatest
-# value, which lets a gather the counter subscripts drop its range test.
+# with the counter bound for the term's loop-var leaves. The seed is 0̄, as the
+# unroll's is (`_combine_with_reducer`, esm-spec §4.3.1), and under a `Dual`
+# value type the first term's partials pass through `0̄ ⊕ term` untouched, as
+# they do through the unroll's leading `Float64` 0̄. `lo`, `st` and `hi` are
+# the range's bounds as the caller emits them; `span`, when given, is the
+# counter's least and greatest value, which lets a gather the counter
+# subscripts drop its range test.
 function _cg_contraction_loop(ctx::_CGCtx, kc, nd::_Node, lo, st, hi; span=nothing)
     spec = nd.payload::_ContractLoop
     haskey(kc.loops, spec.ref) && throw(_CodegenDecline(:contraction_loop_reentered))

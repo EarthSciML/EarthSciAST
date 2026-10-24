@@ -908,13 +908,6 @@ const _ARRAY_CELL_DEPTH = Ref(0)
 # else has bound names without it, so it never sees the loop node.
 const _NEST_SCALAR_LOOPS = "\0nest_scalar_loops"
 
-# The seed that makes a fold `acc = acc ⊕ term` from it equal, bit for bit, the
-# fold from the first term the unroll writes (`_combine_with_reducer`): `-0.0`
-# for `+` (`-0.0 + x` is `x` for every `x`, `-0.0` included, where `0.0 + -0.0`
-# is `+0.0`), `1.0` for `*`, `-Inf` for max and `Inf` for min.
-_first_term_seed(oplus::String) =
-    oplus == "+" ? -0.0 : oplus == "*" ? 1.0 : oplus == "max" ? -Inf : Inf
-
 # Tier gate and coverage floor. On under `native`, but only for reductions at
 # least `_contraction_loop_min()` long — small reductions keep unrolling so the
 # vast existing small-aggregate test surface (and its CSE / stencil interactions)
@@ -1147,9 +1140,9 @@ function _resolve_scalar_faq(faq_expr::OpExpr, array_var_info, var_map, const_ar
     end
     # Nested in the whole-array nest's term (`_NEST_SCALAR_LOOPS` among the
     # bound names), a reduction over ONE constant range at least the loop floor
-    # long stays a loop that reads the nest's counters. It folds from
-    # `_first_term_seed`, so its value is the unroll's below bit for bit: the
-    # same terms in the same order, left to right from the first. Two or more
+    # long stays a loop that reads the nest's counters. It folds from 0̄, so its
+    # value is the unroll's below bit for bit: the same terms in the same order,
+    # left to right from the same seed (esm-spec §4.3.1). Two or more
     # contracted indices keep unrolling, since nested loops would group the sum
     # by the outer index.
     if _NEST_SCALAR_LOOPS in bound_syms && gates === nothing &&
@@ -1159,7 +1152,7 @@ function _resolve_scalar_faq(faq_expr::OpExpr, array_var_info, var_map, const_ar
         r = _expand_int_range(ranges_dict[contract_names[1]])
         if length(r) >= _contraction_loop_min()
             looped = _try_build_contraction_loop(body, contract_names, [r], oplus,
-                        _first_term_seed(oplus), array_var_info, var_map, const_arrays,
+                        zerobar, array_var_info, var_map, const_arrays,
                         pgather; outer_syms = bound_syms)
             looped === nothing || return looped
         end

@@ -6151,8 +6151,7 @@ end
 
 # A region's value as the right-hand side of the equation over its cells (see
 # `_makearray_region_equations`); `nothing` when its rank fits neither the
-# makearray nor the region, which the per-cell build then reports, or when it
-# is a contraction `_ma_nested_contraction` does not rewrite.
+# makearray nor the region, which the per-cell build then reports.
 function _makearray_region_rhs(val::ASTExpr, box::Vector{Tuple{Int,Int}},
                                loops::Vector{String})
     nd = length(loops)
@@ -6163,56 +6162,9 @@ function _makearray_region_rhs(val::ASTExpr, box::Vector{Tuple{Int,Int}},
             length(_output_idx_strings(v))
         sel = rank == nd ? loops : String[loops[d] for d in 1:nd if box[d][1] != box[d][2]]
         length(sel) == rank || return nothing
-        if rank == nd && _is_faq_op(v.op)
-            v = _ma_nested_contraction(v)
-            v === nothing && return nothing
-        end
         return OpExpr("index", ASTExpr[v, (VarExpr(l) for l in sel)...])
     end
-    # A rank-0 aggregate stays nested in a pass-through `+`: as the bare
-    # right-hand side it would be this equation's own aggregate, folded from
-    # the 0̄ seed, where the gather unrolls it from its first term.
-    val isa OpExpr && _is_faq_op((val::OpExpr).op) && return OpExpr("+", ASTExpr[val])
     return val
-end
-
-# A region value that is an array `faq` of the makearray's rank, ready to be
-# gathered at the piece's own loops. The gather `index(<faq>, i…)` resolves it
-# as an expression (`_resolve_index_of_faq`), which folds a contraction from its
-# first term. The piece's cascade would instead unwrap that gather to the bare
-# contraction (`_unwrap_identity_gather`), which every tier folds from the 0̄
-# seed: all `-0.0` terms then sum to `+0.0` where the interpreter, which never
-# splits, has `-0.0`. So a value that contracts one index over a constant range,
-# with no join or filter, becomes the same reduction as a rank-0 `faq` nested in
-# an array `faq` over the output indices alone, which nothing unwraps: the
-# gather resolves it from its first term (`_resolve_scalar_faq`), the terms and
-# their order unchanged, and the whole-array nest keeps a long one as a loop
-# seeded to match. Any other contraction gives `nothing`, and the equation
-# stays whole.
-function _ma_nested_contraction(v::OpExpr)
-    ranges = v.ranges
-    ranges === nothing && return nothing
-    v.expr_body === nothing && return nothing
-    contracted = _contracted_index_names(ranges, _output_idx_strings(v))
-    isempty(contracted) && return v
-    length(contracted) == 1 || return nothing
-    (v.join === nothing && v.join_gates === nothing && v.filter === nothing &&
-     v.key === nothing && v.distinct !== true) || return nothing
-    c = contracted[1]
-    _is_const_int_range(ranges[c]) || return nothing
-    oplus = try
-        first(_aggregate_oplus_identity(v.semiring, v.reduce))
-    catch err
-        err isa TreeWalkError || rethrow()
-        return nothing
-    end
-    oplus in ("+", "*", "max", "min") || return nothing
-    inner = OpExpr("faq", ASTExpr[]; output_idx=Any[],
-                   ranges=Dict{String,Any}(c => ranges[c]), expr_body=v.expr_body,
-                   reduce=v.reduce, semiring=v.semiring)
-    return OpExpr("faq", ASTExpr[]; output_idx=copy(v.output_idx),
-                  ranges=Dict{String,Any}(k => r for (k, r) in ranges if k != c),
-                  expr_body=inner)
 end
 
 # The output slots of a whole-array nest whose LHS subscripts are affine, in

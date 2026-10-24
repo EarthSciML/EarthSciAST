@@ -11,11 +11,11 @@
 # its one body. This pins, against `compiler=:interpreter` (the per-cell unroll):
 #
 #   * bit-identity, `===` per element, for one region, `[0, nested]` over the same
-#     box, overlapping regions where the last wins, a gap left at 0, and a fold
-#     whose terms are all `-0.0` (the loop's seed must not turn it into `+0.0`);
+#     box, overlapping regions where the last wins, a gap left at 0, and a `+`
+#     fold whose terms are all `-0.0` (`+0.0`, from the 0̄ seed, esm-spec §4.3.1);
 #   * the same values as the bare `faq` with no `makearray` around it;
-#   * a region value that contracts an index itself, folded from its first term
-#     as the interpreter's gather folds it, for every numeric ⊕;
+#   * a region value that contracts an index itself, folded as the interpreter's
+#     gather folds it, for every numeric ⊕;
 #   * the route: the whole-array nest, no per-cell build, and report rows that
 #     name the equation each region's piece came from;
 #   * node lowerings flat in N, zero allocation per steady call, and ForwardDiff
@@ -111,21 +111,22 @@ _mnr_same(a, b) = length(a) == length(b) && all(a[k] === b[k] for k in eachindex
         @test ref[1] != sum(big(_mnr_u(1)) * big(_mnr_u(j)) for j in 1:N)
     end
 
-    @testset "every term -0.0 stays -0.0 (N=$N)" for N in (6, 40)
+    @testset "every term -0.0 sums to +0.0 (N=$N)" for N in (6, 40)
         ics = _mnr_ics(N; u=k -> 1.0 + k)
         interp, _ = _mnr_du(_mnr_doc(N, two_regions(N; term=:negzero)), ics; compiler=:interpreter)
         nat, _ = _mnr_du(_mnr_doc(N, two_regions(N; term=:negzero)), ics; compiler=:native)
-        @test all(x -> x === -0.0, interp)
+        @test all(x -> x === 0.0, interp)
         @test _mnr_same(nat, interp)
     end
 
     # A region value that contracts `j` itself. The interpreter reads it as the
-    # gather `index(<faq>, i)`, a fold from the first term, so every `-0.0` term
-    # sums to `-0.0`; a fold from the semiring's 0̄ would give `+0.0`. The same
-    # holds for the partials under ForwardDiff, which are all `-0.0` here too.
+    # gather `index(<faq>, i)`, a fold from the semiring's 0̄, so under `+` every
+    # `-0.0` term sums to `+0.0`; a piece unwraps the gather to the bare
+    # contraction, which folds from the same seed. The partials under
+    # ForwardDiff are all `-0.0` here, which the `Float64` seed leaves as they are.
     # Alone in its makearray the value is the affine tier's; next to a nested
     # reduction, which that tier declines, the equation is split by region.
-    @testset "a contracting region value folds from its first term ($reduce, N=$N)" for
+    @testset "a contracting region value folds as the interpreter does ($reduce, N=$N)" for
             N in (6, 40), reduce in ("+", "max", "min", "*")
         ics = _mnr_ics(N; u=k -> 1.0 + k)
         h = N ÷ 2
@@ -137,7 +138,7 @@ _mnr_same(a, b) = length(a) == length(b) && all(a[k] === b[k] for k in eachindex
         for rhs in (alone, beside)
             interp, _ = _mnr_du(_mnr_doc(N, rhs), ics; compiler=:interpreter)
             nat, tally = _mnr_du(_mnr_doc(N, rhs), ics; compiler=:native)
-            reduce == "+" && @test all(x -> x === -0.0, interp)
+            reduce == "+" && @test all(x -> x === 0.0, interp)
             @test _mnr_same(nat, interp)
             @test get(tally, :percell_acc, 0) == 0
             grads = map((:interpreter, :native)) do c
