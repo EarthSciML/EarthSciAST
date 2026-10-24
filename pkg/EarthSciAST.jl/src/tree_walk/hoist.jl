@@ -231,23 +231,31 @@ _hoist_filtered_producer(e::OpExpr) = _is_faq_op(e.op) && e.filter !== nothing &
     all(x -> (r = get(e.ranges, String(x), nothing); r isa IndexSetRef && isempty(r.of)),
         e.output_idx)
 
-function _hoist_operand_walk(e::ASTExpr, owner::String, hc::_HoistCtx)
+# Memoized on node identity: this runs over every plain equation, and a body
+# that shares a subexpression (a doubling DAG of `n + n`) must be walked once
+# per distinct node, not once per path.
+function _hoist_operand_walk(e::ASTExpr, owner::String, hc::_HoistCtx,
+                             memo::IdDict{OpExpr,ASTExpr})
     e isa OpExpr || return e
     o = e::OpExpr
     _hoist_plain(o) || return o
+    hit = get(memo, o, nothing)
+    hit === nothing || return hit
     eager = (o.op == "ifelse" || o.op == "and" || o.op == "or") ? 1 : length(o.args)
     new = o.args
     for j in 1:min(eager, length(o.args))
         a = o.args[j]
         b = (a isa OpExpr && _hoist_filtered_producer(a::OpExpr)) ?
             _hoist_lift_producer(a::OpExpr, owner, hc) :
-            _hoist_operand_walk(a, owner, hc)
+            _hoist_operand_walk(a, owner, hc, memo)
         if b !== a
             new === o.args && (new = copy(o.args))
             new[j] = b
         end
     end
-    return new === o.args ? o : reconstruct(o; args=new)
+    out = new === o.args ? o : reconstruct(o; args=new)
+    memo[o] = out
+    return out
 end
 
 function _hoist_lift_producer(g::OpExpr, owner::String, hc::_HoistCtx)
@@ -288,7 +296,7 @@ function _hoist_nested_reductions(model::Model, index_sets::AbstractDict)
                                                      Set{String}(["t"]))))
             owner = eq.lhs isa VarExpr ? (eq.lhs::VarExpr).name :
                     isempty(names) ? "" : first(names)
-            new_rhs = _hoist_operand_walk(rhs, owner, hc)
+            new_rhs = _hoist_operand_walk(rhs, owner, hc, IdDict{OpExpr,ASTExpr}())
             new_rhs === rhs && continue
             eqs === model.equations && (eqs = copy(model.equations))
             eqs[i] = Equation(eq.lhs, new_rhs; _comment=eq._comment)
