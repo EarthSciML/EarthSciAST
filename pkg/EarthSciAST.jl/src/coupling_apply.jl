@@ -275,7 +275,7 @@ is_placeholder(name::AbstractString)::Bool =
     name == PLACEHOLDER_VAR || endswith(name, "." * PLACEHOLDER_VAR)
 
 """
-    _apply_operator_compose!(equations, entry, states, observeds, owners)
+    _apply_operator_compose!(equations, contribs, entry, states, observeds, owners)
 
 Apply a `CouplingOperatorCompose` entry (esm-libraries-spec §4.7.1). For
 `"systems": [A, B, …]` every B system's equations are merged INTO A's: B's
@@ -355,6 +355,7 @@ SILENTLY — which is the one outcome a coupling mis-specification must not have
     happened to author the surviving clone.
 """
 function _apply_operator_compose!(equations::Vector{Equation},
+                                  contribs::Vector{Vector{Contribution}},
                                   entry::CouplingOperatorCompose,
                                   states::OrderedDict{String, ModelVariable},
                                   observeds::OrderedDict{String, ModelVariable},
@@ -398,20 +399,26 @@ function _apply_operator_compose!(equations::Vector{Equation},
     # the first entry must not consume it. Ownership travels with the clones,
     # which is the only way it survives: after substitution they carry A's
     # variable names and are textually A's own equations.
+    # Each clone carries B's contributions with `_var` substituted inside each
+    # one, origins unchanged (B's component).
     expanded = Equation[]
+    expanded_contribs = Vector{Contribution}[]
     new_owners = String[]
     for (i, eq) in enumerate(equations)
         owner = owners[i]
         dep = lhs_dependent_variable(eq.lhs)
         if dep !== nothing && is_placeholder(dep) && owner in b_names
             for var in target_vars
-                push!(expanded, Equation(_substitute_placeholder(eq.lhs, dep, var),
-                                         _substitute_placeholder(eq.rhs, dep, var);
-                                         _comment=eq._comment))
+                cs = Contribution[Contribution(_substitute_placeholder(c.expr, dep, var),
+                                               c.origins) for c in contribs[i]]
+                push!(expanded, _equation_from(eq, cs;
+                                               lhs=_substitute_placeholder(eq.lhs, dep, var)))
+                push!(expanded_contribs, cs)
                 push!(new_owners, owner)
             end
         else
             push!(expanded, eq)
+            push!(expanded_contribs, contribs[i])
             push!(new_owners, owner)
         end
     end
@@ -426,10 +433,10 @@ function _apply_operator_compose!(equations::Vector{Equation},
         haskey(a_index, dep) || (a_index[dep] = i)
     end
 
-    # Step 3 (matching) + step 4 (summing). Terms are accumulated per target and
-    # summed into ONE flat `+` node at the end, so `rhs_A + rhs_B1 + rhs_B2`
-    # renders the way it did before this became a position-preserving merge.
-    extra = Dict{Int, Vector{ASTExpr}}()
+    # Step 3 (matching) + step 4 (summing). B's contributions are accumulated
+    # per target and appended to A's list at the end; the merged right-hand
+    # side is rebuilt from that list (the left fold, esm-libraries-spec §4.7.5).
+    extra = Dict{Int, Vector{Contribution}}()
     # §4.7.1 step 4: "the final equation for variable x has the original LHS:
     # D(x, t)". Where A defines the quantity by a bare equation and B gives it a
     # tendency, the merged equation takes B's `D` left-hand side, spelled in
@@ -483,7 +490,7 @@ function _apply_operator_compose!(equations::Vector{Equation},
             continue
         end
 
-        rhs_b = eq.rhs
+        b_contribs = expanded_contribs[i]
         if target != b_dep
             # §4.7.1 step 4: on a translation match the pair names ONE physical
             # quantity in two spellings, and B's spelling is about to lose its
@@ -492,14 +499,24 @@ function _apply_operator_compose!(equations::Vector{Equation},
             # what keeps the merged system from carrying an unknown that nothing
             # defines. On a direct or placeholder match this rewrite is the
             # identity, which is why it is guarded rather than unconditional.
-            rhs_b = _rename_variable(rhs_b, b_dep, target)
+            b_contribs = Contribution[Contribution(_rename_variable(c.expr, b_dep, target),
+                                                   c.origins) for c in b_contribs]
             merged_away[b_dep] = target
             is_bare_match && (bare_matches[b_dep] = target)
         end
         if factor != 1.0
-            rhs_b = OpExpr("*", ASTExpr[NumExpr(factor), rhs_b])
+            # One B contribution is scaled in place. Several COLLAPSE into one
+            # `factor * (b1 + b2 + …)` whose origins are their union: the
+            # factor multiplies the whole sum, and distributing it would change
+            # the arithmetic.
+            b_contribs = length(b_contribs) == 1 ?
+                Contribution[Contribution(OpExpr("*", ASTExpr[NumExpr(factor), b_contribs[1].expr]),
+                                          b_contribs[1].origins)] :
+                Contribution[Contribution(OpExpr("*", ASTExpr[NumExpr(factor),
+                                                              _fold_contributions(b_contribs)]),
+                                          _union_origins(b_contribs))]
         end
-        push!(get!(extra, a_index[target], ASTExpr[]), rhs_b)
+        append!(get!(extra, a_index[target], Contribution[]), b_contribs)
         a_lhs = expanded[a_index[target]].lhs
         if !(a_lhs isa OpExpr && a_lhs.op == "D") && eq.lhs isa OpExpr && eq.lhs.op == "D"
             d_lhs[a_index[target]] = target == b_dep ? eq.lhs :
@@ -524,11 +541,11 @@ function _apply_operator_compose!(equations::Vector{Equation},
     end
 
     if !isempty(extra)
-        for (j, terms) in extra
+        for (j, b_contribs) in extra
             eq = expanded[j]
-            expanded[j] = Equation(get(d_lhs, j, eq.lhs),
-                                   OpExpr("+", ASTExpr[eq.rhs; terms...]);
-                                   _comment=eq._comment)
+            merged = Contribution[expanded_contribs[j]; b_contribs]
+            expanded[j] = _equation_from(eq, merged; lhs=get(d_lhs, j, eq.lhs))
+            expanded_contribs[j] = merged
             # A merged equation is no longer A's authored contribution — it is
             # the composed tendency of its dependent variable, and a LATER
             # coupling entry must be able to find it under that variable's own
@@ -552,8 +569,9 @@ function _apply_operator_compose!(equations::Vector{Equation},
     if any(consumed)
         keep = findall(!, consumed)
         kept_eqs = Equation[expanded[i] for i in keep]
+        kept_contribs = Vector{Contribution}[expanded_contribs[i] for i in keep]
         kept_owners = String[new_owners[i] for i in keep]
-        expanded, new_owners = kept_eqs, kept_owners
+        expanded, expanded_contribs, new_owners = kept_eqs, kept_contribs, kept_owners
     end
 
     # §4.7.1 step 4, the merged-away name (see the docstring). Retarget FIRST,
@@ -566,8 +584,9 @@ function _apply_operator_compose!(equations::Vector{Equation},
                    OrderedDict{String, String}(merge(merged_away, inverted))
     if !isempty(renames_made)
         for (i, eq) in enumerate(expanded)
-            expanded[i] = Equation(_rename_variables(eq.lhs, renames_made),
-                                   _rename_variables(eq.rhs, renames_made);
+            renamed, expanded_contribs[i] = _rewrite_contributions(
+                e -> _rename_variables(e, renames_made), eq, expanded_contribs[i], false)
+            expanded[i] = Equation(_rename_variables(eq.lhs, renames_made), renamed.rhs;
                                    _comment=eq._comment)
         end
         for gone in keys(renames_made)
@@ -577,6 +596,7 @@ function _apply_operator_compose!(equations::Vector{Equation},
     end
 
     empty!(equations); append!(equations, expanded)
+    empty!(contribs);  append!(contribs, expanded_contribs)
     empty!(owners);    append!(owners, new_owners)
     # Everything this entry DELETED, for the caller's running document-wide
     # rename (issue #230). `inverted` is already folded in above: it is the same
@@ -1043,13 +1063,23 @@ cross-language parity) has no matching typed error, and adding a ninth is
 forbidden — the opaque-refs channel is the designated fallback.
 """
 function _apply_couple!(equations::Vector{Equation},
+                        contribs::Vector{Vector{Contribution}},
                         entry::CouplingCouple,
-                        opaque_refs::Vector{String})
+                        opaque_refs::Vector{String};
+                        index::Int,
+                        owners::Vector{String},
+                        states::AbstractDict,
+                        components::Vector{String})
     raw = get(entry.connector, "equations", nothing)
     raw isa AbstractVector || return
+    # The expression a connector writes is authored by this ENTRY: its
+    # contribution carries `{"coupling": index}` (esm-libraries-spec §4.7.5).
+    origin = _coupling_origin(index)
     for item in raw
         if item isa Equation
             push!(equations, item)
+            push!(contribs, _authored(item.rhs, origin))
+            push!(owners, "")
             continue
         end
         item isa AbstractDict || continue
@@ -1057,13 +1087,17 @@ function _apply_couple!(equations::Vector{Equation},
         # (esm-spec §10.3) is discriminated by its `transform` key, which the
         # plain `{lhs, rhs}` form never carries.
         if _has_field(item, :transform)
-            _apply_connector_transform!(equations, item, entry, opaque_refs)
+            _apply_connector_transform!(equations, contribs, item, entry, opaque_refs;
+                                        origin=origin, owners=owners, states=states,
+                                        components=components)
             continue
         end
         lhs = get(item, "lhs", nothing)
         rhs = get(item, "rhs", nothing)
         if lhs isa ASTExpr && rhs isa ASTExpr
             push!(equations, Equation(lhs, rhs; _comment="couple"))
+            push!(contribs, _authored(rhs, origin))
+            push!(owners, "")
         else
             push!(opaque_refs, string(
                 "couple:unparsed_connector_equation:",
@@ -1074,20 +1108,26 @@ function _apply_couple!(equations::Vector{Equation},
 end
 
 """
-    _apply_connector_transform!(equations, item, entry, opaque_refs)
+    _apply_connector_transform!(equations, contribs, item, entry, opaque_refs; origin, owners, states, components)
 
 Apply one `{from, to, transform, expression}` connector-transform equation
 (esm-spec §10.3). The `transform` string selects how `expression` (parsed to an
-`ASTExpr`) modifies the `to` variable's flattened ODE:
+`ASTExpr`) modifies the equation that defines `to` — the LAST equation whose
+left-hand side's dependent variable is `to`, its `D(to)` tendency or a bare
+definition:
 
-  * `additive`       — add `expression` as a source/sink term to `to`'s
-                       tendency: `D(to) ~ <existing rhs> + expression`. The term
-                       is folded onto the existing `D(to)` equation exactly as
-                       [`_apply_operator_compose!`](@ref) sums equations that
-                       share a dependent variable. If `to` has no tendency yet,
-                       `expression` becomes it.
+  * `additive`       — append `expression` to that equation's contributions,
+                       `D(to) ~ <existing rhs> + expression`, exactly as
+                       [`_apply_operator_compose!`](@ref) appends B's terms. If
+                       `to` is an UNKNOWN that no equation defines, the term
+                       BECOMES its tendency (§4.7.2): a new `D(to, t) ~
+                       expression`, placed with the equations of the top-level
+                       component `to`'s first path segment names. A parameter,
+                       or a name no component owns, takes no tendency and the
+                       term is skipped.
   * `multiplicative` — multiply `to`'s existing tendency by `expression`:
-                       `D(to) ~ (<existing rhs>) * expression`.
+                       `D(to) ~ (<existing rhs>) * expression`, collapsing the
+                       contribution list into one whose origins are the union.
   * `replacement`    — NOT IMPLEMENTED. "Replace the variable value entirely"
                        (§10.3) is ambiguous between replacing the tendency and
                        turning `to` into an algebraic variable; rather than
@@ -1099,9 +1139,14 @@ Apply one `{from, to, transform, expression}` connector-transform equation
 rather than misapplied — the same fallback the plain-equation arm uses.
 """
 function _apply_connector_transform!(equations::Vector{Equation},
+                                     contribs::Vector{Vector{Contribution}},
                                      item::AbstractDict,
                                      entry::CouplingCouple,
-                                     opaque_refs::Vector{String})
+                                     opaque_refs::Vector{String};
+                                     origin::TermOrigin,
+                                     owners::Vector{String},
+                                     states::AbstractDict,
+                                     components::Vector{String})
     transform_raw = _get_field(item, :transform, nothing)
     to_raw = _get_field(item, :to, nothing)
     expr_raw = _get_field(item, :expression, nothing)
@@ -1117,9 +1162,11 @@ function _apply_connector_transform!(equations::Vector{Equation},
     expression = expr_raw isa ASTExpr ? expr_raw : expression_from_json(expr_raw)
 
     if transform == "additive"
-        _combine_tendency_term!(equations, to, expression, "+")
+        _combine_tendency_term!(equations, contribs, to, expression, "+", origin;
+                                owners=owners, states=states, components=components)
     elseif transform == "multiplicative"
-        _combine_tendency_term!(equations, to, expression, "*")
+        _combine_tendency_term!(equations, contribs, to, expression, "*", origin;
+                                owners=owners, states=states, components=components)
     elseif transform == "replacement"
         throw(ArgumentError(
             "couple connector transform 'replacement' (esm-spec §10.3) is not " *
@@ -1135,30 +1182,54 @@ function _apply_connector_transform!(equations::Vector{Equation},
     return
 end
 
-# Fold `expression` into the `to` state's tendency in place: rewrite the RHS of
-# the existing `D(to) ~ …` equation to `combine(<existing rhs>, expression)`
-# (`combine == "+"` for additive, `"*"` for multiplicative). This mirrors the
-# shared-dependent-variable RHS merge in `_apply_operator_compose!`. When no
-# `D(to)` equation exists yet:
-#   * additive       — `expression` becomes the whole tendency (`D(to) ~ expression`);
+# Fold `expression` into the equation that defines `to`: the LAST equation whose
+# left-hand side's dependent variable is `to` (its `D(to)` tendency or a bare
+# definition). `combine == "+"` (additive) appends one contribution authored by
+# the coupling entry; `"*"` (multiplicative) collapses the list into ONE
+# contribution, `(<left fold>) * expression`, whose origins are the union then
+# the entry — the product is indivisible. When `to` has no defining equation:
+#   * additive       — an UNKNOWN takes `expression` as its whole tendency, a new
+#                      `D(to) ~ expression` placed after the equations of the
+#                      components up to and including the one `to`'s first path
+#                      segment names (where that component's equation list ends);
+#                      a parameter, or a name no component owns, is skipped;
 #   * multiplicative — there is no existing tendency to scale, which is an error.
 function _combine_tendency_term!(equations::Vector{Equation},
-                                 to::String, expression::ASTExpr, combine::String)
-    idx = findfirst(eq -> differential_lhs_variable(eq.lhs) == to, equations)
+                                 contribs::Vector{Vector{Contribution}},
+                                 to::String, expression::ASTExpr, combine::String,
+                                 origin::TermOrigin;
+                                 owners::Vector{String},
+                                 states::AbstractDict,
+                                 components::Vector{String})
+    if combine == "*" && findfirst(eq -> differential_lhs_variable(eq.lhs) == to, equations) === nothing
+        throw(ArgumentError(
+            "couple connector 'multiplicative' transform targets '$(to)', which " *
+            "has no tendency (`D($(to))`) to multiply (esm-spec §10.3)."))
+    end
+    idx = findlast(eq -> lhs_dependent_variable(eq.lhs) == to, equations)
     if idx === nothing
-        if combine == "*"
-            throw(ArgumentError(
-                "couple connector 'multiplicative' transform targets '$(to)', which " *
-                "has no tendency (`D($(to))`) to multiply (esm-spec §10.3)."))
-        end
-        push!(equations, Equation(
+        root = _component_root(to)
+        pos = findfirst(==(root), components)
+        (pos === nothing || !haskey(states, to)) && return
+        upto = Set{String}(components[1:pos])
+        last = findlast(o -> o in upto, owners)
+        at = last === nothing ? 1 : last + 1
+        insert!(equations, at, Equation(
             OpExpr("D", ASTExpr[VarExpr(to)], wrt="t"), expression;
             _comment="couple:additive"))
+        insert!(contribs, at, _authored(expression, origin))
+        insert!(owners, at, root)
         return
     end
     existing = equations[idx]
-    new_rhs = OpExpr(combine, ASTExpr[existing.rhs, expression])
-    equations[idx] = Equation(existing.lhs, new_rhs; _comment=existing._comment)
+    merged = if combine == "*"
+        Contribution[Contribution(OpExpr("*", ASTExpr[_fold_contributions(contribs[idx]), expression]),
+                                  _union_origins(contribs[idx], origin))]
+    else
+        Contribution[contribs[idx]; Contribution(expression, TermOrigin[origin])]
+    end
+    equations[idx] = _equation_from(existing, merged)
+    contribs[idx] = merged
     return
 end
 
@@ -1177,14 +1248,16 @@ consuming model, declared with its own `shape` and its own `update`, and needs
 no shape transfer from a `param_to_var` edge.
 """
 function _apply_variable_map!(equations::Vector{Equation},
+                              contribs::Vector{Vector{Contribution}},
                               params::OrderedDict{String, ModelVariable},
                               entry::CouplingVariableMap;
-                              observeds::Union{OrderedDict{String, ModelVariable},Nothing}=nothing)
+                              observeds::Union{OrderedDict{String, ModelVariable},Nothing}=nothing,
+                              index::Int)
     if entry.transform isa ASTExpr
-        _apply_expression_transform!(equations, params, observeds, entry)
+        _apply_expression_transform!(equations, contribs, params, observeds, entry, index)
         return
     end
-    _substitute_variable_map!(equations, entry)
+    _substitute_variable_map!(equations, contribs, entry)
     _promote_variable_map_param!(params, entry)
     return
 end
@@ -1199,9 +1272,11 @@ end
 # reference, so no namespacing is applied; the expression MUST reference
 # the entry's `from` variable — it is the data-flow edge the entry declares.
 function _apply_expression_transform!(equations::Vector{Equation},
+                                      contribs::Vector{Vector{Contribution}},
                                       params::OrderedDict{String, ModelVariable},
                                       observeds::Union{OrderedDict{String, ModelVariable},Nothing},
-                                      entry::CouplingVariableMap)
+                                      entry::CouplingVariableMap,
+                                      index::Int)
     from = entry.from
     to = entry.to
     transform = entry.transform::ASTExpr
@@ -1226,14 +1301,19 @@ function _apply_expression_transform!(equations::Vector{Equation},
     end
     # The defining equation (`to ~ transform`) is what MAKES `to` an observed
     # unknown from esm 1.0.0 — the declaration carries no expression, so this
-    # push is the whole definition rather than a duplicate of one.
+    # push is the whole definition rather than a duplicate of one. The coupling
+    # entry wrote that expression, so it is the definition's only author.
     push!(equations, Equation(VarExpr(to), transform))
+    push!(contribs, _authored(transform, _coupling_origin(index)))
     return
 end
 
 # Substitute the `to` reference with `from` (optionally factor-scaled) in every
-# flattened equation.
+# flattened equation. Every named transform is a replacement (§4.7.3), so the
+# substitution applies inside each contribution and adds no origin: it changes
+# an input of a term, not who wrote it.
 function _substitute_variable_map!(equations::Vector{Equation},
+                                   contribs::Vector{Vector{Contribution}},
                                    entry::CouplingVariableMap)
     # Build replacement ASTExpr. `factor` is a scaling coefficient (schema restricts
     # it to the scaling transforms — additive / multiplicative / conversion_factor;
@@ -1248,13 +1328,12 @@ function _substitute_variable_map!(equations::Vector{Equation},
     end
 
     bindings = Dict{String, ASTExpr}(entry.to => replacement)
+    join_renames = Dict{String, String}(entry.to => entry.from)
+    rewrite(e) = _rename_join_names(substitute(e, bindings), join_renames)
     for (i, eq) in enumerate(equations)
-        equations[i] = Equation(
-            substitute(eq.lhs, bindings),
-            _rename_join_names(substitute(eq.rhs, bindings),
-                               Dict{String, String}(entry.to => entry.from));
-            _comment=eq._comment,
-        )
+        rewritten, contribs[i] = _rewrite_contributions(rewrite, eq, contribs[i], false)
+        equations[i] = Equation(substitute(eq.lhs, bindings), rewritten.rhs;
+                                _comment=eq._comment)
     end
     return
 end

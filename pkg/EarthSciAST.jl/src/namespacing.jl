@@ -265,6 +265,7 @@ function _collect_model!(states::OrderedDict{String, ModelVariable},
                          params::OrderedDict{String, ModelVariable},
                          observeds::OrderedDict{String, ModelVariable},
                          equations::Vector{Equation},
+                         contribs::Vector{Vector{Contribution}},
                          continuous_events::Vector{ContinuousEvent},
                          discrete_events::Vector{DiscreteEvent},
                          model::Model, prefix::String;
@@ -317,10 +318,14 @@ function _collect_model!(states::OrderedDict{String, ModelVariable},
         end
     end
 
+    # Per-term provenance (esm-libraries-spec §4.7.5): one contribution per
+    # equation, authored by this component's full dotted path — a subsystem's
+    # equation names the subsystem, not its parent.
     for eq in model.equations
         lhs = _ns(eq.lhs)
         rhs = _ns(eq.rhs)
         push!(equations, Equation(lhs, rhs; _comment=eq._comment))
+        push!(contribs, _authored(rhs, _component_origin(prefix)))
     end
 
     # esm 1.0.0: an observed unknown's defining equation is an ORDINARY entry of
@@ -339,7 +344,7 @@ function _collect_model!(states::OrderedDict{String, ModelVariable},
         # own namespaced key, and the bound value reaches the RHS through the
         # const/refresh array registry keyed by that same name.
         sub_model isa Model || continue
-        _collect_model!(states, params, observeds, equations,
+        _collect_model!(states, params, observeds, equations, contribs,
                         continuous_events, discrete_events,
                         sub_model, "$(prefix).$(sub_name)";
                         tpl_rename=tpl_rename)
@@ -363,6 +368,7 @@ permanently-zero derivative — a zero row in the chemistry Jacobian block.
 function _collect_reaction_system!(states::OrderedDict{String, ModelVariable},
                                    params::OrderedDict{String, ModelVariable},
                                    equations::Vector{Equation},
+                                   contribs::Vector{Vector{Contribution}},
                                    continuous_events::Vector{ContinuousEvent},
                                    discrete_events::Vector{DiscreteEvent},
                                    rsys::ReactionSystem, prefix::String;
@@ -421,6 +427,7 @@ function _collect_reaction_system!(states::OrderedDict{String, ModelVariable},
         lhs = namespace_expr(eq.lhs, prefix, local_names)
         rhs = namespace_expr(rhs0, prefix, local_names)
         push!(equations, Equation(lhs, rhs; _comment=eq._comment))
+        push!(contribs, _authored(rhs, _component_origin(prefix)))
     end
 
     # A reaction system's events are collected on the same footing as a model's
@@ -435,7 +442,7 @@ function _collect_reaction_system!(states::OrderedDict{String, ModelVariable},
                      rsys.continuous_events, rsys.discrete_events, prefix, _ns_event)
 
     for (sub_name, sub_rsys) in rsys.subsystems
-        _collect_reaction_system!(states, params, equations,
+        _collect_reaction_system!(states, params, equations, contribs,
                                   continuous_events, discrete_events,
                                   sub_rsys, "$(prefix).$(sub_name)"; templates=templates)
     end
