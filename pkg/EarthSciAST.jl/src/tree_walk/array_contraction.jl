@@ -175,7 +175,7 @@ function _cg_emit(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
         # a silently wrong read if it ever can.
         throw(_CodegenDecline(:cached_scalar_slot))
     elseif k === _NK_CONTRACTION_LOOP
-        return _cg_contraction_loop(ctx, kc, nd)
+        return _cg_nest_contraction_loop(ctx, kc, nd)
     elseif k === _NK_OP
         return _cg_emit_op(ctx, kc, nd)
     end
@@ -186,31 +186,29 @@ _cg_oplus_fn(op::Symbol) =
     op === :+ ? :+ : op === :* ? :* : op === :max ? :max : op === :min ? :min :
     op === :or ? :_or_combine : throw(_CodegenDecline(:unsupported_op))
 
-# `_NK_CONTRACTION_LOOP` in a nest's term: a scalar reduction nested in it
-# (`_NEST_SCALAR_LOOPS`), `_eval_contraction_loop` as a counted loop. The
-# accumulator starts at the node's `Float64` seed, which for such a loop is
-# `_first_term_seed` (resolve.jl), so the fold is the unroll's from its first
-# term; under a `Dual` value type the first term's partials pass through
-# `seed ⊕ term` untouched. The counter's span is known, so a gather it
-# subscripts drops its range test.
-function _cg_contraction_loop(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
+# `_NK_CONTRACTION_LOOP` as a counted loop, `_eval_contraction_loop` step for
+# step, for every emitter that writes one (the nest's term below, the scalar
+# codegen tier's units). The accumulator starts at the node's `Float64` seed as
+# it is, not converted to the value type, and each step is `acc = acc ⊕ term`
+# with the counter bound for the term's loop-var leaves. With the seed
+# `_first_term_seed` (resolve.jl) the fold is the unroll's from its first term,
+# and under a `Dual` value type the first term's partials pass through
+# `seed ⊕ term` untouched. `lo`, `st` and `hi` are the range's bounds as the
+# caller emits them; `span`, when given, is the counter's least and greatest
+# value, which lets a gather the counter subscripts drop its range test.
+function _cg_contraction_loop(ctx::_CGCtx, kc, nd::_Node, lo, st, hi; span=nothing)
     spec = nd.payload::_ContractLoop
     haskey(kc.loops, spec.ref) && throw(_CodegenDecline(:contraction_loop_reentered))
     fnsym = _cg_oplus_fn(nd.op)
-    rng = spec.lo:spec.step:spec.hi
-    isempty(rng) && return nd.literal
     kv = _cg_name(ctx, "lk")
     acc = _cg_name(ctx, "lacc")
-    lo = _cg_geo!(ctx, spec.lo, (spec, :lo))
-    st = _cg_geo!(ctx, spec.step, (spec, :step), true)
-    hi = _cg_geo!(ctx, spec.hi, (spec, :hi))
     kc.loops[spec.ref] = kv
-    kc.spans[spec.ref] = extrema((first(rng), last(rng)))
+    span === nothing || (kc.spans[spec.ref] = span)
     term = try
         _cg_emit(ctx, kc, nd.children[1])
     finally
         delete!(kc.loops, spec.ref)
-        delete!(kc.spans, spec.ref)
+        span === nothing || delete!(kc.spans, spec.ref)
     end
     return quote
         let
@@ -221,6 +219,20 @@ function _cg_contraction_loop(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
             $acc
         end
     end
+end
+
+# A scalar reduction nested in a nest's term (`_NEST_SCALAR_LOOPS`). Its bounds
+# are build-time integers read through the geometry tables, and its counter's
+# span is known.
+function _cg_nest_contraction_loop(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
+    spec = nd.payload::_ContractLoop
+    rng = spec.lo:spec.step:spec.hi
+    isempty(rng) && return nd.literal
+    lo = _cg_geo!(ctx, spec.lo, (spec, :lo))
+    st = _cg_geo!(ctx, spec.step, (spec, :step), true)
+    hi = _cg_geo!(ctx, spec.hi, (spec, :hi))
+    return _cg_contraction_loop(ctx, kc, nd, lo, st, hi;
+                                span=extrema((first(rng), last(rng))))
 end
 
 # `_NK_CONST_GATHER`: evaluate the subscripts in dimension order, resolve each on
