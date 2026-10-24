@@ -492,20 +492,20 @@
         "n": 1000,
         "gate": "speed",
         "threads": "serial",
-        "measured": 1.8,
+        "measured": 2.03,
         "reason": "native builds the N x N term box in several elementwise passes and then reduces it, where the hand loop folds each row's terms in registers; fusing the elementwise chain into the reduction is executor work; issue #548",
         "phase": "native-models",
-        "provisional": "adapter run 2026-10-23, native/i547 080c8e968, local node cores 5-6, load average 10-17 (other users), one run per size"
+        "provisional": "adapter run 2026-10-23, native/i547 5b5069f0f, hand loop folding a block of rows in stack accumulators, built with -C llvm-args=-align-loops=64, local node core 8, load average 13-15 (other users), median of 5 interleaved runs (range 1.98-2.13)"
       },
       {
         "family": "makearray_nested_sum",
         "n": 3162,
         "gate": "speed",
         "threads": "serial",
-        "measured": 2.36,
+        "measured": 2.78,
         "reason": "native builds the N x N term box in several elementwise passes and then reduces it, where the hand loop folds each row's terms in registers; fusing the elementwise chain into the reduction is executor work; issue #548",
         "phase": "native-models",
-        "provisional": "adapter run 2026-10-23, native/i547 080c8e968, local node cores 5-6, load average 10-17 (other users), one run per size"
+        "provisional": "adapter run 2026-10-23, native/i547 5b5069f0f, hand loop folding a block of rows in stack accumulators, built with -C llvm-args=-align-loops=64, local node core 8, load average 13-15 (other users), median of 5 interleaved runs (range 2.64-2.84)"
       }
     ],
     "julia": [
