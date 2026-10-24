@@ -86,6 +86,7 @@ impl TapedObserveds {
                 forcing: &compiled.forcing,
                 t,
                 declared: &compiled.declared_names,
+                rule_set: compiled.rule_set,
             },
             &mut self.dy,
             false,
@@ -585,6 +586,7 @@ impl ArrayCompiled {
                 forcing: &self.forcing,
                 t,
                 declared: &self.declared_names,
+                rule_set: self.rule_set,
             },
             &mut dy,
             force_scalar,
@@ -672,6 +674,7 @@ impl ArrayCompiled {
                 forcing: &self.forcing,
                 t,
                 declared: &self.declared_names,
+                rule_set: self.rule_set,
             },
             dy,
             false,
@@ -810,6 +813,7 @@ impl ArrayCompiled {
                     forcing: &self.forcing,
                     t,
                     declared: &self.declared_names,
+                    rule_set: self.rule_set,
                 },
                 &mut dy,
                 self.is_interpreter(),
@@ -2170,6 +2174,9 @@ impl ArrayCompiled {
         // its own clone rather than borrowing `self`.
         let declared = self.declared_names.clone();
         let declared_jac = declared.clone();
+        // The closures own their rule clones, so each clone is its own rule set.
+        let rule_set_rhs = next_rule_set_id();
+        let rule_set_jac = next_rule_set_id();
 
         // Materialize the DISCRETE (segment-invariant) observeds ONCE for this
         // segment, on top of the CONST `static_obs`. The caller refreshed the
@@ -2350,6 +2357,7 @@ impl ArrayCompiled {
                     forcing: &forcing_rhs,
                     t,
                     declared: &declared,
+                    rule_set: rule_set_rhs,
                 },
                 dy_s,
                 force_scalar,
@@ -2431,6 +2439,7 @@ impl ArrayCompiled {
                     forcing: &forcing_jac,
                     t,
                     declared: &declared_jac,
+                    rule_set: rule_set_jac,
                 },
                 &mut f_y,
                 force_scalar,
@@ -2448,6 +2457,7 @@ impl ArrayCompiled {
                     forcing: &forcing_jac,
                     t,
                     declared: &declared_jac,
+                    rule_set: rule_set_jac,
                 },
                 &mut f_yp,
                 force_scalar,

@@ -1397,6 +1397,7 @@ def _parse_esm_data(data: dict[str, Any]) -> EsmFile:
             abstol=_s.get("abstol"),
             reltol=_s.get("reltol"),
             splitting=_s.get("splitting"),
+            external=_s.get("external"),
         )
         # §2.2: an EMPTY block normalizes to absence at load. `{}` is legal and
         # means what omitting the block means, so the typed document never holds
@@ -2608,11 +2609,18 @@ def _capture_component_templates(data: Any) -> dict[str, Any]:
     return out
 
 
+def _lexical_dir(path: str | os.PathLike[str]) -> str:
+    """``path`` as an absolute directory, dot segments removed lexically (§2.2.6)."""
+    from .solver import _absolute_directory
+
+    return _absolute_directory(path)
+
+
 def load_path(
     path: str | Path,
     *,
     metaparameters: dict[str, int] | None = None,
-    base_path: str | None = None,
+    base_path: str | os.PathLike[str] | None = None,
 ) -> EsmFile:
     """Read and parse an ESM document from a filesystem path.
 
@@ -2626,6 +2634,7 @@ def load_path(
     Raises:
         FileNotFoundError: If the file path doesn't exist.
     """
+    base_path = os.fspath(base_path) if base_path is not None else None
     file_path = Path(path)
     resolved_base = base_path if base_path is not None else str(file_path.parent.resolve())
     with open(file_path) as f:
@@ -2634,6 +2643,11 @@ def load_path(
     # esm-spec §10.10 / §4.7: relative `coupling_import` refs resolve against this
     # file's directory, which `flatten` would otherwise never learn.
     esm_file.coupling_import_base = resolved_base
+    # esm-spec §2.2.6: D for `solver.external`, taken lexically (no symlink
+    # resolution) because the location is a string function of the document.
+    esm_file.document_base = _lexical_dir(
+        base_path if base_path is not None else os.path.dirname(os.path.abspath(file_path))
+    )
     return esm_file
 
 
@@ -2641,13 +2655,14 @@ def load_string(
     json_text: str,
     *,
     metaparameters: dict[str, int] | None = None,
-    base_path: str | None = None,
+    base_path: str | os.PathLike[str] | None = None,
 ) -> EsmFile:
     """Parse an ESM document from JSON TEXT.
 
     Args:
         json_text: The document as a JSON string.
     """
+    base_path = os.fspath(base_path) if base_path is not None else None
     data = json.loads(json_text)
     esm_file = _load_data(
         data, base_path if base_path is not None else os.getcwd(), metaparameters, None
@@ -2655,6 +2670,9 @@ def load_string(
     # esm-spec §10.10 / §4.7: an explicit base anchors relative `coupling_import`
     # refs; without one `flatten`'s own base applies.
     esm_file.coupling_import_base = base_path
+    # esm-spec §2.2.6: D for `solver.external` is the explicit base, else the
+    # process working directory.
+    esm_file.document_base = _lexical_dir(base_path if base_path is not None else os.getcwd())
     return esm_file
 
 
@@ -2662,7 +2680,7 @@ def load_document(
     document: dict,
     *,
     metaparameters: dict[str, int] | None = None,
-    base_path: str | None = None,
+    base_path: str | os.PathLike[str] | None = None,
 ) -> EsmFile:
     """Parse an ESM document that is ALREADY a Python ``dict`` — the same
     document a ``.esm`` file holds, just already ``json.load``ed.
@@ -2675,6 +2693,7 @@ def load_document(
     # shallow copy, but ``prepare_document_ops`` rewrites ``op`` values on
     # NESTED nodes, which a shallow copy still shares with the caller. Rust, Go
     # and Julia all hand the pipeline their own copy; this makes the five agree.
+    base_path = os.fspath(base_path) if base_path is not None else None
     esm_file = _load_data(
         copy.deepcopy(document),
         base_path if base_path is not None else os.getcwd(),
@@ -2684,6 +2703,9 @@ def load_document(
     # esm-spec §10.10 / §4.7: an explicit base anchors relative `coupling_import`
     # refs; without one `flatten`'s own base applies.
     esm_file.coupling_import_base = base_path
+    # esm-spec §2.2.6: D for `solver.external` is the explicit base, else the
+    # process working directory.
+    esm_file.document_base = _lexical_dir(base_path if base_path is not None else os.getcwd())
     return esm_file
 
 
@@ -2754,7 +2776,11 @@ def _load_data(
         lower_expression_templates,
         reject_expression_templates_pre_v04,
     )
-    from .solver import reject_solver_pre_v11
+    from .solver import (
+        reject_solver_external_pre_v13,
+        reject_solver_external_unresolved,
+        reject_solver_pre_v11,
+    )
     from .template_imports import (
         apply_scope_injections,
         check_data_source_extents,
@@ -2778,6 +2804,11 @@ def _load_data(
     # The top-level `solver` block arrives at esm 1.1.0; a file declaring an
     # earlier version that carries one is rejected (esm-spec §2.2.4).
     reject_solver_pre_v11(data)
+    # `solver.external` arrives at esm 1.3.0 (§2.2.4 requirement 4), and a
+    # `${` in it is refused rather than expanded (§2.2.6). The older, outer
+    # gate above runs first, so a pre-1.1.0 block is reported as such.
+    reject_solver_external_pre_v13(data)
+    reject_solver_external_unresolved(data)
 
     # Declared `units` on a `const` node arrive at esm 1.2.0 (esm-spec §4.8.5).
     from .units import reject_const_units_pre_v12

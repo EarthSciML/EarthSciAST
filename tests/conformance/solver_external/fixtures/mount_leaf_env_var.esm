@@ -1,0 +1,25 @@
+{
+  "esm": "1.3.0",
+  "metadata": {
+    "name": "SolverExternal_mount_leaf_env_var",
+    "description": "A root declaring its own `solver.external`, mounting at the top-level `models.<k>` form a leaf whose `external` carries `${`. The leaf's `solver` block does not cross the mount (esm-spec §2.2.6 'Mounting', §4.7), so the `${` refusal applies to the root alone: the root loads and its accessor returns the root's location.",
+    "authors": [
+      "EarthSciML Test Suite"
+    ],
+    "license": "MIT",
+    "tags": [
+      "solver",
+      "external",
+      "conformance",
+      "mount"
+    ]
+  },
+  "solver": {
+    "external": "./runs/root.run.json"
+  },
+  "models": {
+    "Inner": {
+      "ref": "./leaves/leaf_env_var.esm"
+    }
+  }
+}

@@ -95,18 +95,18 @@
     }
   },
   "counts": {
-    "symbols": 936,
+    "symbols": 940,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
-      "julia": 309,
-      "typescript": 239,
-      "python": 257,
-      "rust": 352,
-      "go": 444
+      "julia": 311,
+      "typescript": 241,
+      "python": 259,
+      "rust": 354,
+      "go": 448
     },
     "by_tier": {
-      "extension": 654,
-      "stable": 282
+      "extension": 656,
+      "stable": 284
     }
   },
   "planned": [
@@ -1571,6 +1571,22 @@
       "tier": "extension",
       "bindings": {
         "go": "CodeSearchsortedNonMonotonic"
+      }
+    },
+    {
+      "name": "code_solver_external_unresolved",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeSolverExternalUnresolved"
+      }
+    },
+    {
+      "name": "code_solver_external_version_too_old",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeSolverExternalVersionTooOld"
       }
     },
     {
@@ -6201,6 +6217,18 @@
       }
     },
     {
+      "name": "reject_solver_external_pre_v13",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "RejectSolverExternalPreV13",
+        "julia": "reject_solver_external_pre_v13",
+        "python": "reject_solver_external_pre_v13",
+        "rust": "reject_solver_external_pre_v13",
+        "typescript": "rejectSolverExternalPreV13"
+      }
+    },
+    {
       "name": "reject_solver_pre_v11",
       "kind": "function",
       "tier": "stable",
@@ -7085,6 +7113,18 @@
       "tier": "extension",
       "bindings": {
         "python": "SolverBlockError"
+      }
+    },
+    {
+      "name": "solver_external_location",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "go": "SolverExternalLocation",
+        "julia": "solver_external_location",
+        "python": "solver_external_location",
+        "rust": "solver_external_location",
+        "typescript": "solverExternalLocation"
       }
     },
     {

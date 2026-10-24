@@ -1,0 +1,61 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "SolverExternal_leaf_v120",
+    "description": "A single-component leaf declaring esm 1.2.0 whose `solver` block carries `external`. Loaded on its own it is refused with `solver_external_version_too_old`; mounted by a 1.3.0 root, its `solver` block does not cross the mount edge, so the gate does not apply to it and the mounting root loads (esm-spec §2.2.6 'Mounting', §4.7).",
+    "authors": [
+      "EarthSciML Test Suite"
+    ],
+    "license": "MIT",
+    "tags": [
+      "solver",
+      "external",
+      "conformance",
+      "mount",
+      "leaf"
+    ]
+  },
+  "solver": {
+    "stiffness": "low",
+    "external": "./leaf.run.json"
+  },
+  "models": {
+    "LeafDecay": {
+      "variables": {
+        "A": {
+          "type": "unknown",
+          "units": "mol/m^3",
+          "default": 2.0
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.5
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "A"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "neg",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "k",
+                  "A"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

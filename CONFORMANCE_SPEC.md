@@ -6941,6 +6941,106 @@ omits it is a configuration error rather than a run under whatever the library
 default happens to be.
 
 
+### 5.47 `solver.external` Location Resolution (normative)
+
+esm-spec §2.2.6 fixes WHERE a document's `solver.external` points. All
+**five** bindings are in scope and `bindings_required` is
+`["julia", "typescript", "python", "rust", "go"]`, for §5.22's reason:
+resolution is a pure string function, so making it required everywhere gives
+one answer per document, and a binding that resolved differently would make the
+same checked-in document name two different run configurations.
+
+The shared fixtures and the pin live in `tests/conformance/solver_external/`;
+its `README.md` is the contract for the manifest format and for how a binding
+consumes it.
+
+#### 5.47.1 What is compared
+
+Four claims.
+
+**Resolution.** One fixture per row of the §2.2.6 table — `./`-relative, bare
+relative, `../`-climbing, dot-segment-collapsing, absolute path, `file://` URL,
+`https://` URL — each loaded from its path. A binding asserts three things per
+fixture: the typed document holds the AUTHORED string, the accessor returns the
+pinned location, and `emit` writes the pinned `solver` block. Further cases load
+the same documents from a string with an explicit base, from a string with no
+base (the process working directory), and from a path with an explicit base
+that replaces the file's directory. Four more pin the §2.2.6 percent-encoding
+of a location built from a path — a space and a `#`, non-ASCII names, a
+literal pin in which `%` becomes `%25` — and that a URL comes back exactly as
+authored, its escapes not encoded again.
+
+**Refusal.** `fixtures/env_var.esm` MUST be rejected at load with
+`solver_external_unresolved`, and the message MUST contain both
+`/solver/external` and the offending string exactly as authored. The check runs
+before schema validation, right after the `solver_external_version_too_old`
+gate.
+
+**Mounting.** A root that mounts a leaf whose `solver` carries `external`
+reports the ROOT's value — resolved against the root's directory — or none,
+at both mount forms, and its emitted `solver` block carries nothing of the
+leaf's. The load-time checks on `external` are checks on the root alone: a root
+mounting a leaf whose `external` holds `${`, or a leaf declaring esm 1.2.0 that
+carries `external`, MUST load, at both mount forms.
+
+**Invariance and the advisory gate.** The flattened systems of
+`invariance/with_external.esm` and `invariance/without_external.esm` MUST be
+identical in every binding (esm-spec §2.2.4 requirement 3), and
+`tests/simulation/solver_external_advisory.esm`, whose `external` names a file
+that does not exist, MUST integrate under each simulating binding's built-in
+`solve()` and pass its inline tests.
+
+#### 5.47.2 ⛔ The resolved location is not in the document
+
+Expectations take §5.22.2's forms — `{"repo_path": …}`, `{"verbatim": …}`, and
+here also `{"cwd_path": …}` for the working-directory case — and no golden
+holds an absolute path. A `repo_path` or `cwd_path` pin is expanded to an
+absolute path and then percent-encoded as esm-spec §2.2.6 encodes a location:
+each byte of the path's UTF-8 encoding outside `A`–`Z` `a`–`z` `0`–`9` `-` `.`
+`_` `~` `/` `:` becomes `%XX` with uppercase hex, `%` itself included. The
+whole expanded path is encoded, repository root or working directory included.
+A `verbatim` pin is compared as written. Drive-letter paths (`C:/…`, which
+§2.2.6 resolves as absolute, to `file:///C:/…`) have no fixture, because the
+suite's paths are the checkout's POSIX paths; each binding pins them in a unit
+test instead. The difference from §5.22 is where the location lives:
+§8.2.1 writes the resolved `url_template` into the document, while §2.2.6 keeps
+the authored string in the document and returns the location from an accessor.
+A binding that wrote the resolved form back would pass a resolution-only check
+and still emit machine-specific documents, which is why each case pins the
+document's `external` and the emitted `solver` block as well as the location.
+
+Nothing the suite names exists on disk, for §5.22.2's reason: resolution is
+lexical and never touches the filesystem, and a fixture pointing at a real file
+would hide a binding that had reached for it.
+
+#### 5.47.3 Gate
+
+There is **no adapter and no golden**. Each binding's own suite reads
+`manifest.json` and asserts against it, and `./scripts/test-conformance.sh`
+runs the five suites it already runs:
+
+| Binding | Test |
+|---|---|
+| Julia | `pkg/EarthSciAST.jl/test/solver_external_conformance_test.jl` |
+| TypeScript | `pkg/earthsci-ast-ts/src/solver-external.test.ts` |
+| Python | `pkg/earthsci-ast-py/tests/test_solver_external_conformance.py` |
+| Rust | `pkg/earthsci-ast-rs/tests/solver_external_conformance.rs` |
+| Go | `pkg/earthsci-ast-go/pkg/esm/solver_external_conformance_test.go` |
+
+The advisory-gate fixture rides on the existing `tests/simulation` sweeps of
+Julia, Python and Rust and MUST NOT appear in their skip lists.
+
+Six further fixtures enter the ordinary §2.2.1 corpus sweep:
+`tests/valid/solver_external.esm` and `tests/valid/solver_external_only.esm`
+MUST be accepted; `tests/invalid/solver_external_empty.esm` and
+`tests/invalid/solver_external_nonstring.esm` are schema errors at
+`/solver/external`; and `tests/invalid/solver_external_version_too_old.esm` and
+`tests/invalid/solver_external_env_var.esm` are pinned `resolver_only`, with
+`resolver_error_code` `solver_external_version_too_old` and
+`solver_external_unresolved`. As with `data_source_url_env_var.esm`, `is_valid`
+is false for all five bindings: every binding implements both checks, so no
+schema-only binding accepts either file.
+
 ## 6. CI Integration
 
 ### 6.1 GitHub Actions Workflow

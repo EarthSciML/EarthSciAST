@@ -188,6 +188,16 @@ export type EsmFile = ESMFormat1 &
      * kept beside the document, never written into its refs.
      */
     couplingImportBase?: string
+
+    /**
+     * NON-SCHEMA, LOADER-POPULATED. The absolute directory `solver.external`
+     * resolves against when `solverExternalLocation` is given no base
+     * (esm-spec §2.2.6): the directory of the file read, the `basePath` load
+     * option, or the working directory at load for a string load.
+     * NON-ENUMERABLE because `external` round-trips verbatim: the base is kept
+     * beside the document, never written into it.
+     */
+    documentBase?: string
   }
 
 /** @deprecated Prefer {@link ExpressionNode} (the generated name). */

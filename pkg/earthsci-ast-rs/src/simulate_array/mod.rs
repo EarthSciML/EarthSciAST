@@ -680,6 +680,9 @@ pub struct ArrayCompiled {
     observed_rules: Vec<AlgebraicRule>,
     /// Per-state RHS rules.
     rhs_rules: Vec<RhsRule>,
+    /// Identity of `rhs_rules` + `observed_rules` for the scratch tables keyed
+    /// by their AST node addresses ([`RhsCall::rule_set`]).
+    rule_set: u64,
     /// Number of flat state slots.
     n_states: usize,
     /// External refreshable forcing-array channel (PR-1, ess-14f.7): the live

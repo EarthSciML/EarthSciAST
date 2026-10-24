@@ -1,0 +1,60 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "solver_external_version_too_old",
+    "description": "`solver.external` in a document declaring esm 1.2.0. The field arrives at esm 1.3.0, so this MUST be rejected with `solver_external_version_too_old` at `/solver/external` (esm-spec §2.2.4, §2.2.5) — the version hint, not a generic error, which is why every binding runs the gate BEFORE schema validation. The rest of the block is legal at 1.2.0: a 1.1.0 or 1.2.0 document with a `solver` block and no `external` stays valid.",
+    "authors": [
+      "EarthSciML Test Suite"
+    ],
+    "created": "2026-10-24T00:00:00Z",
+    "tags": [
+      "solver",
+      "external",
+      "version-gate",
+      "negative"
+    ]
+  },
+  "solver": {
+    "stiffness": "high",
+    "external": "runs/decay.run.json"
+  },
+  "models": {
+    "Decay": {
+      "variables": {
+        "A": {
+          "type": "unknown",
+          "units": "mol/m^3",
+          "default": 2.0
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.5
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "A"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "neg",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "k",
+                  "A"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

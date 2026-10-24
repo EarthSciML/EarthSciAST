@@ -1129,6 +1129,7 @@ def _serialize_esm_file(esm_file: EsmFile) -> dict[str, Any]:
                 ("abstol", _solver.abstol),
                 ("reltol", _solver.reltol),
                 ("splitting", _solver.splitting),
+                ("external", _solver.external),
             )
             if v is not None
         }

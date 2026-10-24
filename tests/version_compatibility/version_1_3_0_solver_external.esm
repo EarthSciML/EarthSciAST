@@ -1,0 +1,57 @@
+{
+  "esm": "1.3.0",
+  "metadata": {
+    "name": "Version_1_3_0_SolverExternal",
+    "description": "Exact version match for a 1.3.0 library. Uses the construct 1.3.0 adds, `solver.external` (esm-spec §2.2.6), so it is also a document an earlier-minor library could not read without a version warning. The referenced run configuration does not exist: EarthSciAST never opens it.",
+    "authors": [
+      "ESM Format Team"
+    ],
+    "created": "2026-10-24T00:00:00Z",
+    "tags": [
+      "test",
+      "compatibility"
+    ]
+  },
+  "solver": {
+    "external": "decay.run.json"
+  },
+  "models": {
+    "Decay": {
+      "variables": {
+        "N": {
+          "type": "unknown",
+          "units": "mol",
+          "default": 1.0
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.1
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "N"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "N"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

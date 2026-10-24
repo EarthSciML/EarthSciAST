@@ -1,0 +1,59 @@
+{
+  "esm": "1.3.0",
+  "metadata": {
+    "name": "solver_external_env_var",
+    "description": "A `solver.external` that needs an environment variable. The document is SCHEMA-VALID (`external` is a non-empty string), so the rejection is the resolver's: every binding refuses at load with `solver_external_unresolved`, and the message names `/solver/external` and quotes the string (esm-spec §2.2.6). A run configuration chosen by the environment is not reproducible, for the reason §8.2.1 gives; a deployment-chosen run configuration is a call-site argument.",
+    "authors": [
+      "EarthSciML Test Suite"
+    ],
+    "created": "2026-10-24T00:00:00Z",
+    "tags": [
+      "solver",
+      "external",
+      "environment-variable",
+      "negative"
+    ]
+  },
+  "solver": {
+    "external": "${RUNS}/x.json"
+  },
+  "models": {
+    "Decay": {
+      "variables": {
+        "A": {
+          "type": "unknown",
+          "units": "mol/m^3",
+          "default": 2.0
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.5
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "A"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "neg",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "k",
+                  "A"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

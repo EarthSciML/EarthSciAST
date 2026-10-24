@@ -1,0 +1,97 @@
+{
+  "esm": "1.3.0",
+  "metadata": {
+    "name": "SolverExternalAdvisory",
+    "description": "Advisory gate for `solver.external` (esm-spec §2.2.6 'Coexistence'). The run configuration this document names does not exist. Every simulating binding's built-in solve() MUST integrate it anyway — it ignores `external`, applies `abstol`/`reltol` by the §2.2.2 chain exactly as it would without it, MUST NOT fail because of `external`, and MUST NOT change its choice of integrator because of it — and pass the inline tests below. Closed form: A(t) = 2 exp(-0.5 t).",
+    "authors": [
+      "EarthSciML Test Suite"
+    ],
+    "created": "2026-10-24T00:00:00Z",
+    "tags": [
+      "solver",
+      "external",
+      "advisory",
+      "analytical"
+    ]
+  },
+  "solver": {
+    "abstol": 1e-10,
+    "reltol": 1e-08,
+    "external": "./runs/missing.run.json"
+  },
+  "models": {
+    "Decay": {
+      "variables": {
+        "A": {
+          "type": "unknown",
+          "units": "mol/m^3",
+          "default": 2.0
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.5
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "A"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "neg",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "k",
+                  "A"
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "tolerance": {
+        "rel": 1e-05,
+        "abs": 1e-08
+      },
+      "tests": [
+        {
+          "id": "integrates_despite_missing_run_config",
+          "description": "A(t) = 2 exp(-0.5 t), sampled at t = 0, 1, 2, 4 s. The missing run configuration changes nothing.",
+          "time_span": {
+            "start": 0.0,
+            "end": 4.0
+          },
+          "assertions": [
+            {
+              "variable": "A",
+              "time": 0.0,
+              "expected": 2.0
+            },
+            {
+              "variable": "A",
+              "time": 1.0,
+              "expected": 1.2130613194252668
+            },
+            {
+              "variable": "A",
+              "time": 2.0,
+              "expected": 0.7357588823428847
+            },
+            {
+              "variable": "A",
+              "time": 4.0,
+              "expected": 0.2706705664732254
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

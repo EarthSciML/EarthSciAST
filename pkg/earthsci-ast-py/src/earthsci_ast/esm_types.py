@@ -643,6 +643,9 @@ class Solver:
     abstol: float | None = None
     reltol: float | None = None
     splitting: str | None = None
+    # A reference to a run-configuration document (esm-spec §2.2.6), held as
+    # authored; :func:`~earthsci_ast.solver.solver_external_location` resolves it.
+    external: str | None = None
 
 
 @dataclass
@@ -1357,6 +1360,13 @@ class EsmFile:
     # from comparison so two loads of the same document from different
     # directories stay equal.
     coupling_import_base: str | None = field(default=None, repr=False, compare=False)
+    # The directory *D* a relative ``solver.external`` resolves against
+    # (esm-spec §2.2.6): the directory of the file read, else the explicit
+    # base, else the working directory at load. Absolute and dot-segment free.
+    # ``None`` for a document built in memory, whose *D* is the working
+    # directory when the location is asked for. Loader-only and non-compared,
+    # like ``coupling_import_base``.
+    document_base: str | None = field(default=None, repr=False, compare=False)
 
     @property
     def esm(self) -> str:

@@ -56,8 +56,10 @@ from .esm_types import (
 # advisory.
 from .solver import (
     SolverBlockError,
+    reject_solver_external_pre_v13,
     reject_solver_pre_v11,
     resolve_tolerances,
+    solver_external_location,
 )
 
 # Core parsing and serialization.
@@ -491,8 +493,10 @@ __all__ = [
     "Species",
     "Solver",
     "SolverBlockError",
+    "reject_solver_external_pre_v13",
     "reject_solver_pre_v11",
     "resolve_tolerances",
+    "solver_external_location",
     "Parameter",
     "Reaction",
     "ReactionSystem",
