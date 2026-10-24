@@ -509,12 +509,9 @@ function _apply_operator_compose!(equations::Vector{Equation},
             # `factor * (b1 + b2 + …)` whose origins are their union: the
             # factor multiplies the whole sum, and distributing it would change
             # the arithmetic.
-            b_contribs = length(b_contribs) == 1 ?
-                Contribution[Contribution(OpExpr("*", ASTExpr[NumExpr(factor), b_contribs[1].expr]),
-                                          b_contribs[1].origins)] :
-                Contribution[Contribution(OpExpr("*", ASTExpr[NumExpr(factor),
-                                                              _fold_contributions(b_contribs)]),
-                                          _union_origins(b_contribs))]
+            b_contribs = Contribution[Contribution(OpExpr("*", ASTExpr[NumExpr(factor),
+                                                                      _fold_contributions(b_contribs)]),
+                                                  _union_origins(b_contribs))]
         end
         append!(get!(extra, a_index[target], Contribution[]), b_contribs)
         a_lhs = expanded[a_index[target]].lhs
@@ -1182,9 +1179,10 @@ function _apply_connector_transform!(equations::Vector{Equation},
     return
 end
 
-# Fold `expression` into the equation that defines `to`: the LAST equation whose
-# left-hand side's dependent variable is `to` (its `D(to)` tendency or a bare
-# definition). `combine == "+"` (additive) appends one contribution authored by
+# Fold `expression` into the equation that defines `to`. Additive targets the
+# LAST equation whose left-hand side's dependent variable is `to` (its `D(to)`
+# tendency or a bare definition); multiplicative targets the LAST `D(to)`
+# tendency only, never a bare `to ~ …`. `combine == "+"` (additive) appends one contribution authored by
 # the coupling entry; `"*"` (multiplicative) collapses the list into ONE
 # contribution, `(<left fold>) * expression`, whose origins are the union then
 # the entry — the product is indivisible. When `to` has no defining equation:
@@ -1201,12 +1199,14 @@ function _combine_tendency_term!(equations::Vector{Equation},
                                  owners::Vector{String},
                                  states::AbstractDict,
                                  components::Vector{String})
-    if combine == "*" && findfirst(eq -> differential_lhs_variable(eq.lhs) == to, equations) === nothing
-        throw(ArgumentError(
+    if combine == "*"
+        idx = findlast(eq -> differential_lhs_variable(eq.lhs) == to, equations)
+        idx === nothing && throw(ArgumentError(
             "couple connector 'multiplicative' transform targets '$(to)', which " *
             "has no tendency (`D($(to))`) to multiply (esm-spec §10.3)."))
+    else
+        idx = findlast(eq -> lhs_dependent_variable(eq.lhs) == to, equations)
     end
-    idx = findlast(eq -> lhs_dependent_variable(eq.lhs) == to, equations)
     if idx === nothing
         root = _component_root(to)
         pos = findfirst(==(root), components)
