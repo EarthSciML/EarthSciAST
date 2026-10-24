@@ -229,8 +229,8 @@
             "interpreter",
             "native"
           ],
-          "code": "E_TREEWALK_UNSUPPORTED_RECURRENCE",
-          "reason": "The variable declares element_type Float32 and Julia evaluates in binary64 only (no binary32 arithmetic, esm-spec 11.3.1); CONFORMANCE_SPEC 5.19.3a forbids folding it in binary64, so both compilers refuse the recurrence by name."
+          "code": "float32_unsupported",
+          "reason": "The variable declares element_type Float32 and Julia evaluates in binary64 only (no binary32 arithmetic, esm-spec 11.3.1); CONFORMANCE_SPEC 5.19.3a forbids folding it in binary64, so both compilers refuse the binary32 variable by name (float32_unsupported, CONFORMANCE_SPEC 5.18.2) before the recurrence is reached."
         }
       ],
       "golden_absent_reason": "The reference (Julia interpreter) refuses this document: Julia evaluates in binary64 only and has no binary32 arithmetic, and 5.19.3a forbids carrying binary64 through a Float32 fold, so it declines rather than return the more precise 0.9999999999999999. The assertions are still gated against the document's own expected values, the binary32 fold, in every binding that runs it."
