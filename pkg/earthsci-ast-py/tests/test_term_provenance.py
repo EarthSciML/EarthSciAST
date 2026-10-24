@@ -302,3 +302,23 @@ def test_an_equation_built_outside_flatten_has_one_unattributed_contribution():
     assert len(eq.contributions) == 1
     assert eq.contributions[0].expr is eq.rhs
     assert eq.contributions[0].origins == []
+
+
+def test_table_lookup_lowering_keeps_the_contributions():
+    """`esm_problem` lowers a caller-flattened system's `table_lookup` nodes; the
+    rewrite happens inside each contribution, so origins survive it."""
+    from earthsci_ast.lower_table_lookup import lower_flattened_table_lookups
+
+    flat = _flatten(CONFORMANCE_DIR / "function_tables" / "linear" / "fixture.esm")
+    lowered = lower_flattened_table_lookups(flat)
+    assert lowered is not flat
+    changed = 0
+    for before, after in zip(flat.equations, lowered.equations):
+        assert [_origins(c) for c in after.contributions] == [
+            _origins(c) for c in before.contributions
+        ]
+        assert "table_lookup" not in json.dumps(str(after.contributions))
+        changed += to_ascii(after.rhs) != to_ascii(before.rhs)
+        ok, _ = _check_invariant(lowered, after)
+        assert ok
+    assert changed
