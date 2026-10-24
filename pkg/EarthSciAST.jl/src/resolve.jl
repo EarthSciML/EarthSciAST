@@ -828,7 +828,8 @@ function _inline_toplevel_model_refs(raw_data, base_path::String;
         visited::Set{String}=Set{String}(),
         staged::Union{Nothing,AbstractDict{String,Any}}=nothing,
         staged_refs::Union{Nothing,AbstractDict{String,String}}=nothing,
-        model_envs::Union{Nothing,AbstractDict{String,Dict{String,Int}}}=nothing)
+        model_envs::Union{Nothing,AbstractDict{String,Dict{String,Int}}}=nothing,
+        precision::AbstractString=_DEFAULT_ELEMENT_TYPE)
     models = _get_field(raw_data, :models, nothing)
     models === nothing && return nothing
     has_stub = any(values(models)) do m
@@ -841,7 +842,8 @@ function _inline_toplevel_model_refs(raw_data, base_path::String;
                                  api_meta=metaparameters,
                                  staged=staged,
                                  staged_refs=staged_refs,
-                                 model_envs=model_envs)
+                                 model_envs=model_envs,
+                                 precision=precision)
     return native
 end
 
@@ -864,6 +866,90 @@ run this same code on the native dictionary instead of a second copy of it on
 the typed tree (the duplication `_inline_toplevel_model_refs!`'s own docstring
 refuses).
 """
+# esm-spec §4.7 "Working precision crosses a mount". A ROOT that declares no
+# `domain.element_type` evaluates in binary64 (§11.3); a MOUNTED document that
+# declares none adopts its mounter's.
+const _DEFAULT_ELEMENT_TYPE = "Float64"
+
+# The `domain.element_type` a document declares — a raw dict or a typed file —
+# or `nothing`.
+function _declared_element_type(doc)
+    if doc isa EsmFile
+        return doc.domain === nothing ? nothing : doc.domain.element_type
+    end
+    doc isa AbstractDict || return nothing
+    d = get(doc, "domain", nothing)
+    d isa AbstractDict || return nothing
+    et = get(d, "element_type", nothing)
+    return et isa AbstractString ? String(et) : nothing
+end
+
+"""
+    _carry_mounted_element_type!(component, leaf, enclosing, where)
+
+Carry a mounted document's declared working precision `leaf` onto the component
+it splices in (esm-spec §4.7 "Working precision crosses a mount"). Nothing is
+written for a leaf that declares none (it adopts the mounting document's), nor
+when `leaf` equals `enclosing`, the mounting document's EFFECTIVE precision.
+Otherwise every variable of the component, and of every subsystem it carries at
+any depth, that declares no `element_type` of its own gets `leaf`. A reaction
+system's species and parameters have no `element_type`, so a component that is,
+or carries, one is refused with `element_type_uncarried`. Works on the native
+dict and on the typed tree, which are the two shapes a mount lands in here.
+"""
+function _carry_mounted_element_type!(component, leaf, enclosing::AbstractString,
+                                      where::AbstractString)
+    (leaf === nothing || leaf == enclosing) && return component
+    _stamp_element_type!(component, String(leaf), String(enclosing), String(where), "")
+    return component
+end
+
+function _element_type_uncarried(leaf, enclosing, where, path)
+    at = isempty(path) ? "" : " (subsystem '$(path)')"
+    return SubsystemRefError(
+        "$(where): the mounted document declares `domain.element_type: \"$(leaf)\"` " *
+        "but the document mounting it evaluates in $(enclosing), and the component " *
+        "carries a reaction system$(at) whose species and parameters cannot declare a " *
+        "per-variable `element_type`; the mount cannot keep the leaf's precision " *
+        "(esm-spec §4.7 \"Working precision crosses a mount\"). Declare the same " *
+        "`domain.element_type` on the mounting document, or remove it from the leaf";
+        code=ERROR_CODES.ELEMENT_TYPE_UNCARRIED)
+end
+
+_sub_path(path, name) = isempty(path) ? String(name) : "$(path).$(name)"
+
+function _stamp_element_type!(sys::AbstractDict, leaf, enclosing, where, path)
+    (haskey(sys, "species") || haskey(sys, "reactions")) &&
+        throw(_element_type_uncarried(leaf, enclosing, where, path))
+    vars = get(sys, "variables", nothing)
+    if vars isa AbstractDict
+        for (_, d) in vars
+            d isa AbstractDict && !haskey(d, "element_type") && (d["element_type"] = leaf)
+        end
+    end
+    subs = get(sys, "subsystems", nothing)
+    if subs isa AbstractDict
+        for (name, sub) in subs
+            _stamp_element_type!(sub, leaf, enclosing, where, _sub_path(path, name))
+        end
+    end
+    return nothing
+end
+
+function _stamp_element_type!(sys::Model, leaf, enclosing, where, path)
+    for (k, v) in collect(sys.variables)
+        v.element_type === nothing && (sys.variables[k] = reconstruct(v; element_type=leaf))
+    end
+    for (name, sub) in sys.subsystems
+        _stamp_element_type!(sub, leaf, enclosing, where, _sub_path(path, name))
+    end
+    return nothing
+end
+
+_stamp_element_type!(::ReactionSystem, leaf, enclosing, where, path) =
+    throw(_element_type_uncarried(leaf, enclosing, where, path))
+_stamp_element_type!(_, leaf, enclosing, where, path) = nothing
+
 # Lower `target`'s `enum` ops against the `enums` block of `document`, the file
 # mounted at this §4.7 edge (esm-spec §9.3), naming the edge in the diagnostic.
 function _lower_mounted_enums_at_edge(document, target, mount_noun::AbstractString)
@@ -881,12 +967,18 @@ function _resolve_mount_edge_core(entry::AbstractDict, ref::String, refpath::Str
                                   base_path::String, visited::Set{String};
                                   mount_noun::String,
                                   parent_meta::AbstractDict{String,<:Integer}=Dict{String,Int}(),
-                                  api_meta::AbstractDict{String,<:Integer}=Dict{String,Int}())
+                                  api_meta::AbstractDict{String,<:Integer}=Dict{String,Int}(),
+                                  precision::AbstractString=_DEFAULT_ELEMENT_TYPE)
     isfile(refpath) || throw(SubsystemRefError(
         "Referenced model file not found: $(refpath) (from ref '$(ref)')"))
     comp = _read_json_document(read(refpath, String))
     comp isa AbstractDict{String,Any} || throw(SubsystemRefError(
         "Referenced model file '$(ref)' did not parse as a JSON object"))
+    # esm-spec §4.7 "Working precision crosses a mount": read before resolution can
+    # consume the leaf's `domain`. The leaf's own edges compare against ITS
+    # effective precision; the caller compares this edge against `precision`.
+    leaf_precision = _declared_element_type(comp)
+    leaf_effective = something(leaf_precision, String(precision))
     # esm-spec §4.7 "Edge pipeline" step (1): the referenced document
     # resolves in its OWN scope, exactly as the `subsystems.<k>` edge
     # resolves it in `_load_ref` — the two mount forms are one mechanism,
@@ -968,9 +1060,11 @@ function _resolve_mount_edge_core(entry::AbstractDict, ref::String, refpath::Str
     end
     leaf_staged = OrderedDict{String,Any}()
     _inline_toplevel_model_refs!(comp, compdir, visited;
-                                 parent_meta=leaf_env, api_meta=api_meta, staged=leaf_staged)
+                                 parent_meta=leaf_env, api_meta=api_meta, staged=leaf_staged,
+                                 precision=leaf_effective)
     _inline_subsystem_refs!(comp, compdir, visited;
-                            parent_meta=leaf_env, api_meta=api_meta, staged=leaf_staged)
+                            parent_meta=leaf_env, api_meta=api_meta, staged=leaf_staged,
+                            precision=leaf_effective)
 
     # §9.7.10 form A: the edge's `expression_template_imports` inject a
     # discretization into the LEAF's own scope BEFORE resolution, so the
@@ -1052,7 +1146,7 @@ function _resolve_mount_edge_core(entry::AbstractDict, ref::String, refpath::Str
         comp = apply_mount_index_set_rename(comp, rename_raw, mount_noun;
                                             nested_contributed=nested_contributed)
     end
-    return comp, compdir, leaf_fold_env
+    return comp, compdir, leaf_fold_env, leaf_precision
 end
 
 """
@@ -1119,21 +1213,26 @@ function _inline_subsystem_refs!(native::AbstractDict{String,Any}, base_path::St
                                  parent_meta::AbstractDict{String,<:Integer}=Dict{String,Int}(),
                                  api_meta::AbstractDict{String,<:Integer}=Dict{String,Int}(),
                                  staged::Union{Nothing,AbstractDict{String,Any}}=nothing,
-                                 staged_refs::Union{Nothing,AbstractDict{String,String}}=nothing)
+                                 staged_refs::Union{Nothing,AbstractDict{String,String}}=nothing,
+                                 precision::AbstractString=_DEFAULT_ELEMENT_TYPE)
     models = get(native, "models", nothing)
     models isa AbstractDict || return native
+    # esm-spec §4.7 "Working precision crosses a mount": THIS document's effective
+    # precision, which each of its edges compares its leaf against.
+    effective = something(_declared_element_type(native), String(precision))
     for (mname, model) in collect(models)
         model isa AbstractDict || continue
         _inline_model_subsystems!(native, model, String(mname), base_path, visited;
                                   parent_meta=parent_meta, api_meta=api_meta, staged=staged,
-                                  staged_refs=staged_refs)
+                                  staged_refs=staged_refs, precision=effective)
     end
     return native
 end
 
 function _inline_model_subsystems!(native::AbstractDict{String,Any}, model::AbstractDict,
                                    parent_name::String, base_path::String, visited::Set{String};
-                                   parent_meta, api_meta, staged, staged_refs=nothing)
+                                   parent_meta, api_meta, staged, staged_refs=nothing,
+                                   precision::AbstractString=_DEFAULT_ELEMENT_TYPE)
     subs = get(model, "subsystems", nothing)
     subs isa AbstractDict || return
     for (sub_key, sub) in collect(subs)
@@ -1152,15 +1251,18 @@ function _inline_model_subsystems!(native::AbstractDict{String,Any}, model::Abst
                     isfile(refpath) || throw(SubsystemRefError(
                         "Subsystem reference '$(ref)' could not be resolved — file does not exist";
                         code=ERROR_CODES.UNRESOLVED_SUBSYSTEM_REF, ref=ref))
-                    comp, compdir, _ = _resolve_mount_edge_core(sub, ref, refpath, base_path, visited;
+                    comp, compdir, _, leaf_precision = _resolve_mount_edge_core(sub, ref, refpath,
+                        base_path, visited;
                         mount_noun="subsystem ref '$(ref)'", parent_meta=parent_meta,
-                        api_meta=api_meta)
+                        api_meta=api_meta, precision=precision)
                     cmodels = get(comp, "models", nothing)
                     (cmodels isa AbstractDict && length(cmodels) == 1) || throw(SubsystemRefError(
                         "Subsystem reference '$(ref)' resolves to a file containing multiple " *
                         "top-level systems; exactly one is required";
                         code=ERROR_CODES.AMBIGUOUS_SUBSYSTEM_REF, ref=ref))
                     cmodel = first(values(cmodels))
+                    _carry_mounted_element_type!(cmodel, leaf_precision, precision,
+                                                 "subsystem ref '$(ref)'")
                     _absolutize_nested_refs!(cmodel, compdir)
                     subs[sub_key] = cmodel
                     _merge_native_index_sets!(native, comp, ref; staged=staged, staged_refs=staged_refs)
@@ -1197,7 +1299,7 @@ function _inline_model_subsystems!(native::AbstractDict{String,Any}, model::Abst
             # typed walk's `_resolve_model_refs!` names the mount site the same way.
             _inline_model_subsystems!(native, sub, sub_name, base_path, visited;
                                       parent_meta=parent_meta, api_meta=api_meta, staged=staged,
-                                      staged_refs=staged_refs)
+                                      staged_refs=staged_refs, precision=precision)
         end
     end
 end
@@ -1249,9 +1351,13 @@ function _inline_toplevel_model_refs!(native::AbstractDict{String,Any}, base_pat
         api_meta::AbstractDict{String,<:Integer}=Dict{String,Int}(),
         staged::Union{Nothing,AbstractDict{String,Any}}=nothing,
         staged_refs::Union{Nothing,AbstractDict{String,String}}=nothing,
-        model_envs::Union{Nothing,AbstractDict{String,Dict{String,Int}}}=nothing)
+        model_envs::Union{Nothing,AbstractDict{String,Dict{String,Int}}}=nothing,
+        precision::AbstractString=_DEFAULT_ELEMENT_TYPE)
     models = get(native, "models", nothing)
     models isa AbstractDict || return
+    # esm-spec §4.7 "Working precision crosses a mount": THIS document's effective
+    # precision, which each of its edges compares its leaf against.
+    effective = something(_declared_element_type(native), String(precision))
     for (name, entry) in collect(models)
         (entry isa AbstractDict && haskey(entry, "ref") &&
             !haskey(entry, "variables")) || continue
@@ -1272,8 +1378,10 @@ function _inline_toplevel_model_refs!(native::AbstractDict{String,Any}, base_pat
         end
         push!(visited, refpath)
         try
-            comp, compdir, leaf_child_env = _resolve_mount_edge_core(entry, ref, refpath, base_path, visited;
-                mount_noun=mount_noun, parent_meta=parent_meta, api_meta=api_meta)
+            comp, compdir, leaf_child_env, leaf_precision = _resolve_mount_edge_core(entry, ref,
+                refpath, base_path, visited;
+                mount_noun=mount_noun, parent_meta=parent_meta, api_meta=api_meta,
+                precision=effective)
 
             # The leaf's own nested mounts — both forms — were inlined inside
             # `_resolve_mount_edge_core`, before its fixpoint (issue #311).
@@ -1300,6 +1408,7 @@ function _inline_toplevel_model_refs!(native::AbstractDict{String,Any}, base_pat
             # made. They run when the leaf's own file is the test target, which a
             # directory-wide `run_tests` reaches anyway.
             cmodel isa AbstractDict && delete!(cmodel, "tests")
+            _carry_mounted_element_type!(cmodel, leaf_precision, effective, mount_noun)
             # Any relative `{ref}` the resolution above did not consume anchors at
             # the LEAF's directory, not at the parent it is about to land in.
             _absolutize_nested_refs!(cmodel, compdir)
@@ -1377,9 +1486,12 @@ Cycle detection is PATH-scoped, so the same single-reaction-system file may be
 mounted under several assembly keys.
 """
 function _inline_toplevel_reaction_system_refs!(native::AbstractDict{String,Any}, base_path::String,
-                                                visited::Set{String})
+                                                visited::Set{String};
+                                                precision::AbstractString=_DEFAULT_ELEMENT_TYPE)
     rsystems = get(native, "reaction_systems", nothing)
     rsystems isa AbstractDict || return
+    # esm-spec §4.7 "Working precision crosses a mount".
+    effective = something(_declared_element_type(native), String(precision))
     for (name, entry) in collect(rsystems)
         (entry isa AbstractDict && haskey(entry, "ref") &&
             !haskey(entry, "species")) || continue
@@ -1416,9 +1528,12 @@ function _inline_toplevel_reaction_system_refs!(native::AbstractDict{String,Any}
             # A §4.7 subsystem ref MUST NOT target a template/coupling library.
             _reject_library_ref(comp, ref, refpath)
             compdir = dirname(refpath)
+            leaf_precision = _declared_element_type(comp)
+            leaf_effective = something(leaf_precision, effective)
             # component-of-component: the referenced file may itself mount refs.
-            _inline_toplevel_model_refs!(comp, compdir, visited)
-            _inline_toplevel_reaction_system_refs!(comp, compdir, visited)
+            _inline_toplevel_model_refs!(comp, compdir, visited; precision=leaf_effective)
+            _inline_toplevel_reaction_system_refs!(comp, compdir, visited;
+                                                   precision=leaf_effective)
             crsystems = get(comp, "reaction_systems", nothing)
             crsystems isa AbstractDict || throw(SubsystemRefError(
                 "Top-level reaction system ref '$(ref)' resolves to a file with no reaction_systems block"))
@@ -1437,6 +1552,10 @@ function _inline_toplevel_reaction_system_refs!(native::AbstractDict{String,Any}
             # esm-spec §6.6: inline tests do not cross a mount edge — the
             # reaction-system twin of the rule in `_inline_toplevel_model_refs!`.
             crsys isa AbstractDict && delete!(crsys, "tests")
+            # esm-spec §4.7 "Working precision crosses a mount": a reaction system
+            # cannot carry a differing leaf precision, so this refuses it.
+            _carry_mounted_element_type!(crsys, leaf_precision, effective,
+                                         "top-level reaction system ref '$(ref)'")
             # esm-spec §9.3: the reaction system's `enum` ops resolve against its
             # OWN file's `enums` block, which does not merge into this document.
             # Its §9.7 resolution is deferred to the root, so a template body keeps
@@ -1596,6 +1715,9 @@ function resolve_subsystem_refs!(file::EsmFile, base_path::String;
                            root_env=root_env, model_envs=model_envs)
 end
 
+# esm-spec §4.7 "Working precision crosses a mount", typed form: `precision` is the
+# mounting document's effective precision.
+
 """
     _resolve_refs_in_file!(file::EsmFile, base_path::String, visited::Set{String})
 
@@ -1608,7 +1730,11 @@ Internal recursive resolver for subsystem references in an EsmFile.
 function _resolve_refs_in_file!(file::EsmFile, base_path::String, visited::Set{String};
         api_meta::AbstractDict{String,<:Integer}=Dict{String,Int}(),
         root_env::AbstractDict{String,<:Integer}=Dict{String,Int}(),
-        model_envs::AbstractDict{String,<:AbstractDict{String,Int}}=Dict{String,Dict{String,Int}}())
+        model_envs::AbstractDict{String,<:AbstractDict{String,Int}}=Dict{String,Dict{String,Int}}(),
+        precision::AbstractString=_DEFAULT_ELEMENT_TYPE)
+    # esm-spec §4.7 "Working precision crosses a mount": THIS document's effective
+    # precision, which each of its edges compares its leaf against.
+    effective = something(_declared_element_type(file), String(precision))
     # Resolve model subsystem refs. The document's own index-set registry is
     # threaded down the walk so every referenced subsystem file's top-level
     # `index_sets` merge into it (esm-spec §4.7, mirroring §9.7.5).
@@ -1618,7 +1744,8 @@ function _resolve_refs_in_file!(file::EsmFile, base_path::String, visited::Set{S
             # closed scope (recorded by the inliner), not the root's (esm-spec §4.7).
             _resolve_model_refs!(file.models, name, model, base_path, visited,
                                  file.index_sets; api_meta=api_meta,
-                                 root_env=get(model_envs, String(name), root_env))
+                                 root_env=get(model_envs, String(name), root_env),
+                                 precision=effective)
         end
     end
 
@@ -1642,7 +1769,8 @@ function _resolve_model_refs!(models_dict, name::String,
                               model, base_path::String, visited::Set{String},
                               registry::AbstractDict{String,IndexSet};
                               api_meta::AbstractDict{String,<:Integer}=Dict{String,Int}(),
-                              root_env::AbstractDict{String,<:Integer}=Dict{String,Int}())
+                              root_env::AbstractDict{String,<:Integer}=Dict{String,Int}(),
+                              precision::AbstractString=_DEFAULT_ELEMENT_TYPE)
     # Only Model values carry subsystems to walk; a SubsystemRef leaf has none.
     model isa Model || return
     for (sub_name, sub_value) in collect(model.subsystems)
@@ -1657,7 +1785,8 @@ function _resolve_model_refs!(models_dict, name::String,
             # `/models/<parent>/subsystems/<sub>` (finding (f)).
             model.subsystems[sub_name] = try
                 _resolve_subsystem_ref(sub_value, base_path, visited, registry;
-                                       api_meta=api_meta, root_env=root_env)
+                                       api_meta=api_meta, root_env=root_env,
+                                       precision=precision)
             catch e
                 e isa SubsystemRefError || rethrow()
                 throw(_with_mount_site(e, sub_name, name))
@@ -1665,7 +1794,8 @@ function _resolve_model_refs!(models_dict, name::String,
         else
             # Inline Model — recurse into its own subsystems.
             _resolve_model_refs!(model.subsystems, sub_name, sub_value, base_path,
-                                 visited, registry; api_meta=api_meta, root_env=root_env)
+                                 visited, registry; api_meta=api_meta, root_env=root_env,
+                                 precision=precision)
         end
     end
 end
@@ -1753,7 +1883,8 @@ importing document's registry — with the §4.7 deep-equal-or-error rule
 function _resolve_subsystem_ref(ref::SubsystemRef, base_path::String, visited::Set{String},
                                 registry::AbstractDict{String,IndexSet};
                                 api_meta::AbstractDict{String,<:Integer}=Dict{String,Int}(),
-                                root_env::AbstractDict{String,<:Integer}=Dict{String,Int}())
+                                root_env::AbstractDict{String,<:Integer}=Dict{String,Int}(),
+                                precision::AbstractString=_DEFAULT_ELEMENT_TYPE)
     # esm-spec §9.7.10 form A: the edge's `expression_template_imports` inject a
     # discretization into the referenced component's own scope, threaded into
     # its load so the §9.6.3 fixpoint lowers its rewrite-targets at the mount.
@@ -1763,7 +1894,8 @@ function _resolve_subsystem_ref(ref::SubsystemRef, base_path::String, visited::S
                        enclosing_env=root_env,
                        injected_imports=ref.expression_template_imports,
                        index_set_rename=ref.index_set_rename,
-                       rename_where="subsystem ref '$(ref.ref)'")
+                       rename_where="subsystem ref '$(ref.ref)'",
+                       precision=precision)
     n_models = loaded.models === nothing ? 0 : length(loaded.models)
     if n_models != 1
         throw(SubsystemRefError(
@@ -1776,7 +1908,10 @@ function _resolve_subsystem_ref(ref::SubsystemRef, base_path::String, visited::S
     # join the importing document's registry, so the importer's variables may
     # be shaped over the mesh file's axes and a disagreement fails loudly.
     _merge_subsystem_index_sets!(registry, loaded, ref.ref)
-    return first(values(loaded.models))
+    # esm-spec §4.7 "Working precision crosses a mount".
+    return _carry_mounted_element_type!(first(values(loaded.models)),
+                                        _declared_element_type(loaded), precision,
+                                        "subsystem ref '$(ref.ref)'")
 end
 
 _resolve_subsystem_ref(ref::String, base_path::String, visited::Set{String},
@@ -1813,7 +1948,8 @@ function _load_ref(ref::String, base_path::String, visited::Set{String};
                    enclosing_env::AbstractDict{String,<:Integer}=Dict{String,Int}(),
                    injected_imports::AbstractVector=Any[],
                    index_set_rename=nothing,
-                   rename_where::AbstractString="mount edge")::EsmFile
+                   rename_where::AbstractString="mount edge",
+                   precision::AbstractString=_DEFAULT_ELEMENT_TYPE)::EsmFile
     # esm-spec §4.7: expand `${VAR}` from the environment before resolving.
     ref = _expand_ref_env(ref)
     # Normalize the reference for cycle detection
@@ -1833,14 +1969,16 @@ function _load_ref(ref::String, base_path::String, visited::Set{String};
                                     api_meta=api_meta,
                                     injected_imports=injected_imports,
                                     index_set_rename=index_set_rename,
-                                    rename_where=rename_where)
+                                    rename_where=rename_where,
+                                    precision=precision)
         else
             return _load_local_ref(ref, base_path, visited; metaparameters=metaparameters,
                                    api_meta=api_meta,
                                    enclosing_env=enclosing_env,
                                    injected_imports=injected_imports,
                                    index_set_rename=index_set_rename,
-                                   rename_where=rename_where)
+                                   rename_where=rename_where,
+                                   precision=precision)
         end
     catch e
         if e isa SubsystemRefError || e isa ExpressionTemplateError
@@ -2032,7 +2170,8 @@ function _load_local_ref(ref::String, base_path::String, visited::Set{String};
                          enclosing_env::AbstractDict{String,<:Integer}=Dict{String,Int}(),
                          injected_imports::AbstractVector=Any[],
                          index_set_rename=nothing,
-                         rename_where::AbstractString="mount edge")::EsmFile
+                         rename_where::AbstractString="mount edge",
+                         precision::AbstractString=_DEFAULT_ELEMENT_TYPE)::EsmFile
     resolved_path = abspath(joinpath(base_path, ref))
 
     if !isfile(resolved_path)
@@ -2076,8 +2215,12 @@ function _load_local_ref(ref::String, base_path::String, visited::Set{String};
     # site-4 backfill composes down the reference DAG at BOTH mount forms — the
     # same threading TypeScript's `inlineNestedTopLevelMounts` and Go's
     # `inlineNestedTopLevelModelRefs` do.
+    # esm-spec §4.7 "Working precision crosses a mount": the leaf's own edges
+    # compare against the leaf's effective precision.
+    leaf_effective = something(_declared_element_type(raw_ref_doc), String(precision))
     inlined_ref = _inline_toplevel_model_refs(ref_doc, ref_base; visited=visited,
-                                              metaparameters=api_meta)
+                                              metaparameters=api_meta,
+                                              precision=leaf_effective)
     file = _load_parsed(inlined_ref === nothing ? ref_doc : inlined_ref; base_path=ref_base,
                         metaparameters=effective,
                         injected_imports=injected_imports,
@@ -2096,7 +2239,8 @@ function _load_local_ref(ref::String, base_path::String, visited::Set{String};
     # the leaf's own closed environment — its declared defaults overlaid with the
     # loader-API bindings — not the root's.
     _resolve_refs_in_file!(file, ref_base, visited; api_meta=api_meta,
-                           root_env=_root_metaparameter_env(raw_ref_doc, effective))
+                           root_env=_root_metaparameter_env(raw_ref_doc, effective),
+                           precision=leaf_effective)
 
     return file
 end
@@ -2115,7 +2259,8 @@ function _load_remote_ref(url::String, visited::Set{String}=Set{String}();
                           api_meta::AbstractDict{String,<:Integer}=Dict{String,Int}(),
                           injected_imports::AbstractVector=Any[],
                           index_set_rename=nothing,
-                          rename_where::AbstractString="mount edge")::EsmFile
+                          rename_where::AbstractString="mount edge",
+                          precision::AbstractString=_DEFAULT_ELEMENT_TYPE)::EsmFile
     local content::String
     try
         content = _fetch_url(url)
@@ -2163,7 +2308,10 @@ function _load_remote_ref(url::String, visited::Set{String}=Set{String}();
     # Nested subsystem refs inside the remote document resolve against the
     # same URL base (relative refs join onto the URL; absolute URLs and the
     # shared `visited` set keep cycle detection canonical).
-    _resolve_refs_in_file!(file, url_base, visited; api_meta=api_meta)
+    # esm-spec §4.7 "Working precision crosses a mount": the leaf's own edges
+    # compare against the leaf's effective precision.
+    _resolve_refs_in_file!(file, url_base, visited; api_meta=api_meta,
+                           precision=something(_declared_element_type(file), String(precision)))
 
     return file
 end

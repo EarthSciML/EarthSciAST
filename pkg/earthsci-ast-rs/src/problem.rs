@@ -1692,8 +1692,13 @@ pub fn esm_problem<'a>(
     // `prepare` — fill NAMED variables and must round each to ITS declared
     // precision, not to the document's. Empty for every document that declares
     // none, which is the inert path.
-    let var_precisions =
-        variable_element_types_of(owned_json.as_ref(), owned_file.as_ref(), flat_only, prec)?;
+    let var_precisions = variable_element_types_of(
+        owned_json.as_ref(),
+        owned_file.as_ref(),
+        flat_only,
+        prec,
+        opts.model_name.as_deref(),
+    )?;
     let _precision_guard = precision::enter_env(prec, std::rc::Rc::new(var_precisions));
 
     // Host-supplied numbers are the one class of value the evaluator does not
@@ -2241,50 +2246,46 @@ fn variable_element_types_of(
     file: Option<&EsmFile>,
     flat: Option<&FlattenedSystem>,
     document: Precision,
+    selected: Option<&str>,
 ) -> Result<precision::VarPrecisions, SimulateError> {
-    let mut out = precision::VarPrecisions::default();
-    let mut record = |model: Option<&str>, name: &str, spelling: Option<&str>| {
-        match Precision::from_element_type(spelling) {
-            Ok(p) => {
-                out.insert(model, name, p);
-                Ok(())
-            }
-            Err(e) => Err(SimulateError::Compile(e)),
-        }
-    };
     if let Some(models) = raw
         .and_then(|v| v.get("models"))
         .and_then(JsonValue::as_object)
     {
-        for (mname, model) in models {
-            let Some(vars) = model.get("variables").and_then(JsonValue::as_object) else {
-                continue;
-            };
-            for (vname, var) in vars {
-                let Some(et) = var.get("element_type").and_then(JsonValue::as_str) else {
-                    continue;
-                };
-                record(Some(mname), vname, Some(et))?;
-            }
-        }
-        return Ok(out);
+        let decls: Vec<precision::ModelDeclarations<'_>> = models
+            .iter()
+            .map(|(mname, model)| precision::ModelDeclarations {
+                model: mname,
+                variables: model
+                    .get("variables")
+                    .and_then(JsonValue::as_object)
+                    .map(|vars| {
+                        vars.iter()
+                            .map(|(v, d)| {
+                                (
+                                    v.as_str(),
+                                    d.get("element_type").and_then(JsonValue::as_str),
+                                )
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                subsystem_variables: precision::subsystem_declarations(model.get("subsystems")),
+            })
+            .collect();
+        return precision::VarPrecisions::from_declarations(&decls, document, selected)
+            .map_err(SimulateError::Compile);
     }
     if let Some(models) = file.and_then(|f| f.models.as_ref()) {
-        for (mname, model) in models {
-            for (vname, var) in &model.variables {
-                let Some(et) = var.element_type.as_deref() else {
-                    continue;
-                };
-                record(Some(mname), vname, Some(et))?;
-            }
-        }
-        return Ok(out);
+        let decls = crate::precision_infer::model_declarations(models);
+        return precision::VarPrecisions::from_declarations(&decls, document, selected)
+            .map_err(SimulateError::Compile);
     }
     // A flattened system carries namespaced names and no per-variable element
     // types of its own; nothing to collect. `document` stays the answer for
     // every name.
     let _ = (flat, document);
-    Ok(out)
+    Ok(precision::VarPrecisions::default())
 }
 
 /// Reject integrating a Float32 document.

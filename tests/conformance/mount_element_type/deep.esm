@@ -1,0 +1,63 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "mount_element_type_deep",
+    "description": "A document that declares no domain mounts leaf_f32_sub.esm at a top-level models.<k> {ref}, beside a binary64 model of its own. The Float32 is written onto the leaf's own variables and onto its subsystem's. Building the assembly's own model is unaffected by the leaf's subsystem precision."
+  },
+  "models": {
+    "Leaf": {
+      "ref": "./leaf_f32_sub.esm"
+    },
+    "Host": {
+      "variables": {
+        "a": {
+          "type": "parameter",
+          "default": 73.5,
+          "units": "1",
+          "description": "The operand of the witness ratio."
+        },
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "description": "100*((100-a)/100)/(100-a): 0.99999994 in binary32, exactly 1 in binary64."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "x",
+          "rhs": {
+            "op": "/",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  100,
+                  {
+                    "op": "/",
+                    "args": [
+                      {
+                        "op": "-",
+                        "args": [
+                          100,
+                          "a"
+                        ]
+                      },
+                      100
+                    ]
+                  }
+                ]
+              },
+              {
+                "op": "-",
+                "args": [
+                  100,
+                  "a"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

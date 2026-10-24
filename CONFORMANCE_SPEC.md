@@ -3151,6 +3151,49 @@ entry, not only at build: a solve happens after the build's guard is gone, and
 an artifact that remembered only the document precision evaluates its binary64
 columns in binary32 at run time.
 
+#### 5.18.2b Mounts — a leaf's `domain.element_type` crosses the edge
+
+A mounted document's `domain` does not merge into the mounting document, so its
+`element_type` would otherwise vanish at the edge: a `"Float32"` leaf mounted by
+a document that declares no domain evaluated in binary64, and
+`100 * ((100 - 73.5) / 100) / (100 - 73.5)` came out `1` through the mount and
+`0.99999994` standalone, with nothing to say so. esm-spec §4.7 ("Working
+precision crosses a mount") makes the edge write the leaf's declared precision
+onto every variable of the spliced component that declares none, whenever it
+differs from the mounting document's effective precision (its own declaration,
+else inherited from its mounter, else `"Float64"` at a root). A leaf that
+declares no precision adopts its mounter's.
+
+Obligations, per binding:
+
+1. **Load.** The written `element_type` fields MUST be exactly those §4.7
+   specifies — no more (a field equal to the enclosing effective precision is
+   not written) and no fewer — at both mount forms and through nested mounts,
+   and MUST survive `load → emit`. This is a loader contract and binds all five
+   bindings, evaluating or not: a binding that drops the field at the mount has
+   discarded the declaration before any evaluator could honour it.
+2. **Refusal at load.** A component that must receive the field but is, or
+   carries, a reaction system is `element_type_uncarried`.
+3. **Evaluation.** An evaluator that honours per-variable precision (§5.18.2a)
+   honours the written fields with no mount-specific code. One that cannot
+   carry a written field at some construct MUST refuse it
+   (`element_type_uncarried`) — Rust does so for a field written into a
+   `subsystems.<k>` component — and one that does not evaluate binary32 at all
+   MUST refuse the variable (`float32_unsupported`, §5.18.2), as Julia and
+   Python do. Mixing a mounted binary32 variable with a
+   binary64 one of the mounting document, by an equation or by a coupling, is
+   `mixed_element_type` (§5.18.2a).
+4. **Time integration.** A mounted binary32 leaf's states integrate as any
+   per-variable binary32 state does (§5.18.2a): the right-hand side rounds to
+   the declared precision and the solver steps in binary64. Only a document
+   whose `domain.element_type` is `"Float32"` is refused integration (§5.18.2
+   clause 3), and a mount does not change the mounting document's.
+
+Gate: `tests/conformance/mount_element_type/` (README there). `expected.json`
+pins, per fixture, every written field and every load-time refusal (all five
+bindings), and the evaluated values at zero tolerance plus the build-time
+refusals (the bindings that evaluate per-variable precision — today Rust).
+
 #### 5.18.3 Implementation note: the fast paths
 
 The clause "every operation rounds" is easy to state and easy to implement

@@ -1,0 +1,21 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "mount_element_type_root_f32",
+    "description": "A Float32 document mounting three leaves: the Float32 leaf (nothing to write), the leaf that declares nothing (adopts Float32, nothing to write) and the Float64 leaf (its variables carry Float64)."
+  },
+  "domain": {
+    "element_type": "Float32"
+  },
+  "models": {
+    "Leaf": {
+      "ref": "./leaf_f32.esm"
+    },
+    "Plain": {
+      "ref": "./leaf_none.esm"
+    },
+    "Wide": {
+      "ref": "./leaf_f64.esm"
+    }
+  }
+}
