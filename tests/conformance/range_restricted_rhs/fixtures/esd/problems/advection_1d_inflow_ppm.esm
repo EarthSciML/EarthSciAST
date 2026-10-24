@@ -1,0 +1,367 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "advection_1d_inflow_ppm",
+    "description": "MMS driver: forced-steady 1-D linear advection u_t = -c D(u,x) + c dGdx on the unit interval [0, 1] with OPEN boundaries -- a prescribed inflow at the upstream (left) wall and a non-reflecting extrapolation outflow at the downstream (right) wall -- discretized by grids/cartesian_uniform_1d/rules/ppm_D_inflow_bc (Piecewise Parabolic Method, Colella-Woodward 1984; conservative finite-volume semi-discrete method-of-lines flux, one-sided PPM reconstruction using the inflow ghost gL at the left wall and zeroth-order extrapolation at the right wall). This is the open-boundary PPM companion of problems/advection_1d_ppm_periodic.esm and the PPM analogue of problems/advection_1d_inflow_lax_friedrichs.esm / advection_1d_inflow_upwind.esm. SMOOTH-MONOTONE MMS (why cos(pi x), not the periodic sine): the manufactured STEADY solution u*(x) = cos(pi x) is MONOTONE on [0,1] with NO interior extrema, so the CW84 monotonicity limiter (which clips smooth extrema to first order -- the sub-nominal-order mechanism documented for the periodic PPM case) stays INACTIVE in the interior and the interior runs near its formal high order; the global observed order is therefore set by the ONE-SIDED boundary reconstruction, which is exactly what this open-boundary case is meant to measure. The exactly matching steady forcing is c dGdx with dGdx = g'(x) = -pi sin(pi x) (the analytic derivative of u*), so the continuous balance is u_t = -c u*_x + c u*_x = 0 and u(t) = u* for all t; the discrete field drifts only by the operator truncation error (forced-steady MMS: observed order = operator order at t=0.1). INFLOW/OUTFLOW COMPATIBILITY (why cos(pi x) with c = 1, gL = 1): flow is in +x (c = 1 > 0), so the inflow is the left wall and the inflow value must equal the exact wall value gL = u*(0) = cos(0) = 1; the profile must have g'(0) = 0 at the inflow wall so the constant-gL upstream ghost matches the wall datum to O(dx^2) and the boundary-cell residual stays consistent with the interior (a nonzero wall gradient would pollute the order). The outflow (right) wall carries no external data -- the zeroth-order extrapolation ghost u[N+1]=u[N] is O(dx^2) accurate there because u*_x(1) = 0, and the reconstruction reaches only interior/self data (non-reflecting), so it needs no compatibility condition. cos(pi x) has u*_x = -pi sin(pi x) with u*_x(0) = 0 and u*_x(1) = 0, so both walls are clean and the global error is dominated by the one-sided reconstruction order (pinned honestly in tests/conformance/convergence/advection_1d_inflow_ppm/golden/errors.json). CONSERVATION: the interior PPM flux-difference telescopes (neighbouring cells share the identical float face flux), but the domain is OPEN (mass enters through F_{1/2}=gL and leaves through the outflow), so unlike the periodic PPM case sum(u) is NOT globally invariant and there is NO mean-conservation assertion here. GRID CONTRACT WIRING (grids/cartesian_uniform_1d/grid.esm) is fulfilled for [0, 1]: x0 = 0 (parameter) and dx = 1/N (an observed dividing the extent by the metaparameter name N, esm-spec 9.7.6, so the convergence sweep's loader-API rebinding of N keeps dx consistent). gL is the rule's inflow free name, declared here as a parameter equal to the wall value; it lives only in the runtime rule body, never in a build-time ic/reference. The ic, the dGdx forcing, and the test references spell x_i = x0 + (i - 1/2) dx inline with load-foldable scalars (0 + (i - 1/2)(1/N)); the build-time 6.6.5/ic/observed cellwise evaluation is scope-free, so build-time coordinate expressions fold from literals and the metaparameter name N alone (never the free-name x_coord template).",
+    "license": "MIT",
+    "tags": [
+      "esd:problem",
+      "grid:cartesian_uniform_1d",
+      "equation:advection",
+      "mms"
+    ],
+    "references": [
+      {
+        "citation": "Colella, P., & Woodward, P. R. (1984). The Piecewise Parabolic Method (PPM) for gas-dynamical simulations. Journal of Computational Physics, 54(1), 174-201.",
+        "doi": "10.1016/0021-9991(84)90143-8"
+      },
+      {
+        "citation": "Roache, P. J. (2002). Code verification by the method of manufactured solutions. J. Fluids Eng. 124(1), 4-10.",
+        "doi": "10.1115/1.1436090"
+      },
+      {
+        "citation": "LeVeque, R. J. (2002). Finite Volume Methods for Hyperbolic Problems. Cambridge University Press. Chapter 6 (high-resolution / PPM reconstruction) and Section 7 (inflow / outflow boundary conditions for advection)."
+      }
+    ]
+  },
+  "models": {
+    "AdvectionPPMInflow": {
+      "expression_template_imports": [
+        {
+          "ref": "../grids/cartesian_uniform_1d/rules/ppm_D_inflow_bc.esm"
+        }
+      ],
+      "variables": {
+        "u": {
+          "type": "unknown",
+          "units": "kg/m^3",
+          "shape": [
+            "x"
+          ],
+          "description": "Advected tracer field over the x index set."
+        },
+        "c": {
+          "type": "parameter",
+          "units": "m/s",
+          "default": 1.0,
+          "description": "Constant transport speed (non-negative; the PPM upwind flux assumes flow in +x, inflow at the left wall). Multiplies both the discretized derivative and the manufactured forcing, so the steady MMS balance holds for any value."
+        },
+        "gL": {
+          "type": "parameter",
+          "units": "kg/m^3",
+          "default": 1.0,
+          "description": "Inflow value carried into the domain at the left wall x = x0 (the rule's inflow free name). Set to the exact manufactured wall value u*(0) = cos(0) = 1 so the boundary cell is consistent; a generic no-inflow consumer would leave the rule's default of 0."
+        },
+        "x0": {
+          "type": "parameter",
+          "units": "m",
+          "default": 0,
+          "description": "Left domain edge a = 0 (unit interval): the grid's x0 free name (consumer-supplied geometry contract, grids/cartesian_uniform_1d/grid.esm)."
+        },
+        "dx": {
+          "type": "unknown",
+          "units": "m",
+          "description": "Grid spacing (b - a)/N = 1/N: the grid's dx free name, resolved inside the rewrite rule's expanded body at evaluation. N is the document-scoped metaparameter, substituted as an integer literal at load (esm-spec 9.7.6), so loader-API rebinding for the convergence sweep keeps dx consistent."
+        },
+        "dGdx": {
+          "type": "unknown",
+          "units": "kg/m^4",
+          "shape": [
+            "x"
+          ],
+          "description": "Analytic derivative of the manufactured solution: dGdx(x) = g'(x) = -pi sin(pi x). Constant in time; c dGdx is the manufactured forcing that holds u* = cos(pi x) steady. Cell centers x_i = 0 + (i - 1/2)/N are spelled inline from literals and the metaparameter name N (build-time-foldable; never the free-name x_coord template)."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "u"
+            ]
+          },
+          "rhs": {
+            "op": "cos",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  3.141592653589793,
+                  {
+                    "op": "faq",
+                    "output_idx": [
+                      "i"
+                    ],
+                    "args": [],
+                    "ranges": {
+                      "i": {
+                        "from": "x"
+                      }
+                    },
+                    "expr": {
+                      "op": "+",
+                      "args": [
+                        0,
+                        {
+                          "op": "*",
+                          "args": [
+                            {
+                              "op": "-",
+                              "args": [
+                                "i",
+                                0.5
+                              ]
+                            },
+                            {
+                              "op": "/",
+                              "args": [
+                                1,
+                                "N"
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "u"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "+",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "-",
+                    "args": [
+                      "c"
+                    ]
+                  },
+                  {
+                    "op": "D",
+                    "args": [
+                      "u"
+                    ],
+                    "wrt": "x"
+                  }
+                ]
+              },
+              {
+                "op": "*",
+                "args": [
+                  "c",
+                  "dGdx"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "dx",
+          "rhs": {
+            "op": "/",
+            "args": [
+              1,
+              "N"
+            ]
+          }
+        },
+        {
+          "lhs": "dGdx",
+          "rhs": {
+            "op": "faq",
+            "output_idx": [
+              "i"
+            ],
+            "args": [],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                -3.141592653589793,
+                {
+                  "op": "sin",
+                  "args": [
+                    {
+                      "op": "*",
+                      "args": [
+                        3.141592653589793,
+                        {
+                          "op": "+",
+                          "args": [
+                            0,
+                            {
+                              "op": "*",
+                              "args": [
+                                {
+                                  "op": "-",
+                                  "args": [
+                                    "i",
+                                    0.5
+                                  ]
+                                },
+                                {
+                                  "op": "/",
+                                  "args": [
+                                    1,
+                                    "N"
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "mms_steady_inflow_ppm",
+          "description": "Manufactured steady solution u*(x) = cos(pi x) with c = 1 and left inflow gL = u*(0) = 1. Derivation: the continuous balance is u_t = -c u*_x + c u*_x = 0 with u*_x = dGdx = -pi sin(pi x), so u(t) = u* exactly; the discrete drift at t=0.1 is the pure truncation of ppm_D_inflow_bc. The profile is monotone (no interior extrema), so the CW84 limiter is inactive in the interior and the observed order is set by the one-sided boundary reconstruction; u*_x(0) = 0 and u*_x(1) = 0 keep both walls clean (metadata.description). References evaluate at cell centers x_i = 0 + (i - 1/2)/N, spelled inline per esm-spec 6.6.5 (build-time evaluation folds literals and metaparameters only). The t=0 assertion pins the ic wiring (reference equals the initial field). The t=0.1 assertion bounds the truncation-driven drift against the SAME steady reference (well under the 0.05 bound at the default N=64). Exact per-resolution errors are pinned in tests/conformance/convergence/advection_1d_inflow_ppm/golden/errors.json.",
+          "time_span": {
+            "start": 0.0,
+            "end": 0.1
+          },
+          "assertions": [
+            {
+              "variable": "u",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "abs": 1e-09
+              },
+              "reduce": "L2_error",
+              "reference": {
+                "op": "cos",
+                "args": [
+                  {
+                    "op": "*",
+                    "args": [
+                      3.141592653589793,
+                      {
+                        "op": "faq",
+                        "output_idx": [
+                          "i"
+                        ],
+                        "args": [],
+                        "ranges": {
+                          "i": {
+                            "from": "x"
+                          }
+                        },
+                        "expr": {
+                          "op": "+",
+                          "args": [
+                            0,
+                            {
+                              "op": "*",
+                              "args": [
+                                {
+                                  "op": "-",
+                                  "args": [
+                                    "i",
+                                    0.5
+                                  ]
+                                },
+                                {
+                                  "op": "/",
+                                  "args": [
+                                    1,
+                                    "N"
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "variable": "u",
+              "time": 0.1,
+              "expected": 0.0,
+              "tolerance": {
+                "abs": 0.05
+              },
+              "reduce": "L2_error",
+              "reference": {
+                "op": "cos",
+                "args": [
+                  {
+                    "op": "*",
+                    "args": [
+                      3.141592653589793,
+                      {
+                        "op": "faq",
+                        "output_idx": [
+                          "i"
+                        ],
+                        "args": [],
+                        "ranges": {
+                          "i": {
+                            "from": "x"
+                          }
+                        },
+                        "expr": {
+                          "op": "+",
+                          "args": [
+                            0,
+                            {
+                              "op": "*",
+                              "args": [
+                                {
+                                  "op": "-",
+                                  "args": [
+                                    "i",
+                                    0.5
+                                  ]
+                                },
+                                {
+                                  "op": "/",
+                                  "args": [
+                                    1,
+                                    "N"
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

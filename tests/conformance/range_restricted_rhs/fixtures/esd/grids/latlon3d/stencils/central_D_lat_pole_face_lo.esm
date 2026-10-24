@@ -1,0 +1,45 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "central_D_lat_pole_face_lo",
+    "description": "Zero-gradient pole-row closure for the LOW latitude boundary (j=1, the south pole on the global recipe) of the centered latitude derivative on the latlon3d grid: the one-sided difference (f[i,2,k] - f[i,1,k]) / dlat_deg over all i (lon), all k (lev). Match-less named face template consumed by rules/central_D_lat_zero_grad_bc, which tiles [lon,lat,lev] with the centered interior stencil (rows [2,NLAT-1]) plus this low face (row 1) and the high face (row NLAT). Factored into its own stencil (rather than inlined in the rule) as the compositional face-factoring idiom, here producing a full (NLON x 1 x NLEV) slab AGGREGATE (a lat face is a 2-D slab on a 3-D grid). Encodes the zero-gradient (crude pole) condition; on a boundary-compatible solution whose first Phi-derivatives vanish at the pole the one-sided face is superconvergent and the global scheme stays O(dlat_deg^2) (see problems/latlon3d_advection_meridional_zero_grad). `dlat_deg` is the inherited consumer-supplied meridional spacing free name.",
+    "license": "MIT",
+    "tags": ["esd:stencil", "family:finite_difference", "grid:latlon3d", "op:D", "order:1", "stencil_width:2"],
+    "references": [
+      {
+        "citation": "LeVeque, R. J. (2007). Finite Difference Methods for Ordinary and Partial Differential Equations. SIAM. Section 2.12 (one-sided boundary treatment)."
+      }
+    ]
+  },
+  "expression_template_imports": [
+    { "ref": "../grid.esm" }
+  ],
+  "expression_templates": {
+    "central_D_lat_pole_face_lo": {
+      "params": ["f"],
+      "body": {
+        "op": "faq",
+        "output_idx": ["i", "j", "k"],
+        "args": ["f"],
+        "ranges": {
+          "i": { "from": "lon" },
+          "j": [1, 1],
+          "k": { "from": "lev" }
+        },
+        "expr": {
+          "op": "/",
+          "args": [
+            {
+              "op": "-",
+              "args": [
+                { "op": "index", "args": ["f", "i", 2, "k"] },
+                { "op": "index", "args": ["f", "i", 1, "k"] }
+              ]
+            },
+            "dlat_deg"
+          ]
+        }
+      }
+    }
+  }
+}

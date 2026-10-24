@@ -1,0 +1,46 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "central_D_lat_interior",
+    "description": "Interior-only centered first derivative along latitude on the latlon3d grid: (f[i,j+1,k] - f[i,j-1,k]) / (2 dlat_deg) over all i (lon), j in [2, NLAT-1], all k (lev) — a PER-DEGREE derivative (see grids/latlon3d/grid.esm for the physical-units metric recipe). The rank-3 extension of grids/latlon/stencils/central_D_lat_interior, evaluated on every lev level. Match-less named template consumed by the boundary-condition layer (rules/central_D_lat_zero_grad_bc adds the j=1 and j=NLAT pole rows via factored face stencils). `dlat_deg` is a free name resolving to the consuming model's meridional spacing variable (the inherited grids/latlon consumer-supplied geometry contract). O(dlat_deg^2) on this uniform axis.",
+    "license": "MIT",
+    "tags": ["esd:stencil", "family:finite_difference", "grid:latlon3d", "op:D", "order:2", "stencil_width:3"],
+    "references": [
+      {
+        "citation": "Fornberg, B. (1988). Generation of finite difference formulas on arbitrarily spaced grids. Mathematics of Computation 51(184), 699-706.",
+        "doi": "10.1090/S0025-5718-1988-0935077-0"
+      }
+    ]
+  },
+  "expression_template_imports": [
+    { "ref": "../grid.esm" }
+  ],
+  "expression_templates": {
+    "central_D_lat_interior": {
+      "params": ["f"],
+      "body": {
+        "op": "faq",
+        "output_idx": ["i", "j", "k"],
+        "args": ["f"],
+        "ranges": {
+          "i": { "from": "lon" },
+          "j": [2, { "op": "-", "args": ["NLAT", 1] }],
+          "k": { "from": "lev" }
+        },
+        "expr": {
+          "op": "/",
+          "args": [
+            {
+              "op": "-",
+              "args": [
+                { "op": "index", "args": ["f", "i", { "op": "+", "args": ["j", 1] }, "k"] },
+                { "op": "index", "args": ["f", "i", { "op": "-", "args": ["j", 1] }, "k"] }
+              ]
+            },
+            { "op": "*", "args": [2, "dlat_deg"] }
+          ]
+        }
+      }
+    }
+  }
+}

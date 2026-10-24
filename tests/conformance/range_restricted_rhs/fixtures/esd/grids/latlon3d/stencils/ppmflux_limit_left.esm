@@ -1,0 +1,149 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "ppmflux_limit_left",
+    "description": "Colella-Woodward (1984) eq. (1.10) parabola monotonicity limiter, LEFT-edge output only -- the exact mirror of the pre-existing ../stencils/ppm_limit_right, and the piece the library was missing. Given a cell's two RAW eq-(1.6) edge interpolants ql (its left edge) and qr (its right edge) together with its cell average qi, it returns the LIMITED left edge ql_lim. WHY THIS ATOM HAS TO EXIST. The pre-existing vertical PPM chain only ever needs a cell's RIGHT endpoint, because ../stencils/ppm_lev_flux_mono hard-codes a NON-NEGATIVE vertical velocity and therefore always donates from the cell BELOW the face. An upwind-biased scheme for a wind that REVERSES must also be able to donate from the cell ABOVE the face, and what it needs there is that upper cell's LEFT endpoint -- which no existing atom produces. THE THREE CW84 CASES (identical to ppm_limit_right except which endpoint is moved): if (qr-qi)(qi-ql) <= 0 the cell is a local extremum and the parabola is flattened to the constant qi (both endpoints collapse to the average, which is what makes the reconstruction bounded and is the case that keeps a chemical tracer non-negative); otherwise, with dq = qr - ql and q6 = 6(qi - (ql+qr)/2), if dq*q6 > dq^2 the parabola's interior extremum falls beyond the RIGHT edge, and the left edge is pulled to 3*qi - 2*qr to keep the sub-grid parabola monotone across the cell; else the raw ql already yields a monotone parabola and is returned unchanged. Note the two non-extremum tests are mutually exclusive for dq != 0 (dq*q6 > dq^2 and -dq^2 > dq*q6 cannot both hold), which is exactly why CW84 applies the left-edge and right-edge corrections independently and why this atom and ppm_limit_right can be evaluated separately on the same cell without interfering. MESH-INDEPENDENT: the limiter is pure scalar algebra in the cell's normalized coordinate -- the cell widths never appear -- so it drops onto the stretched hybrid-sigma vertical unchanged, exactly as ppm_limit_right does. Closed-form ifelse AST (ifelse, <=, >, ^ are ESS evaluable-core ops); grid-agnostic scalar algebra, no index sets, no free names. Match-less named template; consumed by ../stencils/ppmflux_lev_cell_aL.",
+    "license": "MIT",
+    "tags": [
+      "esd:stencil",
+      "family:finite_volume",
+      "grid:latlon3d",
+      "op:limiter",
+      "order:3",
+      "stencil_width:1"
+    ],
+    "references": [
+      {
+        "citation": "Colella, P., & Woodward, P. R. (1984). The Piecewise Parabolic Method (PPM) for gas-dynamical simulations. Journal of Computational Physics, 54(1), 174-201. Equation (1.10), the parabola monotonicity limiter.",
+        "doi": "10.1016/0021-9991(84)90143-8"
+      }
+    ]
+  },
+  "expression_templates": {
+    "ppmflux_limit_left": {
+      "params": [
+        "ql",
+        "qr",
+        "qi"
+      ],
+      "description": "CW84 eq.(1.10) limited LEFT edge ql_lim(ql,qr,qi); mirror of ppm_limit_right",
+      "body": {
+        "op": "ifelse",
+        "args": [
+          {
+            "op": "<=",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "-",
+                    "args": [
+                      "qr",
+                      "qi"
+                    ]
+                  },
+                  {
+                    "op": "-",
+                    "args": [
+                      "qi",
+                      "ql"
+                    ]
+                  }
+                ]
+              },
+              0
+            ]
+          },
+          "qi",
+          {
+            "op": "ifelse",
+            "args": [
+              {
+                "op": ">",
+                "args": [
+                  {
+                    "op": "*",
+                    "args": [
+                      {
+                        "op": "-",
+                        "args": [
+                          "qr",
+                          "ql"
+                        ]
+                      },
+                      {
+                        "op": "*",
+                        "args": [
+                          6,
+                          {
+                            "op": "-",
+                            "args": [
+                              "qi",
+                              {
+                                "op": "*",
+                                "args": [
+                                  {
+                                    "op": "/",
+                                    "args": [
+                                      1,
+                                      2
+                                    ]
+                                  },
+                                  {
+                                    "op": "+",
+                                    "args": [
+                                      "ql",
+                                      "qr"
+                                    ]
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "op": "^",
+                    "args": [
+                      {
+                        "op": "-",
+                        "args": [
+                          "qr",
+                          "ql"
+                        ]
+                      },
+                      2
+                    ]
+                  }
+                ]
+              },
+              {
+                "op": "-",
+                "args": [
+                  {
+                    "op": "*",
+                    "args": [
+                      3,
+                      "qi"
+                    ]
+                  },
+                  {
+                    "op": "*",
+                    "args": [
+                      2,
+                      "qr"
+                    ]
+                  }
+                ]
+              },
+              "ql"
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

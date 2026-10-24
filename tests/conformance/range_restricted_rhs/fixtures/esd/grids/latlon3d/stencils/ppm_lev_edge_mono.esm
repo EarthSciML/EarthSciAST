@@ -1,0 +1,88 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "ppm_lev_edge_mono",
+    "description": "Colella-Woodward (1984) eq. (1.6) non-uniform interpolation to the interface a_{j+1/2}, using the MONOTONIZED eq. (1.8) average slopes (../stencils/ppm_lev_slope_mono) instead of the raw eq. (1.7) slopes. A thin wrapper over the shared eq (1.6) combination ../stencils/ppm_lev_edge_core, differing from its unlimited sibling ../stencils/ppm_lev_edge ONLY in which slope template it supplies -- that single substitution is what makes the reconstruction bounded. WHY IT MATTERS: with raw slopes the 4th-order edge value can overshoot the range of the two cells it separates, so the upwind flux introduces new extrema and can drive a tracer NEGATIVE at a sharp vertical gradient; the eq (1.8) slope limiter forces a_{j+1/2} to lie between a_j and a_{j+1}, which (together with the eq (1.10) parabola limiter applied downstream in ppm_lev_flux_mono) is what makes the monotone vertical PPM safe for chemistry-transport tracers. COST: clipping the slope at smooth extrema drops the formal order -- the full monotone chain measures ~2.5 (L2) / ~2.0 (Linf) on the smooth quadratic-stretch manufactured solution where the unlimited chain measures a clean 4.0. Same 4-cell support as the unlimited edge (eq (1.8) reuses eq (1.7)'s three cells, so the limiter does not widen the stencil). Grid-agnostic scalar algebra; match-less named template; composed by ppm_lev_flux_mono.",
+    "license": "MIT",
+    "tags": [
+      "esd:stencil",
+      "family:finite_volume",
+      "grid:latlon3d",
+      "op:reconstruct",
+      "order:4",
+      "stencil_width:4"
+    ],
+    "references": [
+      {
+        "citation": "Colella, P., & Woodward, P. R. (1984). The Piecewise Parabolic Method (PPM) for gas-dynamical simulations. Journal of Computational Physics, 54(1), 174-201. Equations (1.6)-(1.7), non-uniform mesh.",
+        "doi": "10.1016/0021-9991(84)90143-8"
+      },
+      {
+        "citation": "Colella, P., & Woodward, P. R. (1984). The Piecewise Parabolic Method (PPM) for gas-dynamical simulations. Journal of Computational Physics, 54(1), 174-201. Equation (1.8), monotonized slope.",
+        "doi": "10.1016/0021-9991(84)90143-8"
+      }
+    ]
+  },
+  "expression_template_imports": [
+    {
+      "ref": "./ppm_lev_slope_mono.esm"
+    },
+    {
+      "ref": "./ppm_lev_edge_core.esm"
+    }
+  ],
+  "expression_templates": {
+    "ppm_lev_edge_mono": {
+      "params": [
+        "am",
+        "a0",
+        "ap",
+        "app",
+        "dm",
+        "d0",
+        "dp",
+        "dpp"
+      ],
+      "description": "CW84 eq.(1.6) non-uniform edge a_{j+1/2} using monotonized eq.(1.8) slopes",
+      "body": {
+        "op": "apply_expression_template",
+        "args": [],
+        "name": "ppm_lev_edge_core",
+        "bindings": {
+          "a0": "a0",
+          "ap": "ap",
+          "dm": "dm",
+          "d0": "d0",
+          "dp": "dp",
+          "dpp": "dpp",
+          "sj": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "ppm_lev_slope_mono",
+            "bindings": {
+              "am": "am",
+              "a0": "a0",
+              "ap": "ap",
+              "dm": "dm",
+              "d0": "d0",
+              "dp": "dp"
+            }
+          },
+          "sjp1": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "ppm_lev_slope_mono",
+            "bindings": {
+              "am": "a0",
+              "a0": "ap",
+              "ap": "app",
+              "dm": "d0",
+              "d0": "dp",
+              "dp": "dpp"
+            }
+          }
+        }
+      }
+    }
+  }
+}

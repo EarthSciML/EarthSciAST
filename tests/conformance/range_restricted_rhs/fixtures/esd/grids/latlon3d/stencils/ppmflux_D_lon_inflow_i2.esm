@@ -1,0 +1,270 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "ppmflux_D_lon_inflow_i2",
+    "description": "REGIONAL OPEN-BOUNDARY (lateral inflow / Dirichlet) slab of the upwind-biased MONOTONE conservative flux-form ZONAL advection operator on latlon3d, near the west (i=1) wall. Full-support seven-cell PPM: the out-of-domain cells the reconstruction reaches for are supplied by the prescribed lateral boundary concentration `qbc_w` (a halo of ghost values), and the open wall face flux is FORMED from that halo with the CW84 eq (1.6)/(1.8)/(1.10) limited reconstruction and the SIGN-OF-VELOCITY donor selection of ../stencils/ppmflux_lev_face_flux -- so on inflow the prescribed halo is donated into the domain and on outflow the interior reconstruction leaves (each wall handles both by wind sign, unlike a fixed-direction inflow rule). This is the open-boundary counterpart of the periodic ../stencils/ppmflux_D_lon_wrap_* family: the periodic slab rotates the ghost indices around the zonal circle and the polar slab OMITS the wall flux, whereas this slab FORMS the wall flux from a prescribed exterior state. Derived by transforming ../stencils/ppmflux_D_lon_interior verbatim -- every INTERIOR interface face is built from the SAME atom, cells, widths and face velocity as the interior aggregate, so it lowers to a bit-identical float and the flux divergence telescopes exactly; only the out-of-domain gathers differ, becoming `qbc_w`. FREE-STREAM: at q == 1 with `qbc_w` == 1 every CW84 correction term is a difference of equal values and is exactly 0.0 in IEEE, the parabola is the constant 1, the wall flux collapses to F = w exactly, and the tendency is bit-identical to the mass divergence -- consistency with continuity holds through the open wall. `qbc_w` is a consumer-supplied free name shaped [lat, lev] (the boundary concentration along the wall at each level); the same free-name contract by which the vertical flux stencils read dz. The wall reconstruction is full-order (halo, not donor); on OUTFLOW the boundary-cell reconstruction is mildly influenced by the halo, as in operational regional CTM lateral-boundary schemes -- acceptable and non-reflecting to leading order, and it never breaks conservation because the wall face is single-valued. A per-wall wind-sign-dependent (non-reflecting extrapolation) outflow ghost is a documented follow-on.",
+    "license": "MIT",
+    "tags": [
+      "esd:stencil",
+      "family:finite_volume",
+      "grid:latlon3d",
+      "op:D",
+      "axes:lon,lat,lev",
+      "order:3",
+      "scheme:upwind",
+      "stencil_width:7",
+      "bc:inflow"
+    ],
+    "references": [
+      {
+        "citation": "Colella, P., & Woodward, P. R. (1984). The Piecewise Parabolic Method (PPM) for gas-dynamical simulations. Journal of Computational Physics, 54(1), 174-201.",
+        "doi": "10.1016/0021-9991(84)90143-8"
+      },
+      {
+        "citation": "Lin, S.-J., & Rood, R. B. (1996). Multidimensional flux-form semi-Lagrangian transport schemes. Monthly Weather Review, 124(9), 2046-2070.",
+        "doi": "10.1175/1520-0493(1996)124<2046:MFFSLT>2.0.CO;2"
+      },
+      {
+        "citation": "Williamson, D. L., Drake, J. B., Hack, J. J., Jakob, R., & Swarztrauber, P. N. (1992). A standard test set for numerical approximations to the shallow water equations in spherical geometry. Journal of Computational Physics, 102(1), 211-224. (Spherical lat-lon metric factors for the zonal flux divergence.)",
+        "doi": "10.1016/S0021-9991(05)80016-6"
+      }
+    ]
+  },
+  "expression_template_imports": [
+    {
+      "ref": "../grid.esm"
+    },
+    {
+      "ref": "./ppmflux_lev_face_flux.esm"
+    }
+  ],
+  "expression_templates": {
+    "ppmflux_D_lon_inflow_i2": {
+      "params": [
+        "q",
+        "U",
+        "qbc_w"
+      ],
+      "body": {
+        "op": "faq",
+        "output_idx": [
+          "i",
+          "j",
+          "k"
+        ],
+        "args": [
+          "q",
+          "U"
+        ],
+        "ranges": {
+          "i": [
+            2,
+            2
+          ],
+          "j": {
+            "from": "lat"
+          },
+          "k": {
+            "from": "lev"
+          }
+        },
+        "expr": {
+          "op": "*",
+          "args": [
+            {
+              "op": "/",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "dphi_lat",
+                    "j"
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    {
+                      "op": "*",
+                      "args": [
+                        "dlon_deg",
+                        {
+                          "op": "/",
+                          "args": [
+                            3.141592653589793,
+                            180
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "op": "index",
+                      "args": [
+                        "dS_lat",
+                        "j"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "op": "-",
+              "args": [
+                {
+                  "op": "apply_expression_template",
+                  "args": [],
+                  "name": "ppmflux_lev_face_flux",
+                  "bindings": {
+                    "aL2": {
+                      "op": "index",
+                      "args": [
+                        "qbc_w",
+                        "j",
+                        "k"
+                      ]
+                    },
+                    "aL1": {
+                      "op": "index",
+                      "args": [
+                        "q",
+                        1,
+                        "j",
+                        "k"
+                      ]
+                    },
+                    "aC": {
+                      "op": "index",
+                      "args": [
+                        "q",
+                        2,
+                        "j",
+                        "k"
+                      ]
+                    },
+                    "aRc": {
+                      "op": "index",
+                      "args": [
+                        "q",
+                        3,
+                        "j",
+                        "k"
+                      ]
+                    },
+                    "aR1": {
+                      "op": "index",
+                      "args": [
+                        "q",
+                        4,
+                        "j",
+                        "k"
+                      ]
+                    },
+                    "aR2": {
+                      "op": "index",
+                      "args": [
+                        "q",
+                        5,
+                        "j",
+                        "k"
+                      ]
+                    },
+                    "dL2": "dlon_deg",
+                    "dL1": "dlon_deg",
+                    "dC": "dlon_deg",
+                    "dRc": "dlon_deg",
+                    "dR1": "dlon_deg",
+                    "dR2": "dlon_deg",
+                    "w": {
+                      "op": "index",
+                      "args": [
+                        "U",
+                        3,
+                        "j",
+                        "k"
+                      ]
+                    }
+                  }
+                },
+                {
+                  "op": "apply_expression_template",
+                  "args": [],
+                  "name": "ppmflux_lev_face_flux",
+                  "bindings": {
+                    "aL2": {
+                      "op": "index",
+                      "args": [
+                        "qbc_w",
+                        "j",
+                        "k"
+                      ]
+                    },
+                    "aL1": {
+                      "op": "index",
+                      "args": [
+                        "qbc_w",
+                        "j",
+                        "k"
+                      ]
+                    },
+                    "aC": {
+                      "op": "index",
+                      "args": [
+                        "q",
+                        1,
+                        "j",
+                        "k"
+                      ]
+                    },
+                    "aRc": {
+                      "op": "index",
+                      "args": [
+                        "q",
+                        2,
+                        "j",
+                        "k"
+                      ]
+                    },
+                    "aR1": {
+                      "op": "index",
+                      "args": [
+                        "q",
+                        3,
+                        "j",
+                        "k"
+                      ]
+                    },
+                    "aR2": {
+                      "op": "index",
+                      "args": [
+                        "q",
+                        4,
+                        "j",
+                        "k"
+                      ]
+                    },
+                    "dL2": "dlon_deg",
+                    "dL1": "dlon_deg",
+                    "dC": "dlon_deg",
+                    "dRc": "dlon_deg",
+                    "dR1": "dlon_deg",
+                    "dR2": "dlon_deg",
+                    "w": {
+                      "op": "index",
+                      "args": [
+                        "U",
+                        2,
+                        "j",
+                        "k"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  }
+}

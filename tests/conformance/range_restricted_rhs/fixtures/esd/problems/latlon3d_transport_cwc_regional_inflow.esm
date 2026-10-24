@@ -1,0 +1,1071 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "latlon3d_transport_cwc_regional_inflow",
+    "description": "Consistency with continuity (CWC) / free-stream preservation for the REGIONAL LATERAL-INFLOW monotone PPM scheme on a limited-area latlon patch (lon [0,60], lat [20,60], no poles, no zonal wrap) at 12x9x4. The open-boundary counterpart of latlon3d_transport_cwc_3d_ppm: it gates the same bitwise free-stream identity for OPEN walls carrying a prescribed Dirichlet boundary concentration (the halo qbc), where that gate uses periodic-wrap and polar closures. Carries air mass m and tracer mass mq, derives q = mq/m; four rules fire -- two bare-D open-wall continuity divergences (lon, lat) closing the air-mass budget through the walls, and two compound monotone PPM flux-form inflow rules carrying the tracer with the prescribed halo. The vertical axis is passive (no lev transport): this gate isolates the new lon and lat wall closures. At q == 1 and halo == 1 the PPM wall flux collapses to the mass flux bitwise (the reconstruction of a uniform halo is exactly uniform), so dev = mq - m stays 0. Non-vacuity: _falsifier_regional_inflow perturbs the halos so the inflow walls inject a mismatched concentration and dev drifts. This is the free-stream gate for a regional AQ model driven by prescribed lateral boundary conditions.",
+    "license": "MIT",
+    "tags": [
+      "esd:problem",
+      "grid:latlon3d",
+      "family:finite_volume",
+      "op:D",
+      "axes:lon,lat,lev",
+      "scheme:flux_form",
+      "property:free_stream",
+      "bc:inflow"
+    ]
+  },
+  "models": {
+    "TransportCWCRegionalInflow": {
+      "expression_template_imports": [
+        {
+          "ref": "../grids/latlon3d/rules/face_flux_divergence_lon_open_bc.esm",
+          "bindings": {
+            "NLON": 12,
+            "NLAT": 9,
+            "NLEV": 4
+          }
+        },
+        {
+          "ref": "../grids/latlon3d/rules/face_flux_divergence_lat_open_bc.esm",
+          "bindings": {
+            "NLON": 12,
+            "NLAT": 9,
+            "NLEV": 4
+          }
+        },
+        {
+          "ref": "../grids/latlon3d/rules/ppm_flux_D_lon_mono_inflow_bc.esm",
+          "bindings": {
+            "NLON": 12,
+            "NLAT": 9,
+            "NLEV": 4
+          }
+        },
+        {
+          "ref": "../grids/latlon3d/rules/ppm_flux_D_lat_mono_inflow_bc.esm",
+          "bindings": {
+            "NLON": 12,
+            "NLAT": 9,
+            "NLEV": 4
+          }
+        }
+      ],
+      "variables": {
+        "m": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lon",
+            "lat",
+            "lev"
+          ],
+          "description": "Air mass per cell (a pressure thickness). Strictly positive."
+        },
+        "mq": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lon",
+            "lat",
+            "lev"
+          ],
+          "description": "Tracer mass per cell. Initialised bitwise equal to m, so q == 1."
+        },
+        "dev": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lon",
+            "lat",
+            "lev"
+          ],
+          "description": "Diagnostic deviation dev = mq - m, obtained by integrating the DIFFERENCE of the two right-hand sides from dev(0) = 0. This is the quantity the conformance assertion gates: at q == 1 the tracer divergence collapses bitwise onto the continuity divergence, so dev's own right-hand side is EXACTLY 0.0 in IEEE and dev never leaves zero. It exists because assertion `reference` expressions are build-time and cellwise and cannot read states or observeds, so q itself is not assertable and asserting mq would require re-spelling the entire discrete divergence by hand -- i.e. duplicating the operator inside its own test. Against a constant-zero reference there is nothing for the test to get wrong. dev feeds nothing back into m or mq."
+        },
+        "lon0_deg": {
+          "type": "parameter",
+          "units": "deg",
+          "default": 0.0,
+          "description": "Grid's lon0_deg free name; 0 closes the periodic zonal circle."
+        },
+        "lat0_deg": {
+          "type": "parameter",
+          "units": "deg",
+          "default": 20.0,
+          "description": "Grid's lat0_deg free name; -90 for the pole-to-pole global recipe."
+        },
+        "dlon_deg": {
+          "type": "unknown",
+          "units": "deg",
+          "description": "Regional zonal spacing 5.0 deg (lon in [0.0, 60.0]); the domain does NOT close, so the zonal axis is OPEN (west/east walls), not periodic."
+        },
+        "dlat_deg": {
+          "type": "unknown",
+          "units": "deg",
+          "description": "Regional meridional spacing 5.0 deg (lat in [20.0, 60.0]); the domain does NOT reach the poles, so the meridional axis is OPEN (south/north walls), not polar."
+        },
+        "phie": {
+          "type": "unknown",
+          "units": "deg",
+          "shape": [
+            "lat_nodes"
+          ],
+          "description": "Latitude cell EDGES from the grid's lat_edge template; the half-polar caps fall out of the clamp at +/-90."
+        },
+        "coslat_e": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lat_nodes"
+          ],
+          "description": "cos of the latitude edges. Zero-length face at each pole. Never read at faces 1 or NLAT+1 -- the pole terms are structurally omitted."
+        },
+        "dS_lat": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lat"
+          ],
+          "description": "Exact spherical cell-area weight sin(phie[j+1]) - sin(phie[j])."
+        },
+        "dphi_lat": {
+          "type": "unknown",
+          "units": "rad",
+          "shape": [
+            "lat"
+          ],
+          "description": "Meridional cell extent; HALF-width at the two polar caps."
+        },
+        "Mx": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lon_nodes",
+            "lat",
+            "lev"
+          ],
+          "description": "Zonal face-normal air-mass flux at the WEST edge of each cell. Element NLON+1 IS read here (open east wall). Positive throughout [0,60] deg lon, so the west wall is inflow and the east wall outflow."
+        },
+        "My": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lon",
+            "lat_nodes",
+            "lev"
+          ],
+          "description": "Meridional face-normal air-mass flux at the SOUTH edge of each cell. Faces 1 and NLAT+1 are the open south/north walls (real face lengths, NOT poles). Positive across the patch, so the south wall is inflow and the north wall outflow."
+        },
+        "q": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lon",
+            "lat",
+            "lev"
+          ],
+          "description": "Mixing ratio mq/m. The quantity under test: it must stay EXACTLY 1."
+        },
+        "qbc_w": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lat",
+            "lev"
+          ],
+          "description": "Prescribed tracer concentration in the WEST halo (Dirichlet inflow data), == 1 so the incoming tracer matches the interior and q stays 1. The falsifier perturbs this."
+        },
+        "qbc_e": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lat",
+            "lev"
+          ],
+          "description": "Prescribed tracer concentration in the EAST halo, == 1."
+        },
+        "qbc_s": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lon",
+            "lev"
+          ],
+          "description": "Prescribed tracer concentration in the SOUTH halo, == 1."
+        },
+        "qbc_n": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lon",
+            "lev"
+          ],
+          "description": "Prescribed tracer concentration in the NORTH halo, == 1."
+        }
+      },
+      "tests": [
+        {
+          "id": "freestream_q_stays_one_regional_inflow",
+          "description": "MEASURED: on a mid-latitude regional patch with OPEN lateral walls carrying a prescribed boundary concentration qbc == 1, the mixing ratio q = mq/m stays EXACTLY 1 under a divergent air-mass flux with genuine inflow (west, south) and outflow (east, north). At q == 1 with the halo == 1 every CW84 slope is a difference of equal values and is exactly 0.0 in IEEE, the reconstruction is the constant 1 through the walls, and each open wall flux collapses to F = M bitwise, so the inflow PPM tracer divergence telescopes onto the open-wall continuity twin and dmq/dt equals dm/dt to the last bit. The reference is the CONSTANT ZERO, so 0.0 proves nothing alone -- non-vacuity is problems/_falsifier_regional_inflow.esm (all four qbc halos x 1.000001), which injects a mismatched boundary concentration through the inflow walls and drives dev off zero, correctly FAILING. Only the t>0 assertion discriminates: dev integrates from dev(0)=0.",
+          "time_span": {
+            "start": 0.0,
+            "end": 0.1
+          },
+          "assertions": [
+            {
+              "variable": "dev",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "abs": 1e-12
+              },
+              "reduce": "Linf_error",
+              "reference": {
+                "op": "faq",
+                "output_idx": [
+                  "i",
+                  "j",
+                  "k"
+                ],
+                "args": [],
+                "ranges": {
+                  "i": {
+                    "from": "lon"
+                  },
+                  "j": {
+                    "from": "lat"
+                  },
+                  "k": {
+                    "from": "lev"
+                  }
+                },
+                "expr": 0.0
+              }
+            },
+            {
+              "variable": "dev",
+              "time": 0.1,
+              "expected": 0.0,
+              "tolerance": {
+                "abs": 1e-12
+              },
+              "reduce": "Linf_error",
+              "reference": {
+                "op": "faq",
+                "output_idx": [
+                  "i",
+                  "j",
+                  "k"
+                ],
+                "args": [],
+                "ranges": {
+                  "i": {
+                    "from": "lon"
+                  },
+                  "j": {
+                    "from": "lat"
+                  },
+                  "k": {
+                    "from": "lev"
+                  }
+                },
+                "expr": 0.0
+              }
+            }
+          ]
+        }
+      ],
+      "equations": [
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "m"
+            ]
+          },
+          "rhs": {
+            "op": "faq",
+            "output_idx": [
+              "i",
+              "j",
+              "k"
+            ],
+            "ranges": {
+              "i": {
+                "from": "lon"
+              },
+              "j": {
+                "from": "lat"
+              },
+              "k": {
+                "from": "lev"
+              }
+            },
+            "args": [],
+            "expr": {
+              "op": "+",
+              "args": [
+                2.0,
+                {
+                  "op": "*",
+                  "args": [
+                    0.5,
+                    {
+                      "op": "sin",
+                      "args": [
+                        {
+                          "op": "*",
+                          "args": [
+                            0.017453292519943295,
+                            {
+                              "op": "+",
+                              "args": [
+                                20.0,
+                                {
+                                  "op": "*",
+                                  "args": [
+                                    {
+                                      "op": "-",
+                                      "args": [
+                                        "j",
+                                        1
+                                      ]
+                                    },
+                                    5.0
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    0.1,
+                    {
+                      "op": "cos",
+                      "args": [
+                        {
+                          "op": "*",
+                          "args": [
+                            0.017453292519943295,
+                            {
+                              "op": "*",
+                              "args": [
+                                {
+                                  "op": "-",
+                                  "args": [
+                                    "i",
+                                    0.5
+                                  ]
+                                },
+                                5.0
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "mq"
+            ]
+          },
+          "rhs": {
+            "op": "faq",
+            "output_idx": [
+              "i",
+              "j",
+              "k"
+            ],
+            "ranges": {
+              "i": {
+                "from": "lon"
+              },
+              "j": {
+                "from": "lat"
+              },
+              "k": {
+                "from": "lev"
+              }
+            },
+            "args": [],
+            "expr": {
+              "op": "+",
+              "args": [
+                2.0,
+                {
+                  "op": "*",
+                  "args": [
+                    0.5,
+                    {
+                      "op": "sin",
+                      "args": [
+                        {
+                          "op": "*",
+                          "args": [
+                            0.017453292519943295,
+                            {
+                              "op": "+",
+                              "args": [
+                                20.0,
+                                {
+                                  "op": "*",
+                                  "args": [
+                                    {
+                                      "op": "-",
+                                      "args": [
+                                        "j",
+                                        1
+                                      ]
+                                    },
+                                    5.0
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    0.1,
+                    {
+                      "op": "cos",
+                      "args": [
+                        {
+                          "op": "*",
+                          "args": [
+                            0.017453292519943295,
+                            {
+                              "op": "*",
+                              "args": [
+                                {
+                                  "op": "-",
+                                  "args": [
+                                    "i",
+                                    0.5
+                                  ]
+                                },
+                                5.0
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "dev"
+            ]
+          },
+          "rhs": {
+            "op": "faq",
+            "output_idx": [
+              "i",
+              "j",
+              "k"
+            ],
+            "ranges": {
+              "i": {
+                "from": "lon"
+              },
+              "j": {
+                "from": "lat"
+              },
+              "k": {
+                "from": "lev"
+              }
+            },
+            "args": [],
+            "expr": 0.0
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "m"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "D",
+                    "args": [
+                      "Mx"
+                    ],
+                    "wrt": "lon"
+                  },
+                  {
+                    "op": "D",
+                    "args": [
+                      "My"
+                    ],
+                    "wrt": "lat"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "mq"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "D",
+                    "args": [
+                      {
+                        "op": "*",
+                        "args": [
+                          "Mx",
+                          "q"
+                        ]
+                      },
+                      "qbc_w",
+                      "qbc_e"
+                    ],
+                    "wrt": "lon"
+                  },
+                  {
+                    "op": "D",
+                    "args": [
+                      {
+                        "op": "*",
+                        "args": [
+                          "My",
+                          "q"
+                        ]
+                      },
+                      "qbc_s",
+                      "qbc_n"
+                    ],
+                    "wrt": "lat"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "dev"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  {
+                    "op": "+",
+                    "args": [
+                      {
+                        "op": "D",
+                        "args": [
+                          {
+                            "op": "*",
+                            "args": [
+                              "Mx",
+                              "q"
+                            ]
+                          },
+                          "qbc_w",
+                          "qbc_e"
+                        ],
+                        "wrt": "lon"
+                      },
+                      {
+                        "op": "D",
+                        "args": [
+                          {
+                            "op": "*",
+                            "args": [
+                              "My",
+                              "q"
+                            ]
+                          },
+                          "qbc_s",
+                          "qbc_n"
+                        ],
+                        "wrt": "lat"
+                      }
+                    ]
+                  },
+                  {
+                    "op": "+",
+                    "args": [
+                      {
+                        "op": "D",
+                        "args": [
+                          "Mx"
+                        ],
+                        "wrt": "lon"
+                      },
+                      {
+                        "op": "D",
+                        "args": [
+                          "My"
+                        ],
+                        "wrt": "lat"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "dlon_deg",
+          "rhs": 5.0
+        },
+        {
+          "lhs": "dlat_deg",
+          "rhs": 5.0
+        },
+        {
+          "lhs": "phie",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "lat_edge",
+            "bindings": {}
+          }
+        },
+        {
+          "lhs": "coslat_e",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "coslat_edge",
+            "bindings": {
+              "phie": "phie"
+            }
+          }
+        },
+        {
+          "lhs": "dS_lat",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "latcell_area",
+            "bindings": {
+              "phie": "phie"
+            }
+          }
+        },
+        {
+          "lhs": "dphi_lat",
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "latcell_dphi",
+            "bindings": {
+              "phie": "phie"
+            }
+          }
+        },
+        {
+          "lhs": "Mx",
+          "rhs": {
+            "op": "faq",
+            "output_idx": [
+              "ci",
+              "cj",
+              "ck"
+            ],
+            "args": [
+              "phie"
+            ],
+            "ranges": {
+              "ci": {
+                "from": "lon_nodes"
+              },
+              "cj": {
+                "from": "lat"
+              },
+              "ck": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                0.7,
+                {
+                  "op": "cos",
+                  "args": [
+                    {
+                      "op": "*",
+                      "args": [
+                        0.017453292519943295,
+                        {
+                          "op": "+",
+                          "args": [
+                            "lon0_deg",
+                            {
+                              "op": "*",
+                              "args": [
+                                {
+                                  "op": "-",
+                                  "args": [
+                                    "ci",
+                                    1
+                                  ]
+                                },
+                                "dlon_deg"
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "+",
+                  "args": [
+                    1.0,
+                    {
+                      "op": "*",
+                      "args": [
+                        0.3,
+                        {
+                          "op": "sin",
+                          "args": [
+                            {
+                              "op": "*",
+                              "args": [
+                                0.017453292519943295,
+                                {
+                                  "op": "*",
+                                  "args": [
+                                    0.5,
+                                    {
+                                      "op": "+",
+                                      "args": [
+                                        {
+                                          "op": "index",
+                                          "args": [
+                                            "phie",
+                                            "cj"
+                                          ]
+                                        },
+                                        {
+                                          "op": "index",
+                                          "args": [
+                                            "phie",
+                                            {
+                                              "op": "+",
+                                              "args": [
+                                                "cj",
+                                                1
+                                              ]
+                                            }
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "+",
+                  "args": [
+                    1.0,
+                    {
+                      "op": "*",
+                      "args": [
+                        0.05,
+                        {
+                          "op": "-",
+                          "args": [
+                            "ck",
+                            1
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "My",
+          "rhs": {
+            "op": "faq",
+            "output_idx": [
+              "ci",
+              "cj",
+              "ck"
+            ],
+            "args": [
+              "phie"
+            ],
+            "ranges": {
+              "ci": {
+                "from": "lon"
+              },
+              "cj": {
+                "from": "lat_nodes"
+              },
+              "ck": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                0.5,
+                {
+                  "op": "sin",
+                  "args": [
+                    {
+                      "op": "*",
+                      "args": [
+                        2.0,
+                        {
+                          "op": "*",
+                          "args": [
+                            0.017453292519943295,
+                            {
+                              "op": "+",
+                              "args": [
+                                "lon0_deg",
+                                {
+                                  "op": "*",
+                                  "args": [
+                                    {
+                                      "op": "-",
+                                      "args": [
+                                        "ci",
+                                        0.5
+                                      ]
+                                    },
+                                    "dlon_deg"
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "cos",
+                  "args": [
+                    {
+                      "op": "*",
+                      "args": [
+                        0.017453292519943295,
+                        {
+                          "op": "index",
+                          "args": [
+                            "phie",
+                            "cj"
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "+",
+                  "args": [
+                    1.0,
+                    {
+                      "op": "*",
+                      "args": [
+                        0.05,
+                        {
+                          "op": "-",
+                          "args": [
+                            "ck",
+                            1
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "q",
+          "rhs": {
+            "op": "faq",
+            "output_idx": [
+              "iq",
+              "jq",
+              "kq"
+            ],
+            "args": [
+              "mq",
+              "m"
+            ],
+            "ranges": {
+              "iq": {
+                "from": "lon"
+              },
+              "jq": {
+                "from": "lat"
+              },
+              "kq": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "/",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "mq",
+                    "iq",
+                    "jq",
+                    "kq"
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "m",
+                    "iq",
+                    "jq",
+                    "kq"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": "qbc_w",
+          "rhs": {
+            "op": "faq",
+            "output_idx": [
+              "gl",
+              "gl"
+            ],
+            "args": [],
+            "ranges": {
+              "gl": {
+                "from": "lev"
+              }
+            },
+            "expr": 1.0
+          }
+        },
+        {
+          "lhs": "qbc_e",
+          "rhs": {
+            "op": "faq",
+            "output_idx": [
+              "gl",
+              "gl"
+            ],
+            "args": [],
+            "ranges": {
+              "gl": {
+                "from": "lev"
+              }
+            },
+            "expr": 1.0
+          }
+        },
+        {
+          "lhs": "qbc_s",
+          "rhs": {
+            "op": "faq",
+            "output_idx": [
+              "gl",
+              "gl"
+            ],
+            "args": [],
+            "ranges": {
+              "gl": {
+                "from": "lev"
+              }
+            },
+            "expr": 1.0
+          }
+        },
+        {
+          "lhs": "qbc_n",
+          "rhs": {
+            "op": "faq",
+            "output_idx": [
+              "gl",
+              "gl"
+            ],
+            "args": [],
+            "ranges": {
+              "gl": {
+                "from": "lev"
+              }
+            },
+            "expr": 1.0
+          }
+        }
+      ]
+    }
+  }
+}

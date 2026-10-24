@@ -1,0 +1,136 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "facediv_lat_open_interior",
+    "description": "OPEN-WALL (regional limited-area) rows (j = 1 .. NLAT) of the MERIDIONAL divergence of a face-staggered flux on latlon3d: the continuity twin for the regional lateral-inflow PPM tracer rule ppm_flux_D_lat_mono_inflow_bc. Identical to ../stencils/facediv_lat_interior -- the bare telescoping difference of the two face fluxes bounding the cell times the spherical metric weight -- but ranged over the WHOLE axis, because on an OPEN domain the south/north wall faces (My[1] and My[NLAT+1]) are GENUINE faces to be differenced, not a periodic wrap (My[1] reused as the last east face) and not a pole to be OMITTED. CWC: at tracer q == 1 with a boundary halo == 1 the regional PPM flux collapses to F = My bitwise at EVERY face including the walls (every CW84 correction term is a difference of equal values, exactly 0.0 in IEEE), so d(mq)/dt built by the PPM rule is bit-identical to d(m)/dt built here and a uniform tracer is preserved through the open walls. The domain is OPEN: mass enters and leaves through the wall faces, so the global integral is not invariant -- that is the point of a lateral boundary. Free names and face convention exactly as in ../stencils/facediv_lat_interior.",
+    "license": "MIT",
+    "tags": [
+      "esd:stencil",
+      "family:finite_volume",
+      "grid:latlon3d",
+      "op:div",
+      "axes:lon,lat,lev",
+      "order:1",
+      "stencil_width:2"
+    ],
+    "references": [
+      {
+        "citation": "Lin, S.-J., & Rood, R. B. (1996). Multidimensional flux-form semi-Lagrangian transport schemes. Monthly Weather Review, 124(9), 2046-2070. (Flux-form transport and the requirement that the tracer scheme reuse the mass fluxes of the continuity scheme.)",
+        "doi": "10.1175/1520-0493(1996)124<2046:MFFSLT>2.0.CO;2"
+      },
+      {
+        "citation": "Jockel, P., von Kuhlmann, R., Lawrence, M. G., et al. (2001). On a fundamental problem in implementing flux-form advection schemes for tracer transport in 3-dimensional general circulation and chemistry transport models. Quarterly Journal of the Royal Meteorological Society, 127(573), 1035-1052.",
+        "doi": "10.1002/qj.49712757318"
+      },
+      {
+        "citation": "Jacobson, M. Z. (2005). Fundamentals of Atmospheric Modeling (2nd ed.). Cambridge University Press. Chapter 6 (finite-volume flux-form tracer transport; consistency with continuity)."
+      }
+    ]
+  },
+  "expression_template_imports": [
+    {
+      "ref": "../grid.esm"
+    }
+  ],
+  "expression_templates": {
+    "facediv_lat_open_interior": {
+      "params": [
+        "My"
+      ],
+      "body": {
+        "op": "faq",
+        "output_idx": [
+          "i",
+          "j",
+          "k"
+        ],
+        "args": [
+          "My"
+        ],
+        "ranges": {
+          "i": {
+            "from": "lon"
+          },
+          "j": [
+            1,
+            "NLAT"
+          ],
+          "k": {
+            "from": "lev"
+          }
+        },
+        "expr": {
+          "op": "/",
+          "args": [
+            {
+              "op": "-",
+              "args": [
+                {
+                  "op": "*",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "My",
+                        "i",
+                        {
+                          "op": "+",
+                          "args": [
+                            "j",
+                            1
+                          ]
+                        },
+                        "k"
+                      ]
+                    },
+                    {
+                      "op": "index",
+                      "args": [
+                        "coslat_e",
+                        {
+                          "op": "+",
+                          "args": [
+                            "j",
+                            1
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "My",
+                        "i",
+                        "j",
+                        "k"
+                      ]
+                    },
+                    {
+                      "op": "index",
+                      "args": [
+                        "coslat_e",
+                        "j"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "op": "index",
+              "args": [
+                "dS_lat",
+                "j"
+              ]
+            }
+          ]
+        }
+      }
+    }
+  }
+}

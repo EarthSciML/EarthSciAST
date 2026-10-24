@@ -1,0 +1,45 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "central_D_lat_pole_face_hi",
+    "description": "Zero-gradient pole-row closure for the HIGH latitude boundary (j=NLAT, the north pole on the global recipe) of the centered latitude derivative on the latlon3d grid: the one-sided difference (f[i,NLAT,k] - f[i,NLAT-1,k]) / dlat_deg over all i (lon), all k (lev). Match-less named face template consumed by rules/central_D_lat_zero_grad_bc, the high-latitude companion to central_D_lat_pole_face_lo. Produces a full (NLON x 1 x NLEV) slab AGGREGATE at row NLAT. Encodes the zero-gradient (crude pole) condition; superconvergent on a boundary-compatible solution (see problems/latlon3d_advection_meridional_zero_grad). `dlat_deg` is the inherited consumer-supplied meridional spacing free name.",
+    "license": "MIT",
+    "tags": ["esd:stencil", "family:finite_difference", "grid:latlon3d", "op:D", "order:1", "stencil_width:2"],
+    "references": [
+      {
+        "citation": "LeVeque, R. J. (2007). Finite Difference Methods for Ordinary and Partial Differential Equations. SIAM. Section 2.12 (one-sided boundary treatment)."
+      }
+    ]
+  },
+  "expression_template_imports": [
+    { "ref": "../grid.esm" }
+  ],
+  "expression_templates": {
+    "central_D_lat_pole_face_hi": {
+      "params": ["f"],
+      "body": {
+        "op": "faq",
+        "output_idx": ["i", "j", "k"],
+        "args": ["f"],
+        "ranges": {
+          "i": { "from": "lon" },
+          "j": ["NLAT", "NLAT"],
+          "k": { "from": "lev" }
+        },
+        "expr": {
+          "op": "/",
+          "args": [
+            {
+              "op": "-",
+              "args": [
+                { "op": "index", "args": ["f", "i", "NLAT", "k"] },
+                { "op": "index", "args": ["f", "i", { "op": "-", "args": ["NLAT", 1] }, "k"] }
+              ]
+            },
+            "dlat_deg"
+          ]
+        }
+      }
+    }
+  }
+}

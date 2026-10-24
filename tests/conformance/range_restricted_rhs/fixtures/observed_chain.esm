@@ -1,0 +1,198 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "observed_chain",
+    "description": "The RFC's composition example on 14 cells: du[i] reads the observed F at i and i+1, and F[j] reads u[j-3], u[j-1], u[j] and u[j+2], so the halo of u along x is (3, 3). F is evaluated on its need box by every tile (RFC rule 3); out-of-domain reads are zero ghosts.",
+    "authors": [
+      "EarthSciAST test suite"
+    ],
+    "created": "2026-10-24T00:00:00Z",
+    "tags": [
+      "conformance",
+      "range_restricted_rhs"
+    ]
+  },
+  "index_sets": {
+    "x": {
+      "kind": "interval",
+      "size": 14
+    }
+  },
+  "models": {
+    "Chain": {
+      "variables": {
+        "u": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "x"
+          ],
+          "default": 1.0
+        },
+        "F": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "x"
+          ]
+        }
+      },
+      "equations": [
+        {
+          "lhs": "F",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "j"
+            ],
+            "ranges": {
+              "j": {
+                "from": "x"
+              }
+            },
+            "expr": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "*",
+                  "args": [
+                    0.125,
+                    {
+                      "op": "index",
+                      "args": [
+                        "u",
+                        {
+                          "op": "-",
+                          "args": [
+                            "j",
+                            3
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    0.25,
+                    {
+                      "op": "index",
+                      "args": [
+                        "u",
+                        {
+                          "op": "-",
+                          "args": [
+                            "j",
+                            1
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    0.5,
+                    {
+                      "op": "index",
+                      "args": [
+                        "u",
+                        "j"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    -0.375,
+                    {
+                      "op": "index",
+                      "args": [
+                        "u",
+                        {
+                          "op": "+",
+                          "args": [
+                            "j",
+                            2
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": {
+              "op": "-",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "F",
+                    {
+                      "op": "+",
+                      "args": [
+                        "i",
+                        1
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "F",
+                    "i"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

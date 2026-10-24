@@ -1,0 +1,40 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "cartesian_uniform_1d",
+    "description": "Uniform 1-D Cartesian grid with consumer-supplied extent: N cell-centered points, cell centers x_i = x0 + (i - 1/2) dx. The index set `x` is the iteration axis; N (the cell count) remains the esm-spec 9.7 metaparameter, bound at the import edge or the loader API. The real-valued geometry is NOT baked into this file: `x0` (left domain edge) and `dx` (cell spacing) are free names in the `x_coord` template body (and in this grid's stencils/rules), resolving in the consuming component's scope at evaluation — the same keyed-factor contract grids/mpas uses for areaCell/dvEdge. A consuming model MUST define both as ordinary real-valued model variables: for a domain [a, b], x0 = a (parameter, default a) and dx = (b - a)/N (an observed variable whose expression divides the extent by the metaparameter name N, e.g. {op: /, args: [b - a, N]}, so that a loader-API rebinding of N — a convergence sweep — keeps dx consistent automatically; spec 9.7.6 substitutes the document-scoped N as an integer literal in expression positions at load). A model that binds N at the import edge closes N before it reaches the model's own scope, and must instead spell dx with the matching literal (e.g. {op: /, args: [1, 8]} for N=8 on the unit interval).",
+    "license": "MIT",
+    "tags": ["esd:grid", "family:cartesian", "ndim:1", "spacing:uniform", "axis:x"]
+  },
+  "metaparameters": {
+    "N": { "type": "integer", "default": 64, "description": "Number of cells along x." }
+  },
+  "index_sets": {
+    "x": { "kind": "interval", "size": "N" }
+  },
+  "expression_templates": {
+    "x_coord": {
+      "params": [],
+      "description": "Cell-center coordinates x_i = x0 + (i - 1/2) dx, shaped over the x index set. x0 and dx are free names supplied by the consuming model (see metadata.description for the contract).",
+      "body": {
+        "op": "faq",
+        "output_idx": ["i"],
+        "args": [],
+        "ranges": { "i": { "from": "x" } },
+        "expr": {
+          "op": "+",
+          "args": [
+            "x0",
+            {
+              "op": "*",
+              "args": [
+                { "op": "-", "args": ["i", 0.5] },
+                "dx"
+              ]
+            }
+          ]
+        }
+      }
+    }
+  }
+}

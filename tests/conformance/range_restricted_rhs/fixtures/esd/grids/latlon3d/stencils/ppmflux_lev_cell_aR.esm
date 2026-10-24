@@ -1,0 +1,89 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "ppmflux_lev_cell_aR",
+    "description": "The eq-(1.10)-LIMITED RIGHT (upper, a_{j+1/2}) endpoint of the CW84 sub-grid parabola of the CENTRE cell of a 5-cell vertical window (cells j-2..j+2, widths dmm..dpp), on the latlon3d stretched vertical. This is the donor endpoint when the face velocity is POSITIVE (flow upward: the donor is the cell BELOW the face, and what it contributes to that face is its own upper endpoint). \n\nWHY THE LIBRARY NEEDED THIS AND WHAT IT REVEALS ABOUT THE EXISTING CHAIN. The pre-existing vertical PPM chain (../stencils/ppm_lev_edge -> ppm_lev_edge_core) produces a SINGLE SHARED interface value a_{j+1/2}, interpolated by CW84 eq (1.6) from the four cells straddling the interface. That one value is used by BOTH cells that touch the face. For the UNLIMITED reconstruction that is not a loss of generality -- it is a theorem: the unlimited parabola of cell j and the unlimited parabola of cell j+1 agree exactly at the face they share (both equal the eq-(1.6) interpolant), so the two one-sided face values are IDENTICAL and there is nothing for an upwind scheme to choose between. It is only the eq (1.10) LIMITER, applied per cell, that pulls a cell's endpoints away from the shared interpolant -- and it pulls cell j's upper endpoint and cell j+1's lower endpoint by DIFFERENT amounts, because each is limited against its own cell average and its own opposite edge. After limiting, the two one-sided values at a face genuinely differ, and an upwind-biased scheme has a real choice to make. THAT is why this atom (and its mirror) exist, and why upwind-biased PPM is inseparable from limiting.\n\nCONSTRUCTION. The two raw edge interpolants of the centre cell are both eq (1.6) evaluations on eq-(1.8) MONOTONIZED slopes (../stencils/ppm_lev_edge_mono, reused verbatim): the cell's raw LEFT edge a_{j-1/2} is the eq (1.6) interpolant over cells j-2..j+1, and its raw RIGHT edge a_{j+1/2} is the interpolant over cells j-1..j+2 -- which together is why the centre cell's endpoints need a 5-cell window even though each individual edge needs only 4. Those two raw edges plus the centre cell average a0 are then handed to the eq (1.10) parabola limiter (../stencils/ppm_limit_right), which flattens the parabola to the constant a0 at a local extremum and otherwise pulls whichever endpoint would make the sub-grid parabola non-monotone. TWO LIMITERS, TWO JOBS: eq (1.8) (inside ppm_lev_edge_mono) keeps the INTERPOLATED EDGE between the two cell averages it separates; eq (1.10) keeps the sub-grid PARABOLA monotone within the cell. Both are needed for a bounded reconstruction. Grid-agnostic scalar algebra; match-less named template; consumed by ../stencils/ppmflux_lev_face_flux.",
+    "license": "MIT",
+    "tags": [
+      "esd:stencil",
+      "family:finite_volume",
+      "grid:latlon3d",
+      "op:reconstruct",
+      "order:3",
+      "stencil_width:5"
+    ],
+    "references": [
+      {
+        "citation": "Colella, P., & Woodward, P. R. (1984). The Piecewise Parabolic Method (PPM) for gas-dynamical simulations. Journal of Computational Physics, 54(1), 174-201.",
+        "doi": "10.1016/0021-9991(84)90143-8"
+      },
+      {
+        "citation": "Colella, P., & Sekora, M. D. (2008). A limiter for PPM that preserves accuracy at smooth extrema. Journal of Computational Physics, 227(15), 7069-7076.",
+        "doi": "10.1016/j.jcp.2008.03.034"
+      }
+    ]
+  },
+  "expression_template_imports": [
+    {
+      "ref": "./ppm_lev_edge_mono.esm"
+    },
+    {
+      "ref": "./ppm_limit_right.esm"
+    }
+  ],
+  "expression_templates": {
+    "ppmflux_lev_cell_aR": {
+      "params": [
+        "amm",
+        "am",
+        "a0",
+        "ap",
+        "app",
+        "dmm",
+        "dm",
+        "d0",
+        "dp",
+        "dpp"
+      ],
+      "description": "CW84 eq.(1.10)-limited right endpoint of the centre cell's parabola",
+      "body": {
+        "op": "apply_expression_template",
+        "args": [],
+        "name": "ppm_limit_right",
+        "bindings": {
+          "ql": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "ppm_lev_edge_mono",
+            "bindings": {
+              "am": "amm",
+              "a0": "am",
+              "ap": "a0",
+              "app": "ap",
+              "dm": "dmm",
+              "d0": "dm",
+              "dp": "d0",
+              "dpp": "dp"
+            }
+          },
+          "qr": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "ppm_lev_edge_mono",
+            "bindings": {
+              "am": "am",
+              "a0": "a0",
+              "ap": "ap",
+              "app": "app",
+              "dm": "dm",
+              "d0": "d0",
+              "dp": "dp",
+              "dpp": "dpp"
+            }
+          },
+          "qi": "a0"
+        }
+      }
+    }
+  }
+}
