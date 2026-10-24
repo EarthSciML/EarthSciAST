@@ -552,3 +552,21 @@ end
         end
     end
 end
+
+# A ragged loop (`_NK_RAGGED_LOOP`, children `[body, lo, hi]`) is keyed by
+# identity in the merge signature, like the other runtime loops: under the
+# generic op arm it read as an n-ary `+` over three children, so two distinct
+# ragged loops, or a ragged loop and a plain three-way sum, shared a signature.
+@testset "a ragged loop's merge signature is its own" begin
+    sig(n) = String(take!(ESM._struct_sig!(IOBuffer(), n)))
+    st(i) = ESM._mknode(kind=ESM._NK_STATE, idx=i)
+    lit(x) = ESM._mknode(kind=ESM._NK_LITERAL, literal=x)
+    ragged(lo, hi) = ESM._mknode(kind=ESM._NK_RAGGED_LOOP, op=:+, literal=0.0,
+        payload=ESM._RaggedLoop(Ref(0), 1, 4), children=ESM._Node[st(1), lo, hi])
+    r1 = ragged(lit(1.0), st(2))
+    r2 = ragged(lit(1.0), st(2))
+    plus3 = ESM._mknode(kind=ESM._NK_OP, op=:+, children=ESM._Node[st(1), lit(1.0), st(2)])
+    @test sig(r1) != sig(r2)
+    @test sig(r1) != sig(plus3)
+    @test sig(r1) == sig(r1)
+end

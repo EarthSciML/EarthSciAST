@@ -397,7 +397,7 @@ function _cg_emit(ctx::_CGCtx, kc::_CGUnitCtx, nd::_Node)
     elseif k === _NK_LOOPVAR
         s = get(kc.loops, nd.payload, nothing)
         s === nothing && throw(_CodegenDecline(:loopvar_out_of_scope))
-        return :(_cgT($s))
+        return :(Float64($s))
     elseif k === _NK_CONTRACTION_LOOP
         # The range is part of the class signature (`_sc_sig!`), so its bounds
         # are the same literals for every member.

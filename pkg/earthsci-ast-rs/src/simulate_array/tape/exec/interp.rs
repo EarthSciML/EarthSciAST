@@ -7,6 +7,8 @@
 
 use super::super::geom::{RingTable, run_poly_area};
 use super::fused::{dispatch_bin_kernel, dispatch_un_kernel, exec_fused};
+#[cfg(not(target_arch = "wasm32"))]
+use super::kernels::scan_leading_cols;
 use super::kernels::{
     copy_strided, data_gather, data_gather_sub, ew_select, ew1, ew2, exec_gather, fill_strided,
     index_gather, reduce_axis, reduce_rows, scan_axis, seg_reduce, table_gather,
@@ -671,6 +673,7 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
             init,
             src,
             axes,
+            reverse,
             src_shape,
             out,
         } => {
@@ -698,7 +701,14 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
                 let rows: usize = sv.shape[..axes.len()].iter().product();
                 macro_rules! fold_rows {
                     ($f:expr) => {
-                        unsafe { reduce_rows(dst, n_out, src, rows, $f) }
+                        if *reverse {
+                            // One leading axis, its rows from the last.
+                            for r in (0..rows).rev() {
+                                unsafe { reduce_rows(dst, n_out, src.add(r * n_out), 1, $f) }
+                            }
+                        } else {
+                            unsafe { reduce_rows(dst, n_out, src, rows, $f) }
+                        }
                     };
                 }
                 dispatch_bin_kernel!(op, fold_rows);
@@ -706,7 +716,7 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
             }
             // One folded axis anywhere in a contiguous source: each output
             // cell folds its own run in axis order.
-            if axes.len() == 1 && sv.strides[..] == rm_strides(&sv.shape)[..] {
+            if !*reverse && axes.len() == 1 && sv.strides[..] == rm_strides(&sv.shape)[..] {
                 let a = axes[0] as usize;
                 let pre: usize = sv.shape[..a].iter().product();
                 let post: usize = sv.shape[a + 1..].iter().product();
@@ -732,7 +742,13 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
                 let mut soff = 0i64;
                 let mut doff = 0i64;
                 for d in 0..nd {
-                    soff += sv.strides[d] * idx[d] as i64;
+                    // A reverse fold walks its one folded axis from the end.
+                    let at = if *reverse && axes[0] as usize == d {
+                        sv.shape[d] - 1 - idx[d]
+                    } else {
+                        idx[d]
+                    };
+                    soff += sv.strides[d] * at as i64;
                 }
                 for (j, &d) in keep.iter().enumerate() {
                     doff += out_rm[j] * idx[d] as i64;
@@ -758,16 +774,17 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
             src,
             axis,
             inclusive,
+            reverse,
             src_shape,
             out,
         } => {
             let sv = resolve_src(src, env, slab_ptr, slot_off);
             debug_assert_eq!(&sv.shape[..], &src_shape[..], "Scan source box");
             let dst = unsafe { slab_ptr.add(slot_off[*out as usize]) };
-            let (a, init, inclusive) = (*axis as usize, *init, *inclusive);
+            let (a, init, inclusive, reverse) = (*axis as usize, *init, *inclusive, *reverse);
             macro_rules! scan {
                 ($f:expr) => {
-                    unsafe { scan_axis(dst, &sv, a, init, inclusive, $f) }
+                    unsafe { scan_axis(dst, &sv, a, init, inclusive, reverse, $f) }
                 };
             }
             dispatch_bin_kernel!(op, scan);
@@ -839,7 +856,7 @@ pub(super) unsafe fn exec_straight(cx: &Cx, ins: &Instr, scratch: &mut Scratch, 
             let init = *init;
             macro_rules! fold {
                 ($f:expr) => {
-                    unsafe { seg_reduce(dst, src, mask, rows, init, $f) }
+                    unsafe { seg_reduce(dst, src, mask, rows, 0, init, $f) }
                 };
             }
             dispatch_bin_kernel!(op, fold);
@@ -938,6 +955,7 @@ pub(super) fn shares(prog: &TapeProgram, ins: &Instr) -> bool {
             let w = &prog.dy_writes[*write as usize];
             w.scatter.is_none() && w.scalar_flat.is_none()
         }
+        Instr::Scan { axis: 0, .. } => true,
         _ => false,
     }
 }
@@ -1019,6 +1037,7 @@ pub(super) unsafe fn exec_share(
             init,
             src,
             axes,
+            reverse,
             out,
             ..
         } => {
@@ -1043,12 +1062,47 @@ pub(super) unsafe fn exec_share(
             let src = sv.ptr;
             macro_rules! fold_rows {
                 ($f:expr) => {
-                    for r in 0..rows {
+                    for k in 0..rows {
+                        // A reverse fold takes its rows from the last.
+                        let r = if *reverse { rows - 1 - k } else { k };
                         unsafe { reduce_rows(dst.add(lo), hi - lo, src.add(r * n_out + lo), 1, $f) }
                     }
                 };
             }
             dispatch_bin_kernel!(op, fold_rows);
+        }
+        // A scan along the leading axis: worker `w` sweeps the inner
+        // positions (lanes) of its own share, every one whole and in order.
+        Instr::Scan {
+            op,
+            init,
+            src,
+            axis: 0,
+            inclusive,
+            reverse,
+            src_shape,
+            out,
+        } => {
+            let sv = resolve_src(src, env, slab_ptr, slot_off);
+            let dst = unsafe { slab_ptr.add(slot_off[*out as usize]) };
+            if sv.strides[..] != rm_strides(&sv.shape)[..] || src_shape.is_empty() {
+                if w == 0 {
+                    unsafe { exec_straight(cx, ins, scratch, 1) };
+                }
+                return;
+            }
+            let len = src_shape[0];
+            let post: usize = src_shape[1..].iter().product();
+            let (lo, hi) = super::par::share_at(post, w, ways, dst);
+            let (init, inclusive, reverse, src) = (*init, *inclusive, *reverse, sv.ptr);
+            macro_rules! scan {
+                ($f:expr) => {
+                    unsafe {
+                        scan_leading_cols(dst, src, len, post, init, inclusive, reverse, lo, hi, $f)
+                    }
+                };
+            }
+            dispatch_bin_kernel!(op, scan);
         }
         Instr::Copy { a, out } => {
             let desc = &prog.slots[*out as usize];

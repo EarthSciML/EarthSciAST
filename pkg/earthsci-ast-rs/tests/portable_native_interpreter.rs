@@ -39,6 +39,9 @@ scaling_family!(gather_index);
 scaling_family!(column_search);
 scaling_family!(column_sum);
 scaling_family!(join_keyed);
+scaling_family!(makearray_scan);
+scaling_family!(suffix_scan);
+scaling_family!(ragged_contraction);
 scaling_family!(makearray_nested_sum);
 
 #[test]

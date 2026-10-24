@@ -69,6 +69,10 @@ end
 # Combine a vector of expressions with the semiring ⊕ (`oplus`), returning the
 # 0̄ identity (`zerobar`) for an empty reduction. Build-time helper for
 # expression-position aggregate expansion.
+# The fold is seeded from 0̄ (esm-spec §4.3.1), as the bare contraction's is in
+# every tier (`_unrolled_contraction_body`, `_NK_CONTRACTION`): for "+" the seed
+# is a leading `0.0` term, so a sum whose terms are all `-0.0` is `+0.0`. For
+# the other three ⊕ the seed is an identity bit for bit, so it is left out.
 # For "+" and "*" we emit an n-ary OpExpr (matching _eval_node_op hot paths).
 # For "max"/"min" we emit left-folded binary OpExprs to avoid adding n-ary
 # variants to _eval_node_op (which already handles them as ≥2-arg ops, but
@@ -85,10 +89,9 @@ function _combine_with_reducer(oplus::String, zerobar::Float64, terms::Vector{AS
     if oplus == "or" && scalar
         return OpExpr("or", ASTExpr[NumExpr(zerobar); terms])
     end
+    oplus == "+" && return OpExpr("+", ASTExpr[NumExpr(zerobar); terms])
     length(terms) == 1 && return terms[1]
-    if oplus == "+"
-        return OpExpr("+", terms)
-    elseif oplus == "*"
+    if oplus == "*"
         return OpExpr("*", terms)
     elseif oplus == "max"
         result = terms[1]

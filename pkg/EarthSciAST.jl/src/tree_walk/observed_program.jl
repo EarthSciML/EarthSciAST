@@ -254,9 +254,9 @@ function _build_observed_program_impl(ctx::_ObsProgramCtx, name::String)
                     end)
                     continue
                 end
-                feq = _materialized_fill_equation(m, mat_defs[m], mat_dims[m])
+                feqs = _materialized_fill_equations(m, mat_defs[m], mat_dims[m])
                 se, pcs, aks, sfs, acs = _with_rule_alias(m, m) do
-                    _compile_derivative_equations(Equation[feq], resolved_obs, avi, vm,
+                    _compile_derivative_equations(feqs, resolved_obs, avi, vm,
                         ctx.const_registry, ctx.pgather, ctx.param_sym_set,
                         ctx.reg_funcs, n_total; template_sites=ctx.template_sites)
                 end

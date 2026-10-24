@@ -1,0 +1,157 @@
+{
+  "fixture": "makearray_prefix_scan_dynamic",
+  "reference_binding": "julia",
+  "reference_compiler": "interpreter",
+  "assertions": [
+    {
+      "test_id": "values",
+      "assertion_idx": 1,
+      "variable": "F_bottom",
+      "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 2,
+      "variable": "F_bottom",
+      "actual": 0.5
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 3,
+      "variable": "F_bottom",
+      "actual": 2.5
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 4,
+      "variable": "F_bottom",
+      "actual": 7.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 5,
+      "variable": "F_bottom",
+      "actual": 15.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 6,
+      "variable": "F_top",
+      "actual": 15.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 7,
+      "variable": "F_top",
+      "actual": 14.5
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 8,
+      "variable": "F_top",
+      "actual": 12.5
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 9,
+      "variable": "F_top",
+      "actual": 8.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 10,
+      "variable": "F_top",
+      "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 11,
+      "variable": "G_top",
+      "actual": 1.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 12,
+      "variable": "G_top",
+      "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 13,
+      "variable": "G_top",
+      "actual": 1e+16
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 14,
+      "variable": "G_top",
+      "actual": 1e+16
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 15,
+      "variable": "G_top",
+      "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 16,
+      "variable": "w_bottom",
+      "actual": 0.0
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 17,
+      "variable": "w_bottom",
+      "actual": 0.4999999999999999
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 18,
+      "variable": "w_bottom",
+      "actual": 2.4999999999999996
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 19,
+      "variable": "w_bottom",
+      "actual": 6.999999999999997
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 20,
+      "variable": "w_bottom",
+      "actual": 14.999999999999991
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 21,
+      "variable": "w_top",
+      "actual": 14.999999999999991
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 22,
+      "variable": "w_top",
+      "actual": 14.499999999999996
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 23,
+      "variable": "w_top",
+      "actual": 12.499999999999995
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 24,
+      "variable": "w_top",
+      "actual": 7.999999999999998
+    },
+    {
+      "test_id": "values",
+      "assertion_idx": 25,
+      "variable": "w_top",
+      "actual": 0.0
+    }
+  ]
+}

@@ -25,6 +25,8 @@ is required for every fixture in Julia and Rust, as everywhere.
 | `join_on_parameter_key_*` | a value-equality `join` whose key column is computed from a scalar parameter, which the build bakes (CONFORMANCE_SPEC §5.5.8): the default and a test's `parameter_overrides` both decide the match set | moves fuel_properties, geographic_allocation, liquid_leaking_emissions (`runYearID`, `runCountyID`) |
 | `overlap_join_binning_*` | a containment-binning `faq` with an `overlap` gate, beside the same body ungated | every isrm `E_*` rule |
 | `polygon_area_in_faq_*` | `polygon_intersection_area` as a `faq` body over partial-rank ring slices, gated and ungated | isrm polygon `E_*` rules |
+| `makearray_prefix_scan_*` | a two-region `makearray` whose first region is a prefix-scan `faq` (`filter j < k`, and a `j >= k` suffix variant) and whose second is the rank-0 column total (or 0), on a non-uniform column (#533) | EarthSciDiscretizations column_nonuniform_1d `integral_lev_nodes_cumulative_from_bottom` / `_to_top` (`integral_column_*`) |
+| `ragged_contraction_*` | a contraction over a ragged range bounded through an `offsets` factor (`k from edges_of_cell of [i]`), rows of 3, 2, 4 and 1 edges with out-of-range padding; dynamic: inline under a negation, the lowered `u_t = -div(F)` (#534) | EarthSciDiscretizations MPAS `fv_divergence_cell`, `fv_laplacian_cell` (`divergence_mpas`, `laplacian_mpas`) |
 
 Every shape but `ic_const_gather` has two documents. The **static** one has no
 state, so every rule is a build-time observed; the **dynamic** one adds a state
@@ -60,6 +62,11 @@ document passes under its interpreter except `guarded_out_of_range_dynamic`
 refuses `nested_scalar_reduction_*`, `overlap_join_binning_*` and
 `polygon_area_in_faq_*`; and every static document whose rules read a shaped
 parameter fails under both compilers with "Unresolved symbol".
+
+The #535 shape (a construction-time observed carrying an `overlap` join, which
+only Python's native refused) is not here, because this tier does not run
+Python: it is `overlap_gated_regrid_ode` in `../value_invention_geometry/`,
+which requires Python native.
 
 ## Named exclusions
 
