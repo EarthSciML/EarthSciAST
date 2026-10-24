@@ -332,10 +332,11 @@ end
 # `_foreach_aggregate_term` — the SAME enumerator the per-cell expansion uses,
 # with the same drive plan and the same `_join_admits` test — driven with a
 # sentinel body whose substituted arguments spell the contracted tuple. The fold
-# is the left fold `_combine_with_reducer`'s ⊕ compiles to (an n-ary `+`/`*`
-# accumulates `c[1]⊕c[2]`, then one term at a time; `max`/`min` are already
-# emitted left-folded), and an empty admitted set is the semiring identity 0̄ —
-# so this agrees with the per-cell walk term for term.
+# is the left fold `_combine_with_reducer`'s ⊕ compiles to (an n-ary `+`
+# seeded with 0̄, then one term at a time; `*` accumulates `c[1]⊕c[2]` and
+# `max`/`min` are emitted left-folded, where the 0̄ seed changes no bits), and
+# an empty admitted set is the semiring identity 0̄ — so this agrees with the
+# per-cell walk term for term.
 #
 # It is a PURE EXTENSION: `nothing` on any shape it does not recognise, and the
 # caller falls through to exactly what it did before. `compiler=:interpreter`
@@ -373,7 +374,6 @@ function _gated_field(ce, out_syms::Vector{String}, contract_names::Vector{Strin
         end
         out_env = Dict{String,Int}(out_syms[d] => key[d] for d in 1:nidx)
         acc = zerobar
-        n = 0
         _foreach_aggregate_term(sentinel, contract_names, contract_iters,
                                 gates, nothing, zerobar, out_env) do term
             ks = (term::OpExpr).args
@@ -381,10 +381,9 @@ function _gated_field(ce, out_syms::Vector{String}, contract_names::Vector{Strin
                 key[nidx + d] = Int((ks[d]::IntExpr).value)
             end
             v = ce(key)
-            n += 1
-            acc = n == 1 ? v : _gated_oplus(oplus, acc, v)
+            acc = _gated_oplus(oplus, acc, v)
         end
-        out[i] = n == 0 ? zerobar : acc
+        out[i] = acc
     end
     return out
 end
@@ -994,6 +993,19 @@ function _authored_observed_body(insp::BuildInspection, file::EsmFile, model::Mo
         renames[name] = VarExpr(qual)
     end
     isempty(renames) || (body = substitute(body, renames))
+
+    # (4) Resolve `{from}` index-set ranges as the build resolves its equations
+    # (`_resolve_index_set_ranges`): a ragged range becomes its per-cell
+    # `[1, index(offsets, of…)]` bound, the offsets factor bound by bare name
+    # to the in-scope array.
+    if _has_index_set_ref(body)
+        scope = Dict{String,Nothing}(String(k) => nothing for k in keys(insp.const_arrays))
+        for k in keys(state_arrays)
+            scope[String(k)] = nothing
+        end
+        body = _resolve_isr(body, file.index_sets, insp.derived_extents,
+                            _ragged_factor_scope(file.index_sets, scope))
+    end
     return body
 end
 
@@ -2550,8 +2562,7 @@ record and cross-compare the numbers.
 concatenated in input order.
 
 Both kinds of test-bearing component are run: `models` first, then
-`reaction_systems`, which the schema gives the same `tests` member and which
-this runner skipped entirely until it was fixed.
+`reaction_systems`, which the schema gives the same `tests` member.
 
 Per test: `solve(esm_problem(input, (time_span.start, time_span.stop)), alg;
 reltol, abstol, saveat=<assertion times>)` with the test's `initial_conditions`
@@ -2615,12 +2626,6 @@ Passing a value explicitly overrides the document, which is why a concrete
 default here would silently have suppressed it. These are INTEGRATION
 tolerances and are a different quantity from the §6.6.4 assertion tolerance
 above.
-
-This entry was called `run_pde_tests` until it grew the ability to run a whole
-corpus. The name was always too narrow — the §6.6.5 spatial reductions are one
-assertion FORM, and the same runner has always executed the plain pointwise
-assertions of an ODE document through the same frame — so it is now
-`run_inline_tests`, with no deprecated alias.
 """
 function run_inline_tests(inputs; model_name::Union{Nothing,AbstractString}=nothing,
                           alg=nothing,

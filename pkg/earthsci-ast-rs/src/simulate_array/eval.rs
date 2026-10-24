@@ -3173,6 +3173,22 @@ pub(super) fn reduce_contraction(
         }
     };
     let mut acc: f64 = reduce.identity();
+    // A reverse window folds its suffix from the high end (esm-spec §4.3.1);
+    // a scan that `detect_prefix_scan` did not claim (its body reads the
+    // output index, or its range differs from the output axis) lands here.
+    if let (Some(cell), [j_name], [(lo, hi)]) = (cell, contract_names, ranges)
+        && folds_from_the_top(cell.names, contract_names, filter)
+    {
+        for j in (*lo..=*hi).rev() {
+            set_bind(&mut ctx.loop_binds, j_name, j);
+            if filter_excludes(filter, Some(cell), ctx) {
+                continue;
+            }
+            let term = eval(body, ctx).as_scalar().unwrap_or(f64::NAN);
+            acc = reduce.combine(acc, term);
+        }
+        return acc;
+    }
     // Stream the contraction product from a reused buffer — no per-tuple heap
     // allocation (this loop is the array-simulate hot path).
     let mut tuples = CartesianTuples::new(ranges);
@@ -3929,13 +3945,13 @@ fn push_equality_gate(
 /// How many distinct positions `sym` can still take, given the gates already
 /// resolved. `full` is its side length, which is the answer when nothing has
 /// narrowed it.
-fn reach_of(reach: &HashMap<String, usize>, sym: &str, full: usize) -> usize {
+pub(super) fn reach_of(reach: &HashMap<String, usize>, sym: &str, full: usize) -> usize {
     reach.get(sym).map_or(full, |r| (*r).min(full))
 }
 
 /// Record that a gate with `pairs` pairs leaves at most that many positions
 /// alive on `sym`.
-fn narrow_reach(reach: &mut HashMap<String, usize>, sym: &str, pairs: usize) {
+pub(super) fn narrow_reach(reach: &mut HashMap<String, usize>, sym: &str, pairs: usize) {
     let slot = reach.entry(sym.to_string()).or_insert(usize::MAX);
     *slot = (*slot).min(pairs);
 }
@@ -4613,27 +4629,30 @@ fn reduce_over_pairs(spec: &ReduceSpec, tuples: &[(i64, i64)], ctx: &mut EvalCtx
     acc
 }
 
-/// A recognized **forward prefix scan**: a `faq` whose single contracted
-/// index is admitted by a monotone `filter` against one output index symbol
-/// (esm-spec §4.3.1 "Cumulative (prefix) reductions").
+/// A recognized **prefix scan**: a `faq` whose single contracted index is
+/// admitted by a monotone `filter` against one output index symbol (esm-spec
+/// §4.3.1 "Cumulative (prefix) reductions").
 ///
 /// Recognizing it turns the `O(N²)` triangular double loop into one `O(N)` sweep
-/// with a running accumulator. The rewrite is **bit-identical, not approximate**:
-/// the oracle folds the admitted window ascending, lowest `j` first, so
-/// `accᵢ = accᵢ₋₁ ⊕ bodyᵢ` reproduces the same left fold with the same
-/// association. That is the whole justification, and it is why only the FORWARD
-/// rows (`<=`, `<`) are recognized here — a reverse scan's cells each fold their
-/// own suffix from that suffix's low end, share no partial result, and cannot be
-/// accumulated right-to-left without re-associating (esm-spec §4.3.1).
+/// with a running accumulator. The rewrite is **bit-identical, not approximate**,
+/// because §4.3.1 fixes each window's fold order to be the sweep's: a FORWARD
+/// scan (`j <= i`, `j < i`) folds its window ascending, lowest `j` first, and a
+/// REVERSE scan (`j >= i`, `j > i`) folds its suffix descending, highest `j`
+/// first, so in both `accᵢ = acc_prev ⊕ bodyᵢ` reproduces the left fold with
+/// the same association.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct PrefixScan {
     /// Position of the scanned symbol within the output-index tuple: the axis
     /// the accumulator sweeps along.
     pub axis: usize,
-    /// `true` for `<=` (the newly admitted term joins BEFORE the cell is
-    /// written), `false` for `<` (the cell is written first, so its window is
-    /// the strictly-earlier terms and cell one is the empty reduction).
+    /// `true` for `<=` / `>=` (the newly admitted term joins BEFORE the cell
+    /// is written), `false` for `<` / `>` (the cell is written first, so its
+    /// window is the strictly-earlier terms and the first cell swept is the
+    /// empty reduction).
     pub inclusive: bool,
+    /// `true` for a reverse scan (`j >= i`, `j > i`): the sweep runs from the
+    /// axis's high end down.
+    pub reverse: bool,
 }
 
 /// Match `filter` against the forward-prefix-scan shape and return the output
@@ -4667,29 +4686,12 @@ pub(super) fn detect_prefix_scan(
     let [(c_lo, c_hi)] = *static_ranges? else {
         return None;
     };
-
-    let Expr::Operator(node) = filter else {
-        return None;
-    };
-    if node.args.len() != 2 {
-        return None;
-    }
-    // Accept both spellings of the same predicate: `j <= i` and `i >= j`.
-    let (lhs, rhs) = (&node.args[0], &node.args[1]);
-    let (i_name, inclusive) = match node.op.as_str() {
-        "<=" | "<" => (var_name(rhs)?, node.op == "<="),
-        ">=" | ">" => (var_name(lhs)?, node.op == ">="),
-        _ => return None,
-    };
-    let j_side = match node.op.as_str() {
-        "<=" | "<" => var_name(lhs)?,
-        _ => var_name(rhs)?,
-    };
-    if j_side != j_name {
-        return None;
-    }
-
-    let axis = output_idx_names.iter().position(|s| s == i_name)?;
+    let ScanWindow {
+        axis,
+        inclusive,
+        reverse,
+    } = scan_window(output_idx_names, j_name, filter)?;
+    let i_name = &output_idx_names[axis];
     // Same interval, or `j = i` is not the term entering the window at step `i`.
     if output_ranges.get(axis)? != &(c_lo, c_hi) {
         return None;
@@ -4698,7 +4700,72 @@ pub(super) fn detect_prefix_scan(
     if expr_references(body, i_name) {
         return None;
     }
-    Some(PrefixScan { axis, inclusive })
+    Some(PrefixScan {
+        axis,
+        inclusive,
+        reverse,
+    })
+}
+
+/// The window a `filter` admits when it is exactly one comparison between
+/// the contracted index `j_name` and an output index (esm-spec §4.3.1): a
+/// prefix (`j <= i`, `j < i`, and the mirrored `i >= j`, `i > j`) or a
+/// suffix, a reverse window (`j >= i`, `j > i`, `i <= j`, `i < j`).
+pub(super) struct ScanWindow {
+    /// Position of the output index within the output-index tuple.
+    pub axis: usize,
+    /// The comparison admits `j = i`.
+    pub inclusive: bool,
+    /// A suffix window, folded from its high end.
+    pub reverse: bool,
+}
+
+pub(super) fn scan_window(
+    output_idx_names: &[String],
+    j_name: &str,
+    filter: &Expr,
+) -> Option<ScanWindow> {
+    let Expr::Operator(node) = filter else {
+        return None;
+    };
+    if node.args.len() != 2 {
+        return None;
+    }
+    // Normalize to `low <op> high`: `j <= i` and `i >= j` are the same
+    // forward predicate, `j >= i` and `i <= j` the same reverse one.
+    let (lhs, rhs) = (var_name(&node.args[0])?, var_name(&node.args[1])?);
+    let (low, high, inclusive) = match node.op.as_str() {
+        "<=" | "<" => (lhs, rhs, node.op == "<="),
+        ">=" | ">" => (rhs, lhs, node.op == ">="),
+        _ => return None,
+    };
+    let (i_name, reverse) = if low == j_name {
+        (high, false)
+    } else if high == j_name {
+        (low, true)
+    } else {
+        return None;
+    };
+    let axis = output_idx_names.iter().position(|s| s == i_name)?;
+    Some(ScanWindow {
+        axis,
+        inclusive,
+        reverse,
+    })
+}
+
+/// Does this contraction fold its one contracted index from the top: is
+/// its filter a reverse window (esm-spec §4.3.1)? Every other contraction
+/// folds ascending.
+pub(super) fn folds_from_the_top(
+    output_idx_names: &[String],
+    contract_names: &[String],
+    filter: Option<&Expr>,
+) -> bool {
+    let (Some(filter), [j_name]) = (filter, contract_names) else {
+        return false;
+    };
+    scan_window(output_idx_names, j_name, filter).is_some_and(|w| w.reverse)
 }
 
 /// The variable name of a bare-string expression, else `None`. Index symbols
@@ -4789,7 +4856,12 @@ pub(super) fn run_prefix_scan(
     };
 
     let mut acc = reduce.identity();
-    for i in lo..=hi {
+    let steps: &mut dyn Iterator<Item = i64> = if scan.reverse {
+        &mut (lo..=hi).rev()
+    } else {
+        &mut (lo..=hi)
+    };
+    for i in steps {
         if scan.inclusive {
             // `<=`: the new term joins the window BEFORE this cell is written.
             let term = term_at(i, ctx);
@@ -4797,8 +4869,8 @@ pub(super) fn run_prefix_scan(
             set_bind(&mut ctx.loop_binds, i_name, i);
             emit(i, acc, ctx);
         } else {
-            // `<`: this cell sees only strictly-earlier terms, so cell `lo`
-            // emits the untouched identity — the empty reduction, not an error.
+            // `<`: this cell sees only strictly-earlier terms, so the first
+            // cell swept emits the untouched identity — the empty reduction, not an error.
             set_bind(&mut ctx.loop_binds, i_name, i);
             emit(i, acc, ctx);
             let term = term_at(i, ctx);
@@ -5220,10 +5292,12 @@ pub(super) fn eval_faq(node: &ExpressionNode, ctx: &mut EvalCtx) -> Value {
             i_name: &idx_names[scan.axis],
             j_name: &contract_names[0],
             // One step of one scan when the walk is to stop at its first cell.
-            bounds: if stop_at_first_cell() {
-                (scan_lo, scan_hi.min(scan_lo))
-            } else {
+            bounds: if !stop_at_first_cell() {
                 (scan_lo, scan_hi)
+            } else if scan.reverse {
+                (scan_lo.max(scan_hi), scan_hi)
+            } else {
+                (scan_lo, scan_hi.min(scan_lo))
             },
             body,
             reduce,

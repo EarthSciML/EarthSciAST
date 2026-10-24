@@ -598,7 +598,7 @@ func (v *DataSourceBinding) UnmarshalJSON(data []byte) error {
 }
 
 // Custom JSON unmarshaling for VariableMapCoupling (handles the transform
-// union: legacy string kind | ExpressionNode object). A string transform is
+// union: named string kind | ExpressionNode object). A string transform is
 // stored as a string; an object transform is decoded via UnmarshalExpression
 // into an ExprNode. Any other JSON shape (number, array, boolean) is rejected:
 // an Expression transform is always an operator-node OBJECT (the degenerate

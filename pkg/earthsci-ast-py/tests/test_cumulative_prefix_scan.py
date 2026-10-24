@@ -2,14 +2,15 @@
 
 A prefix reduction is an ordinary ``faq`` whose ``filter`` compares the
 contracted index against an output index. Evaluated literally it is a triangular
-double loop; the interpreter recognizes the FORWARD rows (``<=``, ``<``) and
-collapses them to one ``ufunc.accumulate`` sweep.
+double loop; the native compiler collapses it to one ``ufunc.accumulate`` sweep.
 
-The rewrite is only legitimate because it is **bit-identical** to the
-ascending-``j`` fold the spec pins as normative, so that is what these tests
-assert — not "close enough". They also pin the reverse rows as *declined*: each
-reverse cell folds its own suffix from that suffix's low end, so consecutive
-cells share no partial result and a right-to-left accumulator would re-associate.
+The rewrite is only legitimate because it is **bit-identical** to the fold order
+the spec pins as normative, so that is what these tests assert — not "close
+enough". A FORWARD window (``<=``, ``<``) folds ascending from its low end. A
+REVERSE window (``>=``, ``>``) folds DESCENDING from its high end,
+``((b_N ⊕ b_{N-1}) ⊕ …) ⊕ b_i``, under every ⊕, so one right-to-left
+accumulator is exactly the definition. Both the interpreter and native must
+produce those bits.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from earthsci_ast.compiler import CompilerPolicy, use_policy
 from earthsci_ast.esm_types import ExprNode
 from earthsci_ast.numpy_interpreter import EvalContext, eval_expr
 
@@ -73,7 +75,8 @@ _COMBINE = {
 
 def _oracle(u: np.ndarray, cmp: str, reduce_op: str) -> np.ndarray:
     """The triangular double loop written out literally, folding the admitted
-    window in ascending ``j``. This is the semantics the spec defines."""
+    window in the order the spec defines: ascending ``j``, except a reverse
+    window, which folds descending."""
     n = len(u)
     admits = {
         "<=": lambda j, i: j <= i,
@@ -82,10 +85,12 @@ def _oracle(u: np.ndarray, cmp: str, reduce_op: str) -> np.ndarray:
         ">": lambda j, i: j > i,
     }[cmp]
     combine = _COMBINE[reduce_op]
+    descending = cmp in (">=", ">")
+    order = range(n, 0, -1) if descending else range(1, n + 1)
     out = []
     for i in range(1, n + 1):
         acc = _IDENTITY[reduce_op]
-        for j in range(1, n + 1):
+        for j in order:
             if admits(j, i):
                 acc = combine(acc, float(u[j - 1]))
         out.append(acc)
@@ -124,16 +129,89 @@ def test_forward_scans_are_bit_identical_to_the_triangular_oracle(n, cmp, reduce
     _assert_bit_identical(got, _oracle(u, cmp, reduce_op), f"n={n} {cmp} {reduce_op}")
 
 
+@pytest.mark.parametrize("n", [1, 2, 5, 40, 257])
+@pytest.mark.parametrize("cmp", [">=", ">"])
+@pytest.mark.parametrize("reduce_op", ["+", "*"])
+@pytest.mark.parametrize("compiler", ["native", "interpreter"])
+def test_reverse_scans_fold_descending_bit_for_bit(n, cmp, reduce_op, compiler):
+    """A reverse window under ``+`` / ``*`` folds from its high end, in the
+    reference evaluator and in native's right-to-left accumulate alike."""
+    u = _catastrophic(n)
+    policy = CompilerPolicy(compiler=compiler, every_tier_off=compiler == "interpreter")
+    with use_policy(policy):
+        got = eval_expr(_prefix_agg(cmp, n, reduce_op), _ctx(u))
+    _assert_bit_identical(got, _oracle(u, cmp, reduce_op), f"{compiler} n={n} {cmp} {reduce_op}")
+    if compiler == "native":
+        assert policy.report.tiers().get("prefix-scan")
+
+
+def test_a_reverse_sum_is_not_the_ascending_fold():
+    """The catastrophic input separates the two orders, so the test above bites."""
+    u = _catastrophic(40)
+    got = np.asarray(eval_expr(_prefix_agg(">=", 40, "+"), _ctx(u)), dtype=float).ravel()
+    ascending = [sum(float(x) for x in u[i:]) for i in range(40)]
+    assert any(np.float64(g).tobytes() != np.float64(a).tobytes() for g, a in zip(got, ascending))
+
+
 @pytest.mark.parametrize("n", [1, 5, 40])
 @pytest.mark.parametrize("cmp", [">=", ">"])
-@pytest.mark.parametrize("reduce_op", ["+", "max", "min"])
-def test_reverse_scans_still_evaluate_correctly(n, cmp, reduce_op):
-    """Declined by the scan detector; they must still produce the right answer
-    through the general paths."""
+@pytest.mark.parametrize("reduce_op", ["max", "min"])
+@pytest.mark.parametrize("compiler", ["native", "interpreter"])
+def test_reverse_extremum_scans_fold_descending_bit_for_bit(n, cmp, reduce_op, compiler):
+    """``max`` / ``min`` reverse windows fold from the top too, and native takes
+    them on the scan tier."""
     u = _catastrophic(n)
-    got = np.asarray(eval_expr(_prefix_agg(cmp, n, reduce_op), _ctx(u)), dtype=float).ravel()
-    want = _oracle(u, cmp, reduce_op)
-    assert got == pytest.approx(want, rel=1e-12, abs=0.0)
+    policy = CompilerPolicy(compiler=compiler, every_tier_off=compiler == "interpreter")
+    with use_policy(policy):
+        got = eval_expr(_prefix_agg(cmp, n, reduce_op), _ctx(u))
+    _assert_bit_identical(got, _oracle(u, cmp, reduce_op), f"{compiler} n={n} {cmp} {reduce_op}")
+    if compiler == "native":
+        assert policy.report.tiers().get("prefix-scan")
+
+
+@pytest.mark.parametrize(
+    "reduce_op,u,want",
+    [
+        ("max", [1.0, np.nan, 3.0], [3.0, 3.0, 3.0]),
+        ("min", [3.0, np.nan, 1.0], [1.0, 1.0, 1.0]),
+    ],
+)
+@pytest.mark.parametrize("compiler", ["native", "interpreter"])
+def test_a_reverse_extremum_over_a_nan_folds_from_the_top(reduce_op, u, want, compiler):
+    """A ``max`` / ``min`` step keeps its accumulator unless the term beats it,
+    so a NaN is skipped once the accumulator holds a number and sticks when it
+    comes first: order decides the answer. Folded from the top, cell 2's window
+    ``[NaN, 3]`` starts at 3; folded ascending it would start at the NaN."""
+    policy = CompilerPolicy(compiler=compiler, every_tier_off=compiler == "interpreter")
+    with use_policy(policy):
+        got = eval_expr(_prefix_agg(">=", 3, reduce_op), _ctx(np.array(u)))
+    _assert_bit_identical(got, np.array(want), f"{compiler} {reduce_op}")
+
+
+# Signed zeros and NaNs, leading and interior: the inputs on which a max / min
+# accumulate that is not the per-cell step (np.maximum keeps the later of two
+# equal zeros and propagates a NaN) gives different bits.
+_EXTREMUM_EDGES = {
+    "zeros": [0.0, -0.0, -0.0, 0.0, -1.0, 0.0, -0.0],
+    "neg-zeros": [-0.0, 0.0, 0.0, -0.0, 1.0, -0.0, 0.0],
+    "interior-nan": [2.0, np.nan, 1.0, 3.0, np.nan, 3.0, -0.0],
+    "leading-nan": [np.nan, 1.0, -0.0, 0.0, 5.0, np.nan, 2.0],
+    "trailing-nan": [0.0, -0.0, 4.0, 1.0, -2.0, 0.0, np.nan],
+}
+
+
+@pytest.mark.parametrize("case", sorted(_EXTREMUM_EDGES))
+@pytest.mark.parametrize("cmp", ["<=", "<", ">=", ">"])
+@pytest.mark.parametrize("reduce_op", ["max", "min"])
+def test_extremum_scans_match_the_per_cell_walk_on_zeros_and_nans(case, cmp, reduce_op):
+    u = np.array(_EXTREMUM_EDGES[case])
+    node = _prefix_agg(cmp, u.size, reduce_op)
+    want = _per_cell(node, _ctx(u))
+    policy = CompilerPolicy(compiler="native")
+    with use_policy(policy):
+        got = eval_expr(node, _ctx(u))
+    assert policy.report.tiers().get("prefix-scan")
+    _assert_bit_identical(got, want, f"{case} {cmp} {reduce_op}")
 
 
 @pytest.mark.parametrize(
@@ -251,3 +329,96 @@ def test_rank_2_output_scans_one_axis_and_leaves_the_other_independent():
     got = np.asarray(eval_expr(node, _make_ctx({"m": m})), dtype=float)
     assert got.shape == (nr, nc)
     assert got == pytest.approx(np.cumsum(m, axis=1))
+
+
+# ---------------------------------------------------------------------------
+# Scan-like windows the scan tier cannot take: the dense gated reduce must fold
+# them in the same order as the per-cell walk, bit for bit.
+# ---------------------------------------------------------------------------
+
+# 1, -1e16, 1, 1e16 separates every fold order: ascending gives 0 + 1e16 ... and
+# descending, pairwise and ascending sums all differ in where the 1s are lost.
+_SEPARATING = np.tile([1.0, -1e16, 1.0, 1e16, 3.0, -2e16, 1.0, 2e16], 4)
+
+
+def _window(cmp: str, reduce_op: str, *, body_reads_i: bool, other_range: bool, join: bool):
+    n = _SEPARATING.size
+    body = ExprNode(op="index", args=["u", "j"])
+    if body_reads_i:
+        body = ExprNode(op="*", args=[body, ExprNode(op="+", args=["i", 0.5])])
+    node = ExprNode(
+        op="faq",
+        args=["u"],
+        output_idx=["i"],
+        reduce=reduce_op,
+        ranges={"i": [1, n - 3] if other_range else [1, n], "j": [1, n]},
+        filter=ExprNode(op=cmp, args=["j", "i"]),
+        expr=body,
+    )
+    if join:
+        # Key columns over two declared index sets: a term enters the window
+        # only when the two cells' keys match, so the gate thins each window.
+        node.ranges = {"i": {"from": "rows"}, "j": {"from": "cols"}}
+        node.join = [{"on": [["ki", "kj"]]}]
+    return node
+
+
+def _window_ctx() -> EvalContext:
+    n = _SEPARATING.size
+    keys = (np.arange(n) % 3).astype(float)
+    ctx = _make_ctx({"u": _SEPARATING, "ki": keys, "kj": keys})
+    ctx.index_sets = {
+        "rows": {"kind": "interval", "size": n},
+        "cols": {"kind": "interval", "size": n},
+    }
+    ctx.var_index_sets = {"ki": "rows", "kj": "cols", "u": "cols"}
+    return ctx
+
+
+_SHAPES = {
+    "body-reads-i": dict(body_reads_i=True, other_range=False, join=False),
+    "other-range": dict(body_reads_i=False, other_range=True, join=False),
+    "join": dict(body_reads_i=False, other_range=False, join=True),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(_SHAPES))
+@pytest.mark.parametrize("cmp", ["<=", "<", ">=", ">"])
+@pytest.mark.parametrize("reduce_op", ["+", "*", "max", "min"])
+def test_windows_the_scan_tier_declines_fold_like_the_per_cell_walk(shape, cmp, reduce_op):
+    kw = _SHAPES[shape]
+    want = _per_cell(_window(cmp, reduce_op, **kw), _window_ctx())
+    policy = CompilerPolicy(compiler="native")
+    with use_policy(policy):
+        got = eval_expr(_window(cmp, reduce_op, **kw), _window_ctx())
+    assert policy.report.tiers().get("gated-reduce"), policy.report.tiers()
+    _assert_bit_identical(got, want, f"{shape} {cmp} {reduce_op}")
+
+
+def _per_cell(node: ExprNode, ctx: EvalContext) -> np.ndarray:
+    with use_policy(CompilerPolicy(compiler="interpreter", every_tier_off=True)):
+        return np.asarray(eval_expr(node, ctx), dtype=float)
+
+
+@pytest.mark.parametrize("cmp", [">=", ">"])
+def test_a_declined_reverse_window_folds_from_the_top(cmp):
+    """Against a hand fold: the other-range reverse sum is descending, and the
+    input makes ascending, descending and pairwise sums disagree."""
+    node = _window(cmp, "+", body_reads_i=False, other_range=True, join=False)
+    policy = CompilerPolicy(compiler="native")
+    with use_policy(policy):
+        got = np.asarray(eval_expr(node, _window_ctx()), dtype=float).ravel()
+    u = _SEPARATING
+    n = u.size
+    want, asc = [], []
+    for i in range(1, n - 2):
+        window = [u[j - 1] for j in range(1, n + 1) if (j >= i if cmp == ">=" else j > i)]
+        d = a = None
+        for v in reversed(window):
+            d = v if d is None else d + v
+        for v in window:
+            a = v if a is None else a + v
+        want.append(0.0 if d is None else d)
+        asc.append(0.0 if a is None else a)
+    _assert_bit_identical(got, np.asarray(want), f"declined reverse {cmp}")
+    assert want != asc

@@ -725,3 +725,148 @@ end
 end
 
 HAND_LOOPS["join_keyed"] = HandLoop(_join_setup, _join_row!)
+
+# ---------------------------------------------------------------------------
+# Two-region makearray scan: F[c,k] = sum_{j<k} u[c,j] dz[j] (k = 1..L),
+# F[c,L+1] = sum_j u[c,j] dz[j], D(u[c,l]) = -0.001 (F[c,l+1] - F[c,l]) / dz[l],
+# dz[l] = 100 (1 + 0.5 sin(l))
+# ---------------------------------------------------------------------------
+#
+# Both regions are one running sum per column: the scan's interface k+1 and the
+# total are the same left fold the document writes. Native lays u out
+# column-major, so a row is a block of columns scanned level by level into a
+# per-column buffer.
+
+function _mscan_setup(prob, doc, entry)
+    nc, nl = _shape(entry, "ncol"), _shape(entry, "nlev")
+    o = _block_offset(prob.var_map, "Column.u", (nc, nl))
+    dz = [100.0 * (1 + 0.5 * sin(l)) for l in 1:nl]      # the document's dz equation
+    return (; nc, nl, o, dz, acc = zeros(nc), nrows = cld(nc, _BLOCK))
+end
+
+@inline function _mscan_row!(du, u, t, st, r)
+    (; nc, nl, o, dz, acc) = st
+    qs = ((r-1)*_BLOCK+1):min(r * _BLOCK, nc)
+    @inbounds begin
+        for q in qs
+            acc[q] = 0.0
+        end
+        for l in 1:nl
+            d = dz[l]
+            for q in qs
+                k = o + q + (l - 1) * nc
+                nxt = acc[q] + u[k] * d
+                du[k] = -0.001 * (nxt - acc[q]) / d
+                acc[q] = nxt
+            end
+        end
+    end
+    return nothing
+end
+
+HAND_LOOPS["makearray_scan"] = HandLoop(_mscan_setup, _mscan_row!)
+
+# ---------------------------------------------------------------------------
+# Two-region suffix scan: B[c,k] = sum_{j>=k} u[c,j] dz[j] (k = 1..L), B[c,L+1] = 0,
+# D(u[c,l]) = -0.001 (B[c,l] - B[c,l+1]) / dz[l]
+# ---------------------------------------------------------------------------
+#
+# A reverse scan folds from the top (esm-spec §4.3.1), so each column is one
+# running sum swept downward, starting from the zero lid.
+
+@inline function _sscan_row!(du, u, t, st, r)
+    (; nc, nl, o, dz, acc) = st
+    qs = ((r-1)*_BLOCK+1):min(r * _BLOCK, nc)
+    @inbounds begin
+        for q in qs
+            acc[q] = 0.0
+        end
+        for l in nl:-1:1
+            d = dz[l]
+            for q in qs
+                k = o + q + (l - 1) * nc
+                nxt = acc[q] + u[k] * d
+                du[k] = -0.001 * (nxt - acc[q]) / d
+                acc[q] = nxt
+            end
+        end
+    end
+    return nothing
+end
+
+HAND_LOOPS["suffix_scan"] = HandLoop(_mscan_setup, _sscan_row!)
+
+# ---------------------------------------------------------------------------
+# Ragged contraction: D(u[c]) = -(sum over c's own nNbr[c] neighbours m of
+# kappa (u[c] - u[m]))
+# ---------------------------------------------------------------------------
+#
+# The tables are the document's const equations, read once into CSR form: a
+# cell's neighbours are nbr[start[c]:start[c+1]-1], each row its own length.
+
+function _ragged_setup(prob, doc, entry)
+    m = Int(entry["n_cells"])
+    o = _block_offset(prob.var_map, "Mesh.u", (m,))
+    eqs = doc["models"]["Mesh"]["equations"]
+    counts = only(e["rhs"]["value"] for e in eqs if e["lhs"] == "nNbr")
+    tbl = only(e["rhs"]["value"] for e in eqs if e["lhs"] == "cellsOnCell")
+    start = Vector{Int32}(undef, m + 1)
+    nbr = Int32[]
+    start[1] = 1
+    for c in 1:m
+        for k in 1:Int(counts[c])
+            push!(nbr, Int32(tbl[c][k]))
+        end
+        start[c+1] = length(nbr) + 1
+    end
+    kappa = _param(prob.p, "Mesh.kappa")
+    return (; m, o, start, nbr, kappa, nrows = cld(m, _BLOCK))
+end
+
+@inline function _ragged_row!(du, u, t, st, r)
+    (; m, o, start, nbr, kappa) = st
+    @inbounds for c in ((r-1)*_BLOCK+1):min(r * _BLOCK, m)
+        uc = u[o+c]
+        acc = 0.0
+        for e in start[c]:(start[c+1]-1)
+            acc += kappa * (uc - u[o+nbr[e]])
+        end
+        du[o+c] = -acc
+    end
+    return nothing
+end
+
+HAND_LOOPS["ragged_contraction"] = HandLoop(_ragged_setup, _ragged_row!)
+
+# ---------------------------------------------------------------------------
+# Nested sum in a makearray region: D(u[i]) = -kd u[i],
+# D(J[i]) = sum_j ((0.001 (i + 2 j)) u[j]) u[i]
+# ---------------------------------------------------------------------------
+#
+# The makearray's first region is 0 and its second covers the same box, so the
+# loop writes the second region's value. Each cell's sum runs over j in order.
+
+function _mns_setup(prob, doc, entry)
+    n = Int(entry["n_cells"])
+    ou = _block_offset(prob.var_map, "Band.u", (n,))
+    oj = _block_offset(prob.var_map, "Band.J", (n,))
+    kd = _param(prob.p, "Band.kd")
+    return (; n, ou, oj, kd, nrows = n)
+end
+
+@inline function _mns_row!(du, u, t, st, r)
+    (; n, ou, oj, kd) = st
+    i = r
+    @inbounds begin
+        ui = u[ou+i]
+        acc = 0.0
+        for j in 1:n
+            acc += ((0.001 * (i + 2j)) * u[ou+j]) * ui
+        end
+        du[oj+i] = acc
+        du[ou+i] = -kd * ui
+    end
+    return nothing
+end
+
+HAND_LOOPS["makearray_nested_sum"] = HandLoop(_mns_setup, _mns_row!)

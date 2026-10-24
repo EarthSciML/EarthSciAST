@@ -23,14 +23,11 @@ order-preserving subsequence of the filtered full product, so the ⊕-reduction 
 bit-identical, and that is the property the 1e-12 cross-language tolerance rests
 on.
 
-Every build here names ``compiler="interpreter"``, because a gate-driven
-enumeration IS the per-cell path: the gate decides which tuples exist rather
-than masking a dense box, so there is no whole-box tier for it and the strict
-``native`` default refuses these documents by design (``API_SPEC.md`` §5.8, and
-the census's §2.1 overlap row). Building the whole ``out × reduce`` box and
-masking it is precisely the O(N_c·N_r) work this driver exists to remove, so the
-refusal is a correct statement about the binding, not a gap to paper over here —
-what this file measures is the driver, and the reference is where it runs.
+Every build runs under both compilers. The reference evaluator drives its
+per-cell walk from the candidates; ``native`` builds its flat entries from the
+same candidates (the ``overlap-driven`` tier), so it visits the same tuples and
+must give the same bits. Building the whole ``out × reduce`` box and masking it
+is precisely the O(N_c·N_r) work the driver exists to remove, and neither does.
 """
 
 from __future__ import annotations
@@ -47,6 +44,7 @@ from earthsci_ast.simulation_array import BuildInspection
 GX, GY = 100, 50
 NCELLS = GX * GY
 NPTS = 200
+COMPILERS = ["interpreter", "native"]
 
 
 def _ix(f, *idx):
@@ -128,7 +126,8 @@ def _observed_body(model, name):
 # --------------------------------------------------------------------------- #
 
 
-def test_mirrored_dense_aggregate_is_gate_driven(geom):
+@pytest.mark.parametrize("compiler", COMPILERS)
+def test_mirrored_dense_aggregate_is_gate_driven(geom, compiler):
     """``P[p] = Σ_{c∈cells} [contains(cell_c, pt_p)] · (W_c + S_c)``.
 
     One candidate cell per point, so the driver visits NPTS tuples against a
@@ -189,9 +188,7 @@ def test_mirrored_dense_aggregate_is_gate_driven(geom):
     ca = {f"Mirror.{k}": geom[k] for k in ("X", "Y", "W", "S", "E", "N")}
 
     broad_phase.ENUM_VISITS[0] = 0
-    prep = esm_problem(
-        doc, (0.0, 1.0), const_arrays=ca, model_name="Mirror", compiler="interpreter"
-    )
+    prep = esm_problem(doc, (0.0, 1.0), const_arrays=ca, model_name="Mirror", compiler=compiler)
     got = observed_field(prep, "P")
     visits = broad_phase.ENUM_VISITS[0]
 
@@ -209,7 +206,8 @@ def test_mirrored_dense_aggregate_is_gate_driven(geom):
 # --------------------------------------------------------------------------- #
 
 
-def test_forward_rewritten_binning_aggregate_is_gate_driven(geom):
+@pytest.mark.parametrize("compiler", COMPILERS)
+def test_forward_rewritten_binning_aggregate_is_gate_driven(geom, compiler):
     """``E[c] = Σ_{r∈points} [contains(cell_c, pt_r)] · annual_r`` after
     :func:`desugar_pushdown` re-points it onto ``pd_support__cells`` and attaches
     the derived gate over the generated ``pd_cell__*`` envelopes."""
@@ -294,7 +292,7 @@ def test_forward_rewritten_binning_aggregate_is_gate_driven(geom):
         model_name="Fwd",
         inspect=insp,
         pushdown_rewrite=True,
-        compiler="interpreter",
+        compiler=compiler,
     )
     field = observed_field(prep, "Emis")
     visits = broad_phase.ENUM_VISITS[0]
@@ -318,7 +316,8 @@ def test_forward_rewritten_binning_aggregate_is_gate_driven(geom):
 # --------------------------------------------------------------------------- #
 
 
-def test_output_position_with_no_candidate_is_the_semiring_identity():
+@pytest.mark.parametrize("compiler", COMPILERS)
+def test_output_position_with_no_candidate_is_the_semiring_identity(compiler):
     """A record outside the grid is never visited by the driver, and MUST come
     out as 0̄ — not a hole, not NaN, not a stale buffer value."""
     doc = {
@@ -379,7 +378,7 @@ def test_output_position_with_no_candidate_is_the_semiring_identity():
         "Fill.E": np.array([1.0, 2.0]),
         "Fill.N": np.array([1.0, 1.0]),
     }
-    prep = esm_problem(doc, (0.0, 1.0), const_arrays=ca, model_name="Fill", compiler="interpreter")
+    prep = esm_problem(doc, (0.0, 1.0), const_arrays=ca, model_name="Fill", compiler=compiler)
     got = observed_field(prep, "P")
     assert np.array_equal(got, np.array([7.0, 8.0, 0.0]))
 
@@ -389,7 +388,8 @@ def test_output_position_with_no_candidate_is_the_semiring_identity():
 # --------------------------------------------------------------------------- #
 
 
-def test_scalar_reduction_drives_from_the_candidate_pairs(geom):
+@pytest.mark.parametrize("compiler", COMPILERS)
+def test_scalar_reduction_drives_from_the_candidate_pairs(geom, compiler):
     """``T = Σ_{p,c} [contains(cell_c, pt_p)] · (W_c + S_c)`` — a dense scalar
     reduction whose two contracted axes are exactly the two gated ones. §5.5.6
     pins this as the ``pairs`` shape: bind both from the sorted candidate pairs,
@@ -446,7 +446,7 @@ def test_scalar_reduction_drives_from_the_candidate_pairs(geom):
     ca = {f"Pairs.{k}": geom[k] for k in ("X", "Y", "W", "S", "E", "N")}
 
     broad_phase.ENUM_VISITS[0] = 0
-    prep = esm_problem(doc, (0.0, 1.0), const_arrays=ca, model_name="Pairs", compiler="interpreter")
+    prep = esm_problem(doc, (0.0, 1.0), const_arrays=ca, model_name="Pairs", compiler=compiler)
     got = observed_field(prep, "T")
     visits = broad_phase.ENUM_VISITS[0]
 
@@ -569,6 +569,8 @@ def test_driven_reduction_is_bit_identical_to_the_membership_tested_product(monk
     assert undriven_visits == ncell * npt  # the untouched full product
     assert driven_visits == npt  # one candidate cell per point
     assert np.array_equal(driven, undriven), "the driver reassociated the ⊕-fold"
+    native = observed_field(esm_problem(doc, (0.0, 1.0), const_arrays=ca, model_name="Ord"), "B")
+    assert np.array_equal(native.view(np.uint64), driven.view(np.uint64))
     # ...and the aggregate really is doing multi-term sums, so the check bites.
     assert (driven != 0.0).all()
     assert driven.sum() == pytest.approx(vals.sum(), rel=1e-12)

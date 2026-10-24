@@ -494,8 +494,9 @@ unsafe fn fch_scan_fused(
 
 /// One chunk of an absorbed scan whose lanes are `post` elements wide (an
 /// axis other than the last): position `at + k` is lane `(at + k) % post` at
-/// step `((at + k) / post) % row`; a lane restarts at `init` on step 0 and
-/// otherwise continues from its slot in `carry`.
+/// step `((at + k) / post) % row`; a lane restarts at `init` on step 0 (on
+/// the last step, `row - 1`, for a reverse scan, whose group visits its
+/// rows from the last) and otherwise continues from its slot in `carry`.
 #[inline(always)]
 #[allow(clippy::too_many_arguments)]
 unsafe fn fch_scan_lanes(
@@ -507,16 +508,18 @@ unsafe fn fch_scan_lanes(
     post: usize,
     init: f64,
     inclusive: bool,
+    reverse: bool,
     carry: &mut [f64],
     f: impl Fn(f64, f64) -> f64 + Copy,
 ) {
+    let first = if reverse { row - 1 } else { 0 };
     let mut k = 0usize;
     while k < c {
         let q0 = (at + k) % post;
         let step = ((at + k) / post) % row;
         let len = (c - k).min(post - q0);
         let acc = &mut carry[q0..q0 + len];
-        if step == 0 {
+        if step == first {
             acc.fill(init);
         }
         unsafe {
@@ -1358,6 +1361,19 @@ pub(super) unsafe fn exec_fused(
         unsafe { std::slice::from_raw_parts_mut(red, r.n_inner).fill(r.init) };
     }
     unsafe { fill_whole(fs, bases, whole_src, 0, fs.n_elems(), 0) };
+    // A group with a reverse scan visits its rows from the last.
+    if let Some((rows, len)) = fs.rows_reversed() {
+        for r in (0..rows).rev() {
+            let win = Window {
+                lo: r * len,
+                hi: (r + 1) * len,
+                period: 0,
+                node_elems,
+            };
+            unsafe { run_fused_window(simd, fs, svals, bases, outs, red, idx, fregs, cursor, win) };
+        }
+        return;
+    }
     unsafe {
         run_fused_window(
             simd,
@@ -1741,10 +1757,15 @@ unsafe fn exec_fused_runs(
         in_off,
         carries,
     } = cursor;
-    // Every scan restarts at flat offset 0, the first element the walk
-    // visits, so the carries need no reset here; size them only.
-    carries.clear();
-    carries.resize(n_scans(fs), 0.0);
+    // Every scan restarts at the first element of a lane the walk visits,
+    // so the carries need no reset here; size them only. A group that visits
+    // its rows from the last runs one window per row, each continuing the
+    // carries the row before it left.
+    let n_carries = n_scans(fs);
+    if carries.len() != n_carries {
+        carries.clear();
+        carries.resize(n_carries, 0.0);
+    }
     // One chunk: `c` elements at flat box offset `at`, `done` elements
     // into a run whose shifted inputs start at `in_off`.
     macro_rules! chunk {
@@ -2043,6 +2064,7 @@ unsafe fn exec_fused_runs(
                         a,
                         init,
                         inclusive,
+                        reverse,
                         row,
                         post,
                         carry,
@@ -2050,10 +2072,11 @@ unsafe fn exec_fused_runs(
                     } => {
                         let a = msrc(a);
                         let dst = dst_of(mi, *out);
-                        let (row, post, init, inclusive) =
-                            (*row as usize, *post as usize, *init, *inclusive);
+                        let (row, post, init, inclusive, reverse) =
+                            (*row as usize, *post as usize, *init, *inclusive, *reverse);
                         let cv = &mut carries[*carry as usize..*carry as usize + post];
                         if post == 1 {
+                            debug_assert!(!reverse, "a reverse scan has lanes");
                             let cv = &mut cv[0];
                             macro_rules! chunk {
                                 ($f:expr) => {
@@ -2066,7 +2089,8 @@ unsafe fn exec_fused_runs(
                                 ($f:expr) => {
                                     unsafe {
                                         fch_scan_lanes(
-                                            dst, c, at, a, row, post, init, inclusive, cv, $f,
+                                            dst, c, at, a, row, post, init, inclusive, reverse, cv,
+                                            $f,
                                         )
                                     }
                                 };
@@ -2649,6 +2673,7 @@ pub(in crate::simulate_array::tape) fn eval_micro_op(
             a,
             init,
             inclusive,
+            reverse,
             row,
             post,
             carry,
@@ -2656,7 +2681,8 @@ pub(in crate::simulate_array::tape) fn eval_micro_op(
         } => {
             let (row, post) = (*row as usize, *post as usize);
             let acc = &mut carries[*carry as usize + at % post];
-            if (at / post).is_multiple_of(row) {
+            let first = if *reverse { row - 1 } else { 0 };
+            if (at / post) % row == first {
                 *acc = *init;
             }
             let x = get(a, regs);

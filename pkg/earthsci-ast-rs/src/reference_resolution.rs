@@ -683,10 +683,10 @@ fn collect_document_node_ids(
 
 /// Deprecated alias of [`build_reference_graph`].
 ///
-/// API_SPEC.md §8 item 17: a binding that exposes the explicit index-set
-/// registry keeps it as an optional TRAILING argument of
-/// `build_reference_graph`, not as a separate name. Kept for one minor per
-/// API_SPEC.md §10.
+/// API_SPEC.md §8 item 17: the explicit index-set registry is an optional
+/// TRAILING argument of `build_reference_graph`, not a separate name. This
+/// alias is deprecated and will be removed at the next major (API_SPEC.md
+/// §10).
 #[deprecated(
     since = "0.2.0",
     note = "the registry is now the trailing argument of `build_reference_graph` (API_SPEC.md §8 item 17)"
@@ -708,11 +708,10 @@ pub fn build_reference_graph_with_index_sets(
 /// [`resolve_references`], which is the DOCUMENT-scoped entry point, derives
 /// the registry from the document itself and threads it in for every model.
 ///
-/// Since v0.8.0 the `index_sets` registry is a sibling of `models`, shared by
-/// every model, rather than nested inside each model (mirrors
-/// [`crate::cadence::model_with_loaders`]). Any (pre-0.8.0) model-nested
-/// `index_sets` is *merged* on top — a model-level entry wins on a key
-/// collision — so the older nested shape keeps working unchanged.
+/// The `index_sets` registry is a sibling of `models`, shared by every model
+/// (as in [`crate::cadence::model_with_loaders`]). An `index_sets` nested
+/// inside the model itself is merged on top, and a model-level entry wins on
+/// a key collision.
 ///
 /// Errors on a duplicate node id, an undeclared `ranges[*].from` index set, a
 /// `from_faq` naming no node, or an unresolved `join.on` factor. Cycles are

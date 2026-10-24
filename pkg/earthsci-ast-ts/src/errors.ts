@@ -461,10 +461,15 @@ export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES]
 
 /**
  * Neutral base for EarthSciAST diagnostics: an `Error` carrying a stable `code`
- * string (from {@link ERROR_CODES}) and optional structured `details`. This is
- * purely additive — a single home for future diagnostics. It intentionally does
- * NOT touch the existing `EsmMachineryError` / `EnumLoweringError` /
- * `ClosedFunctionError` classes, which another file owns.
+ * string (from {@link ERROR_CODES}) and optional structured `details`. The
+ * package's error classes extend it — `EsmMachineryError`, `EnumLoweringError`,
+ * `ClosedFunctionError`, `FlattenError`, `UnitConversionError` and the rest —
+ * so one `instanceof EsmDiagnosticError` check catches them, and `code` names
+ * the specific diagnostic.
+ *
+ * One exception: the operator registry's arity and domain checks (an operator
+ * given the wrong number of arguments, `log` of a non-positive value, division
+ * by zero) throw a plain `Error` with no `code`.
  */
 export class EsmDiagnosticError extends Error {
   constructor(

@@ -254,82 +254,24 @@ Algebraic manipulation rules and verification:
 - **Identity verification**: Mathematical identities
 - **Domain restrictions**: Function validity regions
 
-## Usage Examples
+## How these files are used
 
-### Conservation Law Verification
-```python
-from earthsci_ast.verification import verify_reaction_system
-from earthsci_ast.types import ReactionSystem
+These documents are fixtures, not a test suite of their own. Today the only
+code that reads them is the Rust round-trip test
+(`pkg/earthsci-ast-rs/tests/round_trip.rs`,
+`test_mathematical_correctness_round_trip`), which loads
+`conservation_laws.esm` and `dimensional_analysis.esm` and checks that they
+serialize back unchanged. No binding checks the conservation, dimensional,
+numerical or algebraic claims described above against these files; the
+categories record what each file is meant to exercise.
 
-# Load test case
-system = load_test_case("conservation_laws.esm", "mass_conservation_combustion")
+The executable mathematical-correctness case is
+`tests/validation/mathematical_correctness.esm`, whose inline tests the Python
+and Rust suites run (`test_reaction_system_inline_tests.py`,
+`rhs_time_derivative.rs`).
 
-# Verify conservation
-report = verify_reaction_system(system, tolerance=1e-10)
-
-# Check results
-assert report.passed()
-assert report.summary["pass"] > 0
-assert report.summary["fail"] == 0
-```
-
-### Dimensional Analysis
-```python
-from earthsci_ast.verification import verify_dimensional_consistency
-
-# Load dimensional test
-equation = load_test_case("dimensional_analysis.esm", "newton_second_law")
-
-# Verify dimensions
-results = verify_dimensional_consistency([equation])
-
-# Validate consistency
-assert all(r.status == VerificationStatus.PASS for r in results)
-```
-
-### Numerical Precision Testing
-```python
-from earthsci_ast.verification import check_numerical_stability
-
-# Test matrix conditioning
-matrix = load_test_matrix("numerical_correctness.esm", "hilbert_matrix")
-
-# Analyze stability
-stability = check_numerical_stability(matrix)
-
-# Verify within acceptable bounds
-assert stability["condition_number"] < 1e12
-assert stability["is_well_conditioned"]
-```
-
-## Test Execution
-
-### Running All Tests
 ```bash
-# Python implementation
-cd pkg/earthsci-ast-py
-source venv/bin/activate
-python -m pytest tests/test_mathematical_verification.py -v
-
-# Julia implementation
-cd pkg/EarthSciAST.jl
-julia --project=. -e 'using Pkg; Pkg.test()'
-
-# TypeScript implementation
-cd pkg/earthsci-ast-ts
-npm test
-```
-
-### Individual Test Categories
-```bash
-# Conservation laws only
-python -m pytest tests/test_mathematical_verification.py::TestMassConservationVerification -v
-
-# Dimensional analysis only
-python -m pytest tests/test_mathematical_verification.py::TestDimensionalAnalysisVerification -v
-
-# Numerical precision only
-python -m pytest tests/test_mathematical_verification.py::TestNumericalStabilityVerification -v
+cd pkg/earthsci-ast-rs && cargo test --test round_trip test_mathematical_correctness_round_trip
 ```
 
 ## Extending the Test Suite
@@ -365,13 +307,6 @@ python -m pytest tests/test_mathematical_verification.py::TestNumericalStability
 - [ ] Performance benchmarks met
 - [ ] Edge cases and error conditions covered
 - [ ] Documentation complete and accurate
-
-### Continuous Integration
-All test fixtures are automatically verified in CI/CD pipelines across all supported languages, ensuring:
-- **Consistency**: Identical results across implementations
-- **Accuracy**: Mathematical correctness maintained
-- **Performance**: Computational efficiency preserved
-- **Reliability**: Robust error handling
 
 ## References
 

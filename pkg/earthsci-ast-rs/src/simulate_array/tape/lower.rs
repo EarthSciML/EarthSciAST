@@ -96,6 +96,9 @@ type LResult<T> = Result<T, Bail>;
 mod standalone;
 mod tuples;
 
+#[cfg(test)]
+pub(super) use tuples::set_tuple_list_budget;
+
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use standalone::StandaloneError;
 #[cfg(not(target_arch = "wasm32"))]
@@ -553,6 +556,9 @@ pub(crate) struct TapeBuilder<'m> {
     tuple_frames: Vec<tuples::TupleFrame>,
     /// The id the next tuple-list box gets (0 means "not a tuple box").
     next_tuple: u32,
+    /// Tuples this program's tuple lists hold so far, against
+    /// `tuples::tuple_list_budget`.
+    tuples_held: u64,
     /// Fail-closed fault messages (`Instr::Fault` indexes here).
     faults: Vec<String>,
     /// Conditional fault scans (`Instr::FaultScan` indexes here).
@@ -791,6 +797,7 @@ impl<'m> TapeBuilder<'m> {
             known: FxHashMap::default(),
             tuple_frames: Vec::new(),
             next_tuple: 1,
+            tuples_held: 0,
             faults: Vec::new(),
             fault_scans: Vec::new(),
             sweeps: Vec::new(),
@@ -4524,6 +4531,7 @@ impl<'m> TapeBuilder<'m> {
             init: identity,
             src: src_ref,
             axes: (nb as u8..(nb + nc) as u8).collect(),
+            reverse: false,
             src_shape: ext_shape,
             out,
         };
@@ -4657,6 +4665,30 @@ impl<'m> TapeBuilder<'m> {
         if shape.contains(&0) {
             return Ok(self.emit_zero_array(&shape, &lo));
         }
+        // A prefix scan (a `makearray` region value, a filtered rule body):
+        // the oracle sweeps it with `run_prefix_scan`, so it gets the
+        // running-fold lowering, never the filtered triangular box below. A
+        // forward scan's bits agree either way, but the box is O(N^2); a
+        // reverse scan folds each suffix from its high end, which only the
+        // sweep reproduces.
+        let static_ranges = static_contract_ranges(contract_dims);
+        if let Some(scan) = detect_prefix_scan(
+            idx_names,
+            ranges,
+            contract_names,
+            static_ranges.as_deref(),
+            body,
+            filter,
+        ) {
+            return self.lower_prefix_scan(
+                idx_names,
+                ranges,
+                scan,
+                &contract_names[0],
+                body,
+                reduce,
+            );
+        }
         self.push_scope();
         let v = if contract_names.is_empty() {
             let bx = LBox {
@@ -4730,6 +4762,11 @@ impl<'m> TapeBuilder<'m> {
             bail_tape!("contracted: no contracted index");
         }
         if contract_dims.iter().any(|d| !self.dim_is_fixed(d)) {
+            // The tuple-list form folds each row ascending; a reverse
+            // window folds it from the top (esm-spec §4.3.1).
+            if folds_from_the_top(idx_names, contract_names, filter) {
+                bail_tape!("contracted: a reverse-window filter over a ragged range");
+            }
             // A ragged bound varies per output cell: the tuple-list form.
             let ranges: Vec<(i64, i64)> = lo
                 .iter()
@@ -4894,11 +4931,16 @@ impl<'m> TapeBuilder<'m> {
         };
         let sec = self.placement(self.lv_cadence(&src));
         let out = self.new_slot(shape, lo, false, sec);
+        // A reverse window the scan lowering did not claim (its body reads
+        // the output index, or its range is not the output axis's) folds
+        // each cell's suffix from its high end (esm-spec §4.3.1).
+        let reverse = folds_from_the_top(idx_names, window.names, filter);
         let instr = Instr::Reduce {
             op: combine_op,
             init: identity,
             src: self.src_of(&src),
             axes: red_axes,
+            reverse,
             src_shape: ext_shape,
             out,
         };
@@ -4931,8 +4973,11 @@ impl<'m> TapeBuilder<'m> {
         let (clo, chi) = (window.lo, window.hi);
         // Accumulator: identity-filled buffer over the output box.
         let mut acc = self.emit_fill(&LV::Lit(identity), shape, lo, Cadence::Const);
+        // A reverse window (one contracted name) is visited from its high
+        // end (esm-spec §4.3.1).
+        let reverse = folds_from_the_top(idx_names, contract_names, filter);
 
-        let mut cvals: SmallVec<[i64; 4]> = SmallVec::from_slice(clo);
+        let mut cvals: SmallVec<[i64; 4]> = SmallVec::from_slice(if reverse { chi } else { clo });
         loop {
             // Each contraction tuple is a DISTINCT box (and CSE scope).
             self.push_scope();
@@ -4956,6 +5001,13 @@ impl<'m> TapeBuilder<'m> {
             let term = term?;
             acc = self.emit_bin(combine_op, acc, term)?;
 
+            if reverse {
+                cvals[0] -= 1;
+                if cvals[0] < clo[0] {
+                    break;
+                }
+                continue;
+            }
             // Odometer over the window, the LAST contracted name fastest —
             // the per-cell oracle's `CartesianTuples` order.
             let mut d = nc;
@@ -5975,6 +6027,7 @@ impl<'m> TapeBuilder<'m> {
                 init: identity,
                 src: SrcRef::Slot(src_slot),
                 axes: (0..shape.len() as u8).collect(),
+                reverse: false,
                 src_shape: shape,
                 out,
             },
@@ -5984,8 +6037,10 @@ impl<'m> TapeBuilder<'m> {
     }
 
     /// `eval_makearray` mirror (wholesale): the bounding-box assembly around
-    /// region writes, with the same gates production applies before routing to
-    /// the overlay (`shape` non-empty, no prefix-scan region value).
+    /// region writes, with the gate production applies before routing to the
+    /// overlay (`shape` non-empty). A region value production sweeps as a
+    /// prefix scan (where it declines the overlay) lowers to the same running
+    /// fold, through [`Self::lower_faq`].
     fn lower_wholesale_makearray(&mut self, node: &Arc<ExpressionNode>) -> LResult<LV> {
         let regions: &[Vec<[crate::types::RegionBound; 2]>] =
             node.regions.as_deref().unwrap_or(&[]);
@@ -6014,9 +6069,6 @@ impl<'m> TapeBuilder<'m> {
         if shape.contains(&0) {
             bail_tape!("makearray: empty bounding-box axis (per-cell path)");
         }
-        if values.iter().any(region_value_is_prefix_scan) {
-            bail_tape!("makearray: prefix-scan region value (per-cell path)");
-        }
         let bx = LBox {
             syms: &[],
             lo,
@@ -6032,7 +6084,7 @@ impl<'m> TapeBuilder<'m> {
         Ok(self.reorigin_to_one(v?))
     }
 
-    /// A forward prefix scan (esm-spec §4.3.1): the term over the whole
+    /// A prefix scan (esm-spec §4.3.1): the term over the whole
     /// output box, then one [`Instr::Scan`] along the scanned axis — the
     /// vectorized analogue of `run_prefix_scan`, and one instruction whatever
     /// the scanned length.
@@ -6042,7 +6094,8 @@ impl<'m> TapeBuilder<'m> {
     /// and the body never reads the scanned output symbol (the detector
     /// rejects such bodies), so the term at step `i` is the body over a box
     /// whose scanned axis is named by the CONTRACTED symbol. The scan then
-    /// folds each window ascending in the same association.
+    /// folds each window in the sweep's order (ascending, or descending for a
+    /// reverse scan) in the same association.
     ///
     /// A body whose whole-box lowering bails keeps the per-step form
     /// ([`Self::lower_prefix_scan_steps`]), which binds the step position as
@@ -6113,6 +6166,7 @@ impl<'m> TapeBuilder<'m> {
             src: self.src_of(&term),
             axis,
             inclusive: scan.inclusive,
+            reverse: scan.reverse,
             src_shape: full_shape,
             out,
         };
@@ -6166,7 +6220,12 @@ impl<'m> TapeBuilder<'m> {
         // Bind BOTH the scanned output symbol and the contracted symbol to the
         // step position, exactly as `run_prefix_scan`'s `term_at` does.
         let cnames: Vec<String> = vec![idx_names[scan.axis].clone(), j_name.to_string()];
-        for i in slo..=shi {
+        let steps: Vec<i64> = if scan.reverse {
+            (slo..=shi).rev().collect()
+        } else {
+            (slo..=shi).collect()
+        };
+        for i in steps {
             self.push_scope();
             let bx = LBox {
                 syms: idx_names,
@@ -7347,11 +7406,16 @@ impl<'m> TapeBuilder<'m> {
             fuse_stats: FuseStats::default(),
             col_major: false,
         };
+        super::scan_shift::rewrite_scan_makearray_reads(&mut prog);
         if align_layout {
             super::layout::align_state_layout(&mut prog);
         }
         if let Some(cfg) = fuse {
             super::reroll::reroll_program(&mut prog);
+            // Output-only work first moves out of the way, so it does not
+            // split the groups of the work a derivative needs.
+            super::prune::split_output_only(&mut prog);
+            super::sink::sink_const_broadcasts(&mut prog);
             super::fuse::fuse_program(&mut prog, cfg);
             super::prune::split_output_only(&mut prog);
         } else {

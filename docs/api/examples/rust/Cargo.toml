@@ -1,0 +1,66 @@
+# Runnable examples for the generated API reference (docs/api/README.md §3).
+# Built against the in-repo crate, never a published release. Run them all
+# with `scripts/api_docs/rust.sh --examples-only`.
+[package]
+name = "earthsci-ast-api-examples"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# A workspace of its own, so cargo never looks for one further up the tree.
+[workspace]
+
+[dependencies]
+earthsci-ast = { path = "../../../../pkg/earthsci-ast-rs" }
+
+# The examples share one helper: `fixture`, which finds the shared `.esm`
+# documents relative to this directory rather than the working directory.
+[lib]
+path = "support.rs"
+
+[profile.dev]
+debug = false
+
+[[example]]
+name = "load"
+path = "load.rs"
+
+[[example]]
+name = "validate"
+path = "validate.rs"
+
+[[example]]
+name = "inspect"
+path = "inspect.rs"
+
+[[example]]
+name = "display"
+path = "display.rs"
+
+[[example]]
+name = "expressions"
+path = "expressions.rs"
+
+[[example]]
+name = "edit"
+path = "edit.rs"
+
+[[example]]
+name = "flatten"
+path = "flatten.rs"
+
+[[example]]
+name = "reactions"
+path = "reactions.rs"
+
+[[example]]
+name = "simulate"
+path = "simulate.rs"
+
+[[example]]
+name = "graphs"
+path = "graphs.rs"
+
+[[example]]
+name = "units"
+path = "units.rs"

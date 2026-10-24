@@ -3,6 +3,7 @@
 <title>{{ if .IsHome }}{{ site.Title }}{{ else }}{{ .Title }} · {{ site.Title }}{{ end }}</title>
 {{ with .Params.description }}<meta name="description" content="{{ . }}">{{ end }}
 <link rel="stylesheet" href="{{ "css/site.css" | relURL }}">
+{{ if or .Params.api_tabs (eq .Type "api") }}{{ partial "api-tabs.html" . }}{{ end }}
 
 {{/* KaTeX for fast, client-side math rendering. Auto-render scans $$...$$ / \(...\). */}}
 <link rel="stylesheet"

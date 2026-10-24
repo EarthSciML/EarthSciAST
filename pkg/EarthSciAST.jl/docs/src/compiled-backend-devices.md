@@ -56,23 +56,16 @@ du  = Array(xla(ur, pr, tr))
 the stack makes it worse rather than better** — `ulimit -s 131072` before a run
 is the one thing to avoid.
 
-That is worth saying out loud because the failure it prevents used to look like
-a stack problem. Reactant's interpreter rewrites every type-unstable call in a
-traced body into its generated `call_with_reactant`, and that generator runs a
-whole nested GPUCompiler inference to build the replacement. The emitter's walk
-over the compiled IR is recursive, so before it was made opaque to the rewrite
-every level of the tree was one more nested generator: the compile wedged inside
-`typeinf` with no error and no progress, or printed `detected a stack overflow`
-a dozen times and took the process down with `SIGSEGV`. It was intermittent —
-the depth reached depends on the fixture and on what inference had already
-cached — and a bigger stack simply let the nesting run deeper before the guard
-fired.
-
-The fix is in the emitter, not in the caller's environment: the walk's entry is
-marked `Reactant.@skip_rewrite_func`, so the interpreter calls it natively and
-builds no nested generator for the recursion (`ext/reactant_direct/device.jl`
-says why that is safe — the walk constructs `stablehlo.*` operations from the
-traced values' `mlir_data` and otherwise reads host data, so there is no
+Reactant's interpreter rewrites every type-unstable call in a traced body into
+its generated `call_with_reactant`, and that generator runs a whole nested
+GPUCompiler inference to build the replacement. The emitter's walk over the
+compiled IR is recursive, so if every level of the tree were rewritten, each
+would be one more nested generator, and a bigger stack would only let that
+nesting run deeper. The walk's entry is therefore marked
+`Reactant.@skip_rewrite_func`, so the interpreter calls it natively and builds
+no nested generator for the recursion (`ext/reactant_direct/device.jl` says why
+that is safe — the walk constructs `stablehlo.*` operations from the traced
+values' `mlir_data` and otherwise reads host data, so there is no
 `@reactant_overlay` method for the interpreter to find).
 
 ### Put a function between your program and `@compile`

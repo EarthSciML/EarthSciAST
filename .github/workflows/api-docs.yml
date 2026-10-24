@@ -1,0 +1,100 @@
+name: API docs extraction
+
+# Reusable: extracts each binding's docstrings to build/api-docs/<binding>.json
+# and runs its example programs (scripts/api_docs/<binding>.sh, specified in
+# docs/api/README.md), uploading one artifact per binding. docs.yml and
+# pages.yml call it, then render the reference from the artifacts.
+
+on:
+  workflow_call:
+    inputs:
+      strict:
+        description: >-
+          Fail the run when a binding's extraction or examples fail. When
+          false, a failing binding is reported but the caller still renders,
+          with that binding shown as not extracted.
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  extract:
+    name: extract (${{ matrix.binding }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    continue-on-error: ${{ !inputs.strict }}
+    strategy:
+      fail-fast: false
+      matrix:
+        binding: [julia, typescript, python, rust, go]
+    steps:
+      - uses: actions/checkout@v4
+
+      # render.py's region check (regions.py) and most binding scripts use Python.
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Set up Julia
+        if: matrix.binding == 'julia'
+        uses: julia-actions/setup-julia@v2
+        with:
+          # The examples environment dev-links the package through
+          # Project.toml [sources], which needs Julia 1.11 or newer.
+          version: '1'
+      - name: Cache Julia packages
+        if: matrix.binding == 'julia'
+        uses: julia-actions/cache@v2
+
+      - name: Set up Node.js
+        if: matrix.binding == 'typescript'
+        uses: actions/setup-node@v4
+        with:
+          # The examples run under Node's built-in TypeScript type stripping.
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: pkg/earthsci-ast-ts/package-lock.json
+
+      # rustdoc's JSON output, which the extractor reads, needs a nightly
+      # toolchain; the examples build on stable.
+      - name: Set up Rust nightly (rustdoc JSON)
+        if: matrix.binding == 'rust'
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-10-01
+      - name: Set up Rust stable
+        if: matrix.binding == 'rust'
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache Rust builds
+        if: matrix.binding == 'rust'
+        uses: Swatinem/rust-cache@v2
+        with:
+          # rust.sh builds into these target directories, not the workspaces' own.
+          workspaces: |
+            pkg/earthsci-ast-rs -> ../../build/api-docs/rust-rustdoc-target
+            docs/api/examples/rust -> ../../../../build/api-docs/rust-examples-target
+
+      - name: Set up Go
+        if: matrix.binding == 'go'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: pkg/earthsci-ast-go/go.mod
+          cache-dependency-path: pkg/earthsci-ast-go/go.sum
+
+      - name: Check example regions
+        run: python scripts/api_docs/regions.py --binding ${{ matrix.binding }}
+
+      - name: Extract docstrings and run examples
+        run: bash scripts/api_docs/${{ matrix.binding }}.sh
+
+      - name: Upload docstrings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-docs-${{ matrix.binding }}
+          path: build/api-docs/${{ matrix.binding }}.json
+          if-no-files-found: warn
+          retention-days: 7

@@ -69,8 +69,7 @@ const (
 // It carries a stable Code (one of the CodeRef* constants) so callers and the
 // cross-binding conformance suite can assert on the failure mode, and a
 // human-readable Message. For a cycle, Cycle holds the offending vertex-key
-// path. All five bindings call it `ReferenceResolutionError`; Rust keeps
-// `ReferenceError` only as a deprecated alias of the renamed type.
+// path. All five bindings call it `ReferenceResolutionError`.
 type ReferenceResolutionError struct {
 	Code    string
 	Message string

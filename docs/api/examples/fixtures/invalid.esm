@@ -1,0 +1,14 @@
+{
+  "esm": "1.0.0",
+  "metadata": { "name": "Broken", "description": "An equation that names a variable nobody declared.", "authors": ["EarthSciML"] },
+  "models": {
+    "Broken": {
+      "variables": {
+        "x": { "type": "unknown", "units": "1", "default": 1.0 }
+      },
+      "equations": [
+        { "lhs": { "op": "D", "args": ["x"], "wrt": "t" }, "rhs": { "op": "*", "args": [-1, "k", "x"] } }
+      ]
+    }
+  }
+}

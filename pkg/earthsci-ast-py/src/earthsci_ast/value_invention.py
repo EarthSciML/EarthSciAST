@@ -40,8 +40,7 @@ from .esm_types import ExprNode
 
 
 class ValueInventionError(EarthSciAstError):
-    """A value-invention build-time materialisation error (the Python analog of
-    Julia's ``TreeWalkError`` value-invention codes)."""
+    """A value-invention build-time materialisation error."""
 
 
 # The relational body ops that mark a value-invention output (excluded from the
@@ -714,12 +713,10 @@ def _vi_resolve_join(
                 )
             sym_l = _vi_join_index_sym(str(src_env[0]), producer_ranges, ctx)
             sym_r = _vi_join_index_sym(str(tgt_env[0]), producer_ranges, ctx)
-            cands = broad_phase.OverlapIndex(
-                broad_phase.overlap_candidate_set(
-                    broad_phase.envelope_vectors(src_env, ctx.const_arrays),
-                    broad_phase.envelope_vectors(tgt_env, ctx.const_arrays),
-                    eps=eps,
-                )
+            cands = broad_phase.overlap_candidate_index(
+                broad_phase.envelope_vectors(src_env, ctx.const_arrays),
+                broad_phase.envelope_vectors(tgt_env, ctx.const_arrays),
+                eps=eps,
             )
             gates.append(_ViJoinGate(sym_l, sym_r, candidates=cands))
             continue
@@ -1263,8 +1260,8 @@ class ValueInventionResult:
       equi-join column ``rg_src_bin`` / ``rg_tgt_bin`` an aggregate ``join.on``
       gates on. Each code is the interpreter's own
       :func:`numpy_interpreter._skolem_code` of the materialised skolem key, so a
-      buffer is **byte-identical** to what the retired ``simulation_array``
-      per-cell mirror produced (:attr:`EvalContext.join_key_buffers`). The
+      buffer is **byte-identical** to the per-cell key the interpreter computes
+      (:attr:`EvalContext.join_key_buffers`). The
       distinct value-invention primitives (distinct / rank) return SETS and
       arg-witness returns an ARG; this is the setup-materialised join column.
     - ``join_key_index_sets`` — skolem BIN map var → its 1-D declared-shape index
@@ -1307,13 +1304,12 @@ def materialize_value_invention(
     produced regardless.
 
     ``index_sets`` is the document-scoped index-set registry (RFC §5.2), which
-    as of v0.8.0 lives at the top level of the document rather than on each
-    model — mirrors :func:`reference_resolution.build_reference_graph`. When
-    omitted it falls back to a model-local ``model_json["index_sets"]`` key
-    (the pre-v0.8.0 behavior), so a caller need not splice the document registry
+    lives at the top level of the document rather than on each model — mirrors
+    :func:`reference_resolution.build_reference_graph`. When omitted it falls
+    back to a model-local ``model_json["index_sets"]`` key, so a caller need not splice the document registry
     onto the model dict before calling.
 
-    ``const_array_boundaries`` (ess-gj4) optionally declares a per-const-array,
+    ``const_array_boundaries`` optionally declares a per-const-array,
     per-dimension out-of-range gather policy: a mapping of array name → an
     iterable of per-dimension policy strings, each one of "periodic" | "clamp" |
     "error". A const-array gather at an out-of-range 1-based index then resolves

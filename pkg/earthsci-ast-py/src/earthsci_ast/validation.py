@@ -178,10 +178,8 @@ def validate(esm_file: EsmFile, *, base_path: str | None = None) -> ValidationRe
 
     ``esm_file`` is a **typed** :class:`~earthsci_ast.esm_types.EsmFile` — the
     one input type ``validate`` accepts in every binding (API_SPEC.md §8
-    item 13). It does **not** sniff a path, JSON text or a raw ``dict`` out of
-    its argument: that is exactly the defect §8 item 1 removed from ``load``,
-    where one name taking one argument type meant opposite things in different
-    bindings. Use the explicit entry points instead:
+    item 13). It does **not** accept a path, JSON text or a raw ``dict``; use
+    the explicit entry points instead:
 
     * a filesystem path -> :func:`validate_path`;
     * JSON text -> :func:`validate_text`;

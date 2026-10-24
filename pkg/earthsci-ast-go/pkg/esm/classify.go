@@ -108,10 +108,9 @@ func AlgebraicUnknowns(model *Model) []string {
 
 // ObservedDefinition returns the defining RHS of an observed unknown — the RHS
 // of the first equation whose LHS names it, bare (`y ~ f(…)`) or indexed
-// (`y[i] ~ f(…)`) — and whether one exists. This is where an observed's behaviour moved in 1.0.0: out of
-// `variables[v].expression` and into the model's `equations`. Passes that used
-// to read the removed field (units propagation, array-shape checking, the
-// cadence leaf seed) read it here instead.
+// (`y[i] ~ f(…)`) — and whether one exists. An observed's definition lives in
+// the model's `equations` (esm-spec §6.3.1), so passes that need it (units
+// propagation, array-shape checking, the cadence leaf seed) read it here.
 func ObservedDefinition(model *Model, name string) (Expression, bool) {
 	if model == nil {
 		return nil, false

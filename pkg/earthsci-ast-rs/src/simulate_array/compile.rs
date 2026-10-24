@@ -70,7 +70,7 @@ pub(crate) fn model_tree_any(model: &Model, pred: &dyn Fn(&Model) -> bool) -> bo
 /// Used by [`crate::compile_array`] to accept discretized-PDE files even when
 /// the equations do not yet contain explicit `faq`/`index` nodes (e.g. a
 /// spatial model whose equations were rewritten using indexed-scalar
-/// D(u[i])=... form rather than the `faq` wrapper).
+/// `D(u[i]) = ...` form rather than the `faq` wrapper).
 pub fn file_has_spatial_model(file: &EsmFile) -> bool {
     let Some(models) = &file.models else {
         return false;

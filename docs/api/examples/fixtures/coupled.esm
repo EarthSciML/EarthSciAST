@@ -1,0 +1,32 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "HeatedBox",
+    "description": "Two models joined by a variable_map: a heater's temperature drives a box's.",
+    "authors": ["EarthSciML"]
+  },
+  "models": {
+    "Heater": {
+      "variables": {
+        "T": { "type": "unknown", "units": "K", "default": 300.0, "description": "Heater temperature" },
+        "rate": { "type": "parameter", "units": "K/s", "default": 0.5, "description": "Heating rate" }
+      },
+      "equations": [
+        { "lhs": { "op": "D", "args": ["T"], "wrt": "t" }, "rhs": "rate" }
+      ]
+    },
+    "Box": {
+      "variables": {
+        "T_wall": { "type": "parameter", "units": "K", "default": 290.0, "description": "Wall temperature" },
+        "T_air": { "type": "unknown", "units": "K", "default": 290.0, "description": "Air temperature" },
+        "k": { "type": "parameter", "units": "1/s", "default": 0.05, "description": "Exchange coefficient" }
+      },
+      "equations": [
+        { "lhs": { "op": "D", "args": ["T_air"], "wrt": "t" }, "rhs": { "op": "*", "args": ["k", { "op": "-", "args": ["T_wall", "T_air"] }] } }
+      ]
+    }
+  },
+  "coupling": [
+    { "type": "variable_map", "from": "Heater.T", "to": "Box.T_wall", "transform": "param_to_var" }
+  ]
+}

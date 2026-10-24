@@ -397,26 +397,12 @@ function _cg_emit(ctx::_CGCtx, kc::_CGUnitCtx, nd::_Node)
     elseif k === _NK_LOOPVAR
         s = get(kc.loops, nd.payload, nothing)
         s === nothing && throw(_CodegenDecline(:loopvar_out_of_scope))
-        return :(_cgT($s))
+        return :(Float64($s))
     elseif k === _NK_CONTRACTION_LOOP
-        # `_eval_contraction_loop`: the accumulator starts at `T(0̄)`, and each
-        # step is `s ⊕= body` with the counter bound for the body's loop-var
-        # leaves.
+        # The range is part of the class signature (`_sc_sig!`), so its bounds
+        # are the same literals for every member.
         spec = nd.payload::_ContractLoop
-        op = nd.op
-        fnsym = op === :+ ? :+ : op === :* ? :* : op === :max ? :max : :min
-        acc = _cg_name(ctx, "la")
-        kv = _cg_name(ctx, "lk")
-        kc.loops[spec.ref] = kv
-        body = _cg_emit(ctx, kc, nd.children[1])
-        delete!(kc.loops, spec.ref)
-        return quote
-            local $acc = _cgT($(nd.literal))
-            for $kv in $(spec.lo):$(spec.step):$(spec.hi)
-                $acc = $fnsym($acc, $body)
-            end
-            $acc
-        end
+        return _cg_contraction_loop(ctx, kc, nd, spec.lo, spec.step, spec.hi)
     end
     throw(_CodegenDecline(:unknown_kind))
 end

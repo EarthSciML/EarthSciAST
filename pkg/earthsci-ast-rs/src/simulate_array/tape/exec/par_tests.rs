@@ -204,6 +204,60 @@ fn the_regrid_chain_folds_only_admitted_pairs() {
     }
 }
 
+/// The scaling ragged contraction's neighbour sum (`kappa * (u[i] - u[nbr])`
+/// over 5 to 7 tuples a cell) is one private chain whose tuples run block by
+/// block through per-worker buffers: serial and split, every steady call
+/// matches the per-cell oracle to the bit.
+#[test]
+fn the_ragged_chain_runs_its_tuples_through_block_buffers() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(
+        "../../tests/conformance/scaling/fixtures/ragged_contraction/ragged_contraction_N1000.esm",
+    );
+    let text = std::fs::read_to_string(&path).expect("scaling fixture reads");
+    let doc: serde_json::Value = serde_json::from_str(&text).expect("scaling fixture parses");
+    let compiled = crate::simulate_array::tape::tests::compile(doc);
+    let (prog, _) = taped(compiled.build_tape(&std::collections::HashSet::new()));
+    let exec = super::TapeExec::new(&prog);
+    assert_eq!(exec.seg_chains.len(), 1, "one chain");
+    let ch = &exec.seg_chains[0];
+    assert!(ch.private, "nothing else reads the chain's tuples");
+    assert!(
+        ch.seg - ch.start >= 3,
+        "the gathers and the arithmetic join the chain"
+    );
+
+    let opts = ProblemOptions {
+        compiler: Some(Compiler::Native),
+        rhs: Rhs::Always,
+        ..Default::default()
+    };
+    let prob = esm_problem(path.as_path(), (0.0, 1.0), opts).expect("the fixture builds");
+    let c = prob.debug_array_compiled().expect("a right-hand side");
+    let n = c.state_variable_names().len();
+    let state: Vec<f64> = (0..n).map(|k| 1.0 + 0.1 * (k as f64).sin()).collect();
+    let (oracle, _) = c.debug_eval_rhs(&state, 0.0, &HashMap::new(), true);
+    let params = c.debug_resolve_params(&HashMap::new());
+    for ways in [1, 2, 3, 4, 7] {
+        let mut scratch = c
+            .debug_new_scratch_taped()
+            .expect("the tape lowers every rule");
+        let mut stats = crate::simulate_array::RhsStats::default();
+        let mut dy = vec![0.0; n];
+        force_split(Some(ways));
+        for _ in 0..2 {
+            c.debug_eval_rhs_into(&state, 0.0, &params, &mut dy, &mut scratch, &mut stats);
+            for (k, (x, y)) in oracle.iter().zip(&dy).enumerate() {
+                assert_eq!(
+                    x.to_bits(),
+                    y.to_bits(),
+                    "{ways} wide: dy[{k}] is {y:?}, the oracle {x:?}"
+                );
+            }
+        }
+        force_split(None);
+    }
+}
+
 /// The fewest pool dispatches any of a few steady calls of `path` made with
 /// its calls forced `ways` wide (the counter is process-wide and other tests
 /// split too).

@@ -90,6 +90,13 @@
 # untyped here because they are defined later). The in-place build uses them
 # to compile the term into the fold's own pass (scan_fused.jl); the fold itself
 # never reads them.
+#
+# `kstride` / `lstride`: when the slots are one affine box, slot `k` of lane `l`
+# is `slots[1] + (l-1)·lstride + (k-1)·kstride`; `kstride == 0` when they are
+# not. A scan along a slow axis (a column scan over levels with the columns
+# fastest) has `kstride > 1`, and walking it lane by lane strides through
+# memory; `_scan_lanes_strided!` walks it level by level instead when the
+# lanes are contiguous.
 struct _ScanFold
     slots::Vector{Int}
     len::Int
@@ -97,9 +104,28 @@ struct _ScanFold
     zerobar::Float64
     inclusive::Bool
     terms::Vector{Any}
+    lstride::Int
+    kstride::Int
+end
+function _ScanFold(slots::Vector{Int}, len::Int, oplus::Symbol, zerobar::Float64,
+                   inclusive::Bool, terms::Vector{Any})
+    ls, ks = _scan_strides(slots, len)
+    return _ScanFold(slots, len, oplus, zerobar, inclusive, terms, ls, ks)
 end
 _ScanFold(slots::Vector{Int}, len::Int, oplus::Symbol, zerobar::Float64,
           inclusive::Bool) = _ScanFold(slots, len, oplus, zerobar, inclusive, Any[])
+
+function _scan_strides(slots::Vector{Int}, len::Int)
+    (len >= 2 && !isempty(slots)) || return (0, 0)
+    nl = div(length(slots), len)
+    ks = slots[2] - slots[1]
+    ls = nl >= 2 ? slots[len + 1] - slots[1] : 0
+    @inbounds for l in 1:nl, k in 1:len
+        slots[(l - 1) * len + k] == slots[1] + (l - 1) * ls + (k - 1) * ks ||
+            return (0, 0)
+    end
+    return (ls, ks)
+end
 
 # Apply every prefix fold of this build, in place over `du`. Runs AFTER the
 # kernel section, so each fold reads back the per-cell terms its own term
@@ -112,6 +138,11 @@ _ScanFold(slots::Vector{Int}, len::Int, oplus::Symbol, zerobar::Float64,
     end
     return nothing
 end
+
+# A level's folds as a plain list (the output-time observed program's levels),
+# which carry no fused scans: the folds alone.
+_apply_scan_folds!(du, u, p, t, folds::AbstractVector{_ScanFold}) =
+    _apply_scan_folds!(du, folds)
 
 # Fold lanes `l1:l2` of `S` (all of them by default); lanes are independent.
 function _apply_scan_fold!(du, S::_ScanFold, l1::Int = 1,
@@ -139,6 +170,12 @@ function _scan_lanes!(du, S::_ScanFold, combine::F, l1::Int, l2::Int) where {F}
     len = S.len
     z = S.zerobar
     len >= 1 || return nothing
+    # A strided scan whose running value is stored exactly by `du` (the value
+    # type ⊕ yields is `du`'s own) runs level by level.
+    if S.lstride == 1 && abs(S.kstride) >= l2 - l1 + 1 && l2 > l1 &&
+       typeof(combine(z, zero(eltype(du)))) === eltype(du)
+        return _scan_lanes_strided!(du, S, combine, l1, l2)
+    end
     @inbounds for l in l1:l2
         base = (l - 1) * len
         if S.inclusive
@@ -167,3 +204,67 @@ function _scan_lanes!(du, S::_ScanFold, combine::F, l1::Int, l2::Int) where {F}
     end
     return nothing
 end
+
+# `_scan_lanes!` over lanes `l1:l2` of a fold whose lanes are the fast axis
+# (`lstride == 1`) and whose levels lie `kstride` apart (negative for a reverse
+# scan, whose lanes run down the axis), level by level: one
+# level's lanes are contiguous independent cells, and the level folded before it is past
+# their span, so the loop over them carries no dependence and may vectorize
+# across cells. Each lane's running value is kept in its own slot instead of a
+# local, which `du` stores exactly (the caller checks the value type), so
+# every lane folds the same values in the same order:
+#   1. inclusive in place, `du[s_k] = du[s_{k-1}] ⊕ du[s_k]` from `0̄ ⊕ du[s_1]`,
+#      which is `_scan_lanes!`'s inclusive `acc` at every cell;
+#   2. a strict fold then shifts it one level up and puts 0̄ at the first, since
+#      its cell `k` holds the inclusive value of cell `k-1`. The last cell's
+#      term, which a strict fold reads and discards, is overwritten here too.
+function _scan_lanes_strided!(du, S::_ScanFold, combine::F, l1::Int, l2::Int) where {F}
+    lo, hi = _scan_strided_extent(S, l1, l2)
+    v, off = _scan_dense(du, lo, hi)
+    _scan_strided_run!(v, S.slots[1] - off, S.kstride, S.len, S.zerobar, S.inclusive,
+                       combine, l1, l2)
+    return nothing
+end
+
+# The least and greatest slot lanes `l1:l2` of `S` touch: the extremes over the
+# corners (first or last lane, first or last level), since the level stride is
+# negative for a reverse scan.
+function _scan_strided_extent(S::_ScanFold, l1::Int, l2::Int)
+    a = S.slots[1] + (l1 - 1) * S.lstride
+    b = S.slots[1] + (l2 - 1) * S.lstride
+    d = (S.len - 1) * S.kstride
+    return (min(a, b, a + d, b + d), max(a, b, a + d, b + d))
+end
+
+function _scan_strided_run!(du, s1::Int, ks::Int, len::Int, z::Float64,
+                            inclusive::Bool, combine::F, l1::Int, l2::Int) where {F}
+    a = s1 + l1 - 1
+    b = s1 + l2 - 1
+    @inbounds begin
+        for s in a:b
+            du[s] = combine(z, du[s])
+        end
+        for k in 2:len
+            o = (k - 1) * ks
+            @simd ivdep for s in (a + o):(b + o)
+                du[s] = combine(du[s - ks], du[s])
+            end
+        end
+        if !inclusive
+            for k in len:-1:2
+                o = (k - 1) * ks
+                @simd ivdep for s in (a + o):(b + o)
+                    du[s] = du[s - ks]
+                end
+            end
+            for s in a:b
+                du[s] = z
+            end
+        end
+    end
+    return nothing
+end
+
+# The plain vector `du`'s slots `lo:hi` live in, and the offset to subtract
+# (the two-buffer view's method is with it, in build.jl).
+_scan_dense(du, lo::Int, hi::Int) = (du, 0)

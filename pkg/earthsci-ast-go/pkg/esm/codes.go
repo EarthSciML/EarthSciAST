@@ -305,9 +305,7 @@ const (
 )
 
 // --- Diagnostic codes: structural validation, per ESM Libraries Spec Section
-// 3.4. Moved here verbatim from validate.go, where this block used to be
-// declared; the names and values are unchanged and are pinned by
-// tests/invalid/expected_errors.json. ---
+// 3.4. The names and values are pinned by tests/invalid/expected_errors.json. ---
 const (
 	ErrorEquationCountMismatch = "equation_count_mismatch"
 	ErrorUndefinedVariable     = "undefined_variable"
@@ -322,8 +320,7 @@ const (
 	// PARAMETER. From esm 1.0.0 events affect unknowns only: a parameter that
 	// changes during a run carries its own `update` block (esm-spec §5.4), so
 	// there is no `discrete_parameters` list to be missing from and the write is
-	// wrong outright rather than wrong-unless-declared. It replaces both
-	// `invalid_discrete_param` and `undeclared_discrete_parameter`.
+	// wrong outright rather than wrong-unless-declared.
 	ErrorEventAffectsParameter = "event_affects_parameter"
 	// ErrorEquationDefinesParameter is raised when an equation's left-hand side
 	// names a PARAMETER — bare, indexed, inside a `faq`, or through a scoped
@@ -393,12 +390,10 @@ const (
 	// it does not invalidate the document.
 	CodeDuplicateReactionSpecies = "duplicate_reaction_species"
 
-	// A data source entry still requires `kind` and `source.url_template`. The
-	// three per-variable codes that used to sit beside these are gone with
-	// `DataLoader.variables`: from esm 1.0.0 a source declares no variables, and
-	// what used to be checked on a loader variable (file_variable, units) is
-	// checked on the consuming PARAMETER instead -- by the schema, since both are
-	// required there.
+	// A data source entry requires `kind` and `source.url_template`. A source
+	// declares no variables; the file variable and units are checked on the
+	// consuming PARAMETER instead -- by the schema, since both are required
+	// there.
 	CodeMissingDataSourceKind        = "missing_data_source_kind"
 	CodeMissingDataSourceURLTemplate = "missing_data_source_url_template"
 
@@ -555,9 +550,9 @@ const (
 // simulate, and the §9.6.6 code table is cross-language uniform.
 
 // --- Spec enum literal: ModelVariable.Type (esm-spec §6.3). esm 1.0.0 declares
-// exactly TWO. `state`, `observed`, `brownian` and `discrete` are GONE as
-// declared types: a site that used to branch on one of them calls the
-// classification functions in classify.go instead (esm-spec §6.3.1). ---
+// exactly TWO. Whether an unknown is a state, an observed, or an algebraic
+// unknown, and whether a parameter is Brownian or discrete, is DERIVED: call
+// the classification functions in classify.go (esm-spec §6.3.1). ---
 const (
 	// VarTypeUnknown is a quantity the solver solves for; its behaviour is
 	// stated by the model's `equations` and nowhere else.

@@ -1384,9 +1384,8 @@ def expand_document(loaded: Any) -> Any:
     producing the Option-A image: every reference replaced by its expansion
     (pure substitution to the acyclic fixpoint, §9.6.4 rule 2) and every
     per-component ``expression_templates`` block stripped. Deterministic — the
-    DAG is acyclic and substitution confluent, so ``expand_document(load(f))``
-    is structurally equal to the pre-0.9.0 expanded form (the ``expanded*.esm``
-    conformance oracle, §9.6.7). Non-destructive: ``loaded`` is deep copied
+    DAG is acyclic and substitution confluent, so the result is structurally
+    equal to the ``expanded*.esm`` conformance oracle (§9.6.7). Non-destructive: ``loaded`` is deep copied
     first."""
     if not _is_object(loaded):
         return loaded

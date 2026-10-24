@@ -26,10 +26,9 @@ use thiserror::Error;
 /// Exponents are RATIONAL, not integer: `1/s^0.5` — the intensity of an SDE
 /// noise term — is a legitimate unit that appears in the shared corpus
 /// (`tests/fixtures/sde/*.esm`), and `sqrt` halves whatever it is given. An
-/// integer exponent could represent neither, so `sqrt(m^3)` used to be reported
-/// as "not representable" and `s^0.5` failed to parse outright — which, now that
-/// a dimensional mismatch is a HARD ERROR, would falsely reject legitimate
-/// files.
+/// integer exponent could represent neither `sqrt(m^3)` nor `s^0.5`, and since
+/// a dimensional mismatch is a hard error, legitimate files would be
+/// rejected.
 ///
 /// Always stored in lowest terms with a positive denominator, so `PartialEq`
 /// is exact dimensional equality (½ and 2/4 compare equal) and `HashMap` lookups
@@ -1874,6 +1873,12 @@ pub struct UnitParseFailure {
 /// This is the single-outcome view. Validation uses
 /// [`check_equation_dimensions`], which reports EVERY finding and separates
 /// provable mismatches from undeterminable dimensions.
+///
+/// A time derivative `D(x)/Dt` whose `t` declares no units has an
+/// undeterminable left-hand side (esm-spec §4.8.4), so the full comparison is
+/// skipped and the weaker rule applies: if no time unit can reconcile the two
+/// sides, the result is [`UnitError::DimensionMismatch`]; if one can, it is
+/// [`UnitError::UnknownUnit`] ("skipped"), not `Ok(())`.
 pub fn validate_equation_dimensions(
     eq: &Equation,
     env: &HashMap<String, Unit>,

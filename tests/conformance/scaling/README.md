@@ -96,29 +96,40 @@ between binaries built the same way. The deterministic gates do not need it.
 | `column_search` | a per-column count of levels above a threshold used as a subscript, `u[c, max(1, cnt[c])]` (the YSU `kpbl` shape), 20 levels | cells | 10^2 .. 10^6 |
 | `column_sum` | a rank-0 column sum nested in a 3-D `faq` body, `sum_l u[i,j,l]`, 20 levels | cells | 10^2 .. 10^6 |
 | `join_keyed` | a value-equality `join` on computed keys evaluated at build, about four matching rows per cell, feeding the right-hand side | cells (= rows) | 10^2 .. 10^6 |
+| `makearray_scan` | a two-region `makearray` placing a column prefix scan (`filter j < k`) on interfaces 1..20 and the column total on interface 21, feeding a flux divergence `-0.001 (F[c,l+1] - F[c,l]) / dz[l]`, non-uniform `dz`, 20 levels (issue #533) | cells | 10^2 .. 10^6 |
+| `suffix_scan` | the to-top mirror of `makearray_scan`: an inclusive reverse scan (`filter j >= k`) on interfaces 1..20 and 0 on interface 21, feeding `-0.001 (B[c,l] - B[c,l+1]) / dz[l]`; a reverse scan folds from the top, so it is O(levels) per column too | cells | 10^2 .. 10^6 |
+| `ragged_contraction` | a neighbour sum over a ragged range bounded through an `offsets` factor (5, 6 or 7 neighbours per cell, a padded inline neighbour table), inside a negation, over a permuted periodic mesh (the MPAS divergence shape, issue #534) | cells | 10^2 .. 10^6 |
+| `makearray_nested_sum` | a rank-0 sum nested in an array `faq` that is a `makearray` region value, `[0, nested]` over one box, `sum_j ((0.001 (i + 2j)) u[j]) u[i]` (the EarthSciASTDiff contracted-band shape) | cells | 10^2 .. 3162 |
 
 Grid families round the side (`round(N^(1/rank))`), so `n_cells` in a result
-is the actual count and `n` is the nominal ladder value. `source_receptor` and
-`regrid` stop at 3162 because their work or their declared dense intermediates
-grow as N^2; `scalar_chemistry` stops at 10^5 because the document itself
+is the actual count and `n` is the nominal ladder value. `source_receptor`,
+`makearray_nested_sum` and `regrid` stop at 3162 because their work or their
+declared dense intermediates grow as N^2; `scalar_chemistry` stops at 10^5 because the document itself
 grows with N, which is also why the flat-code-size gate does not apply to it
 (`gate_exclusions` in the manifest).
 
 No array a hand loop reads densely is uniform in its document:
-`source_receptor`'s `K` and `prefix_scan`'s `dz` are defined by formulas of
-their indices, so a compiler must materialize them and read them on every
+`source_receptor`'s `K` and the `dz` of `prefix_scan`, `makearray_scan` and `suffix_scan` are
+defined by formulas of their indices, so a compiler must materialize them and read them on every
 call, as it would a loaded array, rather than serve every element from one
 value. (Rust's tape computes both in its build-once section and gathers them
 per call.)
 
-Two hand loops do less work than a literal reading of their document, because
+Five hand loops do less work than a literal reading of their document, because
 a person writing the loop would: `column_sum`'s computes each column's sum once
 and applies it to the column's 20 cells (the sum does not depend on the output
-level, and the fold order over levels is the document's), and `join_keyed`'s
+level, and the fold order over levels is the document's); `join_keyed`'s
 does the join once at setup, bucketing the rows by key, and reads the sums on
-every call (the join reads no state, so it is build-time work). A compiler
-that recomputes either per cell or per call is slower than the reference by
-that work, which is the point.
+every call (the join reads no state, so it is build-time work);
+`makearray_scan`'s computes each column's scan as one running sum, which is
+both regions at once (each interface value, and the total, is the same left
+fold the document writes), O(levels) per column where a literal reading of the
+filter is O(levels^2); `suffix_scan`'s does the same with one running sum
+swept from the top down, the order a reverse scan folds in; and `ragged_contraction`'s reads the neighbour table into
+CSR form at setup and runs each row over its own length, never over the padded
+width. A compiler that does any of this work per cell or per call, or over the
+padded or triangular box, is slower than the reference by that work, which is
+the point.
 
 ## The measured state
 
@@ -137,9 +148,10 @@ Canonical order (bindings map their own state layout onto it by element name):
 |---|---|
 | `stencil_*`, `transport_3d` | the one state variable, row-major (last axis fastest) |
 | `chemistry_grid` | species in the mechanism's declaration order (the vendored file's order), each row-major over (lon, lat) |
-| `prefix_scan`, `unstructured_gather`, `gather_index`, `join_keyed` | `u[1..N]` |
-| `column_search`, `column_sum` | the one state variable, column-major (first axis fastest, levels slowest): the layout both bindings' native compilers give it, so the hand loops read the layout native reads |
+| `prefix_scan`, `unstructured_gather`, `gather_index`, `join_keyed`, `ragged_contraction` | `u[1..N]` |
+| `column_search`, `column_sum`, `makearray_scan`, `suffix_scan` | the one state variable, column-major (first axis fastest, levels slowest): the layout both bindings' native compilers give it, so the hand loops read the layout native reads |
 | `source_receptor` | `c[1..N]`, then `e[1..N]` |
+| `makearray_nested_sum` | `u[1..N]`, then `J[1..N]` |
 | `regrid` | `F_src[1..N]`, then `F_tgt[1..N]` |
 | `scalar_chemistry` | box-major: box 1's 20 species in declaration order, then box 2's, ... |
 
@@ -247,7 +259,7 @@ Thresholds live in `manifest.json` under `gates`.
 | `no_steady_alloc` | deterministic | `allocs_per_call` is 0 (null on a built document fails, unless the result declares it unmeasurable). A ledger entry for it states `max_bytes_per_call`, the most it excuses, and a measure past that bound is red (`EXCEEDS`) |
 | `hand_loop_agrees` | deterministic | `hand_loop_max_abs_diff <= 1e-12 * max(1, dy_max_abs)`, so a wrong reference cannot make a slow compiler look fast. Checked against the interpreter when native refused |
 | `build_slope` | timing | `(build_s(Nmax) - build_s(Nmin)) / (n_states(Nmax) - n_states(Nmin))` under 20 ns, with `build_interleaved_diff_s` in place of the difference when the larger end has it (below), plus the document-size and dense-array allowances below, over the smallest and largest N that built with at most 10^6 cells |
-| `speed` | timing | `steady_rhs_s / hand_loop_s <= 1.25` in each result file, from 10^4 states up (below that a call takes microseconds and the ratio measures timer noise). Two families stop short of 10^4 states and lower it to 2000 through `gate_overrides`: `source_receptor`, whose work is N^2, and `regrid`, whose ladder stops at 6324 states and whose call at 2000 states is already a few microseconds. In a threaded file, a result below 10^4 cells is checked against native's own serial call instead (below) |
+| `speed` | timing | `steady_rhs_s / hand_loop_s <= 1.25` in each result file, from 10^4 states up (below that a call takes microseconds and the ratio measures timer noise). Three families stop short of 10^4 states and lower it to 2000 through `gate_overrides`: `source_receptor` and `makearray_nested_sum`, whose work is N^2, and `regrid`, whose ladder stops at 6324 states and whose call at 2000 states is already a few microseconds. In a threaded file, a result below 10^4 cells is checked against native's own serial call instead (below) |
 
 ### The build slope's two ends
 

@@ -3339,7 +3339,7 @@ def evaluate_rhs(
     column-major element names (``u[1]``, ``u[2,3]``, ...).
 
     This is the single-shot RHS hook the cross-language PDE-simulation
-    conformance tier (bead ess-fmw) uses to check that Julia, Python, and Rust
+    conformance tier uses to check that Julia, Python, and Rust
     agree on the *discretized RHS* independently of any integrator. ``state``
     supplies the value of every state element (same keying as
     ``initial_conditions`` in :func:`simulate`).

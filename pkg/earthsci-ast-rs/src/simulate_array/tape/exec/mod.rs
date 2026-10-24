@@ -669,7 +669,7 @@ fn same_params(last: &[f64], params: &[f64]) -> bool {
 fn dy_zero_ranges(prog: &TapeProgram, n: usize) -> Vec<(usize, usize)> {
     let cont = prog.section_range(Cadence::Continuous);
     let every_call = cont.start..cont.end.min(cont.start + prog.n_rhs as usize);
-    let conditional = conditional_mask(prog);
+    let conditional = prog.guarded_positions();
     let mut written = vec![false; n];
     for pc in every_call {
         if conditional[pc] {
@@ -739,24 +739,6 @@ fn dy_zero_ranges(prog: &TapeProgram, n: usize) -> Vec<(usize, usize)> {
     ranges
 }
 
-/// Per instruction: whether it sits in a region that may not run on a call
-/// (a `JmpIfZero` branch or a sweep body).
-fn conditional_mask(prog: &TapeProgram) -> Vec<bool> {
-    let mut conditional = vec![false; prog.instrs.len()];
-    for (pc, i) in prog.instrs.iter().enumerate() {
-        let len = match i {
-            Instr::JmpIfZero {
-                n_true, n_false, ..
-            } => (*n_true + *n_false) as usize,
-            Instr::Sweep { spec } => prog.sweeps[*spec as usize].body_len as usize,
-            _ => 0,
-        };
-        let end = (pc + 1 + len).min(conditional.len());
-        conditional[pc + 1..end].fill(true);
-    }
-    conditional
-}
-
 /// Per slot, the `dy` offset a fused group writes it to directly, or
 /// `usize::MAX` for the slab: a fused output whose only reader is one
 /// whole-box `DyWrite` onto a CONTIGUOUS run of a `dy` of `n` elements, both
@@ -777,7 +759,7 @@ fn dy_homes(prog: &TapeProgram, n: usize) -> Vec<usize> {
         });
     }
     let cont = prog.section_range(Cadence::Continuous);
-    let conditional = conditional_mask(prog);
+    let conditional = prog.guarded_positions();
     for pc in cont.clone() {
         let Instr::DyWrite { write } = &prog.instrs[pc] else {
             continue;

@@ -238,6 +238,32 @@ const _CHAIN_ICS = Dict("psi[1]" => 1.0, "psi[2]" => 2.0, "psi[3]" => 3.0)
             bad, IdDict{ESM.OpExpr,ESM.ASTExpr}())
     end
 
+    @testset "_hoist_operand_walk is DAG-safe (the filtered-operand lift)" begin
+        # The build lifts a filtered array aggregate reached through elementwise
+        # arithmetic to its own observed, walking EVERY plain equation's body.
+        # Per-path, that walk alone took the depth-32 array chain above past
+        # its bound. The leaf here is such an operand, so the lift fires and
+        # the rewrite must keep the DAG shared on the way out.
+        scan = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["k"],
+            ranges=Dict{String,Any}("k" => ESM.IndexSetRef("lev"),
+                                    "j" => ESM.IndexSetRef("lev")),
+            expr_body=_op("index", _v("u"), _v("j")), reduce="+",
+            filter=_op("<", _v("j"), _v("k")))
+        vars = Dict{String,ModelVariable}(
+            "u" => ModelVariable(UnknownVariable; shape=["lev"]),
+            "F" => ModelVariable(UnknownVariable; shape=["lev"]))
+        model = ESM.Model(vars, ESM.Equation[
+            ESM.Equation(_v("F"), _doubling_dag(_op("*", _n(0.5), scan), 34))])
+        isets = Dict("lev" => ESM.IndexSet("interval"; size=3))
+        t = @elapsed m, _isets, owner = ESM._hoist_nested_reductions(model, isets)
+        @test t < 10                    # pre-fix: 2^34 visits
+        @test length(m.equations) == 2  # one lift, shared by every path
+        @test collect(values(owner)) == ["F"]
+        rhs = m.equations[1].rhs::ESM.OpExpr
+        @test rhs.args[1] === rhs.args[2]
+        @test m.equations[2].rhs === scan
+    end
+
     @testset "_count_obs_refs! path-multiplicity DP on a shared DAG" begin
         names = Set(["g"])
         # A depth-20 doubling DAG: totals must equal the PER-PATH enumeration

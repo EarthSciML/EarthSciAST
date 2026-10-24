@@ -33,6 +33,9 @@ impl Out {
 /// Columns per buffer block in the column families' loops.
 const COLUMN_BLOCK: usize = 1024;
 
+/// Rows per block in `MakearrayNestedSum`'s loop.
+const NESTED_SUM_ROWS: usize = 16;
+
 /// One family's reference loop, with the data it needs prepared at build.
 pub enum HandLoop {
     /// Rank-`rank` diffusion on a `side^rank` grid, zero ghost.
@@ -83,6 +86,26 @@ pub enum HandLoop {
     ColumnSum { ncol: usize, nlev: usize },
     /// `du[i] = -0.1 u[i] + 0.001 agg[i]`, the join's sums computed at setup.
     JoinKeyed { agg: Vec<f64> },
+    /// Per column: the interface field `F[k] = sum_{j < k} u[c, j] dz[j]`
+    /// (and the total at the top interface) as one running sum, then
+    /// `du[c, l] = -0.001 (F[l+1] - F[l]) / dz[l]`; column-fastest state, a
+    /// block of columns scanned level by level through a buffer.
+    MakearrayScan { ncol: usize, dz: Vec<f64> },
+    /// Per column: `B[k] = sum_{j >= k} u[c, j] dz[j]` as one running sum
+    /// swept from the top down (a reverse scan folds from the top), then
+    /// `du[c, l] = -0.001 (B[l] - B[l+1]) / dz[l]`; column-fastest state, a
+    /// block of columns at a time.
+    SuffixScan { ncol: usize, dz: Vec<f64> },
+    /// `du[c] = -(sum_k kappa (u[c] - u[nbr[k]]))` over each cell's own
+    /// neighbours, in CSR form: cell `c`'s are `nbr[start[c]..start[c + 1]]`.
+    Ragged {
+        kappa: f64,
+        start: Vec<u32>,
+        nbr: Vec<u32>,
+    },
+    /// `du[i] = -kd u[i]`, `dJ[i] = sum_j ((0.001 (i + 2 j)) u[j]) u[i]`
+    /// (1-based `i`, `j`), the makearray's covering region.
+    MakearrayNestedSum { n: usize, kd: f64 },
 }
 
 impl HandLoop {
@@ -99,6 +122,9 @@ impl HandLoop {
             HandLoop::GatherIndex { cls, .. } => cls.len(),
             HandLoop::ColumnSearch { ncol, .. } | HandLoop::ColumnSum { ncol, .. } => *ncol,
             HandLoop::JoinKeyed { agg } => agg.len(),
+            HandLoop::MakearrayScan { ncol, .. } | HandLoop::SuffixScan { ncol, .. } => *ncol,
+            HandLoop::Ragged { start, .. } => start.len() - 1,
+            HandLoop::MakearrayNestedSum { n, .. } => *n,
         }
     }
 
@@ -252,6 +278,76 @@ impl HandLoop {
             HandLoop::JoinKeyed { agg } => {
                 for i in lo..hi {
                     du.set(i, -0.1 * u[i] + 0.001 * agg[i]);
+                }
+            }
+            HandLoop::MakearrayScan { ncol, dz } => {
+                let nc = *ncol;
+                let mut acc = [0.0f64; COLUMN_BLOCK];
+                for q0 in (lo..hi).step_by(COLUMN_BLOCK) {
+                    let q1 = (q0 + COLUMN_BLOCK).min(hi);
+                    let acc = &mut acc[..q1 - q0];
+                    acc.fill(0.0);
+                    for (l, &d) in dz.iter().enumerate() {
+                        let row = &u[l * nc + q0..l * nc + q1];
+                        for (b, (a, &v)) in acc.iter_mut().zip(row).enumerate() {
+                            let next = *a + v * d;
+                            du.set(l * nc + q0 + b, -0.001 * (next - *a) / d);
+                            *a = next;
+                        }
+                    }
+                }
+            }
+            HandLoop::SuffixScan { ncol, dz } => {
+                let nc = *ncol;
+                let mut acc = [0.0f64; COLUMN_BLOCK];
+                for q0 in (lo..hi).step_by(COLUMN_BLOCK) {
+                    let q1 = (q0 + COLUMN_BLOCK).min(hi);
+                    let acc = &mut acc[..q1 - q0];
+                    acc.fill(0.0);
+                    for (l, &d) in dz.iter().enumerate().rev() {
+                        let row = &u[l * nc + q0..l * nc + q1];
+                        for (b, (a, &v)) in acc.iter_mut().zip(row).enumerate() {
+                            let next = *a + v * d;
+                            du.set(l * nc + q0 + b, -0.001 * (next - *a) / d);
+                            *a = next;
+                        }
+                    }
+                }
+            }
+            HandLoop::Ragged { kappa, start, nbr } => {
+                for c in lo..hi {
+                    let uc = u[c];
+                    let mut acc = 0.0f64;
+                    for &m in &nbr[start[c] as usize..start[c + 1] as usize] {
+                        acc += kappa * (uc - u[m as usize]);
+                    }
+                    du.set(c, -acc);
+                }
+            }
+            HandLoop::MakearrayNestedSum { n, kd } => {
+                // A block of rows at a time, each row's sum in its own
+                // accumulator on the stack: the rows advance together over j,
+                // each still from 0 in j order, so the inner loop is not one
+                // dependency chain, and nothing is allocated.
+                let n = *n;
+                let (uu, _) = u.split_at(n);
+                let mut b0 = lo;
+                while b0 < hi {
+                    let b1 = (b0 + NESTED_SUM_ROWS).min(hi);
+                    let mut acc = [0.0f64; NESTED_SUM_ROWS];
+                    let acc = &mut acc[..b1 - b0];
+                    let ub = &uu[b0..b1];
+                    for (j0, uj) in uu.iter().enumerate() {
+                        let jj = 2.0 * (j0 + 1) as f64;
+                        for (r, (a, ui)) in acc.iter_mut().zip(ub).enumerate() {
+                            *a += ((0.001 * ((b0 + r + 1) as f64 + jj)) * uj) * ui;
+                        }
+                    }
+                    for (r, (a, ui)) in acc.iter().zip(ub).enumerate() {
+                        du.set(n + b0 + r, *a);
+                        du.set(b0 + r, -kd * ui);
+                    }
+                    b0 = b1;
                 }
             }
             HandLoop::ScalarChemistry { .. } => {

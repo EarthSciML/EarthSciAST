@@ -357,9 +357,8 @@ export function productMatrix(system: ReactionSystem): number[][] {
 
 /**
  * @deprecated Spelling alias for {@link deriveOdes}, kept for one minor per
- * API_SPEC.md §10. `deriveODEs` violated §2/§2.1: the canonical name is
- * `derive_odes`, whose TypeScript transliteration is `deriveOdes`, and this
- * binding already spelled the siblings `odeStates` / `isOdeState` that way.
- * Removed at the next major.
+ * API_SPEC.md §10. The canonical name is `derive_odes`, whose TypeScript
+ * transliteration (API_SPEC §2/§2.1) is `deriveOdes`, matching the siblings
+ * `odeStates` / `isOdeState`. Removed at the next major.
  */
 export const deriveODEs = deriveOdes

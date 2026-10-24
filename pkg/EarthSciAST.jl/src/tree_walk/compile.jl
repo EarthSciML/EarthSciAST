@@ -42,6 +42,7 @@ const _NK_LOOPVAR       = UInt8(10)  # read the current value of an enclosing ru
 const _NK_CONTRACTION_LOOP = UInt8(11)  # compile-once ⊕-reduction: iterate a static range, fold ONE body per iteration (ess-runtime-contraction)
 const _NK_STATE_GATHER = UInt8(12)  # read u at a slot computed at eval time from loop-var-dependent subscripts (ess-runtime-contraction)
 const _NK_RECUR_GATHER = UInt8(13)  # a recurrence's causal self-read: a PUBLISHED cell of its own buffer, or a fault (recurrence_sweep.jl)
+const _NK_RAGGED_LOOP  = UInt8(14)  # ⊕-reduction over a range whose bounds are evaluated per call (a ragged `offsets` bound), seeded from 0̄
 
 # The ONE compiled IR node — scalar spines and access-kernel spines are both trees
 # of these. `kind` selects which fields are live. The catch-all `payload::Any` slot
@@ -168,6 +169,34 @@ struct _ContractLoopBuild
     lo::Int
     hi::Int
     step::Int
+    oplus::Symbol
+    zerobar::Float64
+end
+
+# A reduction over ONE contracted index whose bounds are themselves nodes,
+# evaluated on every call: a ragged range `[1, index(offsets, i)]` read inside an
+# array equation whose output index `i` is a loop counter of the whole-array
+# contraction tier (`_resolve_index_of_faq`'s symbolic path). The node is
+# `_NK_RAGGED_LOOP` with `children = [body, lo, hi]`; `step` is a build constant.
+#
+# The fold is the one the per-cell build writes for the same gather,
+# `_combine_with_reducer` over the expanded terms: seeded from 0̄, the terms
+# folded into it left to right (`acc = acc ⊕ term`), so no term gives 0̄ and an
+# all `-0.0` row under `+` gives `+0.0` (esm-spec §4.3.1). `reach` estimates the
+# iterations per call for the threading verdict's work count
+# (`_node_loop_reach`).
+struct _RaggedLoop
+    ref::Base.RefValue{Int}
+    step::Int
+    reach::Int
+end
+
+# Build→compile side channel for `_NK_RAGGED_LOOP`, carried on a `__ragged_loop`
+# marker op's `.value`; the marker's args are `[body, lo, hi]`.
+struct _RaggedLoopBuild
+    ref::Base.RefValue{Int}
+    step::Int
+    reach::Int
     oplus::Symbol
     zerobar::Float64
 end
@@ -593,6 +622,12 @@ function _compile_op(expr::OpExpr, var_map, param_syms, reg_funcs, memo::_MaybeM
         return _mknode(kind=_NK_CONTRACTION_LOOP, op=lb.oplus, literal=lb.zerobar,
                        payload=_ContractLoop(lb.ref, lb.lo, lb.hi, lb.step),
                        children=_Node[body])
+    end
+    if op_sym === :__ragged_loop
+        lb = expr.value::_RaggedLoopBuild
+        kids = _Node[_compile(a, var_map, param_syms, reg_funcs, memo) for a in expr.args]
+        return _mknode(kind=_NK_RAGGED_LOOP, op=lb.oplus, literal=lb.zerobar,
+                       payload=_RaggedLoop(lb.ref, lb.step, lb.reach), children=kids)
     end
     # Runtime state gather (ess-runtime-contraction): a state read at a
     # loop-var-dependent slot. The subscript `args` compile as children (a loop
@@ -1737,11 +1772,14 @@ end
         return _eval_contraction(n, u, p, t, T)
     elseif k === _NK_LOOPVAR
         # Current value of the enclosing runtime contraction loop counter
-        # (ess-runtime-contraction). Always an INTEGER (a contracted index), so
-        # `T(::Int)` is a constant of the value type — zero derivative under AD.
-        return T((n.payload::Base.RefValue{Int})[])
+        # (ess-runtime-contraction). Always an INTEGER (a contracted index),
+        # read as a `Float64` like the literal the unroll puts in its place, so
+        # arithmetic on it differentiates as the unroll's does.
+        return Float64((n.payload::Base.RefValue{Int})[])
     elseif k === _NK_CONTRACTION_LOOP
         return _eval_contraction_loop(n, u, p, t, T)
+    elseif k === _NK_RAGGED_LOOP
+        return _eval_ragged_loop(n, u, p, t, T)
     elseif k === _NK_STATE_GATHER
         return _eval_state_gather(n, u, p, t, T)
     elseif k === _NK_RECUR_GATHER
@@ -1828,18 +1866,29 @@ end
 # iteration so the ONE compiled `body` (whose `_NK_LOOPVAR` leaves read that ref)
 # yields term(k); folds with ⊕ seeded from 0̄ (`n.literal`). The iteration order is
 # `_expand_int_range`'s order — the SAME order the unroll path (`_foreach_aggregate_term`
-# → `_combine_with_reducer`) accumulates in — so a single-index loop is bit-identical
-# to the unrolled fold (modulo the leading `0̄ ⊕ ·`, itself an identity for all four
-# semirings). Nested loops (multi-index) group the sum by the outer index, a
+# → `_combine_with_reducer`) accumulates in, from the same 0̄ seed (esm-spec §4.3.1) —
+# so a single-index loop is bit-identical to the unrolled fold. Nested loops
+# (multi-index) group the sum by the outer index, a
 # reassociation within ~length·eps of the flat unroll. Zero per-call allocation: the
 # ref is built once at compile time; the fold is stack-only and type-stable in `T`.
+#
+# The seed enters the first step as the node's `Float64`, not converted to `T`,
+# as the emitted loop has it (`_cg_contraction_loop`): `seed ⊕ term₁` leaves a
+# `Dual` term's partials as they are, where `T(seed) ⊕ term₁` adds the seed's
+# zero partials to them and turns a `-0.0` partial into `0.0`. The first step is
+# taken before the loop so the accumulator is a `T` throughout.
 function _eval_contraction_loop(n::_Node, u, p, t, ::Type{T}) where {T}
     spec = n.payload::_ContractLoop
     ref = spec.ref
     body = @inbounds n.children[1]
     op = n.op
-    s = T(n.literal)
     rng = spec.lo:spec.step:spec.hi
+    isempty(rng) && return T(n.literal)
+    ref[] = first(rng)
+    b1 = _eval_node(body, u, p, t, T)
+    s = op === :+ ? T(n.literal + b1) : op === :* ? T(n.literal * b1) :
+        op === :max ? T(max(n.literal, b1)) : T(min(n.literal, b1))
+    rng = (first(rng) + spec.step):spec.step:spec.hi
     if op === :+
         @inbounds for k in rng
             ref[] = k
@@ -1860,6 +1909,33 @@ function _eval_contraction_loop(n::_Node, u, p, t, ::Type{T}) where {T}
             ref[] = k
             s = min(s, _eval_node(body, u, p, t, T))
         end
+    end
+    return s
+end
+
+# `_RaggedLoop`'s fold (see there): the bounds are evaluated first, lower then
+# upper, then the terms in range order, folded into the `Float64` 0̄ (a row with
+# no terms is that 0̄, as the per-cell build's literal for it is).
+function _eval_ragged_loop(n::_Node, u, p, t, ::Type{T}) where {T}
+    spec = n.payload::_RaggedLoop
+    ref = spec.ref
+    ch = n.children
+    body = @inbounds ch[1]
+    lo = round(Int, _eval_node(@inbounds(ch[2]), u, p, t, T))
+    hi = round(Int, _eval_node(@inbounds(ch[3]), u, p, t, T))
+    rng = lo:spec.step:hi
+    isempty(rng) && return n.literal
+    op = n.op
+    z = n.literal
+    # The first step is `0̄ ⊕ term` with the `Float64` 0̄, which also fixes the
+    # accumulator's type for the loop.
+    ref[] = first(rng)
+    v = _eval_node(body, u, p, t, T)
+    s = op === :+ ? z + v : op === :* ? z * v : op === :max ? max(z, v) : min(z, v)
+    for k in Iterators.drop(rng, 1)
+        ref[] = k
+        v = _eval_node(body, u, p, t, T)
+        s = op === :+ ? s + v : op === :* ? s * v : op === :max ? max(s, v) : min(s, v)
     end
     return s
 end

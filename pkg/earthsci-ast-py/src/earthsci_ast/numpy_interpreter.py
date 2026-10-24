@@ -2454,9 +2454,9 @@ def _eval_faq(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
     """
     policy = _compiler.active_policy()
     if policy is None or not policy.strict:
-        return _eval_faq_dispatch(expr, ctx)
+        return _seed_sum_from_identity(expr, _eval_faq_dispatch(expr, ctx))
     try:
-        return _eval_faq_dispatch(expr, ctx)
+        return _seed_sum_from_identity(expr, _eval_faq_dispatch(expr, ctx))
     except _compiler.CompilerRefusedRuleError as refusal:
         if refusal.verified:
             raise
@@ -2466,6 +2466,28 @@ def _eval_faq(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
             # and the refusal below is a true statement about the compiler.
             _eval_faq_dispatch(expr, ctx)
         raise
+
+
+def _seed_sum_from_identity(expr: ExprNode, out: Any) -> Any:
+    """A ``+`` reduction's fold is seeded from 0̄ = +0.0 (esm-spec §4.3.1), so a
+    non-empty sum whose terms are all ``-0.0`` is ``+0.0``. Every tier folds
+    from the first admitted term instead; the two differ only in that case,
+    since ``+0.0 + t`` is ``t`` for every ``t`` but ``-0.0`` and a sum that
+    starts from ``+0.0`` never reaches ``-0.0``. So one ``+ 0.0`` per output cell,
+    which changes nothing but a ``-0.0``, turns any tier's result into the
+    0̄-seeded fold. A node that contracts nothing is a map, not a fold."""
+    if _resolve_semiring(expr)[0] != "+":
+        return out
+    if getattr(expr, "distinct", None) or getattr(expr, "key", None) is not None:
+        return out
+    outs = {s for s in (expr.output_idx or []) if isinstance(s, str)}
+    if not any(s not in outs for s in (expr.ranges or {})):
+        return out
+    if isinstance(out, np.ndarray):
+        return out + 0.0 if out.dtype.kind == "f" else out
+    if isinstance(out, float):
+        return out + 0.0
+    return out
 
 
 def _eval_faq_dispatch(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
@@ -2672,6 +2694,59 @@ def _eval_faq_dispatch(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
             filter_expr if (join_clauses or filter_expr is not None) else None,
         )
 
+    # A node nested in an enclosing whole-box evaluation whose body or filter
+    # reads an enclosing index symbol: that symbol is bound to an ARRAY over the
+    # enclosing box, and every tier below lays its own axes out from axis 0, so
+    # it would compare and gather the enclosing index against this node's own
+    # axes elementwise — the wrong window, silently. Only the tier that puts the
+    # enclosing box in front of this node's own axes may take it.
+    outer = _enclosing_array_refs(expr, ctx, raw_ranges)
+    if outer:
+        if not ragged_reduce:
+            nested = _eval_faq_reduce_nested(
+                expr,
+                ctx,
+                outer,
+                out_syms,
+                reduce_syms,
+                resolved,
+                raw_ranges,
+                reducer,
+                empty_zero,
+                filter_expr,
+            )
+            if nested is not None:
+                if policy is not None:
+                    policy.land("nested-reduce")
+                return nested
+        else:
+            _decline("nested-reduce", "a ragged range under an enclosing whole-box binding")
+        if ragged_reduce:
+            return _eval_faq_ragged(
+                expr,
+                ctx,
+                out_syms,
+                out_ranges_exp,
+                out_shape,
+                reduce_syms,
+                resolved,
+                reducer,
+                empty_zero,
+            )
+        return _eval_faq_scalar(
+            expr,
+            ctx,
+            out_syms,
+            out_ranges_exp,
+            out_shape,
+            reduce_syms,
+            resolved,
+            raw_ranges,
+            reducer,
+            empty_zero,
+            filter_expr,
+        )
+
     # Batched vectorized fast path for a fused geometry-leaf pure map — the planar
     # conservative-regrid narrow phase A_ij = polygon_intersection_area(src_i,
     # tgt_j). Evaluates the whole (join-admitted) candidate set in one kernel call
@@ -2721,6 +2796,28 @@ def _eval_faq_dispatch(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
             if policy is not None:
                 policy.land("prefix-scan")
             return scan
+        # An overlap gate drives enumeration (§5.5.6): the entries are built
+        # from its candidate pairs, never from the dense box the tiers below
+        # would mask, so it is the only whole-array tier an overlap-gated node
+        # reaches.
+        if overlap_gated:
+            driven = _eval_faq_overlap_driven(
+                expr,
+                ctx,
+                out_syms,
+                out_ranges_exp,
+                out_shape,
+                reduce_syms,
+                resolved,
+                raw_ranges,
+                reducer,
+                empty_zero,
+                filter_expr,
+            )
+            if driven is not None:
+                if policy is not None:
+                    policy.land("overlap-driven")
+                return driven
         # Cached constant-geometry OPERATOR path (#3): a join-gated sum_product
         # shaped like the regrid APPLY factors into a reusable weight operator
         # W_op (built once, cached on ctx.op_cache) applied to the current field
@@ -2816,13 +2913,23 @@ def _eval_faq_dispatch(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
         )
 
     if ragged_reduce:
-        if policy is not None:
-            policy.decline(
-                "dispatcher",
-                "a ragged contracted range: the bound depends on the enclosing output "
-                "index through its `offsets` factor, so there is no dense box to build "
-                "and no whole-box tier is attempted",
-            )
+        # No dense box exists (each output cell has its own term count), so the
+        # one whole-array tier lays the cells' terms end to end instead.
+        csr = _eval_faq_ragged_csr(
+            expr,
+            ctx,
+            out_syms,
+            out_ranges_exp,
+            out_shape,
+            reduce_syms,
+            resolved,
+            reducer,
+            empty_zero,
+        )
+        if csr is not None:
+            if policy is not None:
+                policy.land("ragged-csr")
+            return csr
         return _eval_faq_ragged(
             expr,
             ctx,
@@ -3010,6 +3117,459 @@ def _eval_faq_ragged(
             empty_zero,
         )
     return out
+
+
+# ---------------------------------------------------------------------------
+# Flat-entry tiers: the contractions that have no dense box. A ragged range
+# (§5.2) gives each output cell its own term count, and an overlap gate
+# (§5.5.6) admits only its candidate tuples, so neither can be one
+# ``out × reduce`` broadcast. Both are instead enumerated as a FLAT vector of
+# (output cell, contraction tuple) entries — grouped by output cell in C order,
+# each group in the per-cell walk's own term order — the body is evaluated once
+# over that vector, and the groups are ⊕-folded by :func:`_segmented_fold`.
+# ---------------------------------------------------------------------------
+
+
+def _segmented_fold(
+    reducer: str, vals: np.ndarray, counts: np.ndarray, empty_zero: float
+) -> np.ndarray:
+    """⊕-fold consecutive groups of ``vals``: group ``r`` is the next
+    ``counts[r]`` entries, folded left to right — the per-cell walk's
+    :func:`_reduce_step` chain exactly, element-wise through
+    :func:`_reduce_step_box`, so each group's result is bit-for-bit the per-cell
+    walk's. An empty group is the semiring identity ``empty_zero``.
+
+    The fold advances one TERM POSITION at a time over every group still that
+    long (groups are visited longest first, so the live ones are a prefix), which
+    is O(entries) element work in ``max(counts)`` vector steps. A few long groups
+    (a scalar reduction, a dense row) instead fold group by group with a
+    ufunc ``accumulate``, a sequential left fold, for the ⊕ whose step is that
+    ufunc (``+`` and ``*``).
+    """
+    n_rows = counts.size
+    out = np.full(n_rows, empty_zero, dtype=float)
+    if vals.size == 0:
+        return out
+    starts = np.zeros(n_rows, dtype=np.int64)
+    np.cumsum(counts[:-1], out=starts[1:])
+    order = np.argsort(-counts, kind="stable")
+    desc = counts[order]
+    n_live = int(np.count_nonzero(desc))
+    max_count = int(desc[0])
+    ufunc = {"+": np.add, "*": np.multiply}.get(reducer)
+    if ufunc is not None and n_live < max_count:
+        for r in order[:n_live]:
+            s = int(starts[r])
+            out[r] = ufunc.accumulate(vals[s : s + int(counts[r])])[-1]
+        return out
+    neg = -desc
+    live = order[:n_live]
+    acc = _reduce_step_box(reducer, None, vals[starts[live]])
+    acc = np.array(acc, dtype=float)
+    for p in range(1, max_count):
+        n_p = int(np.searchsorted(neg, -p, side="left"))
+        rows = order[:n_p]
+        acc[:n_p] = _reduce_step_box(reducer, acc[:n_p], vals[starts[rows] + p])
+    out[live] = acc
+    return out
+
+
+def _masked_row_fold(
+    reducer: str, term2d: np.ndarray, admit2d: np.ndarray, empty_zero: float
+) -> np.ndarray:
+    """⊕-fold each row's ADMITTED terms left to right, seeded from the first
+    admitted term — :func:`_segmented_fold` over ``term2d[admit2d]``, bit for bit
+    — in a fixed number of whole-array steps rather than one per term position.
+    A row that admits nothing is the semiring identity ``empty_zero``.
+
+    * ``+`` / ``*``: a non-admitted slot becomes ``-0.0`` / ``1.0``, the exact
+      identities (``x + -0.0`` and ``x * 1.0`` are ``x`` for every ``x``, a
+      ``-0.0`` or a NaN included), so a sequential ``ufunc.accumulate`` along the
+      row is the admitted terms' fold, its first step the first admitted term.
+      ``+0.0`` would not do: ``-0.0 + 0.0`` is ``+0.0``.
+    * ``max`` / ``min``: the :func:`_reduce_step` chain replaces its accumulator
+      only by a term that strictly beats it, so it ends on the FIRST admitted
+      term equal to the NaN-skipping extremum — unless the first admitted term
+      is a NaN, which nothing beats.
+    * ``or``: 1 if any admitted term is non-zero.
+    """
+    n_rows = term2d.shape[0]
+    out = np.full(n_rows, empty_zero, dtype=float)
+    if term2d.size == 0:
+        return out
+    live = admit2d.any(axis=1)
+    if reducer == "or":
+        hit = (admit2d & (term2d != 0.0)).any(axis=1)
+        out[live] = np.where(hit[live], 1.0, 0.0)
+        return out
+    if reducer in ("+", "*"):
+        ufunc = np.add if reducer == "+" else np.multiply
+        seq = np.where(admit2d, term2d, -0.0 if reducer == "+" else 1.0)
+        acc = ufunc.accumulate(seq, axis=1, out=seq)[:, -1]
+        out[live] = acc[live]
+        return out
+    is_max = reducer == "max"
+    rows = np.arange(n_rows)
+    first = term2d[rows, np.argmax(admit2d, axis=1)]
+    extreme = (np.fmax if is_max else np.fmin).reduce(
+        np.where(admit2d, term2d, -np.inf if is_max else np.inf), axis=1
+    )
+    at = np.argmax(admit2d & (term2d == extreme[:, None]), axis=1)
+    res = np.where(np.isnan(first), first, term2d[rows, at])
+    out[live] = res[live]
+    return out
+
+
+#: About how many box elements of whole-array work one Python-level numpy step
+#: costs: :func:`_fold_admitted_rows` steps through the admitted terms when that
+#: is cheaper than a pass over the whole box.
+_FOLD_STEP_COST = 2048
+
+
+def _fold_admitted_rows(
+    reducer: str, term2d: np.ndarray, admit2d: np.ndarray, empty_zero: float
+) -> np.ndarray:
+    """⊕-fold each row's admitted terms left to right, the per-cell walk's
+    fold. Both routes give the same bits; this picks the cheaper. A sparse box
+    with short rows packs its admitted terms and steps through them
+    (:func:`_segmented_fold`, one numpy step per term position, or per row for
+    a few long ``+`` / ``*`` rows); otherwise :func:`_masked_row_fold` folds the
+    whole box in a fixed number of passes."""
+    counts = admit2d.sum(axis=1).astype(np.int64)
+    max_count = int(counts.max()) if counts.size else 0
+    n_live = int(np.count_nonzero(counts))
+    steps = min(max_count, n_live) if reducer in ("+", "*") else max_count
+    if steps * _FOLD_STEP_COST < term2d.size:
+        vals = np.ascontiguousarray(term2d[admit2d], dtype=float)
+        return _segmented_fold(reducer, vals, counts, empty_zero)
+    return _masked_row_fold(reducer, term2d, admit2d, empty_zero)
+
+
+def _row_chunks(counts: np.ndarray, cap: int) -> Iterator[tuple[int, int]]:
+    """Consecutive ``[lo, hi)`` row blocks of at most ``cap`` entries each (a
+    single row over the cap is its own block), so a flat-entry tier's working
+    set stays bounded at any N."""
+    n_rows = counts.size
+    if n_rows == 0:
+        return
+    ends = np.cumsum(counts, dtype=np.int64)
+    lo = 0
+    base = 0
+    while lo < n_rows:
+        hi = int(np.searchsorted(ends, base + cap, side="right"))
+        hi = max(hi, lo + 1)
+        yield lo, hi
+        base = int(ends[hi - 1])
+        lo = hi
+
+
+def _array_locals(ctx: EvalContext) -> bool:
+    """Whether an enclosing whole-box tier has bound an index symbol to an array
+    — a flat-entry vector would not broadcast against it."""
+    return any(isinstance(v, np.ndarray) and v.ndim > 0 for v in ctx.locals.values())
+
+
+def _eval_body_on_entries(
+    body: Expr, ctx: EvalContext, bindings: dict[str, np.ndarray], n: int, tier: str
+) -> np.ndarray | None:
+    """``body`` evaluated once over ``n`` flat entries, with each symbol bound
+    to its per-entry value vector; ``None`` (declined, recording ``tier``) when
+    the body does not evaluate and broadcast over them."""
+    prev = dict(ctx.locals)
+    try:
+        for s, v in bindings.items():
+            ctx.locals[s] = np.asarray(v, dtype=float)
+        got = _compile_expr(body)(ctx)
+        vals = np.asarray(_require_real(got, "aggregate body"), dtype=float)
+        return np.ascontiguousarray(np.broadcast_to(vals, (n,)))
+    except (NumpyInterpreterError, IndexError, ValueError, TypeError, KeyError) as exc:
+        return _decline(
+            tier,
+            f"the body does not evaluate over the flat entries: {type(exc).__name__}: {exc}",
+        )
+    finally:
+        ctx.locals = prev
+
+
+def _eval_faq_ragged_csr(
+    expr: ExprNode,
+    ctx: EvalContext,
+    out_syms: list[str],
+    out_ranges_exp: list[list[int]],
+    out_shape: tuple[int, ...],
+    reduce_syms: list[str],
+    resolved: dict[str, Any],
+    reducer: str,
+    empty_zero: float,
+) -> np.ndarray | None:
+    """Whole-array tier for a contraction over a RAGGED range (esm-spec §4.3.1
+    ``{from, of}``, RFC §5.2): the CSR form of :func:`_eval_faq_ragged`.
+
+    Each output cell's term count is read from the ``offsets`` keyed factor for
+    every cell at once; the entries are then the cells' terms laid end to end
+    (CSR), each cell's in :func:`_cartesian` order (last contracted symbol
+    fastest) with a ragged symbol running ``1..offsets[parent]``. The body is
+    evaluated over the entries — the ``values`` factor is read once per entry,
+    through the body's own gather — and :func:`_segmented_fold` folds each cell's
+    terms in that order. Work is O(total entries), never a padded
+    ``rows × max row length`` box, and the answer is bit-for-bit the per-cell
+    walk's.
+
+    Declines inside a recurrence sweep (§5.19.2), when an enclosing tier has
+    bound an index symbol to an array, or when a ragged range's parent is
+    neither an output symbol nor a scalar enclosing binding (a parent that is
+    itself contracted).
+    """
+    tier = "ragged-csr"
+    if ctx.recur is not None:
+        return _decline(tier, "a recurrence sweep reads the array it builds")
+    if _array_locals(ctx):
+        return _decline(tier, "an enclosing tier bound an index symbol to an array")
+    n_rows = int(np.prod(out_shape, dtype=np.int64))
+    if out_shape:
+        cell = np.indices(out_shape).reshape(len(out_shape), n_rows)
+    else:
+        cell = np.zeros((0, 1), dtype=np.intp)
+    out_vals = {
+        s: np.asarray(r, dtype=np.int64)[cell[a]]
+        for a, (s, r) in enumerate(zip(out_syms, out_ranges_exp))
+    }
+
+    # Per contracted symbol: its per-row length (ragged) or its value list (dense).
+    sizes: list[np.ndarray | int] = []
+    dense_vals: dict[str, np.ndarray] = {}
+    for s in reduce_syms:
+        rs = resolved[s]
+        if not isinstance(rs, _RaggedRange):
+            vals = np.asarray(_expand_range(rs), dtype=np.int64)
+            dense_vals[s] = vals
+            sizes.append(int(vals.size))
+            continue
+        try:
+            off = np.asarray(_resolve_keyed_factor(rs.offsets, ctx), dtype=float)
+            if off.ndim == 0:
+                n = np.full(n_rows, int(round(float(off))), dtype=np.int64)
+            else:
+                parents = []
+                for p in rs.of:
+                    if p in out_vals:
+                        parents.append(out_vals[p] - 1)
+                    elif p in ctx.locals and np.ndim(ctx.locals[p]) == 0:
+                        parents.append(np.full(n_rows, int(ctx.locals[p]) - 1, dtype=np.int64))
+                    else:
+                        return _decline(
+                            tier,
+                            f"ragged set {rs.name!r} has parent {p!r}, which is neither an "
+                            f"output symbol nor a scalar enclosing binding",
+                        )
+                n = np.rint(off[tuple(parents)]).astype(np.int64)
+        except (NumpyInterpreterError, IndexError, ValueError, TypeError, KeyError) as exc:
+            return _decline(
+                tier, f"the offsets factor does not resolve: {type(exc).__name__}: {exc}"
+            )
+        sizes.append(np.maximum(np.broadcast_to(n, (n_rows,)), 0))
+
+    counts = np.ones(n_rows, dtype=np.int64)
+    for sz in sizes:
+        counts = counts * sz
+    out = np.empty(n_rows, dtype=float)
+    for lo, hi in _row_chunks(counts, _CONTRACTION_BOX_CAP):
+        c = counts[lo:hi]
+        n_ent = int(c.sum())
+        row = np.repeat(np.arange(lo, hi, dtype=np.int64), c)
+        first = np.zeros(hi - lo, dtype=np.int64)
+        np.cumsum(c[:-1], out=first[1:])
+        t = np.arange(n_ent, dtype=np.int64) - first[row - lo]
+        bindings: dict[str, np.ndarray] = {s: v[row] for s, v in out_vals.items()}
+        for s, sz in zip(reversed(reduce_syms), reversed(sizes)):
+            size = sz if isinstance(sz, int) else sz[row]
+            digit = t % size
+            t = t // size
+            bindings[s] = dense_vals[s][digit] if s in dense_vals else digit + 1
+        vals = _eval_body_on_entries(expr.expr, ctx, bindings, n_ent, tier)
+        if vals is None:
+            return None
+        out[lo:hi] = _segmented_fold(reducer, vals, c, empty_zero)
+    return out.reshape(out_shape)
+
+
+def _value_positions(range_vals: list[int], probe: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """``(found, axis_index)`` for each 1-based value in ``probe`` against the
+    expanded range ``range_vals``: whether it is a member, and its position."""
+    rv = np.asarray(range_vals, dtype=np.int64)
+    sorter = np.argsort(rv, kind="stable")
+    srt = rv[sorter]
+    pos = np.searchsorted(srt, probe)
+    pos_c = np.minimum(pos, max(srt.size - 1, 0))
+    found = (pos < srt.size) & (srt[pos_c] == probe) if srt.size else np.zeros(probe.size, bool)
+    return found, sorter[pos_c]
+
+
+def _batched_leaf_entries(
+    body: Expr, ctx: EvalContext, bindings: dict[str, np.ndarray]
+) -> np.ndarray | None:
+    """The planar ``polygon_intersection_area(index(P_a, s), index(P_b, t))``
+    leaf over flat entries, through the same batched clip kernel the dense
+    :func:`_eval_faq_batched_leaf` tier uses; ``None`` for any other body."""
+    if not (isinstance(body, ExprNode) and body.op == "polygon_intersection_area"):
+        return None
+    if getattr(body, "manifold", None) != "planar" or len(body.args) != 2:
+        return None
+    rings = []
+    for arg in body.args:
+        if not (isinstance(arg, ExprNode) and arg.op == "index" and len(arg.args) == 2):
+            return None
+        sym = arg.args[1]
+        if not (isinstance(sym, str) and sym in bindings):
+            return None
+        try:
+            arr = np.asarray(eval_expr(arg.args[0], ctx), dtype=float)
+        except (NumpyInterpreterError, KeyError, TypeError, ValueError):
+            return None
+        if arr.ndim != 3 or arr.shape[2] != 2:
+            return None
+        idx = np.asarray(bindings[sym], dtype=np.int64) - 1
+        if idx.size and (idx.min() < 0 or idx.max() >= arr.shape[0]):
+            return None
+        rings.append(arr[idx])
+    from . import geometry
+
+    return geometry.intersect_polygon_area_batch(rings[0], rings[1], "planar")
+
+
+def _eval_faq_overlap_driven(
+    expr: ExprNode,
+    ctx: EvalContext,
+    out_syms: list[str],
+    out_ranges_exp: list[list[int]],
+    out_shape: tuple[int, ...],
+    reduce_syms: list[str],
+    resolved: dict[str, Any],
+    raw_ranges: dict[str, Any],
+    reducer: str,
+    empty_zero: float,
+    filter_expr: Expr | None,
+) -> np.ndarray | None:
+    """Whole-array tier for an aggregate gated by a spatial OVERLAP join
+    (CONFORMANCE_SPEC §5.5.6; the gate drives enumeration, §5.5.8).
+
+    The candidate pairs are the only tuples the gate can admit, so the entries
+    are built FROM them: each candidate fixes the two gated symbols, every other
+    range symbol runs its full range, and the entries are sorted into the
+    per-cell walk's order (output cell in C order, then :func:`_cartesian`
+    order). Any further join gate and the ``filter`` are applied to the entries,
+    in the per-cell walk's order (gates, then filter, then body); the body is
+    evaluated over the survivors and each output cell's terms are folded by
+    :func:`_segmented_fold`. The admitted terms and their order are exactly the
+    per-cell walk's, so the answer is bit-for-bit its answer, at
+    O(candidates × the ungated ranges) work; a cell no candidate reaches is the
+    semiring identity (§5.5.6 identity fill).
+
+    The planar ``polygon_intersection_area`` leaf (the regrid narrow phase) runs
+    through the batched clip kernel the dense batched-leaf tier uses.
+    """
+    tier = "overlap-driven"
+    if ctx.recur is not None:
+        return _decline(tier, "a recurrence sweep reads the array it builds")
+    if _array_locals(ctx):
+        return _decline(tier, "an enclosing tier bound an index symbol to an array")
+    try:
+        red_ranges_exp = _expand_reduce_ranges(resolved, reduce_syms)
+        all_syms = out_syms + reduce_syms
+        all_ranges = out_ranges_exp + red_ranges_exp
+        sym_positions = {s: list(r) for s, r in zip(all_syms, all_ranges)}
+        gates = _resolve_join(expr, raw_ranges, sym_positions, ctx)
+    except (NumpyInterpreterError, IndexError, ValueError, TypeError, KeyError) as exc:
+        return _decline(tier, f"join resolution raised {type(exc).__name__}: {exc}")
+    ov = broad_phase.overlap_driver(gates)
+    if ov is None:
+        return _decline(tier, "no join clause resolved to an overlap gate")
+    axis_of = {s: a for a, s in enumerate(all_syms)}
+    if ov.sym_l == ov.sym_r or ov.sym_l not in axis_of or ov.sym_r not in axis_of:
+        return _decline(tier, "the overlap gate's two symbols are not two distinct range axes")
+    if any(len(set(r)) != len(r) for r in all_ranges):
+        return _decline(tier, "a range repeats a value, so a candidate has no unique position")
+    n_out = int(np.prod(out_shape, dtype=np.int64))
+    if 0 in [len(r) for r in all_ranges]:
+        return np.full(out_shape, empty_zero, dtype=float)
+
+    # Candidate pairs -> axis indices of the two gated symbols.
+    pairs = ov.candidates.pair_array()
+    fl, il = _value_positions(all_ranges[axis_of[ov.sym_l]], pairs[:, 0])
+    fr, ir = _value_positions(all_ranges[axis_of[ov.sym_r]], pairs[:, 1])
+    keep = fl & fr
+    il, ir = il[keep], ir[keep]
+    # Product with every other axis, then sort into the per-cell walk's order.
+    ndim = len(all_syms)
+    cols: list[np.ndarray] = [np.empty(0, dtype=np.int64)] * ndim
+    other = [a for a in range(ndim) if a not in (axis_of[ov.sym_l], axis_of[ov.sym_r])]
+    reps = int(np.prod([len(all_ranges[a]) for a in other], dtype=np.int64))
+    if il.size * reps > _CONTRACTION_BOX_CAP:
+        return _decline(
+            tier,
+            f"{il.size * reps} candidate entries, over the {_CONTRACTION_BOX_CAP}-entry "
+            f"materialization cap",
+        )
+    cols[axis_of[ov.sym_l]] = np.repeat(il, reps)
+    cols[axis_of[ov.sym_r]] = np.repeat(ir, reps)
+    if other:
+        grid = np.indices([len(all_ranges[a]) for a in other]).reshape(len(other), reps)
+        for k, a in enumerate(other):
+            cols[a] = np.tile(grid[k], il.size)
+    order = np.lexsort(tuple(cols[a] for a in reversed(range(ndim))))
+    cols = [c[order] for c in cols]
+    broad_phase.ENUM_VISITS[0] += int(order.size)
+    values = [np.asarray(all_ranges[a], dtype=np.int64)[cols[a]] for a in range(ndim)]
+
+    # Every other gate, as a mask over the entries.
+    admit = np.ones(order.size, dtype=bool)
+    for g in gates:
+        if g is ov:
+            continue
+        vl, vr = values[axis_of[g.sym_l]], values[axis_of[g.sym_r]]
+        if g.candidates is not None:
+            cand = g.candidates.pair_array()
+            span = int(max(vr.max(initial=0), cand[:, 1].max(initial=0))) + 1
+            admit &= np.isin(vl * span + vr, cand[:, 0] * span + cand[:, 1])
+        else:
+            rl = all_ranges[axis_of[g.sym_l]]
+            rr_ = all_ranges[axis_of[g.sym_r]]
+            code_l = np.array([g.codes_l[v] for v in rl], dtype=np.int64)
+            code_r = np.array([g.codes_r[v] for v in rr_], dtype=np.int64)
+            admit &= code_l[cols[axis_of[g.sym_l]]] == code_r[cols[axis_of[g.sym_r]]]
+    values = [v[admit] for v in values]
+    cols = [c[admit] for c in cols]
+    bindings = dict(zip(all_syms, values))
+
+    if filter_expr is not None:
+        prev = dict(ctx.locals)
+        try:
+            for s, v in bindings.items():
+                ctx.locals[s] = np.asarray(v, dtype=float)
+            kept = np.asarray(_require_real(_compile_expr(filter_expr)(ctx), "aggregate filter"))
+            kept = np.broadcast_to(kept.astype(bool), (values[0].size,))
+        except (NumpyInterpreterError, IndexError, ValueError, TypeError, KeyError) as exc:
+            return _decline(
+                tier,
+                f"the filter does not evaluate over the flat entries: {type(exc).__name__}: {exc}",
+            )
+        finally:
+            ctx.locals = prev
+        bindings = {s: v[kept] for s, v in bindings.items()}
+        cols = [c[kept] for c in cols]
+
+    n_ent = cols[0].size
+    vals = _batched_leaf_entries(expr.expr, ctx, bindings)
+    if vals is None:
+        vals = _eval_body_on_entries(expr.expr, ctx, bindings, n_ent, tier)
+        if vals is None:
+            return None
+    if out_syms:
+        row = np.ravel_multi_index(tuple(cols[: len(out_syms)]), out_shape)
+    else:
+        row = np.zeros(n_ent, dtype=np.int64)
+    counts = np.bincount(row, minlength=n_out).astype(np.int64)
+    return _segmented_fold(reducer, vals, counts, empty_zero).reshape(out_shape)
 
 
 def _cartesian(lists: list[list[int]]) -> list[tuple[int, ...]]:
@@ -3491,7 +4051,7 @@ def _resolve_join(
                 )
             sym_l = _overlap_env_sym(src_env, raw_ranges, sym_to_set, ctx, "left", order)
             sym_r = _overlap_env_sym(tgt_env, raw_ranges, sym_to_set, ctx, "right", order)
-            cands = broad_phase.overlap_candidate_set(
+            cands = broad_phase.overlap_candidate_index(
                 broad_phase.envelope_vectors_from_cols(
                     src_env, [_overlap_env_array(f, ctx) for f in src_env]
                 ),
@@ -3500,7 +4060,7 @@ def _resolve_join(
                 ),
                 eps=eps,
             )
-            gates.append(_JoinGate(sym_l, sym_r, candidates=broad_phase.OverlapIndex(cands)))
+            gates.append(_JoinGate(sym_l, sym_r, candidates=cands))
             continue
         on = (clause or {}).get("on") or []
         if not on:
@@ -3923,17 +4483,17 @@ def _eval_faq_reduce_vectorized(
     ``A_ij`` matrix instead of a Python loop over every (source, target) pair (the
     dense ``_eval_faq_scalar`` → ``_reduce_over_gated`` walk).
 
-    Per-cell values are computed by the SAME gather the scalar path uses, so only
-    the contraction's summation order changes (numpy pairwise vs sequential), on a
-    par with the existing einsum fast path (:func:`_eval_faq_vectorized`).
+    Per-cell values are computed by the SAME gather the scalar path uses, and the
+    admitted terms of each output cell are folded left to right in the per-cell
+    walk's order (descending for a reverse scan window, esm-spec §4.3.1), so the
+    answer is the scalar path's bit for bit.
     Returns ``None`` — caller falls back to the scalar loop — for an unsupported
     ⊕, an empty index box, a join whose keys are not all box axes, or any body /
     filter that does not evaluate + broadcast cleanly over the box (e.g. a ragged
     bound or a non-array gather). ⊗ is folded by the body evaluation itself, so
     the semiring's ⊗ need not be ×.
     """
-    ufunc = _REDUCE_UFUNCS.get(reducer)
-    if ufunc is None and reducer != "or":
+    if reducer not in _REDUCE_UFUNCS and reducer != "or":
         return _decline("gated-reduce", f"⊕ {reducer!r} has no numpy ufunc")
     if not reduce_syms:
         return _decline(
@@ -3959,20 +4519,131 @@ def _eval_faq_reduce_vectorized(
     if got is None:
         return None
     term, admit = got
-    if admit is not None:
-        term = np.where(admit, term, empty_zero)
+    # Each output cell's admitted terms, in the per-cell walk's order: the
+    # contracted axes trail the box, so a row of the 2-D view runs them in
+    # `_cartesian` order (last symbol fastest), reversed for a reverse scan
+    # window (esm-spec §4.3.1). They are folded left to right by
+    # `_fold_admitted_rows` — never by a pairwise `ufunc.reduce` — so the answer
+    # is the per-cell walk's bit for bit, forward or reverse.
+    n_out = int(np.prod(out_shape, dtype=np.int64))
+    term2d = np.broadcast_to(term, combined_shape).reshape(n_out, -1)
+    admit2d = (
+        np.ones(term2d.shape, dtype=bool)
+        if admit is None
+        else np.broadcast_to(admit, combined_shape).reshape(n_out, -1)
+    )
+    if _folds_descending(filter_expr, reduce_syms, out_syms):
+        term2d = term2d[:, ::-1]
+        admit2d = admit2d[:, ::-1]
+    with np.errstate(over="ignore", invalid="ignore"):
+        out = _fold_admitted_rows(reducer, term2d, admit2d, empty_zero)
+    return out.reshape(out_shape)
 
-    red_axes = tuple(range(len(out_syms), ndim))
-    if reducer == "or":
-        # bool_and_or's ⊕ (a scalar reduction only; the dispatcher rejects an
-        # array-valued one): 1.0 when any admitted term is non-zero — a NaN
-        # included, as in `_reduce_step` — else the identity 0.0. The result
-        # does not depend on the order the terms are visited in.
-        out = np.any(np.asarray(term) != 0.0, axis=red_axes)
-        return np.asarray(out, dtype=float).reshape(out_shape)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        out = ufunc.reduce(np.ascontiguousarray(term), axis=red_axes, initial=empty_zero)
-    return np.asarray(out, dtype=float).reshape(out_shape)
+
+def _enclosing_array_refs(
+    expr: ExprNode, ctx: EvalContext, raw_ranges: dict[str, Any]
+) -> dict[str, np.ndarray]:
+    """The enclosing index symbols this node reads that an enclosing whole-box
+    tier has bound to an array (not shadowed by one of the node's own ranges)."""
+    refs: dict[str, np.ndarray] = {}
+    for name, val in ctx.locals.items():
+        if name in raw_ranges or not (isinstance(val, np.ndarray) and val.ndim > 0):
+            continue
+        if _expr_mentions(expr, name):
+            refs[name] = val
+    return refs
+
+
+def _eval_faq_reduce_nested(
+    expr: ExprNode,
+    ctx: EvalContext,
+    outer: dict[str, np.ndarray],
+    out_syms: list[str],
+    reduce_syms: list[str],
+    resolved: dict[str, Any],
+    raw_ranges: dict[str, Any],
+    reducer: str,
+    empty_zero: float,
+    filter_expr: Expr | None,
+) -> np.ndarray | None:
+    """A rank-0 reduction nested in an enclosing whole-box evaluation, whose body
+    or filter reads the enclosing index symbols (``W[i] = Σ_{j ≥ i} g[j]``).
+
+    The enclosing box goes in FRONT: each enclosing symbol keeps its array over
+    the enclosing box ``S`` and gains trailing unit axes, this node's contracted
+    symbols are bound on axes after ``S``, and the body, filter and join mask
+    evaluate once over ``S × reduce``. Each enclosing cell's admitted terms are
+    then folded left to right in :func:`_cartesian` order by
+    :func:`_fold_admitted_rows` — the per-cell walk's fold, at that cell's binding
+    of the enclosing symbols. The window is fixed per enclosing cell, so it
+    folds ascending whatever its comparison (esm-spec §4.3.1): a nested node
+    has no output index to scan. The result has shape ``S``, which the
+    enclosing tier broadcasts like any other body value.
+
+    Declines for a node with output indices of its own, an unsupported ⊕, or a
+    body / filter / join that does not evaluate over the stacked box.
+    """
+    tier = "nested-reduce"
+    if out_syms or not reduce_syms:
+        return _decline(tier, "the node has output indices of its own, or does not contract")
+    if reducer not in _REDUCE_UFUNCS and reducer != "or":
+        return _decline(tier, f"⊕ {reducer!r} has no numpy ufunc")
+    try:
+        red_ranges = _expand_reduce_ranges(resolved, reduce_syms)
+        lead = np.broadcast_shapes(*(v.shape for v in outer.values()))
+    except (NumpyInterpreterError, ValueError, TypeError, KeyError) as exc:
+        return _decline(tier, f"the boxes do not line up: {type(exc).__name__}: {exc}")
+    k, m = len(lead), len(reduce_syms)
+    red_shape = tuple(len(r) for r in red_ranges)
+    full = tuple(lead) + red_shape
+    n_rows = int(np.prod(lead, dtype=np.int64))
+    if 0 in red_shape:
+        return np.full(lead, empty_zero, dtype=float)
+    if n_rows * int(np.prod(red_shape, dtype=np.int64)) > _CONTRACTION_BOX_CAP:
+        return _decline(tier, "the stacked box is over the materialization cap")
+    join_mask = None
+    if getattr(expr, "join", None):
+        try:
+            sym_positions = {s: list(r) for s, r in zip(reduce_syms, red_ranges)}
+            gates = _resolve_join(expr, raw_ranges, sym_positions, ctx)
+            join_mask = _join_admits_mask(gates, reduce_syms, red_ranges, red_shape)
+        except (NumpyInterpreterError, IndexError, ValueError, TypeError, KeyError) as exc:
+            return _decline(tier, f"join resolution raised {type(exc).__name__}: {exc}")
+        if join_mask is None:
+            return _decline(tier, "a join key is not one of the node's contracted axes")
+    prev = dict(ctx.locals)
+    try:
+        for name, val in outer.items():
+            padded = val.reshape((1,) * (k - val.ndim) + val.shape + (1,) * m)
+            ctx.locals[name] = np.asarray(padded, dtype=float)
+        for axis, (s, r) in enumerate(zip(reduce_syms, red_ranges)):
+            shp = [1] * (k + m)
+            shp[k + axis] = len(r)
+            ctx.locals[s] = np.asarray(r, dtype=float).reshape(shp)
+        with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+            term = np.broadcast_to(
+                np.asarray(_require_real(_compile_expr(expr.expr)(ctx), "aggregate body"), float),
+                full,
+            )
+            admit = np.ones(full, dtype=bool)
+            if filter_expr is not None:
+                keep = np.asarray(_compile_expr(filter_expr)(ctx)).astype(bool)
+                admit = admit & np.broadcast_to(keep, full)
+    except (NumpyInterpreterError, IndexError, ValueError, TypeError, KeyError) as exc:
+        return _decline(
+            tier,
+            f"the body or the filter does not evaluate over the stacked box: "
+            f"{type(exc).__name__}: {exc}",
+        )
+    finally:
+        ctx.locals = prev
+    if join_mask is not None:
+        admit = admit & join_mask.reshape((1,) * k + red_shape)
+    term2d = term.reshape(n_rows, -1)
+    admit2d = admit.reshape(n_rows, -1)
+    with np.errstate(over="ignore", invalid="ignore"):
+        out = _fold_admitted_rows(reducer, term2d, admit2d, empty_zero)
+    return out.reshape(lead)
 
 
 def _gated_box_term(
@@ -4135,15 +4806,11 @@ def _expr_mentions(node: Expr, name: str) -> bool:
     return False
 
 
-def _match_forward_prefix_filter(filter_expr: Expr | None) -> tuple[str, str, bool] | None:
-    """Match a FORWARD prefix-scan filter, returning ``(j_name, i_name, inclusive)``.
-
-    Recognizes ``j <= i`` / ``j < i`` and their mirrored spellings ``i >= j`` /
-    ``i > j``. The reverse rows are deliberately NOT matched: each reverse output
-    cell folds its own suffix from that suffix's low end, so consecutive cells
-    share no partial result and any right-to-left accumulation would re-associate
-    (esm-spec §4.3.1).
-    """
+def _match_scan_filter(filter_expr: Expr | None) -> tuple[str, str, bool] | None:
+    """Match a scan filter as ``(lo, hi, inclusive)``: the comparison ``lo <= hi``
+    (``lo < hi`` when not inclusive) between two bare symbols, in any of its
+    spellings (``a <= b``, ``a < b``, ``b >= a``, ``b > a``). Which of the two is
+    the contracted index decides the direction (:func:`_scan_direction`)."""
     if not isinstance(filter_expr, ExprNode) or len(filter_expr.args or []) != 2:
         return None
     lhs, rhs = filter_expr.args[0], filter_expr.args[1]
@@ -4157,6 +4824,59 @@ def _match_forward_prefix_filter(filter_expr: Expr | None) -> tuple[str, str, bo
     return None
 
 
+def _scan_direction(
+    filter_expr: Expr | None, reduce_syms: list[str], out_syms: list[str]
+) -> tuple[bool, str, str, bool] | None:
+    """``(forward, j, i, inclusive)`` for a cumulative-scan filter (esm-spec
+    §4.3.1) over exactly one contracted index ``j`` and an output index ``i``:
+    FORWARD for ``j <= i`` / ``j < i`` (a prefix window), REVERSE for
+    ``j >= i`` / ``j > i`` (a suffix window, "to-top"). ``None`` otherwise."""
+    if len(reduce_syms) != 1:
+        return None
+    matched = _match_scan_filter(filter_expr)
+    if matched is None:
+        return None
+    lo, hi, inclusive = matched
+    j = reduce_syms[0]
+    if lo == j and hi in out_syms:
+        return True, j, hi, inclusive
+    if hi == j and lo in out_syms:
+        return False, j, lo, inclusive
+    return None
+
+
+def _folds_descending(
+    filter_expr: Expr | None, reduce_syms: list[str], out_syms: list[str]
+) -> bool:
+    """Whether the node is a REVERSE scan, whose window esm-spec §4.3.1 folds
+    DESCENDING under every ⊕ — from its high end, as
+    ``((b_N ⊕ b_{N-1}) ⊕ …) ⊕ b_i`` — so that one right-to-left running
+    accumulator is exactly the definition. Every other window folds ascending."""
+    d = _scan_direction(filter_expr, reduce_syms, out_syms)
+    return d is not None and not d[0]
+
+
+def _running_extremum(reducer: str, seq: np.ndarray) -> np.ndarray:
+    """Running ``max`` / ``min`` along the last axis, bit for bit the per-cell
+    :func:`_reduce_step` chain seeded from the first term: the accumulator is
+    replaced only by a term that strictly beats it. So a tie keeps the earlier
+    term (the sign of a zero is the first zero's), a NaN term is skipped, and a
+    leading NaN sticks for the whole row. ``np.maximum.accumulate`` is none of
+    these: it keeps the later of two equal zeros and propagates every NaN.
+
+    The NaN-skipping running value (``fmax`` / ``fmin``) marks the positions where
+    the accumulator is replaced; each cell then takes the term at the latest
+    replacement at or before it."""
+    beats = np.greater if reducer == "max" else np.less
+    running = (np.fmax if reducer == "max" else np.fmin).accumulate(seq, axis=-1)
+    replaced = np.ones(seq.shape, dtype=bool)
+    replaced[..., 1:] = beats(running[..., 1:], running[..., :-1])
+    pos = np.where(replaced, np.arange(seq.shape[-1]), 0)
+    acc = np.take_along_axis(seq, np.maximum.accumulate(pos, axis=-1), axis=-1)
+    first = seq[..., :1]
+    return np.where(np.isnan(first), first, acc)
+
+
 def _eval_faq_prefix_scan(
     expr: ExprNode,
     ctx: EvalContext,
@@ -4168,7 +4888,7 @@ def _eval_faq_prefix_scan(
     reducer: str,
     empty_zero: float,
 ) -> np.ndarray | None:
-    """`O(N)` fast path for a FORWARD cumulative (prefix) reduction, esm-spec §4.3.1.
+    """`O(N)` fast path for a cumulative (prefix or suffix) reduction, esm-spec §4.3.1.
 
     A prefix reduction reaches the general reducing paths as a full triangular
     box: ``N`` output cells × ``N`` contracted terms, of which half are masked
@@ -4178,17 +4898,19 @@ def _eval_faq_prefix_scan(
 
     It is also *more* conformant, not merely faster. ``ufunc.reduce`` over the
     dense box sums pairwise, whereas ``ufunc.accumulate`` is a sequential left
-    fold — exactly the ascending-``j`` fold the spec pins as normative and the
-    order the scalar oracle and the Rust binding use. So this path makes a prefix
-    sum bit-identical across bindings where the dense path was merely close.
+    fold — exactly the ascending-``j`` fold the spec pins as normative for a
+    forward window, and run over the reversed axis, the descending fold it pins
+    for a reverse (``j >= i``) window. Both are the orders the
+    scalar oracle and the other bindings use, so this path makes a scan
+    bit-identical across bindings where the dense path was merely close.
 
     Declines (``None``) — leaving the general paths to handle it — unless every
     precondition holds. Each is a correctness requirement, not a heuristic:
 
     * exactly one contracted index, named by the filter (otherwise the admitted
       set is not a prefix of a single axis);
-    * the filter is exactly a forward comparison against an output symbol, with
-      no conjunction, so "admitted" and "j ≤ i" coincide;
+    * the filter is exactly a comparison against an output symbol, with no
+      conjunction, so "admitted" and "j ≤ i" (or "j ≥ i") coincide;
     * the contracted range equals the scanned output range, so ``j = i`` is the
       term entering the window at step ``i``;
     * the body does not read the scanned symbol — if it did, every cell's summand
@@ -4207,17 +4929,14 @@ def _eval_faq_prefix_scan(
             "index over a non-empty output box",
         )
 
-    matched = _match_forward_prefix_filter(getattr(expr, "filter", None))
-    if matched is None:
+    direction = _scan_direction(getattr(expr, "filter", None), reduce_syms, out_syms)
+    if direction is None:
         return _decline(
             "prefix-scan",
-            "the filter is not exactly a forward comparison (a reverse scan is not matched)",
+            "the filter is not exactly a comparison of the contracted index against an "
+            "output index",
         )
-    j_name, i_name, inclusive = matched
-    if j_name != reduce_syms[0] or i_name not in out_syms:
-        return _decline(
-            "prefix-scan", "the compared symbols are not the contracted index and an output index"
-        )
+    forward, j_name, i_name, inclusive = direction
     scan_axis = out_syms.index(i_name)
 
     # `j = i` must be the newly admitted term at step `i`: same interval.
@@ -4251,15 +4970,28 @@ def _eval_faq_prefix_scan(
             f"{type(exc).__name__}: {exc}",
         )
 
-    with np.errstate(divide="ignore", invalid="ignore"):
-        acc = ufunc.accumulate(np.ascontiguousarray(terms), axis=terms.ndim - 1)
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+        # A reverse scan folds each suffix from its HIGH end (§4.3.1), so one
+        # accumulator running right to left is exactly the definition.
+        seq = np.ascontiguousarray(terms if forward else terms[..., ::-1])
+        if reducer in ("max", "min"):
+            acc = _running_extremum(reducer, seq)
+        else:
+            acc = ufunc.accumulate(seq, axis=terms.ndim - 1)
+        if not forward:
+            acc = acc[..., ::-1]
     acc = np.asarray(acc, dtype=float)
     if not inclusive:
-        # `<`: cell k sees only strictly-earlier terms, so shift right by one and
-        # seed cell 0 with the identity — the empty reduction, not an error.
+        # Strict: cell k sees only the terms strictly before (forward) or after
+        # (reverse) it, so shift by one and seed the end cell with the identity —
+        # the empty reduction, not an error.
         shifted = np.empty_like(acc)
-        shifted[..., :1] = empty_zero
-        shifted[..., 1:] = acc[..., :-1]
+        if forward:
+            shifted[..., :1] = empty_zero
+            shifted[..., 1:] = acc[..., :-1]
+        else:
+            shifted[..., -1:] = empty_zero
+            shifted[..., :-1] = acc[..., 1:]
         acc = shifted
 
     # Move the scanned axis from last position back to where it sits in out_syms.
@@ -4322,6 +5054,10 @@ def _eval_faq_scalar(
         )
 
     cartesian_red = _cartesian(red_ranges_exp) if reduce_syms else [()]
+    if _folds_descending(filter_expr, reduce_syms, out_syms):
+        # A reverse (to-top) scan folds its suffix window from the high end
+        # (esm-spec §4.3.1).
+        cartesian_red = cartesian_red[::-1]
 
     out = np.zeros(out_shape, dtype=float)
     for multi_idx, local_binding in _iter_output_cells(out_syms, out_ranges_exp, out_shape):

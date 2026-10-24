@@ -491,7 +491,7 @@ pub(crate) fn validate_scoped(esm_file: &EsmFile, scope: ValidationScope) -> Val
 /// * `json_str` - The original JSON string to validate
 /// * `base_path` - Directory anchoring relative §4.7 subsystem refs and §9.7
 ///   template-import refs (esm-spec §9.7.2). `None` anchors them at the process
-///   current directory (the historical behaviour); a caller that loaded the
+///   current directory; a caller that loaded the
 ///   document from a known file MUST pass the file's own directory so relative
 ///   refs resolve the same way `load_path` resolves them — otherwise a valid
 ///   document with relative refs is wrongly rejected.
@@ -572,8 +572,8 @@ pub fn validate_text(json_str: &str, base_path: Option<&std::path::Path>) -> Val
 /// Deprecated alias of [`validate_text`].
 ///
 /// API_SPEC.md §8 item 13 makes `validate` take a typed document everywhere
-/// and names the text convenience `validate_text`. This binding spelled that
-/// convenience `validate_complete`. Kept for one minor per API_SPEC.md §10.
+/// and names the text convenience `validate_text`. This alias is deprecated
+/// and will be removed at the next major (API_SPEC.md §10).
 #[deprecated(
     since = "0.2.0",
     note = "renamed to `validate_text` (API_SPEC.md §8 item 13)"

@@ -1963,9 +1963,8 @@ def solve(
     ``method``), ``abstol`` (not ``atol``), ``reltol`` (not ``rtol``), ``saveat``
     (not ``t_eval``). The defaults — ``reltol=1e-4``, ``abstol=1e-6`` — are the
     canonical cross-binding ones, so Julia, Python and Rust solving the same
-    document with default options produce comparable trajectories. They are
-    looser than this binding's historical ``1e-10`` / ``1e-14``; pass an explicit
-    tolerance when accuracy matters.
+    document with default options produce comparable trajectories. Pass an
+    explicit tolerance when accuracy matters.
 
     Parameters
     ----------

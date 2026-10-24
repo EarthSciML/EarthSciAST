@@ -7,12 +7,11 @@ import (
 	"strings"
 )
 
-// validate_static_checks.go adds the five F-6 static-validation checks — defects
-// that are decidable from the SINGLE document (no evaluator, no solver, no
-// other file) yet were previously caught only by an evaluating binding's
-// build/resolve/partition pass. Their pinned (code, path) tuples live in
-// tests/invalid/expected_errors.json (promoted from `resolver_only`), and these
-// checks make Go's validate() reject each with exactly that pin:
+// validate_static_checks.go holds static-validation checks for defects that
+// are decidable from the SINGLE document (no evaluator, no solver, no other
+// file). Their pinned (code, path) tuples live in
+// tests/invalid/expected_errors.json, and these checks make Go's Validate
+// reject each with exactly that pin:
 //
 //   - join_key_invalid_type          — an aggregate value-equality join whose key
 //     column draws from a categorical index set with a float or null member.

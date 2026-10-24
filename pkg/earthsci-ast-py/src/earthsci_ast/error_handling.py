@@ -536,22 +536,11 @@ UNEVALUABLE_OPERATOR = "unevaluable_operator"
 
 
 # ===========================================================================
-# The registry itself (API_SPEC.md §8 / H-2).
-#
-# `ERROR_CODES` is the canonical, PUBLIC name for this binding's diagnostic-code
-# vocabulary -- the Python twin of Julia's `ERROR_CODES` NamedTuple
-# (`pkg/EarthSciAST.jl/src/error_codes.jl`), TypeScript's `ERROR_CODES` object
-# (`pkg/earthsci-ast-ts/src/errors.ts`), Go's `codes.go` and Rust's
-# `diagnostic::codes`. Everything above stays exactly as it was; this only gives
-# the vocabulary one public, uniformly-spelled entry point, so
-# `ERROR_CODES.UNDEFINED_VARIABLE` reads the same in every binding.
+# The registry itself (API_SPEC.md §6, `error_codes`).
 #
 # It is BUILT FROM the definitions above rather than restating them, so it can
 # never drift: a code added to `ErrorCode` or as a module-level constant appears
 # here automatically, and there is no second list to keep in step.
-#
-# **The values are a cross-binding contract and must never change.** Only where
-# they are defined changed.
 # ===========================================================================
 
 
@@ -639,4 +628,12 @@ def _build_error_codes() -> _ErrorCodeRegistry:
     return _ErrorCodeRegistry(collected)
 
 
+#: Every diagnostic code this binding can emit, keyed by its SCREAMING_SNAKE
+#: name: ``ERROR_CODES.UNDEFINED_VARIABLE == "undefined_variable"``. The same
+#: names and values are exported as ``ERROR_CODES`` by the Julia, TypeScript
+#: and Rust bindings (API_SPEC.md §6), and the code strings are a
+#: cross-binding contract that never changes. Read-only: attribute access and
+#: the mapping protocol (``[]``, ``in``, ``len``, iteration, ``keys`` /
+#: ``values`` / ``items``) work; an unknown name raises ``AttributeError`` and
+#: any assignment raises.
 ERROR_CODES = _build_error_codes()

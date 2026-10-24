@@ -9,7 +9,7 @@ docs/
 ├── README.md              # Orientation for this directory
 ├── README-DOCS.md         # This file
 ├── hugo.toml              # Hugo site configuration
-├── layouts/               # Hugo templates
+├── layouts/               # Hugo templates (api/ and partials/api-tabs.html: the API reference)
 ├── static/                # Static assets, incl. lib/*.esm standard library
 └── content/               # All documentation pages
     ├── _index.md          # Landing page and canonical table of contents
@@ -23,6 +23,7 @@ docs/
     ├── RELEASE_PIPELINE.md, RELEASE_PROCESS.md
     ├── SCHEMA_CHANGE_PROCEDURE.md, STRUCTURAL_ERROR_TEST_FIXTURES.md
     └── generated/         # Build-time output; not checked in
+├── api/                   # API reference inputs: contract, groups.toml, examples, guides
 ```
 
 ## Narrative pages
@@ -45,19 +46,25 @@ fails, which is what stops a bad model reaching the site. The directive syntax
 is documented in [`docs/narrative/_index.md`](narrative/_index.md), which is
 itself the section's landing page.
 
-## Generation
+## API reference and guides
 
-[`scripts/generate_docs.py`](../scripts/generate_docs.py) extracts API
-documentation from the language implementations and writes example pages.
+The API reference under `content/generated/api/` is generated from the five
+bindings' own docstrings and from runnable example programs; how is specified
+in [`docs/api/README.md`](api/README.md). In short:
 
 ```bash
-# Write generated pages where Hugo expects them
-python3 scripts/generate_docs.py --output docs/content/generated
+# Per binding (needs that language's toolchain): extract docstrings to
+# build/api-docs/<binding>.json and run its examples
+scripts/api_docs/python.sh              # likewise julia, typescript, rust, go
+
+# Join them with api-surface.json, docs/api/groups.toml and the guides
+python3 scripts/api_docs/render.py      # Python 3.11+
 ```
 
-Options: `--project-root` (defaults to the working directory), `--output`
-(defaults to `docs/`), and `--setup-infrastructure` to scaffold the automation
-files. The site builds without this step; generated pages are simply absent.
+`render.py` works with whichever `build/api-docs/*.json` exist; a binding that
+was not extracted shows a note in its tabs instead of documentation. Usage
+guides live in [`docs/api/guides/`](api/guides/) and pull their code from the
+examples with `<!-- example: <region> -->` placeholders.
 
 ## Building locally
 
@@ -66,14 +73,15 @@ hugo server --source docs        # http://localhost:1313
 ```
 
 Hugo **extended** is required. `pages.yml` pins the version used in CI; match it
-if the local build and the deployed site disagree.
+if the local build and the deployed site disagree. Run `render.py` first; without
+it the site still builds, but the API pages and the links to them are missing.
 
 ## CI
 
 | Workflow | Trigger | What it does |
 | --- | --- | --- |
-| [`docs.yml`](../.github/workflows/docs.yml) | push/PR touching `pkg/**`, `docs/**`, or `scripts/generate_docs.py` | Regenerates documentation and checks it is current. |
-| [`pages.yml`](../.github/workflows/pages.yml) | push to `main` | Runs `generate_docs.py`, builds with Hugo, link-checks the built site with [lychee](https://github.com/lycheeverse/lychee-action), and deploys to GitHub Pages. |
+| [`docs.yml`](../.github/workflows/docs.yml) | push/PR touching `pkg/**`, `docs/**`, `scripts/api_docs/**` or `api-surface.json` | Runs each binding's `scripts/api_docs/<binding>.sh` in a matrix job (a failing example fails the run), renders the API reference, builds the narrative pages and the site with Hugo, and link-checks it. |
+| [`pages.yml`](../.github/workflows/pages.yml) | push to `main` | The same per-binding extraction and render, then builds with Hugo, link-checks the built site with [lychee](https://github.com/lycheeverse/lychee-action), and deploys to GitHub Pages. |
 
 The link check runs against the **built** site and covers internal links only,
 so a broken relative link fails the deploy rather than shipping.
@@ -91,7 +99,8 @@ so a broken relative link fails the deploy rather than shipping.
 
 - `content/_index.md` is the single table of contents. Do not duplicate the
   navigation tree elsewhere — a second copy drifts.
-- Keep API documentation in the source docstrings and let `generate_docs.py`
-  surface it, rather than restating signatures by hand.
+- Keep API documentation in the source docstrings and let the API reference
+  surface it, rather than restating signatures by hand. Show usage with an
+  example region that runs in CI, not with a code block that does not.
 - The authoritative format definition is [`esm-spec.md`](../esm-spec.md); pages
   here should link to it rather than paraphrase normative rules.

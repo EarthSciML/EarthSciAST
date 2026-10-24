@@ -1,0 +1,21 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "Decay",
+    "description": "First-order decay of a single quantity, with its half-life as an observed.",
+    "authors": ["EarthSciML"]
+  },
+  "models": {
+    "Decay": {
+      "variables": {
+        "N": { "type": "unknown", "units": "mol", "default": 100.0, "description": "Amount remaining" },
+        "lambda": { "type": "parameter", "units": "1/s", "default": 0.1, "description": "Decay constant" },
+        "half_life": { "type": "unknown", "units": "s", "description": "Time for half the amount to decay" }
+      },
+      "equations": [
+        { "lhs": { "op": "D", "args": ["N"], "wrt": "t" }, "rhs": { "op": "*", "args": [{ "op": "-", "args": ["lambda"] }, "N"] } },
+        { "lhs": "half_life", "rhs": { "op": "/", "args": [{ "op": "log", "args": [2] }, "lambda"] } }
+      ]
+    }
+  }
+}

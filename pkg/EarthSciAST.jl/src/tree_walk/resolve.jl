@@ -238,6 +238,35 @@ end
 # entry list, `_array_contraction_table`). A filter is not applied in keys mode.
 const _AggBody = Union{ASTExpr,Nothing}
 
+# A REVERSE scan folds DESCENDING (esm-spec §4.3.1): its suffix `⊕_{j ≥ i}` is
+# the left fold `((b_N ⊕ b_{N-1}) ⊕ …) ⊕ b_i`, so one running accumulator
+# walking the axis from the top computes every cell of it exactly (the scan
+# tier's reversed fold). Every build of such an aggregate visits its terms from
+# the high end down: the callers of `_foreach_aggregate_term` hand it the
+# iterators `_window_iters` orders, judged on the filter BEFORE the output
+# indices are substituted into it.
+#
+# Whether `filt` is a reverse scan window: the one contracted index `j` alone on
+# the high side of an inequality whose other side is an output index
+# (`j >= i`, `j > i`, `i <= j`, `i < j`). A bound that is not an output index
+# (`j >= 2`, `j >= p`) is a plain filter and keeps the ascending order.
+function _reverse_window(filt, contract_names::AbstractVector{<:AbstractString},
+                         out_names)
+    length(contract_names) == 1 || return false
+    filt isa OpExpr || return false
+    f = filt::OpExpr
+    length(f.args) == 2 || return false
+    hi, lo = (f.op == ">=" || f.op == ">") ? (f.args[1], f.args[2]) :
+             (f.op == "<=" || f.op == "<") ? (f.args[2], f.args[1]) : return false
+    return hi isa VarExpr && (hi::VarExpr).name == contract_names[1] &&
+           lo isa VarExpr && (lo::VarExpr).name in out_names
+end
+
+# The contracted iterators in the order the filter `filt` visits them.
+_window_iters(iters, filt, contract_names, out_names) =
+    _reverse_window(filt, contract_names, out_names) ?
+        [collect(Int, Iterators.reverse(iters[1]))] : iters
+
 function _foreach_aggregate_term(emit!::F, body::_AggBody,
         contract_names::Vector{String}, contract_iters,
         gates, filt, zerobar::Float64,
@@ -469,6 +498,14 @@ function _resolve_index_of_faq(faq_expr::OpExpr, idx_args::Vector{ASTExpr},
     contract_names = _contracted_index_names(ranges_dict, output_idx_strs)
     _out_idx_env = Dict{String,Int}(output_idx_strs[d] => k_vals[d]
                                     for d in 1:nd if !symbolic[d])
+    # A ragged bound over a symbolic output index becomes a run-time loop
+    # (`_NK_RAGGED_LOOP`), which reads the bound at the cell the call is at.
+    if any_symbolic && !isempty(bound_syms) &&
+       any(n -> !_is_const_int_range(ranges_dict[n]), contract_names)
+        return _resolve_ragged_faq_loop(faq_expr, sub_body, ranges_dict, idx_exprs,
+                                        contract_names, oplus, zerobar, array_var_info,
+                                        var_map, const_arrays, pgather, bound_syms)
+    end
     contract_iters = [_expand_contract_range(ranges_dict[n], _out_idx_env, const_arrays)
                       for n in contract_names]
 
@@ -493,6 +530,7 @@ function _resolve_index_of_faq(faq_expr::OpExpr, idx_args::Vector{ASTExpr},
     # term resolution forwards `bound_syms` so the symbolic subscripts survive
     # into `_ConstGatherRef`s (in concrete mode `bound_syms` is empty → no-op).
     filt = filt0 === nothing ? nothing : _sub_preserving(filt0, idx_exprs)
+    contract_iters = _window_iters(contract_iters, filt0, contract_names, output_idx_strs)
     terms = ASTExpr[]
     _foreach_aggregate_term(sub_body, contract_names, contract_iters,
                             gates, filt, zerobar, _out_idx_env) do term
@@ -500,6 +538,70 @@ function _resolve_index_of_faq(faq_expr::OpExpr, idx_args::Vector{ASTExpr},
                                       pgather, memo, bound_syms))
     end
     return _combine_with_reducer(oplus, zerobar, terms)
+end
+
+# The symbolic form of a gather of a ragged contraction, `index(faq, i)` with
+# `i` a loop counter of the whole-array contraction tier and the contracted range
+# `[lo, hi]` an expression in `i` (a ragged set's `[1, index(offsets, i)]`):
+# one `__ragged_loop` marker whose bounds are resolved like any other subscript,
+# so the offsets read is a run-time const gather at the call's cell, and whose
+# body is resolved once with the contracted index a loop counter. Each call then
+# folds the cell's own row, `hi - lo + 1` terms, the CSR shape.
+#
+# The terms, their order and their fold are those of the per-cell expansion
+# below (`_foreach_aggregate_term` then `_combine_with_reducer`), which is what
+# the interpreter builds at a concrete cell. Taken only for one contracted
+# index with no join and no filter; anything else declines with
+# `E_TREEWALK_COMPILE_ONCE_UNSUPPORTED`, as the symbolic path always has.
+function _resolve_ragged_faq_loop(faq_expr::OpExpr, sub_body::ASTExpr, ranges_dict,
+        idx_exprs::Dict{String,ASTExpr}, contract_names::Vector{String},
+        oplus::String, zerobar::Float64, array_var_info, var_map, const_arrays,
+        pgather::AbstractDict, bound_syms::Set{String})
+    decline(why) = throw(TreeWalkError("E_TREEWALK_COMPILE_ONCE_UNSUPPORTED",
+        "ragged contraction on the symbolic compile-once path: " * why))
+    length(contract_names) == 1 || decline("more than one contracted index")
+    (faq_expr.join_gates === nothing && faq_expr.filter === nothing) ||
+        decline("a join or a filter")
+    oplus in ("+", "*", "max", "min") || decline("⊕ = $(oplus)")
+    rspec = ranges_dict[contract_names[1]]
+    rspec isa AbstractVector && length(rspec) in (2, 3) || decline("range arity")
+    step = 1
+    if length(rspec) == 3
+        rspec[2] isa Integer || decline("a step that is not a constant integer")
+        step = Int(rspec[2])
+        step == 0 && decline("a zero step")
+    end
+    bound(x) = x isa Integer ? IntExpr(Int64(x)) :
+        x isa ASTExpr ? _resolve_indices(_sub_preserving(x, idx_exprs), array_var_info,
+                                         var_map, const_arrays, pgather, nothing,
+                                         bound_syms) :
+        decline("a bound that is not an integer or an expression")
+    lo = bound(rspec[1])
+    hi = bound(rspec[end])
+    kname = _fresh_loopvar_name()
+    kref = Ref(0)
+    body = _sub_preserving(sub_body,
+                           Dict{String,ASTExpr}(contract_names[1] => VarExpr(kname)))
+    kbsyms = union(bound_syms, Set{String}((kname,)))
+    resolved = _resolve_indices(body, array_var_info, var_map, const_arrays, pgather,
+                                nothing, kbsyms)
+    _LOOPVAR_REFS[Symbol(kname)] = kref
+    return OpExpr("__ragged_loop", ASTExpr[resolved, lo, hi];
+                  value=_RaggedLoopBuild(kref, step, _ragged_reach(rspec, const_arrays),
+                                         Symbol(oplus), zerobar))
+end
+
+# The mean row length of a ragged range `[1, index(offsets, …)]` over a const
+# offsets array, for the threading verdict's work estimate; 1 when the bound is
+# any other expression.
+function _ragged_reach(rspec, const_arrays::AbstractDict)
+    hi = rspec[end]
+    (rspec[1] == 1 && hi isa OpExpr && (hi::OpExpr).op == "index" &&
+     !isempty((hi::OpExpr).args) && (hi::OpExpr).args[1] isa VarExpr) || return 1
+    arr = get(const_arrays, ((hi::OpExpr).args[1]::VarExpr).name, nothing)
+    (arr isa AbstractArray{<:Real} && !isempty(arr)) || return 1
+    m = sum(Float64, arr) / length(arr)
+    return isfinite(m) ? max(1, round(Int, m)) : 1
 end
 
 # Resolve index(makearray(regions=[...], values=[...]), k1, k2, ...) by
@@ -795,6 +897,17 @@ end
 # (xcse.jl, which safely DECLINES an unknown kind → leaves it inline).
 const _ARRAY_CELL_DEPTH = Ref(0)
 
+# A member of a symbolic resolve's bound names that no index name can be: the
+# whole-array nest puts it in the bound names it resolves its term with
+# (`_resolve_array_contraction_term(...; nest_scalar_loops=true)`), and every
+# resolve of that term passes it down with them. A scalar reduction nested in
+# the term then stays a loop (`_resolve_scalar_faq`) instead of unrolling one
+# term per contracted index into the nest's one body, which would make the
+# generated code as long as the reduction. The nest's emitter writes it as a
+# counted loop (`_cg_emit`, array_contraction.jl). A resolve started anywhere
+# else has bound names without it, so it never sees the loop node.
+const _NEST_SCALAR_LOOPS = "\0nest_scalar_loops"
+
 # Tier gate and coverage floor. On under `native`, but only for reductions at
 # least `_contraction_loop_min()` long — small reductions keep unrolling so the
 # vast existing small-aggregate test surface (and its CSE / stencil interactions)
@@ -820,13 +933,16 @@ end
 # `E_TREEWALK_UNBOUND_LOOP_VAR` here — caught, and we unroll (correctness first).
 function _try_build_contraction_loop(body::ASTExpr, contract_names::Vector{String},
         ranges::AbstractVector, oplus::String, zerobar::Float64,
-        array_var_info, var_map, const_arrays, pgather::AbstractDict)
+        array_var_info, var_map, const_arrays, pgather::AbstractDict;
+        # The enclosing symbolic resolve's own bound names, which the body may
+        # read (a reduction nested in the whole-array nest's term).
+        outer_syms::Set{String}=_EMPTY_BOUND_SYMS)
     names = String[_fresh_loopvar_name() for _ in contract_names]
     refs  = Base.RefValue{Int}[Ref(0) for _ in contract_names]
     subs  = Dict{String,ASTExpr}(contract_names[d] => VarExpr(names[d])
                                  for d in eachindex(contract_names))
     subbed = _sub_preserving(body, subs)
-    bsyms  = Set{String}(names)
+    bsyms  = union(Set{String}(names), outer_syms)
     resolved = try
         # memo=nothing: the symbolic (bound-sym) resolution must never share the
         # concrete RHS-build memo (same invariant the compile-once path relies on).
@@ -929,7 +1045,10 @@ end
 # drives the contracted refs from the admitted tuples instead.
 function _resolve_array_contraction_term(body::ASTExpr, out_names::Vector{String},
         contract_names::Vector{String},
-        array_var_info, var_map, const_arrays, pgather::AbstractDict)
+        array_var_info, var_map, const_arrays, pgather::AbstractDict;
+        # The whole-array nest's own resolve, whose emitter writes a nested
+        # scalar reduction as a loop (`_NEST_SCALAR_LOOPS`).
+        nest_scalar_loops::Bool=false)
     nout = length(out_names)
     all_names = vcat(out_names, contract_names)
     fresh = String[_fresh_loopvar_name() for _ in all_names]
@@ -938,6 +1057,7 @@ function _resolve_array_contraction_term(body::ASTExpr, out_names::Vector{String
                                  for d in eachindex(all_names))
     subbed = _sub_preserving(body, subs)
     bsyms  = Set{String}(fresh)
+    nest_scalar_loops && push!(bsyms, _NEST_SCALAR_LOOPS)
     resolved = try
         # memo=nothing, as in `_try_build_contraction_loop`: a symbolic resolve
         # must never share the concrete RHS-build memo.
@@ -1015,6 +1135,25 @@ function _resolve_scalar_faq(faq_expr::OpExpr, array_var_info, var_map, const_ar
         if total >= _contraction_loop_min() && all(!isempty, ranges)
             looped = _try_build_contraction_loop(body, contract_names, ranges,
                         oplus, zerobar, array_var_info, var_map, const_arrays, pgather)
+            looped === nothing || return looped
+        end
+    end
+    # Nested in the whole-array nest's term (`_NEST_SCALAR_LOOPS` among the
+    # bound names), a reduction over ONE constant range at least the loop floor
+    # long stays a loop that reads the nest's counters. It folds from 0̄, so its
+    # value is the unroll's below bit for bit: the same terms in the same order,
+    # left to right from the same seed (esm-spec §4.3.1). Two or more
+    # contracted indices keep unrolling, since nested loops would group the sum
+    # by the outer index.
+    if _NEST_SCALAR_LOOPS in bound_syms && gates === nothing &&
+       filt0 === nothing && length(contract_names) == 1 &&
+       (oplus == "+" || oplus == "*" || oplus == "max" || oplus == "min") &&
+       _is_const_int_range(ranges_dict[contract_names[1]])
+        r = _expand_int_range(ranges_dict[contract_names[1]])
+        if length(r) >= _contraction_loop_min()
+            looped = _try_build_contraction_loop(body, contract_names, [r], oplus,
+                        zerobar, array_var_info, var_map, const_arrays,
+                        pgather; outer_syms = bound_syms)
             looped === nothing || return looped
         end
     end
@@ -1322,15 +1461,29 @@ function _resolve_state_gather(vname::String, lo::Vector{Int}, hi::Vector{Int},
         total = prod(dims)
         sf = Vector{Int}(undef, total)
         cur = Vector{Int}(undef, nd)
+        # A variable laid out as one block is read by arithmetic; formatting a
+        # cell key per cell would make this table cost far more per cell than
+        # the integers it holds.
+        blk = _vm_block(var_map, vname)
+        if blk !== nothing && blk.lo == lo && blk.hi == hi && blk.strides == strd
+            for lin in 0:total-1
+                sf[lin+1] = blk.base + lin
+            end
+            return (sf, strd)
+        end
         for lin in 0:total-1
             rem = lin
             for d in 1:nd
                 cur[d] = lo[d] + (rem % dims[d]); rem ÷= dims[d]
             end
-            cname = _cell_key(vname, cur)
-            haskey(var_map, cname) ||
-                throw(TreeWalkError("E_TREEWALK_MISSING_CELL", cname))
-            sf[lin+1] = var_map[cname]
+            slot = blk === nothing ? 0 : _block_slot(blk, cur)
+            if slot == 0
+                cname = _cell_key(vname, cur)
+                haskey(var_map, cname) ||
+                    throw(TreeWalkError("E_TREEWALK_MISSING_CELL", cname))
+                slot = var_map[cname]
+            end
+            sf[lin+1] = slot
         end
         (sf, strd)
     end

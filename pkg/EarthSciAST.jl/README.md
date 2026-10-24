@@ -35,7 +35,7 @@ Pkg.add("EarthSciAST")
 using EarthSciAST
 
 # Load an ESM format file
-esm_file = load("model.esm")
+esm_file = load_path("model.esm")
 
 # Access model components
 model = esm_file.models["atmosphere"]

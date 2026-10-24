@@ -236,8 +236,7 @@ class UnsupportedDimensionalityError(FlattenError):
     operator (a spatial ``D`` or ``grad``/``div``/``laplacian`` sugar) that no
     discretization rule reduced to a stencil, so it surfaces the uniform
     cross-binding ``code = "unlowered_operator"`` diagnostic (esm-spec §4.2 /
-    §9.6.8, RFC open-op-namespace-fixpoint-rewrite Change B/C) — superseding the
-    old per-binding UnsupportedDimensionality / UnreachableSpatialOperator codes.
+    §9.6.8).
     """
 
     #: Stable cross-binding diagnostic code (esm-spec §9.6.6).
@@ -289,8 +288,8 @@ class FlattenedVariable:
 class LoaderField:
     """A data-fed PARAMETER lowered to a flattened array input (esm-spec §8.5).
 
-    From 1.0.0 a data source is not a component: there is no loader subsystem
-    and no coupling edge. A model consumes a source by declaring a PARAMETER
+    A data source is not a component: there is no loader subsystem and no
+    coupling edge. A model consumes a source by declaring a PARAMETER
     whose ``update`` is ``{kind: "data", source: <key>, from: {file_variable}}``
     — the parameter IS the loaded field, and it owns the units. Flatten records
     this descriptor per such parameter so the simulator can execute the source at

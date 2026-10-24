@@ -205,10 +205,9 @@ pub fn apply_dae_contract(esm: &mut EsmFile, dae_support: bool) -> Result<DaeInf
 
 /// Top-level `discretize()` entry point per RFC §11/§12 for the rust binding.
 ///
-/// Today this function only applies the RFC §12 DAE binding contract
-/// (trivial factoring + error otherwise). The RFC §11 pipeline
-/// (canonicalize, rule engine, PDE-op check, provenance) will be wired in
-/// when that lands as a separate bead.
+/// This function applies the RFC §12 DAE binding contract (trivial
+/// factoring, an error otherwise). It does not run the RFC §11 pipeline
+/// (canonicalize, rule engine, PDE-op check, provenance).
 ///
 /// Returns a discretized [`EsmFile`] with `metadata.system_class`,
 /// `metadata.dae_info`, and `metadata.discretized_from` stamped.

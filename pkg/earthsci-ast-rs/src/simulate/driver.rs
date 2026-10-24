@@ -487,12 +487,11 @@ pub(crate) fn build_array_compiled(
 /// Two-step entry point for array/spatial files: CONSUME the parsed
 /// [`EsmFile`] and compile it into the array runtime's
 /// [`crate::simulate_array::ArrayCompiled`], which the caller then solves
-/// with [`crate::simulate_array::ArrayCompiled::simulate`]. The one-shot
+/// with [`crate::simulate_array::ArrayCompiled::solve`]. The one-shot
 /// [`crate::problem::esm_problem`] borrows `file` and so keeps it alive for the
-/// whole build; for
-/// a large expanded discretization the typed file is on the order of the
-/// compiled rules themselves (~1 GiB for `simpleclimate.esm` at its
-/// production grid), and taking the file by value both lets it die before
+/// whole build; for a large expanded discretization the typed file is on the
+/// order of the compiled rules themselves, and taking the file by value both
+/// lets it die before
 /// the solve AND lets the single-model build move the observed bodies into
 /// the compiled rules instead of deep-copying them
 /// ([`crate::simulate_array::ArrayCompiled::from_file_owned`]).

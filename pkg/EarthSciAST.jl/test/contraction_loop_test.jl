@@ -36,7 +36,7 @@ const _CL_ESS = EarthSciAST
 # Scalar reduction model: D(s)/dt = Σ_{k=0..M} (k * x); x constant (D(x)=0).
 # Constant-RHS ODE from zero ICs, so du(u0) IS the derivative at t=0.
 # Σ_{k=0..M} k = M(M+1)/2, so du[s] = x0 · M(M+1)/2.
-_cl_doc(M::Int) = Dict{String,Any}(
+_cl_doc(M::Int; expr=Dict("op" => "*", "args" => Any["k", "x"])) = Dict{String,Any}(
     "esm" => "1.1.0",
     "metadata" => Dict("name" => "contraction_loop_repro"),
     "models" => Dict("Repro" => Dict{String,Any}(
@@ -49,7 +49,7 @@ _cl_doc(M::Int) = Dict{String,Any}(
                  "rhs" => Dict("op" => "faq", "semiring" => "sum_product",
                                "args" => Any[], "output_idx" => Any[],
                                "ranges" => Dict("k" => Any[0, M]),
-                               "expr" => Dict("op" => "*", "args" => Any["k", "x"]))),
+                               "expr" => expr)),
         ],
     )),
 )
@@ -126,6 +126,44 @@ end
         J = ForwardDiff.gradient(g, u0)
         @test J[vmap["x"]] == M * (M + 1) ÷ 2     # d(du_s)/dx = Σk, loop var has 0 deriv
         @test J[vmap["s"]] == 0.0
+    end
+
+    # Every term has partials of -0.0. The interpreter's fold is seeded from the
+    # `Float64` 0̄ (esm-spec §4.3.1), which adds no partials, so it keeps them.
+    # The loop's seed enters its first step as that `Float64` too, not a `Dual`
+    # with zero partials, so the emitted loop and the walked one keep them as
+    # well. Where every term's value is -0.0 as well, the sum is +0.0 in each.
+    @testset "AD: the loop's seed leaves the terms' partials as they are ($name)" for
+            (name, expr, val) in (
+                ("1 - 0x", Dict("op" => "-", "args" => Any[1.0,
+                                Dict("op" => "*", "args" => Any[0.0, "x"])]), 51.0),
+                ("-(0x)", Dict("op" => "-", "args" => Any[
+                                Dict("op" => "*", "args" => Any[0.0, "x"])]), 0.0))
+        doc = _cl_doc(50; expr=expr)
+        walked = _CL_ESS._plan_with(_CL_ESS._compiler_plan(:native); strict=false,
+                                    scalar_codegen=false)
+        runs = map(((false, :interpreter), (false, :native), (true, :native),
+                    (true, walked))) do (loop, c)
+            insp = _CL_ESS.BuildInspection()
+            kw = (; inspect=insp, initial_conditions=Dict("x" => 2.0, "s" => 0.0))
+            f!, u0, p, _, vmap = withenv("ESS_CONTRACTION_LOOP_MIN" =>
+                                             (loop ? "8" : string(typemax(Int)))) do
+                c isa Symbol ? EarthSciAST._build_evaluator(doc; compiler=c, kw...) :
+                    _CL_ESS._with_compiler_plan(c) do
+                        _CL_ESS._build_evaluator_dict(doc; compiler=c, kw...)
+                    end
+            end
+            g(u) = (d = similar(u, eltype(u)); f!(d, u, p, 0.0); d[vmap["s"]])
+            tiers = [r.tier for r in insp.compiler_report.rules if occursin("s", r.rule)]
+            (ForwardDiff.gradient(g, u0), tiers, g(u0))
+        end
+        @test all(x -> x === -0.0, runs[1][1])
+        @test all(r -> r[3] === val, runs)
+        @test :scalar_loop_codegen in runs[3][2]
+        @test :scalar_loop in runs[4][2]
+        for r in runs[2:end]
+            @test all(r[1] .=== runs[1][1])
+        end
     end
 
     @testset "build size is O(1) in reduction length (loop) vs O(M) (unroll)" begin

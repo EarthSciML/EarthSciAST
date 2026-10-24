@@ -60,11 +60,9 @@ to the directory containing the file. `metaparameters` binds the ROOT
 document's open metaparameters at the loader API (esm-spec §9.7.6 binding
 site 4): already-closed edge bindings win, API bindings beat `default`s.
 
-One of THREE load entry points, replacing the single `load` whose `String`
-argument meant a FILE PATH here and in Go but JSON TEXT in TypeScript and
-Rust — same name, same argument type, opposite meanings, and no type error
-anywhere to catch it. See also [`load_string`](@ref) and
-[`load_document`](@ref).
+One of three load entry points, each named for what its argument is: a file
+path here, JSON text for [`load_string`](@ref), and an already-parsed document
+for [`load_document`](@ref).
 """
 function load_path(path::AbstractString;
                    metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}())::EsmFile

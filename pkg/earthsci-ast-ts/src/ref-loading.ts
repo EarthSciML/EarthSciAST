@@ -311,10 +311,10 @@ export function resolveSubsystemRefsSync(
 }
 
 /**
- * Async resolution — the historical entry point, and the only one that can reach
- * a REMOTE (`http(s)://`) ref, since `fetch` cannot be awaited synchronously.
+ * Async resolution — the only entry point that can reach a REMOTE
+ * (`http(s)://`) ref, since `fetch` cannot be awaited synchronously.
  *
- * It is now a thin shell around the SYNC core: fetch every reachable ref into a
+ * It is a thin shell around the SYNC core: fetch every reachable ref into a
  * cache first, then run the one and only resolution walk against that cache.
  * There is deliberately no second walk implementing the same semantics — index-set
  * merging, the §4.7 single-component invariant, template-machinery lowering,
