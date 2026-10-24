@@ -69,6 +69,47 @@ fn build_standalone_program(
     const_arrays: &ConstArrayScope,
     pipeline: bool,
 ) -> LResult<TapeProgram> {
+    let name = observed_rule_var(rule);
+    with_standalone_builder(
+        name,
+        param_names,
+        const_arrays,
+        crate::precision::is_f32(),
+        pipeline,
+        |mut b| {
+            let _rule_precision = crate::precision::has_variable_overrides()
+                .then(|| crate::precision::enter(crate::precision::of_variable(name)));
+            for (input, value) in inputs {
+                let lv = if value.ndim() == 0 {
+                    // `lookup_variable`'s 0-d arm: a scalar, rounded to the
+                    // precision in force.
+                    LV::Lit(crate::precision::active().round(value[ndarray::IxDyn(&[])]))
+                } else {
+                    b.standalone_array_input(value)?
+                };
+                b.obs_defined
+                    .insert((*input).to_string(), ObsVal::Taped(lv));
+            }
+            let v = b.lower_observed_rule(rule)?;
+            b.flush_rule_fault()?;
+            b.obs_defined.insert(name.clone(), v);
+            Ok(b.finish_standalone(rule))
+        },
+    )
+}
+
+/// Run `f` on a fresh builder for the CONST observed `name` alone, inside its
+/// rule: no states, no forcing inputs, and only the parameters
+/// `param_names`. `f` binds the inputs, lowers, and finishes the program
+/// ([`TapeBuilder::finish_standalone`]).
+pub(super) fn with_standalone_builder<R>(
+    name: &str,
+    param_names: &[String],
+    const_arrays: &ConstArrayScope,
+    f32_document: bool,
+    pipeline: bool,
+    f: impl for<'b> FnOnce(TapeBuilder<'b>) -> R,
+) -> R {
     let var_shapes: IndexMap<String, VarShape> = IndexMap::new();
     let discrete: HashSet<String> = HashSet::new();
     let forcing = ForcingInputs {
@@ -76,51 +117,65 @@ fn build_standalone_program(
         unsized_: HashSet::new(),
         discrete: &discrete,
     };
-    let name = observed_rule_var(rule).clone();
     let mut obs_tier: FxHashMap<String, Cadence> = FxHashMap::default();
-    obs_tier.insert(name.clone(), Cadence::Const);
+    obs_tier.insert(name.to_string(), Cadence::Const);
     let mut b = TapeBuilder::new(
         &var_shapes,
         param_names,
         obs_tier,
         const_arrays,
-        crate::precision::is_f32(),
+        f32_document,
         &forcing,
     );
     b.array_bool_reductions = pipeline;
     b.begin_rule(RuleInfo {
-        name: name.clone(),
+        name: name.to_string(),
         kind: RuleKind::Observed(0),
         cadence: Cadence::Const,
     });
-    let _rule_precision = crate::precision::has_variable_overrides()
-        .then(|| crate::precision::enter(crate::precision::of_variable(&name)));
-    for (input, value) in inputs {
-        let lv = if value.ndim() == 0 {
-            // `lookup_variable`'s 0-d arm: a scalar, rounded to the precision
-            // in force.
-            LV::Lit(crate::precision::active().round(value[ndarray::IxDyn(&[])]))
-        } else if value.is_empty() {
-            // An empty table (a zero extent): a box with no element, whose
-            // values the build knows to be none.
-            let ones = DimI::from_elem(1, value.ndim());
-            let lv = b.emit_zero_array(value.shape(), &ones);
-            if let LV::Arr(s) = lv {
-                b.known.insert(s, Known::Vals(Rc::new(Vec::new())));
-            }
-            lv
-        } else {
-            b.emit_const_array(value)?
-        };
-        b.obs_defined
-            .insert((*input).to_string(), ObsVal::Taped(lv));
+    f(b)
+}
+
+impl TapeBuilder<'_> {
+    /// An array-valued input of a standalone program, whose values the build
+    /// knows: a `ConstArray`, or for an empty table (a zero extent) a box
+    /// with no element, whose values the build knows to be none.
+    pub(super) fn standalone_array_input(&mut self, value: &ndarray::ArrayD<f64>) -> LResult<LV> {
+        if !value.is_empty() {
+            return self.emit_const_array(value);
+        }
+        let ones = DimI::from_elem(1, value.ndim());
+        let lv = self.emit_zero_array(value.shape(), &ones);
+        if let LV::Arr(s) = lv {
+            self.known.insert(s, Known::Vals(Rc::new(Vec::new())));
+        }
+        Ok(lv)
     }
-    let v = b.lower_observed_rule(rule)?;
-    b.flush_rule_fault()?;
-    b.obs_defined.insert(name, v);
-    b.end_rule();
-    let exports = b.compute_exports(std::slice::from_ref(rule), true);
-    Ok(b.finish(exports, None, false))
+
+    /// Close the standalone rule `rule` (whose value is bound in
+    /// `obs_defined`) and finish the program, exporting it.
+    pub(super) fn finish_standalone(mut self, rule: &AlgebraicRule) -> TapeProgram {
+        self.end_rule();
+        let exports = self.compute_exports(std::slice::from_ref(rule), true);
+        self.finish(exports, None, false)
+    }
+
+    /// The build-time value of each observed of `names` as an array (a
+    /// scalar is 0-d), keyed by name; `None` when one of them has none.
+    pub(super) fn known_inputs<'n>(
+        &self,
+        names: impl IntoIterator<Item = &'n String>,
+    ) -> Option<Vec<(String, ndarray::ArrayD<f64>)>> {
+        names
+            .into_iter()
+            .map(|name| {
+                let (shape, vals) = self.known_named(name)?;
+                let a = ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&shape), (*vals).clone())
+                    .ok()?;
+                Some((name.clone(), a))
+            })
+            .collect()
+    }
 }
 
 fn run_standalone_program(
@@ -204,18 +259,12 @@ impl TapeBuilder<'_> {
         // The observeds the rule reads, each by its own build-time value.
         let mut reads: HashSet<String> = HashSet::new();
         collect_variable_names(observed_rule_body(rule), &mut reads);
-        let mut values: Vec<(String, ndarray::ArrayD<f64>)> = Vec::new();
         let mut names: Vec<&String> = reads
             .iter()
             .filter(|r| r.as_str() != name && self.obs_defined.contains_key(r.as_str()))
             .collect();
         names.sort();
-        for dep in names {
-            let (shape, vals) = self.known_named(dep)?;
-            let a =
-                ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&shape), (*vals).clone()).ok()?;
-            values.push((dep.clone(), a));
-        }
+        let mut values = self.known_inputs(names)?;
         // A baked parameter is build-time data (`baked_params`); any other is
         // constant only until the caller changes it, so is not.
         let mut baked: Vec<&String> = reads

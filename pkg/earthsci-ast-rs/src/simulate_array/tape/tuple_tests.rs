@@ -613,6 +613,50 @@ fn the_tuple_list_budget_is_shared_by_every_list_in_a_program() {
     }
 }
 
+/// Add to a [`star_join_doc`] a rank-0 contraction `name` over the same
+/// join, `Σ_{o, a : okey[o] = key[a]} val[a]`, and a scalar state `z`
+/// relaxing to it. Its list holds `n_out · n_big / n_key` tuples.
+fn with_grand_total(mut doc: Value, name: &str) -> Value {
+    let model = &mut doc["models"]["M"];
+    model["variables"][name] = json!({"type": "unknown", "units": "1"});
+    model["variables"]["z"] = json!({"type": "unknown", "units": "1", "default": 1.0});
+    let eqs = model["equations"].as_array_mut().unwrap();
+    eqs.push(
+        json!({"lhs": name, "rhs": {"op": "faq", "args": [], "semiring": "sum_product",
+        "output_idx": [],
+        "ranges": {"o": {"from": "outs"}, "a": {"from": "bigs"}},
+        "join": [{"on": [["okey", "key"]]}],
+        "expr": idx(json!("val"), &[json!("a")])}}),
+    );
+    eqs.push(json!({"lhs": {"op": "D", "args": ["z"], "wrt": "t"},
+        "rhs": {"op": "-", "args": [name, "z"]}}));
+    doc
+}
+
+/// A rank-0 contraction is one cell, so over the budget its run is folded a
+/// window at a time into a literal, bit-identical to the interpreter's,
+/// rather than materialized whole.
+#[test]
+fn a_rank_zero_join_over_the_tuple_list_budget_folds_in_windows() {
+    use super::lower::set_tuple_list_budget;
+    let (n_big, n_key, n_out, n_free) = (600usize, 6usize, 12usize, 2usize);
+    let grand = n_out * (n_big / n_key);
+    let doc = with_grand_total(star_join_doc(n_big, n_key, n_out, n_free, false), "grand");
+    let prev = set_tuple_list_budget(usize::MAX);
+    let prog = ab_check(doc.clone(), -2.0, 2.0);
+    set_tuple_list_budget(prev);
+    assert_eq!(count(&prog, "SegReduce"), 2, "under budget");
+    // Two windows, several, and one tuple a window. Under any budget that
+    // holds `grand`'s list, `grand` (lowered first, by name) would keep it.
+    for budget in [grand - 1, grand / 7, 1] {
+        let prev = set_tuple_list_budget(budget);
+        let prog = ab_check(doc.clone(), -2.0, 2.0);
+        set_tuple_list_budget(prev);
+        assert_eq!(count(&prog, "SegReduce"), 0, "budget {budget}");
+        assert!(prog.seg_tables.is_empty(), "budget {budget}");
+    }
+}
+
 /// The tape PRICES an `on` gate before building it, as the interpreter's
 /// planner does (PR #423): a clause whose key barely discriminates — here a
 /// constant, so it matches the whole product — is declined once a selective
