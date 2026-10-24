@@ -1105,9 +1105,13 @@ order; the application sequence and the reporting sequence are separate.
      component's equation list the equation lives in — and MUST update it here.
 
      Attribution is about VISIBILITY to later entries, not about ordering; ordering stays what
-     §4.7.5 step 4 says. Note that in an implementation whose attribution IS the equation list an
-     equation sits in, updating it necessarily moves the equation: append it to the owner's list,
-     so that in a chained composition each merged equation trails the merges that preceded it.
+     §4.7.5 step 4 says. Nor is it provenance: an equation has one attributed owner but may have
+     several authors, and which component or coupling entry wrote each summand is recorded
+     separately, in the equation's contribution list (§4.7.5, "Per-term provenance").
+
+     Note that in an implementation whose attribution IS the equation list an equation sits in,
+     updating it necessarily moves the equation: append it to the owner's list, so that in a
+     chained composition each merged equation trails the merges that preceded it.
 
    - **The merged-away name does not survive.** When a match renames the dependent variable — a
      translation match, or the bare-name fallback, which is a name-based translation — B's
@@ -1439,6 +1443,7 @@ TypeScript `camelCase`, others verbatim).
 | `brownian_parameters` | ordered map name → variable | `update.kind == "wiener"`. A **subset** of `parameters`, not a sibling bucket. |
 | `discrete_parameters` | ordered map name → variable | Any other `update`. A **subset** of `parameters`. |
 | `equations` | list | The governing equations — dynamics and constraints — coupling applied, dot-namespaced. Entries classified out into `field_ics` are REMOVED from this list (see below). |
+| `equation_contributions` | list, parallel to `equations`, of non-empty ordered lists of contributions | Per-term provenance: entry *i* lists the summands whose left-fold sum is `equations[i]`'s right-hand side, each with the component or coupling entry that authored it. Specified under "Per-term provenance" below. A binding whose flattened equation is a record MAY carry the list on that record (`contributions`) instead of beside it. |
 | `continuous_events` / `discrete_events` | list | Events, dot-namespaced. |
 | `domain` | domain or null | The file's `domain` section, unchanged. |
 | `metadata` | record | Which components were flattened, which coupling rules applied, and `merged_variable_renames` — every state spelling an `operator_compose` renaming match DELETED, mapped onto the survivor it was folded into (step 3, CONFORMANCE_SPEC §5.35). Empty for a document with no renaming merge. |
@@ -1470,6 +1475,93 @@ TypeScript `camelCase`, others verbatim).
 - **Full metadata, not names.** Each `name → variable` map carries the complete declared
   variable (units, `default`, `shape`, `update`, `distribution`), not a bare name list. A
   consumer must be able to build a solver problem from the flattened form alone.
+
+**Per-term provenance (normative; issue #539).** Flatten sums `operator_compose` and `couple`
+contributions into one right-hand side. `equation_contributions` records where each summand came
+from, so a consumer that splits a right-hand side into operators (an integrator's planner) can
+select terms by AUTHOR rather than by how a term happens to be spelled: a coupled sink such as
+`(-DryDep.k_O3) * SuperFast.O3` reads two components and is authored by neither.
+
+- **Shape.** One entry per entry of `equations`, in the same order. Each entry is a NON-EMPTY
+  ordered list of contributions `{expr, origins}`. `expr` is an ordinary expression. `origins` is
+  a non-empty list, deduplicated in first-appearance order, of origins, each EXACTLY ONE of
+  - `{"component": "<dotted path>"}` — the full dotted path of the model, subsystem or reaction
+    system whose equation contained the expression, as namespaced by step 2
+    (`Atmosphere.Chemistry`); and
+  - `{"coupling": <k>}` — `k` the 0-based index of the coupling entry that wrote the expression
+    itself, in the coupling sequence AFTER `coupling_import` expansion (the sequence
+    `metadata.coupling_rules` lists, one entry per element). Entries of every type count toward
+    `k`, including the `operator_apply` and `callback` entries that write nothing.
+
+  An expression a coupling entry merely MOVED or REWROTE keeps its author: merges add no
+  `coupling` origin (so labels do not depend on `systems` order), and a `variable_map`
+  substitution changes an input of a term, not who wrote it.
+- **The invariant.** Let `body(eq)` be `eq.rhs`, or `eq.rhs.expr` when the pointwise lift
+  (esm-spec §10.5) produced the equation and wrapped it in an `faq`. Then `body(eq)` evaluates,
+  at every state, BIT FOR BIT to the LEFT-FOLD sum of the contributions' expressions,
+  `((c1 + c2) + c3) + …`. A binding BUILDS the right-hand side from the list — as left-nested
+  binary `+` or one n-ary `+` evaluated left to right — never the other way round, and every pass
+  below edits the list and rebuilds. A binding MAY drop a literal-zero contribution's operand from
+  the tree (`x + 0` → `x`); the contribution stays recorded. Only the pointwise lift wraps; an
+  authored `faq` right-hand side is the `expr` of an ordinary contribution, and `body(eq)` is then
+  `eq.rhs`.
+- **Every equation has an entry.** Observed definitions, expression-LHS algebraic equations and
+  constraint equations get contributions like any other equation.
+
+How each step of this algorithm fills the list:
+
+| Step | Effect on contributions |
+|---|---|
+| 1. Reaction systems → ODEs | One contribution per derived equation (and per constraint equation), origin the reaction system's dotted path. |
+| 2. Namespace | One contribution per collected equation, `expr` its namespaced right-hand side, origin the authoring component's dotted path. A subsystem's equation names the subsystem (`Parent.Child`), not its parent. |
+| 3. `operator_compose`, placeholder expansion | Each `_var` clone carries B's contributions with `_var` substituted inside each `expr`, origins unchanged (B's component). |
+| 3. `operator_compose`, match | The merged list is A's contributions followed by B's, in order, origins unchanged; on a translation match B's dependent variable is rewritten inside each of B's `expr`. With `factor ≠ 1`: when B has exactly ONE contribution it is appended as `factor * expr`; when B has MORE than one they COLLAPSE into one contribution `factor * (b1 + b2 + …)` (left fold inside) whose origins are the union of B's in first-appearance order. Distributing the factor would change the arithmetic. An unmatched equation keeps its list; an equation §4.7.1 step 4 reattributes moves with its list. |
+| 3. Merged-away rename (§4.7.1 step 4, CONFORMANCE_SPEC §5.35) | Applies inside each `expr`. |
+| 3. `couple` additive | Appends `{expression, [{"coupling": k}]}` to the list of the equation that defines `to` — the equation whose left-hand side's dependent variable is `to` (its `D(to)` tendency, or a bare-LHS definition; the last such equation in document order). When `to` is an UNKNOWN that no equation defines, the term BECOMES its tendency (§4.7.2): a new equation `D(to, t) ~ expression` whose only contribution is `{expression, [{"coupling": k}]}`, appended to the equation list of the top-level component that `to`'s first path segment names. A `to` naming a parameter, or nothing, with no defining equation is skipped. |
+| 3. `couple` multiplicative | Collapse: ONE contribution, `expr = (left fold of the list) * expression`, origins = the union of the list's origins in first-appearance order, then `{"coupling": k}`. |
+| 3. `couple` replacement | The list is REPLACED by `[{expression, [{"coupling": k}]}]`. |
+| 3. `couple` explicit `{lhs, rhs}` connector equation (a binding that accepts the form) | A new equation with one contribution, origin `{"coupling": k}`. |
+| 3. `variable_map`, every named transform (§4.7.3: all are replacements, `additive` and `multiplicative` included) | The substitution applies inside each `expr` (and to the left-hand side); origins unchanged; nothing is appended. |
+| 3. `variable_map`, Expression transform | The new observed's defining equation `to ~ transform` has one contribution, origin `{"coupling": k}`. |
+| Step-4 duplicate merge | An identical duplicate equation a binding drops at assembly is dropped with its list. |
+| 3a. Right-hand-side `D(x, t)` resolution | The resolution table is unchanged. The resolved expression replaces the `D` node INSIDE the referencing contribution, which keeps its origins; `x`'s own contributions are not spliced in. |
+| Pointwise lift (esm-spec §10.5) | Per-cell indexing applies inside each `expr`; the `faq` wrapper goes around the left-fold sum. |
+| 4. `ic` equations classified out | The entry leaves `equations` and `equation_contributions` together; `field_ics` carries no contributions. |
+| Any later pass a binding runs over the flattened equations (e.g. the esm-spec §4.8.3 angle normalization) | Applies inside each `expr`. |
+
+The non-additive merges are the only way a contribution gets more than one origin: the result is
+indivisible, and a consumer must treat it as one term.
+
+**Passes that rewrite flattened equations work per contribution (normative).** Any pass that
+rewrites a flattened equation — canonicalize, `simplify`, CSE that rebuilds trees, discretization
+or template expansion run after flatten — MUST apply inside each contribution and rebuild the
+right-hand side from the list. It MUST NOT flatten, sort, combine or cancel across a contribution
+boundary. CSE MAY share a node between contributions: provenance is not on nodes, so sharing loses
+nothing. An expression-template reference that survives flatten (esm-spec §9.6.4 Option B) sits
+inside one contribution; expanding it rewrites inside that contribution, and if the expansion is a
+sum every resulting term inherits the contribution's origins. A pass that only READS equations
+(a build, a compiler) is unaffected.
+
+**Equality and hashing.** Provenance lives beside the expression tree, never on a node, so
+`canonical_json`, structural expression equality, node hashing, interning and CSE keys are
+unchanged; two contributions with identical expressions and different origins stay two, even when
+interning makes their `expr` one object. A comparison of whole flattened systems (the conformance
+corpus) compares `equation_contributions` as its own field. The CONFORMANCE_SPEC §5.25 build-reuse
+key does not include it.
+
+**Bindings.** Python's per-equation `source_system` is the equation's SLOT OWNER (the attribution
+of §4.7.1 step 4), not provenance; Julia's `eq_owners` is the same thing. Julia's keyword copy
+constructor `FlattenedSystem(flat; equations = eqs)` resets the list to one contribution per
+equation with EMPTY origins when `equations` is replaced alone, so a stale list cannot survive a
+caller's edit; that, and an equation a binding builds outside flatten, are the only places an
+empty `origins` is allowed, and it means "author unknown". Julia's `flattened_to_esm` drops the
+field: the `.esm` format has no slot for it, so it is a documented loss. The field is not a
+document field and changes no format version.
+
+**Serialized form.** The flatten corpus (`tests/conformance/flatten/cases.json`, CONFORMANCE_SPEC
+§5.48) records each equation's list as `"contributions": [{"rhs": <to_ascii(expr)>, "origins":
+[{"component": "<path>"} | {"coupling": <k>}, …]}, …]`. Rust's serde form of `FlattenedSystem`
+carries `equation_contributions` (origin serde-untagged: `{"component": …}` or `{"coupling": …}`).
 
 **Example:** Given an ESM file with `SimpleOzone` (reaction system with O₃, NO, NO₂) and `Advection` (model with `_var` placeholder), where T, u, and v are parameters drawing from the `GEOSFP` data source, coupled via `operator_compose`, the flattened system contains:
 

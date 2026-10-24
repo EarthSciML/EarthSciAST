@@ -6898,6 +6898,70 @@ omits it is a configuration error rather than a run under whatever the library
 default happens to be.
 
 
+### 5.48 Per-Term Provenance Through Flatten (normative)
+
+**Decision pinned.** Every binding's `FlattenedSystem` carries per-term provenance
+(esm-libraries-spec §4.7.5, "Per-term provenance"; issue #539): for each equation,
+the ordered list of its contributions, each an expression with its origins —
+`{"component": "<dotted path>"}` or `{"coupling": <k>}`, `k` the 0-based index of
+the authoring entry in the coupling sequence after `coupling_import` expansion.
+`body(eq)` (the right-hand side, or the `faq` body of a pointwise-lifted equation)
+evaluates bit for bit to the LEFT-FOLD sum of the contribution expressions. All
+five bindings implement it: flatten is Core tier, and the change is a rewrite of
+the flattened form, not a format change, so no binding is excluded.
+
+**Corpus field.** Every equation record of `tests/conformance/flatten/cases.json`
+carries
+
+```json
+"contributions": [
+  {"rhs": "Src.e", "origins": [{"component": "Src"}]},
+  {"rhs": "(-Sink.kd) * Chem.O3", "origins": [{"component": "Sink"}]}
+]
+```
+
+with `rhs` the `to_ascii` rendering of the contribution's expression, the
+renderer the corpus already uses for `equations`. Every binding's flatten-corpus
+test compares the list EXACTLY and IN ORDER — the expressions, the origins and
+their order — for every case of the corpus, with no skip list. The Python oracle
+generates it (`scripts/generate-flatten-corpus.py`), which also refuses a case in
+which an equation has no contribution, or a contribution has no origin, a
+malformed origin or a repeated one.
+
+**Fixtures.** `tests/conformance/term_provenance/` holds one fixture per row of
+the §4.7.5 provenance table (README there): the `systems`-order pair,
+`_var` placeholder expansion, `couple` additive onto an existing and onto an
+absent tendency, `couple` multiplicative (collapse to the union of origins),
+`variable_map` substitution and Expression transform, the pointwise lift, a
+template reference inside a contribution, a deposition-sink-shaped term that
+reads two components, the `translate` factor over a one- and a two-contribution
+B, and step 3a. Chained composes with the operator as `systems[0]` are the
+existing corpus case `chained_operator_compose`. Each fixture is a case of the
+flatten corpus, tier `term_provenance`, id `term_provenance_<fixture name>`, so
+no new runner is involved.
+
+**Non-vacuity.** `non_vacuity.esm` has two operators contribute structurally
+identical expressions (`Emis.flux`, each operator's parameter mapped onto one
+source) to one state. The golden has two contributions with different origins.
+A binding that hangs provenance on interned expression nodes cannot produce it.
+
+**Invariant test.** Each binding with an expression evaluator evaluates
+`body(eq)` and the left fold of its contributions' values at sampled
+non-default states (state and parameter values) for every equation of the
+`term_provenance` fixtures — and of the rest of the corpus where its evaluator
+can — and asserts BIT equality. The sampled values span many decades, so that a
+right-nested sum rounds differently from the left fold and the check can see the
+order; a binding asserts that it did see it on an equation with three or more
+contributions. A binding without an evaluator says so in its test. Python:
+`pkg/earthsci-ast-py/tests/test_term_provenance.py`, which also compares the
+`systems`-order pair against each other — the same `(expression, origins)` pairs,
+in `rhs_A + rhs_B` order.
+
+**Out of scope.** Reaction-level origins, embedding the list in `.esm`, origins
+for individual `variable_map` substitutions: open questions of issue #539, not
+pinned here.
+
+
 ## 6. CI Integration
 
 ### 6.1 GitHub Actions Workflow
