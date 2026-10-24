@@ -1894,8 +1894,8 @@ def _apply_operator_compose(
             # (esm-libraries-spec §4.7.5 provenance table). A `translate` factor
             # scales B's one contribution; when B already carries several, they
             # collapse into ONE `factor * (b1 + b2 + ...)` whose origins are the
-            # union -- the same arithmetic as before, and indivisible because a
-            # distributed factor would change it.
+            # union: indivisible, because distributing the factor would change
+            # the arithmetic.
             b_contribs = [
                 Contribution(substitute(c.expr, {b_dep: target_dep}), c.origins)
                 for c in b_eq.contributions
@@ -2356,8 +2356,8 @@ def _apply_couple(
         expression: Expr = ceq.expression if ceq.expression is not None else ceq.from_var
         authored = Contribution(expression, [TermOrigin(coupling=index)])
         if target not in eq_index:
-            # Only an UNKNOWN can take a tendency: a parameter or observed target
-            # with no defining equation is left alone, as before.
+            # Only an UNKNOWN can take a tendency: a parameter target, or a name
+            # no component owns, is skipped.
             owner = components.get(target.split(".", 1)[0])
             if (
                 owner is None
