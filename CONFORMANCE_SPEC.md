@@ -6923,7 +6923,11 @@ carries
 with `rhs` the `to_ascii` rendering of the contribution's expression, the
 renderer the corpus already uses for `equations`. Every binding's flatten-corpus
 test compares the list EXACTLY and IN ORDER — the expressions, the origins and
-their order — for every case of the corpus, with no skip list. The Python oracle
+their order. The origins (their count and order per equation) are compared for
+every case with no exception. The rendered `rhs` of a contribution is compared
+wherever the binding compares the equation's own rendering: a case a binding
+already records as an equation-rendering divergence diverges in its
+contributions the same way, and only that rendering is excused. The Python oracle
 generates it (`scripts/generate-flatten-corpus.py`), which also refuses a case in
 which an equation has no contribution, or a contribution has no origin, a
 malformed origin or a repeated one.
@@ -6952,7 +6956,9 @@ non-default states (state and parameter values) for every equation of the
 can — and asserts BIT equality. The sampled values span many decades, so that a
 right-nested sum rounds differently from the left fold and the check can see the
 order; a binding asserts that it did see it on an equation with three or more
-contributions. A binding without an evaluator says so in its test. Python:
+contributions. A binding without an evaluator says so in its test. A binding
+whose evaluator is scalar-only (TypeScript, Go) skips pointwise-lifted equations
+and asserts their origins directly instead; Julia evaluates them cell by cell. Python:
 `pkg/earthsci-ast-py/tests/test_term_provenance.py`, which also compares the
 `systems`-order pair against each other — the same `(expression, origins)` pairs,
 in `rhs_A + rhs_B` order.
