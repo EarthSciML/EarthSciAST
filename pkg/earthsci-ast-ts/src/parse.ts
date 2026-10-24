@@ -25,12 +25,18 @@ import {
   rejectTemplateImportsPreV08,
   resolveTemplateMachinery,
 } from './template-imports.js'
-import { normalizeEmptySolver, rejectConstUnitsPreV12, rejectSolverPreV11 } from './solver.js'
+import {
+  normalizeEmptySolver,
+  rejectConstUnitsPreV12,
+  rejectSolverExternalPreV13,
+  rejectSolverExternalUnresolved,
+  rejectSolverPreV11,
+} from './solver.js'
 import { schema } from './embedded-schema.js'
 import { readFileSyncNode, dirnameOf } from './path-utils.js'
 import { deepClone } from './object-utils.js'
 import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
-import { resolveDataSourceUrls } from './data-source-urls.js'
+import { absoluteBase, resolveDataSourceUrls } from './data-source-urls.js'
 
 /**
  * The single root-path token used when a validation diagnostic has no more
@@ -489,6 +495,11 @@ function loadInput(input: string | object, options?: LoadOptions): EsmFile {
   // as the gates above: the version hint beats a generic "extra property"
   // error.
   rejectSolverPreV11(validationView)
+  // `solver.external` arrives at esm 1.3.0 (esm-spec §2.2.4), and a
+  // `${` in it is refused (§2.2.6). After the whole-block gate, so a document
+  // below 1.1.0 is told about the block first.
+  rejectSolverExternalPreV13(validationView)
+  rejectSolverExternalUnresolved(validationView)
   // Step 2e: declared `units` on a `const` node arrive at esm 1.2.0 (esm-spec §4.8.5).
   rejectConstUnitsPreV12(validationView)
   // Then §2.2's one normalization — an EMPTY block means what absence means, so
@@ -681,6 +692,17 @@ function loadInput(input: string | object, options?: LoadOptions): EsmFile {
       configurable: true,
     })
   }
+
+  // esm-spec §2.2.6: `solver.external` resolves against the directory of the
+  // file read, or the working directory for a string load. Recorded absolute,
+  // here, so a later change of working directory does not move it; kept beside
+  // the document because `external` round-trips verbatim.
+  Object.defineProperty(loweredData, 'documentBase', {
+    value: absoluteBase(dataSourceBase),
+    enumerable: false,
+    writable: true,
+    configurable: true,
+  })
 
   // Step 5: Dimensional analysis — emit warnings but never fail the load.
   // Mirrors the Julia @warn behavior so TS callers get the same signal
