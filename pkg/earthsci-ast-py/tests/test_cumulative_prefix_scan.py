@@ -7,10 +7,10 @@ double loop; the native compiler collapses it to one ``ufunc.accumulate`` sweep.
 The rewrite is only legitimate because it is **bit-identical** to the fold order
 the spec pins as normative, so that is what these tests assert — not "close
 enough". A FORWARD window (``<=``, ``<``) folds ascending from its low end. A
-REVERSE window (``>=``, ``>``) under an inexact ⊕ (``+``, ``*``) folds
-DESCENDING from its high end, ``((b_N ⊕ b_{N-1}) ⊕ …) ⊕ b_i``, so one
-right-to-left accumulator is exactly the definition; under ``max`` / ``min`` it
-folds ascending. Both the interpreter and native must produce those bits.
+REVERSE window (``>=``, ``>``) folds DESCENDING from its high end,
+``((b_N ⊕ b_{N-1}) ⊕ …) ⊕ b_i``, under every ⊕, so one right-to-left
+accumulator is exactly the definition. Both the interpreter and native must
+produce those bits.
 """
 
 from __future__ import annotations
@@ -76,7 +76,7 @@ _COMBINE = {
 def _oracle(u: np.ndarray, cmp: str, reduce_op: str) -> np.ndarray:
     """The triangular double loop written out literally, folding the admitted
     window in the order the spec defines: ascending ``j``, except a reverse
-    window under ``+`` / ``*``, which folds descending."""
+    window, which folds descending."""
     n = len(u)
     admits = {
         "<=": lambda j, i: j <= i,
@@ -85,7 +85,7 @@ def _oracle(u: np.ndarray, cmp: str, reduce_op: str) -> np.ndarray:
         ">": lambda j, i: j > i,
     }[cmp]
     combine = _COMBINE[reduce_op]
-    descending = cmp in (">=", ">") and reduce_op in ("+", "*")
+    descending = cmp in (">=", ">")
     order = range(n, 0, -1) if descending else range(1, n + 1)
     out = []
     for i in range(1, n + 1):
@@ -156,12 +156,62 @@ def test_a_reverse_sum_is_not_the_ascending_fold():
 @pytest.mark.parametrize("n", [1, 5, 40])
 @pytest.mark.parametrize("cmp", [">=", ">"])
 @pytest.mark.parametrize("reduce_op", ["max", "min"])
-def test_reverse_extremum_scans_still_evaluate_correctly(n, cmp, reduce_op):
-    """``max`` / ``min`` are exact in either order; the scan tier leaves their
-    reverse rows to the general paths."""
+@pytest.mark.parametrize("compiler", ["native", "interpreter"])
+def test_reverse_extremum_scans_fold_descending_bit_for_bit(n, cmp, reduce_op, compiler):
+    """``max`` / ``min`` reverse windows fold from the top too, and native takes
+    them on the scan tier."""
     u = _catastrophic(n)
-    got = np.asarray(eval_expr(_prefix_agg(cmp, n, reduce_op), _ctx(u)), dtype=float).ravel()
-    _assert_bit_identical(got, _oracle(u, cmp, reduce_op), f"n={n} {cmp} {reduce_op}")
+    policy = CompilerPolicy(compiler=compiler, every_tier_off=compiler == "interpreter")
+    with use_policy(policy):
+        got = eval_expr(_prefix_agg(cmp, n, reduce_op), _ctx(u))
+    _assert_bit_identical(got, _oracle(u, cmp, reduce_op), f"{compiler} n={n} {cmp} {reduce_op}")
+    if compiler == "native":
+        assert policy.report.tiers().get("prefix-scan")
+
+
+@pytest.mark.parametrize(
+    "reduce_op,u,want",
+    [
+        ("max", [1.0, np.nan, 3.0], [3.0, 3.0, 3.0]),
+        ("min", [3.0, np.nan, 1.0], [1.0, 1.0, 1.0]),
+    ],
+)
+@pytest.mark.parametrize("compiler", ["native", "interpreter"])
+def test_a_reverse_extremum_over_a_nan_folds_from_the_top(reduce_op, u, want, compiler):
+    """A ``max`` / ``min`` step keeps its accumulator unless the term beats it,
+    so a NaN is skipped once the accumulator holds a number and sticks when it
+    comes first: order decides the answer. Folded from the top, cell 2's window
+    ``[NaN, 3]`` starts at 3; folded ascending it would start at the NaN."""
+    policy = CompilerPolicy(compiler=compiler, every_tier_off=compiler == "interpreter")
+    with use_policy(policy):
+        got = eval_expr(_prefix_agg(">=", 3, reduce_op), _ctx(np.array(u)))
+    _assert_bit_identical(got, np.array(want), f"{compiler} {reduce_op}")
+
+
+# Signed zeros and NaNs, leading and interior: the inputs on which a max / min
+# accumulate that is not the per-cell step (np.maximum keeps the later of two
+# equal zeros and propagates a NaN) gives different bits.
+_EXTREMUM_EDGES = {
+    "zeros": [0.0, -0.0, -0.0, 0.0, -1.0, 0.0, -0.0],
+    "neg-zeros": [-0.0, 0.0, 0.0, -0.0, 1.0, -0.0, 0.0],
+    "interior-nan": [2.0, np.nan, 1.0, 3.0, np.nan, 3.0, -0.0],
+    "leading-nan": [np.nan, 1.0, -0.0, 0.0, 5.0, np.nan, 2.0],
+    "trailing-nan": [0.0, -0.0, 4.0, 1.0, -2.0, 0.0, np.nan],
+}
+
+
+@pytest.mark.parametrize("case", sorted(_EXTREMUM_EDGES))
+@pytest.mark.parametrize("cmp", ["<=", "<", ">=", ">"])
+@pytest.mark.parametrize("reduce_op", ["max", "min"])
+def test_extremum_scans_match_the_per_cell_walk_on_zeros_and_nans(case, cmp, reduce_op):
+    u = np.array(_EXTREMUM_EDGES[case])
+    node = _prefix_agg(cmp, u.size, reduce_op)
+    want = _per_cell(node, _ctx(u))
+    policy = CompilerPolicy(compiler="native")
+    with use_policy(policy):
+        got = eval_expr(node, _ctx(u))
+    assert policy.report.tiers().get("prefix-scan")
+    _assert_bit_identical(got, want, f"{case} {cmp} {reduce_op}")
 
 
 @pytest.mark.parametrize(

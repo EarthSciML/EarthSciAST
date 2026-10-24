@@ -2454,9 +2454,9 @@ def _eval_faq(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
     """
     policy = _compiler.active_policy()
     if policy is None or not policy.strict:
-        return _eval_faq_dispatch(expr, ctx)
+        return _seed_sum_from_identity(expr, _eval_faq_dispatch(expr, ctx))
     try:
-        return _eval_faq_dispatch(expr, ctx)
+        return _seed_sum_from_identity(expr, _eval_faq_dispatch(expr, ctx))
     except _compiler.CompilerRefusedRuleError as refusal:
         if refusal.verified:
             raise
@@ -2466,6 +2466,28 @@ def _eval_faq(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
             # and the refusal below is a true statement about the compiler.
             _eval_faq_dispatch(expr, ctx)
         raise
+
+
+def _seed_sum_from_identity(expr: ExprNode, out: Any) -> Any:
+    """A ``+`` reduction's fold is seeded from 0̄ = +0.0 (esm-spec §4.3.1), so a
+    non-empty sum whose terms are all ``-0.0`` is ``+0.0``. Every tier folds
+    from the first admitted term instead; the two differ only in that case,
+    since ``+0.0 + t`` is ``t`` for every ``t`` but ``-0.0`` and a sum that
+    starts from ``+0.0`` never reaches ``-0.0``. So one ``+ 0.0`` per output cell,
+    which changes nothing but a ``-0.0``, turns any tier's result into the
+    0̄-seeded fold. A node that contracts nothing is a map, not a fold."""
+    if _resolve_semiring(expr)[0] != "+":
+        return out
+    if getattr(expr, "distinct", None) or getattr(expr, "key", None) is not None:
+        return out
+    outs = {s for s in (expr.output_idx or []) if isinstance(s, str)}
+    if not any(s not in outs for s in (expr.ranges or {})):
+        return out
+    if isinstance(out, np.ndarray):
+        return out + 0.0 if out.dtype.kind == "f" else out
+    if isinstance(out, float):
+        return out + 0.0
+    return out
 
 
 def _eval_faq_dispatch(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
@@ -3150,6 +3172,77 @@ def _segmented_fold(
         acc[:n_p] = _reduce_step_box(reducer, acc[:n_p], vals[starts[rows] + p])
     out[live] = acc
     return out
+
+
+def _masked_row_fold(
+    reducer: str, term2d: np.ndarray, admit2d: np.ndarray, empty_zero: float
+) -> np.ndarray:
+    """⊕-fold each row's ADMITTED terms left to right, seeded from the first
+    admitted term — :func:`_segmented_fold` over ``term2d[admit2d]``, bit for bit
+    — in a fixed number of whole-array steps rather than one per term position.
+    A row that admits nothing is the semiring identity ``empty_zero``.
+
+    * ``+`` / ``*``: a non-admitted slot becomes ``-0.0`` / ``1.0``, the exact
+      identities (``x + -0.0`` and ``x * 1.0`` are ``x`` for every ``x``, a
+      ``-0.0`` or a NaN included), so a sequential ``ufunc.accumulate`` along the
+      row is the admitted terms' fold, its first step the first admitted term.
+      ``+0.0`` would not do: ``-0.0 + 0.0`` is ``+0.0``.
+    * ``max`` / ``min``: the :func:`_reduce_step` chain replaces its accumulator
+      only by a term that strictly beats it, so it ends on the FIRST admitted
+      term equal to the NaN-skipping extremum — unless the first admitted term
+      is a NaN, which nothing beats.
+    * ``or``: 1 if any admitted term is non-zero.
+    """
+    n_rows = term2d.shape[0]
+    out = np.full(n_rows, empty_zero, dtype=float)
+    if term2d.size == 0:
+        return out
+    live = admit2d.any(axis=1)
+    if reducer == "or":
+        hit = (admit2d & (term2d != 0.0)).any(axis=1)
+        out[live] = np.where(hit[live], 1.0, 0.0)
+        return out
+    if reducer in ("+", "*"):
+        ufunc = np.add if reducer == "+" else np.multiply
+        seq = np.where(admit2d, term2d, -0.0 if reducer == "+" else 1.0)
+        acc = ufunc.accumulate(seq, axis=1, out=seq)[:, -1]
+        out[live] = acc[live]
+        return out
+    is_max = reducer == "max"
+    rows = np.arange(n_rows)
+    first = term2d[rows, np.argmax(admit2d, axis=1)]
+    extreme = (np.fmax if is_max else np.fmin).reduce(
+        np.where(admit2d, term2d, -np.inf if is_max else np.inf), axis=1
+    )
+    at = np.argmax(admit2d & (term2d == extreme[:, None]), axis=1)
+    res = np.where(np.isnan(first), first, term2d[rows, at])
+    out[live] = res[live]
+    return out
+
+
+#: About how many box elements of whole-array work one Python-level numpy step
+#: costs: :func:`_fold_admitted_rows` steps through the admitted terms when that
+#: is cheaper than a pass over the whole box.
+_FOLD_STEP_COST = 2048
+
+
+def _fold_admitted_rows(
+    reducer: str, term2d: np.ndarray, admit2d: np.ndarray, empty_zero: float
+) -> np.ndarray:
+    """⊕-fold each row's admitted terms left to right, the per-cell walk's
+    fold. Both routes give the same bits; this picks the cheaper. A sparse box
+    with short rows packs its admitted terms and steps through them
+    (:func:`_segmented_fold`, one numpy step per term position, or per row for
+    a few long ``+`` / ``*`` rows); otherwise :func:`_masked_row_fold` folds the
+    whole box in a fixed number of passes."""
+    counts = admit2d.sum(axis=1).astype(np.int64)
+    max_count = int(counts.max()) if counts.size else 0
+    n_live = int(np.count_nonzero(counts))
+    steps = min(max_count, n_live) if reducer in ("+", "*") else max_count
+    if steps * _FOLD_STEP_COST < term2d.size:
+        vals = np.ascontiguousarray(term2d[admit2d], dtype=float)
+        return _segmented_fold(reducer, vals, counts, empty_zero)
+    return _masked_row_fold(reducer, term2d, admit2d, empty_zero)
 
 
 def _row_chunks(counts: np.ndarray, cap: int) -> Iterator[tuple[int, int]]:
@@ -4430,7 +4523,7 @@ def _eval_faq_reduce_vectorized(
     # contracted axes trail the box, so a row of the 2-D view runs them in
     # `_cartesian` order (last symbol fastest), reversed for a reverse scan
     # window (esm-spec §4.3.1). They are folded left to right by
-    # `_segmented_fold` — never by a pairwise `ufunc.reduce` — so the answer
+    # `_fold_admitted_rows` — never by a pairwise `ufunc.reduce` — so the answer
     # is the per-cell walk's bit for bit, forward or reverse.
     n_out = int(np.prod(out_shape, dtype=np.int64))
     term2d = np.broadcast_to(term, combined_shape).reshape(n_out, -1)
@@ -4439,13 +4532,11 @@ def _eval_faq_reduce_vectorized(
         if admit is None
         else np.broadcast_to(admit, combined_shape).reshape(n_out, -1)
     )
-    if _folds_descending(filter_expr, reduce_syms, out_syms, reducer):
+    if _folds_descending(filter_expr, reduce_syms, out_syms):
         term2d = term2d[:, ::-1]
         admit2d = admit2d[:, ::-1]
-    vals = np.ascontiguousarray(term2d[admit2d], dtype=float)
-    counts = admit2d.sum(axis=1).astype(np.int64)
     with np.errstate(over="ignore", invalid="ignore"):
-        out = _segmented_fold(reducer, vals, counts, empty_zero)
+        out = _fold_admitted_rows(reducer, term2d, admit2d, empty_zero)
     return out.reshape(out_shape)
 
 
@@ -4483,7 +4574,7 @@ def _eval_faq_reduce_nested(
     symbols are bound on axes after ``S``, and the body, filter and join mask
     evaluate once over ``S × reduce``. Each enclosing cell's admitted terms are
     then folded left to right in :func:`_cartesian` order by
-    :func:`_segmented_fold` — the per-cell walk's fold, at that cell's binding
+    :func:`_fold_admitted_rows` — the per-cell walk's fold, at that cell's binding
     of the enclosing symbols. The window is fixed per enclosing cell, so it
     folds ascending whatever its comparison (esm-spec §4.3.1): a nested node
     has no output index to scan. The result has shape ``S``, which the
@@ -4550,10 +4641,8 @@ def _eval_faq_reduce_nested(
         admit = admit & join_mask.reshape((1,) * k + red_shape)
     term2d = term.reshape(n_rows, -1)
     admit2d = admit.reshape(n_rows, -1)
-    vals = np.ascontiguousarray(term2d[admit2d], dtype=float)
-    counts = admit2d.sum(axis=1).astype(np.int64)
     with np.errstate(over="ignore", invalid="ignore"):
-        out = _segmented_fold(reducer, vals, counts, empty_zero)
+        out = _fold_admitted_rows(reducer, term2d, admit2d, empty_zero)
     return out.reshape(lead)
 
 
@@ -4757,16 +4846,35 @@ def _scan_direction(
 
 
 def _folds_descending(
-    filter_expr: Expr | None, reduce_syms: list[str], out_syms: list[str], reducer: str
+    filter_expr: Expr | None, reduce_syms: list[str], out_syms: list[str]
 ) -> bool:
-    """Whether the node is a REVERSE scan under an inexact ⊕, whose window
-    esm-spec §4.3.1 folds DESCENDING — from its high end, as
+    """Whether the node is a REVERSE scan, whose window esm-spec §4.3.1 folds
+    DESCENDING under every ⊕ — from its high end, as
     ``((b_N ⊕ b_{N-1}) ⊕ …) ⊕ b_i`` — so that one right-to-left running
     accumulator is exactly the definition. Every other window folds ascending."""
-    if reducer not in ("+", "*"):
-        return False
     d = _scan_direction(filter_expr, reduce_syms, out_syms)
     return d is not None and not d[0]
+
+
+def _running_extremum(reducer: str, seq: np.ndarray) -> np.ndarray:
+    """Running ``max`` / ``min`` along the last axis, bit for bit the per-cell
+    :func:`_reduce_step` chain seeded from the first term: the accumulator is
+    replaced only by a term that strictly beats it. So a tie keeps the earlier
+    term (the sign of a zero is the first zero's), a NaN term is skipped, and a
+    leading NaN sticks for the whole row. ``np.maximum.accumulate`` is none of
+    these: it keeps the later of two equal zeros and propagates every NaN.
+
+    The NaN-skipping running value (``fmax`` / ``fmin``) marks the positions where
+    the accumulator is replaced; each cell then takes the term at the latest
+    replacement at or before it."""
+    beats = np.greater if reducer == "max" else np.less
+    running = (np.fmax if reducer == "max" else np.fmin).accumulate(seq, axis=-1)
+    replaced = np.ones(seq.shape, dtype=bool)
+    replaced[..., 1:] = beats(running[..., 1:], running[..., :-1])
+    pos = np.where(replaced, np.arange(seq.shape[-1]), 0)
+    acc = np.take_along_axis(seq, np.maximum.accumulate(pos, axis=-1), axis=-1)
+    first = seq[..., :1]
+    return np.where(np.isnan(first), first, acc)
 
 
 def _eval_faq_prefix_scan(
@@ -4792,7 +4900,7 @@ def _eval_faq_prefix_scan(
     dense box sums pairwise, whereas ``ufunc.accumulate`` is a sequential left
     fold — exactly the ascending-``j`` fold the spec pins as normative for a
     forward window, and run over the reversed axis, the descending fold it pins
-    for a reverse (``j >= i``) window under ``+`` / ``*``. Both are the orders the
+    for a reverse (``j >= i``) window. Both are the orders the
     scalar oracle and the other bindings use, so this path makes a scan
     bit-identical across bindings where the dense path was merely close.
 
@@ -4802,8 +4910,7 @@ def _eval_faq_prefix_scan(
     * exactly one contracted index, named by the filter (otherwise the admitted
       set is not a prefix of a single axis);
     * the filter is exactly a comparison against an output symbol, with no
-      conjunction, so "admitted" and "j ≤ i" (or "j ≥ i") coincide; a reverse
-      window only under ``+`` / ``*``, the ⊕ whose suffix folds descending;
+      conjunction, so "admitted" and "j ≤ i" (or "j ≥ i") coincide;
     * the contracted range equals the scanned output range, so ``j = i`` is the
       term entering the window at step ``i``;
     * the body does not read the scanned symbol — if it did, every cell's summand
@@ -4830,10 +4937,6 @@ def _eval_faq_prefix_scan(
             "output index",
         )
     forward, j_name, i_name, inclusive = direction
-    if not forward and reducer not in ("+", "*"):
-        # The per-cell walk folds a max/min suffix ascending; only the inexact
-        # ⊕ are defined to fold a suffix from its high end.
-        return _decline("prefix-scan", f"a reverse scan under ⊕ {reducer!r} folds ascending")
     scan_axis = out_syms.index(i_name)
 
     # `j = i` must be the newly admitted term at step `i`: same interval.
@@ -4868,13 +4971,15 @@ def _eval_faq_prefix_scan(
         )
 
     with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-        if forward:
-            acc = ufunc.accumulate(np.ascontiguousarray(terms), axis=terms.ndim - 1)
+        # A reverse scan folds each suffix from its HIGH end (§4.3.1), so one
+        # accumulator running right to left is exactly the definition.
+        seq = np.ascontiguousarray(terms if forward else terms[..., ::-1])
+        if reducer in ("max", "min"):
+            acc = _running_extremum(reducer, seq)
         else:
-            # A reverse scan folds each suffix from its HIGH end (§4.3.1), so one
-            # accumulator running right to left is exactly the definition.
-            rev = np.ascontiguousarray(terms[..., ::-1])
-            acc = ufunc.accumulate(rev, axis=terms.ndim - 1)[..., ::-1]
+            acc = ufunc.accumulate(seq, axis=terms.ndim - 1)
+        if not forward:
+            acc = acc[..., ::-1]
     acc = np.asarray(acc, dtype=float)
     if not inclusive:
         # Strict: cell k sees only the terms strictly before (forward) or after
@@ -4949,7 +5054,7 @@ def _eval_faq_scalar(
         )
 
     cartesian_red = _cartesian(red_ranges_exp) if reduce_syms else [()]
-    if _folds_descending(filter_expr, reduce_syms, out_syms, reducer):
+    if _folds_descending(filter_expr, reduce_syms, out_syms):
         # A reverse (to-top) scan folds its suffix window from the high end
         # (esm-spec §4.3.1).
         cartesian_red = cartesian_red[::-1]

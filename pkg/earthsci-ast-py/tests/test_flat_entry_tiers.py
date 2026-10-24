@@ -382,3 +382,25 @@ def test_overlap_gated_polygon_leaf_runs_through_the_batched_clip() -> None:
     assert tiers.get("overlap-driven")
     assert _bitwise(got, _oracle(node(), ctx))
     assert got.sum() == pytest.approx(36.0, rel=1e-12)
+
+
+def test_an_overlap_index_from_an_unsorted_array_is_sorted_and_owns_its_rows() -> None:
+    """The PAIR drive order (and the overlap tier's lexsorted pairs) is
+    ``(pos_src, pos_tgt)`` ascending whatever order the array arrives in, a
+    repeated pair counts once as it does in a set, and the index keeps its own
+    copy, so a caller reusing its buffer cannot change the gate."""
+    from earthsci_ast.broad_phase import OverlapIndex
+
+    raw = np.array([[3, 1], [1, 2], [2, 5], [1, 1], [3, 1], [2, 4]], dtype=np.int64)
+    want = [(1, 1), (1, 2), (2, 4), (2, 5), (3, 1)]
+    oi = OverlapIndex(raw)
+    raw[:] = 9
+    assert oi.sorted_pairs() == want
+    assert oi.pair_array().tolist() == [list(p) for p in want]
+    assert len(oi) == len(want)
+    assert (9, 9) not in oi
+
+    already = np.array(want, dtype=np.int64)
+    oi = OverlapIndex(already)
+    assert not np.shares_memory(oi.pair_array(), already)
+    assert oi.sorted_pairs() == want
