@@ -901,8 +901,10 @@ exclusive variant publishes each cell's accumulator before folding in its own te
 evaluator that does not keep a running accumulator — a per-cell triangular fold, say — MUST
 still fold each cell's window in the variant's direction, so it reaches the same bits. No
 binding may use a reassociating scan (pairwise, blocked, or parallel-prefix) for an inexact ⊕
-in either direction. Under an **exactly associative** ⊕ (`max`, `min`) the order cannot change
-the result.
+in either direction. A reverse window folds from the top under **every** ⊕, `max` and `min`
+included: on numbers their order does not matter, but a fold step that keeps its accumulator
+unless a term beats it skips a NaN that arrives after a number and keeps one that arrives
+first, so with a NaN in the window the visiting order decides the result.
 
 **A cumulative sum is not a cumulative integral.** The body is summed with no measure
 weighting — the format carries no measure concept (§6.6.5 convention 2). A Riemann-sum

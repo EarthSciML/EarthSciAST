@@ -4439,7 +4439,7 @@ def _eval_faq_reduce_vectorized(
         if admit is None
         else np.broadcast_to(admit, combined_shape).reshape(n_out, -1)
     )
-    if _folds_descending(filter_expr, reduce_syms, out_syms, reducer):
+    if _folds_descending(filter_expr, reduce_syms, out_syms):
         term2d = term2d[:, ::-1]
         admit2d = admit2d[:, ::-1]
     vals = np.ascontiguousarray(term2d[admit2d], dtype=float)
@@ -4757,16 +4757,35 @@ def _scan_direction(
 
 
 def _folds_descending(
-    filter_expr: Expr | None, reduce_syms: list[str], out_syms: list[str], reducer: str
+    filter_expr: Expr | None, reduce_syms: list[str], out_syms: list[str]
 ) -> bool:
-    """Whether the node is a REVERSE scan under an inexact ⊕, whose window
-    esm-spec §4.3.1 folds DESCENDING — from its high end, as
+    """Whether the node is a REVERSE scan, whose window esm-spec §4.3.1 folds
+    DESCENDING under every ⊕ — from its high end, as
     ``((b_N ⊕ b_{N-1}) ⊕ …) ⊕ b_i`` — so that one right-to-left running
     accumulator is exactly the definition. Every other window folds ascending."""
-    if reducer not in ("+", "*"):
-        return False
     d = _scan_direction(filter_expr, reduce_syms, out_syms)
     return d is not None and not d[0]
+
+
+def _running_extremum(reducer: str, seq: np.ndarray) -> np.ndarray:
+    """Running ``max`` / ``min`` along the last axis, bit for bit the per-cell
+    :func:`_reduce_step` chain seeded from the first term: the accumulator is
+    replaced only by a term that strictly beats it. So a tie keeps the earlier
+    term (the sign of a zero is the first zero's), a NaN term is skipped, and a
+    leading NaN sticks for the whole row. ``np.maximum.accumulate`` is none of
+    these: it keeps the later of two equal zeros and propagates every NaN.
+
+    The NaN-skipping running value (``fmax`` / ``fmin``) marks the positions where
+    the accumulator is replaced; each cell then takes the term at the latest
+    replacement at or before it."""
+    beats = np.greater if reducer == "max" else np.less
+    running = (np.fmax if reducer == "max" else np.fmin).accumulate(seq, axis=-1)
+    replaced = np.ones(seq.shape, dtype=bool)
+    replaced[..., 1:] = beats(running[..., 1:], running[..., :-1])
+    pos = np.where(replaced, np.arange(seq.shape[-1]), 0)
+    acc = np.take_along_axis(seq, np.maximum.accumulate(pos, axis=-1), axis=-1)
+    first = seq[..., :1]
+    return np.where(np.isnan(first), first, acc)
 
 
 def _eval_faq_prefix_scan(
@@ -4792,7 +4811,7 @@ def _eval_faq_prefix_scan(
     dense box sums pairwise, whereas ``ufunc.accumulate`` is a sequential left
     fold — exactly the ascending-``j`` fold the spec pins as normative for a
     forward window, and run over the reversed axis, the descending fold it pins
-    for a reverse (``j >= i``) window under ``+`` / ``*``. Both are the orders the
+    for a reverse (``j >= i``) window. Both are the orders the
     scalar oracle and the other bindings use, so this path makes a scan
     bit-identical across bindings where the dense path was merely close.
 
@@ -4802,8 +4821,7 @@ def _eval_faq_prefix_scan(
     * exactly one contracted index, named by the filter (otherwise the admitted
       set is not a prefix of a single axis);
     * the filter is exactly a comparison against an output symbol, with no
-      conjunction, so "admitted" and "j ≤ i" (or "j ≥ i") coincide; a reverse
-      window only under ``+`` / ``*``, the ⊕ whose suffix folds descending;
+      conjunction, so "admitted" and "j ≤ i" (or "j ≥ i") coincide;
     * the contracted range equals the scanned output range, so ``j = i`` is the
       term entering the window at step ``i``;
     * the body does not read the scanned symbol — if it did, every cell's summand
@@ -4830,10 +4848,6 @@ def _eval_faq_prefix_scan(
             "output index",
         )
     forward, j_name, i_name, inclusive = direction
-    if not forward and reducer not in ("+", "*"):
-        # The per-cell walk folds a max/min suffix ascending; only the inexact
-        # ⊕ are defined to fold a suffix from its high end.
-        return _decline("prefix-scan", f"a reverse scan under ⊕ {reducer!r} folds ascending")
     scan_axis = out_syms.index(i_name)
 
     # `j = i` must be the newly admitted term at step `i`: same interval.
@@ -4868,13 +4882,15 @@ def _eval_faq_prefix_scan(
         )
 
     with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-        if forward:
-            acc = ufunc.accumulate(np.ascontiguousarray(terms), axis=terms.ndim - 1)
+        # A reverse scan folds each suffix from its HIGH end (§4.3.1), so one
+        # accumulator running right to left is exactly the definition.
+        seq = np.ascontiguousarray(terms if forward else terms[..., ::-1])
+        if reducer in ("max", "min"):
+            acc = _running_extremum(reducer, seq)
         else:
-            # A reverse scan folds each suffix from its HIGH end (§4.3.1), so one
-            # accumulator running right to left is exactly the definition.
-            rev = np.ascontiguousarray(terms[..., ::-1])
-            acc = ufunc.accumulate(rev, axis=terms.ndim - 1)[..., ::-1]
+            acc = ufunc.accumulate(seq, axis=terms.ndim - 1)
+        if not forward:
+            acc = acc[..., ::-1]
     acc = np.asarray(acc, dtype=float)
     if not inclusive:
         # Strict: cell k sees only the terms strictly before (forward) or after
@@ -4949,7 +4965,7 @@ def _eval_faq_scalar(
         )
 
     cartesian_red = _cartesian(red_ranges_exp) if reduce_syms else [()]
-    if _folds_descending(filter_expr, reduce_syms, out_syms, reducer):
+    if _folds_descending(filter_expr, reduce_syms, out_syms):
         # A reverse (to-top) scan folds its suffix window from the high end
         # (esm-spec §4.3.1).
         cartesian_red = cartesian_red[::-1]
