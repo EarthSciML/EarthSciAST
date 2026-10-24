@@ -8,7 +8,7 @@ This document maps ESM format specifications to test fixtures to ensure complete
 |---------|---------------|-------------------|----------|
 | 1. Overview | Format version, MIME type | ✅ Created | `valid/minimal_chemistry.esm` |
 | 2. Top-Level Structure | All 8 required fields | ✅ Created | `valid/minimal_chemistry.esm` |
-| 2.2 Solver Hints | `stiffness`, `abstol`, `reltol`, `splitting`; version gate | ✅ Created | `valid/solver_block.esm`, `invalid/solver_*.esm` (4) |
+| 2.2 Solver Hints | `stiffness`, `abstol`, `reltol`, `splitting`, `external` (§2.2.6, esm 1.3.0); both version gates; `${` refusal; `external` resolution, mount rule, advisory gate and flatten invariance | ✅ Created | `valid/solver_block.esm`, `valid/solver_external.esm`, `valid/solver_external_only.esm`, `invalid/solver_*.esm` (8), `conformance/solver_external/` (CONFORMANCE_SPEC §5.47), `simulation/solver_external_advisory.esm` |
 | 3. Metadata | Authors, license, created, etc. | ❌ Missing | **GAP**: Need `metadata_complete.esm` |
 | 4. Expression AST | All operators, numbers, strings | ✅ Partial | `display/expr_precedence.json` (18 cases) |
 | 4.2 Built-in Operators | All 30+ operators | ✅ Created | `display/all_operators.json` (35+ cases) |
