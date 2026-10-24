@@ -1358,15 +1358,29 @@ function _resolve_state_gather(vname::String, lo::Vector{Int}, hi::Vector{Int},
         total = prod(dims)
         sf = Vector{Int}(undef, total)
         cur = Vector{Int}(undef, nd)
+        # A variable laid out as one block is read by arithmetic; formatting a
+        # cell key per cell would make this table cost far more per cell than
+        # the integers it holds.
+        blk = _vm_block(var_map, vname)
+        if blk !== nothing && blk.lo == lo && blk.hi == hi && blk.strides == strd
+            for lin in 0:total-1
+                sf[lin+1] = blk.base + lin
+            end
+            return (sf, strd)
+        end
         for lin in 0:total-1
             rem = lin
             for d in 1:nd
                 cur[d] = lo[d] + (rem % dims[d]); rem ÷= dims[d]
             end
-            cname = _cell_key(vname, cur)
-            haskey(var_map, cname) ||
-                throw(TreeWalkError("E_TREEWALK_MISSING_CELL", cname))
-            sf[lin+1] = var_map[cname]
+            slot = blk === nothing ? 0 : _block_slot(blk, cur)
+            if slot == 0
+                cname = _cell_key(vname, cur)
+                haskey(var_map, cname) ||
+                    throw(TreeWalkError("E_TREEWALK_MISSING_CELL", cname))
+                slot = var_map[cname]
+            end
+            sf[lin+1] = slot
         end
         (sf, strd)
     end

@@ -5940,6 +5940,26 @@ function _makearray_region_rhs(val::ASTExpr, box::Vector{Tuple{Int,Int}},
     return val
 end
 
+# The output slots of a whole-array nest whose LHS subscripts are affine, in
+# `Iterators.product` order, each claimed in `covered`. A function of the
+# ranges as a tuple, so the loop is compiled for their rank rather than
+# dispatched per cell. Returns the number of cells.
+function _ac_claim_outs!(outs::Vector{Int}, covered, blk, var_map, vname::String,
+                         cell::Vector{Int}, forms, iters::Tuple)
+    c = 0
+    for idx_tuple in Iterators.product(iters...)
+        c += 1
+        idx = _lhs_cell_slot(blk, var_map, vname, cell, forms, idx_tuple)
+        idx == 0 && throw(TreeWalkError("E_TREEWALK_UNKNOWN_STATE",
+                                        _cell_key(vname, cell)))
+        covered[idx] && throw(TreeWalkError("E_TREEWALK_DUPLICATE_DERIVATIVE",
+                                            _cell_key(vname, cell)))
+        covered[idx] = true
+        outs[c] = idx
+    end
+    return c
+end
+
 # Thrown to stop the refusal diagnostic's enumeration at its term cap; caught
 # by the diagnostic itself, never seen outside it.
 struct _DiagnosticCap <: EarthSciASTError end
@@ -6164,16 +6184,8 @@ function _try_compile_array_contraction(lhs_body::OpExpr, rhs_body::ASTExpr,
         vname, forms = target
         cell = Vector{Int}(undef, length(forms))
         blk = _vm_block(var_map, vname)
-        for idx_tuple in Iterators.product(range_iters...)
-            c += 1
-            idx = _lhs_cell_slot(blk, var_map, vname, cell, forms, idx_tuple)
-            idx == 0 && throw(TreeWalkError("E_TREEWALK_UNKNOWN_STATE",
-                                            _cell_key(vname, cell)))
-            covered[idx] && throw(TreeWalkError("E_TREEWALK_DUPLICATE_DERIVATIVE",
-                                                _cell_key(vname, cell)))
-            covered[idx] = true
-            outs[c] = idx
-        end
+        c = _ac_claim_outs!(outs, covered, blk, var_map, vname, cell, forms,
+                            Tuple(range_iters))
     else
         for idx_tuple in Iterators.product(range_iters...)
             c += 1
