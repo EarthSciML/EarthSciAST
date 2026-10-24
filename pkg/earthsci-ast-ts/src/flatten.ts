@@ -90,6 +90,7 @@ import { mergedTemplateRegistry } from './flatten-template-registry.js'
 import { resolveRhsTimeDerivatives } from './flatten-tendency.js'
 import {
   addExprs,
+  contributionsOf,
   equationFrom,
   foldContributions,
   mapContributions,
@@ -1651,7 +1652,7 @@ function applyOperatorCompose(
       // contribution; when B already carries several, they collapse into ONE
       // `factor * (b1 + b2 + ...)` whose origins are the union: indivisible,
       // because distributing the factor would change the arithmetic.
-      let bContribs: Contribution[] = bEq.contributions.map((c) => ({
+      let bContribs: Contribution[] = contributionsOf(bEq).map((c) => ({
         expr: substitute(c.expr, { [bDep]: targetDep }) as Expression,
         origins: c.origins,
       }))
@@ -1663,7 +1664,7 @@ function applyOperatorCompose(
           },
         ]
       }
-      a.equations[i] = equationFrom(aEq, [...aEq.contributions, ...bContribs])
+      a.equations[i] = equationFrom(aEq, [...contributionsOf(aEq), ...bContribs])
       mergedPositions.add(i)
       if (targetDep !== bDep) {
         mergedAway[bDep] = targetDep
@@ -2023,24 +2024,26 @@ function applyCouple(
     })
   }
 
-  // Which targets carry a TENDENCY (`D(x)`), as opposed to merely SOME defining
-  // equation: `multiplicative` is defined against an ODE RHS (§10.3, §4.7.2),
-  // so an observed or algebraic equation for `x` does not qualify.
-  const tendencies = new Set<string>()
-  for (const comp of Object.values(components)) {
-    for (const eq of comp.equations) {
+  // The last TENDENCY (`D(x)`) for each target, as opposed to merely SOME
+  // defining equation: `multiplicative` is defined against an ODE RHS (§10.3,
+  // §4.7.2), so an observed or algebraic equation for `x` does not qualify, and
+  // the check and the equation scaled are this one lookup.
+  const tendencies: Record<string, [string, number]> = {}
+  for (const [sysName, comp] of Object.entries(components)) {
+    comp.equations.forEach((eq, i) => {
       if (isNode(eq.lhs) && eq.lhs.op === 'D') {
         const dep = lhsDependentVar(eq.lhs)
-        if (dep !== undefined) tendencies.add(dep)
+        if (dep !== undefined) tendencies[dep] = [sysName, i]
       }
-    }
+    })
   }
 
   for (const raw of connectorEquations) {
     const ceq = raw as { to?: string; from?: string; transform?: string; expression?: Expression }
     const target = ceq.to
     if (target === undefined) continue
-    if (ceq.transform === 'multiplicative' && !tendencies.has(target)) {
+    const multiplicative = ceq.transform === 'multiplicative'
+    if (multiplicative && !Object.prototype.hasOwnProperty.call(tendencies, target)) {
       throw new CoupleMultiplicativeNoTendencyError(
         `couple connector 'multiplicative' transform targets '${target}', ` +
           `which has no tendency (D(${target})) to multiply (esm-spec §10.3). ` +
@@ -2075,25 +2078,25 @@ function applyCouple(
       })
       // The new tendency is a target for the next connector equation too.
       eqIndex[target] = [ownerName, owner.equations.length - 1]
-      tendencies.add(target)
+      tendencies[target] = [ownerName, owner.equations.length - 1]
       continue
     }
-    const [sysName, i] = eqIndex[target]
+    const [sysName, i] = multiplicative ? tendencies[target] : eqIndex[target]
     const comp = components[sysName]
     const existing = comp.equations[i]
 
     let contributions: Contribution[]
-    if (ceq.transform === 'multiplicative') {
+    if (multiplicative) {
       contributions = [
         {
-          expr: multiplyExprs(foldContributions(existing.contributions), expression),
-          origins: unionOrigins(existing.contributions, { coupling: index }),
+          expr: multiplyExprs(foldContributions(contributionsOf(existing)), expression),
+          origins: unionOrigins(contributionsOf(existing), { coupling: index }),
         },
       ]
     } else if (ceq.transform === 'replacement') {
       contributions = [authored]
     } else {
-      contributions = [...existing.contributions, authored]
+      contributions = [...contributionsOf(existing), authored]
     }
     comp.equations[i] = equationFrom(existing, contributions)
   }
@@ -2985,7 +2988,7 @@ function applyPointwiseLift(flat: FlattenedSystem, coupling: CouplingEntry[]): v
 
     // Per-cell indexing applies inside each contribution; the `faq` wrapper goes
     // around their sum (§4.7.5 provenance table).
-    const contributions: Contribution[] = eq.contributions.map((c) => ({
+    const contributions: Contribution[] = contributionsOf(eq).map((c) => ({
       expr: liftRhsToCell(c.expr, arrayVars, loops),
       origins: c.origins,
     }))
