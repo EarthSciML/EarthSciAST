@@ -96,6 +96,9 @@ type LResult<T> = Result<T, Bail>;
 mod standalone;
 mod tuples;
 
+#[cfg(test)]
+pub(super) use tuples::set_tuple_list_budget;
+
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use standalone::StandaloneError;
 #[cfg(not(target_arch = "wasm32"))]
@@ -553,6 +556,9 @@ pub(crate) struct TapeBuilder<'m> {
     tuple_frames: Vec<tuples::TupleFrame>,
     /// The id the next tuple-list box gets (0 means "not a tuple box").
     next_tuple: u32,
+    /// Tuples this program's tuple lists hold so far, against
+    /// `tuples::tuple_list_budget`.
+    tuples_held: u64,
     /// Fail-closed fault messages (`Instr::Fault` indexes here).
     faults: Vec<String>,
     /// Conditional fault scans (`Instr::FaultScan` indexes here).
@@ -791,6 +797,7 @@ impl<'m> TapeBuilder<'m> {
             known: FxHashMap::default(),
             tuple_frames: Vec::new(),
             next_tuple: 1,
+            tuples_held: 0,
             faults: Vec::new(),
             fault_scans: Vec::new(),
             sweeps: Vec::new(),

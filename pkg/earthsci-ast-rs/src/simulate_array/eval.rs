@@ -3945,13 +3945,13 @@ fn push_equality_gate(
 /// How many distinct positions `sym` can still take, given the gates already
 /// resolved. `full` is its side length, which is the answer when nothing has
 /// narrowed it.
-fn reach_of(reach: &HashMap<String, usize>, sym: &str, full: usize) -> usize {
+pub(super) fn reach_of(reach: &HashMap<String, usize>, sym: &str, full: usize) -> usize {
     reach.get(sym).map_or(full, |r| (*r).min(full))
 }
 
 /// Record that a gate with `pairs` pairs leaves at most that many positions
 /// alive on `sym`.
-fn narrow_reach(reach: &mut HashMap<String, usize>, sym: &str, pairs: usize) {
+pub(super) fn narrow_reach(reach: &mut HashMap<String, usize>, sym: &str, pairs: usize) {
     let slot = reach.entry(sym.to_string()).or_insert(usize::MAX);
     *slot = (*slot).min(pairs);
 }
