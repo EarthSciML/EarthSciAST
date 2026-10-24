@@ -486,6 +486,26 @@
         "reason": "the build-time join (15 const-section instructions: keys, values, match set) costs about 1.2 us per row against the 20 ns budget; runs range 1052-1459 ns/state; issue #510",
         "phase": "native-models",
         "provisional": "sweep 2026-10-17, native/models 9a44453f5 + native/models-gates hand loops (f664fd41d), local node cores 16-19, load average 3-11 (other agents on other cores), median of 5 runs"
+      },
+      {
+        "family": "makearray_nested_sum",
+        "n": 1000,
+        "gate": "speed",
+        "threads": "serial",
+        "measured": 1.8,
+        "reason": "native builds the N x N term box in several elementwise passes and then reduces it, where the hand loop folds each row's terms in registers; fusing the elementwise chain into the reduction is executor work; issue #548",
+        "phase": "native-models",
+        "provisional": "adapter run 2026-10-23, native/i547 080c8e968, local node cores 5-6, load average 10-17 (other users), one run per size"
+      },
+      {
+        "family": "makearray_nested_sum",
+        "n": 3162,
+        "gate": "speed",
+        "threads": "serial",
+        "measured": 2.36,
+        "reason": "native builds the N x N term box in several elementwise passes and then reduces it, where the hand loop folds each row's terms in registers; fusing the elementwise chain into the reduction is executor work; issue #548",
+        "phase": "native-models",
+        "provisional": "adapter run 2026-10-23, native/i547 080c8e968, local node cores 5-6, load average 10-17 (other users), one run per size"
       }
     ],
     "julia": [
