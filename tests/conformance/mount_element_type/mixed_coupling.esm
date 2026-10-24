@@ -1,0 +1,45 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "mount_element_type_mixed_coupling",
+    "description": "A binary64 model reads the mounted binary32 quantity through a variable_map coupling. The equation y = 2*px then mixes Float64 and Float32 — mixed_element_type, never a silent widening. LOADS in every binding; the refusal is an evaluation-build error."
+  },
+  "models": {
+    "Leaf": {
+      "ref": "./leaf_f32.esm"
+    },
+    "Host": {
+      "variables": {
+        "px": {
+          "type": "parameter",
+          "default": 0.0,
+          "units": "1"
+        },
+        "y": {
+          "type": "unknown",
+          "units": "1"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "y",
+          "rhs": {
+            "op": "*",
+            "args": [
+              2,
+              "px"
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "coupling": [
+    {
+      "type": "variable_map",
+      "from": "Leaf.x",
+      "to": "Host.px",
+      "transform": "param_to_var"
+    }
+  ]
+}

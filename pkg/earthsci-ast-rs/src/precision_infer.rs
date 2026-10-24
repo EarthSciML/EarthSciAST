@@ -288,19 +288,42 @@ fn annotate_model_with(
 pub fn env_of_file(file: &crate::types::EsmFile) -> Result<Env, CompileError> {
     let document =
         Precision::from_element_type(file.domain.as_ref().and_then(|d| d.element_type.as_deref()))?;
-    let mut vars = VarPrecisions::default();
-    for (mname, model) in file.models.iter().flatten() {
-        for (vname, var) in &model.variables {
-            let Some(et) = var.element_type.as_deref() else {
-                continue;
-            };
-            vars.insert(Some(mname), vname, Precision::from_element_type(Some(et))?);
+    let vars = match file.models.as_ref() {
+        Some(models) => {
+            VarPrecisions::from_declarations(&model_declarations(models), document, None)?
         }
-    }
+        None => VarPrecisions::default(),
+    };
     Ok(Env {
         document,
         variables: Rc::new(vars),
     })
+}
+
+/// The per-model variable declarations [`VarPrecisions::from_declarations`]
+/// reads, off a typed document's models.
+#[must_use]
+pub fn model_declarations(
+    models: &indexmap::IndexMap<String, crate::types::Model>,
+) -> Vec<crate::precision::ModelDeclarations<'_>> {
+    models
+        .iter()
+        .map(|(mname, model)| {
+            let subs = model
+                .subsystems
+                .as_ref()
+                .map(|s| serde_json::to_value(s).unwrap_or(serde_json::Value::Null));
+            crate::precision::ModelDeclarations {
+                model: mname,
+                variables: model
+                    .variables
+                    .iter()
+                    .map(|(v, d)| (v.as_str(), d.element_type.as_deref()))
+                    .collect(),
+                subsystem_variables: crate::precision::subsystem_declarations(subs.as_ref()),
+            }
+        })
+        .collect()
 }
 
 /// `file` with every equation annotated, or `None` when it declares no
@@ -330,6 +353,50 @@ pub fn annotated(
         annotate_models(models, document)?;
     }
     Ok(Some(out))
+}
+
+/// Check a FLATTENED system's equations for `mixed_element_type` (esm-spec
+/// §11.3.1).
+///
+/// The per-model pass ([`annotate_models`]) runs before flattening, one model at
+/// a time, so it cannot see what a coupling does across models: a
+/// `variable_map` that feeds a mounted binary32 quantity into a binary64
+/// model's parameter produces, after flattening, an equation mixing the two —
+/// and without this check it evaluated silently in the rule's precision
+/// (§4.7 "Working precision crosses a mount"). A no-op, with no walk at all,
+/// when no flattened variable declares an `element_type`.
+///
+/// # Errors
+///
+/// [`CompileError::MixedElementType`] naming both variables, or
+/// [`CompileError::UnsupportedElementType`] for a bad spelling.
+pub fn check_flattened(flat: &crate::flatten::FlattenedSystem) -> Result<(), CompileError> {
+    let registries = [
+        &flat.state_variables,
+        &flat.parameters,
+        &flat.observed_variables,
+        &flat.algebraic_variables,
+        &flat.brownian_parameters,
+        &flat.discrete_parameters,
+    ];
+    if !registries
+        .iter()
+        .any(|r| r.values().any(|v| v.element_type.is_some()))
+    {
+        return Ok(());
+    }
+    let document =
+        Precision::from_element_type(flat.domain.as_ref().and_then(|d| d.element_type.as_deref()))?;
+    let mut env: HashMap<String, Precision> = HashMap::new();
+    for r in registries {
+        for (name, var) in r {
+            env.insert(name.clone(), variable_precision(var, document)?);
+        }
+    }
+    for eq in &flat.equations {
+        annotate_equation(eq.clone(), &env, document)?;
+    }
+    Ok(())
 }
 
 fn annotate_equations(

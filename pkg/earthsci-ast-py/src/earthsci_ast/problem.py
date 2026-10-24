@@ -66,7 +66,7 @@ from .compiler import (
     use_policy,
 )
 from .errors import MissingDataError
-from .error_handling import CALLBACK_UNREGISTERED
+from .error_handling import CALLBACK_UNREGISTERED, FLOAT32_UNSUPPORTED
 from .esm_types import CouplingType, EsmFile, ExprNode, is_aggregate_op
 from .expr_walk import iter_children
 from .expression import DataSourceUnboundError, UnsupportedConstructError, free_variables
@@ -758,6 +758,10 @@ def _esm_problem_under(
     # event or solves an implicit equation, so refuse both here, for every route,
     # rather than build a model that silently runs without them.
     _refuse_unsupported_constructs(flat, file)
+
+    # CONFORMANCE_SPEC §5.18.2: a binary32 declaration this evaluator does not
+    # honour is refused, never evaluated in binary64.
+    _refuse_unhonoured_float32(flat)
 
     # A declared shape over an undeclared index set, on a state nothing sizes.
     _assert_shaped_states_have_extent(flat)
@@ -1641,6 +1645,61 @@ def _refuse_unregistered_callback_reads(file: EsmFile) -> None:
 
     for name, model in sorted((file.models or {}).items()):
         visit(model, name)
+
+
+class Float32UnsupportedError(SimulationError):
+    """A variable whose working precision is binary32 reached an evaluator that
+    would compute it in binary64 (CONFORMANCE_SPEC §5.18.2,
+    ``float32_unsupported``)."""
+
+    #: Stable cross-binding diagnostic code.
+    code = FLOAT32_UNSUPPORTED
+
+
+def _refuse_unhonoured_float32(flat: FlattenedSystem) -> None:
+    """Refuse every variable whose effective working precision is binary32 and
+    that this binding does not evaluate in binary32 (CONFORMANCE_SPEC §5.18.2:
+    "a binding that cannot honour a clause MUST refuse it").
+
+    The effective precision is the variable's own ``element_type``, else the
+    document's ``domain.element_type`` — and after esm-spec §4.7 "Working
+    precision crosses a mount" a mounted binary32 leaf reaches here as exactly
+    such per-variable declarations. The one construct this binding does carry in
+    binary32 is the causal self-reference's carried cell (CONFORMANCE_SPEC
+    §5.19.3a, ``numpy_interpreter.rounding_for_element_type``), so an observed
+    defined by a recurrence is exempt; everything else would be evaluated in
+    binary64 with nothing in the result to say so. A no-op for the Float64
+    document.
+    """
+    from .recurrence import is_recurrence_candidate
+
+    domain = getattr(flat, "domain", None)
+    document = (getattr(domain, "element_type", None) if domain is not None else None) or "Float64"
+    tables = (flat.state_variables, flat.observed_variables, flat.parameters)
+    if document != "Float32" and not any(
+        getattr(v, "element_type", None) == "Float32" for t in tables for v in t.values()
+    ):
+        return
+    swept: set[str] = set()
+    for eq in flat.equations:
+        lhs = eq.lhs
+        if isinstance(lhs, str):
+            var = flat.observed_variables.get(lhs) or flat.state_variables.get(lhs)
+            shaped = bool(getattr(var, "shape", None)) if var is not None else False
+            if is_recurrence_candidate(lhs, eq.rhs, array_shaped=shaped):
+                swept.add(lhs)
+    for table in tables:
+        for name, var in table.items():
+            effective = getattr(var, "element_type", None) or document
+            if effective != "Float32" or name in swept:
+                continue
+            raise Float32UnsupportedError(
+                f"{FLOAT32_UNSUPPORTED}: variable '{name}' is declared binary32 "
+                f'(element_type "Float32"), but this binding evaluates it in binary64; '
+                f"refusing the build rather than returning a binary64 answer "
+                f"(CONFORMANCE_SPEC §5.18.2). Evaluate the document with a binding that "
+                f'implements binary32, or declare the variable "Float64"'
+            )
 
 
 def _refuse_unsupported_constructs(flat: FlattenedSystem, file: EsmFile | None) -> None:

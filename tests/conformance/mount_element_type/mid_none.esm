@@ -1,0 +1,12 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "mount_element_type_mid_none",
+    "description": "An intermediate assembly that declares no precision and mounts the Float32 leaf. Its effective precision is inherited from whatever mounts it."
+  },
+  "models": {
+    "Leaf": {
+      "ref": "./leaf_f32.esm"
+    }
+  }
+}

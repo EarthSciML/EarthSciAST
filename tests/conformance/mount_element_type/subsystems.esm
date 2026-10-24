@@ -1,0 +1,28 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "mount_element_type_subsystems",
+    "description": "The same leaf at the other mount form, a subsystems.<k> {ref}. The loader carries the precision identically."
+  },
+  "models": {
+    "Host": {
+      "variables": {
+        "y": {
+          "type": "unknown",
+          "units": "1"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "y",
+          "rhs": 2
+        }
+      ],
+      "subsystems": {
+        "Leaf": {
+          "ref": "./leaf_f32.esm"
+        }
+      }
+    }
+  }
+}

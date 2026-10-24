@@ -511,6 +511,9 @@ impl ArrayCompiled {
     /// inference, faq lowering, the diffsol RHS build — is shared bit-for-bit
     /// with the single-model path.
     pub fn from_flattened(flat: &FlattenedSystem) -> Result<Self, CompileError> {
+        // A coupling can mix precisions the per-model inference never saw
+        // (esm-spec §4.7 "Working precision crosses a mount", §11.3.1).
+        crate::precision_infer::check_flattened(flat)?;
         // Reject hybrid dimensionality and model events. The data-loader
         // refresh path that drives
         // this seam is event-free by design (a driver-level segmented solve,
