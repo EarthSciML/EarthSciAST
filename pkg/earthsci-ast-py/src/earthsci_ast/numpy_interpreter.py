@@ -2454,9 +2454,9 @@ def _eval_faq(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
     """
     policy = _compiler.active_policy()
     if policy is None or not policy.strict:
-        return _eval_faq_dispatch(expr, ctx)
+        return _seed_sum_from_identity(expr, _eval_faq_dispatch(expr, ctx))
     try:
-        return _eval_faq_dispatch(expr, ctx)
+        return _seed_sum_from_identity(expr, _eval_faq_dispatch(expr, ctx))
     except _compiler.CompilerRefusedRuleError as refusal:
         if refusal.verified:
             raise
@@ -2466,6 +2466,28 @@ def _eval_faq(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
             # and the refusal below is a true statement about the compiler.
             _eval_faq_dispatch(expr, ctx)
         raise
+
+
+def _seed_sum_from_identity(expr: ExprNode, out: Any) -> Any:
+    """A ``+`` reduction's fold is seeded from 0̄ = +0.0 (esm-spec §4.3.1), so a
+    non-empty sum whose terms are all ``-0.0`` is ``+0.0``. Every tier folds
+    from the first admitted term instead; the two differ only in that case,
+    since ``+0.0 + t`` is ``t`` for every ``t`` but ``-0.0`` and a sum that
+    starts from ``+0.0`` never reaches ``-0.0``. So one ``+ 0.0`` per output cell,
+    which changes nothing but a ``-0.0``, turns any tier's result into the
+    0̄-seeded fold. A node that contracts nothing is a map, not a fold."""
+    if _resolve_semiring(expr)[0] != "+":
+        return out
+    if getattr(expr, "distinct", None) or getattr(expr, "key", None) is not None:
+        return out
+    outs = {s for s in (expr.output_idx or []) if isinstance(s, str)}
+    if not any(s not in outs for s in (expr.ranges or {})):
+        return out
+    if isinstance(out, np.ndarray):
+        return out + 0.0 if out.dtype.kind == "f" else out
+    if isinstance(out, float):
+        return out + 0.0
+    return out
 
 
 def _eval_faq_dispatch(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
