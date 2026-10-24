@@ -316,6 +316,71 @@ class LoaderField:
     unit_conversion: Expr | None = None
 
 
+@dataclass(frozen=True)
+class TermOrigin:
+    """Who authored one contribution to a flattened equation (esm-libraries-spec
+    §4.7.5, "Per-term provenance").
+
+    Exactly one of the two fields is set: ``component`` is the full dotted path
+    of the model, subsystem or reaction system whose equation contained the
+    expression (``"Atmosphere.Chemistry"``); ``coupling`` is the 0-based index of
+    the coupling entry that wrote the expression itself, counted in the coupling
+    sequence AFTER ``coupling_import`` expansion (the sequence
+    ``metadata.coupling_rules`` lists).
+    """
+
+    component: str | None = None
+    coupling: int | None = None
+
+    def __post_init__(self) -> None:
+        if (self.component is None) == (self.coupling is None):
+            raise ValueError("a TermOrigin names exactly one of `component` or `coupling`")
+
+    def to_json(self) -> dict[str, Any]:
+        """The corpus form: ``{"component": path}`` or ``{"coupling": index}``."""
+        if self.component is not None:
+            return {"component": self.component}
+        return {"coupling": self.coupling}
+
+
+@dataclass
+class Contribution:
+    """One summand of a flattened equation's right-hand side, with its authors.
+
+    ``origins`` is non-empty and deduplicated in first-appearance order. It has
+    more than one entry only where a non-additive merge (a multiplicative
+    ``couple``, or an ``operator_compose`` ``translate`` factor applied to a
+    multi-contribution equation) collapsed several contributions into one
+    indivisible expression. Provenance lives here, beside the expression tree,
+    never on a node: ``expr`` is an ordinary expression and compares, hashes and
+    canonicalizes as one.
+    """
+
+    expr: Expr
+    origins: list[TermOrigin]
+
+
+def _union_origins(contributions: list[Contribution], *extra: TermOrigin) -> list[TermOrigin]:
+    """Every origin of ``contributions`` then ``extra``, deduplicated in
+    first-appearance order."""
+    out: list[TermOrigin] = []
+    for origin in [o for c in contributions for o in c.origins] + list(extra):
+        if origin not in out:
+            out.append(origin)
+    return out
+
+
+def _fold_contributions(contributions: list[Contribution]) -> Expr:
+    """The right-hand side a contribution list stands for: the LEFT fold of the
+    contribution expressions under binary ``+`` (esm-libraries-spec §4.7.5, the
+    provenance invariant). A literal-zero operand is dropped from the tree, as
+    :func:`_add_exprs` always has; its contribution stays recorded."""
+    rhs = contributions[0].expr
+    for contribution in contributions[1:]:
+        rhs = _add_exprs(rhs, contribution.expr)
+    return rhs
+
+
 @dataclass
 class FlattenedEquation:
     """An equation in the flattened system, with namespaced Expr trees.
@@ -323,6 +388,22 @@ class FlattenedEquation:
     Backwards-compatibility note: ``lhs`` and ``rhs`` are stored as Expr trees
     (the canonical form), and ``lhs_str`` / ``rhs_str`` provide pretty-printed
     versions for tests and display.
+
+    ``contributions`` is the equation's per-term provenance (esm-libraries-spec
+    §4.7.5): the ordered summands of the right-hand side, each with the
+    component or coupling entry that authored it. ``body`` (``rhs``, or the
+    ``faq`` body when the pointwise lift wrapped the equation) is the left fold
+    of their expressions. Flatten fills it at every step; an equation built
+    without it gets one contribution with no origins, which says "provenance
+    unknown" rather than inventing an author.
+
+    ``source_system`` is the equation's SLOT OWNER — the component whose
+    equation list it sits in, which decides what a later ``operator_compose``
+    entry can see (§4.7.1 step 4). It is not provenance: a composed equation has
+    one slot owner and several authors.
+
+    ``lifted`` is True when the pointwise lift (esm-spec §10.5) wrapped the
+    equation in an ``faq`` over the grid; ``body`` is then ``rhs.expr``.
     """
 
     lhs: Expr
@@ -330,12 +411,53 @@ class FlattenedEquation:
     source_system: str
     lhs_str: str = ""
     rhs_str: str = ""
+    contributions: list[Contribution] = field(default_factory=list)
+    lifted: bool = False
 
     def __post_init__(self) -> None:
         if not self.lhs_str:
             self.lhs_str = _expr_to_string(self.lhs)
         if not self.rhs_str:
             self.rhs_str = _expr_to_string(self.rhs)
+        if not self.contributions:
+            self.contributions = [Contribution(self.body, [])]
+
+    @property
+    def body(self) -> Expr:
+        """The sum the contributions stand for: ``rhs``, or the ``faq`` body of
+        a lifted equation."""
+        if self.lifted and isinstance(self.rhs, ExprNode):
+            return self.rhs.expr
+        return self.rhs
+
+
+def _equation_from(
+    eq: FlattenedEquation,
+    contributions: list[Contribution],
+    lhs: Expr | None = None,
+) -> FlattenedEquation:
+    """``eq`` with a new contribution list, its right-hand side REBUILT from that
+    list (left fold, re-wrapped in the lift's ``faq`` when ``eq`` is lifted).
+
+    Every flatten pass that rewrites an equation goes through here, so the rhs is
+    never edited apart from its contributions and no term moves across a
+    contribution boundary (esm-libraries-spec §4.7.5)."""
+    body = _fold_contributions(contributions)
+    rhs = replace(eq.rhs, expr=body) if eq.lifted else body
+    return FlattenedEquation(
+        lhs=eq.lhs if lhs is None else lhs,
+        rhs=rhs,
+        source_system=eq.source_system,
+        contributions=contributions,
+        lifted=eq.lifted,
+    )
+
+
+def _map_contributions(eq: FlattenedEquation, fn, lhs: Expr | None = None) -> FlattenedEquation:
+    """``eq`` with ``fn`` applied inside every contribution, origins unchanged."""
+    return _equation_from(
+        eq, [Contribution(fn(c.expr), c.origins) for c in eq.contributions], lhs=lhs
+    )
 
 
 @dataclass
@@ -1090,9 +1212,17 @@ def _namespace_equations(
 
     Factored out of the model / reaction-system collectors, which otherwise each
     repeat the "namespace lhs, namespace rhs, append a FlattenedEquation tagged
-    with the system prefix" wire verbatim.
+    with the system prefix" wire verbatim. ``prefix`` is the full dotted path, so
+    it is both the slot owner and the one origin of the equation's contribution.
     """
     for eq in equations:
+        rhs = _namespace_expr(
+            eq.rhs,
+            prefix,
+            leave_alone=leave_alone,
+            subsystem_keys=subsystem_keys,
+            locals_=locals_,
+        )
         component.equations.append(
             FlattenedEquation(
                 lhs=_namespace_expr(
@@ -1102,14 +1232,11 @@ def _namespace_equations(
                     subsystem_keys=subsystem_keys,
                     locals_=locals_,
                 ),
-                rhs=_namespace_expr(
-                    eq.rhs,
-                    prefix,
-                    leave_alone=leave_alone,
-                    subsystem_keys=subsystem_keys,
-                    locals_=locals_,
-                ),
+                rhs=rhs,
                 source_system=prefix,
+                # §4.7.5 steps 1-2: one contribution, authored by this component
+                # (a reaction system's derived ODEs included).
+                contributions=[Contribution(rhs, [TermOrigin(component=prefix)])],
             )
         )
 
@@ -1763,10 +1890,23 @@ def _apply_operator_compose(
         if target_dep in a_index:
             i = a_index[target_dep]
             a_eq = a.equations[i]
-            substituted_rhs = substitute(b_eq.rhs, {b_dep: target_dep})
+            # B's contributions are APPENDED to A's, in order, origins unchanged
+            # (esm-libraries-spec §4.7.5 provenance table). A `translate` factor
+            # scales B's one contribution; when B already carries several, they
+            # collapse into ONE `factor * (b1 + b2 + ...)` whose origins are the
+            # union -- the same arithmetic as before, and indivisible because a
+            # distributed factor would change it.
+            b_contribs = [
+                Contribution(substitute(c.expr, {b_dep: target_dep}), c.origins)
+                for c in b_eq.contributions
+            ]
             if factor != 1.0:
-                substituted_rhs = ExprNode(op="*", args=[factor, substituted_rhs])
-            new_rhs = _add_exprs(a_eq.rhs, substituted_rhs)
+                b_contribs = [
+                    Contribution(
+                        ExprNode(op="*", args=[factor, _fold_contributions(b_contribs)]),
+                        _union_origins(b_contribs),
+                    )
+                ]
             # Step 4: "the final equation for variable x has the original LHS:
             # D(x, t)". Where A defines the quantity by a bare equation and B
             # gives it a tendency, the merged equation takes B's `D` left-hand
@@ -1775,11 +1915,7 @@ def _apply_operator_compose(
             new_lhs = a_eq.lhs
             if _is_d_lhs(b_eq.lhs) and not _is_d_lhs(a_eq.lhs):
                 new_lhs = substitute(b_eq.lhs, {b_dep: target_dep})
-            a.equations[i] = FlattenedEquation(
-                lhs=new_lhs,
-                rhs=new_rhs,
-                source_system=a_eq.source_system,
-            )
+            a.equations[i] = _equation_from(a_eq, a_eq.contributions + b_contribs, lhs=new_lhs)
             merged_positions.add(i)
             if target_dep != b_dep:
                 merged_away[b_dep] = target_dep
@@ -2103,10 +2239,8 @@ def _retarget_merged_names(
     """
     for comp in components.values():
         for i, eq in enumerate(comp.equations):
-            comp.equations[i] = FlattenedEquation(
-                lhs=rename_names(eq.lhs, renames),
-                rhs=rename_names(eq.rhs, renames),
-                source_system=eq.source_system,
+            comp.equations[i] = _map_contributions(
+                eq, lambda e: rename_names(e, renames), lhs=rename_names(eq.lhs, renames)
             )
         for table in (comp.state_vars, comp.parameters, comp.observed):
             for name, var in table.items():
@@ -2166,6 +2300,7 @@ def _multiply_exprs(left: Expr, right: Expr) -> Expr:
 def _apply_couple(
     components: OrderedDict[str, _ComponentSystem],
     entry: CouplingCouple,
+    index: int,
 ) -> None:
     """Resolve a ``couple`` connector by injecting source/sink terms.
 
@@ -2173,6 +2308,18 @@ def _apply_couple(
     ``A.x``) to ``to_var`` with one of three transforms (``additive``,
     ``multiplicative``, ``replacement``). The expression is appended to (or
     multiplied with, or replaces) the target variable's equation.
+
+    ``index`` is the entry's position in the expanded coupling sequence: the
+    expression a connector writes is authored by the entry, so its contribution
+    carries ``{"coupling": index}`` (esm-libraries-spec §4.7.5 provenance
+    table). ``additive`` appends that contribution; ``multiplicative`` collapses
+    the existing list and the factor into one contribution whose origins are the
+    union; ``replacement`` replaces the list.
+
+    An ``additive`` term whose target is an UNKNOWN with no defining equation
+    yet BECOMES its tendency, ``D(to, t) ~ expression`` (§4.7.2), appended to the
+    equation list of the component that owns ``to``. A target that is a
+    parameter, or names nothing, is skipped.
     """
     if not entry.connector or not entry.connector.equations:
         return
@@ -2206,27 +2353,47 @@ def _apply_couple(
                 f"To scale a constant parameter by a factor, use a variable_map "
                 f"entry with an Expression transform (esm-spec §10.4) instead."
             )
+        expression: Expr = ceq.expression if ceq.expression is not None else ceq.from_var
+        authored = Contribution(expression, [TermOrigin(coupling=index)])
         if target not in eq_index:
+            # Only an UNKNOWN can take a tendency: a parameter or observed target
+            # with no defining equation is left alone, as before.
+            owner = components.get(target.split(".", 1)[0])
+            if (
+                owner is None
+                or target not in owner.state_vars
+                or ceq.transform not in ("additive", None, "")
+            ):
+                continue
+            owner.equations.append(
+                FlattenedEquation(
+                    lhs=ExprNode(op="D", args=[target], wrt=TIME_VAR),
+                    rhs=expression,
+                    source_system=owner.name,
+                    contributions=[authored],
+                )
+            )
+            # The new tendency is a target for the next connector equation too.
+            eq_index[target] = (target.split(".", 1)[0], len(owner.equations) - 1)
+            tendencies.add(target)
             continue
         sys_name, i = eq_index[target]
         comp = components[sys_name]
         existing = comp.equations[i]
-        expression: Expr = ceq.expression if ceq.expression is not None else ceq.from_var
 
-        if ceq.transform == "additive":
-            new_rhs = _add_exprs(existing.rhs, expression)
-        elif ceq.transform == "multiplicative":
-            new_rhs = _multiply_exprs(existing.rhs, expression)
+        if ceq.transform == "multiplicative":
+            contributions = [
+                Contribution(
+                    _multiply_exprs(existing.body, expression),
+                    _union_origins(existing.contributions, TermOrigin(coupling=index)),
+                )
+            ]
         elif ceq.transform == "replacement":
-            new_rhs = expression
+            contributions = [authored]
         else:
-            new_rhs = _add_exprs(existing.rhs, expression)
+            contributions = existing.contributions + [authored]
 
-        comp.equations[i] = FlattenedEquation(
-            lhs=existing.lhs,
-            rhs=new_rhs,
-            source_system=existing.source_system,
-        )
+        comp.equations[i] = _equation_from(existing, contributions)
 
 
 def _contains_join(expr: Expr) -> bool:
@@ -2304,6 +2471,7 @@ def _apply_variable_map(
     components: OrderedDict[str, _ComponentSystem],
     entry: VariableMapCoupling,
     loader_names: set[str] | None = None,
+    index: int = 0,
 ) -> None:
     """Substitute the target parameter with the source variable.
 
@@ -2327,7 +2495,7 @@ def _apply_variable_map(
     if not entry.from_var or not entry.to_var:
         return
     if isinstance(entry.transform, ExprNode):
-        _apply_variable_map_expression(components, entry)
+        _apply_variable_map_expression(components, entry, index)
         return
     loader_names = loader_names or set()
     factor = entry.factor or 1.0
@@ -2336,19 +2504,18 @@ def _apply_variable_map(
         src = ExprNode(op="*", args=[factor, entry.from_var])
 
     bindings = {entry.to_var: src}
+    join_renames = {entry.to_var: entry.from_var}
+
+    def rewrite(expr: Expr) -> Expr:
+        return _rename_join_names(substitute(expr, bindings), join_renames)
+
+    # A substitution changes an INPUT of a term, not its author: it applies
+    # inside each contribution and adds no origin (esm-libraries-spec §4.7.5).
     for comp in components.values():
-        new_eqs: list[FlattenedEquation] = []
-        for eq in comp.equations:
-            new_eqs.append(
-                FlattenedEquation(
-                    lhs=substitute(eq.lhs, bindings),
-                    rhs=_rename_join_names(
-                        substitute(eq.rhs, bindings), {entry.to_var: entry.from_var}
-                    ),
-                    source_system=eq.source_system,
-                )
-            )
-        comp.equations = new_eqs
+        comp.equations = [
+            _map_contributions(eq, rewrite, lhs=substitute(eq.lhs, bindings))
+            for eq in comp.equations
+        ]
 
     # Guard the string comparison: an ExprNode transform never reaches here
     # (handled by _apply_variable_map_expression above), but keep the promotion
@@ -2402,6 +2569,7 @@ def _expr_references_var(expr: Expr, name: str) -> bool:
 def _apply_variable_map_expression(
     components: OrderedDict[str, _ComponentSystem],
     entry: VariableMapCoupling,
+    index: int = 0,
 ) -> None:
     """Resolve a ``variable_map`` whose ``transform`` is an Expression
     (in-progress-0.8.0 widening, esm-spec §10.4/§10.5).
@@ -2416,6 +2584,10 @@ def _apply_variable_map_expression(
     identical to the author declaring the target as an observed with that
     expression. ``factor`` never combines with an expression transform (parse
     rejects the pairing).
+
+    The coupling entry authored that definition, so its one contribution carries
+    ``{"coupling": index}``, ``index`` being the entry's position in the
+    expanded coupling sequence.
     """
     if not _expr_references_var(entry.transform, entry.from_var):
         raise FlattenError(
@@ -2456,6 +2628,7 @@ def _apply_variable_map_expression(
             lhs=entry.to_var,
             rhs=entry.transform,
             source_system=target_comp.name,
+            contributions=[Contribution(entry.transform, [TermOrigin(coupling=index)])],
         )
     )
 
@@ -2580,15 +2753,18 @@ def _apply_couplings(
     _check_variable_map_endpoints(esm_file, components, coupling_entries)
 
     operator_compose_entries: list[OperatorComposeCoupling] = []
-    couple_entries: list[CouplingCouple] = []
-    var_map_entries: list[VariableMapCoupling] = []
-    for entry in coupling_entries:
+    # `couple` and `variable_map` entries keep their position in the expanded
+    # sequence: it is the `{"coupling": k}` origin of every expression they
+    # author (esm-libraries-spec §4.7.5 provenance table).
+    couple_entries: list[tuple[int, CouplingCouple]] = []
+    var_map_entries: list[tuple[int, VariableMapCoupling]] = []
+    for index, entry in enumerate(coupling_entries):
         if isinstance(entry, OperatorComposeCoupling):
             operator_compose_entries.append(entry)
         elif isinstance(entry, CouplingCouple):
-            couple_entries.append(entry)
+            couple_entries.append((index, entry))
         elif isinstance(entry, VariableMapCoupling):
-            var_map_entries.append(entry)
+            var_map_entries.append((index, entry))
         elif isinstance(entry, OperatorApplyCoupling):
             metadata.operator_applies.append(entry.operator or "?")
         elif isinstance(entry, CallbackCoupling):
@@ -2609,15 +2785,15 @@ def _apply_couplings(
     metadata.merged_variable_renames.update(merged_renames)
     metadata.coupling_rewritten_names.update(merged_renames)
 
-    for cp in couple_entries:
-        _apply_couple(components, _retarget_pending_entry(cp, merged_renames))
+    for index, cp in couple_entries:
+        _apply_couple(components, _retarget_pending_entry(cp, merged_renames), index)
 
     # Top-level data-source names — used to recognize a ``param_to_var`` whose
     # producer is a source-fed field, so a grid-shaped binding keeps its shape.
     loader_names: set[str] = set(getattr(esm_file, "data_sources", None) or {})
-    for vm in var_map_entries:
+    for index, vm in var_map_entries:
         resolved = _retarget_pending_entry(vm, merged_renames)
-        _apply_variable_map(components, resolved, loader_names)
+        _apply_variable_map(components, resolved, loader_names, index)
         # A NAMED transform substitutes `to` away entirely; an EXPRESSION
         # transform leaves it standing as the observed the transform defines.
         # Only the first deletes a name, so only the first joins the set the
@@ -3215,8 +3391,7 @@ def _normalize_angle_arguments(flat: FlattenedSystem) -> None:
     def rewrite(expr):
         return normalize_angle_arguments(expr, env)
 
-    for equation in flat.equations:
-        equation.rhs = rewrite(equation.rhs)
+    flat.equations = [_map_contributions(eq, rewrite) for eq in flat.equations]
     flat.field_ics = [(name, rewrite(expr)) for name, expr in flat.field_ics]
     # Events are rewritten too, although no evaluator in THIS binding runs one
     # (`unsupported_construct`, esm-spec §9.6.6). The flattened form is a
@@ -3580,7 +3755,7 @@ def _resolve_rhs_time_derivatives(flat: FlattenedSystem) -> None:
     if not tendency and not definition:
         return
     time_invariant = frozenset(str(k) for k in (flat.parameters or {}))
-    for eq in flat.equations:
+    for i, eq in enumerate(flat.equations):
         if not _has_time_derivative(eq.rhs):
             continue
         # The quantity this equation DEFINES is not available to substitute into
@@ -3591,7 +3766,14 @@ def _resolve_rhs_time_derivatives(flat: FlattenedSystem) -> None:
         if own is None and isinstance(eq.lhs, str):
             own = eq.lhs
         active: list[str] = [own] if own is not None else []
-        eq.rhs = _substitute_time_derivatives(eq.rhs, tendency, definition, time_invariant, active)
+        # The resolved tendency replaces the `D` node INSIDE the referencing
+        # contribution and keeps that contribution's origins.
+        flat.equations[i] = _map_contributions(
+            eq,
+            lambda e, a=active: _substitute_time_derivatives(
+                e, tendency, definition, time_invariant, a
+            ),
+        )
 
 
 def _expand_operator_compose_placeholders(
@@ -3621,11 +3803,13 @@ def _expand_operator_compose_placeholders(
         if has_var_placeholder(eq.lhs) or has_var_placeholder(eq.rhs):
             for var_name in a_state_names:
                 bindings = {"_var": var_name}
+                # Each clone keeps B's contributions, and so B's component as
+                # their origin.
                 new_equations.append(
-                    FlattenedEquation(
+                    _map_contributions(
+                        eq,
+                        lambda e, b=bindings: substitute(e, b),
                         lhs=substitute(eq.lhs, bindings),
-                        rhs=substitute(eq.rhs, bindings),
-                        source_system=eq.source_system,
                     )
                 )
         else:
@@ -3817,17 +4001,25 @@ def _apply_pointwise_lift(flat: FlattenedSystem, coupling: list[CouplingEntry]) 
             ranges=ranges,
             expr=ExprNode(op="D", args=[idx_species], wrt="t"),
         )
+        # Per-cell indexing applies inside each contribution; the `faq` wrapper
+        # goes around their sum (esm-libraries-spec §4.7.5 provenance table).
+        contributions = [
+            Contribution(_lift_rhs_to_cell(c.expr, arrayvars, loops), c.origins)
+            for c in eq.contributions
+        ]
         new_rhs = ExprNode(
             op="faq",
             output_idx=output_idx,
             ranges=ranges,
-            expr=_lift_rhs_to_cell(eq.rhs, arrayvars, loops),
+            expr=_fold_contributions(contributions),
         )
         new_equations.append(
             FlattenedEquation(
                 lhs=new_lhs,
                 rhs=new_rhs,
                 source_system=eq.source_system,
+                contributions=contributions,
+                lifted=True,
             )
         )
 

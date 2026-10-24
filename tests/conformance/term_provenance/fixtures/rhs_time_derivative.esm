@@ -1,0 +1,117 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "RhsTimeDerivativeProvenance",
+    "description": "Per-term provenance through esm-libraries-spec 4.7.5 step 3a. Diag.rate reads D(Chem.O3, t); the resolved tendency (Chem's and Src's terms) replaces the D node INSIDE Diag's contribution and keeps Diag's origin. It does not splice in Chem.O3's contributions with their own origins.",
+    "authors": [
+      "EarthSciAST test suite"
+    ],
+    "created": "2026-10-24T00:00:00Z"
+  },
+  "models": {
+    "Chem": {
+      "variables": {
+        "O3": {
+          "type": "unknown",
+          "units": "mol/mol",
+          "default": 1.0
+        },
+        "k1": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.1
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "O3"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k1"
+                ]
+              },
+              "O3"
+            ]
+          }
+        }
+      ]
+    },
+    "Src": {
+      "variables": {
+        "e": {
+          "type": "parameter",
+          "units": "mol/mol/s",
+          "default": 0.2
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "Chem.O3"
+            ],
+            "wrt": "t"
+          },
+          "rhs": "e"
+        }
+      ]
+    },
+    "Diag": {
+      "variables": {
+        "rate": {
+          "type": "unknown",
+          "units": "mol/mol/s"
+        },
+        "c": {
+          "type": "parameter",
+          "units": "mol/mol/s",
+          "default": 1.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": "rate",
+          "rhs": {
+            "op": "+",
+            "args": [
+              "c",
+              {
+                "op": "*",
+                "args": [
+                  2,
+                  {
+                    "op": "D",
+                    "args": [
+                      "Chem.O3"
+                    ],
+                    "wrt": "t"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "coupling": [
+    {
+      "type": "operator_compose",
+      "systems": [
+        "Chem",
+        "Src"
+      ]
+    }
+  ]
+}

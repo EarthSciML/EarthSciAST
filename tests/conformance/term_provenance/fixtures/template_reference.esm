@@ -1,0 +1,121 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "TemplateReferenceProvenance",
+    "description": "Per-term provenance and an Option B expression-template reference (esm-spec 9.6.4). Chem writes its tendency as a reference to `decay`, whose body is a SUM; Sink contributes a second term. The reference sits inside Chem's contribution, so expanding it -- at load, at build or in a planner -- rewrites inside that contribution and every term of the expansion inherits Chem's origin.",
+    "authors": [
+      "EarthSciAST test suite"
+    ],
+    "created": "2026-10-24T00:00:00Z"
+  },
+  "models": {
+    "Chem": {
+      "expression_templates": {
+        "decay": {
+          "params": [
+            "f",
+            "r",
+            "p"
+          ],
+          "body": {
+            "op": "+",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "-",
+                    "args": [
+                      "r"
+                    ]
+                  },
+                  "f"
+                ]
+              },
+              "p"
+            ]
+          }
+        }
+      },
+      "variables": {
+        "O3": {
+          "type": "unknown",
+          "units": "mol/mol",
+          "default": 1.0
+        },
+        "k1": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.1
+        },
+        "prod": {
+          "type": "parameter",
+          "units": "mol/mol/s",
+          "default": 0.05
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "O3"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "decay",
+            "bindings": {
+              "f": "O3",
+              "r": "k1",
+              "p": "prod"
+            }
+          }
+        }
+      ]
+    },
+    "Sink": {
+      "variables": {
+        "kd": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.01
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "Chem.O3"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "kd"
+                ]
+              },
+              "Chem.O3"
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "coupling": [
+    {
+      "type": "operator_compose",
+      "systems": [
+        "Chem",
+        "Sink"
+      ]
+    }
+  ]
+}

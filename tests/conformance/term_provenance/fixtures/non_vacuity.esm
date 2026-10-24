@@ -1,0 +1,130 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "NonVacuityProvenance",
+    "description": "Per-term provenance non-vacuity: OpA and OpB each contribute `e` to D(Chem.O3), and variable_map binds both to Emis.flux, so the two contributions are STRUCTURALLY IDENTICAL expressions with different origins. The golden keeps two contributions, one per operator. A binding that hangs provenance on interned expression nodes cannot tell them apart and fails this case.",
+    "authors": [
+      "EarthSciAST test suite"
+    ],
+    "created": "2026-10-24T00:00:00Z"
+  },
+  "models": {
+    "Chem": {
+      "variables": {
+        "O3": {
+          "type": "unknown",
+          "units": "mol/mol",
+          "default": 1.0
+        },
+        "k1": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.1
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "O3"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k1"
+                ]
+              },
+              "O3"
+            ]
+          }
+        }
+      ]
+    },
+    "OpA": {
+      "variables": {
+        "e": {
+          "type": "parameter",
+          "units": "mol/mol/s",
+          "default": 0.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "Chem.O3"
+            ],
+            "wrt": "t"
+          },
+          "rhs": "e"
+        }
+      ]
+    },
+    "OpB": {
+      "variables": {
+        "e": {
+          "type": "parameter",
+          "units": "mol/mol/s",
+          "default": 0.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "Chem.O3"
+            ],
+            "wrt": "t"
+          },
+          "rhs": "e"
+        }
+      ]
+    },
+    "Emis": {
+      "variables": {
+        "flux": {
+          "type": "parameter",
+          "units": "mol/mol/s",
+          "default": 0.3
+        }
+      },
+      "equations": []
+    }
+  },
+  "coupling": [
+    {
+      "type": "operator_compose",
+      "systems": [
+        "Chem",
+        "OpA"
+      ]
+    },
+    {
+      "type": "operator_compose",
+      "systems": [
+        "Chem",
+        "OpB"
+      ]
+    },
+    {
+      "type": "variable_map",
+      "from": "Emis.flux",
+      "to": "OpA.e",
+      "transform": "param_to_var"
+    },
+    {
+      "type": "variable_map",
+      "from": "Emis.flux",
+      "to": "OpB.e",
+      "transform": "param_to_var"
+    }
+  ]
+}
