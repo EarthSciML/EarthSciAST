@@ -166,9 +166,10 @@ describe('flatten conformance corpus (esm-libraries-spec §4.7.5 step 4)', () =>
     // system's own `continuous_events` / `discrete_events`, which the schema
     // grants on the same footing as a model's and which Julia's and Rust's
     // flatten used to drop — and the three right-hand-side `D` resolution cases,
-    // plus the twelve `term_provenance` cases (one per row of §4.7.5's
-    // per-term provenance table).
-    expect(corpus.cases.length).toBe(42)
+    // plus the thirteen `term_provenance` cases (one per row of §4.7.5's
+    // per-term provenance table, and the multiplicative couple whose target
+    // also has a later bare algebraic equation).
+    expect(corpus.cases.length).toBe(43)
     // 4 = template_import_lib, couple_multiplicative_no_tendency, the
     // nonterminating rewrite, and `coupling_resolution_edge_cases`, whose EDGE
     // CASE 10 maps onto a target the document declares nowhere.
