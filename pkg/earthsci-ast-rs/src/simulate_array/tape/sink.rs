@@ -34,19 +34,7 @@ pub(super) fn sink_const_broadcasts(prog: &mut TapeProgram) {
     let bound = cont.start + prog.n_rhs as usize;
     let n = prog.instrs.len();
     let tables = prog.tables();
-    let mut guarded = vec![false; n];
-    for (i, ins) in prog.instrs.iter().enumerate() {
-        let len = match ins {
-            Instr::JmpIfZero {
-                n_true, n_false, ..
-            } => (*n_true + *n_false) as usize,
-            Instr::Sweep { spec } => prog.sweeps[*spec as usize].body_len as usize,
-            _ => 0,
-        };
-        for g in guarded.iter_mut().skip(i + 1).take(len) {
-            *g = true;
-        }
-    }
+    let guarded = prog.guarded_positions();
     let mut readers: Vec<Vec<usize>> = vec![Vec::new(); prog.slots.len()];
     for (i, ins) in prog.instrs.iter().enumerate() {
         ins.for_each_read(&tables, |s| {

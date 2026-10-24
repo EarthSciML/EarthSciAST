@@ -40,7 +40,7 @@ pub(super) fn rewrite_scan_makearray_reads(prog: &mut TapeProgram) {
         return;
     }
     let defs = single_defs(prog);
-    let guarded = guarded_positions(prog);
+    let guarded = prog.guarded_positions();
     // Reverse inclusive scans to split into the exclusive scan and the
     // combine with the term: scan position -> the exclusive scan's slot.
     let mut splits: std::collections::BTreeMap<usize, SlotId> = Default::default();
@@ -87,24 +87,6 @@ enum Answer {
     /// A copy of the reverse EXCLUSIVE scan of the reverse inclusive scan
     /// at this position, which is split to define it.
     ReverseExclusive(usize),
-}
-
-/// Positions inside a conditional region or a recurrence body.
-fn guarded_positions(prog: &TapeProgram) -> Vec<bool> {
-    let mut guarded = vec![false; prog.instrs.len()];
-    for (i, ins) in prog.instrs.iter().enumerate() {
-        let len = match ins {
-            Instr::JmpIfZero {
-                n_true, n_false, ..
-            } => (*n_true + *n_false) as usize,
-            Instr::Sweep { spec } => prog.sweeps[*spec as usize].body_len as usize,
-            _ => 0,
-        };
-        for g in guarded.iter_mut().skip(i + 1).take(len) {
-            *g = true;
-        }
-    }
-    guarded
 }
 
 /// Split each reverse inclusive scan in `splits` into the reverse exclusive

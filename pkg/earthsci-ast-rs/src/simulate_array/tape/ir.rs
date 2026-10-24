@@ -2790,6 +2790,25 @@ impl TapeProgram {
         }
     }
 
+    /// Per instruction: whether it sits inside a conditional region (a
+    /// `JmpIfZero` branch) or a recurrence body (a `Sweep`'s), which a call
+    /// may skip or repeat. The region's header itself is not inside it.
+    pub(crate) fn guarded_positions(&self) -> Vec<bool> {
+        let mut guarded = vec![false; self.instrs.len()];
+        for (pc, ins) in self.instrs.iter().enumerate() {
+            let len = match ins {
+                Instr::JmpIfZero {
+                    n_true, n_false, ..
+                } => (*n_true + *n_false) as usize,
+                Instr::Sweep { spec } => self.sweeps[*spec as usize].body_len as usize,
+                _ => 0,
+            };
+            let end = (pc + 1 + len).min(guarded.len());
+            guarded[pc + 1..end].fill(true);
+        }
+        guarded
+    }
+
     /// Section an instruction index belongs to.
     pub(crate) fn section_of(&self, i: usize) -> Cadence {
         if i < self.n_const as usize {

@@ -94,18 +94,7 @@ pub(super) fn seg_chains(prog: &TapeProgram, slot_off: &[usize]) -> Vec<SegChain
     let cont = (prog.n_const + prog.n_segment) as usize;
     // Instruction positions inside a branch or a recurrence body: a chain
     // never spans one (the loop may skip or repeat them).
-    let mut guarded = vec![false; prog.instrs.len()];
-    for (pc, ins) in prog.instrs.iter().enumerate() {
-        let body = match ins {
-            Instr::JmpIfZero {
-                n_true, n_false, ..
-            } => (*n_true + *n_false) as usize,
-            Instr::Sweep { spec } => prog.sweeps[*spec as usize].body_len as usize,
-            _ => 0,
-        };
-        let hi = (pc + 1 + body).min(guarded.len());
-        guarded[pc + 1..hi].fill(true);
-    }
+    let guarded = prog.guarded_positions();
     // Slots the continuous section writes: a compacted table may only copy
     // values that hold for every call between two primes.
     let tables = prog.tables();

@@ -2050,19 +2050,7 @@ fn absorb_pre_reductions(prog: &mut TapeProgram) {
         return;
     }
     let n = prog.instrs.len();
-    let mut guarded = vec![false; n];
-    for i in 0..n {
-        let len = match &prog.instrs[i] {
-            Instr::JmpIfZero {
-                n_true, n_false, ..
-            } => (*n_true + *n_false) as usize,
-            Instr::Sweep { spec } => prog.sweeps[*spec as usize].body_len as usize,
-            _ => 0,
-        };
-        for g in guarded.iter_mut().skip(i + 1).take(len) {
-            *g = true;
-        }
-    }
+    let guarded = prog.guarded_positions();
     let mut absorbed: Vec<(usize, u32, PreReduce)> = Vec::new();
     for i in 0..n.saturating_sub(1) {
         if guarded[i] || guarded[i + 1] || prog.section_of(i) != prog.section_of(i + 1) {
