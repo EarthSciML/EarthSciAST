@@ -49,7 +49,7 @@ pub(crate) fn is_scheme_led(template: &str) -> bool {
 /// substitution names a file that need not exist at load time, and resolving
 /// symlinks would make the resolved URL depend on the filesystem rather than on
 /// the document. A `..` that would climb past the root is dropped, per §5.2.4.
-pub(crate) fn remove_dot_segments(path: &Path) -> PathBuf {
+fn remove_dot_segments(path: &Path) -> PathBuf {
     let mut root = PathBuf::new();
     let mut parts: Vec<&std::ffi::OsStr> = Vec::new();
     for c in path.components() {
@@ -75,7 +75,7 @@ pub(crate) fn remove_dot_segments(path: &Path) -> PathBuf {
 /// `fixtures`; a string load defaults to the working directory) and splicing a
 /// relative path after `file://` would silently make its first segment the URL
 /// HOST — the exact misresolution §8.2.1 exists to stop.
-pub(crate) fn absolute_base(base_dir: &Path) -> PathBuf {
+fn absolute_base(base_dir: &Path) -> PathBuf {
     if base_dir.is_absolute() {
         return base_dir.to_path_buf();
     }

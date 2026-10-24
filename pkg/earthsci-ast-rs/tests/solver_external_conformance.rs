@@ -62,6 +62,20 @@ fn lexical(path: &Path) -> String {
     format!("/{}", parts.join("/"))
 }
 
+/// The §2.2.6 `file://` form of an absolute path, its percent-encoding written
+/// out here rather than borrowed from the binding.
+fn file_url(path: &Path) -> String {
+    let mut out = String::from("file://");
+    for &b in lexical(path).as_bytes() {
+        if b.is_ascii_alphanumeric() || b"-._~/:".contains(&b) {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
 /// The location a pin denotes, or `None` for a `null` pin.
 fn expected_location(pin: &Value) -> Option<String> {
     if pin.is_null() {
@@ -71,13 +85,13 @@ fn expected_location(pin: &Value) -> Option<String> {
         return Some(v.to_string());
     }
     if let Some(rel) = pin.get("repo_path").and_then(Value::as_str) {
-        return Some(format!("file://{}", lexical(&repo_root().join(rel))));
+        return Some(file_url(&repo_root().join(rel)));
     }
     let rel = pin["cwd_path"]
         .as_str()
         .expect("repo_path, cwd_path or verbatim");
     let cwd = std::env::current_dir().expect("working directory");
-    Some(format!("file://{}", lexical(&cwd.join(rel))))
+    Some(file_url(&cwd.join(rel)))
 }
 
 fn load(f: &Value) -> Result<earthsci_ast::EsmFile, earthsci_ast::EsmError> {
@@ -187,10 +201,7 @@ fn emitting_to_another_directory_keeps_the_authored_string_and_moves_the_locatio
         .expect("has a location");
     assert_eq!(
         moved,
-        format!(
-            "file://{}",
-            lexical(&tmp.path().join(authored.expect("authored")))
-        ),
+        file_url(&tmp.path().join(authored.expect("authored"))),
         "the new directory changes the accessor's answer, not the document"
     );
 }
@@ -262,4 +273,113 @@ fn the_version_gate_refuses_external_below_1_3_0_and_the_block_gate_runs_first()
         .expect_err("refused")
         .to_string();
     assert!(msg.contains("[solver_version_too_old]"), "{msg}");
+}
+
+#[test]
+fn a_load_without_a_base_records_the_working_directory_at_load() {
+    let text = std::fs::read_to_string(suite_dir().join("fixtures/bare_relative.esm"))
+        .expect("fixture text");
+    let cwd = lexical(&std::env::current_dir().expect("working directory"));
+    let from_string = earthsci_ast::load_string(&text).expect("loads");
+    assert_eq!(from_string.document_base.as_deref(), Some(cwd.as_str()));
+    let value: Value = serde_json::from_str(&text).expect("JSON");
+    let from_document = earthsci_ast::load_document(&value).expect("loads");
+    assert_eq!(from_document.document_base.as_deref(), Some(cwd.as_str()));
+    // The coupling-import anchor is still recorded only for an explicit base.
+    assert_eq!(from_string.coupling_import_base, None);
+
+    let from_path =
+        earthsci_ast::load_path(suite_dir().join("fixtures/../fixtures/bare_relative.esm"))
+            .expect("loads");
+    assert_eq!(
+        from_path.document_base,
+        Some(lexical(&suite_dir().join("fixtures")))
+    );
+}
+
+fn with_external(external: &str) -> earthsci_ast::EsmFile {
+    earthsci_ast::EsmFile {
+        solver: Some(earthsci_ast::Solver {
+            stiffness: None,
+            abstol: None,
+            reltol: None,
+            splitting: None,
+            external: Some(external.to_string()),
+        }),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn a_drive_letter_path_is_absolute_for_external_and_for_the_base() {
+    for (external, base, want) in [
+        ("C:/proj/./runs/../x.json", None, "file:///C:/proj/x.json"),
+        (r"c:\proj\runs\x.json", None, "file:///c:/proj/runs/x.json"),
+        ("C:/../../x.json", None, "file:///C:/x.json"),
+        (
+            "runs/x.json",
+            Some("C:/proj/sub/.."),
+            "file:///C:/proj/runs/x.json",
+        ),
+        (
+            "runs/x.json",
+            Some(r"D:\proj"),
+            "file:///D:/proj/runs/x.json",
+        ),
+        ("../../../x.json", Some("C:/proj"), "file:///C:/x.json"),
+        ("/srv/x.json", Some("C:/proj"), "file:///srv/x.json"),
+    ] {
+        let got =
+            earthsci_ast::solver_external_location(&with_external(external), base.map(Path::new))
+                .expect("resolves");
+        assert_eq!(
+            got.as_deref(),
+            Some(want),
+            "external {external:?}, base {base:?}"
+        );
+    }
+
+    let text = std::fs::read_to_string(suite_dir().join("fixtures/bare_relative.esm"))
+        .expect("fixture text");
+    let options = earthsci_ast::LoadOptions {
+        base_path: Some(PathBuf::from(r"C:\proj\sub")),
+        ..Default::default()
+    };
+    let loaded = earthsci_ast::load_string_with_options(&text, &options).expect("loads");
+    assert_eq!(loaded.document_base.as_deref(), Some("C:/proj/sub"));
+    assert_eq!(
+        earthsci_ast::solver_external_location(&loaded, None)
+            .expect("resolves")
+            .as_deref(),
+        Some("file:///C:/proj/sub/runs/probe.run.json")
+    );
+}
+
+fn env_var_document() -> Value {
+    serde_json::from_str(
+        &std::fs::read_to_string(suite_dir().join("fixtures/env_var.esm")).expect("fixture text"),
+    )
+    .expect("JSON")
+}
+
+#[test]
+fn the_refusal_quotes_the_string_exactly_as_authored() {
+    let authored = r#"a\b "c" ${X}/y.json"#;
+    let mut doc = env_var_document();
+    doc["solver"]["external"] = Value::from(authored);
+    let msg = earthsci_ast::load_document(&doc)
+        .expect_err("refused")
+        .to_string();
+    assert!(msg.contains("[solver_external_unresolved]"), "{msg}");
+    assert!(msg.contains(&format!("\"{authored}\"")), "{msg}");
+}
+
+#[test]
+fn the_unresolved_check_runs_before_schema_validation() {
+    let mut doc = env_var_document();
+    doc["solver"]["not_a_solver_key"] = Value::Bool(true);
+    let msg = earthsci_ast::load_document(&doc)
+        .expect_err("refused")
+        .to_string();
+    assert!(msg.contains("[solver_external_unresolved]"), "{msg}");
 }

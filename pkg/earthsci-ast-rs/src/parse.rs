@@ -395,14 +395,12 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     // own `base_path` in charge.
     if options.base_path.is_some() {
         esm_file.coupling_import_base = Some(base.to_string_lossy().into_owned());
-        // esm-spec §2.2.6: the anchor `solver_external_location` resolves a
-        // relative `solver.external` against. Made absolute now, so a later
-        // change of working directory cannot move it.
-        let absolute = crate::data_source_urls::remove_dot_segments(
-            &crate::data_source_urls::absolute_base(&base),
-        );
-        esm_file.document_base = Some(absolute.to_string_lossy().into_owned());
     }
+    // esm-spec §2.2.6: the anchor `solver_external_location` resolves a relative
+    // `solver.external` against — the file's directory, the explicit base, or
+    // the working directory of a string load. Recorded on EVERY load and made
+    // absolute now, so a later change of working directory cannot move it.
+    esm_file.document_base = crate::solver::absolute_directory(&base);
 
     Ok(esm_file)
 }

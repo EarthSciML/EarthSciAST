@@ -156,9 +156,10 @@ pub struct EsmFile {
     #[serde(default, skip)]
     pub coupling_import_base: Option<String>,
 
-    /// The absolute directory of the file this document was read from, or the
-    /// explicit base a string load was given; `None` for a document built in
-    /// memory or loaded from a string with no base.
+    /// The absolute directory of the file this document was read from, the
+    /// explicit base a load was given, or the process working directory at
+    /// load for a string or document load without one; `None` for a document
+    /// built in memory (or a directory that is not UTF-8).
     ///
     /// The anchor for every verbatim relative reference a consumer resolves
     /// after load rather than the loader rewriting it — `solver.external`
