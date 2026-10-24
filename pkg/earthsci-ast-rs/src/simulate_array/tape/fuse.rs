@@ -333,10 +333,7 @@ impl GBuilder {
         } else if scans(true) {
             return false;
         }
-        let operand = match src {
-            SrcRef::Slot(s) => Operand::Slot(*s),
-            SrcRef::State(i) => Operand::State(*i),
-        };
+        let operand = Operand::from(*src);
         let Some(r @ (ResOp::Existing(MRef::Reg(_) | MRef::In(_)) | ResOp::NewAligned(..))) =
             self.resolve(&operand, prog)
         else {

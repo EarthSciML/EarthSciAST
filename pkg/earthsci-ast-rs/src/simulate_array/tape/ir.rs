@@ -153,6 +153,16 @@ pub(crate) enum SrcRef {
     State(u32),
 }
 
+impl From<SrcRef> for Operand {
+    /// The operand reading the whole source.
+    fn from(src: SrcRef) -> Self {
+        match src {
+            SrcRef::Slot(s) => Operand::Slot(s),
+            SrcRef::State(i) => Operand::State(i),
+        }
+    }
+}
+
 /// One tape instruction. See the module docs for the semantics contract.
 #[derive(Clone, Debug)]
 pub(crate) enum Instr {

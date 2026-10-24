@@ -138,10 +138,6 @@ fn split_reverse_inclusive(
         else {
             unreachable!("a split position holds a scan");
         };
-        let term = match src {
-            SrcRef::Slot(t) => Operand::Slot(t),
-            SrcRef::State(x) => Operand::State(x),
-        };
         instrs.push(Instr::Scan {
             op,
             init,
@@ -155,7 +151,7 @@ fn split_reverse_inclusive(
         instrs.push(Instr::Bin {
             op,
             a: Operand::Slot(e),
-            b: term,
+            b: src.into(),
             out,
         });
         prov.extend([prog.provenance[k]; 2]);
@@ -287,14 +283,10 @@ fn answer(
         // `k` combined with the term: the kernel the scan applies after
         // writing it.
         if !reverse {
-            let term = match src {
-                SrcRef::Slot(t) => Operand::Slot(t),
-                SrcRef::State(x) => Operand::State(x),
-            };
             return Some(Answer::Read(Instr::Bin {
                 op: sop,
                 a: Operand::Slot(s),
-                b: term,
+                b: src.into(),
                 out,
             }));
         }
