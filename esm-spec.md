@@ -350,8 +350,8 @@ instead, which then replaces *D*.
 | Form | Test on the string | Resolved location |
 |---|---|---|
 | URL | matches `^[A-Za-z][A-Za-z0-9+.-]*://` | unchanged |
-| Absolute path | begins with `/` | dot segments removed, prefixed `file://` |
-| Relative path | anything else | joined onto *D*, dot segments removed, prefixed `file://` |
+| Absolute path | begins with `/`, or with a drive letter: `^[A-Za-z]:[/\\]` | dot segments removed, percent-encoded, prefixed `file://` |
+| Relative path | anything else | joined onto *D*, dot segments removed, percent-encoded, prefixed `file://` |
 
 This is the §8.2.1 table without its substitution-led row: there are no
 substitutions here, and `{` has no meaning.
@@ -359,8 +359,21 @@ substitutions here, and `{` has no meaning.
 - Dot-segment removal is **lexical** (RFC 3986 §5.2.4: `.` dropped, `..`
   removes the preceding segment, a `..` at the root dropped), never `realpath`.
   This is the rule of §8.2.1.
-- A string containing `${` is refused at load with `solver_external_unresolved`.
-  The message MUST name `/solver/external` and quote the string. A run
+- **Percent-encoding.** The input is a path, not a URL, so a location built
+  from it is encoded: each byte of the path's UTF-8 encoding outside the set
+  `A`–`Z` `a`–`z` `0`–`9` `-` `.` `_` `~` `/` `:` is written `%XX`, with
+  uppercase hex. `%` itself becomes `%25`; `runs/case #2.json` resolves to
+  `file://`*D*`/runs/case%20%232.json`. A URL is returned exactly as authored,
+  never encoded or decoded.
+- **Drive-letter paths.** A path beginning with a drive letter, `C:/` or `C:\`,
+  is absolute, whichever operating system resolves it; the same holds for *D*.
+  Every `\` in such a path is read as `/`, the drive segment is a root that a
+  `..` does not climb above, and the location carries a third slash before the
+  drive: `C:\proj\runs\x.json` resolves to `file:///C:/proj/runs/x.json`.
+- A string containing `${` is refused at load with `solver_external_unresolved`,
+  before schema validation and right after the `solver_external_version_too_old`
+  gate. The message MUST name `/solver/external` and quote the string exactly as
+  authored, between plain double quotes with nothing escaped. A run
   configuration chosen by the environment is not reproducible, for the reason
   §8.2.1 gives; a deployment-chosen run configuration is a call-site argument.
 - Resolution never touches the filesystem or the network. A location that does
@@ -380,7 +393,12 @@ must rewrite a relative `external`, as it must a verbatim `coupling_import` ref.
 **Mounting.** `external` describes one run of one assembly. Like the rest of a
 referenced document's `solver` block, it does not cross a mount edge (§4.7):
 only the root document's `solver` block is consulted, and a root that declares
-no `external` has none, whatever the documents it mounts declare.
+no `external` has none, whatever the documents it mounts declare. The two
+load-time checks on `external` are therefore checks on the root alone: a
+mounted document's `external` is not refused for carrying `${`, nor for
+appearing below esm 1.3.0, at either mount form. The schema still applies to it
+(a mounted document must be a valid ESM file), so an empty or non-string
+`external` in a mounted document is a schema error as anywhere else.
 
 **Coexistence with the other fields.**
 

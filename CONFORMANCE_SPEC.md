@@ -6922,16 +6922,23 @@ fixture: the typed document holds the AUTHORED string, the accessor returns the
 pinned location, and `emit` writes the pinned `solver` block. Further cases load
 the same documents from a string with an explicit base, from a string with no
 base (the process working directory), and from a path with an explicit base
-that replaces the file's directory.
+that replaces the file's directory. Four more pin the §2.2.6 percent-encoding
+of a location built from a path — a space and a `#`, non-ASCII names, a
+literal pin in which `%` becomes `%25` — and that a URL comes back exactly as
+authored, its escapes not encoded again.
 
 **Refusal.** `fixtures/env_var.esm` MUST be rejected at load with
 `solver_external_unresolved`, and the message MUST contain both
-`/solver/external` and the offending string.
+`/solver/external` and the offending string exactly as authored. The check runs
+before schema validation, right after the `solver_external_version_too_old`
+gate.
 
 **Mounting.** A root that mounts a leaf whose `solver` carries `external`
 reports the ROOT's value — resolved against the root's directory — or none,
 at both mount forms, and its emitted `solver` block carries nothing of the
-leaf's.
+leaf's. The load-time checks on `external` are checks on the root alone: a root
+mounting a leaf whose `external` holds `${`, or a leaf declaring esm 1.2.0 that
+carries `external`, MUST load, at both mount forms.
 
 **Invariance and the advisory gate.** The flattened systems of
 `invariance/with_external.esm` and `invariance/without_external.esm` MUST be
@@ -6944,7 +6951,15 @@ that does not exist, MUST integrate under each simulating binding's built-in
 
 Expectations take §5.22.2's forms — `{"repo_path": …}`, `{"verbatim": …}`, and
 here also `{"cwd_path": …}` for the working-directory case — and no golden
-holds an absolute path. The difference from §5.22 is where the location lives:
+holds an absolute path. A `repo_path` or `cwd_path` pin is expanded to an
+absolute path and then percent-encoded as esm-spec §2.2.6 encodes a location:
+each byte of the path's UTF-8 encoding outside `A`–`Z` `a`–`z` `0`–`9` `-` `.`
+`_` `~` `/` `:` becomes `%XX` with uppercase hex, `%` itself included. The
+whole expanded path is encoded, repository root or working directory included.
+A `verbatim` pin is compared as written. Drive-letter paths (`C:/…`, which
+§2.2.6 resolves as absolute, to `file:///C:/…`) have no fixture, because the
+suite's paths are the checkout's POSIX paths; each binding pins them in a unit
+test instead. The difference from §5.22 is where the location lives:
 §8.2.1 writes the resolved `url_template` into the document, while §2.2.6 keeps
 the authored string in the document and returns the location from an accessor.
 A binding that wrote the resolved form back would pass a resolution-only check
