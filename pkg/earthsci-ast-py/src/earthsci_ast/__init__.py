@@ -378,6 +378,13 @@ try:
         step,
     )
     from .pushdown_rewrite import desugar_pushdown, pushdown_diagnostics  # noqa: F401
+    from .range_restricted import (  # noqa: F401 — re-exported via __all__ below
+        halo,
+        lanes,
+        restrict,
+        rhs_program,
+        select,
+    )
 
     _has_problem = True
 except ImportError:
@@ -769,6 +776,13 @@ if _has_problem:
             "CompilerUnknownError",
             "CompilerUnavailableError",
             "CompilerRefusedRuleError",
+            # Range-restricted right-hand sides (API_SPEC §5.8): each raises
+            # compiler_unavailable in this binding.
+            "rhs_program",
+            "select",
+            "halo",
+            "restrict",
+            "lanes",
         ]
     )
 
