@@ -5615,7 +5615,12 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
         rhs_list_compiled::Bool=false,
         # The state length of the two-buffer slot space the in-place RHS runs
         # on (`_ObsSplitVec`), or 0; the contraction nests address by it.
-        obs_nst::Int=0)
+        obs_nst::Int=0,
+        # A piece of an equation split by makearray region: its report label,
+        # which names the equation it came from, and the declines that
+        # equation collected before the split.
+        rule_label::Union{Nothing,String}=nothing,
+        rule_declines::Vector{Pair{Symbol,Symbol}}=Pair{Symbol,Symbol}[])
     lhs_op = eq.lhs::OpExpr
     idx_names = _output_idx_strings(lhs_op)
     ranges_dict = _ranges_dict(lhs_op)
@@ -5678,11 +5683,15 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
     end
 
     range_iters = _output_range_iters(ranges_dict, idx_names)
-    label = _faq_debug_label(lhs_body, idx_names, range_iters)
+    label = rule_label === nothing ? _faq_debug_label(lhs_body, idx_names, range_iters) :
+        rule_label
     # Open this rule's report entry first: every tier below either lands it
     # (through the routing tally) or refuses it, and a refusal raised several
     # frames deeper reads the label from here so it can name what it refused.
     _open_rule!(label, :equation)
+    for (tier, why) in rule_declines
+        _note_decline!(tier, why)
+    end
 
     # An EMPTY output range (an index set a metaparameter sizes to 0, say) has no
     # cell to write: there is nothing for any tier to build or for the
@@ -5895,6 +5904,44 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
         scan_fold === nothing || push!(scan_folds, scan_fold)
         return nothing
     end
+    # ── A whole-array `makearray`, one equation per region ────────────────────
+    # `index(makearray(...), i…)` at this equation's own loops. The affine tier
+    # above takes most of these itself: it resolves the makearray per cell, so
+    # each cell sees its region's value, and cuts its boxes at the region
+    # bounds. What it declines comes here, ahead of the nest, which resolves the
+    # term with the cell index symbolic and so could not pick a region at all.
+    # It is offered one equation per region instead
+    # (`_makearray_region_equations`), each through this whole cascade with its
+    # region's value as its right-hand side, under a label naming this
+    # equation and with the declines it collected so far.
+    #
+    # The out-of-place form keeps the equation whole. Below this point it has
+    # the per-cell contraction loop and the static nest, which both take only a
+    # contraction at the top of the right-hand side, and a region's piece has
+    # none (`_makearray_region_rhs`): every piece would reach the per-cell build,
+    # whose cells the whole equation's per-cell build already resolves to the
+    # same values.
+    if !rhs_list_compiled && !_stencil_disabled()
+        parts = _makearray_region_equations(eq, lhs_op, lhs_body, idx_names, range_iters)
+        if parts !== nothing
+            rec = _build_record()
+            declines = rec === nothing ? Pair{Symbol,Symbol}[] : copy(rec.declines)
+            for (w, plo, phi, peq) in parts
+                where_ = join(("$(idx_names[d])=$(plo[d])..$(phi[d])"
+                               for d in eachindex(idx_names)), ", ")
+                plabel = w == 0 ? "$(label), outside every makearray region ($(where_))" :
+                    "$(label), makearray region $(w) ($(where_))"
+                _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
+                    array_contractions, covered, peq, resolved_obs, array_var_info,
+                    var_map, const_registry, pgather, param_sym_set, reg_funcs;
+                    template_sites=template_sites, xeq=xeq, pooled_cells=pooled_cells,
+                    rhs_list_compiled=rhs_list_compiled, obs_nst=obs_nst,
+                    rule_label=plabel, rule_declines=declines)
+            end
+            return nothing
+        end
+    end
+
     # ── Whole-array contraction nest (ess-array-contraction) ──────────────────
     # Offered HERE, once every affine form has declined: what is left below it
     # is the per-cell build, one resolve + `_compile` per OUTPUT CELL. The nest
@@ -5993,6 +6040,151 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
         param_sym_set=param_sym_set, reg_funcs=reg_funcs,
         contraction_loop=use_contraction_loop, pooled_cells=pooled_cells)
     return nothing
+end
+
+# The equations of a whole-array `makearray` right-hand side, one per region
+# box, each over that box with the value `_resolve_index_of_makearray` picks for
+# its cells: an array producer of the makearray's rank as the gather
+# `index(<value>, i…)`; one of lower rank as the gather at the region's
+# non-singleton axes; any other value as it is, and 0 where no region covers a
+# cell. Later regions win, as there: the equation's box is cut at every region
+# bound, each piece goes to the last region that covers it, and a region's
+# pieces are one equation when they make up a box, one each otherwise. The
+# pieces depend on the number of regions only, never on the extents.
+#
+# Each equation comes as `(region, lo, hi, equation)`: the region whose value it
+# takes (0 for none) and the box it covers. `nothing` (the equation stays whole)
+# unless the right-hand side is that gather at the equation's own loops, every
+# loop a unit-step range, every region bound a constant integer and every
+# region value one `_makearray_region_rhs` takes.
+const _MA_REGION_MAX_PIECES = 256
+
+# A region bound as an `Int`, or `nothing` for one that is not an integer an
+# `Int` holds.
+_ma_region_bound(x::Integer) = typemin(Int) <= x <= typemax(Int) ? Int(x) : nothing
+_ma_region_bound(x::AbstractFloat) =
+    (isinteger(x) && -0x1p63 <= x < 0x1p63) ? Int(x) : nothing
+_ma_region_bound(x) = nothing
+
+function _makearray_region_equations(eq::Equation, lhs_op::OpExpr, lhs_body::OpExpr,
+                                     idx_names::Vector{String}, range_iters)
+    rhs = eq.rhs
+    rhs isa OpExpr || return nothing
+    g = rhs::OpExpr
+    nd = length(idx_names)
+    (g.op == "index" && length(g.args) == nd + 1 && nd >= 1) || return nothing
+    for d in 1:nd
+        v = g.args[d + 1]
+        (v isa VarExpr && (v::VarExpr).name == idx_names[d]) || return nothing
+    end
+    ma = g.args[1]
+    (ma isa OpExpr && (ma::OpExpr).op == "makearray") || return nothing
+    ma = ma::OpExpr
+    (ma.regions === nothing || ma.values === nothing) && return nothing
+    regions, values = ma.regions, ma.values
+    (isempty(regions) || length(regions) != length(values)) && return nothing
+    all(r -> r isa UnitRange{Int} && !isempty(r), range_iters) || return nothing
+    elo = Int[first(r) for r in range_iters]
+    ehi = Int[last(r) for r in range_iters]
+    boxes = Vector{Vector{Tuple{Int,Int}}}()
+    for region in regions
+        length(region) == nd || return nothing
+        box = Tuple{Int,Int}[]
+        for d in 1:nd
+            length(region[d]) == 2 || return nothing
+            lo = _ma_region_bound(region[d][1])
+            hi = _ma_region_bound(region[d][2])
+            (lo === nothing || hi === nothing) && return nothing
+            push!(box, (lo, hi))
+        end
+        push!(boxes, box)
+    end
+    # Cut each axis of the equation's box at every region bound inside it.
+    cuts = Vector{Vector{Int}}(undef, nd)
+    for d in 1:nd
+        c = Int[elo[d], ehi[d] + 1]
+        for b in boxes
+            lo, hi = b[d]
+            elo[d] < lo <= ehi[d] && push!(c, lo)
+            elo[d] <= hi < ehi[d] && push!(c, hi + 1)
+        end
+        cuts[d] = sort!(unique!(c))
+    end
+    npieces = prod(length(c) - 1 for c in cuts)
+    npieces <= _MA_REGION_MAX_PIECES || return nothing
+    # Each piece's region: the last whose box holds it, 0 for none.
+    owner = Dict{Int,Vector{NTuple{2,Vector{Int}}}}()
+    for I in CartesianIndices(Tuple(1:(length(c) - 1) for c in cuts))
+        plo = Int[cuts[d][I[d]] for d in 1:nd]
+        phi = Int[cuts[d][I[d] + 1] - 1 for d in 1:nd]
+        w = 0
+        for (r, b) in enumerate(boxes)
+            all(d -> b[d][1] <= plo[d] && phi[d] <= b[d][2], 1:nd) && (w = r)
+        end
+        push!(get!(owner, w, NTuple{2,Vector{Int}}[]), (plo, phi))
+    end
+    loops = idx_names
+    out = Tuple{Int,Vector{Int},Vector{Int},Equation}[]
+    piece_eq(plo, phi, prhs) = Equation(
+        OpExpr("faq", ASTExpr[]; output_idx=Any[l for l in loops],
+               ranges=Dict{String,Any}(loops[d] => Any[plo[d], phi[d]] for d in 1:nd),
+               expr_body=lhs_body),
+        prhs; _comment=eq._comment)
+    for w in sort!(collect(keys(owner)))
+        pieces = owner[w]
+        prhs = w == 0 ? NumExpr(0.0) : _makearray_region_rhs(values[w], boxes[w], loops)
+        prhs === nothing && return nothing
+        # One equation when the pieces tile their bounding box.
+        blo = Int[minimum(p[1][d] for p in pieces) for d in 1:nd]
+        bhi = Int[maximum(p[2][d] for p in pieces) for d in 1:nd]
+        ncov = sum(prod(p[2][d] - p[1][d] + 1 for d in 1:nd) for p in pieces)
+        if ncov == prod(bhi[d] - blo[d] + 1 for d in 1:nd)
+            push!(out, (w, blo, bhi, piece_eq(blo, bhi, prhs)))
+        else
+            for (plo, phi) in pieces
+                push!(out, (w, plo, phi, piece_eq(plo, phi, prhs)))
+            end
+        end
+    end
+    return out
+end
+
+# A region's value as the right-hand side of the equation over its cells (see
+# `_makearray_region_equations`); `nothing` when its rank fits neither the
+# makearray nor the region, which the per-cell build then reports.
+function _makearray_region_rhs(val::ASTExpr, box::Vector{Tuple{Int,Int}},
+                               loops::Vector{String})
+    nd = length(loops)
+    if _is_array_producer(val)
+        v = val::OpExpr
+        rank = v.op == "makearray" ?
+            ((v.regions === nothing || isempty(v.regions)) ? 0 : length(v.regions[1])) :
+            length(_output_idx_strings(v))
+        sel = rank == nd ? loops : String[loops[d] for d in 1:nd if box[d][1] != box[d][2]]
+        length(sel) == rank || return nothing
+        return OpExpr("index", ASTExpr[v, (VarExpr(l) for l in sel)...])
+    end
+    return val
+end
+
+# The output slots of a whole-array nest whose LHS subscripts are affine, in
+# `Iterators.product` order, each claimed in `covered`. A function of the
+# ranges as a tuple, so the loop is compiled for their rank rather than
+# dispatched per cell. Returns the number of cells.
+function _ac_claim_outs!(outs::Vector{Int}, covered, blk, var_map, vname::String,
+                         cell::Vector{Int}, forms, iters::Tuple)
+    c = 0
+    for idx_tuple in Iterators.product(iters...)
+        c += 1
+        idx = _lhs_cell_slot(blk, var_map, vname, cell, forms, idx_tuple)
+        idx == 0 && throw(TreeWalkError("E_TREEWALK_UNKNOWN_STATE",
+                                        _cell_key(vname, cell)))
+        covered[idx] && throw(TreeWalkError("E_TREEWALK_DUPLICATE_DERIVATIVE",
+                                            _cell_key(vname, cell)))
+        covered[idx] = true
+        outs[c] = idx
+    end
+    return c
 end
 
 # Thrown to stop the refusal diagnostic's enumeration at its term cap; caught
@@ -6173,9 +6365,10 @@ function _try_compile_array_contraction(lhs_body::OpExpr, rhs_body::ASTExpr,
         OpExpr("ifelse", ASTExpr[agg_filter, rhs_body, NumExpr(rhs_zerobar)])
     body = isempty(resolved_obs) ? term : _sub_preserving(term, resolved_obs)
     # The term, resolved once with every index symbolic; the emitter writes the
-    # fold around it (array_contraction.jl, `_ACFold`).
+    # fold around it (array_contraction.jl, `_ACFold`). A scalar reduction nested
+    # in it stays a loop (`_NEST_SCALAR_LOOPS`).
     got = _resolve_array_contraction_term(body, idx_names, contract_names,
-                array_var_info, var_map, const_registry, pgather)
+              array_var_info, var_map, const_registry, pgather; nest_scalar_loops=true)
     if got === nothing
         _note_decline!(:array_contraction, :symbolic_body_did_not_lower)
         return nothing
@@ -6214,16 +6407,8 @@ function _try_compile_array_contraction(lhs_body::OpExpr, rhs_body::ASTExpr,
         vname, forms = target
         cell = Vector{Int}(undef, length(forms))
         blk = _vm_block(var_map, vname)
-        for idx_tuple in Iterators.product(range_iters...)
-            c += 1
-            idx = _lhs_cell_slot(blk, var_map, vname, cell, forms, idx_tuple)
-            idx == 0 && throw(TreeWalkError("E_TREEWALK_UNKNOWN_STATE",
-                                            _cell_key(vname, cell)))
-            covered[idx] && throw(TreeWalkError("E_TREEWALK_DUPLICATE_DERIVATIVE",
-                                                _cell_key(vname, cell)))
-            covered[idx] = true
-            outs[c] = idx
-        end
+        c = _ac_claim_outs!(outs, covered, blk, var_map, vname, cell, forms,
+                            Tuple(range_iters))
     else
         for idx_tuple in Iterators.product(range_iters...)
             c += 1

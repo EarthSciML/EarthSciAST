@@ -323,6 +323,25 @@
         100,
         1000
       ]
+    },
+    "makearray_nested_sum": {
+      "description": "A rank-0 sum nested in an array faq that is a makearray region value, [0, nested] over one box (the EarthSciASTDiff contracted-band shape, issue #547): D(J) = makearray(0, faq_i sum_j ((0.001 (i + 2 j)) u[j]) u[i]). The sum reads the outer index, so the work per call is N^2 terms and the ladder stops at 3162, like source_receptor's.",
+      "size_meaning": "cells (2 states per index)",
+      "sizes": [
+        100,
+        1000,
+        3162
+      ],
+      "pr_sizes": [
+        100,
+        1000
+      ],
+      "gate_overrides": {
+        "speed": {
+          "min_n_states": 2000,
+          "why": "the work per call is N^2, so 2000 states (N = 1000) is already a 10^6-term call"
+        }
+      }
     }
   },
   "gates": {
@@ -682,6 +701,26 @@
         "reason": "same; runs range 1.89-2.09; issue #548",
         "phase": "native-models",
         "provisional": "sweep 2026-10-23, native/i533-535 d3b29c968 (native/i533-535-gates at the same tree), adapter built with -C llvm-args=-align-loops=64, local node cores 10-14, load average 9-28 (other users and other jobs on other cores), median of 3 runs"
+      },
+      {
+        "family": "makearray_nested_sum",
+        "n": 1000,
+        "gate": "speed",
+        "threads": "serial",
+        "measured": 2.03,
+        "reason": "native builds the N x N term box in several elementwise passes and then reduces it, where the hand loop folds each row's terms in registers; fusing the elementwise chain into the reduction is executor work; issue #548",
+        "phase": "native-models",
+        "provisional": "adapter run 2026-10-23, native/i547 5b5069f0f, hand loop folding a block of rows in stack accumulators, built with -C llvm-args=-align-loops=64, local node core 8, load average 13-15 (other users), median of 5 interleaved runs (range 1.98-2.13)"
+      },
+      {
+        "family": "makearray_nested_sum",
+        "n": 3162,
+        "gate": "speed",
+        "threads": "serial",
+        "measured": 2.78,
+        "reason": "native builds the N x N term box in several elementwise passes and then reduces it, where the hand loop folds each row's terms in registers; fusing the elementwise chain into the reduction is executor work; issue #548",
+        "phase": "native-models",
+        "provisional": "adapter run 2026-10-23, native/i547 5b5069f0f, hand loop folding a block of rows in stack accumulators, built with -C llvm-args=-align-loops=64, local node core 8, load average 13-15 (other users), median of 5 interleaved runs (range 2.64-2.84)"
       }
     ],
     "julia": [
@@ -784,6 +823,14 @@
         "reason": "the build sits at the 20 ns/state limit; the per-state cost left is generic build work (allocating the state-sized u0, its seeded copy and the scan's slot list, and the collection that triggers), not scan code; runs range 20.0-27.9 serial and threaded; issue #548",
         "phase": "native-models",
         "provisional": "sweep 2026-10-23, native/i533-535 d3b29c968 (native/i533-535-gates at the same tree), local node cores 10-14, load average 9-28 (other users and other jobs on other cores), median of 5 runs"
+      },
+      {
+        "family": "makearray_nested_sum",
+        "gate": "build_slope",
+        "measured": 25.65,
+        "reason": "the build sits at the 20 ns/state limit; the per-state cost left is generic build work (allocating the state-sized u0 and its seeded copy, the output-slot list, and the collection that triggers), not the region split or the nested loop, whose code is the same size at every N; runs range 18.8-25.7 serial and 16.7-18.8 with 2 threads; issue #548",
+        "phase": "native-models",
+        "provisional": "sweep 2026-10-24, native/i547 6d31c7c64 (origin/main 4ff2afeff merged), local node cores 16-19, load average 11-24 (other users, and this branch's Rust checks on other cores), highest of 3 runs serial and 3 with 2 threads"
       }
     ]
   }

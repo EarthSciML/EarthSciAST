@@ -1866,18 +1866,29 @@ end
 # iteration so the ONE compiled `body` (whose `_NK_LOOPVAR` leaves read that ref)
 # yields term(k); folds with ⊕ seeded from 0̄ (`n.literal`). The iteration order is
 # `_expand_int_range`'s order — the SAME order the unroll path (`_foreach_aggregate_term`
-# → `_combine_with_reducer`) accumulates in — so a single-index loop is bit-identical
-# to the unrolled fold (modulo the leading `0̄ ⊕ ·`, itself an identity for all four
-# semirings). Nested loops (multi-index) group the sum by the outer index, a
+# → `_combine_with_reducer`) accumulates in, from the same 0̄ seed (esm-spec §4.3.1) —
+# so a single-index loop is bit-identical to the unrolled fold. Nested loops
+# (multi-index) group the sum by the outer index, a
 # reassociation within ~length·eps of the flat unroll. Zero per-call allocation: the
 # ref is built once at compile time; the fold is stack-only and type-stable in `T`.
+#
+# The seed enters the first step as the node's `Float64`, not converted to `T`,
+# as the emitted loop has it (`_cg_contraction_loop`): `seed ⊕ term₁` leaves a
+# `Dual` term's partials as they are, where `T(seed) ⊕ term₁` adds the seed's
+# zero partials to them and turns a `-0.0` partial into `0.0`. The first step is
+# taken before the loop so the accumulator is a `T` throughout.
 function _eval_contraction_loop(n::_Node, u, p, t, ::Type{T}) where {T}
     spec = n.payload::_ContractLoop
     ref = spec.ref
     body = @inbounds n.children[1]
     op = n.op
-    s = T(n.literal)
     rng = spec.lo:spec.step:spec.hi
+    isempty(rng) && return T(n.literal)
+    ref[] = first(rng)
+    b1 = _eval_node(body, u, p, t, T)
+    s = op === :+ ? T(n.literal + b1) : op === :* ? T(n.literal * b1) :
+        op === :max ? T(max(n.literal, b1)) : T(min(n.literal, b1))
+    rng = (first(rng) + spec.step):spec.step:spec.hi
     if op === :+
         @inbounds for k in rng
             ref[] = k

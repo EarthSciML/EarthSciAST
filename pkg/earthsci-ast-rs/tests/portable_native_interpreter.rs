@@ -42,6 +42,7 @@ scaling_family!(join_keyed);
 scaling_family!(makearray_scan);
 scaling_family!(suffix_scan);
 scaling_family!(ragged_contraction);
+scaling_family!(makearray_nested_sum);
 
 #[test]
 fn geometry_documents() {

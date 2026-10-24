@@ -220,6 +220,7 @@ fn canonical_vars(family: &str, doc: &Value) -> Result<Vec<CanonVar>, String> {
         | "ragged_contraction" => vec!["u"],
         "transport_3d" => vec!["q"],
         "source_receptor" => vec!["c", "e"],
+        "makearray_nested_sum" => vec!["u", "J"],
         "regrid" => vec!["F_src", "F_tgt"],
         // Box-major, species in declaration order: the document's own order.
         "scalar_chemistry" => vars
@@ -467,6 +468,10 @@ fn build_hand_loop(family: &str, doc: &Value, shape: &Value) -> Result<HandLoop,
                 nbr,
             }
         }
+        "makearray_nested_sum" => HandLoop::MakearrayNestedSum {
+            n: set_size("x"),
+            kd: param_default(doc, "kd")?,
+        },
         other => return Err(format!("no hand loop for family {other:?}")),
     })
 }

@@ -897,6 +897,17 @@ end
 # (xcse.jl, which safely DECLINES an unknown kind → leaves it inline).
 const _ARRAY_CELL_DEPTH = Ref(0)
 
+# A member of a symbolic resolve's bound names that no index name can be: the
+# whole-array nest puts it in the bound names it resolves its term with
+# (`_resolve_array_contraction_term(...; nest_scalar_loops=true)`), and every
+# resolve of that term passes it down with them. A scalar reduction nested in
+# the term then stays a loop (`_resolve_scalar_faq`) instead of unrolling one
+# term per contracted index into the nest's one body, which would make the
+# generated code as long as the reduction. The nest's emitter writes it as a
+# counted loop (`_cg_emit`, array_contraction.jl). A resolve started anywhere
+# else has bound names without it, so it never sees the loop node.
+const _NEST_SCALAR_LOOPS = "\0nest_scalar_loops"
+
 # Tier gate and coverage floor. On under `native`, but only for reductions at
 # least `_contraction_loop_min()` long — small reductions keep unrolling so the
 # vast existing small-aggregate test surface (and its CSE / stencil interactions)
@@ -922,13 +933,16 @@ end
 # `E_TREEWALK_UNBOUND_LOOP_VAR` here — caught, and we unroll (correctness first).
 function _try_build_contraction_loop(body::ASTExpr, contract_names::Vector{String},
         ranges::AbstractVector, oplus::String, zerobar::Float64,
-        array_var_info, var_map, const_arrays, pgather::AbstractDict)
+        array_var_info, var_map, const_arrays, pgather::AbstractDict;
+        # The enclosing symbolic resolve's own bound names, which the body may
+        # read (a reduction nested in the whole-array nest's term).
+        outer_syms::Set{String}=_EMPTY_BOUND_SYMS)
     names = String[_fresh_loopvar_name() for _ in contract_names]
     refs  = Base.RefValue{Int}[Ref(0) for _ in contract_names]
     subs  = Dict{String,ASTExpr}(contract_names[d] => VarExpr(names[d])
                                  for d in eachindex(contract_names))
     subbed = _sub_preserving(body, subs)
-    bsyms  = Set{String}(names)
+    bsyms  = union(Set{String}(names), outer_syms)
     resolved = try
         # memo=nothing: the symbolic (bound-sym) resolution must never share the
         # concrete RHS-build memo (same invariant the compile-once path relies on).
@@ -1031,7 +1045,10 @@ end
 # drives the contracted refs from the admitted tuples instead.
 function _resolve_array_contraction_term(body::ASTExpr, out_names::Vector{String},
         contract_names::Vector{String},
-        array_var_info, var_map, const_arrays, pgather::AbstractDict)
+        array_var_info, var_map, const_arrays, pgather::AbstractDict;
+        # The whole-array nest's own resolve, whose emitter writes a nested
+        # scalar reduction as a loop (`_NEST_SCALAR_LOOPS`).
+        nest_scalar_loops::Bool=false)
     nout = length(out_names)
     all_names = vcat(out_names, contract_names)
     fresh = String[_fresh_loopvar_name() for _ in all_names]
@@ -1040,6 +1057,7 @@ function _resolve_array_contraction_term(body::ASTExpr, out_names::Vector{String
                                  for d in eachindex(all_names))
     subbed = _sub_preserving(body, subs)
     bsyms  = Set{String}(fresh)
+    nest_scalar_loops && push!(bsyms, _NEST_SCALAR_LOOPS)
     resolved = try
         # memo=nothing, as in `_try_build_contraction_loop`: a symbolic resolve
         # must never share the concrete RHS-build memo.
@@ -1117,6 +1135,25 @@ function _resolve_scalar_faq(faq_expr::OpExpr, array_var_info, var_map, const_ar
         if total >= _contraction_loop_min() && all(!isempty, ranges)
             looped = _try_build_contraction_loop(body, contract_names, ranges,
                         oplus, zerobar, array_var_info, var_map, const_arrays, pgather)
+            looped === nothing || return looped
+        end
+    end
+    # Nested in the whole-array nest's term (`_NEST_SCALAR_LOOPS` among the
+    # bound names), a reduction over ONE constant range at least the loop floor
+    # long stays a loop that reads the nest's counters. It folds from 0̄, so its
+    # value is the unroll's below bit for bit: the same terms in the same order,
+    # left to right from the same seed (esm-spec §4.3.1). Two or more
+    # contracted indices keep unrolling, since nested loops would group the sum
+    # by the outer index.
+    if _NEST_SCALAR_LOOPS in bound_syms && gates === nothing &&
+       filt0 === nothing && length(contract_names) == 1 &&
+       (oplus == "+" || oplus == "*" || oplus == "max" || oplus == "min") &&
+       _is_const_int_range(ranges_dict[contract_names[1]])
+        r = _expand_int_range(ranges_dict[contract_names[1]])
+        if length(r) >= _contraction_loop_min()
+            looped = _try_build_contraction_loop(body, contract_names, [r], oplus,
+                        zerobar, array_var_info, var_map, const_arrays,
+                        pgather; outer_syms = bound_syms)
             looped === nothing || return looped
         end
     end
@@ -1424,15 +1461,29 @@ function _resolve_state_gather(vname::String, lo::Vector{Int}, hi::Vector{Int},
         total = prod(dims)
         sf = Vector{Int}(undef, total)
         cur = Vector{Int}(undef, nd)
+        # A variable laid out as one block is read by arithmetic; formatting a
+        # cell key per cell would make this table cost far more per cell than
+        # the integers it holds.
+        blk = _vm_block(var_map, vname)
+        if blk !== nothing && blk.lo == lo && blk.hi == hi && blk.strides == strd
+            for lin in 0:total-1
+                sf[lin+1] = blk.base + lin
+            end
+            return (sf, strd)
+        end
         for lin in 0:total-1
             rem = lin
             for d in 1:nd
                 cur[d] = lo[d] + (rem % dims[d]); rem ÷= dims[d]
             end
-            cname = _cell_key(vname, cur)
-            haskey(var_map, cname) ||
-                throw(TreeWalkError("E_TREEWALK_MISSING_CELL", cname))
-            sf[lin+1] = var_map[cname]
+            slot = blk === nothing ? 0 : _block_slot(blk, cur)
+            if slot == 0
+                cname = _cell_key(vname, cur)
+                haskey(var_map, cname) ||
+                    throw(TreeWalkError("E_TREEWALK_MISSING_CELL", cname))
+                slot = var_map[cname]
+            end
+            sf[lin+1] = slot
         end
         (sf, strd)
     end

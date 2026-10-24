@@ -420,6 +420,46 @@ def source_receptor(n):
     }
 
 
+def makearray_nested_sum(n):
+    """A rank-0 sum nested in an array faq that is a makearray region value.
+
+    D(J) = makearray([1,n], [1,n]; [0, faq_i sum_j ((0.001 (i + 2 j)) u[j]) u[i]]),
+    D(u[i]) = -kd u[i]: the EarthSciASTDiff contracted-band shape (issue #547),
+    `[0, nested]` over one box, with the loop indices read as numbers. The sum
+    reads the outer i, so nothing can lift it out of the cell: the work per
+    call is n^2 terms, each in the per-cell build's left-to-right order.
+    """
+    term = op("*", op("*", op("*", 0.001, op("+", "i", op("*", 2, "j"))), ix("u", "j")), ix("u", "i"))
+    inner = faq(term, [], {"j": {"from": "x"}}, reduce="+")
+    model = {
+        "variables": {
+            "u": {"type": "unknown", "units": "1", "shape": ["x"], "default": 1.0},
+            "J": {"type": "unknown", "units": "1", "shape": ["x"], "default": 0.0},
+            "kd": {"type": "parameter", "units": "1", "default": 0.1},
+        },
+        "equations": [
+            {
+                "lhs": faq_lhs("u", ["i"], {"i": {"from": "x"}}),
+                "rhs": faq(op("*", op("-", "kd"), ix("u", "i")), ["i"], {"i": {"from": "x"}}),
+            },
+            {
+                "lhs": {"op": "D", "args": ["J"], "wrt": "t"},
+                "rhs": {
+                    "op": "makearray",
+                    "args": [],
+                    "regions": [[[1, n]], [[1, n]]],
+                    "values": [0, faq(inner, ["i"], {"i": {"from": "x"}})],
+                },
+            },
+        ],
+    }
+    desc = f"nested rank-0 sum in a makearray region value, {n} x {n} terms"
+    return doc("makearray_nested_sum", desc, {"x": n}, {"Band": model}), {
+        "cells": n,
+        "states": 2 * n,
+    }
+
+
 def regrid(n):
     """Conservative regrid of a decaying source field onto a shifted target strip grid.
 
@@ -1172,6 +1212,7 @@ FAMILIES = {
     "makearray_scan": makearray_scan,
     "suffix_scan": suffix_scan,
     "ragged_contraction": ragged_contraction,
+    "makearray_nested_sum": makearray_nested_sum,
 }
 
 

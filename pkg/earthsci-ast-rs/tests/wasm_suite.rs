@@ -341,6 +341,7 @@ scaling_family!(scaling_join_keyed, "join_keyed");
 scaling_family!(scaling_makearray_scan, "makearray_scan");
 scaling_family!(scaling_suffix_scan, "suffix_scan");
 scaling_family!(scaling_ragged_contraction, "ragged_contraction");
+scaling_family!(scaling_makearray_nested_sum, "makearray_nested_sum");
 
 /// The corpus geometry documents the tape lowers (`polygon_intersection_area`,
 /// a build-time `intersect_polygon` ring), native against the interpreter.

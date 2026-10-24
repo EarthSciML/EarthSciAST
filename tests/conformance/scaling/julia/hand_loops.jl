@@ -837,3 +837,36 @@ end
 end
 
 HAND_LOOPS["ragged_contraction"] = HandLoop(_ragged_setup, _ragged_row!)
+
+# ---------------------------------------------------------------------------
+# Nested sum in a makearray region: D(u[i]) = -kd u[i],
+# D(J[i]) = sum_j ((0.001 (i + 2 j)) u[j]) u[i]
+# ---------------------------------------------------------------------------
+#
+# The makearray's first region is 0 and its second covers the same box, so the
+# loop writes the second region's value. Each cell's sum runs over j in order.
+
+function _mns_setup(prob, doc, entry)
+    n = Int(entry["n_cells"])
+    ou = _block_offset(prob.var_map, "Band.u", (n,))
+    oj = _block_offset(prob.var_map, "Band.J", (n,))
+    kd = _param(prob.p, "Band.kd")
+    return (; n, ou, oj, kd, nrows = n)
+end
+
+@inline function _mns_row!(du, u, t, st, r)
+    (; n, ou, oj, kd) = st
+    i = r
+    @inbounds begin
+        ui = u[ou+i]
+        acc = 0.0
+        for j in 1:n
+            acc += ((0.001 * (i + 2j)) * u[ou+j]) * ui
+        end
+        du[oj+i] = acc
+        du[ou+i] = -kd * ui
+    end
+    return nothing
+end
+
+HAND_LOOPS["makearray_nested_sum"] = HandLoop(_mns_setup, _mns_row!)
