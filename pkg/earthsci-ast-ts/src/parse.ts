@@ -26,6 +26,7 @@ import {
   resolveTemplateMachinery,
 } from './template-imports.js'
 import {
+  absoluteDirectory,
   normalizeEmptySolver,
   rejectConstUnitsPreV12,
   rejectSolverExternalPreV13,
@@ -36,7 +37,7 @@ import { schema } from './embedded-schema.js'
 import { readFileSyncNode, dirnameOf } from './path-utils.js'
 import { deepClone } from './object-utils.js'
 import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
-import { absoluteBase, resolveDataSourceUrls } from './data-source-urls.js'
+import { resolveDataSourceUrls } from './data-source-urls.js'
 
 /**
  * The single root-path token used when a validation diagnostic has no more
@@ -698,7 +699,7 @@ function loadInput(input: string | object, options?: LoadOptions): EsmFile {
   // here, so a later change of working directory does not move it; kept beside
   // the document because `external` round-trips verbatim.
   Object.defineProperty(loweredData, 'documentBase', {
-    value: absoluteBase(dataSourceBase),
+    value: absoluteDirectory(dataSourceBase),
     enumerable: false,
     writable: true,
     configurable: true,

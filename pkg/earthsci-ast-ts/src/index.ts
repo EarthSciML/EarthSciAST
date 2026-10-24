@@ -390,9 +390,10 @@ export {
 } from './template-imports.js'
 export type { TemplateResolveOptions, TemplateSchemaError } from './template-imports.js'
 
-// Document-scoped solver hints (esm-spec §2.2): the spec-version gate and the
-// §2.2.2 tolerance resolution order — the two parts of the block that are NOT
-// advisory. The Solver TYPE itself comes from the generated schema types.
+// Document-scoped solver hints (esm-spec §2.2): the spec-version gates, the
+// §2.2.2 tolerance resolution order and the §2.2.6 `solver.external` location
+// — the parts of the block that are NOT advisory. The Solver TYPE itself comes
+// from the generated schema types.
 export {
   rejectSolverPreV11,
   rejectSolverExternalPreV13,

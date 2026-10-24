@@ -48,13 +48,25 @@ const MANIFEST = JSON.parse(fs.readFileSync(path.join(SUITE, 'manifest.json'), '
   invariance: { with: string; without: string }
 }
 
+/** The §2.2.6 percent-encoding, written out here rather than borrowed. */
+function encode(p: string): string {
+  let out = ''
+  for (const b of Buffer.from(p, 'utf8')) {
+    const c = String.fromCharCode(b)
+    out += /^[A-Za-z0-9\-._~/:]$/.test(c) ? c : '%' + b.toString(16).toUpperCase().padStart(2, '0')
+  }
+  return out
+}
+
+function fileUrl(p: string): string {
+  return 'file://' + encode(removeDotSegments(p))
+}
+
 function expand(pin: Pin | null | undefined): string | null {
   if (pin === null || pin === undefined) return null
   if (pin.verbatim !== undefined) return pin.verbatim
-  if (pin.repo_path !== undefined)
-    return 'file://' + removeDotSegments(path.join(REPO_ROOT, pin.repo_path))
-  if (pin.cwd_path !== undefined)
-    return 'file://' + removeDotSegments(process.cwd() + '/' + pin.cwd_path)
+  if (pin.repo_path !== undefined) return fileUrl(path.join(REPO_ROOT, pin.repo_path))
+  if (pin.cwd_path !== undefined) return fileUrl(process.cwd() + '/' + pin.cwd_path)
   throw new Error('a location pin must carry repo_path, cwd_path or verbatim')
 }
 
@@ -101,12 +113,10 @@ describe('esm-spec §2.2.6 solver.external resolution', () => {
   })
 
   it('a mounted leaf’s solver block does not reach the root after ref resolution', async () => {
-    for (const id of [
-      'mount_root_with_external',
-      'mount_root_without_external',
-      'mount_subsystem_root_without_external',
-    ]) {
-      const f = accepted.find((x) => x.id === id) as Fixture
+    const mounts = accepted.filter((x) => x.id.startsWith('mount_'))
+    expect(mounts.length).toBeGreaterThanOrEqual(7)
+    for (const f of mounts) {
+      const id = f.id
       const file = load(f)
       await resolveSubsystemRefs(file, path.dirname(path.join(SUITE, f.path)))
       expect(file.solver?.external ?? null, id).toBe(f.external ?? null)
@@ -124,7 +134,7 @@ describe('esm-spec §2.2.6 solver.external resolution', () => {
       const again = loadPath(moved)
       expect(again.solver?.external).toBe('./runs/probe.run.json')
       expect(solverExternalLocation(again)).toBe(
-        'file://' + removeDotSegments(path.resolve(dir) + '/runs/probe.run.json'),
+        fileUrl(path.resolve(dir) + '/runs/probe.run.json'),
       )
     } finally {
       fs.rmSync(dir, { recursive: true, force: true })
@@ -191,11 +201,9 @@ describe('solverExternalLocation base handling', () => {
 
   it('takes a relative explicit base against the working directory', () => {
     const cwd = process.cwd()
-    expect(solverExternalLocation(inMemory('x/../run.json'))).toBe(
-      'file://' + removeDotSegments(cwd + '/run.json'),
-    )
+    expect(solverExternalLocation(inMemory('x/../run.json'))).toBe(fileUrl(cwd + '/run.json'))
     expect(solverExternalLocation(inMemory('x/../run.json'), 'rel/./dir')).toBe(
-      'file://' + removeDotSegments(cwd + '/rel/dir/run.json'),
+      fileUrl(cwd + '/rel/dir/run.json'),
     )
     expect(solverExternalLocation(inMemory('x/../run.json'), '/abs/a/../b')).toBe(
       'file:///abs/b/run.json',
@@ -205,5 +213,50 @@ describe('solverExternalLocation base handling', () => {
   it('returns null without an external and refuses an in-memory ${', () => {
     expect(solverExternalLocation(inMemory())).toBeNull()
     expect(() => solverExternalLocation(inMemory('${HOME}/r.json'))).toThrow(/\/solver\/external/)
+  })
+
+  it.each([
+    ['C:/proj/./runs/../x.json', undefined, 'file:///C:/proj/x.json'],
+    ['c:\\proj\\runs\\x.json', undefined, 'file:///c:/proj/runs/x.json'],
+    ['C:/../../x.json', undefined, 'file:///C:/x.json'],
+    ['runs/x.json', 'C:/proj/sub/..', 'file:///C:/proj/runs/x.json'],
+    ['runs/x.json', 'D:\\proj', 'file:///D:/proj/runs/x.json'],
+    ['../../../x.json', 'C:/proj', 'file:///C:/x.json'],
+    ['/srv/x.json', 'C:/proj', 'file:///srv/x.json'],
+  ])('reads the drive-letter path %s (base %s) as absolute', (external, base, want) => {
+    expect(solverExternalLocation(inMemory(external), base)).toBe(want)
+  })
+
+  it('records a drive-letter base as absolute at load', () => {
+    const text = fs.readFileSync(path.join(SUITE, 'fixtures', 'bare_relative.esm'), 'utf8')
+    const file = loadString(text, { basePath: 'C:\\proj\\sub' })
+    expect(file.documentBase).toBe('C:/proj/sub')
+    expect(solverExternalLocation(file)).toBe('file:///C:/proj/sub/runs/probe.run.json')
+  })
+})
+
+describe('solver_external_unresolved', () => {
+  const envVar = () =>
+    JSON.parse(fs.readFileSync(path.join(SUITE, 'fixtures', 'env_var.esm'), 'utf8')) as {
+      solver: Record<string, unknown>
+    }
+
+  it('quotes the string exactly as authored', () => {
+    const doc = envVar()
+    const authored = 'a\\b "c" ${X}/y.json'
+    doc.solver.external = authored
+    expect(() => loadString(JSON.stringify(doc))).toThrow(`"${authored}"`)
+  })
+
+  it('is checked before schema validation', () => {
+    const doc = envVar()
+    doc.solver.not_a_solver_key = true
+    let code: string | undefined
+    try {
+      loadString(JSON.stringify(doc))
+    } catch (e) {
+      code = (e as { code?: string }).code
+    }
+    expect(code).toBe(ERROR_CODES.SOLVER_EXTERNAL_UNRESOLVED)
   })
 })

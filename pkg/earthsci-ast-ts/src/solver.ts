@@ -21,7 +21,7 @@ import { ERROR_CODES } from './errors.js'
 import { EsmMachineryError } from './lower-expression-templates.js'
 import type { Solver } from './generated.js'
 import type { EsmFile } from './types.js'
-import { absoluteBase, removeDotSegments, SCHEME_RE } from './data-source-urls.js'
+import { removeDotSegments, SCHEME_RE } from './data-source-urls.js'
 
 /**
  * Binding default relative tolerance (API_SPEC §5.8) — the bottom of the
@@ -38,6 +38,20 @@ function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
 }
 
+/** `[major, minor]` of the document's `esm` string, or `null` when it has none. */
+function declaredMinor(view: Record<string, unknown>): [number, number] | null {
+  const esm = view.esm
+  if (typeof esm !== 'string') return null
+  const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(esm)
+  if (!m) return null
+  return [Number(m[1]), Number(m[2])]
+}
+
+/** Whether a declared `[major, minor]` is below `1.<minor>`. */
+function below1(version: [number, number] | null, minor: number): boolean {
+  return version !== null && (version[0] < 1 || (version[0] === 1 && version[1] < minor))
+}
+
 /**
  * Reject a top-level `solver` block in a file declaring esm < 1.1.0.
  *
@@ -48,16 +62,10 @@ function isObject(v: unknown): v is Record<string, unknown> {
 export function rejectSolverPreV11(view: unknown): void {
   if (!isObject(view)) return
   if (!('solver' in view)) return
-  const esm = view.esm
-  if (typeof esm !== 'string') return
-  const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(esm)
-  if (!m) return
-  const major = Number(m[1])
-  const minor = Number(m[2])
-  if (major > 1 || (major === 1 && minor >= 1)) return
+  if (!below1(declaredMinor(view), 1)) return
   throw new EsmMachineryError(
     ERROR_CODES.SOLVER_VERSION_TOO_OLD,
-    `the top-level \`solver\` block requires esm >= 1.1.0; file declares ${esm}. Offending path: /solver`,
+    `the top-level \`solver\` block requires esm >= 1.1.0; file declares ${String(view.esm)}. Offending path: /solver`,
   )
 }
 
@@ -74,16 +82,10 @@ export function rejectSolverExternalPreV13(view: unknown): void {
   if (!isObject(view)) return
   const solver = view.solver
   if (!isObject(solver) || !('external' in solver)) return
-  const esm = view.esm
-  if (typeof esm !== 'string') return
-  const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(esm)
-  if (!m) return
-  const major = Number(m[1])
-  const minor = Number(m[2])
-  if (major > 1 || (major === 1 && minor >= 3)) return
+  if (!below1(declaredMinor(view), 3)) return
   throw new EsmMachineryError(
     ERROR_CODES.SOLVER_EXTERNAL_VERSION_TOO_OLD,
-    `\`solver.external\` requires esm >= 1.3.0; file declares ${esm}. Offending path: /solver/external`,
+    `\`solver.external\` requires esm >= 1.3.0; file declares ${String(view.esm)}. Offending path: /solver/external`,
   )
 }
 
@@ -91,7 +93,7 @@ function checkSolverExternal(external: string): void {
   if (!external.includes('${')) return
   throw new EsmMachineryError(
     ERROR_CODES.SOLVER_EXTERNAL_UNRESOLVED,
-    `/solver/external '${external}' carries an unexpanded '\${...}' variable. ` +
+    `/solver/external: "${external}" carries an unexpanded '\${...}' variable. ` +
       'esm-spec §2.2.6 does not expand environment variables into a run-configuration ' +
       'reference: a run configuration chosen by the environment is not reproducible. ' +
       'Write a path relative to this document, or pass the run configuration at the call site.',
@@ -110,18 +112,69 @@ export function rejectSolverExternalUnresolved(view: unknown): void {
   checkSolverExternal(solver.external)
 }
 
+/** A drive-letter path, `C:/` or `C:\`: absolute on every host (§2.2.6). */
+const DRIVE_RE = /^[A-Za-z]:[/\\]/
+
+/** The bytes a §2.2.6 location writes as themselves; every other byte is `%XX`. */
+const LOCATION_SAFE = /^[A-Za-z0-9\-._~/:]$/
+
+function isAbsolutePath(path: string): boolean {
+  return path.startsWith('/') || DRIVE_RE.test(path)
+}
+
+/**
+ * An absolute `path` with its dot segments removed (RFC 3986 §5.2.4). A
+ * drive-letter path comes back as `C:/…`, its `\` read as `/` and its drive a
+ * root that `..` does not climb above.
+ */
+function lexicalAbsolute(path: string): string {
+  if (DRIVE_RE.test(path)) {
+    return path.slice(0, 2) + removeDotSegments(path.slice(2).replace(/\\/g, '/'))
+  }
+  return removeDotSegments(path)
+}
+
+/**
+ * `dir` as the absolute, dot-segment-free directory *D* of esm-spec §2.2.6. A
+ * relative `dir` is taken against the working directory. Purely lexical.
+ */
+export function absoluteDirectory(dir: string): string {
+  let d = (dir || '.').replace(/\\/g, '/')
+  if (!isAbsolutePath(d)) {
+    const cwd =
+      typeof process !== 'undefined' && typeof process.cwd === 'function' ? process.cwd() : '/'
+    d = cwd.replace(/\\/g, '/') + '/' + d
+  }
+  return lexicalAbsolute(d)
+}
+
+/** `file://` plus an absolute, dot-segment-free `path`, percent-encoded (§2.2.6). */
+function fileUrl(path: string): string {
+  let encoded = ''
+  for (const byte of new TextEncoder().encode(path)) {
+    const ch = String.fromCharCode(byte)
+    encoded += LOCATION_SAFE.test(ch) ? ch : '%' + byte.toString(16).toUpperCase().padStart(2, '0')
+  }
+  return 'file://' + (path.startsWith('/') ? '' : '/') + encoded
+}
+
 /**
  * The location `solver.external` names, resolved by esm-spec §2.2.6, or `null`
  * when the root document's `solver` block carries none.
  *
- * A URL (`scheme://…`) is returned unchanged. An absolute path has its dot
- * segments removed and is prefixed `file://`. Anything else is joined onto the
- * base, dot segments removed, and prefixed `file://`. The base is `base` when
- * given — a relative one is taken against the working directory — and otherwise
- * the directory recorded at load: the directory of the file `loadPath` read,
- * the `basePath` load option, or the working directory of a `loadString` /
- * `loadDocument`. A document built in memory resolves against the working
- * directory.
+ * A URL (`scheme://…`) is returned unchanged. An absolute path — `/…`, or a
+ * drive-letter `C:/…` / `C:\…` — has its dot segments removed, is
+ * percent-encoded and is prefixed `file://` (`file:///C:/…` for a drive).
+ * Anything else is joined onto the base, dot segments removed,
+ * percent-encoded, and prefixed `file://`. Percent-encoding writes each byte of
+ * the path's UTF-8 encoding outside `A-Za-z0-9-._~/:` as `%XX`, `%` included:
+ * the input is a path, not a URL.
+ *
+ * The base is `base` when given — a relative one is taken against the working
+ * directory — and otherwise the directory recorded at load: the directory of
+ * the file `loadPath` read, the `basePath` load option, or the working
+ * directory of a `loadString` / `loadDocument`. A document built in memory
+ * resolves against the working directory.
  *
  * Purely lexical: it never touches the filesystem, and a location that does not
  * exist resolves normally. The authored string stays in the document and is
@@ -137,9 +190,10 @@ export function solverExternalLocation(file: EsmFile, base?: string): string | n
   if (typeof external !== 'string') return null
   checkSolverExternal(external)
   if (SCHEME_RE.test(external)) return external
-  if (external.startsWith('/')) return 'file://' + removeDotSegments(external)
-  const dir = base ?? file.documentBase ?? '.'
-  return 'file://' + removeDotSegments(absoluteBase(dir).replace(/\/+$/, '') + '/' + external)
+  if (isAbsolutePath(external)) return fileUrl(lexicalAbsolute(external))
+  const dir =
+    base !== undefined ? absoluteDirectory(base) : (file.documentBase ?? absoluteDirectory('.'))
+  return fileUrl(lexicalAbsolute(dir + '/' + external))
 }
 
 /**
@@ -149,13 +203,7 @@ export function solverExternalLocation(file: EsmFile, base?: string): string | n
  */
 export function rejectConstUnitsPreV12(view: unknown): void {
   if (!isObject(view)) return
-  const esm = view.esm
-  if (typeof esm !== 'string') return
-  const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(esm)
-  if (!m) return
-  const major = Number(m[1])
-  const minor = Number(m[2])
-  if (major > 1 || (major === 1 && minor >= 2)) return
+  if (!below1(declaredMinor(view), 2)) return
   const find = (node: unknown, at: string): string | null => {
     if (Array.isArray(node)) {
       for (let i = 0; i < node.length; i++) {
@@ -175,7 +223,7 @@ export function rejectConstUnitsPreV12(view: unknown): void {
   if (path === null) return
   throw new EsmMachineryError(
     ERROR_CODES.CONST_UNITS_VERSION_TOO_OLD,
-    `declared \`units\` on an expression node require esm >= 1.2.0; file declares ${esm}. Offending path: ${path}`,
+    `declared \`units\` on an expression node require esm >= 1.2.0; file declares ${String(view.esm)}. Offending path: ${path}`,
   )
 }
 

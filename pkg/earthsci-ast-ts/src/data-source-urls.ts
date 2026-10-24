@@ -55,7 +55,7 @@ export function removeDotSegments(path: string): string {
  * relative path after `file://` would silently make its first segment the URL
  * HOST — the exact misresolution §8.2.1 exists to stop.
  */
-export function absoluteBase(baseDir: string): string {
+function absoluteBase(baseDir: string): string {
   const b = (baseDir || '.').replace(/\\/g, '/')
   if (b.startsWith('/')) return b
   const cwd =
