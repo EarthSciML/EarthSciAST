@@ -42,10 +42,15 @@ interface VariableCase {
   distribution_kind: string | null
   source_system: string | null
 }
+interface ContributionCase {
+  rhs: string
+  origins: Array<{ component: string } | { coupling: number }>
+}
 interface EquationCase {
   lhs: string
   rhs: string
   source_system: string
+  contributions: ContributionCase[]
 }
 interface EventCase {
   name: string | null
@@ -160,8 +165,10 @@ describe('flatten conformance corpus (esm-libraries-spec §4.7.5 step 4)', () =>
     // whole §4.6 path, plus the two `reaction_system` event cases — a reaction
     // system's own `continuous_events` / `discrete_events`, which the schema
     // grants on the same footing as a model's and which Julia's and Rust's
-    // flatten used to drop — and the three right-hand-side `D` resolution cases.
-    expect(corpus.cases.length).toBe(30)
+    // flatten used to drop — and the three right-hand-side `D` resolution cases,
+    // plus the twelve `term_provenance` cases (one per row of §4.7.5's
+    // per-term provenance table).
+    expect(corpus.cases.length).toBe(42)
     // 4 = template_import_lib, couple_multiplicative_no_tendency, the
     // nonterminating rewrite, and `coupling_resolution_edge_cases`, whose EDGE
     // CASE 10 maps onto a target the document declares nowhere.
@@ -225,11 +232,17 @@ describe('flatten conformance corpus (esm-libraries-spec §4.7.5 step 4)', () =>
 
     // --- equations, events, registries --------------------------------------
 
-    it('equations (ordered, rendered with toAscii)', () => {
+    it('equations (ordered, rendered with toAscii), with their contributions', () => {
+      // `contributions` is per-term provenance (§4.7.5): compared exactly and in
+      // order — the expressions, the origins and their order — for every case.
       const rendered: EquationCase[] = flat.equations.map((eq) => ({
         lhs: toAscii(eq.lhs),
         rhs: toAscii(eq.rhs),
         source_system: eq.sourceSystem,
+        contributions: eq.contributions.map((c) => ({
+          rhs: toAscii(c.expr),
+          origins: c.origins,
+        })),
       }))
       expect(rendered).toEqual(expected.equations)
       expect(flat.equations.length).toBe(expected.equation_count)

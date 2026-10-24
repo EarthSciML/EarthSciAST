@@ -88,6 +88,16 @@ import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
 import { EsmMachineryError } from './lower-expression-templates.js'
 import { mergedTemplateRegistry } from './flatten-template-registry.js'
 import { resolveRhsTimeDerivatives } from './flatten-tendency.js'
+import {
+  addExprs,
+  equationFrom,
+  foldContributions,
+  mapContributions,
+  unionOrigins,
+  type Contribution,
+} from './flatten-contributions.js'
+
+export type { Contribution, TermOrigin } from './flatten-contributions.js'
 
 /** Options for {@link flatten}. Only needed when the file uses `coupling_import`. */
 export type FlattenOptions = CouplingImportOptions
@@ -324,8 +334,25 @@ export interface FlattenedEquation {
   lhs: Expression
   /** Dot-namespaced RHS, with coupling contributions merged in. */
   rhs: Expression
-  /** Name of the source system this equation originated from. */
+  /**
+   * The equation's SLOT OWNER: the component whose equation list it sits in,
+   * which decides what a later `operator_compose` entry can see (§4.7.1 step 4).
+   * It is not provenance — a composed equation has one slot owner and several
+   * authors; {@link FlattenedEquation.contributions} records those.
+   */
   sourceSystem: string
+  /**
+   * Per-term provenance (esm-libraries-spec §4.7.5): the ordered summands of the
+   * right-hand side, each with the component or coupling entry that authored
+   * it. The body (`rhs`, or the `faq` body when {@link FlattenedEquation.lifted})
+   * is the LEFT fold of their expressions.
+   */
+  contributions: Contribution[]
+  /**
+   * True when the pointwise lift (esm-spec §10.5) wrapped the equation in an
+   * `faq` over the grid; the contributions then sum to `rhs.expr`.
+   */
+  lifted?: boolean
 }
 
 /** Metadata describing the origin of the flattened system. */
@@ -674,13 +701,6 @@ function spatialDimsInExpr(expr: Expression, into: Set<string>): void {
   })
 }
 
-/** Sum two expressions, normalizing the trivial `0 + x` / `x + 0` cases. */
-function addExprs(left: Expression, right: Expression): Expression {
-  if (numericValue(left) === 0) return right
-  if (numericValue(right) === 0) return left
-  return { op: '+', args: [left, right] }
-}
-
 /** Multiply two expressions, normalizing the trivial `1 *` / `0 *` cases. */
 function multiplyExprs(left: Expression, right: Expression): Expression {
   if (numericValue(left) === 1) return right
@@ -801,7 +821,7 @@ function renameNames(expr: Expression, renames: Record<string, string>): Express
 
 /**
  * Render a number the way Python's `str(float)` does, which is the spelling the
- * flatten corpus pins for a `translate` conversion factor.
+ * flatten corpus pins for a `translate` or `variable_map` conversion factor.
  *
  * The two runtimes agree on the DIGITS (both emit the shortest round-tripping
  * decimal) and disagree on the PRESENTATION: Python switches to exponent
@@ -881,7 +901,10 @@ function describeCoupling(entry: CouplingEntry): string {
       const transform = e.transform
       const shown = typeof transform === 'string' ? transform : 'expression'
       let rule = `variable_map(${String(e.from)} -> ${String(e.to)}, transform=${shown})`
-      if (e.factor !== undefined && e.factor !== null) rule += ` [factor=${String(e.factor)}]`
+      const factor = e.factor
+      if (factor !== undefined && factor !== null) {
+        rule += ` [factor=${typeof factor === 'number' ? formatPythonFloat(factor) : String(factor)}]`
+      }
       return rule
     }
     case 'callback':
@@ -1038,10 +1061,15 @@ function namespaceEquations(
   locals?: ReadonlySet<string>,
 ): void {
   for (const eq of equations) {
+    const rhs = namespaceExpr(eq.rhs, prefix, LEAVE_ALONE, subsystemKeys, locals)
     component.equations.push({
       lhs: namespaceExpr(eq.lhs, prefix, LEAVE_ALONE, subsystemKeys, locals),
-      rhs: namespaceExpr(eq.rhs, prefix, LEAVE_ALONE, subsystemKeys, locals),
+      rhs,
       sourceSystem: prefix,
+      // §4.7.5 steps 1-2: one contribution, authored by this component (a
+      // reaction system's derived ODEs included). `prefix` is the full dotted
+      // path, so it is both the slot owner and the origin.
+      contributions: [{ expr: rhs, origins: [{ component: prefix }] }],
     })
   }
 }
@@ -1433,12 +1461,10 @@ function expandOperatorComposePlaceholders(
   const next: FlattenedEquation[] = []
   for (const eq of b.equations) {
     if (hasVarPlaceholder(eq.lhs) || hasVarPlaceholder(eq.rhs)) {
+      // Each clone keeps B's contributions, and so B's component as their origin.
       for (const varName of aStates) {
-        next.push({
-          lhs: substitute(eq.lhs, { _var: varName }) as Expression,
-          rhs: substitute(eq.rhs, { _var: varName }) as Expression,
-          sourceSystem: eq.sourceSystem,
-        })
+        const sub = (e: Expression) => substitute(e, { _var: varName }) as Expression
+        next.push(mapContributions(eq, sub, sub(eq.lhs)))
       }
     } else {
       next.push(eq)
@@ -1619,13 +1645,25 @@ function applyOperatorCompose(
       // their names. On a direct match the two names are equal and on a
       // placeholder match the expansion already substituted, so in both cases
       // this is the identity.
-      let rhs = substitute(bEq.rhs, { [bDep]: targetDep }) as Expression
-      if (factor !== 1) rhs = { op: '*', args: [factor, rhs] }
-      a.equations[i] = {
-        lhs: aEq.lhs,
-        rhs: addExprs(aEq.rhs, rhs),
-        sourceSystem: aEq.sourceSystem,
+      //
+      // B's contributions are APPENDED to A's, in order, origins unchanged
+      // (§4.7.5 provenance table). A `translate` factor scales B's one
+      // contribution; when B already carries several, they collapse into ONE
+      // `factor * (b1 + b2 + ...)` whose origins are the union: indivisible,
+      // because distributing the factor would change the arithmetic.
+      let bContribs: Contribution[] = bEq.contributions.map((c) => ({
+        expr: substitute(c.expr, { [bDep]: targetDep }) as Expression,
+        origins: c.origins,
+      }))
+      if (factor !== 1) {
+        bContribs = [
+          {
+            expr: { op: '*', args: [factor, foldContributions(bContribs)] },
+            origins: unionOrigins(bContribs),
+          },
+        ]
       }
+      a.equations[i] = equationFrom(aEq, [...aEq.contributions, ...bContribs])
       mergedPositions.add(i)
       if (targetDep !== bDep) {
         mergedAway[bDep] = targetDep
@@ -1925,11 +1963,9 @@ function retargetMergedNames(
 ): void {
   if (Object.keys(renames).length === 0) return
   for (const comp of Object.values(components)) {
-    comp.equations = comp.equations.map((eq) => ({
-      lhs: renameNames(eq.lhs, renames),
-      rhs: renameNames(eq.rhs, renames),
-      sourceSystem: eq.sourceSystem,
-    }))
+    comp.equations = comp.equations.map((eq) =>
+      mapContributions(eq, (e) => renameNames(e, renames), renameNames(eq.lhs, renames)),
+    )
     // A variable's `update` rules are NOT equations — they are carried on the
     // VARIABLE — so no equation walk reaches them. A parameter that refreshes
     // from `B.x` would otherwise read a state the flattened system no longer
@@ -1957,8 +1993,24 @@ function renameVariableUpdates(
  * Resolve a `couple` connector by injecting source / sink terms: each connector
  * equation maps `from` (already a scoped reference) to `to` with one of three
  * transforms, appended to / multiplied with / replacing the target's RHS.
+ *
+ * `index` is the entry's position in the expanded coupling sequence: the
+ * expression a connector writes is authored by the entry, so its contribution
+ * carries `{ coupling: index }` (§4.7.5 provenance table). `additive` appends
+ * that contribution; `multiplicative` collapses the existing list and the factor
+ * into one contribution whose origins are the union; `replacement` replaces the
+ * list.
+ *
+ * An `additive` term whose target is an UNKNOWN with no defining equation yet
+ * BECOMES its tendency, `D(to, t) ~ expression` (§4.7.2), appended to the
+ * equation list of the top-level component `to`'s first path segment names. A
+ * target that is a parameter, or names nothing, is skipped.
  */
-function applyCouple(components: Record<string, ComponentSystem>, entry: CouplingEntry): void {
+function applyCouple(
+  components: Record<string, ComponentSystem>,
+  entry: CouplingEntry,
+  index: number,
+): void {
   const connector = (entry as unknown as { connector?: { equations?: unknown[] } }).connector
   const connectorEquations = connector?.equations
   if (connectorEquations === undefined || connectorEquations.length === 0) return
@@ -1996,19 +2048,54 @@ function applyCouple(components: Record<string, ComponentSystem>, entry: Couplin
           `entry with an Expression transform (esm-spec §10.4) instead.`,
       )
     }
-    if (!Object.prototype.hasOwnProperty.call(eqIndex, target)) continue
+    const expression: Expression =
+      ceq.expression !== undefined ? ceq.expression : (ceq.from as Expression)
+    const authored: Contribution = { expr: expression, origins: [{ coupling: index }] }
+    if (!Object.prototype.hasOwnProperty.call(eqIndex, target)) {
+      // Only an UNKNOWN can take a tendency: a parameter target, a name no
+      // component owns, or a non-additive transform is skipped.
+      const ownerName = target.split('.')[0]
+      const owner = Object.prototype.hasOwnProperty.call(components, ownerName)
+        ? components[ownerName]
+        : undefined
+      const additive =
+        ceq.transform === undefined || ceq.transform === '' || ceq.transform === 'additive'
+      if (
+        owner === undefined ||
+        !Object.prototype.hasOwnProperty.call(owner.stateVars, target) ||
+        !additive
+      ) {
+        continue
+      }
+      owner.equations.push({
+        lhs: { op: 'D', args: [target], wrt: 't' },
+        rhs: expression,
+        sourceSystem: owner.name,
+        contributions: [authored],
+      })
+      // The new tendency is a target for the next connector equation too.
+      eqIndex[target] = [ownerName, owner.equations.length - 1]
+      tendencies.add(target)
+      continue
+    }
     const [sysName, i] = eqIndex[target]
     const comp = components[sysName]
     const existing = comp.equations[i]
-    const expression: Expression =
-      ceq.expression !== undefined ? ceq.expression : (ceq.from as Expression)
 
-    let rhs: Expression
-    if (ceq.transform === 'multiplicative') rhs = multiplyExprs(existing.rhs, expression)
-    else if (ceq.transform === 'replacement') rhs = expression
-    else rhs = addExprs(existing.rhs, expression)
-
-    comp.equations[i] = { lhs: existing.lhs, rhs, sourceSystem: existing.sourceSystem }
+    let contributions: Contribution[]
+    if (ceq.transform === 'multiplicative') {
+      contributions = [
+        {
+          expr: multiplyExprs(foldContributions(existing.contributions), expression),
+          origins: unionOrigins(existing.contributions, { coupling: index }),
+        },
+      ]
+    } else if (ceq.transform === 'replacement') {
+      contributions = [authored]
+    } else {
+      contributions = [...existing.contributions, authored]
+    }
+    comp.equations[i] = equationFrom(existing, contributions)
   }
 }
 
@@ -2025,6 +2112,7 @@ function applyCouple(components: Record<string, ComponentSystem>, entry: Couplin
 function applyVariableMapExpression(
   components: Record<string, ComponentSystem>,
   entry: CouplingEntry,
+  index: number,
 ): void {
   const e = entry as unknown as { from: string; to: string; transform: Expression }
   if (!exprReferencesVar(e.transform, e.from)) {
@@ -2057,7 +2145,13 @@ function applyVariableMapExpression(
   if (removed?.description !== undefined) observed.description = removed.description
   if (removed?.shape !== undefined) observed.shape = [...removed.shape]
   targetComp.observed[e.to] = observed
-  targetComp.equations.push({ lhs: e.to, rhs: e.transform, sourceSystem: targetComp.name })
+  // The coupling entry authored this definition (§4.7.5 provenance table).
+  targetComp.equations.push({
+    lhs: e.to,
+    rhs: e.transform,
+    sourceSystem: targetComp.name,
+    contributions: [{ expr: e.transform, origins: [{ coupling: index }] }],
+  })
 }
 
 /**
@@ -2079,6 +2173,7 @@ function applyVariableMap(
   components: Record<string, ComponentSystem>,
   entry: CouplingEntry,
   loaderNames: ReadonlySet<string>,
+  index: number,
 ): void {
   const e = entry as unknown as {
     from?: string
@@ -2090,7 +2185,7 @@ function applyVariableMap(
   const toVar = e.to
   if (fromVar === undefined || toVar === undefined || fromVar === '' || toVar === '') return
   if (e.transform !== undefined && typeof e.transform !== 'string') {
-    applyVariableMapExpression(components, entry)
+    applyVariableMapExpression(components, entry, index)
     return
   }
 
@@ -2098,12 +2193,15 @@ function applyVariableMap(
   const src: Expression = factor !== 1 ? { op: '*', args: [factor, fromVar] } : fromVar
   const bindings = { [toVar]: src }
 
+  const joinRenames = { [toVar]: fromVar }
+  const rewrite = (expr: Expression): Expression =>
+    renameJoinNames(substitute(expr, bindings) as Expression, joinRenames)
+  // A substitution changes an INPUT of a term, not its author: it applies inside
+  // each contribution and adds no origin (§4.7.5 provenance table).
   for (const comp of Object.values(components)) {
-    comp.equations = comp.equations.map((eq) => ({
-      lhs: substitute(eq.lhs, bindings) as Expression,
-      rhs: renameJoinNames(substitute(eq.rhs, bindings) as Expression, { [toVar]: fromVar }),
-      sourceSystem: eq.sourceSystem,
-    }))
+    comp.equations = comp.equations.map((eq) =>
+      mapContributions(eq, rewrite, substitute(eq.lhs, bindings) as Expression),
+    )
   }
 
   const transform = typeof e.transform === 'string' ? e.transform.toLowerCase() : ''
@@ -2176,20 +2274,23 @@ function applyCouplings(
   entries: CouplingEntry[],
 ): void {
   const composes: CouplingEntry[] = []
-  const couples: CouplingEntry[] = []
-  const varMaps: CouplingEntry[] = []
+  // `couple` and `variable_map` entries keep their position in the expanded
+  // sequence: it is the `{ coupling: k }` origin of every expression they author
+  // (§4.7.5 provenance table).
+  const couples: Array<[number, CouplingEntry]> = []
+  const varMaps: Array<[number, CouplingEntry]> = []
 
-  for (const entry of entries) {
+  for (const [index, entry] of entries.entries()) {
     const e = entry as unknown as Record<string, unknown>
     switch (entry.type) {
       case 'operator_compose':
         composes.push(entry)
         break
       case 'couple':
-        couples.push(entry)
+        couples.push([index, entry])
         break
       case 'variable_map':
-        varMaps.push(entry)
+        varMaps.push([index, entry])
         break
       case 'callback':
         metadata.callbacks.push(String(e.callback_id ?? '?'))
@@ -2206,7 +2307,11 @@ function applyCouplings(
   // Endpoint preflight, against the PRE-coupling tables: an `operator_compose`
   // `translate` merge (§10.2) legitimately consumes one of two spellings of a
   // quantity, so checking after it ran would flag a well-formed endpoint.
-  checkVariableMapEndpoints(file, components, varMaps)
+  checkVariableMapEndpoints(
+    file,
+    components,
+    varMaps.map(([, vm]) => vm),
+  )
 
   // The document-wide merge map: every state spelling an `operator_compose`
   // renaming match has DELETED, mapped onto the survivor (issue #230). It
@@ -2225,12 +2330,14 @@ function applyCouplings(
   // guard refuses against (issue #230).
   for (const gone of Object.keys(mergedRenames)) metadata.couplingRewrittenNames.add(gone)
 
-  for (const cp of couples) applyCouple(components, retargetPendingEntry(cp, mergedRenames))
+  for (const [index, cp] of couples) {
+    applyCouple(components, retargetPendingEntry(cp, mergedRenames), index)
+  }
 
   const loaderNames = new Set(Object.keys(file.data_sources ?? {}))
-  for (const vm of varMaps) {
+  for (const [index, vm] of varMaps) {
     const resolved = retargetPendingEntry(vm, mergedRenames)
-    applyVariableMap(components, resolved, loaderNames)
+    applyVariableMap(components, resolved, loaderNames, index)
     // A NAMED transform substitutes `to` away entirely; an EXPRESSION transform
     // leaves it standing as the observed the transform defines. Only the first
     // deletes a name, so only the first joins the set the registry guard
@@ -2876,6 +2983,12 @@ function applyPointwiseLift(flat: FlattenedSystem, coupling: CouplingEntry[]): v
     for (let d = 0; d < rank; d++) ranges[loops[d]] = [1, extents[d]]
     flat.liftedShapes[target] = extents
 
+    // Per-cell indexing applies inside each contribution; the `faq` wrapper goes
+    // around their sum (§4.7.5 provenance table).
+    const contributions: Contribution[] = eq.contributions.map((c) => ({
+      expr: liftRhsToCell(c.expr, arrayVars, loops),
+      origins: c.origins,
+    }))
     // `args: []` is not decoration: a `faq` carries its body in `expr`,
     // but the canonical node shape (and `isExprNode`) still requires the `args`
     // slot, and the Python oracle emits it the same way.
@@ -2892,9 +3005,11 @@ function applyPointwiseLift(flat: FlattenedSystem, coupling: CouplingEntry[]): v
         args: [],
         output_idx: [...loops],
         ranges,
-        expr: liftRhsToCell(eq.rhs, arrayVars, loops),
+        expr: foldContributions(contributions),
       } as unknown as ExpressionNode,
       sourceSystem: eq.sourceSystem,
+      contributions,
+      lifted: true,
     })
   }
   flat.equations = next
@@ -3035,7 +3150,7 @@ function normalizeFlattenedAngleArguments(flat: FlattenedSystem): void {
 
   const rewrite = (expr: Expression): Expression => normalizeAngleArguments(expr, env)
 
-  for (const eq of flat.equations) eq.rhs = rewrite(eq.rhs)
+  flat.equations = flat.equations.map((eq) => mapContributions(eq, rewrite))
   for (const ic of flat.fieldIcs) ic.expr = rewrite(ic.expr)
   // Events are rewritten too, although this binding runs no evaluator: the
   // Julia binding exports the flattened form to ModelingToolkit, which does run
