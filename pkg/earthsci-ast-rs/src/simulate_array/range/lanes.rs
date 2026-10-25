@@ -812,7 +812,7 @@ pub(super) fn build(
         ));
     }
     let sets: Vec<String> = kind.sets().to_vec();
-    let sizes = index_set_sizes(&prog.inner.flat);
+    let sizes = index_set_sizes(prog.inner.flat());
     let box_invalid =
         |m: String| super::range_error(crate::diagnostic::codes::RANGE_BOX_INVALID, m);
     for s in &sets {

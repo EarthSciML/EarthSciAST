@@ -14,6 +14,7 @@ use std::sync::Arc;
 /// layout, the parameter tables and the forcing declarations. Built once,
 /// never mutated; `Send + Sync`.
 #[allow(clippy::type_complexity)]
+#[derive(Default)]
 pub(in crate::simulate_array) struct ProgramModel {
     pub(in crate::simulate_array) runtime_mode: RuntimeMode,
     pub(in crate::simulate_array) merged_renames: HashMap<String, String>,

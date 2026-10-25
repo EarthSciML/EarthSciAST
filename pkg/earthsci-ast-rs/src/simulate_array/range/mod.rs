@@ -450,7 +450,9 @@ pub struct RhsProgram {
 
 struct ProgramInner {
     id: u64,
-    flat: Arc<FlattenedSystem>,
+    /// The flattened system the program was compiled from (`None` for the
+    /// solve's own program, which is never restricted).
+    flat: Option<Arc<FlattenedSystem>>,
     model: Arc<ProgramModel>,
     compiler: Compiler,
     runtime_array_parameters: bool,
@@ -475,6 +477,14 @@ struct ProgramInner {
     /// each at its own offset), so a call reads `u` and writes `du` in place.
     identity: bool,
     declared: Arc<HashSet<String>>,
+}
+
+impl ProgramInner {
+    fn flat(&self) -> &FlattenedSystem {
+        self.flat
+            .as_deref()
+            .expect("a program built by `rhs_program` keeps its flattened system")
+    }
 }
 
 impl std::fmt::Debug for RhsProgram {
@@ -771,7 +781,7 @@ impl RhsProgram {
         Ok(RhsProgram {
             inner: Arc::new(ProgramInner {
                 id: next_program_id(),
-                flat,
+                flat: Some(flat),
                 model: Arc::new(model),
                 compiler,
                 runtime_array_parameters,
@@ -921,7 +931,7 @@ impl RhsProgram {
 
     /// The flattened system this program was compiled from.
     pub fn flattened(&self) -> &FlattenedSystem {
-        &self.inner.flat
+        self.inner.flat()
     }
 
     /// The program for one operator: the summands of each `D(x)` whose
@@ -929,7 +939,7 @@ impl RhsProgram {
     /// §5.8). `range_selection_writes_incomplete` when `writes` omits a
     /// variable a kept summand writes. It takes the same forcing sets.
     pub fn select(&self, sel: &RhsSelection) -> Result<RhsProgram, SimulateError> {
-        let (flat, writes) = select::select(&self.inner.flat, sel)?;
+        let (flat, writes) = select::select(self.inner.flat(), sel)?;
         let _precision = self.inner.model.precision.enter();
         RhsProgram::compile(
             Arc::new(flat),
@@ -1023,6 +1033,123 @@ impl RhsProgram {
         check_forcing(forcing, &inner.slots)?;
         let _precision = inner.model.precision.enter();
         let scope = super::FaultScope::enter();
+        self.run(u, aux, p, t, Forcing::Set(forcing), du, ws);
+        match scope.finish() {
+            Some(msg) => {
+                if let WsExec::Tape(ctx) = &mut ws.exec {
+                    ctx.invalidate_sections();
+                }
+                Err(forcing::fault(msg))
+            }
+            None => Ok(()),
+        }
+    }
+
+    /// The program the solve integrates (`native`): `c`'s own state vector
+    /// as `u` (so a call reads `y` and writes `dy` in place) and the solve's
+    /// tape, reading the forcing buffer the solve refreshes.
+    #[cfg(feature = "solve")]
+    pub(in crate::simulate_array) fn for_solve(
+        c: &ArrayCompiled,
+        tape: Arc<TapeProgram>,
+    ) -> RhsProgram {
+        let entries = c
+            .var_shapes
+            .iter()
+            .map(|(name, vs)| {
+                let bx: Vec<(i64, i64)> = vs
+                    .shape
+                    .iter()
+                    .zip(&vs.origin)
+                    .map(|(&n, &o)| (o, o + n as i64 - 1))
+                    .collect();
+                (name.clone(), TileInput::U, Vec::new(), bx.clone(), bx)
+            })
+            .collect();
+        let blocks = Blocks::build(entries);
+        let layout = blocks.public();
+        let model = ProgramModel {
+            var_shapes: c.var_shapes.clone(),
+            param_names: c.param_names.clone(),
+            n_states: c.n_states,
+            precision: c.precision.clone(),
+            ..ProgramModel::default()
+        };
+        RhsProgram {
+            inner: Arc::new(ProgramInner {
+                id: next_program_id(),
+                flat: None,
+                compiler: Compiler::Native,
+                runtime_array_parameters: false,
+                tape: Some(tape),
+                slot_of: Vec::new(),
+                writes: c.var_shapes.keys().cloned().collect(),
+                aux: Vec::new(),
+                state_layout: Vec::new(),
+                params: Vec::new(),
+                slots: Arc::from(Vec::new()),
+                defaults: Vec::new(),
+                scatter: Vec::new(),
+                identity: true,
+                declared: Arc::new(c.declared_names.clone()),
+                blocks,
+                layout,
+                model: Arc::new(model),
+            }),
+        }
+    }
+
+    /// A workspace for [`Self::eval_solve`]: the executor may split a call
+    /// across the process pool, as the solve's right-hand side always has.
+    #[cfg(feature = "solve")]
+    pub(in crate::simulate_array) fn solve_workspace(&self) -> RhsWorkspace {
+        let tape = self
+            .inner
+            .tape
+            .as_ref()
+            .expect("the solve's program is taped");
+        RhsWorkspace {
+            owner: self.inner.id,
+            state: Vec::new(),
+            dy: Vec::new(),
+            exec: WsExec::Tape(Box::new(TapeCtx::new(Arc::clone(tape)))),
+            _not_sync: PhantomData,
+        }
+    }
+
+    /// The solve's right-hand side: [`Self::eval_into`]'s evaluation, reading
+    /// the forcing buffer by name. A fault stays latched on the thread for
+    /// the solve to report after the run (the integrator's right-hand side
+    /// has no error channel), and the SEGMENT section re-runs when the solve
+    /// says the buffer was refreshed ([`RhsWorkspace::forcing_refreshed`]).
+    #[cfg(feature = "solve")]
+    pub(in crate::simulate_array) fn eval_solve(
+        &self,
+        u: &[f64],
+        p: &[f64],
+        t: f64,
+        forcing: &HashMap<String, ArrayD<f64>>,
+        du: &mut [f64],
+        ws: &mut RhsWorkspace,
+    ) {
+        let _precision = self.inner.model.precision.enter();
+        self.run(u, &[], p, t, Forcing::Buffer(forcing), du, ws);
+    }
+
+    /// One evaluation: `u`/`aux` into the state the program addresses, the
+    /// program run, the written rows out to `du`.
+    #[allow(clippy::too_many_arguments)]
+    fn run(
+        &self,
+        u: &[f64],
+        aux: &[f64],
+        p: &[f64],
+        t: f64,
+        forcing: Forcing,
+        du: &mut [f64],
+        ws: &mut RhsWorkspace,
+    ) {
+        let inner = &*self.inner;
         let RhsWorkspace {
             state, dy, exec, ..
         } = ws;
@@ -1040,25 +1167,34 @@ impl RhsProgram {
         };
         match exec {
             WsExec::Tape(ctx) => {
+                let (view, epoch) = match forcing {
+                    Forcing::Set(set) => (
+                        ForcingView::Slots {
+                            bufs: set.bufs(),
+                            slot_of: &inner.slot_of,
+                        },
+                        Some(set.epoch()),
+                    ),
+                    Forcing::Buffer(map) => (ForcingView::Map(map), None),
+                };
                 let inputs = CallInputs {
                     state,
                     params: p,
-                    forcing: ForcingView::Slots {
-                        bufs: forcing.bufs(),
-                        slot_of: &inner.slot_of,
-                    },
-                    forcing_epoch: Some(forcing.epoch()),
+                    forcing: view,
+                    forcing_epoch: epoch,
                     t,
                     declared: &inner.declared,
                 };
                 run_tape_inputs(ctx, &inputs, dy, true);
-                tape_fault(scope, ctx)?;
             }
             WsExec::Lanes { .. } => unreachable!("a whole-domain workspace runs one program"),
             WsExec::Interp(iw) => {
-                if iw.epoch != forcing.epoch() {
-                    fill_forcing_map(&mut iw.forcing.borrow_mut(), forcing);
-                    iw.epoch = forcing.epoch();
+                let Forcing::Set(set) = forcing else {
+                    unreachable!("the solve's program is taped");
+                };
+                if iw.epoch != set.epoch() {
+                    fill_forcing_map(&mut iw.forcing.borrow_mut(), set);
+                    iw.epoch = set.epoch();
                 }
                 let m = &*inner.model;
                 evaluate_rhs_with_scratch(
@@ -1079,9 +1215,6 @@ impl RhsProgram {
                     &mut RhsStats::default(),
                     &mut iw.scratch,
                 );
-                if let Some(msg) = scope.finish() {
-                    return Err(forcing::fault(msg));
-                }
             }
         }
         if !inner.identity {
@@ -1091,7 +1224,27 @@ impl RhsProgram {
                 }
             }
         }
-        Ok(())
+    }
+}
+
+/// What a call's forcing loads read.
+#[derive(Clone, Copy)]
+enum Forcing<'a> {
+    /// A forcing set (every public call).
+    Set(&'a ForcingSet),
+    /// The solve's forcing buffer, by name.
+    #[cfg_attr(not(feature = "solve"), allow(dead_code))]
+    Buffer(&'a HashMap<String, ArrayD<f64>>),
+}
+
+impl RhsWorkspace {
+    /// The solve refreshed its forcing buffer: the next call re-runs the
+    /// SEGMENT section.
+    #[cfg(feature = "solve")]
+    pub(in crate::simulate_array) fn forcing_refreshed(&mut self) {
+        if let WsExec::Tape(ctx) = &mut self.exec {
+            ctx.bump_forcing_epoch();
+        }
     }
 }
 
@@ -1262,8 +1415,9 @@ fn axis_spec(dec: &Decomposition, set: Option<&str>, sizes: &HashMap<String, i64
 /// `dec`.
 fn var_infos(prog: &RhsProgram, dec: &Decomposition) -> HashMap<String, VarInfo> {
     let prog = &*prog.inner;
-    let sizes = index_set_sizes(&prog.flat);
-    let set_names = state_set_names(&prog.flat, &prog.model);
+    let flat = prog.flat();
+    let sizes = index_set_sizes(flat);
+    let set_names = state_set_names(flat, &prog.model);
     let mut out = HashMap::new();
     for (name, vs) in &prog.model.var_shapes {
         let sets = &set_names[name];
@@ -1298,11 +1452,10 @@ fn var_infos(prog: &RhsProgram, dec: &Decomposition) -> HashMap<String, VarInfo>
                     .unwrap_or_default(),
             ),
         };
-        let declared = prog
-            .flat
+        let declared = flat
             .observed_variables
             .get(var)
-            .or_else(|| prog.flat.state_variables.get(var))
+            .or_else(|| flat.state_variables.get(var))
             .and_then(|v| v.shape.clone());
         let extents: Vec<i64> = ranges.iter().map(|r| r.1).collect();
         let sets = axis_set_names(declared, &extents, &sizes);

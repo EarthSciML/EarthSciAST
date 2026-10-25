@@ -192,7 +192,7 @@ struct Boxes {
 }
 
 fn validate(prog: &RhsProgram, dec: &Decomposition, bx: &TileBox) -> Result<Boxes, SimulateError> {
-    let sizes = index_set_sizes(&prog.inner.flat);
+    let sizes = index_set_sizes(prog.inner.flat());
     for a in &dec.axes {
         if !sizes.contains_key(&a.index_set) {
             return Err(box_invalid(format!(
@@ -623,7 +623,7 @@ pub(super) fn build(
     }
     let mut owned: HashMap<String, Vec<(i64, i64)>> = HashMap::new();
     let mut entries = Vec::new();
-    let set_names = super::state_set_names(&prog.inner.flat, compiled);
+    let set_names = super::state_set_names(prog.inner.flat(), compiled);
     for (input, names) in [
         (TileInput::U, &prog.inner.writes),
         (TileInput::Aux, &prog.inner.aux),
