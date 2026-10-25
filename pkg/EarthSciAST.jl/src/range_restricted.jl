@@ -1579,7 +1579,7 @@ _TileSpec(mode, axes, owned, storage, shapes, writes, ctx) =
     _TileSpec(mode, axes, owned, storage, shapes, writes, ctx,
               Dict{String,Tuple{String,Vector{Bool}}}())
 
-struct _HaloDone <: Exception
+struct _HaloDone <: EarthSciASTError
     ctx::_NeedCtx
 end
 
