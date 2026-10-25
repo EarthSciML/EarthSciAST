@@ -236,7 +236,8 @@ end
 function _prepare_run_doc(input; metaparameters::AbstractDict = Dict{String,Int}(),
                           base_path::AbstractString = pwd(),
                           renames_out::Union{Nothing,AbstractDict} = nothing,
-                          supplied_names = ())
+                          supplied_names = (),
+                          flat_out::Union{Nothing,Base.RefValue{Any}} = nothing)
     if input isa AbstractString
         isfile(input) || throw(SimulateError("simulate: no such file '$input'"))
         input = load_path(input; metaparameters=metaparameters)
@@ -293,51 +294,62 @@ function _prepare_run_doc(input; metaparameters::AbstractDict = Dict{String,Int}
         input = lower_table_lookups(input)
         renames_out === nothing ||
             merge!(renames_out, input.metadata.merged_variable_renames)
-        # Surviving references are THE behavior: they ride through
-        # `flattened_to_esm` to the build boundary, where `_build_evaluator_impl`
-        # expands them with SITE RECORDING — the SINGLE evaluator-side expansion
-        # point — and the affine-stencil compile-once tier factors each body once
-        # per (use site, region class) instead of fusing it into every branch
-        # spine (RFC out-of-line-expression-templates step c), which is an
-        # order-of-magnitude reduction in node lowerings on a deep template stack.
-        # The downstream shape transforms
-        # below only inspect equation LHS / infer shapes from already-shaped
-        # operands, so a surviving `apply_expression_template` node rides through
-        # them untouched.
-        #
-        # Lift a feed-forward algebraic physics chain authored as scalars into the
-        # grid shape it inherits from the fields it reads (regrid outputs, loader
-        # fields, the spatial state), so a scalar observed that consumes a build-once
-        # spatial field (`tan_phi = sqrt(dzdx² + dzdy²)` over the regridded terrain)
-        # becomes a per-cell array whose operand references lower to gathers
-        # (`index(TerrainRegrid.dzdx, i, j)`) the evaluator resolves against the
-        # const-array registry. Both transforms are no-ops (return an equivalent
-        # system) for a document with no algebraic states / no scalar-downstream-of-
-        # array observeds, so an already-array (discretized) or purely-scalar (0-D)
-        # run is byte-identical.
-        input = promote_downstream_shapes(algebraic_states_to_observeds(input))
-        doc = flattened_to_esm(input)
-        # Re-attach the verbatim `coordinates` registry (captured pre-flatten) so the
-        # streaming-output writer sees it (RFC §8.3). Document-scoped + un-namespaced,
-        # like `index_sets`, so it drops straight onto the run doc.
-        run_coordinates !== nothing && !isempty(run_coordinates) &&
-            (doc["coordinates"] = run_coordinates)
-        # Re-attach the §2.2 `solver` block (captured pre-flatten) in its RAW
-        # shape, which is what `_document_solver` coerces back. Document-scoped
-        # and un-namespaced, like `coordinates`.
-        if run_solver !== nothing
-            block = serialize_solver(run_solver)
-            isempty(block) || (doc["solver"] = block)
-        end
-        if !isempty(run_init)
-            for (_, m) in doc["models"]
-                m["initialization_equations"] = Any[serialize_equation(eq) for eq in run_init]
-            end
-        end
-        return doc
+        # The last point the per-term provenance (`equation_contributions`) is
+        # still in hand: `rhs_program` selects operators from it.
+        flat_out === nothing || (flat_out[] = (flat = input, coordinates = run_coordinates,
+                                               solver = run_solver, init = run_init))
+        return _flat_run_doc(input, run_coordinates, run_solver, run_init)
     end
     throw(SimulateError("simulate: unsupported input of type $(typeof(input)); " *
                         "pass a path, EsmFile, FlattenedSystem, or native ESM Dict"))
+end
+
+# The run document of the table-lowered flattened system `input`, with the
+# document-scoped blocks flatten does not carry re-attached.
+function _flat_run_doc(input::FlattenedSystem, run_coordinates, run_solver,
+                       run_init::Vector{Equation})
+    # Surviving references are THE behavior: they ride through
+    # `flattened_to_esm` to the build boundary, where `_build_evaluator_impl`
+    # expands them with SITE RECORDING — the SINGLE evaluator-side expansion
+    # point — and the affine-stencil compile-once tier factors each body once
+    # per (use site, region class) instead of fusing it into every branch
+    # spine (RFC out-of-line-expression-templates step c), which is an
+    # order-of-magnitude reduction in node lowerings on a deep template stack.
+    # The downstream shape transforms
+    # below only inspect equation LHS / infer shapes from already-shaped
+    # operands, so a surviving `apply_expression_template` node rides through
+    # them untouched.
+    #
+    # Lift a feed-forward algebraic physics chain authored as scalars into the
+    # grid shape it inherits from the fields it reads (regrid outputs, loader
+    # fields, the spatial state), so a scalar observed that consumes a build-once
+    # spatial field (`tan_phi = sqrt(dzdx² + dzdy²)` over the regridded terrain)
+    # becomes a per-cell array whose operand references lower to gathers
+    # (`index(TerrainRegrid.dzdx, i, j)`) the evaluator resolves against the
+    # const-array registry. Both transforms are no-ops (return an equivalent
+    # system) for a document with no algebraic states / no scalar-downstream-of-
+    # array observeds, so an already-array (discretized) or purely-scalar (0-D)
+    # run is byte-identical.
+    input = promote_downstream_shapes(algebraic_states_to_observeds(input))
+    doc = flattened_to_esm(input)
+    # Re-attach the verbatim `coordinates` registry (captured pre-flatten) so the
+    # streaming-output writer sees it (RFC §8.3). Document-scoped + un-namespaced,
+    # like `index_sets`, so it drops straight onto the run doc.
+    run_coordinates !== nothing && !isempty(run_coordinates) &&
+        (doc["coordinates"] = run_coordinates)
+    # Re-attach the §2.2 `solver` block (captured pre-flatten) in its RAW
+    # shape, which is what `_document_solver` coerces back. Document-scoped
+    # and un-namespaced, like `coordinates`.
+    if run_solver !== nothing
+        block = serialize_solver(run_solver)
+        isempty(block) || (doc["solver"] = block)
+    end
+    if !isempty(run_init)
+        for (_, m) in doc["models"]
+            m["initialization_equations"] = Any[serialize_equation(eq) for eq in run_init]
+        end
+    end
+    return doc
 end
 
 # The `faq`-valued initialization equations of `model` and its subsystems —
@@ -1240,8 +1252,9 @@ function esm_problem(input, tspan;
     # the state silently runs from its default. Resolve those keys here, where
     # the flattened system's metadata is still reachable.
     merged_renames = OrderedDict{String,String}()
+    flat_seed = Ref{Any}(nothing)
     doc = _prepare_run_doc(input; metaparameters=metaparams, base_path=base_path,
-                           renames_out=merged_renames,
+                           renames_out=merged_renames, flat_out=flat_seed,
                            supplied_names=Set{String}(string(k) for d in
                                (const_arrays, param_arrays, providers) if d !== nothing for k in keys(d)))
 
@@ -1366,6 +1379,10 @@ function esm_problem(input, tspan;
         f! = _xla_problem_rhs(f!, var_map, u0_built, p_built,
                               insp.compiler_report)
     end
+    insp.program_seed = (; flat_seed[]..., doc, compiler, model_name,
+                         overrides, const_arrays = merged_const,
+                         param_arrays = merged_param, gated_providers,
+                         sample_time = t_sample)
 
     # ---- initial state: the document's own ICs, then the caller's -----------
     # Under the build's plan: a `seed_ic!` hook (`seed_expression_ic!`) is an

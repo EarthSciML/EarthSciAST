@@ -359,6 +359,21 @@ const ERROR_CODES = (
     # compiler, the rule (equation or observed, component-qualified) and the
     # reason.
     COMPILER_REFUSED_RULE = "compiler_refused_rule",
+    # ── Range-restricted right-hand sides (API_SPEC §5.8; esm-spec §9.6.6):
+    #    `select`, `halo`, `restrict` and `lanes`. Each message names the rule,
+    #    the variable or the index set the failure is about. ──────────────────
+    # An in-domain read of a tile falls outside its storage box and has no
+    # periodic image in it (tile rule 2). Names the missing cells.
+    RANGE_HALO_INSUFFICIENT = "range_halo_insufficient",
+    # A 0-d state write on a tile, or a contraction, scan or data-dependent
+    # gather along a decomposed axis: `global` locality.
+    RANGE_GLOBAL_LOCALITY = "range_global_locality",
+    # `select`'s `writes` omits a variable its kept contributions write.
+    RANGE_SELECTION_WRITES_INCOMPLETE = "range_selection_writes_incomplete",
+    # An owned box outside its storage box or outside `1..N`, an unknown index
+    # set, a face set declared against an axis that is not cut, a period that
+    # is not the axis's extent, or lane sets that do not match the kind.
+    RANGE_BOX_INVALID = "range_box_invalid",
 )
 
 """
