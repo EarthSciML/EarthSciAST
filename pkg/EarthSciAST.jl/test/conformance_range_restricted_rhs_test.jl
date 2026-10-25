@@ -368,6 +368,10 @@ const _RRC_SUBCALL_DOC = "fixtures/esd/problems/latlon3d_transport_cwc_regional_
     pick = isempty(only) ? nothing : Set(split(only, ","))
     for c in manifest.cases
         pick === nothing || String(c.id) in pick || continue
+        # Before 1.12 this template-heavy document's tile kernels compile slowly
+        # enough to push the LTS test job past its time limit; the 1.12+ job
+        # runs it.
+        VERSION < v"1.12" && String(c.document) == _RRC_SUBCALL_DOC && continue
         # This template-heavy document's kernels compile far faster with each
         # template body emitted once as its own function (the value-exact,
         # opt-in `ESS_CG_SUBCALL_FN` tier); its whole-domain reference and its
