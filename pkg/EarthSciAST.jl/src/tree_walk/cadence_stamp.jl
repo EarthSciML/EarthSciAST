@@ -66,6 +66,20 @@ function _pstamp_comparable(x::AbstractArray, n::Base.RefValue{Int})
     return true
 end
 
+# A new stamp for `p`, written into the previous stamp `old` when both are
+# vectors of the same bits type and length: `old` is a private snapshot no one
+# else holds, so a tier that steps through parameter vectors (a solver's
+# sensitivity sweep, a workspace alternating two `p`s) restamps without
+# allocating.
+@inline _pstamp_reuse(old, p) = _pstamp(p)
+@inline function _pstamp_reuse(old, p::Vector{T}) where {T}
+    if isbitstype(T) && old isa Vector{T} && length(old) == length(p)
+        copyto!(old, p)
+        return old
+    end
+    return _pstamp(p)
+end
+
 @inline _pstamp_same(s, p) =
     isbits(p) ? s === p : (s isa typeof(p) && _pcontent_same(s, p))
 
