@@ -326,6 +326,13 @@ export const ERROR_CODES = {
   // `solver_external_unresolved` — `solver.external` carries `${` (esm-spec
   //   §2.2.6). The reference has no substitutions.
   SOLVER_EXTERNAL_UNRESOLVED: 'solver_external_unresolved',
+  // `solver_time_span_version_too_old` — `solver.time_span` in a document
+  //   declaring esm < 1.3.0 (esm-spec §2.2.4).
+  SOLVER_TIME_SPAN_VERSION_TOO_OLD: 'solver_time_span_version_too_old',
+  // `solver_time_span_invalid` — `solver.time_span` is no interval: `end` not
+  //   after `start`, a timestamp naming no calendar day, or an unreadable time
+  //   origin (esm-spec §2.2.7).
+  SOLVER_TIME_SPAN_INVALID: 'solver_time_span_invalid',
 
   // ---- templates: §9.6 expression-template lowering + §9.7 template-library
   //      imports (lower-expression-templates.ts, template-imports.ts;

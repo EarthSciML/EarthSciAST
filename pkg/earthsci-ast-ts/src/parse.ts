@@ -32,6 +32,8 @@ import {
   rejectSolverExternalPreV13,
   rejectSolverExternalUnresolved,
   rejectSolverPreV11,
+  rejectSolverTimeSpanInvalid,
+  rejectSolverTimeSpanPreV13,
 } from './solver.js'
 import { schema } from './embedded-schema.js'
 import { readFileSyncNode, dirnameOf } from './path-utils.js'
@@ -500,7 +502,13 @@ function loadInput(input: string | object, options?: LoadOptions): EsmFile {
   // `${` in it is refused (§2.2.6). After the whole-block gate, so a document
   // below 1.1.0 is told about the block first.
   rejectSolverExternalPreV13(validationView)
+  // `solver.time_span` likewise arrives at esm 1.3.0 (§2.2.4) …
+  rejectSolverTimeSpanPreV13(validationView)
   rejectSolverExternalUnresolved(validationView)
+  // … and must describe an interval once its bounds are converted to seconds
+  // (§2.2.7). Root only, like the `${` refusal: a mounted leaf's block never
+  // reaches this pass. Skips a bound the schema will report.
+  rejectSolverTimeSpanInvalid(validationView)
   // Step 2e: declared `units` on a `const` node arrive at esm 1.2.0 (esm-spec §4.8.5).
   rejectConstUnitsPreV12(validationView)
   // Then §2.2's one normalization — an EMPTY block means what absence means, so

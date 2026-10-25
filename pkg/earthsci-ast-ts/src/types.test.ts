@@ -7,7 +7,7 @@ describe('ESM Format Types', () => {
     // esm-spec §6.3.1: the unified variable model arrives at esm 1.0.0; the
     // top-level `solver` block (§2.2) takes the format to 1.1.0, declared
     // `units` on a `const` node (§4.8.5) to 1.2.0, and `solver.external`
-    // (§2.2.6) to 1.3.0. The embedded
+    // (§2.2.6) and `solver.time_span` (§2.2.7) to 1.3.0. The embedded
     // schema `$id` (and therefore SCHEMA_VERSION) tracks it. The npm package
     // version is a different number and lives in LIBRARY_VERSION.
     expect(SCHEMA_VERSION).toBe('1.3.0')

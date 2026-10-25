@@ -271,6 +271,9 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     # esm-spec §2.2.6: WHERE `solver.external` points -- the shared
     # cross-binding pin in tests/conformance/solver_external/manifest.json.
     include("solver_external_conformance_test.jl")
+    # esm-spec §2.2.7: `solver.time_span` -- the shared cross-binding pin in
+    # tests/conformance/solver_time_span/manifest.json.
+    include("solver_time_span_conformance_test.jl")
     # esm-spec §8.5 `unit_conversion` on the ESIO provider path — the
     # manifest-driven cross-binding conformance adapter.
     include("loader_unit_conversion_conformance_test.jl")

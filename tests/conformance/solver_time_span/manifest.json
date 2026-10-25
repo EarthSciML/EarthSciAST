@@ -1,0 +1,337 @@
+{
+  "category": "solver_time_span",
+  "spec": "esm-spec §2.2.7",
+  "design_note": "GitHub issue #550 (RFC U16, `solver.time_span`)",
+  "bindings_required": [
+    "julia",
+    "typescript",
+    "python",
+    "rust",
+    "go"
+  ],
+  "notes": "The SHARED pin for `solver.time_span` (CONFORMANCE_SPEC §5.48). Every binding's own test suite reads THIS file and asserts against it; there is no adapter and no golden. Each fixture is loaded by its path. For `expect: accepted` a binding asserts that `resolve_time_span(file)` with no call-site interval returns `seconds` EXACTLY (binary64 equality; every pinned value is exact), and that the root's `solver` block as `emit` writes it equals `solver` once both are parsed as JSON, numbers compared by value. For `expect: refused` the load MUST fail with `error_code`, and the message MUST contain every `message_contains` substring.",
+  "fields": {
+    "path": "The fixture, relative to this directory.",
+    "expect": "`accepted` or `refused`.",
+    "solver": "The root's `solver` block exactly as `emit` writes it, numbers compared by value (null: the emitted document has no `solver` key). A timestamp stays the authored string; a mounted leaf's block never reaches the root.",
+    "seconds": "What the accessor returns with no call-site interval: `[start, end]` in binary64 seconds, or null for no interval.",
+    "error_code": "For `expect: refused`: the diagnostic code the load MUST fail with.",
+    "message_contains": "For `expect: refused`: substrings the diagnostic message MUST contain."
+  },
+  "fixtures": [
+    {
+      "id": "numbers",
+      "path": "fixtures/numbers.esm",
+      "expect": "accepted",
+      "solver": {
+        "time_span": {
+          "start": 0,
+          "end": 3600
+        }
+      },
+      "seconds": [
+        0,
+        3600
+      ]
+    },
+    {
+      "id": "numbers_with_other_hints",
+      "path": "fixtures/numbers_with_other_hints.esm",
+      "expect": "accepted",
+      "solver": {
+        "stiffness": "high",
+        "reltol": 0.0001,
+        "time_span": {
+          "start": 10.5,
+          "end": 20.25
+        }
+      },
+      "seconds": [
+        10.5,
+        20.25
+      ]
+    },
+    {
+      "id": "timestamps_posix",
+      "path": "fixtures/timestamps_posix.esm",
+      "expect": "accepted",
+      "solver": {
+        "time_span": {
+          "start": "2019-07-01T00:00:00Z",
+          "end": "2019-07-03T00:00:00Z"
+        }
+      },
+      "seconds": [
+        1561939200,
+        1562112000
+      ]
+    },
+    {
+      "id": "timestamps_reference_time",
+      "path": "fixtures/timestamps_reference_time.esm",
+      "expect": "accepted",
+      "solver": {
+        "time_span": {
+          "start": "2019-07-01T00:00:00Z",
+          "end": "2019-07-03T00:00:00Z"
+        }
+      },
+      "seconds": [
+        0,
+        172800
+      ]
+    },
+    {
+      "id": "timestamps_temporal_start",
+      "path": "fixtures/timestamps_temporal_start.esm",
+      "expect": "accepted",
+      "solver": {
+        "time_span": {
+          "start": "2019-07-01T00:00:00Z",
+          "end": "2019-07-03T00:00:00Z"
+        }
+      },
+      "seconds": [
+        86400,
+        259200
+      ]
+    },
+    {
+      "id": "origin_with_offset",
+      "path": "fixtures/origin_with_offset.esm",
+      "expect": "accepted",
+      "solver": {
+        "time_span": {
+          "start": "2019-07-01T00:00:00Z",
+          "end": "2019-07-03T00:00:00Z"
+        }
+      },
+      "seconds": [
+        0,
+        172800
+      ]
+    },
+    {
+      "id": "mixed",
+      "path": "fixtures/mixed.esm",
+      "expect": "accepted",
+      "solver": {
+        "time_span": {
+          "start": 0,
+          "end": "2019-07-01T01:00:00Z"
+        }
+      },
+      "seconds": [
+        0,
+        3600
+      ]
+    },
+    {
+      "id": "fractional_seconds",
+      "path": "fixtures/fractional_seconds.esm",
+      "expect": "accepted",
+      "solver": {
+        "time_span": {
+          "start": "2019-07-01T00:00:00.5Z",
+          "end": "2019-07-01T00:00:01.25Z"
+        }
+      },
+      "seconds": [
+        0.25,
+        1.0
+      ]
+    },
+    {
+      "id": "calendar_edges",
+      "path": "fixtures/calendar_edges.esm",
+      "expect": "accepted",
+      "solver": {
+        "time_span": {
+          "start": "1969-12-31T23:59:59Z",
+          "end": "2000-02-29T00:00:00Z"
+        }
+      },
+      "seconds": [
+        -1,
+        951782400
+      ]
+    },
+    {
+      "id": "equal_bounds",
+      "path": "fixtures/equal_bounds.esm",
+      "expect": "refused",
+      "error_code": "solver_time_span_invalid",
+      "message_contains": [
+        "/solver/time_span"
+      ]
+    },
+    {
+      "id": "reversed_timestamps",
+      "path": "fixtures/reversed_timestamps.esm",
+      "expect": "refused",
+      "error_code": "solver_time_span_invalid",
+      "message_contains": [
+        "/solver/time_span"
+      ]
+    },
+    {
+      "id": "reversed_mixed",
+      "path": "fixtures/reversed_mixed.esm",
+      "expect": "refused",
+      "error_code": "solver_time_span_invalid",
+      "message_contains": [
+        "/solver/time_span"
+      ]
+    },
+    {
+      "id": "not_a_day",
+      "path": "fixtures/not_a_day.esm",
+      "expect": "refused",
+      "error_code": "solver_time_span_invalid",
+      "message_contains": [
+        "/solver/time_span"
+      ]
+    },
+    {
+      "id": "not_a_leap_year",
+      "path": "fixtures/not_a_leap_year.esm",
+      "expect": "refused",
+      "error_code": "solver_time_span_invalid",
+      "message_contains": [
+        "/solver/time_span"
+      ]
+    },
+    {
+      "id": "unreadable_origin",
+      "path": "fixtures/unreadable_origin.esm",
+      "expect": "refused",
+      "error_code": "solver_time_span_invalid",
+      "message_contains": [
+        "/solver/time_span",
+        "/domain/temporal/reference_time"
+      ]
+    },
+    {
+      "id": "null_origin",
+      "path": "fixtures/null_origin.esm",
+      "expect": "refused",
+      "error_code": "solver_time_span_invalid",
+      "message_contains": [
+        "/solver/time_span",
+        "/domain/temporal/reference_time"
+      ]
+    },
+    {
+      "id": "version_too_old",
+      "path": "fixtures/version_too_old.esm",
+      "expect": "refused",
+      "error_code": "solver_time_span_version_too_old",
+      "message_contains": [
+        "/solver/time_span"
+      ]
+    },
+    {
+      "id": "mount_root_with_time_span",
+      "path": "fixtures/mount_root_with_time_span.esm",
+      "expect": "accepted",
+      "solver": {
+        "time_span": {
+          "start": 5,
+          "end": 6
+        }
+      },
+      "seconds": [
+        5,
+        6
+      ]
+    },
+    {
+      "id": "mount_root_without_time_span",
+      "path": "fixtures/mount_root_without_time_span.esm",
+      "expect": "accepted",
+      "solver": {
+        "reltol": 1e-06
+      },
+      "seconds": null
+    },
+    {
+      "id": "mount_leaf_reversed",
+      "path": "fixtures/mount_leaf_reversed.esm",
+      "expect": "accepted",
+      "solver": null,
+      "seconds": null
+    },
+    {
+      "id": "mount_leaf_v120",
+      "path": "fixtures/mount_leaf_v120.esm",
+      "expect": "accepted",
+      "solver": null,
+      "seconds": null
+    },
+    {
+      "id": "mount_subsystem_root_with_time_span",
+      "path": "fixtures/mount_subsystem_root_with_time_span.esm",
+      "expect": "accepted",
+      "solver": {
+        "time_span": {
+          "start": 5,
+          "end": 6
+        }
+      },
+      "seconds": [
+        5,
+        6
+      ]
+    },
+    {
+      "id": "mount_subsystem_root_without_time_span",
+      "path": "fixtures/mount_subsystem_root_without_time_span.esm",
+      "expect": "accepted",
+      "solver": {
+        "reltol": 1e-06
+      },
+      "seconds": null
+    },
+    {
+      "id": "mount_subsystem_leaf_reversed",
+      "path": "fixtures/mount_subsystem_leaf_reversed.esm",
+      "expect": "accepted",
+      "solver": null,
+      "seconds": null
+    },
+    {
+      "id": "mount_subsystem_leaf_v120",
+      "path": "fixtures/mount_subsystem_leaf_v120.esm",
+      "expect": "accepted",
+      "solver": null,
+      "seconds": null
+    }
+  ],
+  "call_site": {
+    "notes": "The §2.2.7 chain: an explicit interval at the call site wins, both bounds, whether or not the document declares one.",
+    "cases": [
+      {
+        "fixture": "timestamps_reference_time",
+        "call_site": [
+          10,
+          20
+        ],
+        "resolved": [
+          10,
+          20
+        ]
+      },
+      {
+        "fixture": "mount_root_without_time_span",
+        "call_site": [
+          10,
+          20
+        ],
+        "resolved": [
+          10,
+          20
+        ]
+      }
+    ]
+  }
+}

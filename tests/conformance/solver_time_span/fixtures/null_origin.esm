@@ -1,0 +1,66 @@
+{
+  "esm": "1.3.0",
+  "metadata": {
+    "name": "SolverTimeSpan_null_origin",
+    "description": "`reference_time` is present but null: a present key selects its field whatever its value, so the origin is unreadable and the load is refused rather than falling back to `start`.",
+    "authors": [
+      "EarthSciML Test Suite"
+    ],
+    "license": "MIT",
+    "tags": [
+      "solver",
+      "time_span"
+    ]
+  },
+  "solver": {
+    "time_span": {
+      "start": "2019-07-01T00:00:00Z",
+      "end": "2019-07-03T00:00:00Z"
+    }
+  },
+  "domain": {
+    "temporal": {
+      "start": "2019-07-01T00:00:00Z",
+      "reference_time": null
+    }
+  },
+  "models": {
+    "Decay": {
+      "variables": {
+        "A": {
+          "type": "unknown",
+          "units": "mol/m^3",
+          "default": 2.0
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.5
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "A"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "neg",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "k",
+                  "A"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

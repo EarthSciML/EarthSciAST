@@ -646,6 +646,25 @@ class Solver:
     # A reference to a run-configuration document (esm-spec §2.2.6), held as
     # authored; :func:`~earthsci_ast.solver.solver_external_location` resolves it.
     external: str | None = None
+    # The run interval the document asks for (esm-spec §2.2.7), held as
+    # authored; :func:`~earthsci_ast.solver.resolve_time_span` converts it.
+    time_span: SolverTimeSpan | None = None
+
+
+@dataclass
+class SolverTimeSpan:
+    """``solver.time_span``: the interval a document is meant to be simulated over.
+
+    Each bound is held EXACTLY as authored (esm-spec §2.2.4 requirement 2): a
+    number in the document's time units (seconds of the independent variable),
+    or an RFC 3339 UTC timestamp string (``...Z``), which means seconds from the
+    document's time origin. :func:`~earthsci_ast.solver.resolve_time_span`
+    converts both to binary64 seconds (§2.2.7); the converted value is never
+    written back into the document.
+    """
+
+    start: float | int | str
+    end: float | int | str
 
 
 @dataclass

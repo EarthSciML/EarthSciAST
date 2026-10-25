@@ -1036,8 +1036,10 @@ type Domain struct {
 
 // TemporalDomain represents temporal bounds
 type TemporalDomain struct {
-	Start         string  `json:"start"`
-	End           string  `json:"end"`
+	// Start and End are optional in the schema; an absent one is "" and is
+	// not emitted (an emitted "" would fail the schema's date-time format).
+	Start         string  `json:"start,omitempty"`
+	End           string  `json:"end,omitempty"`
 	ReferenceTime *string `json:"reference_time,omitempty"`
 }
 

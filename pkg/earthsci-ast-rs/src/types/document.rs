@@ -40,9 +40,9 @@ pub struct EsmFile {
     pub coordinates: Option<IndexMap<String, Coordinate>>,
 
     /// Document-scoped, OPTIONAL and purely ADVISORY solver hints
-    /// (esm-spec §2.2): stiffness, integration tolerances, a splitting hint
-    /// and a reference to an external run configuration (§2.2.6) the document
-    /// knows about itself.
+    /// (esm-spec §2.2): stiffness, integration tolerances, a splitting hint,
+    /// a reference to an external run configuration (§2.2.6) and the interval
+    /// to simulate over (§2.2.7) the document knows about itself.
     ///
     /// Purely additive — presence changes no equations, no classification and
     /// no flattened system. It is authored configuration, so it round-trips

@@ -256,8 +256,12 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     // `solver.external` arrives at esm 1.3.0, and a `${` in it is never
     // expanded (esm-spec §2.2.4, §2.2.6). Only the ROOT's block is read: a
     // mounted leaf's `solver` block does not cross the mount edge (§4.7).
+    // `solver.time_span` likewise arrives at esm 1.3.0 and must describe an
+    // interval (§2.2.7); its check runs after the `${` refusal, root-only.
     crate::solver::reject_solver_external_pre_v13(&json_value)
+        .and_then(|()| crate::solver::reject_solver_time_span_pre_v13(&json_value))
         .and_then(|()| crate::solver::reject_solver_external_unresolved(&json_value))
+        .and_then(|()| crate::solver::reject_solver_time_span_invalid(&json_value))
         .map_err(|e: crate::diagnostic::DiagnosticError| {
             EsmError::SchemaValidation(e.to_string())
         })?;

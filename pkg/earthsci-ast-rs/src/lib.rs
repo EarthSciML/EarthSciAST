@@ -302,11 +302,12 @@ pub use template_imports::{
     resolve_template_machinery,
 };
 // Document-scoped solver hints (esm-spec §2.2): the spec-version gates, the
-// §2.2.2 tolerance resolution order and the §2.2.6 `solver.external` location
-// — the parts of the block that are NOT advisory.
+// §2.2.2 tolerance resolution order, the §2.2.6 `solver.external` location and
+// the §2.2.7 `solver.time_span` interval — the parts of the block that are NOT
+// advisory.
 pub use solver::{
-    reject_solver_external_pre_v13, reject_solver_pre_v11, resolve_tolerances,
-    solver_external_location,
+    reject_solver_external_pre_v13, reject_solver_pre_v11, reject_solver_time_span_pre_v13,
+    resolve_time_span, resolve_tolerances, solver_external_location,
 };
 pub use types::{
     AffectEquation, AutoRecords, ContinuousEvent, Coordinate, CouplingEntry, CouplingRole,
@@ -316,8 +317,9 @@ pub use types::{
     EsmFile, Expr, ExpressionNode, FunctionalUpdate, InlineValue, Metadata, Model, ModelAnalysis,
     ModelTest, ModelTestAssertion, ModelVariable, Operator, ParameterSweep, ParameterUpdate,
     ParameterUpdateSpec, Plot, PlotAxis, PlotSeries, PlotValue, PlotY, Reaction, ReactionSystem,
-    RecordsPerFile, RegionBound, Solver, Species, StoichiometricEntry, SweepDimension, SweepRange,
-    TimeSpan, Tolerance, UnitConversion, UpdateValue, VariableMapTransform, VariableType,
+    RecordsPerFile, RegionBound, Solver, SolverTimeSpan, Species, StoichiometricEntry,
+    SweepDimension, SweepRange, TimePoint, TimeSpan, Tolerance, UnitConversion, UpdateValue,
+    VariableMapTransform, VariableType,
 };
 pub use validate::{
     SchemaError, StructuralError, StructuralErrorCode, UnitWarning, ValidationResult, validate,

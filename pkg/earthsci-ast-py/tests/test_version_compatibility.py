@@ -64,13 +64,14 @@ class TestVersionCompatibility:
         version_1_1_0_minor_upgrade.esm until esm 1.2.0, and
         version_1_2_0_const_units.esm until esm 1.3.0.
         """
-        fixture = load_fixture("version_1_3_0_solver_external.esm")
-        assert fixture["esm"] == _EXPECTED_VERSION
+        for name in ("version_1_3_0_solver_external.esm", "version_1_3_0_solver_time_span.esm"):
+            fixture = load_fixture(name)
+            assert fixture["esm"] == _EXPECTED_VERSION
 
-        with no_version_warning():
-            result = load_document(fixture)
+            with no_version_warning():
+                result = load_document(fixture)
 
-        assert result.esm == _EXPECTED_VERSION
+            assert result.esm == _EXPECTED_VERSION
 
     def test_major_version_zero_rejection(self):
         """A 0.x document is REJECTED: 1.0.0 is a clean break, so there is no

@@ -184,7 +184,8 @@ describe('Version Compatibility', () => {
     // test asserting lockstep encoded that coincidence as a rule -- which broke
     // the moment the bindings were released as 0.1.0 against the 1.0.0 format.
     it('exposes the schema version, derived from the embedded schema $id', () => {
-      // Moved 1.2.0 -> 1.3.0 with `solver.external` (esm-spec §2.2.6).
+      // Moved 1.2.0 -> 1.3.0 with `solver.external` and `solver.time_span`
+      // (esm-spec §2.2.6, §2.2.7).
       // The literal is the point of the test: SCHEMA_VERSION is DERIVED from the
       // embedded schema `$id`, so this pins that the derivation still reads the
       // schema rather than a stale copy, and it is expected to be updated by

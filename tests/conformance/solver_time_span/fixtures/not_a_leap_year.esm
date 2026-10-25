@@ -1,0 +1,60 @@
+{
+  "esm": "1.3.0",
+  "metadata": {
+    "name": "SolverTimeSpan_not_a_leap_year",
+    "description": "2100 is not a leap year (divisible by 100, not by 400), so 2100-02-29 names no day.",
+    "authors": [
+      "EarthSciML Test Suite"
+    ],
+    "license": "MIT",
+    "tags": [
+      "solver",
+      "time_span"
+    ]
+  },
+  "solver": {
+    "time_span": {
+      "start": "2100-02-28T00:00:00Z",
+      "end": "2100-02-29T00:00:00Z"
+    }
+  },
+  "models": {
+    "Decay": {
+      "variables": {
+        "A": {
+          "type": "unknown",
+          "units": "mol/m^3",
+          "default": 2.0
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.5
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "A"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "neg",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "k",
+                  "A"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

@@ -305,6 +305,7 @@ fn with_external(external: &str) -> earthsci_ast::EsmFile {
             reltol: None,
             splitting: None,
             external: Some(external.to_string()),
+            time_span: None,
         }),
         ..Default::default()
     }

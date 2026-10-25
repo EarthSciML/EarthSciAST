@@ -1390,6 +1390,26 @@ value resolves against the directory of the file the document was read from
 a `url_template` (§8.2.1) but without substitutions. A leaf's `external` does
 not cross a mount edge: only the root document's counts.
 
+## esm 1.3.0: `solver.time_span`
+
+| Kind | What |
+|---|---|
+| `format` | **New optional `solver.time_span`** (esm-spec §2.2, §2.2.7): `{start, end}`, each a number in seconds or an RFC 3339 UTC timestamp, the interval the document is meant to be simulated over. Same format version as `solver.external`. |
+| `new` | `resolve_time_span` (Julia, Python, Rust), `resolveTimeSpan` (TypeScript), `ResolveTimeSpan` (Go): the call-site interval if given, else the document's interval in seconds, else none. `reject_solver_time_span_pre_v13` beside `reject_solver_external_pre_v13`, and the codes `solver_time_span_version_too_old` and `solver_time_span_invalid`. |
+
+**Nothing to migrate.** The field is optional and advisory, and no binding's
+`solve()` / `esm_problem` reads it: their interval argument stays required.
+Carrying it under `esm` below 1.3.0 is rejected with
+`solver_time_span_version_too_old`; an interval whose `end` is not after its
+`start`, or a timestamp naming no calendar day, is rejected with
+`solver_time_span_invalid`.
+
+**Timestamps count from the document's time origin**: the
+`domain.temporal.reference_time` if the document has one, else
+`domain.temporal.start`, else 1970-01-01T00:00:00Z. That is the clock the data
+loaders already use, so a timestamp in `time_span` and a loader's data agree on
+what `t = 0` is. `emit` writes the bounds you authored, never the seconds.
+
 ---
 
 # Part V — What did NOT change

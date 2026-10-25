@@ -7041,6 +7041,64 @@ MUST be accepted; `tests/invalid/solver_external_empty.esm` and
 is false for all five bindings: every binding implements both checks, so no
 schema-only binding accepts either file.
 
+### 5.48 `solver.time_span` Conversion (normative)
+
+esm-spec §2.2.7 fixes what a document's `solver.time_span` means in seconds.
+All **five** bindings are in scope and `bindings_required` is
+`["julia", "typescript", "python", "rust", "go"]`: like §5.47, the conversion is
+a pure function of the document, so one answer per document is required
+everywhere. The shared fixtures and the pin live in
+`tests/conformance/solver_time_span/`; its `README.md` is the contract.
+
+#### 5.48.1 What is compared
+
+**Conversion.** Each accepted fixture pins the accessor's answer with no
+call-site interval as `[start, end]` in binary64 seconds, compared EXACTLY:
+every pinned value is exactly representable and §2.2.7 fixes the arithmetic.
+The cases cover number bounds, timestamps against each of the three time
+origins (`reference_time`, `temporal.start`, the POSIX epoch), an origin with a
+UTC offset, a mixed number/timestamp pair, fractional
+seconds on bounds and origin, and a bound before 1970 and on a leap day. Each
+also pins the emitted `solver` block, numbers compared by value, so the
+authored bounds — not the seconds — are what `emit` writes.
+
+**Refusal.** Seven fixtures MUST be refused at load: an empty and a reversed
+interval, a reversal only the conversion can see (a timestamp against a
+number), two dates that match the pattern and name no day (`02-30`, and
+`02-29` in 2100), an unreadable origin and a `null` one (`solver_time_span_invalid`,
+the message naming `/solver/time_span` and the origin's pointer), and a 1.2.0
+document carrying the field (`solver_time_span_version_too_old`).
+
+**The call site.** The manifest's `call_site` cases pass an explicit interval
+to the accessor, which MUST return it whether or not the document declares one.
+
+**Mounting.** At both mount forms, a root reports its own interval or none,
+its emitted `solver` block carries nothing of the leaf's, and a root mounting a
+leaf whose `time_span` is reversed, or a 1.2.0 leaf that carries one, MUST
+load: the checks are the root's alone.
+
+#### 5.48.2 Gate
+
+There is **no adapter and no golden**. Each binding's own suite reads
+`manifest.json`:
+
+| Binding | Test |
+|---|---|
+| Julia | `pkg/EarthSciAST.jl/test/solver_time_span_conformance_test.jl` |
+| TypeScript | `pkg/earthsci-ast-ts/src/solver-time-span.test.ts` |
+| Python | `pkg/earthsci-ast-py/tests/test_solver_time_span_conformance.py` |
+| Rust | `pkg/earthsci-ast-rs/tests/solver_time_span_conformance.rs` |
+| Go | `pkg/earthsci-ast-go/pkg/esm/solver_time_span_conformance_test.go` |
+
+Five further fixtures enter the ordinary §2.2.1 corpus sweep:
+`tests/valid/solver_time_span.esm` and `tests/valid/solver_time_span_only.esm`
+MUST be accepted; `tests/invalid/solver_time_span_missing_end.esm` is a
+`required` schema error at `/solver/time_span` and
+`tests/invalid/solver_time_span_offset.esm` a `oneOf` schema error at
+`/solver/time_span/start`; and `tests/invalid/solver_time_span_version_too_old.esm`
+and `tests/invalid/solver_time_span_reversed.esm` are pinned `resolver_only`,
+with `is_valid` false for all five bindings.
+
 ## 6. CI Integration
 
 ### 6.1 GitHub Actions Workflow
