@@ -166,6 +166,8 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     # of `native` with the `:interpreter` oracle — the whole point of the
     # compiler keyword, and this file was never on the list, so none of it ran.
     include("compiler_selection_test.jl")
+    include("range_restricted_rhs_test.jl")               # select / halo / restrict / lanes (API_SPEC §5.8)
+    include("conformance_range_restricted_rhs_test.jl")   # CONFORMANCE_SPEC §5.49
     # Every per-cell route under a strict `native`: refused by name, or compiled
     # once and reported under a tier that says so.
     include("percell_route_refusal_test.jl")
