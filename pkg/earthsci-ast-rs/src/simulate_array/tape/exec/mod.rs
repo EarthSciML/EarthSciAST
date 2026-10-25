@@ -274,6 +274,10 @@ pub(crate) struct TapeExec {
     exports_active: bool,
     /// Rule count, cached off the program for the per-call stats.
     pub(crate) n_taped: usize,
+    /// Whether every call runs on the calling thread alone: no split, no
+    /// fork-join on the process-wide pool. Set on a program's workspace
+    /// (API_SPEC §5.8: a program evaluation starts no thread).
+    serial: bool,
     /// Step 4b: the SIMD clone this executor runs its fused loops through,
     /// selected ONCE at executor construction (never per element).
     simd: SimdLevel,
@@ -419,6 +423,7 @@ impl TapeExec {
             lscratch: lanes::LaneScratch::for_program(prog),
             exports_active: false,
             n_taped: prog.rules.len(),
+            serial: false,
             simd: simd_level(),
             #[cfg(not(target_arch = "wasm32"))]
             call_work: par::program_work(prog),
@@ -508,6 +513,20 @@ impl TapeCtx {
         self.forcing_epoch += 1;
     }
 
+    /// Run every call of this context on the calling thread alone.
+    pub(crate) fn set_serial(&mut self) {
+        self.exec.serial = true;
+    }
+
+    /// Forget the primed CONST and SEGMENT sections, so the next call runs
+    /// both again: a call that latched a fault in them leaves values behind
+    /// that a later call must not be served.
+    pub(crate) fn invalidate_sections(&mut self) {
+        self.last_params = None;
+        self.exec.primed_param_epoch = 0;
+        self.exec.primed_forcing_epoch = 0;
+    }
+
     /// Force `Export` instructions on/off (off by default; a harvesting
     /// scratch turns them on because it IS the reader).
     pub(crate) fn set_exports_active(&mut self, on: bool) {
@@ -532,7 +551,7 @@ impl TapeCtx {
 /// interpreter loop can split-borrow the mutable executor pieces beside it.
 struct Env<'a> {
     prog: &'a TapeProgram,
-    forcing: &'a HashMap<String, ArrayD<f64>>,
+    forcing: ForcingView<'a>,
     state: &'a [f64],
     /// Row-major per-variable mirror of `state` (see `TapeExec::state_rm`).
     state_rm: &'a [f64],
@@ -587,6 +606,45 @@ pub(in crate::simulate_array::tape) fn load_forcing(
         for (d, v) in dst.iter_mut().zip(a.iter()) {
             *d = *v;
         }
+    }
+}
+
+/// Where a call's forcing loads read from.
+#[derive(Clone, Copy)]
+pub(in crate::simulate_array) enum ForcingView<'a> {
+    /// The forcing buffer, by name (row-major arrays).
+    Map(&'a HashMap<String, ArrayD<f64>>),
+    /// A forcing set's buffers (column-major, first index fastest), with the
+    /// buffer each of the program's [`ForcingRef`]s reads, resolved when the
+    /// program was built against the set's slots.
+    Slots {
+        bufs: &'a [Arc<[f64]>],
+        slot_of: &'a [u32],
+    },
+}
+
+/// [`Instr::LoadForcing`] from a forcing set's buffer `src`, column-major over
+/// `fr.shape` and of its length (both checked when the set was made). The
+/// same values [`load_forcing`] writes from a row-major entry of the same
+/// field: a column-major program's box is the column-major order itself, a
+/// row-major program's is transposed on the way, and a 0-d entry is rounded
+/// to the active precision.
+pub(in crate::simulate_array::tape) fn load_forcing_slot(
+    fr: &ForcingRef,
+    src: &[f64],
+    col_major: bool,
+    dst: &mut [f64],
+) {
+    if fr.shape.is_empty() {
+        dst[0] = crate::precision::active().round(src[0]);
+    } else if col_major || super::layout::order_free(&fr.shape) {
+        dst.copy_from_slice(src);
+    } else {
+        let rm = rm_strides(&fr.shape);
+        let cm = cm_strides(&fr.shape);
+        // SAFETY: `dst` and `src` both hold the box's element count, and the
+        // strides address that box.
+        unsafe { kernels::copy_strided(dst.as_mut_ptr(), &rm, src.as_ptr(), &cm, &fr.shape) }
     }
 }
 
@@ -868,7 +926,8 @@ pub(in crate::simulate_array) fn run_tape_call(
     let inputs = CallInputs {
         state,
         params,
-        forcing: &forcing,
+        forcing: ForcingView::Map(&forcing),
+        forcing_epoch: None,
         t,
         declared,
     };
@@ -882,7 +941,12 @@ pub(in crate::simulate_array) fn run_tape_call(
 pub(in crate::simulate_array) struct CallInputs<'a> {
     pub(in crate::simulate_array) state: &'a [f64],
     pub(in crate::simulate_array) params: &'a [f64],
-    pub(in crate::simulate_array) forcing: &'a HashMap<String, ArrayD<f64>>,
+    pub(in crate::simulate_array) forcing: ForcingView<'a>,
+    /// The epoch of the forcing the call reads, when the caller names one
+    /// (a forcing set's): the SEGMENT section re-runs when it differs from
+    /// the epoch the context last primed under. `None` keeps the context's
+    /// own counter ([`TapeCtx::bump_forcing_epoch`]).
+    pub(in crate::simulate_array) forcing_epoch: Option<u64>,
     pub(in crate::simulate_array) t: f64,
     pub(in crate::simulate_array) declared: &'a HashSet<String>,
 }
@@ -901,9 +965,13 @@ pub(in crate::simulate_array) fn run_tape_inputs(
         state,
         params,
         forcing,
+        forcing_epoch,
         t,
         declared,
     } = inputs;
+    if let Some(epoch) = forcing_epoch {
+        ctx.forcing_epoch = epoch;
+    }
     // Parameter epoch: a params slice that differs bit for bit from the last
     // one bumps it (the negative-control test in `tests/tape_exec.rs` guards
     // this: bypassing it serves stale CONST values). The kept copy only
@@ -922,8 +990,13 @@ pub(in crate::simulate_array) fn run_tape_inputs(
     let exec = &mut ctx.exec;
     #[cfg(not(target_arch = "wasm32"))]
     {
-        exec.scratch.fscratch.workers.call_ways = par::call_ways(exec.call_work);
-        exec.scratch.fscratch.workers.threads = par::thread_budget();
+        let (ways, threads) = if exec.serial {
+            (1, 1)
+        } else {
+            (par::call_ways(exec.call_work), par::thread_budget())
+        };
+        exec.scratch.fscratch.workers.call_ways = ways;
+        exec.scratch.fscratch.workers.threads = threads;
     }
     // Zero what no rule writes; every other element is overwritten below.
     if exec.dy_zero_len != dy.len() {

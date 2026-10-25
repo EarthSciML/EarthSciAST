@@ -399,9 +399,9 @@ pub use problem::{
 };
 // Range-restricted and operator-restricted right-hand sides (API_SPEC §5.8).
 pub use simulate_array::range::{
-    AxisCut, Decomposition, HaloReport, LaneBlock, LaneInputs, LaneKind, LaneLayout, LaneProgram,
-    RhsProgram, RhsSelection, RhsWorkspace, TileBlock, TileBox, TileLayout, TileProgram,
-    rhs_program,
+    AxisCut, Decomposition, ForcingSet, ForcingSlot, HaloReport, LaneBlock, LaneInputs, LaneKind,
+    LaneLayout, LaneProgram, ParamSlot, RhsError, RhsProgram, RhsSelection, RhsWorkspace, SlotKind,
+    StateBlock, TileBlock, TileBox, TileLayout, TileProgram, rhs_program,
 };
 pub use units::{
     Dimension, EquationDimensionVerdict, ExactScale, Rational, ScaleFactor, UNIT_FINDING_ANALYSIS,

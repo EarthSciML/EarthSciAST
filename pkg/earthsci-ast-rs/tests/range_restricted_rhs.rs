@@ -147,16 +147,19 @@ fn a_steady_tile_call_allocates_nothing() {
     let lay = tile.layout();
     let u = vec![1.25; lay.u_len];
     let aux = vec![0.0; lay.aux_len];
-    let p = prog.default_parameters();
+    let p = prog
+        .parameter_vector(&Default::default())
+        .expect("defaults");
+    let fs = prog.default_forcing().expect("forcing");
     let mut du = vec![f64::NAN; lay.u_len];
     let mut ws = tile.new_workspace();
     for _ in 0..3 {
-        tile.eval_into(&u, &aux, &p, 0.0, &mut du, &mut ws)
+        tile.eval_into(&u, &aux, &p, 0.0, &fs, &mut du, &mut ws)
             .expect("eval");
     }
     let before = allocs();
     for _ in 0..10 {
-        tile.eval_into(&u, &aux, &p, 0.0, &mut du, &mut ws)
+        tile.eval_into(&u, &aux, &p, 0.0, &fs, &mut du, &mut ws)
             .expect("eval");
     }
     assert_eq!(allocs() - before, 0, "a warm tile call allocated");

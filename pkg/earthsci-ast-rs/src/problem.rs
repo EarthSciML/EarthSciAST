@@ -610,6 +610,14 @@ pub struct ProblemOptions {
 
     /// Time at which CONST providers are sampled. Defaults to `tspan.0`.
     pub sample_time: Option<f64>,
+
+    /// Leave every shaped parameter whose value only the document supplies
+    /// (inline array data, or one scalar broadcast over its grid) as a
+    /// run-time input of [`crate::rhs_program`]: an
+    /// [`crate::SlotKind::ArrayParameter`] forcing slot, seeded with that
+    /// value, instead of build-time data (API_SPEC §5.8). Off by default;
+    /// `solve` is unaffected either way.
+    pub runtime_array_parameters: bool,
 }
 
 impl std::fmt::Debug for ProblemOptions {
@@ -624,7 +632,8 @@ impl std::fmt::Debug for ProblemOptions {
             .field("rhs", &self.rhs)
             .field("compiler", &self.compiler)
             .field("inspect", &self.inspect)
-            .field("sample_time", &self.sample_time);
+            .field("sample_time", &self.sample_time)
+            .field("runtime_array_parameters", &self.runtime_array_parameters);
         #[cfg(not(target_arch = "wasm32"))]
         d.field("pushdown_rewrite", &self.pushdown_rewrite)
             .field("providers", &self.providers.keys().collect::<Vec<_>>())
@@ -791,6 +800,8 @@ pub struct EsmProblem {
     /// by provenance (API_SPEC §5.8). `None` for a problem with no array
     /// backend.
     pub(crate) program_source: Option<Rc<ProgramSource>>,
+    /// [`ProblemOptions::runtime_array_parameters`], for `rhs_program`.
+    pub(crate) runtime_array_parameters: bool,
 }
 
 /// What [`EsmProblem::program_source`] holds: the prepared typed document, or
@@ -1547,6 +1558,7 @@ pub fn remake(prob: &EsmProblem, changes: &Remake) -> Result<EsmProblem, Simulat
         #[cfg(not(target_arch = "wasm32"))]
         refresh_boundaries: boundaries,
         program_source: prob.program_source.clone(),
+        runtime_array_parameters: prob.runtime_array_parameters,
     })
 }
 
@@ -2210,6 +2222,7 @@ pub fn esm_problem<'a>(
         #[cfg(not(target_arch = "wasm32"))]
         refresh_boundaries,
         program_source,
+        runtime_array_parameters: opts.runtime_array_parameters,
     };
     Ok(prob)
 }

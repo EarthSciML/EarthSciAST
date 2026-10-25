@@ -18,20 +18,21 @@
 //! per batch, and [`LaneProgram::eval_gathered_into`] runs the program with
 //! those reads replaced by reads of the buffers.
 
+use super::forcing::{ForcingSet, ForcingSlot, RhsError, shape};
 use super::tile::{declined_error, plain_precision, refused, shell};
 use super::walk::AxisSpec;
 use super::{
-    Blocks, Decomposition, LaneKind, LaneLayout, RhsProgram, RhsWorkspace, TileInput, WsExec,
-    build_error, check_lengths, index_set_sizes, take_fault, var_infos,
+    Blocks, Decomposition, LaneKind, LaneLayout, ProgramModel, RhsProgram, RhsWorkspace, TileInput,
+    WsExec, build_error, check_forcing, check_lengths, check_owner, index_set_sizes,
+    next_program_id, slot_map, tape_fault, var_infos,
 };
 use crate::simulate::SimulateError;
 use crate::simulate_array::tape::{
-    CallInputs, TapeCtx, TapeProgram, TileLowering, run_tape_inputs,
+    CallInputs, ForcingView, TapeCtx, TapeProgram, TileLowering, run_tape_inputs,
 };
 use crate::simulate_array::{AlgebraicRule, ArrayCompiled, RhsRule, VarShape};
 use crate::types::{Expr, ExpressionNode, RegionBound};
 use indexmap::IndexMap;
-use ndarray::ArrayD;
 use rustc_hash::FxHashMap;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -47,14 +48,24 @@ fn input_var(k: usize) -> String {
     format!("__lane_input_{k}")
 }
 
-/// A lane program (RFC U3 §6). `Send + Sync`.
+/// A lane program (RFC U3 §6). `Send + Sync + Clone`; it reads the forcing
+/// sets of the program it was built from.
+#[derive(Clone)]
 pub struct LaneProgram {
+    inner: Arc<LaneInner>,
+}
+
+struct LaneInner {
+    id: u64,
     main: Arc<TapeProgram>,
     pre: Arc<TapeProgram>,
     gather: Arc<TapeProgram>,
+    /// The forcing slot each forcing load of `main`, `pre` and `gather`
+    /// reads.
+    slot_of: [Vec<u32>; 3],
     blocks: Blocks,
     layout: LaneLayout,
-    forcing: Arc<HashMap<String, ArrayD<f64>>>,
+    slots: Arc<[ForcingSlot]>,
     capacity: usize,
     sets: Vec<String>,
     /// The global extent of each lane set, for validating `cells`.
@@ -68,9 +79,9 @@ pub struct LaneProgram {
 impl std::fmt::Debug for LaneProgram {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LaneProgram")
-            .field("capacity", &self.capacity)
-            .field("sets", &self.sets)
-            .field("layout", &self.layout)
+            .field("capacity", &self.inner.capacity)
+            .field("sets", &self.inner.sets)
+            .field("layout", &self.inner.layout)
             .finish()
     }
 }
@@ -78,9 +89,9 @@ impl std::fmt::Debug for LaneProgram {
 /// The per-lane buffers of a lane program's pre-gather plan: one run of
 /// `capacity` values per hoisted read. Filled by
 /// [`LaneProgram::gather_lane_inputs`], read by
-/// [`LaneProgram::eval_gathered_into`].
+/// [`LaneProgram::eval_gathered_into`]. `Send`, like a workspace.
 pub struct LaneInputs {
-    owner: usize,
+    owner: u64,
     values: Vec<f64>,
     state: Vec<f64>,
     ctx: Box<TapeCtx>,
@@ -101,37 +112,48 @@ impl LaneInputs {
     }
 }
 
+const MAIN: usize = 0;
+const PRE: usize = 1;
+const GATHER: usize = 2;
+
 impl LaneProgram {
     /// The lane layout (RFC U3 §6): each variable a column-major block whose
     /// first axis is the lane (`1..=capacity`) and whose other axes are the
     /// variable's axes outside the lane's sets, in order.
     pub fn layout(&self) -> &LaneLayout {
-        &self.layout
+        &self.inner.layout
     }
 
     /// The number of lanes the program was built for.
     pub fn capacity(&self) -> usize {
-        self.capacity
+        self.inner.capacity
     }
 
     /// The number of hoisted reads the pre-gather plan fills.
     pub fn n_lane_inputs(&self) -> usize {
-        self.n_inputs
+        self.inner.n_inputs
     }
 
     /// Buffers for [`Self::eval_into`] and [`Self::eval_gathered_into`].
     pub fn new_workspace(&self) -> RhsWorkspace {
-        let n = self.blocks.u_len
-            + self.blocks.aux_len
-            + self.capacity * (self.sets.len() + self.n_inputs);
+        let inner = &*self.inner;
+        let n = inner.blocks.u_len
+            + inner.blocks.aux_len
+            + inner.capacity * (inner.sets.len() + inner.n_inputs);
+        let serial = |t: &Arc<TapeProgram>| {
+            let mut ctx = TapeCtx::new(Arc::clone(t));
+            ctx.set_serial();
+            Box::new(ctx)
+        };
         RhsWorkspace {
-            owner: Arc::as_ptr(&self.main) as usize,
+            owner: inner.id,
             state: vec![0.0; n],
             dy: Vec::new(),
             exec: WsExec::Lanes {
-                main: Box::new(TapeCtx::new(Arc::clone(&self.main))),
-                pre: Box::new(TapeCtx::new(Arc::clone(&self.pre))),
+                main: serial(&inner.main),
+                pre: serial(&inner.pre),
             },
+            _not_sync: std::marker::PhantomData,
         }
     }
 
@@ -145,37 +167,34 @@ impl LaneProgram {
         at: usize,
         cells: &[i32],
         n: usize,
-    ) -> Result<(), SimulateError> {
-        let d = self.sets.len();
-        if n > self.capacity {
-            return Err(build_error(format!(
-                "`lanes`: n = {n} exceeds the program's capacity {}",
-                self.capacity
-            )));
+    ) -> Result<(), RhsError> {
+        let inner = &*self.inner;
+        let d = inner.sets.len();
+        if n > inner.capacity {
+            return Err(shape("n (lanes past the capacity)", inner.capacity, n));
         }
         if !cells.len().is_multiple_of(d.max(1))
             || cells.len() / d.max(1) < n
-            || cells.len() / d.max(1) > self.capacity
+            || cells.len() / d.max(1) > inner.capacity
         {
-            return Err(build_error(format!(
-                "`lanes`: `cells` holds {} entries, which is not D = {d} times a lane count \
-                 between n = {n} and the capacity {}",
+            return Err(shape(
+                "cells (D times a lane count between n and the capacity)",
+                d * n.max(1),
                 cells.len(),
-                self.capacity
-            )));
+            ));
         }
         let given = cells.len() / d.max(1);
-        for (a, &ext) in self.extents.iter().enumerate() {
-            let rows = &mut state[at + a * self.capacity..at + (a + 1) * self.capacity];
+        for (a, &ext) in inner.extents.iter().enumerate() {
+            let rows = &mut state[at + a * inner.capacity..at + (a + 1) * inner.capacity];
             for (l, row) in rows.iter_mut().enumerate() {
                 let src = if l < given { l } else { 0 };
                 let c = if given == 0 { 1 } else { cells[src * d + a] };
                 if l < n && (i64::from(c) < 1 || i64::from(c) > ext) {
-                    return Err(build_error(format!(
-                        "`lanes`: lane {} names {} = {c}, outside 1..{ext}",
-                        l + 1,
-                        self.sets[a]
-                    )));
+                    return Err(shape(
+                        "cells (a lane's cell outside its index set)",
+                        ext as usize,
+                        c.max(0) as usize,
+                    ));
                 }
                 *row = f64::from(c);
             }
@@ -192,21 +211,25 @@ impl LaneProgram {
         aux: &[f64],
         p: &[f64],
         t: f64,
+        forcing: &ForcingSet,
         cells: &[i32],
         n: usize,
         du: &mut [f64],
         ws: &mut RhsWorkspace,
-    ) -> Result<(), SimulateError> {
-        self.run(u, aux, None, p, t, cells, n, du, ws)
+    ) -> Result<(), RhsError> {
+        self.run(u, aux, None, p, t, forcing, cells, n, du, ws)
     }
 
     /// The pre-gather plan's buffers, unfilled.
     pub fn lane_inputs(&self) -> LaneInputs {
+        let inner = &*self.inner;
+        let mut ctx = TapeCtx::new(Arc::clone(&inner.gather));
+        ctx.set_serial();
         LaneInputs {
-            owner: Arc::as_ptr(&self.main) as usize,
-            values: vec![0.0; self.capacity * self.n_inputs],
-            state: vec![0.0; self.capacity * (self.n_inputs + self.sets.len())],
-            ctx: Box::new(TapeCtx::new(Arc::clone(&self.gather))),
+            owner: inner.id,
+            values: vec![0.0; inner.capacity * inner.n_inputs],
+            state: vec![0.0; inner.capacity * (inner.n_inputs + inner.sets.len())],
+            ctx: Box::new(ctx),
         }
     }
 
@@ -217,33 +240,38 @@ impl LaneProgram {
         inputs: &mut LaneInputs,
         p: &[f64],
         t: f64,
+        forcing: &ForcingSet,
         cells: &[i32],
         n: usize,
-    ) -> Result<(), SimulateError> {
-        if inputs.owner != Arc::as_ptr(&self.main) as usize {
-            return Err(build_error(
-                "`gather_lane_inputs`: the inputs were made by another program".to_string(),
+    ) -> Result<(), RhsError> {
+        let inner = &*self.inner;
+        if inputs.owner != inner.id {
+            return Err(shape(
+                "lane inputs (made by another program)",
+                inner.id as usize,
+                inputs.owner as usize,
             ));
         }
-        if p.len() != self.n_params {
-            return Err(build_error(format!(
-                "`gather_lane_inputs`: `p` has {} elements, the program {}",
-                p.len(),
-                self.n_params
-            )));
+        if p.len() != inner.n_params {
+            return Err(shape("p", inner.n_params, p.len()));
         }
-        self.write_cells(&mut inputs.state, self.capacity * self.n_inputs, cells, n)?;
-        let _precision = crate::precision::enter(self.precision);
-        crate::simulate_array::take_const_array_oob();
+        check_forcing(forcing, &inner.slots)?;
+        self.write_cells(&mut inputs.state, inner.capacity * inner.n_inputs, cells, n)?;
+        let _precision = crate::precision::enter(inner.precision);
+        let scope = crate::simulate_array::FaultScope::enter();
         let call = CallInputs {
             state: &inputs.state,
             params: p,
-            forcing: &self.forcing,
+            forcing: ForcingView::Slots {
+                bufs: forcing.bufs(),
+                slot_of: &inner.slot_of[GATHER],
+            },
+            forcing_epoch: Some(forcing.epoch()),
             t,
-            declared: &self.declared,
+            declared: &inner.declared,
         };
         run_tape_inputs(&mut inputs.ctx, &call, &mut inputs.values, false);
-        take_fault()
+        tape_fault(scope, &mut inputs.ctx)
     }
 
     /// [`Self::eval_into`] with every hoisted read taken from `inputs`.
@@ -255,17 +283,31 @@ impl LaneProgram {
         inputs: &LaneInputs,
         p: &[f64],
         t: f64,
+        forcing: &ForcingSet,
         cells: &[i32],
         n: usize,
         du: &mut [f64],
         ws: &mut RhsWorkspace,
-    ) -> Result<(), SimulateError> {
-        if inputs.owner != Arc::as_ptr(&self.main) as usize {
-            return Err(build_error(
-                "`eval_gathered_into`: the inputs were made by another program".to_string(),
+    ) -> Result<(), RhsError> {
+        if inputs.owner != self.inner.id {
+            return Err(shape(
+                "lane inputs (made by another program)",
+                self.inner.id as usize,
+                inputs.owner as usize,
             ));
         }
-        self.run(u, aux, Some(&inputs.values), p, t, cells, n, du, ws)
+        self.run(
+            u,
+            aux,
+            Some(&inputs.values),
+            p,
+            t,
+            forcing,
+            cells,
+            n,
+            du,
+            ws,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -276,23 +318,22 @@ impl LaneProgram {
         gathered: Option<&[f64]>,
         p: &[f64],
         t: f64,
+        forcing: &ForcingSet,
         cells: &[i32],
         n: usize,
         du: &mut [f64],
         ws: &mut RhsWorkspace,
-    ) -> Result<(), SimulateError> {
-        check_lengths(&self.blocks, u, aux, du, p, self.n_params)?;
-        if ws.owner != Arc::as_ptr(&self.main) as usize {
-            return Err(build_error(
-                "`eval_into`: the workspace was made by another program".to_string(),
-            ));
-        }
-        let (nu, na) = (self.blocks.u_len, self.blocks.aux_len);
+    ) -> Result<(), RhsError> {
+        let inner = &*self.inner;
+        check_lengths(&inner.blocks, u, aux, du, p, inner.n_params)?;
+        check_owner(ws, inner.id)?;
+        check_forcing(forcing, &inner.slots)?;
+        let (nu, na) = (inner.blocks.u_len, inner.blocks.aux_len);
         ws.state[..nu].copy_from_slice(u);
         ws.state[nu..nu + na].copy_from_slice(aux);
         let mut state = std::mem::take(&mut ws.state);
         let res = self.write_cells(&mut state, nu + na, cells, n);
-        let at = nu + na + self.capacity * self.sets.len();
+        let at = nu + na + inner.capacity * inner.sets.len();
         if let Some(g) = gathered {
             state[at..at + g.len()].copy_from_slice(g);
         }
@@ -301,18 +342,26 @@ impl LaneProgram {
         let WsExec::Lanes { main, pre } = &mut ws.exec else {
             unreachable!("a lane workspace runs lane tapes");
         };
-        let ctx = if gathered.is_some() { pre } else { main };
-        let _precision = crate::precision::enter(self.precision);
-        crate::simulate_array::take_const_array_oob();
+        let (ctx, which) = if gathered.is_some() {
+            (pre, PRE)
+        } else {
+            (main, MAIN)
+        };
+        let _precision = crate::precision::enter(inner.precision);
+        let scope = crate::simulate_array::FaultScope::enter();
         let call = CallInputs {
             state: &ws.state,
             params: p,
-            forcing: &self.forcing,
+            forcing: ForcingView::Slots {
+                bufs: forcing.bufs(),
+                slot_of: &inner.slot_of[which],
+            },
+            forcing_epoch: Some(forcing.epoch()),
             t,
-            declared: &self.declared,
+            declared: &inner.declared,
         };
         run_tape_inputs(ctx, &call, du, false);
-        take_fault()
+        tape_fault(scope, ctx)
     }
 }
 
@@ -593,7 +642,7 @@ struct Rewritten {
 
 #[allow(clippy::too_many_arguments)]
 fn rewrite(
-    compiled: &ArrayCompiled,
+    compiled: &ProgramModel,
     axes: &HashMap<String, Vec<Option<String>>>,
     lane_vars: &HashSet<String>,
     dependent: &HashSet<String>,
@@ -755,7 +804,7 @@ pub(super) fn build(
     kind: &LaneKind,
     capacity: usize,
 ) -> Result<LaneProgram, SimulateError> {
-    let compiled = &*prog.compiled;
+    let compiled = &*prog.inner.model;
     let precision = plain_precision(compiled, "lane")?;
     if capacity == 0 {
         return Err(build_error(
@@ -763,7 +812,7 @@ pub(super) fn build(
         ));
     }
     let sets: Vec<String> = kind.sets().to_vec();
-    let sizes = index_set_sizes(&prog.flat);
+    let sizes = index_set_sizes(&prog.inner.flat);
     let box_invalid =
         |m: String| super::range_error(crate::diagnostic::codes::RANGE_BOX_INVALID, m);
     for s in &sets {
@@ -794,7 +843,7 @@ pub(super) fn build(
         .collect();
     // Every state in `u` and `aux` carries every lane set; for `cells` the
     // lane sets are exactly the written variables' index sets.
-    for name in prog.writes.iter().chain(&prog.aux) {
+    for name in prog.inner.writes.iter().chain(&prog.inner.aux) {
         let var_sets: Vec<String> = axes[name].iter().flatten().cloned().collect();
         if let Some(s) = sets.iter().find(|s| !var_sets.contains(s)) {
             return Err(box_invalid(format!(
@@ -802,7 +851,7 @@ pub(super) fn build(
             )));
         }
         if cells_mode
-            && prog.writes.contains(name)
+            && prog.inner.writes.contains(name)
             && let Some(s) = var_sets.iter().find(|s| !sets.contains(s))
         {
             return Err(box_invalid(format!(
@@ -830,7 +879,10 @@ pub(super) fn build(
 
     // The lane layout: u, then aux, each block `[capacity, inner…]`.
     let mut entries = Vec::new();
-    for (input, names) in [(TileInput::U, &prog.writes), (TileInput::Aux, &prog.aux)] {
+    for (input, names) in [
+        (TileInput::U, &prog.inner.writes),
+        (TileInput::Aux, &prog.inner.aux),
+    ] {
         for name in names {
             let vs = &compiled.var_shapes[name];
             let var_axes = &axes[name];
@@ -905,6 +957,7 @@ pub(super) fn build(
         add(&mut pre_shapes, input_var(k), &mut pre_at);
     }
     let held: HashSet<String> = prog
+        .inner
         .aux
         .iter()
         .cloned()
@@ -983,19 +1036,28 @@ pub(super) fn build(
     } else {
         build_tape(&shell(compiled, gshapes, grules, gobserved, gheld))?
     };
+    let slot_of = [
+        slot_map(&main_tape, &prog.inner.slots)?,
+        slot_map(&pre_tape, &prog.inner.slots)?,
+        slot_map(&gather_tape, &prog.inner.slots)?,
+    ];
     Ok(LaneProgram {
-        main: Arc::new(main_tape),
-        pre: Arc::new(pre_tape),
-        gather: Arc::new(gather_tape),
-        layout: layout.lane_public(&sets, capacity),
-        blocks: layout,
-        forcing: Arc::clone(&prog.forcing),
-        capacity,
-        extents: sets.iter().map(|s| sizes[s]).collect(),
-        sets,
-        n_inputs,
-        n_params: compiled.param_names.len(),
-        declared: Arc::clone(&prog.declared),
-        precision,
+        inner: Arc::new(LaneInner {
+            id: next_program_id(),
+            main: Arc::new(main_tape),
+            pre: Arc::new(pre_tape),
+            gather: Arc::new(gather_tape),
+            slot_of,
+            layout: layout.lane_public(&sets, capacity),
+            blocks: layout,
+            slots: Arc::clone(&prog.inner.slots),
+            capacity,
+            extents: sets.iter().map(|s| sizes[s]).collect(),
+            sets,
+            n_inputs,
+            n_params: compiled.param_names.len(),
+            declared: Arc::clone(&prog.inner.declared),
+            precision,
+        }),
     })
 }

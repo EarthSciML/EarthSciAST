@@ -134,10 +134,11 @@ fn program(c: &Value) -> Result<RhsProgram, SimulateError> {
 /// The whole-domain reference `G` of `op` at the generated state.
 fn reference(op: &RhsProgram) -> Vec<f64> {
     let (u, aux) = global_state(op);
-    let p = op.default_parameters();
+    let p = op.parameter_vector(&Default::default()).expect("defaults");
+    let fs = op.default_forcing().expect("forcing");
     let mut du = vec![f64::NAN; op.layout().u_len];
     let mut ws = op.new_workspace();
-    op.eval_into(&u, &aux, &p, 0.0, &mut du, &mut ws)
+    op.eval_into(&u, &aux, &p, 0.0, &fs, &mut du, &mut ws)
         .expect("whole-domain evaluation");
     du
 }
@@ -324,7 +325,8 @@ fn tile_partition(c: &Value) -> Result<(), String> {
     }
     let g = reference(&op);
     let (gu, gaux) = global_state(&op);
-    let p = op.default_parameters();
+    let p = op.parameter_vector(&Default::default()).expect("defaults");
+    let fs = op.default_forcing().expect("forcing");
     let whole = op.layout().clone();
     for tiling in c["tilings"].as_array().unwrap() {
         let tid = tiling["id"].as_str().unwrap();
@@ -345,7 +347,7 @@ fn tile_partition(c: &Value) -> Result<(), String> {
                 _ => vec![f64::NAN; lay.u_len],
             };
             let mut ws = tile.new_workspace();
-            tile.eval_into(&u, &aux, &p, 0.0, &mut du, &mut ws)
+            tile.eval_into(&u, &aux, &p, 0.0, &fs, &mut du, &mut ws)
                 .map_err(|e| format!("{tid}: eval {t}: {e}"))?;
             if u.iter().zip(&u0).any(|(a, b)| a.to_bits() != b.to_bits())
                 || aux
@@ -419,7 +421,9 @@ fn tile_one(c: &Value, expect_ok: bool) -> Result<(), String> {
             let (u, aux) = fill_tile(&lay, &whole, &dec, &gu, &gaux);
             let mut du = vec![f64::NAN; lay.u_len];
             let mut ws = tile.new_workspace();
-            tile.eval_into(&u, &aux, &op.default_parameters(), 0.0, &mut du, &mut ws)
+            let p = op.parameter_vector(&Default::default()).expect("defaults");
+            let fs = op.default_forcing().expect("forcing");
+            tile.eval_into(&u, &aux, &p, 0.0, &fs, &mut du, &mut ws)
                 .map_err(|e| format!("eval: {e}"))?;
             for (name, gi) in owned_cells(&lay) {
                 let (ts, gs) = (slot_of(&lay, &name, &gi), slot_of(&whole, &name, &gi));
@@ -572,7 +576,8 @@ fn lanes_case(c: &Value) -> Result<(), String> {
         .map_err(|e| format!("lanes: {e}"))?;
     let g = reference(&op);
     let (gu, gaux) = global_state(&op);
-    let p = op.default_parameters();
+    let p = op.parameter_vector(&Default::default()).expect("defaults");
+    let fs = op.default_forcing().expect("forcing");
     let whole = op.layout().clone();
     let d = lane_sets.len();
     let lay = lanes.layout().clone();
@@ -647,16 +652,18 @@ fn lanes_case(c: &Value) -> Result<(), String> {
         let mut du = vec![f64::NAN; lay.u_len];
         let mut ws = lanes.new_workspace();
         lanes
-            .eval_into(&u, &aux, &p, 0.0, &cells, n, &mut du, &mut ws)
+            .eval_into(&u, &aux, &p, 0.0, &fs, &cells, n, &mut du, &mut ws)
             .map_err(|e| format!("{bid}: eval: {e}"))?;
         matches(&cells, n, &du).map_err(|e| format!("{bid}: {e}"))?;
         let mut inputs = lanes.lane_inputs();
         lanes
-            .gather_lane_inputs(&mut inputs, &p, 0.0, &cells, n)
+            .gather_lane_inputs(&mut inputs, &p, 0.0, &fs, &cells, n)
             .map_err(|e| format!("{bid}: gather_lane_inputs: {e}"))?;
         let mut du2 = vec![f64::NAN; lay.u_len];
         lanes
-            .eval_gathered_into(&u, &aux, &inputs, &p, 0.0, &cells, n, &mut du2, &mut ws)
+            .eval_gathered_into(
+                &u, &aux, &inputs, &p, 0.0, &fs, &cells, n, &mut du2, &mut ws,
+            )
             .map_err(|e| format!("{bid}: pre-gathered eval: {e}"))?;
         matches(&cells, n, &du2).map_err(|e| format!("{bid} (pre-gathered): {e}"))?;
         if c["negative_control"]["batch"].as_str() == Some(bid) {
@@ -675,7 +682,7 @@ fn lanes_case(c: &Value) -> Result<(), String> {
             }
             let mut du3 = vec![f64::NAN; lay.u_len];
             lanes
-                .eval_into(&su, &saux, &p, 0.0, &cells, n, &mut du3, &mut ws)
+                .eval_into(&su, &saux, &p, 0.0, &fs, &cells, n, &mut du3, &mut ws)
                 .map_err(|e| format!("{bid}: swapped eval: {e}"))?;
             if matches(&cells, n, &du3).is_ok() {
                 return Err(format!(

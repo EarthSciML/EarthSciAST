@@ -18,25 +18,30 @@
 //! same program evaluated over the whole domain by the same compiler.
 
 mod analysis;
+mod forcing;
 mod lanes;
+mod model;
 mod select;
 mod tile;
 mod walk;
 
+pub use forcing::{ForcingSet, ForcingSlot, ParamSlot, RhsError, SlotKind, StateBlock};
 pub use lanes::{LaneInputs, LaneProgram};
+use model::ProgramModel;
 pub use tile::TileProgram;
 
-use super::tape::{CallInputs, TapeCtx, TapeProgram, run_tape_inputs};
+use super::tape::{CallInputs, ForcingView, TapeCtx, TapeProgram, run_tape_inputs};
 use super::{ArrayCompiled, RhsCall, RhsScratch, RhsStats, evaluate_rhs_with_scratch};
 use crate::flatten::{FlattenedSystem, TermOrigin};
 use crate::problem::{Compiler, EsmProblem, ProgramSource};
 use crate::simulate::SimulateError;
-use ndarray::ArrayD;
-use std::cell::RefCell;
+use ndarray::{ArrayD, IxDyn, ShapeBuilder};
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::marker::PhantomData;
 use std::ops::RangeInclusive;
-use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use walk::{AxisSpec, VarInfo};
 
 /// Which terms and which variables an operator keeps (API_SPEC §5.8,
@@ -368,22 +373,33 @@ impl Blocks {
     }
 }
 
-/// The per-call buffers of one program (RFC U3 §5): reused across calls, so
-/// a warm call allocates nothing. Made by the program that runs it.
+/// The per-call buffers of one program (API_SPEC §5.8): reused across calls,
+/// so a warm call allocates nothing. Made by the program that runs it, and
+/// usable only with that program (or a clone of it), one call at a time. It
+/// may move between threads (`Send`); it is not `Sync`.
 pub struct RhsWorkspace {
-    owner: usize,
+    owner: u64,
     state: Vec<f64>,
     dy: Vec<f64>,
     exec: WsExec,
+    _not_sync: PhantomData<Cell<()>>,
 }
 
 enum WsExec {
     Tape(Box<TapeCtx>),
-    Scratch(Box<RhsScratch>),
+    Interp(Box<InterpWs>),
     Lanes {
         main: Box<TapeCtx>,
         pre: Box<TapeCtx>,
     },
+}
+
+/// The interpreter's per-call state: its scratch, and the forcing buffer it
+/// reads by name, rebuilt from a forcing set only when the set's epoch moves.
+struct InterpWs {
+    scratch: RhsScratch,
+    forcing: RefCell<HashMap<String, ArrayD<f64>>>,
+    epoch: u64,
 }
 
 impl std::fmt::Debug for RhsWorkspace {
@@ -392,6 +408,13 @@ impl std::fmt::Debug for RhsWorkspace {
             .field("state_len", &self.state.len())
             .finish()
     }
+}
+
+/// A process-unique identity for a program, carried by every clone of it
+/// and recorded by the workspaces it makes.
+fn next_program_id() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
 fn range_error(code: &'static str, message: String) -> SimulateError {
@@ -416,30 +439,50 @@ fn native_only(compiler: Compiler, call: &str) -> SimulateError {
 
 /// A compiled right-hand side, possibly restricted to one operator's terms
 /// and writes (API_SPEC §5.8). Made by [`rhs_program`].
+///
+/// Built once and immutable: `Send + Sync`, and cheap to clone (every clone
+/// shares one program). Evaluate it concurrently with one [`RhsWorkspace`]
+/// per thread; a call never starts a thread of its own.
+#[derive(Clone)]
 pub struct RhsProgram {
-    flat: Rc<FlattenedSystem>,
-    compiled: Rc<ArrayCompiled>,
+    inner: Arc<ProgramInner>,
+}
+
+struct ProgramInner {
+    id: u64,
+    flat: Arc<FlattenedSystem>,
+    model: Arc<ProgramModel>,
     compiler: Compiler,
+    runtime_array_parameters: bool,
     /// The native tape, built at construction (`None` under `interpreter`).
     tape: Option<Arc<TapeProgram>>,
+    /// The forcing slot each of the tape's forcing loads reads.
+    slot_of: Vec<u32>,
     writes: Vec<String>,
     aux: Vec<String>,
     blocks: Blocks,
     layout: TileLayout,
-    /// The forcing buffers the program was built against: the Problem's.
-    forcing: Arc<HashMap<String, ArrayD<f64>>>,
+    state_layout: Vec<StateBlock>,
+    params: Vec<ParamSlot>,
+    slots: Arc<[ForcingSlot]>,
+    /// Each slot's buffer from the Problem's forcing (or the declared
+    /// default), `None` where neither gives one.
+    defaults: Vec<Option<Arc<[f64]>>>,
     /// Per variable of the compiled state vector, in its order: the input it
     /// is read from and the block offsets `(input base, state offset, len)`.
     scatter: Vec<(TileInput, usize, usize, usize)>,
+    /// Whether `u` is the compiled state vector itself (every state written,
+    /// each at its own offset), so a call reads `u` and writes `du` in place.
+    identity: bool,
     declared: Arc<HashSet<String>>,
 }
 
 impl std::fmt::Debug for RhsProgram {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RhsProgram")
-            .field("compiler", &self.compiler)
-            .field("writes", &self.writes)
-            .field("aux", &self.aux)
+            .field("compiler", &self.inner.compiler)
+            .field("writes", &self.inner.writes)
+            .field("aux", &self.inner.aux)
             .finish()
     }
 }
@@ -450,7 +493,8 @@ impl std::fmt::Debug for RhsProgram {
 /// names on every route; it writes every state.
 ///
 /// `native` and `interpreter` problems are accepted; any other compiler is
-/// `compiler_unavailable`.
+/// `compiler_unavailable`. Under `native` a rule the tape cannot express is
+/// `compiler_refused_rule`.
 pub fn rhs_program(prob: &EsmProblem) -> Result<RhsProgram, SimulateError> {
     let compiler = prob.compiler;
     if !matches!(compiler, Compiler::Native | Compiler::Interpreter) {
@@ -479,7 +523,13 @@ pub fn rhs_program(prob: &EsmProblem) -> Result<RhsProgram, SimulateError> {
         crate::problem::Backend::Array(c) => problem_forcing(c, &flat),
         crate::problem::Backend::Static(_) => HashMap::new(),
     };
-    RhsProgram::compile(Rc::new(flat), compiler, None, Arc::new(forcing))
+    RhsProgram::compile(
+        Arc::new(flat),
+        compiler,
+        None,
+        ForcingSource::Problem(&forcing),
+        prob.runtime_array_parameters,
+    )
 }
 
 /// The Problem's forcing buffer, keyed by the flattened names: an entry whose
@@ -503,34 +553,159 @@ fn problem_forcing(c: &ArrayCompiled, flat: &FlattenedSystem) -> HashMap<String,
         .collect()
 }
 
+/// Where a program's forcing slots and their default buffers come from.
+enum ForcingSource<'a> {
+    /// The Problem's forcing buffer, by flattened name.
+    Problem(&'a HashMap<String, ArrayD<f64>>),
+    /// The program a selection is made from: the same slots and buffers.
+    Parent(&'a ProgramInner),
+}
+
 /// `names` in flat-layout order (API_SPEC §5.8): 0-d states by sorted name,
 /// then arrays by sorted name.
-fn flat_layout_order(names: &mut [String], compiled: &ArrayCompiled) {
+fn flat_layout_order(names: &mut [String], model: &ProgramModel) {
     names.sort_by(|a, b| {
-        let rank = |n: &String| !compiled.var_shapes[n].shape.is_empty();
+        let rank = |n: &String| !model.var_shapes[n].shape.is_empty();
         (rank(a), a).cmp(&(rank(b), b))
     });
+}
+
+/// A row-major array's elements in column-major order (first index fastest).
+fn column_major(a: &ArrayD<f64>) -> Arc<[f64]> {
+    a.view().reversed_axes().iter().copied().collect()
+}
+
+/// The forcing slots of `model`: every name its forcing buffer serves that
+/// has a shape, by name, each with its default buffer.
+fn forcing_slots(
+    model: &ProgramModel,
+    problem: &HashMap<String, ArrayD<f64>>,
+    array_params: &HashSet<String>,
+) -> (Vec<ForcingSlot>, Vec<Option<Arc<[f64]>>>) {
+    let mut names: Vec<&String> = model.forcing_decls.keys().collect();
+    names.sort();
+    let mut slots = Vec::new();
+    let mut defaults = Vec::new();
+    for name in names {
+        let Some(shape) = model.forcing_decls[name].clone() else {
+            continue;
+        };
+        let default = match problem.get(name) {
+            Some(a) => Some(column_major(a)),
+            None => model
+                .forcing_defaults
+                .get(name)
+                .cloned()
+                .flatten()
+                .and_then(|(s, v)| ArrayD::from_shape_vec(IxDyn(&s), v).ok())
+                .map(|a| column_major(&a)),
+        };
+        slots.push(ForcingSlot {
+            name: name.clone(),
+            shape,
+            kind: if array_params.contains(name) {
+                SlotKind::ArrayParameter
+            } else {
+                SlotKind::Forcing
+            },
+        });
+        defaults.push(default);
+    }
+    (slots, defaults)
+}
+
+/// The slot each forcing load of `tape` reads, refusing a load of a name no
+/// slot serves or at a shape the slot does not have.
+fn slot_map(tape: &TapeProgram, slots: &[ForcingSlot]) -> Result<Vec<u32>, SimulateError> {
+    tape.forcings
+        .iter()
+        .map(|fr| {
+            let k = slots
+                .iter()
+                .position(|s| s.name == fr.name)
+                .ok_or_else(|| {
+                    build_error(format!(
+                        "`rhs_program`: the program reads forcing `{}`, which no forcing slot serves",
+                        fr.name
+                    ))
+                })?;
+            if slots[k].shape[..] != fr.shape[..] {
+                return Err(build_error(format!(
+                    "`rhs_program`: the program reads forcing `{}` as {:?}, its slot is {:?}",
+                    fr.name, &fr.shape[..], slots[k].shape
+                )));
+            }
+            Ok(k as u32)
+        })
+        .collect()
 }
 
 impl RhsProgram {
     /// Compile `flat` under `compiler`. `writes` is the selection's `W_k`
     /// (`None`: every state).
     fn compile(
-        flat: Rc<FlattenedSystem>,
+        flat: Arc<FlattenedSystem>,
         compiler: Compiler,
         writes: Option<&[String]>,
-        forcing: Arc<HashMap<String, ArrayD<f64>>>,
+        forcing: ForcingSource,
+        runtime_array_parameters: bool,
     ) -> Result<RhsProgram, SimulateError> {
-        let mut compiled = ArrayCompiled::from_flattened(&flat)?;
+        let mut compiled = ArrayCompiled::from_flattened_with(&flat, runtime_array_parameters)?;
         compiled.runtime_mode = match compiler {
             Compiler::Interpreter => super::RuntimeMode::Interpreter,
             _ => super::RuntimeMode::Native,
         };
+        // Every forcing read compiles against the shape the data has.
+        let shapes: Vec<(String, Vec<usize>)> = match &forcing {
+            ForcingSource::Problem(m) => m
+                .iter()
+                .map(|(k, a)| (k.clone(), a.shape().to_vec()))
+                .collect(),
+            ForcingSource::Parent(p) => p
+                .slots
+                .iter()
+                .map(|s| (s.name.clone(), s.shape.clone()))
+                .collect(),
+        };
+        for (name, shape) in shapes {
+            if let Some(decl) = compiled.forcing_decls.get_mut(&name) {
+                *decl = Some(shape);
+            }
+        }
         let tape = match compiler {
-            Compiler::Native => Some(compiled.strict_tape(&HashSet::new())?),
+            Compiler::Native => {
+                let discrete: HashSet<String> = compiled.forcing_decls.keys().cloned().collect();
+                Some(compiled.strict_tape(&discrete)?)
+            }
             _ => None,
         };
-        let states: Vec<String> = compiled.var_shapes.keys().cloned().collect();
+        let model = ProgramModel::from_compiled(compiled);
+        let array_params: HashSet<String> = if runtime_array_parameters {
+            model
+                .forcing_decls
+                .keys()
+                .filter(|n| {
+                    flat.parameters.get(*n).is_some_and(|v| {
+                        v.update.is_none() && v.shape.as_ref().is_some_and(|s| !s.is_empty())
+                    })
+                })
+                .cloned()
+                .collect()
+        } else {
+            HashSet::new()
+        };
+        let (slots, defaults): (Arc<[ForcingSlot]>, Vec<Option<Arc<[f64]>>>) = match forcing {
+            ForcingSource::Problem(m) => {
+                let (s, d) = forcing_slots(&model, m, &array_params);
+                (s.into(), d)
+            }
+            ForcingSource::Parent(p) => (Arc::clone(&p.slots), p.defaults.clone()),
+        };
+        let slot_of = match &tape {
+            Some(t) => slot_map(t, &slots)?,
+            None => Vec::new(),
+        };
+        let states: Vec<String> = model.var_shapes.keys().cloned().collect();
         let mut writes: Vec<String> = match writes {
             None => states.clone(),
             Some(w) => states.iter().filter(|s| w.contains(s)).cloned().collect(),
@@ -540,13 +715,13 @@ impl RhsProgram {
             .filter(|s| !writes.contains(s))
             .cloned()
             .collect();
-        flat_layout_order(&mut writes, &compiled);
-        flat_layout_order(&mut aux, &compiled);
-        let set_names = state_set_names(&flat, &compiled);
+        flat_layout_order(&mut writes, &model);
+        flat_layout_order(&mut aux, &model);
+        let set_names = state_set_names(&flat, &model);
         let mut entries = Vec::new();
         for (input, names) in [(TileInput::U, &writes), (TileInput::Aux, &aux)] {
             for name in names {
-                let vs = &compiled.var_shapes[name];
+                let vs = &model.var_shapes[name];
                 let bx: Vec<(i64, i64)> = vs
                     .shape
                     .iter()
@@ -558,7 +733,7 @@ impl RhsProgram {
         }
         let blocks = Blocks::build(entries);
         let layout = blocks.public();
-        let scatter = compiled
+        let scatter: Vec<(TileInput, usize, usize, usize)> = model
             .var_shapes
             .iter()
             .map(|(name, vs)| {
@@ -567,70 +742,152 @@ impl RhsProgram {
                 (v.input, v.base, vs.flat_offset, len)
             })
             .collect();
-        let declared = Arc::new(compiled.declared_names.clone());
+        let identity = scatter
+            .iter()
+            .all(|&(input, base, off, _)| input == TileInput::U && base == off);
+        let state_layout = layout
+            .u
+            .iter()
+            .map(|b| StateBlock {
+                name: b.name.clone(),
+                flat_offset: b.base,
+                shape: b
+                    .storage
+                    .iter()
+                    .map(|(lo, hi)| (hi - lo + 1).max(0) as usize)
+                    .collect(),
+            })
+            .collect();
+        let params = model
+            .param_names
+            .iter()
+            .zip(&model.param_defaults)
+            .map(|(name, default)| ParamSlot {
+                name: name.clone(),
+                default: *default,
+            })
+            .collect();
+        let declared = Arc::new(model.declared_names.clone());
         Ok(RhsProgram {
-            flat,
-            compiled: Rc::new(compiled),
-            compiler,
-            tape,
-            writes,
-            aux,
-            blocks,
-            layout,
-            forcing,
-            scatter,
-            declared,
+            inner: Arc::new(ProgramInner {
+                id: next_program_id(),
+                flat,
+                model: Arc::new(model),
+                compiler,
+                runtime_array_parameters,
+                tape,
+                slot_of,
+                writes,
+                aux,
+                blocks,
+                layout,
+                state_layout,
+                params,
+                slots,
+                defaults,
+                scatter,
+                identity,
+                declared,
+            }),
         })
+    }
+
+    pub(super) fn slots_arc(&self) -> Arc<[ForcingSlot]> {
+        Arc::clone(&self.inner.slots)
     }
 
     /// The compiler this program was built with.
     pub fn compiler(&self) -> Compiler {
-        self.compiler
+        self.inner.compiler
     }
 
     /// The variables the program writes (`u`), in flat-layout order.
     pub fn writes(&self) -> &[String] {
-        &self.writes
+        &self.inner.writes
     }
 
     /// The states the program reads but does not write (`aux`), in
     /// flat-layout order.
     pub fn aux(&self) -> &[String] {
-        &self.aux
+        &self.inner.aux
     }
 
     /// The whole-domain layout of `u` and `aux`.
     pub fn layout(&self) -> &TileLayout {
-        &self.layout
+        &self.inner.layout
     }
 
-    /// The positional parameter names `p` is read against.
-    pub fn parameter_names(&self) -> &[String] {
-        &self.compiled.param_names
+    /// The length of `u` (and of `du`).
+    pub fn n_states(&self) -> usize {
+        self.inner.blocks.u_len
     }
 
-    /// The parameter vector of the declared defaults (`NaN` where a parameter
-    /// declares none).
-    pub fn default_parameters(&self) -> Vec<f64> {
-        self.compiled
-            .param_defaults
-            .iter()
-            .map(|d| d.unwrap_or(f64::NAN))
-            .collect()
+    /// `u`'s blocks in flat order, each column-major (first index fastest):
+    /// the `u` half of [`Self::layout`].
+    pub fn state_layout(&self) -> &[StateBlock] {
+        &self.inner.state_layout
+    }
+
+    /// The parameters `p` holds, in its order: the order the program's tape
+    /// reads them in (sorted flattened names).
+    pub fn parameters(&self) -> &[ParamSlot] {
+        &self.inner.params
+    }
+
+    /// The parameter vector with `overrides` applied over the declared
+    /// defaults. Strict: a key naming no parameter, or a parameter with
+    /// neither an override nor a default, is an error naming it.
+    pub fn parameter_vector(
+        &self,
+        overrides: &HashMap<String, f64>,
+    ) -> Result<Vec<f64>, SimulateError> {
+        self.inner.model.parameter_vector(overrides)
+    }
+
+    /// The buffers a [`ForcingSet`] for this program holds, in its order.
+    pub fn forcing_slots(&self) -> &[ForcingSlot] {
+        &self.inner.slots
+    }
+
+    /// A forcing set of the Problem's forcing as it was when the program was
+    /// built (a slot the Problem held no data for takes its declared default).
+    /// `Fault` (`E_TREEWALK_UNBOUND_NAME`) names a slot with neither.
+    pub fn default_forcing(&self) -> Result<ForcingSet, RhsError> {
+        let mut bufs = Vec::with_capacity(self.inner.slots.len());
+        for (slot, d) in self.inner.slots.iter().zip(&self.inner.defaults) {
+            match d {
+                Some(b) => bufs.push(Arc::clone(b)),
+                None => {
+                    return Err(RhsError::Fault {
+                        code: "E_TREEWALK_UNBOUND_NAME",
+                        message: format!(
+                            "forcing slot `{}`: the Problem held no data for it and it declares \
+                             no default; build the forcing set with `ForcingSet::new`",
+                            slot.name
+                        ),
+                    });
+                }
+            }
+        }
+        ForcingSet::new(self, bufs)
     }
 
     /// The declared default of every state cell, as `(u, aux)` in this
     /// program's whole-domain layout (`NaN` where none is declared).
     pub fn default_state(&self) -> (Vec<f64>, Vec<f64>) {
-        let mut u = vec![f64::NAN; self.blocks.u_len];
-        let mut aux = vec![f64::NAN; self.blocks.aux_len];
-        for ((name, vs), default) in self
-            .compiled
+        let inner = &*self.inner;
+        let mut u = vec![f64::NAN; inner.blocks.u_len];
+        let mut aux = vec![f64::NAN; inner.blocks.aux_len];
+        for ((name, vs), default) in inner
+            .model
             .var_shapes
             .iter()
-            .zip(&self.compiled.state_defaults)
+            .zip(&inner.model.state_defaults)
         {
-            let v = self.blocks.var(name).expect("every state is in the layout");
+            let v = inner
+                .blocks
+                .var(name)
+                .expect("every state is in the layout");
             let dst = match v.input {
                 TileInput::U => &mut u,
                 TileInput::Aux => &mut aux,
@@ -664,36 +921,38 @@ impl RhsProgram {
 
     /// The flattened system this program was compiled from.
     pub fn flattened(&self) -> &FlattenedSystem {
-        &self.flat
+        &self.inner.flat
     }
 
     /// The program for one operator: the summands of each `D(x)` whose
     /// provenance is in `sel.terms`, writing only `sel.writes` (API_SPEC
     /// §5.8). `range_selection_writes_incomplete` when `writes` omits a
-    /// variable a kept summand writes.
+    /// variable a kept summand writes. It takes the same forcing sets.
     pub fn select(&self, sel: &RhsSelection) -> Result<RhsProgram, SimulateError> {
-        let (flat, writes) = select::select(&self.flat, sel)?;
+        let (flat, writes) = select::select(&self.inner.flat, sel)?;
+        let _precision = self.inner.model.precision.enter();
         RhsProgram::compile(
-            Rc::new(flat),
-            self.compiler,
+            Arc::new(flat),
+            self.inner.compiler,
             Some(&writes),
-            Arc::clone(&self.forcing),
+            ForcingSource::Parent(&self.inner),
+            self.inner.runtime_array_parameters,
         )
     }
 
     /// How far the owned output reaches into each state along each decomposed
     /// or face index set of `dec` (RFC U3 §3). `native` only.
     pub fn halo(&self, dec: &Decomposition) -> Result<HaloReport, SimulateError> {
-        if self.compiler != Compiler::Native {
-            return Err(native_only(self.compiler, "halo"));
+        if self.inner.compiler != Compiler::Native {
+            return Err(native_only(self.inner.compiler, "halo"));
         }
         analysis::halo(self, dec)
     }
 
     /// This program restricted to one tile of `dec` (RFC U3 §4). `native` only.
     pub fn tile(&self, dec: &Decomposition, bx: &TileBox) -> Result<TileProgram, SimulateError> {
-        if self.compiler != Compiler::Native {
-            return Err(native_only(self.compiler, "tile"));
+        if self.inner.compiler != Compiler::Native {
+            return Err(native_only(self.inner.compiler, "tile"));
         }
         tile::build(self, dec, bx)
     }
@@ -701,33 +960,52 @@ impl RhsProgram {
     /// This program over a run-time list of at most `capacity` cells or
     /// columns (RFC U3 §6). `native` only.
     pub fn lanes(&self, kind: LaneKind, capacity: usize) -> Result<LaneProgram, SimulateError> {
-        if self.compiler != Compiler::Native {
-            return Err(native_only(self.compiler, "lanes"));
+        if self.inner.compiler != Compiler::Native {
+            return Err(native_only(self.inner.compiler, "lanes"));
         }
         lanes::build(self, &kind, capacity)
     }
 
     /// Buffers for [`Self::eval_into`].
     pub fn new_workspace(&self) -> RhsWorkspace {
-        let exec = match &self.tape {
-            Some(t) => WsExec::Tape(Box::new(TapeCtx::new(Arc::clone(t)))),
+        let inner = &*self.inner;
+        let exec = match &inner.tape {
+            Some(t) => {
+                let mut ctx = TapeCtx::new(Arc::clone(t));
+                ctx.set_serial();
+                WsExec::Tape(Box::new(ctx))
+            }
             None => {
-                let mut s = RhsScratch::new(&self.compiled.var_shapes);
-                s.set_const_arrays(Arc::clone(&self.compiled.const_scope));
-                WsExec::Scratch(Box::new(s))
+                let mut s = RhsScratch::new(&inner.model.var_shapes);
+                s.set_const_arrays(Arc::clone(&inner.model.const_scope));
+                WsExec::Interp(Box::new(InterpWs {
+                    scratch: s,
+                    forcing: RefCell::new(HashMap::new()),
+                    epoch: 0,
+                }))
             }
         };
+        let n = if inner.identity {
+            0
+        } else {
+            inner.model.n_states
+        };
         RhsWorkspace {
-            owner: self as *const _ as usize,
-            state: vec![0.0; self.compiled.n_states],
-            dy: vec![0.0; self.compiled.n_states],
+            owner: inner.id,
+            state: vec![0.0; n],
+            dy: vec![0.0; n],
             exec,
+            _not_sync: PhantomData,
         }
     }
 
     /// Evaluate the program over the whole domain: `du = f(u, aux, p, t)` in
-    /// [`Self::layout`]. This is the reference every tile and lane of the
-    /// program is bitwise against.
+    /// [`Self::layout`], reading `forcing`. Every element of `du` is written
+    /// (zero for a state with no `D` equation). This is the reference every
+    /// tile and lane of the program is bitwise against.
+    ///
+    /// The result depends only on the program and the arguments' values:
+    /// not on the thread, the workspace's history, or any other call.
     #[allow(clippy::too_many_arguments)]
     pub fn eval_into(
         &self,
@@ -735,75 +1013,132 @@ impl RhsProgram {
         aux: &[f64],
         p: &[f64],
         t: f64,
+        forcing: &ForcingSet,
         du: &mut [f64],
         ws: &mut RhsWorkspace,
-    ) -> Result<(), SimulateError> {
-        check_lengths(&self.blocks, u, aux, du, p, self.compiled.param_names.len())?;
-        let forcing = &*self.forcing;
-        if ws.owner != self as *const _ as usize {
-            return Err(build_error(
-                "`eval_into`: the workspace was made by another program".to_string(),
-            ));
-        }
-        for &(input, base, off, len) in &self.scatter {
-            let src = match input {
-                TileInput::U => u,
-                TileInput::Aux => aux,
-            };
-            ws.state[off..off + len].copy_from_slice(&src[base..base + len]);
-        }
-        let _precision = self.compiled.precision.enter();
-        super::take_const_array_oob();
-        match &mut ws.exec {
+    ) -> Result<(), RhsError> {
+        let inner = &*self.inner;
+        check_lengths(&inner.blocks, u, aux, du, p, inner.params.len())?;
+        check_owner(ws, inner.id)?;
+        check_forcing(forcing, &inner.slots)?;
+        let _precision = inner.model.precision.enter();
+        let scope = super::FaultScope::enter();
+        let RhsWorkspace {
+            state, dy, exec, ..
+        } = ws;
+        let (state, dy): (&[f64], &mut [f64]) = if inner.identity {
+            (u, &mut *du)
+        } else {
+            for &(input, base, off, len) in &inner.scatter {
+                let src = match input {
+                    TileInput::U => u,
+                    TileInput::Aux => aux,
+                };
+                state[off..off + len].copy_from_slice(&src[base..base + len]);
+            }
+            (state.as_slice(), dy.as_mut_slice())
+        };
+        match exec {
             WsExec::Tape(ctx) => {
                 let inputs = CallInputs {
-                    state: &ws.state,
+                    state,
                     params: p,
-                    forcing,
+                    forcing: ForcingView::Slots {
+                        bufs: forcing.bufs(),
+                        slot_of: &inner.slot_of,
+                    },
+                    forcing_epoch: Some(forcing.epoch()),
                     t,
-                    declared: &self.declared,
+                    declared: &inner.declared,
                 };
-                run_tape_inputs(ctx, &inputs, &mut ws.dy, true);
+                run_tape_inputs(ctx, &inputs, dy, true);
+                tape_fault(scope, ctx)?;
             }
             WsExec::Lanes { .. } => unreachable!("a whole-domain workspace runs one program"),
-            WsExec::Scratch(scratch) => {
-                let cell = RefCell::new(forcing.clone());
-                let mut stats = RhsStats::default();
+            WsExec::Interp(iw) => {
+                if iw.epoch != forcing.epoch() {
+                    fill_forcing_map(&mut iw.forcing.borrow_mut(), forcing);
+                    iw.epoch = forcing.epoch();
+                }
+                let m = &*inner.model;
                 evaluate_rhs_with_scratch(
                     &RhsCall {
-                        rhs_rules: &self.compiled.rhs_rules,
-                        observed_rules: &self.compiled.observed_rules,
-                        rule_set: self.compiled.rule_set,
-                        var_shapes: &self.compiled.var_shapes,
-                        param_names: &self.compiled.param_names,
-                        state: &ws.state,
+                        rhs_rules: &m.rhs_rules,
+                        observed_rules: &m.observed_rules,
+                        rule_set: m.rule_set,
+                        var_shapes: &m.var_shapes,
+                        param_names: &m.param_names,
+                        state,
                         params: p,
-                        forcing: &cell,
+                        forcing: &iw.forcing,
                         t,
-                        declared: &self.compiled.declared_names,
+                        declared: &m.declared_names,
                     },
-                    &mut ws.dy,
+                    dy,
                     true,
-                    &mut stats,
-                    scratch,
+                    &mut RhsStats::default(),
+                    &mut iw.scratch,
                 );
+                if let Some(msg) = scope.finish() {
+                    return Err(forcing::fault(msg));
+                }
             }
         }
-        take_fault()?;
-        for &(input, base, off, len) in &self.scatter {
-            if input == TileInput::U {
-                du[base..base + len].copy_from_slice(&ws.dy[off..off + len]);
+        if !inner.identity {
+            for &(input, base, off, len) in &inner.scatter {
+                if input == TileInput::U {
+                    du[base..base + len].copy_from_slice(&ws.dy[off..off + len]);
+                }
             }
         }
         Ok(())
     }
 }
 
-/// The fail-closed evaluation fault the call latched, as an error.
-fn take_fault() -> Result<(), SimulateError> {
-    match super::take_const_array_oob() {
-        Some(details) => {
-            Err(crate::compile_error::CompileError::InterpreterBuildError { details }.into())
+/// The by-name forcing buffer the per-cell evaluator reads, from `set`:
+/// row-major arrays, overwritten in place when one of that shape is there.
+fn fill_forcing_map(map: &mut HashMap<String, ArrayD<f64>>, set: &ForcingSet) {
+    for (k, slot) in set.slots().iter().enumerate() {
+        let src = ndarray::ArrayViewD::from_shape(IxDyn(&slot.shape).f(), set.buffer(k))
+            .expect("a forcing set's buffer holds its slot's shape");
+        match map.get_mut(&slot.name) {
+            Some(a) if a.shape() == &slot.shape[..] => a.assign(&src),
+            _ => {
+                map.insert(slot.name.clone(), src.as_standard_layout().into_owned());
+            }
+        }
+    }
+}
+
+fn check_forcing(set: &ForcingSet, slots: &Arc<[ForcingSlot]>) -> Result<(), RhsError> {
+    if !set.fits(slots) {
+        return Err(forcing::shape(
+            "forcing set (made for another program's slots)",
+            slots.len(),
+            set.slots().len(),
+        ));
+    }
+    Ok(())
+}
+
+fn check_owner(ws: &RhsWorkspace, id: u64) -> Result<(), RhsError> {
+    if ws.owner != id {
+        return Err(forcing::shape(
+            "workspace (made by another program)",
+            id as usize,
+            ws.owner as usize,
+        ));
+    }
+    Ok(())
+}
+
+/// The fault a tape call latched, as an error, forgetting the sections the
+/// call primed (they hold the fault's values).
+fn tape_fault(scope: super::FaultScope, ctx: &mut TapeCtx) -> Result<(), RhsError> {
+    match scope.finish() {
+        Some(msg) => {
+            ctx.invalidate_sections();
+            Err(forcing::fault(msg))
         }
         None => Ok(()),
     }
@@ -816,23 +1151,18 @@ fn check_lengths(
     du: &[f64],
     p: &[f64],
     n_params: usize,
-) -> Result<(), SimulateError> {
-    let bad = |what: &str, got: usize, want: usize| {
-        Err(build_error(format!(
-            "`eval_into`: `{what}` has {got} elements, the program's layout {want}"
-        )))
-    };
+) -> Result<(), RhsError> {
     if u.len() != layout.u_len {
-        return bad("u", u.len(), layout.u_len);
+        return Err(forcing::shape("u", layout.u_len, u.len()));
     }
     if du.len() != layout.u_len {
-        return bad("du", du.len(), layout.u_len);
+        return Err(forcing::shape("du", layout.u_len, du.len()));
     }
     if aux.len() != layout.aux_len {
-        return bad("aux", aux.len(), layout.aux_len);
+        return Err(forcing::shape("aux", layout.aux_len, aux.len()));
     }
     if p.len() != n_params {
-        return bad("p", p.len(), n_params);
+        return Err(forcing::shape("p", n_params, p.len()));
     }
     Ok(())
 }
@@ -841,7 +1171,7 @@ fn check_lengths(
 /// flattened declaration (empty when it names none at the compiled rank).
 fn state_set_names(
     flat: &FlattenedSystem,
-    compiled: &ArrayCompiled,
+    compiled: &ProgramModel,
 ) -> HashMap<String, Vec<String>> {
     let sizes = index_set_sizes(flat);
     compiled
@@ -931,10 +1261,11 @@ fn axis_spec(dec: &Decomposition, set: Option<&str>, sizes: &HashMap<String, i64
 /// The walker's view of every state and every array observed of `prog` under
 /// `dec`.
 fn var_infos(prog: &RhsProgram, dec: &Decomposition) -> HashMap<String, VarInfo> {
+    let prog = &*prog.inner;
     let sizes = index_set_sizes(&prog.flat);
-    let set_names = state_set_names(&prog.flat, &prog.compiled);
+    let set_names = state_set_names(&prog.flat, &prog.model);
     let mut out = HashMap::new();
-    for (name, vs) in &prog.compiled.var_shapes {
+    for (name, vs) in &prog.model.var_shapes {
         let sets = &set_names[name];
         let axes = (0..vs.shape.len())
             .map(|d| axis_spec(dec, sets.get(d).map(String::as_str), &sizes))
@@ -947,7 +1278,7 @@ fn var_infos(prog: &RhsProgram, dec: &Decomposition) -> HashMap<String, VarInfo>
             .collect();
         out.insert(name.clone(), VarInfo { axes, extent });
     }
-    for rule in &prog.compiled.observed_rules {
+    for rule in &prog.model.observed_rules {
         let (var, ranges) = match rule {
             super::AlgebraicRule::ArrayLoop {
                 var, output_ranges, ..

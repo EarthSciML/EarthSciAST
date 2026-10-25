@@ -103,7 +103,7 @@ fn local_reach(
 
 pub(super) fn halo(prog: &RhsProgram, dec: &Decomposition) -> Result<HaloReport, SimulateError> {
     let vars = var_infos(prog, dec);
-    let compiled = &*prog.compiled;
+    let compiled = &*prog.inner.model;
     let mut top = Reach::new();
     for rule in &compiled.rhs_rules {
         let RhsRule::ArrayLoop {
@@ -210,9 +210,10 @@ pub(super) fn halo(prog: &RhsProgram, dec: &Decomposition) -> Result<HaloReport,
     }
     let mut entries = std::collections::BTreeMap::new();
     for name in prog
+        .inner
         .writes
         .iter()
-        .chain(&prog.aux)
+        .chain(&prog.inner.aux)
         .filter(|n| read.contains(*n))
     {
         let info = &vars[name];

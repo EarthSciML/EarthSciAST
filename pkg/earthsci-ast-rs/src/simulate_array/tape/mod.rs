@@ -99,7 +99,9 @@ pub mod xla_emit;
 
 #[cfg(test)]
 pub(crate) use exec::section_primes;
-pub(in crate::simulate_array) use exec::{CallInputs, TapeCtx, run_tape_call, run_tape_inputs};
+pub(in crate::simulate_array) use exec::{
+    CallInputs, ForcingView, TapeCtx, run_tape_call, run_tape_inputs,
+};
 pub(crate) use ir::*;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use lower::StandaloneError;
@@ -567,11 +569,15 @@ impl ArrayCompiled {
     /// the tile's clipped rules and storage-box state layout, `tile` the
     /// domains its reads are classified against. Built with the same sections
     /// and fusion as the whole-domain tape; `Err` names the declined rules.
+    ///
+    /// Every forcing name is discrete: a program reads its forcing from the
+    /// set each call names, so every forcing load, and every observed that
+    /// reads one, is in the SEGMENT section, re-run when the set changes.
     pub(crate) fn build_tile_tape(&self, tile: &TileLowering) -> Result<TapeProgram, DeclinedTape> {
-        let none = HashSet::new();
-        let const_names = self.classify_static_observeds(&none);
-        let seg_names = self.classify_segment_invariant_observeds(&none, true);
-        let forcing = self.forcing_inputs(&none);
+        let discrete: HashSet<String> = self.forcing_decls.keys().cloned().collect();
+        let const_names = self.classify_static_observeds(&discrete);
+        let seg_names = self.classify_segment_invariant_observeds(&discrete, true);
+        let forcing = self.forcing_inputs(&discrete);
         build_tape_program(
             self,
             &const_names,

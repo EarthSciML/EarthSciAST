@@ -2016,6 +2016,38 @@ pub fn take_const_array_oob() -> Option<String> {
     CONST_OOB.with(|c| c.borrow_mut().take().map(|l| l.msg))
 }
 
+/// The fault latch of one program call ([`crate::RhsProgram::eval_into`]):
+/// made on entry, it holds whatever the caller had latched and leaves the
+/// latch empty for the call; [`Self::finish`] takes the call's own fault and
+/// puts the caller's back. A call runs on one thread and starts no other, so
+/// nothing it latches is visible outside it, and nothing latched outside it
+/// is reported as its own.
+pub(crate) struct FaultScope {
+    prev: Option<LatchedFault>,
+}
+
+impl FaultScope {
+    pub(crate) fn enter() -> FaultScope {
+        FaultScope {
+            prev: CONST_OOB.with(|c| c.borrow_mut().take()),
+        }
+    }
+
+    /// The fault the call latched, if any; the caller's latch is restored.
+    pub(crate) fn finish(mut self) -> Option<String> {
+        let prev = self.prev.take();
+        CONST_OOB.with(|c| std::mem::replace(&mut *c.borrow_mut(), prev).map(|l| l.msg))
+    }
+}
+
+impl Drop for FaultScope {
+    fn drop(&mut self) {
+        if let Some(prev) = self.prev.take() {
+            CONST_OOB.with(|c| *c.borrow_mut() = Some(prev));
+        }
+    }
+}
+
 /// Latch the FIRST fail-closed gather diagnostic of this evaluation. The
 /// tape's `Instr::Fault` latches through here too, so both evaluators keep
 /// the same first-wins record.
