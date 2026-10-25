@@ -1438,6 +1438,55 @@ fn couple_multiplicative_without_a_tendency_is_an_error() {
     }
 }
 
+/// esm-libraries-spec §4.7.2: a multiplicative factor scales the target's ODE
+/// right-hand side — the last `D(to, t)` equation — even when a bare `to ~ …`
+/// equation comes after it in document order.
+#[test]
+fn couple_multiplicative_scales_the_tendency_not_a_later_bare_equation() {
+    let doc = r#"{
+      "esm": "1.0.0",
+      "metadata": {"name": "T"},
+      "models": {
+        "Chem": {
+          "variables": {
+            "x": {"type": "unknown", "default": 1.0},
+            "f": {"type": "parameter", "default": 0.5},
+            "g": {"type": "parameter", "default": 2.0}
+          },
+          "equations": [
+            {"lhs": {"op": "D", "args": ["x"], "wrt": "t"}, "rhs": "f"},
+            {"lhs": "x", "rhs": "g"}
+          ]
+        },
+        "Surface": {
+          "variables": {"m": {"type": "parameter", "default": 3.0}},
+          "equations": []
+        }
+      },
+      "coupling": [
+        {"type": "couple", "systems": ["Chem", "Surface"],
+         "connector": {"equations": [
+           {"from": "Surface.m", "to": "Chem.x", "transform": "multiplicative"}
+         ]}}
+      ]
+    }"#;
+    let file = earthsci_ast::load_string(doc).expect("document loads");
+    let flat = flatten(&file).expect("flattens");
+    let rhs_of = |want_tendency: bool| {
+        flat.equations
+            .iter()
+            .find(|eq| matches!(&eq.lhs, Expr::Operator(_)) == want_tendency)
+            .map(|eq| earthsci_ast::to_ascii(&eq.rhs))
+            .expect("both equations survive")
+    };
+    assert_eq!(
+        rhs_of(true),
+        "Chem.f * Surface.m",
+        "only the tendency is scaled"
+    );
+    assert_eq!(rhs_of(false), "Chem.g", "the bare equation is untouched");
+}
+
 /// The deliberate asymmetry (§4.7.2): `additive` against an absent tendency is
 /// well defined — zero is the additive identity — so the same shape with
 /// `transform: "additive"` must NOT raise.
