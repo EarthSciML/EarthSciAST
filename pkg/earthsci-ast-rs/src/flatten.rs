@@ -268,6 +268,23 @@ pub enum FlattenError {
     )]
     CoupleMultiplicativeNoTendency { target: String },
 
+    /// A [`FlattenedSystem`]'s per-equation list
+    /// ([`FlattenedSystem::equation_contributions`] or
+    /// [`FlattenedSystem::equation_lifted`]) has a different number of entries
+    /// than [`FlattenedSystem::equations`]. The lists are paired by position, so
+    /// one out of step cannot say which equation an entry belongs to.
+    #[error(
+        "contributions_out_of_step: FlattenedSystem.{field} has {entries} entries but the system \
+         has {equations} equations (esm-libraries-spec §4.7.5). Add or remove the entry alongside \
+         its equation, or clear the list to treat every right-hand side as one contribution of \
+         unknown origin."
+    )]
+    ContributionsOutOfStep {
+        field: &'static str,
+        entries: usize,
+        equations: usize,
+    },
+
     /// An `operator_compose` entry merged NOTHING (esm-libraries-spec §4.7.1
     /// step 5).
     ///
@@ -457,12 +474,15 @@ pub enum TermOrigin {
 /// One summand of a flattened equation's right-hand side, with its authors
 /// (esm-libraries-spec §4.7.5, "Per-term provenance").
 ///
-/// `origins` is non-empty and deduplicated in first-appearance order. It has
-/// more than one entry only where a non-additive merge (a multiplicative
-/// `couple`, or an `operator_compose` `translate` factor applied to a
-/// multi-contribution equation) collapsed several contributions into one
-/// indivisible expression. Provenance lives here, beside the expression tree,
-/// never on a node, so `expr` compares, hashes and interns as any expression.
+/// `origins` is deduplicated in first-appearance order, and non-empty except
+/// on an equation assembled without provenance (origin unknown). It has more
+/// than one entry only where several contributions collapsed into one
+/// indivisible expression: a non-additive merge (a multiplicative `couple`, or
+/// an `operator_compose` `translate` factor applied to a multi-contribution
+/// equation), or a caller's edit to a right-hand side the list no longer sums
+/// to ([`FlattenedSystem::equation_contributions`]). Provenance lives here,
+/// beside the expression tree, never on a node, so `expr` compares, hashes and
+/// interns as any expression.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Contribution {
     pub expr: Expr,
@@ -547,8 +567,20 @@ pub struct FlattenedSystem {
     /// with the component or coupling entry that authored it. [`flatten`]
     /// builds every right-hand side from this list. Empty only on a system
     /// assembled by hand rather than by [`flatten`].
+    ///
+    /// A public pass that rebuilds a right-hand side from this list first
+    /// checks that the list still sums to it; a caller who edited `rhs` after
+    /// flatten keeps the edit, and that equation's list collapses to one
+    /// contribution carrying every origin the list named.
     #[serde(default)]
     pub equation_contributions: Vec<Vec<Contribution>>,
+    /// One entry per entry of [`Self::equations`]: `true` where the pointwise
+    /// lift (esm-spec §10.5) wrapped the equation in an `faq` over the grid, so
+    /// that [`Self::equation_contributions`] sums to the `faq` body rather than
+    /// to the right-hand side. An authored `faq` right-hand side is `false`.
+    /// Empty (and omitted when serialized) when nothing was lifted.
+    #[serde(default, skip_serializing_if = "none_lifted")]
+    pub equation_lifted: Vec<bool>,
     /// Continuous events from every component, LHS rewritten to namespaced form.
     pub continuous_events: Vec<ContinuousEvent>,
     /// Discrete events from every component, LHS rewritten to namespaced form.
@@ -622,38 +654,71 @@ impl FlattenedSystem {
     /// contributions, origins unchanged, and rebuild the right-hand side from
     /// the rewritten list (esm-libraries-spec §4.7.5: a pass over flattened
     /// equations never moves a term across a contribution boundary).
+    /// Left-hand sides are not touched.
     ///
-    /// An equation with no contribution list (a system assembled by hand) has
-    /// its right-hand side rewritten whole. Left-hand sides are not touched.
-    pub(crate) fn map_rhs_per_contribution(&mut self, mut f: impl FnMut(&Expr) -> Expr) {
-        let paired = self.equation_contributions.len() == self.equations.len();
-        for (i, eq) in self.equations.iter_mut().enumerate() {
-            if !paired {
-                eq.rhs = f(&eq.rhs);
-                continue;
+    /// The system may have been edited by its caller since [`flatten`], so the
+    /// list is not trusted to match: an equation whose list no longer sums to
+    /// its right-hand side (or `faq` body) has the list collapsed to ONE
+    /// contribution — the current right-hand side, with the union of the
+    /// list's origins — before `f` runs, so the caller's edit survives. An
+    /// equation with no list (a system assembled by hand) is one contribution
+    /// with no origins. A non-empty list whose length differs from
+    /// [`Self::equations`]' is refused rather than paired up by position.
+    pub(crate) fn map_rhs_per_contribution(
+        &mut self,
+        mut f: impl FnMut(&Expr) -> Expr,
+    ) -> Result<(), FlattenError> {
+        let n = self.equations.len();
+        for (field, entries) in [
+            ("equation_contributions", self.equation_contributions.len()),
+            ("equation_lifted", self.equation_lifted.len()),
+        ] {
+            if entries != 0 && entries != n {
+                return Err(FlattenError::ContributionsOutOfStep {
+                    field,
+                    entries,
+                    equations: n,
+                });
             }
+        }
+        if self.equation_contributions.is_empty() {
+            self.equation_contributions = vec![Vec::new(); n];
+        }
+        for (i, eq) in self.equations.iter_mut().enumerate() {
+            let lifted = self.equation_lifted.get(i).copied().unwrap_or(false);
+            let wrapper = lift_wrapper(&eq.rhs, lifted).cloned();
+            let body = wrapper
+                .as_ref()
+                .and_then(|node| node.expr.as_deref())
+                .unwrap_or(&eq.rhs);
             let contributions = &mut self.equation_contributions[i];
-            let wrapped = lift_wrapper(&eq.rhs, contributions);
+            if contributions.is_empty() || fold_contributions(contributions) != *body {
+                *contributions = vec![Contribution {
+                    expr: body.clone(),
+                    origins: union_origins(contributions, None),
+                }];
+            }
             for c in contributions.iter_mut() {
                 c.expr = f(&c.expr);
             }
-            eq.rhs = rebuild_body(wrapped, fold_contributions(contributions));
+            eq.rhs = rebuild_body(wrapper, fold_contributions(contributions));
         }
+        Ok(())
     }
 }
 
-/// The `faq` the pointwise lift wrapped around `rhs`'s contribution sum, or
-/// `None` when `rhs` IS that sum (esm-libraries-spec §4.7.5: `body(eq)` is the
-/// `faq` body only when the lift produced the equation).
-fn lift_wrapper(rhs: &Expr, contributions: &[Contribution]) -> Option<ExpressionNode> {
-    let Expr::Operator(node) = rhs else {
-        return None;
-    };
-    if node.op != "faq" || contributions.is_empty() {
-        return None;
+/// Serde skip predicate for [`FlattenedSystem::equation_lifted`].
+fn none_lifted(flags: &[bool]) -> bool {
+    !flags.contains(&true)
+}
+
+/// The `faq` the pointwise lift wrapped around `rhs`, when `lifted` says it
+/// did (esm-libraries-spec §4.7.5: `body(eq)` is that `faq`'s body).
+fn lift_wrapper(rhs: &Expr, lifted: bool) -> Option<&ExpressionNode> {
+    match rhs {
+        Expr::Operator(node) if lifted => Some(node),
+        _ => None,
     }
-    let body = fold_contributions(contributions);
-    (node.expr.as_deref() == Some(&body) && *rhs != body).then(|| ExpressionNode::clone(node))
 }
 
 /// `body`, re-wrapped in the lift's `faq` when the equation carried one.
@@ -723,22 +788,15 @@ impl FlatEq {
 
     /// The sum the contributions stand for: `rhs`, or the lift's `faq` body.
     fn body(&self) -> &Expr {
-        if self.lifted
-            && let Expr::Operator(node) = &self.eq.rhs
-            && let Some(body) = node.expr.as_deref()
-        {
-            return body;
-        }
-        &self.eq.rhs
+        lift_wrapper(&self.eq.rhs, self.lifted)
+            .and_then(|node| node.expr.as_deref())
+            .unwrap_or(&self.eq.rhs)
     }
 
     /// Replace the contribution list and rebuild the right-hand side from it.
     fn set_contributions(&mut self, contributions: Vec<Contribution>) {
         let body = fold_contributions(&contributions);
-        self.eq.rhs = match (&self.eq.rhs, self.lifted) {
-            (Expr::Operator(node), true) => rebuild_body(Some(ExpressionNode::clone(node)), body),
-            _ => body,
-        };
+        self.eq.rhs = rebuild_body(lift_wrapper(&self.eq.rhs, self.lifted).cloned(), body);
         self.contributions = contributions;
     }
 
@@ -970,6 +1028,11 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
     let template_registry = merged_template_registry(file);
     check_registry_coupling_rewrites(&template_registry, &coupling_rewritten_names)?;
 
+    let equation_lifted: Vec<bool> = if equations.iter().any(|fe| fe.lifted) {
+        equations.iter().map(|fe| fe.lifted).collect()
+    } else {
+        Vec::new()
+    };
     let (equations, equation_contributions): (Vec<Equation>, Vec<Vec<Contribution>>) = equations
         .into_iter()
         .map(|fe| (fe.eq, fe.contributions))
@@ -986,6 +1049,7 @@ fn flatten_impl(file: &EsmFile) -> Result<FlattenedSystem, FlattenError> {
         field_ics,
         equations,
         equation_contributions,
+        equation_lifted,
         continuous_events,
         discrete_events,
         domain: file.domain.clone(),
@@ -1061,11 +1125,24 @@ fn normalize_angle_arguments(flat: &mut AssembledParts) {
         }
     };
     for fe in &mut flat.equations {
-        fe.map_contributions(|e| {
-            let mut e = e.clone();
-            rewrite(&mut e);
-            e
-        });
+        // Rebuild only an equation whose contributions the rewrite changed.
+        let rewritten: Vec<Option<Expr>> = fe
+            .contributions
+            .iter()
+            .map(|c| crate::units::normalize_angle_arguments(&c.expr, &env))
+            .collect();
+        if rewritten.iter().all(Option::is_none) {
+            continue;
+        }
+        let contributions = std::mem::take(&mut fe.contributions)
+            .into_iter()
+            .zip(rewritten)
+            .map(|(c, next)| match next {
+                Some(expr) => Contribution { expr, ..c },
+                None => c,
+            })
+            .collect();
+        fe.set_contributions(contributions);
     }
     for (_, e) in &mut flat.field_ics {
         rewrite(e);
@@ -2255,17 +2332,12 @@ pub(crate) fn resolve_rhs_time_derivatives(
     equations: &mut [Equation],
     time_invariant: &HashSet<String>,
 ) -> bool {
-    // Which right-hand sides carry a `D`: a document with none (every document
-    // that had none before this phase existed) keeps its equations untouched
-    // rather than being rebuilt through `substitute`.
-    let carriers: Vec<bool> = equations
-        .iter()
-        .map(|eq| contains_time_derivative(&eq.rhs))
-        .collect();
-    if !carriers.contains(&true) {
+    let Some((carriers, tables)) =
+        plan_time_derivative_resolution(equations.iter(), time_invariant)
+    else {
         return false;
-    }
-    let Some(tables) = DerivTables::build(equations, time_invariant) else {
+    };
+    let Some(tables) = tables else {
         return true;
     };
     for (eq, carries) in equations.iter_mut().zip(carriers) {
@@ -2277,6 +2349,25 @@ pub(crate) fn resolve_rhs_time_derivatives(
     true
 }
 
+/// Which right-hand sides carry a structural time derivative, and the tables
+/// to resolve them against (`None` when the equations define nothing to
+/// resolve against). `None` overall when no right-hand side carries one: a
+/// document with none keeps its equations untouched rather than being rebuilt
+/// through `substitute`.
+fn plan_time_derivative_resolution<'e, 'a>(
+    equations: impl Iterator<Item = &'e Equation> + Clone,
+    time_invariant: &'a HashSet<String>,
+) -> Option<(Vec<bool>, Option<DerivTables<'a>>)> {
+    let carriers: Vec<bool> = equations
+        .clone()
+        .map(|eq| contains_time_derivative(&eq.rhs))
+        .collect();
+    if !carriers.contains(&true) {
+        return None;
+    }
+    Some((carriers, DerivTables::build(equations, time_invariant)))
+}
+
 /// [`resolve_rhs_time_derivatives`] over flatten's own equations: the resolved
 /// expression replaces the `D` node INSIDE the referencing contribution, which
 /// keeps its origins (esm-libraries-spec §4.7.5); the resolved quantity's own
@@ -2285,15 +2376,9 @@ fn resolve_rhs_time_derivatives_per_contribution(
     equations: &mut [FlatEq],
     time_invariant: &HashSet<String>,
 ) {
-    let carriers: Vec<bool> = equations
-        .iter()
-        .map(|fe| contains_time_derivative(&fe.eq.rhs))
-        .collect();
-    if !carriers.contains(&true) {
-        return;
-    }
-    let view: Vec<Equation> = equations.iter().map(|fe| fe.eq.clone()).collect();
-    let Some(tables) = DerivTables::build(&view, time_invariant) else {
+    let Some((carriers, Some(tables))) =
+        plan_time_derivative_resolution(equations.iter().map(|fe| &fe.eq), time_invariant)
+    else {
         return;
     };
     for (fe, carries) in equations.iter_mut().zip(carriers) {
@@ -2336,7 +2421,10 @@ struct DerivTables<'a> {
 impl<'a> DerivTables<'a> {
     /// The tables `equations` define, or `None` when they define nothing to
     /// resolve against.
-    fn build(equations: &[Equation], time_invariant: &'a HashSet<String>) -> Option<Self> {
+    fn build<'e>(
+        equations: impl IntoIterator<Item = &'e Equation>,
+        time_invariant: &'a HashSet<String>,
+    ) -> Option<Self> {
         let mut tables = DerivTables {
             tendency: HashMap::new(),
             definition: HashMap::new(),
@@ -4290,6 +4378,32 @@ fn apply_couple(
     Ok(())
 }
 
+/// The `(block, equation)` position of the LAST equation in document order
+/// whose dependent variable is `target` — restricted to a `D(target, t)` left
+/// side when `tendency_only` (a multiplicative factor scales the tendency,
+/// never a bare `target ~ …` equation, esm-libraries-spec §4.7.2).
+fn last_defining_equation(
+    per_system: &[SystemBlock],
+    target: &str,
+    tendency_only: bool,
+) -> Option<(usize, usize)> {
+    use crate::classification::{LhsForm, lhs_form};
+    let mut found = None;
+    for (b, block) in per_system.iter().enumerate() {
+        for (i, FlatEq { eq, .. }) in block.equations.iter().enumerate() {
+            let dep = match lhs_form(&eq.lhs) {
+                LhsForm::Derivative(name) => name,
+                LhsForm::Bare(name) if !tendency_only => name,
+                _ => continue,
+            };
+            if dep == target {
+                found = Some((b, i));
+            }
+        }
+    }
+    found
+}
+
 /// Fold one INJECTED connector equation — `{from, to, transform, expression}`
 /// (esm-spec §4.7.2) — into the equation that already defines its `to` target.
 ///
@@ -4318,6 +4432,8 @@ fn apply_couple(
 /// skip. The check runs BEFORE the skip and is keyed on a TENDENCY
 /// specifically, not on "some equation defines `to`" — an observed or an
 /// algebraic unknown has a defining equation and still has nothing to multiply.
+/// For the same reason the factor scales the LAST `D(to, t)` equation, even
+/// when a bare `to ~ …` equation comes after it.
 fn inject_connector_term(
     eq_val: &serde_json::Value,
     systems: &[String],
@@ -4329,22 +4445,15 @@ fn inject_connector_term(
     };
 
     let transform = eq_val.get("transform").and_then(|v| v.as_str());
-    if transform == Some("multiplicative") {
-        let has_tendency =
-            per_system
-                .iter()
-                .flat_map(|b| b.equations.iter())
-                .any(|FlatEq { eq, .. }| {
-                    matches!(
-                        crate::classification::lhs_form(&eq.lhs),
-                        crate::classification::LhsForm::Derivative(ref name) if name == target
-                    )
-                });
-        if !has_tendency {
-            return Err(FlattenError::CoupleMultiplicativeNoTendency {
-                target: target.to_string(),
-            });
-        }
+    let multiplicative = transform == Some("multiplicative");
+    // The target equation: the LAST whose dependent variable is `to`, and for
+    // a multiplicative factor the last whose left side is `D(to, t)` — the
+    // presence check below and the fold read the same lookup.
+    let found = last_defining_equation(per_system, target, multiplicative);
+    if multiplicative && found.is_none() {
+        return Err(FlattenError::CoupleMultiplicativeNoTendency {
+            target: target.to_string(),
+        });
     }
 
     // The term: the declared `expression`, or a bare reference to `from` when
@@ -4371,21 +4480,6 @@ fn inject_connector_term(
         expr: term.clone(),
         origins: vec![TermOrigin::Coupling { coupling: index }],
     };
-
-    // The LAST equation in document order whose dependent variable is `to`.
-    let mut found: Option<(usize, usize)> = None;
-    for (b, block) in per_system.iter().enumerate() {
-        for (i, FlatEq { eq, .. }) in block.equations.iter().enumerate() {
-            let dep = match crate::classification::lhs_form(&eq.lhs) {
-                crate::classification::LhsForm::Derivative(name)
-                | crate::classification::LhsForm::Bare(name) => name,
-                crate::classification::LhsForm::Expression => continue,
-            };
-            if dep == target {
-                found = Some((b, i));
-            }
-        }
-    }
 
     let Some((b, i)) = found else {
         // No equation defines `to`. An additive term onto an UNKNOWN BECOMES
@@ -5548,7 +5642,9 @@ mod tests {
             .expect("the lifted equation has three contributions");
         let subs: HashMap<String, Expr> =
             std::iter::once(("Src.e".to_string(), Expr::Variable("Src.e2".to_string()))).collect();
-        flat.map_rhs_per_contribution(|e| crate::substitute::substitute(e, &subs));
+        assert!(flat.equation_lifted[i], "the lift wrapped the equation");
+        flat.map_rhs_per_contribution(|e| crate::substitute::substitute(e, &subs))
+            .expect("the lists are in step");
 
         let contributions = &flat.equation_contributions[i];
         assert_eq!(contributions[1].expr, Expr::Variable("Src.e2".to_string()));
