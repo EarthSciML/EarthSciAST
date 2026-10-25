@@ -1060,7 +1060,7 @@ evaluation.
 Python exports the entry points and each raises `compiler_unavailable`.
 TypeScript and Go have no simulator and export none of it. No schema or format
 change: the decomposition, the boxes and the selection are API arguments.
-`CONFORMANCE_SPEC.md` §5.49 is the gate; its fixtures are
+`CONFORMANCE_SPEC.md` §5.50 is the gate; its fixtures are
 `tests/conformance/range_restricted_rhs/`.
 
 A Problem's right-hand side `F` evaluates the whole model over the whole domain.
@@ -1156,7 +1156,7 @@ lane sets.
 
 Every bitwise claim below is against `select(prog; …)` evaluated over the whole
 domain, written `G_k`. `Σ_k G_k = F` holds only to rounding, because dropping
-summands changes the association; `CONFORMANCE_SPEC.md` §5.49 bounds it.
+summands changes the association; `CONFORMANCE_SPEC.md` §5.50 bounds it.
 `terms = all` with `writes = W_k` is the same program as an operator's derived
 document, when a planner emits one.
 

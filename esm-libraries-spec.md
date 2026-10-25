@@ -673,7 +673,7 @@ run-time list of cells or columns (`lanes`). Index space stays global, and each
 restricted evaluation is bitwise the selected program's whole-domain
 evaluation. The surface, the selection rules, the tile and lane semantics, the
 layouts and the four `range_*` diagnostics are normative in `API_SPEC.md` §5.8,
-"Range-restricted right-hand sides"; `CONFORMANCE_SPEC.md` §5.49 is the gate.
+"Range-restricted right-hand sides"; `CONFORMANCE_SPEC.md` §5.50 is the gate.
 Tiles and lanes require `compiler = native` and are refused with
 `compiler_unavailable` under any other. Python exports the entry points and
 raises `compiler_unavailable` from each.

@@ -7178,7 +7178,7 @@ MUST be accepted; `tests/invalid/solver_time_span_missing_end.esm` is a
 and `tests/invalid/solver_time_span_reversed.esm` are pinned `resolver_only`,
 with `is_valid` false for all five bindings.
 
-### 5.49 Range-Restricted, Operator-Restricted Right-Hand Sides (normative)
+### 5.50 Range-Restricted, Operator-Restricted Right-Hand Sides (normative)
 
 **Decision pinned.** Julia and Rust evaluate one operator's right-hand side —
 the contributions selected by #539 provenance, writing only that operator's
@@ -7328,7 +7328,7 @@ Beside these, each binding tests what no document pins:
   `RhsError::Shape { what: "forcing", .. }` / `ArgumentError`.
 - **Derived programs.** A tile and a lane program of a forcing case take the
   parent's forcing set; their results stay bitwise the whole-domain `select`
-  under sets `A` and `B` (the §5.49 range-restricted contract with forcing as
+  under sets `A` and `B` (the §5.50 range-restricted contract with forcing as
   an argument).
 - **`solve`.** On a native Problem, `solve` runs through the program; the
   conformance suites that exercise native solves are unchanged.

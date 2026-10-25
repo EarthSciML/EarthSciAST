@@ -1,4 +1,4 @@
-//! The `range_restricted_rhs` conformance suite (CONFORMANCE_SPEC §5.49,
+//! The `range_restricted_rhs` conformance suite (CONFORMANCE_SPEC §5.50,
 //! `tests/conformance/range_restricted_rhs/README.md`): every case of the
 //! manifest, under `Compiler::Native`, each checked bitwise against the same
 //! selected program evaluated over the whole domain.

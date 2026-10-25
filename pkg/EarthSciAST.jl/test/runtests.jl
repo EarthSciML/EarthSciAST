@@ -167,7 +167,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     # compiler keyword, and this file was never on the list, so none of it ran.
     include("compiler_selection_test.jl")
     include("range_restricted_rhs_test.jl")               # select / halo / restrict / lanes (API_SPEC §5.8)
-    include("conformance_range_restricted_rhs_test.jl")   # CONFORMANCE_SPEC §5.49
+    include("conformance_range_restricted_rhs_test.jl")   # CONFORMANCE_SPEC §5.50
     include("public_rhs_program_test.jl")                 # reentrant rhs! (API_SPEC §5.8, #541)
     include("conformance_public_rhs_program_test.jl")     # CONFORMANCE_SPEC §5.51
     # Every per-cell route under a strict `native`: refused by name, or compiled

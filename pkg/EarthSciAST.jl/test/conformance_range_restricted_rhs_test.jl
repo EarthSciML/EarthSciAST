@@ -1,5 +1,5 @@
 # Conformance: range-restricted, operator-restricted right-hand sides
-# (CONFORMANCE_SPEC §5.49; API_SPEC §5.8; issue #540).
+# (CONFORMANCE_SPEC §5.50; API_SPEC §5.8; issue #540).
 #
 # Consumes tests/conformance/range_restricted_rhs/manifest.json case by case,
 # as its README specifies. Every check is BITWISE against this binding's own
@@ -362,7 +362,7 @@ end
 
 const _RRC_SUBCALL_DOC = "fixtures/esd/problems/latlon3d_transport_cwc_regional_inflow.esm"
 
-@testset "range_restricted_rhs conformance (§5.49)" begin
+@testset "range_restricted_rhs conformance (§5.50)" begin
     manifest = JSON3.read(read(joinpath(_RRC_DIR, "manifest.json"), String))
     @test manifest.compiler == "native"
     only = get(ENV, "RANGE_RHS_CASES", "")
