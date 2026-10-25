@@ -7320,12 +7320,17 @@ Beside these, each binding tests what no document pins:
 
 - **Workspace identity.** A workspace used with a clone of its program, or after
   the program handle has moved, works; one used with a different program (a
-  `select`ed, tiled or laned one included) is `RhsError::Shape { what:
-  "workspace", .. }` / `ArgumentError`.
+  `select`ed, tiled or laned one included) is `RhsError::ForeignProgram {
+  what: "workspace" }` / `ArgumentError`.
 - **Lengths.** A wrong length of `u`, `aux`, `p`, `du`, a forcing buffer, or a
   forcing set with the wrong slot count, is `RhsError::Shape` naming it /
   `DimensionMismatch`; a set built for another forcing signature is
-  `RhsError::Shape { what: "forcing", .. }` / `ArgumentError`.
+  `RhsError::ForcingSignature` / `ArgumentError`, and an out-of-range slot index
+  to `replace` is `RhsError::SlotIndex` in Rust.
+- **Failed gathers.** Lane inputs whose gather failed (a fault, or a cell
+  outside its index set) after an earlier gather succeeded do not evaluate:
+  `RhsError::NotGathered` / an error, never a result from the half-written
+  buffers.
 - **Derived programs.** A tile and a lane program of a forcing case take the
   parent's forcing set; their results stay bitwise the whole-domain `select`
   under sets `A` and `B` (the §5.50 range-restricted contract with forcing as

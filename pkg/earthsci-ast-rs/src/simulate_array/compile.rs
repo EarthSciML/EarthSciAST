@@ -529,8 +529,8 @@ impl ArrayCompiled {
         Self::from_flattened_with(flat, false)
     }
 
-    /// [`Self::from_flattened`], with every shaped parameter whose value only
-    /// the document supplies left as a run-time input read from the forcing
+    /// [`Self::from_flattened`], with every shaped parameter that has a value
+    /// and no `update` left as a run-time input read from the forcing
     /// buffer (`runtime_array_parameters`, API_SPEC §5.8) rather than lowered
     /// into build-time data.
     pub(crate) fn from_flattened_with(
@@ -1842,14 +1842,13 @@ fn lower_inline_array_parameters(
         let Some(default) = var.default.as_ref() else {
             continue;
         };
-        // `runtime_array_parameters`: a shaped parameter whose value only this
-        // document supplies stays a parameter, read at run time from the
-        // forcing buffer (its default seeds the buffer), instead of becoming
-        // build-time data.
+        // `runtime_array_parameters`: a shaped parameter with a value and no
+        // `update` stays a parameter, read at run time from the forcing buffer
+        // (its value seeds the buffer), instead of becoming build-time data.
+        // A caller's array counts: `esm_problem` binds it onto `default`.
         if keep_at_runtime
             && var.shape.as_deref().is_some_and(|s| !s.is_empty())
             && var.update.is_none()
-            && !external.is_some_and(|a| a.contains_key(name))
         {
             kept.insert(name.clone());
             continue;

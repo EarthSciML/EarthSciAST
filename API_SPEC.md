@@ -875,11 +875,20 @@ pub struct StateBlock  { pub name: String, pub flat_offset: usize, pub shape: Ve
 pub enum RhsError {
     Fault { code: &'static str, message: String },
     Shape { what: &'static str, expected: usize, got: usize },
+    ForeignProgram { what: &'static str },
+    ForcingSignature { detail: String },
+    SlotIndex { slot: usize, slots: usize },
+    NotGathered,
 }
 ```
 
 All of them are re-exported at the crate root. `RhsError` implements
-`std::error::Error` and `Display`; build-time calls (`rhs_program`, `select`,
+`std::error::Error` and `Display`. `Shape` is a length mismatch only
+(`expected` and `got` are lengths); a workspace or lane inputs from another
+program is `ForeignProgram`, a forcing set for other slots is
+`ForcingSignature` (its `detail` names the first slot that differs), an
+out-of-range slot index to `replace` is `SlotIndex`, and lane inputs whose last
+gather failed, or that were never gathered, are `NotGathered`. Build-time calls (`rhs_program`, `select`,
 `halo`, `tile`, `lanes`, `parameter_vector`) keep `SimulateError`.
 
 **Julia types.** `ForcingSet`, `ForcingSlot` (`name::String`,
@@ -921,8 +930,8 @@ All of them are re-exported at the crate root. `RhsError` implements
    ("Range-restricted right-hand sides").
 4. **Workspace.** A workspace belongs to the program that made it and to every
    clone of that program. Passing it to another program — including a program
-   `select`ed, tiled or laned from this one — is `RhsError::Shape { what:
-   "workspace", .. }` in Rust and an `ArgumentError` in Julia, never undefined
+   `select`ed, tiled or laned from this one — is `RhsError::ForeignProgram {
+   what: "workspace" }` in Rust and an `ArgumentError` in Julia, never undefined
    behaviour. The check is on a stable identity of the shared program, not on
    the address of the handle, so moving or cloning the handle keeps a workspace
    valid.
@@ -948,9 +957,10 @@ All of them are re-exported at the crate root. `RhsError` implements
    between workspaces or threads, no thread-local left armed, no panic, no NaN
    fill. A call on another thread or another workspace never observes it, and
    the faulted workspace's next call is unaffected. A wrong length of `u`,
-   `aux`, `p` or `du`, or a forcing set built for another forcing signature, is
-   `RhsError::Shape` naming the argument (`"u"`, `"aux"`, `"p"`, `"du"`,
-   `"forcing"`, `"workspace"`); Julia throws `DimensionMismatch` for a length
+   `aux`, `p` or `du` is `RhsError::Shape` naming the argument (`"u"`,
+   `"aux"`, `"p"`, `"du"`); a forcing set built for another forcing signature
+   is `RhsError::ForcingSignature`, and a workspace from another program
+   `RhsError::ForeignProgram`. Julia throws `DimensionMismatch` for a length
    and `ArgumentError` for a set or workspace that does not belong.
 8. **No internal threads.** An evaluation never spawns, joins, or runs on a
    global pool. Julia's Polyester chunking is off inside `rhs!` (the Problem's
@@ -1019,8 +1029,8 @@ All of them are re-exported at the crate root. `RhsError` implements
 - **Refresh is a swap.** `replace_forcing(fs, slot, buf)` / `replace` returns a
   NEW set with a new epoch, sharing every other buffer; the old set is
   unchanged and stays valid for whoever still holds it. `slot` is 0-based in
-  Rust and 1-based in Julia. There is no in-place refresh and no invalidation
-  call.
+  Rust and 1-based in Julia; a slot past the end is `RhsError::SlotIndex` in
+  Rust. There is no in-place refresh and no invalidation call.
 - **Default.** `default_forcing_set(x)` / `default_forcing()` is the Problem's
   forcing when `rhs_program(prob)` ran: provider data, a caller's array, or the
   declared default broadcast over the slot's shape, and for an
@@ -1029,7 +1039,7 @@ All of them are re-exported at the crate root. `RhsError` implements
   returns the same set (same buffers, same epoch).
 - **Compatibility.** A set is valid for the program it was built against and for
   every program derived from it or cloned from it (same slots). A set whose
-  slot signature differs is `RhsError::Shape { what: "forcing", .. }`.
+  slot signature differs is `RhsError::ForcingSignature`.
 
 ##### Run-time array parameters (normative)
 

@@ -611,11 +611,13 @@ pub struct ProblemOptions {
     /// Time at which CONST providers are sampled. Defaults to `tspan.0`.
     pub sample_time: Option<f64>,
 
-    /// Leave every shaped parameter whose value only the document supplies
-    /// (inline array data, or one scalar broadcast over its grid) as a
-    /// run-time input of [`crate::rhs_program`]: an
-    /// [`crate::SlotKind::ArrayParameter`] forcing slot, seeded with that
-    /// value, instead of build-time data (API_SPEC §5.8). The Problem itself
+    /// Leave every shaped parameter that has a value and is not fed from
+    /// outside the model (no `update`) as a run-time input of
+    /// [`crate::rhs_program`]: an [`crate::SlotKind::ArrayParameter`] forcing
+    /// slot, seeded with that value, instead of build-time data (API_SPEC
+    /// §5.8). The value is the document's (inline array data, or one scalar
+    /// broadcast over its grid) or the caller's [`Self::const_arrays`] entry,
+    /// which takes precedence. The Problem itself
     /// reads it from its forcing buffer, where construction serves that
     /// value, so `solve` integrates the same numbers either way. Off by
     /// default.

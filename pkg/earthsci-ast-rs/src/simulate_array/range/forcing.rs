@@ -12,13 +12,26 @@ pub enum RhsError {
     /// A fail-closed evaluation fault (CONFORMANCE_SPEC §5.5.5, §5.23): `code`
     /// is its `E_TREEWALK_*` code. `du` is unspecified.
     Fault { code: &'static str, message: String },
-    /// An argument does not fit the program: a buffer of the wrong length, or
-    /// a workspace or forcing set made for another program.
+    /// A buffer of the wrong length: `what` names the argument, `expected`
+    /// and `got` are lengths (or, for a forcing set's buffer list, slot
+    /// counts).
     Shape {
         what: &'static str,
         expected: usize,
         got: usize,
     },
+    /// A workspace or lane inputs passed to a program other than the one that
+    /// made them (`what` names which). A program `select`ed, tiled or laned
+    /// from another is a different program; a clone is the same one.
+    ForeignProgram { what: &'static str },
+    /// A forcing set built for other forcing slots than the program's;
+    /// `detail` says where the two slot lists first differ.
+    ForcingSignature { detail: String },
+    /// A forcing-slot index past the end of a set of `slots` slots.
+    SlotIndex { slot: usize, slots: usize },
+    /// Lane inputs that hold no successful gather: never gathered, or the
+    /// last gather failed.
+    NotGathered,
 }
 
 impl std::fmt::Display for RhsError {
@@ -31,7 +44,24 @@ impl std::fmt::Display for RhsError {
                 got,
             } => write!(
                 f,
-                "`{what}` does not fit the program: expected {expected}, got {got}"
+                "`{what}` does not fit the program: expected length {expected}, got {got}"
+            ),
+            RhsError::ForeignProgram { what } => write!(
+                f,
+                "`{what}` was made by another program; it serves only the program that made it \
+                 and that program's clones"
+            ),
+            RhsError::ForcingSignature { detail } => write!(
+                f,
+                "the forcing set was built for other forcing slots than the program's: {detail}"
+            ),
+            RhsError::SlotIndex { slot, slots } => write!(
+                f,
+                "forcing slot {slot} is out of range: the set has {slots} slot(s), indexed from 0"
+            ),
+            RhsError::NotGathered => write!(
+                f,
+                "the lane inputs hold no successful gather; call `gather_lane_inputs` first"
             ),
         }
     }
@@ -173,7 +203,10 @@ impl ForcingSet {
     /// A new set, with a new epoch, sharing every buffer but `slot`'s.
     pub fn replace(&self, slot: usize, buf: Arc<[f64]>) -> Result<ForcingSet, RhsError> {
         let Some(s) = self.slots.get(slot) else {
-            return Err(shape("forcing", self.slots.len(), slot));
+            return Err(RhsError::SlotIndex {
+                slot,
+                slots: self.slots.len(),
+            });
         };
         check_len(s, &buf)?;
         let mut bufs: Vec<Arc<[f64]>> = self.bufs.to_vec();
@@ -211,6 +244,25 @@ impl ForcingSet {
     /// Whether this set was made for `slots` (the same list, or an equal one).
     pub(super) fn fits(&self, slots: &Arc<[ForcingSlot]>) -> bool {
         Arc::ptr_eq(&self.slots, slots) || *self.slots == **slots
+    }
+
+    /// Why this set does not fit `slots`: the first slot the two lists
+    /// disagree on, or their lengths.
+    pub(super) fn mismatch(&self, slots: &[ForcingSlot]) -> RhsError {
+        let show = |s: &ForcingSlot| format!("`{}` {:?} ({:?})", s.name, s.shape, s.kind);
+        let detail = match self.slots.iter().zip(slots).position(|(a, b)| a != b) {
+            Some(k) => format!(
+                "slot {k} is {} in the set, {} in the program",
+                show(&self.slots[k]),
+                show(&slots[k])
+            ),
+            None => format!(
+                "the set has {} slot(s), the program {}",
+                self.slots.len(),
+                slots.len()
+            ),
+        };
+        RhsError::ForcingSignature { detail }
     }
 }
 

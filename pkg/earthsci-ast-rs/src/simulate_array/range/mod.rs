@@ -1256,14 +1256,14 @@ fn fill_forcing_map(map: &mut HashMap<String, ArrayD<f64>>, set: &ForcingSet) {
 
 fn check_forcing(set: &ForcingSet, slots: &Arc<[ForcingSlot]>) -> Result<(), RhsError> {
     if !set.fits(slots) {
-        return Err(forcing::shape("forcing", slots.len(), set.slots().len()));
+        return Err(set.mismatch(slots));
     }
     Ok(())
 }
 
 fn check_owner(ws: &RhsWorkspace, id: u64) -> Result<(), RhsError> {
     if ws.owner != id {
-        return Err(forcing::shape("workspace", id as usize, ws.owner as usize));
+        return Err(RhsError::ForeignProgram { what: "workspace" });
     }
     Ok(())
 }
