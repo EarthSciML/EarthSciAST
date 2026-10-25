@@ -1,0 +1,347 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "forcing_2d_gridded",
+    "description": "A 2-D gridded tracer forced by two handler-fed fields: emis on [x, y] and wind on [y]. col[j] = sum_i emis[i, j] and frac[i, j] = emis[i, j] / col[j] read only forcing, so a compiler that caches state-free work between calls must refresh them when the forcing changes and only then. D(q[i, j]) = frac[i, j] * (1 + 0.01 t) - k q[i, j] + wind[j] (q[i-1, j] - q[i, j]): forcing through an observed, forcing times state, a scalar parameter, t, and an upwind read whose cell-1 neighbour is an out-of-domain zero ghost. D(total) = kd * sum q reduces the whole state.",
+    "authors": [
+      "EarthSciAST test suite"
+    ],
+    "created": "2026-10-25T00:00:00Z",
+    "tags": [
+      "conformance",
+      "public_rhs_program"
+    ]
+  },
+  "index_sets": {
+    "x": {
+      "kind": "interval",
+      "size": 6
+    },
+    "y": {
+      "kind": "interval",
+      "size": 5
+    }
+  },
+  "models": {
+    "Grid2D": {
+      "variables": {
+        "q": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "x",
+            "y"
+          ],
+          "default": 1.0
+        },
+        "total": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0
+        },
+        "emis": {
+          "type": "parameter",
+          "units": "1/s",
+          "shape": [
+            "x",
+            "y"
+          ],
+          "default": 1.0,
+          "description": "Gridded emission field, reloaded on a schedule by a registered handler.",
+          "update": {
+            "kind": "schedule",
+            "interval": 3600.0,
+            "initial_offset": 0.0,
+            "handler": {
+              "handler_id": "emis_reload"
+            }
+          }
+        },
+        "wind": {
+          "type": "parameter",
+          "units": "1/s",
+          "shape": [
+            "y"
+          ],
+          "default": 2.0,
+          "description": "Per-row advection rate, reloaded on a schedule by a registered handler.",
+          "update": {
+            "kind": "schedule",
+            "interval": 3600.0,
+            "initial_offset": 0.0,
+            "handler": {
+              "handler_id": "wind_reload"
+            }
+          }
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.1
+        },
+        "kd": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.05
+        },
+        "col": {
+          "type": "unknown",
+          "units": "1/s",
+          "shape": [
+            "y"
+          ]
+        },
+        "frac": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "x",
+            "y"
+          ]
+        }
+      },
+      "equations": [
+        {
+          "lhs": "col",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "j"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              },
+              "j": {
+                "from": "y"
+              }
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                "emis",
+                "i",
+                "j"
+              ]
+            },
+            "reduce": "+"
+          }
+        },
+        {
+          "lhs": "frac",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i",
+              "j"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              },
+              "j": {
+                "from": "y"
+              }
+            },
+            "expr": {
+              "op": "/",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "emis",
+                    "i",
+                    "j"
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "col",
+                    "j"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i",
+              "j"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              },
+              "j": {
+                "from": "y"
+              }
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "q",
+                    "i",
+                    "j"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i",
+              "j"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              },
+              "j": {
+                "from": "y"
+              }
+            },
+            "expr": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "*",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "frac",
+                        "i",
+                        "j"
+                      ]
+                    },
+                    {
+                      "op": "+",
+                      "args": [
+                        1.0,
+                        {
+                          "op": "*",
+                          "args": [
+                            0.01,
+                            "t"
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "-",
+                  "args": [
+                    {
+                      "op": "*",
+                      "args": [
+                        "k",
+                        {
+                          "op": "index",
+                          "args": [
+                            "q",
+                            "i",
+                            "j"
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "wind",
+                        "j"
+                      ]
+                    },
+                    {
+                      "op": "-",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "q",
+                            {
+                              "op": "-",
+                              "args": [
+                                "i",
+                                1
+                              ]
+                            },
+                            "j"
+                          ]
+                        },
+                        {
+                          "op": "index",
+                          "args": [
+                            "q",
+                            "i",
+                            "j"
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "total"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              "kd",
+              {
+                "op": "faq",
+                "args": [],
+                "output_idx": [],
+                "ranges": {
+                  "i": {
+                    "from": "x"
+                  },
+                  "j": {
+                    "from": "y"
+                  }
+                },
+                "expr": {
+                  "op": "index",
+                  "args": [
+                    "q",
+                    "i",
+                    "j"
+                  ]
+                },
+                "reduce": "+"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

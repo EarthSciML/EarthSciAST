@@ -1,0 +1,104 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "fault_state_gather",
+    "description": "A right-hand side that faults on some states and not others: s = const([10, 20, 30, 40, 50])[1 + floor(w)] reads an inline const array at a subscript computed from the state w. For w in [0, 5) the read is in range; for w >= 5 it is past the end, which fails closed with E_TREEWALK_CONSTARRAY_OOB at evaluation (esm-spec 4.3.3).",
+    "authors": [
+      "EarthSciAST test suite"
+    ],
+    "created": "2026-10-25T00:00:00Z",
+    "tags": [
+      "conformance",
+      "public_rhs_program"
+    ]
+  },
+  "models": {
+    "FaultGather": {
+      "variables": {
+        "w": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.5
+        },
+        "y": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0
+        },
+        "s": {
+          "type": "unknown",
+          "units": "1"
+        },
+        "rate": {
+          "type": "parameter",
+          "units": "1",
+          "default": 2.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": "s",
+          "rhs": {
+            "op": "index",
+            "args": [
+              {
+                "op": "const",
+                "args": [],
+                "value": [
+                  10.0,
+                  20.0,
+                  30.0,
+                  40.0,
+                  50.0
+                ]
+              },
+              {
+                "op": "+",
+                "args": [
+                  1,
+                  {
+                    "op": "floor",
+                    "args": [
+                      "w"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "w"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              "rate"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "y"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              "rate",
+              "s"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}
