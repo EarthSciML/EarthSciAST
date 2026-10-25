@@ -58,6 +58,19 @@ pub enum SimulateError {
         details: String,
     },
 
+    /// A range-restricted or operator-restricted right-hand side (API_SPEC
+    /// §5.8: `select`, `halo`, `tile`, `lanes`) was refused. `code` is one of
+    /// `range_halo_insufficient`, `range_global_locality`,
+    /// `range_selection_writes_incomplete` or `range_box_invalid`, and
+    /// `message` names the rule, variable and axis involved.
+    #[error("{code}: {message}")]
+    RangeRestriction {
+        /// The diagnostic code.
+        code: &'static str,
+        /// What was refused, naming the rule, variable and axis.
+        message: String,
+    },
+
     /// A DATA-FED parameter — one whose `update` is `kind: "data"` (esm-spec
     /// §5.4, §8.5) — reached a build with NOTHING bound to it: no provider,
     /// no loaded array, and no caller-supplied `p` value (esm-spec §9.6.6

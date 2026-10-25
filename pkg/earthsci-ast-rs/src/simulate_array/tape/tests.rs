@@ -126,7 +126,7 @@ pub(super) fn ab_check(doc: serde_json::Value, lo: f64, hi: f64) -> TapeProgram 
     assert!(fast_scratch.has_tape(), "fixture scratch must carry a tape");
     // A second warm fast scratch carrying the UNFUSED program.
     let mut fast_uf = super::super::RhsScratch::new(&compiled.var_shapes);
-    fast_uf.install_tape(std::rc::Rc::new(prog_uf));
+    fast_uf.install_tape(std::sync::Arc::new(prog_uf));
     let prog_uf = {
         // Rebuild for the reference arm (the scratch consumed the first).
         taped(compiled.build_tape_opts(&HashSet::new(), None)).0
@@ -1876,7 +1876,7 @@ fn ab_scan_fused_with_its_neighbours() {
     let param_vec = compiled.debug_resolve_params(&params);
     let state = seeded_state(3 * n, 7, -2.0, 2.0);
     let (dy_ref, _) = compiled.debug_eval_rhs(&state, 0.0, &params, false);
-    let mut ctx = super::exec::TapeCtx::new(std::rc::Rc::new(prog));
+    let mut ctx = super::exec::TapeCtx::new(std::sync::Arc::new(prog));
     for publish in [false, true, false] {
         ctx.set_exports_active(publish);
         let mut dy = vec![f64::NAN; 3 * n];
@@ -2519,7 +2519,7 @@ fn output_only_observeds_leave_the_rhs() {
         };
         super::exec::run_tape_call(ctx, &call, dy, &mut stats);
     };
-    let mut ctx = super::exec::TapeCtx::new(std::rc::Rc::new(prog));
+    let mut ctx = super::exec::TapeCtx::new(std::sync::Arc::new(prog));
     let mut dy = vec![0.0f64; 1];
     run_call(&mut ctx, &mut dy);
     assert_eq!(dy[0].to_bits(), (-3.0f64).to_bits());
@@ -2582,7 +2582,7 @@ fn export_demotion_skips_unread_publishes() {
 
     // Demoted (the production default): the export is
     // never published into the observed map.
-    let mut ctx = super::exec::TapeCtx::new(std::rc::Rc::new(prog));
+    let mut ctx = super::exec::TapeCtx::new(std::sync::Arc::new(prog));
     let mut dy = vec![0.0f64; 1];
     run_call(&mut ctx, &mut dy);
     assert_eq!(dy[0].to_bits(), (-3.0f64).to_bits());

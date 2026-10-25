@@ -63,7 +63,7 @@ fn cfg() -> super::fuse::SuperopCfg {
 fn scratch_with(compiled: &ArrayCompiled, prog: TapeProgram) -> RhsScratch {
     let mut s = RhsScratch::new(&compiled.var_shapes);
     s.set_const_arrays(Rc::clone(&compiled.const_scope));
-    s.install_tape(Rc::new(prog));
+    s.install_tape(std::sync::Arc::new(prog));
     s
 }
 

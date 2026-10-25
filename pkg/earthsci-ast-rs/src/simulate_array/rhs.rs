@@ -107,7 +107,7 @@ impl RhsScratch {
     /// Install a compiled tape program (Step 3b). Called by the driver on the
     /// production RHS closure's scratch. Subsequent
     /// [`evaluate_rhs_with_scratch`] calls run the tape.
-    pub(super) fn install_tape(&mut self, prog: Rc<TapeProgram>) {
+    pub(super) fn install_tape(&mut self, prog: std::sync::Arc<TapeProgram>) {
         self.tape = Some(TapeCtx::new(prog));
     }
 

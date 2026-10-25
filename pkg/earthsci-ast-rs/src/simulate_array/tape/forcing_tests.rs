@@ -104,7 +104,7 @@ fn assert_bits(got: &[f64], want: &[f64], label: &str) {
 
 fn taped_scratch(compiled: &ArrayCompiled, prog: TapeProgram) -> RhsScratch {
     let mut s = compiled.debug_new_scratch();
-    s.install_tape(Rc::new(prog));
+    s.install_tape(std::sync::Arc::new(prog));
     s
 }
 
@@ -257,9 +257,9 @@ fn a_forcing_entry_of_another_shape_faults() {
     feed(&compiled, n, 1.0, 0.7);
     let param_vec = compiled.debug_resolve_params(&HashMap::new());
     let prog = Rc::new(taped(compiled.build_tape_opts(&HashSet::new(), None)).0);
-    let scratch_for = |prog: &Rc<TapeProgram>| {
+    let scratch_for = |prog: &std::sync::Arc<TapeProgram>| {
         let mut s = compiled.debug_new_scratch();
-        s.install_tape(Rc::clone(prog));
+        s.install_tape(std::sync::Arc::clone(prog));
         s
     };
     crate::simulate_array::take_const_array_oob();

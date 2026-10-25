@@ -196,7 +196,7 @@ pub(super) fn run_standalone_export(
 ) -> Result<ndarray::ArrayD<f64>, StandaloneError> {
     let var_shapes: IndexMap<String, VarShape> = IndexMap::new();
     let forcing: RefCell<HashMap<String, ndarray::ArrayD<f64>>> = RefCell::new(HashMap::new());
-    let mut ctx = super::super::TapeCtx::new(Rc::new(prog));
+    let mut ctx = super::super::TapeCtx::new(std::sync::Arc::new(prog));
     ctx.set_exports_active(true);
     crate::simulate_array::take_const_array_oob();
     super::super::run_tape_call(

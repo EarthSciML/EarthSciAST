@@ -53,9 +53,8 @@ use super::super::*;
 use super::ir::*;
 use ndarray::ArrayD;
 use smallvec::SmallVec;
-use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
+use std::sync::Arc;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod chain;
@@ -474,7 +473,7 @@ fn assemblies_covered(prog: &TapeProgram) -> Vec<bool> {
 /// The compiled-tape context a [`super::super::RhsScratch`] carries. `None`
 /// on a scratch means "legacy interpreter path".
 pub(in crate::simulate_array) struct TapeCtx {
-    pub(crate) prog: Rc<TapeProgram>,
+    pub(crate) prog: Arc<TapeProgram>,
     pub(crate) exec: TapeExec,
     /// Step 4 epoch counters (see `run_tape_call`). The parameter epoch is
     /// bumped whenever the caller's params slice differs, bit for bit, from
@@ -489,7 +488,7 @@ pub(in crate::simulate_array) struct TapeCtx {
 }
 
 impl TapeCtx {
-    pub(in crate::simulate_array) fn new(prog: Rc<TapeProgram>) -> Self {
+    pub(in crate::simulate_array) fn new(prog: Arc<TapeProgram>) -> Self {
         let exec = TapeExec::new(&prog);
         TapeCtx {
             prog,
@@ -533,7 +532,7 @@ impl TapeCtx {
 /// interpreter loop can split-borrow the mutable executor pieces beside it.
 struct Env<'a> {
     prog: &'a TapeProgram,
-    forcing: &'a RefCell<HashMap<String, ArrayD<f64>>>,
+    forcing: &'a HashMap<String, ArrayD<f64>>,
     state: &'a [f64],
     /// Row-major per-variable mirror of `state` (see `TapeExec::state_rm`).
     state_rm: &'a [f64],
@@ -865,6 +864,46 @@ pub(in crate::simulate_array) fn run_tape_call(
         declared,
         ..
     } = call;
+    let forcing = forcing.borrow();
+    let inputs = CallInputs {
+        state,
+        params,
+        forcing: &forcing,
+        t,
+        declared,
+    };
+    run_tape_inputs(ctx, &inputs, dy, true);
+    stats.taped_rules += ctx.exec.n_taped;
+}
+
+/// The per-call inputs of [`run_tape_inputs`]: the state vector the program's
+/// state layout addresses, the positional parameters, the forcing buffer's
+/// entries, the time, and the declared-name set for the forcing fault.
+pub(in crate::simulate_array) struct CallInputs<'a> {
+    pub(in crate::simulate_array) state: &'a [f64],
+    pub(in crate::simulate_array) params: &'a [f64],
+    pub(in crate::simulate_array) forcing: &'a HashMap<String, ArrayD<f64>>,
+    pub(in crate::simulate_array) t: f64,
+    pub(in crate::simulate_array) declared: &'a HashSet<String>,
+}
+
+/// [`run_tape_call`]'s body. With `zero_dy` the elements of `dy` no rule
+/// writes are zeroed first; without it they are left as the caller holds them,
+/// which is what a range-restricted program promises (API_SPEC §5.8: only the
+/// owned rows of the written variables are touched).
+pub(in crate::simulate_array) fn run_tape_inputs(
+    ctx: &mut TapeCtx,
+    inputs: &CallInputs,
+    dy: &mut [f64],
+    zero_dy: bool,
+) {
+    let &CallInputs {
+        state,
+        params,
+        forcing,
+        t,
+        declared,
+    } = inputs;
     // Parameter epoch: a params slice that differs bit for bit from the last
     // one bumps it (the negative-control test in `tests/tape_exec.rs` guards
     // this: bypassing it serves stale CONST values). The kept copy only
@@ -897,8 +936,10 @@ pub(in crate::simulate_array) fn run_tape_call(
             exec.plan = None;
         }
     }
-    for &(a, b) in &exec.dy_zero {
-        dy[a..b].fill(0.0);
+    if zero_dy {
+        for &(a, b) in &exec.dy_zero {
+            dy[a..b].fill(0.0);
+        }
     }
     // Refill the row-major state mirror: one strided pass per mirrored
     // variable block (column-major flat -> row-major at the same offset).
@@ -984,6 +1025,4 @@ pub(in crate::simulate_array) fn run_tape_call(
     run_continuous(&env, prime_end..end, exec, dy);
     exec.state_rm = state_rm;
     exec.mirror = mirror;
-
-    stats.taped_rules += exec.n_taped;
 }

@@ -645,7 +645,7 @@ impl FlattenedSystem {
 /// The `faq` the pointwise lift wrapped around `rhs`'s contribution sum, or
 /// `None` when `rhs` IS that sum (esm-libraries-spec §4.7.5: `body(eq)` is the
 /// `faq` body only when the lift produced the equation).
-fn lift_wrapper(rhs: &Expr, contributions: &[Contribution]) -> Option<ExpressionNode> {
+pub(crate) fn lift_wrapper(rhs: &Expr, contributions: &[Contribution]) -> Option<ExpressionNode> {
     let Expr::Operator(node) = rhs else {
         return None;
     };
@@ -657,7 +657,7 @@ fn lift_wrapper(rhs: &Expr, contributions: &[Contribution]) -> Option<Expression
 }
 
 /// `body`, re-wrapped in the lift's `faq` when the equation carried one.
-fn rebuild_body(wrapper: Option<ExpressionNode>, body: Expr) -> Expr {
+pub(crate) fn rebuild_body(wrapper: Option<ExpressionNode>, body: Expr) -> Expr {
     match wrapper {
         Some(mut node) => {
             node.expr = Some(Box::new(body));
@@ -670,7 +670,7 @@ fn rebuild_body(wrapper: Option<ExpressionNode>, body: Expr) -> Expr {
 /// The right-hand side a contribution list stands for: the LEFT fold of the
 /// contribution expressions under binary `+` (esm-libraries-spec §4.7.5, the
 /// provenance invariant).
-fn fold_contributions(contributions: &[Contribution]) -> Expr {
+pub(crate) fn fold_contributions(contributions: &[Contribution]) -> Expr {
     let mut iter = contributions.iter();
     let Some(first) = iter.next() else {
         return zero();

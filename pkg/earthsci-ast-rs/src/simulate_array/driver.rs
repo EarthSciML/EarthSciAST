@@ -48,10 +48,10 @@ struct TapedObserveds {
 
 #[cfg(feature = "solve")]
 impl TapedObserveds {
-    fn new(compiled: &ArrayCompiled, tape: &Rc<TapeProgram>) -> Self {
+    fn new(compiled: &ArrayCompiled, tape: &std::sync::Arc<TapeProgram>) -> Self {
         let mut scratch = RhsScratch::new(&compiled.var_shapes);
         scratch.set_const_arrays(Rc::clone(&compiled.const_scope));
-        scratch.install_tape(Rc::clone(tape));
+        scratch.install_tape(std::sync::Arc::clone(tape));
         scratch.set_exports_active(true);
         TapedObserveds {
             scratch,
@@ -1755,7 +1755,7 @@ impl ArrayCompiled {
         ic_vec: &[f64],
         param_vec: &[f64],
         t0: f64,
-        tape: Option<&Rc<TapeProgram>>,
+        tape: Option<&std::sync::Arc<TapeProgram>>,
     ) -> SolveSetup {
         let sa0 = build_state_arrays(&self.var_shapes, ic_vec);
         // The two STRICT compilers, `native` and `xla` (API_SPEC §5.8): the
@@ -1831,7 +1831,7 @@ impl ArrayCompiled {
         param_vec: &[f64],
         t0: f64,
         boundaries: &[f64],
-        tape: Option<&Rc<TapeProgram>>,
+        tape: Option<&std::sync::Arc<TapeProgram>>,
     ) {
         // Under either strict compiler: one taped read-out at t0 answers BOTH
         // halves of this sink — the static observeds (which the hoist no
@@ -2073,7 +2073,7 @@ impl ArrayCompiled {
         param_vec: &[f64],
         setup: &SolveSetup,
         output_observed: &[String],
-        tape: Option<&Rc<TapeProgram>>,
+        tape: Option<&std::sync::Arc<TapeProgram>>,
     ) -> Result<Solution, SimulateError> {
         let mut state_variable_names = self.state_variable_names().to_vec();
         self.append_observed_trajectories(
@@ -2134,7 +2134,7 @@ impl ArrayCompiled {
         opts: &SolveOptions,
         // Step 3b: the solve-wide tape program + the FULL observed rule list
         // its fallback indices resolve against. `None` ⇒ legacy interpreter.
-        tape: Option<&Rc<TapeProgram>>,
+        tape: Option<&std::sync::Arc<TapeProgram>>,
         // The solve's kept scratches, or `None` for a pair built for this
         // segment alone (see [`SolveScratches`]).
         scratches: Option<&SolveScratches>,
@@ -2270,7 +2270,7 @@ impl ArrayCompiled {
             // tape. Its CONST/SEGMENT sections prime on the first call, and a
             // kept scratch re-runs SEGMENT after each forcing refresh.
             if let Some(prog) = tape {
-                s.install_tape(Rc::clone(prog));
+                s.install_tape(std::sync::Arc::clone(prog));
             }
             *rhs_scratch.borrow_mut() = Some(s);
         }
@@ -2283,8 +2283,8 @@ impl ArrayCompiled {
         // construction is deterministic, so results are bit-identical either way.
         let jac_seed = Rc::clone(&seg_seed);
         let const_scope_jac = Rc::clone(&self.const_scope);
-        let tape_jac: Option<Rc<TapeProgram>> = match (self.tape_serves_passes(), tape) {
-            (true, Some(prog)) => Some(Rc::clone(prog)),
+        let tape_jac: Option<std::sync::Arc<TapeProgram>> = match (self.tape_serves_passes(), tape) {
+            (true, Some(prog)) => Some(std::sync::Arc::clone(prog)),
             _ => None,
         };
         // `interpreter`: the per-cell oracle for the right-hand side too, not
@@ -2416,7 +2416,7 @@ impl ArrayCompiled {
                 // the compiler-agreement tier asserts, CONFORMANCE_SPEC
                 // §5.44), so the differenced Jacobian is unchanged.
                 if let Some(prog) = &tape_jac {
-                    s.install_tape(Rc::clone(prog));
+                    s.install_tape(std::sync::Arc::clone(prog));
                 }
                 s
             });
@@ -2596,7 +2596,7 @@ impl ArrayCompiled {
         static_names: &HashSet<String>,
         varying_rules: &[AlgebraicRule],
         requested: &[String],
-        tape: Option<&Rc<TapeProgram>>,
+        tape: Option<&std::sync::Arc<TapeProgram>>,
     ) {
         if self.observed_rules.is_empty() || time.is_empty() {
             return;
@@ -2880,7 +2880,7 @@ impl ArrayCompiled {
         static_names: &HashSet<String>,
         varying_rules: &[AlgebraicRule],
         requested: &[String],
-        tape: &Rc<TapeProgram>,
+        tape: &std::sync::Arc<TapeProgram>,
     ) {
         let wanted = self.resolve_requested_observeds(requested);
         // WHICH observeds become rows is decided exactly as the overlay path
@@ -3303,7 +3303,7 @@ pub(super) fn expr_blocks_output_pruning(expr: &Expr) -> bool {
 /// The solve-wide tape program (`None` only under the `interpreter`
 /// compiler, which builds no tape).
 #[cfg(feature = "solve")]
-type SolveTape = Option<Rc<TapeProgram>>;
+type SolveTape = Option<std::sync::Arc<TapeProgram>>;
 
 /// The run's [`SolutionMetadata`] — one construction for both driver exits.
 #[cfg(feature = "solve")]
@@ -3367,7 +3367,7 @@ struct SegmentedRun<'a> {
     param_vec: &'a [f64],
     setup: &'a SolveSetup,
     opts: &'a SolveOptions,
-    tape: Option<&'a Rc<TapeProgram>>,
+    tape: Option<&'a std::sync::Arc<TapeProgram>>,
     scratches: Option<&'a SolveScratches>,
 }
 

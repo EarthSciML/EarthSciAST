@@ -99,11 +99,12 @@ pub mod xla_emit;
 
 #[cfg(test)]
 pub(crate) use exec::section_primes;
-pub(in crate::simulate_array) use exec::{TapeCtx, run_tape_call};
+pub(in crate::simulate_array) use exec::{CallInputs, TapeCtx, run_tape_call, run_tape_inputs};
 pub(crate) use ir::*;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use lower::StandaloneError;
 use lower::build_tape_program;
+pub(crate) use lower::{TileAxisDom, TileLowering};
 #[cfg(not(target_arch = "wasm32"))]
 pub(in crate::simulate_array) use lower::{collect_variable_names, eval_standalone_rule};
 
@@ -343,7 +344,7 @@ pub(crate) fn taped(
 /// What a model's tape build produced: the program, or — when any rule did
 /// not lower — the [`DeclinedTape`] in its place. Either way the build's
 /// report rides beside it.
-pub(crate) type TapeBuild = Result<Rc<TapeProgram>, Rc<DeclinedTape>>;
+pub(crate) type TapeBuild = Result<std::sync::Arc<TapeProgram>, Rc<DeclinedTape>>;
 
 /// A tape program this model built, with its report, kept so that every pass
 /// that runs the tape — the construction-time gate, a state-free evaluation,
@@ -416,7 +417,7 @@ impl ArrayCompiled {
             return (e.prog.clone(), Rc::clone(&e.report));
         }
         let (prog, report) = self.build_tape(discrete_forcing);
-        let (prog, report) = (prog.map(Rc::new).map_err(Rc::new), Rc::new(report));
+        let (prog, report) = (prog.map(std::sync::Arc::new).map_err(Rc::new), Rc::new(report));
         self.tape_cache.entries.borrow_mut().push(CachedTape {
             discrete_forcing: forcing,
             forcing_buffer,
@@ -437,7 +438,7 @@ impl ArrayCompiled {
     pub(crate) fn strict_tape(
         &self,
         discrete_forcing: &HashSet<String>,
-    ) -> Result<Rc<TapeProgram>, crate::simulate::SimulateError> {
+    ) -> Result<std::sync::Arc<TapeProgram>, crate::simulate::SimulateError> {
         let declined = match self.tape(discrete_forcing).0 {
             Ok(prog) => return Ok(prog),
             Err(declined) => declined,
@@ -544,12 +545,36 @@ impl ArrayCompiled {
         let seg_names = self.classify_segment_invariant_observeds(discrete_forcing, true);
         let forcing = self.forcing_inputs(discrete_forcing);
         let (prog, vn_hits) =
-            build_tape_program(self, &const_names, &seg_names, &forcing, fuse, align_layout);
+            build_tape_program(self, &const_names, &seg_names, &forcing, fuse, align_layout, None);
         let report = match &prog {
             Ok(prog) => make_report(prog, vn_hits),
             Err(declined) => make_declined_report(declined, vn_hits),
         };
         (prog, report)
+    }
+
+    /// The tape of a range-restricted program (API_SPEC §5.8): `self` holds
+    /// the tile's clipped rules and storage-box state layout, `tile` the
+    /// domains its reads are classified against. Built with the same sections
+    /// and fusion as the whole-domain tape; `Err` names the declined rules.
+    pub(crate) fn build_tile_tape(
+        &self,
+        tile: &TileLowering,
+    ) -> Result<TapeProgram, DeclinedTape> {
+        let none = HashSet::new();
+        let const_names = self.classify_static_observeds(&none);
+        let seg_names = self.classify_segment_invariant_observeds(&none, true);
+        let forcing = self.forcing_inputs(&none);
+        build_tape_program(
+            self,
+            &const_names,
+            &seg_names,
+            &forcing,
+            Some(fuse::SuperopCfg::from_env()),
+            true,
+            Some(tile),
+        )
+        .0
     }
 
     /// Build the tape and return the diagnostic report (see

@@ -67,6 +67,7 @@ mod cse;
 mod driver;
 mod eval;
 mod layout;
+pub(crate) mod range;
 mod rhs;
 pub mod tape;
 mod vectorized;
