@@ -35,7 +35,9 @@ fn offset(g: i64, c: i64, spec: &AxisSpec) -> i64 {
     let d = g - c;
     match spec {
         AxisSpec::Cut {
-            period: Some(n), hi, ..
+            period: Some(n),
+            hi,
+            ..
         } if g >= 1 && g <= *hi => {
             let mut m = d.rem_euclid(*n);
             if m > n / 2 {
@@ -79,7 +81,9 @@ fn local_reach(
                 w.expr(b, &sc).map_err(refusal_error)?;
             }
             for r in &w.reads {
-                let Some(info) = vars.get(&r.var) else { continue };
+                let Some(info) = vars.get(&r.var) else {
+                    continue;
+                };
                 let spec = &info.axes[r.axis];
                 if spec.cut_cell() != Some(set.as_str()) {
                     continue;
@@ -205,13 +209,21 @@ pub(super) fn halo(prog: &RhsProgram, dec: &Decomposition) -> Result<HaloReport,
         }
     }
     let mut entries = std::collections::BTreeMap::new();
-    for name in prog.writes.iter().chain(&prog.aux).filter(|n| read.contains(*n)) {
+    for name in prog
+        .writes
+        .iter()
+        .chain(&prog.aux)
+        .filter(|n| read.contains(*n))
+    {
         let info = &vars[name];
         for spec in &info.axes {
             let AxisSpec::Cut { set, cell, .. } = spec else {
                 continue;
             };
-            let (lo, hi) = top.get(&(name.clone(), cell.clone())).copied().unwrap_or((0, 0));
+            let (lo, hi) = top
+                .get(&(name.clone(), cell.clone()))
+                .copied()
+                .unwrap_or((0, 0));
             entries.insert((name.clone(), set.clone()), ((-lo).max(0), hi.max(0)));
         }
     }

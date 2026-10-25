@@ -388,15 +388,15 @@ pub use problem::{
     observed_field, remake,
 };
 // Range-restricted and operator-restricted right-hand sides (API_SPEC §5.8).
-pub use simulate_array::range::{
-    AxisCut, Decomposition, HaloReport, LaneBlock, LaneInputs, LaneKind, LaneLayout, LaneProgram,
-    RhsProgram, RhsSelection, RhsWorkspace, TileBlock, TileBox, TileLayout, TileProgram,
-    rhs_program,
-};
 #[cfg(feature = "solve")]
 pub use problem::{
     Integrator, StepStatus, init, observed_trajectories, observed_trajectory, solve,
     solve_ensemble, solve_to_completion, step,
+};
+pub use simulate_array::range::{
+    AxisCut, Decomposition, HaloReport, LaneBlock, LaneInputs, LaneKind, LaneLayout, LaneProgram,
+    RhsProgram, RhsSelection, RhsWorkspace, TileBlock, TileBox, TileLayout, TileProgram,
+    rhs_program,
 };
 pub use units::{
     Dimension, EquationDimensionVerdict, ExactScale, Rational, ScaleFactor, UNIT_FINDING_ANALYSIS,

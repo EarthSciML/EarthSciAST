@@ -2283,7 +2283,8 @@ impl ArrayCompiled {
         // construction is deterministic, so results are bit-identical either way.
         let jac_seed = Rc::clone(&seg_seed);
         let const_scope_jac = Rc::clone(&self.const_scope);
-        let tape_jac: Option<std::sync::Arc<TapeProgram>> = match (self.tape_serves_passes(), tape) {
+        let tape_jac: Option<std::sync::Arc<TapeProgram>> = match (self.tape_serves_passes(), tape)
+        {
             (true, Some(prog)) => Some(std::sync::Arc::clone(prog)),
             _ => None,
         };

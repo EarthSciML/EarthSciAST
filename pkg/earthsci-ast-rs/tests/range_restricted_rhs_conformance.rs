@@ -91,7 +91,12 @@ fn decomposition(c: &Value) -> Decomposition {
             .as_array()
             .unwrap()
             .iter()
-            .map(|f| (f[0].as_str().unwrap().to_string(), f[1].as_str().unwrap().to_string()))
+            .map(|f| {
+                (
+                    f[0].as_str().unwrap().to_string(),
+                    f[1].as_str().unwrap().to_string(),
+                )
+            })
             .collect(),
     }
 }
@@ -160,7 +165,10 @@ fn storage_cells(
     global: &[(i64, i64)],
     periods: &[Option<i64>],
 ) -> Vec<Option<Vec<i64>>> {
-    let n: usize = storage.iter().map(|(lo, hi)| (hi - lo + 1) as usize).product();
+    let n: usize = storage
+        .iter()
+        .map(|(lo, hi)| (hi - lo + 1) as usize)
+        .product();
     let mut out = Vec::with_capacity(n.max(1));
     if storage.is_empty() {
         out.push(Some(Vec::new()));
@@ -194,7 +202,13 @@ fn slot_of(lay: &TileLayout, name: &str, g: &[i64]) -> usize {
 }
 
 /// Fill a tile's `(u_S, aux_S)` from the global state.
-fn fill_tile(tile: &TileLayout, whole: &TileLayout, dec: &Decomposition, gu: &[f64], gaux: &[f64]) -> (Vec<f64>, Vec<f64>) {
+fn fill_tile(
+    tile: &TileLayout,
+    whole: &TileLayout,
+    dec: &Decomposition,
+    gu: &[f64],
+    gaux: &[f64],
+) -> (Vec<f64>, Vec<f64>) {
     let fill = |blocks: &[TileBlock], n: usize| {
         let mut x = vec![f64::NAN; n];
         for v in blocks {
@@ -205,7 +219,10 @@ fn fill_tile(tile: &TileLayout, whole: &TileLayout, dec: &Decomposition, gu: &[f
             let periods: Vec<Option<i64>> = (0..v.storage.len())
                 .map(|d| v.sets.get(d).and_then(|s| period_of(dec, s)))
                 .collect();
-            for (k, g) in storage_cells(&v.storage, &w.storage, &periods).into_iter().enumerate() {
+            for (k, g) in storage_cells(&v.storage, &w.storage, &periods)
+                .into_iter()
+                .enumerate()
+            {
                 if let Some(g) = g {
                     x[v.base + k] = src[w.slot(&g).unwrap()];
                 }
@@ -220,7 +237,11 @@ fn fill_tile(tile: &TileLayout, whole: &TileLayout, dec: &Decomposition, gu: &[f
 fn owned_cells(tile: &TileLayout) -> Vec<(String, Vec<i64>)> {
     let mut out = Vec::new();
     for v in &tile.u {
-        let n: usize = v.owned.iter().map(|(lo, hi)| (hi - lo + 1) as usize).product();
+        let n: usize = v
+            .owned
+            .iter()
+            .map(|(lo, hi)| (hi - lo + 1) as usize)
+            .product();
         for k in 0..n.max(1) {
             let mut rem = k;
             let g: Vec<i64> = v
@@ -280,7 +301,9 @@ fn check_error(e: &SimulateError, expect: &Value) -> Result<(), String> {
         if let Some(name) = expect[key].as_str()
             && !msg.contains(name)
         {
-            return Err(format!("the {code} message does not name {key} `{name}`: {msg}"));
+            return Err(format!(
+                "the {code} message does not name {key} `{name}`: {msg}"
+            ));
         }
     }
     Ok(())
@@ -325,7 +348,10 @@ fn tile_partition(c: &Value) -> Result<(), String> {
             tile.eval_into(&u, &aux, &p, 0.0, &mut du, &mut ws)
                 .map_err(|e| format!("{tid}: eval {t}: {e}"))?;
             if u.iter().zip(&u0).any(|(a, b)| a.to_bits() != b.to_bits())
-                || aux.iter().zip(&aux0).any(|(a, b)| a.to_bits() != b.to_bits())
+                || aux
+                    .iter()
+                    .zip(&aux0)
+                    .any(|(a, b)| a.to_bits() != b.to_bits())
             {
                 return Err(format!("{tid}: the call changed its inputs"));
             }
@@ -350,22 +376,31 @@ fn tile_partition(c: &Value) -> Result<(), String> {
                     cells.iter().map(|(n, gi)| slot_of(&lay, n, gi)).collect();
                 for (k, x) in du.iter().enumerate() {
                     if !owned.contains(&k) && !x.is_nan() {
-                        return Err(format!("{tid}: tile {t} wrote du[{k}] = {x} outside its owned rows"));
+                        return Err(format!(
+                            "{tid}: tile {t} wrote du[{k}] = {x} outside its owned rows"
+                        ));
                     }
                 }
             }
         }
         if let (Some(du), Some(lay)) = (shared_du, shared_layout) {
-            let owned: std::collections::HashSet<usize> =
-                shared_cells.iter().map(|(n, gi)| slot_of(&lay, n, gi)).collect();
+            let owned: std::collections::HashSet<usize> = shared_cells
+                .iter()
+                .map(|(n, gi)| slot_of(&lay, n, gi))
+                .collect();
             for (k, x) in du.iter().enumerate() {
                 if !owned.contains(&k) && !x.is_nan() {
-                    return Err(format!("{tid}: the shared du_S has du[{k}] = {x} outside every owned row"));
+                    return Err(format!(
+                        "{tid}: the shared du_S has du[{k}] = {x} outside every owned row"
+                    ));
                 }
             }
         }
         if let Some(k) = written.iter().position(|&n| n != 1) {
-            return Err(format!("{tid}: element {k} of G was written {} times", written[k]));
+            return Err(format!(
+                "{tid}: element {k} of G was written {} times",
+                written[k]
+            ));
         }
     }
     Ok(())
@@ -443,7 +478,12 @@ fn selection_sum(c: &Value) -> Result<(), String> {
         oc["selection"] = serde_json::json!({"writes": opv["writes"], "terms": opv["terms"]});
         let op = program(&oc).map_err(|e| format!("select {}: {e}", opv["name"]))?;
         if op.aux() != names(&opv["aux"]).as_slice() {
-            return Err(format!("{}: aux {:?}, want {}", opv["name"], op.aux(), opv["aux"]));
+            return Err(format!(
+                "{}: aux {:?}, want {}",
+                opv["name"],
+                op.aux(),
+                opv["aux"]
+            ));
         }
         let gk = reference(&op);
         for v in &op.layout().u {
@@ -457,7 +497,10 @@ fn selection_sum(c: &Value) -> Result<(), String> {
     let rel = c["tolerance"]["rel"].as_f64().unwrap();
     for k in 0..f.len() {
         if (sum[k] - f[k]).abs() > rel * abs[k] {
-            return Err(format!("element {k}: sum of operators {} vs F {}", sum[k], f[k]));
+            return Err(format!(
+                "element {k}: sum of operators {} vs F {}",
+                sum[k], f[k]
+            ));
         }
     }
     Ok(())
@@ -471,7 +514,10 @@ fn selection_case(c: &Value, expect_ok: bool) -> Result<(), String> {
             }
             let g = reference(&op);
             for name in names(&c["zero_rows"]) {
-                let v = op.layout().block(&name).ok_or(format!("{name} is not written"))?;
+                let v = op
+                    .layout()
+                    .block(&name)
+                    .ok_or(format!("{name} is not written"))?;
                 if g[v.base..v.base + v.len()].iter().any(|&x| x != 0.0) {
                     return Err(format!("{name} is not zero"));
                 }
@@ -494,7 +540,13 @@ fn lane_kind(c: &Value) -> LaneKind {
 
 /// The global multi-index of element `k` (column-major over the block's
 /// non-lane sets) of `name` in a lane at `cell`.
-fn lane_global(whole: &TileLayout, name: &str, lane_sets: &[String], cell: &[i64], k: usize) -> Vec<i64> {
+fn lane_global(
+    whole: &TileLayout,
+    name: &str,
+    lane_sets: &[String],
+    cell: &[i64],
+    k: usize,
+) -> Vec<i64> {
     let w = whole.block(name).unwrap();
     let mut rem = k;
     let mut g = Vec::with_capacity(w.storage.len());
@@ -515,7 +567,9 @@ fn lanes_case(c: &Value) -> Result<(), String> {
     let op = program(c).map_err(|e| format!("build: {e}"))?;
     let cap = c["capacity"].as_u64().unwrap() as usize;
     let lane_sets = names(&c["lane_sets"]);
-    let lanes = op.lanes(lane_kind(c), cap).map_err(|e| format!("lanes: {e}"))?;
+    let lanes = op
+        .lanes(lane_kind(c), cap)
+        .map_err(|e| format!("lanes: {e}"))?;
     let g = reference(&op);
     let (gu, gaux) = global_state(&op);
     let p = op.default_parameters();
@@ -523,9 +577,14 @@ fn lanes_case(c: &Value) -> Result<(), String> {
     let d = lane_sets.len();
     let lay = lanes.layout().clone();
     if lay.sets != lane_sets || lay.capacity != cap {
-        return Err(format!("lane layout sets {:?} / capacity {}", lay.sets, lay.capacity));
+        return Err(format!(
+            "lane layout sets {:?} / capacity {}",
+            lay.sets, lay.capacity
+        ));
     }
-    let cell_of = |cells: &[i32], l: usize| -> Vec<i64> { (0..d).map(|a| i64::from(cells[l * d + a])).collect() };
+    let cell_of = |cells: &[i32], l: usize| -> Vec<i64> {
+        (0..d).map(|a| i64::from(cells[l * d + a])).collect()
+    };
     let n_elems = |b: &earthsci_ast::LaneBlock| b.extents.iter().product::<usize>();
     let gather = |cells: &[i32], n: usize| {
         let mut u = vec![f64::NAN; lay.u_len];
@@ -533,7 +592,11 @@ fn lanes_case(c: &Value) -> Result<(), String> {
         for (blocks, dst) in [(&lay.u, &mut u), (&lay.aux, &mut aux)] {
             for b in blocks {
                 let w = whole.block(&b.name).unwrap();
-                let src: &[f64] = if whole.u.iter().any(|x| x.name == b.name) { &gu } else { &gaux };
+                let src: &[f64] = if whole.u.iter().any(|x| x.name == b.name) {
+                    &gu
+                } else {
+                    &gaux
+                };
                 for l in 0..n {
                     let cell = cell_of(cells, l);
                     for e in 0..n_elems(b) {
@@ -554,7 +617,11 @@ fn lanes_case(c: &Value) -> Result<(), String> {
                     let gi = lane_global(&whole, &b.name, &lane_sets, &cell, e);
                     let (got, want) = (du[(b.offset + e) * cap + l], g[w.slot(&gi).unwrap()]);
                     if got.to_bits() != want.to_bits() {
-                        return Err(format!("lane {} {}{gi:?}: {got} vs G {want}", l + 1, b.name));
+                        return Err(format!(
+                            "lane {} {}{gi:?}: {got} vs G {want}",
+                            l + 1,
+                            b.name
+                        ));
                     }
                 }
             }
@@ -568,7 +635,13 @@ fn lanes_case(c: &Value) -> Result<(), String> {
             .as_array()
             .unwrap()
             .iter()
-            .flat_map(|t| t.as_array().unwrap().iter().map(|x| x.as_i64().unwrap() as i32).collect::<Vec<_>>())
+            .flat_map(|t| {
+                t.as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|x| x.as_i64().unwrap() as i32)
+                    .collect::<Vec<_>>()
+            })
             .collect();
         let (u, aux) = gather(&cells, n);
         let mut du = vec![f64::NAN; lay.u_len];
@@ -588,7 +661,10 @@ fn lanes_case(c: &Value) -> Result<(), String> {
         matches(&cells, n, &du2).map_err(|e| format!("{bid} (pre-gathered): {e}"))?;
         if c["negative_control"]["batch"].as_str() == Some(bid) {
             let sw = c["negative_control"]["swap_lanes"].as_array().unwrap();
-            let (a, b2) = (sw[0].as_u64().unwrap() as usize - 1, sw[1].as_u64().unwrap() as usize - 1);
+            let (a, b2) = (
+                sw[0].as_u64().unwrap() as usize - 1,
+                sw[1].as_u64().unwrap() as usize - 1,
+            );
             let (mut su, mut saux) = (u.clone(), aux.clone());
             for (blocks, dst) in [(&lay.u, &mut su), (&lay.aux, &mut saux)] {
                 for b in blocks {
@@ -602,7 +678,11 @@ fn lanes_case(c: &Value) -> Result<(), String> {
                 .eval_into(&su, &saux, &p, 0.0, &cells, n, &mut du3, &mut ws)
                 .map_err(|e| format!("{bid}: swapped eval: {e}"))?;
             if matches(&cells, n, &du3).is_ok() {
-                return Err(format!("{bid}: swapping lanes {} and {} did not change the result", a + 1, b2 + 1));
+                return Err(format!(
+                    "{bid}: swapping lanes {} and {} did not change the result",
+                    a + 1,
+                    b2 + 1
+                ));
             }
         }
     }
@@ -649,5 +729,10 @@ fn range_restricted_rhs_manifest() {
             }
         }
     }
-    assert!(failures.is_empty(), "{} case(s) failed:\n{}", failures.len(), failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "{} case(s) failed:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
 }

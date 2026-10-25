@@ -21,11 +21,13 @@
 use super::tile::{declined_error, plain_precision, refused, shell};
 use super::walk::AxisSpec;
 use super::{
-    Decomposition, Blocks, LaneKind, LaneLayout, RhsProgram, RhsWorkspace, TileInput, WsExec,
+    Blocks, Decomposition, LaneKind, LaneLayout, RhsProgram, RhsWorkspace, TileInput, WsExec,
     build_error, check_lengths, index_set_sizes, take_fault, var_infos,
 };
 use crate::simulate::SimulateError;
-use crate::simulate_array::tape::{CallInputs, TapeCtx, TapeProgram, TileLowering, run_tape_inputs};
+use crate::simulate_array::tape::{
+    CallInputs, TapeCtx, TapeProgram, TileLowering, run_tape_inputs,
+};
 use crate::simulate_array::{AlgebraicRule, ArrayCompiled, RhsRule, VarShape};
 use crate::types::{Expr, ExpressionNode, RegionBound};
 use indexmap::IndexMap;
@@ -120,7 +122,9 @@ impl LaneProgram {
 
     /// Buffers for [`Self::eval_into`] and [`Self::eval_gathered_into`].
     pub fn new_workspace(&self) -> RhsWorkspace {
-        let n = self.blocks.u_len + self.blocks.aux_len + self.capacity * (self.sets.len() + self.n_inputs);
+        let n = self.blocks.u_len
+            + self.blocks.aux_len
+            + self.capacity * (self.sets.len() + self.n_inputs);
         RhsWorkspace {
             owner: Arc::as_ptr(&self.main) as usize,
             state: vec![0.0; n],
@@ -136,7 +140,13 @@ impl LaneProgram {
     /// lane rows of `state` starting at `at`, as `f64`. Lanes past those
     /// `cells` lists repeat its first lane, so every lane reads in-range
     /// indices.
-    fn write_cells(&self, state: &mut [f64], at: usize, cells: &[i32], n: usize) -> Result<(), SimulateError> {
+    fn write_cells(
+        &self,
+        state: &mut [f64],
+        at: usize,
+        cells: &[i32],
+        n: usize,
+    ) -> Result<(), SimulateError> {
         let d = self.sets.len();
         if n > self.capacity {
             return Err(build_error(format!(
@@ -144,7 +154,10 @@ impl LaneProgram {
                 self.capacity
             )));
         }
-        if cells.len() % d.max(1) != 0 || cells.len() / d.max(1) < n || cells.len() / d.max(1) > self.capacity {
+        if !cells.len().is_multiple_of(d.max(1))
+            || cells.len() / d.max(1) < n
+            || cells.len() / d.max(1) > self.capacity
+        {
             return Err(build_error(format!(
                 "`lanes`: `cells` holds {} entries, which is not D = {d} times a lane count \
                  between n = {n} and the capacity {}",
@@ -343,7 +356,10 @@ type RResult<T> = Result<T, SimulateError>;
 fn lane_read(set: &str) -> Expr {
     Expr::operator(ExpressionNode {
         op: "index".to_string(),
-        args: vec![Expr::Variable(cell_var(set)), Expr::Variable(LANE.to_string())],
+        args: vec![
+            Expr::Variable(cell_var(set)),
+            Expr::Variable(LANE.to_string()),
+        ],
         ..Default::default()
     })
 }
@@ -430,7 +446,10 @@ impl Rewriter<'_> {
                 }
                 let mut new_args = vec![base.clone(), Expr::Variable(LANE.to_string())];
                 for (d, s) in subs.iter().enumerate() {
-                    match axes[d].as_deref().filter(|set| self.sets.iter().any(|x| x == set)) {
+                    match axes[d]
+                        .as_deref()
+                        .filter(|set| self.sets.iter().any(|x| x == set))
+                    {
                         Some(set) => {
                             let own = matches!(s, Expr::Variable(x) if sc.lane_set(x) == Some(set));
                             if !own {
@@ -473,7 +492,10 @@ impl Rewriter<'_> {
                 if self.pre {
                     return Ok(Expr::operator(ExpressionNode {
                         op: "index".to_string(),
-                        args: vec![Expr::Variable(input_var(k)), Expr::Variable(LANE.to_string())],
+                        args: vec![
+                            Expr::Variable(input_var(k)),
+                            Expr::Variable(LANE.to_string()),
+                        ],
                         ..Default::default()
                     }));
                 }
@@ -487,7 +509,12 @@ impl Rewriter<'_> {
     /// `index(makearray(…), syms…)` with the box's own symbols in order: a
     /// makearray whose regions span the whole of every lane set, rewritten
     /// over the lane axis and the other axes.
-    fn makearray_read(&mut self, node: &Arc<ExpressionNode>, m: &Arc<ExpressionNode>, sc: &LScope) -> RResult<Expr> {
+    fn makearray_read(
+        &mut self,
+        node: &Arc<ExpressionNode>,
+        m: &Arc<ExpressionNode>,
+        sc: &LScope,
+    ) -> RResult<Expr> {
         let subs = &node.args[1..];
         let (Some(regions), Some(values)) = (m.regions.as_ref(), m.values.as_ref()) else {
             return self.refuse("holds a makearray with no regions");
@@ -504,7 +531,9 @@ impl Rewriter<'_> {
                     lane_axes.push(None);
                     inner_subs.push(s.clone());
                 }
-                _ => return self.refuse("subscripts a makearray at a shifted or computed position"),
+                _ => {
+                    return self.refuse("subscripts a makearray at a shifted or computed position");
+                }
             }
         }
         let mut new_regions = Vec::with_capacity(regions.len());
@@ -587,16 +616,25 @@ fn rewrite(
         pre,
     };
     // The lane box of a rule writing `var` over `syms`/`ranges`.
-    let lane_box = |rw: &Rewriter, var: &str, syms: &[String], ranges: &[(i64, i64)]| -> RResult<(LScope, Vec<String>, Vec<(i64, i64)>)> {
+    let lane_box = |rw: &Rewriter,
+                    var: &str,
+                    syms: &[String],
+                    ranges: &[(i64, i64)]|
+     -> RResult<(LScope, Vec<String>, Vec<(i64, i64)>)> {
         let var_axes = axes.get(var).cloned().unwrap_or_default();
         if var_axes.len() != syms.len() {
-            return rw.refuse(format_args!("writes `{var}` through a reshaped left-hand side"));
+            return rw.refuse(format_args!(
+                "writes `{var}` through a reshaped left-hand side"
+            ));
         }
         let mut sc = LScope::default();
         let mut out_syms = vec![LANE.to_string()];
         let mut out_ranges = vec![(1, capacity)];
         for (d, s) in syms.iter().enumerate() {
-            match var_axes[d].as_deref().filter(|set| sets.iter().any(|x| x == set)) {
+            match var_axes[d]
+                .as_deref()
+                .filter(|set| sets.iter().any(|x| x == set))
+            {
                 Some(set) => {
                     let n = sizes.get(set).copied().unwrap_or(-1);
                     if ranges[d] != (1, n) {
@@ -713,15 +751,22 @@ fn rewrite(
     })
 }
 
-pub(super) fn build(prog: &RhsProgram, kind: &LaneKind, capacity: usize) -> Result<LaneProgram, SimulateError> {
+pub(super) fn build(
+    prog: &RhsProgram,
+    kind: &LaneKind,
+    capacity: usize,
+) -> Result<LaneProgram, SimulateError> {
     let compiled = &*prog.compiled;
     let precision = plain_precision(compiled, "lane")?;
     if capacity == 0 {
-        return Err(build_error("`lanes`: capacity must be at least 1".to_string()));
+        return Err(build_error(
+            "`lanes`: capacity must be at least 1".to_string(),
+        ));
     }
     let sets: Vec<String> = kind.sets().to_vec();
     let sizes = index_set_sizes(&prog.flat);
-    let box_invalid = |m: String| super::range_error(crate::diagnostic::codes::RANGE_BOX_INVALID, m);
+    let box_invalid =
+        |m: String| super::range_error(crate::diagnostic::codes::RANGE_BOX_INVALID, m);
     for s in &sets {
         if !sizes.contains_key(s) {
             return Err(box_invalid(format!(
@@ -777,8 +822,12 @@ pub(super) fn build(prog: &RhsProgram, kind: &LaneKind, capacity: usize) -> Resu
         }
     }
     let cap = capacity as i64;
-    let main = rewrite(compiled, &axes, &lane_vars, &dependent, &sets, &sizes, cells_mode, cap, false)?;
-    let pre = rewrite(compiled, &axes, &lane_vars, &dependent, &sets, &sizes, cells_mode, cap, true)?;
+    let main = rewrite(
+        compiled, &axes, &lane_vars, &dependent, &sets, &sizes, cells_mode, cap, false,
+    )?;
+    let pre = rewrite(
+        compiled, &axes, &lane_vars, &dependent, &sets, &sizes, cells_mode, cap, true,
+    )?;
 
     // The lane layout: u, then aux, each block `[capacity, inner…]`.
     let mut entries = Vec::new();
@@ -826,7 +875,11 @@ pub(super) fn build(prog: &RhsProgram, kind: &LaneKind, capacity: usize) -> Resu
         var_shapes.insert(
             v.name.clone(),
             VarShape {
-                shape: v.storage.iter().map(|(lo, hi)| (hi - lo + 1) as usize).collect(),
+                shape: v
+                    .storage
+                    .iter()
+                    .map(|(lo, hi)| (hi - lo + 1) as usize)
+                    .collect(),
                 origin: v.storage.iter().map(|r| r.0).collect(),
                 flat_offset,
             },
@@ -864,12 +917,25 @@ pub(super) fn build(prog: &RhsProgram, kind: &LaneKind, capacity: usize) -> Resu
     };
     let build_tape = |c: &ArrayCompiled| -> Result<TapeProgram, SimulateError> {
         let _env = compiled.precision.enter();
-        c.build_tile_tape(&empty).map_err(|d| declined_error(&d, "lane"))
+        c.build_tile_tape(&empty)
+            .map_err(|d| declined_error(&d, "lane"))
     };
-    let main_tape = build_tape(&shell(compiled, var_shapes.clone(), main.rhs, main.observed, held.clone()))?;
+    let main_tape = build_tape(&shell(
+        compiled,
+        var_shapes.clone(),
+        main.rhs,
+        main.observed,
+        held.clone(),
+    ))?;
     let mut pre_held = held.clone();
     pre_held.extend((0..pre.gathers.len()).map(input_var));
-    let pre_tape = build_tape(&shell(compiled, pre_shapes, pre.rhs, pre.observed, pre_held))?;
+    let pre_tape = build_tape(&shell(
+        compiled,
+        pre_shapes,
+        pre.rhs,
+        pre.observed,
+        pre_held,
+    ))?;
 
     // The gather program: one rule per hoisted read, writing its lanes.
     let mut gshapes: IndexMap<String, VarShape> = IndexMap::new();

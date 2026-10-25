@@ -88,7 +88,11 @@ pub(super) fn select(
             contributions.push(contribs.clone());
             continue;
         };
-        let kept: Vec<_> = contribs.iter().filter(|c| keeps(&c.origins)).cloned().collect();
+        let kept: Vec<_> = contribs
+            .iter()
+            .filter(|c| keeps(&c.origins))
+            .cloned()
+            .collect();
         if !writes.iter().any(|w| w == target) {
             if !kept.is_empty() {
                 return Err(range_error(
@@ -153,6 +157,7 @@ pub(super) fn select(
     out.observed_variables.retain(|name, _| cone.contains(name));
     out.algebraic_variables
         .retain(|name, _| writes.contains(name) || cone.contains(name));
-    out.field_ics.retain(|(name, _)| out.state_variables.contains_key(name));
+    out.field_ics
+        .retain(|(name, _)| out.state_variables.contains_key(name));
     Ok((out, writes))
 }

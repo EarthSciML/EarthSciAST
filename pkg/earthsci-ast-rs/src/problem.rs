@@ -796,8 +796,8 @@ pub struct EsmProblem {
 /// What [`EsmProblem::program_source`] holds: the prepared typed document, or
 /// the caller's flattened system.
 pub(crate) enum ProgramSource {
-    File(EsmFile),
-    Flattened(FlattenedSystem),
+    File(Box<EsmFile>),
+    Flattened(Box<FlattenedSystem>),
 }
 
 impl std::fmt::Debug for EsmProblem {
@@ -2179,9 +2179,9 @@ pub fn esm_problem<'a>(
     install_xla_program(&backend, model_name.as_deref(), compiler)?;
 
     let program_source = match (&backend, owned_file, flat_only) {
-        (Backend::Array(_), Some(file), _) => Some(Rc::new(ProgramSource::File(file))),
+        (Backend::Array(_), Some(file), _) => Some(Rc::new(ProgramSource::File(Box::new(file)))),
         (Backend::Array(_), None, Some(flat)) => {
-            Some(Rc::new(ProgramSource::Flattened(flat.clone())))
+            Some(Rc::new(ProgramSource::Flattened(Box::new(flat.clone()))))
         }
         _ => None,
     };

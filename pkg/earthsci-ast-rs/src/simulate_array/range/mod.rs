@@ -270,8 +270,18 @@ impl Blocks {
             strides: v.strides.clone(),
         };
         TileLayout {
-            u: self.vars.iter().filter(|v| v.input == TileInput::U).map(block).collect(),
-            aux: self.vars.iter().filter(|v| v.input == TileInput::Aux).map(block).collect(),
+            u: self
+                .vars
+                .iter()
+                .filter(|v| v.input == TileInput::U)
+                .map(block)
+                .collect(),
+            aux: self
+                .vars
+                .iter()
+                .filter(|v| v.input == TileInput::Aux)
+                .map(block)
+                .collect(),
             u_len: self.u_len,
             aux_len: self.aux_len,
         }
@@ -283,12 +293,25 @@ impl Blocks {
         let block = |v: &Block| LaneBlock {
             name: v.name.clone(),
             sets: v.index_sets[1..].to_vec(),
-            extents: v.storage[1..].iter().map(|(lo, hi)| (hi - lo + 1).max(0) as usize).collect(),
+            extents: v.storage[1..]
+                .iter()
+                .map(|(lo, hi)| (hi - lo + 1).max(0) as usize)
+                .collect(),
             offset: v.base / capacity.max(1),
         };
         LaneLayout {
-            u: self.vars.iter().filter(|v| v.input == TileInput::U).map(block).collect(),
-            aux: self.vars.iter().filter(|v| v.input == TileInput::Aux).map(block).collect(),
+            u: self
+                .vars
+                .iter()
+                .filter(|v| v.input == TileInput::U)
+                .map(block)
+                .collect(),
+            aux: self
+                .vars
+                .iter()
+                .filter(|v| v.input == TileInput::Aux)
+                .map(block)
+                .collect(),
             sets: sets.to_vec(),
             capacity,
             u_len: self.u_len,
@@ -297,7 +320,15 @@ impl Blocks {
     }
 
     /// Build a layout over the given per-variable boxes, `u` variables first.
-    fn build(entries: Vec<(String, TileInput, Vec<String>, Vec<(i64, i64)>, Vec<(i64, i64)>)>) -> Blocks {
+    fn build(
+        entries: Vec<(
+            String,
+            TileInput,
+            Vec<String>,
+            Vec<(i64, i64)>,
+            Vec<(i64, i64)>,
+        )>,
+    ) -> Blocks {
         let mut vars = Vec::with_capacity(entries.len());
         let mut u_len = 0usize;
         let mut aux_len = 0usize;
@@ -435,7 +466,7 @@ pub fn rhs_program(prob: &EsmProblem) -> Result<RhsProgram, SimulateError> {
     };
     let _precision = prob.precision.enter();
     let flat = match &**source {
-        ProgramSource::Flattened(f) => f.clone(),
+        ProgramSource::Flattened(f) => (**f).clone(),
         ProgramSource::File(file) => {
             let annotated =
                 crate::precision_infer::annotated(file).map_err(SimulateError::Compile)?;
@@ -504,7 +535,11 @@ impl RhsProgram {
             None => states.clone(),
             Some(w) => states.iter().filter(|s| w.contains(s)).cloned().collect(),
         };
-        let mut aux: Vec<String> = states.iter().filter(|s| !writes.contains(s)).cloned().collect();
+        let mut aux: Vec<String> = states
+            .iter()
+            .filter(|s| !writes.contains(s))
+            .cloned()
+            .collect();
         flat_layout_order(&mut writes, &compiled);
         flat_layout_order(&mut aux, &compiled);
         let set_names = state_set_names(&flat, &compiled);
@@ -589,7 +624,12 @@ impl RhsProgram {
     pub fn default_state(&self) -> (Vec<f64>, Vec<f64>) {
         let mut u = vec![f64::NAN; self.blocks.u_len];
         let mut aux = vec![f64::NAN; self.blocks.aux_len];
-        for ((name, vs), default) in self.compiled.var_shapes.iter().zip(&self.compiled.state_defaults) {
+        for ((name, vs), default) in self
+            .compiled
+            .var_shapes
+            .iter()
+            .zip(&self.compiled.state_defaults)
+        {
             let v = self.blocks.var(name).expect("every state is in the layout");
             let dst = match v.input {
                 TileInput::U => &mut u,
@@ -633,7 +673,12 @@ impl RhsProgram {
     /// variable a kept summand writes.
     pub fn select(&self, sel: &RhsSelection) -> Result<RhsProgram, SimulateError> {
         let (flat, writes) = select::select(&self.flat, sel)?;
-        RhsProgram::compile(Rc::new(flat), self.compiler, Some(&writes), Arc::clone(&self.forcing))
+        RhsProgram::compile(
+            Rc::new(flat),
+            self.compiler,
+            Some(&writes),
+            Arc::clone(&self.forcing),
+        )
     }
 
     /// How far the owned output reaches into each state along each decomposed
@@ -793,7 +838,10 @@ fn check_lengths(
 
 /// The index-set name of each axis of each compiled state, from its
 /// flattened declaration (empty when it names none at the compiled rank).
-fn state_set_names(flat: &FlattenedSystem, compiled: &ArrayCompiled) -> HashMap<String, Vec<String>> {
+fn state_set_names(
+    flat: &FlattenedSystem,
+    compiled: &ArrayCompiled,
+) -> HashMap<String, Vec<String>> {
     let sizes = index_set_sizes(flat);
     compiled
         .var_shapes
@@ -810,14 +858,21 @@ fn state_set_names(flat: &FlattenedSystem, compiled: &ArrayCompiled) -> HashMap<
 /// when it names one per axis, else, axis by axis, the one interval index set
 /// of that size when exactly one has it (a state the pointwise lift promoted
 /// carries no declared shape), else none.
-fn axis_set_names(declared: Option<Vec<String>>, extents: &[i64], sizes: &HashMap<String, i64>) -> Vec<String> {
+fn axis_set_names(
+    declared: Option<Vec<String>>,
+    extents: &[i64],
+    sizes: &HashMap<String, i64>,
+) -> Vec<String> {
     if let Some(d) = declared.filter(|d| d.len() == extents.len()) {
         return d;
     }
     let names: Vec<Option<String>> = extents
         .iter()
         .map(|&n| {
-            let mut c = sizes.iter().filter(|(_, m)| **m == n).map(|(k, _)| k.clone());
+            let mut c = sizes
+                .iter()
+                .filter(|(_, m)| **m == n)
+                .map(|(k, _)| k.clone());
             match (c.next(), c.next()) {
                 (Some(k), None) => Some(k),
                 _ => None,
@@ -889,13 +944,7 @@ fn var_infos(prog: &RhsProgram, dec: &Decomposition) -> HashMap<String, VarInfo>
             .zip(&vs.origin)
             .map(|(&n, &o)| (o, o + n as i64 - 1))
             .collect();
-        out.insert(
-            name.clone(),
-            VarInfo {
-                axes,
-                extent,
-            },
-        );
+        out.insert(name.clone(), VarInfo { axes, extent });
     }
     for rule in &prog.compiled.observed_rules {
         let (var, ranges) = match rule {
@@ -929,13 +978,7 @@ fn var_infos(prog: &RhsProgram, dec: &Decomposition) -> HashMap<String, VarInfo>
             .map(|d| axis_spec(dec, sets.get(d).map(String::as_str), &sizes))
             .collect();
         let extent = ranges.iter().map(|&(_, hi)| (1, hi)).collect();
-        out.insert(
-            var.clone(),
-            VarInfo {
-                axes,
-                extent,
-            },
-        );
+        out.insert(var.clone(), VarInfo { axes, extent });
     }
     out
 }

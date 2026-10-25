@@ -13,8 +13,7 @@
 use super::walk::{AxisSpec, Read, Refusal, Scope, VarInfo, Walker};
 use super::{
     Blocks, Decomposition, RhsProgram, RhsWorkspace, TileBox, TileInput, TileLayout, WsExec,
-    build_error,
-    check_lengths, index_set_sizes, range_error, take_fault, var_infos,
+    build_error, check_lengths, index_set_sizes, range_error, take_fault, var_infos,
 };
 use crate::diagnostic::codes;
 use crate::simulate::SimulateError;
@@ -266,7 +265,10 @@ fn axis_ranges(spec: &AxisSpec, extent: (i64, i64), boxes: &Boxes) -> ((i64, i64
             let (olo, ohi) = boxes.owned[cell];
             if *face {
                 let n_cells = hi - 1;
-                ((slo, shi + 1), (olo, if ohi == n_cells { ohi + 1 } else { ohi }))
+                (
+                    (slo, shi + 1),
+                    (olo, if ohi == n_cells { ohi + 1 } else { ohi }),
+                )
             } else {
                 ((slo, shi), (olo, ohi))
             }
@@ -316,7 +318,10 @@ pub(super) fn as_loop(rule: &AlgebraicRule) -> Option<AlgebraicRule> {
     let Expr::Operator(node) = &**body else {
         return None;
     };
-    if !matches!(node.op.as_str(), "faq" | "aggregate") || node.filter.is_some() || node.join.is_some() {
+    if !matches!(node.op.as_str(), "faq" | "aggregate")
+        || node.filter.is_some()
+        || node.join.is_some()
+    {
         return None;
     }
     let out = node.output_idx.as_ref().filter(|o| !o.is_empty())?;
@@ -341,9 +346,15 @@ pub(super) fn as_loop(rule: &AlgebraicRule) -> Option<AlgebraicRule> {
 }
 
 /// Hull the reads of each name into a box per axis.
-fn hull_reads(reads: &[Read], into: &mut HashMap<String, Vec<(i64, i64)>>, vars: &HashMap<String, VarInfo>) {
+fn hull_reads(
+    reads: &[Read],
+    into: &mut HashMap<String, Vec<(i64, i64)>>,
+    vars: &HashMap<String, VarInfo>,
+) {
     for r in reads {
-        let Some(info) = vars.get(&r.var) else { continue };
+        let Some(info) = vars.get(&r.var) else {
+            continue;
+        };
         let entry = into
             .entry(r.var.clone())
             .or_insert_with(|| vec![(i64::MAX, i64::MIN); info.axes.len()]);
@@ -493,7 +504,11 @@ pub(super) fn clip_rules(
                         syms: output_idx_names.clone(),
                         lo: ranges.iter().map(|r| r.0).collect(),
                         hi: ranges.iter().map(|r| r.1).collect(),
-                        sets: info.axes.iter().map(|a| a.cut_cell().map(str::to_string)).collect(),
+                        sets: info
+                            .axes
+                            .iter()
+                            .map(|a| a.cut_cell().map(str::to_string))
+                            .collect(),
                         contracted: Vec::new(),
                     };
                     let mut w = Walker::new(vars, var.clone());
@@ -595,7 +610,10 @@ pub(super) fn shell(
 
 /// The document precision a restricted program runs at, refusing a document
 /// with per-variable element types (whose environment is not `Send`).
-pub(super) fn plain_precision(compiled: &ArrayCompiled, what: &str) -> Result<crate::precision::Precision, SimulateError> {
+pub(super) fn plain_precision(
+    compiled: &ArrayCompiled,
+    what: &str,
+) -> Result<crate::precision::Precision, SimulateError> {
     let _env = compiled.precision.enter();
     if crate::precision::has_variable_overrides() {
         return Err(refused(format!(
@@ -606,7 +624,11 @@ pub(super) fn plain_precision(compiled: &ArrayCompiled, what: &str) -> Result<cr
     Ok(compiled.precision.document)
 }
 
-pub(super) fn build(prog: &RhsProgram, dec: &Decomposition, bx: &TileBox) -> Result<TileProgram, SimulateError> {
+pub(super) fn build(
+    prog: &RhsProgram,
+    dec: &Decomposition,
+    bx: &TileBox,
+) -> Result<TileProgram, SimulateError> {
     let boxes = validate(prog, dec, bx)?;
     let compiled = &*prog.compiled;
     let precision = plain_precision(compiled, "tile restriction")?;
@@ -652,7 +674,11 @@ pub(super) fn build(prog: &RhsProgram, dec: &Decomposition, bx: &TileBox) -> Res
         var_shapes.insert(
             v.name.clone(),
             VarShape {
-                shape: v.storage.iter().map(|(lo, hi)| (hi - lo + 1) as usize).collect(),
+                shape: v
+                    .storage
+                    .iter()
+                    .map(|(lo, hi)| (hi - lo + 1) as usize)
+                    .collect(),
                 origin: v.storage.iter().map(|r| r.0).collect(),
                 flat_offset,
             },
@@ -670,15 +696,11 @@ pub(super) fn build(prog: &RhsProgram, dec: &Decomposition, bx: &TileBox) -> Res
                         set: set.clone().unwrap_or_else(|| format!("axis {}", d + 1)),
                     },
                     AxisSpec::Cut {
-                        set,
-                        hi,
-                        period,
-                        face,
-                        ..
+                        set, hi, period, ..
                     } => TileAxisDom {
                         lo: 1,
                         hi: *hi,
-                        period: period.map(|p| if *face { p } else { p }),
+                        period: *period,
                         set: set.clone(),
                     },
                 })

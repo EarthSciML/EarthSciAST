@@ -1140,7 +1140,8 @@ impl<'m> TapeBuilder<'m> {
         match lv {
             LV::State(ix) => {
                 let axes = tile.states.get(*ix as usize)?;
-                (!axes.is_empty()).then(|| (self.state_vars[*ix as usize].name.clone(), axes.clone()))
+                (!axes.is_empty())
+                    .then(|| (self.state_vars[*ix as usize].name.clone(), axes.clone()))
             }
             LV::Arr(slot) => {
                 let axes = self.tile_slots.get(slot)?;
@@ -1183,7 +1184,14 @@ impl<'m> TapeBuilder<'m> {
     /// The `range_halo_insufficient` refusal of a read of `name` along `dom`
     /// at the in-domain cells `missing`, which the box `box_lo..box_lo+len`
     /// does not hold.
-    fn tile_halo_bail<T>(&self, name: &str, dom: &TileAxisDom, missing: &[i64], box_lo: i64, box_len: i64) -> LResult<T> {
+    fn tile_halo_bail<T>(
+        &self,
+        name: &str,
+        dom: &TileAxisDom,
+        missing: &[i64],
+        box_lo: i64,
+        box_len: i64,
+    ) -> LResult<T> {
         let lo = missing.iter().copied().min().unwrap_or(0);
         let hi = missing.iter().copied().max().unwrap_or(0);
         let rule = self
@@ -1227,7 +1235,13 @@ impl<'m> TapeBuilder<'m> {
                 }
                 Some(TileHit::At(i0)) => fixed.push((d, i0)),
                 None => {
-                    return self.tile_halo_bail(name, &axes[d], &[g], src_origin[d], src_shape[d] as i64);
+                    return self.tile_halo_bail(
+                        name,
+                        &axes[d],
+                        &[g],
+                        src_origin[d],
+                        src_shape[d] as i64,
+                    );
                 }
             }
         }
@@ -1275,7 +1289,13 @@ impl<'m> TapeBuilder<'m> {
                 segs.push((o, len, s0 as usize));
             }
             if !missing.is_empty() {
-                return self.tile_halo_bail(name, &axes[d], &missing, src_origin[d], src_shape[d] as i64);
+                return self.tile_halo_bail(
+                    name,
+                    &axes[d],
+                    &missing,
+                    src_origin[d],
+                    src_shape[d] as i64,
+                );
             }
             if segs.is_empty() {
                 any_ghost = true;
@@ -1296,8 +1316,10 @@ impl<'m> TapeBuilder<'m> {
             let fixed_desc: SmallVec<[(usize, usize); 4]> =
                 fixed.iter().map(|&(d, i0)| (d, i0 as usize)).collect();
             let mapped_flags: SmallVec<[bool; 4]> = mapped.iter().map(|m| m.is_some()).collect();
-            let mapped_src: SmallVec<[usize; 4]> =
-                mapped.iter().filter_map(|m| m.as_ref().map(|(d, _)| *d)).collect();
+            let mapped_src: SmallVec<[usize; 4]> = mapped
+                .iter()
+                .filter_map(|m| m.as_ref().map(|(d, _)| *d))
+                .collect();
             self.emit_gather(
                 arg0,
                 fixed_desc,
@@ -7187,12 +7209,19 @@ impl<'m> TapeBuilder<'m> {
         if nlo.len() != nd || nhi.len() != nd {
             bail_tape!("tile restriction: observed `{var}`: need box rank != output rank");
         }
-        let shape: Vec<usize> = (0..nd).map(|d| (nhi[d] - nlo[d] + 1).max(0) as usize).collect();
+        let shape: Vec<usize> = (0..nd)
+            .map(|d| (nhi[d] - nlo[d] + 1).max(0) as usize)
+            .collect();
         if shape.contains(&0) {
             bail_tape!("tile restriction: observed `{var}`: empty need box");
         }
         let ranges: Vec<(i64, i64)> = (0..nd)
-            .map(|d| (output_ranges[d].0.max(nlo[d]), output_ranges[d].1.min(nhi[d])))
+            .map(|d| {
+                (
+                    output_ranges[d].0.max(nlo[d]),
+                    output_ranges[d].1.min(nhi[d]),
+                )
+            })
             .collect();
         let axes: Vec<TileAxisDom> = (0..nd)
             .map(|d| TileAxisDom {
@@ -7221,7 +7250,10 @@ impl<'m> TapeBuilder<'m> {
                 let region_ix = self.regions.len() as u32;
                 self.regions.push(RegionSpec {
                     dest_lo: (0..nd).map(|d| (ranges[d].0 - nlo[d]) as usize).collect(),
-                    shape: ranges.iter().map(|(lo, hi)| (hi - lo + 1) as usize).collect(),
+                    shape: ranges
+                        .iter()
+                        .map(|(lo, hi)| (hi - lo + 1) as usize)
+                        .collect(),
                 });
                 let LV::Arr(base) = self.emit_zero_array(&shape, &origin) else {
                     unreachable!("a zero fill is an array slot");

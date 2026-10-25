@@ -19,7 +19,9 @@
 //!
 //! What cannot be restricted exactly is refused, never approximated.
 
-use super::super::vectorized::{AxisIndex, AxisRole, VecBox, classify_axis_role, region_value_axes};
+use super::super::vectorized::{
+    AxisIndex, AxisRole, VecBox, classify_axis_role, region_value_axes,
+};
 use crate::types::{Expr, ExpressionNode, RangeSpec, RegionBound};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -142,7 +144,13 @@ impl Scope {
 
     /// Bind `syms` (shadowing any outer binding of the same names) over the
     /// given ranges, keeping the outer symbols the new ones do not shadow.
-    fn nested(&self, syms: &[String], ranges: &[(i64, i64)], sets: &[Option<String>], contracted: &[String]) -> Scope {
+    fn nested(
+        &self,
+        syms: &[String],
+        ranges: &[(i64, i64)],
+        sets: &[Option<String>],
+        contracted: &[String],
+    ) -> Scope {
         let mut out = Scope {
             syms: syms.to_vec(),
             lo: ranges.iter().map(|r| r.0).collect(),
@@ -198,7 +206,12 @@ fn faq_ranges(node: &ExpressionNode, names: &[String]) -> Option<Vec<(i64, i64)>
     let ranges = node.ranges.as_ref()?;
     names
         .iter()
-        .map(|n| ranges.get(n).and_then(RangeSpec::bounds).map(|[lo, hi]| (lo, hi)))
+        .map(|n| {
+            ranges
+                .get(n)
+                .and_then(RangeSpec::bounds)
+                .map(|[lo, hi]| (lo, hi))
+        })
         .collect()
 }
 
@@ -297,7 +310,10 @@ impl<'a> Walker<'a> {
         match node.op.as_str() {
             "index" if !node.args.is_empty() => self.index(node, sc),
             "makearray" => {
-                let regions = node.regions.as_ref().map(|r| r.iter().map(|x| region_box(x)).collect::<Option<Vec<_>>>());
+                let regions = node
+                    .regions
+                    .as_ref()
+                    .map(|r| r.iter().map(|x| region_box(x)).collect::<Option<Vec<_>>>());
                 let Some(Some(regions)) = regions else {
                     return self.refuse("holds a makearray with a symbolic region bound");
                 };
@@ -338,7 +354,12 @@ impl<'a> Walker<'a> {
 
     /// The image box of `subs` over `sc`, axis by axis, with the cell set each
     /// subscript's symbol runs along.
-    fn image_box(&self, subs: &[Expr], sc: &Scope, what: &str) -> WResult<(Vec<(i64, i64)>, Vec<Option<String>>)> {
+    fn image_box(
+        &self,
+        subs: &[Expr],
+        sc: &Scope,
+        what: &str,
+    ) -> WResult<(Vec<(i64, i64)>, Vec<Option<String>>)> {
         let mut bx = Vec::with_capacity(subs.len());
         let mut sets = Vec::with_capacity(subs.len());
         for s in subs {
@@ -354,7 +375,9 @@ impl<'a> Walker<'a> {
                     bx.push((g, g));
                     sets.push(None);
                 }
-                None => return self.refuse(format_args!("subscripts {what} at a computed position")),
+                None => {
+                    return self.refuse(format_args!("subscripts {what} at a computed position"));
+                }
             }
         }
         Ok((bx, sets))
@@ -398,7 +421,9 @@ impl<'a> Walker<'a> {
                                     Some(AxisRole::Const(g)) => (g, g),
                                     None => {
                                         return self.global(
-                                            format_args!("reads `{v}` at a data-dependent subscript"),
+                                            format_args!(
+                                                "reads `{v}` at a data-dependent subscript"
+                                            ),
                                             set,
                                         );
                                     }
@@ -458,7 +483,13 @@ impl<'a> Walker<'a> {
 
     /// A `faq` evaluated over `ranges` (its output symbols, in order), each
     /// symbol running along `sets`.
-    fn faq(&mut self, node: &Arc<ExpressionNode>, ranges: &[(i64, i64)], sets: &[Option<String>], sc: &Scope) -> WResult<Expr> {
+    fn faq(
+        &mut self,
+        node: &Arc<ExpressionNode>,
+        ranges: &[(i64, i64)],
+        sets: &[Option<String>],
+        sc: &Scope,
+    ) -> WResult<Expr> {
         let out_idx: Vec<String> = node.output_idx.clone().unwrap_or_default();
         let contracted = contracted_of(node);
         let inner = sc.nested(&out_idx, ranges, sets, &contracted);
@@ -481,7 +512,13 @@ impl<'a> Walker<'a> {
 
     /// A makearray read over `need` (one inclusive range per axis), whose axes
     /// run along `sets`, inside the box `sc`.
-    fn makearray(&mut self, node: &Arc<ExpressionNode>, need: &[(i64, i64)], sets: &[Option<String>], sc: &Scope) -> WResult<Expr> {
+    fn makearray(
+        &mut self,
+        node: &Arc<ExpressionNode>,
+        need: &[(i64, i64)],
+        sets: &[Option<String>],
+        sc: &Scope,
+    ) -> WResult<Expr> {
         let (Some(regions), Some(values)) = (node.regions.as_ref(), node.values.as_ref()) else {
             return self.refuse("holds a makearray with no regions");
         };
@@ -531,7 +568,14 @@ impl<'a> Walker<'a> {
     }
 
     /// One region value, its region clipped from `ro` to `rc`.
-    fn region_value(&mut self, v: &Expr, ro: &[(i64, i64)], rc: &[(i64, i64)], sets: &[Option<String>], sc: &Scope) -> WResult<Expr> {
+    fn region_value(
+        &mut self,
+        v: &Expr,
+        ro: &[(i64, i64)],
+        rc: &[(i64, i64)],
+        sets: &[Option<String>],
+        sc: &Scope,
+    ) -> WResult<Expr> {
         match v {
             Expr::Operator(node)
                 if (node.op == "faq" || node.op == "aggregate")
@@ -541,8 +585,14 @@ impl<'a> Walker<'a> {
                 let Some(fr) = faq_ranges(node, &out_idx) else {
                     return self.refuse("holds a faq region value whose ranges do not resolve");
                 };
-                let fshape: Vec<usize> = fr.iter().map(|(lo, hi)| (hi - lo + 1).max(0) as usize).collect();
-                let rshape: Vec<usize> = ro.iter().map(|(lo, hi)| (hi - lo + 1).max(0) as usize).collect();
+                let fshape: Vec<usize> = fr
+                    .iter()
+                    .map(|(lo, hi)| (hi - lo + 1).max(0) as usize)
+                    .collect();
+                let rshape: Vec<usize> = ro
+                    .iter()
+                    .map(|(lo, hi)| (hi - lo + 1).max(0) as usize)
+                    .collect();
                 let Some(covered) = region_value_axes(&fshape, &rshape) else {
                     return self.refuse("holds a faq region value that does not fit its region");
                 };
@@ -559,15 +609,21 @@ impl<'a> Walker<'a> {
                 }
                 self.faq(node, &ranges, &fsets, sc)
             }
-            Expr::Operator(node) if node.op != "index" && node.op != "faq" && node.op != "aggregate" && node.op != "makearray" => {
+            Expr::Operator(node)
+                if node.op != "index"
+                    && node.op != "faq"
+                    && node.op != "aggregate"
+                    && node.op != "makearray" =>
+            {
                 let mut err = None;
-                let out = node.map_children(&mut |c| match self.region_value(c, ro, rc, sets, sc) {
-                    Ok(x) => x,
-                    Err(r) => {
-                        err.get_or_insert(r);
-                        c.clone()
-                    }
-                });
+                let out =
+                    node.map_children(&mut |c| match self.region_value(c, ro, rc, sets, sc) {
+                        Ok(x) => x,
+                        Err(r) => {
+                            err.get_or_insert(r);
+                            c.clone()
+                        }
+                    });
                 match err {
                     Some(r) => Err(r),
                     None => Ok(Expr::operator(out)),

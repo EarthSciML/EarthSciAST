@@ -417,7 +417,10 @@ impl ArrayCompiled {
             return (e.prog.clone(), Rc::clone(&e.report));
         }
         let (prog, report) = self.build_tape(discrete_forcing);
-        let (prog, report) = (prog.map(std::sync::Arc::new).map_err(Rc::new), Rc::new(report));
+        let (prog, report) = (
+            prog.map(std::sync::Arc::new).map_err(Rc::new),
+            Rc::new(report),
+        );
         self.tape_cache.entries.borrow_mut().push(CachedTape {
             discrete_forcing: forcing,
             forcing_buffer,
@@ -544,8 +547,15 @@ impl ArrayCompiled {
         let const_names = self.classify_static_observeds(discrete_forcing);
         let seg_names = self.classify_segment_invariant_observeds(discrete_forcing, true);
         let forcing = self.forcing_inputs(discrete_forcing);
-        let (prog, vn_hits) =
-            build_tape_program(self, &const_names, &seg_names, &forcing, fuse, align_layout, None);
+        let (prog, vn_hits) = build_tape_program(
+            self,
+            &const_names,
+            &seg_names,
+            &forcing,
+            fuse,
+            align_layout,
+            None,
+        );
         let report = match &prog {
             Ok(prog) => make_report(prog, vn_hits),
             Err(declined) => make_declined_report(declined, vn_hits),
@@ -557,10 +567,7 @@ impl ArrayCompiled {
     /// the tile's clipped rules and storage-box state layout, `tile` the
     /// domains its reads are classified against. Built with the same sections
     /// and fusion as the whole-domain tape; `Err` names the declined rules.
-    pub(crate) fn build_tile_tape(
-        &self,
-        tile: &TileLowering,
-    ) -> Result<TapeProgram, DeclinedTape> {
+    pub(crate) fn build_tile_tape(&self, tile: &TileLowering) -> Result<TapeProgram, DeclinedTape> {
         let none = HashSet::new();
         let const_names = self.classify_static_observeds(&none);
         let seg_names = self.classify_segment_invariant_observeds(&none, true);
