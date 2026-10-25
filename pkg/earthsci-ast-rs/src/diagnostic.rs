@@ -198,6 +198,14 @@ diagnostic_code_registry! {
     /// is never expanded. The message names `/solver/external` and quotes the
     /// string.
     SOLVER_EXTERNAL_UNRESOLVED = "solver_external_unresolved";
+    /// `solver.time_span` in a document declaring `esm` < 1.3.0 (esm-spec
+    /// §2.2.4, §2.2.5).
+    SOLVER_TIME_SPAN_VERSION_TOO_OLD = "solver_time_span_version_too_old";
+    /// A `solver.time_span` that is no interval (esm-spec §2.2.7): `end` not
+    /// after `start`, a timestamp naming no calendar day, or an unreadable time
+    /// origin. The message names `/solver/time_span` (and the origin's pointer
+    /// when the origin is at fault).
+    SOLVER_TIME_SPAN_INVALID = "solver_time_span_invalid";
     /// Declared `units` on an expression node in a document declaring `esm` <
     /// 1.2.0 (esm-spec §4.8.5).
     CONST_UNITS_VERSION_TOO_OLD = "const_units_version_too_old";
@@ -669,6 +677,8 @@ mod error_code_tests {
             "searchsorted_non_monotonic",
             "solver_external_unresolved",
             "solver_external_version_too_old",
+            "solver_time_span_invalid",
+            "solver_time_span_version_too_old",
             "solver_version_too_old",
             "subsystem_index_set_conflict",
             "subsystem_index_set_rename_unknown_name",

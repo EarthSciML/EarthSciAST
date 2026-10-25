@@ -395,13 +395,16 @@ export {
 export type { TemplateResolveOptions, TemplateSchemaError } from './template-imports.js'
 
 // Document-scoped solver hints (esm-spec §2.2): the spec-version gates, the
-// §2.2.2 tolerance resolution order and the §2.2.6 `solver.external` location
-// — the parts of the block that are NOT advisory. The Solver TYPE itself comes
-// from the generated schema types.
+// §2.2.2 tolerance resolution order, the §2.2.6 `solver.external` location and
+// the §2.2.7 `solver.time_span` interval in seconds — the parts of the block
+// that are NOT advisory. The Solver TYPE itself comes from the generated schema
+// types.
 export {
   rejectSolverPreV11,
   rejectSolverExternalPreV13,
+  rejectSolverTimeSpanPreV13,
   solverExternalLocation,
+  resolveTimeSpan,
   resolveTolerances,
   DEFAULT_ABSTOL,
   DEFAULT_RELTOL,

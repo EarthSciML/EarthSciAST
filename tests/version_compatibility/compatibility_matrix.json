@@ -68,6 +68,13 @@
         "warnings": []
       },
       {
+        "file": "version_1_3_0_solver_time_span.esm",
+        "file_version": "1.3.0",
+        "expected_behavior": "load_success",
+        "description": "Exact version match - should load successfully, with no warning. Uses `solver.time_span`, the other construct esm 1.3.0 adds (esm-spec \u00a72.2.7).",
+        "warnings": []
+      },
+      {
         "file": "version_1_10_0_double_digit.esm",
         "file_version": "1.10.0",
         "expected_behavior": "load_with_warning",

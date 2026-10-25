@@ -86,7 +86,7 @@ The full authoring stance, normatively:
 | `expression_templates` | | Top-level rewrite rules / templates — the payload of a **template-library file** (§9.7.1). Only valid in a library file; component-local templates stay inside their `model` / `reaction_system` (§9.6.1) |
 | `expression_template_imports` | | Ordered imports of template-library files (§9.7.2) — at top level, only valid in a library file layering on other libraries; inside a `model` / `reaction_system` (§9.7.2); or, as **scope-directed injection** into another component's scope, on a §4.7 subsystem-ref edge, a §10 coupling entry, or a §6.6 / §6.7 test / analysis (§9.7.10) |
 | `metaparameters` | | Document-scoped named integers bound at load (import/subsystem edges, loader API, or defaults) and admissible in `index_sets` sizes, `faq` dense ranges, and `makearray` regions (§9.7.6) |
-| `solver` | | Document-scoped, **optional**, purely **advisory** solver hints — stiffness, integration tolerances, and a splitting hint the document knows about itself, plus a reference to an external run-configuration document (`external`, esm 1.3.0; §2.2.6) (§2.2). Purely additive: a document without it validates, flattens and emits exactly as before. Arrives at esm 1.1.0 |
+| `solver` | | Document-scoped, **optional**, purely **advisory** solver hints — stiffness, integration tolerances, and a splitting hint the document knows about itself, plus a reference to an external run-configuration document (`external`, esm 1.3.0; §2.2.6) and the interval the document is meant to be simulated over (`time_span`, esm 1.3.0; §2.2.7) (§2.2). Purely additive: a document without it validates, flattens and emits exactly as before. Arrives at esm 1.1.0 |
 
 Spatial grid geometry is **not** a special top-level concept. Coordinates, extents, spacing, CRS parameters, connectivity, and metric arrays are ordinary data — loaded through a `data_sources` entry or declared as unknowns/parameters — and grid topology and metrics are constructed declaratively with the `faq` Functional Aggregate Query op (RFC semiring-faq-unified-ir). The `operators`, `registered_functions`, `grids`, `staggering_rules`, and `discretizations` blocks present in earlier drafts are **removed**.
 
@@ -180,6 +180,7 @@ as before, and adding it changes no dynamics and no flattened system.
 | `reltol` | number > 0 | Relative **integration** tolerance the document asks for. |
 | `splitting` | `"none"` \| `"lie"` \| `"strang"` | Advisory: the system tolerates or benefits from this operator-splitting convention. Carries **no** prescribed substep structure. |
 | `external` | non-empty string | A reference to a run-configuration document for this document: the schedule, the algorithm per operator, per-operator tolerances and the other settings this document deliberately does not hold. Resolved by §2.2.6. Advisory for every EarthSciAST binding, which never opens it. Arrives at esm 1.3.0. |
+| `time_span` | `{start, end}` | The interval the document is meant to be simulated over. Each bound is a number in the document's time units or an RFC 3339 UTC timestamp; `end` is after `start`. Resolved by §2.2.7. Arrives at esm 1.3.0. |
 
 Every field is optional, and so is the block itself.
 
@@ -189,7 +190,8 @@ Every field is optional, and so is the block itself.
   "solver": {
     "stiffness": "high",
     "reltol": 1e-4,
-    "external": "reseact.run.json"
+    "external": "reseact.run.json",
+    "time_span": {"start": "2019-07-01T00:00:00Z", "end": "2019-07-03T00:00:00Z"}
   }
 }
 ```
@@ -210,7 +212,7 @@ container in the format that rejects an empty object (`coordinates`,
 `index_sets`, `metaparameters` and `coupling_roles` all admit one), a lone rule
 a reader would have to learn for no gain, and a trap for any tool that builds
 the block from optional inputs that all happened to be absent. A block holding
-only `external` is not empty.
+only `external`, or only `time_span`, is not empty.
 
 **Absence is not a default value.** A document with no `solver` block, or with no
 `stiffness` key, has *not declared* its stiffness — it does not thereby declare
@@ -309,7 +311,10 @@ Advisory as the fields are, six things are **required** of every binding:
    schema conformance, not behavior, and is not excused by the block being
    advisory. `external` MUST be a string of length at least 1 (a schema rule),
    and MUST NOT contain `${`, which is refused at load with
-   `solver_external_unresolved` (§2.2.6).
+   `solver_external_unresolved` (§2.2.6). `time_span` MUST carry both `start`
+   and `end`, each a number or an RFC 3339 UTC timestamp (schema rules), and
+   `end` MUST be after `start`, which is refused at load with
+   `solver_time_span_invalid` (§2.2.7).
 2. **Round-trip verbatim**, with one exception. `solver` survives
    `parse → emit` unchanged: it is authored configuration — a peer of
    `tolerance` and `parameter_overrides` — not a load-time construct like
@@ -317,16 +322,20 @@ Advisory as the fields are, six things are **required** of every binding:
    time. The exception is the empty block: `"solver": {}` normalizes to absence
    at load (§2.2) and therefore does not round-trip, because it carries nothing
    to preserve. `external` round-trips as authored: its resolved location
-   (§2.2.6) is exposed by an accessor and is never written back.
+   (§2.2.6) is exposed by an accessor and is never written back. So does
+   `time_span`: a timestamp stays a timestamp and a number stays the number
+   written, and its value in seconds (§2.2.7) is likewise an accessor's.
 3. **Change nothing.** Presence of `solver` MUST NOT alter equations, variable
    classification, namespacing, or the flattened system. That includes
-   `external`: flatten does not read it.
+   `external` and `time_span`: flatten reads neither.
 4. **Gate on version.** A document declaring `esm` below `1.1.0` and carrying a
    `solver` block MUST be rejected with `solver_version_too_old`. A document
    declaring `esm` below `1.3.0` whose `solver` block carries `external` MUST be
    rejected with `solver_external_version_too_old`, before schema validation,
-   at pointer `/solver/external`. A 1.1.0 or 1.2.0 document with a `solver`
-   block and no `external` stays valid.
+   at pointer `/solver/external`; one whose `solver` block carries `time_span`
+   MUST be rejected with `solver_time_span_version_too_old`, before schema
+   validation, at pointer `/solver/time_span`. A 1.1.0 or 1.2.0 document with a
+   `solver` block and neither field stays valid.
 5. **Never open the referenced document.** A binding MUST NOT open, read,
    fetch or validate the document `external` names. A missing file is its
    consumer's error, not a load error.
@@ -339,6 +348,8 @@ Advisory as the fields are, six things are **required** of every binding:
 | `solver_version_too_old` | File declares `esm` < 1.1.0 but carries a top-level `solver` block (§2.2.4). |
 | `solver_external_version_too_old` | File declares `esm` < 1.3.0 but `solver` carries `external` (§2.2.4). |
 | `solver_external_unresolved` | `solver.external` contains `${` (§2.2.6). |
+| `solver_time_span_version_too_old` | File declares `esm` < 1.3.0 but `solver` carries `time_span` (§2.2.4). |
+| `solver_time_span_invalid` | `solver.time_span` does not describe an interval: `end` is not after `start`, a timestamp names no calendar day, or the time origin a timestamp needs cannot be read (§2.2.7). |
 
 #### 2.2.6 `external`: resolving the run-configuration reference
 
@@ -415,6 +426,146 @@ appearing below esm 1.3.0, at either mount form. The schema still applies to it
   see the run configuration, so it cannot check agreement. `splitting: "none"`
   beside a run configuration that splits is not an EarthSciAST error; a
   consumer MAY warn.
+
+#### 2.2.7 `time_span`: the run interval a document asks for
+
+```json
+{
+  "esm": "1.3.0",
+  "solver": {
+    "reltol": 1e-4,
+    "time_span": {"start": "2019-07-01T00:00:00Z", "end": "2019-07-03T00:00:00Z"}
+  }
+}
+```
+
+`time_span` is the interval the document's author means it to be simulated
+over. It is a fact about the model's intended use in the sense that `abstol`
+and `reltol` are: a forcing-driven chemistry case or a spin-up only makes sense
+over a particular period, and without the field every runner restates it. It
+reuses the `{start, end}` shape of `tests[].time_span` (§6.6.2) on purpose, so
+the pair means one thing across the format.
+
+**Bounds.** Each of `start` and `end` is one of:
+
+- **A number**, in the document's time units: seconds of the independent
+  variable (§11.3), whose dimension is time and whose unit is `s` (§4.9.1).
+  This is what `tests[].time_span` already holds.
+- **A timestamp**, a string matching
+  `^YYYY-MM-DDThh:mm:ss(.f+)?Z$` with each field in its calendar range (the
+  schema's pattern): RFC 3339 in UTC, the `Z` required and no other offset
+  admitted. It means the number of seconds from the document's **time origin**
+  to that instant, counted without leap seconds, as POSIX time counts them.
+  `23:59:60` is not admitted.
+
+The **time origin** is the instant at which the independent variable is `0`.
+It is, first match wins:
+
+1. `domain.temporal.reference_time`, when the document carries the key;
+2. otherwise `domain.temporal.start`, when it carries that key;
+3. otherwise the POSIX epoch, `1970-01-01T00:00:00Z`.
+
+A key that is present selects its field whatever its value: a `reference_time`
+that cannot be read is an error (below), never a reason to fall back to
+`start`. A `null` value is present, and is not a date-time.
+
+When the document's `domain.temporal` carries a non-empty `reference_time` or
+`start`, this is the clock the data loaders run on (§8.3): a loader refresh at
+simulation time `t` reads data for the instant origin + `t` seconds. A
+timestamp in `time_span` then lands on the same clock as the data the document
+reads, and a document whose `domain.temporal.start` equals its
+`time_span.start` timestamp begins at `t = 0`. Without such an anchor the two
+clocks are not shared: a timestamp bound counts from the POSIX epoch, while a
+loader anchors `t = 0` by its own rules (§8.3), which may be its own
+`temporal.start` or run window. A document that pairs timestamp bounds with
+data loaders SHOULD therefore declare `domain.temporal.reference_time` or
+`domain.temporal.start`. (An empty-string `reference_time` is not a date-time:
+the load-time check below refuses it when a bound is a timestamp; the loaders
+skip it.) The origin fields are RFC 3339
+date-times, read as `YYYY-MM-DD`, `T` or `t`, `hh:mm:ss`, an optional
+fraction, then `Z`, `z` or a `±hh:mm` offset (hours `00`–`23`, minutes
+`00`–`59`), and nothing after it — in particular no trailing newline, which a
+regular expression ending in `$` admits in PCRE and Python but not in RE2 or
+JavaScript; a binding reads one only when a bound is a timestamp. As for a
+bound, the seconds field is `00`–`59`: a leap second `:60`, which RFC 3339
+admits, has no POSIX count and makes the field unreadable.
+
+A document MAY mix the two forms, `{"start": 0, "end": "2019-07-03T00:00:00Z"}`;
+both convert to seconds on the same clock.
+
+**Conversion is exact arithmetic on the fields.** A binding MUST NOT route a
+timestamp through a host date library whose range, leap-second or time-zone
+handling it does not control. Write a date-time's **whole part** *W* for the
+integer count of seconds from the POSIX epoch to it, by the proleptic Gregorian
+calendar, its offset subtracted, and its **fraction** *f* for the correctly
+rounded binary64 value of `0.` followed by the digits after the decimal point
+(`0` when there are none; enough nines round it to `1`, and that is the
+value). For a timestamp (*W*, *f*) and an origin (*W₀*, *f₀*) the value is
+`(W − W₀) + (f − f₀)`: `W − W₀` in integers, converted to binary64, then added
+to `f − f₀` taken in binary64. A number bound is its value. Every binding
+reaches the same binary64 value.
+
+**Load-time checks.** After the `solver_time_span_version_too_old` gate,
+before schema validation, and on the root document alone (see Mounting below),
+a binding converts both bounds and refuses the document with
+`solver_time_span_invalid`, naming `/solver/time_span`, when:
+
+- `end` is not after `start` (an empty or reversed interval);
+- a number bound is not finite in binary64 (a literal such as `1e400`, or an
+  integer of hundreds of digits). A binding whose JSON reader refuses such a
+  literal while parsing (Julia, Rust) refuses the document there instead; no
+  binding loads it;
+- a timestamp matches the pattern but names no calendar day (`2019-02-30`,
+  `2019-04-31`, or `02-29` outside a leap year); or
+- a bound is a timestamp and the origin field that applies is not an RFC 3339
+  date-time in the form above, or names no calendar day. The message then
+  names that field's pointer as well (`/domain/temporal/reference_time` or
+  `/domain/temporal/start`).
+
+The check runs only when both bounds have a schema-valid form (a number, or a
+string matching the pattern). Anything else is the schema's to report, and
+the load-time check skips it rather than reporting the same fault twice.
+
+**Advisory.** Like every `solver` field, a binding MAY ignore `time_span`. A
+binding that honours it MUST let an explicit interval at the call site
+override it, with the resolution order of §2.2.2:
+
+1. An explicit interval at the call site — it always wins, both bounds.
+2. Otherwise, the document's `solver.time_span`, converted to seconds.
+3. Otherwise, no interval.
+
+The most specific source that gives an interval gives all of it: a caller who
+names only an end does not inherit the document's start. Level 3 is "no
+interval", not a default one; an entry point that needs an interval and finds
+none raises as it does today.
+
+**The accessor.** Every binding exposes the chain as `resolve_time_span`
+(`resolveTimeSpan` in TypeScript, `ResolveTimeSpan` in Go): given the document
+and an optional call-site interval, it returns the call-site interval when one
+is given, else the document's interval as a pair of binary64 seconds, else no
+interval (`nothing` / `None` / `null` / a nil). The typed document keeps what
+was authored; `emit` writes the authored bounds back unchanged, and a
+converted value is never written into the document.
+
+**Current bindings.** All five parse, validate, gate, round-trip and convert
+`time_span` and expose the accessor. None reads it in its own integration
+entry points, whose interval argument is required (`esm_problem(input, tspan)`
+and its peers, API_SPEC §4); a caller that wants the document's interval asks
+the accessor for it.
+
+**Mounting.** `time_span` describes one run of one assembly. Like the rest of
+a referenced document's `solver` block (§2.2.6, Mounting), it does not cross a
+mount edge (§4.7): only the root document's `time_span` survives, and the
+interval belongs to the run, not to a component. The load-time checks on it
+are checks on the root alone; a mounted document's `time_span` is not refused
+for its order, its calendar or for appearing below esm 1.3.0. The schema still
+applies to it. The time origin is likewise the root's: a document has one
+`domain` (§11).
+
+**Coexistence.** A consumer that also reads a run configuration (`external`,
+§2.2.6) SHOULD treat an interval there as more specific than this field, in
+the order §2.2.6 recommends: call-site argument, then the run configuration,
+then `time_span`, then none.
 
 ---
 

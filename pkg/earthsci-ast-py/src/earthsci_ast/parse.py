@@ -94,6 +94,7 @@ from .esm_types import (
     ReactionSystem,
     Reference,
     Solver,
+    SolverTimeSpan,
     Species,
     SweepDimension,
     SweepRange,
@@ -1398,6 +1399,11 @@ def _parse_esm_data(data: dict[str, Any]) -> EsmFile:
             reltol=_s.get("reltol"),
             splitting=_s.get("splitting"),
             external=_s.get("external"),
+            time_span=(
+                SolverTimeSpan(start=_s["time_span"].get("start"), end=_s["time_span"].get("end"))
+                if isinstance(_s.get("time_span"), dict)
+                else None
+            ),
         )
         # §2.2: an EMPTY block normalizes to absence at load. `{}` is legal and
         # means what omitting the block means, so the typed document never holds
@@ -2780,6 +2786,8 @@ def _load_data(
         reject_solver_external_pre_v13,
         reject_solver_external_unresolved,
         reject_solver_pre_v11,
+        reject_solver_time_span_invalid,
+        reject_solver_time_span_pre_v13,
     )
     from .template_imports import (
         apply_scope_injections,
@@ -2808,7 +2816,13 @@ def _load_data(
     # `${` in it is refused rather than expanded (§2.2.6). The older, outer
     # gate above runs first, so a pre-1.1.0 block is reported as such.
     reject_solver_external_pre_v13(data)
+    # `solver.time_span` arrives at esm 1.3.0 too (§2.2.4 requirement 4), and
+    # an interval whose `end` is not after its `start` -- or whose timestamps
+    # name no calendar day, or whose time origin cannot be read -- is refused
+    # (§2.2.7). Root only: a mounted document never passes through here.
+    reject_solver_time_span_pre_v13(data)
     reject_solver_external_unresolved(data)
+    reject_solver_time_span_invalid(data)
 
     # Declared `units` on a `const` node arrive at esm 1.2.0 (esm-spec §4.8.5).
     from .units import reject_const_units_pre_v12

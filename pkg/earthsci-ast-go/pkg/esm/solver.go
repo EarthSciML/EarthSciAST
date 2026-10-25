@@ -47,6 +47,11 @@ type Solver struct {
 	// the resolved location comes from SolverExternalLocation and is never
 	// written back. EarthSciAST never opens the referenced document.
 	External *string `json:"external,omitempty"`
+	// TimeSpan is the interval the document is meant to be simulated over
+	// (esm-spec §2.2.7). Each bound is held exactly as authored -- a number
+	// or an RFC 3339 UTC timestamp -- and emitted verbatim; its value in
+	// seconds comes from ResolveTimeSpan and is never written back.
+	TimeSpan *SolverTimeSpan `json:"time_span,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
@@ -248,7 +253,8 @@ func normalizeSolver(s *Solver) *Solver {
 	if s == nil {
 		return nil
 	}
-	if s.Stiffness == nil && s.Abstol == nil && s.Reltol == nil && s.Splitting == nil && s.External == nil {
+	if s.Stiffness == nil && s.Abstol == nil && s.Reltol == nil && s.Splitting == nil && s.External == nil &&
+		s.TimeSpan == nil {
 		return nil
 	}
 	return s

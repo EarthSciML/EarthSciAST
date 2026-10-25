@@ -49,6 +49,7 @@ from .esm_types import (
     FunctionTable,
     FunctionTableAxis,
     Solver,
+    SolverTimeSpan,
 )
 
 # Document-scoped solver hints (esm-spec §2.2): the spec-version gate and the
@@ -58,6 +59,8 @@ from .solver import (
     SolverBlockError,
     reject_solver_external_pre_v13,
     reject_solver_pre_v11,
+    reject_solver_time_span_pre_v13,
+    resolve_time_span,
     resolve_tolerances,
     solver_external_location,
 )
@@ -495,8 +498,11 @@ __all__ = [
     "Species",
     "Solver",
     "SolverBlockError",
+    "SolverTimeSpan",
     "reject_solver_external_pre_v13",
     "reject_solver_pre_v11",
+    "reject_solver_time_span_pre_v13",
+    "resolve_time_span",
     "resolve_tolerances",
     "solver_external_location",
     "Parameter",

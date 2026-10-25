@@ -323,7 +323,15 @@ func LoadString(jsonStr string, opts ...LoadOption) (*ESMFile, error) {
 			if err := RejectSolverExternalPreV13(preCheck); err != nil {
 				return nil, err
 			}
+			if err := RejectSolverTimeSpanPreV13(preCheck); err != nil {
+				return nil, err
+			}
 			if err := rejectSolverExternalUnresolved(preCheck); err != nil {
+				return nil, err
+			}
+			// esm-spec §2.2.7: on the root alone -- a mounted leaf's `solver`
+			// block never reaches this view.
+			if err := rejectSolverTimeSpanInvalid(preCheck); err != nil {
 				return nil, err
 			}
 			if err := rejectConstUnitsPreV12(preCheck); err != nil {

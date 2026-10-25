@@ -1,0 +1,66 @@
+{
+  "esm": "1.3.0",
+  "metadata": {
+    "name": "SolverTimeSpan_mount_subsystem_root_with_time_span",
+    "description": "A root with its own `time_span`, mounting at the `subsystems.<k>` form a leaf whose block carries another. Only the root's survives.",
+    "authors": [
+      "EarthSciML Test Suite"
+    ],
+    "license": "MIT",
+    "tags": [
+      "solver",
+      "time_span",
+      "mount"
+    ]
+  },
+  "solver": {
+    "time_span": {
+      "start": 5,
+      "end": 6
+    }
+  },
+  "models": {
+    "Outer": {
+      "variables": {
+        "A": {
+          "type": "unknown",
+          "units": "mol/m^3",
+          "default": 2.0
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.5
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "A"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "neg",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "k",
+                  "A"
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "subsystems": {
+        "Inner": {
+          "ref": "./leaves/leaf_with_time_span.esm"
+        }
+      }
+    }
+  }
+}

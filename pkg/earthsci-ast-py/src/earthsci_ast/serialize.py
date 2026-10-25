@@ -1130,6 +1130,14 @@ def _serialize_esm_file(esm_file: EsmFile) -> dict[str, Any]:
                 ("reltol", _solver.reltol),
                 ("splitting", _solver.splitting),
                 ("external", _solver.external),
+                (
+                    "time_span",
+                    # §2.2.4 requirement 2: the authored bounds, a timestamp as
+                    # its string and a number as the number written.
+                    {"start": _solver.time_span.start, "end": _solver.time_span.end}
+                    if _solver.time_span is not None
+                    else None,
+                ),
             )
             if v is not None
         }

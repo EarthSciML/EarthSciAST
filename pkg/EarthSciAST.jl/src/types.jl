@@ -1319,14 +1319,33 @@ struct TimeSpan
 end
 
 """
+    SolverTimeSpan(start, stop)
+
+The `solver.time_span` interval (esm-spec §2.2.7): the period the document is
+meant to be simulated over. Each bound is what the author wrote — a number in
+the document's time units (seconds; an `Int64` when written as an integer, else
+a `Float64`), or an RFC 3339 UTC timestamp `String` — so `emit` writes it back
+unchanged. Its value in seconds comes from
+[`resolve_time_span`](@ref). The wire key `end` is spelled `stop` here, as in
+[`TimeSpan`](@ref), because `end` is a Julia keyword.
+"""
+struct SolverTimeSpan
+    start::Union{Int64,Float64,String}
+    stop::Union{Int64,Float64,String}
+end
+
+"""
     Solver(; stiffness=nothing, abstol=nothing, reltol=nothing, splitting=nothing,
-           external=nothing)
+           external=nothing, time_span=nothing)
 
 Document-scoped, OPTIONAL solver hints (esm-spec §2.2) — numerics the document
 knows about *itself*, which each binding maps to its own integrator — plus
-`external`, a reference to a run-configuration document (esm 1.3.0). The
+`external`, a reference to a run-configuration document, and `time_span`, the
+interval the document asks to be simulated over (both esm 1.3.0). The
 authored `external` string is what the type holds and what `emit` writes; where
-it points comes from [`solver_external_location`](@ref) (§2.2.6).
+it points comes from [`solver_external_location`](@ref) (§2.2.6). Likewise
+`time_span` holds the authored bounds, and [`resolve_time_span`](@ref) converts
+them to seconds (§2.2.7).
 
 Every field is ADVISORY: a binding may ignore any or all of them and still
 conform. Advisory governs the MECHANISM, never the OUTCOME — a binding that
@@ -1349,10 +1368,11 @@ struct Solver
     reltol::Union{Float64,Nothing}
     splitting::Union{String,Nothing}
     external::Union{String,Nothing}
+    time_span::Union{SolverTimeSpan,Nothing}
 
     Solver(; stiffness=nothing, abstol=nothing, reltol=nothing, splitting=nothing,
-           external=nothing) =
-        new(stiffness, abstol, reltol, splitting, external)
+           external=nothing, time_span=nothing) =
+        new(stiffness, abstol, reltol, splitting, external, time_span)
 end
 
 """

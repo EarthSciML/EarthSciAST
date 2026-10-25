@@ -1,0 +1,60 @@
+{
+  "esm": "1.3.0",
+  "metadata": {
+    "name": "SolverTimeSpanOnly",
+    "description": "A `solver` block holding only `time_span`, as numbers: not an empty block, so it does not normalize away (esm-spec §2.2).",
+    "authors": [
+      "EarthSciML Test Suite"
+    ],
+    "license": "MIT",
+    "tags": [
+      "solver",
+      "time_span"
+    ]
+  },
+  "solver": {
+    "time_span": {
+      "start": 0,
+      "end": 3600
+    }
+  },
+  "models": {
+    "Decay": {
+      "variables": {
+        "A": {
+          "type": "unknown",
+          "units": "mol/m^3",
+          "default": 2.0
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.5
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "A"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "neg",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "k",
+                  "A"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}
