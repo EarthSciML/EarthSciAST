@@ -992,6 +992,13 @@ All of them are re-exported at the crate root. `RhsError` implements
   whose `update` takes its value from a data source or a handler) and, when
   `runtime_array_parameters` is on, every shaped parameter with a value
   (`kind = ArrayParameter`). `shape` is the variable's declared shape, resolved.
+  The kind follows the parameter, not how its value arrived: `Forcing` when
+  the parameter is externally fed (or the buffer is a provider's that no
+  parameter declares), `ArrayParameter` otherwise, including a shaped
+  parameter whose value the caller supplied at construction. A Julia
+  `param_arrays` entry is a live buffer even with `runtime_array_parameters`
+  off, so a shaped parameter bound through it is an `ArrayParameter` slot
+  either way.
 - **Buffers.** A set holds one buffer per slot, in slot order, of length
   `prod(shape)` (1 for a 0-d slot), **column-major** (first index fastest), the
   same convention as the state. Rust takes `Arc<[f64]>`; Julia takes any
