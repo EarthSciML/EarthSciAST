@@ -173,11 +173,6 @@ function _rrc_check_tile!(op, dec, t, G, ext, p; du_shared = nothing)
     return covered, owned_slots, L
 end
 
-# Julia runs two tiles of this case, the narrow boundary-band tile and an
-# interior one, for the JIT cost of its template-heavy document; Rust runs
-# every tiling.
-const _RRC_JULIA_TILES = Dict("esd_latlon3d_regional_inflow" => [("narrow", 1), ("narrow", 2)])
-
 function _rrc_tile_partition(c, prob)
     _, op = _rrc_op(c, prob)
     dec = _rrc_dec(c.decomposition)
@@ -185,16 +180,6 @@ function _rrc_tile_partition(c, prob)
     @test RRC.halo(op, dec) == want
     G, ext = _rrc_whole(op, prob.p)
     @test all(isfinite, G)
-    picks = get(_RRC_JULIA_TILES, String(c.id), nothing)
-    if picks !== nothing
-        for (tid, k) in picks
-            tiling = only(t for t in c.tilings if String(t.id) == tid)
-            @testset "tiling $tid tile $k" begin
-                _rrc_check_tile!(op, dec, tiling.tiles[k], G, ext, prob.p)
-            end
-        end
-        return
-    end
     for tiling in c.tilings
         @testset "tiling $(tiling.id)" begin
             shared = get(tiling, :shared_storage, false) === true
@@ -368,7 +353,7 @@ const _RRC_SUBCALL_DOC = "fixtures/esd/problems/latlon3d_transport_cwc_regional_
     pick = isempty(only) ? nothing : Set(split(only, ","))
     for c in manifest.cases
         pick === nothing || String(c.id) in pick || continue
-        # Before 1.12 this template-heavy document's tile kernels compile slowly
+        # Before 1.12 this template-heavy document's program compiles slowly
         # enough to push the LTS test job past its time limit; the 1.12+ job
         # runs it.
         VERSION < v"1.12" && String(c.document) == _RRC_SUBCALL_DOC && continue

@@ -572,8 +572,15 @@ end
 _cg_slot_side(nst::Int, lo::Int, hi::Int) =
     nst <= 0 || lo > hi ? :x : (lo >= 1 && hi <= nst) ? :s : lo > nst ? :o : :x
 
-# The output-slot extent of a kernel's cells.
+# Whether a box's extent along `d` is emitted as the literal 1 of a boundary
+# slab. In a program whose tiles share its code it is run-time data, as every
+# other extent is: a tile may own none of the slab's cells.
+_cg_slab_literal(cs::_CellSet, d::Int) =
+    _cellset_slab(cs, d) && !_range_shared_code(_range_spec_now())
+
+# The output-slot extent of a kernel's cells (`(1, 0)` for none).
 function _cg_oln_extent(cs::_CellSet)
+    any(isempty, cs.ranges) && return (1, 0)
     _is_outs(cs) && return extrema(cs.outs)
     _is_contig(cs) && return (first(cs.ranges[1]), last(cs.ranges[1]))
     lo = hi = cs.base
@@ -585,9 +592,15 @@ function _cg_oln_extent(cs::_CellSet)
     end
     return (lo, hi)
 end
-_cg_oln_extent(Ks::AbstractVector{_AccKernel}) =
-    isempty(Ks) ? (1, 0) :
-    (minimum(K -> _cg_oln_extent(K.cells)[1], Ks), maximum(K -> _cg_oln_extent(K.cells)[2], Ks))
+function _cg_oln_extent(Ks::AbstractVector{_AccKernel})
+    lo, hi = typemax(Int), typemin(Int)
+    for K in Ks
+        a, b = _cg_oln_extent(K.cells)
+        a > b && continue
+        lo = min(lo, a); hi = max(hi, b)
+    end
+    return lo > hi ? (1, 0) : (lo, hi)
+end
 
 # Record that `K`'s loop nest binds `oln` over its own cells.
 function _cg_note_nest!(ctx::_CGCtx, K::_AccKernel)
@@ -1506,11 +1519,14 @@ function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbo
     geo(v, f, unit::Bool=false) = _cg_geo!(ctx, v, (cs, f), unit)
     function axis(d)
         lo = geo(first(cs.ranges[d]), (d, :first))
-        _cellset_slab(cs, d) && return (lo, lo, 1)
+        _cg_slab_literal(cs, d) && return (lo, lo, 1)
         n = length(cs.ranges[d])
         return (lo, geo(last(cs.ranges[d]), (d, :last)), geo(n, (d, :len)))
     end
-    corner = !isempty(cs.strides) && all(d -> _cellset_slab(cs, d), eachindex(cs.strides))
+    # (A program whose tiles share its code counts every box at run time: a
+    # tile runs no cell of a box it does not own.)
+    corner = !isempty(cs.strides) && all(d -> _cellset_slab(cs, d), eachindex(cs.strides)) &&
+             !_range_shared_code(_range_spec_now())
     hdr = if sm === nothing
         Any[:(local $tv = _chunk_ordinals($(corner ? 1 : geo(ncells, :n)), _cgci, _cgnc)),
             :(local $av = $tv[1]),
@@ -1698,6 +1714,9 @@ end
 function _cg_fuse_leading(K::_AccKernel)
     cs = K.cells
     (_is_outs(cs) || _is_contig(cs)) && return K
+    # Whether a box spans whole rows depends on the cells a tile owns, so a
+    # program whose tiles share its code never fuses.
+    _range_shared_code(_range_spec_now()) && return K
     nd = length(cs.strides)
     nd >= 2 || return K
     isempty(K.subs) || return K
@@ -1792,7 +1811,9 @@ function _cg_rowfuse_key(K::_AccKernel)
     cs = K.cells
     nd = length(cs.strides)
     (_is_outs(cs) || !(2 <= nd <= 3)) && return nothing
-    return (nd, cs.base, Tuple(cs.strides), Tuple(cs.ranges[2:nd]),
+    # Rows by their end points: every empty range is `==` every other.
+    return (nd, cs.base, Tuple(cs.strides),
+            Tuple((first(cs.ranges[d]), last(cs.ranges[d])) for d in 2:nd),
             Tuple(_cellset_slab(cs, d) for d in 2:nd))
 end
 
@@ -1841,7 +1862,7 @@ function _cg_emit_rowgroup_nest!(ctx::_CGCtx, Ks::Vector{_AccKernel},
     function axis(cs, d)
         g(v, f) = _cg_geo!(ctx, v, (cs, f))
         lo = g(first(cs.ranges[d]), (d, :first))
-        _cellset_slab(cs, d) && return (lo, lo, 1)
+        _cg_slab_literal(cs, d) && return (lo, lo, 1)
         return (lo, g(last(cs.ranges[d]), (d, :last)), g(length(cs.ranges[d]), (d, :len)))
     end
     st = Any[_cg_geo!(ctx, cs1.strides[d], (cs1, d, :stride), true) for d in 1:nd]
@@ -2048,6 +2069,9 @@ end
 # Returns `(holes, F, iF, oF)` or `nothing`.
 function _cg_row_fission(ctx::_CGCtx, Ks::Vector{_AccKernel}, parts)
     length(Ks) >= 2 || return nothing
+    # The split is chosen from the members' geometry, which differs from tile
+    # to tile, so a program whose tiles share its code keeps the one-pass form.
+    _range_shared_code(_range_spec_now()) && return nothing
     all(q -> isempty(q.rec), parts) || return nothing
     for m in 2:length(Ks)
         last(Ks[m-1].cells.ranges[1]) + 1 == first(Ks[m].cells.ranges[1]) || return nothing

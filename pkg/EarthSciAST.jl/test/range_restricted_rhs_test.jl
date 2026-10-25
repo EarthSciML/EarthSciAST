@@ -97,6 +97,23 @@ end
 
 _rrt_allocated(du, x, ws, u, aux, p) = @allocated rhs!(du, x, ws, u, aux, p, 0.0)
 
+# The expressions of every generated function a program holds.
+function _rrt_generated(x, acc = Set{String}(), seen = Set{UInt}())
+    RGF = RRT.RuntimeGeneratedFunctions
+    x isa RGF.RuntimeGeneratedFunction && (push!(acc, string(RGF.get_expression(x))); return acc)
+    (x isa Module || x isa DataType || x isa String || x isa Symbol || isbits(x)) && return acc
+    objectid(x) in seen && return acc
+    push!(seen, objectid(x))
+    if x isa AbstractArray || x isa Tuple || x isa AbstractDict || x isa AbstractSet
+        foreach(v -> _rrt_generated(v, acc, seen), x isa AbstractDict ? values(x) : x)
+        return acc
+    end
+    for f in fieldnames(typeof(x))
+        isdefined(x, f) && _rrt_generated(getfield(x, f), acc, seen)
+    end
+    return acc
+end
+
 @testset "range_restricted_rhs" begin
     nx, ny = 10, 6
     prob = esm_problem(_rrt_doc(nx, ny), (0.0, 1.0))
@@ -152,6 +169,32 @@ _rrt_allocated(du, x, ws, u, aux, p) = @allocated rhs!(du, x, ws, u, aux, p, 0.0
             @test _rrt_allocated(duS, tile, ws, uS, noaux, prob.p) == 0
         end
         @test all(==(1), seen)
+    end
+
+    @testset "tiles share the whole-domain program's code" begin
+        # Tiles that own different region classes (the wrap columns at x = 1
+        # and x = nx are owned by neither) and whose storage stays off the
+        # seam emit the whole-domain program, and agree with it bitwise.
+        whole = _rrt_generated(prog.f!)
+        @test !isempty(whole)
+        for (xo, yo) in ((2:4, 1:3), (5:9, 4:6), (3:3, 2:5))
+            xs, ys = (first(xo) - 1):(last(xo) + 1), (first(yo) - 1):(last(yo) + 1)
+            tile = restrict(prog, dec; owned = ("x" => xo, "y" => yo),
+                            storage = ("x" => xs, "y" => ys))
+            @test _rrt_generated(tile.f!) == whole
+            b = only(tile_layout(tile).u)
+            uS = fill(NaN, tile_layout(tile).n_u)
+            for c in CartesianIndices(Tuple(b.storage))
+                1 <= c[2] <= ny || continue
+                uS[RRT._tile_slot(b, (c[1], c[2]))] = u[(c[2] - 1) * nx + c[1]]
+            end
+            duS = fill(NaN, length(uS))
+            rhs!(duS, tile, rhs_workspace(tile), uS, Float64[], prob.p, 0.0)
+            for c in CartesianIndices(Tuple(b.owned))
+                @test _rrt_bits(duS[RRT._tile_slot(b, (c[1], c[2]))]) ==
+                      _rrt_bits(G[(c[2] - 1) * nx + c[1]])
+            end
+        end
     end
 
     @testset "refusals" begin

@@ -918,6 +918,14 @@ function _scan_dim_cuts(sig::_AffineSig, body, idx_names, ranges, ctx_proto,
     return starts
 end
 
+# The part of a box's range `r` a program runs, given the range `run` it
+# computes: their overlap, or (none) the empty range just below `r`'s start,
+# so an empty box keeps its place and its ordering among its neighbours.
+function _clip_run(r::UnitRange{Int}, run::UnitRange{Int})
+    c = max(first(r), first(run)):min(last(r), last(run))
+    return isempty(c) ? (first(r):(first(r) - 1)) : c
+end
+
 # Turn per-dim cut starts into segment ranges covering `rng`.
 function _segments(starts::Vector{Int}, rng::UnitRange{Int})
     segs = UnitRange{Int}[]
@@ -1675,7 +1683,7 @@ function _process_affine_box!(kernels, spine_cache, flat_cache, box, idx_names,
                               param_sym_set, reg_funcs, base, strides,
                               lhs_var, lhs_idx_args, sig::_AffineSig,
                               reduce::Union{Nothing,_AffineReduce}=nothing;
-                              out_ranges=nothing)
+                              out_ranges=nothing, cbox=box, view=nothing)
     D = length(box)
     nout = reduce === nothing ? D : D - length(reduce.names)
     rep = Int[first(box[d]) for d in 1:D]
@@ -1717,6 +1725,7 @@ function _process_affine_box!(kernels, spine_cache, flat_cache, box, idx_names,
         end
     end
 
+    view === nothing || _range_real_repls!(view, lane_repl, recipes, box, cbox, D)
     spine, acc, cse, subs = @_bench_hot :spine_lower get!(spine_cache, string(bkey, '#', _lane_repl_key(lane_repl))) do
         a = _AccDesc[]
         raw = _lower_to_access(tmpl, lane_repl, a, subcalls)
@@ -1734,7 +1743,8 @@ function _process_affine_box!(kernels, spine_cache, flat_cache, box, idx_names,
                                         last(box[d]) == last(out_ranges[d]))
                 for d in 1:nout]
     cs = _CellSet(Int[strides[d] for d in 1:nout],
-                  UnitRange{Int}[box[d] for d in 1:nout], base, Int[], slab)
+                  UnitRange{Int}[cbox[d] for d in 1:nout],
+                  base - (view === nothing ? 0 : view.shift), Int[], slab)
     push!(kernels, _AccKernel(cs, spine, acc, _FixedBound(0), 0.0, cse, subs))
 end
 
@@ -1885,7 +1895,12 @@ function _try_affine_stencil(rhs_body::ASTExpr, idx_names::Vector{String},
                              # `nothing` is the per-equation caches
                              # (cross-equation variants off / storeless callers).
                              xeq::Union{Nothing,_XEqStore}=nothing,
-                             reduce::Union{Nothing,_AffineReduce}=nothing)
+                             reduce::Union{Nothing,_AffineReduce}=nothing,
+                             # A tile's lowering (`_RangeAffineView`, range_hooks.jl):
+                             # `range_iters` are then the equation's whole-domain
+                             # ranges, `run_iters` the ones the tile computes, and
+                             # every name/slot lookup goes through `view`.
+                             view=nothing, run_iters=nothing)
     (lhs_body.op == "D" && !isempty(lhs_body.args) &&
      lhs_body.args[1] isa OpExpr && (lhs_body.args[1]::OpExpr).op == "index" &&
      !isempty((lhs_body.args[1]::OpExpr).args) &&
@@ -1954,6 +1969,9 @@ function _try_affine_stencil(rhs_body::ASTExpr, idx_names::Vector{String},
                 throw(_StencilFallback("affine reduction: contracted axis is cut"))
         end
         segs = [_segments(cuts[d], ranges[d]) for d in 1:D]
+        run = run_iters === nothing ? nothing :
+              UnitRange{Int}[first(r):last(r) for r in run_iters]
+        shift = view === nothing ? 0 : view.shift
         kernels = _AccKernel[]
         spine_cache = Dict{String,Tuple{_Node,Vector{_AccDesc},_AccCSE,Vector{_AccKernel}}}()
         flat_cache = IdDict{Any,Vector{Float64}}()
@@ -1961,17 +1979,24 @@ function _try_affine_stencil(rhs_body::ASTExpr, idx_names::Vector{String},
         for segtuple in Iterators.product(segs...)
             box = UnitRange{Int}[segtuple[d] for d in 1:D]
             reduce === nothing || append!(box, reduce.ranges)
+            # The cells of the box this program runs: all of them, or a tile's
+            # share (possibly none; the box is then derived and emitted all
+            # the same, and runs no cell).
+            cbox = run === nothing ? box :
+                   UnitRange{Int}[d <= D ? _clip_run(box[d], run[d]) : box[d]
+                                  for d in eachindex(box)]
             @_bench :affine_box _process_affine_box!(kernels, spine_cache, flat_cache, box, all_names,
                                  body, ctx_proto, var_map, const_arrays,
                                  param_sym_set, reg_funcs, base, all_strides,
                                  lhs_var, lhs_idx_args, sig, reduce;
-                                 out_ranges=ranges)
-            push!(boxes, box[1:D])
+                                 out_ranges=ranges, cbox=cbox, view=view)
+            all(d -> !isempty(cbox[d]), 1:D) && push!(boxes, cbox[1:D])
         end
         # Only after every box is verified: mark covered (untouched on fallback).
         for box in boxes
-            @_bench :mark_covered _mark_box_covered!(covered, box, base, strides, D, lhs_var, lhs_idx_args, idx_names)
+            @_bench :mark_covered _mark_box_covered!(covered, box, base - shift, strides, D, lhs_var, lhs_idx_args, idx_names)
         end
+        view === nothing || _range_real_fixed!(view, kernels)
         return kernels
     catch err
         if err isa _StencilFallback

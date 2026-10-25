@@ -5609,6 +5609,36 @@ _with_rule_alias(f, target::String, label::String) =
 # refusal builds (see `_faq_percell_license`).
 const _REFUSAL_DIAGNOSTIC_TERMS = 1024
 
+# The tile view of a `faq` equation (`_range_affine_view`, range_hooks.jl) and
+# its whole-domain ranges in `idx_names` order, or `nothing`.
+function _faq_range_view(lhs_body::OpExpr, idx_names, range_iters, var_map,
+                         array_var_info, xeq)
+    spec = _range_spec_now()
+    spec === nothing && return nothing
+    range_iters isa Vector{UnitRange{Int}} || return nothing
+    isempty(lhs_body.args) && return nothing
+    inner = lhs_body.args[1]
+    (inner isa OpExpr && (inner::OpExpr).op == "index" &&
+     !isempty((inner::OpExpr).args) && (inner::OpExpr).args[1] isa VarExpr) || return nothing
+    pos = Int[]
+    for a in (inner::OpExpr).args[2:end]
+        a isa VarExpr || continue
+        p = findfirst(==((a::VarExpr).name), idx_names)
+        p === nothing || push!(pos, p)
+    end
+    sort(pos) == collect(eachindex(idx_names)) || return nothing
+    var = ((inner::OpExpr).args[1]::VarExpr).name
+    got = _range_affine_view(spec, var, UnitRange{Int}[range_iters[p] for p in pos],
+                             var_map, array_var_info, xeq)
+    got === nothing && return nothing
+    view, sr = got
+    whole = Vector{UnitRange{Int}}(undef, length(idx_names))
+    for (k, p) in enumerate(pos)
+        whole[p] = sr[k]
+    end
+    return view, whole
+end
+
 function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
         array_contractions, covered::_Covered,
         eq::Equation, resolved_obs::Dict{String,ASTExpr},
@@ -5698,6 +5728,9 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
     end
 
     range_iters = _output_range_iters(ranges_dict, idx_names)
+    # A tile that shares the whole-domain program's code gives the affine tier
+    # this equation over its whole-domain ranges (range_hooks.jl).
+    rview = _faq_range_view(lhs_body, idx_names, range_iters, var_map, array_var_info, xeq)
     label = rule_label === nothing ? _faq_debug_label(lhs_body, idx_names, range_iters) :
         rule_label
     # Open this rule's report entry first: every tier below either lands it
@@ -5713,7 +5746,10 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
     # right-hand side to run, which is also what the per-cell build does with it
     # (a loop over no cells). It lands here for every compiler, so a strict one
     # never refuses an equation over no cells for what its body would cost.
-    if !isempty(range_iters) && any(isempty, range_iters)
+    # (A tile's equation over none of its cells still offers the affine tier
+    # its whole-domain boxes, which run no cell; below that it has none.)
+    empty_output = !isempty(range_iters) && any(isempty, range_iters)
+    if empty_output && rview === nothing
         _tally_cascade!(:empty_output)
         return nothing
     end
@@ -5834,6 +5870,17 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
     if !_stencil_disabled() && !loop_preempts_affine
         scan = _detect_prefix_scan(idx_names, range_iters, contract_names,
                                    contract_const, agg_gates, agg_filter, rhs_body)
+        # The affine tier over `iters`: through the tile's view when it has one
+        # (and the equation is not a scan, whose fold walks the tile's cells).
+        affine(b, iters; kw...) =
+            (rview === nothing || scan !== nothing || iters !== range_iters) ?
+                _try_affine_stencil(b, idx_names, iters, lhs_body, resolved_obs,
+                                    array_var_info, var_map, const_registry, pgather,
+                                    param_sym_set, reg_funcs, covered; xeq=xeq, kw...) :
+                _try_affine_stencil(b, idx_names, rview[2], lhs_body, resolved_obs,
+                                    rview[1].avi, rview[1].vm, const_registry, pgather,
+                                    param_sym_set, reg_funcs, covered; xeq=rview[1].xeq,
+                                    view=rview[1], run_iters=range_iters, kw...)
         # A contraction the affine tier would UNROLL is offered to it as a loop
         # first: the contracted indices stay symbolic, as extra loop dims of the
         # box, and the kernel folds the body over them at run time
@@ -5851,18 +5898,11 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
             loop_body = agg_filter === nothing ? rhs_body :
                 OpExpr("ifelse", ASTExpr[agg_filter, rhs_body, NumExpr(rhs_zerobar)])
             affine_kernels =
-                @_bench :affine_tier _try_affine_stencil(loop_body, idx_names, range_iters,
-                                lhs_body, resolved_obs, array_var_info, var_map,
-                                const_registry, pgather, param_sym_set, reg_funcs,
-                                covered; template_sites=template_sites, xeq=xeq,
-                                reduce=areduce)
+                @_bench :affine_tier affine(loop_body, range_iters;
+                                            template_sites=template_sites, reduce=areduce)
             affine_first_try = affine_kernels !== nothing
             if affine_kernels === nothing && template_sites !== nothing
-                affine_kernels =
-                    _try_affine_stencil(loop_body, idx_names, range_iters, lhs_body,
-                                        resolved_obs, array_var_info, var_map,
-                                        const_registry, pgather, param_sym_set,
-                                        reg_funcs, covered; xeq=xeq, reduce=areduce)
+                affine_kernels = affine(loop_body, range_iters; reduce=areduce)
             end
             affine_kernels === nothing || _tally_cascade!(:affine_reduce)
         end
@@ -5885,21 +5925,15 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
         term_iters = (scan === nothing || scan[4] === nothing) ? range_iters : scan[4]
         if affine_kernels === nothing
             affine_kernels = affine_body === nothing ? nothing :
-                @_bench :affine_tier _try_affine_stencil(affine_body, idx_names, term_iters, lhs_body,
-                                    resolved_obs, array_var_info, var_map,
-                                    const_registry, pgather, param_sym_set, reg_funcs,
-                                    covered; template_sites=template_sites, xeq=xeq)
+                @_bench :affine_tier affine(affine_body, term_iters;
+                                            template_sites=template_sites)
             affine_first_try = affine_kernels !== nothing
         end
         # Compile-once tier declined (a body construct the sub-kernel split cannot
         # model): retry the SAME expanded body fused — exactly the pre-tier build.
         # Rarely taken; `covered` is untouched on a `nothing` return.
         if affine_kernels === nothing && template_sites !== nothing && affine_body !== nothing
-            affine_kernels =
-                _try_affine_stencil(affine_body, idx_names, term_iters, lhs_body,
-                                    resolved_obs, array_var_info, var_map,
-                                    const_registry, pgather, param_sym_set,
-                                    reg_funcs, covered; xeq=xeq)
+            affine_kernels = affine(affine_body, term_iters)
         end
         # The term kernels are in hand — resolve the slots they write, in scan
         # order, so the post-pass can fold them. Only now, so a declined affine
@@ -5917,6 +5951,10 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
                         affine_first_try ? :affine : :affine_fused_retry)
         append!(acc_kernels, affine_kernels)
         scan_fold === nothing || push!(scan_folds, scan_fold)
+        return nothing
+    end
+    if empty_output
+        _tally_cascade!(:empty_output)
         return nothing
     end
     # ── A whole-array `makearray`, one equation per region ────────────────────

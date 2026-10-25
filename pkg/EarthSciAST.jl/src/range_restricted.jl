@@ -390,6 +390,8 @@ _range_fill_equations(::_RangeSpec, name, def, dims, box) =
     _materialized_fill_equations(name, def, dims)
 _range_front_door_done(::_RangeSpec, file, model_name, kwd) = nothing
 _range_build_epoch(::_RangeSpec, epoch) = nothing
+_range_shared_code(::_RangeSpec) = false
+_range_affine_view(::_RangeSpec, var, clipped, var_map, avi, xeq) = nothing
 
 # A whole-domain program build: records the front door's product, so a
 # restriction re-lowers from it.
@@ -400,6 +402,8 @@ function _range_front_door_done(s::_CaptureSpec, file, model_name, kwd)
     s.front[] = (file, model_name, Dict{Symbol,Any}(kwd))
     return nothing
 end
+# The whole-domain program emits the code its tiles share (`_TileSpec`).
+_range_shared_code(::_CaptureSpec) = true
 
 # The keyword set of a re-lowering: the front door's, with every registry a
 # build may extend copied, so one build never sees another's additions.
@@ -1573,11 +1577,82 @@ mutable struct _TileSpec <: _RangeSpec
     # The far-side blocks of states read past a seam: block name → (state,
     # the dimensions on which it holds the far piece).
     aliases::Dict{String,Tuple{String,Vector{Bool}}}
+    # Sharing the whole-domain program's code (range_hooks.jl, "Tiles that
+    # share the whole-domain program's code"): each clipped equation's
+    # whole-domain ranges, keyed by its output variable and its clipped ranges
+    # (both over the loop subscripts of the output, in subscript order); each
+    # array variable's whole-domain extents; the views made so far, per
+    # layout; and the affine tier's stores, per build store.
+    sranges::Dict{Tuple{String,Vector{Tuple{Int,Int}}},Vector{UnitRange{Int}}}
+    whole::Dict{String,Tuple{Vector{Int},Vector{Int}}}
+    views::IdDict{Any,Any}
+    xeqs::IdDict{Any,Any}
 end
 
 _TileSpec(mode, axes, owned, storage, shapes, writes, ctx) =
     _TileSpec(mode, axes, owned, storage, shapes, writes, ctx,
-              Dict{String,Tuple{String,Vector{Bool}}}())
+              Dict{String,Tuple{String,Vector{Bool}}}(),
+              Dict{Tuple{String,Vector{Tuple{Int,Int}}},Vector{UnitRange{Int}}}(),
+              Dict{String,Tuple{Vector{Int},Vector{Int}}}(), IdDict{Any,Any}(),
+              IdDict{Any,Any}())
+
+_range_shared_code(spec::_TileSpec) = spec.mode === :tile
+
+# Whether a tile shares the whole-domain program's code: always, but for one
+# whose storage crosses a periodic seam (its far-side blocks have no
+# whole-domain counterpart).
+_tile_shares_code(spec::_TileSpec) =
+    spec.mode === :tile && spec.ctx !== nothing && isempty(spec.ctx.seams)
+
+function _range_affine_view(spec::_TileSpec, var, clipped, var_map, avi, xeq)
+    _tile_shares_code(spec) || return nothing
+    var_map isa StateLayout || return nothing
+    sr = get(spec.sranges, (String(var), _range_key(clipped)), nothing)
+    sr === nothing && return nothing
+    vm, shift, done = get!(spec.views, var_map) do
+        V, sh = _range_virtual_layout(var_map, spec.whole)
+        (_RangeVMap(V, Dict{Int,String}()), sh, IdDict{Any,Nothing}())
+    end
+    wa = Dict{String,Tuple{Vector{Int},Vector{Int}}}(avi)
+    for (n, e) in spec.whole
+        haskey(wa, n) && (wa[n] = e)
+    end
+    store = xeq === nothing ? nothing : get!(() -> _XEqStore(), spec.xeqs, xeq)
+    return _RangeAffineView(vm, wa, shift, var_map, store, done), sr
+end
+
+# Record the whole-domain ranges of a clipped equation (`clipped` and `whole`
+# over the loop subscripts of `var`, in subscript order).
+function _record_sranges!(spec::_TileSpec, var::String, clipped, whole)
+    spec.sranges[(var, _range_key(clipped))] = UnitRange{Int}[whole...]
+    return nothing
+end
+
+# Ranges as their end points: every empty range is `==` every other, and two
+# empty clips of different regions must stay apart.
+_range_key(rs) = Tuple{Int,Int}[(first(r), last(r)) for r in rs]
+
+# The loop-subscript ranges of a `faq` left-hand side `L` writing `var`, in
+# subscript order, as unit ranges (`nothing` when one is not a single run).
+function _lhs_loop_ranges(ctx::_NeedCtx, L::OpExpr)
+    inner = (L.expr_body::OpExpr).args[1]
+    (inner isa OpExpr && (inner::OpExpr).op == "index") || return nothing
+    rd = _ranges_dict(L)
+    out = UnitRange{Int}[]
+    for a in (inner::OpExpr).args[2:end]
+        (a isa VarExpr && haskey(rd, (a::VarExpr).name)) || continue
+        r = rd[(a::VarExpr).name]
+        (r isa AbstractVector && length(r) == 2) || return nothing
+        lo, hi = r
+        if !(lo isa Integer && hi isa Integer)
+            c = _range_cells(ctx, r)
+            length(c.ivs) == 1 || return nothing
+            lo, hi = minimum(c), maximum(c)
+        end
+        push!(out, Int(lo):Int(hi))
+    end
+    return out
+end
 
 struct _HaloDone <: EarthSciASTError
     ctx::_NeedCtx
@@ -1770,7 +1845,14 @@ function _range_restrict_parts(spec::_TileSpec, model, cls, parts, index_sets,
             continue
         end
         e2 = _need_root!(ctx, eq, tgt)
-        e2 === nothing || push!(eqs, e2)
+        e2 === nothing && continue
+        push!(eqs, e2)
+        if spec.mode === :tile && e2.lhs isa OpExpr && _is_faq_op((e2.lhs::OpExpr).op)
+            w = _lhs_loop_ranges(ctx, eq.lhs::OpExpr)
+            c = _lhs_loop_ranges(ctx, e2.lhs::OpExpr)
+            (w === nothing || c === nothing || length(w) != length(c)) ||
+                _record_sranges!(spec, tgt, c, w)
+        end
     end
     _need_drain!(ctx)
     spec.mode === :halo && throw(_HaloDone(ctx))
@@ -1919,6 +2001,7 @@ function _range_state_boxes!(spec::_TileSpec, avi)
         sh = get(spec.shapes, n, nothing)
         sh === nothing && continue
         lo2, hi2 = copy(lo), copy(hi)
+        wlo, whi = copy(lo), copy(hi)
         for d in eachindex(sh)
             cut = get(spec.axes.cut, sh[d], nothing)
             cut === nothing && continue
@@ -1927,6 +2010,7 @@ function _range_state_boxes!(spec::_TileSpec, avi)
             Sf = face ? (first(S):(last(S) + 1)) : S
             dom = _axis_domain(spec.axes, axis, face)
             sm = get(seams, cut, nothing)
+            wlo[d], whi[d] = first(dom), last(dom)
             if sm !== nothing
                 lo2[d], hi2[d] = first(sm.near), last(sm.near)
             elseif spec.axes.period[axis] !== nothing && !issubset(Sf, dom)
@@ -1937,6 +2021,7 @@ function _range_state_boxes!(spec::_TileSpec, avi)
             end
         end
         avi[n] = (lo2, hi2)
+        spec.whole[n] = (wlo, whi)
     end
     for (a, (n, far)) in spec.aliases
         lo, hi = avi[n]
@@ -1954,6 +2039,7 @@ end
 function _range_observed_box(spec::_TileSpec, name, dims)
     need = get(spec.ctx.obs_need, name, nothing)
     need === nothing && return nothing
+    spec.whole[name] = (ones(Int, length(dims)), copy(dims))
     sh = spec.ctx.shapes[name]
     lo, hi = ones(Int, length(dims)), copy(dims)
     for d in eachindex(dims)
@@ -1961,6 +2047,15 @@ function _range_observed_box(spec::_TileSpec, name, dims)
         c = _obs_near_cells(spec.ctx, name, d, _iset_intersect(need[d].cells, 1:dims[d]))
         isempty(c) && return nothing
         lo[d], hi[d] = minimum(c), maximum(c)
+        if _tile_shares_code(spec)
+            # Laid out over the tile's storage, as a state on the same sets
+            # is, so a read of it keeps the constant offset from the cell
+            # written that it has in the whole-domain program.
+            axis, face = spec.axes.cut[sh[d]]
+            S = spec.storage[axis]
+            lo[d] = max(1, min(lo[d], first(S)))
+            hi[d] = min(dims[d], max(hi[d], last(S) + (face ? 1 : 0)))
+        end
     end
     return (lo, hi)
 end
@@ -1991,6 +2086,26 @@ function _range_fill_equations(spec::_TileSpec, name, def, dims, box)
             c = _iset_intersect(_obs_near_cells(spec.ctx, name, d,
                                                 _iset_intersect(need[d].cells, 1:dims[d])), span)
             push!(pieces, x => c.ivs)
+        end
+        # A tile that shares the whole-domain program's code keeps every
+        # region, over the one run of cells it needs there or none, so its
+        # fills are lowered as the whole-domain program's are.
+        if _tile_shares_code(spec) && all(p -> length(last(p)) <= 1, pieces)
+            r2 = copy(rd)
+            for (x, ivs) in pieces
+                lo = Int(rd[x][1])
+                r2[x] = isempty(ivs) ? Any[lo, lo - 1] : Any[first(ivs[1]), last(ivs[1])]
+            end
+            lhs = reconstruct(L; ranges = r2)
+            clips = Dict{String,Any}(first(p) => r2[first(p)] for p in pieces)
+            rhs = _clip_rhs_ranges(eq.rhs, _output_idx_strings(L), clips)
+            neq = Equation(lhs, rhs)
+            w = _lhs_loop_ranges(spec.ctx, L)
+            c = _lhs_loop_ranges(spec.ctx, lhs)
+            (w === nothing || c === nothing || length(w) != length(c)) ||
+                _record_sranges!(spec, name, c, w)
+            push!(out, neq)
+            continue
         end
         any(p -> isempty(last(p)), pieces) && continue
         for combo in Iterators.product((last(p) for p in pieces)...)
