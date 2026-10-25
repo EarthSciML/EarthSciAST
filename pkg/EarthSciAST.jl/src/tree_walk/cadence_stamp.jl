@@ -137,14 +137,25 @@ end
 
 const _FORCING_EPOCH = Ref{UInt64}(0)
 
-const _ForcingEpoch = Base.RefValue{UInt64}
-_new_forcing_epoch() = _ForcingEpoch(UInt64(0))
+# A build's epoch: its own count, and whether the process-wide count is part of
+# it. Every build's epoch is (`shared`). The private instance of a program that
+# an `RhsWorkspace` evaluates (rhs_program.jl) has unshared epochs: its forcing
+# arrives as a `ForcingSet` whose epoch it tracks itself, so a refresh elsewhere
+# in the process is no reason to refill it, and that path never reads the global.
+mutable struct _ForcingEpoch
+    n::UInt64
+    shared::Bool
+end
+_new_forcing_epoch() = _ForcingEpoch(UInt64(0), true)
+Base.getindex(e::_ForcingEpoch) = e.n
+Base.setindex!(e::_ForcingEpoch, v) = (e.n = UInt64(v); e)
 
-# The epoch a time tier stamps and compares: the build's own count plus the
-# process-wide one. Both only grow, so any bump of either moves the sum.
-@inline _epoch_value(e::_ForcingEpoch) = e[] + _FORCING_EPOCH[]
+# The epoch a time tier stamps and compares: the build's own count plus, when
+# shared, the process-wide one. Both only grow, so any bump of either moves the
+# sum.
+@inline _epoch_value(e::_ForcingEpoch) = e.shared ? e.n + _FORCING_EPOCH[] : e.n
 
-@inline _bump_epoch!(e::_ForcingEpoch) = (e[] += UInt64(1); nothing)
+@inline _bump_epoch!(e::_ForcingEpoch) = (e.n += UInt64(1); nothing)
 
 # Data pointer => the builds reading that buffer: a weak reference to the
 # registered array (so a recycled address is told apart from the buffer it
