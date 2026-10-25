@@ -1,0 +1,50 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "ppm_slope",
+    "description": "Colella-Woodward (1984) eq. (1.7) average slope of a cell-averaged field on a UNIFORM mesh, which collapses to the centered difference delta a_j = (a_{j+1} - a_{j-1})/2. The RAW (unlimited) slope: feeding it to the eq. (1.6) edge interpolation reproduces exactly the collapsed (7/12)(b+c) - (1/12)(a+d) form of ../stencils/ppm_face_value, but the resulting edge is NOT bounded (it can overshoot the range of the two cells it separates). The monotonized eq. (1.8) sibling ../stencils/ppm_slope_mono wraps this with the CW84 clip and is what the shipped ppm_flux uses. Smallest compositional piece of the uniform PPM reconstruction; grid-agnostic scalar algebra, match-less named template. Mesh-spacing-free (a slope per cell, in cell units).",
+    "license": "MIT",
+    "tags": [
+      "esd:stencil",
+      "family:finite_volume",
+      "grid:latlon3d",
+      "op:reconstruct",
+      "order:2",
+      "stencil_width:2"
+    ],
+    "references": [
+      {
+        "citation": "Colella, P., & Woodward, P. R. (1984). The Piecewise Parabolic Method (PPM) for gas-dynamical simulations. Journal of Computational Physics, 54(1), 174-201.",
+        "doi": "10.1016/0021-9991(84)90143-8"
+      }
+    ]
+  },
+  "expression_templates": {
+    "ppm_slope": {
+      "params": [
+        "am",
+        "ap"
+      ],
+      "description": "CW84 eq.(1.7) uniform-mesh average slope (ap - am)/2",
+      "body": {
+        "op": "*",
+        "args": [
+          {
+            "op": "/",
+            "args": [
+              1,
+              2
+            ]
+          },
+          {
+            "op": "-",
+            "args": [
+              "ap",
+              "am"
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

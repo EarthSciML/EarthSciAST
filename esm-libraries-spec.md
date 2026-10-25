@@ -660,6 +660,24 @@ not a quiet demotion — and a binding that carries one MUST document it as such
 because moving it off its default can make `native` refuse an in-scope
 document, which is a defect.
 
+#### 2.5.11 Range-restricted right-hand sides
+
+A Problem's right-hand side covers the whole model over the whole domain. Julia
+and Rust also expose it as a program value, `rhs_program(prob)`, from which a
+caller derives one operator's program by provenance (`select(prog; writes,
+terms)`, a rewrite of the flattened system keyed by the per-term origins of
+§4.7.5), asks how far its owned output reaches into each state along a
+horizontal decomposition (`halo`), restricts it to a tile that reads halo cells
+from an extended local array (`restrict`; Rust `tile`), or evaluates it over a
+run-time list of cells or columns (`lanes`). Index space stays global, and each
+restricted evaluation is bitwise the selected program's whole-domain
+evaluation. The surface, the selection rules, the tile and lane semantics, the
+layouts and the four `range_*` diagnostics are normative in `API_SPEC.md` §5.8,
+"Range-restricted right-hand sides"; `CONFORMANCE_SPEC.md` §5.49 is the gate.
+Tiles and lanes require `compiler = native` and are refused with
+`compiler_unavailable` under any other. Python exports the entry points and
+raises `compiler_unavailable` from each.
+
 ---
 
 ## 3. Validation

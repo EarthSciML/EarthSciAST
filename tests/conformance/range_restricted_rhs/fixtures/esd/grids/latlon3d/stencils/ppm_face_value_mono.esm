@@ -1,0 +1,104 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "ppm_face_value_mono",
+    "description": "Colella-Woodward (1984) eq. (1.6) interpolation of cell-averaged data to the interface between the two central cells of (a,b,c,d) = (a_{j-1}, a_j, a_{j+1}, a_{j+2}), built on the MONOTONIZED eq. (1.8) slopes (../stencils/ppm_slope_mono): face = b + (1/2)(c - b) + (1/6)(delta_m a_j - delta_m a_{j+1}). The BOUNDED replacement for ../stencils/ppm_face_value, which is the same eq. (1.6) combination evaluated with RAW eq. (1.7) slopes and therefore collapses to the closed form (7/12)(b+c) - (1/12)(a+d) -- algebraically identical when the slopes are unlimited (verified), but NOT bounded: the raw-slope edge can overshoot the range of cells b and c, so the upwind flux introduces new extrema and drives a tracer negative. Substituting the monotonized slope forces the edge to lie between b and c. This is the ONLY change between the old and new ppm_flux, and it is what makes the whole uniform PPM family (rules ppm_D_periodic, ppm_D_inflow_bc, ppm_D_lon_periodic, ppm_D_lat_zero_grad_bc) monotone; ../stencils/ppm_limit_right (eq. (1.10)) then constrains the sub-grid parabola, and BOTH are needed -- neither alone bounds the scheme. Grid-agnostic scalar algebra (no index set, no metric, no dx); match-less named template composed by ../stencils/ppm_flux. Scale-invariant (an edge value).",
+    "license": "MIT",
+    "tags": [
+      "esd:stencil",
+      "family:finite_volume",
+      "grid:latlon3d",
+      "op:reconstruct",
+      "order:4",
+      "stencil_width:4"
+    ],
+    "references": [
+      {
+        "citation": "Colella, P., & Woodward, P. R. (1984). The Piecewise Parabolic Method (PPM) for gas-dynamical simulations. Journal of Computational Physics, 54(1), 174-201.",
+        "doi": "10.1016/0021-9991(84)90143-8"
+      },
+      {
+        "citation": "Colella, P., & Woodward, P. R. (1984). The Piecewise Parabolic Method (PPM) for gas-dynamical simulations. Journal of Computational Physics, 54(1), 174-201. Equation (1.8), monotonized slope.",
+        "doi": "10.1016/0021-9991(84)90143-8"
+      }
+    ]
+  },
+  "expression_template_imports": [
+    {
+      "ref": "./ppm_slope_mono.esm"
+    }
+  ],
+  "expression_templates": {
+    "ppm_face_value_mono": {
+      "params": [
+        "a",
+        "b",
+        "c",
+        "d"
+      ],
+      "description": "face = b + (1/2)(c-b) + (1/6)(slope_mono(a,b,c) - slope_mono(b,c,d))",
+      "body": {
+        "op": "+",
+        "args": [
+          "b",
+          {
+            "op": "*",
+            "args": [
+              {
+                "op": "/",
+                "args": [
+                  1,
+                  2
+                ]
+              },
+              {
+                "op": "-",
+                "args": [
+                  "c",
+                  "b"
+                ]
+              }
+            ]
+          },
+          {
+            "op": "*",
+            "args": [
+              {
+                "op": "/",
+                "args": [
+                  1,
+                  6
+                ]
+              },
+              {
+                "op": "-",
+                "args": [
+                  {
+                    "op": "apply_expression_template",
+                    "args": [],
+                    "name": "ppm_slope_mono",
+                    "bindings": {
+                      "am": "a",
+                      "a0": "b",
+                      "ap": "c"
+                    }
+                  },
+                  {
+                    "op": "apply_expression_template",
+                    "args": [],
+                    "name": "ppm_slope_mono",
+                    "bindings": {
+                      "am": "b",
+                      "a0": "c",
+                      "ap": "d"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

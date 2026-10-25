@@ -1,0 +1,468 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "heat_1d_varcoeff_zero_flux",
+    "description": "MMS driver: 1-D VARIABLE-COEFFICIENT heat equation u_t = div(k(x) grad u) + S(x,t) on the unit interval [0, 1] with zero-flux (homogeneous Neumann) boundaries, discretized by the conservative finite-volume rule grids/cartesian_uniform_1d/rules/varcoeff_laplacian_zero_flux_bc. The consumer writes the operator as the conservative compound D(k*D(u,x),x) (coefficient on the LEFT), which that rule matches at priority 10 and lowers to the arithmetic-mean flux-difference stencil. The coefficient k(x) = 1 + 0.5 cos(2 pi x) is a consumer-supplied observed of shape [x] (positive on [0,1], range [0.5,1.5]); it is read by the rule body at the faces via kf[i+1/2]=(k[i]+k[i+1])/2. Manufactured solution u(x,t) = exp(-pi^2 t) cos(pi x): cos(pi x) has zero gradient at x=0 and x=1, so the physical flux k u_x vanishes at both walls and matches the zero-flux closure. Because cos(pi x) is NOT an eigenfunction of the variable-coefficient operator, a forcing term S(x,t) = u_t - div(k grad u) is added so u is exact for the continuous PDE. With this u and k, div(k grad u) = exp(-pi^2 t)[-pi k'(x) sin(pi x) - pi^2 k(x) cos(pi x)] and u_t = -pi^2 exp(-pi^2 t) cos(pi x); the algebra (product-to-sum with k'=-pi sin 2pi x) collapses to the closed form S(x,t) = exp(-pi^2 t) * 0.25 pi^2 (3 cos(3 pi x) - cos(pi x)), spelled below as a time factor exp(-pi^2 t) times an aggregate over cell centers. The grid's consumer-supplied geometry contract (grids/cartesian_uniform_1d/grid.esm) is fulfilled for [0,1]: x0 = 0 (parameter) and dx = 1/N (an observed dividing by the metaparameter name N, substituted at load per esm-spec 9.7.6, so the convergence sweep's loader-API rebinding of N keeps dx consistent) resolve the rule body's free dx at evaluation. Initial condition, coefficient, forcing, and test references all spell the cell-center coordinate x_i = (i - 1/2)/N inline with load-foldable scalars (0 + (i - 1/2)(1/N)) rather than invoking the free-name x_coord template: the official 6.6.5/ic build-time cellwise evaluation is scope-free (model parameters/observeds are not in scope there), and spelling k and S the same way keeps them algebraically identical to what the runtime rule reads. The SAME rule also serves the nonlinear case (a consumer declaring k as an observed k=f(u)); this driver exercises the variable-coefficient dual.",
+    "license": "MIT",
+    "tags": [
+      "esd:problem",
+      "grid:cartesian_uniform_1d",
+      "equation:heat",
+      "mms"
+    ],
+    "references": [
+      {
+        "citation": "Roache, P. J. (2002). Code verification by the method of manufactured solutions. J. Fluids Eng. 124(1), 4-10.",
+        "doi": "10.1115/1.1436090"
+      },
+      {
+        "citation": "LeVeque, R. J. (2007). Finite Difference Methods for Ordinary and Partial Differential Equations. SIAM. Section 2.15 (variable-coefficient conservative form)."
+      }
+    ]
+  },
+  "models": {
+    "Heat": {
+      "expression_template_imports": [
+        {
+          "ref": "../grids/cartesian_uniform_1d/rules/varcoeff_laplacian_zero_flux_bc.esm"
+        }
+      ],
+      "variables": {
+        "u": {
+          "type": "unknown",
+          "units": "K",
+          "shape": [
+            "x"
+          ],
+          "description": "Temperature field over the x index set."
+        },
+        "x0": {
+          "type": "parameter",
+          "units": "m",
+          "default": 0,
+          "description": "Left domain edge a = 0 (unit interval): the grid's x0 free name (consumer-supplied geometry contract, grids/cartesian_uniform_1d/grid.esm)."
+        },
+        "dx": {
+          "type": "unknown",
+          "units": "m",
+          "description": "Grid spacing (b - a)/N = 1/N: the grid's dx free name, resolved inside the rewrite rule's expanded body at evaluation. N is the document-scoped metaparameter (re-exported up the import chain), substituted as an integer literal at load (esm-spec 9.7.6), so loader-API rebinding for the convergence sweep keeps dx consistent."
+        },
+        "k": {
+          "type": "unknown",
+          "units": "m^2/s",
+          "shape": [
+            "x"
+          ],
+          "description": "Variable conductivity k(x) = 1 + 0.5 cos(2 pi x) over the x index set, evaluated at cell centers x_gi = (gi - 1/2)/N (spelled inline from literals and the metaparameter name N). Positive on [0,1] (range [0.5,1.5]). Bound by the rule's match as the coefficient k (the left factor of k*D(u,x)) and read by the expanded stencil at the faces via kf[i+1/2]=(k[i]+k[i+1])/2. k has zero gradient at both walls, consistent with the zero-flux closure. The aggregate loops over `gi`, NOT the stencil's interior index `i`: an array coefficient authored as an aggregate observed is inlined into the stencil's [2,N-1] aggregate at evaluation, and a shared loop-index name would be captured — so, exactly as the nonuniform grid's geometry observeds xc/dxw loop over `gi`, a consumer-supplied coefficient field must loop over an index distinct from `i` (see the rule's description)."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "u"
+            ]
+          },
+          "rhs": {
+            "op": "cos",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  3.141592653589793,
+                  {
+                    "op": "faq",
+                    "output_idx": [
+                      "i"
+                    ],
+                    "args": [],
+                    "ranges": {
+                      "i": {
+                        "from": "x"
+                      }
+                    },
+                    "expr": {
+                      "op": "+",
+                      "args": [
+                        0,
+                        {
+                          "op": "*",
+                          "args": [
+                            {
+                              "op": "-",
+                              "args": [
+                                "i",
+                                0.5
+                              ]
+                            },
+                            {
+                              "op": "/",
+                              "args": [
+                                1,
+                                "N"
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "u"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "+",
+            "args": [
+              {
+                "op": "D",
+                "args": [
+                  {
+                    "op": "*",
+                    "args": [
+                      "k",
+                      {
+                        "op": "D",
+                        "args": [
+                          "u"
+                        ],
+                        "wrt": "x"
+                      }
+                    ]
+                  }
+                ],
+                "wrt": "x"
+              },
+              {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "exp",
+                    "args": [
+                      {
+                        "op": "*",
+                        "args": [
+                          -9.869604401089358,
+                          "t"
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "op": "faq",
+                    "output_idx": [
+                      "i"
+                    ],
+                    "args": [],
+                    "ranges": {
+                      "i": {
+                        "from": "x"
+                      }
+                    },
+                    "expr": {
+                      "op": "*",
+                      "args": [
+                        2.4674011002723395,
+                        {
+                          "op": "-",
+                          "args": [
+                            {
+                              "op": "*",
+                              "args": [
+                                3,
+                                {
+                                  "op": "cos",
+                                  "args": [
+                                    {
+                                      "op": "*",
+                                      "args": [
+                                        9.42477796076938,
+                                        {
+                                          "op": "*",
+                                          "args": [
+                                            {
+                                              "op": "-",
+                                              "args": [
+                                                "i",
+                                                0.5
+                                              ]
+                                            },
+                                            {
+                                              "op": "/",
+                                              "args": [
+                                                1,
+                                                "N"
+                                              ]
+                                            }
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            },
+                            {
+                              "op": "cos",
+                              "args": [
+                                {
+                                  "op": "*",
+                                  "args": [
+                                    3.141592653589793,
+                                    {
+                                      "op": "*",
+                                      "args": [
+                                        {
+                                          "op": "-",
+                                          "args": [
+                                            "i",
+                                            0.5
+                                          ]
+                                        },
+                                        {
+                                          "op": "/",
+                                          "args": [
+                                            1,
+                                            "N"
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "dx",
+          "rhs": {
+            "op": "/",
+            "args": [
+              1,
+              "N"
+            ]
+          }
+        },
+        {
+          "lhs": "k",
+          "rhs": {
+            "op": "faq",
+            "output_idx": [
+              "gi"
+            ],
+            "args": [],
+            "ranges": {
+              "gi": {
+                "from": "x"
+              }
+            },
+            "expr": {
+              "op": "+",
+              "args": [
+                1.0,
+                {
+                  "op": "*",
+                  "args": [
+                    0.5,
+                    {
+                      "op": "cos",
+                      "args": [
+                        {
+                          "op": "*",
+                          "args": [
+                            6.283185307179586,
+                            {
+                              "op": "*",
+                              "args": [
+                                {
+                                  "op": "-",
+                                  "args": [
+                                    "gi",
+                                    0.5
+                                  ]
+                                },
+                                {
+                                  "op": "/",
+                                  "args": [
+                                    1,
+                                    "N"
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "mms_varcoeff_zero_flux_decay",
+          "description": "Manufactured solution u(x,t) = exp(-pi^2 t) cos(pi x) for u_t = div(k(x) grad u) + S(x,t) with k(x) = 1 + 0.5 cos(2 pi x). Derivation: u_t = -pi^2 u; div(k grad u) = exp(-pi^2 t)[-pi k'(x) sin(pi x) - pi^2 k(x) cos(pi x)] with k'(x) = -pi sin(2 pi x); the forcing S = u_t - div(k grad u) collapses (product-to-sum) to exp(-pi^2 t) * 0.25 pi^2 (3 cos(3 pi x) - cos(pi x)), matching the rhs term above, so u solves the continuous PDE exactly. The physical flux k u_x = -pi k sin(pi x) vanishes at x=0 and x=1, matching the zero-flux closure. References evaluate at cell centers x_i = (i - 1/2)/N, spelled inline per esm-spec 6.6.5 (build-time evaluation folds literals and the metaparameter N only). The t=0 assertion pins the ic wiring (reference equals the initial field); the t=0.1 assertion bounds the relative L2 discretization error, which falls at the conservative-FV order 2 (numerically de-risked and confirmed against the Julia reference). Exact per-resolution error values are pinned in tests/conformance/convergence/heat_1d_varcoeff_zero_flux/golden/errors.json.",
+          "time_span": {
+            "start": 0.0,
+            "end": 0.1
+          },
+          "assertions": [
+            {
+              "variable": "u",
+              "time": 0.0,
+              "expected": 0.0,
+              "tolerance": {
+                "abs": 1e-09
+              },
+              "reduce": "L2_error",
+              "reference": {
+                "op": "cos",
+                "args": [
+                  {
+                    "op": "*",
+                    "args": [
+                      3.141592653589793,
+                      {
+                        "op": "faq",
+                        "output_idx": [
+                          "i"
+                        ],
+                        "args": [],
+                        "ranges": {
+                          "i": {
+                            "from": "x"
+                          }
+                        },
+                        "expr": {
+                          "op": "+",
+                          "args": [
+                            0,
+                            {
+                              "op": "*",
+                              "args": [
+                                {
+                                  "op": "-",
+                                  "args": [
+                                    "i",
+                                    0.5
+                                  ]
+                                },
+                                {
+                                  "op": "/",
+                                  "args": [
+                                    1,
+                                    "N"
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "variable": "u",
+              "time": 0.1,
+              "expected": 0.0,
+              "tolerance": {
+                "abs": 0.001
+              },
+              "reduce": "L2_error",
+              "reference": {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "exp",
+                    "args": [
+                      {
+                        "op": "*",
+                        "args": [
+                          -9.869604401089358,
+                          0.1
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "op": "cos",
+                    "args": [
+                      {
+                        "op": "*",
+                        "args": [
+                          3.141592653589793,
+                          {
+                            "op": "faq",
+                            "output_idx": [
+                              "i"
+                            ],
+                            "args": [],
+                            "ranges": {
+                              "i": {
+                                "from": "x"
+                              }
+                            },
+                            "expr": {
+                              "op": "+",
+                              "args": [
+                                0,
+                                {
+                                  "op": "*",
+                                  "args": [
+                                    {
+                                      "op": "-",
+                                      "args": [
+                                        "i",
+                                        0.5
+                                      ]
+                                    },
+                                    {
+                                      "op": "/",
+                                      "args": [
+                                        1,
+                                        "N"
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

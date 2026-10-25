@@ -1,0 +1,344 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "ppmflux_D_lon_interior",
+    "description": "INTERIOR columns (i = 4 .. NLON-3) of the UPWIND-BIASED, MONOTONE, conservative flux-form ZONAL advection operator (1/(a cos phi)) d/dlambda (U q) on the latlon3d grid: D[i,j,k] = ( dphi_lat[j] / (dlam dS_lat[j]) ) ( F_{i+1} - F_i ), with each face flux supplied by the AXIS-NEUTRAL atom ../stencils/ppmflux_lev_face_flux -- whose name says `lev` but whose body is pure scalar algebra with no axis knowledge (exactly like upwind_lev_face_flux, which the donor-cell zonal rule already reuses). It is REUSED HERE BY IMPORT, NOT COPIED. It supplies the CW84 eq (1.6)/(1.8)/(1.10) LIMITED parabola endpoints of the two cells straddling the face -- aR_L from the west cell, aL_R from the east cell -- and selects the donor by the SIGN of the face velocity, branch-free, as F = max(w,0)*aR_L + min(w,0)*aL_R. This zonal rule replaces the donor-cell face value of upwind1_D_lon_flux_* with a limited parabola endpoint and CHANGES NOTHING ELSE: same metric, same face convention, same wrap. \n\nTHE WRAP ROTATES INDICES; IT DROPS NOTHING. This is a PERIODIC axis, so a boundary column is not a truncated stencil closed by a one-sided formula -- it is a FULL-SUPPORT PPM whose out-of-range indices are rotated around the zonal circle (cell 1's i-1 is NLON, its i-2 is NLON-1, its i-3 is NLON-2). Every column here carries the identical seven-cell reconstruction that the interior does; only the index arithmetic differs. Contrast the vertical no-flux siblings ppmflux_D_lev_nf_k*, where the WALL flux is STRUCTURALLY OMITTED rather than formed and multiplied by zero. \n\nTELESCOPING IS BIT-EXACT, AND THAT IS THE LOAD-BEARING PROPERTY. Cell NLON's EAST face and cell 1's WEST face are THE SAME FACE of the closed circle, and the two stencils build it from the SAME six cells (q[NLON-2], q[NLON-1], q[NLON], q[1], q[2], q[3]), the SAME six widths, and the SAME face velocity U[1] -- in the same argument order -- so the two expressions lower to the same AST and evaluate to the same double. sum_i (F_{i+1} - F_i) therefore telescopes to EXACTLY 0.0 in IEEE arithmetic, for ANY q and ANY U, including a deliberately non-periodic U. ELEMENT U[NLON+1,j,k] IS NEVER READ: the east face of cell NLON reuses U[1]. (Verified numerically, not asserted: with a sign-reversing wind the row sum of the tendency is at machine epsilon, and poisoning U[NLON+1] with 1e6 changes not one bit of the output.)\n\nNo index rotation arises here: every column in [4, NLON-3] has all seven of its cells and both of its faces in range. The periodic closure lives in the six sibling wrap stencils ppmflux_D_lon_wrap_i{1,2,3,Nm2,Nm1,N}. Requires NLON >= 7 for this range to be non-empty.\n\nGEOMETRY (free names, the same contract by which the vertical flux stencils read dz, and spelled EXACTLY as in the donor-cell sibling upwind1_D_lon_flux_*). The divergence weight is dphi_lat[j] / (dlam dS_lat[j]) with dlam = dlon_deg pi/180: dphi_lat (shape [lat]) is the cell's angular width in radians (the grid's latcell_dphi applied to the consumer's phie -- a HALF width at the two polar caps), dS_lat (shape [lat]) the EXACT spherical cell-area weight sin(phie[j+1]) - sin(phie[j]) (latcell_area applied to the same phie), and dlon_deg the inherited consumer-supplied zonal spacing. NO cos(phi) FACE-LENGTH FACTOR APPEARS, and that is not an omission: on the zonal axis the cos(phi) of the metric and the cos(phi) of the face length are the same number and cancel identically. The meridional rule needs coslat_e; this one does not. \n\nTHE SIX CELL WIDTHS ARE ALL THE SAME NUMBER, AND THAT IS EXACT. The lon axis is UNIFORM: at fixed j the physical cell width a cos(phi_j) dlam is the same for every i in the row. CW84's eq (1.6) edge interpolant and eq (1.7)/(1.8) slopes are RATIOS of widths -- degree-0 homogeneous -- so scaling all six widths by any positive constant leaves the reconstruction bit-unchanged, and feeding them the single scalar free name `dlon_deg` (degrees, not the physical metres a cos(phi_j) dlam) is therefore not an approximation but the exact uniform-mesh PPM. The widths must be IDENTICAL, which they are: one name, mentioned six times.\n\nFACE INDEXING (pinned by grids/latlon; the same convention as face k = lower edge of cell k in the vertical). FACE i IS THE LOWER (WESTERN) EDGE OF CELL i, so cell i is bounded by face i to the west and face i+1 to the east. Face f draws on the six cells f-3 .. f+2 and the face velocity U[f]; cell i differences face i and face i+1, so its support is the SEVEN cells i-3 .. i+3. The zonal wind U is declared over [lon_nodes, lat, lev]: three-dimensional, face-staggered, POSITIVE EASTWARD. It is the lon_nodes index-set NAME -- not its size -- that lets the esm-spec 9.6.1 `where` shape constraint tell the face wind U apart from the cell tracer q.",
+    "license": "MIT",
+    "tags": [
+      "esd:stencil",
+      "family:finite_volume",
+      "grid:latlon3d",
+      "op:D",
+      "axes:lon,lat,lev",
+      "order:3",
+      "scheme:upwind",
+      "stencil_width:7",
+      "bc:periodic"
+    ],
+    "references": [
+      {
+        "citation": "Colella, P., & Woodward, P. R. (1984). The Piecewise Parabolic Method (PPM) for gas-dynamical simulations. Journal of Computational Physics, 54(1), 174-201.",
+        "doi": "10.1016/0021-9991(84)90143-8"
+      },
+      {
+        "citation": "Lin, S.-J., & Rood, R. B. (1996). Multidimensional flux-form semi-Lagrangian transport schemes. Monthly Weather Review, 124(9), 2046-2070.",
+        "doi": "10.1175/1520-0493(1996)124<2046:MFFSLT>2.0.CO;2"
+      },
+      {
+        "citation": "Williamson, D. L., Drake, J. B., Hack, J. J., Jakob, R., & Swarztrauber, P. N. (1992). A standard test set for numerical approximations to the shallow water equations in spherical geometry. Journal of Computational Physics, 102(1), 211-224. (Spherical lat-lon metric factors for the zonal flux divergence.)",
+        "doi": "10.1016/S0021-9991(05)80016-6"
+      }
+    ]
+  },
+  "expression_template_imports": [
+    {
+      "ref": "../grid.esm"
+    },
+    {
+      "ref": "./ppmflux_lev_face_flux.esm"
+    }
+  ],
+  "expression_templates": {
+    "ppmflux_D_lon_interior": {
+      "params": [
+        "q",
+        "U"
+      ],
+      "body": {
+        "op": "faq",
+        "output_idx": [
+          "i",
+          "j",
+          "k"
+        ],
+        "args": [
+          "q",
+          "U"
+        ],
+        "ranges": {
+          "i": [
+            4,
+            {
+              "op": "-",
+              "args": [
+                "NLON",
+                3
+              ]
+            }
+          ],
+          "j": {
+            "from": "lat"
+          },
+          "k": {
+            "from": "lev"
+          }
+        },
+        "expr": {
+          "op": "*",
+          "args": [
+            {
+              "op": "/",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "dphi_lat",
+                    "j"
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    {
+                      "op": "*",
+                      "args": [
+                        "dlon_deg",
+                        {
+                          "op": "/",
+                          "args": [
+                            3.141592653589793,
+                            180
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "op": "index",
+                      "args": [
+                        "dS_lat",
+                        "j"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "op": "-",
+              "args": [
+                {
+                  "op": "apply_expression_template",
+                  "args": [],
+                  "name": "ppmflux_lev_face_flux",
+                  "bindings": {
+                    "aL2": {
+                      "op": "index",
+                      "args": [
+                        "q",
+                        {
+                          "op": "-",
+                          "args": [
+                            "i",
+                            2
+                          ]
+                        },
+                        "j",
+                        "k"
+                      ]
+                    },
+                    "aL1": {
+                      "op": "index",
+                      "args": [
+                        "q",
+                        {
+                          "op": "-",
+                          "args": [
+                            "i",
+                            1
+                          ]
+                        },
+                        "j",
+                        "k"
+                      ]
+                    },
+                    "aC": {
+                      "op": "index",
+                      "args": [
+                        "q",
+                        "i",
+                        "j",
+                        "k"
+                      ]
+                    },
+                    "aRc": {
+                      "op": "index",
+                      "args": [
+                        "q",
+                        {
+                          "op": "+",
+                          "args": [
+                            "i",
+                            1
+                          ]
+                        },
+                        "j",
+                        "k"
+                      ]
+                    },
+                    "aR1": {
+                      "op": "index",
+                      "args": [
+                        "q",
+                        {
+                          "op": "+",
+                          "args": [
+                            "i",
+                            2
+                          ]
+                        },
+                        "j",
+                        "k"
+                      ]
+                    },
+                    "aR2": {
+                      "op": "index",
+                      "args": [
+                        "q",
+                        {
+                          "op": "+",
+                          "args": [
+                            "i",
+                            3
+                          ]
+                        },
+                        "j",
+                        "k"
+                      ]
+                    },
+                    "dL2": "dlon_deg",
+                    "dL1": "dlon_deg",
+                    "dC": "dlon_deg",
+                    "dRc": "dlon_deg",
+                    "dR1": "dlon_deg",
+                    "dR2": "dlon_deg",
+                    "w": {
+                      "op": "index",
+                      "args": [
+                        "U",
+                        {
+                          "op": "+",
+                          "args": [
+                            "i",
+                            1
+                          ]
+                        },
+                        "j",
+                        "k"
+                      ]
+                    }
+                  }
+                },
+                {
+                  "op": "apply_expression_template",
+                  "args": [],
+                  "name": "ppmflux_lev_face_flux",
+                  "bindings": {
+                    "aL2": {
+                      "op": "index",
+                      "args": [
+                        "q",
+                        {
+                          "op": "-",
+                          "args": [
+                            "i",
+                            3
+                          ]
+                        },
+                        "j",
+                        "k"
+                      ]
+                    },
+                    "aL1": {
+                      "op": "index",
+                      "args": [
+                        "q",
+                        {
+                          "op": "-",
+                          "args": [
+                            "i",
+                            2
+                          ]
+                        },
+                        "j",
+                        "k"
+                      ]
+                    },
+                    "aC": {
+                      "op": "index",
+                      "args": [
+                        "q",
+                        {
+                          "op": "-",
+                          "args": [
+                            "i",
+                            1
+                          ]
+                        },
+                        "j",
+                        "k"
+                      ]
+                    },
+                    "aRc": {
+                      "op": "index",
+                      "args": [
+                        "q",
+                        "i",
+                        "j",
+                        "k"
+                      ]
+                    },
+                    "aR1": {
+                      "op": "index",
+                      "args": [
+                        "q",
+                        {
+                          "op": "+",
+                          "args": [
+                            "i",
+                            1
+                          ]
+                        },
+                        "j",
+                        "k"
+                      ]
+                    },
+                    "aR2": {
+                      "op": "index",
+                      "args": [
+                        "q",
+                        {
+                          "op": "+",
+                          "args": [
+                            "i",
+                            2
+                          ]
+                        },
+                        "j",
+                        "k"
+                      ]
+                    },
+                    "dL2": "dlon_deg",
+                    "dL1": "dlon_deg",
+                    "dC": "dlon_deg",
+                    "dRc": "dlon_deg",
+                    "dR1": "dlon_deg",
+                    "dR2": "dlon_deg",
+                    "w": {
+                      "op": "index",
+                      "args": [
+                        "U",
+                        "i",
+                        "j",
+                        "k"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  }
+}

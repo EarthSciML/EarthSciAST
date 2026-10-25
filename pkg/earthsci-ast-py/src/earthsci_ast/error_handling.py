@@ -422,6 +422,30 @@ COMPILER_REFUSED_RULE = "compiler_refused_rule"
 
 
 # ===========================================================================
+# Range-restricted right-hand sides (API_SPEC §5.8, "Range-restricted right-hand
+# sides"). Python has no native tile or lane implementation, so its entry points
+# raise ``compiler_unavailable`` and nothing here raises these; they keep the
+# §9.6.6 vocabulary uniform across the five registries.
+# ===========================================================================
+
+#: A tile reads an in-domain cell outside its storage box with no periodic
+#: image in it. Names the rule, the variable, the axis and the missing cells.
+RANGE_HALO_INSUFFICIENT = "range_halo_insufficient"
+
+#: A tile restriction or halo report meets a 0-d state write, or a contraction,
+#: scan or data-dependent gather along a decomposed axis. Names the rule and the
+#: axis.
+RANGE_GLOBAL_LOCALITY = "range_global_locality"
+
+#: An operator selection's ``writes`` omits a variable one of its selected
+#: contributions writes. Names the variable and the origins.
+RANGE_SELECTION_WRITES_INCOMPLETE = "range_selection_writes_incomplete"
+
+#: A malformed decomposition, tile box or lane-set list. Names the index set.
+RANGE_BOX_INVALID = "range_box_invalid"
+
+
+# ===========================================================================
 # Running an arrayed definition written with a bare-index LHS (esm-spec §6.3.1,
 # CONFORMANCE_SPEC §5.36.2), reported when a model is built for simulation.
 # ===========================================================================

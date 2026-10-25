@@ -1,0 +1,65 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "ppm_lev_slope",
+    "description": "Colella-Woodward (1984) eq. (1.7) non-uniform average slope delta-a_j of a cell-averaged field on an arbitrarily-spaced 1-D mesh: delta_j = (d0/(dm+d0+dp)) [ ((2 dm + d0)/(dp + d0))(ap - a0) + ((d0 + 2 dp)/(dm + d0))(a0 - am) ], where (am,a0,ap) are three consecutive cell averages and (dm,d0,dp) their cell widths. This is the RAW (unlimited) slope: on a uniform mesh (dm=d0=dp) it collapses to the centered (ap - am)/2, and the non-uniform edge interpolation ppm_lev_edge built from it is exactly 4th-order accurate. The smallest compositional piece of the conservative vertical PPM: it reads three cell values and three widths and returns a scalar slope; ppm_lev_edge composes two of these (at j and j+1). Grid-agnostic scalar algebra (no index set, no aggregate); the MONOTONIZED eq. (1.8) sibling ../stencils/ppm_lev_slope_mono wraps this raw slope with the CW84 clip (same signature, so it is a drop-in substitution) and is what the bounded production chain uses; clipping costs order at smooth extrema (~2.4 L2 instead of 4.0) and buys boundedness. Match-less named template.",
+    "license": "MIT",
+    "tags": [
+      "esd:stencil",
+      "family:finite_volume",
+      "grid:latlon3d",
+      "op:reconstruct",
+      "order:2",
+      "stencil_width:3"
+    ],
+    "references": [
+      {
+        "citation": "Colella, P., & Woodward, P. R. (1984). The Piecewise Parabolic Method (PPM) for gas-dynamical simulations. Journal of Computational Physics, 54(1), 174-201. Equation (1.7), non-uniform mesh.",
+        "doi": "10.1016/0021-9991(84)90143-8"
+      }
+    ]
+  },
+  "expression_templates": {
+    "ppm_lev_slope": {
+      "params": ["am", "a0", "ap", "dm", "d0", "dp"],
+      "description": "CW84 eq.(1.7) non-uniform average slope delta-a of the center cell",
+      "body": {
+        "op": "*",
+        "args": [
+          { "op": "/", "args": ["d0", { "op": "+", "args": ["dm", "d0", "dp"] }] },
+          {
+            "op": "+",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "/",
+                    "args": [
+                      { "op": "+", "args": [{ "op": "*", "args": [2, "dm"] }, "d0"] },
+                      { "op": "+", "args": ["dp", "d0"] }
+                    ]
+                  },
+                  { "op": "-", "args": ["ap", "a0"] }
+                ]
+              },
+              {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "/",
+                    "args": [
+                      { "op": "+", "args": ["d0", { "op": "*", "args": [2, "dp"] }] },
+                      { "op": "+", "args": ["dm", "d0"] }
+                    ]
+                  },
+                  { "op": "-", "args": ["a0", "am"] }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

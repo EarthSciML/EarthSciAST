@@ -1,0 +1,143 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "global_horizontal_sum",
+    "description": "A horizontal contraction: du[i, j] adds the sum of u over the whole x axis of its row. Its locality is global along x; a tile restriction that cuts x is refused with range_global_locality naming the rule and the axis x.",
+    "authors": [
+      "EarthSciAST test suite"
+    ],
+    "created": "2026-10-24T00:00:00Z",
+    "tags": [
+      "conformance",
+      "range_restricted_rhs"
+    ]
+  },
+  "index_sets": {
+    "x": {
+      "kind": "interval",
+      "size": 6
+    },
+    "y": {
+      "kind": "interval",
+      "size": 5
+    }
+  },
+  "models": {
+    "Sum": {
+      "variables": {
+        "u": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "x",
+            "y"
+          ],
+          "default": 1.0
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.1
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i",
+              "j"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              },
+              "j": {
+                "from": "y"
+              }
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "i",
+                    "j"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i",
+              "j"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              },
+              "j": {
+                "from": "y"
+              }
+            },
+            "expr": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "*",
+                  "args": [
+                    {
+                      "op": "-",
+                      "args": [
+                        "k"
+                      ]
+                    },
+                    {
+                      "op": "index",
+                      "args": [
+                        "u",
+                        "i",
+                        "j"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    0.01,
+                    {
+                      "op": "faq",
+                      "args": [],
+                      "output_idx": [],
+                      "ranges": {
+                        "m": {
+                          "from": "x"
+                        }
+                      },
+                      "expr": {
+                        "op": "index",
+                        "args": [
+                          "u",
+                          "m",
+                          "j"
+                        ]
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

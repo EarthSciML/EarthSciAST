@@ -45,6 +45,7 @@ This document maps ESM format specifications to test fixtures to ensure complete
 | **Analysis** | Expression graphs | Required | Required | Required | Required | Required | ✅ `conformance/graph/cases.json` (generated; driven by all five bindings) |
 | **Simulation** | ODE solving | — | Required | — | Required | — | ❌ Missing simulation fixtures |
 | **Simulation** | Event handling | — | Required | — | Required | — | ❌ Missing |
+| **Simulation** | Range-restricted rhs: operator selection, tiles, lanes (API_SPEC §5.8, CONFORMANCE_SPEC §5.49) | — | Refuses (`compiler_unavailable`) | Required (native) | Required (native) | — | ✅ `conformance/range_restricted_rhs/` (manifest-driven; bitwise against each binding's whole-domain `select`) |
 | **Full** | MTK conversion | — | — | — | Required | — | ❌ Missing |
 | **Full** | Coupled systems | — | — | — | Required | — | ❌ Missing |
 

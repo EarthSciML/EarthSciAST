@@ -1,0 +1,213 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "latlon",
+    "description": "Uniform longitude-latitude grid with consumer-supplied extent (global or regional). The `lon` and `lat` index sets are the iteration axes; NLON and NLAT (the point counts) are the esm-spec 9.7 metaparameters, bound at an import edge or the loader API. The real-valued geometry is NOT baked into this file: `lon0_deg`, `dlon_deg`, `lat0_deg`, `dlat_deg` (all in degrees) are free names in the coordinate/metric template bodies and in this grid's stencils/rules, resolving in the consuming component's scope at evaluation — the same keyed-factor contract grids/mpas uses for areaCell/dvEdge and grids/cartesian_uniform_1d uses for x0/dx. COORDINATE CONVENTIONS (pinned; every rule in this directory assumes them): longitude is CELL-BASED — NLON cells with centers lon_i = lon0_deg + (i - 1/2) dlon_deg, i = 1..NLON, so the axis covers [lon0_deg, lon0_deg + NLON dlon_deg) and closes into a periodic zonal circle exactly when NLON dlon_deg = 360; latitude is POINT-BASED and endpoint-inclusive — NLAT points lat_j = lat0_deg + (j - 1) dlat_deg, j = 1..NLAT, covering [lat0_deg, lat0_deg + (NLAT - 1) dlat_deg]. GLOBAL RECIPE (the default 144 x 91 sizes match the esm-spec 9.6.8 worked example): the consuming model defines lon0_deg = 0 (parameter), dlon_deg = 360/NLON, lat0_deg = -90 (parameter), dlat_deg = 180/(NLAT - 1) — the lat points then run pole to pole with lat_1 = -90 and lat_NLAT = +90. Spell the spacings as observed variables whose expressions divide by the METAPARAMETER NAME (e.g. dlon_deg = {op: /, args: [360, NLON]}), which esm-spec 9.7.6 substitutes as an integer literal at load, so a loader-API rebinding of NLON/NLAT — a convergence sweep — keeps the geometry consistent automatically. A model that binds NLON/NLAT at the import edge closes them before they reach the model's own scope and must spell the matching literals instead. REGIONAL RECIPE: any other origin/spacing (e.g. lon0_deg = -130, dlon_deg = 0.25 over CONUS); the zonal circle then does NOT close, so use the zero-gradient (or a future one-sided) lon rule, never the periodic one. PHYSICAL-UNITS RECIPE: every rule here differentiates PER DEGREE of arc; on a sphere of radius R_sphere (a further free name, meters, consumer-supplied) the eastward and northward physical derivatives are df/dx_east = (180/pi) D(f, lon) / (R_sphere * coslat) and df/dy_north = (180/pi) D(f, lat) / R_sphere — compose these metric factors in the consuming equation (the `coslat` template below supplies cos(lat) over the lat axis; 180/pi = 57.29577951308232). Keeping the metric composition in the consumer keeps the rule count low and the rules exact on the index space. \n\nFACE (NODE) AXES, FOR THE CONSERVATIVE FLUX-FORM OPERATORS. Alongside the two CELL/POINT axes this grid declares two N+1 EDGE axes — `lon_nodes` (size NLON+1) and `lat_nodes` (size NLAT+1), esm-spec 9.7.6 metaparameter-expression sizes folded at load. They carry the face-staggered horizontal winds and the face-length metrics of the flux-form transport operators, exactly as `lev_nodes` does in the vertical on grids/latlon3d. FACE INDEXING (pinned, and identical to the vertical convention): FACE j IS THE LOWER (southern) EDGE OF CELL j, so cell j is bounded by face j to the south and face j+1 to the north; faces 1 and NLAT+1 are the two domain-end walls. lon_nodes follows the same rule (face i is the western edge of cell i) and is declared here so the contract is frozen before the zonal flux-form work lands; nothing in this grid reads it yet. Declaring `lat_nodes` as a distinct index-set NAME is also what makes the flux-form rules DISCRIMINABLE: an esm-spec 9.6.1 `where` shape constraint matches on the index-set NAME list, so a face wind of shape [lon, lat_nodes, lev] can never be mistaken for a cell tracer of shape [lon, lat, lev]. \n\nHALF-POLAR FINITE VOLUMES FROM POINT LATITUDES (the `lat_edge` derivation). Latitude is POINT-based and carries no edges of its own, so a finite-volume operator has to manufacture them. The rule pinned here: put each interior edge HALFWAY BETWEEN the two neighbouring points and CLAMP at the domain ends, phie[j] = max(lat0_deg, min(latN_deg, lat0_deg + (j - 1.5) dlat_deg)) for j = 1..NLAT+1, with latN_deg = lat0_deg + (NLAT - 1) dlat_deg. The min/max make it branch-free. On the GLOBAL recipe (lat0_deg = -90, dlat_deg = 180/(NLAT-1)) the j = 1 edge clamps to -90 and the j = NLAT+1 edge clamps to +90, so the two end cells span only HALF a nominal grid interval: this reproduces GEOS-Chem's HALF-POLAR CAPS as a consequence of the clamp rather than as a special case, and it does so on the regional recipe too (there the clamp simply halves the two end rows). Interior cells span a full dlat_deg. \n\nDERIVED LATITUDE GEOMETRY (the keyed-factor contract, mirroring grids/latlon3d's pe -> lev_thickness/lev_center). The CONSUMER declares one observed `phie` of shape [lat_nodes] by applying `lat_edge` (which takes no arguments — it folds from the free names lat0_deg/dlat_deg and the NLAT metaparameter), then feeds that SAME `phie` to the three derived templates: `coslat_edge` (shape [lat_nodes]) = cos(rad(phie[j])), the FACE-LENGTH weight; `latcell_area` (shape [lat]) = sin(rad(phie[j+1])) - sin(rad(phie[j])), the EXACT spherical cell-area weight (an exact integral of cos(phi) dphi, not a midpoint approximation — this is what makes the flux-form divergence conservative to machine precision); and `latcell_dphi` (shape [lat]) = rad(phie[j+1]) - rad(phie[j]), the cell angular width, a HALF-width at the two caps. rad(x) = x pi/180. Angles go in as DEGREES and come out as RADIANS (widths) or dimensionless (areas, cosines); on a sphere of radius R the physical cell area is R^2 dlon_rad latcell_area[j] and the physical face length is R dlon_rad coslat_edge[j]. \n\nAGGREGATE-INDEX HYGIENE, AND WHY THE FOUR TEMPLATES USE FOUR DIFFERENT INDEX NAMES (gje / gjc / gja / gjd). Template application is inlined NON-HYGIENICALLY: an aggregate index in an applied template body is NOT renamed apart from an identically-named index in the surrounding (or the supplied) expression. Two consequences, both load-bearing. (1) None of these names may be `j` (nor `i`/`k`), or a derived observed inlined into a consuming stencil would capture that stencil's own aggregate index — the footgun documented in grids/cartesian_nonuniform_1d and in grids/latlon3d's `gk`. (2) More subtly, the PRODUCER (`lat_edge`, index `gje`) and each CONSUMER (`coslat_edge` `gjc`, `latcell_area` `gja`, `latcell_dphi` `gjd`) must not share an index name EITHER: when the consumer's body is inlined it gathers the producer's inlined body at an OFFSET (phie[gja + 1]), and if the producer aggregated over that same name the offset is silently swallowed — the gather degenerates to phie[gja] and latcell_area returns an array of EXACT ZEROS (which then divides). That failure is silent (no error, no NaN — just zeros, and Inf downstream), so the four distinct names are a correctness requirement, not a style choice. A consuming model must likewise not name its own aggregate index gje/gjc/gja/gjd. \n\nTHE POLE FACES ARE NEVER READ. On the global recipe coslat_edge[1] and coslat_edge[NLAT+1] are cos(-/+pi/2), which in IEEE double is 6.1e-17, NOT zero — so a flux-form operator that MULTIPLIED the pole-wall flux by the pole face length would leak a tiny but nonzero amount of mass across the pole. The flux-form lat rules therefore OMIT the two pole-wall flux terms from the expression entirely (the same literal-absence discipline the vertical no-flux stencils use at the ground and the model lid), which makes the polar no-flux wall exact in floating point. A consequence: whatever a consumer stores in the pole faces of a [lon, lat_nodes, ...] meridional wind is IGNORED, so a nonzero value there is harmless rather than a silent mass leak.",
+    "license": "MIT",
+    "tags": ["esd:grid", "family:latlon", "ndim:2", "spacing:uniform", "axis:lon", "axis:lat"]
+  },
+  "metaparameters": {
+    "NLON": { "type": "integer", "default": 144, "description": "Number of cells along longitude (cell-based axis; the global recipe closes the zonal circle with dlon_deg = 360/NLON)." },
+    "NLAT": { "type": "integer", "default": 91, "description": "Number of points along latitude (point-based, endpoint-inclusive axis; the global recipe is pole-to-pole with dlat_deg = 180/(NLAT - 1))." }
+  },
+  "index_sets": {
+    "lon": { "kind": "interval", "size": "NLON" },
+    "lat": { "kind": "interval", "size": "NLAT" },
+    "lon_nodes": { "kind": "interval", "size": { "op": "+", "args": ["NLON", 1] } },
+    "lat_nodes": { "kind": "interval", "size": { "op": "+", "args": ["NLAT", 1] } }
+  },
+  "expression_templates": {
+    "lon_coord": {
+      "params": [],
+      "description": "Cell-center longitudes lon_i = lon0_deg + (i - 1/2) dlon_deg (degrees), shaped over the lon index set. lon0_deg and dlon_deg are free names supplied by the consuming model (see metadata.description for the contract and the global recipe).",
+      "body": {
+        "op": "faq",
+        "output_idx": ["i"],
+        "args": [],
+        "ranges": { "i": { "from": "lon" } },
+        "expr": {
+          "op": "+",
+          "args": [
+            "lon0_deg",
+            {
+              "op": "*",
+              "args": [
+                { "op": "-", "args": ["i", 0.5] },
+                "dlon_deg"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "lat_coord": {
+      "params": [],
+      "description": "Point latitudes lat_j = lat0_deg + (j - 1) dlat_deg (degrees), shaped over the lat index set (endpoint-inclusive; the global recipe runs pole to pole). lat0_deg and dlat_deg are free names supplied by the consuming model (see metadata.description).",
+      "body": {
+        "op": "faq",
+        "output_idx": ["j"],
+        "args": [],
+        "ranges": { "j": { "from": "lat" } },
+        "expr": {
+          "op": "+",
+          "args": [
+            "lat0_deg",
+            {
+              "op": "*",
+              "args": [
+                { "op": "-", "args": ["j", 1] },
+                "dlat_deg"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "coslat": {
+      "params": [],
+      "description": "Metric factor cos(lat_j) over the lat index set: the cosine of lat_coord converted to radians inside (pi/180 with pi = 3.141592653589793). Used by consumers composing physical-units zonal derivatives, df/dx_east = (180/pi) D(f, lon) / (R_sphere * coslat) — see metadata.description. Inherits lat_coord's free names lat0_deg and dlat_deg.",
+      "body": {
+        "op": "cos",
+        "args": [
+          {
+            "op": "*",
+            "args": [
+              { "op": "/", "args": [3.141592653589793, 180] },
+              { "op": "apply_expression_template", "args": [], "name": "lat_coord", "bindings": {} }
+            ]
+          }
+        ]
+      }
+    },
+    "deg2rad": {
+      "params": ["angle_deg"],
+      "description": "Degree-to-radian helper: angle_deg * pi/180 (pi = 3.141592653589793). Invoke with any scalar or array expression binding; pure sugar for metric-factor compositions.",
+      "body": {
+        "op": "*",
+        "args": [
+          "angle_deg",
+          { "op": "/", "args": [3.141592653589793, 180] }
+        ]
+      }
+    },
+    "lat_edge": {
+      "params": [],
+      "description": "Latitude CELL EDGES in DEGREES, over the lat_nodes (NLAT+1 face) axis: phie[gje] = max(lat0_deg, min(latN_deg, lat0_deg + (gje - 1.5) dlat_deg)), latN_deg = lat0_deg + (NLAT - 1) dlat_deg. Each interior edge is the midpoint of the two neighbouring lat POINTS; the two end edges CLAMP to the domain ends, which halves the two end cells and so reproduces GEOS-Chem's half-polar caps on the global recipe (see metadata.description). Branch-free (min/max, no ifelse). Face gje is the LOWER (southern) edge of cell gje. Assumes dlat_deg > 0. Takes no arguments: it folds from the free names lat0_deg and dlat_deg plus the NLAT metaparameter. THE CONSUMER declares an observed `phie` of shape [lat_nodes] by applying this template, then feeds that same `phie` to coslat_edge / latcell_area / latcell_dphi — the keyed-factor contract grids/latlon3d uses for pe -> lev_thickness. This is the PRODUCER template, and its aggregate index `gje` is deliberately DISTINCT from the consumers' (gjc/gja/gjd): non-hygienic inlining would otherwise let a consumer's offset gather phie[gj+1] be captured by this body's own index and silently lose the +1 (see the AGGREGATE-INDEX HYGIENE paragraph in metadata.description).",
+      "body": {
+        "op": "faq",
+        "output_idx": ["gje"],
+        "args": [],
+        "ranges": { "gje": { "from": "lat_nodes" } },
+        "expr": {
+          "op": "max",
+          "args": [
+            "lat0_deg",
+            {
+              "op": "min",
+              "args": [
+                {
+                  "op": "+",
+                  "args": [
+                    "lat0_deg",
+                    { "op": "*", "args": [{ "op": "-", "args": ["NLAT", 1] }, "dlat_deg"] }
+                  ]
+                },
+                {
+                  "op": "+",
+                  "args": [
+                    "lat0_deg",
+                    { "op": "*", "args": [{ "op": "-", "args": ["gje", 1.5] }, "dlat_deg"] }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "coslat_edge": {
+      "params": ["phie"],
+      "description": "FACE-LENGTH metric over the lat_nodes (NLAT+1 face) axis: coslat_edge[gjc] = cos(pi/180 * phie[gjc]), where phie is the consumer's degree-valued edge array (shape [lat_nodes], from lat_edge). This is the zonal length of the latitude face, in units of R dlon_rad. On the global recipe the two POLE faces have coslat_edge = cos(-/+pi/2) = 6.1e-17 in IEEE double, NOT 0 — which is precisely why the flux-form lat rules OMIT the pole-wall flux terms rather than multiplying them by this near-zero factor (see metadata.description). Aggregate index `gjc`, distinct from the producer's `gje` and from its sibling consumers' `gja`/`gjd` (hygiene; see metadata.description).",
+      "body": {
+        "op": "faq",
+        "output_idx": ["gjc"],
+        "args": ["phie"],
+        "ranges": { "gjc": { "from": "lat_nodes" } },
+        "expr": {
+          "op": "cos",
+          "args": [
+            {
+              "op": "*",
+              "args": [
+                { "op": "/", "args": [3.141592653589793, 180] },
+                { "op": "index", "args": ["phie", "gjc"] }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "latcell_area": {
+      "params": ["phie"],
+      "description": "EXACT spherical cell-area weight over the lat (cell) axis: latcell_area[gja] = sin(pi/180 * phie[gja+1]) - sin(pi/180 * phie[gja]), gathering the consumer's NLAT+1-node degree-valued edge array phie. This is the exact integral of cos(phi) dphi across the cell, not a midpoint approximation, so the flux-form meridional divergence (F[j+1] coslat_edge[j+1] - F[j] coslat_edge[j]) / latcell_area[j] telescopes to an exact global mass budget. Positive when dlat_deg > 0. The physical cell area on a sphere of radius R is R^2 dlon_rad latcell_area[gja]. At the two half-polar caps latcell_area ~ dphi^2/8 — SECOND order small in the grid spacing while the adjacent face is only FIRST order small (coslat_edge ~ dphi/2); that O(1/dphi) amplification is why near-pole convergence requires the product V dq/dphi to vanish like cos(phi) at the pole (see grids/latlon3d/rules/upwind1_flux_D_lat_polar). Aggregate index `gja`, distinct from the producer's `gje` — with a shared name the offset gather phie[gja+1] is captured and silently degenerates to phie[gja], returning EXACT ZEROS (see the AGGREGATE-INDEX HYGIENE paragraph in metadata.description).",
+      "body": {
+        "op": "faq",
+        "output_idx": ["gja"],
+        "args": ["phie"],
+        "ranges": { "gja": { "from": "lat" } },
+        "expr": {
+          "op": "-",
+          "args": [
+            {
+              "op": "sin",
+              "args": [
+                {
+                  "op": "*",
+                  "args": [
+                    { "op": "/", "args": [3.141592653589793, 180] },
+                    { "op": "index", "args": ["phie", { "op": "+", "args": ["gja", 1] }] }
+                  ]
+                }
+              ]
+            },
+            {
+              "op": "sin",
+              "args": [
+                {
+                  "op": "*",
+                  "args": [
+                    { "op": "/", "args": [3.141592653589793, 180] },
+                    { "op": "index", "args": ["phie", "gja"] }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "latcell_dphi": {
+      "params": ["phie"],
+      "description": "Cell angular WIDTH in RADIANS over the lat (cell) axis: latcell_dphi[gjd] = pi/180 * (phie[gjd+1] - phie[gjd]), gathering the consumer's NLAT+1-node degree-valued edge array phie. Interior cells are a full dlat_deg wide; the two end (polar-cap) cells are HALF that, a direct consequence of the lat_edge clamp. The physical north-south cell width on a sphere of radius R is R latcell_dphi[gjd]. Needed by the ZONAL flux-form operator (which weights the zonal divergence by the cell width) and by any consumer wanting the meridional spacing; the MERIDIONAL flux-form operator does NOT need it, since latcell_area already carries the exact area weight. Aggregate index `gjd`, distinct from the producer's `gje` for the offset-gather hygiene reason in metadata.description.",
+      "body": {
+        "op": "faq",
+        "output_idx": ["gjd"],
+        "args": ["phie"],
+        "ranges": { "gjd": { "from": "lat" } },
+        "expr": {
+          "op": "*",
+          "args": [
+            { "op": "/", "args": [3.141592653589793, 180] },
+            {
+              "op": "-",
+              "args": [
+                { "op": "index", "args": ["phie", { "op": "+", "args": ["gjd", 1] }] },
+                { "op": "index", "args": ["phie", "gjd"] }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,58 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "central_D_lat_zero_grad_bc",
+    "description": "Centered first derivative along latitude with zero-gradient boundary rows on the latlon3d grid — the rank-3 (lon x lat x lev) extension of grids/latlon/rules/central_D_lat_zero_grad_bc, for meridional advection/diffusion in a 3-D tracer-transport model such as GEOS-Chem Classic. Matches D(f, wrt: lat), a PER-DEGREE derivative. The body is a makearray tiling [lon, lat, lev] with three regions, each filled by a thin apply of a factored stencil: interior rows [2, NLAT-1] use ../stencils/central_D_lat_interior (the 2nd-order centered difference); the j=1 and j=NLAT pole rows use ../stencils/central_D_lat_pole_face_lo and _hi (one-sided differences encoding the zero-gradient condition). On the GLOBAL recipe (lat0_deg=-90, dlat_deg=180/(NLAT-1)) the boundary rows are the poles themselves, and zero-gradient there is a deliberately CRUDE pole treatment — standard for exemplar transport, adequate for fields whose meridional gradient vanishes at the poles, but it neither couples the pole rows across longitude/level nor conserves through the pole; proper pole handling (averaged polar caps) is a different rule. On a REGIONAL grid the same rule is an ordinary zero-gradient (homogeneous Neumann) frame boundary. All three regions are full-rank slab aggregates (output_idx [i,j,k]) so every binding's simulator fills the (NLON x 1 x NLEV) pole slabs without rank promotion. The one-sided faces are O(dlat_deg) locally, which preserves global 2nd-order convergence for boundary-compatible solutions (see the MMS problem problems/latlon3d_advection_meridional_zero_grad). `dlat_deg` is the inherited consumer-supplied meridional spacing free name. Match scoping: `wrt: lat` plus `where: {f: {shape: [lon, lat, lev]}}` (esm-spec 9.6.1), so it fires only on the meridional derivative of a bare field declared over THIS grid's lon x lat x lev index sets — not on a 2-D latlon field — and, under import-edge renaming (esm-spec 9.7.7), the wrt literal and the where shape follow the renamed axis together, so two latlon3d instances coexist. The constraint requires a bare shaped variable; a consumer differentiating a compound inline expression must bind it to a declared lon x lat x lev observed first.",
+    "license": "MIT",
+    "tags": ["esd:rule", "family:finite_difference", "grid:latlon3d", "op:D", "axes:lon,lat,lev", "order:2", "stencil_width:3", "bc:zero_gradient", "spec:9.6.8"],
+    "references": [
+      {
+        "citation": "LeVeque, R. J. (2007). Finite Difference Methods for Ordinary and Partial Differential Equations. SIAM. Section 2.12 (one-sided boundary treatment)."
+      },
+      {
+        "citation": "Williamson, D. L., Drake, J. B., Hack, J. J., Jakob, R., & Swarztrauber, P. N. (1992). A standard test set for numerical approximations to the shallow water equations in spherical geometry. Journal of Computational Physics, 102(1), 211-224. (Context for pole treatments on latitude-longitude grids.)"
+      }
+    ]
+  },
+  "expression_template_imports": [
+    { "ref": "../stencils/central_D_lat_interior.esm" },
+    { "ref": "../stencils/central_D_lat_pole_face_lo.esm" },
+    { "ref": "../stencils/central_D_lat_pole_face_hi.esm" }
+  ],
+  "expression_templates": {
+    "central_D_lat_zero_grad_bc": {
+      "params": ["f"],
+      "match": { "op": "D", "args": ["f"], "wrt": "lat" },
+      "where": { "f": { "shape": ["lon", "lat", "lev"] } },
+      "body": {
+        "op": "makearray",
+        "args": [],
+        "regions": [
+          [[1, "NLON"], [2, { "op": "-", "args": ["NLAT", 1] }], [1, "NLEV"]],
+          [[1, "NLON"], [1, 1], [1, "NLEV"]],
+          [[1, "NLON"], ["NLAT", "NLAT"], [1, "NLEV"]]
+        ],
+        "values": [
+          {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "central_D_lat_interior",
+            "bindings": { "f": "f" }
+          },
+          {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "central_D_lat_pole_face_lo",
+            "bindings": { "f": "f" }
+          },
+          {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "central_D_lat_pole_face_hi",
+            "bindings": { "f": "f" }
+          }
+        ]
+      }
+    }
+  }
+}

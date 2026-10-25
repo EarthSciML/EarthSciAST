@@ -1,0 +1,255 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "selection_two_operator",
+    "description": "Two operators and a coupling entry on 10 cells. Chem is 0-D O3/NO2 chemistry; coupling entry 0 (a `couple` additive connector) adds Emis.e * Chem.O3 to D(Chem.NO2), origin {\"coupling\": 0}; entry 1 composes Chem with the upwind advection operator Adv and lifts it pointwise onto x. D(Chem.O3) carries contributions from Chem and Adv; D(Chem.NO2) from Chem, coupling 0 and Adv. Selecting the coupling term alone writes only NO2 and reads O3 as aux.",
+    "authors": [
+      "EarthSciAST test suite"
+    ],
+    "created": "2026-10-24T00:00:00Z",
+    "tags": [
+      "conformance",
+      "range_restricted_rhs"
+    ]
+  },
+  "index_sets": {
+    "x": {
+      "kind": "interval",
+      "size": 10
+    }
+  },
+  "models": {
+    "Chem": {
+      "variables": {
+        "O3": {
+          "type": "unknown",
+          "units": "mol/mol",
+          "default": 1.0
+        },
+        "NO2": {
+          "type": "unknown",
+          "units": "mol/mol",
+          "default": 1.0
+        },
+        "k1": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.3
+        },
+        "j1": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.05
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "O3"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "+",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  {
+                    "op": "*",
+                    "args": [
+                      "k1",
+                      "O3",
+                      "NO2"
+                    ]
+                  }
+                ]
+              },
+              {
+                "op": "*",
+                "args": [
+                  "j1",
+                  "NO2"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "NO2"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "k1",
+                  "O3",
+                  "NO2"
+                ]
+              },
+              {
+                "op": "*",
+                "args": [
+                  "j1",
+                  "NO2"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "Emis": {
+      "variables": {
+        "e": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.02
+        }
+      },
+      "equations": []
+    },
+    "Adv": {
+      "variables": {
+        "u": {
+          "type": "parameter",
+          "units": "m/s",
+          "default": 2.0
+        },
+        "dx": {
+          "type": "parameter",
+          "units": "m",
+          "default": 100.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "_var"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "u"
+                ]
+              },
+              {
+                "op": "makearray",
+                "args": [],
+                "regions": [
+                  [
+                    [
+                      2,
+                      10
+                    ]
+                  ],
+                  [
+                    [
+                      1,
+                      1
+                    ]
+                  ]
+                ],
+                "values": [
+                  {
+                    "op": "/",
+                    "args": [
+                      {
+                        "op": "-",
+                        "args": [
+                          {
+                            "op": "index",
+                            "args": [
+                              "_var",
+                              "i"
+                            ]
+                          },
+                          {
+                            "op": "index",
+                            "args": [
+                              "_var",
+                              {
+                                "op": "-",
+                                "args": [
+                                  "i",
+                                  1
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      "dx"
+                    ]
+                  },
+                  {
+                    "op": "/",
+                    "args": [
+                      {
+                        "op": "index",
+                        "args": [
+                          "_var",
+                          "i"
+                        ]
+                      },
+                      "dx"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "coupling": [
+    {
+      "type": "couple",
+      "systems": [
+        "Emis",
+        "Chem"
+      ],
+      "connector": {
+        "equations": [
+          {
+            "from": "Emis.e",
+            "to": "Chem.NO2",
+            "transform": "additive",
+            "expression": {
+              "op": "*",
+              "args": [
+                "Emis.e",
+                "Chem.O3"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "operator_compose",
+      "systems": [
+        "Chem",
+        "Adv"
+      ],
+      "lifting": "pointwise"
+    }
+  ]
+}

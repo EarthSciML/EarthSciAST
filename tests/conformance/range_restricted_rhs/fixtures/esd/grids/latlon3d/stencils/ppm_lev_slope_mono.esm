@@ -1,0 +1,169 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "ppm_lev_slope_mono",
+    "description": "Colella-Woodward (1984) eq. (1.8) MONOTONIZED average slope of a cell-averaged field on an arbitrarily-spaced 1-D mesh: the raw non-uniform eq. (1.7) slope (../stencils/ppm_lev_slope) clipped so the eq (1.6) edge reconstruction built from it cannot overshoot. delta_m a_j = 0 if the cell is a local extremum ((a_{j+1}-a_j)(a_j-a_{j-1}) <= 0, i.e. the neighbouring differences disagree in sign), else sign(delta a_j) * min(|delta a_j|, 2|a_j - a_{j-1}|, 2|a_{j+1} - a_j|). The magnitude clip is expressed as a CLAMP of the raw slope to [-M, M] with M = 2 min(|a_j - a_{j-1}|, |a_{j+1} - a_j|) >= 0: clamp(d, -M, M) = max(-M, min(M, d)) is identically sign(d) min(|d|, M) in all three branches, so no sign op is needed (the evaluable core has min/max/abs/ifelse but not sign). DROP-IN: identical signature to the raw ../stencils/ppm_lev_slope (am,a0,ap,dm,d0,dp), which is exactly why ppm_lev_edge and ppm_lev_edge_mono can be the same wrapper over ppm_lev_edge_core differing only in this substitution. EFFECT: forces the interpolated edge a_{j+1/2} to lie between a_j and a_{j+1}, so the upwind PPM flux introduces no new extrema at a sharp gradient -- the property that keeps a chemistry-transport tracer non-negative across an inversion, a plume, or the tropopause. COST: at a SMOOTH extremum the limiter cannot tell a genuine maximum from an oscillation and clips it to zero slope, which is what degrades the formal order (the extremum-preserving Colella-Sekora (2008) limiter is the documented follow-on that recovers it). Grid-agnostic scalar algebra; match-less named template.",
+    "license": "MIT",
+    "tags": [
+      "esd:stencil",
+      "family:finite_volume",
+      "grid:latlon3d",
+      "op:limiter",
+      "order:2",
+      "stencil_width:3"
+    ],
+    "references": [
+      {
+        "citation": "Colella, P., & Woodward, P. R. (1984). The Piecewise Parabolic Method (PPM) for gas-dynamical simulations. Journal of Computational Physics, 54(1), 174-201. Equation (1.8), monotonized slope.",
+        "doi": "10.1016/0021-9991(84)90143-8"
+      }
+    ]
+  },
+  "expression_template_imports": [
+    {
+      "ref": "./ppm_lev_slope.esm"
+    }
+  ],
+  "expression_templates": {
+    "ppm_lev_slope_mono": {
+      "params": [
+        "am",
+        "a0",
+        "ap",
+        "dm",
+        "d0",
+        "dp"
+      ],
+      "description": "CW84 eq.(1.8) monotonized slope: 0 at an extremum, else the eq.(1.7) slope clamped to +-2 min(|a0-am|,|ap-a0|)",
+      "body": {
+        "op": "ifelse",
+        "args": [
+          {
+            "op": ">",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "-",
+                    "args": [
+                      "ap",
+                      "a0"
+                    ]
+                  },
+                  {
+                    "op": "-",
+                    "args": [
+                      "a0",
+                      "am"
+                    ]
+                  }
+                ]
+              },
+              0
+            ]
+          },
+          {
+            "op": "max",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  {
+                    "op": "*",
+                    "args": [
+                      2,
+                      {
+                        "op": "min",
+                        "args": [
+                          {
+                            "op": "abs",
+                            "args": [
+                              {
+                                "op": "-",
+                                "args": [
+                                  "a0",
+                                  "am"
+                                ]
+                              }
+                            ]
+                          },
+                          {
+                            "op": "abs",
+                            "args": [
+                              {
+                                "op": "-",
+                                "args": [
+                                  "ap",
+                                  "a0"
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "op": "min",
+                "args": [
+                  {
+                    "op": "*",
+                    "args": [
+                      2,
+                      {
+                        "op": "min",
+                        "args": [
+                          {
+                            "op": "abs",
+                            "args": [
+                              {
+                                "op": "-",
+                                "args": [
+                                  "a0",
+                                  "am"
+                                ]
+                              }
+                            ]
+                          },
+                          {
+                            "op": "abs",
+                            "args": [
+                              {
+                                "op": "-",
+                                "args": [
+                                  "ap",
+                                  "a0"
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "op": "apply_expression_template",
+                    "args": [],
+                    "name": "ppm_lev_slope",
+                    "bindings": {
+                      "am": "am",
+                      "a0": "a0",
+                      "ap": "ap",
+                      "dm": "dm",
+                      "d0": "d0",
+                      "dp": "dp"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          0
+        ]
+      }
+    }
+  }
+}
