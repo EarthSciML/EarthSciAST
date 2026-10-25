@@ -344,8 +344,6 @@ function _rrc_selection_ok(c, prob)
     end
 end
 
-const _RRC_SUBCALL_DOC = "fixtures/esd/problems/latlon3d_transport_cwc_regional_inflow.esm"
-
 @testset "range_restricted_rhs conformance (§5.49)" begin
     manifest = JSON3.read(read(joinpath(_RRC_DIR, "manifest.json"), String))
     @test manifest.compiler == "native"
@@ -353,16 +351,6 @@ const _RRC_SUBCALL_DOC = "fixtures/esd/problems/latlon3d_transport_cwc_regional_
     pick = isempty(only) ? nothing : Set(split(only, ","))
     for c in manifest.cases
         pick === nothing || String(c.id) in pick || continue
-        # Before 1.12 this template-heavy document's program compiles slowly
-        # enough to push the LTS test job past its time limit; the 1.12+ job
-        # runs it.
-        VERSION < v"1.12" && String(c.document) == _RRC_SUBCALL_DOC && continue
-        # This template-heavy document's kernels compile far faster with each
-        # template body emitted once as its own function (the value-exact,
-        # opt-in `ESS_CG_SUBCALL_FN` tier); its whole-domain reference and its
-        # tiles are all built under it. Rust runs the default lowering.
-        knob = String(c.document) == _RRC_SUBCALL_DOC ? "1" : get(ENV, "ESS_CG_SUBCALL_FN", nothing)
-        withenv("ESS_CG_SUBCALL_FN" => knob) do
         @testset "$(c.id)" begin
             prob = _rrc_problem(c)
             k = String(c.kind)
@@ -402,7 +390,6 @@ const _RRC_SUBCALL_DOC = "fixtures/esd/problems/latlon3d_transport_cwc_regional_
             else
                 @test k == "a case kind this binding recognizes"
             end
-        end
         end
     end
 end
