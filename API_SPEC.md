@@ -524,6 +524,11 @@ observed_field(prob, name) -> Array
 compiler(prob) -> <vocabulary value>
 compiler_report(prob) -> per-rule tier record
 EnsembleProblem(prob, rewrite) -> EnsembleProblem
+rhs_program(prob) -> program                     # Julia, Rust; see below
+select(prog, writes, terms) -> program
+halo(op, dec) -> (variable, index set) => (lo, hi)
+restrict(op, dec, owned, storage) -> tile        # Rust: RhsProgram::tile
+lanes(op, kind, ...) -> lane program
 ```
 
 A `Solution` carries `retcode` (SciML `ReturnCode`) and is read **by flattened
@@ -812,6 +817,286 @@ survives composition, which is the spelling composition produces anyway.
 > outside**, across recompositions the caller does not control. Both refuse to
 > bind an ambiguous bare name to an arbitrary candidate, which is the property
 > §6.6.2 calls out as non-conforming.
+
+#### Range-restricted right-hand sides: selection, tiles and lanes
+
+**Status.** Julia and Rust, under `compiler = native` (issue #540, RFC U3).
+Python exports the entry points and each raises `compiler_unavailable`.
+TypeScript and Go have no simulator and export none of it. No schema or format
+change: the decomposition, the boxes and the selection are API arguments.
+`CONFORMANCE_SPEC.md` §5.49 is the gate; its fixtures are
+`tests/conformance/range_restricted_rhs/`.
+
+A Problem's right-hand side `F` evaluates the whole model over the whole domain.
+These entries evaluate one **operator** `F_k` — a subset of the additive terms,
+selected by #539 provenance, writing only that operator's variables — over a
+**tile** (an owned box of a horizontal decomposition, reading halo cells from an
+extended local array) or over **lanes** (a run-time list of cells or columns).
+Index space stays global, so a `makearray` boundary region applies exactly where
+the global domain has a boundary and interior stencils apply at every other tile
+edge. The contract is bitwise: the tiles' owned outputs, assembled, equal the
+operator's whole-domain right-hand side bit for bit, and every lane equals its
+cell.
+
+##### The surface
+
+| Canonical | Julia | Rust | Python |
+|---|---|---|---|
+| `rhs_program(prob)` | `rhs_program(prob)` | `rhs_program(&prob) -> Result<RhsProgram, SimulateError>` | raises `compiler_unavailable` |
+| `select(prog, writes, terms)` | `select(prog; writes = :all, terms = :all)` | `RhsProgram::select(&self, &RhsSelection) -> Result<RhsProgram, SimulateError>` | raises `compiler_unavailable` |
+| `halo(op, dec)` | `halo(op, dec) -> Dict{Tuple{String,String},Tuple{Int,Int}}` | `RhsProgram::halo(&self, &Decomposition) -> Result<HaloReport, SimulateError>` | raises `compiler_unavailable` |
+| `restrict(op, dec, owned, storage)` | `restrict(op, dec; owned, storage)` | `RhsProgram::tile(&self, &Decomposition, &TileBox) -> Result<TileProgram, SimulateError>` | raises `compiler_unavailable` |
+| `lanes(op, kind, capacity)` | `lanes(op, kind, sets)` | `RhsProgram::lanes(&self, LaneKind, capacity: usize) -> Result<LaneProgram, SimulateError>` | raises `compiler_unavailable` |
+| layout | `tile_layout(prog_or_tile)`, `lane_layout(lanes)` | `RhsProgram::layout() -> &TileLayout`, `TileProgram::layout() -> &TileLayout`, `LaneProgram::layout() -> &LaneLayout` | — |
+| workspace | `rhs_workspace(x)` | `new_workspace(&self) -> RhsWorkspace` on each program type | — |
+| evaluate | `rhs!(du, x, ws, u, aux, p, t, fs)`; lanes add `cells, n` | `eval_into(&self, u, aux, p, t, du, ws)` on `RhsProgram` and `TileProgram`; `LaneProgram::eval_into(&self, u, aux, p, t, cells, n, du, ws)` | — |
+| pre-gathered lane inputs | `lane_inputs(lanes, L)`, `gather_lane_inputs!(li, lanes, p, t, fs, cells, n)`, then `rhs!(du, lanes, ws, u, aux, p, t, li, cells, n)` | `LaneProgram::lane_inputs(&self) -> LaneInputs`, `gather_lane_inputs(&self, &mut LaneInputs, p, t, cells, n)`, `eval_gathered_into(&self, u, aux, &LaneInputs, p, t, cells, n, du, ws)` | — |
+| decomposition | `Decomposition(; axes, faces)` | `Decomposition { axes: Vec<AxisCut>, faces: Vec<(String, String)> }`, `AxisCut { index_set: String, period: Option<i64> }` | — |
+
+Julia's `restrict` is Rust's `tile`; the RFC names both and both are kept.
+
+**The program.** `rhs_program(prob)` is the Problem's right-hand side as a
+program value: the whole model, over the whole domain, with `u` the Problem's
+state and `aux` empty. It is the smallest program type this RFC needs and not
+the public right-hand-side type of #541 (U4), which will absorb it. `select`
+returns another program of the same type; `halo`, `restrict`/`tile` and `lanes`
+take one. A program carries the flattened system it was built from, so
+`select` re-flattens nothing and re-parses nothing.
+
+- **Julia.** `writes` is `:all` or a vector of flattened state names; `terms`
+  is `:all` or a vector of `TermOrigin`. `dec = Decomposition(axes = ["lon" =>
+  (period = 144,), "lat" => (period = nothing,)], faces = ["lon_nodes" =>
+  "lon"])`. `owned` and `storage` are `index set => UnitRange` pairs, one per
+  decomposed axis: `restrict(op, dec; owned = ("lon" => 17:32, "lat" => 1:13),
+  storage = ("lon" => 14:35, "lat" => -2:16))`. `kind` is `:cells` or
+  `:columns`; `sets` names the index sets a lane's `cells` column indexes, in
+  order. `p` is the Problem's `p`; `fs` is the forcing-buffer set the program
+  was built against (`forcing_buffers(prob)`), or `nothing` for the same.
+  Buffers are `Vector{Float64}`; `cells` is a `Matrix{Int32}` of size `[D, L]`;
+  `rhs!` returns `du`.
+- **Rust.** `RhsSelection { writes: Option<Vec<String>>, terms:
+  Option<Vec<TermOrigin>> }`, `None` meaning all. `TileBox { owned: Vec<(String,
+  RangeInclusive<i64>)>, storage: Vec<(String, RangeInclusive<i64>)> }`.
+  `LaneKind::Cells { sets: Vec<String> }` or `LaneKind::Columns { sets:
+  Vec<String> }`. `HaloReport { reach: BTreeMap<(String, String), (i64, i64)>
+  }`, keyed `(variable, index set)`. Buffers are `&[f64]` / `&mut [f64]`, `cells`
+  is `&[i32]` holding `[D, capacity]` column-major, `p` is the program's
+  parameter vector — `RhsProgram::parameter_names()` gives its order and
+  `RhsProgram::default_parameters()` the Problem's values — and `eval_into`
+  returns `Result<(), SimulateError>`. `TileProgram` and `LaneProgram` are `Send
+  + Sync` where that costs nothing; where it does not, the type's documentation
+  says what holds it back (U4 owns the audit). The RFC's generic `T: StateScalar`, its `ForcingSet` argument and its
+  `RhsError` are U4's; here the state is `f64`, the forcing is the buffers the
+  program was built against, and errors are `SimulateError`.
+
+**Layouts.** `TileLayout` holds two lists of `TileBlock`, `u` and `aux`, and
+their lengths. A `TileBlock` is `{ name, sets, storage, owned, base, strides }`:
+the variable, its index sets in shape order, its storage box and owned box per
+set (inclusive, global coordinates; `owned` is empty for an `aux` block), its
+base offset in the buffer (1-based in Julia, 0-based in Rust) and its
+column-major strides. A whole-domain program's layout is the same record with
+storage = owned = the variable's global box. `LaneLayout` holds `u` and `aux`
+lists of `LaneBlock { name, sets, extents, offset }` — the variable's non-lane
+index sets, their extents and its offset in units of lanes (below) — and the
+lane sets.
+
+##### Selection (normative)
+
+`select(prog; writes, terms)` returns the program of one operator. It is a
+**flatten-level rewrite** keyed by #539 provenance (esm-libraries-spec §4.7.5):
+
+1. **Terms.** For every flattened equation, keep each contribution whose
+   `origins` intersect `terms`, matched by `TermOrigin` equality (a
+   `{"component": path}` or a `{"coupling": k}`). `terms = all` keeps every
+   contribution. The kept contributions are summed as a LEFT FOLD in their
+   original relative order — the order and the association #539's invariant
+   fixes.
+2. **Writes.** Every equation whose target is not in `writes` is dropped.
+   `writes = all` is every state of the program. A kept equation whose
+   contributions were all dropped has right-hand side `0`: an operator that
+   does not touch a variable it writes.
+3. **Completeness.** A variable outside `writes` that has a kept contribution
+   is refused with `range_selection_writes_incomplete`, naming the variable and
+   the contribution's origins. Selection never silently discards a term the
+   caller selected.
+4. **Inputs.** `u` covers the written variables `W_k`; `aux` covers `R_k \
+   W_k`, the states the kept rules read (directly or through observeds) that
+   the operator does not write. Both are in the flat layout's order: 0-d states
+   by sorted name, then arrays by sorted name. `aux` is read-only.
+5. **Recompile.** The selected flattened system is compiled under the
+   program's compiler. Observeds no kept rule reads are not evaluated.
+
+Every bitwise claim below is against `select(prog; …)` evaluated over the whole
+domain, written `G_k`. `Σ_k G_k = F` holds only to rounding, because dropping
+summands changes the association; `CONFORMANCE_SPEC.md` §5.49 bounds it.
+`terms = all` with `writes = W_k` is the same program as an operator's derived
+document, when a planner emits one.
+
+##### Terms of a decomposition
+
+- **Decomposition.** The caller names the horizontal index sets it cuts, each
+  one's period if periodic, and the face index sets that stagger off it (for
+  example `lon_nodes` off `lon`). Every other index set (`lev`, species,
+  records) is whole on every tile. A period is the axis's global extent.
+- **Owned box `B`.** One inclusive range per decomposed index set, inside
+  `1..N`.
+- **Storage box `S`.** `B` dilated by the halo. Along a non-periodic axis it may
+  extend past `1..N`. Along a periodic axis it is expressed in unwrapped
+  coordinates, for example `-2..16`.
+- **Face sets.** Cell `i` owns face `i`, its low face; the tile that owns cell
+  `N` also owns face `N+1`. Owned faces are the owned cells, plus `N+1` at the
+  high edge; storage faces are `S`'s cells plus one. A face quantity stored on
+  the cell index set is just a cell variable.
+- **Rank storage.** Several tiles may share one storage box (a rank's extended
+  array). With `S` equal to the whole domain, storage is the global layout.
+
+##### Halo report (normative)
+
+`halo(op, dec)` returns, for every state variable `v ∈ R_k` and every decomposed
+or face index set `s` on `v`'s shape, the pair `(lo, hi)`: how far the owned
+output reaches into `v` along `s`. It is the smallest pair such that, for every
+owned box `B`, `B` dilated by `(lo, hi)` (in face coordinates for a face set)
+contains every in-domain cell of `v` a tile owning `B` reads.
+
+- **Composition.** Offsets compose through observeds. If `du[i]` reads `F[i]`
+  and `F[i+1]`, and `F[j]` reads `u[j-3..j+2]`, then `u` needs `(3, 3)`.
+- **Region reach.** Each `makearray` region contributes its own reach; the
+  report is the maximum over regions, so a reach that occurs only in a boundary
+  slab is included.
+- **Wraps.** A periodic wrap counts as reach across the seam, whether the
+  evaluator's periodic gather does it or the rule spells it out (`f[NLON-1]`
+  read from cell 1 is a reach of 2 below cell 1).
+- **Refusals.** A contraction, scan or data-dependent subscript along a
+  decomposed axis has no finite reach: `halo` raises `range_global_locality`
+  naming the rule and the axis.
+
+The report names only states; forcing buffers and array parameters are read in
+full by this round's programs (a forcing reach report and windowed forcing are
+U4's `ForcingSet`).
+
+##### Tile semantics (normative)
+
+Let `G_k` be the operator program over the whole domain. Suppose `u_S` and
+`aux_S` agree with the global state on every in-domain cell of `S`, and on a
+periodic axis every cell outside `1..N` holds the value at its wrapped index.
+Then for every `v ∈ W_k` and every owned cell `c` of `v`:
+
+    tile(u_S, aux_S, p, t)[v, c]  ==  G_k(u, aux, p, t)[v, c]   (bitwise)
+
+The compiler reaches this by the following rules.
+
+1. **Region clipping.** Each `makearray` region's global box is intersected
+   with the need box of its output. Empty intersections are dropped. Order, and
+   "later overwrites earlier", are kept. A PPM tile owning `lon ∈ 17..32` keeps
+   only the interior `[4, N-2]`; the tile owning `1..16` keeps slabs 1, 2 and 3
+   and the interior `4..16`.
+2. **Reads.** Each read of `v` at global index `g` along axis `a` resolves in
+   this order:
+   - `g` in storage → read storage.
+   - `a` periodic with period `N`, and `g ± N` in storage → read that cell.
+     This covers both explicit wraps and the periodic gather policy.
+   - `g` outside `1..N`, `a` not periodic → today's out-of-range rule: zero
+     ghost for states and observeds, the declared policy for const arrays.
+   - Otherwise → build error `range_halo_insufficient`, naming the rule, the
+     variable, the axis and the missing cells.
+3. **Observeds.** Each array observed is evaluated on its need box. That box is
+   the union of its readers' need boxes, each widened by that reader's offsets,
+   clipped to the observed's global extent. It is recomputed by every tile that
+   needs it; observeds are never exchanged.
+4. **Writes.** Only the `(W_k, owned)` rows of `du` are written. Every other
+   element of `du` is left untouched. Tiles sharing a storage box may therefore
+   write one shared `du` concurrently.
+5. **Dead halo cells.** Storage cells outside `1..N` on a non-periodic axis are
+   never read. The caller may leave them uninitialized; the conformance test
+   fills them with NaN.
+
+Boxes are fixed at build. Out-of-domain reads keep today's semantics; an
+in-domain read outside storage is a build error, never a ghost zero. Filling the
+halo is the caller's job.
+
+##### Tile layout (normative)
+
+`u_S`, `aux_S` and `du_S` are species-major. Each variable is one column-major
+block over its storage box (first index fastest), in flat-layout order: today's
+layout with `S` in place of the global box. `du_S` has `u_S`'s layout; only
+owned rows are written. Index offsets are rebased by storage origin alone:
+
+    slot = base_v + Σ_d (g_d - S_lo[v,d]) · stride[v,d]
+
+with `g` the global index. Region bounds, coordinates and index-derived values
+keep their global 1-based values.
+
+##### Lanes (normative)
+
+`lanes(op, kind, …)` evaluates an operator whose locality is `pointwise`
+(`kind = cells`) or `column` (`kind = columns`) over a run-time list of cells.
+
+- **Inputs.** `cells` is an `Int32` array of global indices, `[D, L]`, column
+  `l` the index tuple of lane `l` over the lane sets in the order named. For
+  `cells` the lane sets are every index set of the written variables' shape;
+  for `columns` they are the horizontal sets, and the column is every other
+  set. Every state in `u` and `aux` carries every lane set.
+- **Layout.** `u_L`, `aux_L` and `du_L` are species-major with the lane index
+  fastest. Variable `v`, in flat-layout order, holds `C_v` column elements (the
+  product of its non-lane extents; 1 for `cells`), at offset `off_v = Σ_{v'
+  before v} C_{v'}`; element `e` (1-based, column-major over the non-lane sets)
+  of lane `l` is at slot `(off_v + e - 1)·L + l`. For a pointwise operator that
+  is `(s-1)·L + l`; for one species on a column, `((s-1)·nlev + (k-1))·L + l`.
+- **Semantics.** For each lane `l ≤ n` and each `v ∈ W_k`, `du_L[v, l] ==
+  G_k(…)[v, cells[:, l]]` bitwise. A lane's result depends only on its own
+  inputs, so padding a batch with duplicates of a real cell is safe and
+  discardable, and lane order and batch composition cannot change a value.
+- **Reads.** State reads at offset 0 (pointwise) or along the column (column)
+  come from `u_L` and `aux_L`. Every read that depends on the cell's index is
+  evaluated from `cells`: coordinate expressions, level gates, and affine reads
+  of forcing, array parameters, const arrays and state-free observeds.
+  State-free observeds keep their whole-domain build-time values and are
+  gathered per lane. A read that leaves the cell (pointwise) or the column
+  (column) is refused with `compiler_refused_rule`, naming the rule and saying
+  "lane".
+- **Pre-gathered inputs.** `lane_inputs` returns per-lane buffers for every
+  non-state input, `gather_lane_inputs!` fills them for a `cells` list, and the
+  pre-gathered evaluation reads them in place of the gathers. Its results are
+  bitwise those of the plain call.
+- **Capacity.** Julia loops over lanes with a run-time count, so one build
+  serves every `L` (`L = size(cells, 2)`). Rust slot boxes are static, so a lane
+  program is built per capacity (re-lowering only, no document rebuild) and `L`
+  is the capacity. A call passes `n ≤ L`; lanes `n+1..L` are computed and
+  unspecified.
+
+##### Native only, and strict
+
+`select` works on any program. `halo`, `restrict`/`tile` and `lanes` require a
+program built with `compiler = native`; under any other compiler they raise
+`compiler_unavailable`, naming the call. There is no fallback to the interpreter
+and no path that evaluates the global `F` and discards the rest. A native tier
+that cannot be restricted raises `range_global_locality` where decision 8 below
+covers it, and otherwise `compiler_refused_rule` naming the rule and saying
+"tile restriction" or "lane". A silent wrong answer is never an option.
+
+**What tiles refuse (decision 8).** A write to a 0-d state, and a contraction, a
+scan or a data-dependent gather along a decomposed axis: these have `global`
+locality. A contraction along an axis that is NOT cut is ordinary per-tile work.
+
+| Code | Raised by | Meaning |
+|---|---|---|
+| `range_halo_insufficient` | `restrict` / `tile` | An in-domain read falls outside storage and has no periodic image in it (tile rule 2). Names the rule, the variable, the axis and the missing cells. |
+| `range_global_locality` | `halo`, `restrict` / `tile` | A 0-d state write on a tile, or a contraction, scan or data-dependent gather along a decomposed axis. Names the rule and, where there is one, the axis. |
+| `range_selection_writes_incomplete` | `select` | `writes` omits a variable whose kept contributions are non-empty. Names the variable and the origins. |
+| `range_box_invalid` | `halo`, `restrict` / `tile`, `lanes` | An owned box not inside its storage box or outside `1..N`; an unknown index set; a face set declared against an axis the decomposition does not cut; a period that is not the axis's extent; lane sets that do not match the kind. Names the index set. |
+
+**Cost (normative for Julia and Rust).** A tile's call touches, copies,
+transposes or fills no cell outside its storage box: the run cost is O(need
+box), never O(domain). Building a tile may re-lower (Rust) but never
+re-flattens or re-parses the document. A steady-state call allocates nothing
+(Julia ≥ 1.12). One Julia lane build serves every lane count; Rust re-lowers
+per capacity.
+
+**Not here.** Halo exchange, MPI and threading are the caller's. Tile boxes are
+fixed at build; there is no run-time box argument. Restricted observeds are not
+exported. `global` operators (SSA, connected components, horizontal sums) stay
+whole-domain. XLA tile and lane programs are U13's. A `makearray` origin for a
+whole-domain program (the RFC's open question 5) is not settled here.
 
 ### 5.9 Reference resolution
 
@@ -1109,6 +1394,7 @@ reading that as a gap.
 | `parameter` | type | `Parameter` | – | `Parameter` | – | `Parameter` |
 | `parse_unit` | function | – | `parseUnit` | – | `parse_unit` | `ParseUnit` |
 | `reference` | type | `Reference` | – | `Reference` | – | `Reference` |
+| `rhs_program` | function | `rhs_program` | – | `rhs_program` | `rhs_program` | – |
 | `schema_validation_error` | error | `SchemaValidationError` | `SchemaValidationError` | `SchemaValidationError` | – | – |
 | `substitute_in_equations` | function | `substitute_in_equations` | `substituteInEquations` | – | – | `SubstituteInEquations` |
 | `unit_conversion_error` | error | `UnitConversionError` | `UnitConversionError` | `UnitConversionError` | – | – |
@@ -1140,6 +1426,7 @@ reading that as a gap.
 | `cyclic_promotion_error` | error | `CyclicPromotionError` | – | `CyclicPromotionError` | – | – |
 | `dae_info` | type | – | – | – | `DaeInfo` | `DAEInfo` |
 | `data_source_kind` | type | – | – | `DataSourceKind` | `DataSourceKind` | – |
+| `decomposition` | type | `Decomposition` | – | – | `Decomposition` | – |
 | `default_abstol` | constant | – | `DEFAULT_ABSTOL` | – | `DEFAULT_ABSTOL` | – |
 | `default_reltol` | constant | – | `DEFAULT_RELTOL` | – | `DEFAULT_RELTOL` | – |
 | `derive_output_gridding` | function | `derive_output_gridding` | – | – | `derive_output_gridding` | – |
@@ -1174,11 +1461,13 @@ reading that as a gap.
 | `grid_plan` | type | `GridPlan` | – | – | `GridPlan` | – |
 | `group_aggregate` | function | – | – | `group_aggregate` | `group_aggregate` | – |
 | `group_gridding_by_grid` | function | `group_gridding_by_grid` | – | – | `group_gridding_by_grid` | – |
+| `halo` | function | `halo` | – | `halo` | – | – |
 | `init` | function | – | – | `init` | `init` | – |
 | `inline_test_options` | type | `InlineTestOptions` | – | – | `InlineTestOptions` | – |
 | `integrator` | type | – | – | `Integrator` | `Integrator` | – |
 | `intersect_polygon` | function | – | – | `intersect_polygon` | `intersect_polygon` | – |
 | `is_template_library_doc` | function | – | `isTemplateLibraryDoc` | – | `is_template_library_doc` | – |
+| `lanes` | function | `lanes` | – | `lanes` | – | – |
 | `load_options` | type | – | `LoadOptions` | – | `LoadOptions` | – |
 | `lower_reactions_to_equations` | function | `lower_reactions_to_equations` | – | – | `lower_reactions_to_equations` | – |
 | `materialize_value_invention` | function | – | – | `materialize_value_invention` | `materialize_value_invention` | – |
@@ -1202,10 +1491,12 @@ reading that as a gap.
 | `rank` | function | – | – | `rank` | `rank` | – |
 | `ranking` | type | – | – | `Ranking` | `Ranking` | – |
 | `remake` | function | – | – | `remake` | `remake` | – |
+| `restrict` | function | `restrict` | – | `restrict` | – | – |
 | `return_code` | type | – | – | `ReturnCode` | `ReturnCode` | – |
 | `run_inline_tests` | function | `run_inline_tests` | – | – | `run_inline_tests` | – |
 | `schema_error` | error | – | – | – | `SchemaError` | `SchemaError` |
 | `schema_error` | type | `SchemaError` | `SchemaError` | – | – | – |
+| `select` | function | `select` | – | `select` | – | – |
 | `simulate_error` | error | `SimulateError` | – | – | `SimulateError` | – |
 | `skolem` | function | – | – | `skolem` | `skolem` | – |
 | `skolem_edge` | function | – | – | `skolem_edge` | `skolem_edge` | – |

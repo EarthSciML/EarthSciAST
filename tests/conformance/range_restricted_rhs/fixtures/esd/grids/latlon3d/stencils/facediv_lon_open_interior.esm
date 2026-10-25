@@ -1,0 +1,140 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "facediv_lon_open_interior",
+    "description": "OPEN-WALL (regional limited-area) columns (i = 1 .. NLON) of the ZONAL divergence of a face-staggered flux on latlon3d: the continuity twin for the regional lateral-inflow PPM tracer rule ppm_flux_D_lon_mono_inflow_bc. Identical to ../stencils/facediv_lon_interior -- the bare telescoping difference of the two face fluxes bounding the cell times the spherical metric weight -- but ranged over the WHOLE axis, because on an OPEN domain the west/east wall faces (Mx[1] and Mx[NLON+1]) are GENUINE faces to be differenced, not a periodic wrap (Mx[1] reused as the last east face) and not a pole to be OMITTED. CWC: at tracer q == 1 with a boundary halo == 1 the regional PPM flux collapses to F = Mx bitwise at EVERY face including the walls (every CW84 correction term is a difference of equal values, exactly 0.0 in IEEE), so d(mq)/dt built by the PPM rule is bit-identical to d(m)/dt built here and a uniform tracer is preserved through the open walls. The domain is OPEN: mass enters and leaves through the wall faces, so the global integral is not invariant -- that is the point of a lateral boundary. Free names and face convention exactly as in ../stencils/facediv_lon_interior.",
+    "license": "MIT",
+    "tags": [
+      "esd:stencil",
+      "family:finite_volume",
+      "grid:latlon3d",
+      "op:div",
+      "axes:lon,lat,lev",
+      "order:1",
+      "stencil_width:2"
+    ],
+    "references": [
+      {
+        "citation": "Lin, S.-J., & Rood, R. B. (1996). Multidimensional flux-form semi-Lagrangian transport schemes. Monthly Weather Review, 124(9), 2046-2070.",
+        "doi": "10.1175/1520-0493(1996)124<2046:MFFSLT>2.0.CO;2"
+      },
+      {
+        "citation": "Jacobson, M. Z. (2005). Fundamentals of Atmospheric Modeling (2nd ed.). Cambridge University Press. Chapter 6 (finite-volume flux-form tracer transport; consistency with continuity)."
+      },
+      {
+        "citation": "Jockel, P., von Kuhlmann, R., Lawrence, M. G., et al. (2001). On a fundamental problem in implementing flux-form advection schemes for tracer transport in 3-dimensional general circulation and chemistry transport models. Quarterly Journal of the Royal Meteorological Society, 127(573), 1035-1052. (Consistency with continuity: what breaks when the tracer scheme and the continuity scheme do not use the same mass fluxes.)",
+        "doi": "10.1002/qj.49712757318"
+      },
+      {
+        "citation": "Williamson, D. L., Drake, J. B., Hack, J. J., Jakob, R., & Swarztrauber, P. N. (1992). A standard test set for numerical approximations to the shallow water equations in spherical geometry. Journal of Computational Physics, 102(1), 211-224. (Spherical lat-lon metric factors for the zonal flux divergence.)",
+        "doi": "10.1016/S0021-9991(05)80016-6"
+      }
+    ]
+  },
+  "expression_template_imports": [
+    {
+      "ref": "../grid.esm"
+    }
+  ],
+  "expression_templates": {
+    "facediv_lon_open_interior": {
+      "params": [
+        "Mx"
+      ],
+      "body": {
+        "op": "faq",
+        "output_idx": [
+          "i",
+          "j",
+          "k"
+        ],
+        "args": [
+          "Mx"
+        ],
+        "ranges": {
+          "i": [
+            1,
+            "NLON"
+          ],
+          "j": {
+            "from": "lat"
+          },
+          "k": {
+            "from": "lev"
+          }
+        },
+        "expr": {
+          "op": "*",
+          "args": [
+            {
+              "op": "/",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "dphi_lat",
+                    "j"
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    {
+                      "op": "*",
+                      "args": [
+                        "dlon_deg",
+                        {
+                          "op": "/",
+                          "args": [
+                            3.141592653589793,
+                            180
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "op": "index",
+                      "args": [
+                        "dS_lat",
+                        "j"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "op": "-",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "Mx",
+                    {
+                      "op": "+",
+                      "args": [
+                        "i",
+                        1
+                      ]
+                    },
+                    "j",
+                    "k"
+                  ]
+                },
+                {
+                  "op": "index",
+                  "args": [
+                    "Mx",
+                    "i",
+                    "j",
+                    "k"
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  }
+}

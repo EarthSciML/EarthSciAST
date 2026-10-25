@@ -1,0 +1,80 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "ppm_flux",
+    "description": "PPM upwind zonal face flux for non-negative transport speed on latlon3d: the Colella-Woodward (1984) limited right-edge reconstruction of the upwind (west) cell, F_{i+1/2} = qr_lim(cell i). Given the 5-cell zonal neighbourhood (um2,um1,u0,up1,up2) centered on the upwind cell u0 it forms the two raw 4th-order edges via ppm_face_value (aL over um2,um1,u0,up1 and aR over um1,u0,up1,up2) and limits them via ppm_limit_right to the monotone right-edge value crossing the u0/up1 interface. This is the SEMI-DISCRETE (method-of-lines) PPM flux: the reconstructed cell-edge value itself, with time integration left to the ODE solver (no Courant/dt factor), so it composes with the ESS simulate() method-of-lines pathway exactly as the sibling first-derivative rules do. Grid-agnostic scalar algebra (operates on five cell values from one lat/lev column) \u2014 the latlon3d re-authoring of grids/cartesian_uniform_1d/stencils/ppm_flux, kept local per the library's per-grid self-containment convention. Match-less; the 5-cell zonal support wraps periodically in rules/ppm_D_lon_periodic.esm. dlon_deg-free (an edge value). MONOTONICITY (upgraded 2026-07-13): the raw edges now come from ../stencils/ppm_face_value_mono, i.e. eq. (1.6) evaluated on the eq. (1.8) MONOTONIZED slopes, NOT the unlimited ../stencils/ppm_face_value. Previously this flux used the unlimited edge with only the eq. (1.10) parabola limiter, and that combination is NOT bounded: measured on this exact uniform constant-velocity configuration over adversarial non-negative profiles (square, spike, sawtooth, double plume, plateau, random) at N=32/64/128 and two horizons, tracking the minimum over the whole trajectory, eq.(1.10)-only drove a non-negative tracer to -5.3e-2 (periodic) and -5.4e-2 (zero-gradient) -- essentially as negative as no limiter at all (-6.4e-1 / -2.1e0) -- while still paying the limiter's full order penalty. Adding eq. (1.8) makes the scheme non-negative (0.0 periodic; -1e-13 zero-gradient, i.e. roundoff) AND RAISES the observed order (1.55 -> 2.00 on a smooth periodic MMS), because the eq.(1.10)-only form clips more erratically. The upgrade is therefore a strict improvement on both axes and the old chain is strictly dominated. BOTH limiters are load-bearing and neither alone suffices: eq. (1.8) bounds the interpolated EDGE between the two cells it separates, while eq. (1.10)'s extremum-flattening branch is what stops outflux from a local minimum. The same finding, independently derived on the stretched vertical, is recorded in grids/latlon3d/rules/ppm_D_lev_mono_noflux_bc. COST: the lowered AST grows ~8.5x (ppm_limit_right must inline both edges ~5x each and a let-free AST cannot share them, so the now-larger monotonized edge is paid for ten times over); a CSE/let construct in ESM would remove this and is a documented follow-on.",
+    "license": "MIT",
+    "tags": [
+      "esd:stencil",
+      "family:finite_volume",
+      "grid:latlon3d",
+      "op:flux",
+      "order:3",
+      "stencil_width:5"
+    ],
+    "references": [
+      {
+        "citation": "Colella, P., & Woodward, P. R. (1984). The Piecewise Parabolic Method (PPM) for gas-dynamical simulations. Journal of Computational Physics, 54(1), 174-201.",
+        "doi": "10.1016/0021-9991(84)90143-8"
+      },
+      {
+        "citation": "Colella, P., & Woodward, P. R. (1984). ... Equation (1.8), monotonized slope.",
+        "doi": "10.1016/0021-9991(84)90143-8"
+      },
+      {
+        "citation": "Colella, P., & Sekora, M. D. (2008). A limiter for PPM that preserves accuracy at smooth extrema. Journal of Computational Physics, 227(15), 7069-7076. The documented follow-on that would recover high order at genuine smooth extrema.",
+        "doi": "10.1016/j.jcp.2008.03.034"
+      }
+    ]
+  },
+  "expression_template_imports": [
+    {
+      "ref": "./ppm_face_value_mono.esm"
+    },
+    {
+      "ref": "./ppm_limit_right.esm"
+    }
+  ],
+  "expression_templates": {
+    "ppm_flux": {
+      "params": [
+        "um2",
+        "um1",
+        "u0",
+        "up1",
+        "up2"
+      ],
+      "description": "F_{i+1/2}=CW84 limited right edge of the upwind cell u0",
+      "body": {
+        "op": "apply_expression_template",
+        "args": [],
+        "name": "ppm_limit_right",
+        "bindings": {
+          "ql": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "ppm_face_value_mono",
+            "bindings": {
+              "a": "um2",
+              "b": "um1",
+              "c": "u0",
+              "d": "up1"
+            }
+          },
+          "qr": {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "ppm_face_value_mono",
+            "bindings": {
+              "a": "um1",
+              "b": "u0",
+              "c": "up1",
+              "d": "up2"
+            }
+          },
+          "qi": "u0"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,475 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "stencil_2d_centered",
+    "description": "A 2-D five-point Laplacian of u on a 9 x 7 grid, periodic in x through EXPLICIT wrap regions (cell 1 reads u[9, j], cell 9 reads u[1, j]) and zero-ghost in y; v is a centered y-difference of itself plus a pointwise read of u. Halo: u (1, 1) along x and y; v (0, 0) along x, (1, 1) along y.",
+    "authors": [
+      "EarthSciAST test suite"
+    ],
+    "created": "2026-10-24T00:00:00Z",
+    "tags": [
+      "conformance",
+      "range_restricted_rhs"
+    ]
+  },
+  "index_sets": {
+    "x": {
+      "kind": "interval",
+      "size": 9
+    },
+    "y": {
+      "kind": "interval",
+      "size": 7
+    }
+  },
+  "models": {
+    "Stencil2D": {
+      "variables": {
+        "u": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "x",
+            "y"
+          ],
+          "default": 1.0
+        },
+        "v": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "x",
+            "y"
+          ],
+          "default": 1.0
+        },
+        "kappa": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.25
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i",
+              "j"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              },
+              "j": {
+                "from": "y"
+              }
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "i",
+                    "j"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i",
+              "j"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              },
+              "j": {
+                "from": "y"
+              }
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                "kappa",
+                {
+                  "op": "index",
+                  "args": [
+                    {
+                      "op": "makearray",
+                      "args": [],
+                      "regions": [
+                        [
+                          [
+                            2,
+                            8
+                          ],
+                          [
+                            1,
+                            7
+                          ]
+                        ],
+                        [
+                          [
+                            1,
+                            1
+                          ],
+                          [
+                            1,
+                            7
+                          ]
+                        ],
+                        [
+                          [
+                            9,
+                            9
+                          ],
+                          [
+                            1,
+                            7
+                          ]
+                        ]
+                      ],
+                      "values": [
+                        {
+                          "op": "+",
+                          "args": [
+                            {
+                              "op": "index",
+                              "args": [
+                                "u",
+                                {
+                                  "op": "-",
+                                  "args": [
+                                    "i",
+                                    1
+                                  ]
+                                },
+                                "j"
+                              ]
+                            },
+                            {
+                              "op": "index",
+                              "args": [
+                                "u",
+                                {
+                                  "op": "+",
+                                  "args": [
+                                    "i",
+                                    1
+                                  ]
+                                },
+                                "j"
+                              ]
+                            },
+                            {
+                              "op": "index",
+                              "args": [
+                                "u",
+                                "i",
+                                {
+                                  "op": "-",
+                                  "args": [
+                                    "j",
+                                    1
+                                  ]
+                                }
+                              ]
+                            },
+                            {
+                              "op": "index",
+                              "args": [
+                                "u",
+                                "i",
+                                {
+                                  "op": "+",
+                                  "args": [
+                                    "j",
+                                    1
+                                  ]
+                                }
+                              ]
+                            },
+                            {
+                              "op": "*",
+                              "args": [
+                                -4,
+                                {
+                                  "op": "index",
+                                  "args": [
+                                    "u",
+                                    "i",
+                                    "j"
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "op": "+",
+                          "args": [
+                            {
+                              "op": "index",
+                              "args": [
+                                "u",
+                                9,
+                                "j"
+                              ]
+                            },
+                            {
+                              "op": "index",
+                              "args": [
+                                "u",
+                                2,
+                                "j"
+                              ]
+                            },
+                            {
+                              "op": "index",
+                              "args": [
+                                "u",
+                                "i",
+                                {
+                                  "op": "-",
+                                  "args": [
+                                    "j",
+                                    1
+                                  ]
+                                }
+                              ]
+                            },
+                            {
+                              "op": "index",
+                              "args": [
+                                "u",
+                                "i",
+                                {
+                                  "op": "+",
+                                  "args": [
+                                    "j",
+                                    1
+                                  ]
+                                }
+                              ]
+                            },
+                            {
+                              "op": "*",
+                              "args": [
+                                -4,
+                                {
+                                  "op": "index",
+                                  "args": [
+                                    "u",
+                                    "i",
+                                    "j"
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "op": "+",
+                          "args": [
+                            {
+                              "op": "index",
+                              "args": [
+                                "u",
+                                8,
+                                "j"
+                              ]
+                            },
+                            {
+                              "op": "index",
+                              "args": [
+                                "u",
+                                1,
+                                "j"
+                              ]
+                            },
+                            {
+                              "op": "index",
+                              "args": [
+                                "u",
+                                "i",
+                                {
+                                  "op": "-",
+                                  "args": [
+                                    "j",
+                                    1
+                                  ]
+                                }
+                              ]
+                            },
+                            {
+                              "op": "index",
+                              "args": [
+                                "u",
+                                "i",
+                                {
+                                  "op": "+",
+                                  "args": [
+                                    "j",
+                                    1
+                                  ]
+                                }
+                              ]
+                            },
+                            {
+                              "op": "*",
+                              "args": [
+                                -4,
+                                {
+                                  "op": "index",
+                                  "args": [
+                                    "u",
+                                    "i",
+                                    "j"
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    "i",
+                    "j"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i",
+              "j"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              },
+              "j": {
+                "from": "y"
+              }
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "v",
+                    "i",
+                    "j"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i",
+              "j"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              },
+              "j": {
+                "from": "y"
+              }
+            },
+            "expr": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "*",
+                  "args": [
+                    0.1,
+                    {
+                      "op": "index",
+                      "args": [
+                        "u",
+                        "i",
+                        "j"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "-",
+                  "args": [
+                    {
+                      "op": "index",
+                      "args": [
+                        "v",
+                        "i",
+                        "j"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    0.5,
+                    {
+                      "op": "-",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "v",
+                            "i",
+                            {
+                              "op": "+",
+                              "args": [
+                                "j",
+                                1
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "op": "index",
+                          "args": [
+                            "v",
+                            "i",
+                            {
+                              "op": "-",
+                              "args": [
+                                "j",
+                                1
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

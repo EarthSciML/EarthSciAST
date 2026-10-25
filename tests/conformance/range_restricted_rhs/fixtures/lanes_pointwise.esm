@@ -1,0 +1,491 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "lanes_pointwise",
+    "description": "A pointwise two-species chemistry-like operator on a 6 x 5 x 4 grid. Every index-derived read a lane must compute from its cell index is here: a coordinate (cosz, a state-free observed of lat and lon computed from i and j), a level gate (an emission only where k < 2), and an affine read of an array parameter on another grid (Tsrc[k + 2], a 7-level source profile). No read leaves the cell, so the operator's locality is pointwise.",
+    "authors": [
+      "EarthSciAST test suite"
+    ],
+    "created": "2026-10-24T00:00:00Z",
+    "tags": [
+      "conformance",
+      "range_restricted_rhs"
+    ]
+  },
+  "index_sets": {
+    "lon": {
+      "kind": "interval",
+      "size": 6
+    },
+    "lat": {
+      "kind": "interval",
+      "size": 5
+    },
+    "lev": {
+      "kind": "interval",
+      "size": 4
+    },
+    "lev_src": {
+      "kind": "interval",
+      "size": 7
+    }
+  },
+  "models": {
+    "Chem": {
+      "variables": {
+        "A": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lon",
+            "lat",
+            "lev"
+          ],
+          "default": 1.0
+        },
+        "B": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lon",
+            "lat",
+            "lev"
+          ],
+          "default": 1.0
+        },
+        "cosz": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lon",
+            "lat"
+          ]
+        },
+        "Tsrc": {
+          "type": "parameter",
+          "units": "K",
+          "default": [
+            310.0,
+            300.0,
+            290.0,
+            280.0,
+            270.0,
+            260.0,
+            250.0
+          ],
+          "shape": [
+            "lev_src"
+          ]
+        },
+        "lon0_deg": {
+          "type": "parameter",
+          "units": "deg",
+          "default": -10.0
+        },
+        "dlon_deg": {
+          "type": "parameter",
+          "units": "deg",
+          "default": 2.5
+        },
+        "lat0_deg": {
+          "type": "parameter",
+          "units": "deg",
+          "default": 30.0
+        },
+        "dlat_deg": {
+          "type": "parameter",
+          "units": "deg",
+          "default": 2.0
+        },
+        "jA": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.02
+        },
+        "kAB": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.5
+        },
+        "emis": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.003
+        }
+      },
+      "equations": [
+        {
+          "lhs": "cosz",
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i",
+              "j"
+            ],
+            "ranges": {
+              "i": {
+                "from": "lon"
+              },
+              "j": {
+                "from": "lat"
+              }
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "cos",
+                  "args": [
+                    {
+                      "op": "*",
+                      "args": [
+                        0.017453292519943295,
+                        {
+                          "op": "+",
+                          "args": [
+                            "lat0_deg",
+                            {
+                              "op": "*",
+                              "args": [
+                                {
+                                  "op": "-",
+                                  "args": [
+                                    "j",
+                                    0.5
+                                  ]
+                                },
+                                "dlat_deg"
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "+",
+                  "args": [
+                    1.0,
+                    {
+                      "op": "*",
+                      "args": [
+                        0.1,
+                        {
+                          "op": "cos",
+                          "args": [
+                            {
+                              "op": "*",
+                              "args": [
+                                0.017453292519943295,
+                                {
+                                  "op": "+",
+                                  "args": [
+                                    "lon0_deg",
+                                    {
+                                      "op": "*",
+                                      "args": [
+                                        {
+                                          "op": "-",
+                                          "args": [
+                                            "i",
+                                            0.5
+                                          ]
+                                        },
+                                        "dlon_deg"
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i",
+              "j",
+              "k"
+            ],
+            "ranges": {
+              "i": {
+                "from": "lon"
+              },
+              "j": {
+                "from": "lat"
+              },
+              "k": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "A",
+                    "i",
+                    "j",
+                    "k"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i",
+              "j",
+              "k"
+            ],
+            "ranges": {
+              "i": {
+                "from": "lon"
+              },
+              "j": {
+                "from": "lat"
+              },
+              "k": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "+",
+              "args": [
+                {
+                  "op": "-",
+                  "args": [
+                    {
+                      "op": "*",
+                      "args": [
+                        "jA",
+                        {
+                          "op": "index",
+                          "args": [
+                            "cosz",
+                            "i",
+                            "j"
+                          ]
+                        },
+                        {
+                          "op": "index",
+                          "args": [
+                            "A",
+                            "i",
+                            "j",
+                            "k"
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    "kAB",
+                    {
+                      "op": "/",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "Tsrc",
+                            {
+                              "op": "+",
+                              "args": [
+                                "k",
+                                2
+                              ]
+                            }
+                          ]
+                        },
+                        300.0
+                      ]
+                    },
+                    {
+                      "op": "index",
+                      "args": [
+                        "A",
+                        "i",
+                        "j",
+                        "k"
+                      ]
+                    },
+                    {
+                      "op": "index",
+                      "args": [
+                        "B",
+                        "i",
+                        "j",
+                        "k"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "ifelse",
+                  "args": [
+                    {
+                      "op": "<",
+                      "args": [
+                        "k",
+                        2
+                      ]
+                    },
+                    "emis",
+                    0.0
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i",
+              "j",
+              "k"
+            ],
+            "ranges": {
+              "i": {
+                "from": "lon"
+              },
+              "j": {
+                "from": "lat"
+              },
+              "k": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "B",
+                    "i",
+                    "j",
+                    "k"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i",
+              "j",
+              "k"
+            ],
+            "ranges": {
+              "i": {
+                "from": "lon"
+              },
+              "j": {
+                "from": "lat"
+              },
+              "k": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "-",
+              "args": [
+                {
+                  "op": "*",
+                  "args": [
+                    "jA",
+                    {
+                      "op": "index",
+                      "args": [
+                        "cosz",
+                        "i",
+                        "j"
+                      ]
+                    },
+                    {
+                      "op": "index",
+                      "args": [
+                        "A",
+                        "i",
+                        "j",
+                        "k"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    "kAB",
+                    {
+                      "op": "/",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "Tsrc",
+                            {
+                              "op": "+",
+                              "args": [
+                                "k",
+                                2
+                              ]
+                            }
+                          ]
+                        },
+                        300.0
+                      ]
+                    },
+                    {
+                      "op": "index",
+                      "args": [
+                        "A",
+                        "i",
+                        "j",
+                        "k"
+                      ]
+                    },
+                    {
+                      "op": "index",
+                      "args": [
+                        "B",
+                        "i",
+                        "j",
+                        "k"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

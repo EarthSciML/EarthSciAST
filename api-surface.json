@@ -95,18 +95,18 @@
     }
   },
   "counts": {
-    "symbols": 949,
+    "symbols": 979,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
-      "julia": 317,
+      "julia": 329,
       "typescript": 245,
-      "python": 264,
-      "rust": 360,
-      "go": 456
+      "python": 269,
+      "rust": 376,
+      "go": 460
     },
     "by_tier": {
-      "extension": 659,
-      "stable": 290
+      "extension": 683,
+      "stable": 296
     }
   },
   "planned": [
@@ -531,6 +531,14 @@
       "tier": "extension",
       "bindings": {
         "rust": "AutoRecords"
+      }
+    },
+    {
+      "name": "axis_cut",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "AxisCut"
       }
     },
     {
@@ -1499,6 +1507,38 @@
       "tier": "extension",
       "bindings": {
         "go": "CodeRaggedValuesNotGathered"
+      }
+    },
+    {
+      "name": "code_range_box_invalid",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeRangeBoxInvalid"
+      }
+    },
+    {
+      "name": "code_range_global_locality",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeRangeGlobalLocality"
+      }
+    },
+    {
+      "name": "code_range_halo_insufficient",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeRangeHaloInsufficient"
+      }
+    },
+    {
+      "name": "code_range_selection_writes_incomplete",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeRangeSelectionWritesIncomplete"
       }
     },
     {
@@ -2604,6 +2644,15 @@
         "julia": "declared_system_kind",
         "python": "declared_system_kind",
         "typescript": "declaredSystemKind"
+      }
+    },
+    {
+      "name": "decomposition",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "julia": "Decomposition",
+        "rust": "Decomposition"
       }
     },
     {
@@ -4383,6 +4432,14 @@
       }
     },
     {
+      "name": "gather_lane_inputs",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "gather_lane_inputs!"
+      }
+    },
+    {
       "name": "generate_factored_variable_names",
       "kind": "function",
       "tier": "extension",
@@ -4486,6 +4543,23 @@
       "tier": "extension",
       "bindings": {
         "typescript": "groupSubexpressionsByType"
+      }
+    },
+    {
+      "name": "halo",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "halo",
+        "python": "halo"
+      }
+    },
+    {
+      "name": "halo_report",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "HaloReport"
       }
     },
     {
@@ -4721,6 +4795,71 @@
       "tier": "extension",
       "bindings": {
         "rust": "Key"
+      }
+    },
+    {
+      "name": "lane_block",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "LaneBlock"
+      }
+    },
+    {
+      "name": "lane_inputs",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "lane_inputs"
+      }
+    },
+    {
+      "name": "lane_inputs",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "LaneInputs"
+      }
+    },
+    {
+      "name": "lane_kind",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "LaneKind"
+      }
+    },
+    {
+      "name": "lane_layout",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "lane_layout"
+      }
+    },
+    {
+      "name": "lane_layout",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "LaneLayout"
+      }
+    },
+    {
+      "name": "lane_program",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "LaneProgram"
+      }
+    },
+    {
+      "name": "lanes",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "lanes",
+        "python": "lanes"
       }
     },
     {
@@ -6613,6 +6752,15 @@
       }
     },
     {
+      "name": "restrict",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "restrict",
+        "python": "restrict"
+      }
+    },
+    {
       "name": "return_code",
       "kind": "type",
       "tier": "stable",
@@ -6623,10 +6771,60 @@
     },
     {
       "name": "rhs",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "rhs!"
+      }
+    },
+    {
+      "name": "rhs",
       "kind": "type",
       "tier": "extension",
       "bindings": {
         "rust": "Rhs"
+      }
+    },
+    {
+      "name": "rhs_program",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "rhs_program",
+        "python": "rhs_program",
+        "rust": "rhs_program"
+      }
+    },
+    {
+      "name": "rhs_program",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "RhsProgram"
+      }
+    },
+    {
+      "name": "rhs_selection",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "RhsSelection"
+      }
+    },
+    {
+      "name": "rhs_workspace",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "rhs_workspace"
+      }
+    },
+    {
+      "name": "rhs_workspace",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "RhsWorkspace"
       }
     },
     {
@@ -6856,6 +7054,15 @@
       "tier": "extension",
       "bindings": {
         "julia": "seed_expression_ic!"
+      }
+    },
+    {
+      "name": "select",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "select",
+        "python": "select"
       }
     },
     {
@@ -7637,6 +7844,46 @@
       "tier": "extension",
       "bindings": {
         "julia": "tier_histogram"
+      }
+    },
+    {
+      "name": "tile_block",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "TileBlock"
+      }
+    },
+    {
+      "name": "tile_box",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "TileBox"
+      }
+    },
+    {
+      "name": "tile_layout",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "tile_layout"
+      }
+    },
+    {
+      "name": "tile_layout",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "TileLayout"
+      }
+    },
+    {
+      "name": "tile_program",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "TileProgram"
       }
     },
     {

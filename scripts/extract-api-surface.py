@@ -157,7 +157,9 @@ def extract_rust() -> dict:
     src = re.sub(r"//[!/].*", "", src)
     src = _strip_line_comments(src, "//")
     reexports: dict[str, str] = {}
-    for m in re.finditer(r"pub\s+use\s+([A-Za-z0-9_]+)::\{([^}]*)\}\s*;", src, re.S):
+    for m in re.finditer(
+        r"pub\s+use\s+([A-Za-z0-9_]+(?:::[A-Za-z0-9_]+)*)::\{([^}]*)\}\s*;", src, re.S
+    ):
         for item in m.group(2).split(","):
             item = item.strip()
             if not item:

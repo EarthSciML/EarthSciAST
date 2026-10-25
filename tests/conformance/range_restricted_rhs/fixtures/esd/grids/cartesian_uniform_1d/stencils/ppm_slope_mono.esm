@@ -1,0 +1,162 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "ppm_slope_mono",
+    "description": "Colella-Woodward (1984) eq. (1.8) MONOTONIZED average slope on a uniform mesh: the raw eq. (1.7) centered slope (../stencils/ppm_slope) clipped so the eq. (1.6) edge built from it cannot overshoot. delta_m a_j = 0 if the cell is a local extremum ((a_{j+1}-a_j)(a_j-a_{j-1}) <= 0), else sign(delta a_j) * min(|delta a_j|, 2|a_j - a_{j-1}|, 2|a_{j+1} - a_j|). The magnitude clip is written as a CLAMP of the raw slope to [-M, M] with M = 2 min(|a_j-a_{j-1}|, |a_{j+1}-a_j|) >= 0, because max(-M, min(M, d)) is identically sign(d) min(|d|, M) in all three branches -- the evaluable core has min/max/abs/ifelse but no sign op. WHY IT IS REQUIRED: eq. (1.8) forces the interpolated edge a_{j+1/2} to lie between a_j and a_{j+1}, so the upwind flux creates no new extrema. Without it, the eq. (1.10) parabola limiter ALONE does not bound the scheme -- measured on this exact uniform constant-velocity configuration, eq.(1.10)-only drives a non-negative tracer to -5.3e-2 (periodic) / -5.4e-2 (zero-gradient), essentially as negative as no limiter at all, while still paying the limiter's order penalty. Adding eq. (1.8) makes the scheme non-negative AND raises the observed order (1.55 -> 2.00 on a smooth periodic MMS), because eq.(1.10)-alone clips more erratically. Both limiters are load-bearing; see grids/latlon3d/rules/ppm_D_lev_mono_noflux_bc for the same finding on the stretched vertical. COST: at a genuinely SMOOTH extremum the limiter cannot tell a maximum from an oscillation and clips it, which is what keeps PPM sub-nominal on smooth data (the extremum-preserving Colella-Sekora (2008) limiter is the documented follow-on). Grid-agnostic scalar algebra; match-less named template; composed by ../stencils/ppm_face_value_mono.",
+    "license": "MIT",
+    "tags": [
+      "esd:stencil",
+      "family:finite_volume",
+      "grid:cartesian_uniform_1d",
+      "op:limiter",
+      "order:2",
+      "stencil_width:3"
+    ],
+    "references": [
+      {
+        "citation": "Colella, P., & Woodward, P. R. (1984). The Piecewise Parabolic Method (PPM) for gas-dynamical simulations. Journal of Computational Physics, 54(1), 174-201. Equation (1.8), monotonized slope.",
+        "doi": "10.1016/0021-9991(84)90143-8"
+      }
+    ]
+  },
+  "expression_template_imports": [
+    {
+      "ref": "./ppm_slope.esm"
+    }
+  ],
+  "expression_templates": {
+    "ppm_slope_mono": {
+      "params": [
+        "am",
+        "a0",
+        "ap"
+      ],
+      "description": "CW84 eq.(1.8) monotonized slope: 0 at an extremum, else the raw slope clamped to +-2 min(|a0-am|,|ap-a0|)",
+      "body": {
+        "op": "ifelse",
+        "args": [
+          {
+            "op": ">",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "-",
+                    "args": [
+                      "ap",
+                      "a0"
+                    ]
+                  },
+                  {
+                    "op": "-",
+                    "args": [
+                      "a0",
+                      "am"
+                    ]
+                  }
+                ]
+              },
+              0
+            ]
+          },
+          {
+            "op": "max",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  {
+                    "op": "*",
+                    "args": [
+                      2,
+                      {
+                        "op": "min",
+                        "args": [
+                          {
+                            "op": "abs",
+                            "args": [
+                              {
+                                "op": "-",
+                                "args": [
+                                  "a0",
+                                  "am"
+                                ]
+                              }
+                            ]
+                          },
+                          {
+                            "op": "abs",
+                            "args": [
+                              {
+                                "op": "-",
+                                "args": [
+                                  "ap",
+                                  "a0"
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "op": "min",
+                "args": [
+                  {
+                    "op": "*",
+                    "args": [
+                      2,
+                      {
+                        "op": "min",
+                        "args": [
+                          {
+                            "op": "abs",
+                            "args": [
+                              {
+                                "op": "-",
+                                "args": [
+                                  "a0",
+                                  "am"
+                                ]
+                              }
+                            ]
+                          },
+                          {
+                            "op": "abs",
+                            "args": [
+                              {
+                                "op": "-",
+                                "args": [
+                                  "ap",
+                                  "a0"
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "op": "apply_expression_template",
+                    "args": [],
+                    "name": "ppm_slope",
+                    "bindings": {
+                      "am": "am",
+                      "ap": "ap"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          0
+        ]
+      }
+    }
+  }
+}

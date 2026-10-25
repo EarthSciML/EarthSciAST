@@ -433,6 +433,19 @@ diagnostic_code_registry! {
     /// "Ragged ranges"): the range binds the POSITION k in 1..offsets[parent],
     /// so the body reads positions where the author meant members.
     RAGGED_VALUES_NOT_GATHERED = "ragged_values_not_gathered";
+    /// A tile's owned or storage box is malformed: an unknown index set, a
+    /// face set not declared against a decomposed axis, a box outside
+    /// `1..N`, or an owned box not inside its storage box (API_SPEC §5.8).
+    RANGE_BOX_INVALID = "range_box_invalid";
+    /// A range restriction met a rule whose locality is global along a
+    /// decomposed axis: a 0-d state write on a tile, or a contraction, scan or
+    /// data-dependent gather along the axis. Names the rule and the axis.
+    RANGE_GLOBAL_LOCALITY = "range_global_locality";
+    /// A tile reads an in-domain cell its storage box does not hold. Names the
+    /// rule, the variable, the axis and the missing cells.
+    RANGE_HALO_INSUFFICIENT = "range_halo_insufficient";
+    /// `select`'s `writes` omits a variable its kept terms write.
+    RANGE_SELECTION_WRITES_INCOMPLETE = "range_selection_writes_incomplete";
     /// A causal self-read (esm-spec §4.3.1.1) that is not strictly earlier
     /// along exactly one axis.
     RECURRENCE_NOT_WELLFOUNDED = "recurrence_not_wellfounded";
@@ -667,6 +680,10 @@ mod error_code_tests {
             "observed_cycle",
             "operator_variable_missing",
             "ragged_values_not_gathered",
+            "range_box_invalid",
+            "range_global_locality",
+            "range_halo_insufficient",
+            "range_selection_writes_incomplete",
             "recurrence_not_wellfounded",
             "recurrence_unsupported_form",
             "relational_node_in_continuous",

@@ -786,6 +786,18 @@ pub struct EsmProblem {
     /// Refresh anchors strictly inside `tspan`.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) refresh_boundaries: Vec<f64>,
+    /// The typed input the right-hand side was compiled from, kept so
+    /// [`crate::range_rhs::rhs_program`] can flatten it once and select terms
+    /// by provenance (API_SPEC §5.8). `None` for a problem with no array
+    /// backend.
+    pub(crate) program_source: Option<Rc<ProgramSource>>,
+}
+
+/// What [`EsmProblem::program_source`] holds: the prepared typed document, or
+/// the caller's flattened system.
+pub(crate) enum ProgramSource {
+    File(Box<EsmFile>),
+    Flattened(Box<FlattenedSystem>),
 }
 
 impl std::fmt::Debug for EsmProblem {
@@ -1534,6 +1546,7 @@ pub fn remake(prob: &EsmProblem, changes: &Remake) -> Result<EsmProblem, Simulat
         discrete_forcing: prob.discrete_forcing.clone(),
         #[cfg(not(target_arch = "wasm32"))]
         refresh_boundaries: boundaries,
+        program_source: prob.program_source.clone(),
     })
 }
 
@@ -2165,6 +2178,13 @@ pub fn esm_problem<'a>(
     // segment and every Jacobian call reuses the one executable.
     install_xla_program(&backend, model_name.as_deref(), compiler)?;
 
+    let program_source = match (&backend, owned_file, flat_only) {
+        (Backend::Array(_), Some(file), _) => Some(Rc::new(ProgramSource::File(Box::new(file)))),
+        (Backend::Array(_), None, Some(flat)) => {
+            Some(Rc::new(ProgramSource::Flattened(Box::new(flat.clone()))))
+        }
+        _ => None,
+    };
     let prob = EsmProblem {
         doc: Rc::new(match (owned_json, source_text) {
             (None, Some(text)) => RawDocument::from_text(text),
@@ -2189,6 +2209,7 @@ pub fn esm_problem<'a>(
         discrete_forcing,
         #[cfg(not(target_arch = "wasm32"))]
         refresh_boundaries,
+        program_source,
     };
     Ok(prob)
 }

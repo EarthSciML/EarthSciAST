@@ -1,0 +1,249 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "face_state_1d",
+    "description": "A staggered 1-D pair on 10 cells: h on the cell set x, U on the face set x_nodes (11 faces, face i the low face of cell i). dh[i] reads U[i] and U[i+1]; dU[f] reads h[f-1] and h[f] on interior faces, and the two wall faces are 0. Decomposed with x_nodes declared as the face set of x, a tile owning cells a..b owns faces a..b, plus face 11 when b = 10. Halo: h (1, 0) along x; U (0, 1) along x_nodes.",
+    "authors": [
+      "EarthSciAST test suite"
+    ],
+    "created": "2026-10-24T00:00:00Z",
+    "tags": [
+      "conformance",
+      "range_restricted_rhs"
+    ]
+  },
+  "index_sets": {
+    "x": {
+      "kind": "interval",
+      "size": 10
+    },
+    "x_nodes": {
+      "kind": "interval",
+      "size": 11
+    }
+  },
+  "models": {
+    "Staggered": {
+      "variables": {
+        "h": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "x"
+          ],
+          "default": 1.0
+        },
+        "U": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "x_nodes"
+          ],
+          "default": 0.0
+        },
+        "g": {
+          "type": "parameter",
+          "units": "1",
+          "default": 9.8
+        },
+        "dx": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.5
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "h",
+                    "i"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              }
+            },
+            "expr": {
+              "op": "-",
+              "args": [
+                {
+                  "op": "/",
+                  "args": [
+                    {
+                      "op": "-",
+                      "args": [
+                        {
+                          "op": "index",
+                          "args": [
+                            "U",
+                            {
+                              "op": "+",
+                              "args": [
+                                "i",
+                                1
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "op": "index",
+                          "args": [
+                            "U",
+                            "i"
+                          ]
+                        }
+                      ]
+                    },
+                    "dx"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "f"
+            ],
+            "ranges": {
+              "f": {
+                "from": "x_nodes"
+              }
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "U",
+                    "f"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "f"
+            ],
+            "ranges": {
+              "f": {
+                "from": "x_nodes"
+              }
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                {
+                  "op": "makearray",
+                  "args": [],
+                  "regions": [
+                    [
+                      [
+                        2,
+                        10
+                      ]
+                    ],
+                    [
+                      [
+                        1,
+                        1
+                      ]
+                    ],
+                    [
+                      [
+                        11,
+                        11
+                      ]
+                    ]
+                  ],
+                  "values": [
+                    {
+                      "op": "-",
+                      "args": [
+                        {
+                          "op": "*",
+                          "args": [
+                            "g",
+                            {
+                              "op": "/",
+                              "args": [
+                                {
+                                  "op": "-",
+                                  "args": [
+                                    {
+                                      "op": "index",
+                                      "args": [
+                                        "h",
+                                        "f"
+                                      ]
+                                    },
+                                    {
+                                      "op": "index",
+                                      "args": [
+                                        "h",
+                                        {
+                                          "op": "-",
+                                          "args": [
+                                            "f",
+                                            1
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                },
+                                "dx"
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    0.0,
+                    0.0
+                  ]
+                },
+                "f"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

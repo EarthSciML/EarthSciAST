@@ -881,6 +881,15 @@ pub(super) fn run_reference(
                         other => panic!("lane operand is {other:?}"),
                     };
                 let svals: Vec<f64> = ls.scalars.iter().map(scalar).collect();
+                // Scalar state by flat offset, so a lane's state read is one
+                // lookup rather than a scan of every state.
+                let scalar_states: std::collections::HashMap<usize, u32> = prog
+                    .state_vars
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, sv)| sv.shape.is_empty())
+                    .map(|(k, sv)| (sv.flat_offset, k as u32))
+                    .collect();
                 let mut regs = vec![0.0f64; ls.n_regs as usize];
                 let mut published: Vec<(SlotId, f64)> = Vec::new();
                 for l in 0..ls.lanes as usize {
@@ -891,13 +900,9 @@ pub(super) fn run_reference(
                             let i = inp.ix.at(l);
                             scalar(&match inp.kind {
                                 LaneKind::State => Operand::State(
-                                    prog.state_vars
-                                        .iter()
-                                        .position(|sv| {
-                                            sv.shape.is_empty() && sv.flat_offset == i as usize
-                                        })
-                                        .expect("a lane reads a scalar state")
-                                        as u32,
+                                    *scalar_states
+                                        .get(&(i as usize))
+                                        .expect("a lane reads a scalar state"),
                                 ),
                                 LaneKind::Param => Operand::Param(i),
                                 LaneKind::Slot => Operand::Slot(i),

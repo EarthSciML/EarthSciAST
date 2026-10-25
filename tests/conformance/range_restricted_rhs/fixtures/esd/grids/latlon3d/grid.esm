@@ -1,0 +1,97 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "latlon3d",
+    "description": "Three-dimensional longitude-latitude-level grid: the 2-D grids/latlon horizontal mesh extended with a vertical `lev` axis, for 3-D tracer transport on a lat-lon model such as GEOS-Chem Classic. The `lon`, `lat`, `lev` index sets are the iteration axes; NLON, NLAT, NLEV (the point/cell counts) are the esm-spec 9.7 metaparameters, bound at an import edge or the loader API. HORIZONTAL geometry is INHERITED from grids/latlon by expression_template_imports (../latlon/grid.esm): the templates lon_coord, lat_coord, coslat, deg2rad and the free-name contract are reused verbatim, so the horizontal conventions are IDENTICAL to grids/latlon — longitude CELL-based with centers lon_i = lon0_deg + (i - 1/2) dlon_deg (i = 1..NLON), closing into a periodic zonal circle when NLON dlon_deg = 360; latitude POINT-based, endpoint-inclusive, lat_j = lat0_deg + (j - 1) dlat_deg (j = 1..NLAT), pole to pole on the global recipe (lat0_deg = -90, dlat_deg = 180/(NLAT-1)). The real-valued horizontal geometry (lon0_deg, dlon_deg, lat0_deg, dlat_deg, R_sphere) stays consumer-supplied free names, exactly as in grids/latlon. The lon/lat/lon_nodes/lat_nodes index sets and the NLON/NLAT metaparameters are ALSO declared locally here (deep-equal with the import) because the tags-contract lint (validate-library L006) reads a grid file's own literal index_sets/metaparameters and does not resolve imports. VERTICAL geometry follows the grids/cartesian_nonuniform_1d 'grid owns the edge->center/thickness derivation' (Design-B) pattern: `lev` is a CELL axis of NLEV cells and `lev_nodes` is its N+1 EDGE axis (sized {op:+, args:[NLEV,1]}, an esm-spec 9.7.6 metaparameter-expression folded at load). The vertical geometry is NOT baked in — a consuming model supplies a SINGLE 1-D edge array `pe` (shape [lev_nodes], the vertical coordinate at level edges, monotone increasing with the lev index) and the grid derives cell centers `lev_center` = (pe[k]+pe[k+1])/2 and control thicknesses `lev_thickness` = pe[k+1]-pe[k] through two match-less templates a consumer applies to its `pe` (the keyed-factor contract grids/mpas uses for areaCell/dvEdge and grids/cartesian_nonuniform_1d uses for xc/dxw). The geometry aggregate index is `gk` (NOT `k`) so a derived `dp`/`zc` observed does not capture a consuming vertical stencil's own aggregate index `k` when it is inlined (the non-hygienic-inlining footgun documented in grids/cartesian_nonuniform_1d). GEOS-CHEM CLASSIC RECIPE: horizontally the standard 4x5 / 2x2.5 / nested resolutions map onto the latlon contract directly — the GEOS-Chem latitude CENTERS (e.g. -90, -86, ..., 86, 90 at 4x5) ARE the uniform pole-to-pole points lat_j = -90 + (j-1) dlat_deg, so the per-degree finite-difference operators here read the correct center coordinates; GEOS-Chem's HALF-POLAR polar caps are a cell-WIDTH (area/flux-weighting) property that affects only the conservative flux-form transport, not the advective-form per-degree derivative; they are no longer deferred but are DERIVED from the point latitudes by the inherited lat_edge clamp — see the HORIZONTAL FACE AXES paragraph below. Vertically GEOS-Chem uses a hybrid sigma-pressure (eta) coordinate with pressure at level edges P_edge = Ap + Bp*Psurf (Ap in hPa, Bp dimensionless; 72 or reduced 47 levels); a consumer supplies `pe` from that table. V1 SCOPE (this grid): the vertical spacing is a 1-D COLUMN PROFILE dp = dp(k) — supply `pe` for a representative column (Psurf constant, or a pure-pressure region where Bp = 0), for which `pe` is a genuine 1-D array; the FULL Psurf-coupled 3-D thickness dp[i,j,k] (true terrain-following hybrid) is a documented follow-on (expressible as a rank-3 keyed factor, deferred with the conservative flux-form work). SCHEME CAVEAT: the rules on this grid are METHOD-OF-LINES spatial operators (each supplies one directional D(q, wrt: axis); the ODE integrator owns dt), composed by the consumer into du/dt = -(u D(q,lon) + v D(q,lat) + w D(q,lev)); this is NOT the fully-discrete flux-form semi-Lagrangian TPCORE scheme GEOS-Chem uses operationally (Lin & Rood 1996), which carries the Courant number inside the operator and cannot be expressed method-of-lines — see grids/cartesian_uniform_1d/rules/ppm_D_periodic for the same semi-discrete-vs-Courant distinction. HORIZONTAL FACE AXES AND THE HALF-POLAR CAPS (inherited from grids/latlon; the index sets are mirrored literally below). Alongside `lev_nodes` this grid carries the two HORIZONTAL N+1 edge axes `lon_nodes` (NLON+1) and `lat_nodes` (NLAT+1). They hold the face-staggered horizontal winds and the face metrics of the conservative flux-form operators; face j is the LOWER (southern) edge of cell j and face i the western edge of cell i — the same convention as face k = lower edge of cell k in the vertical — so faces 1 and NLAT+1 are the two meridional walls. `lon_nodes` is declared now so the contract is frozen ahead of the zonal flux-form work; no rule here reads it yet. Because latitude is POINT-based it has no native edges, so the grid MANUFACTURES them with the clamped-midpoint rule of the inherited `lat_edge` template: phie[j] = max(lat0_deg, min(latN_deg, lat0_deg + (j - 1.5) dlat_deg)), latN_deg = lat0_deg + (NLAT - 1) dlat_deg — interior edges are midpoints of neighbouring points, the two end edges CLAMP to the domain ends, and on the global recipe that clamp is exactly what produces GEOS-Chem's HALF-POLAR CAPS (the j = 1 and j = NLAT rows span half a nominal interval). The derived geometry follows the SAME keyed-factor contract as pe -> lev_thickness/lev_center: the CONSUMER declares one observed `phie` (shape [lat_nodes], degrees) by applying `lat_edge`, then feeds that same `phie` to `coslat_edge` (shape [lat_nodes]; face-length weight cos(rad(phie))), `latcell_area` (shape [lat]; the EXACT spherical area weight sin(rad(phie[j+1])) - sin(rad(phie[j]))) and `latcell_dphi` (shape [lat]; cell width in radians, a HALF-width at the caps). lat0_deg and dlat_deg stay consumer-supplied free names. AGGREGATE-INDEX HYGIENE: those four templates use FOUR DIFFERENT aggregate indices (gje / gjc / gja / gjd) — never `j`, for the same non-hygienic-inlining reason as `gk` in the vertical, and never each other's, because a consumer that shares the producer's index name has its OFFSET gather phie[gj+1] captured and silently reduced to phie[gj], which makes latcell_area return exact zeros (a silent divide-by-zero, not an error). THE POLE FACES ARE NEVER READ: cos(-/+pi/2) is 6.1e-17 in IEEE double, not 0, so the flux-form lat rules OMIT the two pole-wall flux terms entirely instead of multiplying them by a near-zero face length — the polar no-flux wall is then exact in floating point, and whatever a consumer stores in the pole faces of a [lon, lat_nodes, lev] meridional wind is simply ignored. \n\nBUILD-TIME SCOPE CAVEAT (AGENTS.md): lon_coord/lat_coord/lev_center resolve in RUNTIME positions (rule bodies, equation RHS) but NOT in ic equations or esm-spec 6.6.5 test references, which are evaluated build-time and cellwise with the consumer's parameters/observeds out of scope — there, coordinates must fold from literals plus the metaparameter names.",
+    "license": "MIT",
+    "tags": ["esd:grid", "family:latlon", "ndim:3", "spacing:uniform", "axis:lon", "axis:lat", "axis:lev"],
+    "references": [
+      {
+        "citation": "Lin, S.-J., & Rood, R. B. (1996). Multidimensional flux-form semi-Lagrangian transport schemes. Monthly Weather Review, 124(9), 2046-2070.",
+        "doi": "10.1175/1520-0493(1996)124<2046:MFFSLT>2.0.CO;2"
+      },
+      {
+        "citation": "Bey, I., Jacob, D. J., Yantosca, R. M., et al. (2001). Global modeling of tropospheric chemistry with assimilated meteorology: Model description and evaluation. Journal of Geophysical Research, 106(D19), 23073-23095. (GEOS-Chem grid and hybrid sigma-pressure vertical coordinate.)",
+        "doi": "10.1029/2001JD000807"
+      },
+      {
+        "citation": "LeVeque, R. J. (2007). Finite Difference Methods for Ordinary and Partial Differential Equations. SIAM. Section 2.13 (nonuniform grids / supraconvergence)."
+      }
+    ]
+  },
+  "expression_template_imports": [
+    { "ref": "../latlon/grid.esm" }
+  ],
+  "metaparameters": {
+    "NLON": { "type": "integer", "default": 144, "description": "Number of cells along longitude (cell-based axis; the global recipe closes the zonal circle with dlon_deg = 360/NLON)." },
+    "NLAT": { "type": "integer", "default": 91, "description": "Number of points along latitude (point-based, endpoint-inclusive axis; the global recipe is pole-to-pole with dlat_deg = 180/(NLAT - 1))." },
+    "NLEV": { "type": "integer", "default": 72, "description": "Number of vertical cells (levels). Default 72 = the GEOS-Chem native level count (reduced grid: 47). The edge axis lev_nodes has NLEV+1 members." }
+  },
+  "index_sets": {
+    "lon": { "kind": "interval", "size": "NLON" },
+    "lat": { "kind": "interval", "size": "NLAT" },
+    "lev": { "kind": "interval", "size": "NLEV" },
+    "lon_nodes": { "kind": "interval", "size": { "op": "+", "args": ["NLON", 1] } },
+    "lat_nodes": { "kind": "interval", "size": { "op": "+", "args": ["NLAT", 1] } },
+    "lev_nodes": { "kind": "interval", "size": { "op": "+", "args": ["NLEV", 1] } }
+  },
+  "expression_templates": {
+    "lev_center": {
+      "params": ["pe"],
+      "description": "Cell (level) centers from the edge array: lev_center[gk] = (pe[gk] + pe[gk+1]) / 2 over the lev (cell) axis, gathering the NLEV+1-node edge array pe (shape [lev_nodes]). A consuming model applies this to its `pe` to define its lev-shaped `zc` observed. The aggregation index is `gk`, NOT `k`, so the derived observed does not capture a consuming vertical stencil's own aggregate index `k` when inlined (the non-hygienic-inlining footgun; see grids/cartesian_nonuniform_1d/nonuniform_cell_center).",
+      "body": {
+        "op": "faq",
+        "output_idx": ["gk"],
+        "args": ["pe"],
+        "ranges": { "gk": { "from": "lev" } },
+        "expr": {
+          "op": "*",
+          "args": [
+            0.5,
+            {
+              "op": "+",
+              "args": [
+                { "op": "index", "args": ["pe", "gk"] },
+                { "op": "index", "args": ["pe", { "op": "+", "args": ["gk", 1] }] }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "lev_thickness": {
+      "params": ["pe"],
+      "description": "Finite-volume control thicknesses from the edge array: lev_thickness[gk] = pe[gk+1] - pe[gk] over the lev (cell) axis. A consuming model applies this to its `pe` to define its lev-shaped `dp` observed (positive when pe is monotone increasing with the lev index — the required orientation). Aggregation index `gk` (distinct from a rule's `k`) for the same hygiene reason as lev_center.",
+      "body": {
+        "op": "faq",
+        "output_idx": ["gk"],
+        "args": ["pe"],
+        "ranges": { "gk": { "from": "lev" } },
+        "expr": {
+          "op": "-",
+          "args": [
+            { "op": "index", "args": ["pe", { "op": "+", "args": ["gk", 1] }] },
+            { "op": "index", "args": ["pe", "gk"] }
+          ]
+        }
+      }
+    },
+    "lev_thickness_3d": {
+      "params": ["pe"],
+      "description": "TERRAIN-FOLLOWING (rank-3) control thicknesses from a THREE-DIMENSIONAL edge array: lev_thickness_3d[gi,gj,gk] = pe[gi,gj,gk+1] - pe[gi,gj,gk] over [lon, lat, lev], gathering the [lon, lat, lev_nodes] edge array pe. This is the Psurf-coupled hybrid-sigma-pressure counterpart of lev_thickness: a consuming model builds a 3-D pressure-at-edges pe[i,j,kn] = Ap[kn] + Bp[kn]*Ps(i,j,t) (which varies in longitude, latitude and time whenever the surface pressure does) and applies this template to define its [lon,lat,lev]-shaped `dp` observed (positive when pe increases with the lev index — the required orientation). The physical `dp` is the reconstruction width consumed by the terrain-following flux-form vertical operators (ppm_flux_D_lev_mono_hybrid_noflux_bc). Aggregation indices gi/gj/gk (distinct from a rule's i/j/k) for the non-hygienic-inlining reason documented on lev_center and lev_thickness.",
+      "body": {
+        "op": "faq",
+        "output_idx": ["gi", "gj", "gk"],
+        "args": ["pe"],
+        "ranges": { "gi": { "from": "lon" }, "gj": { "from": "lat" }, "gk": { "from": "lev" } },
+        "expr": {
+          "op": "-",
+          "args": [
+            { "op": "index", "args": ["pe", "gi", "gj", { "op": "+", "args": ["gk", 1] }] },
+            { "op": "index", "args": ["pe", "gi", "gj", "gk"] }
+          ]
+        }
+      }
+    }
+  }
+}

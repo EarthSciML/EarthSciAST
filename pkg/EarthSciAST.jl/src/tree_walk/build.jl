@@ -131,6 +131,11 @@ mutable struct BuildInspection
     # The build writes 0.0 there only as a placeholder; `esm_problem` refuses
     # any the caller's `u0` does not then cover (esm-spec §11.4).
     unvalued_slots::Vector{Int}
+    # What `rhs_program` rebuilds an operator from (src/range_restricted.jl):
+    # the recipe `esm_problem` records (`_ProgramSeedRecipe`), from which the
+    # first `rhs_program` call builds the flattened system with its per-term
+    # provenance. `nothing` for a build `esm_problem` did not make.
+    program_seed::Any
 end
 BuildInspection() = BuildInspection(Dict{String,Array{Float64}}(),
                                     Dict{String,Any}(), Dict{String,ASTExpr}(),
@@ -143,7 +148,7 @@ BuildInspection() = BuildInspection(Dict{String,Array{Float64}}(),
                                     Dict{Tuple{Base.RefValue{Any},String},_ObservedMemo}(),
                                     ReentrantLock(), Ref{Any}(nothing),
                                     nothing, WeakKeyDict{Base.RefValue{Any},Any}(),
-                                    Int[])
+                                    Int[], nothing)
 
 """
     DiscreteMaterializer()
@@ -3835,6 +3840,8 @@ function _build_state_layout(model::Model, cls, parts;
         isempty(cells) && continue
         array_var_info[vname] = _cellset_bbox(cells)
     end
+    # A range-restricted program lays each array state out over its storage.
+    _range_state_boxes!(_range_spec_now(), array_var_info)
 
     # ---- Flat state layout: scalars first, then one block per array ----
     # Each array variable's block covers the bounding box of its cells,
@@ -3895,8 +3902,10 @@ function _build_state_layout(model::Model, cls, parts;
             # A declared shape of a different rank than the producer's output
             # would make the cell keys ambiguous — leave it inlined.
             (v.shape !== nothing && length(v.shape) != length(dims)) && continue
+            box = _range_observed_box(_range_spec_now(), name, dims)
+            box === nothing && continue
             mat_dims[name] = dims
-            array_var_info_ext[name] = (ones(Int, length(dims)), copy(dims))
+            array_var_info_ext[name] = box
             push!(mat_blocks, name => array_var_info_ext[name])
         end
         var_map_ext = _layout_extend(var_map, mat_blocks)
@@ -4028,6 +4037,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     forcing_epoch = materialize_out === nothing ? _new_forcing_epoch() :
                     materialize_out.epoch
     _register_forcing_buffers!(forcing_epoch, values(param_arrays))
+    _range_build_epoch(_range_spec_now(), forcing_epoch)
 
     # ---- Discrete-cadence materialization: cache buffers + fill kernels ----
     # (the middle cadence phase; see DiscreteMaterializer). Each discrete var gets a
@@ -4193,8 +4203,9 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
                     push!(lvl_recurs, sw)
                     continue
                 end
-                feqs = _materialized_fill_equations(name, mat_defs[name],
-                                                    layout.mat_dims[name])
+                feqs = _range_fill_equations(_range_spec_now(), name, mat_defs[name],
+                                             layout.mat_dims[name],
+                                             array_var_info[name])
                 se, pcs, aks, sfs, acs = _compile_derivative_equations(feqs,
                     resolved_obs, array_var_info, var_map, const_registry,
                     pgather, param_sym_set, reg_funcs, n_total;
@@ -4837,6 +4848,10 @@ function _build_evaluator_impl_inner(model::Model;
         registered_functions=registered_functions, vi_vars=_vi_vars,
         vi_extents=_vi_extents, vi_maps=_vi_maps,
         has_value_invention=_has_value_invention, param_reads=param_reads)
+    # A range-restricted program (src/range_restricted.jl) clips the equation
+    # stream to the cells its owned box needs, before any cell is laid out.
+    parts = _range_restrict_parts(_range_spec_now(), model, cls, parts, index_sets,
+                                  const_arrays, param_arrays)
 
     # ---- Phase 3: array-cell discovery + flat state layout + u0/p ----
     # The build-time ARRAY scope a field `ic` resolves against (esm-spec §6.6.5
@@ -7442,12 +7457,13 @@ function _build_evaluator_dict(esm::AbstractDict;
     delete!(kwd, :_gated_providers)
     delete!(kwd, :_sample_time)
 
-    return _build_evaluator(file; model_name=model_name,
-                           _vi_extents=(_vi === nothing ? Dict{String,Int}() : _vi.extents),
-                           _vi_vars=(_vi === nothing ? Set{String}() : _vi.vi_var_names),
-                           _vi_maps=(_vi === nothing ? _EMPTY_VI_MAPS :
-                                     (maps=_vi.maps, map_sets=_vi.map_sets)),
-                           kwd...)
+    kwd[:_vi_extents] = _vi === nothing ? Dict{String,Int}() : _vi.extents
+    kwd[:_vi_vars] = _vi === nothing ? Set{String}() : _vi.vi_var_names
+    kwd[:_vi_maps] = _vi === nothing ? _EMPTY_VI_MAPS : (maps=_vi.maps, map_sets=_vi.map_sets)
+    # A range-restricted program keeps what the front door produced, so a later
+    # restriction of it re-lowers without re-reading the document.
+    _range_front_door_done(_range_spec_now(), file, model_name, kwd)
+    return _build_evaluator(file; model_name=model_name, kwd...)
 end
 
 """

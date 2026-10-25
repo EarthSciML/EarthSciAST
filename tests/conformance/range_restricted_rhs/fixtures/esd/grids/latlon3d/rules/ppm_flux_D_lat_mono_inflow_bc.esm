@@ -1,0 +1,301 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "ppm_flux_D_lat_mono_inflow_bc",
+    "description": "UPWIND-BIASED, MONOTONE, conservative flux-form MERIDIONAL advection D(V*q, wrt: lat) on the latlon3d grid for a REGIONAL (limited-area) domain with OPEN lateral boundaries: a prescribed lateral-boundary concentration (Dirichlet inflow) carried in through whichever wall the wind blows INTO, and the interior reconstruction carried out through whichever wall it blows OUT of. The open-boundary sibling of rules/ppm_flux_D_lat_mono_polar: identical interior, identical spherical metric, identical CW84 eq (1.6)/(1.8)/(1.10) limited reconstruction and sign-of-velocity donor selection (../stencils/ppmflux_lev_face_flux), and the SAME seven-cell support -- only the boundary closure differs. The periodic rule ROTATES the ghost indices around the sphere and the polar rule OMITS the pole-wall flux; this rule FORMS each open wall flux from a prescribed exterior halo instead. THE HALO IS THE BOUNDARY RECONSTRUCTION (full order, not donor). Near each wall the seven-cell reconstruction reaches for out-of-domain cells; those are supplied by the boundary concentrations `qbc_s` (south, shape [lon, lev]) and `qbc_n` (north), a constant halo along the wall at each level, passed as OPERANDS of the matched derivative. The wall face flux is then the CW84-limited one-sided reconstruction over that halo, upwind-selected: F = max(w,0)*aR_ext + min(w,0)*aL_int, so on INFLOW (w into the domain) the prescribed halo is donated and on OUTFLOW the interior parabola leaves. Each of the two walls handles BOTH regimes by the sign of the wall-normal wind -- strictly more general than the 1-D grids/cartesian_uniform_1d/rules/ppm_D_inflow_bc, which hard-codes one inflow wall and one outflow wall for a one-signed speed. CONSISTENCY WITH CONTINUITY / FREE-STREAM. At q == 1 with the halo == 1, every CW84 correction term is a difference of equal values and is exactly 0.0 in IEEE, each parabola is the constant 1, every wall flux collapses to F = w exactly, and the tendency is BITWISE the pure mass divergence: a tracer carried as mq alongside the air mass m stays exactly equal through the open walls (gated by tests/conformance/simulation/latlon3d_transport_cwc_regional_inflow). CONSERVATION. Every INTERIOR interface face is built from the SAME atom, cells, widths and face velocity in the two cells that share it (the boundary slabs are ../stencils/ppmflux_D_lat_interior with only the out-of-domain gathers rerouted to the halo), so the flux divergence telescopes to the bit; the domain is OPEN, so the column/row integral is NOT invariant -- mass enters and leaves through the wall fluxes, which is the point. On OUTFLOW the boundary-cell reconstruction is mildly influenced by the halo (as in operational regional CTM lateral-boundary schemes); a per-wall non-reflecting extrapolation outflow is a documented follow-on. It never breaks conservation (the wall face is single-valued). COMPOUND MATCH. D(V*q, qbc_s, qbc_n, wrt: lat) at priority 10 with the wind on the LEFT of the product and a where-shape constraint separating the face-staggered wind (V over ['lon', 'lat_nodes', 'lev']) from the cell tracer q -- the same contract as the periodic/polar siblings. Carrying the halo as operands also makes this rule's match STRUCTURALLY distinct from its periodic/polar siblings — 3 operands against their 1 — so it no longer collides with them at priority 10 and a problem may import it ALONGSIDE a periodic/polar rule for the same axis: the arity of each call site selects the scheme. (Its `where` guard on the face-staggered wind is still what separates it from the same-priority face_flux_divergence_lat_open_bc, which also matches a product under D.) PER-TRACER HALO. `qbc_s` and `qbc_n` are rule PARAMS, bound by the match from the lat derivative's 2nd and 3rd operands — not free names read out of the consumer's scope. This is what lets each advected tracer carry its OWN lateral boundary concentration: a chemical mechanism advecting 12 species writes D(Mx*O3, O3_bc_w, O3_bc_e, wrt: lat) beside D(Mx*NO, NO_bc_w, NO_bc_e, wrt: lat), and the two halos are independent. (Were they free names, every tracer lowered against this rule would necessarily SHARE one boundary field — there would be no way to give O3 a 40 ppb inflow and NO a 0.0004 ppb one.) It is the same contract EarthSciAST's own `grad(f, inflow)` inflow fixture uses. The geometry names (dphi_lat, dS_lat, ...) ARE still read from the consumer's scope, the same contract by which the vertical flux stencils read dz. Semi-discrete (method-of-lines): the ODE integrator owns dt. Requires NLAT >= 7 for a non-empty interior.",
+    "license": "MIT",
+    "tags": [
+      "esd:rule",
+      "family:finite_volume",
+      "grid:latlon3d",
+      "op:advection",
+      "axes:lon,lat,lev",
+      "order:2",
+      "stencil_width:7",
+      "scheme:upwind",
+      "bc:inflow",
+      "form:flux",
+      "spec:9.6.8"
+    ],
+    "references": [
+      {
+        "citation": "Colella, P., & Woodward, P. R. (1984). The Piecewise Parabolic Method (PPM) for gas-dynamical simulations. Journal of Computational Physics, 54(1), 174-201.",
+        "doi": "10.1016/0021-9991(84)90143-8"
+      },
+      {
+        "citation": "Lin, S.-J., & Rood, R. B. (1996). Multidimensional flux-form semi-Lagrangian transport schemes. Monthly Weather Review, 124(9), 2046-2070.",
+        "doi": "10.1175/1520-0493(1996)124<2046:MFFSLT>2.0.CO;2"
+      },
+      {
+        "citation": "LeVeque, R. J. (2002). Finite Volume Methods for Hyperbolic Problems. Cambridge University Press. Section 7 (inflow / outflow boundary conditions for advection) and Section 4.1 (the upwind donor flux)."
+      },
+      {
+        "citation": "Colella, P., & Sekora, M. D. (2008). A limiter for PPM that preserves accuracy at smooth extrema. Journal of Computational Physics, 227(15), 7069-7076.",
+        "doi": "10.1016/j.jcp.2008.03.034"
+      }
+    ]
+  },
+  "expression_template_imports": [
+    {
+      "ref": "../stencils/ppmflux_D_lat_interior.esm"
+    },
+    {
+      "ref": "../stencils/ppmflux_D_lat_inflow_j1.esm"
+    },
+    {
+      "ref": "../stencils/ppmflux_D_lat_inflow_j2.esm"
+    },
+    {
+      "ref": "../stencils/ppmflux_D_lat_inflow_j3.esm"
+    },
+    {
+      "ref": "../stencils/ppmflux_D_lat_inflow_jNm2.esm"
+    },
+    {
+      "ref": "../stencils/ppmflux_D_lat_inflow_jNm1.esm"
+    },
+    {
+      "ref": "../stencils/ppmflux_D_lat_inflow_jN.esm"
+    }
+  ],
+  "expression_templates": {
+    "ppm_flux_D_lat_mono_inflow_bc": {
+      "params": [
+        "q",
+        "V",
+        "qbc_s",
+        "qbc_n"
+      ],
+      "priority": 10,
+      "match": {
+        "op": "D",
+        "args": [
+          {
+            "op": "*",
+            "args": [
+              "V",
+              "q"
+            ]
+          },
+          "qbc_s",
+          "qbc_n"
+        ],
+        "wrt": "lat"
+      },
+      "where": {
+        "V": {
+          "shape": [
+            "lon",
+            "lat_nodes",
+            "lev"
+          ]
+        }
+      },
+      "body": {
+        "op": "makearray",
+        "args": [],
+        "regions": [
+          [
+            [
+              1,
+              "NLON"
+            ],
+            [
+              4,
+              {
+                "op": "-",
+                "args": [
+                  "NLAT",
+                  3
+                ]
+              }
+            ],
+            [
+              1,
+              "NLEV"
+            ]
+          ],
+          [
+            [
+              1,
+              "NLON"
+            ],
+            [
+              1,
+              1
+            ],
+            [
+              1,
+              "NLEV"
+            ]
+          ],
+          [
+            [
+              1,
+              "NLON"
+            ],
+            [
+              2,
+              2
+            ],
+            [
+              1,
+              "NLEV"
+            ]
+          ],
+          [
+            [
+              1,
+              "NLON"
+            ],
+            [
+              3,
+              3
+            ],
+            [
+              1,
+              "NLEV"
+            ]
+          ],
+          [
+            [
+              1,
+              "NLON"
+            ],
+            [
+              {
+                "op": "-",
+                "args": [
+                  "NLAT",
+                  2
+                ]
+              },
+              {
+                "op": "-",
+                "args": [
+                  "NLAT",
+                  2
+                ]
+              }
+            ],
+            [
+              1,
+              "NLEV"
+            ]
+          ],
+          [
+            [
+              1,
+              "NLON"
+            ],
+            [
+              {
+                "op": "-",
+                "args": [
+                  "NLAT",
+                  1
+                ]
+              },
+              {
+                "op": "-",
+                "args": [
+                  "NLAT",
+                  1
+                ]
+              }
+            ],
+            [
+              1,
+              "NLEV"
+            ]
+          ],
+          [
+            [
+              1,
+              "NLON"
+            ],
+            [
+              "NLAT",
+              "NLAT"
+            ],
+            [
+              1,
+              "NLEV"
+            ]
+          ]
+        ],
+        "values": [
+          {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "ppmflux_D_lat_interior",
+            "bindings": {
+              "q": "q",
+              "V": "V"
+            }
+          },
+          {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "ppmflux_D_lat_inflow_j1",
+            "bindings": {
+              "q": "q",
+              "V": "V",
+              "qbc_s": "qbc_s"
+            }
+          },
+          {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "ppmflux_D_lat_inflow_j2",
+            "bindings": {
+              "q": "q",
+              "V": "V",
+              "qbc_s": "qbc_s"
+            }
+          },
+          {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "ppmflux_D_lat_inflow_j3",
+            "bindings": {
+              "q": "q",
+              "V": "V",
+              "qbc_s": "qbc_s"
+            }
+          },
+          {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "ppmflux_D_lat_inflow_jNm2",
+            "bindings": {
+              "q": "q",
+              "V": "V",
+              "qbc_n": "qbc_n"
+            }
+          },
+          {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "ppmflux_D_lat_inflow_jNm1",
+            "bindings": {
+              "q": "q",
+              "V": "V",
+              "qbc_n": "qbc_n"
+            }
+          },
+          {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "ppmflux_D_lat_inflow_jN",
+            "bindings": {
+              "q": "q",
+              "V": "V",
+              "qbc_n": "qbc_n"
+            }
+          }
+        ]
+      }
+    }
+  }
+}

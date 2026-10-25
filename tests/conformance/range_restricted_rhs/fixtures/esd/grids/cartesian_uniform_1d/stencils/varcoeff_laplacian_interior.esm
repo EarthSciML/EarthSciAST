@@ -1,0 +1,89 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "varcoeff_laplacian_interior",
+    "description": "Interior-only conservative finite-volume variable-coefficient / nonlinear Laplacian div(k grad u) on cartesian_uniform_1d: L u[i] = ( kf[i+1/2] (u[i+1]-u[i]) - kf[i-1/2] (u[i]-u[i-1]) ) / dx^2 over i in [2, N-1], the flux difference of the two face-normal fluxes divided by the uniform cell measure dx^2. The face conductivity is the ARITHMETIC MEAN of the two adjacent cell values, kf[i+1/2] = (k[i]+k[i+1])/2; this is the standard second-order harmonic-vs-arithmetic choice for a smooth coefficient (both are O(dx^2)-accurate at the face for a differentiable k, and the arithmetic mean keeps the operator affine in k so it serves the nonlinear case k=k(u) with no reformulation). Both the state `u` and the coefficient `k` are consumer-supplied fields of shape [x] passed as template parameters (bound by the matching rule from the compound D(k*D(u,x),x) the consumer writes); the SAME rule serves the variable-coefficient case (k=k(x) a given field) and the nonlinear case (k declared as an observed k=f(u), so k depends on the state) because the body only reads k by index at the faces. This interior aggregate loops over `i` over [2,N-1]; a coefficient k supplied as an aggregate observed must therefore loop over a DIFFERENT index (the library convention is `gi`, as the grid geometry observeds use) so its inlining into this aggregate is not captured — see the rule (rules/varcoeff_laplacian_zero_flux_bc) authoring contract. Match-less named template; the boundary-condition layer (rules/varcoeff_laplacian_zero_flux_bc) wraps it into the complete rewrite rule. `dx` is a free name resolving to the consuming model's spacing variable (the grid's consumer-supplied geometry contract; see grids/cartesian_uniform_1d/grid.esm). Reduces to the constant-coefficient 3-point (k/dx^2)(u[i+1]-2u[i]+u[i-1]) when k is spatially constant.",
+    "license": "MIT",
+    "tags": ["esd:stencil", "family:finite_difference", "grid:cartesian_uniform_1d", "op:varcoeff_laplacian", "order:2", "stencil_width:3"],
+    "references": [
+      {
+        "citation": "LeVeque, R. J. (2007). Finite Difference Methods for Ordinary and Partial Differential Equations. SIAM. Section 2.15 (variable-coefficient / conservative form) and Section 2.12 (Neumann boundary conditions)."
+      }
+    ]
+  },
+  "expression_template_imports": [
+    { "ref": "../grid.esm" }
+  ],
+  "expression_templates": {
+    "varcoeff_laplacian_interior": {
+      "params": ["u", "k"],
+      "body": {
+        "op": "faq",
+        "output_idx": ["i"],
+        "args": ["u"],
+        "ranges": { "i": [2, { "op": "-", "args": ["N", 1] }] },
+        "expr": {
+          "op": "/",
+          "args": [
+            {
+              "op": "-",
+              "args": [
+                {
+                  "op": "*",
+                  "args": [
+                    {
+                      "op": "*",
+                      "args": [
+                        0.5,
+                        {
+                          "op": "+",
+                          "args": [
+                            { "op": "index", "args": ["k", "i"] },
+                            { "op": "index", "args": ["k", { "op": "+", "args": ["i", 1] }] }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "op": "-",
+                      "args": [
+                        { "op": "index", "args": ["u", { "op": "+", "args": ["i", 1] }] },
+                        { "op": "index", "args": ["u", "i"] }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    {
+                      "op": "*",
+                      "args": [
+                        0.5,
+                        {
+                          "op": "+",
+                          "args": [
+                            { "op": "index", "args": ["k", { "op": "-", "args": ["i", 1] }] },
+                            { "op": "index", "args": ["k", "i"] }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "op": "-",
+                      "args": [
+                        { "op": "index", "args": ["u", "i"] },
+                        { "op": "index", "args": ["u", { "op": "-", "args": ["i", 1] }] }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            { "op": "*", "args": ["dx", "dx"] }
+          ]
+        }
+      }
+    }
+  }
+}

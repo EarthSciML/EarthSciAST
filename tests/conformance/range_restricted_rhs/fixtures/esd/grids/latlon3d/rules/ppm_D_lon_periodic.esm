@@ -1,0 +1,235 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "ppm_D_lon_periodic",
+    "description": "Piecewise Parabolic Method (PPM; Colella & Woodward 1984) conservative finite-volume zonal first derivative u_lon on the latlon3d grid with a periodic (wrap) longitude boundary, for zonal advection with non-negative angular velocity (a consumer writes u_t = -omega_deg*D(u, wrt: lon), omega_deg >= 0) in a 3-D tracer-transport model such as GEOS-Chem Classic. The rank-3 (lon x lat x lev) extension of grids/cartesian_uniform_1d/rules/ppm_D_periodic, applied on every (lat, lev) column; a higher-order GC-faithful alternative to the sibling first-order upwind1_D_lon_periodic. Matches D(f, wrt: lon), a PER-DEGREE derivative. FLUX FORM: the SEMI-DISCRETE (method-of-lines) reconstructed-edge flux F_{i+1/2} = qr_lim(cell i), the CW84-limited right-edge value of the upwind (west) cell -- NOT the fully-discrete Courant-integral flux. The Courant form needs the CFL number inside the operator; the ESS simulate() pathway is method-of-lines (the rule supplies only the spatial operator D(u,lon) and the ODE integrator owns dt, exactly like the sibling upwind1_D_lon_periodic / central_D_lon rules), so the semi-discrete edge-value flux is the composable choice, faithful to GC's PPM reconstruction but not its TPCORE Courant integral (see grids/latlon3d/grid.esm for the deferred bit-faithful TPCORE note). D f[i,j,k] = (F_{i+1/2} - F_{i-1/2})/dlon_deg; because adjacent zonal cells share the identical float face flux the divergence telescopes and the periodic ring conserves sum(f) to the bit. COMPOSITIONAL BODY: a makearray tiling [lon, lat, lev] with exactly six regions, each filled by a thin apply of a factored stencil -- interior columns [4, NLON-2] x lat x lev use ../stencils/ppm_D_lon_interior; the low wrap columns i=1,2,3 and high wrap columns i=NLON-1,NLON use the five ../stencils/ppm_D_lon_wrap_col{1,2,3,Nm1,N} slab faces (PPM's 5-cell support needs three wrap columns at the low end and two at the high end). Every region is a full-rank slab aggregate (output_idx [i, j, k]) so every binding's simulator fills the wrap slabs without rank promotion. RECONSTRUCTION: raw edges are CW84 eq.(1.6) 4th-order interpolation; the unlimited flux-difference reduces exactly to the 4th-order central first derivative, so away from extrema the scheme is high order. LIMITER: CW84 eqs.(1.7)-(1.10) monotonicity limiter (stencils/ppm_limit_right). ORDER (honest, observed): on a smooth zonal MMS the CW84 limiter still activates at the smooth extrema of the m=1 wave (the classic clipping of the original 1984 limiter, cured only by later extremum-preserving variants), flattening the parabola there, so the global convergence is sub-nominal and norm-dependent -- see tests/conformance/convergence/latlon3d_advection_zonal_ppm for the observed order. MONOTONICITY: with the eq. (1.8) + eq. (1.10) reconstruction the semi-discrete form is bounded in practice (a non-negative field with sharp jumps stays exactly within its initial range in the in-pipeline tests above) but it is still NOT a proven TVD/positivity theorem -- a strict guarantee would require the fully-discrete Courant-integral form under a CFL condition, which the method-of-lines pathway cannot carry. Match scoping: `wrt: lon` plus `where: {f: {shape: [lon, lat, lev]}}` (esm-spec 9.6.1) at priority 10 (mirroring the cartesian ppm sibling) so it wins over any default-priority first-derivative rule sharing the lon axis and fires only on the longitudinal derivative of a bare field declared over THIS grid's lon x lat x lev index sets; under import-edge renaming (esm-spec 9.7.7) the wrt literal and the where shape follow the renamed axis together, so two latlon3d instances coexist. The constraint requires a bare shaped field; a consumer differentiating a compound expression must bind it to a declared lon x lat x lev observed first. `dlon_deg` is the inherited consumer-supplied zonal spacing free name (grids/latlon3d/grid.esm); the periodic wrap is dlon_deg-scale-invariant. Sign convention: upwind for flow toward +lon; a westward variant belongs in a separate rule. *** MONOTONICITY UPGRADE (2026-07-13) -- READ THIS. *** This rule is now genuinely BOUNDED. Its flux (../stencils/ppm_flux) previously reconstructed edges with the UNLIMITED eq. (1.7) slopes and relied on the eq. (1.10) parabola limiter alone; that combination does NOT bound the scheme. Verified in-pipeline on rules/ppm_D_periodic with sharp non-negative initial data (square / spike / sawtooth at N=32/64/128): the old chain drove a tracer in [0,1] down to -5.3e-2 and up to 1.053, i.e. it manufactured negative concentrations -- not survivable in a chemistry-transport model, where they propagate into the chemistry and aerosol solvers, and where the usual fix (clip to zero) silently destroys mass conservation. The edges are now built on the CW84 eq. (1.8) MONOTONIZED slopes (../stencils/ppm_face_value_mono -> ppm_slope_mono), and the same in-pipeline test now holds the tracer EXACTLY in [0, 1] (min 0.0, max 1.0) on every profile and resolution. BOTH limiters are load-bearing and neither alone suffices: eq. (1.8) forces the interpolated EDGE to lie between the two cells it separates, while eq. (1.10)'s extremum-flattening branch is what stops outflux from a local minimum. (Independently re-derived on the stretched vertical; see grids/latlon3d/rules/ppm_D_lev_mono_noflux_bc.) ORDER CONSEQUENCES (honest): on a smooth MMS the upgrade IMPROVES the observed order for the periodic cases (1-D 1.5 -> 1.87 L2; zonal 1.64 -> 1.88 L2), because eq.(1.10)-alone clips more erratically. But where the manufactured solution has a SMOOTH INTERIOR EXTREMUM the upgrade LOWERS it: the meridional cos^4 case falls from 2.00 to 1.22 (L2), because eq. (1.8) zeroes the slope at the extremum cell and that zero also pollutes the two neighbouring edges. That is the classic 1984-limiter smooth-extremum clip, and it is the price of boundedness; the extremum-preserving Colella-Sekora (2008) limiter is the documented follow-on that would recover the order while keeping the bound. COST: the lowered AST grows ~8.5x, because ppm_limit_right must inline both edges ~5x each and a let-free AST cannot share them, so the now-larger monotonized edge is paid for ten times over; a CSE/let construct in ESM would remove this (documented follow-on). The rule's regions, stencil support (5 cells) and boundary faces are UNCHANGED -- only the edge reconstruction inside ppm_flux changed -- so this is a drop-in fix, not a new operator.",
+    "license": "MIT",
+    "tags": [
+      "esd:rule",
+      "family:finite_volume",
+      "grid:latlon3d",
+      "op:D",
+      "axes:lon,lat,lev",
+      "order:3",
+      "stencil_width:6",
+      "bc:periodic",
+      "spec:9.6.8"
+    ],
+    "references": [
+      {
+        "citation": "Colella, P., & Woodward, P. R. (1984). The Piecewise Parabolic Method (PPM) for gas-dynamical simulations. Journal of Computational Physics, 54(1), 174-201.",
+        "doi": "10.1016/0021-9991(84)90143-8"
+      },
+      {
+        "citation": "Lin, S.-J., & Rood, R. B. (1996). Multidimensional flux-form semi-Lagrangian transport schemes. Monthly Weather Review, 124(9), 2046-2070. Flux-form finite-volume advection composition (the GEOS-Chem/TPCORE lineage).",
+        "doi": "10.1175/1520-0493(1996)124<2046:MFFSLT>2.0.CO;2"
+      },
+      {
+        "citation": "Colella, P., & Sekora, M. D. (2008). A limiter for PPM that preserves accuracy at smooth extrema. Journal of Computational Physics, 227(15), 7069-7076.",
+        "doi": "10.1016/j.jcp.2008.03.034"
+      }
+    ]
+  },
+  "expression_template_imports": [
+    {
+      "ref": "../stencils/ppm_D_lon_interior.esm"
+    },
+    {
+      "ref": "../stencils/ppm_D_lon_wrap_col1.esm"
+    },
+    {
+      "ref": "../stencils/ppm_D_lon_wrap_col2.esm"
+    },
+    {
+      "ref": "../stencils/ppm_D_lon_wrap_col3.esm"
+    },
+    {
+      "ref": "../stencils/ppm_D_lon_wrap_colNm1.esm"
+    },
+    {
+      "ref": "../stencils/ppm_D_lon_wrap_colN.esm"
+    }
+  ],
+  "expression_templates": {
+    "ppm_D_lon_periodic": {
+      "params": [
+        "f"
+      ],
+      "priority": 10,
+      "match": {
+        "op": "D",
+        "args": [
+          "f"
+        ],
+        "wrt": "lon"
+      },
+      "where": {
+        "f": {
+          "shape": [
+            "lon",
+            "lat",
+            "lev"
+          ]
+        }
+      },
+      "body": {
+        "op": "makearray",
+        "args": [],
+        "regions": [
+          [
+            [
+              4,
+              {
+                "op": "-",
+                "args": [
+                  "NLON",
+                  2
+                ]
+              }
+            ],
+            [
+              1,
+              "NLAT"
+            ],
+            [
+              1,
+              "NLEV"
+            ]
+          ],
+          [
+            [
+              1,
+              1
+            ],
+            [
+              1,
+              "NLAT"
+            ],
+            [
+              1,
+              "NLEV"
+            ]
+          ],
+          [
+            [
+              2,
+              2
+            ],
+            [
+              1,
+              "NLAT"
+            ],
+            [
+              1,
+              "NLEV"
+            ]
+          ],
+          [
+            [
+              3,
+              3
+            ],
+            [
+              1,
+              "NLAT"
+            ],
+            [
+              1,
+              "NLEV"
+            ]
+          ],
+          [
+            [
+              {
+                "op": "-",
+                "args": [
+                  "NLON",
+                  1
+                ]
+              },
+              {
+                "op": "-",
+                "args": [
+                  "NLON",
+                  1
+                ]
+              }
+            ],
+            [
+              1,
+              "NLAT"
+            ],
+            [
+              1,
+              "NLEV"
+            ]
+          ],
+          [
+            [
+              "NLON",
+              "NLON"
+            ],
+            [
+              1,
+              "NLAT"
+            ],
+            [
+              1,
+              "NLEV"
+            ]
+          ]
+        ],
+        "values": [
+          {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "ppm_D_lon_interior",
+            "bindings": {
+              "f": "f"
+            }
+          },
+          {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "ppm_D_lon_wrap_col1",
+            "bindings": {
+              "f": "f"
+            }
+          },
+          {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "ppm_D_lon_wrap_col2",
+            "bindings": {
+              "f": "f"
+            }
+          },
+          {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "ppm_D_lon_wrap_col3",
+            "bindings": {
+              "f": "f"
+            }
+          },
+          {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "ppm_D_lon_wrap_colNm1",
+            "bindings": {
+              "f": "f"
+            }
+          },
+          {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "ppm_D_lon_wrap_colN",
+            "bindings": {
+              "f": "f"
+            }
+          }
+        ]
+      }
+    }
+  }
+}

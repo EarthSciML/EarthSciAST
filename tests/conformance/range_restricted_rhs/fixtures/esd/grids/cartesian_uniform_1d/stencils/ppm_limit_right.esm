@@ -1,0 +1,154 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "ppm_limit_right",
+    "description": "Colella-Woodward (1984) eqs. (1.7)-(1.10) monotonicity limiter, RIGHT-edge output only (the upwind cell's downwind face, used for non-negative transport speed). Given the raw left/right edge values ql,qr and the cell average qi it returns the limited right edge qr_lim: if (qr-qi)(qi-ql) <= 0 the cell is a local extremum and the parabola is flattened to the constant qi; otherwise, if the parabola's interior extremum falls beyond the left edge (-(dq^2) > dq*q6 with dq=qr-ql, q6=6(qi-(ql+qr)/2)) the right edge is pulled to 3*qi-2*ql to keep the sub-grid parabola monotone, else it stays at qr. This is the archive/discretizations/finite_volume/flux_1d_ppm.json `limiter` qr_lim branch, ALGEBRAICALLY COLLAPSED to a single is_extremum test and verified BIT-IDENTICAL to the archive's nested ql1/qr1 form (when is_extremum holds, ql1=qr1=qi makes dq=q6=0 so the overshoot test is false and qr_lim=qi; when it does not, ql1=ql and qr1=qr, so the two forms agree on every float): the flattened form avoids inlining the is_extremum subexpression six times per limiter (a let-free-AST size win) with no change in value. Closed-form ifelse AST (ifelse, <=, >, ^ are ESS evaluable-core ops). Match-less; used by stencils/ppm_flux.esm.",
+    "license": "MIT",
+    "tags": [
+      "esd:stencil",
+      "family:finite_volume",
+      "grid:cartesian_uniform_1d",
+      "op:limiter",
+      "order:3",
+      "stencil_width:1"
+    ],
+    "references": [
+      {
+        "citation": "Colella, P., & Woodward, P. R. (1984). The Piecewise Parabolic Method (PPM) for gas-dynamical simulations. Journal of Computational Physics, 54(1), 174-201.",
+        "doi": "10.1016/0021-9991(84)90143-8"
+      }
+    ]
+  },
+  "expression_templates": {
+    "ppm_limit_right": {
+      "params": [
+        "ql",
+        "qr",
+        "qi"
+      ],
+      "description": "CW84 limited right edge qr_lim(ql,qr,qi)",
+      "body": {
+        "op": "ifelse",
+        "args": [
+          {
+            "op": "<=",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "-",
+                    "args": [
+                      "qr",
+                      "qi"
+                    ]
+                  },
+                  {
+                    "op": "-",
+                    "args": [
+                      "qi",
+                      "ql"
+                    ]
+                  }
+                ]
+              },
+              0
+            ]
+          },
+          "qi",
+          {
+            "op": "ifelse",
+            "args": [
+              {
+                "op": ">",
+                "args": [
+                  {
+                    "op": "-",
+                    "args": [
+                      {
+                        "op": "^",
+                        "args": [
+                          {
+                            "op": "-",
+                            "args": [
+                              "qr",
+                              "ql"
+                            ]
+                          },
+                          2
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "op": "*",
+                    "args": [
+                      {
+                        "op": "-",
+                        "args": [
+                          "qr",
+                          "ql"
+                        ]
+                      },
+                      {
+                        "op": "*",
+                        "args": [
+                          6,
+                          {
+                            "op": "-",
+                            "args": [
+                              "qi",
+                              {
+                                "op": "*",
+                                "args": [
+                                  {
+                                    "op": "/",
+                                    "args": [
+                                      1,
+                                      2
+                                    ]
+                                  },
+                                  {
+                                    "op": "+",
+                                    "args": [
+                                      "ql",
+                                      "qr"
+                                    ]
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "op": "-",
+                "args": [
+                  {
+                    "op": "*",
+                    "args": [
+                      3,
+                      "qi"
+                    ]
+                  },
+                  {
+                    "op": "*",
+                    "args": [
+                      2,
+                      "ql"
+                    ]
+                  }
+                ]
+              },
+              "qr"
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

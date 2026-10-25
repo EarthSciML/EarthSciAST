@@ -236,7 +236,8 @@ end
 function _prepare_run_doc(input; metaparameters::AbstractDict = Dict{String,Int}(),
                           base_path::AbstractString = pwd(),
                           renames_out::Union{Nothing,AbstractDict} = nothing,
-                          supplied_names = ())
+                          supplied_names = (),
+                          flat_out::Union{Nothing,Base.RefValue{Any}} = nothing)
     if input isa AbstractString
         isfile(input) || throw(SimulateError("simulate: no such file '$input'"))
         input = load_path(input; metaparameters=metaparameters)
@@ -293,51 +294,62 @@ function _prepare_run_doc(input; metaparameters::AbstractDict = Dict{String,Int}
         input = lower_table_lookups(input)
         renames_out === nothing ||
             merge!(renames_out, input.metadata.merged_variable_renames)
-        # Surviving references are THE behavior: they ride through
-        # `flattened_to_esm` to the build boundary, where `_build_evaluator_impl`
-        # expands them with SITE RECORDING — the SINGLE evaluator-side expansion
-        # point — and the affine-stencil compile-once tier factors each body once
-        # per (use site, region class) instead of fusing it into every branch
-        # spine (RFC out-of-line-expression-templates step c), which is an
-        # order-of-magnitude reduction in node lowerings on a deep template stack.
-        # The downstream shape transforms
-        # below only inspect equation LHS / infer shapes from already-shaped
-        # operands, so a surviving `apply_expression_template` node rides through
-        # them untouched.
-        #
-        # Lift a feed-forward algebraic physics chain authored as scalars into the
-        # grid shape it inherits from the fields it reads (regrid outputs, loader
-        # fields, the spatial state), so a scalar observed that consumes a build-once
-        # spatial field (`tan_phi = sqrt(dzdx² + dzdy²)` over the regridded terrain)
-        # becomes a per-cell array whose operand references lower to gathers
-        # (`index(TerrainRegrid.dzdx, i, j)`) the evaluator resolves against the
-        # const-array registry. Both transforms are no-ops (return an equivalent
-        # system) for a document with no algebraic states / no scalar-downstream-of-
-        # array observeds, so an already-array (discretized) or purely-scalar (0-D)
-        # run is byte-identical.
-        input = promote_downstream_shapes(algebraic_states_to_observeds(input))
-        doc = flattened_to_esm(input)
-        # Re-attach the verbatim `coordinates` registry (captured pre-flatten) so the
-        # streaming-output writer sees it (RFC §8.3). Document-scoped + un-namespaced,
-        # like `index_sets`, so it drops straight onto the run doc.
-        run_coordinates !== nothing && !isempty(run_coordinates) &&
-            (doc["coordinates"] = run_coordinates)
-        # Re-attach the §2.2 `solver` block (captured pre-flatten) in its RAW
-        # shape, which is what `_document_solver` coerces back. Document-scoped
-        # and un-namespaced, like `coordinates`.
-        if run_solver !== nothing
-            block = serialize_solver(run_solver)
-            isempty(block) || (doc["solver"] = block)
-        end
-        if !isempty(run_init)
-            for (_, m) in doc["models"]
-                m["initialization_equations"] = Any[serialize_equation(eq) for eq in run_init]
-            end
-        end
-        return doc
+        # The last point the per-term provenance (`equation_contributions`) is
+        # still in hand: `rhs_program` selects operators from it.
+        flat_out === nothing || (flat_out[] = (flat = input, coordinates = run_coordinates,
+                                               solver = run_solver, init = run_init))
+        return _flat_run_doc(input, run_coordinates, run_solver, run_init)
     end
     throw(SimulateError("simulate: unsupported input of type $(typeof(input)); " *
                         "pass a path, EsmFile, FlattenedSystem, or native ESM Dict"))
+end
+
+# The run document of the table-lowered flattened system `input`, with the
+# document-scoped blocks flatten does not carry re-attached.
+function _flat_run_doc(input::FlattenedSystem, run_coordinates, run_solver,
+                       run_init::Vector{Equation})
+    # Surviving references are THE behavior: they ride through
+    # `flattened_to_esm` to the build boundary, where `_build_evaluator_impl`
+    # expands them with SITE RECORDING — the SINGLE evaluator-side expansion
+    # point — and the affine-stencil compile-once tier factors each body once
+    # per (use site, region class) instead of fusing it into every branch
+    # spine (RFC out-of-line-expression-templates step c), which is an
+    # order-of-magnitude reduction in node lowerings on a deep template stack.
+    # The downstream shape transforms
+    # below only inspect equation LHS / infer shapes from already-shaped
+    # operands, so a surviving `apply_expression_template` node rides through
+    # them untouched.
+    #
+    # Lift a feed-forward algebraic physics chain authored as scalars into the
+    # grid shape it inherits from the fields it reads (regrid outputs, loader
+    # fields, the spatial state), so a scalar observed that consumes a build-once
+    # spatial field (`tan_phi = sqrt(dzdx² + dzdy²)` over the regridded terrain)
+    # becomes a per-cell array whose operand references lower to gathers
+    # (`index(TerrainRegrid.dzdx, i, j)`) the evaluator resolves against the
+    # const-array registry. Both transforms are no-ops (return an equivalent
+    # system) for a document with no algebraic states / no scalar-downstream-of-
+    # array observeds, so an already-array (discretized) or purely-scalar (0-D)
+    # run is byte-identical.
+    input = promote_downstream_shapes(algebraic_states_to_observeds(input))
+    doc = flattened_to_esm(input)
+    # Re-attach the verbatim `coordinates` registry (captured pre-flatten) so the
+    # streaming-output writer sees it (RFC §8.3). Document-scoped + un-namespaced,
+    # like `index_sets`, so it drops straight onto the run doc.
+    run_coordinates !== nothing && !isempty(run_coordinates) &&
+        (doc["coordinates"] = run_coordinates)
+    # Re-attach the §2.2 `solver` block (captured pre-flatten) in its RAW
+    # shape, which is what `_document_solver` coerces back. Document-scoped
+    # and un-namespaced, like `coordinates`.
+    if run_solver !== nothing
+        block = serialize_solver(run_solver)
+        isempty(block) || (doc["solver"] = block)
+    end
+    if !isempty(run_init)
+        for (_, m) in doc["models"]
+            m["initialization_equations"] = Any[serialize_equation(eq) for eq in run_init]
+        end
+    end
+    return doc
 end
 
 # The `faq`-valued initialization equations of `model` and its subsystems —
@@ -900,6 +912,86 @@ function _doc_equation_count(doc::AbstractDict)
     return n
 end
 
+# The pushdown prepass's input (`esm_problem(...; pushdown_rewrite = true)`):
+# the rewritten document when the pattern matched, else the loaded file, and
+# whether it matched.
+function _pushdown_input(input, model_name, metaparams, base_path)
+    pfile = input isa EsmFile ? input :
+            input isa AbstractString ?
+                (isfile(input) || throw(SimulateError("esm_problem: no such file '$input'"));
+                 load_path(input; metaparameters=metaparams)) :
+            input isa AbstractDict ? load_document(input; base_path=base_path,
+                                                   metaparameters=metaparams) :
+            throw(SimulateError(
+                "esm_problem: pushdown_rewrite=true needs a path, native Dict, or " *
+                "EsmFile input — a FlattenedSystem is already past the rewrite point"))
+    raw = serialize_esm_file(pfile)
+    rewritten = desugar_pushdown(raw; model_name=model_name)
+    return rewritten !== raw ? (rewritten, true) : (pfile, false)
+end
+
+# What `rhs_program` (src/range_restricted.jl) rebuilds an operator's seed from:
+# the inputs `esm_problem` was called with and the choices it made from them.
+# The seed itself — the table-lowered flattened system while it still carries
+# its per-term provenance, and the merged const arrays — is built on the first
+# `rhs_program` call (`_program_seed`) and kept from then on.
+struct _ProgramSeedRecipe
+    input::Any                        # the caller's document, before any rewrite
+    pushdown::Bool
+    metaparams::Dict{String,Int}
+    base_path::String
+    supplied::Set{String}
+    model_name::Union{Nothing,String}
+    compiler::Symbol
+    overrides::AbstractDict
+    const_arrays::AbstractDict        # the caller's, not the merged registry
+    providers::Any
+    discovered::Set{String}           # providers the extent pre-pass sampled
+    pd_gated::Set{String}             # providers the pushdown record gates
+    pd_coupling::Vector{Pair{String,String}}
+    gated_providers::Dict{String,Any}
+    sample_time::Float64
+    memo::Base.RefValue{Any}
+    lock::ReentrantLock
+end
+
+# The seed of `prob`'s programs, built once from its recipe; `nothing` for a
+# Problem `esm_problem` did not build.
+function _program_seed(prob)
+    r = prob.inspection.program_seed
+    r isa _ProgramSeedRecipe || return r
+    return lock(r.lock) do
+        r.memo[] === nothing || return r.memo[]
+        input = r.pushdown ?
+            first(_pushdown_input(r.input, r.model_name, r.metaparams, r.base_path)) :
+            r.input
+        flat = Ref{Any}(nothing)
+        _prepare_run_doc(input; metaparameters=r.metaparams, base_path=r.base_path,
+                         supplied_names=r.supplied, flat_out=flat)
+        # The const registry `esm_problem` merged, provider by provider as it
+        # routed them; the live forcing buffers are the Problem's own.
+        merged_const = Dict{String,Any}(String(k) => v for (k, v) in r.const_arrays)
+        if r.providers !== nothing
+            for (rawk, prov) in r.providers
+                k = String(rawk)
+                if k in r.discovered
+                    merged_const[k] = Array{Float64}(_sample_field(
+                        provider_sample(prov, r.sample_time), k))
+                elseif !(k in r.pd_gated) && !provider_is_gated(prov) &&
+                       provider_is_const(prov)
+                    merged_const[k] = _provider_const_field(
+                        provider_sample(prov, r.sample_time), k)
+                end
+            end
+        end
+        r.pushdown && _inject_pushdown_aliases!(merged_const, prob.run_doc, r.pd_coupling)
+        r.memo[] = (; flat[]..., compiler = r.compiler, model_name = r.model_name,
+                    overrides = r.overrides, const_arrays = merged_const,
+                    param_arrays = Dict{String,Any}(prob.param_buffers),
+                    gated_providers = r.gated_providers, sample_time = r.sample_time)
+    end
+end
+
 # --------------------------------------------------------------------------- #
 # Loader-discovered extents (esm-spec §8.9.4, CONFORMANCE_SPEC §5.5) — the
 # pre-pass `prepare` runs before ANY load, because a discovered extent closes a
@@ -1203,24 +1295,12 @@ function esm_problem(input, tspan;
     # never triggered from here — stays safe for direct callers.
     pd_gates = Dict{String,Any}()
     pd_coupling = Pair{String,String}[]
+    authored_input = input
     if pushdown_rewrite
-        pfile = input isa EsmFile ? input :
-                input isa AbstractString ?
-                    (isfile(input) || throw(SimulateError("esm_problem: no such file '$input'"));
-                     load_path(input; metaparameters=metaparams)) :
-                input isa AbstractDict ? load_document(input; base_path=base_path,
-                                                       metaparameters=metaparams) :
-                throw(SimulateError(
-                    "esm_problem: pushdown_rewrite=true needs a path, native Dict, or " *
-                    "EsmFile input — a FlattenedSystem is already past the rewrite point"))
-        raw = serialize_esm_file(pfile)
-        rewritten = desugar_pushdown(raw; model_name=model_name)
-        if rewritten !== raw                       # the pattern matched
-            pd_gates = _pushdown_provider_gates(rewritten, providers)
-            pd_coupling = _pushdown_coupling_pairs(rewritten)
-            input = rewritten
-        else
-            input = pfile                          # no re-load, no rewrite
+        input, matched = _pushdown_input(input, model_name, metaparams, base_path)
+        if matched
+            pd_gates = _pushdown_provider_gates(input, providers)
+            pd_coupling = _pushdown_coupling_pairs(input)
         end
     end
     # A discovered extent and a record-derived gate are mutually exclusive: a
@@ -1240,10 +1320,10 @@ function esm_problem(input, tspan;
     # the state silently runs from its default. Resolve those keys here, where
     # the flattened system's metadata is still reachable.
     merged_renames = OrderedDict{String,String}()
+    supplied = Set{String}(string(k) for d in (const_arrays, param_arrays, providers)
+                           if d !== nothing for k in keys(d))
     doc = _prepare_run_doc(input; metaparameters=metaparams, base_path=base_path,
-                           renames_out=merged_renames,
-                           supplied_names=Set{String}(string(k) for d in
-                               (const_arrays, param_arrays, providers) if d !== nothing for k in keys(d)))
+                           renames_out=merged_renames, supplied_names=supplied)
 
     # esm-spec §6.6.2: a `p` binding is a scalar, or — for a SHAPED parameter —
     # INLINE ARRAY DATA (a row-major nested array supplying the whole column).
@@ -1366,6 +1446,14 @@ function esm_problem(input, tspan;
         f! = _xla_problem_rhs(f!, var_map, u0_built, p_built,
                               insp.compiler_report)
     end
+    # What `rhs_program` rebuilds its seed from, on its first call: the
+    # caller's own inputs, not the flattened system or the merged arrays, so a
+    # Problem no program is made from keeps nothing extra alive.
+    insp.program_seed = _ProgramSeedRecipe(authored_input, pushdown_rewrite, metaparams,
+        String(base_path), supplied, model_name === nothing ? nothing : String(model_name),
+        compiler, overrides, const_arrays, providers,
+        Set{String}(keys(discovered)), Set{String}(keys(pd_gates)), pd_coupling,
+        gated_providers, t_sample, Ref{Any}(nothing), ReentrantLock())
 
     # ---- initial state: the document's own ICs, then the caller's -----------
     # Under the build's plan: a `seed_ic!` hook (`seed_expression_ic!`) is an

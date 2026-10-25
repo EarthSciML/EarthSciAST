@@ -653,9 +653,76 @@ pub(crate) struct TapeBuilder<'m> {
     /// when the rule lowers ([`Self::flush_rule_fault`]).
     rule_fault_sec: Cadence,
 
+    // Range restriction (API_SPEC §5.8) ----------------------------------------
+    /// Set for a tile build: the domain of every state axis and the need box
+    /// of every observed the tile keeps. `None` for every whole-domain build,
+    /// which this field then leaves byte-identical.
+    tile: Option<&'m TileLowering>,
+    /// The observed slots a tile build materialized over their need box, with
+    /// each axis's global extent: a read inside the extent but outside the
+    /// slot is a build error, never the zero ghost.
+    tile_slots: FxHashMap<SlotId, Vec<TileAxisDom>>,
+    /// The slot and extent of the observed being lowered, committed to
+    /// `tile_slots` when its rule lowers.
+    tile_pending: Option<(SlotId, Vec<TileAxisDom>)>,
+    /// Set while a classified tile read emits its instruction.
+    tile_read_ok: bool,
+    /// The first read of a range-restricted source through a path that does
+    /// not classify its positions: the rule declines with it.
+    tile_violation: Option<String>,
+
     // Diagnostics ------------------------------------------------------------
     vn_scope_hits: usize,
     vn_hoist_hits: usize,
+}
+
+/// What a tile build knows beyond the compiled rules (API_SPEC §5.8): each
+/// state variable's per-axis domain, in `var_shapes` order (its slot box is
+/// its storage box), and how each kept array observed is computed.
+pub(crate) struct TileLowering {
+    pub(crate) states: Vec<Vec<TileAxisDom>>,
+    pub(crate) observed: FxHashMap<String, TileObserved>,
+}
+
+/// An array observed of a tile build, materialized over its need: a slot
+/// over `lo..=hi` per axis, filled piece by piece (zero elsewhere). Along an
+/// axis whose need crosses a periodic seam the slot is unwrapped: it runs
+/// past the period, and the cells past it hold the cells after the seam.
+pub(crate) struct TileObserved {
+    pub(crate) lo: DimI,
+    pub(crate) hi: DimI,
+    /// Per axis, the period a read wraps by to reach the slot's unwrapped
+    /// cells (`None` where the slot is not unwrapped).
+    pub(crate) period: SmallVec<[Option<i64>; 4]>,
+    pub(crate) pieces: Vec<TilePiece>,
+}
+
+/// One box of an observed's own cells: the global `ranges` it computes, with
+/// `body` (the rule's body restricted to them), placed at the 0-based
+/// `dest_lo` of the slot.
+pub(crate) struct TilePiece {
+    pub(crate) ranges: Vec<(i64, i64)>,
+    pub(crate) dest_lo: Vec<usize>,
+    pub(crate) body: std::rc::Rc<Expr>,
+}
+
+/// One axis of a range-restricted source: the global domain `lo..=hi` its
+/// reads are classified against, the period of a periodic axis, and the
+/// index-set name a diagnostic reports.
+#[derive(Clone, Debug)]
+pub(crate) struct TileAxisDom {
+    pub(crate) lo: i64,
+    pub(crate) hi: i64,
+    pub(crate) period: Option<i64>,
+    pub(crate) set: String,
+}
+
+/// Where one tile read resolves (RFC U3 §4 rule 2).
+enum TileHit {
+    /// Outside the global domain: the zero ghost, as the whole-domain program.
+    Ghost,
+    /// The 0-based position in the source's slot box.
+    At(i64),
 }
 
 /// A slot's build-time value (see `TapeBuilder::known`).
@@ -836,6 +903,11 @@ impl<'m> TapeBuilder<'m> {
             lazy_fault_notes: 0,
             fault_floor: Cadence::Const,
             rule_fault_sec: Cadence::Const,
+            tile: None,
+            tile_slots: FxHashMap::default(),
+            tile_pending: None,
+            tile_read_ok: false,
+            tile_violation: None,
             vn_scope_hits: 0,
             vn_hoist_hits: 0,
         }
@@ -1036,6 +1108,9 @@ impl<'m> TapeBuilder<'m> {
                 let sv = &self.state_vars[*ix as usize];
                 if sv.shape.is_empty() {
                     None
+                } else if self.tile.is_some() {
+                    // A tile's state is its storage box, at its global origin.
+                    Some((sv.shape.clone(), sv.origin.clone()))
                 } else {
                     Some((sv.shape.clone(), DimI::from_elem(1, sv.shape.len())))
                 }
@@ -1061,11 +1136,336 @@ impl<'m> TapeBuilder<'m> {
         }
     }
 
-    fn src_of(&self, lv: &LV) -> SrcRef {
+    fn src_of(&mut self, lv: &LV) -> SrcRef {
+        if self.tile.is_some()
+            && !self.tile_read_ok
+            && self.tile_violation.is_none()
+            && let Some((name, _)) = self.tile_source(lv)
+        {
+            self.tile_violation = Some(format!(
+                "tile restriction: `{name}` is read whole or through a computed subscript, \
+                 which a range-restricted program cannot classify against its storage box"
+            ));
+        }
         match lv {
             LV::Arr(s) => SrcRef::Slot(*s),
             LV::State(ix) => SrcRef::State(*ix),
             _ => unreachable!("src_of called on a scalar LV"),
+        }
+    }
+
+    /// The name and per-axis domain of a range-restricted source: a state of
+    /// a tile build, or an observed it materialized over its need box. `None`
+    /// for every other value, and always outside a tile build.
+    fn tile_source(&self, lv: &LV) -> Option<(String, Vec<TileAxisDom>)> {
+        let tile = self.tile?;
+        match lv {
+            LV::State(ix) => {
+                let axes = tile.states.get(*ix as usize)?;
+                (!axes.is_empty())
+                    .then(|| (self.state_vars[*ix as usize].name.clone(), axes.clone()))
+            }
+            LV::Arr(slot) => {
+                let axes = self.tile_slots.get(slot)?;
+                let name = self
+                    .obs_defined
+                    .iter()
+                    .find(|(_, v)| matches!(v, ObsVal::Taped(LV::Arr(s)) if s == slot))
+                    .map(|(n, _)| n.clone())
+                    .unwrap_or_else(|| format!("slot {slot}"));
+                Some((name, axes.clone()))
+            }
+            _ => None,
+        }
+    }
+
+    /// Resolve one read of a range-restricted source at global subscript `g`
+    /// along an axis whose slot box starts at `box_lo` and spans `box_len`
+    /// cells (RFC U3 §4 rule 2): outside the global domain it is the zero
+    /// ghost the whole-domain program reads there; inside the slot box it is
+    /// that cell; on a periodic axis `g ± N` inside the slot box is that
+    /// cell. `None` when the cell is in the domain and nowhere in the box.
+    fn tile_resolve(dom: &TileAxisDom, box_lo: i64, box_len: i64, g: i64) -> Option<TileHit> {
+        if g < dom.lo || g > dom.hi {
+            return Some(TileHit::Ghost);
+        }
+        let inside = |x: i64| x >= box_lo && x < box_lo + box_len;
+        if inside(g) {
+            return Some(TileHit::At(g - box_lo));
+        }
+        if let Some(n) = dom.period {
+            for x in [g - n, g + n] {
+                if inside(x) {
+                    return Some(TileHit::At(x - box_lo));
+                }
+            }
+        }
+        None
+    }
+
+    /// The `range_halo_insufficient` refusal of a read of `name` along `dom`
+    /// at the in-domain cells `missing`, which the box `box_lo..box_lo+len`
+    /// does not hold.
+    fn tile_halo_bail<T>(
+        &self,
+        name: &str,
+        dom: &TileAxisDom,
+        missing: &[i64],
+        box_lo: i64,
+        box_len: i64,
+    ) -> LResult<T> {
+        let lo = missing.iter().copied().min().unwrap_or(0);
+        let hi = missing.iter().copied().max().unwrap_or(0);
+        let rule = self
+            .rules
+            .get(self.cur_rule as usize)
+            .map(|r| r.name.as_str())
+            .unwrap_or("?");
+        bail_tape!(
+            "{}: rule `{rule}` reads `{name}` along `{}` at cells {lo}..{hi}, which its \
+             storage box {box_lo}..{} does not hold",
+            crate::diagnostic::codes::RANGE_HALO_INSUFFICIENT,
+            dom.set,
+            box_lo + box_len - 1
+        )
+    }
+
+    /// `index(src, …)` of a range-restricted source with every subscript an
+    /// affine map of one output axis, a periodic wrap of one, or a constant:
+    /// each position is resolved by [`Self::tile_resolve`] and the runs that
+    /// read consecutive source cells become the gather's copy segments.
+    #[allow(clippy::too_many_arguments)]
+    fn lower_tile_gather(
+        &mut self,
+        bx: &LBox,
+        arg0: &LV,
+        name: &str,
+        axes: &[TileAxisDom],
+        src_shape: &[usize],
+        src_origin: &[i64],
+        mapped: &[Option<(usize, AxisIndex)>],
+        fixed_raw: &[(usize, i64)],
+    ) -> LResult<LV> {
+        let out_ndim = bx.shape.len();
+        let mut fixed: SmallVec<[(usize, i64); 4]> = SmallVec::new();
+        let mut any_ghost = false;
+        for &(d, g) in fixed_raw {
+            match Self::tile_resolve(&axes[d], src_origin[d], src_shape[d] as i64, g) {
+                Some(TileHit::Ghost) => {
+                    any_ghost = true;
+                    fixed.push((d, 0));
+                }
+                Some(TileHit::At(i0)) => fixed.push((d, i0)),
+                None => {
+                    return self.tile_halo_bail(
+                        name,
+                        &axes[d],
+                        &[g],
+                        src_origin[d],
+                        src_shape[d] as i64,
+                    );
+                }
+            }
+        }
+        let n_mapped = mapped.iter().filter(|m| m.is_some()).count();
+        let mut axis_segs: SmallVec<[SmallVec<[(usize, usize, usize); 2]>; 4]> = SmallVec::new();
+        for a in 0..out_ndim {
+            let Some((d, ax)) = &mapped[a] else {
+                let mut segs = SmallVec::new();
+                segs.push((0usize, bx.shape[a], 0usize));
+                axis_segs.push(segs);
+                continue;
+            };
+            let d = *d;
+            let mut segs: SmallVec<[(usize, usize, usize); 2]> = SmallVec::new();
+            let mut missing: Vec<i64> = Vec::new();
+            let mut run: Option<(usize, usize, i64)> = None; // (out start, len, src start)
+            for p in 0..bx.shape[a] {
+                let g = match ax {
+                    AxisIndex::Affine(k) => bx.lo[a] + p as i64 + k,
+                    AxisIndex::Wrap { k, period, lo } => {
+                        wrap_subscript(bx.lo[a], p as i64, (*k, *lo, *period))
+                    }
+                };
+                match Self::tile_resolve(&axes[d], src_origin[d], src_shape[d] as i64, g) {
+                    Some(TileHit::At(sp)) => match &mut run {
+                        Some((o, len, s0)) if *s0 + *len as i64 == sp && *o + *len == p => {
+                            *len += 1;
+                        }
+                        _ => {
+                            if let Some((o, len, s0)) = run.take() {
+                                segs.push((o, len, s0 as usize));
+                            }
+                            run = Some((p, 1, sp));
+                        }
+                    },
+                    Some(TileHit::Ghost) => {
+                        if let Some((o, len, s0)) = run.take() {
+                            segs.push((o, len, s0 as usize));
+                        }
+                    }
+                    None => missing.push(g),
+                }
+            }
+            if let Some((o, len, s0)) = run.take() {
+                segs.push((o, len, s0 as usize));
+            }
+            if !missing.is_empty() {
+                return self.tile_halo_bail(
+                    name,
+                    &axes[d],
+                    &missing,
+                    src_origin[d],
+                    src_shape[d] as i64,
+                );
+            }
+            if segs.is_empty() {
+                any_ghost = true;
+            }
+            axis_segs.push(segs);
+        }
+        if any_ghost {
+            return Ok(if n_mapped == 0 {
+                LV::Lit(0.0)
+            } else {
+                self.emit_zero_array(&bx.shape, &bx.lo)
+            });
+        }
+        self.tile_read_ok = true;
+        let v = if n_mapped == 0 {
+            self.emit_load_elem(arg0, &fixed)
+        } else {
+            let fixed_desc: SmallVec<[(usize, usize); 4]> =
+                fixed.iter().map(|&(d, i0)| (d, i0 as usize)).collect();
+            let mapped_flags: SmallVec<[bool; 4]> = mapped.iter().map(|m| m.is_some()).collect();
+            let mapped_src: SmallVec<[usize; 4]> = mapped
+                .iter()
+                .filter_map(|m| m.as_ref().map(|(d, _)| *d))
+                .collect();
+            self.emit_gather(
+                arg0,
+                fixed_desc,
+                &mapped_src,
+                mapped_flags,
+                axis_segs,
+                &bx.shape,
+                &bx.lo,
+            )
+        };
+        self.tile_read_ok = false;
+        Ok(v)
+    }
+
+    /// `index(src, …)` of a range-restricted source whose subscript along
+    /// source axis `data_d` is data (`u[i, nbr[i, k]]`). The read is exact
+    /// only when the slot holds that axis whole, exactly its global domain
+    /// (an axis the decomposition does not cut), so the data subscript means
+    /// what it means to the whole-domain program; along a cut axis it is
+    /// `range_global_locality`. Every other subscript is classified as
+    /// [`Self::lower_tile_gather`] classifies it, and must read one run of
+    /// stored cells.
+    #[allow(clippy::too_many_arguments)]
+    fn lower_tile_index_gather(
+        &mut self,
+        node: &Arc<ExpressionNode>,
+        bx: &LBox,
+        arg0: &LV,
+        name: &str,
+        axes: &[TileAxisDom],
+        src_shape: &[usize],
+        src_origin: &[i64],
+        data_d: usize,
+        mapped: &[Option<(usize, AxisIndex)>],
+        fixed_raw: &[(usize, i64)],
+    ) -> LResult<LV> {
+        let dom = &axes[data_d];
+        let whole = src_origin[data_d] == dom.lo && src_shape[data_d] as i64 == dom.hi - dom.lo + 1;
+        if !whole {
+            bail_tape!(
+                "{}: `{name}` is read at a computed subscript along the decomposed axis `{}`",
+                crate::diagnostic::codes::RANGE_GLOBAL_LOCALITY,
+                dom.set
+            );
+        }
+        if dom.lo != 1 {
+            bail_tape!(
+                "tile restriction: `{name}` is read at a computed subscript along `{}`, \
+                 whose domain does not start at 1",
+                dom.set
+            );
+        }
+        let mut gaxes: SmallVec<[GatherAxis; 4]> =
+            SmallVec::from_elem(GatherAxis::Fixed(0), src_shape.len());
+        gaxes[data_d] = GatherAxis::Data;
+        for &(d, g) in fixed_raw {
+            match Self::tile_resolve(&axes[d], src_origin[d], src_shape[d] as i64, g) {
+                // Out of the global domain: every element of the read is the
+                // zero ghost, as in the whole-domain program.
+                Some(TileHit::Ghost) => return Ok(self.emit_zero_array(&bx.shape, &bx.lo)),
+                Some(TileHit::At(i0)) => gaxes[d] = GatherAxis::Fixed(i0 as usize),
+                None => {
+                    return self.tile_halo_bail(
+                        name,
+                        &axes[d],
+                        &[g],
+                        src_origin[d],
+                        src_shape[d] as i64,
+                    );
+                }
+            }
+        }
+        for (a, m) in mapped.iter().enumerate() {
+            let Some((d, ax)) = m else { continue };
+            let d = *d;
+            let AxisIndex::Affine(k) = ax else {
+                bail_tape!(
+                    "tile restriction: `{name}` is read at a computed subscript together with a \
+                     periodic wrap along `{}`",
+                    axes[d].set
+                );
+            };
+            let mut off: Option<i64> = None;
+            let mut missing: Vec<i64> = Vec::new();
+            for p in 0..bx.shape[a] as i64 {
+                let g = bx.lo[a] + p + k;
+                match Self::tile_resolve(&axes[d], src_origin[d], src_shape[d] as i64, g) {
+                    Some(TileHit::At(sp)) => match off {
+                        None => off = Some(sp - p),
+                        Some(o) if o + p == sp => {}
+                        Some(_) => bail_tape!(
+                            "tile restriction: `{name}` is read at a computed subscript and \
+                             across a periodic seam along `{}`",
+                            axes[d].set
+                        ),
+                    },
+                    Some(TileHit::Ghost) => bail_tape!(
+                        "tile restriction: `{name}` is read at a computed subscript and past the \
+                         edge of the domain along `{}`",
+                        axes[d].set
+                    ),
+                    None => missing.push(g),
+                }
+            }
+            if !missing.is_empty() {
+                return self.tile_halo_bail(
+                    name,
+                    &axes[d],
+                    &missing,
+                    src_origin[d],
+                    src_shape[d] as i64,
+                );
+            }
+            gaxes[d] = GatherAxis::Affine {
+                axis: a as u8,
+                off: off.unwrap_or(0),
+            };
+        }
+        match self.emit_index_gather(node, bx, arg0, data_d, gaxes, src_shape.into())? {
+            Some(v) => Ok(v),
+            None => bail_tape!(
+                "tile restriction: `{name}`'s computed subscript is not evaluated over the \
+                 read's own box"
+            ),
         }
     }
 
@@ -2709,6 +3109,32 @@ impl<'m> TapeBuilder<'m> {
                 _ => return self.lower_data_gather(node, bx, &arg0),
             }
         }
+        if let Some((name, axes)) = self.tile_source(&arg0) {
+            if let Some(d) = data_axis {
+                return self.lower_tile_index_gather(
+                    node,
+                    bx,
+                    &arg0,
+                    &name,
+                    &axes,
+                    &src_shape,
+                    &src_origin,
+                    d,
+                    &mapped,
+                    &fixed_raw,
+                );
+            }
+            return self.lower_tile_gather(
+                bx,
+                &arg0,
+                &name,
+                &axes,
+                &src_shape,
+                &src_origin,
+                &mapped,
+                &fixed_raw,
+            );
+        }
         if const_base {
             return self.lower_const_gather(
                 node,
@@ -4056,6 +4482,22 @@ impl<'m> TapeBuilder<'m> {
             }
             axes[*d] = GatherAxis::Affine { axis: a as u8, off };
         }
+        self.emit_index_gather(node, bx, base, data_d, axes, src_shape)
+    }
+
+    /// The [`Instr::IndexGather`] of `base` (of extents `src_shape`) with the
+    /// per-axis plan `axes`, whose data axis `data_d` reads the subscript
+    /// `node.args[1 + data_d]` lowered over `bx`. `None` when that subscript's
+    /// box is not the output box.
+    fn emit_index_gather(
+        &mut self,
+        node: &Arc<ExpressionNode>,
+        bx: &LBox,
+        base: &LV,
+        data_d: usize,
+        axes: SmallVec<[GatherAxis; 4]>,
+        src_shape: DimU,
+    ) -> LResult<Option<LV>> {
         let sub = self.lower_expr(&node.args[1 + data_d], bx)?;
         if let Some((s, o)) = self.lv_box(&sub)
             && (s != bx.shape || o != bx.lo)
@@ -4071,8 +4513,13 @@ impl<'m> TapeBuilder<'m> {
             shape: bx.shape.clone(),
         });
         let out = self.new_slot(&bx.shape, &bx.lo, false, sec);
+        // A tile build reaches here only through `lower_tile_index_gather`,
+        // which has classified every position of the read.
+        let tile_ok = std::mem::replace(&mut self.tile_read_ok, self.tile.is_some());
+        let src = self.src_of(base);
+        self.tile_read_ok = tile_ok;
         let instr = Instr::IndexGather {
-            src: self.src_of(base),
+            src,
             idx: self.op_of(&sub),
             spec,
             out,
@@ -6498,6 +6945,9 @@ pub(super) fn build_tape_program(
     // Store the program axis-reversed where the state layout gains from it
     // (`super::layout`); off for the XLA emitter, which reads logical boxes.
     align_layout: bool,
+    // A tile build's state domains and observed need boxes (API_SPEC §5.8);
+    // `None` for the whole-domain program.
+    tile: Option<&TileLowering>,
 ) -> (Result<TapeProgram, DeclinedTape>, (usize, usize)) {
     let rhs_rules: &[RhsRule] = &compiled.rhs_rules;
     let observed_rules: &[AlgebraicRule] = &compiled.observed_rules;
@@ -6527,6 +6977,7 @@ pub(super) fn build_tape_program(
     );
     b.inline_params = Some(&compiled.inline_param_arrays);
     b.observed_rules = observed_rules;
+    b.tile = tile;
     b.baked_params = baked_join_key_params(compiled);
 
     // ---- observed rules, in dependency order -------------------------------
@@ -6545,9 +6996,14 @@ pub(super) fn build_tape_program(
             .then(|| crate::precision::enter(crate::precision::of_variable(&name)));
         let lowered = b
             .lower_observed_rule(rule)
-            .and_then(|v| b.flush_rule_fault().map(|()| v));
+            .and_then(|v| b.flush_rule_fault().map(|()| v))
+            .and_then(|v| b.take_tile_violation().map(|()| v));
+        let pending = b.tile_pending.take();
         match lowered {
             Ok(obs_val) => {
+                if let Some((slot, axes)) = pending {
+                    b.tile_slots.insert(slot, axes);
+                }
                 b.obs_defined.insert(name, obs_val);
             }
             Err(bail) => {
@@ -6582,7 +7038,11 @@ pub(super) fn build_tape_program(
             cadence: Cadence::Continuous,
         });
         let txn = b.txn();
-        match b.lower_rhs_rule(rule).and_then(|()| b.flush_rule_fault()) {
+        match b
+            .lower_rhs_rule(rule)
+            .and_then(|()| b.flush_rule_fault())
+            .and_then(|()| b.take_tile_violation())
+        {
             Ok(()) => {}
             Err(bail) => {
                 b.rollback(txn);
@@ -6887,6 +7347,110 @@ impl<'m> TapeBuilder<'m> {
     }
 
     /// Lower one observed rule; returns the recorded observed value.
+    /// The rule's first unclassified read of a range-restricted source, as
+    /// its decline.
+    fn take_tile_violation(&mut self) -> LResult<()> {
+        match self.tile_violation.take() {
+            Some(reason) => Err(Bail { reason }),
+            None => Ok(()),
+        }
+    }
+
+    /// A tile build's array observed: evaluated over its declared ranges
+    /// clipped to its need box `lo..=hi` (RFC U3 §4 rule 3), in a slot over
+    /// the need box itself with the cells below the declared ranges zero, as
+    /// the whole-domain program's padded box holds them.
+    fn lower_tile_observed(
+        &mut self,
+        var: &str,
+        output_idx_names: &[String],
+        output_ranges: &[(i64, i64)],
+        need: &TileObserved,
+    ) -> LResult<ObsVal> {
+        let nd = output_ranges.len();
+        if need.lo.len() != nd || need.hi.len() != nd || need.period.len() != nd {
+            bail_tape!("tile restriction: observed `{var}`: need box rank != output rank");
+        }
+        let shape: Vec<usize> = (0..nd)
+            .map(|d| (need.hi[d] - need.lo[d] + 1).max(0) as usize)
+            .collect();
+        if shape.contains(&0) {
+            bail_tape!("tile restriction: observed `{var}`: empty need box");
+        }
+        let axes: Vec<TileAxisDom> = (0..nd)
+            .map(|d| TileAxisDom {
+                lo: 1,
+                hi: output_ranges[d].1,
+                period: need.period[d],
+                set: output_idx_names[d].clone(),
+            })
+            .collect();
+        let origin: DimI = need.lo.clone();
+        let whole = |p: &TilePiece| {
+            (0..nd).all(|d| {
+                p.dest_lo[d] == 0 && (p.ranges[d].1 - p.ranges[d].0 + 1) as usize == shape[d]
+            })
+        };
+        let out = match need.pieces.as_slice() {
+            [] => self.emit_zero_array(&shape, &origin),
+            [p] if whole(p) => self.lower_faq(
+                output_idx_names,
+                &p.ranges,
+                &p.body,
+                &[],
+                &[],
+                ReduceKind::Sum,
+                None,
+            )?,
+            pieces => {
+                let mut acc = self.emit_zero_array(&shape, &origin);
+                for p in pieces {
+                    let v = self.lower_faq(
+                        output_idx_names,
+                        &p.ranges,
+                        &p.body,
+                        &[],
+                        &[],
+                        ReduceKind::Sum,
+                        None,
+                    )?;
+                    let region_ix = self.regions.len() as u32;
+                    self.regions.push(RegionSpec {
+                        dest_lo: p.dest_lo.iter().copied().collect(),
+                        shape: p
+                            .ranges
+                            .iter()
+                            .map(|(lo, hi)| (hi - lo + 1) as usize)
+                            .collect(),
+                    });
+                    let LV::Arr(base) = acc else {
+                        unreachable!("a zero fill is an array slot");
+                    };
+                    let src = self.ensure_slot(&v);
+                    let cad = self.lv_cadence(&v).max(self.lv_cadence(&acc));
+                    let sec = self.placement(cad);
+                    let out = self.new_slot(&shape, &origin, false, sec);
+                    self.emit(
+                        Instr::Region {
+                            base,
+                            src: Operand::Slot(src),
+                            region: region_ix,
+                            out,
+                        },
+                        sec,
+                    );
+                    acc = LV::Arr(out);
+                }
+                acc
+            }
+        };
+        let LV::Arr(slot) = out else {
+            bail_tape!("tile restriction: observed `{var}` did not lower to an array");
+        };
+        self.tile_pending = Some((slot, axes));
+        Ok(ObsVal::Taped(out))
+    }
+
     fn lower_observed_rule(&mut self, rule: &AlgebraicRule) -> LResult<ObsVal> {
         match rule {
             // CONFORMANCE_SPEC §5.19.2: a recurrence's cells are not
@@ -6901,6 +7465,15 @@ impl<'m> TapeBuilder<'m> {
                 axis,
                 ..
             } => self.lower_recurrence(var, output_idx_names, output_ranges, body, *axis),
+            AlgebraicRule::ArrayLoop {
+                var,
+                output_idx_names,
+                output_ranges,
+                ..
+            } if self.tile.is_some_and(|t| t.observed.contains_key(var)) => {
+                let tile = self.tile.expect("tile build");
+                self.lower_tile_observed(var, output_idx_names, output_ranges, &tile.observed[var])
+            }
             AlgebraicRule::ArrayLoop {
                 output_idx_names,
                 output_ranges,

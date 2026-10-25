@@ -146,6 +146,7 @@ include("data_output.jl")
 # emitter's `DirectEmitError`, and before simulate.jl, which dispatches on it.
 include("compiler_xla.jl")
 include("simulate.jl")
+include("range_restricted.jl")
 # Names that have left the public surface, kept for one minor version.
 include("deprecated.jl")
 include("reference_graph.jl")
@@ -228,6 +229,9 @@ export
     infer_array_shapes,
     # Per-term provenance (esm-libraries-spec §4.7.5, issue #539)
     TermOrigin, Contribution, equation_contributions,
+    # Range-restricted right-hand sides (API_SPEC §5.8, issue #540)
+    rhs_program, select, halo, restrict, lanes, tile_layout, lane_layout,
+    rhs_workspace, rhs!, lane_inputs, gather_lane_inputs!, Decomposition,
     # Flatten error taxonomy (spec §4.7.6.10, 8 types for cross-language parity)
     ConflictingDerivativeError, DimensionPromotionError, UnmappedDomainError,
     UnsupportedMappingError, DomainUnitMismatchError,

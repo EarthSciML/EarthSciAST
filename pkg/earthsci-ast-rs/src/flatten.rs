@@ -714,7 +714,7 @@ fn none_lifted(flags: &[bool]) -> bool {
 
 /// The `faq` the pointwise lift wrapped around `rhs`, when `lifted` says it
 /// did (esm-libraries-spec §4.7.5: `body(eq)` is that `faq`'s body).
-fn lift_wrapper(rhs: &Expr, lifted: bool) -> Option<&ExpressionNode> {
+pub(crate) fn lift_wrapper(rhs: &Expr, lifted: bool) -> Option<&ExpressionNode> {
     match rhs {
         Expr::Operator(node) if lifted => Some(node),
         _ => None,
@@ -722,7 +722,7 @@ fn lift_wrapper(rhs: &Expr, lifted: bool) -> Option<&ExpressionNode> {
 }
 
 /// `body`, re-wrapped in the lift's `faq` when the equation carried one.
-fn rebuild_body(wrapper: Option<ExpressionNode>, body: Expr) -> Expr {
+pub(crate) fn rebuild_body(wrapper: Option<ExpressionNode>, body: Expr) -> Expr {
     match wrapper {
         Some(mut node) => {
             node.expr = Some(Box::new(body));
@@ -735,7 +735,7 @@ fn rebuild_body(wrapper: Option<ExpressionNode>, body: Expr) -> Expr {
 /// The right-hand side a contribution list stands for: the LEFT fold of the
 /// contribution expressions under binary `+` (esm-libraries-spec §4.7.5, the
 /// provenance invariant).
-fn fold_contributions(contributions: &[Contribution]) -> Expr {
+pub(crate) fn fold_contributions(contributions: &[Contribution]) -> Expr {
     let mut iter = contributions.iter();
     let Some(first) = iter.next() else {
         return zero();

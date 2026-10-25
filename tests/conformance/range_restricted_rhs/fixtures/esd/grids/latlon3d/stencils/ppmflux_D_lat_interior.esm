@@ -1,0 +1,482 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "ppmflux_D_lat_interior",
+    "description": "INTERIOR rows (j = 4 .. NLAT-3) of the UPWIND-BIASED, MONOTONE, conservative flux-form MERIDIONAL advection operator D(V*q, wrt: lat) on the latlon3d sphere. Each face flux is supplied by ./ppmflux_lev_face_flux -- the CW84 eq (1.6)/(1.8)/(1.10) LIMITED parabola endpoints of the two rows straddling the face, with the donor selected by the SIGN of the face velocity: F = max(v,0)*aR_S + min(v,0)*aL_N. GEOMETRY AND THE POLAR CONVENTION, inherited unchanged from the donor-cell meridional operator ./upwind1_D_lat_flux_interior, whose face flux is the ONLY thing this family replaces: D[i,j,k] = ( F_{j+1} coslat_e[j+1] - F_j coslat_e[j] ) / dS_lat[j], the discrete spherical meridional flux divergence (1/(a cos phi)) d/dphi ( cos(phi) v q ). FACE j IS THE SOUTHERN EDGE OF CELL j, so cell j is bounded by face j to the south and face j+1 to the north. THREE FREE NAMES are read from the consuming model's scope -- the same contract by which the vertical flux stencils read dz: coslat_e (shape [lat_nodes], the face-LENGTH weight cos(phi_e), = the grid's coslat_edge applied to the consumer's phie), dS_lat (shape [lat], the EXACT spherical cell-AREA weight sin(phi_e[j+1]) - sin(phi_e[j]), = the grid's latcell_area), and -- NEW IN THIS FAMILY, and the reason the reconstruction must be nonuniform-aware -- dphi_lat (shape [lat], the cell WIDTH IN RADIANS phi_e[j+1] - phi_e[j], = the grid's latcell_dphi). The two HALF-POLAR CAP cells are half as wide as every interior row, so the latitude axis is genuinely NONUNIFORM and the six-independent-width signature of the face atom -- built for the STRETCHED VERTICAL -- is exactly what lands the scheme here. The meridional wind V is declared over [lon, lat_nodes, lev]: fully three-dimensional, face-staggered, POSITIVE NORTHWARD. THE FACE ATOM IS REUSED, NOT CLONED. ./ppmflux_lev_face_flux says `lev` in its name but its body is pure scalar algebra over six cell values, six cell widths and one face velocity -- it carries no axis knowledge whatever -- exactly like ./upwind_lev_face_flux, which the donor-cell lon and lat rules already reuse. This stencil imports it and supplies latitude quantities. WHY THE SUPPORT IS SEVEN ROWS (j-3 .. j+3). A cell's CW84 eq-(1.10)-limited endpoints need its own 5-cell window. The face at j+1/2 needs the limited NORTHERN endpoint of cell j (rows j-2..j+2) AND the limited SOUTHERN endpoint of cell j+1 (rows j-1..j+3), so a single face reaches over six rows; the divergence differences two faces and so reaches over seven. That extra row of reach is the price of being able to donate from EITHER side, which a meridional wind that reverses sign requires. The interior is consequently [4, NLAT-3] and there are SIX polar slabs, three per cap. Requires NLAT >= 7 for a non-empty interior. CRITICAL -- EXACT TELESCOPING. Every interface flux shared with a neighbouring row is built here from the SAME face template applied to the SAME cells, the SAME widths and the SAME face velocity as the neighbour uses, so the two rows evaluate a BIT-IDENTICAL float for it and the weighted flux divergence telescopes exactly: sum_j dS_lat[j] D[i,j,k] retains only the two pole-wall terms, which are ABSENT, so meridional transport conserves tracer mass to machine precision for ANY q and ANY V. The budget closes in floating point, not merely in exact arithmetic. ",
+    "license": "MIT",
+    "tags": [
+      "esd:stencil",
+      "family:finite_volume",
+      "grid:latlon3d",
+      "op:advection",
+      "axes:lon,lat,lev",
+      "order:2",
+      "scheme:upwind",
+      "stencil_width:7",
+      "bc:no-flux"
+    ],
+    "references": [
+      {
+        "citation": "Colella, P., & Woodward, P. R. (1984). The Piecewise Parabolic Method (PPM) for gas-dynamical simulations. Journal of Computational Physics, 54(1), 174-201.",
+        "doi": "10.1016/0021-9991(84)90143-8"
+      },
+      {
+        "citation": "Lin, S.-J., & Rood, R. B. (1996). Multidimensional flux-form semi-Lagrangian transport schemes. Monthly Weather Review, 124(9), 2046-2070.",
+        "doi": "10.1175/1520-0493(1996)124<2046:MFFSLT>2.0.CO;2"
+      },
+      {
+        "citation": "LeVeque, R. J. (2002). Finite Volume Methods for Hyperbolic Problems. Cambridge University Press. Section 4.1 (the donor-cell upwind flux; the upwind selection is the same whatever sub-grid reconstruction supplies the two one-sided face values)."
+      },
+      {
+        "citation": "Colella, P., & Sekora, M. D. (2008). A limiter for PPM that preserves accuracy at smooth extrema. Journal of Computational Physics, 227(15), 7069-7076.",
+        "doi": "10.1016/j.jcp.2008.03.034"
+      },
+      {
+        "citation": "Jacobson, M. Z. (2005). Fundamentals of Atmospheric Modeling (2nd ed.). Cambridge University Press. Chapter 6 (finite-volume flux-form tracer transport; consistency with continuity)."
+      }
+    ]
+  },
+  "expression_template_imports": [
+    {
+      "ref": "../grid.esm"
+    },
+    {
+      "ref": "./ppmflux_lev_face_flux.esm"
+    }
+  ],
+  "expression_templates": {
+    "ppmflux_D_lat_interior": {
+      "params": [
+        "q",
+        "V"
+      ],
+      "body": {
+        "op": "faq",
+        "output_idx": [
+          "i",
+          "j",
+          "k"
+        ],
+        "args": [
+          "q",
+          "V"
+        ],
+        "ranges": {
+          "i": {
+            "from": "lon"
+          },
+          "j": [
+            4,
+            {
+              "op": "-",
+              "args": [
+                "NLAT",
+                3
+              ]
+            }
+          ],
+          "k": {
+            "from": "lev"
+          }
+        },
+        "expr": {
+          "op": "/",
+          "args": [
+            {
+              "op": "-",
+              "args": [
+                {
+                  "op": "*",
+                  "args": [
+                    {
+                      "op": "apply_expression_template",
+                      "args": [],
+                      "name": "ppmflux_lev_face_flux",
+                      "bindings": {
+                        "aL2": {
+                          "op": "index",
+                          "args": [
+                            "q",
+                            "i",
+                            {
+                              "op": "-",
+                              "args": [
+                                "j",
+                                2
+                              ]
+                            },
+                            "k"
+                          ]
+                        },
+                        "aL1": {
+                          "op": "index",
+                          "args": [
+                            "q",
+                            "i",
+                            {
+                              "op": "-",
+                              "args": [
+                                "j",
+                                1
+                              ]
+                            },
+                            "k"
+                          ]
+                        },
+                        "aC": {
+                          "op": "index",
+                          "args": [
+                            "q",
+                            "i",
+                            "j",
+                            "k"
+                          ]
+                        },
+                        "aRc": {
+                          "op": "index",
+                          "args": [
+                            "q",
+                            "i",
+                            {
+                              "op": "+",
+                              "args": [
+                                "j",
+                                1
+                              ]
+                            },
+                            "k"
+                          ]
+                        },
+                        "aR1": {
+                          "op": "index",
+                          "args": [
+                            "q",
+                            "i",
+                            {
+                              "op": "+",
+                              "args": [
+                                "j",
+                                2
+                              ]
+                            },
+                            "k"
+                          ]
+                        },
+                        "aR2": {
+                          "op": "index",
+                          "args": [
+                            "q",
+                            "i",
+                            {
+                              "op": "+",
+                              "args": [
+                                "j",
+                                3
+                              ]
+                            },
+                            "k"
+                          ]
+                        },
+                        "dL2": {
+                          "op": "index",
+                          "args": [
+                            "dphi_lat",
+                            {
+                              "op": "-",
+                              "args": [
+                                "j",
+                                2
+                              ]
+                            }
+                          ]
+                        },
+                        "dL1": {
+                          "op": "index",
+                          "args": [
+                            "dphi_lat",
+                            {
+                              "op": "-",
+                              "args": [
+                                "j",
+                                1
+                              ]
+                            }
+                          ]
+                        },
+                        "dC": {
+                          "op": "index",
+                          "args": [
+                            "dphi_lat",
+                            "j"
+                          ]
+                        },
+                        "dRc": {
+                          "op": "index",
+                          "args": [
+                            "dphi_lat",
+                            {
+                              "op": "+",
+                              "args": [
+                                "j",
+                                1
+                              ]
+                            }
+                          ]
+                        },
+                        "dR1": {
+                          "op": "index",
+                          "args": [
+                            "dphi_lat",
+                            {
+                              "op": "+",
+                              "args": [
+                                "j",
+                                2
+                              ]
+                            }
+                          ]
+                        },
+                        "dR2": {
+                          "op": "index",
+                          "args": [
+                            "dphi_lat",
+                            {
+                              "op": "+",
+                              "args": [
+                                "j",
+                                3
+                              ]
+                            }
+                          ]
+                        },
+                        "w": {
+                          "op": "index",
+                          "args": [
+                            "V",
+                            "i",
+                            {
+                              "op": "+",
+                              "args": [
+                                "j",
+                                1
+                              ]
+                            },
+                            "k"
+                          ]
+                        }
+                      }
+                    },
+                    {
+                      "op": "index",
+                      "args": [
+                        "coslat_e",
+                        {
+                          "op": "+",
+                          "args": [
+                            "j",
+                            1
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    {
+                      "op": "apply_expression_template",
+                      "args": [],
+                      "name": "ppmflux_lev_face_flux",
+                      "bindings": {
+                        "aL2": {
+                          "op": "index",
+                          "args": [
+                            "q",
+                            "i",
+                            {
+                              "op": "-",
+                              "args": [
+                                "j",
+                                3
+                              ]
+                            },
+                            "k"
+                          ]
+                        },
+                        "aL1": {
+                          "op": "index",
+                          "args": [
+                            "q",
+                            "i",
+                            {
+                              "op": "-",
+                              "args": [
+                                "j",
+                                2
+                              ]
+                            },
+                            "k"
+                          ]
+                        },
+                        "aC": {
+                          "op": "index",
+                          "args": [
+                            "q",
+                            "i",
+                            {
+                              "op": "-",
+                              "args": [
+                                "j",
+                                1
+                              ]
+                            },
+                            "k"
+                          ]
+                        },
+                        "aRc": {
+                          "op": "index",
+                          "args": [
+                            "q",
+                            "i",
+                            "j",
+                            "k"
+                          ]
+                        },
+                        "aR1": {
+                          "op": "index",
+                          "args": [
+                            "q",
+                            "i",
+                            {
+                              "op": "+",
+                              "args": [
+                                "j",
+                                1
+                              ]
+                            },
+                            "k"
+                          ]
+                        },
+                        "aR2": {
+                          "op": "index",
+                          "args": [
+                            "q",
+                            "i",
+                            {
+                              "op": "+",
+                              "args": [
+                                "j",
+                                2
+                              ]
+                            },
+                            "k"
+                          ]
+                        },
+                        "dL2": {
+                          "op": "index",
+                          "args": [
+                            "dphi_lat",
+                            {
+                              "op": "-",
+                              "args": [
+                                "j",
+                                3
+                              ]
+                            }
+                          ]
+                        },
+                        "dL1": {
+                          "op": "index",
+                          "args": [
+                            "dphi_lat",
+                            {
+                              "op": "-",
+                              "args": [
+                                "j",
+                                2
+                              ]
+                            }
+                          ]
+                        },
+                        "dC": {
+                          "op": "index",
+                          "args": [
+                            "dphi_lat",
+                            {
+                              "op": "-",
+                              "args": [
+                                "j",
+                                1
+                              ]
+                            }
+                          ]
+                        },
+                        "dRc": {
+                          "op": "index",
+                          "args": [
+                            "dphi_lat",
+                            "j"
+                          ]
+                        },
+                        "dR1": {
+                          "op": "index",
+                          "args": [
+                            "dphi_lat",
+                            {
+                              "op": "+",
+                              "args": [
+                                "j",
+                                1
+                              ]
+                            }
+                          ]
+                        },
+                        "dR2": {
+                          "op": "index",
+                          "args": [
+                            "dphi_lat",
+                            {
+                              "op": "+",
+                              "args": [
+                                "j",
+                                2
+                              ]
+                            }
+                          ]
+                        },
+                        "w": {
+                          "op": "index",
+                          "args": [
+                            "V",
+                            "i",
+                            "j",
+                            "k"
+                          ]
+                        }
+                      }
+                    },
+                    {
+                      "op": "index",
+                      "args": [
+                        "coslat_e",
+                        "j"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "op": "index",
+              "args": [
+                "dS_lat",
+                "j"
+              ]
+            }
+          ]
+        }
+      }
+    }
+  }
+}

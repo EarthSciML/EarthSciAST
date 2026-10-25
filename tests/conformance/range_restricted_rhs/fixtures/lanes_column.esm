@@ -1,0 +1,556 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "lanes_column",
+    "description": "A column operator on a 5 x 4 x 6 grid: vertical mixing and settling of c along lev with a surface region (k = 1) carrying a source scaled by the cosine of an index-derived latitude, and a top region (k = 6); d is fed pointwise by c. Every read stays in its own column, so the operator's locality is column.",
+    "authors": [
+      "EarthSciAST test suite"
+    ],
+    "created": "2026-10-24T00:00:00Z",
+    "tags": [
+      "conformance",
+      "range_restricted_rhs"
+    ]
+  },
+  "index_sets": {
+    "lon": {
+      "kind": "interval",
+      "size": 5
+    },
+    "lat": {
+      "kind": "interval",
+      "size": 4
+    },
+    "lev": {
+      "kind": "interval",
+      "size": 6
+    }
+  },
+  "models": {
+    "Column": {
+      "variables": {
+        "c": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lon",
+            "lat",
+            "lev"
+          ],
+          "default": 1.0
+        },
+        "d": {
+          "type": "unknown",
+          "units": "1",
+          "shape": [
+            "lon",
+            "lat",
+            "lev"
+          ],
+          "default": 1.0
+        },
+        "Kz": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.3
+        },
+        "ws": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.05
+        },
+        "emis": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.01
+        },
+        "lat0_deg": {
+          "type": "parameter",
+          "units": "deg",
+          "default": 30.0
+        },
+        "dlat_deg": {
+          "type": "parameter",
+          "units": "deg",
+          "default": 2.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i",
+              "j",
+              "k"
+            ],
+            "ranges": {
+              "i": {
+                "from": "lon"
+              },
+              "j": {
+                "from": "lat"
+              },
+              "k": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "c",
+                    "i",
+                    "j",
+                    "k"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i",
+              "j",
+              "k"
+            ],
+            "ranges": {
+              "i": {
+                "from": "lon"
+              },
+              "j": {
+                "from": "lat"
+              },
+              "k": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                {
+                  "op": "makearray",
+                  "args": [],
+                  "regions": [
+                    [
+                      [
+                        1,
+                        5
+                      ],
+                      [
+                        1,
+                        4
+                      ],
+                      [
+                        2,
+                        5
+                      ]
+                    ],
+                    [
+                      [
+                        1,
+                        5
+                      ],
+                      [
+                        1,
+                        4
+                      ],
+                      [
+                        1,
+                        1
+                      ]
+                    ],
+                    [
+                      [
+                        1,
+                        5
+                      ],
+                      [
+                        1,
+                        4
+                      ],
+                      [
+                        6,
+                        6
+                      ]
+                    ]
+                  ],
+                  "values": [
+                    {
+                      "op": "+",
+                      "args": [
+                        {
+                          "op": "*",
+                          "args": [
+                            "Kz",
+                            {
+                              "op": "+",
+                              "args": [
+                                {
+                                  "op": "index",
+                                  "args": [
+                                    "c",
+                                    "i",
+                                    "j",
+                                    {
+                                      "op": "-",
+                                      "args": [
+                                        "k",
+                                        1
+                                      ]
+                                    }
+                                  ]
+                                },
+                                {
+                                  "op": "*",
+                                  "args": [
+                                    -2,
+                                    {
+                                      "op": "index",
+                                      "args": [
+                                        "c",
+                                        "i",
+                                        "j",
+                                        "k"
+                                      ]
+                                    }
+                                  ]
+                                },
+                                {
+                                  "op": "index",
+                                  "args": [
+                                    "c",
+                                    "i",
+                                    "j",
+                                    {
+                                      "op": "+",
+                                      "args": [
+                                        "k",
+                                        1
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "op": "*",
+                          "args": [
+                            "ws",
+                            {
+                              "op": "-",
+                              "args": [
+                                {
+                                  "op": "index",
+                                  "args": [
+                                    "c",
+                                    "i",
+                                    "j",
+                                    {
+                                      "op": "+",
+                                      "args": [
+                                        "k",
+                                        1
+                                      ]
+                                    }
+                                  ]
+                                },
+                                {
+                                  "op": "index",
+                                  "args": [
+                                    "c",
+                                    "i",
+                                    "j",
+                                    "k"
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "op": "+",
+                      "args": [
+                        {
+                          "op": "*",
+                          "args": [
+                            "Kz",
+                            {
+                              "op": "-",
+                              "args": [
+                                {
+                                  "op": "index",
+                                  "args": [
+                                    "c",
+                                    "i",
+                                    "j",
+                                    {
+                                      "op": "+",
+                                      "args": [
+                                        "k",
+                                        1
+                                      ]
+                                    }
+                                  ]
+                                },
+                                {
+                                  "op": "index",
+                                  "args": [
+                                    "c",
+                                    "i",
+                                    "j",
+                                    "k"
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "op": "*",
+                          "args": [
+                            "ws",
+                            {
+                              "op": "-",
+                              "args": [
+                                {
+                                  "op": "index",
+                                  "args": [
+                                    "c",
+                                    "i",
+                                    "j",
+                                    {
+                                      "op": "+",
+                                      "args": [
+                                        "k",
+                                        1
+                                      ]
+                                    }
+                                  ]
+                                },
+                                {
+                                  "op": "index",
+                                  "args": [
+                                    "c",
+                                    "i",
+                                    "j",
+                                    "k"
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "op": "*",
+                          "args": [
+                            "emis",
+                            {
+                              "op": "cos",
+                              "args": [
+                                {
+                                  "op": "*",
+                                  "args": [
+                                    0.017453292519943295,
+                                    {
+                                      "op": "+",
+                                      "args": [
+                                        "lat0_deg",
+                                        {
+                                          "op": "*",
+                                          "args": [
+                                            {
+                                              "op": "-",
+                                              "args": [
+                                                "j",
+                                                0.5
+                                              ]
+                                            },
+                                            "dlat_deg"
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "op": "+",
+                      "args": [
+                        {
+                          "op": "*",
+                          "args": [
+                            "Kz",
+                            {
+                              "op": "-",
+                              "args": [
+                                {
+                                  "op": "index",
+                                  "args": [
+                                    "c",
+                                    "i",
+                                    "j",
+                                    {
+                                      "op": "-",
+                                      "args": [
+                                        "k",
+                                        1
+                                      ]
+                                    }
+                                  ]
+                                },
+                                {
+                                  "op": "index",
+                                  "args": [
+                                    "c",
+                                    "i",
+                                    "j",
+                                    "k"
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "op": "*",
+                          "args": [
+                            {
+                              "op": "-",
+                              "args": [
+                                "ws"
+                              ]
+                            },
+                            {
+                              "op": "index",
+                              "args": [
+                                "c",
+                                "i",
+                                "j",
+                                "k"
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "i",
+                "j",
+                "k"
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i",
+              "j",
+              "k"
+            ],
+            "ranges": {
+              "i": {
+                "from": "lon"
+              },
+              "j": {
+                "from": "lat"
+              },
+              "k": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "D",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "d",
+                    "i",
+                    "j",
+                    "k"
+                  ]
+                }
+              ],
+              "wrt": "t"
+            }
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i",
+              "j",
+              "k"
+            ],
+            "ranges": {
+              "i": {
+                "from": "lon"
+              },
+              "j": {
+                "from": "lat"
+              },
+              "k": {
+                "from": "lev"
+              }
+            },
+            "expr": {
+              "op": "-",
+              "args": [
+                {
+                  "op": "*",
+                  "args": [
+                    0.05,
+                    {
+                      "op": "index",
+                      "args": [
+                        "c",
+                        "i",
+                        "j",
+                        "k"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "op": "*",
+                  "args": [
+                    0.1,
+                    {
+                      "op": "index",
+                      "args": [
+                        "d",
+                        "i",
+                        "j",
+                        "k"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

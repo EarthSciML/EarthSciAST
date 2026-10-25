@@ -211,6 +211,16 @@ export const ERROR_CODES = {
   COMPILER_UNKNOWN: 'compiler_unknown',
   COMPILER_UNAVAILABLE: 'compiler_unavailable',
   COMPILER_REFUSED_RULE: 'compiler_refused_rule',
+  // `range_halo_insufficient` / `range_global_locality` /
+  //   `range_selection_writes_incomplete` / `range_box_invalid` — the refusals
+  //   of operator selection, tiles and lanes (API_SPEC §5.8, "Range-restricted
+  //   right-hand sides"). This binding does not simulate, so it never raises
+  //   any of them; the entries keep the §9.6.6 vocabulary uniform across the
+  //   five registries.
+  RANGE_HALO_INSUFFICIENT: 'range_halo_insufficient',
+  RANGE_GLOBAL_LOCALITY: 'range_global_locality',
+  RANGE_SELECTION_WRITES_INCOMPLETE: 'range_selection_writes_incomplete',
+  RANGE_BOX_INVALID: 'range_box_invalid',
   EQUATION_COUNT_MISMATCH: 'equation_count_mismatch',
   // `event_affects_parameter` — an event `affects` LHS names a PARAMETER
   //   (esm-spec §5.4). From 1.0.0 events affect UNKNOWNS ONLY: a parameter that

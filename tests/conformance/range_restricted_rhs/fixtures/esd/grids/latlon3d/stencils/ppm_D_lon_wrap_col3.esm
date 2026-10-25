@@ -1,0 +1,76 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "ppm_D_lon_wrap_col3",
+    "description": "Periodic zonal wrap face for the PPM longitude derivative on the latlon3d grid: the single i=3 column slab, D f[3,j,k] = (F_{7/2} - F_{5/2})/dlon_deg over all j (lat), all k (lev). Only the west-most cell of F_{5/2} wraps: F_{7/2}=ppm_flux(f[1], f[2], f[3], f[4], f[5]) (fully interior) and F_{5/2}=ppm_flux(f[NLON], f[1], f[2], f[3], f[4]) (indices per (j,k) column). One of five factored periodic wrap faces (low end i=1,2,3) consumed by rules/ppm_D_lon_periodic; a full (1 x NLAT x NLEV) slab AGGREGATE in its own single-purpose stencil so the rule body stays a thin makearray of apply calls. F_{5/2} is shared with the i=2 column and F_{7/2} with the interior i=4 flux (identical floats) so the zonal divergence telescopes. `dlon_deg` is the inherited consumer-supplied zonal spacing free name.",
+    "license": "MIT",
+    "tags": [
+      "esd:stencil",
+      "family:finite_volume",
+      "grid:latlon3d",
+      "op:D",
+      "order:3",
+      "stencil_width:5"
+    ],
+    "references": [
+      {
+        "citation": "Colella, P., & Woodward, P. R. (1984). The Piecewise Parabolic Method (PPM) for gas-dynamical simulations. Journal of Computational Physics, 54(1), 174-201.",
+        "doi": "10.1016/0021-9991(84)90143-8"
+      }
+    ]
+  },
+  "expression_template_imports": [
+    { "ref": "../grid.esm" },
+    { "ref": "./ppm_flux.esm" }
+  ],
+  "expression_templates": {
+    "ppm_D_lon_wrap_col3": {
+      "params": ["f"],
+      "body": {
+        "op": "faq",
+        "output_idx": ["i", "j", "k"],
+        "args": ["f"],
+        "ranges": {
+          "i": [3, 3],
+          "j": { "from": "lat" },
+          "k": { "from": "lev" }
+        },
+        "expr": {
+          "op": "/",
+          "args": [
+            {
+              "op": "-",
+              "args": [
+                {
+                  "op": "apply_expression_template",
+                  "args": [],
+                  "name": "ppm_flux",
+                  "bindings": {
+                    "um2": { "op": "index", "args": ["f", 1, "j", "k"] },
+                    "um1": { "op": "index", "args": ["f", 2, "j", "k"] },
+                    "u0": { "op": "index", "args": ["f", 3, "j", "k"] },
+                    "up1": { "op": "index", "args": ["f", 4, "j", "k"] },
+                    "up2": { "op": "index", "args": ["f", 5, "j", "k"] }
+                  }
+                },
+                {
+                  "op": "apply_expression_template",
+                  "args": [],
+                  "name": "ppm_flux",
+                  "bindings": {
+                    "um2": { "op": "index", "args": ["f", "NLON", "j", "k"] },
+                    "um1": { "op": "index", "args": ["f", 1, "j", "k"] },
+                    "u0": { "op": "index", "args": ["f", 2, "j", "k"] },
+                    "up1": { "op": "index", "args": ["f", 3, "j", "k"] },
+                    "up2": { "op": "index", "args": ["f", 4, "j", "k"] }
+                  }
+                }
+              ]
+            },
+            "dlon_deg"
+          ]
+        }
+      }
+    }
+  }
+}

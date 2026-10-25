@@ -1,0 +1,116 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "varcoeff_laplacian_zero_flux_bc",
+    "description": "Conservative finite-volume VARIABLE-COEFFICIENT / NONLINEAR Laplacian div(k grad u) with zero-flux (homogeneous Neumann) boundaries on cartesian_uniform_1d. The operator carries a coefficient, so a bare laplacian match cannot express it; instead the rule matches the CONSERVATIVE COMPOUND the consumer writes, D( {op:*, args:[k, D(u,wrt:x)]}, wrt:x ) -- outer-D of (k times the inner spatial gradient) -- at priority 10, so under esm-spec 9.6.3 outermost-first compound precedence it fires on the whole compound before any plain-D rule could lower the inner derivative (exactly as central_D2_zero_grad_bc fires on D(D(f,x),x)); this mirrors the archive nonlinear_laplacian applies_to grad(f*grad(u)) ported to the esm-spec 0.8.0 D/wrt spelling. BOTH operands are match wildcards bound to consumer fields: `u` (the state, inner D's argument) and `k` (the coefficient, the LEFT factor of the product). Because matching is structural and non-commutative, the consumer MUST write the coefficient on the LEFT: k * D(u, wrt:x); a product spelled D(u,x)*k or a compound coefficient does not match (bind a compound coefficient to a declared x-shaped observed first). Match-scoped with where {u:{shape:[x]}, k:{shape:[x]}} (esm-spec 9.6.1) so it fires only on this grid's declared x-shaped fields, and under import-edge renaming (esm-spec 9.7.7) the wrt literals and both where shapes follow the renamed axis together, so two cartesian instances coexist scoped to their own grids. ONE rule serves two duals: the VARIABLE-COEFFICIENT case (k=k(x), a given field) and the NONLINEAR case (the consumer declares k as an observed k=f(u), so k depends on the state) -- the body only reads k by bare name at the faces, so a state-dependent k just makes the expanded stencil nonlinear in u with no reformulation (the keyed-factor field contract, like the grid's dx and the nonuniform grid's xc). AUTHORING CONTRACT for k: it is a declared x-shaped field; when supplied as an aggregate observed (k = aggregate over some index of an expression), that aggregate MUST loop over an index DISTINCT from the stencil's interior index `i`, because the coefficient observed is inlined into the stencil's [2,N-1] aggregate at evaluation and a shared loop-index name is captured (silently wrong interior values). This is the same reason the library's geometry observeds loop over `gi` rather than `i` (grids/cartesian_nonuniform_1d nonuniform_cell_center/width); a consumer coefficient should follow suit (e.g. loop over `gi`). A k supplied as a plain state/parameter array, a loader field, or a state-dependent observed with a non-`i` loop index needs no special care. Face conductivity is the ARITHMETIC MEAN kf[i+1/2]=(k[i]+k[i+1])/2 (O(dx^2) at the face for a differentiable coefficient, and affine in k so it composes with the nonlinear dual). Interior [2, N-1]: the imported conservative flux-difference stencil. The boundary faces impose zero flux exactly (natural for the finite-volume form -- no ghost geometry): at i=1 the left domain-face flux is dropped, giving L u[1] = kf[3/2](u[2]-u[1])/dx^2 = (k[1]+k[2])/2 (u[2]-u[1])/dx^2; at i=N the right domain-face flux is dropped, giving L u[N] = -kf[N-1/2](u[N]-u[N-1])/dx^2 = (k[N-1]+k[N])/2 (u[N-1]-u[N])/dx^2. `dx` is a free name resolving to the consuming model's spacing variable (grids/cartesian_uniform_1d/grid.esm); the zero-flux closure is dx-scale-invariant, so the rule serves any domain extent unchanged. Reduces to central_D2_zero_grad_bc when k is spatially constant. Interior O(dx^2); the one-sided zero-flux faces are O(dx) locally, which preserves global 2nd-order L2 convergence for zero-flux-compatible solutions (flux k u_x vanishing at both walls). A model imports exactly one second-derivative/Laplacian rule for x.",
+    "license": "MIT",
+    "tags": ["esd:rule", "family:finite_difference", "grid:cartesian_uniform_1d", "op:varcoeff_laplacian", "axes:x", "order:2", "stencil_width:3", "bc:zero_flux", "spec:9.6.8"],
+    "references": [
+      {
+        "citation": "LeVeque, R. J. (2007). Finite Difference Methods for Ordinary and Partial Differential Equations. SIAM. Section 2.15 (variable-coefficient conservative form) and Section 2.12 (Neumann boundary conditions by dropping the domain-face flux)."
+      }
+    ]
+  },
+  "expression_template_imports": [
+    { "ref": "../stencils/varcoeff_laplacian_interior.esm" }
+  ],
+  "expression_templates": {
+    "varcoeff_laplacian_zero_flux_bc": {
+      "params": ["u", "k"],
+      "priority": 10,
+      "match": {
+        "op": "D",
+        "args": [
+          {
+            "op": "*",
+            "args": [
+              "k",
+              { "op": "D", "args": ["u"], "wrt": "x" }
+            ]
+          }
+        ],
+        "wrt": "x"
+      },
+      "where": { "u": { "shape": ["x"] }, "k": { "shape": ["x"] } },
+      "body": {
+        "op": "makearray",
+        "args": [],
+        "regions": [
+          [[2, { "op": "-", "args": ["N", 1] }]],
+          [[1, 1]],
+          [["N", "N"]]
+        ],
+        "values": [
+          {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "varcoeff_laplacian_interior",
+            "bindings": { "u": "u", "k": "k" }
+          },
+          {
+            "op": "/",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "*",
+                    "args": [
+                      0.5,
+                      {
+                        "op": "+",
+                        "args": [
+                          { "op": "index", "args": ["k", 1] },
+                          { "op": "index", "args": ["k", 2] }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "op": "-",
+                    "args": [
+                      { "op": "index", "args": ["u", 2] },
+                      { "op": "index", "args": ["u", 1] }
+                    ]
+                  }
+                ]
+              },
+              { "op": "*", "args": ["dx", "dx"] }
+            ]
+          },
+          {
+            "op": "/",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "*",
+                    "args": [
+                      0.5,
+                      {
+                        "op": "+",
+                        "args": [
+                          { "op": "index", "args": ["k", { "op": "-", "args": ["N", 1] }] },
+                          { "op": "index", "args": ["k", "N"] }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "op": "-",
+                    "args": [
+                      { "op": "index", "args": ["u", { "op": "-", "args": ["N", 1] }] },
+                      { "op": "index", "args": ["u", "N"] }
+                    ]
+                  }
+                ]
+              },
+              { "op": "*", "args": ["dx", "dx"] }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

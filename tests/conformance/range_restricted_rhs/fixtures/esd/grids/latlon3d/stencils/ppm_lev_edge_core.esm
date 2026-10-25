@@ -1,0 +1,264 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "ppm_lev_edge_core",
+    "description": "Colella-Woodward (1984) eq. (1.6) non-uniform interpolation of a cell-averaged field to the interface a_{j+1/2} between cells j and j+1, PARAMETERIZED BY THE TWO CELL SLOPES. This is the genuine atom of the CW84 edge reconstruction: eq (1.6) is a fixed algebraic combination of the cell averages, the widths, and the average slopes of the two cells straddling the interface -- the CHOICE of slope (the raw eq (1.7) slope, or the monotonized eq (1.8) slope) is the variation point, and it is what separates the unlimited PPM from the monotone PPM. Factoring it out means the eq (1.6) body is written ONCE and shared: ../stencils/ppm_lev_edge supplies raw ppm_lev_slope slopes (unlimited, 4th-order) and ../stencils/ppm_lev_edge_mono supplies monotonized ppm_lev_slope_mono slopes (bounded). a_{j+1/2} = a0 + d0/(d0+dp)(ap-a0) + (1/(dm+d0+dp+dpp))[ (2 dp d0/(d0+dp))((dm+d0)/(2d0+dp) - (dpp+dp)/(2dp+d0))(ap-a0) - d0(dm+d0)/(2d0+dp) sjp1 + dp(dp+dpp)/(2dp+d0) sj ], where (a0,ap)=(a_j,a_{j+1}) are the two cells sharing the interface, (dm,d0,dp,dpp) the four widths of cells j-1..j+2, and sj/sjp1 the average slopes of cells j and j+1. Note the neighbour averages a_{j-1}/a_{j+2} enter ONLY through the slopes, which is why they are not parameters here. On a uniform mesh with raw slopes this collapses exactly to the (7/12)(a0+ap) - (1/12)(am+app) edge of ppm_face_value. Grid-agnostic scalar algebra; match-less named template.",
+    "license": "MIT",
+    "tags": [
+      "esd:stencil",
+      "family:finite_volume",
+      "grid:latlon3d",
+      "op:reconstruct",
+      "order:4",
+      "stencil_width:4"
+    ],
+    "references": [
+      {
+        "citation": "Colella, P., & Woodward, P. R. (1984). The Piecewise Parabolic Method (PPM) for gas-dynamical simulations. Journal of Computational Physics, 54(1), 174-201. Equations (1.6)-(1.7), non-uniform mesh.",
+        "doi": "10.1016/0021-9991(84)90143-8"
+      }
+    ]
+  },
+  "expression_templates": {
+    "ppm_lev_edge_core": {
+      "params": [
+        "a0",
+        "ap",
+        "dm",
+        "d0",
+        "dp",
+        "dpp",
+        "sj",
+        "sjp1"
+      ],
+      "description": "CW84 eq.(1.6) non-uniform edge a_{j+1/2} given the cell slopes sj, sjp1",
+      "body": {
+        "op": "+",
+        "args": [
+          {
+            "op": "+",
+            "args": [
+              "a0",
+              {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "/",
+                    "args": [
+                      "d0",
+                      {
+                        "op": "+",
+                        "args": [
+                          "d0",
+                          "dp"
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "op": "-",
+                    "args": [
+                      "ap",
+                      "a0"
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "op": "*",
+            "args": [
+              {
+                "op": "/",
+                "args": [
+                  1,
+                  {
+                    "op": "+",
+                    "args": [
+                      "dm",
+                      "d0",
+                      "dp",
+                      "dpp"
+                    ]
+                  }
+                ]
+              },
+              {
+                "op": "+",
+                "args": [
+                  {
+                    "op": "*",
+                    "args": [
+                      {
+                        "op": "/",
+                        "args": [
+                          {
+                            "op": "*",
+                            "args": [
+                              2,
+                              "dp",
+                              "d0"
+                            ]
+                          },
+                          {
+                            "op": "+",
+                            "args": [
+                              "d0",
+                              "dp"
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "op": "-",
+                        "args": [
+                          {
+                            "op": "/",
+                            "args": [
+                              {
+                                "op": "+",
+                                "args": [
+                                  "dm",
+                                  "d0"
+                                ]
+                              },
+                              {
+                                "op": "+",
+                                "args": [
+                                  {
+                                    "op": "*",
+                                    "args": [
+                                      2,
+                                      "d0"
+                                    ]
+                                  },
+                                  "dp"
+                                ]
+                              }
+                            ]
+                          },
+                          {
+                            "op": "/",
+                            "args": [
+                              {
+                                "op": "+",
+                                "args": [
+                                  "dpp",
+                                  "dp"
+                                ]
+                              },
+                              {
+                                "op": "+",
+                                "args": [
+                                  {
+                                    "op": "*",
+                                    "args": [
+                                      2,
+                                      "dp"
+                                    ]
+                                  },
+                                  "d0"
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "op": "-",
+                        "args": [
+                          "ap",
+                          "a0"
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "op": "*",
+                    "args": [
+                      {
+                        "op": "-",
+                        "args": [
+                          {
+                            "op": "/",
+                            "args": [
+                              {
+                                "op": "*",
+                                "args": [
+                                  "d0",
+                                  {
+                                    "op": "+",
+                                    "args": [
+                                      "dm",
+                                      "d0"
+                                    ]
+                                  }
+                                ]
+                              },
+                              {
+                                "op": "+",
+                                "args": [
+                                  {
+                                    "op": "*",
+                                    "args": [
+                                      2,
+                                      "d0"
+                                    ]
+                                  },
+                                  "dp"
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      "sjp1"
+                    ]
+                  },
+                  {
+                    "op": "*",
+                    "args": [
+                      {
+                        "op": "/",
+                        "args": [
+                          {
+                            "op": "*",
+                            "args": [
+                              "dp",
+                              {
+                                "op": "+",
+                                "args": [
+                                  "dp",
+                                  "dpp"
+                                ]
+                              }
+                            ]
+                          },
+                          {
+                            "op": "+",
+                            "args": [
+                              {
+                                "op": "*",
+                                "args": [
+                                  2,
+                                  "dp"
+                                ]
+                              },
+                              "d0"
+                            ]
+                          }
+                        ]
+                      },
+                      "sj"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

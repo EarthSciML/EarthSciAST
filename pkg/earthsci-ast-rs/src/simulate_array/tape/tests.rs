@@ -126,7 +126,7 @@ pub(super) fn ab_check(doc: serde_json::Value, lo: f64, hi: f64) -> TapeProgram 
     assert!(fast_scratch.has_tape(), "fixture scratch must carry a tape");
     // A second warm fast scratch carrying the UNFUSED program.
     let mut fast_uf = super::super::RhsScratch::new(&compiled.var_shapes);
-    fast_uf.install_tape(std::rc::Rc::new(prog_uf));
+    fast_uf.install_tape(std::sync::Arc::new(prog_uf));
     let prog_uf = {
         // Rebuild for the reference arm (the scratch consumed the first).
         taped(compiled.build_tape_opts(&HashSet::new(), None)).0
@@ -138,7 +138,7 @@ pub(super) fn ab_check(doc: serde_json::Value, lo: f64, hi: f64) -> TapeProgram 
     let prog_rm = rm_build();
     assert!(!prog_rm.col_major);
     let mut fast_rm = super::super::RhsScratch::new(&compiled.var_shapes);
-    fast_rm.install_tape(std::rc::Rc::new(rm_build()));
+    fast_rm.install_tape(std::sync::Arc::new(rm_build()));
     let mut fast_stats = RhsStats::default();
     for seed in 0..4u64 {
         let state = seeded_state(n, seed, lo, hi);
@@ -1876,7 +1876,7 @@ fn ab_scan_fused_with_its_neighbours() {
     let param_vec = compiled.debug_resolve_params(&params);
     let state = seeded_state(3 * n, 7, -2.0, 2.0);
     let (dy_ref, _) = compiled.debug_eval_rhs(&state, 0.0, &params, false);
-    let mut ctx = super::exec::TapeCtx::new(std::rc::Rc::new(prog));
+    let mut ctx = super::exec::TapeCtx::new(std::sync::Arc::new(prog));
     for publish in [false, true, false] {
         ctx.set_exports_active(publish);
         let mut dy = vec![f64::NAN; 3 * n];
@@ -2521,7 +2521,7 @@ fn output_only_observeds_leave_the_rhs() {
         };
         super::exec::run_tape_call(ctx, &call, dy, &mut stats);
     };
-    let mut ctx = super::exec::TapeCtx::new(std::rc::Rc::new(prog));
+    let mut ctx = super::exec::TapeCtx::new(std::sync::Arc::new(prog));
     let mut dy = vec![0.0f64; 1];
     run_call(&mut ctx, &mut dy);
     assert_eq!(dy[0].to_bits(), (-3.0f64).to_bits());
@@ -2585,7 +2585,7 @@ fn export_demotion_skips_unread_publishes() {
 
     // Demoted (the production default): the export is
     // never published into the observed map.
-    let mut ctx = super::exec::TapeCtx::new(std::rc::Rc::new(prog));
+    let mut ctx = super::exec::TapeCtx::new(std::sync::Arc::new(prog));
     let mut dy = vec![0.0f64; 1];
     run_call(&mut ctx, &mut dy);
     assert_eq!(dy[0].to_bits(), (-3.0f64).to_bits());
@@ -2697,7 +2697,7 @@ fn ab_superop_bin3_and_extended_pairs() {
     let params = HashMap::new();
     let param_vec = compiled.debug_resolve_params(&params);
     let mut fast3 = super::super::RhsScratch::new(&compiled.var_shapes);
-    fast3.install_tape(std::rc::Rc::new(
+    fast3.install_tape(std::sync::Arc::new(
         taped(compiled.build_tape_opts(&HashSet::new(), Some(all_superops_cfg()))).0,
     ));
     let mut stats = RhsStats::default();
@@ -4275,7 +4275,7 @@ fn a_fault_behind_a_state_condition_fires_where_the_oracle_reaches_it() {
                 "program {k} ref"
             );
             let mut scratch = super::super::RhsScratch::new(&compiled.var_shapes);
-            scratch.install_tape(std::rc::Rc::new(match k {
+            scratch.install_tape(std::sync::Arc::new(match k {
                 0 => taped(compiled.build_tape_opts(&HashSet::new(), Some(default_cfg()))).0,
                 1 => taped(compiled.build_tape_opts(&HashSet::new(), None)).0,
                 _ => {
@@ -4374,7 +4374,7 @@ fn assert_fault_parity(doc: serde_json::Value, times: &[f64]) -> TapeProgram {
                 "program {k} ref, t = {t}"
             );
             let mut scratch = super::super::RhsScratch::new(&compiled.var_shapes);
-            scratch.install_tape(std::rc::Rc::new(build(k)));
+            scratch.install_tape(std::sync::Arc::new(build(k)));
             compiled.debug_eval_rhs_into(
                 &state,
                 t,

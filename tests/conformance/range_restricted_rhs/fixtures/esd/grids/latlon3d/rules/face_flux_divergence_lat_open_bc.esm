@@ -1,0 +1,92 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "face_flux_divergence_lat_open_bc",
+    "description": "OPEN-WALL (regional limited-area) MERIDIONAL continuity D(My, wrt: lat) on latlon3d: the air-mass half of a consistency-with-continuity pair whose tracer half is rules/ppm_flux_D_lat_mono_inflow_bc. A regional model writes d(m)/dt = -D(My, wrt: lat) + ... for the air mass m and the face air-mass flux My, alongside d(mq)/dt = -D(My*q, wrt: lat) for the tracer; a constant q is preserved bitwise because the PPM flux collapses to My at every face -- INCLUDING the open walls -- when the boundary halo is uniform. The open-boundary sibling of face_flux_divergence_lat_polar: same metric, same face convention, but the wall faces are DIFFERENCED (real open boundary) rather than omitted at the poles. A single full-axis region applies ../stencils/facediv_lat_open_interior. Match D(My, wrt: lat) at priority 10 with a where-shape constraint marking My as the face-staggered flux over ['lon', 'lat_nodes', 'lev']; a consuming problem imports exactly one lat continuity rule. Semi-discrete (method-of-lines). Requires NLAT >= 1.",
+    "license": "MIT",
+    "tags": [
+      "esd:rule",
+      "family:finite_volume",
+      "grid:latlon3d",
+      "op:div",
+      "axes:lon,lat,lev",
+      "order:1",
+      "stencil_width:2",
+      "bc:inflow",
+      "form:flux",
+      "spec:9.6.8"
+    ],
+    "references": [
+      {
+        "citation": "Lin, S.-J., & Rood, R. B. (1996). Multidimensional flux-form semi-Lagrangian transport schemes. Monthly Weather Review, 124(9), 2046-2070.",
+        "doi": "10.1175/1520-0493(1996)124<2046:MFFSLT>2.0.CO;2"
+      },
+      {
+        "citation": "Jockel, P., von Kuhlmann, R., Lawrence, M. G., et al. (2001). On a fundamental problem in implementing flux-form advection schemes for tracer transport in 3-dimensional general circulation and chemistry transport models. Quarterly Journal of the Royal Meteorological Society, 127(573), 1035-1052.",
+        "doi": "10.1002/qj.49712757318"
+      },
+      {
+        "citation": "Jacobson, M. Z. (2005). Fundamentals of Atmospheric Modeling (2nd ed.). Cambridge University Press. Chapter 6 (finite-volume flux-form tracer transport; consistency with continuity)."
+      }
+    ]
+  },
+  "expression_template_imports": [
+    {
+      "ref": "../stencils/facediv_lat_open_interior.esm"
+    }
+  ],
+  "expression_templates": {
+    "face_flux_divergence_lat_open_bc": {
+      "params": [
+        "My"
+      ],
+      "priority": 10,
+      "match": {
+        "op": "D",
+        "args": [
+          "My"
+        ],
+        "wrt": "lat"
+      },
+      "where": {
+        "My": {
+          "shape": [
+            "lon",
+            "lat_nodes",
+            "lev"
+          ]
+        }
+      },
+      "body": {
+        "op": "makearray",
+        "args": [],
+        "regions": [
+          [
+            [
+              1,
+              "NLON"
+            ],
+            [
+              1,
+              "NLAT"
+            ],
+            [
+              1,
+              "NLEV"
+            ]
+          ]
+        ],
+        "values": [
+          {
+            "op": "apply_expression_template",
+            "args": [],
+            "name": "facediv_lat_open_interior",
+            "bindings": {
+              "My": "My"
+            }
+          }
+        ]
+      }
+    }
+  }
+}
