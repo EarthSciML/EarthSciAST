@@ -4050,6 +4050,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     # ---- Live forcing buffers (ess-14f.3, JL-J0) ----
     # (see `_build_pgather` for the feasibility-gate design note)
     pgather = @_bench :build_pgather _build_pgather(param_arrays)
+    _ws_note_pgather!(pgather)
     # This build's forcing epoch: the problem's (its discrete sink carries it),
     # bumped by a refresh of any buffer the build reads.
     forcing_epoch = materialize_out === nothing ? _new_forcing_epoch() :
