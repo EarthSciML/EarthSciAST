@@ -97,6 +97,9 @@ const _KNOWN_DIAGNOSTIC_CODES = (
     ERROR_CODES.CONST_UNITS_VERSION_TOO_OLD,
     # esm-spec §8.2.1 data-source location resolution (data_source_urls.jl).
     ERROR_CODES.DATA_SOURCE_URL_UNRESOLVED,
+    # esm-spec §2.2.6 `solver.external` load checks (solver.jl).
+    ERROR_CODES.SOLVER_EXTERNAL_VERSION_TOO_OLD,
+    ERROR_CODES.SOLVER_EXTERNAL_UNRESOLVED,
     # esm-spec §9.6 expression templates + §9.6.4 post-expansion validators
     # (lower_expression_templates.jl; the recursive-body composition check
     # lives in template_imports.jl).

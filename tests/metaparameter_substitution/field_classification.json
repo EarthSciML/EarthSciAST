@@ -263,6 +263,7 @@
       "FunctionTable.outputs",
       "IndexSet.from_faq",
       "ParameterUpdate|4.source",
+      "Solver.external",
       "SubsystemRef.index_set_rename",
       "SubsystemRef.model",
       "SubsystemRef.reaction_system",
