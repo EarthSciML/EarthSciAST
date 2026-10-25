@@ -7329,7 +7329,7 @@ Beside these, each binding tests what no document pins:
   to `replace` is `RhsError::SlotIndex` in Rust.
 - **Failed gathers.** Lane inputs whose gather failed (a fault, or a cell
   outside its index set) after an earlier gather succeeded do not evaluate:
-  `RhsError::NotGathered` / an error, never a result from the half-written
+  `RhsError::NotGathered` / `ArgumentError`, never a result from the half-written
   buffers.
 - **Derived programs.** A tile and a lane program of a forcing case take the
   parent's forcing set; their results stay bitwise the whole-domain `select`
