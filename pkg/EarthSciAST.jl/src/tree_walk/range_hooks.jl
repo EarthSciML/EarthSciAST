@@ -69,9 +69,12 @@ _range_affine_view(::Nothing, var, clipped, var_map, array_var_info, xeq) = noth
 # cell's slot is below 1 (slot 0 is the build's "no such cell"). Offsets
 # between slots are the tile's, so every derived stride and offset is the
 # tile's; what holds an absolute slot is shifted back onto the tile's layout:
-# a box's base slot, each slot table and each fixed slot. A slot of a cell the
-# tile does not store (one only an empty box reads) is moved onto a slot of the
-# same variable's tile block, which keeps its buffer and is never read.
+# a box's base slot, each slot table and each fixed slot. A fixed slot of a
+# cell the tile does not store (one only an empty box reads) is moved onto a
+# slot of the same variable's tile block, which keeps its buffer and is never
+# read. A per-box table (a slot table, a value table) covers only the cells of
+# the box the tile runs, so a tile's build grows with its own cells, never with
+# the domain's.
 
 # A layout answering every name the way its `L` does, which records, for each
 # slot it hands out by name, the variable that slot belongs to: the virtual
@@ -156,18 +159,12 @@ function _range_real_slot(view::_RangeAffineView, name, v::Int)
     return clamp(r, b.base, b.base + b.len - 1)
 end
 
-# The cells of `box` (a vector of ranges) in `Iterators.product` order, as a
-# predicate on that order's position: whether the cell lies in `cbox`.
-function _range_cells_in(box, cbox, D)
-    return [all(d -> I[d] in cbox[d], 1:D)
-            for I in Iterators.product((box[d] for d in 1:D)...)]
-end
-
 # Move a box's state-lane lowerings onto the tile's layout (see the section
 # note): a slot table's entries, and the identity run of a lane read on its own
-# grid, which becomes the run of the variable's tile block.
-function _range_real_repls!(view::_RangeAffineView, lane_repl, recipes, box, cbox, D)
-    inside = nothing
+# grid, which becomes the run of the variable's tile block. A tile's slot
+# table covers only the cells of the box it runs (`_box_table_addr`,
+# stencil_affine.jl), which it stores, and every other entry is 0.
+function _range_real_repls!(view::_RangeAffineView, lane_repl, recipes)
     for k in eachindex(lane_repl)
         rec = recipes[k]
         rec.kind == LANE_STATE || continue
@@ -186,11 +183,9 @@ function _range_real_repls!(view::_RangeAffineView, lane_repl, recipes, box, cbo
         else
             tbl = a.conn::Vector{Int}
             haskey(view.done, tbl) && continue
-            inside === nothing && (inside = _range_cells_in(box, cbox, D))
             @inbounds for j in eachindex(tbl)
                 v = tbl[j]
-                v == 0 && continue
-                tbl[j] = inside[j] ? v - view.shift : _range_real_slot(view, rec.var_name, v)
+                v == 0 || (tbl[j] = v - view.shift)
             end
             view.done[tbl] = nothing
         end

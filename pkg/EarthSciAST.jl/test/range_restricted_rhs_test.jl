@@ -74,6 +74,35 @@ function _rrt_flux_doc(nx::Int)
                                Dict("lhs" => lhs, "rhs" => du)])))
 end
 
+# A 1-D diffusion on `nx` cells (zero ghosts) plus `Σ_k W[i,k]·k` over a
+# shaped parameter `W`: the sum reads only build-time data, so the affine tier
+# evaluates it into a per-box table of values.
+function _rrt_table_doc(nx::Int)
+    u(i) = Dict("op" => "index", "args" => Any["u", i])
+    add(a, b) = Dict("op" => "+", "args" => Any[a, b])
+    sub(a, b) = Dict("op" => "-", "args" => Any[a, b])
+    mul(a...) = Dict("op" => "*", "args" => Any[a...])
+    agg = Dict("op" => "faq", "args" => Any[], "output_idx" => Any[],
+               "ranges" => Dict("k" => Any[1, 3]),
+               "expr" => mul(Dict("op" => "index", "args" => Any["W", "i", "k"]), "k"))
+    faq(e) = Dict("op" => "faq", "args" => Any[], "output_idx" => Any["i"],
+                  "ranges" => Dict("i" => Dict("from" => "x")), "expr" => e)
+    lhs = faq(Dict("op" => "D", "args" => Any[u("i")], "wrt" => "t"))
+    rhs = faq(add(mul(0.25, add(u(sub("i", 1)), add(mul(-2, u("i")), u(add("i", 1))))), agg))
+    return Dict{String,Any}(
+        "esm" => "1.2.0",
+        "metadata" => Dict("name" => "rrt_table"),
+        "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => nx),
+                             "kk" => Dict("kind" => "interval", "size" => 3)),
+        "models" => Dict("Tbl" => Dict(
+            "variables" => Dict(
+                "u" => Dict("type" => "unknown", "shape" => ["x"], "default" => 1.0),
+                "W" => Dict("type" => "parameter", "shape" => ["x", "kk"],
+                            "default" => [[sin(1.7 * i * k) + 0.05 * i for k in 1:3]
+                                          for i in 1:nx])),
+            "equations" => Any[Dict("lhs" => lhs, "rhs" => rhs)])))
+end
+
 const _RRT_FIXTURES = joinpath(@__DIR__, "..", "..", "..", "tests", "conformance",
                                "range_restricted_rhs", "fixtures")
 
@@ -112,6 +141,23 @@ function _rrt_generated(x, acc = Set{String}(), seen = Set{UInt}())
         isdefined(x, f) && _rrt_generated(getfield(x, f), acc, seen)
     end
     return acc
+end
+
+# How many numbers a program holds (its tables, its geometry, its constants).
+function _rrt_data(x, n = Ref(0), seen = IdDict{Any,Nothing}())
+    (x isa Module || x isa DataType || x isa String || x isa Symbol || isbits(x)) && return n[]
+    haskey(seen, x) && return n[]
+    seen[x] = nothing
+    if x isa AbstractArray && eltype(x) <: Number
+        n[] += length(x)
+    elseif x isa AbstractArray || x isa Tuple || x isa AbstractDict || x isa AbstractSet
+        foreach(v -> _rrt_data(v, n, seen), x isa AbstractDict ? values(x) : x)
+    else
+        for f in fieldnames(typeof(x))
+            isdefined(x, f) && _rrt_data(getfield(x, f), n, seen)
+        end
+    end
+    return n[]
 end
 
 @testset "range_restricted_rhs" begin
@@ -195,6 +241,35 @@ end
                       _rrt_bits(G[(c[2] - 1) * nx + c[1]])
             end
         end
+    end
+
+    @testset "a tile's build does not grow with the domain" begin
+        # The per-box table of the tile's one owned box covers only the cells
+        # it runs, so a tile of the same cells holds the same data at every
+        # domain size, while the whole-domain program's grows with it.
+        tdec = Decomposition(axes = ["x" => (period = nothing,)])
+        whole, tile = Int[], Int[]
+        for tx in (40, 400)
+            tprob = esm_problem(_rrt_table_doc(tx), (0.0, 1.0))
+            tprog = rhs_program(tprob)
+            TG = _rrt_eval(tprog, tprob.p)
+            t = restrict(tprog, tdec; owned = ("x" => 11:14,), storage = ("x" => 10:15,))
+            @test _rrt_generated(t.f!) == _rrt_generated(tprog.f!)
+            tu = 0.5 .+ (1:tx) ./ (tx + 1)         # the state `_rrt_eval` reads
+            b = only(tile_layout(t).u)
+            uS = fill(NaN, tile_layout(t).n_u)
+            for c in b.storage[1]
+                uS[RRT._tile_slot(b, (c,))] = tu[c]
+            end
+            duS = fill(NaN, length(uS))
+            rhs!(duS, t, rhs_workspace(t), uS, Float64[], tprob.p, 0.0)
+            @test [_rrt_bits(duS[RRT._tile_slot(b, (c,))]) for c in 11:14] ==
+                  _rrt_bits.(TG[11:14])
+            push!(whole, _rrt_data(tprog.f!))
+            push!(tile, _rrt_data(t.f!))
+        end
+        @test whole[2] > whole[1] + 300
+        @test tile[2] == tile[1]
     end
 
     @testset "refusals" begin

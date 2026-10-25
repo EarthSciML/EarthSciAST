@@ -995,6 +995,50 @@ function _box_local_addr(box, D)
     return s, off, acc            # acc == number of cells in the box
 end
 
+# The addressing of a table over the cells `run` of `box` that a program runs:
+# `_box_local_addr(box)` when it runs all of them. A tile that shares the
+# whole-domain program's code (range_hooks.jl) runs only its share of a box,
+# so its tables cover only those cells, and its build costs what its cells
+# cost. A table extent is 1 exactly where the box's is (a wider one is at
+# least 2, even over one cell or none), so every stride the emitted code holds
+# as the literal 1 is the one the whole-domain program holds there.
+function _box_table_addr(box, run, D)
+    run === box && return _box_local_addr(box, D)
+    s = zeros(Int, max(D, 3))
+    acc = 1
+    for d in 1:D
+        s[d] = acc
+        acc *= length(box[d]) == 1 ? 1 : max(length(run[d]), 2)
+    end
+    off = 1
+    for d in 1:D
+        off -= (first(run[d]) - 1) * s[d]
+    end
+    return s, off, acc
+end
+
+# One recipe value per cell of `run` (see `_box_table_addr`) in the table's
+# addressing, every other entry zero, with the table's strides and offset.
+function _box_table(::Type{T}, rec::_LaneRecipe, idx_names, box, run, D, var_map,
+                    const_arrays) where {T}
+    s, off, len = _box_table_addr(box, run, D)
+    run === box && return (_fill_box_table!(Vector{T}(undef, len), rec, idx_names, box, D,
+                                            var_map, const_arrays), s, off)
+    vals = _fill_box_table!(Vector{T}(undef, prod(d -> length(run[d]), 1:D; init = 1)),
+                            rec, idx_names, run, D, var_map, const_arrays)
+    tbl = zeros(T, len)
+    j = 0
+    for I in CartesianIndices(ntuple(d -> UnitRange{Int}(run[d]), D))
+        j += 1
+        a = off
+        @inbounds for d in 1:D
+            a += (I[d] - 1) * s[d]
+        end
+        tbl[a] = vals[j]
+    end
+    return tbl, s, off
+end
+
 # ── LANE-AFFINE STATE BOX (a state gather on its OWN grid) ────────────────
 #
 # `_AK_STATE_AFFINE` models `u[oln + Δ]` — a gather from an array laid out
@@ -1087,17 +1131,15 @@ end
 # connectivity input, and strictly smaller than the per-cell fallback's
 # per-lane slot vectors.
 function _materialize_state_tbl(rec::_LaneRecipe, idx_names, box, D,
-                                var_map, const_arrays)
+                                var_map, const_arrays, run=box)
     _t0 = time_ns()
-    r = _materialize_state_tbl_inner(rec, idx_names, box, D, var_map, const_arrays)
+    r = _materialize_state_tbl_inner(rec, idx_names, box, D, var_map, const_arrays, run)
     _bench_phase!(:mat_state_tbl, _t0)
     return r
 end
 function _materialize_state_tbl_inner(rec::_LaneRecipe, idx_names, box, D,
-                                var_map, const_arrays)
-    s, off, len = _box_local_addr(box, D)
-    tbl = Vector{Int}(undef, len)
-    _fill_box_table!(tbl, rec, idx_names, box, D, var_map, const_arrays)
+                                var_map, const_arrays, run=box)
+    tbl, s, off = _box_table(Int, rec, idx_names, box, run, D, var_map, const_arrays)
     return _AccRepl(_AccStateTblBox(tbl, s, off))
 end
 
@@ -1125,18 +1167,16 @@ _obsref_disabled() = !_compiler_plan_now().obsref
 # per-cell merge (`_acc_merge_nodes`) already emits for divergent forcing
 # reads. Bit-identical by construction; O(box) build cost.
 function _materialize_pgather_tbl(rec::_LaneRecipe, idx_names, box, D,
-                                var_map, const_arrays)
+                                var_map, const_arrays, run=box)
     _t0 = time_ns()
-    r = _materialize_pgather_tbl_inner(rec, idx_names, box, D, var_map, const_arrays)
+    r = _materialize_pgather_tbl_inner(rec, idx_names, box, D, var_map, const_arrays, run)
     _bench_phase!(:mat_pgather_tbl, _t0)
     return r
 end
 function _materialize_pgather_tbl_inner(rec::_LaneRecipe, idx_names, box, D,
-                                  var_map, const_arrays)
+                                  var_map, const_arrays, run=box)
     pg = rec.arr::_PGatherArray
-    s, off, len = _box_local_addr(box, D)
-    tbl = Vector{Int}(undef, len)
-    _fill_box_table!(tbl, rec, idx_names, box, D, var_map, const_arrays)
+    tbl, s, off = _box_table(Int, rec, idx_names, box, run, D, var_map, const_arrays)
     return _AccRepl(_AccArrTblBox(pg.flat, tbl, s, off))
 end
 
@@ -1152,20 +1192,22 @@ end
 # EXHAUSTIVE invariance test (`vals` is the whole box), not a sampled one. This
 # is the only place the invariance-to-literal fold is legal without a structural
 # argument; the LANE_CONST fast path below derives it from the index instead.
+# A program whose tiles share its code keeps the table: a tile evaluates only
+# its own cells (`run`), so it could not make the same decision.
 function _materialize_const_box(rec::_LaneRecipe, idx_names, box, D,
-                                var_map, const_arrays)
+                                var_map, const_arrays, run=box)
     _t0 = time_ns()
-    r = _materialize_const_box_inner(rec, idx_names, box, D, var_map, const_arrays)
+    r = _materialize_const_box_inner(rec, idx_names, box, D, var_map, const_arrays, run)
     _bench_phase!(:mat_const_box, _t0)
     return r
 end
 function _materialize_const_box_inner(rec::_LaneRecipe, idx_names, box, D,
-                                var_map, const_arrays)
-    s, off, len = _box_local_addr(box, D)
-    vals = Vector{Float64}(undef, len)
-    _fill_box_table!(vals, rec, idx_names, box, D, var_map, const_arrays)
-    v1 = vals[1]
-    all(==(v1), vals) && return _LitRepl(v1)   # exhaustively verified invariant
+                                var_map, const_arrays, run=box)
+    vals, s, off = _box_table(Float64, rec, idx_names, box, run, D, var_map, const_arrays)
+    if !_range_shared_code(_range_spec_now())
+        v1 = vals[1]
+        all(==(v1), vals) && return _LitRepl(v1)   # exhaustively verified invariant
+    end
     return _AccRepl(_AccConstBox(vals, s, off))
 end
 
@@ -1196,7 +1238,7 @@ function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
                            flat_cache, box,
                            structural::Bool =
                                all(a -> _affine_idx_expr(a, idx_names), rec.idx_args);
-                           le::Union{Nothing,_LaneEval}=nothing)
+                           le::Union{Nothing,_LaneEval}=nothing, run=box)
     env = Dict{String,Int}()
     ev(loop) = _ev_lane(le, rec, loop, env, idx_names, var_map, const_arrays)
     if rec.kind == LANE_STATE
@@ -1205,12 +1247,12 @@ function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
             for cn in corners
                 ev(cn) == 0 ||
                     return _materialize_state_tbl(rec, idx_names, box, D,
-                                                  var_map, const_arrays)
+                                                  var_map, const_arrays, run)
             end
             _ghost_box(rec, idx_names, corners, structural, box, D, ev,
                        const_arrays, le) ||
                 return _materialize_state_tbl(rec, idx_names, box, D,
-                                              var_map, const_arrays)
+                                              var_map, const_arrays, run)
             return _LitRepl(0.0)
         end
         Δ = slot_rep - oln_rep
@@ -1287,7 +1329,7 @@ function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
                     _state_slot_identity(lo0, hi0), ls, o))
             end
         end
-        return _materialize_state_tbl(rec, idx_names, box, D, var_map, const_arrays)
+        return _materialize_state_tbl(rec, idx_names, box, D, var_map, const_arrays, run)
     elseif rec.kind == LANE_LOOPLIT
         dim = findfirst(==(rec.loop_name), idx_names)
         dim === nothing && throw(_StencilFallback("loop-lit name not an output index"))
@@ -1308,7 +1350,7 @@ function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
         # spine memoization stays sound with no branch-key change — the lane
         # is one sentinel leaf to the branch key, and its per-cell values are
         # exact by exhaustive evaluation, never assumed uniform.
-        return _materialize_const_box(rec, idx_names, box, D, var_map, const_arrays)
+        return _materialize_const_box(rec, idx_names, box, D, var_map, const_arrays, run)
     elseif rec.kind == LANE_CONST
         # Loop-invariance is derived from the INDEX, never sampled from the
         # VALUES.  The historical fast path here compared `_eval_recipe`'s value
@@ -1349,12 +1391,12 @@ function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
         for cn in corners
             (off + sum((cn[d]-1)*s[d] for d in 1:D)) == clin(cn) ||
                 return _materialize_const_box(rec, idx_names, box, D,
-                                              var_map, const_arrays)
+                                              var_map, const_arrays, run)
         end
         structural || _holds_on_box(box, D) do l
             (off + sum((l[d]-1)*s[d] for d in 1:D)) == clin(l)
         end || return _materialize_const_box(rec, idx_names, box, D,
-                                             var_map, const_arrays)
+                                             var_map, const_arrays, run)
         # Index verified affine over the box; a zero stride in every dim means it
         # is the SAME element for every cell (thin dims contribute nothing — the
         # box is one cell wide there), so the read is genuinely loop-invariant
@@ -1390,7 +1432,7 @@ function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
                 _obsref_disabled() &&
                     throw(_StencilFallback("pgather index non-affine in box"))
                 return _materialize_pgather_tbl(rec, idx_names, box, D,
-                                                var_map, const_arrays)
+                                                var_map, const_arrays, run)
             end
         end
         if !structural && !_holds_on_box(box, D) do l
@@ -1399,7 +1441,7 @@ function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
             _obsref_disabled() &&
                 throw(_StencilFallback("pgather index non-affine in box"))
             return _materialize_pgather_tbl(rec, idx_names, box, D,
-                                            var_map, const_arrays)
+                                            var_map, const_arrays, run)
         end
         return _AccRepl(_AccForcingBox(pg.flat, s, off))
     end
@@ -1560,21 +1602,22 @@ end
 # `_materialize_const_box` / `_materialize_state_tbl` build, whose entries at
 # the cells that never read the lane are fillers — a const lane's first
 # in-range value (so a lane uniform where it is read still folds to a
-# literal), a state lane's ghost slot 0.
+# literal), a state lane's ghost slot 0. Over the cells `run` a program runs,
+# as `_box_table` builds it.
 function _guarded_lane_repl(rec::_LaneRecipe, paths::Vector{_GuardPath}, recipes,
-                            idx_names, box, D, var_map, const_arrays)
-    s, off, len = _box_local_addr(box, D)
+                            idx_names, box, D, var_map, const_arrays, run=box)
+    s, off, len = _box_table_addr(box, run, D)
     state = rec.kind == LANE_STATE
-    tbl = state ? Vector{Int}(undef, len) : Vector{Float64}(undef, len)
+    tbl = state ? zeros(Int, len) : zeros(Float64, len)
     unread = falses(len)
     le = _lane_evaluator(rec, collect(String, idx_names), var_map, const_arrays)
     env = Dict{String,Int}()
     loop = Vector{Int}(undef, D)
-    j = 0
-    for I in CartesianIndices(ntuple(d -> UnitRange{Int}(box[d]), D))
-        j += 1
+    for I in CartesianIndices(ntuple(d -> UnitRange{Int}(run[d]), D))
+        j = off
         @inbounds for d in 1:D
             loop[d] = I[d]
+            j += (I[d] - 1) * s[d]
         end
         if le !== nothing
             v, ok = _lane_eval(le, loop)
@@ -1603,8 +1646,12 @@ function _guarded_lane_repl(rec::_LaneRecipe, paths::Vector{_GuardPath}, recipes
     end
     first_read = findfirst(!, unread)
     tbl[unread] .= first_read === nothing ? 0.0 : tbl[first_read]
-    v1 = tbl[1]
-    all(x -> isequal(x, v1), tbl) && return _LitRepl(v1)
+    # (Kept as a table where tiles share the program's code, as
+    # `_materialize_const_box` does.)
+    if !_range_shared_code(_range_spec_now())
+        v1 = tbl[1]
+        all(x -> isequal(x, v1), tbl) && return _LitRepl(v1)
+    end
     return _AccRepl(_AccConstBox(tbl, s, off))
 end
 
@@ -1708,6 +1755,9 @@ function _process_affine_box!(kernels, spine_cache, flat_cache, box, idx_names,
     # than a sample, so `_derive_lane_repl` re-verifies at every cell only where
     # it must. Classified once per branch, not once per box.
     nonaff = _lane_nonaffine_args!(sig, bkey, recipes, ctx_proto.idxset)
+    # A tile's per-box tables cover only the cells of the box it runs
+    # (`_box_table_addr`).
+    run = view === nothing ? box : cbox
     evs = _box_lane_evals!(sig, bkey, recipes, idx_names, var_map, const_arrays)
     lane_repl = Vector{_LaneRepl}(undef, length(recipes))
     for k in eachindex(recipes)
@@ -1715,17 +1765,17 @@ function _process_affine_box!(kernels, spine_cache, flat_cache, box, idx_names,
             @_bench :lane_repl _derive_lane_repl(recipes[k], idx_names, rep, corners, thin,
                                                  oln_rep, base, strides, D, var_map,
                                                  const_arrays, flat_cache, box,
-                                                 !any(nonaff[k]); le=evs[k])
+                                                 !any(nonaff[k]); le=evs[k], run=run)
         catch err
             (_is_const_oob(err) && recipes[k].kind in (LANE_CONST, LANE_STATE)) || rethrow()
             paths = get!(() -> _lane_guard_paths(tmpl, length(recipes)),
                          sig.lane_guards, bkey)[k]
             _guarded_lane_repl(recipes[k], paths, recipes, idx_names, box, D,
-                               var_map, const_arrays)
+                               var_map, const_arrays, run)
         end
     end
 
-    view === nothing || _range_real_repls!(view, lane_repl, recipes, box, cbox, D)
+    view === nothing || _range_real_repls!(view, lane_repl, recipes)
     spine, acc, cse, subs = @_bench_hot :spine_lower get!(spine_cache, string(bkey, '#', _lane_repl_key(lane_repl))) do
         a = _AccDesc[]
         raw = _lower_to_access(tmpl, lane_repl, a, subcalls)
