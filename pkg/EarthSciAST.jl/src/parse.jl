@@ -757,8 +757,13 @@ function coerce_solver(data)
     _num(v) = v === nothing ? nothing : Float64(v)
     _str(v) = v === nothing ? nothing : String(v)
     # A bound keeps its authored form (esm-spec §2.2.7): a timestamp stays the
-    # string, so `emit` writes back what was read.
-    _bound(v) = v isa AbstractString ? String(v) : Float64(v)
+    # string and an integer stays an integer, so `emit` writes back what was
+    # read (`0`, not `0.0`). An integer past Int64 has no exact home and is
+    # carried as its binary64 value.
+    _bound(v) = v isa AbstractString ? String(v) :
+                v isa Int64 ? v :
+                v isa Integer && typemin(Int64) <= v <= typemax(Int64) ? Int64(v) :
+                Float64(v)
     span = _f("time_span")
     s = Solver(stiffness=_str(_f("stiffness")),
                abstol=_num(_f("abstol")),

@@ -1322,15 +1322,16 @@ end
     SolverTimeSpan(start, stop)
 
 The `solver.time_span` interval (esm-spec §2.2.7): the period the document is
-meant to be simulated over. Each bound is what the author wrote — a `Float64`
-in the document's time units (seconds), or an RFC 3339 UTC timestamp `String`
-— so `emit` writes it back unchanged. Its value in seconds comes from
+meant to be simulated over. Each bound is what the author wrote — a number in
+the document's time units (seconds; an `Int64` when written as an integer, else
+a `Float64`), or an RFC 3339 UTC timestamp `String` — so `emit` writes it back
+unchanged. Its value in seconds comes from
 [`resolve_time_span`](@ref). The wire key `end` is spelled `stop` here, as in
 [`TimeSpan`](@ref), because `end` is a Julia keyword.
 """
 struct SolverTimeSpan
-    start::Union{Float64,String}
-    stop::Union{Float64,String}
+    start::Union{Int64,Float64,String}
+    stop::Union{Int64,Float64,String}
 end
 
 """

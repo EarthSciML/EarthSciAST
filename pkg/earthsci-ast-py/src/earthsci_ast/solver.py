@@ -20,6 +20,7 @@ tolerance and interval resolution orders (§2.2.2, §2.2.7).
 
 from __future__ import annotations
 
+import math
 import os
 import re
 from typing import TYPE_CHECKING, Any
@@ -274,10 +275,12 @@ def solver_external_location(
 
 #: A ``time_span`` bound's timestamp form: the schema's pattern, RFC 3339 in UTC
 #: with the ``Z`` required. Field ranges are the pattern's; whether the day
-#: exists is the load-time check's.
+#: exists is the load-time check's. Both patterns end in ``\Z``, not ``$``:
+#: Python's ``$`` also matches before a final newline, which the other bindings'
+#: readers do not admit.
 _BOUND_RE = re.compile(
     r"^([0-9]{4})-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])"
-    r"T([01][0-9]|2[0-3]):([0-5][0-9]):([0-5][0-9])(?:\.([0-9]+))?Z$"
+    r"T([01][0-9]|2[0-3]):([0-5][0-9]):([0-5][0-9])(?:\.([0-9]+))?Z\Z"
 )
 
 #: A time ORIGIN (``domain.temporal.reference_time`` / ``start``): an RFC 3339
@@ -285,7 +288,7 @@ _BOUND_RE = re.compile(
 #: ``±hh:mm`` offset (§2.2.7).
 _ORIGIN_RE = re.compile(
     r"^([0-9]{4})-([0-9]{2})-([0-9]{2})[Tt]([0-9]{2}):([0-9]{2}):([0-9]{2})"
-    r"(?:\.([0-9]+))?(?:([Zz])|([+-])([0-9]{2}):([0-9]{2}))$"
+    r"(?:\.([0-9]+))?(?:([Zz])|([+-])([0-9]{2}):([0-9]{2}))\Z"
 )
 
 _POSIX_EPOCH = "1970-01-01T00:00:00Z"
@@ -330,10 +333,18 @@ def _whole_and_fraction(
     return whole, (float("0." + frac) if frac else 0.0)
 
 
-def _parse_bound_timestamp(text: str) -> tuple[int, float]:
-    """(*W*, *f*) of a bound already known to match :data:`_BOUND_RE`."""
+def _parse_bound_timestamp(which: str, text: str) -> tuple[int, float]:
+    """(*W*, *f*) of a timestamp bound. Raises ``solver_time_span_invalid`` when
+    it does not match :data:`_BOUND_RE` (reachable only for a document built in
+    memory: load leaves that to the schema) and :class:`_NoCalendarDay` when it
+    matches but names no calendar day."""
     m = _BOUND_RE.match(text)
-    assert m is not None
+    if m is None:
+        raise SolverBlockError(
+            SOLVER_TIME_SPAN_INVALID,
+            f'/solver/time_span/{which}: "{text}" is not an RFC 3339 UTC timestamp '
+            "(YYYY-MM-DDThh:mm:ss[.f]Z). Offending path: /solver/time_span",
+        )
     y, mo, d, h, mi, sec = (int(g) for g in m.groups()[:6])
     return _whole_and_fraction(y, mo, d, h, mi, sec, m.group(7), 0)
 
@@ -394,20 +405,37 @@ def _origin_field(temporal: Any) -> tuple[str, Any]:
 
 
 def _time_span_seconds(start: Any, end: Any, temporal: Any) -> tuple[float, float]:
-    """Both bounds in binary64 seconds on the document's clock (§2.2.7).
+    """Both bounds in binary64 seconds on the document's clock (§2.2.7), checked.
 
     Raises :class:`SolverBlockError` (``solver_time_span_invalid``) when a
-    timestamp names no calendar day or the origin a timestamp needs cannot be
-    read. Both bounds must already have a schema-valid form.
+    bound is neither a finite number nor a timestamp in the schema's form, a
+    timestamp names no calendar day, the origin a timestamp needs cannot be
+    read, or ``end`` is not after ``start``.
     """
     origin: tuple[int, float] | None = None
 
     def convert(which: str, value: Any) -> float:
         nonlocal origin
         if _is_number(value):
-            return float(value)
+            try:
+                seconds = float(value)
+            except OverflowError:  # an integer literal past binary64
+                seconds = math.inf
+            if not math.isfinite(seconds):
+                raise SolverBlockError(
+                    SOLVER_TIME_SPAN_INVALID,
+                    f"/solver/time_span/{which} ({value!r}) is not a finite number of "
+                    "seconds in binary64 (esm-spec §2.2.7). Offending path: /solver/time_span",
+                )
+            return seconds
+        if not isinstance(value, str):
+            raise SolverBlockError(
+                SOLVER_TIME_SPAN_INVALID,
+                f"/solver/time_span/{which} ({value!r}) is neither a number nor a "
+                "timestamp. Offending path: /solver/time_span",
+            )
         try:
-            whole, frac = _parse_bound_timestamp(value)
+            whole, frac = _parse_bound_timestamp(which, value)
         except _NoCalendarDay:
             raise SolverBlockError(
                 SOLVER_TIME_SPAN_INVALID,
@@ -428,7 +456,15 @@ def _time_span_seconds(start: Any, end: Any, temporal: Any) -> tuple[float, floa
         w0, f0 = origin
         return float(whole - w0) + (frac - f0)
 
-    return convert("start", start), convert("end", end)
+    lo, hi = convert("start", start), convert("end", end)
+    if not hi > lo:
+        raise SolverBlockError(
+            SOLVER_TIME_SPAN_INVALID,
+            f"/solver/time_span: `end` ({end!r}, {hi!r} s) is not after `start` "
+            f"({start!r}, {lo!r} s); a time_span must describe a non-empty interval "
+            "(esm-spec §2.2.7). Offending path: /solver/time_span",
+        )
+    return lo, hi
 
 
 def reject_solver_time_span_invalid(view: Any) -> None:
@@ -454,14 +490,7 @@ def reject_solver_time_span_invalid(view: Any) -> None:
         return
     domain = view.get("domain")
     temporal = domain.get("temporal") if isinstance(domain, dict) else None
-    lo, hi = _time_span_seconds(start, end, temporal)
-    if not hi > lo:
-        raise SolverBlockError(
-            SOLVER_TIME_SPAN_INVALID,
-            f"/solver/time_span: `end` ({end!r}, {hi!r} s) is not after `start` "
-            f"({start!r}, {lo!r} s); a time_span must describe a non-empty interval "
-            "(esm-spec §2.2.7). Offending path: /solver/time_span",
-        )
+    _time_span_seconds(start, end, temporal)
 
 
 def resolve_time_span(
@@ -479,7 +508,9 @@ def resolve_time_span(
     3. Otherwise ``None``: no interval, not a default one.
 
     The document keeps, and ``emit`` writes, the authored bounds; the converted
-    value is never written back.
+    value is never written back. Raises ``solver_time_span_invalid`` for an
+    interval a load would have refused (a document built in memory is not
+    checked at load), and for a bound whose form is not the schema's.
     """
     if tspan is not None:
         start, end = tspan

@@ -278,3 +278,65 @@ func TestSolverTimeSpanPresentOriginNeverFallsBack(t *testing.T) {
 		})
 	}
 }
+
+// stsNumbersWith is the numbers fixture with its `time_span` text replaced.
+func stsNumbersWith(t *testing.T, span string) string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(stsSuiteDir(t), "fixtures", "numbers.esm"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	doc["solver"] = map[string]any{"time_span": "SPAN"}
+	text, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Replace(string(text), `"SPAN"`, span, 1)
+}
+
+// A number bound emits as the literal written (esm-spec §2.2.4 requirement 2):
+// `1.0` stays `1.0` and `0` stays `0`, not the float64's shortest form.
+func TestSolverTimeSpanNumberEmitsAsWritten(t *testing.T) {
+	file, err := LoadString(stsNumbersWith(t, `{"start":0,"end":1.0}`))
+	if err != nil {
+		t.Fatalf("must load: %v", err)
+	}
+	out, err := ToJSON(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compact := strings.Join(strings.Fields(out), "")
+	if !strings.Contains(compact, `"start":0,`) && !strings.Contains(compact, `"start":0}`) ||
+		!strings.Contains(compact, `"end":1.0`) {
+		t.Errorf("emitted time_span is not the authored text; got: %s", out)
+	}
+	// A bound changed in code emits its new value, not the stale literal.
+	*file.SolverHints.TimeSpan.End.Number = 2.5
+	out, err = ToJSON(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compact := strings.Join(strings.Fields(out), ""); !strings.Contains(compact, `"end":2.5`) {
+		t.Errorf("an edited bound must emit its value; got: %s", out)
+	}
+}
+
+// A number past binary64 is no count of seconds: refused at load, as every
+// binding refuses it.
+func TestSolverTimeSpanNonFiniteBoundIsRefused(t *testing.T) {
+	for _, span := range []string{
+		`{"start":0,"end":1e400}`,
+		`{"start":0,"end":1` + strings.Repeat("0", 400) + `}`,
+		`{"start":1e400,"end":1e400}`,
+	} {
+		_, err := LoadString(stsNumbersWith(t, span))
+		var de DiagnosticError
+		if err == nil || !errors.As(err, &de) || de.DiagnosticCode() != CodeSolverTimeSpanInvalid {
+			t.Errorf("%s: got %v, want code %q", span[:20], err, CodeSolverTimeSpanInvalid)
+		}
+	}
+}

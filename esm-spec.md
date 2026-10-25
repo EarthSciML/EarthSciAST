@@ -469,14 +469,24 @@ A key that is present selects its field whatever its value: a `reference_time`
 that cannot be read is an error (below), never a reason to fall back to
 `start`. A `null` value is present, and is not a date-time.
 
-This is the clock the data loaders already run on (§8.3): a loader refresh at
+When the document's `domain.temporal` carries a non-empty `reference_time` or
+`start`, this is the clock the data loaders run on (§8.3): a loader refresh at
 simulation time `t` reads data for the instant origin + `t` seconds. A
-timestamp in `time_span` therefore lands on the same clock as the data the
-document reads, and a document whose `domain.temporal.start` equals its
-`time_span.start` timestamp begins at `t = 0`. The origin fields are RFC 3339
+timestamp in `time_span` then lands on the same clock as the data the document
+reads, and a document whose `domain.temporal.start` equals its
+`time_span.start` timestamp begins at `t = 0`. Without such an anchor the two
+clocks are not shared: a timestamp bound counts from the POSIX epoch, while a
+loader anchors `t = 0` by its own rules (§8.3), which may be its own
+`temporal.start` or run window. A document that pairs timestamp bounds with
+data loaders SHOULD therefore declare `domain.temporal.reference_time` or
+`domain.temporal.start`. (An empty-string `reference_time` is not a date-time:
+the load-time check below refuses it when a bound is a timestamp; the loaders
+skip it.) The origin fields are RFC 3339
 date-times, read as `YYYY-MM-DD`, `T` or `t`, `hh:mm:ss`, an optional
 fraction, then `Z`, `z` or a `±hh:mm` offset (hours `00`–`23`, minutes
-`00`–`59`); a binding reads one only when a bound is a timestamp. As for a
+`00`–`59`), and nothing after it — in particular no trailing newline, which a
+regular expression ending in `$` admits in PCRE and Python but not in RE2 or
+JavaScript; a binding reads one only when a bound is a timestamp. As for a
 bound, the seconds field is `00`–`59`: a leap second `:60`, which RFC 3339
 admits, has no POSIX count and makes the field unreadable.
 
@@ -501,6 +511,10 @@ a binding converts both bounds and refuses the document with
 `solver_time_span_invalid`, naming `/solver/time_span`, when:
 
 - `end` is not after `start` (an empty or reversed interval);
+- a number bound is not finite in binary64 (a literal such as `1e400`, or an
+  integer of hundreds of digits). A binding whose JSON reader refuses such a
+  literal while parsing (Julia, Rust) refuses the document there instead; no
+  binding loads it;
 - a timestamp matches the pattern but names no calendar day (`2019-02-30`,
   `2019-04-31`, or `02-29` outside a leap year); or
 - a bound is a timestamp and the origin field that applies is not an RFC 3339

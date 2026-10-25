@@ -151,6 +151,9 @@ describe('solver.time_span load gates', () => {
     ['1.3.0', '{"time_span":{"start":"yesterday","end":0}}', 'schema_validation_failed'],
     ['1.3.0', '{"time_span":{"start":0}}', 'schema_validation_failed'],
     ['1.3.0', '{"time_span":{"start":0,"end":1}}', null],
+    // A number past binary64 parses to Infinity and is refused, not skipped.
+    ['1.3.0', '{"time_span":{"start":1e400,"end":1e400}}', ERROR_CODES.SOLVER_TIME_SPAN_INVALID],
+    ['1.3.0', '{"time_span":{"start":0,"end":1e400}}', ERROR_CODES.SOLVER_TIME_SPAN_INVALID],
     ['1.2.0', '{"reltol":1e-6}', null],
   ])('esm %s, solver %s -> %s', (esm, solver, want) => {
     const got = codeOf(() => loadString(doc(esm, solver)))

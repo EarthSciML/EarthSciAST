@@ -196,3 +196,55 @@ def test_a_leap_second_or_out_of_range_offset_origin_is_unreadable(origin: str) 
         earthsci_ast.load_document(doc)
     assert excinfo.value.code == "solver_time_span_invalid"
     assert "/domain/temporal/reference_time" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    ("start", "end", "needle"),
+    [
+        (100, 0, "is not after"),
+        (1.0, 1.0, "is not after"),
+        ("2019-07-01", "2019-07-02T00:00:00Z", "not an RFC 3339 UTC timestamp"),
+        (0, float("inf"), "not a finite number"),
+        (None, 1, "neither a number nor a timestamp"),
+    ],
+)
+def test_the_accessor_refuses_what_a_load_would(start, end, needle: str) -> None:
+    """A document built in memory skips the load-time check, so the accessor
+    makes it, with the same code as the other four bindings."""
+    with pytest.raises(earthsci_ast.SolverBlockError) as excinfo:
+        earthsci_ast.resolve_time_span(_in_memory(start, end, {}))
+    assert excinfo.value.code == "solver_time_span_invalid"
+    assert needle in str(excinfo.value)
+
+
+@pytest.mark.parametrize("end", [10**400, float("inf")], ids=["huge_integer", "overflowed_float"])
+def test_a_bound_past_binary64_is_refused_at_load(end) -> None:
+    """`json` reads a 400-digit literal as an int and `1e400` as inf; both are
+    refused with the ESM code, not an OverflowError."""
+    doc = json.loads((SUITE / "fixtures" / "numbers.esm").read_text())
+    doc["solver"]["time_span"]["end"] = end
+    with pytest.raises(earthsci_ast.SolverBlockError) as excinfo:
+        earthsci_ast.load_document(doc)
+    assert excinfo.value.code == "solver_time_span_invalid"
+
+
+def test_a_trailing_newline_is_not_a_date_time() -> None:
+    """`$` would admit a final newline; the patterns end at the string's end,
+    as RE2, JavaScript and the Rust reader do."""
+    doc = json.loads((SUITE / "fixtures" / "timestamps_reference_time.esm").read_text())
+    doc["domain"]["temporal"]["reference_time"] = "2019-07-01T00:00:00Z\n"
+    with pytest.raises(earthsci_ast.SolverBlockError) as excinfo:
+        earthsci_ast.load_document(doc)
+    assert excinfo.value.code == "solver_time_span_invalid"
+    assert "/domain/temporal/reference_time" in str(excinfo.value)
+
+    # A bound with one is not in the timestamp form, so the load-time check
+    # leaves it to the schema, and the accessor names its form.
+    from earthsci_ast import solver
+
+    assert not solver._schema_valid_bound("2019-07-03T00:00:00Z\n")
+    with pytest.raises(earthsci_ast.SolverBlockError) as excinfo:
+        earthsci_ast.resolve_time_span(
+            _in_memory("2019-07-03T00:00:00Z\n", "2019-07-04T00:00:00Z", {})
+        )
+    assert "not an RFC 3339 UTC timestamp" in str(excinfo.value)

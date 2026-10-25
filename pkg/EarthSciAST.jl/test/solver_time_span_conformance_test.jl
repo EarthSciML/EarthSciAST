@@ -54,7 +54,7 @@ include("testutils.jl")   # TESTUTILS_REPO_ROOT
 
     @testset "the authored bounds are what the type holds" begin
         file = _load("mixed")
-        @test file.solver.time_span == EarthSciAST.SolverTimeSpan(0.0, "2019-07-01T01:00:00Z")
+        @test file.solver.time_span == EarthSciAST.SolverTimeSpan(0, "2019-07-01T01:00:00Z")
         # A rebuild through migrate keeps it.
         @test EarthSciAST.migrate(file, file.esm).solver == file.solver
     end
@@ -76,6 +76,58 @@ include("testutils.jl")   # TESTUTILS_REPO_ROOT
               e.code == EarthSciAST.ERROR_CODES.SOLVER_TIME_SPAN_INVALID
         @test EarthSciAST.resolve_time_span(EarthSciAST.EsmFile("1.3.0",
             EarthSciAST.Metadata("m"))) === nothing
+        refusal(span) = try
+            EarthSciAST.resolve_time_span(mem(span))
+            nothing
+        catch err
+            err
+        end
+        # A bound not in the timestamp form is named as such, not as a bad day.
+        e = refusal(EarthSciAST.SolverTimeSpan("2019-07-01", "2019-07-02T00:00:00Z"))
+        @test e isa EarthSciAST.ExpressionTemplateError &&
+              e.code == EarthSciAST.ERROR_CODES.SOLVER_TIME_SPAN_INVALID &&
+              occursin("not an RFC 3339 UTC timestamp", e.message)
+        e = refusal(EarthSciAST.SolverTimeSpan(0.0, Inf))
+        @test e isa EarthSciAST.ExpressionTemplateError &&
+              e.code == EarthSciAST.ERROR_CODES.SOLVER_TIME_SPAN_INVALID &&
+              occursin("not a finite number", e.message)
+    end
+
+    @testset "an integer bound emits as the integer written" begin
+        span = JSON3.read(EarthSciAST.to_json(_load("numbers")), Dict{String,Any})["solver"]["time_span"]
+        @test span["start"] isa Integer && span["end"] isa Integer
+        @test _load("numbers").solver.time_span == EarthSciAST.SolverTimeSpan(0, 3600)
+    end
+
+    # JSON3 refuses such a literal while parsing (as Rust's reader does); the
+    # §2.2.7 check is the backstop for a reader that yields an infinite value.
+    @testset "a bound past binary64 is refused at load" begin
+        mktempdir() do dir
+            doc = JSON3.read(read(joinpath(suite, "fixtures", "numbers.esm"), String),
+                             Dict{String,Any})
+            for literal in ("1e400", "1" * "0"^400)
+                path = joinpath(dir, "big.esm")
+                text = replace(JSON3.write(doc), "\"end\":3600" => "\"end\":" * literal)
+                @test occursin(literal, text)
+                write(path, text)
+                e = try
+                    EarthSciAST.load_path(path)
+                    nothing
+                catch err
+                    err
+                end
+                @test e isa EarthSciAST.ParseError ||
+                      (e isa EarthSciAST.ExpressionTemplateError &&
+                       e.code == EarthSciAST.ERROR_CODES.SOLVER_TIME_SPAN_INVALID)
+            end
+        end
+    end
+
+    @testset "the time-span calendar does not capture datetime.day_of_year's kernel" begin
+        # registered_functions.jl's traceable `_days_from_civil` keeps its own
+        # dispatch for `Int` arguments (it returns the `_cdiv` float).
+        @test EarthSciAST._days_from_civil(2019, 1, 1) === 17897.0
+        @test EarthSciAST._epoch_days(2019, 1, 1) === 17897
     end
 
     @testset "the calendar, without a date library" begin
@@ -90,5 +142,8 @@ include("testutils.jl")   # TESTUTILS_REPO_ROOT
         @test parts("2019-07-01T24:00:00Z") === nothing
         @test parts("2019-07-01T23:59:60Z") === nothing
         @test parts("2019-07-01 00:00:00Z") === nothing
+        # The pattern ends at the end of the string: no trailing newline.
+        @test parts("1970-01-01T00:00:00Z\n") === nothing
+        @test !occursin(EarthSciAST._TIME_SPAN_TIMESTAMP_RE, "2019-07-01T00:00:00Z\n")
     end
 end

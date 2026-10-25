@@ -317,7 +317,6 @@ function convertTimeSpan(timeSpan: unknown, doc: unknown): [number, number] | nu
   const stamps: (RegExpExecArray | null)[] = []
   for (const b of raw) {
     if (typeof b === 'number') {
-      if (!Number.isFinite(b)) return null
       stamps.push(null)
     } else if (typeof b === 'string') {
       const m = BOUND_RE.exec(b)
@@ -325,6 +324,16 @@ function convertTimeSpan(timeSpan: unknown, doc: unknown): [number, number] | nu
       stamps.push(m)
     } else {
       return null
+    }
+  }
+
+  // A JSON number past binary64 (`1e400`) parses to Infinity: a schema-valid
+  // form whose value is no count of seconds, refused like the other bindings.
+  for (let i = 0; i < 2; i++) {
+    if (stamps[i] === null && !Number.isFinite(raw[i] as number)) {
+      throw timeSpanInvalid(
+        `${i === 0 ? 'start' : 'end'} (${String(raw[i])}) is not a finite number of seconds in binary64 (esm-spec §2.2.7).`,
+      )
     }
   }
 

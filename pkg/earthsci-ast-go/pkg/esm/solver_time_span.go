@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
 	"regexp"
 	"strconv"
 )
@@ -28,10 +29,13 @@ type SolverTimeSpan struct {
 // UTC timestamp (`YYYY-MM-DDThh:mm:ss(.f+)?Z`), which means the seconds from
 // the document's time origin to that instant (esm-spec §2.2.7). Exactly one of
 // Number and Timestamp is set. It round-trips verbatim: a timestamp stays the
-// string, a number stays the number.
+// string, a number stays the number written (`1.0` emits as `1.0`, `0` as `0`).
 type TimePoint struct {
 	Number    *float64
 	Timestamp *string
+	// literal is the number's authored JSON text, kept so emit writes it back
+	// unchanged; it is used only while it still denotes *Number.
+	literal string
 }
 
 func timePointNumber(v float64) TimePoint   { return TimePoint{Number: &v} }
@@ -44,6 +48,11 @@ func (p TimePoint) MarshalJSON() ([]byte, error) {
 	case p.Timestamp != nil:
 		return json.Marshal(*p.Timestamp)
 	case p.Number != nil:
+		if p.literal != "" {
+			if v, err := strconv.ParseFloat(p.literal, 64); err == nil && v == *p.Number {
+				return []byte(p.literal), nil
+			}
+		}
 		return json.Marshal(*p.Number)
 	}
 	return nil, fmt.Errorf("solver.time_span bound holds neither a number nor a timestamp")
@@ -65,7 +74,7 @@ func (p *TimePoint) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &v); err != nil {
 		return fmt.Errorf("solver.time_span bound must be a number or a timestamp string: %w", err)
 	}
-	*p = TimePoint{Number: &v}
+	*p = TimePoint{Number: &v, literal: string(data)}
 	return nil
 }
 
@@ -291,6 +300,11 @@ func timeSpanSeconds(start, end TimePoint, origin timeOriginSource) ([2]float64,
 		name := [2]string{"start", "end"}[i]
 		switch {
 		case p.Number != nil:
+			if math.IsInf(*p.Number, 0) || math.IsNaN(*p.Number) {
+				return out, timeSpanError(fmt.Sprintf(
+					"`%s` (%s) is not a finite number of seconds in binary64 (esm-spec §2.2.7)",
+					name, strconv.FormatFloat(*p.Number, 'g', -1, 64)))
+			}
 			out[i] = *p.Number
 		case p.Timestamp != nil:
 			inst, formOK, ok := parseTimeSpanBound(*p.Timestamp)

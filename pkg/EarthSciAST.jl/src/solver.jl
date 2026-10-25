@@ -213,12 +213,14 @@ function reject_solver_time_span_pre_v13(raw_data)
 end
 
 # A `time_span` bound written as a timestamp: the schema's pattern, UTC with `Z`.
+# Anchored with `\z`, not `$`: PCRE's `$` also matches before a final newline,
+# which RE2, JavaScript and the Rust reader do not admit.
 const _TIME_SPAN_TIMESTAMP_RE =
-    r"^([0-9]{4})-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):([0-5][0-9]):([0-5][0-9])(\.[0-9]+)?Z$"
+    r"^([0-9]{4})-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):([0-5][0-9]):([0-5][0-9])(\.[0-9]+)?Z\z"
 # The time origin (`domain.temporal.reference_time` / `start`): any RFC 3339
 # date-time, offset included. Ranges are checked after the match.
 const _RFC3339_DATETIME_RE =
-    r"^([0-9]{4})-([0-9]{2})-([0-9]{2})[Tt]([0-9]{2}):([0-9]{2}):([0-9]{2})(\.[0-9]+)?([Zz]|([+-])([0-9]{2}):([0-9]{2}))$"
+    r"^([0-9]{4})-([0-9]{2})-([0-9]{2})[Tt]([0-9]{2}):([0-9]{2}):([0-9]{2})(\.[0-9]+)?([Zz]|([+-])([0-9]{2}):([0-9]{2}))\z"
 
 _is_leap_year(y::Int) = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
 _days_in_month(y::Int, m::Int) =
@@ -226,7 +228,10 @@ _days_in_month(y::Int, m::Int) =
 
 # Days from 1970-01-01 to y-m-d in the proleptic Gregorian calendar (Hinnant's
 # `days_from_civil`), so no host date library decides the range or the rules.
-function _days_from_civil(y::Int, m::Int, d::Int)
+# Exact `Int` arithmetic, and deliberately NOT a method of the `_days_from_civil`
+# in registered_functions.jl: that one is the traceable `_cdiv` kernel behind
+# `datetime.day_of_year`, and an `Int` method here would take over its dispatch.
+function _epoch_days(y::Int, m::Int, d::Int)
     y -= m <= 2
     era = fld(y, 400)
     yoe = y - era * 400
@@ -250,7 +255,7 @@ function _datetime_parts(s::AbstractString, re::Regex)
         (oh <= 23 && om <= 59) || return nothing
         offset = (m.captures[9] == "-" ? -1 : 1) * (oh * 3600 + om * 60)
     end
-    whole = _days_from_civil(y, mo, d) * 86400 + h * 3600 + mi * 60 + sec - offset
+    whole = _epoch_days(y, mo, d) * 86400 + h * 3600 + mi * 60 + sec - offset
     frac = m.captures[7] === nothing ? 0.0 : parse(Float64, "0" * m.captures[7])
     return (whole, frac)
 end
@@ -281,7 +286,15 @@ end
 
 # One bound in seconds, or a fault naming why it has none.
 function _time_span_seconds(bound, which::String, origin)
-    bound isa Real && return Float64(bound)
+    if bound isa Real && !(bound isa Bool)
+        v = Float64(bound)
+        isfinite(v) || return _TimeSpanFault(
+            "$(which) ($(bound)) is not a finite number of seconds in binary64")
+        return v
+    end
+    bound isa AbstractString && occursin(_TIME_SPAN_TIMESTAMP_RE, bound) ||
+        return _TimeSpanFault("$(which) \"$(bound)\" is not an RFC 3339 UTC timestamp " *
+                              "(YYYY-MM-DDThh:mm:ss[.f]Z)")
     parts = _datetime_parts(bound, _TIME_SPAN_TIMESTAMP_RE)
     parts === nothing &&
         return _TimeSpanFault("$(which) \"$(bound)\" names no calendar day")
