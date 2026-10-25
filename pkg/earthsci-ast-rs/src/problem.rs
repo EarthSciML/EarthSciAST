@@ -615,8 +615,10 @@ pub struct ProblemOptions {
     /// (inline array data, or one scalar broadcast over its grid) as a
     /// run-time input of [`crate::rhs_program`]: an
     /// [`crate::SlotKind::ArrayParameter`] forcing slot, seeded with that
-    /// value, instead of build-time data (API_SPEC §5.8). Off by default;
-    /// `solve` is unaffected either way.
+    /// value, instead of build-time data (API_SPEC §5.8). The Problem itself
+    /// reads it from its forcing buffer, where construction serves that
+    /// value, so `solve` integrates the same numbers either way. Off by
+    /// default.
     pub runtime_array_parameters: bool,
 }
 
@@ -2074,6 +2076,7 @@ pub fn esm_problem<'a>(
         model_name.as_deref(),
         opts.rhs,
         compiler,
+        opts.runtime_array_parameters,
     )?;
 
     // ---- (4a) The missing-data gate (esm-spec §10.10). ---------------------
@@ -2985,6 +2988,7 @@ fn compile_backend(
     model_name: Option<&str>,
     mode: Rhs,
     compiler: Compiler,
+    runtime_array_parameters: bool,
 ) -> Result<Backend, SimulateError> {
     if let Some(details) = unavailable_reason(compiler) {
         return Err(SimulateError::CompilerUnavailable {
@@ -3020,7 +3024,10 @@ fn compile_backend(
                 "the flattened system declares no state variables".to_string(),
             ));
         }
-        let mut compiled = crate::simulate_array::ArrayCompiled::from_flattened(flat)?;
+        let mut compiled = crate::simulate_array::ArrayCompiled::from_flattened_with(
+            flat,
+            runtime_array_parameters,
+        )?;
         compiled.runtime_mode = runtime_mode;
         return Ok(Backend::Array(Rc::new(compiled)));
     }
@@ -3071,7 +3078,7 @@ fn compile_backend(
     // content: a scalar document and a gridded one are built by the same
     // machinery, so that what ran is a property of the name and not of the
     // input." So every document, scalar or gridded, builds the array runtime.
-    let mut compiled = crate::simulate::build_array_compiled(file)?;
+    let mut compiled = crate::simulate::build_array_compiled(file, runtime_array_parameters)?;
     compiled.runtime_mode = runtime_mode;
     Ok(Backend::Array(Rc::new(compiled)))
 }

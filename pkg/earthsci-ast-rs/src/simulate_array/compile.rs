@@ -431,6 +431,15 @@ fn normalize_model_angle_arguments(model: &mut Model) {
 
 impl ArrayCompiled {
     pub fn from_file(file: &EsmFile) -> Result<Self, CompileError> {
+        Self::from_file_with(file, false)
+    }
+
+    /// [`Self::from_file`], with `runtime_array_parameters` as
+    /// [`Self::from_flattened_with`] takes it.
+    pub(crate) fn from_file_with(
+        file: &EsmFile,
+        runtime_array_parameters: bool,
+    ) -> Result<Self, CompileError> {
         let Some(models) = &file.models else {
             return Err(CompileError::build_err("File has no models to simulate"));
         };
@@ -453,8 +462,13 @@ impl ArrayCompiled {
         // which owns its model outright. The model's name rides along so the
         // pipeline can resolve self-qualified references once the subsystems
         // are mounted.
-        let mut compiled =
-            Self::compile_pipeline(model.clone(), &index_sets, None, Some(model_name), false)?;
+        let mut compiled = Self::compile_pipeline(
+            model.clone(),
+            &index_sets,
+            None,
+            Some(model_name),
+            runtime_array_parameters,
+        )?;
         // Record the model's namespace so overrides may be keyed `Model.param`
         // (the scalar/flatten/Julia convention) as well as the raw `param` this
         // single-model path builds (WS3 override-naming parity).

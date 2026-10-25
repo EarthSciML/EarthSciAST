@@ -459,8 +459,13 @@ pub(crate) fn is_array_file(file: &EsmFile) -> bool {
 ///     reactions vanish from the compiled system — silently, because what is
 ///     left still builds. A `dAdt = D(Chem.A)` observed then fails as an
 ///     unlowered `D` and an assertion on `Chem.A` finds no such state.
+///
+/// `runtime_array_parameters` (API_SPEC §5.8): every shaped parameter whose
+/// value only the document supplies is read from the forcing buffer, seeded
+/// with that value, rather than folded in.
 pub(crate) fn build_array_compiled(
     file: &EsmFile,
+    runtime_array_parameters: bool,
 ) -> Result<crate::simulate_array::ArrayCompiled, SimulateError> {
     // Arm the document's whole precision environment for the build
     // (`crate::precision`) — its `domain.element_type` AND the per-variable
@@ -478,9 +483,15 @@ pub(crate) fn build_array_compiled(
     if !whole_document_is_one_model(file) {
         refuse_coupled_subsystem_event(file)?;
         let flat = flatten(file).map_err(CompileError::from)?;
-        Ok(crate::simulate_array::ArrayCompiled::from_flattened(&flat)?)
+        Ok(crate::simulate_array::ArrayCompiled::from_flattened_with(
+            &flat,
+            runtime_array_parameters,
+        )?)
     } else {
-        Ok(crate::simulate_array::ArrayCompiled::from_file(file)?)
+        Ok(crate::simulate_array::ArrayCompiled::from_file_with(
+            file,
+            runtime_array_parameters,
+        )?)
     }
 }
 
