@@ -118,12 +118,14 @@ pub(super) fn select(
 
     // The cone of what the kept derivatives read, closed through the
     // algebraic equations that define observeds.
-    let mut definers: HashMap<&str, usize> = HashMap::new();
+    // An observed may be defined region by region (`x[1] ~ …`,
+    // `x[2:N] ~ …`), so every defining equation is followed.
+    let mut definers: HashMap<&str, Vec<usize>> = HashMap::new();
     for (k, eq) in equations.iter().enumerate() {
         if derivative_target(&eq.lhs).is_none()
             && let Some(name) = defined_name(&eq.lhs)
         {
-            definers.insert(name, k);
+            definers.entry(name).or_default().push(k);
         }
     }
     let mut cone: HashSet<String> = HashSet::new();
@@ -138,8 +140,9 @@ pub(super) fn select(
         if !cone.insert(name.clone()) {
             continue;
         }
-        if let Some(&k) = definers.get(name.as_str()) {
+        for &k in definers.get(name.as_str()).into_iter().flatten() {
             stack.extend(crate::expression::free_variables(&equations[k].rhs));
+            stack.extend(crate::expression::free_variables(&equations[k].lhs));
         }
     }
     let mut kept_eqs = Vec::new();

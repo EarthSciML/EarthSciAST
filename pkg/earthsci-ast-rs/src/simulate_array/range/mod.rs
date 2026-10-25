@@ -432,6 +432,20 @@ pub struct RhsProgram {
     /// is read from and the block offsets `(input base, state offset, len)`.
     scatter: Vec<(TileInput, usize, usize, usize)>,
     declared: Arc<HashSet<String>>,
+    /// The forcing buffers in the form the per-cell evaluator reads them,
+    /// built once (`None` under `native`, whose tape reads `forcing`).
+    interp_forcing: Option<RefCell<HashMap<String, ArrayD<f64>>>>,
+    /// This program's identity, matched against the workspaces it made. A
+    /// counter value rather than an address, so it survives a move of the
+    /// program.
+    id: usize,
+}
+
+/// A fresh [`RhsProgram`] identity.
+fn next_program_id() -> usize {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static NEXT: AtomicUsize = AtomicUsize::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
 impl std::fmt::Debug for RhsProgram {
@@ -568,6 +582,8 @@ impl RhsProgram {
             })
             .collect();
         let declared = Arc::new(compiled.declared_names.clone());
+        let interp_forcing =
+            (compiler == Compiler::Interpreter).then(|| RefCell::new((*forcing).clone()));
         Ok(RhsProgram {
             flat,
             compiled: Rc::new(compiled),
@@ -580,6 +596,8 @@ impl RhsProgram {
             forcing,
             scatter,
             declared,
+            interp_forcing,
+            id: next_program_id(),
         })
     }
 
@@ -718,7 +736,7 @@ impl RhsProgram {
             }
         };
         RhsWorkspace {
-            owner: self as *const _ as usize,
+            owner: self.id,
             state: vec![0.0; self.compiled.n_states],
             dy: vec![0.0; self.compiled.n_states],
             exec,
@@ -740,7 +758,7 @@ impl RhsProgram {
     ) -> Result<(), SimulateError> {
         check_lengths(&self.blocks, u, aux, du, p, self.compiled.param_names.len())?;
         let forcing = &*self.forcing;
-        if ws.owner != self as *const _ as usize {
+        if ws.owner != self.id {
             return Err(build_error(
                 "`eval_into`: the workspace was made by another program".to_string(),
             ));
@@ -767,7 +785,10 @@ impl RhsProgram {
             }
             WsExec::Lanes { .. } => unreachable!("a whole-domain workspace runs one program"),
             WsExec::Scratch(scratch) => {
-                let cell = RefCell::new(forcing.clone());
+                let cell = self
+                    .interp_forcing
+                    .as_ref()
+                    .expect("an interpreter program holds its forcing cell");
                 let mut stats = RhsStats::default();
                 evaluate_rhs_with_scratch(
                     &RhsCall {
@@ -778,7 +799,7 @@ impl RhsProgram {
                         param_names: &self.compiled.param_names,
                         state: &ws.state,
                         params: p,
-                        forcing: &cell,
+                        forcing: cell,
                         t,
                         declared: &self.compiled.declared_names,
                     },
