@@ -1105,6 +1105,15 @@ after `u0`, see [`seed_expression_ic!`](@ref)), and the streaming-output set
 `sinks` / `snapshot` / `pre_write` / `checkpoint_predicates` /
 `checkpoint_sinks` / `terminate_on_checkpoint`.
 
+`runtime_array_parameters::Bool = false` makes every shaped parameter whose
+value the document supplies (a declared `default`, a scalar broadcast over its
+grid, an inline override in `p`) a live buffer rather than build-time data: it
+appears in [`forcing_buffers`](@ref)`(prob)`, and a program of the Problem
+([`rhs_program`](@ref)) takes it as a [`ForcingSlot`](@ref) of kind
+`:array_parameter`, so a caller evaluates at another field without a rebuild.
+Caller-supplied `const_arrays` stay constant data. Off, those parameters are
+folded into the build as before.
+
 `pushdown_rewrite::Bool = false` opts in to the automatic projection-pushdown
 desugar ([`desugar_pushdown`](@ref)) at the PUBLIC entry point. The rewrite runs
 on the authored document BEFORE flattening (the pattern is authored in the
@@ -1148,6 +1157,7 @@ function esm_problem(input, tspan;
                      base_path::AbstractString = pwd(),
                      compiler::Symbol = :native,
                      sample_time::Union{Nothing,Real} = nothing,
+                     runtime_array_parameters::Bool = false,
                      # ---- Julia extension seam (§2.5.2) ----
                      const_arrays::AbstractDict = Dict{String,Any}(),
                      param_arrays::AbstractDict = Dict{String,Any}(),
@@ -1358,6 +1368,9 @@ function esm_problem(input, tspan;
     # executable is wrapped back into the in-place `f!` this Problem's surface
     # promises, just below. Every other compiler builds the in-place evaluator
     # directly. See src/compiler_xla.jl.
+    # With `runtime_array_parameters` the build adds the shaped parameters'
+    # buffers to `merged_param`; these are the names it had before.
+    forcing_before = Set{String}(keys(merged_param))
     f!, u0_built, p_built, _tspan, var_map = _with_caller_u0(u0) do
       _build_evaluator(doc;
         compiler = compiler,
@@ -1369,6 +1382,7 @@ function esm_problem(input, tspan;
         inspect = insp,
         materialize_out = dm,
         _param_classes = param_classes,
+        _runtime_array_parameters = runtime_array_parameters,
         # Phase 2b Hook 2: deferred gated providers + the build-time sample tick.
         # The front door fetches these pre-sliced right after value-invention.
         _gated_providers = gated_providers,
@@ -1382,7 +1396,10 @@ function esm_problem(input, tspan;
     insp.program_seed = (; flat_seed[]..., doc, compiler, model_name,
                          overrides, const_arrays = merged_const,
                          param_arrays = merged_param, gated_providers,
-                         sample_time = t_sample)
+                         sample_time = t_sample,
+                         array_parameters = runtime_array_parameters ?
+                             sort!([k for k in keys(merged_param) if !(k in forcing_before)]) :
+                             String[])
 
     # ---- initial state: the document's own ICs, then the caller's -----------
     # Under the build's plan: a `seed_ic!` hook (`seed_expression_ic!`) is an

@@ -1005,10 +1005,14 @@ function _register_inline_array_parameters(model::Model, const_arrays::AbstractD
                                            parameter_overrides::AbstractDict,
                                            index_sets::AbstractDict;
                                            param_arrays::AbstractDict=Dict{String,Any}(),
-                                           derived_extents::AbstractDict=_EMPTY_DERIVED_EXTENTS)
+                                           derived_extents::AbstractDict=_EMPTY_DERIVED_EXTENTS,
+                                           runtime::Bool=false)
     additions = Dict{String,Any}()
     for (name, v) in model.variables
         v.type == ParameterVariable && _is_array_shape(v.shape) || continue
+        # A run-time array parameter already bound (an earlier build of the same
+        # Problem registered it) keeps its buffer.
+        runtime && haskey(param_arrays, name) && continue
         ov = get(parameter_overrides, name, nothing)
         value = if is_inline_array(ov)
             ov
@@ -1043,6 +1047,15 @@ function _register_inline_array_parameters(model::Model, const_arrays::AbstractD
                             ov === nothing ? "default" : "parameter_overrides";
                             derived_extents=derived_extents)
         additions[name] = value
+    end
+    if runtime
+        # Each becomes a live buffer (a forcing slot of kind `:array_parameter`),
+        # not const data: the run-time input a gradient with respect to the
+        # field differentiates against.
+        for (k, v) in additions
+            param_arrays[k] = Array{Float64}(v)
+        end
+        return const_arrays
     end
     isempty(additions) && return const_arrays
     merged = Dict{String,Any}(String(k) => v for (k, v) in const_arrays)
@@ -4659,6 +4672,11 @@ function _build_evaluator_impl_inner(model::Model;
                          # `parameter_classes(prep)` needs no sixth return value
                          # — the same reasoning as `param_map`.
                          _param_classes::Union{Nothing,AbstractDict}=nothing,
+                         # Internal: `esm_problem(…; runtime_array_parameters)`. A
+                         # shaped parameter whose value the document supplies is
+                         # registered as a live `param_arrays` buffer (added to the
+                         # caller's dictionary) instead of const data.
+                         _runtime_array_parameters::Bool=false,
                          # What to return in the RHS slot (tree_walk/oop.jl):
                          # `:inplace` → the zero-alloc, eltype-generic evaluator
                          # `f!(du, u, p, t)`; `:oop` → the compiled IR a compiled
@@ -4827,7 +4845,8 @@ function _build_evaluator_impl_inner(model::Model;
     const_arrays = _register_inline_array_parameters(model, const_arrays,
                                                      parameter_overrides, index_sets;
                                                      param_arrays=param_arrays,
-                                                     derived_extents=vi_set_extents)
+                                                     derived_extents=vi_set_extents,
+                                                     runtime=_runtime_array_parameters)
     initial_conditions = _expand_inline_array_ics(model, initial_conditions, index_sets)
     # ---- Phase 1: equation pre-lowering + build-owned variable classification ----
     cls = _build_lower_and_classify(model;
