@@ -189,7 +189,9 @@ Every document validates against the schema and builds under Julia `native`
 with a finite whole-domain right-hand side at the generated state. The expected
 halo reports were derived from the rules and cross-checked by perturbing each
 state element of the Julia native whole-domain right-hand side at three seeded
-states and recording which elements of `du` moved.
+states and recording which elements of `du` moved. A halo counts reads, not
+dependence: a read whose coefficient is an exact zero (the regional-inflow
+slabs on a uniform grid) is invisible to perturbation but still in the halo.
 
 ## Attribution
 
