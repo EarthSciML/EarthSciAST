@@ -952,7 +952,6 @@ struct _ProgramSeedRecipe
     gated_providers::Dict{String,Any}
     sample_time::Float64
     runtime_array_parameters::Bool
-    array_parameters::Vector{String}  # the buffers the build added for that option
     memo::Base.RefValue{Any}
     lock::ReentrantLock
 end
@@ -991,8 +990,7 @@ function _program_seed(prob)
                     overrides = r.overrides, const_arrays = merged_const,
                     param_arrays = Dict{String,Any}(prob.param_buffers),
                     gated_providers = r.gated_providers, sample_time = r.sample_time,
-                    runtime_array_parameters = r.runtime_array_parameters,
-                    array_parameters = r.array_parameters)
+                    runtime_array_parameters = r.runtime_array_parameters)
     end
 end
 
@@ -1189,14 +1187,17 @@ after `u0`, see [`seed_expression_ic!`](@ref)), and the streaming-output set
 `sinks` / `snapshot` / `pre_write` / `checkpoint_predicates` /
 `checkpoint_sinks` / `terminate_on_checkpoint`.
 
-`runtime_array_parameters::Bool = false` makes every shaped parameter whose
-value the document supplies (a declared `default`, a scalar broadcast over its
-grid, an inline override in `p`) a live buffer rather than build-time data: it
-appears in [`forcing_buffers`](@ref)`(prob)`, and a program of the Problem
+`runtime_array_parameters::Bool = false` makes every shaped parameter with a
+value (a declared `default`, a scalar broadcast over its grid, an inline
+override in `p`, or a caller's `const_arrays` entry) a live buffer holding that
+value rather than build-time data: it appears in
+[`forcing_buffers`](@ref)`(prob)`, and a program of the Problem
 ([`rhs_program`](@ref)) takes it as a [`ForcingSlot`](@ref) of kind
-`:array_parameter`, so a caller evaluates at another field without a rebuild.
-Caller-supplied `const_arrays` stay constant data. Off, those parameters are
-folded into the build as before.
+`:array_parameter` whose default buffer is that value, so a caller evaluates at
+another field without a rebuild. Off, those parameters are folded into the
+build as before. Either way, a shaped parameter the caller binds through
+`param_arrays` is a live buffer, and a program's slot of kind `:array_parameter`
+unless the parameter is externally fed.
 
 `pushdown_rewrite::Bool = false` opts in to the automatic projection-pushdown
 desugar ([`desugar_pushdown`](@ref)) at the PUBLIC entry point. The rewrite runs
@@ -1439,9 +1440,6 @@ function esm_problem(input, tspan;
     # executable is wrapped back into the in-place `f!` this Problem's surface
     # promises, just below. Every other compiler builds the in-place evaluator
     # directly. See src/compiler_xla.jl.
-    # With `runtime_array_parameters` the build adds the shaped parameters'
-    # buffers to `merged_param`; these are the names it had before.
-    forcing_before = Set{String}(keys(merged_param))
     f!, u0_built, p_built, _tspan, var_map = _with_caller_u0(u0) do
       _build_evaluator(doc;
         compiler = compiler,
@@ -1472,8 +1470,6 @@ function esm_problem(input, tspan;
         compiler, overrides, const_arrays, providers,
         Set{String}(keys(discovered)), Set{String}(keys(pd_gates)), pd_coupling,
         gated_providers, t_sample, runtime_array_parameters,
-        runtime_array_parameters ?
-            sort!([k for k in keys(merged_param) if !(k in forcing_before)]) : String[],
         Ref{Any}(nothing), ReentrantLock())
 
     # ---- initial state: the document's own ICs, then the caller's -----------

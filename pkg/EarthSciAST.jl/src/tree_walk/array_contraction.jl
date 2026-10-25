@@ -668,7 +668,7 @@ function _ac_entry_local(ctx::_CGCtx, col, en=nothing)
     if en isa _ACEntries && en.compact[]
         so = _cg_name(ctx, "ecol")
         push!(ctx.geosink, :(local $so = $(_cg_tab!(ctx, col))))
-        push!(ctx.geosink, :(local $s = $(_cg_tab!(ctx, copy(col)))))
+        push!(ctx.geosink, :(local $s = $(_cg_tab!(ctx, _ws_scratch!(copy(col))))))
         push!(en.pairs, (so, s))
         return s
     end
@@ -928,7 +928,7 @@ function _ac_emit_gated(ctx::_CGCtx, kc::_CGScalarCtx, entries::_ACEntries,
     cbinds = Any[:(local $(kvs[r]) = $(_ac_entry_local(ctx, fold.cols[r], entries))[$ev])
                  for r in eachindex(kvs)]
     entries.compact[] = false
-    segc = _ac_entry_local(ctx, copy(fold.seg))
+    segc = _ac_entry_local(ctx, _ws_scratch!(copy(fold.seg)))
     acc = _cg_name(ctx, "acc")
     kv = _cg_name(ctx, "k")
     nc = _cg_geo!(ctx, ncells)

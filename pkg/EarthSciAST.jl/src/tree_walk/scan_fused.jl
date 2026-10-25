@@ -657,7 +657,7 @@ function _colscan_nest(ctx::_CGCtx, S::_ScanFold, K::_AccKernel, sh, invsyms, op
     j1 = geo(j1v, :j1)
     dir = sh.rev ? -1 : 1
     z = S.zerobar
-    accv = _cg_tabh!(ctx, zeros(Float64, length(sh.r1)))
+    accv = _cg_tabh!(ctx, _ws_scratch!(zeros(Float64, length(sh.r1))))
     basec = consumer === nothing ? nothing : geo(consumer.K.cells.base, :basec)
     # The strict scan stores its value at the next level (staggered or not);
     # at the last level of a same-range scan that level is not the scan's.

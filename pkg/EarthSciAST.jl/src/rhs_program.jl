@@ -4,16 +4,15 @@
 #
 # A program (`rhs_program`, `select`, `restrict`, `lanes`; range_restricted.jl)
 # is an ordinary native build whose `f!` is kept as a TEMPLATE: `rhs!` never
-# calls it. Every piece of per-call state that `f!` touches — the prelude cache
-# and its CONST/TIME stamps, kernel scratch, observed buffers, loop counters,
-# threading verdicts, the forcing buffers it gathers, a lane program's lane
-# buffers — is a mutable object reachable from that closure. A workspace holds
-# a private instance of the template (`_new_workspace`): every such object
-# copied, the generated code and every other immutable leaf shared, and every
-# forcing read redirected to the workspace's own slot buffer, which `rhs!`
-# fills from the caller's `ForcingSet` once per set. Two workspaces share no
-# mutable object, so calls on distinct workspaces are reentrant whatever tier
-# each rule landed on.
+# calls it. The build also records what a workspace needs to make a private
+# instance of it (`_ws_factory`): which objects are per-call state (caches and
+# their CONST/TIME stamps, scratch, loop counters, threading verdicts), where
+# the template reads each forcing and lane buffer, and the path from the root
+# to each. A workspace (`_instantiate`) owns fresh copies of the state and its
+# own buffer per forcing slot, which `rhs!` fills from the caller's
+# `ForcingSet` once per set; the generated code and every read-only table are
+# shared with the program. Two workspaces share nothing a call writes, so
+# calls on distinct workspaces are reentrant whatever tier each rule landed on.
 
 # ============================================================================
 # Slots and sets
@@ -38,8 +37,10 @@ Base.:(==)(a::ParamSlot, b::ParamSlot) = a.name == b.name && isequal(a.default, 
 One buffer of a [`ForcingSet`](@ref) ([`forcing_slots`](@ref)): the flattened
 `name`, its resolved `shape` (empty for a 0-d input) and its `kind`: `:forcing`
 (an externally fed parameter: its `update` takes its value from a data source or
-a handler) or `:array_parameter` (a shaped parameter made a run-time input by
-`esm_problem(…; runtime_array_parameters = true)`).
+a handler) or `:array_parameter` (any other parameter the program reads as a
+run-time array: a shaped parameter with a value under
+`esm_problem(…; runtime_array_parameters = true)`, or one whose buffer the
+caller bound through `param_arrays`).
 """
 struct ForcingSlot
     name::String
@@ -77,36 +78,18 @@ not change); build a new set instead ([`replace_forcing`](@ref) shares every
 other buffer). Build one with [`forcing_set`](@ref) or
 [`default_forcing_set`](@ref).
 """
-struct ForcingSet
-    slots::Vector{ForcingSlot}
-    bufs::Vector{Vector{Float64}}
-    epoch::UInt64
+mutable struct ForcingSet
+    # Mutable for a stable address only (a holder stores the reference, never
+    # a boxed copy); never written.
+    const slots::Vector{ForcingSlot}
+    const bufs::Vector{Vector{Float64}}
+    const epoch::UInt64
 end
 
 # One process-wide counter, one value per set built: a workspace that primed
 # epoch `e` holds exactly that set's contents.
 const _FORCING_SET_EPOCH = Threads.Atomic{UInt64}(0)
 _next_set_epoch() = Threads.atomic_add!(_FORCING_SET_EPOCH, UInt64(1)) + UInt64(1)
-
-# What a program and the programs derived from it share (and what identifies a
-# program to its workspaces): the parameter and forcing-slot signatures, the
-# buffers its template `f!` gathers, and its default forcing set. Mutable for
-# identity only; never written.
-mutable struct _RhsShared
-    const params::Vector{ParamSlot}
-    const slots::Vector{ForcingSlot}
-    # The template's forcing buffers, in slot order (the program build's own).
-    const originals::Vector{Array{Float64}}
-    const default::ForcingSet
-    # Buffers a lane program writes per call (lane indices, pre-gathered
-    # inputs); a workspace owns its own copy of each.
-    const lane_originals::Vector{Vector{Float64}}
-end
-
-# The same signatures, default set and buffers, a different program (a tile or
-# a lane program, which re-lower from their operator's build).
-_RhsShared(s::_RhsShared, lane_originals::Vector{Vector{Float64}} = Vector{Float64}[]) =
-    _RhsShared(s.params, s.slots, s.originals, s.default, lane_originals)
 
 # A scalar externally fed parameter is a 0-d forcing slot of a program, not a
 # parameter (API_SPEC §5.8, "Forcing sets"). The build reads forcing through
@@ -258,71 +241,67 @@ function parameter_vector(x, overrides::AbstractDict = Dict{String,Float64}())
 end
 
 # ============================================================================
-# Workspaces: a private instance of a program's template
+# Workspaces: an instance factory recorded at program build
 # ============================================================================
+#
+# A program's compiled right-hand side (its template `f!`) is a graph of
+# closures and section structs over three kinds of object:
+#  - per-call state, of the types in `_WsState`: the prelude and observed
+#    caches with their CONST/TIME stamps, kernel scratch, forcing epochs,
+#    threading verdicts, contraction masks, loop counters (`Ref`s), boxed
+#    closure variables and dictionaries; and every array the build registered
+#    as scratch where it allocated it (`_ws_scratch!`), because generated code
+#    writes it;
+#  - the forcing and lane buffers it reads, which the build recorded by
+#    identity (`_ws_note_pgather!`) and the program maps to its slots;
+#  - everything else (generated code, const data, index tables, geometry),
+#    which nothing writes once the build has finished.
+# `_ws_factory` walks the graph once, when the program is built: it records the
+# objects of the first two kinds and the spine, the objects on a path from the
+# root to one of them. `_instantiate` builds a workspace's private instance from
+# that record: a fresh copy of each piece of state, the workspace's own buffer
+# wherever the template holds a forcing or lane buffer, a rebuilt spine, and
+# every other object shared by reference with the template and every other
+# workspace.
 
-"""
-    RhsWorkspace
+# Per-call state: each workspace holds its own.
+const _WsState = Union{_CSECache,_ObsExtVec,_AccScratch,_ForcingEpoch,_SecTCache,_ACMask,
+                       Base.RefValue,Core.Box,AbstractDict}
 
-The mutable state of [`rhs!`](@ref) on one program (API_SPEC §5.8): a private
-instance of the program's compiled right-hand side (its caches, scratch and
-stamps), the internal state and derivative vectors, a buffer per forcing slot
-and the epoch of the forcing set it last loaded. One per concurrent caller;
-usable with the program that made it only.
-"""
-mutable struct RhsWorkspace{F}
-    const shared::_RhsShared
-    const f!::F
-    const u::Vector{Float64}
-    const du::Vector{Float64}
-    # Per forcing slot, the buffer the instance gathers (empty for a slot it
-    # does not read), and whether it reads it.
-    const fbufs::Vector{Vector{Float64}}
-    const fused::Vector{Bool}
-    # Per lane buffer of a lane program (`shared.lane_originals` order).
-    const lbufs::Vector{Vector{Float64}}
-    const epochs::Vector{_ForcingEpoch}
-    const env::Dict{String,Int}
-    primed::UInt64
+# Mutable types a build constructs and never writes afterwards.
+const _WsReadOnly = Union{OpExpr}
+
+# Leaves that hold no reference to anything a workspace replaces.
+const _WsLeaf = Union{String,Symbol,Expr,Module,DataType,UnionAll,Union,Core.TypeName,
+                      Method,Core.MethodInstance,GlobalRef,Regex,
+                      RuntimeGeneratedFunctions.RuntimeGeneratedFunction}
+
+struct _WsFactory
+    template::Any
+    # Object → `:state`, `:scratch`, `(:slot, k)` or `(:lane, k)`.
+    kinds::IdDict{Any,Any}
+    spine::IdDict{Any,Nothing}
+    slot_len::Vector{Int}
+    slot_read::Vector{Bool}     # whether the template reads slot k at all
+    lane_len::Vector{Int}
+    n::Int                      # the internal slot count of `u` / `du`
 end
 
-# The instantiation walk: a deep copy that shares immutable leaves and the
-# generated code, substitutes buffers by memory, and gives every forcing epoch
-# and threading verdict its workspace form.
-struct _InstCtx
-    d::IdDict{Any,Any}
-    ptrs::Vector{Tuple{UInt,Int,Int}}       # (data pointer, length, buffer index)
-    subs::Vector{Vector{Float64}}           # buffer index → its replacement
-    hit::Vector{Bool}
-    epochs::Vector{_ForcingEpoch}
+# What a program shares with every workspace of it (and what identifies the
+# program to them): the parameter and forcing-slot signatures, the default
+# forcing set, and the factory of its workspaces. A derived program has its
+# parent's signatures and default set and a factory of its own. Mutable for
+# identity only; never written.
+mutable struct _RhsShared
+    const params::Vector{ParamSlot}
+    const slots::Vector{ForcingSlot}
+    const default::ForcingSet
+    const factory::_WsFactory
 end
 
-const _INST_SHARED_LEAVES = Union{String,Symbol,Expr,Module,DataType,UnionAll,Union,
-                                  Core.TypeName,Method,Core.MethodInstance,GlobalRef,
-                                  Regex,RuntimeGeneratedFunctions.RuntimeGeneratedFunction}
-
-function _inst_error(what)
+function _ws_refuse(what)
     throw(ErrorException("internal error: a program's right-hand side holds $what, " *
                          "which a workspace cannot instantiate"))
-end
-
-# A Float64 array aliasing a substituted buffer: the replacement (reshaped to
-# the alias's shape), `nothing` when it aliases none. A partial overlap fails
-# closed: the instance would otherwise keep a private copy of forcing memory.
-function _inst_subst(x::Array{Float64}, c::_InstCtx)
-    isempty(x) && return nothing
-    p = UInt(pointer(x))
-    n = length(x)
-    for (q, m, k) in c.ptrs
-        if p == q && n == m
-            c.hit[k] = true
-            s = c.subs[k]
-            return x isa Vector{Float64} ? s : reshape(s, size(x))
-        end
-        (p < q + 8m && q < p + 8n) &&
-            _inst_error("an array overlapping part of a forcing or lane buffer")
-    end
-    return nothing
 end
 
 @static if isdefined(Base, :Memory)
@@ -331,99 +310,281 @@ else
     _is_memory(x) = false
 end
 
+struct _WsWalk
+    kinds::IdDict{Any,Any}
+    aliases::IdDict{Any,Any}           # forcing / lane buffer → (:slot | :lane, k)
+    scratch::IdDict{Any,Nothing}
+    guard::Vector{Tuple{UInt,UInt,String}}   # memory of each forcing / lane buffer
+    parents::IdDict{Any,Vector{Any}}
+    seen::IdDict{Any,Nothing}
+end
+
+function _ws_guard(x::Array{Float64}, w::_WsWalk)
+    isempty(x) && return nothing
+    p = UInt(pointer(x))
+    q = p + UInt(8 * length(x))
+    for (a, b, name) in w.guard
+        (p < b && a < q) && _ws_refuse("an array over the memory of the live buffer " *
+                                       "'$name' that the build did not record")
+    end
+    return nothing
+end
+
+function _ws_walk!(@nospecialize(x), @nospecialize(parent), w::_WsWalk)
+    isbits(x) && return nothing
+    x isa _WsLeaf && return nothing
+    parent === nothing || push!(get!(Vector{Any}, w.parents, x), parent)
+    haskey(w.seen, x) && return nothing
+    w.seen[x] = nothing
+    a = get(w.aliases, x, nothing)
+    if a !== nothing
+        w.kinds[x] = a
+        return nothing
+    end
+    if x isa Array && isbitstype(eltype(x))
+        if haskey(w.scratch, x)
+            w.kinds[x] = :scratch
+        elseif x isa Array{Float64}
+            _ws_guard(x, w)
+        end
+        return nothing
+    end
+    _is_memory(x) && (isbitstype(eltype(x)) ? (return nothing) : _ws_refuse("a $(typeof(x))"))
+    x isa Union{Task,Base.AbstractLock,Base.GenericCondition,Channel,WeakKeyDict,Ptr,
+                Threads.Atomic} && _ws_refuse("a $(typeof(x))")
+    if x isa _WsState
+        w.kinds[x] = :state
+        if x isa Union{_CSECache,_ObsExtVec,_AccScratch}
+            # Its buffer may also be read through a codegen table.
+            haskey(w.seen, x.f64) || (w.seen[x.f64] = nothing)
+            w.kinds[x.f64] = :scratch
+        end
+        x isa Union{_CSECache,_ObsExtVec} && _ws_walk!(x.epoch, x, w)
+        x isa _ACMask && _ws_walk!(x.f, x, w)
+        x isa Base.RefValue && isdefined(x, :x) && _ws_walk!(x[], x, w)
+        x isa Core.Box && isdefined(x, :contents) && _ws_walk!(x.contents, x, w)
+        if x isa AbstractDict
+            for (k, v) in x
+                _ws_walk!(k, x, w)
+                _ws_walk!(v, x, w)
+            end
+        end
+        return nothing
+    end
+    if x isa Array
+        @inbounds for i in eachindex(x)
+            isassigned(x, i) && _ws_walk!(x[i], x, w)
+        end
+        return nothing
+    end
+    ismutable(x) && !(x isa _WsReadOnly) && _ws_refuse("a mutable $(typeof(x))")
+    for i in 1:nfields(x)
+        isdefined(x, i) || continue
+        xi = getfield(x, i)
+        xi isa Ptr && _ws_refuse("a raw pointer in a $(typeof(x))")
+        _ws_walk!(xi, x, w)
+    end
+    return nothing
+end
+
+# The factory of the template `f!` (with `n` internal slots) of a build that
+# recorded `cap`: `slots` names the forcing slots and `slot_bufs[k]` holds the
+# build's own buffer for slot `k`; `lane_bufs` are a lane program's lane
+# buffers. Refuses (at program build) a template that reads a live buffer
+# through an array the build did not record, and any mutable object the
+# factory does not know to be state or read-only.
+function _ws_factory(template, n::Int, cap::_WsCapture, slots::Vector{ForcingSlot},
+                     slot_bufs::Vector{<:AbstractArray},
+                     lane_bufs::Vector{Vector{Float64}} = Vector{Float64}[])
+    aliases = IdDict{Any,Any}()
+    guard = Tuple{UInt,UInt,String}[]
+    function alias!(buf, kind, k, name)
+        aliases[buf] = (kind, k)
+        isempty(buf) || push!(guard, (UInt(pointer(buf)), UInt(pointer(buf)) + UInt(8 * length(buf)),
+                                      name))
+    end
+    for (k, s) in enumerate(slots)
+        alias!(slot_bufs[k], :slot, k, s.name)
+        for pg in cap.pgathers
+            g = get(pg, s.name, nothing)
+            g === nothing || alias!(g.flat, :slot, k, s.name)
+        end
+    end
+    for (k, b) in enumerate(lane_bufs)
+        alias!(b, :lane, k, "lane buffer $k")
+    end
+    w = _WsWalk(IdDict{Any,Any}(), aliases, cap.scratch, guard, IdDict{Any,Vector{Any}}(),
+                IdDict{Any,Nothing}())
+    _ws_walk!(template, nothing, w)
+    spine = IdDict{Any,Nothing}()
+    stack = collect(Any, keys(w.kinds))
+    while !isempty(stack)
+        y = pop!(stack)
+        for q in get(w.parents, y, ())
+            haskey(spine, q) && continue
+            spine[q] = nothing
+            push!(stack, q)
+        end
+    end
+    read = fill(false, length(slots))
+    for k in values(w.kinds)
+        k isa Tuple && k[1] === :slot && (read[k[2]] = true)
+    end
+    return _WsFactory(template, w.kinds, spine, Int[length(b) for b in slot_bufs], read,
+                      Int[length(b) for b in lane_bufs], n)
+end
+
+# The forcing slot buffers of `pa` (a build's buffer registry), in slot order.
+_slot_buffers(slots::Vector{ForcingSlot}, pa) = Array{Float64}[pa[s.name] for s in slots]
+
+struct _InstCtx
+    fac::_WsFactory
+    memo::IdDict{Any,Any}
+    fbufs::Vector{Vector{Float64}}
+    lbufs::Vector{Vector{Float64}}
+    epochs::Vector{_ForcingEpoch}
+    caches::Vector{Any}
+end
+
+_inst_buffer(x::Array{Float64}, b::Vector{Float64}) =
+    x isa Vector{Float64} ? b : reshape(b, size(x))
+
 function _inst(@nospecialize(x), c::_InstCtx)
     isbits(x) && return x
-    x isa _INST_SHARED_LEAVES && return x
-    if ismutable(x)
-        y = get(c.d, x, c)
-        y === c || return y
+    y = get(c.memo, x, c)
+    y === c || return y
+    k = get(c.fac.kinds, x, nothing)
+    k === nothing || return _inst_kind(x, k, c)
+    haskey(c.fac.spine, x) || return x
+    return _inst_spine(x, c)
+end
+
+function _inst_kind(@nospecialize(x), @nospecialize(k), c::_InstCtx)
+    if k isa Tuple
+        b = k[1] === :slot ? c.fbufs[k[2]] : c.lbufs[k[2]]
+        return c.memo[x] = _inst_buffer(x, b)
+    elseif k === :scratch
+        return c.memo[x] = copy(x)
     end
-    if x isa _ForcingEpoch
+    # A fresh piece of per-call state: no tier it memoizes is valid yet.
+    if x isa _CSECache
+        y = _CSECache(_inst(x.f64, c), nothing, _CSE_INVALID, _CSE_INVALID, _CSE_INVALID,
+                      NaN, UInt64(0), _CSE_INVALID, _CSE_INVALID, UInt64(0),
+                      _inst(x.epoch, c))
+        push!(c.caches, y)
+        return c.memo[x] = y
+    elseif x isa _ObsExtVec
+        y = _ObsExtVec(_inst(x.f64, c), nothing, _CSE_INVALID, _CSE_INVALID, _CSE_INVALID,
+                       NaN, UInt64(0), _CSE_INVALID, _CSE_INVALID, UInt64(0),
+                       _inst(x.epoch, c), nothing)
+        push!(c.caches, y)
+        return c.memo[x] = y
+    elseif x isa _AccScratch
+        return c.memo[x] = _AccScratch(_inst(x.f64, c), nothing)
+    elseif x isa _ForcingEpoch
+        # A workspace tracks its forcing set's epoch itself, never the
+        # process-wide refresh count.
         e = _ForcingEpoch(UInt64(0), false)
         push!(c.epochs, e)
-        return c.d[x] = e
+        return c.memo[x] = e
     elseif x isa _SecTCache
-        # Serial: the workspace path never dispatches to Polyester's pool.
-        return c.d[x] = _SecTCache(-3, x.ncells, x.disjoint, x.work, 1, nothing, nothing, x.rmw)
-    elseif x isa Array
-        if x isa Array{Float64}
-            s = _inst_subst(x, c)
-            s === nothing || return c.d[x] = s
+        # Serial: a workspace never dispatches to Polyester's pool.
+        return c.memo[x] = _SecTCache(-3, x.ncells, x.disjoint, x.work, 1, nothing, nothing,
+                                      x.rmw)
+    elseif x isa _ACMask
+        y = typeof(x)(_inst(x.f, c), _CSE_INVALID, 0)
+        push!(c.caches, y)
+        return c.memo[x] = y
+    elseif x isa Base.RefValue
+        y = typeof(x)()
+        c.memo[x] = y
+        isdefined(x, :x) && (y[] = _inst(x[], c))
+        return y
+    elseif x isa Core.Box
+        y = Core.Box()
+        c.memo[x] = y
+        isdefined(x, :contents) && (y.contents = _inst(x.contents, c))
+        return y
+    elseif x isa AbstractDict
+        y = empty(x)
+        c.memo[x] = y
+        for (key, v) in x
+            y[_inst(key, c)] = _inst(v, c)
         end
-        isbitstype(eltype(x)) && return Base.deepcopy_internal(x, c.d)
+        return y
+    end
+    _ws_refuse("a $(typeof(x))")
+end
+
+function _inst_spine(@nospecialize(x), c::_InstCtx)
+    if x isa Array
         y = similar(x)
-        c.d[x] = y
+        c.memo[x] = y
         @inbounds for i in eachindex(x)
             isassigned(x, i) && (y[i] = _inst(x[i], c))
         end
         return y
-    elseif _is_memory(x)
-        isbitstype(eltype(x)) && return Base.deepcopy_internal(x, c.d)
-        _inst_error("a $(typeof(x))")
-    elseif x isa Union{Dict,IdDict}
-        y = empty(x)
-        c.d[x] = y
-        for (k, v) in x
-            y[_inst(k, c)] = _inst(v, c)
-        end
-        return y
-    elseif x isa Union{Task,Base.AbstractLock,Base.GenericCondition,Channel,WeakKeyDict,Ptr}
-        _inst_error("a $(typeof(x))")
     end
-    y = _inst_struct(x, c)
-    if y isa _CSECache || y isa _ObsExtVec
-        # A fresh instance holds no valid tier: its forcing is not loaded yet.
-        y.stamp64 = _CSE_INVALID
-        y.stampalt = _CSE_INVALID
-        y.tp64 = _CSE_INVALID
-        y.tpalt = _CSE_INVALID
-    end
-    return y
-end
-
-function _inst_struct(@nospecialize(x), c::_InstCtx)
     T = typeof(x)::DataType
     nf = nfields(x)
     if ismutable(x)
         y = ccall(:jl_new_struct_uninit, Any, (Any,), T)
-        c.d[x] = y
+        c.memo[x] = y
         for i in 1:nf
             isdefined(x, i) || continue
-            xi = getfield(x, i)
-            xi isa Ptr && _inst_error("a raw pointer in a $(T)")
-            isbits(xi) || (xi = _inst(xi, c))
-            ccall(:jl_set_nth_field, Cvoid, (Any, Csize_t, Any), y, i - 1, xi)
+            ccall(:jl_set_nth_field, Cvoid, (Any, Csize_t, Any), y, i - 1,
+                  _inst(getfield(x, i), c))
         end
         return y
     end
-    nf == 0 && return x
     flds = Vector{Any}(undef, nf)
     for i in 1:nf
         if !isdefined(x, i)
             nf = i - 1
             break
         end
-        xi = getfield(x, i)
-        xi isa Ptr && _inst_error("a raw pointer in a $(T)")
-        flds[i] = isbits(xi) ? xi : _inst(xi, c)
+        flds[i] = _inst(getfield(x, i), c)
     end
-    return ccall(:jl_new_structv, Any, (Any, Ptr{Any}, UInt32), T, flds, nf)
+    return c.memo[x] = ccall(:jl_new_structv, Any, (Any, Ptr{Any}, UInt32), T, flds, nf)
 end
 
-# A workspace for the template `f!` of a program sharing `shared`, whose
-# internal slot space has `n` entries.
-function _new_workspace(shared::_RhsShared, template, n::Int)
-    bufs = Array{Float64}[shared.originals..., shared.lane_originals...]
-    nf = length(shared.originals)
-    subs = Vector{Float64}[zeros(length(b)) for b in bufs]
-    ptrs = Tuple{UInt,Int,Int}[(UInt(pointer(b)), length(b), k)
-                               for (k, b) in enumerate(bufs) if !isempty(b)]
-    c = _InstCtx(IdDict{Any,Any}(), ptrs, subs, fill(false, length(bufs)), _ForcingEpoch[])
-    f = _inst(template, c)
-    fbufs = Vector{Float64}[c.hit[k] ? subs[k] : Float64[] for k in 1:nf]
-    return RhsWorkspace(shared, f, zeros(n), zeros(n), fbufs, c.hit[1:nf],
-                        subs[(nf + 1):end], c.epochs,
-                        Dict{String,Int}(), UInt64(0))
+"""
+    RhsWorkspace
+
+The mutable state of [`rhs!`](@ref) on one program (API_SPEC §5.8): a private
+instance of the program's compiled right-hand side (its caches, scratch and
+stamps; the generated code and every read-only table are the program's), the
+internal state and derivative vectors, a buffer per forcing slot the program
+reads and the epoch of the forcing set it last loaded. One per concurrent
+caller; usable with the program that made it only.
+"""
+mutable struct RhsWorkspace{F}
+    const shared::_RhsShared
+    const f!::F
+    const u::Vector{Float64}
+    const du::Vector{Float64}
+    # Per forcing slot, the buffer the instance reads (empty for a slot the
+    # program does not read), and whether it reads it.
+    const fbufs::Vector{Vector{Float64}}
+    const fread::Vector{Bool}
+    # Per lane buffer of a lane program.
+    const lbufs::Vector{Vector{Float64}}
+    const epochs::Vector{_ForcingEpoch}
+    # The memoizing caches, whose stamps a failed call invalidates.
+    const caches::Vector{Any}
+    const env::Dict{String,Int}
+    primed::UInt64
+end
+
+# A workspace of the program sharing `shared`.
+function _instantiate(shared::_RhsShared)
+    fac = shared.factory
+    fbufs = Vector{Float64}[r ? zeros(n) : Float64[] for (n, r) in zip(fac.slot_len, fac.slot_read)]
+    lbufs = Vector{Float64}[zeros(n) for n in fac.lane_len]
+    c = _InstCtx(fac, IdDict{Any,Any}(), fbufs, lbufs, _ForcingEpoch[], Any[])
+    f = _inst(fac.template, c)
+    return RhsWorkspace(shared, f, zeros(fac.n), zeros(fac.n), fbufs, copy(fac.slot_read),
+                        lbufs, c.epochs, c.caches, Dict{String,Int}(), UInt64(0))
 end
 
 function _check_workspace(shared::_RhsShared, ws::RhsWorkspace)
@@ -441,17 +602,60 @@ end
     return nothing
 end
 
+# After a call that threw: a tier may be half refilled under the stamp of the
+# values it held before, so no memoized value is trusted again until refilled,
+# and the next call reloads its forcing set.
+function _ws_invalidate!(ws::RhsWorkspace)
+    for x in ws.caches
+        if x isa Union{_CSECache,_ObsExtVec}
+            x.stamp64 = _CSE_INVALID
+            x.stampalt = _CSE_INVALID
+            x.tp64 = _CSE_INVALID
+            x.tpalt = _CSE_INVALID
+        elseif x isa _ACMask
+            x.stamp = _CSE_INVALID
+        end
+    end
+    _bump_workspace_epochs!(ws)
+    ws.primed = UInt64(0)
+    return nothing
+end
+
+# The instance's `f!` on the workspace's internal vectors, fail-closed.
+@inline function _ws_eval!(ws::RhsWorkspace, p, t)
+    try
+        ws.f!(ws.du, ws.u, p, t)
+    catch
+        _ws_invalidate!(ws)
+        rethrow()
+    end
+    return nothing
+end
+
+function _check_forcing_set(slots::Vector{ForcingSlot}, fs::ForcingSet, call::AbstractString)
+    (fs.slots === slots || fs.slots == slots) || throw(ArgumentError(
+        "$call: the forcing set was made for another program (its slots are " *
+        "$(join((s.name for s in fs.slots), ", ")); this program's are " *
+        "$(join((s.name for s in slots), ", ")))"))
+    return nothing
+end
+
+function _check_parameters(shared::_RhsShared, p, call::AbstractString)
+    p isa AbstractVector || return nothing
+    n = length(shared.params)
+    length(p) == n || throw(DimensionMismatch(
+        "$call: `p` has $(length(p)) elements; the program has $n parameters" *
+        (n == 0 ? "" : " ($(join((s.name for s in shared.params), ", ")))")))
+    return nothing
+end
+
 # Load `fs` into the workspace when it is not the set the workspace holds: the
 # one copy per (workspace, set), never one per call.
 function _prime!(ws::RhsWorkspace, fs::ForcingSet)
     fs.epoch == ws.primed && return nothing
-    slots = ws.shared.slots
-    (fs.slots === slots || fs.slots == slots) || throw(ArgumentError(
-        "rhs!: the forcing set was made for another program (its slots are " *
-        "$(join((s.name for s in fs.slots), ", ")); this program's are " *
-        "$(join((s.name for s in slots), ", ")))"))
+    _check_forcing_set(ws.shared.slots, fs, "rhs!")
     @inbounds for k in eachindex(ws.fbufs)
-        ws.fused[k] && copyto!(ws.fbufs[k], fs.bufs[k])
+        ws.fread[k] && copyto!(ws.fbufs[k], fs.bufs[k])
     end
     _bump_workspace_epochs!(ws)
     ws.primed = fs.epoch
