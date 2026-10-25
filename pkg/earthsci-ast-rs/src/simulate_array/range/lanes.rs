@@ -257,12 +257,13 @@ impl LaneProgram {
     ) -> Result<(), RhsError> {
         let inner = &*self.inner;
         if inputs.owner != inner.id {
-            return Err(shape(
-                "lane inputs",
-                inner.id as usize,
-                inputs.owner as usize,
-            ));
+            return Err(RhsError::ForeignProgram {
+                what: "lane inputs",
+            });
         }
+        // Cleared until this gather succeeds: a failed gather leaves the
+        // buffers half-written, and they must not evaluate.
+        inputs.forcing = None;
         if p.len() != inner.n_params {
             return Err(shape("p", inner.n_params, p.len()));
         }
@@ -305,14 +306,12 @@ impl LaneProgram {
         ws: &mut RhsWorkspace,
     ) -> Result<(), RhsError> {
         if inputs.owner != self.inner.id {
-            return Err(shape(
-                "lane inputs",
-                self.inner.id as usize,
-                inputs.owner as usize,
-            ));
+            return Err(RhsError::ForeignProgram {
+                what: "lane inputs",
+            });
         }
         let Some(forcing) = &inputs.forcing else {
-            return Err(shape("lane inputs (not gathered)", 1, 0));
+            return Err(RhsError::NotGathered);
         };
         self.run(
             u,
