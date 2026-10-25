@@ -21,7 +21,7 @@
 use super::tile::{declined_error, plain_precision, refused, shell};
 use super::walk::AxisSpec;
 use super::{
-    Decomposition, LaneKind, RhsProgram, RhsWorkspace, TileInput, TileLayout, WsExec,
+    Decomposition, Blocks, LaneKind, LaneLayout, RhsProgram, RhsWorkspace, TileInput, WsExec,
     build_error, check_lengths, index_set_sizes, take_fault, var_infos,
 };
 use crate::simulate::SimulateError;
@@ -51,7 +51,9 @@ pub struct LaneProgram {
     main: Arc<TapeProgram>,
     pre: Arc<TapeProgram>,
     gather: Arc<TapeProgram>,
-    layout: TileLayout,
+    blocks: Blocks,
+    layout: LaneLayout,
+    forcing: Arc<HashMap<String, ArrayD<f64>>>,
     capacity: usize,
     sets: Vec<String>,
     /// The global extent of each lane set, for validating `cells`.
@@ -102,7 +104,7 @@ impl LaneProgram {
     /// The lane layout (RFC U3 §6): each variable a column-major block whose
     /// first axis is the lane (`1..=capacity`) and whose other axes are the
     /// variable's axes outside the lane's sets, in order.
-    pub fn layout(&self) -> &TileLayout {
+    pub fn layout(&self) -> &LaneLayout {
         &self.layout
     }
 
@@ -118,7 +120,7 @@ impl LaneProgram {
 
     /// Buffers for [`Self::eval_into`] and [`Self::eval_gathered_into`].
     pub fn new_workspace(&self) -> RhsWorkspace {
-        let n = self.layout.u_len + self.layout.aux_len + self.capacity * (self.sets.len() + self.n_inputs);
+        let n = self.blocks.u_len + self.blocks.aux_len + self.capacity * (self.sets.len() + self.n_inputs);
         RhsWorkspace {
             owner: Arc::as_ptr(&self.main) as usize,
             state: vec![0.0; n],
@@ -178,13 +180,12 @@ impl LaneProgram {
         aux: &[f64],
         p: &[f64],
         t: f64,
-        forcing: &HashMap<String, ArrayD<f64>>,
         cells: &[i32],
         n: usize,
         du: &mut [f64],
         ws: &mut RhsWorkspace,
     ) -> Result<(), SimulateError> {
-        self.run(u, aux, None, p, t, forcing, cells, n, du, ws)
+        self.run(u, aux, None, p, t, cells, n, du, ws)
     }
 
     /// The pre-gather plan's buffers, unfilled.
@@ -203,7 +204,7 @@ impl LaneProgram {
         &self,
         inputs: &mut LaneInputs,
         p: &[f64],
-        forcing: &HashMap<String, ArrayD<f64>>,
+        t: f64,
         cells: &[i32],
         n: usize,
     ) -> Result<(), SimulateError> {
@@ -225,8 +226,8 @@ impl LaneProgram {
         let call = CallInputs {
             state: &inputs.state,
             params: p,
-            forcing,
-            t: 0.0,
+            forcing: &self.forcing,
+            t,
             declared: &self.declared,
         };
         run_tape_inputs(&mut inputs.ctx, &call, &mut inputs.values, false);
@@ -242,7 +243,6 @@ impl LaneProgram {
         inputs: &LaneInputs,
         p: &[f64],
         t: f64,
-        forcing: &HashMap<String, ArrayD<f64>>,
         cells: &[i32],
         n: usize,
         du: &mut [f64],
@@ -253,7 +253,7 @@ impl LaneProgram {
                 "`eval_gathered_into`: the inputs were made by another program".to_string(),
             ));
         }
-        self.run(u, aux, Some(&inputs.values), p, t, forcing, cells, n, du, ws)
+        self.run(u, aux, Some(&inputs.values), p, t, cells, n, du, ws)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -264,19 +264,18 @@ impl LaneProgram {
         gathered: Option<&[f64]>,
         p: &[f64],
         t: f64,
-        forcing: &HashMap<String, ArrayD<f64>>,
         cells: &[i32],
         n: usize,
         du: &mut [f64],
         ws: &mut RhsWorkspace,
     ) -> Result<(), SimulateError> {
-        check_lengths(&self.layout, u, aux, du, p, self.n_params)?;
+        check_lengths(&self.blocks, u, aux, du, p, self.n_params)?;
         if ws.owner != Arc::as_ptr(&self.main) as usize {
             return Err(build_error(
                 "`eval_into`: the workspace was made by another program".to_string(),
             ));
         }
-        let (nu, na) = (self.layout.u_len, self.layout.aux_len);
+        let (nu, na) = (self.blocks.u_len, self.blocks.aux_len);
         ws.state[..nu].copy_from_slice(u);
         ws.state[nu..nu + na].copy_from_slice(aux);
         let mut state = std::mem::take(&mut ws.state);
@@ -296,7 +295,7 @@ impl LaneProgram {
         let call = CallInputs {
             state: &ws.state,
             params: p,
-            forcing,
+            forcing: &self.forcing,
             t,
             declared: &self.declared,
         };
@@ -722,9 +721,10 @@ pub(super) fn build(prog: &RhsProgram, kind: &LaneKind, capacity: usize) -> Resu
     }
     let sets: Vec<String> = kind.sets().to_vec();
     let sizes = index_set_sizes(&prog.flat);
+    let box_invalid = |m: String| super::range_error(crate::diagnostic::codes::RANGE_BOX_INVALID, m);
     for s in &sets {
         if !sizes.contains_key(s) {
-            return Err(build_error(format!(
+            return Err(box_invalid(format!(
                 "`lanes`: `{s}` is not an interval index set of this program"
             )));
         }
@@ -748,6 +748,25 @@ pub(super) fn build(prog: &RhsProgram, kind: &LaneKind, capacity: usize) -> Resu
             )
         })
         .collect();
+    // Every state in `u` and `aux` carries every lane set; for `cells` the
+    // lane sets are exactly the written variables' index sets.
+    for name in prog.writes.iter().chain(&prog.aux) {
+        let var_sets: Vec<String> = axes[name].iter().flatten().cloned().collect();
+        if let Some(s) = sets.iter().find(|s| !var_sets.contains(s)) {
+            return Err(box_invalid(format!(
+                "`lanes`: the state `{name}` does not carry the lane set `{s}`"
+            )));
+        }
+        if cells_mode
+            && prog.writes.contains(name)
+            && let Some(s) = var_sets.iter().find(|s| !sets.contains(s))
+        {
+            return Err(box_invalid(format!(
+                "`lanes`: `cells` lanes name every index set of the written variables, and \
+                 `{name}` also has `{s}`"
+            )));
+        }
+    }
     let dependent = super::tile::state_dependent(compiled);
     let mut lane_vars: HashSet<String> = compiled.var_shapes.keys().cloned().collect();
     for rule in &compiled.observed_rules {
@@ -795,7 +814,7 @@ pub(super) fn build(prog: &RhsProgram, kind: &LaneKind, capacity: usize) -> Resu
             entries.push((name.clone(), input, index_sets, storage.clone(), storage));
         }
     }
-    let layout = TileLayout::build(entries);
+    let layout = Blocks::build(entries);
 
     // The internal state: u, aux, the lane cells, then the hoisted inputs.
     let mut var_shapes: IndexMap<String, VarShape> = IndexMap::new();
@@ -813,7 +832,7 @@ pub(super) fn build(prog: &RhsProgram, kind: &LaneKind, capacity: usize) -> Resu
             },
         );
     }
-    let mut add = |shapes: &mut IndexMap<String, VarShape>, name: String, at: &mut usize| {
+    let add = |shapes: &mut IndexMap<String, VarShape>, name: String, at: &mut usize| {
         shapes.insert(
             name,
             VarShape {
@@ -903,7 +922,9 @@ pub(super) fn build(prog: &RhsProgram, kind: &LaneKind, capacity: usize) -> Resu
         main: Arc::new(main_tape),
         pre: Arc::new(pre_tape),
         gather: Arc::new(gather_tape),
-        layout,
+        layout: layout.lane_public(&sets, capacity),
+        blocks: layout,
+        forcing: Arc::clone(&prog.forcing),
         capacity,
         extents: sets.iter().map(|s| sizes[s]).collect(),
         sets,

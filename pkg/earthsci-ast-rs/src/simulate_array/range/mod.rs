@@ -33,7 +33,7 @@ use crate::problem::{Compiler, EsmProblem, ProgramSource};
 use crate::simulate::SimulateError;
 use ndarray::ArrayD;
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ops::RangeInclusive;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -96,37 +96,27 @@ impl LaneKind {
     }
 }
 
-/// How far an operator's owned output reaches into one variable along one
-/// decomposed or face index set (RFC U3 §3): `lo` cells below the owned box,
-/// `hi` cells above it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HaloEntry {
-    pub variable: String,
-    pub index_set: String,
-    pub lo: i64,
-    pub hi: i64,
-}
-
-/// [`RhsProgram::halo`]'s report: one entry per state the program reads or
-/// writes and per decomposed or face index set on its shape.
+/// [`RhsProgram::halo`]'s report (RFC U3 §3): for each state the program
+/// reads and each decomposed or face index set on its shape, keyed
+/// `(variable, index set)`, how far the owned output reaches into it: `lo`
+/// cells below the owned box, `hi` above it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HaloReport {
-    pub entries: Vec<HaloEntry>,
+    pub reach: BTreeMap<(String, String), (i64, i64)>,
 }
 
 impl HaloReport {
     /// The `(lo, hi)` reach into `variable` along `index_set`, if reported.
     pub fn get(&self, variable: &str, index_set: &str) -> Option<(i64, i64)> {
-        self.entries
-            .iter()
-            .find(|e| e.variable == variable && e.index_set == index_set)
-            .map(|e| (e.lo, e.hi))
+        self.reach
+            .get(&(variable.to_string(), index_set.to_string()))
+            .copied()
     }
 }
 
 /// Which input a variable's block lives in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TileInput {
+pub(crate) enum TileInput {
     /// `u`: the variables the program writes.
     U,
     /// `aux`: the states it reads but does not write.
@@ -136,26 +126,55 @@ pub enum TileInput {
 /// One variable's block in a program's inputs (RFC U3 §5): a column-major
 /// block over its storage box, first index fastest.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TileVar {
-    pub name: String,
-    pub input: TileInput,
+pub(crate) struct Block {
+    pub(crate) name: String,
+    pub(crate) input: TileInput,
     /// Offset of the block in its input.
-    pub base: usize,
+    pub(crate) base: usize,
     /// The index-set name of each axis (empty when the declaration names
     /// none).
-    pub index_sets: Vec<String>,
+    pub(crate) index_sets: Vec<String>,
     /// Inclusive storage range per axis, in global indices.
-    pub storage: Vec<(i64, i64)>,
+    pub(crate) storage: Vec<(i64, i64)>,
     /// Column-major strides per axis.
-    pub strides: Vec<usize>,
+    pub(crate) strides: Vec<usize>,
     /// Inclusive owned range per axis: the rows a call writes (for a `u`
     /// variable).
-    pub owned: Vec<(i64, i64)>,
+    pub(crate) owned: Vec<(i64, i64)>,
 }
 
-impl TileVar {
-    /// The block's slot of the global multi-index `g` (one entry per axis), or
-    /// `None` outside the storage box.
+/// A program's input layout as the program addresses it: `u` blocks, then
+/// `aux` blocks, each in flat-layout order.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Blocks {
+    pub(crate) vars: Vec<Block>,
+    pub(crate) u_len: usize,
+    pub(crate) aux_len: usize,
+}
+
+/// One variable's block in a tile's (or a whole-domain program's) inputs
+/// (API_SPEC §5.8, "Tile layout"): a column-major block over its storage box,
+/// first index fastest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TileBlock {
+    pub name: String,
+    /// The index-set name of each axis, in shape order (empty when the
+    /// declaration names none).
+    pub sets: Vec<String>,
+    /// Inclusive storage range per axis, in global indices.
+    pub storage: Vec<(i64, i64)>,
+    /// Inclusive owned range per axis: the rows a call writes. Empty for an
+    /// `aux` block.
+    pub owned: Vec<(i64, i64)>,
+    /// 0-based offset of the block in its buffer.
+    pub base: usize,
+    /// Column-major strides per axis.
+    pub strides: Vec<usize>,
+}
+
+impl TileBlock {
+    /// The buffer slot of the global multi-index `g`, or `None` outside the
+    /// storage box.
     pub fn slot(&self, g: &[i64]) -> Option<usize> {
         let mut off = self.base;
         for (d, &x) in g.iter().enumerate() {
@@ -182,22 +201,103 @@ impl TileVar {
     }
 }
 
-/// A program's input layout: `u` then `aux`, each in flat-layout order.
+/// A program's `u` and `aux` layout (API_SPEC §5.8): the written variables'
+/// blocks, then the read-only ones, each list in flat-layout order.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TileLayout {
-    pub vars: Vec<TileVar>,
+    pub u: Vec<TileBlock>,
+    pub aux: Vec<TileBlock>,
     pub u_len: usize,
     pub aux_len: usize,
 }
 
 impl TileLayout {
+    /// The block of `name`, in `u` or `aux`.
+    pub fn block(&self, name: &str) -> Option<&TileBlock> {
+        self.u.iter().chain(&self.aux).find(|b| b.name == name)
+    }
+}
+
+/// One variable's block in a lane program's inputs (API_SPEC §5.8, "Lanes"):
+/// its index sets outside the lane sets, their extents, and its offset in
+/// units of lanes. Element `e` (1-based, column-major over `sets`) of lane `l`
+/// is at slot `(offset + e - 1)·L + l` (`l` 0-based in Rust).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LaneBlock {
+    pub name: String,
+    pub sets: Vec<String>,
+    pub extents: Vec<usize>,
+    pub offset: usize,
+}
+
+/// A lane program's `u` and `aux` layout, with the lane sets a column of
+/// `cells` indexes and the capacity `L`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LaneLayout {
+    pub u: Vec<LaneBlock>,
+    pub aux: Vec<LaneBlock>,
+    pub sets: Vec<String>,
+    pub capacity: usize,
+    pub u_len: usize,
+    pub aux_len: usize,
+}
+
+impl LaneLayout {
+    /// The block of `name`, in `u` or `aux`.
+    pub fn block(&self, name: &str) -> Option<&LaneBlock> {
+        self.u.iter().chain(&self.aux).find(|b| b.name == name)
+    }
+}
+
+impl Blocks {
     /// The block of `name`.
-    pub fn var(&self, name: &str) -> Option<&TileVar> {
+    pub(crate) fn var(&self, name: &str) -> Option<&Block> {
         self.vars.iter().find(|v| v.name == name)
     }
 
+    /// The public record of this layout.
+    pub(crate) fn public(&self) -> TileLayout {
+        let block = |v: &Block| TileBlock {
+            name: v.name.clone(),
+            sets: v.index_sets.clone(),
+            storage: v.storage.clone(),
+            owned: if v.input == TileInput::U {
+                v.owned.clone()
+            } else {
+                Vec::new()
+            },
+            base: v.base,
+            strides: v.strides.clone(),
+        };
+        TileLayout {
+            u: self.vars.iter().filter(|v| v.input == TileInput::U).map(block).collect(),
+            aux: self.vars.iter().filter(|v| v.input == TileInput::Aux).map(block).collect(),
+            u_len: self.u_len,
+            aux_len: self.aux_len,
+        }
+    }
+
+    /// The public record of a lane layout: each block's first axis is the
+    /// lane axis of `capacity` lanes.
+    pub(crate) fn lane_public(&self, sets: &[String], capacity: usize) -> LaneLayout {
+        let block = |v: &Block| LaneBlock {
+            name: v.name.clone(),
+            sets: v.index_sets[1..].to_vec(),
+            extents: v.storage[1..].iter().map(|(lo, hi)| (hi - lo + 1).max(0) as usize).collect(),
+            offset: v.base / capacity.max(1),
+        };
+        LaneLayout {
+            u: self.vars.iter().filter(|v| v.input == TileInput::U).map(block).collect(),
+            aux: self.vars.iter().filter(|v| v.input == TileInput::Aux).map(block).collect(),
+            sets: sets.to_vec(),
+            capacity,
+            u_len: self.u_len,
+            aux_len: self.aux_len,
+        }
+    }
+
     /// Build a layout over the given per-variable boxes, `u` variables first.
-    fn build(entries: Vec<(String, TileInput, Vec<String>, Vec<(i64, i64)>, Vec<(i64, i64)>)>) -> TileLayout {
+    fn build(entries: Vec<(String, TileInput, Vec<String>, Vec<(i64, i64)>, Vec<(i64, i64)>)>) -> Blocks {
         let mut vars = Vec::with_capacity(entries.len());
         let mut u_len = 0usize;
         let mut aux_len = 0usize;
@@ -219,7 +319,7 @@ impl TileLayout {
                     aux_len - len
                 }
             };
-            vars.push(TileVar {
+            vars.push(Block {
                 name,
                 input,
                 base,
@@ -229,7 +329,7 @@ impl TileLayout {
                 owned,
             });
         }
-        TileLayout {
+        Blocks {
             vars,
             u_len,
             aux_len,
@@ -293,7 +393,10 @@ pub struct RhsProgram {
     tape: Option<Arc<TapeProgram>>,
     writes: Vec<String>,
     aux: Vec<String>,
+    blocks: Blocks,
     layout: TileLayout,
+    /// The forcing buffers the program was built against: the Problem's.
+    forcing: Arc<HashMap<String, ArrayD<f64>>>,
     /// Per variable of the compiled state vector, in its order: the input it
     /// is read from and the block offsets `(input base, state offset, len)`.
     scatter: Vec<(TileInput, usize, usize, usize)>,
@@ -341,7 +444,41 @@ pub fn rhs_program(prob: &EsmProblem) -> Result<RhsProgram, SimulateError> {
                 .map_err(|e| SimulateError::Compile(crate::compile_error::CompileError::from(e)))?
         }
     };
-    RhsProgram::compile(Rc::new(flat), compiler, None)
+    let forcing = match &*prob.backend {
+        crate::problem::Backend::Array(c) => problem_forcing(c, &flat),
+        crate::problem::Backend::Static(_) => HashMap::new(),
+    };
+    RhsProgram::compile(Rc::new(flat), compiler, None, Arc::new(forcing))
+}
+
+/// The Problem's forcing buffer, keyed by the flattened names: an entry whose
+/// name the flattened system does not declare is matched to the one
+/// flattened parameter it is the bare name of.
+fn problem_forcing(c: &ArrayCompiled, flat: &FlattenedSystem) -> HashMap<String, ArrayD<f64>> {
+    c.forcing
+        .borrow()
+        .iter()
+        .filter_map(|(k, v)| {
+            if flat.parameters.contains_key(k) {
+                return Some((k.clone(), v.clone()));
+            }
+            let suffix = format!(".{k}");
+            let mut m = flat.parameters.keys().filter(|n| n.ends_with(&suffix));
+            match (m.next(), m.next()) {
+                (Some(n), None) => Some((n.clone(), v.clone())),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+/// `names` in flat-layout order (API_SPEC §5.8): 0-d states by sorted name,
+/// then arrays by sorted name.
+fn flat_layout_order(names: &mut [String], compiled: &ArrayCompiled) {
+    names.sort_by(|a, b| {
+        let rank = |n: &String| !compiled.var_shapes[n].shape.is_empty();
+        (rank(a), a).cmp(&(rank(b), b))
+    });
 }
 
 impl RhsProgram {
@@ -351,6 +488,7 @@ impl RhsProgram {
         flat: Rc<FlattenedSystem>,
         compiler: Compiler,
         writes: Option<&[String]>,
+        forcing: Arc<HashMap<String, ArrayD<f64>>>,
     ) -> Result<RhsProgram, SimulateError> {
         let mut compiled = ArrayCompiled::from_flattened(&flat)?;
         compiled.runtime_mode = match compiler {
@@ -362,11 +500,13 @@ impl RhsProgram {
             _ => None,
         };
         let states: Vec<String> = compiled.var_shapes.keys().cloned().collect();
-        let writes: Vec<String> = match writes {
+        let mut writes: Vec<String> = match writes {
             None => states.clone(),
             Some(w) => states.iter().filter(|s| w.contains(s)).cloned().collect(),
         };
-        let aux: Vec<String> = states.iter().filter(|s| !writes.contains(s)).cloned().collect();
+        let mut aux: Vec<String> = states.iter().filter(|s| !writes.contains(s)).cloned().collect();
+        flat_layout_order(&mut writes, &compiled);
+        flat_layout_order(&mut aux, &compiled);
         let set_names = state_set_names(&flat, &compiled);
         let mut entries = Vec::new();
         for (input, names) in [(TileInput::U, &writes), (TileInput::Aux, &aux)] {
@@ -381,12 +521,13 @@ impl RhsProgram {
                 entries.push((name.clone(), input, set_names[name].clone(), bx.clone(), bx));
             }
         }
-        let layout = TileLayout::build(entries);
+        let blocks = Blocks::build(entries);
+        let layout = blocks.public();
         let scatter = compiled
             .var_shapes
             .iter()
             .map(|(name, vs)| {
-                let v = layout.var(name).expect("every state is in the layout");
+                let v = blocks.var(name).expect("every state is in the layout");
                 let len = vs.shape.iter().product::<usize>().max(1);
                 (v.input, v.base, vs.flat_offset, len)
             })
@@ -399,7 +540,9 @@ impl RhsProgram {
             tape,
             writes,
             aux,
+            blocks,
             layout,
+            forcing,
             scatter,
             declared,
         })
@@ -444,10 +587,10 @@ impl RhsProgram {
     /// The declared default of every state cell, as `(u, aux)` in this
     /// program's whole-domain layout (`NaN` where none is declared).
     pub fn default_state(&self) -> (Vec<f64>, Vec<f64>) {
-        let mut u = vec![f64::NAN; self.layout.u_len];
-        let mut aux = vec![f64::NAN; self.layout.aux_len];
+        let mut u = vec![f64::NAN; self.blocks.u_len];
+        let mut aux = vec![f64::NAN; self.blocks.aux_len];
         for ((name, vs), default) in self.compiled.var_shapes.iter().zip(&self.compiled.state_defaults) {
-            let v = self.layout.var(name).expect("every state is in the layout");
+            let v = self.blocks.var(name).expect("every state is in the layout");
             let dst = match v.input {
                 TileInput::U => &mut u,
                 TileInput::Aux => &mut aux,
@@ -490,7 +633,7 @@ impl RhsProgram {
     /// variable a kept summand writes.
     pub fn select(&self, sel: &RhsSelection) -> Result<RhsProgram, SimulateError> {
         let (flat, writes) = select::select(&self.flat, sel)?;
-        RhsProgram::compile(Rc::new(flat), self.compiler, Some(&writes))
+        RhsProgram::compile(Rc::new(flat), self.compiler, Some(&writes), Arc::clone(&self.forcing))
     }
 
     /// How far the owned output reaches into each state along each decomposed
@@ -547,11 +690,11 @@ impl RhsProgram {
         aux: &[f64],
         p: &[f64],
         t: f64,
-        forcing: &HashMap<String, ArrayD<f64>>,
         du: &mut [f64],
         ws: &mut RhsWorkspace,
     ) -> Result<(), SimulateError> {
-        check_lengths(&self.layout, u, aux, du, p, self.compiled.param_names.len())?;
+        check_lengths(&self.blocks, u, aux, du, p, self.compiled.param_names.len())?;
+        let forcing = &*self.forcing;
         if ws.owner != self as *const _ as usize {
             return Err(build_error(
                 "`eval_into`: the workspace was made by another program".to_string(),
@@ -621,7 +764,7 @@ fn take_fault() -> Result<(), SimulateError> {
 }
 
 fn check_lengths(
-    layout: &TileLayout,
+    layout: &Blocks,
     u: &[f64],
     aux: &[f64],
     du: &[f64],
@@ -751,7 +894,6 @@ fn var_infos(prog: &RhsProgram, dec: &Decomposition) -> HashMap<String, VarInfo>
             VarInfo {
                 axes,
                 extent,
-                state: true,
             },
         );
     }
@@ -792,7 +934,6 @@ fn var_infos(prog: &RhsProgram, dec: &Decomposition) -> HashMap<String, VarInfo>
             VarInfo {
                 axes,
                 extent,
-                state: false,
             },
         );
     }

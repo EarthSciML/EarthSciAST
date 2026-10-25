@@ -12,7 +12,8 @@
 
 use super::walk::{AxisSpec, Read, Refusal, Scope, VarInfo, Walker};
 use super::{
-    Decomposition, RhsProgram, RhsWorkspace, TileBox, TileInput, TileLayout, WsExec, build_error,
+    Blocks, Decomposition, RhsProgram, RhsWorkspace, TileBox, TileInput, TileLayout, WsExec,
+    build_error,
     check_lengths, index_set_sizes, range_error, take_fault, var_infos,
 };
 use crate::diagnostic::codes;
@@ -38,7 +39,9 @@ use std::sync::Arc;
 /// rank can share it across threads, each with its own [`RhsWorkspace`].
 pub struct TileProgram {
     prog: Arc<TapeProgram>,
+    blocks: Blocks,
     layout: TileLayout,
+    forcing: Arc<HashMap<String, ArrayD<f64>>>,
     n_params: usize,
     declared: Arc<HashSet<String>>,
     precision: crate::precision::Precision,
@@ -60,7 +63,7 @@ impl TileProgram {
 
     /// Buffers for [`Self::eval_into`].
     pub fn new_workspace(&self) -> RhsWorkspace {
-        let n = self.layout.u_len + self.layout.aux_len;
+        let n = self.blocks.u_len + self.blocks.aux_len;
         RhsWorkspace {
             owner: Arc::as_ptr(&self.prog) as usize,
             state: vec![0.0; n],
@@ -80,17 +83,16 @@ impl TileProgram {
         aux: &[f64],
         p: &[f64],
         t: f64,
-        forcing: &HashMap<String, ArrayD<f64>>,
         du: &mut [f64],
         ws: &mut RhsWorkspace,
     ) -> Result<(), SimulateError> {
-        check_lengths(&self.layout, u, aux, du, p, self.n_params)?;
+        check_lengths(&self.blocks, u, aux, du, p, self.n_params)?;
         if ws.owner != Arc::as_ptr(&self.prog) as usize {
             return Err(build_error(
                 "`eval_into`: the workspace was made by another program".to_string(),
             ));
         }
-        let nu = self.layout.u_len;
+        let nu = self.blocks.u_len;
         ws.state[..nu].copy_from_slice(u);
         ws.state[nu..].copy_from_slice(aux);
         let WsExec::Tape(ctx) = &mut ws.exec else {
@@ -101,7 +103,7 @@ impl TileProgram {
         let inputs = CallInputs {
             state: &ws.state,
             params: p,
-            forcing,
+            forcing: &self.forcing,
             t,
             declared: &self.declared,
         };
@@ -357,7 +359,6 @@ pub(super) struct ClippedRules {
     pub(super) rhs: Vec<RhsRule>,
     pub(super) observed: Vec<AlgebraicRule>,
     pub(super) need: FxHashMap<String, (SmallVec<[i64; 4]>, SmallVec<[i64; 4]>)>,
-    pub(super) reads: HashMap<String, Vec<(i64, i64)>>,
 }
 
 /// Rewrite `compiled`'s rules for a tile whose derivative of each written
@@ -538,7 +539,6 @@ pub(super) fn clip_rules(
         rhs,
         observed: kept.into_iter().flatten().collect(),
         need,
-        reads,
     })
 }
 
@@ -639,7 +639,7 @@ pub(super) fn build(prog: &RhsProgram, dec: &Decomposition, bx: &TileBox) -> Res
             entries.push((name.clone(), input, set_names[name].clone(), storage, own));
         }
     }
-    let layout = TileLayout::build(entries);
+    let layout = Blocks::build(entries);
     let clipped = clip_rules(compiled, &vars, &owned)?;
 
     let mut var_shapes: IndexMap<String, VarShape> = IndexMap::new();
@@ -699,7 +699,9 @@ pub(super) fn build(prog: &RhsProgram, dec: &Decomposition, bx: &TileBox) -> Res
     };
     Ok(TileProgram {
         prog: Arc::new(tape),
-        layout,
+        layout: layout.public(),
+        blocks: layout,
+        forcing: Arc::clone(&prog.forcing),
         n_params: compiled.param_names.len(),
         declared: Arc::clone(&prog.declared),
         precision,

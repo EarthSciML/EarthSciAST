@@ -58,7 +58,6 @@ pub(crate) struct VarInfo {
     pub(crate) axes: Vec<AxisSpec>,
     /// Inclusive global box per axis.
     pub(crate) extent: Vec<(i64, i64)>,
-    pub(crate) state: bool,
 }
 
 impl VarInfo {

@@ -14,7 +14,7 @@
 
 use super::tile::refusal_error;
 use super::walk::{AxisSpec, Scope, VarInfo, Walker};
-use super::{Decomposition, HaloEntry, HaloReport, RhsProgram, var_infos};
+use super::{Decomposition, HaloReport, RhsProgram, var_infos};
 use crate::simulate::SimulateError;
 use crate::simulate_array::{AlgebraicRule, RhsRule};
 use crate::types::Expr;
@@ -204,7 +204,7 @@ pub(super) fn halo(prog: &RhsProgram, dec: &Decomposition) -> Result<HaloReport,
             read.extend(crate::expression::free_variables(body));
         }
     }
-    let mut entries = Vec::new();
+    let mut entries = std::collections::BTreeMap::new();
     for name in prog.writes.iter().chain(&prog.aux).filter(|n| read.contains(*n)) {
         let info = &vars[name];
         for spec in &info.axes {
@@ -212,13 +212,8 @@ pub(super) fn halo(prog: &RhsProgram, dec: &Decomposition) -> Result<HaloReport,
                 continue;
             };
             let (lo, hi) = top.get(&(name.clone(), cell.clone())).copied().unwrap_or((0, 0));
-            entries.push(HaloEntry {
-                variable: name.clone(),
-                index_set: set.clone(),
-                lo: (-lo).max(0),
-                hi: hi.max(0),
-            });
+            entries.insert((name.clone(), set.clone()), ((-lo).max(0), hi.max(0)));
         }
     }
-    Ok(HaloReport { entries })
+    Ok(HaloReport { reach: entries })
 }
