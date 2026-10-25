@@ -1508,8 +1508,9 @@ select terms by AUTHOR rather than by how a term happens to be spelled: a couple
   the tree (`x + 0` → `x`); the contribution stays recorded. Only the pointwise lift wraps; an
   authored `faq` right-hand side is the `expr` of an ordinary contribution, and `body(eq)` is then
   `eq.rhs`. The two look alike, so a binding records which equations the lift wrapped: Python,
-  TypeScript and Go carry a `lifted` flag on the flattened equation; Julia and Rust recognize the
-  lift's own shape (an `faq` over `D(index(x, …))` with `x` in `lifted_shapes`).
+  TypeScript and Go carry a `lifted` flag on the flattened equation, and Rust an `equation_lifted`
+  list parallel to `equation_contributions`; Julia recognizes the lift's own shape (an `faq` over
+  `D(index(x, …))` with `x` in `lifted_shapes`).
 - **Every equation has an entry.** Observed definitions, expression-LHS algebraic equations and
   constraint equations get contributions like any other equation.
 
