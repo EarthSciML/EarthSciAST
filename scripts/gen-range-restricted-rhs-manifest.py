@@ -104,12 +104,16 @@ NO2, O3 = "Chem.NO2", "Chem.O3"
 
 # The halo of the regional-inflow document. Only mq and m are read (through
 # q = mq / m); dev is written but never read, and Mx, My are state-free. The
-# monotone flux-form PPM divergence reaches three cells low and two high.
+# monotone flux-form PPM divergence reaches three cells low and two high, but
+# the inflow slabs [1,1] and [2,2] read q[1..4] and q[1..5], three cells high.
+# On a uniform grid those reads carry an exact-zero coefficient, so perturbing
+# the state does not see them; the halo counts reads, and a zero times a
+# missing or NaN cell is not zero.
 REGIONAL_INFLOW_ROWS = [
-    ("TransportCWCRegionalInflow.m", "lat", 3, 2),
-    ("TransportCWCRegionalInflow.m", "lon", 3, 2),
-    ("TransportCWCRegionalInflow.mq", "lat", 3, 2),
-    ("TransportCWCRegionalInflow.mq", "lon", 3, 2),
+    ("TransportCWCRegionalInflow.m", "lat", 3, 3),
+    ("TransportCWCRegionalInflow.m", "lon", 3, 3),
+    ("TransportCWCRegionalInflow.mq", "lat", 3, 3),
+    ("TransportCWCRegionalInflow.mq", "lon", 3, 3),
 ]
 
 TILE_CASES = [
