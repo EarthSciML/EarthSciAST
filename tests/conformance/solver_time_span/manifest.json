@@ -9,7 +9,7 @@
     "rust",
     "go"
   ],
-  "notes": "The SHARED pin for `solver.time_span` (CONFORMANCE_SPEC §5.48). Every binding's own test suite reads THIS file and asserts against it; there is no adapter and no golden. Each fixture is loaded by its path. For `expect: accepted` a binding asserts that `resolve_time_span(file)` with no call-site interval returns `seconds` EXACTLY (binary64 equality; every pinned value is exact), and that the root's `solver` block as `emit` writes it equals `solver` once both are parsed as JSON, numbers compared by value. For `expect: refused` the load MUST fail with `error_code`, and the message MUST contain every `message_contains` substring.",
+  "notes": "The SHARED pin for `solver.time_span` (CONFORMANCE_SPEC §5.49). Every binding's own test suite reads THIS file and asserts against it; there is no adapter and no golden. Each fixture is loaded by its path. For `expect: accepted` a binding asserts that `resolve_time_span(file)` with no call-site interval returns `seconds` EXACTLY (binary64 equality; every pinned value is exact), and that the root's `solver` block as `emit` writes it equals `solver` once both are parsed as JSON, numbers compared by value. For `expect: refused` the load MUST fail with `error_code`, and the message MUST contain every `message_contains` substring.",
   "fields": {
     "path": "The fixture, relative to this directory.",
     "expect": "`accepted` or `refused`.",

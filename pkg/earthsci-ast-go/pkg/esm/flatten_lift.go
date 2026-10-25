@@ -248,6 +248,13 @@ func applyPointwiseLift(flat *FlattenedSystem, coupling []CouplingEntry) error {
 		}
 		flat.LiftedShapes = append(flat.LiftedShapes, LiftedShape{Name: target, Shape: extents})
 
+		// Per-cell indexing applies inside each contribution; the `faq` wrapper
+		// goes around their sum (§4.7.5 provenance table).
+		in := eq.contributionList()
+		contributions := make([]Contribution, len(in))
+		for k, c := range in {
+			contributions[k] = Contribution{Expr: liftRHSToCell(c.Expr, arrayvars, loops), Origins: c.Origins}
+		}
 		wrt := DefaultIndepVar
 		idxSpecies := ExprNode{Op: "index", Args: indexArgs(target, loops)}
 		out = append(out, FlattenedEquation{
@@ -257,9 +264,11 @@ func applyPointwiseLift(flat *FlattenedSystem, coupling []CouplingEntry) error {
 			},
 			RHS: ExprNode{
 				Op: "faq", OutputIdx: outputIdx, Ranges: ranges,
-				Expr: liftRHSToCell(eq.RHS, arrayvars, loops),
+				Expr: foldContributions(contributions),
 			},
-			SourceSystem: eq.SourceSystem,
+			SourceSystem:  eq.SourceSystem,
+			Contributions: contributions,
+			Lifted:        true,
 		})
 	}
 	flat.Equations = out

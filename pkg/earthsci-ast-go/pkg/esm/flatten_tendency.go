@@ -87,7 +87,11 @@ func resolveRHSTimeDerivatives(flat *FlattenedSystem) {
 		} else if own, ok := eq.LHS.(string); ok {
 			active = append(active, own)
 		}
-		flat.Equations[i].RHS = r.substitute(eq.RHS, &active)
+		// The resolved tendency replaces the `D` node INSIDE the referencing
+		// contribution, which keeps its origins (esm-libraries-spec §4.7.5).
+		flat.Equations[i] = mapContributions(eq, func(e Expression) Expression {
+			return r.substitute(e, &active)
+		}, eq.LHS)
 	}
 }
 

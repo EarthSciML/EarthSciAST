@@ -3378,7 +3378,7 @@
     "structural_errors": [],
     "is_valid": false,
     "resolver_error_code": "solver_time_span_invalid",
-    "notes": "Resolver-level invalid (esm-spec \u00a72.2.7). SCHEMA-VALID \u2014 the schema cannot compare two bounds, and with a timestamp on one side it could not compare them at all \u2014 so `end` after `start` is a load-time check, refused with `solver_time_span_invalid` naming `/solver/time_span`. `is_valid` is false for EVERY binding: all five convert and check `time_span`. The conversion itself is pinned across bindings by tests/conformance/solver_time_span/manifest.json (CONFORMANCE_SPEC \u00a75.48)."
+    "notes": "Resolver-level invalid (esm-spec \u00a72.2.7). SCHEMA-VALID \u2014 the schema cannot compare two bounds, and with a timestamp on one side it could not compare them at all \u2014 so `end` after `start` is a load-time check, refused with `solver_time_span_invalid` naming `/solver/time_span`. `is_valid` is false for EVERY binding: all five convert and check `time_span`. The conversion itself is pinned across bindings by tests/conformance/solver_time_span/manifest.json (CONFORMANCE_SPEC \u00a75.49)."
   },
   "solver_time_span_missing_end.esm": {
     "schema_errors": [

@@ -346,10 +346,25 @@ type LiftedShape struct {
 // every downstream pass re-parse text and made Go's equation rendering
 // disagree with the shared display corpus. They are trees now; render them with
 // ToASCII / ToUnicode / ToLatex, which is what the cross-language fixtures pin.
+//
+// SourceSystem is the equation's SLOT OWNER: the component whose equation list
+// it sits in, which decides what a later operator_compose entry can see
+// (esm-libraries-spec §4.7.1 step 4). It is not provenance — a composed
+// equation has one slot owner and several authors; Contributions records those.
+//
+// Contributions is the equation's per-term provenance (esm-libraries-spec
+// §4.7.5): the ordered summands of the right-hand side, each with the component
+// or coupling entry that authored it. Body() — RHS, or the `faq` body when
+// Lifted — is the LEFT fold of their expressions.
+//
+// Lifted is true when the pointwise lift (esm-spec §10.5) wrapped the equation
+// in an `faq` over the grid.
 type FlattenedEquation struct {
-	LHS          Expression
-	RHS          Expression
-	SourceSystem string // which system this equation came from
+	LHS           Expression
+	RHS           Expression
+	SourceSystem  string
+	Contributions []Contribution
+	Lifted        bool
 }
 
 // LHSString renders the equation's left-hand side with the shared ASCII
@@ -1112,10 +1127,15 @@ func (c *componentSystem) merge(other *componentSystem) {
 // the component.
 func (c *componentSystem) namespaceEquations(equations []Equation, prefix string, leaveAlone, subsystemKeys, locals map[string]bool) {
 	for _, eq := range equations {
+		rhs := namespaceExprTree(eq.RHS, prefix, leaveAlone, subsystemKeys, locals)
 		c.equations = append(c.equations, FlattenedEquation{
 			LHS:          namespaceExprTree(eq.LHS, prefix, leaveAlone, subsystemKeys, locals),
-			RHS:          namespaceExprTree(eq.RHS, prefix, leaveAlone, subsystemKeys, locals),
+			RHS:          rhs,
 			SourceSystem: prefix,
+			// §4.7.5 steps 1-2: one contribution, authored by this component (a
+			// reaction system's derived ODEs included). prefix is the full dotted
+			// path, so it is both the slot owner and the origin.
+			Contributions: []Contribution{{Expr: rhs, Origins: []TermOrigin{componentOrigin(prefix)}}},
 		})
 	}
 }
@@ -1591,13 +1611,11 @@ func expandOperatorComposePlaceholders(components map[string]*componentSystem, e
 			out = append(out, eq)
 			continue
 		}
+		// Each clone keeps B's contributions, and so B's component as their origin.
 		for _, varName := range a.stateVars.keys {
 			bindings := map[string]Expression{operatorPlaceholderVar: varName}
-			out = append(out, FlattenedEquation{
-				LHS:          substituteExpr(eq.LHS, bindings),
-				RHS:          substituteExpr(eq.RHS, bindings),
-				SourceSystem: eq.SourceSystem,
-			})
+			sub := func(e Expression) Expression { return substituteExpr(e, bindings) }
+			out = append(out, mapContributions(eq, sub, sub(eq.LHS)))
 		}
 	}
 	b.equations = out
@@ -1821,15 +1839,26 @@ func applyOperatorCompose(components map[string]*componentSystem, entry Operator
 		// substituted), the two names are equal and this rewrite is the identity.
 		// Only the dependent variable is rewritten; B's parameters and observeds
 		// keep their names.
-		rhs := substituteExpr(bEq.RHS, map[string]Expression{bDep: targetDep})
+		//
+		// B's contributions are APPENDED to A's, in order, origins unchanged
+		// (§4.7.5 provenance table). A translate factor scales B's one
+		// contribution; when B already carries several, they collapse into ONE
+		// `factor * (b1 + b2 + ...)` whose origins are the union: indivisible,
+		// because distributing the factor would change the arithmetic.
+		rename := map[string]Expression{bDep: targetDep}
+		bIn := bEq.contributionList()
+		bContribs := make([]Contribution, len(bIn))
+		for k, c := range bIn {
+			bContribs[k] = Contribution{Expr: substituteExpr(c.Expr, rename), Origins: c.Origins}
+		}
 		if factor != 1.0 {
-			rhs = ExprNode{Op: "*", Args: []any{factor, rhs}}
+			bContribs = []Contribution{{
+				Expr:    ExprNode{Op: "*", Args: []any{factor, foldContributions(bContribs)}},
+				Origins: unionOrigins(bContribs),
+			}}
 		}
-		a.equations[i] = FlattenedEquation{
-			LHS:          aEq.LHS,
-			RHS:          addExprs(aEq.RHS, rhs),
-			SourceSystem: aEq.SourceSystem,
-		}
+		merged := append(append([]Contribution(nil), aEq.contributionList()...), bContribs...)
+		a.equations[i] = equationFrom(aEq, merged, aEq.LHS)
 		mergedPositions[i] = true
 		if targetDep != bDep {
 			if _, seen := mergedAway[bDep]; !seen {
@@ -2183,11 +2212,7 @@ func retargetMergedNames(components map[string]*componentSystem, renames map[str
 	walk := newNameRenamer(renames)
 	for _, comp := range components {
 		for i, eq := range comp.equations {
-			comp.equations[i] = FlattenedEquation{
-				LHS:          walk.apply(eq.LHS),
-				RHS:          walk.apply(eq.RHS),
-				SourceSystem: eq.SourceSystem,
-			}
+			comp.equations[i] = mapContributions(eq, walk.apply, walk.apply(eq.LHS))
 		}
 		for _, table := range []*varTable{comp.stateVars, comp.parameters, comp.observed} {
 			for _, name := range table.keys {
@@ -2238,10 +2263,21 @@ func rewriteUpdateExprs(update any, rewrite func(Expression) Expression) any {
 // connector equation appends its expression to (or multiplies it with, or
 // replaces) the target variable's equation.
 //
+// index is the entry's position in the expanded coupling sequence: the
+// expression a connector writes is authored by the entry, so its contribution
+// carries {"coupling": index} (§4.7.5 provenance table). `additive` appends that
+// contribution; `multiplicative` collapses the existing list and the factor into
+// one contribution whose origins are the union; `replacement` replaces the list.
+//
+// An `additive` term whose target is an UNKNOWN with no defining equation yet
+// BECOMES its tendency, `D(to, t) ~ expression` (§4.7.2), appended to the
+// equation list of the top-level component the target's first path segment
+// names. A target that is a parameter, or names nothing, is skipped.
+//
 // It fails with *CoupleMultiplicativeNoTendencyError when a `multiplicative`
 // equation targets something with no `D(to)` tendency to multiply (esm-spec
 // §10.3, esm-libraries-spec §4.7.2).
-func applyCouple(components map[string]*componentSystem, order []string, entry CouplingCouple) error {
+func applyCouple(components map[string]*componentSystem, order []string, entry CouplingCouple, index int) error {
 	if len(entry.Connector.Equations) == 0 {
 		return nil
 	}
@@ -2250,10 +2286,11 @@ func applyCouple(components map[string]*componentSystem, order []string, entry C
 		index  int
 	}
 	eqIndex := map[string]eqRef{}
-	// Which targets carry a TENDENCY (`D(x)`), as opposed to merely SOME
+	// The last TENDENCY (`D(x)`) for each target, as opposed to merely SOME
 	// defining equation: `multiplicative` is defined against an ODE right-hand
-	// side, not against an algebraic or observed definition (§10.3, §4.7.2).
-	tendencies := map[string]bool{}
+	// side, not against an algebraic or observed definition (§10.3, §4.7.2), so
+	// it both checks for and scales this equation.
+	tendencies := map[string]eqRef{}
 	for _, sysName := range order {
 		comp := components[sysName]
 		for i, eq := range comp.equations {
@@ -2263,7 +2300,7 @@ func applyCouple(components map[string]*componentSystem, order []string, entry C
 			}
 			eqIndex[dep] = eqRef{system: sysName, index: i}
 			if node, ok := asExprNode(eq.LHS); ok && node.Op == OpDerivative {
-				tendencies[dep] = true
+				tendencies[dep] = eqRef{system: sysName, index: i}
 			}
 		}
 	}
@@ -2272,7 +2309,8 @@ func applyCouple(components map[string]*componentSystem, order []string, entry C
 		if ceq.To == "" {
 			continue
 		}
-		if ceq.Transform == "multiplicative" && !tendencies[ceq.To] {
+		tendency, hasTendency := tendencies[ceq.To]
+		if ceq.Transform == "multiplicative" && !hasTendency {
 			return &CoupleMultiplicativeNoTendencyError{
 				Target: ceq.To,
 				Message: fmt.Sprintf(
@@ -2282,30 +2320,51 @@ func applyCouple(components map[string]*componentSystem, order []string, entry C
 						"transform (esm-spec §10.4) instead.", ceq.To, ceq.To),
 			}
 		}
-		ref, ok := eqIndex[ceq.To]
-		if !ok {
-			continue
-		}
-		comp := components[ref.system]
-		existing := comp.equations[ref.index]
 		expression := ceq.Expression
 		if expression == nil {
 			expression = ceq.From
 		}
-		var rhs Expression
+		authored := Contribution{Expr: expression, Origins: []TermOrigin{couplingOrigin(index)}}
+		ref, ok := eqIndex[ceq.To]
+		if !ok {
+			// Only an UNKNOWN can take a tendency: a parameter target, a name no
+			// component owns, or a non-additive transform is skipped.
+			ownerName, _, _ := strings.Cut(ceq.To, ".")
+			owner := components[ownerName]
+			additive := ceq.Transform == "" || ceq.Transform == "additive"
+			if owner == nil || !owner.stateVars.has(ceq.To) || !additive {
+				continue
+			}
+			wrt := DefaultIndepVar
+			owner.equations = append(owner.equations, FlattenedEquation{
+				LHS:           ExprNode{Op: OpDerivative, Args: []any{ceq.To}, Wrt: &wrt},
+				RHS:           expression,
+				SourceSystem:  owner.name,
+				Contributions: []Contribution{authored},
+			})
+			// The new tendency is a target for the next connector equation too.
+			eqIndex[ceq.To] = eqRef{system: ownerName, index: len(owner.equations) - 1}
+			tendencies[ceq.To] = eqRef{system: ownerName, index: len(owner.equations) - 1}
+			continue
+		}
+		if ceq.Transform == "multiplicative" {
+			ref = tendency
+		}
+		comp := components[ref.system]
+		existing := comp.equations[ref.index]
+		var contributions []Contribution
 		switch ceq.Transform {
 		case "multiplicative":
-			rhs = multiplyExprs(existing.RHS, expression)
+			contributions = []Contribution{{
+				Expr:    multiplyExprs(foldContributions(existing.contributionList()), expression),
+				Origins: unionOrigins(existing.contributionList(), couplingOrigin(index)),
+			}}
 		case "replacement":
-			rhs = expression
+			contributions = []Contribution{authored}
 		default: // "additive" and any unrecognized transform
-			rhs = addExprs(existing.RHS, expression)
+			contributions = append(append([]Contribution(nil), existing.contributionList()...), authored)
 		}
-		comp.equations[ref.index] = FlattenedEquation{
-			LHS:          existing.LHS,
-			RHS:          rhs,
-			SourceSystem: existing.SourceSystem,
-		}
+		comp.equations[ref.index] = equationFrom(existing, contributions, existing.LHS)
 	}
 	return nil
 }
@@ -2377,12 +2436,12 @@ func checkVariableMapEndpoints(file *ESMFile, components map[string]*componentSy
 // `param_to_var` binds a LOADED field onto a GRID-SHAPED consumer parameter, the
 // shape transfers to the source name so the pointwise lift recognizes it as an
 // array operand to index per grid cell (esm-spec §11.5 + §10.4).
-func applyVariableMap(components map[string]*componentSystem, order []string, entry VariableMapCoupling, loaderNames map[string]bool) error {
+func applyVariableMap(components map[string]*componentSystem, order []string, entry VariableMapCoupling, loaderNames map[string]bool, index int) error {
 	if entry.From == "" || entry.To == "" {
 		return nil
 	}
 	if entry.TransformIsExpression() {
-		return applyVariableMapExpression(components, order, entry)
+		return applyVariableMapExpression(components, order, entry, index)
 	}
 	var src Expression = entry.From
 	if entry.Factor != nil && *entry.Factor != 1.0 {
@@ -2392,14 +2451,15 @@ func applyVariableMap(components map[string]*componentSystem, order []string, en
 	// The join sidecars take the same rewrite as a NAME pair, built once rather
 	// than per equation.
 	joinRenames := map[string]string{entry.To: entry.From}
+	rewrite := func(e Expression) Expression {
+		return renameJoinNames(substituteExpr(e, bindings), joinRenames)
+	}
+	// A substitution changes an INPUT of a term, not its author: it applies
+	// inside each contribution and adds no origin (§4.7.5 provenance table).
 	for _, sysName := range order {
 		comp := components[sysName]
 		for i, eq := range comp.equations {
-			comp.equations[i] = FlattenedEquation{
-				LHS:          substituteExpr(eq.LHS, bindings),
-				RHS:          renameJoinNames(substituteExpr(eq.RHS, bindings), joinRenames),
-				SourceSystem: eq.SourceSystem,
-			}
+			comp.equations[i] = mapContributions(eq, rewrite, substituteExpr(eq.LHS, bindings))
 		}
 	}
 
@@ -2434,7 +2494,7 @@ func applyVariableMap(components map[string]*componentSystem, order []string, en
 // substituted: the target becomes an OBSERVED variable named exactly `to` whose
 // defining equation is the transform expression VERBATIM (by contract every
 // reference inside an expression transform is already fully scoped).
-func applyVariableMapExpression(components map[string]*componentSystem, order []string, entry VariableMapCoupling) error {
+func applyVariableMapExpression(components map[string]*componentSystem, order []string, entry VariableMapCoupling, index int) error {
 	if !exprReferencesVar(entry.Transform, entry.From) {
 		return fmt.Errorf(
 			"flatten: variable_map expression transform mapping '%s' -> '%s' does not reference its source variable '%s'",
@@ -2468,10 +2528,12 @@ func applyVariableMapExpression(components map[string]*componentSystem, order []
 		}
 	}
 	targetComp.observed.set(observed)
+	// The coupling entry authored this definition (§4.7.5 provenance table).
 	targetComp.equations = append(targetComp.equations, FlattenedEquation{
-		LHS:          entry.To,
-		RHS:          entry.Transform,
-		SourceSystem: targetComp.name,
+		LHS:           entry.To,
+		RHS:           entry.Transform,
+		SourceSystem:  targetComp.name,
+		Contributions: []Contribution{{Expr: entry.Transform, Origins: []TermOrigin{couplingOrigin(index)}}},
 	})
 	return nil
 }
@@ -2760,8 +2822,8 @@ func normalizeFlattenedAngleArguments(flat *FlattenedSystem) {
 		out, _ := normalizeAngleArguments(e, env)
 		return out
 	}
-	for i := range flat.Equations {
-		flat.Equations[i].RHS = rewrite(flat.Equations[i].RHS)
+	for i, eq := range flat.Equations {
+		flat.Equations[i] = mapContributions(eq, rewrite, eq.LHS)
 	}
 	for i := range flat.FieldICs {
 		flat.FieldICs[i].Expr = rewrite(flat.FieldICs[i].Expr)
@@ -2884,17 +2946,28 @@ func applyCouplings(file *ESMFile, components map[string]*componentSystem, order
 		return err
 	}
 
+	// `couple` and `variable_map` entries keep their position in the expanded
+	// sequence: it is the {"coupling": k} origin of every expression they author
+	// (§4.7.5 provenance table).
+	type indexedCouple struct {
+		index int
+		entry CouplingCouple
+	}
+	type indexedVariableMap struct {
+		index int
+		entry VariableMapCoupling
+	}
 	var composes []OperatorComposeCoupling
-	var couples []CouplingCouple
-	var varMaps []VariableMapCoupling
+	var couples []indexedCouple
+	var varMaps []indexedVariableMap
 	for i, entry := range coupling {
 		switch c := entry.(type) {
 		case OperatorComposeCoupling:
 			composes = append(composes, c)
 		case CouplingCouple:
-			couples = append(couples, c)
+			couples = append(couples, indexedCouple{i, c})
 		case VariableMapCoupling:
-			varMaps = append(varMaps, c)
+			varMaps = append(varMaps, indexedVariableMap{i, c})
 		case OperatorApplyCoupling:
 			metadata.OperatorApplies = append(metadata.OperatorApplies, c.Operator)
 		case CallbackCoupling:
@@ -2929,7 +3002,7 @@ func applyCouplings(file *ESMFile, components map[string]*componentSystem, order
 		metadata.noteCouplingRewritten(gone)
 	}
 	for _, cp := range couples {
-		if err := applyCouple(components, order, retargetPendingCouple(cp, mergedRenames)); err != nil {
+		if err := applyCouple(components, order, retargetPendingCouple(cp.entry, mergedRenames), cp.index); err != nil {
 			return err
 		}
 	}
@@ -2938,8 +3011,8 @@ func applyCouplings(file *ESMFile, components map[string]*componentSystem, order
 		loaderNames[k] = true
 	}
 	for _, vm := range varMaps {
-		resolved := retargetPendingVariableMap(vm, mergedRenames)
-		if err := applyVariableMap(components, order, resolved, loaderNames); err != nil {
+		resolved := retargetPendingVariableMap(vm.entry, mergedRenames)
+		if err := applyVariableMap(components, order, resolved, loaderNames, vm.index); err != nil {
 			return err
 		}
 		// A NAMED transform substitutes `to` away entirely; an EXPRESSION

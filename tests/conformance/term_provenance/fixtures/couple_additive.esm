@@ -1,0 +1,139 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "CoupleAdditive",
+    "description": "Per-term provenance: `couple` additive connector equations. Atm.CO2 has a tendency, so the connector's expression is APPENDED as a contribution whose origin is the coupling entry ({\"coupling\": 1} -- the entry's 0-based index in the coupling sequence). Atm.O2 is an unknown with no tendency, so the first additive term BECOMES D(Atm.O2) (esm-libraries-spec 4.7.2) and the second is appended to it. Atm.flux is a parameter and takes no tendency: that connector equation is skipped. Entry 0 is a variable_map that binds Ocean.F to Ocean.Fref; it runs after the couple and rewrites Ocean.F inside the coupling's contribution without changing that contribution's origin.",
+    "authors": [
+      "EarthSciAST test suite"
+    ],
+    "created": "2026-10-24T00:00:00Z"
+  },
+  "models": {
+    "Atm": {
+      "variables": {
+        "CO2": {
+          "type": "unknown",
+          "units": "ppm",
+          "default": 400.0
+        },
+        "O2": {
+          "type": "unknown",
+          "units": "ppm",
+          "default": 200000.0
+        },
+        "kloss": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.001
+        },
+        "flux": {
+          "type": "parameter",
+          "units": "ppm/s",
+          "default": 0.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "CO2"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "kloss"
+                ]
+              },
+              "CO2"
+            ]
+          }
+        }
+      ]
+    },
+    "Ocean": {
+      "variables": {
+        "F": {
+          "type": "parameter",
+          "units": "ppm/s",
+          "default": 0.5
+        },
+        "G": {
+          "type": "parameter",
+          "units": "ppm/s",
+          "default": 0.25
+        },
+        "H": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.0001
+        },
+        "Fref": {
+          "type": "parameter",
+          "units": "ppm/s",
+          "default": 0.5
+        }
+      },
+      "equations": []
+    }
+  },
+  "coupling": [
+    {
+      "type": "variable_map",
+      "from": "Ocean.Fref",
+      "to": "Ocean.F",
+      "transform": "param_to_var"
+    },
+    {
+      "type": "couple",
+      "systems": [
+        "Ocean",
+        "Atm"
+      ],
+      "connector": {
+        "equations": [
+          {
+            "from": "Ocean.F",
+            "to": "Atm.CO2",
+            "transform": "additive",
+            "expression": "Ocean.F"
+          },
+          {
+            "from": "Ocean.G",
+            "to": "Atm.O2",
+            "transform": "additive",
+            "expression": "Ocean.G"
+          },
+          {
+            "from": "Ocean.H",
+            "to": "Atm.O2",
+            "transform": "additive",
+            "expression": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "-",
+                  "args": [
+                    "Ocean.H"
+                  ]
+                },
+                "Atm.O2"
+              ]
+            }
+          },
+          {
+            "from": "Ocean.G",
+            "to": "Atm.flux",
+            "transform": "additive",
+            "expression": "Ocean.G"
+          }
+        ]
+      }
+    }
+  ]
+}

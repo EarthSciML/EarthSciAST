@@ -1,0 +1,97 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "VariableMapProvenance",
+    "description": "Per-term provenance through `variable_map`. Entry 0 (`additive`, a scaled REPLACEMENT per esm-libraries-spec 4.7.3) substitutes 2 * Met.kref for Chem.k inside Chem's contribution and adds no origin: the map changed an input of the term, not its author. Entry 1 (an Expression transform) turns Chem.e into an observed whose defining equation the coupling entry wrote, so that equation's one contribution has origin {\"coupling\": 1}.",
+    "authors": [
+      "EarthSciAST test suite"
+    ],
+    "created": "2026-10-24T00:00:00Z"
+  },
+  "models": {
+    "Chem": {
+      "variables": {
+        "O3": {
+          "type": "unknown",
+          "units": "mol/mol",
+          "default": 1.0
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.1
+        },
+        "e": {
+          "type": "parameter",
+          "units": "mol/mol/s",
+          "default": 0.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "O3"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "+",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  {
+                    "op": "-",
+                    "args": [
+                      "k"
+                    ]
+                  },
+                  "O3"
+                ]
+              },
+              "e"
+            ]
+          }
+        }
+      ]
+    },
+    "Met": {
+      "variables": {
+        "kref": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.05
+        },
+        "S": {
+          "type": "parameter",
+          "units": "mol/mol/s",
+          "default": 40.0
+        }
+      },
+      "equations": []
+    }
+  },
+  "coupling": [
+    {
+      "type": "variable_map",
+      "from": "Met.kref",
+      "to": "Chem.k",
+      "transform": "additive",
+      "factor": 2.0
+    },
+    {
+      "type": "variable_map",
+      "from": "Met.S",
+      "to": "Chem.e",
+      "transform": {
+        "op": "*",
+        "args": [
+          0.001,
+          "Met.S"
+        ]
+      }
+    }
+  ]
+}

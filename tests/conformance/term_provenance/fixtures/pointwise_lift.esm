@@ -1,0 +1,194 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "PointwiseLiftProvenance",
+    "description": "Per-term provenance through the pointwise lift (esm-spec 10.5). Chem's decay, Src's emission and Adv's upwind stencil are three contributions to D(Chem.O3); the lift indexes each one per cell and wraps their sum in one faq, so body(eq) is the faq body and the contributions are the per-cell terms.",
+    "authors": [
+      "EarthSciAST test suite"
+    ],
+    "created": "2026-10-24T00:00:00Z"
+  },
+  "index_sets": {
+    "x": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "models": {
+    "Chem": {
+      "variables": {
+        "O3": {
+          "type": "unknown",
+          "units": "mol/mol",
+          "default": 1.0
+        },
+        "k1": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.1
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "O3"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k1"
+                ]
+              },
+              "O3"
+            ]
+          }
+        }
+      ]
+    },
+    "Src": {
+      "variables": {
+        "e": {
+          "type": "parameter",
+          "units": "mol/mol/s",
+          "default": 0.2
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "Chem.O3"
+            ],
+            "wrt": "t"
+          },
+          "rhs": "e"
+        }
+      ]
+    },
+    "Adv": {
+      "variables": {
+        "u": {
+          "type": "parameter",
+          "units": "m/s",
+          "default": 2.0
+        },
+        "dx": {
+          "type": "parameter",
+          "units": "m",
+          "default": 100.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "_var"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "u"
+                ]
+              },
+              {
+                "op": "makearray",
+                "args": [],
+                "regions": [
+                  [
+                    [
+                      2,
+                      3
+                    ]
+                  ],
+                  [
+                    [
+                      1,
+                      1
+                    ]
+                  ]
+                ],
+                "values": [
+                  {
+                    "op": "/",
+                    "args": [
+                      {
+                        "op": "-",
+                        "args": [
+                          {
+                            "op": "index",
+                            "args": [
+                              "_var",
+                              "i"
+                            ]
+                          },
+                          {
+                            "op": "index",
+                            "args": [
+                              "_var",
+                              {
+                                "op": "-",
+                                "args": [
+                                  "i",
+                                  1
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      "dx"
+                    ]
+                  },
+                  {
+                    "op": "/",
+                    "args": [
+                      {
+                        "op": "index",
+                        "args": [
+                          "_var",
+                          "i"
+                        ]
+                      },
+                      "dx"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "coupling": [
+    {
+      "type": "operator_compose",
+      "systems": [
+        "Chem",
+        "Src"
+      ]
+    },
+    {
+      "type": "operator_compose",
+      "systems": [
+        "Chem",
+        "Adv"
+      ],
+      "lifting": "pointwise"
+    }
+  ]
+}

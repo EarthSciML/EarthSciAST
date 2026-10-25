@@ -1,7 +1,7 @@
 //! esm-spec §2.2.7 `solver.time_span`, against the SHARED pin.
 //!
 //! Reads `tests/conformance/solver_time_span/manifest.json` and asserts this
-//! binding against it (CONFORMANCE_SPEC §5.48): for an accepted fixture, the
+//! binding against it (CONFORMANCE_SPEC §5.49): for an accepted fixture, the
 //! value [`earthsci_ast::resolve_time_span`] returns with no call-site interval
 //! (binary64 equality — every pinned value is exact) and the root's `solver`
 //! block as `emit` writes it (numbers compared by value); for a refused one,

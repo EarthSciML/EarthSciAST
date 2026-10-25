@@ -30,7 +30,8 @@ Every field of the step-4 normative table, in a language-neutral JSON form:
 ordered name lists for each map, the per-variable metadata that matters (units,
 default, shape, update kinds, distribution kind), the equation count and the
 `to_ascii` rendering of every equation (the same renderer the shared display
-fixtures and the expression-parse corpus use), and the derived `system_kind`.
+fixtures and the expression-parse corpus use) with its ordered `contributions`
+(each a rendered summand and its origins), and the derived `system_kind`.
 Anything left out here cannot be pinned later, so the maps are recorded even
 when empty.
 
@@ -55,6 +56,11 @@ the other bindings:
      §4.7.5's dual membership is for the observed that "materializes into a
      buffer", so a SCALAR observed appearing in the solved-for vector is a
      bug in the oracle, not a case to record.
+  9. Every equation records at least one contribution, and every contribution
+     at least one origin, each naming exactly one of `component` / `coupling`,
+     with no origin repeated (esm-libraries-spec §4.7.5, per-term provenance).
+     The bit-for-bit sum invariant is checked by evaluation in the Python
+     suite (tests/test_term_provenance.py), not here.
 
 Regenerate with:  python3 scripts/generate-flatten-corpus.py
 Output:           tests/conformance/flatten/cases.json
@@ -326,6 +332,33 @@ CASES: list[tuple[str, str, str]] = [
         "advection_reaction_loaded_ic_bc",
         "valid/advection_reaction_loaded_ic_bc.esm",
     ),
+    # --- per-term provenance (esm-libraries-spec §4.7.5, issue #539) ---------
+    # Every case above records `contributions` too; these isolate one row of the
+    # §4.7.5 provenance table each. The chained-compose row is the
+    # `chained_operator_compose` case above, reused rather than copied. See
+    # tests/conformance/term_provenance/README.md for what each one pins.
+    *[
+        (
+            "term_provenance",
+            f"term_provenance_{name}",
+            f"conformance/term_provenance/fixtures/{name}.esm",
+        )
+        for name in (
+            "systems_order_ab",
+            "systems_order_ba",
+            "placeholder_expansion",
+            "couple_additive",
+            "couple_multiplicative",
+            "couple_multiplicative_tendency_first",
+            "variable_map",
+            "pointwise_lift",
+            "template_reference",
+            "deposition_sink",
+            "non_vacuity",
+            "translate_factor",
+            "rhs_time_derivative",
+        )
+    ],
 ]
 
 # --- explicit refusals -------------------------------------------------------
@@ -504,6 +537,10 @@ def _record(flat) -> dict:
                 "lhs": to_ascii(eq.lhs),
                 "rhs": to_ascii(eq.rhs),
                 "source_system": eq.source_system,
+                "contributions": [
+                    {"rhs": to_ascii(c.expr), "origins": [o.to_json() for o in c.origins]}
+                    for c in eq.contributions
+                ],
             }
             for eq in flat.equations
         ],
@@ -622,6 +659,21 @@ def _check(case_id: str, rec: dict) -> None:
                 f"observed materializes into a buffer (§4.7.5 step 4)"
             )
 
+    # 9. Per-term provenance: a contribution list per equation, origins
+    #    non-empty, one-keyed, and deduplicated.
+    for eq in rec["equations"]:
+        contributions = eq["contributions"]
+        if not contributions:
+            raise AssertionError(f"{case_id}: {eq['lhs']} records no contributions")
+        for c in contributions:
+            origins = c["origins"]
+            if not origins:
+                raise AssertionError(f"{case_id}: {eq['lhs']}: a contribution has no origin")
+            if any(len(o) != 1 or not ({"component", "coupling"} & set(o)) for o in origins):
+                raise AssertionError(f"{case_id}: {eq['lhs']}: malformed origin in {origins}")
+            if len({json.dumps(o, sort_keys=True) for o in origins}) != len(origins):
+                raise AssertionError(f"{case_id}: {eq['lhs']}: repeated origin in {origins}")
+
 
 # --- build -------------------------------------------------------------------
 
@@ -676,6 +728,13 @@ def main() -> int:
             "indexed LHS defines, which materializes into a buffer rather than "
             "being inlined - appears in BOTH, carrying the role `observed` in "
             "each (issue #270). "
+            "Each equation's `contributions` is its per-term provenance "
+            "(esm-libraries-spec §4.7.5): the ordered summands whose LEFT-FOLD sum "
+            "is the right-hand side (the `faq` body for a pointwise-lifted "
+            "equation), each rendered with to_ascii and carrying its origins, "
+            '`{"component": <dotted path>}` or `{"coupling": <0-based index into '
+            "the coupling sequence after coupling_import expansion>}`. Compared "
+            "exactly and in order. "
             "Entries in `refusals` must be rejected, with the named error type."
         ),
         "oracle": "earthsci_ast.flatten (pkg/earthsci-ast-py)",

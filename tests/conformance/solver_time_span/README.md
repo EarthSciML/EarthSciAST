@@ -2,7 +2,7 @@
 
 Cross-language conformance for **esm-spec §2.2.7**: what a document's
 `solver.time_span` means in seconds. Design: GitHub issue #550 (RFC U16).
-Gate: CONFORMANCE_SPEC §5.48.
+Gate: CONFORMANCE_SPEC §5.49.
 
 `time_span` is the interval a document is meant to be simulated over:
 `{start, end}`, each a number in the document's time units (seconds) or an RFC

@@ -37,7 +37,8 @@ function flattenedJoinClauses(doc: ReturnType<typeof loadString>): Record<string
         }
       }
     }
-    Object.values(o).forEach(walk)
+    // An equation's `contributions` repeat its rhs summands; count each clause once.
+    for (const [k, child] of Object.entries(o)) if (k !== 'contributions') walk(child)
   }
   walk(flatten(doc) as unknown)
   return found

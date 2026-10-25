@@ -1,7 +1,7 @@
 """esm-spec §2.2.7 `solver.time_span`, against the SHARED pin.
 
 Reads ``tests/conformance/solver_time_span/manifest.json`` and asserts this
-binding against it (CONFORMANCE_SPEC §5.48). An accepted fixture pins two
+binding against it (CONFORMANCE_SPEC §5.49). An accepted fixture pins two
 things: what :func:`earthsci_ast.resolve_time_span` returns with no call-site
 interval (binary64 seconds, compared EXACTLY), and the root's ``solver`` block
 as ``emit`` writes it (the authored bounds, compared as JSON values). A refused

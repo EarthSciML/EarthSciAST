@@ -1,0 +1,197 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "TranslateFactorProvenance",
+    "description": "Per-term provenance under an operator_compose `translate` factor. Chem.Z has one contribution, so it is appended as 3 * expr with Chem's origin. Chem.X already holds two (Chem's and Sink's, from entry 0), so they COLLAPSE into one contribution 2 * (x1 + x2) whose origins are the union, Chem then Sink: distributing the factor would change the arithmetic.",
+    "authors": [
+      "EarthSciAST test suite"
+    ],
+    "created": "2026-10-24T00:00:00Z"
+  },
+  "models": {
+    "Host": {
+      "variables": {
+        "Y": {
+          "type": "unknown",
+          "units": "mol/mol",
+          "default": 1.0
+        },
+        "W": {
+          "type": "unknown",
+          "units": "mol/mol",
+          "default": 1.0
+        },
+        "a": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.3
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "Y"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "a"
+                ]
+              },
+              "Y"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "W"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "a"
+                ]
+              },
+              "W"
+            ]
+          }
+        }
+      ]
+    },
+    "Chem": {
+      "variables": {
+        "X": {
+          "type": "unknown",
+          "units": "mol/mol",
+          "default": 1.0
+        },
+        "Z": {
+          "type": "unknown",
+          "units": "mol/mol",
+          "default": 1.0
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.1
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "X"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "X"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "Z"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k"
+                ]
+              },
+              "Z"
+            ]
+          }
+        }
+      ]
+    },
+    "Sink": {
+      "variables": {
+        "kd": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.01
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "Chem.X"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "kd"
+                ]
+              },
+              "Chem.X"
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "coupling": [
+    {
+      "type": "operator_compose",
+      "systems": [
+        "Chem",
+        "Sink"
+      ]
+    },
+    {
+      "type": "operator_compose",
+      "systems": [
+        "Host",
+        "Chem"
+      ],
+      "translate": {
+        "Y": {
+          "var": "X",
+          "factor": 2.0
+        },
+        "W": {
+          "var": "Z",
+          "factor": 3.0
+        }
+      }
+    }
+  ]
+}
