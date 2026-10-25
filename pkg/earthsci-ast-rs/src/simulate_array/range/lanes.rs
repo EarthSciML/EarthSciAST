@@ -280,15 +280,9 @@ impl LaneProgram {
         };
         run_tape_inputs(&mut inputs.ctx, &call, &mut inputs.values, false);
         tape_fault(scope, &mut inputs.ctx)?;
-        // Kept so the evaluation reads the set these inputs came from; a
-        // clone is a reference count, never an allocation once it is there.
-        if !inputs
-            .forcing
-            .as_ref()
-            .is_some_and(|f| f.epoch() == forcing.epoch())
-        {
-            inputs.forcing = Some(forcing.clone());
-        }
+        // Kept so the evaluation reads the set these inputs came from (a
+        // clone is reference counts, not an allocation).
+        inputs.forcing = Some(forcing.clone());
         Ok(())
     }
 
