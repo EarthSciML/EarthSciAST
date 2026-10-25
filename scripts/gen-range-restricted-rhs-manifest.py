@@ -10,7 +10,7 @@ every tiling (1x1, 2x1, 3x2 uneven, a tile narrower than the boundary band, two
 tiles sharing one rank storage box) and the seeded lane plans, so that every
 binding reads the same explicit boxes and cell lists rather than re-deriving
 them. See tests/conformance/range_restricted_rhs/README.md and
-CONFORMANCE_SPEC.md §5.49.
+CONFORMANCE_SPEC.md §5.50.
 """
 
 from __future__ import annotations
@@ -626,7 +626,7 @@ def build():
         ),
         "spec": [
             "API_SPEC.md §5.8 (Range-restricted right-hand sides)",
-            "CONFORMANCE_SPEC.md §5.49",
+            "CONFORMANCE_SPEC.md §5.50",
         ],
         "compiler": "native",
         "bindings_required": ["julia", "rust"],

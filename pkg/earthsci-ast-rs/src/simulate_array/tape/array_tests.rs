@@ -19,7 +19,6 @@ use crate::simulate_array::take_const_array_oob;
 use crate::value_invention::BoundaryKind;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
 
 pub(super) fn compile(doc: serde_json::Value) -> ArrayCompiled {
     let file = crate::parse::load_string(&doc.to_string()).expect("fixture document loads");
@@ -62,7 +61,7 @@ fn cfg() -> super::fuse::SuperopCfg {
 /// A fresh scratch carrying `prog`.
 fn scratch_with(compiled: &ArrayCompiled, prog: TapeProgram) -> RhsScratch {
     let mut s = RhsScratch::new(&compiled.var_shapes);
-    s.set_const_arrays(Rc::clone(&compiled.const_scope));
+    s.set_const_arrays(std::sync::Arc::clone(&compiled.const_scope));
     s.install_tape(std::sync::Arc::new(prog));
     s
 }
@@ -297,7 +296,8 @@ fn const_gather_boundary_policies_resolve_at_build() {
                 d_eq("u", n, body),
             ],
         ));
-        compiled.const_scope = Rc::new(ConstArrayScope::default().with_boundary("C", vec![kind]));
+        compiled.const_scope =
+            std::sync::Arc::new(ConstArrayScope::default().with_boundary("C", vec![kind]));
         compiled
     };
     // Unfused: whether fusion folds a many-segment gather depends on the run

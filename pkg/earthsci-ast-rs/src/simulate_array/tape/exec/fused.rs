@@ -716,6 +716,13 @@ pub(super) struct FusedScratch {
     pub(super) workers: super::par::FusedWorkers,
 }
 
+// SAFETY: the raw pointers in `bases`, `outs` and `whole_src` are addresses
+// into the slab, `dy` and the state of the call that resolved them. Every
+// group execution rewrites them before it reads one, and nothing reads them
+// after the call returns, so moving the scratch to another thread between
+// calls cannot carry a live borrow with it.
+unsafe impl Send for FusedScratch {}
+
 impl FusedScratch {
     pub(super) fn for_program(prog: &TapeProgram) -> Self {
         let most = |f: fn(&FusedSpec) -> usize| prog.fused.iter().map(f).max().unwrap_or(0);

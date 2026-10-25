@@ -95,18 +95,18 @@
     }
   },
   "counts": {
-    "symbols": 979,
+    "symbols": 993,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
-      "julia": 329,
+      "julia": 341,
       "typescript": 245,
-      "python": 269,
-      "rust": 376,
+      "python": 271,
+      "rust": 382,
       "go": 460
     },
     "by_tier": {
-      "extension": 683,
-      "stable": 296
+      "extension": 691,
+      "stable": 302
     }
   },
   "planned": [
@@ -2673,6 +2673,15 @@
       }
     },
     {
+      "name": "default_forcing_set",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "default_forcing_set",
+        "python": "default_forcing_set"
+      }
+    },
+    {
       "name": "default_indep_var",
       "kind": "constant",
       "tier": "extension",
@@ -4305,6 +4314,49 @@
       }
     },
     {
+      "name": "forcing_epoch",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "forcing_epoch"
+      }
+    },
+    {
+      "name": "forcing_set",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "forcing_set",
+        "python": "forcing_set"
+      }
+    },
+    {
+      "name": "forcing_set",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "julia": "ForcingSet",
+        "rust": "ForcingSet"
+      }
+    },
+    {
+      "name": "forcing_slot",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "julia": "ForcingSlot",
+        "rust": "ForcingSlot"
+      }
+    },
+    {
+      "name": "forcing_slots",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "forcing_slots"
+      }
+    },
+    {
       "name": "format_canonical_float",
       "kind": "function",
       "tier": "stable",
@@ -5301,6 +5353,14 @@
       }
     },
     {
+      "name": "n_states",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "n_states"
+      }
+    },
+    {
       "name": "new_cadence_classifier",
       "kind": "function",
       "tier": "extension",
@@ -5648,6 +5708,15 @@
       }
     },
     {
+      "name": "param_slot",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "julia": "ParamSlot",
+        "rust": "ParamSlot"
+      }
+    },
+    {
       "name": "parameter",
       "kind": "type",
       "tier": "stable",
@@ -5723,6 +5792,14 @@
       "tier": "extension",
       "bindings": {
         "julia": "ParameterVariable"
+      }
+    },
+    {
+      "name": "parameter_vector",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "parameter_vector"
       }
     },
     {
@@ -6630,6 +6707,14 @@
       }
     },
     {
+      "name": "replace_forcing",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "replace_forcing"
+      }
+    },
+    {
       "name": "resolve_and_lower",
       "kind": "function",
       "tier": "extension",
@@ -6783,6 +6868,14 @@
       "tier": "extension",
       "bindings": {
         "rust": "Rhs"
+      }
+    },
+    {
+      "name": "rhs_error",
+      "kind": "error",
+      "tier": "extension",
+      "bindings": {
+        "rust": "RhsError"
       }
     },
     {
@@ -7298,6 +7391,14 @@
       }
     },
     {
+      "name": "slot_kind",
+      "kind": "type",
+      "tier": "extension",
+      "bindings": {
+        "rust": "SlotKind"
+      }
+    },
+    {
       "name": "slurm_walltime_predicate",
       "kind": "function",
       "tier": "extension",
@@ -7441,11 +7542,28 @@
       }
     },
     {
+      "name": "state_block",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "julia": "StateBlock",
+        "rust": "StateBlock"
+      }
+    },
+    {
       "name": "state_cells",
       "kind": "function",
       "tier": "extension",
       "bindings": {
         "rust": "state_cells"
+      }
+    },
+    {
+      "name": "state_layout",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "state_layout"
       }
     },
     {

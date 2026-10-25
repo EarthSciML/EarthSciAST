@@ -951,6 +951,7 @@ struct _ProgramSeedRecipe
     pd_coupling::Vector{Pair{String,String}}
     gated_providers::Dict{String,Any}
     sample_time::Float64
+    runtime_array_parameters::Bool
     memo::Base.RefValue{Any}
     lock::ReentrantLock
 end
@@ -988,7 +989,8 @@ function _program_seed(prob)
         r.memo[] = (; flat[]..., compiler = r.compiler, model_name = r.model_name,
                     overrides = r.overrides, const_arrays = merged_const,
                     param_arrays = Dict{String,Any}(prob.param_buffers),
-                    gated_providers = r.gated_providers, sample_time = r.sample_time)
+                    gated_providers = r.gated_providers, sample_time = r.sample_time,
+                    runtime_array_parameters = r.runtime_array_parameters)
     end
 end
 
@@ -1185,6 +1187,18 @@ after `u0`, see [`seed_expression_ic!`](@ref)), and the streaming-output set
 `sinks` / `snapshot` / `pre_write` / `checkpoint_predicates` /
 `checkpoint_sinks` / `terminate_on_checkpoint`.
 
+`runtime_array_parameters::Bool = false` makes every shaped parameter with a
+value (a declared `default`, a scalar broadcast over its grid, an inline
+override in `p`, or a caller's `const_arrays` entry) a live buffer holding that
+value rather than build-time data: it appears in
+[`forcing_buffers`](@ref)`(prob)`, and a program of the Problem
+([`rhs_program`](@ref)) takes it as a [`ForcingSlot`](@ref) of kind
+`:array_parameter` whose default buffer is that value, so a caller evaluates at
+another field without a rebuild. Off, those parameters are folded into the
+build as before. Either way, a shaped parameter the caller binds through
+`param_arrays` is a live buffer, and a program's slot of kind `:array_parameter`
+unless the parameter is externally fed.
+
 `pushdown_rewrite::Bool = false` opts in to the automatic projection-pushdown
 desugar ([`desugar_pushdown`](@ref)) at the PUBLIC entry point. The rewrite runs
 on the authored document BEFORE flattening (the pattern is authored in the
@@ -1228,6 +1242,7 @@ function esm_problem(input, tspan;
                      base_path::AbstractString = pwd(),
                      compiler::Symbol = :native,
                      sample_time::Union{Nothing,Real} = nothing,
+                     runtime_array_parameters::Bool = false,
                      # ---- Julia extension seam (§2.5.2) ----
                      const_arrays::AbstractDict = Dict{String,Any}(),
                      param_arrays::AbstractDict = Dict{String,Any}(),
@@ -1436,6 +1451,7 @@ function esm_problem(input, tspan;
         inspect = insp,
         materialize_out = dm,
         _param_classes = param_classes,
+        _runtime_array_parameters = runtime_array_parameters,
         # Phase 2b Hook 2: deferred gated providers + the build-time sample tick.
         # The front door fetches these pre-sliced right after value-invention.
         _gated_providers = gated_providers,
@@ -1453,7 +1469,8 @@ function esm_problem(input, tspan;
         String(base_path), supplied, model_name === nothing ? nothing : String(model_name),
         compiler, overrides, const_arrays, providers,
         Set{String}(keys(discovered)), Set{String}(keys(pd_gates)), pd_coupling,
-        gated_providers, t_sample, Ref{Any}(nothing), ReentrantLock())
+        gated_providers, t_sample, runtime_array_parameters,
+        Ref{Any}(nothing), ReentrantLock())
 
     # ---- initial state: the document's own ICs, then the caller's -----------
     # Under the build's plan: a `seed_ic!` hook (`seed_expression_ic!`) is an

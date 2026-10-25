@@ -68,7 +68,7 @@ pub struct RhsScratch {
     /// it reaches every [`EvalCtx`] the RHS builds. Empty by default, so a
     /// scratch nobody configures reads byte-identically to the pre-§5.5.5
     /// evaluator.
-    const_arrays: Rc<ConstArrayScope>,
+    const_arrays: std::sync::Arc<ConstArrayScope>,
 }
 
 impl RhsScratch {
@@ -88,19 +88,19 @@ impl RhsScratch {
             const_lits: ConstLitMemo::default(),
             static_keys: HashSet::new(),
             tape: None,
-            const_arrays: Rc::new(ConstArrayScope::default()),
+            const_arrays: std::sync::Arc::new(ConstArrayScope::default()),
         }
     }
 
     /// Install the compiled model's const-array registry (§5.5.5), so a gather
     /// on one of those factors resolves an out-of-range index by its declared
     /// boundary policy instead of the state gather's zero ghost.
-    pub(super) fn set_const_arrays(&mut self, scope: Rc<ConstArrayScope>) {
+    pub(super) fn set_const_arrays(&mut self, scope: std::sync::Arc<ConstArrayScope>) {
         self.const_arrays = scope;
     }
 
     /// The installed const-array registry.
-    pub(super) fn const_arrays(&self) -> &Rc<ConstArrayScope> {
+    pub(super) fn const_arrays(&self) -> &std::sync::Arc<ConstArrayScope> {
         &self.const_arrays
     }
 
@@ -820,7 +820,7 @@ fn evaluate_rhs_legacy(
 
     // The model's const-array registry (§5.5.5) — cloned `Rc` so it outlives the
     // disjoint field borrows of `scratch` taken below.
-    let const_scope = Rc::clone(scratch.const_arrays());
+    let const_scope = std::sync::Arc::clone(scratch.const_arrays());
     let const_arrays: &ConstArrayScope = &const_scope;
 
     // ess-cse: bind the CSE class table to THIS rule set. Its keys are AST node

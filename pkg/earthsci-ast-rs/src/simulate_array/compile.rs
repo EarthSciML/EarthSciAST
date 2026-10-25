@@ -431,6 +431,15 @@ fn normalize_model_angle_arguments(model: &mut Model) {
 
 impl ArrayCompiled {
     pub fn from_file(file: &EsmFile) -> Result<Self, CompileError> {
+        Self::from_file_with(file, false)
+    }
+
+    /// [`Self::from_file`], with `runtime_array_parameters` as
+    /// [`Self::from_flattened_with`] takes it.
+    pub(crate) fn from_file_with(
+        file: &EsmFile,
+        runtime_array_parameters: bool,
+    ) -> Result<Self, CompileError> {
         let Some(models) = &file.models else {
             return Err(CompileError::build_err("File has no models to simulate"));
         };
@@ -453,8 +462,13 @@ impl ArrayCompiled {
         // which owns its model outright. The model's name rides along so the
         // pipeline can resolve self-qualified references once the subsystems
         // are mounted.
-        let mut compiled =
-            Self::compile_pipeline(model.clone(), &index_sets, None, Some(model_name))?;
+        let mut compiled = Self::compile_pipeline(
+            model.clone(),
+            &index_sets,
+            None,
+            Some(model_name),
+            runtime_array_parameters,
+        )?;
         // Record the model's namespace so overrides may be keyed `Model.param`
         // (the scalar/flatten/Julia convention) as well as the raw `param` this
         // single-model path builds (WS3 override-naming parity).
@@ -483,7 +497,8 @@ impl ArrayCompiled {
         let index_sets: HashMap<String, IndexSet> =
             file.index_sets.unwrap_or_default().into_iter().collect();
         let (model_name, model) = models.into_iter().next().unwrap();
-        let mut compiled = Self::compile_pipeline(model, &index_sets, None, Some(&model_name))?;
+        let mut compiled =
+            Self::compile_pipeline(model, &index_sets, None, Some(&model_name), false)?;
         compiled.qualify_data_fed(&model_name);
         compiled.namespace = Some(model_name);
         Ok(compiled)
@@ -511,6 +526,17 @@ impl ArrayCompiled {
     /// inference, faq lowering, the diffsol RHS build — is shared bit-for-bit
     /// with the single-model path.
     pub fn from_flattened(flat: &FlattenedSystem) -> Result<Self, CompileError> {
+        Self::from_flattened_with(flat, false)
+    }
+
+    /// [`Self::from_flattened`], with every shaped parameter that has a value
+    /// and no `update` left as a run-time input read from the forcing
+    /// buffer (`runtime_array_parameters`, API_SPEC §5.8) rather than lowered
+    /// into build-time data.
+    pub(crate) fn from_flattened_with(
+        flat: &FlattenedSystem,
+        runtime_array_parameters: bool,
+    ) -> Result<Self, CompileError> {
         // A coupling can mix precisions the per-model inference never saw
         // (esm-spec §4.7 "Working precision crosses a mount", §11.3.1).
         crate::precision_infer::check_flattened(flat)?;
@@ -600,7 +626,8 @@ impl ArrayCompiled {
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
-        let mut compiled = Self::from_model(&model, &index_sets)?;
+        let mut compiled =
+            Self::compile_pipeline(model, &index_sets, None, None, runtime_array_parameters)?;
         // `flatten` routed every `ic` equation out of `flat.equations`, so the
         // synthetic model's stage-(0) walk never saw an initial-condition
         // right-hand side. Walk them here, before anything evaluates one
@@ -676,7 +703,7 @@ impl ArrayCompiled {
         index_sets: &HashMap<String, IndexSet>,
         vi_arrays: Option<&HashMap<String, ArrayD<f64>>>,
     ) -> Result<Self, CompileError> {
-        Self::compile_pipeline(model_owned, index_sets, vi_arrays, None)
+        Self::compile_pipeline(model_owned, index_sets, vi_arrays, None, false)
     }
 
     /// The compile pipeline itself; every public entry point above delegates
@@ -690,6 +717,7 @@ impl ArrayCompiled {
         index_sets: &HashMap<String, IndexSet>,
         vi_arrays: Option<&HashMap<String, ArrayD<f64>>>,
         model_name: Option<&str>,
+        runtime_array_parameters: bool,
     ) -> Result<Self, CompileError> {
         // Resolve `{ "from": <index set> }` range references (RFC
         // semiring-faq-unified-ir §5.2) into concrete `[lo, hi]` intervals
@@ -729,8 +757,12 @@ impl ArrayCompiled {
         // is lowered under its namespaced name too; `vi_arrays` is passed so a
         // caller-supplied factor array stays authoritative over a declared
         // default.
-        let inline_param_arrays =
-            lower_inline_array_parameters(&mut model_owned, &index_sets_owned, vi_arrays)?;
+        let (inline_param_arrays, runtime_params) = lower_inline_array_parameters(
+            &mut model_owned,
+            &index_sets_owned,
+            vi_arrays,
+            runtime_array_parameters,
+        )?;
         apply_ragged_factor_scope(&mut index_sets_owned, &model_owned.variables)?;
         // Under `element_type: "Float32"`, reject an index set whose subscripts
         // binary32 cannot address exactly. Index expressions share the value
@@ -808,7 +840,7 @@ impl ArrayCompiled {
         // body out of the variable registry. A gather on one of these resolves
         // an out-of-range index by its declared boundary policy instead of the
         // state gather's zero ghost, which §5.5.5 says is never a const array's.
-        let const_scope = Rc::new(ConstArrayScope::from_names(
+        let const_scope = std::sync::Arc::new(ConstArrayScope::from_names(
             observed_bodies(&model_owned)
                 .into_iter()
                 .filter(|(_, body)| matches!(body, Expr::Operator(n) if n.op == "const"))
@@ -910,7 +942,8 @@ impl ArrayCompiled {
             check_free_variables(model, index_sets, &[])?;
 
             // (1) Collect state / parameter / observed variables.
-            let (state_vars, param_vars, observed_vars, data_fed) = classify_variables(model)?;
+            let (state_vars, param_vars, observed_vars, data_fed) =
+                classify_variables(model, &runtime_params)?;
 
             // (2)+(2b) Infer state shapes from every equation usage, seeding
             // declared array shapes where the index-usage inference left an
@@ -1792,13 +1825,16 @@ fn capture_ic_scope(
 /// [`CompileError::InterpreterBuildError`] when the authored array is ragged or
 /// its extents do not match the declared `shape` resolved against the index-set
 /// registry — the load-time shape check esm-spec §6.6.2 requires.
+#[allow(clippy::type_complexity)]
 fn lower_inline_array_parameters(
     model: &mut Model,
     index_sets: &HashMap<String, IndexSet>,
     external: Option<&HashMap<String, ArrayD<f64>>>,
-) -> Result<HashMap<String, (Vec<usize>, Vec<f64>)>, CompileError> {
+    keep_at_runtime: bool,
+) -> Result<(HashMap<String, (Vec<usize>, Vec<f64>)>, HashSet<String>), CompileError> {
     let mut lowered: Vec<(String, JsonValue)> = Vec::new();
     let mut dense: HashMap<String, (Vec<usize>, Vec<f64>)> = HashMap::new();
+    let mut kept: HashSet<String> = HashSet::new();
     for (name, var) in &mut model.variables {
         if var.var_type != VariableType::Parameter {
             continue;
@@ -1806,6 +1842,17 @@ fn lower_inline_array_parameters(
         let Some(default) = var.default.as_ref() else {
             continue;
         };
+        // `runtime_array_parameters`: a shaped parameter with a value and no
+        // `update` stays a parameter, read at run time from the forcing buffer
+        // (its value seeds the buffer), instead of becoming build-time data.
+        // A caller's array counts: `esm_problem` binds it onto `default`.
+        if keep_at_runtime
+            && var.shape.as_deref().is_some_and(|s| !s.is_empty())
+            && var.update.is_none()
+        {
+            kept.insert(name.clone());
+            continue;
+        }
         if !default.is_array() {
             // esm-spec §6.3 broadcast: one scalar over the whole declared grid.
             // Only for a parameter this document is the sole source of — a 0-D
@@ -1874,7 +1921,7 @@ fn lower_inline_array_parameters(
             comment: None,
         });
     }
-    Ok(dense)
+    Ok((dense, kept))
 }
 
 /// The values [`lower_inline_array_parameters`] gives each shaped parameter
@@ -1953,20 +2000,21 @@ fn dense_to_json(shape: &[usize], values: &[f64]) -> JsonValue {
 /// `update`. A Brownian parameter is refused (`unsupported_construct`), never
 /// a silent drop, and so is a discrete one this backend cannot refresh.
 #[allow(clippy::type_complexity)]
-fn classify_variables(
-    model: &Model,
+fn classify_variables<'m>(
+    model: &'m Model,
+    runtime_params: &HashSet<String>,
 ) -> Result<
     (
-        Vec<&String>,
-        Vec<&String>,
-        Vec<(&String, &ModelVariable)>,
+        Vec<&'m String>,
+        Vec<&'m String>,
+        Vec<(&'m String, &'m ModelVariable)>,
         Vec<(String, String)>,
     ),
     CompileError,
 > {
-    let mut state_vars: Vec<&String> = Vec::new();
-    let mut param_vars: Vec<&String> = Vec::new();
-    let mut observed_vars: Vec<(&String, &ModelVariable)> = Vec::new();
+    let mut state_vars: Vec<&'m String> = Vec::new();
+    let mut param_vars: Vec<&'m String> = Vec::new();
+    let mut observed_vars: Vec<(&'m String, &'m ModelVariable)> = Vec::new();
     // The DATA-FED parameters this classification routes to the forcing
     // channel, each with the `data_sources` key its `update` names
     // (esm-spec §9.6.6 `data_source_unbound`). Recorded here because this is
@@ -1993,6 +2041,13 @@ fn classify_variables(
                 }
             }
             VariableType::Parameter => {
+                // A shaped parameter left as a run-time input
+                // (`runtime_array_parameters`) is read from the forcing
+                // buffer, as an externally refreshed one is.
+                if runtime_params.contains(name) {
+                    observed_vars.push((name, var));
+                    continue;
+                }
                 if class.is_brownian(name) {
                     return Err(CompileError::UnsupportedConstruct {
                         construct: crate::compile_error::WIENER_NOISE,
@@ -2898,7 +2953,7 @@ fn build_observed_rules(
                 var: name.clone(),
                 output_idx_names: r.idx_names,
                 output_ranges: r.ranges,
-                body: Rc::new(r.body),
+                body: std::sync::Arc::new(r.body),
                 axis: r.axis,
                 max_lag: r.max_lag,
                 lag_proven: r.lag_proven,
@@ -2910,7 +2965,7 @@ fn build_observed_rules(
                 var: a.var,
                 output_idx_names: a.idx_names,
                 output_ranges: a.ranges,
-                body: Rc::new(a.body),
+                body: std::sync::Arc::new(a.body),
             });
         } else {
             observed_rules.push(lower_algebraic_body(
@@ -2939,7 +2994,7 @@ fn build_observed_rules(
                         var: a.var.clone(),
                         output_idx_names: r.idx_names,
                         output_ranges: r.ranges,
-                        body: Rc::new(r.body),
+                        body: std::sync::Arc::new(r.body),
                         axis: r.axis,
                         max_lag: r.max_lag,
                         lag_proven: r.lag_proven,
@@ -2950,7 +3005,7 @@ fn build_observed_rules(
                     var: a.var,
                     output_idx_names: a.idx_names,
                     output_ranges: a.ranges,
-                    body: Rc::new(a.body),
+                    body: std::sync::Arc::new(a.body),
                 });
             }
             continue;
@@ -3089,7 +3144,7 @@ fn lower_algebraic_body(
         .and_then(|axes| resolve_declared_shape(axes, index_sets));
     let scalar_rule = |body: Expr| AlgebraicRule::Scalar {
         var: name.to_string(),
-        body: Rc::new(body),
+        body: std::sync::Arc::new(body),
         declared_shape: declared_shape.clone(),
     };
     let Some(target_axes) = array_axes.get(name) else {
@@ -3114,7 +3169,7 @@ fn lower_algebraic_body(
         var: name.to_string(),
         output_idx_names: loops,
         output_ranges,
-        body: Rc::new(looped),
+        body: std::sync::Arc::new(looped),
     })
 }
 
@@ -6588,7 +6643,7 @@ mod event_driven_update_refusal_tests {
         )
         .expect("loads");
         let model = &file.models.as_ref().unwrap()["M"];
-        let err = classify_variables(model).expect_err("refused");
+        let err = classify_variables(model, &HashSet::new()).expect_err("refused");
         let text = err.to_string();
         assert!(
             text.contains("parameter 'k'") && text.contains("`schedule`, `crossing`"),

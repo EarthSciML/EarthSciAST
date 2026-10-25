@@ -1,4 +1,4 @@
-"""Range-restricted right-hand sides in Python (CONFORMANCE_SPEC §5.49).
+"""Range-restricted right-hand sides in Python (CONFORMANCE_SPEC §5.50).
 
 Python has no native tile or lane implementation: every entry point of API_SPEC
 §5.8 "Range-restricted right-hand sides" exists and raises

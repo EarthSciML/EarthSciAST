@@ -544,6 +544,12 @@ pub(in crate::simulate_array::tape) struct ChainScratch {
     compact: Vec<Option<Compacted>>,
 }
 
+// SAFETY: `ops` and `bufs` hold addresses into the slab of the call that
+// resolved them. Each chain run clears and rebuilds them before it reads one,
+// and nothing reads them after the call returns, so moving the scratch to
+// another thread between calls cannot carry a live borrow with it.
+unsafe impl Send for ChainScratch {}
+
 /// A chain's tuples the mask admits, as of the last prime: per output cell
 /// `rows[c] .. rows[c + 1]`, each with its gather position and, when the
 /// product's other operand is a tuple slot, its weight.

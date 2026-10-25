@@ -1704,7 +1704,7 @@ mod kernel_equivalence_tests {
             assert_eq!(*got, want);
             // Same allocation, not an equal one: a later read is served from
             // the table rather than re-walking the payload.
-            assert!(std::rc::Rc::ptr_eq(&first, &got));
+            assert!(std::sync::Arc::ptr_eq(&first, &got));
         }
         // And the memo-aware `const` arm agrees with the un-memoized one.
         match (
@@ -1774,20 +1774,20 @@ mod kernel_equivalence_tests {
         let memo = ConstLitMemo::default();
         memo.retarget(0x1234);
         let first = memo.get(&node).expect("memoized array");
-        assert!(std::rc::Rc::ptr_eq(
+        assert!(std::sync::Arc::ptr_eq(
             &first,
             &memo.get(&node).expect("same rule set, same entry")
         ));
         // Re-binding the same key keeps the table.
         memo.retarget(0x1234);
-        assert!(std::rc::Rc::ptr_eq(
+        assert!(std::sync::Arc::ptr_eq(
             &first,
             &memo.get(&node).expect("same key, same entry")
         ));
         // A different key drops it: the next read is a fresh materialization.
         memo.retarget(0x5678);
         let after = memo.get(&node).expect("rebuilt array");
-        assert!(!std::rc::Rc::ptr_eq(&first, &after));
+        assert!(!std::sync::Arc::ptr_eq(&first, &after));
         assert_eq!(*after, *first);
     }
 }
@@ -2014,6 +2014,38 @@ struct LatchedFault {
 /// could forget.
 pub fn take_const_array_oob() -> Option<String> {
     CONST_OOB.with(|c| c.borrow_mut().take().map(|l| l.msg))
+}
+
+/// The fault latch of one program call ([`crate::RhsProgram::eval_into`]):
+/// made on entry, it holds whatever the caller had latched and leaves the
+/// latch empty for the call; [`Self::finish`] takes the call's own fault and
+/// puts the caller's back. A call runs on one thread and starts no other, so
+/// nothing it latches is visible outside it, and nothing latched outside it
+/// is reported as its own.
+pub(crate) struct FaultScope {
+    prev: Option<LatchedFault>,
+}
+
+impl FaultScope {
+    pub(crate) fn enter() -> FaultScope {
+        FaultScope {
+            prev: CONST_OOB.with(|c| c.borrow_mut().take()),
+        }
+    }
+
+    /// The fault the call latched, if any; the caller's latch is restored.
+    pub(crate) fn finish(mut self) -> Option<String> {
+        let prev = self.prev.take();
+        CONST_OOB.with(|c| std::mem::replace(&mut *c.borrow_mut(), prev).map(|l| l.msg))
+    }
+}
+
+impl Drop for FaultScope {
+    fn drop(&mut self) {
+        if let Some(prev) = self.prev.take() {
+            CONST_OOB.with(|c| *c.borrow_mut() = Some(prev));
+        }
+    }
 }
 
 /// Latch the FIRST fail-closed gather diagnostic of this evaluation. The
@@ -2908,7 +2940,7 @@ pub(crate) fn eval_observed_taped(
                 var: name.to_string(),
                 output_idx_names: r.idx_names,
                 output_ranges: r.ranges,
-                body: Rc::new(r.body),
+                body: std::sync::Arc::new(r.body),
                 axis: r.axis,
                 max_lag: r.max_lag,
                 lag_proven: r.lag_proven,
@@ -2925,7 +2957,7 @@ pub(crate) fn eval_observed_taped(
     } else {
         AlgebraicRule::Scalar {
             var: name.to_string(),
-            body: Rc::new(expr.clone()),
+            body: std::sync::Arc::new(expr.clone()),
             declared_shape: None,
         }
     };

@@ -818,13 +818,266 @@ survives composition, which is the spelling composition produces anyway.
 > bind an ambiguous bare name to an arbitrary candidate, which is the property
 > §6.6.2 calls out as non-conforming.
 
+#### The public right-hand side: programs, workspaces and forcing sets
+
+**Status.** Julia and Rust, under `compiler = native` (issue #541, RFC U4).
+Python exports `rhs_program`, `forcing_set` and `default_forcing_set`, and each
+raises `compiler_unavailable`. TypeScript and Go have no simulator and export
+none of it. No schema or format change. `CONFORMANCE_SPEC.md` §5.51 is the gate;
+its fixtures are `tests/conformance/public_rhs_program/`.
+
+A Problem's right-hand side is a **program**: built once, immutable, and shared
+by every thread that evaluates it. Everything an evaluation mutates lives in a
+**workspace** the caller owns, one per concurrent caller. Forcing is not state
+of the program: it is an argument, an immutable **forcing set** stamped with an
+epoch no other set carries. The tile and lane programs of "Range-restricted
+right-hand sides" below are programs in the same sense and follow every rule
+here except where that section says otherwise.
+
+##### The surface
+
+| Canonical | Julia | Rust | Python |
+|---|---|---|---|
+| `rhs_program(prob)` | `rhs_program(prob)` | `rhs_program(&prob) -> Result<RhsProgram, SimulateError>` | raises `compiler_unavailable` |
+| workspace | `rhs_workspace(x)` | `new_workspace(&self) -> RhsWorkspace` on `RhsProgram`, `TileProgram`, `LaneProgram` | — |
+| states | `n_states(prog)`, `state_layout(prog) -> Vector{StateBlock}` | `RhsProgram::n_states(&self) -> usize`, `RhsProgram::state_layout(&self) -> &[StateBlock]` | — |
+| parameters | `parameters(prog) -> Vector{ParamSlot}`, `parameter_vector(prog, overrides = Dict{String,Float64}()) -> Vector{Float64}` | `RhsProgram::parameters(&self) -> &[ParamSlot]`, `RhsProgram::parameter_vector(&self, &HashMap<String, f64>) -> Result<Vec<f64>, SimulateError>` | — |
+| forcing slots | `forcing_slots(x) -> Vector{ForcingSlot}` | `forcing_slots(&self) -> &[ForcingSlot]` on each program type | — |
+| forcing set | `forcing_set(x, bufs) -> ForcingSet` | `ForcingSet::new(&RhsProgram, Vec<Arc<[f64]>>) -> Result<ForcingSet, RhsError>` | raises `compiler_unavailable` |
+| default forcing | `default_forcing_set(x) -> ForcingSet` | `RhsProgram::default_forcing(&self) -> ForcingSet` | raises `compiler_unavailable` |
+| refresh | `replace_forcing(fs, slot, buf) -> ForcingSet` | `ForcingSet::replace(&self, slot: usize, Arc<[f64]>) -> Result<ForcingSet, RhsError>` | — |
+| epoch | `forcing_epoch(fs) -> UInt64` | `ForcingSet::epoch(&self) -> u64` | — |
+| evaluate | `rhs!(du, x, ws, u, aux, p, t, fs) -> du` | `eval_into(&self, u, aux, p, t, forcing: &ForcingSet, du, ws) -> Result<(), RhsError>` on `RhsProgram` and `TileProgram` | — |
+| evaluate lanes | `rhs!(du, lanes, ws, u, aux, p, t, fs, cells, n)` | `LaneProgram::eval_into(&self, u, aux, p, t, forcing: &ForcingSet, cells, n, du, ws) -> Result<(), RhsError>` | — |
+| pre-gathered lanes | `gather_lane_inputs!(li, lanes, p, t, fs, cells, n)`, then `rhs!(du, lanes, ws, u, aux, p, t, li, cells, n)` | `LaneProgram::gather_lane_inputs(&self, &mut LaneInputs, p, t, forcing: &ForcingSet, cells, n) -> Result<(), RhsError>`, then `eval_gathered_into(&self, u, aux, &LaneInputs, p, t, cells, n, du, ws) -> Result<(), RhsError>` | — |
+| array parameters | `esm_problem(…; runtime_array_parameters = false)` | `ProblemOptions::runtime_array_parameters: bool` (default `false`) | — |
+
+The entry point is the free function `rhs_program(prob)`: the Problem stays
+between the document and the program, so construction (§2.5.2 of
+`esm-libraries-spec.md`) is the one place a document is rewritten, fetched and
+compiled. There is no `RhsProgram::from_problem`.
+
+**Rust types.**
+
+```rust
+pub struct RhsProgram   { /* Arc<…> */ }   // Send + Sync + Clone
+pub struct TileProgram  { /* Arc<…> */ }   // Send + Sync + Clone
+pub struct LaneProgram  { /* Arc<…> */ }   // Send + Sync + Clone
+pub struct RhsWorkspace { /* … */ }        // Send, !Sync
+pub struct ForcingSet   { /* epoch: u64, bufs: Arc<[Arc<[f64]>]> */ }   // Send + Sync + Clone
+
+pub struct ParamSlot   { pub name: String, pub default: Option<f64> }
+pub struct ForcingSlot { pub name: String, pub shape: Vec<usize>, pub kind: SlotKind }
+pub enum   SlotKind    { Forcing, ArrayParameter }
+pub struct StateBlock  { pub name: String, pub flat_offset: usize, pub shape: Vec<usize> }
+
+#[non_exhaustive]
+pub enum RhsError {
+    Fault { code: &'static str, message: String },
+    Shape { what: &'static str, expected: usize, got: usize },
+    ForeignProgram { what: &'static str },
+    ForcingSignature { detail: String },
+    SlotIndex { slot: usize, slots: usize },
+    NotGathered,
+}
+```
+
+All of them are re-exported at the crate root. `RhsError` implements
+`std::error::Error` and `Display`. `Shape` is a length mismatch only
+(`expected` and `got` are lengths); a workspace or lane inputs from another
+program is `ForeignProgram`, a forcing set for other slots is
+`ForcingSignature` (its `detail` names the first slot that differs), an
+out-of-range slot index to `replace` is `SlotIndex`, and lane inputs whose last
+gather failed, or that were never gathered, are `NotGathered`. Build-time calls (`rhs_program`, `select`,
+`halo`, `tile`, `lanes`, `parameter_vector`) keep `SimulateError`.
+
+**Julia types.** `ForcingSet`, `ForcingSlot` (`name::String`,
+`shape::Vector{Int}`, `kind::Symbol`, `:forcing` or `:array_parameter`),
+`ParamSlot` (`name::String`, `default::Union{Float64,Nothing}`) and `StateBlock`
+(`name::String`, `offset::Int` 1-based, `shape::Vector{Int}`) are exported.
+`parameters` is the existing export, with a method on programs.
+
+##### Thread safety (normative)
+
+- **Rust.** `RhsProgram`, `TileProgram`, `LaneProgram` and `ForcingSet` are
+  `Send + Sync + Clone`, unconditionally, and a clone is a reference-count
+  increment. `RhsWorkspace` is `Send` and not `Sync`. A static assertion in the
+  crate's tests pins each. No type that holds an `Rc`, a `RefCell` or a `Cell`
+  carries an `unsafe impl Send` or `Sync`. The workspace MAY carry an
+  `unsafe impl Send` whose only justification is the fused executor's raw
+  pointers into its own buffers, which are rewritten before every use; the
+  impl's `SAFETY` comment says so.
+- **Julia.** A program, a forcing set and a layout are never mutated after they
+  are built. `rhs!` is reentrant across distinct workspaces: any number of tasks
+  may evaluate one program at once, each with its own workspace.
+- **Both.** A workspace serves one call at a time. Sharing one between
+  concurrent calls is a caller error (Rust prevents it with `&mut`).
+
+##### Semantics of an evaluation (normative)
+
+1. **Purity.** The output is a function of the program, `u`, `aux`, `p`, `t` and
+   the forcing set's contents, and of nothing else. It is bitwise identical
+   across threads, across workspaces, whatever a workspace evaluated before, and
+   under any interleaving of concurrent calls.
+2. **Reference.** On the same inputs a program equals the binding's existing
+   single-threaded evaluation bitwise: in Rust, `debug_eval_rhs_into` with a
+   scratch from `debug_new_scratch_taped` whose forcing buffer holds the same
+   data; in Julia, the Problem's `f!` with its forcing buffers holding the same
+   data. Same kernels, same order.
+3. **Output.** A whole-domain program zeroes `du` and then writes it; a state
+   with no `D(·)` equation comes back `0`. A tile writes only its owned rows and
+   a lane program only lanes `1..n`, leaving every other element untouched
+   ("Range-restricted right-hand sides").
+4. **Workspace.** A workspace belongs to the program that made it and to every
+   clone of that program. Passing it to another program — including a program
+   `select`ed, tiled or laned from this one — is `RhsError::ForeignProgram {
+   what: "workspace" }` in Rust and an `ArgumentError` in Julia, never undefined
+   behaviour. The check is on a stable identity of the shared program, not on
+   the address of the handle, so moving or cloning the handle keeps a workspace
+   valid.
+5. **Section caching.** The compiled program keeps its constant, segment and
+   continuous sections, and each workspace keys them on its own inputs:
+   - the constant section re-runs when the bitwise hash of `p` differs from the
+     one the workspace last primed;
+   - the segment section re-runs when `forcing_epoch(fs)` differs from the epoch
+     the workspace last primed;
+   - every forcing and array-parameter load is in the segment section (the
+     program is built with every forcing slot in its discrete set), so no
+     forcing value is ever cached past a change of set.
+   A fresh workspace primes both on its first call.
+6. **No allocation.** After warm-up, a call allocates nothing, including a
+   call that re-runs the constant or segment section because `p` or the forcing
+   set changed (Rust: the counting-allocator test; Julia ≥ 1.12: `@allocated`
+   is zero).
+7. **Errors.** A fail-closed fault (esm-spec §4.3.3 and the faults of
+   `CONFORMANCE_SPEC.md` §5.5.5 and §5.23) is returned as `RhsError::Fault {
+   code, message }` in Rust, with the code the fault carries today (for example
+   `E_TREEWALK_CONSTARRAY_OOB`), and thrown as the existing `TreeWalkError` in
+   Julia. `du` is then unspecified. No fault survives the call: no latch shared
+   between workspaces or threads, no thread-local left armed, no panic, no NaN
+   fill. A call on another thread or another workspace never observes it, and
+   the faulted workspace's next call is unaffected. A wrong length of `u`,
+   `aux`, `p` or `du` is `RhsError::Shape` naming the argument (`"u"`,
+   `"aux"`, `"p"`, `"du"`); a forcing set built for another forcing signature
+   is `RhsError::ForcingSignature`, and a workspace from another program
+   `RhsError::ForeignProgram`. Julia throws `DimensionMismatch` for a length
+   and `ArgumentError` for a set or workspace that does not belong.
+8. **No internal threads.** An evaluation never spawns, joins, or runs on a
+   global pool. Julia's Polyester chunking is off inside `rhs!` (the Problem's
+   own `f!`, used by `solve`, may keep it).
+9. **Precision is the program's.** An evaluation arms the program's precision
+   itself; no result depends on a thread's ambient precision. The state is
+   `f64` (Julia `Float64`) only; a generic state scalar is #542's (RFC U5).
+
+##### States and parameters (normative)
+
+- `n_states(prog)` is the length of `u` (the layout's `u` length). For a
+  whole-domain program `aux` is empty; a `select`ed program's `aux` follows
+  "Selection" below.
+- `state_layout(prog)` lists the `u` blocks in flat-layout order (0-d states by
+  sorted name, then arrays by sorted name): the flattened name, the offset of
+  its first element (0-based in Rust, 1-based in Julia), and its declared shape
+  (empty for a 0-d state). Each block is column-major, first index fastest. It
+  is derived from `tile_layout(prog)` / `RhsProgram::layout()` and agrees with
+  it by construction.
+- **The parameter vector.** `p` is a dense `f64` vector of length
+  `length(parameters(prog))`, in the order `parameters(prog)` lists: the
+  program's scalar parameters that are not externally fed (those are forcing
+  slots, below), by flattened name, ascending in byte order.
+  `ParamSlot.default` is the declared default (`None` / `nothing` when there is
+  none). `parameter_vector(prog, overrides)` is strict: each entry is the
+  override if one is given, else the default; a parameter with neither, and an
+  override key that names no parameter, is an error naming it. The lenient
+  `debug_resolve_params` stays a debug seam. Rust's `parameter_names` and
+  `default_parameters` are folded into `parameters()`.
+- Derived programs (`select`, `tile`, `lanes`) have the parent's `parameters`
+  and the parent's `forcing_slots`, in the same order, so one `p` and one
+  forcing set serve a whole decomposition.
+
+##### Forcing sets (normative)
+
+- **Slots.** `forcing_slots(x)` lists, in ascending byte order of flattened
+  name, every input the program reads that is not state and not a scalar
+  parameter: every externally fed parameter (`kind = Forcing`; a parameter
+  whose `update` takes its value from a data source or a handler) and, when
+  `runtime_array_parameters` is on, every shaped parameter with a value
+  (`kind = ArrayParameter`). `shape` is the variable's declared shape, resolved.
+  The kind follows the parameter, not how its value arrived: `Forcing` when
+  the parameter is externally fed (or the buffer is a provider's that no
+  parameter declares), `ArrayParameter` otherwise, including a shaped
+  parameter whose value the caller supplied at construction. A Julia
+  `param_arrays` entry is a live buffer even with `runtime_array_parameters`
+  off, so a shaped parameter bound through it is an `ArrayParameter` slot
+  either way.
+- **Buffers.** A set holds one buffer per slot, in slot order, of length
+  `prod(shape)` (1 for a 0-d slot), **column-major** (first index fastest), the
+  same convention as the state. Rust takes `Arc<[f64]>`; Julia takes any
+  `AbstractVector{Float64}` (or array) of that length and reads it in linear
+  order. A set does not copy its buffers and its holders must not mutate them:
+  Rust enforces it, and in Julia mutating a buffer after building a set is
+  undefined behaviour (the epoch would not change). Any transpose into the
+  compiled kernels' layout happens in the load, never per call.
+- **Construction.** `forcing_set(x, bufs)` / `ForcingSet::new` checks the slot
+  count and each buffer's length (`RhsError::Shape { what: "forcing", .. }`;
+  Julia `DimensionMismatch`) and stamps the set with a fresh epoch.
+- **Epochs.** One process-wide counter (`AtomicU64` in Rust,
+  `Threads.Atomic{UInt64}` in Julia), incremented for every set built; an epoch
+  is never reused within a process. Two distinct sets never share an epoch,
+  so a stale read is impossible by construction. A clone of a set is the same
+  set and keeps its epoch. Julia's process-global `_FORCING_EPOCH` is not
+  consulted on the `rhs!` path.
+- **Refresh is a swap.** `replace_forcing(fs, slot, buf)` / `replace` returns a
+  NEW set with a new epoch, sharing every other buffer; the old set is
+  unchanged and stays valid for whoever still holds it. `slot` is 0-based in
+  Rust and 1-based in Julia; a slot past the end is `RhsError::SlotIndex` in
+  Rust. There is no in-place refresh and no invalidation call.
+- **Default.** `default_forcing_set(x)` / `default_forcing()` is the Problem's
+  forcing when `rhs_program(prob)` ran: provider data, a caller's array, or the
+  declared default broadcast over the slot's shape, and for an
+  `ArrayParameter` slot the parameter's value. It is a copy taken at program
+  build; later changes to the Problem's own buffers are not seen. Every call
+  returns the same set (same buffers, same epoch).
+- **Compatibility.** A set is valid for the program it was built against and for
+  every program derived from it or cloned from it (same slots). A set whose
+  slot signature differs is `RhsError::ForcingSignature`.
+
+##### Run-time array parameters (normative)
+
+`runtime_array_parameters` is a construction option, off by default. Off, a
+shaped parameter with a value is baked into the compiled program exactly as
+today, bit for bit, `remake` refuses to change it, and it is no slot. On, every
+shaped parameter with a value (its default, or a construction-time array the
+caller supplied) becomes an `ArrayParameter` forcing slot: the build does not
+fold it into constant observeds, `default_forcing` carries its value, and a new
+value takes a new forcing set, never a rebuild. A run-time array parameter is
+read like forcing, through the segment section. Under `runtime_array_parameters
+= true` the program evaluated with its default forcing set equals the program
+built with the option off, bitwise.
+
+##### Compilers
+
+`rhs_program` requires `compiler = native` for the semantics above. A native
+Problem one of whose rules did not tape is refused at `rhs_program` with
+`compiler_refused_rule`, naming the rule. `compiler = interpreter` is kept as the
+reference oracle where the binding can meet the thread-safety rules above with
+it (shared data behind `Arc`, per-call state on the workspace, no thread-local
+surviving a call); under any other compiler `rhs_program` raises
+`compiler_unavailable`. `solve` on a native Problem evaluates through the same
+program (one workspace held by the solver), so there is one code path and the
+solve's numbers do not change.
+
+**Not here.** Observed outputs are not readable from a workspace (#543, RFC
+U6). Precision semantics of a `Float32` document (#542, RFC U5). XLA programs are
+not `Send + Sync` by this section (#544, RFC U13). Internal parallelism of one
+evaluation.
+
 #### Range-restricted right-hand sides: selection, tiles and lanes
 
 **Status.** Julia and Rust, under `compiler = native` (issue #540, RFC U3).
 Python exports the entry points and each raises `compiler_unavailable`.
 TypeScript and Go have no simulator and export none of it. No schema or format
 change: the decomposition, the boxes and the selection are API arguments.
-`CONFORMANCE_SPEC.md` §5.49 is the gate; its fixtures are
+`CONFORMANCE_SPEC.md` §5.50 is the gate; its fixtures are
 `tests/conformance/range_restricted_rhs/`.
 
 A Problem's right-hand side `F` evaluates the whole model over the whole domain.
@@ -848,17 +1101,15 @@ cell.
 | `restrict(op, dec, owned, storage)` | `restrict(op, dec; owned, storage)` | `RhsProgram::tile(&self, &Decomposition, &TileBox) -> Result<TileProgram, SimulateError>` | raises `compiler_unavailable` |
 | `lanes(op, kind, capacity)` | `lanes(op, kind, sets)` | `RhsProgram::lanes(&self, LaneKind, capacity: usize) -> Result<LaneProgram, SimulateError>` | raises `compiler_unavailable` |
 | layout | `tile_layout(prog_or_tile)`, `lane_layout(lanes)` | `RhsProgram::layout() -> &TileLayout`, `TileProgram::layout() -> &TileLayout`, `LaneProgram::layout() -> &LaneLayout` | — |
-| workspace | `rhs_workspace(x)` | `new_workspace(&self) -> RhsWorkspace` on each program type | — |
-| evaluate | `rhs!(du, x, ws, u, aux, p, t, fs)`; lanes add `cells, n` | `eval_into(&self, u, aux, p, t, du, ws)` on `RhsProgram` and `TileProgram`; `LaneProgram::eval_into(&self, u, aux, p, t, cells, n, du, ws)` | — |
-| pre-gathered lane inputs | `lane_inputs(lanes, L)`, `gather_lane_inputs!(li, lanes, p, t, fs, cells, n)`, then `rhs!(du, lanes, ws, u, aux, p, t, li, cells, n)` | `LaneProgram::lane_inputs(&self) -> LaneInputs`, `gather_lane_inputs(&self, &mut LaneInputs, p, t, cells, n)`, `eval_gathered_into(&self, u, aux, &LaneInputs, p, t, cells, n, du, ws)` | — |
+| workspace, evaluate | see "The public right-hand side" above | see "The public right-hand side" above | — |
+| pre-gathered lane inputs | `lane_inputs(lanes, L)`, then as above | `LaneProgram::lane_inputs(&self) -> LaneInputs`, then as above | — |
 | decomposition | `Decomposition(; axes, faces)` | `Decomposition { axes: Vec<AxisCut>, faces: Vec<(String, String)> }`, `AxisCut { index_set: String, period: Option<i64> }` | — |
 
 Julia's `restrict` is Rust's `tile`; the RFC names both and both are kept.
 
 **The program.** `rhs_program(prob)` is the Problem's right-hand side as a
 program value: the whole model, over the whole domain, with `u` the Problem's
-state and `aux` empty. It is the smallest program type this RFC needs and not
-the public right-hand-side type of #541 (U4), which will absorb it. `select`
+state and `aux` empty — the public right-hand side above. `select`
 returns another program of the same type; `halo`, `restrict`/`tile` and `lanes`
 take one. A program carries the flattened system it was built from, so
 `select` re-flattens nothing and re-parses nothing.
@@ -870,8 +1121,7 @@ take one. A program carries the flattened system it was built from, so
   decomposed axis: `restrict(op, dec; owned = ("lon" => 17:32, "lat" => 1:13),
   storage = ("lon" => 14:35, "lat" => -2:16))`. `kind` is `:cells` or
   `:columns`; `sets` names the index sets a lane's `cells` column indexes, in
-  order. `p` is the Problem's `p`; `fs` is the forcing-buffer set the program
-  was built against (`forcing_buffers(prob)`), or `nothing` for the same.
+  order. `p` is `parameter_vector(prog)` and `fs` a `ForcingSet` (above).
   Buffers are `Vector{Float64}`; `cells` is a `Matrix{Int32}` of size `[D, L]`;
   `rhs!` returns `du`.
 - **Rust.** `RhsSelection { writes: Option<Vec<String>>, terms:
@@ -881,13 +1131,8 @@ take one. A program carries the flattened system it was built from, so
   Vec<String> }`. `HaloReport { reach: BTreeMap<(String, String), (i64, i64)>
   }`, keyed `(variable, index set)`. Buffers are `&[f64]` / `&mut [f64]`, `cells`
   is `&[i32]` holding `[D, capacity]` column-major, `p` is the program's
-  parameter vector — `RhsProgram::parameter_names()` gives its order and
-  `RhsProgram::default_parameters()` the Problem's values — and `eval_into`
-  returns `Result<(), SimulateError>`. `TileProgram` and `LaneProgram` are `Send
-  + Sync` where that costs nothing; where it does not, the type's documentation
-  says what holds it back (U4 owns the audit). The RFC's generic `T: StateScalar`, its `ForcingSet` argument and its
-  `RhsError` are U4's; here the state is `f64`, the forcing is the buffers the
-  program was built against, and errors are `SimulateError`.
+  parameter vector (`RhsProgram::parameters()`), the forcing is a `ForcingSet`,
+  and every `eval_into` returns `Result<(), RhsError>` (above).
 
 **Layouts.** `TileLayout` holds two lists of `TileBlock`, `u` and `aux`, and
 their lengths. A `TileBlock` is `{ name, sets, storage, owned, base, strides }`:
@@ -928,7 +1173,7 @@ lane sets.
 
 Every bitwise claim below is against `select(prog; …)` evaluated over the whole
 domain, written `G_k`. `Σ_k G_k = F` holds only to rounding, because dropping
-summands changes the association; `CONFORMANCE_SPEC.md` §5.49 bounds it.
+summands changes the association; `CONFORMANCE_SPEC.md` §5.50 bounds it.
 `terms = all` with `writes = W_k` is the same program as an operator's derived
 document, when a planner emits one.
 
@@ -970,9 +1215,10 @@ contains every in-domain cell of `v` a tile owning `B` reads.
   decomposed axis has no finite reach: `halo` raises `range_global_locality`
   naming the rule and the axis.
 
-The report names only states; forcing buffers and array parameters are read in
-full by this round's programs (a forcing reach report and windowed forcing are
-U4's `ForcingSet`).
+The report names only states. Forcing and array parameters are read in full: a
+tile or lane program takes the same whole-domain `ForcingSet` as the program it
+was derived from. A forcing reach report and windowed forcing sets are not
+specified.
 
 ##### Tile semantics (normative)
 
@@ -1428,6 +1674,7 @@ reading that as a gap.
 | `data_source_kind` | type | – | – | `DataSourceKind` | `DataSourceKind` | – |
 | `decomposition` | type | `Decomposition` | – | – | `Decomposition` | – |
 | `default_abstol` | constant | – | `DEFAULT_ABSTOL` | – | `DEFAULT_ABSTOL` | – |
+| `default_forcing_set` | function | `default_forcing_set` | – | `default_forcing_set` | – | – |
 | `default_reltol` | constant | – | `DEFAULT_RELTOL` | – | `DEFAULT_RELTOL` | – |
 | `derive_output_gridding` | function | `derive_output_gridding` | – | – | `derive_output_gridding` | – |
 | `derive_output_meta` | function | `derive_output_meta` | – | – | `derive_output_meta` | – |
@@ -1455,6 +1702,9 @@ reading that as a gap.
 | `flatten_template_registries` | function | – | `flattenTemplateRegistries` | `flatten_template_registries` | – | – |
 | `flatten_with_options` | function | – | – | – | `flatten_with_options` | `FlattenWithOptions` |
 | `float_key_error` | error | – | – | `FloatKeyError` | `FloatKeyError` | – |
+| `forcing_set` | function | `forcing_set` | – | `forcing_set` | – | – |
+| `forcing_set` | type | `ForcingSet` | – | – | `ForcingSet` | – |
+| `forcing_slot` | type | `ForcingSlot` | – | – | `ForcingSlot` | – |
 | `geometry_error` | error | – | – | `GeometryError` | `GeometryError` | – |
 | `get_component_type` | function | – | `getComponentType` | – | `get_component_type` | – |
 | `graph_edge` | type | – | – | `GraphEdge` | – | `GraphEdge` |
@@ -1476,6 +1726,7 @@ reading that as a gap.
 | `output_error` | error | `OutputError` | – | – | `OutputError` | – |
 | `output_meta` | type | `OutputMeta` | – | – | `OutputMeta` | – |
 | `output_plan` | type | `OutputPlan` | – | – | `OutputPlan` | – |
+| `param_slot` | type | `ParamSlot` | – | – | `ParamSlot` | – |
 | `parameter_sweep` | type | – | – | – | `ParameterSweep` | `ParameterSweep` |
 | `parameters` | function | `parameter_names` / `parameters` | `parameters` | – | – | – |
 | `parse_error` | error | `ParseError` | `ParseError` | – | – | – |
@@ -1503,6 +1754,7 @@ reading that as a gap.
 | `slice_out_of_domain_error` | error | `SliceOutOfDomainError` | – | `SliceOutOfDomainError` | – | – |
 | `solution` | type | – | – | `Solution` | `Solution` | – |
 | `solve` | function | – | – | `solve` | `solve` | – |
+| `state_block` | type | `StateBlock` | – | – | `StateBlock` | – |
 | `step` | function | – | – | `step` | `step` | – |
 | `structural_error` | error | – | – | – | `StructuralError` | `StructuralError` |
 | `substitute_in_model_with_context` | function | – | – | – | `substitute_in_model_with_context` | `SubstituteInModelWithContext` |

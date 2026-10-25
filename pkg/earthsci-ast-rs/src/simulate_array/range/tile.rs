@@ -10,37 +10,46 @@
 //! against the global domain (RFC U3 §4 rule 2). No document is parsed or
 //! flattened.
 
+use super::forcing::{ForcingSet, ForcingSlot, RhsError};
 use super::walk::{AxisSpec, Read, Refusal, Scope, VarInfo, Walker};
 use super::{
-    Blocks, Decomposition, RhsProgram, RhsWorkspace, TileBox, TileInput, TileLayout, WsExec,
-    build_error, check_lengths, index_set_sizes, range_error, take_fault, var_infos,
+    Blocks, Decomposition, ProgramModel, RhsProgram, RhsWorkspace, TileBox, TileInput, TileLayout,
+    WsExec, check_forcing, check_lengths, check_owner, index_set_sizes, next_program_id,
+    range_error, slot_map, tape_fault, var_infos,
 };
 use crate::diagnostic::codes;
 use crate::simulate::SimulateError;
 use crate::simulate_array::tape::{
-    CallInputs, DeclinedTape, TapeCtx, TapeProgram, TileAxisDom, TileLowering, TileObserved,
-    TilePiece, run_tape_inputs,
+    CallInputs, DeclinedTape, ForcingView, TapeCtx, TapeProgram, TileAxisDom, TileLowering,
+    TileObserved, TilePiece, run_tape_inputs,
 };
 use crate::simulate_array::vectorized::lhs_constant_shifts;
-use crate::simulate_array::{AlgebraicRule, ArrayCompiled, RhsRule, StateDefault, VarShape};
+use crate::simulate_array::{AlgebraicRule, ArrayCompiled, RhsRule, VarShape};
 use crate::types::Expr;
 use indexmap::IndexMap;
-use ndarray::ArrayD;
 use rustc_hash::FxHashMap;
 use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
 use std::sync::Arc;
 
 /// One tile of a [`RhsProgram`] (RFC U3 §4): it reads `u` and `aux` over their
 /// storage boxes and writes only the owned rows of `du`.
 ///
-/// `Send + Sync`: it holds the program and plain layout data, so tiles of one
-/// rank can share it across threads, each with its own [`RhsWorkspace`].
+/// `Send + Sync + Clone`: it holds the program and plain layout data, so
+/// tiles of one rank can share it across threads, each with its own
+/// [`RhsWorkspace`]. It reads the forcing sets of the program it was cut
+/// from.
+#[derive(Clone)]
 pub struct TileProgram {
+    inner: Arc<TileInner>,
+}
+
+struct TileInner {
+    id: u64,
     prog: Arc<TapeProgram>,
     blocks: Blocks,
     layout: TileLayout,
-    forcing: Arc<HashMap<String, ArrayD<f64>>>,
+    slots: Arc<[ForcingSlot]>,
+    slot_of: Vec<u32>,
     n_params: usize,
     declared: Arc<HashSet<String>>,
     precision: crate::precision::Precision,
@@ -49,7 +58,7 @@ pub struct TileProgram {
 impl std::fmt::Debug for TileProgram {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TileProgram")
-            .field("layout", &self.layout)
+            .field("layout", &self.inner.layout)
             .finish()
     }
 }
@@ -57,17 +66,25 @@ impl std::fmt::Debug for TileProgram {
 impl TileProgram {
     /// The tile's input layout: every variable's storage and owned boxes.
     pub fn layout(&self) -> &TileLayout {
-        &self.layout
+        &self.inner.layout
+    }
+
+    /// The forcing slots a set for this tile holds: the whole program's.
+    pub fn forcing_slots(&self) -> &[ForcingSlot] {
+        &self.inner.slots
     }
 
     /// Buffers for [`Self::eval_into`].
     pub fn new_workspace(&self) -> RhsWorkspace {
-        let n = self.blocks.u_len + self.blocks.aux_len;
+        let n = self.inner.blocks.u_len + self.inner.blocks.aux_len;
+        let mut ctx = TapeCtx::new(Arc::clone(&self.inner.prog));
+        ctx.set_serial();
         RhsWorkspace {
-            owner: Arc::as_ptr(&self.prog) as usize,
+            owner: self.inner.id,
             state: vec![0.0; n],
             dy: Vec::new(),
-            exec: WsExec::Tape(Box::new(TapeCtx::new(Arc::clone(&self.prog)))),
+            exec: WsExec::Tape(Box::new(ctx)),
+            _not_sync: std::marker::PhantomData,
         }
     }
 
@@ -82,32 +99,35 @@ impl TileProgram {
         aux: &[f64],
         p: &[f64],
         t: f64,
+        forcing: &ForcingSet,
         du: &mut [f64],
         ws: &mut RhsWorkspace,
-    ) -> Result<(), SimulateError> {
-        check_lengths(&self.blocks, u, aux, du, p, self.n_params)?;
-        if ws.owner != Arc::as_ptr(&self.prog) as usize {
-            return Err(build_error(
-                "`eval_into`: the workspace was made by another program".to_string(),
-            ));
-        }
-        let nu = self.blocks.u_len;
+    ) -> Result<(), RhsError> {
+        let inner = &*self.inner;
+        check_lengths(&inner.blocks, u, aux, du, p, inner.n_params)?;
+        check_owner(ws, inner.id)?;
+        check_forcing(forcing, &inner.slots)?;
+        let nu = inner.blocks.u_len;
         ws.state[..nu].copy_from_slice(u);
         ws.state[nu..].copy_from_slice(aux);
         let WsExec::Tape(ctx) = &mut ws.exec else {
             unreachable!("a tile workspace runs a tape");
         };
-        let _precision = crate::precision::enter(self.precision);
-        crate::simulate_array::take_const_array_oob();
+        let _precision = crate::precision::enter(inner.precision);
+        let scope = crate::simulate_array::FaultScope::enter();
         let inputs = CallInputs {
             state: &ws.state,
             params: p,
-            forcing: &self.forcing,
+            forcing: ForcingView::Slots {
+                bufs: forcing.bufs(),
+                slot_of: &inner.slot_of,
+            },
+            forcing_epoch: Some(forcing.epoch()),
             t,
-            declared: &self.declared,
+            declared: &inner.declared,
         };
         run_tape_inputs(ctx, &inputs, du, false);
-        take_fault()
+        tape_fault(scope, ctx)
     }
 }
 
@@ -176,7 +196,7 @@ struct Boxes {
 }
 
 fn validate(prog: &RhsProgram, dec: &Decomposition, bx: &TileBox) -> Result<Boxes, SimulateError> {
-    let sizes = index_set_sizes(&prog.flat);
+    let sizes = index_set_sizes(prog.inner.flat());
     for a in &dec.axes {
         if !sizes.contains_key(&a.index_set) {
             return Err(box_invalid(format!(
@@ -278,7 +298,7 @@ fn axis_ranges(spec: &AxisSpec, extent: (i64, i64), boxes: &Boxes) -> ((i64, i64
 
 /// The free names of every rule body that reads `name`, transitively: whether
 /// an observed depends on the state.
-pub(super) fn state_dependent(compiled: &ArrayCompiled) -> HashSet<String> {
+pub(super) fn state_dependent(compiled: &ProgramModel) -> HashSet<String> {
     let states: HashSet<&str> = compiled.var_shapes.keys().map(String::as_str).collect();
     let mut dep: HashSet<String> = HashSet::new();
     for rule in &compiled.observed_rules {
@@ -341,7 +361,7 @@ pub(super) fn as_loop(rule: &AlgebraicRule) -> Option<AlgebraicRule> {
         var: var.clone(),
         output_idx_names: out.clone(),
         output_ranges: bounds,
-        body: Rc::new(node.expr.as_deref()?.clone()),
+        body: std::sync::Arc::new(node.expr.as_deref()?.clone()),
     })
 }
 
@@ -440,7 +460,7 @@ pub(super) struct ClippedRules {
 /// Rewrite `compiled`'s rules for a tile whose derivative of each written
 /// state covers `owned[var]` (one inclusive range per axis).
 pub(super) fn clip_rules(
-    compiled: &ArrayCompiled,
+    compiled: &ProgramModel,
     vars: &HashMap<String, VarInfo>,
     owned: &HashMap<String, Vec<(i64, i64)>>,
 ) -> Result<ClippedRules, SimulateError> {
@@ -594,7 +614,7 @@ pub(super) fn clip_rules(
                         pieces.push(TilePiece {
                             ranges,
                             dest_lo,
-                            body: Rc::new(b),
+                            body: std::rc::Rc::new(b),
                         });
                     }
                     for d in (0..axes.len()).rev() {
@@ -655,59 +675,19 @@ pub(super) fn clip_rules(
 /// A shell model around restricted rules and a restricted state layout: the
 /// input a tape build reads. Everything else is the program's.
 pub(super) fn shell(
-    compiled: &ArrayCompiled,
+    compiled: &ProgramModel,
     var_shapes: IndexMap<String, VarShape>,
     rhs_rules: Vec<RhsRule>,
     observed_rules: Vec<AlgebraicRule>,
     held: HashSet<String>,
 ) -> ArrayCompiled {
-    let n_states = var_shapes
-        .values()
-        .map(|v| v.shape.iter().product::<usize>().max(1))
-        .sum();
-    let state_defaults = vec![StateDefault::Scalar(None); var_shapes.len()];
-    ArrayCompiled {
-        runtime_mode: compiled.runtime_mode,
-        #[cfg(feature = "xla")]
-        xla_rhs: std::cell::OnceCell::new(),
-        merged_renames: HashMap::new(),
-        var_shapes,
-        state_names: std::cell::OnceCell::new(),
-        qualified_state_names: std::cell::OnceCell::new(),
-        state_defaults,
-        param_names: compiled.param_names.clone(),
-        param_index: compiled.param_index.clone(),
-        param_defaults: compiled.param_defaults.clone(),
-        observed_rules,
-        rhs_rules,
-        rule_set: super::super::rhs::next_rule_set_id(),
-        n_states,
-        forcing: Rc::clone(&compiled.forcing),
-        data_fed: compiled.data_fed.clone(),
-        forcing_generation: std::cell::Cell::new(0),
-        field_ics: Vec::new(),
-        init_faqs: Vec::new(),
-        ic_scope: Default::default(),
-        index_sets: compiled.index_sets.clone(),
-        const_scope: Rc::clone(&compiled.const_scope),
-        namespace: compiled.namespace.clone(),
-        precision: compiled.precision.clone(),
-        declared_names: compiled.declared_names.clone(),
-        #[cfg(feature = "solve")]
-        field_ic_memo: std::cell::RefCell::new(None),
-        inline_param_arrays: compiled.inline_param_arrays.clone(),
-        forcing_decls: compiled.forcing_decls.clone(),
-        forcing_defaults: compiled.forcing_defaults.clone(),
-        unvalued_shaped_params: compiled.unvalued_shaped_params.clone(),
-        held_at_ic: held,
-        tape_cache: crate::simulate_array::tape::TapeCache::new(),
-    }
+    compiled.shell(var_shapes, rhs_rules, observed_rules, held)
 }
 
 /// The document precision a restricted program runs at, refusing a document
 /// with per-variable element types (whose environment is not `Send`).
 pub(super) fn plain_precision(
-    compiled: &ArrayCompiled,
+    compiled: &ProgramModel,
     what: &str,
 ) -> Result<crate::precision::Precision, SimulateError> {
     let _env = compiled.precision.enter();
@@ -726,10 +706,10 @@ pub(super) fn build(
     bx: &TileBox,
 ) -> Result<TileProgram, SimulateError> {
     let boxes = validate(prog, dec, bx)?;
-    let compiled = &*prog.compiled;
+    let compiled = &*prog.inner.model;
     let precision = plain_precision(compiled, "tile restriction")?;
     let vars = var_infos(prog, dec);
-    for w in &prog.writes {
+    for w in &prog.inner.writes {
         if !vars[w].is_cut() {
             return Err(range_error(
                 codes::RANGE_GLOBAL_LOCALITY,
@@ -742,8 +722,11 @@ pub(super) fn build(
     }
     let mut owned: HashMap<String, Vec<(i64, i64)>> = HashMap::new();
     let mut entries = Vec::new();
-    let set_names = super::state_set_names(&prog.flat, compiled);
-    for (input, names) in [(TileInput::U, &prog.writes), (TileInput::Aux, &prog.aux)] {
+    let set_names = super::state_set_names(prog.inner.flat(), compiled);
+    for (input, names) in [
+        (TileInput::U, &prog.inner.writes),
+        (TileInput::Aux, &prog.inner.aux),
+    ] {
         for name in names {
             let info = &vars[name];
             let mut storage = Vec::new();
@@ -807,7 +790,7 @@ pub(super) fn build(
         states: doms,
         observed: clipped.need,
     };
-    let held: HashSet<String> = prog.aux.iter().cloned().collect();
+    let held: HashSet<String> = prog.inner.aux.iter().cloned().collect();
     let shell = shell(compiled, var_shapes, clipped.rhs, clipped.observed, held);
     let tape = {
         let _env = compiled.precision.enter();
@@ -815,14 +798,19 @@ pub(super) fn build(
             .build_tile_tape(&lowering)
             .map_err(|d| declined_error(&d, "tile restriction"))?
     };
+    let slot_of = slot_map(&tape, &prog.inner.slots)?;
     Ok(TileProgram {
-        prog: Arc::new(tape),
-        layout: layout.public(),
-        blocks: layout,
-        forcing: Arc::clone(&prog.forcing),
-        n_params: compiled.param_names.len(),
-        declared: Arc::clone(&prog.declared),
-        precision,
+        inner: Arc::new(TileInner {
+            id: next_program_id(),
+            prog: Arc::new(tape),
+            layout: layout.public(),
+            blocks: layout,
+            slots: Arc::clone(&prog.inner.slots),
+            slot_of,
+            n_params: compiled.param_names.len(),
+            declared: Arc::clone(&prog.inner.declared),
+            precision,
+        }),
     })
 }
 

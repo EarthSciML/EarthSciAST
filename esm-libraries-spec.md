@@ -673,10 +673,27 @@ run-time list of cells or columns (`lanes`). Index space stays global, and each
 restricted evaluation is bitwise the selected program's whole-domain
 evaluation. The surface, the selection rules, the tile and lane semantics, the
 layouts and the four `range_*` diagnostics are normative in `API_SPEC.md` §5.8,
-"Range-restricted right-hand sides"; `CONFORMANCE_SPEC.md` §5.49 is the gate.
+"Range-restricted right-hand sides"; `CONFORMANCE_SPEC.md` §5.50 is the gate.
 Tiles and lanes require `compiler = native` and are refused with
 `compiler_unavailable` under any other. Python exports the entry points and
 raises `compiler_unavailable` from each.
+
+#### 2.5.12 The public right-hand side
+
+`rhs_program(prob)` is also the public, thread-safe form of the right-hand side.
+The program is built once, is immutable, and is shared by every thread that
+evaluates it. Everything one evaluation mutates lives in a workspace the caller
+owns, one per concurrent caller. Forcing is an argument, not state of the
+program: an immutable forcing set stamped with an epoch no other set carries,
+replaced (never mutated) to refresh. The parameter vector is positional, in the
+order the program lists. An evaluation is pure, allocation-free in steady state,
+never threads internally, and returns a fault as a value instead of latching it.
+A construction option, `runtime_array_parameters`, makes shaped parameters
+run-time forcing-set inputs instead of baked constants. The surface and the
+semantics are normative in `API_SPEC.md` §5.8, "The public right-hand side";
+`CONFORMANCE_SPEC.md` §5.51 is the gate. Python exports `rhs_program`,
+`forcing_set` and `default_forcing_set`, and raises `compiler_unavailable` from
+each.
 
 ---
 
