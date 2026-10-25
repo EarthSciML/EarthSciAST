@@ -135,7 +135,7 @@ fn program(c: &Value) -> Result<RhsProgram, SimulateError> {
 fn reference(op: &RhsProgram) -> Vec<f64> {
     let (u, aux) = global_state(op);
     let p = op.parameter_vector(&Default::default()).expect("defaults");
-    let fs = op.default_forcing().expect("forcing");
+    let fs = op.default_forcing();
     let mut du = vec![f64::NAN; op.layout().u_len];
     let mut ws = op.new_workspace();
     op.eval_into(&u, &aux, &p, 0.0, &fs, &mut du, &mut ws)
@@ -326,7 +326,7 @@ fn tile_partition(c: &Value) -> Result<(), String> {
     let g = reference(&op);
     let (gu, gaux) = global_state(&op);
     let p = op.parameter_vector(&Default::default()).expect("defaults");
-    let fs = op.default_forcing().expect("forcing");
+    let fs = op.default_forcing();
     let whole = op.layout().clone();
     for tiling in c["tilings"].as_array().unwrap() {
         let tid = tiling["id"].as_str().unwrap();
@@ -422,7 +422,7 @@ fn tile_one(c: &Value, expect_ok: bool) -> Result<(), String> {
             let mut du = vec![f64::NAN; lay.u_len];
             let mut ws = tile.new_workspace();
             let p = op.parameter_vector(&Default::default()).expect("defaults");
-            let fs = op.default_forcing().expect("forcing");
+            let fs = op.default_forcing();
             tile.eval_into(&u, &aux, &p, 0.0, &fs, &mut du, &mut ws)
                 .map_err(|e| format!("eval: {e}"))?;
             for (name, gi) in owned_cells(&lay) {
@@ -577,7 +577,7 @@ fn lanes_case(c: &Value) -> Result<(), String> {
     let g = reference(&op);
     let (gu, gaux) = global_state(&op);
     let p = op.parameter_vector(&Default::default()).expect("defaults");
-    let fs = op.default_forcing().expect("forcing");
+    let fs = op.default_forcing();
     let whole = op.layout().clone();
     let d = lane_sets.len();
     let lay = lanes.layout().clone();
@@ -661,9 +661,7 @@ fn lanes_case(c: &Value) -> Result<(), String> {
             .map_err(|e| format!("{bid}: gather_lane_inputs: {e}"))?;
         let mut du2 = vec![f64::NAN; lay.u_len];
         lanes
-            .eval_gathered_into(
-                &u, &aux, &inputs, &p, 0.0, &fs, &cells, n, &mut du2, &mut ws,
-            )
+            .eval_gathered_into(&u, &aux, &inputs, &p, 0.0, &cells, n, &mut du2, &mut ws)
             .map_err(|e| format!("{bid}: pre-gathered eval: {e}"))?;
         matches(&cells, n, &du2).map_err(|e| format!("{bid} (pre-gathered): {e}"))?;
         if c["negative_control"]["batch"].as_str() == Some(bid) {

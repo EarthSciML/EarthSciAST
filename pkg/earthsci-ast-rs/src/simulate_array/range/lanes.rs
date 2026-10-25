@@ -89,9 +89,11 @@ impl std::fmt::Debug for LaneProgram {
 /// The per-lane buffers of a lane program's pre-gather plan: one run of
 /// `capacity` values per hoisted read. Filled by
 /// [`LaneProgram::gather_lane_inputs`], read by
-/// [`LaneProgram::eval_gathered_into`]. `Send`, like a workspace.
+/// [`LaneProgram::eval_gathered_into`], which reads the forcing set they
+/// were gathered from. `Send`, like a workspace.
 pub struct LaneInputs {
     owner: u64,
+    forcing: Option<ForcingSet>,
     values: Vec<f64>,
     state: Vec<f64>,
     ctx: Box<TapeCtx>,
@@ -132,6 +134,11 @@ impl LaneProgram {
     /// The number of hoisted reads the pre-gather plan fills.
     pub fn n_lane_inputs(&self) -> usize {
         self.inner.n_inputs
+    }
+
+    /// The forcing slots a set for this program holds: the whole program's.
+    pub fn forcing_slots(&self) -> &[ForcingSlot] {
+        &self.inner.slots
     }
 
     /// Buffers for [`Self::eval_into`] and [`Self::eval_gathered_into`].
@@ -227,6 +234,7 @@ impl LaneProgram {
         ctx.set_serial();
         LaneInputs {
             owner: inner.id,
+            forcing: None,
             values: vec![0.0; inner.capacity * inner.n_inputs],
             state: vec![0.0; inner.capacity * (inner.n_inputs + inner.sets.len())],
             ctx: Box::new(ctx),
@@ -247,7 +255,7 @@ impl LaneProgram {
         let inner = &*self.inner;
         if inputs.owner != inner.id {
             return Err(shape(
-                "lane inputs (made by another program)",
+                "lane inputs",
                 inner.id as usize,
                 inputs.owner as usize,
             ));
@@ -271,10 +279,21 @@ impl LaneProgram {
             declared: &inner.declared,
         };
         run_tape_inputs(&mut inputs.ctx, &call, &mut inputs.values, false);
-        tape_fault(scope, &mut inputs.ctx)
+        tape_fault(scope, &mut inputs.ctx)?;
+        // Kept so the evaluation reads the set these inputs came from; a
+        // clone is a reference count, never an allocation once it is there.
+        if !inputs
+            .forcing
+            .as_ref()
+            .is_some_and(|f| f.epoch() == forcing.epoch())
+        {
+            inputs.forcing = Some(forcing.clone());
+        }
+        Ok(())
     }
 
-    /// [`Self::eval_into`] with every hoisted read taken from `inputs`.
+    /// [`Self::eval_into`] with every hoisted read taken from `inputs`, and
+    /// the forcing set they were gathered from.
     #[allow(clippy::too_many_arguments)]
     pub fn eval_gathered_into(
         &self,
@@ -283,7 +302,6 @@ impl LaneProgram {
         inputs: &LaneInputs,
         p: &[f64],
         t: f64,
-        forcing: &ForcingSet,
         cells: &[i32],
         n: usize,
         du: &mut [f64],
@@ -291,11 +309,14 @@ impl LaneProgram {
     ) -> Result<(), RhsError> {
         if inputs.owner != self.inner.id {
             return Err(shape(
-                "lane inputs (made by another program)",
+                "lane inputs",
                 self.inner.id as usize,
                 inputs.owner as usize,
             ));
         }
+        let Some(forcing) = &inputs.forcing else {
+            return Err(shape("lane inputs (not gathered)", 1, 0));
+        };
         self.run(
             u,
             aux,

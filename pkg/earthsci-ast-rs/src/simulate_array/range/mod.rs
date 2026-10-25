@@ -467,9 +467,8 @@ struct ProgramInner {
     state_layout: Vec<StateBlock>,
     params: Vec<ParamSlot>,
     slots: Arc<[ForcingSlot]>,
-    /// Each slot's buffer from the Problem's forcing (or the declared
-    /// default), `None` where neither gives one.
-    defaults: Vec<Option<Arc<[f64]>>>,
+    /// The Problem's forcing when the program was built.
+    default_set: ForcingSet,
     /// Per variable of the compiled state vector, in its order: the input it
     /// is read from and the block offsets `(input base, state offset, len)`.
     scatter: Vec<(TileInput, usize, usize, usize)>,
@@ -586,12 +585,14 @@ fn column_major(a: &ArrayD<f64>) -> Arc<[f64]> {
 }
 
 /// The forcing slots of `model`: every name its forcing buffer serves that
-/// has a shape, by name, each with its default buffer.
+/// has a shape, in byte order of the name, each with its default buffer (the
+/// Problem's data, else the declared default, else `NaN`: a slot nothing
+/// fills has no value until the caller's set gives it one).
 fn forcing_slots(
     model: &ProgramModel,
     problem: &HashMap<String, ArrayD<f64>>,
     array_params: &HashSet<String>,
-) -> (Vec<ForcingSlot>, Vec<Option<Arc<[f64]>>>) {
+) -> (Vec<ForcingSlot>, Vec<Arc<[f64]>>) {
     let mut names: Vec<&String> = model.forcing_decls.keys().collect();
     names.sort();
     let mut slots = Vec::new();
@@ -600,6 +601,7 @@ fn forcing_slots(
         let Some(shape) = model.forcing_decls[name].clone() else {
             continue;
         };
+        let len = shape.iter().product::<usize>();
         let default = match problem.get(name) {
             Some(a) => Some(column_major(a)),
             None => model
@@ -609,7 +611,9 @@ fn forcing_slots(
                 .flatten()
                 .and_then(|(s, v)| ArrayD::from_shape_vec(IxDyn(&s), v).ok())
                 .map(|a| column_major(&a)),
-        };
+        }
+        .filter(|b| b.len() == len)
+        .unwrap_or_else(|| vec![f64::NAN; len].into());
         slots.push(ForcingSlot {
             name: name.clone(),
             shape,
@@ -704,13 +708,14 @@ impl RhsProgram {
         } else {
             HashSet::new()
         };
-        let (slots, defaults): (Arc<[ForcingSlot]>, Vec<Option<Arc<[f64]>>>) = match forcing {
+        let default_set = match forcing {
             ForcingSource::Problem(m) => {
                 let (s, d) = forcing_slots(&model, m, &array_params);
-                (s.into(), d)
+                ForcingSet::for_slots(s.into(), d).expect("each default holds its slot's shape")
             }
-            ForcingSource::Parent(p) => (Arc::clone(&p.slots), p.defaults.clone()),
+            ForcingSource::Parent(p) => p.default_set.clone(),
         };
+        let slots = default_set.slots_arc();
         let slot_of = match &tape {
             Some(t) => slot_map(t, &slots)?,
             None => Vec::new(),
@@ -794,7 +799,7 @@ impl RhsProgram {
                 state_layout,
                 params,
                 slots,
-                defaults,
+                default_set,
                 scatter,
                 identity,
                 declared,
@@ -859,27 +864,12 @@ impl RhsProgram {
         &self.inner.slots
     }
 
-    /// A forcing set of the Problem's forcing as it was when the program was
-    /// built (a slot the Problem held no data for takes its declared default).
-    /// `Fault` (`E_TREEWALK_UNBOUND_NAME`) names a slot with neither.
-    pub fn default_forcing(&self) -> Result<ForcingSet, RhsError> {
-        let mut bufs = Vec::with_capacity(self.inner.slots.len());
-        for (slot, d) in self.inner.slots.iter().zip(&self.inner.defaults) {
-            match d {
-                Some(b) => bufs.push(Arc::clone(b)),
-                None => {
-                    return Err(RhsError::Fault {
-                        code: "E_TREEWALK_UNBOUND_NAME",
-                        message: format!(
-                            "forcing slot `{}`: the Problem held no data for it and it declares \
-                             no default; build the forcing set with `ForcingSet::new`",
-                            slot.name
-                        ),
-                    });
-                }
-            }
-        }
-        ForcingSet::new(self, bufs)
+    /// The Problem's forcing when the program was built: provider data, a
+    /// caller's array, or the declared default, and for an array-parameter
+    /// slot the parameter's value. Every call returns the same set (the same
+    /// buffers and epoch). A slot none of these fills holds `NaN`.
+    pub fn default_forcing(&self) -> ForcingSet {
+        self.inner.default_set.clone()
     }
 
     /// The declared default of every state cell, as `(u, aux)` in this
@@ -1088,7 +1078,8 @@ impl RhsProgram {
                 state_layout: Vec::new(),
                 params: Vec::new(),
                 slots: Arc::from(Vec::new()),
-                defaults: Vec::new(),
+                default_set: ForcingSet::for_slots(Arc::from(Vec::new()), Vec::new())
+                    .expect("an empty set"),
                 scatter: Vec::new(),
                 identity: true,
                 declared: Arc::new(c.declared_names.clone()),
@@ -1265,22 +1256,14 @@ fn fill_forcing_map(map: &mut HashMap<String, ArrayD<f64>>, set: &ForcingSet) {
 
 fn check_forcing(set: &ForcingSet, slots: &Arc<[ForcingSlot]>) -> Result<(), RhsError> {
     if !set.fits(slots) {
-        return Err(forcing::shape(
-            "forcing set (made for another program's slots)",
-            slots.len(),
-            set.slots().len(),
-        ));
+        return Err(forcing::shape("forcing", slots.len(), set.slots().len()));
     }
     Ok(())
 }
 
 fn check_owner(ws: &RhsWorkspace, id: u64) -> Result<(), RhsError> {
     if ws.owner != id {
-        return Err(forcing::shape(
-            "workspace (made by another program)",
-            id as usize,
-            ws.owner as usize,
-        ));
+        return Err(forcing::shape("workspace", id as usize, ws.owner as usize));
     }
     Ok(())
 }

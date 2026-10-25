@@ -252,7 +252,7 @@ fn eval_into_equals_the_debug_seam() {
             let c = prob.debug_array_compiled().expect("array backend");
             assert_eq!(prog.n_states(), c.n_states());
             let mut rng = Rng(7);
-            let fs = prog.default_forcing().expect("forcing");
+            let fs = prog.default_forcing();
             for _ in 0..5 {
                 let u: Vec<f64> = (0..prog.n_states()).map(|_| rng.f(-1.0, 2.0)).collect();
                 let t = rng.f(0.0, 10.0);
@@ -316,7 +316,7 @@ fn draws(prog: &RhsProgram, n: usize, seed: u64) -> Vec<Call> {
 
 /// Three forcing sets: the Problem's, and two that differ in one buffer.
 fn three_sets(prog: &RhsProgram, name: &str) -> Vec<ForcingSet> {
-    let fs = prog.default_forcing().expect("forcing");
+    let fs = prog.default_forcing();
     let k = slot(prog, name);
     let n = prog.forcing_slots()[k].len();
     let a: Arc<[f64]> = (0..n).map(|i| 0.1 * i as f64 - 0.4).collect();
@@ -487,7 +487,7 @@ fn a_new_forcing_set_is_never_served_stale() {
     let u: Vec<f64> = (0..16).map(|i| 1.0 + 0.1 * f64::from(i)).collect();
     let p = prog.parameter_vector(&HashMap::new()).expect("defaults");
     let k = slot(&prog, "F");
-    let fs = prog.default_forcing().expect("forcing");
+    let fs = prog.default_forcing();
     let fresh: Arc<[f64]> = (0..16).map(|i| 3.0 + f64::from(i)).collect();
     let fs2 = fs.replace(k, Arc::clone(&fresh)).expect("replace");
     assert_ne!(fs.epoch(), fs2.epoch());
@@ -539,7 +539,7 @@ fn a_new_forcing_set_is_never_served_stale() {
 #[test]
 fn a_fault_is_returned_on_its_own_thread_only() {
     let prog = program(&weighted(6), Compiler::Native);
-    let fs = prog.default_forcing().expect("forcing");
+    let fs = prog.default_forcing();
     let k_at = prog
         .parameters()
         .iter()
@@ -659,8 +659,8 @@ fn the_parameter_vector_is_strict_and_positional() {
 fn foreign_workspaces_and_sets_are_shape_errors() {
     let a = program(&forced_1d(8), Compiler::Native);
     let b = program(&forced_2d(4, 2), Compiler::Native);
-    let fa = a.default_forcing().expect("forcing");
-    let fb = b.default_forcing().expect("forcing");
+    let fa = a.default_forcing();
+    let fb = b.default_forcing();
     let p = a.parameter_vector(&HashMap::new()).expect("defaults");
     let u = vec![1.0; 8];
     let mut du = vec![0.0; 8];
@@ -701,7 +701,7 @@ fn foreign_workspaces_and_sets_are_shape_errors() {
 #[test]
 fn the_program_arms_its_own_precision() {
     let prog = program(&forced_1d(8), Compiler::Native);
-    let fs = prog.default_forcing().expect("forcing");
+    let fs = prog.default_forcing();
     let p = prog.parameter_vector(&HashMap::new()).expect("defaults");
     let u: Vec<f64> = (0..8).map(|i| 1.0 / (3.0 + f64::from(i))).collect();
     let want = eval(&prog, &u, &p, 0.0, &fs);
@@ -725,12 +725,12 @@ fn array_parameters_are_run_time_slots_on_request() {
         let k = slot(&prog, "w");
         assert_eq!(prog.forcing_slots()[k].kind, SlotKind::ArrayParameter);
         assert_eq!(prog.forcing_slots()[k].shape, vec![5]);
-        let fs = prog.default_forcing().expect("forcing");
+        let fs = prog.default_forcing();
         let p = prog.parameter_vector(&HashMap::new()).expect("defaults");
         assert_eq!(p.len(), baked.parameters().len());
         let u: Vec<f64> = (0..5).map(|i| 1.0 + f64::from(i)).collect();
         let pb = baked.parameter_vector(&HashMap::new()).expect("defaults");
-        let fb = baked.default_forcing().expect("forcing");
+        let fb = baked.default_forcing();
         assert_eq!(
             bits(&eval(&prog, &u, &p, 0.0, &fs)),
             bits(&eval(&baked, &u, &pb, 0.0, &fb)),

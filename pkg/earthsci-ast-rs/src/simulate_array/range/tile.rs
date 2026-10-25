@@ -70,6 +70,11 @@ impl TileProgram {
         &self.inner.layout
     }
 
+    /// The forcing slots a set for this tile holds: the whole program's.
+    pub fn forcing_slots(&self) -> &[ForcingSlot] {
+        &self.inner.slots
+    }
+
     /// Buffers for [`Self::eval_into`].
     pub fn new_workspace(&self) -> RhsWorkspace {
         let n = self.inner.blocks.u_len + self.inner.blocks.aux_len;

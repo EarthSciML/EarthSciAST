@@ -150,7 +150,7 @@ fn a_steady_tile_call_allocates_nothing() {
     let p = prog
         .parameter_vector(&Default::default())
         .expect("defaults");
-    let fs = prog.default_forcing().expect("forcing");
+    let fs = prog.default_forcing();
     let mut du = vec![f64::NAN; lay.u_len];
     let mut ws = tile.new_workspace();
     for _ in 0..3 {

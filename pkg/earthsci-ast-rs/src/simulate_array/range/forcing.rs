@@ -149,9 +149,16 @@ pub struct ForcingSet {
 impl ForcingSet {
     /// A set for `prog`'s slots: `bufs[k]` is slot `k`'s buffer.
     pub fn new(prog: &RhsProgram, bufs: Vec<Arc<[f64]>>) -> Result<ForcingSet, RhsError> {
-        let slots = prog.slots_arc();
+        ForcingSet::for_slots(prog.slots_arc(), bufs)
+    }
+
+    /// A set over `slots`, its buffers checked against them.
+    pub(super) fn for_slots(
+        slots: Arc<[ForcingSlot]>,
+        bufs: Vec<Arc<[f64]>>,
+    ) -> Result<ForcingSet, RhsError> {
         if bufs.len() != slots.len() {
-            return Err(shape("forcing buffers", slots.len(), bufs.len()));
+            return Err(shape("forcing", slots.len(), bufs.len()));
         }
         for (slot, buf) in slots.iter().zip(&bufs) {
             check_len(slot, buf)?;
@@ -166,7 +173,7 @@ impl ForcingSet {
     /// A new set, with a new epoch, sharing every buffer but `slot`'s.
     pub fn replace(&self, slot: usize, buf: Arc<[f64]>) -> Result<ForcingSet, RhsError> {
         let Some(s) = self.slots.get(slot) else {
-            return Err(shape("forcing slot", self.slots.len(), slot));
+            return Err(shape("forcing", self.slots.len(), slot));
         };
         check_len(s, &buf)?;
         let mut bufs: Vec<Arc<[f64]>> = self.bufs.to_vec();
@@ -193,6 +200,10 @@ impl ForcingSet {
         &self.bufs[k]
     }
 
+    pub(super) fn slots_arc(&self) -> Arc<[ForcingSlot]> {
+        Arc::clone(&self.slots)
+    }
+
     pub(super) fn bufs(&self) -> &[Arc<[f64]>] {
         &self.bufs
     }
@@ -205,7 +216,7 @@ impl ForcingSet {
 
 fn check_len(slot: &ForcingSlot, buf: &[f64]) -> Result<(), RhsError> {
     if buf.len() != slot.len() {
-        return Err(shape("forcing buffer", slot.len(), buf.len()));
+        return Err(shape("forcing", slot.len(), buf.len()));
     }
     Ok(())
 }
