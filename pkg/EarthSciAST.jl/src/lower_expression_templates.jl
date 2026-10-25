@@ -100,6 +100,9 @@ const _KNOWN_DIAGNOSTIC_CODES = (
     # esm-spec §2.2.6 `solver.external` load checks (solver.jl).
     ERROR_CODES.SOLVER_EXTERNAL_VERSION_TOO_OLD,
     ERROR_CODES.SOLVER_EXTERNAL_UNRESOLVED,
+    # esm-spec §2.2.7 `solver.time_span` load checks (solver.jl).
+    ERROR_CODES.SOLVER_TIME_SPAN_VERSION_TOO_OLD,
+    ERROR_CODES.SOLVER_TIME_SPAN_INVALID,
     # esm-spec §9.6 expression templates + §9.6.4 post-expansion validators
     # (lower_expression_templates.jl; the recursive-body composition check
     # lives in template_imports.jl).
