@@ -276,6 +276,14 @@ mutable struct _CGCtx
     # kernel `K`'s descriptor `ix` reads as the local `v` — or `(K, Dict(ix =>
     # v))` for several descriptors.
     subst::Any
+    # Shared invariant prologue (see `_cg_inv!`): the geometry local the
+    # prologue already holds for a (field, value) pair, the invariant local
+    # already holding an emitted invariant expression, and the keys of both in
+    # the order they were added, with the prologue length at that point, so a
+    # declined kernel's entries roll back with its statements.
+    progeo::Dict{Any,Symbol}
+    invmemo::Dict{Any,Symbol}
+    prolog::Vector{Tuple{Int,Bool,Any}}
 end
 _CGCtx(budget::Int, shared_cache::Union{Nothing,_CSECache}=nothing; nst::Int=0) =
     _CGCtx(DataType[], Vector{Any}[], IdDict{Any,Tuple{Int,Int}}(),
@@ -285,7 +293,8 @@ _CGCtx(budget::Int, shared_cache::Union{Nothing,_CSECache}=nothing; nst::Int=0) 
            Dict{String,Tuple{Symbol,Vector{Symbol}}}(), String[], false,
            Int[], Any[], IdDict{Any,Symbol}(), false, false, Symbol[], nothing,
            nst, IdDict{Any,Tuple{Int,Int}}(), IdDict{Any,Bool}(),
-           IdDict{Any,Tuple{Int,Int}}(), nothing)
+           IdDict{Any,Tuple{Int,Int}}(), nothing,
+           Dict{Any,Symbol}(), Dict{Any,Symbol}(), Tuple{Int,Bool,Any}[])
 
 _cg_helper_dedup_disabled() = !_compiler_plan_now().cg_helper_dedup
 
@@ -372,10 +381,23 @@ function _cg_geo!(ctx::_CGCtx, v::Int, key=nothing, unit::Bool=false)
         got = get(ctx.geomemo, key, nothing)
         got === nothing || return got
     end
+    # In the invariant prologue, one local per (field, value): the invariants
+    # of different kernels that read the same fixed slot then emit the same
+    # expression, which `_cg_inv!` shares.
+    pkey = (ctx.geosink === ctx.prologue && key isa Tuple && last(key) === :idx) ?
+           (:idx, v) : nothing
+    if pkey !== nothing
+        got = get(ctx.progeo, pkey, nothing)
+        got === nothing || return got
+    end
     push!(ctx.geo, v)
     s = _cg_name(ctx, "G")
     push!(ctx.geosink, :(local $s = $(_cg_tab!(ctx, ctx.geo))[$(length(ctx.geo))]))
     key === nothing || (ctx.geomemo[key] = s)
+    if pkey !== nothing
+        ctx.progeo[pkey] = s
+        push!(ctx.prolog, (length(ctx.prologue), false, pkey))
+    end
     return s
 end
 
@@ -1272,15 +1294,37 @@ function _cg_inv!(ctx::_CGCtx, K::_AccKernel)
     push!(ctx.invlog, K)
     # Geometry an invariant recipe reads (a fixed slot) is read into the
     # prologue too, just ahead of the statement that uses it.
+    # An invariant whose emitted expression is one the prologue already holds
+    # reuses that local: both read the same inputs (fixed slots, tabs,
+    # parameters, earlier invariants) through the same operations before any
+    # kernel runs, so they hold the same value. The template sub-kernels a
+    # region-split rule lowers per box repeat the same invariants box after box.
     _cg_with_geosink(ctx, ctx.prologue) do
         for r in K.cse.inv_recipes
             e = _cg_bound_body!(ctx, _cg_emit(ctx, kc, r))
+            got = get(ctx.invmemo, e, nothing)
+            if got !== nothing
+                push!(syms, got)
+                continue
+            end
             s = _cg_name(ctx, "v")
             push!(ctx.prologue, :(local $s = $e))
             push!(syms, s)
+            ctx.invmemo[e] = s
+            push!(ctx.prolog, (length(ctx.prologue), true, e))
         end
     end
     return syms
+end
+
+# Drop the shared-prologue entries whose statements a declined kernel's
+# rollback just cut (`resize!(ctx.prologue, n)`).
+function _cg_prolog_rollback!(ctx::_CGCtx, n::Int)
+    while !isempty(ctx.prolog) && ctx.prolog[end][1] > n
+        _, isinv, k = pop!(ctx.prolog)
+        delete!(isinv ? ctx.invmemo : ctx.progeo, k)
+    end
+    return nothing
 end
 
 # ---- One kernel → its loop nest (mirrors `_run_acc_kernel!`) ----------------
@@ -2715,6 +2759,7 @@ function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel};
             catch err
                 err isa _CodegenDecline || rethrow()
                 resize!(ctx.prologue, nprologue)
+                _cg_prolog_rollback!(ctx, nprologue)
                 for i in length(ctx.invlog):-1:(ninvlog + 1)
                     delete!(ctx.invdone, ctx.invlog[i])
                 end
@@ -2747,6 +2792,7 @@ function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel};
         catch err
             err isa _CodegenDecline || rethrow()
             resize!(ctx.prologue, nprologue)
+            _cg_prolog_rollback!(ctx, nprologue)
             for i in length(ctx.invlog):-1:(ninvlog + 1)
                 delete!(ctx.invdone, ctx.invlog[i])
             end
