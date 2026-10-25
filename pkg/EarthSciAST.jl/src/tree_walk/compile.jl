@@ -1354,11 +1354,11 @@ end
 # the repeated same-`p` calls whose zero-allocation property `f!` must keep (pinned by
 # tree_walk_allocation_test.jl). A `p` holding arrays is stored as a deep copy.
 @inline function _cse_mark_const!(c::_CSECache, ::Type{Float64}, p)
-    c.stamp64 = _pstamp(p)
+    c.stamp64 = _pstamp_reuse(c.stamp64, p)
     return nothing
 end
 @inline function _cse_mark_const!(c::_CSECache, ::Type{T}, p) where {T}
-    c.stampalt = _pstamp(p)
+    c.stampalt = _pstamp_reuse(c.stampalt, p)
     return nothing
 end
 
@@ -1401,7 +1401,7 @@ end
 # stamped (fail closed: the tier refills every call, which is the pre-B3 behavior).
 @inline function _cse_mark_t!(c::_CSECache, ::Type{Float64}, p, t)
     if t isa Float64
-        _pstamp_same(c.tp64, p) || (c.tp64 = _pstamp(p))
+        _pstamp_same(c.tp64, p) || (c.tp64 = _pstamp_reuse(c.tp64, p))
         c.tt64 = t
         c.te64 = _epoch_value(c.epoch)
     else
@@ -1411,7 +1411,7 @@ end
 end
 @inline function _cse_mark_t!(c::_CSECache, ::Type{T}, p, t) where {T}
     if isbits(t)
-        _pstamp_same(c.tpalt, p) || (c.tpalt = _pstamp(p))
+        _pstamp_same(c.tpalt, p) || (c.tpalt = _pstamp_reuse(c.tpalt, p))
         c.ttalt === t || (c.ttalt = t)
         c.tealt = _epoch_value(c.epoch)
     else

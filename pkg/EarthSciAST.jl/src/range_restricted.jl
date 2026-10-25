@@ -131,11 +131,9 @@ end
 A right-hand side as a program value (API_SPEC §5.8): [`rhs_program`](@ref)
 returns the Problem's whole model, [`select`](@ref) one operator of it. Its
 `u` covers the written variables and its `aux` the other states the kept rules
-read. Evaluate it with [`rhs!`](@ref); restrict it with [`halo`](@ref),
-[`restrict`](@ref) and [`lanes`](@ref).
-
-This is the smallest program type the range-restricted entries need, not the
-public right-hand-side type of #541 (U4).
+read. Evaluate it with [`rhs!`](@ref) on a [`rhs_workspace`](@ref) per
+concurrent caller; restrict it with [`halo`](@ref), [`restrict`](@ref) and
+[`lanes`](@ref). Immutable once built: one program serves every thread.
 """
 struct RhsProgram{F}
     seed::Any                       # `BuildInspection.program_seed`
@@ -150,6 +148,7 @@ struct RhsProgram{F}
     shapes::Dict{String,Vector{String}}  # array state → index sets per dim
     layout::TileLayout
     maps::_CopyMaps
+    shared::_RhsShared
 end
 
 """
@@ -168,17 +167,7 @@ struct TileProgram{F}
     internal::StateLayout
     layout::TileLayout
     maps::_CopyMaps
-end
-
-"""
-    RhsWorkspace
-
-The scratch a program call writes: the internal state and derivative vectors
-the compiled right-hand side addresses. One per concurrent caller.
-"""
-struct RhsWorkspace
-    u::Vector{Float64}
-    du::Vector{Float64}
+    shared::_RhsShared
 end
 
 # ============================================================================
@@ -388,15 +377,55 @@ end
 
 # Build the program of `doc` (a selected run document) the way `esm_problem`
 # built the Problem's, without its discrete-cadence cut.
+#
+# Every externally fed parameter is a live buffer of the program (a forcing
+# slot), whatever the Problem's own build made of it: the build registers each
+# one the Problem holds no buffer for, filled with its value, in the program's
+# own copy of the buffer registry (`pa`, returned).
 function _program_build(seed, doc::Dict{String,Any})
     front = Ref{Any}(nothing)
-    f!, _u0, _p, _ts, var_map = _with_range_spec(_CaptureSpec(front)) do
+    pa = Dict{String,Any}(String(k) => v for (k, v) in seed.param_arrays)
+    f!, _u0, p, _ts, var_map = _with_range_spec(_CaptureSpec(front)) do
         _build_evaluator(doc; compiler = seed.compiler, form = :inplace,
             model_name = seed.model_name, parameter_overrides = seed.overrides,
-            const_arrays = seed.const_arrays, param_arrays = seed.param_arrays,
-            _gated_providers = seed.gated_providers, _sample_time = seed.sample_time)
+            const_arrays = seed.const_arrays, param_arrays = pa,
+            _gated_providers = seed.gated_providers, _sample_time = seed.sample_time,
+            _runtime_array_parameters = get(seed, :runtime_array_parameters, false),
+            _live_fed_parameters = true)
     end
-    return f!, var_map, front[]
+    return f!, var_map, front[], p, pa
+end
+
+# The parameter and forcing-slot signatures of a program built from `seed`
+# (API_SPEC §5.8, "States and parameters", "Forcing sets"), whose build
+# resolved the parameter NamedTuple `p` and the buffer registry `pa`, and its
+# default forcing set: a copy of those buffers now.
+function _program_shared(seed, p, pa)
+    decl = seed.flat.parameters
+    function declared(n)
+        v = get(decl, n, nothing)
+        (v !== nothing && v.default isa Real) ? Float64(v.default) : nothing
+    end
+    params = p === nothing ? ParamSlot[] :
+             ParamSlot[ParamSlot(String(k), declared(String(k))) for k in keys(p)]
+    sort!(params; by = s -> s.name)
+    ap = Set{String}(get(seed, :array_parameters, ()))
+    names = sort!(String[String(k) for k in keys(pa)])
+    slots = ForcingSlot[ForcingSlot(n, _is_scalar_slot(get(decl, n, nothing)) ? Int[] :
+                                       collect(Int, size(pa[n])),
+                                    (n in ap && !_externally_fed(get(decl, n, nothing))) ?
+                                    :array_parameter : :forcing) for n in names]
+    originals = Array{Float64}[pa[n] for n in names]
+    default = ForcingSet(slots, Vector{Float64}[vec(copy(a)) for a in originals],
+                         _next_set_epoch())
+    return _RhsShared(params, slots, originals, default, Vector{Float64}[])
+end
+
+# A derived program's signatures: its parent's, over its own build's buffers.
+function _derived_shared(parent::_RhsShared, pa)
+    originals = Array{Float64}[pa[s.name] for s in parent.slots]
+    return _RhsShared(parent.params, parent.slots, originals, parent.default,
+                      Vector{Float64}[])
 end
 
 # Re-lower a program's recorded front-door product under `spec`.
@@ -522,12 +551,12 @@ function _copy_maps(layout::TileLayout, internal::StateLayout, to_internal)
 end
 
 function _whole_program(seed, flat::FlattenedSystem, W::Set{String}, R::Set{String},
-                        writes, terms)
+                        writes, terms; parent = nothing)
     init = seed.init
     live = union(W, R)
     init2 = (init === nothing || isempty(init)) ? Equation[] : _select_init(init, live)
-    doc = _flat_run_doc(flat, seed.coordinates, seed.solver, init2)
-    f!, internal, front = _program_build(seed, doc)
+    doc = _flat_run_doc(_scalar_slots_to_arrays(flat), seed.coordinates, seed.solver, init2)
+    f!, internal, front, p, pa = _program_build(seed, doc)
     present = Set{String}(vcat(collect(_layout_scalar_names(internal)),
                                [b.name for b in _layout_blocks(internal)]))
     unames = _flat_order(internal, [n for n in W if n in present])
@@ -540,7 +569,9 @@ function _whole_program(seed, flat::FlattenedSystem, W::Set{String}, R::Set{Stri
     layout = TileLayout(ublocks, ablocks, nu, na)
     maps = _copy_maps(layout, internal, (n, d, x) -> x)
     return RhsProgram(seed, seed.compiler, unames, anames, flat, doc, front, f!,
-                      internal, shapes, layout, maps)
+                      internal, shapes, layout, maps,
+                      parent === nothing ? _program_shared(seed, p, pa) :
+                                           _derived_shared(parent, pa))
 end
 
 """
@@ -550,6 +581,12 @@ The Problem's right-hand side as a program value (API_SPEC §5.8): the whole
 model over the whole domain, with `u` every state of the Problem (in the
 Problem's flat layout) and `aux` empty. [`select`](@ref) narrows it to one
 operator; [`halo`](@ref), [`restrict`](@ref) and [`lanes`](@ref) restrict it.
+
+Its inputs besides the state are a parameter vector ([`parameters`](@ref)) and
+a [`ForcingSet`](@ref) ([`forcing_slots`](@ref)): every externally fed
+parameter, and under `runtime_array_parameters` every shaped parameter with a
+value, is read from the set, never from build-time data.
+[`default_forcing_set`](@ref) holds the Problem's forcing as it is now.
 """
 function rhs_program(prob::EsmProblem)
     seed = prob.inspection.program_seed
@@ -584,7 +621,7 @@ function select(prog::RhsProgram; writes = :all, terms = :all)
     if writes === :all
         W = intersect(W, Set(prog.writes))
     end
-    return _whole_program(prog.seed, flat, W, R, writes, t)
+    return _whole_program(prog.seed, flat, W, R, writes, t; parent = prog.shared)
 end
 
 """
@@ -597,25 +634,59 @@ tile_layout(x::RhsProgram) = x.layout
 tile_layout(x::TileProgram) = x.layout
 
 """
+    parameters(prog) -> Vector{ParamSlot}
+
+The entries of a vector `p` (API_SPEC §5.8): sorted flattened parameter names,
+the positional order the compiled program indexes, each with its default.
+Build a vector with [`parameter_vector`](@ref); `rhs!` also takes the Problem's
+NamedTuple `prob.p`.
+"""
+parameters(x::Union{RhsProgram,TileProgram}) = x.shared.params
+
+"""
+    n_states(prog) -> Int
+
+The length of `u` (API_SPEC §5.8, "States and parameters").
+"""
+n_states(x::Union{RhsProgram,TileProgram}) = x.layout.n_u
+
+"""
+    state_layout(prog) -> Vector{StateBlock}
+
+The `u` blocks in flat-layout order (0-d states by sorted name, then arrays by
+sorted name): name, 1-based offset, shape. Derived from
+[`tile_layout`](@ref)`(prog)`; a tile's shapes are its storage box's.
+"""
+state_layout(x::Union{RhsProgram,TileProgram}) =
+    StateBlock[StateBlock(b.name, b.base, Int[length(r) for r in b.storage])
+               for b in x.layout.u]
+
+"""
     rhs_workspace(x) -> RhsWorkspace
 
-Scratch for [`rhs!`](@ref) on `x` (a program, a tile or a lane program). One per
-concurrent caller.
+The mutable state of [`rhs!`](@ref) on `x` (a program, a tile or a lane
+program): a private instance of its compiled right-hand side, sharing the
+generated code. One per concurrent caller; a workspace may move between
+threads but serves one call at a time.
 """
 rhs_workspace(x::Union{RhsProgram,TileProgram}) =
-    RhsWorkspace(zeros(length(x.internal)), zeros(length(x.internal)))
+    _new_workspace(x.shared, x.f!, length(x.internal))
 
 """
-    rhs!(du, x, ws, u, aux, p, t, fs = nothing) -> du
+    rhs!(du, x, ws, u, aux, p, t, fs::ForcingSet) -> du
 
 Evaluate the program or tile `x` (API_SPEC §5.8): `u` and `aux` in
-[`tile_layout`](@ref)`(x)`, `p` the Problem's parameters, `fs` the forcing
-buffers the program was built against (`forcing_buffers(prob)`) or `nothing`.
-Writes only the owned rows of `du`; every other element is left untouched.
-Allocation-free.
+[`tile_layout`](@ref)`(x)`, `p` a vector in [`parameters`](@ref) order or the
+Problem's NamedTuple, `fs` a [`ForcingSet`](@ref) of `x`, `ws` a
+[`rhs_workspace`](@ref) of `x`. The result is a function of `(x, u, aux, p, t,
+fs)`'s contents alone: bitwise the same on every workspace and thread, whatever
+the workspace evaluated before. Writes only the owned rows of `du`; every other
+element is left untouched. Reentrant across distinct workspaces, never
+threaded internally, allocation-free in steady state.
 """
 function rhs!(du::AbstractVector, x::Union{RhsProgram,TileProgram}, ws::RhsWorkspace,
-              u::AbstractVector, aux::AbstractVector, p, t, fs = nothing)
+              u::AbstractVector, aux::AbstractVector, p, t, fs::ForcingSet)
+    _check_workspace(x.shared, ws)
     L = x.layout
     length(u) == L.n_u || throw(DimensionMismatch(
         "rhs!: `u` has $(length(u)) elements; the layout has $(L.n_u)"))
@@ -623,6 +694,7 @@ function rhs!(du::AbstractVector, x::Union{RhsProgram,TileProgram}, ws::RhsWorks
         "rhs!: `aux` has $(length(aux)) elements; the layout has $(L.n_aux)"))
     length(du) == L.n_u || throw(DimensionMismatch(
         "rhs!: `du` has $(length(du)) elements; the layout has $(L.n_u)"))
+    _prime!(ws, fs)
     m = x.maps
     U = ws.u
     @inbounds for k in eachindex(m.u_src)
@@ -632,7 +704,7 @@ function rhs!(du::AbstractVector, x::Union{RhsProgram,TileProgram}, ws::RhsWorks
         U[m.aux_dst[k]] = aux[m.aux_src[k]]
     end
     D = ws.du
-    x.f!(D, U, p, t)
+    ws.f!(D, U, p, t)
     @inbounds for k in eachindex(m.du_src)
         du[m.du_dst[k]] = D[m.du_src[k]]
     end
@@ -1747,7 +1819,7 @@ function restrict(op::RhsProgram, dec::Decomposition; owned, storage)
         return y in dom ? y : nothing
     end
     maps = _copy_maps(layout, internal, to_internal)
-    return TileProgram(op, dec, ow, st, f!, internal, layout, maps)
+    return TileProgram(op, dec, ow, st, f!, internal, layout, maps, _RhsShared(op.shared))
 end
 
 # ============================================================================
@@ -1772,6 +1844,7 @@ const _LANE_CHUNK = 64
 struct _LaneGather
     buf::Vector{Float64}             # the program's live buffer (C lanes)
     src::AbstractArray               # const array or live forcing buffer
+    dims::Vector{Int}                # `size(src)`
     name::String
     subs::Vector{ASTExpr}
     vars::Vector{Pair{String,Int}}   # loop variable → lane-set row of `cells`
@@ -1790,8 +1863,8 @@ end
 
 An operator over a run-time list of cells (`:cells`) or columns (`:columns`)
 ([`lanes`](@ref)). Evaluate it with [`rhs!`](@ref) on buffers in its
-[`lane_layout`](@ref). One build serves every batch size. Not reentrant: one
-caller at a time (the compiled program owns its lane buffers).
+[`lane_layout`](@ref). One build serves every batch size. Reentrant across
+distinct workspaces: each [`rhs_workspace`](@ref) owns its lane buffers.
 """
 struct LaneProgram{F}
     op::RhsProgram
@@ -1803,10 +1876,11 @@ struct LaneProgram{F}
     layout::LaneLayout
     index_bufs::Vector{Vector{Float64}}   # per lane set, the live lane-index buffer
     gathers::Vector{_LaneGather}
+    gather_slots::Vector{Int}        # per gather, its source's forcing slot (0: const)
     ucopy::Vector{_LaneCopy}
     acopy::Vector{_LaneCopy}
     params::Dict{String,Int}
-    env::Dict{String,Int}            # scratch for the per-lane gathers
+    shared::_RhsShared
 end
 
 """
@@ -1820,6 +1894,9 @@ struct LaneInputs
     index::Vector{Vector{Float64}}
     gathered::Vector{Vector{Float64}}
     L::Int
+    # The forcing set the inputs were gathered from; `rhs!` evaluates the
+    # program's other forcing reads against the same set.
+    fs::Base.RefValue{Union{Nothing,ForcingSet}}
 end
 
 mutable struct _LaneSpec <: _RangeSpec
@@ -1958,7 +2035,7 @@ function _lane_rewrite_index(spec::_LaneSpec, ctx, o::OpExpr, sc::_LaneScope, ru
         if !isempty(lane) && isempty(other)
             k = length(spec.gathers) + 1
             buf = zeros(spec.C)
-            push!(spec.gathers, _LaneGather(buf, ctx.arrays[n], n, subs,
+            push!(spec.gathers, _LaneGather(buf, ctx.arrays[n], collect(Int, size(ctx.arrays[n])), n, subs,
                 [r => findfirst(==(sc.lanevars[r]), spec.sets) for r in lane], ctx.arrays))
             ctx.live["__lane_in_$k"] = buf
             return OpExpr("index", ASTExpr[VarExpr("__lane_in_$k"), VarExpr(sc.first)])
@@ -2221,9 +2298,15 @@ function lanes(op::RhsProgram, kind::Symbol, sets; chunk::Int = _LANE_CHUNK)
     ub, uplan, nu = blocks(op.writes)
     ab, aplan, na = blocks(op.aux_names)
     layout = LaneLayout(ub, ab, S, nu, na)
-    return LaneProgram(op, kind, S, chunk, f!, internal, layout,
-                       Vector{Float64}[index_bufs[s] for s in S], spec.gathers,
-                       uplan, aplan, spec.params, Dict{String,Int}(spec.params))
+    ibufs = Vector{Float64}[index_bufs[s] for s in S]
+    lane_bufs = vcat(ibufs, Vector{Float64}[g.buf for g in spec.gathers])
+    gslots = Int[something(findfirst(o -> o === g.src ||
+                                         (!isempty(o) && pointer(o) == pointer(g.src) &&
+                                          length(o) == length(g.src)),
+                                     op.shared.originals), 0)
+                 for g in spec.gathers]
+    return LaneProgram(op, kind, S, chunk, f!, internal, layout, ibufs, spec.gathers,
+                       gslots, uplan, aplan, spec.params, _RhsShared(op.shared, lane_bufs))
 end
 
 """
@@ -2234,8 +2317,13 @@ for lane `l` of an `L`-lane batch is at slot `(offset_v + e - 1)·L + l`.
 """
 lane_layout(lp::LaneProgram) = lp.layout
 
-rhs_workspace(lp::LaneProgram) =
-    RhsWorkspace(zeros(length(lp.internal)), zeros(length(lp.internal)))
+parameters(lp::LaneProgram) = lp.shared.params
+
+function rhs_workspace(lp::LaneProgram)
+    ws = _new_workspace(lp.shared, lp.f!, length(lp.internal))
+    merge!(ws.env, lp.params)
+    return ws
+end
 
 """
     lane_inputs(lanes::LaneProgram, L::Integer) -> LaneInputs
@@ -2246,23 +2334,46 @@ index and every pre-gathered array read. Fill them with
 """
 lane_inputs(lp::LaneProgram, L::Integer) =
     LaneInputs([zeros(Int(L)) for _ in lp.index_bufs],
-               [zeros(Int(L)) for _ in lp.gathers], Int(L))
+               [zeros(Int(L)) for _ in lp.gathers], Int(L),
+               Base.RefValue{Union{Nothing,ForcingSet}}(nothing))
 
-# The value of pre-gathered input `g` at the cell of lane `l` of `cells`.
-function _lane_gather_value(lp::LaneProgram, g::_LaneGather, cells::AbstractMatrix, l::Int,
+# Pre-gathered input `k` at the cell of lane `l` of `cells`, stored into
+# `buf[c]`: read from the call's forcing buffer, or from const data.
+function _lane_gather!(buf::Vector{Float64}, c::Int, lp::LaneProgram, k::Int, fs::ForcingSet,
+                       cells::AbstractMatrix, l::Int, env::Dict{String,Int})
+    g = lp.gathers[k]
+    slot = lp.gather_slots[k]
+    if slot == 0
+        _lane_gather_store!(buf, c, g, g.src, cells, l, env)
+    else
+        _lane_gather_store!(buf, c, g, fs.bufs[slot], cells, l, env)
+    end
+    return nothing
+end
+
+# A barrier: `src`'s concrete type is known inside, so the read does not box.
+function _lane_gather_store!(buf::Vector{Float64}, c::Int, g::_LaneGather, src::A,
+                             cells::AbstractMatrix, l::Int, env::Dict{String,Int}) where {A}
+    @inbounds buf[c] = _lane_gather_value(g, src, cells, l, env)
+    return nothing
+end
+
+# The value of pre-gathered input `g` (read from `src`, linear over `g.src`'s
+# shape) at the cell of lane `l` of `cells`.
+function _lane_gather_value(g::_LaneGather, src::AbstractArray, cells::AbstractMatrix, l::Int,
                             env::Dict{String,Int})
     for (v, row) in g.vars
         env[v] = Int(cells[row, l])
     end
-    src = g.src
+    shp = g.src
     lin = 0
     stride = 1
     for d in eachindex(g.subs)
-        i = _eval_const_int(g.subs[d], env, g.consts)
-        n = size(src, d)
+        i = _eval_const_int(g.subs[d], env, g.consts)::Int
+        n = g.dims[d]
         if !(1 <= i <= n)
             i = try
-                _resolve_const_index(src, g.name, d, i, n)
+                _resolve_const_index(shp, g.name, d, i, n)
             catch err
                 err isa TreeWalkError || rethrow()
                 return 0.0
@@ -2280,7 +2391,7 @@ end
 Fill `li` for the first `n` lanes of `cells` (an `Int32` `[D, L]` matrix, rows in
 the program's lane-set order); lanes past `n` take lane `n`'s inputs.
 """
-function gather_lane_inputs!(li::LaneInputs, lp::LaneProgram, p, t, fs,
+function gather_lane_inputs!(li::LaneInputs, lp::LaneProgram, p, t, fs::ForcingSet,
                              cells::AbstractMatrix, n::Integer)
     L = li.L
     size(cells, 2) == L || throw(DimensionMismatch(
@@ -2291,10 +2402,11 @@ function gather_lane_inputs!(li::LaneInputs, lp::LaneProgram, p, t, fs,
         for k in eachindex(li.index)
             li.index[k][l] = Float64(cells[k, src])
         end
-        for (k, g) in enumerate(lp.gathers)
-            li.gathered[k][l] = _lane_gather_value(lp, g, cells, src, env)
+        for k in eachindex(lp.gathers)
+            _lane_gather!(li.gathered[k], l, lp, k, fs, cells, src, env)
         end
     end
+    li.fs[] = fs
     return li
 end
 
@@ -2329,9 +2441,10 @@ function _lane_chunk!(du, lp::LaneProgram, ws::RhsWorkspace, u, aux, p, t, L::In
             end
         end
     end
-    _bump_global_epoch!()
+    # The lane buffers changed under the TIME tier's stamps.
+    _bump_workspace_epochs!(ws)
     D = ws.du
-    lp.f!(D, U, p, t)
+    ws.f!(D, U, p, t)
     @inbounds for pl in lp.ucopy
         for e in eachindex(pl.slot1)
             base = (pl.offset + e - 1) * L + s0
@@ -2344,20 +2457,35 @@ function _lane_chunk!(du, lp::LaneProgram, ws::RhsWorkspace, u, aux, p, t, L::In
     return nothing
 end
 
+"""
+    rhs!(du, lanes::LaneProgram, ws, u, aux, p, t, fs::ForcingSet, cells, n) -> du
+    rhs!(du, lanes::LaneProgram, ws, u, aux, p, t, li::LaneInputs, cells, n) -> du
+
+Evaluate the first `n` lanes of an `L`-lane batch (API_SPEC §5.8, "Lanes"):
+`u`, `aux`, `du` in [`lane_layout`](@ref), `cells` an `[D, L]` matrix of global
+indices (rows in the lane-set order). The second form takes every pre-gathered
+input from `li` ([`gather_lane_inputs!`](@ref)) instead of gathering it here,
+and evaluates against the forcing set `li` was gathered from. Every per-call
+buffer is the workspace's: reentrant across distinct workspaces.
+"""
 function rhs!(du::AbstractVector, lp::LaneProgram, ws::RhsWorkspace, u::AbstractVector,
-              aux::AbstractVector, p, t, fs, cells::AbstractMatrix, n::Integer)
+              aux::AbstractVector, p, t, fs::ForcingSet, cells::AbstractMatrix, n::Integer)
+    _check_workspace(lp.shared, ws)
     L = _lane_check(lp, du, u, aux, cells, n)
+    _prime!(ws, fs)
     C = lp.C
-    env = lp.env
+    env = ws.env
+    ni = length(lp.index_bufs)
+    lb = ws.lbufs
     for s0 in 0:C:(n - 1)
         m = min(C, n - s0)
         for c in 1:C
             l = s0 + min(c, m)
-            for k in eachindex(lp.index_bufs)
-                lp.index_bufs[k][c] = Float64(cells[k, l])
+            for k in 1:ni
+                lb[k][c] = Float64(cells[k, l])
             end
-            for g in lp.gathers
-                g.buf[c] = _lane_gather_value(lp, g, cells, l, env)
+            for k in eachindex(lp.gathers)
+                _lane_gather!(lb[ni + k], c, lp, k, fs, cells, l, env)
             end
         end
         _lane_chunk!(du, lp, ws, u, aux, p, t, L, s0, m)
@@ -2367,18 +2495,25 @@ end
 
 function rhs!(du::AbstractVector, lp::LaneProgram, ws::RhsWorkspace, u::AbstractVector,
               aux::AbstractVector, p, t, li::LaneInputs, cells::AbstractMatrix, n::Integer)
+    _check_workspace(lp.shared, ws)
     L = _lane_check(lp, du, u, aux, cells, n)
     li.L == L || throw(DimensionMismatch("rhs!: the lane inputs hold $(li.L) lanes; the batch has $L"))
+    fs = li.fs[]
+    fs === nothing && throw(ArgumentError(
+        "rhs!: the lane inputs were never filled; call gather_lane_inputs! first"))
+    _prime!(ws, fs)
     C = lp.C
+    ni = length(lp.index_bufs)
+    lb = ws.lbufs
     for s0 in 0:C:(n - 1)
         m = min(C, n - s0)
         for c in 1:C
             l = s0 + min(c, m)
-            for k in eachindex(lp.index_bufs)
-                lp.index_bufs[k][c] = li.index[k][l]
+            for k in 1:ni
+                lb[k][c] = li.index[k][l]
             end
-            for (k, g) in enumerate(lp.gathers)
-                g.buf[c] = li.gathered[k][l]
+            for k in eachindex(lp.gathers)
+                lb[ni + k][c] = li.gathered[k][l]
             end
         end
         _lane_chunk!(du, lp, ws, u, aux, p, t, L, s0, m)
