@@ -1712,7 +1712,7 @@ pub fn esm_problem<'a>(
         prec,
         opts.model_name.as_deref(),
     )?;
-    let _precision_guard = precision::enter_env(prec, std::rc::Rc::new(var_precisions));
+    let _precision_guard = precision::enter_env(prec, std::sync::Arc::new(var_precisions));
 
     // Host-supplied numbers are the one class of value the evaluator does not
     // itself produce, so they are rounded ONCE here rather than on each of the

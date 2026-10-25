@@ -34,7 +34,6 @@ use indexmap::IndexMap;
 use ndarray::ArrayD;
 use rustc_hash::FxHashMap;
 use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
 use std::sync::Arc;
 
 /// The lane symbol every rewritten rule runs over.
@@ -731,7 +730,7 @@ fn rewrite(
                     var: var.clone(),
                     output_idx_names: syms,
                     output_ranges: ranges,
-                    body: Rc::new(body),
+                    body: std::sync::Arc::new(body),
                 });
             }
             AlgebraicRule::Scalar { body, .. } if axes.get(var).is_none_or(Vec::is_empty) => {

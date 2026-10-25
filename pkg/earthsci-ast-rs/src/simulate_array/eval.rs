@@ -1704,7 +1704,7 @@ mod kernel_equivalence_tests {
             assert_eq!(*got, want);
             // Same allocation, not an equal one: a later read is served from
             // the table rather than re-walking the payload.
-            assert!(std::rc::Rc::ptr_eq(&first, &got));
+            assert!(std::sync::Arc::ptr_eq(&first, &got));
         }
         // And the memo-aware `const` arm agrees with the un-memoized one.
         match (
@@ -1774,20 +1774,20 @@ mod kernel_equivalence_tests {
         let memo = ConstLitMemo::default();
         memo.retarget(0x1234);
         let first = memo.get(&node).expect("memoized array");
-        assert!(std::rc::Rc::ptr_eq(
+        assert!(std::sync::Arc::ptr_eq(
             &first,
             &memo.get(&node).expect("same rule set, same entry")
         ));
         // Re-binding the same key keeps the table.
         memo.retarget(0x1234);
-        assert!(std::rc::Rc::ptr_eq(
+        assert!(std::sync::Arc::ptr_eq(
             &first,
             &memo.get(&node).expect("same key, same entry")
         ));
         // A different key drops it: the next read is a fresh materialization.
         memo.retarget(0x5678);
         let after = memo.get(&node).expect("rebuilt array");
-        assert!(!std::rc::Rc::ptr_eq(&first, &after));
+        assert!(!std::sync::Arc::ptr_eq(&first, &after));
         assert_eq!(*after, *first);
     }
 }
@@ -2908,7 +2908,7 @@ pub(crate) fn eval_observed_taped(
                 var: name.to_string(),
                 output_idx_names: r.idx_names,
                 output_ranges: r.ranges,
-                body: Rc::new(r.body),
+                body: std::sync::Arc::new(r.body),
                 axis: r.axis,
                 max_lag: r.max_lag,
                 lag_proven: r.lag_proven,
@@ -2925,7 +2925,7 @@ pub(crate) fn eval_observed_taped(
     } else {
         AlgebraicRule::Scalar {
             var: name.to_string(),
-            body: Rc::new(expr.clone()),
+            body: std::sync::Arc::new(expr.clone()),
             declared_shape: None,
         }
     };

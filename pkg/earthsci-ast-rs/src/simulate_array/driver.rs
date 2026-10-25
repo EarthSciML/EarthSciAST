@@ -50,7 +50,7 @@ struct TapedObserveds {
 impl TapedObserveds {
     fn new(compiled: &ArrayCompiled, tape: &std::sync::Arc<TapeProgram>) -> Self {
         let mut scratch = RhsScratch::new(&compiled.var_shapes);
-        scratch.set_const_arrays(Rc::clone(&compiled.const_scope));
+        scratch.set_const_arrays(std::sync::Arc::clone(&compiled.const_scope));
         scratch.install_tape(std::sync::Arc::clone(tape));
         scratch.set_exports_active(true);
         TapedObserveds {
@@ -574,7 +574,7 @@ impl ArrayCompiled {
         let mut dy = vec![0.0f64; self.n_states];
         let mut stats = RhsStats::default();
         let mut scratch = RhsScratch::new(&self.var_shapes);
-        scratch.set_const_arrays(Rc::clone(&self.const_scope));
+        scratch.set_const_arrays(std::sync::Arc::clone(&self.const_scope));
         evaluate_rhs_with_scratch(
             &RhsCall {
                 rhs_rules: &self.rhs_rules,
@@ -603,7 +603,7 @@ impl ArrayCompiled {
     #[doc(hidden)]
     pub fn debug_new_scratch(&self) -> RhsScratch {
         let mut s = RhsScratch::new(&self.var_shapes);
-        s.set_const_arrays(Rc::clone(&self.const_scope));
+        s.set_const_arrays(std::sync::Arc::clone(&self.const_scope));
         s
     }
 
@@ -619,7 +619,7 @@ impl ArrayCompiled {
     #[doc(hidden)]
     pub fn debug_new_scratch_taped(&self) -> Result<RhsScratch, SimulateError> {
         let mut s = RhsScratch::new(&self.var_shapes);
-        s.set_const_arrays(Rc::clone(&self.const_scope));
+        s.set_const_arrays(std::sync::Arc::clone(&self.const_scope));
         s.install_tape(self.strict_tape(&HashSet::new())?);
         Ok(s)
     }
@@ -794,7 +794,7 @@ impl ArrayCompiled {
         let _precision_guard = self.precision.enter();
         let param_vec = self.build_param_vec(params)?;
         let mut scratch = RhsScratch::new(&self.var_shapes);
-        scratch.set_const_arrays(Rc::clone(&self.const_scope));
+        scratch.set_const_arrays(std::sync::Arc::clone(&self.const_scope));
         if self.tape_serves_passes() {
             scratch.install_tape(self.strict_tape(&HashSet::new())?);
             scratch.set_exports_active(true);
@@ -2271,7 +2271,7 @@ impl ArrayCompiled {
         };
         if tape_rhs && rhs_scratch.borrow().is_none() {
             let mut s = RhsScratch::new(&var_shapes);
-            s.set_const_arrays(Rc::clone(&self.const_scope));
+            s.set_const_arrays(std::sync::Arc::clone(&self.const_scope));
             s.set_static((*seg_seed).clone());
             // Step 3b: the production RHS closure's scratch gets the compiled
             // tape. Its CONST/SEGMENT sections prime on the first call, and a
@@ -2289,7 +2289,7 @@ impl ArrayCompiled {
         // (BDF/SDIRK) build it on their first Jacobian evaluation instead;
         // construction is deterministic, so results are bit-identical either way.
         let jac_seed = Rc::clone(&seg_seed);
-        let const_scope_jac = Rc::clone(&self.const_scope);
+        let const_scope_jac = std::sync::Arc::clone(&self.const_scope);
         let tape_jac: Option<std::sync::Arc<TapeProgram>> = match (self.tape_serves_passes(), tape)
         {
             (true, Some(prog)) => Some(std::sync::Arc::clone(prog)),
@@ -2409,7 +2409,7 @@ impl ArrayCompiled {
             let mut scratch_slot = jac_scratch.borrow_mut();
             let scratch = scratch_slot.get_or_insert_with(|| {
                 let mut s = RhsScratch::new(&var_shapes_jac);
-                s.set_const_arrays(Rc::clone(&const_scope_jac));
+                s.set_const_arrays(std::sync::Arc::clone(&const_scope_jac));
                 s.set_static((*jac_seed).clone());
                 // Under `native` the FD Jacobian runs on the TAPE as well
                 // (under `xla` it runs on the emitted program instead, which

@@ -15,7 +15,6 @@ use crate::simulate_array::ConstArrayScope;
 use crate::value_invention::BoundaryKind;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
 
 fn minus(a: serde_json::Value, b: serde_json::Value) -> serde_json::Value {
     json!({"op": "-", "args": [a, b]})
@@ -167,7 +166,8 @@ fn run_time_subscript_under_a_boundary_policy() {
                 d_eq("u", n, body),
             ],
         ));
-        compiled.const_scope = Rc::new(ConstArrayScope::default().with_boundary("C", vec![kind]));
+        compiled.const_scope =
+            std::sync::Arc::new(ConstArrayScope::default().with_boundary("C", vec![kind]));
         let prog = ab(&compiled, &no_params());
         assert!(
             prog.data_gathers.iter().all(|g| g.order.is_none()),

@@ -808,7 +808,7 @@ impl ArrayCompiled {
         // body out of the variable registry. A gather on one of these resolves
         // an out-of-range index by its declared boundary policy instead of the
         // state gather's zero ghost, which §5.5.5 says is never a const array's.
-        let const_scope = Rc::new(ConstArrayScope::from_names(
+        let const_scope = std::sync::Arc::new(ConstArrayScope::from_names(
             observed_bodies(&model_owned)
                 .into_iter()
                 .filter(|(_, body)| matches!(body, Expr::Operator(n) if n.op == "const"))
@@ -2898,7 +2898,7 @@ fn build_observed_rules(
                 var: name.clone(),
                 output_idx_names: r.idx_names,
                 output_ranges: r.ranges,
-                body: Rc::new(r.body),
+                body: std::sync::Arc::new(r.body),
                 axis: r.axis,
                 max_lag: r.max_lag,
                 lag_proven: r.lag_proven,
@@ -2910,7 +2910,7 @@ fn build_observed_rules(
                 var: a.var,
                 output_idx_names: a.idx_names,
                 output_ranges: a.ranges,
-                body: Rc::new(a.body),
+                body: std::sync::Arc::new(a.body),
             });
         } else {
             observed_rules.push(lower_algebraic_body(
@@ -2939,7 +2939,7 @@ fn build_observed_rules(
                         var: a.var.clone(),
                         output_idx_names: r.idx_names,
                         output_ranges: r.ranges,
-                        body: Rc::new(r.body),
+                        body: std::sync::Arc::new(r.body),
                         axis: r.axis,
                         max_lag: r.max_lag,
                         lag_proven: r.lag_proven,
@@ -2950,7 +2950,7 @@ fn build_observed_rules(
                     var: a.var,
                     output_idx_names: a.idx_names,
                     output_ranges: a.ranges,
-                    body: Rc::new(a.body),
+                    body: std::sync::Arc::new(a.body),
                 });
             }
             continue;
@@ -3089,7 +3089,7 @@ fn lower_algebraic_body(
         .and_then(|axes| resolve_declared_shape(axes, index_sets));
     let scalar_rule = |body: Expr| AlgebraicRule::Scalar {
         var: name.to_string(),
-        body: Rc::new(body),
+        body: std::sync::Arc::new(body),
         declared_shape: declared_shape.clone(),
     };
     let Some(target_axes) = array_axes.get(name) else {
@@ -3114,7 +3114,7 @@ fn lower_algebraic_body(
         var: name.to_string(),
         output_idx_names: loops,
         output_ranges,
-        body: Rc::new(looped),
+        body: std::sync::Arc::new(looped),
     })
 }
 

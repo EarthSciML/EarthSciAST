@@ -379,7 +379,7 @@ pub struct RhsStats {
 /// into a transient ndarray (or scalar) that the `observed_values` map
 /// exposes to downstream expressions.
 ///
-/// The body is an `Rc<Expr>`, not a `Box<Expr>`: the driver derives several
+/// The body is an `Arc<Expr>`, not a `Box<Expr>`: the driver derives several
 /// cadence-filtered rule lists from `observed_rules` (CONST / DISCRETE /
 /// CONTINUOUS subsets, the per-closure RHS/Jacobian captures, the
 /// output-pass dependency cones), and the expanded discretization bodies are
@@ -400,7 +400,7 @@ enum AlgebraicRule {
     /// keeps its declared rank however the value came out.
     Scalar {
         var: String,
-        body: Rc<Expr>,
+        body: std::sync::Arc<Expr>,
         declared_shape: Option<Vec<usize>>,
     },
     /// `var[i...] := body` — array algebraic defined via a faq over
@@ -409,7 +409,7 @@ enum AlgebraicRule {
         var: String,
         output_idx_names: Vec<String>,
         output_ranges: Vec<(i64, i64)>,
-        body: Rc<Expr>,
+        body: std::sync::Arc<Expr>,
     },
     /// `var[i…] := body`, where `body` reads `var` itself at a strictly earlier
     /// position along axis `axis` — a CAUSAL SELF-REFERENCE (esm-spec §4.3.1.1,
@@ -428,7 +428,7 @@ enum AlgebraicRule {
         var: String,
         output_idx_names: Vec<String>,
         output_ranges: Vec<(i64, i64)>,
-        body: Rc<Expr>,
+        body: std::sync::Arc<Expr>,
         /// Position within `output_idx_names` of the axis the recurrence folds
         /// along. Swept ascending as the OUTERMOST loop.
         axis: usize,
@@ -765,7 +765,7 @@ pub struct ArrayCompiled {
     /// ghost. `Rc` so the per-call scratch can hold the same registry without
     /// cloning the name set every step. Empty for a model with no const
     /// factors, which reads byte-identically to the pre-§5.5.5 evaluator.
-    const_scope: Rc<ConstArrayScope>,
+    const_scope: std::sync::Arc<ConstArrayScope>,
     /// The single-model namespace (the top-level `models` map key), set by
     /// [`Self::from_file`]. The raw single-model path keys params/states by their
     /// BARE variable names (`R_0`, `psi[i,j]`), but the `flatten` path and the
@@ -1151,15 +1151,15 @@ struct ConstLitInner {
     /// non-numeric literal. Recorded rather than left absent so a repeat read
     /// is still a single probe; the caller then falls back to the plain walk,
     /// which is what produces that literal's NaN sentinel.
-    map: HashMap<(usize, bool), Option<Rc<ArrayD<f64>>>>,
+    map: HashMap<(usize, bool), Option<std::sync::Arc<ArrayD<f64>>>>,
 }
 
 /// Walk an inline `const` node's JSON payload into a shared array. `None` for
 /// any payload [`eval::json_to_value`] does not read as a numeric array — a
 /// scalar, or a ragged/non-numeric one.
-fn walk_const_lit(node: &ExpressionNode) -> Option<Rc<ArrayD<f64>>> {
+fn walk_const_lit(node: &ExpressionNode) -> Option<std::sync::Arc<ArrayD<f64>>> {
     match node.value.as_ref().map(eval::json_to_value) {
-        Some(Some(Value::Array(a))) => Some(Rc::new(*a)),
+        Some(Some(Value::Array(a))) => Some(std::sync::Arc::new(*a)),
         _ => None,
     }
 }
@@ -1179,7 +1179,7 @@ impl ConstLitMemo {
     /// The materialized array for the inline `const` literal `node`, computing
     /// (and remembering) it on the first read. `None` for a scalar or malformed
     /// payload, which the caller handles exactly as an un-memoized walk would.
-    pub(super) fn get(&self, node: &ExpressionNode) -> Option<Rc<ArrayD<f64>>> {
+    pub(super) fn get(&self, node: &ExpressionNode) -> Option<std::sync::Arc<ArrayD<f64>>> {
         let k = (
             node as *const ExpressionNode as usize,
             crate::precision::active().is_f32(),
@@ -1199,7 +1199,7 @@ impl ConstLitMemo {
 pub(super) fn const_lit_array(
     node: &ExpressionNode,
     memo: Option<&ConstLitMemo>,
-) -> Option<Rc<ArrayD<f64>>> {
+) -> Option<std::sync::Arc<ArrayD<f64>>> {
     match memo {
         Some(m) => m.get(node),
         None => walk_const_lit(node),

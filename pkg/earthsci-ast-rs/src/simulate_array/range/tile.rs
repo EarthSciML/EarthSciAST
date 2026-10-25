@@ -341,7 +341,7 @@ pub(super) fn as_loop(rule: &AlgebraicRule) -> Option<AlgebraicRule> {
         var: var.clone(),
         output_idx_names: out.clone(),
         output_ranges: bounds,
-        body: Rc::new(node.expr.as_deref()?.clone()),
+        body: std::sync::Arc::new(node.expr.as_deref()?.clone()),
     })
 }
 
@@ -522,7 +522,7 @@ pub(super) fn clip_rules(
                     var: var.clone(),
                     output_idx_names: output_idx_names.clone(),
                     output_ranges: output_ranges.clone(),
-                    body: Rc::new(new_body),
+                    body: std::sync::Arc::new(new_body),
                 });
             }
             AlgebraicRule::Recurrence { axis, .. } if dependent.contains(var) && info.is_cut() => {
@@ -594,7 +594,7 @@ pub(super) fn shell(
         init_faqs: Vec::new(),
         ic_scope: Default::default(),
         index_sets: compiled.index_sets.clone(),
-        const_scope: Rc::clone(&compiled.const_scope),
+        const_scope: std::sync::Arc::clone(&compiled.const_scope),
         namespace: compiled.namespace.clone(),
         precision: compiled.precision.clone(),
         declared_names: compiled.declared_names.clone(),

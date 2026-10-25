@@ -713,7 +713,7 @@ impl RhsProgram {
             Some(t) => WsExec::Tape(Box::new(TapeCtx::new(Arc::clone(t)))),
             None => {
                 let mut s = RhsScratch::new(&self.compiled.var_shapes);
-                s.set_const_arrays(Rc::clone(&self.compiled.const_scope));
+                s.set_const_arrays(Arc::clone(&self.compiled.const_scope));
                 WsExec::Scratch(Box::new(s))
             }
         };

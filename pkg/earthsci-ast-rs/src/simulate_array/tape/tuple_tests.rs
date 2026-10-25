@@ -432,7 +432,7 @@ fn a_tuple_gather_from_an_empty_const_axis_is_refused_under_any_policy() {
             .push(json!({"lhs": "C", "rhs": cnst(json!([]))}));
         let mut compiled = super::array_tests::compile(doc);
         let scope: ConstArrayScope = (*compiled.const_scope).clone();
-        compiled.const_scope = std::rc::Rc::new(scope.with_boundary("C", vec![kind]));
+        compiled.const_scope = std::sync::Arc::new(scope.with_boundary("C", vec![kind]));
         let refused = agrees_or_refuses(&compiled, &both_branches(), &states());
         assert!(!refused.is_empty(), "{kind:?}");
     }

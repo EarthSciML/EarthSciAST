@@ -446,6 +446,12 @@ pub(in crate::simulate_array::tape) struct AsmPart {
 
 // SAFETY: a part's source is only read, by every share of its assembly.
 unsafe impl Sync for AsmPart {}
+// SAFETY: a part's source is an address into the slab or state of the call
+// that resolved it. The parts are cleared and rebuilt before each split
+// assembly reads them, and nothing reads them after the call returns, so
+// moving the executor that keeps them to another thread between calls cannot
+// carry a live borrow with it.
+unsafe impl Send for AsmPart {}
 
 impl AsmPart {
     pub(super) fn new(region: u32, dbase: i64, src: Rv) -> Self {
