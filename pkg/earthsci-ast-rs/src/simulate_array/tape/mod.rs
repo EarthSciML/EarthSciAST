@@ -104,7 +104,7 @@ pub(crate) use ir::*;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use lower::StandaloneError;
 use lower::build_tape_program;
-pub(crate) use lower::{TileAxisDom, TileLowering};
+pub(crate) use lower::{TileAxisDom, TileLowering, TileObserved, TilePiece};
 #[cfg(not(target_arch = "wasm32"))]
 pub(in crate::simulate_array) use lower::{collect_variable_names, eval_standalone_rule};
 
