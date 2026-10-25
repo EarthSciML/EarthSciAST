@@ -1260,7 +1260,9 @@ reading that as a gap.
 | `reference_graph` | type | `ReferenceGraph` | `ReferenceGraph` | `ReferenceGraph` | `ReferenceGraph` | `ReferenceGraph` |
 | `reference_resolution_error` | error | `ReferenceResolutionError` | `ReferenceResolutionError` | `ReferenceResolutionError` | `ReferenceError` / `ReferenceResolutionError` | `ReferenceResolutionError` |
 | `reference_vertex` | type | `ReferenceVertex` | `ReferenceVertex` | `ReferenceVertex` | `ReferenceVertex` | `ReferenceVertex` |
+| `reject_solver_external_pre_v13` | function | `reject_solver_external_pre_v13` | `rejectSolverExternalPreV13` | `reject_solver_external_pre_v13` | `reject_solver_external_pre_v13` | `RejectSolverExternalPreV13` |
 | `reject_solver_pre_v11` | function | `reject_solver_pre_v11` | `rejectSolverPreV11` | `reject_solver_pre_v11` | `reject_solver_pre_v11` | `RejectSolverPreV11` |
+| `reject_solver_time_span_pre_v13` | function | `reject_solver_time_span_pre_v13` | `rejectSolverTimeSpanPreV13` | `reject_solver_time_span_pre_v13` | `reject_solver_time_span_pre_v13` | `RejectSolverTimeSpanPreV13` |
 | `reject_template_imports_pre_v08` | function | `reject_template_imports_pre_v08` | `rejectTemplateImportsPreV08` | `reject_template_imports_pre_v08` | `reject_template_imports_pre_v08` | `RejectTemplateImportsPreV08` |
 | `remove_coupling` | function | `remove_coupling` | `removeCoupling` | `remove_coupling` / `remove_coupling_from_file` | `remove_coupling` | `RemoveCoupling` |
 | `remove_reaction` | function | `remove_reaction` | `removeReaction` | `remove_reaction` / `remove_reaction_from_system` | `remove_reaction` | `RemoveReaction` |
@@ -1268,9 +1270,11 @@ reading that as a gap.
 | `remove_variable` | function | `remove_variable` | `removeVariable` | `remove_variable` / `remove_variable_from_model` | `remove_variable` | `RemoveVariable` |
 | `resolve_references` | function | `resolve_references` | `resolveReferences` | `resolve_references` | `resolve_references` | `ResolveReferences` |
 | `resolve_subsystem_refs` | function | `resolve_subsystem_refs!` | `resolveSubsystemRefs` | `resolve_subsystem_refs` | `resolve_subsystem_refs` | `ResolveSubsystemRefs` |
+| `resolve_time_span` | function | `resolve_time_span` | `resolveTimeSpan` | `resolve_time_span` | `resolve_time_span` | `ResolveTimeSpan` |
 | `sampled_parameters` | function | `sampled_parameters` | `sampledParameters` | `sampled_parameters` | `sampled_parameters` | `SampledParameters` |
 | `schema_version` | constant | `SCHEMA_VERSION` | `SCHEMA_VERSION` | `SCHEMA_VERSION` | `SCHEMA_VERSION` | `SchemaVersion` |
 | `simplify` | function | `simplify` | `simplify` | `simplify` | `simplify` | `Simplify` |
+| `solver_external_location` | function | `solver_external_location` | `solverExternalLocation` | `solver_external_location` | `solver_external_location` | `SolverExternalLocation` |
 | `stoichiometric_matrix` | function | `stoichiometric_matrix` | `stoichiometricMatrix` | `stoichiometric_matrix` | `stoichiometric_matrix` | `StoichiometricMatrix` |
 | `substitute` | function | `substitute` | `substitute` | `substitute` | `substitute` | `Substitute` |
 | `supported_migration_targets` | function | `supported_migration_targets` | `getSupportedMigrationTargets` / `supportedMigrationTargets` | `supported_migration_targets` | `get_supported_migration_targets` / `supported_migration_targets` | `SupportedMigrationTargets` |
@@ -1348,6 +1352,7 @@ reading that as a gap.
 | `resolve_template_machinery` | function | `resolve_template_machinery` | `resolveTemplateMachinery` | `resolve_template_machinery` | `resolve_template_machinery` | – |
 | `resolve_tolerances` | function | `resolve_tolerances` | `resolveTolerances` | `resolve_tolerances` | `resolve_tolerances` | – |
 | `solver` | type | `Solver` | – | `Solver` | `Solver` | `Solver` |
+| `solver_time_span` | type | `SolverTimeSpan` | – | `SolverTimeSpan` | `SolverTimeSpan` | `SolverTimeSpan` |
 | `species` | type | `Species` | – | `Species` | `Species` | `Species` |
 | `substitute_in_model` | function | – | `substituteInModel` | `substitute_in_model` | `substitute_in_model` | `SubstituteInModel` |
 | `substitute_in_reaction_system` | function | – | `substituteInReactionSystem` | `substitute_in_reaction_system` | `substitute_in_reaction_system` | `SubstituteInReactionSystem` |
@@ -1509,6 +1514,7 @@ reading that as a gap.
 | `sweep_range` | type | – | – | – | `SweepRange` | `SweepRange` |
 | `system_kind` | type | – | `SystemKind` | – | `SystemKind` | – |
 | `temporal_domain` | type | – | – | `TemporalDomain` | – | `TemporalDomain` |
+| `time_point` | type | – | – | – | `TimePoint` | `TimePoint` |
 | `time_span` | type | – | – | – | `TimeSpan` | `TimeSpan` |
 | `to_julia_code` | function | `to_julia_code` | – | `to_julia_code` | – | – |
 | `tolerance` | type | – | – | – | `Tolerance` | `Tolerance` |

@@ -1,0 +1,59 @@
+{
+  "esm": "1.3.0",
+  "metadata": {
+    "name": "SolverExternalOnly",
+    "description": "A `solver` block holding ONLY `external` (esm-spec §2.2.6). It is not an empty block, so the §2.2 normalization of `\"solver\": {}` to absence does not apply: the block survives `parse -> emit` with `external` verbatim. A binding whose empty test forgets `external` drops it here.",
+    "authors": [
+      "EarthSciML Test Suite"
+    ],
+    "created": "2026-10-24T00:00:00Z",
+    "tags": [
+      "solver",
+      "external",
+      "run-configuration",
+      "empty-block-rule"
+    ]
+  },
+  "solver": {
+    "external": "../runs/decay.run.json"
+  },
+  "models": {
+    "Decay": {
+      "variables": {
+        "A": {
+          "type": "unknown",
+          "units": "mol/m^3",
+          "default": 2.0
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.5
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "A"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "neg",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "k",
+                  "A"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

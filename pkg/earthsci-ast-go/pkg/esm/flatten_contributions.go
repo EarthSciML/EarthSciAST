@@ -97,11 +97,24 @@ func (e FlattenedEquation) Body() Expression {
 	return e.RHS
 }
 
+// contributionList is e's contribution list, or — when it is empty, as on an
+// equation built outside flatten — the one contribution `Body()` with no
+// origins, so every pass reads a list that folds to the equation's sum.
+func (e FlattenedEquation) contributionList() []Contribution {
+	if len(e.Contributions) == 0 {
+		return []Contribution{{Expr: e.Body(), Origins: []TermOrigin{}}}
+	}
+	return e.Contributions
+}
+
 // equationFrom is eq with a new contribution list, its right-hand side REBUILT
 // from that list (left fold, re-wrapped in the lift's `faq` when eq is lifted)
 // and its left-hand side replaced by lhs. Every flatten pass that rewrites an
 // equation goes through here, so no term moves across a contribution boundary.
 func equationFrom(eq FlattenedEquation, contributions []Contribution, lhs Expression) FlattenedEquation {
+	if len(contributions) == 0 {
+		contributions = eq.contributionList()
+	}
 	body := foldContributions(contributions)
 	rhs := body
 	if eq.Lifted {
@@ -119,8 +132,9 @@ func equationFrom(eq FlattenedEquation, contributions []Contribution, lhs Expres
 // mapContributions is eq with f applied inside every contribution, origins
 // unchanged, and its left-hand side replaced by lhs.
 func mapContributions(eq FlattenedEquation, f func(Expression) Expression, lhs Expression) FlattenedEquation {
-	out := make([]Contribution, len(eq.Contributions))
-	for i, c := range eq.Contributions {
+	in := eq.contributionList()
+	out := make([]Contribution, len(in))
+	for i, c := range in {
 		out[i] = Contribution{Expr: f(c.Expr), Origins: c.Origins}
 	}
 	return equationFrom(eq, out, lhs)

@@ -13,7 +13,9 @@ contribution expressions. The right-hand side is always BUILT from the list
 ([`_fold_contributions`](@ref)), and every pass that rewrites a flattened
 equation does so inside each contribution and rebuilds
 ([`_rewrite_contributions`](@ref)), so no term moves across a contribution
-boundary.
+boundary. A public pass over a caller-supplied `FlattenedSystem` first checks
+the list against the current equations ([`_flat_contributions`](@ref)): the
+right-hand side is authoritative over a stale list.
 """
 
 """
@@ -179,6 +181,54 @@ _unattributed_contributions(equations::AbstractVector{Equation},
                                                    TermOrigin[])]
                          for eq in equations]
 
+"""Structural equality of two expressions: identity, else their serialized forms."""
+_same_expr(a::ASTExpr, b::ASTExpr)::Bool =
+    a === b || _stable_json(serialize_expression(a)) == _stable_json(serialize_expression(b))
+
+"""True when `contributions` still fold to `body` (the sum the equation carries now)."""
+function _folds_to(contributions::AbstractVector{Contribution}, body::ASTExpr)::Bool
+    length(contributions) == 1 && return _same_expr(contributions[1].expr, body)
+    if body isa OpExpr && body.op == "+" && length(body.args) == length(contributions)
+        all(i -> body.args[i] === contributions[i].expr, eachindex(contributions)) && return true
+    end
+    return _same_expr(_fold_contributions(contributions), body)
+end
+
+"""
+    _flat_contributions(flat) -> Vector{Vector{Contribution}}
+
+The contribution lists of a caller-supplied `flat`, checked against its current
+equations before a public pass rebuilds right-hand sides from them. `equations`
+and `equation_contributions` are mutable vectors, so a caller can edit one
+without the other after `flatten`:
+
+- a length mismatch (an equation pushed or deleted without its list) is an
+  `ArgumentError`, never a silent truncation;
+- an empty list is one contribution, the equation's body, with no origins;
+- a list that no longer folds to the equation's body (the caller replaced the
+  equation) collapses to ONE contribution whose expression is the current body
+  and whose origins are the list's union — the right-hand side is authoritative,
+  and rebuilding it from the stale list would revert the caller's edit.
+"""
+function _flat_contributions(flat)::Vector{Vector{Contribution}}
+    eqs = flat.equations
+    lists = flat.equation_contributions
+    length(eqs) == length(lists) || throw(ArgumentError(
+        "the flattened system has $(length(eqs)) equations but " *
+        "$(length(lists)) equation_contributions entries; the two are parallel " *
+        "(esm-libraries-spec §4.7.5) — add or remove an equation through the " *
+        "`FlattenedSystem(flat; equations=…, equation_contributions=…)` copy constructor"))
+    out = Vector{Vector{Contribution}}(undef, length(eqs))
+    for i in eachindex(eqs)
+        eq, cs = eqs[i], lists[i]
+        body = _contribution_body(eq, _is_lifted(eq, flat.lifted_shapes))
+        out[i] = isempty(cs) ? Contribution[Contribution(body, TermOrigin[])] :
+                 _folds_to(cs, body) ? cs :
+                 Contribution[Contribution(body, _union_origins(cs))]
+    end
+    return out
+end
+
 """
     _rewrite_flat_equations(f, flat; lhs_rewrite=f) -> (equations, equation_contributions)
 
@@ -192,7 +242,7 @@ constructor.
 function _rewrite_flat_equations(f, flat; lhs_rewrite=f)
     eqs = Equation[]
     contribs = Vector{Contribution}[]
-    for (eq, cs) in zip(flat.equations, flat.equation_contributions)
+    for (eq, cs) in zip(flat.equations, _flat_contributions(flat))
         rewritten, new_cs = _rewrite_contributions(f, eq, cs, _is_lifted(eq, flat.lifted_shapes))
         lhs = lhs_rewrite(eq.lhs)
         push!(eqs, lhs === eq.lhs ? rewritten :

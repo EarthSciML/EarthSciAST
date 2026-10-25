@@ -773,6 +773,7 @@ impl RhsProgram {
                     &RhsCall {
                         rhs_rules: &self.compiled.rhs_rules,
                         observed_rules: &self.compiled.observed_rules,
+                        rule_set: self.compiled.rule_set,
                         var_shapes: &self.compiled.var_shapes,
                         param_names: &self.compiled.param_names,
                         state: &ws.state,

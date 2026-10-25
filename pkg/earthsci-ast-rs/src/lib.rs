@@ -302,10 +302,14 @@ pub use template_imports::{
     apply_scope_injections, is_template_library_doc, reject_template_imports_pre_v08,
     resolve_template_machinery,
 };
-// Document-scoped solver hints (esm-spec §2.2): the spec-version gate and the
-// §2.2.2 tolerance resolution order — the two parts of the block that are NOT
+// Document-scoped solver hints (esm-spec §2.2): the spec-version gates, the
+// §2.2.2 tolerance resolution order, the §2.2.6 `solver.external` location and
+// the §2.2.7 `solver.time_span` interval — the parts of the block that are NOT
 // advisory.
-pub use solver::{reject_solver_pre_v11, resolve_tolerances};
+pub use solver::{
+    reject_solver_external_pre_v13, reject_solver_pre_v11, reject_solver_time_span_pre_v13,
+    resolve_time_span, resolve_tolerances, solver_external_location,
+};
 pub use types::{
     AffectEquation, AutoRecords, ContinuousEvent, Coordinate, CouplingEntry, CouplingRole,
     CovarianceMatrix, DaeInfo, DataSource, DataSourceBinding, DataSourceDeterminism,
@@ -314,8 +318,9 @@ pub use types::{
     EsmFile, Expr, ExpressionNode, FunctionalUpdate, InlineValue, Metadata, Model, ModelAnalysis,
     ModelTest, ModelTestAssertion, ModelVariable, Operator, ParameterSweep, ParameterUpdate,
     ParameterUpdateSpec, Plot, PlotAxis, PlotSeries, PlotValue, PlotY, Reaction, ReactionSystem,
-    RecordsPerFile, RegionBound, Solver, Species, StoichiometricEntry, SweepDimension, SweepRange,
-    TimeSpan, Tolerance, UnitConversion, UpdateValue, VariableMapTransform, VariableType,
+    RecordsPerFile, RegionBound, Solver, SolverTimeSpan, Species, StoichiometricEntry,
+    SweepDimension, SweepRange, TimePoint, TimeSpan, Tolerance, UnitConversion, UpdateValue,
+    VariableMapTransform, VariableType,
 };
 pub use validate::{
     SchemaError, StructuralError, StructuralErrorCode, UnitWarning, ValidationResult, validate,
@@ -420,7 +425,7 @@ pub const LIBRARY_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// version in `esm-schema.json`'s `$id` / esm-spec.md; the
 /// `schema_version_matches_bundled_schema` test enforces it, and
 /// `parse::library_version()` (major-compat gating) derives from it.
-pub const SCHEMA_VERSION: &str = "1.2.0";
+pub const SCHEMA_VERSION: &str = "1.3.0";
 
 #[cfg(test)]
 mod version_tests {

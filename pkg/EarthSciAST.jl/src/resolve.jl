@@ -413,8 +413,19 @@ function _load_parsed(raw_data; base_path::AbstractString=pwd(),
     # Top-level `expression_templates` beside a component payload is a
     # template-library payload no component can see (esm-spec §9.7.1).
     _reject_impure_template_library(raw_data)
-    # The top-level `solver` block arrives at esm 1.1.0 (esm-spec §2.2.4).
+    # The top-level `solver` block arrives at esm 1.1.0 (esm-spec §2.2.4), and
+    # its `external` and `time_span` at 1.3.0; the older, outer gate runs
+    # first. A `${` in `external` is refused right after (§2.2.6), then a
+    # `time_span` that is no interval (§2.2.7). The checks on both fields are
+    # the ROOT's alone: a mounted leaf's `solver` block does not cross the
+    # mount (§2.2.6 "Mounting", §2.2.7 "Mounting", §4.7).
     reject_solver_pre_v11(raw_data)
+    if !mounted_leaf
+        reject_solver_external_pre_v13(raw_data)
+        reject_solver_time_span_pre_v13(raw_data)
+        _reject_solver_external_unresolved(raw_data)
+        _reject_solver_time_span_invalid(raw_data)
+    end
     # Declared `units` on a `const` node arrive at esm 1.2.0 (esm-spec §4.8.5).
     reject_const_units_pre_v12(raw_data)
 
@@ -577,7 +588,7 @@ function _lower_and_coerce(raw_data, base_path::AbstractString;
     # carries over into the typed IR as shared `OpExpr` nodes — which the
     # build-time `IdDict` memo caches (tree_walk/compile.jl) then exploit.
     file = task_local_storage(_PARSE_EXPR_MEMO_KEY, IdDict{Any,ASTExpr}()) do
-        coerce_esm_file(expanded)
+        coerce_esm_file(expanded; document_base=_solver_external_base(base_path))
     end
     return _with_declarations(file, raw_templates, raw_metaparams;
                               component_templates=comp_tpls, esm=esm_stamp,
@@ -622,7 +633,8 @@ _with_declarations(file::EsmFile, templates, metaparams;
             # carried the same way — dropping it here would delete the block on
             # every document that goes through template lowering.
             coupling_roles=file.coupling_roles,
-            solver=file.solver)
+            solver=file.solver,
+            document_base=file.document_base)
 
 # ========================================
 # Top-level model {ref} resolution (schema §4.7: models.* = oneOf [Model, {ref}])
@@ -2272,7 +2284,9 @@ function _load_remote_ref(url::String, visited::Set{String}=Set{String}();
 
     reject_expression_templates_pre_v04(raw_data)
     reject_template_imports_pre_v08(raw_data)
-    # The top-level `solver` block arrives at esm 1.1.0 (esm-spec §2.2.4).
+    # The top-level `solver` block arrives at esm 1.1.0 (esm-spec §2.2.4). Its
+    # `external` and `time_span` are not checked: a mounted leaf's `solver`
+    # block does not cross the mount (§2.2.6 "Mounting", §2.2.7, §4.7).
     reject_solver_pre_v11(raw_data)
     # Declared `units` on a `const` node arrive at esm 1.2.0 (esm-spec §4.8.5).
     reject_const_units_pre_v12(raw_data)

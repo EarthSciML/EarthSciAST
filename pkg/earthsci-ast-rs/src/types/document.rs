@@ -40,8 +40,9 @@ pub struct EsmFile {
     pub coordinates: Option<IndexMap<String, Coordinate>>,
 
     /// Document-scoped, OPTIONAL and purely ADVISORY solver hints
-    /// (esm-spec §2.2): stiffness, integration tolerances and a splitting hint
-    /// the document knows about itself.
+    /// (esm-spec §2.2): stiffness, integration tolerances, a splitting hint,
+    /// a reference to an external run configuration (§2.2.6) and the interval
+    /// to simulate over (§2.2.7) the document knows about itself.
     ///
     /// Purely additive — presence changes no equations, no classification and
     /// no flattened system. It is authored configuration, so it round-trips
@@ -154,6 +155,22 @@ pub struct EsmFile {
     /// `#[serde(skip)]` keeps it out of both directions.
     #[serde(default, skip)]
     pub coupling_import_base: Option<String>,
+
+    /// The absolute directory of the file this document was read from, the
+    /// explicit base a load was given, or the process working directory at
+    /// load for a string or document load without one; `None` for a document
+    /// built in memory (or a directory that is not UTF-8).
+    ///
+    /// The anchor for every verbatim relative reference a consumer resolves
+    /// after load rather than the loader rewriting it — `solver.external`
+    /// (esm-spec §2.2.6) resolves against it through
+    /// [`crate::solver_external_location`], falling back to the process working
+    /// directory when it is `None`. Recorded with dot segments removed and
+    /// never through `realpath`.
+    ///
+    /// NOT a wire field: `#[serde(skip)]` keeps it out of both directions.
+    #[serde(default, skip)]
+    pub document_base: Option<String>,
 }
 
 /// The empty document: every optional section absent, `esm` set to
@@ -182,6 +199,7 @@ impl Default for EsmFile {
             function_tables: None,
             component_templates: None,
             coupling_import_base: None,
+            document_base: None,
         }
     }
 }

@@ -30,7 +30,7 @@ use std::path::{Component, Path, PathBuf};
 /// esm-spec §8.2.1 requires the `://` (rather than a bare `scheme:`) so that a
 /// Windows drive letter and a `{date:%Y}` substitution are both read as path
 /// text, not as a scheme.
-fn is_scheme_led(template: &str) -> bool {
+pub(crate) fn is_scheme_led(template: &str) -> bool {
     let Some(idx) = template.find("://") else {
         return false;
     };

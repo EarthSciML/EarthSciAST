@@ -26,7 +26,7 @@ Spelled `ESM_FORMAT_VERSION` until the bindings converged: TypeScript, Rust and
 Go all called this `SCHEMA_VERSION`, and Julia was the only one that did not.
 NOT the version of this PACKAGE — that is [`LIBRARY_VERSION`](@ref).
 """
-const SCHEMA_VERSION = "1.2.0"
+const SCHEMA_VERSION = "1.3.0"
 
 """
     LIBRARY_VERSION
@@ -1319,10 +1319,33 @@ struct TimeSpan
 end
 
 """
-    Solver(; stiffness=nothing, abstol=nothing, reltol=nothing, splitting=nothing)
+    SolverTimeSpan(start, stop)
+
+The `solver.time_span` interval (esm-spec §2.2.7): the period the document is
+meant to be simulated over. Each bound is what the author wrote — a number in
+the document's time units (seconds; an `Int64` when written as an integer, else
+a `Float64`), or an RFC 3339 UTC timestamp `String` — so `emit` writes it back
+unchanged. Its value in seconds comes from
+[`resolve_time_span`](@ref). The wire key `end` is spelled `stop` here, as in
+[`TimeSpan`](@ref), because `end` is a Julia keyword.
+"""
+struct SolverTimeSpan
+    start::Union{Int64,Float64,String}
+    stop::Union{Int64,Float64,String}
+end
+
+"""
+    Solver(; stiffness=nothing, abstol=nothing, reltol=nothing, splitting=nothing,
+           external=nothing, time_span=nothing)
 
 Document-scoped, OPTIONAL solver hints (esm-spec §2.2) — numerics the document
-knows about *itself*, which each binding maps to its own integrator.
+knows about *itself*, which each binding maps to its own integrator — plus
+`external`, a reference to a run-configuration document, and `time_span`, the
+interval the document asks to be simulated over (both esm 1.3.0). The
+authored `external` string is what the type holds and what `emit` writes; where
+it points comes from [`solver_external_location`](@ref) (§2.2.6). Likewise
+`time_span` holds the authored bounds, and [`resolve_time_span`](@ref) converts
+them to seconds (§2.2.7).
 
 Every field is ADVISORY: a binding may ignore any or all of them and still
 conform. Advisory governs the MECHANISM, never the OUTCOME — a binding that
@@ -1344,9 +1367,12 @@ struct Solver
     abstol::Union{Float64,Nothing}
     reltol::Union{Float64,Nothing}
     splitting::Union{String,Nothing}
+    external::Union{String,Nothing}
+    time_span::Union{SolverTimeSpan,Nothing}
 
-    Solver(; stiffness=nothing, abstol=nothing, reltol=nothing, splitting=nothing) =
-        new(stiffness, abstol, reltol, splitting)
+    Solver(; stiffness=nothing, abstol=nothing, reltol=nothing, splitting=nothing,
+           external=nothing, time_span=nothing) =
+        new(stiffness, abstol, reltol, splitting, external, time_span)
 end
 
 """
@@ -2309,6 +2335,15 @@ struct EsmFile
     # declares none, which is NOT a synonym for any default value.
     solver::Union{Solver,Nothing}
 
+    # The absolute, dot-segment-free directory a relative `solver.external`
+    # resolves against (esm-spec §2.2.6 *D*), recorded at load: the directory of
+    # the file read, or the base a string / in-memory load was given or
+    # defaulted to (the working directory). NOT a wire field — it is never
+    # emitted, as the other bindings' `document_base` is not — and `nothing` for
+    # a document built in memory, which resolves against the working directory
+    # at call time.
+    document_base::Union{String,Nothing}
+
     # Constructor with optional parameters
     EsmFile(esm::String, metadata::Metadata;
             models=nothing,
@@ -2324,7 +2359,8 @@ struct EsmFile
             component_templates=nothing,
             coordinates=nothing,
             coupling_roles=nothing,
-            solver=nothing) =
+            solver=nothing,
+            document_base=nothing) =
         new(esm, metadata,
             models === nothing ? nothing : OrderedDict{String,Model}(models),
             reaction_systems === nothing ? nothing :
@@ -2337,7 +2373,7 @@ struct EsmFile
             expression_templates, metaparameters,
             component_templates === nothing ? nothing :
                 OrderedDict{String,Any}(component_templates),
-            coordinates, coupling_roles, solver)
+            coordinates, coupling_roles, solver, document_base)
 end
 
 # ========================================

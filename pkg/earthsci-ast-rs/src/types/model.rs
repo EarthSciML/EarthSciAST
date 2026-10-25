@@ -210,6 +210,45 @@ pub struct Solver {
     /// `"strang"`. Carries no prescribed substep structure.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub splitting: Option<String>,
+
+    /// Reference to an external run-configuration document (esm-spec §2.2.6),
+    /// held exactly as authored. EarthSciAST never opens it; the resolved
+    /// location comes from [`crate::solver_external_location`] and is never
+    /// written back. Arrives at esm 1.3.0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external: Option<String>,
+
+    /// The interval the document is meant to be simulated over (esm-spec
+    /// §2.2.7), held exactly as authored: a timestamp stays the string and a
+    /// number stays the number written. Its value in binary64 seconds comes
+    /// from [`crate::resolve_time_span`] and is never written back. Arrives at
+    /// esm 1.3.0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_span: Option<SolverTimeSpan>,
+}
+
+/// `solver.time_span` (esm-spec §2.2.7): the `{start, end}` shape of
+/// `tests[].time_span` ([`TimeSpan`]), except that each bound may also be an
+/// RFC 3339 UTC timestamp, so it is a separate type rather than `f64` bounds.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SolverTimeSpan {
+    /// Beginning of the interval.
+    pub start: TimePoint,
+    /// End of the interval; after `start` once both are converted to seconds.
+    pub end: TimePoint,
+}
+
+/// One bound of a [`SolverTimeSpan`], kept in its authored form.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum TimePoint {
+    /// Seconds of the independent variable, in the document's time units. A
+    /// [`serde_json::Number`] so an integer bound emits as the integer written.
+    Seconds(serde_json::Number),
+    /// An RFC 3339 UTC timestamp (`YYYY-MM-DDThh:mm:ss(.f+)?Z`): seconds from
+    /// the document's time origin to that instant, counted as POSIX time.
+    Timestamp(String),
 }
 
 /// One entry of the document-scoped [`EsmFile::coordinates`] registry

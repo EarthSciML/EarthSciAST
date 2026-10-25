@@ -81,11 +81,14 @@ pub(super) fn select(
     let mut out = flat.clone();
     let mut equations = Vec::new();
     let mut contributions = Vec::new();
+    let mut lifted_flags = Vec::new();
     for (i, eq) in flat.equations.iter().enumerate() {
         let contribs = &flat.equation_contributions[i];
+        let lifted = flat.equation_lifted.get(i).copied().unwrap_or(false);
         let Some(target) = derivative_target(&eq.lhs) else {
             equations.push(eq.clone());
             contributions.push(contribs.clone());
+            lifted_flags.push(lifted);
             continue;
         };
         let kept: Vec<_> = contribs
@@ -105,11 +108,12 @@ pub(super) fn select(
             }
             continue;
         }
-        let wrapper = lift_wrapper(&eq.rhs, contribs);
+        let wrapper = lift_wrapper(&eq.rhs, lifted).cloned();
         let mut eq = eq.clone();
         eq.rhs = rebuild_body(wrapper, fold_contributions(&kept));
         equations.push(eq);
         contributions.push(kept);
+        lifted_flags.push(lifted);
     }
 
     // The cone of what the kept derivatives read, closed through the
@@ -140,7 +144,8 @@ pub(super) fn select(
     }
     let mut kept_eqs = Vec::new();
     let mut kept_contribs = Vec::new();
-    for (eq, c) in equations.into_iter().zip(contributions) {
+    let mut kept_lifted = Vec::new();
+    for ((eq, c), lifted) in equations.into_iter().zip(contributions).zip(lifted_flags) {
         let keep = match derivative_target(&eq.lhs) {
             Some(_) => true,
             None => defined_name(&eq.lhs).is_none_or(|n| cone.contains(n)),
@@ -148,10 +153,14 @@ pub(super) fn select(
         if keep {
             kept_eqs.push(eq);
             kept_contribs.push(c);
+            kept_lifted.push(lifted);
         }
     }
     out.equations = kept_eqs;
     out.equation_contributions = kept_contribs;
+    if !out.equation_lifted.is_empty() {
+        out.equation_lifted = kept_lifted;
+    }
     out.state_variables
         .retain(|name, _| writes.contains(name) || cone.contains(name));
     out.observed_variables.retain(|name, _| cone.contains(name));

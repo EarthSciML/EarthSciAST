@@ -1,0 +1,62 @@
+{
+  "esm": "1.3.0",
+  "metadata": {
+    "name": "SolverTimeSpan_leaf_reversed",
+    "description": "A leaf whose `time_span` is reversed. Loaded on its own it is refused with `solver_time_span_invalid`; mounted, its block does not cross the edge, so the check does not apply to it.",
+    "authors": [
+      "EarthSciML Test Suite"
+    ],
+    "license": "MIT",
+    "tags": [
+      "solver",
+      "time_span",
+      "mount",
+      "leaf"
+    ]
+  },
+  "solver": {
+    "time_span": {
+      "start": 99,
+      "end": 0
+    }
+  },
+  "models": {
+    "LeafDecay": {
+      "variables": {
+        "A": {
+          "type": "unknown",
+          "units": "mol/m^3",
+          "default": 2.0
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.5
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "A"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "neg",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "k",
+                  "A"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

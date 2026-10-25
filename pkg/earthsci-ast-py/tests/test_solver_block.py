@@ -209,3 +209,71 @@ def test_a_declared_zero_abstol_is_not_swallowed_by_the_stepping_api(tmp_path: P
     integ = init(prob)
     assert integ.abstol == 0.0
     assert integ.reltol == DEFAULT_RELTOL
+
+
+def test_a_block_holding_only_external_is_not_empty(tmp_path: Path) -> None:
+    """§2.2: ``external`` alone is a declared block, so it survives ``parse -> emit``."""
+    f = _load({**BASE, "esm": "1.3.0", "solver": {"external": "runs/x.run.json"}}, tmp_path)
+    assert f.solver is not None
+    assert f.solver.external == "runs/x.run.json"
+    assert json.loads(to_json(f))["solver"] == {"external": "runs/x.run.json"}
+
+
+@pytest.mark.parametrize(
+    ("version", "code"),
+    [
+        ("1.0.0", "solver_version_too_old"),
+        ("1.1.0", "solver_external_version_too_old"),
+        ("1.2.0", "solver_external_version_too_old"),
+    ],
+)
+def test_external_is_rejected_below_esm_1_3_0(tmp_path: Path, version: str, code: str) -> None:
+    """The older, outer gate runs first: below 1.1.0 the whole block is too new."""
+    with pytest.raises(SolverBlockError) as exc:
+        _load({**BASE, "esm": version, "solver": {"external": "x.run.json"}}, tmp_path)
+    assert exc.value.code == code
+    if code == "solver_external_version_too_old":
+        assert "/solver/external" in str(exc.value)
+
+
+def test_a_block_without_external_stays_valid_at_1_2_0(tmp_path: Path) -> None:
+    f = _load({**BASE, "esm": "1.2.0"}, tmp_path)
+    assert f.solver is not None and f.solver.external is None
+
+
+def test_a_block_holding_only_time_span_is_not_empty(tmp_path: Path) -> None:
+    """§2.2: ``time_span`` alone is a declared block, so it survives ``parse -> emit``."""
+    span = {"start": 0, "end": "2019-07-01T01:00:00Z"}
+    f = _load({**BASE, "esm": "1.3.0", "solver": {"time_span": span}}, tmp_path)
+    assert f.solver is not None and f.solver.time_span is not None
+    assert (f.solver.time_span.start, f.solver.time_span.end) == (0, "2019-07-01T01:00:00Z")
+    assert json.loads(to_json(f))["solver"] == {"time_span": span}
+
+
+@pytest.mark.parametrize(
+    ("version", "code"),
+    [
+        ("1.0.0", "solver_version_too_old"),
+        ("1.1.0", "solver_time_span_version_too_old"),
+        ("1.2.0", "solver_time_span_version_too_old"),
+    ],
+)
+def test_time_span_is_rejected_below_esm_1_3_0(tmp_path: Path, version: str, code: str) -> None:
+    """The older, outer gate runs first: below 1.1.0 the whole block is too new."""
+    with pytest.raises(SolverBlockError) as exc:
+        _load({**BASE, "esm": version, "solver": {"time_span": {"start": 0, "end": 1}}}, tmp_path)
+    assert exc.value.code == code
+    if code == "solver_time_span_version_too_old":
+        assert "/solver/time_span" in str(exc.value)
+
+
+def test_the_external_gate_runs_before_the_time_span_gate(tmp_path: Path) -> None:
+    solver = {"external": "x.run.json", "time_span": {"start": 0, "end": 1}}
+    with pytest.raises(SolverBlockError) as exc:
+        _load({**BASE, "esm": "1.2.0", "solver": solver}, tmp_path)
+    assert exc.value.code == "solver_external_version_too_old"
+
+
+def test_a_block_without_time_span_stays_valid_at_1_2_0(tmp_path: Path) -> None:
+    f = _load({**BASE, "esm": "1.2.0"}, tmp_path)
+    assert f.solver is not None and f.solver.time_span is None

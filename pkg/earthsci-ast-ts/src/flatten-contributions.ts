@@ -95,6 +95,17 @@ export function equationBody(eq: ContributedEquation): Expression {
 }
 
 /**
+ * `eq`'s contribution list, or — when it is empty or missing, as on an
+ * equation built outside flatten — the one contribution {@link equationBody}
+ * with no origins, so every pass reads a list that folds to the equation's sum.
+ */
+export function contributionsOf(eq: ContributedEquation): Contribution[] {
+  const list = eq.contributions as Contribution[] | undefined
+  if (list === undefined || list.length === 0) return [{ expr: equationBody(eq), origins: [] }]
+  return list
+}
+
+/**
  * `eq` with a new contribution list, its right-hand side REBUILT from that list
  * (left fold, re-wrapped in the lift's `faq` when `eq` is lifted). Every flatten
  * pass that rewrites an equation goes through here, so no term moves across a
@@ -105,6 +116,7 @@ export function equationFrom<E extends ContributedEquation>(
   contributions: Contribution[],
   lhs: Expression = eq.lhs,
 ): E {
+  if (contributions.length === 0) contributions = contributionsOf(eq)
   const body = foldContributions(contributions)
   const rhs =
     eq.lifted === true ? ({ ...(eq.rhs as ExpressionNode), expr: body } as Expression) : body
@@ -119,7 +131,7 @@ export function mapContributions<E extends ContributedEquation>(
 ): E {
   return equationFrom(
     eq,
-    eq.contributions.map((c) => ({ expr: fn(c.expr), origins: c.origins })),
+    contributionsOf(eq).map((c) => ({ expr: fn(c.expr), origins: c.origins })),
     lhs,
   )
 }

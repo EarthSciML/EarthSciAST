@@ -443,7 +443,9 @@ export
     # docs/content/rfcs/template-library-imports.md)
     resolve_template_machinery, reject_template_imports_pre_v08,
     # Document-scoped solver hints (esm-spec §2.2).
-    Solver, reject_solver_pre_v11, resolve_tolerances, coerce_solver
+    Solver, reject_solver_pre_v11, resolve_tolerances, coerce_solver,
+    reject_solver_external_pre_v13, solver_external_location,
+    SolverTimeSpan, reject_solver_time_span_pre_v13, resolve_time_span
 
 """
 Register this module's own `Unitful.@unit` definitions with Unitful.

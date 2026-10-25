@@ -16,7 +16,7 @@
 import { readdirSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { flatten, type FlattenedEquation, type FlattenedSystem } from './flatten.js'
-import { equationBody } from './flatten-contributions.js'
+import { equationBody, equationFrom, mapContributions } from './flatten-contributions.js'
 import { evaluateExpression } from './codegen.js'
 import { freeVariables } from './expression.js'
 import { toAscii } from './pretty-print.js'
@@ -178,5 +178,26 @@ describe('per-term provenance rows', () => {
     expect(eq.contributions.map(origins)).toEqual(
       ['Chem', 'Src', 'Adv'].map((component) => [{ component }]),
     )
+  })
+})
+
+describe('an equation with no contribution list', () => {
+  // Built outside flatten: it reads as ONE contribution, its rhs, with no
+  // origins (Python's FlattenedEquation default), never a TypeError.
+  const rhs = { op: '+', args: ['a', 'b'] } as const
+  const bare = { lhs: 'y', rhs, sourceSystem: 'M' } as unknown as FlattenedEquation
+
+  it('maps through the default single contribution', () => {
+    const mapped = mapContributions(bare, (e) => e)
+    expect(mapped.contributions).toEqual([{ expr: rhs, origins: [] }])
+    expect(mapped.rhs).toEqual(rhs)
+  })
+
+  it('treats an empty list the same way', () => {
+    const empty = { ...bare, contributions: [] }
+    expect(mapContributions(empty, (e) => e).contributions).toEqual([{ expr: rhs, origins: [] }])
+    const rebuilt = equationFrom(empty, [])
+    expect(rebuilt.rhs).toEqual(rhs)
+    expect(rebuilt.contributions).toEqual([{ expr: rhs, origins: [] }])
   })
 })

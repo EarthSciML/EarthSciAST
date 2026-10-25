@@ -43,6 +43,41 @@ fn an_empty_block_normalizes_to_absence() {
 
     let out: serde_json::Value = serde_json::from_str(&to_json(&f).unwrap()).unwrap();
     assert!(out.get("solver").is_none(), "and must not reach emit");
+
+    // A block holding only `external` is NOT empty (esm-spec §2.2): it
+    // survives load and round-trips as authored.
+    let f = load_string(&doc(r#""solver":{"external":"./x.run.json"},"#, "1.3.0")).unwrap();
+    assert_eq!(
+        f.solver.as_ref().and_then(|s| s.external.as_deref()),
+        Some("./x.run.json")
+    );
+    let out: serde_json::Value = serde_json::from_str(&to_json(&f).unwrap()).unwrap();
+    assert_eq!(
+        out["solver"],
+        serde_json::json!({"external": "./x.run.json"})
+    );
+}
+
+#[test]
+fn external_is_gated_at_1_3_0_and_a_dollar_brace_is_refused() {
+    for esm in ["1.1.0", "1.2.0"] {
+        let err = load_string(&doc(r#""solver":{"external":"x.run.json"},"#, esm))
+            .expect_err("external arrives at 1.3.0");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("[solver_external_version_too_old]") && msg.contains("/solver/external"),
+            "{esm}: got {msg}"
+        );
+    }
+    let err = load_string(&doc(r#""solver":{"external":"${RUNS}/x.json"},"#, "1.3.0"))
+        .expect_err("a `${` is never expanded");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("[solver_external_unresolved]")
+            && msg.contains("/solver/external")
+            && msg.contains("${RUNS}/x.json"),
+        "got {msg}"
+    );
 }
 
 #[test]

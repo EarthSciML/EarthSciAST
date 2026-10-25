@@ -1,0 +1,58 @@
+{
+  "esm": "1.3.0",
+  "metadata": {
+    "name": "SolverExternal_url_not_reencoded",
+    "description": "esm-spec §2.2.6: an `external` that is already a URL is returned exactly as authored, never encoded or decoded, so its `%20` and `%23` are not encoded a second time.",
+    "authors": [
+      "EarthSciML Test Suite"
+    ],
+    "license": "MIT",
+    "tags": [
+      "solver",
+      "external",
+      "conformance"
+    ]
+  },
+  "solver": {
+    "external": "https://example.org/runs/case%20%232.json"
+  },
+  "models": {
+    "Decay": {
+      "variables": {
+        "A": {
+          "type": "unknown",
+          "units": "mol/m^3",
+          "default": 2.0
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.5
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "A"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "neg",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "k",
+                  "A"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

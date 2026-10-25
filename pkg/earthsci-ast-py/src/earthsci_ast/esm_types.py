@@ -643,6 +643,28 @@ class Solver:
     abstol: float | None = None
     reltol: float | None = None
     splitting: str | None = None
+    # A reference to a run-configuration document (esm-spec §2.2.6), held as
+    # authored; :func:`~earthsci_ast.solver.solver_external_location` resolves it.
+    external: str | None = None
+    # The run interval the document asks for (esm-spec §2.2.7), held as
+    # authored; :func:`~earthsci_ast.solver.resolve_time_span` converts it.
+    time_span: SolverTimeSpan | None = None
+
+
+@dataclass
+class SolverTimeSpan:
+    """``solver.time_span``: the interval a document is meant to be simulated over.
+
+    Each bound is held EXACTLY as authored (esm-spec §2.2.4 requirement 2): a
+    number in the document's time units (seconds of the independent variable),
+    or an RFC 3339 UTC timestamp string (``...Z``), which means seconds from the
+    document's time origin. :func:`~earthsci_ast.solver.resolve_time_span`
+    converts both to binary64 seconds (§2.2.7); the converted value is never
+    written back into the document.
+    """
+
+    start: float | int | str
+    end: float | int | str
 
 
 @dataclass
@@ -1357,6 +1379,13 @@ class EsmFile:
     # from comparison so two loads of the same document from different
     # directories stay equal.
     coupling_import_base: str | None = field(default=None, repr=False, compare=False)
+    # The directory *D* a relative ``solver.external`` resolves against
+    # (esm-spec §2.2.6): the directory of the file read, else the explicit
+    # base, else the working directory at load. Absolute and dot-segment free.
+    # ``None`` for a document built in memory, whose *D* is the working
+    # directory when the location is asked for. Loader-only and non-compared,
+    # like ``coupling_import_base``.
+    document_base: str | None = field(default=None, repr=False, compare=False)
 
     @property
     def esm(self) -> str:

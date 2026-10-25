@@ -215,11 +215,15 @@ TEMPLATE_BODY_REFERENCES_COUPLING_REWRITTEN_VARIABLE = (
 DATA_SOURCE_URL_UNRESOLVED = "data_source_url_unresolved"
 
 # ===========================================================================
-# Solver-hint code (esm-spec §2.2.5), raised as ``SolverBlockError`` from
+# Solver-hint codes (esm-spec §2.2.5), raised as ``SolverBlockError`` from
 # ``solver.py``.
 # ===========================================================================
 
 SOLVER_VERSION_TOO_OLD = "solver_version_too_old"
+SOLVER_EXTERNAL_VERSION_TOO_OLD = "solver_external_version_too_old"
+SOLVER_EXTERNAL_UNRESOLVED = "solver_external_unresolved"
+SOLVER_TIME_SPAN_VERSION_TOO_OLD = "solver_time_span_version_too_old"
+SOLVER_TIME_SPAN_INVALID = "solver_time_span_invalid"
 
 # Declared `units` on an expression node in a document declaring esm < 1.2.0
 # (esm-spec §4.8.5), raised as ``ConstUnitsError`` from ``units.py``.

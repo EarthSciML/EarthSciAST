@@ -1036,8 +1036,10 @@ type Domain struct {
 
 // TemporalDomain represents temporal bounds
 type TemporalDomain struct {
-	Start         string  `json:"start"`
-	End           string  `json:"end"`
+	// Start and End are optional in the schema; an absent one is "" and is
+	// not emitted (an emitted "" would fail the schema's date-time format).
+	Start         string  `json:"start,omitempty"`
+	End           string  `json:"end,omitempty"`
 	ReferenceTime *string `json:"reference_time,omitempty"`
 }
 
@@ -1341,6 +1343,13 @@ type ESMFile struct {
 	// over CouplingImportOptions.BasePath. Unexported, so it never reaches the
 	// wire: the `coupling_import` entry round-trips verbatim (§10.10.3).
 	couplingImportBase string
+	// documentBase is the absolute directory `solver.external` resolves against
+	// when SolverExternalLocation is given no base (esm-spec §2.2.6): the
+	// directory of the file read, or the working directory at load for a string
+	// load. Empty for a struct built in code, which then resolves against the
+	// working directory at call time. Unexported, so it never reaches the wire:
+	// `external` round-trips verbatim.
+	documentBase string
 	// componentTemplates holds each component's `expression_templates` block
 	// as it stood AFTER import resolution and BEFORE Expand-at-build stripped
 	// it, keyed "models.<name>" / "reaction_systems.<name>" -- the same key

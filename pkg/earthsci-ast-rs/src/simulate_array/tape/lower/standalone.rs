@@ -211,6 +211,7 @@ pub(super) fn run_standalone_export(
             forcing: &forcing,
             t: 0.0,
             declared: empty_declared_names(),
+            rule_set: next_rule_set_id(),
         },
         &mut [],
         &mut RhsStats::default(),

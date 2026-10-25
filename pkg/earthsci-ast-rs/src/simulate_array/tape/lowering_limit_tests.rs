@@ -104,7 +104,7 @@ fn oracle_ab(doc: Value) -> (TapeProgram, usize) {
         .debug_new_scratch_taped()
         .expect("the tape lowers every rule");
     let mut fast_uf = super::super::RhsScratch::new(&compiled.var_shapes);
-    fast_uf.install_tape(std::rc::Rc::new(
+    fast_uf.install_tape(std::sync::Arc::new(
         taped(compiled.build_tape_opts(&HashSet::new(), None)).0,
     ));
     let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();

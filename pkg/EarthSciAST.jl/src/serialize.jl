@@ -416,6 +416,13 @@ function serialize_solver(solver::Solver)::OrderedDict{String,Any}
     solver.abstol === nothing || (block["abstol"] = solver.abstol)
     solver.reltol === nothing || (block["reltol"] = solver.reltol)
     solver.splitting === nothing || (block["splitting"] = solver.splitting)
+    # The AUTHORED string, never the resolved location (esm-spec §2.2.6): a
+    # machine path written back would make emitted documents differ by machine.
+    solver.external === nothing || (block["external"] = solver.external)
+    # The AUTHORED bounds, never their value in seconds (esm-spec §2.2.7).
+    solver.time_span === nothing ||
+        (block["time_span"] = OrderedDict{String,Any}("start" => solver.time_span.start,
+                                                      "end" => solver.time_span.stop))
     return block
 end
 

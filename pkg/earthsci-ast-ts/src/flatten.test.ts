@@ -486,6 +486,20 @@ describe('couple multiplicative requires an existing tendency (§10.3)', () => {
     expect(toAscii(eq!.rhs)).toBe('A.x * B.y')
   })
 
+  it('scales the D(to) tendency, never a later bare `to ~ g` equation', () => {
+    const file = coupled('A.x', 'multiplicative') as unknown as {
+      models: { A: { equations: unknown[] } }
+    }
+    file.models.A.equations.push({ lhs: 'x', rhs: 3 })
+    const flat = flatten(file as unknown as EsmFile)
+    const tendency = flat.equations.find((e) => toAscii(e.lhs) === 'D(A.x)/Dt')
+    const algebraic = flat.equations.find((e) => toAscii(e.lhs) === 'A.x')
+    expect(tendency).toBeDefined()
+    expect(algebraic).toBeDefined()
+    expect(toAscii(tendency!.rhs)).toBe('A.x * B.y')
+    expect(toAscii(algebraic!.rhs)).toBe('3')
+  })
+
   it('does NOT raise for `additive` against an absent tendency', () => {
     // The asymmetry is deliberate: zero is the additive identity, so an
     // additive term against an absent tendency has an obvious reading. There is

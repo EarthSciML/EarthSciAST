@@ -585,6 +585,7 @@ pub(super) fn shell(
         param_defaults: compiled.param_defaults.clone(),
         observed_rules,
         rhs_rules,
+        rule_set: super::super::rhs::next_rule_set_id(),
         n_states,
         forcing: Rc::clone(&compiled.forcing),
         data_fed: compiled.data_fed.clone(),

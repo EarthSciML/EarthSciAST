@@ -1,0 +1,64 @@
+{
+  "esm": "1.3.0",
+  "metadata": {
+    "name": "SolverExternal",
+    "description": "Exercises `solver.external` (esm-spec §2.2, §2.2.6) beside the four other `solver` fields. All five are present and no combination is invalid (§2.2.6 'Coexistence'): there is no cross-validation, because EarthSciAST cannot see the run configuration. `external` round-trips VERBATIM — the authored relative string, never its resolved `file://` location (§2.2.4 requirement 2). The referenced run configuration does not exist; a missing target is the consumer's error, not a load error, and no binding opens it (§2.2.4 requirement 5).",
+    "authors": [
+      "EarthSciML Test Suite"
+    ],
+    "created": "2026-10-24T00:00:00Z",
+    "tags": [
+      "solver",
+      "external",
+      "run-configuration",
+      "advisory",
+      "additive-schema"
+    ]
+  },
+  "solver": {
+    "stiffness": "high",
+    "abstol": 1e-08,
+    "reltol": 1e-06,
+    "splitting": "strang",
+    "external": "runs/decay.run.json"
+  },
+  "models": {
+    "Decay": {
+      "variables": {
+        "A": {
+          "type": "unknown",
+          "units": "mol/m^3",
+          "default": 2.0
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.5
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "A"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "neg",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "k",
+                  "A"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

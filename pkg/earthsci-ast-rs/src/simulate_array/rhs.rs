@@ -720,6 +720,17 @@ pub(super) struct RhsCall<'a> {
     /// See [`EvalCtx::declared`] — the compiled model's declared-name set,
     /// carried so the evaluator's fault arm can name the right defect.
     pub(super) declared: &'a HashSet<String>,
+    /// The rule set's identity, from [`next_rule_set_id`]: one id per owner of
+    /// `rhs_rules`/`observed_rules`, drawn when that owner is built.
+    pub(super) rule_set: u64,
+}
+
+/// A fresh rule-set identity for [`RhsCall::rule_set`]. Never reused within a
+/// process, so a rule set built after another was dropped cannot inherit its
+/// identity the way it can inherit its allocation.
+pub(super) fn next_rule_set_id() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// The identity of the rule set a scratch's address-keyed tables (the CSE class
@@ -727,11 +738,12 @@ pub(super) struct RhsCall<'a> {
 ///
 /// One definition, two consumers: they are invalidated together or one of them
 /// serves an answer for a node the other has already forgotten.
+///
+/// Not the rule slices' addresses: a model dropped and the next one built may
+/// be handed the very same allocation, with the same rule counts, and a key
+/// derived from it would keep the dropped model's classification alive.
 fn rule_set_key(call: &RhsCall) -> u64 {
-    (call.rhs_rules.as_ptr() as u64)
-        ^ (call.observed_rules.as_ptr() as u64).rotate_left(32)
-        ^ ((call.rhs_rules.len() as u64) << 16)
-        ^ (call.observed_rules.len() as u64)
+    call.rule_set
 }
 
 /// Evaluate one RHS call. Step 3b dispatcher: when the scratch carries a
@@ -800,6 +812,7 @@ fn evaluate_rhs_legacy(
         forcing,
         t,
         declared,
+        rule_set: _,
     } = call;
     // (a) Refill the persistent per-variable state arrays in place from the
     //     flat state vector (no per-call allocation).

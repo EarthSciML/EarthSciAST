@@ -3324,6 +3324,86 @@
     "is_valid": false,
     "notes": "Rejected at load with `solver_version_too_old` (esm-spec \u00a72.2.4): the top-level `solver` block arrives at esm 1.1.0 and this document declares 1.0.0. Gated before schema validation so the author sees the version hint rather than a generic unknown-property error."
   },
+  "solver_external_version_too_old.esm": {
+    "resolver_only": true,
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": false,
+    "resolver_error_code": "solver_external_version_too_old",
+    "notes": "Rejected at load with `solver_external_version_too_old` at `/solver/external` (esm-spec \u00a72.2.4 requirement 4, \u00a72.2.5): `solver.external` arrives at esm 1.3.0 and this document declares 1.2.0. Gated before schema validation, like solver_version_too_old.esm, so the author sees the version hint. The schema is version-agnostic and admits `external`, which is what makes this the resolver's rejection. UNLIKE the schema-only `resolver_only` pins, `is_valid` is false for EVERY binding: all five parse, validate, gate, round-trip and resolve `external` (issue #538, decision 10), so there is no schema-only binding that accepts this file. The rest of the block is legal at 1.2.0."
+  },
+  "solver_external_env_var.esm": {
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": false,
+    "resolver_only": true,
+    "resolver_error_code": "solver_external_unresolved",
+    "notes": "Resolver-level invalid (esm-spec \u00a72.2.6). The document is SCHEMA-VALID \u2014 `external` is a non-empty string, so nothing in JSON Schema forbids a `${` in it \u2014 which is what makes this the resolver's rejection rather than a schema error. As with data_source_url_env_var.esm, `is_valid` is false for EVERY binding: all five resolve `external`, so there is no schema-only binding that accepts this file. Each binding refuses at load with the code in `resolver_error_code`, and the message names `/solver/external` and quotes the string `${RUNS}/x.json`. The resolution rule itself is pinned across bindings by tests/conformance/solver_external/manifest.json (CONFORMANCE_SPEC \u00a75.47)."
+  },
+  "solver_external_empty.esm": {
+    "schema_errors": [
+      {
+        "path": "/solver/external",
+        "message": "String '' is shorter than 1 character (schema: minLength 1)",
+        "keyword": "minLength"
+      }
+    ],
+    "structural_errors": [],
+    "is_valid": false,
+    "notes": "esm-schema.json $defs.Solver.external is a string with minLength 1 (esm-spec \u00a72.2.4 requirement 1). An empty string is not absence and does not normalize away like an empty block."
+  },
+  "solver_external_nonstring.esm": {
+    "schema_errors": [
+      {
+        "path": "/solver/external",
+        "message": "Expected string, got number",
+        "keyword": "type"
+      }
+    ],
+    "structural_errors": [],
+    "is_valid": false,
+    "notes": "esm-schema.json $defs.Solver.external is a string (esm-spec \u00a72.2.4 requirement 1); there is no object form."
+  },
+  "solver_time_span_version_too_old.esm": {
+    "resolver_only": true,
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": false,
+    "resolver_error_code": "solver_time_span_version_too_old",
+    "notes": "Rejected at load with `solver_time_span_version_too_old` at `/solver/time_span` (esm-spec \u00a72.2.4 requirement 4, \u00a72.2.5): `solver.time_span` arrives at esm 1.3.0 and this document declares 1.2.0. Gated before schema validation, like solver_external_version_too_old.esm, and for the same reason `is_valid` is false for EVERY binding: all five gate it (issue #550). The rest of the block is legal at 1.2.0."
+  },
+  "solver_time_span_reversed.esm": {
+    "resolver_only": true,
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": false,
+    "resolver_error_code": "solver_time_span_invalid",
+    "notes": "Resolver-level invalid (esm-spec \u00a72.2.7). SCHEMA-VALID \u2014 the schema cannot compare two bounds, and with a timestamp on one side it could not compare them at all \u2014 so `end` after `start` is a load-time check, refused with `solver_time_span_invalid` naming `/solver/time_span`. `is_valid` is false for EVERY binding: all five convert and check `time_span`. The conversion itself is pinned across bindings by tests/conformance/solver_time_span/manifest.json (CONFORMANCE_SPEC \u00a75.49)."
+  },
+  "solver_time_span_missing_end.esm": {
+    "schema_errors": [
+      {
+        "path": "/solver/time_span",
+        "message": "Required property 'end' is missing",
+        "keyword": "required"
+      }
+    ],
+    "structural_errors": [],
+    "is_valid": false,
+    "notes": "esm-schema.json $defs.Solver.time_span requires both `start` and `end` (esm-spec \u00a72.2.4 requirement 1). An open interval is not a `time_span`."
+  },
+  "solver_time_span_offset.esm": {
+    "schema_errors": [
+      {
+        "path": "/solver/time_span/start",
+        "message": "Value '2019-07-01T02:00:00+02:00' matches neither a number nor an RFC 3339 UTC timestamp",
+        "keyword": "oneOf"
+      }
+    ],
+    "structural_errors": [],
+    "is_valid": false,
+    "notes": "A `time_span` bound is a number or an RFC 3339 timestamp in UTC with the `Z` suffix (esm-spec \u00a72.2.7); an offset, even one naming a valid instant, matches neither branch of the oneOf. Only the time ORIGIN (`domain.temporal.reference_time` / `start`) may carry an offset."
+  },
   "arrayop_op_removed.esm": {
     "parse_error": true,
     "is_valid": false,

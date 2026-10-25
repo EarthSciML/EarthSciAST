@@ -6941,6 +6941,106 @@ omits it is a configuration error rather than a run under whatever the library
 default happens to be.
 
 
+### 5.47 `solver.external` Location Resolution (normative)
+
+esm-spec §2.2.6 fixes WHERE a document's `solver.external` points. All
+**five** bindings are in scope and `bindings_required` is
+`["julia", "typescript", "python", "rust", "go"]`, for §5.22's reason:
+resolution is a pure string function, so making it required everywhere gives
+one answer per document, and a binding that resolved differently would make the
+same checked-in document name two different run configurations.
+
+The shared fixtures and the pin live in `tests/conformance/solver_external/`;
+its `README.md` is the contract for the manifest format and for how a binding
+consumes it.
+
+#### 5.47.1 What is compared
+
+Four claims.
+
+**Resolution.** One fixture per row of the §2.2.6 table — `./`-relative, bare
+relative, `../`-climbing, dot-segment-collapsing, absolute path, `file://` URL,
+`https://` URL — each loaded from its path. A binding asserts three things per
+fixture: the typed document holds the AUTHORED string, the accessor returns the
+pinned location, and `emit` writes the pinned `solver` block. Further cases load
+the same documents from a string with an explicit base, from a string with no
+base (the process working directory), and from a path with an explicit base
+that replaces the file's directory. Four more pin the §2.2.6 percent-encoding
+of a location built from a path — a space and a `#`, non-ASCII names, a
+literal pin in which `%` becomes `%25` — and that a URL comes back exactly as
+authored, its escapes not encoded again.
+
+**Refusal.** `fixtures/env_var.esm` MUST be rejected at load with
+`solver_external_unresolved`, and the message MUST contain both
+`/solver/external` and the offending string exactly as authored. The check runs
+before schema validation, right after the `solver_external_version_too_old`
+gate.
+
+**Mounting.** A root that mounts a leaf whose `solver` carries `external`
+reports the ROOT's value — resolved against the root's directory — or none,
+at both mount forms, and its emitted `solver` block carries nothing of the
+leaf's. The load-time checks on `external` are checks on the root alone: a root
+mounting a leaf whose `external` holds `${`, or a leaf declaring esm 1.2.0 that
+carries `external`, MUST load, at both mount forms.
+
+**Invariance and the advisory gate.** The flattened systems of
+`invariance/with_external.esm` and `invariance/without_external.esm` MUST be
+identical in every binding (esm-spec §2.2.4 requirement 3), and
+`tests/simulation/solver_external_advisory.esm`, whose `external` names a file
+that does not exist, MUST integrate under each simulating binding's built-in
+`solve()` and pass its inline tests.
+
+#### 5.47.2 ⛔ The resolved location is not in the document
+
+Expectations take §5.22.2's forms — `{"repo_path": …}`, `{"verbatim": …}`, and
+here also `{"cwd_path": …}` for the working-directory case — and no golden
+holds an absolute path. A `repo_path` or `cwd_path` pin is expanded to an
+absolute path and then percent-encoded as esm-spec §2.2.6 encodes a location:
+each byte of the path's UTF-8 encoding outside `A`–`Z` `a`–`z` `0`–`9` `-` `.`
+`_` `~` `/` `:` becomes `%XX` with uppercase hex, `%` itself included. The
+whole expanded path is encoded, repository root or working directory included.
+A `verbatim` pin is compared as written. Drive-letter paths (`C:/…`, which
+§2.2.6 resolves as absolute, to `file:///C:/…`) have no fixture, because the
+suite's paths are the checkout's POSIX paths; each binding pins them in a unit
+test instead. The difference from §5.22 is where the location lives:
+§8.2.1 writes the resolved `url_template` into the document, while §2.2.6 keeps
+the authored string in the document and returns the location from an accessor.
+A binding that wrote the resolved form back would pass a resolution-only check
+and still emit machine-specific documents, which is why each case pins the
+document's `external` and the emitted `solver` block as well as the location.
+
+Nothing the suite names exists on disk, for §5.22.2's reason: resolution is
+lexical and never touches the filesystem, and a fixture pointing at a real file
+would hide a binding that had reached for it.
+
+#### 5.47.3 Gate
+
+There is **no adapter and no golden**. Each binding's own suite reads
+`manifest.json` and asserts against it, and `./scripts/test-conformance.sh`
+runs the five suites it already runs:
+
+| Binding | Test |
+|---|---|
+| Julia | `pkg/EarthSciAST.jl/test/solver_external_conformance_test.jl` |
+| TypeScript | `pkg/earthsci-ast-ts/src/solver-external.test.ts` |
+| Python | `pkg/earthsci-ast-py/tests/test_solver_external_conformance.py` |
+| Rust | `pkg/earthsci-ast-rs/tests/solver_external_conformance.rs` |
+| Go | `pkg/earthsci-ast-go/pkg/esm/solver_external_conformance_test.go` |
+
+The advisory-gate fixture rides on the existing `tests/simulation` sweeps of
+Julia, Python and Rust and MUST NOT appear in their skip lists.
+
+Six further fixtures enter the ordinary §2.2.1 corpus sweep:
+`tests/valid/solver_external.esm` and `tests/valid/solver_external_only.esm`
+MUST be accepted; `tests/invalid/solver_external_empty.esm` and
+`tests/invalid/solver_external_nonstring.esm` are schema errors at
+`/solver/external`; and `tests/invalid/solver_external_version_too_old.esm` and
+`tests/invalid/solver_external_env_var.esm` are pinned `resolver_only`, with
+`resolver_error_code` `solver_external_version_too_old` and
+`solver_external_unresolved`. As with `data_source_url_env_var.esm`, `is_valid`
+is false for all five bindings: every binding implements both checks, so no
+schema-only binding accepts either file.
+
 ### 5.48 Per-Term Provenance Through Flatten (normative)
 
 **Decision pinned.** Every binding's `FlattenedSystem` carries per-term provenance
@@ -6979,6 +7079,9 @@ malformed origin or a repeated one.
 the §4.7.5 provenance table (README there): the `systems`-order pair,
 `_var` placeholder expansion, `couple` additive onto an existing and onto an
 absent tendency, `couple` multiplicative (collapse to the union of origins),
+`couple` multiplicative onto a target whose `D(to, t)` tendency is followed by a
+bare `to ~ …` equation (`couple_multiplicative_tendency_first`: the tendency is
+scaled, the bare equation is untouched),
 `variable_map` substitution and Expression transform, the pointwise lift, a
 template reference inside a contribution, a deposition-sink-shaped term that
 reads two components, the `translate` factor over a one- and a two-contribution
@@ -6986,6 +7089,13 @@ B, and step 3a. Chained composes with the operator as `systems[0]` are the
 existing corpus case `chained_operator_compose`. Each fixture is a case of the
 flatten corpus, tier `term_provenance`, id `term_provenance_<fixture name>`, so
 no new runner is involved.
+
+**A caller-edited `rhs`.** Each binding's own suite checks that a pass that
+rebuilds right-hand sides from contributions on a caller-supplied flattened
+system (Python: `esm_problem`'s `table_lookup` lowering) keeps an `rhs` the
+caller edited after flatten and collapses the stale list to one contribution with
+the union of its origins (esm-libraries-spec §4.7.5). The corpus cannot pin it:
+it records flatten's output, where the two never disagree.
 
 **Non-vacuity.** `non_vacuity.esm` has two operators contribute structurally
 identical expressions (`Emis.flux`, each operator's parameter mapped onto one
@@ -7010,6 +7120,63 @@ in `rhs_A + rhs_B` order.
 for individual `variable_map` substitutions: open questions of issue #539, not
 pinned here.
 
+### 5.49 `solver.time_span` Conversion (normative)
+
+esm-spec §2.2.7 fixes what a document's `solver.time_span` means in seconds.
+All **five** bindings are in scope and `bindings_required` is
+`["julia", "typescript", "python", "rust", "go"]`: like §5.47, the conversion is
+a pure function of the document, so one answer per document is required
+everywhere. The shared fixtures and the pin live in
+`tests/conformance/solver_time_span/`; its `README.md` is the contract.
+
+#### 5.49.1 What is compared
+
+**Conversion.** Each accepted fixture pins the accessor's answer with no
+call-site interval as `[start, end]` in binary64 seconds, compared EXACTLY:
+every pinned value is exactly representable and §2.2.7 fixes the arithmetic.
+The cases cover number bounds, timestamps against each of the three time
+origins (`reference_time`, `temporal.start`, the POSIX epoch), an origin with a
+UTC offset, a mixed number/timestamp pair, fractional
+seconds on bounds and origin, and a bound before 1970 and on a leap day. Each
+also pins the emitted `solver` block, numbers compared by value, so the
+authored bounds — not the seconds — are what `emit` writes.
+
+**Refusal.** Seven fixtures MUST be refused at load: an empty and a reversed
+interval, a reversal only the conversion can see (a timestamp against a
+number), two dates that match the pattern and name no day (`02-30`, and
+`02-29` in 2100), an unreadable origin and a `null` one (`solver_time_span_invalid`,
+the message naming `/solver/time_span` and the origin's pointer), and a 1.2.0
+document carrying the field (`solver_time_span_version_too_old`).
+
+**The call site.** The manifest's `call_site` cases pass an explicit interval
+to the accessor, which MUST return it whether or not the document declares one.
+
+**Mounting.** At both mount forms, a root reports its own interval or none,
+its emitted `solver` block carries nothing of the leaf's, and a root mounting a
+leaf whose `time_span` is reversed, or a 1.2.0 leaf that carries one, MUST
+load: the checks are the root's alone.
+
+#### 5.49.2 Gate
+
+There is **no adapter and no golden**. Each binding's own suite reads
+`manifest.json`:
+
+| Binding | Test |
+|---|---|
+| Julia | `pkg/EarthSciAST.jl/test/solver_time_span_conformance_test.jl` |
+| TypeScript | `pkg/earthsci-ast-ts/src/solver-time-span.test.ts` |
+| Python | `pkg/earthsci-ast-py/tests/test_solver_time_span_conformance.py` |
+| Rust | `pkg/earthsci-ast-rs/tests/solver_time_span_conformance.rs` |
+| Go | `pkg/earthsci-ast-go/pkg/esm/solver_time_span_conformance_test.go` |
+
+Five further fixtures enter the ordinary §2.2.1 corpus sweep:
+`tests/valid/solver_time_span.esm` and `tests/valid/solver_time_span_only.esm`
+MUST be accepted; `tests/invalid/solver_time_span_missing_end.esm` is a
+`required` schema error at `/solver/time_span` and
+`tests/invalid/solver_time_span_offset.esm` a `oneOf` schema error at
+`/solver/time_span/start`; and `tests/invalid/solver_time_span_version_too_old.esm`
+and `tests/invalid/solver_time_span_reversed.esm` are pinned `resolver_only`,
+with `is_valid` false for all five bindings.
 
 ### 5.49 Range-Restricted, Operator-Restricted Right-Hand Sides (normative)
 

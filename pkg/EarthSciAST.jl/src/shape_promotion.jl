@@ -441,7 +441,7 @@ function inline_elementwise_array_observeds(flat::FlattenedSystem)::FlattenedSys
     # leaves with its contributions (esm-libraries-spec §4.7.5).
     new_eqs = Equation[]
     new_contribs = Vector{Contribution}[]
-    for (eq, cs) in zip(flat.equations, flat.equation_contributions)
+    for (eq, cs) in zip(flat.equations, _flat_contributions(flat))
         (eq.lhs isa VarExpr && haskey(targets, (eq.lhs::VarExpr).name)) && continue  # drop the def
         rewritten, new_cs = _rewrite_contributions(e -> substitute(e, resolved), eq, cs,
                                                    _is_lifted(eq, flat.lifted_shapes))
@@ -588,7 +588,7 @@ function promote_downstream_shapes(flat::FlattenedSystem;
     # COLLAPSE into the one wrapped expression, origins their union.
     new_eqs = Equation[]
     new_contribs = Vector{Contribution}[]
-    for (eq, cs) in zip(flat.equations, flat.equation_contributions)
+    for (eq, cs) in zip(flat.equations, _flat_contributions(flat))
         out, out_cs = eq, cs
         if eq.lhs isa VarExpr && (eq.lhs::VarExpr).name in arrayvars &&
                  haskey(defs, (eq.lhs::VarExpr).name) &&

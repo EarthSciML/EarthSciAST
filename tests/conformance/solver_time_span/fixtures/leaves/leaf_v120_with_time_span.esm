@@ -1,0 +1,62 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "SolverTimeSpan_leaf_v120",
+    "description": "A leaf declaring esm 1.2.0 whose `solver` block carries `time_span`. Loaded on its own it is refused with `solver_time_span_version_too_old`; mounted, the gate does not apply to it.",
+    "authors": [
+      "EarthSciML Test Suite"
+    ],
+    "license": "MIT",
+    "tags": [
+      "solver",
+      "time_span",
+      "mount",
+      "leaf"
+    ]
+  },
+  "solver": {
+    "time_span": {
+      "start": 0,
+      "end": 99
+    }
+  },
+  "models": {
+    "LeafDecay": {
+      "variables": {
+        "A": {
+          "type": "unknown",
+          "units": "mol/m^3",
+          "default": 2.0
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.5
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "A"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "neg",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "k",
+                  "A"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

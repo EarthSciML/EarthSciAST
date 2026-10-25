@@ -1034,6 +1034,7 @@ impl ArrayCompiled {
             param_defaults,
             observed_rules,
             rhs_rules,
+            rule_set: next_rule_set_id(),
             n_states,
             declared_names,
             forcing: Rc::new(RefCell::new(HashMap::new())),

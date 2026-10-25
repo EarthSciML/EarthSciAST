@@ -14,7 +14,7 @@ use super::taped;
 use ndarray::{ArrayD, IxDyn};
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
+use std::sync::Arc;
 
 /// `M` over `cells` (size `n`): state `c`, the data-fed forcings `bc` (shaped)
 /// and `k` (0-d), the observed `g = 2*bc + k`, and
@@ -256,7 +256,7 @@ fn a_forcing_entry_of_another_shape_faults() {
     let compiled = compile(n as i64);
     feed(&compiled, n, 1.0, 0.7);
     let param_vec = compiled.debug_resolve_params(&HashMap::new());
-    let prog = Rc::new(taped(compiled.build_tape_opts(&HashSet::new(), None)).0);
+    let prog = Arc::new(taped(compiled.build_tape_opts(&HashSet::new(), None)).0);
     let scratch_for = |prog: &std::sync::Arc<TapeProgram>| {
         let mut s = compiled.debug_new_scratch();
         s.install_tape(std::sync::Arc::clone(prog));

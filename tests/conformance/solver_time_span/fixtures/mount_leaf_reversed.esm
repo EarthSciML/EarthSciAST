@@ -1,0 +1,21 @@
+{
+  "esm": "1.3.0",
+  "metadata": {
+    "name": "SolverTimeSpan_mount_leaf_reversed",
+    "description": "A root with no `solver` block mounting at the top-level `models.<k>` form a leaf whose `time_span` is reversed. The root loads: the leaf's block does not cross the edge.",
+    "authors": [
+      "EarthSciML Test Suite"
+    ],
+    "license": "MIT",
+    "tags": [
+      "solver",
+      "time_span",
+      "mount"
+    ]
+  },
+  "models": {
+    "Inner": {
+      "ref": "./leaves/leaf_reversed.esm"
+    }
+  }
+}

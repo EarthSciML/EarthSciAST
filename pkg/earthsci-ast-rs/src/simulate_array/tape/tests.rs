@@ -138,7 +138,7 @@ pub(super) fn ab_check(doc: serde_json::Value, lo: f64, hi: f64) -> TapeProgram 
     let prog_rm = rm_build();
     assert!(!prog_rm.col_major);
     let mut fast_rm = super::super::RhsScratch::new(&compiled.var_shapes);
-    fast_rm.install_tape(std::rc::Rc::new(rm_build()));
+    fast_rm.install_tape(std::sync::Arc::new(rm_build()));
     let mut fast_stats = RhsStats::default();
     for seed in 0..4u64 {
         let state = seeded_state(n, seed, lo, hi);
@@ -1891,6 +1891,7 @@ fn ab_scan_fused_with_its_neighbours() {
             forcing: &compiled.forcing,
             t: 0.0,
             declared: &compiled.declared_names,
+            rule_set: compiled.rule_set,
         };
         super::exec::run_tape_call(&mut ctx, &call, &mut dy, &mut stats);
         for (k, (a, b)) in dy.iter().zip(&dy_ref).enumerate() {
@@ -2516,6 +2517,7 @@ fn output_only_observeds_leave_the_rhs() {
             forcing: &compiled.forcing,
             t: 0.0,
             declared: &compiled.declared_names,
+            rule_set: compiled.rule_set,
         };
         super::exec::run_tape_call(ctx, &call, dy, &mut stats);
     };
@@ -2576,6 +2578,7 @@ fn export_demotion_skips_unread_publishes() {
             forcing: &compiled.forcing,
             t: 0.0,
             declared: &compiled.declared_names,
+            rule_set: compiled.rule_set,
         };
         super::exec::run_tape_call(ctx, &call, dy, &mut stats);
     };
@@ -2694,7 +2697,7 @@ fn ab_superop_bin3_and_extended_pairs() {
     let params = HashMap::new();
     let param_vec = compiled.debug_resolve_params(&params);
     let mut fast3 = super::super::RhsScratch::new(&compiled.var_shapes);
-    fast3.install_tape(std::rc::Rc::new(
+    fast3.install_tape(std::sync::Arc::new(
         taped(compiled.build_tape_opts(&HashSet::new(), Some(all_superops_cfg()))).0,
     ));
     let mut stats = RhsStats::default();
@@ -4272,7 +4275,7 @@ fn a_fault_behind_a_state_condition_fires_where_the_oracle_reaches_it() {
                 "program {k} ref"
             );
             let mut scratch = super::super::RhsScratch::new(&compiled.var_shapes);
-            scratch.install_tape(std::rc::Rc::new(match k {
+            scratch.install_tape(std::sync::Arc::new(match k {
                 0 => taped(compiled.build_tape_opts(&HashSet::new(), Some(default_cfg()))).0,
                 1 => taped(compiled.build_tape_opts(&HashSet::new(), None)).0,
                 _ => {
@@ -4371,7 +4374,7 @@ fn assert_fault_parity(doc: serde_json::Value, times: &[f64]) -> TapeProgram {
                 "program {k} ref, t = {t}"
             );
             let mut scratch = super::super::RhsScratch::new(&compiled.var_shapes);
-            scratch.install_tape(std::rc::Rc::new(build(k)));
+            scratch.install_tape(std::sync::Arc::new(build(k)));
             compiled.debug_eval_rhs_into(
                 &state,
                 t,

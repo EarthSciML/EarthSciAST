@@ -1,0 +1,65 @@
+{
+  "esm": "1.3.0",
+  "metadata": {
+    "name": "SolverExternal_mount_subsystem_root_without_external",
+    "description": "A root document whose `solver` block declares only `reltol`, mounting a leaf whose `solver` block carries `external` at the `subsystems.<k>` form. The leaf's block does not cross the mount edge at either form (esm-spec §4.7, §2.2.6): the root has no `external`, the accessor returns none, and the emitted root's `solver` block is exactly `{\"reltol\": 1e-06}` — the leaf's `external` and `stiffness` are not merged into it.",
+    "authors": [
+      "EarthSciML Test Suite"
+    ],
+    "license": "MIT",
+    "tags": [
+      "solver",
+      "external",
+      "conformance",
+      "mount",
+      "subsystem"
+    ]
+  },
+  "solver": {
+    "reltol": 1e-06
+  },
+  "models": {
+    "Outer": {
+      "variables": {
+        "A": {
+          "type": "unknown",
+          "units": "mol/m^3",
+          "default": 2.0
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.5
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "A"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "neg",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "k",
+                  "A"
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "subsystems": {
+        "Inner": {
+          "ref": "./leaves/leaf_with_external.esm"
+        }
+      }
+    }
+  }
+}

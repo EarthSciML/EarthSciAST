@@ -25,7 +25,7 @@ import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
  * `://` is required (rather than a bare `scheme:`) so that a Windows drive
  * letter and a `{date:%Y}` substitution are both read as path text.
  */
-const SCHEME_RE = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//
+export const SCHEME_RE = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//
 
 /**
  * RFC 3986 §5.2.4 dot-segment removal, lexically, on an absolute path.
@@ -34,7 +34,7 @@ const SCHEME_RE = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//
  * names a file that need not exist at load time, and resolving symlinks would
  * make the resolved URL depend on the filesystem rather than on the document.
  */
-function removeDotSegments(path: string): string {
+export function removeDotSegments(path: string): string {
   const out: string[] = []
   for (const seg of path.split('/')) {
     if (seg === '' || seg === '.') continue

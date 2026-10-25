@@ -148,6 +148,19 @@ const (
 	// CodeSolverVersionTooOld: a top-level `solver` block in a file declaring
 	// esm < 1.1.0 (esm-spec §2.2.4).
 	CodeSolverVersionTooOld = "solver_version_too_old"
+	// CodeSolverExternalVersionTooOld: `solver.external` in a file declaring
+	// esm < 1.3.0 (esm-spec §2.2.4).
+	CodeSolverExternalVersionTooOld = "solver_external_version_too_old"
+	// CodeSolverExternalUnresolved: `solver.external` carries `${`
+	// (esm-spec §2.2.6).
+	CodeSolverExternalUnresolved = "solver_external_unresolved"
+	// CodeSolverTimeSpanVersionTooOld: `solver.time_span` in a file declaring
+	// esm < 1.3.0 (esm-spec §2.2.4).
+	CodeSolverTimeSpanVersionTooOld = "solver_time_span_version_too_old"
+	// CodeSolverTimeSpanInvalid: `solver.time_span` does not describe an
+	// interval -- `end` not after `start`, a timestamp naming no calendar day,
+	// or an unreadable time origin (esm-spec §2.2.7).
+	CodeSolverTimeSpanInvalid = "solver_time_span_invalid"
 )
 
 // --- Diagnostic codes: §10.9-§10.11 coupling libraries / coupling_import

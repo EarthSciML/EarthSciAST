@@ -1,0 +1,60 @@
+{
+  "esm": "1.3.0",
+  "metadata": {
+    "name": "SolverTimeSpan_mount_subsystem_leaf_v120",
+    "description": "A root with no `solver` block mounting at the `subsystems.<k>` form a 1.2.0 leaf that carries `time_span`. The root loads: the version gate is the root's.",
+    "authors": [
+      "EarthSciML Test Suite"
+    ],
+    "license": "MIT",
+    "tags": [
+      "solver",
+      "time_span",
+      "mount"
+    ]
+  },
+  "models": {
+    "Outer": {
+      "variables": {
+        "A": {
+          "type": "unknown",
+          "units": "mol/m^3",
+          "default": 2.0
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.5
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "A"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "neg",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "k",
+                  "A"
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "subsystems": {
+        "Inner": {
+          "ref": "./leaves/leaf_v120_with_time_span.esm"
+        }
+      }
+    }
+  }
+}
