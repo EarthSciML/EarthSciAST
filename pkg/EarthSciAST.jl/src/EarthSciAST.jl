@@ -146,6 +146,7 @@ include("data_output.jl")
 # emitter's `DirectEmitError`, and before simulate.jl, which dispatches on it.
 include("compiler_xla.jl")
 include("simulate.jl")
+include("rhs_program.jl")
 include("range_restricted.jl")
 # Names that have left the public surface, kept for one minor version.
 include("deprecated.jl")
@@ -232,6 +233,9 @@ export
     # Range-restricted right-hand sides (API_SPEC §5.8, issue #540)
     rhs_program, select, halo, restrict, lanes, tile_layout, lane_layout,
     rhs_workspace, rhs!, lane_inputs, gather_lane_inputs!, Decomposition,
+    # Public right-hand side (API_SPEC §5.8, issue #541)
+    RhsProgram, RhsWorkspace, ForcingSet, ForcingSlot, ParamSlot, forcing_slots,
+    forcing_set, default_forcing_set, forcing_epoch, parameter_vector,
     # Flatten error taxonomy (spec §4.7.6.10, 8 types for cross-language parity)
     ConflictingDerivativeError, DimensionPromotionError, UnmappedDomainError,
     UnsupportedMappingError, DomainUnitMismatchError,

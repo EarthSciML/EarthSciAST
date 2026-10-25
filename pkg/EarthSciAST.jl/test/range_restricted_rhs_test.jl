@@ -43,7 +43,7 @@ end
 
 _rrt_bits(x) = reinterpret(UInt64, x)
 
-_rrt_allocated(du, x, ws, u, aux, p) = @allocated rhs!(du, x, ws, u, aux, p, 0.0)
+_rrt_allocated(du, x, ws, u, aux, p, fs) = @allocated rhs!(du, x, ws, u, aux, p, 0.0, fs)
 
 @testset "range_restricted_rhs" begin
     nx, ny = 10, 6
@@ -52,7 +52,8 @@ _rrt_allocated(du, x, ws, u, aux, p) = @allocated rhs!(du, x, ws, u, aux, p, 0.0
     L = tile_layout(prog)
     u = 0.5 .+ (1:L.n_u) ./ L.n_u
     G = fill(NaN, L.n_u)
-    rhs!(G, prog, rhs_workspace(prog), u, Float64[], prob.p, 0.0)
+    fs = default_forcing_set(prog)
+    rhs!(G, prog, rhs_workspace(prog), u, Float64[], prob.p, 0.0, fs)
 
     @testset "the whole-domain program is the Problem's right-hand side" begin
         du = similar(G)
@@ -85,7 +86,7 @@ _rrt_allocated(du, x, ws, u, aux, p) = @allocated rhs!(du, x, ws, u, aux, p, 0.0
             end
             duS = fill(NaN, T.n_u)
             ws = rhs_workspace(tile)
-            rhs!(duS, tile, ws, uS, Float64[], prob.p, 0.0)
+            rhs!(duS, tile, ws, uS, Float64[], prob.p, 0.0, fs)
             owned = Set{Int}()
             for c in CartesianIndices(Tuple(b.owned))
                 s = RRT._tile_slot(b, (c[1], c[2]))
@@ -96,8 +97,8 @@ _rrt_allocated(du, x, ws, u, aux, p) = @allocated rhs!(du, x, ws, u, aux, p, 0.0
             end
             @test all(k -> k in owned || isnan(duS[k]), eachindex(duS))
             noaux = Float64[]
-            _rrt_allocated(duS, tile, ws, uS, noaux, prob.p)
-            @test _rrt_allocated(duS, tile, ws, uS, noaux, prob.p) == 0
+            _rrt_allocated(duS, tile, ws, uS, noaux, prob.p, fs)
+            @test _rrt_allocated(duS, tile, ws, uS, noaux, prob.p, fs) == 0
         end
         @test all(==(1), seen)
     end
@@ -136,7 +137,8 @@ _rrt_allocated(du, x, ws, u, aux, p) = @allocated rhs!(du, x, ws, u, aux, p, 0.0
         iprob = esm_problem(_rrt_doc(nx, ny), (0.0, 1.0); compiler = :interpreter)
         iprog = rhs_program(iprob)
         du = fill(NaN, L.n_u)
-        rhs!(du, iprog, rhs_workspace(iprog), u, Float64[], iprob.p, 0.0)
+        rhs!(du, iprog, rhs_workspace(iprog), u, Float64[], iprob.p, 0.0,
+             default_forcing_set(iprog))
         @test _rrt_bits.(du) == _rrt_bits.(G)
         for f in (() -> halo(iprog, dec),
                   () -> restrict(iprog, dec; owned = ("x" => 1:4, "y" => 1:6),
@@ -155,10 +157,10 @@ _rrt_allocated(du, x, ws, u, aux, p) = @allocated rhs!(du, x, ws, u, aux, p, 0.0
         TO = TermOrigin
         sel = select(prog; terms = [TO(component = "Diff")])
         du = fill(NaN, L.n_u)
-        rhs!(du, sel, rhs_workspace(sel), u, Float64[], prob.p, 0.0)
+        rhs!(du, sel, rhs_workspace(sel), u, Float64[], prob.p, 0.0, fs)
         @test _rrt_bits.(du) == _rrt_bits.(G)
         zero = select(prog; terms = [TO(component = "Nobody")])
-        rhs!(du, zero, rhs_workspace(zero), u, Float64[], prob.p, 0.0)
+        rhs!(du, zero, rhs_workspace(zero), u, Float64[], prob.p, 0.0, fs)
         @test all(==(0.0), du)
         err = try
             select(prog; writes = String[], terms = :all)
