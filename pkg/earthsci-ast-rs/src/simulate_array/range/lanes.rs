@@ -165,9 +165,10 @@ impl LaneProgram {
     }
 
     /// Copy `cells` (`[D, L]`, column-major, 1-based global indices) into the
-    /// lane rows of `state` starting at `at`, as `f64`. Lanes past those
-    /// `cells` lists repeat its first lane, so every lane reads in-range
-    /// indices.
+    /// lane rows of `state` starting at `at`, as `f64`. Only lanes `1..=n` are
+    /// read from `cells` (and range-checked); every lane past `n` repeats lane
+    /// 1 (or cell 1 when `n = 0`), so the padding lanes the tape still
+    /// computes read in-range indices whatever the tail of `cells` holds.
     fn write_cells(
         &self,
         state: &mut [f64],
@@ -190,12 +191,14 @@ impl LaneProgram {
                 cells.len(),
             ));
         }
-        let given = cells.len() / d.max(1);
         for (a, &ext) in inner.extents.iter().enumerate() {
             let rows = &mut state[at + a * inner.capacity..at + (a + 1) * inner.capacity];
             for (l, row) in rows.iter_mut().enumerate() {
-                let src = if l < given { l } else { 0 };
-                let c = if given == 0 { 1 } else { cells[src * d + a] };
+                let c = match (l < n, n > 0) {
+                    (true, _) => cells[l * d + a],
+                    (false, true) => cells[a],
+                    (false, false) => 1,
+                };
                 if l < n && (i64::from(c) < 1 || i64::from(c) > ext) {
                     return Err(shape(
                         "cells (a lane's cell outside its index set)",

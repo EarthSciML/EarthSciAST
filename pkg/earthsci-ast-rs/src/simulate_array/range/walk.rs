@@ -124,8 +124,7 @@ impl Scope {
         classify_axis_role(e, &bx)
     }
 
-    /// The image of the box along output axis `a` under `ax`, and every
-    /// subscript it takes when that is not one contiguous run.
+    /// The hull of the image of the box along output axis `a` under `ax`.
     fn image(&self, a: usize, ax: &AxisIndex) -> (i64, i64) {
         match ax {
             AxisIndex::Affine(k) => (self.lo[a] + k, self.hi[a] + k),
@@ -138,6 +137,26 @@ impl Scope {
                     mx = mx.max(w);
                 }
                 (mn, mx)
+            }
+        }
+    }
+
+    /// The image of the box along output axis `a` under `ax`, as its
+    /// maximal runs of consecutive cells: one run for an affine shift, two
+    /// for a periodic wrap that crosses the seam.
+    fn image_runs(&self, a: usize, ax: &AxisIndex) -> Vec<(i64, i64)> {
+        match ax {
+            AxisIndex::Affine(_) => vec![self.image(a, ax)],
+            AxisIndex::Wrap { k, period, lo } => {
+                let mut runs: Vec<(i64, i64)> = Vec::new();
+                for g in self.lo[a]..=self.hi[a] {
+                    let w = wrap(g + k, *lo, *period);
+                    match runs.last_mut() {
+                        Some(r) if r.1 + 1 == w => r.1 = w,
+                        _ => runs.push((w, w)),
+                    }
+                }
+                runs
             }
         }
     }
@@ -400,8 +419,8 @@ impl<'a> Walker<'a> {
                 let info = &self.vars[v];
                 if info.axes.len() == subs.len() {
                     for (d, s) in subs.iter().enumerate() {
-                        let (lo, hi) = match &info.axes[d] {
-                            AxisSpec::Whole { .. } => info.extent[d],
+                        let runs = match &info.axes[d] {
+                            AxisSpec::Whole { .. } => vec![info.extent[d]],
                             AxisSpec::Cut { cell, set, .. } => {
                                 if mentions_any(s, &sc.contracted) {
                                     return self.global(format_args!("contracts `{v}`"), set);
@@ -416,9 +435,9 @@ impl<'a> Walker<'a> {
                                                  along `{other}`"
                                             ));
                                         }
-                                        sc.image(out_axis, &ax)
+                                        sc.image_runs(out_axis, &ax)
                                     }
-                                    Some(AxisRole::Const(g)) => (g, g),
+                                    Some(AxisRole::Const(g)) => vec![(g, g)],
                                     None => {
                                         return self.global(
                                             format_args!(
@@ -430,12 +449,14 @@ impl<'a> Walker<'a> {
                                 }
                             }
                         };
-                        self.reads.push(Read {
-                            var: v.clone(),
-                            axis: d,
-                            lo,
-                            hi,
-                        });
+                        for (lo, hi) in runs {
+                            self.reads.push(Read {
+                                var: v.clone(),
+                                axis: d,
+                                lo,
+                                hi,
+                            });
+                        }
                     }
                 } else if info.is_cut() {
                     return self.refuse(format_args!(

@@ -119,7 +119,9 @@
       "DataSourceTemporal.start",
       "Domain.temporal.end",
       "Domain.temporal.reference_time",
-      "Domain.temporal.start"
+      "Domain.temporal.start",
+      "Solver.time_span.end",
+      "Solver.time_span.start"
     ],
     "enum": [
       "Analysis.initial_state|1.type",

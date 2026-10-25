@@ -132,9 +132,9 @@ mutable struct BuildInspection
     # any the caller's `u0` does not then cover (esm-spec §11.4).
     unvalued_slots::Vector{Int}
     # What `rhs_program` rebuilds an operator from (src/range_restricted.jl):
-    # the flattened system while it still carries its per-term provenance, and
-    # the build inputs `esm_problem` resolved for it. `nothing` for a build
-    # `esm_problem` did not make.
+    # the recipe `esm_problem` records (`_ProgramSeedRecipe`), from which the
+    # first `rhs_program` call builds the flattened system with its per-term
+    # provenance. `nothing` for a build `esm_problem` did not make.
     program_seed::Any
 end
 BuildInspection() = BuildInspection(Dict{String,Array{Float64}}(),
@@ -4055,6 +4055,7 @@ function _build_compile_evaluator(model::Model, cls, parts, layout;
     forcing_epoch = materialize_out === nothing ? _new_forcing_epoch() :
                     materialize_out.epoch
     _register_forcing_buffers!(forcing_epoch, values(param_arrays))
+    _range_build_epoch(_range_spec_now(), forcing_epoch)
 
     # ---- Discrete-cadence materialization: cache buffers + fill kernels ----
     # (the middle cadence phase; see DiscreteMaterializer). Each discrete var gets a

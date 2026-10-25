@@ -21,14 +21,13 @@ use crate::diagnostic::codes;
 use crate::simulate::SimulateError;
 use crate::simulate_array::tape::{
     CallInputs, DeclinedTape, ForcingView, TapeCtx, TapeProgram, TileAxisDom, TileLowering,
-    run_tape_inputs,
+    TileObserved, TilePiece, run_tape_inputs,
 };
 use crate::simulate_array::vectorized::lhs_constant_shifts;
 use crate::simulate_array::{AlgebraicRule, ArrayCompiled, RhsRule, VarShape};
 use crate::types::Expr;
 use indexmap::IndexMap;
 use rustc_hash::FxHashMap;
-use smallvec::SmallVec;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -366,31 +365,96 @@ pub(super) fn as_loop(rule: &AlgebraicRule) -> Option<AlgebraicRule> {
     })
 }
 
-/// Hull the reads of each name into a box per axis.
-fn hull_reads(
-    reads: &[Read],
-    into: &mut HashMap<String, Vec<(i64, i64)>>,
-    vars: &HashMap<String, VarInfo>,
-) {
+/// The read intervals of each name, per axis.
+type AxisReads = HashMap<String, Vec<Vec<(i64, i64)>>>;
+
+/// Collect the reads of each name per axis.
+fn collect_reads(reads: &[Read], into: &mut AxisReads, vars: &HashMap<String, VarInfo>) {
     for r in reads {
         let Some(info) = vars.get(&r.var) else {
             continue;
         };
         let entry = into
             .entry(r.var.clone())
-            .or_insert_with(|| vec![(i64::MAX, i64::MIN); info.axes.len()]);
+            .or_insert_with(|| vec![Vec::new(); info.axes.len()]);
         if let Some(e) = entry.get_mut(r.axis) {
-            *e = (e.0.min(r.lo), e.1.max(r.hi));
+            e.push((r.lo, r.hi));
         }
     }
 }
 
-/// The rules a tile runs, and the need box of every array observed it
-/// restricts. `owned` maps each state's name to its owned box.
+/// One axis of an observed's need: its slot range `lo..=hi`, unwrapped (on a
+/// periodic axis `hi` may pass the period), and the pieces of the global
+/// domain it holds, each `(global lo, global hi, 0-based slot offset)`.
+#[derive(Debug, PartialEq)]
+struct AxisNeed {
+    lo: i64,
+    hi: i64,
+    pieces: Vec<(i64, i64, i64)>,
+}
+
+/// The cells of an observed axis of global extent `1..=hi` that the reads
+/// `reads` need. Reads past the extent are the zero ghost and need nothing.
+/// Along a periodic axis of `period == hi` cells the need is the shortest arc
+/// of the circle that covers every read, so reads on both sides of the seam
+/// need two pieces, not the cells between them; otherwise it is the hull.
+fn axis_need(reads: &[(i64, i64)], hi: i64, period: Option<i64>) -> AxisNeed {
+    let mut iv: Vec<(i64, i64)> = reads
+        .iter()
+        .map(|&(a, b)| (a.max(1), b.min(hi)))
+        .filter(|(a, b)| a <= b)
+        .collect();
+    if iv.is_empty() {
+        return AxisNeed {
+            lo: 1,
+            hi,
+            pieces: vec![(1, hi, 0)],
+        };
+    }
+    iv.sort_unstable();
+    let mut merged: Vec<(i64, i64)> = Vec::with_capacity(iv.len());
+    for (a, b) in iv {
+        match merged.last_mut() {
+            Some(m) if a <= m.1 + 1 => m.1 = m.1.max(b),
+            _ => merged.push((a, b)),
+        }
+    }
+    let first = merged[0].0;
+    let last = merged[merged.len() - 1].1;
+    let hull = AxisNeed {
+        lo: first,
+        hi: last,
+        pieces: vec![(first, last, 0)],
+    };
+    if period != Some(hi) || merged.len() < 2 {
+        return hull;
+    }
+    // The gap across the seam, against the widest gap between two runs.
+    let seam_gap = (hi - last) + (first - 1);
+    let (k, gap) = merged
+        .windows(2)
+        .enumerate()
+        .map(|(k, w)| (k, w[1].0 - w[0].1 - 1))
+        .max_by_key(|&(k, g)| (g, std::cmp::Reverse(k)))
+        .expect("two runs have a gap");
+    if gap <= seam_gap {
+        return hull;
+    }
+    // Need `merged[k+1].0 ..= hi`, then `1 ..= merged[k].1` past the seam.
+    let a = merged[k + 1].0;
+    let b = merged[k].1;
+    AxisNeed {
+        lo: a,
+        hi: b + hi,
+        pieces: vec![(a, hi, 0), (1, b, hi - a + 1)],
+    }
+}
+
+/// The rules a tile runs, and the need of every array observed it restricts.
 pub(super) struct ClippedRules {
     pub(super) rhs: Vec<RhsRule>,
     pub(super) observed: Vec<AlgebraicRule>,
-    pub(super) need: FxHashMap<String, (SmallVec<[i64; 4]>, SmallVec<[i64; 4]>)>,
+    pub(super) need: FxHashMap<String, TileObserved>,
 }
 
 /// Rewrite `compiled`'s rules for a tile whose derivative of each written
@@ -400,7 +464,7 @@ pub(super) fn clip_rules(
     vars: &HashMap<String, VarInfo>,
     owned: &HashMap<String, Vec<(i64, i64)>>,
 ) -> Result<ClippedRules, SimulateError> {
-    let mut reads: HashMap<String, Vec<(i64, i64)>> = HashMap::new();
+    let mut reads: AxisReads = HashMap::new();
     let mut needed: HashSet<String> = HashSet::new();
     let mut rhs = Vec::new();
     for rule in &compiled.rhs_rules {
@@ -464,7 +528,7 @@ pub(super) fn clip_rules(
                     Some(f) => Some(Box::new(w.expr(f, &sc).map_err(refusal_error)?)),
                     None => None,
                 };
-                hull_reads(&w.reads, &mut reads, vars);
+                collect_reads(&w.reads, &mut reads, vars);
                 needed.extend(crate::expression::free_variables(&body));
                 if let Some(f) = &filter {
                     needed.extend(crate::expression::free_variables(f));
@@ -501,50 +565,80 @@ pub(super) fn clip_rules(
                 output_ranges,
                 ..
             } if dependent.contains(var) && info.is_cut() => {
-                let hull = reads.get(var).cloned();
-                let mut nlo = SmallVec::new();
-                let mut nhi = SmallVec::new();
-                for (d, &(_, hi)) in output_ranges.iter().enumerate() {
-                    let (a, b) = match (&info.axes[d], hull.as_ref().map(|h| h[d])) {
-                        (AxisSpec::Cut { .. }, Some((a, b))) if a <= b => (a.max(1), b.min(hi)),
-                        _ => (1, hi),
-                    };
-                    let (a, b) = if a > b { (1, hi) } else { (a, b) };
-                    nlo.push(a);
-                    nhi.push(b);
-                }
-                let ranges: Vec<(i64, i64)> = output_ranges
+                let read = reads.get(var).cloned().unwrap_or_default();
+                let axes: Vec<AxisNeed> = output_ranges
                     .iter()
                     .enumerate()
-                    .map(|(d, &(lo, hi))| (lo.max(nlo[d]), hi.min(nhi[d])))
+                    .map(|(d, &(_, hi))| match &info.axes[d] {
+                        AxisSpec::Cut { period, face, .. } => {
+                            let r = read.get(d).map(Vec::as_slice).unwrap_or(&[]);
+                            axis_need(r, hi, if *face { None } else { *period })
+                        }
+                        AxisSpec::Whole { .. } => AxisNeed {
+                            lo: 1,
+                            hi,
+                            pieces: vec![(1, hi, 0)],
+                        },
+                    })
                     .collect();
-                let new_body = if ranges.iter().any(|(lo, hi)| lo > hi) {
-                    body.clone()
-                } else {
-                    let sc = Scope {
-                        syms: output_idx_names.clone(),
-                        lo: ranges.iter().map(|r| r.0).collect(),
-                        hi: ranges.iter().map(|r| r.1).collect(),
-                        sets: info
-                            .axes
+                let sets: Vec<Option<String>> = info
+                    .axes
+                    .iter()
+                    .map(|a| a.cut_cell().map(str::to_string))
+                    .collect();
+                // One piece per combination of the axes' pieces, each the
+                // observed's own cells there, walked over its own box.
+                let mut pieces = Vec::new();
+                let mut combo = vec![0usize; axes.len()];
+                'combos: loop {
+                    let mut ranges = Vec::with_capacity(axes.len());
+                    let mut dest_lo = Vec::with_capacity(axes.len());
+                    for (d, ax) in axes.iter().enumerate() {
+                        let (glo, ghi, off) = ax.pieces[combo[d]];
+                        let (lo, hi) = (output_ranges[d].0.max(glo), output_ranges[d].1.min(ghi));
+                        ranges.push((lo, hi));
+                        dest_lo.push((off + lo - glo).max(0) as usize);
+                    }
+                    if ranges.iter().all(|(lo, hi)| lo <= hi) {
+                        let sc = Scope {
+                            syms: output_idx_names.clone(),
+                            lo: ranges.iter().map(|r| r.0).collect(),
+                            hi: ranges.iter().map(|r| r.1).collect(),
+                            sets: sets.clone(),
+                            contracted: Vec::new(),
+                        };
+                        let mut w = Walker::new(vars, var.clone());
+                        let b = w.expr(body, &sc).map_err(refusal_error)?;
+                        collect_reads(&w.reads, &mut reads, vars);
+                        needed.extend(crate::expression::free_variables(&b));
+                        pieces.push(TilePiece {
+                            ranges,
+                            dest_lo,
+                            body: std::rc::Rc::new(b),
+                        });
+                    }
+                    for d in (0..axes.len()).rev() {
+                        combo[d] += 1;
+                        if combo[d] < axes[d].pieces.len() {
+                            continue 'combos;
+                        }
+                        combo[d] = 0;
+                    }
+                    break;
+                }
+                need.insert(
+                    var.clone(),
+                    TileObserved {
+                        lo: axes.iter().map(|a| a.lo).collect(),
+                        hi: axes.iter().map(|a| a.hi).collect(),
+                        period: axes
                             .iter()
-                            .map(|a| a.cut_cell().map(str::to_string))
+                            .map(|a| (a.pieces.len() > 1).then(|| a.pieces[0].1))
                             .collect(),
-                        contracted: Vec::new(),
-                    };
-                    let mut w = Walker::new(vars, var.clone());
-                    let b = w.expr(body, &sc).map_err(refusal_error)?;
-                    hull_reads(&w.reads, &mut reads, vars);
-                    b
-                };
-                needed.extend(crate::expression::free_variables(&new_body));
-                need.insert(var.clone(), (nlo, nhi));
-                kept[k] = Some(AlgebraicRule::ArrayLoop {
-                    var: var.clone(),
-                    output_idx_names: output_idx_names.clone(),
-                    output_ranges: output_ranges.clone(),
-                    body: std::sync::Arc::new(new_body),
-                });
+                        pieces,
+                    },
+                );
+                kept[k] = Some(rule.clone());
             }
             AlgebraicRule::Recurrence { axis, .. } if dependent.contains(var) && info.is_cut() => {
                 if let Some(AxisSpec::Cut { set, .. }) = info.axes.get(*axis) {
@@ -694,7 +788,7 @@ pub(super) fn build(
     }
     let lowering = TileLowering {
         states: doms,
-        observed: clipped.need.clone(),
+        observed: clipped.need,
     };
     let held: HashSet<String> = prog.inner.aux.iter().cloned().collect();
     let shell = shell(compiled, var_shapes, clipped.rhs, clipped.observed, held);
@@ -718,4 +812,42 @@ pub(super) fn build(
             precision,
         }),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AxisNeed, axis_need};
+
+    #[test]
+    fn a_need_across_a_periodic_seam_is_two_pieces() {
+        // Cells 1..4 and the wrapped cell 64.
+        assert_eq!(
+            axis_need(&[(1, 4), (64, 64), (0, 3)], 64, Some(64)),
+            AxisNeed {
+                lo: 64,
+                hi: 68,
+                pieces: vec![(64, 64, 0), (1, 4, 1)],
+            }
+        );
+        // Not periodic: the hull.
+        assert_eq!(
+            axis_need(&[(1, 4), (64, 64)], 64, None),
+            AxisNeed {
+                lo: 1,
+                hi: 64,
+                pieces: vec![(1, 64, 0)],
+            }
+        );
+        // Periodic, but the reads sit nearer each other than across the seam.
+        assert_eq!(
+            axis_need(&[(10, 12), (20, 22)], 64, Some(64)),
+            AxisNeed {
+                lo: 10,
+                hi: 22,
+                pieces: vec![(10, 22, 0)],
+            }
+        );
+        // No read: the whole axis.
+        assert_eq!(axis_need(&[], 8, Some(8)).pieces, vec![(1, 8, 0)]);
+    }
 }

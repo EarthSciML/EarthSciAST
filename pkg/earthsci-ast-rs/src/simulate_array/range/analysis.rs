@@ -14,7 +14,8 @@
 
 use super::tile::refusal_error;
 use super::walk::{AxisSpec, Scope, VarInfo, Walker};
-use super::{Decomposition, HaloReport, RhsProgram, var_infos};
+use super::{Decomposition, HaloReport, RhsProgram, range_error, var_infos};
+use crate::diagnostic::codes;
 use crate::simulate::SimulateError;
 use crate::simulate_array::{AlgebraicRule, RhsRule};
 use crate::types::Expr;
@@ -101,6 +102,35 @@ fn local_reach(
     Ok(reach)
 }
 
+/// A state-dependent observed computed wholesale (not cell by cell): every
+/// output cell sees the whole value, so a read of a state (or of a
+/// state-dependent observed) along a decomposed axis is one no box of reach
+/// bounds. The walk refuses a whole-array read or a reduction along such an
+/// axis; any other read along one (a fixed cell) is `range_global_locality`.
+/// `states` holds the walker's view of the states and the state-dependent
+/// observeds only.
+fn wholesale_reach(
+    states: &HashMap<String, VarInfo>,
+    var: &str,
+    body: &Expr,
+) -> Result<(), SimulateError> {
+    let mut w = Walker::new(states, var.to_string());
+    w.expr(body, &Scope::default()).map_err(refusal_error)?;
+    for r in &w.reads {
+        if let Some(AxisSpec::Cut { set, .. }) = states[&r.var].axes.get(r.axis) {
+            return Err(range_error(
+                codes::RANGE_GLOBAL_LOCALITY,
+                format!(
+                    "observed `{var}` is computed whole and reads `{}` along the decomposed axis \
+                     `{set}`, so its locality is global along `{set}`",
+                    r.var
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn halo(prog: &RhsProgram, dec: &Decomposition) -> Result<HaloReport, SimulateError> {
     let vars = var_infos(prog, dec);
     let compiled = &*prog.inner.model;
@@ -141,17 +171,76 @@ pub(super) fn halo(prog: &RhsProgram, dec: &Decomposition) -> Result<HaloReport,
             widen(&mut top, k, lo, hi);
         }
     }
+    // The states the program reads: the free names of its derivatives,
+    // closed through the observeds they read.
+    let mut read: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for rule in &compiled.rhs_rules {
+        match rule {
+            RhsRule::Scalar { body, .. } | RhsRule::IndexedScalar { body, .. } => {
+                read.extend(crate::expression::free_variables(body));
+            }
+            RhsRule::ArrayLoop { body, filter, .. } => {
+                read.extend(crate::expression::free_variables(body));
+                if let Some(f) = filter {
+                    read.extend(crate::expression::free_variables(f));
+                }
+            }
+        }
+    }
+    for rule in compiled.observed_rules.iter().rev() {
+        let (var, body) = match rule {
+            AlgebraicRule::Scalar { var, body, .. }
+            | AlgebraicRule::ArrayLoop { var, body, .. }
+            | AlgebraicRule::Recurrence { var, body, .. } => (var, body),
+        };
+        if read.contains(var) {
+            read.extend(crate::expression::free_variables(body));
+        }
+    }
+    let dependent = super::tile::state_dependent(compiled);
+    let dependent_vars: HashMap<String, VarInfo> = vars
+        .iter()
+        .filter(|(n, _)| compiled.var_shapes.contains_key(*n) || dependent.contains(*n))
+        .map(|(n, v)| (n.clone(), v.clone()))
+        .collect();
     for rule in compiled.observed_rules.iter().rev() {
         let converted = super::tile::as_loop(rule);
         let rule = converted.as_ref().unwrap_or(rule);
-        let AlgebraicRule::ArrayLoop {
-            var,
-            output_idx_names,
-            output_ranges,
-            body,
-        } = rule
-        else {
-            continue;
+        let (var, output_idx_names, output_ranges, body) = match rule {
+            AlgebraicRule::ArrayLoop {
+                var,
+                output_idx_names,
+                output_ranges,
+                body,
+            } => (var, output_idx_names, output_ranges, body),
+            AlgebraicRule::Recurrence {
+                var,
+                output_idx_names,
+                output_ranges,
+                body,
+                axis,
+                ..
+            } => {
+                if !read.contains(var) || !dependent.contains(var) {
+                    continue;
+                }
+                if let Some(AxisSpec::Cut { set, .. }) = vars[var].axes.get(*axis) {
+                    return Err(range_error(
+                        codes::RANGE_GLOBAL_LOCALITY,
+                        format!(
+                            "observed `{var}` is a recurrence along the decomposed axis `{set}`, \
+                             so its locality is global along `{set}`"
+                        ),
+                    ));
+                }
+                (var, output_idx_names, output_ranges, body)
+            }
+            AlgebraicRule::Scalar { var, body, .. } => {
+                if read.contains(var) && dependent.contains(var) {
+                    wholesale_reach(&dependent_vars, var, body)?;
+                }
+                continue;
+            }
         };
         let info = &vars[var];
         let sets: Vec<Option<String>> = info
@@ -180,32 +269,6 @@ pub(super) fn halo(prog: &RhsProgram, dec: &Decomposition) -> Result<HaloReport,
             if let Some((_, (a, b))) = reached.iter().find(|(s, _)| *s == set) {
                 widen(&mut top, (x, set), a + lo, b + hi);
             }
-        }
-    }
-    // The states the program reads: the free names of its derivatives,
-    // closed through the observeds they read.
-    let mut read: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for rule in &compiled.rhs_rules {
-        match rule {
-            RhsRule::Scalar { body, .. } | RhsRule::IndexedScalar { body, .. } => {
-                read.extend(crate::expression::free_variables(body));
-            }
-            RhsRule::ArrayLoop { body, filter, .. } => {
-                read.extend(crate::expression::free_variables(body));
-                if let Some(f) = filter {
-                    read.extend(crate::expression::free_variables(f));
-                }
-            }
-        }
-    }
-    for rule in compiled.observed_rules.iter().rev() {
-        let (var, body) = match rule {
-            AlgebraicRule::Scalar { var, body, .. }
-            | AlgebraicRule::ArrayLoop { var, body, .. }
-            | AlgebraicRule::Recurrence { var, body, .. } => (var, body),
-        };
-        if read.contains(var) {
-            read.extend(crate::expression::free_variables(body));
         }
     }
     let mut entries = std::collections::BTreeMap::new();

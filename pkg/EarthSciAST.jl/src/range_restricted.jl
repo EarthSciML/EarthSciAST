@@ -136,7 +136,7 @@ concurrent caller; restrict it with [`halo`](@ref), [`restrict`](@ref) and
 [`lanes`](@ref). Immutable once built: one program serves every thread.
 """
 struct RhsProgram{F}
-    seed::Any                       # `BuildInspection.program_seed`
+    seed::Any                       # `_program_seed(prob)`
     compiler::Symbol
     writes::Vector{String}          # W, flat-layout order
     aux_names::Vector{String}       # R \ W, flat-layout order
@@ -224,17 +224,22 @@ end
 
 # The selected flattened system (rules 1–3 of "Selection") and the state names
 # its kept rules read, directly or through observeds.
-function _select_flat(flat::FlattenedSystem, writes, terms)
+#
+# `writable` is the set `writes` draws from: every state of `flat` for the
+# Problem's whole model, a program's own written variables for a selection of
+# a selection (whose other states are read-only `aux`).
+function _select_flat(flat::FlattenedSystem, writes, terms,
+                      writable = Set{String}(keys(flat.state_variables)))
     states = flat.state_variables
     W = Set{String}()
     if writes === :all
-        union!(W, keys(states))
+        union!(W, writable)
     else
         for w in writes
             ws = String(w)
-            haskey(states, ws) || throw(SimulateError(
-                "select: `writes` names '$ws', which is not a state of this program; " *
-                "its states are $(join(sort!(collect(keys(states))), ", "))"))
+            ws in writable || throw(SimulateError(
+                "select: `writes` names '$ws', which is not a variable this program " *
+                "writes; it writes $(join(sort!(collect(writable)), ", "))"))
             push!(W, ws)
         end
     end
@@ -351,6 +356,7 @@ _range_observed_box(::_RangeSpec, name, dims) = (ones(Int, length(dims)), copy(d
 _range_fill_equations(::_RangeSpec, name, def, dims, box) =
     _materialized_fill_equations(name, def, dims)
 _range_front_door_done(::_RangeSpec, file, model_name, kwd) = nothing
+_range_build_epoch(::_RangeSpec, epoch) = nothing
 
 # A whole-domain program build: records the front door's product, so a
 # restriction re-lowers from it.
@@ -503,8 +509,11 @@ end
 
 # The copy maps between a layout and the internal slot space. `to_internal(name,
 # d, g)` maps a storage coordinate to its internal (global) coordinate, or
-# `nothing` for a cell the program never reads (a dead halo cell).
-function _copy_maps(layout::TileLayout, internal::StateLayout, to_internal)
+# `nothing` for a cell the program never reads (a dead halo cell); a cell
+# outside the variable's own block may lie in one of its `extra` blocks (the
+# pieces past a periodic seam).
+function _copy_maps(layout::TileLayout, internal::StateLayout, to_internal,
+                    extra::AbstractDict = Dict{String,Vector{String}}())
     function fill_in!(src, dst, blocks)
         for b in blocks
             if isempty(b.sets) && isempty(b.storage)
@@ -523,6 +532,10 @@ function _copy_maps(layout::TileLayout, internal::StateLayout, to_internal)
                 end
                 ok || continue
                 s = _block_slot(ib, g)
+                for a in get(extra, b.name, ())
+                    s == 0 || break
+                    s = _block_slot(_layout_block(internal, a), g)
+                end
                 s == 0 && continue
                 push!(src, _tile_slot(b, Tuple(c)))
                 push!(dst, s)
@@ -589,8 +602,8 @@ value, is read from the set, never from build-time data.
 [`default_forcing_set`](@ref) holds the Problem's forcing as it is now.
 """
 function rhs_program(prob::EsmProblem)
-    seed = prob.inspection.program_seed
     c = compiler(prob)
+    seed = c in (:native, :interpreter) ? _program_seed(prob) : nothing
     (seed === nothing || !(c in (:native, :interpreter))) &&
         throw(_range_error(ERROR_CODES.COMPILER_UNAVAILABLE,
             "rhs_program needs a Problem built by esm_problem with compiler = :native " *
@@ -611,16 +624,19 @@ in `writes` (a vector of flattened state names, or `:all`) are dropped, and a
 kept equation with no kept contribution writes `0`. The result's `u` covers
 `writes` and its `aux` the other states the kept rules read.
 
+A selection of a selection composes: its `terms` keep only the contributions
+both selections keep, and its `writes` (`:all` meaning `prog`'s own) must be
+variables `prog` writes.
+
 Raises `range_selection_writes_incomplete` when a variable outside `writes` has
 a kept contribution.
 """
 function select(prog::RhsProgram; writes = :all, terms = :all)
     t = _normalize_terms(terms)
-    flat, W, R = _select_flat(prog.seed.flat, writes, t)
-    # A selection of a selection selects from the program's own states.
-    if writes === :all
-        W = intersect(W, Set(prog.writes))
-    end
+    # A selection of a selection selects from the program's own flattened
+    # system: its contributions are the ones the first selection kept, and its
+    # writable variables are the first selection's `writes`.
+    flat, W, R = _select_flat(prog.flat, writes, t, Set{String}(prog.writes))
     return _whole_program(prog.seed, flat, W, R, writes, t; parent = prog.shared)
 end
 
@@ -844,6 +860,43 @@ _axis_period(m::_AxisModel, axis::String) = m.period[axis]
     return r > P ÷ 2 ? r - P : r
 end
 
+# A tile's storage crossing the seam of a periodic axis: the in-domain cells it
+# stores directly (`near`, which holds the owned box) and the images of the
+# cells it stores past the seam (`far`, at the other end of the axis). The axis
+# splits into two sides at `cut`, each holding one piece.
+struct _Seam
+    near::UnitRange{Int}
+    far::UnitRange{Int}
+    far_high::Bool                            # `far` lies above `near`
+    cut::Int
+end
+
+_seam_far(s::_Seam, g::Integer) = s.far_high ? g > s.cut : g <= s.cut
+
+# The seam a tile's storage `S` crosses on a periodic axis of period `P` (face
+# cells when `face`), or `nothing` when it crosses none, or stores so much of
+# the axis that both pieces meet (its block is then the whole axis, which is
+# no larger than its storage).
+function _tile_seam(S::UnitRange{Int}, dom::UnitRange{Int}, P::Int, face::Bool)
+    Sf = face ? (first(S):(last(S) + 1)) : S
+    issubset(Sf, dom) && return nothing
+    near = max(first(Sf), first(dom)):min(last(Sf), last(dom))
+    imgs = Int[]
+    for x in Sf
+        x in dom && continue
+        y = x + P * cld(first(dom) - x, P)
+        y in dom && push!(imgs, y)
+    end
+    (isempty(near) || isempty(imgs)) && return nothing
+    far = minimum(imgs):maximum(imgs)
+    if first(far) > last(near) + 1
+        return _Seam(near, far, true, (last(near) + first(far)) ÷ 2)
+    elseif last(far) < first(near) - 1
+        return _Seam(near, far, false, (last(far) + first(near)) ÷ 2)
+    end
+    return nothing
+end
+
 mutable struct _NeedCtx
     mode::Symbol                              # :halo, :tile or :lane
     axes::_AxisModel
@@ -865,6 +918,55 @@ mutable struct _NeedCtx
     work::Vector{String}
     obs_rule::Dict{String,String}
     scalar_stack::Set{String}
+    # Seam crossings (tile mode): `(axis, face)` → its seam; the walk's current
+    # context (`("", ())` for the state equations, `(observed, sides)` for an
+    # observed evaluated on one side of each seam it crosses); the `index`
+    # nodes being walked; and, per such node, per (variable, context), which
+    # sides of each seam its reads land on (bit 1 near, bit 2 far).
+    seams::Dict{Tuple{String,Bool},_Seam}
+    tag::Tuple{String,Tuple}
+    idx_stack::Vector{Any}
+    marks::IdDict{Any,Dict{Tuple{String,Tuple{String,Tuple}},Vector{UInt8}}}
+end
+
+_NeedCtx(mode, axes, owned, storage, shapes, extents, states, scalar_states, obs_defs,
+         scalar_defs, mat_obs, params, const_arrays, arrays, reach, reads, obs_need, work,
+         obs_rule, scalar_stack) =
+    _NeedCtx(mode, axes, owned, storage, shapes, extents, states, scalar_states, obs_defs,
+             scalar_defs, mat_obs, params, const_arrays, arrays, reach, reads, obs_need,
+             work, obs_rule, scalar_stack, Dict{Tuple{String,Bool},_Seam}(), ("", ()),
+             Any[], IdDict{Any,Dict{Tuple{String,Tuple{String,Tuple}},Vector{UInt8}}}())
+
+# The seam dimension `d` of variable `n` crosses, or `nothing`.
+function _dim_seam(ctx::_NeedCtx, n::String, d::Int)
+    isempty(ctx.seams) && return nothing
+    cut = get(ctx.axes.cut, ctx.shapes[n][d], nothing)
+    cut === nothing && return nothing
+    return get(ctx.seams, cut, nothing)
+end
+
+# Record which sides of its seams a read of `n` at `binds` lands on.
+function _seam_mark!(ctx::_NeedCtx, n::String, binds::Vector{_Bind})
+    isempty(ctx.seams) && return nothing
+    bits = zeros(UInt8, length(binds))
+    any_seam = false
+    for d in eachindex(binds)
+        s = _dim_seam(ctx, n, d)
+        s === nothing && continue
+        any_seam = true
+        for r in binds[d].cells.ivs
+            # An interval's sides: it is on one side unless it spans the cut.
+            bits[d] |= _seam_far(s, first(r)) ? 0x02 : 0x01
+            bits[d] |= _seam_far(s, last(r)) ? 0x02 : 0x01
+        end
+    end
+    any_seam || return nothing
+    node = isempty(ctx.idx_stack) ? nothing : ctx.idx_stack[end]
+    d = get!(() -> Dict{Tuple{String,Tuple{String,Tuple}},Vector{UInt8}}(), ctx.marks, node)
+    k = (n, ctx.tag)
+    cur = get(d, k, nothing)
+    d[k] = cur === nothing ? bits : cur .| bits
+    return nothing
 end
 
 # The rule name a diagnostic shows: a hoisted reduction under its reader's name.
@@ -1029,8 +1131,13 @@ function _need_walk!(ctx::_NeedCtx, e::ASTExpr, env::Dict{String,_Bind},
     e isa OpExpr || return nothing
     o = e::OpExpr
     if o.op == "index" && !isempty(o.args)
-        return _need_index!(ctx, o.args[1], ASTExpr[a for a in o.args[2:end]], env,
-                            anchors, rule)
+        push!(ctx.idx_stack, o)
+        try
+            _need_index!(ctx, o.args[1], ASTExpr[a for a in o.args[2:end]], env, anchors, rule)
+        finally
+            pop!(ctx.idx_stack)
+        end
+        return nothing
     end
     if _is_faq_op(o.op) && o.expr_body !== nothing
         # A bare aggregate: a reduction over its ranges.
@@ -1144,11 +1251,13 @@ function _need_index!(ctx::_NeedCtx, target::ASTExpr, subs::Vector{ASTExpr},
             length(sh) == length(subs) || return nothing
             binds = _Bind[_bind_sub(ctx, subs[d], env, anchors, sh[d], rule) for d in eachindex(subs)]
             _record_state_read!(ctx, n, binds, rule)
+            _seam_mark!(ctx, n, binds)
         elseif haskey(ctx.obs_defs, n)
             sh = ctx.shapes[n]
             length(sh) == length(subs) || return nothing
             binds = _Bind[_bind_sub(ctx, subs[d], env, anchors, sh[d], rule) for d in eachindex(subs)]
             _need_observed!(ctx, n, binds, rule)
+            _seam_mark!(ctx, n, binds)
         elseif haskey(ctx.scalar_defs, n)
             _need_walk!(ctx, target, env, anchors, rule)
         end
@@ -1355,19 +1464,37 @@ function _need_drain!(ctx::_NeedCtx)
         n = popfirst!(ctx.work)
         binds = ctx.obs_need[n]
         any(b -> isempty(b.cells) && !b.runtime, binds) && continue
-        env = Dict{String,_Bind}()
-        anchors = Dict{String,String}()
-        subs = ASTExpr[]
-        for d in eachindex(binds)
-            v = "\0rr\0$d"
-            env[v] = binds[d]
-            isempty(binds[d].axis) || (anchors[binds[d].axis] = v)
-            push!(subs, VarExpr(v))
+        # Evaluated on each side of each seam it crosses separately, so every
+        # read in its definition is told which side it serves.
+        sdims = [d for d in eachindex(binds) if _dim_seam(ctx, n, d) !== nothing]
+        for sides in Iterators.product((false:true for _ in sdims)...)
+            bs = copy(binds)
+            for (k, d) in enumerate(sdims)
+                s = _dim_seam(ctx, n, d)::_Seam
+                bs[d] = _with_cells(bs[d], _seam_side_cells(s, bs[d].cells, sides[k]))
+            end
+            any(b -> isempty(b.cells) && !b.runtime, bs) && continue
+            env = Dict{String,_Bind}()
+            anchors = Dict{String,String}()
+            subs = ASTExpr[]
+            for d in eachindex(bs)
+                v = "\0rr\0$d"
+                env[v] = bs[d]
+                isempty(bs[d].axis) || (anchors[bs[d].axis] = v)
+                push!(subs, VarExpr(v))
+            end
+            ctx.tag = (n, Tuple(sides))
+            _need_index!(ctx, ctx.obs_defs[n], subs, env, anchors, n)
         end
-        _need_index!(ctx, ctx.obs_defs[n], subs, env, anchors, n)
+        ctx.tag = ("", ())
     end
     return nothing
 end
+
+# The cells of `c` on the near (`far = false`) or far side of seam `s`.
+_seam_side_cells(s::_Seam, c::_ISet, far::Bool) =
+    s.far_high == far ? _iset_intersect(c, (s.cut + 1):typemax(Int) - 1) :
+                        _iset_intersect(c, (typemin(Int) + 1):s.cut)
 
 # ============================================================================
 # §5 The decomposition against a program
@@ -1453,9 +1580,16 @@ mutable struct _TileSpec <: _RangeSpec
     shapes::Dict{String,Vector{String}}        # array states (from the program)
     writes::Set{String}
     ctx::Any                                   # the `_NeedCtx` once analysed
+    # The far-side blocks of states read past a seam: block name → (state,
+    # the dimensions on which it holds the far piece).
+    aliases::Dict{String,Tuple{String,Vector{Bool}}}
 end
 
-struct _HaloDone <: Exception
+_TileSpec(mode, axes, owned, storage, shapes, writes, ctx) =
+    _TileSpec(mode, axes, owned, storage, shapes, writes, ctx,
+              Dict{String,Tuple{String,Vector{Bool}}}())
+
+struct _HaloDone <: EarthSciASTError
     ctx::_NeedCtx
 end
 
@@ -1494,12 +1628,22 @@ function _need_context(spec::_TileSpec, model, cls, parts, index_sets, const_arr
                Dict{String,Any}(String(k) => v for (k, v) in const_arrays))
     states = Set{String}(n for n in keys(spec.shapes))
     scalar_states = Set{String}(n for n in parts.state_var_names if !(n in states))
-    return _NeedCtx(spec.mode, spec.axes, spec.owned, spec.storage, shapes, extents,
-                    states, scalar_states, obs_defs, scalar_defs,
-                    Set{String}(cls.mat_array_vars), params, ca, arrays,
-                    Dict{Tuple{String,String},Tuple{Int,Int}}(), Set{String}(),
-                    Dict{String,Vector{_Bind}}(), String[], Dict{String,String}(),
-                    Set{String}())
+    ctx = _NeedCtx(spec.mode, spec.axes, spec.owned, spec.storage, shapes, extents,
+                   states, scalar_states, obs_defs, scalar_defs,
+                   Set{String}(cls.mat_array_vars), params, ca, arrays,
+                   Dict{Tuple{String,String},Tuple{Int,Int}}(), Set{String}(),
+                   Dict{String,Vector{_Bind}}(), String[], Dict{String,String}(),
+                   Set{String}())
+    if spec.mode === :tile
+        for (a, P) in spec.axes.period
+            P === nothing && continue
+            for face in (false, true)
+                sm = _tile_seam(spec.storage[a], _axis_domain(spec.axes, a, face), P, face)
+                sm === nothing || (ctx.seams[(a, face)] = sm)
+            end
+        end
+    end
+    return ctx
 end
 
 # The output cells of a `D` equation's loop variable at dimension `d` of `v`.
@@ -1516,6 +1660,30 @@ function _output_cells(ctx::_NeedCtx, v::String, d::Int, rng)
         return _iset_intersect(cells, ob), axis
     end
     return _iset_intersect(cells, dom), axis
+end
+
+# The right-hand side of an equation whose left-hand side `faq` (output indices
+# `louts`) was clipped: `clips` maps a left-hand loop variable to its new range,
+# and a right-hand `faq` output takes the range of the left-hand output it
+# lines up with. Equal ranks line up by position, whatever each side names its
+# indices; a lower-rank right-hand side (its output names are the left-hand
+# loops it keeps) by name.
+function _clip_rhs_ranges(rhs::ASTExpr, louts::Vector{String}, clips::AbstractDict)
+    (rhs isa OpExpr && _is_faq_op((rhs::OpExpr).op) && (rhs::OpExpr).ranges !== nothing) ||
+        return rhs
+    R = rhs::OpExpr
+    routs = _output_idx_strings(R)
+    rr = Dict{String,Any}(String(k) => r for (k, r) in R.ranges)
+    for (x, r) in clips
+        y = if length(routs) == length(louts)
+            d = findfirst(==(x), louts)
+            d === nothing ? nothing : routs[d]
+        else
+            x in routs ? x : nothing
+        end
+        (y !== nothing && haskey(rr, y)) && (rr[y] = r)
+    end
+    return reconstruct(R; ranges = rr)
 end
 
 # Walk one `D` equation; return it clipped to the owned box (tile mode), or
@@ -1568,17 +1736,8 @@ function _need_root!(ctx::_NeedCtx, eq::Equation, rule::String)
         end
         ctx.mode === :tile || return eq
         newlhs = reconstruct(L; ranges = newr)
-        newrhs = rhs
-        if rhs isa OpExpr && _is_faq_op((rhs::OpExpr).op) && (rhs::OpExpr).ranges !== nothing
-            R = rhs::OpExpr
-            routs = _output_idx_strings(R)
-            rr = Dict{String,Any}(String(k) => r for (k, r) in R.ranges)
-            for (d, x) in enumerate(outs)
-                d <= length(routs) || break
-                haskey(rr, routs[d]) && (rr[routs[d]] = newr[x])
-            end
-            newrhs = reconstruct(R; ranges = rr)
-        end
+        clips = Dict{String,Any}(x => newr[x] for x in outs if haskey(newr, x))
+        newrhs = _clip_rhs_ranges(rhs, outs, clips)
         return Equation(newlhs, newrhs; _comment = eq._comment)
     end
     body = lhs
@@ -1625,13 +1784,147 @@ function _range_restrict_parts(spec::_TileSpec, model, cls, parts, index_sets,
     end
     _need_drain!(ctx)
     spec.mode === :halo && throw(_HaloDone(ctx))
+    isempty(ctx.seams) || (eqs = _seam_equations(ctx, spec, eqs))
     return merge(parts, (equations = eqs,))
 end
 
-# Each array state's internal box: the in-domain cells of its storage (a
-# periodic axis in global coordinates, its whole extent when the storage
-# crosses the seam).
+# ---- Reads past a periodic seam ----
+#
+# A tile whose storage crosses a seam lays each state out over the piece it
+# stores directly (`near`) and, as a second block, the piece past the seam
+# (`far`), so its internal vector is as long as its storage, never the axis.
+# Every read is sent to the block its cells lie in: a state read past the seam
+# reads the far block (a block named by `_seam_alias`, holding the same global
+# coordinates), and an observed read past the seam is evaluated there, from its
+# definition rewritten for that side. The need walk recorded, per read and per
+# context, which side each read lands on (`_seam_mark!`); a read that lands on
+# both is refused.
+
+_seam_alias(n::String, far::Vector{Bool}) = "__seam_" * join(Int.(far)) * "__" * n
+
+struct _SeamRewrite
+    ctx::_NeedCtx
+    aliases::Dict{String,Tuple{String,Vector{Bool}}}
+    inline::Dict{Tuple{String,Tuple},ASTExpr}
+end
+
+# The dimensions on which the read of `n` at `node` lands past the seam in
+# context `tag` (`:any`: every context), or `nothing` for a read that does not
+# (or that the walk never reached).
+function _seam_far_dims(ctx::_NeedCtx, node, n::String, tag)
+    m = get(ctx.marks, node, nothing)
+    m === nothing && return nothing
+    bits = nothing
+    if tag === :any
+        for ((v, _), b) in m
+            v == n || continue
+            bits = bits === nothing ? copy(b) : bits .| b
+        end
+    else
+        bits = get(m, (n, tag), nothing)
+    end
+    bits === nothing && return nothing
+    far = Bool[b == 0x02 for b in bits]
+    for d in eachindex(bits)
+        bits[d] == 0x03 && _refuse_rule(_rule_display(n),
+            "tile restriction: one read of '$n' reaches cells on both sides of the " *
+            "periodic seam of '$(ctx.shapes[n][d])' within the tile's storage; give the " *
+            "tile a storage box that does not cross the seam")
+    end
+    return any(far) ? far : nothing
+end
+
+# `f` over every expression child of `o`; `o` itself when none changes.
+function _seam_map(f, o::OpExpr)
+    args = ASTExpr[f(a) for a in o.args]
+    body = o.expr_body === nothing ? nothing : f(o.expr_body)
+    filt = o.filter === nothing ? nothing : f(o.filter)
+    vals = o.values === nothing ? nothing : ASTExpr[f(v) for v in o.values]
+    lo = o.lower === nothing ? nothing : f(o.lower)
+    hi = o.upper === nothing ? nothing : f(o.upper)
+    same = all(k -> args[k] === o.args[k], eachindex(args)) && body === o.expr_body &&
+           filt === o.filter && lo === o.lower && hi === o.upper &&
+           (vals === nothing || all(k -> vals[k] === o.values[k], eachindex(vals)))
+    same && return o
+    return reconstruct(o; args = args, expr_body = body, filter = filt, values = vals,
+                       lower = lo, upper = hi)
+end
+
+function _seam_rewrite(rw::_SeamRewrite, e::ASTExpr, tag)
+    e isa OpExpr || return e
+    o = e::OpExpr
+    if o.op == "index" && !isempty(o.args)
+        args = ASTExpr[_seam_target(rw, o.args[1], o, tag)]
+        for a in Iterators.drop(o.args, 1)
+            push!(args, _seam_rewrite(rw, a, tag))
+        end
+        all(k -> args[k] === o.args[k], eachindex(args)) && return o
+        return reconstruct(o; args = args)
+    end
+    return _seam_map(x -> _seam_rewrite(rw, x, tag), o)
+end
+
+# The target of the `index` node `node` (`nothing` for an observed's own
+# definition), rewritten: a state read past the seam reads its far block, an
+# observed read past the seam its definition on that side.
+function _seam_target(rw::_SeamRewrite, t::ASTExpr, node, tag)
+    ctx = rw.ctx
+    if t isa VarExpr
+        n = (t::VarExpr).name
+        if n in ctx.states
+            far = _seam_far_dims(ctx, node, n, tag)
+            far === nothing && return t
+            a = _seam_alias(n, far)
+            rw.aliases[a] = (n, far)
+            return VarExpr(a)
+        elseif haskey(ctx.obs_defs, n)
+            far = _seam_far_dims(ctx, node, n, tag)
+            far === nothing && return t
+            sides = Tuple(far[d] for d in eachindex(far) if _dim_seam(ctx, n, d) !== nothing)
+            return get!(rw.inline, (n, sides)) do
+                _seam_target(rw, ctx.obs_defs[n], nothing, (n, sides))
+            end
+        end
+        return t
+    end
+    t isa OpExpr || return t
+    o = t::OpExpr
+    (o.op == "index" || o.op == "makearray" || o.op == "const" ||
+     (_is_faq_op(o.op) && o.expr_body !== nothing)) && return _seam_rewrite(rw, o, tag)
+    # An elementwise combination of arrays: each array operand is read at the
+    # cells of `node` itself.
+    return _seam_map(o) do x
+        _is_arrayish(ctx, x) ? _seam_target(rw, x, node, tag) : _seam_rewrite(rw, x, tag)
+    end
+end
+
+function _seam_equations(ctx::_NeedCtx, spec::_TileSpec, eqs::Vector{Equation})
+    rw = _SeamRewrite(ctx, spec.aliases, Dict{Tuple{String,Tuple},ASTExpr}())
+    out = Equation[]
+    for eq in eqs
+        rhs = if _d_target(eq.lhs) !== nothing
+            _seam_rewrite(rw, eq.rhs, ("", ()))
+        elseif eq.lhs isa VarExpr && haskey(ctx.obs_defs, (eq.lhs::VarExpr).name)
+            n = (eq.lhs::VarExpr).name
+            near = Tuple(false for d in eachindex(ctx.shapes[n]) if _dim_seam(ctx, n, d) !== nothing)
+            _seam_target(rw, eq.rhs, nothing, (n, near))
+        elseif eq.lhs isa VarExpr && haskey(ctx.scalar_defs, (eq.lhs::VarExpr).name)
+            _seam_rewrite(rw, eq.rhs, :any)
+        else
+            eq.rhs
+        end
+        push!(out, rhs === eq.rhs ? eq : Equation(eq.lhs, rhs; _comment = eq._comment))
+    end
+    return out
+end
+
+# Each array state's internal box: the in-domain cells of its storage, in
+# global coordinates. Where the storage crosses a periodic seam, that is the
+# piece on the tile's side, and the piece past the seam is a block of its own
+# (`_seam_alias`) for the reads that land there; a storage that wraps onto
+# itself takes the whole axis.
 function _range_state_boxes!(spec::_TileSpec, avi)
+    seams = spec.ctx === nothing ? Dict{Tuple{String,Bool},_Seam}() : spec.ctx.seams
     for (n, (lo, hi)) in collect(avi)
         sh = get(spec.shapes, n, nothing)
         sh === nothing && continue
@@ -1643,7 +1936,10 @@ function _range_state_boxes!(spec::_TileSpec, avi)
             S = spec.storage[axis]
             Sf = face ? (first(S):(last(S) + 1)) : S
             dom = _axis_domain(spec.axes, axis, face)
-            if spec.axes.period[axis] !== nothing && !issubset(Sf, dom)
+            sm = get(seams, cut, nothing)
+            if sm !== nothing
+                lo2[d], hi2[d] = first(sm.near), last(sm.near)
+            elseif spec.axes.period[axis] !== nothing && !issubset(Sf, dom)
                 lo2[d], hi2[d] = first(dom), last(dom)
             else
                 r = max(first(Sf), first(dom)):min(last(Sf), last(dom))
@@ -1651,6 +1947,16 @@ function _range_state_boxes!(spec::_TileSpec, avi)
             end
         end
         avi[n] = (lo2, hi2)
+    end
+    for (a, (n, far)) in spec.aliases
+        lo, hi = avi[n]
+        lo2, hi2 = copy(lo), copy(hi)
+        for d in eachindex(far)
+            far[d] || continue
+            sm = seams[spec.axes.cut[spec.shapes[n][d]]]
+            lo2[d], hi2[d] = first(sm.far), last(sm.far)
+        end
+        avi[a] = (lo2, hi2)
     end
     return avi
 end
@@ -1662,11 +1968,18 @@ function _range_observed_box(spec::_TileSpec, name, dims)
     lo, hi = ones(Int, length(dims)), copy(dims)
     for d in eachindex(dims)
         haskey(spec.axes.cut, sh[d]) || continue
-        c = _iset_intersect(need[d].cells, 1:dims[d])
+        c = _obs_near_cells(spec.ctx, name, d, _iset_intersect(need[d].cells, 1:dims[d]))
         isempty(c) && return nothing
         lo[d], hi[d] = minimum(c), maximum(c)
     end
     return (lo, hi)
+end
+
+# The cells of observed `n`'s buffer along dimension `d`: past a seam an
+# observed is evaluated where it is read, so its buffer holds its near side.
+function _obs_near_cells(ctx::_NeedCtx, n::String, d::Int, c::_ISet)
+    s = _dim_seam(ctx, n, d)
+    return s === nothing ? c : _seam_side_cells(s, c, false)
 end
 
 function _range_fill_equations(spec::_TileSpec, name, def, dims, box)
@@ -1685,7 +1998,8 @@ function _range_fill_equations(spec::_TileSpec, name, def, dims, box)
             x = (a::VarExpr).name
             r = rd[x]
             span = Int(r[1]):Int(r[end])
-            c = _iset_intersect(_iset_intersect(need[d].cells, 1:dims[d]), span)
+            c = _iset_intersect(_obs_near_cells(spec.ctx, name, d,
+                                                _iset_intersect(need[d].cells, 1:dims[d])), span)
             push!(pieces, x => c.ivs)
         end
         any(p -> isempty(last(p)), pieces) && continue
@@ -1695,14 +2009,8 @@ function _range_fill_equations(spec::_TileSpec, name, def, dims, box)
                 r2[first(p)] = Any[first(combo[k]), last(combo[k])]
             end
             lhs = reconstruct(L; ranges = r2)
-            rhs = eq.rhs
-            if rhs isa OpExpr && _is_faq_op((rhs::OpExpr).op) && (rhs::OpExpr).ranges !== nothing
-                rr = Dict{String,Any}(String(k) => v for (k, v) in (rhs::OpExpr).ranges)
-                for (k, p) in enumerate(pieces)
-                    haskey(rr, first(p)) && (rr[first(p)] = Any[first(combo[k]), last(combo[k])])
-                end
-                rhs = reconstruct(rhs::OpExpr; ranges = rr)
-            end
+            clips = Dict{String,Any}(first(p) => r2[first(p)] for p in pieces)
+            rhs = _clip_rhs_ranges(eq.rhs, _output_idx_strings(L), clips)
             push!(out, Equation(lhs, rhs))
         end
     end
@@ -1818,7 +2126,12 @@ function restrict(op::RhsProgram, dec::Decomposition; owned, storage)
         y = x + P * cld(first(dom) - x, P)
         return y in dom ? y : nothing
     end
-    maps = _copy_maps(layout, internal, to_internal)
+    extra = Dict{String,Vector{String}}()
+    for (a, (n, _)) in spec.aliases
+        push!(get!(() -> String[], extra, n), a)
+    end
+    foreach(sort!, values(extra))
+    maps = _copy_maps(layout, internal, to_internal, extra)
     return TileProgram(op, dec, ow, st, f!, internal, layout, maps, _RhsShared(op.shared))
 end
 
@@ -1910,9 +2223,12 @@ mutable struct _LaneSpec <: _RangeSpec
     obs_shapes::Dict{String,Vector{String}}
     params::Dict{String,Int}
     ext::Dict{String,Int}
+    epoch::Any                                 # the build's forcing epoch
 end
 
 _lane_refuse(rule, why) = _refuse_rule(_rule_display(rule), "lane: $why")
+
+_range_build_epoch(spec::_LaneSpec, epoch) = (spec.epoch = epoch; nothing)
 
 _lane_box_dim(spec::_LaneSpec, shape::Vector{String}, d::Int) =
     shape[d] in spec.sets ?
@@ -2250,24 +2566,8 @@ function lanes(op::RhsProgram, kind::Symbol, sets; chunk::Int = _LANE_CHUNK)
         kind === :columns && isempty(others) && throw(_box_invalid(join(S, ", "),
             "a :columns lane leaves a column, but the lane sets cover every index set of '$n'"))
     end
-    ext = _program_sets(op)
-    index_bufs = Dict{String,Vector{Float64}}(s => zeros(chunk) for s in S)
-    spec = _LaneSpec(kind, S, chunk, shapes, index_bufs, _LaneGather[], Set{String}(),
-                     Dict{String,Vector{String}}(), Dict{String,Int}(), ext)
-    # The lane-index buffers are live forcing buffers of the build.
-    file, model_name, _ = op.front
-    kw = _relower_kwargs(op.front)
-    pa = get(kw, :param_arrays, Dict{String,Any}())
-    pa = Dict{String,Any}(String(k) => v for (k, v) in pa)
-    for (s, b) in index_bufs
-        pa["__lane_" * s] = b
-    end
-    kw[:param_arrays] = pa
-    f!, _u0, _p, _ts, internal = _with_compiler_plan(_plan_for(op.compiler)) do
-        _with_range_spec(spec) do
-            _build_evaluator(file; model_name = model_name, kw...)
-        end
-    end
+    inst = _lane_instance(op, kind, S, chunk)
+    internal = inst.internal
     # ---- the lane layout and its copy plans ----
     function blocks(names)
         out = LaneBlock[]
@@ -2298,15 +2598,41 @@ function lanes(op::RhsProgram, kind::Symbol, sets; chunk::Int = _LANE_CHUNK)
     ub, uplan, nu = blocks(op.writes)
     ab, aplan, na = blocks(op.aux_names)
     layout = LaneLayout(ub, ab, S, nu, na)
-    ibufs = Vector{Float64}[index_bufs[s] for s in S]
-    lane_bufs = vcat(ibufs, Vector{Float64}[g.buf for g in spec.gathers])
+    lane_bufs = vcat(inst.index_bufs, Vector{Float64}[g.buf for g in inst.gathers])
     gslots = Int[something(findfirst(o -> o === g.src ||
                                          (!isempty(o) && pointer(o) == pointer(g.src) &&
                                           length(o) == length(g.src)),
                                      op.shared.originals), 0)
-                 for g in spec.gathers]
-    return LaneProgram(op, kind, S, chunk, f!, internal, layout, ibufs, spec.gathers,
-                       gslots, uplan, aplan, spec.params, _RhsShared(op.shared, lane_bufs))
+                 for g in inst.gathers]
+    return LaneProgram(op, kind, S, chunk, inst.f!, internal, layout, inst.index_bufs,
+                       inst.gathers, gslots, uplan, aplan, inst.params,
+                       _RhsShared(op.shared, lane_bufs))
+end
+
+# One compiled lane program: its right-hand side, the live lane buffers it
+# reads, its gathers and its build's forcing epoch.
+function _lane_instance(op::RhsProgram, kind::Symbol, S::Vector{String}, chunk::Int)
+    index_bufs = Dict{String,Vector{Float64}}(s => zeros(chunk) for s in S)
+    spec = _LaneSpec(kind, S, chunk, _array_shapes(op), index_bufs, _LaneGather[],
+                     Set{String}(), Dict{String,Vector{String}}(), Dict{String,Int}(),
+                     _program_sets(op), nothing)
+    # The lane-index buffers are live forcing buffers of the build.
+    file, model_name, _ = op.front
+    kw = _relower_kwargs(op.front)
+    pa = get(kw, :param_arrays, Dict{String,Any}())
+    pa = Dict{String,Any}(String(k) => v for (k, v) in pa)
+    for (s, b) in index_bufs
+        pa["__lane_" * s] = b
+    end
+    kw[:param_arrays] = pa
+    f!, _u0, _p, _ts, internal = _with_compiler_plan(_plan_for(op.compiler)) do
+        _with_range_spec(spec) do
+            _build_evaluator(file; model_name = model_name, kw...)
+        end
+    end
+    spec.epoch isa _ForcingEpoch || error("lanes: the build did not report its forcing epoch")
+    return (; f!, internal, index_bufs = Vector{Float64}[index_bufs[s] for s in S],
+            gathers = spec.gathers, params = spec.params, epoch = spec.epoch::_ForcingEpoch)
 end
 
 """
@@ -2410,7 +2736,8 @@ function gather_lane_inputs!(li::LaneInputs, lp::LaneProgram, p, t, fs::ForcingS
     return li
 end
 
-function _lane_check(lp::LaneProgram, du, u, aux, cells, n)
+function _lane_check(lp::LaneProgram, ws::RhsWorkspace, du, u, aux, cells, n)
+    _check_workspace(lp.shared, ws)
     L = size(cells, 2)
     size(cells, 1) == length(lp.sets) || throw(DimensionMismatch(
         "rhs!: `cells` has $(size(cells, 1)) rows; the lane sets are $(join(lp.sets, ", "))"))
@@ -2470,8 +2797,7 @@ buffer is the workspace's: reentrant across distinct workspaces.
 """
 function rhs!(du::AbstractVector, lp::LaneProgram, ws::RhsWorkspace, u::AbstractVector,
               aux::AbstractVector, p, t, fs::ForcingSet, cells::AbstractMatrix, n::Integer)
-    _check_workspace(lp.shared, ws)
-    L = _lane_check(lp, du, u, aux, cells, n)
+    L = _lane_check(lp, ws, du, u, aux, cells, n)
     _prime!(ws, fs)
     C = lp.C
     env = ws.env
@@ -2495,8 +2821,7 @@ end
 
 function rhs!(du::AbstractVector, lp::LaneProgram, ws::RhsWorkspace, u::AbstractVector,
               aux::AbstractVector, p, t, li::LaneInputs, cells::AbstractMatrix, n::Integer)
-    _check_workspace(lp.shared, ws)
-    L = _lane_check(lp, du, u, aux, cells, n)
+    L = _lane_check(lp, ws, du, u, aux, cells, n)
     li.L == L || throw(DimensionMismatch("rhs!: the lane inputs hold $(li.L) lanes; the batch has $L"))
     fs = li.fs[]
     fs === nothing && throw(ArgumentError(
