@@ -234,8 +234,9 @@ export
     rhs_program, select, halo, restrict, lanes, tile_layout, lane_layout,
     rhs_workspace, rhs!, lane_inputs, gather_lane_inputs!, Decomposition,
     # Public right-hand side (API_SPEC §5.8, issue #541)
-    RhsProgram, RhsWorkspace, ForcingSet, ForcingSlot, ParamSlot, forcing_slots,
-    forcing_set, default_forcing_set, forcing_epoch, parameter_vector,
+    ForcingSet, ForcingSlot, ParamSlot, StateBlock, forcing_slots, forcing_set,
+    default_forcing_set, replace_forcing, forcing_epoch, parameter_vector, n_states,
+    state_layout,
     # Flatten error taxonomy (spec §4.7.6.10, 8 types for cross-language parity)
     ConflictingDerivativeError, DimensionPromotionError, UnmappedDomainError,
     UnsupportedMappingError, DomainUnitMismatchError,

@@ -115,18 +115,33 @@ end
 
     @testset "forcing sets" begin
         a = default_forcing_set(prog)
-        b = default_forcing_set(prog)
-        @test forcing_epoch(a) != forcing_epoch(b)
-        c = replace(a, "M.G" => [1.0, 1.0, 1.0])
-        @test forcing_epoch(c) > forcing_epoch(b)
-        @test c.arrays[1] === a.arrays[1]            # unchanged buffers are shared
-        d = forcing_set(prog, (; var"M.F" = a.arrays[1], var"M.G" = vec(a.arrays[2])))
-        @test d.arrays[1] === a.arrays[1]
-        @test_throws ArgumentError forcing_set(prog, Dict("M.F" => a.arrays[1]))
+        @test default_forcing_set(prog) === a
+        @test forcing_epoch(default_forcing_set(prog)) == forcing_epoch(a)
+        c = replace_forcing(a, 2, [1.0, 1.0, 1.0])
+        @test forcing_epoch(c) > forcing_epoch(a)
+        @test c.bufs[1] === a.bufs[1]                # unchanged buffers are shared
+        @test a.bufs[2] == [2.0, 1.0, 3.0]           # and the old set is unchanged
+        F = reshape(copy(a.bufs[1]), nx, ny)
+        d = forcing_set(prog, [F, a.bufs[2]])
+        @test pointer(d.bufs[1]) == pointer(F)       # held, not copied
+        @test forcing_epoch(d) != forcing_epoch(forcing_set(prog, [F, a.bufs[2]]))
+        @test_throws DimensionMismatch forcing_set(prog, [F])
         @test_throws DimensionMismatch forcing_set(prog, [zeros(3, 3), zeros(3)])
-        # A copy, not an alias of the Problem's live buffer.
-        @test vec(a.arrays[1]) == forcing_buffers(prob)[Symbol("M.F")]
-        @test a.flat[1] !== forcing_buffers(prob)[Symbol("M.F")]
+        @test_throws ArgumentError replace_forcing(a, 3, zeros(3))
+        # A copy taken at program build, not an alias of the Problem's buffer.
+        @test a.bufs[1] == forcing_buffers(prob)[Symbol("M.F")]
+        @test a.bufs[1] !== forcing_buffers(prob)[Symbol("M.F")]
+        # Derived programs have their parent's signatures and default set.
+        sel = select(prog)
+        @test forcing_slots(sel) == forcing_slots(prog)
+        @test parameters(sel) == parameters(prog)
+        @test default_forcing_set(sel) === a
+    end
+
+    @testset "state layout" begin
+        @test n_states(prog) == L.n_u == nx * ny + 2
+        @test state_layout(prog) == [StateBlock("M.w", 1, Int[]), StateBlock("M.y", 2, Int[]),
+                                     StateBlock("M.u", 3, [nx, ny])]
     end
 
     fs = default_forcing_set(prog)
@@ -157,8 +172,8 @@ end
 
     # Reference results: one fresh workspace per evaluation.
     draws = [(0.5 .+ rand(rng, L.n_u), [0.1 + 0.4 * rand(rng)], rand(rng)) for _ in 1:8]
-    F2 = 3.0 .* fs.arrays[1]
-    sets = [fs, replace(fs, "M.F" => F2)]
+    F2 = 3.0 .* fs.bufs[1]
+    sets = [fs, replace_forcing(fs, 1, F2)]
     ref = Dict{Tuple{Int,Int},Vector{Float64}}()
     for (i, (u, p, t)) in enumerate(draws), k in 1:2
         du = fill(NaN, L.n_u)
@@ -196,9 +211,9 @@ end
         # A new set at the same (p, t) on a workspace that loaded the old one.
         ws = rhs_workspace(prog)
         s0 = default_forcing_set(prog)
-        F3 = copy(s0.arrays[1])
+        F3 = copy(s0.bufs[1])
         F3[1] = 100.0
-        s1 = replace(s0, "M.F" => F3)
+        s1 = replace_forcing(s0, 1, F3)
         a = fill(NaN, L.n_u)
         rhs!(a, prog, ws, u, noaux, p, t, s0)
         b = fill(NaN, L.n_u)
@@ -234,7 +249,7 @@ end
     end
 
     @testset "fault isolation" begin
-        bad = replace(fs, "M.G" => [7.0, 1.0, 1.0])    # C has 3 entries
+        bad = replace_forcing(fs, 2, [7.0, 1.0, 1.0])  # C has 3 entries
         u, p, t = draws[1]
         ws = rhs_workspace(prog)
         du = fill(NaN, L.n_u)
@@ -331,7 +346,7 @@ end
     @test du ≈ G
     K2 = collect(range(1.0, 2.0; length = n))
     rhs!(du, prog, rhs_workspace(prog), u, Float64[], parameter_vector(prog), 0.0,
-         replace(fs, "M.K" => K2))
+         replace_forcing(fs, 1, K2))
     @test du ≈ -K2 .* u
 end
 
@@ -364,7 +379,7 @@ end
     prog = rhs_program(prob)
     lp = lanes(prog, :cells, ["x", "y"])
     fs = default_forcing_set(prog)
-    fs2 = replace(fs, "M.F" => 5.0 .* F)
+    fs2 = replace_forcing(fs, 1, 5.0 .* F)
     u = collect(range(0.5, 1.5; length = nx * ny))
     p = parameter_vector(prog)
     whole(s) = (d = fill(NaN, nx * ny);
@@ -377,7 +392,7 @@ end
         ul = Float64[u[(cells[2, l] - 1) * nx + cells[1, l]] for l in 1:nl]
         dl = fill(NaN, nl)
         li === nothing ? rhs!(dl, lp, ws, ul, Float64[], p, 0.0, s, cells, nl) :
-                         rhs!(dl, lp, ws, ul, Float64[], p, 0.0, s, li, cells, nl)
+                         rhs!(dl, lp, ws, ul, Float64[], p, 0.0, li, cells, nl)
         return dl
     end
     expect(G, cells) = Float64[G[(cells[2, l] - 1) * nx + cells[1, l]] for l in axes(cells, 2)]
@@ -429,4 +444,56 @@ end
         tile_alloc()
         @test tile_alloc() == 0
     end
+end
+
+# A scalar parameter fed by a data source is a 0-d forcing slot, not a
+# parameter; a shaped one is a slot of its shape.
+function _prt_fed_doc(n::Int)
+    faq(e) = Dict("op" => "faq", "args" => Any[], "output_idx" => Any["i"],
+                  "ranges" => Dict("i" => Dict("from" => "x")), "expr" => e)
+    fed(fv) = Dict("kind" => "data", "source" => "met", "from" => Dict("file_variable" => fv))
+    return Dict{String,Any}(
+        "esm" => "1.2.0",
+        "metadata" => Dict("name" => "prt_fed"),
+        "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => n)),
+        "data_sources" => Dict("met" => Dict("kind" => "grid",
+                                             "source" => Dict("url_template" => "file:///met.nc"))),
+        "models" => Dict("M" => Dict(
+            "variables" => Dict(
+                "u" => Dict("type" => "unknown", "shape" => ["x"], "default" => 1.0),
+                "y" => Dict("type" => "unknown", "default" => 0.0),
+                "s" => Dict("type" => "parameter", "shape" => Any[], "default" => 2.0,
+                            "update" => fed("s")),
+                "E" => Dict("type" => "parameter", "shape" => ["x"], "default" => 0.5,
+                            "update" => fed("E")),
+                "k" => Dict("type" => "parameter", "default" => 0.25)),
+            "equations" => Any[
+                Dict("lhs" => faq(Dict("op" => "D", "args" => Any[_prt_idx("u", "i")],
+                                       "wrt" => "t")),
+                     "rhs" => faq(_prt_op("-", _prt_op("*", "s", _prt_idx("E", "i")),
+                                          _prt_op("*", "k", _prt_idx("u", "i"))))),
+                Dict("lhs" => _prt_op("D", "y"), "rhs" => _prt_op("*", "s", "k"))])))
+end
+
+@testset "externally fed parameters are forcing slots" begin
+    n = 5
+    prob = esm_problem(_prt_fed_doc(n), (0.0, 1.0))
+    prog = rhs_program(prob)
+    @test forcing_slots(prog) == [ForcingSlot("M.E", [n], :forcing),
+                                  ForcingSlot("M.s", Int[], :forcing)]
+    @test parameters(prog) == [ParamSlot("M.k", 0.25)]
+    D = default_forcing_set(prog)
+    @test D.bufs == [fill(0.5, n), [2.0]]
+    u = vcat(0.0, collect(range(0.5, 1.5; length = n)))      # y, then u
+    @test [b.name for b in state_layout(prog)] == ["M.y", "M.u"]
+    pv = parameter_vector(prog)
+    du = fill(NaN, n + 1)
+    rhs!(du, prog, rhs_workspace(prog), u, Float64[], pv, 0.0, D)
+    G = fill(NaN, n + 1)
+    prob.f!(G, u, prob.p, 0.0)
+    @test reinterpret(UInt64, du) == reinterpret(UInt64, G)
+    s3 = replace_forcing(D, 2, [3.0])
+    rhs!(du, prog, rhs_workspace(prog), u, Float64[], pv, 0.0, s3)
+    @test du[1] == 3.0 * 0.25
+    @test du[2:end] == 3.0 .* 0.5 .- 0.25 .* u[2:end]
 end

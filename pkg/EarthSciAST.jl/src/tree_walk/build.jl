@@ -1006,13 +1006,16 @@ function _register_inline_array_parameters(model::Model, const_arrays::AbstractD
                                            index_sets::AbstractDict;
                                            param_arrays::AbstractDict=Dict{String,Any}(),
                                            derived_extents::AbstractDict=_EMPTY_DERIVED_EXTENTS,
-                                           runtime::Bool=false)
+                                           runtime::Bool=false, live_fed::Bool=false)
     additions = Dict{String,Any}()
+    live_additions = Dict{String,Any}()
     for (name, v) in model.variables
         v.type == ParameterVariable && _is_array_shape(v.shape) || continue
-        # A run-time array parameter already bound (an earlier build of the same
-        # Problem registered it) keeps its buffer.
-        runtime && haskey(param_arrays, name) && continue
+        # A live parameter (every shaped one under `runtime`, an externally fed
+        # one under `live_fed`) already bound to a buffer keeps it; one the
+        # caller supplied as const data becomes a buffer holding that data.
+        live = runtime || (live_fed && _externally_fed(v))
+        live && haskey(param_arrays, name) && continue
         ov = get(parameter_overrides, name, nothing)
         value = if is_inline_array(ov)
             ov
@@ -1028,7 +1031,8 @@ function _register_inline_array_parameters(model::Model, const_arrays::AbstractD
             exts === nothing && continue
             fill(Float64(ov), Tuple(exts))
         elseif haskey(const_arrays, name)
-            continue                      # caller-supplied data is authoritative
+            live || continue              # caller-supplied data is authoritative
+            const_arrays[name]
         elseif is_inline_array(v.default)
             v.default
         elseif v.default isa Number
@@ -1046,16 +1050,17 @@ function _register_inline_array_parameters(model::Model, const_arrays::AbstractD
         _check_inline_shape(name, value, v.shape, index_sets,
                             ov === nothing ? "default" : "parameter_overrides";
                             derived_extents=derived_extents)
-        additions[name] = value
+        (live ? live_additions : additions)[name] = value
     end
-    if runtime
-        # Each becomes a live buffer (a forcing slot of kind `:array_parameter`),
-        # not const data: the run-time input a gradient with respect to the
-        # field differentiates against.
-        for (k, v) in additions
+    if !isempty(live_additions)
+        # A live parameter becomes a buffer (a program's forcing slot), not const
+        # data: a run-time input a caller swaps and a gradient differentiates
+        # against.
+        for (k, v) in live_additions
             param_arrays[k] = Array{Float64}(v)
         end
-        return const_arrays
+        const_arrays = Dict{String,Any}(String(k) => v for (k, v) in const_arrays
+                                        if !haskey(live_additions, String(k)))
     end
     isempty(additions) && return const_arrays
     merged = Dict{String,Any}(String(k) => v for (k, v) in const_arrays)
@@ -2975,11 +2980,11 @@ end
 @inline _obsext_const_stale(s::_ObsExtVec, ::Type{T}, p) where {T} =
     !_pstamp_same(s.stampalt, p)
 @inline function _obsext_mark_const!(s::_ObsExtVec, ::Type{Float64}, p)
-    s.stamp64 = _pstamp(p)
+    s.stamp64 = _pstamp_reuse(s.stamp64, p)
     return nothing
 end
 @inline function _obsext_mark_const!(s::_ObsExtVec, ::Type{T}, p) where {T}
-    s.stampalt = _pstamp(p)
+    s.stampalt = _pstamp_reuse(s.stampalt, p)
     return nothing
 end
 # The time tier's test and mark, with `_cse_t_stale` / `_cse_mark_t!`'s rules:
@@ -2991,7 +2996,7 @@ end
     !(s.ttalt === t && s.tealt === _epoch_value(s.epoch) && _pstamp_same(s.tpalt, p))
 @inline function _obsext_mark_t!(s::_ObsExtVec, ::Type{Float64}, p, t)
     if t isa Float64
-        _pstamp_same(s.tp64, p) || (s.tp64 = _pstamp(p))
+        _pstamp_same(s.tp64, p) || (s.tp64 = _pstamp_reuse(s.tp64, p))
         s.tt64 = t
         s.te64 = _epoch_value(s.epoch)
     else
@@ -3001,7 +3006,7 @@ end
 end
 @inline function _obsext_mark_t!(s::_ObsExtVec, ::Type{T}, p, t) where {T}
     if isbits(t)
-        _pstamp_same(s.tpalt, p) || (s.tpalt = _pstamp(p))
+        _pstamp_same(s.tpalt, p) || (s.tpalt = _pstamp_reuse(s.tpalt, p))
         s.ttalt === t || (s.ttalt = t)
         s.tealt = _epoch_value(s.epoch)
     else
@@ -4677,6 +4682,10 @@ function _build_evaluator_impl_inner(model::Model;
                          # registered as a live `param_arrays` buffer (added to the
                          # caller's dictionary) instead of const data.
                          _runtime_array_parameters::Bool=false,
+                         # Internal: a program build (src/range_restricted.jl). Every
+                         # externally fed shaped parameter is registered the same way,
+                         # whatever data the Problem bound to it.
+                         _live_fed_parameters::Bool=false,
                          # What to return in the RHS slot (tree_walk/oop.jl):
                          # `:inplace` → the zero-alloc, eltype-generic evaluator
                          # `f!(du, u, p, t)`; `:oop` → the compiled IR a compiled
@@ -4846,7 +4855,8 @@ function _build_evaluator_impl_inner(model::Model;
                                                      parameter_overrides, index_sets;
                                                      param_arrays=param_arrays,
                                                      derived_extents=vi_set_extents,
-                                                     runtime=_runtime_array_parameters)
+                                                     runtime=_runtime_array_parameters,
+                                                     live_fed=_live_fed_parameters)
     initial_conditions = _expand_inline_array_ics(model, initial_conditions, index_sets)
     # ---- Phase 1: equation pre-lowering + build-owned variable classification ----
     cls = _build_lower_and_classify(model;

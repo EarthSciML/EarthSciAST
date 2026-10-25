@@ -8,7 +8,7 @@
 # and its CONST/TIME stamps, kernel scratch, observed buffers, loop counters,
 # threading verdicts, the forcing buffers it gathers, a lane program's lane
 # buffers — is a mutable object reachable from that closure. A workspace holds
-# a private instance of the template (`_instantiate`): every such object
+# a private instance of the template (`_new_workspace`): every such object
 # copied, the generated code and every other immutable leaf shared, and every
 # forcing read redirected to the workspace's own slot buffer, which `rhs!`
 # fills from the caller's `ForcingSet` once per set. Two workspaces share no
@@ -23,22 +23,23 @@
     ParamSlot
 
 One entry of a program's parameter vector ([`parameters`](@ref)): the flattened
-parameter `name` and its `default`, the value the Problem resolved (the
-document default, or the `esm_problem(…; p)` override).
+parameter `name` and its declared `default` (`nothing` when it declares none).
 """
 struct ParamSlot
     name::String
-    default::Union{Nothing,Float64}
+    default::Union{Float64,Nothing}
 end
+
+Base.:(==)(a::ParamSlot, b::ParamSlot) = a.name == b.name && isequal(a.default, b.default)
 
 """
     ForcingSlot
 
-One buffer of a [`ForcingSet`](@ref) ([`forcing_slots`](@ref)): the forcing
-`name`, its `shape` (column-major, first index fastest, as the state) and its
-`kind`: `:forcing` (a live forcing buffer) or `:array_parameter` (a shaped
-parameter made a run-time input by `esm_problem(…; runtime_array_parameters =
-true)`).
+One buffer of a [`ForcingSet`](@ref) ([`forcing_slots`](@ref)): the flattened
+`name`, its resolved `shape` (empty for a 0-d input) and its `kind`: `:forcing`
+(an externally fed parameter: its `update` takes its value from a data source or
+a handler) or `:array_parameter` (a shaped parameter made a run-time input by
+`esm_problem(…; runtime_array_parameters = true)`).
 """
 struct ForcingSlot
     name::String
@@ -49,141 +50,174 @@ end
 Base.:(==)(a::ForcingSlot, b::ForcingSlot) =
     a.name == b.name && a.shape == b.shape && a.kind === b.kind
 
-# What every program built from one Problem shares (and what identifies a
-# program to its workspaces): the parameter and forcing-slot signatures and the
-# buffers its template `f!` gathers. Mutable for identity only; never written.
+"""
+    StateBlock
+
+One block of a program's `u` ([`state_layout`](@ref)): the flattened state
+`name`, the 1-based `offset` of its first element, and its `shape` (empty for a
+0-d state). Column-major, first index fastest.
+"""
+struct StateBlock
+    name::String
+    offset::Int
+    shape::Vector{Int}
+end
+
+Base.:(==)(a::StateBlock, b::StateBlock) =
+    a.name == b.name && a.offset == b.offset && a.shape == b.shape
+
+"""
+    ForcingSet
+
+The forcing inputs of an evaluation (API_SPEC §5.8): one column-major buffer per
+[`forcing_slots`](@ref) entry, in slot order, and an epoch no other set in the
+process carries. Never mutated: the set holds its buffers by reference, so
+writing into one after building the set is undefined behaviour (the epoch would
+not change); build a new set instead ([`replace_forcing`](@ref) shares every
+other buffer). Build one with [`forcing_set`](@ref) or
+[`default_forcing_set`](@ref).
+"""
+struct ForcingSet
+    slots::Vector{ForcingSlot}
+    bufs::Vector{Vector{Float64}}
+    epoch::UInt64
+end
+
+# One process-wide counter, one value per set built: a workspace that primed
+# epoch `e` holds exactly that set's contents.
+const _FORCING_SET_EPOCH = Threads.Atomic{UInt64}(0)
+_next_set_epoch() = Threads.atomic_add!(_FORCING_SET_EPOCH, UInt64(1)) + UInt64(1)
+
+# What a program and the programs derived from it share (and what identifies a
+# program to its workspaces): the parameter and forcing-slot signatures, the
+# buffers its template `f!` gathers, and its default forcing set. Mutable for
+# identity only; never written.
 mutable struct _RhsShared
     const params::Vector{ParamSlot}
     const slots::Vector{ForcingSlot}
-    # The template's forcing buffers, in slot order: the Problem's live buffers.
+    # The template's forcing buffers, in slot order (the program build's own).
     const originals::Vector{Array{Float64}}
+    const default::ForcingSet
     # Buffers a lane program writes per call (lane indices, pre-gathered
     # inputs); a workspace owns its own copy of each.
     const lane_originals::Vector{Vector{Float64}}
 end
 
-_RhsShared(params, slots, originals) =
-    _RhsShared(params, slots, originals, Vector{Float64}[])
-
-# The same signatures, a different program (a tile, a lane program).
+# The same signatures, default set and buffers, a different program (a tile or
+# a lane program, which re-lower from their operator's build).
 _RhsShared(s::_RhsShared, lane_originals::Vector{Vector{Float64}} = Vector{Float64}[]) =
-    _RhsShared(s.params, s.slots, s.originals, lane_originals)
+    _RhsShared(s.params, s.slots, s.originals, s.default, lane_originals)
 
-"""
-    ForcingSet
+# A scalar externally fed parameter is a 0-d forcing slot of a program, not a
+# parameter (API_SPEC §5.8, "Forcing sets"). The build reads forcing through
+# arrays, so the program's flattened system declares it over a one-cell index
+# set and reads `index(name, 1)` wherever it read `name`; its buffer holds the
+# one value.
+const _SCALAR_SLOT_SET = "__esm_scalar_slot"
 
-The forcing inputs of one evaluation (API_SPEC §5.8): one dense column-major
-buffer per [`forcing_slots`](@ref) entry and a process-unique epoch. A set is
-immutable by contract: it holds the caller's buffers by reference, and a caller
-that changes a value builds a new set ([`replace`](@ref) shares every other
-buffer). Build one with [`forcing_set`](@ref) or [`default_forcing_set`](@ref).
-"""
-struct ForcingSet
-    slots::Vector{ForcingSlot}
-    arrays::Vector{Array{Float64}}   # as given, for the caller
-    flat::Vector{Vector{Float64}}    # the same memory, linear
-    epoch::UInt64
+_is_scalar_slot(v) = v isa ModelVariable && !_is_array_shape(v.shape) && _externally_fed(v)
+
+function _scalar_slots_to_arrays(flat::FlattenedSystem)
+    names = String[n for (n, v) in flat.parameters if _is_scalar_slot(v)]
+    isempty(names) && return flat
+    b = Dict{String,ASTExpr}(n => OpExpr("index", ASTExpr[VarExpr(n), IntExpr(1)])
+                             for n in names)
+    sub(e) = substitute(e, b)
+    params = OrderedDict{String,ModelVariable}()
+    for (n, v) in flat.parameters
+        params[n] = n in names ?
+            ModelVariable(v.type; default = v.default, description = v.description,
+                          units = v.units, default_units = v.default_units,
+                          shape = [_SCALAR_SLOT_SET], location = v.location,
+                          distribution = v.distribution, update = v.update,
+                          element_type = v.element_type) : v
+    end
+    sets = copy(flat.index_sets)
+    sets[_SCALAR_SLOT_SET] = IndexSet("interval"; size = 1)
+    return FlattenedSystem(flat;
+        parameters = params, index_sets = sets,
+        discrete_parameters = OrderedDict{String,ModelVariable}(
+            k => get(params, k, v) for (k, v) in flat.discrete_parameters),
+        equations = Equation[Equation(sub(e.lhs), sub(e.rhs); _comment = e._comment)
+                             for e in flat.equations],
+        equation_contributions = Vector{Contribution}[
+            Contribution[Contribution(sub(c.expr), c.origins) for c in cs]
+            for cs in flat.equation_contributions])
 end
 
-# One process-wide counter: two sets never share an epoch, so a workspace that
-# primed epoch `e` holds exactly that set's contents.
-const _FORCING_SET_EPOCH = Threads.Atomic{UInt64}(0)
-_next_set_epoch() = Threads.atomic_add!(_FORCING_SET_EPOCH, UInt64(1)) + UInt64(1)
+# Whether a parameter's `update` takes its value from a data source or a handler.
+_externally_fed(::Nothing) = false
+function _externally_fed(v::ModelVariable)
+    v.type == ParameterVariable || return false
+    for u in something(v.update, ParameterUpdate[])
+        (u.from !== nothing || u.handler !== nothing) && return true
+    end
+    return false
+end
 
 _slots_of(x) = x.shared.slots
 
 """
-    forcing_slots(prog) -> Vector{ForcingSlot}
+    forcing_slots(x) -> Vector{ForcingSlot}
 
-The buffers a [`ForcingSet`](@ref) of `prog` (a program, a tile or a lane
-program) holds, in order: the Problem's forcing buffers sorted by name, the
-order [`forcing_buffers`](@ref)`(prob)` uses.
+The buffers a [`ForcingSet`](@ref) of `x` (a program, a tile or a lane program)
+holds, in ascending byte order of flattened name. A derived program has its
+parent's slots.
 """
 forcing_slots(x) = _slots_of(x)
 
-function _slot_buffer(s::ForcingSlot, buf)
+function _slot_buffer(s::ForcingSlot, buf, what::AbstractString)
     buf isa AbstractArray || throw(ArgumentError(
-        "forcing_set: the buffer for '$(s.name)' is a $(typeof(buf)), not an array"))
-    a = buf isa Array{Float64} ? buf : Array{Float64}(buf)
+        "$what: the buffer for '$(s.name)' is a $(typeof(buf)), not an array"))
     n = prod(s.shape; init = 1)
-    if size(a) == Tuple(s.shape) || (ndims(a) == 1 && length(a) == n)
-        return a
-    end
-    throw(DimensionMismatch("forcing_set: the buffer for '$(s.name)' has size " *
-        "$(size(a)); the slot's shape is $(Tuple(s.shape)) (column-major, or flat of " *
-        "length $n)"))
-end
-
-function _make_set(slots::Vector{ForcingSlot}, arrays::Vector{Array{Float64}})
-    flat = Vector{Float64}[vec(a) for a in arrays]
-    return ForcingSet(slots, arrays, flat, _next_set_epoch())
+    length(buf) == n || throw(DimensionMismatch(
+        "$what: the buffer for '$(s.name)' has $(length(buf)) elements; the slot's " *
+        "shape $(Tuple(s.shape)) has $n"))
+    # An `Array{Float64}` is held as it is (its linear view shares its memory);
+    # any other array is read once into one.
+    return buf isa Array{Float64} ? vec(buf) : Vector{Float64}(vec(collect(buf)))
 end
 
 """
-    forcing_set(prog, bufs) -> ForcingSet
+    forcing_set(x, bufs) -> ForcingSet
 
-A forcing set for `prog` (API_SPEC §5.8): `bufs` is a NamedTuple or a dictionary
-keyed by slot name, or a vector in [`forcing_slots`](@ref) order. Every slot is
-required; each buffer has the slot's shape (or is flat, column-major). The
-buffers are held by reference, not copied; the set gets a new epoch.
+A forcing set for `x` (API_SPEC §5.8): `bufs` holds one buffer per
+[`forcing_slots`](@ref)`(x)` entry, in slot order, each of `prod(shape)`
+elements read in linear (column-major) order. The buffers are held by
+reference; the set gets a fresh epoch. A wrong count or length is a
+`DimensionMismatch`.
 """
 function forcing_set(x, bufs)
     slots = _slots_of(x)
-    arrays = Vector{Array{Float64}}(undef, length(slots))
-    if bufs isa NamedTuple || bufs isa AbstractDict
-        names = Set{String}(s.name for s in slots)
-        for k in keys(bufs)
-            String(k) in names || throw(ArgumentError(
-                "forcing_set: '$k' is not a forcing slot of this program; its slots are " *
-                (isempty(slots) ? "none" : join((s.name for s in slots), ", "))))
-        end
-        for (i, s) in enumerate(slots)
-            v = bufs isa NamedTuple ? get(bufs, Symbol(s.name), nothing) :
-                get(bufs, s.name, get(bufs, Symbol(s.name), nothing))
-            v === nothing && throw(ArgumentError(
-                "forcing_set: no buffer for the forcing slot '$(s.name)'"))
-            arrays[i] = _slot_buffer(s, v)
-        end
-    else
-        length(bufs) == length(slots) || throw(DimensionMismatch(
-            "forcing_set: $(length(bufs)) buffers for $(length(slots)) forcing slots"))
-        for (i, (s, v)) in enumerate(zip(slots, bufs))
-            arrays[i] = _slot_buffer(s, v)
-        end
-    end
-    return _make_set(slots, arrays)
+    length(bufs) == length(slots) || throw(DimensionMismatch(
+        "forcing_set: $(length(bufs)) buffers for $(length(slots)) forcing slots" *
+        (isempty(slots) ? "" : " ($(join((s.name for s in slots), ", ")))")))
+    flat = Vector{Float64}[_slot_buffer(s, b, "forcing_set") for (s, b) in zip(slots, bufs)]
+    return ForcingSet(slots, flat, _next_set_epoch())
 end
 
 """
-    default_forcing_set(prog) -> ForcingSet
+    default_forcing_set(x) -> ForcingSet
 
-A forcing set holding a copy of the Problem's forcing buffers as they are now.
+The Problem's forcing when [`rhs_program`](@ref) ran — provider data, a
+caller's array, or the declared default broadcast over the slot's shape, and an
+array parameter's value — copied then. Every call returns the same set; a
+derived program returns its parent's.
 """
-default_forcing_set(x) =
-    _make_set(_slots_of(x), Array{Float64}[copy(a) for a in x.shared.originals])
-
-_slot_index(fs::ForcingSet, k::Integer) =
-    1 <= k <= length(fs.slots) ? Int(k) :
-    throw(ArgumentError("replace: slot $k of a set with $(length(fs.slots)) slots"))
-function _slot_index(fs::ForcingSet, name::Union{AbstractString,Symbol})
-    i = findfirst(s -> s.name == String(name), fs.slots)
-    i === nothing && throw(ArgumentError("replace: '$name' is not a forcing slot of this set"))
-    return i
-end
+default_forcing_set(x) = x.shared.default
 
 """
-    replace(fs::ForcingSet, slot => buf, …) -> ForcingSet
+    replace_forcing(fs::ForcingSet, slot::Integer, buf) -> ForcingSet
 
-A new set with a new epoch, sharing every buffer of `fs` but the replaced ones.
-`slot` is a slot index or name.
+A new set with a new epoch: `fs` with its 1-based `slot` holding `buf`, every
+other buffer shared. `fs` is unchanged.
 """
-function Base.replace(fs::ForcingSet, reps::Pair...)
-    arrays = copy(fs.arrays)
-    for r in reps
-        i = _slot_index(fs, first(r))
-        arrays[i] = _slot_buffer(fs.slots[i], last(r))
-    end
-    return _make_set(fs.slots, arrays)
+function replace_forcing(fs::ForcingSet, slot::Integer, buf)
+    1 <= slot <= length(fs.slots) || throw(ArgumentError(
+        "replace_forcing: slot $slot of a set with $(length(fs.slots)) slots"))
+    bufs = copy(fs.bufs)
+    bufs[slot] = _slot_buffer(fs.slots[slot], buf, "replace_forcing")
+    return ForcingSet(fs.slots, bufs, _next_set_epoch())
 end
 
 """
@@ -417,7 +451,7 @@ function _prime!(ws::RhsWorkspace, fs::ForcingSet)
         "$(join((s.name for s in fs.slots), ", ")); this program's are " *
         "$(join((s.name for s in slots), ", ")))"))
     @inbounds for k in eachindex(ws.fbufs)
-        ws.fused[k] && copyto!(ws.fbufs[k], fs.flat[k])
+        ws.fused[k] && copyto!(ws.fbufs[k], fs.bufs[k])
     end
     _bump_workspace_epochs!(ws)
     ws.primed = fs.epoch

@@ -1396,7 +1396,7 @@ function esm_problem(input, tspan;
     insp.program_seed = (; flat_seed[]..., doc, compiler, model_name,
                          overrides, const_arrays = merged_const,
                          param_arrays = merged_param, gated_providers,
-                         sample_time = t_sample,
+                         sample_time = t_sample, runtime_array_parameters,
                          array_parameters = runtime_array_parameters ?
                              sort!([k for k in keys(merged_param) if !(k in forcing_before)]) :
                              String[])
