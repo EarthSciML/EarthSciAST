@@ -1,0 +1,118 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "CoupleMultiplicative",
+    "description": "Per-term provenance: a multiplicative `couple` onto a tendency that already holds two contributions (Chem's own and Sink's, from operator_compose). The product cannot be distributed without changing the arithmetic, so the list COLLAPSES to one contribution, (sum) * factor, whose origins are the union in first-appearance order: Chem, Sink, then {\"coupling\": 1}.",
+    "authors": [
+      "EarthSciAST test suite"
+    ],
+    "created": "2026-10-24T00:00:00Z"
+  },
+  "models": {
+    "Chem": {
+      "variables": {
+        "O3": {
+          "type": "unknown",
+          "units": "mol/mol",
+          "default": 1.0
+        },
+        "k1": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.1
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "O3"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k1"
+                ]
+              },
+              "O3"
+            ]
+          }
+        }
+      ]
+    },
+    "Sink": {
+      "variables": {
+        "kd": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.01
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "Chem.O3"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "kd"
+                ]
+              },
+              "Chem.O3"
+            ]
+          }
+        }
+      ]
+    },
+    "Light": {
+      "variables": {
+        "f": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.5
+        }
+      },
+      "equations": []
+    }
+  },
+  "coupling": [
+    {
+      "type": "operator_compose",
+      "systems": [
+        "Chem",
+        "Sink"
+      ]
+    },
+    {
+      "type": "couple",
+      "systems": [
+        "Light",
+        "Chem"
+      ],
+      "connector": {
+        "equations": [
+          {
+            "from": "Light.f",
+            "to": "Chem.O3",
+            "transform": "multiplicative",
+            "expression": "Light.f"
+          }
+        ]
+      }
+    }
+  ]
+}

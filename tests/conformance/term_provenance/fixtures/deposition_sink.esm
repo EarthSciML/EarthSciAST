@@ -1,0 +1,115 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "DepositionSinkProvenance",
+    "description": "Per-term provenance for a deposition-sink-shaped term (the reseact SuperFastDepositionSink shape). DepSink authors -k_O3 * O3 on its own O3, merged onto SuperFast.O3 by `translate`; a variable_map binds DepSink.k_O3 to DryDep.k_O3. The flattened term reads DryDep.k_O3 and SuperFast.O3 -- two components, neither its author -- and its origin is DepSink.",
+    "authors": [
+      "EarthSciAST test suite"
+    ],
+    "created": "2026-10-24T00:00:00Z"
+  },
+  "models": {
+    "SuperFast": {
+      "variables": {
+        "O3": {
+          "type": "unknown",
+          "units": "mol/mol",
+          "default": 1.0
+        },
+        "k1": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.1
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "O3"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k1"
+                ]
+              },
+              "O3"
+            ]
+          }
+        }
+      ]
+    },
+    "DepSink": {
+      "variables": {
+        "O3": {
+          "type": "unknown",
+          "units": "mol/mol",
+          "default": 1.0
+        },
+        "k_O3": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "O3"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k_O3"
+                ]
+              },
+              "O3"
+            ]
+          }
+        }
+      ]
+    },
+    "DryDep": {
+      "variables": {
+        "k_O3": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.02
+        }
+      },
+      "equations": []
+    }
+  },
+  "coupling": [
+    {
+      "type": "operator_compose",
+      "systems": [
+        "SuperFast",
+        "DepSink"
+      ],
+      "translate": {
+        "O3": "O3"
+      }
+    },
+    {
+      "type": "variable_map",
+      "from": "DryDep.k_O3",
+      "to": "DepSink.k_O3",
+      "transform": "param_to_var"
+    }
+  ]
+}

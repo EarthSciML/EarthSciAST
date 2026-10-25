@@ -10,6 +10,7 @@ import type { FlattenedSystem } from './flatten.js'
 import { numericValue } from './numeric-literal.js'
 import { mapChildren } from './expression.js'
 import { isRewriteTargetDerivative } from './op-registry.js'
+import { mapContributions } from './flatten-contributions.js'
 
 function isNode(e: unknown): e is ExpressionNode {
   return typeof e === 'object' && e !== null && typeof (e as { op?: unknown }).op === 'string'
@@ -90,16 +91,18 @@ export function resolveRhsTimeDerivatives(flat: FlattenedSystem): void {
     }
   }
   if (tables.tendency.size === 0 && tables.definition.size === 0) return
-  for (const eq of flat.equations) {
-    if (!hasTimeDerivative(eq.rhs)) continue
+  flat.equations = flat.equations.map((eq) => {
+    if (!hasTimeDerivative(eq.rhs)) return eq
     // The quantity this equation DEFINES is not available to substitute into its
     // own right-hand side; seeding `active` with it is what makes
     // `D(x)/dt ~ k*D(x, t)` and `y ~ D(y, t)` terminate as unresolved rather than
     // expand forever.
     const own = derivativeTarget(eq.lhs) ?? (typeof eq.lhs === 'string' ? eq.lhs : undefined)
     const active = own === undefined ? [] : [own]
-    eq.rhs = substitute(eq.rhs, tables, active)
-  }
+    // The resolved tendency replaces the `D` node INSIDE the referencing
+    // contribution, which keeps its origins (esm-libraries-spec §4.7.5).
+    return mapContributions(eq, (e) => substitute(e, tables, active))
+  })
 }
 
 /** Rewrite every structural `D` inside `e`, leaving the ones `deriv` cannot answer as authored. */

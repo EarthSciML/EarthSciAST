@@ -95,18 +95,18 @@
     }
   },
   "counts": {
-    "symbols": 940,
+    "symbols": 943,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
-      "julia": 311,
-      "typescript": 241,
-      "python": 259,
-      "rust": 354,
-      "go": 448
+      "julia": 314,
+      "typescript": 243,
+      "python": 261,
+      "rust": 356,
+      "go": 450
     },
     "by_tier": {
-      "extension": 656,
-      "stable": 284
+      "extension": 657,
+      "stable": 286
     }
   },
   "planned": [
@@ -2276,6 +2276,18 @@
       }
     },
     {
+      "name": "contribution",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "Contribution",
+        "julia": "Contribution",
+        "python": "Contribution",
+        "rust": "Contribution",
+        "typescript": "Contribution"
+      }
+    },
+    {
       "name": "convert_units",
       "kind": "function",
       "tier": "stable",
@@ -3159,6 +3171,14 @@
       "tier": "extension",
       "bindings": {
         "go": "EquationBalance"
+      }
+    },
+    {
+      "name": "equation_contributions",
+      "kind": "function",
+      "tier": "extension",
+      "bindings": {
+        "julia": "equation_contributions"
       }
     },
     {
@@ -7538,6 +7558,18 @@
       "bindings": {
         "go": "TemporalDomain",
         "python": "TemporalDomain"
+      }
+    },
+    {
+      "name": "term_origin",
+      "kind": "type",
+      "tier": "stable",
+      "bindings": {
+        "go": "TermOrigin",
+        "julia": "TermOrigin",
+        "python": "TermOrigin",
+        "rust": "TermOrigin",
+        "typescript": "TermOrigin"
       }
     },
     {

@@ -206,6 +206,12 @@ in full and this is the corpus's pin for the rule.)
   system's, and the merge was reading the A/B roles off the dependent variable's
   prefix and getting them backwards. Provenance is now recorded at collection
   (`_attribute_equations!`) and the sum is §4.7.1 step 4's `rhs_A + rhs_B`.
+* `equations` on `term_provenance_pointwise_lift` — differences (i) and (ii) of
+  `advection_reaction_loaded_ic_bc` above, and nothing else: the oracle
+  namespaces the lift's loop variable (`Adv.i`) and prints its range as an
+  extent (`1:3`), where Julia prints `i` over the index set `x`. The lift
+  itself — indexing inside each contribution and one `faq` around their sum —
+  agrees, and the case's origins are compared like every other case's below.
 (RESOLVED 2026-08-24: `equations` on `advanced_coupling`, a summand-order
 divergence. The document declares a `couple` (an additive deposition term onto
 `Chemistry.O3`), then a `variable_map`, then an `operator_compose` (advection).
@@ -271,6 +277,7 @@ const _FC_DIVERGENCES = Dict{String,Vector{String}}(
     "operator_compose_translate" => ["equations", "independent_variables"],
     "tendency_resolution" => ["equations"],
     "merged_tendency" => ["equations"],
+    "term_provenance_pointwise_lift" => ["equations"],
 )
 
 # There is no `_FC_REFUSED_CASES` any more. `advanced_coupling` was its only
@@ -366,8 +373,10 @@ function _fc_record(flat)
         "discrete_parameters" => String[k for k in keys(flat.discrete_parameters)],
         "equation_count" => length(flat.equations),
         "equations" => [Dict{String,Any}("lhs" => to_ascii(eq.lhs),
-                                         "rhs" => to_ascii(eq.rhs))
-                        for eq in eqsrc.equations],
+                                         "rhs" => to_ascii(eq.rhs),
+                                         "contributions" => _fc_contributions(cs))
+                        for (eq, cs) in zip(eqsrc.equations,
+                                            equation_contributions(eqsrc))],
         "continuous_events" => [_fc_event(e) for e in flat.continuous_events],
         "discrete_events" => [_fc_event(e) for e in flat.discrete_events],
         "domain" => flat.domain === nothing ? nothing :
@@ -401,6 +410,16 @@ function _fc_record(flat)
         "_lifted" => Set{String}(keys(flat.lifted_shapes)),
     )
 end
+
+"""One origin in the corpus's shape: `{"component": path}` or `{"coupling": k}`."""
+_fc_origin(o::TermOrigin) = o.component === nothing ?
+    Dict{String,Any}("coupling" => o.coupling) :
+    Dict{String,Any}("component" => o.component)
+
+"""An equation's per-term provenance in the corpus's shape (CONFORMANCE_SPEC §5.48)."""
+_fc_contributions(cs) = [Dict{String,Any}("rhs" => to_ascii(c.expr),
+                                          "origins" => Any[_fc_origin(o) for o in c.origins])
+                         for c in cs]
 
 # ── comparison helpers ──────────────────────────────────────────────────────
 
@@ -527,6 +546,36 @@ end
             for (i, (e, a)) in enumerate(zip(exp["equations"], act["equations"]))
                 @test (id, "eq", i, "lhs", a["lhs"]) == (id, "eq", i, "lhs", e["lhs"])
                 @test (id, "eq", i, "rhs", a["rhs"]) == (id, "eq", i, "rhs", e["rhs"])
+                # Per-term provenance (CONFORMANCE_SPEC §5.48): the whole list,
+                # expressions and origins, exactly and in order.
+                @test (id, "eq", i, "contributions", a["contributions"]) ==
+                      (id, "eq", i, "contributions", e["contributions"])
+            end
+        end
+        # The ORIGINS are compared for every case, including one whose equation
+        # RENDERING diverges above (a `_FC_DIVERGENCES` "equations" entry is
+        # about how an expression prints, never about who wrote it): the count of
+        # contributions per equation and every origin, in order. With no
+        # exception (§5.48): when the equation COUNTS diverge (a failure the
+        # `equation_count` check above reports), the equations are matched by
+        # their left-hand side instead, every LHS on only one side fails, and the
+        # origins of every LHS on both sides are still compared.
+        _origins(eq) = [c["origins"] for c in eq["contributions"]]
+        if length(act["equations"]) == length(exp["equations"])
+            for (i, (e, a)) in enumerate(zip(exp["equations"], act["equations"]))
+                @test (id, "eq", i, "origins", _origins(a)) ==
+                      (id, "eq", i, "origins", _origins(e))
+            end
+        else
+            by_lhs(eqs) = (d = Dict{String,Vector{Any}}();
+                           for eq in eqs push!(get!(d, String(eq["lhs"]), Any[]), _origins(eq)) end;
+                           d)
+            a_by, e_by = by_lhs(act["equations"]), by_lhs(exp["equations"])
+            @test (id, "origins: equation LHSs", sort!(collect(keys(a_by)))) ==
+                  (id, "origins: equation LHSs", sort!(collect(keys(e_by))))
+            for lhs in sort!(collect(intersect(keys(a_by), keys(e_by))))
+                @test (id, "lhs", lhs, "origins", a_by[lhs]) ==
+                      (id, "lhs", lhs, "origins", e_by[lhs])
             end
         end
         # No `ic` equation may survive in `equations` (§4.7.5 step 4, normative).

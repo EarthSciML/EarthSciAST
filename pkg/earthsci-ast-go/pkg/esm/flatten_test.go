@@ -576,3 +576,38 @@ func TestFlattenCouple_MultiplicativeOntoAnObservedIsAnError(t *testing.T) {
 			"observed carries a defining equation but no D(to) to multiply", err, err)
 	}
 }
+
+// TestFlattenCouple_MultiplicativeScalesTheTendencyNotALaterAlgebraic pins
+// that `multiplicative` scales the LAST `D(to)` equation, even when a bare
+// `to ~ g` defining equation comes after it: the presence check and the
+// equation scaled are the same lookup.
+func TestFlattenCouple_MultiplicativeScalesTheTendencyNotALaterAlgebraic(t *testing.T) {
+	file := coupleTransformFile("A.x", "multiplicative")
+	m := file.Models["A"]
+	m.Equations = append(m.Equations, Equation{LHS: "x", RHS: 3.0})
+	file.Models["A"] = m
+
+	flat, err := Flatten(file)
+	if err != nil {
+		t.Fatalf("Flatten: %v", err)
+	}
+	var sawTendency, sawAlgebraic bool
+	for _, eq := range flat.Equations {
+		switch ToASCII(eq.LHS) {
+		case "D(A.x)/Dt":
+			sawTendency = true
+			if rhs := ToASCII(eq.RHS); !strings.Contains(rhs, "B.s") {
+				t.Errorf("D(A.x) RHS = %q; the multiplicative factor must scale the tendency", rhs)
+			}
+		case "A.x":
+			sawAlgebraic = true
+			if rhs := ToASCII(eq.RHS); strings.Contains(rhs, "B.s") {
+				t.Errorf("A.x RHS = %q; the algebraic equation must not be scaled", rhs)
+			}
+		}
+	}
+	if !sawTendency || !sawAlgebraic {
+		t.Fatalf("expected both D(A.x) and A.x equations, tendency=%v algebraic=%v",
+			sawTendency, sawAlgebraic)
+	}
+}

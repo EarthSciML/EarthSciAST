@@ -195,8 +195,10 @@ pub(crate) fn lowered_flattened_copy(
     let mut owned = flat.clone();
     for eq in &mut owned.equations {
         eq.lhs = lower(&eq.lhs);
-        eq.rhs = lower(&eq.rhs);
     }
+    // Inside each contribution, rebuilding the right-hand side from the list
+    // (esm-libraries-spec §4.7.5).
+    owned.map_rhs_per_contribution(&mut lower)?;
     owned.continuous_events = flat
         .continuous_events
         .iter()
@@ -858,6 +860,58 @@ mod tests {
             authored.contains(TABLE_LOOKUP),
             "the caller's system was rewritten"
         );
+    }
+
+    /// A caller who edits a flattened right-hand side keeps the edit: the stale
+    /// contribution list collapses to the current right-hand side, carrying the
+    /// list's origins, rather than being folded back over it.
+    #[test]
+    fn the_flattened_pass_keeps_a_callers_rhs_edit() {
+        let file = load_string(FIXTURE).expect("loads");
+        let mut flat = crate::flatten::flatten(&file).expect("flattens");
+        let origins = flat.equation_contributions[0][0].origins.clone();
+        let authored = flat.equations[0].rhs.clone();
+        flat.equations[0].rhs = Expr::operator(crate::types::ExpressionNode {
+            op: "*".to_string(),
+            args: vec![Expr::Integer(2), authored],
+            ..Default::default()
+        });
+
+        let lowered = lowered_flattened_copy(&flat)
+            .expect("lowers")
+            .expect("the system declares tables");
+        let Expr::Operator(node) = &lowered.equations[0].rhs else {
+            panic!("the edited right-hand side is a product");
+        };
+        assert_eq!(node.op, "*", "the caller's edit was reverted");
+        assert_eq!(node.args[0], Expr::Integer(2));
+        assert!(
+            matches!(&node.args[1], Expr::Operator(n) if n.op == "fn"),
+            "the lookup inside the edit is lowered: {:?}",
+            node.args[1]
+        );
+        let contributions = &lowered.equation_contributions[0];
+        assert_eq!(contributions.len(), 1);
+        assert_eq!(contributions[0].expr, lowered.equations[0].rhs);
+        assert_eq!(contributions[0].origins, origins);
+    }
+
+    /// A contribution list whose length no longer matches the equations cannot
+    /// be paired up by position, so it is refused.
+    #[test]
+    fn the_flattened_pass_refuses_an_out_of_step_contribution_list() {
+        let file = load_string(FIXTURE).expect("loads");
+        let mut flat = crate::flatten::flatten(&file).expect("flattens");
+        let extra = flat.equation_contributions[0].clone();
+        flat.equation_contributions.push(extra);
+        match lowered_flattened_copy(&flat) {
+            Err(CompileError::Flatten(crate::flatten::FlattenError::ContributionsOutOfStep {
+                field: "equation_contributions",
+                entries: 2,
+                equations: 1,
+            })) => {}
+            other => panic!("expected ContributionsOutOfStep, got {other:?}"),
+        }
     }
 
     #[test]

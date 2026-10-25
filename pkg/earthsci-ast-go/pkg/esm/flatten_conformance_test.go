@@ -47,9 +47,18 @@ type flattenVarRecord struct {
 }
 
 type flattenEqRecord struct {
-	LHS          string  `json:"lhs"`
-	RHS          string  `json:"rhs"`
-	SourceSystem *string `json:"source_system"`
+	LHS           string                      `json:"lhs"`
+	RHS           string                      `json:"rhs"`
+	SourceSystem  *string                     `json:"source_system"`
+	Contributions []flattenContributionRecord `json:"contributions"`
+}
+
+// flattenContributionRecord is one entry of an equation's per-term provenance
+// (esm-libraries-spec §4.7.5), in the corpus form: the contribution rendered
+// with ToASCII, and its origins.
+type flattenContributionRecord struct {
+	RHS     string       `json:"rhs"`
+	Origins []TermOrigin `json:"origins"`
 }
 
 type flattenEventRecord struct {
@@ -189,7 +198,13 @@ func goFlattenCase(flat *FlattenedSystem) flattenCase {
 	eqs := make([]flattenEqRecord, 0, len(flat.Equations))
 	for _, eq := range flat.Equations {
 		src := eq.SourceSystem
-		eqs = append(eqs, flattenEqRecord{LHS: ToASCII(eq.LHS), RHS: ToASCII(eq.RHS), SourceSystem: &src})
+		contributions := make([]flattenContributionRecord, len(eq.Contributions))
+		for i, c := range eq.Contributions {
+			contributions[i] = flattenContributionRecord{RHS: ToASCII(c.Expr), Origins: c.Origins}
+		}
+		eqs = append(eqs, flattenEqRecord{
+			LHS: ToASCII(eq.LHS), RHS: ToASCII(eq.RHS), SourceSystem: &src, Contributions: contributions,
+		})
 	}
 	continuous := []flattenEventRecord{}
 	for _, ce := range flat.ContinuousEvents {
@@ -416,6 +431,16 @@ func TestFlattenConformance(t *testing.T) {
 					t.Errorf("equations[%d]:\n  got  %s | %s ~ %s\n  want %s | %s ~ %s",
 						i, showStr(g.SourceSystem), g.LHS, g.RHS,
 						showStr(w.SourceSystem), w.LHS, w.RHS)
+				}
+				// Per-term provenance (§4.7.5): compared exactly and in order —
+				// the expressions, the origins and their order — for every case.
+				// Compared in the corpus's JSON form, so a TermOrigin with both or
+				// neither field set cannot pass.
+				gotJSON, _ := json.Marshal(g.Contributions)
+				wantJSON, _ := json.Marshal(w.Contributions)
+				if string(gotJSON) != string(wantJSON) {
+					t.Errorf("equations[%d] %s contributions:\n  got  %s\n  want %s",
+						i, w.LHS, gotJSON, wantJSON)
 				}
 			}
 

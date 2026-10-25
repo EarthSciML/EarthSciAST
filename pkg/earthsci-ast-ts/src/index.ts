@@ -290,6 +290,10 @@ export {
 } from './flatten.js'
 export type {
   FlattenedEquation,
+  // Per-term provenance (esm-libraries-spec §4.7.5): a flattened equation's
+  // ordered summands and the component or coupling entry that authored each.
+  Contribution,
+  TermOrigin,
   FlattenMetadata,
   FlattenedSystem,
   FlattenOptions,

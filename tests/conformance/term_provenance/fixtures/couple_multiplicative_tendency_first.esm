@@ -1,0 +1,88 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "CoupleMultiplicativeTendencyFirst",
+    "description": "Per-term provenance: the target of a multiplicative `couple` has a tendency D(Chem.O3) followed by a bare algebraic equation Chem.O3 ~ ... for the same variable. The factor scales the LAST `D(to, t)` equation (the ODE right-hand side), never the later bare equation, which keeps its rhs and its single Chem origin.",
+    "authors": [
+      "EarthSciAST test suite"
+    ],
+    "created": "2026-10-24T00:00:00Z"
+  },
+  "models": {
+    "Chem": {
+      "variables": {
+        "O3": {
+          "type": "unknown",
+          "units": "mol/mol",
+          "default": 1.0
+        },
+        "k1": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.1
+        },
+        "O3_ref": {
+          "type": "parameter",
+          "units": "mol/mol",
+          "default": 0.04
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "O3"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k1"
+                ]
+              },
+              "O3"
+            ]
+          }
+        },
+        {
+          "lhs": "O3",
+          "rhs": "O3_ref"
+        }
+      ]
+    },
+    "Light": {
+      "variables": {
+        "f": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.5
+        }
+      },
+      "equations": []
+    }
+  },
+  "coupling": [
+    {
+      "type": "couple",
+      "systems": [
+        "Light",
+        "Chem"
+      ],
+      "connector": {
+        "equations": [
+          {
+            "from": "Light.f",
+            "to": "Chem.O3",
+            "transform": "multiplicative",
+            "expression": "Light.f"
+          }
+        ]
+      }
+    }
+  ]
+}

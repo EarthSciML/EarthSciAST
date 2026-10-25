@@ -169,6 +169,13 @@ Fields:
   consumes (esm-spec §8.5).
 - `lifted_shapes::OrderedDict{String, Vector{Int}}`: post-lift grid extents for
   arrayed states (§10.5).
+- `equation_contributions::Vector{Vector{Contribution}}`: per-term provenance
+  (esm-libraries-spec §4.7.5), parallel to `equations`. Entry `i` lists the
+  [`Contribution`](@ref)s whose left-fold sum is equation `i`'s right-hand side
+  (its `faq` body when the pointwise lift wrapped it), each with the
+  [`TermOrigin`](@ref)s that authored it. `eq_owners` inside `flatten` is the
+  slot owner a later merge reads, not this. Read it with
+  [`equation_contributions`](@ref).
 
 ORDERING (esm-libraries-spec §4.7.5 step 4, normative): every ordered map and
 list above is in DOCUMENT ORDER — components in the order the file declares them,
@@ -226,6 +233,12 @@ struct FlattenedSystem
     # Post-lift grid shapes for arrayed states: the §10.5 pointwise lift's
     # per-dimension CELL EXTENTS, keyed by the lifted state's namespaced name.
     lifted_shapes::OrderedDict{String, Vector{Int}}
+    # Per-term provenance (esm-libraries-spec §4.7.5, issue #539): parallel to
+    # `equations`, entry `i` the ordered contributions whose left-fold sum is
+    # equation `i`'s right-hand side (its `faq` body when the pointwise lift
+    # wrapped it). Beside the expression tree, never on a node. See
+    # `term_provenance.jl`.
+    equation_contributions::Vector{Vector{Contribution}}
 
     # The one entry path, and it COERCES. Every ordered map here is an
     # `OrderedDict`, and Julia's implicit conversion from a plain `Dict` is
@@ -235,16 +248,25 @@ struct FlattenedSystem
     # it has. Coercing here keeps such a call working WITHOUT widening the field
     # types, which is what would let hash order back into a positional parameter
     # vector.
-    FlattenedSystem(ivs, sv, p, obs, eqs, cev, dev, dom, meta, isets, ftabs, treg,
-                    alg, brw, disc, ics, lfs, lshapes) =
-        new(Symbol[iv for iv in ivs], _flat_od(ModelVariable, sv), _flat_od(ModelVariable, p),
+    function FlattenedSystem(ivs, sv, p, obs, eqs, cev, dev, dom, meta, isets, ftabs, treg,
+                             alg, brw, disc, ics, lfs, lshapes, contribs)
+        length(contribs) == length(eqs) || throw(ArgumentError(
+            "equation_contributions has $(length(contribs)) entries for " *
+            "$(length(eqs)) equations; the two are parallel"))
+        any(isempty, contribs) && throw(ArgumentError(
+            "every flattened equation has at least one contribution"))
+        return new(Symbol[iv for iv in ivs], _flat_od(ModelVariable, sv), _flat_od(ModelVariable, p),
             _flat_od(ModelVariable, obs), eqs, cev, dev, dom, meta,
             _flat_od(IndexSet, isets), _flat_od(FunctionTable, ftabs),
             _flat_od(Any, treg), _flat_od(ModelVariable, alg),
             _flat_od(ModelVariable, brw), _flat_od(ModelVariable, disc),
             Pair{String, ASTExpr}[Pair{String, ASTExpr}(String(k), v) for (k, v) in ics],
-            LoaderField[lf for lf in lfs], _flat_od(Vector{Int}, lshapes))
+            LoaderField[lf for lf in lfs], _flat_od(Vector{Int}, lshapes),
+            Vector{Contribution}[Contribution[c for c in cs] for cs in contribs])
+    end
 end
+
+equation_contributions(flat::FlattenedSystem) = flat.equation_contributions
 
 # The map coercion the inner constructor above applies. An already-ordered map
 # passes through untouched; anything else is rebuilt in ITS iteration order.
@@ -274,6 +296,13 @@ FlattenedSystem(ivs, sv, p, obs, eqs, cev, dev, dom, meta, isets, ftabs, treg) =
                     _flat_empty_vars(), _flat_empty_vars(), _flat_empty_vars(),
                     Pair{String, ASTExpr}[], LoaderField[],
                     OrderedDict{String, Vector{Int}}())
+# A caller that predates per-term provenance gets one unattributed contribution
+# per equation (empty `origins`, "author unknown").
+FlattenedSystem(ivs, sv, p, obs, eqs, cev, dev, dom, meta, isets, ftabs, treg,
+                alg, brw, disc, ics, lfs, lshapes) =
+    FlattenedSystem(ivs, sv, p, obs, eqs, cev, dev, dom, meta, isets, ftabs, treg,
+                    alg, brw, disc, ics, lfs, lshapes,
+                    _unattributed_contributions(eqs, lshapes))
 
 """
     FlattenedSystem(flat::FlattenedSystem; kwargs...) -> FlattenedSystem
@@ -283,8 +312,13 @@ Keyword copy-constructor: rebuild a `FlattenedSystem`, copying every field from
 copy-with-changes transforms (e.g. the shape-promotion passes) through this so
 a newly added field is preserved by default instead of silently dropped by an
 11-positional-argument re-listing.
+
+`equation_contributions` is parallel to `equations`, so it is not copied when
+`equations` is replaced alone: it RESETS to one contribution per equation (its
+body) with EMPTY origins, "author unknown" (esm-libraries-spec §4.7.5). A stale
+list must not survive a caller's edit. A pass that keeps provenance passes both.
 """
-FlattenedSystem(flat::FlattenedSystem;
+function FlattenedSystem(flat::FlattenedSystem;
         independent_variables = flat.independent_variables,
         state_variables = flat.state_variables,
         parameters = flat.parameters,
@@ -302,13 +336,20 @@ FlattenedSystem(flat::FlattenedSystem;
         discrete_parameters = flat.discrete_parameters,
         field_ics = flat.field_ics,
         loader_fields = flat.loader_fields,
-        lifted_shapes = flat.lifted_shapes) =
-    FlattenedSystem(independent_variables, state_variables, parameters,
+        lifted_shapes = flat.lifted_shapes,
+        equation_contributions = nothing)
+    if equation_contributions === nothing
+        equation_contributions = equations === flat.equations ?
+            flat.equation_contributions :
+            _unattributed_contributions(equations, lifted_shapes)
+    end
+    return FlattenedSystem(independent_variables, state_variables, parameters,
                     observed_variables, equations, continuous_events,
                     discrete_events, domain, metadata, index_sets,
                     function_tables, template_registry,
                     algebraic_variables, brownian_parameters, discrete_parameters,
-                    field_ics, loader_fields, lifted_shapes)
+                    field_ics, loader_fields, lifted_shapes, equation_contributions)
+end
 
 # ========================================
 # ODE-vs-PDE split predicate + redirect messages
@@ -537,7 +578,7 @@ function _rhs_derivative_target(e::ASTExpr)::Union{String,Nothing}
 end
 
 """
-    _resolve_rhs_time_derivatives!(equations, time_invariant)
+    _resolve_rhs_time_derivatives!(equations, contribs, time_invariant, lifted_shapes)
 
 Step 3c of [`flatten`]: rewrite every right-hand-side STRUCTURAL time derivative
 into the tendency this system already defines for it (esm-spec §4.2).
@@ -577,11 +618,17 @@ FORMS, never from a classification set: §6.3.1 derives an unknown's role from t
 equations, and `inlined_unknowns` in particular is the strict `y ~ f(…)` inlining
 set, not the classification (the substitution PR #250 unpicked).
 
+The resolved expression replaces the `D` node INSIDE the referencing
+contribution, which keeps its origins; `x`'s own contributions are not spliced
+in (esm-libraries-spec §4.7.5).
+
 Mirrors the Rust `flatten::resolve_rhs_time_derivatives` and the Python
 `_resolve_rhs_time_derivatives` exactly.
 """
 function _resolve_rhs_time_derivatives!(equations::Vector{Equation},
-                                        time_invariant::Set{String})
+                                        contribs::Vector{Vector{Contribution}},
+                                        time_invariant::Set{String},
+                                        lifted_shapes::AbstractDict)
     tendency = Dict{String,ASTExpr}()
     definition = Dict{String,ASTExpr}()
     for eq in equations
@@ -607,9 +654,11 @@ function _resolve_rhs_time_derivatives!(equations::Vector{Equation},
             own = (eq.lhs::VarExpr).name
         end
         active = own === nothing ? String[] : String[own]
-        new_rhs = _substitute_time_derivatives(eq.rhs, tendency, definition,
-                                               time_invariant, active)
-        new_rhs === eq.rhs || (equations[i] = Equation(eq.lhs, new_rhs))
+        resolve(e) = _substitute_time_derivatives(e, tendency, definition,
+                                                  time_invariant, active)
+        resolved, contribs[i] = _rewrite_contributions(resolve, eq, contribs[i],
+                                                       _is_lifted(eq, lifted_shapes))
+        resolved === eq || (equations[i] = Equation(eq.lhs, resolved.rhs))
     end
     return equations
 end
@@ -865,7 +914,7 @@ function _in_document_order(names::AbstractSet{String},
 end
 
 """
-    _extract_field_ics!(equations) -> Vector{Pair{String, ASTExpr}}
+    _extract_field_ics!(equations, contribs) -> Vector{Pair{String, ASTExpr}}
 
 Classify the deferred `ic` equations (esm-spec §11.4.1) OUT of `equations`,
 returning them as ordered `state => rhs` pairs.
@@ -881,22 +930,29 @@ Runs LAST, after the pointwise lift and the independent-variable derivation, so
 every intermediate pass still sees the equation list it always did and only the
 FINAL, observable `equations` differs.
 """
-function _extract_field_ics!(equations::Vector{Equation})
+function _extract_field_ics!(equations::Vector{Equation},
+                             contribs::Vector{Vector{Contribution}})
     ics = Pair{String, ASTExpr}[]
     remaining = Equation[]
-    for eq in equations
+    remaining_contribs = Vector{Contribution}[]
+    for (eq, cs) in zip(equations, contribs)
         lhs = eq.lhs
         target = (lhs isa OpExpr && lhs.op == "ic" && length(lhs.args) == 1 &&
                   lhs.args[1] isa VarExpr) ? (lhs.args[1]::VarExpr).name : nothing
         if target === nothing
             push!(remaining, eq)
+            push!(remaining_contribs, cs)
         else
+            # The entry leaves `equations` and its contributions together;
+            # `field_ics` carries none.
             push!(ics, target => eq.rhs)
         end
     end
     if length(remaining) != length(equations)
         empty!(equations)
         append!(equations, remaining)
+        empty!(contribs)
+        append!(contribs, remaining_contribs)
     end
     return ics
 end
@@ -1059,6 +1115,11 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
     # an operator component may write `D(Chemistry.O3, t) = …` itself. See
     # `_attribute_equations!`.
     eq_owners = String[]
+    # Parallel to `equations`: per-term PROVENANCE (esm-libraries-spec §4.7.5,
+    # issue #539) — each equation's ordered contributions and who wrote each.
+    # `eq_owners` is the slot owner a later merge reads; this is the authorship
+    # a consumer reads, and every step below edits the two lists together.
+    contribs = Vector{Contribution}[]
     continuous_events = ContinuousEvent[]
     discrete_events = DiscreteEvent[]
     # esm-spec v0.8.0: index sets are a single document-scoped registry, seeded
@@ -1087,7 +1148,7 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
     if file.models !== nothing
         for (name, model) in file.models
             push!(source_systems, name)
-            _collect_model!(states, params, observeds, equations,
+            _collect_model!(states, params, observeds, equations, contribs,
                             continuous_events, discrete_events,
                             model, name;
                             tpl_rename=get(template_rename, name, nothing))
@@ -1105,7 +1166,7 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
             push!(source_systems, name)
             rs_templates = file.component_templates === nothing ? nothing :
                 get(file.component_templates, "reaction_systems.$(name)", nothing)
-            _collect_reaction_system!(states, params, equations,
+            _collect_reaction_system!(states, params, equations, contribs,
                                       continuous_events, discrete_events,
                                       rsys, name; templates=rs_templates)
             _attribute_equations!(eq_owners, equations, name)
@@ -1182,7 +1243,7 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
         # `_attribute_equations!` marks them so before the merge reads the vector.
         _attribute_equations!(eq_owners, equations, "")
         _compose_renames!(merged_renames,
-                          _apply_operator_compose!(equations, entry, states, observeds,
+                          _apply_operator_compose!(equations, contribs, entry, states, observeds,
                                                    eq_owners; renames=merged_renames))
     end
 
@@ -1205,15 +1266,22 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
         observeds = _lower_variable_updates(observeds, _rn)
     end
 
-    for entry in file.coupling
+    # A coupling entry's index — the `{"coupling": k}` origin of anything it
+    # writes — is its 0-based position in this post-`coupling_import` sequence,
+    # whatever its kind.
+    _attribute_equations!(eq_owners, equations, "")
+    for (k, entry) in enumerate(file.coupling)
         entry isa CouplingCouple || continue
-        _apply_couple!(equations, _retarget_pending_entry(entry, merged_renames), opaque_refs)
+        _apply_couple!(equations, contribs, _retarget_pending_entry(entry, merged_renames),
+                       opaque_refs; index=k - 1, owners=eq_owners, states=states,
+                       components=source_systems)
     end
 
-    for entry in file.coupling
+    for (k, entry) in enumerate(file.coupling)
         entry isa CouplingVariableMap || continue
         resolved = _retarget_pending_entry(entry, merged_renames)
-        _apply_variable_map!(equations, params, resolved; observeds=observeds)
+        _apply_variable_map!(equations, contribs, params, resolved;
+                             observeds=observeds, index=k - 1)
         resolved.transform isa ASTExpr || push!(map_rewritten_names, resolved.to)
     end
 
@@ -1245,7 +1313,8 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
     # reaction/model state ODE with the spatial operator's advection; array-ify
     # those merged equations (promote the species to the grid shape and wrap in an
     # `faq` over the grid) so the lifted reaction network runs pointwise.
-    _apply_pointwise_lift!(equations, states, params, observeds, index_sets, file.coupling;
+    _apply_pointwise_lift!(equations, contribs, states, params, observeds, index_sets,
+                           file.coupling;
                            template_registry=(isempty(template_registry) ? nothing :
                                               template_registry),
                            lifted_shapes=lifted_shapes)
@@ -1256,7 +1325,8 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
     # equations the lift produced, and after Step 1+2 so a reaction network's
     # mass-action tendency (§7.4) is available to a sibling model's scoped
     # `D(Chem.O3, t)`.
-    _resolve_rhs_time_derivatives!(equations, Set{String}(keys(params)))
+    _resolve_rhs_time_derivatives!(equations, contribs, Set{String}(keys(params)),
+                                   lifted_shapes)
 
     # Step 4: Compute independent variables.
     ivs = _compute_independent_variables(equations)
@@ -1297,13 +1367,13 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
 
     # Step 7: classify the deferred `ic` equations OUT of `equations` (§4.7.5
     # step 4, normative). Last, so every pass above saw the list it always did.
-    field_ics = _extract_field_ics!(equations)
+    field_ics = _extract_field_ics!(equations, contribs)
 
     # Step 8: bring a scaled ANGLE argument of `sin`/`cos`/`tan` to radians
     # (esm-spec §4.8.3, issue #409). See `_normalize_angle_arguments`.
-    equations, field_ics, continuous_events, discrete_events =
+    equations, contribs, field_ics, continuous_events, discrete_events =
         _normalize_angle_arguments(states, params, observeds,
-                                   equations, field_ics,
+                                   equations, contribs, lifted_shapes, field_ics,
                                    continuous_events, discrete_events)
 
     return FlattenedSystem(
@@ -1311,7 +1381,7 @@ function flatten(file::EsmFile; base_path::AbstractString=".",
         equations, continuous_events, discrete_events,
         target_domain, metadata, index_sets, function_tables, template_registry,
         algebraic_variables, brownian, discrete_params,
-        field_ics, loader_fields, lifted_shapes,
+        field_ics, loader_fields, lifted_shapes, contribs,
     )
 end
 
@@ -1337,7 +1407,7 @@ this change strengthens.
 The same phase, at the same place in the pipeline, is in every binding.
 """
 function _normalize_angle_arguments(states, params, observeds,
-                                    equations, field_ics,
+                                    equations, contribs, lifted_shapes, field_ics,
                                     continuous_events, discrete_events)
     var_units = Dict{String, String}()
     for table in (states, params, observeds), (name, var) in table
@@ -1348,15 +1418,18 @@ function _normalize_angle_arguments(states, params, observeds,
     # A document that declares no angle at a scale other than 1 cannot be
     # rewritten, so decide that from the DECLARATIONS and walk nothing.
     any(angle_normalization_factor(parse_units(u)) !== nothing
-        for u in values(var_units)) || return (equations, field_ics,
+        for u in values(var_units)) || return (equations, contribs, field_ics,
                                                continuous_events, discrete_events)
 
     # An array operator carries its element's unit (the checker's rule too, so
     # the two agree), so `cos(index(lat, i))` with `lat` in `deg` is converted
     # like `cos(lat)`.
     rewrite(e) = _normalize_angle_expr(e, var_units)
-    equations = Equation[Equation(eq.lhs, rewrite(eq.rhs); _comment=eq._comment)
-                         for eq in equations]
+    # Inside each contribution, so no term crosses a contribution boundary.
+    rewritten = [_rewrite_contributions(rewrite, eq, cs, _is_lifted(eq, lifted_shapes))
+                 for (eq, cs) in zip(equations, contribs)]
+    equations = Equation[first(r) for r in rewritten]
+    contribs = Vector{Contribution}[last(r) for r in rewritten]
     field_ics = Pair{String, ASTExpr}[name => rewrite(expr) for (name, expr) in field_ics]
     # Events are rewritten too: this binding exports the flattened form to
     # ModelingToolkit, which DOES run events, so leaving a `sin(theta [deg])` in
@@ -1378,7 +1451,7 @@ function _normalize_angle_arguments(states, params, observeds,
                       reinitialize = ev.reinitialize, description = ev.description,
                       name = ev.name)
         for ev in discrete_events]
-    return (equations, field_ics, continuous_events, discrete_events)
+    return (equations, contribs, field_ics, continuous_events, discrete_events)
 end
 
 # Rewrite every `sin`/`cos`/`tan` in `expr` whose argument is an angle at a scale
@@ -1454,6 +1527,9 @@ This is the monolithic path the staged camp-fire run previously could not take,
 because a lossy `flatten` dropped the geometry `manifold` / `table` data and the
 index-set registry. With those preserved (canonical `reconstruct` + the registry
 fields on `FlattenedSystem`), the whole flattened document lowers in one shot.
+
+`equation_contributions` is NOT carried: the `.esm` format has no slot for
+per-term provenance (esm-libraries-spec §4.7.5), so it is a documented loss.
 """
 # esm-spec §9.6.4 rule 7 / §10.7: registry bodies are COMPONENT-SCOPED source —
 # their free variable references resolve in the owning component's namespace,

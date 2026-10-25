@@ -112,6 +112,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("codegen_test.jl")
     include("flatten_test.jl")
     include("flatten_conformance_test.jl")  # FlattenedSystem field set ≡ Python oracle
+    include("term_provenance_test.jl")      # per-term provenance invariant (§4.7.5)
     # operator_compose merge intent: the §4.7.1 step 5 diagnostic, `require_match`,
     # and step 3's owner-based bare-name rename (issue #195).
     include("operator_compose_merge_conformance_test.jl")

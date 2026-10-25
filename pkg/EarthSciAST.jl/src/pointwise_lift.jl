@@ -159,6 +159,7 @@ with a spatial operator (its merged RHS carries an operator `makearray`) from a
 no merged equation carries a spatial-operator makearray.
 """
 function _apply_pointwise_lift!(equations::Vector{Equation},
+                                contribs::Vector{Vector{Contribution}},
                                 states::OrderedDict{String,ModelVariable},
                                 params::OrderedDict{String,ModelVariable},
                                 observeds::OrderedDict{String,ModelVariable},
@@ -199,8 +200,8 @@ function _apply_pointwise_lift!(equations::Vector{Equation},
         # the cell counts, which only this pass knows.
         lifted_shapes === nothing ||
             (lifted_shapes[species] = _makearray_extents(mas[1]))
-        equations[n] = _pointwise_lift_equation(eq, species, arrayvars, loops,
-                                                ranges)
+        equations[n], contribs[n] = _pointwise_lift_equation(eq, contribs[n], species,
+                                                             arrayvars, loops, ranges)
     end
     return
 end
@@ -425,19 +426,25 @@ end
 
 # Rewrite the merged scalar state ODE into per-cell `faq`s over the grid:
 # LHS `D(sp,t)` → `aggregate(D(index(sp, loops…), t))`, RHS per-cell via
-# `_lift_rhs_to_cell`.
-function _pointwise_lift_equation(eq::Equation, species::String,
+# `_lift_rhs_to_cell`. The per-cell indexing applies inside each contribution,
+# and the `faq` wraps their left-fold sum (esm-libraries-spec §4.7.5), so the
+# lifted equation's body — not its right-hand side — is what the contributions
+# sum to. Returns the equation and its lifted contributions.
+function _pointwise_lift_equation(eq::Equation, contributions::Vector{Contribution},
+                                  species::String,
                                   arrayvars::Set{String},
                                   loops::Vector{String},
-                                  ranges::Dict{String,Any})::Equation
+                                  ranges::Dict{String,Any})
     oidx = Any[l for l in loops]
     idx_species = OpExpr("index", ASTExpr[VarExpr(species),
                          (VarExpr(l) for l in loops)...])
     new_lhs = OpExpr("faq", ASTExpr[];
                      output_idx=oidx, ranges=ranges,
                      expr_body=OpExpr("D", ASTExpr[idx_species], wrt="t"))
+    lifted = Contribution[Contribution(_lift_rhs_to_cell(c.expr, arrayvars, loops), c.origins)
+                          for c in contributions]
     new_rhs = OpExpr("faq", ASTExpr[];
                      output_idx=oidx, ranges=ranges,
-                     expr_body=_lift_rhs_to_cell(eq.rhs, arrayvars, loops))
-    return Equation(new_lhs, new_rhs; _comment=eq._comment)
+                     expr_body=_fold_contributions(lifted))
+    return Equation(new_lhs, new_rhs; _comment=eq._comment), lifted
 end

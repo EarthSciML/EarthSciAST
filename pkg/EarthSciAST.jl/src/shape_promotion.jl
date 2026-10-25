@@ -437,13 +437,19 @@ function inline_elementwise_array_observeds(flat::FlattenedSystem)::FlattenedSys
 
     new_obs = OrderedDict{String,ModelVariable}(
         k => v for (k, v) in flat.observed_variables if !haskey(targets, k))
+    # The substitution applies inside each contribution; a dropped definition
+    # leaves with its contributions (esm-libraries-spec §4.7.5).
     new_eqs = Equation[]
-    for eq in flat.equations
+    new_contribs = Vector{Contribution}[]
+    for (eq, cs) in zip(flat.equations, _flat_contributions(flat))
         (eq.lhs isa VarExpr && haskey(targets, (eq.lhs::VarExpr).name)) && continue  # drop the def
-        push!(new_eqs, Equation(eq.lhs, substitute(eq.rhs, resolved);
-                                _comment=eq._comment))
+        rewritten, new_cs = _rewrite_contributions(e -> substitute(e, resolved), eq, cs,
+                                                   _is_lifted(eq, flat.lifted_shapes))
+        push!(new_eqs, rewritten)
+        push!(new_contribs, new_cs)
     end
-    return FlattenedSystem(flat; observed_variables=new_obs, equations=new_eqs)
+    return FlattenedSystem(flat; observed_variables=new_obs, equations=new_eqs,
+                           equation_contributions=new_contribs)
 end
 
 """
@@ -574,24 +580,37 @@ function promote_downstream_shapes(flat::FlattenedSystem;
     # name for a now-array variable, and the evaluator fails to bind it
     # (`E_TREEWALK_UNBOUND_VARIABLE`). Scalar-position references are left for
     # the post-discretize `index_promoted_refs!` companion, as before.
+    #
+    # Per-term provenance (esm-libraries-spec §4.7.5): the consumer rewrite
+    # applies inside each contribution (a lifted equation's in its `faq` loop
+    # scope). Wrapping a definition into a `faq` is NOT additive — the producer
+    # computes the whole sum per cell — so a promoted definition's contributions
+    # COLLAPSE into the one wrapped expression, origins their union.
     new_eqs = Equation[]
-    for eq in flat.equations
-        rhs = if eq.lhs isa VarExpr && (eq.lhs::VarExpr).name in arrayvars &&
+    new_contribs = Vector{Contribution}[]
+    for (eq, cs) in zip(flat.equations, _flat_contributions(flat))
+        out, out_cs = eq, cs
+        if eq.lhs isa VarExpr && (eq.lhs::VarExpr).name in arrayvars &&
                  haskey(defs, (eq.lhs::VarExpr).name) &&
                  (flat_was_scalar(flat, (eq.lhs::VarExpr).name))
-            _lift_to_faq(eq.rhs, shapes[(eq.lhs::VarExpr).name], arrayvars, shapes)
-        else
-            eq.rhs
+            wrapped = _lift_to_faq(eq.rhs, shapes[(eq.lhs::VarExpr).name], arrayvars, shapes)
+            if wrapped !== eq.rhs
+                out_cs = Contribution[Contribution(wrapped, _union_origins(cs))]
+                out = _equation_from(eq, out_cs)
+            end
         end
-        index_consumer_refs &&
-            (rhs = _index_promoted_consumer_refs(rhs, newly_promoted, shapes))
-        push!(new_eqs, rhs === eq.rhs ? eq :
-              Equation(eq.lhs, rhs; _comment=eq._comment))
+        if index_consumer_refs
+            out, out_cs = _rewrite_contributions(
+                e -> _index_promoted_consumer_refs(e, newly_promoted, shapes), out, out_cs,
+                _is_lifted(out, flat.lifted_shapes))
+        end
+        push!(new_eqs, out)
+        push!(new_contribs, out_cs)
     end
 
     return FlattenedSystem(flat; state_variables=new_states, parameters=new_params,
                            observed_variables=new_observeds, equations=new_eqs,
-                           index_sets=index_sets)
+                           equation_contributions=new_contribs, index_sets=index_sets)
 end
 
 # `[(output symbol, extent)…]` of a `faq` producer every one of whose output

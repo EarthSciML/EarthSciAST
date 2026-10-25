@@ -201,16 +201,23 @@ def lower_flattened_table_lookups(flat: FlattenedSystem) -> FlattenedSystem:
 def _lower_flattened_equations(
     eqs: list[FlattenedEquation], tables: dict[str, FunctionTable]
 ) -> list[FlattenedEquation]:
+    # The lowering applies inside each contribution and the right-hand side is
+    # rebuilt from them, so per-term provenance survives it (esm-libraries-spec
+    # §4.7.5). The system is caller-supplied, so a list left stale by an edited
+    # rhs is first collapsed onto that rhs rather than allowed to revert it.
+    # Imported here: `flatten` imports this module's siblings at load.
+    from .flatten import Contribution, _authoritative_contributions, _equation_from
+
     out: list[FlattenedEquation] = []
     changed = False
     for eq in eqs:
         lhs = _lower_expr(eq.lhs, tables)
-        rhs = _lower_expr(eq.rhs, tables)
-        if lhs is eq.lhs and rhs is eq.rhs:
+        current = _authoritative_contributions(eq)
+        contributions = [Contribution(_lower_expr(c.expr, tables), c.origins) for c in current]
+        if lhs is eq.lhs and all(new.expr is old.expr for new, old in zip(contributions, current)):
             out.append(eq)
         else:
-            # Blank display strings are re-rendered from the lowered trees.
-            out.append(replace(eq, lhs=lhs, rhs=rhs, lhs_str="", rhs_str=""))
+            out.append(_equation_from(eq, contributions, lhs=lhs))
             changed = True
     return out if changed else eqs
 

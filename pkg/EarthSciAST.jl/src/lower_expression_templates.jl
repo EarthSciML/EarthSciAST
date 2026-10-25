@@ -97,6 +97,9 @@ const _KNOWN_DIAGNOSTIC_CODES = (
     ERROR_CODES.CONST_UNITS_VERSION_TOO_OLD,
     # esm-spec §8.2.1 data-source location resolution (data_source_urls.jl).
     ERROR_CODES.DATA_SOURCE_URL_UNRESOLVED,
+    # esm-spec §2.2.6 `solver.external` load checks (solver.jl).
+    ERROR_CODES.SOLVER_EXTERNAL_VERSION_TOO_OLD,
+    ERROR_CODES.SOLVER_EXTERNAL_UNRESOLVED,
     # esm-spec §9.6 expression templates + §9.6.4 post-expansion validators
     # (lower_expression_templates.jl; the recursive-body composition check
     # lives in template_imports.jl).
@@ -2057,11 +2060,12 @@ function expand_flattened_refs(flat::FlattenedSystem;
         memo::_ExpandMemo = Dict{Tuple{String,String},OpExpr}())::FlattenedSystem
     reg = flat.template_registry
     isempty(reg) && return flat
-    neweqs = Equation[Equation(_expand_expr_refs(eq.lhs, reg, nothing, memo),
-                               _expand_expr_refs(eq.rhs, reg, nothing, memo);
-                               _comment=eq._comment)
-                      for eq in flat.equations]
-    return FlattenedSystem(flat; equations=neweqs,
+    # Expansion rewrites inside each contribution (esm-libraries-spec §4.7.5): a
+    # reference whose body is a sum expands into terms that all inherit the
+    # contribution's origins.
+    neweqs, newcontribs = _rewrite_flat_equations(
+        e -> _expand_expr_refs(e, reg, nothing, memo), flat)
+    return FlattenedSystem(flat; equations=neweqs, equation_contributions=newcontribs,
         state_variables=_expand_vars_refs(flat.state_variables, reg, memo),
         parameters=_expand_vars_refs(flat.parameters, reg, memo),
         observed_variables=_expand_vars_refs(flat.observed_variables, reg, memo))

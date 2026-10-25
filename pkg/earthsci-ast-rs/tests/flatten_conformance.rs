@@ -172,12 +172,42 @@ fn kind_str(k: SystemKind) -> &'static str {
     k.as_str()
 }
 
+/// The equations with their per-term provenance (esm-libraries-spec §4.7.5),
+/// as the corpus records them: each contribution's expression rendered by
+/// `to_ascii` and its origins in serde's untagged `{"component": …}` /
+/// `{"coupling": …}` form, which is the corpus form.
+fn equations(flat: &FlattenedSystem) -> Vec<Value> {
+    assert_eq!(
+        flat.equation_contributions.len(),
+        flat.equations.len(),
+        "one contribution list per equation"
+    );
+    flat.equations
+        .iter()
+        .zip(&flat.equation_contributions)
+        .map(|(e, contributions)| {
+            serde_json::json!({
+                "lhs": to_ascii(&e.lhs),
+                "rhs": to_ascii(&e.rhs),
+                "contributions": contributions
+                    .iter()
+                    .map(|c| serde_json::json!({
+                        "rhs": to_ascii(&c.expr),
+                        "origins": c.origins,
+                    }))
+                    .collect::<Vec<_>>(),
+            })
+        })
+        .collect()
+}
+
 /// The whole step-4 field set of `flat`, in the corpus's own serialization.
 ///
 /// Every field the generator's `_record()` pins is produced here, EXCEPT the
 /// two it cannot be asked for:
-///   * `equations[].source_system` — Rust's `Equation` carries `lhs`/`rhs` and
-///     no provenance tag, so the equation comparison is `lhs`/`rhs` only.
+///   * `equations[].source_system` — the oracle's SLOT OWNER, which Rust's
+///     `Equation` does not carry. Provenance proper, `contributions`, IS
+///     compared, in order, for every case.
 ///   * `metadata.operator_applies` / `metadata.callbacks` / the exact
 ///     `metadata.coupling_rules` PROSE — Rust records one flat
 ///     `coupling_rules_applied` list of human-readable descriptions with its own
@@ -205,11 +235,7 @@ fn record(flat: &FlattenedSystem, reaction_systems: &BTreeSet<String>) -> Value 
         "brownian_parameters": names(&flat.brownian_parameters),
         "discrete_parameters": names(&flat.discrete_parameters),
         "equation_count": flat.equations.len(),
-        "equations": flat
-            .equations
-            .iter()
-            .map(|e| serde_json::json!({"lhs": to_ascii(&e.lhs), "rhs": to_ascii(&e.rhs)}))
-            .collect::<Vec<_>>(),
+        "equations": equations(flat),
         "continuous_events": flat
             .continuous_events
             .iter()
@@ -259,7 +285,13 @@ fn expected(case: &Value) -> Value {
         eqs.as_array()
             .unwrap()
             .iter()
-            .map(|e| serde_json::json!({"lhs": e["lhs"], "rhs": e["rhs"]}))
+            .map(|e| {
+                serde_json::json!({
+                    "lhs": e["lhs"],
+                    "rhs": e["rhs"],
+                    "contributions": e["contributions"],
+                })
+            })
             .collect()
     };
     serde_json::json!({

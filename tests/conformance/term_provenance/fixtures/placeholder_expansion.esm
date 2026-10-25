@@ -1,0 +1,127 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "PlaceholderExpansion",
+    "description": "Per-term provenance: a `_var` operator cloned once per state of A. Every clone's contribution carries the operator's component (Adv), not the state's.",
+    "authors": [
+      "EarthSciAST test suite"
+    ],
+    "created": "2026-10-24T00:00:00Z"
+  },
+  "models": {
+    "Chem": {
+      "variables": {
+        "O3": {
+          "type": "unknown",
+          "units": "mol/mol",
+          "default": 1.0
+        },
+        "NO": {
+          "type": "unknown",
+          "units": "mol/mol",
+          "default": 1.0
+        },
+        "k1": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.1
+        },
+        "k2": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.2
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "O3"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k1"
+                ]
+              },
+              "O3"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "NO"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "k2"
+                ]
+              },
+              "NO"
+            ]
+          }
+        }
+      ]
+    },
+    "Adv": {
+      "variables": {
+        "wind": {
+          "type": "parameter",
+          "units": "m/s",
+          "default": 3.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "_var"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "-",
+                "args": [
+                  "wind"
+                ]
+              },
+              {
+                "op": "grad",
+                "args": [
+                  "_var"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "coupling": [
+    {
+      "type": "operator_compose",
+      "systems": [
+        "Chem",
+        "Adv"
+      ]
+    }
+  ]
+}

@@ -199,7 +199,8 @@ function lower_table_lookups(flat::FlattenedSystem)::FlattenedSystem
     tables = flat.function_tables
     _no_tables(tables) && return flat
     f(e) = _lower_expr_table_lookups(e, tables)
-    eqs = _lower_equations!(copy(flat.equations), f)
+    # Inside each contribution, so per-term provenance survives the lowering.
+    eqs, contribs = _rewrite_flat_equations(f, flat)
     cev = _lower_events!(copy(flat.continuous_events), f)
     dev = _lower_events!(copy(flat.discrete_events), f)
     ics = Pair{String,ASTExpr}[name => f(rhs) for (name, rhs) in flat.field_ics]
@@ -214,7 +215,8 @@ function lower_table_lookups(flat::FlattenedSystem)::FlattenedSystem
         k => get(parent, k, v) for (k, v) in subset)
     return FlattenedSystem(flat;
         state_variables=states, parameters=params, observed_variables=observed,
-        equations=eqs, continuous_events=cev, discrete_events=dev, field_ics=ics,
+        equations=eqs, equation_contributions=contribs,
+        continuous_events=cev, discrete_events=dev, field_ics=ics,
         algebraic_variables=relink(flat.algebraic_variables, states),
         brownian_parameters=relink(flat.brownian_parameters, params),
         discrete_parameters=relink(flat.discrete_parameters, params))
