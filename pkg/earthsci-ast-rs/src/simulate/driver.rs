@@ -460,9 +460,9 @@ pub(crate) fn is_array_file(file: &EsmFile) -> bool {
 ///     left still builds. A `dAdt = D(Chem.A)` observed then fails as an
 ///     unlowered `D` and an assertion on `Chem.A` finds no such state.
 ///
-/// `runtime_array_parameters` (API_SPEC §5.8): every shaped parameter whose
-/// value only the document supplies is read from the forcing buffer, seeded
-/// with that value, rather than folded in.
+/// `runtime_array_parameters` (API_SPEC §5.8): every shaped parameter that
+/// has a value and no `update` is read from the forcing buffer, seeded with
+/// that value, rather than folded in.
 pub(crate) fn build_array_compiled(
     file: &EsmFile,
     runtime_array_parameters: bool,

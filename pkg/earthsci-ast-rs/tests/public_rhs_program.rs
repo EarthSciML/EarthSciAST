@@ -656,7 +656,7 @@ fn the_parameter_vector_is_strict_and_positional() {
 }
 
 #[test]
-fn foreign_workspaces_and_sets_are_shape_errors() {
+fn foreign_workspaces_and_sets_are_refused() {
     let a = program(&forced_1d(8), Compiler::Native);
     let b = program(&forced_2d(4, 2), Compiler::Native);
     let fa = a.default_forcing();
@@ -667,12 +667,12 @@ fn foreign_workspaces_and_sets_are_shape_errors() {
     let mut wb = b.new_workspace();
     assert!(matches!(
         a.eval_into(&u, &[], &p, 0.0, &fa, &mut du, &mut wb),
-        Err(RhsError::Shape { .. })
+        Err(RhsError::ForeignProgram { what: "workspace" })
     ));
     let mut wa = a.new_workspace();
     assert!(matches!(
         a.eval_into(&u, &[], &p, 0.0, &fb, &mut du, &mut wa),
-        Err(RhsError::Shape { .. })
+        Err(RhsError::ForcingSignature { .. })
     ));
     assert!(matches!(
         a.eval_into(&u[..7], &[], &p, 0.0, &fa, &mut du, &mut wa),
@@ -744,4 +744,183 @@ fn array_parameters_are_run_time_slots_on_request() {
             assert_eq!(du[i], w[i] * u[i] + w[0], "{compiler} cell {i}");
         }
     }
+}
+
+/// `weighted(n)` with `w` given no value by the document.
+fn weighted_without_w(n: i64) -> serde_json::Value {
+    let mut doc = weighted(n);
+    doc["models"]["M"]["variables"]["w"]
+        .as_object_mut()
+        .unwrap()
+        .remove("default");
+    doc
+}
+
+/// A shaped parameter whose array the caller supplies (`const_arrays`) is,
+/// under `runtime_array_parameters`, an `ArrayParameter` slot whose default
+/// buffer is the caller's array, and swapping it changes the result with no
+/// rebuild. Off, the caller's array is baked in as before.
+#[test]
+fn caller_arrays_are_run_time_slots_on_request() {
+    let caller = [1.5, 2.5, 4.0, 0.25, 3.0];
+    let make = |doc: &serde_json::Value, compiler: Compiler, runtime: bool| {
+        let arr = ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&[5]), caller.to_vec()).unwrap();
+        esm_problem(
+            doc,
+            (0.0, 1.0),
+            ProblemOptions {
+                compiler: Some(compiler),
+                runtime_array_parameters: runtime,
+                const_arrays: HashMap::from([("M.w".to_string(), arr)]),
+                ..Default::default()
+            },
+        )
+        .unwrap_or_else(|e| panic!("builds: {e}"))
+    };
+    let u: Vec<f64> = (0..5).map(|i| 1.0 + f64::from(i)).collect();
+    // k = 1: du[i] = w[i] u[i] + w[1].
+    let expect = |w: &[f64]| -> Vec<f64> { (0..5).map(|i| w[i] * u[i] + w[0]).collect() };
+    for doc in [weighted(5), weighted_without_w(5)] {
+        for compiler in [Compiler::Native, Compiler::Interpreter] {
+            let baked = rhs_program(&make(&doc, compiler, false)).expect("baked");
+            assert!(baked.forcing_slots().is_empty(), "{compiler}");
+            let pb = baked.parameter_vector(&HashMap::new()).expect("defaults");
+            let off = eval(&baked, &u, &pb, 0.0, &baked.default_forcing());
+            assert_eq!(bits(&off), bits(&expect(&caller)), "{compiler} off");
+
+            let prog = rhs_program(&make(&doc, compiler, true)).expect("runtime");
+            let k = slot(&prog, "w");
+            assert_eq!(prog.forcing_slots()[k].kind, SlotKind::ArrayParameter);
+            let fs = prog.default_forcing();
+            assert_eq!(
+                fs.buffer(k),
+                &caller[..],
+                "{compiler}: seeded by the caller"
+            );
+            let p = prog.parameter_vector(&HashMap::new()).expect("defaults");
+            let mut ws = prog.new_workspace();
+            let mut du = vec![f64::NAN; 5];
+            prog.eval_into(&u, &[], &p, 0.0, &fs, &mut du, &mut ws)
+                .expect("eval");
+            assert_eq!(bits(&du), bits(&off), "{compiler}: on equals off");
+            let w: Arc<[f64]> = vec![2.0, 3.0, 5.0, 7.0, 11.0].into();
+            let fs2 = fs.replace(k, Arc::clone(&w)).expect("replace");
+            prog.eval_into(&u, &[], &p, 0.0, &fs2, &mut du, &mut ws)
+                .expect("eval");
+            assert_eq!(bits(&du), bits(&expect(&w)), "{compiler}: swapped");
+        }
+    }
+}
+
+/// Each argument that does not belong to the program says what is wrong.
+#[test]
+fn mismatches_name_what_is_wrong() {
+    let a = program(&forced_1d(8), Compiler::Native);
+    let b = program(&forced_2d(4, 2), Compiler::Native);
+    let fa = a.default_forcing();
+    let n = fa.slots().len();
+    let buf: Arc<[f64]> = vec![0.0; 1].into();
+    assert_eq!(
+        fa.replace(n, buf).unwrap_err(),
+        RhsError::SlotIndex { slot: n, slots: n }
+    );
+    let p = a.parameter_vector(&HashMap::new()).expect("defaults");
+    let u = vec![1.0; 8];
+    let mut du = vec![0.0; 8];
+    let mut wa = a.new_workspace();
+    match a.eval_into(&u, &[], &p, 0.0, &b.default_forcing(), &mut du, &mut wa) {
+        Err(e @ RhsError::ForcingSignature { .. }) => {
+            let msg = e.to_string();
+            assert!(
+                msg.contains("slot 0 is `M.G`") && msg.contains("`M.F`"),
+                "{msg}"
+            )
+        }
+        other => panic!("expected a forcing-signature error, got {other:?}"),
+    }
+    let mut wb = b.new_workspace();
+    assert_eq!(
+        a.eval_into(&u, &[], &p, 0.0, &fa, &mut du, &mut wb)
+            .unwrap_err(),
+        RhsError::ForeignProgram { what: "workspace" }
+    );
+}
+
+/// A gather that fails leaves the inputs ungathered: evaluating them is an
+/// error, not a result built from the half-written buffers and the previous
+/// gather's forcing.
+#[test]
+fn a_failed_gather_cannot_be_evaluated() {
+    // `D(u[i]) = w[i + k] u[i]`: each lane gathers `w` at its cell shifted
+    // by `k`, a fault when the shift leaves `1..n`.
+    let mut doc = weighted(6);
+    doc["models"]["M"]["variables"]["k"]["default"] = json!(0.0);
+    doc["models"]["M"]["equations"][0]["rhs"]["expr"] = json!({"op": "*", "args": [
+        idx1("w", json!({"op": "+", "args": ["i", "k"]})), idx1("u", json!("i"))]});
+    let prog = program(&doc, Compiler::Native);
+    let lanes = prog
+        .lanes(
+            earthsci_ast::LaneKind::Cells {
+                sets: vec!["x".to_string()],
+            },
+            4,
+        )
+        .expect("lanes");
+    let names: Vec<&str> = prog.parameters().iter().map(|s| s.name.as_str()).collect();
+    let at_k = names.iter().position(|n| n.ends_with(".k")).unwrap();
+    let p = prog.parameter_vector(&HashMap::new()).expect("defaults");
+    let fs = prog.default_forcing();
+    let cells: Vec<i32> = vec![2, 5, 1, 1];
+    let lay = lanes.layout().clone();
+    let u = vec![1.0; lay.u_len];
+    let mut du = vec![f64::NAN; lay.u_len];
+    let mut ws = lanes.new_workspace();
+    let mut inputs = lanes.lane_inputs();
+    assert_eq!(
+        lanes
+            .eval_gathered_into(&u, &[], &inputs, &p, 0.0, &cells, 2, &mut du, &mut ws)
+            .unwrap_err(),
+        RhsError::NotGathered
+    );
+    lanes
+        .gather_lane_inputs(&mut inputs, &p, 0.0, &fs, &cells, 2)
+        .expect("gather");
+    lanes
+        .eval_gathered_into(&u, &[], &inputs, &p, 0.0, &cells, 2, &mut du, &mut ws)
+        .expect("eval");
+    // A cell outside its index set fails the gather after the buffers began
+    // to fill.
+    let bad: Vec<i32> = vec![2, 99, 1, 1];
+    assert!(
+        lanes
+            .gather_lane_inputs(&mut inputs, &p, 0.0, &fs, &bad, 2)
+            .is_err()
+    );
+    assert_eq!(
+        lanes
+            .eval_gathered_into(&u, &[], &inputs, &p, 0.0, &cells, 2, &mut du, &mut ws)
+            .unwrap_err(),
+        RhsError::NotGathered
+    );
+    // So does a fault inside the gather (`w[i + k]` out of range).
+    lanes
+        .gather_lane_inputs(&mut inputs, &p, 0.0, &fs, &cells, 2)
+        .expect("gather");
+    let mut q = p.clone();
+    q[at_k] = 40.0;
+    match lanes.gather_lane_inputs(&mut inputs, &q, 0.0, &fs, &cells, 2) {
+        Err(RhsError::Fault { .. }) => {}
+        other => panic!("expected a fault, got {other:?}"),
+    }
+    assert_eq!(
+        lanes
+            .eval_gathered_into(&u, &[], &inputs, &q, 0.0, &cells, 2, &mut du, &mut ws)
+            .unwrap_err(),
+        RhsError::NotGathered
+    );
+    // A wrong-length `p` is refused before the gather starts.
+    assert!(matches!(
+        lanes.gather_lane_inputs(&mut inputs, &p[1..], 0.0, &fs, &cells, 2),
+        Err(RhsError::Shape { what: "p", .. })
+    ));
 }
