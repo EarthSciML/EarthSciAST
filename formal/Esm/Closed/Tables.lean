@@ -301,23 +301,28 @@ def outside (ax : List Num) (x : Num) : Bool :=
   Scalar.lt x (ax.getD 0 .nan) || Scalar.lt (ax.getD (ax.length - 1) .nan) x
 
 /-- The value of a lookup on table `T`, data `s` (the output's slice), axis
-inputs `xs` in the table's axis order. -/
+inputs `xs` in the table's axis order, before the out-of-bounds check. -/
+def lookupCore (T : FTable) (s : Nested) (xs : List Num) : Except Code Num :=
+  match T.interpolation, T.axes, xs with
+  | .linear, [a0], [x0] => match s.toVec with
+    | some v => .ok (linear v a0.values x0)
+    | none => .error Codes.dataShapeMismatch
+  | .bilinear, [a0, a1], [x0, x1] => match s.toMat with
+    | some m => .ok (bilinear m a0.values a1.values x0 x1)
+    | none => .error Codes.dataShapeMismatch
+  | .nearest, [a0], [x0] => match s.toVec with
+    | some v => .ok (nearest v a0.values x0)
+    | none => .error Codes.dataShapeMismatch
+  | _, _, _ => .error Codes.interpolationAxesMismatch
+
+/-- Some input lies strictly outside its axis. -/
+def anyOutside (T : FTable) (xs : List Num) : Bool :=
+  (List.zipWith (fun (a : Axis) x => outside a.values x) T.axes xs).any id
+
+/-- The value of a lookup, with `out_of_bounds: "error"` (§9.5.3a). -/
 def lookupValue (T : FTable) (s : Nested) (xs : List Num) : Except Code Num :=
-  if T.outOfBounds = .error &&
-      (List.zipWith (fun (a : Axis) x => outside a.values x) T.axes xs).any id then
-    .error Codes.lookupOutOfBounds
-  else
-    match T.interpolation, T.axes, xs with
-    | .linear, [a0], [x0] => match s.toVec with
-      | some v => .ok (linear v a0.values x0)
-      | none => .error Codes.dataShapeMismatch
-    | .bilinear, [a0, a1], [x0, x1] => match s.toMat with
-      | some m => .ok (bilinear m a0.values a1.values x0 x1)
-      | none => .error Codes.dataShapeMismatch
-    | .nearest, [a0], [x0] => match s.toVec with
-      | some v => .ok (nearest v a0.values x0)
-      | none => .error Codes.dataShapeMismatch
-    | _, _, _ => .error Codes.interpolationAxesMismatch
+  if T.outOfBounds = .error && anyOutside T xs then .error Codes.lookupOutOfBounds
+  else lookupCore T s xs
 
 /-! ## Expressions -/
 
@@ -926,35 +931,33 @@ theorem eval_nearest_lowered (tables : List (String × FTable)) (env : String �
     simp only [nearest, List.length_map]
     rw [show r0.length - 1 + 1 - 1 = r0.length - 1 by omega]
 
-/-- §9.5 / §9.5.3: for `out_of_bounds: "clamp"`, evaluating the lowered tree
-equals evaluating the `table_lookup` node, for every interpolation method,
-whenever the lookup lowers (every load-time check passed) and its axis inputs
-evaluate to scalars. -/
-theorem lower_eval (tables : List (String × FTable)) (env : String → Num) (tid : String)
+/-- The lowered tree computes `lookupCore` on the inputs evaluated in table
+axis order. -/
+theorem lower_eval_core (tables : List (String × FTable)) (env : String → Num) (tid : String)
     (axes : List (String × Expr)) (out : Option OutSel) (args : List Expr) (e : Expr)
+    (T : FTable) (s : Nested) (vals : List (String × Num))
     (hl : lower tables tid axes out args = .ok e)
-    (hin : ∀ p ∈ axes, ∃ v, eval tables env p.2 = .ok (.num v))
-    (hclamp : ∀ T, tables.lookup tid = some T → T.outOfBounds = .clamp) :
-    eval tables env e = eval tables env (.lookup tid axes out args) := by
-  unfold lower at hl
-  cases hp : prepLookup tables tid (axes.map Prod.fst) out args with
-  | error c => rw [hp] at hl; cases hl
-  | ok Ts =>
-    obtain ⟨T, s⟩ := Ts
+    (hp : prepLookup tables tid (axes.map Prod.fst) out args = .ok (T, s))
+    (hvals : evalAxes tables env axes = .ok vals)
+    (hlk : ∀ k e, axes.lookup k = some e →
+      ∃ v, eval tables env e = .ok (.num v) ∧ vals.lookup k = some v) :
+    eval tables env e =
+      (do
+        let xs ← T.axes.mapM (fun a => match vals.lookup a.name with
+          | some v => .ok v
+          | none => .error Codes.lookupAxisNameMismatch)
+        let r ← lookupCore T s xs
+        return Val.num r) := by
+    unfold lower at hl
     rw [hp] at hl
     simp only [bind, Except.bind] at hl
     obtain ⟨hargs, hT, hv, hkeys, o, ho, hs⟩ := prepLookup_ok hp
-    have hoob := hclamp T hT
     have hax := validateTable_axes hv
     have har := validateTable_arity hv
     have hsh := slice_shape hv ho
     rw [← hs] at hsh
-    obtain ⟨vals, hvals, hlk⟩ := evalAxes_ok tables env axes hin
-    rw [eval_lookup_prep hp hvals]
     have hinp := fun a (ha : a ∈ T.axes) => axis_input hkeys hlk ha
-    unfold lookupValue
-    rw [hoob]
-    simp only [reduceCtorEq, decide_false, Bool.false_and, Bool.false_eq_true, ↓reduceIte]
+    unfold lookupCore
     cases hm : T.interpolation <;> rw [hm] at hl har <;>
       rcases hA : T.axes with _ | ⟨a0, _ | ⟨a1, _ | ⟨a2, rest⟩⟩⟩ <;>
       rw [hA] at hl har <;> simp [FTable.arityOk] at har <;> simp only [pure, Except.pure] at hl <;>
@@ -1005,6 +1008,354 @@ theorem lower_eval (tables : List (String × FTable)) (env : String → Num) (ti
         toVec_ofVec]
       rw [hr0]
       exact eval_nearest_lowered tables env v r0 hpw0 hlen0 (by simpa using hvlen) _ v0 hv0
+
+/-- §9.5 / §9.5.3: for `out_of_bounds: "clamp"`, evaluating the lowered tree
+equals evaluating the `table_lookup` node, for every interpolation method,
+whenever the lookup lowers (every load-time check passed) and its axis inputs
+evaluate to scalars. -/
+theorem lower_eval (tables : List (String × FTable)) (env : String → Num) (tid : String)
+    (axes : List (String × Expr)) (out : Option OutSel) (args : List Expr) (e : Expr)
+    (hl : lower tables tid axes out args = .ok e)
+    (hin : ∀ p ∈ axes, ∃ v, eval tables env p.2 = .ok (.num v))
+    (hclamp : ∀ T, tables.lookup tid = some T → T.outOfBounds = .clamp) :
+    eval tables env e = eval tables env (.lookup tid axes out args) := by
+  cases hp : prepLookup tables tid (axes.map Prod.fst) out args with
+  | error c => unfold lower at hl; rw [hp] at hl; cases hl
+  | ok Ts =>
+    obtain ⟨T, s⟩ := Ts
+    obtain ⟨-, hT, -⟩ := prepLookup_ok hp
+    obtain ⟨vals, hvals, hlk⟩ := evalAxes_ok tables env axes hin
+    rw [eval_lookup_prep hp hvals, lower_eval_core tables env tid axes out args e T s vals hl hp hvals hlk]
+    unfold lookupValue
+    rw [hclamp T hT]
+    simp only [reduceCtorEq, decide_false, Bool.false_and, Bool.false_eq_true, ↓reduceIte]
+
+/-- §9.5.3a, for a binding that implements `out_of_bounds: "error"` (the model
+does): with `xs` the axis inputs in table order, the lookup raises
+`table_lookup_out_of_bounds` exactly when some input is strictly outside its
+axis, and otherwise equals the lowered (clamp) tree. -/
+theorem lookup_error_mode (tables : List (String × FTable)) (env : String → Num) (tid : String)
+    (axes : List (String × Expr)) (out : Option OutSel) (args : List Expr) (e : Expr)
+    (hl : lower tables tid axes out args = .ok e)
+    (hin : ∀ p ∈ axes, ∃ v, eval tables env p.2 = .ok (.num v)) :
+    ∃ T xs, tables.lookup tid = some T ∧
+      T.axes.mapM (fun a => do
+        (← eval tables env ((axes.lookup a.name).getD (.lit .nan))).asNum) = .ok xs ∧
+      eval tables env (.lookup tid axes out args) =
+        (if T.outOfBounds = .error && anyOutside T xs then .error Codes.lookupOutOfBounds
+         else eval tables env e) := by
+  cases hp : prepLookup tables tid (axes.map Prod.fst) out args with
+  | error c => unfold lower at hl; rw [hp] at hl; cases hl
+  | ok Ts =>
+    obtain ⟨T, s⟩ := Ts
+    obtain ⟨-, hT, -, hkeys, -⟩ := prepLookup_ok hp
+    obtain ⟨vals, hvals, hlk⟩ := evalAxes_ok tables env axes hin
+    -- the inputs, in table order
+    have key : ∀ (L : List Axis), (∀ a ∈ L, a ∈ T.axes) →
+        ∃ xs, L.mapM (fun a => match vals.lookup a.name with
+            | some v => .ok v
+            | none => .error Codes.lookupAxisNameMismatch) = (.ok xs : Except Code (List Num)) ∧
+          L.mapM (fun a => do
+            (← eval tables env ((axes.lookup a.name).getD (.lit .nan))).asNum) = .ok xs := by
+      intro L hL
+      induction L with
+      | nil => exact ⟨[], rfl, rfl⟩
+      | cons a L ih =>
+        obtain ⟨xs, h1, h2⟩ := ih (fun b hb => hL b (by simp [hb]))
+        obtain ⟨v, hv, hvl⟩ := axis_input hkeys hlk (hL a (by simp))
+        refine ⟨v :: xs, ?_, ?_⟩
+        · simp only [List.mapM_cons, hvl, h1]; rfl
+        · rw [List.mapM_cons, h2]; simp only [hv, bind, Except.bind, Val.asNum]; rfl
+    obtain ⟨xs, h1, h2⟩ := key T.axes (fun a ha => ha)
+    refine ⟨T, xs, hT, h2, ?_⟩
+    rw [eval_lookup_prep hp hvals, lower_eval_core tables env tid axes out args e T s vals hl hp hvals hlk,
+      h1]
+    simp only [bind, Except.bind]
+    unfold lookupValue
+    split_ifs <;> rfl
+
+/-- §9.5.3a: `outside` is "strictly below the first knot or strictly above the
+last"; a NaN query is never outside. -/
+theorem outside_spec (r : List ℝ) (hn : 1 ≤ r.length) (x : ℝ) :
+    outside (r.map Num.fin) (Num.fin x) = true ↔ x < r.getD 0 0 ∨ r.getD (r.length - 1) 0 < x := by
+  simp only [outside, List.length_map, getD_map_fin (show 0 < r.length by omega),
+    getD_map_fin (show r.length - 1 < r.length by omega), Num.lt_fin, Bool.or_eq_true,
+    decide_eq_true_eq]
+
+theorem outside_nan (ax : List Num) : outside ax Num.nan = false := by
+  simp [outside]
+
+/-! ## Load-time checks of `function_tables` and `table_lookup` -/
+
+/-- The conditions §9.5.1 puts on a table (with Q-9: finite data). -/
+def TableValid (T : FTable) : Prop :=
+  (T.axes.map (·.name)).Nodup ∧ (∀ os, T.outputs = some os → os.Nodup) ∧
+    FTable.arityOk T.interpolation T.axes.length = true ∧
+    (∀ a ∈ T.axes, ∃ r : List ℝ, a.values = r.map Num.fin ∧ r.Pairwise (· < ·) ∧ 2 ≤ r.length) ∧
+    T.data.hasShape T.expectedShape = true ∧ T.data.anyNaN = false ∧
+    (∀ sh, T.shape = some sh → sh = T.expectedShape)
+
+/-- §9.5.1/§9.5.5: a table loads iff it satisfies every condition. -/
+theorem validateTable_ok_iff (T : FTable) : validateTable T = .ok () ↔ TableValid T := by
+  constructor
+  · intro h
+    have hax := validateTable_axes h
+    have har := validateTable_arity h
+    obtain ⟨hsh, hnan⟩ := validateTable_shape h
+    unfold validateTable at h
+    split_ifs at h with h1 h2 h3 h4 h5 h6 h7 h8 h9 h10
+    refine ⟨by simpa using h1, ?_, har, hax, hsh, hnan, ?_⟩
+    · intro os hos
+      simp only [FTable.outputsDup, hos, Bool.not_eq_true', decide_eq_false_iff_not,
+        Decidable.not_not] at h2
+      simpa using h2
+    · intro sh hsh'
+      simp only [FTable.shapeAssertionWrong, hsh', bne_iff_ne, ne_eq, Decidable.not_not] at h10
+      exact h10
+  · rintro ⟨h1, h2, h3, h4, h5, h6, h7⟩
+    have c2 : T.outputsDup = false := by
+      unfold FTable.outputsDup
+      cases ho : T.outputs with
+      | none => rfl
+      | some os => simpa using h2 os ho
+    have c4 : T.axes.any (fun a => anyNaN a.values) = false := by
+      rw [List.any_eq_false]; intro a ha
+      obtain ⟨r, hr, -, -⟩ := h4 a ha
+      rw [hr]; simp [(anyNaN_false_iff _).mpr ⟨r, rfl⟩]
+    have c5 : T.axes.any (fun a => !adjAll Scalar.lt a.values) = false := by
+      rw [List.any_eq_false]; intro a ha
+      obtain ⟨r, hr, hp, -⟩ := h4 a ha
+      rw [hr, (adjAll_lt_iff r).mpr hp]; simp
+    have c6 : T.axes.any (fun a => decide (a.values.length < 2)) = false := by
+      rw [List.any_eq_false]; intro a ha
+      obtain ⟨r, hr, -, hl⟩ := h4 a ha
+      rw [hr]; simp; omega
+    have c7 : T.outputsMismatch = false := by
+      unfold FTable.outputsMismatch
+      unfold FTable.expectedShape at h5
+      cases ho : T.outputs with
+      | none => rfl
+      | some os =>
+        rw [ho] at h5
+        cases hd : T.data with
+        | leaf _ => rfl
+        | node xs =>
+          rw [hd] at h5
+          simp only [Nested.hasShape, Bool.and_eq_true, beq_iff_eq] at h5
+          simp [h5.1]
+    have c10 : T.shapeAssertionWrong = false := by
+      unfold FTable.shapeAssertionWrong
+      cases hs : T.shape with
+      | none => rfl
+      | some sh => simp [h7 sh hs]
+    simp [validateTable, h1, c2, h3, c4, c5, c6, c7, h5, h6, c10]
+
+/-- Q-4 (`table_axis_nan` before `table_axis_non_monotonic`): once the name and
+arity checks pass, a NaN in any axis is reported as `table_axis_nan`. -/
+theorem validateTable_nan_precedence (T : FTable) (h1 : (T.axes.map (·.name)).Nodup)
+    (h2 : ∀ os, T.outputs = some os → os.Nodup)
+    (h3 : FTable.arityOk T.interpolation T.axes.length = true)
+    (hn : ∃ a ∈ T.axes, ∃ x ∈ a.values, x.isNaN = true) :
+    validateTable T = .error "table_axis_nan" := by
+  have c2 : T.outputsDup = false := by
+    unfold FTable.outputsDup
+    cases ho : T.outputs with
+    | none => rfl
+    | some os => simpa using h2 os ho
+  have c4 : T.axes.any (fun a => anyNaN a.values) = true := by
+    obtain ⟨a, ha, hx⟩ := hn
+    exact List.any_eq_true.mpr ⟨a, ha, (anyNaN_true_iff _).mpr hx⟩
+  simp [validateTable, h1, c2, h3, c4, Codes.axisNaN]
+
+/-- §9.5.5: every rejection of a table names a violated condition. -/
+theorem validateTable_code_sound (T : FTable) (c : Code) (h : validateTable T = .error c) :
+    (c = "table_axis_duplicate_name" ∧ ¬ (T.axes.map (·.name)).Nodup) ∨
+    (c = "table_outputs_duplicate_name" ∧ ∃ os, T.outputs = some os ∧ ¬ os.Nodup) ∨
+    (c = "table_interpolation_axes_mismatch" ∧
+      FTable.arityOk T.interpolation T.axes.length = false) ∨
+    (c = "table_axis_nan" ∧ ∃ a ∈ T.axes, ∃ x ∈ a.values, x.isNaN = true) ∨
+    (c = "table_axis_non_monotonic" ∧
+      ∃ a ∈ T.axes, ∃ r : List ℝ, a.values = r.map Num.fin ∧ ¬ r.Pairwise (· < ·)) ∨
+    (c = "unspecified:table_axis_too_short" ∧ ∃ a ∈ T.axes, a.values.length < 2) ∨
+    (c = "table_outputs_length_mismatch" ∧
+      ∃ os xs, T.outputs = some os ∧ T.data = .node xs ∧ xs.length ≠ os.length) ∨
+    (c = "table_data_shape_mismatch" ∧
+      (T.data.hasShape T.expectedShape = false ∨ ∃ sh, T.shape = some sh ∧ sh ≠ T.expectedShape)) ∨
+    (c = "table_data_nan" ∧ T.data.anyNaN = true) := by
+  unfold validateTable at h
+  split_ifs at h with h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 <;>
+    simp only [Except.error.injEq] at h <;> subst h
+  · left; exact ⟨rfl, by simpa using h1⟩
+  · right; left
+    refine ⟨rfl, ?_⟩
+    unfold FTable.outputsDup at h2
+    cases ho : T.outputs with
+    | none => rw [ho] at h2; simp at h2
+    | some os => rw [ho] at h2; exact ⟨os, rfl, by simpa using h2⟩
+  · right; right; left; exact ⟨rfl, by simpa using h3⟩
+  · right; right; right; left
+    refine ⟨rfl, ?_⟩
+    obtain ⟨a, ha, hx⟩ := List.any_eq_true.mp h4
+    exact ⟨a, ha, (anyNaN_true_iff _).mp hx⟩
+  · right; right; right; right; left
+    refine ⟨rfl, ?_⟩
+    obtain ⟨a, ha, hx⟩ := List.any_eq_true.mp h5
+    simp only [List.any_eq_true, not_exists, not_and, Bool.not_eq_true] at h4
+    obtain ⟨r, hr⟩ := (anyNaN_false_iff _).mp (h4 a ha)
+    refine ⟨a, ha, r, hr, fun hp => ?_⟩
+    rw [hr, (adjAll_lt_iff r).mpr hp] at hx; simp at hx
+  · right; right; right; right; right; left
+    refine ⟨rfl, ?_⟩
+    obtain ⟨a, ha, hx⟩ := List.any_eq_true.mp h6
+    exact ⟨a, ha, by simpa using hx⟩
+  · right; right; right; right; right; right; left
+    refine ⟨rfl, ?_⟩
+    unfold FTable.outputsMismatch at h7
+    cases ho : T.outputs with
+    | none => rw [ho] at h7; simp at h7
+    | some os =>
+      rw [ho] at h7
+      cases hd : T.data with
+      | leaf _ => rw [hd] at h7; simp at h7
+      | node xs => rw [hd] at h7; exact ⟨os, xs, rfl, rfl, by simpa using h7⟩
+  · right; right; right; right; right; right; right; left
+    exact ⟨rfl, Or.inl (by simpa using h8)⟩
+  · right; right; right; right; right; right; right; right
+    exact ⟨rfl, h9⟩
+  · right; right; right; right; right; right; right; left
+    refine ⟨rfl, Or.inr ?_⟩
+    unfold FTable.shapeAssertionWrong at h10
+    cases hs : T.shape with
+    | none => rw [hs] at h10; simp at h10
+    | some sh => rw [hs] at h10; exact ⟨sh, rfl, by simpa using h10⟩
+
+/-- Q-11: a `table_lookup` with non-empty `args` is `table_lookup_args_nonempty`. -/
+theorem lookup_args_nonempty (tables : List (String × FTable)) (env : String → Num)
+    (tid : String) (axes : List (String × Expr)) (out : Option OutSel) (args : List Expr)
+    (h : args ≠ []) :
+    eval tables env (.lookup tid axes out args) = .error "table_lookup_args_nonempty" := by
+  have : args.isEmpty = false := by simpa using h
+  rw [eval]
+  simp [prepLookup, this, Codes.lookupArgsNonempty, bind, Except.bind]
+
+/-- §9.5.2: a reference to an undeclared table is `table_lookup_unknown_table`. -/
+theorem lookup_unknown_table (tables : List (String × FTable)) (env : String → Num)
+    (tid : String) (axes : List (String × Expr)) (out : Option OutSel)
+    (h : tables.lookup tid = none) :
+    eval tables env (.lookup tid axes out []) = .error "table_lookup_unknown_table" := by
+  rw [eval]
+  simp [prepLookup, h, Codes.lookupUnknownTable, bind, Except.bind]
+
+/-- §9.5.2: on a valid table, axis keys that are not exactly its axis names are
+`table_lookup_axis_name_mismatch`. -/
+theorem lookup_axis_mismatch (tables : List (String × FTable)) (env : String → Num)
+    (tid : String) (axes : List (String × Expr)) (out : Option OutSel) (T : FTable)
+    (hT : tables.lookup tid = some T) (hv : validateTable T = .ok ())
+    (hk : ¬ (∀ k, k ∈ axes.map Prod.fst ↔ k ∈ T.axes.map (·.name))) :
+    eval tables env (.lookup tid axes out []) = .error "table_lookup_axis_name_mismatch" := by
+  have : keysMatch (axes.map Prod.fst) (T.axes.map (·.name)) = false := by
+    cases e : keysMatch (axes.map Prod.fst) (T.axes.map (·.name))
+    · rfl
+    · exfalso; apply hk; intro k
+      simp only [keysMatch, Bool.and_eq_true, List.all_eq_true, decide_eq_true_eq] at e
+      exact ⟨fun h => e.1 k h, fun h => e.2 k h⟩
+  rw [eval]
+  simp [prepLookup, hT, hv, this, Codes.lookupAxisNameMismatch, bind, Except.bind]
+
+/-- §9.5.2 with Q-12: an omitted `output` is output 0, whether or not `outputs`
+is declared. -/
+theorem resolveOutput_omitted (T : FTable) : resolveOutput T none = resolveOutput T (some (.idx 0)) :=
+  rfl
+
+/-- §9.5.2 with Q-10: without `outputs` the table has the one output 0. -/
+theorem resolveOutput_single (T : FTable) (h : T.outputs = none) (n : ℕ) (s : String) :
+    (resolveOutput T (some (.idx n)) = if n = 0 then .ok 0 else .error "table_lookup_output_out_of_range") ∧
+      resolveOutput T (some (.name s)) = .error "table_lookup_output_out_of_range" := by
+  simp [resolveOutput, resolveIdx, h, Codes.lookupOutputOutOfRange]
+
+/-- §9.5.2 with `outputs` declared: an integer must be `< len(outputs)`, a
+string must be one of them (its position); otherwise
+`table_lookup_output_out_of_range`. -/
+theorem resolveOutput_multi (T : FTable) (os : List String) (h : T.outputs = some os) (n : ℕ)
+    (s : String) :
+    (resolveOutput T (some (.idx n)) =
+        if n < os.length then .ok n else .error "table_lookup_output_out_of_range") ∧
+      (s ∉ os → resolveOutput T (some (.name s)) = .error "table_lookup_output_out_of_range") ∧
+      (∀ i (hi : i < os.length), os[i] = s → (∀ j (hj : j < i), os[j] ≠ s) →
+        resolveOutput T (some (.name s)) = .ok i) := by
+  refine ⟨by simp [resolveOutput, resolveIdx, h, Codes.lookupOutputOutOfRange], ?_, ?_⟩
+  · intro hs
+    have : findName s os = none := by
+      clear h
+      induction os with
+      | nil => rfl
+      | cons o os ih =>
+        simp only [List.mem_cons, not_or] at hs
+        simp only [findName, show ¬ o = s from fun e => hs.1 e.symm, ↓reduceIte, ih hs.2,
+          Option.map_none]
+    simp [resolveOutput, h, this, Codes.lookupOutputOutOfRange]
+  · intro i hi hs hlt
+    have : findName s os = some i := by
+      clear h
+      induction os generalizing i with
+      | nil => simp at hi
+      | cons o os ih =>
+        cases i with
+        | zero => simp only [List.getElem_cons_zero] at hs; simp [findName, hs]
+        | succ i =>
+          have ho : ¬ o = s := hlt 0 (by omega)
+          simp only [findName, ho, ↓reduceIte]
+          rw [ih i (by simpa using hi) (by simpa using hs)
+            (fun j hj => by simpa using hlt (j + 1) (by omega))]
+          rfl
+    simp [resolveOutput, h, this]
+
+/-! ## The spec's current `nearest` lowering is not nearest (Q-13) -/
+
+theorem indexVal_ofVec (v : List Num) (k : ℕ) (hk1 : 1 ≤ k) (hk2 : k ≤ v.length) :
+    indexVal (.arr (ofVec v)) (.num (.fin (k : ℝ))) = .ok (.num (v.getD (k - 1) .nan)) := by
+  have hlt : k - 1 < v.length := by omega
+  have hlt' : k - 1 < (v.map Nested.leaf).length := by simpa using hlt
+  simp only [ofVec, indexVal, Nat.floor_natCast, List.length_map, hk1, hk2, and_self,
+    ↓reduceIte, List.getD_eq_getElem _ _ hlt', List.getElem_map, List.getD_eq_getElem _ _ hlt]
+
+/-- The §9.5.3 lowering as the spec text currently writes it:
+`index(data, searchsorted(x, axis))`, claimed to return the nearest knot's value. -/
+def SpecNearestLowering : Prop :=
+  ∀ (v : List Num) (r : List ℝ) (x : ℝ), r.Pairwise (· < ·) → 2 ≤ r.length →
+    v.length = r.length →
+    eval [] (fun _ => Num.nan) (.index [.const (ofVec v),
+      .fn "interp.searchsorted" [.lit (.fin x), .const (ofVec (r.map Num.fin))]]) =
+      .ok (.num (nearest v (r.map Num.fin) (.fin x)))
+
+/-- Refuted: on axis `[0, 10]` with data `[1, 2]`, the query `x = 1` is nearest
+knot 0 (value 1), but `searchsorted` returns the first knot ≥ x, knot 1
+(value 2). (Above the last knot it returns `N + 1`, an out-of-range index.) -/
+theorem spec_nearest_lowering_refuted : ¬ SpecNearestLowering := by
+  intro h
+  have hpw : [(0 : ℝ), 10].Pairwise (· < ·) := by simp
+  have hc := h [.fin 1, .fin 2] [0, 10] 1 hpw (by simp) rfl
+  have hconst : eval [] (fun _ => Num.nan) (.const (ofVec [.fin 1, .fin 2])) =
+      .ok (.arr (ofVec [.fin 1, .fin 2])) := by
+    rw [eval]; exact fun _ h => by cases h
+  rw [eval, evalIndex, hconst, eval, evalFn] at hc
+  simp only [argOf, ofVec, argOfNested] at hc
+  rw [show Nested.node (([(0 : ℝ), 10].map Num.fin).map Nested.leaf) =
+      ofVec ([(0 : ℝ), 10].map Num.fin) from rfl, toVec_ofVec,
+    validateSearchsorted_eq _ (by simp)] at hc
+  simp only [bind, Except.bind, eval, Val.asNum, pure, Except.pure] at hc
+  rw [searchsorted_fin_map] at hc
+  have hf : [(0 : ℝ), 10].findIdx (fun m => decide ((1 : ℝ) ≤ m)) = 1 := by
+    simp [List.findIdx_cons]
+  rw [hf] at hc
+  have hn : nearestIdx [(0 : ℝ), 10] 1 = 0 := by
+    rw [← findIdx_midsR _ hpw (by simp)]
+    simp [midsR, List.findIdx_cons]; norm_num
+  rw [show Nested.node (List.map Nested.leaf [Num.fin 1, Num.fin 2]) = ofVec [Num.fin 1, Num.fin 2]
+      from rfl, indexVal_ofVec _ 2 (by norm_num) (by simp)] at hc
+  simp only [nearest, map_re_fin, hn] at hc
+  simp only [Except.ok.injEq, Val.num.injEq] at hc
+  simp at hc
 
 end
 
