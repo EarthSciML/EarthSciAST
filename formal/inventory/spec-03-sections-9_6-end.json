@@ -1,0 +1,897 @@
+{
+  "source": "esm-spec.md",
+  "clauses": [
+    {
+      "id": "spec.9.6.1.scalar-field-binding-admissible",
+      "section": "9.6.1",
+      "quote": "The value bound to a scalar-field parameter MUST be a literal admissible for that field",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "A template call whose expanded-equivalent form puts an inadmissible literal in a scalar field (e.g. manifold) is rejected by that field's own check, reported at the call site."
+    },
+    {
+      "id": "spec.9.6.1.param-name-author-collision",
+      "section": "9.6.1",
+      "quote": "so an author MUST NOT name a parameter after a field literal its body means literally",
+      "class": "out_of_scope",
+      "area": "rewrite",
+      "note": "Authoring policy: the engine must still substitute (next clause), so no verdict depends on it.",
+      "concern": "Phrased as an author MUST NOT, yet the same sentence requires bindings to accept and substitute such a body; a violating document is not rejected by anything, so this behaves as a SHOULD and a document can be non-conforming while every conforming tool accepts it."
+    },
+    {
+      "id": "spec.9.6.1.param-shadows-literal-substitute",
+      "section": "9.6.1",
+      "quote": "bindings MAY surface a lint-grade diagnostic for such a collision but MUST still substitute",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "Every string in a template body equal to a declared parameter name is replaced on instantiation, including in scalar fields and where it coincides with a field literal or index symbol."
+    },
+    {
+      "id": "spec.9.6.1.where-shape-rename",
+      "section": "9.6.1",
+      "quote": "a rename applied at an `expression_template_imports` edge MUST rewrite the imported templates' `where.*.shape` entries together with the imported `index_sets` and range references",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "Import-edge index-set renaming maps where.shape entries through the same rename map as the imported index_sets, so a renamed instance's constraints name the renamed sets.",
+      "concern": "The §9.7.7 'Transitivity (normative occurrence sites)' list for index-set renames enumerates registry keys, `of`, `from`, wrt/dim/var, integral bounds and join `on`, but not `where.*.shape`; the two normative enumerations of rename sites disagree."
+    },
+    {
+      "id": "spec.9.6.2.apply-args-empty",
+      "section": "9.6.2",
+      "quote": "`args`: MUST be an empty array.",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "An apply_expression_template node with non-empty args is rejected at load.",
+      "concern": "No diagnostic code is assigned to a non-empty `args`; the §9.6.6 table has no matching row (invalid_declaration covers template declarations, not call sites)."
+    },
+    {
+      "id": "spec.9.6.3.match-no-apply-node",
+      "section": "9.6.3",
+      "quote": "`match` patterns MUST NOT contain `apply_expression_template` nodes. Because selection",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "A match pattern containing an apply_expression_template node is rejected at registration.",
+      "concern": "No diagnostic code is named for this rejection here or in §9.7.3, and the §9.6.6 table has no row for it (only possibly the catch-all 'other structural defects' of invalid_declaration)."
+    },
+    {
+      "id": "spec.9.6.3.fixpoint-byte-identical",
+      "section": "9.6.3",
+      "quote": "all five bindings MUST produce byte-identical fixpoints (or the same non-convergence rejection)",
+      "class": "semantic",
+      "phase": 4,
+      "area": "determinism",
+      "note": "The rewrite fixpoint (outermost-first passes, priority then effective-declaration-order selection, where-filtering before selection, 64-pass bound) is a deterministic function of the loaded document."
+    },
+    {
+      "id": "spec.9.6.3.bindings-cover-params",
+      "section": "9.6.3",
+      "quote": "Bindings MUST cover every entry of the template's `params` exactly — no missing keys, no extras.",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "A call whose bindings key set differs from the template's params set is rejected with apply_expression_template_bindings_mismatch."
+    },
+    {
+      "id": "spec.9.6.3.substituted-scalar-admissible",
+      "section": "9.6.3",
+      "quote": "a value substituted into a scalar-field position MUST be a literal admissible for that field, enforced by the §9.6.9 validation discharge",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "Substitution never checks field admissibility; validation of the expanded-equivalent form rejects an inadmissible scalar-field value."
+    },
+    {
+      "id": "spec.9.6.3.expansion-no-evaluation",
+      "section": "9.6.3",
+      "quote": "Expansion MUST NOT depend on argument evaluation.",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "Template instantiation is a function of the argument ASTs only: equal ASTs give equal results regardless of their values."
+    },
+    {
+      "id": "spec.9.6.4.no-version-special-case",
+      "section": "9.6.4",
+      "quote": "a loader MUST NOT special-case older versions to recover Option A matching",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "Rule-4 pattern opacity applies to every accepted document regardless of its declared esm version."
+    },
+    {
+      "id": "spec.9.6.4.load-does-not-expand",
+      "section": "9.6.4",
+      "quote": "but MUST NOT expand `apply_expression_template` nodes except as rule 3 requires",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "After load, every non-eager (non-target-bearing) template reference survives unexpanded."
+    },
+    {
+      "id": "spec.9.6.4.references-denote-expansion",
+      "section": "9.6.4",
+      "quote": "downstream code MAY recognise them (that is the point), but MUST give them the semantics of rule 2",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "Any consumer's result on the reference-preserving tree equals its result on Expand(tree)."
+    },
+    {
+      "id": "spec.9.6.4.expand-deterministic",
+      "section": "9.6.4",
+      "quote": "pair MUST produce structurally identical ASTs with bit-equal constants; caching MUST NOT be observable",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "Expand is a pure function of (template, bindings): repeated expansions are structurally equal with bit-equal constants."
+    },
+    {
+      "id": "spec.9.6.4.observable-as-expand",
+      "section": "9.6.4",
+      "quote": "All observable behavior MUST be as if evaluated on `Expand(tree)`; numeric results MUST be bit-identical to it",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "Evaluating a reference-preserving tree gives bit-identical results to evaluating Expand(tree)."
+    },
+    {
+      "id": "spec.9.6.4.eager-expansion-prepass",
+      "section": "9.6.4",
+      "quote": "or whose own `bindings` carry such an op or a nested eager reference, MUST be expanded innermost-first in a pre-pass before the §9.6.3 fixpoint",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "Target-bearing references (and those whose bindings carry rewrite-target ops or eager references) are expanded innermost-first before the fixpoint, so no rewrite-target op survives inside a reference."
+    },
+    {
+      "id": "spec.9.6.4.decisions-on-expand",
+      "section": "9.6.4",
+      "quote": "A consumer whose *decisions* depend on the shape of an expression MUST therefore reach those decisions on `Expand(tree)`, not on the reference-preserving tree, or its behavior becomes a function of the author's factoring — which rule 2 forbids (\"all observable behavior MUST be as if evaluated on `Expand(tree)`\"). The projection-pushdown desugar (CONFORMANCE_SPEC §5.5.7) is the worked example: **whether the pushdown fires MUST NOT depend on whether the author factored the binning body through a template.**",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "Shape-dependent transforms (e.g. projection pushdown) make the same decision on a document and on its template-refactored equivalent."
+    },
+    {
+      "id": "spec.9.6.4.registry-emit-order",
+      "section": "9.6.4",
+      "quote": "then materialized entries in lexicographic (UTF-8 byte) name order; all five bindings MUST emit this exact order",
+      "class": "semantic",
+      "phase": 4,
+      "area": "round_trip",
+      "note": "An emitted component expression_templates block lists authored entries in authored order, then materialized entries sorted by UTF-8 bytes of their names."
+    },
+    {
+      "id": "spec.9.6.4.empty-absent-bindings-same",
+      "section": "9.6.4",
+      "quote": "a binding MUST treat a missing argument, a null argument, and an empty map identically",
+      "class": "semantic",
+      "phase": 4,
+      "area": "round_trip",
+      "note": "Load mode is generic iff the root is a template-library file and the loader binding set is empty; absent, null and empty select the same mode."
+    },
+    {
+      "id": "spec.9.6.4.generic-library-roundtrip-identity",
+      "section": "9.6.4",
+      "quote": "`emit(load(f))` MUST parse deep-equal to `f`",
+      "class": "semantic",
+      "phase": 4,
+      "area": "round_trip",
+      "note": "On a generic load, an import-free template-library file round-trips to a document deep-equal to itself (no folding, nothing dropped or added)."
+    },
+    {
+      "id": "spec.9.6.4.modes-not-mixed",
+      "section": "9.6.4",
+      "quote": "The modes MUST NOT be mixed.",
+      "class": "semantic",
+      "phase": 4,
+      "area": "round_trip",
+      "note": "Generic-load emit leaves every metaparameter site symbolic; instantiating-load emit folds every one; no emit is partially folded."
+    },
+    {
+      "id": "spec.9.6.4.load-preservation",
+      "section": "9.6.4",
+      "quote": "**Load preservation.** `emit(load(f))` MUST reproduce `f`. Preservation is **full value equality**, not mere key presence: every member `f` authors — every object key, at every depth — MUST be present in the emitted document *with an equal value*",
+      "class": "semantic",
+      "phase": 4,
+      "area": "round_trip",
+      "note": "emit(load(f)) equals f modulo canonical serialization, omission of default/empty fields, and the enumerated required load-time rewrites.",
+      "concern": "The 'only differences this rule admits' list omits differences the spec itself requires elsewhere: consumption of component expression_template_imports (§9.7.6), materialized registry entries added by rule 5, the esm version bump of rule 8, lowering of rewrite-target ops by the §9.6.3 fixpoint, and consumption of composition-form injections (§9.7.10); read literally, every conforming emit of a document with imports or match rules violates it."
+    },
+    {
+      "id": "spec.9.6.4.permitted-rewrite-preserves-rest",
+      "section": "9.6.4",
+      "quote": "a binding applying one MUST still preserve every field outside the construct it rewrote",
+      "class": "semantic",
+      "phase": 4,
+      "area": "round_trip",
+      "note": "A permitted (optional) emit rewrite such as the §6.7.4 y-shorthand desugar changes only the construct it rewrites; all other fields are preserved with equal values."
+    },
+    {
+      "id": "spec.9.6.4.harness-against-original",
+      "section": "9.6.4",
+      "quote": "a conformance harness MUST assert the round-trip against the **original document**",
+      "class": "out_of_scope",
+      "area": "conformance_harness",
+      "note": "Requirement on the conformance harness's comparison target, not on format semantics."
+    },
+    {
+      "id": "spec.9.6.4.emit-load-idempotent",
+      "section": "9.6.4",
+      "quote": "Both modes MUST be idempotent. `emit ∘ load` MUST be a byte-wise fixed point within a mode",
+      "class": "semantic",
+      "phase": 4,
+      "area": "round_trip",
+      "note": "emit(load(emit(load(f)))) is byte-identical to emit(load(f)) when both loads use the same mode."
+    },
+    {
+      "id": "spec.9.6.4.validity-discharge-strategy",
+      "section": "9.6.4",
+      "quote": "bindings MUST discharge this via registration-time, call-site, and memoized per-instantiation checks (§9.6.9), not by materializing the full expansion",
+      "class": "out_of_scope",
+      "area": "rewrite",
+      "note": "Implementation strategy (no full materialization) is a performance requirement; the semantic content, validity iff Expand(document) is valid, is not itself a MUST."
+    },
+    {
+      "id": "spec.9.6.4.version-stamp",
+      "section": "9.6.4",
+      "quote": "`apply_expression_template` call site or any **materialized** registry entry MUST declare `esm: 0.9.0` or later",
+      "class": "semantic",
+      "phase": 4,
+      "area": "round_trip",
+      "note": "An emitted document containing a surviving call site or a materialized registry entry declares esm >= 0.9.0; otherwise it keeps the source version."
+    },
+    {
+      "id": "spec.9.6.5.version-gate-0-4-0",
+      "section": "9.6.5",
+      "quote": "Files declaring `esm: 0.3.x` or earlier MUST be rejected by all five bindings if they carry either construct, with diagnostic `apply_expression_template_version_too_old`.",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "A document declaring esm < 0.4.0 that carries expression_templates or apply_expression_template is rejected with apply_expression_template_version_too_old."
+    },
+    {
+      "id": "spec.9.6.5.version-gate-0-8-0",
+      "section": "9.6.5",
+      "quote": "Files declaring an earlier version MUST be rejected by all five bindings if they carry any of these constructs, with diagnostic `template_import_version_too_old`.",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "A document declaring esm < 0.8.0 that carries imports, top-level expression_templates or metaparameters is rejected with template_import_version_too_old."
+    },
+    {
+      "id": "spec.9.6.6.stable-diagnostic-codes",
+      "section": "9.6.6",
+      "quote": "Bindings MUST emit the following stable diagnostic codes",
+      "class": "semantic",
+      "phase": 4,
+      "area": "diagnostics",
+      "note": "Each condition in the §9.6.6 table is reported with exactly its listed code."
+    },
+    {
+      "id": "spec.9.6.6.derived-index-set-not-empty",
+      "section": "9.6.6",
+      "quote": "The evaluator MUST NOT contract the range as empty",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "A range over a derived index set whose producer was not materialized yields derived_index_set_unmaterialized at build, never the semiring's additive identity."
+    },
+    {
+      "id": "spec.9.6.6.unevaluable-op-checked-upfront",
+      "section": "9.6.6",
+      "quote": "The check MUST precede evaluation",
+      "class": "semantic",
+      "phase": 2,
+      "area": "diagnostics",
+      "note": "An expression containing an op the evaluator cannot evaluate is refused with unevaluable_operator before any part is evaluated, including ops in untaken ifelse branches."
+    },
+    {
+      "id": "spec.9.6.6.unevaluable-op-no-sentinel",
+      "section": "9.6.6",
+      "quote": "The diagnostic MUST name the offending op, and the evaluator MUST NOT evaluate the op to a sentinel value",
+      "class": "semantic",
+      "phase": 2,
+      "area": "diagnostics",
+      "note": "unevaluable_operator names the op and evaluation never returns a number (NaN, zero, etc.) for it."
+    },
+    {
+      "id": "spec.9.6.6.unsupported-construct-names",
+      "section": "9.6.6",
+      "quote": "Fires at BUILD, before evaluation, and MUST name the construct and the evaluator.",
+      "class": "semantic",
+      "phase": 6,
+      "area": "solver",
+      "note": "An evaluator that cannot run events, implicit equations or Wiener noise refuses at build with unsupported_construct naming both, rather than running without them."
+    },
+    {
+      "id": "spec.9.6.6.pinned-parameter-builds",
+      "section": "9.6.6",
+      "quote": "A parameter the caller pins with `p` IS bound, MUST build, and the pin MUST reach the right-hand side.",
+      "class": "semantic",
+      "phase": 6,
+      "area": "data_sources",
+      "note": "A data-fed parameter given a caller value builds, and the right-hand side reads that value.",
+      "concern": "The data_source_unbound row says the code fires only 'in a case none of the following rules answers', but the rules that follow (default builds, no default is E_TREEWALK_MISSING_DATA, unresolved key is data_source_undefined, pinned builds) appear to cover every case, so the condition under which data_source_unbound is raised is undefined."
+    },
+    {
+      "id": "spec.9.6.6.compiler-unknown-names",
+      "section": "9.6.6",
+      "quote": "Fires at construction, before anything is built, and MUST name the offending value.",
+      "class": "out_of_scope",
+      "area": "api",
+      "note": "Concerns the esm_problem compiler option of API_SPEC, not format semantics."
+    },
+    {
+      "id": "spec.9.6.6.compiler-unavailable",
+      "section": "9.6.6",
+      "quote": "The message MUST name what would have to be loaded or built. A binding MUST NOT answer by selecting a different compiler",
+      "class": "out_of_scope",
+      "area": "api",
+      "note": "Binding build/packaging capability and compiler selection API behaviour."
+    },
+    {
+      "id": "spec.9.6.6.compiler-refused-rule",
+      "section": "9.6.6",
+      "quote": "Fires at BUILD, and MUST name the compiler, the **rule**",
+      "class": "out_of_scope",
+      "area": "api",
+      "note": "Compiler-specific refusal reporting; depends on which compiler a binding offers, not on document semantics."
+    },
+    {
+      "id": "spec.9.6.6.range-halo-insufficient",
+      "section": "9.6.6",
+      "quote": "Fires when the tile is built, and MUST name the rule, the variable, the axis and the missing cells.",
+      "class": "out_of_scope",
+      "area": "api",
+      "note": "Tile restriction is an API_SPEC §5.8 execution feature (range-restricted right-hand sides), not part of the format."
+    },
+    {
+      "id": "spec.9.6.6.library-illegal-payload-load-fails",
+      "section": "9.6.6",
+      "quote": "loading MUST fail rather than leave the templates silently inert. The message MUST name the offending keys.",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "A document with top-level expression_templates beside models/reaction_systems/data_sources/coupling/domain is rejected with template_library_illegal_payload naming those keys."
+    },
+    {
+      "id": "spec.9.6.6.subsystem-index-set-conflict-message",
+      "section": "9.6.6",
+      "quote": "The message MUST name both contributors, both definitions, and the `index_set_rename` remedy.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "diagnostics",
+      "note": "The subsystem_index_set_conflict diagnostic carries both contributors and both definitions."
+    },
+    {
+      "id": "spec.9.6.6.element-type-uncarried-names",
+      "section": "9.6.6",
+      "quote": "MUST name the edge or construct. Refusing is REQUIRED",
+      "class": "semantic",
+      "phase": 7,
+      "area": "precision",
+      "note": "A declared element_type that a mount edge or evaluator construct cannot carry is refused with element_type_uncarried naming it, never evaluated in another precision."
+    },
+    {
+      "id": "spec.9.6.6.invalid-broadcast-fn",
+      "section": "9.6.6",
+      "quote": "an unchecked `fn` is discarded silently rather than failing. Loading MUST fail.",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "A broadcast node with absent or non-scalar-operator fn, or an argument count outside that operator's arity, is rejected at load with invalid_broadcast_fn."
+    },
+    {
+      "id": "spec.9.6.7.fixture-arrhenius",
+      "section": "9.6.7",
+      "quote": "All five bindings (Julia, Python, Rust, TypeScript, Go) MUST produce a structurally-equal `reactions` array",
+      "class": "out_of_scope",
+      "area": "conformance_harness",
+      "note": "Assertion about one fixed fixture; a test the model participates in, not a property (covered by the §9.6.4 rule-2 clauses)."
+    },
+    {
+      "id": "spec.9.6.7.fixture-scalar-field-param",
+      "section": "9.6.7",
+      "quote": "All five bindings MUST produce structurally-equal post-substitution nodes",
+      "class": "out_of_scope",
+      "area": "conformance_harness",
+      "note": "Fixed-fixture assertion; the general property is spec.9.6.1.param-shadows-literal-substitute."
+    },
+    {
+      "id": "spec.9.6.7.fixture-opacity-negative",
+      "section": "9.6.7",
+      "quote": "a compound `match` pattern whose shape only assembles across a surviving-reference boundary: MUST NOT fire",
+      "class": "out_of_scope",
+      "area": "conformance_harness",
+      "note": "Fixed-fixture assertion of rule-4 opacity; the property belongs to the §9.6.4 rule-4 behaviour."
+    },
+    {
+      "id": "spec.9.6.8.spatial-d-must-lower",
+      "section": "9.6.8",
+      "quote": "MUST be lowered to a `faq` + `makearray` stencil by a `match` rewrite rule (§9.6) before evaluation",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "No spatial D reaches evaluation: after the fixpoint any remaining spatial D is rejected by the unlowered_operator gate.",
+      "concern": "The clause prescribes the output form (faq + makearray stencil), but nothing checks the body a rule produces; a rule lowering D to any evaluable-core expression passes the gate, and §9.6.8's own grad_is_Dx example shows rules whose bodies are not stencils, so only 'eliminated before evaluation' is enforceable."
+    },
+    {
+      "id": "spec.9.6.8.lowering-deterministic",
+      "section": "9.6.8",
+      "quote": "Two bindings expanding the same file MUST produce byte-identical post-lowering ASTs",
+      "class": "semantic",
+      "phase": 4,
+      "area": "determinism",
+      "note": "Discretization lowering is a deterministic function of the document (same as the §9.6.3 fixpoint determinism, including identical rejections)."
+    },
+    {
+      "id": "spec.9.6.9.discharge-without-materializing",
+      "section": "9.6.9",
+      "quote": "Bindings MUST discharge this **without materializing the full expansion**",
+      "class": "out_of_scope",
+      "area": "rewrite",
+      "note": "Performance/implementation requirement; the semantic half is that validity equals validity of Expand(document)."
+    },
+    {
+      "id": "spec.9.6.9.dotted-registry-keys-accepted",
+      "section": "9.6.9",
+      "quote": "so dotted names validate — binding resolvers MUST accept them",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "Template registry keys and apply_expression_template names may be dotted identifiers and resolve like any other name."
+    },
+    {
+      "id": "spec.9.7.1.library-no-component-payload",
+      "section": "9.7.1",
+      "quote": "It MUST NOT declare `models`, `reaction_systems`, `data_sources`, `coupling`, or `domain`",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "A document with top-level expression_templates and any of models/reaction_systems/data_sources/coupling/domain is rejected with template_library_illegal_payload."
+    },
+    {
+      "id": "spec.9.7.2.url-ref-unsupported",
+      "section": "9.7.2",
+      "quote": "a binding without remote support MUST reject them with `template_import_unresolved`",
+      "class": "out_of_scope",
+      "area": "rewrite",
+      "note": "Remote fetch is a binding I/O capability, not format semantics."
+    },
+    {
+      "id": "spec.9.7.3.match-no-apply-node-registration",
+      "section": "9.7.3",
+      "quote": "A reference in a body denotes its expansion exactly as at any other site (§9.6.4 rule 2). `match` patterns MUST NOT contain `apply_expression_template` nodes.",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "Restates spec.9.6.3.match-no-apply-node: a match pattern containing an apply node is rejected at registration."
+    },
+    {
+      "id": "spec.9.7.6.metaparameter-type-integer",
+      "section": "9.7.6",
+      "quote": "`type` is required and MUST be `\"integer\"` (the only kind).",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "A metaparameter declaration whose type is missing or not \"integer\" is rejected."
+    },
+    {
+      "id": "spec.9.7.6.metaparameter-name-conflict",
+      "section": "9.7.6",
+      "quote": "A metaparameter name MUST NOT collide with any variable, parameter, species, or index-set name visible in the document, nor with any **loop symbol** in it",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "A metaparameter whose name equals a visible variable/parameter/species/index-set name or any loop symbol (ranges key or output_idx entry, including in own and imported templates, checked in the library's own scope) is rejected with metaparameter_name_conflict."
+    },
+    {
+      "id": "spec.9.7.6.metaparameter-exact-division",
+      "section": "9.7.6",
+      "quote": "`/` MUST divide exactly, and overflow is an error (`metaparameter_type_error`)",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "Folding a metaparameter expression uses exact 64-bit integer arithmetic; an inexact division or an overflow is rejected with metaparameter_type_error.",
+      "concern": "'exact 64-bit integer arithmetic' does not say signed or unsigned, which fixes where overflow occurs; unary minus suggests signed int64 but it is not stated."
+    },
+    {
+      "id": "spec.9.7.6.structural-field-verbatim",
+      "section": "9.7.6",
+      "quote": "a structural string field of an Expression node holds a *name*, not a reference to a value, and MUST be copied verbatim even when a bound metaparameter spells it exactly",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "Metaparameter substitution rewrites only expression positions; a structural string field equal to a bound metaparameter name is unchanged."
+    },
+    {
+      "id": "spec.9.7.6.axis-scalars-not-substituted",
+      "section": "9.7.6",
+      "quote": "the node `{\"op\": \"grad\", \"args\": [\"x\"], \"dim\": \"x\"}` MUST become `{\"op\": \"grad\", \"args\": [3], \"dim\": \"x\"}`",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "wrt, dim and integral's var are never substituted, while operand occurrences of the same name are."
+    },
+    {
+      "id": "spec.9.7.6.node-header-not-substituted",
+      "section": "9.7.6",
+      "quote": "the node `{\"op\": \"max\", \"args\": [\"k\", \"max\"]}` MUST become `{\"op\": \"max\", \"args\": [\"k\", 3]}`",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "op, id and expect_cadence are never substituted."
+    },
+    {
+      "id": "spec.9.7.6.registry-fields-not-substituted",
+      "section": "9.7.6",
+      "quote": "MUST keep `\"reduce\": \"max\"` while any `\"max\"` in its `expr` folds to 3",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "reduce, semiring, manifold, fn, table, side, attrs, members, from_faq and where are never substituted."
+    },
+    {
+      "id": "spec.9.7.6.name-and-text-fields-not-substituted",
+      "section": "9.7.6",
+      "quote": "the join clause `{\"on\": [[\"row_id\", \"row_id\"]], \"syms\": [\"i\", \"j\"]}` MUST stay as written",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "Loop-symbol, reference, enum, unit and free-text fields are never substituted."
+    },
+    {
+      "id": "spec.9.7.6.structural-key-set-equals-file",
+      "section": "9.7.6",
+      "quote": "so the set it holds MUST equal `skip_keys` in `tests/metaparameter_substitution/field_classification.json`",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "Metaparameter substitution skips exactly the object keys in skip_keys (map keys in name_keyed_map_keys are never tested against it).",
+      "concern": "The normative structural key set is delegated to a test-data file outside the spec, so the spec text alone does not determine substitution; nothing states which wins if that file disagrees with the four families enumerated in the preceding paragraph."
+    },
+    {
+      "id": "spec.9.7.6.subsystem-binding-names-closed",
+      "section": "9.7.6",
+      "quote": "Consequently a subsystem-edge binding value's free names MUST already be closed in the mounting scope.",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "A subsystem-edge binding value folds immediately against the mounting document's closed metaparameters; a free name absent from that scope is template_import_unknown_name.",
+      "concern": "Defaults apply only at the root's close (site 5) and a non-root document may leave metaparameters open for its importer (site 2), so a non-root mounting document's names need not be closed when its refs resolve; the clause does not say what happens then or which diagnostic applies to a declared-but-still-open name."
+    },
+    {
+      "id": "spec.9.7.7.rename-key-in-export-set",
+      "section": "9.7.7",
+      "quote": "A `rename` key MUST name a member of that set",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "A rename key outside the edge's surviving export set (templates after only, index sets, metaparameters left open by bindings) is rejected with template_import_rename_unknown_name."
+    },
+    {
+      "id": "spec.9.7.7.rename-targets-dotted-identifiers",
+      "section": "9.7.7",
+      "quote": "Targets (and `prefix`) MUST be dotted identifiers",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "A prefix or rename target not matching [A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)* is rejected with template_import_rename_invalid."
+    },
+    {
+      "id": "spec.9.7.7.rename-post-names-distinct",
+      "section": "9.7.7",
+      "quote": "Within each namespace (templates, index sets, metaparameters) the post-rename names MUST be distinct",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "Edge renaming is injective within each namespace, else template_import_rename_collision."
+    },
+    {
+      "id": "spec.9.7.7.rename-template-references",
+      "section": "9.7.7",
+      "quote": "but bindings that compose lazily MUST rewrite them",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "Renaming a template rewrites every apply_expression_template.name reference to it in the surviving imported declarations.",
+      "concern": "The parenthetical says references are 'in practice already inlined by the target's own §9.7.3 composition', but §9.7.3 says bodies are not inlined from esm 0.9.0; under the current model every binding must rewrite these references, not only those that 'compose lazily'."
+    },
+    {
+      "id": "spec.9.7.7.rebind-key-free",
+      "section": "9.7.7",
+      "quote": "A `rebind` key MUST occur free in the surviving declarations",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "A rebind key that does not occur free, or names a declared name, is template_import_rebind_unknown_name; one naming a bound index symbol is template_import_rename_invalid."
+    },
+    {
+      "id": "spec.9.7.7.rebind-targets-fresh",
+      "section": "9.7.7",
+      "quote": "Targets MUST be fresh — colliding with a remaining free name",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "A rebind target equal to a remaining free name, bound index symbol, template param or another target is rejected with template_import_rename_collision."
+    },
+    {
+      "id": "spec.9.7.10.injected-ref-is-library",
+      "section": "9.7.10",
+      "quote": "the injected `ref` MUST resolve to a template-library file (§9.7.1)",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "An injected import whose ref is not a template-library file is rejected with template_import_not_library."
+    },
+    {
+      "id": "spec.9.7.10.test-injection-not-at-load",
+      "section": "9.7.10",
+      "quote": "A test's injection MUST NOT run at component load",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "Loading a document never applies Test/Analysis injections: the component's rewrite-targets and the emitted document are unchanged by them."
+    },
+    {
+      "id": "spec.10.2.translate-var-redundant",
+      "section": "10.2",
+      "quote": "Writing it MUST produce the same flattened system as omitting it",
+      "class": "semantic",
+      "phase": 5,
+      "area": "flatten",
+      "note": "A translate value of \"B._var\" yields the same flattened system as omitting the entry."
+    },
+    {
+      "id": "spec.10.2.translate-bare-scoped-equivalent",
+      "section": "10.2",
+      "quote": "so the two spellings denote the same variable and MUST produce the same flattened system",
+      "class": "semantic",
+      "phase": 5,
+      "area": "flatten",
+      "note": "A bare translate endpoint resolved against its side's system flattens identically to its fully scoped spelling."
+    },
+    {
+      "id": "spec.10.3.multiplicative-needs-tendency-table",
+      "section": "10.3",
+      "quote": "`to` MUST already have one — see below",
+      "class": "semantic",
+      "phase": 5,
+      "area": "coupling",
+      "note": "Table form of spec.10.3.multiplicative-no-tendency: a multiplicative connector target must have a D(to) equation."
+    },
+    {
+      "id": "spec.10.3.multiplicative-no-tendency",
+      "section": "10.3",
+      "quote": "a library MUST raise `couple_multiplicative_no_tendency` rather than silently dropping the connector equation",
+      "class": "semantic",
+      "phase": 5,
+      "area": "coupling",
+      "note": "A multiplicative connector equation whose target has no D(to) equation in the flattened system is rejected with couple_multiplicative_no_tendency."
+    },
+    {
+      "id": "spec.10.4.transform-refs-fully-scoped",
+      "section": "10.4",
+      "quote": "every variable reference MUST be a fully-scoped reference (`System.var`) resolvable in the flattened coupled system",
+      "class": "semantic",
+      "phase": 5,
+      "area": "coupling",
+      "note": "Every free variable reference in an Expression transform is System.var and resolves in the flattened system.",
+      "concern": "A regridding transform is a faq whose bound index symbols (and possibly t or metaparameter names) appear as bare strings in variable-reference positions; the clause does not exempt them, and no diagnostic is named for a violation."
+    },
+    {
+      "id": "spec.10.4.transform-references-from",
+      "section": "10.4",
+      "quote": "The expression MUST reference the entry's `from` variable",
+      "class": "semantic",
+      "phase": 5,
+      "area": "coupling",
+      "note": "An Expression transform contains at least one reference to the entry's from variable.",
+      "concern": "No diagnostic code is named, and it is unclear whether a reference reaching `from` only through an apply_expression_template binding (as in the §10.5 example) counts, i.e. whether the check runs on the reference-preserving tree or on Expand(tree)."
+    },
+    {
+      "id": "spec.10.4.library-transform-lowered",
+      "section": "10.4",
+      "quote": "a library edge's transform MUST expand to an already-lowered form",
+      "class": "semantic",
+      "phase": 5,
+      "area": "coupling",
+      "note": "A coupling-library edge transform whose templates would introduce grad/div/spatial D is rejected with coupling_library_illegal_payload."
+    },
+    {
+      "id": "spec.10.7.scope-before-merge",
+      "section": "10.7",
+      "quote": "A binding MUST therefore apply the scoping in the same pass that namespaces the component's equations",
+      "class": "semantic",
+      "phase": 5,
+      "area": "flatten",
+      "note": "The flattened template registry equals merge(scope(each component's carried registry)), with dedup on post-scoping bodies and DAG-propagated owner-path renames."
+    },
+    {
+      "id": "spec.10.7.merge-surface-composed",
+      "section": "10.7",
+      "quote": "A caller that goes on to namespace MUST compose it with the scoping",
+      "class": "out_of_scope",
+      "area": "api",
+      "note": "Obligation on callers of a binding's flatten_template_registries API surface, not on format semantics."
+    },
+    {
+      "id": "spec.10.8.injection-key-referenced",
+      "section": "10.8",
+      "quote": "Each map key MUST name a system **referenced by that entry**",
+      "class": "semantic",
+      "phase": 5,
+      "area": "coupling",
+      "note": "A coupling-entry expression_template_imports key that names no system the entry references is rejected with template_inject_target_unknown."
+    },
+    {
+      "id": "spec.10.9.coupling-library-payload",
+      "section": "10.9",
+      "quote": "A coupling-library file **MUST NOT** declare `models`, `reaction_systems`, `data_sources`,",
+      "class": "semantic",
+      "phase": 5,
+      "area": "coupling",
+      "note": "A document with coupling_roles and any of models/reaction_systems/data_sources/domain/index_sets/metaparameters/expression_templates is rejected with coupling_library_illegal_payload."
+    },
+    {
+      "id": "spec.10.9.coupling-library-no-callback",
+      "section": "10.9",
+      "quote": "It MUST NOT contain a `callback` entry",
+      "class": "semantic",
+      "phase": 5,
+      "area": "coupling",
+      "note": "A coupling library containing a callback entry or an edge with expression_template_imports is rejected with coupling_library_illegal_payload."
+    },
+    {
+      "id": "spec.10.9.coupling-library-no-nested-import",
+      "section": "10.9",
+      "quote": "A coupling-library file **MUST NOT** itself contain a `coupling_import` entry",
+      "class": "semantic",
+      "phase": 5,
+      "area": "coupling",
+      "note": "A coupling library containing a coupling_import entry is rejected with coupling_library_nested_import."
+    },
+    {
+      "id": "spec.10.9.coupling-library-transform-lowered",
+      "section": "10.9",
+      "quote": "a library transform MUST expand to an already-lowered form",
+      "class": "semantic",
+      "phase": 5,
+      "area": "coupling",
+      "note": "Same as spec.10.4.library-transform-lowered: a library edge transform template introducing a rewrite-target op is coupling_library_illegal_payload."
+    },
+    {
+      "id": "spec.10.10.1.every-role-bound",
+      "section": "10.10.1",
+      "quote": "**Every role MUST have a `bind` entry.**",
+      "class": "semantic",
+      "phase": 5,
+      "area": "coupling",
+      "note": "A declared role absent from bind is rejected with coupling_import_role_unbound."
+    },
+    {
+      "id": "spec.10.10.1.bind-key-is-role",
+      "section": "10.10.1",
+      "quote": "**Every `bind` key MUST name a declared role.**",
+      "class": "semantic",
+      "phase": 5,
+      "area": "coupling",
+      "note": "A bind key that is not a declared role is rejected with coupling_import_unknown_role."
+    },
+    {
+      "id": "spec.10.10.1.bind-value-is-component",
+      "section": "10.10.1",
+      "quote": "**Every `bind` value MUST resolve to a component.**",
+      "class": "semantic",
+      "phase": 5,
+      "area": "coupling",
+      "note": "A bind value not resolving to a top-level or nested model/reaction system is rejected with coupling_import_bind_not_a_component."
+    },
+    {
+      "id": "spec.10.10.1.bind-path-walk",
+      "section": "10.10.1",
+      "quote": "`s₁` MUST name a top-level `models` / `reaction_systems` key, and each subsequent `sᵢ` MUST name a key in the preceding system's `subsystems` map. The whole path MUST terminate on a system node",
+      "class": "semantic",
+      "phase": 5,
+      "area": "coupling",
+      "note": "A bind value resolves iff its first segment is a top-level model/reaction system and each later segment is a subsystems key of the previous one; data_sources entries never resolve."
+    },
+    {
+      "id": "spec.10.10.2.no-component-ref-in-config",
+      "section": "10.10.2",
+      "quote": "a library MUST NOT hide a component reference there",
+      "class": "out_of_scope",
+      "area": "coupling",
+      "note": "Authoring policy on library files: config is opaque and copied verbatim, so no check can observe a violation."
+    },
+    {
+      "id": "spec.10.10.3.validate-expanded-coupling",
+      "section": "10.10.3",
+      "quote": "MUST apply the coupled-system reference validation to the **expanded** coupling",
+      "class": "semantic",
+      "phase": 5,
+      "area": "coupling",
+      "note": "After coupling_import expansion, a bound component lacking a referenced variable fails with unresolved_scoped_ref naming Component.var."
+    },
+    {
+      "id": "spec.10.10.3.source-misbind-pointer",
+      "section": "10.10.3",
+      "quote": "MUST report it at the pointer of the `coupling_import` entry (`/coupling/<i>`)",
+      "class": "semantic",
+      "phase": 5,
+      "area": "diagnostics",
+      "note": "A mis-bind reported by validate on the source document carries the pointer /coupling/<i> of the import entry."
+    },
+    {
+      "id": "spec.10.10.3.missing-parameter-no-substitute",
+      "section": "10.10.3",
+      "quote": "A binding MUST NOT substitute `0.0` (or any other value it chose) for the missing one, and MUST NOT defer the failure to the solve.",
+      "class": "semantic",
+      "phase": 6,
+      "area": "solver",
+      "note": "Problem construction with a parameter that has no default and no supplied value fails with E_TREEWALK_MISSING_DATA naming it, before any solve."
+    },
+    {
+      "id": "spec.11.3.1.precision-refuse-construct",
+      "section": "11.3.1",
+      "quote": "A runtime that cannot honour the declaration for some construct MUST **error naming that construct**",
+      "class": "semantic",
+      "phase": 7,
+      "area": "precision",
+      "note": "Evaluation under a declared element_type either rounds per that precision at every operation or errors naming the construct; it never silently uses another precision."
+    },
+    {
+      "id": "spec.11.3.1.mixed-element-type",
+      "section": "11.3.1",
+      "quote": "MUST be an error naming both variables (`mixed_element_type`)",
+      "class": "semantic",
+      "phase": 7,
+      "area": "precision",
+      "note": "Static precision propagation: an operator with operands of different declared element types, or an equation whose RHS precision differs from its LHS, is rejected with mixed_element_type.",
+      "concern": "Operands are arbitrary sub-expressions whose precision is inferred from leaves, not necessarily variables, so 'naming both variables' is undefined when an operand is compound or when several variables of each precision feed it."
+    },
+    {
+      "id": "spec.11.3.1.precision-not-entry-only",
+      "section": "11.3.1",
+      "quote": "Exempting a variable only where its data ENTERS is not sufficient and MUST NOT be offered as an implementation of this field",
+      "class": "semantic",
+      "phase": 7,
+      "area": "precision",
+      "note": "A variable's element_type governs the precision of every operation over it, not only the rounding where its data enters."
+    },
+    {
+      "id": "spec.11.4.ic-coordinate-symbols-declared",
+      "section": "11.4",
+      "quote": "Those symbols are implicitly declared and MUST NOT be reported as `undefined_variable` (§4.9.1).",
+      "class": "semantic",
+      "phase": 5,
+      "area": "flatten",
+      "note": "Spatial coordinate names in an ic RHS are not undefined_variable.",
+      "concern": "The set of 'spatial coordinate names' is given only by example (x, y, z, lon, lat, lev, 'not necessarily the index-set key'), so which bare names an ic RHS may use without being undefined_variable is not defined."
+    },
+    {
+      "id": "spec.11.4.missing-initial-value",
+      "section": "11.4",
+      "quote": "a binding MUST NOT start such an unknown at `0.0` (or any other value it chose), and MUST NOT defer the failure to the solve",
+      "class": "semantic",
+      "phase": 6,
+      "area": "solver",
+      "note": "Problem construction with an ODE state or algebraic unknown that gets no starting value from any source fails with E_TREEWALK_MISSING_INITIAL_VALUE naming it, before any solve."
+    },
+    {
+      "id": "spec.11.4.1.ic-not-in-reaction-system",
+      "section": "11.4.1",
+      "quote": "An `ic` equation MUST NOT be placed inside a reaction system's `constraint_equations`",
+      "class": "semantic",
+      "phase": 5,
+      "area": "reactions",
+      "note": "An ic equation anywhere other than a model's equations is rejected with ic_in_reaction_system."
+    }
+  ]
+}

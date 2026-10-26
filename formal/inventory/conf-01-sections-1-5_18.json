@@ -1,0 +1,972 @@
+{
+  "source": "CONFORMANCE_SPEC.md",
+  "clauses": [
+    {
+      "id": "conf.2.2.1.lib-in-validation-sweep",
+      "section": "2.2.1",
+      "quote": "a conforming binding's validation sweep MUST include them and MUST hold them to exactly the `tests/valid/` standard",
+      "class": "out_of_scope",
+      "area": "conformance_harness",
+      "note": "Which files a binding's validation sweep covers is test-harness scope; the validity of the lib documents themselves is covered by the ordinary validation properties."
+    },
+    {
+      "id": "conf.2.2.3.substitute-semantics",
+      "section": "2.2.3",
+      "quote": "All implementations MUST implement `substitute` with the following behavior:",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "substitute is single-pass (no re-substitution of replacements), recurses into every args child, preserves operator metadata, passes unbound names through, and is the identity under an empty map.",
+      "concern": "Rule 3 lists a faq's `expr` among sidecar fields 'carried through unchanged', but `expr` is the faq's body expression; read literally, substitution never reaches variables inside a faq body, which contradicts rule 2's 'descends into every args child' intent and is likely not meant."
+    },
+    {
+      "id": "conf.2.2.3.substitute-empty-args",
+      "section": "2.2.3",
+      "quote": "and no `args` (or `args: []`) MUST NOT panic or raise; it is returned structurally equivalent.",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "substitute is total on operator nodes with empty or missing args and returns a structurally equal node."
+    },
+    {
+      "id": "conf.5.2.display-byte-identical",
+      "section": "5.2",
+      "quote": "\"All language implementations MUST produce byte-identical output, verified by the shared fixtures in this directory\"",
+      "class": "out_of_scope",
+      "area": "api",
+      "note": "Display rendering (unicode/latex/ascii) is a presentation feature governed by tests/display/RENDERING_CONTRACT.md, outside the two spec files the model covers; the MUST is quoted from that contract."
+    },
+    {
+      "id": "conf.5.5.pure-function-of-total-order",
+      "section": "5.5",
+      "quote": "Every emitted set, key, and dense ID MUST be a **pure function of a defined total order over tuples**.",
+      "class": "semantic",
+      "phase": 2,
+      "area": "determinism",
+      "note": "Every value-invention output (distinct, skolem, rank, arg-witness, joins) is a function of the input multiset under the defined total order, independent of input order and hashing."
+    },
+    {
+      "id": "conf.5.5.1.float-key-normalized",
+      "section": "5.5.1",
+      "quote": "If a float is genuinely unavoidable it MUST be normalized (`-0.0`→`0.0`, `NaN` rejected) via the existing `canonicalize` float formatting before comparison",
+      "class": "semantic",
+      "phase": 2,
+      "area": "determinism",
+      "note": "A float in a key is normalized (-0.0 to 0.0, NaN rejected) before ordering, so keys differing only in zero sign compare equal and NaN keys are an error.",
+      "concern": "It says normalization happens 'via the canonicalize float formatting' before comparison but not whether the comparison is then numeric or on the formatted string; a lexicographic comparison of formatted numbers is not numeric order (\"10\" < \"9\"), so the total order on float keys is unspecified."
+    },
+    {
+      "id": "conf.5.5.1.distinct-not-insertion-order",
+      "section": "5.5.1",
+      "quote": "It MUST NOT be first-seen / insertion order, which is non-portable",
+      "class": "semantic",
+      "phase": 2,
+      "area": "determinism",
+      "note": "distinct returns the sorted, adjacent-deduplicated sequence under the total order, so its output is invariant under permutation of its input."
+    },
+    {
+      "id": "conf.5.5.1.fingerprint-hash-portable",
+      "section": "5.5.1",
+      "quote": "it MUST be a **portable, seed-pinned, non-cryptographic hash** (e.g. XXH3-64 seed 0) over a **canonical byte serialization**",
+      "class": "out_of_scope",
+      "area": "determinism",
+      "note": "Constrains the hashing technique of an optional, unspecified fingerprint; the model uses canonical tuples and no fingerprint exists in the format to formalize."
+    },
+    {
+      "id": "conf.5.5.1.join-output-sorted",
+      "section": "5.5.1",
+      "quote": "the emitted result MUST be **sorted by the canonical key**",
+      "class": "semantic",
+      "phase": 2,
+      "area": "determinism",
+      "note": "A join or group-by aggregate emits its result sorted by canonical key, independent of bucketing order."
+    },
+    {
+      "id": "conf.5.5.1.join-oplus-assoc-comm",
+      "section": "5.5.1",
+      "quote": "The semiring `⊕` used to combine duplicates MUST be associative + commutative",
+      "class": "semantic",
+      "phase": 2,
+      "area": "semiring",
+      "note": "Every registry ⊕ used to merge duplicate keys is associative and commutative on its declared domain (stated over exact reals/booleans; floating point is handled by the sequential-order rule).",
+      "concern": "The parenthetical claims every registry ⊕ (sum, product, ...) is associative and commutative 'so input and parallel order cannot change the result'; IEEE-754 floating-point + and × are not associative, which is why the next sentence has to require a fixed sequential order — the claim is false for floats as stated."
+    },
+    {
+      "id": "conf.5.5.1.float-bucket-sequential",
+      "section": "5.5.1",
+      "quote": "the per-bucket reduction MUST be done sequentially in canonical order to avoid last-ULP drift",
+      "class": "semantic",
+      "phase": 2,
+      "area": "determinism",
+      "note": "A floating-point group-by reduction is the left fold of each bucket's values in canonical order, so the result is bit-determined by the input multiset."
+    },
+    {
+      "id": "conf.5.5.1.scvt-follows-rule-5",
+      "section": "5.5.1",
+      "quote": "so it is a value-equality group-by and MUST follow rule 5 exactly",
+      "class": "semantic",
+      "phase": 3,
+      "area": "determinism",
+      "note": "A grouped reduction keyed on an arg-witness buffer buckets by integer key, folds each bucket in canonical order, and yields 0̄ for an empty group."
+    },
+    {
+      "id": "conf.5.5.1.derived-buffer-inputs-const-discrete",
+      "section": "5.5.1",
+      "quote": "(its inputs MUST be CONST/DISCRETE)",
+      "class": "semantic",
+      "phase": 5,
+      "area": "other",
+      "note": "A grouped/derived value-invention buffer whose inputs classify CONTINUOUS is rejected by the cadence guard."
+    },
+    {
+      "id": "conf.5.5.3.index-set-byte-identical",
+      "section": "5.5.3",
+      "quote": "Two conforming bindings MUST produce byte-for-byte identical serialized index sets and identical dense-ID arrays",
+      "class": "semantic",
+      "phase": 2,
+      "area": "determinism",
+      "note": "The canonical compact-JSON serialization of an index set and its dense IDs (after base normalization) is a function of the input alone."
+    },
+    {
+      "id": "conf.5.5.3.1.fixtures-avoid-integral-floats",
+      "section": "5.5.3.1",
+      "quote": "fixtures MUST avoid integral-valued float literals wherever the float-ness is semantic",
+      "class": "out_of_scope",
+      "area": "canonical",
+      "note": "An authoring rule for fixture writers, not a property of the format's semantics."
+    },
+    {
+      "id": "conf.5.5.3.1.writer-rejects-nonfinite",
+      "section": "5.5.3.1",
+      "quote": "Non-finite values (`NaN`, `±Inf`) are not valid JSON; the canonical writer MUST reject them.",
+      "class": "semantic",
+      "phase": 2,
+      "area": "canonical",
+      "note": "The canonical number writer is partial: it is undefined (errors) exactly on NaN and ±Inf and total on finite doubles."
+    },
+    {
+      "id": "conf.5.5.3.1.literal-type-by-value",
+      "section": "5.5.3.1",
+      "quote": "a property of a number's *value*, so it MUST hold at the AST-literal boundary **uniformly**, independent of any binding's JSON-reader number typing. A conforming reader whose number inference is context-dependent (Julia's `JSON3` applies a structural inference that can materialise a bare integer token — e.g. `1` — as `Float64` inside a deeply-nested, schema-repeating document) MUST re-apply rule 1 when building the AST",
+      "class": "semantic",
+      "phase": 2,
+      "area": "round_trip",
+      "note": "Parsing maps a JSON number to an integer literal iff its value is integral and Int64-representable, and to a float literal otherwise, regardless of position in the document.",
+      "concern": "Narrowing integral floats to integer literals is called value-preserving only on the strength of '/' being true division; nothing says + - * ^ on integer literals are evaluated without Int64 overflow, so an author's 1e18 * 1e18 (narrowed to integers) could overflow where the float form would not."
+    },
+    {
+      "id": "conf.5.5.3.1.int-ratio-canonical-form",
+      "section": "5.5.3.1",
+      "quote": "that all five bindings MUST produce identically, inside and outside a `faq`",
+      "class": "semantic",
+      "phase": 2,
+      "area": "canonical",
+      "note": "An integer-spelled ratio such as {op:'/', args:[1,N]} has exactly one canonical serialization, with integer operands, at any depth including faq bodies."
+    },
+    {
+      "id": "conf.5.5.4.harness-identical-inputs",
+      "section": "5.5.4",
+      "quote": "The suite MUST feed **identical** mesh / table inputs to every producing binding",
+      "class": "out_of_scope",
+      "area": "conformance_harness",
+      "note": "Describes how the determinism harness drives bindings."
+    },
+    {
+      "id": "conf.5.5.4.adversarial-variants-collapse",
+      "section": "5.5.4",
+      "quote": "All such variants MUST collapse to the identical canonical output.",
+      "class": "semantic",
+      "phase": 2,
+      "area": "determinism",
+      "note": "Value-invention outputs are invariant under duplicating rows, reversing symmetric-edge orientation and permuting input order."
+    },
+    {
+      "id": "conf.5.5.5.gather-boundary-agree",
+      "section": "5.5.5",
+      "quote": "All evaluating bindings (Julia, Rust, Python) MUST agree byte-for-byte on the resolved gather",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "A const-array gather resolves an out-of-range index per declared per-dimension policy (periodic mod1, clamp, or error by default), checked per dimension, never on the flat offset."
+    },
+    {
+      "id": "conf.5.5.5.untaken-read-no-fault",
+      "section": "5.5.5",
+      "quote": "it MUST NOT raise `E_TREEWALK_CONSTARRAY_OOB`, and it contributes nothing",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "An out-of-range const-array read in an unselected ifelse branch or a filter-excluded faq term raises no error and contributes nothing (0̄ for an excluded term)."
+    },
+    {
+      "id": "conf.5.5.5.taken-read-faults",
+      "section": "5.5.5",
+      "quote": "A read in a selected branch or an admitted term that is out of range MUST raise the error",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "An out-of-range read under the error policy in a selected branch or admitted term raises E_TREEWALK_CONSTARRAY_OOB, same code as an unguarded read."
+    },
+    {
+      "id": "conf.5.5.5.compiled-tier-masks-fault",
+      "section": "5.5.5",
+      "quote": "tier that evaluates both branches or every term for speed MUST mask the fault per cell",
+      "class": "later",
+      "phase": 7,
+      "area": "arrays",
+      "note": "A compiled/vectorized evaluation raises the out-of-range fault for exactly the cells whose evaluation takes the read, matching the interpreter."
+    },
+    {
+      "id": "conf.5.5.6.namespace-join-names",
+      "section": "5.5.6",
+      "quote": "system, a binding **MUST** dot-namespace those names by the same rule it applies to any other reference",
+      "class": "semantic",
+      "phase": 5,
+      "area": "flatten",
+      "note": "Flattening prefixes join names (on key columns, overlap envelope factors) like references: node-local binders first left alone, declared locals and local-subsystem-headed names prefixed, everything else untouched."
+    },
+    {
+      "id": "conf.5.5.6.no-namespace-loop-symbols",
+      "section": "5.5.6",
+      "quote": "which a binding MUST NOT namespace because the array interpreter resolves those positionally",
+      "class": "semantic",
+      "phase": 5,
+      "area": "flatten",
+      "note": "Flattening leaves output_idx entries, ranges keys and integral int_var symbols unprefixed."
+    },
+    {
+      "id": "conf.5.5.6.variable-map-carries-join-names",
+      "section": "5.5.6",
+      "quote": "**A `variable_map` MUST carry join names with it (normative).**",
+      "class": "semantic",
+      "phase": 5,
+      "area": "coupling",
+      "note": "A removing variable_map (param_to_var, conversion_factor, or no transform) renames to→from inside join clauses as well as expression trees."
+    },
+    {
+      "id": "conf.5.5.6.variable-map-renames-join",
+      "section": "5.5.6",
+      "quote": "so a binding MUST additionally rename `to` → `from` inside every `join` clause",
+      "class": "semantic",
+      "phase": 5,
+      "area": "coupling",
+      "note": "After a removing variable_map, no join clause in the flattened system names the removed target."
+    },
+    {
+      "id": "conf.5.5.6.spatial-index-equals-brute-force",
+      "section": "5.5.6",
+      "quote": "(rstar R*-tree / STRtree) MUST return a set byte-identical to the brute-force",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "The broad-phase candidate set is exactly the sorted set of pairs satisfying the closed eps-inflated AABB predicate (and is therefore conservative and monotone in eps)."
+    },
+    {
+      "id": "conf.5.5.6.driver-not-producer-only",
+      "section": "5.5.6",
+      "quote": "and a binding MUST NOT restrict the driver to the producer",
+      "class": "out_of_scope",
+      "area": "arrays",
+      "note": "Whether an overlap gate drives enumeration is a cost requirement; the result is fixed by the membership semantics and identity fill."
+    },
+    {
+      "id": "conf.5.5.6.overlap-identity-fill",
+      "section": "5.5.6",
+      "quote": "Such a position MUST be filled with the semiring's `0̄`",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "An output position of an overlap-gated faq with no candidate pair equals the semiring 0̄, exactly as under the ungated full product."
+    },
+    {
+      "id": "conf.5.5.6.three-shapes-driven",
+      "section": "5.5.6",
+      "quote": "The three shapes above MUST be driven — that is what the MUST NOT above forbids sidestepping",
+      "class": "out_of_scope",
+      "area": "arrays",
+      "note": "Enumeration driving is a performance requirement; the result-equivalence it must preserve is captured by the identity-fill and same-answer clauses.",
+      "concern": "The permitted fallback example ('a faq with additional contracted axes beside two contracted gated ones') is inside the first mandatory shape ('both gated symbols contracted ⇒ drive from the sorted candidate PAIRS, then take the cartesian product with any ungated ranges'); and driving pairs first then ungated ranges is not the full product's relative order when an ungated axis precedes the gated ones, so the 'same relative order' claim fails for that shape."
+    },
+    {
+      "id": "conf.5.5.6.envelope-factors-build-time",
+      "section": "5.5.6",
+      "quote": "overlap gate's `src_env` / `tgt_env` factors MUST be build-time const-array data",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "An overlap gate's envelope factors are build-time constant (not state- or time-dependent); derived-axis envelopes are materialized before gate resolution."
+    },
+    {
+      "id": "conf.5.5.6.selection-vocabulary-uniform",
+      "section": "5.5.6",
+      "quote": "A binding MUST accept the same vocabulary wherever a selection is written",
+      "class": "out_of_scope",
+      "area": "data_sources",
+      "note": "Loader selection vocabulary concerns data access."
+    },
+    {
+      "id": "conf.5.5.6.selection-pushdown-neutral",
+      "section": "5.5.6",
+      "quote": "are pushed down to the reader or applied after the read MUST NOT change the delivered array",
+      "class": "out_of_scope",
+      "area": "data_sources",
+      "note": "Reader pushdown vs post-read slicing is a data-access implementation choice."
+    },
+    {
+      "id": "conf.5.5.6.provider-key-flattened-name",
+      "section": "5.5.6",
+      "quote": "MUST key each provider by the **consuming parameter's flattened name**",
+      "class": "out_of_scope",
+      "area": "api",
+      "note": "The key of an injected-provider map is binding API shape."
+    },
+    {
+      "id": "conf.5.5.6.provider-key-no-source-qualified",
+      "section": "5.5.6",
+      "quote": "It MUST NOT require a source-qualified spelling.",
+      "class": "out_of_scope",
+      "area": "api",
+      "note": "Binding API shape for injected providers."
+    },
+    {
+      "id": "conf.5.5.6.fetch-filter-column",
+      "section": "5.5.6",
+      "quote": "so a binding MUST fetch such a column in order to compute the mask",
+      "class": "out_of_scope",
+      "area": "data_sources",
+      "note": "Which file columns a reader fetches is data access."
+    },
+    {
+      "id": "conf.5.5.6.loader-discovered-extent",
+      "section": "5.5.6",
+      "quote": "Bindings MUST (a) sample such a loader exactly once",
+      "class": "out_of_scope",
+      "area": "data_sources",
+      "note": "Sampling a loader once and checking discovered extents against loaded data depend on file I/O, which the model does not perform."
+    },
+    {
+      "id": "conf.5.5.7.pushdown-identity-idempotent-pure",
+      "section": "5.5.7",
+      "quote": "It MUST leave a document it does not recognise byte-identical, and it MUST be idempotent and pure",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "desugar_pushdown is the identity on unrecognised documents, idempotent (f(f(d)) = f(d)), and does not mutate its input.",
+      "concern": "'Byte-identical' is undefined for an in-memory document transform unless a serialization is fixed, and the section header says the pushdown corpus is 'compared as parsed JSON'; it is unclear whether the requirement is byte equality of some canonical emission or structural (parsed-JSON) equality."
+    },
+    {
+      "id": "conf.5.5.7.two-predicate-shapes",
+      "section": "5.5.7",
+      "quote": "TWO predicate shapes MUST be recognised, told apart",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "A binning faq's containment predicate is recognised as point-in-rectangle (2 record factors, min and max each) or envelope overlap (4 record factors, one bound each), with bound kind taken from comparison orientation, not authored order."
+    },
+    {
+      "id": "conf.5.5.7.pair-by-first-appearance",
+      "section": "5.5.7",
+      "quote": "binding MUST therefore pair deterministically — by order of first appearance — and MUST NOT reject a predicate for being ambiguous, nor infer axes from factor NAMES",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "Envelope-predicate axis pairing is by order of first appearance, never fails on ambiguity, and is invariant under renaming of factors."
+    },
+    {
+      "id": "conf.5.5.7.symmetric-orientation-from-context",
+      "section": "5.5.7",
+      "quote": "binding MUST NOT resolve a symmetric predicate by taking whichever reading it tried first without that context",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "For a symmetric envelope predicate the cell/record orientation is fixed by the forward mat-vec pattern, not by parse order."
+    },
+    {
+      "id": "conf.5.5.7.both-subscripts-same-gather",
+      "section": "5.5.7",
+      "quote": "Both subscript spellings on such an `F` MUST be carried, and by the SAME gather",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "Every cell-axis array read with the bare cell symbol, in full or partial subscript form, is rewritten to the same rank-preserving cell gather."
+    },
+    {
+      "id": "conf.5.5.7.gather-rank-preserving",
+      "section": "5.5.7",
+      "quote": "gather MUST be **rank-preserving**",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "The generated cell gather has shape [support, F's trailing axes], so substituting it for F keeps every use well-typed."
+    },
+    {
+      "id": "conf.5.5.7.generated-symbols-no-capture",
+      "section": "5.5.7",
+      "quote": "Generated trailing symbols MUST NOT be able to capture an authored one",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "Symbols generated by the pushdown rewrite are fresh with respect to the document's authored symbols."
+    },
+    {
+      "id": "conf.5.5.7.no-bounds-only-rewrite",
+      "section": "5.5.7",
+      "quote": "binding MUST NOT emit the rewrite in that state",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "The rewrite never re-points the cell axis while some cell-axis array read by the body still indexes the full grid."
+    },
+    {
+      "id": "conf.5.5.7.non-cell-reads-not-gathered",
+      "section": "5.5.7",
+      "quote": "Two reads are deliberately NOT gathered, and MUST NOT be:",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "Arrays whose shape[0] is not the cell set, and cell-axis arrays indexed without the cell symbol, are left untouched by the rewrite."
+    },
+    {
+      "id": "conf.5.5.7.computed-cell-position-rejected",
+      "section": "5.5.7",
+      "quote": "A binding MUST reject such a document with a hard error naming the array and the subscript.",
+      "class": "semantic",
+      "phase": 3,
+      "area": "diagnostics",
+      "note": "A cell-axis array read at a computed cell position in a recognised binning body makes the desugar fail rather than decline or rewrite.",
+      "concern": "Unlike the neighbouring rejections, no diagnostic code is assigned, so the cross-binding verdict can be pinned only as 'some error', not by code."
+    },
+    {
+      "id": "conf.5.5.7.mirrored-gate-only",
+      "section": "5.5.7",
+      "quote": "It MUST NOT receive a derived index set, a producer, a member factor, a gathered rect family, or a `gated_select` entry, and its `shape`, `output_idx` and `ranges` MUST be left untouched.",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "A mirrored binning faq gains only the join.overlap clause; all other fields are unchanged and no other constructs are generated for it."
+    },
+    {
+      "id": "conf.5.5.7.pushdown-sees-through-templates",
+      "section": "5.5.7",
+      "quote": "**Whether the pushdown fires MUST NOT depend on whether the author factored > the binning body through an `expression_templates` entry.** A binding > implementation MUST recognise a factored body exactly as it recognises the > body's expansion",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "Recognition by the pushdown desugar commutes with template expansion: it fires on a document iff it fires on the expanded document."
+    },
+    {
+      "id": "conf.5.5.7.repoint-call-site-not-body",
+      "section": "5.5.7",
+      "quote": "The rewrite MUST re-point the rect factors by editing the **call site** — the reference's `bindings`, and the `faq`'s own `ranges` / `shape` / `args` / `join` — and MUST NOT edit the referenced template `body`.",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "The pushdown rewrite leaves expression_templates bodies unchanged and re-points rect factors only at call sites."
+    },
+    {
+      "id": "conf.5.5.7.repoint-both-binding-spellings",
+      "section": "5.5.7",
+      "quote": "Both binding spellings carry a rect factor and both MUST be re-pointed",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "Rect factors bound to a template by bare name or by subscripted expression are both re-pointed."
+    },
+    {
+      "id": "conf.5.5.7.free-rect-factor-rejected",
+      "section": "5.5.7",
+      "quote": "That is a wrong-numbers defect, so it MUST be rejected, with diagnostic `template_body_references_pushdown_rewritten_variable`",
+      "class": "semantic",
+      "phase": 4,
+      "area": "diagnostics",
+      "note": "A template body naming a rewritten rect factor free (not via bindings or args) is rejected with template_body_references_pushdown_rewritten_variable."
+    },
+    {
+      "id": "conf.5.5.7.residual-no-silent-decline",
+      "section": "5.5.7",
+      "quote": "The desugar MUST NOT decline silently on a document it can see is join-shaped.",
+      "class": "semantic",
+      "phase": 3,
+      "area": "diagnostics",
+      "note": "A join-shaped faq whose predicate cannot be recovered yields a pushdown_join_unrecognised record."
+    },
+    {
+      "id": "conf.5.5.7.residual-diagnostic-emitted",
+      "section": "5.5.7",
+      "quote": "implementation MUST emit a diagnostic naming the variable and stating the consequence",
+      "class": "semantic",
+      "phase": 3,
+      "area": "diagnostics",
+      "note": "The residual diagnostic records (code, variable, consumer, array, index_set, reason, template, consequence) sorted by (variable, consumer, array)."
+    },
+    {
+      "id": "conf.5.5.7.not-a-join-vs-unreadable",
+      "section": "5.5.7",
+      "quote": "\"not a join\" and \"a join I could not read\" MUST be kept apart",
+      "class": "semantic",
+      "phase": 3,
+      "area": "diagnostics",
+      "note": "A faq with no containment predicate produces no diagnostic; only a join-shaped faq with an unparsed predicate is reported."
+    },
+    {
+      "id": "conf.5.5.7.non-additive-untouched",
+      "section": "5.5.7",
+      "quote": "same shape MUST be left untouched",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "The pushdown desugar is the identity on any binning faq whose semiring is not the additive (+, 0) monoid."
+    },
+    {
+      "id": "conf.5.5.8.key-column-polymorphic",
+      "section": "5.5.8",
+      "quote": "A binding **MUST** support both.",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "An on key resolves first to a node loop symbol or range index set, else to a build-time-constant 1-D data column on one of the node's ranges, else is a build error (except the degenerate right-key case)."
+    },
+    {
+      "id": "conf.5.5.8.three-candidates-rejected",
+      "section": "5.5.8",
+      "quote": "`|C| >= 3` — a binding MUST **reject** the document, naming the candidates.",
+      "class": "semantic",
+      "phase": 3,
+      "area": "diagnostics",
+      "note": "A data-column key whose axis is drawn by three or more of the node's ranges, with no syms, is rejected.",
+      "concern": "Stated unconditionally, but a few lines later `syms` is 'REQUIRED for the |C| >= 3 case' and overrides the default, so the rejection must apply only when no `syms` is present; the table under 'two refusals' says so, this bullet does not."
+    },
+    {
+      "id": "conf.5.5.8.syms-name-ranges",
+      "section": "5.5.8",
+      "quote": "Both entries MUST name ranges of the node.",
+      "class": "semantic",
+      "phase": 3,
+      "area": "diagnostics",
+      "note": "A syms entry that is not a key of the node's ranges is rejected (join_syms_unknown_symbol)."
+    },
+    {
+      "id": "conf.5.5.8.syms-not-renamed",
+      "section": "5.5.8",
+      "quote": "a binding MUST carry it through both unchanged",
+      "class": "semantic",
+      "phase": 5,
+      "area": "flatten",
+      "note": "Flattening namespacing and variable_map renaming leave a join clause's syms unchanged."
+    },
+    {
+      "id": "conf.5.5.8.join-refusals-in-validate",
+      "section": "5.5.8",
+      "quote": "A binding MUST therefore reject them in `validate()`",
+      "class": "semantic",
+      "phase": 3,
+      "area": "diagnostics",
+      "note": "join_side_ambiguous and join_syms_unknown_symbol are validation-time verdicts, decidable from the single document, attached at the containing equation field."
+    },
+    {
+      "id": "conf.5.5.8.driver-choice-result-neutral",
+      "section": "5.5.8",
+      "quote": "binding MUST make it true; it is not something that holds for free",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "With several join gates on one node, the result is independent of which gate drives enumeration and of the order the clauses are written."
+    },
+    {
+      "id": "conf.5.5.8.fourth-shape-should",
+      "section": "5.5.8",
+      "quote": "is a SHOULD, not a MUST",
+      "class": "out_of_scope",
+      "area": "arrays",
+      "note": "The token is negated: driving the fourth shape is a performance recommendation, not a requirement."
+    },
+    {
+      "id": "conf.5.5.8.on-identity-fill",
+      "section": "5.5.8",
+      "quote": "candidate pair is never visited and MUST read as the semiring's `0̄`",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "An output position of an on-gated faq with no matching pair equals the semiring 0̄."
+    },
+    {
+      "id": "conf.5.5.8.on-fallback-same-answer",
+      "section": "5.5.8",
+      "quote": "that is slower and MUST give the same answer",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "Evaluating an on-gated faq by full product plus equality test is bit-identical to the driven evaluation.",
+      "concern": "The match set is ordered 'by the canonical key first … then by left position', and the first driving shape drives 'from the sorted candidate PAIRS'; if pairs are walked in key order rather than position order, a floating-point ⊕ accumulates in a different order from the full product, so bit-identity holds only if the driver re-sorts by position, which the text implies but does not state."
+    },
+    {
+      "id": "conf.5.5.8.non-consulting-paths-apply-equality",
+      "section": "5.5.8",
+      "quote": "binding therefore MUST make every path that does not consult the gate",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "The value of an on-gated faq equals the full product with the key equality ANDed into the filter, on every evaluation path."
+    },
+    {
+      "id": "conf.5.5.8.on-not-gate-alone",
+      "section": "5.5.8",
+      "quote": "A binding MUST NOT resolve an `on` clause into a gate alone",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "No evaluation path computes an on-gated faq as the ungated product."
+    },
+    {
+      "id": "conf.5.5.8.match-set-memo-not-stale",
+      "section": "5.5.8",
+      "quote": "binding that memoises the match set MUST NOT serve a stale one",
+      "class": "out_of_scope",
+      "area": "arrays",
+      "note": "Memoisation is an implementation detail; the model recomputes the match set from current data."
+    },
+    {
+      "id": "conf.5.5.8.computed-key-column-accepted",
+      "section": "5.5.8",
+      "quote": "A binding MUST accept it as a key column",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "A const-cadence computed observed (no state or t dependence) is admitted as a key column on either side and drives the gate."
+    },
+    {
+      "id": "conf.5.5.8.baked-parameter-remake-refused",
+      "section": "5.5.8",
+      "quote": "a `remake` that changes it MUST be refused, naming the parameter",
+      "class": "out_of_scope",
+      "area": "api",
+      "note": "remake is a binding API operation on a built Problem, not a property of the document."
+    },
+    {
+      "id": "conf.5.5.8.key-comparison-exact",
+      "section": "5.5.8",
+      "quote": "A binding MUST therefore evaluate that comparison on the key values **as stored**, in the widest precision it has, and MUST NOT narrow it to the document's `domain.element_type` (§5.18).",
+      "class": "semantic",
+      "phase": 7,
+      "area": "precision",
+      "note": "The lowered join-key equality is evaluated on unnarrowed key values regardless of element_type, so the predicate and the gate test the same equality.",
+      "concern": "Contradicts §5.18.1's table, which says 'every arithmetic, comparison and logical operator' has its operands narrowed to binary32 under \"Float32\"; §5.18.2a's comparison rule exempts only operands declared binary64, not a lowered join predicate over keys in a document-wide Float32 model."
+    },
+    {
+      "id": "conf.5.5.8.same-lowering-same-check",
+      "section": "5.5.8",
+      "quote": "A binding that implements the same lowering MUST check the same thing",
+      "class": "later",
+      "phase": 7,
+      "area": "precision",
+      "note": "A binding lowering join pairs into filter predicates marks them exact (binary64) independent of the precision pass.",
+      "concern": "'Check the same thing' has no stated referent (mark the comparison binary64? verify it at build?), and the follow-on conformance condition ('exactly when that precision separates its key values') depends on the data, so the clause cannot be stated precisely."
+    },
+    {
+      "id": "conf.5.5.8.float-data-not-key",
+      "section": "5.5.8",
+      "quote": "a binding MUST NOT treat it as a key",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "A declared data column with a non-integral float value is not used as a gate key (either rejected or the gate declined).",
+      "concern": "The text then says declining the gate while the lowered predicate computes float equality is also conforming and that 'a document that can tell them apart is outside the contract', so the MUST NOT constrains no observable result and cannot be stated as a property."
+    },
+    {
+      "id": "conf.5.5.8.computed-key-exact-equality",
+      "section": "5.5.8",
+      "quote": "so a binding MUST admit it as a key whatever its values and compare them by exact IEEE-754 binary64 equality",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "Computed key columns match by IEEE binary64 ==: +0 matches -0, ±Inf match only themselves, NaN matches nothing.",
+      "concern": "Contradicts §5.5.1 rule 1 (floats forbidden in keys; NaN rejected; -0.0 normalized), and justifies itself by claiming the values are 'the same in every binding', which is false for computed values that pass through elementary functions (§5.9.2 and §5.18.1 both say libm results differ in the last ulp across bindings)."
+    },
+    {
+      "id": "conf.5.6.identities-not-in-file",
+      "section": "5.6",
+      "quote": "are fixed by the registry table below and **MUST NOT be written into the file**",
+      "class": "semantic",
+      "phase": 2,
+      "area": "semiring",
+      "note": "Each semiring's ⊕, ⊗, 0̄ and 1̄ are determined by the closed registry alone; no document field can change them.",
+      "concern": "Does not say whether a document that does write an identity is invalid (rejected) or the field is ignored, so the verdict on such a document is unspecified."
+    },
+    {
+      "id": "conf.5.6.3.empty-reduction-registry-identity",
+      "section": "5.6.3",
+      "quote": "Every binding MUST return the registry `0̄` for an empty `⊕`-reduction",
+      "class": "semantic",
+      "phase": 2,
+      "area": "semiring",
+      "note": "An empty ⊕-reduction (empty range, empty set, zero dynamic bound, all-filtered) equals the registry 0̄: 0, −∞, +∞, −∞, false."
+    },
+    {
+      "id": "conf.5.6.4.ragged-binds-positions",
+      "section": "5.6.4",
+      "quote": "Every evaluating binding MUST bind positions, not members, in an ordinary `faq`",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "A ragged range in a non-value-invention faq binds k in 1..offsets[i], not values[i,k]."
+    },
+    {
+      "id": "conf.5.6.4.ragged-values-must-be-gathered",
+      "section": "5.6.4",
+      "quote": "every binding's `validate()` MUST reject a `faq` whose ragged range's `values` array its body",
+      "class": "semantic",
+      "phase": 3,
+      "area": "diagnostics",
+      "note": "A non-value-invention faq over a ragged range whose expr/filter never reads that set's values is rejected with ragged_values_not_gathered (undecided for surviving template references and undeclared sets)."
+    },
+    {
+      "id": "conf.5.6.4.no-undefined-index-set-without-registry",
+      "section": "5.6.4",
+      "quote": "**`validate()` therefore MUST NOT report `undefined_index_set` for a document that declares no registry**",
+      "class": "semantic",
+      "phase": 3,
+      "area": "diagnostics",
+      "note": "Validation emits undefined_index_set only for documents that declare their own index_sets registry."
+    },
+    {
+      "id": "conf.5.7.2.seed-from-classification",
+      "section": "5.7.2",
+      "quote": "every binding MUST seed from those functions rather than re-deriving the categories locally",
+      "class": "semantic",
+      "phase": 5,
+      "area": "other",
+      "note": "Cadence leaf seeds are a function of the esm-spec §6.3.1 variable classification per the seed table, with observeds seeded by the join of their defining RHS."
+    },
+    {
+      "id": "conf.5.7.2.observed-cycle-reported",
+      "section": "5.7.2",
+      "quote": "a cycle is a defect and MUST be reported rather than silently seeded",
+      "class": "semantic",
+      "phase": 5,
+      "area": "diagnostics",
+      "note": "Cadence classification of a cyclic observed definition graph fails with a diagnostic instead of producing a class."
+    },
+    {
+      "id": "conf.5.7.6.discrete-subgraph-acyclic",
+      "section": "5.7.6",
+      "quote": "The `≤ DISCRETE` subgraph MUST be a DAG",
+      "class": "semantic",
+      "phase": 5,
+      "area": "diagnostics",
+      "note": "A cycle among CONST/DISCRETE nodes is rejected with a diagnostic naming the cycle."
+    },
+    {
+      "id": "conf.5.7.7.cadence-agreement",
+      "section": "5.7.7",
+      "quote": "all bindings MUST agree on (a) **every node's class**",
+      "class": "semantic",
+      "phase": 5,
+      "area": "other",
+      "note": "Each node's cadence class, the set of materialization points, emptiness of hot tree and handler, and CONST-folded buffer contents are functions of the document.",
+      "concern": "Requiring byte-identical CONST-folded buffers across bindings is unachievable when a folded buffer passes through elementary functions, whose results §5.9.2 and §5.18.1 acknowledge differ in the last ulp between language math libraries."
+    },
+    {
+      "id": "conf.5.8.2.sliver-not-fail",
+      "section": "5.8.2",
+      "quote": "tie-break regime MUST NOT fail conformance",
+      "class": "out_of_scope",
+      "area": "conformance_harness",
+      "note": "A comparison-tolerance rule of the geometry harness."
+    },
+    {
+      "id": "conf.5.8.2.rtol-loosest-pair",
+      "section": "5.8.2",
+      "quote": "`rtol` is **empirically calibrated** and MUST accommodate the **loosest binding pair**",
+      "class": "out_of_scope",
+      "area": "conformance_harness",
+      "note": "How the harness tolerance is calibrated."
+    },
+    {
+      "id": "conf.5.8.5.candidate-set-byte-identical",
+      "section": "5.8.5",
+      "quote": "native-hash iteration order — and MUST be **byte-identical** across bindings",
+      "class": "semantic",
+      "phase": 3,
+      "area": "determinism",
+      "note": "The bin-Skolem candidate overlap-pair set is a sorted function of the integer bin keys."
+    },
+    {
+      "id": "conf.5.8.5.bin-key-integer",
+      "section": "5.8.5",
+      "quote": "The bin key MUST be integer and reproducibly derived",
+      "class": "semantic",
+      "phase": 3,
+      "area": "determinism",
+      "note": "Regridding broad-phase bin keys are integers; no floating-point coordinate comparison decides candidacy.",
+      "concern": "Says 'No FP comparison in the broad phase', but §5.5.6 defines the overlap gate's broad phase as a floating-point closed AABB comparison of envelope factors; the two broad phases are different constructs but the text does not say this rule is limited to the bin-Skolem regridding join."
+    },
+    {
+      "id": "conf.5.8.6.permuted-variant-collapses",
+      "section": "5.8.6",
+      "quote": "including the adversarial **permuted-input-order** variant, which MUST collapse",
+      "class": "semantic",
+      "phase": 3,
+      "area": "determinism",
+      "note": "The regridding candidate set is invariant under permutation of the input cells."
+    },
+    {
+      "id": "conf.5.9.2.sim-not-byte-identical",
+      "section": "5.9.2",
+      "quote": "Byte-identity MUST NOT be asserted on simulation output.",
+      "class": "out_of_scope",
+      "area": "conformance_harness",
+      "note": "A rule about what the simulation harness asserts."
+    },
+    {
+      "id": "conf.5.10.2.regrid-sim-not-byte-identical",
+      "section": "5.10.2",
+      "quote": "As in §5.9, trajectories are floating-point and MUST NOT be asserted",
+      "class": "out_of_scope",
+      "area": "conformance_harness",
+      "note": "A rule about what the harness asserts."
+    },
+    {
+      "id": "conf.5.11.2.loader-sim-not-byte-identical",
+      "section": "5.11.2",
+      "quote": "As in §5.10, trajectories MUST NOT be asserted byte-identical",
+      "class": "out_of_scope",
+      "area": "conformance_harness",
+      "note": "A rule about what the harness asserts."
+    },
+    {
+      "id": "conf.5.12.2.const-materialize-not-byte-identical",
+      "section": "5.12.2",
+      "quote": "As in §5.11, trajectories MUST NOT be asserted byte-identical",
+      "class": "out_of_scope",
+      "area": "conformance_harness",
+      "note": "A rule about what the harness asserts."
+    },
+    {
+      "id": "conf.5.13.const-sibling-stays-const",
+      "section": "5.13",
+      "quote": "so it is CONST-cadence and MUST stay on the build-once/inline path. It MUST NOT become a per-refresh cache",
+      "class": "semantic",
+      "phase": 5,
+      "area": "other",
+      "note": "A state-free, forcing-free contraction over CONST weights and a scalar parameter classifies CONST, not DISCRETE."
+    },
+    {
+      "id": "conf.5.13.2.discrete-sim-not-byte-identical",
+      "section": "5.13.2",
+      "quote": "As in §5.10 / §5.12, trajectories MUST NOT be asserted byte-identical",
+      "class": "out_of_scope",
+      "area": "conformance_harness",
+      "note": "A rule about what the harness asserts."
+    },
+    {
+      "id": "conf.5.15.1.ambiguous-key-carries-candidates",
+      "section": "5.15.1",
+      "quote": "An `ambiguous` diagnostic MUST additionally carry every candidate name — without them the author is told the key is wrong but not how to qualify it — and MUST be distinguishable from `unknown`.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "diagnostics",
+      "note": "Override-key resolution classifies each key as resolved, unknown or ambiguous; ambiguous carries the full candidate set."
+    },
+    {
+      "id": "conf.5.18.1.index-extent-below-2-24",
+      "section": "5.18.1",
+      "quote": "a binding MUST reject a declared index-set extent above that rather than let a subscript round silently",
+      "class": "semantic",
+      "phase": 7,
+      "area": "precision",
+      "note": "Under binary32, a document declaring an index-set extent above 2^24 is rejected.",
+      "concern": "Rejecting extents above 2^24 does not ensure index arithmetic stays exact: a flat-offset subscript such as layer · N_C + c (used in §5.5.7) can exceed 2^24 with every extent below it; and the sentence is unconditional, so it reads as also rejecting such extents in Float64 documents."
+    },
+    {
+      "id": "conf.5.18.2.refuse-unhonoured-clause",
+      "section": "5.18.2",
+      "quote": "A binding that cannot honour a clause MUST refuse it.",
+      "class": "semantic",
+      "phase": 7,
+      "area": "precision",
+      "note": "Every element_type construct is either evaluated at the declared precision or refused with a named error (unsupported_element_type, float32_unsupported, Float32 time integration)."
+    },
+    {
+      "id": "conf.5.18.2a.no-override-matches-document",
+      "section": "5.18.2a",
+      "quote": "and a document in which no variable declares one MUST behave exactly as §5.18.1 describes — bit for bit, on the same code path",
+      "class": "semantic",
+      "phase": 7,
+      "area": "precision",
+      "note": "Per-variable precision inference with no variable overrides yields the document precision at every node, so results equal the document-wide semantics.",
+      "concern": "'On the same code path' is an implementation constraint with no observable meaning; only the bit-for-bit part can be stated as a property."
+    },
+    {
+      "id": "conf.5.18.2a.mixed-element-type-refused",
+      "section": "5.18.2a",
+      "quote": "or an equation whose right-hand side disagrees with its left-hand side, MUST be an error naming BOTH variables and both types (`mixed_element_type`). A binding MUST NOT resolve the mix by a usual-arithmetic-conversions rule",
+      "class": "semantic",
+      "phase": 7,
+      "area": "precision",
+      "note": "Static precision inference fails with mixed_element_type exactly when some operator's declared operand precisions differ or an equation's RHS precision differs from its LHS; no implicit widening or narrowing."
+    },
+    {
+      "id": "conf.5.18.2a.not-ingress-only",
+      "section": "5.18.2a",
+      "quote": "A binding MUST NOT implement this field by exempting a variable only where its data enters.",
+      "class": "semantic",
+      "phase": 7,
+      "area": "precision",
+      "note": "Arithmetic over a binary64-declared variable is evaluated in binary64 throughout, not only at ingress."
+    },
+    {
+      "id": "conf.5.18.2a.artifact-rearms-precision-table",
+      "section": "5.18.2a",
+      "quote": "compiled artifact MUST carry the per-variable table and re-arm it at each run entry",
+      "class": "later",
+      "phase": 7,
+      "area": "precision",
+      "note": "A compiled artifact evaluates each variable at its declared precision at run time, matching the build-time inference."
+    },
+    {
+      "id": "conf.5.18.2b.mount-writes-element-type",
+      "section": "5.18.2b",
+      "quote": "The written `element_type` fields MUST be exactly those §4.7",
+      "class": "semantic",
+      "phase": 5,
+      "area": "precision",
+      "note": "Mount splicing writes a leaf's element_type onto exactly the variables of the spliced component that declare none, when it differs from the mounter's effective precision, through nested mounts."
+    },
+    {
+      "id": "conf.5.18.2b.mount-element-type-round-trips",
+      "section": "5.18.2b",
+      "quote": "and MUST survive `load → emit`",
+      "class": "semantic",
+      "phase": 5,
+      "area": "round_trip",
+      "note": "Written per-variable element_type fields are preserved by load followed by emit."
+    },
+    {
+      "id": "conf.5.18.2b.uncarried-field-refused",
+      "section": "5.18.2b",
+      "quote": "carry a written field at some construct MUST refuse it",
+      "class": "semantic",
+      "phase": 7,
+      "area": "precision",
+      "note": "An evaluator that cannot carry a mount-written element_type at a construct refuses with element_type_uncarried."
+    },
+    {
+      "id": "conf.5.18.2b.no-binary32-evaluator-refuses",
+      "section": "5.18.2b",
+      "quote": "MUST refuse the variable (`float32_unsupported`, §5.18.2), as Julia and",
+      "class": "semantic",
+      "phase": 7,
+      "area": "precision",
+      "note": "An evaluator without binary32 support refuses a binary32 variable with float32_unsupported rather than evaluating it in binary64.",
+      "concern": "Says Julia and Python refuse such variables, but §5.18.4 says 'Julia, Python, Go and TypeScript ignore element_type'; the two statements of the bindings' current behaviour contradict each other (and §5.18.2b point 1 binds Go/TS to write and preserve the field, which 'ignore' also contradicts)."
+    },
+    {
+      "id": "conf.5.18.4.mixed-fixture-not-build",
+      "section": "5.18.4",
+      "quote": "`f32_mixed_element_types.esm`, which MUST NOT build",
+      "class": "out_of_scope",
+      "area": "conformance_harness",
+      "note": "A fixture expectation of the precision gate; the underlying rule is the mixed_element_type refusal of §5.18.2a."
+    }
+  ]
+}

@@ -1,0 +1,75 @@
+name: Formal model (Lean)
+
+# Builds the Lean model of the spec in `formal/` and runs its audit gate
+# (`scripts/formal-audit.py`). Not a required check yet: it becomes blocking
+# per conformance tier once the model covers that tier (formal/README.md).
+#
+# The spec files are in `paths` because the inventory audit checks that every
+# MUST clause is accounted for and that every citation still resolves: a spec
+# edit that adds a clause or moves a cited sentence must update `formal/` in
+# the same PR.
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'formal/**'
+      - 'esm-spec.md'
+      - 'CONFORMANCE_SPEC.md'
+      - 'scripts/formal-audit.py'
+      - '.github/workflows/formal.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'formal/**'
+      - 'esm-spec.md'
+      - 'CONFORMANCE_SPEC.md'
+      - 'scripts/formal-audit.py'
+      - '.github/workflows/formal.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: formal-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  lean:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+    - uses: actions/checkout@v4
+
+    # The inventory and token checks need no Lean, so they run first and
+    # report even when the Lean build fails.
+    - name: Audit inventory and tokens
+      run: |
+        python3 scripts/formal-audit.py tokens
+        python3 scripts/formal-audit.py inventory
+
+    - name: Cache Lean toolchain
+      uses: actions/cache@v4
+      with:
+        path: ~/.elan
+        key: ${{ runner.os }}-elan-${{ hashFiles('formal/lean-toolchain') }}
+
+    - name: Install elan
+      run: |
+        curl -fsSL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
+          | sh -s -- -y --no-modify-path --default-toolchain none
+        echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+    # Prebuilt Mathlib. Building Mathlib from source takes hours; if the cache
+    # download fails, fail the job rather than fall back to that.
+    - name: Fetch Mathlib cache
+      working-directory: formal
+      run: lake exe cache get
+
+    - name: Build model
+      working-directory: formal
+      run: lake build
+
+    - name: Audit registry against the build
+      run: python3 scripts/formal-audit.py registry --lean
