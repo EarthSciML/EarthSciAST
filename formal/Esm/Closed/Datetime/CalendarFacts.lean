@@ -321,6 +321,40 @@ theorem fvfJdn_eq {c : Date} (hc : c.Valid) (hd : daysFromCivil fvfFirstDate ≤
   rcases this with h|h|h|h|h|h|h|h|h|h|h|h <;> subst h <;> norm_num at hy2 ⊢ <;>
     simp (disch := omega) only [Int.tdiv_eq_ediv_of_nonneg] <;> omega
 
+theorem tdiv_bounds (a b : ℤ) (hb : 0 < b) : a / b ≤ a.tdiv b ∧ a.tdiv b ≤ a / b + 1 := by
+  rw [Int.tdiv_eq_ediv]
+  split_ifs <;> simp [Int.sign_eq_one_of_pos hb]
+
+/-- Everywhere, the FvF JDN is within 3 days of the day count plus 2440588
+(each truncating division is at most one off the floor). -/
+theorem fvfJdn_near {c : Date} (hc : c.Valid) : |fvfJdn c - (daysFromCivil c + 2440588)| ≤ 3 := by
+  obtain ⟨h1, h2, h3, h4⟩ := hc
+  unfold fvfJdn daysFromCivil
+  simp only
+  rw [fvf_month_term _ h1 h2]
+  generalize c.year = y at *
+  generalize c.month = m at *
+  generalize c.day = d at *
+  have b1 := tdiv_bounds (1461 * (y + 4800 + if m ≤ 2 then -1 else 0)) 4 (by norm_num)
+  have b2 := tdiv_bounds (367 * (m - 2 - 12 * if m ≤ 2 then -1 else 0)) 12 (by norm_num)
+  have b3 := tdiv_bounds (y + 4900 + if m ≤ 2 then -1 else 0) 100 (by norm_num)
+  generalize Int.tdiv (1461 * (y + 4800 + if m ≤ 2 then -1 else 0)) 4 = T1 at *
+  generalize Int.tdiv (367 * (m - 2 - 12 * if m ≤ 2 then -1 else 0)) 12 = T2 at *
+  generalize Int.tdiv (y + 4900 + if m ≤ 2 then -1 else 0) 100 = T3 at *
+  have b4 := tdiv_bounds (3 * T3) 4 (by norm_num)
+  generalize Int.tdiv (3 * T3) 4 = T4 at *
+  unfold daysBeforeMonth daysBeforeYear epochOffset
+  rw [leapInt_eq]
+  have := fvf_century_mar y
+  have := fvf_century_jan y
+  have := leap_count_incl y
+  have := leap_count_excl y
+  have : m = 1 ∨ m = 2 ∨ m = 3 ∨ m = 4 ∨ m = 5 ∨ m = 6 ∨ m = 7 ∨ m = 8 ∨ m = 9 ∨ m = 10 ∨
+      m = 11 ∨ m = 12 := by omega
+  rw [abs_le]
+  rcases this with h|h|h|h|h|h|h|h|h|h|h|h <;> subst h <;> norm_num at b1 b2 b3 ⊢ <;>
+    constructor <;> omega
+
 /-- Before -4800-03-01 the formula is off: on -4800-02-29 it gives the JDN of
 -4800-03-01. -/
 theorem fvfJdn_ne_before :

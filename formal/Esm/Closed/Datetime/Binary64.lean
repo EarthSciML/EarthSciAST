@@ -66,10 +66,10 @@ theorem fexp_of_binade {x : K} {k : ℤ} (h1 : 2 ^ k ≤ |x|) (h2 : |x| < 2 ^ (k
   omega
 
 theorem rne_of_lt_half {r : K} {k : ℤ} (hk : ⌊r⌋ = k) (h : r - k < 1 / 2) : rne r = k := by
-  unfold rne; rw [hk, if_pos h]
+  unfold rne; rw [hk]; simp only [h, ↓reduceIte]
 
 theorem rne_of_gt_half {r : K} {k : ℤ} (hk : ⌊r⌋ = k) (h : 1 / 2 < r - k) : rne r = k + 1 := by
-  unfold rne; rw [hk, if_neg (not_lt.mpr h.le), if_pos h]
+  unfold rne; rw [hk]; simp only [not_lt.mpr h.le, h, ↓reduceIte]
 
 /-- Rounding twice the distance: if `x` is within half an ulp of `J`, `rn x` is
 within one ulp of `J`. (Across a power of two the half-ulp bound on `rn x - x`
