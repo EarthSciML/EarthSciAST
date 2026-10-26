@@ -370,10 +370,74 @@ def run_lean_checks(checks, report):
     if proc.returncode != 0:
         report.error("theorem/statement mismatch or missing theorem:\n" + out.strip())
         return
-    for m in re.finditer(r"'([^']+)' depends on axioms: \[([^\]]*)\]", out):
-        extra = {a.strip() for a in m.group(2).split(",")} - ALLOWED_AXIOMS
+    # `#print axioms` output carries no source position, so pair each line with
+    # its check by order. Names may contain primes or «» escapes, hence the greedy
+    # match up to the fixed suffix.
+    found = re.findall(
+        r"^'(.*)' (?:depends on axioms: \[(.*)\]|does not depend on any axioms)$", out, re.M
+    )
+    if len(found) != len(checks):
+        report.error(
+            f"expected {len(checks)} `#print axioms` results, got {len(found)}:\n" + out.strip()
+        )
+        return
+    for (pid, _, _, thm), (name, axioms) in zip(checks, found):
+        extra = {a.strip() for a in axioms.split(",") if a.strip()} - ALLOWED_AXIOMS
         if extra:
-            report.error(f"{m.group(1)} depends on non-standard axioms {sorted(extra)}")
+            report.error(f"{pid}: {thm} depends on non-standard axioms {sorted(extra)}")
+
+
+_IDENT_CHAR = re.compile(r"[\w'.!?»]")
+_CHAR_LITERAL = re.compile(r"'(\\[^']+|[^'\\])'")
+
+
+def strip_comments_and_strings(text):
+    """Replace Lean comments and string/char literals with spaces, keeping newlines.
+
+    A single left-to-right scan, so a `--` inside a string, or a `/-` inside a
+    line comment, is not mistaken for a comment opener; block comments nest.
+    """
+    out = []
+    i, n = 0, len(text)
+
+    def blank(s):
+        out.append("".join(c if c == "\n" else " " for c in s))
+
+    while i < n:
+        if text.startswith("--", i):
+            j = text.find("\n", i)
+            j = n if j < 0 else j
+            blank(text[i:j])
+            i = j
+        elif text.startswith("/-", i):
+            depth, j = 1, i + 2
+            while j < n and depth:
+                if text.startswith("/-", j):
+                    depth, j = depth + 1, j + 2
+                elif text.startswith("-/", j):
+                    depth, j = depth - 1, j + 2
+                else:
+                    j += 1
+            blank(text[i:j])
+            i = j
+        elif text[i] == '"':
+            j = i + 1
+            while j < n and text[j] != '"':
+                j += 2 if text[j] == "\\" else 1
+            blank(text[i : j + 1])
+            i = j + 1
+        elif (
+            text[i] == "'"
+            and not (i and _IDENT_CHAR.match(text[i - 1]))
+            and (m := _CHAR_LITERAL.match(text, i))
+        ):
+            # A prime after an identifier character (`h'`) is part of the name.
+            blank(m.group(0))
+            i = m.end()
+        else:
+            out.append(text[i])
+            i += 1
+    return "".join(out)
 
 
 def check_tokens(args):
@@ -384,9 +448,8 @@ def check_tokens(args):
         if ".lake" in path.parts:
             continue
         text = path.read_text(encoding="utf-8")
-        # Line comments and block comments may mention a token; strip them.
-        code = re.sub(r"/-.*?-/", "", text, flags=re.S)
-        code = re.sub(r"--[^\n]*", "", code)
+        # Comments and string literals may mention a token; blank them out.
+        code = strip_comments_and_strings(text)
         for name, rx in FORBIDDEN_TOKENS.items():
             if name == "native_decide" and str(path) in allowed:
                 continue
