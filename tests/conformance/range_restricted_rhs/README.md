@@ -2,7 +2,7 @@
 
 Fixtures for operator selection, tiles and lanes (issue #540, RFC U3).
 API_SPEC.md §5.8, "Range-restricted right-hand sides", is the surface;
-CONFORMANCE_SPEC.md §5.49 is the gate. Every check is **bitwise** against the
+CONFORMANCE_SPEC.md §5.50 is the gate. Every check is **bitwise** against the
 same binding's whole-domain evaluation of the same selected program under the
 same compiler, `native`. There are no rhs
 numbers in this directory: the reference for a tile or a lane is the binding's

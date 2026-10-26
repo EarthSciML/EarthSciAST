@@ -384,6 +384,8 @@ try:
     )
     from .pushdown_rewrite import desugar_pushdown, pushdown_diagnostics  # noqa: F401
     from .range_restricted import (  # noqa: F401 — re-exported via __all__ below
+        default_forcing_set,
+        forcing_set,
         halo,
         lanes,
         restrict,
@@ -786,9 +788,11 @@ if _has_problem:
             "CompilerUnknownError",
             "CompilerUnavailableError",
             "CompilerRefusedRuleError",
-            # Range-restricted right-hand sides (API_SPEC §5.8): each raises
-            # compiler_unavailable in this binding.
+            # The public and range-restricted right-hand sides (API_SPEC §5.8):
+            # each raises compiler_unavailable in this binding.
             "rhs_program",
+            "forcing_set",
+            "default_forcing_set",
             "select",
             "halo",
             "restrict",

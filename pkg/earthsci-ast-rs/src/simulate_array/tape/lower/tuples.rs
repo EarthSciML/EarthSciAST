@@ -644,7 +644,7 @@ impl TapeBuilder<'_> {
                 // exported.
                 let rule = AlgebraicRule::Scalar {
                     var: name.to_string(),
-                    body: Rc::new(Expr::Number(0.0)),
+                    body: std::sync::Arc::new(Expr::Number(0.0)),
                     declared_shape: (!shape.is_empty()).then(|| shape.to_vec()),
                 };
                 let prog = b.finish_standalone(&rule);

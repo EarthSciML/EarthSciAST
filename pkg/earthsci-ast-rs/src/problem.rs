@@ -610,6 +610,18 @@ pub struct ProblemOptions {
 
     /// Time at which CONST providers are sampled. Defaults to `tspan.0`.
     pub sample_time: Option<f64>,
+
+    /// Leave every shaped parameter that has a value and is not fed from
+    /// outside the model (no `update`) as a run-time input of
+    /// [`crate::rhs_program`]: an [`crate::SlotKind::ArrayParameter`] forcing
+    /// slot, seeded with that value, instead of build-time data (API_SPEC
+    /// §5.8). The value is the document's (inline array data, or one scalar
+    /// broadcast over its grid) or the caller's [`Self::const_arrays`] entry,
+    /// which takes precedence. The Problem itself
+    /// reads it from its forcing buffer, where construction serves that
+    /// value, so `solve` integrates the same numbers either way. Off by
+    /// default.
+    pub runtime_array_parameters: bool,
 }
 
 impl std::fmt::Debug for ProblemOptions {
@@ -624,7 +636,8 @@ impl std::fmt::Debug for ProblemOptions {
             .field("rhs", &self.rhs)
             .field("compiler", &self.compiler)
             .field("inspect", &self.inspect)
-            .field("sample_time", &self.sample_time);
+            .field("sample_time", &self.sample_time)
+            .field("runtime_array_parameters", &self.runtime_array_parameters);
         #[cfg(not(target_arch = "wasm32"))]
         d.field("pushdown_rewrite", &self.pushdown_rewrite)
             .field("providers", &self.providers.keys().collect::<Vec<_>>())
@@ -791,6 +804,8 @@ pub struct EsmProblem {
     /// by provenance (API_SPEC §5.8). `None` for a problem with no array
     /// backend.
     pub(crate) program_source: Option<Rc<ProgramSource>>,
+    /// [`ProblemOptions::runtime_array_parameters`], for `rhs_program`.
+    pub(crate) runtime_array_parameters: bool,
 }
 
 /// What [`EsmProblem::program_source`] holds: the prepared typed document, or
@@ -1547,6 +1562,7 @@ pub fn remake(prob: &EsmProblem, changes: &Remake) -> Result<EsmProblem, Simulat
         #[cfg(not(target_arch = "wasm32"))]
         refresh_boundaries: boundaries,
         program_source: prob.program_source.clone(),
+        runtime_array_parameters: prob.runtime_array_parameters,
     })
 }
 
@@ -1712,7 +1728,7 @@ pub fn esm_problem<'a>(
         prec,
         opts.model_name.as_deref(),
     )?;
-    let _precision_guard = precision::enter_env(prec, std::rc::Rc::new(var_precisions));
+    let _precision_guard = precision::enter_env(prec, std::sync::Arc::new(var_precisions));
 
     // Host-supplied numbers are the one class of value the evaluator does not
     // itself produce, so they are rounded ONCE here rather than on each of the
@@ -2062,6 +2078,7 @@ pub fn esm_problem<'a>(
         model_name.as_deref(),
         opts.rhs,
         compiler,
+        opts.runtime_array_parameters,
     )?;
 
     // ---- (4a) The missing-data gate (esm-spec §10.10). ---------------------
@@ -2210,6 +2227,7 @@ pub fn esm_problem<'a>(
         #[cfg(not(target_arch = "wasm32"))]
         refresh_boundaries,
         program_source,
+        runtime_array_parameters: opts.runtime_array_parameters,
     };
     Ok(prob)
 }
@@ -2972,6 +2990,7 @@ fn compile_backend(
     model_name: Option<&str>,
     mode: Rhs,
     compiler: Compiler,
+    runtime_array_parameters: bool,
 ) -> Result<Backend, SimulateError> {
     if let Some(details) = unavailable_reason(compiler) {
         return Err(SimulateError::CompilerUnavailable {
@@ -3007,7 +3026,10 @@ fn compile_backend(
                 "the flattened system declares no state variables".to_string(),
             ));
         }
-        let mut compiled = crate::simulate_array::ArrayCompiled::from_flattened(flat)?;
+        let mut compiled = crate::simulate_array::ArrayCompiled::from_flattened_with(
+            flat,
+            runtime_array_parameters,
+        )?;
         compiled.runtime_mode = runtime_mode;
         return Ok(Backend::Array(Rc::new(compiled)));
     }
@@ -3058,7 +3080,7 @@ fn compile_backend(
     // content: a scalar document and a gridded one are built by the same
     // machinery, so that what ran is a property of the name and not of the
     // input." So every document, scalar or gridded, builds the array runtime.
-    let mut compiled = crate::simulate::build_array_compiled(file)?;
+    let mut compiled = crate::simulate::build_array_compiled(file, runtime_array_parameters)?;
     compiled.runtime_mode = runtime_mode;
     Ok(Backend::Array(Rc::new(compiled)))
 }

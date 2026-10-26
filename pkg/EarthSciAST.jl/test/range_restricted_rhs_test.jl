@@ -113,7 +113,7 @@ function _rrt_eval(x, p)
     u = 0.5 .+ (1:L.n_u) ./ (L.n_u + 1)
     aux = 0.25 .+ (1:L.n_aux) ./ (L.n_aux + 1)
     du = fill(NaN, L.n_u)
-    rhs!(du, x, rhs_workspace(x), u, aux, p, 0.0)
+    rhs!(du, x, rhs_workspace(x), u, aux, p, 0.0, default_forcing_set(x))
     return du
 end
 
@@ -124,7 +124,7 @@ catch e
     e
 end
 
-_rrt_allocated(du, x, ws, u, aux, p) = @allocated rhs!(du, x, ws, u, aux, p, 0.0)
+_rrt_allocated(du, x, ws, u, aux, p, fs) = @allocated rhs!(du, x, ws, u, aux, p, 0.0, fs)
 
 # The expressions of every generated function a program holds.
 function _rrt_generated(x, acc = Set{String}(), seen = Set{UInt}())
@@ -167,7 +167,8 @@ end
     L = tile_layout(prog)
     u = 0.5 .+ (1:L.n_u) ./ L.n_u
     G = fill(NaN, L.n_u)
-    rhs!(G, prog, rhs_workspace(prog), u, Float64[], prob.p, 0.0)
+    fs = default_forcing_set(prog)
+    rhs!(G, prog, rhs_workspace(prog), u, Float64[], prob.p, 0.0, fs)
 
     @testset "the whole-domain program is the Problem's right-hand side" begin
         du = similar(G)
@@ -200,7 +201,7 @@ end
             end
             duS = fill(NaN, T.n_u)
             ws = rhs_workspace(tile)
-            rhs!(duS, tile, ws, uS, Float64[], prob.p, 0.0)
+            rhs!(duS, tile, ws, uS, Float64[], prob.p, 0.0, fs)
             owned = Set{Int}()
             for c in CartesianIndices(Tuple(b.owned))
                 s = RRT._tile_slot(b, (c[1], c[2]))
@@ -211,8 +212,8 @@ end
             end
             @test all(k -> k in owned || isnan(duS[k]), eachindex(duS))
             noaux = Float64[]
-            _rrt_allocated(duS, tile, ws, uS, noaux, prob.p)
-            @test _rrt_allocated(duS, tile, ws, uS, noaux, prob.p) == 0
+            _rrt_allocated(duS, tile, ws, uS, noaux, prob.p, fs)
+            @test _rrt_allocated(duS, tile, ws, uS, noaux, prob.p, fs) == 0
         end
         @test all(==(1), seen)
     end
@@ -306,7 +307,8 @@ end
         iprob = esm_problem(_rrt_doc(nx, ny), (0.0, 1.0); compiler = :interpreter)
         iprog = rhs_program(iprob)
         du = fill(NaN, L.n_u)
-        rhs!(du, iprog, rhs_workspace(iprog), u, Float64[], iprob.p, 0.0)
+        rhs!(du, iprog, rhs_workspace(iprog), u, Float64[], iprob.p, 0.0,
+             default_forcing_set(iprog))
         @test _rrt_bits.(du) == _rrt_bits.(G)
         for f in (() -> halo(iprog, dec),
                   () -> restrict(iprog, dec; owned = ("x" => 1:4, "y" => 1:6),
@@ -325,10 +327,10 @@ end
         TO = TermOrigin
         sel = select(prog; terms = [TO(component = "Diff")])
         du = fill(NaN, L.n_u)
-        rhs!(du, sel, rhs_workspace(sel), u, Float64[], prob.p, 0.0)
+        rhs!(du, sel, rhs_workspace(sel), u, Float64[], prob.p, 0.0, fs)
         @test _rrt_bits.(du) == _rrt_bits.(G)
         zero = select(prog; terms = [TO(component = "Nobody")])
-        rhs!(du, zero, rhs_workspace(zero), u, Float64[], prob.p, 0.0)
+        rhs!(du, zero, rhs_workspace(zero), u, Float64[], prob.p, 0.0, fs)
         @test all(==(0.0), du)
         err = try
             select(prog; writes = String[], terms = :all)
@@ -405,12 +407,12 @@ end
         tile = restrict(prog, dec; owned = ("x" => 1:4, "y" => 1:6),
                         storage = ("x" => 0:5, "y" => 0:7))
         w1, w2 = rhs_workspace(tile), rhs_workspace(tile)
-        @test w1.f! === tile.f! && w2.f! !== w1.f!
+        @test w1.f! !== tile.f! && w2.f! !== w1.f!
         other = restrict(prog, dec; owned = ("x" => 5:10, "y" => 1:6),
                          storage = ("x" => 4:11, "y" => 0:7))
         T = tile_layout(tile)
         err = _rrt_err(() -> rhs!(zeros(T.n_u), tile, rhs_workspace(other), zeros(T.n_u),
-                                  Float64[], prob.p, 0.0))
+                                  Float64[], prob.p, 0.0, default_forcing_set(tile)))
         @test err isa ArgumentError
 
         # Lanes: concurrent calls through one workspace per task agree bitwise
@@ -425,14 +427,14 @@ end
             cells = batches[mod1(k, length(batches))]
             du = fill(NaN, LL.n_u * 8)
             rhs!(du, lp, ws, state(8, LL.n_u, k), state(8, LL.n_aux, k), lprob.p, 0.0,
-                 nothing, cells, 7)
+                 default_forcing_set(lp), cells, 7)
             return du
         end
         ws0 = rhs_workspace(lp)
         nt = 4
         want = [_rrt_bits.(run!(ws0, k)) for k in 1:(40 + nt)]
         wss = [rhs_workspace(lp) for _ in 1:nt]
-        @test wss[1].index_bufs[1] !== ws0.index_bufs[1] && wss[1].f! !== ws0.f!
+        @test wss[1].lbufs[1] !== ws0.lbufs[1] && wss[1].f! !== ws0.f!
         got = Vector{Any}(undef, nt)
         @sync for w in 1:nt
             Threads.@spawn begin
@@ -449,7 +451,8 @@ end
         BL = tile_layout(bprog)
         bu = 0.5 .+ (1:BL.n_u) ./ BL.n_u
         BG = fill(NaN, BL.n_u)
-        rhs!(BG, bprog, rhs_workspace(bprog), bu, Float64[], bprob.p, 0.0)
+        rhs!(BG, bprog, rhs_workspace(bprog), bu, Float64[], bprob.p, 0.0,
+             default_forcing_set(bprog))
         bdec = Decomposition(axes = ["x" => (period = bx,), "y" => (period = nothing,)])
         for (xo, xs) in ((1:4, 0:5), (bx - 3:bx, (bx - 4):(bx + 1)), (1:2, -1:3))
             tile = restrict(bprog, bdec; owned = ("x" => xo, "y" => 1:ny),
@@ -465,7 +468,8 @@ end
                 uS[RRT._tile_slot(b, (c[1], c[2]))] = bu[(c[2] - 1) * bx + mod1(c[1], bx)]
             end
             duS = fill(NaN, T.n_u)
-            rhs!(duS, tile, rhs_workspace(tile), uS, Float64[], bprob.p, 0.0)
+            rhs!(duS, tile, rhs_workspace(tile), uS, Float64[], bprob.p, 0.0,
+                 default_forcing_set(tile))
             ok = true
             for c in CartesianIndices(Tuple(b.owned))
                 ok &= _rrt_bits(duS[RRT._tile_slot(b, (c[1], c[2]))]) ==
@@ -482,7 +486,8 @@ end
         FL = tile_layout(fprog)
         fu = 0.5 .+ (1:FL.n_u) ./ (FL.n_u + 7)
         FG = fill(NaN, FL.n_u)
-        rhs!(FG, fprog, rhs_workspace(fprog), fu, Float64[], fprob.p, 0.0)
+        rhs!(FG, fprog, rhs_workspace(fprog), fu, Float64[], fprob.p, 0.0,
+             default_forcing_set(fprog))
         fdec = Decomposition(axes = ["x" => (period = fx,)])
         @test halo(fprog, fdec) == Dict(("Flux.u", "x") => (1, 1))
         seen = zeros(Int, fx)
@@ -492,7 +497,8 @@ end
             b = only(tile_layout(tile).u)
             uS = [fu[mod1(c, fx)] for c in xs]
             duS = fill(NaN, length(xs))
-            rhs!(duS, tile, rhs_workspace(tile), uS, Float64[], fprob.p, 0.0)
+            rhs!(duS, tile, rhs_workspace(tile), uS, Float64[], fprob.p, 0.0,
+                 default_forcing_set(tile))
             for c in xo
                 seen[c] += _rrt_bits(duS[RRT._tile_slot(b, (c,))]) == _rrt_bits(FG[c])
             end

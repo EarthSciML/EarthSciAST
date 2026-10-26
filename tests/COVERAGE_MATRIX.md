@@ -45,7 +45,8 @@ This document maps ESM format specifications to test fixtures to ensure complete
 | **Analysis** | Expression graphs | Required | Required | Required | Required | Required | ✅ `conformance/graph/cases.json` (generated; driven by all five bindings) |
 | **Simulation** | ODE solving | — | Required | — | Required | — | ❌ Missing simulation fixtures |
 | **Simulation** | Event handling | — | Required | — | Required | — | ❌ Missing |
-| **Simulation** | Range-restricted rhs: operator selection, tiles, lanes (API_SPEC §5.8, CONFORMANCE_SPEC §5.49) | — | Refuses (`compiler_unavailable`) | Required (native) | Required (native) | — | ✅ `conformance/range_restricted_rhs/` (manifest-driven; bitwise against each binding's whole-domain `select`) |
+| **Simulation** | Range-restricted rhs: operator selection, tiles, lanes (API_SPEC §5.8, CONFORMANCE_SPEC §5.50) | — | Refuses (`compiler_unavailable`) | Required (native) | Required (native) | — | ✅ `conformance/range_restricted_rhs/` (manifest-driven; bitwise against each binding's whole-domain `select`) |
+| **Simulation** | Public thread-safe rhs: program, workspace, epoch-stamped forcing set, parameter vector, run-time array parameters (API_SPEC §5.8, CONFORMANCE_SPEC §5.51) | — | Refuses (`compiler_unavailable`) | Required (native) | Required (native) | — | ✅ `conformance/public_rhs_program/` (manifest-driven; bitwise against each binding's existing evaluation and its own serial results) |
 | **Full** | MTK conversion | — | — | — | Required | — | ❌ Missing |
 | **Full** | Coupled systems | — | — | — | Required | — | ❌ Missing |
 

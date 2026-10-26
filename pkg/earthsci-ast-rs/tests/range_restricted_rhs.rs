@@ -147,16 +147,19 @@ fn a_steady_tile_call_allocates_nothing() {
     let lay = tile.layout();
     let u = vec![1.25; lay.u_len];
     let aux = vec![0.0; lay.aux_len];
-    let p = prog.default_parameters();
+    let p = prog
+        .parameter_vector(&Default::default())
+        .expect("defaults");
+    let fs = prog.default_forcing();
     let mut du = vec![f64::NAN; lay.u_len];
     let mut ws = tile.new_workspace();
     for _ in 0..3 {
-        tile.eval_into(&u, &aux, &p, 0.0, &mut du, &mut ws)
+        tile.eval_into(&u, &aux, &p, 0.0, &fs, &mut du, &mut ws)
             .expect("eval");
     }
     let before = allocs();
     for _ in 0..10 {
-        tile.eval_into(&u, &aux, &p, 0.0, &mut du, &mut ws)
+        tile.eval_into(&u, &aux, &p, 0.0, &fs, &mut du, &mut ws)
             .expect("eval");
     }
     assert_eq!(allocs() - before, 0, "a warm tile call allocated");
@@ -241,10 +244,13 @@ fn varied(n: usize) -> Vec<f64> {
 }
 
 fn whole_du(prog: &RhsProgram, u: &[f64], aux: &[f64]) -> Vec<f64> {
-    let p = prog.default_parameters();
+    let p = prog
+        .parameter_vector(&Default::default())
+        .expect("defaults");
+    let fs = prog.default_forcing();
     let mut du = vec![f64::NAN; prog.layout().u_len];
     let mut ws = prog.new_workspace();
-    prog.eval_into(u, aux, &p, 0.0, &mut du, &mut ws)
+    prog.eval_into(u, aux, &p, 0.0, &fs, &mut du, &mut ws)
         .expect("whole-domain eval");
     du
 }
@@ -298,17 +304,20 @@ fn a_workspace_follows_its_program_when_the_program_moves() {
         // does not.
         let moved = Box::new(prog);
         let u = varied(moved.layout().u_len);
-        let p = moved.default_parameters();
+        let p = moved
+            .parameter_vector(&Default::default())
+            .expect("defaults");
+        let fs = moved.default_forcing();
         let mut du = vec![0.0; u.len()];
         moved
-            .eval_into(&u, &[], &p, 0.0, &mut du, &mut ws)
+            .eval_into(&u, &[], &p, 0.0, &fs, &mut du, &mut ws)
             .expect("the workspace still belongs to the moved program");
         // A workspace of another program is still refused.
         let other = program(&stencil(8), compiler);
         let mut foreign = other.new_workspace();
         assert!(
             moved
-                .eval_into(&u, &[], &p, 0.0, &mut du, &mut foreign)
+                .eval_into(&u, &[], &p, 0.0, &fs, &mut du, &mut foreign)
                 .is_err()
         );
     }
@@ -345,7 +354,10 @@ fn padding_lanes_ignore_the_tail_of_cells() {
         .expect("lanes");
     let gu = varied(n as usize);
     let want = whole_du(&prog, &gu, &[]);
-    let p = prog.default_parameters();
+    let p = prog
+        .parameter_vector(&Default::default())
+        .expect("defaults");
+    let fs = prog.default_forcing();
     // Two lanes asked for; the tail of `cells` is garbage.
     let cells: Vec<i32> = vec![5, 2, 1_000_000, -7];
     let lay = lanes.layout().clone();
@@ -355,17 +367,17 @@ fn padding_lanes_ignore_the_tail_of_cells() {
     let mut du = vec![f64::NAN; lay.u_len];
     let mut ws = lanes.new_workspace();
     lanes
-        .eval_into(&u, &[], &p, 0.0, &cells, 2, &mut du, &mut ws)
+        .eval_into(&u, &[], &p, 0.0, &fs, &cells, 2, &mut du, &mut ws)
         .expect("the padding lanes read in-range cells");
     assert_eq!(du[0].to_bits(), want[4].to_bits());
     assert_eq!(du[1].to_bits(), want[1].to_bits());
     let mut inputs = lanes.lane_inputs();
     lanes
-        .gather_lane_inputs(&mut inputs, &p, 0.0, &cells, 2)
+        .gather_lane_inputs(&mut inputs, &p, 0.0, &fs, &cells, 2)
         .expect("the padding lanes gather in-range cells");
     // With no lane asked for, the whole of `cells` is padding.
     lanes
-        .eval_into(&u, &[], &p, 0.0, &cells, 0, &mut du, &mut ws)
+        .eval_into(&u, &[], &p, 0.0, &fs, &cells, 0, &mut du, &mut ws)
         .expect("n = 0");
 }
 
@@ -410,10 +422,13 @@ fn a_computed_subscript_along_an_uncut_axis_tiles() {
                 }
             }
         }
-        let p = prog.default_parameters();
+        let p = prog
+            .parameter_vector(&Default::default())
+            .expect("defaults");
+        let fs = prog.default_forcing();
         let mut du = vec![f64::NAN; lay.u_len];
         let mut ws = tile.new_workspace();
-        tile.eval_into(&u, &[], &p, 0.0, &mut du, &mut ws)
+        tile.eval_into(&u, &[], &p, 0.0, &fs, &mut du, &mut ws)
             .expect("eval");
         for i in owned.0..=owned.1 {
             for j in 1..=3 {
@@ -612,10 +627,13 @@ fn an_observed_read_across_a_periodic_seam_is_computed_over_its_need() {
                 let src = if g < 1 { g + n } else { g };
                 u[b.slot(&[g]).unwrap()] = gu[(src - 1) as usize];
             }
-            let p = prog.default_parameters();
+            let p = prog
+                .parameter_vector(&Default::default())
+                .expect("defaults");
+            let fs = prog.default_forcing();
             let mut du = vec![f64::NAN; lay.u_len];
             let mut ws = tile.new_workspace();
-            tile.eval_into(&u, &[], &p, 0.0, &mut du, &mut ws)
+            tile.eval_into(&u, &[], &p, 0.0, &fs, &mut du, &mut ws)
                 .expect("eval");
             for g in 1..=4i64 {
                 assert_eq!(
@@ -638,7 +656,7 @@ fn an_observed_read_across_a_periodic_seam_is_computed_over_its_need() {
             }
             let mut du = vec![f64::NAN; lay.u_len];
             let mut ws = tile.new_workspace();
-            tile.eval_into(&u, &[], &p, 0.0, &mut du, &mut ws)
+            tile.eval_into(&u, &[], &p, 0.0, &fs, &mut du, &mut ws)
                 .expect("eval");
             for g in n - 3..=n {
                 assert_eq!(
@@ -731,11 +749,14 @@ fn forced_program(compiler: Compiler, k: usize) -> RhsProgram {
 fn warm_call_allocs(prog: &RhsProgram, native: &RhsProgram) -> usize {
     let u = varied(prog.layout().u_len);
     let want = whole_du(native, &u, &[]);
-    let p = prog.default_parameters();
+    let p = prog
+        .parameter_vector(&Default::default())
+        .expect("defaults");
+    let fs = prog.default_forcing();
     let mut du = vec![f64::NAN; u.len()];
     let mut ws = prog.new_workspace();
     for _ in 0..3 {
-        prog.eval_into(&u, &[], &p, 0.0, &mut du, &mut ws)
+        prog.eval_into(&u, &[], &p, 0.0, &fs, &mut du, &mut ws)
             .expect("eval");
     }
     assert_eq!(
@@ -744,7 +765,7 @@ fn warm_call_allocs(prog: &RhsProgram, native: &RhsProgram) -> usize {
         "the interpreter reads the same forcing as the tape"
     );
     let before = allocs();
-    prog.eval_into(&u, &[], &p, 0.0, &mut du, &mut ws)
+    prog.eval_into(&u, &[], &p, 0.0, &fs, &mut du, &mut ws)
         .expect("eval");
     allocs() - before
 }

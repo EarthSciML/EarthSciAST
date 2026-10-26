@@ -175,7 +175,15 @@ pub(super) fn run_range(
                 let off = slot_off[*out as usize];
                 let dst =
                     unsafe { std::slice::from_raw_parts_mut(slab_ptr.add(off), forcing_len(fr)) };
-                load_forcing(fr, env.forcing, env.declared, prog.col_major, dst);
+                match env.forcing {
+                    super::ForcingView::Map(buffer) => {
+                        load_forcing(fr, buffer, env.declared, prog.col_major, dst)
+                    }
+                    super::ForcingView::Slots { bufs, slot_of } => {
+                        let src = &bufs[slot_of[*forcing as usize] as usize];
+                        super::load_forcing_slot(fr, src, prog.col_major, dst)
+                    }
+                }
             }
             Instr::Fault { fault } => {
                 let (rule, key) = &prog.fault_order[*fault as usize];

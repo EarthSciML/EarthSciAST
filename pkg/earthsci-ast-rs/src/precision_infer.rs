@@ -92,7 +92,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::compile_error::CompileError;
-use std::rc::Rc;
 
 use crate::precision::{Env, Precision, VarPrecisions};
 use crate::types::{Equation, Expr, ExpressionNode, Model};
@@ -296,7 +295,7 @@ pub fn env_of_file(file: &crate::types::EsmFile) -> Result<Env, CompileError> {
     };
     Ok(Env {
         document,
-        variables: Rc::new(vars),
+        variables: std::sync::Arc::new(vars),
     })
 }
 

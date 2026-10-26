@@ -1,5 +1,5 @@
 # Conformance: range-restricted, operator-restricted right-hand sides
-# (CONFORMANCE_SPEC §5.49; API_SPEC §5.8; issue #540).
+# (CONFORMANCE_SPEC §5.50; API_SPEC §5.8; issue #540).
 #
 # Consumes tests/conformance/range_restricted_rhs/manifest.json case by case,
 # as its README specifies. Every check is BITWISE against this binding's own
@@ -107,7 +107,7 @@ function _rrc_whole(op, p)
     u = _rrc_fill(L.u, L.n_u, ext, id)
     aux = _rrc_fill(L.aux, L.n_aux, ext, id)
     du = fill(NaN, L.n_u)
-    RRC.rhs!(du, op, RRC.rhs_workspace(op), u, aux, p, 0.0)
+    RRC.rhs!(du, op, RRC.rhs_workspace(op), u, aux, p, 0.0, RRC.default_forcing_set(op))
     return du, ext
 end
 
@@ -139,7 +139,7 @@ function _rrc_check_tile!(op, dec, t, G, ext, p; du_shared = nothing)
     aux = _rrc_fill(L.aux, L.n_aux, ext, wrap)
     u0, aux0 = copy(u), copy(aux)
     du = du_shared === nothing ? fill(NaN, L.n_u) : du_shared
-    RRC.rhs!(du, tile, RRC.rhs_workspace(tile), u, aux, p, 0.0)
+    RRC.rhs!(du, tile, RRC.rhs_workspace(tile), u, aux, p, 0.0, RRC.default_forcing_set(tile))
     @test isequal(u, u0)
     @test isequal(aux, aux0)
     # §5 layout: contiguous bases, column-major strides over storage.
@@ -232,6 +232,7 @@ function _rrc_lanes(c, prob)
     LL = RRC.lane_layout(lp)
     cap = Int(c.capacity)
     ws = RRC.rhs_workspace(lp)
+    fs = RRC.default_forcing_set(lp)
     whole = Dict(b.name => b for b in vcat(RRC.tile_layout(op).u, RRC.tile_layout(op).aux))
     # The lane buffer of `blocks` gathered at `cells`.
     function gather(blocks, nper, cells)
@@ -270,10 +271,10 @@ function _rrc_lanes(c, prob)
             u = gather(LL.u, LL.n_u, cells)
             aux = gather(LL.aux, LL.n_aux, cells)
             du = fill(NaN, LL.n_u * size(cells, 2))
-            RRC.rhs!(du, lp, ws, u, aux, prob.p, 0.0, nothing, cells, n)
+            RRC.rhs!(du, lp, ws, u, aux, prob.p, 0.0, fs, cells, n)
             @test check(du, cells, n)
             li = RRC.lane_inputs(lp, size(cells, 2))
-            RRC.gather_lane_inputs!(li, lp, prob.p, 0.0, nothing, cells, n)
+            RRC.gather_lane_inputs!(li, lp, prob.p, 0.0, fs, cells, n)
             du2 = fill(NaN, LL.n_u * size(cells, 2))
             RRC.rhs!(du2, lp, ws, u, aux, prob.p, 0.0, li, cells, n)
             @test check(du2, cells, n)
@@ -287,7 +288,7 @@ function _rrc_lanes(c, prob)
                 swap!(u2, LL.n_u)
                 swap!(aux2, LL.n_aux)
                 du3 = fill(NaN, LL.n_u * L)
-                RRC.rhs!(du3, lp, ws, u2, aux2, prob.p, 0.0, nothing, cells, n)
+                RRC.rhs!(du3, lp, ws, u2, aux2, prob.p, 0.0, fs, cells, n)
                 @test !check(du3, cells, n)
             end
         end
@@ -344,7 +345,7 @@ function _rrc_selection_ok(c, prob)
     end
 end
 
-@testset "range_restricted_rhs conformance (§5.49)" begin
+@testset "range_restricted_rhs conformance (§5.50)" begin
     manifest = JSON3.read(read(joinpath(_RRC_DIR, "manifest.json"), String))
     @test manifest.compiler == "native"
     only = get(ENV, "RANGE_RHS_CASES", "")
