@@ -586,6 +586,426 @@ theorem slice_shape {T : FTable} (h : validateTable T = .ok ()) {out : Option Ou
       have hlt : o < xs.length := by rw [hs.1]; exact resolveOutput_lt hout ho
       simpa [FTable.axesShape] using allShape_getD hs.2 hlt
 
+/-! ## Nearest knot, by midpoints -/
+
+/-- Real midpoints of adjacent knots. -/
+def midsR (r : List ℝ) : List ℝ := List.zipWith (fun p q => (p + q) / 2) r r.tail
+
+theorem mids_map (r : List ℝ) : mids (r.map Num.fin) = (midsR r).map Num.fin := by
+  induction r with
+  | nil => rfl
+  | cons a t ih =>
+    cases t with
+    | nil => rfl
+    | cons b t =>
+      simp only [mids, midsR, List.map_cons, List.tail_cons, List.zipWith_cons_cons] at ih ⊢
+      rw [ih]
+      simp [Num.div_fin _ _ (two_ne_zero)]
+
+theorem length_midsR (r : List ℝ) : (midsR r).length = r.length - 1 := by
+  simp [midsR, List.length_zipWith, List.length_tail]
+
+theorem getD_midsR {r : List ℝ} {j : ℕ} (hj : j + 1 < r.length) :
+    (midsR r).getD j 0 = (r.getD j 0 + r.getD (j + 1) 0) / 2 := by
+  rw [List.getD_eq_getElem _ _ (by rw [length_midsR]; omega), List.getD_eq_getElem _ _ (by omega),
+    List.getD_eq_getElem _ _ hj]
+  simp [midsR, List.getElem_zipWith, List.getElem_tail]
+
+theorem abs_le_abs_iff_mid {p q x : ℝ} (hpq : p < q) :
+    |x - p| ≤ |x - q| ↔ x ≤ (p + q) / 2 := by
+  rw [← sq_le_sq]
+  constructor
+  · intro h; nlinarith
+  · intro h; nlinarith
+
+theorem abs_lt_abs_iff_mid {p q x : ℝ} (hpq : p < q) :
+    |x - q| < |x - p| ↔ (p + q) / 2 < x := by
+  rw [← sq_lt_sq]
+  constructor
+  · intro h; nlinarith
+  · intro h; nlinarith
+
+/-- Q-13: the first midpoint at or above `x` locates the nearest knot, ties to
+the lower knot. -/
+theorem findIdx_midsR (r : List ℝ) (hr : r.Pairwise (· < ·)) (hn : 1 ≤ r.length) (x : ℝ) :
+    (midsR r).findIdx (fun m => decide (x ≤ m)) = nearestIdx r x := by
+  set k := (midsR r).findIdx (fun m => decide (x ≤ m)) with hk
+  have hkle : k ≤ r.length - 1 := by
+    have := List.findIdx_le_length (p := fun m => decide (x ≤ m)) (xs := midsR r)
+    rw [length_midsR] at this; exact this
+  -- below k every midpoint is below x; at k (if any) it is ≥ x
+  have hbelow : ∀ j, j < k → (r.getD j 0 + r.getD (j + 1) 0) / 2 < x := by
+    intro j hj
+    have := List.not_of_lt_findIdx (p := fun m => decide (x ≤ m)) (xs := midsR r) hj
+    simp only [decide_eq_false_iff_not, not_le] at this
+    rw [← getD_midsR (by omega), List.getD_eq_getElem _ _ (by rw [length_midsR]; omega)]
+    exact this
+  have hat : k + 1 < r.length → x ≤ (r.getD k 0 + r.getD (k + 1) 0) / 2 := by
+    intro hk1
+    have hlt : k < (midsR r).length := by rw [length_midsR]; omega
+    have := List.findIdx_getElem (w := hlt)
+    simp only [decide_eq_true_eq] at this
+    rw [← getD_midsR hk1, List.getD_eq_getElem _ _ hlt]
+    exact this
+  have hkn : k < r.length := by omega
+  -- the knot k is at least as close as every knot, and strictly closer than those below
+  have closest : ∀ j, j < r.length → |x - r.getD k 0| ≤ |x - r.getD j 0| := by
+    intro j hj
+    rcases lt_trichotomy j k with h | h | h
+    · have h1 := hbelow (k - 1) (by omega)
+      have e : k - 1 + 1 = k := by omega
+      rw [e] at h1
+      have h2 : r.getD j 0 ≤ r.getD (k - 1) 0 := pw_getD_le hr (by omega) (by omega)
+      have h3 : r.getD j 0 < r.getD k 0 := pw_getD_lt hr hkn h
+      exact ((abs_lt_abs_iff_mid h3).mpr (by linarith)).le
+    · rw [h]
+    · have h1 := hat (by omega)
+      have h2 : r.getD (k + 1) 0 ≤ r.getD j 0 := pw_getD_le hr hj (by omega)
+      have h3 : r.getD k 0 < r.getD j 0 := pw_getD_lt hr hj h
+      exact (abs_le_abs_iff_mid h3).mpr (by linarith)
+  have strict : ∀ j, j < k → |x - r.getD k 0| < |x - r.getD j 0| := by
+    intro j hj
+    have h1 := hbelow (k - 1) (by omega)
+    have e : k - 1 + 1 = k := by omega
+    rw [e] at h1
+    have h2 : r.getD j 0 ≤ r.getD (k - 1) 0 := pw_getD_le hr (by omega) (by omega)
+    have h3 : r.getD j 0 < r.getD k 0 := pw_getD_lt hr hkn hj
+    exact (abs_lt_abs_iff_mid h3).mpr (by linarith)
+  symm
+  unfold nearestIdx
+  rw [List.findIdx_eq hkn]
+  constructor
+  · rw [List.all_eq_true]
+    intro aj haj
+    obtain ⟨j, hj, rfl⟩ := List.mem_iff_getElem.mp haj
+    have := closest j hj
+    rw [List.getD_eq_getElem _ _ hkn, List.getD_eq_getElem _ _ hj] at this
+    simpa using this
+  · intro j hj
+    rw [List.all_eq_false]
+    refine ⟨r[k], List.getElem_mem _, ?_⟩
+    have := strict j hj
+    rw [List.getD_eq_getElem _ _ hkn, List.getD_eq_getElem _ _ (by omega)] at this
+    simpa using this
+
+/-- Q-13, the semantics: the model's nearest index is an argmin of `|x − knot|`,
+the least one (ties to the lower knot), and clamps (it is always a knot). -/
+theorem nearestIdx_spec (r : List ℝ) (hr : r.Pairwise (· < ·)) (hn : 1 ≤ r.length) (x : ℝ) :
+    nearestIdx r x < r.length ∧
+      (∀ j, j < r.length → |x - r.getD (nearestIdx r x) 0| ≤ |x - r.getD j 0|) ∧
+      (∀ j, j < nearestIdx r x → |x - r.getD (nearestIdx r x) 0| < |x - r.getD j 0|) := by
+  have hidx := findIdx_midsR r hr hn x
+  have hkn : nearestIdx r x < r.length := by
+    rw [← hidx]
+    have := List.findIdx_le_length (p := fun m => decide (x ≤ m)) (xs := midsR r)
+    rw [length_midsR] at this; omega
+  have hP : r.all (fun aj => decide (|x - (r[nearestIdx r x]'hkn)| ≤ |x - aj|)) = true :=
+    List.findIdx_getElem (p := fun ak => r.all (fun aj => decide (|x - ak| ≤ |x - aj|)))
+      (xs := r) (w := hkn)
+  have hQ : ∀ j (hj : j < nearestIdx r x),
+      r.all (fun aj => decide (|x - (r[j]'(by omega))| ≤ |x - aj|)) = false :=
+    fun j hj => List.not_of_lt_findIdx
+      (p := fun ak => r.all (fun aj => decide (|x - ak| ≤ |x - aj|))) (xs := r) (i := j) hj
+  rw [List.all_eq_true] at hP
+  refine ⟨hkn, ?_, ?_⟩
+  · intro j hj
+    have := hP r[j] (List.getElem_mem _)
+    rw [List.getD_eq_getElem _ _ hkn, List.getD_eq_getElem _ _ hj]
+    simpa using this
+  · intro j hj
+    have := hQ j hj
+    rw [List.all_eq_false] at this
+    obtain ⟨aj, haj, hlt⟩ := this
+    simp only [Bool.not_eq_true, decide_eq_false_iff_not, not_le] at hlt
+    rw [List.getD_eq_getElem _ _ hkn, List.getD_eq_getElem _ _ (by omega)]
+    have := hP aj haj
+    simp only [decide_eq_true_eq] at this
+    linarith
+
+/-! ## Validation of the lowered arguments -/
+
+theorem validateLinear_eq (t : List Num) (r : List ℝ) (hlen : t.length = r.length)
+    (h2 : 2 ≤ r.length) (hr : r.Pairwise (· < ·)) :
+    validateLinear (Arg.const1 t) (Arg.const1 (r.map Num.fin)) = .ok (t, r.map Num.fin) := by
+  have h3 : anyNaN (r.map Num.fin) = false := (anyNaN_false_iff _).mpr ⟨r, rfl⟩
+  have h4 := (adjAll_lt_iff r).mpr hr
+  have c1 : ¬ (r.map Num.fin).length < 2 := by simp; omega
+  have c2 : t.length = (r.map Num.fin).length := by simpa using hlen
+  simp only [validateLinear, h3, h4, c1, c2, ne_eq, not_true_eq_false, Bool.not_true,
+    Bool.false_eq_true, ↓reduceIte]
+
+theorem validateBilinear_eq (M : List (List Num)) (rx ry : List ℝ) (hlen : M.length = rx.length)
+    (hrow : ∀ row ∈ M, row.length = ry.length) (h2x : 2 ≤ rx.length) (h2y : 2 ≤ ry.length)
+    (hx : rx.Pairwise (· < ·)) (hy : ry.Pairwise (· < ·)) :
+    validateBilinear (Arg.const2 M) (Arg.const1 (rx.map Num.fin)) (Arg.const1 (ry.map Num.fin)) =
+      .ok (M, rx.map Num.fin, ry.map Num.fin) := by
+  have n1 : anyNaN (rx.map Num.fin) = false := (anyNaN_false_iff _).mpr ⟨rx, rfl⟩
+  have n2 : anyNaN (ry.map Num.fin) = false := (anyNaN_false_iff _).mpr ⟨ry, rfl⟩
+  have m1 := (adjAll_lt_iff rx).mpr hx
+  have m2 := (adjAll_lt_iff ry).mpr hy
+  have c1 : (decide ((rx.map Num.fin).length < 2) || decide ((ry.map Num.fin).length < 2)) = false := by
+    simp only [Bool.or_eq_false_iff, decide_eq_false_iff_not, not_lt, List.length_map]; omega
+  have c2 : (decide (M.length ≠ (rx.map Num.fin).length) ||
+      M.any (fun row => decide (row.length ≠ (ry.map Num.fin).length))) = false := by
+    simpa [hlen] using hrow
+  simp only [validateBilinear, c1, c2, n1, n2, m1, m2, Bool.or_false, Bool.and_true, Bool.not_true,
+    Bool.false_eq_true, ↓reduceIte]
+
+theorem midsR_pairwise (r : List ℝ) (hr : r.Pairwise (· < ·)) : (midsR r).Pairwise (· ≤ ·) := by
+  rw [List.pairwise_iff_getElem]
+  intro i j hi hj hij
+  rw [length_midsR] at hi hj
+  have a := getD_midsR (r := r) (j := i) (by omega)
+  have b := getD_midsR (r := r) (j := j) (by omega)
+  rw [List.getD_eq_getElem _ _ (by rw [length_midsR]; omega)] at a b
+  rw [a, b]
+  have h1 := pw_getD_lt hr (i := i) (j := j) (by omega) hij
+  have h2 := pw_getD_lt hr (i := i + 1) (j := j + 1) (by omega) (by omega)
+  linarith
+
+theorem validateSearchsorted_eq (r : List ℝ) (hr : r.Pairwise (· ≤ ·)) :
+    validateSearchsorted (Arg.const1 (r.map Num.fin)) = .ok (r.map Num.fin) := by
+  have h1 : anyNaN (r.map Num.fin) = false := (anyNaN_false_iff _).mpr ⟨r, rfl⟩
+  have h2 := (adjAll_le_iff r).mpr hr
+  simp [validateSearchsorted, h1, h2]
+
+/-! ## Unpacking a successful lookup preparation -/
+
+theorem prepLookup_ok {tables : List (String × FTable)} {tid : String} {keys : List String}
+    {out : Option OutSel} {args : List Expr} {T : FTable} {s : Nested}
+    (h : prepLookup tables tid keys out args = .ok (T, s)) :
+    args = [] ∧ tables.lookup tid = some T ∧ validateTable T = .ok () ∧
+      keysMatch keys (T.axes.map (·.name)) = true ∧
+      ∃ o, resolveOutput T out = .ok o ∧ s = slice T o := by
+  unfold prepLookup at h
+  cases h1 : args.isEmpty with
+  | false => rw [h1] at h; cases h
+  | true =>
+    rw [h1] at h
+    simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte] at h
+    cases hT : tables.lookup tid with
+      | none => rw [hT] at h; cases h
+      | some T' =>
+        rw [hT] at h
+        dsimp only at h
+        cases hv : validateTable T' with
+        | error c => rw [hv] at h; cases h
+        | ok u =>
+          rw [hv] at h
+          simp only [bind, Except.bind] at h
+          cases h2 : keysMatch keys (T'.axes.map (·.name)) with
+          | false => simp [h2] at h
+          | true =>
+            simp only [h2, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at h
+            cases ho : resolveOutput T' out with
+            | error c => rw [ho] at h; cases h
+            | ok o =>
+              rw [ho] at h
+              simp only [pure, Except.pure, Except.ok.injEq, Prod.mk.injEq] at h
+              obtain ⟨rfl, rfl⟩ := h
+              exact ⟨List.isEmpty_iff.mp h1, rfl, by cases u; exact hv, h2, o, ho, rfl⟩
+
+theorem lookup_isSome_of_mem {β : Type} {axes : List (String × β)} {k : String}
+    (h : k ∈ axes.map Prod.fst) : ∃ e, axes.lookup k = some e := by
+  induction axes with
+  | nil => simp at h
+  | cons p rest ih =>
+    obtain ⟨k', e'⟩ := p
+    simp only [List.lookup]
+    by_cases hk : k = k'
+    · subst hk; exact ⟨e', by simp⟩
+    · have : (k == k') = false := by simpa using hk
+      rw [this]
+      exact ih (by simp at h; rcases h with h | h; exact absurd h hk; simpa using h)
+
+theorem evalAxes_ok (tables : List (String × FTable)) (env : String → Num)
+    (axes : List (String × Expr)) (hin : ∀ p ∈ axes, ∃ v, eval tables env p.2 = .ok (.num v)) :
+    ∃ vals, evalAxes tables env axes = .ok vals ∧
+      ∀ k e, axes.lookup k = some e → ∃ v, eval tables env e = .ok (.num v) ∧ vals.lookup k = some v := by
+  induction axes with
+  | nil => exact ⟨[], by simp [evalAxes], fun k e h => by simp at h⟩
+  | cons p rest ih =>
+    obtain ⟨k0, e0⟩ := p
+    obtain ⟨v0, hv0⟩ := hin (k0, e0) (by simp)
+    obtain ⟨vals, hvals, hlk⟩ := ih (fun p hp => hin p (by simp [hp]))
+    refine ⟨(k0, v0) :: vals, ?_, ?_⟩
+    · simp only [evalAxes, hv0, hvals]; rfl
+    · intro k e hke
+      simp only [List.lookup] at hke ⊢
+      by_cases hk : k = k0
+      · subst hk
+        simp only [beq_self_eq_true, Option.some.injEq] at hke ⊢
+        subst hke
+        exact ⟨v0, hv0, rfl⟩
+      · have : (k == k0) = false := by simpa using hk
+        rw [this] at hke ⊢
+        exact hlk k e hke
+
+theorem keysMatch_mem {keys names : List String} (h : keysMatch keys names = true) {n : String}
+    (hn : n ∈ names) : n ∈ keys := by
+  simp only [keysMatch, Bool.and_eq_true, List.all_eq_true, decide_eq_true_eq] at h
+  exact h.2 n hn
+
+/-! ## The lowering is sound -/
+
+/-- Inputs of a lookup whose axis keys match: each table axis has an input
+expression, it evaluates to a scalar, and `evalAxes` recorded that scalar. -/
+theorem axis_input {tables : List (String × FTable)} {env : String → Num}
+    {axes : List (String × Expr)} {vals : List (String × Num)} {T : FTable}
+    (hkeys : keysMatch (axes.map Prod.fst) (T.axes.map (·.name)) = true)
+    (hlk : ∀ k e, axes.lookup k = some e →
+      ∃ v, eval tables env e = .ok (.num v) ∧ vals.lookup k = some v)
+    {a : Axis} (ha : a ∈ T.axes) :
+    ∃ v, eval tables env ((axes.lookup a.name).getD (.lit .nan)) = .ok (.num v) ∧
+      vals.lookup a.name = some v := by
+  obtain ⟨e, he⟩ := lookup_isSome_of_mem (keysMatch_mem hkeys (List.mem_map_of_mem ha))
+  obtain ⟨v, hv, hvl⟩ := hlk _ _ he
+  exact ⟨v, by rw [he]; exact hv, hvl⟩
+
+theorem eval_lookup_prep {tables : List (String × FTable)} {env : String → Num}
+    {tid : String} {axes : List (String × Expr)} {out : Option OutSel} {args : List Expr}
+    {T : FTable} {s : Nested} {vals : List (String × Num)}
+    (hp : prepLookup tables tid (axes.map Prod.fst) out args = .ok (T, s))
+    (hvals : evalAxes tables env axes = .ok vals) :
+    eval tables env (.lookup tid axes out args) =
+      (do
+        let xs ← T.axes.mapM (fun a => match vals.lookup a.name with
+          | some v => .ok v
+          | none => .error Codes.lookupAxisNameMismatch)
+        let r ← lookupValue T s xs
+        return Val.num r) := by
+  rw [eval, hp]
+  simp only [bind, Except.bind, hvals]
+
+theorem searchsorted_fin_map (x : ℝ) (l : List ℝ) :
+    searchsorted (Num.fin x) (l.map Num.fin) = l.findIdx (fun m => decide (x ≤ m)) + 1 := by
+  simp only [searchsorted, List.findIdx_map]
+  rfl
+
+theorem map_re_fin (r : List ℝ) : (r.map Num.fin).map Num.re = r := by
+  induction r with
+  | nil => rfl
+  | cons a r ih => simp only [List.map_cons, Num.re, ih]
+
+/-- The lowered `nearest` tree evaluates to the model's `nearest`. -/
+theorem eval_nearest_lowered (tables : List (String × FTable)) (env : String → Num)
+    (v : List Num) (r0 : List ℝ) (hpw : r0.Pairwise (· < ·)) (hlen : 2 ≤ r0.length)
+    (hv : v.length = r0.length) (xe : Expr) (x0 : Num)
+    (hx : eval tables env xe = .ok (.num x0)) :
+    eval tables env (.index [.const (ofVec v),
+      .fn "interp.searchsorted" [xe, .const (ofVec (mids (r0.map Num.fin)))]]) =
+      .ok (.num (nearest v (r0.map Num.fin) x0)) := by
+  have hc : eval tables env (.const (ofVec v)) = .ok (.arr (ofVec v)) := by
+    rw [eval]; exact fun _ h => by cases h
+  rw [eval, evalIndex, hc, eval, evalFn]
+  rw [mids_map]
+  simp only [ofVec, argOf, argOfNested]
+  rw [show Nested.node (((midsR r0).map Num.fin).map Nested.leaf) =
+      ofVec ((midsR r0).map Num.fin) from rfl, toVec_ofVec,
+    validateSearchsorted_eq _ (midsR_pairwise r0 hpw)]
+  simp only [bind, Except.bind, hx, Val.asNum, pure, Except.pure]
+  -- the index
+  have hk : ∀ k : ℕ, 1 ≤ k → k ≤ v.length →
+      indexVal (.arr (.node (v.map Nested.leaf))) (.num (.fin (k : ℝ))) =
+        .ok (.num (v.getD (k - 1) .nan)) := by
+    intro k hk1 hk2
+    have hlt : k - 1 < v.length := by omega
+    have hlt' : k - 1 < (v.map Nested.leaf).length := by simpa using hlt
+    simp only [indexVal, Nat.floor_natCast, List.length_map, hk1, hk2, and_self,
+      ↓reduceIte, List.getD_eq_getElem _ _ hlt', List.getElem_map, List.getD_eq_getElem _ _ hlt]
+  cases x0 with
+  | fin x =>
+    rw [searchsorted_fin_map]
+    have hb := List.findIdx_le_length (p := fun m => decide (x ≤ m)) (xs := midsR r0)
+    rw [length_midsR] at hb
+    rw [hk _ (by omega) (by omega)]
+    simp only [nearest, map_re_fin, Nat.add_sub_cancel, findIdx_midsR r0 hpw (by omega) x]
+  | nan =>
+    rw [searchsorted_nan, List.length_map, length_midsR]
+    rw [hk _ (by omega) (by omega)]
+    simp only [nearest, List.length_map]
+    rw [show r0.length - 1 + 1 - 1 = r0.length - 1 by omega]
+
+/-- §9.5 / §9.5.3: for `out_of_bounds: "clamp"`, evaluating the lowered tree
+equals evaluating the `table_lookup` node, for every interpolation method,
+whenever the lookup lowers (every load-time check passed) and its axis inputs
+evaluate to scalars. -/
+theorem lower_eval (tables : List (String × FTable)) (env : String → Num) (tid : String)
+    (axes : List (String × Expr)) (out : Option OutSel) (args : List Expr) (e : Expr)
+    (hl : lower tables tid axes out args = .ok e)
+    (hin : ∀ p ∈ axes, ∃ v, eval tables env p.2 = .ok (.num v))
+    (hclamp : ∀ T, tables.lookup tid = some T → T.outOfBounds = .clamp) :
+    eval tables env e = eval tables env (.lookup tid axes out args) := by
+  unfold lower at hl
+  cases hp : prepLookup tables tid (axes.map Prod.fst) out args with
+  | error c => rw [hp] at hl; cases hl
+  | ok Ts =>
+    obtain ⟨T, s⟩ := Ts
+    rw [hp] at hl
+    simp only [bind, Except.bind] at hl
+    obtain ⟨hargs, hT, hv, hkeys, o, ho, hs⟩ := prepLookup_ok hp
+    have hoob := hclamp T hT
+    have hax := validateTable_axes hv
+    have har := validateTable_arity hv
+    have hsh := slice_shape hv ho
+    rw [← hs] at hsh
+    obtain ⟨vals, hvals, hlk⟩ := evalAxes_ok tables env axes hin
+    rw [eval_lookup_prep hp hvals]
+    have hinp := fun a (ha : a ∈ T.axes) => axis_input hkeys hlk ha
+    unfold lookupValue
+    rw [hoob]
+    simp only [reduceCtorEq, decide_false, Bool.false_and, Bool.false_eq_true, ↓reduceIte]
+    cases hm : T.interpolation <;> rw [hm] at hl har <;>
+      rcases hA : T.axes with _ | ⟨a0, _ | ⟨a1, _ | ⟨a2, rest⟩⟩⟩ <;>
+      rw [hA] at hl har <;> simp [FTable.arityOk] at har <;> simp only [pure, Except.pure] at hl <;>
+      cases hl
+    · -- linear
+      have ha0 := hax a0 (by rw [hA]; simp)
+      obtain ⟨r0, hr0, hpw0, hlen0⟩ := ha0
+      obtain ⟨v0, hv0, hvl0⟩ := hinp a0 (by rw [hA]; simp)
+      rw [FTable.axesShape, hA] at hsh
+      obtain ⟨v, rfl, hvlen⟩ := hasShape_one hsh
+      replace hvlen : v.length = r0.length := by simpa [hr0] using hvlen
+      rw [hr0]
+      simp only [List.mapM_cons, List.mapM_nil, hvl0, bind, Except.bind, pure, Except.pure,
+        toVec_ofVec]
+      rw [eval, evalFn]
+      simp only [argOf, argOfNested_ofVec, validateLinear_eq v r0 (by simpa using hvlen) hlen0 hpw0,
+        bind, Except.bind, hv0, Val.asNum, pure, Except.pure]
+      rw [hr0]
+    · -- bilinear
+      obtain ⟨r0, hr0, hpw0, hlen0⟩ := hax a0 (by rw [hA]; simp)
+      obtain ⟨r1, hr1, hpw1, hlen1⟩ := hax a1 (by rw [hA]; simp)
+      obtain ⟨v0, hv0, hvl0⟩ := hinp a0 (by rw [hA]; simp)
+      obtain ⟨v1, hv1, hvl1⟩ := hinp a1 (by rw [hA]; simp)
+      rw [FTable.axesShape, hA] at hsh
+      obtain ⟨M, rfl, hMlen, hMrow⟩ := hasShape_two hsh
+      obtain ⟨row, M', rfl⟩ : ∃ row M', M = row :: M' := by
+        cases M with
+        | nil => simp [hr0] at hMlen; omega
+        | cons row M' => exact ⟨row, M', rfl⟩
+      simp only [List.mapM_cons, List.mapM_nil, hvl0, hvl1, bind, Except.bind, pure, Except.pure,
+        toMat_ofMat]
+      rw [eval, evalFn]
+      replace hMlen : (row :: M').length = r0.length := by simpa [hr0] using hMlen
+      replace hMrow : ∀ x ∈ row :: M', x.length = r1.length := by simpa [hr1] using hMrow
+      rw [hr0, hr1]
+      simp only [argOf, argOfNested_ofMat, argOfNested_ofVec,
+        validateBilinear_eq (row :: M') r0 r1 (by simpa using hMlen) (by simpa using hMrow)
+          hlen0 hlen1 hpw0 hpw1,
+        bind, Except.bind, hv0, hv1, Val.asNum, pure, Except.pure]
+    · -- nearest
+      obtain ⟨r0, hr0, hpw0, hlen0⟩ := hax a0 (by rw [hA]; simp)
+      obtain ⟨v0, hv0, hvl0⟩ := hinp a0 (by rw [hA]; simp)
+      rw [FTable.axesShape, hA] at hsh
+      obtain ⟨v, rfl, hvlen⟩ := hasShape_one hsh
+      replace hvlen : v.length = r0.length := by simpa [hr0] using hvlen
+      rw [hr0]
+      simp only [List.mapM_cons, List.mapM_nil, hvl0, bind, Except.bind, pure, Except.pure,
+        toVec_ofVec]
+      rw [hr0]
+      exact eval_nearest_lowered tables env v r0 hpw0 hlen0 (by simpa using hvlen) _ v0 hv0
+
 end
 
 end Esm.Closed.Tables
