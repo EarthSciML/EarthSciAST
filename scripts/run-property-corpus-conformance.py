@@ -81,6 +81,7 @@ from conformance_lib import (  # noqa: E402 — needs the sys.path bootstrap abo
     NOT_CONFIGURED,
     OPTIONAL_BINDINGS,
     AdapterHarness,
+    optional_exclusion,
 )
 
 # Optional participants (`lean`, the executable Lean model of the spec in
@@ -481,7 +482,7 @@ def main() -> int:
             if binding.optional:
                 # Named, never required: reported, and kept out of `skipped`
                 # so `--require-all-bindings` does not count it.
-                optional_exclusions.append({"binding": binding.name, "reason": binding.skip_reason})
+                optional_exclusions.append(optional_exclusion(binding.name, binding.skip_reason))
                 print(
                     f"[skip] {binding.name}: optional participant, unrequired "
                     f"({binding.skip_reason})",
@@ -498,9 +499,12 @@ def main() -> int:
             print(f"[fail] {binding.name}: {exc}", file=sys.stderr)
             return 1
 
-    if len(outputs) < 2:
+    # Optional participants (`lean`) do not count toward the minimum: one binding
+    # checked against the Lean model alone is not a cross-binding comparison.
+    if len([b for b in outputs if b not in OPTIONAL_BINDINGS]) < 2:
         print(
-            f"error: need at least 2 available bindings (got {list(outputs)}); skipped: {skipped}",
+            f"error: need at least 2 available bindings, optional participants not "
+            f"counted (got {list(outputs)}); skipped: {skipped}",
             file=sys.stderr,
         )
         return 1

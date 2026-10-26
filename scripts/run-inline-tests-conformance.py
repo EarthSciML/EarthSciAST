@@ -52,9 +52,11 @@ The Lean model of the spec (formal/) is an OPTIONAL participant, ``lean``:
 ``$EARTHSCI_INLINE_TESTS_ADAPTER_LEAN`` (or ``earthsci-inline-tests-adapter-lean``
 on PATH) enrolls it, and a default run (no ``--bindings``) always includes it.
 Unconfigured, it is reported as a named, unrequired exclusion and never fails
-the run; configured, it is gated exactly like a binding, and its per-fixture
-refusals are ledgered under ``named_exclusions`` like any other. A manifest
-cannot list it in ``bindings_required``, and it never mints a golden.
+the run; configured, it is gated exactly like a REQUIRED binding (an adapter
+that crashes, times out or answers ``unavailable`` fails the run), and its
+per-fixture refusals are ledgered under ``named_exclusions`` like any other. A
+manifest cannot list it in ``bindings_required`` or in a fixture's ``required``
+ledger, and it never mints a golden.
 
 Usage:
     python3 scripts/run-inline-tests-conformance.py \\
@@ -100,6 +102,7 @@ from conformance_lib import (  # noqa: E402 — needs the sys.path bootstrap abo
     _eprint,
     build_parser,
     optional_exclusions,
+    gated_as_required,
     optional_participant_controls,
     with_optional_bindings,
     write_report,
@@ -267,7 +270,9 @@ def _validate_ledgers(path: Path, fid: str, fx: dict, bindings_required: list) -
                 f"an empty list is how a fixture says 'no compiler of this binding runs it'"
             )
     for b, compilers in req.items():
-        if b not in ALL_BINDINGS:
+        if b not in KNOWN_BINDINGS:
+            # Not ALL_BINDINGS: an optional participant (`lean`) is never
+            # required, so naming it here would be a ledger nothing enforces.
             raise ManifestError(f"{path}: fixtures[{fid}].required names unknown binding {b!r}")
         if not isinstance(compilers, list):
             raise ManifestError(f"{path}: fixtures[{fid}].required[{b}] must be an array")
@@ -799,7 +804,15 @@ def run_suite(
     overall_ok = True
     for b in bindings:
         b_report, exclusions = gate_binding(
-            b, adapters[b], fixtures, goldens, authored, rtol, atol, compiler, b in required
+            b,
+            adapters[b],
+            fixtures,
+            goldens,
+            authored,
+            rtol,
+            atol,
+            compiler,
+            gated_as_required(b, required, adapters[b]),
         )
         report["bindings"][b] = b_report
         report["named_exclusions"].extend(exclusions)
@@ -824,8 +837,9 @@ def gate_binding(
     required: bool,
 ) -> tuple[dict, list[dict]]:
     """Gate one binding's whole adapter answer: its report entry, and the named
-    exclusions it recorded. `required` is whether the manifest lists the binding
-    in `bindings_required`."""
+    exclusions it recorded. `required` is whether a broken adapter fails the run:
+    the manifest lists the binding in `bindings_required`, or it is a configured
+    optional participant (`conformance_lib.gated_as_required`)."""
     b_report: dict[str, Any] = {
         "adapter_status": ar.get("adapter_status"),
         "error": ar.get("error"),
@@ -1408,24 +1422,43 @@ def _optional_participant_controls(
     fixtures = [fx]
     goldens = {fx["id"]: golden}
     authored_by_id = {fx["id"]: authored}
+    required = set(manifest["bindings_required"])
     absent = InlineTestsHarness("native").missing_record("lean")
     r, _ = gate_binding(
-        "lean", absent, fixtures, goldens, authored_by_id, rtol, atol, "native", False
+        "lean",
+        absent,
+        fixtures,
+        goldens,
+        authored_by_id,
+        rtol,
+        atol,
+        "native",
+        gated_as_required("lean", required, absent),
     )
     check(
         absent["adapter_status"] == NOT_CONFIGURED and r["status"] == "skipped",
         "optional/unconfigured-lean-is-skipped",
         f"an unconfigured lean gated as {r['status']} ({absent['adapter_status']})",
     )
-    empty = {"adapter_status": "ok", "fixtures": {}}
-    r, _ = gate_binding(
-        "lean", empty, fixtures, goldens, authored_by_id, rtol, atol, "native", False
-    )
-    check(
-        r["status"] == "fail",
-        "optional/configured-lean-is-gated",
-        f"a configured lean that answered nothing gated as {r['status']}",
-    )
+    for status in ("ok", "no_output", "timeout", "invalid_output", "unavailable"):
+        broken = {"adapter_status": status, "error": status, "fixtures": {}}
+        r, _ = gate_binding(
+            "lean",
+            broken,
+            fixtures,
+            goldens,
+            authored_by_id,
+            rtol,
+            atol,
+            "native",
+            gated_as_required("lean", required, broken),
+        )
+        check(
+            r["status"] == "fail",
+            f"optional/configured-lean-is-gated/{status}",
+            f"a configured lean whose adapter answered {status!r} with no fixtures "
+            f"gated as {r['status']}",
+        )
     import argparse
     import contextlib
     import io
@@ -1435,20 +1468,37 @@ def _optional_participant_controls(
             argparse.Namespace(write_golden=True, bindings="lean", compiler=REFERENCE_COMPILER)
         )
     check(rc == 2, "optional/lean-cannot-mint-goldens", f"--write-golden from lean exited {rc}")
+
+    def rejected(variant: dict) -> bool:
+        with tempfile.TemporaryDirectory(prefix="inline-tests-optional-") as d:
+            mp = Path(d) / "manifest.json"
+            mp.write_text(json.dumps(variant))
+            try:
+                load_manifest(mp)
+                return False
+            except ManifestError:
+                return True
+
+    # The unmodified manifest must load from the temp dir, or the two controls
+    # below would pass for a reason that has nothing to do with lean.
+    check(
+        not rejected(manifest),
+        "optional/control-baseline-loads",
+        "the unmodified manifest was rejected when loaded from a temp dir",
+    )
     requiring = copy.deepcopy(manifest)
     requiring["bindings_required"] = [*manifest["bindings_required"], "lean"]
-    with tempfile.TemporaryDirectory(prefix="inline-tests-optional-") as d:
-        mp = Path(d) / "manifest.json"
-        mp.write_text(json.dumps(requiring))
-        try:
-            load_manifest(mp)
-            rejected = False
-        except ManifestError:
-            rejected = True
     check(
-        rejected,
+        rejected(requiring),
         "optional/lean-cannot-be-required",
         "a manifest with lean in bindings_required was accepted",
+    )
+    ledgered = copy.deepcopy(manifest)
+    ledgered["fixtures"][0]["required"]["lean"] = [REFERENCE_COMPILER]
+    check(
+        rejected(ledgered),
+        "optional/lean-cannot-be-required-per-fixture",
+        "a fixture whose required ledger names lean was accepted",
     )
 
 

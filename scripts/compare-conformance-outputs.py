@@ -59,7 +59,8 @@ OPTIONAL PARTICIPANTS
 a `--languages` binding whenever `<output-dir>/lean/results.json` exists. When
 it does not, it is listed under `optional_exclusions` in the analysis and on the
 console, and the run's verdict is unchanged. `--optional-languages` (no value)
-turns this off; naming `lean` in `--languages` makes its results required.
+turns this off; naming `lean` in `--languages` makes its results required. It
+never counts toward the minimum of two bindings a comparison needs.
 """
 
 from __future__ import annotations
@@ -71,13 +72,17 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
+# conformance_lib lives next to this script; put scripts/ on sys.path first.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from conformance_lib import OPTIONAL_BINDINGS, optional_exclusion  # noqa: E402
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 EXPECTED_ERRORS = REPO_ROOT / "tests" / "invalid" / "expected_errors.json"
 
 # Participants compared when their results exist and otherwise reported as a
 # named, unrequired exclusion. `lean` is the executable Lean model of the spec
-# (formal/README.md); see conformance_lib.OPTIONAL_BINDINGS.
-OPTIONAL_LANGUAGES = ("lean",)
+# (formal/README.md).
+OPTIONAL_LANGUAGES = OPTIONAL_BINDINGS
 
 
 class Failure:
@@ -658,21 +663,28 @@ def main() -> int:
             results[language] = payload
             print(f"✓ Loaded results for {language}")
 
-    optional_exclusions: list[dict[str, str]] = []
+    optional_exclusions: list[dict[str, Any]] = []
     for language in args.optional_languages:
         if language in args.languages:
             continue  # asked for by name: required, handled above
         payload = load_language_results(output_dir, language)
         if payload is None:
             reason = f"no {output_dir / language / 'results.json'}"
-            optional_exclusions.append({"language": language, "reason": reason})
+            optional_exclusions.append(optional_exclusion(language, reason))
             print(f"- Optional participant {language}: not configured (unrequired) — {reason}")
         else:
             results[language] = payload
             print(f"✓ Loaded results for {language} (optional participant)")
 
-    if len(results) < 2:
-        print("Error: need at least 2 language implementations to compare", file=sys.stderr)
+    # Only bindings count toward the minimum: one binding checked against the
+    # Lean model alone is not a cross-binding comparison.
+    bindings_loaded = [lang for lang in results if lang not in OPTIONAL_LANGUAGES]
+    if len(bindings_loaded) < 2:
+        print(
+            "Error: need at least 2 language implementations to compare "
+            f"(optional participants do not count; got {bindings_loaded})",
+            file=sys.stderr,
+        )
         return 1
 
     print(

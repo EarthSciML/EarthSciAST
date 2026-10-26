@@ -62,12 +62,14 @@ KNOWN_BINDINGS = ("julia", "rust", "python", "typescript", "go")
 # `esm-lean` adapter. An optional participant is in every default run; when its
 # adapter is not configured it is reported as a named, unrequired exclusion
 # (adapter_status `not_configured`) and never fails the run, and when it is
-# configured it is gated exactly like a binding. It never mints a golden, and a
-# manifest cannot list it in `bindings_required` (that would be a ruling, not a
-# runner change).
+# configured it is gated exactly like a REQUIRED binding: a crash, timeout or
+# missing answer fails the run (`gated_as_required`). It never mints a golden,
+# never counts toward a cross-binding comparison's minimum of two bindings, and
+# a manifest cannot list it in `bindings_required` or a per-fixture `required`
+# ledger (that would be a ruling, not a runner change).
 OPTIONAL_BINDINGS = ("lean",)
 
-# Every name a runner accepts on `--bindings` and in per-fixture ledgers.
+# Every name a runner accepts on `--bindings` and in `named_exclusions` ledgers.
 ALL_BINDINGS = KNOWN_BINDINGS + OPTIONAL_BINDINGS
 
 # The adapter_status of an optional participant whose adapter is not configured.
@@ -81,11 +83,26 @@ def with_optional_bindings(bindings: list[str]) -> list[str]:
     return [*bindings, *(b for b in OPTIONAL_BINDINGS if b not in bindings)]
 
 
+def gated_as_required(binding: str, required: set[str] | list[str], ar: dict) -> bool:
+    """Whether a broken adapter for ``binding`` fails the run: the manifest
+    requires it, or it is an optional participant that was configured (any
+    adapter_status but ``not_configured``). Enrolling an adapter asks for it to
+    be checked."""
+    if binding in required:
+        return True
+    return binding in OPTIONAL_BINDINGS and ar.get("adapter_status") != NOT_CONFIGURED
+
+
+def optional_exclusion(binding: str, reason: str | None) -> dict:
+    """One named, unrequired exclusion, in the shape every runner reports."""
+    return {"binding": binding, "adapter_status": NOT_CONFIGURED, "reason": reason}
+
+
 def optional_exclusions(adapters: dict[str, dict]) -> list[dict]:
     """The named, unrequired exclusions: one entry per optional participant
     whose adapter is not configured. Runners put this list in their report."""
     return [
-        {"binding": b, "adapter_status": NOT_CONFIGURED, "reason": ar.get("error")}
+        optional_exclusion(b, ar.get("error"))
         for b, ar in adapters.items()
         if b in OPTIONAL_BINDINGS and ar.get("adapter_status") == NOT_CONFIGURED
     ]
@@ -369,8 +386,8 @@ def run_producer_suite(
     Discovers + runs every requested binding's adapter, then gates each one:
 
       * an adapter that did not run OK is a hard ``fail`` when the binding is
-        ``required`` (which also sinks ``overall_ok``) and a ``skipped``
-        otherwise; its stderr tail is attached when ``attach_stderr`` (the PDE
+        ``required`` or a configured optional participant (``gated_as_required``;
+        either also sinks ``overall_ok``) and a ``skipped`` otherwise; its stderr tail is attached when ``attach_stderr`` (the PDE
         runner keeps it, the others never did);
       * otherwise every fixture is compared via ``compare_fixture(binding, fx,
         produced)`` — a runner-supplied callable returning the per-fixture report
@@ -409,8 +426,9 @@ def run_producer_suite(
         if ar.get("adapter_status") != "ok":
             if attach_stderr and ar.get("stderr"):
                 b_report["stderr"] = ar["stderr"]
-            b_report["status"] = "fail" if b in required else "skipped"
-            if b in required:
+            must = gated_as_required(b, required, ar)
+            b_report["status"] = "fail" if must else "skipped"
+            if must:
                 overall_ok = False
             report["bindings"][b] = b_report
             continue
@@ -451,19 +469,33 @@ def optional_participant_controls(slug: str) -> list[tuple[bool, str, str]]:
     """Negative controls for the optional-participant contract, as
     ``(ok, label, detail)`` triples a runner's ``--self-test`` reports.
 
-    Asserts, with no adapter run: an unconfigured optional participant is
+    Asserts, with no real adapter run: an unconfigured optional participant is
     ``not_configured`` (and a missing REQUIRED-able binding is still
-    ``missing``); the default binding list carries it; a producer run in which it
-    is the only participant and unconfigured is green and names it as an
-    exclusion; and a manifest that REQUIRES it is a config error."""
+    ``missing``); the default binding list carries it; a producer run in which a
+    required binding answers and it is unconfigured is green (status ``ok``, not
+    the ``no_producers`` escape) and names it as an exclusion; a run in which it
+    is configured but its adapter crashed is red; and a manifest that REQUIRES it
+    is a config error."""
 
-    class _Unconfigured(AdapterHarness):
+    class _Scripted(AdapterHarness):
+        """Answers every adapter call from ``records`` instead of a subprocess;
+        a binding absent from ``records`` is unconfigured."""
+
+        def __init__(self, records: dict[str, dict]) -> None:
+            super().__init__(slug)
+            self.records = records
+
         def discover(self, binding: str) -> list[str] | None:
-            return None
+            return ["<scripted>"] if binding in self.records else None
 
-    harness = _Unconfigured(slug)
+        def run(self, binding, argv, manifest_path, timeout):  # noqa: ANN001
+            return {"binding": binding, **self.records[binding]}
+
+    answered = {"adapter_status": "ok", "fixtures": {"x": {}}}
+    crashed = {"adapter_status": "no_output", "error": "adapter wrote no output", "fixtures": {}}
+    unconfigured = _Scripted({})
     out: list[tuple[bool, str, str]] = []
-    lean, julia = (harness.missing_record(b)["adapter_status"] for b in ("lean", "julia"))
+    lean, julia = (unconfigured.missing_record(b)["adapter_status"] for b in ("lean", "julia"))
     out.append(
         (
             lean == NOT_CONFIGURED and julia == "missing",
@@ -484,31 +516,45 @@ def optional_participant_controls(slug: str) -> list[tuple[bool, str, str]]:
 
     with tempfile.TemporaryDirectory(prefix=f"{slug}-optional-") as d:
         report_path = Path(d) / "report.json"
-        common = dict(
-            harness=harness,
-            bindings=list(OPTIONAL_BINDINGS),
-            fixtures=[{"id": "x"}],
-            manifest_path=Path("<self-test>"),
-            output_path=report_path,
-            timeout=None,
-            compare_fixture=lambda b, fx, produced: {"status": "ok"},
-            print_report=lambda r: None,
-            no_producers_message="",
-        )
-        with contextlib.redirect_stdout(io.StringIO()):
-            rc = run_producer_suite(required=set(), **common)
-        report = json.loads(report_path.read_text())
+
+        def suite(harness: AdapterHarness, required: set) -> tuple[int, dict]:
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc = run_producer_suite(
+                    harness=harness,
+                    bindings=with_optional_bindings(["julia"]),
+                    required=required,
+                    fixtures=[{"id": "x"}],
+                    manifest_path=Path("<self-test>"),
+                    output_path=report_path,
+                    timeout=None,
+                    compare_fixture=lambda b, fx, produced: {"status": "ok"},
+                    print_report=lambda r: None,
+                    no_producers_message="",
+                )
+            return rc, json.loads(report_path.read_text())
+
+        rc, report = suite(_Scripted({"julia": answered}), {"julia"})
         named = [e["binding"] for e in report.get("optional_exclusions", [])]
         out.append(
             (
-                rc == 0 and named == list(OPTIONAL_BINDINGS),
+                rc == 0 and report["status"] == "ok" and named == list(OPTIONAL_BINDINGS),
                 "optional/unconfigured-is-a-named-green-exclusion",
-                f"exit {rc}, named exclusions {named}",
+                f"exit {rc}, status {report['status']!r}, named exclusions {named}",
+            )
+        )
+        rc, report = suite(
+            _Scripted({"julia": answered, **{b: crashed for b in OPTIONAL_BINDINGS}}), {"julia"}
+        )
+        statuses = {b: report["bindings"][b]["status"] for b in OPTIONAL_BINDINGS}
+        out.append(
+            (
+                rc == 1 and set(statuses.values()) == {"fail"},
+                "optional/configured-and-crashed-fails",
+                f"exit {rc}, optional participants gated as {statuses}",
             )
         )
         try:
-            with contextlib.redirect_stdout(io.StringIO()):
-                run_producer_suite(required=set(OPTIONAL_BINDINGS), **common)
+            suite(unconfigured, set(OPTIONAL_BINDINGS))
             rejected = False
         except ManifestError:
             rejected = True
