@@ -163,12 +163,14 @@ def bilinear (T : List (List α)) (ax ay : List α) (x y : α) : α :=
 
 /-! ## Load-time validation -/
 
-/-- A `fn` argument as the loader sees it: a `const`-op array of rank 1 or 2,
-a `const` scalar, or anything else (a variable, a non-`const` expression). -/
+/-- A `fn` argument as the loader sees it: a `const` scalar, a `const`-op
+array of rank 1 or 2, a `const` of any other nesting, or anything else (a
+variable, a non-`const` expression). -/
 inductive Arg (α : Type) where
   | const0 (v : α)
   | const1 (v : List α)
   | const2 (v : List (List α))
+  | constN
   | other
 
 /-- Every adjacent pair satisfies `r`. -/
