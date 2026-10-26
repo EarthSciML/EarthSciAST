@@ -509,8 +509,7 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
     end
 
     @testset "template sub-kernels (`_NK_SUBCALL`)" begin
-        fix = joinpath(TESTUTILS_REPO_ROOT, "tests", "bench",
-                       "transport_3axis_7cubed_fullrank.esm")
+        fix = fullrank_per_cell_fixture()
         @test isfile(fix)
         flat = ESM_DE.flatten(ESM_DE.load_path(fix))
         fo, u0, p, _, _ = EarthSciAST._build_evaluator(flat; form = :oop)
@@ -672,9 +671,10 @@ _de_halo_build(doc, ics; form = :oop, batch = true) =
 
         # And the two read forms are the SAME PROGRAM numerically. A 3-axis
         # stencil over 343 cells is the shape that shatters: its reads span two
-        # producers and run two to four positions at a time.
-        fix = joinpath(TESTUTILS_REPO_ROOT, "tests", "bench",
-                       "transport_3axis_7cubed_fullrank.esm")
+        # producers and run two to four positions at a time. (Spelled per cell,
+        # so the cross product of its three derivatives' regions stays one
+        # stencil rather than three lifted observeds.)
+        fix = fullrank_per_cell_fixture()
         @test isfile(fix)
         flat = ESM_DE.flatten(ESM_DE.load_path(fix))
         fo, u0, p, _, _ = EarthSciAST._build_evaluator(flat; form = :oop)

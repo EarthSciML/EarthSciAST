@@ -10,11 +10,8 @@
 # `compiler=:interpreter` builds. Drives
 # tests/bench/transport_3axis_7cubed_fullrank.esm (the 5×5×5-cross-product
 # fixture the tier collapses to 5+5+5) plus inline mini-fixtures for nested
-# references and the missing-registry guard. The fixture spells its right-hand
-# side over whole arrays, so the build lifts each derivative's `makearray` into
-# its own observed (tree_walk/hoist.jl) and no cross product reaches the affine
-# tier; the tier's gates read the same equation spelled per cell, whose
-# `index(D(q), i, j, k)` operands are not lifted.
+# references and the missing-registry guard. The tier's gates read the
+# fixture spelled per cell (`fullrank_per_cell_fixture`, testutils.jl).
 
 using Test
 using JSON3
@@ -29,26 +26,6 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
 
 @testset "compile-once template tier" begin
     bench(parts...) = joinpath(TESTUTILS_REPO_ROOT, "tests", "bench", parts...)
-
-    # The full-rank fixture with its equation spelled per cell,
-    # `D(q[i,j,k]) = -(D_x(q)[i,j,k] + D_y(q)[i,j,k] + D_z(q)[i,j,k])`, written
-    # to a file the loader reads.
-    function per_cell_spelling(fix::AbstractString)
-        doc = JSON3.read(read(fix, String), Dict{String,Any})
-        ix(e) = Dict("op" => "index", "args" => Any[e, "i", "j", "k"])
-        D(w) = Dict("op" => "D", "args" => Any["q"], "wrt" => w)
-        faq(e) = Dict("op" => "faq", "args" => Any[], "output_idx" => Any["i", "j", "k"],
-                      "ranges" => Dict("i" => Dict("from" => "x"), "j" => Dict("from" => "y"),
-                                       "k" => Dict("from" => "z")),
-                      "expr" => e)
-        doc["models"]["Transport"]["equations"] = Any[Dict(
-            "lhs" => faq(Dict("op" => "D", "args" => Any[ix("q")], "wrt" => "t")),
-            "rhs" => faq(Dict("op" => "-", "args" => Any[Dict("op" => "+",
-                "args" => Any[ix(D("x")), ix(D("y")), ix(D("z"))])])))]
-        path = joinpath(mktempdir(), "transport_3axis_7cubed_fullrank_per_cell.esm")
-        open(io -> JSON3.write(io, doc), path, "w")
-        return path
-    end
 
     # Deterministic non-trivial state + a couple of (u, t) probes.
     probe_states(n) = (
@@ -84,7 +61,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
 
     @testset "gate 3: bit-identity on the full-rank cross-product fixture" begin
         WHOLE = bench("transport_3axis_7cubed_fullrank.esm")
-        FIX = per_cell_spelling(WHOLE)
+        FIX = fullrank_per_cell_fixture()
 
         # Both spellings, lifted or not, are the same right-hand side.
         lifted, _, _ = build_and_probe(WHOLE)
@@ -123,7 +100,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
         # this fixture DOES carry sub-kernels and EVERY acc plan is vectorizable,
         # which is the property a compiled backend needs — the emitter refuses a
         # per-cell fallback kernel outright.
-        FIX = per_cell_spelling(bench("transport_3axis_7cubed_fullrank.esm"))
+        FIX = fullrank_per_cell_fixture()
         flat = flatten(load_path(FIX))
         fo, u0, p, _, _ = EarthSciAST._build_evaluator(flat; form=:oop)
         # `fo` is the `_OopRHS` wrapper; the compiled IR — and its lane plans —

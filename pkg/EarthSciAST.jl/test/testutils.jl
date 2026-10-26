@@ -159,4 +159,28 @@ function harness_u0(doc)
     return out
 end
 
+# tests/bench/transport_3axis_7cubed_fullrank.esm with its equation spelled per
+# cell, `D(q[i,j,k]) = -(D_x(q)[i,j,k] + D_y(q)[i,j,k] + D_z(q)[i,j,k])`,
+# written to a temporary file. The fixture's whole-array spelling has its three
+# derivative `makearray`s lifted into observeds (tree_walk/hoist.jl), so no
+# cross product of their regions reaches the compile-once template tier; this
+# spelling's `index` operands are not lifted, so it still does.
+function fullrank_per_cell_fixture()
+    fix = joinpath(TESTUTILS_REPO_ROOT, "tests", "bench", "transport_3axis_7cubed_fullrank.esm")
+    doc = JSON3.read(read(fix, String), Dict{String,Any})
+    ix(e) = Dict("op" => "index", "args" => Any[e, "i", "j", "k"])
+    D(w) = Dict("op" => "D", "args" => Any["q"], "wrt" => w)
+    faq(e) = Dict("op" => "faq", "args" => Any[], "output_idx" => Any["i", "j", "k"],
+                  "ranges" => Dict("i" => Dict("from" => "x"), "j" => Dict("from" => "y"),
+                                   "k" => Dict("from" => "z")),
+                  "expr" => e)
+    doc["models"]["Transport"]["equations"] = Any[Dict(
+        "lhs" => faq(Dict("op" => "D", "args" => Any[ix("q")], "wrt" => "t")),
+        "rhs" => faq(Dict("op" => "-", "args" => Any[Dict("op" => "+",
+            "args" => Any[ix(D("x")), ix(D("y")), ix(D("z"))])])))]
+    path = joinpath(mktempdir(), "transport_3axis_7cubed_fullrank_per_cell.esm")
+    open(io -> JSON3.write(io, doc), path, "w")
+    return path
+end
+
 end # ESM_TESTUTILS_LOADED guard
