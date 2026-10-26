@@ -8,4 +8,4 @@
  * hosts — so the value is mirrored, and `version.test.ts` fails the build if
  * the mirror drifts. Same arrangement Rust uses for its `SCHEMA_VERSION`.
  */
-export const LIBRARY_VERSION = '0.4.0'
+export const LIBRARY_VERSION = '0.5.0'
