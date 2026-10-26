@@ -536,11 +536,11 @@
     {
       "id": "spec.9.2.datetime-exact-integer",
       "section": "9.2",
-      "quote": "Bindings MUST use exact integer arithmetic on the decomposed `(date, time-of-day)` pair after a single floor-divmod by 86400",
+      "quote": "Bindings MUST use exact integer arithmetic on the decomposed `(date, time-of-day)` pair after a single floor-divmod by 86400: the day number is `floor(t_utc / 86400)` and the time of day is `t_utc − 86400·floor(t_utc / 86400)`, both taken exactly (as real numbers, not as rounded binary64 operations), so the time of day lies in `[0, 86400)`. `hour`, `minute` and `second` come from `floor(time of day)`",
       "class": "semantic",
       "phase": 1,
       "area": "closed_functions",
-      "note": "datetime.* fields equal the proleptic-Gregorian decomposition of day = floor(t/86400), tod = t mod 86400 (floored), with exact integer outputs.",
+      "note": "datetime.* fields equal the proleptic-Gregorian decomposition of day = floor(t/86400), tod = t - 86400*floor(t/86400) in [0, 86400) (exact reals), with hour/minute/second from floor(tod) and exact integer outputs (ruling Q-3).",
       "concern": "t_utc is a binary64 that need not be an integer, so time-of-day is not an integer and 'exact integer arithmetic' does not say how second/minute treat fractions; floor(t/86400) computed as a rounded binary64 division can be off by one for t just below a multiple of 86400, making the floor-divmod pair inconsistent; and julian_day involves a divide and an add (two roundings), so the '<= 1 ulp' guarantee does not follow."
     },
     {
