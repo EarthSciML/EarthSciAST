@@ -10,7 +10,8 @@
 # `compiler=:interpreter` builds. Drives
 # tests/bench/transport_3axis_7cubed_fullrank.esm (the 5×5×5-cross-product
 # fixture the tier collapses to 5+5+5) plus inline mini-fixtures for nested
-# references and the missing-registry guard.
+# references and the missing-registry guard. The tier's gates read the
+# fixture spelled per cell (`fullrank_per_cell_fixture`, testutils.jl).
 
 using Test
 using JSON3
@@ -59,9 +60,17 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
     end
 
     @testset "gate 3: bit-identity on the full-rank cross-product fixture" begin
-        FIX = bench("transport_3axis_7cubed_fullrank.esm")
+        WHOLE = bench("transport_3axis_7cubed_fullrank.esm")
+        FIX = fullrank_per_cell_fixture()
 
+        # Both spellings, lifted or not, are the same right-hand side.
+        lifted, _, _ = build_and_probe(WHOLE)
+        lifted_percell, _, _ = build_and_probe(WHOLE; compiler=:interpreter)
         fast, u0, cfast = build_and_probe(FIX)
+        for k in 1:3
+            @test lifted[k] == fast[k]
+            @test lifted[k] == lifted_percell[k]
+        end
         atload, _, catload = build_and_probe(FIX; atload=true)
         percell, _, _ = build_and_probe(FIX; compiler=:interpreter)
 
@@ -91,7 +100,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (also lets this file run standalo
         # this fixture DOES carry sub-kernels and EVERY acc plan is vectorizable,
         # which is the property a compiled backend needs — the emitter refuses a
         # per-cell fallback kernel outright.
-        FIX = bench("transport_3axis_7cubed_fullrank.esm")
+        FIX = fullrank_per_cell_fixture()
         flat = flatten(load_path(FIX))
         fo, u0, p, _, _ = EarthSciAST._build_evaluator(flat; form=:oop)
         # `fo` is the `_OopRHS` wrapper; the compiled IR — and its lane plans —

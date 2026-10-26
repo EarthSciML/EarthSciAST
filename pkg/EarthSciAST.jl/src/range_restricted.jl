@@ -149,6 +149,10 @@ struct RhsProgram{F}
     layout::TileLayout
     maps::_CopyMaps
     shared::_RhsShared
+    memo::_ProgramMemo              # what its re-lowerings reuse from its build
+    # The layout, copy maps and workspace factory of its decomposed form
+    # (`_decomposed_form`), for `rhs!` to read without a dynamic lookup.
+    form::Base.RefValue{Union{Nothing,Tuple{TileLayout,_CopyMaps,_RhsShared}}}
 end
 
 """
@@ -357,12 +361,20 @@ _range_fill_equations(::_RangeSpec, name, def, dims, box) =
     _materialized_fill_equations(name, def, dims)
 _range_front_door_done(::_RangeSpec, file, model_name, kwd) = nothing
 _range_build_epoch(::_RangeSpec, epoch) = nothing
+_range_shared_code(::_RangeSpec) = false
+_range_affine_view(::_RangeSpec, var, clipped, var_map, avi, xeq) = nothing
+_range_fixed_ident(::_RangeSpec, acc, i) = nothing
+_range_memo(::_RangeSpec) = nothing
+_range_memo_records(::_RangeSpec) = false
 
 # A whole-domain program build: records the front door's product, so a
 # restriction re-lowers from it.
 struct _CaptureSpec <: _RangeSpec
     front::Base.RefValue{Any}
+    memo::_ProgramMemo
 end
+_range_memo(s::_CaptureSpec) = s.memo
+_range_memo_records(::_CaptureSpec) = true
 function _range_front_door_done(s::_CaptureSpec, file, model_name, kwd)
     s.front[] = (file, model_name, Dict{Symbol,Any}(kwd))
     return nothing
@@ -391,10 +403,11 @@ end
 # own copy of the buffer registry (`pa`, returned).
 function _program_build(seed, doc::Dict{String,Any})
     front = Ref{Any}(nothing)
+    memo = _ProgramMemo()
     pa = Dict{String,Any}(String(k) => v for (k, v) in seed.param_arrays)
     cap = _WsCapture()
     f!, _u0, p, _ts, var_map = _with_ws_capture(cap) do
-        _with_range_spec(_CaptureSpec(front)) do
+        _with_range_spec(_CaptureSpec(front, memo)) do
             _build_evaluator(doc; compiler = seed.compiler, form = :inplace,
                 model_name = seed.model_name, parameter_overrides = seed.overrides,
                 const_arrays = seed.const_arrays, param_arrays = pa,
@@ -403,7 +416,7 @@ function _program_build(seed, doc::Dict{String,Any})
                 _live_fed_parameters = true)
         end
     end
-    return f!, var_map, front[], p, pa, cap
+    return f!, var_map, front[], p, pa, cap, memo
 end
 
 # The parameter and forcing-slot signatures of a program built from `seed`
@@ -585,7 +598,7 @@ function _whole_program(seed, flat::FlattenedSystem, W::Set{String}, R::Set{Stri
     live = union(W, R)
     init2 = (init === nothing || isempty(init)) ? Equation[] : _select_init(init, live)
     doc = _flat_run_doc(_scalar_slots_to_arrays(flat), seed.coordinates, seed.solver, init2)
-    f!, internal, front, p, pa, cap = _program_build(seed, doc)
+    f!, internal, front, p, pa, cap, memo = _program_build(seed, doc)
     present = Set{String}(vcat(collect(_layout_scalar_names(internal)),
                                [b.name for b in _layout_blocks(internal)]))
     unames = _flat_order(internal, [n for n in W if n in present])
@@ -601,7 +614,8 @@ function _whole_program(seed, flat::FlattenedSystem, W::Set{String}, R::Set{Stri
                       internal, shapes, layout, maps,
                       parent === nothing ?
                           _program_shared(seed, p, pa, f!, length(internal), cap) :
-                          _derived_shared(parent, f!, length(internal), cap, pa))
+                          _derived_shared(parent, f!, length(internal), cap, pa),
+                      memo, Ref{Union{Nothing,Tuple{TileLayout,_CopyMaps,_RhsShared}}}(nothing))
 end
 
 """
@@ -702,8 +716,59 @@ program): a private instance of its compiled right-hand side — its own caches,
 scratch and forcing buffers; the generated code and every read-only table are
 the program's. One per concurrent caller; a workspace may move between threads
 but serves one call at a time.
+
+A workspace of a whole-domain program made after the program was decomposed
+([`halo`](@ref) or [`restrict`](@ref)) evaluates it through the code its tiles
+share (the program's tile over its whole domain), so the program and its tiles
+compile one right-hand side; the values are the same.
 """
-rhs_workspace(x::Union{RhsProgram,TileProgram}) = _instantiate(x.shared)
+rhs_workspace(x::TileProgram) = _instantiate(x.shared)
+function rhs_workspace(x::RhsProgram)
+    alt = _decomposed_form(x)
+    return _instantiate(alt === nothing ? x.shared : alt.shared)
+end
+
+# Record that `op` was asked about decomposition `dec` (the first one counts).
+function _note_decomposition!(op::RhsProgram, dec::Decomposition)
+    memo = op.memo
+    lock(() -> (memo.dec[] === nothing && (memo.dec[] = dec)), memo.lock)
+    return nothing
+end
+
+# The tile of a decomposed program `op` over its whole domain, under the first
+# decomposition it was asked about, when that tile shares its code with the
+# other tiles and lays `u` and `aux` out as `op` does; else `nothing`. Built
+# once, when a workspace first asks for it. A whole-domain tile stores no
+# cell past the domain, so its storage crosses no seam.
+function _decomposed_form(op::RhsProgram)
+    memo = op.memo
+    lock(memo.lock) do
+        memo.form[] === missing || return memo.form[]
+        dec = memo.dec[]
+        dec === nothing && return nothing
+        memo.form[] = nothing
+        m = _axis_model(op, dec)
+        dom = [a => 1:n for (a, n) in m.N]
+        alt = try
+            restrict(op, dec; owned = dom, storage = dom)
+        catch err
+            err isa EarthSciASTError || rethrow()
+            nothing
+        end
+        alt === nothing || _same_layout(alt.layout, op.layout) || (alt = nothing)
+        memo.form[] = alt
+        alt === nothing || (op.form[] = (alt.layout, alt.maps, alt.shared))
+        return alt
+    end
+end
+
+_same_layout(a::TileLayout, b::TileLayout) =
+    a.n_u == b.n_u && a.n_aux == b.n_aux && _same_blocks(a.u, b.u) && _same_blocks(a.aux, b.aux)
+_same_blocks(a, b) =
+    length(a) == length(b) &&
+    all(((x, y),) -> x.name == y.name && x.sets == y.sets && x.storage == y.storage &&
+                     x.owned == y.owned && x.base == y.base && x.strides == y.strides,
+        zip(a, b))
 
 """
     rhs!(du, x, ws, u, aux, p, t, fs::ForcingSet) -> du
@@ -722,17 +787,29 @@ next call recomputes everything the failed one may have half written.
 """
 function rhs!(du::AbstractVector, x::Union{RhsProgram,TileProgram}, ws::RhsWorkspace,
               u::AbstractVector, aux::AbstractVector, p, t, fs::ForcingSet)
-    _check_workspace(x.shared, ws)
-    L = x.layout
+    if x isa RhsProgram && ws.shared !== x.shared
+        # A workspace of the program's decomposed form (`rhs_workspace`), set
+        # before the workspace was made.
+        alt = x.form[]
+        if alt !== nothing && ws.shared === alt[3]
+            return _rhs_eval!(du, alt[1], alt[2], alt[3], ws, u, aux, p, t, fs)
+        end
+    end
+    return _rhs_eval!(du, x.layout, x.maps, x.shared, ws, u, aux, p, t, fs)
+end
+
+function _rhs_eval!(du::AbstractVector, L::TileLayout, m::_CopyMaps, shared::_RhsShared,
+                    ws::RhsWorkspace, u::AbstractVector, aux::AbstractVector, p, t,
+                    fs::ForcingSet)
+    _check_workspace(shared, ws)
     length(u) == L.n_u || throw(DimensionMismatch(
         "rhs!: `u` has $(length(u)) elements; the layout has $(L.n_u)"))
     length(aux) == L.n_aux || throw(DimensionMismatch(
         "rhs!: `aux` has $(length(aux)) elements; the layout has $(L.n_aux)"))
     length(du) == L.n_u || throw(DimensionMismatch(
         "rhs!: `du` has $(length(du)) elements; the layout has $(L.n_u)"))
-    _check_parameters(x.shared, p, "rhs!")
+    _check_parameters(shared, p, "rhs!")
     _prime!(ws, fs)
-    m = x.maps
     U = ws.u
     @inbounds for k in eachindex(m.u_src)
         U[m.u_dst[k]] = u[m.u_src[k]]
@@ -1604,11 +1681,97 @@ mutable struct _TileSpec <: _RangeSpec
     # The far-side blocks of states read past a seam: block name → (state,
     # the dimensions on which it holds the far piece).
     aliases::Dict{String,Tuple{String,Vector{Bool}}}
+    # Sharing code across tiles (range_hooks.jl, "Tiles that share their
+    # code"): each clipped equation's whole-domain ranges, keyed by its output
+    # variable and its clipped ranges (both over the loop subscripts of the
+    # output, in subscript order); each array variable's whole-domain extents;
+    # the views made so far, per layout, and their bounds tables, per layout
+    # and build table; the affine tier's stores, per build store; and the
+    # cell each moved fixed slot reads, per descriptor table
+    # (`_range_real_fixed!`).
+    sranges::Dict{Tuple{String,Vector{Tuple{Int,Int}}},Vector{UnitRange{Int}}}
+    whole::Dict{String,Tuple{Vector{Int},Vector{Int}}}
+    views::IdDict{Any,Any}
+    xeqs::IdDict{Any,Any}
+    fixed::IdDict{Any,Dict{Int,Any}}
+    memo::Union{Nothing,_ProgramMemo}          # the program's (`_ProgramMemo`)
 end
 
-_TileSpec(mode, axes, owned, storage, shapes, writes, ctx) =
+_TileSpec(mode, axes, owned, storage, shapes, writes, ctx, memo = nothing) =
     _TileSpec(mode, axes, owned, storage, shapes, writes, ctx,
-              Dict{String,Tuple{String,Vector{Bool}}}())
+              Dict{String,Tuple{String,Vector{Bool}}}(),
+              Dict{Tuple{String,Vector{Tuple{Int,Int}}},Vector{UnitRange{Int}}}(),
+              Dict{String,Tuple{Vector{Int},Vector{Int}}}(), IdDict{Any,Any}(),
+              IdDict{Any,Any}(), IdDict{Any,Dict{Int,Any}}(), memo)
+
+# Whether a tile shares its code with the operator's other tiles: always, but
+# for one whose storage crosses a periodic seam (its far-side blocks have no
+# counterpart in another tile's layout).
+_tile_shares_code(spec::_TileSpec) =
+    spec.mode === :tile && spec.ctx !== nothing && isempty(spec.ctx.seams)
+_range_shared_code(spec::_TileSpec) = _tile_shares_code(spec)
+_range_memo(spec::_TileSpec) = spec.memo
+
+function _range_fixed_ident(spec::_TileSpec, acc, i)
+    d = get(spec.fixed, acc, nothing)
+    return d === nothing ? nothing : get(d, i, nothing)
+end
+
+function _range_affine_view(spec::_TileSpec, var, clipped, var_map, avi, xeq)
+    _tile_shares_code(spec) || return nothing
+    var_map isa StateLayout || return nothing
+    sr = get(spec.sranges, (String(var), _range_key(clipped)), nothing)
+    sr === nothing && return nothing
+    vm, shift, done = get!(spec.views, var_map) do
+        V, sh = _range_virtual_layout(var_map, spec.whole)
+        (_RangeVMap(V, Dict{Int,String}()), sh, IdDict{Any,Nothing}())
+    end
+    # Every array variable's bounds, the whole-domain extents of those the
+    # tile cuts: made once per layout and bounds table, which a build fixes
+    # before it lowers its first equation.
+    wa = get!(spec.views, (var_map, avi)) do
+        w = Dict{String,Tuple{Vector{Int},Vector{Int}}}(avi)
+        for (n, e) in spec.whole
+            haskey(w, n) && (w[n] = e)
+        end
+        w
+    end
+    store = xeq === nothing ? nothing : get!(() -> _XEqStore(), spec.xeqs, xeq)
+    return _RangeAffineView(vm, wa, shift, var_map, store, done, spec.fixed), sr
+end
+
+# Record the whole-domain ranges of a clipped equation (`clipped` and `whole`
+# over the loop subscripts of `var`, in subscript order).
+function _record_sranges!(spec::_TileSpec, var::String, clipped, whole)
+    spec.sranges[(var, _range_key(clipped))] = UnitRange{Int}[whole...]
+    return nothing
+end
+
+# Ranges as their end points: every empty range is `==` every other, and two
+# empty clips of different regions must stay apart.
+_range_key(rs) = Tuple{Int,Int}[(first(r), last(r)) for r in rs]
+
+# The loop-subscript ranges of a `faq` left-hand side `L` writing `var`, in
+# subscript order, as unit ranges (`nothing` when one is not a single run).
+function _lhs_loop_ranges(ctx::_NeedCtx, L::OpExpr)
+    inner = (L.expr_body::OpExpr).args[1]
+    (inner isa OpExpr && (inner::OpExpr).op == "index") || return nothing
+    rd = _ranges_dict(L)
+    out = UnitRange{Int}[]
+    for a in (inner::OpExpr).args[2:end]
+        (a isa VarExpr && haskey(rd, (a::VarExpr).name)) || continue
+        r = rd[(a::VarExpr).name]
+        (r isa AbstractVector && length(r) == 2) || return nothing
+        lo, hi = r
+        if !(lo isa Integer && hi isa Integer)
+            c = _range_cells(ctx, r)
+            length(c.ivs) == 1 || return nothing
+            lo, hi = minimum(c), maximum(c)
+        end
+        push!(out, Int(lo):Int(hi))
+    end
+    return out
+end
 
 struct _HaloDone <: EarthSciASTError
     ctx::_NeedCtx
@@ -1707,8 +1870,25 @@ function _clip_rhs_ranges(rhs::ASTExpr, louts::Vector{String}, clips::AbstractDi
     return reconstruct(R; ranges = rr)
 end
 
+# Whether a tile build shares its code with the operator's other tiles
+# (`_tile_shares_code`).
+_ctx_shares_code(ctx::_NeedCtx) = ctx.mode === :tile && isempty(ctx.seams)
+
+# Set loop variable `x`'s range in `newr` to the empty `[lo, lo - 1]`, `lo` the
+# first cell of its range `rd[x]`; false when that range has no cell.
+function _range_none!(ctx::_NeedCtx, newr, rd, x::String)
+    c = _range_cells(ctx, rd[x])
+    isempty(c) && return false
+    lo = minimum(c)
+    newr[x] = Any[lo, lo - 1]
+    return true
+end
+
 # Walk one `D` equation; return it clipped to the owned box (tile mode), or
-# `nothing` when the tile owns none of its cells.
+# `nothing` when the tile owns none of its cells. A tile that shares its code
+# keeps a `faq` equation it owns no cell of, over an empty range along a loop
+# variable (`[lo, lo - 1]`, `lo` the first cell of the variable's range), so
+# it lowers the equation as every other tile does, with no cell to run.
 function _need_root!(ctx::_NeedCtx, eq::Equation, rule::String)
     lhs = eq.lhs
     if lhs isa OpExpr && _is_faq_op((lhs::OpExpr).op)
@@ -1723,11 +1903,21 @@ function _need_root!(ctx::_NeedCtx, eq::Equation, rule::String)
         env = Dict{String,_Bind}()
         anchors = Dict{String,String}()
         newr = Dict{String,Any}(String(k) => r for (k, r) in rd)
+        # Whether the tile runs none of the equation's cells (a subscript
+        # misses the owned box) and keeps it all the same.
+        keep = _ctx_shares_code(ctx)
+        none = false
+        loops = String[]
         for (d, a) in enumerate(args)
             if a isa VarExpr && haskey(rd, (a::VarExpr).name)
                 x = (a::VarExpr).name
+                push!(loops, x)
                 cells, axis = _output_cells(ctx, v, d, rd[x])
-                isempty(cells) && return nothing
+                if isempty(cells)
+                    (keep && _range_none!(ctx, newr, rd, x)) || return nothing
+                    none = true
+                    continue
+                end
                 env[x] = isempty(axis) ? _Bind(cells) : _Bind(cells, axis, 0, 0, false, false)
                 isempty(axis) || (anchors[axis] = x)
                 if !isempty(axis) && ctx.mode === :tile
@@ -1745,15 +1935,26 @@ function _need_root!(ctx::_NeedCtx, eq::Equation, rule::String)
                         "`$(format_expression(a, :ascii))` is neither a loop index nor a constant")
                 end
                 cells, axis = _output_cells(ctx, v, d, Any[g, g])
-                isempty(cells) && return nothing
+                if isempty(cells)
+                    keep || return nothing
+                    none = true
+                end
             end
         end
+        # A constant subscript off the owned box runs no cell through an empty
+        # loop variable.
+        if none && !any(x -> isempty(_range_cells(ctx, newr[x])), loops)
+            (!isempty(loops) && _range_none!(ctx, newr, rd, first(loops))) || return nothing
+        end
         rhs = eq.rhs
-        if rhs isa OpExpr && _is_faq_op((rhs::OpExpr).op) &&
-           length(_output_idx_strings(rhs::OpExpr)) == length(outs)
-            _need_index!(ctx, rhs, ASTExpr[VarExpr(x) for x in outs], env, anchors, rule)
-        else
-            _need_walk!(ctx, rhs, env, anchors, rule)
+        # (An equation kept over no cells reads nothing.)
+        if !none
+            if rhs isa OpExpr && _is_faq_op((rhs::OpExpr).op) &&
+               length(_output_idx_strings(rhs::OpExpr)) == length(outs)
+                _need_index!(ctx, rhs, ASTExpr[VarExpr(x) for x in outs], env, anchors, rule)
+            else
+                _need_walk!(ctx, rhs, env, anchors, rule)
+            end
         end
         ctx.mode === :tile || return eq
         newlhs = reconstruct(L; ranges = newr)
@@ -1801,7 +2002,14 @@ function _range_restrict_parts(spec::_TileSpec, model, cls, parts, index_sets,
             continue
         end
         e2 = _need_root!(ctx, eq, tgt)
-        e2 === nothing || push!(eqs, e2)
+        e2 === nothing && continue
+        push!(eqs, e2)
+        if spec.mode === :tile && e2.lhs isa OpExpr && _is_faq_op((e2.lhs::OpExpr).op)
+            w = _lhs_loop_ranges(ctx, eq.lhs::OpExpr)
+            c = _lhs_loop_ranges(ctx, e2.lhs::OpExpr)
+            (w === nothing || c === nothing || length(w) != length(c)) ||
+                _record_sranges!(spec, tgt, c, w)
+        end
     end
     _need_drain!(ctx)
     spec.mode === :halo && throw(_HaloDone(ctx))
@@ -1950,6 +2158,7 @@ function _range_state_boxes!(spec::_TileSpec, avi)
         sh = get(spec.shapes, n, nothing)
         sh === nothing && continue
         lo2, hi2 = copy(lo), copy(hi)
+        wlo, whi = copy(lo), copy(hi)
         for d in eachindex(sh)
             cut = get(spec.axes.cut, sh[d], nothing)
             cut === nothing && continue
@@ -1958,6 +2167,7 @@ function _range_state_boxes!(spec::_TileSpec, avi)
             Sf = face ? (first(S):(last(S) + 1)) : S
             dom = _axis_domain(spec.axes, axis, face)
             sm = get(seams, cut, nothing)
+            wlo[d], whi[d] = first(dom), last(dom)
             if sm !== nothing
                 lo2[d], hi2[d] = first(sm.near), last(sm.near)
             elseif spec.axes.period[axis] !== nothing && !issubset(Sf, dom)
@@ -1968,6 +2178,7 @@ function _range_state_boxes!(spec::_TileSpec, avi)
             end
         end
         avi[n] = (lo2, hi2)
+        spec.whole[n] = (wlo, whi)
     end
     for (a, (n, far)) in spec.aliases
         lo, hi = avi[n]
@@ -1985,6 +2196,7 @@ end
 function _range_observed_box(spec::_TileSpec, name, dims)
     need = get(spec.ctx.obs_need, name, nothing)
     need === nothing && return nothing
+    spec.whole[name] = (ones(Int, length(dims)), copy(dims))
     sh = spec.ctx.shapes[name]
     lo, hi = ones(Int, length(dims)), copy(dims)
     for d in eachindex(dims)
@@ -1992,6 +2204,15 @@ function _range_observed_box(spec::_TileSpec, name, dims)
         c = _obs_near_cells(spec.ctx, name, d, _iset_intersect(need[d].cells, 1:dims[d]))
         isempty(c) && return nothing
         lo[d], hi[d] = minimum(c), maximum(c)
+        if _tile_shares_code(spec)
+            # Laid out over the tile's storage, as a state on the same sets
+            # is, so a read of it keeps the constant offset from the cell
+            # written that it has in the whole-domain program.
+            axis, face = spec.axes.cut[sh[d]]
+            S = spec.storage[axis]
+            lo[d] = max(1, min(lo[d], first(S)))
+            hi[d] = min(dims[d], max(hi[d], last(S) + (face ? 1 : 0)))
+        end
     end
     return (lo, hi)
 end
@@ -2022,6 +2243,26 @@ function _range_fill_equations(spec::_TileSpec, name, def, dims, box)
             c = _iset_intersect(_obs_near_cells(spec.ctx, name, d,
                                                 _iset_intersect(need[d].cells, 1:dims[d])), span)
             push!(pieces, x => c.ivs)
+        end
+        # A tile that shares its code keeps every region, over the one run of
+        # cells it needs there or none, so its fills are lowered as every
+        # other tile's are.
+        if _tile_shares_code(spec) && all(p -> length(last(p)) <= 1, pieces)
+            r2 = copy(rd)
+            for (x, ivs) in pieces
+                lo = Int(rd[x][1])
+                r2[x] = isempty(ivs) ? Any[lo, lo - 1] : Any[first(ivs[1]), last(ivs[1])]
+            end
+            lhs = reconstruct(L; ranges = r2)
+            clips = Dict{String,Any}(first(p) => r2[first(p)] for p in pieces)
+            rhs = _clip_rhs_ranges(eq.rhs, _output_idx_strings(L), clips)
+            neq = Equation(lhs, rhs)
+            w = _lhs_loop_ranges(spec.ctx, L)
+            c = _lhs_loop_ranges(spec.ctx, lhs)
+            (w === nothing || c === nothing || length(w) != length(c)) ||
+                _record_sranges!(spec, name, c, w)
+            push!(out, neq)
+            continue
         end
         any(p -> isempty(last(p)), pieces) && continue
         for combo in Iterators.product((last(p) for p in pieces)...)
@@ -2059,8 +2300,9 @@ with `compiler = :native`.
 function halo(op::RhsProgram, dec::Decomposition)
     _require_native(op, "halo")
     m = _axis_model(op, dec)
+    _note_decomposition!(op, dec)
     spec = _TileSpec(:halo, m, Dict{String,UnitRange{Int}}(), Dict{String,UnitRange{Int}}(),
-                     _array_shapes(op), Set(op.writes), nothing)
+                     _array_shapes(op), Set(op.writes), nothing, op.memo)
     ctx = try
         _relower(op, spec)
         error("halo: the build did not reach the range seam")
@@ -2112,8 +2354,9 @@ function restrict(op::RhsProgram, dec::Decomposition; owned, storage)
             "the operator writes the 0-d state '$n', which no tile owns; a 0-d state " *
             "write has global locality (API_SPEC §5.8, decision 8)"))
     end
+    _note_decomposition!(op, dec)
     shapes = _array_shapes(op)
-    spec = _TileSpec(:tile, m, ow, st, shapes, Set(op.writes), nothing)
+    spec = _TileSpec(:tile, m, ow, st, shapes, Set(op.writes), nothing, op.memo)
     f!, internal, cap, pa = _relower(op, spec)
     # ---- the tile's layout and copy maps ----
     gb = Dict{String,Vector{UnitRange{Int}}}(

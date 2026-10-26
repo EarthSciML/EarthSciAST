@@ -72,6 +72,11 @@ function _lc_holds_license(x, seen = IdDict{Any,Nothing}(), depth = 0)
     return false
 end
 
+# The kernel section of an evaluator, through the wrapper of a build that
+# fills array observeds into buffers.
+_lc_section(f) = hasfield(typeof(f), :kernel_section) ? getfield(f, :kernel_section) :
+                 _lc_section(getfield(f, :f_state!))
+
 @testset "per-cell evaluation needs a license" begin
 
     @testset "no strict plan can make a license" begin
@@ -150,14 +155,14 @@ end
         lax = _LC._plan_with(_LC._compiler_plan(:native); strict = false, codegen = false)
         f_lax = first(_LC._build_evaluator(file; compiler = lax))
         f_nat = first(_LC._build_evaluator(file; compiler = :native))
-        sec = getfield(f_lax, :kernel_section)
+        sec = _lc_section(f_lax)
         @test sec.walk isa _LC._PerCellLicense && !isempty(sec.kernels)
         rebuild(walk) = _LC._KernelSection(sec.cgf, sec.cgtabs, sec.n_emitted, sec.kernels,
             sec.dualf, sec.dualtabs, sec.n_dual_emitted, sec.dual_resid, sec.f64cg,
             sec.tcache, sec.dual_tcache, sec.ntiles, walk)
         @test_throws ArgumentError rebuild(nothing)
         @test rebuild(sec.walk) isa _LC._KernelSection
-        nsec = getfield(f_nat, :kernel_section)
+        nsec = _lc_section(f_nat)
         @test typeof(nsec).parameters[end] === Nothing
         @test _lc_holds_license(f_lax)
         @test !_lc_holds_license(f_nat)

@@ -231,11 +231,123 @@ _hoist_filtered_producer(e::OpExpr) = _is_faq_op(e.op) && e.filter !== nothing &
     all(x -> (r = get(e.ranges, String(x), nothing); r isa IndexSetRef && isempty(r.of)),
         e.output_idx)
 
+# REGION-SPLIT OPERANDS of elementwise arithmetic are lifted too. A rule that
+# lowers a spatial `D` builds a `makearray` whose regions split the axis it
+# differentiates along (the interior stencil and its boundary faces, §9.6.8).
+# Two such operands combined elementwise,
+#
+#     D(mq) = -(D_lon(Mx·q) + D_lat(My·q))
+#
+# reach the affine tier as one expression cut by the product of their region
+# cuts: every box of the product lowers its own copy of both stencils. Lifted,
+# each `makearray` is its own observed `H` over the left-hand side's shape,
+# filled region by region once per call, and `D(mq) = -(H_lon + H_lat)` reads
+# the buffers. The fill evaluates each region value at exactly the cells it
+# covers in place, and the combination applies the same operators to the same
+# values in the same order, so every result is unchanged. A `makearray`
+# qualifies when it is reached through elementwise operators in eager
+# positions only and has at least two regions, one integer bound pair per
+# dimension of the left-hand side's declared shape inside that dimension's
+# interval set, and regions that together cover every cell (an uncovered cell
+# reads the `makearray` default in place). It is lifted only when the equation
+# combines at least two of them. Interning makes node identity the canonical
+# expression, so a term two equations share (`dev` reads `mq`'s two flux
+# divergences) is lifted once and read by both.
+
+# The qualifying `makearray` operands of `e` (see above) against the
+# left-hand side's dimension sizes `dims`.
+function _hoist_split_operands!(out::Vector{OpExpr}, e::ASTExpr, dims::Vector{Int},
+                                seen::IdDict{OpExpr,Nothing})
+    e isa OpExpr || return out
+    o = e::OpExpr
+    haskey(seen, o) && return out
+    seen[o] = nothing
+    if o.op == "makearray"
+        _hoist_split_qualifies(o, dims) && push!(out, o)
+        return out
+    end
+    _hoist_plain(o) || return out
+    eager = (o.op == "ifelse" || o.op == "and" || o.op == "or") ? 1 : length(o.args)
+    for j in 1:min(eager, length(o.args))
+        _hoist_split_operands!(out, o.args[j], dims, seen)
+    end
+    return out
+end
+
+function _hoist_split_qualifies(m::OpExpr, dims::Vector{Int})
+    regs = m.regions
+    (regs === nothing || m.values === nothing || length(regs) < 2 ||
+     length(m.values) != length(regs)) && return false
+    nd = length(dims)
+    for reg in regs
+        length(reg) == nd || return false
+        for d in 1:nd
+            b = reg[d]
+            (length(b) == 2 && b[1] isa Integer && b[2] isa Integer) || return false
+            (1 <= b[1] && b[2] <= dims[d] && b[2] >= b[1] - 1) || return false
+        end
+    end
+    return _hoist_regions_cover(regs, dims)
+end
+
+# Whether the regions cover every cell of the `dims` box. Each dimension is cut
+# at every region bound; a cell of the product of those cuts lies wholly inside
+# or wholly outside each region, so checking one corner per product cell is
+# exact, and the number of product cells depends on the regions, not the grid.
+function _hoist_regions_cover(regs, dims::Vector{Int})
+    nd = length(dims)
+    starts = Vector{Vector{Int}}(undef, nd)
+    for d in 1:nd
+        s = Set{Int}(1)
+        for reg in regs
+            lo, hi = Int(reg[d][1]), Int(reg[d][2])
+            hi >= lo || continue
+            push!(s, lo)
+            hi < dims[d] && push!(s, hi + 1)
+        end
+        starts[d] = sort!(collect(s))
+    end
+    for corner in Iterators.product(starts...)
+        any(reg -> all(d -> reg[d][1] <= corner[d] <= reg[d][2], 1:nd), regs) ||
+            return false
+    end
+    return true
+end
+
+function _hoist_lift_split(g::OpExpr, owner::String, shape::Vector{String}, hc::_HoistCtx)
+    key = (objectid(g), vcat(String["\0makearray"], shape))
+    hit = get(hc.memo, key, nothing)
+    hit === nothing || return hit
+    name = string(_HOIST_PREFIX, "m", length(hc.memo) + 1, '\0', owner)
+    hc.vars[name] = ModelVariable(UnknownVariable; shape=copy(shape))
+    push!(hc.eqs, Equation(VarExpr(name), g))
+    hc.owner[name] = owner
+    reader = VarExpr(name)
+    hc.memo[key] = reader
+    return reader
+end
+
+# The declared shape of the variable `owner` and each set's size, when every
+# set is an interval of known size.
+function _hoist_owner_dims(owner::String, hc::_HoistCtx, index_sets::AbstractDict)
+    v = get(hc.model_vars, owner, nothing)
+    (v isa ModelVariable && v.shape !== nothing && !isempty(v.shape)) || return nothing
+    shape = String[String(s) for s in v.shape]
+    dims = Int[]
+    for s in shape
+        is = get(index_sets, s, nothing)
+        (is isa IndexSet && is.kind == "interval" && is.size isa Integer) || return nothing
+        push!(dims, Int(is.size))
+    end
+    return shape, dims
+end
+
 # Memoized on node identity: this runs over every plain equation, and a body
 # that shares a subexpression (a doubling DAG of `n + n`) must be walked once
-# per distinct node, not once per path.
+# per distinct node, not once per path. `split`, when given, is the set of
+# region-split operands to lift and the left-hand side's shape.
 function _hoist_operand_walk(e::ASTExpr, owner::String, hc::_HoistCtx,
-                             memo::IdDict{OpExpr,ASTExpr})
+                             memo::IdDict{OpExpr,ASTExpr}, split=nothing)
     e isa OpExpr || return e
     o = e::OpExpr
     _hoist_plain(o) || return o
@@ -245,9 +357,13 @@ function _hoist_operand_walk(e::ASTExpr, owner::String, hc::_HoistCtx,
     new = o.args
     for j in 1:min(eager, length(o.args))
         a = o.args[j]
-        b = (a isa OpExpr && _hoist_filtered_producer(a::OpExpr)) ?
-            _hoist_lift_producer(a::OpExpr, owner, hc) :
-            _hoist_operand_walk(a, owner, hc, memo)
+        b = if split !== nothing && a isa OpExpr && haskey(split[1], a::OpExpr)
+            _hoist_lift_split(a::OpExpr, owner, split[2], hc)
+        elseif a isa OpExpr && _hoist_filtered_producer(a::OpExpr)
+            _hoist_lift_producer(a::OpExpr, owner, hc)
+        else
+            _hoist_operand_walk(a, owner, hc, memo, split)
+        end
         if b !== a
             new === o.args && (new = copy(o.args))
             new[j] = b
@@ -275,9 +391,10 @@ end
 # A compiler-report rule label with every lifted name replaced by the variable
 # whose equation it was lifted from (the name ends in it, after a NUL).
 _hoist_public_label(label::AbstractString) =
-    replace(replace(replace(label,
+    replace(replace(replace(replace(label,
                 r"\0hoist\0g\d+\0([^\0\[\]]*)" => s"\1 (hoisted gather)"),
                 r"\0hoist\0a\d+\0([^\0\[\]]*)" => s"\1 (hoisted aggregate)"),
+                r"\0hoist\0m\d+\0([^\0\[\]]*)" => s"\1 (hoisted region term)"),
             r"\0hoist\0\d+\0([^\0\[\]]*)" => s"\1 (hoisted reduction)")
 
 # The build's copy of `model` with every qualifying nested reduction lifted
@@ -296,7 +413,14 @@ function _hoist_nested_reductions(model::Model, index_sets::AbstractDict)
                                                      Set{String}(["t"]))))
             owner = eq.lhs isa VarExpr ? (eq.lhs::VarExpr).name :
                     isempty(names) ? "" : first(names)
-            new_rhs = _hoist_operand_walk(rhs, owner, hc, IdDict{OpExpr,ASTExpr}())
+            split = nothing
+            od = _hoist_owner_dims(owner, hc, index_sets)
+            if od !== nothing
+                ops = _hoist_split_operands!(OpExpr[], rhs, od[2], IdDict{OpExpr,Nothing}())
+                length(ops) >= 2 &&
+                    (split = (IdDict{OpExpr,Nothing}(o => nothing for o in ops), od[1]))
+            end
+            new_rhs = _hoist_operand_walk(rhs, owner, hc, IdDict{OpExpr,ASTExpr}(), split)
             new_rhs === rhs && continue
             eqs === model.equations && (eqs = copy(model.equations))
             eqs[i] = Equation(eq.lhs, new_rhs; _comment=eq._comment)

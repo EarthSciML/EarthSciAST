@@ -74,6 +74,108 @@ function _rrt_flux_doc(nx::Int)
                                Dict("lhs" => lhs, "rhs" => du)])))
 end
 
+# A 1-D diffusion on `nx` cells (zero ghosts) plus `Σ_k W[i,k]·k` over a
+# shaped parameter `W`: the sum reads only build-time data, so the affine tier
+# evaluates it into a per-box table of values.
+function _rrt_table_doc(nx::Int)
+    u(i) = Dict("op" => "index", "args" => Any["u", i])
+    add(a, b) = Dict("op" => "+", "args" => Any[a, b])
+    sub(a, b) = Dict("op" => "-", "args" => Any[a, b])
+    mul(a...) = Dict("op" => "*", "args" => Any[a...])
+    agg = Dict("op" => "faq", "args" => Any[], "output_idx" => Any[],
+               "ranges" => Dict("k" => Any[1, 3]),
+               "expr" => mul(Dict("op" => "index", "args" => Any["W", "i", "k"]), "k"))
+    faq(e) = Dict("op" => "faq", "args" => Any[], "output_idx" => Any["i"],
+                  "ranges" => Dict("i" => Dict("from" => "x")), "expr" => e)
+    lhs = faq(Dict("op" => "D", "args" => Any[u("i")], "wrt" => "t"))
+    rhs = faq(add(mul(0.25, add(u(sub("i", 1)), add(mul(-2, u("i")), u(add("i", 1))))), agg))
+    return Dict{String,Any}(
+        "esm" => "1.2.0",
+        "metadata" => Dict("name" => "rrt_table"),
+        "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => nx),
+                             "kk" => Dict("kind" => "interval", "size" => 3)),
+        "models" => Dict("Tbl" => Dict(
+            "variables" => Dict(
+                "u" => Dict("type" => "unknown", "shape" => ["x"], "default" => 1.0),
+                "W" => Dict("type" => "parameter", "shape" => ["x", "kk"],
+                            "default" => [[sin(1.7 * i * k) + 0.05 * i for k in 1:3]
+                                          for i in 1:nx])),
+            "equations" => Any[Dict("lhs" => lhs, "rhs" => rhs)])))
+end
+
+# A 1-D document whose tile build takes every path that could cost the whole
+# domain: clamped (not structurally affine) state and const subscripts, a
+# shaped parameter with an inline default, one with a scalar default, and a
+# const read out of range under a guard.
+function _rrt_paths_doc(nx::Int)
+    ix(v, a...) = Dict("op" => "index", "args" => Any[v, a...])
+    op(o, a...) = Dict("op" => o, "args" => Any[a...])
+    u(i) = ix("u", i)
+    agg = Dict("op" => "faq", "args" => Any[], "output_idx" => Any[],
+               "ranges" => Dict("k" => Any[1, 3]),
+               "expr" => op("*", ix("W", "i", "k"), "k"))
+    faq(e) = Dict("op" => "faq", "args" => Any[], "output_idx" => Any["i"],
+                  "ranges" => Dict("i" => Dict("from" => "x")), "expr" => e)
+    lap = op("+", u(op("max", op("-", "i", 1), 1)), op("*", -2, u("i")),
+             u(op("min", op("+", "i", 1), nx)))
+    rhs = faq(op("+", op("*", 0.25, lap), agg, ix("c", op("max", "i", 2)), ix("S", "i"),
+                 op("ifelse", op("<", "i", nx), ix("g", op("+", "i", 1)), 0)))
+    lhs = faq(Dict("op" => "D", "args" => Any[u("i")], "wrt" => "t"))
+    return Dict{String,Any}(
+        "esm" => "1.2.0",
+        "metadata" => Dict("name" => "rrt_paths"),
+        "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => nx),
+                             "kk" => Dict("kind" => "interval", "size" => 3)),
+        "models" => Dict("Paths" => Dict(
+            "variables" => Dict(
+                "u" => Dict("type" => "unknown", "shape" => ["x"], "default" => 1.0),
+                "W" => Dict("type" => "parameter", "shape" => ["x", "kk"],
+                            "default" => [[sin(1.7 * i * k) + 0.05 * i for k in 1:3]
+                                          for i in 1:nx]),
+                "c" => Dict("type" => "parameter", "shape" => ["x"],
+                            "default" => [cos(0.3 * i) for i in 1:nx]),
+                "g" => Dict("type" => "parameter", "shape" => ["x"],
+                            "default" => [0.01 * i for i in 1:nx]),
+                "S" => Dict("type" => "parameter", "shape" => ["x"], "default" => 2.0)),
+            "equations" => Any[Dict("lhs" => lhs, "rhs" => rhs)])))
+end
+
+# An outflow along x on an `nx × ny` grid as three equations, one per region
+# (the faces `i = 1` and `i = nx` and the interior), over the observed flux
+# `F[i,j] = u[i,j]/2 - u[i-1,j]/4` (a zero ghost at `i = 1`), which the build
+# materializes into a buffer of its own; the face `i = nx` also reads two fixed
+# cells, `u[1,1]·u[2,1]`. A tile that owns no cell of a face keeps that face's
+# equation over no cells.
+function _rrt_faces_doc(nx::Int, ny::Int)
+    ix(v, i) = Dict("op" => "index", "args" => Any[v, i, "j"])
+    fx(i) = Dict("op" => "index", "args" => Any["u", i, 1])
+    op(o, a...) = Dict("op" => o, "args" => Any[a...])
+    faq(lo, hi, e) = Dict("op" => "faq", "args" => Any[], "output_idx" => Any["i", "j"],
+                          "ranges" => Dict("i" => Any[lo, hi], "j" => Any[1, ny]), "expr" => e)
+    D(lo, hi) = faq(lo, hi, Dict("op" => "D", "args" => Any[ix("u", "i")], "wrt" => "t"))
+    F = Dict("op" => "faq", "args" => Any[], "output_idx" => Any["i", "j"],
+             "ranges" => Dict("i" => Dict("from" => "x"), "j" => Dict("from" => "y")),
+             "expr" => op("-", op("*", 0.5, ix("u", "i")),
+                          op("*", 0.25, ix("u", op("-", "i", 1)))))
+    return Dict{String,Any}(
+        "esm" => "1.2.0",
+        "metadata" => Dict("name" => "rrt_faces"),
+        "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => nx),
+                             "y" => Dict("kind" => "interval", "size" => ny)),
+        "models" => Dict("Faces" => Dict(
+            "variables" => Dict(
+                "u" => Dict("type" => "unknown", "shape" => ["x", "y"], "default" => 1.0),
+                "F" => Dict("type" => "unknown", "shape" => ["x", "y"])),
+            "equations" => Any[
+                Dict("lhs" => "F", "rhs" => F),
+                Dict("lhs" => D(1, 1),
+                     "rhs" => faq(1, 1, op("-", ix("F", op("+", "i", 1)), op("*", 2, ix("F", "i"))))),
+                Dict("lhs" => D(2, nx - 1),
+                     "rhs" => faq(2, nx - 1, op("-", ix("F", op("+", "i", 1)), ix("F", "i")))),
+                Dict("lhs" => D(nx, nx),
+                     "rhs" => faq(nx, nx, op("-", op("*", fx(1), fx(2)), ix("F", "i"))))])))
+end
+
 const _RRT_FIXTURES = joinpath(@__DIR__, "..", "..", "..", "tests", "conformance",
                                "range_restricted_rhs", "fixtures")
 
@@ -96,6 +198,68 @@ catch e
 end
 
 _rrt_allocated(du, x, ws, u, aux, p, fs) = @allocated rhs!(du, x, ws, u, aux, p, 0.0, fs)
+
+# The expressions of every generated function a program holds.
+function _rrt_generated(x, acc = Set{String}(), seen = Set{UInt}())
+    RGF = RRT.RuntimeGeneratedFunctions
+    x isa RGF.RuntimeGeneratedFunction && (push!(acc, string(RGF.get_expression(x))); return acc)
+    (x isa Module || x isa DataType || x isa String || x isa Symbol || isbits(x)) && return acc
+    objectid(x) in seen && return acc
+    push!(seen, objectid(x))
+    if x isa AbstractArray || x isa Tuple || x isa AbstractDict || x isa AbstractSet
+        foreach(v -> _rrt_generated(v, acc, seen), x isa AbstractDict ? values(x) : x)
+        return acc
+    end
+    for f in fieldnames(typeof(x))
+        isdefined(x, f) && _rrt_generated(getfield(x, f), acc, seen)
+    end
+    return acc
+end
+
+# How many numbers a program holds (its tables, its geometry, its constants).
+function _rrt_data(x, n = Ref(0), seen = IdDict{Any,Nothing}())
+    (x isa Module || x isa DataType || x isa String || x isa Symbol || isbits(x)) && return n[]
+    haskey(seen, x) && return n[]
+    seen[x] = nothing
+    if x isa AbstractArray && eltype(x) <: Number
+        n[] += length(x)
+    elseif x isa AbstractArray || x isa Tuple || x isa AbstractDict || x isa AbstractSet
+        foreach(v -> _rrt_data(v, n, seen), x isa AbstractDict ? values(x) : x)
+    else
+        for f in fieldnames(typeof(x))
+            isdefined(x, f) && _rrt_data(getfield(x, f), n, seen)
+        end
+    end
+    return n[]
+end
+
+# A tile of the program `prog` of a non-periodic 1-D document (or a 2-D one,
+# `ny` cells along its uncut y), owned `o` with storage `st` along x, checked
+# bitwise against `prog` at a state that depends only on the cell; returns the
+# tile's generated code.
+function _rrt_tile_code(prog, p, o, st; ny = nothing)
+    n = tile_layout(prog).n_u
+    nx = ny === nothing ? n : n ÷ ny
+    g(c) = ny === nothing ? c[1] : (c[2] - 1) * nx + c[1]
+    val(c) = 0.5 + g(c) / (n + 1)
+    box(r) = ny === nothing ? ("x" => r,) : ("x" => r, "y" => 1:ny)
+    tdec = Decomposition(axes = ny === nothing ? ["x" => (period = nothing,)] :
+                                ["x" => (period = nothing,), "y" => (period = nothing,)])
+    t = restrict(prog, tdec; owned = box(o), storage = box(st))
+    b = only(tile_layout(t).u)
+    uS = fill(NaN, tile_layout(t).n_u)
+    for c in CartesianIndices(Tuple(b.storage))
+        1 <= c[1] <= nx && (uS[RRT._tile_slot(b, Tuple(c))] = val(c))
+    end
+    duS = fill(NaN, length(uS))
+    rhs!(duS, t, rhs_workspace(t), uS, Float64[], p, 0.0, default_forcing_set(t))
+    uW = [val(Tuple(c)) for c in CartesianIndices(Tuple(only(tile_layout(prog).u).storage))]
+    W = fill(NaN, n)
+    rhs!(W, prog, rhs_workspace(prog), vec(uW), Float64[], p, 0.0, default_forcing_set(prog))
+    @test all(c -> _rrt_bits(duS[RRT._tile_slot(b, Tuple(c))]) == _rrt_bits(W[g(c)]),
+              CartesianIndices(Tuple(b.owned)))
+    return _rrt_generated(t.f!)
+end
 
 @testset "range_restricted_rhs" begin
     nx, ny = 10, 6
@@ -153,6 +317,98 @@ _rrt_allocated(du, x, ws, u, aux, p, fs) = @allocated rhs!(du, x, ws, u, aux, p,
             @test _rrt_allocated(duS, tile, ws, uS, noaux, prob.p, fs) == 0
         end
         @test all(==(1), seen)
+    end
+
+    @testset "tiles share their code" begin
+        # Tiles that own different region classes (the wrap columns at x = 1
+        # and x = nx are owned by neither) and whose storage stays off the
+        # seam emit the same code, and agree with the whole-domain program
+        # bitwise. The whole-domain program keeps the optimizations a sharing
+        # tile gives up: it emits what the Problem's own build emits.
+        @test _rrt_generated(prog.f!) == _rrt_generated(prob.f!)
+        codes = Set{String}[]
+        for (xo, yo) in ((2:4, 1:3), (5:9, 4:6), (3:3, 2:5))
+            xs, ys = (first(xo) - 1):(last(xo) + 1), (first(yo) - 1):(last(yo) + 1)
+            tile = restrict(prog, dec; owned = ("x" => xo, "y" => yo),
+                            storage = ("x" => xs, "y" => ys))
+            push!(codes, _rrt_generated(tile.f!))
+            b = only(tile_layout(tile).u)
+            uS = fill(NaN, tile_layout(tile).n_u)
+            for c in CartesianIndices(Tuple(b.storage))
+                1 <= c[2] <= ny || continue
+                uS[RRT._tile_slot(b, (c[1], c[2]))] = u[(c[2] - 1) * nx + c[1]]
+            end
+            duS = fill(NaN, length(uS))
+            rhs!(duS, tile, rhs_workspace(tile), uS, Float64[], prob.p, 0.0,
+                 default_forcing_set(tile))
+            for c in CartesianIndices(Tuple(b.owned))
+                @test _rrt_bits(duS[RRT._tile_slot(b, (c[1], c[2]))]) ==
+                      _rrt_bits(G[(c[2] - 1) * nx + c[1]])
+            end
+        end
+        @test !isempty(codes[1]) && all(==(codes[1]), codes)
+        # Once decomposed, the program evaluates a new workspace through the
+        # code its tiles share, to the same values, allocation-free.
+        alt = RRT._decomposed_form(prog)
+        @test alt isa RRT.TileProgram && _rrt_generated(alt.f!) == codes[1]
+        ws2 = rhs_workspace(prog)
+        du2 = fill(NaN, L.n_u)
+        rhs!(du2, prog, ws2, u, Float64[], prob.p, 0.0, fs)
+        @test _rrt_bits.(du2) == _rrt_bits.(G)
+        noaux = Float64[]
+        _rrt_allocated(du2, prog, ws2, u, noaux, prob.p, fs)
+        @test _rrt_allocated(du2, prog, ws2, u, noaux, prob.p, fs) == 0
+    end
+
+    @testset "a tile emits a box it runs no cell of as every tile does" begin
+        # Per-region equations (two faces and the interior) over a flux the
+        # build materializes into its own buffer: the second tile owns no cell
+        # of either face, so it keeps both face equations over no cells, and
+        # reads the flux buffer there as the tile that owns a face does. Its
+        # storage holds neither fixed cell `u[1,1]` nor `u[2,1]`, so both land
+        # on one slot of its block, yet stay two reads, as in the first tile,
+        # which stores them.
+        fprob = esm_problem(_rrt_faces_doc(10, 4), (0.0, 1.0))
+        fprog = rhs_program(fprob)
+        codes = [_rrt_tile_code(fprog, fprob.p, o, st; ny = 4)
+                 for (o, st) in ((1:3, 0:4), (4:7, 3:8))]
+        @test all(==(codes[1]), codes)
+    end
+
+    @testset "a tile's build does not grow with the domain" begin
+        # The per-box table of the tile's one owned box covers only the cells
+        # it runs, so a tile of the same cells holds the same data at every
+        # domain size, while the whole-domain program's grows with it; and it
+        # emits the same code at every domain size.
+        tdec = Decomposition(axes = ["x" => (period = nothing,)])
+        whole, tile, codes = Int[], Int[], Set{String}[]
+        for tx in (40, 400)
+            tprob = esm_problem(_rrt_table_doc(tx), (0.0, 1.0))
+            tprog = rhs_program(tprob)
+            t = restrict(tprog, tdec; owned = ("x" => 11:14,), storage = ("x" => 10:15,))
+            push!(codes, _rrt_tile_code(tprog, tprob.p, 11:14, 10:15))
+            push!(whole, _rrt_data(tprog.f!))
+            push!(tile, _rrt_data(t.f!))
+        end
+        @test whole[2] > whole[1] + 300
+        @test tile[2] == tile[1]
+        @test codes[2] == codes[1]
+        # Every step of a tile's build that could cost the whole domain: box
+        # checks of subscripts that are not structurally affine (a clamped
+        # state and const subscript), a const read out of range under a
+        # guard, and shaped parameters with an inline or a scalar default. A
+        # tile reuses what its program's build worked out, so what its build
+        # allocates grows by less than one number per added cell.
+        alloc = Int[]
+        for tx in (40, 1000)
+            tprob = esm_problem(_rrt_paths_doc(tx), (0.0, 1.0))
+            tprog = rhs_program(tprob)
+            tx == 40 ? _rrt_tile_code(tprog, tprob.p, 11:14, 10:15) :
+                restrict(tprog, tdec; owned = ("x" => 11:14,), storage = ("x" => 10:15,))
+            push!(alloc, @allocated restrict(tprog, tdec; owned = ("x" => 11:14,),
+                                             storage = ("x" => 10:15,)))
+        end
+        @test alloc[2] - alloc[1] < 8 * (1000 - 40)
     end
 
     @testset "refusals" begin

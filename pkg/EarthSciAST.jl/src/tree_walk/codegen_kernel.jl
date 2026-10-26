@@ -276,6 +276,14 @@ mutable struct _CGCtx
     # kernel `K`'s descriptor `ix` reads as the local `v` — or `(K, Dict(ix =>
     # v))` for several descriptors.
     subst::Any
+    # Shared invariant prologue (see `_cg_inv!`): the geometry local the
+    # prologue already holds for a (field, value) pair, the invariant local
+    # already holding an emitted invariant expression, and the keys of both in
+    # the order they were added, with the prologue length at that point, so a
+    # declined kernel's entries roll back with its statements.
+    progeo::Dict{Any,Symbol}
+    invmemo::Dict{Any,Symbol}
+    prolog::Vector{Tuple{Int,Bool,Any}}
 end
 _CGCtx(budget::Int, shared_cache::Union{Nothing,_CSECache}=nothing; nst::Int=0) =
     _CGCtx(DataType[], Vector{Any}[], IdDict{Any,Tuple{Int,Int}}(),
@@ -285,7 +293,8 @@ _CGCtx(budget::Int, shared_cache::Union{Nothing,_CSECache}=nothing; nst::Int=0) 
            Dict{String,Tuple{Symbol,Vector{Symbol}}}(), String[], false,
            Int[], Any[], IdDict{Any,Symbol}(), false, false, Symbol[], nothing,
            nst, IdDict{Any,Tuple{Int,Int}}(), IdDict{Any,Bool}(),
-           IdDict{Any,Tuple{Int,Int}}(), nothing)
+           IdDict{Any,Tuple{Int,Int}}(), nothing,
+           Dict{Any,Symbol}(), Dict{Any,Symbol}(), Tuple{Int,Bool,Any}[])
 
 _cg_helper_dedup_disabled() = !_compiler_plan_now().cg_helper_dedup
 
@@ -372,10 +381,22 @@ function _cg_geo!(ctx::_CGCtx, v::Int, key=nothing, unit::Bool=false)
         got = get(ctx.geomemo, key, nothing)
         got === nothing || return got
     end
+    # In the invariant prologue, one local per fixed read: the invariants of
+    # different kernels that read the same cell then emit the same expression,
+    # which `_cg_inv!` shares.
+    pkey = ctx.geosink === ctx.prologue ? _cg_fixed_read(key, v) : nothing
+    if pkey !== nothing
+        got = get(ctx.progeo, pkey, nothing)
+        got === nothing || return got
+    end
     push!(ctx.geo, v)
     s = _cg_name(ctx, "G")
     push!(ctx.geosink, :(local $s = $(_cg_tab!(ctx, ctx.geo))[$(length(ctx.geo))]))
     key === nothing || (ctx.geomemo[key] = s)
+    if pkey !== nothing
+        ctx.progeo[pkey] = s
+        push!(ctx.prolog, (length(ctx.prologue), false, pkey))
+    end
     return s
 end
 
@@ -531,6 +552,27 @@ function _cg_conn_mode(conn::Vector{Int})
     return any(iszero, conn) ? -1 : -2
 end
 
+# What a fixed read of value `v` under geometry key `key` reads, for the
+# invariant prologue to hold one local per read (`_cg_geo!`), or `nothing`
+# when the key is not a fixed descriptor's. A state slot names its cell, a
+# forcing index its element of that buffer, except where a tile build moved a
+# slot onto its own layout: a slot of a cell the tile does not store is
+# clamped into its variable's block, where it may meet another's, so the read
+# is named by the cell it had before (`_range_fixed_ident`).
+function _cg_fixed_read(key, v::Int)
+    (key isa Tuple && length(key) == 2 && last(key) === :idx) || return nothing
+    k1 = first(key)
+    (k1 isa Tuple && length(k1) == 2 && first(k1) isa Vector{_AccDesc}) || return nothing
+    acc, i = k1
+    a = acc[i]
+    if a.kind === _AK_STATE_FIXED
+        return (:state, _range_fixed_ident(_range_spec_now(), acc, i), v)
+    elseif a.kind === _AK_ARR_FIXED
+        return (:arr, objectid(a.arr), v)
+    end
+    return nothing
+end
+
 # ---- Two-buffer addressing ------------------------------------------------
 # A right-hand side with materialized array observeds runs on a slot space of
 # two buffers (`_ObsSplitVec`): the state, then the observed buffer. Where the
@@ -572,8 +614,15 @@ end
 _cg_slot_side(nst::Int, lo::Int, hi::Int) =
     nst <= 0 || lo > hi ? :x : (lo >= 1 && hi <= nst) ? :s : lo > nst ? :o : :x
 
-# The output-slot extent of a kernel's cells.
+# Whether a box's extent along `d` is emitted as the literal 1 of a boundary
+# slab. In a tile that shares its code it is run-time data, as every other
+# extent is: the tile may own none of the slab's cells.
+_cg_slab_literal(cs::_CellSet, d::Int) =
+    _cellset_slab(cs, d) && !_range_shared_code(_range_spec_now())
+
+# The output-slot extent of a kernel's cells (`(1, 0)` for none).
 function _cg_oln_extent(cs::_CellSet)
+    any(isempty, cs.ranges) && return (1, 0)
     _is_outs(cs) && return extrema(cs.outs)
     _is_contig(cs) && return (first(cs.ranges[1]), last(cs.ranges[1]))
     lo = hi = cs.base
@@ -585,9 +634,15 @@ function _cg_oln_extent(cs::_CellSet)
     end
     return (lo, hi)
 end
-_cg_oln_extent(Ks::AbstractVector{_AccKernel}) =
-    isempty(Ks) ? (1, 0) :
-    (minimum(K -> _cg_oln_extent(K.cells)[1], Ks), maximum(K -> _cg_oln_extent(K.cells)[2], Ks))
+function _cg_oln_extent(Ks::AbstractVector{_AccKernel})
+    lo, hi = typemax(Int), typemin(Int)
+    for K in Ks
+        a, b = _cg_oln_extent(K.cells)
+        a > b && continue
+        lo = min(lo, a); hi = max(hi, b)
+    end
+    return lo > hi ? (1, 0) : (lo, hi)
+end
 
 # Record that `K`'s loop nest binds `oln` over its own cells.
 function _cg_note_nest!(ctx::_CGCtx, K::_AccKernel)
@@ -613,7 +668,10 @@ function _cg_table_extent(ctx::_CGCtx, conn)
     return ext
 end
 
-# The buffer descriptor `a` reads in kernel context `kc`.
+# The buffer descriptor `a` reads in kernel context `kc`. A state-lane
+# descriptor of a tile that shares its code names a slot of the variable it
+# reads (`idx`, `_range_real_repls!`), whose buffer is the one every read of it
+# addresses, whatever cells the tile's box runs.
 function _cg_side(ctx::_CGCtx, kc::_CGKernCtx, a::_AccDesc)
     ctx.nst > 0 || return :x
     k = a.kind
@@ -621,8 +679,11 @@ function _cg_side(ctx::_CGCtx, kc::_CGKernCtx, a::_AccDesc)
         (kc.oln isa Symbol && !haskey(ctx.subks, kc.K)) || return :x
         e = get(ctx.olnext, kc.K, nothing)
         e === nothing && return :x
+        a.idx > 0 && return _cg_slot_side(ctx.nst, a.idx, a.idx)
         return _cg_slot_side(ctx.nst, e[1] + a.delta, e[2] + a.delta)
     elseif k === _AK_STATE_FIXED
+        return _cg_slot_side(ctx.nst, a.idx, a.idx)
+    elseif k === _AK_STATE_TBL_BOX && a.idx > 0
         return _cg_slot_side(ctx.nst, a.idx, a.idx)
     elseif k === _AK_STATE_INDIRECT || k === _AK_STATE_INDIRECT_COL ||
            k === _AK_STATE_TBL_BOX
@@ -1259,15 +1320,37 @@ function _cg_inv!(ctx::_CGCtx, K::_AccKernel)
     push!(ctx.invlog, K)
     # Geometry an invariant recipe reads (a fixed slot) is read into the
     # prologue too, just ahead of the statement that uses it.
+    # An invariant whose emitted expression is one the prologue already holds
+    # reuses that local: both read the same inputs (fixed slots, tabs,
+    # parameters, earlier invariants) through the same operations before any
+    # kernel runs, so they hold the same value. The template sub-kernels a
+    # region-split rule lowers per box repeat the same invariants box after box.
     _cg_with_geosink(ctx, ctx.prologue) do
         for r in K.cse.inv_recipes
             e = _cg_bound_body!(ctx, _cg_emit(ctx, kc, r))
+            got = get(ctx.invmemo, e, nothing)
+            if got !== nothing
+                push!(syms, got)
+                continue
+            end
             s = _cg_name(ctx, "v")
             push!(ctx.prologue, :(local $s = $e))
             push!(syms, s)
+            ctx.invmemo[e] = s
+            push!(ctx.prolog, (length(ctx.prologue), true, e))
         end
     end
     return syms
+end
+
+# Drop the shared-prologue entries whose statements a declined kernel's
+# rollback just cut (`resize!(ctx.prologue, n)`).
+function _cg_prolog_rollback!(ctx::_CGCtx, n::Int)
+    while !isempty(ctx.prolog) && ctx.prolog[end][1] > n
+        _, isinv, k = pop!(ctx.prolog)
+        delete!(isinv ? ctx.invmemo : ctx.progeo, k)
+    end
+    return nothing
 end
 
 # ---- One kernel → its loop nest (mirrors `_run_acc_kernel!`) ----------------
@@ -1506,11 +1589,14 @@ function _cg_emit_kernel_nest!(ctx::_CGCtx, K::_AccKernel, invsyms::Vector{Symbo
     geo(v, f, unit::Bool=false) = _cg_geo!(ctx, v, (cs, f), unit)
     function axis(d)
         lo = geo(first(cs.ranges[d]), (d, :first))
-        _cellset_slab(cs, d) && return (lo, lo, 1)
+        _cg_slab_literal(cs, d) && return (lo, lo, 1)
         n = length(cs.ranges[d])
         return (lo, geo(last(cs.ranges[d]), (d, :last)), geo(n, (d, :len)))
     end
-    corner = !isempty(cs.strides) && all(d -> _cellset_slab(cs, d), eachindex(cs.strides))
+    # (A tile that shares its code counts every box at run time: it runs no
+    # cell of a box it does not own.)
+    corner = !isempty(cs.strides) && all(d -> _cellset_slab(cs, d), eachindex(cs.strides)) &&
+             !_range_shared_code(_range_spec_now())
     hdr = if sm === nothing
         Any[:(local $tv = _chunk_ordinals($(corner ? 1 : geo(ncells, :n)), _cgci, _cgnc)),
             :(local $av = $tv[1]),
@@ -1698,6 +1784,9 @@ end
 function _cg_fuse_leading(K::_AccKernel)
     cs = K.cells
     (_is_outs(cs) || _is_contig(cs)) && return K
+    # Whether a box spans whole rows depends on the cells a tile owns, so a
+    # tile that shares its code never fuses.
+    _range_shared_code(_range_spec_now()) && return K
     nd = length(cs.strides)
     nd >= 2 || return K
     isempty(K.subs) || return K
@@ -1792,7 +1881,9 @@ function _cg_rowfuse_key(K::_AccKernel)
     cs = K.cells
     nd = length(cs.strides)
     (_is_outs(cs) || !(2 <= nd <= 3)) && return nothing
-    return (nd, cs.base, Tuple(cs.strides), Tuple(cs.ranges[2:nd]),
+    # Rows by their end points: every empty range is `==` every other.
+    return (nd, cs.base, Tuple(cs.strides),
+            Tuple((first(cs.ranges[d]), last(cs.ranges[d])) for d in 2:nd),
             Tuple(_cellset_slab(cs, d) for d in 2:nd))
 end
 
@@ -1802,6 +1893,9 @@ end
 function _cg_rowfuse_groups(kernels::AbstractVector{_AccKernel})
     out = Dict{Int,Vector{Int}}()
     (_cg_split_supported() && !_cg_subcall_fn_disabled()) && return out
+    # Which boxes share their rows is read from the rows a tile runs, so a
+    # tile that shares its code emits every box as its own nest.
+    _range_shared_code(_range_spec_now()) && return out
     byrow = Dict{Any,Vector{Int}}()
     for (j, K) in enumerate(kernels)
         key = _cg_rowfuse_key(K)
@@ -1841,7 +1935,7 @@ function _cg_emit_rowgroup_nest!(ctx::_CGCtx, Ks::Vector{_AccKernel},
     function axis(cs, d)
         g(v, f) = _cg_geo!(ctx, v, (cs, f))
         lo = g(first(cs.ranges[d]), (d, :first))
-        _cellset_slab(cs, d) && return (lo, lo, 1)
+        _cg_slab_literal(cs, d) && return (lo, lo, 1)
         return (lo, g(last(cs.ranges[d]), (d, :last)), g(length(cs.ranges[d]), (d, :len)))
     end
     st = Any[_cg_geo!(ctx, cs1.strides[d], (cs1, d, :stride), true) for d in 1:nd]
@@ -2048,6 +2142,9 @@ end
 # Returns `(holes, F, iF, oF)` or `nothing`.
 function _cg_row_fission(ctx::_CGCtx, Ks::Vector{_AccKernel}, parts)
     length(Ks) >= 2 || return nothing
+    # The split is chosen from the members' geometry, which differs from tile
+    # to tile, so a tile that shares its code keeps the one-pass form.
+    _range_shared_code(_range_spec_now()) && return nothing
     all(q -> isempty(q.rec), parts) || return nothing
     for m in 2:length(Ks)
         last(Ks[m-1].cells.ranges[1]) + 1 == first(Ks[m].cells.ranges[1]) || return nothing
@@ -2691,6 +2788,7 @@ function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel};
             catch err
                 err isa _CodegenDecline || rethrow()
                 resize!(ctx.prologue, nprologue)
+                _cg_prolog_rollback!(ctx, nprologue)
                 for i in length(ctx.invlog):-1:(ninvlog + 1)
                     delete!(ctx.invdone, ctx.invlog[i])
                 end
@@ -2723,6 +2821,7 @@ function _build_codegen_rhs(acc_kernels::AbstractVector{_AccKernel};
         catch err
             err isa _CodegenDecline || rethrow()
             resize!(ctx.prologue, nprologue)
+            _cg_prolog_rollback!(ctx, nprologue)
             for i in length(ctx.invlog):-1:(ninvlog + 1)
                 delete!(ctx.invdone, ctx.invlog[i])
             end

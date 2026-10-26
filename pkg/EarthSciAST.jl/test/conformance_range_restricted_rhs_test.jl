@@ -173,11 +173,6 @@ function _rrc_check_tile!(op, dec, t, G, ext, p; du_shared = nothing)
     return covered, owned_slots, L
 end
 
-# Julia runs two tiles of this case, the narrow boundary-band tile and an
-# interior one, for the JIT cost of its template-heavy document; Rust runs
-# every tiling.
-const _RRC_JULIA_TILES = Dict("esd_latlon3d_regional_inflow" => [("narrow", 1), ("narrow", 2)])
-
 function _rrc_tile_partition(c, prob)
     _, op = _rrc_op(c, prob)
     dec = _rrc_dec(c.decomposition)
@@ -185,16 +180,6 @@ function _rrc_tile_partition(c, prob)
     @test RRC.halo(op, dec) == want
     G, ext = _rrc_whole(op, prob.p)
     @test all(isfinite, G)
-    picks = get(_RRC_JULIA_TILES, String(c.id), nothing)
-    if picks !== nothing
-        for (tid, k) in picks
-            tiling = only(t for t in c.tilings if String(t.id) == tid)
-            @testset "tiling $tid tile $k" begin
-                _rrc_check_tile!(op, dec, tiling.tiles[k], G, ext, prob.p)
-            end
-        end
-        return
-    end
     for tiling in c.tilings
         @testset "tiling $(tiling.id)" begin
             shared = get(tiling, :shared_storage, false) === true
@@ -360,8 +345,6 @@ function _rrc_selection_ok(c, prob)
     end
 end
 
-const _RRC_SUBCALL_DOC = "fixtures/esd/problems/latlon3d_transport_cwc_regional_inflow.esm"
-
 @testset "range_restricted_rhs conformance (§5.50)" begin
     manifest = JSON3.read(read(joinpath(_RRC_DIR, "manifest.json"), String))
     @test manifest.compiler == "native"
@@ -369,16 +352,6 @@ const _RRC_SUBCALL_DOC = "fixtures/esd/problems/latlon3d_transport_cwc_regional_
     pick = isempty(only) ? nothing : Set(split(only, ","))
     for c in manifest.cases
         pick === nothing || String(c.id) in pick || continue
-        # Before 1.12 this template-heavy document's tile kernels compile slowly
-        # enough to push the LTS test job past its time limit; the 1.12+ job
-        # runs it.
-        VERSION < v"1.12" && String(c.document) == _RRC_SUBCALL_DOC && continue
-        # This template-heavy document's kernels compile far faster with each
-        # template body emitted once as its own function (the value-exact,
-        # opt-in `ESS_CG_SUBCALL_FN` tier); its whole-domain reference and its
-        # tiles are all built under it. Rust runs the default lowering.
-        knob = String(c.document) == _RRC_SUBCALL_DOC ? "1" : get(ENV, "ESS_CG_SUBCALL_FN", nothing)
-        withenv("ESS_CG_SUBCALL_FN" => knob) do
         @testset "$(c.id)" begin
             prob = _rrc_problem(c)
             k = String(c.kind)
@@ -418,7 +391,6 @@ const _RRC_SUBCALL_DOC = "fixtures/esd/problems/latlon3d_transport_cwc_regional_
             else
                 @test k == "a case kind this binding recognizes"
             end
-        end
         end
     end
 end

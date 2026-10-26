@@ -204,6 +204,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("stencil_subtree_tbl_test.jl")           # subterm-granular fallback: const-evaluable subtree → per-box table (interpreter oracle)
     include("scan_prefix_test.jl")                   # ess-scan O(N) prefix reduction ≡ per-cell
     include("makearray_scan_region_test.jl")         # #533: a scan makearray region / filtered operand under native
+    include("hoist_region_split_test.jl")            # region-split operands combined elementwise, each lifted to an observed
     include("stencil_affine_cse_test.jl")            # ess-affine per-cell CSE ≡ per-cell
     include("stencil_affine_invariant_test.jl")      # ess-affine invariant hoist ≡ per-cell
     # Cross-shape state gather (a state array read from a loop of a DIFFERENT
