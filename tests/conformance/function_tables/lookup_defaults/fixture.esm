@@ -276,7 +276,7 @@
       ],
       "tests": [
         {
-          "id": "omitted_output_is_zero_and_absent_args_is_empty",
+          "id": "omitted_output_is_zero_and_single_output_reads_whole_data",
           "description": "p = 1.5, q = 0.5. multi: output A gives 15, B gives 150; y_omitted (no `output`) must equal y_zero and y_named. multi2d: output 0 gives 2.5 and output 1 gives 25; y2_omitted must be 2.5. single: the whole data [5, 7, 11] at 1.5 gives 6, with `output` omitted or 0 (lowering with data[0] = 5 would not even be an array).",
           "time_span": {
             "start": 0.0,
