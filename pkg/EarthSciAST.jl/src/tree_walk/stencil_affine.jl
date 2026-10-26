@@ -951,7 +951,7 @@ end
 # string.
 function _desc_key(d::_AccDesc)
     k = d.kind
-    k === _AK_STATE_AFFINE && return (0x1, UInt64(0), d.delta, 0, 0, 0)
+    k === _AK_STATE_AFFINE && return (0x1, UInt64(0), d.delta, d.idx, 0, 0)
     k === _AK_LOOP_IDX     && return (0x2, UInt64(0), d.dim, 0, 0, 0)
     if k === _AK_CONST_BOX || k === _AK_FORCING_BOX || k === _AK_STATE_TBL_BOX
         tag = k === _AK_CONST_BOX ? 0x3 : k === _AK_FORCING_BOX ? 0x4 : 0x5
@@ -996,9 +996,9 @@ function _box_local_addr(box, D)
 end
 
 # The addressing of a table over the cells `run` of `box` that a program runs:
-# `_box_local_addr(box)` when it runs all of them. A tile that shares the
-# whole-domain program's code (range_hooks.jl) runs only its share of a box,
-# so its tables cover only those cells, and its build costs what its cells
+# `_box_local_addr(box)` when it runs all of them. A tile that shares its
+# code (range_hooks.jl) runs only its share of a box, so its tables cover
+# only those cells, and its build costs what its cells
 # cost. A table extent is 1 exactly where the box's is (a wider one is at
 # least 2, even over one cell or none), so every stride the emitted code holds
 # as the literal 1 is the one the whole-domain program holds there.
@@ -1192,8 +1192,8 @@ end
 # EXHAUSTIVE invariance test (`vals` is the whole box), not a sampled one. This
 # is the only place the invariance-to-literal fold is legal without a structural
 # argument; the LANE_CONST fast path below derives it from the index instead.
-# A program whose tiles share its code keeps the table: a tile evaluates only
-# its own cells (`run`), so it could not make the same decision.
+# A tile that shares its code keeps the table: it evaluates only its own cells
+# (`run`), so it could not make the decision every tile makes.
 function _materialize_const_box(rec::_LaneRecipe, idx_names, box, D,
                                 var_map, const_arrays, run=box)
     _t0 = time_ns()
@@ -1250,7 +1250,7 @@ function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
                                                   var_map, const_arrays, run)
             end
             _ghost_box(rec, idx_names, corners, structural, box, D, ev,
-                       const_arrays, le) ||
+                       const_arrays, le, run) ||
                 return _materialize_state_tbl(rec, idx_names, box, D,
                                               var_map, const_arrays, run)
             return _LitRepl(0.0)
@@ -1264,7 +1264,8 @@ function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
                 break
             end
         end
-        uniform && (structural || _holds_on_box(box, D) do l
+        uniform && (structural || _box_holds(box, run, D,
+                                             () -> _lane_box_key(:offset, rec, idx_names, box)) do l
             sc = ev(l)
             sc != 0 && sc - _box_oln(base, strides, l, D) == Δ
         end) && return _AccRepl(_AccStateAffine(Δ))
@@ -1393,7 +1394,8 @@ function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
                 return _materialize_const_box(rec, idx_names, box, D,
                                               var_map, const_arrays, run)
         end
-        structural || _holds_on_box(box, D) do l
+        structural || _box_holds(box, run, D,
+                                 () -> _lane_box_key(:const, rec, idx_names, box)) do l
             (off + sum((l[d]-1)*s[d] for d in 1:D)) == clin(l)
         end || return _materialize_const_box(rec, idx_names, box, D,
                                              var_map, const_arrays, run)
@@ -1404,7 +1406,7 @@ function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
         # _eval_recipe(...)` (see `_recipe_const_lin`), so `val_rep` is that
         # element and the fold is bit-identical.
         all(iszero, s) && return _LitRepl(Float64(val_rep))
-        arr_flat = get!(flat_cache, rec.arr) do; Float64.(vec(rec.arr)); end
+        arr_flat = get!(flat_cache, rec.arr) do; _const_flat(rec.arr); end
         return _AccRepl(_AccConstBox(arr_flat, s, off))
     else  # LANE_PGATHER — LIVE forcing gather
         # `_eval_recipe` returns the flat LINEAR INDEX into the forcing buffer (its
@@ -1435,7 +1437,8 @@ function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
                                                 var_map, const_arrays, run)
             end
         end
-        if !structural && !_holds_on_box(box, D) do l
+        if !structural && !_box_holds(box, run, D,
+                                      () -> _lane_box_key(:forcing, rec, idx_names, box)) do l
                 (off + sum((l[d]-1)*s[d] for d in 1:D)) == ev(l)
             end
             _obsref_disabled() &&
@@ -1646,13 +1649,54 @@ function _guarded_lane_repl(rec::_LaneRecipe, paths::Vector{_GuardPath}, recipes
     end
     first_read = findfirst(!, unread)
     tbl[unread] .= first_read === nothing ? 0.0 : tbl[first_read]
-    # (Kept as a table where tiles share the program's code, as
+    # (Kept as a table in a tile that shares its code, as
     # `_materialize_const_box` does.)
     if !_range_shared_code(_range_spec_now())
         v1 = tbl[1]
         all(x -> isequal(x, v1), tbl) && return _LitRepl(v1)
     end
     return _AccRepl(_AccConstBox(tbl, s, off))
+end
+
+# A const array's flat Float64 copy, which a box read addresses. Each `faq`
+# equation's lowering makes its own; a re-lowering of a program reuses its
+# build's (`_ProgramMemo`), so a tile does not copy a whole-domain array.
+function _const_flat(arr)
+    spec = _range_spec_now()
+    memo = _range_memo(spec)
+    memo === nothing && return Float64.(vec(arr))
+    if _range_memo_records(spec)
+        f = Float64.(vec(arr))
+        lock(() -> get!(memo.flats, arr, f), memo.lock)
+        return f
+    end
+    return _memo_get(() -> Float64.(vec(arr)), memo, :flats, arr, false)
+end
+
+# `_guarded_lane_repl` over the cells `run` of `box`. Its refusal (a guard
+# only the run time decides, at some cell) is recorded for the box by the
+# program's own build and raised again by every tile that shares its code,
+# whichever of the box's cells it runs, so the tiles lower the box alike
+# (`_box_holds`).
+function _guarded_box_repl(rec::_LaneRecipe, paths, recipes, idx_names, box, D, var_map,
+                           const_arrays, run)
+    spec = _range_spec_now()
+    memo = _range_memo(spec)
+    memo === nothing && return _guarded_lane_repl(rec, paths, recipes, idx_names, box, D,
+                                                  var_map, const_arrays, run)
+    key = _lane_box_key(:guarded, rec, idx_names, box)
+    if run !== box
+        got = lock(() -> get(memo.verdicts, key, nothing), memo.lock)
+        got isa Exception && throw(got)
+    end
+    try
+        return _guarded_lane_repl(rec, paths, recipes, idx_names, box, D, var_map,
+                                  const_arrays, run)
+    catch err
+        (err isa _StencilFallback && run === box && _range_memo_records(spec)) &&
+            lock(() -> get!(memo.verdicts, key, err), memo.lock)
+        rethrow()
+    end
 end
 
 # Does `pred(loop)` hold at EVERY cell of the box? The exact counterpart of a
@@ -1668,6 +1712,54 @@ function _holds_on_box(pred, box, D)
     return true
 end
 
+# `_holds_on_box` over a box of which a program runs the cells `run`. A
+# program's own build answers it over the box, as every build does, and records
+# the answer (`_ProgramMemo`). A tile that shares its code runs only its cells
+# of the box, but must reach the answer every tile reaches, so it takes the
+# box's recorded answer (working it out, and recording it, the first time) and
+# also checks it over its own cells, which is what makes its lowering correct
+# there whatever layout the answer was reached in. So its build costs what its
+# cells cost. An answer that raised (a const subscript out of range) is
+# recorded as the error, and raises again. `key()` names the check: the lane
+# (its kind, variable, subscripts and bounds), the box, the loop names and the
+# site.
+function _box_holds(pred, box, run, D, key)
+    spec = _range_spec_now()
+    memo = _range_memo(spec)
+    if run === box
+        memo === nothing && return _holds_on_box(pred, box, D)
+        _range_memo_records(spec) || return _holds_on_box(pred, box, D)
+        v = _box_answer(pred, box, D)
+        k = key()
+        lock(() -> get!(memo.verdicts, k, v), memo.lock)
+        v isa Exception && throw(v)
+        return v::Bool
+    end
+    k = key()
+    v = memo === nothing ? nothing : lock(() -> get(memo.verdicts, k, nothing), memo.lock)
+    if v === nothing
+        v = _box_answer(pred, box, D)
+        memo === nothing || lock(() -> get!(memo.verdicts, k, v), memo.lock)
+    end
+    v isa Exception && throw(v)
+    return (v::Bool) && _holds_on_box(pred, run, D)
+end
+
+# `_holds_on_box`'s answer, or the out-of-range error it raised.
+function _box_answer(pred, box, D)
+    try
+        return _holds_on_box(pred, box, D)
+    catch err
+        _is_const_oob(err) || rethrow()
+        return err
+    end
+end
+
+# The key of a box check of lane `rec` at `site` (`_box_holds`).
+_lane_box_key(site::Symbol, rec::_LaneRecipe, idx_names, box) =
+    (site, rec.kind, rec.var_name, string(rec.idx_args), copy(rec.lo), copy(rec.hi),
+     String[String(x) for x in idx_names], Tuple{Int,Int}[(first(r), last(r)) for r in box])
+
 # Is EVERY cell of the box a ghost read (some subscript outside the variable's
 # bounds), given that every corner is? Not implied: a ghost corner can be out of
 # range on either side, so an affine subscript like `3i - 40` is a ghost at both
@@ -1676,7 +1768,7 @@ end
 # its lower bound at every corner, or above its upper bound at every corner.
 # Otherwise (and always for a non-affine subscript) every cell is checked.
 function _ghost_box(rec::_LaneRecipe, idx_names, corners, structural, box, D,
-                    ev, const_arrays, le::Union{Nothing,_LaneEval}=nothing)
+                    ev, const_arrays, le::Union{Nothing,_LaneEval}=nothing, run=box)
     if structural
         env = Dict{String,Int}()
         for d in eachindex(rec.idx_args)
@@ -1689,7 +1781,8 @@ function _ghost_box(rec::_LaneRecipe, idx_names, corners, structural, box, D,
             (below || above) && return true
         end
     end
-    return _holds_on_box(l -> ev(l) == 0, box, D)
+    return _box_holds(l -> ev(l) == 0, box, run, D,
+                      () -> _lane_box_key(:ghost, rec, idx_names, box))
 end
 
 # All 2^D corners of a box, as loop vectors, the first dim varying fastest (the
@@ -1770,8 +1863,8 @@ function _process_affine_box!(kernels, spine_cache, flat_cache, box, idx_names,
             (_is_const_oob(err) && recipes[k].kind in (LANE_CONST, LANE_STATE)) || rethrow()
             paths = get!(() -> _lane_guard_paths(tmpl, length(recipes)),
                          sig.lane_guards, bkey)[k]
-            _guarded_lane_repl(recipes[k], paths, recipes, idx_names, box, D,
-                               var_map, const_arrays, run)
+            _guarded_box_repl(recipes[k], paths, recipes, idx_names, box, D,
+                              var_map, const_arrays, run)
         end
     end
 

@@ -1001,6 +1001,13 @@ end
 # name, so broadcasting a DECLARED scalar never displaces one; an explicit
 # override is the caller speaking for this run and outranks both registries,
 # exactly as the array spelling of that override already does.
+# The array of a shaped parameter `name` holding `x` at every element of its
+# extents `exts`; a program's re-lowering reuses its build's (`_ProgramMemo`).
+_broadcast_parameter(name, x::Float64, exts) =
+    _memo_get(_range_spec_now(), :inline, (String(name), x, Tuple(exts))) do
+        fill(x, Tuple(exts))
+    end
+
 function _register_inline_array_parameters(model::Model, const_arrays::AbstractDict,
                                            parameter_overrides::AbstractDict,
                                            index_sets::AbstractDict;
@@ -1029,7 +1036,7 @@ function _register_inline_array_parameters(model::Model, const_arrays::AbstractD
             # DROPPED and the default used instead.
             exts = _declared_shape_extents(v.shape, index_sets, derived_extents)
             exts === nothing && continue
-            fill(Float64(ov), Tuple(exts))
+            _broadcast_parameter(name, Float64(ov), exts)
         elseif haskey(const_arrays, name)
             live || continue              # caller-supplied data is authoritative
             const_arrays[name]
@@ -1043,7 +1050,7 @@ function _register_inline_array_parameters(model::Model, const_arrays::AbstractD
             haskey(param_arrays, name) && continue
             exts = _declared_shape_extents(v.shape, index_sets, derived_extents)
             exts === nothing && continue
-            fill(Float64(v.default), Tuple(exts))
+            _broadcast_parameter(name, Float64(v.default), exts)
         else
             continue
         end
@@ -2153,9 +2160,13 @@ function _register_const_arrays(const_arrays::AbstractDict,
                                 pia_operand_arrays, const_obs_arrays)
     const_boundaries = Dict{String,Any}(String(k) => v for (k, v) in const_array_boundaries)
     registry = Dict{String,AbstractArray{Float64}}()
+    spec = _range_spec_now()
     for (k, v) in const_arrays
         k_str = String(k)
-        arr = ndims(v) == 1 ? Vector{Float64}(v) : Array{Float64}(v)
+        # A program's re-lowering reuses its build's copy (`_ProgramMemo`).
+        arr = _memo_get(spec, :arrays, v) do
+            ndims(v) == 1 ? Vector{Float64}(v) : Array{Float64}(v)
+        end
         bnd = get(const_boundaries, k_str, nothing)
         registry[k_str] = bnd === nothing ? arr : _wrap_bounded_const(arr, bnd, k_str)
     end
@@ -5758,8 +5769,8 @@ function _compile_faq_equation!(percell_scalar, acc_kernels, scan_folds,
     end
 
     range_iters = _output_range_iters(ranges_dict, idx_names)
-    # A tile that shares the whole-domain program's code gives the affine tier
-    # this equation over its whole-domain ranges (range_hooks.jl).
+    # A tile that shares its code gives the affine tier this equation over its
+    # whole-domain ranges (range_hooks.jl).
     rview = _faq_range_view(lhs_body, idx_names, range_iters, var_map, array_var_info, xeq)
     label = rule_label === nothing ? _faq_debug_label(lhs_body, idx_names, range_iters) :
         rule_label

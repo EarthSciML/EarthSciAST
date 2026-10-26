@@ -1173,8 +1173,8 @@ every stage.
 function _merge_acc_kernel_classes(kernels::AbstractVector{_AccKernel};
                                    keep_affine::Bool=false)
     (_oop_merge_disabled() || length(kernels) <= 1) && return (kernels, nothing)
-    # A program whose tiles share its code keeps every box kernel: a tile may
-    # own none of a box's cells, and a class of such boxes would have no cell
+    # A tile that shares its code keeps every box kernel: it may own none of a
+    # box's cells, and a class of such boxes would have no cell
     # to list, which no merged kernel represents.
     kept = _range_shared_code(_range_spec_now()) ?
            [j for j in eachindex(kernels)
