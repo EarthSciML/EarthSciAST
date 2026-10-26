@@ -236,7 +236,8 @@ end
                 uS[RRT._tile_slot(b, (c[1], c[2]))] = u[(c[2] - 1) * nx + c[1]]
             end
             duS = fill(NaN, length(uS))
-            rhs!(duS, tile, rhs_workspace(tile), uS, Float64[], prob.p, 0.0)
+            rhs!(duS, tile, rhs_workspace(tile), uS, Float64[], prob.p, 0.0,
+                 default_forcing_set(tile))
             for c in CartesianIndices(Tuple(b.owned))
                 @test _rrt_bits(duS[RRT._tile_slot(b, (c[1], c[2]))]) ==
                       _rrt_bits(G[(c[2] - 1) * nx + c[1]])
@@ -263,7 +264,8 @@ end
                 uS[RRT._tile_slot(b, (c,))] = tu[c]
             end
             duS = fill(NaN, length(uS))
-            rhs!(duS, t, rhs_workspace(t), uS, Float64[], tprob.p, 0.0)
+            rhs!(duS, t, rhs_workspace(t), uS, Float64[], tprob.p, 0.0,
+                 default_forcing_set(t))
             @test [_rrt_bits(duS[RRT._tile_slot(b, (c,))]) for c in 11:14] ==
                   _rrt_bits.(TG[11:14])
             push!(whole, _rrt_data(tprog.f!))
