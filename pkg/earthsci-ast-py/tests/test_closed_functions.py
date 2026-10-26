@@ -352,16 +352,10 @@ def test_julian_day_ulp_close():
 
 
 def test_int32_overflow_raises():
-    """Year far beyond Int32 range overflows. (Sanity — not spec-required.)
-
-    Skipped: Python's stdlib ``datetime`` rejects years outside ``[1, 9999]``
-    long before the closed-function Int32 overflow check would fire. This
-    test documents the known limit.
-    """
-    pytest.skip(
-        "Python stdlib datetime rejects out-of-range years before Int32 overflow "
-        "fires; the spec contract is 'overflow if exceeded', not 'must reach 2^31'."
-    )
+    """``datetime.year`` past the Int32 range raises ``closed_function_overflow``."""
+    with pytest.raises(ClosedFunctionError) as exc:
+        evaluate_closed_function("datetime.year", [1e18])
+    assert exc.value.code == "closed_function_overflow"
 
 
 def test_serializer_roundtrip_fn_op():

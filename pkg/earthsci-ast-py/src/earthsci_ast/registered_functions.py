@@ -31,12 +31,14 @@ list (diagnostic ``unknown_closed_function``). This module provides:
   ``interp_axis_length_mismatch``, ``interp_nan_in_axis``,
   ``interp_axis_too_short``).
 
-Calendar arithmetic uses Python's stdlib :mod:`datetime` with the
-proleptic-Gregorian default; the v0.3.0 spec contract forbids leap-second
-consultation, which :class:`datetime.datetime` already honors.
-``datetime.julian_day`` is computed via the Fliegel–van Flandern (1968)
-integer formula plus the fractional-day offset, giving ≤ 1 ulp agreement
-with the spec reference computation.
+Calendar arithmetic is exact integer arithmetic on the floor-divmod of
+``t_utc`` by 86400 (no leap-second consultation), with Hinnant's
+``civil_from_days`` for the proleptic-Gregorian date. It does not use
+:mod:`datetime`: ``timedelta`` rounds to the nearest microsecond, so a time a
+few nanoseconds before midnight would land on the next day, and its years stop
+at 1..9999. ``datetime.julian_day`` is computed via the Fliegel–van Flandern
+(1968) integer formula plus the fractional-day offset, giving ≤ 1 ulp
+agreement with the spec reference computation.
 """
 
 from __future__ import annotations
@@ -44,7 +46,6 @@ from __future__ import annotations
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from .error_handling import (
@@ -120,21 +121,21 @@ class _ClosedFunction:
 # definition order does not matter (the helpers only need to exist at call time).
 _CLOSED_FUNCTIONS: dict[str, _ClosedFunction] = {
     "datetime.year": _ClosedFunction(
-        1, lambda name, args: _check_int32(name, _to_datetime(args[0]).year)
+        1, lambda name, args: _check_int32(name, _decompose_utc(args[0]).year)
     ),
-    "datetime.month": _ClosedFunction(1, lambda name, args: _to_datetime(args[0]).month),
-    "datetime.day": _ClosedFunction(1, lambda name, args: _to_datetime(args[0]).day),
-    "datetime.hour": _ClosedFunction(1, lambda name, args: _to_datetime(args[0]).hour),
-    "datetime.minute": _ClosedFunction(1, lambda name, args: _to_datetime(args[0]).minute),
-    "datetime.second": _ClosedFunction(1, lambda name, args: _to_datetime(args[0]).second),
+    "datetime.month": _ClosedFunction(1, lambda name, args: _decompose_utc(args[0]).month),
+    "datetime.day": _ClosedFunction(1, lambda name, args: _decompose_utc(args[0]).day),
+    "datetime.hour": _ClosedFunction(1, lambda name, args: _decompose_utc(args[0]).hour),
+    "datetime.minute": _ClosedFunction(1, lambda name, args: _decompose_utc(args[0]).minute),
+    "datetime.second": _ClosedFunction(1, lambda name, args: _decompose_utc(args[0]).second),
     "datetime.day_of_year": _ClosedFunction(
-        1, lambda name, args: _day_of_year(_to_datetime(args[0]))
+        1, lambda name, args: _day_of_year(_decompose_utc(args[0]))
     ),
     "datetime.julian_day": _ClosedFunction(
         1, lambda name, args: _datetime_julian_day(float(args[0]))
     ),
     "datetime.is_leap_year": _ClosedFunction(
-        1, lambda name, args: 1 if _is_leap_year(_to_datetime(args[0]).year) else 0
+        1, lambda name, args: 1 if _is_leap_year(_decompose_utc(args[0]).year) else 0
     ),
     "interp.searchsorted": _ClosedFunction(
         2, lambda name, args: _interp_searchsorted(name, float(args[0]), args[1]), (1,)
@@ -198,12 +199,40 @@ def _expect_arity(name: str, args: Sequence[Any], n: int) -> None:
         )
 
 
-def _to_datetime(t_utc: Any) -> datetime:
-    """Convert a UTC scalar (seconds since Unix epoch) to a tz-aware datetime.
+@dataclass(frozen=True)
+class _UtcParts:
+    """The esm-spec §9.2 decomposition of one ``t_utc``."""
 
-    Uses ``datetime.fromtimestamp(..., tz=timezone.utc)`` which honors the
-    proleptic-Gregorian calendar and (per the spec contract) does not consult
-    leap seconds.
+    day_count: int  # floor(t_utc / 86400): days after 1970-01-01
+    second_of_day: int  # floor of the time of day, in [0, 86400)
+    fraction: float  # time of day minus ``second_of_day``, in [0, 1), exact
+    year: int
+    month: int
+    day: int
+
+    @property
+    def hour(self) -> int:
+        return self.second_of_day // 3600
+
+    @property
+    def minute(self) -> int:
+        return self.second_of_day % 3600 // 60
+
+    @property
+    def second(self) -> int:
+        return self.second_of_day % 60
+
+
+def _decompose_utc(t_utc: Any) -> _UtcParts:
+    """Split a UTC scalar (seconds since the Unix epoch) per esm-spec §9.2.
+
+    The day number is ``floor(t / 86400)`` and the time of day
+    ``t - 86400 * floor(t / 86400)``, both exact, with the fields taken from
+    ``floor(time of day)`` — a fractional time floors toward −∞. Flooring
+    ``t`` to a whole second first and then divmod-ing the (arbitrary-
+    precision) integer gives exactly that pair, because 86400 is an integer:
+    ``floor(t / 86400) == floor(t) // 86400``. ``t - floor(t)`` is exact in
+    binary64, so no step rounds.
     """
     seconds = float(t_utc)
     if not math.isfinite(seconds):
@@ -211,10 +240,26 @@ def _to_datetime(t_utc: Any) -> datetime:
             CLOSED_FUNCTION_ARITY,
             f"datetime.*: t_utc must be finite, got {seconds}",
         )
-    # `datetime.fromtimestamp(..., tz=utc)` accepts negative values for
-    # pre-epoch times on all supported platforms (CPython implements its own
-    # proleptic-Gregorian arithmetic and does not delegate to libc gmtime).
-    return datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(seconds=seconds)
+    whole = math.floor(seconds)
+    day_count, second_of_day = divmod(whole, 86400)
+    year, month, day = _civil_from_days(day_count)
+    return _UtcParts(day_count, second_of_day, seconds - whole, year, month, day)
+
+
+def _civil_from_days(z: int) -> tuple[int, int, int]:
+    """Hinnant's ``civil_from_days``: days after 1970-01-01 to proleptic-
+    Gregorian ``(year, month, day)``, exact for any integer (ISO 8601 years:
+    1 BC = 0)."""
+    z += 719468
+    era = z // 146097
+    doe = z - era * 146097  # [0, 146096]
+    yoe = (doe - doe // 1460 + doe // 36524 - doe // 146096) // 365  # [0, 399]
+    doy = doe - (365 * yoe + yoe // 4 - yoe // 100)  # [0, 365], March-based
+    mp = (5 * doy + 2) // 153  # [0, 11]
+    day = doy - (153 * mp + 2) // 5 + 1
+    month = mp + 3 if mp < 10 else mp - 9
+    year = yoe + era * 400 + (1 if month <= 2 else 0)
+    return year, month, day
 
 
 def _trunc_div(a: int, b: int) -> int:
@@ -234,12 +279,14 @@ def _trunc_div(a: int, b: int) -> int:
 def _datetime_julian_day(t_utc: float) -> float:
     """Fliegel–van Flandern (1968) integer JDN + fractional-day offset.
 
-    Returns a Float64 with ≤ 1 ulp agreement to the spec reference
-    computation. The only floating-point operation in the inner formula is
-    the final divide by 86400 (one rounded operation).
+    The offset is ``(time_of_day − 43200) / 86400`` (esm-spec §9.2), formed
+    as ``(second_of_day − 43200) + fraction``: the integer part is exact, so
+    the time of day is rounded once, then divided and added — ≤ 1 ulp of the
+    exact value, and taken from the SAME floor-divmod as the date, so the
+    date and the offset can never disagree about which day ``t`` is in.
     """
-    dt = _to_datetime(t_utc)
-    y, m, d = dt.year, dt.month, dt.day
+    p = _decompose_utc(t_utc)
+    y, m, d = p.year, p.month, p.day
     a = _trunc_div(m - 14, 12)
     jdn = (
         _trunc_div(1461 * (y + 4800 + a), 4)
@@ -248,13 +295,8 @@ def _datetime_julian_day(t_utc: float) -> float:
         + d
         - 32075
     )
-    # JDN counts noon-to-noon; convert time-of-day seconds (since 00:00 UTC)
-    # to a fractional offset relative to noon. The spec pins this offset as
-    # `(time_of_day_seconds − 43200) / 86400` (esm-spec §9.2.1).
-    seconds_in_day = math.fmod(float(t_utc), 86400.0)
-    if seconds_in_day < 0:
-        seconds_in_day += 86400.0
-    return float(jdn) + (seconds_in_day - 43200.0) / 86400.0
+    from_noon = float(p.second_of_day - 43200) + p.fraction
+    return float(jdn) + from_noon / 86400.0
 
 
 def _is_leap_year(year: int) -> bool:
@@ -266,9 +308,9 @@ _DOY_CUMULATIVE_NORMAL = (0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334)
 _DOY_CUMULATIVE_LEAP = (0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335)
 
 
-def _day_of_year(dt: datetime) -> int:
-    table = _DOY_CUMULATIVE_LEAP if _is_leap_year(dt.year) else _DOY_CUMULATIVE_NORMAL
-    return table[dt.month - 1] + dt.day
+def _day_of_year(p: _UtcParts) -> int:
+    table = _DOY_CUMULATIVE_LEAP if _is_leap_year(p.year) else _DOY_CUMULATIVE_NORMAL
+    return table[p.month - 1] + p.day
 
 
 def _interp_searchsorted(name: str, x: float, xs: Any) -> int:
