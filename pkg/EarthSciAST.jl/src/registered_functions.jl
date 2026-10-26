@@ -99,7 +99,7 @@ Raised by the closed function registry when the spec contract is violated.
 - `closed_function_arity` — wrong number of arguments for the named function.
 - `closed_function_overflow` — integer-typed result would overflow Int32.
 - `searchsorted_non_monotonic` — `xs` is not non-decreasing.
-- `searchsorted_nan_in_table` — `xs` contains a NaN entry.
+- `searchsorted_nan` — `xs` contains a NaN entry (checked before monotonicity).
 - `interp_non_monotonic_axis` — `interp.linear` / `interp.bilinear` axis is
   not strictly increasing (esm-spec §9.2; equal-adjacent rejected because the
   blend denominator would be zero).
@@ -732,13 +732,16 @@ function _validate_searchsorted_table(name::String, xs)::Nothing
         throw(ClosedFunctionError(ERROR_CODES.CLOSED_FUNCTION_ARITY,
             "$(name): xs argument must be an array (got $(typeof(xs)))"))
     end
+    # NaN first, over the whole array (esm-spec §9.2): a NaN compares false with
+    # everything, so a monotonicity verdict on an `xs` holding one would depend
+    # on how the comparison is written.
+    for (i, raw) in enumerate(xs)
+        isnan(Float64(raw)) && throw(ClosedFunctionError(ERROR_CODES.SEARCHSORTED_NAN,
+            "$(name): xs[$(i)] is NaN; NaN entries in xs are forbidden"))
+    end
     prev = NaN
     for (i, raw) in enumerate(xs)
         v = Float64(raw)
-        if isnan(v)
-            throw(ClosedFunctionError(ERROR_CODES.SEARCHSORTED_NAN_IN_TABLE,
-                "$(name): xs[$(i)] is NaN; NaN entries in xs are forbidden"))
-        end
         if i > 1 && v < prev
             throw(ClosedFunctionError(ERROR_CODES.SEARCHSORTED_NON_MONOTONIC,
                 "$(name): xs is not non-decreasing (xs[$(i)]=$(v) < xs[$(i-1)]=$(prev))"))
@@ -802,18 +805,20 @@ function _validate_interp_axis(name::String, axis_raw, axis_label::String)::Vect
             "$(name): `$(axis_label)` has $(n) entries; need ≥ 2 to define a blend interval."))
     end
     out = Vector{Float64}(undef, n)
+    # NaN over the whole axis before monotonicity (esm-spec §9.2): an axis
+    # holding a NaN is `interp_nan_in_axis` whatever its other entries.
     @inbounds for i in 1:n
-        v = Float64(axis_raw[i])
-        if isnan(v)
-            throw(ClosedFunctionError(ERROR_CODES.INTERP_NAN_IN_AXIS,
-                "$(name): `$(axis_label)`[$(i)] is NaN; axis arrays must be all-finite."))
-        end
-        if i > 1 && !(v > out[i-1])
+        out[i] = Float64(axis_raw[i])
+        isnan(out[i]) && throw(ClosedFunctionError(ERROR_CODES.INTERP_NAN_IN_AXIS,
+            "$(name): `$(axis_label)`[$(i)] is NaN; axis arrays must be all-finite."))
+    end
+    @inbounds for i in 2:n
+        v = out[i]
+        if !(v > out[i-1])
             throw(ClosedFunctionError(ERROR_CODES.INTERP_NON_MONOTONIC_AXIS,
                 "$(name): `$(axis_label)` is not strictly increasing " *
                 "(`$(axis_label)`[$(i)] = $(v) is not > `$(axis_label)`[$(i-1)] = $(out[i-1]))."))
         end
-        out[i] = v
     end
     return out
 end
@@ -1251,6 +1256,28 @@ end
 Base.showerror(io::IO, e::EnumLoweringError) =
     print(io, "EnumLoweringError(", e.code, "): ", e.message)
 
+# esm-spec §9.3: within ONE enum the integer values are unique — `0` included —
+# and a duplicate is a defect of the block itself, raised whether or not any
+# `enum` op names either symbol and before any op resolves. Values may coincide
+# ACROSS enums. Takes the typed map or the raw JSON block; a non-integer value
+# is left to the coercer's own diagnostic.
+function _check_enum_values_unique(enums)::Nothing
+    (enums === nothing || !(enums isa AbstractDict)) && return nothing
+    for (enum_name, mapping) in pairs(enums)
+        mapping isa AbstractDict || continue
+        seen = Dict{Int,String}()
+        for (sym, v) in pairs(mapping)
+            (v isa Integer && !(v isa Bool)) || continue
+            prior = get(seen, Int(v), nothing)
+            prior === nothing || throw(EnumLoweringError(ERROR_CODES.ENUM_DUPLICATE_VALUE,
+                "enums.$(enum_name): symbols `$(prior)` and `$(sym)` both map to " *
+                "$(Int(v)); values within one enum must be unique (esm-spec §9.3)"))
+            seen[Int(v)] = string(sym)
+        end
+    end
+    return nothing
+end
+
 """
     _lower_enum_ops_for_file(document, target, open_names) -> target′
 
@@ -1272,6 +1299,7 @@ diagnostic. Raises [`EnumLoweringError`](@ref).
 function _lower_enum_ops_for_file(document, target,
                                   open_names::AbstractSet{String}=Set{String}())
     enums = _is_object(document) ? _raw_get(document, "enums") : nothing
+    _check_enum_values_unique(enums)
     return _lower_raw_enum_ops(target, enums, open_names)
 end
 
@@ -1395,6 +1423,7 @@ Mutates `file` in place; returns the file for convenience.
 """
 function lower_enums!(file::EsmFile)::EsmFile
     enums = file.enums === nothing ? Dict{String,Dict{String,Int}}() : file.enums
+    _check_enum_values_unique(enums)
     if file.models !== nothing
         for (_, m) in file.models
             _lower_model_enums!(m, enums)

@@ -281,9 +281,48 @@ end
     # "seen set" using 0 as its own sentinel would pass the positive case and
     # let this one through.
     _doc(enums) = """{"esm":"1.0.0","metadata":{"name":"T","description":"d","authors":["a"]},"enums":$enums,"models":{"M":{"variables":{"x":{"type":"unknown","units":"1"}},"equations":[{"lhs":"x","rhs":{"op":"enum","args":["m","A"]}}]}}}"""
-    @test_throws ParseError load_string(_doc("""{"m":{"A":0,"B":0}}"""))
-    @test_throws ParseError load_string(_doc("""{"m":{"A":3,"B":3}}"""))
+    dup_code(f) = try
+        f(); ""
+    catch e
+        e isa EnumLoweringError || rethrow()
+        e.code
+    end
+    @test dup_code(() -> load_string(_doc("""{"m":{"A":0,"B":0}}"""))) == "enum_duplicate_value"
+    @test dup_code(() -> load_string(_doc("""{"m":{"A":3,"B":3}}"""))) == "enum_duplicate_value"
+    # Whether or not any `enum` op names the duplicated symbols.
+    @test dup_code(() -> load_string(_doc("""{"m":{"A":1,"B":2,"C":2}}"""))) ==
+          "enum_duplicate_value"
+    # Values MAY coincide across enums.
+    @test dup_code(() -> load_string(_doc("""{"m":{"A":1},"n":{"A":1}}"""))) == ""
+    # A file built in memory (no coercer) is checked by the lowering.
+    mem = EsmFile("1.0.0", Metadata("E"); enums=Dict("m" => Dict("A" => 0, "B" => 0)))
+    @test dup_code(() -> lower_enums(mem)) == "enum_duplicate_value"
     ok = load_string(_doc("""{"m":{"A":0,"B":-1}}"""))
     @test ok.enums["m"]["A"] == 0
     @test ok.enums["m"]["B"] == -1
+
+    # The two tests/invalid fixtures (resolver_only, pinned code).
+    for f in ("enum_duplicate_value.esm", "enum_duplicate_zero_value.esm")
+        @test dup_code(() -> load_path(joinpath(_CF_REPO_ROOT, "tests", "invalid", f))) ==
+              "enum_duplicate_value"
+    end
+end
+
+# esm-spec §9.2 / §9.5.5: NaN is checked over the whole array BEFORE monotonicity,
+# so the verdict on an array holding a NaN does not depend on where it sits.
+@testset "NaN precedes non-monotonic (esm-spec §9.2)" begin
+    cf_code(name, args) = try
+        evaluate_closed_function(name, args); ""
+    catch e
+        e isa ClosedFunctionError || rethrow()
+        e.code
+    end
+    for xs in ([3.0, 1.0, NaN], [NaN, 1.0, 2.0], [1.0, NaN, 0.0])
+        @test cf_code("interp.searchsorted", Any[1.0, xs]) == "searchsorted_nan"
+        @test cf_code("interp.linear", Any[[1.0, 2.0, 3.0], xs, 1.0]) == "interp_nan_in_axis"
+        @test cf_code("interp.bilinear",
+                      Any[[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], [0.0, 1.0], xs, 0.5, 1.0]) ==
+              "interp_nan_in_axis"
+    end
+    @test cf_code("interp.searchsorted", Any[1.0, [3.0, 1.0, 2.0]]) == "searchsorted_non_monotonic"
 end

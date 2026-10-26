@@ -513,18 +513,22 @@ end
 # act as the non-symbolic-arg discriminators in `@register_symbolic`; the
 # scalar query argument(s) are the only symbolic args MTK traces.
 #
-# `interp.searchsorted` is intentionally NOT registered here — its return
-# is an integer index, and the only spec-supported composition with `index`
-# requires array-shaped intermediate evaluation that does not lower cleanly
-# to MTK. Callers needing searchsorted in symbolic contexts should use the
-# named tensor-interp primitives instead (which were added precisely for
-# that reason).
+# `interp.searchsorted` is registered too, as an opaque integer-valued scalar:
+# it composes with `min` / `max` / `-` and a run-time `index` into a `const`
+# array (`_esm_const_gather`), which is the §9.5.3 `nearest` lowering.
 
 # 1-D linear interp registered op. The `table` and `axis` arguments are
 # concrete vectors; `x` is the symbolic query that MTK's tracer flows.
 function _esm_interp_linear(table::Vector{Float64}, axis::Vector{Float64}, x::Real)::Float64
     return EarthSciAST.evaluate_closed_function("interp.linear",
         Any[table, axis, Float64(x)])::Float64
+end
+
+# `interp.searchsorted` registered op: the 1-based index as a Float64, so it
+# flows through symbolic arithmetic; `_esm_const_gather` rounds it back.
+function _esm_interp_searchsorted(xs::Vector{Float64}, x::Real)::Float64
+    return Float64(EarthSciAST.evaluate_closed_function("interp.searchsorted",
+        Any[Float64(x), xs]))
 end
 
 # 2-D bilinear interp registered op. The `table` is a row-major nested
@@ -544,6 +548,7 @@ end
 # of the spec contract; downstream users who need analytic gradients must
 # define them separately.
 @register_symbolic _esm_interp_linear(table::Vector{Float64}, axis::Vector{Float64}, x) false
+@register_symbolic _esm_interp_searchsorted(xs::Vector{Float64}, x) false
 @register_symbolic _esm_interp_bilinear(table::Vector{Vector{Float64}}, axis_x::Vector{Float64}, axis_y::Vector{Float64}, x, y) false
 
 # The registration's symtype promotion does not match a call whose table
@@ -553,6 +558,7 @@ end
 # calls is a real scalar, so say so for any argument types.
 Symbolics.SymbolicUtils.promote_symtype(::typeof(_esm_interp_linear), args...) = Real
 Symbolics.SymbolicUtils.promote_symtype(::typeof(_esm_interp_bilinear), args...) = Real
+Symbolics.SymbolicUtils.promote_symtype(::typeof(_esm_interp_searchsorted), args...) = Real
 
 # Recursively coerce a JSON-parsed const-array value into the concrete
 # vector type the registered op expects. Inputs may be Vector{Any} of
@@ -617,14 +623,20 @@ function _build_fn(expr::OpExpr, var_dict::Dict{String,Any},
         x_sym  = _esm_to_symbolic(expr.args[4], var_dict, t_sym, dim_dict)
         y_sym  = _esm_to_symbolic(expr.args[5], var_dict, t_sym, dim_dict)
         return _esm_interp_bilinear(table, axis_x, axis_y, x_sym, y_sym)
+    elseif fname == "interp.searchsorted"
+        length(expr.args) == 2 ||
+            throw(ArgumentError("interp.searchsorted expects 2 args, got $(length(expr.args))"))
+        xs = _to_float64_vector(_extract_const_array_node(expr.args[2], fname, "xs"))
+        # Validate at build, as the interpreter does at load: the registered
+        # call is opaque, so a bad table would otherwise surface mid-solve.
+        EarthSciAST._validate_searchsorted_table(fname, xs)
+        x_sym = _esm_to_symbolic(expr.args[1], var_dict, t_sym, dim_dict)
+        return _esm_interp_searchsorted(xs, x_sym)
     end
-    # Other closed functions (datetime.*, interp.searchsorted) are not
-    # exposed as registered symbolic ops — they're either unused in MTK
-    # contexts or whose return shape (integer index) doesn't compose with
-    # symbolic arithmetic.
+    # The datetime.* closed functions are not exposed as registered symbolic ops.
     throw(ArgumentError("Unsupported `fn` name in MTK lowering: `$(fname)`. " *
-          "Only `interp.linear` and `interp.bilinear` are registered as " *
-          "@register_symbolic operators (esm-94w)."))
+          "Only `interp.linear`, `interp.bilinear` and `interp.searchsorted` are " *
+          "registered as @register_symbolic operators (esm-94w)."))
 end
 
 function _get_or_make_dim(dim_dict::Dict{String,Any}, name::AbstractString)

@@ -47,7 +47,8 @@ and [`ClosedFunctionError`](@ref).
 
 Codes: `table_lookup_unknown_table`, `table_lookup_axis_name_mismatch`,
 `table_lookup_output_out_of_range`, `table_interpolation_axes_mismatch`,
-`table_data_shape_mismatch`, `table_axis_nan`, the §9.5.3a refusal
+`table_data_shape_mismatch`, `table_axis_nan`, `table_axis_non_monotonic`,
+`table_lookup_args_nonempty`, the §9.5.3a refusal
 `table_out_of_bounds_unsupported` (from a compiler that cannot run an
 `out_of_bounds: "error"` table), and the evaluation-time
 `table_lookup_out_of_bounds` a strict table raises for a query outside its axis.
@@ -398,17 +399,39 @@ function _lower_table_lookup_node(node::OpExpr,
                                     inputs[1], inputs[2]]; name="interp.bilinear",
                       table=strict)
     elseif kind == "nearest" && length(table.axes) == 1
-        # `nearest` is an `index` of the table slice at the searchsorted
-        # position, not an `interp` blend.
-        return OpExpr("index", ASTExpr[_table_const(slice),
-            OpExpr("fn", ASTExpr[inputs[1],
-                                 _table_axis_const(table.axes[1], table_id)];
-                   name="interp.searchsorted", table=strict)])
+        return _nearest_lookup_tree(_table_const(slice),
+                                    _table_axis_const(table.axes[1], table_id),
+                                    length(table.axes[1].values), inputs[1], strict)
     end
     throw(TableLookupError(ERROR_CODES.TABLE_INTERPOLATION_AXES_MISMATCH,
         "table `$(table_id)` declares `interpolation: \"$(kind)\"` over " *
         "$(length(table.axes)) axes; `linear` and `nearest` require 1, `bilinear` " *
         "requires 2 (esm-spec §9.5.1)"))
+end
+
+# The esm-spec §9.5.3 `nearest` composition, op for op and operand for operand
+# (every binding builds this same tree so ties are decided on the same two
+# binary64 differences):
+#
+#   j  = interp.searchsorted(x, A)       lo = max(j - 1, 1)       hi = min(j, N)
+#   ifelse(x == x, index(D, ifelse(A[hi] - x < x - A[lo], hi, lo)), x)
+#
+# A tie goes to `lo`, the lower knot; below the axis `lo = hi = 1` and above it
+# (and for a NaN query, whose search is N + 1) `lo = hi = N`, so no `index`
+# reads out of range on either branch; a NaN query takes the outer else-branch
+# and returns NaN. For an `out_of_bounds: "error"` table every `searchsorted`
+# carries the table id, so the evaluator's strict check on the query runs
+# whichever copy it reaches first.
+function _nearest_lookup_tree(D::OpExpr, A::OpExpr, N::Int, x::ASTExpr,
+                              strict::Union{String,Nothing})::OpExpr
+    j() = OpExpr("fn", ASTExpr[x, A]; name="interp.searchsorted", table=strict)
+    lo() = OpExpr("max", ASTExpr[OpExpr("-", ASTExpr[j(), IntExpr(1)]), IntExpr(1)])
+    hi() = OpExpr("min", ASTExpr[j(), IntExpr(N)])
+    nearer_hi = OpExpr("<", ASTExpr[
+        OpExpr("-", ASTExpr[OpExpr("index", ASTExpr[A, hi()]), x]),
+        OpExpr("-", ASTExpr[x, OpExpr("index", ASTExpr[A, lo()])])])
+    pick = OpExpr("index", ASTExpr[D, OpExpr("ifelse", ASTExpr[nearer_hi, hi(), lo()])])
+    return OpExpr("ifelse", ASTExpr[OpExpr("==", ASTExpr[x, x]), pick, x])
 end
 
 # The node's per-axis input expressions, in the table's DECLARED axis order —
@@ -417,7 +440,7 @@ end
 function _table_axis_inputs(node::OpExpr, table::FunctionTable,
                             table_id::String)::Vector{ASTExpr}
     isempty(node.args) || throw(TableLookupError(
-        ERROR_CODES.TABLE_LOOKUP_AXIS_NAME_MISMATCH,
+        ERROR_CODES.TABLE_LOOKUP_ARGS_NONEMPTY,
         "`table_lookup` on table `$(table_id)` carries $(length(node.args)) positional " *
         "`args`; the per-axis inputs live under `axes` and `args` MUST be empty " *
         "(esm-spec §9.5.2)"))
@@ -513,9 +536,21 @@ function _table_data_value(slice)
     return Vector{Float64}[_table_data_value(row) for row in slice]
 end
 
+# esm-spec §9.5.5: the axis is checked for NaN (any non-finite value) over its
+# whole length BEFORE monotonicity, so an axis holding a NaN is `table_axis_nan`
+# whatever its other entries — a NaN compares false with everything, so the
+# monotonicity verdict on it would depend on how the comparison is written.
 function _table_axis_const(axis::FunctionTableAxis, table_id::String)::ASTExpr
     all(isfinite, axis.values) || throw(TableLookupError(ERROR_CODES.TABLE_AXIS_NAN,
         "table `$(table_id)`: axis `$(axis.name)` carries a non-finite value; axis " *
         "`values` must be strictly-increasing FINITE floats (esm-spec §9.5.1)"))
-    return OpExpr("const", ASTExpr[]; value=copy(axis.values))
+    vals = axis.values
+    for i in 2:length(vals)
+        vals[i] > vals[i-1] || throw(TableLookupError(
+            ERROR_CODES.TABLE_AXIS_NON_MONOTONIC,
+            "table `$(table_id)`: axis `$(axis.name)` is not strictly increasing " *
+            "(values[$(i)] = $(vals[i]) is not > values[$(i - 1)] = $(vals[i - 1])) " *
+            "(esm-spec §9.5.1)"))
+    end
+    return OpExpr("const", ASTExpr[]; value=copy(vals))
 end
