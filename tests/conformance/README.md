@@ -320,6 +320,27 @@ Reference implementation:
 the contract itself grew a normalization pass and two ledgers. Anything
 beyond that is the contract leaking into the adapter: push it back here.
 
+## Optional participant: `lean`
+
+`lean` is the executable Lean model of the spec (`formal/`, adapter
+`esm-lean`). The runners below recognize it as an **optional** participant
+(`OPTIONAL_BINDINGS` in `scripts/conformance_lib.py`). It joins every
+default run. When its adapter is not configured, it is reported as a named,
+unrequired exclusion (`optional_exclusions` in the report, `adapter_status`
+`not_configured`) and never fails the run. When it is configured, it is gated
+exactly like a binding. No manifest may list it in `bindings_required`, and
+`--write-golden` still mints only from the reference binding.
+
+| Runner | How to configure `lean` |
+|---|---|
+| `run-inline-tests-conformance.py` | `$EARTHSCI_INLINE_TESTS_ADAPTER_LEAN`, or `earthsci-inline-tests-adapter-lean` on PATH. The manifest adapter protocol, plus `--compiler`. Its refusals go in the fixture's `named_exclusions`, like any binding's. |
+| `run-determinism-conformance.py` | `$EARTHSCI_DETERMINISM_ADAPTER_LEAN`, or `earthsci-determinism-adapter-lean` on PATH. The manifest adapter protocol. Rank base 0 unless `rank_base_pin` says otherwise. |
+| `run-property-corpus-conformance.py` | `$EARTHSCI_PROPERTY_CORPUS_ADAPTER_LEAN`, or `earthsci-property-corpus-adapter-lean` on PATH. The round-trip driver protocol (`<cmd> <fixture.json>...` → JSON on stdout, as in `scripts/property_corpus/roundtrip_python.py`). |
+| `compare-conformance-outputs.py` | Write `<output-dir>/lean/results.json`. `--optional-languages` with no value turns this off. |
+
+The `test-conformance.sh` stages pass explicit `--bindings` lists, so `lean`
+runs there only after a stage names it.
+
 ## Adding a fixture
 
 1. Add the `.esm` file under `tests/` in an appropriate category

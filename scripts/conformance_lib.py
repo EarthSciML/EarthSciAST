@@ -53,7 +53,42 @@ from typing import Any, Callable
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
+# The bindings a manifest may REQUIRE (`bindings_required`) and mint goldens
+# from. Unchanged by the optional participants below.
 KNOWN_BINDINGS = ("julia", "rust", "python", "typescript", "go")
+
+# Participants a runner recognizes but that no tier requires: `lean` is the
+# executable Lean model of the spec (formal/README.md), run through its
+# `esm-lean` adapter. An optional participant is in every default run; when its
+# adapter is not configured it is reported as a named, unrequired exclusion
+# (adapter_status `not_configured`) and never fails the run, and when it is
+# configured it is gated exactly like a binding. It never mints a golden, and a
+# manifest cannot list it in `bindings_required` (that would be a ruling, not a
+# runner change).
+OPTIONAL_BINDINGS = ("lean",)
+
+# Every name a runner accepts on `--bindings` and in per-fixture ledgers.
+ALL_BINDINGS = KNOWN_BINDINGS + OPTIONAL_BINDINGS
+
+# The adapter_status of an optional participant whose adapter is not configured.
+NOT_CONFIGURED = "not_configured"
+
+
+def with_optional_bindings(bindings: list[str]) -> list[str]:
+    """``bindings`` followed by every optional participant not already in it:
+    a runner's DEFAULT binding list, so an unconfigured optional participant is
+    reported by name rather than silently absent."""
+    return [*bindings, *(b for b in OPTIONAL_BINDINGS if b not in bindings)]
+
+
+def optional_exclusions(adapters: dict[str, dict]) -> list[dict]:
+    """The named, unrequired exclusions: one entry per optional participant
+    whose adapter is not configured. Runners put this list in their report."""
+    return [
+        {"binding": b, "adapter_status": NOT_CONFIGURED, "reason": ar.get("error")}
+        for b, ar in adapters.items()
+        if b in OPTIONAL_BINDINGS and ar.get("adapter_status") == NOT_CONFIGURED
+    ]
 
 
 def _eprint(*args: Any) -> None:
@@ -176,7 +211,10 @@ class AdapterHarness:
     def missing_record(self, binding: str) -> dict:
         return {
             "binding": binding,
-            "adapter_status": "missing",
+            # An optional participant with no adapter is not configured, not
+            # broken; the status says which, so a report never reads a
+            # deliberate absence as a crashed producer.
+            "adapter_status": NOT_CONFIGURED if binding in OPTIONAL_BINDINGS else "missing",
             "error": (
                 f"adapter not found; expected on PATH as "
                 f"{self.path_prefix}{binding} or via "
@@ -287,6 +325,10 @@ def print_summary(report: dict, title: str) -> None:
         for fid, fr in br.get("fixtures", {}).items():
             if fr.get("status") != "ok":
                 print(f"      FAIL {fid}: {fr.get('problems') or fr.get('status')}")
+    for ex in report.get("optional_exclusions") or []:
+        print(
+            f"  optional participant {ex['binding']}: not configured (unrequired) — {ex['reason']}"
+        )
 
 
 # === Canonical serialization ==============================================
@@ -343,11 +385,18 @@ def run_producer_suite(
     decide ``ok`` vs ``fail``. The report is then written, ``print_report`` renders
     the console summary, and the exit code is ``1`` iff the final status is
     ``fail`` (``0`` for ``ok`` / ``no_producers``)."""
+    if set(required) & set(OPTIONAL_BINDINGS):
+        raise ManifestError(
+            f"{manifest_path}: bindings_required names an optional participant "
+            f"{sorted(set(required) & set(OPTIONAL_BINDINGS))}; requiring one is a ruling, "
+            f"not a manifest edit"
+        )
     adapters = harness.collect(bindings, manifest_path, timeout)
     report: dict[str, Any] = {
         "manifest_path": str(manifest_path),
         "status": "ok",
         "bindings": {},
+        "optional_exclusions": optional_exclusions(adapters),
     }
     overall_ok = True
     for b in bindings:
@@ -396,6 +445,81 @@ def run_producer_suite(
     write_report(report, output_path)
     print_report(report)
     return 1 if report["status"] == "fail" else 0
+
+
+def optional_participant_controls(slug: str) -> list[tuple[bool, str, str]]:
+    """Negative controls for the optional-participant contract, as
+    ``(ok, label, detail)`` triples a runner's ``--self-test`` reports.
+
+    Asserts, with no adapter run: an unconfigured optional participant is
+    ``not_configured`` (and a missing REQUIRED-able binding is still
+    ``missing``); the default binding list carries it; a producer run in which it
+    is the only participant and unconfigured is green and names it as an
+    exclusion; and a manifest that REQUIRES it is a config error."""
+
+    class _Unconfigured(AdapterHarness):
+        def discover(self, binding: str) -> list[str] | None:
+            return None
+
+    harness = _Unconfigured(slug)
+    out: list[tuple[bool, str, str]] = []
+    lean, julia = (harness.missing_record(b)["adapter_status"] for b in ("lean", "julia"))
+    out.append(
+        (
+            lean == NOT_CONFIGURED and julia == "missing",
+            "optional/unconfigured-is-not-a-broken-adapter",
+            f"lean -> {lean!r}, julia -> {julia!r}; want {NOT_CONFIGURED!r} / 'missing'",
+        )
+    )
+    defaults = with_optional_bindings(["julia"])
+    out.append(
+        (
+            defaults == ["julia", *OPTIONAL_BINDINGS],
+            "optional/in-every-default-run",
+            f"default bindings {defaults}",
+        )
+    )
+    import contextlib
+    import io
+
+    with tempfile.TemporaryDirectory(prefix=f"{slug}-optional-") as d:
+        report_path = Path(d) / "report.json"
+        common = dict(
+            harness=harness,
+            bindings=list(OPTIONAL_BINDINGS),
+            fixtures=[{"id": "x"}],
+            manifest_path=Path("<self-test>"),
+            output_path=report_path,
+            timeout=None,
+            compare_fixture=lambda b, fx, produced: {"status": "ok"},
+            print_report=lambda r: None,
+            no_producers_message="",
+        )
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc = run_producer_suite(required=set(), **common)
+        report = json.loads(report_path.read_text())
+        named = [e["binding"] for e in report.get("optional_exclusions", [])]
+        out.append(
+            (
+                rc == 0 and named == list(OPTIONAL_BINDINGS),
+                "optional/unconfigured-is-a-named-green-exclusion",
+                f"exit {rc}, named exclusions {named}",
+            )
+        )
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                run_producer_suite(required=set(OPTIONAL_BINDINGS), **common)
+            rejected = False
+        except ManifestError:
+            rejected = True
+        out.append(
+            (
+                rejected,
+                "optional/cannot-be-required-by-a-manifest",
+                "a manifest requiring an optional participant was accepted",
+            )
+        )
+    return out
 
 
 # === CLI ==================================================================
