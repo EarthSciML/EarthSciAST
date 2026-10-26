@@ -34,6 +34,11 @@ def Axis.all : List Axis := [.m, .kg, .s, .mol, .K, .A, .cd, .rad]
 
 theorem Axis.mem_all (a : Axis) : a ∈ Axis.all := by cases a <;> simp [Axis.all]
 
+/-- Exactly eight axes, and no others. -/
+theorem Axis.exactly_eight :
+    (∀ a : Axis, a ∈ Axis.all) ∧ Axis.all.length = 8 ∧ Axis.all.Nodup :=
+  ⟨Axis.mem_all, rfl, by decide⟩
+
 instance : Fintype Axis :=
   ⟨⟨(Axis.all : Multiset Axis), by decide⟩, Axis.mem_all⟩
 
