@@ -175,19 +175,7 @@ export function lowerTableLookupNode(
     ])
   }
   if (kind === 'nearest' && axes.length === 1) {
-    // `nearest` is an `index` of the table slice at the searchsorted position,
-    // not an `interp` blend. The lowered form is the §9.5.3 one, but note that
-    // `index` is an ARRAY op with no entry in the scalar op-registry, so
-    // `codegen.ts` cannot evaluate the result — a `nearest` table lowers
-    // correctly here and is then refused as `unlowered_operator` by the scalar
-    // runner, the same as any other array op.
-    return {
-      op: 'index',
-      args: [
-        constExpr(data),
-        closedFn('interp.searchsorted', [inputs[0], axisConst(axes[0], tableId)]),
-      ],
-    }
+    return nearestTree(data, axes[0], inputs[0], tableId)
   }
   return fail(
     ERROR_CODES.TABLE_INTERPOLATION_AXES_MISMATCH,
@@ -197,14 +185,45 @@ export function lowerTableLookupNode(
 }
 
 /**
+ * The esm-spec §9.5.3 `nearest` composition, built node for node as the spec
+ * spells it (same ops, same operand order) so that every binding decides a tie
+ * on the same two `binary64` differences `A[hi] - x` and `x - A[lo]`:
+ *
+ *     ifelse(x == x, index(D, ifelse(A[hi] - x < x - A[lo], hi, lo)), x)
+ *
+ * with `j = searchsorted(x, A)`, `lo = max(j - 1, 1)`, `hi = min(j, N)`. A tie
+ * goes to the lower knot, a query outside the axis clamps to the end knot, and
+ * a NaN query returns NaN. `index` is an array op the scalar evaluator in
+ * `codegen.ts` does not evaluate, so the result lowers here and is then refused
+ * there as `unevaluable_operator`.
+ */
+function nearestTree(data: unknown, axis: FunctionTableAxis, x: Expr, tableId: string): Expr {
+  const n = axis.values.length
+  const knots = (): Expr => axisConst(axis, tableId)
+  const j = (): Expr => closedFn('interp.searchsorted', [x, knots()])
+  const lo = (): Expr => op('max', [op('-', [j(), 1]), 1])
+  const hi = (): Expr => op('min', [j(), n])
+  const knotAt = (k: Expr): Expr => op('index', [knots(), k])
+  return op('ifelse', [
+    op('==', [x, x]),
+    op('index', [
+      constExpr(data),
+      op('ifelse', [op('<', [op('-', [knotAt(hi()), x]), op('-', [x, knotAt(lo())])]), hi(), lo()]),
+    ]),
+    x,
+  ])
+}
+
+/**
  * The node's per-axis input expressions, in the table's DECLARED axis order
  * (which is the order of `data`'s inner dimensions, and therefore the argument
  * order of `interp.bilinear`).
  */
 function axisInputs(node: ExpressionNode, table: FunctionTable, tableId: string): Expr[] {
+  // An absent `args` means `[]` (esm-spec §9.5.2).
   if (node.args !== undefined && node.args.length > 0) {
     fail(
-      ERROR_CODES.TABLE_LOOKUP_AXIS_NAME_MISMATCH,
+      ERROR_CODES.TABLE_LOOKUP_ARGS_NONEMPTY,
       `\`table_lookup\` on table \`${tableId}\` carries ${node.args.length} positional \`args\`; ` +
         'the per-axis inputs live under `axes` and `args` MUST be empty (esm-spec §9.5.2)',
     )
@@ -342,11 +361,28 @@ function axisConst(axis: FunctionTableAxis, tableId: string): Expr {
       )
     }
   }
+  // After the non-finite scan, which takes precedence (esm-spec §9.5.5): every
+  // entry is a finite number by here.
+  for (let i = 1; i < axis.values.length; i++) {
+    const prev = numericValue(axis.values[i - 1]) as number
+    const cur = numericValue(axis.values[i]) as number
+    if (!(cur > prev)) {
+      fail(
+        ERROR_CODES.TABLE_AXIS_NON_MONOTONIC,
+        `table \`${tableId}\`: axis \`${axis.name}\` is not strictly increasing at entry ` +
+          `${i + 1} (${cur} after ${prev}) (esm-spec §9.5.1)`,
+      )
+    }
+  }
   return constExpr(axis.values)
 }
 
 function constExpr(value: unknown): Expr {
   return { op: 'const', args: [], value: plainNumbers(value) } as Expr
+}
+
+function op(name: string, args: Expr[]): Expr {
+  return { op: name, args } as Expr
 }
 
 function closedFn(name: string, args: Expr[]): Expr {

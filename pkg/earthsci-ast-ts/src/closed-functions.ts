@@ -29,7 +29,7 @@ export type ClosedFunctionErrorCode =
   | 'closed_function_arity'
   | 'closed_function_overflow'
   | 'searchsorted_non_monotonic'
-  | 'searchsorted_nan_in_table'
+  | 'searchsorted_nan'
   | 'interp_non_monotonic_axis'
   | 'interp_axis_length_mismatch'
   | 'interp_nan_in_axis'
@@ -219,10 +219,7 @@ export function validateSearchsortedTable(
   }
   for (let i = 0; i < xs.length; i++) {
     if (Number.isNaN(xs[i]!)) {
-      throw new ClosedFunctionError(
-        ERROR_CODES.SEARCHSORTED_NAN_IN_TABLE,
-        `${where}: xs[${i + 1}] is NaN`,
-      )
+      throw new ClosedFunctionError(ERROR_CODES.SEARCHSORTED_NAN, `${where}: xs[${i + 1}] is NaN`)
     }
   }
   for (let i = 1; i < xs.length; i++) {

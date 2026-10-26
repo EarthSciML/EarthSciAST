@@ -429,6 +429,8 @@ export const ERROR_CODES = {
   ENUM_OP_MALFORMED: 'enum_op_malformed',
   UNKNOWN_ENUM: 'unknown_enum',
   UNKNOWN_ENUM_SYMBOL: 'unknown_enum_symbol',
+  // Two symbols of one enum map to the same integer (esm-spec §9.3).
+  ENUM_DUPLICATE_VALUE: 'enum_duplicate_value',
 
   // ---- function tables: §9.5.3 `table_lookup` lowering (lower-table-lookups.ts;
   //      TableLookupLoweringError codes, named by esm-spec §9.5.5) ----
@@ -438,6 +440,10 @@ export const ERROR_CODES = {
   TABLE_INTERPOLATION_AXES_MISMATCH: 'table_interpolation_axes_mismatch',
   TABLE_DATA_SHAPE_MISMATCH: 'table_data_shape_mismatch',
   TABLE_AXIS_NAN: 'table_axis_nan',
+  // Checked after `table_axis_nan`, which takes precedence (esm-spec §9.5.5).
+  TABLE_AXIS_NON_MONOTONIC: 'table_axis_non_monotonic',
+  // A `table_lookup` carrying a non-empty `args` (esm-spec §9.5.2).
+  TABLE_LOOKUP_ARGS_NONEMPTY: 'table_lookup_args_nonempty',
   // `table_out_of_bounds_unsupported` — esm-spec §9.5.3a. `out_of_bounds:
   //   "error"` is "conformant when implemented" (§9.5.1) and this binding does
   //   not implement it. Lowering such a table to the clamping `interp.*` form
@@ -457,7 +463,8 @@ export const ERROR_CODES = {
   INTERP_NAN_IN_AXIS: 'interp_nan_in_axis',
   INTERP_NON_MONOTONIC_AXIS: 'interp_non_monotonic_axis',
   INTERP_TABLE_NOT_CONST: 'interp_table_not_const',
-  SEARCHSORTED_NAN_IN_TABLE: 'searchsorted_nan_in_table',
+  // NaN in `xs` is checked before monotonicity (esm-spec §9.2).
+  SEARCHSORTED_NAN: 'searchsorted_nan',
   SEARCHSORTED_NON_MONOTONIC: 'searchsorted_non_monotonic',
   // ---- evaluation: the tree-walking evaluator (codegen.ts; raised as
   //      UnloweredOperatorError / EvaluatorError). `unlowered_operator` is the
