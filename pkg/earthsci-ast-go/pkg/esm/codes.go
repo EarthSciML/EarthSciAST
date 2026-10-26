@@ -437,9 +437,13 @@ const (
 	// document's `function_tables` block does not declare.
 	CodeTableLookupUnknownTable = "table_lookup_unknown_table"
 	// CodeTableLookupAxisNameMismatch: the key set of `table_lookup.axes` does
-	// not match the axis names the referenced table declares — or the node
-	// carries positional `args`, which §9.5.2 requires to be empty.
+	// not match the axis names the referenced table declares.
 	CodeTableLookupAxisNameMismatch = "table_lookup_axis_name_mismatch"
+	// CodeTableLookupArgsNonempty: a `table_lookup` node carries a non-empty
+	// positional `args` (esm-spec §9.5.2); an absent `args` means `[]`. The
+	// schema rejects the same node, so this is what a node that skipped
+	// schema validation (one built in memory) reports.
+	CodeTableLookupArgsNonempty = "table_lookup_args_nonempty"
 	// CodeTableLookupOutputOutOfRange: `table_lookup.output` selects no output
 	// of the referenced table — an index past `len(outputs)` (or past 0 for a
 	// single-output table), a name absent from `outputs`, or a non-integer /
@@ -479,8 +483,9 @@ const (
 	// CodeSearchsortedNonMonotonic: a `searchsorted` table is not
 	// non-decreasing.
 	CodeSearchsortedNonMonotonic = "searchsorted_non_monotonic"
-	// CodeSearchsortedNaNInTable: a `searchsorted` table contains a NaN.
-	CodeSearchsortedNaNInTable = "searchsorted_nan_in_table"
+	// CodeSearchsortedNaN: a `searchsorted` table contains a NaN. Checked
+	// before CodeSearchsortedNonMonotonic (esm-spec §9.2).
+	CodeSearchsortedNaN = "searchsorted_nan"
 	// CodeInterpNonMonotonicAxis: an `interp` axis is not strictly increasing.
 	CodeInterpNonMonotonicAxis = "interp_non_monotonic_axis"
 	// CodeInterpAxisLengthMismatch: an `interp` axis length does not match the
@@ -505,6 +510,10 @@ const (
 	CodeInvalidEnumArity = "invalid_enum_arity"
 	// CodeInvalidEnumArg: an `enum` node argument is not a string.
 	CodeInvalidEnumArg = "invalid_enum_arg"
+	// CodeEnumDuplicateValue: two symbols of ONE `enums` entry map to the same
+	// integer (esm-spec §9.3). Raised on the block itself, whether or not an
+	// `enum` op names either symbol; values MAY coincide across enums.
+	CodeEnumDuplicateValue = "enum_duplicate_value"
 )
 
 // --- Diagnostic codes: expression EVALUATION (EvaluationError, raised from

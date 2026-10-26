@@ -49,7 +49,7 @@ const (
 //   - closed_function_arity       — wrong number of arguments.
 //   - closed_function_overflow    — integer-typed result would overflow Int32.
 //   - searchsorted_non_monotonic  — xs is not non-decreasing.
-//   - searchsorted_nan_in_table   — xs contains a NaN entry.
+//   - searchsorted_nan            — xs contains a NaN entry (checked before monotonicity).
 //   - interp_non_monotonic_axis   — interp.linear/bilinear axis is not strictly increasing.
 //   - interp_axis_length_mismatch — table shape disagrees with axis length(s).
 //   - interp_nan_in_axis          — interp.linear/bilinear axis contains NaN.
@@ -347,13 +347,17 @@ func interpSearchsorted(name string, x float64, xs []float64) (int32, error) {
 		// consistent extension that composes with `index`.
 		return int32(1), nil
 	}
-	// Validate monotonicity + NaN-in-table once per call.
+	// NaN is checked in its own pass BEFORE monotonicity (esm-spec §9.2): an
+	// xs holding a NaN is `searchsorted_nan` whatever its other entries, so a
+	// decreasing pair ahead of the NaN cannot win.
 	for i := 0; i < n; i++ {
 		if math.IsNaN(xs[i]) {
-			return 0, newClosedFunctionError(CodeSearchsortedNaNInTable,
+			return 0, newClosedFunctionError(CodeSearchsortedNaN,
 				fmt.Sprintf("%s: xs[%d] is NaN; NaN entries in xs are forbidden", name, i+1))
 		}
-		if i > 0 && xs[i] < xs[i-1] {
+	}
+	for i := 1; i < n; i++ {
+		if xs[i] < xs[i-1] {
 			return 0, newClosedFunctionError(CodeSearchsortedNonMonotonic,
 				fmt.Sprintf("%s: xs is not non-decreasing (xs[%d]=%g < xs[%d]=%g)",
 					name, i+1, xs[i], i, xs[i-1]))
@@ -379,7 +383,7 @@ func interpSearchsorted(name string, x float64, xs []float64) (int32, error) {
 // (programmatically built) and []interface{} (post-parse). NaN entries are
 // preserved: NaN string literals are already coerced to a float64 NaN by
 // toFloat64 (strconv.ParseFloat accepts "NaN"/"nan"), and downstream validators
-// reject NaN where the spec forbids it (searchsorted_nan_in_table,
+// reject NaN where the spec forbids it (searchsorted_nan,
 // interp_nan_in_axis). `role` names the argument in diagnostics.
 //
 // This replaces the former toFloat64Slice + toInterpAxisOrTable pair, which

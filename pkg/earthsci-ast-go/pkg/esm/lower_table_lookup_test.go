@@ -16,6 +16,7 @@ package esm
 import (
 	"encoding/json"
 	"errors"
+	"math"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -195,25 +196,115 @@ func TestTableLookupLowersMultiOutputBilinearToTheSpecForm(t *testing.T) {
 	}
 }
 
-// `nearest` is an `index` of the table slice at the searchsorted position, not
-// an `interp` blend.
-func TestTableLookupLowersNearestToIndexOfSearchsorted(t *testing.T) {
+// `nearest` lowers to the esm-spec §9.5.3 composition — the knot nearest x,
+// ties low, clamped, NaN in NaN out — with exactly the spec's ops and operand
+// order: ifelse(x == x, index(D, ifelse(A[hi]-x < x-A[lo], hi, lo)), x).
+func TestTableLookupLowersNearestToTheSpecComposition(t *testing.T) {
 	src := strings.Replace(tableLookupFixture,
 		`"interpolation": "linear"`, `"interpolation": "nearest"`, 1)
 	got := jsonView(t, loweredRHS(t, src, 0))
-	want := jsonLiteral(t, `{
-      "op": "index",
-      "args": [
+	const (
+		axis = `{"op": "const", "args": [], "value": [1.0, 2.0, 3.0, 4.0]}`
+		j    = `{"op": "fn", "name": "interp.searchsorted", "args": ["p", ` + axis + `]}`
+		lo   = `{"op": "max", "args": [{"op": "-", "args": [` + j + `, 1]}, 1]}`
+		hi   = `{"op": "min", "args": [` + j + `, 4]}`
+	)
+	want := jsonLiteral(t, `{"op": "ifelse", "args": [
+      {"op": "==", "args": ["p", "p"]},
+      {"op": "index", "args": [
         {"op": "const", "args": [], "value": [10.0, 20.0, 30.0, 40.0]},
-        {"op": "fn", "name": "interp.searchsorted", "args": [
-          "p",
-          {"op": "const", "args": [], "value": [1.0, 2.0, 3.0, 4.0]}
-        ]}
-      ]
-    }`)
+        {"op": "ifelse", "args": [
+          {"op": "<", "args": [
+            {"op": "-", "args": [{"op": "index", "args": [`+axis+`, `+hi+`]}, "p"]},
+            {"op": "-", "args": ["p", {"op": "index", "args": [`+axis+`, `+lo+`]}]}]},
+          `+hi+`,
+          `+lo+`]}]},
+      "p"]}`)
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("nearest lowered form diverges from esm-spec §9.5.3:\n got %#v\nwant %#v",
 			got, want)
+	}
+
+	// Evaluated: on a knot, a tie (2.5 between knots 2 and 3 goes LOW), either
+	// side of a midpoint, clamped below and above, and NaN in → NaN out.
+	file, err := LoadString(src)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	rhs := file.Models["M"].Equations[0].RHS
+	for _, c := range []struct{ p, want float64 }{
+		{1.0, 10}, {2.5, 20}, {2.49, 20}, {2.51, 30}, {4.0, 40}, {-5, 10}, {99, 40},
+	} {
+		v, err := file.Evaluate(rhs, map[string]float64{"p": c.p})
+		if err != nil {
+			t.Fatalf("p=%v: %v", c.p, err)
+		}
+		if v != c.want {
+			t.Errorf("nearest at p=%v = %v, want %v", c.p, v, c.want)
+		}
+	}
+	v, err := file.Evaluate(rhs, map[string]float64{"p": math.NaN()})
+	if err != nil {
+		t.Fatalf("NaN query: %v", err)
+	}
+	if !math.IsNaN(v) {
+		t.Errorf("a NaN query must give NaN, got %v", v)
+	}
+}
+
+// `out_of_bounds: "error"` stays refused under `nearest`, as under `linear`
+// (esm-spec §9.5.3a): this binding does not implement the mode.
+func TestTableLookupNearestOutOfBoundsErrorIsRefused(t *testing.T) {
+	src := strings.Replace(tableLookupFixture, `"interpolation": "linear",`,
+		`"interpolation": "nearest", "out_of_bounds": "error",`, 1)
+	if got := refuseCode(t, src); got != CodeTableOutOfBoundsUnsupported {
+		t.Fatalf("refusal code = %q, want %q", got, CodeTableOutOfBoundsUnsupported)
+	}
+}
+
+// A `table_lookup` carrying positional `args` is `table_lookup_args_nonempty`
+// (esm-spec §9.5.2); an absent `args` is `[]`. The schema rejects the former, so
+// both nodes are built in memory.
+func TestTableLookupArgsNonemptyAndAbsent(t *testing.T) {
+	tables := map[string]FunctionTable{"t": {
+		Axes: []FunctionTableAxis{{Name: "p", Values: []float64{1, 2, 3}}},
+		Data: []any{10.0, 20.0, 30.0},
+	}}
+	id := "t"
+	withArgs := ExprNode{Op: OpTableLookup, Table: &id,
+		TableAxes: map[string]Expression{"p": "p"}, Args: []any{"p"}}
+	_, err := lowerExprTableLookups(withArgs, tables)
+	var de DiagnosticError
+	if !errors.As(err, &de) || de.DiagnosticCode() != CodeTableLookupArgsNonempty {
+		t.Fatalf("non-empty args: got %v, want code %q", err, CodeTableLookupArgsNonempty)
+	}
+	absent := ExprNode{Op: OpTableLookup, Table: &id, TableAxes: map[string]Expression{"p": "p"}}
+	v, err := evaluateWithTables(absent, tables, map[string]float64{"p": 2.5})
+	if err != nil {
+		t.Fatalf("absent args must lower as []: %v", err)
+	}
+	if v != 25 {
+		t.Fatalf("absent-args lookup = %v, want 25", v)
+	}
+}
+
+// A NaN in an axis is `table_axis_nan` whatever the axis's other entries — a
+// decreasing pair ahead of the NaN, or a NaN first (esm-spec §9.5.5). JSON
+// cannot spell NaN, so the tables are built in memory.
+func TestTableLookupAxisNaNTakesPrecedence(t *testing.T) {
+	for _, values := range [][]float64{{3, 1, math.NaN()}, {math.NaN(), 1, 2}} {
+		tables := map[string]FunctionTable{"t": {
+			Axes: []FunctionTableAxis{{Name: "p", Values: values}},
+			Data: []any{10.0, 20.0, 30.0},
+		}}
+		id := "t"
+		node := ExprNode{Op: OpTableLookup, Table: &id,
+			TableAxes: map[string]Expression{"p": "p"}, Args: []any{}}
+		_, err := lowerExprTableLookups(node, tables)
+		var de DiagnosticError
+		if !errors.As(err, &de) || de.DiagnosticCode() != CodeTableAxisNaN {
+			t.Errorf("axis %v: got %v, want code %q", values, err, CodeTableAxisNaN)
+		}
 	}
 }
 
@@ -308,6 +399,19 @@ func TestTableLookupLoweringDiagnostics(t *testing.T) {
 			name: "output selector on a single-output table",
 			src: strings.Replace(tableLookupFixture, `"axes": {"p": "p"}, "args": []`,
 				`"axes": {"p": "p"}, "output": 2, "args": []`, 1),
+			code: CodeTableLookupOutputOutOfRange,
+		},
+		{
+			// No `outputs`: 0 is the only output (esm-spec §9.5.5).
+			name: "output 1 on a single-output table",
+			src: strings.Replace(tableLookupFixture, `"axes": {"p": "p"}, "args": []`,
+				`"axes": {"p": "p"}, "output": 1, "args": []`, 1),
+			code: CodeTableLookupOutputOutOfRange,
+		},
+		{
+			name: "any output name on a single-output table",
+			src: strings.Replace(tableLookupFixture, `"axes": {"p": "p"}, "args": []`,
+				`"axes": {"p": "p"}, "output": "y", "args": []`, 1),
 			code: CodeTableLookupOutputOutOfRange,
 		},
 		{
@@ -428,6 +532,93 @@ func TestFunctionTablesInlineTestFixtureEvaluatesThroughTheLoweringPath(t *testi
 	if reflect.DeepEqual(wArgs[2], yArgs[2]) {
 		t.Fatal("`w` must keep its own axis input expression")
 	}
+}
+
+// evaluateInlineFixtureAssertions loads a tests/conformance/function_tables
+// fixture with one model and one inline test, binds every `parameter` to its
+// declared default, evaluates each asserted variable's defining equation through
+// (*ESMFile).Evaluate, and requires the fixture's expected value bit for bit.
+// It returns the loaded file and the model's defining equations by LHS name.
+func evaluateInlineFixtureAssertions(t *testing.T, dir, modelName string) (*ESMFile, map[string]Expression) {
+	t.Helper()
+	file, err := LoadPath(filepath.Join(functionTablesFixturesRoot(t), dir, "fixture.esm"))
+	if err != nil {
+		t.Fatalf("load %s fixture: %v", dir, err)
+	}
+	model, ok := file.Models[modelName]
+	if !ok {
+		t.Fatalf("%s fixture must declare model %s", dir, modelName)
+	}
+	if len(model.Tests) != 1 {
+		t.Fatalf("%s fixture must declare exactly one inline test, got %d", dir, len(model.Tests))
+	}
+	bindings := map[string]float64{}
+	for name, v := range model.Variables {
+		if v.Type != "parameter" {
+			continue
+		}
+		f, ok := toFloat64Any(v.Default)
+		if !ok {
+			t.Fatalf("parameter %q default is not numeric: %#v", name, v.Default)
+		}
+		bindings[name] = f
+	}
+	for name, raw := range model.Tests[0].ParameterOverrides {
+		f, ok := toFloat64Any(raw)
+		if !ok {
+			t.Fatalf("parameter override %q is not numeric: %#v", name, raw)
+		}
+		bindings[name] = f
+	}
+	defining := make(map[string]Expression, len(model.Equations))
+	for _, eq := range model.Equations {
+		if name, ok := eq.LHS.(string); ok {
+			defining[name] = eq.RHS
+		}
+	}
+	for _, a := range model.Tests[0].Assertions {
+		rhs, ok := defining[a.Variable]
+		if !ok {
+			t.Fatalf("no defining equation for asserted variable %q", a.Variable)
+		}
+		got, err := file.Evaluate(rhs, bindings)
+		if err != nil {
+			t.Fatalf("evaluating %q: %v", a.Variable, err)
+		}
+		if !bitEqual(got, a.Expected) {
+			t.Errorf("%s = %v, fixture asserts %v", a.Variable, got, a.Expected)
+		}
+	}
+	return file, defining
+}
+
+// tests/conformance/function_tables/nearest/ (esm-spec §9.5.6 item 6): knots,
+// midpoint ties (low knot), either side of a midpoint, and clamping. The
+// fixture also spells one lookup by hand in the §9.5.3 form; the production
+// lowering must produce exactly that tree.
+func TestFunctionTablesNearestFixture(t *testing.T) {
+	file, defining := evaluateInlineFixtureAssertions(t, "nearest", "NearestLookup")
+	lowered, err := lowerTableLookups(file)
+	if err != nil {
+		t.Fatalf("lower: %v", err)
+	}
+	var got Expression
+	for _, eq := range lowered.Models["NearestLookup"].Equations {
+		if eq.LHS == "n_tie_2_4" {
+			got = eq.RHS
+		}
+	}
+	if !reflect.DeepEqual(jsonView(t, got), jsonView(t, defining["n_tie_2_4_hand"])) {
+		t.Fatalf("lowered `n_tie_2_4` is not the fixture's hand-spelled `n_tie_2_4_hand`:\n got %#v\nwant %#v",
+			jsonView(t, got), jsonView(t, defining["n_tie_2_4_hand"]))
+	}
+}
+
+// tests/conformance/function_tables/lookup_defaults/ (esm-spec §9.5.6 item 7):
+// an omitted `output` is 0 on multi-output tables, and a single-output table
+// lowers with its whole `data`.
+func TestFunctionTablesLookupDefaultsFixture(t *testing.T) {
+	evaluateInlineFixtureAssertions(t, "lookup_defaults", "LookupDefaults")
 }
 
 // TestFunctionTablesOutOfBoundsErrorFixtureLoadsButIsRefused drives

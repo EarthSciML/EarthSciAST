@@ -293,16 +293,11 @@ func lowerTableLookupNode(node ExprNode, tables map[string]FunctionTable) (Expre
 		return closedFnNode("interp.bilinear",
 			constNode(data), axisX, axisY, inputs[0], inputs[1]), nil
 	case kind == "nearest" && len(table.Axes) == 1:
-		// `nearest` is an `index` of the table slice at the searchsorted
-		// position, not an `interp` blend.
 		axis, err := tableAxisConst(table.Axes[0], id)
 		if err != nil {
 			return nil, err
 		}
-		return ExprNode{Op: "index", Args: []any{
-			constNode(data),
-			closedFnNode("interp.searchsorted", inputs[0], axis),
-		}}, nil
+		return nearestLookupNode(data, axis, inputs[0], len(table.Axes[0].Values)), nil
 	default:
 		return nil, newTableLookupError(CodeTableInterpolationAxesMismatch,
 			"table %q declares `interpolation: %q` over %d axes; `linear` and `nearest` "+
@@ -311,12 +306,47 @@ func lowerTableLookupNode(node ExprNode, tables map[string]FunctionTable) (Expre
 	}
 }
 
+// nearestLookupNode builds the esm-spec §9.5.3 `nearest` composition: D at the
+// knot nearest x, a tie going to the lower knot, clamped outside the axis, and
+// NaN for a NaN query. With j = searchsorted(x, A), lo = max(j-1, 1) and
+// hi = min(j, N):
+//
+//	ifelse(x == x, index(D, ifelse(A[hi]-x < x-A[lo], hi, lo)), x)
+//
+// The ops and their operand order are exactly the spec's, so every binding
+// decides "nearer" and "tie" on the same two binary64 differences. Each use of
+// x, A, j, lo and hi is its own copy of the subtree, as the spec writes it.
+func nearestLookupNode(data any, axis ExprNode, x Expression, n int) Expression {
+	axisConst := func() ExprNode { return constNode(axis.Value) }
+	j := func() ExprNode { return closedFnNode("interp.searchsorted", x, axisConst()) }
+	lo := func() ExprNode {
+		return ExprNode{Op: "max", Args: []any{
+			ExprNode{Op: "-", Args: []any{j(), int64(1)}}, int64(1)}}
+	}
+	hi := func() ExprNode { return ExprNode{Op: "min", Args: []any{j(), int64(n)}} }
+	knot := func(k ExprNode) ExprNode { return ExprNode{Op: "index", Args: []any{axisConst(), k}} }
+	pick := ExprNode{Op: "ifelse", Args: []any{
+		ExprNode{Op: "<", Args: []any{
+			ExprNode{Op: "-", Args: []any{knot(hi()), x}},
+			ExprNode{Op: "-", Args: []any{x, knot(lo())}},
+		}},
+		hi(),
+		lo(),
+	}}
+	return ExprNode{Op: "ifelse", Args: []any{
+		ExprNode{Op: "==", Args: []any{x, x}},
+		ExprNode{Op: "index", Args: []any{constNode(data), pick}},
+		x,
+	}}
+}
+
 // tableAxisInputs returns the node's per-axis input expressions in the table's
 // DECLARED axis order — which is the order of `data`'s inner dimensions, and
 // therefore the argument order interp.bilinear expects.
 func tableAxisInputs(node ExprNode, table FunctionTable, id string) ([]Expression, error) {
+	// An absent `args` (nil) is `[]` (esm-spec §9.5.2).
 	if len(node.Args) != 0 {
-		return nil, newTableLookupError(CodeTableLookupAxisNameMismatch,
+		return nil, newTableLookupError(CodeTableLookupArgsNonempty,
 			"`table_lookup` on table %q carries %d positional `args`; the per-axis inputs "+
 				"live under `axes` and `args` MUST be empty (esm-spec §9.5.2)",
 			id, len(node.Args))
