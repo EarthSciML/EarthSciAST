@@ -37,6 +37,8 @@ ROOT = Path(__file__).resolve().parent.parent
 FORMAL = ROOT / "formal"
 INVENTORY_DIR = FORMAL / "inventory"
 REGISTRY = FORMAL / "properties.json"
+# One file per spec area, so parallel work on different areas never edits the same file.
+REGISTRY_DIR = FORMAL / "properties"
 QUESTIONS = FORMAL / "QUESTIONS.md"
 
 SPEC_FILES = ("esm-spec.md", "CONFORMANCE_SPEC.md")
@@ -281,9 +283,14 @@ def check_citation(text, source, section, quote):
 
 
 def load_registry(report):
-    if not REGISTRY.exists():
-        return {"properties": [], "verified_checkers": []}
-    return load_json(REGISTRY, report) or {"properties": [], "verified_checkers": []}
+    """`properties.json` (verified checkers) merged with every `properties/*.json`."""
+    reg = {"properties": [], "verified_checkers": []}
+    paths = ([REGISTRY] if REGISTRY.exists() else []) + sorted(REGISTRY_DIR.glob("*.json"))
+    for path in paths:
+        doc = load_json(path, report) or {}
+        reg["properties"] += doc.get("properties", [])
+        reg["verified_checkers"] += doc.get("verified_checkers", [])
+    return reg
 
 
 def question_anchors():

@@ -20,7 +20,7 @@ It serves two purposes:
 | `Esm/` | The model, one module per spec area |
 | `Adapter/Main.lean` | The `esm-lean` executable used by the conformance runners |
 | `inventory/*.json` | Every normative (`MUST`) clause of the two spec files, classified |
-| `properties.json` | The property registry: what is claimed about which clauses, and its status |
+| `properties/*.json` | The property registry, one file per spec area: what is claimed about which clauses, and its status (`properties.json` lists verified checkers) |
 | `QUESTIONS.md` | Spec ambiguities awaiting a ruling, and the rulings once made |
 | `../scripts/formal-audit.py` | The audit gate |
 
@@ -121,7 +121,7 @@ one spec file:
 | 6 | Simulation against manufactured or exact solutions (the PDE-simulation and solver tiers) |
 | 7 | Compiled backends, precision, anything beyond the spec core |
 
-## The property registry (`properties.json`)
+## The property registry (`properties/*.json`)
 
 ```json
 {
