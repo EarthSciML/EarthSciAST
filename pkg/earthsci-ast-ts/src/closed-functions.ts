@@ -55,9 +55,6 @@ export class ClosedFunctionError extends EsmDiagnosticError {
 // set and the evaluator can never drift out of sync.
 
 const SECONDS_PER_DAY = 86400
-// Days from proleptic-Gregorian year 0000-01-01 to Unix epoch 1970-01-01.
-// Matches the Julia ref (Date(1970,1,1) - Date(0,1,1)).value = 719528.
-const UNIX_EPOCH_DAYS_FROM_YEAR_ZERO = 719528
 
 const INT32_MIN = -2147483648
 const INT32_MAX = 2147483647
@@ -73,11 +70,24 @@ function checkInt32(name: string, v: number): number {
 }
 
 /**
- * Floor-division of two integers (matches Math.floor semantics for
- * negative dividends, which Julia's `fld` and Python's `//` also use).
+ * Floor division of an exact integer `a` by a positive integer `b`
+ * (Julia's `fld`, Python's `//`).
+ *
+ * The quotient `Math.floor(a / b)` is only a candidate: when `a` is large the
+ * rounded divide can land on the integer above a quotient just below it. The
+ * remainder `a - q*b` is exact for every `a` this module passes (the product
+ * `q*b` stays an exact integer far past the Int32 year range), and the true
+ * floor is the unique `q` with `0 <= r < b`, so one step either way repairs it.
  */
 function fdiv(a: number, b: number): number {
-  return Math.floor(a / b)
+  const q = Math.floor(a / b)
+  const r = a - q * b
+  return r < 0 ? q - 1 : r >= b ? q + 1 : q
+}
+
+/** Integer division rounding toward zero (C / Julia `÷`). */
+function tdiv(a: number, b: number): number {
+  return a < 0 ? -fdiv(-a, b) : fdiv(a, b)
 }
 
 /**
@@ -107,17 +117,16 @@ function isLeapProleptic(y: number): boolean {
 const DAYS_BEFORE_MONTH_NORMAL = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334]
 const DAYS_BEFORE_MONTH_LEAP = [0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335]
 
-/** Convert "days since 0000-01-01" (proleptic Gregorian) to Y/M/D. */
-function daysToYMD(dayOfEra: number): { year: number; month: number; day: number } {
-  // Howard Hinnant's civil_from_days (http://howardhinnant.github.io/date_algorithms.html),
-  // shifted so day 0 is 0000-01-01. Hinnant's era is March-based (0000-03-01)
-  // so the leap day falls at the year's end; `z` re-bases dayOfEra onto that
-  // epoch (year 0 is a Gregorian leap year, so Jan+Feb = 60 days), and the
-  // closing `m`/`year` step maps the March-based month back to a calendar
-  // date. Pure integer-floor arithmetic — bit-exact with the Julia reference's
-  // Dates.Date computation.
-  const z = dayOfEra - 60 // days since 0000-03-01
-  const era = fdiv(z >= 0 ? z : z - 146096, 146097)
+/** Convert days since 1970-01-01 (proleptic Gregorian) to Y/M/D. */
+function daysToYMD(days: number): { year: number; month: number; day: number } {
+  // Howard Hinnant's civil_from_days (http://howardhinnant.github.io/date_algorithms.html).
+  // Hinnant's era is March-based (0000-03-01) so the leap day falls at the
+  // year's end; the closing `m`/`year` step maps the March-based month back
+  // to a calendar date. `era` is a FLOORED division: Hinnant's C spelling
+  // `(z >= 0 ? z : z - 146096) / 146097` is that floor written with C's
+  // truncating `/`, and must not be combined with a floor a second time.
+  const z = days + 719468 // days since 0000-03-01
+  const era = fdiv(z, 146097)
   const doe = z - era * 146097 // [0, 146096]
   const yoe = fdiv(doe - fdiv(doe, 1460) + fdiv(doe, 36524) - fdiv(doe, 146096), 365)
   const y = yoe + era * 400
@@ -135,12 +144,27 @@ function dayOfYear(year: number, month: number, day: number): number {
 }
 
 /**
- * Julian Day Number (continuous including fractional day-of-day).
- * 1970-01-01T00:00:00 UTC → 2440587.5.
+ * Continuous Julian Day: the Fliegel–van Flandern (1968) integer JDN of the
+ * date plus `(time_of_day − 43200) / 86400` (esm-spec §9.2). The offset is
+ * formed as `(secondOfDay − 43200) + fraction` — an exact integer plus the
+ * exact fractional second — so the time of day rounds once, and it comes from
+ * the same floor-divmod as the date. 1970-01-01T00:00:00 UTC → 2440587.5.
  */
-function julianDayValue(tUtc: number): number {
-  // Constant offset by Unix-epoch JDN. The only float op is the divide.
-  return 2440587.5 + tUtc / SECONDS_PER_DAY
+function julianDayValue(
+  year: number,
+  month: number,
+  day: number,
+  secondOfDay: number,
+  fraction: number,
+): number {
+  const a = tdiv(month - 14, 12)
+  const jdn =
+    tdiv(1461 * (year + 4800 + a), 4) +
+    tdiv(367 * (month - 2 - 12 * a), 12) -
+    tdiv(3 * tdiv(year + 4900 + a, 100), 4) +
+    day -
+    32075
+  return jdn + (secondOfDay - 43200 + fraction) / SECONDS_PER_DAY
 }
 
 function decomposeUtcSeconds(tUtc: number): DateParts {
@@ -150,21 +174,20 @@ function decomposeUtcSeconds(tUtc: number): DateParts {
       `datetime input ${tUtc} is not a finite value`,
     )
   }
-  const totalDays = fdiv(tUtc, SECONDS_PER_DAY) // floor seconds → days
-  const remSeconds = tUtc - totalDays * SECONDS_PER_DAY // [0, 86400)
-  const dayOfEra = totalDays + UNIX_EPOCH_DAYS_FROM_YEAR_ZERO
+  // esm-spec §9.2: day number floor(t / 86400), time of day
+  // t − 86400·floor(t / 86400) in [0, 86400), both exact; the fields come
+  // from floor(time of day). Because 86400 is an integer that pair is the
+  // floor-divmod of floor(t), which is exact in binary64 — so a fractional
+  // time floors toward −∞ and the date and the time of day always agree.
+  const whole = Math.floor(tUtc)
+  const fraction = tUtc - whole // exact, in [0, 1)
+  const totalDays = fdiv(whole, SECONDS_PER_DAY)
+  const secondOfDay = whole - totalDays * SECONDS_PER_DAY // exact, in [0, 86400)
 
-  const { year, month, day } = daysToYMD(dayOfEra)
-  // remSeconds may be fractional; Y/M/D/h/m/s integer outputs are taken
-  // from the floored second count.
-  const wholeRem = Math.floor(remSeconds)
-  const hour = fdiv(wholeRem, 3600)
-  const minute = fdiv(wholeRem - hour * 3600, 60)
-  const second = wholeRem - hour * 3600 - minute * 60
-
-  const doy = dayOfYear(year, month, day)
-  const jdn = julianDayValue(tUtc)
-  const isLeap = isLeapProleptic(year) ? 1 : 0
+  const { year, month, day } = daysToYMD(totalDays)
+  const hour = fdiv(secondOfDay, 3600)
+  const minute = fdiv(secondOfDay - hour * 3600, 60)
+  const second = secondOfDay - hour * 3600 - minute * 60
 
   return {
     year,
@@ -173,9 +196,9 @@ function decomposeUtcSeconds(tUtc: number): DateParts {
     hour,
     minute,
     second,
-    dayOfYear: doy,
-    julianDay: jdn,
-    isLeapYear: isLeap,
+    dayOfYear: dayOfYear(year, month, day),
+    julianDay: julianDayValue(year, month, day, secondOfDay, fraction),
+    isLeapYear: isLeapProleptic(year) ? 1 : 0,
   }
 }
 

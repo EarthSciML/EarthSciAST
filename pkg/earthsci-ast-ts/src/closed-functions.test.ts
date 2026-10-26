@@ -217,7 +217,11 @@ describe('Closed function registry — cross-binding conformance', () => {
         it(`error scenario ${errorScenario.name} → ${errorScenario.expected_error_code}`, () => {
           const decoded = errorScenario.inputs.map(decodeInput)
           try {
-            if (expected.function === 'interp.searchsorted') {
+            if (mod === 'datetime') {
+              const bindings = new Map<string, number>()
+              bindings.set(paramName, decoded[0] as number)
+              evaluateExpression(rhsTemplate, bindings)
+            } else if (expected.function === 'interp.searchsorted') {
               const xs = decoded[1] as number[]
               validateSearchsortedTable(xs)
               searchsortedFirst(decoded[0] as number, xs)
