@@ -551,7 +551,25 @@
       "phase": 1,
       "area": "closed_functions",
       "note": "interp.searchsorted loads iff xs is a const array with xs[i] <= xs[i+1] for all i; otherwise searchsorted_non_monotonic.",
-      "concern": "Wording resolved 2026-10-26 (Q-7): non-decreasing. Still open for phase 1: NaN entries in xs are 'forbidden' with no diagnostic code (ruling: new code searchsorted_nan, checked first)."
+      "concern": "Wording resolved 2026-10-26 (Q-7): non-decreasing. NaN entries in xs: resolved 2026-10-26 (Q-7) with code searchsorted_nan, checked first (spec.9.2.searchsorted-xs-no-nan)."
+    },
+    {
+      "id": "spec.9.2.searchsorted-xs-no-nan",
+      "section": "9.2",
+      "quote": "Bindings MUST reject an `xs` containing a NaN entry at load time with diagnostic `searchsorted_nan`, and MUST check for NaN before monotonicity: an `xs` that contains a NaN is reported as `searchsorted_nan` whatever its other entries, never as `searchsorted_non_monotonic`.",
+      "class": "semantic",
+      "phase": 1,
+      "area": "closed_functions",
+      "note": "An interp.searchsorted xs containing a NaN is rejected with searchsorted_nan, never searchsorted_non_monotonic, whatever its other entries."
+    },
+    {
+      "id": "spec.9.2.searchsorted-xs-must-not-nan",
+      "section": "9.2",
+      "quote": "`xs` MUST NOT contain NaN.",
+      "class": "semantic",
+      "phase": 1,
+      "area": "closed_functions",
+      "note": "Restatement of spec.9.2.searchsorted-xs-no-nan: an xs that loads contains no NaN."
     },
     {
       "id": "spec.9.2.interp-const-finite-shape",
@@ -588,7 +606,16 @@
       "phase": 1,
       "area": "closed_functions",
       "note": "An interp axis containing NaN is rejected with interp_nan_in_axis.",
-      "concern": "A NaN axis entry also violates strict monotonicity, so both interp_nan_in_axis and interp_non_monotonic_axis apply and no precedence between the two codes is given."
+      "concern": "A NaN axis entry also violates strict monotonicity, so both interp_nan_in_axis and interp_non_monotonic_axis apply and no precedence between the two codes is given. Resolved 2026-10-26 (Q-4): interp_nan_in_axis takes precedence (spec.9.2.interp-nan-precedence)."
+    },
+    {
+      "id": "spec.9.2.interp-nan-precedence",
+      "section": "9.2",
+      "quote": "Takes precedence over `interp_non_monotonic_axis`: an axis containing a NaN MUST be reported with `interp_nan_in_axis`, whatever its other entries.",
+      "class": "semantic",
+      "phase": 1,
+      "area": "closed_functions",
+      "note": "An interp.linear/bilinear axis containing a NaN is rejected with interp_nan_in_axis, never interp_non_monotonic_axis."
     },
     {
       "id": "spec.9.2.interp-reject-at-load",
@@ -626,7 +653,16 @@
       "phase": 1,
       "area": "closed_functions",
       "note": "Within one enum no two symbols map to the same integer.",
-      "concern": "No diagnostic code is given for a duplicate value, and 'MAY NOT' in the same sentence is not an RFC 2119 keyword and can be read as a permission not to."
+      "concern": "No diagnostic code is given for a duplicate value, and 'MAY NOT' in the same sentence is not an RFC 2119 keyword and can be read as a permission not to. Resolved 2026-10-26 (Q-8): MUST NOT, code enum_duplicate_value (spec.9.3.enum-duplicate-rejected)."
+    },
+    {
+      "id": "spec.9.3.enum-duplicate-rejected",
+      "section": "9.3",
+      "quote": "so two symbols MUST NOT both map to `0`. Bindings MUST reject an enum in which two symbols map to the same integer at load time with diagnostic `enum_duplicate_value`, whether or not any `enum` op names either symbol.",
+      "class": "semantic",
+      "phase": 1,
+      "area": "closed_functions",
+      "note": "A document whose enums block has two symbols of one enum with the same integer (0 included) fails load with enum_duplicate_value, referenced or not."
     },
     {
       "id": "spec.9.3.enum-lowered-at-load",
@@ -662,7 +698,7 @@
       "phase": 1,
       "area": "closed_functions",
       "note": "Evaluating a table_lookup equals evaluating its §9.5.3 lowering (interp.linear, interp.bilinear, or index of searchsorted) at every input.",
-      "concern": "§9.5.3 qualifies this as 'modulo the same FMA caveats', so 'bit-equivalent' is not unconditional; and the 'nearest' lowering index(data, searchsorted(x, axis)) is neither nearest (searchsorted returns the first knot >= x) nor clamped (it returns N+1 above the last knot, an out-of-range index), contradicting out_of_bounds: \"clamp\"."
+      "concern": "§9.5.3 qualifies this as 'modulo the same FMA caveats', so 'bit-equivalent' is not unconditional; and the 'nearest' lowering index(data, searchsorted(x, axis)) is neither nearest (searchsorted returns the first knot >= x) nor clamped (it returns N+1 above the last knot, an out-of-range index), contradicting out_of_bounds: \"clamp\". The nearest lowering resolved 2026-10-26 (Q-13): true nearest knot, ties low, clamped (spec.9.5.3.nearest-lowering)."
     },
     {
       "id": "spec.9.5.1.axis-names-unique",
@@ -690,7 +726,7 @@
       "phase": 1,
       "area": "closed_functions",
       "note": "With outputs declared, len(data) == len(outputs), else table_outputs_length_mismatch.",
-      "concern": "The §9.5.3 lowering always slices data[i], but for a table without outputs data has no leading output dimension, so data[0] would be the first table entry rather than the whole table; the lowering for single-output tables is not stated."
+      "concern": "The §9.5.3 lowering always slices data[i], but for a table without outputs data has no leading output dimension, so data[0] would be the first table entry rather than the whole table; the lowering for single-output tables is not stated. Resolved 2026-10-26 (Q-10): single-output tables lower with the whole data (spec.9.5.3.lowering-table-operand)."
     },
     {
       "id": "spec.9.5.1.data-finite",
@@ -746,7 +782,16 @@
       "phase": 1,
       "area": "closed_functions",
       "note": "A string output names an entry of outputs and an integer output is < the leading data dimension; otherwise table_lookup_output_out_of_range.",
-      "concern": "It is not said what happens when output is omitted on a table that declares outputs (default 0, or an error)."
+      "concern": "It is not said what happens when output is omitted on a table that declares outputs (default 0, or an error). Resolved 2026-10-26 (Q-12): omitted output means 0 whether or not outputs is declared (spec.9.5.2.lookup-output-default)."
+    },
+    {
+      "id": "spec.9.5.2.lookup-output-default",
+      "section": "9.5.2",
+      "quote": "MAY be omitted whether or not the table declares `outputs`; an omitted `output` MUST be read as `0`",
+      "class": "semantic",
+      "phase": 1,
+      "area": "closed_functions",
+      "note": "A table_lookup with no output field evaluates exactly as the same lookup with output 0, for single- and multi-output tables."
     },
     {
       "id": "spec.9.5.2.lookup-args-empty",
@@ -756,7 +801,34 @@
       "phase": 1,
       "area": "closed_functions",
       "note": "A table_lookup node with non-empty args is rejected.",
-      "concern": "No diagnostic code is listed in §9.5.5 for non-empty args, and it is not said whether an absent args is equivalent to []."
+      "concern": "No diagnostic code is listed in §9.5.5 for non-empty args, and it is not said whether an absent args is equivalent to []. Resolved 2026-10-26 (Q-11): absent args is [], non-empty args is table_lookup_args_nonempty (spec.9.5.2.lookup-args-nonempty-rejected)."
+    },
+    {
+      "id": "spec.9.5.2.lookup-args-nonempty-rejected",
+      "section": "9.5.2",
+      "quote": "Bindings MUST reject a `table_lookup` whose `args` is non-empty with diagnostic `table_lookup_args_nonempty`",
+      "class": "semantic",
+      "phase": 1,
+      "area": "closed_functions",
+      "note": "A table_lookup with non-empty args is rejected with table_lookup_args_nonempty; an absent args is treated as []."
+    },
+    {
+      "id": "spec.9.5.3.lowering-table-operand",
+      "section": "9.5.3",
+      "quote": "`D` is the table the lookup reads, and a binding MUST lower with this `D`. For a table that declares `outputs`, `D` is `data[i]`, the slice of the leading output dimension for the selected output `i` (`table_lookup.output`, `0` when omitted). For a table without `outputs`, `D` is the whole `data`",
+      "class": "semantic",
+      "phase": 1,
+      "area": "closed_functions",
+      "note": "The const table operand of a lowered table_lookup is data[output] when outputs is declared and the whole data otherwise."
+    },
+    {
+      "id": "spec.9.5.3.nearest-lowering",
+      "section": "9.5.3",
+      "quote": "For `interpolation: \"nearest\"` on a 1-axis table, the lookup MUST return `D[k]` for the knot `k` nearest the query `x`, a tie between two knots going to the lower one",
+      "class": "semantic",
+      "phase": 1,
+      "area": "closed_functions",
+      "note": "nearest returns D[k] for k an argmin of |x - A[k]| (ties low, judged on the binary64 differences of the lowered tree), D[1] below and D[N] above the axis, NaN for NaN x; it equals the stated AST composition and never indexes out of range."
     },
     {
       "id": "spec.9.5.3.serializer-roundtrips-authored",
@@ -784,6 +856,15 @@
       "phase": 2,
       "area": "round_trip",
       "note": "emit(parse(doc)) keeps inline const lookups inline; no table_lookup is introduced."
+    },
+    {
+      "id": "spec.9.5.5.table-axis-nan-precedence",
+      "section": "9.5.5",
+      "quote": "Takes precedence over `table_axis_non_monotonic`: an axis containing a NaN MUST be reported with `table_axis_nan`, whatever its other entries.",
+      "class": "semantic",
+      "phase": 1,
+      "area": "closed_functions",
+      "note": "A function_tables axis containing a NaN is rejected with table_axis_nan, never table_axis_non_monotonic."
     },
     {
       "id": "spec.9.5.3a.error-mode-unsupported",

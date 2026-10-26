@@ -65,6 +65,38 @@ error, and Julia's `mtk`). Answering
 in the mode the binding happens to have, rather than the one the author
 declared, is a wrong number with nothing in the result to say so.
 
+### `nearest/fixture.esm`
+
+`interpolation: "nearest"` (esm-spec §9.5.3) through each binding's inline-test
+runner. The lookup returns the table value at the knot NEAREST the query; a tie
+between two knots goes to the LOWER knot; and with the default
+`out_of_bounds: "clamp"` a query below the first knot or above the last returns
+the end value. The axis `[1, 2, 4, 8]` is non-uniform and every midpoint used
+(1.5, 3, 6) is exactly representable, so each tie is a true tie in binary64.
+Eleven queries cover both clamps, every knot class, the three ties, and a point
+either side of a midpoint. `n_tie_2_4_hand` spells the §9.5.3 lowering out by
+hand (`interp.searchsorted`, `min`, `max`, `index`, `-`, `<`, `==`, `ifelse`),
+so a binding whose lowering is not the spec's composition disagrees with it.
+
+The fixture replaces the pre-2026-10-26 lowering,
+`index(data, interp.searchsorted(x, axis))`, which returned the first knot
+`>= x` rather than the nearest one, and read one past the end of `data` for a
+query above the last knot (`E_TREEWALK_CONSTARRAY_OOB`) — so `q_above` fails a
+binding that still lowers that way, and with it every assertion in the model.
+
+### `lookup_defaults/fixture.esm`
+
+The §9.5.2 and §9.5.3 defaults through each binding's inline-test runner. An
+omitted `table_lookup.output` means `0` whether or not the table declares
+`outputs`; on a multi-output table the lowering reads the slice `data[output]`,
+and on a single-output table (no `outputs`) it reads the WHOLE `data`, never
+`data[0]`. Each omitted-`output` read is asserted beside the same read written
+out and beside a read of a different output, on a 1-axis linear and a 2-axis
+bilinear multi-output table, and on a single-output table. (`args` is always
+written: the schema requires it on every expression node, so an absent `args`
+can only reach a binding through a node built in memory, and is covered by each
+binding's unit tests.)
+
 ## Per-binding contract
 
 All five language bindings (Julia, Python, TypeScript, Rust, Go) MUST:

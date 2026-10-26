@@ -4278,9 +4278,10 @@ Decomposes a UTC scalar time into proleptic-Gregorian calendar fields. All entri
 Returns the 1-based index `i` of the first element of `xs` that is `≥ x` (left-side bias, equivalent to Julia's `searchsortedfirst`).
 
 - `xs` MUST be a `const`-op array of non-decreasing floats (equal neighbours allowed). Bindings MUST reject non-monotonic `xs` at load time with diagnostic `searchsorted_non_monotonic`.
+- `xs` MUST NOT contain NaN. Bindings MUST reject an `xs` containing a NaN entry at load time with diagnostic `searchsorted_nan`, and MUST check for NaN before monotonicity: an `xs` that contains a NaN is reported as `searchsorted_nan` whatever its other entries, never as `searchsorted_non_monotonic`. (A NaN compares false with every value, so whether a comparison-based monotonicity check passes or fails on it depends on how the check is written; checking NaN first makes the verdict independent of that.)
 - Equal values in `xs` (duplicates): the returned index is the **smallest** `i` for which `xs[i] ≥ x`. This makes the result deterministic on duplicate runs and lets authors compose searches (e.g. find the first interval containing `x` even when boundaries coincide).
 - Out-of-range query: if `x ≤ xs[1]`, return `1`. If `x > xs[N]`, return `N + 1` (one past the end). Authors who need clamping wrap the result in `min(N, ...)` using the AST.
-- NaN `x`: result is `N + 1` (treated as "greater than every finite element"). NaN entries in `xs` are forbidden.
+- NaN `x`: result is `N + 1` (treated as "greater than every finite element"). NaN entries in `xs` are rejected at load (`searchsorted_nan`, above).
 
 **Tolerance:** exact (the returned index is integer; the comparison is the IEEE-754 `≥` predicate, which has no rounding tolerance).
 
@@ -4350,7 +4351,7 @@ Let `axis_x = [x₁, ..., x_{Nx}]`, `axis_y = [y₁, ..., y_{Ny}]`, and `table[i
 |---|---|
 | `interp_non_monotonic_axis` | Any `axis` (or `axis_x`, `axis_y`) is not strictly increasing. Includes equal-adjacent and decreasing pairs. |
 | `interp_axis_length_mismatch` | `interp.linear`: `len(table) != len(axis)`. `interp.bilinear`: outer length of `table` differs from `len(axis_x)`, or any row's length differs from `len(axis_y)`. |
-| `interp_nan_in_axis` | Any axis contains NaN. |
+| `interp_nan_in_axis` | Any axis contains NaN. Takes precedence over `interp_non_monotonic_axis`: an axis containing a NaN MUST be reported with `interp_nan_in_axis`, whatever its other entries. |
 | `interp_axis_too_short` | Any axis has fewer than 2 entries (no interval to blend across). |
 | `interp_table_not_const` / `interp_axis_not_const` | The `table` or any axis argument is not a literal `const`-op array (e.g. it is a variable reference or a non-`const` expression). |
 
@@ -4401,7 +4402,7 @@ The `enums` top-level block declares file-local symbol → integer mappings used
 
 - `enums` is a JSON object. Keys are enum names (strings); values are objects mapping **string** keys (the symbolic names) to **integers** (the resolved values). The value domain is the **whole integer range** — negative, zero and positive. An enum member is a categorical CODE, not a position: it lowers to a `const` number used in arithmetic and in `join.on` key comparisons, where `0` and `-1` are ordinary values (a source table whose `opModeID` is `0` or whose `polProcessID` is `-1` is naming a real category, not an absence). Bindings MUST NOT reject a zero or negative member.
 - The two 1-based constructs in this format — `index`-op / index-set coordinates (§4.3.3, §5.2) and `makearray` regions (§4.3.2) — are separate and carry their own bounds validation. Using an enum member as an `index` argument (the §4.5 example) is an authoring choice that the `index` op bounds-checks like any other operand; it does not constrain what an `enums` block may declare.
-- Within a single enum, integer values MUST be unique — `0` is a value like any other, so two symbols MAY NOT both map to `0`. Across enums, values MAY collide (each enum defines its own namespace).
+- Within a single enum, integer values MUST be unique — `0` is a value like any other, so two symbols MUST NOT both map to `0`. Bindings MUST reject an enum in which two symbols map to the same integer at load time with diagnostic `enum_duplicate_value`, whether or not any `enum` op names either symbol. Across enums, values MAY collide (each enum defines its own namespace).
 - Two `.esm` files may declare an enum of the same name with different mappings: enums are file-local and never merged across files. A component mounted by a §4.7 `ref` resolves its `enum` ops against the enums declared in the *referenced* file, not the enclosing one (next bullet).
 - **Mounted files (§4.7).** An `enum` op in a file mounted at either mount form — a `subsystems.<k>` `{ref}` or a top-level `models.<k>` / `reaction_systems.<k>` `{ref}` — resolves against **the mounted file's** `enums` block. It is lowered at the mount edge, once the mounted document has resolved in its own scope (§4.7 "Edge pipeline", step 1; its own nested mounts were lowered at their own edges) and before its component splices in. The mounted file's `enums` block does not merge into the mounting document. So two mounted files that declare the same enum name with different mappings each keep their own values; a mounting document that declares an enum of the same name, with the same or a different mapping, changes neither; and the mounting document's own `enum` ops resolve against its own block only, so naming an enum that only a mounted file declares is `unknown_enum`. An op spelled by one of a template's `params` is decided by the call that binds that parameter, as at a template-library import edge (next bullet); a mounting document cannot call a mounted file's component-local templates, so every such call is the mounted file's own, and the edge expands it before lowering. The op therefore resolves against the mounted file's block too, whether or not that file carries §9.7 import machinery. The one exception is the top-level `reaction_systems.<k>` form, which only Julia mounts and which is still the raw pre-pass "Two mount forms, one mechanism" (§4.7) names as the remaining gap: it defers the mounted reaction system's template resolution to the mounting document, so an op spelled by a parameter there still resolves against the mounting document's block, and closes when that gap does. A mounted file naming an enum or symbol it does not declare is `unknown_enum` / `unknown_enum_symbol` at the edge, exactly as when that file loads on its own. Fixtures: `tests/conformance/mount_enums/`.
 - **Template libraries (§9.7).** An `enum` op written in a template-library file's template `body` resolves against **that library's** `enums` block, never the importer's. It is lowered at the import edge, while the library resolves in its own scope (§9.7.7 edge pipeline, step 1), so the templates reach the importer with the op already a `const` (§9.7.5). An importer therefore needs no copy of a library's enums, and an importer that declares an enum of the same name, with the same or a different mapping, does not change what the library's templates compute. An op whose enum-name or symbol argument is spelled by one of the template's `params` is decided by the file that binds that parameter: parameter substitution is position-blind (§9.6.3 constraint 5), so the binding decides what the op spells. **The library's own calls resolve in the library.** When a library template body calls a template in the library's scope (its own or one it imports) and that call binds the parameter, the edge expands each such call to a template that can still produce an `enum` op (the eager expansion §9.6.4 rule 3 requires at load) and lowers the result against the library's block. **Only parameters the importer binds resolve in the importer.** An op still spelled with a parameter after that step (because the importer calls the template directly, or because the calling library template forwards one of its own `params` into the call) stays as written and resolves with the importing document's enums after expansion. An op whose arguments are not two strings is left to the document-wide pass. A library body naming an enum or symbol the library does not declare, directly or through a symbol it binds in its own call, is `unknown_enum` / `unknown_enum_symbol` at load, reported against the library and the template, even when the importer declares that name.
@@ -4410,6 +4411,7 @@ The `enums` top-level block declares file-local symbol → integer mappings used
 
 - The `enum` op (§4.5) MUST resolve at load time, before any expression evaluation. After lowering, no `enum`-op nodes remain in the in-memory representation; each is replaced by a `{"op": "const", "value": <integer>}` node. Bindings MUST NOT propagate enum strings into evaluated expressions.
 - An `enum` op that names an undeclared enum (`unknown_enum`) or a symbol not declared under that enum (`unknown_enum_symbol`) MUST be rejected at load time. Loading MUST fail.
+- A duplicate value within one enum (`enum_duplicate_value`, above) is a defect of the `enums` block itself, and is reported against the block, before any `enum` op is resolved.
 
 **Use with the `index` op:** the canonical use of `enums` is to keep categorical lookups portable. Tables are encoded as `const` arrays; categorical keys are written as `enum` ops; the existing `index` op (§4.3.3) does the actual lookup — the portable form of, e.g., a Wesely-style canopy resistance lookup (`enum` keys indexing a `const` resistance table, as in §4.5).
 
@@ -4464,9 +4466,9 @@ Components that depend on tabulated functions — most prominently the `fastjx` 
 - Each entry is a `FunctionTable` carrying `axes`, `data`, and (optionally) `description`, `interpolation`, `out_of_bounds`, `outputs`, `shape`, `schema_version`.
 - `axes` is an ordered list of named `FunctionTableAxis` entries. Axis order defines the order of inner dimensions of `data` (after the leading output dimension when `outputs` is present). Axis names within a single table MUST be unique. v0.4.0 caps axis count at 2 (matching the §9.2 `interp.linear` / `interp.bilinear` set); higher-dimensional lookups are deferred until the closed registry adds `interp.trilinear`.
 - Each axis declares `name`, `values` (strictly-increasing finite floats, ≥ 2 entries), and an optional advisory `units` string. **`units` is advisory in v0.4.0** — bindings record it for documentation only; load-time unit-checking against `table_lookup.axes` input expressions is deferred to a future units RFC.
-- `interpolation` is `"linear"` (1 axis), `"bilinear"` (2 axes), or `"nearest"` (1 axis, lowering to `index` after `interp.searchsorted`). Default is `"linear"`. Bindings MUST reject mismatched (`linear` with 2 axes, `bilinear` with 1 axis, etc.) at load time with diagnostic `table_interpolation_axes_mismatch`.
+- `interpolation` is `"linear"` (1 axis), `"bilinear"` (2 axes), or `"nearest"` (1 axis: the table value at the knot nearest the query, ties to the lower knot; lowering in §9.5.3). Default is `"linear"`. Bindings MUST reject mismatched (`linear` with 2 axes, `bilinear` with 1 axis, etc.) at load time with diagnostic `table_interpolation_axes_mismatch`.
 - `out_of_bounds` is `"clamp"` (default, matches `interp.linear` / `interp.bilinear` extrapolate-flat semantics) or `"error"` (raise at evaluation time with `table_lookup_out_of_bounds`). v0.4.0 requires all five bindings to implement `"clamp"`; `"error"` is conformant when implemented.
-- `outputs` is an optional ordered list of output names (strings, unique within the table). When present, the leading dimension of `data` MUST equal the length of `outputs`, and `table_lookup.output` MAY name an entry of this list in addition to using a 0-based integer index. When absent, the table is single-output and `table_lookup.output` defaults to `0`.
+- `outputs` is an optional ordered list of output names (strings, unique within the table). When present, the leading dimension of `data` MUST equal the length of `outputs`, and `table_lookup.output` MAY name an entry of this list in addition to using a 0-based integer index. When absent, the table is single-output: `data` has no output dimension, and `0` is its only output. Whether or not `outputs` is declared, an omitted `table_lookup.output` means `0`.
 - `data` is the canonical, nested-array literal. Leaves MUST be finite numbers — NaN entries are rejected at load time with `table_data_nan`. Shape: `[len(outputs), len(axes[0].values), len(axes[1].values), ...]` when `outputs` is present; `[len(axes[0].values), len(axes[1].values), ...]` otherwise. Loaders verify the actual nesting; mismatched shapes raise `table_data_shape_mismatch`. This is deliberately stricter than the inline §9.2 form, whose `table` MAY contain NaN for missing data: an inline lookup over a table with NaN entries cannot be lifted into `function_tables`.
 - `shape` is an optional redundant assertion on `data`'s shape. If present, MUST match the actual nesting; loaders reject mismatches. **`data` is the source of truth — `shape` is a load-time assertion only.** Round-trippers MUST NOT fabricate a `shape` field when the author did not write one.
 
@@ -4490,28 +4492,30 @@ Components that depend on tabulated functions — most prominently the `fastjx` 
 
 - `table` (string, required): id of a `function_tables` entry. References to undeclared tables raise `table_lookup_unknown_table` at load time.
 - `axes` (object, required): map from axis name to scalar input expression. The set of keys MUST exactly match the names of the referenced table's `axes[]` (same set, no extras, no omissions); mismatch raises `table_lookup_axis_name_mismatch`. Each value is an arbitrary scalar `Expression` (number literal, variable reference, or AST node).
-- `output` (integer ≥ 0 OR string): which output to return. Integer is a 0-based index into the table's leading data dimension. String MUST be an entry of the table's `outputs` array. Out-of-range integer or unknown name raises `table_lookup_output_out_of_range`. May be omitted when the table has no `outputs` declaration (defaults to `0`).
-- `args` MUST be empty `[]` for a `table_lookup` node — the per-axis input expressions live under `axes`, not `args`.
+- `output` (integer ≥ 0 OR string): which output to return. Integer is a 0-based index into the table's leading data dimension. String MUST be an entry of the table's `outputs` array. Out-of-range integer or unknown name raises `table_lookup_output_out_of_range`. MAY be omitted whether or not the table declares `outputs`; an omitted `output` MUST be read as `0` (the first output of a multi-output table, the only output of a single-output one).
+- `args` MUST be empty `[]` for a `table_lookup` node — the per-axis input expressions live under `axes`, not `args`. An absent `args` means `[]`. (The schema requires `args` on every expression node, so a document always writes it; the absent case is a node that did not pass through schema validation, such as one built in memory.) Bindings MUST reject a `table_lookup` whose `args` is non-empty with diagnostic `table_lookup_args_nonempty` (the schema rejects one too, with `maxItems`; the code is what a binding raises where schema validation did not run).
 
 #### 9.5.3 Lowering to `interp.linear` / `interp.bilinear` / `index`
 
 A `table_lookup` node lowers at load time to a structurally-equivalent `fn` (or `index`) tree using the existing §9.2 closed-function set. The lowered tree is bit-equivalent: a `table_lookup` query and the equivalent inline lookup that an author would have written by hand produce the same IEEE-754 `binary64` result on the same axis weights and table values, modulo the same FMA caveats described in §9.2.
 
-For a `table_lookup` referencing a 1-axis table with `interpolation: "linear"`, output `i`, the lowered AST is:
+In the lowered trees below, `D` is the table the lookup reads, and a binding MUST lower with this `D`. For a table that declares `outputs`, `D` is `data[i]`, the slice of the leading output dimension for the selected output `i` (`table_lookup.output`, `0` when omitted). For a table without `outputs`, `D` is the whole `data`: it has no output dimension to slice, and `0` is the only output it has. `data[0]` of a single-output table is its first row (or first value), not the table, and lowering with it is wrong.
+
+For a `table_lookup` referencing a 1-axis table with `interpolation: "linear"`, the lowered AST is:
 
 ```jsonc
 { "op": "fn", "name": "interp.linear", "args": [
-    { "op": "const", "value": data[i] },           // 1-D table slice for output i
+    { "op": "const", "value": D },               // 1-D table for the selected output
     { "op": "const", "value": axes[0].values },    // axis values
     <axis_input_expression>                         // the user-supplied axes[axis[0].name]
 ] }
 ```
 
-For a 2-axis table with `interpolation: "bilinear"`, output `i`:
+For a 2-axis table with `interpolation: "bilinear"`:
 
 ```jsonc
 { "op": "fn", "name": "interp.bilinear", "args": [
-    { "op": "const", "value": data[i] },           // 2-D table slice for output i (Nx × Ny)
+    { "op": "const", "value": D },               // 2-D table for the selected output (Nx × Ny)
     { "op": "const", "value": axes[0].values },    // axis_x values
     { "op": "const", "value": axes[1].values },    // axis_y values
     <x_input_expression>,                           // axes[axes[0].name]
@@ -4519,16 +4523,26 @@ For a 2-axis table with `interpolation: "bilinear"`, output `i`:
 ] }
 ```
 
-For `interpolation: "nearest"` on a 1-axis table:
+For `interpolation: "nearest"` on a 1-axis table, the lookup MUST return `D[k]` for the knot `k` nearest the query `x`, a tie between two knots going to the lower one, and under `out_of_bounds: "clamp"` a query below the first knot returns `D[1]` and one above the last returns `D[N]` (the nearest knot in both cases). A NaN query returns NaN, as `interp.linear` does. There is no closed function for it: the lowering is an AST composition over `interp.searchsorted`, `index`, `min`, `max`, `-`, `<`, `==` and `ifelse`. With `N = len(axes[0].values)`, `A = { "op": "const", "value": axes[0].values }` and `x` the axis input expression (written once per use below; it is a pure expression, so the copies agree):
 
 ```jsonc
-{ "op": "index", "args": [
-    { "op": "const", "value": data[i] },
-    { "op": "fn", "name": "interp.searchsorted", "args": [
-        <axis_input_expression>,
-        { "op": "const", "value": axes[0].values } ] }
-] }
+// j  = interp.searchsorted(x, A)   ∈ 1..N+1, the first knot ≥ x
+// lo = max(j - 1, 1)               the knot at or below x (1 below the range)
+// hi = min(j, N)                   the knot at or above x (N above the range)
+{ "op": "ifelse", "args": [
+    { "op": "==", "args": [ x, x ] },                         // false only for NaN
+    { "op": "index", "args": [
+        { "op": "const", "value": D },
+        { "op": "ifelse", "args": [
+            { "op": "<", "args": [
+                { "op": "-", "args": [ { "op": "index", "args": [ A, hi ] }, x ] },
+                { "op": "-", "args": [ x, { "op": "index", "args": [ A, lo ] } ] } ] },
+            hi,                                               // strictly nearer the upper knot
+            lo ] } ] },                                       // nearer the lower knot, or a tie
+    x ] }                                                     // NaN query: NaN
 ```
+
+where `j` is `{ "op": "fn", "name": "interp.searchsorted", "args": [ x, A ] }`, `lo` is `{ "op": "max", "args": [ { "op": "-", "args": [ j, 1 ] }, 1 ] }` and `hi` is `{ "op": "min", "args": [ j, N ] }`. Both indices are always in `1..N` — below the range `lo = hi = 1`, above it (and for a NaN query, whose `searchsorted` is `N + 1`) `lo = hi = N` — so no `index` in the tree reads out of range, whichever branch an evaluator takes. "Nearest" and "tie" are decided on the two `binary64` differences `A[hi] − x` and `x − A[lo]` as the tree computes them; because both are computed in every binding with the same two subtractions, every binding picks the same knot, including on a query a rounding error away from a midpoint. The result is always an entry of `D`, so it is exact. With `out_of_bounds: "error"`, a binding that implements the mode raises `table_lookup_out_of_bounds` for a query strictly below `A[1]` or strictly above `A[N]` (§9.5.3a) and otherwise evaluates this tree.
 
 Bindings MAY satisfy this lowering by an in-memory transformation at load time (resulting AST contains no `table_lookup` nodes after load) or by a thin evaluator that dispatches on `table_lookup` directly to the existing `interp.linear` / `interp.bilinear` / `index` implementations. Both are conformant. The serializer of every binding MUST round-trip the authored form (see §9.5.4).
 
@@ -4546,7 +4560,7 @@ The migration of inline-const lookups to tables is a one-shot author-driven refa
 | Diagnostic code | Condition |
 |---|---|
 | `table_axis_non_monotonic` | An axis's `values` is not strictly increasing. |
-| `table_axis_nan` | An axis's `values` contains NaN. |
+| `table_axis_nan` | An axis's `values` contains NaN. Takes precedence over `table_axis_non_monotonic`: an axis containing a NaN MUST be reported with `table_axis_nan`, whatever its other entries. |
 | `table_data_shape_mismatch` | The actual nesting of `data` does not match the shape implied by `axes` (and `outputs`, when present), or the redundant `shape` assertion does not match `data`. |
 | `table_data_nan` | A leaf of `data` is NaN. |
 | `table_interpolation_axes_mismatch` | `interpolation` and the number of axes are inconsistent (`linear` requires 1, `bilinear` requires 2, `nearest` requires 1). |
@@ -4555,7 +4569,8 @@ The migration of inline-const lookups to tables is a one-shot author-driven refa
 | `table_outputs_duplicate_name` | Two entries of `outputs` share the same name. |
 | `table_lookup_unknown_table` | `table_lookup.table` references an id not declared in `function_tables`. |
 | `table_lookup_axis_name_mismatch` | The set of keys in `table_lookup.axes` does not match the set of axis names declared on the referenced table. |
-| `table_lookup_output_out_of_range` | `table_lookup.output` integer is ≥ `len(outputs)` (or ≥ leading dimension of `data` when `outputs` is absent), or its string is not an entry of `outputs`. |
+| `table_lookup_output_out_of_range` | `table_lookup.output` integer is ≥ `len(outputs)` (or ≥ 1 when `outputs` is absent: a single-output table has only output `0`), or its string is not an entry of `outputs` (any string, when `outputs` is absent). |
+| `table_lookup_args_nonempty` | A `table_lookup` node carries a non-empty `args` (§9.5.2). An absent `args` is `[]` and is not an error. |
 | `table_out_of_bounds_unsupported` | The referenced table declares `out_of_bounds: "error"` and the binding does not implement that mode. Raised where the binding would otherwise lower or evaluate the lookup — see §9.5.3a. |
 
 ##### 9.5.3a `out_of_bounds: "error"` in a binding that does not implement it
@@ -4571,6 +4586,8 @@ Conformance fixtures under `tests/conformance/function_tables/` exercise:
 3. A roundtrip-preservation case (load + save reproduces the authored byte sequence modulo whitespace, with NO promotion or demotion across the inline-const ↔ table_lookup boundary) — `roundtrip/`.
 4. An END-TO-END case run through the binding's own inline-test runner (§6.6) rather than through a lowering harness — `inline_test/`. It pairs an observed defined by a `table_lookup` with a sibling observed spelling the same lookup in the lowered form, plus an out-of-range input that must clamp; a binding whose lowering exists only inside its test harness fails the first and third assertions while passing the second. The lowering is a property of the EVALUATION path, and only this fixture pins that.
 5. The `out_of_bounds: "error"` refusal of §9.5.3a — `out_of_bounds_error/`.
+6. `interpolation: "nearest"` through the inline-test runner: queries on a knot, either side of a midpoint, exactly on a midpoint (the tie goes to the lower knot), and below and above the axis (clamped) — `nearest/`.
+7. The defaults of §9.5.2 and §9.5.3 through the inline-test runner: multi-output tables (one 1-axis, one 2-axis) read with `output` omitted (output `0`) beside the same read spelled out and a read of another output, and a single-output table read with `output` omitted and `0` (lowered with the whole `data`) — `lookup_defaults/`.
 
 Each fixture pairs an `.esm` file with a small numeric harness that asserts the lowered evaluation matches the equivalent inline-const lookup at the §9.2 tolerance contract (`abs: 0, rel: 0` non-FMA, `abs: 0, rel: 4e-16` mixed-FMA cross-binding). All five bindings MUST pass.
 

@@ -3963,5 +3963,21 @@
     ],
     "is_valid": false,
     "notes": "esm-spec \u00a74.8.3 (PR #508 review): index, reshape and transpose take the unit of args[0], but every operand is walked, so a mismatch inside a subscript is reported even though the declared result unit (K) matches the array's."
+  },
+  "enum_duplicate_value.esm": {
+    "resolver_only": true,
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": false,
+    "resolver_error_code": "enum_duplicate_value",
+    "notes": "Resolver-level invalid (esm-spec \u00a79.3, CONFORMANCE_SPEC \u00a75.26.5). SCHEMA-VALID \u2014 JSON Schema cannot say that the values of an object are distinct \u2014 so uniqueness is a loader check, refused with `enum_duplicate_value`. `is_valid` is false for EVERY binding: all five parse the `enums` block at load and reject a duplicate there. `land_use.forest` and `land_use.woodland` both map to 3; the `enum` op names a third, unduplicated member, and a second enum reuses 3 legally (values MAY coincide across enums)."
+  },
+  "enum_duplicate_zero_value.esm": {
+    "resolver_only": true,
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": false,
+    "resolver_error_code": "enum_duplicate_value",
+    "notes": "Resolver-level invalid (esm-spec \u00a79.3, CONFORMANCE_SPEC \u00a75.26.5). SCHEMA-VALID \u2014 JSON Schema cannot say that the values of an object are distinct \u2014 so uniqueness is a loader check, refused with `enum_duplicate_value`. `is_valid` is false for EVERY binding: all five parse the `enums` block at load and reject a duplicate there. Two symbols map to 0 and no `enum` op names either: 0 is a value like any other, and the check is on the block, not on resolved members."
   }
 }

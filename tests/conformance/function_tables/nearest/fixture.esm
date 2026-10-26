@@ -1,0 +1,555 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "function_tables_nearest_conformance",
+    "description": "esm-spec §9.5.3 `interpolation: \"nearest\"` exercised through each binding's inline-test runner. A lookup returns the table value at the knot NEAREST the query, a tie between two knots going to the LOWER knot, and with the default `out_of_bounds: \"clamp\"` a query outside the axis returns the end value. The axis [1, 2, 4, 8] is non-uniform, so the midpoints differ per cell, and every midpoint used is exactly representable, so the tie is a true tie in binary64. `n_tie_2_4_hand` spells the §9.5.3 lowering of the `q_tie_2_4` query out by hand (searchsorted, min, max, index, -, <, ==, ifelse), so a binding whose `table_lookup` lowering differs from the spec's composition disagrees with it.",
+    "authors": [
+      "EarthSciML"
+    ]
+  },
+  "function_tables": {
+    "steps": {
+      "description": "A step table read by nearest knot (synthetic).",
+      "axes": [
+        {
+          "name": "p",
+          "values": [
+            1.0,
+            2.0,
+            4.0,
+            8.0
+          ]
+        }
+      ],
+      "interpolation": "nearest",
+      "data": [
+        10.0,
+        20.0,
+        40.0,
+        80.0
+      ]
+    }
+  },
+  "models": {
+    "NearestLookup": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        },
+        "n_below": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0
+        },
+        "n_first": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0
+        },
+        "n_tie_1_2": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0
+        },
+        "n_near_lo": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0
+        },
+        "n_tie_2_4": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0
+        },
+        "n_near_hi": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0
+        },
+        "n_knot": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0
+        },
+        "n_tie_4_8": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0
+        },
+        "n_just_above_tie": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0
+        },
+        "n_last": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0
+        },
+        "n_above": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0
+        },
+        "q_below": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.0
+        },
+        "q_first": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1.0
+        },
+        "q_tie_1_2": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1.5
+        },
+        "q_near_lo": {
+          "type": "parameter",
+          "units": "1",
+          "default": 2.9
+        },
+        "q_tie_2_4": {
+          "type": "parameter",
+          "units": "1",
+          "default": 3.0
+        },
+        "q_near_hi": {
+          "type": "parameter",
+          "units": "1",
+          "default": 3.1
+        },
+        "q_knot": {
+          "type": "parameter",
+          "units": "1",
+          "default": 4.0
+        },
+        "q_tie_4_8": {
+          "type": "parameter",
+          "units": "1",
+          "default": 6.0
+        },
+        "q_just_above_tie": {
+          "type": "parameter",
+          "units": "1",
+          "default": 6.5
+        },
+        "q_last": {
+          "type": "parameter",
+          "units": "1",
+          "default": 8.0
+        },
+        "q_above": {
+          "type": "parameter",
+          "units": "1",
+          "default": 100.0
+        },
+        "n_tie_2_4_hand": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "const",
+            "args": [],
+            "value": 0.0
+          }
+        },
+        {
+          "lhs": "n_below",
+          "rhs": {
+            "op": "table_lookup",
+            "table": "steps",
+            "axes": {
+              "p": "q_below"
+            },
+            "args": []
+          }
+        },
+        {
+          "lhs": "n_first",
+          "rhs": {
+            "op": "table_lookup",
+            "table": "steps",
+            "axes": {
+              "p": "q_first"
+            },
+            "args": []
+          }
+        },
+        {
+          "lhs": "n_tie_1_2",
+          "rhs": {
+            "op": "table_lookup",
+            "table": "steps",
+            "axes": {
+              "p": "q_tie_1_2"
+            },
+            "args": []
+          }
+        },
+        {
+          "lhs": "n_near_lo",
+          "rhs": {
+            "op": "table_lookup",
+            "table": "steps",
+            "axes": {
+              "p": "q_near_lo"
+            },
+            "args": []
+          }
+        },
+        {
+          "lhs": "n_tie_2_4",
+          "rhs": {
+            "op": "table_lookup",
+            "table": "steps",
+            "axes": {
+              "p": "q_tie_2_4"
+            },
+            "args": []
+          }
+        },
+        {
+          "lhs": "n_near_hi",
+          "rhs": {
+            "op": "table_lookup",
+            "table": "steps",
+            "axes": {
+              "p": "q_near_hi"
+            },
+            "args": []
+          }
+        },
+        {
+          "lhs": "n_knot",
+          "rhs": {
+            "op": "table_lookup",
+            "table": "steps",
+            "axes": {
+              "p": "q_knot"
+            },
+            "args": []
+          }
+        },
+        {
+          "lhs": "n_tie_4_8",
+          "rhs": {
+            "op": "table_lookup",
+            "table": "steps",
+            "axes": {
+              "p": "q_tie_4_8"
+            },
+            "args": []
+          }
+        },
+        {
+          "lhs": "n_just_above_tie",
+          "rhs": {
+            "op": "table_lookup",
+            "table": "steps",
+            "axes": {
+              "p": "q_just_above_tie"
+            },
+            "args": []
+          }
+        },
+        {
+          "lhs": "n_last",
+          "rhs": {
+            "op": "table_lookup",
+            "table": "steps",
+            "axes": {
+              "p": "q_last"
+            },
+            "args": []
+          }
+        },
+        {
+          "lhs": "n_above",
+          "rhs": {
+            "op": "table_lookup",
+            "table": "steps",
+            "axes": {
+              "p": "q_above"
+            },
+            "args": []
+          }
+        },
+        {
+          "lhs": "n_tie_2_4_hand",
+          "rhs": {
+            "op": "ifelse",
+            "args": [
+              {
+                "op": "==",
+                "args": [
+                  "q_tie_2_4",
+                  "q_tie_2_4"
+                ]
+              },
+              {
+                "op": "index",
+                "args": [
+                  {
+                    "op": "const",
+                    "args": [],
+                    "value": [
+                      10.0,
+                      20.0,
+                      40.0,
+                      80.0
+                    ]
+                  },
+                  {
+                    "op": "ifelse",
+                    "args": [
+                      {
+                        "op": "<",
+                        "args": [
+                          {
+                            "op": "-",
+                            "args": [
+                              {
+                                "op": "index",
+                                "args": [
+                                  {
+                                    "op": "const",
+                                    "args": [],
+                                    "value": [
+                                      1.0,
+                                      2.0,
+                                      4.0,
+                                      8.0
+                                    ]
+                                  },
+                                  {
+                                    "op": "min",
+                                    "args": [
+                                      {
+                                        "op": "fn",
+                                        "name": "interp.searchsorted",
+                                        "args": [
+                                          "q_tie_2_4",
+                                          {
+                                            "op": "const",
+                                            "args": [],
+                                            "value": [
+                                              1.0,
+                                              2.0,
+                                              4.0,
+                                              8.0
+                                            ]
+                                          }
+                                        ]
+                                      },
+                                      4
+                                    ]
+                                  }
+                                ]
+                              },
+                              "q_tie_2_4"
+                            ]
+                          },
+                          {
+                            "op": "-",
+                            "args": [
+                              "q_tie_2_4",
+                              {
+                                "op": "index",
+                                "args": [
+                                  {
+                                    "op": "const",
+                                    "args": [],
+                                    "value": [
+                                      1.0,
+                                      2.0,
+                                      4.0,
+                                      8.0
+                                    ]
+                                  },
+                                  {
+                                    "op": "max",
+                                    "args": [
+                                      {
+                                        "op": "-",
+                                        "args": [
+                                          {
+                                            "op": "fn",
+                                            "name": "interp.searchsorted",
+                                            "args": [
+                                              "q_tie_2_4",
+                                              {
+                                                "op": "const",
+                                                "args": [],
+                                                "value": [
+                                                  1.0,
+                                                  2.0,
+                                                  4.0,
+                                                  8.0
+                                                ]
+                                              }
+                                            ]
+                                          },
+                                          1
+                                        ]
+                                      },
+                                      1
+                                    ]
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "op": "min",
+                        "args": [
+                          {
+                            "op": "fn",
+                            "name": "interp.searchsorted",
+                            "args": [
+                              "q_tie_2_4",
+                              {
+                                "op": "const",
+                                "args": [],
+                                "value": [
+                                  1.0,
+                                  2.0,
+                                  4.0,
+                                  8.0
+                                ]
+                              }
+                            ]
+                          },
+                          4
+                        ]
+                      },
+                      {
+                        "op": "max",
+                        "args": [
+                          {
+                            "op": "-",
+                            "args": [
+                              {
+                                "op": "fn",
+                                "name": "interp.searchsorted",
+                                "args": [
+                                  "q_tie_2_4",
+                                  {
+                                    "op": "const",
+                                    "args": [],
+                                    "value": [
+                                      1.0,
+                                      2.0,
+                                      4.0,
+                                      8.0
+                                    ]
+                                  }
+                                ]
+                              },
+                              1
+                            ]
+                          },
+                          1
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              "q_tie_2_4"
+            ]
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "nearest_knot_ties_low_and_clamps",
+          "description": "q_below = 0.0 -> 10.0 (below the first knot: clamps to D[1]); q_first = 1.0 -> 10.0 (on the first knot); q_tie_1_2 = 1.5 -> 10.0 (midpoint of knots 1 and 2: a tie goes to the LOWER knot); q_near_lo = 2.9 -> 20.0 (nearer knot 2 (0.9) than knot 4 (1.1)); q_tie_2_4 = 3.0 -> 20.0 (midpoint of knots 2 and 4: tie, lower knot); q_near_hi = 3.1 -> 40.0 (nearer knot 4 (0.9) than knot 2 (1.1): first knot >= x, and here also the nearest); q_knot = 4.0 -> 40.0 (on an interior knot); q_tie_4_8 = 6.0 -> 40.0 (midpoint of knots 4 and 8: tie, lower knot); q_just_above_tie = 6.5 -> 80.0 (just past the 4-8 midpoint: upper knot); q_last = 8.0 -> 80.0 (on the last knot); q_above = 100.0 -> 80.0 (above the last knot: clamps to D[N] (the old index(D, searchsorted) lowering read D[N+1] here))",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "assertions": [
+            {
+              "variable": "n_below",
+              "time": 0.0,
+              "expected": 10.0
+            },
+            {
+              "variable": "n_first",
+              "time": 0.0,
+              "expected": 10.0
+            },
+            {
+              "variable": "n_tie_1_2",
+              "time": 0.0,
+              "expected": 10.0
+            },
+            {
+              "variable": "n_near_lo",
+              "time": 0.0,
+              "expected": 20.0
+            },
+            {
+              "variable": "n_tie_2_4",
+              "time": 0.0,
+              "expected": 20.0
+            },
+            {
+              "variable": "n_near_hi",
+              "time": 0.0,
+              "expected": 40.0
+            },
+            {
+              "variable": "n_knot",
+              "time": 0.0,
+              "expected": 40.0
+            },
+            {
+              "variable": "n_tie_4_8",
+              "time": 0.0,
+              "expected": 40.0
+            },
+            {
+              "variable": "n_just_above_tie",
+              "time": 0.0,
+              "expected": 80.0
+            },
+            {
+              "variable": "n_last",
+              "time": 0.0,
+              "expected": 80.0
+            },
+            {
+              "variable": "n_above",
+              "time": 0.0,
+              "expected": 80.0
+            },
+            {
+              "variable": "n_tie_2_4_hand",
+              "time": 0.0,
+              "expected": 20.0
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

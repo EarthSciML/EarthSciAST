@@ -91,9 +91,21 @@
     },
     {
       "name": "nan_in_xs",
-      "description": "xs contains a NaN entry — bindings MUST reject with diagnostic code 'searchsorted_nan_in_table'.",
+      "description": "xs contains a NaN entry — bindings MUST reject with diagnostic code 'searchsorted_nan' (esm-spec §9.2).",
       "inputs": [ 2.0, [1.0, "NaN", 3.0, 4.0, 5.0] ],
-      "expected_error_code": "searchsorted_nan_in_table"
+      "expected_error_code": "searchsorted_nan"
+    },
+    {
+      "name": "nan_first_in_xs",
+      "description": "A NaN as the FIRST entry of an otherwise increasing xs. Every comparison with NaN is false, so a check written as `xs[i] > xs[i+1]` passes it and one written as `!(xs[i] <= xs[i+1])` fails it; the verdict MUST be 'searchsorted_nan' either way (esm-spec §9.2: NaN is checked before monotonicity).",
+      "inputs": [ 2.0, ["NaN", 1.0, 2.0, 3.0] ],
+      "expected_error_code": "searchsorted_nan"
+    },
+    {
+      "name": "nan_in_non_monotonic_xs",
+      "description": "xs is BOTH non-monotonic (3.0 before 1.0) and contains a NaN later on. NaN takes precedence: the code MUST be 'searchsorted_nan', not 'searchsorted_non_monotonic', even though the decreasing pair comes first (esm-spec §9.2).",
+      "inputs": [ 2.0, [3.0, 1.0, "NaN", 4.0] ],
+      "expected_error_code": "searchsorted_nan"
     }
   ]
 }

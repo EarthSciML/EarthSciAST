@@ -156,6 +156,18 @@
       "expected_error_code": "interp_nan_in_axis"
     },
     {
+      "name": "nan_in_non_monotonic_axis_x",
+      "description": "axis_x is BOTH decreasing (2.0 before 1.0) and contains a NaN later on. NaN takes precedence within an axis: bindings MUST reject with `interp_nan_in_axis`, not `interp_non_monotonic_axis` (esm-spec §9.2 Errors).",
+      "inputs": [ [[0.0, 1.0, 2.0], [10.0, 11.0, 12.0], [20.0, 21.0, 22.0]], [2.0, 1.0, "NaN"], [0.0, 10.0, 20.0], 0.5, 5.0 ],
+      "expected_error_code": "interp_nan_in_axis"
+    },
+    {
+      "name": "nan_first_in_axis_y",
+      "description": "A NaN as the FIRST entry of an otherwise increasing axis_y. A comparison-based monotonicity check passes or fails on it depending on how it is written; the verdict MUST be `interp_nan_in_axis` either way (esm-spec §9.2 Errors).",
+      "inputs": [ [[0.0, 1.0, 2.0], [10.0, 11.0, 12.0], [20.0, 21.0, 22.0]], [0.0, 1.0, 2.0], ["NaN", 10.0, 20.0], 0.5, 5.0 ],
+      "expected_error_code": "interp_nan_in_axis"
+    },
+    {
       "name": "axis_x_too_short",
       "description": "axis_x has only one entry (no x-cell to blend across). Bindings MUST reject with `interp_axis_too_short`.",
       "inputs": [ [[0.0, 1.0, 2.0]], [0.0], [0.0, 10.0, 20.0], 0.0, 5.0 ],
