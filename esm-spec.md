@@ -864,7 +864,13 @@ All take their standard mathematical arguments in `args`. Most are unary (one
 scalar argument) except `atan2` (binary) and `min`/`max`, which are **n-ary
 with arity ≥ 2** and return the element-wise extremum across all arguments
 (left-fold of the binary operator). Conforming bindings MUST reject `min`/`max`
-nodes with fewer than two arguments. `min`/`max` are the canonical, AST-level
+nodes with fewer than two arguments. **NaN propagates:** if any argument is NaN
+the result is NaN, whatever its position — the IEEE 754-2019 `maximum` /
+`minimum` operations, not 2008's `maxNum` / `minNum`, which return the other
+operand. A language's native min/max that drops NaN (Rust's `f64::max`, C's
+`fmax`, Python's built-in `max` in one argument order) MUST NOT be used as is.
+The same holds for the `max`/`min` ⊕ of a `faq` reduction (§4.3, CONFORMANCE
+§5.6): one NaN term makes the reduction NaN. `min`/`max` are the canonical, AST-level
 encoding of clamp / clip / limiter primitives — `clamp(x, lo, hi)` is
 `{"op": "min", "args": [hi, {"op": "max", "args": [lo, "x"]}]}` — and reviewers
 MUST reject `fn` nodes that only re-implement these in disguise (see §9.2).
@@ -2081,10 +2087,14 @@ resolves free symbols correctly in `validate` and then evaluates an unresolvable
 name anyway has not satisfied this section — it has moved the failure from a
 message to a number. An evaluator MUST NOT produce a value for a name bound in
 none of the scopes available where it evaluates; it MUST fail closed, naming the
-name. A NaN sentinel is specifically **not** enough: IEEE-754 `max` and `min`
-return the non-NaN operand, so `max(known, undeclaredFloor)` quietly evaluates as
-`max(known)` — the undeclared operand does not poison the result, it *vanishes
-from it*, and every digit downstream is finite and plausible. Where a binding has
+name. A NaN sentinel is specifically **not** enough. A sentinel is a number, so
+nothing downstream can tell it from a NaN the model computed; and a sentinel only
+poisons a result while every operation it meets propagates NaN, which is what
+§4.2 requires of `min`/`max` but not what every language's native functions do
+(Rust's `f64::max` returns the other operand). Under such a function,
+`max(known, undeclaredFloor)` quietly evaluates as `max(known)` — the undeclared
+operand does not poison the result, it *vanishes from it*, and every digit
+downstream is finite and plausible. Where a binding has
 more than one route from a document to a value (a per-step route and a build-time
 pipeline are both routes), the check MUST be one shared implementation every
 route invokes; this is normatively **CONFORMANCE_SPEC §5.23**, and it is stated
@@ -4267,7 +4277,7 @@ Decomposes a UTC scalar time into proleptic-Gregorian calendar fields. All entri
 
 Returns the 1-based index `i` of the first element of `xs` that is `≥ x` (left-side bias, equivalent to Julia's `searchsortedfirst`).
 
-- `xs` MUST be a `const`-op array of strictly non-decreasing floats. Bindings MUST reject non-monotonic `xs` at load time with diagnostic `searchsorted_non_monotonic`.
+- `xs` MUST be a `const`-op array of non-decreasing floats (equal neighbours allowed). Bindings MUST reject non-monotonic `xs` at load time with diagnostic `searchsorted_non_monotonic`.
 - Equal values in `xs` (duplicates): the returned index is the **smallest** `i` for which `xs[i] ≥ x`. This makes the result deterministic on duplicate runs and lets authors compose searches (e.g. find the first interval containing `x` even when boundaries coincide).
 - Out-of-range query: if `x ≤ xs[1]`, return `1`. If `x > xs[N]`, return `N + 1` (one past the end). Authors who need clamping wrap the result in `min(N, ...)` using the AST.
 - NaN `x`: result is `N + 1` (treated as "greater than every finite element"). NaN entries in `xs` are forbidden.
@@ -4287,7 +4297,7 @@ These primitives are the named, opaque form of the searchsorted-plus-index-plus-
 
 **Argument shape contract (loaded at file-load time, not at evaluation):**
 
-- `table` and the axis array(s) MUST be `const`-op arrays of finite floats. Loaders MUST resolve their nested shapes at load time. The shape relation MUST hold:
+- `table` and the axis array(s) MUST be `const`-op arrays of floats, the axis entries finite (`table` entries MAY be NaN; see below). Loaders MUST resolve their nested shapes at load time. The shape relation MUST hold:
   - `interp.linear`: `len(table) == len(axis) == N` with `N ≥ 2`.
   - `interp.bilinear`: outer length of `table` MUST equal `Nx == len(axis_x)` and every inner row of `table` MUST have length `Ny == len(axis_y)`, with `Nx ≥ 2` and `Ny ≥ 2`. The table is row-major: `table[i][j]` is the value at `(axis_x[i], axis_y[j])`.
 - Each axis array MUST be **strictly increasing**. Equal adjacent axis values are not allowed (they would make a denominator zero in the blend). `interp.searchsorted` permits equal-adjacent (§9.2) because it returns an index, not a blend; `interp.linear` / `interp.bilinear` do not.
@@ -4457,7 +4467,7 @@ Components that depend on tabulated functions — most prominently the `fastjx` 
 - `interpolation` is `"linear"` (1 axis), `"bilinear"` (2 axes), or `"nearest"` (1 axis, lowering to `index` after `interp.searchsorted`). Default is `"linear"`. Bindings MUST reject mismatched (`linear` with 2 axes, `bilinear` with 1 axis, etc.) at load time with diagnostic `table_interpolation_axes_mismatch`.
 - `out_of_bounds` is `"clamp"` (default, matches `interp.linear` / `interp.bilinear` extrapolate-flat semantics) or `"error"` (raise at evaluation time with `table_lookup_out_of_bounds`). v0.4.0 requires all five bindings to implement `"clamp"`; `"error"` is conformant when implemented.
 - `outputs` is an optional ordered list of output names (strings, unique within the table). When present, the leading dimension of `data` MUST equal the length of `outputs`, and `table_lookup.output` MAY name an entry of this list in addition to using a 0-based integer index. When absent, the table is single-output and `table_lookup.output` defaults to `0`.
-- `data` is the canonical, nested-array literal. Leaves MUST be finite numbers — NaN entries are rejected at load time with `table_data_nan`. Shape: `[len(outputs), len(axes[0].values), len(axes[1].values), ...]` when `outputs` is present; `[len(axes[0].values), len(axes[1].values), ...]` otherwise. Loaders verify the actual nesting; mismatched shapes raise `table_data_shape_mismatch`.
+- `data` is the canonical, nested-array literal. Leaves MUST be finite numbers — NaN entries are rejected at load time with `table_data_nan`. Shape: `[len(outputs), len(axes[0].values), len(axes[1].values), ...]` when `outputs` is present; `[len(axes[0].values), len(axes[1].values), ...]` otherwise. Loaders verify the actual nesting; mismatched shapes raise `table_data_shape_mismatch`. This is deliberately stricter than the inline §9.2 form, whose `table` MAY contain NaN for missing data: an inline lookup over a table with NaN entries cannot be lifted into `function_tables`.
 - `shape` is an optional redundant assertion on `data`'s shape. If present, MUST match the actual nesting; loaders reject mismatches. **`data` is the source of truth — `shape` is a load-time assertion only.** Round-trippers MUST NOT fabricate a `shape` field when the author did not write one.
 
 **Authoring policy:** tables are **opt-in**. Loaders MUST NOT silently auto-promote inline `const`-op arrays into `function_tables` entries during round-trip. The migration of an existing inline-const-heavy `.esm` to `function_tables` is a one-shot author-driven refactor, not a load-time canonicalization. This preserves the existing `tests/` corpus and the `earthsci-ast-go` byte-exact reload guarantee.

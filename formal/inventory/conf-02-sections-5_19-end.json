@@ -606,24 +606,21 @@
       "note": "CI scheduling rule."
     },
     {
-      "id": "conf.5.45.doubly-defined-refused",
-      "section": "5.45",
+      "id": "conf.5.52.doubly-defined-refused",
+      "section": "5.52",
       "quote": "(`D(x, t) ~ f`) and a whole-variable algebraic one (`x ~ g`) MUST be refused at BUILD by every simulating binding, with the esm-spec §4.9.4 diagnostic `equation_count_mismatch`, and the message MUST name the unknown and BOTH equations.",
       "class": "semantic",
       "phase": 5,
       "area": "diagnostics",
-      "note": "An unknown with both a derivative equation and a whole-variable algebraic equation is rejected with equation_count_mismatch, naming the unknown and both equations, never tie-broken.",
-      "concern": "The section number 5.45 is used for two different sections (this one at line 6601 and 'Inline-Test Conformance Tiers' at line 6743), and 5.44.6 appears after 5.46, so a citation of 5.45 cannot resolve to one heading.",
-      "blocked_by": "Q-1"
+      "note": "An unknown with both a derivative equation and a whole-variable algebraic equation is rejected with equation_count_mismatch, naming the unknown and both equations, never tie-broken."
     },
     {
-      "id": "conf.5.45.control-must-run",
-      "section": "5.45",
+      "id": "conf.5.52.control-must-run",
+      "section": "5.52",
       "quote": "which takes the same evaluator and MUST still run",
       "class": "out_of_scope",
       "area": "conformance_harness",
-      "note": "Non-vacuity control of the fixture set.",
-      "blocked_by": "Q-1"
+      "note": "Non-vacuity control of the fixture set."
     },
     {
       "id": "conf.5.46.missing-data-fails",
@@ -896,14 +893,14 @@
       "note": "Harness rule: compare (code, path) pairs, not just 'some error'."
     },
     {
-      "id": "conf.7.1.2.unresolved-order-not-unbound",
-      "section": "7.1.2",
+      "id": "conf.7.1.unresolved-order-not-unbound",
+      "section": "7.1",
       "quote": "A binding whose evaluator cannot distinguish the two cases MUST NOT claim the stronger one.",
       "class": "semantic",
       "phase": 2,
       "area": "diagnostics",
       "note": "A reference to a declared name that has no value yet at evaluation is reported as E_TREEWALK_UNRESOLVED_ORDER (or a weaker diagnosis), never as E_TREEWALK_UNBOUND_NAME, which is reserved for names no scope binds.",
-      "concern": "This row belongs to the §7.1 error-code table but sits after the §7.1.2 prose as an orphaned table fragment with no header, so its nearest heading is 7.1.2; it is also unclear what 'claim the stronger one' permits instead (a generic error, or E_TREEWALK_UNRESOLVED_ORDER for every case)."
+      "concern": "Placement resolved 2026-10-26 (Q-18 part): the row is back in the §7.1 table. Still open: what 'claim the stronger one' lets a binding report instead."
     }
   ]
 }

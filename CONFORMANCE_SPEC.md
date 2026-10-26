@@ -3803,9 +3803,12 @@ one route, the answer was *a plausible number*.
 in none of the resolution scopes available where it is evaluated. A binding MUST
 surface that as a named fault — a raise, or a latched diagnostic drained at
 every exit — and MUST NOT substitute a value for the unbound operand. In
-particular a NaN sentinel is **not** sufficient: IEEE-754 `max` and `min` return
-the non-NaN operand, so `max(known, undeclaredFloor)` silently evaluates as
-`max(known)`. The operand does not become NaN; it **disappears**, and every
+particular a NaN sentinel is **not** sufficient. A sentinel cannot be told apart
+from a NaN the model computed, and it survives only operations that propagate NaN.
+§4.2 requires `min`/`max` to propagate, but a language's native function may not
+(Rust's `f64::max` returns the other operand), and under such a function
+`max(known, undeclaredFloor)` silently evaluates as `max(known)`. The operand
+does not become NaN; it **disappears**, and every
 downstream digit is finite, plausible, and computed from an expression the author
 did not write. This is the same laundering §5.19.4 forbids for a causal
 self-read, stated for the general case rather than for one construct.
@@ -6598,107 +6601,6 @@ passes one explicitly. Which value is the stage's own to state:
 Either way the compiler is an argument and never an inheritance. Without that,
 the whole harness goes red for reasons unrelated to what each stage tests.
 
-### 5.45 A Doubly-Defined Unknown Is Refused, Never Tie-Broken (normative)
-
-**Decision pinned.** An unknown that carries BOTH a derivative equation
-(`D(x, t) ~ f`) and a whole-variable algebraic one (`x ~ g`) MUST be refused at
-BUILD by every simulating binding, with the esm-spec §4.9.4 diagnostic
-`equation_count_mismatch`, and the message MUST name the unknown and BOTH
-equations. §4.9.4 counts an equation against the unknowns whichever form its LHS
-takes, so the two together are one more equation than the model has unknowns to
-bind — which is exactly what each binding's `validate` already reports at
-`/models/<M>`. The build is the other place that same document arrives, and it
-says the same thing.
-
-**Reason.** The alternative is to tie-break, and there is no defensible winner.
-Rust did it on purpose — "differential wins over algebraic when both are
-present" — on the grounds that reporting the name as algebraic would hide a
-genuinely settable initial condition from a Run UI. But the document declares a
-constraint, and integrating the derivative alone runs a model the file does not
-describe while saying nothing about the equation dropped to do it. A refused
-document has no run, so there is no Run UI left to mislead. Julia, for its part,
-kept both equations and failed later, deep in classification, with a
-Julia-local code naming neither the unknown nor either equation — a refusal, but
-not one an author can act on.
-
-**Shape.** Golden-free; it pins no numbers. Two refusal cases — the same defect
-on a scalar document and on one whose shaped unknown takes a binding's ARRAY
-compile, because the scalar and array routes are separate code in Rust and
-Python and both must refuse. Each has its own CONTROL: the same document with
-the algebraic equation removed, which takes the same evaluator and MUST still
-run. The controls are the non-vacuity anchor: a binding that refused every
-document would otherwise satisfy the refusal cases. Both refusal fixtures give
-the two equations DIFFERING right-hand sides (`k` against `k * 3`), so no
-binding can argue the pair is a harmless duplicate; an IDENTICAL pair is left to
-each binding's own structural validator, which is where a duplicate definition
-is decided.
-
-The manifest and fixtures live in `tests/conformance/doubly_defined_state/`.
-Adapters: `pkg/EarthSciAST.jl/test/doubly_defined_state_conformance_test.jl`;
-`pkg/earthsci-ast-py/tests/test_doubly_defined_state_conformance.py`;
-`pkg/earthsci-ast-rs/tests/doubly_defined_state_conformance.rs`. Each adapter
-also asserts that its binding's `validate` reports the same code on the same
-file, which is what makes the refusal a property of the document rather than of
-the evaluator. Go and TypeScript do not simulate; they only register the code.
-
-**Out of scope.** Julia's ModelingToolkit route is a code GENERATOR
-(`to_julia_code`), not a build, so it never raises the code; a generated script
-hands both equations to `mtkcompile`, which reports the imbalance in its own
-vocabulary.
-
-
-### 5.46 A Data-Fed Parameter Nothing Bound: Its Default, or Missing Data (normative)
-
-A **data-fed parameter** is one whose `update` is `{kind: "data", source: …,
-from: {file_variable: …}}` (esm-spec §5.4, §8.5). From esm 1.0.0 that parameter
-IS the loaded field: a data source is not a component and has no coupling edge.
-
-**The rule.** When a binding builds a document and a data-fed parameter has
-**nothing bound to it** — no provider object for it, no array loaded for it, and
-no caller-supplied `p` value for it:
-
-- a declared `default` is the parameter's value (esm-spec §6.3; user ruling
-  2026-09-29), and the build succeeds;
-- with no `default`, the parameter is missing data (esm-spec §10.10), and the
-  build MUST FAIL at construction with `E_TREEWALK_MISSING_DATA`, naming the
-  parameter and the data source that feeds it. It MUST NOT bind the parameter
-  from zero or from a NaN sentinel (the missing-data tier, `tests/conformance/missing_data/`,
-  pins the shaped and scalar forms).
-
-This binds `esm_problem`, `build_evaluator` and `run_inline_tests` alike, and the
-answer is a document contract: it MUST be identical under `compiler=native` and
-`compiler=interpreter`. Whether a compiler can lower a read of the forcing
-channel is a separate question, answered by `compiler_refused_rule`.
-
-**The `p` escape hatch is required to keep working.** A caller who passes an
-explicit `p` value for the parameter HAS bound it. That is how a data-fed
-document is run offline, and how its inline tests run (`Test.parameter_overrides`,
-esm-spec §6.6, is the `p` argument of `esm_problem` by another name). Such a
-build MUST succeed, and the pinned value MUST reach the right-hand side,
-outranking the declared `default`.
-
-**An unresolvable source is not a bound source.** A parameter whose
-`update.source` names no declared `data_sources` entry is the validation defect
-`data_source_undefined` (esm-spec §8.5), which the front door refuses
-(esm-libraries-spec §2.5.2). No binding may drop the loader field because its
-source did not resolve and then run the parameter as an ordinary one.
-
-`data_source_unbound` (esm-spec §9.6.6) remains the registered name for an
-unbound feed a binding cannot answer by the rules above.
-
-#### 5.46.1 Gate
-
-`tests/conformance/data_source_unbound/` — a manifest, two refusal fixtures
-(no `default`, and an unresolvable source) and three cases that run (a defaulted
-feed, a pinned feed, and a plain parameter), with no goldens. Consumed by
-`pkg/EarthSciAST.jl/test/data_source_unbound_conformance_test.jl`,
-`pkg/earthsci-ast-py/tests/test_data_source_unbound_conformance.py` and
-`pkg/earthsci-ast-rs/tests/data_source_unbound_conformance.rs`, each of which
-asserts the refusal under BOTH compilers, asserts that the message names the
-parameter, and runs the cases that build. Go and TypeScript do not simulate and only
-register the code.
-
-
 #### 5.44.6 The native coverage ledger
 
 This tier's `required` maps hold six fixtures to a trajectory. The **native
@@ -6940,6 +6842,56 @@ binding per compiler, named `inline-tests <tier> <compiler> producer
 omits it is a configuration error rather than a run under whatever the library
 default happens to be.
 
+### 5.46 A Data-Fed Parameter Nothing Bound: Its Default, or Missing Data (normative)
+
+A **data-fed parameter** is one whose `update` is `{kind: "data", source: …,
+from: {file_variable: …}}` (esm-spec §5.4, §8.5). From esm 1.0.0 that parameter
+IS the loaded field: a data source is not a component and has no coupling edge.
+
+**The rule.** When a binding builds a document and a data-fed parameter has
+**nothing bound to it** — no provider object for it, no array loaded for it, and
+no caller-supplied `p` value for it:
+
+- a declared `default` is the parameter's value (esm-spec §6.3; user ruling
+  2026-09-29), and the build succeeds;
+- with no `default`, the parameter is missing data (esm-spec §10.10), and the
+  build MUST FAIL at construction with `E_TREEWALK_MISSING_DATA`, naming the
+  parameter and the data source that feeds it. It MUST NOT bind the parameter
+  from zero or from a NaN sentinel (the missing-data tier, `tests/conformance/missing_data/`,
+  pins the shaped and scalar forms).
+
+This binds `esm_problem`, `build_evaluator` and `run_inline_tests` alike, and the
+answer is a document contract: it MUST be identical under `compiler=native` and
+`compiler=interpreter`. Whether a compiler can lower a read of the forcing
+channel is a separate question, answered by `compiler_refused_rule`.
+
+**The `p` escape hatch is required to keep working.** A caller who passes an
+explicit `p` value for the parameter HAS bound it. That is how a data-fed
+document is run offline, and how its inline tests run (`Test.parameter_overrides`,
+esm-spec §6.6, is the `p` argument of `esm_problem` by another name). Such a
+build MUST succeed, and the pinned value MUST reach the right-hand side,
+outranking the declared `default`.
+
+**An unresolvable source is not a bound source.** A parameter whose
+`update.source` names no declared `data_sources` entry is the validation defect
+`data_source_undefined` (esm-spec §8.5), which the front door refuses
+(esm-libraries-spec §2.5.2). No binding may drop the loader field because its
+source did not resolve and then run the parameter as an ordinary one.
+
+`data_source_unbound` (esm-spec §9.6.6) remains the registered name for an
+unbound feed a binding cannot answer by the rules above.
+
+#### 5.46.1 Gate
+
+`tests/conformance/data_source_unbound/` — a manifest, two refusal fixtures
+(no `default`, and an unresolvable source) and three cases that run (a defaulted
+feed, a pinned feed, and a plain parameter), with no goldens. Consumed by
+`pkg/EarthSciAST.jl/test/data_source_unbound_conformance_test.jl`,
+`pkg/earthsci-ast-py/tests/test_data_source_unbound_conformance.py` and
+`pkg/earthsci-ast-rs/tests/data_source_unbound_conformance.rs`, each of which
+asserts the refusal under BOTH compilers, asserts that the message names the
+parameter, and runs the cases that build. Go and TypeScript do not simulate and only
+register the code.
 
 ### 5.47 `solver.external` Location Resolution (normative)
 
@@ -7353,6 +7305,53 @@ does not recognize. It runs in that binding's ordinary test suite.
 state and precision semantics (#542), XLA programs (#544), internal parallelism
 of one evaluation, and windowed forcing.
 
+### 5.52 A Doubly-Defined Unknown Is Refused, Never Tie-Broken (normative)
+
+**Decision pinned.** An unknown that carries BOTH a derivative equation
+(`D(x, t) ~ f`) and a whole-variable algebraic one (`x ~ g`) MUST be refused at
+BUILD by every simulating binding, with the esm-spec §4.9.4 diagnostic
+`equation_count_mismatch`, and the message MUST name the unknown and BOTH
+equations. §4.9.4 counts an equation against the unknowns whichever form its LHS
+takes, so the two together are one more equation than the model has unknowns to
+bind — which is exactly what each binding's `validate` already reports at
+`/models/<M>`. The build is the other place that same document arrives, and it
+says the same thing.
+
+**Reason.** The alternative is to tie-break, and there is no defensible winner.
+Rust did it on purpose — "differential wins over algebraic when both are
+present" — on the grounds that reporting the name as algebraic would hide a
+genuinely settable initial condition from a Run UI. But the document declares a
+constraint, and integrating the derivative alone runs a model the file does not
+describe while saying nothing about the equation dropped to do it. A refused
+document has no run, so there is no Run UI left to mislead. Julia, for its part,
+kept both equations and failed later, deep in classification, with a
+Julia-local code naming neither the unknown nor either equation — a refusal, but
+not one an author can act on.
+
+**Shape.** Golden-free; it pins no numbers. Two refusal cases — the same defect
+on a scalar document and on one whose shaped unknown takes a binding's ARRAY
+compile, because the scalar and array routes are separate code in Rust and
+Python and both must refuse. Each has its own CONTROL: the same document with
+the algebraic equation removed, which takes the same evaluator and MUST still
+run. The controls are the non-vacuity anchor: a binding that refused every
+document would otherwise satisfy the refusal cases. Both refusal fixtures give
+the two equations DIFFERING right-hand sides (`k` against `k * 3`), so no
+binding can argue the pair is a harmless duplicate; an IDENTICAL pair is left to
+each binding's own structural validator, which is where a duplicate definition
+is decided.
+
+The manifest and fixtures live in `tests/conformance/doubly_defined_state/`.
+Adapters: `pkg/EarthSciAST.jl/test/doubly_defined_state_conformance_test.jl`;
+`pkg/earthsci-ast-py/tests/test_doubly_defined_state_conformance.py`;
+`pkg/earthsci-ast-rs/tests/doubly_defined_state_conformance.rs`. Each adapter
+also asserts that its binding's `validate` reports the same code on the same
+file, which is what makes the refusal a property of the document rather than of
+the evaluator. Go and TypeScript do not simulate; they only register the code.
+
+**Out of scope.** Julia's ModelingToolkit route is a code GENERATOR
+(`to_julia_code`), not a build, so it never raises the code; a generated script
+hands both equations to `mtkcompile`, which reports the imbalance in its own
+vocabulary.
 
 ## 6. CI Integration
 
@@ -7433,6 +7432,12 @@ ever emitted it, and the code had zero real coverage.
 | `assertion_rank_mismatch` | Structural | An assertion whose form does not match the declared rank of the variable it names (esm-spec §6.6.5): pointwise on a variable declared with a non-empty `shape` (unless the target is an element name such as `u[1]`), or `coords` / `reduce` on a variable declared without one. Checked for targets the asserting component declares by a bare name. Pointer: the assertion, e.g. `/models/M/tests/0/assertions/0`. Fixtures: `tests/invalid/assertion_rank_mismatch_*.esm`. |
 | `reserved_variable_name` | Structural | A declaration spelled with a globally-scoped name — the document's independent variable (`domain.independent_variable`, default `"t"`) or the §6.4 `_var` placeholder (esm-spec §4.9.1.1). Both are in scope in every model and resolve BY NAME, so the declaration is unreachable and every reader silently gets the implicit symbol instead. Covers all three declaration maps: `models[M].variables` (recursing into every INLINE subsystem, at any depth), `reaction_systems[S].species`, `reaction_systems[S].parameters`. Pointer: the offending key, e.g. `/models/M/variables/t`, `/models/M/subsystems/S/variables/t`. Hard error in EVERY binding — the pre-fix behaviour was a validated document whose equations silently read the simulation clock. The reserved set FOLLOWS the document, exactly as `reserved_index_symbol` does; a binding that hard-codes the literal `"t"` fails `tests/valid/independent_variable_renamed.esm`. |
 | `array_default_without_shape` | Structural | Inline array data as the `default` of a variable that declares no `shape` — omitted, `null` or empty (esm-spec §6.3). Inline array data is a shaped variable's value, so with no shape there is nothing for it to fill and no scalar reading of it. Covers both declared types and the `variables` of every INLINE subsystem, at any depth. Pointer: the offending `default`, e.g. `/models/M/variables/k/default`, `/models/M/subsystems/S/variables/x/default`. Hard error in every binding, and a structural check rather than a schema constraint because whether an array is legal depends on the sibling `shape` field. Fixture: `tests/invalid/array_default_without_shape.esm`. |
+| `E_NO_DAE_SUPPORT` | DAE | A model's equations contain algebraic equations alongside differential ones, and DAE support is disabled in the binding (RFC §12). The error message must name at least one algebraic-equation path and the enabling knob. |
+| `E_TREEWALK_RECUR_UNAVAILABLE` | Runtime | A causal self-read (esm-spec §4.3.1.1) named a position outside the recurrence axis, or a cell the sweep has not published yet. Fail-closed: never the §5.5.5 zero ghost, and never a bare NaN (a `max(x, 0)` in the body would launder one). See §5.19.4. |
+| `E_TREEWALK_UNBOUND_NAME` | Runtime | An expression referenced a name bound in NO resolution scope — not the independent variable, a loop binder, a state, an observed, a parameter or a forcing channel. Fail-closed: never a NaN sentinel, which `max(x, floor)` or any comparison launders by DROPPING the operand rather than propagating it. The general case of the previous row. See §5.23. |
+| `E_TREEWALK_UNRESOLVED_ORDER` | Runtime | An expression referenced a name the model DOES declare — a state, a parameter or an observed — for which no value existed at the point of evaluation. For an observed that means its defining rule had not run: the materialization order stalled, which is what an `observed_cycle` (esm-spec §4.9.6) looks like from inside the evaluator. Split out of `E_TREEWALK_UNBOUND_NAME` because reporting a DECLARED name as bound-by-nothing is a false statement about the document, and the name it lands on is whichever the walk reached first — routinely an innocent one (issue #181). A binding whose evaluator cannot distinguish the two cases MUST NOT claim the stronger one. |
+| `E_TREEWALK_INDEX_ON_SCALAR` | Runtime | A subscript was applied to a value with NO axes: `index(x, i, …)` where `x` is 0-D (esm-spec §4.3.4 — a scalar declares no index sets, so there is no axis for `i` to range over). Fail-closed: never the §5.5.5 zero ghost, which is the boundary convention for a gather that HAS an axis to fall outside of, and never a bare NaN, which `max(x, 0)` or any comparison launders into a plausible number. `index(x)` with no subscript is the identity and is NOT this condition — it is how a body reads an unshaped quantity through the gather spelling. Python raises `index applied to scalar value` for the same input. |
+| `E_NONTRIVIAL_DAE` | DAE | Binding with trivial-DAE-only strategy (Go, Rust) found algebraic equations that could not be factored symbolically — cyclic observed equations, implicit residuals, or genuine algebraic constraints remain after observed-style `y ~ f(...)` substitution (RFC §12, `docs/rfcs/dae-binding-strategies.md`). The error message must name each residual equation path and point the user at a full-DAE-capable binding (Julia). |
 
 #### 7.1.0 List-valued diagnostic details are sorted
 
@@ -7453,7 +7458,7 @@ in. (This is separate from the round-trip contract, which does require key order
 to survive `emit ∘ load` — that is served on the serialization path, not by the
 validator's view of the document.)
 
-### 7.1.1 Units severity contract
+#### 7.1.1 Units severity contract
 
 Normative definition: **esm-spec §4.8**. Restated here because it is the contract the
 shared corpus pins and the one the five bindings must not re-diverge on:
@@ -7491,26 +7496,7 @@ Eight further pins from esm-spec §4.8, each of which a binding has violated:
 | A **numeric atom is legal only when its value is exactly `1`** | §4.8.2 | `(m/s)^-1/3` — what an author writes reaching for a rational exponent — parses as `((m/s)^-1)/3`, and FOUR bindings accepted it with THREE different meanings: Julia dropped the 1/3, Rust/Go/TS retained it, Python rejected the string. Two of those differ only in SCALE, which a dimensional checker cannot see. `^(-1/3)` is now the only spelling, and the diagnostic must say "scaling factor". Fixtures: `tests/invalid/units_discriminator_scaling_factor.esm`, `tests/conformance/unit_registry`. |
 | The registry holds the **US customary family — `ft`, `mi`, `lb`, `hp`, `gal`, `short_ton`, `tonne`, `inHg`** — and deliberately **no `ton`, no `t`, no `in`, no `yd`, no `mph`** | §4.8.1 | The FF10 point-source format stores stack geometry in feet and the annual total in short tons; MOVES stores link length in miles, link speed in mi/h, engine ratings in horsepower, its emission rates in g/(hp*h), fuel consumption in lb/(hp*h), fuel density in g/gal and barometric pressure in inHg. Without those entries a document must either lie (`kg/yr` on a short-ton column: dimensionally perfect, wrong by 907.18474, invisible) or be rejected. `ton` is excluded because it is three different masses; `t` because a one-letter mass symbol reads as tera-; `in`/`yd` because no corpus column uses them; `mph` because it is a fused spelling of a compound the grammar already builds. Scales are pinned EXACTLY, and the SCALE is the contract wherever two conventions share a dimension: `ft` = 0.3048 m, `mi` = 1609.344 m (= 5280 ft), `lb` = 0.45359237 kg, `short_ton` = 907.18474 kg (= 2000 lb), `hp` = 745.6998715822702 W (MECHANICAL, 550 ft*lbf/s — the metric PS is 735.49875 W, 1.4% away), `gal` = 0.003785411784 m³ (US LIQUID — the imperial gallon is 4.54609 L, 20% away), `inHg` = 3386.388640341 Pa (= 25.4 mmHg). `short_ton` and `tonne`, `hp` and PS, `gal` and the imperial gallon each share a dimension, so only the scale distinguishes them. Fixtures: `tests/valid/units_inventory_registry.esm`, `tests/valid/units_moves_registry.esm`, `tests/conformance/unit_registry`. |
 
-### 7.1.3 Checker semantics that MUST NOT re-diverge
-
-The corpus contains conforming files that individual bindings reject. In every case below the
-SPEC sanctions the file and the CHECKER is at fault; the normative rules are esm-spec §4.9.
-A binding MUST NOT "fix" a rejection by editing the fixture.
-
-| # | Rule | Normative | Fixture that pins it |
-|---|---|---|---|
-| a | The **independent variable** (`domain.independent_variable`, default `"t"`) and **spatial coordinate names** (`x`, `y`, `lon`, …) are IMPLICITLY DECLARED — never `undefined_variable`. | §4.9.1, §11.3, §11.4 | `tests/valid/cadence/pure_pointwise.esm`, `tests/valid/initial_conditions/expression_ignition_front_1d.esm` |
-| b | **`_var`** is legal wherever an ODE state is legal, including a continuous event's `affects`/`affect_neg` LHS and a parameter update handler's `read_vars`, in any operator-composed or coupled model — never `event_var_undeclared`. It ranges over `ode_states` (esm-spec §6.3.1), never the observed or algebraic unknowns. | §4.9.1, §6.4 | `tests/valid/full_coupled.esm` |
-| c | **Scoped references are ARBITRARY DEPTH** (`A.B.c`, `A.B.C.d`). A resolver walks every segment; it MUST NOT split on `"."` and take `[0]` as the system and `[1]` as the variable. Applies to the `systems`/`from`/`to` of a coupling entry too. | §4.6, §4.9.2 | `tests/valid/scoped_refs_coupling.esm`, `tests/scoping/*.esm` |
-| d | A **reaction `rate` MAY contain scoped references** into other systems. | §4.9.3, §7.3 | `tests/valid/events_cross_system.esm` |
-| e | **`equation_count_mismatch` balances UNKNOWNS vs EQUATIONS.** A non-derivative (algebraic) LHS — bare-variable *or* expression — is a credited equation. For `system_kind: "nonlinear"` there are no derivative equations at all. | §4.9.4 | `tests/valid/nonlinear_isorropia_shape.esm` |
-| f | The canonical subsystem-ref codes are **`unresolved_subsystem_ref`** and **`ambiguous_subsystem_ref`**. The older `ref_not_found` / `ref_ambiguous_system` spellings are RETIRED. `ref_*` was ambiguous across three distinct reference mechanisms (§4.7 subsystem refs, §9.7 template imports, §10 coupling-library role edges); the chosen pair parallels the already-canonical `unresolved_scoped_ref`. | §4.7, §7.1 | `tests/invalid/subsystem_ref_not_found.esm`, `tests/invalid/subsystem_ref_ambiguous.esm` |
-| i | **A VALID fixture MUST be asserted `is_valid == true`, not merely round-tripped — and a valid fixture can NEVER, on its own, prove a checker checks anything.** Mutation-testing `tests/valid/units_registry_grammar.esm` (corrupt each observed variable in turn; every corruption still passed) exposed two distinct vacuities. In **Python**, nothing compared a variable's DECLARED units against the dimension its EXPRESSION computes, so the assertion was empty. In **TypeScript**, the valid-corpus conformance test only calls `load`/`emit` — `it.each(validFiles)('should round-trip …')` — and **never calls `validate()`**, so "it validates clean" meant "it was never validated". A valid fixture can only ever prove a checker does not FALSELY REJECT; proving it actually CHECKS requires an INVALID fixture whose sole defect is a violation of the rule. Every discriminator rule therefore needs BOTH halves. This is §9 ("Tests that assert nothing") reappearing inside the conformance harness itself. | §4.8, §9 | `tests/valid/units_registry_grammar.esm` (positive half), `tests/invalid/units_discriminator_*.esm` (9, negative half) |
-| j | **`details.variable` is the ONE spelling** for the offending name in a structural error's `details` object — NOT `variable_name`. Two spellings for one thing is the drift this audit exists to kill. `variable` is the incumbent (34 pins) and is what TS already emits. | §7.1 | `tests/invalid/expected_errors.json` |
-| k | **Reference integrity needs the COMPLETE set of declaration sites, or (h) turns into false REJECTS.** Two sites are easy to miss, and the (h) sweep hit both. (1) **`coupling[i].config.callback_variables[j].name` IS a declaration site** — a callback injects those names into the target system, and `tests/coupling/callback_examples.esm` legitimately references them from `equations`; a checker that consults only `models[M].variables` falsely rejects it. (2) There are **NO bare/undeclared names**: a forcing delivered by the host at runtime MUST still be declared (`type: "discrete"` is the established spelling, §5.10.1). An undeclared forcing name is indistinguishable from a TYPO, which is precisely the false-negative (h) closes — so the escape hatch cannot survive (h) and had to go. `discrete_materialize_contraction.esm` used to carry `src` as a deliberately bare name; it now declares it, with no change to its cadence semantics. | §4.9.5, §5.10.1 | `tests/coupling/callback_examples.esm`, `tests/conformance/discrete_materialize/fixtures/discrete_materialize_contraction.esm` |
-| h | **Reference integrity applies to EVERY expression-bearing field**, not only `equations`. THIRTEEN fields carry an Expression and ELEVEN were unchecked in every binding: an undefined name in a parameter `update`'s `when` / `expression`, in `guesses`, in an `initialization_equations` RHS, in an event condition / trigger / affect RHS, in an assertion `reference`, in an `update.from`'s `unit_conversion`, or in a coupling connector `expression` / `transform` was INVISIBLE to all five. Within an Expression the walk must also descend `expr`/`filter`/`key`/`lower`/`upper`/`values`/`axes`/`bindings`, not just `args`. | §4.9.5 | `tests/invalid/undefined_variable_in_*.esm` (18), `tests/invalid/unresolved_scoped_ref_in_*.esm` (2) |
-
-### 7.1.2 The `tests/invalid/expected_errors.json` pin contract
+#### 7.1.2 The `tests/invalid/expected_errors.json` pin contract
 
 Every fixture under `tests/invalid/**` has an entry keyed by its **basename**. An entry is
 a claim about *why* the file is invalid, not merely *that* it is:
@@ -7556,12 +7542,25 @@ a claim about *why* the file is invalid, not merely *that* it is:
 
 A conforming harness MUST compare emitted `(code, path)` pairs against these pins. Asserting
 only "some error was produced" is what let 42 pins drift undetected (audit 2026-07-14, F4).
-| `E_NO_DAE_SUPPORT` | DAE | A model's equations contain algebraic equations alongside differential ones, and DAE support is disabled in the binding (RFC §12). The error message must name at least one algebraic-equation path and the enabling knob. |
-| `E_TREEWALK_RECUR_UNAVAILABLE` | Runtime | A causal self-read (esm-spec §4.3.1.1) named a position outside the recurrence axis, or a cell the sweep has not published yet. Fail-closed: never the §5.5.5 zero ghost, and never a bare NaN (a `max(x, 0)` in the body would launder one). See §5.19.4. |
-| `E_TREEWALK_UNBOUND_NAME` | Runtime | An expression referenced a name bound in NO resolution scope — not the independent variable, a loop binder, a state, an observed, a parameter or a forcing channel. Fail-closed: never a NaN sentinel, which `max(x, floor)` or any comparison launders by DROPPING the operand rather than propagating it. The general case of the previous row. See §5.23. |
-| `E_TREEWALK_UNRESOLVED_ORDER` | Runtime | An expression referenced a name the model DOES declare — a state, a parameter or an observed — for which no value existed at the point of evaluation. For an observed that means its defining rule had not run: the materialization order stalled, which is what an `observed_cycle` (esm-spec §4.9.6) looks like from inside the evaluator. Split out of `E_TREEWALK_UNBOUND_NAME` because reporting a DECLARED name as bound-by-nothing is a false statement about the document, and the name it lands on is whichever the walk reached first — routinely an innocent one (issue #181). A binding whose evaluator cannot distinguish the two cases MUST NOT claim the stronger one. |
-| `E_TREEWALK_INDEX_ON_SCALAR` | Runtime | A subscript was applied to a value with NO axes: `index(x, i, …)` where `x` is 0-D (esm-spec §4.3.4 — a scalar declares no index sets, so there is no axis for `i` to range over). Fail-closed: never the §5.5.5 zero ghost, which is the boundary convention for a gather that HAS an axis to fall outside of, and never a bare NaN, which `max(x, 0)` or any comparison launders into a plausible number. `index(x)` with no subscript is the identity and is NOT this condition — it is how a body reads an unshaped quantity through the gather spelling. Python raises `index applied to scalar value` for the same input. |
-| `E_NONTRIVIAL_DAE` | DAE | Binding with trivial-DAE-only strategy (Go, Rust) found algebraic equations that could not be factored symbolically — cyclic observed equations, implicit residuals, or genuine algebraic constraints remain after observed-style `y ~ f(...)` substitution (RFC §12, `docs/rfcs/dae-binding-strategies.md`). The error message must name each residual equation path and point the user at a full-DAE-capable binding (Julia). |
+
+#### 7.1.3 Checker semantics that MUST NOT re-diverge
+
+The corpus contains conforming files that individual bindings reject. In every case below the
+SPEC sanctions the file and the CHECKER is at fault; the normative rules are esm-spec §4.9.
+A binding MUST NOT "fix" a rejection by editing the fixture.
+
+| # | Rule | Normative | Fixture that pins it |
+|---|---|---|---|
+| a | The **independent variable** (`domain.independent_variable`, default `"t"`) and **spatial coordinate names** (`x`, `y`, `lon`, …) are IMPLICITLY DECLARED — never `undefined_variable`. | §4.9.1, §11.3, §11.4 | `tests/valid/cadence/pure_pointwise.esm`, `tests/valid/initial_conditions/expression_ignition_front_1d.esm` |
+| b | **`_var`** is legal wherever an ODE state is legal, including a continuous event's `affects`/`affect_neg` LHS and a parameter update handler's `read_vars`, in any operator-composed or coupled model — never `event_var_undeclared`. It ranges over `ode_states` (esm-spec §6.3.1), never the observed or algebraic unknowns. | §4.9.1, §6.4 | `tests/valid/full_coupled.esm` |
+| c | **Scoped references are ARBITRARY DEPTH** (`A.B.c`, `A.B.C.d`). A resolver walks every segment; it MUST NOT split on `"."` and take `[0]` as the system and `[1]` as the variable. Applies to the `systems`/`from`/`to` of a coupling entry too. | §4.6, §4.9.2 | `tests/valid/scoped_refs_coupling.esm`, `tests/scoping/*.esm` |
+| d | A **reaction `rate` MAY contain scoped references** into other systems. | §4.9.3, §7.3 | `tests/valid/events_cross_system.esm` |
+| e | **`equation_count_mismatch` balances UNKNOWNS vs EQUATIONS.** A non-derivative (algebraic) LHS — bare-variable *or* expression — is a credited equation. For `system_kind: "nonlinear"` there are no derivative equations at all. | §4.9.4 | `tests/valid/nonlinear_isorropia_shape.esm` |
+| f | The canonical subsystem-ref codes are **`unresolved_subsystem_ref`** and **`ambiguous_subsystem_ref`**. The older `ref_not_found` / `ref_ambiguous_system` spellings are RETIRED. `ref_*` was ambiguous across three distinct reference mechanisms (§4.7 subsystem refs, §9.7 template imports, §10 coupling-library role edges); the chosen pair parallels the already-canonical `unresolved_scoped_ref`. | §4.7, §7.1 | `tests/invalid/subsystem_ref_not_found.esm`, `tests/invalid/subsystem_ref_ambiguous.esm` |
+| g | **Reference integrity applies to EVERY expression-bearing field**, not only `equations`. THIRTEEN fields carry an Expression and ELEVEN were unchecked in every binding: an undefined name in a parameter `update`'s `when` / `expression`, in `guesses`, in an `initialization_equations` RHS, in an event condition / trigger / affect RHS, in an assertion `reference`, in an `update.from`'s `unit_conversion`, or in a coupling connector `expression` / `transform` was INVISIBLE to all five. Within an Expression the walk must also descend `expr`/`filter`/`key`/`lower`/`upper`/`values`/`axes`/`bindings`, not just `args`. | §4.9.5 | `tests/invalid/undefined_variable_in_*.esm` (18), `tests/invalid/unresolved_scoped_ref_in_*.esm` (2) |
+| h | **A VALID fixture MUST be asserted `is_valid == true`, not merely round-tripped — and a valid fixture can NEVER, on its own, prove a checker checks anything.** Mutation-testing `tests/valid/units_registry_grammar.esm` (corrupt each observed variable in turn; every corruption still passed) exposed two distinct vacuities. In **Python**, nothing compared a variable's DECLARED units against the dimension its EXPRESSION computes, so the assertion was empty. In **TypeScript**, the valid-corpus conformance test only calls `load`/`emit` — `it.each(validFiles)('should round-trip …')` — and **never calls `validate()`**, so "it validates clean" meant "it was never validated". A valid fixture can only ever prove a checker does not FALSELY REJECT; proving it actually CHECKS requires an INVALID fixture whose sole defect is a violation of the rule. Every discriminator rule therefore needs BOTH halves. This is §9 ("Tests that assert nothing") reappearing inside the conformance harness itself. | §4.8, §9 | `tests/valid/units_registry_grammar.esm` (positive half), `tests/invalid/units_discriminator_*.esm` (9, negative half) |
+| i | **`details.variable` is the ONE spelling** for the offending name in a structural error's `details` object — NOT `variable_name`. Two spellings for one thing is the drift this audit exists to kill. `variable` is the incumbent (34 pins) and is what TS already emits. | §7.1 | `tests/invalid/expected_errors.json` |
+| j | **Reference integrity needs the COMPLETE set of declaration sites, or (g) turns into false REJECTS.** Two sites are easy to miss, and the (g) sweep hit both. (1) **`coupling[i].config.callback_variables[j].name` IS a declaration site** — a callback injects those names into the target system, and `tests/coupling/callback_examples.esm` legitimately references them from `equations`; a checker that consults only `models[M].variables` falsely rejects it. (2) There are **NO bare/undeclared names**: a forcing delivered by the host at runtime MUST still be declared (`type: "discrete"` is the established spelling, §5.10.1). An undeclared forcing name is indistinguishable from a TYPO, which is precisely the false-negative (g) closes — so the escape hatch cannot survive (g) and had to go. `discrete_materialize_contraction.esm` used to carry `src` as a deliberately bare name; it now declares it, with no change to its cadence semantics. | §4.9.5, §5.10.1 | `tests/coupling/callback_examples.esm`, `tests/conformance/discrete_materialize/fixtures/discrete_materialize_contraction.esm` |
 
 ### 7.2 Error Message Format
 

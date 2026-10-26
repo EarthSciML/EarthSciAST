@@ -255,6 +255,15 @@
       "note": "A min/max node with fewer than two arguments is rejected at load."
     },
     {
+      "id": "spec.4.2.minmax-nan-propagates",
+      "section": "4.2",
+      "quote": "A language's native min/max that drops NaN (Rust's `f64::max`, C's `fmax`, Python's built-in `max` in one argument order) MUST NOT be used as is.",
+      "class": "semantic",
+      "phase": 2,
+      "area": "scalar",
+      "note": "min/max (and the max/min faq reduction) return NaN when any argument is NaN, in every argument position (ruling 2026-10-26)."
+    },
+    {
       "id": "spec.4.2.review-reject-disguised-minmax-fn",
       "section": "4.2",
       "quote": "reviewers MUST reject `fn` nodes that only re-implement these in disguise",

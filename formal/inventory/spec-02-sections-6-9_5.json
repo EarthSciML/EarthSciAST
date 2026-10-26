@@ -546,22 +546,21 @@
     {
       "id": "spec.9.2.searchsorted-xs-monotone",
       "section": "9.2",
-      "quote": "`xs` MUST be a `const`-op array of strictly non-decreasing floats. Bindings MUST reject non-monotonic `xs` at load time with diagnostic `searchsorted_non_monotonic`.",
+      "quote": "`xs` MUST be a `const`-op array of non-decreasing floats (equal neighbours allowed). Bindings MUST reject non-monotonic `xs` at load time with diagnostic `searchsorted_non_monotonic`.",
       "class": "semantic",
       "phase": 1,
       "area": "closed_functions",
       "note": "interp.searchsorted loads iff xs is a const array with xs[i] <= xs[i+1] for all i; otherwise searchsorted_non_monotonic.",
-      "concern": "'Strictly non-decreasing' is self-contradictory (strictly increasing vs non-decreasing); the next bullet allows duplicates so non-decreasing is meant. NaN entries in xs are 'forbidden' with no diagnostic code, and a NaN makes every comparison-based monotonicity check pass or fail depending on how it is written."
+      "concern": "Wording resolved 2026-10-26 (Q-7): non-decreasing. Still open for phase 1: NaN entries in xs are 'forbidden' with no diagnostic code (ruling: new code searchsorted_nan, checked first)."
     },
     {
       "id": "spec.9.2.interp-const-finite-shape",
       "section": "9.2",
-      "quote": "`table` and the axis array(s) MUST be `const`-op arrays of finite floats. Loaders MUST resolve their nested shapes at load time. The shape relation MUST hold:",
+      "quote": "`table` and the axis array(s) MUST be `const`-op arrays of floats, the axis entries finite (`table` entries MAY be NaN; see below). Loaders MUST resolve their nested shapes at load time. The shape relation MUST hold:",
       "class": "semantic",
       "phase": 1,
       "area": "closed_functions",
-      "note": "interp.linear loads only if table and axis are const arrays with len(table) == len(axis) >= 2; otherwise the matching interp_* diagnostic.",
-      "concern": "'Arrays of finite floats' includes table, contradicting the bullet two lines below that says 'Table arrays MAY contain NaN'."
+      "note": "interp.linear loads only if table and axis are const arrays with len(table) == len(axis) >= 2; otherwise the matching interp_* diagnostic."
     },
     {
       "id": "spec.9.2.interp-bilinear-shape",

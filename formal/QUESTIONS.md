@@ -5,101 +5,104 @@ spec. Each entry has an anchor `Q-n`, the inventory clauses it concerns, how it
 was found, what is wrong, and, once made, the ruling and the change that
 carries it. Entries Q-2 onward were generated from the `concern` fields of
 `inventory/*.json` (2026-10-26); each one still needs triage: some will be
-misreadings by the inventory pass, which is recorded as the ruling.
+misreadings by the inventory pass, which is recorded as the ruling. Triage
+happens when each phase starts; purely editorial defects (numbering,
+wording, a default only one reading permits) are fixed without a ruling
+and recorded here, and substantive ones go to the maintainer.
 
 Ordered by the plan phase that needs the ruling first. A phase cannot close
 with a pending question among its own clauses.
 
 ## Q-1 CONFORMANCE_SPEC.md section numbering
-- Clauses: `conf.5.45.doubly-defined-refused`, `conf.5.45.control-must-run`
+- Clauses: `conf.5.52.doubly-defined-refused`, `conf.5.52.control-must-run`
 - Phase: 0
 - Found by: inventory (citation audit: section 5.45 resolves to two headings)
 - Problem: Two sections are numbered 5.45 ("A Doubly-Defined Unknown Is Refused" and "Inline-Test Conformance Tiers"), and 5.44.6 appears after 5.46. In §7.1, 7.1.3 precedes 7.1.2, the 7.1.x headings mix `###` and `####`, the tail of the §7.1 error-code table is detached from its header and falls under 7.1.2, and the §7.1.3 rule rows run a–f, i, j, k, h with no g. Code and docs cite "§5.45" for the inline-test tiers.
-- Ruling: (pending)
+- Ruling: Renumber and repair (2026-10-26): DONE in the phase-0 spec PR: the doubly-defined-unknown section is now §5.52 at the end of §5 (5.50 and 5.51 were taken); §5.44.6 is back under §5.44 and §5 reads in order; §7.1.0–7.1.3 are all `####` and in order; the detached E_* rows are back in the §7.1 table; the §7.1.3 rules are relettered a–j (old h→g, i→h, j→i, k→j, with the cross-reference in old k updated). The audit's blocked_by markers were removed when the citations resolved.
 
 ## Q-2 CONFORMANCE_SPEC.md §5.26: enum values unique
 - Clauses: `conf.5.26.enum-values-unique`
 - Phase: 1
 - Found by: inventory
 - Problem: 'MAY NOT' is not an RFC 2119 keyword and can be read as 'is permitted not to'; and no diagnostic code is named for the duplicate-value rejection (5.26.5 records three bindings accepting duplicates silently).
-- Ruling: (pending)
+- Ruling: MUST NOT; new code enum_duplicate_value (2026-10-26). Phase-1 PR with binding support and fixture.
 
 ## Q-3 esm-spec.md §9.2: datetime exact integer
 - Clauses: `spec.9.2.datetime-exact-integer`
 - Phase: 1
 - Found by: inventory
 - Problem: t_utc is a binary64 that need not be an integer, so time-of-day is not an integer and 'exact integer arithmetic' does not say how second/minute treat fractions; floor(t/86400) computed as a rounded binary64 division can be off by one for t just below a multiple of 86400, making the floor-divmod pair inconsistent; and julian_day involves a divide and an add (two roundings), so the '<= 1 ulp' guarantee does not follow.
-- Ruling: (pending)
+- Ruling: Floor toward −∞ (2026-10-26): hour/minute/second come from floor(time-of-day). The float floor(t/86400) and the julian_day ≤1-ulp claim are to be proven in phase 1 (the inventory concern was partly a misreading). Python (datetime.fromtimestamp rounds to µs) is a phase-1 binding finding.
 
 ## Q-4 esm-spec.md §9.2: interp axis no nan
 - Clauses: `spec.9.2.interp-axis-no-nan`
 - Phase: 1
 - Found by: inventory
 - Problem: A NaN axis entry also violates strict monotonicity, so both interp_nan_in_axis and interp_non_monotonic_axis apply and no precedence between the two codes is given.
-- Ruling: (pending)
+- Ruling: interp_nan_in_axis takes precedence over interp_non_monotonic_axis; table_axis_nan over table_axis_non_monotonic (2026-10-26). Phase-1 PR.
 
 ## Q-5 esm-spec.md §9.2: interp const finite shape
 - Clauses: `spec.9.2.interp-const-finite-shape`
 - Phase: 1
 - Found by: inventory
 - Problem: 'Arrays of finite floats' includes table, contradicting the bullet two lines below that says 'Table arrays MAY contain NaN'.
-- Ruling: (pending)
+- Ruling: Clarify only (2026-10-26): axes must be finite; inline tables MAY hold NaN. Phase-0 spec PR.
 
 ## Q-6 esm-spec.md §9.2: interp fma tolerance
 - Clauses: `spec.9.2.interp-fma-tolerance`
 - Phase: 1
 - Found by: inventory
 - Problem: The bound is defined by whatever tolerance a fixture file carries, so it is not a spec-level property; and rel 4e-16 cannot hold in general: fusing t_i + w*(d) removes one rounding of w*d, which relative to a result near zero by cancellation is unbounded.
-- Ruling: (pending)
+- Ruling: Allow FMA with an absolute bound in ulps of max(|tᵢ|,|tᵢ₊₁|) (2026-10-26); the constant is proven in phase 1 before it enters the spec; the rel 4e-16 relaxation is removed.
 
 ## Q-7 esm-spec.md §9.2: searchsorted xs monotone
 - Clauses: `spec.9.2.searchsorted-xs-monotone`
 - Phase: 1
 - Found by: inventory
 - Problem: 'Strictly non-decreasing' is self-contradictory (strictly increasing vs non-decreasing); the next bullet allows duplicates so non-decreasing is meant. NaN entries in xs are 'forbidden' with no diagnostic code, and a NaN makes every comparison-based monotonicity check pass or fail depending on how it is written.
-- Ruling: (pending)
+- Ruling: New code searchsorted_nan, checked before searchsorted_non_monotonic; wording becomes non-decreasing (2026-10-26). Wording in the phase-0 spec PR; the code in the phase-1 PR.
 
 ## Q-8 esm-spec.md §9.3: enum values unique
 - Clauses: `spec.9.3.enum-values-unique`
 - Phase: 1
 - Found by: inventory
 - Problem: No diagnostic code is given for a duplicate value, and 'MAY NOT' in the same sentence is not an RFC 2119 keyword and can be read as a permission not to.
-- Ruling: (pending)
+- Ruling: Same ruling as Q-2.
 
 ## Q-9 esm-spec.md §9.5.1: data finite
 - Clauses: `spec.9.5.1.data-finite`
 - Phase: 1
 - Found by: inventory
 - Problem: Only NaN has a diagnostic code; an infinite leaf violates 'finite' with no code (though JSON cannot spell one), and this is stricter than the §9.2 inline form, which allows NaN in tables, so a table with NaN cannot be lifted even though the lifting is said not to change semantics.
-- Ruling: (pending)
+- Ruling: function_tables stays deliberately stricter than inline tables, and the spec says so: a NaN-bearing inline table cannot be lifted (2026-10-26). Phase-0 spec PR.
 
 ## Q-10 esm-spec.md §9.5.1: outputs leading dim
 - Clauses: `spec.9.5.1.outputs-leading-dim`
 - Phase: 1
 - Found by: inventory
 - Problem: The §9.5.3 lowering always slices data[i], but for a table without outputs data has no leading output dimension, so data[0] would be the first table entry rather than the whole table; the lowering for single-output tables is not stated.
-- Ruling: (pending)
+- Ruling: Single-output tables lower with the whole data; the data[i] slice applies only with outputs (2026-10-26). Phase-1 PR.
 
 ## Q-11 esm-spec.md §9.5.2: lookup args empty
 - Clauses: `spec.9.5.2.lookup-args-empty`
 - Phase: 1
 - Found by: inventory
 - Problem: No diagnostic code is listed in §9.5.5 for non-empty args, and it is not said whether an absent args is equivalent to [].
-- Ruling: (pending)
+- Ruling: Absent args means []; non-empty args is rejected with new code table_lookup_args_nonempty (2026-10-26). Phase-1 PR.
 
 ## Q-12 esm-spec.md §9.5.2: lookup output name
 - Clauses: `spec.9.5.2.lookup-output-name`
 - Phase: 1
 - Found by: inventory
 - Problem: It is not said what happens when output is omitted on a table that declares outputs (default 0, or an error).
-- Ruling: (pending)
+- Ruling: Omitted output means 0 whether or not outputs is declared (2026-10-26). Phase-1 PR.
 
 ## Q-13 esm-spec.md §9.5: table lookup bit equivalent
 - Clauses: `spec.9.5.table-lookup-bit-equivalent`
 - Phase: 1
 - Found by: inventory
 - Problem: §9.5.3 qualifies this as 'modulo the same FMA caveats', so 'bit-equivalent' is not unconditional; and the 'nearest' lowering index(data, searchsorted(x, axis)) is neither nearest (searchsorted returns the first knot >= x) nor clamped (it returns N+1 above the last knot, an out-of-range index), contradicting out_of_bounds: "clamp".
-- Ruling: (pending)
+- Ruling: True nearest knot, ties to the lower knot, out_of_bounds respected (2026-10-26). Phase-1 PR with binding lowering changes and fixtures.
 
 ## Q-14 CONFORMANCE_SPEC.md §5.5.1: float key normalized
 - Clauses: `conf.5.5.1.float-key-normalized`
@@ -129,8 +132,8 @@ with a pending question among its own clauses.
 - Problem: Does not say whether a document that does write an identity is invalid (rejected) or the field is ignored, so the verdict on such a document is unspecified.
 - Ruling: (pending)
 
-## Q-18 CONFORMANCE_SPEC.md §7.1.2: unresolved order not unbound
-- Clauses: `conf.7.1.2.unresolved-order-not-unbound`
+## Q-18 CONFORMANCE_SPEC.md §7.1: unresolved order not unbound
+- Clauses: `conf.7.1.unresolved-order-not-unbound`
 - Phase: 2
 - Found by: inventory
 - Problem: This row belongs to the §7.1 error-code table but sits after the §7.1.2 prose as an orphaned table fragment with no header, so its nearest heading is 7.1.2; it is also unclear what 'claim the stronger one' permits instead (a generic error, or E_TREEWALK_UNRESOLVED_ORDER for every case).
@@ -204,7 +207,7 @@ with a pending question among its own clauses.
 - Phase: 2
 - Found by: inventory
 - Problem: (`spec.4.9.5.evaluator-fail-closed`) The supporting claim that 'IEEE-754 max and min return the non-NaN operand' is not true in general: IEEE 754-2019 `maximum`/`minimum` propagate NaN (only `maximumNumber`/`minimumNumber`, and 2008's maxNum, return the number), and of the binding languages Julia `max`, JS `Math.max`, Go `math.Max` and NumPy `maximum` propagate NaN while Rust `f64::max` and C `fmax` do not. / (`conf.5.23.unbound-name-is-fault`) The supporting sentence that follows ('IEEE-754 `max` and `min` return the non-NaN operand') is not true of IEEE 754 as a whole: 754-2008 maxNum/minNum do, but 754-2019 maximum/minimum propagate NaN, and e.g. Julia's max(NaN, 0.0) returns NaN; the clause stands without it, but the stated fact is a property of particular functions, not of IEEE-754.
-- Ruling: (pending)
+- Ruling: Propagate (2026-10-26): if any operand is NaN the result is NaN, also for the max/min ⊕ of faq; the false sentence is rewritten. Spec fix in the phase-0 PR; the Rust divergence (#568) is held for phase 2 to find.
 
 ## Q-29 esm-spec.md §6.6.3: nonfinite actual fails
 - Clauses: `spec.6.6.3.nonfinite-actual-fails`
