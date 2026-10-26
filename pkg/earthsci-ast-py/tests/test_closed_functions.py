@@ -17,12 +17,13 @@ from pathlib import Path
 from typing import Any, List
 
 import pytest
-from conftest import FIXTURES_ROOT as _TESTS_ROOT, VALID_DIR
+from conftest import FIXTURES_ROOT as _TESTS_ROOT, INVALID_DIR, VALID_DIR
 
 from earthsci_ast import load_path, load_string
 from earthsci_ast.numpy_interpreter import evaluate, fold_constant_expr
 from earthsci_ast.registered_functions import (
     ClosedFunctionError,
+    EnumLoweringError,
     closed_function_names,
     evaluate_closed_function,
 )
@@ -294,13 +295,41 @@ def test_enum_values_must_still_be_unique_including_zero():
             '"equations":[{"lhs":"x","rhs":{"op":"enum","args":["m","A"]}}]}}}'
         )
 
-    with pytest.raises(Exception, match="duplicate value 0"):
-        load_string(doc('{"m":{"A":0,"B":0}}'))
-    with pytest.raises(Exception, match="duplicate value 3"):
-        load_string(doc('{"m":{"A":3,"B":3}}'))
-    # Distinct values, one of them zero and one negative, are fine.
-    loaded = load_string(doc('{"m":{"A":0,"B":-1}}'))
+    for enums in ('{"m":{"A":0,"B":0}}', '{"m":{"A":3,"B":3}}'):
+        with pytest.raises(EnumLoweringError) as excinfo:
+            load_string(doc(enums))
+        assert excinfo.value.code == "enum_duplicate_value"
+    # A duplicate no `enum` op names is still a defect of the block.
+    with pytest.raises(EnumLoweringError) as excinfo:
+        load_string(doc('{"m":{"A":1},"n":{"P":2,"Q":2}}'))
+    assert excinfo.value.code == "enum_duplicate_value"
+    # Distinct values, one of them zero and one negative, are fine, and values
+    # may coincide ACROSS enums.
+    loaded = load_string(doc('{"m":{"A":0,"B":-1},"n":{"P":0,"Q":-1}}'))
     assert loaded.enums["m"] == {"A": 0, "B": -1}
+
+
+@pytest.mark.parametrize("fname", ["enum_duplicate_value.esm", "enum_duplicate_zero_value.esm"])
+def test_enum_duplicate_value_fixtures_are_rejected_with_the_code(fname):
+    """The two shared invalid fixtures pinned to `enum_duplicate_value` in
+    tests/invalid/expected_errors.json (CONFORMANCE_SPEC §5.26.5)."""
+    expected = json.loads((INVALID_DIR / "expected_errors.json").read_text())[fname]
+    assert expected["resolver_error_code"] == "enum_duplicate_value"
+    with pytest.raises(EnumLoweringError) as excinfo:
+        load_path(INVALID_DIR / fname)
+    assert excinfo.value.code == expected["resolver_error_code"]
+
+
+def test_enum_duplicate_value_is_raised_at_an_edge_before_any_op_resolves():
+    """The raw-JSON edge lowering (a mounted file or a template library, §9.3)
+    checks the block before it resolves an op, so a duplicate is reported even
+    when the op it lowers names an unduplicated member."""
+    from earthsci_ast.registered_functions import lower_enum_ops_for_file
+
+    document = {"enums": {"m": {"A": 1, "B": 2, "C": 2}}}
+    with pytest.raises(EnumLoweringError) as excinfo:
+        lower_enum_ops_for_file(document, {"op": "enum", "args": ["m", "A"]})
+    assert excinfo.value.code == "enum_duplicate_value"
 
 
 def test_enums_lowered_in_bound_filter_and_key():

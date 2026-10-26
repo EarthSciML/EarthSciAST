@@ -106,7 +106,8 @@ def lower_table_lookups(file: EsmFile) -> EsmFile:
     Raises :class:`TableLookupError` carrying one of the esm-spec §9.5.5 codes
     (``table_lookup_unknown_table``, ``table_lookup_axis_name_mismatch``,
     ``table_lookup_output_out_of_range``, ``table_interpolation_axes_mismatch``,
-    ``table_data_shape_mismatch``, ``table_axis_nan``), or
+    ``table_data_shape_mismatch``, ``table_axis_nan``,
+    ``table_axis_non_monotonic``, ``table_lookup_args_nonempty``), or
     ``table_out_of_bounds_unsupported`` for the §9.5.1 ``out_of_bounds:
     "error"`` mode this binding does not implement (§9.5.3a).
     """
@@ -559,15 +560,7 @@ def _lower_node(node: ExprNode, tables: dict[str, FunctionTable]) -> ExprNode:
             ],
         )
     if kind == "nearest" and len(axes) == 1:
-        # `nearest` is an `index` of the table slice at the searchsorted
-        # position, not an `interp` blend.
-        return ExprNode(
-            op="index",
-            args=[
-                _const(data),
-                _closed_fn("interp.searchsorted", [inputs[0], _axis_const(axes[0], table_id)]),
-            ],
-        )
+        return _nearest(data, axes[0], inputs[0], table_id)
     raise _err(
         ErrorCode.TABLE_INTERPOLATION_AXES_MISMATCH,
         f'table `{table_id}` declares `interpolation: "{kind}"` over {len(axes)} axes; '
@@ -575,13 +568,60 @@ def _lower_node(node: ExprNode, tables: dict[str, FunctionTable]) -> ExprNode:
     )
 
 
+def _nearest(data: Any, axis: FunctionTableAxis, x: Expr, table_id: str) -> ExprNode:
+    """The §9.5.3 ``interpolation: "nearest"`` composition, built node for node
+    as the spec writes it (same ops, same operand order), so every binding
+    decides a tie on the same two ``binary64`` differences::
+
+        ifelse(x == x,
+               index(D, ifelse(A[hi] - x < x - A[lo], hi, lo)),
+               x)
+
+    with ``j = interp.searchsorted(x, A)``, ``lo = max(j - 1, 1)`` and
+    ``hi = min(j, N)``. A tie goes to ``lo``; both indices stay in ``1..N``, so
+    a query outside the axis clamps to the end knot and no ``index`` reads out
+    of range; a NaN query takes the outer else branch and returns NaN. Every use
+    of ``x`` and ``A`` is a fresh copy, so the lowered tree shares no nodes.
+    """
+    n = len(axis.values)
+    axis_const = _axis_const(axis, table_id)
+
+    def xq() -> Expr:
+        return copy.deepcopy(x)
+
+    def a() -> ExprNode:
+        return copy.deepcopy(axis_const)
+
+    def j() -> ExprNode:
+        return _closed_fn("interp.searchsorted", [xq(), a()])
+
+    def lo() -> ExprNode:
+        return ExprNode(op="max", args=[ExprNode(op="-", args=[j(), 1]), 1])
+
+    def hi() -> ExprNode:
+        return ExprNode(op="min", args=[j(), n])
+
+    upper_gap = ExprNode(op="-", args=[ExprNode(op="index", args=[a(), hi()]), xq()])
+    lower_gap = ExprNode(op="-", args=[xq(), ExprNode(op="index", args=[a(), lo()])])
+    knot = ExprNode(op="ifelse", args=[ExprNode(op="<", args=[upper_gap, lower_gap]), hi(), lo()])
+    return ExprNode(
+        op="ifelse",
+        args=[
+            ExprNode(op="==", args=[xq(), xq()]),
+            ExprNode(op="index", args=[_const(data), knot]),
+            xq(),
+        ],
+    )
+
+
 def _axis_inputs(node: ExprNode, table: FunctionTable, table_id: str) -> list[Expr]:
     """The node's per-axis input expressions, in the table's DECLARED axis order
     (which is the order of ``data``'s inner dimensions, and therefore the
-    argument order of ``interp.bilinear``)."""
+    argument order of ``interp.bilinear``). An absent ``args`` is ``[]``; a
+    non-empty one is ``table_lookup_args_nonempty`` (§9.5.2)."""
     if node.args:
         raise _err(
-            ErrorCode.TABLE_LOOKUP_AXIS_NAME_MISMATCH,
+            ErrorCode.TABLE_LOOKUP_ARGS_NONEMPTY,
             f"`table_lookup` on table `{table_id}` carries {len(node.args)} positional "
             f"`args`; the per-axis inputs live under `axes` and `args` MUST be empty "
             f"(esm-spec §9.5.2)",
@@ -676,7 +716,11 @@ def _output_slice(table: FunctionTable, output: int, table_id: str) -> Any:
 
 
 def _axis_const(axis: FunctionTableAxis, table_id: str) -> ExprNode:
-    """``{"op": "const", "value": <axis values>}`` for one declared axis."""
+    """``{"op": "const", "value": <axis values>}`` for one declared axis.
+
+    Checks the axis first for a NaN or non-finite entry (``table_axis_nan``),
+    then for strict monotonicity (``table_axis_non_monotonic``): an axis holding
+    a NaN is ``table_axis_nan`` whatever its other entries (§9.5.5)."""
     for value in axis.values:
         if not isinstance(value, (int, float)) or isinstance(value, bool):
             raise _err(
@@ -691,6 +735,14 @@ def _axis_const(axis: FunctionTableAxis, table_id: str) -> ExprNode:
                 f"table `{table_id}`: axis `{axis.name}` carries the non-finite value "
                 f"{value!r}; axis `values` must be strictly-increasing finite floats "
                 f"(esm-spec §9.5.1)",
+            )
+    for i in range(1, len(axis.values)):
+        if not axis.values[i] > axis.values[i - 1]:
+            raise _err(
+                ErrorCode.TABLE_AXIS_NON_MONOTONIC,
+                f"table `{table_id}`: axis `{axis.name}` is not strictly increasing "
+                f"(values[{i}]={axis.values[i]!r} after values[{i - 1}]="
+                f"{axis.values[i - 1]!r}; esm-spec §9.5.1)",
             )
     return _const(axis.values)
 

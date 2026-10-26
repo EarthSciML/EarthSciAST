@@ -472,3 +472,132 @@ def test_a_malformed_lookup_raises_its_named_diagnostic(edits, code):
     with pytest.raises(TableLookupError) as excinfo:
         lower_table_lookups(load_document(_variant(**edits)))
     assert excinfo.value.code == code.value
+
+
+@pytest.mark.parametrize(
+    "values", [[3.0, 1.0, float("nan")], [float("nan"), 1.0, 2.0], [1.0, float("nan"), 0.5]]
+)
+def test_a_nan_axis_is_table_axis_nan_whatever_its_order(values):
+    """§9.5.5: NaN is checked before monotonicity, so an axis that is also
+    decreasing (before or after the NaN) still reports `table_axis_nan`."""
+    doc = _variant(table={"axes": [{"name": "p", "values": values}], "data": [1.0, 2.0, 3.0]})
+    with pytest.raises(TableLookupError) as excinfo:
+        lower_table_lookups(load_document(doc))
+    assert excinfo.value.code == ErrorCode.TABLE_AXIS_NAN.value
+
+
+@pytest.mark.parametrize("values", [[1.0, 3.0, 2.0, 4.0], [1.0, 2.0, 2.0, 4.0]])
+def test_a_non_increasing_axis_is_table_axis_non_monotonic(values):
+    doc = _variant(table={"axes": [{"name": "p", "values": values}]})
+    with pytest.raises(TableLookupError) as excinfo:
+        lower_table_lookups(load_document(doc))
+    assert excinfo.value.code == ErrorCode.TABLE_AXIS_NON_MONOTONIC.value
+
+
+# ---------------------------------------------------------------------------
+# §9.5.2 / §9.5.3: output defaults, the whole-`data` rule, and `args`.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("output", [None, 0])
+def test_a_single_output_table_lowers_with_the_whole_data(output):
+    """No `outputs` means `D` is the whole `data`, never `data[0]`; an omitted
+    `output` is `0`."""
+    lookup = {} if output is None else {"output": output}
+    lowered = lower_table_lookups(load_document(_variant(lookup=lookup)))
+    assert _serialize_expression(_rhs(lowered))["args"][0]["value"] == [10.0, 20.0, 30.0, 40.0]
+
+
+@pytest.mark.parametrize("output", [1, "a"])
+def test_a_single_output_table_has_only_output_zero(output):
+    with pytest.raises(TableLookupError) as excinfo:
+        lower_table_lookups(load_document(_variant(lookup={"output": output})))
+    assert excinfo.value.code == ErrorCode.TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE.value
+
+
+def test_an_omitted_output_on_a_multi_output_table_is_output_zero():
+    doc = _variant(
+        table={"outputs": ["a", "b"], "data": [[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0]]}
+    )
+    lowered = lower_table_lookups(load_document(doc))
+    assert _serialize_expression(_rhs(lowered))["args"][0]["value"] == [1.0, 2.0, 3.0, 4.0]
+
+
+def test_non_empty_args_is_table_lookup_args_nonempty():
+    """The schema rejects it with `maxItems`; the code is what the lowering
+    raises on a node that skipped schema validation (an in-memory build)."""
+    file = load_document(FIXTURE)
+    _rhs(file).args = ["p"]
+    with pytest.raises(TableLookupError) as excinfo:
+        lower_table_lookups(file)
+    assert excinfo.value.code == ErrorCode.TABLE_LOOKUP_ARGS_NONEMPTY.value
+
+
+def test_absent_args_is_empty_args():
+    node = ExprNode(op="table_lookup", table="t_prof", table_axes={"p": "p"})
+    file = load_document(FIXTURE)
+    file.models["M"].equations[0].rhs = node
+    lowered = lower_table_lookups(file)
+    assert _serialize_expression(_rhs(lowered))["name"] == "interp.linear"
+
+
+# ---------------------------------------------------------------------------
+# §9.5.3 `interpolation: "nearest"` and the defaults fixture, end to end.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("fixture", ["nearest", "lookup_defaults"])
+def test_inline_test_fixture_passes_every_assertion(fixture):
+    results = run_inline_tests(str(FIXTURES_ROOT / fixture / "fixture.esm"))
+    assert results
+    failed = [f"{r.variable}: {r.message}" for r in results if not r.passed]
+    assert not failed, failed
+
+
+def _equation_rhs(file, lhs):
+    model = file.models["NearestLookup"]
+    return next(eq.rhs for eq in model.equations if eq.lhs == lhs)
+
+
+def test_nearest_lowers_to_the_spec_composition_node_for_node():
+    """The fixture's `n_tie_2_4_hand` spells §9.5.3's tree by hand for the
+    `q_tie_2_4` query; the lowering of `n_tie_2_4` must BE that tree, so every
+    binding decides a tie on the same two subtractions."""
+    file = load_path(FIXTURES_ROOT / "nearest" / "fixture.esm")
+    lowered = lower_table_lookups(file)
+    assert _serialize_expression(_equation_rhs(lowered, "n_tie_2_4")) == _serialize_expression(
+        _equation_rhs(file, "n_tie_2_4_hand")
+    )
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        (0.0, 10.0),  # below the axis: clamped to the first knot
+        (1.5, 10.0),  # midpoint of [1, 2]: the tie goes to the lower knot
+        (2.9, 20.0),
+        (3.0, 20.0),  # midpoint of [2, 4]
+        (3.1, 40.0),
+        (8.0, 80.0),  # the last knot is in range
+        (100.0, 80.0),  # above the axis: clamped to the last knot
+    ],
+)
+def test_nearest_evaluates_to_the_nearest_knot(query, expected):
+    from earthsci_ast import evaluate
+
+    rhs = _equation_rhs(
+        lower_table_lookups(load_path(FIXTURES_ROOT / "nearest" / "fixture.esm")), "n_tie_2_4"
+    )
+    assert evaluate(rhs, {"q_tie_2_4": query}) == expected
+
+
+def test_a_nan_query_to_a_nearest_table_is_nan():
+    """JSON cannot spell a NaN default, so the fixture cannot pin this one."""
+    import math
+
+    from earthsci_ast import evaluate
+
+    rhs = _equation_rhs(
+        lower_table_lookups(load_path(FIXTURES_ROOT / "nearest" / "fixture.esm")), "n_tie_2_4"
+    )
+    assert math.isnan(evaluate(rhs, {"q_tie_2_4": float("nan")}))

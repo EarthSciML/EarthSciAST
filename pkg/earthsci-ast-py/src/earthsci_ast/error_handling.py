@@ -154,6 +154,8 @@ class ErrorCode(Enum):
     TABLE_INTERPOLATION_AXES_MISMATCH = "table_interpolation_axes_mismatch"
     TABLE_DATA_SHAPE_MISMATCH = "table_data_shape_mismatch"
     TABLE_AXIS_NAN = "table_axis_nan"
+    TABLE_AXIS_NON_MONOTONIC = "table_axis_non_monotonic"
+    TABLE_LOOKUP_ARGS_NONEMPTY = "table_lookup_args_nonempty"
     # §9.5.3a: `out_of_bounds: "error"` is "conformant when implemented"
     # (§9.5.1) and this binding does not implement it, so the lookup is REFUSED
     # where it would otherwise lower. Silently substituting clamp semantics for
@@ -319,13 +321,16 @@ UNKNOWN_CLOSED_FUNCTION = "unknown_closed_function"
 CLOSED_FUNCTION_ARITY = "closed_function_arity"
 CLOSED_FUNCTION_OVERFLOW = "closed_function_overflow"
 SEARCHSORTED_NON_MONOTONIC = "searchsorted_non_monotonic"
-SEARCHSORTED_NAN_IN_TABLE = "searchsorted_nan_in_table"
+SEARCHSORTED_NAN = "searchsorted_nan"
 INTERP_NON_MONOTONIC_AXIS = "interp_non_monotonic_axis"
 INTERP_AXIS_LENGTH_MISMATCH = "interp_axis_length_mismatch"
 INTERP_NAN_IN_AXIS = "interp_nan_in_axis"
 INTERP_AXIS_TOO_SHORT = "interp_axis_too_short"
 UNKNOWN_ENUM = "unknown_enum"
 UNKNOWN_ENUM_SYMBOL = "unknown_enum_symbol"
+#: Two symbols of one enum map to the same integer (esm-spec §9.3). A defect of
+#: the `enums` block itself, reported before any `enum` op resolves.
+ENUM_DUPLICATE_VALUE = "enum_duplicate_value"
 
 
 # ===========================================================================

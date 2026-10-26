@@ -27,7 +27,7 @@ list (diagnostic ``unknown_closed_function``). This module provides:
 - :class:`ClosedFunctionError` — error type carrying spec-defined diagnostic
   codes (``unknown_closed_function``, ``closed_function_overflow``,
   ``searchsorted_non_monotonic``, ``closed_function_arity``,
-  ``searchsorted_nan_in_table``, ``interp_non_monotonic_axis``,
+  ``searchsorted_nan``, ``interp_non_monotonic_axis``,
   ``interp_axis_length_mismatch``, ``interp_nan_in_axis``,
   ``interp_axis_too_short``).
 
@@ -51,11 +51,12 @@ from typing import Any, Callable
 from .error_handling import (
     CLOSED_FUNCTION_ARITY,
     CLOSED_FUNCTION_OVERFLOW,
+    ENUM_DUPLICATE_VALUE,
     INTERP_AXIS_LENGTH_MISMATCH,
     INTERP_AXIS_TOO_SHORT,
     INTERP_NAN_IN_AXIS,
     INTERP_NON_MONOTONIC_AXIS,
-    SEARCHSORTED_NAN_IN_TABLE,
+    SEARCHSORTED_NAN,
     SEARCHSORTED_NON_MONOTONIC,
     UNKNOWN_CLOSED_FUNCTION,
     UNKNOWN_ENUM,
@@ -80,7 +81,8 @@ class ClosedFunctionError(EarthSciAstError):
     - ``closed_function_arity`` — wrong number of arguments for the named function.
     - ``closed_function_overflow`` — integer-typed result would overflow Int32.
     - ``searchsorted_non_monotonic`` — ``xs`` is not non-decreasing.
-    - ``searchsorted_nan_in_table`` — ``xs`` contains a NaN entry.
+    - ``searchsorted_nan`` — ``xs`` contains a NaN entry (checked before
+      monotonicity).
 
     The code constants themselves are defined in
     :mod:`earthsci_ast.error_handling`; their string values are part of the
@@ -330,21 +332,22 @@ def _interp_searchsorted(name: str, x: float, xs: Any) -> int:
         # Empty table — extends "above-range → N+1" to N=0; the only consistent
         # extension that composes with `index`.
         return 1
-    # Validate monotonicity + NaN-in-table once per call.
-    prev = float("nan")
-    for i, raw in enumerate(xs):
-        v = float(raw)
+    # NaN first, then monotonicity (esm-spec §9.2): an `xs` holding a NaN is
+    # `searchsorted_nan` whatever its other entries.
+    values = [float(raw) for raw in xs]
+    for i, v in enumerate(values):
         if math.isnan(v):
             raise ClosedFunctionError(
-                SEARCHSORTED_NAN_IN_TABLE,
+                SEARCHSORTED_NAN,
                 f"{name}: xs[{i + 1}] is NaN; NaN entries in xs are forbidden",
             )
-        if i > 0 and v < prev:
+    for i in range(1, n):
+        if values[i] < values[i - 1]:
             raise ClosedFunctionError(
                 SEARCHSORTED_NON_MONOTONIC,
-                f"{name}: xs is not non-decreasing (xs[{i + 1}]={v} < xs[{i}]={prev})",
+                f"{name}: xs is not non-decreasing "
+                f"(xs[{i + 1}]={values[i]} < xs[{i}]={values[i - 1]})",
             )
-        prev = v
     # NaN x → N+1 (treated as "greater than every finite element").
     if math.isnan(x):
         return _check_int32(name, n + 1)
@@ -374,23 +377,22 @@ def _validate_interp_axis(name: str, axis: Sequence[Any], axis_label: str) -> li
             INTERP_AXIS_TOO_SHORT,
             f"{name}: {axis_label} has {n} entries; need ≥ 2 to define a cell",
         )
-    out: list[float] = []
-    prev = float("-inf")
-    for i, raw in enumerate(axis):
-        v = float(raw)
+    # NaN first, then monotonicity (esm-spec §9.2): an axis holding a NaN is
+    # `interp_nan_in_axis` whatever its other entries.
+    out = [float(raw) for raw in axis]
+    for i, v in enumerate(out):
         if math.isnan(v):
             raise ClosedFunctionError(
                 INTERP_NAN_IN_AXIS,
                 f"{name}: {axis_label}[{i + 1}] is NaN; NaN entries in axes are forbidden",
             )
-        if i > 0 and v <= prev:
+    for i in range(1, n):
+        if out[i] <= out[i - 1]:
             raise ClosedFunctionError(
                 INTERP_NON_MONOTONIC_AXIS,
                 f"{name}: {axis_label} is not strictly increasing "
-                f"({axis_label}[{i + 1}]={v} ≤ {axis_label}[{i}]={prev})",
+                f"({axis_label}[{i + 1}]={out[i]} ≤ {axis_label}[{i}]={out[i - 1]})",
             )
-        out.append(v)
-        prev = v
     return out
 
 
@@ -564,7 +566,7 @@ class EnumLoweringError(EarthSciAstError, ValueError):
     """Raised when enum lowering (esm-spec §9.3) fails.
 
     Carries the stable diagnostic ``code`` (``unknown_enum`` /
-    ``unknown_enum_symbol``) as a structured attribute — like
+    ``unknown_enum_symbol`` / ``enum_duplicate_value``) as a structured attribute — like
     :class:`ClosedFunctionError` — instead of interpolating it into the message
     text. Also subclasses :class:`ValueError`, so ``except ValueError`` catches
     it.
@@ -574,6 +576,34 @@ class EnumLoweringError(EarthSciAstError, ValueError):
         super().__init__(f"{code}: {message}")
         self.code = code
         self.message = message
+
+
+def check_enum_block(enums: Any) -> None:
+    """Reject an ``enums`` block in which two symbols of ONE enum map to the
+    same integer, ``0`` included (esm-spec §9.3), with
+    :class:`EnumLoweringError` ``enum_duplicate_value``.
+
+    A defect of the block itself: it is raised whether or not any ``enum`` op
+    names either symbol, and before any op resolves. Values may coincide across
+    enums. Entries that are not objects, or values that are not integers, are
+    left to the parser's own type checks.
+    """
+    if not isinstance(enums, dict):
+        return
+    for enum_name, mapping in enums.items():
+        if not isinstance(mapping, dict):
+            continue
+        seen: dict[int, str] = {}
+        for sym, val in mapping.items():
+            if not isinstance(val, int) or isinstance(val, bool):
+                continue
+            if val in seen:
+                raise EnumLoweringError(
+                    ENUM_DUPLICATE_VALUE,
+                    f"enums/{enum_name}: symbols `{seen[val]}` and `{sym}` both map to "
+                    f"{val}; values must be unique within an enum (esm-spec §9.3)",
+                )
+            seen[val] = sym
 
 
 def lower_enum_ops_for_file(
@@ -593,12 +623,13 @@ def lower_enum_ops_for_file(
     the call site decides what it spells and the op resolves there. An op whose
     arguments are not two strings is left for :func:`lower_enums`.
 
-    Raises :class:`EnumLoweringError` (``unknown_enum`` /
-    ``unknown_enum_symbol``). ``target`` is not modified.
+    Raises :class:`EnumLoweringError` (``enum_duplicate_value`` /
+    ``unknown_enum`` / ``unknown_enum_symbol``). ``target`` is not modified.
     """
     enums = document.get("enums") if isinstance(document, dict) else None
     if not isinstance(enums, dict):
         enums = {}
+    check_enum_block(enums)
 
     def walk(node: Any) -> Any:
         if isinstance(node, list):
