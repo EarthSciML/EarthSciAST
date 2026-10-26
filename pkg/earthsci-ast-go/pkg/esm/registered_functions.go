@@ -33,9 +33,13 @@ import (
 // (esm-spec §9.2). Named to replace the inline magic literals the audit
 // flagged in toUnixDateTime / datetimeJulianDay.
 const (
-	secondsPerDay     = 86400.0 // seconds in a UTC day (floor-divmod split)
-	secondsPerHalfDay = 43200.0 // noon offset for the continuous Julian Day
-	nanosPerSecond    = 1e9     // fractional-second → nanosecond scale
+	secondsPerDay     = 86400 // seconds in a UTC day (floor-divmod split)
+	secondsPerHalfDay = 43200 // noon offset for the continuous Julian Day
+	// maxCalendarSeconds bounds |floor(t_utc)| so the whole-second count fits
+	// an int64 with room for time.Unix's internal epoch shift. It is ~1.5e11
+	// years, far past the Int32 year range, so every t_utc whose fields are
+	// representable is inside it.
+	maxCalendarSeconds = 1 << 62
 )
 
 // ClosedFunctionError carries the spec-defined diagnostic codes pinned by
@@ -156,7 +160,7 @@ func EvaluateClosedFunction(name string, args []any) (any, error) {
 			return nil, newClosedFunctionError(CodeClosedFunctionArity,
 				fmt.Sprintf("%s: argument must be numeric, got %T", name, args[0]))
 		}
-		return datetimeJulianDay(f), nil
+		return datetimeJulianDay(f)
 	case "datetime.is_leap_year":
 		if err := expectArity(name, args, 1); err != nil {
 			return nil, err
@@ -256,37 +260,54 @@ func checkInt32(name string, v int64) (int32, error) {
 }
 
 // toUnixDateTime converts a UTC scalar time (seconds since Unix epoch) to
-// time.Time at UTC. The spec pins floor-divmod by 86400 for the
-// (date, time-of-day) split; time.Unix already does this with the
-// proleptic-Gregorian calendar. Float fractional seconds are converted to
-// nanoseconds before construction.
+// the time.Time of the WHOLE second it falls in, at UTC. esm-spec §9.2 takes
+// the fields from floor(time of day), where time of day is
+// t − 86400·floor(t/86400) taken exactly; since 86400 is an integer, that is
+// the same instant as floor(t) seconds, so a fractional t floors toward −∞
+// (59.9999999 → 00:00:59, −1e-7 → 23:59:59 of 1969-12-31) and never rounds
+// into the next second. time.Unix then does the floored divmod and the
+// proleptic-Gregorian conversion in exact integer arithmetic.
 func toUnixDateTime(v any) (time.Time, error) {
 	f, ok := toFloat64(v)
 	if !ok {
 		return time.Time{}, newClosedFunctionError(CodeClosedFunctionArity,
 			fmt.Sprintf("argument must be numeric, got %T", v))
 	}
-	// Split into integer seconds and fractional nanoseconds. Use
-	// math.Floor so that negative-fractional inputs ("0.5 seconds before
-	// epoch") follow Python-style floored division per esm-spec §9.2.
-	whole := math.Floor(f)
-	frac := f - whole
-	sec := int64(whole)
-	nsec := int64(math.Round(frac * nanosPerSecond))
-	if nsec >= nanosPerSecond {
-		sec++
-		nsec -= nanosPerSecond
+	whole, err := wholeSeconds(f)
+	if err != nil {
+		return time.Time{}, err
 	}
-	return time.Unix(sec, nsec).UTC(), nil
+	return time.Unix(whole, 0).UTC(), nil
+}
+
+// wholeSeconds is floor(t_utc) as an int64 (exact: a floored binary64 is an
+// integer). Outside ±maxCalendarSeconds — and for NaN/Inf — there is no
+// Int32 calendar to report, and the int64 conversion itself would be
+// implementation-defined, so it raises closed_function_overflow.
+func wholeSeconds(f float64) (int64, error) {
+	whole := math.Floor(f)
+	if !(whole >= -maxCalendarSeconds && whole < maxCalendarSeconds) {
+		return 0, newClosedFunctionError(CodeClosedFunctionOverflow,
+			fmt.Sprintf("datetime.*: t_utc %g is outside the calendar range", f))
+	}
+	return int64(whole), nil
 }
 
 // datetimeJulianDay computes the continuous Julian Day Number (JDN) for a
 // UTC scalar time, including the fractional time-of-day offset relative
 // to noon UTC. Uses the Fliegel–van Flandern (1968) integer formula plus
 // `(time_of_day_seconds − 43200) / 86400`, ≤ 1 ulp agreement to the spec
-// reference per esm-spec §9.2.1.
-func datetimeJulianDay(tUTC float64) float64 {
-	t, _ := toUnixDateTime(tUTC)
+// reference per esm-spec §9.2. The offset is formed as
+// (second_of_day − 43200) + (t − floor(t)): the integer part is exact and
+// t − floor(t) is exact in binary64, so the time of day is rounded once, and
+// it comes from the SAME floor as the date, so the two cannot disagree about
+// which day t is in.
+func datetimeJulianDay(tUTC float64) (float64, error) {
+	whole, err := wholeSeconds(tUTC)
+	if err != nil {
+		return 0, err
+	}
+	t := time.Unix(whole, 0).UTC()
 	y := t.Year()
 	m := int(t.Month())
 	d := t.Day()
@@ -295,13 +316,18 @@ func datetimeJulianDay(tUTC float64) float64 {
 		(367*(m-2-12*mAdj))/12 -
 		(3*((y+4900+mAdj)/100))/4 +
 		d - 32075
-	// JDN counts noon-to-noon; convert time-of-day seconds (since 00:00 UTC)
-	// to a fractional offset relative to noon.
-	secondsInDay := math.Mod(tUTC, secondsPerDay)
-	if secondsInDay < 0 {
-		secondsInDay += secondsPerDay
+	secondOfDay := whole - secondsPerDay*floorDiv(whole, secondsPerDay)
+	fromNoon := float64(secondOfDay-secondsPerHalfDay) + (tUTC - math.Floor(tUTC))
+	return float64(jdn) + fromNoon/secondsPerDay, nil
+}
+
+// floorDiv is integer division rounding toward −∞ (Go's `/` truncates).
+func floorDiv(a, b int64) int64 {
+	q := a / b
+	if (a%b != 0) && ((a < 0) != (b < 0)) {
+		q--
 	}
-	return float64(jdn) + (secondsInDay-secondsPerHalfDay)/secondsPerDay
+	return q
 }
 
 // isLeapYear: proleptic-Gregorian. Pure integer arithmetic, exact zero
