@@ -386,22 +386,18 @@ end
 # surfaces as an `:oop`-vs-`:inplace` mismatch in a model, not as a test
 # failure here. `test/datetime_arithmetic_test.jl` pins agreement with `Dates`
 # EXHAUSTIVELY: every day from 1600-01-01 to 2400-01-01 (292,000 days), every
-# second of four representative days, and the millisecond-rounding boundaries.
+# second of four representative days, and fractional seconds on both sides
+# of the epoch.
 #
-# MILLISECOND RESOLUTION IS PART OF THE CONTRACT, not an implementation
-# detail. `Dates.unix2datetime(x)` is `DateTime(UTM(UNIXEPOCH + trunc(Int64,
-# 1000x)))`, so the sub-millisecond remainder of `t` is DISCARDED, and working
-# in whole milliseconds from the start is what reproduces that. Decomposing
-# `t` directly in seconds disagrees at every sub-millisecond boundary — caught
-# by the ms-boundary phase of the test, which is the only phase that can see
-# it (an exact-integer `t` truncates and rounds alike).
-#
-# `trunc`, NOT `round`, and the distinction is load-bearing: at
-# `t = …59.9995 s` rounding lands on the next second and truncation stays put,
-# and `Dates` stays put. Note this makes the cut asymmetric about the epoch —
-# truncation goes toward ZERO, so a sub-second time in 1969 moves forward
-# while one in 1971 moves back. That is `Dates`' behavior, faithfully copied,
-# not a choice made here.
+# FRACTIONAL SECONDS FLOOR TOWARD −∞ (esm-spec §9.2): the day number is
+# `floor(t/86400)` and the time of day `t − 86400·floor(t/86400)`, both
+# exact, and the fields come from `floor(time of day)`. Because 86400 is an
+# integer that is the floor-divmod of `floor(t)`, which is exact in binary64,
+# so the decomposition starts from the whole second `t` falls in. This is NOT
+# `Dates.unix2datetime`, which truncates `1000t` toward ZERO: there a time
+# just before the epoch (`-1e-7`) lands on 1970-01-01T00:00:00 rather than
+# 1969-12-31T23:59:59. Every whole-second `t` agrees with `Dates`, which is
+# what the test's sweeps compare against.
 
 # Floor division. PRECONDITION: `a` and `b` are exact integers in the value
 # type and `b > 0` — true of every call in this section.
@@ -443,26 +439,22 @@ end
                   ifelse(r >= b, q + oftype(q, 1), q))
 end
 
-# Truncation toward zero, spelled with the two primitives a compiled backend
-# already lowers. `Base.trunc` would do on the host but is a third op to demand
-# of a backend for no gain, and `floor` + a select is exactly the pair the rest
-# of this section is built from.
-@inline _ctrunc(x) = ifelse(x < 0, -floor(-x), floor(x))
-
-# Days since 1970-01-01 and milliseconds-of-day, from a UTC second count.
+# Days since 1970-01-01 and the whole second of the day, in [0, 86400), from a
+# UTC second count — the esm-spec §9.2 floor-divmod (see the section comment).
 #
-# `ms` is an exact integer — the precondition `_cdiv` needs — for every
-# `|t| < 9e12 s`, about ±285,000 years around the epoch. Past that the ms
-# count leaves Float64's exact-integer range and the fields stop being
-# meaningful; on the `Float64` path `_cal_i32` then rejects them as
-# non-Int32. That is the same place the old `Dates` path gave up (an
-# `InexactError` from inside `trunc(Int64, ·)`), so the domain has not
-# narrowed — but note it IS a throw, and the TOTALITY CONTRACT at the top of
-# this file scopes the calendar to finite in-range inputs for that reason.
+# `s = floor(t)` is an exact integer for every finite `t`. `_cdiv(s, 86400)` is
+# exact further out than its general `2⁵³` precondition: `86400 = 2⁷·675`, so
+# the product `q·86400` stays exact while `q·675 < 2⁵³` (|t| up to ~1.1e18 s),
+# and the remainder `s − q·86400` is then an exact difference of two close
+# exact numbers. That covers the whole Int32 year range (|t| < 6.8e16 s), so
+# `datetime.year` reaches ±2³¹ exactly and `_cal_i32` raises the overflow one
+# year past it. Far beyond that the fields stop being meaningful, and the
+# TOTALITY CONTRACT at the top of this file scopes the calendar to in-range
+# inputs for that reason.
 @inline function _cal_split(t_utc)
-    ms = _ctrunc(1000 * t_utc)
-    days = _cdiv(ms, 86400000)
-    return days, ms - days * 86400000
+    s = floor(t_utc)
+    days = _cdiv(s, 86400)
+    return days, s - days * 86400
 end
 
 # (year, month, day) from days since the Unix epoch — Hinnant's
@@ -521,19 +513,18 @@ end
 end
 
 @inline function _cal_hour(t)
-    msod = _cal_split(t)[2]
-    return _cdiv(msod, 3600000)
+    sod = _cal_split(t)[2]
+    return _cdiv(sod, 3600)
 end
 
 @inline function _cal_minute(t)
-    msod = _cal_split(t)[2]
-    return _cdiv(msod - _cdiv(msod, 3600000) * 3600000, 60000)
+    sod = _cal_split(t)[2]
+    return _cdiv(sod - _cdiv(sod, 3600) * 3600, 60)
 end
 
 @inline function _cal_second(t)
-    msod = _cal_split(t)[2]
-    rem_min = msod - _cdiv(msod, 60000) * 60000
-    return _cdiv(rem_min, 1000)
+    sod = _cal_split(t)[2]
+    return sod - _cdiv(sod, 60) * 60
 end
 
 # Fliegel–van Flandern (1968) integer JDN, plus fractional-day offset from
@@ -550,10 +541,12 @@ end
 # integer JDN is taken off the primal (`_value`), which is exactly right: the
 # day-number is piecewise constant, so it contributes no derivative.
 #
-# `mod(t_utc, 86400.0)` is left generic rather than split into
-# `t - 86400*floor(t/86400)`: ForwardDiff differentiates `mod` directly, and on a
-# `Float64` query this is bit-for-bit the same call as before (`_value` is the
-# identity), preserving the spec's pinned ≤1 ulp / cross-binding contract.
+# The time of day is `(sod − 43200) + (t − floor(t))`, with `sod` and the
+# floor taken from the SAME split as the date: the integer part is exact and
+# `t − floor(t)` is exact in binary64, so the offset rounds once and can never
+# name a different day from the date (a separate `mod(t, 86400.0)` rounds
+# `86400 − 5e-324` up to 86400 while the floor says the day before). The floor
+# is of the PRIMAL, a constant, so `t_utc − s` keeps `t`'s derivative.
 #
 # The (y, m, d) decomposition comes from the branch-free calendar above rather
 # than from `Dates`, so this traces like everything else — which matters more
@@ -569,7 +562,9 @@ end
 # -13..-2: truncation gives -1 for every month, flooring would give -2 at
 # January. That term is written as the select it actually is.
 function _datetime_julian_day(t_utc)
-    y, m, d = _civil_from_days(_cal_split(_value(t_utc))[1])
+    t0 = _value(t_utc)
+    days, sod = _cal_split(t0)
+    y, m, d = _civil_from_days(days)
     a = ifelse(m <= 2, oftype(m, -1), oftype(m, 0))   # == (m - 14) ÷ 12, truncated
     jdn = _cdiv(1461 * (y + 4800 + a), 4) +
           _cdiv(367 * (m - 2 - 12 * a), 12) -
@@ -578,12 +573,12 @@ function _datetime_julian_day(t_utc)
     # JDN counts noon-to-noon; convert time-of-day seconds (since 00:00 UTC)
     # to a fractional offset relative to noon. The spec pins this offset as
     # `(time_of_day_seconds − 43200) / 86400` (esm-spec §9.2.1).
-    seconds_in_day = mod(t_utc, 86400.0)
+    from_noon = (sod - 43200) + (t_utc - floor(t0))
     # `jdn` is already a value of the argument's own type — the branch-free
     # decomposition never leaves it. The `Float64(jdn)` that stood here was
     # narrowing an `Int` returned by `Dates`, and on a traced value it is the
     # same wall as `_to_datetime`'s.
-    return jdn + (seconds_in_day - 43200.0) / 86400.0
+    return jdn + from_noon / 86400.0
 end
 
 # ============================================================
