@@ -132,7 +132,12 @@ def iso(t):
     y = p["year"]
     ys = f"{y:04d}" if 0 <= y <= 9999 else f"{y:+05d}"
     frac = p["tod"] - math.floor(p["tod"])
-    fs = "" if frac == 0 else f" + {float(frac)!r} s"
+    if frac == 0:
+        fs = ""
+    elif float(frac) == 1.0:  # e.g. 1 - 5e-324: below 1 but rounds to it
+        fs = " + just under 1 s"
+    else:
+        fs = f" + {float(frac)!r} s"
     return (
         f"{ys}-{p['month']:02d}-{p['day']:02d}T{p['hour']:02d}:"
         f"{p['minute']:02d}:{p['second']:02d}Z{fs}"

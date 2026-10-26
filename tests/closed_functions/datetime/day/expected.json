@@ -58,7 +58,7 @@
         },
         {
             "name": "frac_epoch_below_ulp",
-            "description": "t_utc = -5e-324 -> 1969-12-31T23:59:59Z + 1.0 s (one ulp below the epoch boundary). Fields floor toward -inf (esm-spec §9.2).",
+            "description": "t_utc = -5e-324 -> 1969-12-31T23:59:59Z + just under 1 s (one ulp below the epoch boundary). Fields floor toward -inf (esm-spec §9.2).",
             "inputs": [
                 -5e-324
             ],
@@ -906,7 +906,7 @@
         },
         {
             "name": "frac_epoch_min_subnormal_below",
-            "description": "t_utc = -5e-324 -> 1969-12-31T23:59:59Z + 1.0 s (smallest subnormal below the epoch: 1969-12-31T23:59:59, although 86400 - 5e-324 rounds to 86400 in binary64). Fields floor toward -inf (esm-spec §9.2).",
+            "description": "t_utc = -5e-324 -> 1969-12-31T23:59:59Z + just under 1 s (smallest subnormal below the epoch: 1969-12-31T23:59:59, although 86400 - 5e-324 rounds to 86400 in binary64). Fields floor toward -inf (esm-spec §9.2).",
             "inputs": [
                 -5e-324
             ],
