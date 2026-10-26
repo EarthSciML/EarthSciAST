@@ -54,6 +54,12 @@ inductive Base
   | prime (p : Nat.Primes)
   deriving DecidableEq
 
+@[simp] theorem Base.prime_mk_eq (a b : ℕ) (ha : a.Prime) (hb : b.Prime) :
+    (Base.prime ⟨a, ha⟩ = Base.prime ⟨b, hb⟩) = (a = b) := by
+  apply propext; constructor
+  · intro h; cases h; rfl
+  · rintro rfl; rfl
+
 /-- The real number a base denotes. -/
 noncomputable def Base.real : Base → ℝ
   | .pi => Real.pi

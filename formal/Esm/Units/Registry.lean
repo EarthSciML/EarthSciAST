@@ -30,7 +30,7 @@ def mk (d : Dim) (q : ℚ) : U := ⟨d, Scale.ofRat q⟩
 def mkPi (d : Dim) (q : ℚ) (k : ℚ) : U := ⟨d, Scale.ofRat q ++ Scale.pi k⟩
 
 namespace Dims
-def none : Dim := D 0 0 0 0 0 0 0 0
+def dimless : Dim := D 0 0 0 0 0 0 0 0
 def len : Dim := D 1 0 0 0 0 0 0 0
 def mass : Dim := D 0 1 0 0 0 0 0 0
 def time : Dim := D 0 0 1 0 0 0 0 0
@@ -100,21 +100,21 @@ def table : List (String × U) := [
   -- Solid angle
   ("sr", mk solidAngle 1),
   -- Mixing ratios (dimensionless)
-  ("ppm", mk none (1 / 10 ^ 6)), ("ppb", mk none (1 / 10 ^ 9)), ("ppt", mk none (1 / 10 ^ 12)),
-  ("ppmv", mk none (1 / 10 ^ 6)), ("ppbv", mk none (1 / 10 ^ 9)), ("pptv", mk none (1 / 10 ^ 12)),
+  ("ppm", mk dimless (1 / 10 ^ 6)), ("ppb", mk dimless (1 / 10 ^ 9)), ("ppt", mk dimless (1 / 10 ^ 12)),
+  ("ppmv", mk dimless (1 / 10 ^ 6)), ("ppbv", mk dimless (1 / 10 ^ 9)), ("pptv", mk dimless (1 / 10 ^ 12)),
   -- Fractions (dimensionless)
-  ("%", mk none (1 / 100)), ("psu", mk none 1),
+  ("%", mk dimless (1 / 100)), ("psu", mk dimless 1),
   -- Counts (dimensionless)
-  ("molec", mk none 1), ("molecule", mk none 1), ("individuals", mk none 1),
-  ("vehicles", mk none 1), ("units", mk none 1), ("count", mk none 1),
+  ("molec", mk dimless 1), ("molecule", mk dimless 1), ("individuals", mk dimless 1),
+  ("vehicles", mk dimless 1), ("units", mk dimless 1), ("count", mk dimless 1),
   -- Column amount
   ("Dobson", mk column 2.6867e20), ("DU", mk column 2.6867e20),
   -- Long-form aliases
   ("meter", mk len 1), ("meters", mk len 1), ("hour", mk time 3600),
-  ("Celsius", mk temp 1), ("percent", mk none (1 / 100)),
+  ("Celsius", mk temp 1), ("percent", mk dimless (1 / 100)),
   ("degree", mkPi angle (1 / 180) 1), ("degrees", mkPi angle (1 / 180) 1),
   -- Dimensionless spellings
-  ("", mk none 1), ("1", mk none 1), ("dimensionless", mk none 1)
+  ("", mk dimless 1), ("1", mk dimless 1), ("dimensionless", mk dimless 1)
 ]
 
 /-- The table's keys. -/
