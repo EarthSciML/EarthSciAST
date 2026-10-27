@@ -268,34 +268,57 @@ export function searchsortedFirst(x: number, xs: readonly number[]): number {
   return lo + 1
 }
 
+/** One interpolation axis and the label its diagnostics name it by. */
+type LabelledAxis = readonly [axis: readonly number[], where: string]
+
+/** esm-spec §9.2 order step 3, over every axis: fewer than 2 entries. */
+function checkAxesLength(axes: readonly LabelledAxis[]): void {
+  for (const [axis, where] of axes) {
+    if (axis.length < 2) {
+      throw new ClosedFunctionError(
+        ERROR_CODES.INTERP_AXIS_TOO_SHORT,
+        `${where}: axis has ${axis.length} entries (must have at least 2)`,
+      )
+    }
+  }
+}
+
 /**
- * Validate a 1-D interpolation axis (`interp.linear` / `interp.bilinear`).
- * Strictly increasing, no NaN, length ≥ 2. Diagnostic codes match
- * esm-spec §9.2 "Errors (load time)" table.
+ * esm-spec §9.2 order steps 5 and 6, each over every axis: a non-finite entry
+ * (NaN, +Inf or -Inf; ruling Q-113) is `interp_nan_in_axis`, then a pair that
+ * is not strictly increasing is `interp_non_monotonic_axis`.
+ */
+function checkAxesValues(axes: readonly LabelledAxis[]): void {
+  for (const [axis, where] of axes) {
+    for (let i = 0; i < axis.length; i++) {
+      if (!Number.isFinite(axis[i]!)) {
+        throw new ClosedFunctionError(
+          ERROR_CODES.INTERP_NAN_IN_AXIS,
+          `${where}: axis[${i + 1}] is ${axis[i]}, not a finite number`,
+        )
+      }
+    }
+  }
+  for (const [axis, where] of axes) {
+    for (let i = 1; i < axis.length; i++) {
+      if (axis[i]! <= axis[i - 1]!) {
+        throw new ClosedFunctionError(
+          ERROR_CODES.INTERP_NON_MONOTONIC_AXIS,
+          `${where}: axis is not strictly increasing at index ${i + 1} (axis[${i + 1}]=${axis[i]} ≤ axis[${i}]=${axis[i - 1]})`,
+        )
+      }
+    }
+  }
+}
+
+/**
+ * Validate a 1-D interpolation axis (`interp.linear` / `interp.bilinear`):
+ * at least 2 entries, every entry finite, strictly increasing — in that order
+ * (esm-spec §9.2 "Order of the argument checks").
  */
 export function validateInterpAxis(axis: readonly number[], where: string): void {
-  if (axis.length < 2) {
-    throw new ClosedFunctionError(
-      ERROR_CODES.INTERP_AXIS_TOO_SHORT,
-      `${where}: axis has ${axis.length} entries (must have at least 2)`,
-    )
-  }
-  for (let i = 0; i < axis.length; i++) {
-    if (Number.isNaN(axis[i]!)) {
-      throw new ClosedFunctionError(
-        ERROR_CODES.INTERP_NAN_IN_AXIS,
-        `${where}: axis[${i + 1}] is NaN`,
-      )
-    }
-  }
-  for (let i = 1; i < axis.length; i++) {
-    if (axis[i]! <= axis[i - 1]!) {
-      throw new ClosedFunctionError(
-        ERROR_CODES.INTERP_NON_MONOTONIC_AXIS,
-        `${where}: axis is not strictly increasing at index ${i + 1} (axis[${i + 1}]=${axis[i]} ≤ axis[${i}]=${axis[i - 1]})`,
-      )
-    }
-  }
+  checkAxesLength([[axis, where]])
+  checkAxesValues([[axis, where]])
 }
 
 /**
@@ -320,8 +343,10 @@ function asNumberArray(
 }
 
 function asNumberMatrix(name: string, v: unknown): number[][] {
+  // An empty array is rank 1, not rank 2 (ruling Q-111).
   if (
     !Array.isArray(v) ||
+    v.length === 0 ||
     !v.every((row) => Array.isArray(row) && row.every((e) => typeof e === 'number'))
   ) {
     throw new ClosedFunctionError(
@@ -338,24 +363,33 @@ function asNumberMatrix(name: string, v: unknown): number[][] {
  * {@link validateInterpAxis}. Shared by evaluation and the load-time check.
  */
 function validateLinearArrays(table: readonly number[], axis: readonly number[]): void {
+  const axes: LabelledAxis[] = [[axis, 'interp.linear']]
+  checkAxesLength(axes)
   if (table.length !== axis.length) {
     throw new ClosedFunctionError(
       ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH,
       `interp.linear: len(table)=${table.length} != len(axis)=${axis.length}`,
     )
   }
-  validateInterpAxis(axis, 'interp.linear')
+  checkAxesValues(axes)
 }
 
 /**
  * The esm-spec §9.2 shape and axis checks of `interp.bilinear` on a rank-2
- * `table` and rank-1 axes. Shared by evaluation and the load-time check.
+ * `table` and rank-1 axes, in the pinned order (each step over both axes):
+ * too short, length mismatch, non-finite entry, not strictly increasing.
+ * Shared by evaluation and the load-time check.
  */
 function validateBilinearArrays(
   table: readonly (readonly number[])[],
   axisX: readonly number[],
   axisY: readonly number[],
 ): void {
+  const axes: LabelledAxis[] = [
+    [axisX, 'interp.bilinear axis_x'],
+    [axisY, 'interp.bilinear axis_y'],
+  ]
+  checkAxesLength(axes)
   const nx = axisX.length
   const ny = axisY.length
   if (table.length !== nx) {
@@ -372,8 +406,7 @@ function validateBilinearArrays(
       )
     }
   }
-  validateInterpAxis(axisX, 'interp.bilinear axis_x')
-  validateInterpAxis(axisY, 'interp.bilinear axis_y')
+  checkAxesValues(axes)
 }
 
 /**
@@ -608,11 +641,11 @@ function plainLeaves(value: unknown): unknown {
  * The esm-spec §9.2 LOAD-TIME argument checks of one `fn` call (ruling Q-106):
  * the call names `name` and carries `args`, as written in the loaded document.
  * Only `interp.searchsorted`, `interp.linear` and `interp.bilinear` have
- * argument checks; any other name returns at once. A call with the wrong number
- * of arguments is left to evaluation (`closed_function_arity`), since the
- * argument roles are not defined for it.
+ * argument checks; any other name returns at once.
  *
- * In order, for each array argument in argument order: not a `const` node, or
+ * In order (esm-spec §9.2 "Order of the argument checks", ruling Q-110): a
+ * wrong number of arguments is `closed_function_arity` (ruling Q-112); then,
+ * for each array argument in argument order: not a `const` node, or
  * a `const` of the wrong rank (rank 1 for an axis, `xs` and `interp.linear`'s
  * `table`; rank 2 for `interp.bilinear`'s `table`) is `interp_table_not_const`
  * / `interp_axis_not_const` (ruling Q-108); then the value checks evaluation
@@ -628,7 +661,7 @@ export function checkClosedFunctionArguments(
   try {
     switch (name) {
       case 'interp.searchsorted': {
-        if (args.length !== 2) return
+        requireArity(name, args as unknown[], 2)
         const xs = asNumberArray(
           name,
           constArgValue(args[1]),
@@ -639,7 +672,7 @@ export function checkClosedFunctionArguments(
         return
       }
       case 'interp.linear': {
-        if (args.length !== 3) return
+        requireArity(name, args as unknown[], 3)
         const table = asNumberArray(
           name,
           constArgValue(args[0]),
@@ -656,7 +689,7 @@ export function checkClosedFunctionArguments(
         return
       }
       case 'interp.bilinear': {
-        if (args.length !== 5) return
+        requireArity(name, args as unknown[], 5)
         const table = asNumberMatrix(name, constArgValue(args[0]))
         const axisX = asNumberArray(
           name,

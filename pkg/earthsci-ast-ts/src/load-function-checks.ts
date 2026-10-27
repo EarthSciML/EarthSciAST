@@ -15,9 +15,15 @@
  *   table checks ({@link validateFunctionTable}, the same function the
  *   `table_lookup` lowering calls).
  * - Every `fn` node naming `interp.searchsorted` / `interp.linear` /
- *   `interp.bilinear`, wherever it sits, gets the §9.2 argument checks
- *   ({@link checkClosedFunctionArguments}, which shares its value checks with
- *   evaluation).
+ *   `interp.bilinear`, wherever it sits, gets the §9.2 argument checks, arity
+ *   first ({@link checkClosedFunctionArguments}, which shares its value checks
+ *   with evaluation; rulings Q-110, Q-112).
+ * - Every `table_lookup` node, wherever it sits, gets its own §9.5.5 checks —
+ *   unknown table, `args`, axis keys, output ({@link checkTableLookupNode},
+ *   the same function the lowering calls; ruling Q-112).
+ *
+ * Every table is checked before any expression node (ruling Q-113), so a
+ * document with a failing table and a failing node reports the table.
  *
  * "Wherever it sits" is a walk over the WHOLE loaded document rather than a
  * list of expression-bearing fields: every expression position (equations,
@@ -33,7 +39,12 @@
  */
 
 import { checkClosedFunctionArguments } from './closed-functions.js'
-import { validateFunctionTable, type FunctionTables } from './lower-table-lookups.js'
+import {
+  checkTableLookupNode,
+  validateFunctionTable,
+  type FunctionTables,
+} from './lower-table-lookups.js'
+import type { ExpressionNode } from './types.js'
 
 /** The closed functions that have load-time argument checks (esm-spec §9.2). */
 const CHECKED_FUNCTIONS: ReadonlySet<string> = new Set([
@@ -61,25 +72,29 @@ export function checkFunctionTablesAndClosedFunctionCalls(doc: unknown): void {
       validateFunctionTable(table, id)
     }
   }
+  const validTables = tables !== null && typeof tables === 'object' ? tables : undefined
   for (const [key, child] of Object.entries(doc)) {
     if (key === 'function_tables') continue
-    walk(child, `/${escapePointer(key)}`)
+    walk(child, `/${escapePointer(key)}`, validTables)
   }
 }
 
-function walk(value: unknown, path: string): void {
+function walk(value: unknown, path: string, tables: FunctionTables | undefined): void {
   if (value === null || typeof value !== 'object') return
   if (Array.isArray(value)) {
-    for (let i = 0; i < value.length; i++) walk(value[i], `${path}/${i}`)
+    for (let i = 0; i < value.length; i++) walk(value[i], `${path}/${i}`, tables)
     return
   }
   const node = value as { op?: unknown; name?: unknown; args?: unknown }
   if (node.op === 'fn' && typeof node.name === 'string' && CHECKED_FUNCTIONS.has(node.name)) {
     checkClosedFunctionArguments(node.name, Array.isArray(node.args) ? node.args : [], path)
+  } else if (node.op === 'table_lookup') {
+    // The tables were all checked above, so only the node's own checks run.
+    checkTableLookupNode(value as ExpressionNode, tables, false)
   }
   for (const [key, child] of Object.entries(value)) {
     // A `const` node's `value` is data: there is no expression inside it.
     if (node.op === 'const' && key === 'value') continue
-    walk(child, `${path}/${escapePointer(key)}`)
+    walk(child, `${path}/${escapePointer(key)}`, tables)
   }
 }

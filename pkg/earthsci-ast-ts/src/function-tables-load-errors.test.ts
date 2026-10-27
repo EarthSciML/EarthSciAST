@@ -7,8 +7,8 @@
  * become the binary64 values JSON cannot carry, and several cases also hold an
  * axis the schema would reject. Each case runs through BOTH places this binding
  * checks a table: the load-time check `load` and `validate()` run on every
- * `function_tables` entry (`checkFunctionTablesAndClosedFunctionCalls`, ruling
- * Q-106), and the §9.5.3 lowering of the lookup (`lowerTableLookups`, which
+ * `function_tables` entry (`checkFunctionTablesAndClosedFunctionCalls`, rulings
+ * Q-106 and Q-112: every table, then every lookup node's own fields), and the §9.5.3 lowering of the lookup (`lowerTableLookups`, which
  * re-checks the table it names, then the lookup's own fields). The cases a
  * document can carry live in `tests/invalid/function_table_*.esm` instead
  * (`load-function-checks.test.ts`). No case is skipped: a
@@ -64,10 +64,16 @@ function tablesOf(c: LoadErrorCase): FunctionTables {
   return { [ledger.table_id]: decodeNonFinite(c.table) } as FunctionTables
 }
 
-/** The §9.5.5 code the load-time table check raises, or `null` when it passes. */
+/**
+ * The §9.5.5 code the load-time check raises — the table's checks, then the
+ * lookup node's own (ruling Q-112) — or `null` when both pass.
+ */
 function loadCheckCode(c: LoadErrorCase): string | null {
   try {
-    checkFunctionTablesAndClosedFunctionCalls({ function_tables: tablesOf(c) })
+    checkFunctionTablesAndClosedFunctionCalls({
+      function_tables: tablesOf(c),
+      lookup: decodeNonFinite(c.lookup),
+    })
     return null
   } catch (e) {
     if (e instanceof TableLookupLoweringError) return e.code

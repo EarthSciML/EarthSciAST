@@ -127,30 +127,8 @@ export function lowerTableLookupNode(
   node: ExpressionNode,
   tables: FunctionTables | undefined,
 ): Expr {
-  const tableId = node.table
-  if (typeof tableId !== 'string') {
-    fail(
-      ERROR_CODES.TABLE_LOOKUP_UNKNOWN_TABLE,
-      'a `table_lookup` node carries no `table` id (esm-spec §9.5.2)',
-    )
-  }
-  const table = tables?.[tableId]
-  if (table === undefined) {
-    fail(
-      ERROR_CODES.TABLE_LOOKUP_UNKNOWN_TABLE,
-      `\`table_lookup\` references table \`${tableId}\`, which the document's ` +
-        '`function_tables` block does not declare',
-    )
-  }
-  // esm-spec §9.5.5 "Order of the lookup checks" (ruling Q-107): unknown table,
-  // then the table's own ten checks, then the lookup's `args`, axis keys and
-  // output. A broken table is named for what is wrong with IT. (Load has
-  // already run the table checks on every table; they are repeated here
-  // because this function is also handed tables that never went through a
-  // load.)
-  validateFunctionTable(table, tableId)
-  const inputs = axisInputs(node, table, tableId)
-  const data = outputSlice(table, outputIndex(node, table, tableId))
+  const { tableId, table, inputs, output } = checkLookup(node, tables, true)
+  const data = outputSlice(table, output)
 
   // esm-spec §9.5.3a, outside the order above: raised only on a lookup that
   // passed every check. `clamp` (the default) is exactly what `interp.linear` /
@@ -184,6 +162,52 @@ export function lowerTableLookupNode(
   }
   // `validateFunctionTable` has already rejected every other kind/axis-count pair.
   return nearestTree(data, axes[0], inputs[0])
+}
+
+/**
+ * The esm-spec §9.5.5 checks of ONE `table_lookup` node, in the pinned order
+ * ("Order of the lookup checks", rulings Q-107 and Q-112): unknown table, then
+ * (when `checkTable`) the named table's ten checks, then the lookup's own
+ * `args`, axis keys and output. Throws a {@link TableLookupLoweringError}
+ * naming the first failure.
+ *
+ * Load runs this on every `table_lookup` node with `checkTable` false, because
+ * it has already checked every table before any expression node; the lowering
+ * runs it with `checkTable` true, because it is also handed tables that never
+ * went through a load.
+ */
+export function checkTableLookupNode(
+  node: ExpressionNode,
+  tables: FunctionTables | undefined,
+  checkTable: boolean,
+): void {
+  checkLookup(node, tables, checkTable)
+}
+
+function checkLookup(
+  node: ExpressionNode,
+  tables: FunctionTables | undefined,
+  checkTable: boolean,
+): { tableId: string; table: FunctionTable; inputs: Expr[]; output: number } {
+  const tableId = node.table
+  if (typeof tableId !== 'string') {
+    fail(
+      ERROR_CODES.TABLE_LOOKUP_UNKNOWN_TABLE,
+      'a `table_lookup` node carries no `table` id (esm-spec §9.5.2)',
+    )
+  }
+  const table = tables !== undefined && Object.hasOwn(tables, tableId) ? tables[tableId] : undefined
+  if (table === undefined) {
+    fail(
+      ERROR_CODES.TABLE_LOOKUP_UNKNOWN_TABLE,
+      `\`table_lookup\` references table \`${tableId}\`, which the document's ` +
+        '`function_tables` block does not declare',
+    )
+  }
+  if (checkTable) validateFunctionTable(table, tableId)
+  const inputs = axisInputs(node, table, tableId)
+  const output = outputIndex(node, table, tableId)
+  return { tableId, table, inputs, output }
 }
 
 /** The arity `interpolation` requires (esm-spec §9.5.1), or `undefined` for an unknown kind. */

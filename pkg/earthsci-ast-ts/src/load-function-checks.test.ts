@@ -40,7 +40,7 @@ const fixtures = fs
 
 describe('closed-function and function-table checks at load (esm-spec §9.2, §9.5.5)', () => {
   it('finds the corpus documents', () => {
-    expect(fixtures.length).toBeGreaterThanOrEqual(30)
+    expect(fixtures.length).toBeGreaterThanOrEqual(46)
   })
 
   it.each(fixtures)('refuses %s at load and in validate() with its pinned code', (name) => {
@@ -96,9 +96,91 @@ describe('the load-time argument check on in-memory calls', () => {
     ).toThrow(/\/models\/M\/equations\/0\/rhs/)
   })
 
-  it('leaves other functions and a wrong arity to evaluation', () => {
-    expect(codeOf(() => checkClosedFunctionArguments('datetime.year', ['t']))).toBeNull()
-    expect(codeOf(() => checkClosedFunctionArguments('interp.linear', ['x']))).toBeNull()
+  it('checks interp.* arity first, and leaves datetime.* to evaluation (ruling Q-112)', () => {
+    expect(codeOf(() => checkClosedFunctionArguments('datetime.year', ['t', 't']))).toBeNull()
+    expect(codeOf(() => checkClosedFunctionArguments('interp.linear', ['x']))).toBe(
+      ERROR_CODES.CLOSED_FUNCTION_ARITY,
+    )
+    expect(codeOf(() => checkClosedFunctionArguments('interp.searchsorted', [c([1])]))).toBe(
+      ERROR_CODES.CLOSED_FUNCTION_ARITY,
+    )
+  })
+
+  it('runs each step over every axis before the next (ruling Q-110)', () => {
+    // axis_x disagrees with the table's outer length; axis_y has one entry.
+    expect(
+      codeOf(() =>
+        checkClosedFunctionArguments('interp.bilinear', [
+          c([[1], [2], [3]]),
+          c([0, 1]),
+          c([0]),
+          'x',
+          'y',
+        ]),
+      ),
+    ).toBe(ERROR_CODES.INTERP_AXIS_TOO_SHORT)
+    // A length mismatch comes before a non-finite axis entry.
+    expect(
+      codeOf(() =>
+        checkClosedFunctionArguments('interp.linear', [c([1, 2]), c([0, Number.NaN, 2]), 'x']),
+      ),
+    ).toBe(ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH)
+  })
+
+  it('treats an infinite axis entry as interp_nan_in_axis (ruling Q-113)', () => {
+    for (const inf of [Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      expect(
+        codeOf(() => checkClosedFunctionArguments('interp.linear', [c([1, 2]), c([0, inf]), 'x'])),
+      ).toBe(ERROR_CODES.INTERP_NAN_IN_AXIS)
+    }
+  })
+
+  it('treats an empty bilinear table as rank 1 (ruling Q-111)', () => {
+    expect(
+      codeOf(() =>
+        checkClosedFunctionArguments('interp.bilinear', [c([]), c([0, 1]), c([0, 1]), 'x', 'y']),
+      ),
+    ).toBe(ERROR_CODES.INTERP_TABLE_NOT_CONST)
+  })
+})
+
+describe('table_lookup node checks run at load (ruling Q-112)', () => {
+  const doc = (lookup: object, tables?: object) => ({
+    esm: '1.0.0',
+    metadata: { name: 'LookupAtLoad' },
+    ...(tables ? { function_tables: tables } : {}),
+    models: {
+      M: {
+        variables: {
+          x: { type: 'parameter', units: '1', default: 0.5 },
+          y: { type: 'unknown', units: '1', default: 1.0 },
+        },
+        equations: [
+          {
+            lhs: { op: 'D', args: ['y'], wrt: 't' },
+            rhs: { op: 'table_lookup', table: 'T', args: [], ...lookup },
+          },
+        ],
+      },
+    },
+  })
+  const T = { T: { axes: [{ name: 'x', values: [0, 1] }], data: [1, 2] } }
+
+  it('loads a well-formed lookup', () => {
+    expect(codeOf(() => loadString(JSON.stringify(doc({ axes: { x: 'x' } }, T))))).toBeNull()
+  })
+
+  it.each<[string, object, object | undefined, string]>([
+    ['an unknown table', { axes: { x: 'x' } }, undefined, ERROR_CODES.TABLE_LOOKUP_UNKNOWN_TABLE],
+    ['a missing axis key', { axes: { z: 'x' } }, T, ERROR_CODES.TABLE_LOOKUP_AXIS_NAME_MISMATCH],
+    [
+      'an output out of range',
+      { axes: { x: 'x' }, output: 2 },
+      T,
+      ERROR_CODES.TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE,
+    ],
+  ])('refuses %s, though nothing evaluates it', (_label, lookup, tables, want) => {
+    expect(codeOf(() => loadString(JSON.stringify(doc(lookup, tables))))).toBe(want)
   })
 })
 
