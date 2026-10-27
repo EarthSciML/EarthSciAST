@@ -35,10 +35,15 @@ import (
 const (
 	secondsPerDay     = 86400 // seconds in a UTC day (floor-divmod split)
 	secondsPerHalfDay = 43200 // noon offset for the continuous Julian Day
+	// julianDayOfEpochDay is the Julian Day Number of 1970-01-01 (noon), so
+	// the Julian Date of day number d at time of day s is
+	// (d + julianDayOfEpochDay) + (s − 43200)/86400.
+	julianDayOfEpochDay = 2440588
 	// maxCalendarSeconds bounds |floor(t_utc)| so the whole-second count fits
-	// an int64 with room for time.Unix's internal epoch shift. It is ~1.5e11
-	// years, far past the Int32 year range, so every t_utc whose fields are
-	// representable is inside it.
+	// an int64 with room for time.Unix's internal epoch shift. It is not the
+	// overflow rule — that is the Int32 year (yearInInt32) — but ~1.5e11
+	// years, far past it, so every t_utc it rejects has a year outside Int32
+	// too and the two raise the same closed_function_overflow.
 	maxCalendarSeconds = 1 << 62
 )
 
@@ -109,9 +114,9 @@ func IsClosedFunction(name string) bool {
 
 // datetimeFieldAccessors maps the seven datetime.* field-extraction functions
 // (esm-spec §9.2) to their calendar accessor. Each takes a single UTC-scalar
-// argument, decomposes it via toUnixDateTime, and returns a signed 32-bit
-// integer (range-checked uniformly through checkInt32 — the small calendar
-// fields never overflow, so this only ever matters for datetime.year).
+// argument, decomposes it via toUnixDateTime (which raises
+// closed_function_overflow when the year of t_utc is outside Int32, for every
+// field), and returns a signed 32-bit integer.
 var datetimeFieldAccessors = map[string]func(time.Time) int{
 	"datetime.year":        func(t time.Time) int { return t.Year() },
 	"datetime.month":       func(t time.Time) int { return int(t.Month()) },
@@ -262,7 +267,9 @@ func checkInt32(name string, v int64) (int32, error) {
 }
 
 // toUnixDateTime converts a UTC scalar time (seconds since Unix epoch) to
-// the time.Time of the WHOLE second it falls in, at UTC. esm-spec §9.2 takes
+// the time.Time of the WHOLE second it falls in, at UTC. It raises
+// closed_function_overflow for a NaN or ±Inf t_utc and for one whose year is
+// outside Int32 (esm-spec §9.2), so every datetime.* field shares the rule. esm-spec §9.2 takes
 // the fields from floor(time of day), where time of day is
 // t − 86400·floor(t/86400) taken exactly; since 86400 is an integer, that is
 // the same instant as floor(t) seconds, so a fractional t floors toward −∞
@@ -279,13 +286,29 @@ func toUnixDateTime(v any) (time.Time, error) {
 	if err != nil {
 		return time.Time{}, err
 	}
-	return time.Unix(whole, 0).UTC(), nil
+	t := time.Unix(whole, 0).UTC()
+	if err := yearInInt32(t, f); err != nil {
+		return time.Time{}, err
+	}
+	return t, nil
+}
+
+// yearInInt32 raises closed_function_overflow when the proleptic-Gregorian
+// year of t (the decomposition of t_utc) is outside Int32: esm-spec §9.2
+// makes every datetime.* function raise then, whatever field it returns.
+func yearInInt32(t time.Time, tUTC float64) error {
+	if y := int64(t.Year()); y < math.MinInt32 || y > math.MaxInt32 {
+		return newClosedFunctionError(CodeClosedFunctionOverflow,
+			fmt.Sprintf("datetime.*: the year %d of t_utc %g overflows Int32", y, tUTC))
+	}
+	return nil
 }
 
 // wholeSeconds is floor(t_utc) as an int64 (exact: a floored binary64 is an
-// integer). Outside ±maxCalendarSeconds — and for NaN/Inf — there is no
-// Int32 calendar to report, and the int64 conversion itself would be
-// implementation-defined, so it raises closed_function_overflow.
+// integer). A NaN or ±Inf t_utc raises closed_function_overflow (esm-spec
+// §9.2). So does one outside ±maxCalendarSeconds, where the int64 conversion
+// would be implementation-defined; its year is far outside Int32, so that is
+// the year rule's answer too.
 func wholeSeconds(f float64) (int64, error) {
 	whole := math.Floor(f)
 	if !(whole >= -maxCalendarSeconds && whole < maxCalendarSeconds) {
@@ -295,32 +318,27 @@ func wholeSeconds(f float64) (int64, error) {
 	return int64(whole), nil
 }
 
-// datetimeJulianDay computes the continuous Julian Day Number (JDN) for a
-// UTC scalar time, including the fractional time-of-day offset relative
-// to noon UTC. Uses the Fliegel–van Flandern (1968) integer formula plus
-// `(time_of_day_seconds − 43200) / 86400`, ≤ 1 ulp agreement to the spec
-// reference per esm-spec §9.2. The offset is formed as
-// (second_of_day − 43200) + (t − floor(t)): the integer part is exact and
-// t − floor(t) is exact in binary64, so the time of day is rounded once, and
-// it comes from the SAME floor as the date, so the two cannot disagree about
-// which day t is in.
+// datetimeJulianDay is the standard Julian Date t_utc/86400 + 2440587.5 for
+// every t_utc, evaluated in binary64 as esm-spec §9.2 pins it, from the exact
+// split: (day + 2440588) + ((second_of_day − 43200) + (t − floor(t))) / 86400.
+// The day term and second_of_day − 43200 are exact integers and t − floor(t)
+// is exact in binary64, so only the inner add, the divide and the outer add
+// round (≤ 1 ulp). The day term is the linear day number, not the
+// Fliegel–van Flandern JDN of the date, which agrees only from -4800-03-01 on.
+// Like every datetime.* function it raises closed_function_overflow for a
+// non-finite t_utc or a year outside Int32.
 func datetimeJulianDay(tUTC float64) (float64, error) {
 	whole, err := wholeSeconds(tUTC)
 	if err != nil {
 		return 0, err
 	}
-	t := time.Unix(whole, 0).UTC()
-	y := t.Year()
-	m := int(t.Month())
-	d := t.Day()
-	mAdj := (m - 14) / 12
-	jdn := (1461*(y+4800+mAdj))/4 +
-		(367*(m-2-12*mAdj))/12 -
-		(3*((y+4900+mAdj)/100))/4 +
-		d - 32075
-	secondOfDay := whole - secondsPerDay*floorDiv(whole, secondsPerDay)
+	if err := yearInInt32(time.Unix(whole, 0).UTC(), tUTC); err != nil {
+		return 0, err
+	}
+	day := floorDiv(whole, secondsPerDay)
+	secondOfDay := whole - secondsPerDay*day
 	fromNoon := float64(secondOfDay-secondsPerHalfDay) + (tUTC - math.Floor(tUTC))
-	return float64(jdn) + fromNoon/secondsPerDay, nil
+	return float64(day+julianDayOfEpochDay) + fromNoon/secondsPerDay, nil
 }
 
 // floorDiv is integer division rounding toward −∞ (Go's `/` truncates).

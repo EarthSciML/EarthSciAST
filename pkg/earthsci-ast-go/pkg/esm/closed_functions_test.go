@@ -178,8 +178,9 @@ func walkClosedFnDirs(root string) ([]closedFnEntry, error) {
 
 // normalizeFixtureArgs converts the JSON-decoded input slice into the
 // types EvaluateClosedFunction expects: numbers stay as float64; nested
-// arrays stay as []interface{}; the literal string "NaN" is converted to
-// math.NaN(); other strings are forwarded for diagnostic purposes.
+// arrays stay as []interface{}; the literal strings "NaN", "Inf" and "-Inf"
+// are converted to math.NaN() and ±math.Inf; other strings are forwarded for
+// diagnostic purposes.
 func normalizeFixtureArgs(inputs []any) ([]any, error) {
 	out := make([]any, len(inputs))
 	for i, raw := range inputs {
@@ -191,8 +192,13 @@ func normalizeFixtureArgs(inputs []any) ([]any, error) {
 func normalizeFixtureValue(v any) any {
 	switch x := v.(type) {
 	case string:
-		if x == "NaN" || x == "nan" || x == "NAN" {
+		switch x {
+		case "NaN", "nan", "NAN":
 			return math.NaN()
+		case "Inf":
+			return math.Inf(1)
+		case "-Inf":
+			return math.Inf(-1)
 		}
 		return x
 	case []any:
