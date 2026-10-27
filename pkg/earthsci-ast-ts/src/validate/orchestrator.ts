@@ -25,7 +25,12 @@ import {
   stripNumericLiterals,
 } from '../numeric-literal.js'
 import { ERROR_CODES } from '../errors.js'
-import { type UnitWarning, topLevelScopedUnits, validateUnits } from '../units.js'
+import {
+  type UnitWarning,
+  dimensionlessLiteralWarnings,
+  topLevelScopedUnits,
+  validateUnits,
+} from '../units.js'
 import { forEachComponent } from '../traverse.js'
 import type { EsmFile } from '../types.js'
 import type { ValidationError, ValidationResult, StructuralError } from './types.js'
@@ -591,6 +596,11 @@ function validateAny(data: string | object, options: ValidateOptions = {}): Vali
 
         // Promote unit incompatibility warnings to structural errors
         structural_errors.push(...promoteUnitWarningsToErrors(unit_warnings))
+
+        // Bare numeric literals read as dimensionless (esm-spec §4.8.6):
+        // warnings only at this stage, added after the promotion above so they
+        // can never become errors or change `is_valid`.
+        unit_warnings.push(...dimensionlessLiteralWarnings(esmFile))
       } catch (e: unknown) {
         const error = e as Error
         structural_errors.push({

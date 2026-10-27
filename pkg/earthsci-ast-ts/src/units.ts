@@ -100,11 +100,21 @@ export interface UnitWarning {
    *   about the checker, not the file. → WARNING, and the dimension is
    *   reported UNKNOWN and the check SKIPPED, never assumed dimensionless.
    *
+   * - `units_dimensionless_literal_mismatch` — a check site that the current
+   *   neutral-literal rule passes or skips fails once a nonzero bare numeric
+   *   literal is read as dimensionless at scale 1 (esm-spec §4.8.6). Emitted by
+   *   {@link dimensionlessLiteralWarnings}, never by `validateUnits`. →
+   *   WARNING at this stage; it becomes an error at the next major esm version.
+   *
    * An unknown VARIABLE is an `analysis` finding here and nothing more: it is
    * separately a hard `undefined_variable` error, so the units layer does not
    * double-report it.
    */
-  code: 'dimensional_mismatch' | 'unparseable_unit' | 'analysis'
+  code:
+    | 'dimensional_mismatch'
+    | 'unparseable_unit'
+    | 'analysis'
+    | 'units_dimensionless_literal_mismatch'
   location?: string
   equation?: string
   /** For `unparseable_unit`: the declaration at fault. `validate()` promotes the
@@ -209,6 +219,14 @@ export function parseUnit(unitStr: string): ParsedUnit {
 function literalValue(expr: Expression): number | null {
   if (typeof expr === 'number') return expr
   if (isNumericLiteral(expr)) return expr.value
+  return null
+}
+
+/** The numeric `value` of a `const` node, or `null` when it is not a number. */
+function numericConstValue(node: ExpressionNode): number | null {
+  const value = (node as { value?: unknown }).value
+  if (typeof value === 'number') return value
+  if (isNumericLiteral(value as Expression)) return (value as { value: number }).value
   return null
 }
 
@@ -359,8 +377,32 @@ export function constantExponentValue(expr: Expression): Rational | null {
 export function checkDimensions(
   expr: Expression,
   unitBindings: Map<string, ParsedUnit>,
+  options: DimensionOptions = {},
 ): UnitResult {
-  return checkDimensionsMemo(expr, unitBindings, new Map())
+  return checkDimensionsMemo(expr, unitBindings, new Map(), options)
+}
+
+/**
+ * Which literal rule {@link checkDimensions} types under.
+ */
+export interface DimensionOptions {
+  /**
+   * esm-spec §4.8.6: when `true`, a nonzero bare numeric literal (and a `const`
+   * that declares no `units`) is DIMENSIONLESS at scale 1 instead of
+   * undeterminable. Zero, in any spelling, stays neutral. Default `false`, the
+   * current rule; only the dimensionless-literal warning pass sets it.
+   */
+  dimensionlessLiterals?: boolean
+}
+
+/**
+ * The unit of a bare numeric literal (or a unit-less `const`) of `value`:
+ * undeterminable under the current rule (esm-spec §4.8.4); under the §4.8.6
+ * rule, dimensionless at scale 1 unless it is zero, which stays neutral.
+ */
+function literalUnit(value: number, options: DimensionOptions): ParsedUnit | null {
+  if (!options.dimensionlessLiterals || value === 0) return null
+  return dimensionless()
 }
 
 /**
@@ -479,6 +521,7 @@ function checkDimensionsMemo(
   expr: Expression,
   unitBindings: Map<string, ParsedUnit>,
   memo: Map<object, UnitResult>,
+  options: DimensionOptions,
 ): UnitResult {
   const isNode = typeof expr === 'object' && expr !== null
   if (isNode) {
@@ -487,7 +530,7 @@ function checkDimensionsMemo(
       return { dimensions: hit.dimensions, warnings: [], diagnostics: [] }
     }
   }
-  const res = computeDimensions(expr, unitBindings, memo)
+  const res = computeDimensions(expr, unitBindings, memo, options)
   if (isNode) memo.set(expr, res)
   return res
 }
@@ -496,6 +539,7 @@ function computeDimensions(
   expr: Expression,
   unitBindings: Map<string, ParsedUnit>,
   memo: Map<object, UnitResult>,
+  options: DimensionOptions,
 ): UnitResult {
   const diagnostics: UnitDiagnostic[] = []
   // Record a diagnostic with its classification made EXPLICIT here (not
@@ -534,8 +578,11 @@ function computeDimensions(
   // meaning IS determined: additively they are neutral and adopt their
   // sibling's dimension (`T - 273.15` → K), and an exponent is read by VALUE
   // (`x^2`). A sum of nothing but literals (`1 + 2`) stays indeterminate.
+  //
+  // Under the esm-spec §4.8.6 rule (`options.dimensionlessLiterals`) a nonzero
+  // literal is dimensionless instead; see {@link literalUnit}.
   if (typeof expr === 'number' || isNumericLiteral(expr)) {
-    return unknown()
+    return finish(literalUnit(literalValue(expr) as number, options))
   }
 
   if (typeof expr === 'string') {
@@ -556,7 +603,7 @@ function computeDimensions(
 
   // Walk a sub-expression, recording its findings; returns its unit.
   const walk = (part: Expression): ParsedUnit | null => {
-    const r = checkDimensionsMemo(part, unitBindings, memo)
+    const r = checkDimensionsMemo(part, unitBindings, memo, options)
     diagnostics.push(...r.diagnostics)
     return r.dimensions
   }
@@ -597,7 +644,7 @@ function computeDimensions(
     return finish(walk({ op: node.fn, args } as ExpressionNode))
   }
 
-  const argResults = args.map((arg) => checkDimensionsMemo(arg, unitBindings, memo))
+  const argResults = args.map((arg) => checkDimensionsMemo(arg, unitBindings, memo, options))
   for (const r of argResults) diagnostics.push(...r.diagnostics)
 
   // `get(i)` is the i-th operand's dimension, or `null` when indeterminate.
@@ -1004,11 +1051,14 @@ function computeDimensions(
 
     case 'const': {
       // A `const` that DECLARES its units has that unit (esm-spec §4.8.5);
-      // without `units` it is undeterminable, like a bare literal. An
-      // unresolvable string is reported at the containing expression field, not
-      // here.
+      // without `units` it is typed like a bare literal of its value
+      // (undeterminable under the current rule). An unresolvable string is
+      // reported at the containing expression field, not here.
       const declared = (node as { units?: string }).units
-      if (declared === undefined) return unknown()
+      if (declared === undefined) {
+        const value = numericConstValue(node)
+        return value === null ? unknown() : finish(literalUnit(value, options))
+      }
       return finish(tryParseUnit(declared))
     }
 
@@ -1152,47 +1202,12 @@ function reportUnparseableVariableUnits(
 }
 
 /**
- * Validate dimensional consistency of equations in an ESM file.
- *
- * SCOPE: every real inline component — each top-level model / reaction system
- * AND their inline `subsystems` (walked via `forEachComponent(..., {recurse:
- * true})`; reference-stub and data-loader subsystems are opaque leaves and are
- * skipped). For each, `forEachEquation` covers a model's dynamic `equations`
- * and a reaction system's `constraint_equations`; models additionally have
- * their `observed` variable expressions checked.
- *
- * BINDINGS: the shared top-level environment (top-level models' variables +
- * reaction systems' species/parameters, bare first-wins) is used
- * for EVERY component, including subsystems. Subsystem-local declarations are
- * deliberately NOT added, so a name defined only inside a subsystem stays an
- * "Unknown variable" and keeps the mismatch-suppression in `checkAndReport`.
- * This is the conservative scope required to broaden coverage without
- * introducing cross-language divergence: binding a subsystem's own variables
- * would un-suppress equation-level mismatches for nondimensionalized subsystem
- * ODEs (e.g. `D(u,t) = k*u` with a dimensionless `u`), which the other bindings
- * — none of which run a full per-equation dimensional check — never flag. A
- * top-level reaction system's `constraint_equations` still resolve fully,
- * because that system's species/parameters ARE in the shared environment.
- *
- * SPATIAL-CALCULUS SUGAR: `grad`/`div`/`laplacian` (and `integral`, and any user
- * op) are ordinary open-tier rewrite-target ops with NO dimensional rule
- * (esm-spec §4.2 / §4.8.3 "any other op"): their dimension is UNDETERMINABLE
- * until a discretization rule lowers them to a `D` stencil, so `checkDimensions`
- * reports UNKNOWN and skips the enclosing check (§4.8.4). There is no coordinate
- * table and no op-name special case — the checker never divides an operand by a
- * coordinate's units. Unparseable variable-unit DECLARATIONS are still a defect;
- * {@link reportUnparseableVariableUnits} flags them per component (the only pass
- * that sees inline-subsystem variables).
+ * The shared bare-name binding environment {@link validateUnits} types every
+ * component against: top-level models' variables + reaction systems'
+ * species/parameters, bare first-wins. An unparseable declaration is reported
+ * into `warnings` and left unbound (see {@link addBinding}).
  */
-export function validateUnits(file: EsmFile): UnitWarning[] {
-  const warnings: UnitWarning[] = []
-
-  // Shared binding environment: top-level models' variables + reaction systems'
-  // species/parameters, bare first-wins (scoped keys are added per component by
-  // `withScopedReferenceUnits`). This is the ONLY bare-name
-  // environment — subsystem-local declarations are never added (see the
-  // docstring's BINDINGS note), so a subsystem-only name stays unbound and its
-  // equation-level mismatch is suppressed.
+function sharedUnitBindings(file: EsmFile, warnings: UnitWarning[]): Map<string, ParsedUnit> {
   const unitBindings = new Map<string, ParsedUnit>()
   if (file.models) {
     for (const [modelName, model] of Object.entries(file.models)) {
@@ -1235,6 +1250,53 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
       }
     }
   }
+
+  return unitBindings
+}
+
+/**
+ * Validate dimensional consistency of equations in an ESM file.
+ *
+ * SCOPE: every real inline component — each top-level model / reaction system
+ * AND their inline `subsystems` (walked via `forEachComponent(..., {recurse:
+ * true})`; reference-stub and data-loader subsystems are opaque leaves and are
+ * skipped). For each, `forEachEquation` covers a model's dynamic `equations`
+ * and a reaction system's `constraint_equations`; models additionally have
+ * their `observed` variable expressions checked.
+ *
+ * BINDINGS: the shared top-level environment (top-level models' variables +
+ * reaction systems' species/parameters, bare first-wins) is used
+ * for EVERY component, including subsystems. Subsystem-local declarations are
+ * deliberately NOT added, so a name defined only inside a subsystem stays an
+ * "Unknown variable" and keeps the mismatch-suppression in `checkAndReport`.
+ * This is the conservative scope required to broaden coverage without
+ * introducing cross-language divergence: binding a subsystem's own variables
+ * would un-suppress equation-level mismatches for nondimensionalized subsystem
+ * ODEs (e.g. `D(u,t) = k*u` with a dimensionless `u`), which the other bindings
+ * — none of which run a full per-equation dimensional check — never flag. A
+ * top-level reaction system's `constraint_equations` still resolve fully,
+ * because that system's species/parameters ARE in the shared environment.
+ *
+ * SPATIAL-CALCULUS SUGAR: `grad`/`div`/`laplacian` (and `integral`, and any user
+ * op) are ordinary open-tier rewrite-target ops with NO dimensional rule
+ * (esm-spec §4.2 / §4.8.3 "any other op"): their dimension is UNDETERMINABLE
+ * until a discretization rule lowers them to a `D` stencil, so `checkDimensions`
+ * reports UNKNOWN and skips the enclosing check (§4.8.4). There is no coordinate
+ * table and no op-name special case — the checker never divides an operand by a
+ * coordinate's units. Unparseable variable-unit DECLARATIONS are still a defect;
+ * {@link reportUnparseableVariableUnits} flags them per component (the only pass
+ * that sees inline-subsystem variables).
+ */
+export function validateUnits(file: EsmFile): UnitWarning[] {
+  const warnings: UnitWarning[] = []
+
+  // Shared binding environment: top-level models' variables + reaction systems'
+  // species/parameters, bare first-wins (scoped keys are added per component by
+  // `withScopedReferenceUnits`). This is the ONLY bare-name
+  // environment — subsystem-local declarations are never added (see the
+  // docstring's BINDINGS note), so a subsystem-only name stays unbound and its
+  // equation-level mismatch is suppressed.
+  const unitBindings = sharedUnitBindings(file, warnings)
 
   // Reaction-rate / stoichiometry dimensional check lives in validate.ts
   // (`validateReactionRateUnits`) so it can emit a structured
@@ -1896,4 +1958,199 @@ function formatDims(dims: CanonicalDims): string {
     else parts.push(`/${key}^${-value}`)
   }
   return parts.length > 0 ? parts.join('·') : 'dimensionless'
+}
+
+/**
+ * The value of a bare numeric literal, a `const` without `units`, or a unary
+ * `+`/`-` of one (nested to any depth); `null` for anything else.
+ */
+function bareLiteralValue(expr: unknown): number | null {
+  if (typeof expr === 'number') return expr
+  if (isNumericLiteral(expr as Expression)) return (expr as { value: number }).value
+  if (typeof expr !== 'object' || expr === null) return null
+  const node = expr as ExpressionNode
+  if (node.op === 'const' && (node as { units?: string }).units === undefined) {
+    return numericConstValue(node)
+  }
+  if ((node.op === '+' || node.op === '-') && (node.args ?? []).length === 1) {
+    const inner = bareLiteralValue(node.args[0])
+    if (inner === null) return null
+    return node.op === '-' ? -inner : inner
+  }
+  return null
+}
+
+/**
+ * The distinct nonzero bare literals of `exprs`, in walk order — what the
+ * dimensionless-literal warning names.
+ */
+function nonzeroLiterals(exprs: unknown[]): string[] {
+  const out: string[] = []
+  const walk = (node: unknown): void => {
+    const value = bareLiteralValue(node)
+    if (value !== null) {
+      if (value !== 0) {
+        const text = String(value)
+        if (!out.includes(text)) out.push(text)
+      }
+      return
+    }
+    if (typeof node !== 'object' || node === null) return
+    const n = node as ExpressionNode
+    for (const child of n.args ?? []) walk(child)
+    if (n.expr !== undefined && n.expr !== null) walk(n.expr)
+    if (n.filter !== undefined && n.filter !== null) walk(n.filter)
+    for (const child of (n.values ?? []) as unknown[]) walk(child)
+  }
+  for (const expr of exprs) walk(expr)
+  return out
+}
+
+/** The first provable mismatch among `diagnostics`, or `null`. */
+function firstMismatch(diagnostics: UnitDiagnostic[]): string | null {
+  return diagnostics.find((d) => d.code === ERROR_CODES.DIMENSIONAL_MISMATCH)?.message ?? null
+}
+
+/**
+ * The first provable mismatch an EQUATION check site produces under
+ * `options`' literal rule, or `null` when it passes or is skipped: a mismatch
+ * inside either side, else both sides determinable and differing in dimension
+ * or exact scale (esm-spec §4.8.6 "Check sites"). The time-ratio rule
+ * {@link validateUnits} applies to a derivative of an undeclared independent
+ * variable is not part of the site verdict: such a derivative is
+ * undeterminable, so the site is skipped, as in the Python reference.
+ */
+function equationSiteMismatch(
+  lhs: Expression,
+  rhs: Expression,
+  bindings: Map<string, ParsedUnit>,
+  options: DimensionOptions,
+): string | null {
+  try {
+    const left = checkDimensions(lhs, bindings, options)
+    const right = checkDimensions(rhs, bindings, options)
+    const inner = firstMismatch([...left.diagnostics, ...right.diagnostics])
+    if (inner !== null) return inner
+    const l = left.dimensions
+    const r = right.dimensions
+    if (l !== null && r !== null && !sameUnit(l, r)) {
+      return `LHS has ${formatUnit(l)}, RHS has ${formatUnit(r)}`
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
+/** The first provable mismatch inside a reaction RATE under `options`. */
+function rateSiteMismatch(
+  rate: Expression,
+  bindings: Map<string, ParsedUnit>,
+  options: DimensionOptions,
+): string | null {
+  try {
+    return firstMismatch(checkDimensions(rate, bindings, options).diagnostics)
+  } catch {
+    return null
+  }
+}
+
+function pointerToken(name: string): string {
+  return name.replace(/~/g, '~0').replace(/\//g, '~1')
+}
+
+/**
+ * The esm-spec §4.8.6 warnings: one `units_dimensionless_literal_mismatch`
+ * per check site whose verdict is a provable mismatch when nonzero bare
+ * numeric literals are dimensionless at scale 1, but not under the current
+ * neutral-literal rule. In document order.
+ *
+ * The sites are each equation of every top-level model
+ * (`/models/<M>/equations/<i>`) and each reaction rate of every top-level
+ * reaction system (`/reaction_systems/<S>/reactions/<i>`); subsystems are not
+ * sites. A model's equations are typed in the environment {@link validateUnits}
+ * gives them, a rate in the one `validateReactionRateUnits` gives it (the
+ * system's own species and parameters), both with scoped references bound. A
+ * site the current rule already rejects carries no warning: it is an error
+ * already. The warnings never make a document invalid.
+ */
+export function dimensionlessLiteralWarnings(file: EsmFile): UnitWarning[] {
+  const out: UnitWarning[] = []
+  const current: DimensionOptions = { dimensionlessLiterals: false }
+  const candidate: DimensionOptions = { dimensionlessLiterals: true }
+  const scopedTopLevel = topLevelScopedUnits(file)
+  // Unparseable declarations are reported by `validateUnits`; here they only
+  // stay unbound.
+  const shared = sharedUnitBindings(file, [])
+
+  const visit = (
+    pointer: string,
+    found: string | null,
+    wasFound: () => boolean,
+    exprs: unknown[],
+  ) => {
+    if (found === null || wasFound()) return
+    const literals = nonzeroLiterals(exprs)
+    const named = literals.length > 0 ? literals.join(', ') : '(none determinable)'
+    out.push({
+      message:
+        `${pointer}: with bare numeric literals read as dimensionless (esm-spec §4.8.6), ` +
+        `${found}; bare literal(s): ${named}. This becomes an error at the next major ` +
+        `esm version; a literal that carries a unit is written const(value, units "...") ` +
+        `(esm-spec §4.8.5)`,
+      code: ERROR_CODES.UNITS_DIMENSIONLESS_LITERAL_MISMATCH,
+      location: pointer,
+    })
+  }
+
+  for (const [modelName, model] of Object.entries(file.models ?? {})) {
+    if (isReferenceStub(model)) continue
+    const bindings = withScopedReferenceUnits(
+      bindingsForComponent(shared, modelName, model),
+      file,
+      model,
+      scopedTopLevel,
+    )
+    const equations = ((model as Model).equations ?? []) as Array<{
+      lhs: Expression
+      rhs: Expression
+    }>
+    equations.forEach((equation, i) => {
+      if (!equation) return
+      const pointer = `/models/${pointerToken(modelName)}/equations/${i}`
+      visit(
+        pointer,
+        equationSiteMismatch(equation.lhs, equation.rhs, bindings, candidate),
+        () => equationSiteMismatch(equation.lhs, equation.rhs, bindings, current) !== null,
+        [equation.lhs, equation.rhs],
+      )
+    })
+  }
+
+  for (const [systemName, system] of Object.entries(file.reaction_systems ?? {})) {
+    if (isReferenceStub(system)) continue
+    // The system's own species and parameters, exactly as
+    // `validateReactionRateUnits` binds them.
+    const bindings = withScopedReferenceUnits(
+      bindingsForComponent(new Map(), systemName, system),
+      file,
+      system,
+      scopedTopLevel,
+    )
+    const reactions = ((system as { reactions?: unknown[] }).reactions ?? []) as Array<
+      { rate?: Expression } | null | undefined
+    >
+    reactions.forEach((reaction, i) => {
+      const rate = reaction?.rate
+      if (rate === undefined || rate === null) return
+      const pointer = `/reaction_systems/${pointerToken(systemName)}/reactions/${i}`
+      visit(
+        pointer,
+        rateSiteMismatch(rate, bindings, candidate),
+        () => rateSiteMismatch(rate, bindings, current) !== null,
+        [rate],
+      )
+    })
+  }
+  return out
 }
