@@ -637,21 +637,30 @@
     {
       "id": "spec.9.2.interp-axis-no-nan",
       "section": "9.2",
-      "quote": "Axis arrays MUST NOT contain NaN.",
+      "quote": "Axis arrays MUST NOT contain a non-finite value (NaN, +Inf or −Inf).",
       "class": "semantic",
       "phase": 1,
       "area": "closed_functions",
-      "note": "An interp axis containing NaN is rejected with interp_nan_in_axis.",
+      "note": "No interp.linear / interp.bilinear axis entry is NaN or ±Inf; a non-finite entry is interp_nan_in_axis (ruling Q-113).",
       "concern": "A NaN axis entry also violates strict monotonicity, so both interp_nan_in_axis and interp_non_monotonic_axis apply and no precedence between the two codes is given. Resolved 2026-10-26 (Q-4): interp_nan_in_axis takes precedence (spec.9.2.interp-nan-precedence)."
     },
     {
       "id": "spec.9.2.interp-nan-precedence",
       "section": "9.2",
-      "quote": "Takes precedence over `interp_non_monotonic_axis`: an axis containing a NaN MUST be reported with `interp_nan_in_axis`, whatever its other entries.",
+      "quote": "Takes precedence over `interp_non_monotonic_axis`: an axis containing a non-finite value MUST be reported with `interp_nan_in_axis`, whatever its other entries.",
       "class": "semantic",
       "phase": 1,
       "area": "closed_functions",
-      "note": "An interp.linear/bilinear axis containing a NaN is rejected with interp_nan_in_axis, never interp_non_monotonic_axis."
+      "note": "An interp axis containing a non-finite value (NaN or ±Inf, ruling Q-113) is interp_nan_in_axis, never interp_non_monotonic_axis."
+    },
+    {
+      "id": "spec.9.2.interp-check-order",
+      "section": "9.2",
+      "quote": "such a call is reported with a single code, and bindings MUST report the first rule the call breaks in this order:",
+      "class": "semantic",
+      "phase": 1,
+      "area": "closed_functions",
+      "note": "An interp.linear / interp.bilinear call is reported with the first of: closed_function_arity; table then axes not a const array of the required rank; any axis too short; length mismatch; any non-finite axis entry; non-monotonic axis (rulings Q-110, Q-111, Q-112); each step over every axis."
     },
     {
       "id": "spec.9.2.interp-reject-at-load",
@@ -928,6 +937,24 @@
       "phase": 1,
       "area": "closed_functions",
       "note": "A document loads only if every function_tables entry passes the ten §9.5.5 checks, referenced or not (ruling Q-106)."
+    },
+    {
+      "id": "spec.9.5.5.lookup-checks-at-load",
+      "section": "9.5.5",
+      "quote": "MUST also run at load and in `validate()`, in the same way, on every node wherever it appears, as do the §9.2 argument checks on every `interp.*` `fn` node.",
+      "class": "semantic",
+      "phase": 1,
+      "area": "closed_functions",
+      "note": "Every table_lookup node's own checks (unknown table, args, axis keys, output) run at load on every node, evaluated or not (ruling Q-112)."
+    },
+    {
+      "id": "spec.9.5.5.tables-before-nodes",
+      "section": "9.5.5",
+      "quote": "Bindings MUST check every table before any expression node, so a document with both a failing table and a failing `fn` or `table_lookup` node is reported with the table's code",
+      "class": "semantic",
+      "phase": 1,
+      "area": "closed_functions",
+      "note": "A document with a failing function table is reported with a table code even when an expression node also fails (ruling Q-113)."
     },
     {
       "id": "spec.9.5.5.lookup-check-order",
