@@ -114,10 +114,12 @@ Raised by the closed function registry when the spec contract is violated.
 - `interp_nan_in_axis` — any `axis` (or `axis_x`, `axis_y`) contains a NaN.
 - `interp_axis_too_short` — any axis has fewer than 2 entries.
 - `interp_table_not_const` / `interp_axis_not_const` — table / axis (or
-  `interp.searchsorted` `xs`) argument is not a literal `const`-op array (e.g.
-  a variable reference). Raised by the AST extraction sites (the tree-walk
-  build's const-arg protocol, the MTK lowering), and — for a wrong-rank
-  searchsorted `xs` value — by `evaluate_closed_function` itself.
+  `interp.searchsorted` `xs`) argument is not a literal `const`-op array of
+  the required rank (e.g. a variable reference, a scalar `const`, a nested
+  array where a flat one belongs; ruling Q-108). Raised at load and by
+  `validate()` on every `interp.*` `fn` node (load_time_checks.jl), by the
+  build's const-arg protocol and the MTK lowering, and — for a value of the
+  wrong rank — by `evaluate_closed_function` itself.
 """
 struct ClosedFunctionError <: EarthSciASTError
     code::String
@@ -803,15 +805,32 @@ function _interp_searchsorted(name::String, x::Real, xs)::Int32
     return _interp_searchsorted_core(name, x, xs)
 end
 
+# esm-spec §9.2 (ruling Q-108): the `table` and axis arguments of `interp.linear`
+# and `interp.bilinear` are `const` arrays OF A FIXED RANK — rank 1 for an axis
+# and for `interp.linear`'s table, rank 2 (an array of rank-1 rows) for
+# `interp.bilinear`'s table. A `const` of any other rank (a scalar, a nested array
+# where a flat one belongs, a flat one where rows belong) is the same diagnostic
+# as an argument that is not a `const` at all: `interp_table_not_const` /
+# `interp_axis_not_const`. Ragged rows are still rank 2 (that is
+# `interp_axis_length_mismatch`), and `[]` is both ranks.
+_interp_number(x) = x isa Real && !(x isa Bool)
+_interp_rank1(v) = v isa AbstractVector && all(_interp_number, v)
+_interp_rank2(v) = v isa AbstractVector && all(_interp_rank1, v)
+
+function _require_interp_rank(name::String, v, rank::Int, code::String, label::String)
+    (rank == 1 ? _interp_rank1(v) : _interp_rank2(v)) && return nothing
+    got = v isa AbstractVector ? "an array that is not rank $(rank)" : "a $(typeof(v))"
+    throw(ClosedFunctionError(code,
+        "$(name): `$(label)` must be a rank-$(rank) `const`-op array of numbers " *
+        "(esm-spec §9.2); got $(got)"))
+end
+
 # Validate a 1-D axis used by `interp.linear` / `interp.bilinear`. Per
 # esm-spec §9.2: strictly increasing, no NaN, length ≥ 2. Returns the axis
 # coerced to `Vector{Float64}` for downstream blending. `axis_label` names
 # the failing axis ("axis", "axis_x", "axis_y") for the diagnostic.
 function _validate_interp_axis(name::String, axis_raw, axis_label::String)::Vector{Float64}
-    if !(axis_raw isa AbstractVector)
-        throw(ClosedFunctionError(ERROR_CODES.CLOSED_FUNCTION_ARITY,
-            "$(name): `$(axis_label)` must be an array (got $(typeof(axis_raw)))"))
-    end
+    _require_interp_rank(name, axis_raw, 1, ERROR_CODES.INTERP_AXIS_NOT_CONST, axis_label)
     n = length(axis_raw)
     if n < 2
         throw(ClosedFunctionError(ERROR_CODES.INTERP_AXIS_TOO_SHORT,
@@ -885,10 +904,7 @@ end
 # `interp.linear` per esm-spec §9.2 — validate the axis/table, then run the
 # kernel. Behaviour is byte-identical to the pre-`ess-wrh` monolithic form.
 function _interp_linear(name::String, table_raw, axis_raw, x::Real)
-    if !(table_raw isa AbstractVector)
-        throw(ClosedFunctionError(ERROR_CODES.CLOSED_FUNCTION_ARITY,
-            "$(name): `table` must be an array (got $(typeof(table_raw)))"))
-    end
+    _require_interp_rank(name, table_raw, 1, ERROR_CODES.INTERP_TABLE_NOT_CONST, "table")
     axis = _validate_interp_axis(name, axis_raw, "axis")
     if length(table_raw) != length(axis)
         throw(ClosedFunctionError(ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH,
@@ -954,14 +970,20 @@ end
     end
 end
 
+# The rank of every array argument of `interp.bilinear`, before any axis VALUE
+# is looked at (the order the load-time check and the build share).
+function _interp_bilinear_ranks(name::String, table_raw, axis_x_raw, axis_y_raw)
+    _require_interp_rank(name, table_raw, 2, ERROR_CODES.INTERP_TABLE_NOT_CONST, "table")
+    _require_interp_rank(name, axis_x_raw, 1, ERROR_CODES.INTERP_AXIS_NOT_CONST, "axis_x")
+    _require_interp_rank(name, axis_y_raw, 1, ERROR_CODES.INTERP_AXIS_NOT_CONST, "axis_y")
+    return nothing
+end
+
 # `interp.bilinear` per esm-spec §9.2 — validate the axes/table, then run the
 # kernel. Behaviour is byte-identical to the pre-`ess-wrh` monolithic form.
 function _interp_bilinear(name::String, table_raw, axis_x_raw, axis_y_raw,
                           x::Real, y::Real)
-    if !(table_raw isa AbstractVector)
-        throw(ClosedFunctionError(ERROR_CODES.CLOSED_FUNCTION_ARITY,
-            "$(name): `table` must be an array (got $(typeof(table_raw)))"))
-    end
+    _interp_bilinear_ranks(name, table_raw, axis_x_raw, axis_y_raw)
     axis_x = _validate_interp_axis(name, axis_x_raw, "axis_x")
     axis_y = _validate_interp_axis(name, axis_y_raw, "axis_y")
     Nx = length(axis_x)
@@ -973,10 +995,6 @@ function _interp_bilinear(name::String, table_raw, axis_x_raw, axis_y_raw,
     # Validate every inner row length matches Ny (rejects ragged tables).
     @inbounds for i in 1:Nx
         row = table_raw[i]
-        if !(row isa AbstractVector)
-            throw(ClosedFunctionError(ERROR_CODES.CLOSED_FUNCTION_ARITY,
-                "$(name): `table[$(i)]` must be an array (got $(typeof(row)))"))
-        end
         if length(row) != Ny
             throw(ClosedFunctionError(ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH,
                 "$(name): `len(table[$(i)])` = $(length(row)) but `len(axis_y)` = $(Ny)."))
@@ -1093,6 +1111,7 @@ end
 
 function _build_interp_linear_spec(name::String, table_raw, axis_raw;
                                    strict::String = "")::_InterpLinearSpec
+    _require_interp_rank(name, table_raw, 1, ERROR_CODES.INTERP_TABLE_NOT_CONST, "table")
     table = _coerce_f64_vec(name, table_raw, "table")
     axis  = _validate_interp_axis(name, axis_raw, "axis")
     if length(table) != length(axis)
@@ -1104,10 +1123,7 @@ end
 
 function _build_interp_bilinear_spec(name::String, table_raw, axis_x_raw,
                                      axis_y_raw; strict::String = "")::_InterpBilinearSpec
-    if !(table_raw isa AbstractVector)
-        throw(ClosedFunctionError(ERROR_CODES.CLOSED_FUNCTION_ARITY,
-            "$(name): `table` must be an array (got $(typeof(table_raw)))"))
-    end
+    _interp_bilinear_ranks(name, table_raw, axis_x_raw, axis_y_raw)
     axis_x = _validate_interp_axis(name, axis_x_raw, "axis_x")
     axis_y = _validate_interp_axis(name, axis_y_raw, "axis_y")
     Nx = length(axis_x)
@@ -1119,10 +1135,6 @@ function _build_interp_bilinear_spec(name::String, table_raw, axis_x_raw,
     table = Vector{Vector{Float64}}(undef, Nx)
     @inbounds for i in 1:Nx
         row = table_raw[i]
-        if !(row isa AbstractVector)
-            throw(ClosedFunctionError(ERROR_CODES.CLOSED_FUNCTION_ARITY,
-                "$(name): `table[$(i)]` must be an array (got $(typeof(row)))"))
-        end
         if length(row) != Ny
             throw(ClosedFunctionError(ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH,
                 "$(name): `len(table[$(i)])` = $(length(row)) but `len(axis_y)` = $(Ny)."))

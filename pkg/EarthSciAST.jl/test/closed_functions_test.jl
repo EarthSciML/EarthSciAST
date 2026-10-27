@@ -48,6 +48,27 @@ function _within_tol(actual, expected, abs_tol, rel_tol)
     return diff <= abs_tol || diff <= rel_tol * max(1.0, abs(e))
 end
 
+# The code the load-time argument check (`_check_interp_fn_node`, run by load
+# and `validate()` on every `interp.*` call) raises on a `fn` node whose array
+# positions are `const` nodes holding `inputs` and whose scalar positions are
+# variable references, or "" when it passes.
+function _cf_load_check_code(fn_name::String, inputs)
+    cspec = EarthSciAST._fn_const_arg_spec(fn_name)
+    args = EarthSciAST.ASTExpr[
+        pos in cspec.const_positions ?
+            EarthSciAST.OpExpr("const", EarthSciAST.ASTExpr[]; value=inputs[pos]) :
+            EarthSciAST.VarExpr("q$(pos)")
+        for pos in eachindex(inputs)]
+    node = EarthSciAST.OpExpr("fn", args; name=fn_name)
+    return try
+        EarthSciAST._check_interp_fn_node(node)
+        ""
+    catch e
+        e isa ClosedFunctionError || rethrow()
+        e.code
+    end
+end
+
 @testset "Closed function registry conformance (esm-tzp / esm-4aw)" begin
     @test isdir(_CF_FIX_ROOT)
 
@@ -121,6 +142,13 @@ end
                                 @test err_caught isa ClosedFunctionError
                                 if err_caught isa ClosedFunctionError
                                     @test err_caught.code == expected_code
+                                end
+                                # The LOAD-time argument check (esm-spec §9.2,
+                                # ruling Q-106) on the `fn` node, the array
+                                # inputs as `const` args.
+                                if startswith(fn_name, "interp.")
+                                    @test _cf_load_check_code(fn_name, inputs_decoded) ==
+                                          expected_code
                                 end
                             end
                         end
@@ -362,4 +390,78 @@ end
               "interp_nan_in_axis"
     end
     @test cf_code("interp.searchsorted", Any[1.0, [3.0, 1.0, 2.0]]) == "searchsorted_non_monotonic"
+end
+
+# esm-spec §9.2 "When the argument checks run" and §9.5.5 "When the table checks
+# run" (ruling Q-106): every `tests/invalid/closed_fn_*.esm` and
+# `tests/invalid/function_table_*.esm` is schema-valid and pinned
+# `resolver_only` with a `resolver_error_code`, the `enum_duplicate_value.esm`
+# convention. Load raises that code; `validate()` on the same document (coerced
+# without the load-time check, as a document built in memory would be) reports
+# it as a structural error; and `validate_path` renders the load failure as an
+# invalid verdict carrying the code.
+@testset "closed-function and function-table checks at load (esm-spec §9.2, §9.5.5)" begin
+    invalid_dir = joinpath(_CF_REPO_ROOT, "tests", "invalid")
+    pins = JSON3.read(read(joinpath(invalid_dir, "expected_errors.json"), String))
+    files = sort([f for f in readdir(invalid_dir)
+                  if endswith(f, ".esm") &&
+                     (startswith(f, "closed_fn_") || startswith(f, "function_table_"))])
+    # A missing fixture set is a failure, not a vacuous pass.
+    @test length(files) >= 30
+    for f in files
+        @testset "$(f)" begin
+            pin = pins[Symbol(f)]
+            @test pin.resolver_only === true
+            @test pin.is_valid === false
+            expected = String(pin.resolver_error_code)
+            path = joinpath(invalid_dir, f)
+            code = try
+                load_path(path); ""
+            catch e
+                (e isa ClosedFunctionError || e isa EarthSciAST.TableLookupError) || rethrow()
+                e.code
+            end
+            @test code == expected
+            mem = EarthSciAST.coerce_esm_file(JSON3.read(read(path, String), Dict{String,Any}))
+            result = validate(mem)
+            @test !result.is_valid
+            @test any(e -> e.error_type == expected, result.structural_errors)
+            @test any(e -> e.error_type == expected,
+                      EarthSciAST.validate_closed_functions_and_tables(mem))
+            vp = EarthSciAST.validate_path(path)
+            @test !vp.is_valid
+            @test any(e -> e.error_type == expected, vp.structural_errors)
+        end
+    end
+end
+
+# Ruling Q-108 (1): `xs = []` is a valid rank-1 searchsorted table; every query,
+# a NaN one included, returns 1 — at load, through the registry, and through
+# the tree-walk build a document goes through.
+@testset "empty searchsorted xs (esm-spec §9.2, ruling Q-108)" begin
+    @test evaluate_closed_function("interp.searchsorted", Any[2.0, Any[]]) == 1
+    @test evaluate_closed_function("interp.searchsorted", Any[NaN, Float64[]]) == 1
+    @test _cf_load_check_code("interp.searchsorted", Any[2.0, Any[]]) == ""
+end
+
+# esm-spec §9.2: a `fn` node inside an expression-template body is checked where
+# the template is applied, on the arguments the expansion gives it — never in
+# the body, whose `ax` is only a parameter there.
+@testset "interp.* call in a template body is checked at the application (esm-spec §9.2)" begin
+    doc(ax) = """{"esm":"1.0.0","metadata":{"name":"T","description":"d","authors":["a"]},
+     "models":{"M":{"expression_templates":{"lin":{"params":["ax","q"],
+       "body":{"op":"fn","name":"interp.linear","args":[{"op":"const","args":[],"value":[1.0,2.0]},"ax","q"]}}},
+      "variables":{"y":{"type":"unknown","units":"1"},"x":{"type":"parameter","units":"1","default":0.5}},
+      "equations":[{"lhs":"y","rhs":{"op":"apply_expression_template","args":[],"name":"lin",
+         "bindings":{"ax":{"op":"const","args":[],"value":$ax},"q":"x"}}}]}}}"""
+    code(ax) = try
+        load_string(doc(ax)); ""
+    catch e
+        e isa ClosedFunctionError || rethrow()
+        e.code
+    end
+    @test code("[0.0, 1.0]") == ""
+    @test code("[1.0, 0.0]") == "interp_non_monotonic_axis"
+    @test code("[0.0]") == "interp_axis_too_short"
+    @test code("[[0.0, 1.0], [2.0, 3.0]]") == "interp_axis_not_const"
 end

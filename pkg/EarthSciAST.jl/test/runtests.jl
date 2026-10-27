@@ -474,10 +474,18 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
                         # in tests/invalid/template_imports/ and never reached
                         # here. tests/invalid/data_source_url_env_var.esm is
                         # the first top-level fixture that raises it.
+                        # The three code-carrying load rejections the
+                        # `resolver_only` fixtures pin: `enum_duplicate_value`
+                        # (§9.3), and the §9.2 closed-function argument and
+                        # §9.5.5 function-table checks load runs on every
+                        # `interp.*` call and every table.
                         (e isa EarthSciAST.ParseError ||
                          e isa EarthSciAST.SchemaValidationError ||
                          e isa EarthSciAST.SubsystemRefError ||
-                         e isa EarthSciAST.ExpressionTemplateError) || rethrow()
+                         e isa EarthSciAST.ExpressionTemplateError ||
+                         e isa EarthSciAST.EnumLoweringError ||
+                         e isa EarthSciAST.ClosedFunctionError ||
+                         e isa EarthSciAST.TableLookupError) || rethrow()
                         true
                     end
                     if rejected

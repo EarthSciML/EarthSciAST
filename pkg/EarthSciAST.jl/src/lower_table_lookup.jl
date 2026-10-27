@@ -57,8 +57,10 @@ Codes: the lookup's own `table_lookup_args_nonempty`,
 `out_of_bounds: "error"` table), and the evaluation-time
 `table_lookup_out_of_bounds` a strict table raises for a query outside its axis.
 
-A build diagnostic, not a load one: the offending document still loads and
-still round-trips (§9.5.4) — it simply does not evaluate.
+The ten table checks are LOAD diagnostics: load and `validate()` run them on
+every `function_tables` entry (esm-spec §9.5.5), so a document holding a broken
+table does not load. The lookup's own codes and the evaluation-time codes are
+raised where the lookup is lowered or evaluated.
 """
 struct TableLookupError <: EarthSciASTError
     code::String
@@ -366,17 +368,12 @@ function _lower_expr_table_lookups(e::OpExpr, tables::_TableRegistry,
 end
 
 # The §9.5.3 lowering of ONE `table_lookup` node. The order of its checks is
-# the formal model's (`Esm.Closed.Tables.prepLookup`): the node's `args`, the
-# table reference, the table's OWN §9.5.5 checks (`_validate_function_table`),
-# then the lookup's axis keys and output.
+# esm-spec §9.5.5 "Order of the lookup checks" (ruling Q-107): the table
+# reference, the named table's OWN ten checks (`_validate_function_table`), then
+# the lookup's own fields — `args`, axis keys, output.
 function _lower_table_lookup_node(node::OpExpr,
                                   tables::AbstractDict{String,FunctionTable})::ASTExpr
     table_id = node.table
-    isempty(node.args) || throw(TableLookupError(
-        ERROR_CODES.TABLE_LOOKUP_ARGS_NONEMPTY,
-        "`table_lookup`$(table_id === nothing ? "" : " on table `$(table_id)`") " *
-        "carries $(length(node.args)) positional `args`; the per-axis inputs live " *
-        "under `axes` and `args` MUST be empty (esm-spec §9.5.2)"))
     table_id === nothing && throw(TableLookupError(
         ERROR_CODES.TABLE_LOOKUP_UNKNOWN_TABLE,
         "a `table_lookup` node carries no `table` id (esm-spec §9.5.2)"))
@@ -386,6 +383,11 @@ function _lower_table_lookup_node(node::OpExpr,
         "`function_tables` block does not declare"))
     table = tables[table_id]
     _validate_function_table(table, table_id)
+    isempty(node.args) || throw(TableLookupError(
+        ERROR_CODES.TABLE_LOOKUP_ARGS_NONEMPTY,
+        "`table_lookup` on table `$(table_id)` carries $(length(node.args)) " *
+        "positional `args`; the per-axis inputs live under `axes` and `args` MUST " *
+        "be empty (esm-spec §9.5.2)"))
     # esm-spec §9.5.1. `clamp` (the default) is exactly what the `interp.*`
     # cores do at the ends, so the lowered tree IS the clamp semantics. An
     # `error` table lowers to the same tree with its id on the node that reads
@@ -439,9 +441,12 @@ next begins:
 10. `table_data_shape_mismatch` — the `shape` assertion differs from the
     implied shape.
 
-The one validator of a `function_tables` entry in this binding: the §9.5.3
-lowering calls it as soon as a lookup's table id resolves, before any check
-about the lookup itself.
+The one validator of a `function_tables` entry in this binding. Load and
+`validate()` run it on EVERY entry, referenced or not
+([`_check_function_tables`](@ref), esm-spec §9.5.5 "When the table checks
+run"); the §9.5.3 lowering runs it again as soon as a lookup's table id
+resolves, before any check about the lookup itself (§9.5.5 "Order of the lookup
+checks"), which covers a table built in memory.
 """
 function _validate_function_table(table::FunctionTable, table_id::AbstractString)::Nothing
     fail(code, msg) = throw(TableLookupError(code,
@@ -466,7 +471,7 @@ function _validate_function_table(table::FunctionTable, table_id::AbstractString
     # on how the comparison is written.
     for ax in axes
         all(isfinite, ax.values) || fail(ERROR_CODES.TABLE_AXIS_NAN,
-            "axis `$(ax.name)` carries a non-finite value; axis `values` must be " *
+            "axis `$(ax.name)` carries a value that is not finite (NaN, +Inf or -Inf); axis `values` must be " *
             "strictly-increasing finite floats")
     end
     for ax in axes
@@ -492,7 +497,7 @@ function _validate_function_table(table::FunctionTable, table_id::AbstractString
         "the nesting of `data` is not the shape $(implied) implied by its axes" *
         (outputs === nothing ? "" : " and `outputs`"))
     _table_all_finite(data) || fail(ERROR_CODES.TABLE_DATA_NAN,
-        "a leaf of `data` is NaN (or infinite); table data must be finite")
+        "a leaf of `data` is not finite (NaN, +Inf or -Inf); table data must be finite")
     (table.shape === nothing || table.shape == implied) ||
         fail(ERROR_CODES.TABLE_DATA_SHAPE_MISMATCH,
              "the `shape` assertion $(table.shape) differs from the shape $(implied) " *

@@ -613,6 +613,12 @@ function validate_structural(file::EsmFile)::Vector{StructuralError}
     # rather than being collapsed into a cycle error.
     append!(errors, validate_observed_cycles(file))
 
+    # 5c-iv. The esm-spec §9.2 closed-function argument checks on every
+    # `interp.*` call and the §9.5.5 checks on every function table — the same
+    # checks load runs (`check_closed_functions_and_tables`), reported here for
+    # a document built or edited in memory.
+    append!(errors, validate_closed_functions_and_tables(file))
+
     # 5d. `variable_map` identity-coupling declared-unit mismatch (esm-spec §4.7.6).
     # The flatten path already rejects this via `_check_variable_map_units`
     # (`DomainUnitMismatchError`); mirror it as a `domain_unit_mismatch` structural
@@ -788,7 +794,11 @@ otherwise leave `structural_errors` empty even though the document is invalid
 - a `SubsystemRefError` — an unresolvable / ambiguous `{ref}` mount — carries its
   code and mount site (`/models/<parent>/subsystems/<sub>`);
 - a structured `ParseError` (`code` non-empty) — currently the §11.4.1
-  `ic_in_reaction_system` rejection — carries its own code, pointer and details.
+  `ic_in_reaction_system` rejection — carries its own code, pointer and details;
+- a `ClosedFunctionError` / `TableLookupError` from the load-time esm-spec §9.2
+  argument checks and §9.5.5 table checks (`check_closed_functions_and_tables`)
+  carries its code, reported at the document root (the error holds no
+  pointer; `validate()` on a typed document reports the field's pointer).
 
 Both the file entry point [`validate_path`](@ref) and the
 conformance producer route load failures through here so the finding is reported
@@ -807,6 +817,8 @@ function load_failure_structural_error(e)::Union{StructuralError,Nothing}
         )
     elseif e isa ParseError && !isempty(e.code)
         return StructuralError(e.path, e.message, e.code, e.details)
+    elseif e isa ClosedFunctionError || e isa TableLookupError
+        return StructuralError("", e.message, e.code)
     end
     return nothing
 end
