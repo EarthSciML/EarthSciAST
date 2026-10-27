@@ -268,7 +268,7 @@ def keysMatch (keys names : List String) : Bool :=
 
 /-- Everything about a `table_lookup` node that is decided at load: Q-11 args,
 the table reference, the table's own checks, the axis keys, the output. -/
-def prepLookup (tables : List (String × FTable)) (tid : String) (keys : List String)
+def prepLookup {α : Type} (tables : List (String × FTable)) (tid : String) (keys : List String)
     (out : Option OutSel) (args : List α) : Except Code (FTable × Nested) :=
   if !args.isEmpty then .error Codes.lookupArgsNonempty
   else match tables.lookup tid with
