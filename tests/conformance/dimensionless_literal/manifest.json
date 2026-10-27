@@ -21,7 +21,7 @@
     },
     {
       "id": "neutral_literal_pins_warn",
-      "input": "(the ten tests/valid files listed in the golden)",
+      "input": "(the 27 tests/valid files the golden lists with a nonempty warning set: 83 warnings)",
       "assert": "each stays VALID and carries exactly the listed warnings; these files pin today's neutral-literal rule and are rewritten by the next stage's codemod, not here"
     }
   ]
