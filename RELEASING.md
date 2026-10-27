@@ -30,6 +30,12 @@ commit the Julia General registry accepted:
    `pkg/EarthSciAST.jl` tree is the one General registered, then publishes to
    PyPI, crates.io, npm and the Go proxy and attaches the binaries.
 
+The jobs these three run live in the organization's shared reusable workflows,
+[`EarthSciML/.github`](https://github.com/EarthSciML/.github/blob/main/RELEASING.md)
+(`release-*.yml`), which EarthSciASTDiff, EarthSciIntegrator and EarthSciIO use
+too. This repository's files only say what to publish. The PyPI job is the
+exception: it stays in `release.yml` itself (see PyPI below).
+
 The order exists because General can refuse a registration, and the other
 registries never let a version be reused. v0.3.0 is the case in point: it
 reached npm, PyPI, crates.io and Go, while its General PR sat refused by
