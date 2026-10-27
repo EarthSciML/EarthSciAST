@@ -554,6 +554,15 @@
       "concern": "Wording resolved 2026-10-26 (Q-7): non-decreasing. NaN entries in xs: resolved 2026-10-26 (Q-7) with code searchsorted_nan, checked first (spec.9.2.searchsorted-xs-no-nan)."
     },
     {
+      "id": "spec.9.2.searchsorted-xs-not-const",
+      "section": "9.2",
+      "quote": "Bindings MUST reject an `xs` that is not a rank-1 `const`-op array — a variable reference, a non-`const` expression, or a `const` whose `value` is a scalar or a nested array — at load time with diagnostic `interp_axis_not_const`",
+      "class": "semantic",
+      "phase": 1,
+      "area": "closed_functions",
+      "note": "An interp.searchsorted xs that is not a rank-1 const array is rejected with interp_axis_not_const, before the NaN and monotonicity checks (Q-105)."
+    },
+    {
       "id": "spec.9.2.searchsorted-xs-no-nan",
       "section": "9.2",
       "quote": "Bindings MUST reject an `xs` containing a NaN entry at load time with diagnostic `searchsorted_nan`, and MUST check for NaN before monotonicity: an `xs` that contains a NaN is reported as `searchsorted_nan` whatever its other entries, never as `searchsorted_non_monotonic`.",
@@ -865,6 +874,15 @@
       "phase": 1,
       "area": "closed_functions",
       "note": "A function_tables axis containing a NaN is rejected with table_axis_nan, never table_axis_non_monotonic."
+    },
+    {
+      "id": "spec.9.5.5.table-check-order",
+      "section": "9.5.5",
+      "quote": "it is then reported with ONE code, and bindings MUST report the first rule it breaks in this order",
+      "class": "semantic",
+      "phase": 1,
+      "area": "closed_functions",
+      "note": "A function table breaking several §9.5.5 rules is reported with the code of the first in the pinned ten-step order, each step over every axis (Q-105)."
     },
     {
       "id": "spec.9.5.3a.error-mode-unsupported",

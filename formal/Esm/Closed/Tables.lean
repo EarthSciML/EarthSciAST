@@ -30,11 +30,14 @@ Rulings modelled (formal/QUESTIONS.md):
   `index(data, searchsorted(x, midpoints(axis)))`; the spec's current
   `index(data, searchsorted(x, axis))` is refuted (`spec_nearest_lowering_refuted`).
 
-Choices the spec does not make, recorded where they are made: the order of the
-§9.5.5 checks beyond Q-4; an axis with fewer than 2 values (required by §9.5.1,
-no code in §9.5.5) is rejected under the non-spec marker
-`unspecified:table_axis_too_short`; a NaN query to a `nearest` table has no
-ruling (the model, and its lowering, return the last knot's value).
+* Q-105: an axis with fewer than 2 values is `table_axis_too_short`, and the
+  order of the §9.5.5 table checks is the order of `validateTable` below, which
+  the spec now pins ("Order of the table checks"); `validateTable_first_*`
+  prove each code fires exactly when its rule is broken and no earlier rule is.
+
+A choice the spec does not make, recorded where it is made: a NaN query to a
+`nearest` table has no ruling (the model, and its lowering, return the last
+knot's value).
 -/
 
 namespace Esm.Closed.Tables
@@ -169,7 +172,7 @@ def outputsDuplicateName : Code := "table_outputs_duplicate_name"
 def interpolationAxesMismatch : Code := "table_interpolation_axes_mismatch"
 def axisNaN : Code := "table_axis_nan"
 def axisNonMonotonic : Code := "table_axis_non_monotonic"
-def axisTooShort : Code := "unspecified:table_axis_too_short"
+def axisTooShort : Code := "table_axis_too_short"
 def outputsLengthMismatch : Code := "table_outputs_length_mismatch"
 def dataShapeMismatch : Code := "table_data_shape_mismatch"
 def dataNaN : Code := "table_data_nan"
@@ -181,8 +184,8 @@ def lookupOutOfBounds : Code := "table_lookup_out_of_bounds"
 end Codes
 
 open FTable in
-/-- The §9.5.5 load-time checks on one table, in the model's order (Q-4 pins
-NaN before monotonicity; the rest is the model's choice). -/
+/-- The §9.5.5 load-time checks on one table, in the order §9.5.5 pins (Q-4,
+Q-105): each step over every axis before the next. -/
 def validateTable (T : FTable) : Except Code Unit :=
   if !decide (T.axes.map (·.name)).Nodup then .error Codes.axisDuplicateName
   else if T.outputsDup then .error Codes.outputsDuplicateName
@@ -1431,7 +1434,7 @@ theorem validateTable_code_sound (T : FTable) (c : Code) (h : validateTable T = 
     (c = "table_axis_nan" ∧ ∃ a ∈ T.axes, ∃ x ∈ a.values, x.isNaN = true) ∨
     (c = "table_axis_non_monotonic" ∧
       ∃ a ∈ T.axes, ∃ r : List ℝ, a.values = r.map Num.fin ∧ ¬ r.Pairwise (· < ·)) ∨
-    (c = "unspecified:table_axis_too_short" ∧ ∃ a ∈ T.axes, a.values.length < 2) ∨
+    (c = "table_axis_too_short" ∧ ∃ a ∈ T.axes, a.values.length < 2) ∨
     (c = "table_outputs_length_mismatch" ∧
       ∃ os xs, T.outputs = some os ∧ T.data = .node xs ∧ xs.length ≠ os.length) ∨
     (c = "table_data_shape_mismatch" ∧
@@ -1483,6 +1486,211 @@ theorem validateTable_code_sound (T : FTable) (c : Code) (h : validateTable T = 
     cases hs : T.shape with
     | none => rw [hs] at h10; simp at h10
     | some sh => rw [hs] at h10; exact ⟨sh, rfl, by simpa using h10⟩
+
+/-! ## The pinned order of the §9.5.5 table checks (Q-105)
+
+The ten rules of §9.5.5's "Order of the table checks", as propositions, in
+order. Rule 5 is stated over real axes: it is reached only when rule 4 passed,
+so every axis is NaN-free there. -/
+
+namespace Rule
+/-- 1. Two axes share a name (`table_axis_duplicate_name`). -/
+def axisDupName (T : FTable) : Prop := ¬ (T.axes.map (·.name)).Nodup
+/-- 2. Two outputs share a name (`table_outputs_duplicate_name`). -/
+def outputsDupName (T : FTable) : Prop := ∃ os, T.outputs = some os ∧ ¬ os.Nodup
+/-- 3. The interpolation and the axis count disagree (`table_interpolation_axes_mismatch`). -/
+def arity (T : FTable) : Prop := FTable.arityOk T.interpolation T.axes.length = false
+/-- 4. Some axis holds a NaN (`table_axis_nan`). -/
+def axisNaN (T : FTable) : Prop := ∃ a ∈ T.axes, ∃ x ∈ a.values, x.isNaN = true
+/-- 5. Some (NaN-free) axis is not strictly increasing (`table_axis_non_monotonic`). -/
+def axisNonMonotonic (T : FTable) : Prop :=
+  ∃ a ∈ T.axes, ∃ r : List ℝ, a.values = r.map Num.fin ∧ ¬ r.Pairwise (· < ·)
+/-- 6. Some axis has fewer than 2 values (`table_axis_too_short`). -/
+def axisTooShort (T : FTable) : Prop := ∃ a ∈ T.axes, a.values.length < 2
+/-- 7. `outputs` is declared, `data` is an array, and their lengths differ
+(`table_outputs_length_mismatch`). -/
+def outputsLength (T : FTable) : Prop :=
+  ∃ os xs, T.outputs = some os ∧ T.data = .node xs ∧ xs.length ≠ os.length
+/-- 8. The nesting of `data` is not the implied shape (`table_data_shape_mismatch`). -/
+def nesting (T : FTable) : Prop := T.data.hasShape T.expectedShape = false
+/-- 9. Some leaf of `data` is NaN (`table_data_nan`). -/
+def dataNaN (T : FTable) : Prop := T.data.anyNaN = true
+/-- 10. The `shape` assertion is not the implied shape (`table_data_shape_mismatch`). -/
+def shapeAssertion (T : FTable) : Prop := ∃ sh, T.shape = some sh ∧ sh ≠ T.expectedShape
+end Rule
+
+section Bridge
+variable (T : FTable)
+
+private theorem b1 : ((!decide (T.axes.map (·.name)).Nodup) = true) ↔ Rule.axisDupName T := by
+  simp [Rule.axisDupName]
+
+private theorem b2 : T.outputsDup = true ↔ Rule.outputsDupName T := by
+  unfold FTable.outputsDup Rule.outputsDupName
+  cases T.outputs <;> simp
+
+private theorem b3 : ((!FTable.arityOk T.interpolation T.axes.length) = true) ↔ Rule.arity T := by
+  simp [Rule.arity]
+
+private theorem b4 : T.axes.any (fun a => anyNaN a.values) = true ↔ Rule.axisNaN T := by
+  simp only [List.any_eq_true, Rule.axisNaN, anyNaN_true_iff]
+
+private theorem b5 (h4 : ¬ Rule.axisNaN T) :
+    T.axes.any (fun a => !adjAll Scalar.lt a.values) = true ↔ Rule.axisNonMonotonic T := by
+  have hfin : ∀ a ∈ T.axes, ∃ r : List ℝ, a.values = r.map Num.fin := fun a ha =>
+    (anyNaN_false_iff _).mp (by
+      cases e : anyNaN a.values
+      · rfl
+      · exact absurd ⟨a, ha, (anyNaN_true_iff _).mp e⟩ h4)
+  rw [List.any_eq_true]
+  constructor
+  · rintro ⟨a, ha, hx⟩
+    obtain ⟨r, hr⟩ := hfin a ha
+    refine ⟨a, ha, r, hr, fun hp => ?_⟩
+    rw [hr, (adjAll_lt_iff r).mpr hp] at hx; simp at hx
+  · rintro ⟨a, ha, r, hr, hp⟩
+    refine ⟨a, ha, ?_⟩
+    rw [hr]
+    cases e : adjAll Scalar.lt (r.map Num.fin)
+    · rfl
+    · exact absurd ((adjAll_lt_iff r).mp e) hp
+
+private theorem b6 : T.axes.any (fun a => decide (a.values.length < 2)) = true ↔
+    Rule.axisTooShort T := by
+  simp [Rule.axisTooShort]
+
+private theorem b7 : T.outputsMismatch = true ↔ Rule.outputsLength T := by
+  unfold FTable.outputsMismatch Rule.outputsLength
+  cases T.outputs <;> cases T.data <;> simp
+
+private theorem b8 : ((!T.data.hasShape T.expectedShape) = true) ↔ Rule.nesting T := by
+  simp [Rule.nesting]
+
+private theorem b10 : T.shapeAssertionWrong = true ↔ Rule.shapeAssertion T := by
+  unfold FTable.shapeAssertionWrong Rule.shapeAssertion
+  cases T.shape <;> simp
+
+end Bridge
+
+open Classical in
+/-- `validateTable` is the §9.5.5 rule list read in order: the first broken
+rule names the code. -/
+theorem validateTable_ladder (T : FTable) : validateTable T =
+    if Rule.axisDupName T then .error "table_axis_duplicate_name"
+    else if Rule.outputsDupName T then .error "table_outputs_duplicate_name"
+    else if Rule.arity T then .error "table_interpolation_axes_mismatch"
+    else if Rule.axisNaN T then .error "table_axis_nan"
+    else if Rule.axisNonMonotonic T then .error "table_axis_non_monotonic"
+    else if Rule.axisTooShort T then .error "table_axis_too_short"
+    else if Rule.outputsLength T then .error "table_outputs_length_mismatch"
+    else if Rule.nesting T then .error "table_data_shape_mismatch"
+    else if Rule.dataNaN T then .error "table_data_nan"
+    else if Rule.shapeAssertion T then .error "table_data_shape_mismatch"
+    else .ok () := by
+  unfold validateTable
+  by_cases h1 : Rule.axisDupName T
+  · rw [if_pos ((b1 T).mpr h1), if_pos h1] <;> rfl
+  rw [if_neg (mt (b1 T).mp h1), if_neg h1]
+  by_cases h2 : Rule.outputsDupName T
+  · rw [if_pos ((b2 T).mpr h2), if_pos h2] <;> rfl
+  rw [if_neg (mt (b2 T).mp h2), if_neg h2]
+  by_cases h3 : Rule.arity T
+  · rw [if_pos ((b3 T).mpr h3), if_pos h3] <;> rfl
+  rw [if_neg (mt (b3 T).mp h3), if_neg h3]
+  by_cases h4 : Rule.axisNaN T
+  · rw [if_pos ((b4 T).mpr h4), if_pos h4] <;> rfl
+  rw [if_neg (mt (b4 T).mp h4), if_neg h4]
+  by_cases h5 : Rule.axisNonMonotonic T
+  · rw [if_pos ((b5 T h4).mpr h5), if_pos h5] <;> rfl
+  rw [if_neg (mt (b5 T h4).mp h5), if_neg h5]
+  by_cases h6 : Rule.axisTooShort T
+  · rw [if_pos ((b6 T).mpr h6), if_pos h6] <;> rfl
+  rw [if_neg (mt (b6 T).mp h6), if_neg h6]
+  by_cases h7 : Rule.outputsLength T
+  · rw [if_pos ((b7 T).mpr h7), if_pos h7] <;> rfl
+  rw [if_neg (mt (b7 T).mp h7), if_neg h7]
+  by_cases h8 : Rule.nesting T
+  · rw [if_pos ((b8 T).mpr h8), if_pos h8] <;> rfl
+  rw [if_neg (mt (b8 T).mp h8), if_neg h8]
+  by_cases h9 : Rule.dataNaN T
+  · rw [if_pos (show T.data.anyNaN = true from h9), if_pos h9] <;> rfl
+  rw [if_neg (show ¬ T.data.anyNaN = true from h9), if_neg h9]
+  by_cases h10 : Rule.shapeAssertion T
+  · rw [if_pos ((b10 T).mpr h10), if_pos h10] <;> rfl
+  rw [if_neg (mt (b10 T).mp h10), if_neg h10]
+
+/-- Step 1 of the pinned order: `table_axis_duplicate_name` exactly when two
+axes share a name. -/
+theorem validateTable_first_axis_dup_name (T : FTable) :
+    validateTable T = .error "table_axis_duplicate_name" ↔ Rule.axisDupName T := by
+  rw [validateTable_ladder]; split_ifs <;> simp_all
+
+/-- Step 2: `table_outputs_duplicate_name` exactly when two outputs share a
+name and rule 1 holds. -/
+theorem validateTable_first_outputs_dup_name (T : FTable) :
+    validateTable T = .error "table_outputs_duplicate_name" ↔
+      ¬ Rule.axisDupName T ∧ Rule.outputsDupName T := by
+  rw [validateTable_ladder]; split_ifs <;> simp_all
+
+/-- Step 3: `table_interpolation_axes_mismatch` exactly when the interpolation
+and the axis count disagree and rules 1–2 hold. -/
+theorem validateTable_first_arity (T : FTable) :
+    validateTable T = .error "table_interpolation_axes_mismatch" ↔
+      ¬ Rule.axisDupName T ∧ ¬ Rule.outputsDupName T ∧ Rule.arity T := by
+  rw [validateTable_ladder]; split_ifs <;> simp_all
+
+/-- Step 4: `table_axis_nan` exactly when some axis holds a NaN and rules 1–3
+hold. -/
+theorem validateTable_first_axis_nan (T : FTable) :
+    validateTable T = .error "table_axis_nan" ↔
+      ¬ Rule.axisDupName T ∧ ¬ Rule.outputsDupName T ∧ ¬ Rule.arity T ∧ Rule.axisNaN T := by
+  rw [validateTable_ladder]; split_ifs <;> simp_all
+
+/-- Step 5: `table_axis_non_monotonic` exactly when some axis is not strictly
+increasing and rules 1–4 hold. -/
+theorem validateTable_first_axis_non_monotonic (T : FTable) :
+    validateTable T = .error "table_axis_non_monotonic" ↔
+      ¬ Rule.axisDupName T ∧ ¬ Rule.outputsDupName T ∧ ¬ Rule.arity T ∧ ¬ Rule.axisNaN T ∧
+        Rule.axisNonMonotonic T := by
+  rw [validateTable_ladder]; split_ifs <;> simp_all
+
+/-- Step 6 (Q-105): `table_axis_too_short` exactly when some axis has fewer
+than 2 values and rules 1–5 hold. -/
+theorem validateTable_first_axis_too_short (T : FTable) :
+    validateTable T = .error "table_axis_too_short" ↔
+      ¬ Rule.axisDupName T ∧ ¬ Rule.outputsDupName T ∧ ¬ Rule.arity T ∧ ¬ Rule.axisNaN T ∧
+        ¬ Rule.axisNonMonotonic T ∧ Rule.axisTooShort T := by
+  rw [validateTable_ladder]; split_ifs <;> simp_all
+
+/-- Step 7: `table_outputs_length_mismatch` exactly when `data`'s leading
+length differs from `len(outputs)` and rules 1–6 hold. -/
+theorem validateTable_first_outputs_length (T : FTable) :
+    validateTable T = .error "table_outputs_length_mismatch" ↔
+      ¬ Rule.axisDupName T ∧ ¬ Rule.outputsDupName T ∧ ¬ Rule.arity T ∧ ¬ Rule.axisNaN T ∧
+        ¬ Rule.axisNonMonotonic T ∧ ¬ Rule.axisTooShort T ∧ Rule.outputsLength T := by
+  rw [validateTable_ladder]; split_ifs <;> simp_all
+
+/-- Steps 8 and 10: `table_data_shape_mismatch` exactly when the nesting of
+`data` is wrong and rules 1–7 hold, or the `shape` assertion is wrong and rules
+1–9 hold. -/
+theorem validateTable_first_data_shape (T : FTable) :
+    validateTable T = .error "table_data_shape_mismatch" ↔
+      (¬ Rule.axisDupName T ∧ ¬ Rule.outputsDupName T ∧ ¬ Rule.arity T ∧ ¬ Rule.axisNaN T ∧
+        ¬ Rule.axisNonMonotonic T ∧ ¬ Rule.axisTooShort T ∧ ¬ Rule.outputsLength T ∧
+        Rule.nesting T) ∨
+      (¬ Rule.axisDupName T ∧ ¬ Rule.outputsDupName T ∧ ¬ Rule.arity T ∧ ¬ Rule.axisNaN T ∧
+        ¬ Rule.axisNonMonotonic T ∧ ¬ Rule.axisTooShort T ∧ ¬ Rule.outputsLength T ∧
+        ¬ Rule.nesting T ∧ ¬ Rule.dataNaN T ∧ Rule.shapeAssertion T) := by
+  rw [validateTable_ladder]; split_ifs <;> simp_all
+
+/-- Step 9: `table_data_nan` exactly when a leaf of `data` is NaN and rules 1–8
+hold. -/
+theorem validateTable_first_data_nan (T : FTable) :
+    validateTable T = .error "table_data_nan" ↔
+      ¬ Rule.axisDupName T ∧ ¬ Rule.outputsDupName T ∧ ¬ Rule.arity T ∧ ¬ Rule.axisNaN T ∧
+        ¬ Rule.axisNonMonotonic T ∧ ¬ Rule.axisTooShort T ∧ ¬ Rule.outputsLength T ∧
+        ¬ Rule.nesting T ∧ Rule.dataNaN T := by
+  rw [validateTable_ladder]; split_ifs <;> simp_all
 
 /-- Q-11: a `table_lookup` with non-empty `args` is `table_lookup_args_nonempty`. -/
 theorem lookup_args_nonempty (tables : List (String × FTable)) (env : String → Num)

@@ -27,7 +27,9 @@ so the adapter's verdicts are the model's verdicts.
 
 Rulings modelled here (formal/QUESTIONS.md): Q-4 (`interp_nan_in_axis` before
 `interp_non_monotonic_axis`), Q-5 (axes finite, tables MAY hold NaN), Q-7
-(`searchsorted_nan` before `searchsorted_non_monotonic`; `xs` non-decreasing).
+(`searchsorted_nan` before `searchsorted_non_monotonic`; `xs` non-decreasing),
+Q-105 (an `xs` that is not a rank-1 `const` array is `interp_axis_not_const`,
+checked first).
 -/
 
 namespace Esm.Closed
@@ -194,9 +196,6 @@ def interpNaNInAxis : Code := "interp_nan_in_axis"
 def interpTooShort : Code := "interp_axis_too_short"
 def interpTableNotConst : Code := "interp_table_not_const"
 def interpAxisNotConst : Code := "interp_axis_not_const"
-/-- §9.2 names no code for a searchsorted `xs` that is not a rank-1 `const`
-array. The model rejects it under this marker, which is not a spec code. -/
-def searchsortedXsUnspecified : Code := "unspecified:searchsorted_xs_not_const_array"
 end Codes
 
 section Validation
@@ -204,14 +203,15 @@ section Validation
 variable {α : Type} [Scalar α]
 open Scalar
 
-/-- `interp.searchsorted`'s load-time check on `xs` (§9.2, Q-7): NaN first,
-then non-decreasing. Returns the validated array. -/
+/-- `interp.searchsorted`'s load-time check on `xs` (§9.2, Q-7, Q-105): a
+rank-1 `const` array first (`interp_axis_not_const` otherwise), then NaN, then
+non-decreasing. Returns the validated array. -/
 def validateSearchsorted : Arg α → Except Code (List α)
   | .const1 xs =>
     if anyNaN xs then .error Codes.searchsortedNaN
     else if !adjAll le xs then .error Codes.searchsortedNonMonotonic
     else .ok xs
-  | _ => .error Codes.searchsortedXsUnspecified
+  | _ => .error Codes.interpAxisNotConst
 
 /-- `interp.linear`'s load-time check (§9.2). The order of checks where the
 spec gives none (it pins only Q-4's NaN-before-monotonic): not-const (table,
@@ -945,6 +945,57 @@ theorem validateSearchsorted_non_monotonic (r : List ℝ) (h : ¬ r.Pairwise (·
     · rfl
     · exact absurd ((adjAll_le_iff r).mp e) h
   simp [validateSearchsorted, h1, h2, Codes.searchsortedNonMonotonic]
+
+/-- §9.2 + Q-105, the first check: `xs` is rejected with `interp_axis_not_const`
+exactly when it is not a rank-1 `const` array. -/
+theorem validateSearchsorted_not_const_iff (a : Arg Num) :
+    validateSearchsorted a = .error "interp_axis_not_const" ↔ ∀ xs, a ≠ Arg.const1 xs := by
+  constructor
+  · intro h xs ha
+    subst ha
+    simp only [validateSearchsorted] at h
+    split_ifs at h <;> simp [Codes.searchsortedNaN, Codes.searchsortedNonMonotonic] at h
+  · intro h
+    cases a with
+    | const1 xs => exact absurd rfl (h xs)
+    | _ => rfl
+
+/-- §9.2 + Q-7 + Q-105, the second check: `searchsorted_nan` exactly when `xs`
+is a rank-1 `const` array (the first check passes) holding a NaN. -/
+theorem validateSearchsorted_nan_iff (a : Arg Num) :
+    validateSearchsorted a = .error "searchsorted_nan" ↔
+      ∃ xs, a = Arg.const1 xs ∧ ∃ x ∈ xs, x.isNaN = true := by
+  constructor
+  · intro h
+    cases a with
+    | const1 xs =>
+      refine ⟨xs, rfl, ?_⟩
+      simp only [validateSearchsorted] at h
+      split_ifs at h with h1
+      · exact (anyNaN_true_iff xs).mp h1
+      all_goals simp [Codes.searchsortedNonMonotonic] at h
+    | _ => simp [validateSearchsorted, Codes.interpAxisNotConst] at h
+  · rintro ⟨xs, rfl, hx⟩
+    exact validateSearchsorted_nan xs hx
+
+/-- §9.2 + Q-105, the third check: `searchsorted_non_monotonic` exactly when
+`xs` is a NaN-free rank-1 `const` array (the first two checks pass) that is not
+non-decreasing. -/
+theorem validateSearchsorted_non_monotonic_iff (a : Arg Num) :
+    validateSearchsorted a = .error "searchsorted_non_monotonic" ↔
+      ∃ r : List ℝ, a = Arg.const1 (r.map Num.fin) ∧ ¬ r.Pairwise (· ≤ ·) := by
+  constructor
+  · intro h
+    cases a with
+    | const1 xs =>
+      simp only [validateSearchsorted] at h
+      split_ifs at h with h1 h2
+      · simp [Codes.searchsortedNaN] at h
+      · obtain ⟨r, rfl⟩ := (anyNaN_false_iff xs).mp (by simpa using h1)
+        exact ⟨r, rfl, fun hr => by simp [(adjAll_le_iff r).mpr hr] at h2⟩
+    | _ => simp [validateSearchsorted, Codes.interpAxisNotConst] at h
+  · rintro ⟨r, rfl, hr⟩
+    exact validateSearchsorted_non_monotonic r hr
 
 /-- §9.2 argument contract for `interp.linear`: accepted iff both arguments are
 rank-1 `const` arrays, the axis has ≥ 2 entries, the lengths agree, and the

@@ -491,10 +491,34 @@
     {
       "id": "P-interp-searchsorted-xs-not-const",
       "clauses": [
-        "spec.9.2.searchsorted-xs-monotone"
+        "spec.9.2.searchsorted-xs-not-const"
       ],
-      "status": "open",
-      "statement": "§9.2 names no diagnostic code for a searchsorted xs that is not a rank-1 const array (interp_*_not_const cover only linear/bilinear); the model rejects under a non-spec marker. Needs a ruling."
+      "statement": "Q-105: interp.searchsorted's xs is rejected with interp_axis_not_const exactly when it is not a rank-1 const array (the first of its three checks).",
+      "lean_statement": "∀ (a : Esm.Closed.Arg Esm.Closed.Num), Esm.Closed.validateSearchsorted a = Except.error \"interp_axis_not_const\" ↔ ∀ (xs : List Esm.Closed.Num), a ≠ Esm.Closed.Arg.const1 xs",
+      "status": "proven",
+      "theorem": "Esm.Closed.validateSearchsorted_not_const_iff"
+    },
+    {
+      "id": "P-interp-searchsorted-nan-first",
+      "clauses": [
+        "spec.9.2.searchsorted-xs-no-nan",
+        "spec.9.2.searchsorted-xs-not-const"
+      ],
+      "statement": "Q-7 + Q-105: searchsorted_nan exactly when xs is a rank-1 const array (the first check passes) holding a NaN.",
+      "lean_statement": "∀ (a : Esm.Closed.Arg Esm.Closed.Num), Esm.Closed.validateSearchsorted a = Except.error \"searchsorted_nan\" ↔ ∃ (xs : List Esm.Closed.Num), a = Esm.Closed.Arg.const1 xs ∧ ∃ x ∈ xs, x.isNaN = Bool.true",
+      "status": "proven",
+      "theorem": "Esm.Closed.validateSearchsorted_nan_iff"
+    },
+    {
+      "id": "P-interp-searchsorted-non-monotonic-first",
+      "clauses": [
+        "spec.9.2.searchsorted-xs-monotone",
+        "spec.9.2.searchsorted-xs-not-const"
+      ],
+      "statement": "Q-105: searchsorted_non_monotonic exactly when xs is a NaN-free rank-1 const array (the first two checks pass) that is not non-decreasing.",
+      "lean_statement": "∀ (a : Esm.Closed.Arg Esm.Closed.Num), Esm.Closed.validateSearchsorted a = Except.error \"searchsorted_non_monotonic\" ↔ ∃ (r : List ℝ), a = Esm.Closed.Arg.const1 (List.map Esm.Closed.Num.fin r) ∧ ¬List.Pairwise (fun (x1 x2 : ℝ) => x1 ≤ x2) r",
+      "status": "proven",
+      "theorem": "Esm.Closed.validateSearchsorted_non_monotonic_iff"
     }
   ]
 }

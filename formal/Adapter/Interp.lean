@@ -40,6 +40,18 @@ def matOf (j : Json) : Except String (List (List Float)) := do
   let a ← j.getArr?
   a.toList.mapM vecOf
 
+/-- How §9.2's argument contract sees a fixture value: a scalar, a rank-1 or
+rank-2 array, or anything else. (The fixtures pass values, so a non-`const`
+argument — a variable reference — cannot occur here; a wrong-rank one can.) -/
+def argOf (j : Json) : Arg Float :=
+  match floatOf j with
+  | .ok v => .const0 v
+  | .error _ => match vecOf j with
+    | .ok v => .const1 v
+    | .error _ => match matOf j with
+      | .ok m => .const2 m
+      | .error _ => .constN
+
 def floatJson (x : Float) : Json :=
   let v : Json := if x.isNaN then .str "NaN"
     else match JsonNumber.fromFloat? x with
@@ -52,9 +64,8 @@ def runOne (fn : String) (inputs : Array Json) : Except String (Except Code Json
   match fn, inputs.toList with
   | "interp.searchsorted", [x, xs] => do
     let x ← floatOf x
-    let xs ← vecOf xs
     return (do
-      let xs ← validateSearchsorted (Arg.const1 xs)
+      let xs ← validateSearchsorted (argOf xs)
       return Json.mkObj [("value", (searchsorted x xs : Nat))])
   | "interp.linear", [t, ax, x] => do
     let t ← vecOf t
