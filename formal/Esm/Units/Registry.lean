@@ -4,9 +4,13 @@ import Esm.Units.Rat
 # The unit registry table (esm-spec §4.8.1)
 
 The flat table, exactly as written in §4.8.1: a symbol is in it, spelled exactly,
-or it does not resolve. Each entry is built from the scale the spec STATES for it
-(never from an identity the spec claims about it), so the identities in
-`Esm.Units.Identities` are genuine checks of the table, not restatements.
+or it does not resolve. Each entry is built from the scale the spec STATES for it,
+so the identities in `Esm.Units.Identities` are checks of the table rather than
+restatements — with three exceptions, where the spec states the scale AS a
+product: `hp` (`550 × 0.3048 × 0.45359237 × 9.80665`), `psi`
+(`0.45359237 × 9.80665 / 0.0254²`) and `Torr` (`101325/760`). Their identities
+confirm only that those products agree with the `ft`, `lb` and `atm` entries;
+the independent check on `hp` is its binary64 fold (`hp_fold_left_to_right`).
 
 Scales the spec does not state are the SI definitions the symbol names (`km` is
 1000 m, `bar` is 10⁵ Pa, …), except for three choices recorded as questions in

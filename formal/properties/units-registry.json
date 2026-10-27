@@ -183,7 +183,7 @@
       "clauses": [
         "spec.4.8.1.customary-scales-pinned"
       ],
-      "statement": "Torr is exactly atm / 760 = 20265/152 Pa.",
+      "statement": "The table's Torr (stated by the spec as 101325/760 Pa, and built from it) equals atm / 760 given atm = 101325 Pa, and equals 20265/152 Pa. This confirms only consistency with the atm entry. (Reworded after the hollow-proof review of 2026-10-26.)",
       "lean_statement": "(Esm.Units.sym \"Torr\").Agree ((Esm.Units.sym \"atm\").div (Esm.Units.num 760)) ∧ (Esm.Units.sym \"Torr\").Agree (Esm.Units.mk Esm.Units.Dims.pressure (20265 / 152))",
       "status": "proven",
       "theorem": "Esm.Units.torr_eq_atm_div_760",
@@ -217,7 +217,7 @@
       "clauses": [
         "spec.4.8.1.customary-scales-pinned"
       ],
-      "statement": "psi is lbf/in²: lb × 9.80665 m s⁻² over (0.0254 m)², exactly.",
+      "statement": "The table's psi equals the spec's stated product lb × 9.80665 m s⁻² / (0.0254 m)² exactly, given lb = 0.45359237 kg. The psi entry is itself built from that product, so this confirms only consistency with the lb entry. (Reworded after the hollow-proof review of 2026-10-26.)",
       "lean_statement": "(Esm.Units.sym \"psi\").Agree ((((Esm.Units.num 9.80665).mul (Esm.Units.sym \"lb\")).mul ((Esm.Units.sym \"m\").mul ((Esm.Units.sym \"s\").rpow (-2)))).div (((Esm.Units.num 0.0254).mul (Esm.Units.sym \"m\")).rpow 2))",
       "status": "proven",
       "theorem": "Esm.Units.psi_eq_lbf_per_in2",
@@ -228,7 +228,7 @@
       "clauses": [
         "spec.4.8.1.customary-scales-pinned"
       ],
-      "statement": "hp is 550 ft·lbf/s = 550 × ft × lb × 9.80665 W, exactly.",
+      "statement": "The table's hp equals the spec's stated product 550 × ft × lb × 9.80665 W exactly, given ft = 0.3048 m and lb = 0.45359237 kg. The hp entry is itself built from that product, so this confirms only consistency with the ft and lb entries; the independent check is P-units-hp-binary64-fold. (Reworded after the hollow-proof review of 2026-10-26.)",
       "lean_statement": "(Esm.Units.sym \"hp\").Agree (((((Esm.Units.num 550).mul (Esm.Units.sym \"ft\")).mul (Esm.Units.sym \"lb\")).mul (Esm.Units.num 9.80665)).mul ((Esm.Units.sym \"m\").mul ((Esm.Units.sym \"s\").rpow (-3))))",
       "status": "proven",
       "theorem": "Esm.Units.hp_eq_550_ft_lbf_per_s",
@@ -336,32 +336,35 @@
     {
       "id": "P-units-grammar-left-fold",
       "clauses": [
-        "spec.4.8.2.percent-symbol-token"
+        "spec.4.8.4.unresolvable-unit-hard-error"
       ],
       "statement": "`*`, `/` and juxtaposition are one precedence level folded left to right: any chain of symbols joined by them parses as the left fold (J/mol*K is (J/mol)*K).",
       "lean_statement": "∀ (a : String) (ops : List (Esm.Units.Op × String)), Esm.Units.parse (.sym a :: Esm.Units.opToks ops) = .ok (Esm.Units.foldOps (.sym a) ops)",
       "status": "proven",
-      "theorem": "Esm.Units.parse_fold"
+      "theorem": "Esm.Units.parse_fold",
+      "note": "grammar rule with no MUST in §4.8.2; see inventory gap"
     },
     {
       "id": "P-units-grammar-pow-binds",
       "clauses": [
-        "spec.4.8.2.percent-symbol-token"
+        "spec.4.8.4.unresolvable-unit-hard-error"
       ],
       "statement": "`^` and `**` bind tighter than `/`: a/b^q parses as a/(b^q), for signed or unsigned numeric exponents.",
       "lean_statement": "∀ (a b lit : String) (q : ℚ) (i : Bool) (pw : Esm.Units.Tok), (pw = .caret ∨ pw = .dstar) → Esm.Units.parse [.sym a, .slash, .sym b, pw, .num lit q i] = .ok (.div (.sym a) (.pow (.sym b) q)) ∧ Esm.Units.parse [.sym a, .slash, .sym b, pw, .minus, .num lit q i] = .ok (.div (.sym a) (.pow (.sym b) (-q)))",
       "status": "proven",
-      "theorem": "Esm.Units.parse_pow_binds"
+      "theorem": "Esm.Units.parse_pow_binds",
+      "note": "grammar rule with no MUST in §4.8.2; see inventory gap"
     },
     {
       "id": "P-units-grammar-rational-exponent",
       "clauses": [
-        "spec.4.8.2.percent-symbol-token"
+        "spec.4.8.4.unresolvable-unit-hard-error"
       ],
       "statement": "A parenthesised rational exponent ^(p/q) or ^(-p/q) is the exact rational ±p/q.",
       "lean_statement": "∀ (p q : ℕ) (neg : Bool) (lp lq : String) (ts : List Esm.Units.Tok), q ≠ 0 → Esm.Units.pExp (.lp :: (if neg then [Esm.Units.Tok.minus] else []) ++ .num lp (p : ℚ) true :: .slash :: .num lq (q : ℚ) true :: .rp :: ts) = .ok ((if neg then -(p : ℚ) else p) / q, ts)",
       "status": "proven",
-      "theorem": "Esm.Units.pExp_rational"
+      "theorem": "Esm.Units.pExp_rational",
+      "note": "grammar rule with no MUST in §4.8.2; see inventory gap"
     },
     {
       "id": "P-units-grammar-scaling-factor-head",
@@ -380,7 +383,7 @@
         "spec.4.8.2.scaling-factor-diagnostic-text",
         "spec.4.8.4.unresolvable-unit-hard-error"
       ],
-      "statement": "A numeric atom other than 1 after a chain of terms and `*` or `/` is a scaling-factor error ((m/s)^-1/3 reads as ((m/s)^-1)/3).",
+      "statement": "A numeric atom other than 1 after a chain of BARE SYMBOLS joined by `*`, `/` or juxtaposition, and a `*` or `/`, is a scaling-factor error. (Chains containing powers or parentheses are not covered here; `(m/s)^-1/3` is the fixed example P-units-scaling-factor-m-per-s.) Narrowed after the hollow-proof review of 2026-10-26.",
       "lean_statement": "∀ (a : String) (ops : List (Esm.Units.Op × String)) (op : Esm.Units.Tok) (lit : String) (v : ℚ) (i : Bool) (rest : List Esm.Units.Tok), (op = .star ∨ op = .slash) → v ≠ 1 → Esm.Units.parse (.sym a :: Esm.Units.opToks ops ++ op :: .num lit v i :: rest) = .error (.scalingFactor lit)",
       "status": "proven",
       "theorem": "Esm.Units.parse_scaling_factor_after"
@@ -390,7 +393,7 @@
       "clauses": [
         "spec.4.8.4.unresolvable-unit-hard-error"
       ],
-      "statement": "`-` is not an operator: a `-` after any chain of terms is a parse error.",
+      "statement": "`-` is not an operator: a `-` after a chain of BARE SYMBOLS joined by `*`, `/` or juxtaposition is a parse error. Narrowed after the hollow-proof review of 2026-10-26; `g/hp-hr` is the fixed example P-units-g-per-hp-hr-rejected.",
       "lean_statement": "∀ (a : String) (ops : List (Esm.Units.Op × String)) (rest : List Esm.Units.Tok), ∃ err, Esm.Units.parse (.sym a :: Esm.Units.opToks ops ++ .minus :: rest) = .error err",
       "status": "proven",
       "theorem": "Esm.Units.parse_minus_rejected"
@@ -400,7 +403,7 @@
       "clauses": [
         "spec.4.8.4.unresolvable-unit-hard-error"
       ],
-      "statement": "At the string level, a-b never resolves for symbol runs a and b (g/hp-hr does not resolve).",
+      "statement": "At the string level, `a-b` never resolves for two symbol runs a and b (e.g. `hp-hr`). Narrowed after the hollow-proof review of 2026-10-26; `g/hp-hr` is P-units-g-per-hp-hr-rejected.",
       "lean_statement": "∀ a b : List Char, Esm.Units.IdentRun a → Esm.Units.IdentRun b → ¬ ∃ u, Esm.Units.resolveChars (a ++ '-' :: b) = .ok u",
       "status": "proven",
       "theorem": "Esm.Units.resolve_minus_rejected"
@@ -408,12 +411,57 @@
     {
       "id": "P-units-grammar-whitespace-multiplies",
       "clauses": [
-        "spec.4.8.2.percent-symbol-token"
+        "spec.4.8.4.unresolvable-unit-hard-error"
       ],
       "statement": "Whitespace between terms is multiplication: `a b` resolves exactly as `a*b` for any two symbol runs.",
       "lean_statement": "∀ a b : List Char, Esm.Units.IdentRun a → Esm.Units.IdentRun b → Esm.Units.resolveChars (a ++ ' ' :: b) = Esm.Units.resolveChars (a ++ '*' :: b)",
       "status": "proven",
-      "theorem": "Esm.Units.resolve_space_eq_star"
+      "theorem": "Esm.Units.resolve_space_eq_star",
+      "note": "grammar rule with no MUST in §4.8.2; see inventory gap"
+    },
+    {
+      "id": "P-units-percent-symbol-token",
+      "clauses": [
+        "spec.4.8.2.percent-symbol-token"
+      ],
+      "statement": "`%` is a symbol token: resolve \"%\" succeeds with a unit agreeing with dimensionless scale 0.01, and resolve \"%/h\" succeeds with a unit agreeing with h⁻¹ at scale 1/360000.",
+      "lean_statement": "(∃ u, Esm.Units.resolve \"%\" = .ok u ∧ u.Agree (Esm.Units.num 0.01)) ∧ (∃ u, Esm.Units.resolve \"%/h\" = .ok u ∧ u.Agree (Esm.Units.mk (Esm.Units.Dims.dimless - Esm.Units.Dims.time) (1 / 360000)))",
+      "status": "proven",
+      "theorem": "Esm.Units.percent_resolves",
+      "closed_ok": "the clause names these specific strings; a fixed fact checked end to end through resolve"
+    },
+    {
+      "id": "P-units-scaling-factor-m-per-s",
+      "clauses": [
+        "spec.4.8.2.scaling-factor-diagnostic-text",
+        "spec.4.8.4.unresolvable-unit-hard-error"
+      ],
+      "statement": "resolve \"(m/s)^-1/3\" fails with the scaling-factor error for the literal 3 (it reads as ((m/s)^-1)/3).",
+      "lean_statement": "Esm.Units.resolve \"(m/s)^-1/3\" = .error (.scalingFactor \"3\")",
+      "status": "proven",
+      "theorem": "Esm.Units.m_per_s_pow_scaling_factor",
+      "closed_ok": "the clause names these specific strings; a fixed fact checked end to end through resolve"
+    },
+    {
+      "id": "P-units-g-per-hp-hr-rejected",
+      "clauses": [
+        "spec.4.8.4.unresolvable-unit-hard-error"
+      ],
+      "statement": "resolve \"g/hp-hr\" fails: `-` is not an operator.",
+      "lean_statement": "Esm.Units.resolve \"g/hp-hr\" = .error (.syntax \"'-' is not an operator in a unit string (a negative exponent is ^-n)\")",
+      "status": "proven",
+      "theorem": "Esm.Units.g_per_hp_hr_rejected",
+      "closed_ok": "the spec names this string (MOVES's spelling)"
+    },
+    {
+      "id": "P-units-scaling-factor-message",
+      "clauses": [
+        "spec.4.8.2.scaling-factor-diagnostic-text"
+      ],
+      "statement": "For every literal, the scaling-factor diagnostic contains `scaling factor` and `^(p/q)`.",
+      "lean_statement": "∀ lit : String, \"scaling factor\".toList <:+: (Esm.Units.Err.scalingFactor lit).message.toList ∧ \"^(p/q)\".toList <:+: (Esm.Units.Err.scalingFactor lit).message.toList",
+      "status": "proven",
+      "theorem": "Esm.Units.scaling_factor_message"
     },
     {
       "id": "P-units-grammar-run-lexing",

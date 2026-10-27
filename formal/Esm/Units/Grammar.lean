@@ -38,11 +38,16 @@ inductive Err
   | fuel
   deriving DecidableEq, Repr
 
+/-- The two phrases §4.8.2 requires in the scaling-factor diagnostic. -/
+def scalingFactorText : String := "scaling factor"
+def rationalExponentText : String := "^(p/q)"
+
 def Err.message : Err → String
   | .unknownSymbol s => s!"unknown unit symbol '{s}': not a key of the §4.8.1 registry"
   | .scalingFactor n =>
-    s!"the number {n} is a scaling factor, not a unit: the only numeric atom a unit string " ++
-    "admits is 1, and a rational exponent is spelled ^(p/q)"
+    "the number " ++ n ++ " is a " ++ scalingFactorText ++
+    ", not a unit: the only numeric atom a unit string admits is 1, and a rational exponent " ++
+    "is spelled " ++ rationalExponentText
   | .badChar c => s!"unexpected character '{c}' in a unit string"
   | .syntax m => m
   | .fuel => "internal: parser fuel exhausted"

@@ -12,6 +12,7 @@ import Esm.Units.Identities
 import Esm.Units.GrammarLaws
 import Esm.Units.Exec
 import Esm.Units.Examples
+import Esm.Units.Strings
 import Mathlib.Basic.Real.Basic
 
 /-! Shared definitions for the ESM spec model. -/
