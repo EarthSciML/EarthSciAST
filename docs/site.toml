@@ -1,0 +1,4 @@
+id = "ast"
+title = "EarthSciAST"
+description = "The EarthSciML Abstract Syntax Tree format: schema, operators, coupling, and five language bindings."
+repo = "EarthSciML/EarthSciAST"

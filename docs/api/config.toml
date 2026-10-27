@@ -1,0 +1,43 @@
+# API reference configuration, read by the shared tooling in
+# EarthSciML/earthsci.dev (tools/api_docs; schema in its README.md).
+
+manifest = "api-surface.json"
+examples = "docs/api/examples"
+groups = "docs/api/groups.toml"
+guides = "docs/api/guides"
+
+[reference]
+title = "EarthSciAST"
+summary = "read, check, transform and (in three of them) simulate the same `.esm` documents."
+spec = "API_SPEC.md"
+spec_tiers = "3-surface-tiers"
+spec_extension = "7-extension-seams"
+
+[bindings.julia]
+path = "pkg/EarthSciAST.jl"
+package = "EarthSciAST"                  # module name
+env = "docs/api/examples/julia"          # Julia environment holding the package and JSON3
+load = ["SciMLBase"]                     # extension triggers loaded before extraction
+
+[bindings.typescript]
+path = "pkg/earthsci-ast-ts"
+package = "@earthsciml/ast"              # npm name
+entry = "src/index.ts"
+dist = "dist/esm/index.js"
+
+[bindings.python]
+path = "pkg/earthsci-ast-py"
+package = "earthsci_ast"                 # import name
+extras = ["simulate"]
+
+[bindings.rust]
+path = "pkg/earthsci-ast-rs"
+crate = "earthsci-ast"
+features = ["parallel", "custom_alloc"]
+docs_rs_features = ["cli", "solve"]
+nightly = "nightly-2026-10-01"
+
+[bindings.go]
+path = "pkg/earthsci-ast-go/pkg/esm"     # package directory
+package = "github.com/EarthSciML/EarthSciAST/pkg/earthsci-ast-go/pkg/esm"
+module_file = "pkg/earthsci-ast-go/go.mod"   # for setup-go (go-version-file, cache)
