@@ -246,6 +246,12 @@ func lowerTableLookupNode(node ExprNode, tables map[string]FunctionTable) (Expre
 			"`table_lookup` references table %q, which the document's `function_tables` "+
 				"block does not declare", id)
 	}
+	// The table itself first (esm-spec §9.5.5, in its pinned order): a lookup
+	// into a malformed table is reported for the table, whatever else is wrong
+	// with the lookup.
+	if err := validateFunctionTable(id, table); err != nil {
+		return nil, err
+	}
 	// esm-spec §9.5.3a. `clamp` (the default) is exactly what interp.linear /
 	// interp.bilinear do at the ends, so for it the lowering IS the semantics;
 	// `error` has no lowered form at all, and answering it with the clamping
@@ -265,45 +271,227 @@ func lowerTableLookupNode(node ExprNode, tables map[string]FunctionTable) (Expre
 	if err != nil {
 		return nil, err
 	}
-	data, err := tableOutputSlice(table, outputIdx, id)
-	if err != nil {
-		return nil, err
-	}
+	data := tableOutputSlice(table, outputIdx)
 
-	kind := "linear"
-	if table.Interpolation != nil {
-		kind = *table.Interpolation
-	}
-	switch {
-	case kind == "linear" && len(table.Axes) == 1:
-		axis, err := tableAxisConst(table.Axes[0], id)
-		if err != nil {
-			return nil, err
-		}
-		return closedFnNode("interp.linear", constNode(data), axis, inputs[0]), nil
-	case kind == "bilinear" && len(table.Axes) == 2:
-		axisX, err := tableAxisConst(table.Axes[0], id)
-		if err != nil {
-			return nil, err
-		}
-		axisY, err := tableAxisConst(table.Axes[1], id)
-		if err != nil {
-			return nil, err
-		}
-		return closedFnNode("interp.bilinear",
-			constNode(data), axisX, axisY, inputs[0], inputs[1]), nil
-	case kind == "nearest" && len(table.Axes) == 1:
-		axis, err := tableAxisConst(table.Axes[0], id)
-		if err != nil {
-			return nil, err
-		}
-		return nearestLookupNode(data, axis, inputs[0], len(table.Axes[0].Values)), nil
+	kind := tableInterpolation(table)
+	// validateFunctionTable has already matched the kind to the axis count, so
+	// exactly one arm applies.
+	switch kind {
+	case "bilinear":
+		return closedFnNode("interp.bilinear", constNode(data),
+			tableAxisConst(table.Axes[0]), tableAxisConst(table.Axes[1]),
+			inputs[0], inputs[1]), nil
+	case "nearest":
+		return nearestLookupNode(data, tableAxisConst(table.Axes[0]), inputs[0],
+			len(table.Axes[0].Values)), nil
 	default:
-		return nil, newTableLookupError(CodeTableInterpolationAxesMismatch,
+		return closedFnNode("interp.linear", constNode(data),
+			tableAxisConst(table.Axes[0]), inputs[0]), nil
+	}
+}
+
+// tableInterpolation is the table's `interpolation`, defaulting to "linear".
+func tableInterpolation(table FunctionTable) string {
+	if table.Interpolation != nil {
+		return *table.Interpolation
+	}
+	return "linear"
+}
+
+// validateFunctionTable runs the esm-spec §9.5.5 checks on one table and
+// returns the FIRST rule it breaks, in the spec's pinned order (the order of
+// Esm.Closed.Tables.validateTable in formal/). Each step covers every axis
+// before the next begins:
+//
+//  1. table_axis_duplicate_name
+//  2. table_outputs_duplicate_name
+//  3. table_interpolation_axes_mismatch
+//  4. table_axis_nan (any axis)
+//  5. table_axis_non_monotonic (any axis)
+//  6. table_axis_too_short (any axis)
+//  7. table_outputs_length_mismatch (outputs declared, data an array)
+//  8. table_data_shape_mismatch (the nesting of data)
+//  9. table_data_nan
+//  10. table_data_shape_mismatch (the `shape` assertion)
+//
+// It is the ONE place this binding checks a table; the lowering calls it as
+// soon as a lookup's table id resolves. Two readings of this binding's own:
+// a non-finite axis value or data leaf is refused under the NaN code (§9.5.1
+// requires finite values; an infinity has no code of its own and JSON cannot
+// spell one), and a data leaf that is not a number is a nesting mismatch
+// (step 8), since it is not the scalar the implied shape puts there.
+func validateFunctionTable(id string, table FunctionTable) error {
+	// 1.
+	seenAxis := make(map[string]bool, len(table.Axes))
+	for _, axis := range table.Axes {
+		if seenAxis[axis.Name] {
+			return newTableLookupError(CodeTableAxisDuplicateName,
+				"table %q declares the axis name %q more than once (esm-spec §9.5.1)",
+				id, axis.Name)
+		}
+		seenAxis[axis.Name] = true
+	}
+	// 2.
+	seenOutput := make(map[string]bool, len(table.Outputs))
+	for _, name := range table.Outputs {
+		if seenOutput[name] {
+			return newTableLookupError(CodeTableOutputsDuplicateName,
+				"table %q declares the output name %q more than once (esm-spec §9.5.1)",
+				id, name)
+		}
+		seenOutput[name] = true
+	}
+	// 3.
+	kind := tableInterpolation(table)
+	want := map[string]int{"linear": 1, "nearest": 1, "bilinear": 2}
+	if n, ok := want[kind]; !ok || n != len(table.Axes) {
+		return newTableLookupError(CodeTableInterpolationAxesMismatch,
 			"table %q declares `interpolation: %q` over %d axes; `linear` and `nearest` "+
 				"require 1, `bilinear` requires 2 (esm-spec §9.5.1)",
 			id, kind, len(table.Axes))
 	}
+	// 4.
+	for _, axis := range table.Axes {
+		for i, v := range axis.Values {
+			if math.IsNaN(v) || math.IsInf(v, 0) {
+				return newTableLookupError(CodeTableAxisNaN,
+					"table %q: axis %q value %d is %v; axis `values` must be "+
+						"strictly-increasing FINITE floats (esm-spec §9.5.1)",
+					id, axis.Name, i+1, v)
+			}
+		}
+	}
+	// 5.
+	for _, axis := range table.Axes {
+		for i := 1; i < len(axis.Values); i++ {
+			if !(axis.Values[i-1] < axis.Values[i]) {
+				return newTableLookupError(CodeTableAxisNonMonotonic,
+					"table %q: axis %q is not strictly increasing (value %d = %v, "+
+						"value %d = %v) (esm-spec §9.5.1)",
+					id, axis.Name, i, axis.Values[i-1], i+1, axis.Values[i])
+			}
+		}
+	}
+	// 6.
+	for _, axis := range table.Axes {
+		if len(axis.Values) < 2 {
+			return newTableLookupError(CodeTableAxisTooShort,
+				"table %q: axis %q has %d values; an axis needs at least 2 (esm-spec §9.5.1)",
+				id, axis.Name, len(axis.Values))
+		}
+	}
+	// 7.
+	if len(table.Outputs) > 0 {
+		if rows, ok := asTableArray(table.Data); ok && len(rows) != len(table.Outputs) {
+			return newTableLookupError(CodeTableOutputsLengthMismatch,
+				"table %q: `data` has %d rows but the table declares %d outputs; its "+
+					"leading dimension must equal `len(outputs)` (esm-spec §9.5.1)",
+				id, len(rows), len(table.Outputs))
+		}
+	}
+	// 8.
+	shape := tableImpliedShape(table)
+	if !tableDataHasShape(table.Data, shape) {
+		return newTableLookupError(CodeTableDataShapeMismatch,
+			"table %q: the nesting of `data` is not the shape %v that its axes (and "+
+				"outputs, when declared) imply (esm-spec §9.5.1)", id, shape)
+	}
+	// 9.
+	if tableDataNonFinite(table.Data) {
+		return newTableLookupError(CodeTableDataNaN,
+			"table %q: a leaf of `data` is NaN; table data must be finite (esm-spec §9.5.1)", id)
+	}
+	// 10.
+	if table.Shape != nil && !equalInts(table.Shape, shape) {
+		return newTableLookupError(CodeTableDataShapeMismatch,
+			"table %q: the `shape` assertion %v differs from the shape %v that the "+
+				"table implies (esm-spec §9.5.1)", id, table.Shape, shape)
+	}
+	return nil
+}
+
+// tableImpliedShape is `[len(outputs)] ++ [len(axis.values) for each axis]`,
+// without the leading entry when `outputs` is absent (esm-spec §9.5.1).
+func tableImpliedShape(table FunctionTable) []int {
+	shape := make([]int, 0, len(table.Axes)+1)
+	if len(table.Outputs) > 0 {
+		shape = append(shape, len(table.Outputs))
+	}
+	for _, axis := range table.Axes {
+		shape = append(shape, len(axis.Values))
+	}
+	return shape
+}
+
+// asTableArray views a `data` (sub)literal as an array of its elements: the
+// []any a decoded document holds, or a []float64 built in memory.
+func asTableArray(v any) ([]any, bool) {
+	switch a := v.(type) {
+	case []any:
+		return a, true
+	case []float64:
+		out := make([]any, len(a))
+		for i, f := range a {
+			out[i] = f
+		}
+		return out, true
+	}
+	return nil, false
+}
+
+// tableLeaf reads a `data` leaf as a number; ok is false for anything that is
+// not one (an array, a string, nil, ...).
+func tableLeaf(v any) (float64, bool) {
+	if n, ok := v.(json.Number); ok {
+		f, err := n.Float64()
+		return f, err == nil
+	}
+	return toFloat64Strict(v)
+}
+
+// tableDataHasShape reports whether the nesting of v is EXACTLY shape: a
+// number at shape [], and an array of shape[0] elements each of shape[1:].
+func tableDataHasShape(v any, shape []int) bool {
+	if len(shape) == 0 {
+		_, ok := tableLeaf(v)
+		return ok
+	}
+	elems, ok := asTableArray(v)
+	if !ok || len(elems) != shape[0] {
+		return false
+	}
+	for _, e := range elems {
+		if !tableDataHasShape(e, shape[1:]) {
+			return false
+		}
+	}
+	return true
+}
+
+// tableDataNonFinite reports whether some numeric leaf of v is NaN or infinite.
+func tableDataNonFinite(v any) bool {
+	if elems, ok := asTableArray(v); ok {
+		for _, e := range elems {
+			if tableDataNonFinite(e) {
+				return true
+			}
+		}
+		return false
+	}
+	f, ok := tableLeaf(v)
+	return ok && (math.IsNaN(f) || math.IsInf(f, 0))
+}
+
+func equalInts(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // nearestLookupNode builds the esm-spec §9.5.3 `nearest` composition: D at the
@@ -442,35 +630,26 @@ func outputSelectorInt(v any) (int, bool) {
 // tableOutputSlice returns the `data` sub-array the lowered `const` carries: row
 // `output` of the leading dimension for a multi-output table, and the whole
 // literal for a single-output one (which has no leading output dimension,
-// §9.5.1).
-func tableOutputSlice(table FunctionTable, output int, id string) (any, error) {
+// §9.5.1). The table has passed validateFunctionTable and output has been
+// resolved against `outputs`, so the row exists.
+func tableOutputSlice(table FunctionTable, output int) any {
 	if len(table.Outputs) == 0 {
-		return table.Data, nil
+		return table.Data
 	}
-	rows, ok := table.Data.([]any)
-	if !ok || output >= len(rows) {
-		return nil, newTableLookupError(CodeTableDataShapeMismatch,
-			"table %q: `data` has no row %d for the selected output — its leading "+
-				"dimension must equal `len(outputs)` (esm-spec §9.5.1)", id, output)
-	}
-	return rows[output], nil
+	rows, _ := asTableArray(table.Data)
+	return rows[output]
 }
 
 // tableAxisConst builds the `{"op": "const", "value": <axis values>}` node for
 // one declared axis. The values are copied into an []any of float64 — the shape
 // a decoded inline-`const` array literal has — so the lowered tree is
 // indistinguishable from the hand-written one the author could have typed.
-func tableAxisConst(axis FunctionTableAxis, id string) (ExprNode, error) {
+func tableAxisConst(axis FunctionTableAxis) ExprNode {
 	values := make([]any, len(axis.Values))
 	for i, v := range axis.Values {
-		if math.IsNaN(v) || math.IsInf(v, 0) {
-			return ExprNode{}, newTableLookupError(CodeTableAxisNaN,
-				"table %q: axis %q carries a non-finite value; axis `values` must be "+
-					"strictly-increasing FINITE floats (esm-spec §9.5.1)", id, axis.Name)
-		}
 		values[i] = v
 	}
-	return constNode(values), nil
+	return constNode(values)
 }
 
 // constNode builds a `const`-op node carrying an inline literal payload.

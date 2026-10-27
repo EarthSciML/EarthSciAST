@@ -2,6 +2,7 @@ package esm
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -259,4 +260,56 @@ func closedFunctionsFixturesDir(t *testing.T) string {
 	// pkg/esm/closed_functions_test.go -> repo root is 4 levels up.
 	repoRoot := filepath.Join(pkgDir, "..", "..", "..", "..")
 	return filepath.Join(repoRoot, "tests", "closed_functions")
+}
+
+// An `interp.searchsorted` whose `xs` is not a rank-1 `const`-op array is
+// `interp_axis_not_const` (esm-spec §9.2), through the normal load → evaluate
+// path: a variable reference, a non-`const` expression, a `const` scalar and a
+// nested `const` (the last holding a NaN, which the rank check must beat).
+func TestSearchsortedNonConstXsIsInterpAxisNotConst(t *testing.T) {
+	const src = `{
+  "esm": "1.0.0",
+  "metadata": {"name": "ss", "authors": ["test"]},
+  "models": {
+    "M": {
+      "variables": {
+        "y": {"type": "unknown", "default": 0.0},
+        "p": {"type": "parameter", "default": 2.5}
+      },
+      "equations": [
+        {"lhs": "y", "rhs": {"op": "fn", "name": "interp.searchsorted", "args": ["p", "p"]}},
+        {"lhs": "y", "rhs": {"op": "fn", "name": "interp.searchsorted",
+          "args": ["p", {"op": "+", "args": ["p", 1]}]}},
+        {"lhs": "y", "rhs": {"op": "fn", "name": "interp.searchsorted",
+          "args": ["p", {"op": "const", "args": [], "value": 3.0}]}},
+        {"lhs": "y", "rhs": {"op": "fn", "name": "interp.searchsorted",
+          "args": ["p", {"op": "const", "args": [], "value": [[1.0, 2.0], [3.0, 4.0]]}]}}
+      ]
+    }
+  }
+}`
+	file, err := LoadString(src)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	eqs := file.Models["M"].Equations
+	if len(eqs) != 4 {
+		t.Fatalf("want 4 equations, got %d", len(eqs))
+	}
+	for i, eq := range eqs {
+		_, err := file.Evaluate(eq.RHS, map[string]float64{"p": 2.5})
+		var de DiagnosticError
+		if !errors.As(err, &de) || de.DiagnosticCode() != CodeInterpAxisNotConst {
+			t.Errorf("equation %d: got %v, want code %q", i, err, CodeInterpAxisNotConst)
+		}
+	}
+	// The rank check comes before the NaN check.
+	name := "interp.searchsorted"
+	nested := ExprNode{Op: OpFn, Name: &name, Args: []any{2.0,
+		ExprNode{Op: OpConst, Args: []any{}, Value: []any{[]any{1.0, math.NaN()}, []any{3.0, 4.0}}}}}
+	_, err = Evaluate(nested, nil)
+	var de DiagnosticError
+	if !errors.As(err, &de) || de.DiagnosticCode() != CodeInterpAxisNotConst {
+		t.Errorf("nested xs with a NaN: got %v, want code %q", err, CodeInterpAxisNotConst)
+	}
 }

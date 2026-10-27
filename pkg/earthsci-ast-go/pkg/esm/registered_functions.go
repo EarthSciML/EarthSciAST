@@ -50,6 +50,8 @@ const (
 //   - closed_function_overflow    — integer-typed result would overflow Int32.
 //   - searchsorted_non_monotonic  — xs is not non-decreasing.
 //   - searchsorted_nan            — xs contains a NaN entry (checked before monotonicity).
+//   - interp_axis_not_const       — searchsorted's xs is not a rank-1 `const` array
+//     (checked before searchsorted_nan).
 //   - interp_non_monotonic_axis   — interp.linear/bilinear axis is not strictly increasing.
 //   - interp_axis_length_mismatch — table shape disagrees with axis length(s).
 //   - interp_nan_in_axis          — interp.linear/bilinear axis contains NaN.
@@ -182,7 +184,7 @@ func EvaluateClosedFunction(name string, args []any) (any, error) {
 			return nil, newClosedFunctionError(CodeClosedFunctionArity,
 				fmt.Sprintf("%s: first argument (x) must be numeric, got %T", name, args[0]))
 		}
-		xs, err := toFloat64Array(name, "xs", args[1])
+		xs, err := searchsortedXs(name, args[1])
 		if err != nil {
 			return nil, err
 		}
@@ -375,6 +377,35 @@ func interpSearchsorted(name string, x float64, xs []float64) (int32, error) {
 		}
 	}
 	return checkInt32(name, int64(n+1))
+}
+
+// searchsortedXs extracts the `xs` of interp.searchsorted, refusing one that
+// is not a rank-1 array — a scalar, or an array with an array entry — with
+// `interp_axis_not_const` (esm-spec §9.2). The rank is decided over the WHOLE
+// value before any entry is read as a number, so a nested xs holding a NaN is
+// still `interp_axis_not_const`, never `searchsorted_nan`. (The AST-level half
+// of the same rule — an `xs` that is not a `const` node at all — is in
+// evaluateFnNode, since by the time a value reaches here a variable reference
+// has already been reduced to a scalar.)
+func searchsortedXs(name string, v any) ([]float64, error) {
+	notConst := func(what string) error {
+		return newClosedFunctionError(CodeInterpAxisNotConst,
+			fmt.Sprintf("%s: xs must be a rank-1 `const`-op array, got %s (esm-spec §9.2)",
+				name, what))
+	}
+	switch xs := v.(type) {
+	case []float64:
+	case []any:
+		for i, e := range xs {
+			switch e.(type) {
+			case []any, []float64:
+				return nil, notConst(fmt.Sprintf("a nested array (xs[%d] is an array)", i+1))
+			}
+		}
+	default:
+		return nil, notConst(fmt.Sprintf("a scalar (%T)", v))
+	}
+	return toFloat64Array(name, "xs", v)
 }
 
 // toFloat64Array extracts a 1-D []float64 from an evaluated `const`-op array
