@@ -1758,7 +1758,7 @@ A binding MUST NOT introduce a ninth axis, and MUST NOT map a registry symbol on
 | Electromagnetic | `C` `V` `Ohm` `F` `T` |
 | Temperature / angle | `degC` `degF` `deg` |
 | Solid angle | `sr` (steradian — `rad²`) |
-| Mixing ratios (dimensionless) | `ppm` `ppb` `ppt` `ppmv` `ppbv` `pptv` |
+| Mixing ratios (dimensionless) | `ppm` `ppb` `ppt` `ppmv` `ppbv` `pptv` (`ppt` is parts per **trillion**; scales below) |
 | Fractions (dimensionless) | `%` (scale 0.01) · `psu` (scale 1 — practical salinity is a pure number by definition) |
 | Counts (dimensionless) | `molec` `molecule` `individuals` `vehicles` `units` `count` |
 | Column amount | `Dobson` `DU` |
@@ -1767,7 +1767,7 @@ A binding MUST NOT introduce a ninth axis, and MUST NOT map a registry symbol on
 
 **The US customary entries are in the table because US emission inventories are written in them.** The EPA FF10 point-source format — the input every US air-quality model reads — stores stack height and stack diameter in **feet**, stack velocity in **feet per second**, and the annual emission total in **short tons per year**. EPA MOVES, the onroad and nonroad inventory model, stores link length in **miles** and link speed in **mi/h**, bins its nonroad model on engine ratings in **horsepower**, tabulates every emission rate in **g/(hp·h)** and brake-specific fuel consumption in **lb/(hp·h)**, and stores fuel density and its refuelling and dioxin rates per **US gallon**. A format for air-quality models that cannot spell the units its own input files use forces every such column to be declared in a unit it is not stored in, and that lie is invisible to a dimensional checker: `ft` declared as `m` is dimensionally perfect and numerically wrong by 3.28.
 
-Every one of these is **exact by definition** (`inHg`, by convention), and the **scale** — not only the dimension — is normative, because a scale error is invisible to dimensional analysis:
+Every one of these is **exact by definition** (`inHg`, by convention), and the **scale** — not only the dimension — is normative, because a scale error is invisible to dimensional analysis. The table also pins the calorie and the mixing ratios, whose names alone leave the scale open:
 
 | Symbol | Scale | Exact because |
 |---|---|---|
@@ -1781,6 +1781,11 @@ Every one of these is **exact by definition** (`inHg`, by convention), and the *
 | `psi` | `0.45359237 × 9.80665 / 0.0254²` Pa (≈ `6894.757293168361`) | lbf/in²: the international pound, standard gravity and the international inch, all exact |
 | `degF` | `5/9` K | the Fahrenheit degree; its affine offset is not modelled (below) |
 | `BTU` | `1055.05585262` J | the International Table BTU, exact by definition — NOT the rounded `1055.06` some units libraries carry |
+| `cal` | `4.184` J | the **thermochemical** calorie, exact by definition — NOT the International Table calorie (`4.1868` J) |
+| `kcal` | `4184` J | exactly `1000 × cal` |
+| `ppm` `ppmv` | `1e-6` | parts per million |
+| `ppb` `ppbv` | `1e-9` | parts per billion (10⁹) |
+| `ppt` `pptv` | `1e-12` | parts per **trillion** (10¹²) — never parts per thousand |
 
 `hp` and `gal` are why the scale is normative and not merely recommended: the **metric** horsepower (PS) is 735.49875 W and the **imperial** gallon is 4.54609 L. Each shares its dimension with the entry above — 1.4% and 20% away respectively — so a binding that picks the other convention passes every dimensional check and mis-scales every rate in the file. A binding MUST use the values above.
 
@@ -1823,22 +1828,35 @@ Every one of these is **exact by definition** (`inHg`, by convention), and the *
 
 Superscripts normalise **positionally**: a run of `⁻`? followed by superscript digits becomes `^` + the ASCII transliteration of that run.
 
+The table is the whole rewrite. In particular a degree sign is rewritten only as part of `°C` or `°F`: a bare `°` (and `°K`) is not rewritten, so it stays an unexpected character and the string does not resolve. The angle is spelled `deg`.
+
 **The grammar**, applied to the normalised string:
 
 ```
 unit     := term (('*' | '/')? term)*
 term     := atom (('^' | '**') exponent)?
-exponent := integer | decimal | '(' integer '/' integer ')'
+exponent := '-'? (integer | decimal) | '(' '-'? integer '/' '-'? integer ')'
 atom     := '1' | symbol | '(' unit ')'
+integer  := digit+
+decimal  := digit+ '.' digit+
 ```
 
-- **A numeric atom is legal ONLY when its value is exactly `1`.** The leading `1` of `"1/s"` is the whole reason `atom` admits a number at all; any OTHER number is a **scaling factor**, and a unit string denotes a *unit*, not a *quantity*. `"1000/s"` and `"0.5 m"` are hard errors. This is pinned because the alternative produced three different answers for one string: an author writing `"(m/s)^-1/3"` — reaching for a rational exponent — gets `((m/s)^-1)/3` under this grammar, and the bindings variously **dropped** the 1/3 (leaving `s/m`), **retained** it (leaving `s/m` scaled by 1/3), or **rejected** the whole string. None of the three is what the author meant. With the scaling factor illegal, `"(m/s)^(-1/3)"` is the only spelling of that unit and the mistake is a diagnostic instead of a silently wrong dimension. The diagnostic MUST say that a number other than 1 is a scaling factor and that a rational exponent is spelled `^(p/q)`.
+**Tokens.** The normalised string is read as a sequence of tokens: the operators `*`, `**` (one token, never two `*`), `/`, `^`, `-`, the parentheses `(` `)`, the one-character symbol `%`, and **runs**. A run is a maximal sequence of the identifier characters `A`–`Z`, `a`–`z`, `0`–`9` and `_`. A run of digits alone — optionally followed by `.` and a second run of digits alone — is a NUMBER; every other run is a SYMBOL. Whitespace (space, tab, carriage return, line feed) separates tokens and is otherwise ignored, except that whitespace between two terms is multiplication (below). Any other character — `+`, `,`, a `.` that is not inside a number, a bare `°`, a non-ASCII letter left after normalisation — makes the string unresolvable.
+
+A conforming parser MUST resolve exactly the strings this grammar and these token rules derive, and MUST NOT resolve any other string. The consequences that are easy to get wrong:
+
+- **Only `""` is the empty unit.** A whitespace-only string (`" "`, `"\t"`) has no tokens, so it derives no `unit` and does not resolve; it is not a spelling of dimensionless. The dimensionless spellings are the three §4.8.1 lists: `""`, `"1"`, `"dimensionless"`.
+- **An exponent has no `+` sign and no exponent notation.** `m^+2` does not resolve (`+` is not a token; a positive exponent is unsigned). `m^1e3` does not resolve: `1e3` is one run containing a letter, so it is a symbol, not a number, and a symbol is not an exponent.
+- **Whitespace may stand between any two tokens**, so `m ^ 2`, `kg * m / s ^ 2`, `m^- 1` and `(m/s)^( -1 / 3 )` resolve exactly as their unspaced spellings do. Only between two TERMS does whitespace carry meaning (multiplication).
+- **`%` is a token on its own, whatever is adjacent.** `%h` is `%`·`h` and `%/h` is `%`/`h`, exactly as `% h` is.
+
+- **A numeric atom is legal ONLY when it is spelled exactly `1`.** The leading `1` of `"1/s"` is the whole reason `atom` admits a number at all; any OTHER number is a **scaling factor**, and a unit string denotes a *unit*, not a *quantity*. `"1000/s"` and `"0.5 m"` are hard errors, and so are `"01/s"` and `"1.0/s"`: the atom is the literal `1`, not a number whose value is one, and those two get the same scaling-factor diagnostic as `"2/s"`. This is pinned because the alternative produced three different answers for one string: an author writing `"(m/s)^-1/3"` — reaching for a rational exponent — gets `((m/s)^-1)/3` under this grammar, and the bindings variously **dropped** the 1/3 (leaving `s/m`), **retained** it (leaving `s/m` scaled by 1/3), or **rejected** the whole string. None of the three is what the author meant. With the scaling factor illegal, `"(m/s)^(-1/3)"` is the only spelling of that unit and the mistake is a diagnostic instead of a silently wrong dimension. The diagnostic MUST say that a number other than 1 is a scaling factor and that a rational exponent is spelled `^(p/q)`.
 - **Exponents are RATIONAL, not integer.** `2`, `-1`, `0.5`, `1.5`, `(1/2)` are all admissible. An integer-only grammar cannot express `1/s^0.5` — the intensity of a Wiener noise term, which is the unit of every `wiener`-updated parameter in an SDE (`tests/fixtures/sde/*.esm`) — and under the §4.8.4 hard-error severity an integer-only parser would FALSELY REJECT every conforming SDE file in the corpus. A *symbolic* exponent in a unit string remains inadmissible; a symbolic exponent in an *expression* is a different case (§4.8.4).
 - **Whitespace between terms means MULTIPLICATION**, as in pint and UDUNITS — `"ppb^-1 s^-1"` is `ppb⁻¹·s⁻¹`. This is what makes a species tag (§4.8.1) illegal rather than merely discouraged.
 - **`*` and `/` are ONE precedence level, evaluated LEFT to RIGHT.** `"J/mol*K"` is `(J/mol)*K` = `J·mol⁻¹·K`, NOT `J/(mol·K)`. A parser that gives `*` a higher precedence than `/` silently negates the exponent of every symbol after the first `/` — it read `J/mol*K` as `J·mol⁻¹·K⁻¹` — and, because the result is a *plausible* dimension, nothing downstream can detect it. Likewise `"kg/m*s"` is `kg·m⁻¹·s`, and `"L/mol/s"` is `L·mol⁻¹·s⁻¹`.
 - **Parentheses are REQUIRED for a compound denominator**: `"J/(mol*K)"`, `"cm^3/(molec*s)"`. A parser that cannot handle parentheses reads `J/(mol*K)` as dimensionless and silently disables every check downstream of it.
-- A `symbol` is a maximal run of characters that is a §4.8.1 table key. Table keys are alphanumeric, plus `_` (as in `short_ton`), with two further exceptions — `%` and the empty string — so a lexer MUST admit `%` as a symbol token (`"%"`, `"%/h"`).
-- A digit run that is NOT separated from a symbol by `^`/`**` is a *different symbol*, not an implicit exponent: `"cm3"` and `"m/s2"` do not resolve (`cm3` is not a table key). Write `"cm^3"`, `"m/s^2"`.
+- A `symbol` is a whole run (the token rules above), and it resolves only when the WHOLE run is a §4.8.1 table key. A run is never split into a table-key prefix and a remainder: `s1`, `kgm`, `1s` and `mil` are each one symbol, none is a table key, and none resolves — `s1` is not `s`·`1`, `kgm` is not `kg`·`m`. Table keys are alphanumeric, plus `_` (as in `short_ton`), with two further exceptions — `%` and the empty string — so a lexer MUST admit `%` as a symbol token (`"%"`, `"%/h"`).
+- A digit run that is NOT separated from a symbol by `^`/`**` is part of the same run, so it makes a *different symbol*, not an implicit exponent: `"cm3"` and `"m/s2"` do not resolve (`cm3` is not a table key). Write `"cm^3"`, `"m/s^2"`.
 
 #### 4.8.3 Dimensional rules for operators
 

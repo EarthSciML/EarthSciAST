@@ -726,7 +726,7 @@
       "class": "semantic",
       "phase": 1,
       "area": "units",
-      "note": "The scales of ft, mi, lb, hp, gal, inHg, Torr, psi, degF and BTU are exactly the rationals given."
+      "note": "The scales of ft, mi, lb, hp, gal, inHg, Torr, psi, degF, BTU, cal, kcal and the six mixing ratios are exactly the rationals given (cal = 4.184 J thermochemical, ppt = 1e-12)."
     },
     {
       "id": "spec.4.8.1.scale-agreement-exact",
@@ -762,6 +762,15 @@
       "phase": 1,
       "area": "units",
       "note": "DU and Dobson have dimension m^-2 and exact scale 2.6867e20."
+    },
+    {
+      "id": "spec.4.8.2.grammar-exact",
+      "section": "4.8.2",
+      "quote": "A conforming parser MUST resolve exactly the strings this grammar and these token rules derive, and MUST NOT resolve any other string.",
+      "class": "semantic",
+      "phase": 2,
+      "area": "units",
+      "note": "A unit string resolves iff it lexes by the token rules and derives from the grammar: whitespace-only, m^+2, m^1e3, s1, a bare degree sign do not resolve; m ^ 2 and %h do."
     },
     {
       "id": "spec.4.8.2.scaling-factor-diagnostic-text",
