@@ -410,6 +410,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("const_array_index_mtk_test.jl")    # #286: a bare const array as an index base
     include("function_tables_test.jl")
     include("function_tables_lowering_test.jl")
+    include("function_tables_load_errors_test.jl")  # §9.5.5 the pinned order of the table checks
     # …and the same lowering on the path that EVALUATES a document (#188):
     # the harness above does the lowering itself, so it cannot see whether the
     # build front doors do.

@@ -162,6 +162,43 @@ end
 end
 
 # ---------------------------------------------------------------------------
+# esm-spec §9.2: an `interp.searchsorted` `xs` that is not a rank-1 `const`-op
+# array — a variable reference, a non-`const` expression, a scalar or nested
+# `const` — is `interp_axis_not_const`, decided BEFORE `searchsorted_nan` and
+# `searchsorted_non_monotonic`. The fixture's `error_scenarios` above pin the
+# wrong-RANK forms on the registry; these pin the forms a value harness cannot
+# express, on the tree-walk build a document actually goes through.
+# ---------------------------------------------------------------------------
+@testset "interp.searchsorted xs must be a rank-1 const array (esm-spec §9.2)" begin
+    v(n) = VarExpr(n)
+    cst(x) = OpExpr("const", EarthSciAST.ASTExpr[]; value=x)
+    model_with(xs) = Model(
+        Dict("y" => ModelVariable(EarthSciAST.UnknownVariable; default=0.0),
+             "a" => ModelVariable(EarthSciAST.ParameterVariable; default=1.0),
+             "b" => ModelVariable(EarthSciAST.ParameterVariable; default=2.0)),
+        [Equation(OpExpr("D", EarthSciAST.ASTExpr[v("y")]; wrt="t"),
+                  OpExpr("fn", EarthSciAST.ASTExpr[v("a"), xs];
+                         name="interp.searchsorted"))])
+    build_code(xs) = try
+        EarthSciAST._build_evaluator(model_with(xs))
+        nothing
+    catch e
+        e isa ClosedFunctionError || rethrow()
+        e.code
+    end
+    @test build_code(v("b")) == "interp_axis_not_const"
+    @test build_code(OpExpr("+", EarthSciAST.ASTExpr[v("a"), v("b")])) ==
+          "interp_axis_not_const"
+    @test build_code(cst(3.0)) == "interp_axis_not_const"
+    @test build_code(cst(Any[[1.0, 2.0], [3.0, 4.0]])) == "interp_axis_not_const"
+    @test build_code(cst(Any[[1.0, NaN], [3.0, 4.0]])) == "interp_axis_not_const"
+    # Rank first, then NaN, then monotonicity.
+    @test build_code(cst([3.0, NaN, 1.0])) == "searchsorted_nan"
+    @test build_code(cst([3.0, 1.0])) == "searchsorted_non_monotonic"
+    @test build_code(cst([1.0, 2.0, 3.0])) === nothing
+end
+
+# ---------------------------------------------------------------------------
 # Enum lowering — esm-spec §9.3, API_SPEC.md §8 item 15.
 #
 # Two things this pins: the canonical name is the PURE form (`lower_enums`),

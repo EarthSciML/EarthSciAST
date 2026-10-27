@@ -583,15 +583,17 @@ function _to_float64_table_2d(v)::Vector{Vector{Float64}}
     throw(ArgumentError("expected a 2-D nested vector, got $(typeof(v))"))
 end
 
-# Pull a `const`-op array value out of an AST argument node. Errors give
-# the same `interp_*_not_const` flavor the spec defines for load-time
-# validation, surfaced as plain Julia errors during MTK lowering.
-function _extract_const_array_node(arg::EsmExpr, fname::String, label::String)
+# Pull a `const`-op array value out of an AST argument node, or raise the
+# esm-spec §9.2 `interp_table_not_const` / `interp_axis_not_const` code (`code`)
+# as the `ClosedFunctionError` the tree-walk build raises for the same node.
+function _extract_const_array_node(arg::EsmExpr, fname::String, label::String,
+                                   code::String)
     if arg isa OpExpr && arg.op == "const" && arg.value isa AbstractVector
         return arg.value
     end
-    throw(ArgumentError("$(fname): `$(label)` argument must be a `const`-op array " *
-          "(esm-spec §9.2); got $(typeof(arg))"))
+    throw(EarthSciAST.ClosedFunctionError(code,
+        "$(fname): `$(label)` argument must be a `const`-op array " *
+        "(esm-spec §9.2); got $(arg isa OpExpr ? "a `$(arg.op)` node" : typeof(arg))"))
 end
 
 function _build_fn(expr::OpExpr, var_dict::Dict{String,Any},
@@ -610,26 +612,35 @@ function _build_fn(expr::OpExpr, var_dict::Dict{String,Any},
     if fname == "interp.linear"
         length(expr.args) == 3 ||
             throw(ArgumentError("interp.linear expects 3 args, got $(length(expr.args))"))
-        table = _to_float64_vector(_extract_const_array_node(expr.args[1], fname, "table"))
-        axis  = _to_float64_vector(_extract_const_array_node(expr.args[2], fname, "axis"))
+        table = _to_float64_vector(_extract_const_array_node(expr.args[1], fname, "table",
+            EarthSciAST.ERROR_CODES.INTERP_TABLE_NOT_CONST))
+        axis  = _to_float64_vector(_extract_const_array_node(expr.args[2], fname, "axis",
+            EarthSciAST.ERROR_CODES.INTERP_AXIS_NOT_CONST))
         x_sym = _esm_to_symbolic(expr.args[3], var_dict, t_sym, dim_dict)
         return _esm_interp_linear(table, axis, x_sym)
     elseif fname == "interp.bilinear"
         length(expr.args) == 5 ||
             throw(ArgumentError("interp.bilinear expects 5 args, got $(length(expr.args))"))
-        table  = _to_float64_table_2d(_extract_const_array_node(expr.args[1], fname, "table"))
-        axis_x = _to_float64_vector(_extract_const_array_node(expr.args[2], fname, "axis_x"))
-        axis_y = _to_float64_vector(_extract_const_array_node(expr.args[3], fname, "axis_y"))
+        table  = _to_float64_table_2d(_extract_const_array_node(expr.args[1], fname, "table",
+            EarthSciAST.ERROR_CODES.INTERP_TABLE_NOT_CONST))
+        axis_x = _to_float64_vector(_extract_const_array_node(expr.args[2], fname, "axis_x",
+            EarthSciAST.ERROR_CODES.INTERP_AXIS_NOT_CONST))
+        axis_y = _to_float64_vector(_extract_const_array_node(expr.args[3], fname, "axis_y",
+            EarthSciAST.ERROR_CODES.INTERP_AXIS_NOT_CONST))
         x_sym  = _esm_to_symbolic(expr.args[4], var_dict, t_sym, dim_dict)
         y_sym  = _esm_to_symbolic(expr.args[5], var_dict, t_sym, dim_dict)
         return _esm_interp_bilinear(table, axis_x, axis_y, x_sym, y_sym)
     elseif fname == "interp.searchsorted"
         length(expr.args) == 2 ||
             throw(ArgumentError("interp.searchsorted expects 2 args, got $(length(expr.args))"))
-        xs = _to_float64_vector(_extract_const_array_node(expr.args[2], fname, "xs"))
-        # Validate at build, as the interpreter does at load: the registered
-        # call is opaque, so a bad table would otherwise surface mid-solve.
-        EarthSciAST._validate_searchsorted_table(fname, xs)
+        xs_raw = _extract_const_array_node(expr.args[2], fname, "xs",
+            EarthSciAST.ERROR_CODES.INTERP_AXIS_NOT_CONST)
+        # Validate at build, as the tree-walk build does: the registered call is
+        # opaque, so a bad table would otherwise surface mid-solve. BEFORE the
+        # Float64 coercion, so a nested `xs` is `interp_axis_not_const` and not
+        # a conversion error.
+        EarthSciAST._validate_searchsorted_table(fname, xs_raw)
+        xs = _to_float64_vector(xs_raw)
         x_sym = _esm_to_symbolic(expr.args[1], var_dict, t_sym, dim_dict)
         return _esm_interp_searchsorted(xs, x_sym)
     end

@@ -50,7 +50,7 @@ This module provides:
   [`EsmFile`](@ref) to a `const` integer per esm-spec §9.3.
 - [`ClosedFunctionError`](@ref) — error type carrying spec-defined diagnostic
   codes (`unknown_closed_function`, `closed_function_overflow`,
-  `searchsorted_non_monotonic`, `closed_function_arity`).
+  `searchsorted_non_monotonic`, `closed_function_arity`, `interp_axis_not_const`, …).
 
 Calendar arithmetic is a BRANCH-FREE closed form over the proleptic-Gregorian
 calendar (Hinnant's `civil_from_days`), computed in the argument's own value
@@ -100,6 +100,8 @@ Raised by the closed function registry when the spec contract is violated.
 - `closed_function_overflow` — integer-typed result would overflow Int32.
 - `searchsorted_non_monotonic` — `xs` is not non-decreasing.
 - `searchsorted_nan` — `xs` contains a NaN entry (checked before monotonicity).
+- `interp_axis_not_const` — `interp.searchsorted`'s `xs` is not a rank-1 array
+  of numbers (a scalar, a nested array); checked before `searchsorted_nan`.
 - `interp_non_monotonic_axis` — `interp.linear` / `interp.bilinear` axis is
   not strictly increasing (esm-spec §9.2; equal-adjacent rejected because the
   blend denominator would be zero).
@@ -108,9 +110,11 @@ Raised by the closed function registry when the spec contract is violated.
   differs from `len(axis_y)`.
 - `interp_nan_in_axis` — any `axis` (or `axis_x`, `axis_y`) contains a NaN.
 - `interp_axis_too_short` — any axis has fewer than 2 entries.
-- `interp_table_not_const` / `interp_axis_not_const` — table / axis argument
-  is not a literal `const`-op array (e.g. a variable reference). Raised by
-  the AST extraction site, not by `evaluate_closed_function` directly.
+- `interp_table_not_const` / `interp_axis_not_const` — table / axis (or
+  `interp.searchsorted` `xs`) argument is not a literal `const`-op array (e.g.
+  a variable reference). Raised by the AST extraction sites (the tree-walk
+  build's const-arg protocol, the MTK lowering), and — for a wrong-rank
+  searchsorted `xs` value — by `evaluate_closed_function` itself.
 """
 struct ClosedFunctionError <: EarthSciASTError
     code::String
@@ -723,14 +727,20 @@ end
                      _fn_typed_core_call_r(Base.tail(rows), id - 1, x)
 end
 
-# Validate an `interp.searchsorted` table `xs`: must be a vector, non-decreasing,
-# with no NaN entries (esm-spec §9.2.2). Factored out of the per-call kernel so
-# the access-kernel array path can validate ONCE at build time instead of re-walking
-# the build-time-constant table every lane (ess-wrh).
+# Validate an `interp.searchsorted` table `xs` (esm-spec §9.2), in the spec's
+# order: a rank-1 array of numbers (`interp_axis_not_const` — a scalar or a
+# nested array is not one), then no NaN entry (`searchsorted_nan`), then
+# non-decreasing (`searchsorted_non_monotonic`). Factored out of the per-call
+# kernel so the access-kernel array path can validate ONCE at build time instead
+# of re-walking the build-time-constant table every lane (ess-wrh). Every path
+# that reads an `xs` — this registry, the tree-walk build's const-arg protocol,
+# the MTK lowering — runs it.
 function _validate_searchsorted_table(name::String, xs)::Nothing
-    if !(xs isa AbstractVector)
-        throw(ClosedFunctionError(ERROR_CODES.CLOSED_FUNCTION_ARITY,
-            "$(name): xs argument must be an array (got $(typeof(xs)))"))
+    if !(xs isa AbstractVector && all(x -> x isa Real && !(x isa Bool), xs))
+        throw(ClosedFunctionError(ERROR_CODES.INTERP_AXIS_NOT_CONST,
+            "$(name): xs must be a rank-1 `const`-op array of numbers (esm-spec §9.2); " *
+            "got $(xs isa AbstractVector ? "an array whose entries are not all numbers" :
+                   "a $(typeof(xs))")"))
     end
     # NaN first, over the whole array (esm-spec §9.2): a NaN compares false with
     # everything, so a monotonicity verdict on an `xs` holding one would depend

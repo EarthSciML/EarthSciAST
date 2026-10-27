@@ -323,6 +323,14 @@ const ERROR_CODES = (
     # An axis's `values` is not strictly increasing. `table_axis_nan` takes
     # precedence: an axis holding a NaN is reported as that, never as this.
     TABLE_AXIS_NON_MONOTONIC = "table_axis_non_monotonic",
+    # An axis's `values` has fewer than 2 entries (§9.5.1). The schema's
+    # `minItems: 2` refuses it in a document; this is the code for a table
+    # built in memory.
+    TABLE_AXIS_TOO_SHORT = "table_axis_too_short",
+    TABLE_AXIS_DUPLICATE_NAME = "table_axis_duplicate_name",
+    TABLE_OUTPUTS_DUPLICATE_NAME = "table_outputs_duplicate_name",
+    TABLE_OUTPUTS_LENGTH_MISMATCH = "table_outputs_length_mismatch",
+    TABLE_DATA_NAN = "table_data_nan",
     # A `table_lookup` node carrying a non-empty `args` (esm-spec §9.5.2), raised
     # where schema validation did not run (an in-memory node).
     TABLE_LOOKUP_ARGS_NONEMPTY = "table_lookup_args_nonempty",
