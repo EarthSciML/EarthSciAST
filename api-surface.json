@@ -95,17 +95,17 @@
     }
   },
   "counts": {
-    "symbols": 993,
+    "symbols": 995,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
       "julia": 341,
       "typescript": 245,
       "python": 271,
       "rust": 382,
-      "go": 460
+      "go": 462
     },
     "by_tier": {
-      "extension": 691,
+      "extension": 693,
       "stable": 302
     }
   },
@@ -1318,6 +1318,14 @@
       }
     },
     {
+      "name": "code_enum_duplicate_value",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeEnumDuplicateValue"
+      }
+    },
+    {
       "name": "code_geometry_manifold_invalid",
       "kind": "constant",
       "tier": "extension",
@@ -1598,11 +1606,11 @@
       }
     },
     {
-      "name": "code_searchsorted_na_n_in_table",
+      "name": "code_searchsorted_na_n",
       "kind": "constant",
       "tier": "extension",
       "bindings": {
-        "go": "CodeSearchsortedNaNInTable"
+        "go": "CodeSearchsortedNaN"
       }
     },
     {
@@ -1715,6 +1723,14 @@
       "tier": "extension",
       "bindings": {
         "go": "CodeTableInterpolationAxesMismatch"
+      }
+    },
+    {
+      "name": "code_table_lookup_args_nonempty",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTableLookupArgsNonempty"
       }
     },
     {
