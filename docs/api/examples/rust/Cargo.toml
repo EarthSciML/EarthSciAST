@@ -1,6 +1,6 @@
 # Runnable examples for the generated API reference (docs/api/README.md §3).
 # Built against the in-repo crate, never a published release. Run them all
-# with `scripts/api_docs/rust.sh --examples-only`.
+# with `tools/api_docs/rust.sh --examples-only` from EarthSciML/earthsci.dev.
 [package]
 name = "earthsci-ast-api-examples"
 version = "0.0.0"

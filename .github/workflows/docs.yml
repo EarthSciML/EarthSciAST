@@ -1,92 +1,119 @@
-name: Documentation
+name: docs
+
+# Installed in each EarthSci source repo as .github/workflows/docs.yml.
+# Nothing of the docs machinery lives in this repo: extraction, rendering and
+# bundling all run from EarthSciML/earthsci.dev (DESIGN.md there).
+#
+# On push to main: extract API docs, build the docs bundle, merge it into this
+# repo's `docs-bundle` branch as the `dev` version and notify earthsci.dev,
+# which rebuilds the site.
+# On a push of a release tag vX.Y.Z: the same from the code at that tag, but
+# only the API reference is published, as that version (the narrative docs
+# always come from main). The site then offers the version in its selector.
+# On pull requests: the same, minus publishing and notifying (validation only).
+#
+# Needs the repo (or org) secrets DOCS_APP_ID and DOCS_APP_PRIVATE_KEY: a GitHub
+# App installed on EarthSciML/earthsci.dev with contents:write, used to notify
+# the site (repository_dispatch).
 
 on:
   push:
-    branches: [ main ]
-    paths:
-      - 'pkg/**'
-      - 'docs/**'
-      - 'scripts/api_docs/**'
-      - 'api-surface.json'
-      - '.github/workflows/docs.yml'
-      - '.github/workflows/api-docs.yml'
+    branches: [main]
+    tags: ['v*']
   pull_request:
-    branches: [ main ]
-    paths:
-      - 'pkg/**'
-      - 'docs/**'
-      - 'scripts/api_docs/**'
-      - 'api-surface.json'
-      - '.github/workflows/docs.yml'
-      - '.github/workflows/api-docs.yml'
+  workflow_dispatch:
 
-permissions:
-  contents: read
-
+# Publishing merges into one shared branch; tools/publish.py retries on a
+# conflict, but a tag build should still never be cancelled by a later push.
 concurrency:
   group: docs-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-jobs:
-  # Docstring extraction and the runnable examples, one job per binding. A
-  # failing example fails the run.
-  api-docs:
-    uses: ./.github/workflows/api-docs.yml
-    with:
-      strict: true
+permissions:
+  contents: read
 
-  build:
-    needs: api-docs
+jobs:
+  plan:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    env:
-      HUGO_VERSION: "0.131.0"
+    outputs:
+      bindings: ${{ steps.plan.outputs.bindings }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: EarthSciML/earthsci.dev
+          ref: main
+          path: .earthsci-dev
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      # Prints the bindings in docs/api/config.toml as a JSON array ([] when
+      # the repo has no API reference).
+      - id: plan
+        run: echo "bindings=$(python .earthsci-dev/tools/api_docs/plan.py --repo-root .)" >> "$GITHUB_OUTPUT"
+
+  extract:
+    needs: plan
+    if: needs.plan.outputs.bindings != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # On pull requests a failing example fails the run; on main a failing
+    # binding is reported but does not block the bundle (it renders as
+    # "not extracted in this build").
+    continue-on-error: ${{ github.event_name != 'pull_request' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        binding: ${{ fromJSON(needs.plan.outputs.bindings) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EarthSciML/earthsci.dev/.github/actions/api-extract@main
+        with:
+          binding: ${{ matrix.binding }}
+
+  bundle:
+    needs: [plan, extract]
+    if: ${{ !cancelled() && needs.plan.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write   # push the docs-bundle branch
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      # Prebuild: every narrative page is assembled, validated, tested and
+      # plotted. A broken model in the documentation fails here. A tag build
+      # publishes only the API reference, so it skips the narrative pages.
+      - uses: dtolnay/rust-toolchain@stable
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+      - uses: Swatinem/rust-cache@v2
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         with:
-          python-version: '3.11'
+          workspaces: pkg/earthsci-narrative
+      - name: Build narrative pages
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        run: cargo run --manifest-path pkg/earthsci-narrative/Cargo.toml --bin esm-narrative -- build
 
       - name: Download extracted docstrings
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           pattern: api-docs-*
           path: build/api-docs
           merge-multiple: true
 
-      - name: Render API reference and guides
-        run: python scripts/api_docs/render.py
-
-      # Every narrative page is assembled, validated, tested and plotted. This
-      # is where a broken model in the documentation fails a pull request.
-      - name: Build narrative pages
-        run: cargo run --manifest-path pkg/earthsci-narrative/Cargo.toml --bin esm-narrative -- build
-
-      - name: Install Hugo extended
-        run: |
-          curl -sSL \
-            "https://github.com/gohugoio/hugo/releases/download/v${HUGO_VERSION}/hugo_extended_${HUGO_VERSION}_linux-amd64.tar.gz" \
-            | tar -xz -C /usr/local/bin hugo
-
-      - name: Build site with Hugo
-        run: hugo --source docs --minify --destination public --baseURL "https://earthsciml.github.io/EarthSciAST/"
-
-      - name: Stage built site for link-checking
-        run: |
-          mkdir -p "$RUNNER_TEMP/lychee-root/EarthSciAST"
-          cp -r docs/public/. "$RUNNER_TEMP/lychee-root/EarthSciAST/"
-
-      - name: Link-check built site (internal links only)
-        uses: lycheeverse/lychee-action@v2
+      # Short-lived token for notifying earthsci.dev; not minted on pull requests,
+      # which only validate.
+      - name: Create site dispatch token
+        id: app-token
+        if: ${{ github.event_name != 'pull_request' }}
+        uses: actions/create-github-app-token@v1
         with:
-          args: >-
-            --offline
-            --no-progress
-            --root-dir ${{ runner.temp }}/lychee-root
-            --exclude '^https?://'
-            --exclude '^mailto:'
-            '${{ runner.temp }}/lychee-root/EarthSciAST/**/*.html'
-          fail: true
-          format: detailed
+          app-id: ${{ secrets.DOCS_APP_ID }}
+          private-key: ${{ secrets.DOCS_APP_PRIVATE_KEY }}
+          owner: EarthSciML
+          repositories: earthsci.dev
+
+      - uses: EarthSciML/earthsci.dev/.github/actions/docs-bundle@main
+        with:
+          dispatch-token: ${{ steps.app-token.outputs.token }}
