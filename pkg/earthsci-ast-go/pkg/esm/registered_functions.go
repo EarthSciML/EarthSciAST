@@ -55,8 +55,10 @@ const (
 //   - closed_function_overflow    — integer-typed result would overflow Int32.
 //   - searchsorted_non_monotonic  — xs is not non-decreasing.
 //   - searchsorted_nan            — xs contains a NaN entry (checked before monotonicity).
-//   - interp_axis_not_const       — searchsorted's xs is not a rank-1 `const` array
-//     (checked before searchsorted_nan).
+//   - interp_axis_not_const       — an axis, or searchsorted's xs, is not a rank-1
+//     `const` array (checked before searchsorted_nan).
+//   - interp_table_not_const      — an interp.linear/bilinear table is not a `const`
+//     array of rank 1 (linear) or rank 2 (bilinear).
 //   - interp_non_monotonic_axis   — interp.linear/bilinear axis is not strictly increasing.
 //   - interp_axis_length_mismatch — table shape disagrees with axis length(s).
 //   - interp_nan_in_axis          — interp.linear/bilinear axis contains NaN.
@@ -189,7 +191,7 @@ func EvaluateClosedFunction(name string, args []any) (any, error) {
 			return nil, newClosedFunctionError(CodeClosedFunctionArity,
 				fmt.Sprintf("%s: first argument (x) must be numeric, got %T", name, args[0]))
 		}
-		xs, err := searchsortedXs(name, args[1])
+		xs, err := interpRank1Array(name, "xs", CodeInterpAxisNotConst, args[1])
 		if err != nil {
 			return nil, err
 		}
@@ -198,11 +200,11 @@ func EvaluateClosedFunction(name string, args []any) (any, error) {
 		if err := expectArity(name, args, 3); err != nil {
 			return nil, err
 		}
-		table, err := toFloat64Array(name, "table", args[0])
+		table, err := interpRank1Array(name, "table", codeInterpTableNotConst, args[0])
 		if err != nil {
 			return nil, err
 		}
-		axis, err := toFloat64Array(name, "axis", args[1])
+		axis, err := interpRank1Array(name, "axis", CodeInterpAxisNotConst, args[1])
 		if err != nil {
 			return nil, err
 		}
@@ -216,15 +218,15 @@ func EvaluateClosedFunction(name string, args []any) (any, error) {
 		if err := expectArity(name, args, 5); err != nil {
 			return nil, err
 		}
-		table, err := toInterpMatrix(name, "table", args[0])
+		table, err := interpRank2Array(name, "table", codeInterpTableNotConst, args[0])
 		if err != nil {
 			return nil, err
 		}
-		axisX, err := toFloat64Array(name, "axis_x", args[1])
+		axisX, err := interpRank1Array(name, "axis_x", CodeInterpAxisNotConst, args[1])
 		if err != nil {
 			return nil, err
 		}
-		axisY, err := toFloat64Array(name, "axis_y", args[2])
+		axisY, err := interpRank1Array(name, "axis_y", CodeInterpAxisNotConst, args[2])
 		if err != nil {
 			return nil, err
 		}
@@ -362,27 +364,14 @@ func isLeapYear(y int) bool {
 // → 1, above → N+1, NaN x → N+1, NaN entries in xs → error, non-monotonic
 // xs → error.
 func interpSearchsorted(name string, x float64, xs []float64) (int32, error) {
+	if err := validateSearchsortedXs(name, xs); err != nil {
+		return 0, err
+	}
 	n := len(xs)
 	if n == 0 {
-		// Empty table: extends "above-range → N+1" rule to N=0; the only
-		// consistent extension that composes with `index`.
+		// Empty table (esm-spec §9.2): a valid rank-1 xs; every query, a NaN x
+		// included, is N + 1 = 1.
 		return int32(1), nil
-	}
-	// NaN is checked in its own pass BEFORE monotonicity (esm-spec §9.2): an
-	// xs holding a NaN is `searchsorted_nan` whatever its other entries, so a
-	// decreasing pair ahead of the NaN cannot win.
-	for i := 0; i < n; i++ {
-		if math.IsNaN(xs[i]) {
-			return 0, newClosedFunctionError(CodeSearchsortedNaN,
-				fmt.Sprintf("%s: xs[%d] is NaN; NaN entries in xs are forbidden", name, i+1))
-		}
-	}
-	for i := 1; i < n; i++ {
-		if xs[i] < xs[i-1] {
-			return 0, newClosedFunctionError(CodeSearchsortedNonMonotonic,
-				fmt.Sprintf("%s: xs is not non-decreasing (xs[%d]=%g < xs[%d]=%g)",
-					name, i+1, xs[i], i, xs[i-1]))
-		}
 	}
 	// NaN x → N+1 ("greater than every finite element").
 	if math.IsNaN(x) {
@@ -398,33 +387,104 @@ func interpSearchsorted(name string, x float64, xs []float64) (int32, error) {
 	return checkInt32(name, int64(n+1))
 }
 
-// searchsortedXs extracts the `xs` of interp.searchsorted, refusing one that
-// is not a rank-1 array — a scalar, or an array with an array entry — with
-// `interp_axis_not_const` (esm-spec §9.2). The rank is decided over the WHOLE
-// value before any entry is read as a number, so a nested xs holding a NaN is
-// still `interp_axis_not_const`, never `searchsorted_nan`. (The AST-level half
-// of the same rule — an `xs` that is not a `const` node at all — is in
-// evaluateFnNode, since by the time a value reaches here a variable reference
-// has already been reduced to a scalar.)
-func searchsortedXs(name string, v any) ([]float64, error) {
-	notConst := func(what string) error {
-		return newClosedFunctionError(CodeInterpAxisNotConst,
-			fmt.Sprintf("%s: xs must be a rank-1 `const`-op array, got %s (esm-spec §9.2)",
-				name, what))
+// validateSearchsortedXs runs the esm-spec §9.2 checks on a rank-1 `xs`: NaN
+// in its own pass BEFORE monotonicity, so an xs holding a NaN is
+// `searchsorted_nan` whatever its other entries and a decreasing pair ahead of
+// the NaN cannot win; then non-decreasing (`searchsorted_non_monotonic`). An
+// empty xs passes both. It is shared by the load-time argument check
+// (load_time_checks.go) and the evaluator.
+func validateSearchsortedXs(name string, xs []float64) error {
+	for i, v := range xs {
+		if math.IsNaN(v) {
+			return newClosedFunctionError(CodeSearchsortedNaN,
+				fmt.Sprintf("%s: xs[%d] is NaN; NaN entries in xs are forbidden", name, i+1))
+		}
 	}
+	for i := 1; i < len(xs); i++ {
+		if xs[i] < xs[i-1] {
+			return newClosedFunctionError(CodeSearchsortedNonMonotonic,
+				fmt.Sprintf("%s: xs is not non-decreasing (xs[%d]=%g < xs[%d]=%g)",
+					name, i+1, xs[i], i, xs[i-1]))
+		}
+	}
+	return nil
+}
+
+// isArrayValue reports whether v is an array (a decoded []any or an in-memory
+// []float64 / [][]float64).
+func isArrayValue(v any) bool {
+	switch v.(type) {
+	case []any, []float64, [][]float64:
+		return true
+	}
+	return false
+}
+
+// interpRank1Array extracts a rank-1 array argument of an interp.* function —
+// searchsorted's `xs`, linear's `table`, an axis — refusing one of any other
+// rank (a scalar, or an array with an array entry) with `code`:
+// `interp_axis_not_const` for an axis or `xs`, `interp_table_not_const` for a
+// table (esm-spec §9.2, ruling Q-108). The rank is decided over the WHOLE value
+// before any entry is read as a number, so a nested array holding a NaN is
+// still the rank code, never a NaN code. (The AST-level half of the same rule —
+// an argument that is not a `const` node at all — is checkInterpArgsNode, since
+// by the time a value reaches here a variable reference has already been
+// reduced to a scalar.)
+func interpRank1Array(name, role, code string, v any) ([]float64, error) {
 	switch xs := v.(type) {
 	case []float64:
 	case []any:
 		for i, e := range xs {
-			switch e.(type) {
-			case []any, []float64:
-				return nil, notConst(fmt.Sprintf("a nested array (xs[%d] is an array)", i+1))
+			if isArrayValue(e) {
+				return nil, newClosedFunctionError(code, fmt.Sprintf(
+					"%s: %s must be a rank-1 `const`-op array, got a nested array "+
+						"(%s[%d] is an array) (esm-spec §9.2)", name, role, role, i+1))
 			}
 		}
 	default:
-		return nil, notConst(fmt.Sprintf("a scalar (%T)", v))
+		return nil, newClosedFunctionError(code, fmt.Sprintf(
+			"%s: %s must be a rank-1 `const`-op array, got a scalar (%T) (esm-spec §9.2)",
+			name, role, v))
 	}
-	return toFloat64Array(name, "xs", v)
+	return toFloat64Array(name, role, v)
+}
+
+// interpRank2Array extracts interp.bilinear's `table`, refusing anything but a
+// rank-2 array — a scalar, a rank-1 array, or a row that is itself nested —
+// with `code` (`interp_table_not_const`, esm-spec §9.2, ruling Q-108). Ragged
+// rows ARE rank 2; their lengths are interpBilinear's
+// `interp_axis_length_mismatch`.
+func interpRank2Array(name, role, code string, v any) ([][]float64, error) {
+	notRank2 := func(what string) error {
+		return newClosedFunctionError(code, fmt.Sprintf(
+			"%s: %s must be a rank-2 `const`-op array, got %s (esm-spec §9.2)",
+			name, role, what))
+	}
+	switch outer := v.(type) {
+	case [][]float64:
+	case []any:
+		for i, row := range outer {
+			if !isArrayValue(row) {
+				return nil, notRank2(fmt.Sprintf("a row that is not an array (%s[%d])", role, i+1))
+			}
+			if r, ok := row.([]any); ok {
+				for j, e := range r {
+					if isArrayValue(e) {
+						return nil, notRank2(fmt.Sprintf(
+							"an array nested deeper than rank 2 (%s[%d][%d] is an array)",
+							role, i+1, j+1))
+					}
+				}
+			}
+			if _, ok := row.([][]float64); ok {
+				return nil, notRank2(fmt.Sprintf(
+					"an array nested deeper than rank 2 (%s[%d])", role, i+1))
+			}
+		}
+	default:
+		return nil, notRank2(fmt.Sprintf("a scalar (%T)", v))
+	}
+	return toInterpMatrix(name, role, v)
 }
 
 // toFloat64Array extracts a 1-D []float64 from an evaluated `const`-op array
@@ -520,26 +580,66 @@ func validateInterpAxis(fnName, axisName string, axis []float64) error {
 	return nil
 }
 
-// interpLinear implements `interp.linear` per esm-spec §9.2. Validation
-// order: length-mismatch (between table and axis), then axis well-formedness
-// via validateInterpAxis. Evaluation uses the spec-pinned form
-// `t[i] + w*(t[i+1] - t[i])` so that w=0 returns t[i] exactly and w=1
-// returns t[i+1] without 1−w cancellation.
-func interpLinear(table, axis []float64, x float64) (float64, error) {
+// validateInterpLinearArgs runs the esm-spec §9.2 argument checks of
+// interp.linear on its rank-1 table and axis. `axis_too_short` takes
+// precedence over a length mismatch when both could apply (N = 1 with a
+// matching table length). Shared by the load-time argument check
+// (load_time_checks.go) and the evaluator.
+func validateInterpLinearArgs(table, axis []float64) error {
 	const fnName = "interp.linear"
-	// `axis_too_short` MUST take precedence over a length mismatch when
-	// both could apply; checking the axis first satisfies that ordering
-	// when N=1 with a matching table length.
 	if len(axis) < 2 {
-		return 0, newClosedFunctionError(CodeInterpAxisTooShort,
+		return newClosedFunctionError(CodeInterpAxisTooShort,
 			fmt.Sprintf("%s: axis has %d entries; need ≥ 2 to form an interval to blend across",
 				fnName, len(axis)))
 	}
 	if len(table) != len(axis) {
-		return 0, newClosedFunctionError(CodeInterpAxisLengthMismatch,
+		return newClosedFunctionError(CodeInterpAxisLengthMismatch,
 			fmt.Sprintf("%s: len(table)=%d != len(axis)=%d", fnName, len(table), len(axis)))
 	}
-	if err := validateInterpAxis(fnName, "axis", axis); err != nil {
+	return validateInterpAxis(fnName, "axis", axis)
+}
+
+// validateInterpBilinearArgs runs the esm-spec §9.2 argument checks of
+// interp.bilinear on its rank-2 table and two axes, in this order:
+//  1. axis_x too short
+//  2. axis_y too short
+//  3. table outer length vs len(axis_x)
+//  4. each inner row length vs len(axis_y) (also catches ragged rows)
+//  5. axis_x / axis_y NaN + monotonicity (via validateInterpAxis)
+func validateInterpBilinearArgs(table [][]float64, axisX, axisY []float64) error {
+	const fnName = "interp.bilinear"
+	if len(axisX) < 2 {
+		return newClosedFunctionError(CodeInterpAxisTooShort,
+			fmt.Sprintf("%s: axis_x has %d entries; need ≥ 2", fnName, len(axisX)))
+	}
+	if len(axisY) < 2 {
+		return newClosedFunctionError(CodeInterpAxisTooShort,
+			fmt.Sprintf("%s: axis_y has %d entries; need ≥ 2", fnName, len(axisY)))
+	}
+	if len(table) != len(axisX) {
+		return newClosedFunctionError(CodeInterpAxisLengthMismatch,
+			fmt.Sprintf("%s: outer len(table)=%d != len(axis_x)=%d",
+				fnName, len(table), len(axisX)))
+	}
+	for i, row := range table {
+		if len(row) != len(axisY) {
+			return newClosedFunctionError(CodeInterpAxisLengthMismatch,
+				fmt.Sprintf("%s: len(table[%d])=%d != len(axis_y)=%d",
+					fnName, i+1, len(row), len(axisY)))
+		}
+	}
+	if err := validateInterpAxis(fnName, "axis_x", axisX); err != nil {
+		return err
+	}
+	return validateInterpAxis(fnName, "axis_y", axisY)
+}
+
+// interpLinear implements `interp.linear` per esm-spec §9.2, after the
+// argument checks of validateInterpLinearArgs. Evaluation uses the spec-pinned form
+// `t[i] + w*(t[i+1] - t[i])` so that w=0 returns t[i] exactly and w=1
+// returns t[i+1] without 1−w cancellation.
+func interpLinear(table, axis []float64, x float64) (float64, error) {
+	if err := validateInterpLinearArgs(table, axis); err != nil {
 		return 0, err
 	}
 	n := len(axis)
@@ -570,44 +670,13 @@ func interpLinear(table, axis []float64, x float64) (float64, error) {
 	return table[i] + w*(table[i+1]-table[i]), nil
 }
 
-// interpBilinear implements `interp.bilinear` per esm-spec §9.2.
-// Validation order:
-//  1. axis_x too short
-//  2. axis_y too short
-//  3. table outer length vs len(axis_x)
-//  4. each inner row length vs len(axis_y) (also catches ragged rows)
-//  5. axis_x / axis_y NaN + monotonicity (via validateInterpAxis)
-//
-// Evaluation uses the spec-pinned form: two 1-D x-blends followed by one
+// interpBilinear implements `interp.bilinear` per esm-spec §9.2, after the
+// argument checks of validateInterpBilinearArgs. Evaluation uses the spec-pinned form: two 1-D x-blends followed by one
 // y-blend, each in `a + w*(b - a)`. Cell location uses the "largest index
 // in [0, N-2] with axis[i] ≤ q" convention so that a query exactly on an
 // interior knot lands on `i = k` (wx = 0) per esm-spec §9.2.
 func interpBilinear(table [][]float64, axisX, axisY []float64, x, y float64) (float64, error) {
-	const fnName = "interp.bilinear"
-	if len(axisX) < 2 {
-		return 0, newClosedFunctionError(CodeInterpAxisTooShort,
-			fmt.Sprintf("%s: axis_x has %d entries; need ≥ 2", fnName, len(axisX)))
-	}
-	if len(axisY) < 2 {
-		return 0, newClosedFunctionError(CodeInterpAxisTooShort,
-			fmt.Sprintf("%s: axis_y has %d entries; need ≥ 2", fnName, len(axisY)))
-	}
-	if len(table) != len(axisX) {
-		return 0, newClosedFunctionError(CodeInterpAxisLengthMismatch,
-			fmt.Sprintf("%s: outer len(table)=%d != len(axis_x)=%d",
-				fnName, len(table), len(axisX)))
-	}
-	for i, row := range table {
-		if len(row) != len(axisY) {
-			return 0, newClosedFunctionError(CodeInterpAxisLengthMismatch,
-				fmt.Sprintf("%s: len(table[%d])=%d != len(axis_y)=%d",
-					fnName, i+1, len(row), len(axisY)))
-		}
-	}
-	if err := validateInterpAxis(fnName, "axis_x", axisX); err != nil {
-		return 0, err
-	}
-	if err := validateInterpAxis(fnName, "axis_y", axisY); err != nil {
+	if err := validateInterpBilinearArgs(table, axisX, axisY); err != nil {
 		return 0, err
 	}
 	// NaN x or y: spec says result is NaN. Shortcut the cell-location step,

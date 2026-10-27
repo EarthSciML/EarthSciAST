@@ -917,7 +917,10 @@ func evaluateFnNode(node ExprNode, bindings map[string]float64) (float64, error)
 	if node.Name == nil || *node.Name == "" {
 		return 0, fmt.Errorf("fn op missing required `name` field (esm-spec §4.4)")
 	}
-	if err := checkSearchsortedXsNode(node); err != nil {
+	// Load ran the full §9.2 argument checks (load_time_checks.go); a tree
+	// built in memory gets them here: the AST half now, the value half in
+	// EvaluateClosedFunction.
+	if err := checkInterpArgsAreConst(node); err != nil {
 		return 0, err
 	}
 	args := make([]any, len(node.Args))
@@ -942,32 +945,6 @@ func evaluateFnNode(node ExprNode, bindings map[string]float64) (float64, error)
 	default:
 		return 0, fmt.Errorf("closed function %q returned unsupported scalar type %T", *node.Name, out)
 	}
-}
-
-// checkSearchsortedXsNode refuses an `interp.searchsorted` call whose `xs`
-// (second argument) is not a `const`-op node — a variable reference or any
-// other expression — with `interp_axis_not_const` (esm-spec §9.2). It must be
-// decided on the AST: evaluateFnArg would reduce a variable reference to a
-// scalar, and the scalar would then be indistinguishable from a `const` scalar.
-// The rank of a `const` xs is checked by searchsortedXs. A call with the wrong
-// argument count is left to EvaluateClosedFunction's arity check.
-func checkSearchsortedXsNode(node ExprNode) error {
-	if *node.Name != "interp.searchsorted" || len(node.Args) != 2 {
-		return nil
-	}
-	switch a := node.Args[1].(type) {
-	case ExprNode:
-		if a.Op == OpConst {
-			return nil
-		}
-	case *ExprNode:
-		if a != nil && a.Op == OpConst {
-			return nil
-		}
-	}
-	return newClosedFunctionError(CodeInterpAxisNotConst,
-		fmt.Sprintf("interp.searchsorted: xs must be a rank-1 `const`-op array, got %s "+
-			"(esm-spec §9.2)", describeFnArg(node.Args[1])))
 }
 
 // describeFnArg names a non-`const` closed-function argument for a diagnostic.

@@ -456,8 +456,8 @@ const (
 	// CodeTableInterpolationAxesMismatch: `interpolation` and the axis count
 	// disagree — `linear` and `nearest` require 1 axis, `bilinear` 2.
 	CodeTableInterpolationAxesMismatch = "table_interpolation_axes_mismatch"
-	// CodeTableAxisNaN: an axis's `values` carries a non-finite entry; §9.5.1
-	// requires strictly-increasing FINITE floats.
+	// CodeTableAxisNaN: an axis's `values` carries a value that is not finite
+	// (NaN, +Inf or -Inf; esm-spec §9.5.5, ruling Q-109).
 	CodeTableAxisNaN = "table_axis_nan"
 	// CodeTableAxisNonMonotonic: an axis's `values` is not strictly increasing.
 	CodeTableAxisNonMonotonic = "table_axis_non_monotonic"
@@ -472,8 +472,8 @@ const (
 	// `axes` (and `outputs`, when present) imply, or the redundant `shape`
 	// assertion does not match that shape.
 	CodeTableDataShapeMismatch = "table_data_shape_mismatch"
-	// CodeTableDataNaN: a leaf of `data` is non-finite (NaN; an infinity,
-	// which JSON cannot spell, is refused under the same code).
+	// CodeTableDataNaN: a leaf of `data` is not finite (NaN, +Inf or -Inf;
+	// esm-spec §9.5.5, ruling Q-109).
 	CodeTableDataNaN = "table_data_nan"
 	// CodeTableOutOfBoundsUnsupported: the referenced table declares
 	// `out_of_bounds: "error"`, which this binding does not implement. Per
@@ -511,12 +511,18 @@ const (
 	CodeInterpNaNInAxis = "interp_nan_in_axis"
 	// CodeInterpAxisTooShort: an `interp` axis has fewer than two points.
 	CodeInterpAxisTooShort = "interp_axis_too_short"
-	// CodeInterpAxisNotConst: the `xs` of `interp.searchsorted` is not a
-	// rank-1 `const`-op array — a variable reference, a non-`const`
-	// expression, or a `const` whose value is a scalar or a nested array.
-	// Checked before CodeSearchsortedNaN and CodeSearchsortedNonMonotonic
-	// (esm-spec §9.2).
+	// CodeInterpAxisNotConst: an axis of `interp.linear` / `interp.bilinear`,
+	// or the `xs` of `interp.searchsorted`, is not a rank-1 `const`-op array —
+	// a variable reference, a non-`const` expression, or a `const` whose value
+	// is a scalar or a nested array (esm-spec §9.2, ruling Q-108). Checked
+	// before CodeSearchsortedNaN and CodeSearchsortedNonMonotonic.
 	CodeInterpAxisNotConst = "interp_axis_not_const"
+	// codeInterpTableNotConst: the `table` of `interp.linear` /
+	// `interp.bilinear` is not a `const`-op array of the required rank (1 for
+	// linear, 2 for bilinear) — a variable reference, a non-`const`
+	// expression, or a `const` of the wrong rank (esm-spec §9.2, ruling Q-108).
+	// Unexported until api-surface.json records it.
+	codeInterpTableNotConst = "interp_table_not_const"
 )
 
 // --- Diagnostic codes: §9.3 enum lowering (raised via newEnumLoweringError

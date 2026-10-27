@@ -1,13 +1,16 @@
 package esm
 
 // Drives tests/conformance/function_tables/load_errors/cases.json: the
-// esm-spec §9.5.5 table checks and their pinned order. Each case is one table
-// (id `T`) and one `table_lookup` into it; the table is built IN MEMORY (the
-// string "NaN" anywhere in it is a binary64 NaN, which JSON cannot carry), the
-// lookup goes through the production §9.5.3 lowering, and the diagnostic code
-// it raises is compared with `expected_error_code` (null: the lookup lowers).
-// Go's FunctionTable holds axis values as []float64 and `data` as `any`, so
-// every case is representable and none is skipped.
+// esm-spec §9.5.5 table checks and their pinned order, for the cases JSON
+// cannot express as a document. Each case is one table (id `T`) and one
+// `table_lookup` into it; the table is built IN MEMORY (the strings "NaN",
+// "Inf" and "-Inf" anywhere in it are those binary64 values, which JSON cannot
+// carry). The table goes through the SAME load-time check load and validate()
+// run on every `function_tables` entry (checkFunctionsAtLoad), and the lookup
+// through the production §9.5.3 lowering; both must raise
+// `expected_error_code` (null: the table passes and the lookup lowers). Go's
+// FunctionTable holds axis values as []float64 and `data` as `any`, so every
+// case is representable and none is skipped.
 
 import (
 	"encoding/json"
@@ -24,6 +27,9 @@ type tableLoadErrorLedger struct {
 	TableID string               `json:"table_id"`
 	Order   []string             `json:"order"`
 	Cases   []tableLoadErrorCase `json:"cases"`
+	// MovedToTestsInvalid maps a former case to the tests/invalid fixture that
+	// now carries it; its pinned code counts toward the order's coverage.
+	MovedToTestsInvalid map[string]string `json:"moved_to_tests_invalid"`
 }
 
 type tableLoadErrorCase struct {
@@ -53,12 +59,18 @@ type tableCaseLookup struct {
 	Args   []any          `json:"args"`
 }
 
-// nanFromLedger rewrites every "NaN" string in a decoded JSON value to NaN.
+// nanFromLedger rewrites every "NaN", "Inf" and "-Inf" string in a decoded
+// JSON value to that binary64 value.
 func nanFromLedger(v any) any {
 	switch x := v.(type) {
 	case string:
-		if x == "NaN" {
+		switch x {
+		case "NaN":
 			return math.NaN()
+		case "Inf":
+			return math.Inf(1)
+		case "-Inf":
+			return math.Inf(-1)
 		}
 		return x
 	case []any:
@@ -114,9 +126,20 @@ func TestFunctionTableLoadErrorsLedger(t *testing.T) {
 	if len(ledger.Cases) == 0 || len(ledger.Order) == 0 {
 		t.Fatal("the load_errors ledger has no cases or no order")
 	}
-	// Every rule of the order must be the expected code of some case, and a
-	// valid control must be present, so a ledger that lost a case fails here.
+	// Every rule of the order must be the expected code of some case (or of a
+	// case moved to a tests/invalid fixture, which TestClosedFnAndTableInvalidFixtures
+	// loads), and a valid control must be present, so a ledger that lost a case
+	// fails here.
 	covered := map[string]bool{}
+	pins := resolverOnlyPins(t, dsuRepoRoot(t))
+	for from, fixture := range ledger.MovedToTestsInvalid {
+		code, ok := pins[fixture]
+		if !ok || code == "" {
+			t.Errorf("case %q moved to %s, which is not pinned resolver_only with a code", from, fixture)
+			continue
+		}
+		covered[code] = true
+	}
 	sawControl := false
 	for _, c := range ledger.Cases {
 		if c.ExpectedErrorCode == nil {
@@ -151,19 +174,27 @@ func TestFunctionTableLoadErrorsLedger(t *testing.T) {
 			}
 			node := ExprNode{Op: c.Lookup.Op, Table: &id, TableAxes: axes,
 				Output: c.Lookup.Output, Args: args}
-			_, err := lowerExprTableLookups(node, tables)
-			if c.ExpectedErrorCode == nil {
-				if err != nil {
-					t.Fatalf("expected the lookup to lower, got %v", err)
+			loadErr := checkFunctionsAtLoad(&ESMFile{FunctionTables: tables})
+			_, lowerErr := lowerExprTableLookups(node, tables)
+			for _, step := range []struct {
+				name string
+				err  error
+			}{{"load-time table check", loadErr}, {"lowering", lowerErr}} {
+				err := step.err
+				if c.ExpectedErrorCode == nil {
+					if err != nil {
+						t.Fatalf("%s: expected no error, got %v", step.name, err)
+					}
+					continue
 				}
-				return
-			}
-			var de DiagnosticError
-			if !errors.As(err, &de) {
-				t.Fatalf("expected code %q, got %T: %v", *c.ExpectedErrorCode, err, err)
-			}
-			if de.DiagnosticCode() != *c.ExpectedErrorCode {
-				t.Fatalf("code = %q, want %q (%v)", de.DiagnosticCode(), *c.ExpectedErrorCode, err)
+				var de DiagnosticError
+				if !errors.As(err, &de) {
+					t.Fatalf("%s: expected code %q, got %T: %v", step.name, *c.ExpectedErrorCode, err, err)
+				}
+				if de.DiagnosticCode() != *c.ExpectedErrorCode {
+					t.Fatalf("%s: code = %q, want %q (%v)", step.name, de.DiagnosticCode(),
+						*c.ExpectedErrorCode, err)
+				}
 			}
 		})
 		ran++

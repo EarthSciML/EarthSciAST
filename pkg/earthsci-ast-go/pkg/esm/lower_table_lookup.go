@@ -314,12 +314,13 @@ func tableInterpolation(table FunctionTable) string {
 //  9. table_data_nan
 //  10. table_data_shape_mismatch (the `shape` assertion)
 //
-// It is the ONE place this binding checks a table; the lowering calls it as
-// soon as a lookup's table id resolves. Two readings of this binding's own:
-// a non-finite axis value or data leaf is refused under the NaN code (§9.5.1
-// requires finite values; an infinity has no code of its own and JSON cannot
-// spell one), and a data leaf that is not a number is a nesting mismatch
-// (step 8), since it is not the scalar the implied shape puts there.
+// It is the ONE place this binding checks a table: load and validate() run it
+// on every `function_tables` entry (load_time_checks.go), and the lowering
+// repeats it as soon as a lookup's table id resolves. A non-finite axis value
+// or data leaf (NaN, +Inf or -Inf) is refused under the NaN code (esm-spec §9.5.5, ruling
+// Q-109). One reading of this binding's own: a data leaf that is not a number
+// is a nesting mismatch (step 8), since it is not the scalar the implied shape
+// puts there.
 func validateFunctionTable(id string, table FunctionTable) error {
 	// 1.
 	seenAxis := make(map[string]bool, len(table.Axes))
@@ -355,8 +356,8 @@ func validateFunctionTable(id string, table FunctionTable) error {
 		for i, v := range axis.Values {
 			if math.IsNaN(v) || math.IsInf(v, 0) {
 				return newTableLookupError(CodeTableAxisNaN,
-					"table %q: axis %q value %d is %v; axis `values` must be "+
-						"strictly-increasing FINITE floats (esm-spec §9.5.1)",
+					"table %q: axis %q value %d is %v, which is not finite; axis `values` "+
+						"must be strictly-increasing FINITE floats (esm-spec §9.5.1)",
 					id, axis.Name, i+1, v)
 			}
 		}
@@ -399,7 +400,8 @@ func validateFunctionTable(id string, table FunctionTable) error {
 	// 9.
 	if tableDataNonFinite(table.Data) {
 		return newTableLookupError(CodeTableDataNaN,
-			"table %q: a leaf of `data` is NaN; table data must be finite (esm-spec §9.5.1)", id)
+			"table %q: a leaf of `data` is not finite (NaN or ±Inf); table data must be "+
+				"finite (esm-spec §9.5.1)", id)
 	}
 	// 10.
 	if table.Shape != nil && !equalInts(table.Shape, shape) {

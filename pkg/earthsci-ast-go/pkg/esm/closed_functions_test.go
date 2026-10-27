@@ -77,6 +77,12 @@ func TestClosedFunctionsConformance(t *testing.T) {
 					if err := assertCloseEnough(out, sc.Expected, fixture.Tolerance); err != nil {
 						t.Fatalf("scenario %s (%s): %v", sc.Name, sc.Description, err)
 					}
+					// A success scenario passes the load-time argument check.
+					if node, ok := fixtureFnNode(fixture.Function, args); ok {
+						if err := checkClosedFnArgs(node); err != nil {
+							t.Fatalf("load-time argument check rejected a success scenario: %v", err)
+						}
+					}
 				})
 			}
 			for _, sc := range fixture.ErrorScenarios {
@@ -98,10 +104,38 @@ func TestClosedFunctionsConformance(t *testing.T) {
 						t.Fatalf("error code mismatch: got %q, want %q (%s)",
 							cfErr.Code, sc.ExpectedErrorCode, sc.Description)
 					}
+					// The same inputs as a `fn` node with `const` array
+					// arguments must fail the LOAD-TIME argument check with the
+					// same code (esm-spec §9.2, ruling Q-106).
+					if node, ok := fixtureFnNode(fixture.Function, args); ok {
+						var de DiagnosticError
+						if err := checkClosedFnArgs(node); !errors.As(err, &de) ||
+							de.DiagnosticCode() != sc.ExpectedErrorCode {
+							t.Fatalf("load-time argument check = %v, want code %q",
+								err, sc.ExpectedErrorCode)
+						}
+					}
 				})
 			}
 		})
 	}
+}
+
+// fixtureFnNode builds the `fn` node an interp.* scenario stands for: each
+// array-valued argument position (interpArrayArgs) a `const` node holding the
+// input whatever its rank, every other input a bare value. ok is false for a
+// function with no array arguments or the wrong input count.
+func fixtureFnNode(function string, args []any) (ExprNode, bool) {
+	spec, ok := interpArrayArgs[function]
+	if !ok || len(args) != spec.arity {
+		return ExprNode{}, false
+	}
+	nodeArgs := append([]any(nil), args...)
+	for _, a := range spec.args {
+		nodeArgs[a.index] = ExprNode{Op: OpConst, Args: []any{}, Value: args[a.index]}
+	}
+	name := function
+	return ExprNode{Op: OpFn, Name: &name, Args: nodeArgs}, true
 }
 
 type closedFnFixture struct {
@@ -269,11 +303,12 @@ func closedFunctionsFixturesDir(t *testing.T) string {
 }
 
 // An `interp.searchsorted` whose `xs` is not a rank-1 `const`-op array is
-// `interp_axis_not_const` (esm-spec §9.2), through the normal load → evaluate
-// path: a variable reference, a non-`const` expression, a `const` scalar and a
-// nested `const` (the last holding a NaN, which the rank check must beat).
+// `interp_axis_not_const` (esm-spec §9.2), raised by LOAD (ruling Q-106): a
+// variable reference, a non-`const` expression, a `const` scalar and a nested
+// `const`; and by the evaluator for a tree built in memory, where the rank
+// check must beat a NaN in a nested xs.
 func TestSearchsortedNonConstXsIsInterpAxisNotConst(t *testing.T) {
-	const src = `{
+	const tmpl = `{
   "esm": "1.0.0",
   "metadata": {"name": "ss", "authors": ["test"]},
   "models": {
@@ -283,38 +318,35 @@ func TestSearchsortedNonConstXsIsInterpAxisNotConst(t *testing.T) {
         "p": {"type": "parameter", "default": 2.5}
       },
       "equations": [
-        {"lhs": "y", "rhs": {"op": "fn", "name": "interp.searchsorted", "args": ["p", "p"]}},
-        {"lhs": "y", "rhs": {"op": "fn", "name": "interp.searchsorted",
-          "args": ["p", {"op": "+", "args": ["p", 1]}]}},
-        {"lhs": "y", "rhs": {"op": "fn", "name": "interp.searchsorted",
-          "args": ["p", {"op": "const", "args": [], "value": 3.0}]}},
-        {"lhs": "y", "rhs": {"op": "fn", "name": "interp.searchsorted",
-          "args": ["p", {"op": "const", "args": [], "value": [[1.0, 2.0], [3.0, 4.0]]}]}}
+        {"lhs": "y", "rhs": {"op": "fn", "name": "interp.searchsorted", "args": ["p", %s]}}
       ]
     }
   }
 }`
-	file, err := LoadString(src)
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	eqs := file.Models["M"].Equations
-	if len(eqs) != 4 {
-		t.Fatalf("want 4 equations, got %d", len(eqs))
-	}
-	for i, eq := range eqs {
-		_, err := file.Evaluate(eq.RHS, map[string]float64{"p": 2.5})
+	for _, xs := range []string{
+		`"p"`,
+		`{"op": "+", "args": ["p", 1]}`,
+		`{"op": "const", "args": [], "value": 3.0}`,
+		`{"op": "const", "args": [], "value": [[1.0, 2.0], [3.0, 4.0]]}`,
+	} {
+		_, err := LoadString(fmt.Sprintf(tmpl, xs))
 		var de DiagnosticError
 		if !errors.As(err, &de) || de.DiagnosticCode() != CodeInterpAxisNotConst {
-			t.Errorf("equation %d: got %v, want code %q", i, err, CodeInterpAxisNotConst)
+			t.Errorf("xs %s: load = %v, want code %q", xs, err, CodeInterpAxisNotConst)
 		}
 	}
-	// The rank check comes before the NaN check.
+	// In memory, through the evaluator: a variable reference as xs.
 	name := "interp.searchsorted"
+	varXs := ExprNode{Op: OpFn, Name: &name, Args: []any{2.0, "p"}}
+	_, err := Evaluate(varXs, map[string]float64{"p": 2.5})
+	var de DiagnosticError
+	if !errors.As(err, &de) || de.DiagnosticCode() != CodeInterpAxisNotConst {
+		t.Errorf("variable xs: got %v, want code %q", err, CodeInterpAxisNotConst)
+	}
+	// The rank check comes before the NaN check.
 	nested := ExprNode{Op: OpFn, Name: &name, Args: []any{2.0,
 		ExprNode{Op: OpConst, Args: []any{}, Value: []any{[]any{1.0, math.NaN()}, []any{3.0, 4.0}}}}}
 	_, err = Evaluate(nested, nil)
-	var de DiagnosticError
 	if !errors.As(err, &de) || de.DiagnosticCode() != CodeInterpAxisNotConst {
 		t.Errorf("nested xs with a NaN: got %v, want code %q", err, CodeInterpAxisNotConst)
 	}
