@@ -160,6 +160,36 @@
       "description": "Ruling Q-108: a scalar `axis` is the wrong rank: 'interp_axis_not_const'.",
       "inputs": [ [10.0, 20.0], 1.0, 0.5 ],
       "expected_error_code": "interp_axis_not_const"
+    },
+    {
+      "name": "too_short__nan",
+      "description": "Ruling Q-110: not-const/rank, too short, length mismatch, non-finite, non-monotonic. A one-value table over the one-value axis [NaN]: 'interp_axis_too_short'.",
+      "inputs": [ [1.0], ["NaN"], 0.5 ],
+      "expected_error_code": "interp_axis_too_short"
+    },
+    {
+      "name": "length_mismatch__nan",
+      "description": "Ruling Q-110: not-const/rank, too short, length mismatch, non-finite, non-monotonic. A three-value table over the two-value axis [0, NaN]: 'interp_axis_length_mismatch'.",
+      "inputs": [ [1.0, 2.0, 3.0], [0.0, "NaN"], 0.5 ],
+      "expected_error_code": "interp_axis_length_mismatch"
+    },
+    {
+      "name": "inf_in_axis",
+      "description": "Ruling Q-113: a +Inf axis entry in an otherwise increasing axis is 'interp_nan_in_axis' (a non-finite entry).",
+      "inputs": [ [10.0, 20.0, 30.0], [0.0, 1.0, "Inf"], 0.5 ],
+      "expected_error_code": "interp_nan_in_axis"
+    },
+    {
+      "name": "neg_inf_first_in_axis",
+      "description": "Ruling Q-113: a -Inf first axis entry is 'interp_nan_in_axis'.",
+      "inputs": [ [10.0, 20.0, 30.0], ["-Inf", 0.0, 1.0], 0.5 ],
+      "expected_error_code": "interp_nan_in_axis"
+    },
+    {
+      "name": "inf_in_non_monotonic_axis",
+      "description": "Ruling Q-113: the axis [+Inf, 0] is decreasing and non-finite; non-finite comes first: 'interp_nan_in_axis'.",
+      "inputs": [ [10.0, 20.0], ["Inf", 0.0], 0.5 ],
+      "expected_error_code": "interp_nan_in_axis"
     }
   ]
 }

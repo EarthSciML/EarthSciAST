@@ -1,5 +1,5 @@
 {
-  "_comment": "esm-spec §9.5.5 load-time table checks and their pinned order: the cases JSON cannot express as a `.esm` document. Each case is one function table (id `T`) and one `table_lookup` node referencing it. A harness builds the table IN MEMORY from `table`, writing each string \"NaN\", \"Inf\" or \"-Inf\" as that binary64 value (JSON cannot carry them), and runs it through the SAME load-time table check that the binding's load / validate() runs on every `function_tables` entry (ruling Q-106); the axes with fewer than 2 values are here because the schema rejects them (`minItems: 2`). The harness asserts the diagnostic code (`expected_error_code`; null means the table passes and the lookup lowers). Cases that break two rules break two ADJACENT rules of the order; `breaks` lists the rules each case breaks, first the one to report. The schema-valid cases are ordinary documents under tests/invalid/ (function_table_*.esm, pinned `resolver_only` with `resolver_error_code` in tests/invalid/expected_errors.json). A non-finite value (NaN, +Inf or -Inf) in an axis is `table_axis_nan` and in `data` is `table_data_nan` (ruling Q-109). A binding whose table data cannot hold a non-finite value at all (its data type has none) may skip a case whose `data` holds one, and says so in its harness.",
+  "_comment": "esm-spec §9.5.5 load-time table checks and their pinned order: the cases JSON cannot express as a `.esm` document. Each case is one function table (id `T`) and one `table_lookup` node referencing it. A harness builds the table IN MEMORY from `table`, writing each string \"NaN\", \"Inf\" or \"-Inf\" as that binary64 value (JSON cannot carry them), and runs it through the SAME load-time table check that the binding's load / validate() runs on every `function_tables` entry (ruling Q-106); the axes with fewer than 2 values are here because the schema rejects them (`minItems: 2`). The harness then runs the case's `lookup` through the binding's load-time `table_lookup` check (ruling Q-112: unknown table, the ten table checks, args, axis keys, output) and asserts the diagnostic code (`expected_error_code`; null means the table and the lookup pass and the lookup lowers). The lookups with a non-empty `args` are here because the schema rejects them (`maxItems: 0`). Cases that break two rules break two ADJACENT rules of the order; `breaks` lists the rules each case breaks, first the one to report. The schema-valid cases are ordinary documents under tests/invalid/ (function_table_*.esm, pinned `resolver_only` with `resolver_error_code` in tests/invalid/expected_errors.json). A non-finite value (NaN, +Inf or -Inf) in an axis is `table_axis_nan` and in `data` is `table_data_nan` (ruling Q-109). A binding whose table data cannot hold a non-finite value at all (its data type has none) may skip a case whose `data` holds one, and says so in its harness.",
   "spec": "esm-spec §9.5.5 (Order of the table checks); formal: Esm.Closed.Tables.validateTable",
   "table_id": "T",
   "order": [
@@ -606,6 +606,116 @@
         "args": []
       },
       "expected_error_code": "table_data_nan"
+    },
+    {
+      "name": "lookup_args_nonempty",
+      "description": "Ruling Q-112: the lookup on a well-formed table carries args [1] (the schema rejects it, maxItems 0): `table_lookup_args_nonempty`.",
+      "breaks": [
+        "table_lookup_args_nonempty"
+      ],
+      "table": {
+        "axes": [
+          {
+            "name": "x",
+            "values": [
+              0,
+              1,
+              2
+            ]
+          }
+        ],
+        "interpolation": "linear",
+        "data": [
+          10,
+          20,
+          30
+        ]
+      },
+      "lookup": {
+        "op": "table_lookup",
+        "table": "T",
+        "axes": {
+          "x": 0.5
+        },
+        "args": [
+          1
+        ]
+      },
+      "expected_error_code": "table_lookup_args_nonempty"
+    },
+    {
+      "name": "lookup_args_nonempty__axis_name_mismatch",
+      "description": "Ruling Q-107: args are checked before axis keys. The lookup carries args [1] and binds axis `z`: `table_lookup_args_nonempty`.",
+      "breaks": [
+        "table_lookup_args_nonempty",
+        "table_lookup_axis_name_mismatch"
+      ],
+      "table": {
+        "axes": [
+          {
+            "name": "x",
+            "values": [
+              0,
+              1,
+              2
+            ]
+          }
+        ],
+        "interpolation": "linear",
+        "data": [
+          10,
+          20,
+          30
+        ]
+      },
+      "lookup": {
+        "op": "table_lookup",
+        "table": "T",
+        "axes": {
+          "z": 0.5
+        },
+        "args": [
+          1
+        ]
+      },
+      "expected_error_code": "table_lookup_args_nonempty"
+    },
+    {
+      "name": "table_axis_nan__lookup_args_nonempty",
+      "description": "Ruling Q-107: the table is checked before the lookup's own fields. The table's axis holds a NaN and the lookup carries args [1]: `table_axis_nan`.",
+      "breaks": [
+        "table_axis_nan",
+        "table_lookup_args_nonempty"
+      ],
+      "table": {
+        "axes": [
+          {
+            "name": "x",
+            "values": [
+              0,
+              "NaN",
+              2
+            ]
+          }
+        ],
+        "interpolation": "linear",
+        "data": [
+          10,
+          20,
+          30
+        ]
+      },
+      "lookup": {
+        "op": "table_lookup",
+        "table": "T",
+        "axes": {
+          "x": 0.5
+        },
+        "args": [
+          1
+        ]
+      },
+      "expected_error_code": "table_axis_nan"
     }
   ],
   "moved_to_tests_invalid": {

@@ -202,6 +202,24 @@
       "description": "Ruling Q-108: a scalar `axis_y` is the wrong rank: 'interp_axis_not_const'.",
       "inputs": [ [[1.0, 2.0], [3.0, 4.0]], [0.0, 1.0], 1.0, 0.5, 0.5 ],
       "expected_error_code": "interp_axis_not_const"
+    },
+    {
+      "name": "length_mismatch__nan_axis_x",
+      "description": "Ruling Q-110: not-const/rank, too short, length mismatch, non-finite, non-monotonic. A ragged table (second row short) with axis_x [0, NaN]: 'interp_axis_length_mismatch'.",
+      "inputs": [ [[1.0, 2.0], [3.0]], [0.0, "NaN"], [0.0, 1.0], 0.5, 0.5 ],
+      "expected_error_code": "interp_axis_length_mismatch"
+    },
+    {
+      "name": "inf_in_axis_y",
+      "description": "Ruling Q-113: a +Inf entry in axis_y is 'interp_nan_in_axis'.",
+      "inputs": [ [[1.0, 2.0], [3.0, 4.0]], [0.0, 1.0], [0.0, "Inf"], 0.5, 0.5 ],
+      "expected_error_code": "interp_nan_in_axis"
+    },
+    {
+      "name": "table_empty",
+      "description": "Ruling Q-111: the empty array [] is rank 1, so as the bilinear table it is 'interp_table_not_const'.",
+      "inputs": [ [], [0.0, 1.0], [0.0, 1.0], 0.5, 0.5 ],
+      "expected_error_code": "interp_table_not_const"
     }
   ]
 }

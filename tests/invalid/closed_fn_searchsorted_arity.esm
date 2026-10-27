@@ -1,0 +1,66 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "ClosedFn_searchsorted_arity",
+    "description": "Ruling Q-112: `interp.searchsorted` called with three arguments; its arity is 2.",
+    "authors": [
+      "EarthSciML"
+    ],
+    "created": "2026-10-27T00:00:00Z"
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "y": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        },
+        "x": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.5
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "y"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              {
+                "op": "fn",
+                "name": "interp.searchsorted",
+                "args": [
+                  "x",
+                  {
+                    "op": "const",
+                    "args": [],
+                    "value": [
+                      1.0,
+                      2.0
+                    ]
+                  },
+                  {
+                    "op": "const",
+                    "args": [],
+                    "value": [
+                      3.0
+                    ]
+                  }
+                ]
+              },
+              "y"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

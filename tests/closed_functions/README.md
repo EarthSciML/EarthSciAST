@@ -112,4 +112,7 @@ The scenario sets cover the boundary semantics pinned in esm-spec §9.2:
   equal-adjacent axis, axis-table length mismatch (and ragged rows for
   bilinear), NaN in axis, single-element axis, and a `const` table or
   axis of the wrong rank (`interp_table_not_const` /
-  `interp_axis_not_const`, ruling Q-108).
+  `interp_axis_not_const`, ruling Q-108; `[]` as a bilinear table is
+  rank 1, ruling Q-111), a ±Inf axis entry (`interp_nan_in_axis`, ruling
+  Q-113), and calls that break two adjacent rules of the pinned order
+  (ruling Q-110).
