@@ -1498,7 +1498,9 @@ def _init_worker(engine_src):
         SymbolicValidator.build()
 
 
-class _FileTimeout(Exception):
+class _FileTimeout(BaseException):
+    """Not an Exception, so no `except Exception` inside the engine swallows it."""
+
     pass
 
 
