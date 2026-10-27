@@ -870,9 +870,11 @@ describe('Unit parsing and dimensional analysis', () => {
   })
 
   describe('Edge cases and error handling', () => {
-    it('should handle empty or null unit strings gracefully', () => {
+    it('reads only the empty string as the empty unit', () => {
       expect(shape(parseUnit(''))).toEqual({ dims: {}, scale: 1 })
-      expect(shape(parseUnit('   '))).toEqual({ dims: {}, scale: 1 })
+      // esm-spec 4.8.2: a whitespace-only string has no tokens and derives no
+      // unit, so it is rejected rather than read as dimensionless.
+      expect(() => parseUnit('   ')).toThrow()
     })
 
     it('should REJECT an unknown unit token rather than silently pass it', () => {
