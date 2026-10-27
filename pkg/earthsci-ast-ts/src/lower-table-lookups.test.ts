@@ -332,11 +332,50 @@ describe('§9.5.5 diagnostics', () => {
     )
   })
 
-  it('names a `data` block with no row for the selected output `table_data_shape_mismatch`', () => {
-    const short = tables({
-      t: { axes: [{ name: 'p', values: [1, 2] }], outputs: ['a', 'b'], data: [[10, 20]] },
+  // esm-spec §9.5.5: the table is checked before the lookup, so even output
+  // `a` (whose row exists) is refused, and `outputs` vs the leading dimension
+  // of `data` is its own code.
+  it.each(['a', 'b'])(
+    'names a `data` block shorter than `outputs` `table_outputs_length_mismatch` (output %s)',
+    (output) => {
+      const short = tables({
+        t: { axes: [{ name: 'p', values: [1, 2] }], outputs: ['a', 'b'], data: [[10, 20]] },
+      })
+      expect(loweringErrorCode(() => lowerTableLookups(lookup({ output }), short))).toBe(
+        ERROR_CODES.TABLE_OUTPUTS_LENGTH_MISMATCH,
+      )
+    },
+  )
+
+  it('checks the table before the lookup: a broken table beats a misspelled axis key', () => {
+    const bad = tables({ t: { axes: [{ name: 'p', values: [2, 1] }], data: [10, 20] } })
+    expect(loweringErrorCode(() => lowerTableLookups(lookup({ axes: { q: 1 } }), bad))).toBe(
+      ERROR_CODES.TABLE_AXIS_NON_MONOTONIC,
+    )
+  })
+
+  it('checks the table before refusing `out_of_bounds: "error"`', () => {
+    const bad = tables({
+      t: { axes: [{ name: 'p', values: [1, 2] }], out_of_bounds: 'error', data: [10, 20, 30] },
     })
-    expect(loweringErrorCode(() => lowerTableLookups(lookup({ output: 'b' }), short))).toBe(
+    expect(loweringErrorCode(() => lowerTableLookups(lookup(), bad))).toBe(
+      ERROR_CODES.TABLE_DATA_SHAPE_MISMATCH,
+    )
+  })
+
+  it.each([Infinity, -Infinity, NaN])(
+    'names a non-finite `data` leaf (%s) `table_data_nan`',
+    (v) => {
+      const bad = tables({ t: { axes: [{ name: 'p', values: [1, 2] }], data: [10, v] } })
+      expect(loweringErrorCode(() => lowerTableLookups(lookup(), bad))).toBe(
+        ERROR_CODES.TABLE_DATA_NAN,
+      )
+    },
+  )
+
+  it('names a non-numeric `data` leaf `table_data_shape_mismatch`', () => {
+    const bad = tables({ t: { axes: [{ name: 'p', values: [1, 2] }], data: [10, 'x'] } })
+    expect(loweringErrorCode(() => lowerTableLookups(lookup(), bad))).toBe(
       ERROR_CODES.TABLE_DATA_SHAPE_MISMATCH,
     )
   })

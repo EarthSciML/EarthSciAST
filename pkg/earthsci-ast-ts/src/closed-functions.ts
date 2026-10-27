@@ -203,14 +203,23 @@ function asNumber(name: string, v: unknown, idx = 0): number {
 }
 
 /**
- * Validate a `searchsorted` xs table. Throws on NaN entries or
- * non-monotonic order. Empty arrays are rejected with the spec arity
- * code (the registry requires N ≥ 1).
+ * Validate a `searchsorted` xs table, in esm-spec §9.2's order: a value that
+ * is not a rank-1 array of numbers is `interp_axis_not_const` (checked at run
+ * time too, since a JavaScript caller can hand over anything), then a NaN entry
+ * is `searchsorted_nan`, then a decreasing pair is `searchsorted_non_monotonic`.
+ * Empty arrays are rejected with the spec arity code (the registry requires
+ * N ≥ 1).
  */
 export function validateSearchsortedTable(
   xs: readonly number[],
   where = 'interp.searchsorted',
 ): void {
+  if (!Array.isArray(xs) || !xs.every((e) => typeof e === 'number')) {
+    throw new ClosedFunctionError(
+      ERROR_CODES.INTERP_AXIS_NOT_CONST,
+      `${where}: xs must be a rank-1 const-array of numbers`,
+    )
+  }
   if (xs.length === 0) {
     throw new ClosedFunctionError(
       ERROR_CODES.CLOSED_FUNCTION_ARITY,
@@ -290,9 +299,10 @@ export function validateInterpAxis(axis: readonly number[], where: string): void
  * Coerce a value to a const-array of numbers, raising `code` when it is not
  * (e.g. a variable reference or non-`const` expression). The code is passed in
  * because esm-spec §9.2 pins DISTINCT diagnostics per argument role: a `table`
- * argument raises `interp_table_not_const`, an axis raises
- * `interp_axis_not_const`, and `interp.searchsorted`'s `xs` raises the older
- * `closed_function_arity`.
+ * argument raises `interp_table_not_const`, and an axis — `interp.searchsorted`'s
+ * `xs` included — raises `interp_axis_not_const`. A value that is not a rank-1
+ * array of numbers (a scalar, a nested array, or an unevaluated expression the
+ * evaluator passed through) fails here, before any NaN or monotonicity check.
  */
 function asNumberArray(
   name: string,
@@ -440,7 +450,8 @@ type ClosedFunctionHandler = (name: string, args: unknown[]) => number
  *  - datetime.* take a single scalar `t_utc` (number).
  *  - interp.searchsorted takes [scalar x, number[] xs]. The xs array MUST be a
  *    plain array of numbers (the AST evaluator extracts it from a `const`-op
- *    child without numeric-collapsing it).
+ *    child without numeric-collapsing it); anything else is
+ *    `interp_axis_not_const`.
  *  - interp.linear takes [number[] table, number[] axis, scalar x].
  *  - interp.bilinear takes
  *    [number[][] table, number[] axis_x, number[] axis_y, scalar x, scalar y].
@@ -485,10 +496,10 @@ const CLOSED_FUNCTION_DISPATCH: Record<string, ClosedFunctionHandler> = {
   'interp.searchsorted': (name, args) => {
     requireArity(name, args, 2)
     const x = asNumber(name, args[0], 0)
-    // searchsorted's xs predates the interp_* codes and is spec-pinned to the
-    // arity diagnostic (esm-spec §9.2); pass it explicitly through the shared
-    // const-array helper so the code lives at one call site.
-    const xs = asNumberArray(name, args[1], 'xs (arg 2)', ERROR_CODES.CLOSED_FUNCTION_ARITY)
+    // esm-spec §9.2: an `xs` that is not a rank-1 const array is
+    // `interp_axis_not_const`, decided before `searchsorted_nan` /
+    // `searchsorted_non_monotonic` (which `searchsortedFirst` checks).
+    const xs = asNumberArray(name, args[1], 'xs (arg 2)', ERROR_CODES.INTERP_AXIS_NOT_CONST)
     return searchsortedFirst(x, xs)
   },
   'interp.linear': (name, args) => {

@@ -22,12 +22,15 @@ import {
   ClosedFunctionError,
   closedFunctionNames,
   CLOSED_FUNCTION_NAMES,
+  dispatchClosedFunction,
   validateSearchsortedTable,
   searchsortedFirst,
   interpLinear,
   interpBilinear,
 } from './closed-functions.js'
 import { fixturesDir } from './test-helpers.js'
+import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
+import type { Expr, Model } from './types.js'
 
 const fixturesRoot = fixturesDir('closed_functions')
 
@@ -222,9 +225,10 @@ describe('Closed function registry — cross-binding conformance', () => {
               bindings.set(paramName, decoded[0] as number)
               evaluateExpression(rhsTemplate, bindings)
             } else if (expected.function === 'interp.searchsorted') {
-              const xs = decoded[1] as number[]
-              validateSearchsortedTable(xs)
-              searchsortedFirst(decoded[0] as number, xs)
+              // Through the registry's own dispatch, which owns the argument
+              // contract: the rank check on `xs` (`interp_axis_not_const`) is
+              // decided there, so a scalar or nested `xs` reaches it as-is.
+              dispatchClosedFunction('interp.searchsorted', decoded)
             } else if (expected.function === 'interp.linear') {
               const table = decoded[0] as number[]
               const axis = decoded[1] as number[]
@@ -261,5 +265,90 @@ describe('closedFunctionNames (API_SPEC.md §8 item 4)', () => {
 
   it('returns exactly the deprecated CLOSED_FUNCTION_NAMES constant', () => {
     expect(closedFunctionNames()).toBe(CLOSED_FUNCTION_NAMES)
+  })
+})
+
+describe('interp.searchsorted: an xs that is not a rank-1 const array (esm-spec §9.2)', () => {
+  const fixturePath = join(fixturesRoot, 'interp', 'searchsorted', 'canonical.esm')
+
+  /** The canonical fixture with its `xs` argument replaced by `xs`, loaded. */
+  function loadWithXs(xs: unknown): Expr {
+    const doc = JSON.parse(readFileSync(fixturePath, 'utf-8'))
+    doc.models.Probe.equations[0].rhs.args[1] = xs
+    const file = loadString(JSON.stringify(doc))
+    return (file.models!.Probe as Model).equations[0].rhs
+  }
+
+  function evalCode(rhs: Expr, bindings: Map<string, number>): string {
+    try {
+      evaluateExpression(rhs, bindings)
+    } catch (e) {
+      if (e instanceof EsmDiagnosticError) return e.code
+      throw e
+    }
+    return 'NO_ERROR'
+  }
+
+  it.each<[string, unknown]>([
+    ['a variable reference', 'xs_var'],
+    ['a non-const expression', { op: '+', args: [1, 2] }],
+    ['a scalar const', { op: 'const', args: [], value: 3 }],
+    [
+      'a nested const',
+      {
+        op: 'const',
+        args: [],
+        value: [
+          [1, 2],
+          [3, 4],
+        ],
+      },
+    ],
+    [
+      'a nested const holding a NaN',
+      {
+        op: 'const',
+        args: [],
+        value: [
+          [1, NaN],
+          [3, 4],
+        ],
+      },
+    ],
+  ])('rejects %s as `interp_axis_not_const`, through load and evaluate', (_label, xs) => {
+    // The nested-NaN form cannot be written in JSON; build it in memory.
+    const rhs =
+      _label === 'a nested const holding a NaN'
+        ? ({ op: 'fn', name: 'interp.searchsorted', args: ['x', xs] } as Expr)
+        : loadWithXs(xs)
+    // `xs_var` is BOUND (to a scalar): the code must not depend on whether the
+    // evaluator could have produced a number for it.
+    const bound = new Map([
+      ['x', 2],
+      ['xs_var', 3],
+    ])
+    expect(evalCode(rhs, bound)).toBe(ERROR_CODES.INTERP_AXIS_NOT_CONST)
+    // ...nor on whether it could not.
+    expect(evalCode(rhs, new Map([['x', 2]]))).toBe(ERROR_CODES.INTERP_AXIS_NOT_CONST)
+  })
+
+  it.each<[string, unknown]>([
+    ['a scalar', 3],
+    [
+      'a nested array',
+      [
+        [1, Number.NaN],
+        [3, 4],
+      ],
+    ],
+  ])('validateSearchsortedTable rejects %s as `interp_axis_not_const`', (_label, xs) => {
+    expect(() => validateSearchsortedTable(xs as number[])).toThrow(
+      expect.objectContaining({ code: ERROR_CODES.INTERP_AXIS_NOT_CONST }),
+    )
+  })
+
+  it('still evaluates the rank-1 const xs', () => {
+    const rhs = loadWithXs({ op: 'const', args: [], value: [1, 2, 3] })
+    expect(evaluateExpression(rhs, new Map([['x', 2]]))).toBe(2)
   })
 })
