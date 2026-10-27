@@ -96,6 +96,7 @@ import random
 import re
 import subprocess
 import sys
+import time
 import warnings
 from fractions import Fraction
 from pathlib import Path
@@ -907,6 +908,12 @@ def try_subset(comp, units, scoped, lhs, rhs, subset):
 
 def solve_site(comp, units, scoped, lhs, rhs, candidates, max_exhaustive=3):
     """Return ('ok', {id: vec}) | ('ambiguous', [sols]) | ('unresolved', reason)."""
+    deadline = time.monotonic() + SITE_BUDGET
+
+    def over():
+        return time.monotonic() > deadline
+
+    budget_msg = f"the literal-subset search exceeded its {SITE_BUDGET} s budget"
     n = len(candidates)
     if n == 0:
         return "unresolved", "no eligible nonzero literal at the site (the mismatch is elsewhere)"
@@ -914,6 +921,8 @@ def solve_site(comp, units, scoped, lhs, rhs, candidates, max_exhaustive=3):
     for size in range(1, min(limit, n) + 1):
         sols = []
         for subset in itertools.combinations(candidates, size):
+            if over():
+                return "unresolved", budget_msg
             status, sol = try_subset(comp, units, scoped, lhs, rhs, subset)
             if status == "unique":
                 sols.append(sol)
@@ -927,6 +936,8 @@ def solve_site(comp, units, scoped, lhs, rhs, candidates, max_exhaustive=3):
     if status not in ("unique", "underdetermined", "nonminimal"):
         return "unresolved", "no assignment of units to the site's literals makes it pass"
     for c in list(candidates):
+        if over():
+            return "unresolved", budget_msg
         trial = [x for x in active if x != c]
         st, _ = try_subset(comp, units, scoped, lhs, rhs, trial)
         if st in ("unique", "underdetermined", "nonminimal"):
@@ -936,6 +947,8 @@ def solve_site(comp, units, scoped, lhs, rhs, candidates, max_exhaustive=3):
         return "unresolved", f"minimal literal set {len(active)} is {status}"
     for i in active:
         for j in candidates:
+            if over():
+                return "unresolved", budget_msg
             if j in active:
                 continue
             swap = [x for x in active if x != i] + [j]
@@ -1485,10 +1498,38 @@ def _init_worker(engine_src):
         SymbolicValidator.build()
 
 
+class _FileTimeout(Exception):
+    pass
+
+
+def _on_alarm(signum, frame):
+    raise _FileTimeout()
+
+
+#: Seconds one file may take; a site with very many candidate literals can
+#: make the subset search slow, and one file must not stall a corpus run.
+FILE_TIMEOUT = 1800
+
+#: Seconds the literal-subset search may spend on one site.
+SITE_BUDGET = 60
+
+
 def _run_one(item):
+    import signal
+
     path, rel, bump, evaluate = item
+    signal.signal(signal.SIGALRM, _on_alarm)
+    signal.alarm(FILE_TIMEOUT)
     try:
         rep = process_file(path, bump, evaluate=evaluate)
+    except _FileTimeout:
+        rep = {
+            "file": path,
+            "rewrites": [],
+            "unresolved": [{"site": "(whole file)", "reason": f"timed out after {FILE_TIMEOUT} s"}],
+            "notes": [],
+            "status": f"timed out after {FILE_TIMEOUT} s; nothing proposed",
+        }
     except Exception as exc:
         rep = {
             "file": path,
@@ -1497,6 +1538,8 @@ def _run_one(item):
             "notes": [],
             "status": f"codemod crashed: {type(exc).__name__}: {exc}"[:300],
         }
+    finally:
+        signal.alarm(0)
     rep["rel"] = rel
     return rep
 
@@ -1534,7 +1577,7 @@ def main(argv=None):
         import multiprocessing as mp
 
         pool = mp.get_context("fork").Pool(args.jobs, _init_worker, (args.engine_src,))
-        results = pool.imap(_run_one, todo)
+        results = pool.imap_unordered(_run_one, todo)
     else:
         results = map(_run_one, todo)
     reports = []
@@ -1565,6 +1608,7 @@ def main(argv=None):
             out = Path(args.patch_dir) / (rel + ".patch")
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_text("".join(diff))
+    reports.sort(key=lambda r: r["rel"])
     mount_notes = mounting_parents(reports)
     for line in mount_notes:
         print("NOTE:", line)
