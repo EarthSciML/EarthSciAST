@@ -469,6 +469,14 @@
     {
       "units": "fs",
       "why": "esm-spec 4.8.1: NO SI-prefix mechanism. `fs` would be a femto-second; it is not a table key. Rust resolved it through a prefix fallback until this was pinned."
+    },
+    {
+      "units": "m^(-2)",
+      "why": "esm-spec 4.8.2: a parenthesised exponent is '(' '-'? integer '/' '-'? integer ')', always a RATIO. Go and Rust accepted `^(-2)` while Julia and Python rejected it; the spelling is `m^-2`."
+    },
+    {
+      "units": "m^(1.5/2)",
+      "why": "As `m^(-2)`: the two sides of a rational exponent are integers. Go accepted decimals there."
     }
   ],
   "reject_scaling_factor": [
