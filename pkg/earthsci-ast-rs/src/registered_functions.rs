@@ -217,7 +217,7 @@ fn cf_datetime_year(name: &str, args: &[ClosedArg]) -> Result<ClosedValue, Close
     expect_arity(name, args, 1)?;
     let t = args[0].expect_scalar(name, 0)?;
     let (y, _, _, _, _, _) = decompose_utc(t);
-    Ok(ClosedValue::Integer(check_i32(name, y as i64)?))
+    Ok(ClosedValue::Integer(check_i32(name, y)?))
 }
 
 fn cf_datetime_day_of_year(
@@ -287,7 +287,7 @@ fn cf_interp_bilinear(name: &str, args: &[ClosedArg]) -> Result<ClosedValue, Clo
 fn datetime_field(
     name: &str,
     args: &[ClosedArg],
-    select: impl Fn((i32, u32, u32, u32, u32, u32)) -> u32,
+    select: impl Fn((i64, u32, u32, u32, u32, u32)) -> u32,
 ) -> Result<ClosedValue, ClosedFunctionError> {
     expect_arity(name, args, 1)?;
     let t = args[0].expect_scalar(name, 0)?;
@@ -316,38 +316,40 @@ fn check_i32(name: &str, v: i64) -> Result<i32, ClosedFunctionError> {
 
 // ---------------------------------------------------------------------------
 // Calendar arithmetic — integer ymd/hms decomposition, Fliegel–van Flandern
-// JDN. The spec pins floored division by 86400 to split (date, time-of-day);
-// we use Python-style floor / mod so negative `t_utc` decomposes the same as
-// Julia's `unix2datetime`.
+// JDN. esm-spec §9.2 splits `t_utc` by ONE floor-divmod by 86400 into the day
+// number `floor(t/86400)` and the time of day `t − 86400·floor(t/86400)`, both
+// exact (as reals), and takes hour/minute/second from `floor(time of day)`:
+// fractional time floors toward −∞ (ruling Q-3).
 // ---------------------------------------------------------------------------
 
-// Floored division/modulus on f64 → integer day count and seconds-of-day.
-// `seconds_in_day` lands in `[0.0, 86400.0)` (inclusive of 0, exclusive of
-// 86400) so the per-component decomposition is unambiguous.
+/// The esm-spec §9.2 floor-divmod of `t_utc` by 86400, done exactly:
+/// `(day count, whole second of the day in [0, 86400), fractional second in
+/// [0, 1))`.
+///
+/// Because 86400 is an integer, `floor(t/86400) == floor(floor(t)/86400)`, so
+/// the split is the Euclidean divmod of the whole second `floor(t)` — an exact
+/// integer in binary64 — and `t − floor(t)` is exact too. Nothing rounds, so
+/// the date and the time of day can never disagree about which day `t` is in.
+/// (Dividing `t / 86400.0` in floating point instead rounds just below a day
+/// boundary, and `86400 − 5e-324` rounds up to 86400.)
+///
+/// Outside `±2^63` s the `as i64` cast saturates (and NaN becomes 0); the year
+/// there is far outside Int32, so `datetime.year` still reports the overflow.
 #[inline]
-fn floor_div_mod(t_utc: f64) -> (i64, f64) {
-    let day = (t_utc / 86400.0).floor();
-    let mut sec = t_utc - day * 86400.0;
-    // Defensive: floating-point rounding may push `sec` to exactly 86400.0
-    // for inputs near a day boundary. Re-map onto the half-open interval.
-    if sec >= 86400.0 {
-        sec -= 86400.0;
-    } else if sec < 0.0 {
-        sec += 86400.0;
-    }
-    (day as i64, sec)
+fn floor_div_mod(t_utc: f64) -> (i64, i64, f64) {
+    let whole = t_utc.floor();
+    let s = whole as i64;
+    (s.div_euclid(86400), s.rem_euclid(86400), t_utc - whole)
 }
 
 // Decompose a UTC scalar into (year, month, day, hour, minute, second). Uses
 // the Hinnant civil_from_days algorithm (see howardhinnant.github.io/date_algorithms.html)
 // extended to the proleptic-Gregorian calendar; the algorithm is exact on
-// the full i64 day-count domain, far beyond the i32 year contract.
-fn decompose_utc(t_utc: f64) -> (i32, u32, u32, u32, u32, u32) {
-    let (day_count, sec_in_day) = floor_div_mod(t_utc);
+// the full i64 day-count domain, far beyond the i32 year contract. The year
+// stays `i64` so `datetime.year` can range-check it rather than wrap.
+fn decompose_utc(t_utc: f64) -> (i64, u32, u32, u32, u32, u32) {
+    let (day_count, s, _) = floor_div_mod(t_utc);
     let (y, m, d) = civil_from_days(day_count);
-    // Truncate fractional seconds — the spec pins integer outputs and
-    // forbids leap-second slots (so seconds ∈ 0..=59).
-    let s = sec_in_day.trunc() as i64;
     let hour = (s / 3600) as u32;
     let minute = ((s % 3600) / 60) as u32;
     let second = (s % 60) as u32;
@@ -357,7 +359,7 @@ fn decompose_utc(t_utc: f64) -> (i32, u32, u32, u32, u32, u32) {
 // Hinnant's algorithm: days since 1970-01-01 → (y, m, d) on the proleptic-
 // Gregorian calendar. Negative day counts produce negative / pre-Common-Era
 // years per ISO 8601 (1 BC = 0, 2 BC = -1).
-fn civil_from_days(z: i64) -> (i32, u32, u32) {
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let z = z + 719468;
     let era = if z >= 0 { z } else { z - 146096 } / 146097;
     let doe = (z - era * 146097) as u64; // [0, 146096]
@@ -368,14 +370,14 @@ fn civil_from_days(z: i64) -> (i32, u32, u32) {
     let d = (doy - (153 * mp + 2) / 5 + 1) as u32; // [1, 31]
     let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32; // [1, 12]
     let y = if m <= 2 { y + 1 } else { y };
-    (y as i32, m, d)
+    (y, m, d)
 }
 
-fn is_leap_year(y: i32) -> bool {
+fn is_leap_year(y: i64) -> bool {
     (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0)
 }
 
-fn day_of_year(y: i32, m: u32, d: u32) -> u32 {
+fn day_of_year(y: i64, m: u32, d: u32) -> u32 {
     const CUM: [u32; 12] = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
     let mut doy = CUM[(m - 1) as usize] + d;
     if m > 2 && is_leap_year(y) {
@@ -385,23 +387,23 @@ fn day_of_year(y: i32, m: u32, d: u32) -> u32 {
 }
 
 // Fliegel–van Flandern (1968) JDN on the integer date component, plus the
-// fractional-day offset relative to noon UTC. Matches the Julia reference
-// (which uses Julia's `÷` — truncate-toward-zero — for the inner divides) to
-// within ≤ 1 ulp; the only float op is the final divide by 86400. Rust's
-// integer `/` is also truncate-toward-zero, so the inner divides match Julia
-// directly. Using `div_euclid` here would shift the (m − 14)/12 term by one
+// fractional-day offset `(time_of_day − 43200) / 86400` relative to noon UTC.
+// The offset is formed as `(second_of_day − 43200) + fraction` — an exact
+// integer plus the exact fractional second — so the time of day rounds once,
+// then the divide and the add round once each. Rust's integer `/` is
+// truncate-toward-zero, matching the formula's (and Julia's `÷`) inner
+// divides. Using `div_euclid` here would shift the (m − 14)/12 term by one
 // for Jan/Feb (off by ±2 days) and fail epoch — keep `/`.
 fn julian_day(t_utc: f64) -> f64 {
-    let (day_count, sec_in_day) = floor_div_mod(t_utc);
+    let (day_count, sec_of_day, frac) = floor_div_mod(t_utc);
     let (y, m, d) = civil_from_days(day_count);
-    let y = y as i64;
     let m = m as i64;
     let d = d as i64;
     let jdn = (1461 * (y + 4800 + (m - 14) / 12)) / 4 + (367 * (m - 2 - 12 * ((m - 14) / 12))) / 12
         - (3 * ((y + 4900 + (m - 14) / 12) / 100)) / 4
         + d
         - 32075;
-    (jdn as f64) + (sec_in_day - 43200.0) / 86400.0
+    (jdn as f64) + (((sec_of_day - 43200) as f64) + frac) / 86400.0
 }
 
 // `interp.searchsorted` per esm-spec §9.2: 1-based, left-side bias on

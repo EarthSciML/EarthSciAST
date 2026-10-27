@@ -3263,6 +3263,23 @@ const DATETIME_TIMES: &[f64] = &[
     -36_916_473_600.0, // 0800-03-01T00:00:00Z (era boundary)
     -11_670_912_000.0, // 1600-03-01T00:00:00Z (era boundary)
     951_868_800.0,     // 2000-03-01T00:00:00Z (era boundary, product exact)
+    // Fractional times one step from a boundary, which floor toward -inf
+    // (esm-spec §9.2, ruling Q-3): the smallest subnormal below the epoch
+    // (where `86400 - 5e-324` rounds to 86400), the ruling's worked examples,
+    // and one ulp below a second, a day and a month boundary on each side of
+    // the epoch.
+    -5e-324,
+    -1e-7,
+    59.9999999,
+    86_399.9999999,
+    0.999_999_999_999_999_9,
+    86_399.999_999_999_99,
+    -86_400.000_000_000_01,
+    2_678_399.999_999_999_5,
+    // The Int32 year range edges: the last double of year 2147483647 and the
+    // first instant of year -2147483648, where the day count is ~7.8e11.
+    6.776_797_623_353_279e16,
+    -6.776_810_056_797_12e16,
 ];
 
 /// The nine calendar entries of the closed-function registry, in the order the

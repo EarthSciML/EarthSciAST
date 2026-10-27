@@ -2158,7 +2158,10 @@ impl<'m> TapeBuilder<'m> {
     //
     // That is possible because the spec's own recipe — ONE floored divmod of
     // `t_utc` by 86400, then exact integer arithmetic on the resulting (days,
-    // seconds-of-day) pair — carries in `f64` with no rounding at all. Every
+    // seconds-of-day) pair — carries in `f64` with no rounding at all. The
+    // divmod is taken of `floor(t_utc)`, which is exact and gives the same
+    // pair (86400 is an integer), so the fields floor toward −∞ (ruling Q-3)
+    // and the time of day is never rounded up into the next day. Every
     // intermediate is an integer well inside binary64's 2^53 exact-integer
     // range, where `+`, `-` and `*` are exact; and `floor(a / b)` for integer
     // `a`, `b` is the integer quotient whenever `|a| << 2^52`, because the
@@ -2564,10 +2567,11 @@ impl<'m> TapeBuilder<'m> {
     /// dead-code pass, so an unconditional seconds-of-day would be six
     /// instructions the interpreter runs on every call of `datetime.year`.
     fn lower_datetime(&mut self, name: &str, t: LV) -> LResult<LV> {
-        let day = self.dt_day_count(t.clone())?;
+        let whole = self.emit_un(UnCode::Floor, t.clone());
+        let day = self.dt_day_count(whole.clone())?;
         match name {
             "datetime.hour" | "datetime.minute" | "datetime.second" => {
-                let sec = self.dt_sec_in_day(t, day)?;
+                let sec = self.dt_sec_of_day(whole, day)?;
                 let (hour, minute, second) = self.dt_hms(sec)?;
                 Ok(match name {
                     "datetime.hour" => hour,
@@ -2576,8 +2580,9 @@ impl<'m> TapeBuilder<'m> {
                 })
             }
             "datetime.julian_day" => {
-                let sec = self.dt_sec_in_day(t, day.clone())?;
-                self.dt_julian_day(day, sec)
+                let sec = self.dt_sec_of_day(whole.clone(), day.clone())?;
+                let frac = self.emit_bin(BinCode::Sub, t, whole)?; // exact, in [0, 1)
+                self.dt_julian_day(day, sec, frac)
             }
             _ => {
                 let (y, m, d) = self.dt_civil_from_days(day)?;
@@ -2606,15 +2611,6 @@ impl<'m> TapeBuilder<'m> {
             return Ok(if c != 0.0 { a } else { b });
         }
         self.emit_select(cond, a, b)
-    }
-
-    /// `trunc(q)` — round toward zero, which is what Rust's `as i64` and its
-    /// integer `/` do, and what `f64::trunc` does in the reference.
-    fn dt_trunc(&mut self, q: LV) -> LResult<LV> {
-        let neg = self.dt_op(BinCode::Lt, q.clone(), 0.0)?;
-        let up = self.emit_un(UnCode::Ceil, q.clone());
-        let down = self.emit_un(UnCode::Floor, q);
-        self.dt_select(neg, up, down)
     }
 
     /// `floor(a / k)` — floored integer division (`k > 0`), with the quotient
@@ -2691,25 +2687,17 @@ impl<'m> TapeBuilder<'m> {
     }
 
     /// The day half of `floor_div_mod` — the ONE floored divmod by 86400 the
-    /// spec allows before all the arithmetic goes integer.
-    fn dt_day_count(&mut self, t: LV) -> LResult<LV> {
-        self.dt_floor_div(t, 86400.0)
+    /// spec allows before all the arithmetic goes integer — of the whole
+    /// second `floor(t_utc)`.
+    fn dt_day_count(&mut self, whole: LV) -> LResult<LV> {
+        self.dt_floor_div(whole, 86400.0)
     }
 
-    /// The seconds-of-day half, in `[0, 86400)`.
-    fn dt_sec_in_day(&mut self, t: LV, day: LV) -> LResult<LV> {
+    /// The whole second of the day, in `[0, 86400)`: the exact remainder of the
+    /// same divmod, so it needs no re-mapping and always agrees with the day.
+    fn dt_sec_of_day(&mut self, whole: LV, day: LV) -> LResult<LV> {
         let off = self.dt_op(BinCode::Mul, day, 86400.0)?;
-        let sec = self.emit_bin(BinCode::Sub, t, off)?;
-        // The reference re-maps a `sec` that floating-point rounding pushed out
-        // of [0, 86400) and deliberately leaves the day count alone; mirror
-        // both halves, including the `else if` (so the two adjustments cannot
-        // both apply).
-        let hi = self.dt_op(BinCode::Ge, sec.clone(), 86400.0)?;
-        let lo = self.dt_op(BinCode::Lt, sec.clone(), 0.0)?;
-        let down = self.dt_op(BinCode::Sub, sec.clone(), 86400.0)?;
-        let up = self.dt_op(BinCode::Add, sec.clone(), 86400.0)?;
-        let inner = self.dt_select(lo, up, sec)?;
-        self.dt_select(hi, down, inner)
+        self.emit_bin(BinCode::Sub, whole, off)
     }
 
     /// Hinnant's `civil_from_days`: a day count since 1970-01-01 to
@@ -2762,12 +2750,11 @@ impl<'m> TapeBuilder<'m> {
         Ok((y, m, d))
     }
 
-    /// `(hour, minute, second)` from the seconds-of-day. The reference
-    /// truncates the fractional second away first, then does `i64` `/` and `%`
-    /// — both round toward zero.
-    fn dt_hms(&mut self, sec_in_day: LV) -> LResult<(LV, LV, LV)> {
-        let s = self.dt_trunc(sec_in_day)?;
-        let s = self.dt_nan_to_zero(s)?;
+    /// `(hour, minute, second)` from the whole second of the day. The
+    /// reference does `i64` `/` and `%` — both round toward zero, and the
+    /// operand is never negative.
+    fn dt_hms(&mut self, sec_of_day: LV) -> LResult<(LV, LV, LV)> {
+        let s = self.dt_nan_to_zero(sec_of_day)?;
         let hour = self.dt_trunc_div(s.clone(), 3600.0)?;
         let whole_hours = self.dt_op(BinCode::Mul, hour.clone(), 3600.0)?;
         let rem = self.emit_bin(BinCode::Sub, s.clone(), whole_hours)?; // s % 3600
@@ -2826,7 +2813,7 @@ impl<'m> TapeBuilder<'m> {
     /// fractional day measured from noon UTC. The one floating-point divide is
     /// the final `/ 86400`, which is where the spec's "<= 1 ulp" allowance for
     /// this entry (and only this entry) comes from.
-    fn dt_julian_day(&mut self, day_count: LV, sec_in_day: LV) -> LResult<LV> {
+    fn dt_julian_day(&mut self, day_count: LV, sec_of_day: LV, frac: LV) -> LResult<LV> {
         let (y, m, d) = self.dt_civil_from_days(day_count)?;
         // `a = (m - 14) / 12` truncated. With `m` in [1, 12] the numerator is
         // in [-13, -2], so the quotient is -1 exactly for January and February
@@ -2854,10 +2841,11 @@ impl<'m> TapeBuilder<'m> {
         let jdn = self.emit_bin(BinCode::Sub, jdn, t3)?;
         let jdn = self.emit_bin(BinCode::Add, jdn, d)?;
         let jdn = self.dt_op(BinCode::Sub, jdn, 32075.0)?;
-        // (jdn as f64) + (sec_in_day - 43200.0) / 86400.0
-        let frac = self.dt_op(BinCode::Sub, sec_in_day, 43200.0)?;
-        let frac = self.dt_op(BinCode::Div, frac, 86400.0)?;
-        self.emit_bin(BinCode::Add, jdn, frac)
+        // (jdn as f64) + (((sec_of_day - 43200) as f64) + frac) / 86400.0
+        let from_noon = self.dt_op(BinCode::Sub, sec_of_day, 43200.0)?;
+        let from_noon = self.emit_bin(BinCode::Add, from_noon, frac)?;
+        let from_noon = self.dt_op(BinCode::Div, from_noon, 86400.0)?;
+        self.emit_bin(BinCode::Add, jdn, from_noon)
     }
 
     // -- ifelse ---------------------------------------------------------------
