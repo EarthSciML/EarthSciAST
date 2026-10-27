@@ -587,6 +587,12 @@ function computeDimensions(
 
   if (typeof expr === 'string') {
     const dims = unitBindings.get(expr)
+    if (!dims && expr === 't') {
+      // The implicit independent variable has the time dimension, in seconds
+      // (esm-spec §4.9.1). A derivative taken with respect to an undeclared `t`
+      // stays undeterminable: the `D` arm reads `unitBindings`, not this.
+      return finish({ dims: { s: 1 }, scale: 1, exact: ExactScale.one() })
+    }
     if (!dims) {
       // Unknown variable ⇒ UNKNOWN dimension, not dimensionless. Assuming
       // dimensionless here would manufacture mismatches against every
@@ -1028,6 +1034,11 @@ function computeDimensions(
 
     case 'Pre':
       return finish(get(0))
+
+    case 'ic':
+      // CARRIES its operand's unit (esm-spec §4.8.3): `ic(T [K]) = 288.0` is
+      // checked like `T = 288.0`.
+      return finish(argDims.length > 0 ? get(0) : null)
 
     case 'index':
     case 'reshape':
@@ -2013,12 +2024,11 @@ function firstMismatch(diagnostics: UnitDiagnostic[]): string | null {
 
 /**
  * The first provable mismatch an EQUATION check site produces under
- * `options`' literal rule, or `null` when it passes or is skipped: a mismatch
- * inside either side, else both sides determinable and differing in dimension
- * or exact scale (esm-spec §4.8.6 "Check sites"). The time-ratio rule
- * {@link validateUnits} applies to a derivative of an undeclared independent
- * variable is not part of the site verdict: such a derivative is
- * undeterminable, so the site is skipped, as in the Python reference.
+ * `options`' literal rule, or `null` when it passes or is skipped (esm-spec
+ * §4.8.6 "Check sites"): a mismatch inside either side; else, when the lhs is
+ * `D(x)` with respect to an undeclared independent variable, the §4.8.4 rule
+ * that no time unit reconciles the sides ({@link derivativeTimeMismatch});
+ * else both sides determinable and differing in dimension or exact scale.
  */
 function equationSiteMismatch(
   lhs: Expression,
@@ -2031,6 +2041,10 @@ function equationSiteMismatch(
     const right = checkDimensions(rhs, bindings, options)
     const inner = firstMismatch([...left.diagnostics, ...right.diagnostics])
     if (inner !== null) return inner
+    if (derivativeOfUndeclaredTime(lhs, bindings)) {
+      const state = checkDimensions((lhs as ExpressionNode).args[0], bindings, options)
+      return derivativeTimeMismatch(state.dimensions, right.dimensions)
+    }
     const l = left.dimensions
     const r = right.dimensions
     if (l !== null && r !== null && !sameUnit(l, r)) {
@@ -2065,14 +2079,16 @@ function pointerToken(name: string): string {
  * numeric literals are dimensionless at scale 1, but not under the current
  * neutral-literal rule. In document order.
  *
- * The sites are each equation of every top-level model
- * (`/models/<M>/equations/<i>`) and each reaction rate of every top-level
- * reaction system (`/reaction_systems/<S>/reactions/<i>`); subsystems are not
- * sites. A model's equations are typed in the environment {@link validateUnits}
- * gives them, a rate in the one `validateReactionRateUnits` gives it (the
- * system's own species and parameters), both with scoped references bound. A
- * site the current rule already rejects carries no warning: it is an error
- * already. The warnings never make a document invalid.
+ * The sites are every model's `equations` and `initialization_equations` and
+ * every reaction system's `constraint_equations` and reaction rates, in the
+ * top-level components and in their inline subsystems at any depth (a `{ref}`
+ * mount counts once resolved; an unresolved one is skipped). A component's
+ * equations are typed against its own declarations over the shared top-level
+ * environment, as {@link validateUnits} types a top-level component; a rate
+ * against the system's own species and parameters, as
+ * `validateReactionRateUnits` does. Both bind scoped references. A site the
+ * current rule already rejects carries no warning: it is an error already.
+ * The warnings never make a document invalid.
  */
 export function dimensionlessLiteralWarnings(file: EsmFile): UnitWarning[] {
   const out: UnitWarning[] = []
@@ -2103,23 +2119,17 @@ export function dimensionlessLiteralWarnings(file: EsmFile): UnitWarning[] {
     })
   }
 
-  for (const [modelName, model] of Object.entries(file.models ?? {})) {
-    if (isReferenceStub(model)) continue
-    const bindings = withScopedReferenceUnits(
-      bindingsForComponent(shared, modelName, model),
-      file,
-      model,
-      scopedTopLevel,
-    )
-    const equations = ((model as Model).equations ?? []) as Array<{
-      lhs: Expression
-      rhs: Expression
-    }>
-    equations.forEach((equation, i) => {
+  type Eq = { lhs: Expression; rhs: Expression } | null | undefined
+  const visitEquations = (
+    pointer: string,
+    equations: unknown,
+    bindings: Map<string, ParsedUnit>,
+  ) => {
+    if (!Array.isArray(equations)) return
+    ;(equations as Eq[]).forEach((equation, i) => {
       if (!equation) return
-      const pointer = `/models/${pointerToken(modelName)}/equations/${i}`
       visit(
-        pointer,
+        `${pointer}/${i}`,
         equationSiteMismatch(equation.lhs, equation.rhs, bindings, candidate),
         () => equationSiteMismatch(equation.lhs, equation.rhs, bindings, current) !== null,
         [equation.lhs, equation.rhs],
@@ -2127,30 +2137,62 @@ export function dimensionlessLiteralWarnings(file: EsmFile): UnitWarning[] {
     })
   }
 
-  for (const [systemName, system] of Object.entries(file.reaction_systems ?? {})) {
-    if (isReferenceStub(system)) continue
-    // The system's own species and parameters, exactly as
-    // `validateReactionRateUnits` binds them.
-    const bindings = withScopedReferenceUnits(
-      bindingsForComponent(new Map(), systemName, system),
-      file,
-      system,
-      scopedTopLevel,
+  // `name` is the component's own key; passing it undotted makes
+  // `bindingsForComponent` rebind the component's own declarations at any depth.
+  const scoped = (bindings: Map<string, ParsedUnit>, component: unknown) =>
+    withScopedReferenceUnits(bindings, file, component, scopedTopLevel)
+
+  const walkSubsystems = (
+    pointer: string,
+    component: unknown,
+    walk: (pointer: string, name: string, sub: unknown) => void,
+  ) => {
+    const subs = (component as { subsystems?: Record<string, unknown> }).subsystems
+    for (const [name, sub] of Object.entries(subs ?? {})) {
+      if (sub === null || typeof sub !== 'object' || 'ref' in sub) continue
+      walk(`${pointer}/subsystems/${pointerToken(name)}`, name, sub)
+    }
+  }
+
+  const walkModel = (pointer: string, name: string, model: unknown): void => {
+    const bindings = scoped(bindingsForComponent(shared, name, model), model)
+    const m = model as { equations?: unknown; initialization_equations?: unknown }
+    visitEquations(`${pointer}/equations`, m.equations, bindings)
+    visitEquations(`${pointer}/initialization_equations`, m.initialization_equations, bindings)
+    walkSubsystems(pointer, model, walkModel)
+  }
+
+  const walkReactionSystem = (pointer: string, name: string, system: unknown): void => {
+    const equationBindings = scoped(bindingsForComponent(shared, name, system), system)
+    visitEquations(
+      `${pointer}/constraint_equations`,
+      (system as { constraint_equations?: unknown }).constraint_equations,
+      equationBindings,
     )
+    const rateBindings = scoped(bindingsForComponent(new Map(), name, system), system)
     const reactions = ((system as { reactions?: unknown[] }).reactions ?? []) as Array<
       { rate?: Expression } | null | undefined
     >
     reactions.forEach((reaction, i) => {
       const rate = reaction?.rate
       if (rate === undefined || rate === null) return
-      const pointer = `/reaction_systems/${pointerToken(systemName)}/reactions/${i}`
       visit(
-        pointer,
-        rateSiteMismatch(rate, bindings, candidate),
-        () => rateSiteMismatch(rate, bindings, current) !== null,
+        `${pointer}/reactions/${i}`,
+        rateSiteMismatch(rate, rateBindings, candidate),
+        () => rateSiteMismatch(rate, rateBindings, current) !== null,
         [rate],
       )
     })
+    walkSubsystems(pointer, system, walkReactionSystem)
+  }
+
+  for (const [name, model] of Object.entries(file.models ?? {})) {
+    if (isReferenceStub(model)) continue
+    walkModel(`/models/${pointerToken(name)}`, name, model)
+  }
+  for (const [name, system] of Object.entries(file.reaction_systems ?? {})) {
+    if (isReferenceStub(system)) continue
+    walkReactionSystem(`/reaction_systems/${pointerToken(name)}`, name, system)
   }
   return out
 }
