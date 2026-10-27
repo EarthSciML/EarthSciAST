@@ -79,4 +79,20 @@ _dl_warnings(result) = [w for w in result.unit_warnings
         @test isempty(EarthSciAST.expression_unit_findings(mx, Dict("x" => "m");
                                                           dimensionless_literals=true))
     end
+
+    @testset "ic carries its operand's unit; an undeclared t is in seconds" begin
+        icq = EarthSciAST.OpExpr("ic", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("q")])
+        for on in (false, true)
+            @test EarthSciAST.get_expression_dimensions(icq, Dict("q" => "km");
+                                                        dimensionless_literals=on) == u"km"
+        end
+        @test EarthSciAST.get_expression_dimensions(EarthSciAST.VarExpr("t"),
+                                                    Dict{String, String}()) == u"s"
+        # A declared t keeps its declared unit.
+        @test EarthSciAST.get_expression_dimensions(EarthSciAST.VarExpr("t"),
+                                                    Dict("t" => "hr")) == u"hr"
+        # D with respect to an undeclared t stays undeterminable.
+        dq = EarthSciAST.OpExpr("D", EarthSciAST.ASTExpr[EarthSciAST.VarExpr("q")]; wrt="t")
+        @test EarthSciAST.get_expression_dimensions(dq, Dict("q" => "kg")) === nothing
+    end
 end

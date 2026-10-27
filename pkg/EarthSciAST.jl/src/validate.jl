@@ -1801,6 +1801,20 @@ function _units_view(file::EsmFile, model_name::AbstractString, model::Model)
     return view
 end
 
+# The reaction system the units engine judges: `_units_view` for a reaction
+# system — its rates' and constraint equations' surviving
+# `apply_expression_template` references expanded, on a copy.
+function _reaction_system_units_view(file::EsmFile, rs_name::AbstractString,
+                                     rs::ReactionSystem)
+    file.component_templates === nothing && return rs
+    reg = get(file.component_templates, "reaction_systems.$rs_name", nothing)
+    reg === nothing && return rs
+    view = deepcopy(rs)
+    _expand_reaction_system_refs!(view, reg)
+    _expand_equations_refs!(view.constraint_equations, reg)
+    return view
+end
+
 """
     validate_model_unit_consistency(model::Model, path::String; file=nothing, toplevel=nothing) -> Vector{StructuralError}
 

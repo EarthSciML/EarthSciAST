@@ -1555,6 +1555,9 @@ const _DIMENSION_RULES = let rules = Dict{String, Function}(
         # `Pre` PRESERVES its operand's dimension (esm-spec §4.8.3) — it names
         # the operand's value at the previous step, not a dimensionless one.
         "Pre"    => _preserve_dimension_rule,
+        # `ic(x)` names x's initial value, so it CARRIES x's unit, dimension
+        # and scale (esm-spec §4.8.3) — under either literal rule.
+        "ic"     => _preserve_dimension_rule,
         "D"      => _derivative_rule,
         # A `const` that DECLARES its units has that unit (esm-spec §4.8.5).
         "const"  => _const_units_rule,
@@ -1724,7 +1727,14 @@ function _expr_dimensions!(findings::Vector{String}, expr::ASTExpr,
         # Look up variable units; a variable we know nothing about has
         # *unknown* dimensions, not dimensionless ones.
         unit_str = get(var_units, expr.name, nothing)
-        unit_str === nothing && return nothing
+        if unit_str === nothing
+            # The implicit independent variable `t`, undeclared, has the time
+            # dimension in seconds (esm-spec §4.9.1), as in the other bindings.
+            # A derivative WITH RESPECT TO it stays undeterminable
+            # (`_derivative_rule` reads only declared units).
+            expr.name == "t" && return u"s"
+            return nothing
+        end
         return _absolute_unit(parse_units(unit_str))
     elseif expr isa OpExpr
         rule = get(_DIMENSION_RULES, expr.op, nothing)
@@ -2233,6 +2243,15 @@ function _nonzero_literals(exprs)::Vector{String}
     return out
 end
 
+# The operand `x` when `lhs` is `D(x)` taken with respect to an independent
+# variable (default `t`) the component does not declare, else `nothing`.
+function _derivative_of_undeclared_time(lhs, var_units)
+    (lhs isa OpExpr && lhs.op == "D" && length(lhs.args) == 1) || return nothing
+    wrt = lhs.wrt !== nothing ? lhs.wrt : "t"
+    get(var_units, wrt, nothing) === nothing || return nothing
+    return lhs.args[1]
+end
+
 # A unit for the dimensionless-literal message; a pure number reads as such
 # rather than as Unitful's empty spelling.
 _site_ustr(u) = (_is_pure_number(u) && !_is_angle_bearing(u)) ? "dimensionless" : _ustr(u)
@@ -2242,11 +2261,26 @@ _site_ustr(u) = (_is_pure_number(u) && !_is_angle_bearing(u)) ? "dimensionless" 
 # (`lhs` given) fails on any mismatch inside either side, or when both sides
 # are determinable and differ in dimension or exact scale; a reaction-rate site
 # (`lhs === nothing`) fails on a mismatch inside the rate only.
+#
+# A `D(x)` left-hand side with respect to an UNDECLARED independent variable is
+# undeterminable, so the two sides are not compared directly: whatever unit the
+# time carries contributes only powers of TIME, so the site fails iff
+# [x] / [rhs] has a non-time axis with nonzero power (esm-spec §4.8.4).
 function _site_mismatch(lhs, rhs, var_units)::Union{String, Nothing}
     findings = String[]
     left = lhs === nothing ? nothing : _expr_dimensions!(findings, lhs, var_units)
     right = _expr_dimensions!(findings, rhs, var_units)
+    state = _derivative_of_undeclared_time(lhs, var_units)
+    state_dim = state === nothing ? nothing : _expr_dimensions!(findings, state, var_units)
     isempty(findings) || return findings[1]
+    if state !== nothing
+        (state_dim === nothing || right === nothing) && return nothing
+        ratio = dimension(state_dim) / dimension(right)
+        _is_time_power(ratio) && return nothing
+        return "no time unit can reconcile the derivative of " *
+               "'$(_site_ustr(state_dim))' with '$(_site_ustr(right))' " *
+               "(their ratio $(ratio) is not a power of time)"
+    end
     (left === nothing || right === nothing) && return nothing
     _same_unit(left, right) && return nothing
     return "left-hand side has units '$(_site_ustr(left))' but right-hand side " *
@@ -2262,11 +2296,12 @@ excepted), but not under the current neutral-literal rule. Returns
 `(json_pointer, message)` pairs, models before reaction systems, each sorted by
 name.
 
-The sites are each equation of every top-level model
-(`/models/<M>/equations/<i>`) and each reaction rate of every top-level
-reaction system (`/reaction_systems/<S>/reactions/<i>`); subsystems are not
-visited. Each component is typed in the unit environment its own unit checks
-use. A site the current rule already rejects carries no warning: it is an
+The sites are every model's `equations` and `initialization_equations` and
+every reaction system's `constraint_equations` and reaction rates, in the
+top-level components and in their inline subsystems at any depth
+(`/models/<M>/subsystems/<S>/equations/<i>`, …). Each component is typed in the
+unit environment its own unit checks use, with its surviving template
+references expanded. A site the current rule already rejects carries no warning: it is an
 error already.
 """
 function dimensionless_literal_findings(file::EsmFile)::Vector{Tuple{String, String}}
@@ -2287,34 +2322,65 @@ function dimensionless_literal_findings(file::EsmFile)::Vector{Tuple{String, Str
         return
     end
 
+    function walk_model(pointer, model::Model)
+        env = _model_unit_env(model, toplevel)
+        for (field, eqs) in (("equations", model.equations),
+                             ("initialization_equations", model.initialization_equations))
+            for (i, eq) in enumerate(eqs)
+                visit("$pointer/$field/$(i - 1)", eq.lhs, eq.rhs, env)
+            end
+        end
+        walk_subsystems(pointer, model)
+        return
+    end
+
+    function walk_reaction_system(pointer, rs::ReactionSystem)
+        own = Dict{String, String}()
+        for decl in Iterators.flatten((rs.species, rs.parameters))
+            u = decl.units
+            (u !== nothing && !isempty(u) && parse_units(u) !== nothing) &&
+                (own[decl.name] = u)
+        end
+        env = _UnitEnv(own, _relative_scoped_units(rs), toplevel)
+        for (i, eq) in enumerate(rs.constraint_equations)
+            visit("$pointer/constraint_equations/$(i - 1)", eq.lhs, eq.rhs, env)
+        end
+        for (i, reaction) in enumerate(rs.reactions)
+            visit("$pointer/reactions/$(i - 1)", nothing, reaction.rate, env)
+        end
+        walk_subsystems(pointer, rs)
+        return
+    end
+
+    # Inline subsystems at any depth, a resolved mount included; anything that
+    # is not a typed component (an unresolved mount) has nothing to type.
+    function walk_subsystems(pointer, component)
+        subs = component.subsystems
+        for name in sort!(collect(keys(subs)))
+            sub = subs[name]
+            sub_pointer = "$pointer/subsystems/$(_ptr_escape(name))"
+            sub isa Model && walk_model(sub_pointer, sub)
+            sub isa ReactionSystem && walk_reaction_system(sub_pointer, sub)
+        end
+        return
+    end
+
+    # Each top-level component is typed through its template-expanded view, so
+    # a surviving `apply_expression_template` reference has the unit of its
+    # expansion (esm-spec §9.6.4 rule 2); the view expands its subsystems too.
     if file.models !== nothing
         for name in sort!(collect(keys(file.models)))
             model = file.models[name]
             model isa Model || continue
-            view = _units_view(file, name, model)
-            env = _model_unit_env(view, toplevel)
-            for (i, eq) in enumerate(view.equations)
-                visit("/models/$(_ptr_escape(name))/equations/$(i - 1)",
-                      eq.lhs, eq.rhs, env)
-            end
+            walk_model("/models/$(_ptr_escape(name))", _units_view(file, name, model))
         end
     end
-
     if file.reaction_systems !== nothing
         for name in sort!(collect(keys(file.reaction_systems)))
             rs = file.reaction_systems[name]
             rs isa ReactionSystem || continue
-            own = Dict{String, String}()
-            for decl in Iterators.flatten((rs.species, rs.parameters))
-                u = decl.units
-                (u !== nothing && !isempty(u) && parse_units(u) !== nothing) &&
-                    (own[decl.name] = u)
-            end
-            env = _UnitEnv(own, _relative_scoped_units(rs), toplevel)
-            for (i, reaction) in enumerate(rs.reactions)
-                visit("/reaction_systems/$(_ptr_escape(name))/reactions/$(i - 1)",
-                      nothing, reaction.rate, env)
-            end
+            walk_reaction_system("/reaction_systems/$(_ptr_escape(name))",
+                                 _reaction_system_units_view(file, name, rs))
         end
     end
     return out
