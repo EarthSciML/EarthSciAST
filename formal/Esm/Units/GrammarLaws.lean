@@ -131,10 +131,11 @@ theorem parse_minus_rejected :
   rw [e]
   exact ⟨_, rfl⟩
 
-/-- A numeric atom whose value is not 1 is a scaling factor — at the head of
-a unit string (`1000/s`, `0.5 m`) … -/
+/-- A numeric atom other than the literal `1` is a scaling factor (ruling
+Q-104: `01` and `1.0` are too) — at the head of a unit string (`1000/s`,
+`0.5 m`) … -/
 theorem parse_scaling_factor_head :
-    ∀ (lit : String) (v : ℚ) (i : Bool) (ts : List Tok), v ≠ 1 →
+    ∀ (lit : String) (v : ℚ) (i : Bool) (ts : List Tok), lit ≠ "1" →
       parse (.num lit v i :: ts) = .error (.scalingFactor lit) := by
   intro lit v i ts hv
   have : 4 * (Tok.num lit v i :: ts).length + 8 = (4 * ts.length + 9) + 3 := by simp; ring
@@ -146,7 +147,7 @@ theorem parse_scaling_factor_head :
 `((m/s)^-1)/3`: the `3` is a scaling factor, not part of an exponent). -/
 theorem parse_scaling_factor_after :
     ∀ (a : String) (ops : List (Op × String)) (op : Tok) (lit : String) (v : ℚ) (i : Bool)
-      (rest : List Tok), (op = .star ∨ op = .slash) → v ≠ 1 →
+      (rest : List Tok), (op = .star ∨ op = .slash) → lit ≠ "1" →
       parse (.sym a :: opToks ops ++ op :: .num lit v i :: rest) = .error (.scalingFactor lit) := by
   intro a ops op lit v i rest hop hv
   have hl := length_opToks ops
