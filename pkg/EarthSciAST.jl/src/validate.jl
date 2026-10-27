@@ -440,7 +440,30 @@ Error paths use 0-based JSON-Pointer slash style (e.g.
 `/models/M/equations/0`), matching the shared cross-language fixtures in
 `tests/invalid/expected_errors.json` and the TS/Python bindings.
 """
-function validate_structural(file::EsmFile)::Vector{StructuralError}
+validate_structural(file::EsmFile)::Vector{StructuralError} =
+    _validate_structural(file, _UnitsInputs(file))
+
+# What the units checks of one validation pass share, built once: the
+# document-wide scoped-reference units (esm-spec §4.8.4; units.jl's
+# `_ScopedUnits`) and each top-level model's template-expanded view
+# (`_units_view`).
+struct _UnitsInputs
+    file::EsmFile
+    toplevel::Dict{String, Union{String, Nothing}}
+    models::Dict{String, Model}
+end
+
+function _UnitsInputs(file::EsmFile)
+    models = Dict{String, Model}()
+    if file.models !== nothing
+        for (name, model) in file.models
+            models[name] = _units_view(file, name, model)
+        end
+    end
+    return _UnitsInputs(file, _toplevel_scoped_units(file), models)
+end
+
+function _validate_structural(file::EsmFile, units::_UnitsInputs)::Vector{StructuralError}
     errors = StructuralError[]
 
     # 1. Validate model equation-unknown balance.
@@ -472,7 +495,7 @@ function validate_structural(file::EsmFile)::Vector{StructuralError}
     # 3. Validate reaction system consistency
     # The document-wide part of every component's scoped-reference units
     # (esm-spec §4.8.4), built once for the whole pass.
-    scoped_toplevel = _toplevel_scoped_units(file)
+    scoped_toplevel = units.toplevel
     if file.reaction_systems !== nothing
         for (rs_name, rs) in file.reaction_systems
             append!(errors, validate_reaction_consistency(rs, "/reaction_systems/$rs_name";
@@ -568,7 +591,7 @@ function validate_structural(file::EsmFile)::Vector{StructuralError}
             # is why `validate()` accepted every dimensionally-inconsistent
             # fixture in the shared corpus.
             append!(errors, validate_model_unit_consistency(
-                _units_view(file, model_name, model), "/models/$model_name";
+                units.models[model_name], "/models/$model_name";
                 toplevel=scoped_toplevel))
         end
     end
@@ -674,26 +697,43 @@ function validate(file::EsmFile)::ValidationResult
     data = serialize_esm_file(file)
 
     schema_errors = validate_schema(data)
-    structural_errors = validate_structural(file)
+    units = _UnitsInputs(file)
+    structural_errors = _validate_structural(file, units)
     # Mirror the TS binding (validate.ts): unit findings are surfaced both as
     # `unit_warnings` records and as promoted `unit_inconsistency` structural
     # errors, so neither channel is dead. The SET and ORDER of findings is
     # exactly what it has always been — only the element type gained structure
     # (finding D-8), so `[w.message for w in result.unit_warnings]` reproduces
     # the old `Vector{String}` byte for byte.
-    unit_warnings = [UnitWarning(e.path, _unit_finding_code(e.error_type), e.message,
-                                 string(get(e.details, "lhs_units", "")),
-                                 string(get(e.details, "rhs_units", "")))
-                     for e in structural_errors
-                     if e.error_type == ERROR_CODES.UNIT_INCONSISTENCY]
-    # Bare numeric literals read as dimensionless (esm-spec §4.8.6): a WARNING
-    # at this stage, so it is never a structural error and never touches
-    # `is_valid`.
-    for (path, message) in dimensionless_literal_findings(file)
-        push!(unit_warnings, UnitWarning(path, UNIT_FINDING_DIMENSIONLESS_LITERAL, message))
-    end
+    unit_warnings = UnitWarning[
+        UnitWarning(e.path, _unit_finding_code(e.error_type), e.message,
+                    string(get(e.details, "lhs_units", "")),
+                    string(get(e.details, "rhs_units", "")))
+        for e in structural_errors if e.error_type == ERROR_CODES.UNIT_INCONSISTENCY]
+    _push_dimensionless_literal_warnings!(unit_warnings, units)
 
     return ValidationResult(schema_errors, structural_errors, unit_warnings=unit_warnings)
+end
+
+# Bare numeric literals read as dimensionless (esm-spec §4.8.6): a WARNING at
+# this stage, so it is never a structural error and never touches `is_valid`. A
+# failure of the pass itself says nothing about the file: it is downgraded to an
+# `analysis` unit warning, never an error and never a throw out of `validate`.
+# `findings` is the pass, an argument so a test can make it fail.
+function _push_dimensionless_literal_warnings!(unit_warnings::Vector{UnitWarning}, units,
+                                               findings=_dimensionless_literal_findings)
+    found = try
+        findings(units)
+    catch e
+        e isa InterruptException && rethrow()
+        push!(unit_warnings, UnitWarning("", ERROR_CODES.ANALYSIS,
+            "Dimensionless-literal check failed: $(sprint(showerror, e))"))
+        return unit_warnings
+    end
+    for (path, message) in found
+        push!(unit_warnings, UnitWarning(path, UNIT_FINDING_DIMENSIONLESS_LITERAL, message))
+    end
+    return unit_warnings
 end
 
 """
@@ -1814,8 +1854,9 @@ function _units_view(file::EsmFile, model_name::AbstractString, model::Model)
 end
 
 # The reaction system the units engine judges: `_units_view` for a reaction
-# system — its rates' and constraint equations' surviving
-# `apply_expression_template` references expanded, on a copy.
+# system — the surviving `apply_expression_template` references in its rates
+# and constraint equations, and in those of its subsystems at any depth,
+# expanded on a copy.
 function _reaction_system_units_view(file::EsmFile, rs_name::AbstractString,
                                      rs::ReactionSystem)
     file.component_templates === nothing && return rs
@@ -1823,7 +1864,6 @@ function _reaction_system_units_view(file::EsmFile, rs_name::AbstractString,
     reg === nothing && return rs
     view = deepcopy(rs)
     _expand_reaction_system_refs!(view, reg)
-    _expand_equations_refs!(view.constraint_equations, reg)
     return view
 end
 

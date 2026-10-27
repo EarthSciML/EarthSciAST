@@ -19,6 +19,11 @@ const _DL_FIXTURE = "tests/conformance/dimensionless_literal/fixtures/dimensionl
 _dl_warnings(result) = [w for w in result.unit_warnings
                         if w.code == EarthSciAST.UNIT_FINDING_DIMENSIONLESS_LITERAL]
 
+# A first-order decay `species → ∅` at rate `k`, as a raw reaction.
+_dl_decay(id, species, k) = Dict{String, Any}(
+    "id" => id, "rate" => k, "products" => nothing,
+    "substrates" => Any[Dict{String, Any}("species" => species, "stoichiometry" => 1)])
+
 @testset "dimensionless-literal warning (esm-spec §4.8.6)" begin
     @testset "the golden names the registered code" begin
         @test _DL_GOLDEN["code"] == EarthSciAST.UNIT_FINDING_DIMENSIONLESS_LITERAL
@@ -44,6 +49,59 @@ _dl_warnings(result) = [w for w in result.unit_warnings
         # The warning is never a structural error at this stage.
         @test !any(e -> e.error_type == EarthSciAST.UNIT_FINDING_DIMENSIONLESS_LITERAL,
                    result.structural_errors)
+    end
+
+    @testset "a failing pass is an analysis warning, never a throw" begin
+        file = EarthSciAST.load_path(joinpath(TESTUTILS_REPO_ROOT, _DL_FIXTURE))
+        baseline = EarthSciAST.validate(file)
+        @test baseline.is_valid
+        warnings = EarthSciAST.UnitWarning[]
+        EarthSciAST._push_dimensionless_literal_warnings!(
+            warnings, EarthSciAST._UnitsInputs(file), _ -> error("forced failure"))
+        @test length(warnings) == 1
+        @test only(warnings).code == EarthSciAST.ERROR_CODES.ANALYSIS
+        @test occursin("forced failure", only(warnings).message)
+        # The downgraded warning leaves validity to the current rule alone.
+        result = EarthSciAST.ValidationResult(baseline.schema_errors,
+                                              baseline.structural_errors,
+                                              unit_warnings=warnings)
+        @test result.is_valid
+    end
+
+    @testset "a nested reaction system's constraint equation is typed through its template" begin
+        doc = Dict{String, Any}(
+            "esm" => "1.2.0",
+            "metadata" => Dict{String, Any}("name" => "nested_constraint_template"),
+            "reaction_systems" => Dict{String, Any}(
+                "Chem" => Dict{String, Any}(
+                    "species" => Dict{String, Any}("A" => Dict{String, Any}("units" => "mol/m^3")),
+                    "parameters" => Dict{String, Any}(
+                        "kA" => Dict{String, Any}("units" => "1/s", "default" => 1.0)),
+                    "expression_templates" => Dict{String, Any}(
+                        "celsius" => Dict{String, Any}(
+                            "params" => Any["x"],
+                            "body" => Dict{String, Any}("op" => "-", "args" => Any["x", 273.15]))),
+                    "reactions" => Any[_dl_decay("R1", "A", "kA")],
+                    "subsystems" => Dict{String, Any}(
+                        "Inner" => Dict{String, Any}(
+                            "species" => Dict{String, Any}(
+                                "B" => Dict{String, Any}("units" => "mol/m^3")),
+                            "parameters" => Dict{String, Any}(
+                                "T" => Dict{String, Any}("units" => "K", "default" => 300.0),
+                                "Tc" => Dict{String, Any}("units" => "K", "default" => 26.85),
+                                "kB" => Dict{String, Any}("units" => "1/s", "default" => 1.0)),
+                            "reactions" => Any[_dl_decay("R2", "B", "kB")],
+                            "constraint_equations" => Any[Dict{String, Any}(
+                                "lhs" => "Tc",
+                                "rhs" => Dict{String, Any}(
+                                    "op" => "apply_expression_template", "args" => Any[],
+                                    "name" => "celsius",
+                                    "bindings" => Dict{String, Any}("x" => "T")))])))))
+        file = EarthSciAST.load_document(doc)
+        result = EarthSciAST.validate(file)
+        @test result.is_valid
+        @test [w.path for w in _dl_warnings(result)] ==
+              ["/reaction_systems/Chem/subsystems/Inner/constraint_equations/0"]
     end
 
     @testset "zero stays neutral, every other literal is dimensionless" begin
