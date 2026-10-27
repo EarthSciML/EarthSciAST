@@ -139,12 +139,16 @@ function dayOfYear(year: number, month: number, day: number): number {
 }
 
 /**
- * Julian Day Number (continuous including fractional day-of-day).
- * 1970-01-01T00:00:00 UTC → 2440587.5.
+ * Continuous Julian Day: the standard JD, linear in the day number,
+ * `(totalDays + 2440588) + ((secondOfDay − 43200) + fraction) / 86400`
+ * (1970-01-01T00:00:00 UTC → 2440587.5). The first sum is an exact integer
+ * and the offset comes from the same exact floor-divmod as the date, so the
+ * time of day rounds once, then the divide and the add round once each —
+ * no cancellation near JD 0. From -4800-03-01 on this equals the spec's
+ * Fliegel–van Flandern reference.
  */
-function julianDayValue(tUtc: number): number {
-  // Constant offset by Unix-epoch JDN. The only float op is the divide.
-  return 2440587.5 + tUtc / SECONDS_PER_DAY
+function julianDayValue(totalDays: number, secondOfDay: number, fraction: number): number {
+  return totalDays + 2440588 + (secondOfDay - 43200 + fraction) / SECONDS_PER_DAY
 }
 
 function decomposeUtcSeconds(tUtc: number): DateParts {
@@ -176,7 +180,7 @@ function decomposeUtcSeconds(tUtc: number): DateParts {
     minute,
     second,
     dayOfYear: dayOfYear(year, month, day),
-    julianDay: julianDayValue(tUtc),
+    julianDay: julianDayValue(totalDays, secondOfDay, tUtc - whole),
     isLeapYear: isLeapProleptic(year) ? 1 : 0,
   }
 }
