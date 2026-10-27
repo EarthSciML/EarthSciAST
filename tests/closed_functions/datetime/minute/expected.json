@@ -553,6 +553,54 @@
             "expected": 0
         },
         {
+            "name": "frac_pre_epoch_second_1969_12_31T23_59_59_below_ulp",
+            "description": "t_utc = -1.0000000000000002 -> 1969-12-31T23:59:58Z + 0.9999999999999998 s (one ulp below the pre_epoch_second_1969_12_31T23_59_59 boundary). Fields floor toward -inf (esm-spec §9.2).",
+            "inputs": [
+                -1.0000000000000002
+            ],
+            "expected": 59
+        },
+        {
+            "name": "frac_pre_epoch_second_1969_12_31T23_59_59_below_1e_7",
+            "description": "t_utc = -1.0000001 -> 1969-12-31T23:59:58Z + 0.9999998999999999 s (1e-7 s below the pre_epoch_second_1969_12_31T23_59_59 boundary). Fields floor toward -inf (esm-spec §9.2).",
+            "inputs": [
+                -1.0000001
+            ],
+            "expected": 59
+        },
+        {
+            "name": "frac_pre_epoch_second_1969_12_31T23_59_59_below_half",
+            "description": "t_utc = -1.5 -> 1969-12-31T23:59:58Z + 0.5 s (0.5 s below the pre_epoch_second_1969_12_31T23_59_59 boundary). Fields floor toward -inf (esm-spec §9.2).",
+            "inputs": [
+                -1.5
+            ],
+            "expected": 59
+        },
+        {
+            "name": "frac_pre_epoch_second_1969_12_31T23_59_59_at",
+            "description": "t_utc = -1.0 -> 1969-12-31T23:59:59Z (exactly at the pre_epoch_second_1969_12_31T23_59_59 boundary). Fields floor toward -inf (esm-spec §9.2).",
+            "inputs": [
+                -1.0
+            ],
+            "expected": 59
+        },
+        {
+            "name": "frac_pre_epoch_second_1969_12_31T23_59_59_above_1e_7",
+            "description": "t_utc = -0.9999999 -> 1969-12-31T23:59:59Z + 9.999999994736442e-08 s (1e-7 s above the pre_epoch_second_1969_12_31T23_59_59 boundary). Fields floor toward -inf (esm-spec §9.2).",
+            "inputs": [
+                -0.9999999
+            ],
+            "expected": 59
+        },
+        {
+            "name": "frac_pre_epoch_second_1969_12_31T23_59_59_above_ulp",
+            "description": "t_utc = -0.9999999999999999 -> 1969-12-31T23:59:59Z + 1.1102230246251565e-16 s (one ulp above the pre_epoch_second_1969_12_31T23_59_59 boundary). Fields floor toward -inf (esm-spec §9.2).",
+            "inputs": [
+                -0.9999999999999999
+            ],
+            "expected": 59
+        },
+        {
             "name": "frac_pre_epoch_minute_1969_12_31T23_59_below_ulp",
             "description": "t_utc = -60.00000000000001 -> 1969-12-31T23:58:59Z + 0.9999999999999929 s (one ulp below the pre_epoch_minute_1969_12_31T23_59 boundary). Fields floor toward -inf (esm-spec §9.2).",
             "inputs": [

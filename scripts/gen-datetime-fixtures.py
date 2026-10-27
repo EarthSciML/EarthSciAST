@@ -18,8 +18,8 @@ calling a binding:
 * `julian_day` is the exact rational `JDN(date) + (tod - 43200) / 86400`,
   rounded once to the nearest binary64 (`Fraction.__float__` is correctly
   rounded). `JDN(date)` is the ordinal-based count, cross-checked against the
-  spec's Fliegel–van Flandern formula; a date where the two disagree is left
-  out of the julian_day fixture and printed.
+  spec's Fliegel–van Flandern formula. Dates before -4800-03-01, where the two
+  can disagree, are left out of the julian_day fixture and printed.
 
 Inputs are written as the shortest repr of the binary64 value, so the JSON
 literal IS the input. Scenarios already in a fixture are kept and checked
@@ -169,6 +169,7 @@ BOUNDARIES = [
     ("non_leap_2100_03_01", t_of(2100, 3, 1)),
     ("leap_day_end_2024_03_01", t_of(2024, 3, 1)),
     ("year_2025", t_of(2025)),
+    ("pre_epoch_second_1969_12_31T23_59_59", -1),
     ("pre_epoch_minute_1969_12_31T23_59", -60),
     ("pre_epoch_day_1969_12_31", -DAY),
     ("year_1900", t_of(1900)),
@@ -249,9 +250,19 @@ FUNCTIONS = ["year", "month", "day", "hour", "minute", "second",
              "day_of_year", "julian_day", "is_leap_year"]
 
 
-def jdn_agrees(t):
+# Before -4800-03-01 the spec's Fliegel-van Flandern reference (truncating
+# division) and the standard Julian Day disagree on some dates; which one
+# §9.2 means there is an open question, so the julian_day fixture pins
+# neither reading on or before that date, even where the two happen to agree.
+JULIAN_DAY_FIRST_PINNED = day_number_from_civil(-4800, 3, 1)
+
+
+def jdn_pinnable(t):
     p = decompose(t)
-    return fliegel_van_flandern(p["year"], p["month"], p["day"]) == p["n"] + EPOCH_ORDINAL + 1721425
+    if p["n"] < JULIAN_DAY_FIRST_PINNED:
+        return False
+    assert fliegel_van_flandern(p["year"], p["month"], p["day"]) == p["n"] + EPOCH_ORDINAL + 1721425
+    return True
 
 
 def generated_scenarios(fn, skipped):
@@ -264,7 +275,7 @@ def generated_scenarios(fn, skipped):
     ok, _ = int32_edges()
     points += ok
     for name, t, why in points:
-        if fn == "julian_day" and not jdn_agrees(t):
+        if fn == "julian_day" and not jdn_pinnable(t):
             skipped.append((fn, name, t))
             continue
         out.append({
@@ -334,7 +345,7 @@ def main():
                 path.write_text(new)
 
     for fn, name, t in skipped:
-        print(f"skipped {fn}/{name}: Fliegel-van Flandern disagrees with the ordinal JDN at t={t!r}")
+        print(f"skipped {fn}/{name}: t={t!r} is before -4800-03-01 (julian_day reading open)")
     for b in bad:
         print("MISMATCH", b)
     verb = "would change" if args.check else "wrote"
