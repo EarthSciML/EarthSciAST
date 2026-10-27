@@ -1058,6 +1058,10 @@ UNIT_FINDING_UNPARSEABLE = "unparseable_unit"
 #: operator with no dimensional rule, an unknown variable, a missing pint.
 #: A statement about the checker, not the file.
 UNIT_FINDING_ANALYSIS = "analysis"
+#: A check the CURRENT neutral-literal rule skips or passes fails once a bare
+#: numeric literal is read as dimensionless (esm-spec §4.8.6). A WARNING at this
+#: stage: validity is decided by the current rule alone.
+UNIT_FINDING_DIMENSIONLESS_LITERAL = "units_dimensionless_literal_mismatch"
 
 
 @dataclass
@@ -1290,6 +1294,10 @@ class UnitValidator:
 
         self.ureg = ureg
         self.known_units: dict[str, pint.Quantity] = {}
+        # esm-spec §4.8.6: when True, a bare numeric literal (and a unit-less
+        # `const`) other than zero is DIMENSIONLESS at scale 1 instead of
+        # undeterminable. Only the dimensionless-literal warning pass sets it.
+        self.dimensionless_literals = False
         # Targets of the current component's scoped references (`Leaf.p`,
         # `sub.v`), consulted after `known_units` (see ScopedUnits).
         self.scoped_units: Mapping[str, ScopedUnit] = {}
@@ -1654,7 +1662,7 @@ class UnitValidator:
             return self._dimensionless
 
         if isinstance(expr, (int, float)):
-            return None
+            return self._literal_type(expr)
 
         if isinstance(expr, str):
             unit = self._unit_of(expr)
@@ -1668,6 +1676,15 @@ class UnitValidator:
             return self._type_node(expr)
 
         return None
+
+    def _literal_type(self, value: Any) -> _Typed | None:
+        """The unit of a bare numeric literal (or a unit-less ``const``):
+        undeterminable under the current rule (esm-spec §4.8.4); under the
+        §4.8.6 rule, dimensionless at scale 1 unless it is zero, which stays
+        neutral."""
+        if not self.dimensionless_literals or value == 0:
+            return None
+        return self._dimensionless
 
     @property
     def _dimensionless(self) -> _Typed:
@@ -1780,6 +1797,9 @@ class UnitValidator:
             # unresolvable string is reported at the containing expression field,
             # not here.
             if node.units is None:
+                value = node.value
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    return self._literal_type(value)
                 return None
             try:
                 unit = parse_unit(node.units)
@@ -2050,6 +2070,157 @@ class UnitValidator:
 
         result.is_valid = len(result.errors) == 0
         return result
+
+
+def bare_literal_value(expr: Any) -> float | None:
+    """The value of a bare numeric literal, a ``const`` without ``units``, or a
+    unary ``+``/``-`` of one (nested to any depth); ``None`` for anything else."""
+    if isinstance(expr, bool):
+        return None
+    if isinstance(expr, (int, float)):
+        return expr
+    if isinstance(expr, ExprNode):
+        if expr.op == "const" and expr.units is None:
+            value = expr.value
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                return value
+            return None
+        if expr.op in ("+", "-") and len(expr.args or []) == 1:
+            inner = bare_literal_value(expr.args[0])
+            if inner is None:
+                return None
+            return -inner if expr.op == "-" else inner
+    return None
+
+
+def _nonzero_literals(exprs: list[Any]) -> list[str]:
+    """The distinct nonzero bare literals in ``exprs``, in walk order, spelled
+    as JSON numbers -- what the dimensionless-literal warning names."""
+    out: list[str] = []
+
+    def walk(node: Any) -> None:
+        value = bare_literal_value(node)
+        if value is not None:
+            if value != 0:
+                text = repr(value)
+                if text not in out:
+                    out.append(text)
+            return
+        if isinstance(node, ExprNode):
+            for child in node.args or []:
+                walk(child)
+            for child in (node.expr, node.filter):
+                if child is not None:
+                    walk(child)
+            for child in node.values or []:
+                walk(child)
+
+    for expr in exprs:
+        walk(expr)
+    return out
+
+
+def _site_mismatch(validator: UnitValidator, lhs: Any, rhs: Any) -> str | None:
+    """The first provable mismatch one check site produces under
+    ``validator``'s literal rule, or ``None`` when it passes or is skipped. A
+    site is an equation (``lhs`` vs ``rhs`` plus every operator rule inside
+    either side) or a reaction rate (``lhs`` ``None``: the rules inside it)."""
+    try:
+        left = validator._type(lhs) if lhs is not None else None
+        right = validator._type(rhs)
+    except DimensionalMismatchError as e:
+        return str(e)
+    except pint.PintError:
+        return None
+    if lhs is None or left is None or right is None:
+        return None
+    if not validator._dimensions_compatible(left.dim, right.dim):
+        return f"LHS has dimension {left.dim}, RHS has dimension {right.dim}"
+    if left.scale != right.scale:
+        return f"LHS has dimension {left.dim} at scale {left.scale}, RHS at scale {right.scale}"
+    return None
+
+
+def _pointer_token(name: str) -> str:
+    return str(name).replace("~", "~0").replace("/", "~1")
+
+
+def dimensionless_literal_findings(esm_file: EsmFile) -> list[tuple[str, str]]:
+    """The esm-spec §4.8.6 warnings: every check site whose verdict is a
+    provable mismatch when bare numeric literals are dimensionless, but not
+    under the current neutral-literal rule. Returns ``(json_pointer, message)``
+    pairs in document order.
+
+    The sites are each equation of every top-level model
+    (``/models/<M>/equations/<i>``) and each reaction rate of every top-level
+    reaction system (``/reaction_systems/<S>/reactions/<i>``). A site the
+    current rule already rejects carries no warning: it is an error already.
+    """
+    if not PINT_AVAILABLE:
+        return []
+    scoped = ScopedUnits(esm_file)
+    out: list[tuple[str, str]] = []
+
+    def seeded(component: Any, units: dict[str, str | None], dimensionless: bool):
+        validator = UnitValidator()
+        validator.dimensionless_literals = dimensionless
+        validator.scoped_units = scoped.for_component(component)
+        for name, spelled in units.items():
+            if not spelled:
+                continue
+            try:
+                validator.known_units[name] = parse_unit(spelled)
+            except UnparseableUnitError:
+                continue
+        return validator
+
+    def visit(pointer: str, current, candidate, lhs: Any, rhs: Any) -> None:
+        found = _site_mismatch(candidate, lhs, rhs)
+        if found is None or _site_mismatch(current, lhs, rhs) is not None:
+            return
+        literals = _nonzero_literals([e for e in (lhs, rhs) if e is not None])
+        named = ", ".join(literals) if literals else "(none determinable)"
+        out.append(
+            (
+                pointer,
+                f"{pointer}: with bare numeric literals read as dimensionless "
+                f"(esm-spec §4.8.6), {found}; bare literal(s): {named}. This "
+                "becomes an error at the next major esm version; a literal that "
+                'carries a unit is written const(value, units "...") '
+                "(esm-spec §4.8.5)",
+            )
+        )
+
+    for mname, model in (esm_file.models or {}).items():
+        units = {n: v.units for n, v in (model.variables or {}).items()}
+        current = seeded(model, units, False)
+        candidate = seeded(model, units, True)
+        for i, eq in enumerate(model.equations or []):
+            visit(
+                f"/models/{_pointer_token(mname)}/equations/{i}",
+                current,
+                candidate,
+                eq.lhs,
+                eq.rhs,
+            )
+
+    for sname, rs in (esm_file.reaction_systems or {}).items():
+        units = {sp.name: sp.units for sp in rs.species or []}
+        units.update({p.name: p.units for p in rs.parameters or []})
+        current = seeded(rs, units, False)
+        candidate = seeded(rs, units, True)
+        for i, reaction in enumerate(rs.reactions or []):
+            rate = getattr(reaction, "rate_constant", None)
+            if rate is None:
+                continue
+            visit(
+                f"/reaction_systems/{_pointer_token(sname)}/reactions/{i}",
+                current,
+                candidate,
+                None,
+                rate,
+            )
+    return out
 
 
 def angle_normalization_factor(unit) -> float | None:
