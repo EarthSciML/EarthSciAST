@@ -857,6 +857,70 @@
             "expected": 1
         },
         {
+            "name": "frac_fvf_first_day_minus_4800_03_01_below_ulp",
+            "description": "t_utc = -213635404800.00003 -> -4800-02-29T23:59:59Z + 0.999969482421875 s (one ulp below the fvf_first_day_minus_4800_03_01 boundary). Fields floor toward -inf (esm-spec §9.2).",
+            "inputs": [
+                -213635404800.00003
+            ],
+            "expected": 29
+        },
+        {
+            "name": "frac_fvf_first_day_minus_4800_03_01_below_half",
+            "description": "t_utc = -213635404800.5 -> -4800-02-29T23:59:59Z + 0.5 s (0.5 s below the fvf_first_day_minus_4800_03_01 boundary). Fields floor toward -inf (esm-spec §9.2).",
+            "inputs": [
+                -213635404800.5
+            ],
+            "expected": 29
+        },
+        {
+            "name": "frac_fvf_first_day_minus_4800_03_01_at",
+            "description": "t_utc = -213635404800.0 -> -4800-03-01T00:00:00Z (exactly at the fvf_first_day_minus_4800_03_01 boundary). Fields floor toward -inf (esm-spec §9.2).",
+            "inputs": [
+                -213635404800.0
+            ],
+            "expected": 1
+        },
+        {
+            "name": "frac_fvf_first_day_minus_4800_03_01_above_ulp",
+            "description": "t_utc = -213635404799.99997 -> -4800-03-01T00:00:00Z + 3.0517578125e-05 s (one ulp above the fvf_first_day_minus_4800_03_01 boundary). Fields floor toward -inf (esm-spec §9.2).",
+            "inputs": [
+                -213635404799.99997
+            ],
+            "expected": 1
+        },
+        {
+            "name": "frac_leap_day_start_minus_4800_02_29_below_ulp",
+            "description": "t_utc = -213635491200.00003 -> -4800-02-28T23:59:59Z + 0.999969482421875 s (one ulp below the leap_day_start_minus_4800_02_29 boundary). Fields floor toward -inf (esm-spec §9.2).",
+            "inputs": [
+                -213635491200.00003
+            ],
+            "expected": 28
+        },
+        {
+            "name": "frac_leap_day_start_minus_4800_02_29_below_half",
+            "description": "t_utc = -213635491200.5 -> -4800-02-28T23:59:59Z + 0.5 s (0.5 s below the leap_day_start_minus_4800_02_29 boundary). Fields floor toward -inf (esm-spec §9.2).",
+            "inputs": [
+                -213635491200.5
+            ],
+            "expected": 28
+        },
+        {
+            "name": "frac_leap_day_start_minus_4800_02_29_at",
+            "description": "t_utc = -213635491200.0 -> -4800-02-29T00:00:00Z (exactly at the leap_day_start_minus_4800_02_29 boundary). Fields floor toward -inf (esm-spec §9.2).",
+            "inputs": [
+                -213635491200.0
+            ],
+            "expected": 29
+        },
+        {
+            "name": "frac_leap_day_start_minus_4800_02_29_above_ulp",
+            "description": "t_utc = -213635491199.99997 -> -4800-02-29T00:00:00Z + 3.0517578125e-05 s (one ulp above the leap_day_start_minus_4800_02_29 boundary). Fields floor toward -inf (esm-spec §9.2).",
+            "inputs": [
+                -213635491199.99997
+            ],
+            "expected": 29
+        },
+        {
             "name": "frac_year_minus_100000_below_ulp",
             "description": "t_utc = -3217862419200.0005 -> -100001-12-31T23:59:59Z + 0.99951171875 s (one ulp below the year_minus_100000 boundary). Fields floor toward -inf (esm-spec §9.2).",
             "inputs": [
@@ -982,5 +1046,47 @@
     "tolerance": {
         "rel": 0,
         "abs": 0
-    }
+    },
+    "error_scenarios": [
+        {
+            "name": "int32_year_max_plus_one",
+            "description": "t_utc = 6.77679762335328e+16 (first instant of year 2147483648: one past Int32 max). The year of t is outside Int32, so every datetime.* function MUST raise `closed_function_overflow` (esm-spec §9.2).",
+            "inputs": [
+                6.77679762335328e+16
+            ],
+            "expected_error_code": "closed_function_overflow"
+        },
+        {
+            "name": "int32_year_min_minus_one",
+            "description": "t_utc = -6.776810056797121e+16 (largest binary64 before year -2147483648: year -2147483649, one past Int32 min). The year of t is outside Int32, so every datetime.* function MUST raise `closed_function_overflow` (esm-spec §9.2).",
+            "inputs": [
+                -6.776810056797121e+16
+            ],
+            "expected_error_code": "closed_function_overflow"
+        },
+        {
+            "name": "nonfinite_nan",
+            "description": "t_utc = NaN. A non-finite t MUST raise `closed_function_overflow` in every datetime.* function (esm-spec §9.2).",
+            "inputs": [
+                "NaN"
+            ],
+            "expected_error_code": "closed_function_overflow"
+        },
+        {
+            "name": "nonfinite_pos_inf",
+            "description": "t_utc = Inf. A non-finite t MUST raise `closed_function_overflow` in every datetime.* function (esm-spec §9.2).",
+            "inputs": [
+                "Inf"
+            ],
+            "expected_error_code": "closed_function_overflow"
+        },
+        {
+            "name": "nonfinite_neg_inf",
+            "description": "t_utc = -Inf. A non-finite t MUST raise `closed_function_overflow` in every datetime.* function (esm-spec §9.2).",
+            "inputs": [
+                "-Inf"
+            ],
+            "expected_error_code": "closed_function_overflow"
+        }
+    ]
 }

@@ -15,16 +15,22 @@ calling a binding:
   days, which repeat the calendar exactly) into the range that function
   accepts; the year is then shifted back by 400 per cycle. That covers any
   integer year, far beyond the stdlib's 1..9999.
-* `julian_day` is the exact rational `JDN(date) + (tod - 43200) / 86400`,
-  rounded once to the nearest binary64 (`Fraction.__float__` is correctly
-  rounded). `JDN(date)` is the ordinal-based count, cross-checked against the
-  spec's Fliegel–van Flandern formula. Dates before -4800-03-01, where the two
-  can disagree, are left out of the julian_day fixture and printed.
+* `julian_day` is the standard Julian Date for every `t` (ruling Q-99): the
+  exact rational `t / 86400 + 2440587.5`, rounded once to the nearest binary64
+  (`Fraction.__float__` is correctly rounded). It is checked to equal
+  `(day + 2440588) + (tod - 43200) / 86400`, the split §9.2 computes it from,
+  and, from -4800-03-01 on, the Fliegel–van Flandern formula of §9.2's
+  informative note; before that date the fixture pins dates where FvF is off
+  by +1, -1 and -2 days.
+* Every function raises `closed_function_overflow` when the year of `t` is
+  outside Int32 (ruling Q-101) and when `t` is NaN or ±Inf (ruling Q-100);
+  each fixture carries those error scenarios. Non-finite inputs are written as
+  the strings "NaN", "Inf" and "-Inf", as in the interp fixtures.
 
 Inputs are written as the shortest repr of the binary64 value, so the JSON
 literal IS the input. Scenarios already in a fixture are kept and checked
 against the same exact computation; the generated ones (named `frac_*` and
-`int32_*`) are replaced on every run, so the script is idempotent.
+`int32_*`, `jd_*` and `nonfinite_*`) are replaced on every run, so the script is idempotent.
 
 Usage: python3 scripts/gen-datetime-fixtures.py [--check]
   --check  exit non-zero if any fixture file would change (CI-friendly).
@@ -46,11 +52,14 @@ CYCLE_DAYS = 146097  # one 400-year proleptic-Gregorian cycle
 EPOCH_ORDINAL = _dt.date(1970, 1, 1).toordinal()  # 719163
 INT32_MIN = -(2**31)
 INT32_MAX = 2**31 - 1
-GENERATED_PREFIXES = ("frac_", "int32_")
+GENERATED_PREFIXES = ("frac_", "int32_", "jd_", "nonfinite_")
+JD_OFFSET = Fraction(4881175, 2)  # 2440587.5, the Julian Date of the epoch
+NONFINITE = [("nonfinite_nan", "NaN"), ("nonfinite_pos_inf", "Inf"), ("nonfinite_neg_inf", "-Inf")]
 
 
 class Overflow(Exception):
-    """The integer result does not fit in a signed 32-bit integer."""
+    """`closed_function_overflow`: the year of `t` is not a signed 32-bit
+    integer, or `t` is not finite."""
 
 
 # ---------------------------------------------------------------------------
@@ -82,7 +91,8 @@ def trunc_div(a, b):
 
 
 def fliegel_van_flandern(y, m, d):
-    """The spec's reference JDN formula, with C-style truncating division."""
+    """§9.2's informative Fliegel–van Flandern JDN, with C-style truncating
+    division (equal to the day number + 2440588 from -4800-03-01 on)."""
     a = trunc_div(m - 14, 12)
     return (
         trunc_div(1461 * (y + 4800 + a), 4)
@@ -115,15 +125,25 @@ def decompose(t):
     }
 
 
+FVF_FIRST_DAY = day_number_from_civil(-4800, 3, 1)
+
+
 def evaluate(fn, t):
-    """Exact expected value of `datetime.<fn>(t)`; raises Overflow for year."""
+    """Exact expected value of `datetime.<fn>(t)`; raises Overflow when the
+    year of `t` is outside Int32 or `t` is not finite (every function)."""
+    if isinstance(t, str) or not math.isfinite(t):
+        raise Overflow(t)
     p = decompose(t)
+    if not INT32_MIN <= p["year"] <= INT32_MAX:
+        raise Overflow(p["year"])
     if fn == "julian_day":
-        jdn = (p["n"] + EPOCH_ORDINAL) + 1721425  # JDN of the civil date (noon)
-        return float(jdn + (p["tod"] - 43200) / Fraction(DAY))
+        jd = Fraction(t) / DAY + JD_OFFSET
+        assert jd == (p["n"] + 2440588) + (p["tod"] - 43200) / Fraction(DAY)
+        if p["n"] >= FVF_FIRST_DAY:
+            assert fliegel_van_flandern(p["year"], p["month"], p["day"]) == p["n"] + 2440588
+        return float(jd)
     v = p[fn]
-    if not INT32_MIN <= v <= INT32_MAX:
-        raise Overflow(v)
+    assert INT32_MIN <= v <= INT32_MAX
     return v
 
 
@@ -177,6 +197,8 @@ BOUNDARIES = [
     ("year_0000", t_of(0)),
     ("leap_day_end_0000_03_01", t_of(0, 3, 1)),
     ("year_minus_4713", t_of(-4713)),
+    ("fvf_first_day_minus_4800_03_01", t_of(-4800, 3, 1)),
+    ("leap_day_start_minus_4800_02_29", t_of(-4800, 2, 29)),
     ("year_minus_100000", t_of(-100000)),
     ("year_10000", t_of(10000)),
 ]
@@ -246,26 +268,43 @@ def int32_edges():
     return ok, over
 
 
+# Before -4800-03-01 the Fliegel–van Flandern formula of §9.2's informative
+# note is not the Julian Date; julian_day is (ruling Q-99). These pin dates
+# where FvF is off by each amount it can be, and far-past dates.
+def jd_points():
+    pts = [
+        ("jd_minus_4800_02_29_noon", t_of(-4800, 2, 29, 12), "FvF is 1 day ahead"),
+        ("jd_minus_8000_06_15", t_of(-8000, 6, 15), "FvF is 1 day behind"),
+        ("jd_minus_8000_06_15_noon", t_of(-8000, 6, 15, 12), "FvF is 1 day behind"),
+        ("jd_minus_9996_03_01_noon", t_of(-9996, 3, 1, 12), "FvF is 2 days behind"),
+        ("jd_minus_100000_01_01_noon", t_of(-100000, 1, 1, 12), "far past"),
+        ("jd_minus_100000_06_15T18_00", t_of(-100000, 6, 15, 18), "far past"),
+    ]
+    # Julian Date 0 (-4713-11-24T12:00Z) and its neighbourhood: the result is
+    # small there, so the day number and the offset nearly cancel.
+    jd0 = float(t_of(-4713, 11, 24, 12))
+    assert Fraction(jd0) / DAY + JD_OFFSET == 0
+    pts += [
+        ("jd_zero", jd0, "Julian Date 0"),
+        ("jd_zero_above_ulp", math.nextafter(jd0, math.inf), "one ulp after Julian Date 0"),
+        ("jd_zero_below_ulp", math.nextafter(jd0, -math.inf), "one ulp before Julian Date 0"),
+        ("jd_plus_0_3", jd0 + 25920.0, "Julian Date 0.3"),
+        ("jd_minus_0_3", jd0 - 25920.0, "Julian Date -0.3"),
+        ("jd_plus_0_7_frac", jd0 + 60480.123, "Julian Date 0.7 + a fraction"),
+    ]
+    out = []
+    for name, b, why in pts:
+        p = decompose(float(b))
+        fvf = fliegel_van_flandern(p["year"], p["month"], p["day"]) - (p["n"] + 2440588)
+        out.append((name, float(b), f"{why}: FvF - JD = {fvf:+d} days"))
+    return out
+
+
 FUNCTIONS = ["year", "month", "day", "hour", "minute", "second",
              "day_of_year", "julian_day", "is_leap_year"]
 
 
-# Before -4800-03-01 the spec's Fliegel-van Flandern reference (truncating
-# division) and the standard Julian Day disagree on some dates; which one
-# §9.2 means there is an open question, so the julian_day fixture pins
-# neither reading on or before that date, even where the two happen to agree.
-JULIAN_DAY_FIRST_PINNED = day_number_from_civil(-4800, 3, 1)
-
-
-def jdn_pinnable(t):
-    p = decompose(t)
-    if p["n"] < JULIAN_DAY_FIRST_PINNED:
-        return False
-    assert fliegel_van_flandern(p["year"], p["month"], p["day"]) == p["n"] + EPOCH_ORDINAL + 1721425
-    return True
-
-
-def generated_scenarios(fn, skipped):
+def generated_scenarios(fn):
     out = []
     points = []
     for label, b in BOUNDARIES:
@@ -274,10 +313,9 @@ def generated_scenarios(fn, skipped):
     points += EXTRA
     ok, _ = int32_edges()
     points += ok
+    if fn == "julian_day":
+        points += jd_points()
     for name, t, why in points:
-        if fn == "julian_day" and not jdn_pinnable(t):
-            skipped.append((fn, name, t))
-            continue
         out.append({
             "name": name,
             "description": f"t_utc = {t!r} -> {iso(t)} ({why}). Fields floor toward -inf (esm-spec §9.2).",
@@ -288,8 +326,6 @@ def generated_scenarios(fn, skipped):
 
 
 def generated_errors(fn):
-    if fn != "year":
-        return []
     _, over = int32_edges()
     errs = []
     for name, t, why in over:
@@ -300,8 +336,17 @@ def generated_errors(fn):
             pass
         errs.append({
             "name": name,
-            "description": f"t_utc = {t!r} ({why}). Bindings MUST raise `closed_function_overflow` (esm-spec §9.2).",
+            "description": f"t_utc = {t!r} ({why}). The year of t is outside Int32, so every "
+                           "datetime.* function MUST raise `closed_function_overflow` (esm-spec §9.2).",
             "inputs": [t],
+            "expected_error_code": "closed_function_overflow",
+        })
+    for name, lit in NONFINITE:
+        errs.append({
+            "name": name,
+            "description": f"t_utc = {lit}. A non-finite t MUST raise `closed_function_overflow` "
+                           "in every datetime.* function (esm-spec §9.2).",
+            "inputs": [lit],
             "expected_error_code": "closed_function_overflow",
         })
     return errs
@@ -316,7 +361,7 @@ def main():
     ap.add_argument("--check", action="store_true")
     args = ap.parse_args()
 
-    bad, changed, skipped, added = [], [], [], 0
+    bad, changed, added = [], [], 0
     for fn in FUNCTIONS:
         path = FIXTURES / fn / "expected.json"
         text = path.read_text()
@@ -329,11 +374,18 @@ def main():
             diff = abs(want - s["expected"])
             if diff > max(tol["abs"], tol["rel"] * max(1.0, abs(want))):
                 bad.append(f"{fn}/{s['name']}: fixture has {s['expected']!r}, exact value is {want!r}")
-        gen = generated_scenarios(fn, skipped)
+        gen = generated_scenarios(fn)
         added += len(gen)
         spec["scenarios"] = keep + gen
         keep_err = [e for e in spec.get("error_scenarios", [])
                     if not e["name"].startswith(GENERATED_PREFIXES)]
+        for e in keep_err:
+            if e.get("expected_error_code") == "closed_function_overflow":
+                try:
+                    evaluate(fn, e["inputs"][0])
+                    bad.append(f"{fn}/{e['name']}: fixture expects an overflow, the exact value fits")
+                except Overflow:
+                    pass
         errs = keep_err + generated_errors(fn)
         added += len(errs) - len(keep_err)
         if errs:
@@ -344,13 +396,11 @@ def main():
             if not args.check:
                 path.write_text(new)
 
-    for fn, name, t in skipped:
-        print(f"skipped {fn}/{name}: t={t!r} is before -4800-03-01 (julian_day reading open)")
     for b in bad:
         print("MISMATCH", b)
     verb = "would change" if args.check else "wrote"
     print(f"{added} generated scenarios; {verb} {len(changed)} file(s); "
-          f"{len(bad)} hand-written scenario mismatch(es); {len(skipped)} skipped")
+          f"{len(bad)} hand-written scenario mismatch(es)")
     if bad or (args.check and changed):
         sys.exit(1)
 

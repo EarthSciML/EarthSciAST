@@ -544,6 +544,24 @@
       "concern": "t_utc is a binary64 that need not be an integer, so time-of-day is not an integer and 'exact integer arithmetic' does not say how second/minute treat fractions; floor(t/86400) computed as a rounded binary64 division can be off by one for t just below a multiple of 86400, making the floor-divmod pair inconsistent; and julian_day involves a divide and an add (two roundings), so the '<= 1 ulp' guarantee does not follow."
     },
     {
+      "id": "spec.9.2.datetime-julian-standard",
+      "section": "9.2",
+      "quote": "Its result MUST be the binary64 value of `(d + 2440588) + ((s − 43200) + (t_utc − floor(t_utc))) / 86400`, evaluated in that order from the exact split above",
+      "class": "semantic",
+      "phase": 1,
+      "area": "closed_functions",
+      "note": "julian_day is the standard Julian Date t/86400 + 2440587.5 for every t (ruling Q-99), evaluated in binary64 as (d + 2440588) ⊕ (((s − 43200) ⊕ (t − ⌊t⌋)) ⊘ 86400) on the exact split; within 1 ulp of the exact value. Fliegel–van Flandern is informative, equal from −4800-03-01 on."
+    },
+    {
+      "id": "spec.9.2.datetime-overflow-year",
+      "section": "9.2",
+      "quote": "Every `datetime.*` function, whatever field it returns, MUST raise `closed_function_overflow` when the proleptic-Gregorian year of `t_utc` is outside the signed 32-bit range",
+      "class": "semantic",
+      "phase": 1,
+      "area": "closed_functions",
+      "note": "Every datetime.* function (julian_day included) raises closed_function_overflow exactly when the year of t is outside Int32 (ruling Q-101) or t is NaN/±Inf (ruling Q-100); otherwise it returns its value."
+    },
+    {
       "id": "spec.9.2.searchsorted-xs-monotone",
       "section": "9.2",
       "quote": "`xs` MUST be a `const`-op array of non-decreasing floats (equal neighbours allowed). Bindings MUST reject non-monotonic `xs` at load time with diagnostic `searchsorted_non_monotonic`.",

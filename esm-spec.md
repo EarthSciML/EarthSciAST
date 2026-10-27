@@ -4263,7 +4263,7 @@ The v1 set is intentionally narrow: calendar arithmetic on UTC time, plus a sing
 
 #### `datetime.*` — calendar decomposition
 
-Decomposes a UTC scalar time into proleptic-Gregorian calendar fields. All entries are pure: same input → same output, no system-clock or timezone consultation. Bindings MUST use exact integer arithmetic on the decomposed `(date, time-of-day)` pair after a single floor-divmod by 86400: the day number is `floor(t_utc / 86400)` and the time of day is `t_utc − 86400·floor(t_utc / 86400)`, both taken exactly (as real numbers, not as rounded binary64 operations), so the time of day lies in `[0, 86400)`. `hour`, `minute` and `second` come from `floor(time of day)`; a fractional `t_utc` therefore floors toward −∞ and never rounds up into the next second. This guarantees per-binding agreement to the integer (zero ulp drift on the integer outputs, ≤ 1 ulp on `julian_day` because of one floating-point divide).
+Decomposes a UTC scalar time into proleptic-Gregorian calendar fields. All entries are pure: same input → same output, no system-clock or timezone consultation. Bindings MUST use exact integer arithmetic on the decomposed `(date, time-of-day)` pair after a single floor-divmod by 86400: the day number is `floor(t_utc / 86400)` and the time of day is `t_utc − 86400·floor(t_utc / 86400)`, both taken exactly (as real numbers, not as rounded binary64 operations), so the time of day lies in `[0, 86400)`. `hour`, `minute` and `second` come from `floor(time of day)`; a fractional `t_utc` therefore floors toward −∞ and never rounds up into the next second. This guarantees per-binding agreement to the integer (zero ulp drift on the integer outputs, ≤ 1 ulp on `julian_day`, whose binary64 evaluation is pinned below).
 
 | Name | Arity | Args | Return | Range / convention |
 |---|---|---|---|---|
@@ -4274,16 +4274,17 @@ Decomposes a UTC scalar time into proleptic-Gregorian calendar fields. All entri
 | `datetime.minute` | 1 | `t_utc: scalar [s]` | integer scalar (0..59) | UTC minute |
 | `datetime.second` | 1 | `t_utc: scalar [s]` | integer scalar (0..59) | UTC second (no leap-second slot) |
 | `datetime.day_of_year` | 1 | `t_utc: scalar [s]` | integer scalar (1..366) | 1 = Jan 1 |
-| `datetime.julian_day` | 1 | `t_utc: scalar [s]` | scalar | continuous Julian Day Number incl. fractional time-of-day |
+| `datetime.julian_day` | 1 | `t_utc: scalar [s]` | scalar | continuous Julian Date incl. fractional time-of-day |
 | `datetime.is_leap_year` | 1 | `t_utc: scalar [s]` | integer scalar (0 or 1) | 1 if the proleptic-Gregorian year of `t_utc` is a leap year, else 0 |
 
 **Boundary semantics:**
 
 - Negative `t_utc` (pre-1970) is supported. The proleptic-Gregorian calendar extends backwards without modification; `datetime.year` of a pre-1970 instant is the proleptic-Gregorian year (e.g. `1969`, `1900`, `-1` for 2 BC by ISO 8601 convention).
-- `datetime.julian_day` returns the standard JDN convention (JD 0 = noon UTC on 4713 BC Jan 1, proleptic Julian calendar). The reference computation is the Fliegel–van Flandern (1968) integer formula applied to the date part of `t_utc`, plus `(time_of_day_seconds − 43200) / 86400` for the fractional part. Bindings MAY use a faster equivalent if it is bit-exact on the supported domain.
+- `datetime.julian_day` is the standard Julian Date (JD 0 = noon UTC on 4713 BC January 1, proleptic Julian calendar) for every `t_utc`: exactly `t_utc / 86400 + 2440587.5`. Its result MUST be the binary64 value of `(d + 2440588) + ((s − 43200) + (t_utc − floor(t_utc))) / 86400`, evaluated in that order from the exact split above, where `d = floor(t_utc / 86400)` is the day number and `s = floor(t_utc) − 86400·d` is the whole second of the day. `d + 2440588` and `s − 43200` are exact integers and `t_utc − floor(t_utc)` is exact in binary64, so only the inner addition, the division and the outer addition round; the result is within 1 ulp of the exact Julian Date. Bindings MAY use another computation that gives the same binary64 result. *Informative:* from −4800-03-01 on, the Fliegel–van Flandern (1968) integer formula (with truncating division) applied to the calendar date of `t_utc` equals `d + 2440588`. Before that date it differs by −2 to +1 days, and it is not the result there.
+- Every `datetime.*` function, whatever field it returns, MUST raise `closed_function_overflow` when the proleptic-Gregorian year of `t_utc` is outside the signed 32-bit range (before −2147483648-01-01T00:00:00Z, or at or after 2147483648-01-01T00:00:00Z), and when `t_utc` is NaN or ±Inf.
 - All other entries decompose using the rule that the calendar date is `floor(t_utc / 86400)` days after 1970-01-01, with `t_utc mod 86400` (floored, in `[0, 86400)`) giving the time-of-day seconds. Negative-modulo edge cases use Python-style floored division (so `floor(-1.0 / 86400) = -1` and `(-1.0) mod 86400 = 86399`). Fractional seconds are floored, never rounded: `59.9999999` is 00:00:59 of 1970-01-01, `86399.9999999` is 23:59:59 of 1970-01-01, and `-1e-7` is 23:59:59 of 1969-12-31.
 
-**Tolerance:** integer outputs are exact (zero error). `datetime.julian_day` is ≤ 1 ulp.
+**Tolerance:** integer outputs are exact (zero error). `datetime.julian_day` is ≤ 1 ulp from the exact Julian Date.
 
 #### `interp.*` — search
 
