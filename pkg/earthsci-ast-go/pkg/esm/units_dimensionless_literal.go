@@ -16,14 +16,17 @@ import (
 )
 
 // dimensionlessLiteralFindings returns the §4.8.6 warnings for file, in
-// document order (models then reaction systems, each in sorted name order).
+// document order (models then reaction systems, each in sorted name order,
+// a component's own sites before its subsystems').
 //
-// The check sites are each equation of every TOP-LEVEL model
-// (`/models/<M>/equations/<i>`) and each reaction rate of every TOP-LEVEL
-// reaction system (`/reaction_systems/<S>/reactions/<i>`). Each component is
-// typed in the unit environment the current-rule check already uses for it:
-// its declared units (unparseable declarations skipped) plus its scoped
-// references.
+// The check sites (esm-spec §4.8.6 "Check sites") are every model's
+// `equations` and `initialization_equations` and every reaction system's
+// `constraint_equations` and reaction rates, in each top-level component and
+// in its inline subsystems at any depth; an unresolved `{ref}` mount is
+// skipped. Each component is typed in the unit environment the current-rule
+// check uses for it: its declared units (unparseable declarations skipped),
+// its scoped references relative to its own subsystems, and the document's
+// top-level scoped paths.
 func dimensionlessLiteralFindings(file *ESMFile, scoped *scopedUnitIndex) []UnitWarning {
 	var out []UnitWarning
 	current := unitTyper{}
@@ -50,25 +53,55 @@ func dimensionlessLiteralFindings(file *ESMFile, scoped *scopedUnitIndex) []Unit
 				`carries a unit is written const(value, units "...") (esm-spec §4.8.5)`, pointer, found, named),
 		})
 	}
-
-	for _, name := range sortedKeys(file.Models) {
-		model := file.Models[name]
-		env, _ := buildModelUnitEnv(&model)
-		scoped.extend(env, model.Subsystems)
-		for i, eq := range model.Equations {
-			visit(fmt.Sprintf("/models/%s/equations/%d", escapeJSONPointerSegment(name), i), env, eq.LHS, eq.RHS, true)
+	visitEquations := func(pointer, field string, env map[string]Unit, eqs []Equation) {
+		for i, eq := range eqs {
+			visit(fmt.Sprintf("%s/%s/%d", pointer, field, i), env, eq.LHS, eq.RHS, true)
 		}
 	}
-	for _, name := range sortedKeys(file.ReactionSystems) {
-		system := file.ReactionSystems[name]
-		env, _ := buildSystemUnitEnv(&system)
+
+	var walkModel func(pointer string, model *Model)
+	walkModel = func(pointer string, model *Model) {
+		env, _ := buildModelUnitEnv(model)
+		scoped.extend(env, model.Subsystems)
+		visitEquations(pointer, "equations", env, model.Equations)
+		visitEquations(pointer, "initialization_equations", env, model.InitializationEquations)
+		for _, name := range sortedKeys(model.Subsystems) {
+			if _, inline := subsystemAsMap(model.Subsystems[name]); !inline {
+				continue
+			}
+			if sub, ok := decodeSubsystemAs[Model](model.Subsystems[name]); ok {
+				walkModel(pointer+"/subsystems/"+escapeJSONPointerSegment(name), &sub)
+			}
+		}
+	}
+	var walkSystem func(pointer string, system *ReactionSystem)
+	walkSystem = func(pointer string, system *ReactionSystem) {
+		env, _ := buildSystemUnitEnv(system)
 		scoped.extend(env, system.Subsystems)
+		visitEquations(pointer, "constraint_equations", env, system.ConstraintEquations)
 		for i, rx := range system.Reactions {
 			if rx.Rate == nil {
 				continue
 			}
-			visit(fmt.Sprintf("/reaction_systems/%s/reactions/%d", escapeJSONPointerSegment(name), i), env, nil, rx.Rate, false)
+			visit(fmt.Sprintf("%s/reactions/%d", pointer, i), env, nil, rx.Rate, false)
 		}
+		for _, name := range sortedKeys(system.Subsystems) {
+			if _, inline := subsystemAsMap(system.Subsystems[name]); !inline {
+				continue
+			}
+			if sub, ok := decodeSubsystemAs[ReactionSystem](system.Subsystems[name]); ok {
+				walkSystem(pointer+"/subsystems/"+escapeJSONPointerSegment(name), &sub)
+			}
+		}
+	}
+
+	for _, name := range sortedKeys(file.Models) {
+		model := file.Models[name]
+		walkModel("/models/"+escapeJSONPointerSegment(name), &model)
+	}
+	for _, name := range sortedKeys(file.ReactionSystems) {
+		system := file.ReactionSystems[name]
+		walkSystem("/reaction_systems/"+escapeJSONPointerSegment(name), &system)
 	}
 	return out
 }
@@ -77,7 +110,9 @@ func dimensionlessLiteralFindings(file *ESMFile, scoped *scopedUnitIndex) []Unit
 // ut's literal rule, or "" when the site passes or is skipped. A site is an
 // equation (hasLHS: every operator rule inside either side, then the two sides
 // compared in dimension and exact scale when both are determinable) or a
-// reaction rate (the operator rules inside rhs only). An analysis finding (an
+// reaction rate (the operator rules inside rhs only). A derivative with
+// respect to an undeclared independent variable is judged by the
+// no-time-unit-reconciles rule instead of the side comparison. An analysis finding (an
 // arity defect, say) is not a mismatch: it leaves that side undeterminable.
 func (ut unitTyper) siteMismatch(lhs, rhs Expression, hasLHS bool, env map[string]Unit) string {
 	var left *Unit
@@ -92,7 +127,20 @@ func (ut unitTyper) siteMismatch(lhs, rhs Expression, hasLHS bool, env map[strin
 	if err != nil && findingCode(err) == UnitFindingDimensionalMismatch {
 		return err.Error()
 	}
-	if !hasLHS || left == nil || right == nil || err != nil {
+	if !hasLHS || err != nil {
+		return ""
+	}
+	// `D(x)` with respect to an undeclared independent variable is
+	// undeterminable, so the sides are not compared directly; but whatever unit
+	// that variable carries contributes only powers of time, so a ratio with
+	// any other axis is provably irreconcilable (esm-spec §4.8.4).
+	if state, undeclared := ut.derivativeStateDim(lhs, env); undeclared {
+		if mismatch := derivativeTimeMismatch(state, right); mismatch != nil {
+			return mismatch.Error()
+		}
+		return ""
+	}
+	if left == nil || right == nil {
 		return ""
 	}
 	if !left.Dim.Equal(right.Dim) {

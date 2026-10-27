@@ -1435,6 +1435,13 @@ func (ut unitTyper) propagate(expr Expression, env map[string]Unit) (*Unit, erro
 			cp := u
 			return &cp, nil
 		}
+		// The implicit independent variable, when the component does not
+		// declare it, has the time dimension in seconds (esm-spec §4.9.1), as
+		// in the other bindings. A derivative taken with respect to it stays
+		// undeterminable: the `D` rule reads the env, not this fallback.
+		if e == DefaultIndepVar {
+			return &Unit{Dim: Dimension{dimTime: ratInt(1)}, Scale: 1}, nil
+		}
 		// Unknown variable ⇒ UNKNOWN dimension, not dimensionless. It is
 		// separately a hard `undefined_variable` error, so the units layer does
 		// not double-report it.
@@ -1752,7 +1759,9 @@ func (ut unitTyper) propagateNode(node ExprNode, env map[string]Unit) (*Unit, er
 		}
 		return &Unit{Scale: 1}, nil
 
-	case "abs", "sign":
+	case "abs", "sign", OpIC:
+		// `ic(x)` names x's initial value, so it carries x's unit, dimension
+		// and scale (esm-spec §4.8.3).
 		if len(node.Args) != 1 {
 			return nil, analysisErrf("'%s' requires 1 argument, got %d", node.Op, len(node.Args))
 		}
@@ -2100,6 +2109,12 @@ func isRewriteTargetDerivative(node ExprNode) bool {
 // true, signalling that the caller must use derivativeTimeMismatch instead of a
 // direct LHS/RHS comparison. Otherwise it returns false.
 func derivativeStateDim(lhs Expression, env map[string]Unit) (*Unit, bool) {
+	return unitTyper{}.derivativeStateDim(lhs, env)
+}
+
+// derivativeStateDim is derivativeStateDim with the state typed under ut's
+// literal rule.
+func (ut unitTyper) derivativeStateDim(lhs Expression, env map[string]Unit) (*Unit, bool) {
 	var node ExprNode
 	switch e := lhs.(type) {
 	case ExprNode:
@@ -2115,7 +2130,7 @@ func derivativeStateDim(lhs Expression, env map[string]Unit) (*Unit, bool) {
 	if _, declared := env[derivativeWrt(node)]; declared {
 		return nil, false
 	}
-	state, err := propagateDimension(node.Args[0], env)
+	state, err := ut.propagate(node.Args[0], env)
 	if err != nil {
 		return nil, false
 	}
