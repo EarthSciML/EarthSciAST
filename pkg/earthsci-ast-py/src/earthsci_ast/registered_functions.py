@@ -214,7 +214,7 @@ class _UtcParts:
 
     day_count: int  # floor(t_utc / 86400): days after 1970-01-01
     second_of_day: int  # floor of the time of day, in [0, 86400)
-    fraction: float  # time of day minus ``second_of_day``, in [0, 1), exact
+    fraction: float  # t - floor(t), in [0, 1]; see _datetime_julian_day
     year: int
     month: int
     day: int
@@ -242,8 +242,9 @@ def _decompose_utc(t_utc: Any) -> _UtcParts:
     ``floor(time of day)`` — a fractional time floors toward −∞. Flooring
     ``t`` to a whole second first and then divmod-ing the (arbitrary-
     precision) integer gives exactly that pair, because 86400 is an integer:
-    ``floor(t / 86400) == floor(t) // 86400``. ``t - floor(t)`` is exact in
-    binary64, so no step rounds.
+    ``floor(t / 86400) == floor(t) // 86400``, so no step of the split rounds.
+    (``fraction`` is a binary64 ``t - floor(t)``: exact except for
+    ``-0.5 < t < 0``, where ``1 + t`` can round, up to 1.0 at worst.)
     """
     seconds = float(t_utc)
     if not math.isfinite(seconds):
@@ -284,8 +285,9 @@ def _datetime_julian_day(t_utc: float) -> float:
     Evaluated as §9.2 pins it, from the exact split:
     ``(day + 2440588) + ((second_of_day − 43200) + fraction) / 86400``. The
     day term and ``second_of_day − 43200`` are exact integers and the fraction
-    is exact, so the inner add, the divide and the outer add are the only
-    roundings — ≤ 1 ulp of the exact value. The day number is linear, not
+    is exact except for ``-0.5 < t < 0`` (where ``1 + t`` can round), so the
+    inner add, the divide and the outer add are the only other roundings —
+    ≤ 1 ulp of the exact value. The day number is linear, not
     the Fliegel–van Flandern JDN of the date: the two agree from -4800-03-01
     on, and before that FvF is off by -2 to +1 days.
     """

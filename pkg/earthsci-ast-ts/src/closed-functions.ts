@@ -143,7 +143,8 @@ function dayOfYear(year: number, month: number, day: number): number {
  * (1970-01-01T00:00:00 UTC → 2440587.5). The first sum is an exact integer
  * and the offset comes from the same exact floor-divmod as the date, so the
  * time of day rounds once, then the divide and the add round once each —
- * no cancellation near JD 0. This is the evaluation esm-spec §9.2 pins; the
+ * no cancellation near JD 0. (`fraction = t − floor(t)` is itself exact
+ * except for −0.5 < t < 0, where `1 + t` can round.) This is the evaluation esm-spec §9.2 pins; the
  * day term is the linear day number, which equals the informative
  * Fliegel–van Flandern JDN from -4800-03-01 on (and not before).
  */

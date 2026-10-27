@@ -322,8 +322,9 @@ func wholeSeconds(f float64) (int64, error) {
 // every t_utc, evaluated in binary64 as esm-spec §9.2 pins it, from the exact
 // split: (day + 2440588) + ((second_of_day − 43200) + (t − floor(t))) / 86400.
 // The day term and second_of_day − 43200 are exact integers and t − floor(t)
-// is exact in binary64, so only the inner add, the divide and the outer add
-// round (≤ 1 ulp). The day term is the linear day number, not the
+// is exact in binary64 except for −0.5 < t < 0 (where 1 + t can round), so
+// beyond that only the inner add, the divide and the outer add round
+// (≤ 1 ulp). The day term is the linear day number, not the
 // Fliegel–van Flandern JDN of the date, which agrees only from -4800-03-01 on.
 // Like every datetime.* function it raises closed_function_overflow for a
 // non-finite t_utc or a year outside Int32.
