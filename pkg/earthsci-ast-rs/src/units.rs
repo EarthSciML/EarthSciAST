@@ -17,6 +17,7 @@
 //! implementation (`EarthSciAST.jl/src/units.jl::
 //! get_expression_dimensions`).
 
+use crate::inline_test_checks::pointer_token;
 use crate::types::{Equation, Expr, ExpressionNode};
 use std::collections::{BTreeMap, HashMap};
 use thiserror::Error;
@@ -2112,11 +2113,6 @@ fn first_mismatch(findings: Vec<UnitFinding>) -> Option<String> {
         .into_iter()
         .find(UnitFinding::is_error)
         .map(|f| f.message)
-}
-
-/// One RFC 6901 reference token.
-fn pointer_token(name: &str) -> String {
-    name.replace('~', "~0").replace('/', "~1")
 }
 
 /// One esm-spec §4.8.6 check site: an equation, or a reaction rate.
