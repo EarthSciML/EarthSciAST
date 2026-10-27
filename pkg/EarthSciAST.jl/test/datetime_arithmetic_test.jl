@@ -25,8 +25,10 @@
 #     the oracle is `Dates` applied to `floor(t)`.
 #
 # `julian_day` is pinned separately against the previous `Dates`-based
-# Fliegel–van Flandern spelling, bitwise, because it is the one member of the
-# family that is continuous in `t` and feeds a Rosenbrock ∂f/∂t.
+# Fliegel–van Flandern spelling, bitwise over 1600–2400 (where FvF equals the
+# linear day number §9.2 now pins), because it is the one member of the
+# family that is continuous in `t` and feeds a Rosenbrock ∂f/∂t. Before
+# -4800-03-01 FvF is not the Julian Date; the shared fixtures pin that range.
 
 using Test
 using Dates
@@ -184,18 +186,30 @@ end
         @test _DT_M._cal_narrow("datetime.year", v) === v
     end
 
-    # Non-finite `t` is out of the calendar's domain. The old path threw from
-    # inside `round(Int64, NaN)` with no diagnostic code; this one carries one.
-    @testset "non-finite t raises a coded error" begin
-        for bad_t in (NaN, Inf, -Inf)
-            err = try
-                _dt_eval("datetime.year", bad_t)
-                nothing
-            catch e
-                e
-            end
-            @test err isa EarthSciAST.ClosedFunctionError
-            @test err.code == "closed_function_overflow"
+    # esm-spec §9.2: a NaN or ±Inf `t`, and one whose year is outside Int32,
+    # raise `closed_function_overflow` in EVERY entry (rulings Q-100, Q-101) —
+    # through the pinned registry, its AD twin and the typed scalar cores.
+    @testset "non-finite t and Int32-overflowing years raise overflow, every entry" begin
+        coded(f) = try
+            f()
+            nothing
+        catch e
+            e isa EarthSciAST.ClosedFunctionError ? e.code : e
+        end
+        hi = 6.77679762335328e16            # first instant of year 2^31
+        lo = prevfloat(-6.77681005679712e16) # last double of year -2^31 - 1
+        names = vcat(_DT_FIELDS, ["datetime.julian_day"])
+        for name in names, bad_t in (NaN, Inf, -Inf, hi, lo)
+            @test coded(() -> _dt_eval(name, bad_t)) == "closed_function_overflow"
+            @test coded(() -> _DT_M.evaluate_closed_function_ad(name, Any[bad_t])) ==
+                  "closed_function_overflow"
+            spec = _DT_M._fn_typed_core_spec(name)
+            @test coded(() -> _DT_M._fn_typed_core_call(spec.id, bad_t)) ==
+                  "closed_function_overflow"
+        end
+        # One step inside each edge every entry still answers.
+        for name in names, ok_t in (prevfloat(hi), -6.77681005679712e16)
+            @test coded(() -> _dt_eval(name, ok_t)) === nothing
         end
     end
 end

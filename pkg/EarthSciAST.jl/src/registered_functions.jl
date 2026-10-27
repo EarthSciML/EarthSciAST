@@ -37,8 +37,11 @@ only as a *difference between evaluator paths* (the array paths raise
 where the scalar path silently skipped), and that divergence is a **contract
 violation by the function author, not an evaluator bug**. The spec-defined
 `datetime.*` / `interp.*` set honors this contract (the calendar functions are
-total on finite `Float64`; the interpolators extrapolate flat rather than
-raising). Any future closed primitive must too.
+total on every finite `Float64` whose proleptic-Gregorian year is an Int32 —
+|t| below about 6.8e16 s; outside that, and for NaN/±Inf, esm-spec §9.2 makes
+every one of them raise `closed_function_overflow`, which they do; the
+interpolators extrapolate flat rather than raising). Any future closed
+primitive must too.
 
 This module provides:
 
@@ -57,9 +60,9 @@ calendar (Hinnant's `civil_from_days`), computed in the argument's own value
 type rather than through `Dates` — see the calendar section below for why an
 opaque host call is a wall for a traced or otherwise non-host evaluator. The
 v0.3.0 spec contract forbids leap-second consultation, which this honors by
-construction. `julian_day` is computed via the Fliegel–van Flandern (1968)
-integer formula plus the fractional-day offset, giving ≤ 1 ulp agreement with
-the spec reference. `Dates` remains the ORACLE: `test/datetime_arithmetic_
+construction. `julian_day` is the standard Julian Date `t/86400 + 2440587.5`
+for every `t`, evaluated in binary64 from the same exact split as esm-spec
+§9.2 pins it (≤ 1 ulp). `Dates` remains the ORACLE: `test/datetime_arithmetic_
 test.jl` pins every field against it exhaustively over 1600–2400.
 """
 
@@ -183,6 +186,30 @@ end
 # a silently wrong number.
 @inline _cal_narrow(name::String, v) = v isa Real ? _cal_i32(name, v) : v
 
+# The overflow gate every `datetime.*` entry passes its argument through
+# (esm-spec §9.2): a NaN or ±Inf `t`, and one whose proleptic-Gregorian year
+# is outside Int32, raise `closed_function_overflow` WHICHEVER field is asked
+# for. The year test is on the day number — `_DAY_OF_INT32_MIN_YEAR` is
+# -2147483648-01-01, `_DAY_OF_INT32_YEAR_END` is 2147483648-01-01 — which is
+# the same test as the year's and needs no calendar. Only a host real is
+# checked: a traced value has no host answer to raise on, and the compiled
+# lanes take the eltype-generic kernels, which carry no check.
+const _DAY_OF_INT32_MIN_YEAR = -784353015833.0
+const _DAY_OF_INT32_YEAR_END = 784351576777.0
+
+@inline function _cal_t(name::String, t)
+    t isa Real || return t
+    isfinite(t) || _cal_overflow(name, t)
+    days = _cal_split(t)[1]
+    (_DAY_OF_INT32_MIN_YEAR <= days < _DAY_OF_INT32_YEAR_END) || _cal_overflow(name, t)
+    return t
+end
+
+@noinline _cal_overflow(name::String, t) =
+    throw(ClosedFunctionError(ERROR_CODES.CLOSED_FUNCTION_OVERFLOW,
+        isfinite(t) ? "$(name): the year of t_utc $(t) overflows Int32" :
+                      "$(name): t_utc $(t) is not finite"))
+
 function _cal_i32(name::String, v)::Int32
     fv = Float64(v)
     if !isfinite(fv) || fv < typemin(Int32) || fv > typemax(Int32)
@@ -230,31 +257,31 @@ function evaluate_closed_function(name::String, args::AbstractVector)
 
     if name == "datetime.year"
         _expect_arity(name, args, 1)
-        return _cal_i32(name, _cal_year(_value(args[1])))
+        return _cal_i32(name, _cal_year(_cal_t(name, _value(args[1]))))
     elseif name == "datetime.month"
         _expect_arity(name, args, 1)
-        return _cal_i32(name, _cal_month(_value(args[1])))
+        return _cal_i32(name, _cal_month(_cal_t(name, _value(args[1]))))
     elseif name == "datetime.day"
         _expect_arity(name, args, 1)
-        return _cal_i32(name, _cal_day(_value(args[1])))
+        return _cal_i32(name, _cal_day(_cal_t(name, _value(args[1]))))
     elseif name == "datetime.hour"
         _expect_arity(name, args, 1)
-        return _cal_i32(name, _cal_hour(_value(args[1])))
+        return _cal_i32(name, _cal_hour(_cal_t(name, _value(args[1]))))
     elseif name == "datetime.minute"
         _expect_arity(name, args, 1)
-        return _cal_i32(name, _cal_minute(_value(args[1])))
+        return _cal_i32(name, _cal_minute(_cal_t(name, _value(args[1]))))
     elseif name == "datetime.second"
         _expect_arity(name, args, 1)
-        return _cal_i32(name, _cal_second(_value(args[1])))
+        return _cal_i32(name, _cal_second(_cal_t(name, _value(args[1]))))
     elseif name == "datetime.day_of_year"
         _expect_arity(name, args, 1)
-        return _cal_i32(name, _cal_day_of_year(_value(args[1])))
+        return _cal_i32(name, _cal_day_of_year(_cal_t(name, _value(args[1]))))
     elseif name == "datetime.julian_day"
         _expect_arity(name, args, 1)
-        return _datetime_julian_day(Float64(args[1]))::Float64
+        return _datetime_julian_day(_cal_t(name, Float64(args[1])))::Float64
     elseif name == "datetime.is_leap_year"
         _expect_arity(name, args, 1)
-        return _cal_i32(name, _cal_is_leap_year(_value(args[1])))
+        return _cal_i32(name, _cal_is_leap_year(_cal_t(name, _value(args[1]))))
     elseif name == "interp.searchsorted"
         _expect_arity(name, args, 2)
         return _interp_searchsorted(name, args[1], args[2])
@@ -303,6 +330,7 @@ index is a build-time table position, not a value the traced program computes.
 function evaluate_closed_function_ad(name::String, args::AbstractVector)
     if name == "datetime.julian_day"
         _expect_arity(name, args, 1)
+        _cal_t(name, _value(args[1]))
         return _datetime_julian_day(args[1])
     elseif name == "interp.linear"
         _expect_arity(name, args, 3)
@@ -325,21 +353,21 @@ function evaluate_closed_function_ad(name::String, args::AbstractVector)
     # these are piecewise constant) rather than partials leaking through the
     # floor divisions.
     elseif name == "datetime.year"
-        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_year(_value(args[1])))
+        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_year(_cal_t(name, _value(args[1]))))
     elseif name == "datetime.month"
-        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_month(_value(args[1])))
+        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_month(_cal_t(name, _value(args[1]))))
     elseif name == "datetime.day"
-        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_day(_value(args[1])))
+        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_day(_cal_t(name, _value(args[1]))))
     elseif name == "datetime.hour"
-        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_hour(_value(args[1])))
+        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_hour(_cal_t(name, _value(args[1]))))
     elseif name == "datetime.minute"
-        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_minute(_value(args[1])))
+        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_minute(_cal_t(name, _value(args[1]))))
     elseif name == "datetime.second"
-        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_second(_value(args[1])))
+        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_second(_cal_t(name, _value(args[1]))))
     elseif name == "datetime.day_of_year"
-        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_day_of_year(_value(args[1])))
+        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_day_of_year(_cal_t(name, _value(args[1]))))
     elseif name == "datetime.is_leap_year"
-        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_is_leap_year(_value(args[1])))
+        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_is_leap_year(_cal_t(name, _value(args[1]))))
     end
     # Discrete-valued or already-generic: the pinned registry handles duals.
     return evaluate_closed_function(name, args)
@@ -376,8 +404,7 @@ end
 # So the calendar is re-derived here as ARITHMETIC. Nothing about it is
 # approximate: the proleptic-Gregorian calendar is a closed-form function of
 # the day number, and Howard Hinnant's `civil_from_days` computes it with no
-# branch and no table — the exact inverse of the Fliegel–van Flandern formula
-# `_datetime_julian_day` already runs in the forward direction below. Every
+# branch and no table — the exact inverse of `_days_from_civil` below. Every
 # step is `+ - * /`, `floor`, a comparison and a `select`, all of which the
 # compiled backends already lower (`ifelse` is a VALUE-level select — both arms
 # are computed and the condition picks one — not control flow, which is
@@ -531,10 +558,14 @@ end
     return sod - _cdiv(sod, 60) * 60
 end
 
-# Fliegel–van Flandern (1968) integer JDN, plus fractional-day offset from
-# noon-UTC. Returns Float64 with ≤ 1 ulp agreement to the spec reference
-# computation — the only floating-point operation is the final divide by
-# 86400 (one rounded operation).
+# The standard Julian Date `t/86400 + 2440587.5`, for every `t` (esm-spec
+# §9.2), evaluated as the spec pins it from the exact split:
+# `(days + 2440588) + ((sod − 43200) + (t − floor(t))) / 86400`. `days +
+# 2440588` and `sod − 43200` are exact integers and `t − floor(t)` is exact in
+# binary64 except for −0.5 < t < 0 (where `1 + t` can round), so the inner
+# add, the divide and the outer add are the only other roundings (≤ 1 ulp). The day term is the LINEAR day number, not the
+# Fliegel–van Flandern JDN of the calendar date: the two agree from
+# -4800-03-01 on, and before that FvF is off by -2 to +1 days.
 #
 # UNLIKE the rest of `datetime.*`, this one is genuinely CONTINUOUS in `t_utc`
 # (d(julian_day)/d(t_utc) = 1/86400 a.e.), so the query is `Real` and the
@@ -542,47 +573,19 @@ end
 # derivative comes back out. This is load-bearing for stiff solvers — a
 # Rosenbrock method needs ∂f/∂t, and in models whose photolysis rates are driven
 # by solar geometry that path runs through `julian_day`. Only the DISCRETE
-# integer JDN is taken off the primal (`_value`), which is exactly right: the
-# day-number is piecewise constant, so it contributes no derivative.
+# day number is taken off the primal (`_value`), which is exactly right: it is
+# piecewise constant, so it contributes no derivative.
 #
-# The time of day is `(sod − 43200) + (t − floor(t))`, with `sod` and the
-# floor taken from the SAME split as the date: the integer part is exact and
-# `t − floor(t)` is exact in binary64, so the offset rounds once and can never
-# name a different day from the date (a separate `mod(t, 86400.0)` rounds
-# `86400 − 5e-324` up to 86400 while the floor says the day before). The floor
-# is of the PRIMAL, a constant, so `t_utc − s` keeps `t`'s derivative.
-#
-# The (y, m, d) decomposition comes from the branch-free calendar above rather
-# than from `Dates`, so this traces like everything else — which matters more
-# here than for the discrete fields, because a Rosenbrock ∂f/∂t through solar
-# geometry runs straight down this path.
-#
-# `÷` BECAME `_cdiv` ONLY WHERE THAT IS THE SAME OPERATION. Julia's integer `÷`
-# truncates toward zero; `_cdiv` floors. The two agree exactly when the
-# numerator is non-negative, which holds for all three of the divisions kept
-# below (the `1461·(…)`, `367·(…)` and `3·(…)/100` terms are positive for every
-# year > -4800, the same implicit domain the Fliegel–van Flandern form always
-# carried). The ONE place they differ is `(m - 14) ÷ 12`, whose numerator runs
-# -13..-2: truncation gives -1 for every month, flooring would give -2 at
-# January. That term is written as the select it actually is.
+# `sod` and the floor come from the SAME split as the day: a separate
+# `mod(t, 86400.0)` rounds `86400 − 5e-324` up to 86400 while the floor says
+# the day before. The floor is of the PRIMAL, a constant, so `t_utc − s` keeps
+# `t`'s derivative. Every step is `+ - * /` and `floor`, so this traces like
+# the rest of the calendar. The overflow gate (`_cal_t`) is the caller's.
 function _datetime_julian_day(t_utc)
     t0 = _value(t_utc)
     days, sod = _cal_split(t0)
-    y, m, d = _civil_from_days(days)
-    a = ifelse(m <= 2, oftype(m, -1), oftype(m, 0))   # == (m - 14) ÷ 12, truncated
-    jdn = _cdiv(1461 * (y + 4800 + a), 4) +
-          _cdiv(367 * (m - 2 - 12 * a), 12) -
-          _cdiv(3 * _cdiv(y + 4900 + a, 100), 4) +
-          d - 32075
-    # JDN counts noon-to-noon; convert time-of-day seconds (since 00:00 UTC)
-    # to a fractional offset relative to noon. The spec pins this offset as
-    # `(time_of_day_seconds − 43200) / 86400` (esm-spec §9.2.1).
     from_noon = (sod - 43200) + (t_utc - floor(t0))
-    # `jdn` is already a value of the argument's own type — the branch-free
-    # decomposition never leaves it. The `Float64(jdn)` that stood here was
-    # narrowing an `Int` returned by `Dates`, and on a traced value it is the
-    # same wall as `_to_datetime`'s.
-    return jdn + from_noon / 86400.0
+    return (days + 2440588) + from_noon / 86400.0
 end
 
 # ============================================================
@@ -660,25 +663,25 @@ end
 # exactly one, and every tier reaches it.
 const _FN_TYPED_SCALAR_CORES = (
     (fname = "datetime.year", arity = 1, kernel = _cal_year,
-     core = t -> Float64(_cal_i32("datetime.year", _cal_year(t)))),
+     core = t -> Float64(_cal_i32("datetime.year", _cal_year(_cal_t("datetime.year", t))))),
     (fname = "datetime.month", arity = 1, kernel = _cal_month,
-     core = t -> Float64(_cal_i32("datetime.month", _cal_month(t)))),
+     core = t -> Float64(_cal_i32("datetime.month", _cal_month(_cal_t("datetime.month", t))))),
     (fname = "datetime.day", arity = 1, kernel = _cal_day,
-     core = t -> Float64(_cal_i32("datetime.day", _cal_day(t)))),
+     core = t -> Float64(_cal_i32("datetime.day", _cal_day(_cal_t("datetime.day", t))))),
     (fname = "datetime.hour", arity = 1, kernel = _cal_hour,
-     core = t -> Float64(_cal_i32("datetime.hour", _cal_hour(t)))),
+     core = t -> Float64(_cal_i32("datetime.hour", _cal_hour(_cal_t("datetime.hour", t))))),
     (fname = "datetime.minute", arity = 1, kernel = _cal_minute,
-     core = t -> Float64(_cal_i32("datetime.minute", _cal_minute(t)))),
+     core = t -> Float64(_cal_i32("datetime.minute", _cal_minute(_cal_t("datetime.minute", t))))),
     (fname = "datetime.second", arity = 1, kernel = _cal_second,
-     core = t -> Float64(_cal_i32("datetime.second", _cal_second(t)))),
+     core = t -> Float64(_cal_i32("datetime.second", _cal_second(_cal_t("datetime.second", t))))),
     (fname = "datetime.day_of_year", arity = 1, kernel = _cal_day_of_year,
-     core = t -> Float64(_cal_i32("datetime.day_of_year", _cal_day_of_year(t)))),
+     core = t -> Float64(_cal_i32("datetime.day_of_year", _cal_day_of_year(_cal_t("datetime.day_of_year", t))))),
     (fname = "datetime.is_leap_year", arity = 1, kernel = _cal_is_leap_year,
-     core = t -> Float64(_cal_i32("datetime.is_leap_year", _cal_is_leap_year(t)))),
+     core = t -> Float64(_cal_i32("datetime.is_leap_year", _cal_is_leap_year(_cal_t("datetime.is_leap_year", t))))),
     # Already `Float64`-valued — the boxed arm's `convert(T, ::Float64)` was
-    # the identity, so the core is the raw kernel.
+    # the identity, so the core is the kernel behind the overflow gate.
     (fname = "datetime.julian_day", arity = 1, kernel = _datetime_julian_day,
-     core = _datetime_julian_day),
+     core = t -> _datetime_julian_day(_cal_t("datetime.julian_day", t))),
 )
 
 # The eltype-generic kernel of row `id`, for a backend that must lower the

@@ -32,7 +32,7 @@
 # src/registered_functions.jl). The calendar those kernels are written from is
 # branch-free arithmetic by construction — a floored divmod of `t_utc` into
 # (days since the epoch, milliseconds of day), then Howard Hinnant's
-# `civil_from_days`, then the Fliegel–van Flandern integer Julian day — so
+# `civil_from_days`, and the linear day number for the Julian Date — so
 # lowering it is `multiply`/`divide`/`floor`/`subtract`/`compare`/`select` and
 # nothing else, and `_de_fn_lanes` broadcasts one kernel over the lane vector to
 # emit exactly that. The results stay Float64 tensors carrying integer values,
