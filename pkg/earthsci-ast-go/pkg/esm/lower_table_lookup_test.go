@@ -137,8 +137,8 @@ func refuseCode(t *testing.T, src string) string {
 	t.Helper()
 	file, err := LoadString(src)
 	if err != nil {
-		t.Fatalf("fixture must LOAD (esm-spec §9.5.3a and the §9.5.5 lookup checks "+
-			"raise at lowering, not at load): %v", err)
+		t.Fatalf("fixture must LOAD (esm-spec §9.5.3a raises at lowering, not at "+
+			"load): %v", err)
 	}
 	if _, err := lowerTableLookups(file); err != nil {
 		var de DiagnosticError
@@ -374,9 +374,6 @@ func TestTableLookupLoweringDiagnostics(t *testing.T) {
 		name string
 		src  string
 		code string
-		// atLoad: a §9.5.5 TABLE check, which load raises on every table
-		// (ruling Q-106); the lookup's own checks and §9.5.3a stay at lowering.
-		atLoad bool
 	}{
 		{
 			name: "unknown table",
@@ -421,8 +418,7 @@ func TestTableLookupLoweringDiagnostics(t *testing.T) {
 			name: "interpolation kind and axis count disagree",
 			src: strings.Replace(tableLookupFixture,
 				`"interpolation": "linear"`, `"interpolation": "bilinear"`, 1),
-			code:   CodeTableInterpolationAxesMismatch,
-			atLoad: true,
+			code: CodeTableInterpolationAxesMismatch,
 		},
 		{
 			// esm-spec §9.5.3a: refused, not answered under "clamp".
@@ -433,8 +429,12 @@ func TestTableLookupLoweringDiagnostics(t *testing.T) {
 		},
 	}
 	for _, tc := range cases {
+		// A §9.5.5 table or lookup check is raised by load on every table and
+		// every lookup node (rulings Q-106, Q-112); only §9.5.3a stays at
+		// lowering.
+		atLoad := tc.code != CodeTableOutOfBoundsUnsupported
 		t.Run(tc.name, func(t *testing.T) {
-			if tc.atLoad {
+			if atLoad {
 				_, err := LoadString(tc.src)
 				var de DiagnosticError
 				if !errors.As(err, &de) || de.DiagnosticCode() != tc.code {

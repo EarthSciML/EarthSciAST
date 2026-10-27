@@ -462,7 +462,13 @@ func interpRank2Array(name, role, code string, v any) ([][]float64, error) {
 	}
 	switch outer := v.(type) {
 	case [][]float64:
+		if len(outer) == 0 {
+			return nil, notRank2("`[]`, which is rank 1 (ruling Q-111)")
+		}
 	case []any:
+		if len(outer) == 0 {
+			return nil, notRank2("`[]`, which is rank 1 (ruling Q-111)")
+		}
 		for i, row := range outer {
 			if !isArrayValue(row) {
 				return nil, notRank2(fmt.Sprintf("a row that is not an array (%s[%d])", role, i+1))
@@ -552,38 +558,38 @@ func toInterpMatrix(name, role string, v any) ([][]float64, error) {
 	}
 }
 
-// validateInterpAxis checks an axis array against the load-time contract
-// (esm-spec §9.2): length ≥ 2, no NaN entries, strictly increasing.
-// Order: too_short → nan_in_axis → non_monotonic, so each fixture's
-// isolated-error scenario surfaces the spec-named diagnostic regardless
-// of which other constraints would also fail given a more pathological
-// input.
-func validateInterpAxis(fnName, axisName string, axis []float64) error {
-	if len(axis) < 2 {
-		return newClosedFunctionError(CodeInterpAxisTooShort,
-			fmt.Sprintf("%s: %s has %d entries; need ≥ 2 to form an interval to blend across",
-				fnName, axisName, len(axis)))
-	}
-	for i, v := range axis {
-		if math.IsNaN(v) {
-			return newClosedFunctionError(CodeInterpNaNInAxis,
-				fmt.Sprintf("%s: %s[%d] is NaN; axes MUST NOT contain NaN", fnName, axisName, i+1))
+// validateInterpAxesValues runs the last two steps of the esm-spec §9.2
+// "Order of the argument checks" over the named axes, each step over EVERY
+// axis before the next begins (ruling Q-110): a non-finite entry (NaN, +Inf
+// or -Inf; ruling Q-113) in any axis is `interp_nan_in_axis`, then any axis
+// not strictly increasing is `interp_non_monotonic_axis`. Lengths are the
+// caller's earlier steps.
+func validateInterpAxesValues(fnName string, names []string, axes [][]float64) error {
+	for k, axis := range axes {
+		for i, v := range axis {
+			if math.IsNaN(v) || math.IsInf(v, 0) {
+				return newClosedFunctionError(CodeInterpNaNInAxis,
+					fmt.Sprintf("%s: %s[%d] is %v; axis entries MUST be finite",
+						fnName, names[k], i+1, v))
+			}
 		}
 	}
-	for i := 1; i < len(axis); i++ {
-		if axis[i] <= axis[i-1] {
-			return newClosedFunctionError(CodeInterpNonMonotonicAxis,
-				fmt.Sprintf("%s: %s is not strictly increasing (%s[%d]=%g ≤ %s[%d]=%g)",
-					fnName, axisName, axisName, i+1, axis[i], axisName, i, axis[i-1]))
+	for k, axis := range axes {
+		for i := 1; i < len(axis); i++ {
+			if axis[i] <= axis[i-1] {
+				return newClosedFunctionError(CodeInterpNonMonotonicAxis,
+					fmt.Sprintf("%s: %s is not strictly increasing (%s[%d]=%g ≤ %s[%d]=%g)",
+						fnName, names[k], names[k], i+1, axis[i], names[k], i, axis[i-1]))
+			}
 		}
 	}
 	return nil
 }
 
 // validateInterpLinearArgs runs the esm-spec §9.2 argument checks of
-// interp.linear on its rank-1 table and axis. `axis_too_short` takes
-// precedence over a length mismatch when both could apply (N = 1 with a
-// matching table length). Shared by the load-time argument check
+// interp.linear on its rank-1 table and axis, in the pinned order (ruling
+// Q-110): too short, length mismatch, non-finite entry, not strictly
+// increasing. Shared by the load-time argument check
 // (load_time_checks.go) and the evaluator.
 func validateInterpLinearArgs(table, axis []float64) error {
 	const fnName = "interp.linear"
@@ -596,7 +602,7 @@ func validateInterpLinearArgs(table, axis []float64) error {
 		return newClosedFunctionError(CodeInterpAxisLengthMismatch,
 			fmt.Sprintf("%s: len(table)=%d != len(axis)=%d", fnName, len(table), len(axis)))
 	}
-	return validateInterpAxis(fnName, "axis", axis)
+	return validateInterpAxesValues(fnName, []string{"axis"}, [][]float64{axis})
 }
 
 // validateInterpBilinearArgs runs the esm-spec §9.2 argument checks of
@@ -605,7 +611,11 @@ func validateInterpLinearArgs(table, axis []float64) error {
 //  2. axis_y too short
 //  3. table outer length vs len(axis_x)
 //  4. each inner row length vs len(axis_y) (also catches ragged rows)
-//  5. axis_x / axis_y NaN + monotonicity (via validateInterpAxis)
+//  5. a non-finite entry in axis_x or axis_y, then either axis not strictly
+//     increasing (validateInterpAxesValues)
+//
+// This is the order of esm-spec §9.2 "Order of the argument checks" (ruling
+// Q-110), each step over both axes before the next.
 func validateInterpBilinearArgs(table [][]float64, axisX, axisY []float64) error {
 	const fnName = "interp.bilinear"
 	if len(axisX) < 2 {
@@ -628,10 +638,8 @@ func validateInterpBilinearArgs(table [][]float64, axisX, axisY []float64) error
 					fnName, i+1, len(row), len(axisY)))
 		}
 	}
-	if err := validateInterpAxis(fnName, "axis_x", axisX); err != nil {
-		return err
-	}
-	return validateInterpAxis(fnName, "axis_y", axisY)
+	return validateInterpAxesValues(fnName, []string{"axis_x", "axis_y"},
+		[][]float64{axisX, axisY})
 }
 
 // interpLinear implements `interp.linear` per esm-spec §9.2, after the

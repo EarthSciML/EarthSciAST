@@ -5,9 +5,10 @@ package esm
 // cannot express as a document. Each case is one table (id `T`) and one
 // `table_lookup` into it; the table is built IN MEMORY (the strings "NaN",
 // "Inf" and "-Inf" anywhere in it are those binary64 values, which JSON cannot
-// carry). The table goes through the SAME load-time check load and validate()
-// run on every `function_tables` entry (checkFunctionsAtLoad), and the lookup
-// through the production §9.5.3 lowering; both must raise
+// carry). The table and the lookup, placed in a document, go through the SAME
+// load-time checks load and validate() run (checkFunctionsAtLoad: the table's
+// ten checks, then the lookup's own), and the lookup through the production
+// §9.5.3 lowering; both must raise
 // `expected_error_code` (null: the table passes and the lookup lowers). Go's
 // FunctionTable holds axis values as []float64 and `data` as `any`, so every
 // case is representable and none is skipped.
@@ -174,7 +175,13 @@ func TestFunctionTableLoadErrorsLedger(t *testing.T) {
 			}
 			node := ExprNode{Op: c.Lookup.Op, Table: &id, TableAxes: axes,
 				Output: c.Lookup.Output, Args: args}
-			loadErr := checkFunctionsAtLoad(&ESMFile{FunctionTables: tables})
+			// The lookup sits in a document beside its table, so the load-time
+			// gate runs the table's ten checks and then the lookup's own
+			// (rulings Q-107, Q-112), through the same walk load uses.
+			doc := &ESMFile{FunctionTables: tables, Models: map[string]Model{
+				"M": {Equations: []Equation{{LHS: "y", RHS: node}}},
+			}}
+			loadErr := checkFunctionsAtLoad(doc)
 			_, lowerErr := lowerExprTableLookups(node, tables)
 			for _, step := range []struct {
 				name string

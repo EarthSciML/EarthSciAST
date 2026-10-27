@@ -820,7 +820,9 @@ func TestAuditT4_UndeterminableFindingsStayWarnings(t *testing.T) {
 	//
 	//   - `x ^ alpha`  — a SYMBOLIC exponent: the dimension depends on alpha's
 	//                    runtime VALUE.
-	//   - `table_lookup(x)` — an operator the units engine has no rule for.
+	//   - `table_lookup` — an operator the units engine has no rule for. It is a
+	//                    well-formed lookup into a declared table, because load and
+	//                    validate() check every lookup (esm-spec §9.5.5, ruling Q-112).
 	//
 	// Built as structs (not JSON) so the case is about the units policy and not
 	// about satisfying the schema's shape rules for these ops.
@@ -843,11 +845,17 @@ func TestAuditT4_UndeterminableFindingsStayWarnings(t *testing.T) {
 					},
 				},
 			},
+			FunctionTables: map[string]FunctionTable{
+				"T": {Axes: []FunctionTableAxis{{Name: "x", Values: []float64{0, 1}}},
+					Data: []any{1.0, 2.0}},
+			},
 		}
 	}
+	lookupTable := "T"
 	cases := map[string]Expression{
 		"symbolic_exponent": ExprNode{Op: "^", Args: []any{"x", "alpha"}},
-		"unknown_op":        ExprNode{Op: "table_lookup", Args: []any{"x"}},
+		"unknown_op": ExprNode{Op: OpTableLookup, Table: &lookupTable,
+			TableAxes: map[string]Expression{"x": "x"}, Args: []any{}},
 	}
 	for label, expr := range cases {
 		t.Run(label, func(t *testing.T) {

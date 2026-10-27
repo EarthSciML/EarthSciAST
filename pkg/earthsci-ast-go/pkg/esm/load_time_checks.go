@@ -1,14 +1,15 @@
 package esm
 
-// Load-time closed-function argument checks and function-table checks —
-// esm-spec §9.2 "When the argument checks run" and §9.5.5 "When the table
-// checks run" (rulings Q-106..Q-109).
+// Load-time closed-function argument checks, function-table checks and
+// table_lookup checks — esm-spec §9.2 "When the argument checks run" and
+// §9.5.5 "When the table checks run" (rulings Q-106..Q-113).
 //
 // Both run during load (parse.go, after template expansion and enum lowering,
 // so an `fn` node inside an expression-template body is checked where the
 // template is applied) and in validate() (collectStructuralErrors). They cover
-// EVERY `function_tables` entry, referenced or not, and EVERY `fn` node naming
-// interp.searchsorted / interp.linear / interp.bilinear wherever it appears.
+// EVERY `function_tables` entry, referenced or not, then EVERY `fn` node naming
+// interp.searchsorted / interp.linear / interp.bilinear and EVERY
+// `table_lookup` node wherever it appears, evaluated or not.
 // A document that fails one does not load. The lowering of a `table_lookup`
 // and the evaluator repeat the checks for trees built in memory.
 
@@ -45,13 +46,15 @@ var interpArrayArgs = map[string]struct {
 	}},
 }
 
-// checkInterpArgsAreConst is the AST half of the §9.2 argument checks: every
-// array-valued argument of an interp.* `fn` node must be a `const`-op node — a
-// variable reference or any other expression is `interp_axis_not_const` (an
-// axis, searchsorted's xs) or `interp_table_not_const` (a table). It must be
-// decided on the AST: evaluateFnArg would reduce a variable reference to a
-// scalar, which would then be indistinguishable from a `const` scalar. A node
-// with the wrong argument count is left to EvaluateClosedFunction's arity check.
+// checkInterpArgsAreConst is the AST half of the §9.2 argument checks, for
+// the evaluator: every array-valued argument of an interp.* `fn` node must be
+// a `const`-op node — a variable reference or any other expression is
+// `interp_axis_not_const` (an axis, searchsorted's xs) or
+// `interp_table_not_const` (a table). It must be decided on the AST:
+// evaluateFnArg would reduce a variable reference to a scalar, which would
+// then be indistinguishable from a `const` scalar. A node with the wrong
+// argument count is left to EvaluateClosedFunction's arity check, and the
+// ranks to EvaluateClosedFunction itself.
 func checkInterpArgsAreConst(node ExprNode) error {
 	if node.Name == nil {
 		return nil
@@ -61,73 +64,126 @@ func checkInterpArgsAreConst(node ExprNode) error {
 		return nil
 	}
 	for _, a := range spec.args {
-		if arg, ok := asExprNode(node.Args[a.index]); ok && arg.Op == OpConst {
-			continue
+		if err := interpArgNotConst(*node.Name, a, node.Args[a.index]); err != nil {
+			return err
 		}
-		return newClosedFunctionError(a.code, fmt.Sprintf(
-			"%s: %s must be a `const`-op array, got %s (esm-spec §9.2)",
-			*node.Name, a.role, describeFnArg(node.Args[a.index])))
 	}
 	return nil
 }
 
-// constArgValue is the `value` of an argument checkInterpArgsAreConst has
-// already found to be a `const` node.
+// interpArgNotConst refuses an array-valued interp.* argument that is not a
+// `const`-op node, with the code of its position.
+func interpArgNotConst(name string, a interpArrayArg, arg Expression) error {
+	if node, ok := asExprNode(arg); ok && node.Op == OpConst {
+		return nil
+	}
+	return newClosedFunctionError(a.code, fmt.Sprintf(
+		"%s: %s must be a `const`-op array, got %s (esm-spec §9.2)",
+		name, a.role, describeFnArg(arg)))
+}
+
+// constArgValue is the `value` of an argument interpArgNotConst has already
+// found to be a `const` node.
 func constArgValue(arg Expression) any {
 	node, _ := asExprNode(arg)
 	return node.Value
 }
 
-// checkClosedFnArgs runs every load-time §9.2 argument check on one `fn` node:
-// the AST half (checkInterpArgsAreConst), then the rank of each `const` array
-// (`interp_table_not_const` / `interp_axis_not_const`, ruling Q-108), then the
-// function's own checks — searchsorted_nan before searchsorted_non_monotonic;
-// for interp.linear / interp.bilinear the order of validateInterpLinearArgs /
-// validateInterpBilinearArgs. Any other `fn`, or one with the wrong argument
-// count, passes: arity is an evaluation-time check.
+// checkClosedFnArgs runs every load-time §9.2 argument check on one `fn` node,
+// in the order of §9.2 "Order of the argument checks" (ruling Q-110):
+//
+//  1. closed_function_arity (ruling Q-112: at load, for interp.* only);
+//  2. each array-valued argument in argument order — the table first, then
+//     the axes — not a `const` node, or a `const` of the wrong rank
+//     (`interp_table_not_const` / `interp_axis_not_const`; rulings Q-108,
+//     Q-111);
+//  3. the function's own checks: searchsorted_nan then
+//     searchsorted_non_monotonic; for interp.linear / interp.bilinear the
+//     order of validateInterpLinearArgs / validateInterpBilinearArgs.
+//
+// Any other `fn` passes: its checks are evaluation-time.
 func checkClosedFnArgs(node ExprNode) error {
-	if err := checkInterpArgsAreConst(node); err != nil {
-		return err
-	}
 	if node.Name == nil {
 		return nil
 	}
 	name := *node.Name
 	spec, ok := interpArrayArgs[name]
-	if !ok || len(node.Args) != spec.arity {
+	if !ok {
 		return nil
+	}
+	if err := expectArity(name, node.Args, spec.arity); err != nil {
+		return err
+	}
+	rank1 := map[int][]float64{}
+	var table2 [][]float64
+	for _, a := range spec.args {
+		arg := node.Args[a.index]
+		if err := interpArgNotConst(name, a, arg); err != nil {
+			return err
+		}
+		value := constArgValue(arg)
+		if name == "interp.bilinear" && a.index == 0 {
+			t, err := interpRank2Array(name, a.role, a.code, value)
+			if err != nil {
+				return err
+			}
+			table2 = t
+			continue
+		}
+		v, err := interpRank1Array(name, a.role, a.code, value)
+		if err != nil {
+			return err
+		}
+		rank1[a.index] = v
 	}
 	switch name {
 	case "interp.searchsorted":
-		xs, err := interpRank1Array(name, "xs", CodeInterpAxisNotConst, constArgValue(node.Args[1]))
-		if err != nil {
-			return err
-		}
-		return validateSearchsortedXs(name, xs)
+		return validateSearchsortedXs(name, rank1[1])
 	case "interp.linear":
-		table, err := interpRank1Array(name, "table", codeInterpTableNotConst, constArgValue(node.Args[0]))
-		if err != nil {
-			return err
-		}
-		axis, err := interpRank1Array(name, "axis", CodeInterpAxisNotConst, constArgValue(node.Args[1]))
-		if err != nil {
-			return err
-		}
-		return validateInterpLinearArgs(table, axis)
+		return validateInterpLinearArgs(rank1[0], rank1[1])
 	case "interp.bilinear":
-		table, err := interpRank2Array(name, "table", codeInterpTableNotConst, constArgValue(node.Args[0]))
-		if err != nil {
-			return err
-		}
-		axisX, err := interpRank1Array(name, "axis_x", CodeInterpAxisNotConst, constArgValue(node.Args[1]))
-		if err != nil {
-			return err
-		}
-		axisY, err := interpRank1Array(name, "axis_y", CodeInterpAxisNotConst, constArgValue(node.Args[2]))
-		if err != nil {
-			return err
-		}
-		return validateInterpBilinearArgs(table, axisX, axisY)
+		return validateInterpBilinearArgs(table2, rank1[1], rank1[2])
+	}
+	return nil
+}
+
+// checkTableLookupNode runs a `table_lookup` node's own checks at load (esm-spec
+// §9.5.5 "When the table checks run", ruling Q-112), in the pinned lookup order
+// (ruling Q-107): table_lookup_unknown_table; then the named table's ten checks
+// (already run on every table before any node, so they pass here); then
+// table_lookup_args_nonempty, table_lookup_axis_name_mismatch and
+// table_lookup_output_out_of_range. `table_out_of_bounds_unsupported` is NOT
+// one of them: it stays where a lookup is lowered (§9.5.3a).
+func checkTableLookupNode(node ExprNode, tables map[string]FunctionTable) error {
+	if node.Table == nil || *node.Table == "" {
+		return newTableLookupError(CodeTableLookupUnknownTable,
+			"a `table_lookup` node carries no `table` id (esm-spec §9.5.2)")
+	}
+	id := *node.Table
+	table, ok := tables[id]
+	if !ok {
+		return newTableLookupError(CodeTableLookupUnknownTable,
+			"`table_lookup` references table %q, which the document's `function_tables` "+
+				"block does not declare", id)
+	}
+	if err := validateFunctionTable(id, table); err != nil {
+		return err
+	}
+	if _, err := tableAxisInputs(node, table, id); err != nil {
+		return err
+	}
+	_, err := tableOutputIndex(node, table, id)
+	return err
+}
+
+// checkExprNodeAtLoad is the load-time check of one expression node: the §9.2
+// argument checks of an interp.* `fn` node, or the checks of a `table_lookup`.
+func checkExprNodeAtLoad(node ExprNode, tables map[string]FunctionTable) error {
+	switch node.Op {
+	case OpFn:
+		return checkClosedFnArgs(node)
+	case OpTableLookup:
+		return checkTableLookupNode(node, tables)
 	}
 	return nil
 }
@@ -140,9 +196,11 @@ type loadTimeFinding struct {
 }
 
 // loadTimeFunctionChecks runs the §9.5.5 table checks on every
-// `function_tables` entry (sorted by id), then the §9.2 argument checks on
-// every interp.* `fn` node of the document, calling report for each failure.
-// report returns false to stop the walk.
+// `function_tables` entry (sorted by id), then — every table before any
+// expression node (ruling Q-113) — the §9.2 argument checks on every interp.*
+// `fn` node and the lookup checks on every `table_lookup` node of the
+// document, calling report for each failure. report returns false to stop the
+// walk.
 func loadTimeFunctionChecks(file *ESMFile, report func(loadTimeFinding) bool) {
 	ids := make([]string, 0, len(file.FunctionTables))
 	for id := range file.FunctionTables {
@@ -158,8 +216,8 @@ func loadTimeFunctionChecks(file *ESMFile, report func(loadTimeFinding) bool) {
 	}
 	visitDocumentExprs(file, func(path string, expr Expression) bool {
 		keepGoing := true
-		visitFnNodes(expr, func(node ExprNode) bool {
-			if err := checkClosedFnArgs(node); err != nil {
+		visitExprNodes(expr, func(node ExprNode) bool {
+			if err := checkExprNodeAtLoad(node, file.FunctionTables); err != nil {
 				keepGoing = report(loadTimeFinding{path: path, err: err})
 			}
 			return keepGoing
@@ -168,8 +226,8 @@ func loadTimeFunctionChecks(file *ESMFile, report func(loadTimeFinding) bool) {
 	})
 }
 
-// checkFunctionsAtLoad is the load-time gate: the first failed table or
-// argument check, as the *TableLookupError / *ClosedFunctionError that carries
+// checkFunctionsAtLoad is the load-time gate: the first failed table,
+// argument or lookup check, as the *TableLookupError / *ClosedFunctionError that carries
 // its code, or nil.
 func checkFunctionsAtLoad(file *ESMFile) error {
 	var first error
@@ -199,18 +257,18 @@ func (s *structuralScan) validateFunctionChecks() {
 	})
 }
 
-// visitFnNodes calls visit on every `fn` node in expr, in every
+// visitExprNodes calls visit on every operator node in expr, in every
 // expression-bearing field (mapExprChildren), raw lists and raw objects
 // included. visit returns false to stop.
-func visitFnNodes(expr Expression, visit func(ExprNode) bool) bool {
+func visitExprNodes(expr Expression, visit func(ExprNode) bool) bool {
 	if node, ok := asExprNode(expr); ok {
-		if node.Op == OpFn && !visit(node) {
+		if !visit(node) {
 			return false
 		}
 		keepGoing := true
 		_, _ = mapExprChildren(node, func(child Expression) (Expression, error) {
 			if keepGoing {
-				keepGoing = visitFnNodes(child, visit)
+				keepGoing = visitExprNodes(child, visit)
 			}
 			return child, nil
 		})
@@ -219,7 +277,7 @@ func visitFnNodes(expr Expression, visit func(ExprNode) bool) bool {
 	switch v := expr.(type) {
 	case []any:
 		for _, el := range v {
-			if !visitFnNodes(el, visit) {
+			if !visitExprNodes(el, visit) {
 				return false
 			}
 		}
@@ -230,7 +288,7 @@ func visitFnNodes(expr Expression, visit func(ExprNode) bool) bool {
 			if k == "expression_templates" {
 				continue
 			}
-			if !visitFnNodes(v[k], visit) {
+			if !visitExprNodes(v[k], visit) {
 				return false
 			}
 		}
