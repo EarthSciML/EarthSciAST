@@ -16,6 +16,7 @@
  */
 
 import { EsmDiagnosticError, ERROR_CODES } from './errors.js'
+import { numericValue } from './numeric-literal.js'
 
 /**
  * The stable diagnostic codes a {@link ClosedFunctionError} can carry: an
@@ -215,8 +216,8 @@ function asNumber(name: string, v: unknown, idx = 0): number {
  * is not a rank-1 array of numbers is `interp_axis_not_const` (checked at run
  * time too, since a JavaScript caller can hand over anything), then a NaN entry
  * is `searchsorted_nan`, then a decreasing pair is `searchsorted_non_monotonic`.
- * Empty arrays are rejected with the spec arity code (the registry requires
- * N ≥ 1).
+ * An empty `xs` is a valid rank-1 table (N = 0, trivially non-decreasing), and
+ * every query against it returns 1 (esm-spec §9.2, ruling Q-108).
  */
 export function validateSearchsortedTable(
   xs: readonly number[],
@@ -226,12 +227,6 @@ export function validateSearchsortedTable(
     throw new ClosedFunctionError(
       ERROR_CODES.INTERP_AXIS_NOT_CONST,
       `${where}: xs must be a rank-1 const-array of numbers`,
-    )
-  }
-  if (xs.length === 0) {
-    throw new ClosedFunctionError(
-      ERROR_CODES.CLOSED_FUNCTION_ARITY,
-      `${where}: xs table is empty (must have at least one entry)`,
     )
   }
   for (let i = 0; i < xs.length; i++) {
@@ -338,6 +333,50 @@ function asNumberMatrix(name: string, v: unknown): number[][] {
 }
 
 /**
+ * The esm-spec §9.2 shape and axis checks of `interp.linear` on arrays already
+ * known to be rank 1: `interp_axis_length_mismatch`, then the axis checks of
+ * {@link validateInterpAxis}. Shared by evaluation and the load-time check.
+ */
+function validateLinearArrays(table: readonly number[], axis: readonly number[]): void {
+  if (table.length !== axis.length) {
+    throw new ClosedFunctionError(
+      ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH,
+      `interp.linear: len(table)=${table.length} != len(axis)=${axis.length}`,
+    )
+  }
+  validateInterpAxis(axis, 'interp.linear')
+}
+
+/**
+ * The esm-spec §9.2 shape and axis checks of `interp.bilinear` on a rank-2
+ * `table` and rank-1 axes. Shared by evaluation and the load-time check.
+ */
+function validateBilinearArrays(
+  table: readonly (readonly number[])[],
+  axisX: readonly number[],
+  axisY: readonly number[],
+): void {
+  const nx = axisX.length
+  const ny = axisY.length
+  if (table.length !== nx) {
+    throw new ClosedFunctionError(
+      ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH,
+      `interp.bilinear: outer len(table)=${table.length} != len(axis_x)=${nx}`,
+    )
+  }
+  for (let r = 0; r < table.length; r++) {
+    if (table[r]!.length !== ny) {
+      throw new ClosedFunctionError(
+        ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH,
+        `interp.bilinear: table row ${r + 1} has length ${table[r]!.length}, expected len(axis_y)=${ny}`,
+      )
+    }
+  }
+  validateInterpAxis(axisX, 'interp.bilinear axis_x')
+  validateInterpAxis(axisY, 'interp.bilinear axis_y')
+}
+
+/**
  * 1-D linear interpolation with extrapolate-flat clamps. Pinned form
  * `result = t[i] + w * (t[i+1] - t[i])` so that w=0/1 reproduce the
  * endpoint exactly under IEEE-754 round-to-nearest.
@@ -346,13 +385,7 @@ function asNumberMatrix(name: string, v: unknown): number[][] {
  * matches the `searchsortedFirst` convention in this module).
  */
 export function interpLinear(table: readonly number[], axis: readonly number[], x: number): number {
-  if (table.length !== axis.length) {
-    throw new ClosedFunctionError(
-      ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH,
-      `interp.linear: len(table)=${table.length} != len(axis)=${axis.length}`,
-    )
-  }
-  validateInterpAxis(axis, 'interp.linear')
+  validateLinearArrays(table, axis)
   const n = axis.length
   if (x <= axis[0]!) return table[0]!
   if (x >= axis[n - 1]!) return table[n - 1]!
@@ -384,24 +417,9 @@ export function interpBilinear(
   x: number,
   y: number,
 ): number {
+  validateBilinearArrays(table, axisX, axisY)
   const nx = axisX.length
   const ny = axisY.length
-  if (table.length !== nx) {
-    throw new ClosedFunctionError(
-      ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH,
-      `interp.bilinear: outer len(table)=${table.length} != len(axis_x)=${nx}`,
-    )
-  }
-  for (let r = 0; r < table.length; r++) {
-    if (table[r]!.length !== ny) {
-      throw new ClosedFunctionError(
-        ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH,
-        `interp.bilinear: table row ${r + 1} has length ${table[r]!.length}, expected len(axis_y)=${ny}`,
-      )
-    }
-  }
-  validateInterpAxis(axisX, 'interp.bilinear axis_x')
-  validateInterpAxis(axisY, 'interp.bilinear axis_y')
 
   // Per-axis clamp (extrapolate-flat). NaN passes through unchanged
   // because both comparisons return false for NaN, propagating to wx/wy.
@@ -564,4 +582,104 @@ export function dispatchClosedFunction(name: string, args: unknown[]): number {
     )
   }
   return handler(name, args)
+}
+
+/**
+ * The value an argument of an `interp.*` call carries when it is a literal
+ * `const` node — its `value`, with any tagged `NumericLiteral` leaf (a
+ * `{canonical: true}` load) unwrapped to a plain number — or `undefined` when
+ * the argument is not a `const` node at all (a variable reference, any other
+ * expression).
+ */
+function constArgValue(arg: unknown): unknown {
+  if (typeof arg !== 'object' || arg === null || Array.isArray(arg)) return undefined
+  if ((arg as { op?: unknown }).op !== 'const') return undefined
+  return plainLeaves((arg as { value?: unknown }).value)
+}
+
+function plainLeaves(value: unknown): unknown {
+  const n = numericValue(value)
+  if (n !== undefined) return n
+  if (Array.isArray(value)) return value.map(plainLeaves)
+  return value
+}
+
+/**
+ * The esm-spec §9.2 LOAD-TIME argument checks of one `fn` call (ruling Q-106):
+ * the call names `name` and carries `args`, as written in the loaded document.
+ * Only `interp.searchsorted`, `interp.linear` and `interp.bilinear` have
+ * argument checks; any other name returns at once. A call with the wrong number
+ * of arguments is left to evaluation (`closed_function_arity`), since the
+ * argument roles are not defined for it.
+ *
+ * In order, for each array argument in argument order: not a `const` node, or
+ * a `const` of the wrong rank (rank 1 for an axis, `xs` and `interp.linear`'s
+ * `table`; rank 2 for `interp.bilinear`'s `table`) is `interp_table_not_const`
+ * / `interp_axis_not_const` (ruling Q-108); then the value checks evaluation
+ * runs — the very same functions, so the two cannot disagree.
+ *
+ * `where` (a JSON Pointer) is prefixed to the message.
+ */
+export function checkClosedFunctionArguments(
+  name: string,
+  args: readonly unknown[],
+  where = '',
+): void {
+  try {
+    switch (name) {
+      case 'interp.searchsorted': {
+        if (args.length !== 2) return
+        const xs = asNumberArray(
+          name,
+          constArgValue(args[1]),
+          'xs (arg 2)',
+          ERROR_CODES.INTERP_AXIS_NOT_CONST,
+        )
+        validateSearchsortedTable(xs)
+        return
+      }
+      case 'interp.linear': {
+        if (args.length !== 3) return
+        const table = asNumberArray(
+          name,
+          constArgValue(args[0]),
+          'table',
+          ERROR_CODES.INTERP_TABLE_NOT_CONST,
+        )
+        const axis = asNumberArray(
+          name,
+          constArgValue(args[1]),
+          'axis',
+          ERROR_CODES.INTERP_AXIS_NOT_CONST,
+        )
+        validateLinearArrays(table, axis)
+        return
+      }
+      case 'interp.bilinear': {
+        if (args.length !== 5) return
+        const table = asNumberMatrix(name, constArgValue(args[0]))
+        const axisX = asNumberArray(
+          name,
+          constArgValue(args[1]),
+          'axis_x',
+          ERROR_CODES.INTERP_AXIS_NOT_CONST,
+        )
+        const axisY = asNumberArray(
+          name,
+          constArgValue(args[2]),
+          'axis_y',
+          ERROR_CODES.INTERP_AXIS_NOT_CONST,
+        )
+        validateBilinearArrays(table, axisX, axisY)
+        return
+      }
+      default:
+        return
+    }
+  } catch (e) {
+    if (e instanceof ClosedFunctionError && where !== '') {
+      throw new ClosedFunctionError(e.code, `${where}: ${e.message.replace(/^\[[a-z_]+\] /, '')}`)
+    }
+    throw e
+  }
 }

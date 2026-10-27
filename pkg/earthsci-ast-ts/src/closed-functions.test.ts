@@ -20,6 +20,7 @@ import { loadString } from './parse.js'
 import { evaluateExpression } from './codegen.js'
 import {
   ClosedFunctionError,
+  checkClosedFunctionArguments,
   closedFunctionNames,
   CLOSED_FUNCTION_NAMES,
   dispatchClosedFunction,
@@ -217,7 +218,38 @@ describe('Closed function registry — cross-binding conformance', () => {
         })
       }
 
-      // Error scenarios validate spec-pinned diagnostic codes.
+      // Error scenarios validate spec-pinned diagnostic codes — first through
+      // the LOAD-time argument check (the one load and validate() run on every
+      // `fn` call, ruling Q-106), with the array inputs as `const` arguments,
+      // then through evaluation below.
+      if (expected.function.startsWith('interp.')) {
+        for (const errorScenario of expected.error_scenarios ?? []) {
+          it(`error scenario ${errorScenario.name} at load → ${errorScenario.expected_error_code}`, () => {
+            const decoded = errorScenario.inputs.map(decodeInput)
+            // searchsorted's `xs` is argument 2; every array of linear /
+            // bilinear precedes its scalar queries. A scalar in an array
+            // position is still written as a `const` (the wrong-rank cases).
+            const arrayPositions =
+              expected.function === 'interp.searchsorted'
+                ? [1]
+                : expected.function === 'interp.linear'
+                  ? [0, 1]
+                  : [0, 1, 2]
+            const args = decoded.map((v, i) =>
+              arrayPositions.includes(i) ? { op: 'const', args: [], value: v } : `q${i}`,
+            )
+            let code: string | null = null
+            try {
+              checkClosedFunctionArguments(expected.function, args)
+            } catch (e) {
+              expect(e).toBeInstanceOf(ClosedFunctionError)
+              code = (e as ClosedFunctionError).code
+            }
+            expect(code).toBe(errorScenario.expected_error_code)
+          })
+        }
+      }
+
       for (const errorScenario of expected.error_scenarios ?? []) {
         it(`error scenario ${errorScenario.name} → ${errorScenario.expected_error_code}`, () => {
           const decoded = errorScenario.inputs.map(decodeInput)
@@ -231,18 +263,13 @@ describe('Closed function registry — cross-binding conformance', () => {
               // contract: the rank check on `xs` (`interp_axis_not_const`) is
               // decided there, so a scalar or nested `xs` reaches it as-is.
               dispatchClosedFunction('interp.searchsorted', decoded)
-            } else if (expected.function === 'interp.linear') {
-              const table = decoded[0] as number[]
-              const axis = decoded[1] as number[]
-              const x = decoded[2] as number
-              interpLinear(table, axis, x)
-            } else if (expected.function === 'interp.bilinear') {
-              const table = decoded[0] as number[][]
-              const axisX = decoded[1] as number[]
-              const axisY = decoded[2] as number[]
-              const x = decoded[3] as number
-              const y = decoded[4] as number
-              interpBilinear(table, axisX, axisY, x, y)
+            } else if (
+              expected.function === 'interp.linear' ||
+              expected.function === 'interp.bilinear'
+            ) {
+              // Through the registry's dispatch, which owns the rank checks
+              // (`interp_table_not_const` / `interp_axis_not_const`).
+              dispatchClosedFunction(expected.function, decoded)
             } else {
               throw new Error(`unhandled error-scenario fixture function ${expected.function}`)
             }
@@ -273,12 +300,27 @@ describe('closedFunctionNames (API_SPEC.md §8 item 4)', () => {
 describe('interp.searchsorted: an xs that is not a rank-1 const array (esm-spec §9.2)', () => {
   const fixturePath = join(fixturesRoot, 'interp', 'searchsorted', 'canonical.esm')
 
-  /** The canonical fixture with its `xs` argument replaced by `xs`, loaded. */
-  function loadWithXs(xs: unknown): Expr {
+  /** The canonical fixture with its `xs` argument replaced by `xs`. */
+  function docWithXs(xs: unknown): string {
     const doc = JSON.parse(readFileSync(fixturePath, 'utf-8'))
     doc.models.Probe.equations[0].rhs.args[1] = xs
-    const file = loadString(JSON.stringify(doc))
+    return JSON.stringify(doc)
+  }
+
+  /** The canonical fixture with its `xs` argument replaced by `xs`, loaded. */
+  function loadWithXs(xs: unknown): Expr {
+    const file = loadString(docWithXs(xs))
     return (file.models!.Probe as Model).equations[0].rhs
+  }
+
+  function loadCode(xs: unknown): string {
+    try {
+      loadString(docWithXs(xs))
+    } catch (e) {
+      if (e instanceof EsmDiagnosticError) return e.code
+      throw e
+    }
+    return 'NO_ERROR'
   }
 
   function evalCode(rhs: Expr, bindings: Map<string, number>): string {
@@ -317,12 +359,13 @@ describe('interp.searchsorted: an xs that is not a rank-1 const array (esm-spec 
         ],
       },
     ],
-  ])('rejects %s as `interp_axis_not_const`, through load and evaluate', (_label, xs) => {
-    // The nested-NaN form cannot be written in JSON; build it in memory.
-    const rhs =
-      _label === 'a nested const holding a NaN'
-        ? ({ op: 'fn', name: 'interp.searchsorted', args: ['x', xs] } as Expr)
-        : loadWithXs(xs)
+  ])('rejects %s as `interp_axis_not_const`, at load and at evaluation', (_label, xs) => {
+    // The nested-NaN form cannot be written in JSON.
+    if (_label !== 'a nested const holding a NaN') {
+      expect(loadCode(xs)).toBe(ERROR_CODES.INTERP_AXIS_NOT_CONST)
+    }
+    // Evaluation repeats the check on a call that never went through a load.
+    const rhs = { op: 'fn', name: 'interp.searchsorted', args: ['x', xs] } as Expr
     // `xs_var` is BOUND (to a scalar): the code must not depend on whether the
     // evaluator could have produced a number for it.
     const bound = new Map([
@@ -352,5 +395,11 @@ describe('interp.searchsorted: an xs that is not a rank-1 const array (esm-spec 
   it('still evaluates the rank-1 const xs', () => {
     const rhs = loadWithXs({ op: 'const', args: [], value: [1, 2, 3] })
     expect(evaluateExpression(rhs, new Map([['x', 2]]))).toBe(2)
+  })
+
+  it('loads and evaluates an empty xs to 1 (ruling Q-108)', () => {
+    const rhs = loadWithXs({ op: 'const', args: [], value: [] })
+    expect(evaluateExpression(rhs, new Map([['x', 2]]))).toBe(1)
+    expect(evaluateExpression(rhs, new Map([['x', Number.NaN]]))).toBe(1)
   })
 })

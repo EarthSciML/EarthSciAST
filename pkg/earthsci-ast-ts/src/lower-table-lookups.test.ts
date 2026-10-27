@@ -165,6 +165,22 @@ describe('out_of_bounds_error fixture: `error` mode is refused, not clamped (esm
     ).toBe(ERROR_CODES.TABLE_OUT_OF_BOUNDS_UNSUPPORTED)
   })
 
+  it("checks the lookup's own fields before refusing `error` mode (esm-spec §9.5.5, ruling Q-107)", () => {
+    const block = tables({
+      T: { axes: [{ name: 'x', values: [0, 1] }], data: [1, 2], out_of_bounds: 'error' },
+    })
+    const lookup = (fields: object) => ({ op: 'table_lookup', table: 'T', ...fields }) as Expr
+    expect(loweringErrorCode(() => lowerTableLookups(lookup({ axes: { y: 0.5 } }), block))).toBe(
+      ERROR_CODES.TABLE_LOOKUP_AXIS_NAME_MISMATCH,
+    )
+    expect(
+      loweringErrorCode(() => lowerTableLookups(lookup({ axes: { x: 0.5 }, output: 3 }), block)),
+    ).toBe(ERROR_CODES.TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE)
+    expect(loweringErrorCode(() => lowerTableLookups(lookup({ axes: { x: 0.5 } }), block))).toBe(
+      ERROR_CODES.TABLE_OUT_OF_BOUNDS_UNSUPPORTED,
+    )
+  })
+
   it('still round-trips the refused document verbatim (§9.5.4)', () => {
     const file = fixture('out_of_bounds_error')
     const reloaded = JSON.parse(toJson(file)) as {

@@ -432,8 +432,9 @@ export const ERROR_CODES = {
   // Two symbols of one enum map to the same integer (esm-spec §9.3).
   ENUM_DUPLICATE_VALUE: 'enum_duplicate_value',
 
-  // ---- function tables: §9.5.3 `table_lookup` lowering (lower-table-lookups.ts;
-  //      TableLookupLoweringError codes, named by esm-spec §9.5.5) ----
+  // ---- function tables: the §9.5.5 table checks, run at load on every table
+  //      (load-function-checks.ts) and again by the §9.5.3 `table_lookup`
+  //      lowering (lower-table-lookups.ts); TableLookupLoweringError codes ----
   TABLE_LOOKUP_UNKNOWN_TABLE: 'table_lookup_unknown_table',
   TABLE_LOOKUP_AXIS_NAME_MISMATCH: 'table_lookup_axis_name_mismatch',
   TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE: 'table_lookup_output_out_of_range',
@@ -442,6 +443,7 @@ export const ERROR_CODES = {
   // table checks"; `validateFunctionTable` in lower-table-lookups.ts).
   TABLE_AXIS_DUPLICATE_NAME: 'table_axis_duplicate_name',
   TABLE_OUTPUTS_DUPLICATE_NAME: 'table_outputs_duplicate_name',
+  // An axis value that is not finite: NaN, +Inf or -Inf (§9.5.5, ruling Q-109).
   TABLE_AXIS_NAN: 'table_axis_nan',
   TABLE_AXIS_NON_MONOTONIC: 'table_axis_non_monotonic',
   // An axis with fewer than 2 values (§9.5.1), on a table schema validation
@@ -449,6 +451,7 @@ export const ERROR_CODES = {
   TABLE_AXIS_TOO_SHORT: 'table_axis_too_short',
   TABLE_OUTPUTS_LENGTH_MISMATCH: 'table_outputs_length_mismatch',
   TABLE_DATA_SHAPE_MISMATCH: 'table_data_shape_mismatch',
+  // A `data` leaf that is not finite: NaN, +Inf or -Inf (§9.5.5, ruling Q-109).
   TABLE_DATA_NAN: 'table_data_nan',
   // A `table_lookup` carrying a non-empty `args` (esm-spec §9.5.2).
   TABLE_LOOKUP_ARGS_NONEMPTY: 'table_lookup_args_nonempty',
@@ -461,7 +464,9 @@ export const ERROR_CODES = {
   TABLE_OUT_OF_BOUNDS_UNSUPPORTED: 'table_out_of_bounds_unsupported',
 
   // ---- closed-functions: §9.2 closed function registry (closed-functions.ts;
-  //      ClosedFunctionError codes) ----
+  //      ClosedFunctionError codes). The `interp_*` / `searchsorted_*` argument
+  //      checks run at load on every `interp.*` call (load-function-checks.ts)
+  //      and again at evaluation ----
   UNKNOWN_CLOSED_FUNCTION: 'unknown_closed_function',
   CLOSED_FUNCTION_ARITY: 'closed_function_arity',
   CLOSED_FUNCTION_OVERFLOW: 'closed_function_overflow',

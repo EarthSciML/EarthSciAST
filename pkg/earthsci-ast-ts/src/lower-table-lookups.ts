@@ -142,11 +142,18 @@ export function lowerTableLookupNode(
         '`function_tables` block does not declare',
     )
   }
-  // The table's own §9.5.5 checks come before anything about the lookup (its
-  // `out_of_bounds` refusal, axis keys, output), as in the formal model's
-  // `prepLookup`: a broken table is named for what is wrong with IT.
+  // esm-spec §9.5.5 "Order of the lookup checks" (ruling Q-107): unknown table,
+  // then the table's own ten checks, then the lookup's `args`, axis keys and
+  // output. A broken table is named for what is wrong with IT. (Load has
+  // already run the table checks on every table; they are repeated here
+  // because this function is also handed tables that never went through a
+  // load.)
   validateFunctionTable(table, tableId)
-  // esm-spec §9.5.3a. `clamp` (the default) is exactly what `interp.linear` /
+  const inputs = axisInputs(node, table, tableId)
+  const data = outputSlice(table, outputIndex(node, table, tableId))
+
+  // esm-spec §9.5.3a, outside the order above: raised only on a lookup that
+  // passed every check. `clamp` (the default) is exactly what `interp.linear` /
   // `interp.bilinear` do at the ends, so the lowering IS the semantics there;
   // `error` has no lowered form at all, and answering it with the clamping one
   // would hand back a number the author did not ask for with nothing in the
@@ -159,9 +166,6 @@ export function lowerTableLookupNode(
         'under clamp semantics would be a silently different result (esm-spec §9.5.3a)',
     )
   }
-
-  const inputs = axisInputs(node, table, tableId)
-  const data = outputSlice(table, outputIndex(node, table, tableId))
 
   // `interpolation` defaults to `linear` (esm-spec §9.5.1).
   const kind = table.interpolation ?? 'linear'
@@ -210,17 +214,17 @@ const AXES_FOR_INTERPOLATION: { [kind: string]: number | undefined } = {
  * The implied shape is `[len(outputs), len(axes[0].values), …]` with `outputs`,
  * the axis lengths alone without (§9.5.1).
  *
- * Choices this binding makes where the rules leave room: a non-finite knot
- * (±Infinity) or a non-numeric one is `table_axis_nan` (§9.5.1 requires FINITE
- * floats, and an infinite knot makes the §9.2 blend weight 0 or NaN with no
- * diagnostic); a ±Infinity `data` leaf is likewise `table_data_nan` (the schema
- * requires finite leaves); a non-numeric `data` leaf (a string, an object,
- * `null`) does not count as a leaf at all, so it is a nesting mismatch
+ * A knot that is not finite (NaN, +Inf or -Inf) is `table_axis_nan`, and a
+ * `data` leaf that is not finite is `table_data_nan` (esm-spec §9.5.5, ruling
+ * Q-109). Choices this binding makes where the rules leave room: a non-numeric
+ * knot is `table_axis_nan` too; a non-numeric `data` leaf (a string, an
+ * object, `null`) does not count as a leaf at all, so it is a nesting mismatch
  * (`table_data_shape_mismatch`, step 8).
  *
- * This is the binding's only validator for a function table: the TypeScript
- * loader does not check `function_tables` beyond the schema, and the §9.5.3
- * lowering (the one place a table's contents are used) calls this first.
+ * The binding's one validator for a function table: load runs it on every
+ * `function_tables` entry, referenced or not (`load-function-checks.ts`,
+ * ruling Q-106), and the §9.5.3 lowering runs it again on the table a lookup
+ * names.
  */
 export function validateFunctionTable(table: FunctionTable, tableId: string): void {
   const axes: readonly FunctionTableAxis[] = table.axes

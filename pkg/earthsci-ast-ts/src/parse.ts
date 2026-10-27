@@ -11,6 +11,7 @@ import type { EsmFile } from './types.js'
 import { validateUnits, type UnitWarning } from './units.js'
 import { losslessJsonParse, stripNumericLiterals } from './numeric-literal.js'
 import { lowerEnums } from './lower-enums.js'
+import { checkFunctionTablesAndClosedFunctionCalls } from './load-function-checks.js'
 import {
   expandDocument,
   lowerExpressionTemplates,
@@ -636,6 +637,13 @@ function loadInput(input: string | object, options?: LoadOptions): EsmFile {
   // codegen runner sees only `const` — `evaluateExpression()` rejects
   // any leftover `enum` op as an unlowered file.
   const loweredData = lowerEnums(typedData)
+
+  // Step 4a: the esm-spec §9.5.5 table checks on EVERY `function_tables` entry,
+  // referenced or not, and the §9.2 argument checks on EVERY `interp.*` `fn`
+  // call, wherever it sits (ruling Q-106). On the document as loaded — after
+  // template expansion and enum lowering — so a call inside a template body is
+  // checked where the template was applied. A failure does not load.
+  checkFunctionTablesAndClosedFunctionCalls(loweredData)
 
   // Attach the captured Option-B registries (NON-SCHEMA, loader-populated —
   // see `EsmFile.componentTemplates` in `types.ts`). Omitted entirely when the
