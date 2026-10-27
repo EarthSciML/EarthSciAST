@@ -1488,6 +1488,10 @@ def expand(paths, skips):
         for rel in sorted(x for x in listed if x):
             if any(rel == s or rel.startswith(s.rstrip("/") + "/") for s in skips):
                 continue
+            if (p / rel).is_symlink():
+                # The link's target is a tracked file of its own and is
+                # rewritten there; a patch at the link would replace the link.
+                continue
             out.append((str(p / rel), p, rel))
     return out
 
