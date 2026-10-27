@@ -4,6 +4,7 @@ import Esm.Closed.Datetime.Exact
 import Esm.Closed.Datetime.ExactFacts
 import Esm.Closed.Datetime.Binary64
 import Esm.Closed.Datetime.Binary64Julian
+import Esm.Closed.Datetime.FloatImpl
 
 /-!
 # `datetime.*` (esm-spec §9.2)
@@ -44,6 +45,14 @@ theorem fDivmod_exact (t : ℝ) (ht : IsF64 t) (hb : |t| ≤ 2 ^ (59 : ℤ))
   have htod := fTimeOfDay_eq ht.1 hb hneg
   refine ⟨fDayNumber_eq ht.1 (lt_of_le_of_lt hb (by norm_num)) hband, htod, ?_⟩
   unfold fSecondOfDay secondOfDay; rw [htod]
+
+/-- §9.2's "a single floor-divmod by 86400 … guarantees … zero ulp drift on
+the integer outputs", read for the binary64 floor-divmod, is false: inside
+`(-43200, 0)` the remainder rounds (see `fSecondOfDay_ne`). -/
+theorem fDivmod_not_exact :
+    ¬ ∀ t : ℝ, IsF64 t → |t| ≤ 2 ^ (59 : ℤ) →
+      fDayNumber t = dayNumber t ∧ fSecondOfDay t = secondOfDay t :=
+  fun h => fSecondOfDay_ne fun t ht hb => (h t ht hb).2
 
 /-- Claim (b): the spec's binary64 julian_day is within one ulp of the exact
 value of its formula, for every double `|t| ≤ 2^59`. -/
