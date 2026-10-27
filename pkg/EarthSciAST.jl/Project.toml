@@ -27,6 +27,7 @@ ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
 GeoInterface = "cf35fbd7-0cd7-5166-be24-54bfbe79505f"
 GeometryOps = "3251bfac-6a57-4b6d-aa61-ac1fef2975ab"
 ModelingToolkit = "961ee093-0014-501f-94e3-6117800e7a78"
+ModelingToolkitBase = "7771a370-6774-4173-bd38-47e70ca0b839"
 Reactant = "3c362404-f566-11ee-1572-e11a4b42c853"
 SciMLBase = "0bca4576-84f4-4d90-8ffe-ffa030f20462"
 SortTileRecursiveTree = "746ee33f-1797-42c2-866d-db2fce69d14d"
@@ -58,15 +59,26 @@ SortTileRecursiveTree = "0.1"
 JSON3 = "1"
 JSONSchema = "1"
 ModelingToolkit = "11"
+# HELD BACK DELIBERATELY. ModelingToolkitBase is a weak dependency only so that
+# this cap applies wherever it is installed; no extension loads it directly.
+# Releases after 1.42 (all of which need SciMLBase 3) break the ModelingToolkit
+# extension: `mtkcompile` refuses the array equations it builds ("... is present
+# in the system but ... is not an unknown"), discrete events fail
+# initialization, and states no equation mentions are dropped. Until SciMLBase 3
+# was allowed, the SciMLBase cap held ModelingToolkitBase at 1.42 implicitly;
+# this keeps that while letting environments without ModelingToolkit move to
+# SciMLBase 3. 1.31 - 1.42 accept both SciMLBase 2 and 3. Lift once the
+# extension works on current ModelingToolkitBase.
+ModelingToolkitBase = "1 - 1.42"
 OrderedCollections = "1, 2"
 Polyester = "0.7"
 PrecompileTools = "1"
-OrdinaryDiffEqNonlinearSolve = "1"
-OrdinaryDiffEqRosenbrock = "1"
-OrdinaryDiffEqTsit5 = "1"
+OrdinaryDiffEqNonlinearSolve = "1, 2"
+OrdinaryDiffEqRosenbrock = "1, 2"
+OrdinaryDiffEqTsit5 = "1, 2"
 Reactant = "0.2"
 RuntimeGeneratedFunctions = "0.5"
-SciMLBase = "2"
+SciMLBase = "2, 3"
 Symbolics = "7"
 # HELD BACK DELIBERATELY. SymbolicUtils 4.46.0 deleted
 #   Base.ImmutableDict(d::ImmutableDict{K,V}, x, y) = ImmutableDict{K,V}(d, x, y)

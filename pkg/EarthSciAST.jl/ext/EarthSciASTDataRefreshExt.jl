@@ -9,10 +9,11 @@ the live forcing buffers (`param_arrays` / `_NK_PARAM_GATHER`, ess-14f.3).
 
 Kept out of the base package per `[[library-exposes-rhs-not-solver]]` and R4 of
 the plan (mayor-dir esio-consumer-julia-plan-2026-06-26.md §6): returning a
-`PresetTimeCallback` needs `DiffEqCallbacks`, and `u_modified!` needs
-`SciMLBase` — both solver-adjacent, so they stay `weakdeps`, mirroring the
-existing `MTKExt` / `CatalystExt` pattern. Without them loaded, the core
-fallback throws a `RefreshError` telling the user what to load.
+`PresetTimeCallback` needs `DiffEqCallbacks`, and `derivative_discontinuity!`
+(`u_modified!` before SciMLBase 3) needs `SciMLBase` — both solver-adjacent, so
+they stay `weakdeps`, mirroring the existing `MTKExt` / `CatalystExt` pattern.
+Without them loaded, the core fallback throws a `RefreshError` telling the user
+what to load.
 """
 module EarthSciASTDataRefreshExt
 
@@ -22,7 +23,15 @@ using EarthSciAST: RefreshBuffers,
 # Explicit import so we can add the extension method to this generic.
 import EarthSciAST: build_refresh_callback
 import DiffEqCallbacks: PresetTimeCallback
-import SciMLBase: u_modified!
+import SciMLBase
+
+# SciMLBase 3 renamed `u_modified!` to `derivative_discontinuity!` (and 3.0
+# dropped the old name; later 3.x keep it only as a deprecated alias). SciMLBase
+# 2 has only `u_modified!`. Bind whichever this SciMLBase provides, so the
+# extension works under the `SciMLBase = "2, 3"` compat.
+const _derivative_discontinuity! =
+    isdefined(SciMLBase, :derivative_discontinuity!) ?
+    SciMLBase.derivative_discontinuity! : SciMLBase.u_modified!
 
 # Group the refreshed (DISCRETE) variables by their provider OBJECT so a provider
 # serving several variables is sampled once per cadence boundary, not once per
@@ -75,10 +84,11 @@ function build_refresh_callback(;
     # buffer IN PLACE, then force the integrator to recompute its cached
     # derivative. (Regrid is an in-model coupling the RHS evaluates, not here.)
     #
-    # `u_modified!(integrator, true)` — NOT `false`. We changed the forcing buffer
-    # in `p`, so `f(u, p, t)` changed even though `u` did not. FSAL integrators
-    # (Tsit5, …) reuse the last stage's derivative as the next step's first stage;
-    # leaving the modified flag false would keep that STALE derivative (computed
+    # `derivative_discontinuity!(integrator, true)` (SciMLBase 2: `u_modified!`)
+    # — NOT `false`. We changed the forcing buffer in `p`, so `f(u, p, t)`
+    # changed even though `u` did not. FSAL integrators (Tsit5, …) reuse the
+    # last stage's derivative as the next step's first stage; leaving the
+    # modified flag false would keep that STALE derivative (computed
     # from the pre-refresh forcing) for one stage, blending old and new forcing
     # across the boundary (a ~stage-sized error per anchor). `true` recomputes
     # `f` at the current `u` with the refreshed buffer; it does NOT reset `u` or
@@ -88,9 +98,9 @@ function build_refresh_callback(;
     # `post_refresh` — the discrete-cadence materialization hook (the middle cadence
     # phase; see DiscreteMaterializer). After the RAW forcing buffers are refreshed,
     # it recomputes every derived discrete-cadence cache (the regrid→physics stack)
-    # from them, ONCE per boundary. Runs before `u_modified!` so the recomputed
-    # derivative sees the fresh caches. Defaults to a no-op (a model with no
-    # discrete-materialize var, or a caller who wired none).
+    # from them, ONCE per boundary. Runs before `_derivative_discontinuity!` so
+    # the recomputed derivative sees the fresh caches. Defaults to a no-op (a
+    # model with no discrete-materialize var, or a caller who wired none).
     function affect!(integrator)
         t = integrator.t
         for (prov, vars) in groups
@@ -100,7 +110,7 @@ function build_refresh_callback(;
             end
         end
         post_refresh()
-        u_modified!(integrator, true)
+        _derivative_discontinuity!(integrator, true)
         return nothing
     end
 
