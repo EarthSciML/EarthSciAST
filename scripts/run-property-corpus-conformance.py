@@ -48,6 +48,14 @@ A binding whose driver is unavailable is SKIPPED by default; pass
 ``--require-all-bindings`` (the harness does) to make a missing driver a failure,
 because a binding that did not run has not been checked (audit F10).
 
+OPTIONAL PARTICIPANTS: ``lean`` (the executable Lean model of the spec,
+formal/) joins when ``$EARTHSCI_PROPERTY_CORPUS_ADAPTER_LEAN`` (or
+``earthsci-property-corpus-adapter-lean`` on PATH) names a driver speaking the
+same protocol as ``scripts/property_corpus/roundtrip_python.py``. It is then a
+binding like the others, in the divergence comparison included. Unconfigured, it
+is a named, unrequired exclusion (``summary.optional_exclusions``) that
+``--require-all-bindings`` does not count.
+
 Usage::
 
     python3 scripts/run-property-corpus-conformance.py [--corpus <dir>] \\
@@ -68,6 +76,24 @@ from typing import Dict, List, Optional
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CORPUS = PROJECT_ROOT / "tests" / "property_corpus" / "expressions"
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from conformance_lib import (  # noqa: E402 — needs the sys.path bootstrap above
+    NOT_CONFIGURED,
+    OPTIONAL_BINDINGS,
+    AdapterHarness,
+    optional_exclusion,
+)
+
+# Optional participants (`lean`, the executable Lean model of the spec in
+# formal/) are addressed the way every manifest runner addresses an adapter:
+# $EARTHSCI_PROPERTY_CORPUS_ADAPTER_<NAME>, else
+# earthsci-property-corpus-adapter-<name> on PATH. The command speaks THIS
+# runner's driver protocol, not the manifest one: it is invoked as
+# `<cmd> <fixture.json> ...` and prints `{fixture_name: {"ok": bool,
+# "value"|"error": ...}}` on stdout, exactly like
+# scripts/property_corpus/roundtrip_python.py.
+_OPTIONAL_ADAPTERS = AdapterHarness("property-corpus")
+
 
 @dataclass
 class Binding:
@@ -76,6 +102,9 @@ class Binding:
     cwd: Optional[Path] = None
     available: bool = True
     skip_reason: str = ""
+    # An optional participant is never required: unavailable, it is a named,
+    # unrequired exclusion, and `--require-all-bindings` does not count it.
+    optional: bool = False
 
 
 def detect_bindings() -> List[Binding]:
@@ -157,6 +186,23 @@ def detect_bindings() -> List[Binding]:
             skip_reason="node not on PATH" if node is None else "",
         )
     )
+
+    for name in OPTIONAL_BINDINGS:
+        argv = _OPTIONAL_ADAPTERS.discover(name)
+        bindings.append(
+            Binding(
+                name=name,
+                cmd=argv or [],
+                available=argv is not None,
+                skip_reason=(
+                    f"{NOT_CONFIGURED}: set ${_OPTIONAL_ADAPTERS.env_prefix}{name.upper()} "
+                    f"or put {_OPTIONAL_ADAPTERS.path_prefix}{name} on PATH"
+                    if argv is None
+                    else ""
+                ),
+                optional=True,
+            )
+        )
 
     return bindings
 
@@ -301,8 +347,77 @@ def summarize(report: List[dict], bindings: List[str]) -> dict:
     }
 
 
+def self_test() -> int:
+    """No live binding: assert the comparison's two signals and the optional-
+    participant contract on synthetic driver outputs."""
+    failures: List[str] = []
+
+    def check(ok: bool, label: str, detail: str) -> None:
+        print(f"self-test {'OK  ' if ok else 'FAIL'} [{label}]", file=sys.stderr)
+        if not ok:
+            failures.append(f"{label}: {detail}")
+
+    src = {"op": "+", "args": ["x", 1], "units": "m"}
+    dropped = {"op": "+", "args": ["x", 1]}
+
+    def out(v: dict) -> Dict[str, dict]:
+        return {"expr_0.json": {"ok": True, "value": v}}
+
+    def run(**parts: dict) -> dict:
+        outputs = {n: out(v) for n, v in parts.items()}
+        outputs[SOURCE_PARTICIPANT] = out(src)
+        return compare(outputs)[0]
+
+    r = run(a=src, b=src)
+    check(
+        not r["diverged"] and not r["source_mismatch"],
+        "faithful-round-trip-is-clean",
+        str(r),
+    )
+    r = run(a=dropped, b=dropped)
+    check(
+        not r["diverged"] and r["source_mismatch"],
+        "shared-drop-is-a-source-mismatch",
+        f"two bindings dropping the same field: {r}",
+    )
+    r = run(a=src, b=dropped)
+    check(r["diverged"], "single-drop-is-a-divergence", str(r))
+    r = run(a=src, b={"args": [1, "x"], "op": "+", "units": "m"})
+    check(r["diverged"], "argument-order-is-not-free", str(r))
+    r = run(a={"units": "m", "args": ["x", 1], "op": "+"}, b=src)
+    check(
+        not r["diverged"] and not r["source_mismatch"],
+        "object-key-order-is-free",
+        str(r),
+    )
+
+    unconfigured = [b for b in detect_bindings() if b.optional and not b.available]
+    check(
+        all(b.skip_reason.startswith(NOT_CONFIGURED) for b in unconfigured),
+        "optional-unconfigured-is-named",
+        str([(b.name, b.skip_reason) for b in unconfigured]),
+    )
+    check(
+        {b.name for b in detect_bindings() if b.optional} == set(OPTIONAL_BINDINGS),
+        "optional-participants-detected",
+        str([b.name for b in detect_bindings()]),
+    )
+
+    print(f"self-test: {'OK' if not failures else 'FAILED'}", file=sys.stderr)
+    for f in failures:
+        print(f"  {f}", file=sys.stderr)
+    return 1 if failures else 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument(
+        "--self-test",
+        action="store_true",
+        help="Run no binding: assert the comparison's signals (a field every binding "
+        "drops is a SOURCE mismatch, one binding's drop is a divergence) and the "
+        "optional-participant contract on synthetic outputs, then exit.",
+    )
     ap.add_argument("--corpus", default=str(DEFAULT_CORPUS))
     ap.add_argument(
         "--output",
@@ -342,6 +457,8 @@ def main() -> int:
         help="Restrict to a subset of bindings (default: all available).",
     )
     args = ap.parse_args()
+    if args.self_test:
+        return self_test()
 
     # Resolve: the go and rust drivers run with `cwd` set to their own package
     # directory, so a corpus spelled relatively would reach them as a path that
@@ -359,8 +476,19 @@ def main() -> int:
 
     outputs: Dict[str, Dict[str, dict]] = {}
     skipped: List[str] = []
+    optional_exclusions: List[dict] = []
     for binding in bindings:
         if not binding.available:
+            if binding.optional:
+                # Named, never required: reported, and kept out of `skipped`
+                # so `--require-all-bindings` does not count it.
+                optional_exclusions.append(optional_exclusion(binding.name, binding.skip_reason))
+                print(
+                    f"[skip] {binding.name}: optional participant, unrequired "
+                    f"({binding.skip_reason})",
+                    file=sys.stderr,
+                )
+                continue
             skipped.append(f"{binding.name} ({binding.skip_reason})")
             print(f"[skip] {binding.name}: {binding.skip_reason}", file=sys.stderr)
             continue
@@ -371,9 +499,12 @@ def main() -> int:
             print(f"[fail] {binding.name}: {exc}", file=sys.stderr)
             return 1
 
-    if len(outputs) < 2:
+    # Optional participants (`lean`) do not count toward the minimum: one binding
+    # checked against the Lean model alone is not a cross-binding comparison.
+    if len([b for b in outputs if b not in OPTIONAL_BINDINGS]) < 2:
         print(
-            f"error: need at least 2 available bindings (got {list(outputs)}); skipped: {skipped}",
+            f"error: need at least 2 available bindings, optional participants not "
+            f"counted (got {list(outputs)}); skipped: {skipped}",
             file=sys.stderr,
         )
         return 1
@@ -393,6 +524,7 @@ def main() -> int:
 
     report = compare(outputs)
     summary = summarize(report, sorted(outputs.keys()))
+    summary["optional_exclusions"] = optional_exclusions
 
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)

@@ -1,0 +1,906 @@
+{
+  "source": "CONFORMANCE_SPEC.md",
+  "clauses": [
+    {
+      "id": "conf.5.19.1.fixture-pins-order",
+      "section": "5.19.1",
+      "quote": "A conformance fixture for this category MUST therefore pin the arithmetic **order**, not merely the answer to a loose tolerance",
+      "class": "out_of_scope",
+      "area": "conformance_harness",
+      "note": "Fixture-authoring rule for the recurrence category (pin the order, not a loose tolerance)."
+    },
+    {
+      "id": "conf.5.19.2.no-reordering-path",
+      "section": "5.19.2",
+      "quote": "A binding MUST NOT evaluate a recurrence definition through any path that reorders or batches its cells",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "A recurrence's value is the sequential sweep: recurrence axis outermost and ascending, the other axes in output_idx order, each cell published before the next is computed; the result equals this ordered left fold bit for bit."
+    },
+    {
+      "id": "conf.5.19.2.detect-and-decline",
+      "section": "5.19.2",
+      "quote": "A binding whose default array path does any of the above MUST detect a recurrence definition and decline that path for it specifically",
+      "class": "out_of_scope",
+      "area": "arrays",
+      "note": "How a binding selects its internal evaluation path; the value requirement is conf.5.19.2.no-reordering-path."
+    },
+    {
+      "id": "conf.5.19.3.order-distinguishing-assertion",
+      "section": "5.19.3",
+      "quote": "A conformance fixture in this category MUST include at least one assertion whose value distinguishes the normative order from every other order or association.",
+      "class": "out_of_scope",
+      "area": "conformance_harness",
+      "note": "Fixture-authoring rule: each recurrence fixture must contain an order-discriminating assertion."
+    },
+    {
+      "id": "conf.5.19.3a.round-every-cell",
+      "section": "5.19.3a",
+      "quote": "and it MUST be rounded to that precision **at every cell**, not only when the finished array is handed back",
+      "class": "semantic",
+      "phase": 7,
+      "area": "precision",
+      "note": "In a recurrence whose variable has a narrower element_type, each cell is rounded to that type when it is written, so later cells read the rounded value; for Float32 the result equals the binary32 fold."
+    },
+    {
+      "id": "conf.5.19.3a.float32-fixture-zero-tolerance",
+      "section": "5.19.3a",
+      "quote": "A fixture in this category that declares `Float32` MUST therefore be pinned to the binary32 fold with **zero** tolerance, and its description MUST name the binary64 value the un-rounded implementation would give.",
+      "class": "out_of_scope",
+      "area": "conformance_harness",
+      "note": "Fixture-authoring rule for Float32 recurrence fixtures (zero tolerance, name the binary64 value)."
+    },
+    {
+      "id": "conf.5.19.3b.identical-on-every-route",
+      "section": "5.19.3b",
+      "quote": "MUST evaluate a recurrence identically on every such route",
+      "class": "out_of_scope",
+      "area": "api",
+      "note": "About a binding's internal evaluation routes; the model has a single evaluator, so the value is route-independent by construction (value property: conf.5.19.2.no-reordering-path)."
+    },
+    {
+      "id": "conf.5.19.3b.test-every-route",
+      "section": "5.19.3b",
+      "quote": "its test tier MUST exercise every route it has.",
+      "class": "out_of_scope",
+      "area": "conformance_harness",
+      "note": "Test-coverage rule for a binding's own test tier."
+    },
+    {
+      "id": "conf.5.19.3b.unsupported-route-declines",
+      "section": "5.19.3b",
+      "quote": "A binding whose routes cannot be made to agree MUST make the unsupported route decline loudly",
+      "class": "out_of_scope",
+      "area": "api",
+      "note": "Binding-internal route policy (decline loudly rather than launder a zero)."
+    },
+    {
+      "id": "conf.5.19.4.unavailable-read-not-a-number",
+      "section": "5.19.4",
+      "quote": "An out-of-range or not-yet-published self-read is `E_TREEWALK_RECUR_UNAVAILABLE` and MUST NOT resolve to a number.",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "Evaluating a causal self-read whose index is out of range or not yet published yields the error E_TREEWALK_RECUR_UNAVAILABLE, never a value (no zero ghost, no NaN)."
+    },
+    {
+      "id": "conf.5.19.4.fault-fails-run",
+      "section": "5.19.4",
+      "quote": "binding MUST surface the fault through whatever channel makes the run fail — a raise, or a latched diagnostic drained at every exit of the solve — and MUST NOT report a solution built on one.",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "An unavailable self-read propagates: any evaluation that performs one has an error outcome, and no result computed from it is returned."
+    },
+    {
+      "id": "conf.5.19.5.reject-ill-founded",
+      "section": "5.19.5",
+      "quote": "Every binding — executing or not — MUST reject a self-read that is not a well-founded causal read",
+      "class": "semantic",
+      "phase": 3,
+      "area": "diagnostics",
+      "note": "A self-read that is not strictly earlier along exactly one axis is rejected at validation with recurrence_not_wellfounded or recurrence_unsupported_form, per esm-spec 4.3.1.1."
+    },
+    {
+      "id": "conf.5.19.5.exemption-gated-on-candidacy",
+      "section": "5.19.5",
+      "quote": "That exemption MUST be gated on whether the equation is a *candidate* — an array-shaped unknown with at least one `index` self-read in its own RHS, well founded or not — and MUST NOT be gated on the well-foundedness verdict.",
+      "class": "semantic",
+      "phase": 3,
+      "area": "diagnostics",
+      "note": "For a recurrence candidate the reported diagnosis is the recurrence check's (an ill-founded candidate gets a recurrence_* code, not a cycle error); a non-candidate self-reference (scalar x ~ x + 1, bare s ~ s + 1) keeps its observed_cycle diagnosis."
+    },
+    {
+      "id": "conf.5.19.5.determine-own-shape",
+      "section": "5.19.5",
+      "quote": "A binding MUST determine which shape it has rather than copy another binding's placement",
+      "class": "out_of_scope",
+      "area": "api",
+      "note": "Implementation guidance about where a binding's cycle check runs."
+    },
+    {
+      "id": "conf.5.19.5.no-cross-binding-wording",
+      "section": "5.19.5",
+      "quote": "A binding MUST NOT be tested against another binding's wording.",
+      "class": "out_of_scope",
+      "area": "conformance_harness",
+      "note": "Harness rule: rejections are pinned by (code, path), never by message prose."
+    },
+    {
+      "id": "conf.5.19.5.cycle-handling-unweakened",
+      "section": "5.19.5",
+      "quote": "Conversely, admitting a well-founded recurrence MUST NOT weaken any cycle handling.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "diagnostics",
+      "note": "Only the self-edge of a recurrence candidate is dropped from the observed dependency graph; every multi-variable observed cycle is still rejected exactly as without recurrences, and never with a recurrence code."
+    },
+    {
+      "id": "conf.5.21.3.explicit-zero-stops-fallthrough",
+      "section": "5.21.3",
+      "quote": "`{\"rel\": 0}` says *\"no relative bound\"* and MUST stop the fallthrough",
+      "class": "semantic",
+      "phase": 6,
+      "area": "other",
+      "note": "Per-field tolerance resolution: a level whose block declares a bound with value 0 supplies 0 for that field; only an absent key (or null) falls through to the next level, the implementation default being the fourth level."
+    },
+    {
+      "id": "conf.5.22.1.env-var-template-refused",
+      "section": "5.22.1",
+      "quote": "`fixtures/env_var_catalog.esm` and `fixtures/env_var_mirror_catalog.esm` MUST be rejected at load with the diagnostic `data_source_url_unresolved`, and the message MUST contain **both** the offending document site",
+      "class": "semantic",
+      "phase": 7,
+      "area": "data_sources",
+      "note": "A url_template (primary or mirror) containing an environment-variable reference is rejected at load with data_source_url_unresolved, and the diagnostic carries the document site and the template text."
+    },
+    {
+      "id": "conf.5.22.3.corpus-fixture-verdicts",
+      "section": "5.22.3",
+      "quote": "`tests/valid/data_source_relative_url.esm` MUST be accepted and `tests/invalid/data_source_url_env_var.esm` MUST be rejected, by all five.",
+      "class": "semantic",
+      "phase": 7,
+      "area": "data_sources",
+      "note": "Validation accepts a relative url_template and rejects one carrying ${VAR} (a resolver rejection on a schema-valid document)."
+    },
+    {
+      "id": "conf.5.23.unbound-name-is-fault",
+      "section": "5.23",
+      "quote": "An expression MUST NOT be evaluated against a name that is bound in none of the resolution scopes available where it is evaluated. A binding MUST surface that as a named fault — a raise, or a latched diagnostic drained at every exit — and MUST NOT substitute a value for the unbound operand.",
+      "class": "semantic",
+      "phase": 2,
+      "area": "scalar",
+      "note": "Evaluating an expression that references a name bound in no available scope yields an error naming that operand; it never yields a value (no NaN or other sentinel substituted).",
+      "concern": "The supporting sentence that follows ('IEEE-754 `max` and `min` return the non-NaN operand') is not true of IEEE 754 as a whole: 754-2008 maxNum/minNum do, but 754-2019 maximum/minimum propagate NaN, and e.g. Julia's max(NaN, 0.0) returns NaN; the clause stands without it, but the stated fact is a property of particular functions, not of IEEE-754."
+    },
+    {
+      "id": "conf.5.23.1.single-shared-gate",
+      "section": "5.23.1",
+      "quote": "The check that a referenced name is bound MUST be a single shared implementation that each route invokes",
+      "class": "out_of_scope",
+      "area": "api",
+      "note": "Code-architecture rule inside a binding (one shared gate)."
+    },
+    {
+      "id": "conf.5.23.1.resolver-fails-closed",
+      "section": "5.23.1",
+      "quote": "A route that misses the gate MUST still fail closed.** The gate is a build-time check over a model and is necessarily conservative — it must credit names a runtime channel may legitimately bind (a forcing field, a qualified cross-namespace reference) rather than risk rejecting a valid document. So the resolver itself, at the point where every scope has been tried and none matched, MUST fault.",
+      "class": "out_of_scope",
+      "area": "api",
+      "note": "Defense-in-depth layering inside a binding; the semantic content (an unbound name faults) is conf.5.23.unbound-name-is-fault."
+    },
+    {
+      "id": "conf.5.23.1.cross-route-fixture",
+      "section": "5.23.1",
+      "quote": "A fixture MUST be driven on each route and the *same* verdict asserted, naming the same operand.",
+      "class": "out_of_scope",
+      "area": "conformance_harness",
+      "note": "Harness rule: drive the fixture on every route of a binding."
+    },
+    {
+      "id": "conf.5.24.1.selectivity-exact-comparison",
+      "section": "5.24.1",
+      "quote": "It MUST be compared exactly.** Compare two gates as a rational",
+      "class": "out_of_scope",
+      "area": "arrays",
+      "note": "Concerns only the choice of which join gate drives enumeration, which the section says cannot affect any emitted value; a performance matter.",
+      "concern": "This MUST (and the tie-break MUST after it) sits inside an estimate the section calls 'explicitly NOT normative' that a binding 'MAY' replace or omit, and since the result cannot depend on the driver choice, a violation is unobservable; also the justification that a float division rounds 'differently in different languages' is doubtful, as IEEE-754 division is correctly rounded and gives identical results for identical binary64 inputs in every conforming language."
+    },
+    {
+      "id": "conf.5.24.1.tie-break-document-position",
+      "section": "5.24.1",
+      "quote": "Ties MUST break on document position.",
+      "class": "out_of_scope",
+      "area": "arrays",
+      "note": "Driver-order tie-break for an optional optimisation; no emitted value depends on it (see the concern on conf.5.24.1.selectivity-exact-comparison)."
+    },
+    {
+      "id": "conf.5.24.2.test-many-to-many",
+      "section": "5.24.2",
+      "quote": "A binding MUST test this explicitly; it is the easiest thing to",
+      "class": "out_of_scope",
+      "area": "conformance_harness",
+      "note": "Testing obligation on a binding (many-to-many joins under intersection)."
+    },
+    {
+      "id": "conf.5.24.2.both-contracted-driver-intersects",
+      "section": "5.24.2",
+      "quote": "MUST intersect its partner list with whatever the bound gates already admitted for that axis",
+      "class": "out_of_scope",
+      "area": "arrays",
+      "note": "Enumeration strategy for an optional optimisation (performance).",
+      "concern": "A MUST inside a SHOULD-level optimisation whose violation the section says cannot change any result (the lowered filter still decides every leaf), so it is not observable and reads as a SHOULD."
+    },
+    {
+      "id": "conf.5.24.2.should-not-must",
+      "section": "5.24.2",
+      "quote": "This is a SHOULD and not a MUST",
+      "class": "out_of_scope",
+      "area": "other",
+      "note": "Not a requirement: states that conjunction driving is optional."
+    },
+    {
+      "id": "conf.5.25.1.reuse-key",
+      "section": "5.25.1",
+      "quote": "MUST NOT reuse it unless every input that binding's own build reads is unchanged. The key MUST be compared exactly (no tolerance, no canonicalization that could merge two values the build would treat differently), and the reused artifact MUST be a pure function of it.",
+      "class": "out_of_scope",
+      "area": "api",
+      "note": "Build caching inside a binding's inline-test runner; the model builds per test, so results equal a fresh build's by construction."
+    },
+    {
+      "id": "conf.5.25.1.run-per-test",
+      "section": "5.25.1",
+      "quote": "a binding that reuses a build MUST therefore still perform the run per test",
+      "class": "out_of_scope",
+      "area": "api",
+      "note": "Build-caching rule inside a binding."
+    },
+    {
+      "id": "conf.5.25.1.extend-key",
+      "section": "5.25.1",
+      "quote": "A binding whose build reads anything further MUST extend the key by that much",
+      "class": "out_of_scope",
+      "area": "api",
+      "note": "Build-caching rule inside a binding."
+    },
+    {
+      "id": "conf.5.25.2.restore-mutable-state",
+      "section": "5.25.2",
+      "quote": "A binding that reuses a build MUST restore every such artifact to its post-construction state before each reuse, so that the n-th test of a shared build observes exactly what a freshly built problem would. A binding that cannot restore one MUST NOT reuse a build that carries it.",
+      "class": "out_of_scope",
+      "area": "api",
+      "note": "Build-caching rule inside a binding (no carried mutable state)."
+    },
+    {
+      "id": "conf.5.25.3.order-independence",
+      "section": "5.25.3",
+      "quote": "permuting a component's `tests` array MUST NOT change any assertion's actual, and MUST NOT change which assertions are reported.",
+      "class": "semantic",
+      "phase": 6,
+      "area": "other",
+      "note": "Inline-test results are invariant under permutation of a component's tests array: the same set of reported assertions, each with the same actual."
+    },
+    {
+      "id": "conf.5.25.4.filter-equals-postfilter",
+      "section": "5.25.4",
+      "quote": "A runner that offers a test filter (the Rust CLI's `esm test --filter`) MUST report exactly the rows",
+      "class": "out_of_scope",
+      "area": "api",
+      "note": "Behaviour of a runner's CLI filter option."
+    },
+    {
+      "id": "conf.5.26.enum-any-integer",
+      "section": "5.26",
+      "quote": "A binding MUST accept a zero-valued and a negative-valued member, MUST resolve it to exactly its declared integer, and MUST NOT clamp it, treat it as absent, or take it for a default.",
+      "class": "semantic",
+      "phase": 1,
+      "area": "closed_functions",
+      "note": "An enums member of any integer value, including 0 and negatives, loads and lowers to a const node holding exactly that integer."
+    },
+    {
+      "id": "conf.5.26.enum-values-unique",
+      "section": "5.26",
+      "quote": "within one enum, values MUST be unique, and `0` is a value like any other, so two symbols MAY NOT both map to `0`",
+      "class": "semantic",
+      "phase": 1,
+      "area": "schema",
+      "note": "A document in which two members of one enum share a value (0 included) is rejected at load; values may coincide across different enums.",
+      "concern": "'MAY NOT' is not an RFC 2119 keyword and can be read as 'is permitted not to'; and no diagnostic code is named for the duplicate-value rejection (5.26.5 records three bindings accepting duplicates silently)."
+    },
+    {
+      "id": "conf.5.26.3.binding-must-show",
+      "section": "5.26.3",
+      "quote": "A binding MUST show, on `tests/valid/enums_zero_and_negative.esm`:",
+      "class": "out_of_scope",
+      "area": "conformance_harness",
+      "note": "Per-binding test obligation on a named fixture."
+    },
+    {
+      "id": "conf.5.26.5.uniqueness-restated",
+      "section": "5.26.5",
+      "quote": "\"Values MUST be unique within an enum\" is not expressible in JSON Schema",
+      "class": "semantic",
+      "phase": 1,
+      "area": "schema",
+      "note": "Restatement of conf.5.26.enum-values-unique (enforced by loaders, not the schema); same property."
+    },
+    {
+      "id": "conf.5.27.answer-at-sampled-state",
+      "section": "5.27",
+      "quote": "a binding MUST answer from the observed's own definition evaluated **at the sampled state** — the same value the right-hand side saw at that time — and MUST NOT substitute a build-time snapshot for a state-dependent one.",
+      "class": "semantic",
+      "phase": 6,
+      "area": "simulation",
+      "note": "A coords/reduce assertion on an array observed reads the observed's definition evaluated at the sampled (t, state); for a state-free observed this equals the build-time field."
+    },
+    {
+      "id": "conf.5.27.scope-not-mode-switch",
+      "section": "5.27",
+      "quote": "A binding that reaches the answer by adding the sample to an existing evaluation scope MUST NOT make the state-free path conditional on that scope being empty.",
+      "class": "out_of_scope",
+      "area": "api",
+      "note": "Implementation constraint protecting a build optimisation (materialize state-free producers once).",
+      "concern": "This normative paragraph is placed in the middle of the binding table (between the Julia and Python rows) and names only Julia functions, so it is unclear whether it binds every binding or is a Julia-specific note; it also breaks the Markdown table."
+    },
+    {
+      "id": "conf.5.27.1.asserted-component-declares",
+      "section": "5.27.1",
+      "quote": "So a binding MUST first require that the asserted component itself declares the name as an observed of its own",
+      "class": "semantic",
+      "phase": 5,
+      "area": "flatten",
+      "note": "An assertion's variable resolves only to an observed the asserted component itself declares; a name it does not declare is an error, never a sibling component's field."
+    },
+    {
+      "id": "conf.5.27.3.dead-observed-answerable",
+      "section": "5.27.3",
+      "quote": "An assertion MUST be answerable on an array OBSERVED that **no live equation consumes**.",
+      "class": "semantic",
+      "phase": 6,
+      "area": "simulation",
+      "note": "The answer to an assertion on an observed does not depend on whether any equation consumes it: a dead observed reads its own definition at the sampled state."
+    },
+    {
+      "id": "conf.5.27.3.readable-however-built",
+      "section": "5.27.3",
+      "quote": "an observed's field MUST be readable however the build chose to treat it",
+      "class": "out_of_scope",
+      "area": "api",
+      "note": "Which internal sources a binding's build must consult; the value property is conf.5.27.3.dead-observed-answerable."
+    },
+    {
+      "id": "conf.5.27.3.recursion-guard-chain",
+      "section": "5.27.3",
+      "quote": "The recursion guard MUST be the dependency CHAIN, not the set of everything visited",
+      "class": "semantic",
+      "phase": 5,
+      "area": "flatten",
+      "note": "Resolving observed definitions treats a diamond (two readers of one observed) as acyclic and resolves it for each reader; only a node repeated on the current dependency chain is a cycle."
+    },
+    {
+      "id": "conf.5.28.4.shape-mismatch-rejected",
+      "section": "5.28.4",
+      "quote": "An array whose extents, rank, or nesting disagree with the declared `shape` MUST be rejected — never truncated, padded, or broadcast",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "Inline array data (default, override or initial condition) whose nested extents, rank or nesting differ from the declared shape (after metaparameter folding) is rejected; it is never truncated, padded or broadcast.",
+      "concern": "The heading calls this a load-time error, but the text describes per-binding runners and language-specific build/run error types, and no diagnostic code is named although 'the CLASSIFICATION is the cross-binding contract'; when it is raised and with which code is unspecified."
+    },
+    {
+      "id": "conf.5.29.gather-distributes-to-leaves",
+      "section": "5.29",
+      "quote": "and MUST resolve it by the identity above, transitively, until the gather lands on the array LEAVES",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "index(op(a1..an), k) evaluates to op(index(a1,k)..index(an,k)) for elementwise op, recursively through nested elementwise ops down to array sources, with scalar operands left ungathered; it stops at index nodes, scalar reductions and non-elementwise ops."
+    },
+    {
+      "id": "conf.5.30.bind-dimension-names",
+      "section": "5.30",
+      "quote": "Before evaluation, a binding MUST bind the field's dimension names in the reference.",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "An inline reference that mentions a dimension name free evaluates as a faq over the field's shape with each dimension name bound to the cell's 1-based position; a reference mentioning none is unchanged."
+    },
+    {
+      "id": "conf.5.30.capture-aware-no-double-wrap",
+      "section": "5.30",
+      "quote": "mentions it bound, not free, and MUST NOT be wrapped a second time.",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "A dimension name rebound by an enclosing faq/makearray loop symbol or integral variable is not a free mention and does not trigger the wrap."
+    },
+    {
+      "id": "conf.5.30.wrt-not-free-mention",
+      "section": "5.30",
+      "quote": "`deriv(u, wrt: \"x\")` inside a reference MUST NOT by itself trigger the wrap.",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "A node's wrt target is not a free mention of the name for the dimension-name wrap."
+    },
+    {
+      "id": "conf.5.30.dimension-name-clash-fault",
+      "section": "5.30",
+      "quote": "MUST reject it with an error naming the clashing name, rather than silently choosing either meaning.",
+      "class": "semantic",
+      "phase": 3,
+      "area": "diagnostics",
+      "note": "A reference that mentions free a name that is both a dimension of the asserted field and bound in the build-time scope (parameters with their aliases, build-time arrays with their bare aliases) is rejected with an error naming it.",
+      "concern": "The clash scope is defined by what each binding's build happens to carry ('Which names a build carries in each half is an implementation matter'; Rust has no const_arrays), so whether a given document is rejected can differ between bindings; the clause cannot be stated as a function of the document alone."
+    },
+    {
+      "id": "conf.5.31.dropped-prefix-validated",
+      "section": "5.31",
+      "quote": "every segment of it MUST name a component or subsystem the document declares",
+      "class": "semantic",
+      "phase": 5,
+      "area": "flatten",
+      "note": "Under override-key rule 2, each leading segment dropped from a dotted key must name a declared component or subsystem; otherwise the key is unknown."
+    },
+    {
+      "id": "conf.5.31.key-collision-reported",
+      "section": "5.31",
+      "quote": "That is a document authoring error and MUST be reported, naming the resolved variable and every colliding key.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "flatten",
+      "note": "Two or more non-exact override keys that designate the same build name are an error naming the variable and every key; an exact (rule 1) hit wins and is never part of a collision."
+    },
+    {
+      "id": "conf.5.32.3.scalar-override-broadcasts",
+      "section": "5.32.3",
+      "quote": "SCALAR `parameter_overrides` entry naming a shaped parameter MUST broadcast too — it does not fall back to the scalar `p` vector, which cannot express it, and it MUST NOT lose to the very `default` it replaces",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "A scalar override of a shaped parameter yields a field with that value in every cell, and takes precedence over the declared default whether that default is scalar or array."
+    },
+    {
+      "id": "conf.5.33.require-match-false-round-trips",
+      "section": "5.33",
+      "quote": "an explicit `false` MUST survive a round trip",
+      "class": "semantic",
+      "phase": 5,
+      "area": "round_trip",
+      "note": "require_match is tri-state: load then emit preserves an explicit false and preserves absence, and does not conflate them."
+    },
+    {
+      "id": "conf.5.35.template-guard-all-bindings",
+      "section": "5.35",
+      "quote": "All five bindings MUST implement this guard.** A MUST that four of five ignore is not a rule",
+      "class": "semantic",
+      "phase": 5,
+      "area": "coupling",
+      "note": "A surviving expression-template registry body that references a merged-away variable (and does not bind it as a template param) is refused with template_body_references_coupling_rewritten_variable."
+    },
+    {
+      "id": "conf.5.36.indexed-lhs-runs-like-bare",
+      "section": "5.36",
+      "quote": "A binding MUST run a document whose ARRAY-shaped observed is defined the indexed way exactly as it runs the bare one.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "flatten",
+      "note": "An array observed defined by the shelled indexed LHS aggregate{k}(index(V,k)) ~ rhs is accepted and denotes the same definition as the bare V ~ rhs, at every rank."
+    },
+    {
+      "id": "conf.5.36.1.distinct-absent-equals-false",
+      "section": "5.36.1",
+      "quote": "A binding MUST read an absent and a false `distinct` alike.",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "A faq with distinct absent and one with distinct: false are the same node in every respect."
+    },
+    {
+      "id": "conf.5.36.2.bare-index-refused",
+      "section": "5.36.2",
+      "quote": "Any other bare-index definition of an observed MUST be **refused** with `indexed_definition_unsupported_form`",
+      "class": "semantic",
+      "phase": 5,
+      "area": "diagnostics",
+      "note": "A bare index(V, k...) ~ rhs runs only when V is named directly, every subscript is a plain symbol, rhs is a faq whose output_idx lists those symbols in order and the count matches V's rank; otherwise it is refused with indexed_definition_unsupported_form, or unbound_index_symbol when a subscript is bound by no faq.",
+      "concern": "The section records but does not settle that structural validation disagrees on the offset fixture (Rust's validator calls `k` in w_offset[k+1] undeclared, Python loads it), so the required verdict for that shape is not pinned; and the exemption 'Value-invention outputs are materialized by their own engine and are outside this rule' uses a term the clause does not define."
+    },
+    {
+      "id": "conf.5.37.2.unrecognised-token-fails",
+      "section": "5.37.2",
+      "quote": "an adapter meeting an unrecognised one MUST fail rather than skip",
+      "class": "out_of_scope",
+      "area": "conformance_harness",
+      "note": "Adapter behaviour for the data-only golden's string encoding."
+    },
+    {
+      "id": "conf.5.38.1.no-byte-comparison",
+      "section": "5.38.1",
+      "quote": "on either MUST NOT be asserted",
+      "class": "out_of_scope",
+      "area": "conformance_harness",
+      "note": "Harness rule: compiled-backend agreement is numerical, never a comparison of emitted programs."
+    },
+    {
+      "id": "conf.5.38.3.refuse-not-fallback",
+      "section": "5.38.3",
+      "quote": "**MUST refuse it** — `{\"status\": \"refused\", \"rule\": …, \"reason\": …}` for that fixture — and MUST NOT fall back to an interpreter, a partial lowering, or a host callback.",
+      "class": "out_of_scope",
+      "area": "api",
+      "note": "Capability and refusal behaviour of a binding's compiled engine; not a property of the format's semantics."
+    },
+    {
+      "id": "conf.5.38.3.compiler-no-fallback",
+      "section": "5.38.3",
+      "quote": "and MUST NOT fall back to a slower path. §5.44 applies",
+      "class": "out_of_scope",
+      "area": "api",
+      "note": "Restates the libraries-spec rule that a compiler refuses rather than falling back; binding API behaviour."
+    },
+    {
+      "id": "conf.5.38.5.analytic-anchor-required",
+      "section": "5.38.5",
+      "quote": "every fixture that *can* carry an `analytic_rhs` anchor MUST",
+      "class": "out_of_scope",
+      "area": "conformance_harness",
+      "note": "Fixture-authoring rule for the compiled-RHS tier."
+    },
+    {
+      "id": "conf.5.39.refuse-unsupported-constructs",
+      "section": "5.39",
+      "quote": "Each of those evaluators MUST refuse a document carrying any of them at BUILD with the esm-spec §9.6.6 diagnostic `unsupported_construct`, and the message MUST name the construct and the evaluator.",
+      "class": "out_of_scope",
+      "area": "api",
+      "note": "A capability limit of particular binding evaluators (events, implicit equations, Wiener noise are valid format constructs that :mtk runs); not a property of the format's semantics."
+    },
+    {
+      "id": "conf.5.39.control-must-run",
+      "section": "5.39",
+      "quote": "One CONTROL: the array discrete-event document with its event removed, which MUST still run and pass.",
+      "class": "out_of_scope",
+      "area": "conformance_harness",
+      "note": "Non-vacuity control of the fixture set."
+    },
+    {
+      "id": "conf.5.41.rank-does-not-replace-shape",
+      "section": "5.41",
+      "quote": "The value's rank MUST NOT replace the declared shape.",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "An observed with a declared shape whose right-hand side evaluates to a scalar has every element of its declared shape, each equal to that scalar, for assertions and for readers."
+    },
+    {
+      "id": "conf.5.42.literal-t-every-layer",
+      "section": "5.42",
+      "quote": "A binding MUST answer it the same way in all of them",
+      "class": "semantic",
+      "phase": 5,
+      "area": "other",
+      "note": "One predicate decides the derivative axis everywhere (classification, units, equation balance, DAE analysis): D with wrt absent or \"t\" is the time derivative, any other wrt (including the declared independent variable's name) is a spatial rewrite target.",
+      "concern": "The section says wrt \"t\" is always the structural time derivative, yet its rationale says reading wrt: \"t\" as the independent variable in a document that renames it to s and declares t as air temperature would leave d/d(air temperature) unwritable, which implies wrt \"t\" should then mean the declared variable t; and a derivative along the renamed independent variable is made a spatial rewrite target, so in such a document it is unclear what the time derivative is with respect to."
+    },
+    {
+      "id": "conf.5.44.1.no-structural-assertion",
+      "section": "5.44.1",
+      "quote": "a binding MUST NOT assert anything structural about what a compiler produced",
+      "class": "out_of_scope",
+      "area": "conformance_harness",
+      "note": "Harness rule: compiler agreement is numerical only."
+    },
+    {
+      "id": "conf.5.44.3.required-map",
+      "section": "5.44.3",
+      "quote": "the compilers that MUST run it",
+      "class": "out_of_scope",
+      "area": "conformance_harness",
+      "note": "Defines the manifest's per-fixture required map (a harness ledger)."
+    },
+    {
+      "id": "conf.5.44.5.same-frequency",
+      "section": "5.44.5",
+      "quote": "A compiler gated that way MUST be gated at the same frequency as the default run",
+      "class": "out_of_scope",
+      "area": "conformance_harness",
+      "note": "CI scheduling rule."
+    },
+    {
+      "id": "conf.5.52.doubly-defined-refused",
+      "section": "5.52",
+      "quote": "(`D(x, t) ~ f`) and a whole-variable algebraic one (`x ~ g`) MUST be refused at BUILD by every simulating binding, with the esm-spec §4.9.4 diagnostic `equation_count_mismatch`, and the message MUST name the unknown and BOTH equations.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "diagnostics",
+      "note": "An unknown with both a derivative equation and a whole-variable algebraic equation is rejected with equation_count_mismatch, naming the unknown and both equations, never tie-broken."
+    },
+    {
+      "id": "conf.5.52.control-must-run",
+      "section": "5.52",
+      "quote": "which takes the same evaluator and MUST still run",
+      "class": "out_of_scope",
+      "area": "conformance_harness",
+      "note": "Non-vacuity control of the fixture set."
+    },
+    {
+      "id": "conf.5.46.missing-data-fails",
+      "section": "5.46",
+      "quote": "build MUST FAIL at construction with `E_TREEWALK_MISSING_DATA`, naming the parameter and the data source that feeds it. It MUST NOT bind the parameter from zero or from a NaN sentinel",
+      "class": "semantic",
+      "phase": 5,
+      "area": "data_sources",
+      "note": "A data-fed parameter with nothing bound and no default makes construction fail with E_TREEWALK_MISSING_DATA naming the parameter and its source; with a default, the default is its value."
+    },
+    {
+      "id": "conf.5.46.compiler-independent",
+      "section": "5.46",
+      "quote": "it MUST be identical under `compiler=native` and `compiler=interpreter`",
+      "class": "out_of_scope",
+      "area": "api",
+      "note": "Agreement between a binding's compilers; the model has one semantics, so the outcome is compiler-independent by construction."
+    },
+    {
+      "id": "conf.5.46.p-binding-outranks-default",
+      "section": "5.46",
+      "quote": "Such a build MUST succeed, and the pinned value MUST reach the right-hand side, outranking the declared `default`.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "data_sources",
+      "note": "A caller-supplied value for a data-fed parameter binds it: construction succeeds and the right-hand side reads that value instead of the default."
+    },
+    {
+      "id": "conf.5.45.2.golden-absent-reason",
+      "section": "5.45.2",
+      "quote": "the manifest MUST carry a `golden_absent_reason`",
+      "class": "out_of_scope",
+      "area": "conformance_harness",
+      "note": "Manifest-format rule for the inline-test tiers."
+    },
+    {
+      "id": "conf.5.45.3.required-names-native",
+      "section": "5.45.3",
+      "quote": "`bindings_required` binding's `required` list MUST name `native`",
+      "class": "out_of_scope",
+      "area": "conformance_harness",
+      "note": "Manifest-format rule for the inline-test tiers."
+    },
+    {
+      "id": "conf.5.47.1.env-var-refused",
+      "section": "5.47.1",
+      "quote": "`fixtures/env_var.esm` MUST be rejected at load with `solver_external_unresolved`, and the message MUST contain both `/solver/external` and the offending string exactly as authored.",
+      "class": "semantic",
+      "phase": 7,
+      "area": "solver",
+      "note": "A root document whose solver.external contains an environment-variable reference is rejected at load with solver_external_unresolved, the diagnostic naming /solver/external and the authored string."
+    },
+    {
+      "id": "conf.5.47.1.leaf-external-not-checked",
+      "section": "5.47.1",
+      "quote": "a root mounting a leaf whose `external` holds `${`, or a leaf declaring esm 1.2.0 that carries `external`, MUST load, at both mount forms.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "solver",
+      "note": "Load-time checks on solver.external apply to the root only: a mounted leaf's external is ignored, never validated, at both mount forms."
+    },
+    {
+      "id": "conf.5.47.1.external-flatten-invariant",
+      "section": "5.47.1",
+      "quote": "The flattened systems of `invariance/with_external.esm` and `invariance/without_external.esm` MUST be identical",
+      "class": "semantic",
+      "phase": 5,
+      "area": "flatten",
+      "note": "solver.external does not affect flattening: two documents differing only in it flatten identically."
+    },
+    {
+      "id": "conf.5.47.1.advisory-integrates",
+      "section": "5.47.1",
+      "quote": "MUST integrate under each simulating binding's built-in `solve()` and pass its inline tests.",
+      "class": "later",
+      "phase": 6,
+      "area": "solver",
+      "note": "solver.external is advisory: a document naming a nonexistent external file still integrates under the built-in solver and passes its inline tests."
+    },
+    {
+      "id": "conf.5.47.3.not-in-skip-lists",
+      "section": "5.47.3",
+      "quote": "Julia, Python and Rust and MUST NOT appear in their skip lists.",
+      "class": "out_of_scope",
+      "area": "conformance_harness",
+      "note": "Harness rule about binding skip lists."
+    },
+    {
+      "id": "conf.5.47.3.valid-fixtures-accepted",
+      "section": "5.47.3",
+      "quote": "`tests/valid/solver_external.esm` and `tests/valid/solver_external_only.esm` MUST be accepted",
+      "class": "semantic",
+      "phase": 7,
+      "area": "solver",
+      "note": "Documents with a well-formed solver.external validate."
+    },
+    {
+      "id": "conf.5.49.1.refusals",
+      "section": "5.49.1",
+      "quote": "Seven fixtures MUST be refused at load",
+      "class": "semantic",
+      "phase": 7,
+      "area": "solver",
+      "note": "solver.time_span is refused at load when empty, reversed (including a reversal visible only after converting a timestamp against a number), naming a nonexistent date, or with an unreadable or null origin (solver_time_span_invalid), and in a 1.2.0 document (solver_time_span_version_too_old).",
+      "concern": "The text says 'Seven fixtures' but enumerates eight: empty, reversed, conversion-only reversal, 02-30, 02-29 in 2100, unreadable origin, null origin, and the 1.2.0 document."
+    },
+    {
+      "id": "conf.5.49.1.call-site-interval",
+      "section": "5.49.1",
+      "quote": "to the accessor, which MUST return it whether or not the document declares one.",
+      "class": "out_of_scope",
+      "area": "api",
+      "note": "Behaviour of a binding's time-span accessor given a call-site interval."
+    },
+    {
+      "id": "conf.5.49.1.leaf-time-span-not-checked",
+      "section": "5.49.1",
+      "quote": "a root mounting a leaf whose `time_span` is reversed, or a 1.2.0 leaf that carries one, MUST load",
+      "class": "semantic",
+      "phase": 5,
+      "area": "solver",
+      "note": "Load-time checks on solver.time_span apply to the root only; a mounted leaf's time_span is ignored at both mount forms."
+    },
+    {
+      "id": "conf.5.49.2.valid-fixtures-accepted",
+      "section": "5.49.2",
+      "quote": "`tests/valid/solver_time_span.esm` and `tests/valid/solver_time_span_only.esm` MUST be accepted",
+      "class": "semantic",
+      "phase": 7,
+      "area": "solver",
+      "note": "Documents with a well-formed solver.time_span validate."
+    },
+    {
+      "id": "conf.5.50.lane-swap-control",
+      "section": "5.50",
+      "quote": "swapping two lanes' state inputs without swapping their cells MUST make the comparison fail",
+      "class": "out_of_scope",
+      "area": "conformance_harness",
+      "note": "Negative control proving the lane comparison can fail."
+    },
+    {
+      "id": "conf.7.1.removed-op-arrayop",
+      "section": "7.1",
+      "quote": "It MUST be rejected BY NAME at the wire boundary, not left to fall through",
+      "class": "semantic",
+      "phase": 2,
+      "area": "diagnostics",
+      "note": "A node with op \"arrayop\" is rejected at load with removed_op naming the node's path, rather than accepted as an open rewrite-target op."
+    },
+    {
+      "id": "conf.7.1.faq-version-gate-authored-form",
+      "section": "7.1",
+      "quote": "The gate MUST read the AUTHORED form, before alias normalization",
+      "class": "semantic",
+      "phase": 2,
+      "area": "diagnostics",
+      "note": "faq_version_too_old fires only when the authored document spells op \"faq\" under esm < 1.1.0; an authored aggregate under 1.0.0 is normalized to faq with the declared version raised to 1.1.0, not rejected.",
+      "concern": "The next sentence ('a document whose EXPANDED form contains `faq` declares 1.1.0 even when its authored bytes do not') does not say whether a pre-1.1.0 document whose expansion produces faq is rejected or has its version raised, and sits awkwardly with the gate reading only the authored form."
+    },
+    {
+      "id": "conf.7.1.alias-normalized-every-document",
+      "section": "7.1",
+      "quote": "The loader MUST normalize the node to `faq` at ONE wire boundary per binding, applied to EVERY document a load touches",
+      "class": "semantic",
+      "phase": 2,
+      "area": "canonical",
+      "note": "Loading replaces every aggregate node with faq in every document a load touches (root, ref-loaded children, template and coupling libraries) before version gates and schema validation, so emit never writes aggregate."
+    },
+    {
+      "id": "conf.7.1.alias-warning-once-per-document",
+      "section": "7.1",
+      "quote": "and MUST report this once per DOCUMENT per alias, naming the count, not once per node.",
+      "class": "semantic",
+      "phase": 2,
+      "area": "diagnostics",
+      "note": "The deprecated_op_alias warning is issued once per document per alias with the node count.",
+      "concern": "The sentence is a fragment ('…reaches `emit` untouched. and MUST report this…') whose subject and 'this' are unclear, and it does not say whether a ref-loaded child or library counts as a separate DOCUMENT for the once-per-document count, though the preceding sentence treats each as a document the load touches."
+    },
+    {
+      "id": "conf.7.1.1.undeterminable-not-dimensionless",
+      "section": "7.1.1",
+      "quote": "An undeterminable dimension MUST NOT be reported as *dimensionless*",
+      "class": "semantic",
+      "phase": 2,
+      "area": "units",
+      "note": "The checker's dimension domain has an 'unknown' value distinct from dimensionless; an undeterminable operand yields unknown, which skips the enclosing check rather than causing a mismatch."
+    },
+    {
+      "id": "conf.7.1.1.no-severity-downgrade",
+      "section": "7.1.1",
+      "quote": "An incomplete unit registry MUST NOT be worked around by downgrading a severity",
+      "class": "semantic",
+      "phase": 2,
+      "area": "units",
+      "note": "Severities are fixed by the table: an unregistered or unparseable unit string is always the hard error unit_parse_error, never a warning."
+    },
+    {
+      "id": "conf.7.1.3.title",
+      "section": "7.1.3",
+      "quote": "Checker semantics that MUST NOT re-diverge",
+      "class": "out_of_scope",
+      "area": "conformance_harness",
+      "note": "Section title; the rules it heads restate esm-spec 4.9 and are inventoried there."
+    },
+    {
+      "id": "conf.7.1.3.no-fixture-editing",
+      "section": "7.1.3",
+      "quote": "A binding MUST NOT \"fix\" a rejection by editing the fixture.",
+      "class": "out_of_scope",
+      "area": "conformance_harness",
+      "note": "Maintenance policy for the shared corpus."
+    },
+    {
+      "id": "conf.7.1.3.scoped-ref-arbitrary-depth",
+      "section": "7.1.3",
+      "quote": "it MUST NOT split on `\".\"` and take `[0]` as the system and `[1]` as the variable.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "flatten",
+      "note": "A scoped reference (A.B.c, A.B.C.d), including a coupling entry's systems/from/to, resolves by walking every segment through nested systems at any depth."
+    },
+    {
+      "id": "conf.7.1.3.valid-fixture-asserted-valid",
+      "section": "7.1.3",
+      "quote": "A VALID fixture MUST be asserted `is_valid == true`, not merely round-tripped",
+      "class": "out_of_scope",
+      "area": "conformance_harness",
+      "note": "Harness rule: valid fixtures are asserted to validate, and each discriminator rule needs an invalid twin."
+    },
+    {
+      "id": "conf.7.1.3.forcing-must-be-declared",
+      "section": "7.1.3",
+      "quote": "a forcing delivered by the host at runtime MUST still be declared",
+      "class": "semantic",
+      "phase": 5,
+      "area": "diagnostics",
+      "note": "Every name an expression references must be declared (callback_variables names count as declarations); an undeclared name, even one a host would supply as a forcing at runtime, is undefined_variable."
+    },
+    {
+      "id": "conf.7.1.2.schema-errors-pinned",
+      "section": "7.1.2",
+      "quote": "JSON-Schema violations the file MUST produce",
+      "class": "out_of_scope",
+      "area": "conformance_harness",
+      "note": "Pin contract of tests/invalid/expected_errors.json: pinned schema errors are a required subset of what a binding emits.",
+      "concern": "Schema pins are {path, message, keyword} triples, so they pin message prose, which contradicts §5.19.5's 'What is pinned is the (code, path) pair, and NOT the diagnostic prose' and is fragile across validator libraries whose messages differ."
+    },
+    {
+      "id": "conf.7.1.2.structural-errors-pinned",
+      "section": "7.1.2",
+      "quote": "post-schema findings the file MUST produce",
+      "class": "out_of_scope",
+      "area": "conformance_harness",
+      "note": "Pin contract: pinned structural (path, code) findings are a required subset of what a binding emits."
+    },
+    {
+      "id": "conf.7.1.2.schema-invalid-no-structural",
+      "section": "7.1.2",
+      "quote": "a fixture with a non-empty `schema_errors` MUST have `structural_errors: []`",
+      "class": "out_of_scope",
+      "area": "conformance_harness",
+      "note": "Pin-format rule; reflects that a schema-invalid document never reaches structural validation."
+    },
+    {
+      "id": "conf.7.1.2.harness-compares-code-path",
+      "section": "7.1.2",
+      "quote": "A conforming harness MUST compare emitted `(code, path)` pairs against these pins.",
+      "class": "out_of_scope",
+      "area": "conformance_harness",
+      "note": "Harness rule: compare (code, path) pairs, not just 'some error'."
+    },
+    {
+      "id": "conf.7.1.unresolved-order-not-unbound",
+      "section": "7.1",
+      "quote": "A binding whose evaluator cannot distinguish the two cases MUST NOT claim the stronger one.",
+      "class": "semantic",
+      "phase": 2,
+      "area": "diagnostics",
+      "note": "A reference to a declared name that has no value yet at evaluation is reported as E_TREEWALK_UNRESOLVED_ORDER (or a weaker diagnosis), never as E_TREEWALK_UNBOUND_NAME, which is reserved for names no scope binds.",
+      "concern": "Placement resolved 2026-10-26 (Q-18 part): the row is back in the §7.1 table. Still open: what 'claim the stronger one' lets a binding report instead."
+    }
+  ]
+}

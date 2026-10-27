@@ -29,7 +29,10 @@ Two phases, one harness:
     are byte-identical to the golden (after base normalization) and to each
     other, and that every variant collapses to the golden per binding. Julia /
     Rust / Python are `bindings_required`, so a missing or mismatching producer
-    fails the run.
+    fails the run. The Lean model of the spec (formal/) is an OPTIONAL
+    participant: $EARTHSCI_DETERMINISM_ADAPTER_LEAN (or
+    earthsci-determinism-adapter-lean on PATH) enrolls it, and while neither is
+    set it is reported as a named, unrequired exclusion (`not_configured`).
 
 See tests/conformance/determinism/README.md for the adapter contract.
 
@@ -57,7 +60,7 @@ from typing import Any
 # each other, so put scripts/ on sys.path first.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from conformance_lib import (  # noqa: E402 — needs the sys.path bootstrap above
-    KNOWN_BINDINGS,
+    ALL_BINDINGS,
     REPO_ROOT,
     AdapterHarness,
     ManifestError,
@@ -65,8 +68,10 @@ from conformance_lib import (  # noqa: E402 — needs the sys.path bootstrap abo
     build_parser,
     canonical_serialize as _canonical_serialize,
     cli_main,
+    optional_participant_controls,
     print_summary,
     run_producer_suite,
+    with_optional_bindings,
 )
 from conformance_lib import load_manifest as _load_manifest  # noqa: E402
 
@@ -409,6 +414,14 @@ def self_test(manifest_path: Path) -> int:
         rc = 1
         _eprint("self-test FAIL [neg/float_in_key]: float key was NOT rejected")
 
+    # The optional `lean` participant: unconfigured is a named green exclusion.
+    for ok, label, detail in optional_participant_controls("determinism"):
+        if ok:
+            print(f"self-test OK   [{label}]")
+        else:
+            rc = 1
+            _eprint(f"self-test FAIL [{label}]: {detail}")
+
     print("\nself-test:", "OK" if rc == 0 else "FAILED")
     return rc
 
@@ -425,9 +438,13 @@ def run_suite(
     if not bindings:
         bindings = list(manifest.get("bindings_required") or [])
         bindings.extend(b for b in (manifest.get("bindings_optional") or []) if b not in bindings)
+        # The optional participants (`lean`) join every default run: reported as
+        # a named, unrequired exclusion when unconfigured, gated like any binding
+        # when configured.
+        bindings = with_optional_bindings(bindings)
     for b in bindings:
-        if b not in KNOWN_BINDINGS:
-            _eprint(f"error: unknown binding {b!r}; known: {KNOWN_BINDINGS}")
+        if b not in ALL_BINDINGS:
+            _eprint(f"error: unknown binding {b!r}; known: {ALL_BINDINGS}")
             return 2
 
     required = set(manifest.get("bindings_required") or [])

@@ -1,0 +1,1095 @@
+{
+  "source": "esm-spec.md",
+  "clauses": [
+    {
+      "id": "spec.1.1.ast-first-review-policy",
+      "section": "1.1",
+      "quote": "Authors and reviewers MUST prefer the built-in expression AST (Section 4) over the closed function registry (Section 9). A `{\"op\": \"fn\", ...}` node is justified **only** when the desired primitive cannot be written as a finite closed-form composition of the AST ops in §4.2 — typically because it requires non-AST ingredients (calendar arithmetic, polygon clipping). Anything expressible in finite closed form (powers, polynomials, transcendentals, conditionals, piecewise, clip/clamp) belongs in the AST. Reviewers MUST reject `fn` nodes whose body can be written using existing AST ops",
+      "class": "out_of_scope",
+      "area": "other",
+      "note": "Authoring and review policy for adding registry functions; not a property of document semantics."
+    },
+    {
+      "id": "spec.1.1.closed-registry-reject-unknown-fn",
+      "section": "1.1",
+      "quote": "bindings MUST reject any `fn` node whose `name` is not in the spec-defined set for the file's declared `esm` version",
+      "class": "semantic",
+      "phase": 1,
+      "area": "closed_functions",
+      "note": "A document is rejected at load iff some fn node names a function absent from the registry for its declared esm version."
+    },
+    {
+      "id": "spec.2.2.empty-block-normalizes-away",
+      "section": "2.2",
+      "quote": "A binding MUST normalize it away **at load**, so the typed document never holds a block with nothing set and the block does not survive `parse → emit`.",
+      "class": "semantic",
+      "phase": 2,
+      "area": "round_trip",
+      "note": "load maps `solver: {}` to an absent solver block, so emit(load d) carries no solver key when the block was empty."
+    },
+    {
+      "id": "spec.2.2.absence-not-default",
+      "section": "2.2",
+      "quote": "A binding MUST NOT read absence as an assertion about the system.",
+      "class": "semantic",
+      "phase": 2,
+      "area": "solver",
+      "note": "The loaded representation distinguishes an absent stiffness (or absent block) from any declared value, e.g. absent ≠ \"low\"."
+    },
+    {
+      "id": "spec.2.2.2.tolerance-chain-every-entry-point",
+      "section": "2.2.2",
+      "quote": "A binding MUST run it at *every* entry point that hands a document to an integrator",
+      "class": "later",
+      "phase": 6,
+      "area": "solver",
+      "note": "The tolerances an integrator receives are call-site argument, else solver.abstol/reltol, else binding default, at every integration entry point (solve and init)."
+    },
+    {
+      "id": "spec.2.2.2.tolerance-explicit-vs-default-distinguishable",
+      "section": "2.2.2",
+      "quote": "a binding MUST be able to tell \"the caller named no tolerance\" apart from \"the caller passed the binding default\"",
+      "class": "out_of_scope",
+      "area": "api",
+      "note": "Constrains the signature of a binding's entry points (optional vs defaulted arguments), not format semantics."
+    },
+    {
+      "id": "spec.2.2.4.external-string-no-substitution",
+      "section": "2.2.4",
+      "quote": "`external` MUST be a string of length at least 1 (a schema rule), and MUST NOT contain `${`, which is refused at load with `solver_external_unresolved` (§2.2.6).",
+      "class": "semantic",
+      "phase": 2,
+      "area": "solver",
+      "note": "solver.external is accepted only as a non-empty string; one containing `${` is rejected at load with solver_external_unresolved."
+    },
+    {
+      "id": "spec.2.2.4.time-span-shape-and-order",
+      "section": "2.2.4",
+      "quote": "`time_span` MUST carry both `start` and `end`, each a number or an RFC 3339 UTC timestamp (schema rules), and `end` MUST be after `start`, which is refused at load with `solver_time_span_invalid` (§2.2.7).",
+      "class": "semantic",
+      "phase": 2,
+      "area": "solver",
+      "note": "A time_span without both bounds of the admitted forms is a schema error; one whose converted end ≤ start is rejected with solver_time_span_invalid."
+    },
+    {
+      "id": "spec.2.2.4.solver-changes-nothing",
+      "section": "2.2.4",
+      "quote": "Presence of `solver` MUST NOT alter equations, variable classification, namespacing, or the flattened system.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "flatten",
+      "note": "flatten(d) = flatten(d with any solver block), and classification is independent of solver."
+    },
+    {
+      "id": "spec.2.2.4.solver-version-gate",
+      "section": "2.2.4",
+      "quote": "A document declaring `esm` below `1.1.0` and carrying a `solver` block MUST be rejected with `solver_version_too_old`.",
+      "class": "semantic",
+      "phase": 2,
+      "area": "diagnostics",
+      "note": "A document with esm < 1.1.0 and a solver block is rejected with solver_version_too_old."
+    },
+    {
+      "id": "spec.2.2.4.external-time-span-version-gate",
+      "section": "2.2.4",
+      "quote": "A document declaring `esm` below `1.3.0` whose `solver` block carries `external` MUST be rejected with `solver_external_version_too_old`, before schema validation, at pointer `/solver/external`; one whose `solver` block carries `time_span` MUST be rejected with `solver_time_span_version_too_old`, before schema validation, at pointer `/solver/time_span`.",
+      "class": "semantic",
+      "phase": 2,
+      "area": "diagnostics",
+      "note": "esm < 1.3.0 with solver.external (resp. time_span) yields exactly (solver_external_version_too_old, /solver/external) (resp. the time_span code and pointer), taking precedence over schema errors."
+    },
+    {
+      "id": "spec.2.2.4.never-open-external",
+      "section": "2.2.4",
+      "quote": "A binding MUST NOT open, read, fetch or validate the document `external` names.",
+      "class": "out_of_scope",
+      "area": "solver",
+      "note": "File/network access policy; the model performs no I/O."
+    },
+    {
+      "id": "spec.2.2.6.external-unresolved-message",
+      "section": "2.2.6",
+      "quote": "The message MUST name `/solver/external` and quote the string exactly as authored, between plain double quotes with nothing escaped.",
+      "class": "semantic",
+      "phase": 2,
+      "area": "diagnostics",
+      "note": "The solver_external_unresolved message contains the pointer /solver/external and the authored string verbatim between double quotes.",
+      "concern": "This pins diagnostic prose, while §4.9.6 says the prose is 'as everywhere else, not pinned across bindings'; and 'nothing escaped' makes the message ambiguous when the authored string itself contains a double quote or newline."
+    },
+    {
+      "id": "spec.2.2.6.external-no-effect-on-integration",
+      "section": "2.2.6",
+      "quote": "It MUST NOT fail because of `external`, and it MUST NOT change its choice of integrator because `external` is present.",
+      "class": "later",
+      "phase": 6,
+      "area": "solver",
+      "note": "A binding's own solve/init behave identically on d and on d with solver.external added."
+    },
+    {
+      "id": "spec.2.2.7.time-span-exact-conversion",
+      "section": "2.2.7",
+      "quote": "A binding MUST NOT route a timestamp through a host date library whose range, leap-second or time-zone handling it does not control.",
+      "class": "semantic",
+      "phase": 2,
+      "area": "solver",
+      "note": "A timestamp bound converts to the binary64 value (W − W₀) + (f − f₀) defined by the proleptic Gregorian calendar, for every pattern-valid timestamp and origin."
+    },
+    {
+      "id": "spec.2.2.7.time-span-call-site-wins",
+      "section": "2.2.7",
+      "quote": "binding that honours it MUST let an explicit interval at the call site override it, with the resolution order of §2.2.2",
+      "class": "later",
+      "phase": 6,
+      "area": "solver",
+      "note": "The interval used for integration is the call-site interval (both bounds) if given, else the document's converted time_span, else none."
+    },
+    {
+      "id": "spec.3.x-esd-opaque-preserved",
+      "section": "3",
+      "quote": "core tooling MUST NOT assign meaning to anything inside it, MUST NOT validate or transform it, and MUST preserve it across `parse → emit` like any other metadata field.",
+      "class": "semantic",
+      "phase": 2,
+      "area": "round_trip",
+      "note": "For any JSON object x, metadata.x_esd = x survives emit(load d) unchanged and no verdict depends on its contents."
+    },
+    {
+      "id": "spec.4.1.1.text-surface-single-reading",
+      "section": "4.1.1",
+      "quote": "That surface is normative for those APIs: `parse_expression` is the inverse of `to_ascii`, and all five bindings MUST agree on the reading of any given text.",
+      "class": "semantic",
+      "phase": 2,
+      "area": "round_trip",
+      "note": "parse_expression is a function of the text, and parse_expression(to_ascii e) = e for every expression e (up to the stated normalizations).",
+      "concern": "'parse_expression is the inverse of to_ascii' cannot hold for all trees: §4.1.1 itself says a parser flattens `a + (b + c)` into one n-ary `+` (so a nested `+` tree does not round-trip), and a `-` before a numeric literal is read as part of the literal (so a unary-minus node on a literal does not round-trip); the class of trees on which it is an inverse is not stated."
+    },
+    {
+      "id": "spec.4.1.1.printer-parenthesize-negated-sum",
+      "section": "4.1.1",
+      "quote": "Because a unary-minus operand extends only to the next `+` or binary `-`, a printer MUST parenthesize a negated sum or difference",
+      "class": "semantic",
+      "phase": 2,
+      "area": "round_trip",
+      "note": "to_ascii of a unary minus over a + or binary - node parenthesizes the operand, so the text re-parses to the same tree."
+    },
+    {
+      "id": "spec.4.1.1.printer-parenthesize-same-level-right",
+      "section": "4.1.1",
+      "quote": "because every level groups to the LEFT, a printer MUST parenthesize a right operand at the same level unless it is the same associative operator",
+      "class": "semantic",
+      "phase": 2,
+      "area": "round_trip",
+      "note": "to_ascii parenthesizes a right operand of equal precedence unless it is the same associative n-ary operator, so parse(to_ascii e) = e.",
+      "concern": "'every level groups to the LEFT' contradicts the precedence table, where level 7 `^` is right-associative and level 6 `not` is prefix; for `^` the rule as written parenthesizes the wrong side (a right `^` operand needs none, a left one does)."
+    },
+    {
+      "id": "spec.4.2.rewrite-target-eliminated-before-eval",
+      "section": "4.2",
+      "quote": "A rewrite-target op has **no** evaluator; it MUST be eliminated by a rewrite rule (§9.6) before evaluation.",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "Evaluation/compilation of a document in which any open-tier op survives the rewrite fixpoint is rejected with unlowered_operator; loading is not."
+    },
+    {
+      "id": "spec.4.2.rhs-d-unresolvable-refused",
+      "section": "4.2",
+      "quote": "**A `D` the resolution cannot answer MUST be refused (normative).** Resolution answers nothing for an operand outside the table above — an operator with no rule there (`^`, an elementary function, a reduction, a nested `D`), or a name that carries neither equation and is not time-invariant — and it answers nothing for a **cyclic** chain, which it MUST detect and stop rather than expand without end (`D(x)/dt ~ k · D(x, t)`; an observed whose definition reaches its own derivative). In each case the node remains as authored and is a rewrite-target: an implementation MUST NOT invent a value for it",
+      "class": "semantic",
+      "phase": 5,
+      "area": "flatten",
+      "note": "RHS total-derivative resolution is a terminating partial function defined by the table; on any operand outside it or on a cycle it leaves the D node unchanged (never 0), and the build rejects it with unlowered_operator."
+    },
+    {
+      "id": "spec.4.2.structural-d-unary",
+      "section": "4.2",
+      "quote": "`args` MUST have exactly one entry. It is evaluable-core and is consumed by system assembly",
+      "class": "semantic",
+      "phase": 2,
+      "area": "scalar",
+      "note": "A D node with wrt \"t\" or no wrt and an arg count other than one is rejected at load.",
+      "concern": "The expected diagnostic is binding-dependent (a schema maxItems error, or operator_arity in a binding that also checks arity), so the clause does not fix one verdict code to pin."
+    },
+    {
+      "id": "spec.4.2.d-trailing-operands-dimension-neutral",
+      "section": "4.2",
+      "quote": "it MUST NOT report a trailing operand as an arity defect, and MUST NOT let one participate in, or invalidate, the derivative's dimension.",
+      "class": "semantic",
+      "phase": 2,
+      "area": "units",
+      "note": "For a spatial D, the dimensional result and findings of D(f, aux…) equal those of D(f): trailing operands never affect the check."
+    },
+    {
+      "id": "spec.4.2.d-trailing-operands-no-role",
+      "section": "4.2",
+      "quote": "the format assigns no per-position role and a binding MUST NOT infer one",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "The meaning of args[1..] of a spatial D is fixed only by the matching rule: lowering depends on them solely through pattern binding."
+    },
+    {
+      "id": "spec.4.2.sugar-ops-dimension-unknown",
+      "section": "4.2",
+      "quote": "a checker MUST report their dimension as `unknown` and skip the enclosing check (§4.8.4), never inventing a coordinate-divided dimension",
+      "class": "semantic",
+      "phase": 2,
+      "area": "units",
+      "note": "grad/div/laplacian/integral and every other open-tier op have undeterminable dimension, so the enclosing check is skipped."
+    },
+    {
+      "id": "spec.4.2.sugar-ops-not-privileged",
+      "section": "4.2",
+      "quote": "A binding MUST NOT single these names out",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "Matching, lowering and checking treat grad/div/laplacian/curl/integral exactly as any other open-tier op name (renaming invariance)."
+    },
+    {
+      "id": "spec.4.2.minmax-arity",
+      "section": "4.2",
+      "quote": "Conforming bindings MUST reject `min`/`max` nodes with fewer than two arguments.",
+      "class": "semantic",
+      "phase": 2,
+      "area": "scalar",
+      "note": "A min/max node with fewer than two arguments is rejected at load."
+    },
+    {
+      "id": "spec.4.2.minmax-nan-propagates",
+      "section": "4.2",
+      "quote": "A language's native min/max that drops NaN (Rust's `f64::max`, C's `fmax`, Python's built-in `max` in one argument order) MUST NOT be used as is.",
+      "class": "semantic",
+      "phase": 2,
+      "area": "scalar",
+      "note": "min/max (and the max/min faq reduction) return NaN when any argument is NaN, in every argument position (ruling 2026-10-26)."
+    },
+    {
+      "id": "spec.4.2.review-reject-disguised-minmax-fn",
+      "section": "4.2",
+      "quote": "reviewers MUST reject `fn` nodes that only re-implement these in disguise",
+      "class": "out_of_scope",
+      "area": "other",
+      "note": "Review policy for registry additions; not a property of document semantics."
+    },
+    {
+      "id": "spec.4.2.table-lookup-empty-args",
+      "section": "4.2",
+      "quote": "`output` selects which output (integer index or named entry) to return. `args` MUST be empty.",
+      "class": "semantic",
+      "phase": 1,
+      "area": "closed_functions",
+      "note": "A table_lookup node with non-empty args is rejected at load."
+    },
+    {
+      "id": "spec.4.2.const-empty-args",
+      "section": "4.2",
+      "quote": "`value` is any JSON value (number, integer, or nested array of numbers/integers); `args` MUST be empty `[]`.",
+      "class": "semantic",
+      "phase": 2,
+      "area": "scalar",
+      "note": "A const node with non-empty args is rejected at load."
+    },
+    {
+      "id": "spec.4.2.broadcast-fn-scalar-op-table",
+      "section": "4.2",
+      "quote": "`fn` MUST name a scalar operator, applied at an arity that operator admits, else `invalid_broadcast_fn`.",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "A broadcast node whose fn is not a pointwise scalar op, or is applied at an inadmissible arity, is rejected with invalid_broadcast_fn."
+    },
+    {
+      "id": "spec.4.2.aggregate-alias-normalized",
+      "section": "4.2",
+      "quote": "A loader MUST accept it, MUST normalize the node to `faq` at the wire boundary — ahead of the version gates and schema validation, so that nothing downstream of the loader, `emit` included, ever sees the alias — and MUST report the warning diagnostic `deprecated_op_alias` once per document per alias.",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "load rewrites every `aggregate` node to `faq` (raising the declared esm to ≥ 1.1.0) and emits one deprecated_op_alias warning; emit never writes `aggregate`.",
+      "concern": "It says normalization runs 'ahead of the version gates', but the next paragraph says the faq_version_too_old gate 'reads the authored form, before normalization' — the order is stated both ways; and 'once per document' is ambiguous when one load touches several documents (root, ref-loaded children, libraries), each of which is normalized."
+    },
+    {
+      "id": "spec.4.2.value-invention-constant-factors",
+      "section": "4.2",
+      "quote": "every column a `skolem` key, `distinct` producer or arg-witness body reads MUST be build-time data. A **constant factor** is any of: an array supplied to the build (a loader- or caller-provided factor), a shaped parameter carrying inline data (§6.3), or an **unknown whose defining equation's right-hand side is an array `const` node** (`x ~ const([…])`). The last is build-time data exactly as the first two are, so a binding MUST accept it as a key column.",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "A value-invention key column is admitted iff it is a constant factor (including x ~ const([…])); otherwise derived_index_set_unmaterialized or relational_node_in_continuous."
+    },
+    {
+      "id": "spec.4.3.1.ragged-values-not-gathered",
+      "section": "4.3.1",
+      "quote": "MUST be rejected by `validate()` with `ragged_values_not_gathered` (§9.6.6)",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "validate rejects a non-value-invention faq ranging over a declared ragged set whose expr/filter never reads that set's values array (template references and injected sets excepted)."
+    },
+    {
+      "id": "spec.4.3.1.no-private-cumsum-op",
+      "section": "4.3.1",
+      "quote": "binding MUST NOT introduce one under a private op name. The `integral` op (§4.2) is *not* the discrete cumulative form",
+      "class": "out_of_scope",
+      "area": "api",
+      "note": "Constrains a binding's op vocabulary; the format's closed evaluable core already excludes such an op."
+    },
+    {
+      "id": "spec.4.3.1.scan-direction-without-accumulator",
+      "section": "4.3.1",
+      "quote": "An evaluator that does not keep a running accumulator — a per-cell triangular fold, say — MUST still fold each cell's window in the variant's direction, so it reaches the same bits.",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "Each output cell of a forward (reverse) scan equals the left fold of its window in increasing (decreasing) contracted-index order, bitwise."
+    },
+    {
+      "id": "spec.4.3.1.1.no-private-recurrence-op",
+      "section": "4.3.1.1",
+      "quote": "the format ships no separate `scan` / `fold` / `recur` operator and a binding MUST NOT introduce one under a private op name",
+      "class": "out_of_scope",
+      "area": "api",
+      "note": "Constrains a binding's op vocabulary; the closed evaluable core already excludes such an op."
+    },
+    {
+      "id": "spec.4.3.1.1.reject-unjustified-self-read",
+      "section": "4.3.1.1",
+      "quote": "a binding MUST reject a self-read it cannot justify rather than guessing at one",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "Every causal self-read is either admitted by the lag rules or the document is rejected with a recurrence_* code; no self-read is silently reinterpreted."
+    },
+    {
+      "id": "spec.4.3.1.1.recurrence-coefficient-one",
+      "section": "4.3.1.1",
+      "quote": "The proof obligation is therefore split, and the split is normative. The **coefficient** of the frame symbol MUST be provably 1",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "A self-read index argument that is not affine in its frame symbol with coefficient 1 is rejected with recurrence_not_wellfounded.",
+      "concern": "'Provably 1' names no decision procedure: whether forms such as `(k+k)-k`, `1*k`, or `p*k` with a parameter p = 1 count as coefficient 1 is unspecified, so validators of different strength can reach different verdicts — the validator/evaluator divergence the following paragraph says is never defensible."
+    },
+    {
+      "id": "spec.4.3.1.1.recurrence-unproven-lag-admitted",
+      "section": "4.3.1.1",
+      "quote": "need NOT be provable, and a checker MUST NOT reject a lag merely because it could not bound it",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "A self-read with coefficient 1 whose lag bounds are unknown or straddle zero is admitted; only provably non-positive lag is rejected."
+    },
+    {
+      "id": "spec.4.3.1.1.recurrence-no-reordered-path",
+      "section": "4.3.1.1",
+      "quote": "A recurrence definition MUST NOT be evaluated through any whole-array, vectorized, fused, tiled, kernel-merged or otherwise reordered path.",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "The value of a recurrence equals the ordered sweep (recurrence axis outermost ascending, each cell published before the next), bitwise."
+    },
+    {
+      "id": "spec.4.3.1.1.recurrence-route-identical",
+      "section": "4.3.1.1",
+      "quote": "A binding MUST evaluate a recurrence identically on **every route it has** for materializing an observed",
+      "class": "later",
+      "phase": 7,
+      "area": "arrays",
+      "note": "Per-step and build-time materialization of a recurrence observed produce identical bits."
+    },
+    {
+      "id": "spec.4.3.1.1.recurrence-shared-sweep",
+      "section": "4.3.1.1",
+      "quote": "MUST do so with one shared implementation of the sweep rather than one per route",
+      "class": "out_of_scope",
+      "area": "api",
+      "note": "Code-structure requirement on a binding."
+    },
+    {
+      "id": "spec.4.3.1.1.recurrence-rejections-table",
+      "section": "4.3.1.1",
+      "quote": "A self-read that is not a well-founded causal read is a structural error, not a boundary case, and every binding MUST reject it",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "Each situation in the Rejections table yields exactly its listed code (recurrence_not_wellfounded or recurrence_unsupported_form)."
+    },
+    {
+      "id": "spec.4.3.1.1.cycle-exemption-gated-on-candidacy",
+      "section": "4.3.1.1",
+      "quote": "A binding that has to exempt the self-edge from an existing cycle check MUST gate that exemption on the equation being a **candidate**",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "An ill-founded self-read in an array-shaped candidate yields a recurrence_* code, never observed_cycle."
+    },
+    {
+      "id": "spec.4.3.2.makearray-region-inverted",
+      "section": "4.3.2",
+      "quote": "A pair with `stop < start − 1` is **inverted** and MUST be rejected at load time with `makearray_region_inverted` (§9.6.6)",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "After metaparameter folding, a makearray bound pair with stop < start − 1 is rejected with makearray_region_inverted; stop = start − 1 is an empty region."
+    },
+    {
+      "id": "spec.4.3.4.broadcast-one-operand-not-identity",
+      "section": "4.3.4",
+      "quote": "A one-operand `broadcast` MUST NOT be treated as the identity on its operand",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "broadcast(fn, [x]) equals fn applied unarily to each element of x."
+    },
+    {
+      "id": "spec.4.3.4.invalid-broadcast-fn-load-fails",
+      "section": "4.3.4",
+      "quote": "Bindings **MUST emit an `invalid_broadcast_fn` error** when this invariant is violated — including when `fn` is absent, for which there is no default; **loading MUST fail**.",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "Load fails with invalid_broadcast_fn for a broadcast with absent, non-scalar or wrong-arity fn."
+    },
+    {
+      "id": "spec.4.3.4.named-operand-not-subset-rejected",
+      "section": "4.3.4",
+      "quote": "It has no axis to align to, so bindings MUST reject the document with the structural diagnostic `array_shape_mismatch` (Section 7). Both shapes are declared, so this is decidable statically and MUST be decided at validation time",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "validate rejects with array_shape_mismatch any elementwise operand whose declared index sets are not a subset of the result's."
+    },
+    {
+      "id": "spec.4.3.4.named-broadcast-equals-faq",
+      "section": "4.3.4",
+      "quote": "The two spellings MUST agree bit for bit.",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "A bare elementwise array expression over named operands equals, element for element and bitwise, the equivalent full-map faq over the result axes."
+    },
+    {
+      "id": "spec.4.3.4.scalar-rhs-keeps-declared-shape",
+      "section": "4.3.4",
+      "quote": "A binding MUST NOT let the value's rank replace the declared shape",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "An equation giving a shaped variable a scalar RHS assigns that value to every element of the declared shape."
+    },
+    {
+      "id": "spec.4.4.fn-name-in-registry",
+      "section": "4.4",
+      "quote": "bindings MUST reject `fn` nodes whose `name` is not in the registry for the file's declared `esm` version. There is no per-file declaration",
+      "class": "semantic",
+      "phase": 1,
+      "area": "closed_functions",
+      "note": "A fn node naming a function outside the registry for the declared esm version is rejected."
+    },
+    {
+      "id": "spec.4.4.unknown-closed-function-code",
+      "section": "4.4",
+      "quote": "Bindings MUST emit an `unknown_closed_function` error when this invariant is violated; loading MUST fail.",
+      "class": "semantic",
+      "phase": 1,
+      "area": "closed_functions",
+      "note": "The rejection of an unregistered fn name carries code unknown_closed_function and fails load."
+    },
+    {
+      "id": "spec.4.5.enum-args-match-declared",
+      "section": "4.5",
+      "quote": "`enum_name` MUST match a key in the top-level `enums` block (Section 9.3); `symbol` MUST match a key declared under that enum.",
+      "class": "semantic",
+      "phase": 1,
+      "area": "closed_functions",
+      "note": "An enum node is well-formed only if its enum name and symbol are declared."
+    },
+    {
+      "id": "spec.4.5.enum-unknown-codes",
+      "section": "4.5",
+      "quote": "Bindings MUST reject references to undeclared enums or undeclared symbols within an enum at load time, with diagnostic codes `unknown_enum` and `unknown_enum_symbol` respectively.",
+      "class": "semantic",
+      "phase": 1,
+      "area": "closed_functions",
+      "note": "An undeclared enum yields unknown_enum and an undeclared symbol yields unknown_enum_symbol at load; a declared pair lowers to its integer const."
+    },
+    {
+      "id": "spec.4.6.scoped-ref-walk-every-segment",
+      "section": "4.6",
+      "quote": "There is **no depth limit**, and a resolver MUST walk every segment",
+      "class": "semantic",
+      "phase": 5,
+      "area": "flatten",
+      "note": "A scoped reference s₁…sₙ resolves by walking s₁ through subsystems maps to sₙ₋₁ and looking up sₙ there, at any depth."
+    },
+    {
+      "id": "spec.4.7.url-ref-unsupported-clean-reject",
+      "section": "4.7",
+      "quote": "A binding without remote support MUST reject a URL ref **cleanly** with the existing unresolved diagnostics",
+      "class": "out_of_scope",
+      "area": "other",
+      "note": "Network capability of a binding; the model performs no I/O."
+    },
+    {
+      "id": "spec.4.7.url-ref-base-joining",
+      "section": "4.7",
+      "quote": "A binding that does support URLs MUST treat a URL-loaded document as the base for that document's own relative refs",
+      "class": "out_of_scope",
+      "area": "other",
+      "note": "Remote fetching and URL joining are file/network I/O, outside the model."
+    },
+    {
+      "id": "spec.4.7.mount-forms-identical",
+      "section": "4.7",
+      "quote": "Two mount forms that merged different things would make an assembly's meaning depend on which attachment point the author happened to pick; a binding MUST NOT make them differ.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "flatten",
+      "note": "Mounting a component via subsystems.<k> or via top-level models.<k> yields the same resolved component and the same index-set merge; only its landing place differs."
+    },
+    {
+      "id": "spec.4.7.mount-form-unsupported-refused",
+      "section": "4.7",
+      "quote": "a binding that does not implement a mount form MUST refuse the entry with `mount_form_unsupported` (§9.6.6) at its pointer",
+      "class": "out_of_scope",
+      "area": "diagnostics",
+      "note": "Refusal for a capability a binding lacks; the model implements every mount form."
+    },
+    {
+      "id": "spec.4.7.symbolic-size-independent-of-machinery",
+      "section": "4.7",
+      "quote": "It MUST NOT depend on whether the leaf happens to declare `metaparameters`, or to import a template library",
+      "class": "semantic",
+      "phase": 5,
+      "area": "flatten",
+      "note": "An unclosed index-set size in a mounted leaf merges upward symbolically whether or not the leaf declares metaparameters or imports templates."
+    },
+    {
+      "id": "spec.4.7.loader-bindings-backfill-both-forms",
+      "section": "4.7",
+      "quote": "is exactly what \"a binding MUST NOT make them differ\" forbids",
+      "class": "semantic",
+      "phase": 5,
+      "area": "flatten",
+      "note": "Loader-API metaparameter bindings seed a mounted leaf's close, filtered to the names the leaf declares, identically at both mount forms and at every depth."
+    },
+    {
+      "id": "spec.4.7.nested-mounts-resolved-first",
+      "section": "4.7",
+      "quote": "a referenced document's own mount edges MUST be resolved, in that document's directory and against that document's own registry, before its single top-level system is extracted and before its `index_sets` merge upward.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "flatten",
+      "note": "Mounting an assembly resolves its own mount edges first, so mounting composes to any depth at both forms."
+    },
+    {
+      "id": "spec.4.7.mount-cycle-path-scoped",
+      "section": "4.7",
+      "quote": "Cycle detection MUST be path-scoped — pushed when an edge is entered and popped when it is left — so the same component file may be mounted under several keys, and only a cycle along the current resolution path is an error; the diagnostic MUST name the cycle rather than recursing without bound.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "flatten",
+      "note": "Mount resolution terminates; it errors (naming the cycle) iff a file recurs along one resolution path, and accepts DAG-shaped reuse."
+    },
+    {
+      "id": "spec.4.7.merge-after-mounting-close",
+      "section": "4.7",
+      "quote": "A binding MUST NOT merge before that close.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "flatten",
+      "note": "The index-set merge folds an incoming contribution against the mounting document's closed metaparameter environment and compares folded forms deep-equal.",
+      "concern": "This states normatively that the merge runs after the mounting document's close, yet the 'Two mount forms' paragraph above says Rust and Julia merge before it, Python/TypeScript/Go after, and that 'which side of that merge order is right' is open — the spec both decides and leaves open the same question."
+    },
+    {
+      "id": "spec.4.7.rename-not-nested-contribution",
+      "section": "4.7",
+      "quote": "An enclosing mount edge's `index_set_rename` MUST NOT rename an axis contributed only by a component the LEAF itself mounts",
+      "class": "semantic",
+      "phase": 5,
+      "area": "flatten",
+      "note": "An edge's index_set_rename vocabulary is the axes the referenced document declares or imports itself; naming one that arrived only via a nested mount is subsystem_index_set_rename_unknown_name."
+    },
+    {
+      "id": "spec.4.7.rename-key-must-exist",
+      "section": "4.7",
+      "quote": "A key MUST name an index set of the resolved mounted document, else `subsystem_index_set_rename_unknown_name`",
+      "class": "semantic",
+      "phase": 5,
+      "area": "flatten",
+      "note": "An index_set_rename key that is not an index set of the resolved mounted document is rejected with subsystem_index_set_rename_unknown_name."
+    },
+    {
+      "id": "spec.4.7.rename-target-dotted-identifier",
+      "section": "4.7",
+      "quote": "Targets MUST be dotted identifiers (§9.7.7 grammar), else `template_import_rename_invalid`",
+      "class": "semantic",
+      "phase": 5,
+      "area": "flatten",
+      "note": "An index_set_rename target outside the dotted-identifier grammar is rejected with template_import_rename_invalid."
+    },
+    {
+      "id": "spec.4.7.rename-targets-distinct",
+      "section": "4.7",
+      "quote": "post-rename names MUST be distinct within the edge, else `template_import_rename_collision`",
+      "class": "semantic",
+      "phase": 5,
+      "area": "flatten",
+      "note": "An index_set_rename whose post-rename names collide is rejected with template_import_rename_collision."
+    },
+    {
+      "id": "spec.4.7.rename-unsupported-form-refused",
+      "section": "4.7",
+      "quote": "That section's rule that a binding MUST NOT make the two forms differ is what makes silence unacceptable here: a binding that cannot yet APPLY the field at a form MUST REFUSE that edge",
+      "class": "out_of_scope",
+      "area": "diagnostics",
+      "note": "Refusal for a capability a binding lacks (subsystem_index_set_rename_unsupported_mount_form); the model applies renames at every form."
+    },
+    {
+      "id": "spec.4.7.from-faq-document-scope",
+      "section": "4.7",
+      "quote": "Therefore `from_faq` MUST be resolved against the expression nodes of the **whole document**, not of one model",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "A derived index set's from_faq resolves against every expression node id in the document; naming none is unknown_faq_node.",
+      "concern": "It justifies document scope by 'the §3 field table', but §3 is Metadata; the field table that makes index_sets document-scoped is in §2."
+    },
+    {
+      "id": "spec.4.7.node-id-unique-per-document",
+      "section": "4.7",
+      "quote": "an expression-node `id` MUST be unique across the document rather than merely within its model",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "A document in which two expression nodes share an id is rejected at load.",
+      "concern": "A duplicate id is called 'a load-time error' but no diagnostic code is given, so the verdict cannot be pinned as a (code, pointer) pair like the others."
+    },
+    {
+      "id": "spec.4.7.element-type-uncarried",
+      "section": "4.7",
+      "quote": "A component that cannot carry the field MUST be refused at load, not evaluated in the mounting document's precision.",
+      "class": "semantic",
+      "phase": 7,
+      "area": "precision",
+      "note": "Mounting a document whose precision must be written onto a reaction system is rejected at load with element_type_uncarried."
+    },
+    {
+      "id": "spec.4.7.ref-target-kinds-distinct",
+      "section": "4.7",
+      "quote": "A subsystem `ref` MUST NOT target a template-library file (`subsystem_ref_is_template_library`), and a template import MUST NOT target a subsystem/component file (`template_import_not_library`).",
+      "class": "semantic",
+      "phase": 5,
+      "area": "flatten",
+      "note": "A subsystem ref to a template library is subsystem_ref_is_template_library; a template import of a component file is template_import_not_library."
+    },
+    {
+      "id": "spec.4.7.injected-import-target-kinds",
+      "section": "4.7",
+      "quote": "The injected `ref` MUST resolve to a template-library file (`template_import_not_library` otherwise); the subsystem `ref` itself still MUST resolve to a component file.",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "On a mount edge, an injected template import must name a template library (else template_import_not_library) and the subsystem ref a component file."
+    },
+    {
+      "id": "spec.4.8.1.eight-axes-fixed",
+      "section": "4.8.1",
+      "quote": "A binding MUST NOT introduce a ninth axis, and MUST NOT map a registry symbol onto an axis the table below does not give it.",
+      "class": "semantic",
+      "phase": 1,
+      "area": "units",
+      "note": "A dimension is a rational vector over exactly m, kg, s, mol, K, A, cd, rad, and each registry symbol's dimension is the one the table gives."
+    },
+    {
+      "id": "spec.4.8.1.units-library-constrained",
+      "section": "4.8.1",
+      "quote": "A general-purpose units library MAY be used as the arithmetic engine, but it MUST be constrained to this table and these axes.",
+      "class": "semantic",
+      "phase": 1,
+      "area": "units",
+      "note": "Unit resolution agrees with the §4.8.1 table on every symbol, whatever engine computes it."
+    },
+    {
+      "id": "spec.4.8.1.no-si-prefix-mechanism",
+      "section": "4.8.1",
+      "quote": "A binding whose underlying units library *does* have a prefix mechanism (pint, uom, Unitful) MUST disable it or gate lookups on this table.",
+      "class": "semantic",
+      "phase": 1,
+      "area": "units",
+      "note": "A unit symbol resolves iff it is a table key exactly as spelled; prefixed compositions not in the table (kmolec, nppb) are unit_parse_error."
+    },
+    {
+      "id": "spec.4.8.1.customary-scales-pinned",
+      "section": "4.8.1",
+      "quote": "A binding MUST use the values above.",
+      "class": "semantic",
+      "phase": 1,
+      "area": "units",
+      "note": "The scales of ft, mi, lb, hp, gal, inHg, Torr, psi, degF and BTU are exactly the rationals given."
+    },
+    {
+      "id": "spec.4.8.1.scale-agreement-exact",
+      "section": "4.8.1",
+      "quote": "A conforming checker MUST decide every scale agreement (§4.8.3) **exactly**, never by comparing floating-point numbers within a tolerance",
+      "class": "semantic",
+      "phase": 2,
+      "area": "units",
+      "note": "Scale agreement is equality of exact scales (rationals times powers of π); the verdict never depends on floating-point arithmetic."
+    },
+    {
+      "id": "spec.4.8.1.float-scale-not-verdict",
+      "section": "4.8.1",
+      "quote": "A binding MAY keep a floating-point scale for NUMERIC unit conversion (loaders, coupling transforms), but that float MUST NOT decide a dimensional verdict.",
+      "class": "semantic",
+      "phase": 2,
+      "area": "units",
+      "note": "Every dimensional verdict is a function of exact scales only."
+    },
+    {
+      "id": "spec.4.8.1.short-ton-spelling",
+      "section": "4.8.1",
+      "quote": "A document that means short tons MUST write `short_ton`",
+      "class": "out_of_scope",
+      "area": "units",
+      "note": "States author intent; the checkable consequence (no `ton` or `t` symbol) is covered by the registry table."
+    },
+    {
+      "id": "spec.4.8.1.dobson-scale",
+      "section": "4.8.1",
+      "quote": "A binding MUST use `2.6867e20`.",
+      "class": "semantic",
+      "phase": 1,
+      "area": "units",
+      "note": "DU and Dobson have dimension m^-2 and exact scale 2.6867e20."
+    },
+    {
+      "id": "spec.4.8.2.scaling-factor-diagnostic-text",
+      "section": "4.8.2",
+      "quote": "The diagnostic MUST say that a number other than 1 is a scaling factor and that a rational exponent is spelled `^(p/q)`.",
+      "class": "semantic",
+      "phase": 2,
+      "area": "diagnostics",
+      "note": "A unit string with a numeric atom other than 1 is unit_parse_error, and the message names the scaling-factor reason and the ^(p/q) spelling."
+    },
+    {
+      "id": "spec.4.8.2.percent-symbol-token",
+      "section": "4.8.2",
+      "quote": "so a lexer MUST admit `%` as a symbol token",
+      "class": "semantic",
+      "phase": 2,
+      "area": "units",
+      "note": "\"%\" and \"%/h\" lex and resolve (scale 0.01, dimensionless).",
+      "concern": "'A symbol is a maximal run of characters that is a table key' does not say whether a run is delimited by character class (so `s1` is one unresolvable token) or is the longest table-key prefix (so `s1` lexes as `s` followed by the legal atom `1`, i.e. `s*1`, which the grammar's optional-operator juxtaposition accepts); the two readings disagree on strings like `kg1` and `s1`."
+    },
+    {
+      "id": "spec.4.8.3.sum-operands-share-unit",
+      "section": "4.8.3",
+      "quote": "All operands MUST share a dimension **and a scale**; the result is that unit.",
+      "class": "semantic",
+      "phase": 2,
+      "area": "units",
+      "note": "The determinable operands of +/− must have equal dimension and exact scale; undeterminable ones are skipped; with none determinable the result is undeterminable.",
+      "concern": "The row is headed '`+` `-` (n-ary)' and the constant-expression rule treats `-` over two or more operands as a left fold, but the §4.2 arithmetic table gives `-` arity 'unary or binary'; whether a three-operand `-` is legal is stated both ways."
+    },
+    {
+      "id": "spec.4.8.3.pow-exponent-dimensionless",
+      "section": "4.8.3",
+      "quote": "The exponent MUST be dimensionless.",
+      "class": "semantic",
+      "phase": 2,
+      "area": "units",
+      "note": "A ^ with a dimensional exponent is a mismatch; a constant-expression exponent raises dimension and scale exactly; any other exponent makes the result undeterminable."
+    },
+    {
+      "id": "spec.4.8.3.sqrt-not-transcendental",
+      "section": "4.8.3",
+      "quote": "`sqrt` is NOT a transcendental and MUST NOT be given the dimensionless-argument rule",
+      "class": "semantic",
+      "phase": 2,
+      "area": "units",
+      "note": "sqrt halves every exponent of its operand's dimension and scale and accepts any dimension."
+    },
+    {
+      "id": "spec.4.8.3.comparison-operands-share-unit",
+      "section": "4.8.3",
+      "quote": "The operands whose unit is determinable MUST share a dimension and a scale, and an undeterminable operand is skipped exactly as in `+` `-`",
+      "class": "semantic",
+      "phase": 2,
+      "area": "units",
+      "note": "Determinable comparison operands must agree in dimension and scale; the result is dimensionless."
+    },
+    {
+      "id": "spec.4.8.3.concat-operands-share-unit",
+      "section": "4.8.3",
+      "quote": "Its operands follow the `+` rule: every determinable operand MUST share a dimension and a scale",
+      "class": "semantic",
+      "phase": 2,
+      "area": "units",
+      "note": "concat's determinable operands must agree; the result is their shared unit or undeterminable."
+    },
+    {
+      "id": "spec.4.8.3.makearray-values-share-unit",
+      "section": "4.8.3",
+      "quote": "Its region `values` follow the `+` rule: determinable values MUST share a dimension and a scale",
+      "class": "semantic",
+      "phase": 2,
+      "area": "units",
+      "note": "makearray's determinable region values must agree; the result is their shared unit or undeterminable."
+    },
+    {
+      "id": "spec.4.8.3.circular-trig-argument",
+      "section": "4.8.3",
+      "quote": "The argument MUST be a **plane angle** (`rad`, or `deg`, which carries the `rad` dimension to the FIRST power) **or dimensionless at scale 1**. The result is dimensionless. A plane angle is admitted at **any scale**, and an implementation MUST **CONVERT** it to radians before evaluating",
+      "class": "semantic",
+      "phase": 2,
+      "area": "units",
+      "note": "sin/cos/tan accept rad^1 at any scale or dimensionless at scale 1 (not sr), and the value is computed on the argument converted to radians."
+    },
+    {
+      "id": "spec.4.8.3.inverse-trig-argument",
+      "section": "4.8.3",
+      "quote": "The argument MUST be **dimensionless at scale 1**. The result is an **angle** (`rad`).",
+      "class": "semantic",
+      "phase": 2,
+      "area": "units",
+      "note": "asin/acos/atan require a dimensionless scale-1 argument and return rad."
+    },
+    {
+      "id": "spec.4.8.3.atan2-commensurate",
+      "section": "4.8.3",
+      "quote": "The two operands MUST be **COMMENSURATE with each other** — same dimension and same scale, but ANY dimension, not necessarily dimensionless. The result is an **angle** (`rad`). `atan2` is the ONE inverse-trig op that does not take a dimensionless argument: it takes a *ratio not yet formed*, so `atan2(dy_m, dx_m)` is the ordinary spelling of a bearing and MUST be admitted.",
+      "class": "semantic",
+      "phase": 2,
+      "area": "units",
+      "note": "atan2 is accepted iff its operands agree in dimension and scale (any dimension), with result rad."
+    },
+    {
+      "id": "spec.4.8.3.strict-transcendental-argument",
+      "section": "4.8.3",
+      "quote": "The argument MUST be **dimensionless at scale 1** — a PURE NUMBER — and the result is dimensionless. The set is EXACTLY",
+      "class": "semantic",
+      "phase": 2,
+      "area": "units",
+      "note": "log, log10, exp, sinh, cosh, tanh, asinh, acosh, atanh require a dimensionless scale-1 argument."
+    },
+    {
+      "id": "spec.4.8.3.angle-converted-on-evaluation",
+      "section": "4.8.3",
+      "quote": "An implementation MUST apply the declared scale to reach radians before evaluating a circular function, in every binding.",
+      "class": "semantic",
+      "phase": 2,
+      "area": "scalar",
+      "note": "Evaluating sin/cos/tan of an argument whose unit (by the §4.8.3 rules, array ops included) is deg multiplies by π/180 first: sin(90 deg) = 1."
+    },
+    {
+      "id": "spec.4.8.3.agreement-dimension-and-scale",
+      "section": "4.8.3",
+      "quote": "the two units MUST have the same dimension and the same exact scale (§4.8.1)",
+      "class": "semantic",
+      "phase": 2,
+      "area": "units",
+      "note": "Every agreement (operands, equation sides, observed vs declared unit) requires equal dimension and equal exact scale.",
+      "concern": "The same paragraph refers to 'the ten strict transcendentals', but the §4.8.3 table says the strict set is 'EXACTLY ... nine ops, and no others'."
+    },
+    {
+      "id": "spec.4.8.3.scaled-dimensionless-diagnostic-repair",
+      "section": "4.8.3",
+      "quote": "a conforming checker **REFUSES** rather than picking one, and the diagnostic MUST name the **repair**, not only the refusal",
+      "class": "semantic",
+      "phase": 2,
+      "area": "diagnostics",
+      "note": "A transcendental of a dimensionless argument at scale ≠ 1 is unit_dimension_mismatch, and the message names the repair (divide by 1 of that unit)."
+    },
+    {
+      "id": "spec.4.8.3.no-silent-scale-normalization",
+      "section": "4.8.3",
+      "quote": "A checker MUST NOT silently normalize instead",
+      "class": "semantic",
+      "phase": 2,
+      "area": "units",
+      "note": "A dimensionless-but-scaled argument to a strict transcendental is rejected, never rescaled."
+    },
+    {
+      "id": "spec.4.8.4.undeterminable-not-dimensionless",
+      "section": "4.8.4",
+      "quote": "**An undeterminable dimension MUST NOT be reported as dimensionless.**",
+      "class": "semantic",
+      "phase": 2,
+      "area": "units",
+      "note": "An op with no rule, or a rule with nothing to read, yields 'unknown' (skip), never dimensionless; no false mismatch arises from such an op."
+    },
+    {
+      "id": "spec.4.8.4.unresolvable-unit-hard-error",
+      "section": "4.8.4",
+      "quote": "**An incomplete registry MUST NOT be papered over by downgrading the severity.**",
+      "class": "semantic",
+      "phase": 2,
+      "area": "units",
+      "note": "A unit string that does not parse or names a non-registry symbol is always the hard error unit_parse_error, never a warning or dimensionless."
+    },
+    {
+      "id": "spec.4.9.in-scope-symbols-resolve",
+      "section": "4.9",
+      "quote": "Name Resolution: what a checker MUST NOT call undefined `undefined_variable`, `undefined_parameter`, `event_var_undeclared` and `unresolved_scoped_ref` are hard errors, so every symbol this section declares to be **in scope** is a symbol a checker MUST resolve.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "flatten",
+      "note": "No symbol that §4.9 declares in scope is reported as undefined_variable, undefined_parameter, event_var_undeclared or unresolved_scoped_ref."
+    },
+    {
+      "id": "spec.4.9.1.var-placeholder-not-undeclared",
+      "section": "4.9.1",
+      "quote": "A checker MUST NOT emit `event_var_undeclared` for `_var` in a model that is operator-composed or that is a coupling target.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "coupling",
+      "note": "_var in an operator-composed or coupling-target model never yields event_var_undeclared."
+    },
+    {
+      "id": "spec.4.9.1.1.reserved-variable-name",
+      "section": "4.9.1.1",
+      "quote": "A DECLARATION MUST NOT spell one of them (`reserved_variable_name`)",
+      "class": "semantic",
+      "phase": 5,
+      "area": "flatten",
+      "note": "A key in models.variables, an inline subsystem's variables, or a reaction system's species/parameters equal to domain.independent_variable (default t) or _var is rejected with reserved_variable_name at that key."
+    },
+    {
+      "id": "spec.4.9.1.1.reserved-name-recurse-subsystems",
+      "section": "4.9.1.1",
+      "quote": "so its `variables` map is a declaration map like any other and a checker MUST recurse into every inline subsystem",
+      "class": "semantic",
+      "phase": 5,
+      "area": "flatten",
+      "note": "The reserved-name check applies to inline subsystems at every depth (including spliced-in mounts)."
+    },
+    {
+      "id": "spec.4.9.1.2.no-control-chars-in-names",
+      "section": "4.9.1.2",
+      "quote": "A declared name MUST NOT contain a control character A key of a declaration map MUST NOT contain a NUL or any other C0 control character (U+0000–U+001F) or DEL (U+007F).",
+      "class": "semantic",
+      "phase": 2,
+      "area": "schema",
+      "note": "A declaration-map key containing U+0000–U+001F or U+007F fails schema validation at load."
+    },
+    {
+      "id": "spec.4.9.2.scoped-ref-arbitrary-depth",
+      "section": "4.9.2",
+      "quote": "A resolver MUST **walk** the path — take the last segment as the name and resolve the preceding segments one at a time against each parent's `subsystems` map. A resolver MUST NOT split on `\".\"` and treat segment `[0]` as the system and segment `[1]` as the variable.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "flatten",
+      "note": "Resolution of an n-segment reference (n ≥ 2), including a coupling system path, walks subsystems; it never treats segments 2..n as one name."
+    },
+    {
+      "id": "spec.4.9.4.init-equations-separate-balance",
+      "section": "4.9.4",
+      "quote": "`initialization_equations` (§6.2) are a *separate* block with a separate balance and MUST NOT be counted into the main one.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "flatten",
+      "note": "The equation_count_mismatch balance counts unknowns against main equations of every LHS form, excluding initialization_equations."
+    },
+    {
+      "id": "spec.4.9.5.resolve-every-expression",
+      "section": "4.9.5",
+      "quote": "A checker MUST resolve the free symbols of **every** Expression in the document, wherever it appears",
+      "class": "semantic",
+      "phase": 5,
+      "area": "flatten",
+      "note": "An undefined name in any expression-bearing field of the table is reported with that row's code and pointer."
+    },
+    {
+      "id": "spec.4.9.5.forcing-must-be-declared",
+      "section": "4.9.5",
+      "quote": "a forcing field delivered by the host at runtime MUST still be declared",
+      "class": "semantic",
+      "phase": 5,
+      "area": "flatten",
+      "note": "There are no implicitly-declared host forcings: an undeclared name outside §4.9.1 and the listed declaration sites is undefined."
+    },
+    {
+      "id": "spec.4.9.5.walk-every-child-field",
+      "section": "4.9.5",
+      "quote": "**And within an Expression, the walk MUST descend every child field, not just `args`.**",
+      "class": "semantic",
+      "phase": 5,
+      "area": "flatten",
+      "note": "Free-symbol resolution descends args and expr, filter, key, lower, upper, values, axes and bindings."
+    },
+    {
+      "id": "spec.4.9.5.evaluator-fail-closed",
+      "section": "4.9.5",
+      "quote": "An evaluator MUST NOT produce a value for a name bound in none of the scopes available where it evaluates; it MUST fail closed, naming the name.",
+      "class": "semantic",
+      "phase": 2,
+      "area": "scalar",
+      "note": "Evaluating an expression with a free name unbound in the environment is an error naming that name, never a value.",
+      "concern": "The supporting claim that 'IEEE-754 max and min return the non-NaN operand' is not true in general: IEEE 754-2019 `maximum`/`minimum` propagate NaN (only `maximumNumber`/`minimumNumber`, and 2008's maxNum, return the number), and of the binding languages Julia `max`, JS `Math.max`, Go `math.Max` and NumPy `maximum` propagate NaN while Rust `f64::max` and C `fmax` do not."
+    },
+    {
+      "id": "spec.4.9.5.unbound-check-shared",
+      "section": "4.9.5",
+      "quote": "the check MUST be one shared implementation every route invokes",
+      "class": "out_of_scope",
+      "area": "api",
+      "note": "Code-structure requirement on a binding."
+    },
+    {
+      "id": "spec.4.9.6.observed-cycle-rejected",
+      "section": "4.9.6",
+      "quote": "Every binding MUST reject it, with diagnostic `observed_cycle`, and the diagnostic MUST **name the observeds on the cycle**.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "flatten",
+      "note": "A model whose observed dependency graph (minus recurrence-candidate self-edges) has a cycle is rejected with observed_cycle, naming a cycle."
+    },
+    {
+      "id": "spec.4.9.6.observed-cycle-in-validate",
+      "section": "4.9.6",
+      "quote": "it MUST NOT rely on the build to be the only place this is caught",
+      "class": "semantic",
+      "phase": 5,
+      "area": "flatten",
+      "note": "validate alone, without building, rejects an observed cycle."
+    },
+    {
+      "id": "spec.4.9.6.observed-cycle-deterministic",
+      "section": "4.9.6",
+      "quote": "The traversal MUST be deterministic — sorted roots, sorted successors — so a binding names the same cycle on every run",
+      "class": "semantic",
+      "phase": 5,
+      "area": "flatten",
+      "note": "details.cycle is the cycle found by depth-first search from sorted roots over sorted successors, closed by repeating its entry node.",
+      "concern": "'Sorted' names no order (code point, UTF-8 bytes, locale), and which cycle and rotation a DFS reports depends on unstated details (whether it stops at the first back edge, which node it enters on), so two compliant bindings can report different `details.cycle` paths."
+    },
+    {
+      "id": "spec.5.3.event-affects-unknown-only",
+      "section": "5.3",
+      "quote": "Every `lhs` MUST name an **unknown**; an event that writes a parameter is `event_affects_parameter`.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "events",
+      "note": "A discrete event affect whose lhs names a parameter is rejected with event_affects_parameter."
+    },
+    {
+      "id": "spec.5.4.single-update-object-form",
+      "section": "5.4",
+      "quote": "**A single rule MUST be the object form.** A one-element array is invalid",
+      "class": "semantic",
+      "phase": 5,
+      "area": "events",
+      "note": "An update given as a one-element array is rejected; arrays have length ≥ 2."
+    },
+    {
+      "id": "spec.5.4.discrete-cadence-shape",
+      "section": "5.4",
+      "quote": "This is why a `schedule`, `data`, or `remesh` parameter MUST declare its `shape`",
+      "class": "semantic",
+      "phase": 5,
+      "area": "events",
+      "note": "A parameter with any update rule of kind schedule, data or remesh and no shape is rejected."
+    }
+  ]
+}

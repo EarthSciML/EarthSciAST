@@ -1,0 +1,806 @@
+{
+  "source": "esm-spec.md",
+  "clauses": [
+    {
+      "id": "spec.6.3.no-declared-subtype",
+      "section": "6.3",
+      "quote": "Brownian follows from their updates. A checker or binding MUST NOT reintroduce the distinction as a declaration.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "schema",
+      "note": "A variable's declared type is exactly one of unknown or parameter; ODE-state, observed and Brownian status are never read from a declaration.",
+      "concern": "No diagnostic or observable test is given: it is unclear whether this means a loader must reject a legacy type such as \"state\", or only that binding APIs must not expose such a field, so it cannot be stated as an accept/reject property as written."
+    },
+    {
+      "id": "spec.6.3.shape-equals-faq-ranges",
+      "section": "6.3",
+      "quote": "If a `shape` is declared as well, its extents MUST equal the ranges' extents, and a mismatch is `array_shape_mismatch`.",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "When an unknown is defined by a faq over explicit inline ranges and also declares a shape, the declared extents equal the range extents, else array_shape_mismatch."
+    },
+    {
+      "id": "spec.6.3.inline-default-matches-shape",
+      "section": "6.3",
+      "quote": "The array MUST match the declared `shape` after metaparameter folding; a wrong extent, a wrong rank, or a ragged array (sibling axes of different lengths) is a **load-time error**",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "An inline array default is accepted only if its nesting is rectangular and equals the folded declared shape; otherwise load fails.",
+      "concern": "No diagnostic code is named for this load-time error (contrast array_default_without_shape just below), so cross-binding agreement can only be on the verdict, not the code."
+    },
+    {
+      "id": "spec.6.3.array-default-without-shape",
+      "section": "6.3",
+      "quote": "so such a `default` MUST be rejected at load with the structural diagnostic `array_default_without_shape`, reported at the offending `default`. The rule covers both declared types and the variables of every inline subsystem. A binding MUST NOT resolve it by dropping the variable from scope or by substituting a number.",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "An array-valued default on a variable with no (or empty) shape, at any subsystem depth, is rejected with array_default_without_shape at that default's pointer."
+    },
+    {
+      "id": "spec.6.3.scalar-default-broadcast",
+      "section": "6.3",
+      "quote": "a scalar on a shaped variable MUST be materialized over the variable's whole declared grid",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "A scalar default on a shaped variable denotes the full-shape array with that value in every cell, so index(p, k) equals the scalar for every in-range k."
+    },
+    {
+      "id": "spec.6.3.1.derived-classification-functions",
+      "section": "6.3.1",
+      "quote": "Because the format declares two types, every binding MUST expose the same functions to recover the finer categories a solver needs.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "flatten",
+      "note": "ode_states, observed_unknowns and algebraic_unknowns partition the unknowns; brownian/discrete/sampled/constant partition the parameters; system_kind is the first of sde, pde, nonlinear, ode whose condition holds.",
+      "concern": "The text claims the three unknown sets partition the unknowns, but nothing forbids one unknown being both under D(.,t) on one LHS and the bare LHS of another equation (it would be in ode_states and observed_unknowns), and an unknown that appears in no equation at all is put in algebraic_unknowns by the 'no equation names them on its LHS' wording even though nothing constrains it."
+    },
+    {
+      "id": "spec.6.3.1.equation-defines-parameter",
+      "section": "6.3.1",
+      "quote": "A binding MUST reject such a document in validation and MUST refuse to build it.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "diagnostics",
+      "note": "Any equation whose LHS names a parameter (bare, indexed, inside a faq, scoped into a subsystem, or under D) makes the document invalid with equation_defines_parameter, at validation and at build."
+    },
+    {
+      "id": "spec.6.3.1.unbound-index-symbol",
+      "section": "6.3.1",
+      "quote": "variable or metaparameter MUST be bound by a `faq` enclosing it on that left-hand side",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "A string subscript of an index on an equation LHS that names no variable or metaparameter is bound by an enclosing LHS faq or the RHS faq's output_idx; otherwise unbound_index_symbol."
+    },
+    {
+      "id": "spec.6.3.1.bare-index-unsupported-form",
+      "section": "6.3.1",
+      "quote": "Every other bare-index definition of an observed MUST be refused with `indexed_definition_unsupported_form`, naming `V`, rather than run.",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "A bare index(V, k...) ~ rhs definition runs as V ~ rhs exactly when the listed conditions hold, and is otherwise refused with indexed_definition_unsupported_form naming V.",
+      "concern": "The preceding text says the definition runs 'when all three hold' but then lists four conditions (the fourth being the rank check), so the set of forms this clause refuses is stated inconsistently."
+    },
+    {
+      "id": "spec.6.4.var-implicitly-declared",
+      "section": "6.4",
+      "quote": "It is implicitly declared (§4.9.1): a checker MUST NOT report it as `undefined_variable` or `event_var_undeclared`.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "coupling",
+      "note": "The placeholder _var is never reported as undefined_variable or event_var_undeclared wherever an ODE state is legal."
+    },
+    {
+      "id": "spec.6.6.tests-dropped-at-mount",
+      "section": "6.6",
+      "quote": "the mounted component's `tests` array MUST be **dropped at load**: it is not part of the mounting document, and a runner whose test target is that document MUST NOT run it.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "flatten",
+      "note": "Resolving a {ref} mount yields a component with no tests, so the mounting document's set of runnable tests contains only tests on components it declares itself."
+    },
+    {
+      "id": "spec.6.6.2.override-array-matches-shape",
+      "section": "6.6.2",
+      "quote": "The array MUST match the variable's declared `shape` after metaparameter folding, and a mismatch (a wrong extent, a wrong rank, a ragged array) is a **load-time error**",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "An inline-array value in initial_conditions or parameter_overrides is accepted only if it is rectangular and equals the variable's folded shape.",
+      "concern": "No diagnostic code is named for the mismatch, so the property can only fix the verdict."
+    },
+    {
+      "id": "spec.6.6.2.scalar-override-broadcast",
+      "section": "6.6.2",
+      "quote": "A scalar override of a shaped variable is therefore a value of that variable's full shape, and MUST be honoured on whatever channel the binding uses for that shape",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "A scalar override on a shaped variable sets every element of that variable to the scalar; it is never ignored."
+    },
+    {
+      "id": "spec.6.6.2.override-key-precedence",
+      "section": "6.6.2",
+      "quote": "A binding MUST resolve each key against the flattened names by this precedence, stopping at the first rule that applies:",
+      "class": "semantic",
+      "phase": 5,
+      "area": "flatten",
+      "note": "Override-key resolution is the function: exact flattened name, else the longest dotted suffix of the key that is a flattened name, else the unique flattened name having the key as a dotted suffix."
+    },
+    {
+      "id": "spec.6.6.2.override-dropped-prefix-declared",
+      "section": "6.6.2",
+      "quote": "Every leading segment dropped along the way MUST name a **component or subsystem the document declares**",
+      "class": "semantic",
+      "phase": 5,
+      "area": "flatten",
+      "note": "Rule 2 resolves a key only if every leading segment it drops names a declared component or subsystem.",
+      "concern": "Rule 2 says 'the longest such suffix wins' and separately that every dropped segment must be declared; it does not say whether, when the longest suffix's dropped prefix fails the check, a shorter suffix whose dropped prefix passes is tried or rule 2 fails outright."
+    },
+    {
+      "id": "spec.6.6.2.override-unrecognized-rejected",
+      "section": "6.6.2",
+      "quote": "A key that reaches none of the three is **unrecognized** and MUST be rejected",
+      "class": "semantic",
+      "phase": 5,
+      "area": "diagnostics",
+      "note": "A key that resolves under none of rules 1-3 is rejected."
+    },
+    {
+      "id": "spec.6.6.2.override-reject-run",
+      "section": "6.6.2",
+      "quote": "A conforming runtime MUST reject the run rather than ignore the key or pick a winner.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "diagnostics",
+      "note": "A run whose overrides contain an unresolvable key, an ambiguous key, or two keys resolving to one variable is rejected, never run.",
+      "concern": "This sentence makes any variable that two keys both resolve to an error, but the paragraph after the table says an exact hit plus a rule-2/3 claim on the same variable is resolved silently in favour of the exact hit; the two statements disagree on that case."
+    },
+    {
+      "id": "spec.6.6.2.override-diagnostic-content",
+      "section": "6.6.2",
+      "quote": "| Case | Condition | Diagnostic MUST |",
+      "class": "semantic",
+      "phase": 5,
+      "area": "diagnostics",
+      "note": "The unknown-key diagnostic names the key; the ambiguous one names the key and every candidate; the colliding one names the variable and every colliding key."
+    },
+    {
+      "id": "spec.6.6.2.override-ambiguous-distinguishable",
+      "section": "6.6.2",
+      "quote": "It MUST be distinguishable from the unknown case; binding one candidate arbitrarily is NOT conforming.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "diagnostics",
+      "note": "An ambiguous key yields a diagnostic class different from an unknown key and never binds any candidate."
+    },
+    {
+      "id": "spec.6.6.2.validator-unknown-override-key",
+      "section": "6.6.2",
+      "quote": "a validator MUST also reject an unknown key, with `unknown_override_key` at the key's pointer",
+      "class": "semantic",
+      "phase": 5,
+      "area": "diagnostics",
+      "note": "A validator reports unknown_override_key at the escaped key pointer for every override key (element suffix stripped) matching no declared qualified name under rules 1-3, unless the document still holds an unresolved {ref} mount."
+    },
+    {
+      "id": "spec.6.6.3.assertion-bare-target-declared",
+      "section": "6.6.3",
+      "quote": "A validator MUST reject an assertion whose `variable` is a bare name that the asserting component does not declare",
+      "class": "semantic",
+      "phase": 5,
+      "area": "diagnostics",
+      "note": "An assertion whose bare variable (element suffix stripped) is not declared by its component is rejected with undefined_variable at the assertion's variable pointer; dotted names are not checked."
+    },
+    {
+      "id": "spec.6.6.3.symmetric-relative-scale",
+      "section": "6.6.3",
+      "quote": "A conforming runtime MUST use the symmetric scale; an asymmetric one is a divergence, not a rounding difference.",
+      "class": "semantic",
+      "phase": 2,
+      "area": "other",
+      "note": "The tolerance test is |a - e| <= max(abs, rel * max(|a|, |e|)), symmetric in actual and expected."
+    },
+    {
+      "id": "spec.6.6.3.no-epsilon-floor",
+      "section": "6.6.3",
+      "quote": "No `ε` floor is needed, and a conforming runtime MUST NOT introduce one",
+      "class": "semantic",
+      "phase": 2,
+      "area": "other",
+      "note": "The pass predicate has no epsilon floor: for expected = 0 and abs = 0 a nonzero actual passes only if rel * |actual| >= |actual|."
+    },
+    {
+      "id": "spec.6.6.3.nonfinite-actual-fails",
+      "section": "6.6.3",
+      "quote": "so only the infinite case needs the guard; a conforming runtime MUST apply it, and MUST NOT let any `abs` or `rel` bound admit a non-finite `actual`.",
+      "class": "semantic",
+      "phase": 2,
+      "area": "other",
+      "note": "pass(a, e) = (a == e) or (a, e both finite and tolerance test holds); so a non-finite actual fails against every finite expected at every tolerance.",
+      "concern": "The motivating claims are false as stated: not every IEEE-754 comparison with NaN is false (!= is true), and with rel = 0 the right side rel * inf is NaN, so the unguarded bound does not 'PASS for every expected value' (and max(abs, NaN) differs by language: Julia max propagates NaN, C fmax drops it)."
+    },
+    {
+      "id": "spec.6.6.4.null-tolerance-is-absent",
+      "section": "6.6.4",
+      "quote": "a runtime that accepts one MUST treat it as absent.",
+      "class": "semantic",
+      "phase": 2,
+      "area": "other",
+      "note": "In per-field tolerance resolution a null abs or rel behaves exactly like a missing key.",
+      "concern": "The same sentence says null 'is not conforming input', so a model must choose between rejecting it and treating it as absent; the clause permits both, so the verdict on a null tolerance is not determined."
+    },
+    {
+      "id": "spec.6.6.5.whole-field-needs-selector",
+      "section": "6.6.5",
+      "quote": "An assertion on a whole shaped field MUST select a scalar via either `coords` or `reduce`.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "diagnostics",
+      "note": "An assertion naming a shaped variable without an element suffix carries coords or reduce."
+    },
+    {
+      "id": "spec.6.6.5.assertion-rank-mismatch",
+      "section": "6.6.5",
+      "quote": "Validators MUST reject, with `assertion_rank_mismatch` at the assertion's pointer",
+      "class": "semantic",
+      "phase": 5,
+      "area": "diagnostics",
+      "note": "For a bare-name target, a pointwise assertion on a non-empty-shape variable (not an element name), or coords/reduce on a shapeless variable, is rejected with assertion_rank_mismatch."
+    },
+    {
+      "id": "spec.6.6.5.coords-keys-match-index-sets",
+      "section": "6.6.5",
+      "quote": "`coords` keys MUST match the spatial index-set names the field is shaped over.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "diagnostics",
+      "note": "Every coords key is one of the index-set names in the asserted variable's shape.",
+      "concern": "No diagnostic code or rejection stage (validation vs run) is given for a coords key naming a set the field is not shaped over."
+    },
+    {
+      "id": "spec.6.6.5.pinned-conventions",
+      "section": "6.6.5",
+      "quote": "conforming runtimes MUST implement exactly these):",
+      "class": "later",
+      "phase": 6,
+      "area": "simulation",
+      "note": "Sampling uses idx = ceil(c - 1/2); integral is the mean over cells (unit measure per axis); from_file paths resolve relative to the .esm file's directory."
+    },
+    {
+      "id": "spec.6.6.5.coords-index-in-range",
+      "section": "6.6.5",
+      "quote": "The resolved index MUST lie in `1..size`.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "arrays",
+      "note": "ceil(c - 1/2) for each coords value lies in 1..size of its index set, else the assertion is invalid.",
+      "concern": "No diagnostic code or stage is given for an out-of-range resolved index, and validators cannot always check it because index-set sizes may depend on metaparameters closed only at build."
+    },
+    {
+      "id": "spec.6.6.5.coords-partial-pin",
+      "section": "6.6.5",
+      "quote": "otherwise the assertion is ill-defined and validators MUST reject.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "diagnostics",
+      "note": "coords pinning a strict subset of the field's dimensions is rejected unless every unpinned dimension has size 1.",
+      "concern": "The example ('a 1-D component with a single dimension') does not fit the rule: in a 1-D field a strict subset pins nothing, and the single remaining dimension resolves to one sample only if its size is 1; no diagnostic code is named either."
+    },
+    {
+      "id": "spec.6.6.5.from-file-shape",
+      "section": "6.6.5",
+      "quote": "Implementations MUST validate the shape and reject mismatches.",
+      "class": "later",
+      "phase": 6,
+      "area": "simulation",
+      "note": "A from_file reference array is accepted only if its nesting equals the asserted field's shape."
+    },
+    {
+      "id": "spec.6.6.5.buildtime-param-spelling",
+      "section": "6.6.5",
+      "quote": "and it MUST read a parameter under the spelling that component's own **equations** use.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "flatten",
+      "note": "A build-time expression resolves a parameter name by flattened name, then owner-relative remainder, then a globally unique dotted suffix; any other name is unbound and an error."
+    },
+    {
+      "id": "spec.6.6.5.buildtime-ambiguous-qualify",
+      "section": "6.6.5",
+      "quote": "the flattened name stays authoritative and such an expression MUST qualify further",
+      "class": "semantic",
+      "phase": 5,
+      "area": "flatten",
+      "note": "A suffix that is neither owner-relative nor globally unique binds nothing in the build-time scope.",
+      "concern": "The clause says an ambiguous suffix 'binds nothing' and the expression must qualify further, but does not say whether this is a distinct error or falls under 'unbound', so the diagnostic for it is undetermined."
+    },
+    {
+      "id": "spec.6.6.5.dimension-name-clash",
+      "section": "6.6.5",
+      "quote": "The dimension names share that one scope with everything else in it, so a name MUST NOT be both.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "diagnostics",
+      "note": "An inline reference that mentions free a name that is both a dimension of the asserted field and already bound in the build-time scope (scalar parameters or build arrays, under any alias) is rejected naming the name."
+    },
+    {
+      "id": "spec.6.6.5.dimension-name-clash-reject",
+      "section": "6.6.5",
+      "quote": "One name meaning two things in one scope is an ill-formed document, and an implementation MUST reject it with an error naming the clashing name",
+      "class": "semantic",
+      "phase": 5,
+      "area": "diagnostics",
+      "note": "The clash is reported as an error naming the clashing name; neither meaning is chosen."
+    },
+    {
+      "id": "spec.6.6.5.reference-free-t",
+      "section": "6.6.5",
+      "quote": "An implementation MUST therefore reject a reference that mentions `t` free with an error naming it, rather than evaluating it.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "diagnostics",
+      "note": "An inline reference with a free t (not rebound by a faq and not a shape dimension) is rejected with an error naming t."
+    },
+    {
+      "id": "spec.6.6.6.standalone-undeclared-index-set",
+      "section": "6.6.6",
+      "quote": "Loading or validating such a document standalone therefore MUST NOT reject an index-set name it does not declare",
+      "class": "semantic",
+      "phase": 4,
+      "area": "rewrite",
+      "note": "Standalone load/validation of a component never reports undefined_index_set; an index-set name still unresolved after test injection is an error at build.",
+      "concern": "'Such a document' is not delimited: the clause reads as if every standalone document defers undefined_index_set, which would also stop catching genuine typos in components that are never injected."
+    },
+    {
+      "id": "spec.6.7.4.field-slice-pinned",
+      "section": "6.7.4",
+      "quote": "`y` names the variable plotted as a function of that dimension. Non-plotted spatial dimensions MUST be pinned in `pinned_coords`.",
+      "class": "later",
+      "phase": 6,
+      "area": "other",
+      "note": "A field_slice plot has a pinned_coords entry for every spatial dimension of the field other than x.",
+      "concern": "Since v0.8.0 (§6.3.1) the domain carries nothing spatial, so 'a domain spatial dimension' and 'more spatial dimensions than the plot uses' have no referent in the format."
+    },
+    {
+      "id": "spec.6.7.4.field-snapshot-pinned",
+      "section": "6.7.4",
+      "quote": "`value.variable` names the field. Non-plotted spatial dimensions MUST be pinned in `pinned_coords`.",
+      "class": "later",
+      "phase": 6,
+      "area": "other",
+      "note": "A field_snapshot plot has a pinned_coords entry for every spatial dimension of the field other than x and y.",
+      "concern": "Since v0.8.0 (§6.3.1) the domain carries nothing spatial, so 'a domain spatial dimension' and 'more spatial dimensions than the plot uses' have no referent in the format."
+    },
+    {
+      "id": "spec.6.7.4.field-plot-x-spatial",
+      "section": "6.7.4",
+      "quote": "for `field_slice` and `field_snapshot`, `x` MUST name a domain spatial dimension.",
+      "class": "later",
+      "phase": 6,
+      "area": "other",
+      "note": "The x axis of a field plot names a spatial dimension of the plotted field.",
+      "concern": "Since v0.8.0 (§6.3.1) the domain carries nothing spatial, so 'a domain spatial dimension' and 'more spatial dimensions than the plot uses' have no referent in the format."
+    },
+    {
+      "id": "spec.6.7.4.field-plot-y-spatial",
+      "section": "6.7.4",
+      "quote": "For `field_slice` and `field_snapshot`, `y` MUST be a single `PlotAxis` naming a domain spatial dimension.",
+      "class": "later",
+      "phase": 6,
+      "area": "other",
+      "note": "The y axis of a field plot is a single PlotAxis.",
+      "concern": "Contradicts the field_slice bullet just above and the §6.7.6 example, where y names the plotted variable (u), not a spatial dimension; only field_snapshot's y is a spatial dimension."
+    },
+    {
+      "id": "spec.6.7.6.extra-dims-pinned",
+      "section": "6.7.6",
+      "quote": "If the underlying domain has more spatial dimensions than the plot uses, the extras MUST be pinned",
+      "class": "later",
+      "phase": 6,
+      "area": "other",
+      "note": "Same as the field-plot pinning rule: every spatial dimension not on a plot axis has a pinned_coords entry.",
+      "concern": "Since v0.8.0 (§6.3.1) the domain carries nothing spatial, so 'a domain spatial dimension' and 'more spatial dimensions than the plot uses' have no referent in the format."
+    },
+    {
+      "id": "spec.8.1.determinism-layout",
+      "section": "8.1",
+      "quote": "A binding that cannot honor the declared layout MUST reject the file at load rather than reinterpret bytes.",
+      "class": "out_of_scope",
+      "area": "data_sources",
+      "note": "Binary byte-layout handling of data files is file I/O, not format semantics."
+    },
+    {
+      "id": "spec.8.2.1.env-var-template-message",
+      "section": "8.2.1",
+      "quote": "is a load-time error, `data_source_url_unresolved`, whose message MUST name the offending data source and template.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "data_sources",
+      "note": "A url_template or mirrors entry containing ${ fails at load with data_source_url_unresolved naming the source and the template."
+    },
+    {
+      "id": "spec.8.2.1.unresolved-source-fails",
+      "section": "8.2.1",
+      "quote": "A source whose location cannot be resolved MUST fail with this diagnostic. It MUST NOT be skipped, and it MUST NOT be allowed to deliver an empty read or a consuming parameter's `default`",
+      "class": "semantic",
+      "phase": 5,
+      "area": "data_sources",
+      "note": "Location resolution is a total function to a file:// or scheme URL or the error data_source_url_unresolved; an error is never replaced by a skip, an empty read or a default.",
+      "concern": "'Cannot be resolved' is defined only by the ${ and ?/# cases; it is unclear whether a resolved URL whose file is missing at read time also falls under this diagnostic and its no-default rule."
+    },
+    {
+      "id": "spec.8.5.update-source-defined",
+      "section": "8.5",
+      "quote": "`update.source` MUST resolve to a `data_sources` key (`data_source_undefined` otherwise).",
+      "class": "semantic",
+      "phase": 5,
+      "area": "data_sources",
+      "note": "A data update whose source is not a key of data_sources is rejected with data_source_undefined."
+    },
+    {
+      "id": "spec.8.6.1.ring-padding-accepted",
+      "section": "8.6.1",
+      "quote": "from the plain distinct-vertex ring MUST be accepted by every binding:",
+      "class": "semantic",
+      "phase": 3,
+      "area": "arrays",
+      "note": "A polygon operand with an explicit closing duplicate or consecutive duplicate vertices is accepted (not rejected as degenerate) when it has at least 3 distinct vertices."
+    },
+    {
+      "id": "spec.8.6.1.ring-dedup-equal",
+      "section": "8.6.1",
+      "quote": "A binding MUST evaluate such a ring as its **deduplicated** form: consecutive duplicates (wrap pair included) are removed under the shared point-equality tolerance (`atol 1e-8`, `rtol 1e-5` — the `np.allclose` defaults all bindings pin), and the op's value MUST equal the same op over the already-distinct ring.",
+      "class": "later",
+      "phase": 7,
+      "area": "other",
+      "note": "intersect_polygon / polygon_intersection_area over a padded ring equals the same op over the ring with consecutive (and wrap) duplicates removed.",
+      "concern": "Deduplication 'under the shared point-equality tolerance' is not well defined: closeness under atol/rtol is not transitive (a chain of near-duplicates), np.allclose's rtol is asymmetric, and which of two near-equal vertices is kept is unspecified, so 'MUST equal the same op over the already-distinct ring' cannot hold exactly."
+    },
+    {
+      "id": "spec.8.9.1.unknown-reader-option",
+      "section": "8.9.1",
+      "quote": "reader does not recognise **MUST** be an error, not an ignored key",
+      "class": "out_of_scope",
+      "area": "data_sources",
+      "note": "Reader option handling is file decoding, outside the format's semantics.",
+      "concern": "Validity then depends on which format reader a binding binds, so the same document can be valid in one binding and invalid in another; no diagnostic code is named."
+    },
+    {
+      "id": "spec.8.9.2.select-pushdown-agrees",
+      "section": "8.9.2",
+      "quote": "applies it after the read is an optimization — the two **MUST** agree exactly.",
+      "class": "out_of_scope",
+      "area": "data_sources",
+      "note": "Equivalence of reader pushdown and post-read selection is a data-access optimization contract."
+    },
+    {
+      "id": "spec.8.9.4.extent-collect-before-inline",
+      "section": "8.9.4",
+      "quote": "so a binding that does it MUST collect first and inline second.",
+      "class": "semantic",
+      "phase": 4,
+      "area": "data_sources",
+      "note": "The extent-name check accepts exactly the metaparameter names collected from the authored documents before any mount is inlined."
+    },
+    {
+      "id": "spec.8.9.4.extent-accepted-set",
+      "section": "8.9.4",
+      "quote": "*What counts as declared, and the two cases this check MUST NOT refuse.*",
+      "class": "semantic",
+      "phase": 4,
+      "area": "data_sources",
+      "note": "An extent metaparameter declared by the document, by a mounted document (transitively), or by an imported library and left unbound by the import edge is never reported as template_import_unknown_name."
+    },
+    {
+      "id": "spec.8.9.4.extent-check-idempotent",
+      "section": "8.9.4",
+      "quote": "check is an AUTHORING check and MUST be idempotent",
+      "class": "semantic",
+      "phase": 4,
+      "area": "data_sources",
+      "note": "The extent check accepts a resolved document whenever it accepted the authored one: it is skipped when no {ref} mount remains and an index_sets entry has every interval size a concrete integer.",
+      "concern": "The resolved-shape test is satisfied by an authored single file with literal integer index-set sizes and no mounts, so the misspelled-extent typo the preceding paragraph insists must stay caught escapes the check; 'at least one index_sets entry with every interval size' is also ambiguous about whether 'every' ranges over that entry or all entries."
+    },
+    {
+      "id": "spec.9.1.unknown-closed-function",
+      "section": "9.1",
+      "quote": "bindings MUST reject any `fn` node whose `name` is not declared in §9.2 for the file's `esm` version, with diagnostic code `unknown_closed_function`. Loading MUST fail.",
+      "class": "semantic",
+      "phase": 1,
+      "area": "closed_functions",
+      "note": "A document containing an fn node whose name is outside the closed registry for its esm version fails to load with unknown_closed_function."
+    },
+    {
+      "id": "spec.9.1.authoring-policy-review",
+      "section": "9.1",
+      "quote": "The §1.1 authoring policy MUST be enforced at review time.",
+      "class": "out_of_scope",
+      "area": "closed_functions",
+      "note": "Review policy for adding registry entries, not a property of documents."
+    },
+    {
+      "id": "spec.9.2.closed-function-overflow",
+      "section": "9.2",
+      "quote": "All integer outputs are signed 32-bit; bindings MUST raise `closed_function_overflow` if a result would overflow.",
+      "class": "semantic",
+      "phase": 1,
+      "area": "closed_functions",
+      "note": "Each integer-valued closed function returns its value when it fits in Int32 and raises closed_function_overflow otherwise."
+    },
+    {
+      "id": "spec.9.2.datetime-exact-integer",
+      "section": "9.2",
+      "quote": "Bindings MUST use exact integer arithmetic on the decomposed `(date, time-of-day)` pair after a single floor-divmod by 86400",
+      "class": "semantic",
+      "phase": 1,
+      "area": "closed_functions",
+      "note": "datetime.* fields equal the proleptic-Gregorian decomposition of day = floor(t/86400), tod = t mod 86400 (floored), with exact integer outputs.",
+      "concern": "t_utc is a binary64 that need not be an integer, so time-of-day is not an integer and 'exact integer arithmetic' does not say how second/minute treat fractions; floor(t/86400) computed as a rounded binary64 division can be off by one for t just below a multiple of 86400, making the floor-divmod pair inconsistent; and julian_day involves a divide and an add (two roundings), so the '<= 1 ulp' guarantee does not follow."
+    },
+    {
+      "id": "spec.9.2.searchsorted-xs-monotone",
+      "section": "9.2",
+      "quote": "`xs` MUST be a `const`-op array of non-decreasing floats (equal neighbours allowed). Bindings MUST reject non-monotonic `xs` at load time with diagnostic `searchsorted_non_monotonic`.",
+      "class": "semantic",
+      "phase": 1,
+      "area": "closed_functions",
+      "note": "interp.searchsorted loads iff xs is a const array with xs[i] <= xs[i+1] for all i; otherwise searchsorted_non_monotonic.",
+      "concern": "Wording resolved 2026-10-26 (Q-7): non-decreasing. Still open for phase 1: NaN entries in xs are 'forbidden' with no diagnostic code (ruling: new code searchsorted_nan, checked first)."
+    },
+    {
+      "id": "spec.9.2.interp-const-finite-shape",
+      "section": "9.2",
+      "quote": "`table` and the axis array(s) MUST be `const`-op arrays of floats, the axis entries finite (`table` entries MAY be NaN; see below). Loaders MUST resolve their nested shapes at load time. The shape relation MUST hold:",
+      "class": "semantic",
+      "phase": 1,
+      "area": "closed_functions",
+      "note": "interp.linear loads only if table and axis are const arrays with len(table) == len(axis) >= 2; otherwise the matching interp_* diagnostic."
+    },
+    {
+      "id": "spec.9.2.interp-bilinear-shape",
+      "section": "9.2",
+      "quote": "`interp.bilinear`: outer length of `table` MUST equal `Nx == len(axis_x)` and every inner row of `table` MUST have length `Ny == len(axis_y)`",
+      "class": "semantic",
+      "phase": 1,
+      "area": "closed_functions",
+      "note": "interp.bilinear loads only if table is Nx rows each of length Ny with Nx = len(axis_x) >= 2 and Ny = len(axis_y) >= 2."
+    },
+    {
+      "id": "spec.9.2.interp-axis-strict",
+      "section": "9.2",
+      "quote": "Each axis array MUST be **strictly increasing**.",
+      "class": "semantic",
+      "phase": 1,
+      "area": "closed_functions",
+      "note": "An interp.linear/bilinear axis with any a[i] >= a[i+1] is rejected with interp_non_monotonic_axis."
+    },
+    {
+      "id": "spec.9.2.interp-axis-no-nan",
+      "section": "9.2",
+      "quote": "Axis arrays MUST NOT contain NaN.",
+      "class": "semantic",
+      "phase": 1,
+      "area": "closed_functions",
+      "note": "An interp axis containing NaN is rejected with interp_nan_in_axis.",
+      "concern": "A NaN axis entry also violates strict monotonicity, so both interp_nan_in_axis and interp_non_monotonic_axis apply and no precedence between the two codes is given."
+    },
+    {
+      "id": "spec.9.2.interp-reject-at-load",
+      "section": "9.2",
+      "quote": "Bindings MUST reject violations at file-load time with the diagnostic codes listed under \"Errors\" below. Loading MUST fail.",
+      "class": "semantic",
+      "phase": 1,
+      "area": "closed_functions",
+      "note": "Any violation of the interp argument contract fails load with the listed interp_* code."
+    },
+    {
+      "id": "spec.9.2.interp-fma-tolerance",
+      "section": "9.2",
+      "quote": "bindings that use FMA selectively MUST ensure their results still match the non-FMA reference within the per-fixture tolerance",
+      "class": "semantic",
+      "phase": 1,
+      "area": "precision",
+      "note": "interp.linear/bilinear evaluated with the pinned non-FMA order are bit-exact; an FMA evaluation differs from it by at most the fixture tolerance.",
+      "concern": "The bound is defined by whatever tolerance a fixture file carries, so it is not a spec-level property; and rel 4e-16 cannot hold in general: fusing t_i + w*(d) removes one rounding of w*d, which relative to a result near zero by cancellation is unbounded."
+    },
+    {
+      "id": "spec.9.3.enum-zero-negative-allowed",
+      "section": "9.3",
+      "quote": "Bindings MUST NOT reject a zero or negative member.",
+      "class": "semantic",
+      "phase": 1,
+      "area": "closed_functions",
+      "note": "Every integer (including 0 and negatives) is an acceptable enum member value."
+    },
+    {
+      "id": "spec.9.3.enum-values-unique",
+      "section": "9.3",
+      "quote": "Within a single enum, integer values MUST be unique",
+      "class": "semantic",
+      "phase": 1,
+      "area": "closed_functions",
+      "note": "Within one enum no two symbols map to the same integer.",
+      "concern": "No diagnostic code is given for a duplicate value, and 'MAY NOT' in the same sentence is not an RFC 2119 keyword and can be read as a permission not to."
+    },
+    {
+      "id": "spec.9.3.enum-lowered-at-load",
+      "section": "9.3",
+      "quote": "The `enum` op (§4.5) MUST resolve at load time, before any expression evaluation. After lowering, no `enum`-op nodes remain in the in-memory representation; each is replaced by a `{\"op\": \"const\", \"value\": <integer>}` node. Bindings MUST NOT propagate enum strings into evaluated expressions.",
+      "class": "semantic",
+      "phase": 1,
+      "area": "closed_functions",
+      "note": "Enum lowering replaces each enum op by const of the integer its file's enums block assigns; the loaded tree contains no enum nodes."
+    },
+    {
+      "id": "spec.9.3.enum-unknown-rejected",
+      "section": "9.3",
+      "quote": "MUST be rejected at load time. Loading MUST fail.",
+      "class": "semantic",
+      "phase": 1,
+      "area": "closed_functions",
+      "note": "An enum op naming an undeclared enum fails with unknown_enum, and an undeclared symbol with unknown_enum_symbol."
+    },
+    {
+      "id": "spec.9.4.closed-function-ci",
+      "section": "9.4",
+      "quote": "`scripts/test-conformance.sh` MUST run the closed-function fixtures across all five bindings on every PR.",
+      "class": "out_of_scope",
+      "area": "conformance_harness",
+      "note": "CI harness mechanics."
+    },
+    {
+      "id": "spec.9.5.table-lookup-bit-equivalent",
+      "section": "9.5",
+      "quote": "the materialized AST a binding produces from a `table_lookup` MUST be bit-equivalent to the equivalent inline-`const` lookup.",
+      "class": "semantic",
+      "phase": 1,
+      "area": "closed_functions",
+      "note": "Evaluating a table_lookup equals evaluating its §9.5.3 lowering (interp.linear, interp.bilinear, or index of searchsorted) at every input.",
+      "concern": "§9.5.3 qualifies this as 'modulo the same FMA caveats', so 'bit-equivalent' is not unconditional; and the 'nearest' lowering index(data, searchsorted(x, axis)) is neither nearest (searchsorted returns the first knot >= x) nor clamped (it returns N+1 above the last knot, an out-of-range index), contradicting out_of_bounds: \"clamp\"."
+    },
+    {
+      "id": "spec.9.5.1.axis-names-unique",
+      "section": "9.5.1",
+      "quote": "Axis names within a single table MUST be unique.",
+      "class": "semantic",
+      "phase": 1,
+      "area": "closed_functions",
+      "note": "A table with two axes of the same name is rejected with table_axis_duplicate_name."
+    },
+    {
+      "id": "spec.9.5.1.interpolation-axes-match",
+      "section": "9.5.1",
+      "quote": "Bindings MUST reject mismatched (`linear` with 2 axes, `bilinear` with 1 axis, etc.) at load time with diagnostic `table_interpolation_axes_mismatch`.",
+      "class": "semantic",
+      "phase": 1,
+      "area": "closed_functions",
+      "note": "A table loads only if interpolation is linear or nearest with 1 axis or bilinear with 2; otherwise table_interpolation_axes_mismatch."
+    },
+    {
+      "id": "spec.9.5.1.outputs-leading-dim",
+      "section": "9.5.1",
+      "quote": "When present, the leading dimension of `data` MUST equal the length of `outputs`",
+      "class": "semantic",
+      "phase": 1,
+      "area": "closed_functions",
+      "note": "With outputs declared, len(data) == len(outputs), else table_outputs_length_mismatch.",
+      "concern": "The §9.5.3 lowering always slices data[i], but for a table without outputs data has no leading output dimension, so data[0] would be the first table entry rather than the whole table; the lowering for single-output tables is not stated."
+    },
+    {
+      "id": "spec.9.5.1.data-finite",
+      "section": "9.5.1",
+      "quote": "Leaves MUST be finite numbers — NaN entries are rejected at load time with `table_data_nan`.",
+      "class": "semantic",
+      "phase": 1,
+      "area": "closed_functions",
+      "note": "Every leaf of a function table's data is a finite number; a NaN leaf fails load with table_data_nan.",
+      "concern": "Only NaN has a diagnostic code; an infinite leaf violates 'finite' with no code (though JSON cannot spell one), and this is stricter than the §9.2 inline form, which allows NaN in tables, so a table with NaN cannot be lifted even though the lifting is said not to change semantics."
+    },
+    {
+      "id": "spec.9.5.1.shape-assertion-matches",
+      "section": "9.5.1",
+      "quote": "`shape` is an optional redundant assertion on `data`'s shape. If present, MUST match the actual nesting; loaders reject mismatches.",
+      "class": "semantic",
+      "phase": 1,
+      "area": "closed_functions",
+      "note": "A declared shape that differs from data's actual nesting fails with table_data_shape_mismatch."
+    },
+    {
+      "id": "spec.9.5.1.no-fabricated-shape",
+      "section": "9.5.1",
+      "quote": "Round-trippers MUST NOT fabricate a `shape` field when the author did not write one.",
+      "class": "semantic",
+      "phase": 2,
+      "area": "round_trip",
+      "note": "emit(parse(doc)) contains a table shape field iff doc did."
+    },
+    {
+      "id": "spec.9.5.1.no-auto-promote",
+      "section": "9.5.1",
+      "quote": "Loaders MUST NOT silently auto-promote inline `const`-op arrays into `function_tables` entries during round-trip.",
+      "class": "semantic",
+      "phase": 2,
+      "area": "round_trip",
+      "note": "Round-trip never creates function_tables entries absent from the source."
+    },
+    {
+      "id": "spec.9.5.2.lookup-axes-keys-match",
+      "section": "9.5.2",
+      "quote": "The set of keys MUST exactly match the names of the referenced table's `axes[]`",
+      "class": "semantic",
+      "phase": 1,
+      "area": "closed_functions",
+      "note": "A table_lookup's axes keys equal, as a set, the referenced table's axis names; otherwise table_lookup_axis_name_mismatch."
+    },
+    {
+      "id": "spec.9.5.2.lookup-output-name",
+      "section": "9.5.2",
+      "quote": "String MUST be an entry of the table's `outputs` array.",
+      "class": "semantic",
+      "phase": 1,
+      "area": "closed_functions",
+      "note": "A string output names an entry of outputs and an integer output is < the leading data dimension; otherwise table_lookup_output_out_of_range.",
+      "concern": "It is not said what happens when output is omitted on a table that declares outputs (default 0, or an error)."
+    },
+    {
+      "id": "spec.9.5.2.lookup-args-empty",
+      "section": "9.5.2",
+      "quote": "`args` MUST be empty `[]` for a `table_lookup` node",
+      "class": "semantic",
+      "phase": 1,
+      "area": "closed_functions",
+      "note": "A table_lookup node with non-empty args is rejected.",
+      "concern": "No diagnostic code is listed in §9.5.5 for non-empty args, and it is not said whether an absent args is equivalent to []."
+    },
+    {
+      "id": "spec.9.5.3.serializer-roundtrips-authored",
+      "section": "9.5.3",
+      "quote": "The serializer of every binding MUST round-trip the authored form (see §9.5.4).",
+      "class": "semantic",
+      "phase": 2,
+      "area": "round_trip",
+      "note": "Whatever lowering strategy a binding uses, emit returns the authored table_lookup / function_tables form."
+    },
+    {
+      "id": "spec.9.5.4.preserve-table-lookup",
+      "section": "9.5.4",
+      "quote": "Loaders MUST preserve them on save: - A file whose source contains `table_lookup` nodes serializes back with `table_lookup` nodes — bindings MUST NOT canonicalize a `table_lookup` to its lowered `fn` form on save.",
+      "class": "semantic",
+      "phase": 2,
+      "area": "round_trip",
+      "note": "emit(parse(doc)) keeps every table_lookup node and the function_tables block as authored."
+    },
+    {
+      "id": "spec.9.5.4.no-promote-inline",
+      "section": "9.5.4",
+      "quote": "bindings MUST NOT canonicalize inline lookups into `table_lookup` references.",
+      "class": "semantic",
+      "phase": 2,
+      "area": "round_trip",
+      "note": "emit(parse(doc)) keeps inline const lookups inline; no table_lookup is introduced."
+    },
+    {
+      "id": "spec.9.5.3a.error-mode-unsupported",
+      "section": "9.5.3a",
+      "quote": "A binding that has not implemented `\"error\"` **MUST refuse the lookup** with `table_out_of_bounds_unsupported` rather than evaluate it under `\"clamp\"`.",
+      "class": "semantic",
+      "phase": 1,
+      "area": "closed_functions",
+      "note": "A lookup on an out_of_bounds: \"error\" table either raises table_lookup_out_of_bounds exactly for queries strictly outside the axis range (NaN passes through) or is refused with table_out_of_bounds_unsupported; it is never evaluated as clamp."
+    },
+    {
+      "id": "spec.9.5.6.all-bindings-pass",
+      "section": "9.5.6",
+      "quote": "All five bindings MUST pass.",
+      "class": "out_of_scope",
+      "area": "conformance_harness",
+      "note": "Requirement on the CI harness, not on document semantics."
+    }
+  ]
+}
