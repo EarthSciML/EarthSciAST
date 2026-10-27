@@ -524,7 +524,7 @@
         },
         "time_value": {
           "type": "unknown",
-          "units": "1",
+          "units": "s",
           "description": "The bare name `t` is the simulation time, asserted at a NON-zero time so a binding that evaluates every assertion at the span start cannot pass it."
         },
         "probe": {
