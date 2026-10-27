@@ -110,7 +110,7 @@ fn run_fixture_inline_tests(rel: &str, compiler: earthsci_ast::Compiler) -> usiz
 
 /// esm-spec §9.5.3 `nearest`: the knot nearest the query, ties to the lower
 /// knot, clamped outside the axis, through the inline-test runner. The
-/// fixture's last assertion is the hand-spelled lowering, which must agree.
+/// fixture includes the hand-spelled lowering as an assertion, which must agree.
 /// `index` with a run-time subscript is not taped, so this runs on the
 /// interpreter.
 #[test]
@@ -120,7 +120,7 @@ fn nearest_fixture_inline_tests_pass() {
             "conformance/function_tables/nearest/fixture.esm",
             earthsci_ast::Compiler::Interpreter,
         ),
-        12
+        13
     );
 }
 
