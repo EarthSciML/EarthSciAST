@@ -2,7 +2,7 @@
   "esm": "1.3.0",
   "metadata": {
     "name": "DimensionlessLiteralWarning",
-    "description": "Pins the esm-spec §4.8.6 warning units_dimensionless_literal_mismatch. Equations 0-6 are one per pattern class of the bare-literal impact study and each WARNS: under the current rule a bare literal is neutral and the check is skipped or passes, while read as dimensionless at scale 1 it is a dimension or scale mismatch. Equations 7-14 are controls that must NOT warn: the literal zero stays neutral (max, ifelse branch, ic, comparison), a unit-bearing const carries its unit, and a dimensionless literal in a dimensionless context agrees. Reaction 0's rate warns (exp(-1370 / T)); reaction 1's does not. The document is VALID: at this stage the warning never changes validity.",
+    "description": "Pins the esm-spec §4.8.6 warning units_dimensionless_literal_mismatch. Model Literals: equations 0-6 are one per pattern class of the bare-literal impact study and each WARNS (under the current rule a bare literal is neutral and the check is skipped or passes; read as dimensionless at scale 1 it is a dimension or scale mismatch). Equations 7-14 are controls that must NOT warn: the literal zero stays neutral (max, ifelse branch, ic, comparison), a unit-bearing const carries its unit, and a dimensionless literal in a dimensionless context agrees. Equations 15-19 pin the site rules: 15 (the derivative of T_state) is quiet, 16 warns through the ic rule, 17 through the undeclared t in seconds, 18 through the no-time-unit-reconciles rule for a derivative with respect to an undeclared t, 19 is an ordinary warning, and initialization_equations/0 warns at its own pointer. Subsystem Inner: equation 0 warns, equation 1 does not. Reaction 0's rate warns (exp(-1370 / T)); reaction 1's does not. The document is VALID: at this stage the warning never changes validity.",
     "authors": [
       "Chris Tessum with Claude"
     ],
@@ -140,6 +140,32 @@
           "type": "unknown",
           "units": "m",
           "description": "Quiet: 0.5 * x + x, the coefficient is dimensionless and the product is m"
+        },
+        "T_state": {
+          "type": "unknown",
+          "units": "K",
+          "description": "Warns: ic(T_state) = 288.0, ic carries its operand's unit (esm-spec §4.8.3)"
+        },
+        "wave": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Warns: cos(0.26 * t), the undeclared t is in seconds (esm-spec §4.9.1)"
+        },
+        "m_air": {
+          "type": "unknown",
+          "units": "kg/m^3",
+          "description": "Warns: D(m_air) = 0.001 * n_drop, no time unit reconciles kg/m^3 with 1/m^3 (esm-spec §4.8.4)"
+        },
+        "n_drop": {
+          "type": "parameter",
+          "units": "1/m^3",
+          "default": 100000000.0,
+          "description": "A droplet number density"
+        },
+        "p_init": {
+          "type": "unknown",
+          "units": "Pa",
+          "description": "Warns from initialization_equations: p_init = 101325.0 * c, a pure number equated with a pressure"
         }
       },
       "equations": [
@@ -347,8 +373,135 @@
               "x"
             ]
           }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "T_state"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "k",
+                  "T_state"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "T_state"
+            ]
+          },
+          "rhs": 288.0
+        },
+        {
+          "lhs": "wave",
+          "rhs": {
+            "op": "cos",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  0.26,
+                  "t"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "m_air"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              0.001,
+              "n_drop"
+            ]
+          }
+        },
+        {
+          "lhs": "p_init",
+          "rhs": {
+            "op": "*",
+            "args": [
+              101325.0,
+              "c"
+            ]
+          }
         }
-      ]
+      ],
+      "initialization_equations": [
+        {
+          "lhs": "p_init",
+          "rhs": {
+            "op": "*",
+            "args": [
+              101325.0,
+              "c"
+            ]
+          }
+        }
+      ],
+      "subsystems": {
+        "Inner": {
+          "variables": {
+            "x_in": {
+              "type": "parameter",
+              "units": "m",
+              "default": 1.0,
+              "description": "A length in an inline subsystem"
+            },
+            "y_in": {
+              "type": "unknown",
+              "units": "m",
+              "description": "Warns: 1 + x_in, inside an inline subsystem"
+            },
+            "z_in": {
+              "type": "unknown",
+              "units": "m",
+              "description": "Quiet: max(x_in, 0), inside an inline subsystem"
+            }
+          },
+          "equations": [
+            {
+              "lhs": "y_in",
+              "rhs": {
+                "op": "+",
+                "args": [
+                  1,
+                  "x_in"
+                ]
+              }
+            },
+            {
+              "lhs": "z_in",
+              "rhs": {
+                "op": "max",
+                "args": [
+                  "x_in",
+                  0
+                ]
+              }
+            }
+          ]
+        }
+      }
     }
   },
   "reaction_systems": {
