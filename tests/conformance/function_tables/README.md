@@ -97,6 +97,22 @@ written: the schema requires it on every expression node, so an absent `args`
 can only reach a binding through a node built in memory, and is covered by each
 binding's unit tests.)
 
+### `load_errors/cases.json`
+
+The §9.5.5 load-time table checks and the order they report in (esm-spec
+§9.5.5, "Order of the table checks"). A ledger rather than `.esm` documents:
+each case is one table (id `T`) and one `table_lookup` on it, and a harness
+builds the table in memory — several cases need a NaN, which JSON cannot carry
+(the ledger writes it as the string `"NaN"`, as `tests/closed_functions/` does),
+and the one-value and empty axes are rejected by the schema (`minItems: 2`)
+before any binding would see them. The harness lowers the lookup through the
+binding's own §9.5.3 lowering and asserts `expected_error_code` (`null`: the
+lookup lowers). The two-rule cases break two rules ADJACENT in the pinned
+order, so every adjacent pair is pinned, and two pairs are pinned across axes
+(a decreasing first axis with a NaN in the second is `table_axis_nan`; a
+one-value first axis with a decreasing second is `table_axis_non_monotonic`),
+because each step covers every axis before the next begins.
+
 ## Per-binding contract
 
 All five language bindings (Julia, Python, TypeScript, Rust, Go) MUST:
@@ -112,6 +128,7 @@ All five language bindings (Julia, Python, TypeScript, Rust, Go) MUST:
    only inside the binding's own test harness — pinned by `inline_test/`.
 4. Refuse `out_of_bounds: "error"` by name, or implement it — pinned by
    `out_of_bounds_error/`.
-5. Round-trip the loaded file: `parse → serialize → parse → serialize`
+5. Report every `load_errors/` case with its `expected_error_code`.
+6. Round-trip the loaded file: `parse → serialize → parse → serialize`
    yields bit-identical bytes (modulo whitespace), preserving the authored
    `function_tables` block and `table_lookup` nodes.

@@ -106,6 +106,24 @@
       "description": "xs is BOTH non-monotonic (3.0 before 1.0) and contains a NaN later on. NaN takes precedence: the code MUST be 'searchsorted_nan', not 'searchsorted_non_monotonic', even though the decreasing pair comes first (esm-spec §9.2).",
       "inputs": [ 2.0, [3.0, 1.0, "NaN", 4.0] ],
       "expected_error_code": "searchsorted_nan"
+    },
+    {
+      "name": "xs_scalar",
+      "description": "xs is a scalar, not a rank-1 array — bindings MUST reject with 'interp_axis_not_const' (esm-spec §9.2), the code interp.linear / interp.bilinear raise for an axis that is not a const array. (A non-const xs — a variable reference or a non-const expression — gets the same code; this harness passes values, so it can express only the wrong-rank const forms.)",
+      "inputs": [ 2.0, 3.0 ],
+      "expected_error_code": "interp_axis_not_const"
+    },
+    {
+      "name": "xs_nested",
+      "description": "xs is a rank-2 array — not a rank-1 const array, so bindings MUST reject with 'interp_axis_not_const' (esm-spec §9.2).",
+      "inputs": [ 2.0, [[1.0, 2.0], [3.0, 4.0]] ],
+      "expected_error_code": "interp_axis_not_const"
+    },
+    {
+      "name": "xs_nested_with_nan",
+      "description": "xs is a rank-2 array holding a NaN. The rank check comes first (esm-spec §9.2), so the code MUST be 'interp_axis_not_const', not 'searchsorted_nan'.",
+      "inputs": [ 2.0, [[1.0, "NaN"], [3.0, 4.0]] ],
+      "expected_error_code": "interp_axis_not_const"
     }
   ]
 }

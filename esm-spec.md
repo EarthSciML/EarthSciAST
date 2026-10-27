@@ -4296,6 +4296,7 @@ Decomposes a UTC scalar time into proleptic-Gregorian calendar fields. All entri
 Returns the 1-based index `i` of the first element of `xs` that is `≥ x` (left-side bias, equivalent to Julia's `searchsortedfirst`).
 
 - `xs` MUST be a `const`-op array of non-decreasing floats (equal neighbours allowed). Bindings MUST reject non-monotonic `xs` at load time with diagnostic `searchsorted_non_monotonic`.
+- Bindings MUST reject an `xs` that is not a rank-1 `const`-op array — a variable reference, a non-`const` expression, or a `const` whose `value` is a scalar or a nested array — at load time with diagnostic `interp_axis_not_const`, the code `interp.linear` and `interp.bilinear` raise for an axis that is not a `const` array (Errors, below). This check comes first: `searchsorted_nan` and `searchsorted_non_monotonic` are decided only on an `xs` that passes it.
 - `xs` MUST NOT contain NaN. Bindings MUST reject an `xs` containing a NaN entry at load time with diagnostic `searchsorted_nan`, and MUST check for NaN before monotonicity: an `xs` that contains a NaN is reported as `searchsorted_nan` whatever its other entries, never as `searchsorted_non_monotonic`. (A NaN compares false with every value, so whether a comparison-based monotonicity check passes or fails on it depends on how the check is written; checking NaN first makes the verdict independent of that.)
 - Equal values in `xs` (duplicates): the returned index is the **smallest** `i` for which `xs[i] ≥ x`. This makes the result deterministic on duplicate runs and lets authors compose searches (e.g. find the first interval containing `x` even when boundaries coincide).
 - Out-of-range query: if `x ≤ xs[1]`, return `1`. If `x > xs[N]`, return `N + 1` (one past the end). Authors who need clamping wrap the result in `min(N, ...)` using the AST.
@@ -4371,7 +4372,7 @@ Let `axis_x = [x₁, ..., x_{Nx}]`, `axis_y = [y₁, ..., y_{Ny}]`, and `table[i
 | `interp_axis_length_mismatch` | `interp.linear`: `len(table) != len(axis)`. `interp.bilinear`: outer length of `table` differs from `len(axis_x)`, or any row's length differs from `len(axis_y)`. |
 | `interp_nan_in_axis` | Any axis contains NaN. Takes precedence over `interp_non_monotonic_axis`: an axis containing a NaN MUST be reported with `interp_nan_in_axis`, whatever its other entries. |
 | `interp_axis_too_short` | Any axis has fewer than 2 entries (no interval to blend across). |
-| `interp_table_not_const` / `interp_axis_not_const` | The `table` or any axis argument is not a literal `const`-op array (e.g. it is a variable reference or a non-`const` expression). |
+| `interp_table_not_const` / `interp_axis_not_const` | The `table` or any axis argument is not a literal `const`-op array (e.g. it is a variable reference or a non-`const` expression). `interp_axis_not_const` is also the code for an `interp.searchsorted` `xs` that is not a rank-1 `const`-op array (see `interp.searchsorted` above), checked before `searchsorted_nan` and `searchsorted_non_monotonic`. |
 
 **Tolerance:** when bindings implement the pinned evaluation order in IEEE-754 `binary64` arithmetic without fused multiply-add, agreement is **bit-exact** (`{ "abs": 0, "rel": 0 }`) for fixtures whose inputs are exactly representable. The spec does not require FMA, but a binding MAY contract a blend `a + w·(b − a)` into one. Bindings that use FMA selectively MUST ensure their results stay within these absolute bounds of the pinned non-FMA result, where `ulp(v) = 2^max(⌊log₂|v|⌋ − 52, −1074)` is the spacing of `binary64` values at `v`:
 
@@ -4491,7 +4492,7 @@ Components that depend on tabulated functions — most prominently the `fastjx` 
 
 - Each entry is a `FunctionTable` carrying `axes`, `data`, and (optionally) `description`, `interpolation`, `out_of_bounds`, `outputs`, `shape`, `schema_version`.
 - `axes` is an ordered list of named `FunctionTableAxis` entries. Axis order defines the order of inner dimensions of `data` (after the leading output dimension when `outputs` is present). Axis names within a single table MUST be unique. v0.4.0 caps axis count at 2 (matching the §9.2 `interp.linear` / `interp.bilinear` set); higher-dimensional lookups are deferred until the closed registry adds `interp.trilinear`.
-- Each axis declares `name`, `values` (strictly-increasing finite floats, ≥ 2 entries), and an optional advisory `units` string. **`units` is advisory in v0.4.0** — bindings record it for documentation only; load-time unit-checking against `table_lookup.axes` input expressions is deferred to a future units RFC.
+- Each axis declares `name`, `values` (strictly-increasing finite floats, ≥ 2 entries; §9.5.5 names the code for each violation), and an optional advisory `units` string. **`units` is advisory in v0.4.0** — bindings record it for documentation only; load-time unit-checking against `table_lookup.axes` input expressions is deferred to a future units RFC.
 - `interpolation` is `"linear"` (1 axis), `"bilinear"` (2 axes), or `"nearest"` (1 axis: the table value at the knot nearest the query, ties to the lower knot; lowering in §9.5.3). Default is `"linear"`. Bindings MUST reject mismatched (`linear` with 2 axes, `bilinear` with 1 axis, etc.) at load time with diagnostic `table_interpolation_axes_mismatch`.
 - `out_of_bounds` is `"clamp"` (default, matches `interp.linear` / `interp.bilinear` extrapolate-flat semantics) or `"error"` (raise at evaluation time with `table_lookup_out_of_bounds`). v0.4.0 requires all five bindings to implement `"clamp"`; `"error"` is conformant when implemented.
 - `outputs` is an optional ordered list of output names (strings, unique within the table). When present, the leading dimension of `data` MUST equal the length of `outputs`, and `table_lookup.output` MAY name an entry of this list in addition to using a 0-based integer index. When absent, the table is single-output: `data` has no output dimension, and `0` is its only output. Whether or not `outputs` is declared, an omitted `table_lookup.output` means `0`.
@@ -4568,7 +4569,7 @@ For `interpolation: "nearest"` on a 1-axis table, the lookup MUST return `D[k]` 
     x ] }                                                     // NaN query: NaN
 ```
 
-where `j` is `{ "op": "fn", "name": "interp.searchsorted", "args": [ x, A ] }`, `lo` is `{ "op": "max", "args": [ { "op": "-", "args": [ j, 1 ] }, 1 ] }` and `hi` is `{ "op": "min", "args": [ j, N ] }`. Both indices are always in `1..N` — below the range `lo = hi = 1`, above it (and for a NaN query, whose `searchsorted` is `N + 1`) `lo = hi = N` — so no `index` in the tree reads out of range, whichever branch an evaluator takes. "Nearest" and "tie" are decided on the two `binary64` differences `A[hi] − x` and `x − A[lo]` as the tree computes them; because both are computed in every binding with the same two subtractions, every binding picks the same knot, including on a query a rounding error away from a midpoint. The result is always an entry of `D`, so it is exact. With `out_of_bounds: "error"`, a binding that implements the mode raises `table_lookup_out_of_bounds` for a query strictly below `A[1]` or strictly above `A[N]` (§9.5.3a) and otherwise evaluates this tree.
+where `j` is `{ "op": "fn", "name": "interp.searchsorted", "args": [ x, A ] }`, `lo` is `{ "op": "max", "args": [ { "op": "-", "args": [ j, 1 ] }, 1 ] }` and `hi` is `{ "op": "min", "args": [ j, N ] }`. Both indices are always in `1..N` — below the range `lo = hi = 1`, above it (and for a NaN query, whose `searchsorted` is `N + 1`) `lo = hi = N` — so no `index` in the tree reads out of range, whichever branch an evaluator takes. "Nearest" and "tie" are decided on the two `binary64` differences `A[hi] − x` and `x − A[lo]` as the tree computes them; because both are computed in every binding with the same two subtractions, every binding picks the same knot, including on a query a rounding error away from a midpoint. The knot so picked is the truly nearest one (by exact distance, ties to the lower) except in one case: when the upper bracketing knot `A[hi]` is strictly nearer to `x` than `A[lo]`, by at most `ulp(x − A[lo])` (the §9.2 spacing), the two rounded differences can compare equal and the tree returns the lower knot. It never errs toward the upper knot. (Proven in `formal/`: `Esm.Closed.Tables.nearest64_spec` for the bound, `Esm.Closed.Tables.nearest64_not_exact` for a query where it is attained; fixture `q_rounding_tie` in `tests/conformance/function_tables/nearest/` pins the binary64 answer.) The result is always an entry of `D`, so it is exact. With `out_of_bounds: "error"`, a binding that implements the mode raises `table_lookup_out_of_bounds` for a query strictly below `A[1]` or strictly above `A[N]` (§9.5.3a) and otherwise evaluates this tree.
 
 Bindings MAY satisfy this lowering by an in-memory transformation at load time (resulting AST contains no `table_lookup` nodes after load) or by a thin evaluator that dispatches on `table_lookup` directly to the existing `interp.linear` / `interp.bilinear` / `index` implementations. Both are conformant. The serializer of every binding MUST round-trip the authored form (see §9.5.4).
 
@@ -4587,6 +4588,7 @@ The migration of inline-const lookups to tables is a one-shot author-driven refa
 |---|---|
 | `table_axis_non_monotonic` | An axis's `values` is not strictly increasing. |
 | `table_axis_nan` | An axis's `values` contains NaN. Takes precedence over `table_axis_non_monotonic`: an axis containing a NaN MUST be reported with `table_axis_nan`, whatever its other entries. |
+| `table_axis_too_short` | An axis's `values` has fewer than 2 entries (§9.5.1). The schema rejects such an axis too (`minItems: 2`); the code is what a binding raises where schema validation did not run, such as on a table built in memory. |
 | `table_data_shape_mismatch` | The actual nesting of `data` does not match the shape implied by `axes` (and `outputs`, when present), or the redundant `shape` assertion does not match `data`. |
 | `table_data_nan` | A leaf of `data` is NaN. |
 | `table_interpolation_axes_mismatch` | `interpolation` and the number of axes are inconsistent (`linear` requires 1, `bilinear` requires 2, `nearest` requires 1). |
@@ -4598,6 +4600,21 @@ The migration of inline-const lookups to tables is a one-shot author-driven refa
 | `table_lookup_output_out_of_range` | `table_lookup.output` integer is ≥ `len(outputs)` (or ≥ 1 when `outputs` is absent: a single-output table has only output `0`), or its string is not an entry of `outputs` (any string, when `outputs` is absent). |
 | `table_lookup_args_nonempty` | A `table_lookup` node carries a non-empty `args` (§9.5.2). An absent `args` is `[]` and is not an error. |
 | `table_out_of_bounds_unsupported` | The referenced table declares `out_of_bounds: "error"` and the binding does not implement that mode. Raised where the binding would otherwise lower or evaluate the lookup — see §9.5.3a. |
+
+**Order of the table checks.** A table can break several of the rules above at once; it is then reported with ONE code, and bindings MUST report the first rule it breaks in this order:
+
+1. `table_axis_duplicate_name`;
+2. `table_outputs_duplicate_name`;
+3. `table_interpolation_axes_mismatch`;
+4. `table_axis_nan` — a NaN in any axis;
+5. `table_axis_non_monotonic` — any axis not strictly increasing;
+6. `table_axis_too_short` — any axis with fewer than 2 values;
+7. `table_outputs_length_mismatch` — `outputs` is declared, `data` is an array, and its length differs from `len(outputs)`;
+8. `table_data_shape_mismatch` — the nesting of `data` differs from the shape implied by `axes` (and `outputs`);
+9. `table_data_nan`;
+10. `table_data_shape_mismatch` — the redundant `shape` assertion differs from the implied shape.
+
+Each step covers every axis of the table before the next step begins, so a table whose first axis is decreasing and whose second axis holds a NaN is `table_axis_nan`, and one whose first axis has a single value and whose second is decreasing is `table_axis_non_monotonic`. The order is a choice, not a consequence of the rules; it is pinned so that every binding names the same rule. (It is the order of `Esm.Closed.Tables.validateTable` in `formal/`; fixtures: `tests/conformance/function_tables/load_errors/`.)
 
 ##### 9.5.3a `out_of_bounds: "error"` in a binding that does not implement it
 
@@ -4614,6 +4631,7 @@ Conformance fixtures under `tests/conformance/function_tables/` exercise:
 5. The `out_of_bounds: "error"` refusal of §9.5.3a — `out_of_bounds_error/`.
 6. `interpolation: "nearest"` through the inline-test runner: queries on a knot, either side of a midpoint, exactly on a midpoint (the tie goes to the lower knot), and below and above the axis (clamped) — `nearest/`.
 7. The defaults of §9.5.2 and §9.5.3 through the inline-test runner: multi-output tables (one 1-axis, one 2-axis) read with `output` omitted (output `0`) beside the same read spelled out and a read of another output, and a single-output table read with `output` omitted and `0` (lowered with the whole `data`) — `lookup_defaults/`.
+8. The §9.5.5 load-time rejections and their order: tables that each break one rule, or two rules adjacent in the order above (with the first one the one to report), each referenced by one `table_lookup` that the binding lowers — `load_errors/` (a `cases.json` ledger rather than `.esm` documents, because several cases need a NaN, which JSON cannot carry, or an axis the schema rejects; NaN is written as the string `"NaN"`, as in `tests/closed_functions/`).
 
 Each fixture pairs an `.esm` file with a small numeric harness that asserts the lowered evaluation matches the equivalent inline-const lookup at the §9.2 tolerance contract (bit-exact without FMA; the §9.2 absolute ulp bounds when FMA is used). All five bindings MUST pass.
 
