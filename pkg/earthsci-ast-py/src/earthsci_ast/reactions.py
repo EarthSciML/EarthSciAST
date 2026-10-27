@@ -38,7 +38,12 @@ def lower_reactions_to_equations(
 
     Builds ``d[species]/dt = sum_r net_stoich(species, r) * rate(r)`` expressions
     using ESM :class:`ExprNode` trees (not SymPy), so the output is directly
-    usable by any consumer that handles the ESM expression AST.
+    usable by any consumer that handles the ESM expression AST. The tree is the
+    canonical form of esm-libraries-spec §4.6.2, which every binding emits byte
+    for byte (``tests/conformance/reactions/lowering_form.json``): one n-ary
+    ``+`` over a species' terms in reaction order, each term the bare rate law
+    for a net coefficient of 1 and ``coefficient * rate`` otherwise, with an
+    integer literal for an integral coefficient.
 
     Args:
         reactions: List of reactions in the system.
@@ -63,7 +68,11 @@ def lower_reactions_to_equations(
     # Julia reference (flatten.jl `lower_reactions_to_equations`,
     # `species[i].constant === true && continue`).
     constant_names = {s.name for s in species if s.constant is True}
-    species_rates: dict[str, Expr] = dict.fromkeys(species_names, 0)
+    # Each species' terms, in reaction order. A list rather than a running sum:
+    # the canonical form (esm-libraries-spec §4.6.2) is ONE n-ary ``+`` over the
+    # terms, and an empty list -- not a literal zero -- is what means "no
+    # equation".
+    species_terms: dict[str, list[Expr]] = {name: [] for name in species_names}
 
     for reaction in reactions:
         if reaction.rate_constant is None:
@@ -78,37 +87,34 @@ def lower_reactions_to_equations(
                 raise ValueError(f"Product {product} not found in species list")
 
         # Per esm-spec.md §7.4 the ``rate`` field is the rate COEFFICIENT.
-        # The full mass-action rate law is always ``k · ∏ Sᵢ^nᵢ`` — the
-        # runner is responsible for the substrate product. No heuristic.
-        rate_expr: Expr = reaction.rate_constant
-        for reactant, coeff in reaction.reactants.items():
-            if coeff == 1:
-                rate_expr = _multiply_expressions(rate_expr, reactant)
-            else:
-                power_expr = _power_expression(reactant, coeff)
-                rate_expr = _multiply_expressions(rate_expr, power_expr)
+        # The full mass-action rate law is always ``k · ∏ Sᵢ^nᵢ`` -- the
+        # runner is responsible for the substrate product. No heuristic, and no
+        # simplification: a literal ``1`` or ``0`` rate stays in the tree.
+        rate_expr = _mass_action_rate(reaction.rate_constant, reaction.reactants)
 
         # Apply net stoichiometry (product_coeff - reactant_coeff) to species rates.
         for species_name in species_names:
-            net_stoich_coeff = 0
-            if species_name in reaction.reactants:
-                net_stoich_coeff -= reaction.reactants[species_name]
-            if species_name in reaction.products:
-                net_stoich_coeff += reaction.products[species_name]
-
-            if net_stoich_coeff != 0:
-                contribution = _multiply_expressions(net_stoich_coeff, rate_expr)
-                species_rates[species_name] = _add_expressions(
-                    species_rates[species_name], contribution
-                )
+            net_stoich_coeff = reaction.products.get(species_name, 0) - reaction.reactants.get(
+                species_name, 0
+            )
+            if net_stoich_coeff == 0:
+                continue
+            if net_stoich_coeff == 1:
+                term: Expr = rate_expr
+            else:
+                term = ExprNode(op="*", args=[_stoich_literal(net_stoich_coeff), rate_expr])
+            species_terms[species_name].append(term)
 
     equations: list[Equation] = []
     for species_name in species_names:
         if species_name in constant_names:
             continue
-        if species_rates[species_name] != 0:
-            lhs = ExprNode(op="D", args=[species_name], wrt="t")
-            equations.append(Equation(lhs=lhs, rhs=species_rates[species_name]))
+        terms = species_terms[species_name]
+        if not terms:
+            continue
+        rhs = terms[0] if len(terms) == 1 else ExprNode(op="+", args=list(terms))
+        lhs = ExprNode(op="D", args=[species_name], wrt="t")
+        equations.append(Equation(lhs=lhs, rhs=rhs))
 
     return equations
 
@@ -289,38 +295,29 @@ def product_matrix(system: ReactionSystem) -> np.ndarray:
     return _build_stoich_matrix(system, lambda r, s: r.products.get(s, 0))
 
 
-# Helper functions for expression manipulation
+# Helper functions for the canonical lowering (esm-libraries-spec §4.6.2)
 
 
-def _multiply_expressions(expr1: Expr, expr2: Expr) -> Expr:
-    """Multiply two expressions."""
-    if expr1 == 0:
-        return 0
-    if expr2 == 0:
-        return 0
-    if expr1 == 1:
-        return expr2
-    if expr2 == 1:
-        return expr1
-
-    return ExprNode(op="*", args=[expr1, expr2])
+def _stoich_literal(value: int | float) -> int | float:
+    """A stoichiometric coefficient or exponent as the literal the tree carries:
+    an ``int`` when the value is integral (CONFORMANCE_SPEC §5.5.3.1 rule 3),
+    the ``float`` otherwise."""
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return value
 
 
-def _add_expressions(expr1: Expr, expr2: Expr) -> Expr:
-    """Add two expressions."""
-    if expr1 == 0:
-        return expr2
-    if expr2 == 0:
-        return expr1
-
-    return ExprNode(op="+", args=[expr1, expr2])
-
-
-def _power_expression(base: Expr, exponent: float) -> Expr:
-    """Create a power expression."""
-    if exponent == 1:
-        return base
-    if exponent == 0:
-        return 1
-
-    return ExprNode(op="^", args=[base, exponent])
+def _mass_action_rate(rate: Expr, reactants: dict[str, int | float]) -> Expr:
+    """The rate law ``k · ∏ Sᵢ^nᵢ``: the coefficient alone for a source
+    reaction, otherwise one n-ary ``*`` with the coefficient FIRST and one
+    factor per substrate in listed order -- the bare species for a coefficient
+    of 1, ``Sᵢ ^ nᵢ`` otherwise."""
+    if not reactants:
+        return rate
+    factors: list[Expr] = [rate]
+    for reactant, coeff in reactants.items():
+        if coeff == 1:
+            factors.append(reactant)
+        else:
+            factors.append(ExprNode(op="^", args=[reactant, _stoich_literal(coeff)]))
+    return ExprNode(op="*", args=factors)

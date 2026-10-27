@@ -971,6 +971,59 @@ error and no `X`.
 > is declared and touched by no reaction. This clause is the ruling that closed it, in favour of
 > the four.
 
+#### 4.6.2 The exact tree `derive_odes` emits (normative)
+
+`derive_odes` and §4.7.5 step 1 build every species' right-hand side as ONE exact expression
+tree, the same in every binding. A flattened equation's terms are copied verbatim into derived
+documents, so two bindings that build arithmetically equal but differently shaped trees write
+different bytes; this section leaves nothing to choose. For a reaction `j` with `rate` `k`
+and substrate entries `(S₁, n₁), …, (S_m, n_m)` in listed order, and a species `X`:
+
+1. **Rate law `v_j`.** With no substrates (`substrates` null or empty), `v_j` is `k` itself,
+   unchanged. Otherwise it is one n-ary product with `k` FIRST and one factor per substrate
+   entry, in listed order:
+   `{"op": "*", "args": [k, F₁, …, F_m]}`, where `Fᵢ` is the species name `Sᵢ` when `nᵢ = 1`
+   and `{"op": "^", "args": [Sᵢ, nᵢ]}` otherwise. A reservoir species (§4.6.1) is a factor
+   like any other.
+2. **Net coefficient `c`.** `c = P − S`, where `P` is the sum of `X`'s product coefficients in
+   reaction `j` and `S` the sum of its substrate coefficients (each 0 when `X` is absent from
+   that side), computed in IEEE-754 binary64. A species on both sides gets one term for the
+   reaction, not two (`A + B → 2 A` gives `A` the coefficient `+1`), and `c = 0` (a catalyst)
+   gives no term.
+3. **Term.** When `c = 1` the term is `v_j` itself. Otherwise it is the two-operand product
+   `{"op": "*", "args": [c, v_j]}`, coefficient FIRST, with `v_j` kept as one operand rather
+   than spliced into it. A loss of 1 is therefore `{"op": "*", "args": [-1, v_j]}`: not a
+   unary `-`, and not the float `-1.0`.
+4. **Right-hand side.** `X`'s terms, in reaction declaration order. One term is the
+   right-hand side itself; two or more are one n-ary sum `{"op": "+", "args": [t₁, …, t_r]}`,
+   never nested two-operand sums. No terms means no equation (§4.6.1).
+5. **Literals.** A coefficient `c` or an exponent `nᵢ` whose value is integral is an INTEGER
+   literal (CONFORMANCE_SPEC §5.5.3.1 rule 3): `-1`, `-2`, `{"op": "^", "args": ["A", 2]}`. A
+   non-integral one is a float literal (`1.5`, `-0.75`).
+6. **No simplification.** Nothing else is rewritten. `k` is copied as authored (a literal `1`
+   rate gives `{"op": "*", "args": [1, "A"]}`, not `A`), and no factor, term or sum is
+   reordered, merged, folded or dropped.
+
+The left-hand side is `{"op": "D", "args": [X], "wrt": "t"}`. In `flatten`, step 2 then
+namespaces every name, the derived equation is one contribution whose origin is the reaction
+system (§4.7.5, per-term provenance), and the pointwise lift (esm-spec §10.5) replaces each
+species reference by its per-cell `index` node and changes nothing else in the tree.
+
+Rules 3 and 4 are both the literal reading of esm-spec §7.4, `dX/dt += net_stoich_X · v`
+summed over reactions. Rule 3 keeps one shape for every coefficient, so a loss is not a special
+case, and keeping `v_j` whole means `c · (k · ∏ Sᵢ^nᵢ)` evaluates in the same order in every
+binding. Evaluated left to right, the n-ary sum of rule 4 gives the same bits as the left-fold
+of two-operand sums, so the choice between the two changes bytes, not numbers.
+
+> **Note (was a cross-binding divergence).** Before this section the five bindings wrote five
+> trees for one reaction network. Julia wrote a loss of 1 as a unary `-` and any other
+> coefficient as a float (`-2.0`); Rust wrote every coefficient as a float (`-1.0 * v`);
+> Python, Go and TypeScript's `flatten` nested every product and sum two operands at a time
+> and dropped a literal `1` rate; TypeScript's `derive_odes` used the unary `-` and emitted
+> `D(X, t) = 0` for a species in no reaction, against §4.6.1.
+> `tests/conformance/reactions/lowering_form.json` now pins the tree, compared as JSON with
+> integer and non-integer numbers kept apart, in all five bindings.
+
 ### 4.7 Coupling Resolution
 
 Libraries at **all tiers** (including Core) must implement coupling resolution as a **flattening** operation: transforming a set of coupled component systems into a single flat equation system with dot-namespaced variables. This flattened representation is the canonical intermediate form — it is the output of coupling resolution and the input to simulation backends, graph construction, and validation.
@@ -1298,7 +1351,7 @@ All libraries (including Core tier) must implement the flattening algorithm. Fla
 
 **Algorithm:**
 
-1. **Derive ODEs from reaction systems.** For each reaction system in the file, generate the equivalent ODE equations using the stoichiometry and rate laws (as specified in Section 4.6 `derive_odes`). This converts reaction systems into a uniform equation-based representation.
+1. **Derive ODEs from reaction systems.** For each reaction system in the file, generate the equivalent ODE equations using the stoichiometry and rate laws (as specified in Section 4.6 `derive_odes`, in the exact tree of §4.6.2). This converts reaction systems into a uniform equation-based representation.
 
 2. **Namespace all variables.** For each component system (model, or derived ODE system from a reaction system):
    - Prefix every variable, parameter, and species name with the system name and a dot.
@@ -2850,7 +2903,7 @@ The following items are acknowledged gaps in this specification. They do not blo
 
 | Issue | Affected area | Notes |
 |---|---|---|
-| `derive_odes` algorithm not fully specified | Section 4.6 | Standard mass-action kinetics ODE generation from stoichiometry + rate laws. Need to specify handling of source reactions (null substrates), sink reactions (null products), and constraint equations. |
+| `derive_odes` handling of constraint equations not specified | Section 4.6 | The derived ODE tree, source (null substrates) and sink (null products) reactions included, is fixed by §4.6.2. How a reaction system's `constraint_equations` join the derived model is still open. |
 | Stoichiometric matrix convention not stated | Section 4.6 | Must specify: species × reactions (rows × columns), net stoichiometry (products − substrates). |
 | Expression graph edge rules for reactions are ambiguous | Section 4.8.2 | The rule for which nodes get edges (self-loops, rate parameter edges) needs a precise algorithm, not just an example. |
 | Unit string parsing grammar undefined | Section 3.3 | Unit strings are free-form. A formal grammar or recognized-token list (including `molec`, `ppb`, `ppm`) would improve cross-language consistency. |

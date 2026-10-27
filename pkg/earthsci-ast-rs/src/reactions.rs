@@ -98,18 +98,23 @@ pub fn lower_reactions_to_equations(
         for reaction in reactions {
             // v0.2.x allows fractional stoichiometries; accumulate in f64 so
             // products like `0.87 CH2O` survive the ODE lowering unchanged.
-            let mut net_stoichiometry: f64 = 0.0;
+            // The net coefficient is `P - S` (esm-libraries-spec §4.6.2): the
+            // species' product and substrate coefficients are each summed in
+            // listed order and differenced once.
+            let mut produced: f64 = 0.0;
+            let mut consumed: f64 = 0.0;
 
             for substrate in reaction.substrates.iter().flatten() {
                 if &substrate.species == sp_name {
-                    net_stoichiometry -= substrate.coefficient;
+                    consumed += substrate.coefficient;
                 }
             }
             for product in reaction.products.iter().flatten() {
                 if &product.species == sp_name {
-                    net_stoichiometry += product.coefficient;
+                    produced += product.coefficient;
                 }
             }
+            let net_stoichiometry = produced - consumed;
 
             if net_stoichiometry != 0.0 {
                 let enhanced_rate = enhance_rate_with_mass_action(
@@ -117,14 +122,17 @@ pub fn lower_reactions_to_equations(
                     reaction.substrates.as_deref().unwrap_or(&[]),
                 );
 
+                // The canonical term (esm-libraries-spec §4.6.2): the bare
+                // rate law for a net coefficient of exactly 1, otherwise the
+                // two-operand product `coefficient * rate`, coefficient first,
+                // an INTEGER literal when integral. A loss of 1 is
+                // `-1 * rate`; `-1.0` would serialize as a float.
                 if net_stoichiometry == 1.0 {
                     rate_terms.push(enhanced_rate);
                 } else {
-                    // Covers -1.0 too: `Number(net_stoichiometry)` is exactly
-                    // `Number(-1.0)` when the coefficient is -1.
                     rate_terms.push(Expr::operator(ExpressionNode {
                         op: "*".to_string(),
-                        args: vec![Expr::Number(net_stoichiometry), enhanced_rate],
+                        args: vec![stoich_literal(net_stoichiometry), enhanced_rate],
                         wrt: None,
                         dim: None,
                         ..Default::default()
@@ -173,6 +181,17 @@ pub fn lower_reactions_to_equations(
     }
 
     Ok(equations)
+}
+
+/// A stoichiometric coefficient or exponent as the literal the lowered tree
+/// carries: [`Expr::Integer`] when the value is integral and fits `i64`
+/// (CONFORMANCE_SPEC §5.5.3.1 rule 3), [`Expr::Number`] otherwise.
+fn stoich_literal(value: f64) -> Expr {
+    if value.fract() == 0.0 && (i64::MIN as f64..=i64::MAX as f64).contains(&value) {
+        Expr::Integer(value as i64)
+    } else {
+        Expr::Number(value)
+    }
 }
 
 /// Generate ODE model from a reaction system
@@ -295,12 +314,7 @@ fn enhance_rate_with_mass_action(rate: &Expr, substrates: &[crate::Stoichiometri
         if coeff == 1.0 {
             concentration_factors.push(species_var);
         } else {
-            let exponent =
-                if coeff.fract() == 0.0 && (i64::MIN as f64..=i64::MAX as f64).contains(&coeff) {
-                    Expr::Integer(coeff as i64)
-                } else {
-                    Expr::Number(coeff)
-                };
+            let exponent = stoich_literal(coeff);
             concentration_factors.push(Expr::operator(ExpressionNode {
                 op: "^".to_string(),
                 args: vec![species_var, exponent],
@@ -884,8 +898,10 @@ mod tests {
                 assert_eq!(node.args.len(), 2);
                 // First arg should be -1, second should be k_deg * A
                 match &node.args[0] {
-                    Expr::Number(n) => assert_eq!(*n, -1.0),
-                    _ => panic!("Expected -1 as first argument"),
+                    // An INTEGER literal (esm-libraries-spec §4.6.2), never
+                    // the float `-1.0`.
+                    Expr::Integer(n) => assert_eq!(*n, -1),
+                    _ => panic!("Expected the integer literal -1 as first argument"),
                 }
             }
             _ => panic!(

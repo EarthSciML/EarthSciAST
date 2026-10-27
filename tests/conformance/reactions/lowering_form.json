@@ -1,0 +1,609 @@
+{
+  "description": "Cross-binding pin for the EXACT TREE a reaction system lowers to, in derive_odes and in flatten (esm-libraries-spec §4.6.2). Every binding must produce these expressions, compared as JSON with integer and non-integer numbers kept apart. Hand-written: the expected trees follow from the §4.6.2 rules applied to each document, and were cross-checked against all five bindings; there is no generator and no oracle binding.",
+  "why": "Derived documents copy flattened terms verbatim, so two bindings that lower the same reaction to different trees write different bytes. Before §4.6.2 they did: Julia wrote a loss as a unary minus and other coefficients as floats (`-2.0`), Rust as `-1.0 * rate`, Python, Go and TypeScript's flatten nested every `*` and `+` two operands at a time and dropped a literal `1` rate, and TypeScript's derive_odes used a unary minus and emitted `D(X, t) = 0` for a species in no reaction.",
+  "how_to_drive": "For each case load `document`. (1) derive_odes on the reaction system named `system`: its equation list, in order, serialized with the binding's own expression writer, must equal `derive_odes` (each `{lhs, rhs}`). (2) flatten the document. Take, in order, the flattened equations that carry a contribution whose origins are exactly `[{\"component\": system}]`; there must be exactly one such contribution per equation and as many equations as `flatten` entries. Entry k's `species` is the species whose derivative the k-th equation's left-hand side takes (`D(x, t)`, or for a lifted equation the `faq` whose `expr` is `D(index(x, ...), t)`), and its `contribution` is that contribution's expression. When `lifted` is false the equation must also have exactly that one contribution, its right-hand side must equal `contribution`, and its left-hand side must be `D(species, t)`. Numbers compare by value and by kind: an integer literal in the corpus must be an integer literal in the binding (CONFORMANCE_SPEC §5.5.3.1 rule 3), so `-1.0` fails where `-1` is expected; TypeScript, whose numbers carry no kind, compares by value only.",
+  "cases": [
+    {
+      "name": "photostationary_loss_and_production",
+      "description": "NO2 <-> NO + O3 with a parameter rate (R1) and an expression rate (R2). Every net coefficient is +1 or -1: a production term is the bare rate law, a loss term is `-1 * rate` with the INTEGER -1 (never a unary minus, never the float -1.0). Each species has two terms, so each right-hand side is one n-ary `+`. Species are declared NO2, NO, O3 -- not sorted.",
+      "system": "Chem",
+      "lifted": false,
+      "derive_odes": [
+        {
+          "lhs": {"op": "D", "args": ["NO2"], "wrt": "t"},
+          "rhs": {"op": "+", "args": [{"op": "*", "args": [-1, {"op": "*", "args": ["j", "NO2"]}]}, {"op": "*", "args": [{"op": "*", "args": [1.8e-12, {"op": "exp", "args": [{"op": "/", "args": [-1370, "T"]}]}]}, "NO", "O3"]}]}
+        },
+        {
+          "lhs": {"op": "D", "args": ["NO"], "wrt": "t"},
+          "rhs": {"op": "+", "args": [{"op": "*", "args": ["j", "NO2"]}, {"op": "*", "args": [-1, {"op": "*", "args": [{"op": "*", "args": [1.8e-12, {"op": "exp", "args": [{"op": "/", "args": [-1370, "T"]}]}]}, "NO", "O3"]}]}]}
+        },
+        {
+          "lhs": {"op": "D", "args": ["O3"], "wrt": "t"},
+          "rhs": {"op": "+", "args": [{"op": "*", "args": ["j", "NO2"]}, {"op": "*", "args": [-1, {"op": "*", "args": [{"op": "*", "args": [1.8e-12, {"op": "exp", "args": [{"op": "/", "args": [-1370, "T"]}]}]}, "NO", "O3"]}]}]}
+        }
+      ],
+      "flatten": [
+        {
+          "species": "Chem.NO2",
+          "contribution": {"op": "+", "args": [{"op": "*", "args": [-1, {"op": "*", "args": ["Chem.j", "Chem.NO2"]}]}, {"op": "*", "args": [{"op": "*", "args": [1.8e-12, {"op": "exp", "args": [{"op": "/", "args": [-1370, "Chem.T"]}]}]}, "Chem.NO", "Chem.O3"]}]}
+        },
+        {
+          "species": "Chem.NO",
+          "contribution": {"op": "+", "args": [{"op": "*", "args": ["Chem.j", "Chem.NO2"]}, {"op": "*", "args": [-1, {"op": "*", "args": [{"op": "*", "args": [1.8e-12, {"op": "exp", "args": [{"op": "/", "args": [-1370, "Chem.T"]}]}]}, "Chem.NO", "Chem.O3"]}]}]}
+        },
+        {
+          "species": "Chem.O3",
+          "contribution": {"op": "+", "args": [{"op": "*", "args": ["Chem.j", "Chem.NO2"]}, {"op": "*", "args": [-1, {"op": "*", "args": [{"op": "*", "args": [1.8e-12, {"op": "exp", "args": [{"op": "/", "args": [-1370, "Chem.T"]}]}]}, "Chem.NO", "Chem.O3"]}]}]}
+        }
+      ],
+      "document": {
+        "esm": "1.3.0",
+        "metadata": {
+          "name": "reaction_lowering_photostationary"
+        },
+        "reaction_systems": {
+          "Chem": {
+            "species": {
+              "NO2": {
+                "default": 10.5
+              },
+              "NO": {
+                "default": 5.5
+              },
+              "O3": {
+                "default": 40.5
+              }
+            },
+            "parameters": {
+              "j": {
+                "default": 0.0125
+              },
+              "T": {
+                "default": 298.5
+              }
+            },
+            "reactions": [
+              {
+                "id": "R1",
+                "substrates": [
+                  {
+                    "species": "NO2",
+                    "stoichiometry": 1
+                  }
+                ],
+                "products": [
+                  {
+                    "species": "NO",
+                    "stoichiometry": 1
+                  },
+                  {
+                    "species": "O3",
+                    "stoichiometry": 1
+                  }
+                ],
+                "rate": "j"
+              },
+              {
+                "id": "R2",
+                "substrates": [
+                  {
+                    "species": "NO",
+                    "stoichiometry": 1
+                  },
+                  {
+                    "species": "O3",
+                    "stoichiometry": 1
+                  }
+                ],
+                "products": [
+                  {
+                    "species": "NO2",
+                    "stoichiometry": 1
+                  }
+                ],
+                "rate": {"op": "*", "args": [1.8e-12, {"op": "exp", "args": [{"op": "/", "args": [-1370, "T"]}]}]}
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "stoichiometry_and_rate_forms",
+      "description": "Every lowering branch in one network. R3 `2 A -> B`: the factor `A ^ 2` (integer exponent) and A's coefficient -2. R4 `A + B -> 2 A`: A on both sides, net +1, so A's term is the bare rate law. R5 `B -> 1.5 C`: an integer rate literal 3 and a fractional coefficient 1.5. R6 is a source (rate alone), R7 a sink. R8 `A + C -> B + C`: C is a catalyst, net 0, so R8 gives C no term. R9 `3 B -> B`: net -2 with `B ^ 3`. R10 has the reservoir M as a factor; M itself gets no equation. R11 has the literal rate 1, which stays in the tree (`1 * O3`). R12 `C -> 0.25 C`: a fractional net -0.75. R13 `0.5 O3 -> NO`: a fractional exponent. X is in no reaction and gets no equation.",
+      "system": "Chem",
+      "lifted": false,
+      "derive_odes": [
+        {
+          "lhs": {"op": "D", "args": ["NO2"], "wrt": "t"},
+          "rhs": {"op": "+", "args": [{"op": "*", "args": [-1, {"op": "*", "args": ["j", "NO2"]}]}, {"op": "*", "args": [{"op": "*", "args": [1.8e-12, {"op": "exp", "args": [{"op": "/", "args": [-1370, "T"]}]}]}, "NO", "O3"]}, {"op": "*", "args": ["k1", "M", "NO"]}]}
+        },
+        {
+          "lhs": {"op": "D", "args": ["NO"], "wrt": "t"},
+          "rhs": {"op": "+", "args": [{"op": "*", "args": ["j", "NO2"]}, {"op": "*", "args": [-1, {"op": "*", "args": [{"op": "*", "args": [1.8e-12, {"op": "exp", "args": [{"op": "/", "args": [-1370, "T"]}]}]}, "NO", "O3"]}]}, {"op": "*", "args": [-1, {"op": "*", "args": ["k1", "M", "NO"]}]}, {"op": "*", "args": ["k1", {"op": "^", "args": ["O3", 0.5]}]}]}
+        },
+        {
+          "lhs": {"op": "D", "args": ["O3"], "wrt": "t"},
+          "rhs": {"op": "+", "args": [{"op": "*", "args": ["j", "NO2"]}, {"op": "*", "args": [-1, {"op": "*", "args": [{"op": "*", "args": [1.8e-12, {"op": "exp", "args": [{"op": "/", "args": [-1370, "T"]}]}]}, "NO", "O3"]}]}, {"op": "*", "args": [-1, {"op": "*", "args": [1, "O3"]}]}, {"op": "*", "args": [-0.5, {"op": "*", "args": ["k1", {"op": "^", "args": ["O3", 0.5]}]}]}]}
+        },
+        {
+          "lhs": {"op": "D", "args": ["A"], "wrt": "t"},
+          "rhs": {"op": "+", "args": [{"op": "*", "args": [-2, {"op": "*", "args": [0.5, {"op": "^", "args": ["A", 2]}]}]}, {"op": "*", "args": ["k2", "A", "B"]}, "e", {"op": "*", "args": [-1, {"op": "*", "args": ["k3", "A", "C"]}]}]}
+        },
+        {
+          "lhs": {"op": "D", "args": ["B"], "wrt": "t"},
+          "rhs": {"op": "+", "args": [{"op": "*", "args": [0.5, {"op": "^", "args": ["A", 2]}]}, {"op": "*", "args": [-1, {"op": "*", "args": ["k2", "A", "B"]}]}, {"op": "*", "args": [-1, {"op": "*", "args": [3, "B"]}]}, {"op": "*", "args": ["k3", "A", "C"]}, {"op": "*", "args": [-2, {"op": "*", "args": [2.5, {"op": "^", "args": ["B", 3]}]}]}]}
+        },
+        {
+          "lhs": {"op": "D", "args": ["C"], "wrt": "t"},
+          "rhs": {"op": "+", "args": [{"op": "*", "args": [1.5, {"op": "*", "args": [3, "B"]}]}, {"op": "*", "args": [-1, {"op": "*", "args": ["kd", "C"]}]}, {"op": "*", "args": [-0.75, {"op": "*", "args": ["kd", "C"]}]}]}
+        }
+      ],
+      "flatten": [
+        {
+          "species": "Chem.NO2",
+          "contribution": {"op": "+", "args": [{"op": "*", "args": [-1, {"op": "*", "args": ["Chem.j", "Chem.NO2"]}]}, {"op": "*", "args": [{"op": "*", "args": [1.8e-12, {"op": "exp", "args": [{"op": "/", "args": [-1370, "Chem.T"]}]}]}, "Chem.NO", "Chem.O3"]}, {"op": "*", "args": ["Chem.k1", "Chem.M", "Chem.NO"]}]}
+        },
+        {
+          "species": "Chem.NO",
+          "contribution": {"op": "+", "args": [{"op": "*", "args": ["Chem.j", "Chem.NO2"]}, {"op": "*", "args": [-1, {"op": "*", "args": [{"op": "*", "args": [1.8e-12, {"op": "exp", "args": [{"op": "/", "args": [-1370, "Chem.T"]}]}]}, "Chem.NO", "Chem.O3"]}]}, {"op": "*", "args": [-1, {"op": "*", "args": ["Chem.k1", "Chem.M", "Chem.NO"]}]}, {"op": "*", "args": ["Chem.k1", {"op": "^", "args": ["Chem.O3", 0.5]}]}]}
+        },
+        {
+          "species": "Chem.O3",
+          "contribution": {"op": "+", "args": [{"op": "*", "args": ["Chem.j", "Chem.NO2"]}, {"op": "*", "args": [-1, {"op": "*", "args": [{"op": "*", "args": [1.8e-12, {"op": "exp", "args": [{"op": "/", "args": [-1370, "Chem.T"]}]}]}, "Chem.NO", "Chem.O3"]}]}, {"op": "*", "args": [-1, {"op": "*", "args": [1, "Chem.O3"]}]}, {"op": "*", "args": [-0.5, {"op": "*", "args": ["Chem.k1", {"op": "^", "args": ["Chem.O3", 0.5]}]}]}]}
+        },
+        {
+          "species": "Chem.A",
+          "contribution": {"op": "+", "args": [{"op": "*", "args": [-2, {"op": "*", "args": [0.5, {"op": "^", "args": ["Chem.A", 2]}]}]}, {"op": "*", "args": ["Chem.k2", "Chem.A", "Chem.B"]}, "Chem.e", {"op": "*", "args": [-1, {"op": "*", "args": ["Chem.k3", "Chem.A", "Chem.C"]}]}]}
+        },
+        {
+          "species": "Chem.B",
+          "contribution": {"op": "+", "args": [{"op": "*", "args": [0.5, {"op": "^", "args": ["Chem.A", 2]}]}, {"op": "*", "args": [-1, {"op": "*", "args": ["Chem.k2", "Chem.A", "Chem.B"]}]}, {"op": "*", "args": [-1, {"op": "*", "args": [3, "Chem.B"]}]}, {"op": "*", "args": ["Chem.k3", "Chem.A", "Chem.C"]}, {"op": "*", "args": [-2, {"op": "*", "args": [2.5, {"op": "^", "args": ["Chem.B", 3]}]}]}]}
+        },
+        {
+          "species": "Chem.C",
+          "contribution": {"op": "+", "args": [{"op": "*", "args": [1.5, {"op": "*", "args": [3, "Chem.B"]}]}, {"op": "*", "args": [-1, {"op": "*", "args": ["Chem.kd", "Chem.C"]}]}, {"op": "*", "args": [-0.75, {"op": "*", "args": ["Chem.kd", "Chem.C"]}]}]}
+        }
+      ],
+      "document": {
+        "esm": "1.3.0",
+        "metadata": {
+          "name": "reaction_lowering_forms"
+        },
+        "reaction_systems": {
+          "Chem": {
+            "species": {
+              "NO2": {
+                "default": 10.5
+              },
+              "NO": {
+                "default": 5.5
+              },
+              "O3": {
+                "default": 40.5
+              },
+              "A": {
+                "default": 1.5
+              },
+              "B": {
+                "default": 2.5
+              },
+              "C": {
+                "default": 3.5
+              },
+              "M": {
+                "default": 7.5,
+                "constant": true
+              },
+              "X": {
+                "default": 0.5
+              }
+            },
+            "parameters": {
+              "j": {
+                "default": 0.0125
+              },
+              "T": {
+                "default": 298.5
+              },
+              "k1": {
+                "default": 0.25
+              },
+              "k2": {
+                "default": 0.75
+              },
+              "k3": {
+                "default": 0.125
+              },
+              "e": {
+                "default": 0.0625
+              },
+              "kd": {
+                "default": 0.375
+              }
+            },
+            "reactions": [
+              {
+                "id": "R1",
+                "substrates": [
+                  {
+                    "species": "NO2",
+                    "stoichiometry": 1
+                  }
+                ],
+                "products": [
+                  {
+                    "species": "NO",
+                    "stoichiometry": 1
+                  },
+                  {
+                    "species": "O3",
+                    "stoichiometry": 1
+                  }
+                ],
+                "rate": "j"
+              },
+              {
+                "id": "R2",
+                "substrates": [
+                  {
+                    "species": "NO",
+                    "stoichiometry": 1
+                  },
+                  {
+                    "species": "O3",
+                    "stoichiometry": 1
+                  }
+                ],
+                "products": [
+                  {
+                    "species": "NO2",
+                    "stoichiometry": 1
+                  }
+                ],
+                "rate": {"op": "*", "args": [1.8e-12, {"op": "exp", "args": [{"op": "/", "args": [-1370, "T"]}]}]}
+              },
+              {
+                "id": "R3",
+                "substrates": [
+                  {
+                    "species": "A",
+                    "stoichiometry": 2
+                  }
+                ],
+                "products": [
+                  {
+                    "species": "B",
+                    "stoichiometry": 1
+                  }
+                ],
+                "rate": 0.5
+              },
+              {
+                "id": "R4",
+                "substrates": [
+                  {
+                    "species": "A",
+                    "stoichiometry": 1
+                  },
+                  {
+                    "species": "B",
+                    "stoichiometry": 1
+                  }
+                ],
+                "products": [
+                  {
+                    "species": "A",
+                    "stoichiometry": 2
+                  }
+                ],
+                "rate": "k2"
+              },
+              {
+                "id": "R5",
+                "substrates": [
+                  {
+                    "species": "B",
+                    "stoichiometry": 1
+                  }
+                ],
+                "products": [
+                  {
+                    "species": "C",
+                    "stoichiometry": 1.5
+                  }
+                ],
+                "rate": 3
+              },
+              {
+                "id": "R6",
+                "substrates": null,
+                "products": [
+                  {
+                    "species": "A",
+                    "stoichiometry": 1
+                  }
+                ],
+                "rate": "e"
+              },
+              {
+                "id": "R7",
+                "substrates": [
+                  {
+                    "species": "C",
+                    "stoichiometry": 1
+                  }
+                ],
+                "products": null,
+                "rate": "kd"
+              },
+              {
+                "id": "R8",
+                "substrates": [
+                  {
+                    "species": "A",
+                    "stoichiometry": 1
+                  },
+                  {
+                    "species": "C",
+                    "stoichiometry": 1
+                  }
+                ],
+                "products": [
+                  {
+                    "species": "B",
+                    "stoichiometry": 1
+                  },
+                  {
+                    "species": "C",
+                    "stoichiometry": 1
+                  }
+                ],
+                "rate": "k3"
+              },
+              {
+                "id": "R9",
+                "substrates": [
+                  {
+                    "species": "B",
+                    "stoichiometry": 3
+                  }
+                ],
+                "products": [
+                  {
+                    "species": "B",
+                    "stoichiometry": 1
+                  }
+                ],
+                "rate": 2.5
+              },
+              {
+                "id": "R10",
+                "substrates": [
+                  {
+                    "species": "M",
+                    "stoichiometry": 1
+                  },
+                  {
+                    "species": "NO",
+                    "stoichiometry": 1
+                  }
+                ],
+                "products": [
+                  {
+                    "species": "NO2",
+                    "stoichiometry": 1
+                  }
+                ],
+                "rate": "k1"
+              },
+              {
+                "id": "R11",
+                "substrates": [
+                  {
+                    "species": "O3",
+                    "stoichiometry": 1
+                  }
+                ],
+                "products": null,
+                "rate": 1
+              },
+              {
+                "id": "R12",
+                "substrates": [
+                  {
+                    "species": "C",
+                    "stoichiometry": 1
+                  }
+                ],
+                "products": [
+                  {
+                    "species": "C",
+                    "stoichiometry": 0.25
+                  }
+                ],
+                "rate": "kd"
+              },
+              {
+                "id": "R13",
+                "substrates": [
+                  {
+                    "species": "O3",
+                    "stoichiometry": 0.5
+                  }
+                ],
+                "products": [
+                  {
+                    "species": "NO",
+                    "stoichiometry": 1
+                  }
+                ],
+                "rate": "k1"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "lifted_pointwise",
+      "description": "The network lifted pointwise onto 4 cells by an operator_compose with a deposition model (EarthSciIntegrator's pointwise_chemistry fixture plus R3 `2 NO2 -> NO2 + 1.5 NO`). The lift indexes every species reference per cell and changes nothing else, so the reaction system's contribution has exactly the scalar form. Only that contribution is compared: the equation's left-hand side and `faq` wrapper carry the lift's own range spelling, which this corpus does not pin.",
+      "system": "Chem",
+      "lifted": true,
+      "derive_odes": [
+        {
+          "lhs": {"op": "D", "args": ["NO2"], "wrt": "t"},
+          "rhs": {"op": "+", "args": [{"op": "*", "args": [-1, {"op": "*", "args": ["j", "NO2"]}]}, {"op": "*", "args": ["k", "NO", "O3"]}, {"op": "*", "args": [-1, {"op": "*", "args": [0.5, {"op": "^", "args": ["NO2", 2]}]}]}]}
+        },
+        {
+          "lhs": {"op": "D", "args": ["NO"], "wrt": "t"},
+          "rhs": {"op": "+", "args": [{"op": "*", "args": ["j", "NO2"]}, {"op": "*", "args": [-1, {"op": "*", "args": ["k", "NO", "O3"]}]}, {"op": "*", "args": [1.5, {"op": "*", "args": [0.5, {"op": "^", "args": ["NO2", 2]}]}]}]}
+        },
+        {
+          "lhs": {"op": "D", "args": ["O3"], "wrt": "t"},
+          "rhs": {"op": "+", "args": [{"op": "*", "args": ["j", "NO2"]}, {"op": "*", "args": [-1, {"op": "*", "args": ["k", "NO", "O3"]}]}]}
+        }
+      ],
+      "flatten": [
+        {
+          "species": "Chem.NO2",
+          "contribution": {"op": "+", "args": [{"op": "*", "args": [-1, {"op": "*", "args": ["Chem.j", {"op": "index", "args": ["Chem.NO2", "i"]}]}]}, {"op": "*", "args": ["Chem.k", {"op": "index", "args": ["Chem.NO", "i"]}, {"op": "index", "args": ["Chem.O3", "i"]}]}, {"op": "*", "args": [-1, {"op": "*", "args": [0.5, {"op": "^", "args": [{"op": "index", "args": ["Chem.NO2", "i"]}, 2]}]}]}]}
+        },
+        {
+          "species": "Chem.NO",
+          "contribution": {"op": "+", "args": [{"op": "*", "args": ["Chem.j", {"op": "index", "args": ["Chem.NO2", "i"]}]}, {"op": "*", "args": [-1, {"op": "*", "args": ["Chem.k", {"op": "index", "args": ["Chem.NO", "i"]}, {"op": "index", "args": ["Chem.O3", "i"]}]}]}, {"op": "*", "args": [1.5, {"op": "*", "args": [0.5, {"op": "^", "args": [{"op": "index", "args": ["Chem.NO2", "i"]}, 2]}]}]}]}
+        },
+        {
+          "species": "Chem.O3",
+          "contribution": {"op": "+", "args": [{"op": "*", "args": ["Chem.j", {"op": "index", "args": ["Chem.NO2", "i"]}]}, {"op": "*", "args": [-1, {"op": "*", "args": ["Chem.k", {"op": "index", "args": ["Chem.NO", "i"]}, {"op": "index", "args": ["Chem.O3", "i"]}]}]}]}
+        }
+      ],
+      "document": {
+        "esm": "1.3.0",
+        "metadata": {
+          "name": "reaction_lowering_lifted",
+          "description": "A reaction system lifted pointwise onto 4 cells by operator_compose with a per-cell deposition sink."
+        },
+        "index_sets": {
+          "cell": {
+            "kind": "interval",
+            "size": 4
+          }
+        },
+        "reaction_systems": {
+          "Chem": {
+            "species": {
+              "NO2": {
+                "default": 10.5
+              },
+              "NO": {
+                "default": 5.5
+              },
+              "O3": {
+                "default": 40.5
+              }
+            },
+            "parameters": {
+              "j": {
+                "default": 0.0125
+              },
+              "k": {
+                "default": 0.00044
+              }
+            },
+            "reactions": [
+              {
+                "id": "R1",
+                "substrates": [
+                  {
+                    "species": "NO2",
+                    "stoichiometry": 1
+                  }
+                ],
+                "products": [
+                  {
+                    "species": "NO",
+                    "stoichiometry": 1
+                  },
+                  {
+                    "species": "O3",
+                    "stoichiometry": 1
+                  }
+                ],
+                "rate": "j"
+              },
+              {
+                "id": "R2",
+                "substrates": [
+                  {
+                    "species": "NO",
+                    "stoichiometry": 1
+                  },
+                  {
+                    "species": "O3",
+                    "stoichiometry": 1
+                  }
+                ],
+                "products": [
+                  {
+                    "species": "NO2",
+                    "stoichiometry": 1
+                  }
+                ],
+                "rate": "k"
+              },
+              {
+                "id": "R3",
+                "substrates": [
+                  {
+                    "species": "NO2",
+                    "stoichiometry": 2
+                  }
+                ],
+                "products": [
+                  {
+                    "species": "NO2",
+                    "stoichiometry": 1
+                  },
+                  {
+                    "species": "NO",
+                    "stoichiometry": 1.5
+                  }
+                ],
+                "rate": 0.5
+              }
+            ]
+          }
+        },
+        "models": {
+          "Dep": {
+            "variables": {
+              "kd": {
+                "type": "parameter",
+                "default": 0.0002
+              },
+              "cellw": {
+                "type": "parameter",
+                "shape": [
+                  "cell"
+                ],
+                "default": 1.5
+              }
+            },
+            "equations": [{"lhs": {"op": "D", "args": ["_var"], "wrt": "t"}, "rhs": {"op": "makearray", "args": [], "regions": [[[1, 4]]], "values": [{"op": "faq", "args": [], "output_idx": ["i"], "ranges": {"i": [1, 4]}, "expr": {"op": "*", "args": [-1, "Dep.kd", {"op": "index", "args": ["Dep.cellw", "i"]}, {"op": "index", "args": ["_var", "i"]}]}}]}}]
+          }
+        },
+        "coupling": [
+          {
+            "type": "operator_compose",
+            "systems": [
+              "Chem",
+              "Dep"
+            ],
+            "lifting": "pointwise"
+          }
+        ]
+      }
+    }
+  ]
+}

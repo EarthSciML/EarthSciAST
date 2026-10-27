@@ -402,6 +402,11 @@ mass-action kinetics: `d[X]/dt = Σ (stoich_ij * rate_j)`.
 Shared by `derive_odes` (reaction → Model) and `flatten` (EsmFile → FlattenedSystem)
 so there is exactly one place that turns stoichiometry into equations.
 
+The tree is the canonical form esm-libraries-spec §4.6.2 pins byte for byte
+across the bindings (`tests/conformance/reactions/lowering_form.json`): an
+n-ary `+` over the species' terms in reaction order, each term the bare rate
+law or `stoich * rate` with an integer literal for an integral coefficient.
+
 The LHS is always `D(X, t)` symbolically, regardless of the document's
 domain — dimension promotion (§4.7.6) is applied by `flatten`, not here.
 Spatial operators are added downstream when coupling adds them.
@@ -428,6 +433,12 @@ function lower_reactions_to_equations(reactions::Vector{Reaction},
 
     n_species = length(species_names)
     n_rxns = length(reactions)
+    # Net stoichiometry is `P - S` (esm-libraries-spec §4.6.2): `P` sums the
+    # species' product coefficients in the reaction and `S` its substrate
+    # coefficients, each in listed order, and the difference is taken once.
+    # Accumulating one signed running sum instead rounds differently for a
+    # species listed more than once with fractional coefficients.
+    P = zeros(Float64, n_species, n_rxns)
     S = zeros(Float64, n_species, n_rxns)
 
     for (j, rxn) in enumerate(reactions)
@@ -441,7 +452,11 @@ function lower_reactions_to_equations(reactions::Vector{Reaction},
                 "'$sp', which the reaction system does not declare";
                 code=ERROR_CODES.UNDEFINED_SPECIES,
                 details=Dict{String,Any}("species" => sp, "reaction_id" => rxn.id)))
-            S[species_idx[sp], j] += signed_stoich
+            if signed_stoich < 0
+                S[species_idx[sp], j] -= signed_stoich
+            else
+                P[species_idx[sp], j] += signed_stoich
+            end
         end
     end
 
@@ -451,17 +466,19 @@ function lower_reactions_to_equations(reactions::Vector{Reaction},
         # `mass_action_rate` reads it from `species` either way.
         species[i].constant === true && continue
         terms = ASTExpr[]
-        for (j, rxn) in enumerate(reactions)
-            stoich = S[i, j]
+        for j in 1:n_rxns
+            stoich = P[i, j] - S[i, j]
             stoich == 0 && continue
-            rate_expr = mass_action_rate(rxn, species)
+            # The canonical term (esm-libraries-spec §4.6.2): the bare rate law
+            # for a net stoichiometry of exactly 1, and otherwise the two-operand
+            # product `stoich * rate` with the coefficient FIRST and spelled as
+            # an integer literal when it is integral. A loss of 1 is
+            # `-1 * rate`, not a unary minus.
+            rate_expr = mass_action_rate(reactions[j], species)
             if stoich == 1
                 push!(terms, rate_expr)
-            elseif stoich == -1
-                push!(terms, OpExpr("-", ASTExpr[rate_expr]))
             else
-                push!(terms, OpExpr("*",
-                    ASTExpr[NumExpr(Float64(stoich)), rate_expr]))
+                push!(terms, OpExpr("*", ASTExpr[_stoich_literal(stoich), rate_expr]))
             end
         end
         # A species with NO net contribution from any reaction gets NO equation,
@@ -473,7 +490,7 @@ function lower_reactions_to_equations(reactions::Vector{Reaction},
         # rule and the second is its answer.
         #
         # This is also what the other four bindings do (Python `reactions.py`,
-        # Rust `reactions.rs`, Go `flatten.go`, TypeScript `flatten.ts`); Julia
+        # Rust `reactions.rs`, Go `flatten.go`, TypeScript `reactions.ts`); Julia
         # emitting the zero was a 4-1 outlier, and the divergence was recorded in
         # `flatten_conformance_test.jl`'s `_FC_DIVERGENCES` until this changed.
         isempty(terms) && continue
@@ -484,6 +501,12 @@ function lower_reactions_to_equations(reactions::Vector{Reaction},
 
     return equations
 end
+
+# A stoichiometric coefficient or exponent as the literal the lowered tree
+# carries: an integer literal when the value is integral (CONFORMANCE_SPEC
+# §5.5.3.1 rule 3), a float literal otherwise.
+_stoich_literal(x::Real)::ASTExpr =
+    (isinteger(x) && typemin(Int64) <= x <= typemax(Int64)) ? IntExpr(Int64(x)) : NumExpr(Float64(x))
 
 # ========================================
 # Spatial-axis detection (structural, esm-spec §4.2 / §4.9.1(ii) / §11.2)
