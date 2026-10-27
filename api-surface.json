@@ -95,17 +95,17 @@
     }
   },
   "counts": {
-    "symbols": 995,
+    "symbols": 1002,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
       "julia": 341,
       "typescript": 245,
       "python": 271,
       "rust": 382,
-      "go": 462
+      "go": 469
     },
     "by_tier": {
-      "extension": 693,
+      "extension": 700,
       "stable": 302
     }
   },
@@ -1350,6 +1350,14 @@
       }
     },
     {
+      "name": "code_interp_axis_not_const",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeInterpAxisNotConst"
+      }
+    },
+    {
       "name": "code_interp_axis_too_short",
       "kind": "constant",
       "tier": "extension",
@@ -1702,11 +1710,43 @@
       }
     },
     {
+      "name": "code_table_axis_duplicate_name",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTableAxisDuplicateName"
+      }
+    },
+    {
       "name": "code_table_axis_na_n",
       "kind": "constant",
       "tier": "extension",
       "bindings": {
         "go": "CodeTableAxisNaN"
+      }
+    },
+    {
+      "name": "code_table_axis_non_monotonic",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTableAxisNonMonotonic"
+      }
+    },
+    {
+      "name": "code_table_axis_too_short",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTableAxisTooShort"
+      }
+    },
+    {
+      "name": "code_table_data_na_n",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTableDataNaN"
       }
     },
     {
@@ -1763,6 +1803,22 @@
       "tier": "extension",
       "bindings": {
         "go": "CodeTableOutOfBoundsUnsupported"
+      }
+    },
+    {
+      "name": "code_table_outputs_duplicate_name",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTableOutputsDuplicateName"
+      }
+    },
+    {
+      "name": "code_table_outputs_length_mismatch",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTableOutputsLengthMismatch"
       }
     },
     {
