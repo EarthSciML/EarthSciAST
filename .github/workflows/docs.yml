@@ -4,8 +4,12 @@ name: docs
 # Nothing of the docs machinery lives in this repo: extraction, rendering and
 # bundling all run from EarthSciML/earthsci.dev (DESIGN.md there).
 #
-# On push to main: extract API docs, build the docs bundle, publish it to this
-# repo's `docs-bundle` branch and notify earthsci.dev, which rebuilds the site.
+# On push to main: extract API docs, build the docs bundle, merge it into this
+# repo's `docs-bundle` branch as the `dev` version and notify earthsci.dev,
+# which rebuilds the site.
+# On a push of a release tag vX.Y.Z: the same from the code at that tag, but
+# only the API reference is published, as that version (the narrative docs
+# always come from main). The site then offers the version in its selector.
 # On pull requests: the same, minus publishing and notifying (validation only).
 #
 # Needs the repo (or org) secret SITE_DISPATCH_TOKEN: a token with contents:write
@@ -14,12 +18,15 @@ name: docs
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
+# Publishing merges into one shared branch; tools/publish.py retries on a
+# conflict, but a tag build should still never be cancelled by a later push.
 concurrency:
   group: docs-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -74,12 +81,16 @@ jobs:
       - uses: actions/checkout@v4
 
       # Prebuild: every narrative page is assembled, validated, tested and
-      # plotted. A broken model in the documentation fails here.
+      # plotted. A broken model in the documentation fails here. A tag build
+      # publishes only the API reference, so it skips the narrative pages.
       - uses: dtolnay/rust-toolchain@stable
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
       - uses: Swatinem/rust-cache@v2
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         with:
           workspaces: pkg/earthsci-narrative
       - name: Build narrative pages
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         run: cargo run --manifest-path pkg/earthsci-narrative/Cargo.toml --bin esm-narrative -- build
 
       - name: Download extracted docstrings
