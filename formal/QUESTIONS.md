@@ -776,3 +776,31 @@ with a pending question among its own clauses.
 - Found by: phase-1 binding work
 - Problem: §9.5.1 and the schema require finite values, but the codes only name NaN; bindings differ on infinities in tables built in memory.
 - Ruling: Editorial (2026-10-27): a non-finite value (NaN or ±Inf) is reported by `table_axis_nan` / `table_data_nan`; the code descriptions say "not finite".
+
+## Q-110 esm-spec.md §9.2: order of the interp.linear / interp.bilinear argument checks
+- Clauses: `spec.9.2.interp-axis-no-nan`
+- Phase: 1
+- Found by: phase-1 binding work
+- Problem: Beyond not-const first and Q-4, the order of too-short, length-mismatch, NaN and non-monotonic differs across bindings.
+- Ruling: (2026-10-27) not-const/rank → too short → length mismatch → NaN → non-monotonic (the Lean/Python order).
+
+## Q-111 esm-spec.md §9.2: an empty table for interp.bilinear
+- Clauses: `spec.9.2.interp-axis-no-nan`
+- Phase: 1
+- Found by: phase-1 binding work
+- Problem: `[]` as a bilinear table reads as rank 1 (Rust, Lean) or an empty rank-2 table (Go, TypeScript).
+- Ruling: (2026-10-27) `[]` is rank 1, so `interp_table_not_const` (Q-108's wrong-rank rule).
+
+## Q-112 esm-spec.md §9.2, §9.5.2: the remaining static checks run at load
+- Clauses: `spec.9.5.5.table-check-order`
+- Phase: 1
+- Found by: phase-1 binding work
+- Problem: After Q-106, a `table_lookup`'s own checks (unknown table, non-empty args, axis keys, output) and `interp.*` arity still run at lowering/evaluation in most bindings.
+- Ruling: (2026-10-27) Both move to load and `validate()`, like Q-106; they become `tests/invalid` fixtures.
+
+## Q-113 esm-spec.md §9.2, §9.5: editorial consequences of Q-106..Q-112
+- Clauses: `spec.9.5.5.table-check-order`
+- Phase: 1
+- Found by: phase-1 binding work
+- Problem: (a) which error a document with several failures reports; (b) an infinite `interp.*` axis entry has no code; (c) a `fn` inside an expression-template body.
+- Ruling: Editorial (2026-10-27): (a) tables are checked before `fn` nodes, as all five bindings already do, and the spec says so; (b) a non-finite axis entry is `interp_nan_in_axis` (the Q-109 reading); (c) checked where the template is applied.
