@@ -28,6 +28,23 @@
         40.0,
         80.0
       ]
+    },
+    "signed": {
+      "description": "Knots -1 and 1 (synthetic): a query 2^-60 above the midpoint 0 is strictly nearer knot 1, but both binary64 differences 1 - x and x - (-1) round to 1, so the section 9.5.3 comparison (decided on those rounded differences) selects the lower knot.",
+      "axes": [
+        {
+          "name": "p",
+          "values": [
+            -1.0,
+            1.0
+          ]
+        }
+      ],
+      "interpolation": "nearest",
+      "data": [
+        10.0,
+        20.0
+      ]
     }
   },
   "models": {
@@ -152,6 +169,16 @@
           "type": "unknown",
           "units": "1",
           "default": 0.0
+        },
+        "n_rounding_tie": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0
+        },
+        "q_rounding_tie": {
+          "type": "parameter",
+          "units": "1",
+          "default": 8.673617379884035e-19
         }
       },
       "equations": [
@@ -476,12 +503,23 @@
               "q_tie_2_4"
             ]
           }
+        },
+        {
+          "lhs": "n_rounding_tie",
+          "rhs": {
+            "op": "table_lookup",
+            "table": "signed",
+            "axes": {
+              "p": "q_rounding_tie"
+            },
+            "args": []
+          }
         }
       ],
       "tests": [
         {
           "id": "nearest_knot_ties_low_and_clamps",
-          "description": "q_below = 0.0 -> 10.0 (below the first knot: clamps to D[1]); q_first = 1.0 -> 10.0 (on the first knot); q_tie_1_2 = 1.5 -> 10.0 (midpoint of knots 1 and 2: a tie goes to the LOWER knot); q_near_lo = 2.9 -> 20.0 (nearer knot 2 (0.9) than knot 4 (1.1)); q_tie_2_4 = 3.0 -> 20.0 (midpoint of knots 2 and 4: tie, lower knot); q_near_hi = 3.1 -> 40.0 (nearer knot 4 (0.9) than knot 2 (1.1): first knot >= x, and here also the nearest); q_knot = 4.0 -> 40.0 (on an interior knot); q_tie_4_8 = 6.0 -> 40.0 (midpoint of knots 4 and 8: tie, lower knot); q_just_above_tie = 6.5 -> 80.0 (just past the 4-8 midpoint: upper knot); q_last = 8.0 -> 80.0 (on the last knot); q_above = 100.0 -> 80.0 (above the last knot: clamps to D[N] (the old index(D, searchsorted) lowering read D[N+1] here))",
+          "description": "q_below = 0.0 -> 10.0 (below the first knot: clamps to D[1]); q_first = 1.0 -> 10.0 (on the first knot); q_tie_1_2 = 1.5 -> 10.0 (midpoint of knots 1 and 2: a tie goes to the LOWER knot); q_near_lo = 2.9 -> 20.0 (nearer knot 2 (0.9) than knot 4 (1.1)); q_tie_2_4 = 3.0 -> 20.0 (midpoint of knots 2 and 4: tie, lower knot); q_near_hi = 3.1 -> 40.0 (nearer knot 4 (0.9) than knot 2 (1.1): first knot >= x, and here also the nearest); q_knot = 4.0 -> 40.0 (on an interior knot); q_tie_4_8 = 6.0 -> 40.0 (midpoint of knots 4 and 8: tie, lower knot); q_just_above_tie = 6.5 -> 80.0 (just past the 4-8 midpoint: upper knot); q_last = 8.0 -> 80.0 (on the last knot); q_above = 100.0 -> 80.0 (above the last knot: clamps to D[N] (the old index(D, searchsorted) lowering read D[N+1] here)); q_rounding_tie = 2^-60 on the signed table (knots -1, 1) -> 10.0: knot 1 is nearer by 2^-59 in exact arithmetic, but the spec decides on the binary64 differences 1 - x and x + 1, which both round to 1.0, a tie that goes to the lower knot (formal: Esm.Closed.Tables.nearest64_not_exact)",
           "time_span": {
             "start": 0.0,
             "end": 1.0
@@ -546,6 +584,11 @@
               "variable": "n_tie_2_4_hand",
               "time": 0.0,
               "expected": 20.0
+            },
+            {
+              "variable": "n_rounding_tie",
+              "time": 0.0,
+              "expected": 10.0
             }
           ]
         }

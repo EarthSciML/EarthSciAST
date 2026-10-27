@@ -145,10 +145,41 @@
       "clauses": [
         "spec.9.5.table-lookup-bit-equivalent"
       ],
-      "statement": "The model's nearest lowering index(data, searchsorted(x, midpoints(axis))) evaluates to the nearest semantics.",
-      "lean_statement": "∀ (tables : List (String × Esm.Closed.Tables.FTable)) (env : String → Esm.Closed.Num) (v : List Esm.Closed.Num) (r0 : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) r0 → (2 : ℕ) ≤ r0.length → v.length = r0.length → ∀ (xe : Esm.Closed.Tables.Expr) (x0 : Esm.Closed.Num), Esm.Closed.Tables.eval tables env xe = Except.ok (Esm.Closed.Tables.Val.num x0) → Esm.Closed.Tables.eval tables env (Esm.Closed.Tables.Expr.index [Esm.Closed.Tables.Expr.const (Esm.Closed.Tables.ofVec v), Esm.Closed.Tables.Expr.fn \"interp.searchsorted\" [xe, Esm.Closed.Tables.Expr.const (Esm.Closed.Tables.ofVec (Esm.Closed.Tables.mids (List.map Esm.Closed.Num.fin r0)))]]) = Except.ok (Esm.Closed.Tables.Val.num (Esm.Closed.Tables.nearest v (List.map Esm.Closed.Num.fin r0) x0))",
+      "statement": "The §9.5.3 nearest tree ifelse(x==x, index(D, ifelse(A[hi]−x < x−A[lo], hi, lo)), x), j = searchsorted(x, A), lo = max(j−1, 1), hi = min(j, N), evaluated with EXACT arithmetic, is the value at the nearest knot (ties low, clamped), and NaN for a NaN query.",
+      "lean_statement": "∀ (tables : List (String × Esm.Closed.Tables.FTable)) (env : String → Esm.Closed.Num) (v : List Esm.Closed.Num) (r0 : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) r0 → (2 : ℕ) ≤ r0.length → v.length = r0.length → ∀ (xe : Esm.Closed.Tables.Expr) (x0 : Esm.Closed.Num), Esm.Closed.Tables.eval tables env xe = Except.ok (Esm.Closed.Tables.Val.num x0) → Esm.Closed.Tables.eval tables env (Esm.Closed.Tables.nearestTree (Esm.Closed.Tables.ofVec v) (List.map Esm.Closed.Num.fin r0) xe) = Except.ok (Esm.Closed.Tables.Val.num (Esm.Closed.Tables.nearest v (List.map Esm.Closed.Num.fin r0) x0))",
       "status": "proven",
       "theorem": "Esm.Closed.Tables.eval_nearest_lowered"
+    },
+    {
+      "id": "P-tables-nearest-bracket",
+      "clauses": [
+        "spec.9.5.table-lookup-bit-equivalent"
+      ],
+      "statement": "With exact distances, the nearest knot (least argmin, ties low) is hi when A[hi] − x < x − A[lo] and lo otherwise, lo/hi the bracketing knots of searchsorted.",
+      "lean_statement": "∀ (a : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) a → (2 : ℕ) ≤ a.length → ∀ (x : ℝ), Esm.Closed.Tables.nearestIdx a x = if a.getD (Min.min (List.findIdx (fun (b : ℝ) => Decidable.decide (x ≤ b)) a) (a.length - (1 : ℕ))) (0 : ℝ) - x < x - a.getD (List.findIdx (fun (b : ℝ) => Decidable.decide (x ≤ b)) a - (1 : ℕ)) (0 : ℝ) then Min.min (List.findIdx (fun (b : ℝ) => Decidable.decide (x ≤ b)) a) (a.length - (1 : ℕ)) else List.findIdx (fun (b : ℝ) => Decidable.decide (x ≤ b)) a - (1 : ℕ)",
+      "status": "proven",
+      "theorem": "Esm.Closed.Tables.nearestIdx_bracket"
+    },
+    {
+      "id": "P-tables-nearest64-exact",
+      "clauses": [
+        "spec.9.5.table-lookup-bit-equivalent"
+      ],
+      "statement": "Q-13 for the §9.5.3 tree with its two subtractions in binary64: for every strictly increasing axis of doubles and double query it selects the true nearest knot. REFUTED: axis [−1, 1], x = 2^−60; knot 1 is nearer but 1 ⊖ x = x ⊖ (−1) = 1, so the tree returns knot −1.",
+      "lean_statement": "∀ (a : List ℝ) (x : ℝ), List.Pairwise (fun (p q : ℝ) => p < q) a → 2 ≤ a.length → (∀ b ∈ a, Esm.F64.Repr b) → Esm.F64.Repr x → Esm.Closed.Tables.nearest64 a x = Esm.Closed.Tables.nearestIdx a x",
+      "status": "refuted",
+      "theorem": "Esm.Closed.Tables.nearest64_not_exact",
+      "reproducer": "tests/conformance/function_tables/nearest/fixture.esm"
+    },
+    {
+      "id": "P-tables-nearest64-weak",
+      "clauses": [
+        "spec.9.5.table-lookup-bit-equivalent"
+      ],
+      "statement": "What holds in binary64: the tree selects the true nearest knot, except that when the upper bracketing knot is strictly nearer it may select the lower one, and only when the two exact distances differ by at most ulp(x − A[lo]); it never errs toward the upper knot.",
+      "lean_statement": "∀ (a : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) a → (2 : ℕ) ≤ a.length → ∀ (x : ℝ), Esm.Closed.Tables.nearest64 a x = Esm.Closed.Tables.nearestIdx a x ∨ Esm.Closed.Tables.nearest64 a x = Esm.Closed.Tables.nlo a x ∧ Esm.Closed.Tables.nearestIdx a x = Esm.Closed.Tables.nhi a x ∧ (0 : ℝ) < x - a.getD (Esm.Closed.Tables.nlo a x) (0 : ℝ) - (a.getD (Esm.Closed.Tables.nhi a x) (0 : ℝ) - x) ∧ x - a.getD (Esm.Closed.Tables.nlo a x) (0 : ℝ) - (a.getD (Esm.Closed.Tables.nhi a x) (0 : ℝ) - x) ≤ Esm.F64.ulp (x - a.getD (Esm.Closed.Tables.nlo a x) (0 : ℝ))",
+      "status": "proven",
+      "theorem": "Esm.Closed.Tables.nearest64_spec"
     },
     {
       "id": "P-tables-nearest-argmin",
@@ -188,14 +219,6 @@
       ],
       "status": "open",
       "statement": "§9.5.1 requires ≥ 2 values per axis but §9.5.5 has no code for a 1-value axis; the model rejects under a non-spec marker. Needs a ruling."
-    },
-    {
-      "id": "P-tables-nearest-nan-query",
-      "clauses": [
-        "spec.9.5.table-lookup-bit-equivalent"
-      ],
-      "status": "open",
-      "statement": "Q-13 does not say what nearest returns for a NaN query (§9.5.3a's 'a NaN query yields NaN' was written for linear). The model and its lowering return the last knot's value; NaN is the other candidate. Needs a ruling."
     }
   ]
 }

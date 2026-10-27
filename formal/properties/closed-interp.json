@@ -395,6 +395,26 @@
       "theorem": "Esm.Closed.Rounding.blend64_w_one_le"
     },
     {
+      "id": "P-interp-bilinear-errs",
+      "clauses": [
+        "spec.9.2.interp-fma-tolerance"
+      ],
+      "statement": "For double corners and weights in [0, 1], the pinned binary64 bilinear result is within 11/2·ulp(max |corner|) of the exact bilinear value, and the all-FMA result within 3·ulp.",
+      "lean_statement": "∀ (t00 t10 t01 t11 wx wy : ℝ), Esm.F64.Repr t00 → Esm.F64.Repr t10 → Esm.F64.Repr t01 → Esm.F64.Repr t11 → (0 : ℝ) ≤ wx → wx ≤ (1 : ℝ) → (0 : ℝ) ≤ wy → wy ≤ (1 : ℝ) → have M := Max.max (Max.max |t00| |t10|) (Max.max |t01| |t11|); |Esm.Closed.Rounding.bilinear64 t00 t10 t01 t11 wx wy - Esm.Closed.Rounding.bilinearR t00 t10 t01 t11 wx wy| ≤ (11 / 2 : ℝ) * Esm.F64.ulp M ∧ |Esm.Closed.Rounding.bilinearFMA t00 t10 t01 t11 wx wy - Esm.Closed.Rounding.bilinearR t00 t10 t01 t11 wx wy| ≤ (3 : ℝ) * Esm.F64.ulp M",
+      "status": "proven",
+      "theorem": "Esm.Closed.Rounding.bilinear_errs"
+    },
+    {
+      "id": "P-interp-bilinear-fma-bound",
+      "clauses": [
+        "spec.9.2.interp-fma-tolerance"
+      ],
+      "statement": "Q-6 for interp.bilinear: the all-FMA and the pinned evaluations differ by at most 17/2·ulp(max |corner|).",
+      "lean_statement": "∀ (t00 t10 t01 t11 wx wy : ℝ), Esm.F64.Repr t00 → Esm.F64.Repr t10 → Esm.F64.Repr t01 → Esm.F64.Repr t11 → (0 : ℝ) ≤ wx → wx ≤ (1 : ℝ) → (0 : ℝ) ≤ wy → wy ≤ (1 : ℝ) → |Esm.Closed.Rounding.bilinear64 t00 t10 t01 t11 wx wy - Esm.Closed.Rounding.bilinearFMA t00 t10 t01 t11 wx wy| ≤ (17 / 2 : ℝ) * Esm.F64.ulp (Max.max (Max.max |t00| |t10|) (Max.max |t01| |t11|))",
+      "status": "proven",
+      "theorem": "Esm.Closed.Rounding.bilinear_fma_le"
+    },
+    {
       "id": "P-enum-unique-values",
       "clauses": [
         "spec.9.3.enum-values-unique",
@@ -444,7 +464,7 @@
         "spec.9.2.interp-fma-tolerance"
       ],
       "status": "open",
-      "statement": "§9.2 'w = 1 ⇒ result = t_i + (t_{i+1} − t_i) = t_{i+1}' as exact binary64 equality. Lean refutes it (Esm.Closed.Rounding.blend64_w_one_refuted: 1 ⊕ (1 ⊗ (2^−60 ⊖ 1)) = 0), but no QUESTIONS.md entry or fixture records it yet, so it cannot be registered as refuted; see P-interp-endpoint-w1-sterbenz / -bound for what holds."
+      "statement": "§9.2 'w = 1 ⇒ result = t_i + (t_{i+1} − t_i) = t_{i+1}' as exact binary64 equality. Lean refutes it (Esm.Closed.Rounding.blend64_w_one_refuted, ¬ Esm.Closed.Rounding.WOneExact: 1 ⊕ (1 ⊗ (2^−60 ⊖ 1)) = 0), but no QUESTIONS.md entry or fixture records it yet, so it cannot be registered as refuted; see P-interp-endpoint-w1-sterbenz / -bound for what holds."
     },
     {
       "id": "P-interp-bilinear-alt-cell-binary64",
@@ -455,12 +475,12 @@
       "statement": "§9.2 bilinear step 2: the alternative cell i = k−1 (wx = 1) is BIT-identical to the pinned i = k under the pinned form. False in binary64 by the same counterexample as P-interp-endpoint-w1-exact-binary64 (rows t[k−1] = 1, t[k] = 2^−60); also refuted for the 'equivalent formulation' clamp(searchsorted(x_q), 2, Nx) − 1, which selects k−1. Needs a QUESTIONS.md entry."
     },
     {
-      "id": "P-interp-bilinear-fma-bound",
+      "id": "P-interp-bilinear-fma-least-constant",
       "clauses": [
         "spec.9.2.interp-fma-tolerance"
       ],
       "status": "open",
-      "statement": "Q-6 for the composed interp.bilinear (all three blends fused vs none): an absolute bound in ulps of the largest corner. Not proven; a randomized search over sparse-mantissa doubles found differences of 4·ulp(max corner), so the linear constant 2 does not carry over."
+      "statement": "The LEAST constant c with |bilinear64 − bilinearFMA| ≤ c·ulp(max |corner|). Proven c ≤ 17/2 (P-interp-bilinear-fma-bound); a randomized search over sparse-mantissa doubles attains 4. The gap [4, 17/2] is open."
     },
     {
       "id": "P-interp-searchsorted-xs-not-const",

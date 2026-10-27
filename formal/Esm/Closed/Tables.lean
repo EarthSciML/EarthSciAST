@@ -289,11 +289,13 @@ def Num.re : Num → ℝ
 def nearestIdx (a : List ℝ) (x : ℝ) : ℕ :=
   a.findIdx (fun ak => a.all (fun aj => decide (|x - ak| ≤ |x - aj|)))
 
-/-- `interpolation: "nearest"` (Q-13). A NaN query has no ruling; the model
-returns the last knot's value, which is what its lowering computes. -/
+/-- `interpolation: "nearest"` (Q-13, §9.5.3): the value at the knot nearest
+`x`, ties to the lower knot, clamped; a NaN query returns NaN (§9.5.3). This
+is the semantics with EXACT distances; the binary64 behaviour of the spec's
+lowering is in `Esm/Closed/Tables/Nearest64.lean`. -/
 def nearest (v : List Num) (ax : List Num) : Num → Num
   | .fin x => v.getD (nearestIdx (ax.map Num.re) x) .nan
-  | .nan => v.getD (ax.length - 1) .nan
+  | .nan => .nan
 
 /-- A query strictly outside an axis (`out_of_bounds: "error"`, §9.5.3a); a
 NaN query is not out of bounds. -/
@@ -332,6 +334,8 @@ inductive Expr where
   | const (c : Nested)
   | fn (name : String) (args : List Expr)
   | index (args : List Expr)
+  /-- The §4.2 ops the nearest lowering uses: `-`, `<`, `==`, `min`, `max`, `ifelse`. -/
+  | op (name : String) (args : List Expr)
   | lookup (table : String) (axes : List (String × Expr)) (output : Option OutSel)
       (args : List Expr)
 
@@ -359,9 +363,25 @@ def indexVal : Val → Val → Except Code Val
     else .error "unspecified:index_out_of_bounds"
   | _, _ => .error "unspecified:index_operand"
 
-/-- Midpoints of adjacent knots, the breakpoints of `nearest`. -/
-def mids (l : List Num) : List Num :=
-  List.zipWith (fun a b => Scalar.div (Scalar.add a b) (Num.fin 2)) l l.tail
+/-- IEEE `==`: false when either side is NaN. -/
+def Num.beq : Num → Num → Bool
+  | .fin a, .fin b => decide (a = b)
+  | _, _ => false
+
+def Num.ofBool (b : Bool) : Num := .fin (if b then 1 else 0)
+
+/-- An `ifelse` condition holds when it is a nonzero number. -/
+def Num.truthy : Num → Bool
+  | .fin r => decide (r ≠ 0)
+  | .nan => false
+
+def Num.max : Num → Num → Num
+  | .fin a, .fin b => .fin (Max.max a b)
+  | _, _ => .nan
+
+def Num.min : Num → Num → Num
+  | .fin a, .fin b => .fin (Min.min a b)
+  | _, _ => .nan
 
 def closedNames : List String :=
   ["datetime.year", "datetime.month", "datetime.day", "datetime.hour", "datetime.minute",
@@ -379,6 +399,7 @@ def eval (tables : List (String × FTable)) (env : String → Num) :
   | .const c => .ok (.arr c)
   | .fn name args => evalFn tables env name args
   | .index args => evalIndex tables env args
+  | .op name args => evalOp tables env name args
   | .lookup tid axes out args => do
     let (T, s) ← prepLookup tables tid (axes.map Prod.fst) out args
     let vals ← evalAxes tables env axes
@@ -407,6 +428,34 @@ def evalFn (tables : List (String × FTable)) (env : String → Num) :
     if name ∈ closedNames then .error "unspecified:arity_or_unmodelled"
     else .error "unknown_closed_function"
 
+/-- `ifelse` evaluates only the branch it takes. -/
+def evalOp (tables : List (String × FTable)) (env : String → Num) :
+    String → List Expr → Except Code Val
+  | "ifelse", [c, a, b] => do
+    let cv ← (← eval tables env c).asNum
+    if Num.truthy cv then eval tables env a else eval tables env b
+  | "-", [a, b] => do
+    let u ← (← eval tables env a).asNum
+    let v ← (← eval tables env b).asNum
+    return .num (Scalar.sub u v)
+  | "<", [a, b] => do
+    let u ← (← eval tables env a).asNum
+    let v ← (← eval tables env b).asNum
+    return .num (Num.ofBool (Scalar.lt u v))
+  | "==", [a, b] => do
+    let u ← (← eval tables env a).asNum
+    let v ← (← eval tables env b).asNum
+    return .num (Num.ofBool (Num.beq u v))
+  | "max", [a, b] => do
+    let u ← (← eval tables env a).asNum
+    let v ← (← eval tables env b).asNum
+    return .num (Num.max u v)
+  | "min", [a, b] => do
+    let u ← (← eval tables env a).asNum
+    let v ← (← eval tables env b).asNum
+    return .num (Num.min u v)
+  | _, _ => .error "unspecified:op_not_modelled"
+
 def evalIndex (tables : List (String × FTable)) (env : String → Num) :
     List Expr → Except Code Val
   | [a, i] => do
@@ -427,6 +476,19 @@ end
 
 /-! ## The §9.5.3 lowering -/
 
+/-- §9.5.3's `nearest` lowering, as the spec writes it:
+`ifelse(x == x, index(D, ifelse(A[hi] − x < x − A[lo], hi, lo)), x)` with
+`j = searchsorted(x, A)`, `lo = max(j − 1, 1)`, `hi = min(j, N)`. -/
+def nearestTree (D : Nested) (A : List Num) (x : Expr) : Expr :=
+  let Ae := Expr.const (ofVec A)
+  let j := Expr.fn "interp.searchsorted" [x, Ae]
+  let lo := Expr.op "max" [.op "-" [j, .lit (.fin 1)], .lit (.fin 1)]
+  let hi := Expr.op "min" [j, .lit (.fin (A.length : ℝ))]
+  .op "ifelse" [.op "==" [x, x],
+    .index [.const D,
+      .op "ifelse" [.op "<" [.op "-" [.index [Ae, hi], x], .op "-" [x, .index [Ae, lo]]], hi, lo]],
+    x]
+
 /-- Lower a `table_lookup` node to closed functions. The `out_of_bounds:
 "error"` mode has no closed-function form (nothing in the AST raises); its
 check stays with the thin evaluator (`lookupValue`), which §9.5.3 permits. -/
@@ -440,9 +502,7 @@ def lower (tables : List (String × FTable)) (tid : String)
   | .bilinear, [a0, a1] =>
     return .fn "interp.bilinear"
       [.const s, .const (ofVec a0.values), .const (ofVec a1.values), inp a0, inp a1]
-  | .nearest, [a0] =>
-    return .index [.const s,
-      .fn "interp.searchsorted" [inp a0, .const (ofVec (mids a0.values))]]
+  | .nearest, [a0] => return nearestTree s a0.values (inp a0)
   | _, _ => .error Codes.interpolationAxesMismatch
 
 /-! ## Facts about literals -/
@@ -595,17 +655,6 @@ theorem slice_shape {T : FTable} (h : validateTable T = .ok ()) {out : Option Ou
 
 /-- Real midpoints of adjacent knots. -/
 def midsR (r : List ℝ) : List ℝ := List.zipWith (fun p q => (p + q) / 2) r r.tail
-
-theorem mids_map (r : List ℝ) : mids (r.map Num.fin) = (midsR r).map Num.fin := by
-  induction r with
-  | nil => rfl
-  | cons a t ih =>
-    cases t with
-    | nil => rfl
-    | cons b t =>
-      simp only [mids, midsR, List.map_cons, List.tail_cons, List.zipWith_cons_cons] at ih ⊢
-      rw [ih]
-      simp [Num.div_fin _ _ (two_ne_zero)]
 
 theorem length_midsR (r : List ℝ) : (midsR r).length = r.length - 1 := by
   simp [midsR, List.length_zipWith, List.length_tail]
@@ -892,44 +941,250 @@ theorem map_re_fin (r : List ℝ) : (r.map Num.fin).map Num.re = r := by
   | nil => rfl
   | cons a r ih => simp only [List.map_cons, Num.re, ih]
 
-/-- The lowered `nearest` tree evaluates to the model's `nearest`. -/
+/-- Characterize `findIdx` by its value (either an index or the length). -/
+theorem findIdx_eq_of {α : Type} {p : α → Bool} {l : List α} {k : ℕ} (hk : k ≤ l.length)
+    (hpos : ∀ (h : k < l.length), p l[k] = true) (hneg : ∀ i (h : i < k), p (l[i]'(by omega)) = false) :
+    l.findIdx p = k := by
+  rcases hk.lt_or_eq with h | h
+  · exact (List.findIdx_eq h).mpr ⟨hpos h, fun i hi => hneg i hi⟩
+  · subst h
+    apply List.findIdx_eq_length.mpr
+    intro x hx
+    obtain ⟨i, hi, rfl⟩ := List.mem_iff_getElem.mp hx
+    exact hneg i hi
+
+/-- §9.5.3 with exact arithmetic: with `j` the first knot `≥ x` (0-based),
+`lo = j − 1` and `hi = min(j, N − 1)`, the nearest knot (least argmin) is `hi`
+when `A[hi] − x < x − A[lo]` and `lo` otherwise. -/
+theorem nearestIdx_bracket (a : List ℝ) (hr : a.Pairwise (· < ·)) (hn : 2 ≤ a.length) (x : ℝ) :
+    nearestIdx a x =
+      if a.getD (min (a.findIdx (fun b => decide (x ≤ b))) (a.length - 1)) 0 - x <
+          x - a.getD (a.findIdx (fun b => decide (x ≤ b)) - 1) 0
+      then min (a.findIdx (fun b => decide (x ≤ b))) (a.length - 1)
+      else a.findIdx (fun b => decide (x ≤ b)) - 1 := by
+  rw [← findIdx_midsR a hr (by omega) x]
+  set j := a.findIdx (fun b => decide (x ≤ b)) with hj
+  have hjle : j ≤ a.length := List.findIdx_le_length
+  have hbelow : ∀ i, i < j → a.getD i 0 < x := by
+    intro i hi
+    have := List.not_of_lt_findIdx (p := fun b => decide (x ≤ b)) (xs := a) (i := i) hi
+    simp only [decide_eq_false_iff_not, not_le] at this
+    rw [List.getD_eq_getElem _ _ (by omega)]; exact this
+  have hat : j < a.length → x ≤ a.getD j 0 := by
+    intro h
+    have := List.findIdx_getElem (p := fun b => decide (x ≤ b)) (xs := a) (w := h)
+    simp only [decide_eq_true_eq] at this
+    rw [List.getD_eq_getElem _ _ h]; exact this
+  have hlm : (midsR a).length = a.length - 1 := length_midsR a
+  have gm : ∀ i (h : i < (midsR a).length),
+      (midsR a)[i] = (a.getD i 0 + a.getD (i + 1) 0) / 2 := by
+    intro i h
+    rw [← getD_midsR (by omega), List.getD_eq_getElem]
+  rcases Nat.eq_zero_or_pos j with h0 | h0
+  · -- below (or on) the first knot
+    rw [h0] at hat ⊢
+    have hx0 := hat (by omega)
+    simp only [Nat.zero_min, Nat.zero_sub, lt_self_iff_false, sub_lt_self_iff, ↓reduceIte]
+    have : ¬ (a.getD 0 0 - x < x - a.getD 0 0) := by intro h; linarith
+    rw [if_neg this]
+    apply findIdx_eq_of (by omega)
+    · intro h
+      have := pw_getD_lt hr (i := 0) (j := 1) (by omega) (by omega)
+      simp only [gm 0 h, decide_eq_true_eq]; linarith
+    · intro i hi; omega
+  rcases (show j = a.length ∨ j < a.length by omega) with hL | hL
+  · -- above the last knot
+    have hxL := hbelow (a.length - 1) (by omega)
+    have e1 : min j (a.length - 1) = a.length - 1 := by omega
+    have e2 : j - 1 = a.length - 1 := by omega
+    rw [e1, e2]
+    have : ¬ (a.getD (a.length - 1) 0 - x < x - a.getD (a.length - 1) 0) ∨ True := Or.inr trivial
+    have hres : (if a.getD (a.length - 1) 0 - x < x - a.getD (a.length - 1) 0
+        then a.length - 1 else a.length - 1) = a.length - 1 := by split_ifs <;> rfl
+    rw [hres]
+    apply findIdx_eq_of (by omega)
+    · intro h; omega
+    · intro i hi
+      have := pw_getD_le hr (i := i + 1) (j := a.length - 1) (by omega) (by omega)
+      have h2 := pw_getD_lt hr (i := i) (j := i + 1) (by omega) (by omega)
+      simp only [gm i (by omega), decide_eq_false_iff_not, not_le]
+      linarith
+  · -- in the cell (j − 1, j)
+    have e1 : min j (a.length - 1) = j := by omega
+    rw [e1]
+    have hxj := hat hL
+    have hxl := hbelow (j - 1) (by omega)
+    have ej : j - 1 + 1 = j := by omega
+    have hneg : ∀ i (h : i < j - 1), decide (x ≤ (midsR a)[i]'(by omega)) = false := by
+      intro i hi
+      have := pw_getD_le hr (i := i + 1) (j := j - 1) (by omega) (by omega)
+      have h2 := pw_getD_lt hr (i := i) (j := i + 1) (by omega) (by omega)
+      simp only [gm i (by omega), decide_eq_false_iff_not, not_le]
+      linarith
+    split_ifs with hc
+    · apply findIdx_eq_of (by omega)
+      · intro h
+        have := pw_getD_lt hr (i := j) (j := j + 1) (by omega) (by omega)
+        simp only [gm j h, decide_eq_true_eq]; linarith
+      · intro i hi
+        rcases (show i < j - 1 ∨ i = j - 1 by omega) with h | h
+        · exact hneg i h
+        · subst h
+          simp only [gm (j - 1) (by omega), ej, decide_eq_false_iff_not, not_le]
+          linarith
+    · apply findIdx_eq_of (by omega)
+      · intro h
+        simp only [gm (j - 1) h, ej, decide_eq_true_eq]
+        linarith
+      · exact hneg
+
+theorem indexVal_ofVec (v : List Num) (k : ℕ) (hk1 : 1 ≤ k) (hk2 : k ≤ v.length) :
+    indexVal (.arr (ofVec v)) (.num (.fin (k : ℝ))) = .ok (.num (v.getD (k - 1) .nan)) := by
+  have hlt : k - 1 < v.length := by omega
+  have hlt' : k - 1 < (v.map Nested.leaf).length := by simpa using hlt
+  simp only [ofVec, indexVal, Nat.floor_natCast, List.length_map, hk1, hk2, and_self,
+    ↓reduceIte, List.getD_eq_getElem _ _ hlt', List.getElem_map, List.getD_eq_getElem _ _ hlt]
+
+theorem ev_const_arr (tables : List (String × FTable)) (env : String → Num) (l : List Num) :
+    eval tables env (.const (ofVec l)) = .ok (.arr (ofVec l)) := by
+  rw [eval]; exact fun _ h => by cases h
+
+theorem ev_lit (tables : List (String × FTable)) (env : String → Num) (v : Num) :
+    eval tables env (.lit v) = .ok (.num v) := by rw [eval]
+
+theorem ev_sub (tables : List (String × FTable)) (env : String → Num)
+    (a b : Expr) (u v : Num) (ha : eval tables env a = .ok (.num u))
+    (hb : eval tables env b = .ok (.num v)) :
+    eval tables env (.op "-" [a, b]) = .ok (.num (Scalar.sub u v)) := by
+  rw [eval, evalOp]
+  simp only [ha, hb, bind, Except.bind, Val.asNum, pure, Except.pure]
+
+theorem ev_lt (tables : List (String × FTable)) (env : String → Num)
+    (a b : Expr) (u v : Num) (ha : eval tables env a = .ok (.num u))
+    (hb : eval tables env b = .ok (.num v)) :
+    eval tables env (.op "<" [a, b]) = .ok (.num (Num.ofBool (Scalar.lt u v))) := by
+  rw [eval, evalOp]
+  simp only [ha, hb, bind, Except.bind, Val.asNum, pure, Except.pure]
+
+theorem ev_beq (tables : List (String × FTable)) (env : String → Num)
+    (a b : Expr) (u v : Num) (ha : eval tables env a = .ok (.num u))
+    (hb : eval tables env b = .ok (.num v)) :
+    eval tables env (.op "==" [a, b]) = .ok (.num (Num.ofBool (Num.beq u v))) := by
+  rw [eval, evalOp]
+  simp only [ha, hb, bind, Except.bind, Val.asNum, pure, Except.pure]
+
+theorem ev_max (tables : List (String × FTable)) (env : String → Num)
+    (a b : Expr) (u v : Num) (ha : eval tables env a = .ok (.num u))
+    (hb : eval tables env b = .ok (.num v)) :
+    eval tables env (.op "max" [a, b]) = .ok (.num (Num.max u v)) := by
+  rw [eval, evalOp]
+  simp only [ha, hb, bind, Except.bind, Val.asNum, pure, Except.pure]
+
+theorem ev_min (tables : List (String × FTable)) (env : String → Num)
+    (a b : Expr) (u v : Num) (ha : eval tables env a = .ok (.num u))
+    (hb : eval tables env b = .ok (.num v)) :
+    eval tables env (.op "min" [a, b]) = .ok (.num (Num.min u v)) := by
+  rw [eval, evalOp]
+  simp only [ha, hb, bind, Except.bind, Val.asNum, pure, Except.pure]
+
+theorem ev_ifelse (tables : List (String × FTable)) (env : String → Num) (c a b : Expr) (cv : Num)
+    (hc : eval tables env c = .ok (.num cv)) :
+    eval tables env (.op "ifelse" [c, a, b]) =
+      if Num.truthy cv then eval tables env a else eval tables env b := by
+  rw [eval, evalOp]
+  simp only [hc, bind, Except.bind, Val.asNum]
+
+theorem ev_index_vec (tables : List (String × FTable)) (env : String → Num) (l : List Num)
+    (ie : Expr) (k : ℕ) (hi : eval tables env ie = .ok (.num (.fin (k : ℝ))))
+    (hk1 : 1 ≤ k) (hk2 : k ≤ l.length) :
+    eval tables env (.index [.const (ofVec l), ie]) = .ok (.num (l.getD (k - 1) .nan)) := by
+  rw [eval, evalIndex, ev_const_arr, hi]
+  simp only [bind, Except.bind]
+  exact indexVal_ofVec l k hk1 hk2
+
+theorem ev_searchsorted (tables : List (String × FTable)) (env : String → Num) (r : List ℝ)
+    (hr : r.Pairwise (· < ·)) (xe : Expr) (x0 : Num)
+    (hx : eval tables env xe = .ok (.num x0)) :
+    eval tables env (.fn "interp.searchsorted" [xe, .const (ofVec (r.map Num.fin))]) =
+      .ok (.num (.fin (searchsorted x0 (r.map Num.fin) : ℝ))) := by
+  rw [eval, evalFn]
+  simp only [argOf, argOfNested_ofVec,
+    validateSearchsorted_eq r (hr.imp (fun h => le_of_lt h)), bind, Except.bind, hx, Val.asNum,
+    pure, Except.pure]
+
+/-- The §9.5.3 `nearest` tree, evaluated with EXACT arithmetic, is the
+nearest knot's value (ties low, clamped), and NaN for a NaN query. -/
 theorem eval_nearest_lowered (tables : List (String × FTable)) (env : String → Num)
     (v : List Num) (r0 : List ℝ) (hpw : r0.Pairwise (· < ·)) (hlen : 2 ≤ r0.length)
     (hv : v.length = r0.length) (xe : Expr) (x0 : Num)
     (hx : eval tables env xe = .ok (.num x0)) :
-    eval tables env (.index [.const (ofVec v),
-      .fn "interp.searchsorted" [xe, .const (ofVec (mids (r0.map Num.fin)))]]) =
+    eval tables env (nearestTree (ofVec v) (r0.map Num.fin) xe) =
       .ok (.num (nearest v (r0.map Num.fin) x0)) := by
-  have hc : eval tables env (.const (ofVec v)) = .ok (.arr (ofVec v)) := by
-    rw [eval]; exact fun _ h => by cases h
-  rw [eval, evalIndex, hc, eval, evalFn]
-  rw [mids_map]
-  simp only [ofVec, argOf, argOfNested]
-  rw [show Nested.node (((midsR r0).map Num.fin).map Nested.leaf) =
-      ofVec ((midsR r0).map Num.fin) from rfl, toVec_ofVec,
-    validateSearchsorted_eq _ (midsR_pairwise r0 hpw)]
-  simp only [bind, Except.bind, hx, Val.asNum, pure, Except.pure]
-  -- the index
-  have hk : ∀ k : ℕ, 1 ≤ k → k ≤ v.length →
-      indexVal (.arr (.node (v.map Nested.leaf))) (.num (.fin (k : ℝ))) =
-        .ok (.num (v.getD (k - 1) .nan)) := by
-    intro k hk1 hk2
-    have hlt : k - 1 < v.length := by omega
-    have hlt' : k - 1 < (v.map Nested.leaf).length := by simpa using hlt
-    simp only [indexVal, Nat.floor_natCast, List.length_map, hk1, hk2, and_self,
-      ↓reduceIte, List.getD_eq_getElem _ _ hlt', List.getElem_map, List.getD_eq_getElem _ _ hlt]
+  unfold nearestTree
+  simp only
+  have hsr := ev_searchsorted tables env r0 hpw xe x0 hx
   cases x0 with
-  | fin x =>
-    rw [searchsorted_fin_map]
-    have hb := List.findIdx_le_length (p := fun m => decide (x ≤ m)) (xs := midsR r0)
-    rw [length_midsR] at hb
-    rw [hk _ (by omega) (by omega)]
-    simp only [nearest, map_re_fin, Nat.add_sub_cancel, findIdx_midsR r0 hpw (by omega) x]
   | nan =>
-    rw [searchsorted_nan, List.length_map, length_midsR]
-    rw [hk _ (by omega) (by omega)]
-    simp only [nearest, List.length_map]
-    rw [show r0.length - 1 + 1 - 1 = r0.length - 1 by omega]
+    have hq := ev_beq tables env xe xe _ _ hx hx
+    simp only [Num.beq] at hq
+    rw [ev_ifelse _ _ _ _ _ _ hq]
+    simp [Num.ofBool, Num.truthy, hx, nearest]
+  | fin x =>
+    have hq := ev_beq tables env xe xe _ _ hx hx
+    simp only [Num.beq, decide_true] at hq
+    rw [ev_ifelse _ _ _ _ _ _ hq]
+    simp only [Num.ofBool, Num.truthy, ↓reduceIte, ne_eq, one_ne_zero, not_false_eq_true,
+      decide_true]
+    rw [searchsorted_fin_map] at hsr
+    set j := r0.findIdx (fun m => decide (x ≤ m)) with hj
+    have hjle : j ≤ r0.length := List.findIdx_le_length
+    -- lo and hi, as 1-based indices
+    have hlo := ev_max tables env _ (.lit (.fin 1)) _ _
+      (ev_sub tables env _ (.lit (.fin 1)) _ _ hsr (ev_lit _ _ _)) (ev_lit _ _ _)
+    simp only [Num.sub_fin, Num.max] at hlo
+    have hhi := ev_min tables env _ (.lit (.fin ((r0.map Num.fin).length : ℝ))) _ _ hsr
+      (ev_lit _ _ _)
+    simp only [Num.min] at hhi
+    have elo : Max.max ((((j + 1 : ℕ)) : ℝ) - 1) 1 = (((j - 1 + 1 : ℕ)) : ℝ) := by
+      rcases Nat.eq_zero_or_pos j with h | h
+      · rw [h]; norm_num
+      · rw [show j - 1 + 1 = j by omega]
+        have h1 : (1 : ℝ) ≤ j := by exact_mod_cast h
+        rw [show (((j + 1 : ℕ)) : ℝ) - 1 = j by push_cast; ring]
+        exact max_eq_left h1
+    have ehi : Min.min (((j + 1 : ℕ)) : ℝ) ((r0.map Num.fin).length : ℝ) =
+        (((min j (r0.length - 1) + 1 : ℕ)) : ℝ) := by
+      rw [List.length_map, ← Nat.cast_min]
+      congr 1; omega
+    rw [elo] at hlo
+    rw [ehi] at hhi
+    have hlen' : (r0.map Num.fin).length = r0.length := List.length_map _
+    have hAhi := ev_index_vec tables env (r0.map Num.fin) _ _ hhi (by omega) (by omega)
+    have hAlo := ev_index_vec tables env (r0.map Num.fin) _ _ hlo (by omega) (by omega)
+    rw [Nat.add_sub_cancel, getD_map_fin (show min j (r0.length - 1) < r0.length by omega)] at hAhi
+    rw [Nat.add_sub_cancel, getD_map_fin (show j - 1 < r0.length by omega)] at hAlo
+    have hd1 := ev_sub tables env _ _ _ _ hAhi hx
+    have hd2 := ev_sub tables env _ _ _ _ hx hAlo
+    simp only [Num.sub_fin] at hd1 hd2
+    have hcmp := ev_lt tables env _ _ _ _ hd1 hd2
+    simp only [Num.lt_fin] at hcmp
+    have hbr := ev_ifelse tables env _ (Expr.op "min" [Expr.fn "interp.searchsorted"
+        [xe, Expr.const (ofVec (List.map Num.fin r0))],
+        Expr.lit (Num.fin ((List.map Num.fin r0).length : ℝ))])
+      (Expr.op "max" [Expr.op "-" [Expr.fn "interp.searchsorted"
+        [xe, Expr.const (ofVec (List.map Num.fin r0))], Expr.lit (Num.fin 1)],
+        Expr.lit (Num.fin 1)]) _ hcmp
+    rw [hhi, hlo] at hbr
+    have hres := nearestIdx_bracket r0 hpw hlen x
+    rw [← hj] at hres
+    simp only [nearest, map_re_fin, hres]
+    by_cases hc : r0.getD (min j (r0.length - 1)) 0 - x < x - r0.getD (j - 1) 0
+    · simp only [Num.ofBool, hc, decide_true, Num.truthy, ↓reduceIte, ne_eq, one_ne_zero,
+        not_false_eq_true] at hbr
+      rw [ev_index_vec tables env v _ _ hbr (by omega) (by omega), Nat.add_sub_cancel, if_pos hc]
+    · simp only [Num.ofBool, hc, decide_false, Num.truthy, Bool.false_eq_true, ↓reduceIte, ne_eq,
+        not_true_eq_false, decide_true, Decidable.not_not] at hbr
+      rw [ev_index_vec tables env v _ _ hbr (by omega) (by omega), Nat.add_sub_cancel, if_neg hc]
 
 /-- The lowered tree computes `lookupCore` on the inputs evaluated in table
 axis order. -/
@@ -1311,13 +1566,6 @@ theorem resolveOutput_multi (T : FTable) (os : List String) (h : T.outputs = som
     simp [resolveOutput, h, this]
 
 /-! ## The spec's current `nearest` lowering is not nearest (Q-13) -/
-
-theorem indexVal_ofVec (v : List Num) (k : ℕ) (hk1 : 1 ≤ k) (hk2 : k ≤ v.length) :
-    indexVal (.arr (ofVec v)) (.num (.fin (k : ℝ))) = .ok (.num (v.getD (k - 1) .nan)) := by
-  have hlt : k - 1 < v.length := by omega
-  have hlt' : k - 1 < (v.map Nested.leaf).length := by simpa using hlt
-  simp only [ofVec, indexVal, Nat.floor_natCast, List.length_map, hk1, hk2, and_self,
-    ↓reduceIte, List.getD_eq_getElem _ _ hlt', List.getElem_map, List.getD_eq_getElem _ _ hlt]
 
 /-- The §9.5.3 lowering as the spec text currently writes it:
 `index(data, searchsorted(x, axis))`, claimed to return the nearest knot's value. -/

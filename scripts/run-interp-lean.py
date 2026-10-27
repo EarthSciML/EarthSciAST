@@ -15,8 +15,7 @@ Prints one summary line; exit status 1 on any (unknown) mismatch.
 The adapter's output has the shape `scripts/run-closed-functions-lean.py`
 expects (`results[*].value` / `results[*].error`), so this script is temporary:
 at integration it is replaced by an `"interp": "interp"` entry in that
-script's MODES (which has no KNOWN list, so the Q-7 fixture disagreement below
-shows there as a failure until the fixture is updated).
+script's MODES (which has no KNOWN list).
 """
 
 import argparse
@@ -32,10 +31,7 @@ TIER = ROOT / "tests" / "closed_functions" / "interp"
 EXE = ROOT / "formal" / ".lake" / "build" / "bin" / "esm-lean"
 
 # (fixture dir, scenario) -> why the model's answer differs from the fixture
-KNOWN = {
-    ("searchsorted", "nan_in_xs"): "Q-7 ruled the code `searchsorted_nan`; fixture still says "
-    "`searchsorted_nan_in_table`",
-}
+KNOWN = {}
 
 
 def num(v):
