@@ -59,14 +59,13 @@ const SECONDS_PER_DAY = 86400
 const INT32_MIN = -2147483648
 const INT32_MAX = 2147483647
 
-function checkInt32(name: string, v: number): number {
-  if (!Number.isFinite(v) || v < INT32_MIN || v > INT32_MAX) {
+function checkYearInt32(tUtc: number, year: number): void {
+  if (year < INT32_MIN || year > INT32_MAX) {
     throw new ClosedFunctionError(
       ERROR_CODES.CLOSED_FUNCTION_OVERFLOW,
-      `${name} result ${v} overflows signed 32-bit integer range`,
+      `datetime.*: the year ${year} of t_utc ${tUtc} overflows signed 32-bit integer range`,
     )
   }
-  return v
 }
 
 /**
@@ -144,13 +143,20 @@ function dayOfYear(year: number, month: number, day: number): number {
  * (1970-01-01T00:00:00 UTC → 2440587.5). The first sum is an exact integer
  * and the offset comes from the same exact floor-divmod as the date, so the
  * time of day rounds once, then the divide and the add round once each —
- * no cancellation near JD 0. From -4800-03-01 on this equals the spec's
- * Fliegel–van Flandern reference.
+ * no cancellation near JD 0. This is the evaluation esm-spec §9.2 pins; the
+ * day term is the linear day number, which equals the informative
+ * Fliegel–van Flandern JDN from -4800-03-01 on (and not before).
  */
 function julianDayValue(totalDays: number, secondOfDay: number, fraction: number): number {
   return totalDays + 2440588 + (secondOfDay - 43200 + fraction) / SECONDS_PER_DAY
 }
 
+/**
+ * Every `datetime.*` field goes through here, so the two overflow rules of
+ * esm-spec §9.2 hold for all of them alike: a NaN or ±Inf `t_utc`, and one
+ * whose proleptic-Gregorian year is outside Int32, raise
+ * `closed_function_overflow` whichever field is asked for.
+ */
 function decomposeUtcSeconds(tUtc: number): DateParts {
   if (!Number.isFinite(tUtc)) {
     throw new ClosedFunctionError(
@@ -168,6 +174,7 @@ function decomposeUtcSeconds(tUtc: number): DateParts {
   const secondOfDay = whole - totalDays * SECONDS_PER_DAY // exact, in [0, 86400)
 
   const { year, month, day } = daysToYMD(totalDays)
+  checkYearInt32(tUtc, year)
   const hour = fdiv(secondOfDay, 3600)
   const minute = fdiv(secondOfDay - hour * 3600, 60)
   const second = secondOfDay - hour * 3600 - minute * 60
@@ -459,7 +466,7 @@ type ClosedFunctionHandler = (name: string, args: unknown[]) => number
 const CLOSED_FUNCTION_DISPATCH: Record<string, ClosedFunctionHandler> = {
   'datetime.year': (name, args) => {
     requireArity(name, args, 1)
-    return checkInt32(name, decomposeUtcSeconds(asNumber(name, args[0])).year)
+    return decomposeUtcSeconds(asNumber(name, args[0])).year
   },
   'datetime.month': (name, args) => {
     requireArity(name, args, 1)

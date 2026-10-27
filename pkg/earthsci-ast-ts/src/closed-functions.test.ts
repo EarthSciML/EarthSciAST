@@ -57,10 +57,12 @@ interface ExpectedFile {
   error_scenarios?: ErrorScenario[]
 }
 
-// `expected.json` encodes NaN as the JSON string "NaN" (since JSON has no
-// NaN). Convert to a real number for evaluation.
+// `expected.json` encodes NaN and ±Inf as the JSON strings "NaN", "Inf" and
+// "-Inf" (since JSON has neither). Convert to a real number for evaluation.
 function decodeInput(v: unknown): unknown {
   if (v === 'NaN') return Number.NaN
+  if (v === 'Inf') return Number.POSITIVE_INFINITY
+  if (v === '-Inf') return Number.NEGATIVE_INFINITY
   if (Array.isArray(v)) return v.map(decodeInput)
   return v
 }
