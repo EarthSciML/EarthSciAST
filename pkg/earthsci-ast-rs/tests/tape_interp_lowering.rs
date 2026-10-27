@@ -91,6 +91,23 @@ fn compile(doc: &str) -> ArrayCompiled {
     ArrayCompiled::from_file(&file).unwrap_or_else(|e| panic!("compile: {e:?}"))
 }
 
+/// A document that load refuses — its `interp.*` arguments break esm-spec
+/// §9.2, which load checks (ruling Q-106) — deserialized WITHOUT load, as one
+/// built in memory would be, so the build's own repeat of the check is what
+/// is exercised. Asserts load does refuse it, with `code`.
+fn compile_unloaded(doc: &str, code: &str) -> ArrayCompiled {
+    let file = unloaded(doc, code);
+    ArrayCompiled::from_file(&file).unwrap_or_else(|e| panic!("compile: {e:?}"))
+}
+
+fn unloaded(doc: &str, code: &str) -> earthsci_ast::EsmFile {
+    let msg = load_string(doc)
+        .expect_err("load must refuse the document (esm-spec §9.2, ruling Q-106)")
+        .to_string();
+    assert!(msg.contains(&format!("[{code}]")), "load: {msg}");
+    serde_json::from_str(doc).unwrap_or_else(|e| panic!("deserialize: {e}"))
+}
+
 /// The tape's answer and the per-cell oracle's, for one probe state.
 fn both(compiled: &ArrayCompiled, u: &[f64], t: f64) -> (Vec<f64>, Vec<f64>) {
     let p: HashMap<String, f64> = HashMap::new();
@@ -608,7 +625,7 @@ fn a_non_const_table_bails_by_name() {
           "q" ]} }
     ] } }
 }"#;
-    let compiled = compile(doc);
+    let compiled = compile_unloaded(doc, "interp_axis_not_const");
     let report = compiled.debug_build_tape_report();
     let reasons: Vec<&str> = report.fallbacks.iter().map(|f| f.1.as_str()).collect();
     assert!(
@@ -650,7 +667,7 @@ fn a_searchsorted_xs_that_is_not_a_rank_1_const_is_interp_axis_not_const() {
         r#"{ "op": "const", "args": [], "value": 3.0 }"#,
         r#"{ "op": "const", "args": [], "value": [[1.0, 2.0], [3.0, 4.0]] }"#,
     ] {
-        let file = load_string(&doc(xs)).unwrap_or_else(|e| panic!("load {xs}: {e:?}"));
+        let file = unloaded(&doc(xs), "interp_axis_not_const");
         let e = match esm_problem(
             &file,
             (0.0, 1.0),
@@ -691,7 +708,7 @@ fn a_table_the_registry_rejects_bails_rather_than_blending() {
           "q" ]} }
     ] } }
 }"#;
-    let compiled = compile(doc);
+    let compiled = compile_unloaded(doc, "interp_non_monotonic_axis");
     let report = compiled.debug_build_tape_report();
     let reasons: Vec<&str> = report.fallbacks.iter().map(|f| f.1.as_str()).collect();
     assert!(

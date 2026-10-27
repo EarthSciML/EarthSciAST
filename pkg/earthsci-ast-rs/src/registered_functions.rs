@@ -86,36 +86,6 @@ impl ClosedArg {
             )),
         }
     }
-
-    fn expect_array(&self, name: &str, position: usize) -> Result<&[f64], ClosedFunctionError> {
-        match self {
-            ClosedArg::Array(v) => Ok(v.as_slice()),
-            ClosedArg::Scalar(_) | ClosedArg::Array2D(_) => Err(ClosedFunctionError::new(
-                codes::CLOSED_FUNCTION_ARG_TYPE,
-                format!(
-                    "{name}: arg #{} must be 1-D array, got other shape",
-                    position + 1
-                ),
-            )),
-        }
-    }
-
-    fn expect_array2d(
-        &self,
-        name: &str,
-        position: usize,
-    ) -> Result<&[Vec<f64>], ClosedFunctionError> {
-        match self {
-            ClosedArg::Array2D(v) => Ok(v.as_slice()),
-            ClosedArg::Scalar(_) | ClosedArg::Array(_) => Err(ClosedFunctionError::new(
-                codes::CLOSED_FUNCTION_ARG_TYPE,
-                format!(
-                    "{name}: arg #{} must be 2-D array, got other shape",
-                    position + 1
-                ),
-            )),
-        }
-    }
 }
 
 /// Scalar return value from a closed function. Integer-typed entries (every
@@ -260,10 +230,7 @@ fn cf_interp_searchsorted(
     // and that is decided before `searchsorted_nan` / `_non_monotonic` look
     // at its entries.
     let ClosedArg::Array(xs) = &args[1] else {
-        return Err(ClosedFunctionError::new(
-            codes::INTERP_AXIS_NOT_CONST,
-            format!("{name}: arg #2 (`xs`) must be a rank-1 `const` array"),
-        ));
+        return Err(not_const(name, codes::INTERP_AXIS_NOT_CONST, "xs", 1));
     };
     Ok(ClosedValue::Integer(check_i32(
         name,
@@ -273,22 +240,176 @@ fn cf_interp_searchsorted(
 
 fn cf_interp_linear(name: &str, args: &[ClosedArg]) -> Result<ClosedValue, ClosedFunctionError> {
     expect_arity(name, args, 3)?;
-    let table = args[0].expect_array(name, 0)?;
-    let axis = args[1].expect_array(name, 1)?;
+    // esm-spec §9.2 (ruling Q-108): a `table` or axis of the wrong rank is
+    // `interp_table_not_const` / `interp_axis_not_const`, the codes the
+    // load-time argument check ([`check_closed_function_args`]) raises.
+    let ClosedArg::Array(table) = &args[0] else {
+        return Err(not_const(name, codes::INTERP_TABLE_NOT_CONST, "table", 1));
+    };
+    let ClosedArg::Array(axis) = &args[1] else {
+        return Err(not_const(name, codes::INTERP_AXIS_NOT_CONST, "axis", 1));
+    };
     let x = args[2].expect_scalar(name, 2)?;
     Ok(ClosedValue::Float(interp_linear(table, axis, x)?))
 }
 
 fn cf_interp_bilinear(name: &str, args: &[ClosedArg]) -> Result<ClosedValue, ClosedFunctionError> {
     expect_arity(name, args, 5)?;
-    let table = args[0].expect_array2d(name, 0)?;
-    let axis_x = args[1].expect_array(name, 1)?;
-    let axis_y = args[2].expect_array(name, 2)?;
+    let ClosedArg::Array2D(table) = &args[0] else {
+        return Err(not_const(name, codes::INTERP_TABLE_NOT_CONST, "table", 2));
+    };
+    let ClosedArg::Array(axis_x) = &args[1] else {
+        return Err(not_const(name, codes::INTERP_AXIS_NOT_CONST, "axis_x", 1));
+    };
+    let ClosedArg::Array(axis_y) = &args[2] else {
+        return Err(not_const(name, codes::INTERP_AXIS_NOT_CONST, "axis_y", 1));
+    };
     let x = args[3].expect_scalar(name, 3)?;
     let y = args[4].expect_scalar(name, 4)?;
     Ok(ClosedValue::Float(interp_bilinear(
         table, axis_x, axis_y, x, y,
     )?))
+}
+
+/// The `interp_table_not_const` / `interp_axis_not_const` diagnostic for an
+/// argument `label` that is not a literal `const`-op array of rank `rank`.
+fn not_const(name: &str, code: &str, label: &str, rank: usize) -> ClosedFunctionError {
+    ClosedFunctionError::new(
+        code,
+        format!("{name}: `{label}` must be a literal rank-{rank} `const`-op array (esm-spec §9.2)"),
+    )
+}
+
+/// What the esm-spec §9.2 load-time argument checks see of one argument of an
+/// `interp.*` `fn` node: whether it is a literal `const`-op node at all, and if
+/// so the rank of its `value`.
+///
+/// It is a separate type from [`ClosedArg`] because the load-time checks have
+/// to tell apart what an evaluated argument cannot: a variable reference from a
+/// `const` scalar, and a rank-3 literal from a ragged rank-2 one.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ClosedArgLiteral {
+    /// Not a `const`-op node: a variable reference, a bare number, or any
+    /// other expression.
+    NotConst,
+    /// A `const` whose `value` is a number.
+    Scalar(f64),
+    /// A `const` whose `value` is an array of numbers (`[]` included).
+    Array(Vec<f64>),
+    /// A `const` whose `value` is an array of arrays of numbers. The rows may
+    /// differ in length; that is `interp_axis_length_mismatch`, not a rank
+    /// error.
+    Array2D(Vec<Vec<f64>>),
+    /// A `const` whose `value` is nested deeper, mixes numbers and arrays, or
+    /// holds a leaf that is not a number.
+    OtherRank,
+}
+
+impl ClosedArgLiteral {
+    /// Classify a `const` node's `value`.
+    pub fn from_const_value(value: &serde_json::Value) -> Self {
+        use serde_json::Value as J;
+        let numbers = |items: &[J]| -> Option<Vec<f64>> {
+            items
+                .iter()
+                .map(|v| v.as_number().and_then(|n| n.as_f64()))
+                .collect()
+        };
+        match value {
+            J::Number(n) => n.as_f64().map_or(Self::OtherRank, Self::Scalar),
+            J::Array(items) => {
+                if let Some(flat) = numbers(items) {
+                    return Self::Array(flat);
+                }
+                let rows: Option<Vec<Vec<f64>>> = items
+                    .iter()
+                    .map(|row| row.as_array().and_then(|r| numbers(r)))
+                    .collect();
+                rows.map_or(Self::OtherRank, Self::Array2D)
+            }
+            _ => Self::OtherRank,
+        }
+    }
+
+    /// Classify a typed argument expression.
+    pub fn from_expr(arg: &crate::Expr) -> Self {
+        match arg {
+            crate::Expr::Operator(node) if node.op == "const" => node
+                .value
+                .as_ref()
+                .map_or(Self::NotConst, Self::from_const_value),
+            _ => Self::NotConst,
+        }
+    }
+
+    /// Classify a raw-JSON argument, as the loader walks it.
+    pub(crate) fn from_json(arg: &serde_json::Value) -> Self {
+        match arg.as_object() {
+            Some(obj) if obj.get("op").and_then(|o| o.as_str()) == Some("const") => obj
+                .get("value")
+                .map_or(Self::NotConst, Self::from_const_value),
+            _ => Self::NotConst,
+        }
+    }
+}
+
+/// Whether `name` is one of the three closed functions whose arguments the
+/// load-time checks of esm-spec §9.2 cover.
+pub(crate) fn has_load_time_argument_checks(name: &str) -> bool {
+    matches!(
+        name,
+        "interp.searchsorted" | "interp.linear" | "interp.bilinear"
+    )
+}
+
+/// The esm-spec §9.2 load-time argument checks of one `fn` call — the checks
+/// load and `validate()` run on every `interp.*` node wherever it appears
+/// (ruling Q-106). `Ok` for any other function name, and for a call with too
+/// few arguments to check (its arity is the evaluator's
+/// `closed_function_arity`).
+///
+/// Order: each array argument must be a literal `const` of the function's rank
+/// (`table`, then the axes, in argument order — `interp_table_not_const` /
+/// `interp_axis_not_const`); then each axis in argument order (fewer than 2
+/// entries, then NaN, then not strictly increasing); then the length relation.
+/// `interp.searchsorted`'s `xs` is checked for rank, then NaN, then
+/// monotonicity. These are the checks the evaluator's own registry entries
+/// make, in the same order, so a call that passes here evaluates.
+pub fn check_closed_function_args(
+    name: &str,
+    args: &[ClosedArgLiteral],
+) -> Result<(), ClosedFunctionError> {
+    use ClosedArgLiteral as L;
+    match name {
+        "interp.searchsorted" if args.len() >= 2 => {
+            let L::Array(xs) = &args[1] else {
+                return Err(not_const(name, codes::INTERP_AXIS_NOT_CONST, "xs", 1));
+            };
+            check_searchsorted_xs(name, xs)
+        }
+        "interp.linear" if args.len() >= 3 => {
+            let L::Array(table) = &args[0] else {
+                return Err(not_const(name, codes::INTERP_TABLE_NOT_CONST, "table", 1));
+            };
+            let L::Array(axis) = &args[1] else {
+                return Err(not_const(name, codes::INTERP_AXIS_NOT_CONST, "axis", 1));
+            };
+            check_linear_table(table, axis)
+        }
+        "interp.bilinear" if args.len() >= 5 => {
+            let L::Array2D(table) = &args[0] else {
+                return Err(not_const(name, codes::INTERP_TABLE_NOT_CONST, "table", 2));
+            };
+            let L::Array(axis_x) = &args[1] else {
+                return Err(not_const(name, codes::INTERP_AXIS_NOT_CONST, "axis_x", 1));
+            };
+            let L::Array(axis_y) = &args[2] else {
+                return Err(not_const(name, codes::INTERP_AXIS_NOT_CONST, "axis_y", 1));
+            };
+            check_bilinear_table(table, axis_x, axis_y)
+        }
+        _ => Ok(()),
+    }
 }
 
 /// Evaluate a unary `datetime.*` accessor that returns one `u32` field of the
@@ -436,6 +557,13 @@ fn julian_day(t_utc: f64) -> Result<f64, ClosedFunctionError> {
 // duplicates / exact matches; out-of-range below → 1, above → N+1; NaN x →
 // N+1; NaN entries in xs → error; non-monotonic xs → error.
 fn searchsorted(name: &str, x: f64, xs: &[f64]) -> Result<i64, ClosedFunctionError> {
+    check_searchsorted_xs(name, xs)?;
+    Ok(searchsorted_at(x, xs))
+}
+
+/// The esm-spec §9.2 checks on a rank-1 `xs`: NaN, then monotonicity. An
+/// empty `xs` passes (ruling Q-108).
+fn check_searchsorted_xs(name: &str, xs: &[f64]) -> Result<(), ClosedFunctionError> {
     // NaN is checked over the WHOLE table before monotonicity (esm-spec
     // §9.2): every comparison with NaN is false, so a monotonicity verdict on
     // a table holding one would depend on how the comparison is written.
@@ -462,7 +590,7 @@ fn searchsorted(name: &str, x: f64, xs: &[f64]) -> Result<i64, ClosedFunctionErr
             ));
         }
     }
-    Ok(searchsorted_at(x, xs))
+    Ok(())
 }
 
 /// The search half of [`searchsorted`], with the table taken as ALREADY
@@ -497,6 +625,12 @@ pub(crate) fn searchsorted_at(x: f64, xs: &[f64]) -> i64 {
 // pinned form `result = t[i] + w * (t[i+1] - t[i])` so endpoints are
 // recovered exactly under IEEE-754 round-to-nearest.
 fn interp_linear(table: &[f64], axis: &[f64], x: f64) -> Result<f64, ClosedFunctionError> {
+    check_linear_table(table, axis)?;
+    Ok(interp_linear_at(table, axis, x))
+}
+
+/// The esm-spec §9.2 checks on `interp.linear`'s rank-1 `table` and `axis`.
+fn check_linear_table(table: &[f64], axis: &[f64]) -> Result<(), ClosedFunctionError> {
     validate_axis("interp.linear", "axis", axis)?;
     if table.len() != axis.len() {
         return Err(ClosedFunctionError::new(
@@ -508,7 +642,7 @@ fn interp_linear(table: &[f64], axis: &[f64], x: f64) -> Result<f64, ClosedFunct
             ),
         ));
     }
-    Ok(interp_linear_at(table, axis, x))
+    Ok(())
 }
 
 /// The blend half of [`interp_linear`], with `table` and `axis` taken as
@@ -560,6 +694,17 @@ fn interp_bilinear(
     x: f64,
     y: f64,
 ) -> Result<f64, ClosedFunctionError> {
+    check_bilinear_table(table, axis_x, axis_y)?;
+    Ok(bilinear_at(|i, j| table[i][j], axis_x, axis_y, x, y))
+}
+
+/// The esm-spec §9.2 checks on `interp.bilinear`'s rank-2 `table` and its two
+/// rank-1 axes.
+fn check_bilinear_table(
+    table: &[Vec<f64>],
+    axis_x: &[f64],
+    axis_y: &[f64],
+) -> Result<(), ClosedFunctionError> {
     validate_axis("interp.bilinear", "axis_x", axis_x)?;
     validate_axis("interp.bilinear", "axis_y", axis_y)?;
     if table.len() != axis_x.len() {
@@ -585,7 +730,7 @@ fn interp_bilinear(
             ));
         }
     }
-    Ok(bilinear_at(|i, j| table[i][j], axis_x, axis_y, x, y))
+    Ok(())
 }
 
 /// [`interp_bilinear`] over a ROW-MAJOR FLAT table (`table[i * ny + j]`),

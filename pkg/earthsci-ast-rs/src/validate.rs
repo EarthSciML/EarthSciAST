@@ -280,6 +280,43 @@ pub enum StructuralErrorCode {
     /// document fails to load instead of reaching a runtime that would have to
     /// drop the variable from scope or fabricate a value for it.
     ArrayDefaultWithoutShape,
+    // The esm-spec §9.2 closed-function argument checks and the §9.5.5
+    // function-table checks, which load and `validate()` run on every `fn`
+    // node and every table (ruling Q-106; `crate::load_checks`).
+    /// An `interp.*` axis, or `interp.searchsorted`'s `xs`, that is not a literal rank-1 `const`-op array (esm-spec §9.2).
+    InterpAxisNotConst,
+    /// An `interp.linear` / `interp.bilinear` `table` that is not a literal `const`-op array of the function's rank (esm-spec §9.2).
+    InterpTableNotConst,
+    /// An `interp.*` axis with fewer than 2 entries (esm-spec §9.2).
+    InterpAxisTooShort,
+    /// An `interp.*` table whose extents differ from its axes' lengths (esm-spec §9.2).
+    InterpAxisLengthMismatch,
+    /// An `interp.*` axis containing a NaN (esm-spec §9.2).
+    InterpNanInAxis,
+    /// An `interp.*` axis that is not strictly increasing (esm-spec §9.2).
+    InterpNonMonotonicAxis,
+    /// An `interp.searchsorted` `xs` containing a NaN (esm-spec §9.2).
+    SearchsortedNan,
+    /// An `interp.searchsorted` `xs` that is not non-decreasing (esm-spec §9.2).
+    SearchsortedNonMonotonic,
+    /// Two axes of one function table share a name (esm-spec §9.5.5).
+    TableAxisDuplicateName,
+    /// Two outputs of one function table share a name (esm-spec §9.5.5).
+    TableOutputsDuplicateName,
+    /// A function table whose `interpolation` and axis count disagree (esm-spec §9.5.5).
+    TableInterpolationAxesMismatch,
+    /// A function-table axis value that is not finite (esm-spec §9.5.5).
+    TableAxisNan,
+    /// A function-table axis that is not strictly increasing (esm-spec §9.5.5).
+    TableAxisNonMonotonic,
+    /// A function-table axis with fewer than 2 values (esm-spec §9.5.5).
+    TableAxisTooShort,
+    /// A function table whose `data` leading dimension is not `len(outputs)` (esm-spec §9.5.5).
+    TableOutputsLengthMismatch,
+    /// A function table whose `data` nesting, or `shape` assertion, is not the shape its axes imply (esm-spec §9.5.5).
+    TableDataShapeMismatch,
+    /// A function-table `data` leaf that is not finite (esm-spec §9.5.5).
+    TableDataNan,
 }
 
 use crate::diagnostic::codes;
@@ -325,8 +362,52 @@ impl std::fmt::Display for StructuralErrorCode {
             Self::UnknownOverrideKey => codes::UNKNOWN_OVERRIDE_KEY,
             Self::AssertionRankMismatch => codes::ASSERTION_RANK_MISMATCH,
             Self::ArrayDefaultWithoutShape => codes::ARRAY_DEFAULT_WITHOUT_SHAPE,
+            Self::InterpAxisNotConst => codes::INTERP_AXIS_NOT_CONST,
+            Self::InterpTableNotConst => codes::INTERP_TABLE_NOT_CONST,
+            Self::InterpAxisTooShort => codes::INTERP_AXIS_TOO_SHORT,
+            Self::InterpAxisLengthMismatch => codes::INTERP_AXIS_LENGTH_MISMATCH,
+            Self::InterpNanInAxis => codes::INTERP_NAN_IN_AXIS,
+            Self::InterpNonMonotonicAxis => codes::INTERP_NON_MONOTONIC_AXIS,
+            Self::SearchsortedNan => codes::SEARCHSORTED_NAN,
+            Self::SearchsortedNonMonotonic => codes::SEARCHSORTED_NON_MONOTONIC,
+            Self::TableAxisDuplicateName => codes::TABLE_AXIS_DUPLICATE_NAME,
+            Self::TableOutputsDuplicateName => codes::TABLE_OUTPUTS_DUPLICATE_NAME,
+            Self::TableInterpolationAxesMismatch => codes::TABLE_INTERPOLATION_AXES_MISMATCH,
+            Self::TableAxisNan => codes::TABLE_AXIS_NAN,
+            Self::TableAxisNonMonotonic => codes::TABLE_AXIS_NON_MONOTONIC,
+            Self::TableAxisTooShort => codes::TABLE_AXIS_TOO_SHORT,
+            Self::TableOutputsLengthMismatch => codes::TABLE_OUTPUTS_LENGTH_MISMATCH,
+            Self::TableDataShapeMismatch => codes::TABLE_DATA_SHAPE_MISMATCH,
+            Self::TableDataNan => codes::TABLE_DATA_NAN,
         };
         write!(f, "{s}")
+    }
+}
+
+impl StructuralErrorCode {
+    /// The variant for a code the load-time checks of [`crate::load_checks`]
+    /// raise, or `None` for any other code.
+    pub(crate) fn from_load_check_code(code: &str) -> Option<Self> {
+        Some(match code {
+            codes::INTERP_AXIS_NOT_CONST => Self::InterpAxisNotConst,
+            codes::INTERP_TABLE_NOT_CONST => Self::InterpTableNotConst,
+            codes::INTERP_AXIS_TOO_SHORT => Self::InterpAxisTooShort,
+            codes::INTERP_AXIS_LENGTH_MISMATCH => Self::InterpAxisLengthMismatch,
+            codes::INTERP_NAN_IN_AXIS => Self::InterpNanInAxis,
+            codes::INTERP_NON_MONOTONIC_AXIS => Self::InterpNonMonotonicAxis,
+            codes::SEARCHSORTED_NAN => Self::SearchsortedNan,
+            codes::SEARCHSORTED_NON_MONOTONIC => Self::SearchsortedNonMonotonic,
+            codes::TABLE_AXIS_DUPLICATE_NAME => Self::TableAxisDuplicateName,
+            codes::TABLE_OUTPUTS_DUPLICATE_NAME => Self::TableOutputsDuplicateName,
+            codes::TABLE_INTERPOLATION_AXES_MISMATCH => Self::TableInterpolationAxesMismatch,
+            codes::TABLE_AXIS_NAN => Self::TableAxisNan,
+            codes::TABLE_AXIS_NON_MONOTONIC => Self::TableAxisNonMonotonic,
+            codes::TABLE_AXIS_TOO_SHORT => Self::TableAxisTooShort,
+            codes::TABLE_OUTPUTS_LENGTH_MISMATCH => Self::TableOutputsLengthMismatch,
+            codes::TABLE_DATA_SHAPE_MISMATCH => Self::TableDataShapeMismatch,
+            codes::TABLE_DATA_NAN => Self::TableDataNan,
+            _ => return None,
+        })
     }
 }
 
@@ -446,6 +527,13 @@ pub(crate) fn validate_scoped(esm_file: &EsmFile, scope: ValidationScope) -> Val
                 &mut structural_errors,
             );
         }
+    }
+
+    // esm-spec §9.2 / §9.5.5: the closed-function argument checks on every
+    // `interp.*` call and the table checks on every `function_tables` entry,
+    // which load runs too (ruling Q-106).
+    if scope == ValidationScope::Full {
+        crate::load_checks::validate_findings(esm_file, &mut structural_errors);
     }
 
     // An inline test's assertion targets, override keys and assertion ranks

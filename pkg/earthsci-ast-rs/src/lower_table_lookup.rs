@@ -502,17 +502,18 @@ fn has_shape(data: &Value, shape: &[usize]) -> bool {
     }
 }
 
-/// Whether some numeric leaf of `data` is NaN.
+/// Whether some numeric leaf of `data` is not finite (NaN, +Inf or -Inf;
+/// ruling Q-109).
 ///
-/// A `serde_json::Value` number cannot be NaN (JSON has no spelling for one,
-/// and `serde_json` refuses to build one), so on this binding's `data` type
-/// this is always false and step 9 of [`validate_table`] never fires. It is
-/// kept as a step so the order stays the spec's, should `data` ever change
-/// type.
-fn any_nan(data: &Value) -> bool {
+/// A `serde_json::Value` number cannot be NaN or infinite (JSON has no
+/// spelling for either, and `serde_json` refuses to build one), so on this
+/// binding's `data` type this is always false and step 9 of
+/// [`validate_table`] never fires. It is kept as a step so the order stays the
+/// spec's, should `data` ever change type.
+fn any_non_finite(data: &Value) -> bool {
     match data {
-        Value::Number(n) => n.as_f64().is_some_and(f64::is_nan),
-        Value::Array(items) => items.iter().any(any_nan),
+        Value::Number(n) => n.as_f64().is_some_and(|v| !v.is_finite()),
+        Value::Array(items) => items.iter().any(any_non_finite),
         _ => false,
     }
 }
@@ -521,17 +522,27 @@ fn any_nan(data: &Value) -> bool {
 /// "Order of the table checks": the FIRST rule the table breaks is the one
 /// reported, and each step covers every axis before the next begins. It is
 /// `Esm.Closed.Tables.validateTable` in `formal/`; the fixtures are
+/// `tests/invalid/function_table_*.esm` and
 /// `tests/conformance/function_tables/load_errors/`.
 ///
-/// 1. `table_axis_duplicate_name`; 2. `table_outputs_duplicate_name`;
-/// 3. `table_interpolation_axes_mismatch`; 4. `table_axis_nan` (any axis);
-/// 5. `table_axis_non_monotonic` (any axis); 6. `table_axis_too_short` (any
-/// axis); 7. `table_outputs_length_mismatch`; 8. `table_data_shape_mismatch`
-/// (the nesting of `data`); 9. `table_data_nan`; 10.
-/// `table_data_shape_mismatch` (the `shape` assertion).
+/// Load and `validate()` run it on EVERY `function_tables` entry, referenced
+/// or not ([`crate::load_checks`], ruling Q-106); the lowering runs it again on
+/// the table a lookup names, for a document built in memory that never went
+/// through either.
 ///
-/// A NaN is checked over every axis before monotonicity because every
-/// comparison with a NaN is false, so a monotonicity verdict on an axis
+/// 1. `table_axis_duplicate_name`;
+/// 2. `table_outputs_duplicate_name`;
+/// 3. `table_interpolation_axes_mismatch`;
+/// 4. `table_axis_nan` (a value that is not finite, any axis; ruling Q-109);
+/// 5. `table_axis_non_monotonic` (any axis);
+/// 6. `table_axis_too_short` (any axis);
+/// 7. `table_outputs_length_mismatch`;
+/// 8. `table_data_shape_mismatch` (the nesting of `data`);
+/// 9. `table_data_nan` (a leaf that is not finite);
+/// 10. `table_data_shape_mismatch` (the `shape` assertion).
+///
+/// A non-finite value is checked over every axis before monotonicity because
+/// every comparison with a NaN is false, so a monotonicity verdict on an axis
 /// holding one would depend on how the comparison is written.
 pub(crate) fn validate_table(table: &FunctionTable, table_id: &str) -> Result<(), CompileError> {
     // 1.
@@ -573,14 +584,15 @@ pub(crate) fn validate_table(table: &FunctionTable, table_id: &str) -> Result<()
     }
     // 4.
     for axis in &table.axes {
-        if let Some(i) = axis.values.iter().position(|v| v.is_nan()) {
+        if let Some(i) = axis.values.iter().position(|v| !v.is_finite()) {
             return Err(err(
                 codes::TABLE_AXIS_NAN,
                 format!(
-                    "table `{table_id}`: axis `{}` value {} is NaN; axis `values` must be \
-                     strictly-increasing finite floats (esm-spec §9.5.1)",
+                    "table `{table_id}`: axis `{}` value {} is {}, not finite; axis `values` \
+                     must be strictly-increasing finite floats (esm-spec §9.5.1)",
                     axis.name,
-                    i + 1
+                    i + 1,
+                    axis.values[i]
                 ),
             ));
         }
@@ -643,10 +655,10 @@ pub(crate) fn validate_table(table: &FunctionTable, table_id: &str) -> Result<()
         ));
     }
     // 9.
-    if any_nan(&table.data) {
+    if any_non_finite(&table.data) {
         return Err(err(
             codes::TABLE_DATA_NAN,
-            format!("table `{table_id}`: a leaf of `data` is NaN (esm-spec §9.5.1)"),
+            format!("table `{table_id}`: a leaf of `data` is not finite (esm-spec §9.5.1)"),
         ));
     }
     // 10.

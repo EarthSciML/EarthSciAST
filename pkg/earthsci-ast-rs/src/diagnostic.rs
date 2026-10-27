@@ -264,11 +264,13 @@ diagnostic_code_registry! {
     //      (`lower_table_lookup.rs`) ----
     //
     // Every §9.5.5 code: the table checks (`validate_table`, in the spec's
-    // pinned order) and the lookup checks. Carried on
-    // `CompileError::TableLookupLowering` rather than `DiagnosticError`,
-    // because the lowering runs at BUILD (§9.5.4 requires the authored form
-    // to round-trip, so it cannot run at load) — but the CODES are the same
-    // cross-binding vocabulary either way, which is what this registry is.
+    // pinned order) and the lookup checks. The table checks run at load and in
+    // `validate()` on every table (`load_checks.rs`, ruling Q-106); the lookup
+    // checks run where a lookup is lowered, at BUILD (§9.5.4 requires the
+    // authored form to round-trip, so the lowering cannot run at load), which
+    // is why they are carried on `CompileError::TableLookupLowering` rather
+    // than `DiagnosticError` — but the CODES are the same cross-binding
+    // vocabulary either way, which is what this registry is.
 
     /// `table_lookup.table` names an id the document's `function_tables`
     /// block does not declare.
@@ -289,8 +291,9 @@ diagnostic_code_registry! {
     /// The nesting of `data` does not match the shape `axes` (and `outputs`,
     /// when present) imply, or the redundant `shape` assertion does not.
     TABLE_DATA_SHAPE_MISMATCH = "table_data_shape_mismatch";
-    /// A leaf of `data` is NaN. This binding's `data` is a JSON value, which
-    /// cannot hold a NaN, so the check is in place but cannot fire here.
+    /// A leaf of `data` is not finite (NaN, +Inf or -Inf). This binding's
+    /// `data` is a JSON value, which cannot hold a non-finite number, so the
+    /// check is in place but cannot fire here.
     TABLE_DATA_NAN = "table_data_nan";
     /// Two axes of one table share a `name`.
     TABLE_AXIS_DUPLICATE_NAME = "table_axis_duplicate_name";
@@ -302,12 +305,12 @@ diagnostic_code_registry! {
     /// An axis's `values` has fewer than 2 entries (esm-spec §9.5.1). The
     /// schema rejects one too; this is what a table built in memory gets.
     TABLE_AXIS_TOO_SHORT = "table_axis_too_short";
-    /// An axis's `values` carries a non-finite entry; §9.5.1 requires
-    /// strictly-increasing FINITE floats.
+    /// An axis's `values` carries a value that is not finite (NaN, +Inf or
+    /// -Inf); §9.5.1 requires strictly-increasing FINITE floats.
     TABLE_AXIS_NAN = "table_axis_nan";
     /// An axis's `values` is not strictly increasing (equal-adjacent or
-    /// decreasing). A NaN entry is `table_axis_nan` instead, whatever the
-    /// other entries (esm-spec §9.5.5).
+    /// decreasing). A non-finite entry is `table_axis_nan` instead, whatever
+    /// the other entries (esm-spec §9.5.5).
     TABLE_AXIS_NON_MONOTONIC = "table_axis_non_monotonic";
     /// A lookup into an `out_of_bounds: "error"` table was queried outside an
     /// axis range (esm-spec §9.5.1). Raised at evaluation time, through the
