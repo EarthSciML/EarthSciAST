@@ -77,7 +77,8 @@ pub struct UnitWarning {
     /// [`StructuralError::path`]). `""` when the raise site has no pointer.
     pub path: String,
     /// Finding kind, and the whole of the severity policy:
-    /// `dimensional_mismatch` | `unparseable_unit` | `analysis`. See the
+    /// `dimensional_mismatch` | `unparseable_unit` | `analysis` |
+    /// `units_dimensionless_literal_mismatch` (a warning, esm-spec §4.8.6). See the
     /// `UNIT_FINDING_*` constants in [`crate::units`].
     pub code: String,
     /// Human-readable description of the finding.
@@ -445,6 +446,23 @@ pub(crate) fn validate_scoped(esm_file: &EsmFile, scope: ValidationScope) -> Val
                 &document_units,
                 &mut structural_errors,
             );
+        }
+    }
+
+    // esm-spec §4.8.6: where a nonzero bare literal read as dimensionless would
+    // turn a passing or skipped unit check into a mismatch. Warnings only at
+    // this stage — they never reach `structural_errors` or `is_valid`.
+    if scope == ValidationScope::Full {
+        for (path, message) in
+            crate::units::dimensionless_literal_findings(esm_file, &document_units)
+        {
+            unit_warnings.push(UnitWarning {
+                path,
+                code: crate::units::UNIT_FINDING_DIMENSIONLESS_LITERAL.to_string(),
+                message,
+                lhs_units: String::new(),
+                rhs_units: String::new(),
+            });
         }
     }
 
