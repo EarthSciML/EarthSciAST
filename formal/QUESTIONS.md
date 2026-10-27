@@ -748,3 +748,31 @@ with a pending question among its own clauses.
 - Found by: phase-1 formalization
 - Problem: No code is named for an `interp.searchsorted` `xs` that is not a rank-1 const array, nor for a function-table axis with fewer than 2 values; the order of the §9.5.5 checks beyond Q-4 is unpinned (the model's order is in `Esm/Closed/Tables.lean`).
 - Ruling: (2026-10-26) searchsorted's non-const xs reuses interp_axis_not_const; new code table_axis_too_short; the model's §9.5.5 check order is pinned in the spec. Fixtures; bindings fixed where they differ.
+
+## Q-106 esm-spec.md §9.2, §9.5.5: when closed-function and table checks run
+- Clauses: `spec.9.5.5.table-check-order`, `spec.9.2.searchsorted-xs-not-const`
+- Phase: 1
+- Found by: phase-1 binding work
+- Problem: The spec says these errors are raised at load time; every binding raises them at build or evaluation instead, so an unreferenced broken table is never reported and none of these cases can be a `tests/invalid` fixture.
+- Ruling: Bindings check at load (2026-10-27): every binding runs the closed-function argument checks and the §9.5.5 table checks in load/`validate()`, for every table whether referenced or not; the cases become `tests/invalid` fixtures.
+
+## Q-107 esm-spec.md §9.5.5: lookup checks relative to the table checks
+- Clauses: `spec.9.5.5.table-check-order`
+- Phase: 1
+- Found by: phase-1 binding work
+- Problem: Unpinned whether a `table_lookup`'s own checks (args, axis keys, output) come before or after validating the table it names. The model and Julia check args first; the other four after.
+- Ruling: Table checks first (2026-10-27): unknown table, then the ten table checks, then the lookup's args, axis keys and output. Julia and the model change.
+
+## Q-108 esm-spec.md §9.2: empty searchsorted table; wrong-rank interp arrays
+- Clauses: `spec.9.2.searchsorted-xs-not-const`
+- Phase: 1
+- Found by: phase-1 binding work
+- Problem: (1) Whether `xs = []` is a valid rank-1 table (Python and the model return 1; TypeScript rejects). (2) The code for a wrong-rank `const` axis or table of `interp.linear`/`interp.bilinear` differs across bindings and the model.
+- Ruling: (2026-10-27) (1) `[]` is valid and searchsorted returns 1; (2) a wrong-rank axis or table is `interp_axis_not_const` / `interp_table_not_const`.
+
+## Q-109 esm-spec.md §9.5.1, §9.5.5: infinite table values (editorial)
+- Clauses: `spec.9.5.5.table-check-order`
+- Phase: 1
+- Found by: phase-1 binding work
+- Problem: §9.5.1 and the schema require finite values, but the codes only name NaN; bindings differ on infinities in tables built in memory.
+- Ruling: Editorial (2026-10-27): a non-finite value (NaN or ±Inf) is reported by `table_axis_nan` / `table_data_nan`; the code descriptions say "not finite".
