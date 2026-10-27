@@ -2105,15 +2105,10 @@ func isRewriteTargetDerivative(node ExprNode) bool {
 
 // derivativeStateDim inspects an equation's LHS. When it is a derivative taken
 // with respect to an UNDECLARED variable — the ordinary case, since `t` is
-// rarely given units — it returns the dimension of the differentiated state and
-// true, signalling that the caller must use derivativeTimeMismatch instead of a
-// direct LHS/RHS comparison. Otherwise it returns false.
-func derivativeStateDim(lhs Expression, env map[string]Unit) (*Unit, bool) {
-	return unitTyper{}.derivativeStateDim(lhs, env)
-}
-
-// derivativeStateDim is derivativeStateDim with the state typed under ut's
-// literal rule.
+// rarely given units — it returns the dimension of the differentiated state
+// (typed under ut's literal rule) and true, signalling that the caller must use
+// derivativeTimeMismatch instead of a direct LHS/RHS comparison. Otherwise it
+// returns false.
 func (ut unitTyper) derivativeStateDim(lhs Expression, env map[string]Unit) (*Unit, bool) {
 	var node ExprNode
 	switch e := lhs.(type) {
@@ -2299,8 +2294,15 @@ func declaredDimString(units *string) string {
 // the previous `/lhs` and `/rhs` suffixes pointed at no schema node and did not
 // match the corpus.
 func ValidateEquationDimensions(eq *Equation, env map[string]Unit, path string) *UnitWarning {
-	lhs, lhsErr := propagateDimension(eq.LHS, env)
-	rhs, rhsErr := propagateDimension(eq.RHS, env)
+	return unitTyper{}.equationFinding(eq, env, path)
+}
+
+// equationFinding is ValidateEquationDimensions under ut's literal rule: the
+// one equation check both the validator (current rule) and the esm-spec §4.8.6
+// warning pass (both rules) run.
+func (ut unitTyper) equationFinding(eq *Equation, env map[string]Unit, path string) *UnitWarning {
+	lhs, lhsErr := ut.propagate(eq.LHS, env)
+	rhs, rhsErr := ut.propagate(eq.RHS, env)
 
 	if lhsErr != nil {
 		return &UnitWarning{
@@ -2324,7 +2326,7 @@ func ValidateEquationDimensions(eq *Equation, env map[string]Unit, path string) 
 	// D(x)/d<wrt> = rhs with an UNDECLARED <wrt>: the LHS dimension is unknown
 	// (see the OpDerivative case), so the sides cannot be compared directly. The
 	// equation is still provably wrong when no time unit could reconcile them.
-	if state, undeclared := derivativeStateDim(eq.LHS, env); undeclared {
+	if state, undeclared := ut.derivativeStateDim(eq.LHS, env); undeclared {
 		if err := derivativeTimeMismatch(state, rhs); err != nil {
 			return &UnitWarning{
 				Path:     path,
@@ -2835,13 +2837,8 @@ func validateReactionSystemUnits(_ string, system *ReactionSystem, basePath stri
 		})
 	}
 	for i, rx := range system.Reactions {
-		rxPath := fmt.Sprintf("%s/reactions/%d/rate", basePath, i)
-		if _, err := PropagateDimension(rx.Rate, env); err != nil {
-			result.UnitWarnings = append(result.UnitWarnings, UnitWarning{
-				Path:    rxPath,
-				Code:    findingCode(err),
-				Message: "dimensional analysis failed: " + err.Error(),
-			})
+		if w := (unitTyper{}).rateFinding(rx.Rate, env, fmt.Sprintf("%s/reactions/%d/rate", basePath, i)); w != nil {
+			result.UnitWarnings = append(result.UnitWarnings, *w)
 		}
 	}
 	for i, eq := range system.ConstraintEquations {
@@ -2850,6 +2847,20 @@ func validateReactionSystemUnits(_ string, system *ReactionSystem, basePath stri
 			result.UnitWarnings = append(result.UnitWarnings, *w)
 		}
 	}
+}
+
+// rateFinding is the finding a reaction rate's own operator rules produce
+// under ut's literal rule, or nil. The rate is not compared with its
+// stoichiometric order here (validateReactionRateUnits does that).
+func (ut unitTyper) rateFinding(rate Expression, env map[string]Unit, path string) *UnitWarning {
+	if _, err := ut.propagate(rate, env); err != nil {
+		return &UnitWarning{
+			Path:    path,
+			Code:    findingCode(err),
+			Message: "dimensional analysis failed: " + err.Error(),
+		}
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------

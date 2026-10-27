@@ -1245,7 +1245,7 @@ func TestCheckerB_A_IndependentVarAndCoordinatesAreImplicit(t *testing.T) {
 	      {"lhs":{"op":"ic","args":["u"]},
 	       "rhs":{"op":"tanh","args":[{"op":"-","args":["x",0.3]}]}},
 	      {"lhs":{"op":"D","args":["u"],"wrt":"t"},
-	       "rhs":{"op":"*","args":[{"op":"sin","args":["t"]},0.0]}}
+	       "rhs":{"op":"*","args":["t",0.0]}}
 	    ]}}}`
 	result := validateSrc(t, src)
 	if hasCode(result, ErrorUndefinedVariable) {
@@ -1259,6 +1259,12 @@ func TestCheckerB_A_IndependentVarAndCoordinatesAreImplicit(t *testing.T) {
 	bad := validateSrc(t, strings.Replace(src, `"x",0.3`, `"not_a_coord",0.3`, 1))
 	if !hasCode(bad, ErrorUndefinedVariable) {
 		t.Error("an ordinary undeclared name must still be reported as undefined_variable")
+	}
+	// An undeclared `t` is implicit, but it is in seconds (esm-spec §4.9.1), so
+	// `sin(t)` is a unit inconsistency rather than an undefined name.
+	sinT := validateSrc(t, strings.Replace(src, `"args":["t",0.0]`, `"args":[{"op":"sin","args":["t"]},0.0]`, 1))
+	if hasCode(sinT, ErrorUndefinedVariable) || !hasCode(sinT, ErrorUnitInconsistency) {
+		t.Errorf("sin(t) with `t` undeclared must be a unit_inconsistency, not undefined: %+v", sinT.StructuralErrors)
 	}
 }
 
