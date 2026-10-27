@@ -54,10 +54,18 @@ theorem fDivmod_not_exact :
       fDayNumber t = dayNumber t ∧ fSecondOfDay t = secondOfDay t :=
   fun h => fSecondOfDay_ne fun t ht hb => (h t ht hb).2
 
-/-- Claim (b): the spec's binary64 julian_day is within one ulp of the exact
-value of its formula, for every double `|t| ≤ 2^59`. -/
+/-- Claim (b), for the julian_day §9.2 pins (ruling Q-99): its binary64
+evaluation is within one ulp of the exact Julian Date, for every double
+`|t| ≤ 2^59` (which covers every `t` whose year is an Int32). -/
 theorem fJulianDay_within_ulp (t : ℝ) (ht : IsF64 t) (hb : |t| ≤ 2 ^ (59 : ℤ)) :
     |fJulianDay t - julianDay t| ≤ ulp (julianDay t) :=
   fJulianDay_err ht.1 hb
+
+/-- The same bound for the Fliegel–van Flandern computation of §9.2's
+informative note (the spec's reference before Q-99), against the exact value
+of its own formula. -/
+theorem fFvfJulianDay_within_ulp (t : ℝ) (ht : IsF64 t) (hb : |t| ≤ 2 ^ (59 : ℤ)) :
+    |fFvfJulianDay t - fvfJulianDay t| ≤ ulp (fvfJulianDay t) :=
+  fFvfJulianDay_err ht.1 hb
 
 end Esm.Closed.Datetime

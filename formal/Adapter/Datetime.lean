@@ -8,8 +8,10 @@ import Esm.Closed.Datetime.FloatImpl
 Each input is the JSON decimal rounded to the nearest binary64 (`Esm.F64.rn`
 at `ℚ`, the same double a binding's JSON parser produces). Integer outputs are
 the exact model (`IntFn.eval`, ruling Q-3) on that double's exact value;
-`julian_day` is the spec's binary64 reference computation (`fJulianDay`) in
-the `Esm.F64` model at `ℚ`, printed as the exact decimal of the double.
+`julian_day` is the binary64 evaluation §9.2 pins (`fJulianDay`, ruling Q-99)
+in the `Esm.F64` model at `ℚ`, printed as the exact decimal of the double.
+Every function reports `closed_function_overflow` when the year of `t` is
+outside Int32 (ruling Q-101) and for a non-finite `t` (ruling Q-100).
 
 Output (stdout):
 
@@ -20,9 +22,9 @@ Output (stdout):
 ```
 
 Scenarios are read from both `scenarios` and `error_scenarios`. A non-finite
-input (`"NaN"`, `"Infinity"`, `"-Infinity"`, or a decimal beyond the largest
-double) has no specified result in esm-spec §9.2; it is reported as the error
-`nonfinite_input`.
+input (`"NaN"`, `"Inf"`, `"-Inf"`, `"Infinity"`, `"-Infinity"`, or a decimal
+beyond the largest double) is `Time.nan`/`posInf`/`negInf` and evaluates
+through `IntFn.evalTime` / `julianDayEvalTime`.
 
 Diagnostics on stderr, never in the result: a disagreement between the
 `Esm.F64` model and Lean's `Float` (the differential test), a julian_day more
@@ -38,15 +40,18 @@ open Lean Esm.Closed.Datetime
 Lean's JSON parser gives), or non-finite. -/
 inductive Input where
   | finite (q : ℚ) (f : Float)
-  | nonfinite
+  | nonfinite (t : Time ℚ)
 
 def parseInput (j : Json) : Except String Input :=
   match j with
   | .num n =>
     let q : ℚ := (n.mantissa : ℚ) / (10 : ℚ) ^ n.exponent
     let t := Esm.F64.rn q
-    if |t| ≤ Esm.F64.maxFinite then .ok (.finite t n.toFloat) else .ok .nonfinite
-  | .str "NaN" | .str "Infinity" | .str "-Infinity" => .ok .nonfinite
+    if |t| ≤ Esm.F64.maxFinite then .ok (.finite t n.toFloat)
+    else .ok (.nonfinite (if 0 < t then .posInf else .negInf))
+  | .str "NaN" => .ok (.nonfinite .nan)
+  | .str "Inf" | .str "Infinity" => .ok (.nonfinite .posInf)
+  | .str "-Inf" | .str "-Infinity" => .ok (.nonfinite .negInf)
   | _ => .error s!"unsupported input {j.compress}"
 
 /-- The exact decimal of a dyadic rational (`num / 2^k = num · 5^k / 10^k`). -/
@@ -79,12 +84,25 @@ def pipelineInt (f : IntFn) (t : ℚ) : ℤ :=
 
 def evalScenario (fn : String) (name : String) (inp : Input) : IO Json := do
   let res (fields : List (String × Json)) : Json := Json.mkObj (("name", Json.str name) :: fields)
+  let overflow := res [("error", "closed_function_overflow")]
   match inp with
-  | .nonfinite => return res [("error", "nonfinite_input")]
+  | .nonfinite x =>
+    if fn == "datetime.julian_day" then
+      match julianDayEvalTime x with
+      | .overflow => return overflow
+      | .ok _ => throw (IO.userError s!"{name}: a non-finite t gave a value")
+    else
+      match intFnOf fn with
+      | none => throw (IO.userError s!"unknown datetime function {fn}")
+      | some f =>
+        match f.evalTime x with
+        | .overflow => return overflow
+        | .ok _ => throw (IO.userError s!"{name}: a non-finite t gave a value")
   | .finite t tf =>
     if FloatImpl.toRat tf != some t then
       IO.eprintln s!"{name}: Lean's Float parse {tf} differs from Esm.F64.rn of the decimal"
     if fn == "datetime.julian_day" then
+      if !(decide (YearInInt32 t)) then return overflow
       let j : ℚ := fJulianDay t
       match FloatImpl.julianDay tf >>= FloatImpl.toRat with
       | some jf =>
@@ -104,7 +122,7 @@ def evalScenario (fn : String) (name : String) (inp : Input) : IO Json := do
           IO.eprintln s!"{name}: the binary64 floor-divmod pipeline gives {p}, the exact model {f.exact t}"
         match f.eval t with
         | .ok v => return res [("value", Json.num ⟨v, 0⟩)]
-        | .overflow => return res [("error", "closed_function_overflow")]
+        | .overflow => return overflow
 
 def run (path : String) : IO Json := do
   let text ← IO.FS.readFile path

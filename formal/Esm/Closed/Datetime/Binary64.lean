@@ -11,8 +11,11 @@ binary64 pipeline in the `Esm.F64` model, operation for operation:
 
 * `fDayNumber t = ⌊t ⊘ 86400⌋`;
 * `fTimeOfDay t = t ⊖ (86400 ⊗ d)`, the remainder of the floor-divmod;
-* `fJulianDay t = JDN ⊕ ((tod ⊖ 43200) ⊘ 86400)`, the spec's reference
-  computation with the JDN rounded to a double first.
+* `fJulianDay t = (d + 2440588) ⊕ (((s − 43200) ⊕ (t ⊖ ⌊t⌋)) ⊘ 86400)`,
+  julian_day as §9.2 pins it on the exact split (ruling Q-99);
+* `fFvfJulianDay t = JDN ⊕ ((tod ⊖ 43200) ⊘ 86400)`, the Fliegel–van
+  Flandern computation of §9.2's informative note (the spec's reference
+  computation before Q-99), with the JDN rounded to a double first.
 
 and compares it with the exact model (`Exact.lean`).
 -/
@@ -36,8 +39,17 @@ def fTimeOfDay (t : K) : K := fsub t (fmul 86400 (fDayNumber t : K))
 /-- `⌊tod⌋` from the binary64 remainder. -/
 def fSecondOfDay (t : K) : ℤ := ⌊fTimeOfDay t⌋
 
-/-- The spec's julian_day reference computation in binary64. -/
+/-- `datetime.julian_day` in binary64 as §9.2 pins it (ruling Q-99), on the
+exact split `d = ⌊t / 86400⌋`, `s = ⌊t⌋ − 86400 d` (`secondOfDay`):
+`(d + 2440588) ⊕ (((s − 43200) ⊕ (t ⊖ ⌊t⌋)) ⊘ 86400)`. The two integers are
+converted to doubles (`rn`, exact in range: `fJulianDay_err`). -/
 def fJulianDay (t : K) : K :=
+  fadd (rn ((dayNumber t + 2440588 : ℤ) : K))
+    (fdiv (fadd (rn ((secondOfDay t - 43200 : ℤ) : K)) (fsub t (⌊t⌋ : K))) 86400)
+
+/-- The Fliegel–van Flandern julian_day of §9.2's informative note, with the
+binary64 floor-divmod. -/
+def fFvfJulianDay (t : K) : K :=
   fadd (rn (fvfJdn (civilFromDays (fDayNumber t)) : K)) (fdiv (fsub (fTimeOfDay t) 43200) 86400)
 
 /-! ## Helpers about the binary64 model -/

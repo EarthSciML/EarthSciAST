@@ -7,8 +7,10 @@ import Esm.Closed.Datetime.Binary64
   double `|t| ≤ 2^59` outside `(-43200, 0)`;
 * `fSecondOfDay_ne`: inside that interval it is not, and `⌊tod⌋` can be a
   second late (`t = -1 - 2^-52` gives 86399, the exact value is 86398);
-* `fJulianDay_err`: the spec's binary64 julian_day is within one ulp of the
-  exact value of its formula, for every double `|t| ≤ 2^59`.
+* `fJulianDay_err`: the binary64 julian_day §9.2 pins is within one ulp of
+  the exact Julian Date, for every double `|t| ≤ 2^59`;
+* `fFvfJulianDay_err`: so is the informative Fliegel–van Flandern
+  computation, of the exact value of its own formula.
 -/
 
 namespace Esm.Closed.Datetime
@@ -190,12 +192,12 @@ theorem repr_tod_sub {t : K} (ht : Repr t) (h16 : 2 ^ (16 : ℤ) ≤ |t|) (hb : 
     linarith
   exact_mod_cast hc
 
-theorem fJulianDay_err {t : K} (ht : Repr t) (hb : |t| ≤ 2 ^ (59 : ℤ)) :
-    |fJulianDay t - julianDay t| ≤ ulp (julianDay t) := by
-  unfold fJulianDay fadd
+theorem fFvfJulianDay_err {t : K} (ht : Repr t) (hb : |t| ≤ 2 ^ (59 : ℤ)) :
+    |fFvfJulianDay t - fvfJulianDay t| ≤ ulp (fvfJulianDay t) := by
+  unfold fFvfJulianDay fadd
   apply abs_rn_sub_le_ulp
   have h60 : |t| < 2 ^ (60 : ℤ) := lt_of_le_of_lt hb (zpow_lt_zpow_right₀ one_lt_two (by norm_num))
-  set J := julianDay t with hJ
+  set J := fvfJulianDay t with hJ
   set dF := fDayNumber t with hdF
   set d := dayNumber t with hd
   set AF := fvfJdn (civilFromDays dF) with hAF
@@ -236,7 +238,7 @@ theorem fJulianDay_err {t : K} (ht : Repr t) (hb : |t| ≤ 2 ^ (59 : ℤ)) :
   rw [rn_of_repr (repr_intCast hAFsmall)]
   -- `J = AF + (s - 43200) / 86400` in both cases.
   have hJs : J = AF + (s - 43200) / 86400 := by
-    rw [hJ]; unfold julianDay timeOfDay dateOf
+    rw [hJ]; unfold fvfJulianDay timeOfDay dateOf
     rcases hcases with h | ⟨h1, h2, -⟩
     · rw [hAF, hs, h]
     · rw [hAF, hs, ← hd, h1, h2, civil_zero_jdn, civil_neg_one_jdn]; push_cast; ring
@@ -377,6 +379,185 @@ theorem fJulianDay_err {t : K} (ht : Repr t) (hb : |t| ≤ 2 ^ (59 : ℤ)) :
           have : 1 ≤ |AF| := Int.one_le_abs hA
           exact_mod_cast this
         have := abs_sub_abs_le_abs_sub (AF : K) (-z)
+        rw [abs_neg, sub_neg_eq_add] at this
+        linarith
+    have := abs_rn_sub_le z
+    linarith
+
+
+/-! ## julian_day as §9.2 pins it (ruling Q-99) -/
+
+/-- `tod - 43200 = (s - 43200) + (t - ⌊t⌋)`: the split the binary64 formula
+is evaluated from. -/
+theorem timeOfDay_sub_eq (t : K) :
+    timeOfDay t - 43200 = ((secondOfDay t - 43200 : ℤ) : K) + (t - ⌊t⌋) := by
+  rw [secondOfDay_eq]; unfold timeOfDay; push_cast; ring
+
+/-- `t - ⌊t⌋` is a double when `t` is a double with `2^16 ≤ |t|`. -/
+theorem repr_frac {t : K} (ht : Repr t) (h16 : 2 ^ (16 : ℤ) ≤ |t|) :
+    F64.Repr (t - ⌊t⌋) := by
+  obtain ⟨n, hn⟩ := repr_iff.mp ht
+  set E := fexp t with hE
+  have hE1 : -36 ≤ E := fexp_ge_of_ge h16
+  set e := min E 0 with he
+  set M : ℤ := n * 2 ^ (E - e).toNat - ⌊t⌋ * 2 ^ (-e).toNat with hM
+  have hval : t - ⌊t⌋ = (M : K) * 2 ^ e := by
+    nth_rewrite 1 [hn]
+    rw [hM]
+    push_cast
+    rw [sub_mul, mul_assoc, mul_assoc, ← zpow_natCast, ← zpow_natCast, ← zpow_add₀ two_ne_zero,
+      ← zpow_add₀ two_ne_zero, Int.toNat_of_nonneg (by omega), Int.toNat_of_nonneg (by omega),
+      show E - e + e = E by ring, show -e + e = (0 : ℤ) by ring, zpow_zero, mul_one]
+  refine ⟨M, e, ?_, by omega, hval⟩
+  have hf0 : 0 ≤ t - ⌊t⌋ := by have := Int.floor_le t; linarith
+  have hf1 : t - ⌊t⌋ < 1 := by have := Int.lt_floor_add_one t; linarith
+  have habs : |(M : K)| * 2 ^ e < 1 := by
+    rw [← abs_of_pos (two_zpow_pos' (K := K) e), ← abs_mul, ← hval, abs_of_nonneg hf0]
+    exact hf1
+  have he36 : (2 : K) ^ (-36 : ℤ) ≤ 2 ^ e := two_zpow_le' (by omega)
+  have : |(M : K)| * 2 ^ (-36 : ℤ) < 1 :=
+    lt_of_le_of_lt (mul_le_mul_of_nonneg_left he36 (abs_nonneg _)) habs
+  have : |(M : K)| < 2 ^ (36 : ℤ) := by
+    rw [show (2 : K) ^ (-36 : ℤ) = (2 ^ (36 : ℤ))⁻¹ by rw [zpow_neg]] at this
+    rwa [← div_eq_mul_inv, div_lt_iff₀ (two_zpow_pos' _), one_mul] at this
+  have hc : ((|M| : ℤ) : K) < ((2 ^ 53 : ℤ) : K) := by
+    push_cast
+    have : (2 : K) ^ (36 : ℤ) < 2 ^ 53 := by norm_num
+    linarith
+  exact_mod_cast hc
+
+/-- The binary64 julian_day §9.2 pins is within one ulp of the exact Julian
+Date, for every double `|t| ≤ 2^59`. -/
+theorem fJulianDay_err {t : K} (ht : Repr t) (hb : |t| ≤ 2 ^ (59 : ℤ)) :
+    |fJulianDay t - julianDay t| ≤ ulp (julianDay t) := by
+  unfold fJulianDay fadd
+  apply abs_rn_sub_le_ulp
+  set J := julianDay t with hJ
+  set d := dayNumber t with hd
+  set S : ℤ := secondOfDay t - 43200 with hS
+  set f : K := t - ⌊t⌋ with hf
+  -- The two integers convert to doubles exactly.
+  have hdsmall := dayNumber_small hb
+  rw [← hd] at hdsmall
+  have hD : rn (((d + 2440588 : ℤ)) : K) = ((d + 2440588 : ℤ) : K) := by
+    apply rn_of_repr; apply repr_intCast
+    rw [abs_lt] at hdsmall; rw [abs_le]; constructor <;> omega
+  have hSb : |S| ≤ 43200 := by
+    have := secondOfDay_bounds t; rw [hS, abs_le]; constructor <;> omega
+  have hSr : rn ((S : ℤ) : K) = S := by
+    apply rn_of_repr; apply repr_intCast
+    rw [abs_le] at hSb ⊢; constructor <;> omega
+  rw [hD, hSr]
+  have hJs : J = ((d + 2440588 : ℤ) : K) + ((S : K) + f) / 86400 := by
+    rw [hJ, hS, hf]; unfold julianDay; rw [timeOfDay_sub_eq]
+  have hf0 : 0 ≤ f := by have := Int.floor_le t; rw [hf]; linarith
+  have hf1 : f < 1 := by have := Int.lt_floor_add_one t; rw [hf]; linarith
+  have hSK : |(S : K)| ≤ 43200 := by exact_mod_cast hSb
+  simp only [fsub, fdiv]
+  set fF := rn f with hfF
+  set w := (S : K) + fF with hw
+  set u := rn w with hu
+  set z := u / 86400 with hz
+  by_cases hJ8 : 8 ≤ |J|
+  · -- Crude bounds on each rounding.
+    have hfb : |f| < 2 ^ (0 : ℤ) := by rw [abs_of_nonneg hf0]; simpa using hf1
+    have e1 : |fF - f| ≤ 2 ^ (-54 : ℤ) := by
+      have := abs_rn_sub_le f
+      have := ulp_le hfb (by norm_num)
+      have : (2 : K) ^ ((0 : ℤ) - 53) = 2 * 2 ^ (-54 : ℤ) := by norm_num
+      rw [hfF]; linarith
+    have hfFb : |fF| ≤ 1 := by
+      have hr : Repr (1 : K) := ⟨1, 0, by norm_num, by norm_num, by simp⟩
+      rw [abs_le]; constructor
+      · have : (0 : K) ≤ fF := by rw [hfF]; exact rn_nonneg hf0
+        linarith
+      · rw [← rn_of_repr hr, hfF]; exact rn_mono hf1.le
+    have hwb : |w| < 2 ^ (16 : ℤ) := by
+      rw [hw]; rw [abs_le] at hfFb hSK; rw [abs_lt]
+      have : (2 : K) ^ (16 : ℤ) = 65536 := by norm_num
+      constructor <;> linarith [hfFb.1, hfFb.2, hSK.1, hSK.2]
+    have e2 : |u - w| ≤ 2 ^ (-38 : ℤ) := by
+      have := abs_rn_sub_le w
+      have := ulp_le hwb (by norm_num)
+      have : (2 : K) ^ ((16 : ℤ) - 53) = 2 * 2 ^ (-38 : ℤ) := by norm_num
+      rw [hu]; linarith
+    have hub : |u| ≤ 2 ^ (16 : ℤ) := by
+      have hr : Repr ((2 : K) ^ (16 : ℤ)) := ⟨1, 16, by norm_num, by norm_num, by simp⟩
+      rw [abs_lt] at hwb; rw [abs_le]; constructor
+      · rw [← rn_of_repr (repr_neg hr)]; exact rn_mono (by linarith)
+      · rw [← rn_of_repr hr, hu]; exact rn_mono hwb.2.le
+    have hzb : |z| < 2 ^ (0 : ℤ) := by
+      rw [hz, abs_div, abs_of_pos (by norm_num : (0 : K) < 86400), div_lt_iff₀ (by norm_num)]
+      have : (2 : K) ^ (16 : ℤ) < 2 ^ (0 : ℤ) * 86400 := by norm_num
+      linarith
+    have e3 : |rn z - z| ≤ 2 ^ (-54 : ℤ) := by
+      have := abs_rn_sub_le z
+      have := ulp_le hzb (by norm_num)
+      have : (2 : K) ^ ((0 : ℤ) - 53) = 2 * 2 ^ (-54 : ℤ) := by norm_num
+      linarith
+    -- `ulp J ≥ 2^-49`.
+    have hulpJ : (2 : K) ^ (-49 : ℤ) ≤ ulp J := by
+      unfold ulp
+      apply two_zpow_le'
+      by_contra hc
+      have := abs_lt_fexp J
+      have := two_zpow_le' (K := K) (show fexp J + 53 ≤ 3 by omega)
+      have : (2 : K) ^ (3 : ℤ) = 8 := by norm_num
+      linarith
+    have hsplit : ((d + 2440588 : ℤ) : K) + rn z - J =
+        (rn z - z) + (u - w) / 86400 + (fF - f) / 86400 := by
+      rw [hJs, hz, hw]; ring
+    rw [hsplit]
+    have h86 : (0 : K) < 86400 := by norm_num
+    have k1 : |(u - w) / 86400| ≤ 2 ^ (-38 : ℤ) / 86400 := by
+      rw [abs_div, abs_of_pos h86]; exact div_le_div_of_nonneg_right e2 h86.le
+    have k2 : |(fF - f) / 86400| ≤ 2 ^ (-54 : ℤ) / 86400 := by
+      rw [abs_div, abs_of_pos h86]; exact div_le_div_of_nonneg_right e1 h86.le
+    have num : (2 : K) ^ (-54 : ℤ) + 2 ^ (-38 : ℤ) / 86400 + 2 ^ (-54 : ℤ) / 86400 ≤
+        2 ^ (-49 : ℤ) / 2 := by norm_num
+    calc |(rn z - z) + (u - w) / 86400 + (fF - f) / 86400|
+        ≤ |rn z - z| + |(u - w) / 86400| + |(fF - f) / 86400| := abs_add_three _ _ _
+      _ ≤ 2 ^ (-54 : ℤ) + 2 ^ (-38 : ℤ) / 86400 + 2 ^ (-54 : ℤ) / 86400 := by gcongr
+      _ ≤ 2 ^ (-49 : ℤ) / 2 := num
+      _ ≤ ulp J / 2 := by gcongr
+  · -- `|J| < 8`: then `t < -2^16`, and `t - ⌊t⌋` and `(s - 43200) + (t - ⌊t⌋)`
+    -- are exact.
+    have hJ8' : |J| < 8 := lt_of_not_ge hJ8
+    have hJv : J = t / 86400 + 2440587.5 := by
+      rw [hJ]; unfold julianDay timeOfDay; push_cast; ring
+    have h16 : (2 : K) ^ (16 : ℤ) ≤ |t| := by
+      rw [abs_lt, hJv] at hJ8'
+      have : t < -(2 ^ (16 : ℤ)) := by
+        have : (2 : K) ^ (16 : ℤ) = 65536 := by norm_num
+        rw [this]
+        have := hJ8'.2
+        have h' : t / 86400 < -2440579.5 := by linarith
+        rw [div_lt_iff₀ (by norm_num)] at h'
+        linarith
+      rw [abs_of_neg (by have := two_zpow_pos' (K := K) 16; linarith)]
+      linarith
+    have hfeq : fF = f := by rw [hfF]; exact rn_of_repr (repr_frac ht h16)
+    have hweq : u = (S : K) + f := by
+      rw [hu, hw, hfeq]
+      apply rn_of_repr
+      rw [hS, hf, ← timeOfDay_sub_eq]
+      exact repr_tod_sub ht h16 hb
+    have hJz : J = ((d + 2440588 : ℤ) : K) + z := by rw [hJs, hz, hweq]
+    rw [hJz, show ((d + 2440588 : ℤ) : K) + rn z - (((d + 2440588 : ℤ) : K) + z) = rn z - z by ring]
+    have hz1 : |z| ≤ 1 / 2 := by
+      have hw' : (S : K) + f = timeOfDay t - 43200 := by rw [hS, hf, timeOfDay_sub_eq]
+      obtain ⟨a, b⟩ := timeOfDay_bounds t
+      rw [hz, hweq, hw', abs_le]; constructor
+      · rw [le_div_iff₀ (by norm_num)]; linarith
+      · rw [div_le_iff₀ (by norm_num)]; linarith
+    have hulp : ulp z ≤ ulp (((d + 2440588 : ℤ) : K) + z) := by
+      by_cases hA : d + 2440588 = 0
+      · rw [hA]; simp
+      · apply ulp_mono
+        have : (1 : K) ≤ |((d + 2440588 : ℤ) : K)| := by
+          have : 1 ≤ |d + 2440588| := Int.one_le_abs hA
+          exact_mod_cast this
+        have := abs_sub_abs_le_abs_sub (((d + 2440588 : ℤ) : K)) (-z)
         rw [abs_neg, sub_neg_eq_add] at this
         linarith
     have := abs_rn_sub_le z

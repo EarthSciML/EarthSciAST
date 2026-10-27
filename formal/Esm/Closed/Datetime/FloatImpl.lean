@@ -5,7 +5,8 @@ import Esm.Closed.Datetime.Calendar
 
 The spec's binary64 pipeline, written with Lean's `Float` (a C `double`) and
 following `Binary64.lean`'s `fDayNumber`, `fTimeOfDay` and `fJulianDay`
-operation for operation. The adapter runs it next to the `Esm.F64` model
+operation for operation (the integer day number and second of the day of
+`fJulianDay` are computed exactly here, as the bindings do). The adapter runs it next to the `Esm.F64` model
 evaluated at `ℚ` and reports any difference: that is the differential test
 connecting the two.
 -/
@@ -33,9 +34,12 @@ def timeOfDay (t : Float) : Float := t - 86400.0 * (t / 86400.0).floor
 /-- `⌊tod⌋`. -/
 def secondOfDay (t : Float) : Option ℤ := (toRat (timeOfDay t)).map (fun q => ⌊q⌋)
 
-/-- `JDN ⊕ ((tod ⊖ 43200) ⊘ 86400)`. -/
+/-- `(d + 2440588) ⊕ (((s − 43200) ⊕ (t ⊖ ⌊t⌋)) ⊘ 86400)` on the exact split
+of `⌊t⌋` (`Binary64.lean`'s `fJulianDay`); `none` for a non-finite `t`. -/
 def julianDay (t : Float) : Option Float :=
-  (dayNumber t).map fun d =>
-    Float.ofInt (fvfJdn (civilFromDays d)) + (timeOfDay t - 43200.0) / 86400.0
+  (toRat t.floor).map fun w =>
+    let s : ℤ := ⌊w⌋
+    let d : ℤ := ⌊(s : ℚ) / 86400⌋
+    Float.ofInt (d + 2440588) + (Float.ofInt (s - 86400 * d - 43200) + (t - t.floor)) / 86400.0
 
 end Esm.Closed.Datetime.FloatImpl
