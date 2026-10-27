@@ -68,6 +68,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("unit_exact_scale_test.jl")
     include("transcendental_scale_test.jl")
     include("const_units_test.jl")
+    include("dimensionless_literal_conformance_test.jl")  # esm-spec §4.8.6 warning stage
     include("graph_test.jl")
     include("graph_conformance_test.jl")  # component/expression graphs ≡ TS oracle
 

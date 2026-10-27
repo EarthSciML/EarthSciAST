@@ -1533,8 +1533,11 @@ const _BOOLEAN_OPS = _ops_with_dim_class(:boolean)
 # without `units` it is undeterminable, like a bare literal. An unresolvable
 # string is reported at the containing expression field by `model_unit_findings`,
 # not here.
+# Under the esm-spec §4.8.6 literal rule a unit-less `const` types exactly as
+# the bare literal it is (`_literal_unit`).
 _const_units_rule(expr, var_units, findings) =
-    expr.units === nothing ? nothing : _absolute_unit(parse_units(expr.units))
+    expr.units === nothing ? _literal_unit(expr.value, var_units) :
+                             _absolute_unit(parse_units(expr.units))
 
 const _DIMENSION_RULES = let rules = Dict{String, Function}(
         "+"      => _same_dimension_rule,
@@ -1666,6 +1669,46 @@ function _faq_unit(expr, body)
     return nothing
 end
 
+# ---------------------------------------------------------------------------
+# THE DIMENSIONLESS-LITERAL RULE (esm-spec §4.8.6), a switch on the engine.
+#
+# With the switch ON, a bare numeric literal, and a `const` without `units`,
+# whose value is nonzero types as DIMENSIONLESS at scale 1 instead of
+# undeterminable. Zero stays neutral (`D(y) = 0`, `max(x, 0)`), and so does a
+# unary `-` of zero, because a unary sign carries its operand's unit. Nothing
+# else changes. The switch is carried by the unit environment itself — the
+# `var_units` every rule already threads through — so no rule needs a new
+# argument: `_LiteralRuleEnv` wraps an environment and answers lookups exactly
+# as it does. OFF (any other environment) is today's behaviour.
+#
+# At this stage the rule only drives the `units_dimensionless_literal_mismatch`
+# WARNING (`dimensionless_literal_findings`); validity is decided by the
+# current, neutral-literal rule alone.
+# ---------------------------------------------------------------------------
+struct _LiteralRuleEnv{K, V, D <: AbstractDict{K, V}} <: AbstractDict{K, V}
+    inner::D
+end
+Base.get(env::_LiteralRuleEnv, name, default) = get(env.inner, name, default)
+Base.getindex(env::_LiteralRuleEnv, name) = env.inner[name]
+Base.haskey(env::_LiteralRuleEnv, name) = haskey(env.inner, name)
+Base.length(env::_LiteralRuleEnv) = length(env.inner)
+Base.iterate(env::_LiteralRuleEnv, state...) = iterate(env.inner, state...)
+
+# `var_units` with the §4.8.6 literal rule switched on or off.
+_with_literal_rule(var_units::AbstractDict, on::Bool) =
+    on ? (var_units isa _LiteralRuleEnv ? var_units : _LiteralRuleEnv(var_units)) :
+         (var_units isa _LiteralRuleEnv ? var_units.inner : var_units)
+
+# The unit of a bare literal (or unit-less `const`) of value `v`: undeterminable
+# under the current rule (esm-spec §4.8.4); under the §4.8.6 rule dimensionless
+# at scale 1 unless it is zero.
+function _literal_unit(v, var_units)
+    var_units isa _LiteralRuleEnv || return nothing
+    (v isa Real && !(v isa Bool)) || return nothing
+    iszero(v) && return nothing
+    return Unitful.NoUnits
+end
+
 # The engine proper. Returns the expression's dimension, or `nothing` when it
 # cannot be determined; every PROVABLE inconsistency encountered anywhere in the
 # subtree is appended to `findings`. See the invariant at the top of this block.
@@ -1674,8 +1717,9 @@ function _expr_dimensions!(findings::Vector{String}, expr::ASTExpr,
     if expr isa NumExpr || expr isa IntExpr
         # A bare number's dimension is INDETERMINATE, not dimensionless — see
         # the implicit-units note (fabrication #1). The three positions where a
-        # literal's meaning IS determined are handled by their own rules.
-        return nothing
+        # literal's meaning IS determined are handled by their own rules. Under
+        # the esm-spec §4.8.6 switch a nonzero one is dimensionless instead.
+        return _literal_unit(expr.value, var_units)
     elseif expr isa VarExpr
         # Look up variable units; a variable we know nothing about has
         # *unknown* dimensions, not dimensionless ones.
@@ -1716,7 +1760,8 @@ function _absolute_unit(u)
 end
 
 """
-    expression_unit_findings(expr::ASTExpr, var_units::AbstractDict) -> Vector{String}
+    expression_unit_findings(expr::ASTExpr, var_units::AbstractDict;
+                             dimensionless_literals=false) -> Vector{String}
 
 Every PROVABLE dimensional inconsistency inside `expr`, as human-readable
 messages. Empty means "nothing provably wrong" — NOT "fully checked": an
@@ -1726,10 +1771,16 @@ operator with no dimensional rule) yields no findings.
 This is the silent, error-collecting counterpart of
 [`get_expression_dimensions`](@ref) and the entry point the structural validator
 builds on.
+
+`dimensionless_literals = true` types a nonzero bare numeric literal (and a
+`const` without `units`) as dimensionless at scale 1 instead of undeterminable
+(esm-spec §4.8.6); zero stays neutral. Off by default: validity is decided by
+the neutral-literal rule.
 """
-function expression_unit_findings(expr::ASTExpr, var_units::AbstractDict)::Vector{String}
+function expression_unit_findings(expr::ASTExpr, var_units::AbstractDict;
+                                  dimensionless_literals::Bool=false)::Vector{String}
     findings = String[]
-    _expr_dimensions!(findings, expr, var_units)
+    _expr_dimensions!(findings, expr, _with_literal_rule(var_units, dimensionless_literals))
     return findings
 end
 
@@ -1746,10 +1797,14 @@ Because those three cases share one return value, `nothing` alone tells you
 nothing about *validity*; any provable inconsistency found along the way is
 reported here as a `@warn` and, for programmatic use, is available from
 [`expression_unit_findings`](@ref).
+
+`dimensionless_literals` switches on the esm-spec §4.8.6 literal rule, as for
+[`expression_unit_findings`](@ref).
 """
-function get_expression_dimensions(expr::ASTExpr, var_units::AbstractDict)::Union{Unitful.Units, Nothing}
+function get_expression_dimensions(expr::ASTExpr, var_units::AbstractDict;
+                                   dimensionless_literals::Bool=false)::Union{Unitful.Units, Nothing}
     findings = String[]
-    dim = _expr_dimensions!(findings, expr, var_units)
+    dim = _expr_dimensions!(findings, expr, _with_literal_rule(var_units, dimensionless_literals))
     for msg in findings
         @warn msg
     end
@@ -1891,6 +1946,20 @@ disable the checker).
 """
 const UNIT_PARSE_ERROR = ERROR_CODES.UNIT_PARSE_ERROR
 
+# A model's unit environment: its variables' declared units that RESOLVE (an
+# unresolvable one is reported at its declaration and left unknown here), then
+# scoped references into its own subsystems and into the document's top-level
+# components (esm-spec §4.8.4, EarthSciAST#414). The model's own bare names are
+# never overwritten.
+function _model_unit_env(model::Model, toplevel::_ScopedUnits)::_UnitEnv
+    own_units = Dict{String, String}()
+    for (name, var) in model.variables
+        var.units !== nothing && !isempty(var.units) &&
+            parse_units(var.units) !== nothing && (own_units[name] = var.units)
+    end
+    return _UnitEnv(own_units, _relative_scoped_units(model), toplevel)
+end
+
 """
     model_unit_findings(model::Model; file=nothing, toplevel=nothing) -> Vector{UnitFinding}
 
@@ -1933,18 +2002,8 @@ function model_unit_findings(model::Model; file=nothing,
     # one whose declared units do not resolve is reported separately below and
     # then treated as unknown, so a single bad string cannot cascade into a
     # bogus mismatch at every site that mentions the variable.
-    own_units = Dict{String, String}()
-    for (name, var) in model.variables
-        var.units !== nothing && !isempty(var.units) &&
-            parse_units(var.units) !== nothing && (own_units[name] = var.units)
-    end
-    # Scoped references — into this model's own subsystems and, given the
-    # document, into its top-level components — carry their targets' declared
-    # units (esm-spec §4.8.4, EarthSciAST#414). The model's own bare names are
-    # never overwritten; an unresolvable target unit is reported at its own
-    # declaration, so it is simply left unknown here.
-    var_units = _UnitEnv(own_units, _relative_scoped_units(model),
-                         toplevel === nothing ? _toplevel_scoped_units(file) : toplevel)
+    var_units = _model_unit_env(model,
+                                toplevel === nothing ? _toplevel_scoped_units(file) : toplevel)
 
     out = UnitFinding[]
 
@@ -2121,6 +2180,144 @@ function validate_file_dimensions(file::EsmFile)::Bool
     end
 
     return all_valid
+end
+
+"""
+    UNIT_FINDING_DIMENSIONLESS_LITERAL::String
+
+The `UnitWarning.code` of a check site that the current neutral-literal rule
+passes or skips but that fails once a bare numeric literal is read as
+dimensionless at scale 1 (esm-spec §4.8.6). Its value is
+`"units_dimensionless_literal_mismatch"`. A WARNING at this stage:
+[`validate`](@ref) reports it on `unit_warnings` and it never changes
+`is_valid`.
+"""
+const UNIT_FINDING_DIMENSIONLESS_LITERAL = ERROR_CODES.UNITS_DIMENSIONLESS_LITERAL_MISMATCH
+
+# The value of a bare numeric literal, a `const` without `units`, or a unary
+# `+`/`-` of one (nested to any depth); `nothing` for anything else.
+function _bare_literal_value(e)
+    _real(v) = (v isa Real && !(v isa Bool)) ? v : nothing
+    (e isa IntExpr || e isa NumExpr) && return _real(e.value)
+    e isa OpExpr || return nothing
+    e.op == "const" && e.units === nothing && return _real(e.value)
+    if e.op in ("+", "-") && length(e.args) == 1
+        inner = _bare_literal_value(e.args[1])
+        inner === nothing && return nothing
+        return e.op == "-" ? -inner : inner
+    end
+    return nothing
+end
+
+# The distinct nonzero bare literals in `exprs`, in walk order, as text — what
+# the dimensionless-literal warning names.
+function _nonzero_literals(exprs)::Vector{String}
+    out = String[]
+    function walk(node)
+        v = _bare_literal_value(node)
+        if v !== nothing
+            if !iszero(v)
+                text = string(v)
+                text in out || push!(out, text)
+            end
+            return
+        end
+        node isa OpExpr || return
+        foreach(walk, node.args)
+        node.expr_body !== nothing && walk(node.expr_body)
+        node.filter !== nothing && walk(node.filter)
+        node.values !== nothing && foreach(walk, node.values)
+        return
+    end
+    foreach(walk, exprs)
+    return out
+end
+
+# A unit for the dimensionless-literal message; a pure number reads as such
+# rather than as Unitful's empty spelling.
+_site_ustr(u) = (_is_pure_number(u) && !_is_angle_bearing(u)) ? "dimensionless" : _ustr(u)
+
+# The first PROVABLE mismatch one check site produces under `var_units`'s
+# literal rule, or `nothing` when it passes or is skipped. An equation site
+# (`lhs` given) fails on any mismatch inside either side, or when both sides
+# are determinable and differ in dimension or exact scale; a reaction-rate site
+# (`lhs === nothing`) fails on a mismatch inside the rate only.
+function _site_mismatch(lhs, rhs, var_units)::Union{String, Nothing}
+    findings = String[]
+    left = lhs === nothing ? nothing : _expr_dimensions!(findings, lhs, var_units)
+    right = _expr_dimensions!(findings, rhs, var_units)
+    isempty(findings) || return findings[1]
+    (left === nothing || right === nothing) && return nothing
+    _same_unit(left, right) && return nothing
+    return "left-hand side has units '$(_site_ustr(left))' but right-hand side " *
+           "has units '$(_site_ustr(right))'"
+end
+
+"""
+    dimensionless_literal_findings(file::EsmFile) -> Vector{Tuple{String, String}}
+
+The esm-spec §4.8.6 warnings: every check site whose verdict is a provable
+mismatch when bare numeric literals are read as dimensionless at scale 1 (zero
+excepted), but not under the current neutral-literal rule. Returns
+`(json_pointer, message)` pairs, models before reaction systems, each sorted by
+name.
+
+The sites are each equation of every top-level model
+(`/models/<M>/equations/<i>`) and each reaction rate of every top-level
+reaction system (`/reaction_systems/<S>/reactions/<i>`); subsystems are not
+visited. Each component is typed in the unit environment its own unit checks
+use. A site the current rule already rejects carries no warning: it is an
+error already.
+"""
+function dimensionless_literal_findings(file::EsmFile)::Vector{Tuple{String, String}}
+    out = Tuple{String, String}[]
+    toplevel = _toplevel_scoped_units(file)
+
+    function visit(pointer, lhs, rhs, env)
+        found = _site_mismatch(lhs, rhs, _LiteralRuleEnv(env))
+        found === nothing && return
+        _site_mismatch(lhs, rhs, env) === nothing || return
+        literals = _nonzero_literals(lhs === nothing ? (rhs,) : (lhs, rhs))
+        named = isempty(literals) ? "(none determinable)" : join(literals, ", ")
+        push!(out, (pointer,
+            "$pointer: with bare numeric literals read as dimensionless " *
+            "(esm-spec §4.8.6), $found; bare literal(s): $named. This becomes " *
+            "an error at the next major esm version; a literal that carries a " *
+            "unit is written const(value, units \"...\") (esm-spec §4.8.5)"))
+        return
+    end
+
+    if file.models !== nothing
+        for name in sort!(collect(keys(file.models)))
+            model = file.models[name]
+            model isa Model || continue
+            view = _units_view(file, name, model)
+            env = _model_unit_env(view, toplevel)
+            for (i, eq) in enumerate(view.equations)
+                visit("/models/$(_ptr_escape(name))/equations/$(i - 1)",
+                      eq.lhs, eq.rhs, env)
+            end
+        end
+    end
+
+    if file.reaction_systems !== nothing
+        for name in sort!(collect(keys(file.reaction_systems)))
+            rs = file.reaction_systems[name]
+            rs isa ReactionSystem || continue
+            own = Dict{String, String}()
+            for decl in Iterators.flatten((rs.species, rs.parameters))
+                u = decl.units
+                (u !== nothing && !isempty(u) && parse_units(u) !== nothing) &&
+                    (own[decl.name] = u)
+            end
+            env = _UnitEnv(own, _relative_scoped_units(rs), toplevel)
+            for (i, reaction) in enumerate(rs.reactions)
+                visit("/reaction_systems/$(_ptr_escape(name))/reactions/$(i - 1)",
+                      nothing, reaction.rate, env)
+            end
+        end
+    end
+    return out
 end
 
 """

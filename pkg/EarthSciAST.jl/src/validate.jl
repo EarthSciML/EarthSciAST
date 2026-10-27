@@ -68,7 +68,9 @@ Fields and their JSON spellings match Go's `UnitWarning`
   `UnitFinding*`, Rust's `UNIT_FINDING_*` and TypeScript's
   `UnitWarning['code']` union share: `dimensional_mismatch` (a PROVABLE
   inconsistency), `unparseable_unit` (a declared unit string denoting no real
-  unit), `analysis` (the checker could not DETERMINE a dimension). It is NOT
+  unit), `analysis` (the checker could not DETERMINE a dimension), and the
+  warning `units_dimensionless_literal_mismatch`
+  ([`UNIT_FINDING_DIMENSIONLESS_LITERAL`](@ref), esm-spec §4.8.6). It is NOT
   the `unit_inconsistency` / `unit_parse_error` pair, which names the
   STRUCTURAL error each finding is promoted to.
 * `message` — human-readable description (binding-local prose).
@@ -672,6 +674,12 @@ function validate(file::EsmFile)::ValidationResult
                                  string(get(e.details, "rhs_units", "")))
                      for e in structural_errors
                      if e.error_type == ERROR_CODES.UNIT_INCONSISTENCY]
+    # Bare numeric literals read as dimensionless (esm-spec §4.8.6): a WARNING
+    # at this stage, so it is never a structural error and never touches
+    # `is_valid`.
+    for (path, message) in dimensionless_literal_findings(file)
+        push!(unit_warnings, UnitWarning(path, UNIT_FINDING_DIMENSIONLESS_LITERAL, message))
+    end
 
     return ValidationResult(schema_errors, structural_errors, unit_warnings=unit_warnings)
 end
