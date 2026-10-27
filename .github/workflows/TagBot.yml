@@ -11,13 +11,11 @@ on:
       - created
   workflow_dispatch:
 
-# No `permissions:` block: TagBot's README asks for the repository defaults.
-
 jobs:
   TagBot:
     if: github.event_name == 'workflow_dispatch' || github.actor == 'JuliaTagBot'
     uses: EarthSciML/.github/.github/workflows/release-tagbot.yml@main
     with:
       julia-subdir: pkg/EarthSciAST.jl
-    secrets:
-      TAGBOT_SSH_KEY: ${{ secrets.TAGBOT_SSH_KEY }}
+    # The org's TagBot App key (TAGBOT_APP_PRIVATE_KEY); see EarthSciML/.github.
+    secrets: inherit
