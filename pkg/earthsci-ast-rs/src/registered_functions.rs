@@ -37,7 +37,7 @@ pub struct ClosedFunctionError {
     /// Stable diagnostic code: `unknown_closed_function`,
     /// `closed_function_arity`, `closed_function_overflow`,
     /// `searchsorted_non_monotonic`, `searchsorted_nan`,
-    /// `closed_function_arg_type`.
+    /// `closed_function_arg_type`, and the `interp_*` codes of §9.2.
     pub code: String,
 
     /// Human-readable diagnostic message.
@@ -255,7 +255,16 @@ fn cf_interp_searchsorted(
 ) -> Result<ClosedValue, ClosedFunctionError> {
     expect_arity(name, args, 2)?;
     let x = args[0].expect_scalar(name, 0)?;
-    let xs = args[1].expect_array(name, 1)?;
+    // esm-spec §9.2: an `xs` that is not a rank-1 `const` array is
+    // `interp_axis_not_const` — the code the two tensor entries' axes use —
+    // and that is decided before `searchsorted_nan` / `_non_monotonic` look
+    // at its entries.
+    let ClosedArg::Array(xs) = &args[1] else {
+        return Err(ClosedFunctionError::new(
+            codes::INTERP_AXIS_NOT_CONST,
+            format!("{name}: arg #2 (`xs`) must be a rank-1 `const` array"),
+        ));
+    };
     Ok(ClosedValue::Integer(check_i32(
         name,
         searchsorted(name, x, xs)?,
@@ -821,6 +830,22 @@ mod tests {
             let err =
                 evaluate_closed_function("interp.searchsorted", &[s(2.0), a(xs)]).unwrap_err();
             assert_eq!(err.code, "searchsorted_nan", "xs = {xs:?}");
+        }
+    }
+
+    /// esm-spec §9.2: an `xs` that is not a rank-1 array is
+    /// `interp_axis_not_const`, decided before its entries are looked at — a
+    /// nested `xs` holding a NaN is still `interp_axis_not_const`.
+    #[test]
+    fn searchsorted_non_rank_1_xs_is_interp_axis_not_const() {
+        for xs in [
+            ClosedArg::Scalar(3.0),
+            ClosedArg::Array2D(vec![vec![1.0, 2.0], vec![3.0, 4.0]]),
+            ClosedArg::Array2D(vec![vec![1.0, f64::NAN], vec![3.0, 4.0]]),
+        ] {
+            let err =
+                evaluate_closed_function("interp.searchsorted", &[s(2.0), xs.clone()]).unwrap_err();
+            assert_eq!(err.code, "interp_axis_not_const", "xs = {xs:?}");
         }
     }
 

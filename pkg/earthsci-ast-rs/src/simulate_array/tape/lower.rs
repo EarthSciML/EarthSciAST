@@ -2516,16 +2516,25 @@ impl<'m> TapeBuilder<'m> {
         label: &str,
         rank: usize,
     ) -> LResult<(Vec<usize>, Vec<f64>)> {
+        // esm-spec §9.2 names the refusal: `interp_table_not_const` for the
+        // `table`, `interp_axis_not_const` for an axis and for
+        // `interp.searchsorted`'s `xs`. The tape decides it first, before the
+        // registry probe looks at any entry (NaN, monotonicity).
+        let code = if label == "table" {
+            crate::diagnostic::codes::INTERP_TABLE_NOT_CONST
+        } else {
+            crate::diagnostic::codes::INTERP_AXIS_NOT_CONST
+        };
         let Expr::Operator(n) = arg else {
             bail_tape!(
                 "op: closed function `{name}`'s `{label}` argument is not an inline \
-                 `const` array (esm-spec §9.2 requires a literal `const`)"
+                 `const` array (esm-spec §9.2 requires a literal `const`): {code}"
             );
         };
         if n.op != "const" {
             bail_tape!(
                 "op: closed function `{name}`'s `{label}` argument is a `{}` node, not \
-                 an inline `const` array (esm-spec §9.2)",
+                 an inline `const` array (esm-spec §9.2): {code}",
                 n.op
             );
         }
@@ -2537,7 +2546,7 @@ impl<'m> TapeBuilder<'m> {
             }
             _ => bail_tape!(
                 "op: closed function `{name}`'s `{label}` argument is not a rank-{rank} \
-                 `const` array"
+                 `const` array: {code}"
             ),
         }
     }

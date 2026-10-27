@@ -619,6 +619,56 @@ fn a_non_const_table_bails_by_name() {
     );
 }
 
+/// esm-spec §9.2: an `interp.searchsorted` `xs` that is not a rank-1 `const`
+/// array — a variable reference, a non-`const` expression, a scalar `const`,
+/// a nested `const` (one holding a NaN included: the rank is decided first) —
+/// is `interp_axis_not_const`. The strict `native` build refuses the rule and
+/// its reason carries that code.
+#[test]
+fn a_searchsorted_xs_that_is_not_a_rank_1_const_is_interp_axis_not_const() {
+    let doc = |xs: &str| {
+        format!(
+            r#"{{
+  "esm": "1.0.0",
+  "metadata": {{ "name": "SearchsortedXs", "authors": ["test"] }},
+  "models": {{ "M": {{ "variables": {{
+      "q": {{ "type": "unknown", "units": "1", "default": 0.0 }},
+      "w": {{ "type": "parameter", "units": "1", "default": 1.0 }},
+      "y": {{ "type": "unknown", "units": "1", "default": 0.0 }}
+    }},
+    "equations": [
+      {{ "lhs": {{ "op": "D", "args": ["q"], "wrt": "t" }}, "rhs": 0.0 }},
+      {{ "lhs": {{ "op": "D", "args": ["y"], "wrt": "t" }},
+        "rhs": {{ "op": "fn", "name": "interp.searchsorted", "args": ["q", {xs}] }} }}
+    ] }} }}
+}}"#
+        )
+    };
+    for xs in [
+        r#""w""#,
+        r#"{ "op": "*", "args": [{ "op": "const", "args": [], "value": [0.0, 1.0] }, 2.0] }"#,
+        r#"{ "op": "const", "args": [], "value": 3.0 }"#,
+        r#"{ "op": "const", "args": [], "value": [[1.0, 2.0], [3.0, 4.0]] }"#,
+    ] {
+        let file = load_string(&doc(xs)).unwrap_or_else(|e| panic!("load {xs}: {e:?}"));
+        let e = match esm_problem(
+            &file,
+            (0.0, 1.0),
+            ProblemOptions {
+                compiler: Some(Compiler::Native),
+                ..Default::default()
+            },
+        ) {
+            Ok(_) => panic!("xs = {xs}: the native build must refuse"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            e.contains("interp.searchsorted") && e.contains("interp_axis_not_const"),
+            "xs = {xs}: {e}"
+        );
+    }
+}
+
 /// A table the registry itself rejects — here an axis that is not strictly
 /// increasing — must bail for the same reason: the registry answers such a
 /// call with an error, `eval_fn` turns that into the NaN sentinel, and only

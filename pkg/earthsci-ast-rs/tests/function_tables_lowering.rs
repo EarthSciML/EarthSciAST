@@ -351,3 +351,126 @@ fn roundtrip_fixture_lowering_matches_inline_const_companion() {
         "table_lookup lowering must match its inline-const companion bit-for-bit"
     );
 }
+
+// ---------------------------------------------------------------------------
+// §9.5.5 load-time table checks, in the pinned order
+// (`tests/conformance/function_tables/load_errors/cases.json`)
+// ---------------------------------------------------------------------------
+
+/// Stands in for a `"NaN"` axis entry while the table is deserialized: JSON
+/// (and so `serde_json`) has no NaN, so the table is read with this finite
+/// placeholder and every occurrence is then overwritten with a binary64 NaN in
+/// memory.
+const NAN_PLACEHOLDER: f64 = -1.234_567_890_123_456_7e300;
+
+fn replace_nan_strings(v: &mut Value) {
+    match v {
+        Value::String(s) if s == "NaN" => *v = serde_json::json!(NAN_PLACEHOLDER),
+        Value::Array(items) => items.iter_mut().for_each(replace_nan_strings),
+        Value::Object(map) => map.values_mut().for_each(replace_nan_strings),
+        _ => {}
+    }
+}
+
+/// Every case of the shared ledger: the table is built IN MEMORY (`"NaN"` as a
+/// binary64 NaN), put into a document beside one equation whose right-hand
+/// side is the case's `table_lookup`, and the document is built through
+/// `esm_problem` — the public path that runs the §9.5.3 lowering. The code the
+/// build refuses with must be the case's `expected_error_code`; `null` means
+/// it must build.
+///
+/// Skipped: the cases whose `data` holds a `"NaN"`. This binding's table
+/// `data` is a `serde_json::Value`, whose numbers cannot be NaN, so those
+/// tables cannot be built at all (the ledger's `_comment` allows the skip).
+#[test]
+fn load_error_ledger_codes_and_order() {
+    use earthsci_ast::{CompileError, ProblemOptions, SimulateError, esm_problem, load_string};
+
+    let path = common::repo_fixture("conformance/function_tables/load_errors/cases.json");
+    let ledger: Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("read cases.json"))
+            .expect("cases.json is JSON");
+    let table_id = ledger["table_id"].as_str().expect("table_id");
+    let cases = ledger["cases"].as_array().expect("cases");
+    assert!(!cases.is_empty(), "the ledger has no cases");
+    // Every rule of the pinned order is some case's expected code.
+    for rule in ledger["order"].as_array().expect("order") {
+        let code = rule
+            .as_str()
+            .expect("order entry")
+            .split(' ')
+            .next()
+            .unwrap();
+        assert!(
+            cases.iter().any(|c| c["expected_error_code"] == code),
+            "no case expects {code}"
+        );
+    }
+
+    const TEMPLATE: &str = r#"{
+      "esm": "1.0.0",
+      "metadata": { "name": "load_errors", "authors": ["test"] },
+      "function_tables": {
+        "T": { "axes": [{"name": "x", "values": [0.0, 1.0]}], "data": [0.0, 1.0] }
+      },
+      "models": { "M": {
+        "variables": { "y": {"type": "unknown", "default": 0.0} },
+        "equations": [ {"lhs": {"op": "D", "args": ["y"], "wrt": "t"}, "rhs": 0.0} ]
+      } }
+    }"#;
+
+    let (mut ran, mut skipped) = (0usize, Vec::new());
+    for case in cases {
+        let name = case["name"].as_str().expect("case name");
+        if case["table"]["data"].to_string().contains("\"NaN\"") {
+            skipped.push(name);
+            continue;
+        }
+        let mut table_json = case["table"].clone();
+        replace_nan_strings(&mut table_json);
+        let mut file = load_string(TEMPLATE).expect("template loads");
+        let tables = file.function_tables.as_mut().expect("template table");
+        tables.clear();
+        tables.insert(
+            table_id.to_string(),
+            serde_json::from_value(table_json).unwrap_or_else(|e| panic!("{name}: table: {e}")),
+        );
+        for axis in &mut tables[table_id].axes {
+            for v in &mut axis.values {
+                if *v == NAN_PLACEHOLDER {
+                    *v = f64::NAN;
+                }
+            }
+        }
+        let model = file.models.as_mut().unwrap().get_mut("M").unwrap();
+        model.equations[0].rhs = serde_json::from_value(case["lookup"].clone())
+            .unwrap_or_else(|e| panic!("{name}: lookup: {e}"));
+
+        let got = match esm_problem(&file, (0.0, 1.0), ProblemOptions::default()) {
+            Ok(_) => None,
+            Err(SimulateError::Compile(CompileError::TableLookupLowering { code, .. })) => {
+                Some(code)
+            }
+            Err(other) => panic!("{name}: refused, but not by the table lowering: {other}"),
+        };
+        assert_eq!(
+            got,
+            case["expected_error_code"].as_str(),
+            "{name}: {}",
+            case["description"].as_str().unwrap_or("")
+        );
+        ran += 1;
+    }
+    // The two cases whose `data` holds a NaN; a ledger that grows another one
+    // must be looked at, not silently skipped.
+    assert_eq!(
+        skipped,
+        [
+            "data_shape_mismatch__data_nan",
+            "data_nan__shape_assertion_mismatch"
+        ],
+        "the skipped cases"
+    );
+    assert_eq!(ran + skipped.len(), cases.len());
+    assert!(ran > 0, "no case ran");
+}

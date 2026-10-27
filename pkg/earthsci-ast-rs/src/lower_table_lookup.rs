@@ -294,10 +294,11 @@ fn lower_node(
     // `interp.bilinear` do at the ends, so the lowering IS the semantics there;
     // `error` is the same tree carrying the table id, which makes the
     // evaluators check each query against its axis first.
+    // The table itself first, before anything about this lookup is looked at
+    // (esm-spec §9.5.5; the formal model validates the table at this point
+    // too).
+    validate_table(table, table_id)?;
     let strict = (table.out_of_bounds.as_deref() == Some("error")).then_some(table_id);
-    for axis in &table.axes {
-        validate_table_axis(axis, table_id)?;
-    }
     let inputs = axis_inputs(node, table, table_id)?;
     let output = output_index(node, table, table_id)?;
     let data = output_slice(table, output, table_id)?;
@@ -450,6 +451,11 @@ fn output_index(
 /// The `data` sub-array the lowered `const` carries: row `output` of the
 /// leading dimension for a multi-output table, and the whole literal for a
 /// single-output one (which has no leading output dimension, §9.5.1).
+///
+/// [`validate_table`] has already established that `data`'s leading
+/// dimension is `len(outputs)` and [`output_index`] that `output` is below
+/// it, so the row exists; the error is the fail-closed answer should a caller
+/// ever skip that validation, not a check of its own.
 fn output_slice<'a>(
     table: &'a FunctionTable,
     output: usize,
@@ -473,30 +479,188 @@ fn output_slice<'a>(
         })
 }
 
-/// esm-spec §9.5.5: an axis's `values` must be NaN-free and strictly
-/// increasing, and a NaN is reported as `table_axis_nan` whatever the other
-/// entries are — it is checked over the whole axis first, because every
-/// comparison with a NaN is false and a monotonicity verdict on it would
-/// depend on how the comparison is written.
-fn validate_table_axis(axis: &FunctionTableAxis, table_id: &str) -> Result<(), CompileError> {
-    if let Some(i) = axis.values.iter().position(|v| v.is_nan()) {
+/// Whether `interpolation` (absent means `linear`) accepts `n_axes` axes:
+/// `linear` and `nearest` take 1, `bilinear` 2. An interpolation name outside
+/// those three accepts none.
+fn interpolation_accepts(kind: &str, n_axes: usize) -> bool {
+    matches!(
+        (kind, n_axes),
+        ("linear", 1) | ("bilinear", 2) | ("nearest", 1)
+    )
+}
+
+/// Whether the nesting of `data` is EXACTLY `shape`: a number for `[]`, and
+/// for `n :: rest` an array of `n` entries each nested as `rest`. Any other
+/// leaf — a string, a boolean, `null`, an object — is a nesting mismatch.
+fn has_shape(data: &Value, shape: &[usize]) -> bool {
+    match (data, shape) {
+        (Value::Number(_), []) => true,
+        (Value::Array(items), [n, rest @ ..]) => {
+            items.len() == *n && items.iter().all(|item| has_shape(item, rest))
+        }
+        _ => false,
+    }
+}
+
+/// Whether some numeric leaf of `data` is NaN.
+///
+/// A `serde_json::Value` number cannot be NaN (JSON has no spelling for one,
+/// and `serde_json` refuses to build one), so on this binding's `data` type
+/// this is always false and step 9 of [`validate_table`] never fires. It is
+/// kept as a step so the order stays the spec's, should `data` ever change
+/// type.
+fn any_nan(data: &Value) -> bool {
+    match data {
+        Value::Number(n) => n.as_f64().is_some_and(f64::is_nan),
+        Value::Array(items) => items.iter().any(any_nan),
+        _ => false,
+    }
+}
+
+/// The esm-spec §9.5.5 load-time checks on one function table, in the pinned
+/// "Order of the table checks": the FIRST rule the table breaks is the one
+/// reported, and each step covers every axis before the next begins. It is
+/// `Esm.Closed.Tables.validateTable` in `formal/`; the fixtures are
+/// `tests/conformance/function_tables/load_errors/`.
+///
+/// 1. `table_axis_duplicate_name`; 2. `table_outputs_duplicate_name`;
+/// 3. `table_interpolation_axes_mismatch`; 4. `table_axis_nan` (any axis);
+/// 5. `table_axis_non_monotonic` (any axis); 6. `table_axis_too_short` (any
+/// axis); 7. `table_outputs_length_mismatch`; 8. `table_data_shape_mismatch`
+/// (the nesting of `data`); 9. `table_data_nan`; 10.
+/// `table_data_shape_mismatch` (the `shape` assertion).
+///
+/// A NaN is checked over every axis before monotonicity because every
+/// comparison with a NaN is false, so a monotonicity verdict on an axis
+/// holding one would depend on how the comparison is written.
+pub(crate) fn validate_table(table: &FunctionTable, table_id: &str) -> Result<(), CompileError> {
+    // 1.
+    for (i, axis) in table.axes.iter().enumerate() {
+        if table.axes[..i].iter().any(|a| a.name == axis.name) {
+            return Err(err(
+                codes::TABLE_AXIS_DUPLICATE_NAME,
+                format!(
+                    "table `{table_id}` declares two axes named `{}` (esm-spec §9.5.5)",
+                    axis.name
+                ),
+            ));
+        }
+    }
+    // 2.
+    if let Some(outputs) = &table.outputs {
+        for (i, name) in outputs.iter().enumerate() {
+            if outputs[..i].contains(name) {
+                return Err(err(
+                    codes::TABLE_OUTPUTS_DUPLICATE_NAME,
+                    format!(
+                        "table `{table_id}` declares two outputs named `{name}` (esm-spec §9.5.5)"
+                    ),
+                ));
+            }
+        }
+    }
+    // 3.
+    let kind = table.interpolation.as_deref().unwrap_or("linear");
+    if !interpolation_accepts(kind, table.axes.len()) {
         return Err(err(
-            codes::TABLE_AXIS_NAN,
+            codes::TABLE_INTERPOLATION_AXES_MISMATCH,
             format!(
-                "table `{table_id}`: axis `{}` value {} is NaN; axis `values` must be \
-                 strictly-increasing finite floats (esm-spec §9.5.1)",
-                axis.name,
-                i + 1
+                "table `{table_id}` declares `interpolation: \"{kind}\"` over {} axes; \
+                 `linear` and `nearest` require 1, `bilinear` requires 2 (esm-spec §9.5.1)",
+                table.axes.len()
             ),
         ));
     }
-    if let Some(w) = axis.values.windows(2).find(|w| w[0] >= w[1]) {
+    // 4.
+    for axis in &table.axes {
+        if let Some(i) = axis.values.iter().position(|v| v.is_nan()) {
+            return Err(err(
+                codes::TABLE_AXIS_NAN,
+                format!(
+                    "table `{table_id}`: axis `{}` value {} is NaN; axis `values` must be \
+                     strictly-increasing finite floats (esm-spec §9.5.1)",
+                    axis.name,
+                    i + 1
+                ),
+            ));
+        }
+    }
+    // 5.
+    for axis in &table.axes {
+        if let Some(w) = axis.values.windows(2).find(|w| w[0] >= w[1]) {
+            return Err(err(
+                codes::TABLE_AXIS_NON_MONOTONIC,
+                format!(
+                    "table `{table_id}`: axis `{}` is not strictly increasing ({} then {}) \
+                     (esm-spec §9.5.1)",
+                    axis.name, w[0], w[1]
+                ),
+            ));
+        }
+    }
+    // 6.
+    for axis in &table.axes {
+        if axis.values.len() < 2 {
+            return Err(err(
+                codes::TABLE_AXIS_TOO_SHORT,
+                format!(
+                    "table `{table_id}`: axis `{}` has {} value(s); an axis needs at least 2 \
+                     (esm-spec §9.5.1)",
+                    axis.name,
+                    axis.values.len()
+                ),
+            ));
+        }
+    }
+    // 7.
+    if let (Some(outputs), Value::Array(rows)) = (&table.outputs, &table.data)
+        && rows.len() != outputs.len()
+    {
         return Err(err(
-            codes::TABLE_AXIS_NON_MONOTONIC,
+            codes::TABLE_OUTPUTS_LENGTH_MISMATCH,
             format!(
-                "table `{table_id}`: axis `{}` is not strictly increasing ({} then {}) \
-                 (esm-spec §9.5.1)",
-                axis.name, w[0], w[1]
+                "table `{table_id}`: `data` has leading dimension {} but the table declares {} \
+                 outputs (esm-spec §9.5.1)",
+                rows.len(),
+                outputs.len()
+            ),
+        ));
+    }
+    // 8.
+    let implied: Vec<usize> = table
+        .outputs
+        .iter()
+        .map(Vec::len)
+        .chain(table.axes.iter().map(|a| a.values.len()))
+        .collect();
+    if !has_shape(&table.data, &implied) {
+        return Err(err(
+            codes::TABLE_DATA_SHAPE_MISMATCH,
+            format!(
+                "table `{table_id}`: the nesting of `data` is not the shape {implied:?} its axes \
+                 (and outputs) imply (esm-spec §9.5.1)"
+            ),
+        ));
+    }
+    // 9.
+    if any_nan(&table.data) {
+        return Err(err(
+            codes::TABLE_DATA_NAN,
+            format!("table `{table_id}`: a leaf of `data` is NaN (esm-spec §9.5.1)"),
+        ));
+    }
+    // 10.
+    if let Some(shape) = &table.shape
+        && !shape
+            .iter()
+            .map(|&d| d as u128)
+            .eq(implied.iter().map(|&d| d as u128))
+    {
+        return Err(err(
+            codes::TABLE_DATA_SHAPE_MISMATCH,
+            format!(
+                "table `{table_id}`: the `shape` assertion {shape:?} is not the shape {implied:?} \
+                 its axes (and outputs) imply (esm-spec §9.5.1)"
             ),
         ));
     }
