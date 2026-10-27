@@ -216,7 +216,7 @@ pub fn evaluate_closed_function(
 fn cf_datetime_year(name: &str, args: &[ClosedArg]) -> Result<ClosedValue, ClosedFunctionError> {
     expect_arity(name, args, 1)?;
     let t = args[0].expect_scalar(name, 0)?;
-    let (y, _, _, _, _, _) = decompose_utc(t);
+    let (y, _, _, _, _, _) = decompose_utc(t)?;
     Ok(ClosedValue::Integer(check_i32(name, y)?))
 }
 
@@ -226,7 +226,7 @@ fn cf_datetime_day_of_year(
 ) -> Result<ClosedValue, ClosedFunctionError> {
     expect_arity(name, args, 1)?;
     let t = args[0].expect_scalar(name, 0)?;
-    let (y, m, d, _, _, _) = decompose_utc(t);
+    let (y, m, d, _, _, _) = decompose_utc(t)?;
     Ok(ClosedValue::Integer(day_of_year(y, m, d) as i32))
 }
 
@@ -236,7 +236,7 @@ fn cf_datetime_julian_day(
 ) -> Result<ClosedValue, ClosedFunctionError> {
     expect_arity(name, args, 1)?;
     let t = args[0].expect_scalar(name, 0)?;
-    Ok(ClosedValue::Float(julian_day(t)))
+    Ok(ClosedValue::Float(julian_day(t)?))
 }
 
 fn cf_datetime_is_leap_year(
@@ -245,7 +245,7 @@ fn cf_datetime_is_leap_year(
 ) -> Result<ClosedValue, ClosedFunctionError> {
     expect_arity(name, args, 1)?;
     let t = args[0].expect_scalar(name, 0)?;
-    let (y, _, _, _, _, _) = decompose_utc(t);
+    let (y, _, _, _, _, _) = decompose_utc(t)?;
     Ok(ClosedValue::Integer(if is_leap_year(y) { 1 } else { 0 }))
 }
 
@@ -300,7 +300,7 @@ fn datetime_field(
 ) -> Result<ClosedValue, ClosedFunctionError> {
     expect_arity(name, args, 1)?;
     let t = args[0].expect_scalar(name, 0)?;
-    Ok(ClosedValue::Integer(select(decompose_utc(t)) as i32))
+    Ok(ClosedValue::Integer(select(decompose_utc(t)?) as i32))
 }
 
 fn expect_arity(name: &str, args: &[ClosedArg], n: usize) -> Result<(), ClosedFunctionError> {
@@ -324,8 +324,8 @@ fn check_i32(name: &str, v: i64) -> Result<i32, ClosedFunctionError> {
 }
 
 // ---------------------------------------------------------------------------
-// Calendar arithmetic — integer ymd/hms decomposition, Fliegel–van Flandern
-// JDN. esm-spec §9.2 splits `t_utc` by ONE floor-divmod by 86400 into the day
+// Calendar arithmetic — integer ymd/hms decomposition and the Julian Date.
+// esm-spec §9.2 splits `t_utc` by ONE floor-divmod by 86400 into the day
 // number `floor(t/86400)` and the time of day `t − 86400·floor(t/86400)`, both
 // exact (as reals), and takes hour/minute/second from `floor(time of day)`:
 // fractional time floors toward −∞ (ruling Q-3).
@@ -337,32 +337,56 @@ fn check_i32(name: &str, v: i64) -> Result<i32, ClosedFunctionError> {
 ///
 /// Because 86400 is an integer, `floor(t/86400) == floor(floor(t)/86400)`, so
 /// the split is the Euclidean divmod of the whole second `floor(t)` — an exact
-/// integer in binary64 — and `t − floor(t)` is exact too. Nothing rounds, so
-/// the date and the time of day can never disagree about which day `t` is in.
+/// integer in binary64. Nothing rounds, so the date and the time of day can
+/// never disagree about which day `t` is in. (The fractional second
+/// `t − floor(t)` is exact too, except for `−0.5 < t < 0`, where `1 + t` can
+/// round — up to 1.0 at worst; only `julian_day` reads it.)
 /// (Dividing `t / 86400.0` in floating point instead rounds just below a day
 /// boundary, and `86400 − 5e-324` rounds up to 86400.)
 ///
-/// Outside `±2^63` s the `as i64` cast saturates (and NaN becomes 0); the year
-/// there is far outside Int32, so `datetime.year` still reports the overflow.
+/// Also the overflow gate every `datetime.*` entry passes through (esm-spec
+/// §9.2): a NaN or ±Inf `t_utc`, and one whose year is outside Int32, raise
+/// `closed_function_overflow` whichever field is asked for. Outside `±2^63` s
+/// the `as i64` cast saturates, but the year there is far outside Int32, so
+/// the year check rejects it all the same.
 #[inline]
-fn floor_div_mod(t_utc: f64) -> (i64, i64, f64) {
+fn floor_div_mod(t_utc: f64) -> Result<(i64, i64, f64), ClosedFunctionError> {
+    if !t_utc.is_finite() {
+        return Err(ClosedFunctionError::new(
+            codes::CLOSED_FUNCTION_OVERFLOW,
+            format!("datetime.*: t_utc {t_utc} is not finite"),
+        ));
+    }
     let whole = t_utc.floor();
     let s = whole as i64;
-    (s.div_euclid(86400), s.rem_euclid(86400), t_utc - whole)
+    let day_count = s.div_euclid(86400);
+    if !(DAY_OF_INT32_MIN_YEAR..DAY_OF_INT32_YEAR_END).contains(&day_count) {
+        return Err(ClosedFunctionError::new(
+            codes::CLOSED_FUNCTION_OVERFLOW,
+            format!("datetime.*: the year of t_utc {t_utc} overflows Int32"),
+        ));
+    }
+    Ok((day_count, s.rem_euclid(86400), t_utc - whole))
 }
+
+/// Day number (days after 1970-01-01) of -2147483648-01-01, the first day
+/// whose year is an Int32.
+pub(crate) const DAY_OF_INT32_MIN_YEAR: i64 = -784_353_015_833;
+/// Day number of 2147483648-01-01, the first day past the Int32 years.
+pub(crate) const DAY_OF_INT32_YEAR_END: i64 = 784_351_576_777;
 
 // Decompose a UTC scalar into (year, month, day, hour, minute, second). Uses
 // the Hinnant civil_from_days algorithm (see howardhinnant.github.io/date_algorithms.html)
 // extended to the proleptic-Gregorian calendar; the algorithm is exact on
 // the full i64 day-count domain, far beyond the i32 year contract. The year
-// stays `i64` so `datetime.year` can range-check it rather than wrap.
-fn decompose_utc(t_utc: f64) -> (i64, u32, u32, u32, u32, u32) {
-    let (day_count, s, _) = floor_div_mod(t_utc);
+// stays `i64`; `floor_div_mod` has already confined it to Int32.
+fn decompose_utc(t_utc: f64) -> Result<(i64, u32, u32, u32, u32, u32), ClosedFunctionError> {
+    let (day_count, s, _) = floor_div_mod(t_utc)?;
     let (y, m, d) = civil_from_days(day_count);
     let hour = (s / 3600) as u32;
     let minute = ((s % 3600) / 60) as u32;
     let second = (s % 60) as u32;
-    (y, m, d, hour, minute, second)
+    Ok((y, m, d, hour, minute, second))
 }
 
 // Hinnant's algorithm: days since 1970-01-01 → (y, m, d) on the proleptic-
@@ -395,24 +419,17 @@ fn day_of_year(y: i64, m: u32, d: u32) -> u32 {
     doy
 }
 
-// Fliegel–van Flandern (1968) JDN on the integer date component, plus the
-// fractional-day offset `(time_of_day − 43200) / 86400` relative to noon UTC.
-// The offset is formed as `(second_of_day − 43200) + fraction` — an exact
-// integer plus the exact fractional second — so the time of day rounds once,
-// then the divide and the add round once each. Rust's integer `/` is
-// truncate-toward-zero, matching the formula's (and Julia's `÷`) inner
-// divides. Using `div_euclid` here would shift the (m − 14)/12 term by one
-// for Jan/Feb (off by ±2 days) and fail epoch — keep `/`.
-fn julian_day(t_utc: f64) -> f64 {
-    let (day_count, sec_of_day, frac) = floor_div_mod(t_utc);
-    let (y, m, d) = civil_from_days(day_count);
-    let m = m as i64;
-    let d = d as i64;
-    let jdn = (1461 * (y + 4800 + (m - 14) / 12)) / 4 + (367 * (m - 2 - 12 * ((m - 14) / 12))) / 12
-        - (3 * ((y + 4900 + (m - 14) / 12) / 100)) / 4
-        + d
-        - 32075;
-    (jdn as f64) + (((sec_of_day - 43200) as f64) + frac) / 86400.0
+// The standard Julian Date `t / 86400 + 2440587.5`, evaluated as esm-spec
+// §9.2 pins it from the exact split:
+// `(day + 2440588) + ((second_of_day − 43200) + fraction) / 86400`. The day
+// term and `second_of_day − 43200` are exact integers and the fraction is
+// exact except for `−0.5 < t < 0` (where `1 + t` can round), so the inner
+// add, the divide and the outer add are the only other roundings (≤ 1 ulp). The day term is the LINEAR day number, not the
+// Fliegel–van Flandern JDN of the date: the two agree from -4800-03-01 on,
+// and before that FvF is off by -2 to +1 days.
+fn julian_day(t_utc: f64) -> Result<f64, ClosedFunctionError> {
+    let (day_count, sec_of_day, frac) = floor_div_mod(t_utc)?;
+    Ok(((day_count + 2440588) as f64) + (((sec_of_day - 43200) as f64) + frac) / 86400.0)
 }
 
 // `interp.searchsorted` per esm-spec §9.2: 1-based, left-side bias on
@@ -769,6 +786,43 @@ mod tests {
         // 2024-12-31 — day 366 in a leap year.
         let v = evaluate_closed_function("datetime.day_of_year", &[s(1735689599.0)]).unwrap();
         assert_eq!(v, ClosedValue::Integer(366));
+    }
+
+    /// esm-spec §9.2 (rulings Q-100, Q-101): every `datetime.*` entry raises
+    /// `closed_function_overflow` for a non-finite `t` and for one whose year
+    /// is outside Int32, and still answers one double inside each edge.
+    #[test]
+    fn datetime_overflow_every_entry() {
+        let names = closed_function_names();
+        let hi: f64 = 6.776_797_623_353_28e16; // first instant of year 2^31
+        let lo: f64 = -6.776_810_056_797_12e16; // first instant of year -2^31
+        for name in names.iter().filter(|n| n.starts_with("datetime.")) {
+            for t in [
+                f64::NAN,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                hi,
+                lo.next_down(),
+                1e300,
+            ] {
+                let err = evaluate_closed_function(name, &[s(t)]).unwrap_err();
+                assert_eq!(err.code, codes::CLOSED_FUNCTION_OVERFLOW, "{name}({t})");
+            }
+            for t in [hi.next_down(), lo] {
+                assert!(
+                    evaluate_closed_function(name, &[s(t)]).is_ok(),
+                    "{name}({t})"
+                );
+            }
+        }
+    }
+
+    /// `julian_day` is the standard Julian Date before -4800-03-01 too, where
+    /// the Fliegel–van Flandern JDN is a day ahead (-4800-02-29T12:00Z).
+    #[test]
+    fn datetime_julian_day_before_fvf_domain() {
+        let v = evaluate_closed_function("datetime.julian_day", &[s(-213_635_448_000.0)]).unwrap();
+        assert_eq!(v, ClosedValue::Float(-32045.0));
     }
 
     #[test]

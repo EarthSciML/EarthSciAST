@@ -3280,6 +3280,21 @@ const DATETIME_TIMES: &[f64] = &[
     // first instant of year -2147483648, where the day count is ~7.8e11.
     6.776_797_623_353_279e16,
     -6.776_810_056_797_12e16,
+    // One instant past each edge, where every entry raises
+    // `closed_function_overflow` and the oracle answers NaN, and ±Inf.
+    6.776_797_623_353_28e16,
+    -6.776_810_056_797_121e16,
+    f64::INFINITY,
+    f64::NEG_INFINITY,
+    // Julian dates before -4800-03-01, where the Fliegel-van Flandern JDN
+    // is +1, -1 and -2 days off and the linear day number is the answer, and
+    // around Julian Date 0 (-4713-11-24T12:00Z).
+    -213_635_448_000.0, // -4800-02-29T12:00:00Z
+    -314_608_449_600.0, // -8000-06-15T12:00:00Z
+    -377_605_281_600.0, // -9996-03-01T12:00:00Z
+    -210_866_760_000.0,
+    -210_866_759_999.999_97,
+    -210_866_785_920.0,
 ];
 
 /// The nine calendar entries of the closed-function registry, in the order the
@@ -3382,11 +3397,11 @@ fn ab_datetime_family() {
     datetime_ab_check(datetime_doc(), DATETIME_TIMES);
 }
 
-/// The oracle's `eval_fn` answers a NaN argument with the calendar fields of
-/// the epoch, because its float-to-integer casts saturate, and with NaN for
-/// `julian_day`, whose fractional term keeps the NaN. The tape has to do the
-/// same, or a NaN state during a rejected solver step would be the one input
-/// on which the two paths disagree.
+/// The registry raises `closed_function_overflow` for a NaN argument in
+/// every `datetime.*` entry (esm-spec §9.2), which the oracle's `eval_fn`
+/// answers with NaN. The tape has to do the same, or a NaN state during a
+/// rejected solver step would be the one input on which the two paths
+/// disagree.
 #[test]
 fn ab_datetime_nan_argument() {
     // `x / x` with x = 0 is the NaN the per-cell registry sees.
