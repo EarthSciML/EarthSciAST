@@ -11,6 +11,12 @@ A fixture that disagrees with a RULING (formal/QUESTIONS.md) is listed in
 KNOWN: the model follows the ruling, the mismatch is printed as known and does
 not fail the run unless --strict is given. Every other mismatch fails it.
 Prints one summary line; exit status 1 on any (unknown) mismatch.
+
+The adapter's output has the shape `scripts/run-closed-functions-lean.py`
+expects (`results[*].value` / `results[*].error`), so this script is temporary:
+at integration it is replaced by an `"interp": "interp"` entry in that
+script's MODES (which has no KNOWN list, so the Q-7 fixture disagreement below
+shows there as a failure until the fixture is updated).
 """
 
 import argparse
@@ -49,7 +55,8 @@ def close(got, want, tol):
         return math.isnan(want) and math.isnan(got)
     if got == want:
         return True
-    return abs(got - want) <= max(tol.get("abs", 0), tol.get("rel", 0) * abs(want))
+    diff = abs(got - want)
+    return diff <= tol.get("abs", 0) or diff <= tol.get("rel", 0) * abs(want)
 
 
 def main():
@@ -72,10 +79,10 @@ def main():
             if r is None:
                 ok, msg = False, "no result"
             elif "expected_error_code" in s:
-                ok = r.get("error_code") == s["expected_error_code"]
-                msg = f"want error {s['expected_error_code']}, got {r.get('error_code', r.get('value'))}"
-            elif "error_code" in r:
-                ok, msg = False, f"want {s['expected']}, got error {r['error_code']}"
+                ok = r.get("error") == s["expected_error_code"]
+                msg = f"want error {s['expected_error_code']}, got {r.get('error', r.get('value'))}"
+            elif "error" in r:
+                ok, msg = False, f"want {s['expected']}, got error {r['error']}"
             else:
                 got = got_value(r)
                 ok = close(got, num(s["expected"]), tol)

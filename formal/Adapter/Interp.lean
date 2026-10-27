@@ -13,7 +13,7 @@ same code the exact model's theorems are about — and prints
 {"function": "interp.linear",
  "results": [{"name": "...", "value": 15.0, "bits": "4624633867356078080"},
              {"name": "...", "value": "NaN", "bits": "..."},
-             {"name": "...", "error_code": "interp_nan_in_axis"}]}
+             {"name": "...", "error": "interp_nan_in_axis"}]}
 ```
 
 `value` is a JSON number (or the string `"NaN"`); `bits` is the IEEE-754
@@ -85,7 +85,7 @@ def runFixture (j : Json) : Except String Json := do
     let r ← runOne fn inputs
     match r with
     | .ok v => out := out.push (v.mergeObj (Json.mkObj [("name", name)]))
-    | .error c => out := out.push (Json.mkObj [("name", name), ("error_code", c)])
+    | .error c => out := out.push (Json.mkObj [("name", name), ("error", c)])
   return Json.mkObj [("function", fn), ("results", Json.arr out)]
 
 def main (args : List String) : IO UInt32 := do
