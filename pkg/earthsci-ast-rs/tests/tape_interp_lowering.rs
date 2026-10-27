@@ -833,8 +833,8 @@ fn a_strict_bilinear_table_checks_both_axes() {
     }
 }
 
-/// `nearest` lowers to `index(data, interp.searchsorted(q, axis))`, and the
-/// marker sits on the search. The tape does not lower an `index` whose
+/// `nearest` lowers to the esm-spec §9.5.3 composition over
+/// `interp.searchsorted`, and the marker sits on each search. The tape does not lower an `index` whose
 /// subscript is a run-time value (native refuses that document whatever the
 /// table's `out_of_bounds`), so this one is checked on the oracle alone.
 #[test]
@@ -862,7 +862,11 @@ fn a_strict_nearest_table_checks_its_query() {
     for (x, want) in [
         (-1.0, None),
         (0.0, Some(10.0)),
+        // The 1.0..2.5 midpoint is a tie, which goes to the lower knot.
+        (1.75, Some(20.0)),
         (2.5, Some(40.0)),
+        // Nearer 3.0 than 2.5.
+        (2.8, Some(80.0)),
         (7.0, Some(160.0)),
         (7.5, None),
     ] {

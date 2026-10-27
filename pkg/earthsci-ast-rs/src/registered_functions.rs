@@ -36,7 +36,7 @@ use thiserror::Error;
 pub struct ClosedFunctionError {
     /// Stable diagnostic code: `unknown_closed_function`,
     /// `closed_function_arity`, `closed_function_overflow`,
-    /// `searchsorted_non_monotonic`, `searchsorted_nan_in_table`,
+    /// `searchsorted_non_monotonic`, `searchsorted_nan`,
     /// `closed_function_arg_type`.
     pub code: String,
 
@@ -410,29 +410,31 @@ fn julian_day(t_utc: f64) -> f64 {
 // duplicates / exact matches; out-of-range below → 1, above → N+1; NaN x →
 // N+1; NaN entries in xs → error; non-monotonic xs → error.
 fn searchsorted(name: &str, x: f64, xs: &[f64]) -> Result<i64, ClosedFunctionError> {
-    // Validate monotonicity + NaN-in-table once per call (matches Julia).
-    let mut prev = f64::NAN;
-    for (i, v) in xs.iter().copied().enumerate() {
-        if v.is_nan() {
-            return Err(ClosedFunctionError::new(
-                codes::SEARCHSORTED_NAN_IN_TABLE,
-                format!(
-                    "{name}: xs[{idx}] is NaN; NaN entries in xs are forbidden",
-                    idx = i + 1
-                ),
-            ));
-        }
-        if i > 0 && v < prev {
+    // NaN is checked over the WHOLE table before monotonicity (esm-spec
+    // §9.2): every comparison with NaN is false, so a monotonicity verdict on
+    // a table holding one would depend on how the comparison is written.
+    if let Some(i) = xs.iter().position(|v| v.is_nan()) {
+        return Err(ClosedFunctionError::new(
+            codes::SEARCHSORTED_NAN,
+            format!(
+                "{name}: xs[{idx}] is NaN; NaN entries in xs are forbidden",
+                idx = i + 1
+            ),
+        ));
+    }
+    for (i, w) in xs.windows(2).enumerate() {
+        if w[1] < w[0] {
             return Err(ClosedFunctionError::new(
                 codes::SEARCHSORTED_NON_MONOTONIC,
                 format!(
                     "{name}: xs is not non-decreasing (xs[{idx}]={v} < xs[{prev_idx}]={prev})",
-                    idx = i + 1,
-                    prev_idx = i,
+                    idx = i + 2,
+                    prev_idx = i + 1,
+                    v = w[1],
+                    prev = w[0],
                 ),
             ));
         }
-        prev = v;
     }
     Ok(searchsorted_at(x, xs))
 }
@@ -805,7 +807,21 @@ mod tests {
         let err =
             evaluate_closed_function("interp.searchsorted", &[s(2.0), a(&[1.0, f64::NAN, 3.0])])
                 .unwrap_err();
-        assert_eq!(err.code, "searchsorted_nan_in_table");
+        assert_eq!(err.code, "searchsorted_nan");
+    }
+
+    /// esm-spec §9.2: NaN in `xs` is checked before monotonicity, so a NaN
+    /// first, or a NaN after a decreasing pair, is still `searchsorted_nan`.
+    #[test]
+    fn searchsorted_nan_takes_precedence_over_non_monotonic() {
+        for xs in [
+            &[f64::NAN, 1.0, 2.0, 3.0][..],
+            &[3.0, 1.0, f64::NAN, 4.0][..],
+        ] {
+            let err =
+                evaluate_closed_function("interp.searchsorted", &[s(2.0), a(xs)]).unwrap_err();
+            assert_eq!(err.code, "searchsorted_nan", "xs = {xs:?}");
+        }
     }
 
     #[test]
@@ -936,6 +952,23 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.code, "interp_nan_in_axis");
+    }
+
+    /// esm-spec §9.2 Errors: within an axis, a NaN is `interp_nan_in_axis`
+    /// whatever the other entries — after a decreasing pair, or first.
+    #[test]
+    fn interp_nan_in_axis_takes_precedence_over_non_monotonic() {
+        for axis in [
+            &[0.0, 2.0, 1.0, f64::NAN][..],
+            &[f64::NAN, 1.0, 2.0, 3.0][..],
+        ] {
+            let err = evaluate_closed_function(
+                "interp.linear",
+                &[a(&[10.0, 20.0, 30.0, 40.0]), a(axis), s(1.0)],
+            )
+            .unwrap_err();
+            assert_eq!(err.code, "interp_nan_in_axis", "axis = {axis:?}");
+        }
     }
 
     #[test]

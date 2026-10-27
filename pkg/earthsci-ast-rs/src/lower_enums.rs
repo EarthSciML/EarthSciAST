@@ -50,6 +50,10 @@ fn parse_enums_block(
             ));
         };
         let mut m = HashMap::new();
+        // Value -> the first symbol that took it. Uniqueness is per enum
+        // (esm-spec §9.3): two enums MAY share a value, so this is reset for
+        // each entry, and `0` is a value like any other.
+        let mut taken: HashMap<i64, &str> = HashMap::new();
         for (sym, intval) in map_obj {
             let Some(n) = intval.as_i64() else {
                 return Err(err(
@@ -57,6 +61,15 @@ fn parse_enums_block(
                     format!("enums.{enum_name}.{sym}: value must be an integer"),
                 ));
             };
+            if let Some(first) = taken.insert(n, sym.as_str()) {
+                return Err(err(
+                    codes::ENUM_DUPLICATE_VALUE,
+                    format!(
+                        "enums.{enum_name}: symbols `{first}` and `{sym}` both map to {n}; \
+                         values within one enum must be unique (esm-spec §9.3)"
+                    ),
+                ));
+            }
             m.insert(sym.clone(), n);
         }
         out.insert(enum_name.clone(), m);
@@ -311,6 +324,7 @@ pub fn lower_enums_mut(file: &mut crate::EsmFile) -> Result<(), EnumLoweringErro
 /// - `unknown_enum_symbol` — `enum` op references an undeclared symbol
 /// - `enum_invalid_args` — `enum` op has a non-positional or wrong-arity body
 /// - `invalid_enums_block` — top-level `enums` block is malformed
+/// - `enum_duplicate_value` — two symbols of one enum map to the same integer
 pub fn lower_enums_raw(value: &mut Value) -> Result<(), EnumLoweringError> {
     lower_enums_raw_scanned(value, true)
 }
@@ -477,6 +491,21 @@ mod tests {
         });
         let err = lower_enums_raw(&mut v).unwrap_err();
         assert_eq!(err.code, "unknown_enum");
+    }
+
+    /// esm-spec §9.3: a duplicate within one enum is rejected on the block
+    /// itself — with no `enum` op anywhere, and for `0` like any other value —
+    /// while two enums MAY share a value.
+    #[test]
+    fn duplicate_value_within_one_enum_rejected() {
+        for dup in [json!({"a": 3, "b": 3, "c": 1}), json!({"a": 0, "b": 0})] {
+            let mut v = json!({"enums": {"e": dup}, "models": {}});
+            let err = lower_enums_raw(&mut v).unwrap_err();
+            assert_eq!(err.code, "enum_duplicate_value", "{err}");
+            assert!(err.message.contains("`a`") && err.message.contains("`b`"));
+        }
+        let mut shared = json!({"enums": {"e": {"a": 3}, "f": {"b": 3}}, "models": {}});
+        lower_enums_raw(&mut shared).expect("values MAY coincide across enums");
     }
 
     #[test]

@@ -245,6 +245,9 @@ diagnostic_code_registry! {
 
     // ---- enums: §9.3 load-time enum lowering (`lower_enums.rs`) ----
 
+    /// Two symbols of ONE enum map to the same integer (esm-spec §9.3). Raised
+    /// on the `enums` block itself, whether or not an `enum` op names them.
+    ENUM_DUPLICATE_VALUE = "enum_duplicate_value";
     /// An enum operator applied to an argument list its arity does not admit.
     ENUM_INVALID_ARGS = "enum_invalid_args";
     /// An enum construct survived lowering — nothing downstream can interpret
@@ -270,12 +273,15 @@ diagnostic_code_registry! {
     /// block does not declare.
     TABLE_LOOKUP_UNKNOWN_TABLE = "table_lookup_unknown_table";
     /// The key set of `table_lookup.axes` does not match the axis names the
-    /// referenced table declares (an extra key, a missing one, or a
-    /// positional `args` list where the axes map belongs).
+    /// referenced table declares (an extra key or a missing one).
     TABLE_LOOKUP_AXIS_NAME_MISMATCH = "table_lookup_axis_name_mismatch";
     /// `table_lookup.output` selects a row the table's leading `data`
     /// dimension does not have, or a name its `outputs` list does not carry.
     TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE = "table_lookup_output_out_of_range";
+    /// A `table_lookup` node carrying a non-empty `args` (esm-spec §9.5.2);
+    /// an absent `args` is `[]`. The schema rejects it too, so this is what a
+    /// node that skipped schema validation (one built in memory) gets.
+    TABLE_LOOKUP_ARGS_NONEMPTY = "table_lookup_args_nonempty";
     /// A table whose `interpolation` and axis count disagree (`linear` and
     /// `nearest` require 1 axis, `bilinear` 2).
     TABLE_INTERPOLATION_AXES_MISMATCH = "table_interpolation_axes_mismatch";
@@ -285,6 +291,10 @@ diagnostic_code_registry! {
     /// An axis's `values` carries a non-finite entry; §9.5.1 requires
     /// strictly-increasing FINITE floats.
     TABLE_AXIS_NAN = "table_axis_nan";
+    /// An axis's `values` is not strictly increasing (equal-adjacent or
+    /// decreasing). A NaN entry is `table_axis_nan` instead, whatever the
+    /// other entries (esm-spec §9.5.5).
+    TABLE_AXIS_NON_MONOTONIC = "table_axis_non_monotonic";
     /// A lookup into an `out_of_bounds: "error"` table was queried outside an
     /// axis range (esm-spec §9.5.1). Raised at evaluation time, through the
     /// evaluators' fail-closed fault channel.
@@ -543,8 +553,9 @@ diagnostic_code_registry! {
     CLOSED_FUNCTION_ARG_TYPE = "closed_function_arg_type";
     /// A `searchsorted` table that is not monotonically non-decreasing.
     SEARCHSORTED_NON_MONOTONIC = "searchsorted_non_monotonic";
-    /// A `searchsorted` table containing a NaN.
-    SEARCHSORTED_NAN_IN_TABLE = "searchsorted_nan_in_table";
+    /// A `searchsorted` table containing a NaN (checked before monotonicity,
+    /// esm-spec §9.2).
+    SEARCHSORTED_NAN = "searchsorted_nan";
     /// An `interp` axis that is not strictly increasing.
     INTERP_NON_MONOTONIC_AXIS = "interp_non_monotonic_axis";
     /// An `interp` axis whose length does not match the table's.
@@ -652,6 +663,7 @@ mod error_code_tests {
             "dimensional_mismatch",
             "domain_unit_mismatch",
             "element_type_uncarried",
+            "enum_duplicate_value",
             "enum_invalid_args",
             "enum_lowering_residual",
             "equation_count_mismatch",
@@ -690,7 +702,7 @@ mod error_code_tests {
             "reserved_index_symbol",
             "reserved_variable_name",
             "rewrite_rule_nonterminating",
-            "searchsorted_nan_in_table",
+            "searchsorted_nan",
             "searchsorted_non_monotonic",
             "solver_external_unresolved",
             "solver_external_version_too_old",
@@ -703,8 +715,10 @@ mod error_code_tests {
             "subsystem_ref_is_coupling_library",
             "subsystem_ref_is_template_library",
             "table_axis_nan",
+            "table_axis_non_monotonic",
             "table_data_shape_mismatch",
             "table_interpolation_axes_mismatch",
+            "table_lookup_args_nonempty",
             "table_lookup_axis_name_mismatch",
             "table_lookup_out_of_bounds",
             "table_lookup_output_out_of_range",

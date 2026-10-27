@@ -29,7 +29,7 @@
 //! exactly what `interp.linear` / `interp.bilinear` do at the ends, so the
 //! §9.5.3 tree IS the clamp semantics. An `"error"` table lowers to that same
 //! tree with the table's id on the `interp.*` node's `table` field (on the
-//! `interp.searchsorted` node for `nearest`): the marker tells both evaluators
+//! `interp.searchsorted` nodes for `nearest`): the marker tells both evaluators
 //! to check each query against its axis before the interpolation core and to
 //! raise `table_lookup_out_of_bounds` for a query outside it
 //! ([`out_of_bounds_fault`]). An in-range query computes the very same `f64`
@@ -295,6 +295,9 @@ fn lower_node(
     // `error` is the same tree carrying the table id, which makes the
     // evaluators check each query against its axis first.
     let strict = (table.out_of_bounds.as_deref() == Some("error")).then_some(table_id);
+    for axis in &table.axes {
+        validate_table_axis(axis, table_id)?;
+    }
     let inputs = axis_inputs(node, table, table_id)?;
     let output = output_index(node, table, table_id)?;
     let data = output_slice(table, output, table_id)?;
@@ -321,20 +324,13 @@ fn lower_node(
                 inputs[1].clone(),
             ],
         )),
-        // `nearest` is an `index` of the table slice at the searchsorted
-        // position, not an `interp` blend.
-        ("nearest", [x]) => Ok(Expr::operator(ExpressionNode {
-            op: "index".to_string(),
-            args: vec![
-                const_expr(data.clone()),
-                closed_fn(
-                    strict,
-                    "interp.searchsorted",
-                    vec![inputs[0].clone(), axis_const(x, table_id)?],
-                ),
-            ],
-            ..Default::default()
-        })),
+        ("nearest", [x]) => Ok(nearest_tree(
+            strict,
+            data,
+            axis_const(x, table_id)?,
+            x.values.len(),
+            &inputs[0],
+        )),
         _ => Err(err(
             codes::TABLE_INTERPOLATION_AXES_MISMATCH,
             format!(
@@ -354,9 +350,11 @@ fn axis_inputs(
     table: &FunctionTable,
     table_id: &str,
 ) -> Result<Vec<Expr>, CompileError> {
+    // An absent `args` deserializes to the empty list, which is what §9.5.2
+    // says it means.
     if !node.args.is_empty() {
         return Err(err(
-            codes::TABLE_LOOKUP_AXIS_NAME_MISMATCH,
+            codes::TABLE_LOOKUP_ARGS_NONEMPTY,
             format!(
                 "`table_lookup` on table `{table_id}` carries {} positional `args`; the per-axis \
                  inputs live under `axes` and `args` MUST be empty (esm-spec §9.5.2)",
@@ -473,6 +471,91 @@ fn output_slice<'a>(
                 ),
             )
         })
+}
+
+/// esm-spec §9.5.5: an axis's `values` must be NaN-free and strictly
+/// increasing, and a NaN is reported as `table_axis_nan` whatever the other
+/// entries are — it is checked over the whole axis first, because every
+/// comparison with a NaN is false and a monotonicity verdict on it would
+/// depend on how the comparison is written.
+fn validate_table_axis(axis: &FunctionTableAxis, table_id: &str) -> Result<(), CompileError> {
+    if let Some(i) = axis.values.iter().position(|v| v.is_nan()) {
+        return Err(err(
+            codes::TABLE_AXIS_NAN,
+            format!(
+                "table `{table_id}`: axis `{}` value {} is NaN; axis `values` must be \
+                 strictly-increasing finite floats (esm-spec §9.5.1)",
+                axis.name,
+                i + 1
+            ),
+        ));
+    }
+    if let Some(w) = axis.values.windows(2).find(|w| w[0] >= w[1]) {
+        return Err(err(
+            codes::TABLE_AXIS_NON_MONOTONIC,
+            format!(
+                "table `{table_id}`: axis `{}` is not strictly increasing ({} then {}) \
+                 (esm-spec §9.5.1)",
+                axis.name, w[0], w[1]
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn op_node(op: &str, args: Vec<Expr>) -> Expr {
+    Expr::operator(ExpressionNode {
+        op: op.to_string(),
+        args,
+        ..Default::default()
+    })
+}
+
+/// The esm-spec §9.5.3 `nearest` composition, operand for operand:
+///
+/// ```text
+/// ifelse(x == x,
+///        index(D, ifelse(A[hi] - x < x - A[lo], hi, lo)),
+///        x)
+/// j = interp.searchsorted(x, A), lo = max(j - 1, 1), hi = min(j, N)
+/// ```
+///
+/// The tree is built exactly as the spec spells it so that every binding
+/// decides "nearest" and "tie" on the same two `binary64` differences; a tie
+/// takes `lo`. Each `searchsorted` carries the strict-table marker of an
+/// `out_of_bounds: "error"` table, so the query is range-checked wherever it
+/// is read.
+fn nearest_tree(strict: Option<&str>, data: &Value, axis: Expr, n: usize, x: &Expr) -> Expr {
+    let j = || closed_fn(strict, "interp.searchsorted", vec![x.clone(), axis.clone()]);
+    let lo = || {
+        op_node(
+            "max",
+            vec![op_node("-", vec![j(), Expr::Integer(1)]), Expr::Integer(1)],
+        )
+    };
+    let hi = || op_node("min", vec![j(), Expr::Integer(n as i64)]);
+    let knot = |i: Expr| op_node("index", vec![axis.clone(), i]);
+    let nearer_hi = op_node(
+        "<",
+        vec![
+            op_node("-", vec![knot(hi()), x.clone()]),
+            op_node("-", vec![x.clone(), knot(lo())]),
+        ],
+    );
+    op_node(
+        "ifelse",
+        vec![
+            op_node("==", vec![x.clone(), x.clone()]),
+            op_node(
+                "index",
+                vec![
+                    const_expr(data.clone()),
+                    op_node("ifelse", vec![nearer_hi, hi(), lo()]),
+                ],
+            ),
+            x.clone(),
+        ],
+    )
 }
 
 /// `{"op": "const", "value": <axis values>}` for one declared axis.
@@ -743,8 +826,8 @@ mod tests {
         assert_eq!(unmarked, serde_json::to_value(rhs(&clamp)).unwrap());
     }
 
-    /// `nearest` carries the marker on its `interp.searchsorted`, the node
-    /// that reads the query.
+    /// `nearest` carries the marker on every `interp.searchsorted`, the nodes
+    /// that read the query; the root is the §9.5.3 NaN guard, unmarked.
     #[test]
     fn a_nearest_error_table_marks_its_searchsorted() {
         let mut file = load_string(&FIXTURE.replace(
@@ -754,10 +837,123 @@ mod tests {
         .expect("loads");
         lower_table_lookups(&mut file).expect("lowers");
         let lowered = serde_json::to_value(rhs(&file)).unwrap();
-        assert_eq!(lowered["op"], "index");
+        assert_eq!(lowered["op"], "ifelse");
         assert!(lowered.get("table").is_none());
-        assert_eq!(lowered["args"][1]["name"], "interp.searchsorted");
-        assert_eq!(lowered["args"][1]["table"], "t_prof");
+        let text = lowered.to_string();
+        let searches = text.matches("\"interp.searchsorted\"").count();
+        assert_eq!(
+            searches, 4,
+            "j appears once in each of the four uses of lo and hi: {text}"
+        );
+        assert_eq!(
+            text.matches("\"table\":\"t_prof\"").count(),
+            searches,
+            "every search is marked: {text}"
+        );
+    }
+
+    /// esm-spec §9.5.3: the `nearest` lowering is the spec's composition
+    /// operand for operand. The shared fixture spells it by hand as
+    /// `n_tie_2_4_hand`; lowering the `table_lookup` that `n_tie_2_4` reads
+    /// must produce that very tree.
+    #[test]
+    fn nearest_lowers_to_the_fixtures_hand_spelled_composition() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/conformance/function_tables/nearest/fixture.esm"
+        );
+        let mut file = load_string(&std::fs::read_to_string(path).unwrap()).expect("loads");
+        lower_table_lookups(&mut file).expect("lowers");
+        let model = &file.models.as_ref().unwrap()["NearestLookup"];
+        let defining = |lhs: &str| {
+            let eq = model
+                .equations
+                .iter()
+                .find(|eq| eq.lhs == Expr::Variable(lhs.to_string()))
+                .unwrap_or_else(|| panic!("no equation for {lhs}"));
+            serde_json::to_value(&eq.rhs).unwrap()
+        };
+        assert_eq!(defining("n_tie_2_4"), defining("n_tie_2_4_hand"));
+    }
+
+    /// The single-output defaults of esm-spec §9.5.1 / §9.5.2: a table without
+    /// `outputs` lowers with the WHOLE `data` for an omitted `output` and for
+    /// `0`, and refuses `1` and any string; a multi-output table reads row 0
+    /// for an omitted `output`.
+    #[test]
+    fn output_defaults_and_the_single_output_range() {
+        for output in ["", "\"output\": 0,"] {
+            let mut file = load_string(&FIXTURE.replace(
+                "\"axes\": {\"p\": \"p\"},",
+                &format!("\"axes\": {{\"p\": \"p\"}}, {output}"),
+            ))
+            .expect("loads");
+            lower_table_lookups(&mut file).expect("lowers");
+            let lowered = serde_json::to_value(rhs(&file)).unwrap();
+            assert_eq!(
+                lowered["args"][0]["value"],
+                serde_json::json!([10.0, 20.0, 30.0, 40.0]),
+                "output {output:?}: the whole `data`, not `data[0]`"
+            );
+        }
+        for output in ["\"output\": 1,", "\"output\": \"t\","] {
+            assert_refused_with(
+                &FIXTURE.replace(
+                    "\"axes\": {\"p\": \"p\"},",
+                    &format!("\"axes\": {{\"p\": \"p\"}}, {output}"),
+                ),
+                codes::TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE,
+            );
+        }
+        let mut file = load_string(&BILINEAR.replace("\"output\": 1,", "")).expect("loads");
+        lower_table_lookups(&mut file).expect("lowers");
+        let omitted =
+            serde_json::to_value(file.models.as_ref().unwrap()["M"].equations[1].rhs.clone())
+                .unwrap();
+        assert_eq!(
+            omitted["args"][0]["value"],
+            serde_json::json!([[1.0, 1.5, 2.0], [1.1, 1.6, 2.1], [1.2, 1.7, 2.2]]),
+            "an omitted output is output 0"
+        );
+    }
+
+    /// esm-spec §9.5.2: `args` on a `table_lookup` is `table_lookup_args_nonempty`.
+    /// The schema refuses the same document, so the node is built in memory.
+    #[test]
+    fn a_non_empty_args_list_is_a_named_diagnostic() {
+        let mut file = load_string(FIXTURE).expect("loads");
+        let model = file.models.as_mut().unwrap().get_mut("M").unwrap();
+        let node = model.equations[0]
+            .rhs
+            .node_mut()
+            .expect("the lookup is an operator node");
+        node.args.push(Expr::Variable("p".to_string()));
+        let e = lower_table_lookups(&mut file).expect_err("must be refused");
+        assert!(
+            e.to_string().starts_with(codes::TABLE_LOOKUP_ARGS_NONEMPTY),
+            "got: {e}"
+        );
+    }
+
+    /// esm-spec §9.5.5: a NaN anywhere on an axis is `table_axis_nan`, never
+    /// `table_axis_non_monotonic`, even where a decreasing pair comes first or
+    /// the NaN is the first entry. JSON cannot spell NaN, so the table is
+    /// edited in memory.
+    #[test]
+    fn a_nan_axis_entry_takes_precedence_over_non_monotonic() {
+        let with_axis = |values: Vec<f64>| {
+            let mut file = load_string(FIXTURE).expect("loads");
+            file.function_tables.as_mut().unwrap()["t_prof"].axes[0].values = values;
+            lower_table_lookups(&mut file)
+                .expect_err("must be refused")
+                .to_string()
+        };
+        for values in [vec![3.0, 1.0, f64::NAN, 4.0], vec![f64::NAN, 1.0, 2.0, 3.0]] {
+            let e = with_axis(values.clone());
+            assert!(e.starts_with(codes::TABLE_AXIS_NAN), "{values:?}: {e}");
+        }
+        let e = with_axis(vec![1.0, 3.0, 2.0, 4.0]);
+        assert!(e.starts_with(codes::TABLE_AXIS_NON_MONOTONIC), "{e}");
     }
 
     /// The range test: strictly outside the end knots raises, an end knot and
