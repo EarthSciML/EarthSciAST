@@ -85,11 +85,6 @@ function fdiv(a: number, b: number): number {
   return r < 0 ? q - 1 : r >= b ? q + 1 : q
 }
 
-/** Integer division rounding toward zero (C / Julia `÷`). */
-function tdiv(a: number, b: number): number {
-  return a < 0 ? -fdiv(-a, b) : fdiv(a, b)
-}
-
 /**
  * Decompose UTC seconds-since-epoch (IEEE-754 binary64, no leap seconds)
  * into proleptic-Gregorian Y/M/D/h/m/s plus day_of_year and julian_day.
@@ -144,27 +139,12 @@ function dayOfYear(year: number, month: number, day: number): number {
 }
 
 /**
- * Continuous Julian Day: the Fliegel–van Flandern (1968) integer JDN of the
- * date plus `(time_of_day − 43200) / 86400` (esm-spec §9.2). The offset is
- * formed as `(secondOfDay − 43200) + fraction` — an exact integer plus the
- * exact fractional second — so the time of day rounds once, and it comes from
- * the same floor-divmod as the date. 1970-01-01T00:00:00 UTC → 2440587.5.
+ * Julian Day Number (continuous including fractional day-of-day).
+ * 1970-01-01T00:00:00 UTC → 2440587.5.
  */
-function julianDayValue(
-  year: number,
-  month: number,
-  day: number,
-  secondOfDay: number,
-  fraction: number,
-): number {
-  const a = tdiv(month - 14, 12)
-  const jdn =
-    tdiv(1461 * (year + 4800 + a), 4) +
-    tdiv(367 * (month - 2 - 12 * a), 12) -
-    tdiv(3 * tdiv(year + 4900 + a, 100), 4) +
-    day -
-    32075
-  return jdn + (secondOfDay - 43200 + fraction) / SECONDS_PER_DAY
+function julianDayValue(tUtc: number): number {
+  // Constant offset by Unix-epoch JDN. The only float op is the divide.
+  return 2440587.5 + tUtc / SECONDS_PER_DAY
 }
 
 function decomposeUtcSeconds(tUtc: number): DateParts {
@@ -180,7 +160,6 @@ function decomposeUtcSeconds(tUtc: number): DateParts {
   // floor-divmod of floor(t), which is exact in binary64 — so a fractional
   // time floors toward −∞ and the date and the time of day always agree.
   const whole = Math.floor(tUtc)
-  const fraction = tUtc - whole // exact, in [0, 1)
   const totalDays = fdiv(whole, SECONDS_PER_DAY)
   const secondOfDay = whole - totalDays * SECONDS_PER_DAY // exact, in [0, 86400)
 
@@ -197,7 +176,7 @@ function decomposeUtcSeconds(tUtc: number): DateParts {
     minute,
     second,
     dayOfYear: dayOfYear(year, month, day),
-    julianDay: julianDayValue(year, month, day, secondOfDay, fraction),
+    julianDay: julianDayValue(tUtc),
     isLeapYear: isLeapProleptic(year) ? 1 : 0,
   }
 }
