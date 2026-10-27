@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.2.0",
   "metadata": {
     "name": "TagsAndLicenseExample",
     "description": "Demonstrates proper tag categorization and license specification",
@@ -27,7 +27,7 @@
       "equations": [
         {
           "lhs": { "op": "D", "args": ["aerosol_mass"], "wrt": "t" },
-          "rhs": { "op": "*", "args": [0.001, "droplet_number"] }
+          "rhs": { "op": "*", "args": [{"op": "const", "args": [], "value": 0.001, "units": "kg/s"}, "droplet_number"] }
         },
         {
           "lhs": { "op": "D", "args": ["droplet_number"], "wrt": "t" },

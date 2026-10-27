@@ -230,11 +230,11 @@
                     {
                       "op": "+",
                       "args": [
-                        1.0,
+                        {"op": "const", "args": [], "value": 1.0, "units": "1/s"},
                         {
                           "op": "*",
                           "args": [
-                            0.01,
+                            {"op": "const", "args": [], "value": 0.01, "units": "1/s^2"},
                             "t"
                           ]
                         }

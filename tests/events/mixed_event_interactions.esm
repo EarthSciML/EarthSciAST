@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.2.0",
   "metadata": {
     "name": "MixedEventInteractions",
     "description": "Test cases for mixed continuous/discrete event interactions and cross-system events",
@@ -487,7 +487,7 @@
                     "op": "*",
                     "args": [
                       "t",
-                      1.5
+                      {"op": "const", "args": [], "value": 1.5, "units": "1/s"}
                     ]
                   }
                 ]
@@ -495,12 +495,12 @@
               {
                 "op": "+",
                 "args": [
-                  1.0,
+                  {"op": "const", "args": [], "value": 1.0, "units": "1/s"},
                   {
                     "op": "*",
                     "args": [
                       "discrete_trigger",
-                      0.5
+                      {"op": "const", "args": [], "value": 0.5, "units": "1/s"}
                     ]
                   }
                 ]
@@ -686,7 +686,7 @@
               {
                 "op": "*",
                 "args": [
-                  0.5,
+                  {"op": "const", "args": [], "value": 0.5, "units": "1/s"},
                   {
                     "op": "sin",
                     "args": [
@@ -694,7 +694,7 @@
                         "op": "*",
                         "args": [
                           "t",
-                          2.0
+                          {"op": "const", "args": [], "value": 2.0, "units": "1/s"}
                         ]
                       }
                     ]
@@ -704,7 +704,7 @@
               {
                 "op": "*",
                 "args": [
-                  0.2,
+                  {"op": "const", "args": [], "value": 0.2, "units": "1/s"},
                   {
                     "op": "cos",
                     "args": [
@@ -712,7 +712,7 @@
                         "op": "*",
                         "args": [
                           "t",
-                          0.7
+                          {"op": "const", "args": [], "value": 0.7, "units": "1/s"}
                         ]
                       }
                     ]

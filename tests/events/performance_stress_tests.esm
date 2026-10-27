@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.2.0",
   "metadata": {
     "name": "PerformanceStressTests",
     "description": "Performance benchmarking and stress testing for event systems with large numbers of events",
@@ -393,7 +393,7 @@
           "rhs": {
             "op": "*",
             "args": [
-              50.0,
+              {"op": "const", "args": [], "value": 50.0, "units": "1/s"},
               {
                 "op": "sin",
                 "args": [
@@ -401,7 +401,7 @@
                     "op": "*",
                     "args": [
                       "t",
-                      10.0
+                      {"op": "const", "args": [], "value": 10.0, "units": "1/s"}
                     ]
                   }
                 ]
@@ -420,7 +420,7 @@
           "rhs": {
             "op": "*",
             "args": [
-              30.0,
+              {"op": "const", "args": [], "value": 30.0, "units": "1/s"},
               {
                 "op": "cos",
                 "args": [
@@ -428,7 +428,7 @@
                     "op": "*",
                     "args": [
                       "t",
-                      15.0
+                      {"op": "const", "args": [], "value": 15.0, "units": "1/s"}
                     ]
                   }
                 ]
@@ -447,7 +447,7 @@
           "rhs": {
             "op": "*",
             "args": [
-              20.0,
+              {"op": "const", "args": [], "value": 20.0, "units": "1/s"},
               {
                 "op": "sin",
                 "args": [
@@ -455,7 +455,7 @@
                     "op": "*",
                     "args": [
                       "t",
-                      7.5
+                      {"op": "const", "args": [], "value": 7.5, "units": "1/s"}
                     ]
                   }
                 ]

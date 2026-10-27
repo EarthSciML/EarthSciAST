@@ -1,5 +1,5 @@
 {
-  "esm": "1.1.0",
+  "esm": "1.2.0",
   "metadata": {
     "name": "WrtDefaultOmittedScalar",
     "description": "esm-spec §4.2: on a `D` node an ABSENT `wrt` MEANS `t`. The two models below differ only in whether the equation spells `\"wrt\": \"t\"` or omits it, and both integrate the same exponential decay from the same initial condition, so their inline tests assert the same closed-form values. A binding that applies the default on one path and drops it on another does not fail with a wrong number, it fails to build a system at all: EarthSciAST#407 had the Rust SCALAR interpreter match `wrt == Some(\"t\")` while the array path classified its LHS through the shared classification API, so the shaped spelling simulated and the scalar one was refused at interpreter build with `State variable 'z' has no D(z, t) = ... equation`. Julia's tree-walk runner dropped the default on both shapes (`E_TREEWALK_UNSUPPORTED_EQUATION`) and Python refused the document at parse (`Operator 'D' requires 'wrt' field to be specified`). Pairing the two spellings is the point: a fixture carrying only the short form would go red on any binding that cannot load it, but would not pin that the two spellings mean the SAME thing. The SHAPED half of the pair lives in `tests/fixtures/faq/28_wrt_default_omitted_shaped.esm`, because this corpus's generic runner drives the SCALAR backend, which has no `faq` evaluator.",
@@ -57,7 +57,7 @@
               "z"
             ]
           },
-          "rhs": 1.0
+          "rhs": {"op": "const", "args": [], "value": 1.0, "units": "mol"}
         }
       ],
       "tolerance": {
@@ -131,7 +131,7 @@
               "z"
             ]
           },
-          "rhs": 1.0
+          "rhs": {"op": "const", "args": [], "value": 1.0, "units": "mol"}
         }
       ],
       "tolerance": {

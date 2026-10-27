@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.2.0",
   "metadata": {
     "name": "MultiStepCouplingChainsFixtures",
     "description": "Test fixtures for complex multi-step coupling resolution chains",
@@ -98,7 +98,7 @@
               {
                 "op": "*",
                 "args": [
-                  1e-14,
+                  {"op": "const", "args": [], "value": 1e-14, "units": "1/s"},
                   "O3",
                   "NO"
                 ]
@@ -164,7 +164,7 @@
           "rhs": {
             "op": "*",
             "args": [
-              -1,
+              {"op": "const", "args": [], "value": -1, "units": "1/cm^3"},
               "k_NO_HO2",
               "NO",
               "HO2"
@@ -372,7 +372,7 @@
               {
                 "op": "*",
                 "args": [
-                  -1,
+                  {"op": "const", "args": [], "value": -1, "units": "m^3/mol"},
                   "primary_production_rate",
                   "DIC",
                   "nutrients"
@@ -433,7 +433,7 @@
               {
                 "op": "*",
                 "args": [
-                  -1,
+                  {"op": "const", "args": [], "value": -1, "units": "m^3/mol"},
                   "primary_production_rate",
                   "DIC",
                   "nutrients"

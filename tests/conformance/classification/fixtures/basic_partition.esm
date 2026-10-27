@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.2.0",
   "metadata": {
     "name": "ClassificationBasicPartition",
     "description": "The esm-spec §6.3.1 worked example: one ODE state, one observed unknown, one algebraic unknown, one Brownian parameter and two constants, so that a binding's classification functions are pinned against every category at once."
@@ -61,7 +61,7 @@
         },
         {
           "lhs": { "op": "*", "args": ["SO4", "SO4"] },
-          "rhs": { "op": "*", "args": ["k", 1.0] }
+          "rhs": { "op": "*", "args": ["k", {"op": "const", "args": [], "value": 1.0, "units": "mol^2*s"}] }
         }
       ]
     }

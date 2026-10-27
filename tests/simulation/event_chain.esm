@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.2.0",
   "metadata": {
     "name": "EventChainTest",
     "description": "Complex event system test with interconnected events and parameter modifications",
@@ -192,7 +192,7 @@
               "concentration"
             ]
           },
-          "rhs": 0.1
+          "rhs": {"op": "const", "args": [], "value": 0.1, "units": "mol/L"}
         },
         {
           "lhs": {
@@ -201,7 +201,7 @@
               "temperature"
             ]
           },
-          "rhs": 298.15
+          "rhs": {"op": "const", "args": [], "value": 298.15, "units": "K"}
         },
         {
           "lhs": {

@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.2.0",
   "metadata": {
     "name": "BoxModelOzone",
     "description": "Simple 0D ozone-NOx photochemistry box model with known analytical behavior",
@@ -158,7 +158,7 @@
               "O3"
             ]
           },
-          "rhs": 50.0
+          "rhs": {"op": "const", "args": [], "value": 50.0, "units": "ppbv"}
         },
         {
           "lhs": {
@@ -167,7 +167,7 @@
               "NO"
             ]
           },
-          "rhs": 10.0
+          "rhs": {"op": "const", "args": [], "value": 10.0, "units": "ppbv"}
         },
         {
           "lhs": {
@@ -176,7 +176,7 @@
               "NO2"
             ]
           },
-          "rhs": 20.0
+          "rhs": {"op": "const", "args": [], "value": 20.0, "units": "ppbv"}
         },
         {
           "lhs": "O",

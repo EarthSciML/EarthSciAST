@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.2.0",
   "metadata": {
     "name": "OceanAtmosphereBiogeochemistry",
     "description": "End-to-end test for coupled ocean-atmosphere biogeochemical cycles with CO2, O2, and marine ecosystem interactions\nMigrated from ESM v0.1.0 to v0.2.0 via esm-migrate.",
@@ -254,7 +254,7 @@
               "DIC"
             ]
           },
-          "rhs": 2100.0
+          "rhs": {"op": "const", "args": [], "value": 2100.0, "units": "mol/m^3"}
         },
         {
           "lhs": {
@@ -263,7 +263,7 @@
               "ALK"
             ]
           },
-          "rhs": 2300.0
+          "rhs": {"op": "const", "args": [], "value": 2300.0, "units": "mol/m^3"}
         },
         {
           "lhs": {
@@ -272,7 +272,7 @@
               "O2_dissolved"
             ]
           },
-          "rhs": 250.0
+          "rhs": {"op": "const", "args": [], "value": 250.0, "units": "mol/m^3"}
         },
         {
           "lhs": "pCO2_ocean",
@@ -293,12 +293,12 @@
               {
                 "op": "*",
                 "args": [
-                  0.0002,
+                  {"op": "const", "args": [], "value": 0.0002, "units": "m^3/mol"},
                   {
                     "op": "-",
                     "args": [
                       "DIC",
-                      2100
+                      {"op": "const", "args": [], "value": 2100, "units": "mol/m^3"}
                     ]
                   }
                 ]
@@ -325,7 +325,7 @@
                     "op": "+",
                     "args": [
                       "DIC",
-                      50
+                      {"op": "const", "args": [], "value": 50, "units": "mol/m^3"}
                     ]
                   }
                 ]
@@ -336,12 +336,12 @@
                   {
                     "op": "*",
                     "args": [
-                      0.01,
+                      {"op": "const", "args": [], "value": 0.01, "units": "1/K"},
                       {
                         "op": "-",
                         "args": [
                           "temperature_ocean",
-                          298.15
+                          {"op": "const", "args": [], "value": 298.15, "units": "K"}
                         ]
                       }
                     ]
@@ -703,7 +703,7 @@
               "nutrients"
             ]
           },
-          "rhs": 15.0
+          "rhs": {"op": "const", "args": [], "value": 15.0, "units": "mol/m^3"}
         },
         {
           "lhs": {
@@ -712,7 +712,7 @@
               "phytoplankton"
             ]
           },
-          "rhs": 2.0
+          "rhs": {"op": "const", "args": [], "value": 2.0, "units": "mol/m^3"}
         },
         {
           "lhs": {
@@ -721,7 +721,7 @@
               "zooplankton"
             ]
           },
-          "rhs": 1.0
+          "rhs": {"op": "const", "args": [], "value": 1.0, "units": "mol/m^3"}
         },
         {
           "lhs": {
@@ -730,7 +730,7 @@
               "detritus"
             ]
           },
-          "rhs": 0.5
+          "rhs": {"op": "const", "args": [], "value": 0.5, "units": "mol/m^3"}
         },
         {
           "lhs": "primary_production",

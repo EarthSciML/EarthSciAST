@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.2.0",
   "metadata": {
     "name": "NestedSubsystemTests",
     "description": "Test hierarchical subsystem nesting and scoped reference resolution\nMigrated from ESM v0.1.0 to v0.2.0 via esm-migrate.",
@@ -338,11 +338,11 @@
           "rhs": {
             "op": "*",
             "args": [
-              0.001,
+              {"op": "const", "args": [], "value": 0.001, "units": "1/s"},
               {
                 "op": "-",
                 "args": [
-                  290,
+                  {"op": "const", "args": [], "value": 290, "units": "K"},
                   "sea_surface_temp"
                 ]
               }
@@ -356,7 +356,7 @@
               "sea_surface_temp"
             ]
           },
-          "rhs": 288.0
+          "rhs": {"op": "const", "args": [], "value": 288.0, "units": "K"}
         }
       ]
     }

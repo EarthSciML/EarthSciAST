@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.2.0",
   "metadata": {
     "name": "MathematicalCorrectnessValidation",
     "description": "Test mathematical correctness verification across all operations",
@@ -272,7 +272,7 @@
               "position"
             ]
           },
-          "rhs": 1.0
+          "rhs": {"op": "const", "args": [], "value": 1.0, "units": "m"}
         },
         {
           "lhs": {

@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.2.0",
   "metadata": {
     "name": "DataLoadersComprehensive",
     "description": "Comprehensive test fixtures for data loader types, validation, and configuration",
@@ -374,13 +374,13 @@
                       "PBLH"
                     ]
                   },
-                  1.0
+                  {"op": "const", "args": [], "value": 1.0, "units": "m^3/kg"}
                 ]
               },
               {
                 "op": "*",
                 "args": [
-                  1e-05,
+                  {"op": "const", "args": [], "value": 1e-05, "units": "1/s"},
                   "NO"
                 ]
               }

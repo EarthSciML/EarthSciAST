@@ -1,5 +1,5 @@
 {
-  "esm": "1.1.0",
+  "esm": "1.2.0",
   "metadata": {
     "name": "WildfireAtmosphereOcean",
     "description": "Coupled wildfire-atmosphere-ocean system. The air-sea coupling remaps the atmosphere-grid sensible heat flux (a SPATIALLY-VARYING field on the 4-cell atmosphere surface grid) onto the DIFFERENT 3-cell ocean surface grid by a REAL conservative regrid whose overlap weights W[a,o] = A[a,o]/A_o are computed INLINE from cell geometry (bin-skolem broad phase + fused polygon_intersection_area narrow phase, esm-spec.md §8.6.1), not supplied. 0-D<->spatial maps use the coupling lifting field.",
@@ -82,7 +82,7 @@
               "T"
             ]
           },
-          "rhs": 288.0
+          "rhs": {"op": "const", "args": [], "value": 288.0, "units": "K"}
         },
         {
           "lhs": {
@@ -173,7 +173,7 @@
               "fuel"
             ]
           },
-          "rhs": 10.0
+          "rhs": {"op": "const", "args": [], "value": 10.0, "units": "kg/m^2"}
         },
         {
           "lhs": {
@@ -221,7 +221,7 @@
                       0
                     ]
                   },
-                  18000.0,
+                  {"op": "const", "args": [], "value": 18000.0, "units": "m/s^2"},
                   0.0
                 ]
               }
@@ -658,7 +658,7 @@
               "SST"
             ]
           },
-          "rhs": 290.0
+          "rhs": {"op": "const", "args": [], "value": 290.0, "units": "K"}
         },
         {
           "lhs": {

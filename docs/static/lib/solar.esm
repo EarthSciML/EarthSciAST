@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.2.0",
   "metadata": {
     "name": "Solar",
     "description": "Standard-library solar-geometry subsystem. Computes solar declination δ, the equation of time, and the solar zenith angle θ_z given latitude (degrees north), longitude (degrees east of prime meridian), and a UTC scalar time `t_utc`. The algorithm is the Spencer-/NOAA-style Fourier series for δ and EoT; it is bit-defined relative to the closed `datetime.*` registry (esm-spec.md §9.2) plus the §4.2 elementary-function ops, so all bindings agree to ≤ 10 ulp on the transcendental composition. Includable via §4.7 reference; see docs/standard_library.md.",
@@ -460,7 +460,7 @@
                       "min_per_deg"
                     ]
                   },
-                  180.0
+                  {"op": "const", "args": [], "value": 180.0, "units": "deg"}
                 ]
               }
             ]

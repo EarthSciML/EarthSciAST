@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.2.0",
   "metadata": {
     "name": "BouncingBallTest",
     "description": "Ball dropping with elastic collisions - continuous event handling test",
@@ -78,7 +78,7 @@
               "height"
             ]
           },
-          "rhs": 10.0
+          "rhs": {"op": "const", "args": [], "value": 10.0, "units": "m"}
         },
         {
           "lhs": {

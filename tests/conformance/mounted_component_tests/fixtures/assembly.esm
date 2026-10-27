@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.2.0",
   "metadata": {
     "name": "decay_assembly",
     "description": "A document that MOUNTS `leaf.esm` by a top-level `models` `{ref}` (esm-spec 4.7 / 9.7.10) and couples it: `Forcing.rate` replaces `Decay.k`, so the mounted leaf runs at k = 5 rather than the k = 1 its own inline test was written against. Per esm-spec 6.6 a mount does not carry the mounted component's tests; only `Forcing`'s own test - authored in THIS document, against THIS document's conditions - runs here.",
@@ -29,7 +29,7 @@
       "equations": [
         {
           "lhs": "rate",
-          "rhs": 5.0
+          "rhs": {"op": "const", "args": [], "value": 5.0, "units": "1/s"}
         },
         {
           "lhs": {

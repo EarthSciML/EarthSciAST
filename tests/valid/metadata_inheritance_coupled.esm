@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.2.0",
   "metadata": {
     "name": "CoupledSystemMetadataExample",
     "description": "Demonstrates metadata inheritance and provenance tracking in coupled systems",
@@ -98,7 +98,7 @@
                   {
                     "op": "/",
                     "args": [
-                      -1370,
+                      {"op": "const", "args": [], "value": -1370, "units": "K"},
                       "T"
                     ]
                   }

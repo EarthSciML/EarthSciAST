@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.2.0",
   "metadata": {
     "name": "ScopedReferenceResolutionTestFixture",
     "description": "Comprehensive test fixture for hierarchical variable references covering all scoped reference resolution patterns from ESM spec Section 4.3",
@@ -50,7 +50,7 @@
               "Atmosphere.temperature_mean"
             ]
           },
-          "rhs": 288.15
+          "rhs": {"op": "const", "args": [], "value": 288.15, "units": "K"}
         },
         {
           "lhs": {
@@ -95,7 +95,7 @@
               "Ocean.sea_surface_temperature"
             ]
           },
-          "rhs": 285.0
+          "rhs": {"op": "const", "args": [], "value": 285.0, "units": "K"}
         }
       ],
       "subsystems": {
@@ -129,11 +129,11 @@
               "rhs": {
                 "op": "*",
                 "args": [
-                  0.001,
+                  {"op": "const", "args": [], "value": 0.001, "units": "1/s"},
                   {
                     "op": "-",
                     "args": [
-                      290.0,
+                      {"op": "const", "args": [], "value": 290.0, "units": "K"},
                       "temperature_mean"
                     ]
                   }
@@ -286,7 +286,7 @@
                           {
                             "op": "*",
                             "args": [
-                              1e-06,
+                              {"op": "const", "args": [], "value": 1e-06, "units": "mol/mol/s"},
                               "O3_strat"
                             ]
                           }
@@ -441,7 +441,7 @@
               "carbon_pool"
             ]
           },
-          "rhs": 5.0
+          "rhs": {"op": "const", "args": [], "value": 5.0, "units": "kg/m^2"}
         }
       ],
       "subsystems": {

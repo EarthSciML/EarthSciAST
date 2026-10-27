@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.2.0",
   "metadata": {
     "name": "FinancialClimateScenarios",
     "description": "Financial market shock events and climate system tipping points",
@@ -723,7 +723,7 @@
           "rhs": {
             "op": "*",
             "args": [
-              -0.01,
+              {"op": "const", "args": [], "value": -0.01, "units": "1/(K*s)"},
               {
                 "op": "max",
                 "args": [
@@ -732,7 +732,7 @@
                     "op": "-",
                     "args": [
                       "global_temperature",
-                      273.15
+                      {"op": "const", "args": [], "value": 273.15, "units": "K"}
                     ]
                   }
                 ]

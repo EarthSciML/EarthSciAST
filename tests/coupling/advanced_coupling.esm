@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.2.0",
   "metadata": {
     "name": "AdvancedCouplingTests",
     "description": "Test all coupling types: couple, variable_map, operator_compose, callback\nMigrated from ESM v0.1.0 to v0.2.0 via esm-migrate.",
@@ -105,7 +105,7 @@
             "op": "*",
             "args": [
               "O3",
-              0.001
+              {"op": "const", "args": [], "value": 0.001, "units": "mol/m^2/s"}
             ]
           }
         }

@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.2.0",
   "metadata": {
     "name": "DiscreteEventScenarios",
     "description": "Comprehensive discrete event test cases with periodic, preset, and conditional triggers",
@@ -501,7 +501,7 @@
               {
                 "op": "*",
                 "args": [
-                  2.0,
+                  {"op": "const", "args": [], "value": 2.0, "units": "1/s"},
                   {
                     "op": "sin",
                     "args": [
@@ -509,7 +509,7 @@
                         "op": "*",
                         "args": [
                           "t",
-                          0.8
+                          {"op": "const", "args": [], "value": 0.8, "units": "1/s"}
                         ]
                       }
                     ]
@@ -519,7 +519,7 @@
               {
                 "op": "*",
                 "args": [
-                  0.5,
+                  {"op": "const", "args": [], "value": 0.5, "units": "1/s"},
                   {
                     "op": "cos",
                     "args": [
@@ -527,7 +527,7 @@
                         "op": "*",
                         "args": [
                           "t",
-                          2.1
+                          {"op": "const", "args": [], "value": 2.1, "units": "1/s"}
                         ]
                       }
                     ]

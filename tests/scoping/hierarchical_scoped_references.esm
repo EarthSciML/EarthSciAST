@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.2.0",
   "metadata": {
     "name": "HierarchicalScopedReferences",
     "description": "Test fixtures for hierarchical scoped reference resolution (A.B.C.variable)",
@@ -101,7 +101,7 @@
                   {
                     "op": "*",
                     "args": [
-                      0.1,
+                      {"op": "const", "args": [], "value": 0.1, "units": "1/s"},
                       "ParentSystem.SubsystemA.DeepSubA.deep_variable"
                     ]
                   },

@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.2.0",
   "metadata": {
     "name": "FullCoupledSystem",
     "description": "Comprehensive ESM test exercising all sections: models, reaction_systems, data_sources, operators, coupling, domain with spatial+temporal+ICs+BCs, and solver. The meteorology and emission fields the loaders used to publish are now parameters of the consuming components, each carrying an `update` that names its data source (esm-spec 8.5).\nMigrated from ESM v0.1.0 to v0.2.0 via esm-migrate.",
@@ -97,7 +97,7 @@
                   {
                     "op": "/",
                     "args": [
-                      -1370,
+                      {"op": "const", "args": [], "value": -1370, "units": "K"},
                       "T"
                     ]
                   }
