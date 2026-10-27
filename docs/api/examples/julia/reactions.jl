@@ -14,9 +14,9 @@ for eq in odes.equations
     println(to_ascii(eq))
 end
 @assert [to_ascii(eq) for eq in odes.equations] == [
-    "D(O3)/Dt = -k1 * NO * O3 + jNO2 * NO2",
-    "D(NO)/Dt = -k1 * NO * O3 + jNO2 * NO2",
-    "D(NO2)/Dt = k1 * NO * O3 - jNO2 * NO2",
+    "D(O3)/Dt = -1 * k1 * NO * O3 + jNO2 * NO2",
+    "D(NO)/Dt = -1 * k1 * NO * O3 + jNO2 * NO2",
+    "D(NO2)/Dt = k1 * NO * O3 + -1 * jNO2 * NO2",
 ]
 
 # Rows are species (O3, NO, NO2), columns are reactions (R1, R2).

@@ -129,31 +129,32 @@ end
         # through unmodified — i.e. eq_B.rhs is exactly `k * A * B` with:
         #
         #   - a top-level OpExpr("*") (not "+" and not "-")
-        #   - no leading NumExpr coefficient (no `2*rate` artifact)
+        #   - no leading numeric coefficient (no `2*rate` artifact)
         #   - references to k, A, and B
         #
         # This distinguishes the correct +1 case from the incorrect
         # structures `2*rate + (-rate)` (would be top-level "+"),
-        # `2*rate` (would have a leading NumExpr(2)), or `-rate` (would be
-        # top-level unary "-").
+        # `2*rate` (would have a leading IntExpr(2)), or `-1*rate` (would have
+        # a leading IntExpr(-1)).
         @test eq_B.rhs isa EarthSciAST.OpExpr
         top_B = eq_B.rhs::EarthSciAST.OpExpr
         @test top_B.op == "*"
         @test top_B.op != "+"
         @test top_B.op != "-"
-        @test !any(a -> a isa EarthSciAST.NumExpr, top_B.args)
+        @test !any(a -> a isa EarthSciAST.NumExpr || a isa EarthSciAST.IntExpr, top_B.args)
         @test _uses_var(eq_B.rhs, "Auto.k")
         @test _uses_var(eq_B.rhs, "Auto.A")
         @test _uses_var(eq_B.rhs, "Auto.B")
 
-        # Net stoich of A = -1. The A equation MUST take the `stoich == -1`
-        # branch, which wraps the mass_action_rate term in a unary negation.
-        # Structurally: eq_A.rhs is OpExpr("-", [rate_expr]) — a unary minus
-        # with exactly one arg that itself contains k, A, and B.
+        # Net stoich of A = -1. The A equation is the canonical loss term of
+        # esm-libraries-spec §4.6.2: OpExpr("*", [IntExpr(-1), rate_expr]) — the
+        # INTEGER -1 times the mass_action_rate term, which contains k, A, and B.
+        # Not a unary minus, and not the float -1.0.
         @test eq_A.rhs isa EarthSciAST.OpExpr
         top_A = eq_A.rhs::EarthSciAST.OpExpr
-        @test top_A.op == "-"
-        @test length(top_A.args) == 1
+        @test top_A.op == "*"
+        @test length(top_A.args) == 2
+        @test top_A.args[1] isa EarthSciAST.IntExpr && top_A.args[1].value == -1
         @test _uses_var(eq_A.rhs, "Auto.k")
         @test _uses_var(eq_A.rhs, "Auto.A")
         @test _uses_var(eq_A.rhs, "Auto.B")

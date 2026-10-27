@@ -75,6 +75,89 @@ pub fn lower_reactions_to_equations(
         }
     }
 
+    // Each species' terms, indexed by its declaration position and filled
+    // reaction by reaction so they come out in reaction order
+    // (esm-libraries-spec §4.6.2 rule 4).
+    let mut species_terms: Vec<Vec<Expr>> = vec![Vec::new(); species.len()];
+
+    for reaction in reactions {
+        // v0.2.x allows fractional stoichiometries; accumulate in f64 so
+        // products like `0.87 CH2O` survive the ODE lowering unchanged.
+        // The net coefficient is `P - S` (esm-libraries-spec §4.6.2): each
+        // species' product and substrate coefficients are summed in listed
+        // order and differenced once. Only the species this reaction names are
+        // visited, as `(index, produced, consumed)` in first-mention order.
+        let mut sums: Vec<(usize, f64, f64)> = Vec::new();
+        let sides = [
+            (false, reaction.substrates.iter().flatten()),
+            (true, reaction.products.iter().flatten()),
+        ];
+        for (is_product, entries) in sides {
+            for entry in entries {
+                // Validated above: every entry names a declared species.
+                let Some(idx) = species.get_index_of(&entry.species) else {
+                    continue;
+                };
+                let slot = match sums.iter().position(|(i, _, _)| *i == idx) {
+                    Some(pos) => &mut sums[pos],
+                    None => {
+                        sums.push((idx, 0.0, 0.0));
+                        sums.last_mut().unwrap()
+                    }
+                };
+                if is_product {
+                    slot.1 += entry.coefficient;
+                } else {
+                    slot.2 += entry.coefficient;
+                }
+            }
+        }
+
+        // The mass-action rate law, built once per reaction and cloned into
+        // each species' term.
+        let mut rate_law: Option<Expr> = None;
+        for (idx, produced, consumed) in sums {
+            // Reservoir species (`constant: true`, §7.4): held fixed, so it
+            // gets NO dX/dt equation. Its concentration is still a mass-action
+            // factor in the OTHER species' rate laws — the rate law reads it
+            // from the reaction's substrate list regardless of this skip.
+            // Mirrors the Julia reference (flatten.jl
+            // `lower_reactions_to_equations`).
+            if species[idx].constant == Some(true) {
+                continue;
+            }
+            let net_stoichiometry = produced - consumed;
+            if net_stoichiometry == 0.0 {
+                continue;
+            }
+            let enhanced_rate = rate_law
+                .get_or_insert_with(|| {
+                    enhance_rate_with_mass_action(
+                        &reaction.rate,
+                        reaction.substrates.as_deref().unwrap_or(&[]),
+                    )
+                })
+                .clone();
+
+            // The canonical term (esm-libraries-spec §4.6.2): the bare
+            // rate law for a net coefficient of exactly 1, otherwise the
+            // two-operand product `coefficient * rate`, coefficient first,
+            // an INTEGER literal when integral. A loss of 1 is
+            // `-1 * rate`; `-1.0` would serialize as a float.
+            species_terms[idx].push(if net_stoichiometry == 1.0 {
+                enhanced_rate
+            } else {
+                Expr::operator(ExpressionNode {
+                    op: "*".to_string(),
+                    args: vec![stoich_literal(net_stoichiometry), enhanced_rate],
+                    wrt: None,
+                    dim: None,
+                    ..Default::default()
+                })
+            });
+        }
+    }
+
     let mut equations = Vec::with_capacity(species.len());
 
     // DOCUMENT ORDER (esm-libraries-spec §4.7.5 step 4, "Ordering"): the
@@ -82,57 +165,7 @@ pub fn lower_reactions_to_equations(
     // DECLARES its species. Sorting them — what this used to do — reorders the
     // flattened equation list relative to `state_variables`, which the shared
     // flatten corpus pins per equation index.
-    for sp_name in species.keys() {
-        // Reservoir species (`constant: true`, §7.4): held fixed, so it gets
-        // NO dX/dt equation. Its concentration is still a mass-action factor in
-        // the OTHER species' rate laws — `enhance_rate_with_mass_action` reads
-        // it from each reaction's substrate list regardless of this skip.
-        // Mirrors the Julia reference (flatten.jl `lower_reactions_to_equations`,
-        // `species[i].constant === true && continue`).
-        if species.get(sp_name).and_then(|s| s.constant) == Some(true) {
-            continue;
-        }
-
-        let mut rate_terms = Vec::new();
-
-        for reaction in reactions {
-            // v0.2.x allows fractional stoichiometries; accumulate in f64 so
-            // products like `0.87 CH2O` survive the ODE lowering unchanged.
-            let mut net_stoichiometry: f64 = 0.0;
-
-            for substrate in reaction.substrates.iter().flatten() {
-                if &substrate.species == sp_name {
-                    net_stoichiometry -= substrate.coefficient;
-                }
-            }
-            for product in reaction.products.iter().flatten() {
-                if &product.species == sp_name {
-                    net_stoichiometry += product.coefficient;
-                }
-            }
-
-            if net_stoichiometry != 0.0 {
-                let enhanced_rate = enhance_rate_with_mass_action(
-                    &reaction.rate,
-                    reaction.substrates.as_deref().unwrap_or(&[]),
-                );
-
-                if net_stoichiometry == 1.0 {
-                    rate_terms.push(enhanced_rate);
-                } else {
-                    // Covers -1.0 too: `Number(net_stoichiometry)` is exactly
-                    // `Number(-1.0)` when the coefficient is -1.
-                    rate_terms.push(Expr::operator(ExpressionNode {
-                        op: "*".to_string(),
-                        args: vec![Expr::Number(net_stoichiometry), enhanced_rate],
-                        wrt: None,
-                        dim: None,
-                        ..Default::default()
-                    }));
-                }
-            }
-        }
-
+    for (sp_name, rate_terms) in species.keys().zip(species_terms) {
         // A species with NO net contribution from any reaction gets NO
         // equation, rather than a vacuous `D(X, t) = 0`. Emitting the zero
         // equation makes such a species an ODE state that never moves, and
@@ -173,6 +206,19 @@ pub fn lower_reactions_to_equations(
     }
 
     Ok(equations)
+}
+
+/// A stoichiometric coefficient or exponent as the literal the lowered tree
+/// carries: [`Expr::Integer`] when the value is integral and representable in
+/// `i64` (CONFORMANCE_SPEC §5.5.3.1 rule 3, esm-libraries-spec §4.6.2 rule 5),
+/// [`Expr::Number`] otherwise. `i64::MAX as f64` rounds up to 2^63, one past
+/// `i64::MAX`, so the upper bound is exclusive.
+fn stoich_literal(value: f64) -> Expr {
+    if value.fract() == 0.0 && (i64::MIN as f64..i64::MAX as f64).contains(&value) {
+        Expr::Integer(value as i64)
+    } else {
+        Expr::Number(value)
+    }
 }
 
 /// Generate ODE model from a reaction system
@@ -295,12 +341,7 @@ fn enhance_rate_with_mass_action(rate: &Expr, substrates: &[crate::Stoichiometri
         if coeff == 1.0 {
             concentration_factors.push(species_var);
         } else {
-            let exponent =
-                if coeff.fract() == 0.0 && (i64::MIN as f64..=i64::MAX as f64).contains(&coeff) {
-                    Expr::Integer(coeff as i64)
-                } else {
-                    Expr::Number(coeff)
-                };
+            let exponent = stoich_literal(coeff);
             concentration_factors.push(Expr::operator(ExpressionNode {
                 op: "^".to_string(),
                 args: vec![species_var, exponent],
@@ -428,6 +469,21 @@ mod tests {
     use super::*;
     use crate::{Reaction, Species, StoichiometricEntry, VariableType};
     use indexmap::IndexMap;
+
+    #[test]
+    fn test_stoich_literal_int64_bounds() {
+        // 2^63 is integral but one past `i64::MAX`: a float, not a saturated
+        // integer (esm-libraries-spec §4.6.2 rule 5).
+        let two_63 = 2.0_f64.powi(63);
+        assert!(matches!(stoich_literal(two_63), Expr::Number(_)));
+        assert!(matches!(stoich_literal(-two_63), Expr::Integer(i64::MIN)));
+        assert!(matches!(
+            stoich_literal(1e17),
+            Expr::Integer(100_000_000_000_000_000)
+        ));
+        assert!(matches!(stoich_literal(-2.0), Expr::Integer(-2)));
+        assert!(matches!(stoich_literal(1.5), Expr::Number(_)));
+    }
 
     fn create_test_species(name: &str) -> (String, Species) {
         (
@@ -884,8 +940,10 @@ mod tests {
                 assert_eq!(node.args.len(), 2);
                 // First arg should be -1, second should be k_deg * A
                 match &node.args[0] {
-                    Expr::Number(n) => assert_eq!(*n, -1.0),
-                    _ => panic!("Expected -1 as first argument"),
+                    // An INTEGER literal (esm-libraries-spec §4.6.2), never
+                    // the float `-1.0`.
+                    Expr::Integer(n) => assert_eq!(*n, -1),
+                    _ => panic!("Expected the integer literal -1 as first argument"),
                 }
             }
             _ => panic!(

@@ -137,14 +137,10 @@ it a differential unknown that never moves. `lower_reactions_to_equations`
 (src/flatten.jl) now skips it, so both bindings put `OH` first, both lead with
 the transport term, and the equation ORDER agrees.)
 
-* `equations` on `full_coupled` — what survives is ONLY the reaction-lowering
-  coefficient rendering below: the `O3` and `NO` equations differ in that the
-  oracle writes `-1 * rate` where Julia writes `-rate`. The `OH` and `NO2`
-  equations now match the corpus EXACTLY, as do `equation_count`,
-  `algebraic_variables`, `state_variables` and the equation order. This case is
-  therefore no longer a case of its own — it is one of "the reaction-lowering
-  cases" bullet below, and it stays in `_FC_DIVERGENCES` only until that
-  rendering is reconciled. Pinned locally below.
+(RESOLVED: `equations` on `full_coupled`. What survived the `OH` fix above was
+only the reaction-lowering coefficient rendering — the oracle wrote `-1 * rate`
+where Julia wrote `-rate` — and esm-libraries-spec §4.6.2 settled that (see "the
+reaction-lowering cases" below). The case is compared in full.)
 * `equations` / `independent_variables` on `operator_compose_translate` — two
   separate oracle gaps, neither about the composition this case exists to pin
   (the merge itself matches the corpus exactly and is asserted locally below).
@@ -164,11 +160,10 @@ the transport term, and the equation ORDER agrees.)
   stays bare; the oracle prefixes it to `DepositionSystem.O3`, a name that is in
   no variable map either. Neither answer is usable and the fixture is what wants
   fixing. Every other equation in the case agrees exactly.
-* `equations` on `minimal_chemistry` / `metadata_inheritance_coupled` — the
-  reaction-lowering coefficient rendering below (`-1 * rate` vs `-rate`), and
-  nothing else; the composed advection terms agree exactly. These two are the
-  new `operator_compose` tier, so the composition they exist to pin is asserted
-  locally below rather than left to the skipped comparison.
+(RESOLVED: `equations` on `minimal_chemistry` / `metadata_inheritance_coupled`,
+which differed only in the reaction-lowering coefficient rendering below. Both
+are compared in full; the composition they exist to pin is also asserted locally
+below.)
 * `equations` on `complete_coupling_types` — `EmissionSources` writes
   `D(NO,t) = …` for an `NO` it does not declare and no coupling binds. Julia's
   namespacing only prefixes a component's OWN locals, so the dangling reference
@@ -184,22 +179,23 @@ defines"). Julia used to put them in `observed_variables` alone and the oracle i
 says BOTH: an arrayed observed is observed AND materializes into the solved-for
 vector. All five bindings now implement the full reading, so the case is compared
 in full and this is the corpus's pin for the rule.)
-* `equations` on the reaction-lowering cases — a stoichiometric coefficient of
-  −1 renders as `-1 * rate` in the oracle and `-rate` (or an infix `a - b`) in
-  Julia. Semantically identical, textually different; a `to_ascii`-level
-  difference in how the lowering builds the term, not a flatten difference.
-  `tendency_resolution` and `merged_tendency` are reaction-lowering cases too:
-  the right-hand-side `D` resolution (§4.7.5 step 3a) copies the lowered
-  `Chem.A` tendency into `M.dAdt`, so the same rendering shows up twice per
-  document. The resolution itself is pinned by
-  `rhs_time_derivative_resolution_test.jl`.
+(RESOLVED: `equations` on the reaction-lowering cases — `full_coupled`,
+`minimal_chemistry`, `metadata_inheritance_coupled`, `autocatalytic_reaction`,
+`expression_templates_arrhenius`, `tendency_resolution` and `merged_tendency`. A
+stoichiometric coefficient of −1 rendered as `-1 * rate` in the oracle and
+`-rate` (or an infix `a - b`) in Julia, because Julia lowered a loss to a unary
+minus. esm-libraries-spec §4.6.2 now fixes the lowered tree exactly — a loss of
+1 is `-1 * rate`, with the integer `-1` — and `lower_reactions_to_equations`
+builds it, so every one of these cases is compared in full.
+`tests/conformance/reactions/lowering_form.json` pins the tree itself.)
 * `equations` on `advection_reaction_loaded_ic_bc` — three separate differences,
   none of them about the field set: (i) the oracle NAMESPACES an aggregate's loop
   variables (`Advection.i`) and index-set references, which esm-spec v0.8.0 makes
   wrong — index sets are a document-scoped registry with plain names, and a loop
   variable is body-local, not a component variable; (ii) the oracle prints a range
-  as its extent (`1:4`) where Julia prints the index-set name (`lon`); (iii) the
-  reaction-lowering coefficient rendering below. A fourth used to sit here —
+  as its extent (`1:4`) where Julia prints the index-set name (`lon`). A third,
+  the reaction-lowering coefficient rendering, is RESOLVED (esm-libraries-spec
+  §4.6.2, see above). A fourth used to sit here —
   `operator_compose` summing the matched RHSs in the opposite order — and is
   RESOLVED (2026-08-24): `Advection` writes `D(Chemistry.O3, t) = …` itself, so
   after namespacing its equations are indistinguishable from the reaction
@@ -265,18 +261,11 @@ refusal must not lose the diagnostic.)
 
 """
 const _FC_DIVERGENCES = Dict{String,Vector{String}}(
-    "full_coupled" => ["equations"],
     "complete_coupling_types" => ["equations"],
     "edge_enumeration_area_eff" => ["equations"],
-    "expression_templates_arrhenius" => ["equations"],
-    "autocatalytic_reaction" => ["equations"],
     "advection_reaction_loaded_ic_bc" => ["equations"],
-    "minimal_chemistry" => ["equations"],
-    "metadata_inheritance_coupled" => ["equations"],
     "bare_reference_resolution" => ["discrete_events"],
     "operator_compose_translate" => ["equations", "independent_variables"],
-    "tendency_resolution" => ["equations"],
-    "merged_tendency" => ["equations"],
     "term_provenance_pointwise_lift" => ["equations"],
 )
 
@@ -729,31 +718,24 @@ end
               "(-Transport.w) * grad(AtmosphericChemistry.OH) + " *
               "Transport.K_h * laplacian(AtmosphericChemistry.OH) + " *
               "Transport.K_v * laplacian(AtmosphericChemistry.OH)"
-        # ... and it is byte-identical to what the shared corpus records, which
-        # is the half of the `equations` divergence this closed. What remains is
-        # the `-1 * rate` vs `-rate` coefficient rendering on O3 and NO, and
-        # nothing else — asserted here so a regression cannot quietly widen the
-        # entry back out.
+        # ... and every equation is byte-identical to what the shared corpus
+        # records. The `-1 * rate` vs `-rate` rendering that used to separate O3
+        # and NO is gone: esm-libraries-spec §4.6.2 writes a loss of 1 as
+        # `-1 * rate` in every binding.
         corpus_case = first(c for c in JSON3.read(read(_FLATTEN_CORPUS_PATH, String)).cases
                             if String(c.id) == "full_coupled")
         corpus_eqs = String["$(e.lhs) = $(e.rhs)" for e in corpus_case.equations]
-        @test eqs[1] == corpus_eqs[1]                       # OH  — exact
-        @test eqs[4] == corpus_eqs[4]                       # NO2 — exact
-        for i in (2, 3)                                     # O3, NO — only `-1 *`
-            @test eqs[i] != corpus_eqs[i]
-            @test replace(corpus_eqs[i], "-1 * " => "-") == eqs[i]
-        end
+        @test eqs == corpus_eqs
     end
 
     @testset "operator_compose tier: the composed equations, in full" begin
-        # `equations` is skipped for these two cases over the reaction-lowering
-        # coefficient rendering alone (`-1 * rate` vs `-rate`). They are the new
-        # `operator_compose` tier, so the composition itself — a `_var` template
-        # cloned once per state of A and summed onto A's own tendency — is
-        # pinned here in full rather than left uncompared.
+        # These two cases are the `operator_compose` tier, so the composition
+        # itself — a `_var` template cloned once per state of A and summed onto
+        # A's own tendency — is pinned here in full as well as against the
+        # corpus. A loss of 1 renders `-1 * rate` (esm-libraries-spec §4.6.2).
         flat = flatten(load_path(joinpath(_FLATTEN_TESTS_DIR, "valid",
                                           "minimal_chemistry.esm")))
-        chem = "-1.8e-12 * exp(-1370 / SimpleOzone.T) * SimpleOzone.M * " *
+        chem = "-1 * 1.8e-12 * exp(-1370 / SimpleOzone.T) * SimpleOzone.M * " *
                "SimpleOzone.NO * SimpleOzone.O3 + SimpleOzone.jNO2 * SimpleOzone.NO2"
         adv(v) = " + (-Advection.u_wind) * grad(SimpleOzone.$(v))" *
                  " + (-Advection.v_wind) * grad(SimpleOzone.$(v))"
@@ -761,13 +743,13 @@ end
             "D(SimpleOzone.O3)/Dt = " * chem * adv("O3"),
             "D(SimpleOzone.NO)/Dt = " * chem * adv("NO"),
             "D(SimpleOzone.NO2)/Dt = 1.8e-12 * exp(-1370 / SimpleOzone.T) * " *
-                "SimpleOzone.M * SimpleOzone.NO * SimpleOzone.O3 - " *
+                "SimpleOzone.M * SimpleOzone.NO * SimpleOzone.O3 + -1 * " *
                 "SimpleOzone.jNO2 * SimpleOzone.NO2" * adv("NO2"),
         ]
 
         flat = flatten(load_path(joinpath(_FLATTEN_TESTS_DIR, "valid",
                                           "metadata_inheritance_coupled.esm")))
-        chem2 = "-1.8e-12 * exp(-1370 / AtmosphericChemistry.T) * " *
+        chem2 = "-1 * 1.8e-12 * exp(-1370 / AtmosphericChemistry.T) * " *
                 "AtmosphericChemistry.NO * AtmosphericChemistry.O3 + " *
                 "AtmosphericChemistry.jNO2 * AtmosphericChemistry.NO2"
         adv2(v) = " + (-AdvectionTransport.u_wind) * grad(AtmosphericChemistry.$(v))" *
@@ -777,7 +759,7 @@ end
             "D(AtmosphericChemistry.NO)/Dt = " * chem2 * adv2("NO"),
             "D(AtmosphericChemistry.NO2)/Dt = 1.8e-12 * " *
                 "exp(-1370 / AtmosphericChemistry.T) * AtmosphericChemistry.NO * " *
-                "AtmosphericChemistry.O3 - AtmosphericChemistry.jNO2 * " *
+                "AtmosphericChemistry.O3 + -1 * AtmosphericChemistry.jNO2 * " *
                 "AtmosphericChemistry.NO2" * adv2("NO2"),
         ]
     end
