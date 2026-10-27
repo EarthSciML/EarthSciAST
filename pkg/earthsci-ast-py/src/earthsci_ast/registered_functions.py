@@ -29,7 +29,8 @@ list (diagnostic ``unknown_closed_function``). This module provides:
   ``searchsorted_non_monotonic``, ``closed_function_arity``,
   ``searchsorted_nan``, ``interp_non_monotonic_axis``,
   ``interp_axis_length_mismatch``, ``interp_nan_in_axis``,
-  ``interp_axis_too_short``).
+  ``interp_axis_too_short``, ``interp_table_not_const``,
+  ``interp_axis_not_const``).
 
 Calendar arithmetic is exact integer arithmetic on the floor-divmod of
 ``t_utc`` by 86400 (no leap-second consultation), with Hinnant's
@@ -53,9 +54,11 @@ from .error_handling import (
     CLOSED_FUNCTION_OVERFLOW,
     ENUM_DUPLICATE_VALUE,
     INTERP_AXIS_LENGTH_MISMATCH,
+    INTERP_AXIS_NOT_CONST,
     INTERP_AXIS_TOO_SHORT,
     INTERP_NAN_IN_AXIS,
     INTERP_NON_MONOTONIC_AXIS,
+    INTERP_TABLE_NOT_CONST,
     SEARCHSORTED_NAN,
     SEARCHSORTED_NON_MONOTONIC,
     UNKNOWN_CLOSED_FUNCTION,
@@ -83,6 +86,10 @@ class ClosedFunctionError(EarthSciAstError):
     - ``searchsorted_non_monotonic`` — ``xs`` is not non-decreasing.
     - ``searchsorted_nan`` — ``xs`` contains a NaN entry (checked before
       monotonicity).
+    - ``interp_table_not_const`` / ``interp_axis_not_const`` — an ``interp.*``
+      table / axis argument is not a literal ``const``-op array; for
+      ``interp.searchsorted``, an ``xs`` that is not a RANK-1 ``const`` array
+      (checked before ``searchsorted_nan``).
 
     The code constants themselves are defined in
     :mod:`earthsci_ast.error_handling`; their string values are part of the
@@ -321,12 +328,23 @@ def _interp_searchsorted(name: str, x: float, xs: Any) -> int:
     1-based, left-side bias (smallest ``i`` with ``xs[i] ≥ x``); out-of-range
     below → 1, above → ``N+1``; NaN ``x`` → ``N+1``; NaN entries in ``xs``
     raise; non-monotonic ``xs`` raises.
+
+    An ``xs`` that is not a rank-1 array -- a scalar, or an array with an
+    array entry -- is ``interp_axis_not_const``, checked FIRST (esm-spec
+    §9.2), so a nested ``xs`` holding a NaN is never ``searchsorted_nan``.
     """
     if not isinstance(xs, (list, tuple)):
         raise ClosedFunctionError(
-            CLOSED_FUNCTION_ARITY,
-            f"{name}: xs argument must be an array (got {type(xs).__name__})",
+            INTERP_AXIS_NOT_CONST,
+            f"{name}: xs must be a rank-1 `const` array (got {type(xs).__name__})",
         )
+    for i, entry in enumerate(xs):
+        if isinstance(entry, (list, tuple, dict)) or not _is_number(entry):
+            raise ClosedFunctionError(
+                INTERP_AXIS_NOT_CONST,
+                f"{name}: xs must be a rank-1 `const` array of numbers, but "
+                f"xs[{i + 1}] is {type(entry).__name__}",
+            )
     n = len(xs)
     if n == 0:
         # Empty table — extends "above-range → N+1" to N=0; the only consistent
@@ -359,6 +377,17 @@ def _interp_searchsorted(name: str, x: float, xs: Any) -> int:
     return _check_int32(name, n + 1)
 
 
+def _is_number(v: Any) -> bool:
+    """A numeric leaf of a ``const`` array: a real number that is not a bool."""
+    if isinstance(v, bool):
+        return False
+    try:
+        float(v)
+    except (TypeError, ValueError):
+        return False
+    return not isinstance(v, (str, bytes))
+
+
 def _validate_interp_axis(name: str, axis: Sequence[Any], axis_label: str) -> list[float]:
     """Validate a 1-D interpolation axis and return it as a list of floats.
 
@@ -368,7 +397,7 @@ def _validate_interp_axis(name: str, axis: Sequence[Any], axis_label: str) -> li
     """
     if not isinstance(axis, (list, tuple)):
         raise ClosedFunctionError(
-            CLOSED_FUNCTION_ARITY,
+            INTERP_AXIS_NOT_CONST,
             f"{name}: {axis_label} must be an inline `const` array (got {type(axis).__name__})",
         )
     n = len(axis)
@@ -403,7 +432,7 @@ def _interp_linear(name: str, table: Any, axis: Any, x: float) -> float:
     """
     if not isinstance(table, (list, tuple)):
         raise ClosedFunctionError(
-            CLOSED_FUNCTION_ARITY,
+            INTERP_TABLE_NOT_CONST,
             f"{name}: table must be an inline `const` array (got {type(table).__name__})",
         )
     axis_vals = _validate_interp_axis(name, axis, "axis")
@@ -451,7 +480,7 @@ def _interp_bilinear(
     """
     if not isinstance(table, (list, tuple)):
         raise ClosedFunctionError(
-            CLOSED_FUNCTION_ARITY,
+            INTERP_TABLE_NOT_CONST,
             f"{name}: table must be an inline `const` 2-D array (got {type(table).__name__})",
         )
     ax = _validate_interp_axis(name, axis_x, "axis_x")
@@ -536,24 +565,41 @@ def evaluate_closed_function(name: str, args: Sequence[Any]) -> int | float:
 # ============================================================
 
 
-def extract_const_array(node: Any) -> list[Any]:
-    """Extract a const-op array argument as a (possibly nested) Python list.
+def _not_const_code(name: str, position: int) -> str:
+    """The esm-spec §9.2 code for a non-``const`` argument in ``position`` of
+    ``name``: ``interp_table_not_const`` for the ``table`` slot of
+    ``interp.linear`` / ``interp.bilinear`` (slot 0), ``interp_axis_not_const``
+    for every axis slot, including ``interp.searchsorted``'s ``xs``."""
+    if name in ("interp.linear", "interp.bilinear") and position == 0:
+        return INTERP_TABLE_NOT_CONST
+    return INTERP_AXIS_NOT_CONST
+
+
+def extract_const_arg(name: str, position: int, node: Any) -> Any:
+    """Unwrap argument ``position`` of closed function ``name``, which MUST be a
+    ``const``-op array (one of :data:`INTERP_CONST_ARG_POSITIONS`).
 
     The ``interp.*`` closed functions take inline ``const`` arrays for their
-    table and axis arguments (see esm-spec §9.2 ``interp.*`` subsection):
-    ``interp.searchsorted`` for ``xs``; ``interp.linear`` for ``table`` and
-    ``axis``; ``interp.bilinear`` for ``table`` (2-D), ``axis_x``, and
-    ``axis_y``. Evaluators must pass the raw array — not a per-element-
-    evaluated value — to the closed function dispatch. This helper unwraps
-    ``{op: "const", value: [...]}``.
+    table and axis arguments (esm-spec §9.2): ``interp.searchsorted`` for
+    ``xs``; ``interp.linear`` for ``table`` and ``axis``; ``interp.bilinear``
+    for ``table`` (2-D), ``axis_x`` and ``axis_y``. Evaluators pass the raw
+    array -- not a per-element-evaluated value -- to the dispatch.
+
+    A variable reference or any non-``const`` expression in that slot raises
+    the slot's esm-spec §9.2 code (``interp_table_not_const`` /
+    ``interp_axis_not_const``) rather than being evaluated: the slot takes
+    literal data only. A ``const`` whose value is a scalar is returned as is, so
+    the closed function itself reports it under the same code (with the rank
+    check ``interp.searchsorted`` makes before its NaN check).
     """
     if isinstance(node, ExprNode) and node.op == "const":
-        return list(node.value or [])
-    if isinstance(node, (list, tuple)):
-        return list(node)
+        value = node.value
+        return list(value) if isinstance(value, (list, tuple)) else value
+    what = f"`{node.op}` expression" if isinstance(node, ExprNode) else repr(node)
     raise ClosedFunctionError(
-        CLOSED_FUNCTION_ARITY,
-        "interp.*: table / axis argument must be an inline `const` array",
+        _not_const_code(name, position),
+        f"{name}: argument {position + 1} must be an inline `const`-op array, "
+        f"got {what} (esm-spec §9.2)",
     )
 
 

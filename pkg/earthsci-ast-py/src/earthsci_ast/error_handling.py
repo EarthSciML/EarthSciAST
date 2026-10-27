@@ -155,6 +155,11 @@ class ErrorCode(Enum):
     TABLE_DATA_SHAPE_MISMATCH = "table_data_shape_mismatch"
     TABLE_AXIS_NAN = "table_axis_nan"
     TABLE_AXIS_NON_MONOTONIC = "table_axis_non_monotonic"
+    TABLE_AXIS_TOO_SHORT = "table_axis_too_short"
+    TABLE_AXIS_DUPLICATE_NAME = "table_axis_duplicate_name"
+    TABLE_OUTPUTS_DUPLICATE_NAME = "table_outputs_duplicate_name"
+    TABLE_OUTPUTS_LENGTH_MISMATCH = "table_outputs_length_mismatch"
+    TABLE_DATA_NAN = "table_data_nan"
     TABLE_LOOKUP_ARGS_NONEMPTY = "table_lookup_args_nonempty"
     # §9.5.3a: `out_of_bounds: "error"` is "conformant when implemented"
     # (§9.5.1) and this binding does not implement it, so the lookup is REFUSED
@@ -326,6 +331,12 @@ INTERP_NON_MONOTONIC_AXIS = "interp_non_monotonic_axis"
 INTERP_AXIS_LENGTH_MISMATCH = "interp_axis_length_mismatch"
 INTERP_NAN_IN_AXIS = "interp_nan_in_axis"
 INTERP_AXIS_TOO_SHORT = "interp_axis_too_short"
+#: A table / axis argument of an ``interp.*`` call is not a literal ``const``-op
+#: array (a variable reference, a non-``const`` expression). ``interp_axis_not_const``
+#: is also ``interp.searchsorted``'s code for an ``xs`` that is not a rank-1
+#: ``const`` array, checked before ``searchsorted_nan`` (esm-spec §9.2).
+INTERP_TABLE_NOT_CONST = "interp_table_not_const"
+INTERP_AXIS_NOT_CONST = "interp_axis_not_const"
 UNKNOWN_ENUM = "unknown_enum"
 UNKNOWN_ENUM_SYMBOL = "unknown_enum_symbol"
 #: Two symbols of one enum map to the same integer (esm-spec §9.3). A defect of

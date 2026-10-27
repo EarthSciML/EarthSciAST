@@ -24,7 +24,7 @@ from .registered_functions import (
     INTERP_CONST_ARG_POSITIONS,
     closed_function_names,
     evaluate_closed_function,
-    extract_const_array,
+    extract_const_arg,
 )
 
 
@@ -599,12 +599,10 @@ def _expr_to_sympy(
             dynamic_sympy_args: list[sp.Expr] = []
             for i, a in enumerate(expr.args):
                 if i in const_positions:
-                    if not (isinstance(a, ExprNode) and a.op == "const"):
-                        raise SimulationError(
-                            f"`{expr.name}` argument {i} must be an inline "
-                            f"`const` array (esm-spec §9.2 ``interp.*``)"
-                        )
-                    const_args_by_position[i] = extract_const_array(a)
+                    # Raises the slot's esm-spec §9.2 code
+                    # (`interp_table_not_const` / `interp_axis_not_const`) for a
+                    # variable or computed expression in a table / axis slot.
+                    const_args_by_position[i] = extract_const_arg(expr.name, i, a)
                 else:
                     dynamic_sympy_args.append(
                         _expr_to_sympy(a, symbol_map, fn_callable_map, structural_ops)

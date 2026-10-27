@@ -220,6 +220,75 @@ def test_searchsorted_through_ast():
     assert fold_constant_expr(eq.rhs, {"x": 1.0}) == 1.0
 
 
+def _searchsorted_doc(xs: Any) -> dict:
+    """A one-equation model whose RHS is ``interp.searchsorted(x, <xs>)``, with
+    a parameter ``xs`` an author might mistake for an axis."""
+    return {
+        "esm": "1.0.0",
+        "metadata": {"name": "searchsorted_xs", "authors": ["test"]},
+        "models": {
+            "M": {
+                "variables": {
+                    "x": {"type": "parameter", "default": 2.5},
+                    "xs": {"type": "parameter", "default": 1.0},
+                    "y": {"type": "unknown", "default": 0.0},
+                },
+                "equations": [
+                    {
+                        "lhs": {"op": "D", "args": ["y"], "wrt": "t"},
+                        "rhs": {"op": "fn", "name": "interp.searchsorted", "args": ["x", xs]},
+                    }
+                ],
+            }
+        },
+    }
+
+
+_NON_CONST_XS = {
+    "variable_reference": "xs",
+    "non_const_expression": {"op": "*", "args": [2.0, "xs"]},
+    "const_scalar": {"op": "const", "args": [], "value": 3.0},
+    "const_nested": {"op": "const", "args": [], "value": [[1.0, 2.0], [3.0, 4.0]]},
+}
+
+
+@pytest.mark.parametrize("xs", list(_NON_CONST_XS.values()), ids=list(_NON_CONST_XS))
+def test_searchsorted_non_const_xs_is_interp_axis_not_const(xs):
+    """esm-spec §9.2: an ``xs`` that is not a rank-1 ``const`` array -- a
+    variable reference, a computed expression, a scalar or nested ``const`` --
+    is ``interp_axis_not_const``, raised by the evaluator rather than evaluated
+    and passed through."""
+    file = load_string(json.dumps(_searchsorted_doc(xs)))
+    rhs = file.models["M"].equations[0].rhs
+    with pytest.raises(ClosedFunctionError) as exc:
+        fold_constant_expr(rhs, {"x": 2.5, "xs": 1.0})
+    assert exc.value.code == "interp_axis_not_const"
+
+
+@pytest.mark.parametrize(
+    "xs",
+    [_NON_CONST_XS["variable_reference"], _NON_CONST_XS["non_const_expression"]],
+    ids=["variable_reference", "non_const_expression"],
+)
+def test_searchsorted_non_const_xs_is_refused_by_the_sympy_build(xs):
+    """The SymPy compiler bakes the ``const`` slots into a closure at build;
+    a non-``const`` ``xs`` is refused there with the same code."""
+    from earthsci_ast.problem import esm_problem
+
+    file = load_string(json.dumps(_searchsorted_doc(xs)))
+    with pytest.raises(ClosedFunctionError) as exc:
+        esm_problem(file, (0.0, 1.0), compiler="sympy")
+    assert exc.value.code == "interp_axis_not_const"
+
+
+def test_searchsorted_rank_check_precedes_the_nan_check():
+    """A nested ``xs`` holding a NaN is ``interp_axis_not_const``, not
+    ``searchsorted_nan``: the rank check comes first (esm-spec §9.2)."""
+    with pytest.raises(ClosedFunctionError) as exc:
+        evaluate_closed_function("interp.searchsorted", [2.0, [[1.0, float("nan")], [3.0]]])
+    assert exc.value.code == "interp_axis_not_const"
+
+
 def test_enums_lowered_to_const():
     """End-to-end: ``enum`` ops are resolved to ``const`` integers at load."""
     fixture = VALID_DIR / "enums_categorical_lookup.esm"

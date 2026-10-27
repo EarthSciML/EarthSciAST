@@ -449,14 +449,28 @@ def test_a_document_with_no_tables_is_not_even_walked():
         ({"lookup": {"axes": {"q": "p"}}}, ErrorCode.TABLE_LOOKUP_AXIS_NAME_MISMATCH),
         ({"lookup": {"output": 7}}, ErrorCode.TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE),
         (
-            {"table": {"outputs": ["a", "b"]}, "lookup": {"output": "c"}},
+            {
+                "table": {"outputs": ["a", "b"], "data": [[1.0, 2.0, 3.0, 4.0]] * 2},
+                "lookup": {"output": "c"},
+            },
             ErrorCode.TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE,
         ),
         # `outputs` declares five rows, so `output: 4` is in range — but `data`
-        # carries only four, which is a table defect, not a selector one.
+        # carries only four, which is a table defect, not a selector one, and
+        # the table is checked before the lookup (§9.5.5, order step 7).
         (
             {"table": {"outputs": ["a", "b", "c", "d", "e"]}, "lookup": {"output": 4}},
+            ErrorCode.TABLE_OUTPUTS_LENGTH_MISMATCH,
+        ),
+        # Rows of the right count but the wrong length: the nesting (step 8).
+        (
+            {"table": {"outputs": ["a", "b"], "data": [[1.0, 2.0, 3.0, 4.0], [5.0, 6.0]]}},
             ErrorCode.TABLE_DATA_SHAPE_MISMATCH,
+        ),
+        # A broken table is reported before a broken lookup.
+        (
+            {"table": {"interpolation": "bilinear"}, "lookup": {"table": "t_prof", "output": 7}},
+            ErrorCode.TABLE_INTERPOLATION_AXES_MISMATCH,
         ),
         ({"table": {"interpolation": "bilinear"}}, ErrorCode.TABLE_INTERPOLATION_AXES_MISMATCH),
         (
