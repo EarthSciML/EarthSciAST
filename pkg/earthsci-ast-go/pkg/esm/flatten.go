@@ -1437,7 +1437,7 @@ func lowerReactionsToEquations(rs *ReactionSystem, speciesOrder []string) ([]Equ
 			products[p.Species] += p.Stoichiometry
 		}
 
-		var rateExpr Expression = reaction.Rate
+		rateExpr := reaction.Rate
 		if len(reaction.Substrates) > 0 {
 			factors := []any{reaction.Rate}
 			for _, s := range reaction.Substrates {
