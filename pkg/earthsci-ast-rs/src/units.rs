@@ -2150,19 +2150,102 @@ impl LiteralSite<'_> {
 /// but not under the current neutral-literal rule. Returns `(json_pointer,
 /// message)` pairs in document order.
 ///
-/// The sites are each equation of every top-level model
-/// (`/models/<M>/equations/<i>`) and each reaction rate of every top-level
-/// reaction system (`/reaction_systems/<S>/reactions/<i>`). Each component is
-/// typed against the environment validation types it against: its own
-/// declarations (unparseable ones skipped), then paths relative to its
+/// The sites are every model's `equations` and `initialization_equations`
+/// and every reaction system's `constraint_equations` and reaction rates, in
+/// the top-level components and in their inline subsystems at any depth (a
+/// resolved `{ref}` mount counts; an unresolved one is skipped). Each component
+/// is typed against the environment validation types it against: its own
+/// declarations (unparseable ones skipped), then paths relative to its own
 /// subsystems, then `document_units`. A site the current rule already rejects
 /// carries no warning: it is an error already.
 pub(crate) fn dimensionless_literal_findings(
     esm_file: &crate::EsmFile,
     document_units: &HashMap<String, Unit>,
 ) -> Vec<(String, String)> {
-    let mut out = Vec::new();
-    let mut visit = |pointer: String, site: LiteralSite<'_>, env: &dyn UnitEnv| {
+    let mut walk = LiteralWalk {
+        document_units,
+        out: Vec::new(),
+    };
+    for (name, model) in esm_file.models.iter().flatten() {
+        walk.model(&format!("/models/{}", pointer_token(name)), model);
+    }
+    for (name, rs) in esm_file.reaction_systems.iter().flatten() {
+        walk.reaction_system(&format!("/reaction_systems/{}", pointer_token(name)), rs);
+    }
+    walk.out
+}
+
+/// The walk behind [`dimensionless_literal_findings`].
+struct LiteralWalk<'d> {
+    document_units: &'d HashMap<String, Unit>,
+    out: Vec<(String, String)>,
+}
+
+impl LiteralWalk<'_> {
+    fn model(&mut self, pointer: &str, model: &crate::Model) {
+        let (own, _) = build_unit_env(&model.variables);
+        let env = ComponentUnitEnv::new(own, model.subsystems.as_ref(), self.document_units);
+        for (i, eq) in model.equations.iter().enumerate() {
+            self.site(
+                format!("{pointer}/equations/{i}"),
+                LiteralSite::Equation(eq),
+                &env,
+            );
+        }
+        for (i, eq) in model.initialization_equations.iter().flatten().enumerate() {
+            self.site(
+                format!("{pointer}/initialization_equations/{i}"),
+                LiteralSite::Equation(eq),
+                &env,
+            );
+        }
+        for (name, sub) in inline_subsystems(model.subsystems.as_ref()) {
+            if let Ok(sub) = serde_json::from_value::<crate::Model>(sub.clone()) {
+                self.model(
+                    &format!("{pointer}/subsystems/{}", pointer_token(name)),
+                    &sub,
+                );
+            }
+        }
+    }
+
+    fn reaction_system(&mut self, pointer: &str, rs: &crate::ReactionSystem) {
+        let declared = rs
+            .species
+            .iter()
+            .map(|(n, sp)| (n, sp.units.as_deref()))
+            .chain(rs.parameters.iter().map(|(n, p)| (n, p.units.as_deref())));
+        let own: HashMap<String, Unit> = declared
+            .filter_map(|(n, units)| Some((n.clone(), parse_unit(units?).ok()?)))
+            .collect();
+        let env = ComponentUnitEnv::new(own, rs.subsystems.as_ref(), self.document_units);
+        for (i, eq) in rs.constraint_equations.iter().flatten().enumerate() {
+            self.site(
+                format!("{pointer}/constraint_equations/{i}"),
+                LiteralSite::Equation(eq),
+                &env,
+            );
+        }
+        for (i, reaction) in rs.reactions.iter().enumerate() {
+            self.site(
+                format!("{pointer}/reactions/{i}"),
+                LiteralSite::Rate(&reaction.rate),
+                &env,
+            );
+        }
+        for (name, sub) in inline_subsystems(rs.subsystems.as_ref()) {
+            if let Ok(sub) = serde_json::from_value::<crate::ReactionSystem>(sub.clone()) {
+                self.reaction_system(
+                    &format!("{pointer}/subsystems/{}", pointer_token(name)),
+                    &sub,
+                );
+            }
+        }
+    }
+
+    /// Judge one site under both literal rules and record the warning when only
+    /// the dimensionless-literal rule fails it.
+    fn site(&mut self, pointer: String, site: LiteralSite<'_>, env: &dyn UnitEnv) {
         let literals = nonzero_bare_literals(&site.exprs());
         // With no nonzero literal the two rules type the site identically.
         if literals.is_empty() {
@@ -2181,40 +2264,29 @@ pub(crate) fn dimensionless_literal_findings(
              (esm-spec §4.8.5)",
             literals.join(", ")
         );
-        out.push((pointer, message));
-    };
-
-    for (name, model) in esm_file.models.iter().flatten() {
-        let (own, _) = build_unit_env(&model.variables);
-        let env = ComponentUnitEnv::new(own, model.subsystems.as_ref(), document_units);
-        for (i, eq) in model.equations.iter().enumerate() {
-            visit(
-                format!("/models/{}/equations/{i}", pointer_token(name)),
-                LiteralSite::Equation(eq),
-                &env,
-            );
-        }
+        self.out.push((pointer, message));
     }
+}
 
-    for (name, rs) in esm_file.reaction_systems.iter().flatten() {
-        let declared = rs
-            .species
-            .iter()
-            .map(|(n, sp)| (n, sp.units.as_deref()))
-            .chain(rs.parameters.iter().map(|(n, p)| (n, p.units.as_deref())));
-        let own: HashMap<String, Unit> = declared
-            .filter_map(|(n, units)| Some((n.clone(), parse_unit(units?).ok()?)))
-            .collect();
-        let env = ComponentUnitEnv::new(own, rs.subsystems.as_ref(), document_units);
-        for (i, reaction) in rs.reactions.iter().enumerate() {
-            visit(
-                format!("/reaction_systems/{}/reactions/{i}", pointer_token(name)),
-                LiteralSite::Rate(&reaction.rate),
-                &env,
-            );
-        }
-    }
-    out
+/// The inline subsystems of a `subsystems` map: a resolved `{ref}` mount is
+/// already spliced in (and a mounted single-component document is unwrapped to
+/// its component); an unresolved `{ref}` has nothing to type and is skipped.
+fn inline_subsystems(
+    subsystems: Option<&indexmap::IndexMap<String, serde_json::Value>>,
+) -> impl Iterator<Item = (&String, &serde_json::Value)> {
+    subsystems
+        .into_iter()
+        .flatten()
+        .filter_map(|(name, value)| {
+            let component = value
+                .get("models")
+                .or_else(|| value.get("reaction_systems"))
+                .and_then(|m| m.as_object())
+                .filter(|m| m.len() == 1)
+                .and_then(|m| m.values().next())
+                .unwrap_or(value);
+            (component.is_object() && component.get("ref").is_none()).then_some((name, component))
+        })
 }
 
 /// The dimensional analyser's verdict on one equation, in the form a report
