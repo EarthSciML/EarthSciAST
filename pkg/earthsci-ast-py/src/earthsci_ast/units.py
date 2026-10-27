@@ -1668,6 +1668,12 @@ class UnitValidator:
             unit = self._unit_of(expr)
             if unit is not None:
                 return _Typed(unit.dimensionality, exact_scale_of(unit))
+            if expr == op_registry.STRUCTURAL_DERIVATIVE_WRT:
+                # The implicit independent variable has the time dimension, in
+                # seconds (esm-spec §4.9.1), as in the other bindings. A
+                # derivative taken with respect to it stays undeterminable when
+                # it is undeclared (see `D` below and `_site_mismatch`).
+                return _Typed(self.ureg.parse_units("s").dimensionality, ExactScale.one())
             # Undeclared symbol: unknown dimension, so it is skipped rather
             # than assumed dimensionless.
             return None
@@ -2128,9 +2134,26 @@ def _site_mismatch(validator: UnitValidator, lhs: Any, rhs: Any) -> str | None:
     try:
         left = validator._type(lhs) if lhs is not None else None
         right = validator._type(rhs)
+        state = _derivative_of_undeclared_time(validator, lhs)
+        state_typed = validator._type(state) if state is not None else None
     except DimensionalMismatchError as e:
         return str(e)
     except pint.PintError:
+        return None
+    if state is not None:
+        # `D(x)` with respect to an undeclared time is undeterminable, so the
+        # two sides cannot be compared directly; but whatever unit the time
+        # carries contributes only powers of TIME, so a ratio with any other
+        # dimension is provably irreconcilable (esm-spec §4.8.4).
+        if state_typed is None or right is None:
+            return None
+        ratio = state_typed.dim / right.dim
+        time_axis = "[time]"
+        if any(axis != time_axis and power != 0 for axis, power in ratio.items()):
+            return (
+                f"No time unit can reconcile d({state_typed.dim})/dt with {right.dim} "
+                f"(their ratio {ratio} is not a power of time)"
+            )
         return None
     if lhs is None or left is None or right is None:
         return None
@@ -2139,6 +2162,17 @@ def _site_mismatch(validator: UnitValidator, lhs: Any, rhs: Any) -> str | None:
     if left.scale != right.scale:
         return f"LHS has dimension {left.dim} at scale {left.scale}, RHS at scale {right.scale}"
     return None
+
+
+def _derivative_of_undeclared_time(validator: UnitValidator, lhs: Any) -> Any:
+    """The operand ``x`` when ``lhs`` is ``D(x)`` taken with respect to an
+    independent variable the component does not declare, else ``None``."""
+    if not isinstance(lhs, ExprNode) or lhs.op != "D" or len(lhs.args or []) != 1:
+        return None
+    wrt = lhs.wrt or op_registry.STRUCTURAL_DERIVATIVE_WRT
+    if validator._unit_of(wrt) is not None:
+        return None
+    return lhs.args[0]
 
 
 def _pointer_token(name: str) -> str:
@@ -2151,10 +2185,11 @@ def dimensionless_literal_findings(esm_file: EsmFile) -> list[tuple[str, str]]:
     under the current neutral-literal rule. Returns ``(json_pointer, message)``
     pairs in document order.
 
-    The sites are each equation of every top-level model
-    (``/models/<M>/equations/<i>``) and each reaction rate of every top-level
-    reaction system (``/reaction_systems/<S>/reactions/<i>``). A site the
-    current rule already rejects carries no warning: it is an error already.
+    The sites are every model's ``equations`` and ``initialization_equations``
+    and every reaction system's ``constraint_equations`` and reaction rates,
+    in the top-level components and in their inline subsystems at any depth.
+    A site the current rule already rejects carries no warning: it is an error
+    already.
     """
     if not PINT_AVAILABLE:
         return []
@@ -2191,35 +2226,41 @@ def dimensionless_literal_findings(esm_file: EsmFile) -> list[tuple[str, str]]:
             )
         )
 
-    for mname, model in (esm_file.models or {}).items():
+    def walk_model(pointer: str, model: Any) -> None:
         units = {n: v.units for n, v in (model.variables or {}).items()}
         current = seeded(model, units, False)
         candidate = seeded(model, units, True)
-        for i, eq in enumerate(model.equations or []):
-            visit(
-                f"/models/{_pointer_token(mname)}/equations/{i}",
-                current,
-                candidate,
-                eq.lhs,
-                eq.rhs,
-            )
+        for field_name in ("equations", "initialization_equations"):
+            for i, eq in enumerate(getattr(model, field_name, None) or []):
+                visit(f"{pointer}/{field_name}/{i}", current, candidate, eq.lhs, eq.rhs)
+        walk_subsystems(pointer, model, walk_model)
 
-    for sname, rs in (esm_file.reaction_systems or {}).items():
+    def walk_reaction_system(pointer: str, rs: Any) -> None:
         units = {sp.name: sp.units for sp in rs.species or []}
         units.update({p.name: p.units for p in rs.parameters or []})
         current = seeded(rs, units, False)
         candidate = seeded(rs, units, True)
+        for i, eq in enumerate(rs.constraint_equations or []):
+            visit(f"{pointer}/constraint_equations/{i}", current, candidate, eq.lhs, eq.rhs)
         for i, reaction in enumerate(rs.reactions or []):
             rate = getattr(reaction, "rate_constant", None)
             if rate is None:
                 continue
-            visit(
-                f"/reaction_systems/{_pointer_token(sname)}/reactions/{i}",
-                current,
-                candidate,
-                None,
-                rate,
-            )
+            visit(f"{pointer}/reactions/{i}", current, candidate, None, rate)
+        walk_subsystems(pointer, rs, walk_reaction_system)
+
+    def walk_subsystems(pointer: str, component: Any, walk) -> None:
+        # Inline subsystems at any depth; an unresolved `{ref}` mount is a raw
+        # dict and has nothing to type.
+        for name, sub in (getattr(component, "subsystems", None) or {}).items():
+            if isinstance(sub, dict):
+                continue
+            walk(f"{pointer}/subsystems/{_pointer_token(name)}", sub)
+
+    for mname, model in (esm_file.models or {}).items():
+        walk_model(f"/models/{_pointer_token(mname)}", model)
+    for sname, rs in (esm_file.reaction_systems or {}).items():
+        walk_reaction_system(f"/reaction_systems/{_pointer_token(sname)}", rs)
     return out
 
 
