@@ -1,8 +1,7 @@
 # EarthSciAST.jl
 
 [![Cross-Language Conformance Testing](https://github.com/EarthSciML/EarthSciAST/actions/workflows/conformance-testing.yml/badge.svg)](https://github.com/EarthSciML/EarthSciAST/actions/workflows/conformance-testing.yml)
-[![Docs](https://img.shields.io/badge/docs-stable-blue.svg)](https://earthsciml.github.io/EarthSciAST/pkg/EarthSciAST.jl/stable)
-[![Docs](https://img.shields.io/badge/docs-dev-blue.svg)](https://earthsciml.github.io/EarthSciAST/pkg/EarthSciAST.jl/dev)
+[![Docs](https://img.shields.io/badge/docs-earthsci.dev-blue.svg)](https://earthsci.dev/ast/)
 
 EarthSciML Abstract Syntax Tree Format Julia library.
 
@@ -91,8 +90,8 @@ the tree-walk runtime (`esm_problem` + `solve`) runs it end to end.
 ## Documentation
 
 For detailed documentation, examples, and API reference, see:
-- [Stable Documentation](https://earthsciml.github.io/EarthSciAST/pkg/EarthSciAST.jl/stable)
-- [Development Documentation](https://earthsciml.github.io/EarthSciAST/pkg/EarthSciAST.jl/dev)
+- [EarthSciAST documentation](https://earthsci.dev/ast/)
+- [API reference (all bindings, including Julia)](https://earthsci.dev/ast/generated/api/)
 
 ## Contributing
 

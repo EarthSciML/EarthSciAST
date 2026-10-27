@@ -3,12 +3,13 @@ using Documenter
 
 DocMeta.setdocmeta!(EarthSciAST, :DocTestSetup, :(using EarthSciAST); recursive=true)
 
+# Local build and doctest check only. The published documentation is built by
+# earthsci.dev (https://earthsci.dev/ast/); nothing deploys from here.
 makedocs(;
     modules=[EarthSciAST],
     authors="Chris Tessum with Claude <noreply@anthropic.com> and contributors",
     sitename="EarthSciAST.jl",
     format=Documenter.HTML(;
-        canonical="https://earthsciml.github.io/EarthSciAST/pkg/EarthSciAST.jl",
         edit_link="main",
         assets=String[],
     ),
@@ -19,10 +20,4 @@ makedocs(;
         "Compiled Backend Devices" => "compiled-backend-devices.md",
     ],
     warnonly=true,
-)
-
-deploydocs(;
-    repo="github.com/EarthSciML/EarthSciAST.git",
-    devbranch="main",
-    dirname="pkg/EarthSciAST.jl",
 )
