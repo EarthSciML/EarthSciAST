@@ -37,9 +37,11 @@ Calendar arithmetic is exact integer arithmetic on the floor-divmod of
 ``civil_from_days`` for the proleptic-Gregorian date. It does not use
 :mod:`datetime`: ``timedelta`` rounds to the nearest microsecond, so a time a
 few nanoseconds before midnight would land on the next day, and its years stop
-at 1..9999. ``datetime.julian_day`` is computed via the Fliegel–van Flandern
-(1968) integer formula plus the fractional-day offset, giving ≤ 1 ulp
-agreement with the spec reference computation.
+at 1..9999. ``datetime.julian_day`` is the standard Julian Date
+``t / 86400 + 2440587.5`` for every ``t``, evaluated in binary64 from the same
+exact split (esm-spec §9.2). Every ``datetime.*`` function raises
+``closed_function_overflow`` when ``t_utc`` is NaN or ±Inf or its year is
+outside Int32.
 """
 
 from __future__ import annotations
@@ -129,9 +131,7 @@ class _ClosedFunction:
 # module-level helper functions defined further below; the deferred lookup means
 # definition order does not matter (the helpers only need to exist at call time).
 _CLOSED_FUNCTIONS: dict[str, _ClosedFunction] = {
-    "datetime.year": _ClosedFunction(
-        1, lambda name, args: _check_int32(name, _decompose_utc(args[0]).year)
-    ),
+    "datetime.year": _ClosedFunction(1, lambda name, args: _decompose_utc(args[0]).year),
     "datetime.month": _ClosedFunction(1, lambda name, args: _decompose_utc(args[0]).month),
     "datetime.day": _ClosedFunction(1, lambda name, args: _decompose_utc(args[0]).day),
     "datetime.hour": _ClosedFunction(1, lambda name, args: _decompose_utc(args[0]).hour),
@@ -233,7 +233,9 @@ class _UtcParts:
 
 
 def _decompose_utc(t_utc: Any) -> _UtcParts:
-    """Split a UTC scalar (seconds since the Unix epoch) per esm-spec §9.2.
+    """Split a UTC scalar (seconds since the Unix epoch) per esm-spec §9.2,
+    raising ``closed_function_overflow`` for a NaN or ±Inf ``t_utc`` and for
+    one whose year is outside Int32 — whichever field the caller then reads.
 
     The day number is ``floor(t / 86400)`` and the time of day
     ``t - 86400 * floor(t / 86400)``, both exact, with the fields taken from
@@ -246,12 +248,17 @@ def _decompose_utc(t_utc: Any) -> _UtcParts:
     seconds = float(t_utc)
     if not math.isfinite(seconds):
         raise ClosedFunctionError(
-            CLOSED_FUNCTION_ARITY,
+            CLOSED_FUNCTION_OVERFLOW,
             f"datetime.*: t_utc must be finite, got {seconds}",
         )
     whole = math.floor(seconds)
     day_count, second_of_day = divmod(whole, 86400)
     year, month, day = _civil_from_days(day_count)
+    if year < _INT32_MIN or year > _INT32_MAX:
+        raise ClosedFunctionError(
+            CLOSED_FUNCTION_OVERFLOW,
+            f"datetime.*: the year {year} of t_utc {seconds!r} overflows Int32",
+        )
     return _UtcParts(day_count, second_of_day, seconds - whole, year, month, day)
 
 
@@ -271,41 +278,20 @@ def _civil_from_days(z: int) -> tuple[int, int, int]:
     return year, month, day
 
 
-def _trunc_div(a: int, b: int) -> int:
-    """Truncated integer division (rounds toward zero), C/Julia ÷ semantics.
-
-    Python's ``//`` is floor division — it disagrees with the C-style
-    semantics the Fliegel–van Flandern (1968) formula assumes whenever the
-    dividend is negative (e.g. ``(M − 14)`` for ``M ∈ [1, 12]``). Misusing
-    ``//`` here produces JDN values that drift by 1–2 days from the spec.
-    """
-    q, r = divmod(a, b)
-    if r != 0 and (a < 0) != (b < 0):
-        q += 1
-    return q
-
-
 def _datetime_julian_day(t_utc: float) -> float:
-    """Fliegel–van Flandern (1968) integer JDN + fractional-day offset.
+    """The standard Julian Date ``t / 86400 + 2440587.5`` (esm-spec §9.2).
 
-    The offset is ``(time_of_day − 43200) / 86400`` (esm-spec §9.2), formed
-    as ``(second_of_day − 43200) + fraction``: the integer part is exact, so
-    the time of day is rounded once, then divided and added — ≤ 1 ulp of the
-    exact value, and taken from the SAME floor-divmod as the date, so the
-    date and the offset can never disagree about which day ``t`` is in.
+    Evaluated as §9.2 pins it, from the exact split:
+    ``(day + 2440588) + ((second_of_day − 43200) + fraction) / 86400``. The
+    day term and ``second_of_day − 43200`` are exact integers and the fraction
+    is exact, so the inner add, the divide and the outer add are the only
+    roundings — ≤ 1 ulp of the exact value. The day number is linear, not
+    the Fliegel–van Flandern JDN of the date: the two agree from -4800-03-01
+    on, and before that FvF is off by -2 to +1 days.
     """
     p = _decompose_utc(t_utc)
-    y, m, d = p.year, p.month, p.day
-    a = _trunc_div(m - 14, 12)
-    jdn = (
-        _trunc_div(1461 * (y + 4800 + a), 4)
-        + _trunc_div(367 * (m - 2 - 12 * a), 12)
-        - _trunc_div(3 * _trunc_div(y + 4900 + a, 100), 4)
-        + d
-        - 32075
-    )
     from_noon = float(p.second_of_day - 43200) + p.fraction
-    return float(jdn) + from_noon / 86400.0
+    return float(p.day_count + 2440588) + from_noon / 86400.0
 
 
 def _is_leap_year(year: int) -> bool:
