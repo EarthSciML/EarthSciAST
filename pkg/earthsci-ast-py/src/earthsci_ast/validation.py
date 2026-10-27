@@ -42,7 +42,9 @@ from jsonschema import ValidationError as JsonSchemaValidationError
 from .classification import observed_definitions, observed_unknowns, ode_states
 from .error_handling import ErrorCode
 from .esm_types import EsmFile
+from .lower_table_lookup import TableLookupError
 from .parse import SchemaValidationError, SubsystemRefError, load_path, load_string
+from .registered_functions import ClosedFunctionError
 from .units import UNIT_FINDING_ANALYSIS
 
 
@@ -261,6 +263,11 @@ def validate(esm_file: EsmFile, *, base_path: str | None = None) -> ValidationRe
         # see the expanded edges, not the opaque import entry.
         _validate_imported_coupling_edges(esm_file, structural_errors)
 
+        # 4d. The esm-spec §9.2 closed-function argument checks and the §9.5.5
+        # function-table / table_lookup checks -- the same ones the loader runs
+        # (ruling Q-106), repeated for a document built or edited in memory.
+        _validate_closed_functions_and_tables(esm_file, structural_errors)
+
         # 5. Unit validation (warnings only)
         _validate_units(esm_file, unit_warnings)
 
@@ -363,6 +370,15 @@ def _validate_loaded(loader, base_path: str | None) -> ValidationResult:
             schema_errors=[ValidationError(path="", message=str(e), code=ErrorCode.SCHEMA.value)],
             structural_errors=[],
         )
+    except (ClosedFunctionError, TableLookupError) as e:
+        # A §9.2 closed-function argument check or a §9.5.5 table check the
+        # loader ran (ruling Q-106): a structural defect with its own code, not
+        # an opaque parse failure.
+        return ValidationResult(
+            is_valid=False,
+            schema_errors=[],
+            structural_errors=[ValidationError(path="", message=str(e), code=e.code)],
+        )
     except SubsystemRefError as e:
         # A §4.7 mount that does not resolve is a STRUCTURAL defect at the
         # pointer of the mount, not a parse failure of the document as a
@@ -411,6 +427,24 @@ def validate_text(text: str, *, base_path: str | None = None) -> ValidationResul
     fixture text should pass the fixture's directory.
     """
     return _validate_loaded(lambda: load_string(text, base_path=base_path), base_path)
+
+
+def _validate_closed_functions_and_tables(
+    esm_file: EsmFile, structural_errors: list[ValidationError]
+) -> None:
+    """One structural error per failing function table, ``interp.*`` ``fn``
+    node and ``table_lookup`` node (esm-spec §9.2, §9.5.5), under the check's
+    own diagnostic code."""
+    from .load_checks import iter_document_errors
+
+    for path, error in iter_document_errors(esm_file):
+        structural_errors.append(
+            ValidationError(
+                path=path,
+                message=getattr(error, "message", str(error)),
+                code=error.code,
+            )
+        )
 
 
 def _validate_content_presence(esm_file: EsmFile, structural_errors: list[ValidationError]) -> None:

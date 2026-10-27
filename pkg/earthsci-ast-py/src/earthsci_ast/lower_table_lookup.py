@@ -11,7 +11,12 @@ whose observed was defined by a ``table_lookup`` therefore validated, and then
 could not evaluate a single inline-test assertion that depended on it, while the
 same lookup written out by hand worked (issue #188).
 
-**This runs at BUILD, not at load, and that is the point.** §9.5.4 makes
+The §9.5.5 CHECKS are not deferred to this pass: the loader and
+``validate()`` run :func:`check_function_tables` on every table and
+:func:`check_table_lookup` on every lookup (§9.5.5 "When the table checks
+run"). Only the rewrite itself waits for the build.
+
+**The rewrite runs at BUILD, not at load, and that is the point.** §9.5.4 makes
 ``function_tables`` / ``table_lookup`` first-class AUTHORED constructs that must
 survive a round trip, and this binding serializes the typed
 :class:`~earthsci_ast.esm_types.EsmFile` it loaded (``load_document`` ->
@@ -62,7 +67,13 @@ from .expr_walk import any_child, map_children
 if TYPE_CHECKING:
     from .flatten import FlattenedEquation, FlattenedSystem, FlattenedVariable
 
-__all__ = ["TableLookupError", "lower_flattened_table_lookups", "lower_table_lookups"]
+__all__ = [
+    "TableLookupError",
+    "check_function_tables",
+    "check_table_lookup",
+    "lower_flattened_table_lookups",
+    "lower_table_lookups",
+]
 
 #: The op this pass consumes.
 _TABLE_LOOKUP = "table_lookup"
@@ -106,10 +117,14 @@ def lower_table_lookups(file: EsmFile) -> EsmFile:
     Raises :class:`TableLookupError` carrying one of the esm-spec §9.5.5 codes
     -- ``table_lookup_unknown_table``; then the first of the ten table checks
     the referenced table fails, in §9.5.5's pinned order (see
-    :func:`_validate_table`); then ``table_out_of_bounds_unsupported`` for the
-    §9.5.1 ``out_of_bounds: "error"`` mode this binding does not implement
-    (§9.5.3a), ``table_lookup_args_nonempty``,
-    ``table_lookup_axis_name_mismatch`` and ``table_lookup_output_out_of_range``.
+    :func:`_validate_table`); then ``table_lookup_args_nonempty``,
+    ``table_lookup_axis_name_mismatch`` and ``table_lookup_output_out_of_range``
+    (:func:`check_table_lookup`); then, on a lookup that passed all of those,
+    ``table_out_of_bounds_unsupported`` for the §9.5.1 ``out_of_bounds:
+    "error"`` mode this binding does not implement (§9.5.3a). The loader has
+    already run every check but the last (:func:`check_function_tables`,
+    :func:`check_table_lookup`); they are repeated here for a document built
+    or edited in memory.
     """
     tables = file.function_tables or {}
     if not tables:
@@ -514,8 +529,32 @@ def _lower_expr(expr: Expr, tables: dict[str, FunctionTable]) -> Expr:
     return _lower_node(node, tables)
 
 
-def _lower_node(node: ExprNode, tables: dict[str, FunctionTable]) -> ExprNode:
-    """The §9.5.3 lowering of one ``table_lookup`` node."""
+def check_function_tables(tables: dict[str, FunctionTable] | None) -> None:
+    """Run the ten esm-spec §9.5.5 table checks on EVERY ``function_tables``
+    entry, in declaration order, whether or not any ``table_lookup`` names it
+    (§9.5.5 "When the table checks run", ruling Q-106). Raises
+    :class:`TableLookupError` with the first code the first failing table
+    breaks. The loader and ``validate()`` run this; the lowering repeats it per
+    lookup."""
+    for table_id, table in (tables or {}).items():
+        _validate_table(table, table_id)
+
+
+def check_table_lookup(node: ExprNode, tables: dict[str, FunctionTable] | None) -> None:
+    """Check one ``table_lookup`` node in the esm-spec §9.5.5 order:
+    ``table_lookup_unknown_table``; the ten checks of the table it names;
+    ``table_lookup_args_nonempty``, ``table_lookup_axis_name_mismatch``,
+    ``table_lookup_output_out_of_range`` (ruling Q-107). Raises
+    :class:`TableLookupError`. ``table_out_of_bounds_unsupported`` is not part
+    of this check: it belongs where the lookup lowers (§9.5.3a)."""
+    _check_lookup(node, tables or {})
+
+
+def _check_lookup(
+    node: ExprNode, tables: dict[str, FunctionTable]
+) -> tuple[FunctionTable, list[Expr], int]:
+    """:func:`check_table_lookup`, returning the table, the per-axis inputs
+    in declared axis order, and the 0-based output row."""
     table_id = node.table
     if not table_id:
         raise _err(
@@ -532,6 +571,17 @@ def _lower_node(node: ExprNode, tables: dict[str, FunctionTable]) -> ExprNode:
     # The table is checked as soon as the id resolves, before anything about
     # the lookup itself (formal: `Esm.Closed.Tables.validateTable`).
     _validate_table(table, table_id)
+    inputs = _axis_inputs(node, table, table_id)
+    output = _output_index(node, table, table_id)
+    return table, inputs, output
+
+
+def _lower_node(node: ExprNode, tables: dict[str, FunctionTable]) -> ExprNode:
+    """The §9.5.3 lowering of one ``table_lookup`` node."""
+    table_id = node.table
+    table, inputs, output = _check_lookup(node, tables)
+    # Raised only on a lookup that passed every check (esm-spec §9.5.5 "Order
+    # of the lookup checks"; §9.5.3a).
     if table.out_of_bounds == "error":
         raise _err(
             ErrorCode.TABLE_OUT_OF_BOUNDS_UNSUPPORTED,
@@ -542,8 +592,6 @@ def _lower_node(node: ExprNode, tables: dict[str, FunctionTable]) -> ExprNode:
             f"is a wrong number with nothing in the result to say so",
         )
 
-    inputs = _axis_inputs(node, table, table_id)
-    output = _output_index(node, table, table_id)
     # Without `outputs` the table is single-output and `data` is the whole
     # literal (§9.5.1); with them, row `output` of the leading dimension, which
     # `_validate_table` has proven exists.
@@ -588,10 +636,12 @@ def _has_shape(value: Any, shape: list[int]) -> bool:
     )
 
 
-def _any_nan(value: Any) -> bool:
+def _any_non_finite(value: Any) -> bool:
+    """Whether a leaf of ``value`` is NaN, +Inf or -Inf (esm-spec §9.5.1,
+    ruling Q-109)."""
     if isinstance(value, list):
-        return any(_any_nan(v) for v in value)
-    return isinstance(value, float) and math.isnan(value)
+        return any(_any_non_finite(v) for v in value)
+    return isinstance(value, float) and not math.isfinite(value)
 
 
 def _first_duplicate(names: list[Any]) -> Any:
@@ -611,18 +661,18 @@ def _validate_table(table: FunctionTable, table_id: str) -> None:
     1. ``table_axis_duplicate_name``;
     2. ``table_outputs_duplicate_name``;
     3. ``table_interpolation_axes_mismatch``;
-    4. ``table_axis_nan`` (any axis);
+    4. ``table_axis_nan`` (a value that is not finite, in any axis);
     5. ``table_axis_non_monotonic`` (any axis);
     6. ``table_axis_too_short`` (any axis);
     7. ``table_outputs_length_mismatch``;
     8. ``table_data_shape_mismatch`` (the nesting of ``data``);
-    9. ``table_data_nan``;
+    9. ``table_data_nan`` (a ``data`` leaf that is not finite);
     10. ``table_data_shape_mismatch`` (the ``shape`` assertion).
 
     The order is the formal model's (``Esm.Closed.Tables.validateTable``).
-    Step 4 also rejects a non-numeric or infinite axis entry, since §9.5.1
-    requires axis values to be finite floats; step 8 treats a non-numeric
-    ``data`` leaf as a nesting mismatch.
+    Step 4 rejects a NaN or infinite axis entry (ruling Q-109) and also a
+    non-numeric one, since §9.5.1 requires axis values to be finite floats;
+    step 8 treats a non-numeric ``data`` leaf as a nesting mismatch.
     """
     axes = table.axes
     duplicate = _first_duplicate([axis.name for axis in axes])
@@ -689,10 +739,11 @@ def _validate_table(table: FunctionTable, table_id: str) -> None:
             f"table `{table_id}`: the nesting of `data` is not the shape {implied} its "
             f"axes{' and outputs' if outputs is not None else ''} imply (esm-spec §9.5.1)",
         )
-    if _any_nan(data):
+    if _any_non_finite(data):
         raise _err(
             ErrorCode.TABLE_DATA_NAN,
-            f"table `{table_id}`: `data` holds a NaN leaf (esm-spec §9.5.5)",
+            f"table `{table_id}`: `data` holds a leaf that is not finite (NaN or "
+            f"±Inf); `data` leaves must be finite numbers (esm-spec §9.5.1)",
         )
     if table.shape is not None and list(table.shape) != implied:
         raise _err(

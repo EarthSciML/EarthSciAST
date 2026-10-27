@@ -17,17 +17,20 @@ from pathlib import Path
 from typing import Any, List
 
 import pytest
-from conftest import FIXTURES_ROOT as _TESTS_ROOT, INVALID_DIR, VALID_DIR
+from conftest import FIXTURES_ROOT as _TESTS_ROOT
+from conftest import INVALID_DIR, VALID_DIR
 
 from earthsci_ast import load_path, load_string
+from earthsci_ast.esm_types import ExprNode
 from earthsci_ast.numpy_interpreter import evaluate, fold_constant_expr
 from earthsci_ast.registered_functions import (
+    INTERP_CONST_ARG_POSITIONS,
     ClosedFunctionError,
     EnumLoweringError,
+    check_closed_function_node,
     closed_function_names,
     evaluate_closed_function,
 )
-
 
 FIXTURES_ROOT = _TESTS_ROOT / "closed_functions"
 
@@ -174,8 +177,110 @@ def test_closed_function_fixture(fixture_dir: Path):
         except ClosedFunctionError as e:
             if e.code != expected_code:
                 failures.append(f"error_{ename}: got code={e.code!r}, expected {expected_code!r}")
+        # The LOAD-time argument check on the `fn` node with the inputs as
+        # `const` arguments (esm-spec §9.2 "When the argument checks run",
+        # ruling Q-106; tests/closed_functions/README.md).
+        if fn_name in INTERP_CONST_ARG_POSITIONS:
+            node = _fn_node_with_const_args(fn_name, inputs)
+            try:
+                check_closed_function_node(node)
+                failures.append(f"load_{ename}: expected {expected_code} but no error raised")
+            except ClosedFunctionError as e:
+                if e.code != expected_code:
+                    failures.append(
+                        f"load_{ename}: got code={e.code!r}, expected {expected_code!r}"
+                    )
 
     assert not failures, "Fixture mismatches:\n  " + "\n  ".join(failures)
+
+
+def _fn_node_with_const_args(name: str, inputs: list) -> ExprNode:
+    """``fn`` node ``name`` whose const-only slots are ``const`` ops carrying
+    the inputs and whose query slots are the plain numbers."""
+    positions = INTERP_CONST_ARG_POSITIONS[name]
+    args = [
+        ExprNode(op="const", args=[], value=v) if i in positions else v
+        for i, v in enumerate(inputs)
+    ]
+    return ExprNode(op="fn", name=name, args=args)
+
+
+def _load_error_fixtures() -> list[str]:
+    return sorted(
+        p.name
+        for p in INVALID_DIR.glob("*.esm")
+        if p.name.startswith(("closed_fn_", "function_table_"))
+    )
+
+
+@pytest.mark.parametrize("fname", _load_error_fixtures())
+def test_closed_function_and_table_fixtures_are_rejected_at_load(fname):
+    """Every ``tests/invalid/closed_fn_*.esm`` and ``function_table_*.esm`` is
+    rejected at LOAD with its pinned code, and ``validate_path`` calls it
+    invalid under that code (esm-spec §9.2 / §9.5.5 "When ... run", ruling
+    Q-106) -- the ``enum_duplicate_value.esm`` convention."""
+    from earthsci_ast.lower_table_lookup import TableLookupError
+    from earthsci_ast.validation import validate_path
+
+    expected = json.loads((INVALID_DIR / "expected_errors.json").read_text())[fname]
+    assert expected["resolver_only"] is True
+    assert expected["is_valid"] is False
+    want = expected["resolver_error_code"]
+    with pytest.raises((ClosedFunctionError, TableLookupError)) as excinfo:
+        load_path(INVALID_DIR / fname)
+    assert excinfo.value.code == want
+    result = validate_path(str(INVALID_DIR / fname))
+    assert not result.is_valid
+    assert [e.code for e in result.structural_errors] == [want]
+
+
+def test_the_load_error_fixture_set_is_present():
+    """The sweep above parametrizes over a glob; pin that it found the set."""
+    names = _load_error_fixtures()
+    assert sum(n.startswith("closed_fn_") for n in names) >= 19
+    assert sum(n.startswith("function_table_") for n in names) >= 11
+
+
+def test_validate_reports_a_closed_function_error_on_a_document_edited_in_memory():
+    """``validate()`` runs the same checks as load on a typed document, so a
+    document broken after it loaded is reported invalid under the code."""
+    from earthsci_ast import validate
+
+    file = load_string(
+        json.dumps(_searchsorted_doc({"op": "const", "args": [], "value": [1.0, 2.0]}))
+    )
+    assert validate(file).is_valid
+    file.models["M"].equations[0].rhs.args[1] = ExprNode(op="const", args=[], value=[2.0, 1.0])
+    result = validate(file)
+    assert not result.is_valid
+    assert "searchsorted_non_monotonic" in [e.code for e in result.structural_errors]
+
+
+def test_a_closed_function_inside_an_unevaluated_event_is_checked_at_load():
+    """The check covers every expression-bearing field, not just equations."""
+    doc = _searchsorted_doc({"op": "const", "args": [], "value": [1.0, 2.0]})
+    doc["models"]["M"]["discrete_events"] = [
+        {
+            "trigger": {
+                "type": "condition",
+                "expression": {
+                    "op": ">",
+                    "args": [
+                        {
+                            "op": "fn",
+                            "name": "interp.searchsorted",
+                            "args": ["x", {"op": "const", "args": [], "value": [3.0, 1.0]}],
+                        },
+                        1,
+                    ],
+                },
+            },
+            "affects": [{"lhs": "y", "rhs": 0.0}],
+        }
+    ]
+    with pytest.raises(ClosedFunctionError) as exc:
+        load_string(json.dumps(doc))
+    assert exc.value.code == "searchsorted_non_monotonic"
 
 
 # ============================================================
@@ -256,13 +361,26 @@ _NON_CONST_XS = {
 def test_searchsorted_non_const_xs_is_interp_axis_not_const(xs):
     """esm-spec §9.2: an ``xs`` that is not a rank-1 ``const`` array -- a
     variable reference, a computed expression, a scalar or nested ``const`` --
-    is ``interp_axis_not_const``, raised by the evaluator rather than evaluated
-    and passed through."""
-    file = load_string(json.dumps(_searchsorted_doc(xs)))
+    is ``interp_axis_not_const``, raised at LOAD (ruling Q-106), and again by
+    the evaluator on a tree built in memory rather than evaluated and passed
+    through."""
+    with pytest.raises(ClosedFunctionError) as exc:
+        load_string(json.dumps(_searchsorted_doc(xs)))
+    assert exc.value.code == "interp_axis_not_const"
+
+    file = load_string(json.dumps(_searchsorted_doc({"op": "const", "args": [], "value": [1.0]})))
     rhs = file.models["M"].equations[0].rhs
+    rhs.args[1] = _parsed_expr(xs)
     with pytest.raises(ClosedFunctionError) as exc:
         fold_constant_expr(rhs, {"x": 2.5, "xs": 1.0})
     assert exc.value.code == "interp_axis_not_const"
+
+
+def _parsed_expr(raw: Any) -> Any:
+    """``raw`` JSON expression as the typed tree holds it."""
+    from earthsci_ast.parse import _parse_expression
+
+    return _parse_expression(raw)
 
 
 @pytest.mark.parametrize(
@@ -275,7 +393,8 @@ def test_searchsorted_non_const_xs_is_refused_by_the_sympy_build(xs):
     a non-``const`` ``xs`` is refused there with the same code."""
     from earthsci_ast.problem import esm_problem
 
-    file = load_string(json.dumps(_searchsorted_doc(xs)))
+    file = load_string(json.dumps(_searchsorted_doc({"op": "const", "args": [], "value": [1.0]})))
+    file.models["M"].equations[0].rhs.args[1] = _parsed_expr(xs)
     with pytest.raises(ClosedFunctionError) as exc:
         esm_problem(file, (0.0, 1.0), compiler="sympy")
     assert exc.value.code == "interp_axis_not_const"

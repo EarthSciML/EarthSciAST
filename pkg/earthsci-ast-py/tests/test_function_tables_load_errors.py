@@ -3,10 +3,15 @@ shared ledger ``tests/conformance/function_tables/load_errors/cases.json``.
 
 Each case is one function table (id ``T``) and one ``table_lookup`` reading it.
 The table is built IN MEMORY -- the schema would reject the one-value and empty
-axes, and JSON cannot carry the NaNs several cases need (the ledger spells them
-``"NaN"``) -- and the lookup goes through this binding's real §9.5.3 lowering,
+axes, and JSON cannot carry the NaNs and infinities several cases need (the
+ledger spells them ``"NaN"``, ``"Inf"``, ``"-Inf"``). Each case runs through
+the SAME load-time table check ``load`` and ``validate()`` use
+(:func:`~earthsci_ast.load_checks.iter_document_errors`, ruling Q-106), and
+through this binding's real §9.5.3 lowering,
 :func:`~earthsci_ast.lower_table_lookup.lower_table_lookups`. Every case runs;
-Python's table ``data`` holds a binary64 NaN, so none is skipped.
+Python's table ``data`` holds binary64 NaNs and infinities, so none is skipped.
+The cases a document can carry live in ``tests/invalid/function_table_*.esm``
+(``test_closed_functions.py`` sweeps them).
 """
 
 from __future__ import annotations
@@ -17,8 +22,9 @@ import math
 import pytest
 from conftest import CONFORMANCE_DIR
 
-from earthsci_ast import load_document
+from earthsci_ast import load_document, validate
 from earthsci_ast.esm_types import ExprNode, FunctionTable, FunctionTableAxis
+from earthsci_ast.load_checks import check_document, iter_document_errors
 from earthsci_ast.lower_table_lookup import TableLookupError, lower_table_lookups
 
 LEDGER = CONFORMANCE_DIR / "function_tables" / "load_errors" / "cases.json"
@@ -45,10 +51,14 @@ _DOC = {
 }
 
 
+_NON_FINITE = {"NaN": math.nan, "Inf": math.inf, "-Inf": -math.inf}
+
+
 def _nan(value):
-    """The ledger's ``"NaN"`` strings as binary64 NaNs, anywhere in a value."""
-    if value == "NaN":
-        return math.nan
+    """The ledger's ``"NaN"`` / ``"Inf"`` / ``"-Inf"`` strings as binary64
+    values, anywhere in a value."""
+    if isinstance(value, str) and value in _NON_FINITE:
+        return _NON_FINITE[value]
     if isinstance(value, list):
         return [_nan(v) for v in value]
     return value
@@ -80,6 +90,7 @@ def test_the_ledger_is_not_empty():
     silently; pin that it holds them, and that the case names are unique."""
     assert _SPEC["table_id"] == "T"
     assert len(CASES) >= 15
+    assert any(c["name"].startswith("data_neg_inf") for c in CASES)
     names = [c["name"] for c in CASES]
     assert len(set(names)) == len(names)
 
@@ -91,6 +102,23 @@ def test_a_table_reports_the_first_rule_it_breaks(case):
     file.models["M"].equations[0].rhs = _lookup(case["lookup"])
 
     expected = case["expected_error_code"]
+
+    # The load-time check (the one `load` runs, ruling Q-106) and validate().
+    found = [(path, err.code) for path, err in iter_document_errors(file)]
+    result = validate(file)
+    if expected is None:
+        assert found == [], found
+        check_document(file)
+        assert not [e for e in result.structural_errors if e.code.startswith("table_")]
+    else:
+        assert found and found[0][1] == expected, (case["breaks"], found)
+        with pytest.raises(TableLookupError) as excinfo:
+            check_document(file)
+        assert excinfo.value.code == expected
+        assert not result.is_valid
+        assert expected in [e.code for e in result.structural_errors]
+
+    # The lowering repeats the checks (esm-spec §9.5.5: a binding MAY).
     if expected is None:
         lowered = lower_table_lookups(file)
         rhs = lowered.models["M"].equations[0].rhs

@@ -89,9 +89,10 @@ class ClosedFunctionError(EarthSciAstError):
     - ``searchsorted_nan`` — ``xs`` contains a NaN entry (checked before
       monotonicity).
     - ``interp_table_not_const`` / ``interp_axis_not_const`` — an ``interp.*``
-      table / axis argument is not a literal ``const``-op array; for
-      ``interp.searchsorted``, an ``xs`` that is not a RANK-1 ``const`` array
-      (checked before ``searchsorted_nan``).
+      table / axis argument is not a literal ``const``-op array of the
+      required rank (rank 1 for an axis and ``interp.linear``'s table, rank 2
+      for ``interp.bilinear``'s); for ``interp.searchsorted``, an ``xs`` that
+      is not a RANK-1 ``const`` array (checked before ``searchsorted_nan``).
 
     The code constants themselves are defined in
     :mod:`earthsci_ast.error_handling`; their string values are part of the
@@ -310,51 +311,176 @@ def _day_of_year(p: _UtcParts) -> int:
     return table[p.month - 1] + p.day
 
 
+def _is_number(v: Any) -> bool:
+    """A numeric leaf of a ``const`` array: a real number that is not a bool."""
+    if isinstance(v, bool):
+        return False
+    try:
+        float(v)
+    except (TypeError, ValueError):
+        return False
+    return not isinstance(v, (str, bytes, list, tuple, dict))
+
+
+#: Stand-in for an argument that is not a ``const`` op at all (a variable
+#: reference, a computed expression) in :func:`check_interp_arguments`.
+NOT_CONST: Any = type("_NotConst", (), {"__repr__": lambda self: "<not const>"})()
+
+
+def _is_rank1(v: Any) -> bool:
+    """A rank-1 array: a list whose every entry is a number (``[]`` included)."""
+    return isinstance(v, (list, tuple)) and all(_is_number(e) for e in v)
+
+
+def _is_rank2(v: Any) -> bool:
+    """A rank-2 array: a list whose every entry is a rank-1 array. Rows may
+    differ in length; that is ``interp_axis_length_mismatch``, not a rank
+    error (esm-spec §9.2)."""
+    return isinstance(v, (list, tuple)) and all(_is_rank1(row) for row in v)
+
+
+def _describe(v: Any) -> str:
+    if v is NOT_CONST:
+        return "an argument that is not a `const` op"
+    if isinstance(v, (list, tuple)):
+        return "a `const` array of the wrong rank"
+    return f"a `const` {type(v).__name__}"
+
+
+def check_interp_arguments(name: str, values: Sequence[Any]) -> None:
+    """The esm-spec §9.2 load-time ARGUMENT checks of ``interp.searchsorted``,
+    ``interp.linear`` and ``interp.bilinear``, on the argument values.
+
+    ``values`` is the full argument list; each ``const``-only slot (see
+    :data:`INTERP_CONST_ARG_POSITIONS`) holds the ``const`` op's ``value``, or
+    :data:`NOT_CONST` when the argument is not a ``const`` op. The scalar query
+    slots are not inspected. Raises :class:`ClosedFunctionError` with the first
+    code that applies; any other function name is a no-op.
+
+    This is the ONE implementation: the loader and ``validate()`` run it on
+    every ``fn`` node (esm-spec §9.2 "When the argument checks run", ruling
+    Q-106), and the evaluator runs it again before computing.
+
+    Order. ``interp.searchsorted``: not a rank-1 ``const`` array
+    (``interp_axis_not_const``), then NaN, then non-decreasing; ``xs = []``
+    passes (ruling Q-108). ``interp.linear`` / ``interp.bilinear``, each step
+    over every axis before the next (the formal model's order where the spec
+    pins none; the spec pins only NaN before monotonicity): the table, then
+    each axis, as a ``const`` of the required rank (rank 1 for an axis and for
+    ``interp.linear``'s table, rank 2 for ``interp.bilinear``'s, ruling Q-108);
+    then an axis shorter than 2; then the table/axis length relation; then a
+    NaN in an axis; then strict monotonicity.
+    """
+    if name == "interp.searchsorted":
+        xs = values[1]
+        if not _is_rank1(xs):
+            raise ClosedFunctionError(
+                INTERP_AXIS_NOT_CONST,
+                f"{name}: xs must be a rank-1 `const` array of numbers, got {_describe(xs)}",
+            )
+        floats = [float(v) for v in xs]
+        for i, v in enumerate(floats):
+            if math.isnan(v):
+                raise ClosedFunctionError(
+                    SEARCHSORTED_NAN,
+                    f"{name}: xs[{i + 1}] is NaN; NaN entries in xs are forbidden",
+                )
+        for i in range(1, len(floats)):
+            if floats[i] < floats[i - 1]:
+                raise ClosedFunctionError(
+                    SEARCHSORTED_NON_MONOTONIC,
+                    f"{name}: xs is not non-decreasing "
+                    f"(xs[{i + 1}]={floats[i]} < xs[{i}]={floats[i - 1]})",
+                )
+        return
+    if name == "interp.linear":
+        table, axes, labels = values[0], [values[1]], ["axis"]
+        table_ok = _is_rank1(table)
+    elif name == "interp.bilinear":
+        table, axes, labels = values[0], [values[1], values[2]], ["axis_x", "axis_y"]
+        table_ok = _is_rank2(table)
+    else:
+        return
+    if not table_ok:
+        raise ClosedFunctionError(
+            INTERP_TABLE_NOT_CONST,
+            f"{name}: table must be an inline rank-{len(axes)} `const` array, "
+            f"got {_describe(table)}",
+        )
+    for axis, label in zip(axes, labels):
+        if not _is_rank1(axis):
+            raise ClosedFunctionError(
+                INTERP_AXIS_NOT_CONST,
+                f"{name}: {label} must be an inline rank-1 `const` array, got {_describe(axis)}",
+            )
+    for axis, label in zip(axes, labels):
+        if len(axis) < 2:
+            raise ClosedFunctionError(
+                INTERP_AXIS_TOO_SHORT,
+                f"{name}: {label} has {len(axis)} entries; need ≥ 2 to define a cell",
+            )
+    if len(table) != len(axes[0]):
+        raise ClosedFunctionError(
+            INTERP_AXIS_LENGTH_MISMATCH,
+            f"{name}: {'outer ' if len(axes) == 2 else ''}len(table)={len(table)} "
+            f"!= len({labels[0]})={len(axes[0])}",
+        )
+    if len(axes) == 2:
+        for i, row in enumerate(table):
+            if len(row) != len(axes[1]):
+                raise ClosedFunctionError(
+                    INTERP_AXIS_LENGTH_MISMATCH,
+                    f"{name}: table row {i + 1} has length {len(row)} "
+                    f"!= len(axis_y)={len(axes[1])}",
+                )
+    for axis, label in zip(axes, labels):
+        for i, v in enumerate(axis):
+            if math.isnan(float(v)):
+                raise ClosedFunctionError(
+                    INTERP_NAN_IN_AXIS,
+                    f"{name}: {label}[{i + 1}] is NaN; NaN entries in axes are forbidden",
+                )
+    for axis, label in zip(axes, labels):
+        for i in range(1, len(axis)):
+            if float(axis[i]) <= float(axis[i - 1]):
+                raise ClosedFunctionError(
+                    INTERP_NON_MONOTONIC_AXIS,
+                    f"{name}: {label} is not strictly increasing "
+                    f"({label}[{i + 1}]={axis[i]} ≤ {label}[{i}]={axis[i - 1]})",
+                )
+
+
+def check_closed_function_node(node: ExprNode) -> None:
+    """Run :func:`check_interp_arguments` on one ``fn`` node's arguments as
+    written: a ``const`` op contributes its ``value``, anything else
+    :data:`NOT_CONST`. A node whose argument count is wrong is left to the
+    evaluator's ``closed_function_arity`` check."""
+    name = node.name
+    positions = INTERP_CONST_ARG_POSITIONS.get(name or "")
+    if not positions:
+        return
+    args = list(node.args or [])
+    spec = _CLOSED_FUNCTIONS[name]
+    if len(args) != spec.arity:
+        return
+    values: list[Any] = [None] * len(args)
+    for p in positions:
+        a = args[p]
+        values[p] = a.value if isinstance(a, ExprNode) and a.op == "const" else NOT_CONST
+    check_interp_arguments(name, values)
+
+
 def _interp_searchsorted(name: str, x: float, xs: Any) -> int:
     """``interp.searchsorted`` per esm-spec §9.2.2.
 
     1-based, left-side bias (smallest ``i`` with ``xs[i] ≥ x``); out-of-range
-    below → 1, above → ``N+1``; NaN ``x`` → ``N+1``; NaN entries in ``xs``
-    raise; non-monotonic ``xs`` raises.
-
-    An ``xs`` that is not a rank-1 array -- a scalar, or an array with an
-    array entry -- is ``interp_axis_not_const``, checked FIRST (esm-spec
-    §9.2), so a nested ``xs`` holding a NaN is never ``searchsorted_nan``.
+    below → 1, above → ``N+1``; NaN ``x`` → ``N+1``; ``xs = []`` → 1 for every
+    ``x``. The argument checks are :func:`check_interp_arguments`.
     """
-    if not isinstance(xs, (list, tuple)):
-        raise ClosedFunctionError(
-            INTERP_AXIS_NOT_CONST,
-            f"{name}: xs must be a rank-1 `const` array (got {type(xs).__name__})",
-        )
-    for i, entry in enumerate(xs):
-        if isinstance(entry, (list, tuple, dict)) or not _is_number(entry):
-            raise ClosedFunctionError(
-                INTERP_AXIS_NOT_CONST,
-                f"{name}: xs must be a rank-1 `const` array of numbers, but "
-                f"xs[{i + 1}] is {type(entry).__name__}",
-            )
+    check_interp_arguments(name, [x, xs])
     n = len(xs)
-    if n == 0:
-        # Empty table — extends "above-range → N+1" to N=0; the only consistent
-        # extension that composes with `index`.
-        return 1
-    # NaN first, then monotonicity (esm-spec §9.2): an `xs` holding a NaN is
-    # `searchsorted_nan` whatever its other entries.
-    values = [float(raw) for raw in xs]
-    for i, v in enumerate(values):
-        if math.isnan(v):
-            raise ClosedFunctionError(
-                SEARCHSORTED_NAN,
-                f"{name}: xs[{i + 1}] is NaN; NaN entries in xs are forbidden",
-            )
-    for i in range(1, n):
-        if values[i] < values[i - 1]:
-            raise ClosedFunctionError(
-                SEARCHSORTED_NON_MONOTONIC,
-                f"{name}: xs is not non-decreasing "
-                f"(xs[{i + 1}]={values[i]} < xs[{i}]={values[i - 1]})",
-            )
-    # NaN x → N+1 (treated as "greater than every finite element").
+    # NaN x → N+1 (treated as "greater than every finite element"); with
+    # xs = [] every query is N + 1 = 1.
     if math.isnan(x):
         return _check_int32(name, n + 1)
     # Linear scan for the smallest 1-based index with xs[i] ≥ x. The spec
@@ -365,71 +491,14 @@ def _interp_searchsorted(name: str, x: float, xs: Any) -> int:
     return _check_int32(name, n + 1)
 
 
-def _is_number(v: Any) -> bool:
-    """A numeric leaf of a ``const`` array: a real number that is not a bool."""
-    if isinstance(v, bool):
-        return False
-    try:
-        float(v)
-    except (TypeError, ValueError):
-        return False
-    return not isinstance(v, (str, bytes))
-
-
-def _validate_interp_axis(name: str, axis: Sequence[Any], axis_label: str) -> list[float]:
-    """Validate a 1-D interpolation axis and return it as a list of floats.
-
-    Spec §9.2 ``interp.*`` subsection requires axes be strictly increasing
-    (no equal-adjacent), contain no NaN, and have at least two entries —
-    otherwise there is no interval to blend across.
-    """
-    if not isinstance(axis, (list, tuple)):
-        raise ClosedFunctionError(
-            INTERP_AXIS_NOT_CONST,
-            f"{name}: {axis_label} must be an inline `const` array (got {type(axis).__name__})",
-        )
-    n = len(axis)
-    if n < 2:
-        raise ClosedFunctionError(
-            INTERP_AXIS_TOO_SHORT,
-            f"{name}: {axis_label} has {n} entries; need ≥ 2 to define a cell",
-        )
-    # NaN first, then monotonicity (esm-spec §9.2): an axis holding a NaN is
-    # `interp_nan_in_axis` whatever its other entries.
-    out = [float(raw) for raw in axis]
-    for i, v in enumerate(out):
-        if math.isnan(v):
-            raise ClosedFunctionError(
-                INTERP_NAN_IN_AXIS,
-                f"{name}: {axis_label}[{i + 1}] is NaN; NaN entries in axes are forbidden",
-            )
-    for i in range(1, n):
-        if out[i] <= out[i - 1]:
-            raise ClosedFunctionError(
-                INTERP_NON_MONOTONIC_AXIS,
-                f"{name}: {axis_label} is not strictly increasing "
-                f"({axis_label}[{i + 1}]={out[i]} ≤ {axis_label}[{i}]={out[i - 1]})",
-            )
-    return out
-
-
 def _interp_linear(name: str, table: Any, axis: Any, x: float) -> float:
     """``interp.linear`` per esm-spec §9.2 ``interp.*`` subsection.
 
     Extrapolate-flat boundary, pinned blend ``t[i] + w*(t[i+1] - t[i])``.
     """
-    if not isinstance(table, (list, tuple)):
-        raise ClosedFunctionError(
-            INTERP_TABLE_NOT_CONST,
-            f"{name}: table must be an inline `const` array (got {type(table).__name__})",
-        )
-    axis_vals = _validate_interp_axis(name, axis, "axis")
+    check_interp_arguments(name, [table, axis, x])
+    axis_vals = [float(a) for a in axis]
     n = len(axis_vals)
-    if len(table) != n:
-        raise ClosedFunctionError(
-            INTERP_AXIS_LENGTH_MISMATCH,
-            f"{name}: len(table)={len(table)} != len(axis)={n}",
-        )
     table_vals = [float(t) for t in table]
     if math.isnan(x):
         # Spec step 4: the clamps in steps 1–2 use IEEE `≤` / `≥` which return
@@ -466,32 +535,11 @@ def _interp_bilinear(
     Two pinned 1-D x-blends followed by one 1-D y-blend; per-axis
     extrapolate-flat clamp; row-major ``table[i][j]`` at ``(axis_x[i], axis_y[j])``.
     """
-    if not isinstance(table, (list, tuple)):
-        raise ClosedFunctionError(
-            INTERP_TABLE_NOT_CONST,
-            f"{name}: table must be an inline `const` 2-D array (got {type(table).__name__})",
-        )
-    ax = _validate_interp_axis(name, axis_x, "axis_x")
-    ay = _validate_interp_axis(name, axis_y, "axis_y")
+    check_interp_arguments(name, [table, axis_x, axis_y, x, y])
+    ax = [float(a) for a in axis_x]
+    ay = [float(a) for a in axis_y]
     nx, ny = len(ax), len(ay)
-    if len(table) != nx:
-        raise ClosedFunctionError(
-            INTERP_AXIS_LENGTH_MISMATCH,
-            f"{name}: outer len(table)={len(table)} != len(axis_x)={nx}",
-        )
-    table_rows: list[list[float]] = []
-    for i, row in enumerate(table):
-        if not isinstance(row, (list, tuple)):
-            raise ClosedFunctionError(
-                INTERP_AXIS_LENGTH_MISMATCH,
-                f"{name}: table row {i + 1} is not an array (got {type(row).__name__})",
-            )
-        if len(row) != ny:
-            raise ClosedFunctionError(
-                INTERP_AXIS_LENGTH_MISMATCH,
-                f"{name}: table row {i + 1} has length {len(row)} != len(axis_y)={ny}",
-            )
-        table_rows.append([float(v) for v in row])
+    table_rows = [[float(v) for v in row] for row in table]
     if math.isnan(x) or math.isnan(y):
         # Spec step 5: NaN inputs propagate through the corresponding axis
         # weight. Short-circuit to NaN.

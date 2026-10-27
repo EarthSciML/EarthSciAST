@@ -3056,6 +3056,14 @@ def _load_data(
         for ev in top_discrete_events:
             esm_file.events.append(_parse_discrete_event(ev))
 
+    # The §9.2 closed-function argument checks on every `interp.*` `fn` node and
+    # the §9.5.5 checks on every function table and `table_lookup`, on the tree
+    # as loaded (templates expanded, enums lowered): they run at load, not when
+    # something first evaluates or lowers the node (ruling Q-106).
+    from .load_checks import check_document
+
+    check_document(esm_file)
+
     return esm_file
 
 
