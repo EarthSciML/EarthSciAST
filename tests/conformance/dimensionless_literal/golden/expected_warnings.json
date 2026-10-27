@@ -1,0 +1,75 @@
+{
+  "code": "units_dimensionless_literal_mismatch",
+  "spec": "esm-spec §4.8.6; CONFORMANCE_SPEC §7.1",
+  "contract": "For each file (path relative to the repository root): validate() reports is_valid == true, and the JSON Pointers of its unit warnings whose code is `units_dimensionless_literal_mismatch`, sorted lexicographically by UTF-8 code point, equal the listed array EXACTLY (an empty array means the file must carry none). Message text is binding-local and not pinned.",
+  "files": {
+    "tests/conformance/dimensionless_literal/fixtures/dimensionless_literal.esm": [
+      "/models/Literals/equations/0",
+      "/models/Literals/equations/1",
+      "/models/Literals/equations/2",
+      "/models/Literals/equations/3",
+      "/models/Literals/equations/4",
+      "/models/Literals/equations/5",
+      "/models/Literals/equations/6",
+      "/reaction_systems/Chem/reactions/0"
+    ],
+    "tests/valid/units_negated_literal_neutral.esm": [
+      "/models/NegatedLiteralOffsets/equations/0",
+      "/models/NegatedLiteralOffsets/equations/1",
+      "/models/NegatedLiteralOffsets/equations/2"
+    ],
+    "tests/valid/units_sum_undeterminable_operands.esm": [
+      "/models/SumUnitRules/equations/0",
+      "/models/SumUnitRules/equations/1",
+      "/models/SumUnitRules/equations/2",
+      "/models/SumUnitRules/equations/3",
+      "/models/SumUnitRules/equations/5"
+    ],
+    "tests/valid/units_ifelse_undeterminable_branch.esm": [
+      "/models/IfelseUnitRules/equations/2",
+      "/models/IfelseUnitRules/equations/3"
+    ],
+    "tests/valid/units_conversions.esm": [
+      "/models/ConcentrationConversions/equations/1",
+      "/models/ConcentrationConversions/equations/2",
+      "/models/ConcentrationConversions/equations/3",
+      "/models/EnergyConversions/equations/0",
+      "/models/EnergyConversions/equations/1",
+      "/models/EnergyConversions/equations/2",
+      "/models/EnergyConversions/equations/3",
+      "/models/EnergyConversions/equations/4",
+      "/models/LengthConversions/equations/0",
+      "/models/LengthConversions/equations/1",
+      "/models/LengthConversions/equations/2",
+      "/models/LengthConversions/equations/3",
+      "/models/LengthConversions/equations/4",
+      "/models/PressureConversions/equations/0",
+      "/models/PressureConversions/equations/1",
+      "/models/PressureConversions/equations/2",
+      "/models/PressureConversions/equations/3",
+      "/models/PressureConversions/equations/4",
+      "/models/TemperatureConversions/equations/0",
+      "/models/TemperatureConversions/equations/1",
+      "/models/VolumeConversions/equations/0",
+      "/models/VolumeConversions/equations/1",
+      "/models/VolumeConversions/equations/2",
+      "/models/VolumeConversions/equations/3"
+    ],
+    "tests/valid/units_dimensional_analysis.esm": [
+      "/models/ElectromagneticFields/equations/2"
+    ],
+    "tests/valid/units_propagation.esm": [
+      "/models/ThermodynamicsModel/equations/1"
+    ],
+    "tests/valid/units_scale_conversion.esm": [
+      "/models/UnitsScaleConversion/equations/2"
+    ],
+    "tests/valid/units_const_declared.esm": [
+      "/models/UnitsConstDeclared/equations/4"
+    ],
+    "tests/valid/units_array_operators_consistent.esm": [],
+    "tests/valid/minimal_chemistry.esm": [
+      "/reaction_systems/SimpleOzone/reactions/0"
+    ]
+  }
+}
