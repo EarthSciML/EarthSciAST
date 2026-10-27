@@ -1,0 +1,201 @@
+{
+  "properties": [
+    {
+      "id": "P-tables-valid-iff",
+      "clauses": [
+        "spec.9.5.1.axis-names-unique",
+        "spec.9.5.1.interpolation-axes-match",
+        "spec.9.5.1.outputs-leading-dim",
+        "spec.9.5.1.data-finite",
+        "spec.9.5.1.shape-assertion-matches"
+      ],
+      "statement": "A function table loads iff axis names and outputs are unique, interpolation matches the axis count, every axis is NaN-free, strictly increasing with ≥ 2 values, data has the implied nesting and no NaN leaf (Q-9), and any shape assertion equals the implied shape.",
+      "lean_statement": "∀ (T : Esm.Closed.Tables.FTable), Esm.Closed.Tables.validateTable T = Except.ok () ↔ Esm.Closed.Tables.TableValid T",
+      "status": "proven",
+      "theorem": "Esm.Closed.Tables.validateTable_ok_iff"
+    },
+    {
+      "id": "P-tables-code-sound",
+      "clauses": [
+        "spec.9.5.1.axis-names-unique",
+        "spec.9.5.1.interpolation-axes-match",
+        "spec.9.5.1.outputs-leading-dim",
+        "spec.9.5.1.data-finite",
+        "spec.9.5.1.shape-assertion-matches"
+      ],
+      "statement": "Every rejection of a table names a violated condition with its §9.5.5 code.",
+      "lean_statement": "∀ (T : Esm.Closed.Tables.FTable) (c : Esm.Closed.Code), Esm.Closed.Tables.validateTable T = Except.error c → c = \"table_axis_duplicate_name\" ∧ ¬(List.map (fun (x : Esm.Closed.Tables.Axis) => x.name) T.axes).Nodup ∨ (c = \"table_outputs_duplicate_name\" ∧ ∃ (os : List String), T.outputs = Option.some os ∧ ¬os.Nodup) ∨ c = \"table_interpolation_axes_mismatch\" ∧ Esm.Closed.Tables.FTable.arityOk T.interpolation T.axes.length = Bool.false ∨ (c = \"table_axis_nan\" ∧ ∃ a ∈ T.axes, ∃ x ∈ a.values, x.isNaN = Bool.true) ∨ (c = \"table_axis_non_monotonic\" ∧ ∃ a ∈ T.axes, ∃ (r : List ℝ), a.values = List.map Esm.Closed.Num.fin r ∧ ¬List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) r) ∨ (c = \"unspecified:table_axis_too_short\" ∧ ∃ a ∈ T.axes, a.values.length < (2 : ℕ)) ∨ (c = \"table_outputs_length_mismatch\" ∧ ∃ (os : List String) (xs : List Esm.Closed.Tables.Nested), T.outputs = Option.some os ∧ T.data = Esm.Closed.Tables.Nested.node xs ∧ xs.length ≠ os.length) ∨ c = \"table_data_shape_mismatch\" ∧ (T.data.hasShape T.expectedShape = Bool.false ∨ ∃ (sh : List ℕ), T.shape = Option.some sh ∧ sh ≠ T.expectedShape) ∨ c = \"table_data_nan\" ∧ T.data.anyNaN = Bool.true",
+      "status": "proven",
+      "theorem": "Esm.Closed.Tables.validateTable_code_sound"
+    },
+    {
+      "id": "P-tables-axis-nan-precedence",
+      "clauses": [
+        "spec.9.2.interp-axis-no-nan"
+      ],
+      "statement": "Q-4: once the name and arity checks pass, a NaN in any axis is table_axis_nan (before table_axis_non_monotonic).",
+      "lean_statement": "∀ (T : Esm.Closed.Tables.FTable), (List.map (fun (x : Esm.Closed.Tables.Axis) => x.name) T.axes).Nodup → (∀ (os : List String), T.outputs = Option.some os → os.Nodup) → Esm.Closed.Tables.FTable.arityOk T.interpolation T.axes.length = Bool.true → (∃ a ∈ T.axes, ∃ x ∈ a.values, x.isNaN = Bool.true) → Esm.Closed.Tables.validateTable T = Except.error \"table_axis_nan\"",
+      "status": "proven",
+      "theorem": "Esm.Closed.Tables.validateTable_nan_precedence"
+    },
+    {
+      "id": "P-tables-lookup-args-nonempty",
+      "clauses": [
+        "spec.9.5.2.lookup-args-empty"
+      ],
+      "statement": "Q-11: a table_lookup with non-empty args is table_lookup_args_nonempty.",
+      "lean_statement": "∀ (tables : List (String × Esm.Closed.Tables.FTable)) (env : String → Esm.Closed.Num) (tid : String) (axes : List (String × Esm.Closed.Tables.Expr)) (out : Option Esm.Closed.Tables.OutSel) (args : List Esm.Closed.Tables.Expr), args ≠ [] → Esm.Closed.Tables.eval tables env (Esm.Closed.Tables.Expr.lookup tid axes out args) = Except.error \"table_lookup_args_nonempty\"",
+      "status": "proven",
+      "theorem": "Esm.Closed.Tables.lookup_args_nonempty"
+    },
+    {
+      "id": "P-tables-lookup-unknown-table",
+      "clauses": [
+        "spec.9.5.2.lookup-axes-keys-match"
+      ],
+      "statement": "A reference to an undeclared table is table_lookup_unknown_table.",
+      "lean_statement": "∀ (tables : List (String × Esm.Closed.Tables.FTable)) (env : String → Esm.Closed.Num) (tid : String) (axes : List (String × Esm.Closed.Tables.Expr)) (out : Option Esm.Closed.Tables.OutSel), List.lookup tid tables = Option.none → Esm.Closed.Tables.eval tables env (Esm.Closed.Tables.Expr.lookup tid axes out []) = Except.error \"table_lookup_unknown_table\"",
+      "status": "proven",
+      "theorem": "Esm.Closed.Tables.lookup_unknown_table"
+    },
+    {
+      "id": "P-tables-lookup-axis-keys",
+      "clauses": [
+        "spec.9.5.2.lookup-axes-keys-match"
+      ],
+      "statement": "On a valid table, axis keys that are not exactly its axis names are table_lookup_axis_name_mismatch.",
+      "lean_statement": "∀ (tables : List (String × Esm.Closed.Tables.FTable)) (env : String → Esm.Closed.Num) (tid : String) (axes : List (String × Esm.Closed.Tables.Expr)) (out : Option Esm.Closed.Tables.OutSel) (T : Esm.Closed.Tables.FTable), List.lookup tid tables = Option.some T → Esm.Closed.Tables.validateTable T = Except.ok () → (¬∀ (k : String), k ∈ List.map Prod.fst axes ↔ k ∈ List.map (fun (x : Esm.Closed.Tables.Axis) => x.name) T.axes) → Esm.Closed.Tables.eval tables env (Esm.Closed.Tables.Expr.lookup tid axes out []) = Except.error \"table_lookup_axis_name_mismatch\"",
+      "status": "proven",
+      "theorem": "Esm.Closed.Tables.lookup_axis_mismatch"
+    },
+    {
+      "id": "P-tables-output-omitted",
+      "clauses": [
+        "spec.9.5.2.lookup-output-name"
+      ],
+      "statement": "Q-12: an omitted output is output 0, with or without outputs.",
+      "lean_statement": "∀ (T : Esm.Closed.Tables.FTable), Esm.Closed.Tables.resolveOutput T Option.none = Esm.Closed.Tables.resolveOutput T (Option.some (Esm.Closed.Tables.OutSel.idx (0 : ℕ)))",
+      "status": "proven",
+      "theorem": "Esm.Closed.Tables.resolveOutput_omitted"
+    },
+    {
+      "id": "P-tables-output-single",
+      "clauses": [
+        "spec.9.5.2.lookup-output-name",
+        "spec.9.5.1.outputs-leading-dim"
+      ],
+      "statement": "Q-10: without outputs, the only valid output is 0; a string output is out of range.",
+      "lean_statement": "∀ (T : Esm.Closed.Tables.FTable), T.outputs = Option.none → ∀ (n : ℕ) (s : String), (Esm.Closed.Tables.resolveOutput T (Option.some (Esm.Closed.Tables.OutSel.idx n)) = if n = (0 : ℕ) then Except.ok (0 : ℕ) else Except.error \"table_lookup_output_out_of_range\") ∧ Esm.Closed.Tables.resolveOutput T (Option.some (Esm.Closed.Tables.OutSel.name s)) = Except.error \"table_lookup_output_out_of_range\"",
+      "status": "proven",
+      "theorem": "Esm.Closed.Tables.resolveOutput_single"
+    },
+    {
+      "id": "P-tables-output-multi",
+      "clauses": [
+        "spec.9.5.2.lookup-output-name",
+        "spec.9.5.1.outputs-leading-dim"
+      ],
+      "statement": "With outputs, an integer must be < len(outputs) and a string must be one of them (its first position); otherwise table_lookup_output_out_of_range.",
+      "lean_statement": "∀ (T : Esm.Closed.Tables.FTable) (os : List String), T.outputs = Option.some os → ∀ (n : ℕ) (s : String), (Esm.Closed.Tables.resolveOutput T (Option.some (Esm.Closed.Tables.OutSel.idx n)) = if n < os.length then Except.ok n else Except.error \"table_lookup_output_out_of_range\") ∧ (s ∉ os → Esm.Closed.Tables.resolveOutput T (Option.some (Esm.Closed.Tables.OutSel.name s)) = Except.error \"table_lookup_output_out_of_range\") ∧ ∀ (i : ℕ) (hi : i < os.length), os[i] = s → (∀ (j : ℕ) (hj : j < i), os[j] ≠ s) → Esm.Closed.Tables.resolveOutput T (Option.some (Esm.Closed.Tables.OutSel.name s)) = Except.ok i",
+      "status": "proven",
+      "theorem": "Esm.Closed.Tables.resolveOutput_multi"
+    },
+    {
+      "id": "P-tables-lowering-sound",
+      "clauses": [
+        "spec.9.5.table-lookup-bit-equivalent"
+      ],
+      "statement": "For out_of_bounds clamp, evaluating the §9.5.3 lowered tree equals evaluating the table_lookup, for linear, bilinear and nearest (Q-10 slice, Q-13 nearest), whenever the lookup lowers and its inputs are scalars.",
+      "lean_statement": "∀ (tables : List (String × Esm.Closed.Tables.FTable)) (env : String → Esm.Closed.Num) (tid : String) (axes : List (String × Esm.Closed.Tables.Expr)) (out : Option Esm.Closed.Tables.OutSel) (args : List Esm.Closed.Tables.Expr) (e : Esm.Closed.Tables.Expr), Esm.Closed.Tables.lower tables tid axes out args = Except.ok e → (∀ p ∈ axes, ∃ (v : Esm.Closed.Num), Esm.Closed.Tables.eval tables env p.2 = Except.ok (Esm.Closed.Tables.Val.num v)) → (∀ (T : Esm.Closed.Tables.FTable), List.lookup tid tables = Option.some T → T.outOfBounds = Esm.Closed.Tables.OOB.clamp) → Esm.Closed.Tables.eval tables env e = Esm.Closed.Tables.eval tables env (Esm.Closed.Tables.Expr.lookup tid axes out args)",
+      "status": "proven",
+      "theorem": "Esm.Closed.Tables.lower_eval"
+    },
+    {
+      "id": "P-tables-error-mode",
+      "clauses": [
+        "spec.9.5.3a.error-mode-unsupported"
+      ],
+      "statement": "out_of_bounds error: the lookup raises table_lookup_out_of_bounds exactly when an input is strictly outside its axis, otherwise equals the lowered tree.",
+      "lean_statement": "∀ (tables : List (String × Esm.Closed.Tables.FTable)) (env : String → Esm.Closed.Num) (tid : String) (axes : List (String × Esm.Closed.Tables.Expr)) (out : Option Esm.Closed.Tables.OutSel) (args : List Esm.Closed.Tables.Expr) (e : Esm.Closed.Tables.Expr), Esm.Closed.Tables.lower tables tid axes out args = Except.ok e → (∀ p ∈ axes, ∃ (v : Esm.Closed.Num), Esm.Closed.Tables.eval tables env p.2 = Except.ok (Esm.Closed.Tables.Val.num v)) → ∃ (T : Esm.Closed.Tables.FTable) (xs : List Esm.Closed.Num), List.lookup tid tables = Option.some T ∧ List.mapM (fun (a : Esm.Closed.Tables.Axis) => (Esm.Closed.Tables.eval tables env ((List.lookup a.name axes).getD (Esm.Closed.Tables.Expr.lit Esm.Closed.Num.nan))).bind Esm.Closed.Tables.Val.asNum) T.axes = Except.ok xs ∧ Esm.Closed.Tables.eval tables env (Esm.Closed.Tables.Expr.lookup tid axes out args) = if (Decidable.decide (T.outOfBounds = Esm.Closed.Tables.OOB.error) && Esm.Closed.Tables.anyOutside T xs) = Bool.true then Except.error Esm.Closed.Tables.Codes.lookupOutOfBounds else Esm.Closed.Tables.eval tables env e",
+      "status": "proven",
+      "theorem": "Esm.Closed.Tables.lookup_error_mode"
+    },
+    {
+      "id": "P-tables-outside",
+      "clauses": [
+        "spec.9.5.3a.error-mode-unsupported"
+      ],
+      "statement": "'Outside' is strictly below the first knot or strictly above the last (end knots are in range).",
+      "lean_statement": "∀ (r : List ℝ), (1 : ℕ) ≤ r.length → ∀ (x : ℝ), Esm.Closed.Tables.outside (List.map Esm.Closed.Num.fin r) (Esm.Closed.Num.fin x) = Bool.true ↔ x < r.getD (0 : ℕ) (0 : ℝ) ∨ r.getD (r.length - (1 : ℕ)) (0 : ℝ) < x",
+      "status": "proven",
+      "theorem": "Esm.Closed.Tables.outside_spec"
+    },
+    {
+      "id": "P-tables-outside-nan",
+      "clauses": [
+        "spec.9.5.3a.error-mode-unsupported"
+      ],
+      "statement": "A NaN query is not out of bounds.",
+      "lean_statement": "∀ (ax : List Esm.Closed.Num), Esm.Closed.Tables.outside ax Esm.Closed.Num.nan = Bool.false",
+      "status": "proven",
+      "theorem": "Esm.Closed.Tables.outside_nan"
+    },
+    {
+      "id": "P-tables-nearest-lowered",
+      "clauses": [
+        "spec.9.5.table-lookup-bit-equivalent"
+      ],
+      "statement": "The model's nearest lowering index(data, searchsorted(x, midpoints(axis))) evaluates to the nearest semantics.",
+      "lean_statement": "∀ (tables : List (String × Esm.Closed.Tables.FTable)) (env : String → Esm.Closed.Num) (v : List Esm.Closed.Num) (r0 : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) r0 → (2 : ℕ) ≤ r0.length → v.length = r0.length → ∀ (xe : Esm.Closed.Tables.Expr) (x0 : Esm.Closed.Num), Esm.Closed.Tables.eval tables env xe = Except.ok (Esm.Closed.Tables.Val.num x0) → Esm.Closed.Tables.eval tables env (Esm.Closed.Tables.Expr.index [Esm.Closed.Tables.Expr.const (Esm.Closed.Tables.ofVec v), Esm.Closed.Tables.Expr.fn \"interp.searchsorted\" [xe, Esm.Closed.Tables.Expr.const (Esm.Closed.Tables.ofVec (Esm.Closed.Tables.mids (List.map Esm.Closed.Num.fin r0)))]]) = Except.ok (Esm.Closed.Tables.Val.num (Esm.Closed.Tables.nearest v (List.map Esm.Closed.Num.fin r0) x0))",
+      "status": "proven",
+      "theorem": "Esm.Closed.Tables.eval_nearest_lowered"
+    },
+    {
+      "id": "P-tables-nearest-argmin",
+      "clauses": [
+        "spec.9.5.table-lookup-bit-equivalent"
+      ],
+      "statement": "Q-13: the nearest index is a knot (clamping), minimizes |x − knot|, and is strictly closer than every lower knot (ties go to the lower knot).",
+      "lean_statement": "∀ (r : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) r → (1 : ℕ) ≤ r.length → ∀ (x : ℝ), Esm.Closed.Tables.nearestIdx r x < r.length ∧ (∀ j < r.length, |x - r.getD (Esm.Closed.Tables.nearestIdx r x) (0 : ℝ)| ≤ |x - r.getD j (0 : ℝ)|) ∧ ∀ j < Esm.Closed.Tables.nearestIdx r x, |x - r.getD (Esm.Closed.Tables.nearestIdx r x) (0 : ℝ)| < |x - r.getD j (0 : ℝ)|",
+      "status": "proven",
+      "theorem": "Esm.Closed.Tables.nearestIdx_spec"
+    },
+    {
+      "id": "P-tables-nearest-midpoints",
+      "clauses": [
+        "spec.9.5.table-lookup-bit-equivalent"
+      ],
+      "statement": "Q-13: the first midpoint ≥ x locates the nearest knot, ties low.",
+      "lean_statement": "∀ (r : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) r → (1 : ℕ) ≤ r.length → ∀ (x : ℝ), List.findIdx (fun (m : ℝ) => Decidable.decide (x ≤ m)) (Esm.Closed.Tables.midsR r) = Esm.Closed.Tables.nearestIdx r x",
+      "status": "proven",
+      "theorem": "Esm.Closed.Tables.findIdx_midsR"
+    },
+    {
+      "id": "P-tables-spec-nearest-lowering",
+      "clauses": [
+        "spec.9.5.table-lookup-bit-equivalent"
+      ],
+      "statement": "§9.5.3's current nearest lowering index(data, searchsorted(x, axis)) returns the value at the nearest knot. REFUTED: axis [0, 10], data [1, 2], x = 1 gives 2, not 1.",
+      "lean_statement": "∀ (v : List Esm.Closed.Num) (r : List ℝ) (x : ℝ), List.Pairwise (fun (a b : ℝ) => a < b) r → 2 ≤ r.length → v.length = r.length → Esm.Closed.Tables.eval [] (fun _ => Esm.Closed.Num.nan) (Esm.Closed.Tables.Expr.index [Esm.Closed.Tables.Expr.const (Esm.Closed.Tables.ofVec v), Esm.Closed.Tables.Expr.fn \"interp.searchsorted\" [Esm.Closed.Tables.Expr.lit (Esm.Closed.Num.fin x), Esm.Closed.Tables.Expr.const (Esm.Closed.Tables.ofVec (r.map Esm.Closed.Num.fin))]]) = Except.ok (Esm.Closed.Tables.Val.num (Esm.Closed.Tables.nearest v (r.map Esm.Closed.Num.fin) (Esm.Closed.Num.fin x)))",
+      "status": "refuted",
+      "theorem": "Esm.Closed.Tables.spec_nearest_lowering_refuted",
+      "reproducer": "formal/QUESTIONS.md#Q-13"
+    },
+    {
+      "id": "P-tables-axis-too-short-code",
+      "clauses": [
+        "spec.9.5.1.interpolation-axes-match"
+      ],
+      "status": "open",
+      "statement": "§9.5.1 requires ≥ 2 values per axis but §9.5.5 has no code for a 1-value axis; the model rejects under a non-spec marker. Needs a ruling."
+    },
+    {
+      "id": "P-tables-nearest-nan-query",
+      "clauses": [
+        "spec.9.5.table-lookup-bit-equivalent"
+      ],
+      "status": "open",
+      "statement": "Q-13 does not say what nearest returns for a NaN query (§9.5.3a's 'a NaN query yields NaN' was written for linear). The model and its lowering return the last knot's value; NaN is the other candidate. Needs a ruling."
+    }
+  ]
+}
