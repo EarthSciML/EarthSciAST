@@ -12,8 +12,9 @@ name: docs
 # always come from main). The site then offers the version in its selector.
 # On pull requests: the same, minus publishing and notifying (validation only).
 #
-# Needs the repo (or org) secret SITE_DISPATCH_TOKEN: a token with contents:write
-# on EarthSciML/earthsci.dev.
+# Needs the repo (or org) secrets DOCS_APP_ID and DOCS_APP_PRIVATE_KEY: a GitHub
+# App installed on EarthSciML/earthsci.dev with contents:write, used to notify
+# the site (repository_dispatch).
 
 on:
   push:
@@ -101,6 +102,18 @@ jobs:
           path: build/api-docs
           merge-multiple: true
 
+      # Short-lived token for notifying earthsci.dev; not minted on pull requests,
+      # which only validate.
+      - name: Create site dispatch token
+        id: app-token
+        if: ${{ github.event_name != 'pull_request' }}
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.DOCS_APP_ID }}
+          private-key: ${{ secrets.DOCS_APP_PRIVATE_KEY }}
+          owner: EarthSciML
+          repositories: earthsci.dev
+
       - uses: EarthSciML/earthsci.dev/.github/actions/docs-bundle@main
         with:
-          dispatch-token: ${{ secrets.SITE_DISPATCH_TOKEN }}
+          dispatch-token: ${{ steps.app-token.outputs.token }}
