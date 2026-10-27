@@ -1,6 +1,9 @@
 # Documentation Build System
 
-How the EarthSciAST documentation site is generated, built, and deployed.
+How EarthSciAST's documentation is generated and published. The Hugo site, theme
+and API-doc tooling live in [EarthSciML/earthsci.dev](https://github.com/EarthSciML/earthsci.dev)
+(see its `DESIGN.md`); this repo supplies content, `docs/site.toml` and
+`docs/api/config.toml`.
 
 ## Structure
 
@@ -8,8 +11,7 @@ How the EarthSciAST documentation site is generated, built, and deployed.
 docs/
 ├── README.md              # Orientation for this directory
 ├── README-DOCS.md         # This file
-├── hugo.toml              # Hugo site configuration
-├── layouts/               # Hugo templates (api/ and partials/api-tabs.html: the API reference)
+├── site.toml              # Project metadata and nav for earthsci.dev
 ├── static/                # Static assets, incl. lib/*.esm standard library
 └── content/               # All documentation pages
     ├── _index.md          # Landing page and canonical table of contents
@@ -23,7 +25,7 @@ docs/
     ├── RELEASE_PIPELINE.md, RELEASE_PROCESS.md
     ├── SCHEMA_CHANGE_PROCEDURE.md, STRUCTURAL_ERROR_TEST_FIXTURES.md
     └── generated/         # Build-time output; not checked in
-├── api/                   # API reference inputs: contract, groups.toml, examples, guides
+├── api/                   # API reference inputs: config.toml, groups.toml, examples, guides
 ```
 
 ## Narrative pages
@@ -48,59 +50,50 @@ itself the section's landing page.
 
 ## API reference and guides
 
-The API reference under `content/generated/api/` is generated from the five
-bindings' own docstrings and from runnable example programs; how is specified
-in [`docs/api/README.md`](api/README.md). In short:
+The reference under `content/generated/api/` is generated from the five
+bindings' own docstrings and from runnable example programs by the tooling in
+earthsci.dev (`tools/api_docs/`, documented in its README). Inputs kept here:
+`docs/api/config.toml`, `api-surface.json`, `docs/api/groups.toml`,
+`docs/api/examples/` and `docs/api/guides/`.
 
 ```bash
-# Per binding (needs that language's toolchain): extract docstrings to
-# build/api-docs/<binding>.json and run its examples
-scripts/api_docs/python.sh              # likewise julia, typescript, rust, go
-
-# Join them with api-surface.json, docs/api/groups.toml and the guides
-python3 scripts/api_docs/render.py      # Python 3.11+
+# With ../earthsci.dev checked out
+../earthsci.dev/tools/api_docs/python.sh --repo-root .   # likewise julia, typescript, rust, go
+python3 ../earthsci.dev/tools/api_docs/render.py --repo-root .
 ```
 
 `render.py` works with whichever `build/api-docs/*.json` exist; a binding that
-was not extracted shows a note in its tabs instead of documentation. Usage
-guides live in [`docs/api/guides/`](api/guides/) and pull their code from the
-examples with `<!-- example: <region> -->` placeholders.
+was not extracted shows a note in its tabs.
 
-## Building locally
+## CI and publishing
 
-```bash
-hugo server --source docs        # http://localhost:1313
-```
+[`.github/workflows/docs.yml`](../.github/workflows/docs.yml) runs on pushes to
+`main`, pull requests and manual dispatch:
 
-Hugo **extended** is required. `pages.yml` pins the version used in CI; match it
-if the local build and the deployed site disagree. Run `render.py` first; without
-it the site still builds, but the API pages and the links to them are missing.
+1. `extract`: one job per binding (actions from earthsci.dev) extracts
+   docstrings and runs the examples. A failing example fails pull requests; on
+   `main` the binding renders as "not extracted".
+2. `bundle`: builds the narrative pages (a model that fails validation or an
+   inline test stops the run), renders the reference, and assembles the
+   bundle. On `main` it force-pushes the bundle to this repo's `docs-bundle`
+   branch and dispatches `docs-updated` to earthsci.dev, which refetches every
+   project's bundle, builds the site, link-checks it and deploys it. Needs the
+   `SITE_DISPATCH_TOKEN` secret.
 
-## CI
-
-| Workflow | Trigger | What it does |
-| --- | --- | --- |
-| [`docs.yml`](../.github/workflows/docs.yml) | push/PR touching `pkg/**`, `docs/**`, `scripts/api_docs/**` or `api-surface.json` | Runs each binding's `scripts/api_docs/<binding>.sh` in a matrix job (a failing example fails the run), renders the API reference, builds the narrative pages and the site with Hugo, and link-checks it. |
-| [`pages.yml`](../.github/workflows/pages.yml) | push to `main` | The same per-binding extraction and render, then builds with Hugo, link-checks the built site with [lychee](https://github.com/lycheeverse/lychee-action), and deploys to GitHub Pages. |
-
-The link check runs against the **built** site and covers internal links only,
-so a broken relative link fails the deploy rather than shipping.
+Pull requests build the bundle but neither publish nor dispatch.
 
 ## Adding a page
 
 1. Add the Markdown file under the appropriate `content/` subdirectory.
-2. Give it Hugo front matter (`title`, `description`) — see any existing page.
-3. Link it from `content/_index.md` or the relevant section `_index.md`. Hugo
-   resolves links as site URLs (`operators/arrays/`), not file paths.
-4. Verify with `hugo server --source docs` before pushing; `pages.yml` will
-   reject a broken internal link.
+2. Give it Hugo front matter (`title`, `description`).
+3. Link it from `content/_index.md` or the relevant section `_index.md`.
+4. Root-relative links are written as if the project were the site root.
 
 ## Conventions
 
 - `content/_index.md` is the single table of contents. Do not duplicate the
-  navigation tree elsewhere — a second copy drifts.
-- Keep API documentation in the source docstrings and let the API reference
-  surface it, rather than restating signatures by hand. Show usage with an
-  example region that runs in CI, not with a code block that does not.
+  navigation tree elsewhere.
+- Keep API documentation in the source docstrings; show usage with an example
+  region that runs in CI.
 - The authoritative format definition is [`esm-spec.md`](../esm-spec.md); pages
-  here should link to it rather than paraphrase normative rules.
+  here link to it rather than paraphrase normative rules.
