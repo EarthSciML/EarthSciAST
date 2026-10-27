@@ -1293,6 +1293,9 @@ func isIdentCont(c byte) bool {
 //     symbolic (non-literal) exponent, an operator with no dimensional rule
 //     (fn/table_lookup), a malformed arity. That is a statement
 //     about the checker, not a defect in the file. → WARNING.
+//   - UnitFindingDimensionlessLiteral — the esm-spec §4.8.6 warning stage: a
+//     site that fails only when nonzero bare literals are dimensionless. Never
+//     promoted. → WARNING.
 //
 // An unknown VARIABLE is likewise never a mismatch (it propagates as "unknown"
 // and suppresses the check); it is separately a hard `undefined_variable` error,
@@ -1301,6 +1304,11 @@ const (
 	UnitFindingDimensionalMismatch = "dimensional_mismatch"
 	UnitFindingUnparseable         = "unparseable_unit"
 	UnitFindingAnalysis            = "analysis"
+	// UnitFindingDimensionlessLiteral — a check site the CURRENT neutral-literal
+	// rule passes or skips fails once a nonzero bare numeric literal is read as
+	// dimensionless at scale 1 (esm-spec §4.8.6). → WARNING at this stage; it
+	// becomes an error at the next major esm version.
+	UnitFindingDimensionlessLiteral = "units_dimensionless_literal_mismatch"
 )
 
 // dimError is a propagation failure that carries its classification.
@@ -1355,7 +1363,34 @@ func PropagateDimension(expr Expression, env map[string]Unit) (*Unit, error) {
 	return propagateDimension(expr, env)
 }
 
-// propagateDimension is the recursive dimension propagator implementing the
+// unitTyper is the dimension propagator, parameterized by its LITERAL RULE.
+//
+// The zero value is the current rule (esm-spec §4.8.3/§4.8.4): a bare numeric
+// literal, and a `const` without `units`, is undeterminable (neutral). With
+// dimensionlessLiterals set it is the dimensionless-literal rule of esm-spec
+// §4.8.6: such a literal whose value is NONZERO is dimensionless at scale 1,
+// while zero stays neutral. Nothing else differs between the two rules. Only
+// the §4.8.6 warning pass (dimensionlessLiteralFindings) sets the switch.
+type unitTyper struct {
+	dimensionlessLiterals bool
+}
+
+// propagateDimension types expr under the current (neutral-literal) rule.
+func propagateDimension(expr Expression, env map[string]Unit) (*Unit, error) {
+	return unitTyper{}.propagate(expr, env)
+}
+
+// literalUnit is the unit of a bare numeric literal (or a unit-less `const`)
+// of value v: undeterminable under the current rule; under the §4.8.6 rule,
+// dimensionless at scale 1 unless v is zero, which stays neutral.
+func (ut unitTyper) literalUnit(v float64) *Unit {
+	if !ut.dimensionlessLiterals || v == 0 {
+		return nil
+	}
+	return &Unit{Scale: 1}
+}
+
+// propagate is the recursive dimension propagator implementing the
 // PropagateDimension contract. Operators with no modeled dimensional rule —
 // including the open-tier rewrite-target sugar grad/div/laplacian, which carry
 // no privileged spatial-calculus semantics here — fall through to the final
@@ -1369,7 +1404,7 @@ func PropagateDimension(expr Expression, env map[string]Unit) (*Unit, error) {
 // fn applied to its operands; an faq's unit is decided by its ⊕. The
 // evaluation path (the angle rewrite, normalizeAngleArguments) reads the same
 // function, so checker and evaluator agree on every array element's unit.
-func propagateDimension(expr Expression, env map[string]Unit) (*Unit, error) {
+func (ut unitTyper) propagate(expr Expression, env map[string]Unit) (*Unit, error) {
 	switch e := expr.(type) {
 	case nil:
 		return nil, nil
@@ -1390,7 +1425,11 @@ func propagateDimension(expr Expression, env map[string]Unit) (*Unit, error) {
 		// sibling's dimension (`T - 273.15` → K), and an exponent is read by
 		// VALUE (`x^2`). A sum of nothing but literals (`1 + 2`) stays
 		// indeterminate.
-		return nil, nil
+		//
+		// Under the esm-spec §4.8.6 dimensionless-literal rule (a warning-only
+		// rule at this stage) a nonzero literal is a pure number instead.
+		v, _ := toFloat64Strict(e)
+		return ut.literalUnit(v), nil
 	case string:
 		if u, ok := env[e]; ok {
 			cp := u
@@ -1401,15 +1440,15 @@ func propagateDimension(expr Expression, env map[string]Unit) (*Unit, error) {
 		// not double-report it.
 		return nil, nil
 	case ExprNode:
-		return propagateExprNode(e, env)
+		return ut.propagateNode(e, env)
 	case *ExprNode:
-		return propagateExprNode(*e, env)
+		return ut.propagateNode(*e, env)
 	default:
 		return nil, nil
 	}
 }
 
-func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
+func (ut unitTyper) propagateNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 	switch node.Op {
 	case "+", "-":
 		// Every operand whose dimension is known must agree, and the result is
@@ -1425,7 +1464,7 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 		// `biomass + 0.5` — with the literal silently carrying its sibling's
 		// unit. It costs no coverage: a genuine inconsistency (`length + mass`)
 		// is between two DECLARED quantities and is still caught.
-		return agreeingUnit(node.Op, node.Args, env)
+		return ut.agreeingUnit(node.Op, node.Args, env)
 
 	case "*":
 		// A single indeterminate factor makes the whole product indeterminate.
@@ -1436,7 +1475,7 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 		// a mismatch against the declared µg/m³.
 		result := Unit{Scale: 1}
 		for _, arg := range node.Args {
-			u, err := propagateDimension(arg, env)
+			u, err := ut.propagate(arg, env)
 			if err != nil {
 				return nil, err
 			}
@@ -1451,11 +1490,11 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 		if len(node.Args) != 2 {
 			return nil, analysisErrf("'/' requires exactly 2 arguments, got %d", len(node.Args))
 		}
-		num, err := propagateDimension(node.Args[0], env)
+		num, err := ut.propagate(node.Args[0], env)
 		if err != nil {
 			return nil, err
 		}
-		den, err := propagateDimension(node.Args[1], env)
+		den, err := ut.propagate(node.Args[1], env)
 		if err != nil {
 			return nil, err
 		}
@@ -1469,11 +1508,11 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 		if len(node.Args) != 2 {
 			return nil, analysisErrf("'%s' requires exactly 2 arguments, got %d", node.Op, len(node.Args))
 		}
-		base, err := propagateDimension(node.Args[0], env)
+		base, err := ut.propagate(node.Args[0], env)
 		if err != nil {
 			return nil, err
 		}
-		expDim, err := propagateDimension(node.Args[1], env)
+		expDim, err := ut.propagate(node.Args[1], env)
 		if err != nil {
 			return nil, err
 		}
@@ -1517,18 +1556,18 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 		// is then decided by its ⊕ (faqUnit).
 		// Any operands are walked too.
 		if node.Filter != nil {
-			if _, err := propagateDimension(node.Filter, env); err != nil {
+			if _, err := ut.propagate(node.Filter, env); err != nil {
 				return nil, err
 			}
 		}
 		var body *Unit
 		if node.Expr != nil {
 			var err error
-			if body, err = propagateDimension(node.Expr, env); err != nil {
+			if body, err = ut.propagate(node.Expr, env); err != nil {
 				return nil, err
 			}
 		}
-		if err := walkOperands(node.Args, env); err != nil {
+		if err := ut.walkOperands(node.Args, env); err != nil {
 			return nil, err
 		}
 		if node.Expr == nil {
@@ -1545,11 +1584,11 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 		if len(node.Args) == 0 {
 			return nil, nil
 		}
-		src, err := propagateDimension(node.Args[0], env)
+		src, err := ut.propagate(node.Args[0], env)
 		if err != nil {
 			return nil, err
 		}
-		if err := walkOperands(node.Args[1:], env); err != nil {
+		if err := ut.walkOperands(node.Args[1:], env); err != nil {
 			return nil, err
 		}
 		return src, nil
@@ -1559,19 +1598,19 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 		// determinable operand must agree in dimension and scale, an
 		// undeterminable one is skipped, and the result is the shared unit
 		// (undeterminable when none is known).
-		return agreeingUnit(node.Op, node.Args, env)
+		return ut.agreeingUnit(node.Op, node.Args, env)
 
 	case "makearray":
 		// The region values behave like the operands of `+`. A bare-literal
 		// region is skipped and takes the other regions' unit; no determinable
 		// value (or no values at all) is undeterminable. Any operands are
 		// walked first.
-		if err := walkOperands(node.Args, env); err != nil {
+		if err := ut.walkOperands(node.Args, env); err != nil {
 			return nil, err
 		}
 		var first *Unit
 		for _, v := range node.Values {
-			u, err := propagateDimension(v, env)
+			u, err := ut.propagate(v, env)
 			if err != nil {
 				return nil, err
 			}
@@ -1595,15 +1634,15 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 		// error elsewhere; its unit is undeterminable, but its operands are
 		// still walked.
 		if node.Fn == nil {
-			return nil, walkOperands(node.Args, env)
+			return nil, ut.walkOperands(node.Args, env)
 		}
-		return propagateExprNode(ExprNode{Op: *node.Fn, Args: node.Args}, env)
+		return ut.propagateNode(ExprNode{Op: *node.Fn, Args: node.Args}, env)
 
 	case "sqrt":
 		if len(node.Args) != 1 {
 			return nil, analysisErrf("sqrt requires 1 argument, got %d", len(node.Args))
 		}
-		base, err := propagateDimension(node.Args[0], env)
+		base, err := ut.propagate(node.Args[0], env)
 		if err != nil {
 			return nil, err
 		}
@@ -1625,7 +1664,7 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 		if len(node.Args) != 1 {
 			return nil, analysisErrf("'%s' requires 1 argument, got %d", node.Op, len(node.Args))
 		}
-		arg, err := propagateDimension(node.Args[0], env)
+		arg, err := ut.propagate(node.Args[0], env)
 		if err != nil {
 			return nil, err
 		}
@@ -1655,7 +1694,7 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 		if len(node.Args) != 1 {
 			return nil, analysisErrf("'%s' requires 1 argument, got %d", node.Op, len(node.Args))
 		}
-		arg, err := propagateDimension(node.Args[0], env)
+		arg, err := ut.propagate(node.Args[0], env)
 		if err != nil {
 			return nil, err
 		}
@@ -1675,11 +1714,11 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 		if len(node.Args) != 2 {
 			return nil, analysisErrf("'atan2' requires 2 arguments, got %d", len(node.Args))
 		}
-		y, err := propagateDimension(node.Args[0], env)
+		y, err := ut.propagate(node.Args[0], env)
 		if err != nil {
 			return nil, err
 		}
-		x, err := propagateDimension(node.Args[1], env)
+		x, err := ut.propagate(node.Args[1], env)
 		if err != nil {
 			return nil, err
 		}
@@ -1698,7 +1737,7 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 		if len(node.Args) != 1 {
 			return nil, analysisErrf("'%s' requires 1 argument, got %d", node.Op, len(node.Args))
 		}
-		arg, err := propagateDimension(node.Args[0], env)
+		arg, err := ut.propagate(node.Args[0], env)
 		if err != nil {
 			return nil, err
 		}
@@ -1717,7 +1756,7 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 		if len(node.Args) != 1 {
 			return nil, analysisErrf("'%s' requires 1 argument, got %d", node.Op, len(node.Args))
 		}
-		return propagateDimension(node.Args[0], env)
+		return ut.propagate(node.Args[0], env)
 
 	case OpDerivative:
 		// A REWRITE-TARGET `D` may carry trailing auxiliary boundary operands
@@ -1730,7 +1769,7 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 		if !isRewriteTargetDerivative(node) && len(node.Args) != 1 {
 			return nil, analysisErrf("'D' requires 1 argument, got %d", len(node.Args))
 		}
-		varDim, err := propagateDimension(node.Args[0], env)
+		varDim, err := ut.propagate(node.Args[0], env)
 		if err != nil {
 			return nil, err
 		}
@@ -1762,7 +1801,7 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 		// operands are, including when none is known (esm-spec §4.8.3).
 		var first *Unit
 		for i, arg := range node.Args {
-			u, err := propagateDimension(arg, env)
+			u, err := ut.propagate(arg, env)
 			if err != nil {
 				return nil, err
 			}
@@ -1790,7 +1829,7 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 		// mismatch inside one (`not(x [m] > z [kg])`) is reported (esm-spec
 		// §4.8.3).
 		for _, arg := range node.Args {
-			if _, err := propagateDimension(arg, env); err != nil {
+			if _, err := ut.propagate(arg, env); err != nil {
 				return nil, err
 			}
 		}
@@ -1807,12 +1846,12 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 		if len(node.Args) != 3 {
 			return nil, analysisErrf("'ifelse' requires 3 arguments, got %d", len(node.Args))
 		}
-		if _, err := propagateDimension(node.Args[0], env); err != nil {
+		if _, err := ut.propagate(node.Args[0], env); err != nil {
 			return nil, err
 		}
 		var first *Unit
 		for _, arg := range node.Args[1:] {
-			u, err := propagateDimension(arg, env)
+			u, err := ut.propagate(arg, env)
 			if err != nil {
 				return nil, err
 			}
@@ -1836,8 +1875,12 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 		// A `const` that DECLARES its units has that unit (esm-spec §4.8.5);
 		// without `units` it is undeterminable, like a bare literal. An
 		// unresolvable string is reported at the containing expression field, not
-		// here.
+		// here. Under the §4.8.6 rule a unit-less numeric `const` is typed as a
+		// bare literal of its value.
 		if node.Units == nil {
+			if v, ok := toFloat64Strict(node.Value); ok {
+				return ut.literalUnit(v), nil
+			}
 			return nil, nil
 		}
 		u, err := ParseUnit(*node.Units)
@@ -1848,7 +1891,7 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 
 	case "min", "max":
 		// The `+` rule: known operands agree, unknown ones are skipped.
-		return agreeingUnit(node.Op, node.Args, env)
+		return ut.agreeingUnit(node.Op, node.Args, env)
 	}
 	// Unknown / unmodeled operator (including the open-tier rewrite-target sugar
 	// grad/div/laplacian, which have no privileged dimensional rule): propagate
@@ -1860,9 +1903,9 @@ func propagateExprNode(node ExprNode, env map[string]Unit) (*Unit, error) {
 
 // walkOperands checks every operand in args for internal consistency,
 // discarding their units; it returns the first finding.
-func walkOperands(args []any, env map[string]Unit) error {
+func (ut unitTyper) walkOperands(args []any, env map[string]Unit) error {
 	for _, arg := range args {
-		if _, err := propagateDimension(arg, env); err != nil {
+		if _, err := ut.propagate(arg, env); err != nil {
 			return err
 		}
 	}
@@ -1873,10 +1916,10 @@ func walkOperands(args []any, env map[string]Unit) error {
 // operand whose unit is determinable must agree in dimension AND scale (a
 // disagreement is a provable mismatch), an undeterminable operand is skipped,
 // and the result is the shared unit -- undeterminable when no operand is known.
-func agreeingUnit(op string, args []any, env map[string]Unit) (*Unit, error) {
+func (ut unitTyper) agreeingUnit(op string, args []any, env map[string]Unit) (*Unit, error) {
 	var first *Unit
 	for i, arg := range args {
-		u, err := propagateDimension(arg, env)
+		u, err := ut.propagate(arg, env)
 		if err != nil {
 			return nil, err
 		}
