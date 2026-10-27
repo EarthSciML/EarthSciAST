@@ -702,23 +702,26 @@ class _UnitGrammar:
         if self.peek() == "lpar":
             # A rational exponent: `(1/2)`, `(-3/2)`.
             self.take()
-            self.signed_number()
+            self.signed_number(integer_only=True)
             if self.peek() != "div":
                 self.fail("a parenthesised exponent must be a rational `(p/q)`")
             self.take()
-            self.signed_number()
+            self.signed_number(integer_only=True)
             if self.peek() != "rpar":
                 self.fail("unclosed exponent '('")
             self.take()
             return
         self.signed_number()
 
-    def signed_number(self) -> None:
+    def signed_number(self, integer_only: bool = False) -> None:
         if self.peek() == "sign":
             self.take()
         if self.peek() != "number":
             self.fail("an exponent must be an integer, a decimal, or a rational `(p/q)`")
-        self.take()
+        _, text = self.take()
+        if integer_only and "." in text:
+            # `(p/q)` is a ratio of INTEGERS (esm-spec 4.8.2): `m^(1.5/2)` is out.
+            self.fail("a rational exponent is spelled ^(p/q) with integers p and q")
 
     def atom(self) -> None:
         kind = self.peek()
