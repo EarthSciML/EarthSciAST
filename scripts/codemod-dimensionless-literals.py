@@ -1645,6 +1645,8 @@ def mounting_parents(reports):
     bumped = {str(Path(r["file"]).resolve()) for r in reports if r.get("bumped")}
     out = []
     for r in reports:
+        if r.get("bumped"):
+            continue  # raised in this same run
         try:
             doc = json.loads(Path(r["file"]).read_text())
         except Exception:
