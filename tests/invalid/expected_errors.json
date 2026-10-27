@@ -3979,5 +3979,245 @@
     "is_valid": false,
     "resolver_error_code": "enum_duplicate_value",
     "notes": "Resolver-level invalid (esm-spec \u00a79.3, CONFORMANCE_SPEC \u00a75.26.5). SCHEMA-VALID \u2014 JSON Schema cannot say that the values of an object are distinct \u2014 so uniqueness is a loader check, refused with `enum_duplicate_value`. `is_valid` is false for EVERY binding: all five parse the `enums` block at load and reject a duplicate there. Two symbols map to 0 and no `enum` op names either: 0 is a value like any other, and the check is on the block, not on resolved members."
+  },
+  "function_table_axis_duplicate_name.esm": {
+    "resolver_only": true,
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": false,
+    "resolver_error_code": "table_axis_duplicate_name",
+    "notes": "Resolver-level invalid (esm-spec \u00a79.5.5, ruling Q-106). SCHEMA-VALID \u2014 JSON Schema cannot express this \u00a79.5.5 table rule \u2014 so it is a loader check. `is_valid` is false for EVERY binding: all five run the ten \u00a79.5.5 table checks at load (and in validate()) on every `function_tables` entry, whether or not a `table_lookup` references it. Table `T` has two axes named `x` (step 1) and two outputs named `a` (step 2); step 1 is reported. No `table_lookup` references `T`."
+  },
+  "function_table_outputs_duplicate_name.esm": {
+    "resolver_only": true,
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": false,
+    "resolver_error_code": "table_outputs_duplicate_name",
+    "notes": "Resolver-level invalid (esm-spec \u00a79.5.5, ruling Q-106). SCHEMA-VALID \u2014 JSON Schema cannot express this \u00a79.5.5 table rule \u2014 so it is a loader check. `is_valid` is false for EVERY binding: all five run the ten \u00a79.5.5 table checks at load (and in validate()) on every `function_tables` entry, whether or not a `table_lookup` references it. Table `T` has two outputs named `a` (step 2) and declares `bilinear` over one axis (step 3); step 2 is reported. No `table_lookup` references `T`."
+  },
+  "function_table_interpolation_axes_mismatch.esm": {
+    "resolver_only": true,
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": false,
+    "resolver_error_code": "table_interpolation_axes_mismatch",
+    "notes": "Resolver-level invalid (esm-spec \u00a79.5.5, ruling Q-106). SCHEMA-VALID \u2014 JSON Schema cannot express this \u00a79.5.5 table rule \u2014 so it is a loader check. `is_valid` is false for EVERY binding: all five run the ten \u00a79.5.5 table checks at load (and in validate()) on every `function_tables` entry, whether or not a `table_lookup` references it. Table `T` declares `linear` over two axes (step 3) and its axis `y` is decreasing (step 5); step 3 is reported. No `table_lookup` references `T`."
+  },
+  "function_table_nearest_two_axes.esm": {
+    "resolver_only": true,
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": false,
+    "resolver_error_code": "table_interpolation_axes_mismatch",
+    "notes": "Resolver-level invalid (esm-spec \u00a79.5.5, ruling Q-106). SCHEMA-VALID \u2014 JSON Schema cannot express this \u00a79.5.5 table rule \u2014 so it is a loader check. `is_valid` is false for EVERY binding: all five run the ten \u00a79.5.5 table checks at load (and in validate()) on every `function_tables` entry, whether or not a `table_lookup` references it. Table `T` declares `nearest` over two axes; `nearest` requires one (step 3). No `table_lookup` references `T`."
+  },
+  "function_table_axis_non_monotonic.esm": {
+    "resolver_only": true,
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": false,
+    "resolver_error_code": "table_axis_non_monotonic",
+    "notes": "Resolver-level invalid (esm-spec \u00a79.5.5, ruling Q-106). SCHEMA-VALID \u2014 JSON Schema cannot express this \u00a79.5.5 table rule \u2014 so it is a loader check. `is_valid` is false for EVERY binding: all five run the ten \u00a79.5.5 table checks at load (and in validate()) on every `function_tables` entry, whether or not a `table_lookup` references it. Table `T`'s second axis `y` is not strictly increasing (step 5) and `data` has one output slab where `outputs` names two (step 7); step 5 is reported. No `table_lookup` references `T`."
+  },
+  "function_table_axis_equal_values.esm": {
+    "resolver_only": true,
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": false,
+    "resolver_error_code": "table_axis_non_monotonic",
+    "notes": "Resolver-level invalid (esm-spec \u00a79.5.5, ruling Q-106). SCHEMA-VALID \u2014 JSON Schema cannot express this \u00a79.5.5 table rule \u2014 so it is a loader check. `is_valid` is false for EVERY binding: all five run the ten \u00a79.5.5 table checks at load (and in validate()) on every `function_tables` entry, whether or not a `table_lookup` references it. Table `T`'s axis has two equal neighbouring values; an axis MUST be strictly increasing (step 5). No `table_lookup` references `T`."
+  },
+  "function_table_outputs_length_mismatch.esm": {
+    "resolver_only": true,
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": false,
+    "resolver_error_code": "table_outputs_length_mismatch",
+    "notes": "Resolver-level invalid (esm-spec \u00a79.5.5, ruling Q-106). SCHEMA-VALID \u2014 JSON Schema cannot express this \u00a79.5.5 table rule \u2014 so it is a loader check. `is_valid` is false for EVERY binding: all five run the ten \u00a79.5.5 table checks at load (and in validate()) on every `function_tables` entry, whether or not a `table_lookup` references it. Table `T` declares two outputs but `data` has one slab (step 7), and that slab has three values over a two-value axis (step 8); step 7 is reported. No `table_lookup` references `T`."
+  },
+  "function_table_data_shape_mismatch.esm": {
+    "resolver_only": true,
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": false,
+    "resolver_error_code": "table_data_shape_mismatch",
+    "notes": "Resolver-level invalid (esm-spec \u00a79.5.5, ruling Q-106). SCHEMA-VALID \u2014 JSON Schema cannot express this \u00a79.5.5 table rule \u2014 so it is a loader check. `is_valid` is false for EVERY binding: all five run the ten \u00a79.5.5 table checks at load (and in validate()) on every `function_tables` entry, whether or not a `table_lookup` references it. Table `T`'s `data` has two values over a three-value axis (step 8). No `table_lookup` references `T`."
+  },
+  "function_table_data_ragged.esm": {
+    "resolver_only": true,
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": false,
+    "resolver_error_code": "table_data_shape_mismatch",
+    "notes": "Resolver-level invalid (esm-spec \u00a79.5.5, ruling Q-106). SCHEMA-VALID \u2014 JSON Schema cannot express this \u00a79.5.5 table rule \u2014 so it is a loader check. `is_valid` is false for EVERY binding: all five run the ten \u00a79.5.5 table checks at load (and in validate()) on every `function_tables` entry, whether or not a `table_lookup` references it. Table `T`'s second row of `data` has one value over a two-value axis `y` (step 8). No `table_lookup` references `T`."
+  },
+  "function_table_shape_assertion_mismatch.esm": {
+    "resolver_only": true,
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": false,
+    "resolver_error_code": "table_data_shape_mismatch",
+    "notes": "Resolver-level invalid (esm-spec \u00a79.5.5, ruling Q-106). SCHEMA-VALID \u2014 JSON Schema cannot express this \u00a79.5.5 table rule \u2014 so it is a loader check. `is_valid` is false for EVERY binding: all five run the ten \u00a79.5.5 table checks at load (and in validate()) on every `function_tables` entry, whether or not a `table_lookup` references it. Table `T`'s `data` matches its axes, but the redundant `shape` assertion says [4] (step 10). No `table_lookup` references `T`."
+  },
+  "function_table_referenced_lookup_axis_mismatch.esm": {
+    "resolver_only": true,
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": false,
+    "resolver_error_code": "table_axis_non_monotonic",
+    "notes": "Resolver-level invalid (esm-spec \u00a79.5.5, ruling Q-106). SCHEMA-VALID \u2014 JSON Schema cannot express this \u00a79.5.5 table rule \u2014 so it is a loader check. `is_valid` is false for EVERY binding: all five run the ten \u00a79.5.5 table checks at load (and in validate()) on every `function_tables` entry, whether or not a `table_lookup` references it. Ruling Q-107: the table a `table_lookup` names is checked before the lookup's own args, axis keys and output. Table `T`'s axis is decreasing, and the one `table_lookup` that references `T` binds an axis `z` the table does not declare (`table_lookup_axis_name_mismatch`) and asks for output 3 of a single-output table (`table_lookup_output_out_of_range`). The table's code is reported."
+  },
+  "closed_fn_searchsorted_non_monotonic.esm": {
+    "resolver_only": true,
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": false,
+    "resolver_error_code": "searchsorted_non_monotonic",
+    "notes": "Resolver-level invalid (esm-spec \u00a79.2 argument checks, ruling Q-106). SCHEMA-VALID \u2014 the schema does not type `fn` arguments \u2014 so it is a loader check. `is_valid` is false for EVERY binding: all five run the \u00a79.2 closed-function argument checks at load (and in validate()) on every `fn` call of an `interp.*` function, wherever it appears. `interp.searchsorted(x, xs)` with `xs = [1, 3, 2]`, which is not non-decreasing."
+  },
+  "closed_fn_searchsorted_xs_not_const.esm": {
+    "resolver_only": true,
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": false,
+    "resolver_error_code": "interp_axis_not_const",
+    "notes": "Resolver-level invalid (esm-spec \u00a79.2 argument checks, ruling Q-106). SCHEMA-VALID \u2014 the schema does not type `fn` arguments \u2014 so it is a loader check. `is_valid` is false for EVERY binding: all five run the \u00a79.2 closed-function argument checks at load (and in validate()) on every `fn` call of an `interp.*` function, wherever it appears. `interp.searchsorted(x, xs)` whose `xs` is the parameter `p`, a variable reference rather than a `const`-op array (esm-spec \u00a79.2, ruling Q-105)."
+  },
+  "closed_fn_searchsorted_xs_scalar.esm": {
+    "resolver_only": true,
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": false,
+    "resolver_error_code": "interp_axis_not_const",
+    "notes": "Resolver-level invalid (esm-spec \u00a79.2 argument checks, ruling Q-106). SCHEMA-VALID \u2014 the schema does not type `fn` arguments \u2014 so it is a loader check. `is_valid` is false for EVERY binding: all five run the \u00a79.2 closed-function argument checks at load (and in validate()) on every `fn` call of an `interp.*` function, wherever it appears. `interp.searchsorted(x, xs)` whose `xs` is the scalar `const` 3.0, not a rank-1 `const`-op array."
+  },
+  "closed_fn_searchsorted_xs_nested.esm": {
+    "resolver_only": true,
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": false,
+    "resolver_error_code": "interp_axis_not_const",
+    "notes": "Resolver-level invalid (esm-spec \u00a79.2 argument checks, ruling Q-106). SCHEMA-VALID \u2014 the schema does not type `fn` arguments \u2014 so it is a loader check. `is_valid` is false for EVERY binding: all five run the \u00a79.2 closed-function argument checks at load (and in validate()) on every `fn` call of an `interp.*` function, wherever it appears. `interp.searchsorted(x, xs)` whose `xs` is the rank-2 `const` [[1, 2], [3, 4]], not a rank-1 `const`-op array."
+  },
+  "closed_fn_linear_non_monotonic_axis.esm": {
+    "resolver_only": true,
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": false,
+    "resolver_error_code": "interp_non_monotonic_axis",
+    "notes": "Resolver-level invalid (esm-spec \u00a79.2 argument checks, ruling Q-106). SCHEMA-VALID \u2014 the schema does not type `fn` arguments \u2014 so it is a loader check. `is_valid` is false for EVERY binding: all five run the \u00a79.2 closed-function argument checks at load (and in validate()) on every `fn` call of an `interp.*` function, wherever it appears. `interp.linear` in an ALGEBRAIC equation `w = ...` (not the ODE): the axis [0, 2, 1, 3] is not strictly increasing. The argument checks run on every `fn` call wherever it appears."
+  },
+  "closed_fn_linear_equal_adjacent_axis.esm": {
+    "resolver_only": true,
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": false,
+    "resolver_error_code": "interp_non_monotonic_axis",
+    "notes": "Resolver-level invalid (esm-spec \u00a79.2 argument checks, ruling Q-106). SCHEMA-VALID \u2014 the schema does not type `fn` arguments \u2014 so it is a loader check. `is_valid` is false for EVERY binding: all five run the \u00a79.2 closed-function argument checks at load (and in validate()) on every `fn` call of an `interp.*` function, wherever it appears. `interp.linear` with the axis [0, 1, 1, 2]: equal neighbours are not strictly increasing."
+  },
+  "closed_fn_linear_length_mismatch.esm": {
+    "resolver_only": true,
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": false,
+    "resolver_error_code": "interp_axis_length_mismatch",
+    "notes": "Resolver-level invalid (esm-spec \u00a79.2 argument checks, ruling Q-106). SCHEMA-VALID \u2014 the schema does not type `fn` arguments \u2014 so it is a loader check. `is_valid` is false for EVERY binding: all five run the \u00a79.2 closed-function argument checks at load (and in validate()) on every `fn` call of an `interp.*` function, wherever it appears. `interp.linear` with a four-value table over a three-value axis."
+  },
+  "closed_fn_linear_axis_too_short.esm": {
+    "resolver_only": true,
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": false,
+    "resolver_error_code": "interp_axis_too_short",
+    "notes": "Resolver-level invalid (esm-spec \u00a79.2 argument checks, ruling Q-106). SCHEMA-VALID \u2014 the schema does not type `fn` arguments \u2014 so it is a loader check. `is_valid` is false for EVERY binding: all five run the \u00a79.2 closed-function argument checks at load (and in validate()) on every `fn` call of an `interp.*` function, wherever it appears. `interp.linear` with a one-value table over a one-value axis: no interval to blend across."
+  },
+  "closed_fn_linear_table_not_const.esm": {
+    "resolver_only": true,
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": false,
+    "resolver_error_code": "interp_table_not_const",
+    "notes": "Resolver-level invalid (esm-spec \u00a79.2 argument checks, ruling Q-106). SCHEMA-VALID \u2014 the schema does not type `fn` arguments \u2014 so it is a loader check. `is_valid` is false for EVERY binding: all five run the \u00a79.2 closed-function argument checks at load (and in validate()) on every `fn` call of an `interp.*` function, wherever it appears. `interp.linear` whose `table` is the parameter `p`, a variable reference rather than a `const`-op array."
+  },
+  "closed_fn_linear_axis_not_const.esm": {
+    "resolver_only": true,
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": false,
+    "resolver_error_code": "interp_axis_not_const",
+    "notes": "Resolver-level invalid (esm-spec \u00a79.2 argument checks, ruling Q-106). SCHEMA-VALID \u2014 the schema does not type `fn` arguments \u2014 so it is a loader check. `is_valid` is false for EVERY binding: all five run the \u00a79.2 closed-function argument checks at load (and in validate()) on every `fn` call of an `interp.*` function, wherever it appears. `interp.linear` whose `axis` is a non-`const` expression (a product of two `const` arrays is still not a literal `const`-op array)."
+  },
+  "closed_fn_linear_table_nested.esm": {
+    "resolver_only": true,
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": false,
+    "resolver_error_code": "interp_table_not_const",
+    "notes": "Resolver-level invalid (esm-spec \u00a79.2 argument checks, ruling Q-106). SCHEMA-VALID \u2014 the schema does not type `fn` arguments \u2014 so it is a loader check. `is_valid` is false for EVERY binding: all five run the \u00a79.2 closed-function argument checks at load (and in validate()) on every `fn` call of an `interp.*` function, wherever it appears. Ruling Q-108: `interp.linear` whose `table` is the rank-2 `const` [[1, 2], [3, 4]] over a two-value axis. A `const` of the wrong rank is `interp_table_not_const`."
+  },
+  "closed_fn_linear_axis_nested.esm": {
+    "resolver_only": true,
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": false,
+    "resolver_error_code": "interp_axis_not_const",
+    "notes": "Resolver-level invalid (esm-spec \u00a79.2 argument checks, ruling Q-106). SCHEMA-VALID \u2014 the schema does not type `fn` arguments \u2014 so it is a loader check. `is_valid` is false for EVERY binding: all five run the \u00a79.2 closed-function argument checks at load (and in validate()) on every `fn` call of an `interp.*` function, wherever it appears. Ruling Q-108: `interp.linear` whose `axis` is the rank-2 `const` [[0, 1], [2, 3]] beside a two-value table. A `const` of the wrong rank is `interp_axis_not_const`."
+  },
+  "closed_fn_linear_table_scalar.esm": {
+    "resolver_only": true,
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": false,
+    "resolver_error_code": "interp_table_not_const",
+    "notes": "Resolver-level invalid (esm-spec \u00a79.2 argument checks, ruling Q-106). SCHEMA-VALID \u2014 the schema does not type `fn` arguments \u2014 so it is a loader check. `is_valid` is false for EVERY binding: all five run the \u00a79.2 closed-function argument checks at load (and in validate()) on every `fn` call of an `interp.*` function, wherever it appears. Ruling Q-108: `interp.linear` whose `table` is the scalar `const` 5.0. A `const` of the wrong rank is `interp_table_not_const`."
+  },
+  "closed_fn_linear_in_reaction_rate.esm": {
+    "resolver_only": true,
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": false,
+    "resolver_error_code": "interp_non_monotonic_axis",
+    "notes": "Resolver-level invalid (esm-spec \u00a79.2 argument checks, ruling Q-106). SCHEMA-VALID \u2014 the schema does not type `fn` arguments \u2014 so it is a loader check. `is_valid` is false for EVERY binding: all five run the \u00a79.2 closed-function argument checks at load (and in validate()) on every `fn` call of an `interp.*` function, wherever it appears. `interp.linear` inside a REACTION RATE (not a model equation): the axis [300, 200] is decreasing. The argument checks run on every `fn` call wherever it appears."
+  },
+  "closed_fn_bilinear_ragged_rows.esm": {
+    "resolver_only": true,
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": false,
+    "resolver_error_code": "interp_axis_length_mismatch",
+    "notes": "Resolver-level invalid (esm-spec \u00a79.2 argument checks, ruling Q-106). SCHEMA-VALID \u2014 the schema does not type `fn` arguments \u2014 so it is a loader check. `is_valid` is false for EVERY binding: all five run the \u00a79.2 closed-function argument checks at load (and in validate()) on every `fn` call of an `interp.*` function, wherever it appears. `interp.bilinear` whose table's second row has two values over a three-value `axis_y`."
+  },
+  "closed_fn_bilinear_non_monotonic_axis_y.esm": {
+    "resolver_only": true,
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": false,
+    "resolver_error_code": "interp_non_monotonic_axis",
+    "notes": "Resolver-level invalid (esm-spec \u00a79.2 argument checks, ruling Q-106). SCHEMA-VALID \u2014 the schema does not type `fn` arguments \u2014 so it is a loader check. `is_valid` is false for EVERY binding: all five run the \u00a79.2 closed-function argument checks at load (and in validate()) on every `fn` call of an `interp.*` function, wherever it appears. `interp.bilinear` whose `axis_y` [0, 20, 10] is not strictly increasing."
+  },
+  "closed_fn_bilinear_axis_y_too_short.esm": {
+    "resolver_only": true,
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": false,
+    "resolver_error_code": "interp_axis_too_short",
+    "notes": "Resolver-level invalid (esm-spec \u00a79.2 argument checks, ruling Q-106). SCHEMA-VALID \u2014 the schema does not type `fn` arguments \u2014 so it is a loader check. `is_valid` is false for EVERY binding: all five run the \u00a79.2 closed-function argument checks at load (and in validate()) on every `fn` call of an `interp.*` function, wherever it appears. `interp.bilinear` whose `axis_y` has one value (and every table row one value)."
+  },
+  "closed_fn_bilinear_table_rank1.esm": {
+    "resolver_only": true,
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": false,
+    "resolver_error_code": "interp_table_not_const",
+    "notes": "Resolver-level invalid (esm-spec \u00a79.2 argument checks, ruling Q-106). SCHEMA-VALID \u2014 the schema does not type `fn` arguments \u2014 so it is a loader check. `is_valid` is false for EVERY binding: all five run the \u00a79.2 closed-function argument checks at load (and in validate()) on every `fn` call of an `interp.*` function, wherever it appears. Ruling Q-108: `interp.bilinear` whose `table` is the rank-1 `const` [1, 2] (its length equals `len(axis_x)`). A `const` of the wrong rank is `interp_table_not_const`."
+  },
+  "closed_fn_bilinear_axis_x_nested.esm": {
+    "resolver_only": true,
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": false,
+    "resolver_error_code": "interp_axis_not_const",
+    "notes": "Resolver-level invalid (esm-spec \u00a79.2 argument checks, ruling Q-106). SCHEMA-VALID \u2014 the schema does not type `fn` arguments \u2014 so it is a loader check. `is_valid` is false for EVERY binding: all five run the \u00a79.2 closed-function argument checks at load (and in validate()) on every `fn` call of an `interp.*` function, wherever it appears. Ruling Q-108: `interp.bilinear` whose `axis_x` is the rank-2 `const` [[0, 1], [2, 3]]. A `const` of the wrong rank is `interp_axis_not_const`."
   }
 }

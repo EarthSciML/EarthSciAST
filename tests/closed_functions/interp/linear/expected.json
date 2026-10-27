@@ -136,6 +136,30 @@
       "description": "Axis has only one entry (no interval to blend). Bindings MUST reject with `interp_axis_too_short`.",
       "inputs": [ [42.0], [0.0], 0.0 ],
       "expected_error_code": "interp_axis_too_short"
+    },
+    {
+      "name": "table_rank2",
+      "description": "Ruling Q-108: a `table` that is a rank-2 const array (its length equals len(axis)) is the wrong rank for interp.linear, and is 'interp_table_not_const' (esm-spec §9.2).",
+      "inputs": [ [[1.0, 2.0], [3.0, 4.0]], [0.0, 1.0], 0.5 ],
+      "expected_error_code": "interp_table_not_const"
+    },
+    {
+      "name": "table_scalar",
+      "description": "Ruling Q-108: a scalar `table` is the wrong rank for interp.linear: 'interp_table_not_const'.",
+      "inputs": [ 5.0, [0.0, 1.0], 0.5 ],
+      "expected_error_code": "interp_table_not_const"
+    },
+    {
+      "name": "axis_rank2",
+      "description": "Ruling Q-108: an `axis` that is a rank-2 const array (its length equals len(table)) is the wrong rank: 'interp_axis_not_const'.",
+      "inputs": [ [10.0, 20.0], [[0.0, 1.0], [2.0, 3.0]], 0.5 ],
+      "expected_error_code": "interp_axis_not_const"
+    },
+    {
+      "name": "axis_scalar",
+      "description": "Ruling Q-108: a scalar `axis` is the wrong rank: 'interp_axis_not_const'.",
+      "inputs": [ [10.0, 20.0], 1.0, 0.5 ],
+      "expected_error_code": "interp_axis_not_const"
     }
   ]
 }

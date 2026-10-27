@@ -178,6 +178,30 @@
       "description": "axis_y has only one entry (no y-cell to blend across). Bindings MUST reject with `interp_axis_too_short`.",
       "inputs": [ [[0.0], [10.0], [20.0]], [0.0, 1.0, 2.0], [0.0], 0.5, 0.0 ],
       "expected_error_code": "interp_axis_too_short"
+    },
+    {
+      "name": "table_rank1",
+      "description": "Ruling Q-108: a rank-1 `table` (its length equals len(axis_x)) is the wrong rank for interp.bilinear: 'interp_table_not_const' (esm-spec §9.2).",
+      "inputs": [ [1.0, 2.0], [0.0, 1.0], [0.0, 1.0], 0.5, 0.5 ],
+      "expected_error_code": "interp_table_not_const"
+    },
+    {
+      "name": "table_rank3",
+      "description": "Ruling Q-108: a rank-3 `table` is the wrong rank for interp.bilinear: 'interp_table_not_const'.",
+      "inputs": [ [[[1.0, 2.0], [3.0, 4.0]], [[5.0, 6.0], [7.0, 8.0]]], [0.0, 1.0], [0.0, 1.0], 0.5, 0.5 ],
+      "expected_error_code": "interp_table_not_const"
+    },
+    {
+      "name": "axis_x_rank2",
+      "description": "Ruling Q-108: a rank-2 `axis_x` is the wrong rank: 'interp_axis_not_const'.",
+      "inputs": [ [[1.0, 2.0], [3.0, 4.0]], [[0.0, 1.0], [2.0, 3.0]], [0.0, 1.0], 0.5, 0.5 ],
+      "expected_error_code": "interp_axis_not_const"
+    },
+    {
+      "name": "axis_y_scalar",
+      "description": "Ruling Q-108: a scalar `axis_y` is the wrong rank: 'interp_axis_not_const'.",
+      "inputs": [ [[1.0, 2.0], [3.0, 4.0]], [0.0, 1.0], 1.0, 0.5, 0.5 ],
+      "expected_error_code": "interp_axis_not_const"
     }
   ]
 }

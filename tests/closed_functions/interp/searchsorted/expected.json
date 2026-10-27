@@ -80,6 +80,18 @@
       "description": "Spec says 'non-decreasing' (not strictly increasing); equal-adjacent xs are valid. With xs = [1, 1, 2, 2, 3], x = 1.5 returns the smallest i with xs[i] ≥ 1.5 = 3.",
       "inputs": [ 1.5, [1.0, 1.0, 2.0, 2.0, 3.0] ],
       "expected": 3
+    },
+    {
+      "name": "empty_xs",
+      "description": "Ruling Q-108: xs = [] is a valid rank-1 table (N = 0, trivially non-decreasing). No element is ≥ x, so the result is N + 1 = 1 (esm-spec §9.2).",
+      "inputs": [ 2.0, [] ],
+      "expected": 1
+    },
+    {
+      "name": "empty_xs_nan_x",
+      "description": "Ruling Q-108: a NaN x against xs = [] is N + 1 = 1, as for any table.",
+      "inputs": [ "NaN", [] ],
+      "expected": 1
     }
   ],
   "error_scenarios": [
