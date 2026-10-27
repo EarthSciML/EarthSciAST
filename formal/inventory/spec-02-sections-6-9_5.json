@@ -629,11 +629,11 @@
     {
       "id": "spec.9.2.interp-fma-tolerance",
       "section": "9.2",
-      "quote": "bindings that use FMA selectively MUST ensure their results still match the non-FMA reference within the per-fixture tolerance",
+      "quote": "Bindings that use FMA selectively MUST ensure their results stay within these absolute bounds of the pinned non-FMA result",
       "class": "semantic",
       "phase": 1,
       "area": "precision",
-      "note": "interp.linear/bilinear evaluated with the pinned non-FMA order are bit-exact; an FMA evaluation differs from it by at most the fixture tolerance.",
+      "note": "An FMA evaluation of interp.linear is within 2 ulp(max |t_i|, |t_i+1|) of the pinned non-FMA one, and of interp.bilinear within 17/2 ulp(max |corner|) (ruling Q-6).",
       "concern": "The bound is defined by whatever tolerance a fixture file carries, so it is not a spec-level property; and rel 4e-16 cannot hold in general: fusing t_i + w*(d) removes one rounding of w*d, which relative to a result near zero by cancellation is unbounded."
     },
     {

@@ -1774,7 +1774,7 @@ Every one of these is **exact by definition** (`inHg`, by convention), and the *
 | `ft` | `0.3048` m | the international foot, 1959 agreement |
 | `mi` | `1609.344` m | exactly `5280 × ft`, same agreement |
 | `lb` | `0.45359237` kg | the international avoirdupois pound, 1959 — and exactly `short_ton / 2000` |
-| `hp` | `745.6998715822702` W | 550 ft·lbf/s = `550 × ft × lb × 9.80665`, folded LEFT TO RIGHT — unlike `mi` and `short_ton` this product is not exactly representable, so the fold order is what makes every binding land on the same double; NIST SP 811 App. B gives 7.456 999 E+02 W |
+| `hp` | `745.6998715822702` W | 550 ft·lbf/s = `550 × ft × lb × 9.80665`, folded LEFT TO RIGHT — this product of rounded literals lands on different doubles under different fold orders, and its exact value is not a double, so the fold order is what makes every binding land on the same double (proven in `formal/Esm/Units/Identities.lean`); NIST SP 811 App. B gives 7.456 999 E+02 W |
 | `gal` | `0.003785411784` m³ | 231 in³, the US **liquid** gallon; NIST SP 811 App. B |
 | `inHg` | `3386.388640341` Pa | exactly `25.4 × mmHg`, the conventional value; NIST SP 811 |
 | `Torr` | `101325/760` Pa | exactly `atm / 760`, by definition — NOT the same as `mmHg` (133.322387415 Pa), and NOT a rounded decimal |
@@ -1837,7 +1837,7 @@ atom     := '1' | symbol | '(' unit ')'
 - **Whitespace between terms means MULTIPLICATION**, as in pint and UDUNITS — `"ppb^-1 s^-1"` is `ppb⁻¹·s⁻¹`. This is what makes a species tag (§4.8.1) illegal rather than merely discouraged.
 - **`*` and `/` are ONE precedence level, evaluated LEFT to RIGHT.** `"J/mol*K"` is `(J/mol)*K` = `J·mol⁻¹·K`, NOT `J/(mol·K)`. A parser that gives `*` a higher precedence than `/` silently negates the exponent of every symbol after the first `/` — it read `J/mol*K` as `J·mol⁻¹·K⁻¹` — and, because the result is a *plausible* dimension, nothing downstream can detect it. Likewise `"kg/m*s"` is `kg·m⁻¹·s`, and `"L/mol/s"` is `L·mol⁻¹·s⁻¹`.
 - **Parentheses are REQUIRED for a compound denominator**: `"J/(mol*K)"`, `"cm^3/(molec*s)"`. A parser that cannot handle parentheses reads `J/(mol*K)` as dimensionless and silently disables every check downstream of it.
-- A `symbol` is a maximal run of characters that is a §4.8.1 table key. Table keys are alphanumeric with two exceptions — `%` and the empty string — so a lexer MUST admit `%` as a symbol token (`"%"`, `"%/h"`).
+- A `symbol` is a maximal run of characters that is a §4.8.1 table key. Table keys are alphanumeric, plus `_` (as in `short_ton`), with two further exceptions — `%` and the empty string — so a lexer MUST admit `%` as a symbol token (`"%"`, `"%/h"`).
 - A digit run that is NOT separated from a symbol by `^`/`**` is a *different symbol*, not an implicit exponent: `"cm3"` and `"m/s2"` do not resolve (`cm3` is not a table key). Write `"cm^3"`, `"m/s^2"`.
 
 #### 4.8.3 Dimensional rules for operators
@@ -4271,7 +4271,7 @@ Decomposes a UTC scalar time into proleptic-Gregorian calendar fields. All entri
 
 | Name | Arity | Args | Return |
 |---|---|---|---|
-| `interp.searchsorted` | 2 | `x: scalar, xs: const array[N]` | integer scalar (1..N) |
+| `interp.searchsorted` | 2 | `x: scalar, xs: const array[N]` | integer scalar (1..N+1) |
 
 **Semantics — `interp.searchsorted`:**
 
@@ -4318,7 +4318,7 @@ Let `axis = [a₁, ..., aₙ]` (1-based indexing for spec exposition) and `table
    result = tᵢ + w · (tᵢ₊₁ − tᵢ)
    ```
 
-   This form (rather than `(1 − w)·tᵢ + w·tᵢ₊₁`) is required because it is **exact at the endpoints**: `w = 0` ⇒ `result = tᵢ` exactly, and `w = 1` ⇒ `result = tᵢ + (tᵢ₊₁ − tᵢ) = tᵢ₊₁` to within IEEE-754 round-to-nearest, with no rounding error from `1 − w` cancellation when `x` is near `aᵢ₊₁`.
+   This form (rather than `(1 − w)·tᵢ + w·tᵢ₊₁`) is required because it is **exact at the left endpoint** and has no `1 − w` cancellation when `x` is near `aᵢ₊₁`: `w = 0` ⇒ `result = tᵢ` exactly in `binary64` (provided `tᵢ₊₁` is finite; a NaN `tᵢ₊₁` gives NaN). At `w = 1` the result is `tᵢ ⊕ (tᵢ₊₁ ⊖ tᵢ)`, which equals `tᵢ₊₁` exactly when `tᵢ/2 ≤ tᵢ₊₁ ≤ 2·tᵢ` (Sterbenz) and is otherwise within `3/2·ulp(max(|tᵢ|, |tᵢ₊₁|))` of it — for example `tᵢ = 1`, `tᵢ₊₁ = 2⁻⁶⁰` gives `0`. Both facts are proven in `formal/Esm/Closed/Interp/Rounding.lean`.
 
 4. **NaN propagation.** If `x` is NaN, the result is NaN. (The clamp comparisons in steps 1–2 are IEEE-754 `≤` and `≥`, which both return false for NaN, so the function falls through to step 3, where `aᵢ − x` and `(aᵢ₊₁ − aᵢ)` produce a NaN weight that propagates through the blend.)
 
@@ -4327,7 +4327,7 @@ Let `axis = [a₁, ..., aₙ]` (1-based indexing for spec exposition) and `table
 Let `axis_x = [x₁, ..., x_{Nx}]`, `axis_y = [y₁, ..., y_{Ny}]`, and `table[i][j]` be the value at `(xᵢ, yⱼ)`. For scalar queries `(x, y)`:
 
 1. **Per-axis clamp.** Compute `x_q = clamp(x, x₁, x_{Nx})` and `y_q = clamp(y, y₁, y_{Ny})`, where `clamp(v, lo, hi)` is `lo` if `v ≤ lo`, `hi` if `v ≥ hi`, else `v`. This is the 2-D extrapolate-flat rule: queries outside the table are pinned to the nearest edge.
-2. **Cell location.** Choose `i` as the **largest** index in `[1, Nx − 1]` with `xᵢ ≤ x_q`, and `j` as the largest index in `[1, Ny − 1]` with `yⱼ ≤ y_q`. (Equivalent formulation: clamp the result of `interp.searchsorted(x_q, axis_x)` to `[2, Nx]`, then subtract 1; analogously for `y`.) Both assignments are unique because step 1 guarantees `x₁ ≤ x_q ≤ x_{Nx}` and `y₁ ≤ y_q ≤ y_{Ny}`. When `x_q` lands exactly on an interior knot `xₖ` the convention selects `i = k` (so `wx = 0` and the x-blend reduces to the row at knot `k` exactly); the same blend evaluated under the alternative `i = k − 1` (so `wx = 1`) produces the bit-identical result under the pinned form, but the spec pins the convention for definiteness.
+2. **Cell location.** Choose `i` as the **largest** index in `[1, Nx − 1]` with `xᵢ ≤ x_q`, and `j` as the largest index in `[1, Ny − 1]` with `yⱼ ≤ y_q`. (Clamping the result of `interp.searchsorted(x_q, axis_x)` to `[2, Nx]` and subtracting 1 is **not** an equivalent formulation: `interp.searchsorted` returns the first knot `≥ x_q`, so at an interior knot `xₖ` it selects `i = k − 1`.) Both assignments are unique because step 1 guarantees `x₁ ≤ x_q ≤ x_{Nx}` and `y₁ ≤ y_q ≤ y_{Ny}`. When `x_q` lands exactly on an interior knot `xₖ` the convention selects `i = k` (so `wx = 0` and the x-blend reduces to the row at knot `k` exactly); the same blend evaluated under the alternative `i = k − 1` (so `wx = 1`) gives the same value in exact arithmetic but not always the same `binary64` result (rows `1` and `2⁻⁶⁰` blend to `0` at `wx = 1`; see the `w = 1` note under `interp.linear`), which is why the spec pins `i = k`.
 3. **Weights.**
 
    ```
@@ -4355,15 +4355,23 @@ Let `axis_x = [x₁, ..., x_{Nx}]`, `axis_y = [y₁, ..., y_{Ny}]`, and `table[i
 | `interp_axis_too_short` | Any axis has fewer than 2 entries (no interval to blend across). |
 | `interp_table_not_const` / `interp_axis_not_const` | The `table` or any axis argument is not a literal `const`-op array (e.g. it is a variable reference or a non-`const` expression). |
 
-**Tolerance:** when bindings implement the pinned evaluation order in IEEE-754 `binary64` arithmetic, agreement is **bit-exact** (`{ "abs": 0, "rel": 0 }`) for fixtures whose inputs are exactly representable and whose intermediate arithmetic does not require an FMA (the spec does not require FMA usage; bindings that use FMA selectively MUST ensure their results still match the non-FMA reference within the per-fixture tolerance). For mixed-FMA / non-FMA cross-binding comparisons the harness MAY relax to `{ "abs": 0, "rel": 4e-16 }` (~2 ulp at unit magnitude); see `tests/closed_functions/interp/linear/expected.json` and `bilinear/expected.json` for the per-fixture tolerance fields actually applied in CI.
+**Tolerance:** when bindings implement the pinned evaluation order in IEEE-754 `binary64` arithmetic without fused multiply-add, agreement is **bit-exact** (`{ "abs": 0, "rel": 0 }`) for fixtures whose inputs are exactly representable. The spec does not require FMA, but a binding MAY contract a blend `a + w·(b − a)` into one. Bindings that use FMA selectively MUST ensure their results stay within these absolute bounds of the pinned non-FMA result, where `ulp(v) = 2^max(⌊log₂|v|⌋ − 52, −1074)` is the spacing of `binary64` values at `v`:
+
+- `interp.linear`: `2·ulp(max(|tᵢ|, |tᵢ₊₁|))`, over the two table entries of the cell. The constant is attained, so no smaller integer bound holds.
+- `interp.bilinear`: `17/2·ulp(m)`, where `m` is the largest magnitude among the four cell corners. This bound is proven but not known to be tight; differences of `4·ulp(m)` occur.
+
+Both bounds are proven in `formal/` (`Esm/Closed/Interp/Rounding.lean`, `Esm/Closed/Interp/Bilinear64.lean`). No relative tolerance is sound: with FMA, `interp.linear([1, −2], [0, 3], 1)` is `2⁻⁵⁴` where the pinned result is `0`. The fixtures under `tests/closed_functions/interp/` are bit-exact (`0/0`) and avoid FMA-sensitive inputs.
 
 **Composition rationale (informative):** `interp.linear(table, axis, x)` is exactly equivalent to the following AST composition (modulo evaluation order / FMA effects, which the spec pins above):
 
 ```jsonc
-// Let i = interp.searchsorted(x, axis) clamped to [2, N], i_lo = i − 1.
+// Let xc = clamp(x, axis[1], axis[N]) (extrapolate-flat; clamping the index alone
+// would clamp the cell but not the weight, and so extrapolate), then
+// i = interp.searchsorted(xc, axis) clamped to [2, N], i_lo = i − 1.
 // Then the linear blend is:
-//   table[i_lo] + (x − axis[i_lo]) / (axis[i] − axis[i_lo]) · (table[i] − table[i_lo])
-// (with extrapolate-flat handled by clamping the search result before the index lookup).
+//   table[i_lo] + (xc − axis[i_lo]) / (axis[i] − axis[i_lo]) · (table[i] − table[i_lo])
+// (At an interior knot this picks the cell to the LEFT of the knot, w = 1, where the
+// pinned form picks the cell to the right, w = 0; the two agree in exact arithmetic.)
 ```
 
 The named primitive exists so that symbolic layers in bindings (notably the Julia MTK extension) can mark each lookup as opaque to alias elimination via `@register_symbolic`, instead of paying the structural-simplify cost of ~10 alias-eliminated intermediates per lookup. With ~230 lookups per `fastjx` photolysis evaluation (18 wavelengths × 13 species), that difference is the gap between MTK simplification finishing in seconds versus minutes-to-hours (see escalation `hq-wisp-y6g6`).
@@ -4589,7 +4597,7 @@ Conformance fixtures under `tests/conformance/function_tables/` exercise:
 6. `interpolation: "nearest"` through the inline-test runner: queries on a knot, either side of a midpoint, exactly on a midpoint (the tie goes to the lower knot), and below and above the axis (clamped) — `nearest/`.
 7. The defaults of §9.5.2 and §9.5.3 through the inline-test runner: multi-output tables (one 1-axis, one 2-axis) read with `output` omitted (output `0`) beside the same read spelled out and a read of another output, and a single-output table read with `output` omitted and `0` (lowered with the whole `data`) — `lookup_defaults/`.
 
-Each fixture pairs an `.esm` file with a small numeric harness that asserts the lowered evaluation matches the equivalent inline-const lookup at the §9.2 tolerance contract (`abs: 0, rel: 0` non-FMA, `abs: 0, rel: 4e-16` mixed-FMA cross-binding). All five bindings MUST pass.
+Each fixture pairs an `.esm` file with a small numeric harness that asserts the lowered evaluation matches the equivalent inline-const lookup at the §9.2 tolerance contract (bit-exact without FMA; the §9.2 absolute ulp bounds when FMA is used). All five bindings MUST pass.
 
 ### 9.6 Rewrite rules (expression templates)
 
