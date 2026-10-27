@@ -137,8 +137,9 @@
       ],
       "statement": "For every t, the spec's reference julian_day equals the standard Julian Date t/86400 + 2440587.5 (§9.2: 'the standard JDN convention (JD 0 = noon UTC on 4713 BC Jan 1, proleptic Julian)').",
       "lean_statement": "∀ t : ℝ, Esm.Closed.Datetime.julianDay t = t / 86400 + 2440587.5",
-      "status": "open",
-      "note": "False in the model: Esm.Closed.Datetime.julianDay_ne_standard proves the negation (on -4800-02-29 the published FvF formula is one day ahead; it is exact only from -4800-03-01, P-closed-datetime-fvf-domain). Not marked refuted because a refutation needs a reproducer: this needs a spec question choosing between 'FvF as published' (the spec's reference computation) and 'the standard JD' (the spec's convention) for dates before -4800-03-01; reported to the coordinator."
+      "status": "question",
+      "note": "False in the model: Esm.Closed.Datetime.julianDay_ne_standard proves the negation (on -4800-02-29 the published FvF formula is one day ahead; it is exact only from -4800-03-01, P-closed-datetime-fvf-domain). Not marked refuted because a refutation needs a reproducer: this needs a spec question choosing between 'FvF as published' (the spec's reference computation) and 'the standard JD' (the spec's convention) for dates before -4800-03-01; reported to the coordinator.",
+      "question": "Q-99"
     },
     {
       "id": "P-closed-datetime-nonfinite",
@@ -146,8 +147,9 @@
         "spec.9.2.datetime-exact-integer"
       ],
       "statement": "The result of a datetime.* function at a NaN or infinite t_utc.",
-      "status": "open",
-      "note": "§9.2 says all real-valued time inputs are binary64 but gives no result or diagnostic for NaN/±Inf (§9.4 lists 'NaN input' among example boundary cases). The adapter reports error nonfinite_input; needs a spec question."
+      "status": "question",
+      "note": "§9.2 says all real-valued time inputs are binary64 but gives no result or diagnostic for NaN/±Inf (§9.4 lists 'NaN input' among example boundary cases). The adapter reports error nonfinite_input; needs a spec question.",
+      "question": "Q-100"
     },
     {
       "id": "P-closed-datetime-binary64-floor",

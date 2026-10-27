@@ -54,6 +54,7 @@ with a pending question among its own clauses.
 - Found by: inventory
 - Problem: The bound is defined by whatever tolerance a fixture file carries, so it is not a spec-level property; and rel 4e-16 cannot hold in general: fusing t_i + w*(d) removes one rounding of w*d, which relative to a result near zero by cancellation is unbounded.
 - Ruling: Allow FMA with an absolute bound in ulps of max(|tᵢ|,|tᵢ₊₁|) (2026-10-26); the constant is proven in phase 1 before it enters the spec; the rel 4e-16 relaxation is removed.
+- Done (phase 1): `interp.linear` 2·ulp(max(|tᵢ|,|tᵢ₊₁|)), attained (`P-interp-fma-two-ulp-attained`); `interp.bilinear` 17/2·ulp(max |corner|), proven but not known tight (`P-interp-bilinear-fma-bound`; least constant open, `P-interp-bilinear-fma-least-constant`, ≥ 4 by search). Both in §9.2's tolerance paragraph; the rel 4e-16 relaxation is gone from §9.2 and §9.5.6.
 
 ## Q-7 esm-spec.md §9.2: searchsorted xs monotone
 - Clauses: `spec.9.2.searchsorted-xs-monotone`
@@ -683,4 +684,67 @@ with a pending question among its own clauses.
 - Phase: none (out_of_scope)
 - Found by: inventory
 - Problem: Phrased as an author MUST NOT, yet the same sentence requires bindings to accept and substitute such a body; a violating document is not rejected by anything, so this behaves as a SHOULD and a document can be non-conforming while every conforming tool accepts it.
+- Ruling: (pending)
+
+## Q-97 esm-spec.md §9.2: interp endpoint and alternative-cell claims (editorial)
+- Clauses: `spec.9.2.interp-fma-tolerance`
+- Phase: 1
+- Found by: phase-1 formalization (`Esm.Closed.Rounding.blend64_w_one_refuted`)
+- Problem: §9.2 claimed `w = 1 ⇒ result = tᵢ₊₁` and that bilinear's alternative cell `i = k − 1` is bit-identical to the pinned `i = k`. In binary64 `1 ⊕ (1 ⊗ (2⁻⁶⁰ ⊖ 1)) = 0`, refuting both. Also: the "equivalent formulation" of the bilinear cell via `interp.searchsorted` picks `k − 1` at an interior knot; the linear composition rationale clamped the index but not the weight, so it extrapolated; `w = 0` exactness needs `tᵢ₊₁` finite; the `interp.searchsorted` row said `(1..N)` where it returns `1..N+1`.
+- Ruling: Editorial (2026-10-26): text corrected to the proven facts (exact at `w = 0` for finite `tᵢ₊₁`; at `w = 1` exact under Sterbenz, else within 3/2 ulp; alternative cell equal over ℝ only; searchsorted formulation marked not equivalent; rationale clamps `x`; return range `1..N+1`).
+
+## Q-98 esm-spec.md §9.5.3: nearest is decided on binary64 differences, not exact distance
+- Clauses: `spec.9.5.table-lookup-bit-equivalent`
+- Phase: 1
+- Found by: phase-1 formalization (`nearest64_not_exact`, `nearest64_spec`)
+- Problem: Ruling Q-13 says "true nearest knot". The §9.5.3 lowering written for it decides on the binary64 differences `A[hi] − x` and `x − A[lo]`. On axis `[−1, 1]` with `x = 2⁻⁶⁰` both round to `1.0`, so it returns the lower knot although the upper is nearer. Proven: it is otherwise exact, it errs only toward the lower knot, and only when the exact distances differ by at most `ulp(x − A[lo])`. Fixture `q_rounding_tie` pins the binary64 answer.
+- Ruling: (pending)
+
+## Q-99 esm-spec.md §9.2: julian_day before −4800-03-01
+- Clauses: `spec.9.2.datetime-exact-integer`
+- Phase: 1
+- Found by: phase-1 formalization (`julianDay_ne_standard`)
+- Problem: §9.2 names Fliegel–van Flandern with truncating division as the reference computation and the standard Julian Date (JD 0 at noon, 4713 BC Jan 1) as the convention. They agree from −4800-03-01 on and disagree by −2 to +1 days on most earlier dates (FvF is 1 day ahead on −4800-02-29). Python, Go, Julia and Rust use FvF; TypeScript the standard JD. No fixture pins a date before −4800-03-01.
+- Ruling: (pending)
+
+## Q-100 esm-spec.md §9.2: datetime of a non-finite t
+- Clauses: `spec.9.2.datetime-exact-integer`
+- Phase: 1
+- Found by: phase-1 formalization
+- Problem: No result or diagnostic is given for a NaN or ±Inf `t_utc`.
+- Ruling: (pending)
+
+## Q-101 esm-spec.md §9.2: datetime fields when the year overflows
+- Clauses: `spec.9.2.datetime-exact-integer`
+- Phase: 1
+- Found by: phase-1 binding work
+- Problem: "If a result would overflow" — only `year` can leave Int32. It is unspecified whether `month`, `day`, `hour`, … raise `closed_function_overflow` too for such a `t`. Go raises for |t| ≥ 2⁶²; the others return deterministic values.
+- Ruling: (pending)
+
+## Q-102 esm-spec.md §9.2: single floor-divmod "zero drift" (editorial)
+- Clauses: `spec.9.2.datetime-exact-integer`
+- Phase: 1
+- Found by: phase-1 formalization (`fSecondOfDay_ne`)
+- Problem: "A single floor-divmod gives zero drift on the integer outputs" is false for a binary64 floor-divmod: at `t = −1 − 2⁻⁵²`, `86400 ⊕ t` rounds to 86399.
+- Ruling: Editorial (2026-10-26): the Q-3 text defines the day number and time of day exactly, as real numbers; reproducer `tests/closed_functions/datetime/second/expected.json` scenario `frac_pre_epoch_minute_1969_12_31T23_59_below_ulp`.
+
+## Q-103 esm-spec.md §4.8.1: unit scales with no stated value
+- Clauses: `spec.4.8.1.customary-scales-pinned`
+- Phase: 1
+- Found by: phase-1 formalization
+- Problem: `cal`, `kcal`, `ppm`, `ppb` and `ppt` have no stated scale. The model uses cal = 4.184 J and ppt = 10⁻¹² (every binding agrees), but `ppt` reads as parts per trillion or per thousand.
+- Ruling: (pending)
+
+## Q-104 esm-spec.md §4.8.2: unit-string grammar edge cases
+- Clauses: `spec.4.8.2.percent-symbol-token`
+- Phase: 1
+- Found by: phase-1 formalization (Python compared)
+- Problem: Unspecified: (a) a whitespace-only string (Python: dimensionless; model: reject); (b) `m^+2` (Python accepts; model rejects); (c) `01/s` and `1.0/s` — the grammar's atom is literally `'1'`, the prose says "value exactly 1"; (d) whether `%h` is `%`·`h`; (e) whitespace inside a term (`m ^ 2`), accepted by both.
+- Ruling: (pending)
+
+## Q-105 esm-spec.md §9.2, §9.5.5: unnamed diagnostic codes and check order
+- Clauses: `spec.9.2.searchsorted-xs-monotone`
+- Phase: 1
+- Found by: phase-1 formalization
+- Problem: No code is named for an `interp.searchsorted` `xs` that is not a rank-1 const array, nor for a function-table axis with fewer than 2 values; the order of the §9.5.5 checks beyond Q-4 is unpinned (the model's order is in `Esm/Closed/Tables.lean`).
 - Ruling: (pending)

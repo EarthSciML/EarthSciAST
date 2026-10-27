@@ -463,16 +463,22 @@
       "clauses": [
         "spec.9.2.interp-fma-tolerance"
       ],
-      "status": "open",
-      "statement": "§9.2 'w = 1 ⇒ result = t_i + (t_{i+1} − t_i) = t_{i+1}' as exact binary64 equality. Lean refutes it (Esm.Closed.Rounding.blend64_w_one_refuted, ¬ Esm.Closed.Rounding.WOneExact: 1 ⊕ (1 ⊗ (2^−60 ⊖ 1)) = 0), but no QUESTIONS.md entry or fixture records it yet, so it cannot be registered as refuted; see P-interp-endpoint-w1-sterbenz / -bound for what holds."
+      "status": "refuted",
+      "statement": "§9.2 (old text) 'w = 1 ⇒ result = t_i + (t_{i+1} − t_i) = t_{i+1}' as exact binary64 equality. REFUTED: 1 ⊕ (1 ⊗ (2^−60 ⊖ 1)) = 0. The text now states what holds (P-interp-endpoint-w1-sterbenz, -bound).",
+      "lean_statement": "∀ t u : ℝ, Esm.F64.Repr t → Esm.F64.Repr u → Esm.Closed.Rounding.blend64 t u 1 = u",
+      "theorem": "Esm.Closed.Rounding.blend64_w_one_refuted",
+      "reproducer": "formal/QUESTIONS.md#Q-97"
     },
     {
       "id": "P-interp-bilinear-alt-cell-binary64",
       "clauses": [
         "spec.9.2.interp-fma-tolerance"
       ],
-      "status": "open",
-      "statement": "§9.2 bilinear step 2: the alternative cell i = k−1 (wx = 1) is BIT-identical to the pinned i = k under the pinned form. False in binary64 by the same counterexample as P-interp-endpoint-w1-exact-binary64 (rows t[k−1] = 1, t[k] = 2^−60); also refuted for the 'equivalent formulation' clamp(searchsorted(x_q), 2, Nx) − 1, which selects k−1. Needs a QUESTIONS.md entry."
+      "status": "refuted",
+      "statement": "§9.2 bilinear step 2 (old text): the alternative cell i = k−1 (wx = 1) is bit-identical to the pinned i = k (wx = 0, which returns the row at knot k exactly). That needs the wx = 1 blend of rows t[k−1], t[k] to return t[k] exactly in binary64, which fails for rows 1 and 2^−60. The text now says the two agree over ℝ only.",
+      "lean_statement": "∀ t u : ℝ, Esm.F64.Repr t → Esm.F64.Repr u → Esm.Closed.Rounding.blend64 t u 1 = u",
+      "theorem": "Esm.Closed.Rounding.blend64_w_one_refuted",
+      "reproducer": "formal/QUESTIONS.md#Q-97"
     },
     {
       "id": "P-interp-bilinear-fma-least-constant",

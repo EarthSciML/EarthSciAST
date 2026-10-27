@@ -32,6 +32,7 @@ BINARY = FORMAL / ".lake" / "build" / "bin" / "esm-lean"
 # function-name prefix -> esm-lean mode
 MODES = {
     "datetime": "datetime",
+    "interp": "interp",
 }
 
 
