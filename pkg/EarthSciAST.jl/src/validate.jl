@@ -220,9 +220,21 @@ const _SCHEMA_ANNOTATION_KEYS = Set{String}([
     "readOnly", "writeOnly", "contentEncoding", "contentMediaType",
 ])
 
+# A fresh, empty instance path for JSONSchema.jl's private `_validate`. Before
+# v1.6 the path is a `String`; from v1.6 it is an `_InstancePath` segment vector
+# that the library pushes to and pops from while it descends, so each call gets
+# its own. Only the pass/fail verdict is read here, never the path, so the root
+# path is all either version needs.
+@static if isdefined(JSONSchema, :_InstancePath)
+    _jsonschema_root_path() = JSONSchema._InstancePath()
+else
+    _jsonschema_root_path() = ""
+end
+
 # Does instance `x` satisfy `subschema` in full? Delegated to JSONSchema.jl so
 # the branch-selection verdict is identical to the library's.
-_schema_matches(x, subschema) = JSONSchema._validate(x, subschema, "") === nothing
+_schema_matches(x, subschema) =
+    JSONSchema._validate(x, subschema, _jsonschema_root_path()) === nothing
 
 function _schema_error_message(keyword::AbstractString)::String
     keyword == "required"             && return "missing required property"
@@ -357,7 +369,7 @@ function _collect_schema_keyword!(errors::Vector{SchemaError}, x, schema, k::Str
         # `pattern`, `exclusiveMinimum`, …): evaluated by JSONSchema.jl exactly
         # as in a normal validation. A non-`nothing` return means it failed at
         # THIS node; the standard keyword name is `k`.
-        JSONSchema._validate(x, schema, Val{Symbol(k)}(), v, path) === nothing ||
+        JSONSchema._validate(x, schema, Val{Symbol(k)}(), v, _jsonschema_root_path()) === nothing ||
             _push_schema_error!(errors, path, k)
     end
     return errors

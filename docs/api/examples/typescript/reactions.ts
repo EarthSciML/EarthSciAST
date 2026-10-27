@@ -16,9 +16,9 @@ assert.deepEqual(odeStates(odes).sort(), ['NO', 'NO2', 'O3'])
 assert.deepEqual(
   odes.equations.map((eq) => toAscii(eq)),
   [
-    'D(O3)/Dt = -k1 * NO * O3 + jNO2 * NO2',
-    'D(NO)/Dt = -k1 * NO * O3 + jNO2 * NO2',
-    'D(NO2)/Dt = k1 * NO * O3 - jNO2 * NO2',
+    'D(O3)/Dt = -1 * k1 * NO * O3 + jNO2 * NO2',
+    'D(NO)/Dt = -1 * k1 * NO * O3 + jNO2 * NO2',
+    'D(NO2)/Dt = k1 * NO * O3 + -1 * jNO2 * NO2',
   ],
 )
 

@@ -3691,6 +3691,8 @@ dX/dt += (net_stoich_X) · v
 
 where `net_stoich_X = (stoich as product) − (stoich as substrate)`.
 
+**Exact form.** The expression tree these formulas lower to (operand order, how a loss of 1 or a coefficient of 2 is written, integer literals for integral coefficients, one n-ary sum per species) is fixed by Library Specification §4.6.2, so every binding lowers a reaction network to the same bytes.
+
 **Unit convention:** The `rate` field in each reaction must be the **effective rate** for the species units used — i.e., mass action applied to the rate and species values must produce the correct ODE tendency in the declared species units. When species are in mixing ratios (e.g., `mol/mol`) but rate constants are in concentration units (e.g., `cm³/molec/s`), the rate expression must include the appropriate number density factor(s) `M` to convert. For a reaction of total substrate order `n`, the rate should include `M^(n−1)`.
 
 **Reservoir species (`constant: true`).** A species declared with `constant: true` is a *reservoir*: it appears in rate laws as a concentration but no `dX/dt` equation is generated for it. Bindings that target Catalyst emit it as a parameter with `isconstantspecies=true` metadata; other bindings skip the ODE for that species while still evaluating mass-action contributions from it. Typical use: O₂, CH₄, H₂O in tropospheric chemistry where the species participates in many reactions but its concentration is effectively unchanged on the simulation timescale.

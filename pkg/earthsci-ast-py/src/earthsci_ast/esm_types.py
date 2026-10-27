@@ -568,6 +568,10 @@ class Reaction:
     # fractional stoichiometries (e.g. `0.87 CH2O`). Parser preserves the
     # original JSON numeric type; serializer emits `int` for integer-valued
     # coefficients to keep integer fixtures byte-identical across round-trips.
+    #
+    # A species the document lists more than once on one side appears once
+    # here, with its coefficients summed in listed order; the entries as
+    # authored are kept in `substrate_entries` / `product_entries`.
     reactants: dict[str, int | float] = field(default_factory=dict)
     products: dict[str, int | float] = field(default_factory=dict)
     rate_constant: float | Expr | None = None
@@ -580,6 +584,41 @@ class Reaction:
     # flag re-emit could not tell an authored `name` from the default and
     # invented a `name` key the author never wrote.
     name_authored: bool = True
+    # The substrate / product entries as the document listed them, in order,
+    # repeats kept: `[("A", 1), ("A", 1)]` for `A + A`. The mass-action rate
+    # law has one factor per ENTRY (esm-libraries-spec §4.6.2), which the
+    # `reactants` / `products` maps cannot express. None for a reaction built
+    # in code; `Reaction.substrate_list()` / `product_list()` then fall back to
+    # the maps, and they also fall back when the maps were edited after parse.
+    substrate_entries: list[tuple[str, int | float]] | None = None
+    product_entries: list[tuple[str, int | float]] | None = None
+
+    def substrate_list(self) -> list[tuple[str, int | float]]:
+        """The substrate entries in listed order, repeats kept."""
+        return _ordered_entries(self.substrate_entries, self.reactants)
+
+    def product_list(self) -> list[tuple[str, int | float]]:
+        """The product entries in listed order, repeats kept."""
+        return _ordered_entries(self.product_entries, self.products)
+
+
+def _ordered_entries(
+    entries: list[tuple[str, int | float]] | None, summed: dict[str, int | float]
+) -> list[tuple[str, int | float]]:
+    """The authored entries when they still sum to the species map, otherwise
+    the map's own items (the map is the source of truth once edited)."""
+    if entries is not None and _sum_entries(entries) == summed:
+        return list(entries)
+    return list(summed.items())
+
+
+def _sum_entries(entries: list[tuple[str, int | float]]) -> dict[str, int | float]:
+    """Collapse entries to a species map, summing a repeated species' coefficients
+    in listed order."""
+    out: dict[str, int | float] = {}
+    for species, coeff in entries:
+        out[species] = out[species] + coeff if species in out else coeff
+    return out
 
 
 @dataclass

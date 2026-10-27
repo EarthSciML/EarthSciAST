@@ -1399,6 +1399,12 @@ single failure. Measured before the change:
 Declaration order was canonical on both counts: it is the majority in both
 columns, and it is what this section already said. Two bindings moved.
 
+**The derived equations are one exact tree in all five bindings**, in
+`derive_odes` and in `flatten` alike: esm-libraries-spec §4.6.2 fixes operand
+order, how each coefficient is written (a loss of 1 is `-1 * rate`, an integral
+coefficient an integer literal) and one n-ary `+` per species. Pinned
+cross-binding by `tests/conformance/reactions/lowering_form.json`.
+
 **Rust** dropped the sort in `stoichiometric_matrix` (`src/reactions.rs`) and in
 its `parallel`-feature twin (`src/performance.rs`, which sorted to stay
 consistent with it). The sort's stated justification was "so indices are
