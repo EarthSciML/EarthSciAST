@@ -144,6 +144,9 @@ fn units_fixtures_dimensional_propagation() {
             .unit_warnings
             .iter()
             .filter(|w| !w.message.contains("unparseable unit"))
+            // The esm-spec §4.8.6 warnings are pinned by
+            // `units_dimensionless_literal.rs`, not counted here.
+            .filter(|w| w.code != UNIT_FINDING_DIMENSIONLESS_LITERAL)
             .count();
         assert_eq!(
             dimensional_warnings, expected,

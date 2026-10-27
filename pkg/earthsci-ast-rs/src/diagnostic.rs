@@ -65,7 +65,7 @@ macro_rules! diagnostic_code_registry {
         /// type carries it — [`DiagnosticError`], `StructuralError`
         /// (`crate::validate::StructuralErrorCode::to_string` is defined off these
         /// constants), `ClosedFunctionError` and the `UnitWarning` finding kinds
-        /// (`crate::units::UNIT_FINDING_*` are aliases of three of them). The one
+        /// (`crate::units::UNIT_FINDING_*` are aliases of four of them). The one
         /// deliberate exclusion is the DAE lowering's Rust-local `E_*` names, which
         /// are not a cross-binding vocabulary — Julia excludes its `E_TREEWALK_*`
         /// names from `ERROR_CODES` for the same reason.
@@ -519,7 +519,8 @@ diagnostic_code_registry! {
 
     // ---- unit FINDING kinds (`units.rs`): a second, smaller vocabulary
     // carried on `UnitWarning.code` rather than on a `StructuralError`. The
-    // first two state a defect in the FILE, the third a limit of the ANALYSIS.
+    // first two state a defect in the FILE, the third a limit of the ANALYSIS,
+    // the fourth a warning ahead of the next major version's literal rule.
     // Shared verbatim with Go's `UnitFinding*` and TypeScript's
     // `UnitWarning['code']` union. ----
 
@@ -529,6 +530,10 @@ diagnostic_code_registry! {
     UNPARSEABLE_UNIT = "unparseable_unit";
     /// The checker cannot DETERMINE a dimension — not a defect in the file.
     ANALYSIS = "analysis";
+    /// A WARNING: a check site the current neutral-literal rule passes or
+    /// skips fails once a nonzero bare numeric literal is read as
+    /// dimensionless at scale 1 (esm-spec §4.8.6). Never changes validity.
+    UNITS_DIMENSIONLESS_LITERAL_MISMATCH = "units_dimensionless_literal_mismatch";
 
     // ---- closed-function registry: esm-spec §9.1-§9.2
     // (`registered_functions.rs`, raised as `ClosedFunctionError`). ----
@@ -740,6 +745,7 @@ mod error_code_tests {
             "unevaluable_operator",
             "unit_inconsistency",
             "unit_parse_error",
+            "units_dimensionless_literal_mismatch",
             "unknown_closed_function",
             "unknown_enum",
             "unknown_enum_symbol",

@@ -1,0 +1,282 @@
+{
+  "code": "units_dimensionless_literal_mismatch",
+  "spec": "esm-spec §4.8.6; CONFORMANCE_SPEC §7.1",
+  "contract": "For each file (path relative to the repository root): validate() reports is_valid == true, and the JSON Pointers of its unit warnings whose code is `units_dimensionless_literal_mismatch`, sorted lexicographically by UTF-8 code point, equal the listed array EXACTLY (an empty array means the file must carry none). The list covers the authored fixture and EVERY file under tests/valid, so the five bindings' warning sets over the valid corpus are pinned identical. Message text is binding-local and not pinned.",
+  "files": {
+    "tests/conformance/dimensionless_literal/fixtures/dimensionless_literal.esm": [
+      "/models/Literals/equations/0",
+      "/models/Literals/equations/1",
+      "/models/Literals/equations/16",
+      "/models/Literals/equations/17",
+      "/models/Literals/equations/18",
+      "/models/Literals/equations/19",
+      "/models/Literals/equations/2",
+      "/models/Literals/equations/3",
+      "/models/Literals/equations/4",
+      "/models/Literals/equations/5",
+      "/models/Literals/equations/6",
+      "/models/Literals/initialization_equations/0",
+      "/models/Literals/subsystems/Inner/equations/0",
+      "/reaction_systems/Chem/reactions/0"
+    ],
+    "tests/valid/advection_reaction_loaded_ic_bc.esm": [],
+    "tests/valid/array_broadcast/bare_axis_permuted_operand.esm": [],
+    "tests/valid/array_broadcast/bare_mixed_rank_product.esm": [],
+    "tests/valid/array_broadcast/bare_rank_lift.esm": [],
+    "tests/valid/array_broadcast/broadcast_node_mixed_rank.esm": [],
+    "tests/valid/cadence/arrayed_observed_seeds.esm": [],
+    "tests/valid/cadence/discrete_remesh_stencil.esm": [],
+    "tests/valid/cadence/loader_const_seed.esm": [],
+    "tests/valid/cadence/loader_temporal_seed.esm": [],
+    "tests/valid/cadence/mixed_stencil.esm": [],
+    "tests/valid/cadence/observed_leaf_seeds.esm": [],
+    "tests/valid/cadence/pure_pointwise.esm": [],
+    "tests/valid/cadence/pure_topology.esm": [],
+    "tests/valid/coordinates_registry.esm": [],
+    "tests/valid/coupling_transform_expression.esm": [],
+    "tests/valid/coupling_variable_map_identity_units_match.esm": [],
+    "tests/valid/data_source_relative_url.esm": [],
+    "tests/valid/data_sources_comprehensive.esm": [
+      "/models/SimpleChemistry/equations/1"
+    ],
+    "tests/valid/data_sources_earthscidata_jl.esm": [],
+    "tests/valid/data_sources_ingest_and_select.esm": [
+      "/models/Ingest/equations/3",
+      "/models/Ingest/equations/4"
+    ],
+    "tests/valid/data_sources_only.esm": [],
+    "tests/valid/derivative_trailing_boundary_operands.esm": [],
+    "tests/valid/enums_categorical_lookup.esm": [],
+    "tests/valid/enums_symbol_template_binding.esm": [],
+    "tests/valid/enums_zero_and_negative.esm": [],
+    "tests/valid/events_all_types.esm": [],
+    "tests/valid/events_continuous_affect_neg.esm": [],
+    "tests/valid/events_cross_system.esm": [
+      "/models/MeteorologicalSystem/equations/0",
+      "/models/MeteorologicalSystem/equations/1",
+      "/models/MeteorologicalSystem/equations/2",
+      "/models/MeteorologicalSystem/equations/3"
+    ],
+    "tests/valid/events_discrete_periodic.esm": [
+      "/models/SeasonalEcosystem/equations/0"
+    ],
+    "tests/valid/events_discrete_preset_times.esm": [
+      "/models/ClinicalTrialProtocol/equations/1",
+      "/models/ExperimentalSchedule/equations/2"
+    ],
+    "tests/valid/expr_graphs_variable_deps.esm": [],
+    "tests/valid/expression_templates_arrhenius.esm": [
+      "/reaction_systems/chem/reactions/0",
+      "/reaction_systems/chem/reactions/1",
+      "/reaction_systems/chem/reactions/2"
+    ],
+    "tests/valid/faq/area_eff_edge_faq.esm": [],
+    "tests/valid/faq/categorical_index_set.esm": [],
+    "tests/valid/faq/coordinate_int_ratio_spacing.esm": [],
+    "tests/valid/faq/cross_model_from_faq.esm": [],
+    "tests/valid/faq/cumulative_prefix_reduction.esm": [],
+    "tests/valid/faq/discrete_variable_refresh.esm": [],
+    "tests/valid/faq/edge_enumeration_area_eff.esm": [],
+    "tests/valid/faq/faq_semiring_indexset.esm": [],
+    "tests/valid/faq/fvm_diffusion_sum_product.esm": [],
+    "tests/valid/faq/join_disaggregation_m2m.esm": [],
+    "tests/valid/faq/join_disaggregation_m2m_permuted.esm": [],
+    "tests/valid/faq/join_filter.esm": [],
+    "tests/valid/faq/join_moves_running_exhaust.esm": [],
+    "tests/valid/faq/join_on_data_columns.esm": [],
+    "tests/valid/faq/join_on_self_join.esm": [],
+    "tests/valid/faq/join_on_self_join_syms.esm": [],
+    "tests/valid/faq/max_product_saturation.esm": [],
+    "tests/valid/faq/min_reduction_static_shaped_document.esm": [],
+    "tests/valid/faq/min_sum_tropical.esm": [],
+    "tests/valid/faq/nearest_generator_argmin.esm": [],
+    "tests/valid/faq/nearest_generator_centroid.esm": [],
+    "tests/valid/faq/node_addressing_from_faq.esm": [],
+    "tests/valid/faq/ragged_member_gather.esm": [],
+    "tests/valid/faq/skolem_distinct_rank.esm": [],
+    "tests/valid/fractional_stoichiometry.esm": [],
+    "tests/valid/full_coupled.esm": [
+      "/reaction_systems/AtmosphericChemistry/reactions/0"
+    ],
+    "tests/valid/full_model_specification.esm": [],
+    "tests/valid/geometry/bin_skolem_spatial_join.esm": [],
+    "tests/valid/geometry/conservative_regrid_assembly.esm": [],
+    "tests/valid/geometry/conservative_regrid_overlap_join.esm": [],
+    "tests/valid/geometry/intersect_polygon_clip_area.esm": [],
+    "tests/valid/geometry/intersect_polygon_planar_area.esm": [],
+    "tests/valid/geometry/intersect_polygon_planar_ode.esm": [],
+    "tests/valid/geometry/polygon_intersection_area_padded_ring.esm": [],
+    "tests/valid/geometry/polygon_intersection_area_planar.esm": [],
+    "tests/valid/independent_variable_renamed.esm": [],
+    "tests/valid/initial_conditions/expression_ignition_front_1d.esm": [],
+    "tests/valid/inline_test_reference_mount_name.esm": [],
+    "tests/valid/inline_test_static_check_spellings.esm": [],
+    "tests/valid/integral_operator_pide.esm": [],
+    "tests/valid/lib_calendar_subsystem_inclusion.esm": [
+      "/models/Diurnal/equations/1"
+    ],
+    "tests/valid/lib_solar_subsystem_inclusion.esm": [
+      "/models/Photolysis/subsystems/Solar/equations/8"
+    ],
+    "tests/valid/makearray_empty_region_min_extent.esm": [],
+    "tests/valid/metadata_author_variations.esm": [],
+    "tests/valid/metadata_complete.esm": [
+      "/reaction_systems/ComprehensiveOzoneChemistry/reactions/0",
+      "/reaction_systems/ComprehensiveOzoneChemistry/reactions/2"
+    ],
+    "tests/valid/metadata_date_formats.esm": [],
+    "tests/valid/metadata_discretized_stamps.esm": [],
+    "tests/valid/metadata_inheritance_coupled.esm": [
+      "/reaction_systems/AtmosphericChemistry/reactions/0"
+    ],
+    "tests/valid/metadata_minimal.esm": [],
+    "tests/valid/metadata_reference_types.esm": [],
+    "tests/valid/metadata_tags_license.esm": [
+      "/models/TaggedModel/equations/0",
+      "/models/TaggedModel/equations/1"
+    ],
+    "tests/valid/minimal_chemistry.esm": [
+      "/reaction_systems/SimpleOzone/reactions/0"
+    ],
+    "tests/valid/model_only.esm": [
+      "/models/FluidDynamics/equations/1",
+      "/models/FluidDynamics/equations/3",
+      "/models/PopulationDynamics/equations/2",
+      "/models/PopulationDynamics/equations/3",
+      "/models/WaveEquation/equations/2"
+    ],
+    "tests/valid/mount_chain_inner.esm": [],
+    "tests/valid/mount_chain_outer.esm": [],
+    "tests/valid/mount_chain_via_subsystem.esm": [],
+    "tests/valid/mount_forwarded_axis_column.esm": [],
+    "tests/valid/mount_forwarded_axis_grid_lib.esm": [],
+    "tests/valid/mount_forwarded_axis_nested.esm": [],
+    "tests/valid/mount_forwarded_axis_nested_4.esm": [],
+    "tests/valid/mount_forwarded_axis_toplevel_beside_nested.esm": [],
+    "tests/valid/mount_rename_atm_column.esm": [],
+    "tests/valid/mount_rename_soil_column.esm": [],
+    "tests/valid/mount_rename_two_columns.esm": [],
+    "tests/valid/mount_rename_two_columns_toplevel.esm": [],
+    "tests/valid/nonlinear_isorropia_shape.esm": [
+      "/models/IsorropiaEq/initialization_equations/1"
+    ],
+    "tests/valid/nonlinear_mogi_shape.esm": [],
+    "tests/valid/nonlinear_two_component_static.esm": [
+      "/models/Sites/subsystems/North/equations/1"
+    ],
+    "tests/valid/reaction_system_only.esm": [
+      "/reaction_systems/PureChemistry/reactions/2",
+      "/reaction_systems/PureChemistry/reactions/4",
+      "/reaction_systems/PureChemistry/reactions/6",
+      "/reaction_systems/PureChemistry/reactions/7",
+      "/reaction_systems/PureChemistry/reactions/9"
+    ],
+    "tests/valid/recurrence_causal_self_reference.esm": [],
+    "tests/valid/reservoir_species_constant.esm": [],
+    "tests/valid/scalar_leaves/hyperbolic_trig_leaves.esm": [],
+    "tests/valid/scalar_leaves/inverse_trig_leaves.esm": [],
+    "tests/valid/scoped_refs_coupling.esm": [
+      "/models/AtmosphericChemistry/equations/0",
+      "/models/AtmosphericChemistry/subsystems/Aerosols/equations/0",
+      "/models/AtmosphericChemistry/subsystems/Aerosols/subsystems/SecondaryOrganic/equations/0",
+      "/models/AtmosphericChemistry/subsystems/GasPhase/equations/0",
+      "/models/EmissionSources/subsystems/Biogenic/subsystems/Forest/equations/0",
+      "/models/EmissionSources/subsystems/Transportation/equations/0",
+      "/models/Meteorology/subsystems/Temperature/equations/0"
+    ],
+    "tests/valid/scoped_refs_nested.esm": [],
+    "tests/valid/solver_block.esm": [],
+    "tests/valid/solver_external.esm": [],
+    "tests/valid/solver_external_only.esm": [],
+    "tests/valid/solver_time_span.esm": [],
+    "tests/valid/solver_time_span_only.esm": [],
+    "tests/valid/structural_issues.esm": [],
+    "tests/valid/subsystem_index_set_merge.esm": [],
+    "tests/valid/subsystem_mesh_lib.esm": [],
+    "tests/valid/template_import_faq_axis.esm": [],
+    "tests/valid/template_import_faq_axis_lib.esm": [],
+    "tests/valid/template_import_lib.esm": [],
+    "tests/valid/template_import_minimal.esm": [],
+    "tests/valid/template_import_rename_lib.esm": [],
+    "tests/valid/tests_analyses_comprehensive.esm": [],
+    "tests/valid/toplevel_ref_index_set_merge.esm": [],
+    "tests/valid/toplevel_ref_metaparameter_axis.esm": [],
+    "tests/valid/toplevel_ref_metaparameter_axis_lib.esm": [],
+    "tests/valid/units_array_mount_index_faq_consistent.esm": [],
+    "tests/valid/units_array_mount_leaf.esm": [],
+    "tests/valid/units_array_operators_consistent.esm": [],
+    "tests/valid/units_comparisons_and_connectives.esm": [],
+    "tests/valid/units_const_declared.esm": [
+      "/models/UnitsConstDeclared/equations/4"
+    ],
+    "tests/valid/units_constant_exponent_folding.esm": [],
+    "tests/valid/units_conversions.esm": [
+      "/models/ConcentrationConversions/equations/1",
+      "/models/ConcentrationConversions/equations/2",
+      "/models/ConcentrationConversions/equations/3",
+      "/models/EnergyConversions/equations/0",
+      "/models/EnergyConversions/equations/1",
+      "/models/EnergyConversions/equations/2",
+      "/models/EnergyConversions/equations/3",
+      "/models/EnergyConversions/equations/4",
+      "/models/LengthConversions/equations/0",
+      "/models/LengthConversions/equations/1",
+      "/models/LengthConversions/equations/2",
+      "/models/LengthConversions/equations/3",
+      "/models/LengthConversions/equations/4",
+      "/models/PressureConversions/equations/0",
+      "/models/PressureConversions/equations/1",
+      "/models/PressureConversions/equations/2",
+      "/models/PressureConversions/equations/3",
+      "/models/PressureConversions/equations/4",
+      "/models/TemperatureConversions/equations/0",
+      "/models/TemperatureConversions/equations/1",
+      "/models/VolumeConversions/equations/0",
+      "/models/VolumeConversions/equations/1",
+      "/models/VolumeConversions/equations/2",
+      "/models/VolumeConversions/equations/3"
+    ],
+    "tests/valid/units_dimensional_analysis.esm": [
+      "/models/ElectromagneticFields/equations/2"
+    ],
+    "tests/valid/units_faq_filter_consistent.esm": [],
+    "tests/valid/units_ifelse_undeterminable_branch.esm": [
+      "/models/IfelseUnitRules/equations/2",
+      "/models/IfelseUnitRules/equations/3"
+    ],
+    "tests/valid/units_inventory_registry.esm": [],
+    "tests/valid/units_mount_leaf.esm": [],
+    "tests/valid/units_mount_subsystem_consistent.esm": [],
+    "tests/valid/units_mount_toplevel_consistent.esm": [],
+    "tests/valid/units_moves_registry.esm": [],
+    "tests/valid/units_negated_literal_neutral.esm": [
+      "/models/NegatedLiteralOffsets/equations/0",
+      "/models/NegatedLiteralOffsets/equations/1",
+      "/models/NegatedLiteralOffsets/equations/2"
+    ],
+    "tests/valid/units_propagation.esm": [
+      "/models/ThermodynamicsModel/equations/1"
+    ],
+    "tests/valid/units_registry_grammar.esm": [],
+    "tests/valid/units_scale_conversion.esm": [
+      "/models/UnitsScaleConversion/equations/2"
+    ],
+    "tests/valid/units_scoped_reference_unitless_shadow.esm": [],
+    "tests/valid/units_sum_undeterminable_operands.esm": [
+      "/models/SumUnitRules/equations/0",
+      "/models/SumUnitRules/equations/1",
+      "/models/SumUnitRules/equations/2",
+      "/models/SumUnitRules/equations/3",
+      "/models/SumUnitRules/equations/5"
+    ],
+    "tests/valid/units_symbolic_exponent_undeterminable.esm": [],
+    "tests/valid/units_transcendental_scaled_argument_repair.esm": [],
+    "tests/valid/variable_map_subsystem_endpoints.esm": [],
+    "tests/valid/wildfire_atmosphere_ocean.esm": [
+      "/models/AtmosphericDynamics/equations/0",
+      "/models/OceanDynamics/equations/3",
+      "/models/WildfirePropagation/equations/1",
+      "/models/WildfirePropagation/equations/3"
+    ]
+  }
+}

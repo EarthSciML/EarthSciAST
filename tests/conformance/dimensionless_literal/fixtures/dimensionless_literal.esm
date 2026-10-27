@@ -1,0 +1,611 @@
+{
+  "esm": "1.3.0",
+  "metadata": {
+    "name": "DimensionlessLiteralWarning",
+    "description": "Pins the esm-spec §4.8.6 warning units_dimensionless_literal_mismatch. Model Literals: equations 0-6 are one per pattern class of the bare-literal impact study and each WARNS (under the current rule a bare literal is neutral and the check is skipped or passes; read as dimensionless at scale 1 it is a dimension or scale mismatch). Equations 7-14 are controls that must NOT warn: the literal zero stays neutral (max, ifelse branch, ic, comparison), a unit-bearing const carries its unit, and a dimensionless literal in a dimensionless context agrees. Equations 15-19 pin the site rules: 15 (the derivative of T_state) is quiet, 16 warns through the ic rule, 17 through the undeclared t in seconds, 18 through the no-time-unit-reconciles rule for a derivative with respect to an undeclared t, 19 is an ordinary warning, and initialization_equations/0 warns at its own pointer. Subsystem Inner: equation 0 warns, equation 1 does not. Reaction 0's rate warns (exp(-1370 / T)); reaction 1's does not. The document is VALID: at this stage the warning never changes validity.",
+    "authors": [
+      "Chris Tessum with Claude"
+    ],
+    "created": "2026-10-27T00:00:00Z"
+  },
+  "models": {
+    "Literals": {
+      "variables": {
+        "T": {
+          "type": "parameter",
+          "units": "K",
+          "default": 298.15,
+          "description": "Air temperature"
+        },
+        "x": {
+          "type": "parameter",
+          "units": "m",
+          "default": 2.0,
+          "description": "A length"
+        },
+        "P_pa": {
+          "type": "parameter",
+          "units": "Pa",
+          "default": 101325.0,
+          "description": "Pressure in pascal"
+        },
+        "A": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.001,
+          "description": "Pre-exponential factor"
+        },
+        "phi": {
+          "type": "parameter",
+          "units": "m",
+          "default": 0.5,
+          "description": "Level-set distance"
+        },
+        "H_ice": {
+          "type": "parameter",
+          "units": "m",
+          "default": 100.0,
+          "description": "Ice thickness"
+        },
+        "c": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1.0,
+          "description": "A dimensionless switch"
+        },
+        "f": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.25,
+          "description": "A frequency"
+        },
+        "tau": {
+          "type": "parameter",
+          "units": "s",
+          "default": 3.0,
+          "description": "A time"
+        },
+        "k": {
+          "type": "parameter",
+          "units": "1/s",
+          "default": 0.1,
+          "description": "A decay rate"
+        },
+        "T_offset": {
+          "type": "unknown",
+          "units": "K",
+          "description": "Warns: additive offset T - 273.15"
+        },
+        "one_plus_x": {
+          "type": "unknown",
+          "units": "m",
+          "description": "Warns: 1 + x"
+        },
+        "P_atm": {
+          "type": "unknown",
+          "units": "atm",
+          "description": "Warns: conversion factor P_pa / 101325.0"
+        },
+        "k_arrhenius": {
+          "type": "unknown",
+          "units": "1/s",
+          "description": "Warns: literal inside a transcendental, exp(-1370 / T)"
+        },
+        "H": {
+          "type": "unknown",
+          "units": "m/s",
+          "description": "Warns: literal coefficient carrying a unit, 1.4 * phi"
+        },
+        "dx": {
+          "type": "unknown",
+          "units": "m",
+          "description": "Warns: literal equated to a dimensional quantity, 1 / 64"
+        },
+        "grounded": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Warns: comparison against a nonzero literal, H_ice > 0.01"
+        },
+        "clipped": {
+          "type": "unknown",
+          "units": "m",
+          "description": "Quiet: max(x, 0), zero is neutral"
+        },
+        "gated": {
+          "type": "unknown",
+          "units": "m",
+          "description": "Quiet: ifelse(c > 0, x, 0), zero is neutral"
+        },
+        "q": {
+          "type": "unknown",
+          "units": "kg",
+          "description": "Quiet: ic(q) = 0.0, zero is neutral"
+        },
+        "positive": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Quiet: x > 0 compares against zero"
+        },
+        "T_shift": {
+          "type": "unknown",
+          "units": "K",
+          "description": "Quiet: T - const(273.15, units K), a unit-bearing const"
+        },
+        "phase": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Quiet: 2 * pi * f * tau, a dimensionless literal in a dimensionless product"
+        },
+        "half_sum": {
+          "type": "unknown",
+          "units": "m",
+          "description": "Quiet: 0.5 * x + x, the coefficient is dimensionless and the product is m"
+        },
+        "T_state": {
+          "type": "unknown",
+          "units": "K",
+          "description": "Warns: ic(T_state) = 288.0, ic carries its operand's unit (esm-spec §4.8.3)"
+        },
+        "wave": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Warns: cos(0.26 * t), the undeclared t is in seconds (esm-spec §4.9.1)"
+        },
+        "m_air": {
+          "type": "unknown",
+          "units": "kg/m^3",
+          "description": "Warns: D(m_air) = 0.001 * n_drop, no time unit reconciles kg/m^3 with 1/m^3 (esm-spec §4.8.4)"
+        },
+        "n_drop": {
+          "type": "parameter",
+          "units": "1/m^3",
+          "default": 100000000.0,
+          "description": "A droplet number density"
+        },
+        "p_init": {
+          "type": "unknown",
+          "units": "Pa",
+          "description": "Warns from initialization_equations: p_init = 101325.0 * c, a pure number equated with a pressure"
+        }
+      },
+      "equations": [
+        {
+          "lhs": "T_offset",
+          "rhs": {
+            "op": "-",
+            "args": [
+              "T",
+              273.15
+            ]
+          }
+        },
+        {
+          "lhs": "one_plus_x",
+          "rhs": {
+            "op": "+",
+            "args": [
+              1,
+              "x"
+            ]
+          }
+        },
+        {
+          "lhs": "P_atm",
+          "rhs": {
+            "op": "/",
+            "args": [
+              "P_pa",
+              101325.0
+            ]
+          }
+        },
+        {
+          "lhs": "k_arrhenius",
+          "rhs": {
+            "op": "*",
+            "args": [
+              "A",
+              {
+                "op": "exp",
+                "args": [
+                  {
+                    "op": "/",
+                    "args": [
+                      -1370,
+                      "T"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "H",
+          "rhs": {
+            "op": "*",
+            "args": [
+              1.4,
+              "phi"
+            ]
+          }
+        },
+        {
+          "lhs": "dx",
+          "rhs": {
+            "op": "/",
+            "args": [
+              1,
+              64
+            ]
+          }
+        },
+        {
+          "lhs": "grounded",
+          "rhs": {
+            "op": "ifelse",
+            "args": [
+              {
+                "op": ">",
+                "args": [
+                  "H_ice",
+                  0.01
+                ]
+              },
+              1,
+              0
+            ]
+          }
+        },
+        {
+          "lhs": "clipped",
+          "rhs": {
+            "op": "max",
+            "args": [
+              "x",
+              0
+            ]
+          }
+        },
+        {
+          "lhs": "gated",
+          "rhs": {
+            "op": "ifelse",
+            "args": [
+              {
+                "op": ">",
+                "args": [
+                  "c",
+                  0
+                ]
+              },
+              "x",
+              0
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "q"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "k",
+                  "q"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "q"
+            ]
+          },
+          "rhs": 0.0
+        },
+        {
+          "lhs": "positive",
+          "rhs": {
+            "op": "ifelse",
+            "args": [
+              {
+                "op": ">",
+                "args": [
+                  "x",
+                  0
+                ]
+              },
+              1,
+              0
+            ]
+          }
+        },
+        {
+          "lhs": "T_shift",
+          "rhs": {
+            "op": "-",
+            "args": [
+              "T",
+              {
+                "op": "const",
+                "args": [],
+                "value": 273.15,
+                "units": "K"
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "phase",
+          "rhs": {
+            "op": "*",
+            "args": [
+              2,
+              3.141592653589793,
+              "f",
+              "tau"
+            ]
+          }
+        },
+        {
+          "lhs": "half_sum",
+          "rhs": {
+            "op": "+",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  0.5,
+                  "x"
+                ]
+              },
+              "x"
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "T_state"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  "k",
+                  "T_state"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "ic",
+            "args": [
+              "T_state"
+            ]
+          },
+          "rhs": 288.0
+        },
+        {
+          "lhs": "wave",
+          "rhs": {
+            "op": "cos",
+            "args": [
+              {
+                "op": "*",
+                "args": [
+                  0.26,
+                  "t"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "m_air"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              0.001,
+              "n_drop"
+            ]
+          }
+        },
+        {
+          "lhs": "p_init",
+          "rhs": {
+            "op": "*",
+            "args": [
+              101325.0,
+              "c"
+            ]
+          }
+        }
+      ],
+      "initialization_equations": [
+        {
+          "lhs": "p_init",
+          "rhs": {
+            "op": "*",
+            "args": [
+              101325.0,
+              "c"
+            ]
+          }
+        }
+      ],
+      "subsystems": {
+        "Inner": {
+          "variables": {
+            "x_in": {
+              "type": "parameter",
+              "units": "m",
+              "default": 1.0,
+              "description": "A length in an inline subsystem"
+            },
+            "y_in": {
+              "type": "unknown",
+              "units": "m",
+              "description": "Warns: 1 + x_in, inside an inline subsystem"
+            },
+            "z_in": {
+              "type": "unknown",
+              "units": "m",
+              "description": "Quiet: max(x_in, 0), inside an inline subsystem"
+            }
+          },
+          "equations": [
+            {
+              "lhs": "y_in",
+              "rhs": {
+                "op": "+",
+                "args": [
+                  1,
+                  "x_in"
+                ]
+              }
+            },
+            {
+              "lhs": "z_in",
+              "rhs": {
+                "op": "max",
+                "args": [
+                  "x_in",
+                  0
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "reaction_systems": {
+    "Chem": {
+      "species": {
+        "O3": {
+          "units": "mol/mol",
+          "default": 4e-08,
+          "description": "Ozone"
+        },
+        "NO": {
+          "units": "mol/mol",
+          "default": 1e-10,
+          "description": "Nitric oxide"
+        },
+        "NO2": {
+          "units": "mol/mol",
+          "default": 1e-09,
+          "description": "Nitrogen dioxide"
+        }
+      },
+      "parameters": {
+        "T": {
+          "units": "K",
+          "default": 298.15,
+          "description": "Temperature"
+        },
+        "M": {
+          "units": "1",
+          "default": 2.46e+19,
+          "description": "Air number density factor, folded to dimensionless"
+        },
+        "j": {
+          "units": "1/s",
+          "default": 0.01,
+          "description": "Photolysis frequency"
+        }
+      },
+      "reactions": [
+        {
+          "id": "R1",
+          "substrates": [
+            {
+              "species": "O3",
+              "stoichiometry": 1
+            },
+            {
+              "species": "NO",
+              "stoichiometry": 1
+            }
+          ],
+          "products": [
+            {
+              "species": "NO2",
+              "stoichiometry": 1
+            }
+          ],
+          "rate": {
+            "op": "*",
+            "args": [
+              1.8e-12,
+              {
+                "op": "exp",
+                "args": [
+                  {
+                    "op": "/",
+                    "args": [
+                      -1370,
+                      "T"
+                    ]
+                  }
+                ]
+              },
+              "M"
+            ]
+          }
+        },
+        {
+          "id": "R2",
+          "substrates": [
+            {
+              "species": "NO2",
+              "stoichiometry": 1
+            }
+          ],
+          "products": [
+            {
+              "species": "NO",
+              "stoichiometry": 1
+            },
+            {
+              "species": "O3",
+              "stoichiometry": 1
+            }
+          ],
+          "rate": {
+            "op": "*",
+            "args": [
+              0.5,
+              "j"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

@@ -309,6 +309,7 @@ export
     # cannot. `validate()` is built on these.
     expression_unit_findings, equation_unit_findings, model_unit_findings,
     UnitFinding, UNIT_DIMENSION_MISMATCH, UNIT_PARSE_ERROR,
+    UNIT_FINDING_DIMENSIONLESS_LITERAL,
     # Editing operations (Section 4). EsmFile merging extends `Base.merge`
     # (always in scope for consumers), so `merge` is not re-exported.
     EditError,

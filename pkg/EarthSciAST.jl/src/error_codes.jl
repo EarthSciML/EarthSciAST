@@ -162,6 +162,12 @@ const ERROR_CODES = (
     DIMENSIONAL_MISMATCH = "dimensional_mismatch",
     UNPARSEABLE_UNIT = "unparseable_unit",
     ANALYSIS = "analysis",
+    #    A check site the current neutral-literal rule passes or skips fails
+    #    once a bare numeric literal is read as dimensionless (esm-spec
+    #    §4.8.6). A WARNING at this stage, never promoted to a structural
+    #    error. `UNIT_FINDING_DIMENSIONLESS_LITERAL` in units.jl is its
+    #    public alias.
+    UNITS_DIMENSIONLESS_LITERAL_MISMATCH = "units_dimensionless_literal_mismatch",
 
     # ── Document load / subsystem-reference resolution (resolve.jl, parse.jl;
     #    esm-spec §4.7). These are THROWN at load, and `validate` renders the

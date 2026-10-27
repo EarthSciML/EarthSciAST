@@ -66,6 +66,10 @@ tests/conformance/
 │   ├── aliased.esm                 #   input, authored with the deprecated spelling
 │   ├── canonical.esm               #   expected output, and a no-warning input
 │   └── manifest.json
+├── dimensionless_literal/          # the bare-literal-is-dimensionless WARNING stage (esm-spec §4.8.6)
+│   ├── fixtures/dimensionless_literal.esm  #   one equation per pattern class, plus controls; valid
+│   ├── golden/expected_warnings.json       #   exact warning pointers, incl. ten tests/valid files
+│   └── manifest.json
 └── round_trip/
     └── manifest.json               # fixtures, normalizations, transforms, divergences
 ```
@@ -116,6 +120,7 @@ Classification of every stage in `scripts/test-conformance.sh`:
 | `inline-test <compiler> producer (<binding>)` | **reference-comparing** twice over: each binding's `actual` against the document's authored `expected` (an oracle outside every binding), by the runner's own §6.6.3 predicate with the binding's `passed` required to agree, and its `actual` against the Julia-`interpreter` golden. For Rust and Python the golden leg is additionally **cross-binding-agreeing**; the authored expectation is what keeps a shared wrong answer visible. A refusal is a **named exclusion** in the report, never a silent skip (CONFORMANCE_SPEC §5.45.3) |
 | `recurrence` (`recurrence/`, an inline-test tier driven by `scripts/run-inline-tests-conformance.py`) | **reference-comparing** — every assertion is a value pinned at zero tolerance, several against an INDEPENDENT oracle (`07`'s ascending fold in Python) rather than against another binding. Bit-identity is available here (CONFORMANCE_SPEC §5.19.1), so cross-binding agreement is a consequence of each binding matching the reference, not the test |
 | `deprecated_op_alias` (`deprecated_op_alias/manifest.json`, driven by each binding's own suite) | **reference-comparing** — `canonical.esm` is a committed golden outside the bindings, and the alias input must emit byte-identically to it. The warning-count assertion is a per-binding classification (CONFORMANCE_SPEC §7), not a wire format. |
+| `dimensionless_literal` (`dimensionless_literal/manifest.json`, driven by each binding's own suite) | **reference-comparing** — the authored fixture's warning pointers follow from its construction (one equation per pattern class, each with a known verdict), and the ten `tests/valid` pins match the 2026-10-27 impact study, which ran a separately patched checker. All five bindings compare against the same golden, so a binding cannot pass by agreeing with itself. |
 | **round-trip** (`round_trip/manifest.json`, below) | **reference-comparing** since the original fixture `F` became the oracle (was self-comparing) |
 
 ## Round-trip contract

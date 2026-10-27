@@ -13,6 +13,7 @@
  */
 
 import { ERROR_CODES } from '../errors.js'
+import { pointerToken } from '../json-pointer.js'
 import type { EsmFile } from '../types.js'
 import type { StructuralError } from './types.js'
 
@@ -34,11 +35,6 @@ function entries(value: unknown): [string, unknown][] {
 function stripElementSuffix(name: string): [string, boolean] {
   const m = ELEMENT_SUFFIX.exec(name)
   return m ? [m[1], true] : [name, false]
-}
-
-/** Escape one JSON Pointer reference token (RFC 6901). */
-function pointerToken(key: string): string {
-  return key.replace(/~/g, '~0').replace(/\//g, '~1')
 }
 
 /**

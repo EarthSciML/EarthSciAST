@@ -1608,6 +1608,7 @@ reading that as a gap.
 | `species` | type | `Species` | – | `Species` | `Species` | `Species` |
 | `substitute_in_model` | function | – | `substituteInModel` | `substitute_in_model` | `substitute_in_model` | `SubstituteInModel` |
 | `substitute_in_reaction_system` | function | – | `substituteInReactionSystem` | `substitute_in_reaction_system` | `substitute_in_reaction_system` | `SubstituteInReactionSystem` |
+| `unit_finding_dimensionless_literal` | constant | `UNIT_FINDING_DIMENSIONLESS_LITERAL` | – | `UNIT_FINDING_DIMENSIONLESS_LITERAL` | `UNIT_FINDING_DIMENSIONLESS_LITERAL` | `UnitFindingDimensionlessLiteral` |
 | `vertex_kind` | type | – | `VertexKind` | `VertexKind` | `VertexKind` | `VertexKind` |
 
 #### Exported by three of the five

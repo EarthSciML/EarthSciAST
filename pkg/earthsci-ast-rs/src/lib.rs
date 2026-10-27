@@ -405,10 +405,11 @@ pub use simulate_array::range::{
 };
 pub use units::{
     Dimension, EquationDimensionVerdict, ExactScale, Rational, ScaleFactor, UNIT_FINDING_ANALYSIS,
-    UNIT_FINDING_DIMENSIONAL_MISMATCH, UNIT_FINDING_UNPARSEABLE, Unit, UnitError, UnitFinding,
-    UnitParseFailure, UnitSeverity, build_unit_env, check_dimensional_consistency,
-    check_equation_dimensions, check_expression_dimensions, convert_units,
-    equation_dimension_verdict, model_unit_env, parse_unit, validate_equation_dimensions,
+    UNIT_FINDING_DIMENSIONAL_MISMATCH, UNIT_FINDING_DIMENSIONLESS_LITERAL,
+    UNIT_FINDING_UNPARSEABLE, Unit, UnitError, UnitFinding, UnitParseFailure, UnitSeverity,
+    build_unit_env, check_dimensional_consistency, check_equation_dimensions,
+    check_expression_dimensions, convert_units, equation_dimension_verdict, model_unit_env,
+    parse_unit, validate_equation_dimensions,
 };
 
 #[cfg(feature = "parallel")]
