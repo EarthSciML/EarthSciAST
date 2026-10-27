@@ -254,3 +254,25 @@ func TestReactionLoweringFormCorpus(t *testing.T) {
 		})
 	}
 }
+
+// TestStoichLiteralInt64Range pins esm-libraries-spec §4.6.2 rule 5's bound:
+// integral and representable in int64 is an integer literal, the same cutoff
+// as the other bindings.
+func TestStoichLiteralInt64Range(t *testing.T) {
+	cases := []struct {
+		in   float64
+		want any
+	}{
+		{-2, int64(-2)},
+		{1.5, 1.5},
+		{1e17, int64(100000000000000000)},
+		{-(1 << 63), int64(math.MinInt64)},
+		{1 << 63, float64(1 << 63)},
+		{1e300, 1e300},
+	}
+	for _, c := range cases {
+		if got := stoichLiteral(c.in); got != c.want {
+			t.Errorf("stoichLiteral(%g) = %#v, want %#v", c.in, got, c.want)
+		}
+	}
+}

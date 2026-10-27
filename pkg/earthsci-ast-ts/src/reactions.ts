@@ -13,6 +13,7 @@ import type {
   Equation,
   Expression,
 } from './types.js'
+import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
 
 /**
  * Derive ODEs from a reaction system using mass action kinetics
@@ -35,10 +36,12 @@ export function deriveOdes(system: ReactionSystem): Model {
   const variables: { [key: string]: ModelVariable } = {}
   const equations: Equation[] = []
 
-  // Convert species to UNKNOWNS. Each gets a `D(s,t)` equation below, which is
-  // what makes it an ODE state under the derived classification — the 0.x
-  // `type: 'state'` declaration said the same thing twice, and 1.0.0 keeps only
-  // the equation (esm-spec 6.3.1).
+  // Convert species to UNKNOWNS. A species some reaction moves gets a `D(s,t)`
+  // equation below, which is what makes it an ODE state under the derived
+  // classification — the 0.x `type: 'state'` declaration said the same thing
+  // twice, and 1.0.0 keeps only the equation (esm-spec 6.3.1). A species no
+  // reaction moves (inert, or a catalyst everywhere) gets no equation, so it is
+  // an ALGEBRAIC unknown (esm-libraries-spec §4.6.1).
   //
   // EXCEPT a reservoir species (`constant: true`, esm-spec 7.4), which is held
   // fixed and gets no ODE, so it lowers to a PARAMETER carrying its declared
@@ -114,12 +117,38 @@ export function lowerReactionsToEquations(system: ReactionSystem): Equation[] {
   for (const name of speciesNames) terms[name] = []
 
   for (const reaction of system.reactions ?? []) {
+    // Each species this reaction names, in first-mention order, with its product
+    // and substrate coefficients each summed in listed order (`P` and `S`).
+    const sums = new Map<string, { produced: number; consumed: number }>()
+    const sides = [
+      [reaction.substrates ?? [], false],
+      [reaction.products ?? [], true],
+    ] as const
+    for (const [entries, isProduct] of sides) {
+      for (const entry of entries) {
+        // A substrate or product the system does not declare is refused, not
+        // dropped: dropping it lowers a different reaction (a product that is
+        // never produced) with no diagnostic (esm-spec §7.2,
+        // `undefined_species`). The other bindings refuse it too.
+        if (!Object.hasOwn(terms, entry.species)) {
+          throw new EsmDiagnosticError(
+            ERROR_CODES.UNDEFINED_SPECIES,
+            `reaction '${reaction.id}' names species '${entry.species}', which the reaction system does not declare`,
+            { species: entry.species, reaction_id: reaction.id },
+          )
+        }
+        let sum = sums.get(entry.species)
+        if (sum === undefined) {
+          sum = { produced: 0, consumed: 0 }
+          sums.set(entry.species, sum)
+        }
+        if (isProduct) sum.produced += entry.stoichiometry
+        else sum.consumed += entry.stoichiometry
+      }
+    }
+
     const rateLaw = massActionRate(reaction)
-    for (const name of speciesNames) {
-      let produced = 0
-      let consumed = 0
-      for (const p of reaction.products ?? []) if (p.species === name) produced += p.stoichiometry
-      for (const s of reaction.substrates ?? []) if (s.species === name) consumed += s.stoichiometry
+    for (const [name, { produced, consumed }] of sums) {
       const net = produced - consumed
       if (net === 0) continue
       terms[name].push(net === 1 ? rateLaw : { op: '*', args: [net, rateLaw] })

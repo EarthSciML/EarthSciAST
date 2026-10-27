@@ -431,56 +431,61 @@ function lower_reactions_to_equations(reactions::Vector{Reaction},
     species_names = [sp.name for sp in species]
     species_idx = Dict{String, Int}(name => i for (i, name) in enumerate(species_names))
 
-    n_species = length(species_names)
-    n_rxns = length(reactions)
-    # Net stoichiometry is `P - S` (esm-libraries-spec §4.6.2): `P` sums the
-    # species' product coefficients in the reaction and `S` its substrate
-    # coefficients, each in listed order, and the difference is taken once.
-    # Accumulating one signed running sum instead rounds differently for a
-    # species listed more than once with fractional coefficients.
-    P = zeros(Float64, n_species, n_rxns)
-    S = zeros(Float64, n_species, n_rxns)
+    # Each species' terms, filled reaction by reaction so they come out in
+    # reaction order (esm-libraries-spec §4.6.2 rule 4).
+    terms = [ASTExpr[] for _ in species_names]
 
-    for (j, rxn) in enumerate(reactions)
-        for (sp, signed_stoich) in each_stoich_term(rxn)
-            # A substrate or product the system does not declare is refused, not
-            # dropped: dropping it lowers a different reaction (a product that is
-            # never produced) with no diagnostic (esm-spec §7.2,
-            # `undefined_species`). The other bindings refuse it too.
-            haskey(species_idx, sp) || throw(ParseError(
-                "[$(ERROR_CODES.UNDEFINED_SPECIES)] reaction '$(rxn.id)' names species " *
-                "'$sp', which the reaction system does not declare";
-                code=ERROR_CODES.UNDEFINED_SPECIES,
-                details=Dict{String,Any}("species" => sp, "reaction_id" => rxn.id)))
-            if signed_stoich < 0
-                S[species_idx[sp], j] -= signed_stoich
-            else
-                P[species_idx[sp], j] += signed_stoich
+    for rxn in reactions
+        # Net stoichiometry is `P - S` (esm-libraries-spec §4.6.2): `P` sums the
+        # species' product coefficients in the reaction and `S` its substrate
+        # coefficients, each in listed order, and the difference is taken once.
+        # Accumulating one signed running sum instead rounds differently for a
+        # species listed more than once with fractional coefficients. Only the
+        # species the reaction names are visited, in first-mention order.
+        produced = Dict{Int,Float64}()
+        consumed = Dict{Int,Float64}()
+        touched = Int[]
+        for (side, entries) in ((consumed, raw_substrates(rxn)), (produced, raw_products(rxn)))
+            entries === nothing && continue
+            for entry in entries
+                sp = entry.species
+                # A substrate or product the system does not declare is refused,
+                # not dropped: dropping it lowers a different reaction (a product
+                # that is never produced) with no diagnostic (esm-spec §7.2,
+                # `undefined_species`). The other bindings refuse it too.
+                i = get(species_idx, sp, 0)
+                i == 0 && throw(ParseError(
+                    "[$(ERROR_CODES.UNDEFINED_SPECIES)] reaction '$(rxn.id)' names species " *
+                    "'$sp', which the reaction system does not declare";
+                    code=ERROR_CODES.UNDEFINED_SPECIES,
+                    details=Dict{String,Any}("species" => sp, "reaction_id" => rxn.id)))
+                haskey(produced, i) || haskey(consumed, i) || push!(touched, i)
+                side[i] = get(side, i, 0.0) + entry.stoichiometry
             end
         end
-    end
 
-    for (i, name) in enumerate(species_names)
-        # Reservoir species (§7.4): held fixed, so it gets no ODE. Its
-        # mass-action contribution to the OTHER species' rates is untouched —
-        # `mass_action_rate` reads it from `species` either way.
-        species[i].constant === true && continue
-        terms = ASTExpr[]
-        for j in 1:n_rxns
-            stoich = P[i, j] - S[i, j]
+        for i in touched
+            # Reservoir species (§7.4): held fixed, so it gets no ODE. Its
+            # mass-action contribution to the OTHER species' rates is untouched —
+            # `mass_action_rate` reads it from the reaction either way.
+            species[i].constant === true && continue
+            stoich = get(produced, i, 0.0) - get(consumed, i, 0.0)
             stoich == 0 && continue
             # The canonical term (esm-libraries-spec §4.6.2): the bare rate law
             # for a net stoichiometry of exactly 1, and otherwise the two-operand
             # product `stoich * rate` with the coefficient FIRST and spelled as
             # an integer literal when it is integral. A loss of 1 is
             # `-1 * rate`, not a unary minus.
-            rate_expr = mass_action_rate(reactions[j], species)
+            rate_expr = mass_action_rate(rxn, species)
             if stoich == 1
-                push!(terms, rate_expr)
+                push!(terms[i], rate_expr)
             else
-                push!(terms, OpExpr("*", ASTExpr[_stoich_literal(stoich), rate_expr]))
+                push!(terms[i], OpExpr("*", ASTExpr[_stoich_literal(stoich), rate_expr]))
             end
         end
+    end
+
+    for (i, name) in enumerate(species_names)
         # A species with NO net contribution from any reaction gets NO equation,
         # rather than a vacuous `D(X, t) = 0`. The empty sum is zero, so emitting
         # it is defensible arithmetic — but esm-spec §6.3.1 classifies by
@@ -493,9 +498,9 @@ function lower_reactions_to_equations(reactions::Vector{Reaction},
         # Rust `reactions.rs`, Go `flatten.go`, TypeScript `reactions.ts`); Julia
         # emitting the zero was a 4-1 outlier, and the divergence was recorded in
         # `flatten_conformance_test.jl`'s `_FC_DIVERGENCES` until this changed.
-        isempty(terms) && continue
+        isempty(terms[i]) && continue
         lhs = OpExpr("D", ASTExpr[VarExpr(name)], wrt="t")
-        rhs = length(terms) == 1 ? terms[1] : OpExpr("+", terms)
+        rhs = length(terms[i]) == 1 ? terms[i][1] : OpExpr("+", terms[i])
         push!(equations, Equation(lhs, rhs))
     end
 
@@ -503,10 +508,12 @@ function lower_reactions_to_equations(reactions::Vector{Reaction},
 end
 
 # A stoichiometric coefficient or exponent as the literal the lowered tree
-# carries: an integer literal when the value is integral (CONFORMANCE_SPEC
-# §5.5.3.1 rule 3), a float literal otherwise.
+# carries: an integer literal when the value is integral and representable in
+# Int64 (CONFORMANCE_SPEC §5.5.3.1 rule 3, esm-libraries-spec §4.6.2 rule 5), a
+# float literal otherwise. `2.0^63` is integral but one past `typemax(Int64)`,
+# so the upper bound is strict.
 _stoich_literal(x::Real)::ASTExpr =
-    (isinteger(x) && typemin(Int64) <= x <= typemax(Int64)) ? IntExpr(Int64(x)) : NumExpr(Float64(x))
+    (isinteger(x) && -2.0^63 <= x < 2.0^63) ? IntExpr(Int64(x)) : NumExpr(Float64(x))
 
 # ========================================
 # Spatial-axis detection (structural, esm-spec §4.2 / §4.9.1(ii) / §11.2)

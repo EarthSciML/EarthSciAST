@@ -997,9 +997,10 @@ and substrate entries `(S₁, n₁), …, (S_m, n_m)` in listed order, and a spe
 4. **Right-hand side.** `X`'s terms, in reaction declaration order. One term is the
    right-hand side itself; two or more are one n-ary sum `{"op": "+", "args": [t₁, …, t_r]}`,
    never nested two-operand sums. No terms means no equation (§4.6.1).
-5. **Literals.** A coefficient `c` or an exponent `nᵢ` whose value is integral is an INTEGER
-   literal (CONFORMANCE_SPEC §5.5.3.1 rule 3): `-1`, `-2`, `{"op": "^", "args": ["A", 2]}`. A
-   non-integral one is a float literal (`1.5`, `-0.75`).
+5. **Literals.** A coefficient `c` or an exponent `nᵢ` whose value is integral and representable
+   in `Int64` (`-2^63 ≤ x < 2^63`) is an INTEGER literal (CONFORMANCE_SPEC §5.5.3.1 rule 3): `-1`,
+   `-2`, `{"op": "^", "args": ["A", 2]}`. Any other value, non-integral (`1.5`, `-0.75`) or
+   integral but outside that range (`1e300`), is a float literal.
 6. **No simplification.** Nothing else is rewritten. `k` is copied as authored (a literal `1`
    rate gives `{"op": "*", "args": [1, "A"]}`, not `A`), and no factor, term or sum is
    reordered, merged, folded or dropped.

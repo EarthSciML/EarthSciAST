@@ -90,10 +90,12 @@ def lower_reactions_to_equations(
         # The full mass-action rate law is always ``k · ∏ Sᵢ^nᵢ`` -- the
         # runner is responsible for the substrate product. No heuristic, and no
         # simplification: a literal ``1`` or ``0`` rate stays in the tree.
-        rate_expr = _mass_action_rate(reaction.rate_constant, reaction.reactants)
+        rate_expr = _mass_action_rate(reaction.rate_constant, reaction.substrate_list())
 
-        # Apply net stoichiometry (product_coeff - reactant_coeff) to species rates.
-        for species_name in species_names:
+        # Apply net stoichiometry (product_coeff - reactant_coeff) to the
+        # species this reaction names. The maps hold each side's coefficients
+        # summed in listed order, so this is `P - S` of §4.6.2 rule 2.
+        for species_name in dict.fromkeys([*reaction.reactants, *reaction.products]):
             net_stoich_coeff = reaction.products.get(species_name, 0) - reaction.reactants.get(
                 species_name, 0
             )
@@ -298,24 +300,31 @@ def product_matrix(system: ReactionSystem) -> np.ndarray:
 # Helper functions for the canonical lowering (esm-libraries-spec §4.6.2)
 
 
+_INT64_BOUND = 2**63
+
+
 def _stoich_literal(value: int | float) -> int | float:
     """A stoichiometric coefficient or exponent as the literal the tree carries:
-    an ``int`` when the value is integral (CONFORMANCE_SPEC §5.5.3.1 rule 3),
-    the ``float`` otherwise."""
-    if isinstance(value, float) and value.is_integer():
+    an ``int`` when the value is integral and representable in Int64
+    (CONFORMANCE_SPEC §5.5.3.1 rule 3, esm-libraries-spec §4.6.2 rule 5), a
+    ``float`` otherwise -- the same cutoff as the other bindings."""
+    if isinstance(value, float) and not value.is_integer():
+        return value
+    if -_INT64_BOUND <= value < _INT64_BOUND:
         return int(value)
-    return value
+    return float(value)
 
 
-def _mass_action_rate(rate: Expr, reactants: dict[str, int | float]) -> Expr:
+def _mass_action_rate(rate: Expr, reactants: list[tuple[str, int | float]]) -> Expr:
     """The rate law ``k · ∏ Sᵢ^nᵢ``: the coefficient alone for a source
     reaction, otherwise one n-ary ``*`` with the coefficient FIRST and one
-    factor per substrate in listed order -- the bare species for a coefficient
-    of 1, ``Sᵢ ^ nᵢ`` otherwise."""
+    factor per substrate ENTRY in listed order (a species listed twice gives
+    two factors) -- the bare species for a coefficient of 1, ``Sᵢ ^ nᵢ``
+    otherwise."""
     if not reactants:
         return rate
     factors: list[Expr] = [rate]
-    for reactant, coeff in reactants.items():
+    for reactant, coeff in reactants:
         if coeff == 1:
             factors.append(reactant)
         else:

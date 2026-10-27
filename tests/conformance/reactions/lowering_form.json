@@ -446,6 +446,131 @@
       }
     },
     {
+      "name": "repeated_species_entries",
+      "description": "A species listed more than once on one side of a reaction. The rate law has one factor per ENTRY, so `A + A -> B` gives `k1 * A * A`, not `k1 * A^2`, and A's coefficient is -2 (§4.6.2 rules 1 and 2); `C -> B + B` gives B the coefficient +2. R2 lists C twice as a substrate (0.1 then 0.2) and once as a product (0.3): S = 0.1 + 0.2 is summed in listed order and the difference taken once, so C's coefficient is 0.3 - 0.30000000000000004, a tiny nonzero float, and the term is kept (rule 6: nothing is folded). A binding that keys a reaction's entries by species keeps one entry per species and fails every equation here.",
+      "system": "Chem",
+      "lifted": false,
+      "derive_odes": [
+        {
+          "lhs": {"op": "D", "args": ["A"], "wrt": "t"},
+          "rhs": {"op": "*", "args": [-2, {"op": "*", "args": ["k1", "A", "A"]}]}
+        },
+        {
+          "lhs": {"op": "D", "args": ["B"], "wrt": "t"},
+          "rhs": {"op": "+", "args": [{"op": "*", "args": ["k1", "A", "A"]}, {"op": "*", "args": [2, {"op": "*", "args": [1.5, "C"]}]}]}
+        },
+        {
+          "lhs": {"op": "D", "args": ["C"], "wrt": "t"},
+          "rhs": {"op": "+", "args": [{"op": "*", "args": [-5.551115123125783e-17, {"op": "*", "args": ["k2", {"op": "^", "args": ["C", 0.1]}, {"op": "^", "args": ["C", 0.2]}]}]}, {"op": "*", "args": [-1, {"op": "*", "args": [1.5, "C"]}]}]}
+        }
+      ],
+      "flatten": [
+        {
+          "species": "Chem.A",
+          "contribution": {"op": "*", "args": [-2, {"op": "*", "args": ["Chem.k1", "Chem.A", "Chem.A"]}]}
+        },
+        {
+          "species": "Chem.B",
+          "contribution": {"op": "+", "args": [{"op": "*", "args": ["Chem.k1", "Chem.A", "Chem.A"]}, {"op": "*", "args": [2, {"op": "*", "args": [1.5, "Chem.C"]}]}]}
+        },
+        {
+          "species": "Chem.C",
+          "contribution": {"op": "+", "args": [{"op": "*", "args": [-5.551115123125783e-17, {"op": "*", "args": ["Chem.k2", {"op": "^", "args": ["Chem.C", 0.1]}, {"op": "^", "args": ["Chem.C", 0.2]}]}]}, {"op": "*", "args": [-1, {"op": "*", "args": [1.5, "Chem.C"]}]}]}
+        }
+      ],
+      "document": {
+        "esm": "1.3.0",
+        "metadata": {
+          "name": "reaction_lowering_repeated_entries"
+        },
+        "reaction_systems": {
+          "Chem": {
+            "species": {
+              "A": {
+                "default": 2.5
+              },
+              "B": {
+                "default": 0.5
+              },
+              "C": {
+                "default": 1.5
+              }
+            },
+            "parameters": {
+              "k1": {
+                "default": 0.25
+              },
+              "k2": {
+                "default": 0.75
+              }
+            },
+            "reactions": [
+              {
+                "id": "R1",
+                "substrates": [
+                  {
+                    "species": "A",
+                    "stoichiometry": 1
+                  },
+                  {
+                    "species": "A",
+                    "stoichiometry": 1
+                  }
+                ],
+                "products": [
+                  {
+                    "species": "B",
+                    "stoichiometry": 1
+                  }
+                ],
+                "rate": "k1"
+              },
+              {
+                "id": "R2",
+                "substrates": [
+                  {
+                    "species": "C",
+                    "stoichiometry": 0.1
+                  },
+                  {
+                    "species": "C",
+                    "stoichiometry": 0.2
+                  }
+                ],
+                "products": [
+                  {
+                    "species": "C",
+                    "stoichiometry": 0.3
+                  }
+                ],
+                "rate": "k2"
+              },
+              {
+                "id": "R3",
+                "substrates": [
+                  {
+                    "species": "C",
+                    "stoichiometry": 1
+                  }
+                ],
+                "products": [
+                  {
+                    "species": "B",
+                    "stoichiometry": 1
+                  },
+                  {
+                    "species": "B",
+                    "stoichiometry": 1
+                  }
+                ],
+                "rate": 1.5
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
       "name": "lifted_pointwise",
       "description": "The network lifted pointwise onto 4 cells by an operator_compose with a deposition model (EarthSciIntegrator's pointwise_chemistry fixture plus R3 `2 NO2 -> NO2 + 1.5 NO`). The lift indexes every species reference per cell and changes nothing else, so the reaction system's contribution has exactly the scalar form. Only that contribution is compared: the equation's left-hand side and `faq` wrapper carry the lift's own range spelling, which this corpus does not pin.",
       "system": "Chem",

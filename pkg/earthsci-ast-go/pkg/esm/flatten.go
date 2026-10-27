@@ -1487,11 +1487,14 @@ func lowerReactionsToEquations(rs *ReactionSystem, speciesOrder []string) ([]Equ
 	return out, nil
 }
 
-// stoichLiteral renders a stoichiometric coefficient as the numeric literal the
-// expression tree carries: an integer-valued coefficient as an int (so it
-// renders and round-trips as `2`, not `2.0`), a fractional one as a float.
+// stoichLiteral renders a stoichiometric coefficient or exponent as the numeric
+// literal the expression tree carries: an integral value representable in int64
+// as an int (so it renders and round-trips as `2`, not `2.0`), anything else as
+// a float (CONFORMANCE_SPEC §5.5.3.1 rule 3, esm-libraries-spec §4.6.2 rule 5).
+// Every integral float64 in [-2^63, 2^63) converts to int64 exactly, so the
+// bound is int64's range, not intExactCutoff, matching the other bindings.
 func stoichLiteral(v float64) any {
-	if v == math.Trunc(v) && math.Abs(v) < intExactCutoff {
+	if v == math.Trunc(v) && v >= -(1<<63) && v < 1<<63 {
 		return int64(v)
 	}
 	return v

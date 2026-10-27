@@ -85,6 +85,7 @@ five bindings. The corpus' `how_to_drive` field is the driver contract.
 |---|---|
 | `photostationary_loss_and_production` | unit stoichiometry: loss `-1 * rate`, production the bare rate law; a parameter rate and an expression rate; several reactions per species |
 | `stoichiometry_and_rate_forms` | non-unit stoichiometry (`A ^ 2`, coefficient `-2`), a species on both sides (net `+1`), a catalyst (net 0, no term), fractional coefficients and exponents, source and sink reactions, a reservoir factor, an inert species (no equation), integer, float and literal-`1` rates |
+| `repeated_species_entries` | a species listed twice on one side (`A + A` gives `k1 * A * A` and coefficient `-2`; `B + B` as products gives `+2`), and a substrate listed twice against a product whose `P - S` is a tiny nonzero float, kept as a term |
 | `lifted_pointwise` | the network lifted pointwise onto a grid by `operator_compose`; only the reaction system's contribution is compared, because the lift's `faq` range spelling is not pinned here |
 
 Numbers compare by value AND kind: an integer literal in the corpus must be an

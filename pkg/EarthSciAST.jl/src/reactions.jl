@@ -223,11 +223,8 @@ function mass_action_rate(reaction::Reaction, species::Vector{Species})::ASTExpr
         if entry.stoichiometry == 1
             push!(mass_action_terms, species_expr)
         else
-            exponent_expr = isinteger(entry.stoichiometry) ?
-                IntExpr(Int64(entry.stoichiometry)) :
-                NumExpr(entry.stoichiometry)
             push!(mass_action_terms, OpExpr("^",
-                ASTExpr[species_expr, exponent_expr]))
+                ASTExpr[species_expr, _stoich_literal(entry.stoichiometry)]))
         end
     end
 

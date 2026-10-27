@@ -76,6 +76,26 @@ describe('Reaction system ODE derivation', () => {
       })
     })
 
+    it('refuses a product the system does not declare (undefined_species)', () => {
+      const system: ReactionSystem = {
+        species: { A: { default: 1.0 } },
+        parameters: { k1: { default: 0.1 } },
+        reactions: [
+          {
+            id: 'R1',
+            substrates: [{ species: 'A', stoichiometry: 1 }],
+            products: [{ species: 'Z', stoichiometry: 1 }],
+            rate: 'k1',
+          },
+        ],
+      }
+      // Dropping Z would lower a different reaction with no diagnostic; the
+      // other four bindings refuse it, and so must this one.
+      expect(() => deriveOdes(system)).toThrowError(
+        expect.objectContaining({ code: 'undefined_species' }),
+      )
+    })
+
     it('should handle source reaction (null substrates)', () => {
       const system: ReactionSystem = {
         species: {
