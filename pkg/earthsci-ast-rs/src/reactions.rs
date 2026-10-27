@@ -474,14 +474,9 @@ mod tests {
     fn test_stoich_literal_int64_bounds() {
         // 2^63 is integral but one past `i64::MAX`: a float, not a saturated
         // integer (esm-libraries-spec §4.6.2 rule 5).
-        assert!(matches!(
-            stoich_literal(9.223_372_036_854_775_808e18),
-            Expr::Number(_)
-        ));
-        assert!(matches!(
-            stoich_literal(-9.223_372_036_854_775_808e18),
-            Expr::Integer(i64::MIN)
-        ));
+        let two_63 = 2.0_f64.powi(63);
+        assert!(matches!(stoich_literal(two_63), Expr::Number(_)));
+        assert!(matches!(stoich_literal(-two_63), Expr::Integer(i64::MIN)));
         assert!(matches!(
             stoich_literal(1e17),
             Expr::Integer(100_000_000_000_000_000)
