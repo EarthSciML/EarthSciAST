@@ -95,18 +95,18 @@
     }
   },
   "counts": {
-    "symbols": 993,
+    "symbols": 994,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
-      "julia": 341,
+      "julia": 342,
       "typescript": 245,
-      "python": 271,
-      "rust": 382,
-      "go": 460
+      "python": 272,
+      "rust": 383,
+      "go": 461
     },
     "by_tier": {
       "extension": 691,
-      "stable": 302
+      "stable": 303
     }
   },
   "planned": [
@@ -8287,6 +8287,17 @@
         "go": "UnitFindingDimensionalMismatch",
         "python": "UNIT_FINDING_DIMENSIONAL_MISMATCH",
         "rust": "UNIT_FINDING_DIMENSIONAL_MISMATCH"
+      }
+    },
+    {
+      "name": "unit_finding_dimensionless_literal",
+      "kind": "constant",
+      "tier": "stable",
+      "bindings": {
+        "go": "UnitFindingDimensionlessLiteral",
+        "julia": "UNIT_FINDING_DIMENSIONLESS_LITERAL",
+        "python": "UNIT_FINDING_DIMENSIONLESS_LITERAL",
+        "rust": "UNIT_FINDING_DIMENSIONLESS_LITERAL"
       }
     },
     {
