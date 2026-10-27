@@ -28,8 +28,8 @@ def floatOf (j : Json) : Except String Float :=
   match j with
   | .num n => .ok n.toFloat
   | .str "NaN" => .ok ((0.0 : Float) / 0.0)
-  | .str "Infinity" => .ok ((1.0 : Float) / 0.0)
-  | .str "-Infinity" => .ok ((-1.0 : Float) / 0.0)
+  | .str "Infinity" | .str "Inf" => .ok ((1.0 : Float) / 0.0)
+  | .str "-Infinity" | .str "-Inf" => .ok ((-1.0 : Float) / 0.0)
   | _ => .error s!"expected a number, got {j.compress}"
 
 def vecOf (j : Json) : Except String (List Float) := do
@@ -42,7 +42,9 @@ def matOf (j : Json) : Except String (List (List Float)) := do
 
 /-- How §9.2's argument contract sees a fixture value: a scalar, a rank-1 or
 rank-2 array, or anything else. (The fixtures pass values, so a non-`const`
-argument — a variable reference — cannot occur here; a wrong-rank one can.) -/
+argument — a variable reference — cannot occur here; a wrong-rank one can, and
+is `interp_table_not_const` / `interp_axis_not_const`, ruling Q-108.) The
+array arguments go through the model's load-time check exactly as written. -/
 def argOf (j : Json) : Arg Float :=
   match floatOf j with
   | .ok v => .const0 v
@@ -68,20 +70,15 @@ def runOne (fn : String) (inputs : Array Json) : Except String (Except Code Json
       let xs ← validateSearchsorted (argOf xs)
       return Json.mkObj [("value", (searchsorted x xs : Nat))])
   | "interp.linear", [t, ax, x] => do
-    let t ← vecOf t
-    let ax ← vecOf ax
     let x ← floatOf x
     return (do
-      let (t, ax) ← validateLinear (Arg.const1 t) (Arg.const1 ax)
+      let (t, ax) ← validateLinear (argOf t) (argOf ax)
       return floatJson (linear t ax x))
   | "interp.bilinear", [T, ax, ay, x, y] => do
-    let T ← matOf T
-    let ax ← vecOf ax
-    let ay ← vecOf ay
     let x ← floatOf x
     let y ← floatOf y
     return (do
-      let (T, ax, ay) ← validateBilinear (Arg.const2 T) (Arg.const1 ax) (Arg.const1 ay)
+      let (T, ax, ay) ← validateBilinear (argOf T) (argOf ax) (argOf ay)
       return floatJson (bilinear T ax ay x y))
   | _, _ => throw s!"unsupported function/arity: {fn} with {inputs.size} inputs"
 

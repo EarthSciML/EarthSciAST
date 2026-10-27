@@ -12,6 +12,11 @@ The mode is chosen from the fixture's `function` prefix (`datetime.year` ->
 `datetime`). A fixture whose prefix has no mode in `MODES` is skipped and
 counted, not failed.
 
+With no fixtures named, it also runs `esm-lean tables` on the §9.5.5 table-check
+ledger `tests/conformance/function_tables/load_errors/cases.json` (tables built
+in memory, NaN / Inf / -Inf included, ruling Q-109) and checks each case's code
+(`expected_error_code`, null for a table that passes) exactly.
+
 Prints one summary line; exits 1 on any mismatch or adapter failure.
 
     python3 scripts/run-closed-functions-lean.py [--no-build] [-v] [fixture.json ...]
@@ -28,6 +33,7 @@ ROOT = Path(__file__).resolve().parent.parent
 FORMAL = ROOT / "formal"
 FIXTURES = ROOT / "tests" / "closed_functions"
 BINARY = FORMAL / ".lake" / "build" / "bin" / "esm-lean"
+TABLE_LEDGER = ROOT / "tests" / "conformance" / "function_tables" / "load_errors" / "cases.json"
 
 # function-name prefix -> esm-lean mode
 MODES = {
@@ -85,6 +91,28 @@ def check_fixture(path, verbose):
     return passed, failed, 0, msgs
 
 
+def check_table_ledger(path):
+    """`esm-lean tables` on a load_errors ledger. Returns (passed, failed, messages)."""
+    ledger = json.loads(path.read_text(encoding="utf-8"))
+    cases = ledger.get("cases", [])
+    rel = path.relative_to(ROOT) if path.is_relative_to(ROOT) else path
+    proc = subprocess.run([str(BINARY), "tables", str(path)], capture_output=True, text=True)
+    if proc.returncode != 0:
+        return 0, len(cases), [f"FAIL {rel}: esm-lean exited {proc.returncode}: {proc.stderr.strip()}"]
+    results = {r["name"]: r for r in json.loads(proc.stdout)["results"]}
+    passed = failed = 0
+    msgs = []
+    for c in cases:
+        r = results.get(c["name"])
+        got = r.get("error") if r is not None else "no result"
+        if r is not None and got == c.get("expected_error_code"):
+            passed += 1
+        else:
+            failed += 1
+            msgs.append(f"FAIL {rel} {c['name']}: expected {c.get('expected_error_code')!r}, got {got!r}")
+    return passed, failed, msgs
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
     ap.add_argument("fixtures", nargs="*", type=Path)
@@ -105,7 +133,13 @@ def main():
         for m in msgs:
             if m.startswith("FAIL") or args.verbose:
                 print(m)
-    print(f"closed-functions (lean): {tp} passed, {tf} failed, {ts} skipped in {len(paths)} fixtures")
+    nf = len(paths)
+    if not args.fixtures and TABLE_LEDGER.exists():
+        passed, failed, msgs = check_table_ledger(TABLE_LEDGER)
+        tp, tf, nf = tp + passed, tf + failed, nf + 1
+        for m in msgs:
+            print(m)
+    print(f"closed-functions (lean): {tp} passed, {tf} failed, {ts} skipped in {nf} fixtures")
     sys.exit(1 if tf else 0)
 
 

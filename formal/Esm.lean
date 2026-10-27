@@ -8,6 +8,7 @@ import Esm.Closed.Interp.Bilinear64
 import Esm.Closed.Tables
 import Esm.Closed.Tables.Enums
 import Esm.Closed.Tables.Nearest64
+import Esm.Closed.Tables.Load
 import Esm.Units.Identities
 import Esm.Units.GrammarLaws
 import Esm.Units.Exec

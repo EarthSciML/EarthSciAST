@@ -29,7 +29,11 @@ Rulings modelled here (formal/QUESTIONS.md): Q-4 (`interp_nan_in_axis` before
 `interp_non_monotonic_axis`), Q-5 (axes finite, tables MAY hold NaN), Q-7
 (`searchsorted_nan` before `searchsorted_non_monotonic`; `xs` non-decreasing),
 Q-105 (an `xs` that is not a rank-1 `const` array is `interp_axis_not_const`,
-checked first).
+checked first), Q-108 (an empty `xs` is valid and every query returns 1; a
+`const` table or axis of the wrong rank for `interp.linear` /
+`interp.bilinear` is `interp_table_not_const` / `interp_axis_not_const`).
+Q-106 (the checks run at load on every `fn` node) is modelled in
+`Esm/Closed/Tables/Load.lean`.
 -/
 
 namespace Esm.Closed
@@ -213,29 +217,28 @@ def validateSearchsorted : Arg α → Except Code (List α)
     else .ok xs
   | _ => .error Codes.interpAxisNotConst
 
-/-- `interp.linear`'s load-time check (§9.2). The order of checks where the
-spec gives none (it pins only Q-4's NaN-before-monotonic): not-const (table,
-then axis), rank, axis length, shape relation, NaN, monotonicity. A table or
-axis `const` of the wrong rank has no code of its own in §9.2; the shape
-relation fails, so the model reports `interp_axis_length_mismatch`. -/
+/-- `interp.linear`'s load-time check (§9.2). The table must be a rank-1
+`const` array (`interp_table_not_const` otherwise: a non-`const` argument or a
+`const` of any other rank, Q-108), then the axis likewise
+(`interp_axis_not_const`). The order of the remaining checks, where the spec
+gives none (it pins only Q-4's NaN-before-monotonic): axis length, shape
+relation, NaN, monotonicity. -/
 def validateLinear : Arg α → Arg α → Except Code (List α × List α)
-  | .other, _ => .error Codes.interpTableNotConst
-  | _, .other => .error Codes.interpAxisNotConst
   | .const1 t, .const1 ax =>
     if ax.length < 2 then .error Codes.interpTooShort
     else if t.length ≠ ax.length then .error Codes.interpLengthMismatch
     else if anyNaN ax then .error Codes.interpNaNInAxis
     else if !adjAll lt ax then .error Codes.interpNonMonotonic
     else .ok (t, ax)
-  | _, _ => .error Codes.interpLengthMismatch
+  | .const1 _, _ => .error Codes.interpAxisNotConst
+  | _, _ => .error Codes.interpTableNotConst
 
-/-- `interp.bilinear`'s load-time check (§9.2), same order as
-`validateLinear`, each stage over both axes before the next (so a NaN in either
-axis beats a non-monotonic other axis, Q-4). -/
+/-- `interp.bilinear`'s load-time check (§9.2): a rank-2 `const` table
+(`interp_table_not_const` otherwise, Q-108), then rank-1 `const` axes
+(`interp_axis_not_const` otherwise), then the same order as `validateLinear`,
+each stage over both axes before the next (so a NaN in either axis beats a
+non-monotonic other axis, Q-4). -/
 def validateBilinear : Arg α → Arg α → Arg α → Except Code (List (List α) × List α × List α)
-  | .other, _, _ => .error Codes.interpTableNotConst
-  | _, .other, _ => .error Codes.interpAxisNotConst
-  | _, _, .other => .error Codes.interpAxisNotConst
   | .const2 T, .const1 ax, .const1 ay =>
     if ax.length < 2 || ay.length < 2 then .error Codes.interpTooShort
     else if T.length ≠ ax.length || T.any (fun row => row.length ≠ ay.length) then
@@ -243,7 +246,8 @@ def validateBilinear : Arg α → Arg α → Arg α → Except Code (List (List 
     else if anyNaN ax || anyNaN ay then .error Codes.interpNaNInAxis
     else if !(adjAll lt ax && adjAll lt ay) then .error Codes.interpNonMonotonic
     else .ok (T, ax, ay)
-  | _, _, _ => .error Codes.interpLengthMismatch
+  | .const2 _, _, _ => .error Codes.interpAxisNotConst
+  | _, _, _ => .error Codes.interpTableNotConst
 
 end Validation
 
@@ -1020,14 +1024,36 @@ theorem validateLinear_ok_iff (t ax : Arg Num) :
     simp only [validateLinear, h3, h4, h2, c1, ne_eq, not_true_eq_false, Bool.not_true,
       Bool.false_eq_true, ↓reduceIte]
 
-/-- §9.2: a non-`const` table is `interp_table_not_const`; a `const` table with
-a non-`const` axis is `interp_axis_not_const`. -/
-theorem validateLinear_not_const (t ax : Arg Num) :
-    validateLinear .other ax = .error "interp_table_not_const" ∧
-      (t ≠ .other → validateLinear t .other = .error "interp_axis_not_const") := by
-  refine ⟨rfl, ?_⟩
+/-- The statement of the retired property P-interp-linear-not-const: a
+non-`const` table is `interp_table_not_const`, and ANY other table with a
+non-`const` axis is `interp_axis_not_const`. -/
+def LinearNotConstOld : Prop :=
+  ∀ (t ax : Arg Num), validateLinear .other ax = .error "interp_table_not_const" ∧
+    (t ≠ .other → validateLinear t .other = .error "interp_axis_not_const")
+
+/-- Refuted under Q-108: a scalar `const` table is the wrong rank, so it is
+`interp_table_not_const` (checked first), whatever the axis. -/
+theorem validateLinear_not_const_refuted : ¬ LinearNotConstOld := by
   intro h
-  cases t <;> first | exact absurd rfl h | rfl
+  have := (h (.const0 .nan) .other).2 (fun e => by cases e)
+  simp [validateLinear, Codes.interpTableNotConst] at this
+
+/-- §9.2 + Q-108 for `interp.linear`: `interp_table_not_const` exactly when the
+table is not a rank-1 `const` array (checked first), and
+`interp_axis_not_const` exactly when the table is one and the axis is not. -/
+theorem validateLinear_rank (t ax : Arg Num) :
+    (validateLinear t ax = .error "interp_table_not_const" ↔ ∀ t', t ≠ .const1 t') ∧
+      (validateLinear t ax = .error "interp_axis_not_const" ↔
+        (∃ t', t = .const1 t') ∧ ∀ a', ax ≠ .const1 a') := by
+  cases t <;> cases ax <;>
+    simp only [validateLinear, Codes.interpTableNotConst, Codes.interpAxisNotConst,
+      ne_eq, reduceCtorEq, not_false_eq_true, implies_true, forall_const, true_iff,
+      exists_false, false_and, iff_true, and_true, exists_eq', true_and] <;>
+    first
+    | (split_ifs <;> simp [Codes.interpTooShort, Codes.interpLengthMismatch,
+        Codes.interpNaNInAxis, Codes.interpNonMonotonic])
+    | simp
+    | decide
 
 /-- §9.2 + Q-4: on rank-1 `const` arguments every rejection names a violated
 condition: `interp_axis_too_short` (axis shorter than 2),
@@ -1149,6 +1175,31 @@ theorem validateBilinear_nan_precedence (T : List (List Num)) (ax ay : List Num)
     simpa [h3] using h4
   simp only [validateBilinear, c1, c2, hn', Bool.false_eq_true, ↓reduceIte]
   rfl
+
+/-- §9.2 + Q-108 for `interp.bilinear`: `interp_table_not_const` exactly when
+the table is not a rank-2 `const` array (checked first), and
+`interp_axis_not_const` exactly when it is one and some axis is not a rank-1
+`const` array. -/
+theorem validateBilinear_rank (T ax ay : Arg Num) :
+    (validateBilinear T ax ay = .error "interp_table_not_const" ↔ ∀ T', T ≠ .const2 T') ∧
+      (validateBilinear T ax ay = .error "interp_axis_not_const" ↔
+        (∃ T', T = .const2 T') ∧ ¬ ((∃ a', ax = .const1 a') ∧ ∃ b', ay = .const1 b')) := by
+  cases T <;> cases ax <;> cases ay <;>
+    simp only [validateBilinear, Codes.interpTableNotConst, Codes.interpAxisNotConst,
+      ne_eq, reduceCtorEq, not_false_eq_true, implies_true, forall_const, true_iff,
+      exists_false, false_and, and_false, iff_true, and_true, exists_eq', true_and,
+      not_true_eq_false, iff_false, not_and, not_exists] <;>
+    first
+    | (split_ifs <;> simp [Codes.interpTooShort, Codes.interpLengthMismatch,
+        Codes.interpNaNInAxis, Codes.interpNonMonotonic])
+    | simp
+    | decide
+
+/-- §9.2 + Q-108: an empty `xs` passes every check, and every query against it,
+NaN included, returns `N + 1 = 1`. -/
+theorem searchsorted_empty (x : Num) :
+    validateSearchsorted (Arg.const1 ([] : List Num)) = .ok [] ∧ searchsorted x [] = 1 := by
+  simp [validateSearchsorted, anyNaN, adjAll, searchsorted]
 
 end ValidationProofs
 

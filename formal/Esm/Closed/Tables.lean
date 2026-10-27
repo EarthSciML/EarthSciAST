@@ -30,6 +30,10 @@ Rulings modelled (formal/QUESTIONS.md):
   `index(data, searchsorted(x, midpoints(axis)))`; the spec's current
   `index(data, searchsorted(x, axis))` is refuted (`spec_nearest_lowering_refuted`).
 
+* Q-107: a `table_lookup` is checked unknown table, then the ten checks of the
+  table it names, then its `args`, axis keys and output (`prepLookup`).
+* Q-106, Q-109 (checks at load on every table and every `interp.*` node; a
+  non-finite table value): `Esm/Closed/Tables/Load.lean`.
 * Q-105: an axis with fewer than 2 values is `table_axis_too_short`, and the
   order of the §9.5.5 table checks is the order of `validateTable` below, which
   the spec now pins ("Order of the table checks"); `validateTable_first_*`
@@ -269,19 +273,21 @@ def slice (T : FTable) (o : ℕ) : Nested :=
 def keysMatch (keys names : List String) : Bool :=
   keys.all (· ∈ names) && names.all (· ∈ keys)
 
-/-- Everything about a `table_lookup` node that is decided at load: Q-11 args,
-the table reference, the table's own checks, the axis keys, the output. -/
+/-- Everything about a `table_lookup` node that is decided at load, in the
+order §9.5.5 pins (Q-107): the table reference, the ten checks of the table it
+names, then the lookup's own fields — `args` (Q-11), the axis keys, the
+output. -/
 def prepLookup {α : Type} (tables : List (String × FTable)) (tid : String) (keys : List String)
     (out : Option OutSel) (args : List α) : Except Code (FTable × Nested) :=
-  if !args.isEmpty then .error Codes.lookupArgsNonempty
-  else match tables.lookup tid with
-    | none => .error Codes.lookupUnknownTable
-    | some T => do
-      validateTable T
-      if !keysMatch keys (T.axes.map (·.name)) then .error Codes.lookupAxisNameMismatch
-      else
-        let o ← resolveOutput T out
-        return (T, slice T o)
+  match tables.lookup tid with
+  | none => .error Codes.lookupUnknownTable
+  | some T => do
+    validateTable T
+    if !args.isEmpty then .error Codes.lookupArgsNonempty
+    else if !keysMatch keys (T.axes.map (·.name)) then .error Codes.lookupAxisNameMismatch
+    else
+      let o ← resolveOutput T out
+      return (T, slice T o)
 
 /-- Real part of a validated (NaN-free) value. -/
 def Num.re : Num → ℝ
@@ -835,32 +841,31 @@ theorem prepLookup_ok {tables : List (String × FTable)} {tid : String} {keys : 
       keysMatch keys (T.axes.map (·.name)) = true ∧
       ∃ o, resolveOutput T out = .ok o ∧ s = slice T o := by
   unfold prepLookup at h
-  cases h1 : args.isEmpty with
-  | false => rw [h1] at h; cases h
-  | true =>
-    rw [h1] at h
-    simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte] at h
-    cases hT : tables.lookup tid with
-      | none => rw [hT] at h; cases h
-      | some T' =>
-        rw [hT] at h
-        dsimp only at h
-        cases hv : validateTable T' with
-        | error c => rw [hv] at h; cases h
-        | ok u =>
-          rw [hv] at h
-          simp only [bind, Except.bind] at h
-          cases h2 : keysMatch keys (T'.axes.map (·.name)) with
-          | false => simp [h2] at h
-          | true =>
-            simp only [h2, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at h
-            cases ho : resolveOutput T' out with
-            | error c => rw [ho] at h; cases h
-            | ok o =>
-              rw [ho] at h
-              simp only [pure, Except.pure, Except.ok.injEq, Prod.mk.injEq] at h
-              obtain ⟨rfl, rfl⟩ := h
-              exact ⟨List.isEmpty_iff.mp h1, rfl, by cases u; exact hv, h2, o, ho, rfl⟩
+  cases hT : tables.lookup tid with
+  | none => rw [hT] at h; cases h
+  | some T' =>
+    rw [hT] at h
+    dsimp only at h
+    cases hv : validateTable T' with
+    | error c => rw [hv] at h; cases h
+    | ok u =>
+      rw [hv] at h
+      simp only [bind, Except.bind] at h
+      cases h1 : args.isEmpty with
+      | false => simp [h1] at h
+      | true =>
+        simp only [h1, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at h
+        cases h2 : keysMatch keys (T'.axes.map (·.name)) with
+        | false => simp [h2] at h
+        | true =>
+          simp only [h2, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at h
+          cases ho : resolveOutput T' out with
+          | error c => rw [ho] at h; cases h
+          | ok o =>
+            rw [ho] at h
+            simp only [pure, Except.pure, Except.ok.injEq, Prod.mk.injEq] at h
+            obtain ⟨rfl, rfl⟩ := h
+            exact ⟨List.isEmpty_iff.mp h1, rfl, by cases u; exact hv, h2, o, ho, rfl⟩
 
 theorem lookup_isSome_of_mem {β : Type} {axes : List (String × β)} {k : String}
     (h : k ∈ axes.map Prod.fst) : ∃ e, axes.lookup k = some e := by
@@ -1692,14 +1697,54 @@ theorem validateTable_first_data_nan (T : FTable) :
         ¬ Rule.nesting T ∧ Rule.dataNaN T := by
   rw [validateTable_ladder]; split_ifs <;> simp_all
 
-/-- Q-11: a `table_lookup` with non-empty `args` is `table_lookup_args_nonempty`. -/
-theorem lookup_args_nonempty (tables : List (String × FTable)) (env : String → Num)
-    (tid : String) (axes : List (String × Expr)) (out : Option OutSel) (args : List Expr)
-    (h : args ≠ []) :
-    eval tables env (.lookup tid axes out args) = .error "table_lookup_args_nonempty" := by
-  have : args.isEmpty = false := by simpa using h
-  rw [eval]
-  simp [prepLookup, this, Codes.lookupArgsNonempty, bind, Except.bind]
+/-- The statement of the retired property P-tables-lookup-args-nonempty: a
+`table_lookup` with non-empty `args` is `table_lookup_args_nonempty`, whatever
+the table it names. -/
+def LookupArgsFirstOld : Prop :=
+  ∀ (tables : List (String × FTable)) (env : String → Num) (tid : String)
+    (axes : List (String × Expr)) (out : Option OutSel) (args : List Expr), args ≠ [] →
+    eval tables env (.lookup tid axes out args) = .error "table_lookup_args_nonempty"
+
+/-- Refuted under Q-107: the table reference is checked first, so a lookup with
+non-empty `args` naming an undeclared table is `table_lookup_unknown_table`. -/
+theorem lookup_args_first_refuted : ¬ LookupArgsFirstOld := by
+  intro h
+  have := h [] (fun _ => .nan) "T" [] none [.lit .nan] (by simp)
+  rw [eval] at this
+  simp [prepLookup, Codes.lookupUnknownTable, bind, Except.bind] at this
+
+/-- §9.5.5 "Order of the lookup checks" (Q-107): a `table_lookup` is
+`table_lookup_unknown_table` if it names no table; otherwise the first failing
+check of the table it names; otherwise `table_lookup_args_nonempty` if it has
+`args`; otherwise (keys matching) the output check. Whatever the other fields
+hold. (The axis-key step is `lookup_axis_mismatch`.) -/
+theorem lookup_check_order (tables : List (String × FTable)) (env : String → Num)
+    (tid : String) (axes : List (String × Expr)) (out : Option OutSel) (args : List Expr) :
+    (tables.lookup tid = none →
+      eval tables env (.lookup tid axes out args) = .error "table_lookup_unknown_table") ∧
+    (∀ T c, tables.lookup tid = some T → validateTable T = .error c →
+      eval tables env (.lookup tid axes out args) = .error c) ∧
+    (∀ T, tables.lookup tid = some T → validateTable T = .ok () → args ≠ [] →
+      eval tables env (.lookup tid axes out args) = .error "table_lookup_args_nonempty") ∧
+    (∀ T c, tables.lookup tid = some T → validateTable T = .ok () →
+      keysMatch (axes.map Prod.fst) (T.axes.map (·.name)) = true →
+      resolveOutput T out = .error c →
+      eval tables env (.lookup tid axes out []) = .error c) := by
+  refine ⟨fun h => ?_, fun T c hT hv => ?_, fun T hT hv ha => ?_, fun T c hT hv hk ho => ?_⟩
+  · rw [eval]; simp [prepLookup, h, Codes.lookupUnknownTable, bind, Except.bind]
+  · rw [eval]; simp [prepLookup, hT, hv, bind, Except.bind]
+  · have : args.isEmpty = false := by simpa using ha
+    rw [eval]; simp [prepLookup, hT, hv, this, Codes.lookupArgsNonempty, bind, Except.bind]
+  · rw [eval]; simp [prepLookup, hT, hv, hk, ho, bind, Except.bind]
+
+/-- §9.2 + Q-108: `interp.searchsorted` against the empty `const` array `[]`
+returns 1 for every scalar query, NaN included. -/
+theorem eval_searchsorted_empty (tables : List (String × FTable)) (env : String → Num)
+    (xe : Expr) (x : Num) (hx : eval tables env xe = .ok (.num x)) :
+    eval tables env (.fn "interp.searchsorted" [xe, .const (.node [])]) = .ok (.num (.fin 1)) := by
+  rw [eval, evalFn]
+  simp [argOf, argOfNested, Nested.toVec, validateSearchsorted, anyNaN, adjAll, hx, Val.asNum,
+    searchsorted, bind, Except.bind, pure, Except.pure]
 
 /-- §9.5.2: a reference to an undeclared table is `table_lookup_unknown_table`. -/
 theorem lookup_unknown_table (tables : List (String × FTable)) (env : String → Num)

@@ -242,8 +242,11 @@
       ],
       "statement": "A non-const table is interp_table_not_const; a const table with a non-const axis is interp_axis_not_const.",
       "lean_statement": "∀ (t ax : Esm.Closed.Arg Esm.Closed.Num), Esm.Closed.validateLinear Esm.Closed.Arg.other ax = Except.error \"interp_table_not_const\" ∧ (t ≠ Esm.Closed.Arg.other → Esm.Closed.validateLinear t Esm.Closed.Arg.other = Except.error \"interp_axis_not_const\")",
-      "status": "proven",
-      "theorem": "Esm.Closed.validateLinear_not_const"
+      "status": "refuted",
+      "theorem": "Esm.Closed.validateLinear_not_const_refuted",
+      "reproducer": "tests/closed_functions/interp/linear/expected.json",
+      "retired": "Q-108",
+      "note": "Retired by ruling Q-108 (2026-10-27): a const table of the wrong rank (a scalar, say) is interp_table_not_const, checked before the axis. Refuted at a scalar table with a non-const axis (fixture error scenario table_scalar in tests/closed_functions/interp/linear/expected.json). Superseded by P-interp-linear-rank."
     },
     {
       "id": "P-interp-linear-code-sound",
@@ -519,6 +522,80 @@
       "lean_statement": "∀ (a : Esm.Closed.Arg Esm.Closed.Num), Esm.Closed.validateSearchsorted a = Except.error \"searchsorted_non_monotonic\" ↔ ∃ (r : List ℝ), a = Esm.Closed.Arg.const1 (List.map Esm.Closed.Num.fin r) ∧ ¬List.Pairwise (fun (x1 x2 : ℝ) => x1 ≤ x2) r",
       "status": "proven",
       "theorem": "Esm.Closed.validateSearchsorted_non_monotonic_iff"
+    },
+    {
+      "id": "P-interp-linear-rank",
+      "clauses": [
+        "spec.9.2.interp-const-finite-shape",
+        "spec.9.2.interp-reject-at-load"
+      ],
+      "statement": "Q-108: interp.linear is interp_table_not_const exactly when the table is not a rank-1 const array (checked first), and interp_axis_not_const exactly when the table is one and the axis is not (a non-const argument or a const of the wrong rank).",
+      "lean_statement": "∀ (t ax : Esm.Closed.Arg Esm.Closed.Num), (Esm.Closed.validateLinear t ax = Except.error \"interp_table_not_const\" ↔ ∀ (t' : List Esm.Closed.Num), t ≠ Esm.Closed.Arg.const1 t') ∧ (Esm.Closed.validateLinear t ax = Except.error \"interp_axis_not_const\" ↔ (∃ (t' : List Esm.Closed.Num), t = Esm.Closed.Arg.const1 t') ∧ ∀ (a' : List Esm.Closed.Num), ax ≠ Esm.Closed.Arg.const1 a')",
+      "status": "proven",
+      "theorem": "Esm.Closed.validateLinear_rank",
+      "supersedes": "P-interp-linear-not-const, which reported any non-const axis as interp_axis_not_const whatever the table; Q-108 checks the table rank first."
+    },
+    {
+      "id": "P-interp-bilinear-rank",
+      "clauses": [
+        "spec.9.2.interp-const-finite-shape",
+        "spec.9.2.interp-reject-at-load"
+      ],
+      "statement": "Q-108: interp.bilinear is interp_table_not_const exactly when the table is not a rank-2 const array (checked first), and interp_axis_not_const exactly when it is one and some axis is not a rank-1 const array.",
+      "lean_statement": "∀ (T ax ay : Esm.Closed.Arg Esm.Closed.Num), (Esm.Closed.validateBilinear T ax ay = Except.error \"interp_table_not_const\" ↔ ∀ (T' : List (List Esm.Closed.Num)), T ≠ Esm.Closed.Arg.const2 T') ∧ (Esm.Closed.validateBilinear T ax ay = Except.error \"interp_axis_not_const\" ↔ (∃ (T' : List (List Esm.Closed.Num)), T = Esm.Closed.Arg.const2 T') ∧ ¬((∃ (a' : List Esm.Closed.Num), ax = Esm.Closed.Arg.const1 a') ∧ ∃ (b' : List Esm.Closed.Num), ay = Esm.Closed.Arg.const1 b'))",
+      "status": "proven",
+      "theorem": "Esm.Closed.validateBilinear_rank"
+    },
+    {
+      "id": "P-interp-searchsorted-empty-xs",
+      "clauses": [
+        "spec.9.2.searchsorted-empty-xs"
+      ],
+      "statement": "Q-108: xs = [] passes the load check, and every query against it, NaN included, returns 1.",
+      "lean_statement": "∀ (x : Esm.Closed.Num), Esm.Closed.validateSearchsorted (Esm.Closed.Arg.const1 ([] : List Esm.Closed.Num)) = Except.ok [] ∧ Esm.Closed.searchsorted x [] = (1 : ℕ)",
+      "status": "proven",
+      "theorem": "Esm.Closed.searchsorted_empty"
+    },
+    {
+      "id": "P-interp-searchsorted-empty-xs-eval",
+      "clauses": [
+        "spec.9.2.searchsorted-empty-xs"
+      ],
+      "statement": "Q-108: an interp.searchsorted node whose xs is the const array [] evaluates to 1 for every scalar query, NaN included.",
+      "lean_statement": "∀ (tables : List (String × Esm.Closed.Tables.FTable)) (env : String → Esm.Closed.Num) (xe : Esm.Closed.Tables.Expr) (x : Esm.Closed.Num), Esm.Closed.Tables.eval tables env xe = Except.ok (Esm.Closed.Tables.Val.num x) → Esm.Closed.Tables.eval tables env (Esm.Closed.Tables.Expr.fn \"interp.searchsorted\" [xe, Esm.Closed.Tables.Expr.const (Esm.Closed.Tables.Nested.node [])]) = Except.ok (Esm.Closed.Tables.Val.num (Esm.Closed.Num.fin 1))",
+      "status": "proven",
+      "theorem": "Esm.Closed.Tables.eval_searchsorted_empty"
+    },
+    {
+      "id": "P-interp-checks-at-load",
+      "clauses": [
+        "spec.9.2.interp-checks-at-load",
+        "spec.9.2.interp-reject-at-load"
+      ],
+      "statement": "Q-106: an interp.searchsorted / interp.linear / interp.bilinear node anywhere in an expression of the document whose arguments fail the §9.2 check makes the document fail to load, whether or not it is evaluated.",
+      "lean_statement": "∀ (d : Esm.Closed.Tables.Doc) (e : Esm.Closed.Tables.Expr), e ∈ d.exprs → (∀ (x xs : Esm.Closed.Tables.Expr) (c : Esm.Closed.Code), Esm.Closed.Tables.Expr.fn \"interp.searchsorted\" [x, xs] ∈ Esm.Closed.Tables.nodes e → Esm.Closed.validateSearchsorted (Esm.Closed.Tables.argOf xs) = Except.error c → ∃ (c' : Esm.Closed.Code), Esm.Closed.Tables.loadCheck d = Except.error c') ∧ (∀ (t ax x : Esm.Closed.Tables.Expr) (c : Esm.Closed.Code), Esm.Closed.Tables.Expr.fn \"interp.linear\" [t, ax, x] ∈ Esm.Closed.Tables.nodes e → Esm.Closed.validateLinear (Esm.Closed.Tables.argOf t) (Esm.Closed.Tables.argOf ax) = Except.error c → ∃ (c' : Esm.Closed.Code), Esm.Closed.Tables.loadCheck d = Except.error c') ∧ ∀ (T0 ax ay x y : Esm.Closed.Tables.Expr) (c : Esm.Closed.Code), Esm.Closed.Tables.Expr.fn \"interp.bilinear\" [T0, ax, ay, x, y] ∈ Esm.Closed.Tables.nodes e → Esm.Closed.validateBilinear (Esm.Closed.Tables.argOf T0) (Esm.Closed.Tables.argOf ax) (Esm.Closed.Tables.argOf ay) = Except.error c → ∃ (c' : Esm.Closed.Code), Esm.Closed.Tables.loadCheck d = Except.error c'",
+      "status": "proven",
+      "theorem": "Esm.Closed.Tables.interp_checks_at_load"
+    },
+    {
+      "id": "P-interp-checks-nodes-cover",
+      "clauses": [
+        "spec.9.2.interp-checks-at-load"
+      ],
+      "statement": "The nodes the load check visits are every node of the tree: the root, and closed under taking children (fn / index / op arguments, table_lookup axes and arguments).",
+      "lean_statement": "∀ (root : Esm.Closed.Tables.Expr), root ∈ Esm.Closed.Tables.nodes root ∧ ∀ n ∈ Esm.Closed.Tables.nodes root, ∀ c ∈ Esm.Closed.Tables.children n, c ∈ Esm.Closed.Tables.nodes root",
+      "status": "proven",
+      "theorem": "Esm.Closed.Tables.nodes_cover"
+    },
+    {
+      "id": "P-interp-load-not-evaluation",
+      "clauses": [
+        "spec.9.2.interp-checks-at-load"
+      ],
+      "statement": "Q-106: load is not evaluation: some document has an expression that evaluates (the ifelse never takes the branch with a malformed interp.linear) and still does not load.",
+      "lean_statement": "∃ (d : Esm.Closed.Tables.Doc) (e : Esm.Closed.Tables.Expr) (v : Esm.Closed.Tables.Val), d.exprs = [e] ∧ Esm.Closed.Tables.eval d.loaded (fun (_ : String) => Esm.Closed.Num.nan) e = Except.ok v ∧ Esm.Closed.Tables.loadCheck d = Except.error \"interp_table_not_const\"",
+      "status": "proven",
+      "theorem": "Esm.Closed.Tables.load_is_not_evaluation"
     }
   ]
 }
