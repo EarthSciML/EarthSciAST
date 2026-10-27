@@ -581,6 +581,15 @@
       "note": "An interp.searchsorted xs that is not a rank-1 const array is rejected with interp_axis_not_const, before the NaN and monotonicity checks (Q-105)."
     },
     {
+      "id": "spec.9.2.searchsorted-empty-xs",
+      "section": "9.2",
+      "quote": "Bindings MUST accept an empty `xs` (`[]`, `N = 0`): it is a rank-1 `const`-op array and trivially non-decreasing, so it passes every check above, and every query against it, a NaN `x` included, returns `N + 1 = 1`.",
+      "class": "semantic",
+      "phase": 1,
+      "area": "closed_functions",
+      "note": "interp.searchsorted with xs = [] passes the load checks and returns 1 for every x, NaN included (ruling Q-108)."
+    },
+    {
       "id": "spec.9.2.searchsorted-xs-no-nan",
       "section": "9.2",
       "quote": "Bindings MUST reject an `xs` containing a NaN entry at load time with diagnostic `searchsorted_nan`, and MUST check for NaN before monotonicity: an `xs` that contains a NaN is reported as `searchsorted_nan` whatever its other entries, never as `searchsorted_non_monotonic`.",
@@ -652,6 +661,15 @@
       "phase": 1,
       "area": "closed_functions",
       "note": "Any violation of the interp argument contract fails load with the listed interp_* code."
+    },
+    {
+      "id": "spec.9.2.interp-checks-at-load",
+      "section": "9.2",
+      "quote": "MUST run during load, and in `validate()`, on every `fn` node that names one of these functions, wherever it appears in the document (every expression-bearing field, §4.9.5) and whether or not anything ever evaluates it. A document that fails one of them does not load. A binding MAY repeat the checks when it builds or evaluates an expression, but MUST NOT defer them to then.",
+      "class": "semantic",
+      "phase": 1,
+      "area": "closed_functions",
+      "note": "The §9.2 interp argument checks are a function of the loaded document alone: every interp.* fn node in every expression-bearing field is checked at load, whether or not it is evaluated (ruling Q-106)."
     },
     {
       "id": "spec.9.2.interp-fma-tolerance",
@@ -758,12 +776,12 @@
     {
       "id": "spec.9.5.1.data-finite",
       "section": "9.5.1",
-      "quote": "Leaves MUST be finite numbers — NaN entries are rejected at load time with `table_data_nan`.",
+      "quote": "Leaves MUST be finite numbers — a NaN or infinite leaf is rejected at load time with `table_data_nan`.",
       "class": "semantic",
       "phase": 1,
       "area": "closed_functions",
-      "note": "Every leaf of a function table's data is a finite number; a NaN leaf fails load with table_data_nan.",
-      "concern": "Only NaN has a diagnostic code; an infinite leaf violates 'finite' with no code (though JSON cannot spell one), and this is stricter than the §9.2 inline form, which allows NaN in tables, so a table with NaN cannot be lifted even though the lifting is said not to change semantics."
+      "note": "Every leaf of a function table's data is a finite number; a NaN or ±Inf leaf fails load with table_data_nan (ruling Q-109).",
+      "concern": "This is stricter than the §9.2 inline form, which allows NaN in tables, so a table with NaN cannot be lifted even though the lifting is said not to change semantics."
     },
     {
       "id": "spec.9.5.1.shape-assertion-matches",
@@ -887,11 +905,11 @@
     {
       "id": "spec.9.5.5.table-axis-nan-precedence",
       "section": "9.5.5",
-      "quote": "Takes precedence over `table_axis_non_monotonic`: an axis containing a NaN MUST be reported with `table_axis_nan`, whatever its other entries.",
+      "quote": "Takes precedence over `table_axis_non_monotonic`: an axis containing a non-finite value MUST be reported with `table_axis_nan`, whatever its other entries.",
       "class": "semantic",
       "phase": 1,
       "area": "closed_functions",
-      "note": "A function_tables axis containing a NaN is rejected with table_axis_nan, never table_axis_non_monotonic."
+      "note": "A function_tables axis containing a non-finite value (NaN or ±Inf, ruling Q-109) is rejected with table_axis_nan, never table_axis_non_monotonic."
     },
     {
       "id": "spec.9.5.5.table-check-order",
@@ -901,6 +919,24 @@
       "phase": 1,
       "area": "closed_functions",
       "note": "A function table breaking several §9.5.5 rules is reported with the code of the first in the pinned ten-step order, each step over every axis (Q-105)."
+    },
+    {
+      "id": "spec.9.5.5.table-checks-at-load",
+      "section": "9.5.5",
+      "quote": "Bindings MUST run the ten table checks above during load, and in `validate()`, on EVERY entry of `function_tables`, whether or not any `table_lookup` references it. A document with a table that fails one of them does not load. A binding MAY repeat the checks where it lowers or evaluates a lookup, but MUST NOT defer them to then.",
+      "class": "semantic",
+      "phase": 1,
+      "area": "closed_functions",
+      "note": "A document loads only if every function_tables entry passes the ten §9.5.5 checks, referenced or not (ruling Q-106)."
+    },
+    {
+      "id": "spec.9.5.5.lookup-check-order",
+      "section": "9.5.5",
+      "quote": "A `table_lookup` node is checked in this order, and bindings MUST report the first code that applies:",
+      "class": "semantic",
+      "phase": 1,
+      "area": "closed_functions",
+      "note": "A table_lookup is reported with the first of: table_lookup_unknown_table; the ten table checks of the named table in the §9.5.5 order; table_lookup_args_nonempty; table_lookup_axis_name_mismatch; table_lookup_output_out_of_range (ruling Q-107)."
     },
     {
       "id": "spec.9.5.3a.error-mode-unsupported",
