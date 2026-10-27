@@ -726,7 +726,7 @@ def eligible_literals(expr, path, out, templates_used):
     elif op == "makearray":
         for i, v in enumerate(expr.get("values") or []):
             eligible_literals(v, path + ("values", i), out, templates_used)
-    elif op == "faq" and expr.get("expr") is not None:
+    elif op in ("faq", "aggregate") and expr.get("expr") is not None:
         eligible_literals(expr["expr"], path + ("expr",), out, templates_used)
     elif op == "broadcast" and expr.get("fn") in _TYPED_ALL_ARGS:
         for i, a in enumerate(args):
@@ -1102,6 +1102,7 @@ def process_file(path: str, bump: bool, evaluate: bool = True) -> dict:
     # 1. markers
     marks = {}  # id -> (raw path, kind, value)
     site_marks = {}
+    foreign_templates = {}  # site -> templates it applies that this file does not define
     for ptr in warn0:
         if ptr not in sites:
             rep["unresolved"].append(
@@ -1122,6 +1123,9 @@ def process_file(path: str, bump: bool, evaluate: bool = True) -> dict:
             for body in templates.get(name, []):
                 eligible_literals(get_at(doc, body), body, found, set())
         site_marks[ptr] = found
+        foreign = sorted(n for n in used if n and n not in templates)
+        if foreign:
+            foreign_templates[ptr] = foreign
         for p, k in found:
             if all(m[0] != p for m in marks.values()):
                 raw_val = get_at(doc, p)
@@ -1222,6 +1226,12 @@ def process_file(path: str, bump: bool, evaluate: bool = True) -> dict:
                 }
             )
         else:
+            if ptr in foreign_templates:
+                sol += (
+                    "; the site applies template(s) defined in another file ("
+                    + ", ".join(foreign_templates[ptr])
+                    + "), whose literals are repaired there"
+                )
             rep["unresolved"].append(
                 {"site": ptr, "equation": eq_text, "declared_units": declared, "reason": sol}
             )
