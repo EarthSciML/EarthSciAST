@@ -1,0 +1,51 @@
+# Dependabot version updates: one grouped pull request per ecosystem per week,
+# so routine bumps arrive together instead of one PR per dependency. Security
+# updates for a dependency with an advisory are separate and not grouped; they
+# are switched on in the repository settings, not here.
+version: 2
+updates:
+  - package-ecosystem: "julia"
+    directory: "/pkg/EarthSciAST.jl"
+    schedule:
+      interval: "weekly"
+    groups:
+      julia:
+        patterns: ["*"]
+  - package-ecosystem: "uv"
+    directory: "/pkg/earthsci-ast-py"
+    schedule:
+      interval: "weekly"
+    groups:
+      uv:
+        patterns: ["*"]
+  - package-ecosystem: "npm"
+    directory: "/pkg/earthsci-ast-ts"
+    schedule:
+      interval: "weekly"
+    groups:
+      npm:
+        patterns: ["*"]
+  - package-ecosystem: "cargo"
+    directories:
+      - "/pkg/earthsci-ast-rs"
+      - "/pkg/earthsci-narrative"
+      - "/pkg/earthsci-typst-plugin"
+    schedule:
+      interval: "weekly"
+    groups:
+      cargo:
+        patterns: ["*"]
+  - package-ecosystem: "gomod"
+    directory: "/pkg/earthsci-ast-go"
+    schedule:
+      interval: "weekly"
+    groups:
+      gomod:
+        patterns: ["*"]
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      github-actions:
+        patterns: ["*"]

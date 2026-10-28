@@ -95,18 +95,18 @@
     }
   },
   "counts": {
-    "symbols": 1003,
+    "symbols": 1005,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
-      "julia": 342,
+      "julia": 344,
       "typescript": 245,
-      "python": 272,
-      "rust": 383,
+      "python": 274,
+      "rust": 385,
       "go": 470
     },
     "by_tier": {
       "extension": 700,
-      "stable": 303
+      "stable": 305
     }
   },
   "planned": [
@@ -8077,6 +8077,16 @@
       }
     },
     {
+      "name": "time_origin",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "time_origin",
+        "python": "time_origin",
+        "rust": "time_origin"
+      }
+    },
+    {
       "name": "time_point",
       "kind": "type",
       "tier": "stable",
@@ -8092,6 +8102,16 @@
       "bindings": {
         "go": "TimeSpan",
         "rust": "TimeSpan"
+      }
+    },
+    {
+      "name": "timestamp_to_seconds",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "timestamp_to_seconds",
+        "python": "timestamp_to_seconds",
+        "rust": "timestamp_to_seconds"
       }
     },
     {

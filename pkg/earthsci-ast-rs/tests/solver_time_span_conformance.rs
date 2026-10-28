@@ -310,3 +310,186 @@ fn a_document_built_in_memory_converts_and_is_checked_by_the_accessor() {
     let e = earthsci_ast::resolve_time_span(&doc, None).expect_err("1900 is no leap year");
     assert_eq!(e.code, "solver_time_span_invalid");
 }
+
+// --- the §2.2.7 public accessors: time_origin / timestamp_to_seconds ---------
+
+fn fixture_by_id(m: &Value, id: &str) -> Value {
+    m["fixtures"]
+        .as_array()
+        .expect("fixtures")
+        .iter()
+        .find(|f| f["id"] == id)
+        .cloned()
+        .unwrap_or_else(|| panic!("fixture {id} is pinned"))
+}
+
+#[test]
+fn time_origin_is_the_instant_the_document_names() {
+    let m = manifest();
+    for (id, want) in [
+        ("timestamps_posix", 0.0),
+        ("timestamps_reference_time", 1_561_939_200.0),
+        ("timestamps_temporal_start", 1_561_852_800.0),
+        ("origin_with_offset", 1_561_939_200.0),
+        ("fractional_seconds", 1_561_939_200.25),
+        ("numbers", 0.0),
+    ] {
+        let doc = load(&fixture_by_id(&m, id)).unwrap_or_else(|e| panic!("{id} must load: {e}"));
+        assert_eq!(
+            earthsci_ast::time_origin(&doc).expect("an origin"),
+            want,
+            "{id}"
+        );
+    }
+}
+
+#[test]
+fn timestamp_to_seconds_agrees_with_resolve_time_span_on_every_fixture() {
+    let m = manifest();
+    for f in fixtures(&m, "accepted") {
+        let id = f["id"].as_str().expect("id");
+        let span = &f["solver"]["time_span"];
+        if span.is_null() {
+            continue;
+        }
+        let doc = load(&f).unwrap_or_else(|e| panic!("{id} must load: {e}"));
+        let resolved = earthsci_ast::resolve_time_span(&doc, None)
+            .unwrap_or_else(|e| panic!("{id} resolves: {e}"))
+            .unwrap_or_else(|| panic!("{id} pins a time_span"));
+        for (index, key) in [(0usize, "start"), (1, "end")] {
+            if let Some(stamp) = span[key].as_str() {
+                assert_eq!(
+                    earthsci_ast::timestamp_to_seconds(&doc, stamp).expect("converts"),
+                    [resolved.0, resolved.1][index],
+                    "{id}: {key}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn timestamp_to_seconds_counts_from_the_document_origin() {
+    let m = manifest();
+    let reference = load(&fixture_by_id(&m, "timestamps_reference_time")).expect("loads");
+    assert_eq!(
+        earthsci_ast::timestamp_to_seconds(&reference, "2019-07-01T00:00:00Z").expect("converts"),
+        0.0
+    );
+    assert_eq!(
+        earthsci_ast::timestamp_to_seconds(&reference, "2019-07-03T00:00:00Z").expect("converts"),
+        172_800.0
+    );
+    let fractional = load(&fixture_by_id(&m, "fractional_seconds")).expect("loads");
+    assert_eq!(
+        earthsci_ast::timestamp_to_seconds(&fractional, "2019-07-01T00:00:00.5Z")
+            .expect("converts"),
+        0.25
+    );
+    assert_eq!(
+        earthsci_ast::timestamp_to_seconds(&fractional, "2019-07-01T00:00:01.25Z")
+            .expect("converts"),
+        1.0
+    );
+}
+
+#[test]
+fn the_origin_and_converter_are_consistent_for_exactly_representable_timestamps() {
+    let m = manifest();
+    let posix = load(&fixture_by_id(&m, "timestamps_posix")).expect("loads");
+    let reference = load(&fixture_by_id(&m, "timestamps_reference_time")).expect("loads");
+    let origin = earthsci_ast::time_origin(&reference).expect("an origin");
+    for stamp in [
+        "2019-07-01T00:00:00Z",
+        "2019-07-03T00:00:00Z",
+        "2019-07-01T00:00:00.5Z",
+    ] {
+        assert_eq!(
+            earthsci_ast::timestamp_to_seconds(&posix, stamp).expect("converts"),
+            origin + earthsci_ast::timestamp_to_seconds(&reference, stamp).expect("converts"),
+            "{stamp}"
+        );
+    }
+}
+
+#[test]
+fn reconstruction_from_the_pair_is_correct_only_to_within_rounding() {
+    // `time_origin + timestamp_to_seconds` rounds the two parts separately, so
+    // it equals the timestamp's POSIX time only to within binary64 rounding.
+    let doc: earthsci_ast::EsmFile = serde_json::from_str(&decay_doc(
+        serde_json::json!({"time_span": {"start": "2019-07-01T00:00:00.1Z", "end": "2019-07-01T00:00:01Z"}}),
+        Some(serde_json::json!({"reference_time": "2019-07-01T00:00:00.2Z"})),
+    ))
+    .expect("typed document");
+    let origin = earthsci_ast::time_origin(&doc).expect("an origin");
+    let converted =
+        earthsci_ast::timestamp_to_seconds(&doc, "2019-07-01T00:00:00.1Z").expect("converts");
+    assert_eq!(converted, -0.1);
+    assert_eq!(origin, 1_561_939_200.2);
+    // One ulp above the timestamp's own POSIX time, 1561939200.1.
+    let posix = 1_561_939_200.1_f64;
+    assert_eq!(origin + converted, f64::from_bits(posix.to_bits() + 1));
+    assert_ne!(origin + converted, posix);
+}
+
+#[test]
+fn a_bad_timestamp_is_reported_before_a_bad_origin() {
+    let bad: earthsci_ast::EsmFile = serde_json::from_str(&decay_doc(
+        serde_json::json!({"time_span": {"start": 0, "end": 1}}),
+        Some(serde_json::json!({"reference_time": "not-a-date"})),
+    ))
+    .expect("typed document");
+    let e = earthsci_ast::timestamp_to_seconds(&bad, "2019-07-01").expect_err("bad form");
+    assert_eq!(e.code, "solver_time_span_invalid");
+    assert!(
+        e.message.contains("not an RFC 3339 UTC timestamp"),
+        "{}",
+        e.message
+    );
+    assert!(
+        !e.message.contains("/domain/temporal/reference_time"),
+        "{}",
+        e.message
+    );
+}
+
+#[test]
+fn the_accessors_refuse_a_bad_origin_or_timestamp() {
+    let m = manifest();
+    // A present origin that is not a date-time: built in memory, so the schema
+    // format has no chance to refuse it first.
+    let bad: earthsci_ast::EsmFile = serde_json::from_str(&decay_doc(
+        serde_json::json!({"time_span": {"start": 0, "end": 1}}),
+        Some(serde_json::json!({"reference_time": "not-a-date"})),
+    ))
+    .expect("typed document");
+
+    let e = earthsci_ast::time_origin(&bad).expect_err("an unreadable origin is refused");
+    assert_eq!(e.code, "solver_time_span_invalid");
+    assert!(
+        e.message.contains("/domain/temporal/reference_time"),
+        "{}",
+        e.message
+    );
+    let e = earthsci_ast::timestamp_to_seconds(&bad, "2019-07-01T00:00:00Z")
+        .expect_err("an unreadable origin is refused");
+    assert_eq!(e.code, "solver_time_span_invalid");
+    assert!(
+        e.message.contains("/domain/temporal/reference_time"),
+        "{}",
+        e.message
+    );
+
+    let reference = load(&fixture_by_id(&m, "timestamps_reference_time")).expect("loads");
+    let e = earthsci_ast::timestamp_to_seconds(&reference, "2019-07-01").expect_err("bad form");
+    assert_eq!(e.code, "solver_time_span_invalid");
+    assert!(
+        e.message.contains("not an RFC 3339 UTC timestamp"),
+        "{}",
+        e.message
+    );
+    let e = earthsci_ast::timestamp_to_seconds(&reference, "2019-02-30T00:00:00Z")
+        .expect_err("no such day");
+    assert_eq!(e.code, "solver_time_span_invalid");
+    assert!(e.message.contains("names no calendar day"), "{}", e.message);
+}
