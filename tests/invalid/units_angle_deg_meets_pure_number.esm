@@ -1,0 +1,49 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "units_angle_deg_meets_pure_number",
+    "description": "Invalid: where an angle meets a pure number the [angle] axis is removed but the SCALE is kept (esm-spec §4.8.3 \"An angle meets a pure number\"). `deg` is pi/180 rad, so `bad_ratio [1] = theta_deg [deg]` is a scale mismatch, exactly as equating a pure number with a percentage is. The rad control beside it is clean; the one observed variable `bad_ratio` is the only defect. The valid half is tests/valid/units_angle_meets_pure_number.esm.",
+    "authors": [
+      "EarthSciAST"
+    ],
+    "created": "2026-10-27T00:00:00Z"
+  },
+  "models": {
+    "BadAngleModel": {
+      "variables": {
+        "theta_deg": {
+          "type": "parameter",
+          "units": "deg",
+          "default": 30.0,
+          "description": "A plane angle in degrees."
+        },
+        "theta_rad": {
+          "type": "parameter",
+          "units": "rad",
+          "default": 0.5,
+          "description": "A plane angle in radians."
+        },
+        "good_ratio": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Clean control: rad meets a pure number at scale 1."
+        },
+        "bad_ratio": {
+          "type": "unknown",
+          "units": "1",
+          "description": "THE ONLY DEFECT: deg meets a pure number; the scales differ by pi/180."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "good_ratio",
+          "rhs": "theta_rad"
+        },
+        {
+          "lhs": "bad_ratio",
+          "rhs": "theta_deg"
+        }
+      ]
+    }
+  }
+}

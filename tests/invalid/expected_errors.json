@@ -2956,6 +2956,18 @@
     ],
     "is_valid": false
   },
+  "units_angle_deg_meets_pure_number.esm": {
+    "schema_errors": [],
+    "structural_errors": [
+      {
+        "path": "/models/BadAngleModel/variables/bad_ratio",
+        "code": "unit_inconsistency",
+        "message": "Declared units of observed variable do not match the units computed by its expression"
+      }
+    ],
+    "is_valid": false,
+    "notes": "esm-spec \u00a74.8.3 \"An angle meets a pure number\": the [angle] axis cancels but the scale is kept, and deg is pi/180 rad, so a pure number equated with an angle in deg is a scale mismatch. The rad control good_ratio is clean."
+  },
   "units_discriminator_circular_trig_arg.esm": {
     "schema_errors": [],
     "structural_errors": [
