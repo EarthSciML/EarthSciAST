@@ -388,15 +388,16 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     // and the lookup checks on every `table_lookup` node, wherever they appear.
     // HERE, on the fully rewritten form, so a node a template expansion
     // produced is checked with the arguments the application gave it. Raised
-    // the way `enum_duplicate_value` is: a `[code]`-prefixed load error, which
-    // `validate_text` reports as an invalid document. The template scan above
+    // as a `[code]`-prefixed structural error, as the reserved-index-symbol
+    // check above is: the document is schema-valid, and `validate_text`
+    // reports it invalid with the code among its structural errors. The template scan above
     // already saw the whole document when it carried no template machinery,
     // so a document it found no such node in is not walked again.
     let tables = crate::load_checks::check_raw_function_tables(&json_value)
-        .map_err(|f| EsmError::SchemaValidation(f.to_string()))?;
+        .map_err(|f| EsmError::StructuralValidation(f.to_string()))?;
     if has_checked_node || !scanned_whole {
         crate::load_checks::check_raw_expression_nodes(&json_value, &tables)
-            .map_err(|f| EsmError::SchemaValidation(f.to_string()))?;
+            .map_err(|f| EsmError::StructuralValidation(f.to_string()))?;
     }
 
     // Deserialize into our types. The interning scope makes every

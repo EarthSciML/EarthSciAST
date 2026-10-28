@@ -270,6 +270,14 @@ impl TypedWalk<'_> {
         }
         for (name, rs) in file.reaction_systems.iter().flatten() {
             let base = format!("/reaction_systems/{name}");
+            for (pname, param) in &rs.parameters {
+                if let Some(spec) = &param.update {
+                    let update_base = format!("{base}/parameters/{pname}/update");
+                    spec.for_each_expression_at(&mut |expr, site| {
+                        self.expr(expr, &format!("{update_base}{site}"));
+                    });
+                }
+            }
             for (i, rxn) in rs.reactions.iter().enumerate() {
                 self.expr(&rxn.rate, &format!("{base}/reactions/{i}/rate"));
             }

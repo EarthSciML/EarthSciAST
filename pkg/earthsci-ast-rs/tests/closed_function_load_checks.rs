@@ -118,3 +118,39 @@ fn a_template_body_is_checked_at_its_application() {
         .to_string();
     assert!(msg.contains("[interp_non_monotonic_axis]"), "got: {msg}");
 }
+
+/// A reaction-system parameter's `update` is checked like a model variable's:
+/// `load_string` refuses a non-monotonic searchsorted `xs` there as a
+/// structural error carrying its code, and `validate()` on the same document
+/// built without load (so the load gate never saw it) reports it at its path.
+#[test]
+fn a_reaction_system_parameter_update_is_checked() {
+    let text = r#"{
+      "esm": "1.0.0",
+      "metadata": { "name": "rsp", "authors": ["test"] },
+      "reaction_systems": { "RS": {
+        "species": { "A": { "default": 1.0 } },
+        "parameters": {
+          "x": { "default": 2.0 },
+          "k": { "default": 1.0, "update": { "kind": "condition",
+            "when": { "op": ">", "args": ["t", 1.0] },
+            "expression": { "op": "fn", "name": "interp.searchsorted",
+              "args": ["x", { "op": "const", "args": [], "value": [3.0, 1.0, 2.0] }] } } }
+        },
+        "reactions": [ { "id": "r1", "substrates": [ { "species": "A", "stoichiometry": 1 } ],
+                         "products": null, "rate": "k" } ]
+      } }
+    }"#;
+    match earthsci_ast::load_string(text) {
+        Err(earthsci_ast::EsmError::StructuralValidation(msg)) => {
+            assert!(msg.contains("[searchsorted_non_monotonic]"), "got: {msg}")
+        }
+        other => panic!("want a structural load error, got {other:?}"),
+    }
+    let typed: EsmFile = serde_json::from_str(text).expect("deserializes without load");
+    let found = validate(&typed).structural_errors.iter().any(|e| {
+        e.code.to_string() == "searchsorted_non_monotonic"
+            && e.path == "/reaction_systems/RS/parameters/k/update/expression"
+    });
+    assert!(found, "validate() must report the update's searchsorted");
+}
