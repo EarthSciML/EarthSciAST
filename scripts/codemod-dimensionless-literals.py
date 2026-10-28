@@ -292,6 +292,166 @@ def engine_report(text: str, base: str):
     return r.is_valid, errs, dim, other
 
 
+def engine_messages(text: str, base: str) -> dict:
+    """{site pointer: warning message} for the dimensionless-literal warnings."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        r = EA.validate_text(text, base_path=base)
+    return {w.path: w.message for w in r.unit_warnings if w.code == WARNING_CODE}
+
+
+# ---------------------------------------------------------------------------
+# Declaration fixes (angle units)
+# ---------------------------------------------------------------------------
+
+
+def _angle_power(unit_text):
+    try:
+        vec = unit_vec(U.parse_unit(unit_text))
+    except Exception:
+        return None
+    return vec.get(("d", "[angle]"), Fraction(0))
+
+
+def _with_angle_power(unit_text, k):
+    """`unit_text` times rad^k, in the simplest spelling (or None)."""
+    vec = unit_vec(U.parse_unit(unit_text))
+    target = vadd(vec, {("d", "[angle]"): Fraction(k)})
+    if not target:
+        return "1"
+    return spell_unit(target, [unit_text, "rad"])
+
+
+def _component_of(rpath):
+    """Raw path of the component that owns an equation / reaction path."""
+    return rpath[:-2]
+
+
+def declaration_fixes(text, base, sites, rep):
+    """Repair sites whose only mismatch is a `rad` factor by changing ONE
+    variable's declared `units` (never a literal `1/rad`).
+
+    A site qualifies when its warning names the `[angle]` axis and a variable of
+    its own component that appears at the site has declared units. Candidates,
+    in order: the equation's left-hand variable, observed (defined) variables,
+    then every other variable at the site. Each candidate declaration
+    `old * rad^k` is accepted only if, on the whole document, validity and the
+    structural errors are unchanged, the site stops warning, and no warning or
+    other unit finding appears anywhere else (every site that uses the variable
+    is re-typed by the engine; another unit finding may only disappear). Returns
+    the edited text."""
+    msgs = engine_messages(text, base)
+    angle_sites = [p for p, m in msgs.items() if "[angle]" in m and p in sites]
+    if not angle_sites:
+        return text
+    valid0, errs0, warn0, other0 = engine_report(text, base)
+    for ptr in sorted(angle_sites):
+        if ptr not in warn0:
+            continue  # already repaired by an earlier declaration change
+        doc = json.loads(text)
+        spans = parse_spans(text)
+        rpath, kind = sites[ptr]
+        comp_path = _component_of(rpath)
+        comp = get_at(doc, comp_path)
+        variables = comp.get("variables") if isinstance(comp, dict) else None
+        if not isinstance(variables, dict):
+            continue
+        raw = get_at(doc, rpath)
+        names = []
+        for side in ("lhs", "rhs", "rate"):
+            if side in raw:
+                for n in _raw_names(raw[side]):
+                    if n not in names:
+                        names.append(n)
+        observed = {
+            eq.get("lhs")
+            for eq in comp.get("equations") or []
+            if isinstance(eq, dict) and isinstance(eq.get("lhs"), str)
+        }
+        lhs = raw.get("lhs")
+        lhs_var = lhs if isinstance(lhs, str) else None
+        if isinstance(lhs, dict) and lhs.get("op") == "D" and lhs.get("args"):
+            lhs_var = lhs["args"][0] if isinstance(lhs["args"][0], str) else None
+        order = [n for n in [lhs_var] if n]
+        order += [n for n in names if n in observed and n not in order]
+        order += [n for n in names if n not in order]
+        tried = []
+        accepted = None
+        for name in order:
+            var = variables.get(name)
+            if not isinstance(var, dict) or not isinstance(var.get("units"), str):
+                continue
+            old = var["units"]
+            e = _angle_power(old)
+            if e is None:
+                continue
+            powers = ([-e] if e else []) + [k for k in (1, -1, 2, -2) if k != -e]
+            for k in powers:
+                try:
+                    new = _with_angle_power(old, k)
+                except Exception:
+                    new = None
+                if new is None:
+                    continue
+                sp = span_at(spans, comp_path + ("variables", name, "units"))
+                cand = text[: sp.start] + json.dumps(new) + text[sp.end :]
+                try:
+                    valid1, errs1, warn1, other1 = engine_report(cand, base)
+                except Exception:
+                    continue
+                ok = (
+                    valid1 == valid0
+                    and errs1 == errs0
+                    and set(other1) <= set(other0)
+                    and ptr not in warn1
+                    and set(warn1) <= set(warn0)
+                )
+                tried.append(f"{name}: {old} -> {new}" + ("" if ok else " (breaks another site)"))
+                if ok:
+                    accepted = (name, old, new, cand, warn1)
+                    break
+            if accepted:
+                break
+        info = {"site": ptr, "equation": _site_equation(raw, kind)}
+        if accepted:
+            name, old, new, cand, warn1 = accepted
+            fixed = sorted(set(warn0) - set(warn1))
+            rep["declarations"].append(
+                {
+                    **info,
+                    "component": "/" + "/".join(ptr_token(x) for x in comp_path),
+                    "variable": name,
+                    "before": old,
+                    "after": new,
+                    "sites_fixed": fixed,
+                }
+            )
+            text, warn0 = cand, warn1
+        else:
+            rep["declaration_unresolved"].append(
+                {**info, "tried": tried or ["no variable at the site carries a declared unit"]}
+            )
+    return text
+
+
+def _raw_names(expr):
+    if isinstance(expr, str):
+        yield expr
+    elif isinstance(expr, list):
+        for v in expr:
+            yield from _raw_names(v)
+    elif isinstance(expr, dict):
+        for k, v in expr.items():
+            if k in ("args", "expr", "filter", "values", "bindings"):
+                yield from _raw_names(v if k != "bindings" else list(v.values()))
+
+
+def _site_equation(raw, kind):
+    if kind == "eq":
+        return f"{show(raw.get('lhs'))} = {show(raw.get('rhs'))}"
+    return f"rate: {show(raw.get('rate'))}"
+
+
 # ---- log-unit vectors ------------------------------------------------------
 
 
@@ -1123,11 +1283,24 @@ def process_file(path: str, bump: bool, evaluate: bool = True) -> dict:
         return rep
     rep["is_valid"] = valid0
     rep["warnings_before"] = warn0
+    rep["declarations"] = []
+    rep["declaration_unresolved"] = []
     if not warn0:
         return rep
     version = version_tuple(doc.get("esm"))
     rep["esm"] = doc.get("esm")
     sites = raw_sites(doc)
+    decl_text = declaration_fixes(text, base, sites, rep)
+    if decl_text != text:
+        text = decl_text
+        doc = json.loads(text)
+        spans = parse_spans(text)
+        valid0, errs0, warn0, other0 = engine_report(text, base)
+        if not warn0:
+            rep["new_text"] = text
+            rep["warnings_after"] = warn0
+            rep["applied"] = True
+            return rep
     templates = find_templates(doc)
 
     # 1. markers
@@ -1286,6 +1459,19 @@ def process_file(path: str, bump: bool, evaluate: bool = True) -> dict:
         atoms = []
         for ptr, _ in uses:
             atoms += list(site_info[ptr]["declared"].values())
+        if set(vec) == {("d", "[angle]")}:
+            # A bare power of rad on a literal is the signature of a declaration
+            # that drops (or adds) the angle: never written onto a literal.
+            for ptr, _ in uses:
+                bad_sites.add(
+                    (
+                        ptr,
+                        f"literal {val} would need units rad^{vec[('d', '[angle]')]}: the angle "
+                        "belongs in a declaration, and no single declaration change verified "
+                        "(see the declaration section)",
+                    )
+                )
+            continue
         unit = spell_unit(vec, atoms)
         if unit is None:
             for ptr, _ in uses:
@@ -1389,6 +1575,12 @@ def process_file(path: str, bump: bool, evaluate: bool = True) -> dict:
             )
         edits = edits_out
     rep["bumped"] = bool(rep.get("new_text")) and needs_bump
+    rep["applied"] = bool(rep.get("new_text"))
+    if not rep.get("new_text") and rep["declarations"]:
+        # Only declaration changes verified: they stand on their own.
+        rep["new_text"] = text
+        rep["bumped"] = False
+        rep["applied"] = True
     for p, e in edits.items():
         rep["rewrites"].append(
             {
@@ -1643,7 +1835,13 @@ def main(argv=None):
 def summary_md(reports, title, args):
     from collections import Counter
 
-    touched = [r for r in reports if any(x["applied"] for x in r["rewrites"])]
+    touched = [
+        r
+        for r in reports
+        if any(x["applied"] for x in r["rewrites"]) or (r.get("declarations") and r.get("applied"))
+    ]
+    decls = [(r["rel"], d) for r in reports for d in r.get("declarations", []) if r.get("applied")]
+    decl_open = [(r["rel"], d) for r in reports for d in r.get("declaration_unresolved", [])]
     cls = Counter(x["class"] for r in reports for x in r["rewrites"] if x["applied"])
     warned = [r for r in reports if r.get("warnings_before")]
     unresolved = [(r["rel"], u) for r in reports for u in r["unresolved"]]
@@ -1665,6 +1863,8 @@ def summary_md(reports, title, args):
         ),
         f"- rewrites proposed: {sum(cls.values())} — mechanical {cls['mechanical']}, "
         f"suspicious {cls['suspicious']}",
+        f"- declaration changes (angle units): {len(decls)}; angle sites with no verified "
+        f"declaration change: {len(decl_open)}",
         f"- unresolved sites (no rewrite proposed): {len(unresolved)}",
         f"- files whose own processing failed: {len(failed)}",
         f"- files skipped because they are not JSON (deliberately malformed fixtures): {len(not_json)}",
@@ -1677,6 +1877,36 @@ def summary_md(reports, title, args):
         + ("All patched files passed." if touched else "No file was patched."),
         "",
     ]
+    lines += ["## Declaration changes (angle units)", ""]
+    lines += [
+        "A site whose only mismatch is a `rad` factor is repaired by changing one "
+        "variable's declared `units`, never by a literal `1/rad`. The equation's "
+        "left-hand variable is tried first, then observed variables, then the rest; a "
+        "change is kept only if validity is unchanged, the site stops warning and no "
+        "other site that uses the variable starts warning or erroring. `rad` has scale "
+        "1, so no value changes.",
+        "",
+    ]
+    if not decls:
+        lines += ["None.", ""]
+    for rel, d in decls:
+        lines += [
+            f"- `{rel}` {d['component']}: `{d['variable']}` units `{d['before']}` -> "
+            f"`{d['after']}` (fixes {', '.join(d['sites_fixed'])})",
+            f"  - equation: `{d['equation']}`",
+        ]
+    if decl_open:
+        lines += [
+            "",
+            "Angle sites where no single declaration change verified (left as they are):",
+            "",
+        ]
+        for rel, d in decl_open:
+            lines += [
+                f"- `{rel}` {d['site']}: `{d['equation']}`",
+                "  - tried: " + "; ".join(d["tried"]),
+            ]
+    lines += [""]
     if any(r.get("bumped") for r in touched):
         lines += ["## esm version bumps (1.2.0 is the first version with unit-bearing `const`)", ""]
         lines += [

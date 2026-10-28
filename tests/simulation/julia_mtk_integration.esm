@@ -34,7 +34,7 @@
         },
         "omega": {
           "type": "parameter",
-          "units": "rad/s",
+          "units": "1/s",
           "default": 1.0,
           "description": "Angular frequency"
         },
@@ -140,7 +140,7 @@
                       }
                     ]
                   },
-                  {"op": "const", "args": [], "value": 2, "units": "rad^2"}
+                  2
                 ]
               }
             ]
