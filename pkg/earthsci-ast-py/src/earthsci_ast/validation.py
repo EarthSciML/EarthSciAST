@@ -1105,6 +1105,8 @@ def _validate_observed_dimensions(
             ScopedUnits,
             UnitValidator,
             UnparseableUnitError,
+            _angle_meets_number,
+            _Typed,
             exact_scale_of,
             parse_unit,
         )
@@ -1170,6 +1172,10 @@ def _validate_observed_dimensions(
 
             if typed is None:
                 continue  # undeterminable (§4.8.4) — skip, never assume dimensionless
+            # An angle meets a pure number (esm-spec §4.8.3): the angle axis
+            # cancels and the scales are compared.
+            declared_typed, typed = _angle_meets_number(_Typed(declared, declared_scale), typed)
+            declared, declared_scale = declared_typed.dim, declared_typed.scale
             computed = typed.dim
             if computed == declared and typed.scale == declared_scale:
                 continue
@@ -1449,10 +1455,24 @@ def _validate_imported_coupling_edges(
 def _validate_dimensionless_literals(esm_file: EsmFile, unit_warnings: list[UnitWarning]) -> None:
     """esm-spec §4.8.6: one ``units_dimensionless_literal_mismatch`` warning
     per check site that the dimensionless-literal rule rejects and the current
-    neutral-literal rule does not. Never an error at this stage."""
-    from .units import UNIT_FINDING_DIMENSIONLESS_LITERAL, dimensionless_literal_findings
+    neutral-literal rule does not. Never an error at this stage: a failure of
+    the pass itself is an analysis warning, as in :func:`_validate_units`."""
+    try:
+        from .units import UNIT_FINDING_DIMENSIONLESS_LITERAL, dimensionless_literal_findings
 
-    for path, message in dimensionless_literal_findings(esm_file):
+        findings = dimensionless_literal_findings(esm_file)
+    except Exception as e:
+        unit_warnings.append(
+            UnitWarning(
+                path="",
+                message=f"Dimensionless-literal analysis failed: {str(e)}",
+                # The checker blew up; that says nothing about the file.
+                code=UNIT_FINDING_ANALYSIS,
+                details={"validation_type": "dimensionless_literal", "exception": str(e)},
+            )
+        )
+        return
+    for path, message in findings:
         unit_warnings.append(
             UnitWarning(
                 path=path,

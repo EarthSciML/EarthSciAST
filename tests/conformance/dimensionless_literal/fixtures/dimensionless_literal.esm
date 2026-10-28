@@ -166,6 +166,28 @@
           "type": "unknown",
           "units": "Pa",
           "description": "Warns from initialization_equations: p_init = 101325.0 * c, a pure number equated with a pressure"
+        },
+        "z": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.5,
+          "description": "A pure number, the argument of atan."
+        },
+        "theta_deg": {
+          "type": "parameter",
+          "units": "deg",
+          "default": 30.0,
+          "description": "An angle in degrees."
+        },
+        "psi_atan": {
+          "type": "unknown",
+          "units": "1",
+          "description": "CONTROL: pi/2 - 2*atan(z). atan returns an angle, and where an angle meets a pure number rad counts as dimensionless (esm-spec §4.8.3), so this checks as written under both literal rules: NO warning."
+        },
+        "tilt": {
+          "type": "unknown",
+          "units": "1",
+          "description": "WARNS: theta_deg / 57.29577951308232. Under the dimensionless-literal rule the quotient is in deg; the angle axis cancels against the pure-number side but the scale pi/180 is kept (esm-spec §4.8.3), so the sides disagree in scale. The repair is const(57.29577951308232, units \"deg\")."
         }
       },
       "equations": [
@@ -442,6 +464,37 @@
             "args": [
               101325.0,
               "c"
+            ]
+          }
+        },
+        {
+          "lhs": "psi_atan",
+          "rhs": {
+            "op": "+",
+            "args": [
+              1.5707963267948966,
+              {
+                "op": "*",
+                "args": [
+                  -2,
+                  {
+                    "op": "atan",
+                    "args": [
+                      "z"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "lhs": "tilt",
+          "rhs": {
+            "op": "/",
+            "args": [
+              "theta_deg",
+              57.29577951308232
             ]
           }
         }

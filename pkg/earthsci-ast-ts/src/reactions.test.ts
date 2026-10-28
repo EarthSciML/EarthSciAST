@@ -58,9 +58,10 @@ describe('Reaction system ODE derivation', () => {
           isExprNode(eq.lhs) && eq.lhs.op === 'D' && eq.lhs.args[0] === 'A' && eq.lhs.wrt === 't',
       )
       expect(eqnA).toBeDefined()
+      // A loss of 1 is `-1 * rate` (esm-libraries-spec §4.6.2), not a unary minus.
       expect(eqnA?.rhs).toEqual({
-        op: '-',
-        args: [{ op: '*', args: ['k1', 'A'] }],
+        op: '*',
+        args: [-1, { op: '*', args: ['k1', 'A'] }],
       })
 
       // d[B]/dt = k1 * A
@@ -73,6 +74,26 @@ describe('Reaction system ODE derivation', () => {
         op: '*',
         args: ['k1', 'A'],
       })
+    })
+
+    it('refuses a product the system does not declare (undefined_species)', () => {
+      const system: ReactionSystem = {
+        species: { A: { default: 1.0 } },
+        parameters: { k1: { default: 0.1 } },
+        reactions: [
+          {
+            id: 'R1',
+            substrates: [{ species: 'A', stoichiometry: 1 }],
+            products: [{ species: 'Z', stoichiometry: 1 }],
+            rate: 'k1',
+          },
+        ],
+      }
+      // Dropping Z would lower a different reaction with no diagnostic; the
+      // other four bindings refuse it, and so must this one.
+      expect(() => deriveOdes(system)).toThrowError(
+        expect.objectContaining({ code: 'undefined_species' }),
+      )
     })
 
     it('should handle source reaction (null substrates)', () => {
@@ -129,8 +150,8 @@ describe('Reaction system ODE derivation', () => {
           isExprNode(eq.lhs) && eq.lhs.op === 'D' && eq.lhs.args[0] === 'A' && eq.lhs.wrt === 't',
       )
       expect(eqnA?.rhs).toEqual({
-        op: '-',
-        args: [{ op: '*', args: ['k_sink', 'A'] }],
+        op: '*',
+        args: [-1, { op: '*', args: ['k_sink', 'A'] }],
       })
     })
 
@@ -213,8 +234,8 @@ describe('Reaction system ODE derivation', () => {
       expect(eqnA?.rhs).toEqual({
         op: '+',
         args: [
-          { op: '-', args: [{ op: '*', args: ['k1', 'A'] }] },
-          { op: '-', args: [{ op: '*', args: ['k2', 'A'] }] },
+          { op: '*', args: [-1, { op: '*', args: ['k1', 'A'] }] },
+          { op: '*', args: [-1, { op: '*', args: ['k2', 'A'] }] },
         ],
       })
 
@@ -261,12 +282,14 @@ describe('Reaction system ODE derivation', () => {
 
       const model = deriveOdes(system)
 
-      // d[B]/dt = 0 (no reactions affect B)
+      // No reaction moves B, so it gets NO equation (esm-libraries-spec
+      // §4.6.1) -- not `D(B, t) = 0`, which would make it a differential
+      // unknown that never moves.
       const eqnB = model.equations.find(
         (eq) =>
           isExprNode(eq.lhs) && eq.lhs.op === 'D' && eq.lhs.args[0] === 'B' && eq.lhs.wrt === 't',
       )
-      expect(eqnB?.rhs).toBe(0)
+      expect(eqnB).toBeUndefined()
     })
 
     it('should append constraint equations', () => {
@@ -364,8 +387,9 @@ describe('Reaction system ODE derivation', () => {
           isExprNode(eq.lhs) && eq.lhs.op === 'D' && eq.lhs.args[0] === 'A' && eq.lhs.wrt === 't',
       )
       expect(eqnA?.rhs).toEqual({
-        op: '-',
+        op: '*',
         args: [
+          -1,
           {
             op: '*',
             args: [

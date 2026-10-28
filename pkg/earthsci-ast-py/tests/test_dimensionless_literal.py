@@ -5,6 +5,7 @@ Gates `tests/conformance/dimensionless_literal/`: every file in the golden is
 VALID, and carries exactly the pinned `units_dimensionless_literal_mismatch`
 warnings, at the pinned JSON Pointers.
 """
+
 from __future__ import annotations
 
 import json
@@ -12,8 +13,12 @@ import json
 import pytest
 from conftest import CONFORMANCE_DIR, REPO_ROOT
 
-from earthsci_ast import validate_path
-from earthsci_ast.units import UNIT_FINDING_DIMENSIONLESS_LITERAL, UnitValidator
+from earthsci_ast import units, validate_path
+from earthsci_ast.units import (
+    UNIT_FINDING_ANALYSIS,
+    UNIT_FINDING_DIMENSIONLESS_LITERAL,
+    UnitValidator,
+)
 
 GOLDEN = json.loads(
     (CONFORMANCE_DIR / "dimensionless_literal" / "golden" / "expected_warnings.json").read_text()
@@ -46,6 +51,20 @@ def test_the_warning_names_the_literal_and_the_repair():
     assert "273.15" in message
     assert "[temperature]" in message
     assert "const(" in message
+
+
+@pytest.mark.parametrize("error", [ValueError("bad scale"), TypeError("odd node")])
+def test_a_failing_warning_pass_leaves_the_document_valid(monkeypatch, error):
+    def explode(_esm_file):
+        raise error
+
+    monkeypatch.setattr(units, "dimensionless_literal_findings", explode)
+    rel = "tests/conformance/dimensionless_literal/fixtures/dimensionless_literal.esm"
+    result = validate_path(REPO_ROOT / rel)
+    assert result.is_valid, [(e.code, e.message) for e in result.structural_errors]
+    assert not any(w.code == UNIT_FINDING_DIMENSIONLESS_LITERAL for w in result.unit_warnings)
+    failed = [w for w in result.unit_warnings if str(error) in w.message]
+    assert [w.code for w in failed] == [UNIT_FINDING_ANALYSIS]
 
 
 @pytest.mark.parametrize(

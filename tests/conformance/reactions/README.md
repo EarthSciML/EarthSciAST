@@ -1,5 +1,12 @@
 # Reaction conformance corpus
 
+Two hand-written corpora, each driven by a test in all five bindings:
+
+- `species_order.json` — the species ORDER of `derive_odes` and
+  `stoichiometric_matrix` (below);
+- `lowering_form.json` — the exact expression TREE a reaction system lowers to,
+  in `derive_odes` and in `flatten` (see the end of this file).
+
 `species_order.json` pins **species ORDER** in the two Analysis-tier reaction
 operations — `derive_odes` and `stoichiometric_matrix` — across all five
 bindings. Canonical order is **declaration order**: the order the document
@@ -57,3 +64,38 @@ each LHS `D(<species>, t)` node's first argument.
 | Python | `pkg/earthsci-ast-py/tests/test_reaction_species_order.py` |
 | Rust | `pkg/earthsci-ast-rs/tests/reaction_species_order.rs` |
 | Go | `pkg/earthsci-ast-go/pkg/esm/reaction_species_order_test.go` |
+
+---
+
+# `lowering_form.json`: the lowered tree
+
+Pins the exact expression tree of esm-libraries-spec §4.6.2 — the rate law
+`k · ∏ Sᵢ^nᵢ` as one n-ary `*` with `k` first, each species' term as the bare
+rate law for a net coefficient of 1 and `coefficient * rate` otherwise, one
+n-ary `+` per species, integer literals for integral coefficients and
+exponents, and nothing simplified. Derived documents copy flattened terms
+verbatim, so a binding that lowers the same reaction to a different tree writes
+different bytes.
+
+Like `species_order.json` it is **hand-written**: the expected trees follow from
+the §4.6.2 rules applied to each document, and were cross-checked against all
+five bindings. The corpus' `how_to_drive` field is the driver contract.
+
+| Case | What it covers |
+|---|---|
+| `photostationary_loss_and_production` | unit stoichiometry: loss `-1 * rate`, production the bare rate law; a parameter rate and an expression rate; several reactions per species |
+| `stoichiometry_and_rate_forms` | non-unit stoichiometry (`A ^ 2`, coefficient `-2`), a species on both sides (net `+1`), a catalyst (net 0, no term), fractional coefficients and exponents, source and sink reactions, a reservoir factor, an inert species (no equation), integer, float and literal-`1` rates |
+| `repeated_species_entries` | a species listed twice on one side (`A + A` gives `k1 * A * A` and coefficient `-2`; `B + B` as products gives `+2`), and a substrate listed twice against a product whose `P - S` is a tiny nonzero float, kept as a term |
+| `lifted_pointwise` | the network lifted pointwise onto a grid by `operator_compose`; only the reaction system's contribution is compared, because the lift's `faq` range spelling is not pinned here |
+
+Numbers compare by value AND kind: an integer literal in the corpus must be an
+integer literal in the binding (CONFORMANCE_SPEC §5.5.3.1 rule 3). TypeScript
+numbers have no kind, so its driver compares by value only.
+
+| Binding | Test |
+|---|---|
+| Julia | `pkg/EarthSciAST.jl/test/reaction_lowering_form_test.jl` |
+| TypeScript | `pkg/earthsci-ast-ts/src/reaction-lowering-form.test.ts` |
+| Python | `pkg/earthsci-ast-py/tests/test_reaction_lowering_form.py` |
+| Rust | `pkg/earthsci-ast-rs/tests/reaction_lowering_form.rs` |
+| Go | `pkg/earthsci-ast-go/pkg/esm/reaction_lowering_form_test.go` |

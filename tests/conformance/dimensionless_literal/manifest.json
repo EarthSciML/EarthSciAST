@@ -7,12 +7,12 @@
     {
       "id": "pattern_classes_warn",
       "input": "fixtures/dimensionless_literal.esm",
-      "assert": "warns at /models/Literals/equations/0..6 (additive offset T - 273.15; 1 + x; conversion factor P_pa / 101325.0; exp(-1370 / T); literal coefficient 1.4 * phi carrying a unit; dx [m] = 1 / 64; H_ice > 0.01) and at /reaction_systems/Chem/reactions/0 (exp(-1370 / T) in a rate)"
+      "assert": "warns at /models/Literals/equations/0..6 (additive offset T - 273.15; 1 + x; conversion factor P_pa / 101325.0; exp(-1370 / T); literal coefficient 1.4 * phi carrying a unit; dx [m] = 1 / 64; H_ice > 0.01) and /models/Literals/equations/21 (theta_deg [deg] / 57.29577951308232 against a pure number: the angle axis cancels but the deg scale is kept, esm-spec §4.8.3), and at /reaction_systems/Chem/reactions/0 (exp(-1370 / T) in a rate)"
     },
     {
       "id": "controls_quiet",
       "input": "fixtures/dimensionless_literal.esm",
-      "assert": "NO warning at /models/Literals/equations/7..14 (max(x, 0); ifelse(c > 0, x, 0); D(q) = -(k * q); ic(q) = 0.0; ifelse(x > 0, 1, 0); T - const(273.15, units K); 2 * pi * f * tau; 0.5 * x + x) nor at /reaction_systems/Chem/reactions/1"
+      "assert": "NO warning at /models/Literals/equations/7..14 (max(x, 0); ifelse(c > 0, x, 0); D(q) = -(k * q); ic(q) = 0.0; ifelse(x > 0, 1, 0); T - const(273.15, units K); 2 * pi * f * tau; 0.5 * x + x) nor at /models/Literals/equations/20 (pi/2 - 2*atan(z): an angle meeting a pure number counts as dimensionless, esm-spec §4.8.3) nor at /reaction_systems/Chem/reactions/1"
     },
     {
       "id": "still_valid",
@@ -21,7 +21,7 @@
     },
     {
       "id": "neutral_literal_pins_warn",
-      "input": "(the ten tests/valid files listed in the golden)",
+      "input": "(the 27 tests/valid files the golden lists with a nonempty warning set: 83 warnings)",
       "assert": "each stays VALID and carries exactly the listed warnings; these files pin today's neutral-literal rule and are rewritten by the next stage's codemod, not here"
     }
   ]

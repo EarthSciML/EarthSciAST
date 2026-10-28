@@ -1,0 +1,143 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "units_angle_meets_pure_number",
+    "description": "Where an angle meets a pure number, `rad` counts as dimensionless (esm-spec §4.8.3 \"An angle meets a pure number\"): the [angle] axis is removed from the angle and the two are compared by dimension and exact scale. Every equation here pairs a quantity in `rad` with a pure number at one of the places the rule names: a sum, min/max, a comparison, ifelse branches, an equation's two sides, and the argument of a strict transcendental. `psi_literal` is the Monin-Obukhov form `pi/2 - 2*atan(x)` written with bare literals, which checks as written under both the current and the dimensionless-literal rule (§4.8.6) and so carries no warning. tests/invalid/units_angle_deg_meets_pure_number.esm pins the scale refusal for `deg`.",
+    "authors": [
+      "EarthSciAST"
+    ],
+    "created": "2026-10-27T00:00:00Z",
+    "tags": [
+      "units",
+      "angle",
+      "rad"
+    ]
+  },
+  "models": {
+    "AngleMeetsNumber": {
+      "variables": {
+        "theta": {
+          "type": "parameter",
+          "units": "rad",
+          "default": 0.3,
+          "description": "A plane angle in radians."
+        },
+        "half_pi": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1.5707963267948966,
+          "description": "A pure number."
+        },
+        "x": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.5,
+          "description": "A pure-number argument of atan."
+        },
+        "psi_sum": {
+          "type": "unknown",
+          "units": "1",
+          "description": "Sum of a pure number and an angle: the angle cancels."
+        },
+        "psi_side": {
+          "type": "unknown",
+          "units": "1",
+          "description": "A pure number equated with an angle."
+        },
+        "psi_max": {
+          "type": "unknown",
+          "units": "1",
+          "description": "max of an angle and a pure number."
+        },
+        "psi_branch": {
+          "type": "unknown",
+          "units": "1",
+          "description": "ifelse whose condition compares, and whose branches pair, an angle with a pure number."
+        },
+        "growth": {
+          "type": "unknown",
+          "units": "1",
+          "description": "exp of an angle in radians."
+        },
+        "psi_literal": {
+          "type": "unknown",
+          "units": "1",
+          "description": "pi/2 - 2*atan(x), with bare literals."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "psi_sum",
+          "rhs": {
+            "op": "-",
+            "args": [
+              "half_pi",
+              "theta"
+            ]
+          }
+        },
+        {
+          "lhs": "psi_side",
+          "rhs": "theta"
+        },
+        {
+          "lhs": "psi_max",
+          "rhs": {
+            "op": "max",
+            "args": [
+              "theta",
+              "half_pi"
+            ]
+          }
+        },
+        {
+          "lhs": "psi_branch",
+          "rhs": {
+            "op": "ifelse",
+            "args": [
+              {
+                "op": ">",
+                "args": [
+                  "theta",
+                  "half_pi"
+                ]
+              },
+              "theta",
+              "half_pi"
+            ]
+          }
+        },
+        {
+          "lhs": "growth",
+          "rhs": {
+            "op": "exp",
+            "args": [
+              "theta"
+            ]
+          }
+        },
+        {
+          "lhs": "psi_literal",
+          "rhs": {
+            "op": "+",
+            "args": [
+              1.5707963267948966,
+              {
+                "op": "*",
+                "args": [
+                  -2,
+                  {
+                    "op": "atan",
+                    "args": [
+                      "x"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

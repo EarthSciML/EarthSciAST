@@ -11,6 +11,7 @@
       "/models/Literals/equations/18",
       "/models/Literals/equations/19",
       "/models/Literals/equations/2",
+      "/models/Literals/equations/21",
       "/models/Literals/equations/3",
       "/models/Literals/equations/4",
       "/models/Literals/equations/5",
@@ -154,6 +155,7 @@
     "tests/valid/toplevel_ref_index_set_merge.esm": [],
     "tests/valid/toplevel_ref_metaparameter_axis.esm": [],
     "tests/valid/toplevel_ref_metaparameter_axis_lib.esm": [],
+    "tests/valid/units_angle_meets_pure_number.esm": [],
     "tests/valid/units_array_mount_index_faq_consistent.esm": [],
     "tests/valid/units_array_mount_leaf.esm": [],
     "tests/valid/units_array_operators_consistent.esm": [],
@@ -224,6 +226,8 @@
     "tests/valid/units_symbolic_exponent_undeterminable.esm": [],
     "tests/valid/units_transcendental_scaled_argument_repair.esm": [],
     "tests/valid/variable_map_subsystem_endpoints.esm": [],
+    "tests/valid/version_gate_newer_leaf.esm": [],
+    "tests/valid/version_gate_older_mounts_newer.esm": [],
     "tests/valid/wildfire_atmosphere_ocean.esm": []
   }
 }

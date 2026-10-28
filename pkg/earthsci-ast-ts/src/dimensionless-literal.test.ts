@@ -9,10 +9,11 @@
 
 import { readFileSync } from 'node:fs'
 import * as path from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ERROR_CODES } from './errors.js'
 import { REPO_ROOT, fixturesDir } from './test-helpers.js'
 import { checkDimensions, parseUnit } from './units.js'
+import type * as units from './units.js'
 import { validateText } from './validate.js'
 import { floatLit, intLit } from './numeric-literal.js'
 import type { Expression } from './types.js'
@@ -64,6 +65,70 @@ describe('units_dimensionless_literal_mismatch (esm-spec §4.8.6)', () => {
     expect(message).toContain('273.15')
     expect(message).toContain('K')
     expect(message).toContain('const(')
+  })
+})
+
+describe('the warning pass and validity', () => {
+  const doc = (models: unknown) =>
+    JSON.stringify({ esm: '1.3.0', metadata: { name: 'T', authors: ['T'] }, models })
+
+  afterEach(() => {
+    vi.doUnmock('./units.js')
+    vi.resetModules()
+  })
+
+  it('an exception in the pass is an analysis warning, never an error', async () => {
+    vi.resetModules()
+    vi.doMock('./units.js', async (importOriginal) => ({
+      ...(await importOriginal<typeof units>()),
+      dimensionlessLiteralWarnings: () => {
+        throw new Error('boom')
+      },
+    }))
+    const { validateText: validateMocked } = await import('./validate.js')
+    const result = validateMocked(readFileSync(path.join(REPO_ROOT, FIXTURE), 'utf-8'))
+    expect(result.structural_errors).toEqual([])
+    expect(result.is_valid).toBe(true)
+    const failed = result.unit_warnings.filter((w) => w.message.includes('boom'))
+    expect(failed.map((w) => [w.code, w.message])).toEqual([
+      [ERROR_CODES.ANALYSIS, 'Error checking dimensionless literals: boom'],
+    ])
+  })
+
+  it('an inline subsystem site the validator already rejects carries no warning', () => {
+    // In the subsystem `a` is metres, so `b = a + 1` fails only with the
+    // literal dimensionless. The validator leaves subsystem-local names
+    // unbound and types `a` as the parent's seconds, so it already rejects the
+    // equation: that is an error, not a warning.
+    const result = validateText(
+      doc({
+        M: {
+          variables: {
+            a: { type: 'parameter', units: 's', default: 1 },
+            b: { type: 'unknown', units: 'm' },
+          },
+          equations: [{ lhs: 'b', rhs: 'a' }],
+          subsystems: {
+            Inner: {
+              variables: {
+                a: { type: 'parameter', units: 'm', default: 1 },
+                b: { type: 'unknown', units: 'm' },
+              },
+              equations: [{ lhs: 'b', rhs: { op: '+', args: ['a', 1] } }],
+            },
+          },
+        },
+      }),
+    )
+    const sub = '/models/M/subsystems/Inner/equations/0'
+    expect(result.structural_errors.map((e) => `${e.code} ${e.path}`)).toContain(
+      `unit_inconsistency ${sub}`,
+    )
+    expect(
+      result.unit_warnings
+        .filter((w) => w.code === ERROR_CODES.UNITS_DIMENSIONLESS_LITERAL_MISMATCH)
+        .map((w) => w.location),
+    ).not.toContain(sub)
   })
 })
 

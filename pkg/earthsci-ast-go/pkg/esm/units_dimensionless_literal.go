@@ -27,38 +27,54 @@ import (
 // check uses for it: its declared units (unparseable declarations skipped),
 // its scoped references relative to its own subsystems, and the document's
 // top-level scoped paths.
-func dimensionlessLiteralFindings(file *ESMFile, scoped *scopedUnitIndex) []UnitWarning {
-	var out []UnitWarning
+//
+// The pass can never fail validation: a panic inside it is recovered and
+// reported as one analysis warning at the document root, after the warnings
+// already found.
+func dimensionlessLiteralFindings(file *ESMFile, scoped *scopedUnitIndex) (out []UnitWarning) {
+	defer func() {
+		if r := recover(); r != nil {
+			out = append(out, UnitWarning{
+				Path:    "",
+				Code:    UnitFindingAnalysis,
+				Message: fmt.Sprintf("the esm-spec §4.8.6 dimensionless-literal check stopped early: %v", r),
+			})
+		}
+	}()
 	current := unitTyper{}
 	candidate := unitTyper{dimensionlessLiterals: true}
 
-	visit := func(pointer string, env map[string]Unit, lhs, rhs Expression, hasLHS bool) {
-		found := candidate.siteMismatch(lhs, rhs, hasLHS, env)
-		if found == "" || current.siteMismatch(lhs, rhs, hasLHS, env) != "" {
+	// visit judges one site under both literal rules through the validator's
+	// own site check (mismatch), recording a warning when only the
+	// dimensionless-literal rule finds a provable mismatch.
+	visit := func(pointer string, exprs []Expression, mismatch func(unitTyper) *UnitWarning) {
+		lits := nonzeroLiterals(exprs)
+		// With no nonzero literal the two rules type the site identically.
+		if len(lits) == 0 {
 			return
 		}
-		exprs := []Expression{rhs}
-		if hasLHS {
-			exprs = []Expression{lhs, rhs}
-		}
-		named := "(none determinable)"
-		if lits := nonzeroLiterals(exprs); len(lits) > 0 {
-			named = strings.Join(lits, ", ")
+		found := mismatch(candidate)
+		if !isMismatch(found) || isMismatch(mismatch(current)) {
+			return
 		}
 		out = append(out, UnitWarning{
 			Path: pointer,
 			Code: UnitFindingDimensionlessLiteral,
 			Message: fmt.Sprintf("%s: with bare numeric literals read as dimensionless (esm-spec §4.8.6), %s; "+
 				"bare literal(s): %s. This becomes an error at the next major esm version; a literal that "+
-				`carries a unit is written const(value, units "...") (esm-spec §4.8.5)`, pointer, found, named),
+				`carries a unit is written const(value, units "...") (esm-spec §4.8.5)`,
+				pointer, found.Message, strings.Join(lits, ", ")),
 		})
 	}
 	visitEquations := func(pointer, field string, env map[string]Unit, eqs []Equation) {
-		for i, eq := range eqs {
-			visit(fmt.Sprintf("%s/%s/%d", pointer, field, i), env, eq.LHS, eq.RHS, true)
+		for i := range eqs {
+			eq := &eqs[i]
+			site := fmt.Sprintf("%s/%s/%d", pointer, field, i)
+			visit(site, []Expression{eq.LHS, eq.RHS}, func(ut unitTyper) *UnitWarning {
+				return ut.equationFinding(eq, env, site)
+			})
 		}
 	}
-
 	var walkModel func(pointer string, model *Model)
 	walkModel = func(pointer string, model *Model) {
 		env, _ := buildModelUnitEnv(model)
@@ -83,7 +99,10 @@ func dimensionlessLiteralFindings(file *ESMFile, scoped *scopedUnitIndex) []Unit
 			if rx.Rate == nil {
 				continue
 			}
-			visit(fmt.Sprintf("%s/reactions/%d", pointer, i), env, nil, rx.Rate, false)
+			rate, site := rx.Rate, fmt.Sprintf("%s/reactions/%d", pointer, i)
+			visit(site, []Expression{rate}, func(ut unitTyper) *UnitWarning {
+				return ut.rateFinding(rate, env, site)
+			})
 		}
 		for _, name := range sortedKeys(system.Subsystems) {
 			if _, inline := subsystemAsMap(system.Subsystems[name]); !inline {
@@ -106,50 +125,11 @@ func dimensionlessLiteralFindings(file *ESMFile, scoped *scopedUnitIndex) []Unit
 	return out
 }
 
-// siteMismatch is the first provable mismatch one check site produces under
-// ut's literal rule, or "" when the site passes or is skipped. A site is an
-// equation (hasLHS: every operator rule inside either side, then the two sides
-// compared in dimension and exact scale when both are determinable) or a
-// reaction rate (the operator rules inside rhs only). A derivative with
-// respect to an undeclared independent variable is judged by the
-// no-time-unit-reconciles rule instead of the side comparison. An analysis finding (an
-// arity defect, say) is not a mismatch: it leaves that side undeterminable.
-func (ut unitTyper) siteMismatch(lhs, rhs Expression, hasLHS bool, env map[string]Unit) string {
-	var left *Unit
-	if hasLHS {
-		u, err := ut.propagate(lhs, env)
-		if err != nil && findingCode(err) == UnitFindingDimensionalMismatch {
-			return err.Error()
-		}
-		left = u
-	}
-	right, err := ut.propagate(rhs, env)
-	if err != nil && findingCode(err) == UnitFindingDimensionalMismatch {
-		return err.Error()
-	}
-	if !hasLHS || err != nil {
-		return ""
-	}
-	// `D(x)` with respect to an undeclared independent variable is
-	// undeterminable, so the sides are not compared directly; but whatever unit
-	// that variable carries contributes only powers of time, so a ratio with
-	// any other axis is provably irreconcilable (esm-spec §4.8.4).
-	if state, undeclared := ut.derivativeStateDim(lhs, env); undeclared {
-		if mismatch := derivativeTimeMismatch(state, right); mismatch != nil {
-			return mismatch.Error()
-		}
-		return ""
-	}
-	if left == nil || right == nil {
-		return ""
-	}
-	if !left.Dim.Equal(right.Dim) {
-		return fmt.Sprintf("LHS has dimension %s, RHS has dimension %s", left.Dim, right.Dim)
-	}
-	if !left.Exact.Equal(right.Exact) {
-		return fmt.Sprintf("LHS has dimension %s at scale %s, RHS at scale %s", left.Dim, left.Exact, right.Exact)
-	}
-	return ""
+// isMismatch reports whether a site check's finding is a provable mismatch. An
+// analysis finding (an arity defect, say) is not one: it leaves the site
+// undeterminable.
+func isMismatch(w *UnitWarning) bool {
+	return w != nil && w.Code == UnitFindingDimensionalMismatch
 }
 
 // bareLiteralValue is the value of a bare numeric literal, a `const` without

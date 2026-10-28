@@ -74,6 +74,8 @@ import {
   type ParsedUnit,
 } from './units.js'
 import { substitute } from './substitute.js'
+// The reaction lowering is the one `deriveOdes` uses (esm-libraries-spec §4.6.2).
+import { lowerReactionsToEquations } from './reactions.js'
 import {
   algebraicUnknowns,
   brownianParameters as classifyBrownian,
@@ -89,7 +91,6 @@ import { EsmMachineryError } from './lower-expression-templates.js'
 import { mergedTemplateRegistry } from './flatten-template-registry.js'
 import { resolveRhsTimeDerivatives } from './flatten-tendency.js'
 import {
-  addExprs,
   contributionsOf,
   equationFrom,
   foldContributions,
@@ -1260,57 +1261,6 @@ function collectModel(
     mergeComponent(component, collectModel(subModel, `${fullPrefix}.${subName}`, dataSources))
   }
   return component
-}
-
-/**
- * Lower a reaction list to `D(species, t) = Σ net_stoich · rate` equations by
- * mass action (esm-spec §7.4).
- *
- * Kept LOCAL to flatten rather than routed through `deriveODEs` because the two
- * differ in two observable ways, and the cross-binding corpus pins THIS one: a
- * species with a zero net rate gets NO equation (rather than `D(s,t) = 0`), and a
- * net stoichiometry of -1 emits `-1 * rate` (rather than a unary minus), which is
- * the form every other binding renders.
- *
- * A reservoir species (`constant: true`, §7.4) is held fixed and gets no ODE; its
- * concentration is still a mass-action factor in every other species' rate law.
- */
-function lowerReactionsToEquations(rs: ReactionSystem): Equation[] {
-  const speciesNames = Object.keys(rs.species ?? {})
-  const constantNames = new Set(
-    speciesNames.filter((n) => (rs.species ?? {})[n]?.constant === true),
-  )
-  const rates: Record<string, Expression> = {}
-  for (const name of speciesNames) rates[name] = 0
-
-  for (const reaction of rs.reactions ?? []) {
-    // Per esm-spec §7.4 the `rate` field is the rate COEFFICIENT; the full
-    // mass-action rate law is always `k · ∏ Sᵢ^nᵢ`.
-    let rateExpr: Expression = reaction.rate
-    for (const substrate of reaction.substrates ?? []) {
-      const factor: Expression =
-        substrate.stoichiometry === 1
-          ? substrate.species
-          : { op: '^', args: [substrate.species, substrate.stoichiometry] }
-      rateExpr = multiplyExprs(rateExpr, factor)
-    }
-
-    for (const name of speciesNames) {
-      let net = 0
-      for (const s of reaction.substrates ?? []) if (s.species === name) net -= s.stoichiometry
-      for (const p of reaction.products ?? []) if (p.species === name) net += p.stoichiometry
-      if (net === 0) continue
-      rates[name] = addExprs(rates[name], multiplyExprs(net, rateExpr))
-    }
-  }
-
-  const equations: Equation[] = []
-  for (const name of speciesNames) {
-    if (constantNames.has(name)) continue
-    if (numericValue(rates[name]) === 0) continue
-    equations.push({ lhs: { op: 'D', args: [name], wrt: 't' }, rhs: rates[name] })
-  }
-  return equations
 }
 
 /** Collect a ReactionSystem (lowered to ODEs) into a {@link ComponentSystem}. */

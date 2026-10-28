@@ -140,6 +140,11 @@ function _load_document(raw_data, base_path::String;
     # Rust runs it at the same point, ahead of ref resolution, for the same
     # reason.
     check_data_source_extents(raw_data, String(base_path), mount_declared)
+    # The version gates read THIS file's own `esm` (esm-spec §4.7, §4.8.5 item
+    # 6), so they run on the authored tree too, before the inliners below splice
+    # in content a mounted file declared under its own version. Each mounted
+    # file is gated against its own version at its mount edge.
+    _check_authored_document(raw_data)
     # Inline any top-level model `{ref}` stubs (schema §4.7: `models.*` is
     # oneOf [Model, {ref}]) before the typed pipeline, so a simulation file that
     # references its components by `{"ref": "..."}` — as the Python runner's
@@ -210,7 +215,7 @@ function _load_document(raw_data, base_path::String;
     doc = resolved_ds === nothing ? doc : resolved_ds
     file = _load_parsed(doc; base_path=base_path, metaparameters=metaparameters,
                         injected_imports=injected_imports,
-                        mount_declared=mount_declared)
+                        mount_declared=mount_declared, authored_checked=true)
     # Resolve nested subsystem references relative to the document's directory.
     # The loader-API bindings reach this mount form too (§4.7 "Two mount forms,
     # one mechanism"): a leaf mounted at a `subsystems.<k>` edge gets the same
@@ -370,36 +375,19 @@ function _format_schema_errors(schema_errors)::String
 end
 
 """
-    _load_parsed(raw_data; base_path, metaparameters, injected_imports) -> EsmFile
+    _check_authored_document(doc; mounted_leaf=false)
 
-Shared typed-load pipeline over an already-JSON-parsed document: version
-gates → schema validation → raw structural checks → §9.7 machinery →
-template lowering → typed coercion. Reached by every public `load_*` entry
-point through `_load_document`, which wraps it with the top-level `{ref}`
-inlining and nested subsystem-ref resolution that make a loaded document
-complete; `_load_local_ref` calls it directly because it drives the nested
-walk itself with a shared cycle-detection set.
+The version gates of ONE file, and the raw checks that run beside them, on the
+document AS ITS FILE SPELLS IT. Each file is held to its own declared `esm`
+version (esm-spec §4.7, §4.8.5 item 6): run on a document whose mounts are
+already inlined, a gate would judge the mounted file's constructs against the
+mounting file's version and reject a 1.0.0 file only because it mounts a 1.2.0
+one (`tests/valid/version_gate_older_mounts_newer.esm`). So the load pipeline
+calls this on the authored tree, before any `{ref}` is inlined, and the mount
+edges call it on each mounted file (`_resolve_mount_edge_core`,
+`_load_local_ref`, `_load_remote_ref`).
 """
-function _load_parsed(raw_data; base_path::AbstractString=pwd(),
-                      metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}(),
-                      injected_imports::AbstractVector=Any[],
-                      index_set_rename=nothing,
-                      rename_where::AbstractString="mount edge",
-                      mount_declared::Union{Nothing,AbstractSet{String}}=nothing,
-                      mounted_leaf::Bool=false,
-                      enclosing_env::AbstractDict{String,<:Integer}=Dict{String,Int}())::EsmFile
-    # `load_document` hands us an in-memory dict that never passed through
-    # `_read_json_document`, so the wire-boundary op pass runs here too. It is
-    # idempotent: a document that already came through the reader carries no
-    # alias, so this is a silent no-op rather than a second warning.
-    #
-    # `gate=false`: top-level `{ref}` inlining has already run by this point, so
-    # this document is no longer the AUTHORED one. A legal 1.0.0 parent that
-    # mounts a `faq`-using child now CONTAINS `faq` without ever having spelled
-    # it, and gating it here would reject a document nobody authored wrongly.
-    # The floor is raised instead, exactly as `emit` does (§5.5).
-    _prepare_document_ops!(raw_data; gate=false)
-
+function _check_authored_document(raw_data; mounted_leaf::Bool=false)
     # v0.4.0 expression_templates / apply_expression_template are
     # rejected when the file declares esm < 0.4.0 (RFC §5.4 spec-version
     # gate). Surfaced before schema validation so the user sees the
@@ -428,6 +416,44 @@ function _load_parsed(raw_data; base_path::AbstractString=pwd(),
     end
     # Declared `units` on a `const` node arrive at esm 1.2.0 (esm-spec §4.8.5).
     reject_const_units_pre_v12(raw_data)
+    return nothing
+end
+
+"""
+    _load_parsed(raw_data; base_path, metaparameters, injected_imports) -> EsmFile
+
+Shared typed-load pipeline over an already-JSON-parsed document: version
+gates → schema validation → raw structural checks → §9.7 machinery →
+template lowering → typed coercion. Reached by every public `load_*` entry
+point through `_load_document`, which wraps it with the top-level `{ref}`
+inlining and nested subsystem-ref resolution that make a loaded document
+complete; `_load_local_ref` calls it directly because it drives the nested
+walk itself with a shared cycle-detection set.
+"""
+function _load_parsed(raw_data; base_path::AbstractString=pwd(),
+                      metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}(),
+                      injected_imports::AbstractVector=Any[],
+                      index_set_rename=nothing,
+                      rename_where::AbstractString="mount edge",
+                      mount_declared::Union{Nothing,AbstractSet{String}}=nothing,
+                      mounted_leaf::Bool=false,
+                      authored_checked::Bool=false,
+                      enclosing_env::AbstractDict{String,<:Integer}=Dict{String,Int}())::EsmFile
+    # `load_document` hands us an in-memory dict that never passed through
+    # `_read_json_document`, so the wire-boundary op pass runs here too. It is
+    # idempotent: a document that already came through the reader carries no
+    # alias, so this is a silent no-op rather than a second warning.
+    #
+    # `gate=false`: top-level `{ref}` inlining has already run by this point, so
+    # this document is no longer the AUTHORED one. A legal 1.0.0 parent that
+    # mounts a `faq`-using child now CONTAINS `faq` without ever having spelled
+    # it, and gating it here would reject a document nobody authored wrongly.
+    # The floor is raised instead, exactly as `emit` does (§5.5).
+    _prepare_document_ops!(raw_data; gate=false)
+
+    # The version gates and the raw checks that belong with them, unless the
+    # caller already ran them on the AUTHORED form (`authored_checked`).
+    authored_checked || _check_authored_document(raw_data; mounted_leaf=mounted_leaf)
 
     # Validate schema
     schema_errors = validate_schema(raw_data)
@@ -1000,6 +1026,11 @@ function _resolve_mount_edge_core(entry::AbstractDict, ref::String, refpath::Str
     # `_load_local_ref` / `_load_remote_ref`.
     reject_expression_templates_pre_v04(comp)
     reject_template_imports_pre_v08(comp)
+    # The gates `_load_local_ref` and `_load_remote_ref` apply to a mounted
+    # file, against ITS OWN version (esm-spec §4.7): its content is about to
+    # be spliced into a document that may declare an older one.
+    reject_solver_pre_v11(comp)
+    reject_const_units_pre_v12(comp)
     _reject_library_ref(comp, ref, refpath)
     compdir = dirname(refpath)
 
@@ -1537,6 +1568,12 @@ function _inline_toplevel_reaction_system_refs!(native::AbstractDict{String,Any}
             comp = _read_json_document(read(refpath, String))
             comp isa AbstractDict{String,Any} || throw(SubsystemRefError(
                 "Referenced reaction system file '$(ref)' did not parse as a JSON object"))
+            # The mounted file's own version gates, against its own version
+            # (esm-spec §4.7), as at every other mount edge.
+            reject_expression_templates_pre_v04(comp)
+            reject_template_imports_pre_v08(comp)
+            reject_solver_pre_v11(comp)
+            reject_const_units_pre_v12(comp)
             # A §4.7 subsystem ref MUST NOT target a template/coupling library.
             _reject_library_ref(comp, ref, refpath)
             compdir = dirname(refpath)
@@ -2197,6 +2234,10 @@ function _load_local_ref(ref::String, base_path::String, visited::Set{String};
     content = read(resolved_path, String)
     raw_ref_doc = _read_json_document(content)
     _reject_library_ref(raw_ref_doc, ref, resolved_path)
+    # The mounted file's own version gates, on its authored form: its own
+    # top-level mounts are inlined below, and each of them is gated against its
+    # own version at its edge (esm-spec §4.7).
+    _check_authored_document(raw_ref_doc; mounted_leaf=true)
 
     # Parse the referenced file with the typed pipeline ONLY — deliberately not
     # a public `load_*` entry point, which would resolve nested refs with a
@@ -2240,7 +2281,7 @@ function _load_local_ref(ref::String, base_path::String, visited::Set{String};
                         rename_where=rename_where,
                         mount_declared=(isempty(effective) ? Set{String}() :
                             _collect_mount_declared_metaparameters(raw_ref_doc, ref_base)),
-                        mounted_leaf=true,
+                        mounted_leaf=true, authored_checked=true,
                         enclosing_env=enclosing_env)
 
     # Recursively resolve refs in the loaded file, relative to its own directory.

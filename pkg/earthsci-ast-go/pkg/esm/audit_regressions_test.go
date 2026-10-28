@@ -1245,7 +1245,7 @@ func TestCheckerB_A_IndependentVarAndCoordinatesAreImplicit(t *testing.T) {
 	      {"lhs":{"op":"ic","args":["u"]},
 	       "rhs":{"op":"tanh","args":[{"op":"-","args":["x",0.3]}]}},
 	      {"lhs":{"op":"D","args":["u"],"wrt":"t"},
-	       "rhs":{"op":"*","args":[{"op":"sin","args":["t"]},0.0]}}
+	       "rhs":{"op":"*","args":["t",0.0]}}
 	    ]}}}`
 	result := validateSrc(t, src)
 	if hasCode(result, ErrorUndefinedVariable) {
@@ -1259,6 +1259,12 @@ func TestCheckerB_A_IndependentVarAndCoordinatesAreImplicit(t *testing.T) {
 	bad := validateSrc(t, strings.Replace(src, `"x",0.3`, `"not_a_coord",0.3`, 1))
 	if !hasCode(bad, ErrorUndefinedVariable) {
 		t.Error("an ordinary undeclared name must still be reported as undefined_variable")
+	}
+	// An undeclared `t` is implicit, but it is in seconds (esm-spec §4.9.1), so
+	// `sin(t)` is a unit inconsistency rather than an undefined name.
+	sinT := validateSrc(t, strings.Replace(src, `"args":["t",0.0]`, `"args":[{"op":"sin","args":["t"]},0.0]`, 1))
+	if hasCode(sinT, ErrorUndefinedVariable) || !hasCode(sinT, ErrorUnitInconsistency) {
+		t.Errorf("sin(t) with `t` undeclared must be a unit_inconsistency, not undefined: %+v", sinT.StructuralErrors)
 	}
 }
 
@@ -1618,8 +1624,14 @@ func TestUnitsV2_TrigReturnsAnAngle(t *testing.T) {
 		if err != nil || u == nil || !u.Dim.IsDimensionless() {
 			t.Errorf("%s(pure number) must be dimensionless: %v (err %v)", op, u, err)
 		}
-		if _, err := PropagateDimension(ExprNode{Op: op, Args: []any{"theta"}}, env); err == nil {
-			t.Errorf("%s takes a DIMENSIONLESS argument — an angle must be rejected", op)
+		// An angle meets a pure number (esm-spec §4.8.3): the angle axis is
+		// removed and the scale kept, so `rad` passes and `deg` is refused for
+		// its scale, like `percent`.
+		if u, err := PropagateDimension(ExprNode{Op: op, Args: []any{"theta"}}, env); err != nil || u == nil || !u.Dim.IsDimensionless() {
+			t.Errorf("%s(rad) must be accepted as a pure number: %v (err %v)", op, u, err)
+		}
+		if _, err := PropagateDimension(ExprNode{Op: op, Args: []any{"azimuth"}}, env); err == nil {
+			t.Errorf("%s(deg) must be refused: a deg argument is a pure number at scale pi/180", op)
 		}
 		if _, err := PropagateDimension(ExprNode{Op: op, Args: []any{"mass"}}, env); err == nil {
 			t.Errorf("%s(kg) must be rejected", op)

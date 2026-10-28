@@ -599,8 +599,18 @@ function validateAny(data: string | object, options: ValidateOptions = {}): Vali
 
         // Bare numeric literals read as dimensionless (esm-spec §4.8.6):
         // warnings only at this stage, added after the promotion above so they
-        // can never become errors or change `is_valid`.
-        unit_warnings.push(...dimensionlessLiteralWarnings(esmFile))
+        // can never become errors or change `is_valid`. A failure in the pass
+        // is an `analysis` unit warning, as a failed unit check is, and never
+        // reaches the catch below that reports a structural error.
+        try {
+          unit_warnings.push(...dimensionlessLiteralWarnings(esmFile))
+        } catch (e: unknown) {
+          unit_warnings.push({
+            message: `Error checking dimensionless literals: ${e instanceof Error ? e.message : String(e)}`,
+            code: ERROR_CODES.ANALYSIS,
+            location: ROOT_PATH,
+          })
+        }
       } catch (e: unknown) {
         const error = e as Error
         structural_errors.push({

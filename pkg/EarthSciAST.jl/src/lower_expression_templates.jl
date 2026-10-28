@@ -2022,6 +2022,7 @@ function _expand_reaction_system_refs!(rs::ReactionSystem, reg)
             _expand_expr_refs(r.rate, reg); name=r.name, reference=r.reference))
     end
     empty!(rs.reactions); append!(rs.reactions, new_reactions)
+    _expand_equations_refs!(rs.constraint_equations, reg)
     for (_, sub) in rs.subsystems
         _expand_reaction_system_refs!(sub, reg)
     end

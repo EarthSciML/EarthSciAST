@@ -149,3 +149,19 @@ func TestDimensionlessLiteralTyperZeroStaysNeutral(t *testing.T) {
 		t.Errorf("x + 1 under the current rule: want no finding, got %v", err)
 	}
 }
+
+// A panic inside the warning pass degrades to one analysis warning; it never
+// escapes to the caller of Validate.
+func TestDimensionlessLiteralPanicDegradesToWarning(t *testing.T) {
+	file := &ESMFile{Models: map[string]Model{"M": {
+		Equations: []Equation{{
+			LHS: "x",
+			// A nil node pointer panics when typed.
+			RHS: ExprNode{Op: "+", Args: []any{(*ExprNode)(nil), 2.0}},
+		}},
+	}}}
+	warnings := dimensionlessLiteralFindings(file, nil)
+	if len(warnings) != 1 || warnings[0].Code != UnitFindingAnalysis {
+		t.Fatalf("got %+v, want one %s warning", warnings, UnitFindingAnalysis)
+	}
+}
