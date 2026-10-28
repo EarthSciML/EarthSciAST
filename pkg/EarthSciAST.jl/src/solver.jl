@@ -393,7 +393,7 @@ function time_origin(file::EsmFile)
 end
 
 """
-    timestamp_to_seconds(file::EsmFile, timestamp::AbstractString) -> Float64
+    timestamp_to_seconds(file::EsmFile, timestamp) -> Float64
 
 `timestamp`, an RFC 3339 UTC timestamp (`YYYY-MM-DDThh:mm:ss[.f]Z` — the
 `solver.time_span` bound form), as seconds from `file`'s time origin:
@@ -402,15 +402,26 @@ fractions in binary64, exactly as [`resolve_time_span`](@ref) converts a
 `time_span` timestamp (esm-spec §2.2.7). The origin is
 [`time_origin(file)`](@ref).
 
-Raises `solver_time_span_invalid` when `timestamp` is not of that form or names
-no calendar day, or when the document's origin cannot be read.
+Raises `solver_time_span_invalid` when `timestamp` is not a string, is not of
+that form, or names no calendar day, or when the document's origin cannot be
+read. The timestamp is checked before the origin, so the two errors — which
+share a code — are reported in the same order as in the other bindings.
 """
 function timestamp_to_seconds(file::EsmFile, timestamp::AbstractString)
-    origin = _time_origin(file.domain)
-    origin isa _TimeSpanFault && throw(_time_span_accessor_error(origin))
-    s = _time_span_seconds(timestamp, "timestamp", origin)
+    # `_time_span_seconds` checks the timestamp's form and calendar BEFORE it
+    # consults the origin, so a bad timestamp is reported as such even when the
+    # document's origin is also unreadable.
+    s = _time_span_seconds(timestamp, "timestamp", _time_origin(file.domain))
     s isa _TimeSpanFault && throw(_time_span_accessor_error(s))
     return s
+end
+
+# A non-string timestamp is a caller error, not a `MethodError`: report it with
+# the same code and shape as Python (which maps it to `solver_time_span_invalid`).
+function timestamp_to_seconds(file::EsmFile, timestamp)
+    throw(_time_span_accessor_error(_TimeSpanFault(
+        "timestamp ($(repr(timestamp))) is not an RFC 3339 UTC timestamp " *
+        "(YYYY-MM-DDThh:mm:ss[.f]Z)")))
 end
 
 """

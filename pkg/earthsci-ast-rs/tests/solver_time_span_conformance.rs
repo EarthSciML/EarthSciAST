@@ -394,7 +394,7 @@ fn timestamp_to_seconds_counts_from_the_document_origin() {
 }
 
 #[test]
-fn the_origin_and_converter_are_consistent_for_any_timestamp() {
+fn the_origin_and_converter_are_consistent_for_exactly_representable_timestamps() {
     let m = manifest();
     let posix = load(&fixture_by_id(&m, "timestamps_posix")).expect("loads");
     let reference = load(&fixture_by_id(&m, "timestamps_reference_time")).expect("loads");
@@ -410,6 +410,47 @@ fn the_origin_and_converter_are_consistent_for_any_timestamp() {
             "{stamp}"
         );
     }
+}
+
+#[test]
+fn reconstruction_from_the_pair_is_correct_only_to_within_rounding() {
+    // `time_origin + timestamp_to_seconds` rounds the two parts separately, so
+    // it equals the timestamp's POSIX time only to within binary64 rounding.
+    let doc: earthsci_ast::EsmFile = serde_json::from_str(&decay_doc(
+        serde_json::json!({"time_span": {"start": "2019-07-01T00:00:00.1Z", "end": "2019-07-01T00:00:01Z"}}),
+        Some(serde_json::json!({"reference_time": "2019-07-01T00:00:00.2Z"})),
+    ))
+    .expect("typed document");
+    let origin = earthsci_ast::time_origin(&doc).expect("an origin");
+    let converted =
+        earthsci_ast::timestamp_to_seconds(&doc, "2019-07-01T00:00:00.1Z").expect("converts");
+    assert_eq!(converted, -0.1);
+    assert_eq!(origin, 1_561_939_200.2);
+    // One ulp above the timestamp's own POSIX time, 1561939200.1.
+    let posix = 1_561_939_200.1_f64;
+    assert_eq!(origin + converted, f64::from_bits(posix.to_bits() + 1));
+    assert_ne!(origin + converted, posix);
+}
+
+#[test]
+fn a_bad_timestamp_is_reported_before_a_bad_origin() {
+    let bad: earthsci_ast::EsmFile = serde_json::from_str(&decay_doc(
+        serde_json::json!({"time_span": {"start": 0, "end": 1}}),
+        Some(serde_json::json!({"reference_time": "not-a-date"})),
+    ))
+    .expect("typed document");
+    let e = earthsci_ast::timestamp_to_seconds(&bad, "2019-07-01").expect_err("bad form");
+    assert_eq!(e.code, "solver_time_span_invalid");
+    assert!(
+        e.message.contains("not an RFC 3339 UTC timestamp"),
+        "{}",
+        e.message
+    );
+    assert!(
+        !e.message.contains("/domain/temporal/reference_time"),
+        "{}",
+        e.message
+    );
 }
 
 #[test]

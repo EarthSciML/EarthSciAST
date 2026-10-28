@@ -11,6 +11,7 @@ fixture pins the diagnostic code and substrings of its message.
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
 import pytest
@@ -290,14 +291,29 @@ def test_timestamp_to_seconds_counts_from_the_document_origin() -> None:
     assert earthsci_ast.timestamp_to_seconds(frac, "2019-07-01T00:00:01.25Z") == 1.0
 
 
-def test_the_origin_and_converter_are_consistent_for_any_timestamp() -> None:
-    """`time_origin + timestamp_to_seconds == the POSIX time of the timestamp`."""
+def test_the_origin_and_converter_are_consistent_for_exactly_representable_timestamps() -> None:
+    """For `.0`/`.5` fractions, `time_origin + timestamp_to_seconds == POSIX time`."""
     posix = _load(BY_ID["timestamps_posix"])
     ref = _load(BY_ID["timestamps_reference_time"])
     for stamp in ("2019-07-01T00:00:00Z", "2019-07-03T00:00:00Z", "2019-07-01T00:00:00.5Z"):
         assert earthsci_ast.timestamp_to_seconds(posix, stamp) == earthsci_ast.time_origin(
             ref
         ) + earthsci_ast.timestamp_to_seconds(ref, stamp)
+
+
+def test_reconstruction_from_the_pair_is_correct_only_to_within_rounding() -> None:
+    """`time_origin + timestamp_to_seconds` rounds the two parts separately."""
+    f = _in_memory(
+        "2019-07-01T00:00:00.1Z",
+        "2019-07-01T00:00:01Z",
+        {"reference_time": "2019-07-01T00:00:00.2Z"},
+    )
+    origin = earthsci_ast.time_origin(f)
+    converted = earthsci_ast.timestamp_to_seconds(f, "2019-07-01T00:00:00.1Z")
+    assert converted == -0.1
+    assert origin == 1561939200.2
+    # One ulp above the timestamp's own POSIX time, 1561939200.1.
+    assert origin + converted == math.nextafter(1561939200.1, math.inf)
 
 
 def test_time_origin_refuses_an_unreadable_origin() -> None:
@@ -324,3 +340,12 @@ def test_timestamp_to_seconds_refuses_a_bad_timestamp_or_origin() -> None:
             _in_memory(0, 1, {"reference_time": "not-a-date"}), "2019-07-01T00:00:00Z"
         )
     assert "/domain/temporal/reference_time" in str(excinfo.value)
+
+
+def test_the_timestamp_is_reported_before_the_origin() -> None:
+    """Both errors share a code, so the order must match Julia and Rust."""
+    f = _in_memory(0, 1, {"reference_time": "not-a-date"})
+    with pytest.raises(earthsci_ast.SolverBlockError) as excinfo:
+        earthsci_ast.timestamp_to_seconds(f, "2019-07-01")
+    assert "not an RFC 3339 UTC timestamp" in str(excinfo.value)
+    assert "/domain/temporal/reference_time" not in str(excinfo.value)

@@ -571,22 +571,35 @@ the whole-second difference in integers, then the fractions added in binary64.
 No binding reads a host date library: the calendar is the proleptic Gregorian
 `days_from_civil`, so the range and the leap-year rules are the same everywhere.
 
-| Canonical | Julia | Python | Rust | Returns |
-|---|---|---|---|---|
-| `resolve_time_span` | `resolve_time_span` | `resolve_time_span` | `resolve_time_span` | the interval to simulate: the call-site `tspan`, else the document's converted `time_span`, else none |
-| `time_origin` | `time_origin` | `time_origin` | `time_origin` | the origin itself, as binary64 seconds from the POSIX epoch (`0.0` when the document declares none) |
-| `timestamp_to_seconds` | `timestamp_to_seconds` | `timestamp_to_seconds` | `timestamp_to_seconds` | one timestamp, in seconds from that origin |
+| Canonical | Julia | Python | Rust | TypeScript | Go | Returns |
+|---|---|---|---|---|---|---|
+| `resolve_time_span` | `resolve_time_span` | `resolve_time_span` | `resolve_time_span` | `resolveTimeSpan` | `ResolveTimeSpan` | the interval to simulate: the call-site `tspan`, else the document's converted `time_span`, else none |
+| `time_origin` | `time_origin` | `time_origin` | `time_origin` | – | – | the origin itself, as binary64 seconds from the POSIX epoch (`0.0` when the document declares none) |
+| `timestamp_to_seconds` | `timestamp_to_seconds` | `timestamp_to_seconds` | `timestamp_to_seconds` | – | – | one timestamp, in seconds from that origin |
 
 `time_origin` and `timestamp_to_seconds` are the two halves of
 `resolve_time_span`'s arithmetic, exposed so a caller can convert a timestamp of
 its own — a run config, or an interval it was handed — without reaching into a
 binding's internals. `timestamp_to_seconds` accepts exactly the bound form
-(`Z`, no offset), so it agrees with `resolve_time_span` bit for bit:
-`time_origin(f) + timestamp_to_seconds(f, ts)` is the timestamp's POSIX time. A
-present-but-unreadable origin, a malformed timestamp, or a day that names no
+(`Z`, no offset), so it agrees with `resolve_time_span` bit for bit: the same
+operands in the same order.
+
+Reconstructing a timestamp's POSIX time from the pair is a separate matter.
+`time_origin(f) + timestamp_to_seconds(f, ts)` rounds `W₀ + f₀` and
+`(W − W₀) + (f − f₀)` separately before adding them, so it equals `W + f` only
+to within binary64 rounding — exactly when the fractions are representable
+(origin `.25`, timestamp `.5`), one ulp off otherwise (origin `.2`, timestamp
+`.1`). A caller who needs a timestamp's POSIX time converts it with the same
+origin through `resolve_time_span`, rather than reconstructing it from rounded
+parts.
+
+A present-but-unreadable origin, a malformed timestamp, or a day that names no
 calendar day raises `solver_time_span_invalid` (the code §2.2.7's load check
-already uses). Julia, Python and Rust carry all three; Go and TypeScript do not
-simulate and carry none of them.
+already uses); when the timestamp AND the origin are both bad, the timestamp is
+reported first, in every binding. Julia, Python and Rust carry all three
+operations. TypeScript and Go carry `resolve_time_span` but not the two new
+accessors — neither binding simulates, and the pair exists for a host driving a
+run.
 
 #### `compiler`: which strategy builds the right-hand side
 

@@ -494,6 +494,19 @@ fn time_origin_of(temporal: Option<&Value>) -> Result<Instant, OriginFault> {
     Ok(epoch)
 }
 
+/// The §2.2.7 message for a timestamp that did not convert, `label` naming it
+/// (`start`, `end`, `timestamp`). Shared by the `time_span` path and the public
+/// accessor so their wording cannot drift.
+fn stamp_error(label: &str, text: &str, kind: StampError) -> String {
+    match kind {
+        StampError::NoDay => format!("{label} \"{text}\" names no calendar day"),
+        StampError::Form => format!(
+            "{label} \"{text}\" is not an RFC 3339 UTC timestamp \
+             (YYYY-MM-DDThh:mm:ss[.f]Z)"
+        ),
+    }
+}
+
 /// Convert both bounds to binary64 seconds on the document's clock and check
 /// that they describe an interval (esm-spec §2.2.7). A timestamp is
 /// `(W − W₀) + (f − f₀)`: the whole-second difference in integers, then
@@ -506,22 +519,17 @@ fn time_span_seconds(
     let mut stamps = [None, None];
     for (slot, (name, bound)) in stamps.iter_mut().zip([("start", start), ("end", end)]) {
         if let Bound::Timestamp(text) = bound {
-            *slot = Some(parse_date_time(text, true).map_err(|e| match e {
-                StampError::NoDay => {
-                    time_span_invalid(format_args!("{name} \"{text}\" names no calendar day"))
-                }
-                StampError::Form => time_span_invalid(format_args!(
-                    "{name} \"{text}\" is not an RFC 3339 UTC timestamp \
-                     (YYYY-MM-DDThh:mm:ss[.f]Z)"
-                )),
-            })?);
+            *slot = Some(
+                parse_date_time(text, true)
+                    .map_err(|e| time_span_invalid(stamp_error(name, text, e)))?,
+            );
         }
     }
     let origin = if stamps.iter().any(Option::is_some) {
         Some(time_origin_of(temporal).map_err(|f| {
             time_span_invalid(format_args!(
                 "{}",
-                f.message("a timestamp bound is counted from the time origin")
+                f.message("a timestamp is counted from the time origin")
             ))
         })?)
     } else {
@@ -619,6 +627,13 @@ fn accessor_error(fault: &OriginFault) -> DiagnosticError {
     )
 }
 
+/// The document's time origin as an [`Instant`], or the accessors' refusal.
+/// One lookup path, shared by [`time_origin`] and [`timestamp_to_seconds`].
+fn origin_instant(file: &crate::EsmFile) -> Result<Instant, DiagnosticError> {
+    let temporal = file.domain.as_ref().and_then(|d| d.temporal.as_ref());
+    time_origin_of(temporal).map_err(|f| accessor_error(&f))
+}
+
 /// The document's time origin in seconds from the POSIX epoch (esm-spec
 /// §2.2.7): `domain.temporal.reference_time`, else `domain.temporal.start`,
 /// else the epoch itself, as `W0 + f0` -- whole seconds converted, the
@@ -630,8 +645,7 @@ fn accessor_error(fault: &OriginFault) -> DiagnosticError {
 /// but is not an RFC 3339 date-time naming a calendar day fails with
 /// `solver_time_span_invalid`, naming its pointer.
 pub fn time_origin(file: &crate::EsmFile) -> Result<f64, DiagnosticError> {
-    let temporal = file.domain.as_ref().and_then(|d| d.temporal.as_ref());
-    let origin = time_origin_of(temporal).map_err(|f| accessor_error(&f))?;
+    let origin = origin_instant(file)?;
     Ok(origin.whole as f64 + origin.frac)
 }
 
@@ -644,26 +658,23 @@ pub fn time_origin(file: &crate::EsmFile) -> Result<f64, DiagnosticError> {
 /// origin is [`time_origin`].
 ///
 /// Fails with `solver_time_span_invalid` when `timestamp` is not of that form
-/// or names no calendar day, or when the document's origin cannot be read.
+/// or names no calendar day, or when the document's origin cannot be read. The
+/// timestamp is checked BEFORE the origin, so the two errors -- which share a
+/// code -- are reported in the same order as in Julia and Python.
 pub fn timestamp_to_seconds(
     file: &crate::EsmFile,
     timestamp: &str,
 ) -> Result<f64, DiagnosticError> {
     let stamp = parse_date_time(timestamp, true).map_err(|kind| {
-        let why = match kind {
-            StampError::NoDay => format!("timestamp \"{timestamp}\" names no calendar day"),
-            StampError::Form => format!(
-                "timestamp \"{timestamp}\" is not an RFC 3339 UTC timestamp \
-                 (YYYY-MM-DDThh:mm:ss[.f]Z)"
-            ),
-        };
         err(
             codes::SOLVER_TIME_SPAN_INVALID,
-            format!("{why} (esm-spec §2.2.7)."),
+            format!(
+                "{} (esm-spec §2.2.7).",
+                stamp_error("timestamp", timestamp, kind)
+            ),
         )
     })?;
-    let temporal = file.domain.as_ref().and_then(|d| d.temporal.as_ref());
-    let origin = time_origin_of(temporal).map_err(|f| accessor_error(&f))?;
+    let origin = origin_instant(file)?;
     Ok((stamp.whole - origin.whole) as f64 + (stamp.frac - origin.frac))
 }
 

@@ -218,5 +218,44 @@ include("testutils.jl")   # TESTUTILS_REPO_ROOT
         end
         @test e isa EarthSciAST.ExpressionTemplateError &&
               occursin("names no calendar day", e.message)
+
+        # A bad timestamp is reported BEFORE a bad origin: the two share a code,
+        # so the order must match Python and Rust.
+        e = try
+            EarthSciAST.timestamp_to_seconds(bad_origin, "2019-07-01")
+            nothing
+        catch err
+            err
+        end
+        @test e isa EarthSciAST.ExpressionTemplateError &&
+              occursin("not an RFC 3339 UTC timestamp", e.message) &&
+              !occursin("/domain/temporal/reference_time", e.message)
+
+        # A non-string timestamp is the same structured error, not a MethodError.
+        for bad in (0, nothing, :t)
+            e = try
+                EarthSciAST.timestamp_to_seconds(ref, bad)
+                nothing
+            catch err
+                err
+            end
+            @test e isa EarthSciAST.ExpressionTemplateError &&
+                  e.code == EarthSciAST.ERROR_CODES.SOLVER_TIME_SPAN_INVALID &&
+                  occursin("not an RFC 3339 UTC timestamp", e.message)
+        end
+
+        # Reconstructing a timestamp's POSIX time from the pair is correct only
+        # to within rounding: `time_origin` and `timestamp_to_seconds` round
+        # `W₀ + f₀` and `(W − W₀) + (f − f₀)` separately. With an exactly
+        # representable fraction they agree; with origin `.2` and timestamp
+        # `.1` the sum is one ulp high.
+        rounding = EarthSciAST.EsmFile("1.3.0", EarthSciAST.Metadata("m");
+            domain=EarthSciAST.Domain(temporal=Dict{String,Any}(
+                "reference_time" => "2019-07-01T00:00:00.2Z")))
+        @test EarthSciAST.time_origin(rounding) === 1561939200.2
+        @test EarthSciAST.timestamp_to_seconds(rounding, "2019-07-01T00:00:00.1Z") === -0.1
+        @test EarthSciAST.time_origin(rounding) +
+              EarthSciAST.timestamp_to_seconds(rounding, "2019-07-01T00:00:00.1Z") ===
+              nextfloat(1561939200.1)
     end
 end

@@ -335,18 +335,19 @@ def _whole_and_fraction(
     return whole, (float("0." + frac) if frac else 0.0)
 
 
-def _parse_bound_timestamp(which: str, text: str) -> tuple[int, float]:
-    """(*W*, *f*) of a timestamp bound. Raises ``solver_time_span_invalid`` when
-    it does not match :data:`_BOUND_RE` (reachable only for a document built in
-    memory: load leaves that to the schema) and :class:`_NoCalendarDay` when it
-    matches but names no calendar day."""
+def _parse_bound_timestamp(text: str) -> tuple[int, float] | None:
+    """(*W*, *f*) of a timestamp bound, or ``None`` when it does not match the
+    schema's :data:`_BOUND_RE` form (reachable only for a document built in
+    memory: load leaves that to the schema). Raises :class:`_NoCalendarDay` when
+    it matches but names no calendar day.
+
+    Returning ``None`` rather than raising lets every caller word its own
+    refusal (``/solver/time_span/start``, ``timestamp``) while matching the
+    pattern exactly once.
+    """
     m = _BOUND_RE.match(text)
     if m is None:
-        raise SolverBlockError(
-            SOLVER_TIME_SPAN_INVALID,
-            f'/solver/time_span/{which}: "{text}" is not an RFC 3339 UTC timestamp '
-            "(YYYY-MM-DDThh:mm:ss[.f]Z). Offending path: /solver/time_span",
-        )
+        return None
     y, mo, d, h, mi, sec = (int(g) for g in m.groups()[:6])
     return _whole_and_fraction(y, mo, d, h, mi, sec, m.group(7), 0)
 
@@ -406,6 +407,33 @@ def _origin_field(temporal: Any) -> tuple[str, Any]:
     return "", _POSIX_EPOCH
 
 
+class _OriginUnreadable(Exception):
+    """The origin field that applies is present but is not a usable date-time.
+
+    Carries the offending field's ``pointer`` and ``authored`` value so each
+    caller can word its own refusal, from ONE resolution path (§2.2.7).
+    """
+
+    def __init__(self, pointer: str, authored: Any) -> None:
+        super().__init__(pointer)
+        self.pointer = pointer
+        self.authored = authored
+
+
+def _read_origin(temporal: Any) -> tuple[int, float]:
+    """(*W₀*, *f₀*) of the §2.2.7 time origin, or raise :class:`_OriginUnreadable`.
+
+    The single origin-resolution path: ``domain.temporal.reference_time``, else
+    ``domain.temporal.start``, else the POSIX epoch. Callers reword the refusal
+    for their own context (a ``time_span`` bound, or the public accessors).
+    """
+    pointer, authored = _origin_field(temporal)
+    parsed = _parse_origin(authored)
+    if parsed is None:
+        raise _OriginUnreadable(pointer, authored)
+    return parsed
+
+
 def _time_span_seconds(start: Any, end: Any, temporal: Any) -> tuple[float, float]:
     """Both bounds in binary64 seconds on the document's clock (§2.2.7), checked.
 
@@ -437,24 +465,31 @@ def _time_span_seconds(start: Any, end: Any, temporal: Any) -> tuple[float, floa
                 "timestamp. Offending path: /solver/time_span",
             )
         try:
-            whole, frac = _parse_bound_timestamp(which, value)
+            parsed = _parse_bound_timestamp(value)
         except _NoCalendarDay:
             raise SolverBlockError(
                 SOLVER_TIME_SPAN_INVALID,
                 f'/solver/time_span/{which}: "{value}" names no calendar day. '
                 "Offending path: /solver/time_span",
             ) from None
+        if parsed is None:
+            raise SolverBlockError(
+                SOLVER_TIME_SPAN_INVALID,
+                f'/solver/time_span/{which}: "{value}" is not an RFC 3339 UTC timestamp '
+                "(YYYY-MM-DDThh:mm:ss[.f]Z). Offending path: /solver/time_span",
+            )
+        whole, frac = parsed
         if origin is None:
-            pointer, authored = _origin_field(temporal)
-            origin = _parse_origin(authored)
-            if origin is None:
+            try:
+                origin = _read_origin(temporal)
+            except _OriginUnreadable as exc:
                 raise SolverBlockError(
                     SOLVER_TIME_SPAN_INVALID,
                     f"/solver/time_span/{which} is a timestamp, which counts seconds from "
-                    f"the document's time origin, but {pointer} ({authored!r}) is not an "
+                    f"the document's time origin, but {exc.pointer} ({exc.authored!r}) is not an "
                     "RFC 3339 date-time naming a calendar day (esm-spec §2.2.7). "
                     "Offending path: /solver/time_span",
-                )
+                ) from None
         w0, f0 = origin
         return float(whole - w0) + (frac - f0)
 
@@ -537,15 +572,14 @@ def _document_origin_parts(esm_file: EsmFile) -> tuple[int, float]:
     """
     domain = getattr(esm_file, "domain", None)
     temporal = getattr(domain, "temporal", None) if domain is not None else None
-    pointer, authored = _origin_field(temporal)
-    parsed = _parse_origin(authored)
-    if parsed is None:
+    try:
+        return _read_origin(temporal)
+    except _OriginUnreadable as exc:
         raise SolverBlockError(
             SOLVER_TIME_SPAN_INVALID,
-            f"the document's time origin {pointer} ({authored!r}) is not an RFC 3339 "
+            f"the document's time origin {exc.pointer} ({exc.authored!r}) is not an RFC 3339 "
             "date-time naming a calendar day (esm-spec §2.2.7)",
-        )
-    return parsed
+        ) from None
 
 
 def time_origin(esm_file: EsmFile) -> float:
@@ -576,21 +610,26 @@ def timestamp_to_seconds(esm_file: EsmFile, timestamp: str) -> float:
     timestamp. The origin is :func:`time_origin`.
 
     Raises ``solver_time_span_invalid`` when ``timestamp`` is not of that form or
-    names no calendar day, or when the document's origin cannot be read.
+    names no calendar day, or when the document's origin cannot be read. The
+    timestamp is checked BEFORE the origin, so the two errors a caller cannot
+    tell apart by code are still reported in the same order in every binding.
     """
-    if not isinstance(timestamp, str) or _BOUND_RE.match(timestamp) is None:
+    parsed: tuple[int, float] | None = None
+    if isinstance(timestamp, str):
+        try:
+            parsed = _parse_bound_timestamp(timestamp)
+        except _NoCalendarDay:
+            raise SolverBlockError(
+                SOLVER_TIME_SPAN_INVALID,
+                f'timestamp "{timestamp}" names no calendar day (esm-spec §2.2.7)',
+            ) from None
+    if parsed is None:
         raise SolverBlockError(
             SOLVER_TIME_SPAN_INVALID,
             f'timestamp "{timestamp}" is not an RFC 3339 UTC timestamp '
             "(YYYY-MM-DDThh:mm:ss[.f]Z) (esm-spec §2.2.7)",
         )
-    try:
-        whole, frac = _parse_bound_timestamp("timestamp", timestamp)
-    except _NoCalendarDay:
-        raise SolverBlockError(
-            SOLVER_TIME_SPAN_INVALID,
-            f'timestamp "{timestamp}" names no calendar day (esm-spec §2.2.7)',
-        ) from None
+    whole, frac = parsed
     w0, f0 = _document_origin_parts(esm_file)
     return float(whole - w0) + (frac - f0)
 
