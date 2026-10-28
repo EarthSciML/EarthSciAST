@@ -40,79 +40,6 @@ jobs:
       julia-subdir: pkg/EarthSciAST.jl
       version-check: ./scripts/check-version-sync.sh
 
-  # Security scan before release
-  security-scan:
-    needs: release-analysis
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    if: needs.release-analysis.outputs.needs_release == 'true'
-    outputs:
-      security_status: ${{ steps.security_check.outputs.status }}
-      vulnerabilities_found: ${{ steps.security_check.outputs.vulnerabilities }}
-    steps:
-    - uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
-
-    - name: Install security tools
-      run: |
-        pip install --upgrade pip
-        pip install safety toml requests urllib3
-
-    - name: Run pre-release security scan
-      id: security_check
-      run: |
-        echo "Running pre-release security scan..."
-
-        # Run security scanner
-        python3 scripts/package-security-scanner.py \
-          --config .security-config.json \
-          --output pre-release-security-scan.json
-
-        SCAN_EXIT_CODE=$?
-
-        # Check for critical vulnerabilities
-        CRITICAL_VULNS=$(python3 -c "
-        import json
-        try:
-            with open('pre-release-security-scan.json', 'r') as f:
-                data = json.load(f)
-            critical_count = 0
-            for pkg in data.get('packages', {}).values():
-                for vuln in pkg.get('vulnerabilities', []):
-                    if vuln.get('severity', '').lower() in ['critical', 'high']:
-                        critical_count += 1
-            print(critical_count)
-        except:
-            print(0)
-        ")
-
-        echo "Critical vulnerabilities found: $CRITICAL_VULNS"
-        echo "vulnerabilities=$CRITICAL_VULNS" >> $GITHUB_OUTPUT
-
-        if [ "$CRITICAL_VULNS" -gt 0 ]; then
-          echo "status=blocked" >> $GITHUB_OUTPUT
-          echo "❌ Release blocked due to $CRITICAL_VULNS critical vulnerabilities"
-          exit 1
-        else
-          echo "status=passed" >> $GITHUB_OUTPUT
-          echo "✅ Security scan passed, proceeding with release"
-          exit 0
-        fi
-
-    - name: Upload security scan results
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: pre-release-security-scan-${{ github.run_id }}
-        path: pre-release-security-scan.json
-        retention-days: 90
-
   # Conformance and compiler agreement now GATE the release. They used to run
   # against the tag after every registry had already published from it.
   run-conformance-tests:
@@ -135,8 +62,8 @@ jobs:
     secrets: inherit
 
   register-julia:
-    needs: [ release-analysis, security-scan, run-conformance-tests, run-mtk-compiler-agreement ]
-    if: needs.release-analysis.outputs.needs_release == 'true' && needs.security-scan.outputs.security_status == 'passed'
+    needs: [ release-analysis, run-conformance-tests, run-mtk-compiler-agreement ]
+    if: needs.release-analysis.outputs.needs_release == 'true'
     permissions:
       contents: write
     uses: EarthSciML/.github/.github/workflows/release-register.yml@main

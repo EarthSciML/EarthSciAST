@@ -520,7 +520,7 @@ All packages follow semantic versioning:
 1. **Version Coordination**: All language packages maintain synchronized versions
 2. **Testing**: Full conformance test suite must pass (`./scripts/test-conformance.sh`)
 3. **Documentation**: Update all relevant documentation
-4. **Security**: Run security scans (`./scripts/package-security-scanner.py`) and address vulnerabilities
+4. **Security**: Check the repository's Dependabot alerts and resolve any high or critical ones
 5. **Changelog**: Generate comprehensive changelog
 6. **Tagging**: Tag and publish each language package per its ecosystem (e.g., `npm publish`, `cargo publish`, Julia registry PR)
 
