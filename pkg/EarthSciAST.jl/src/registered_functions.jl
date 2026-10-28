@@ -195,8 +195,9 @@ end
 # for. The year test is on the day number — `_DAY_OF_INT32_MIN_YEAR` is
 # -2147483648-01-01, `_DAY_OF_INT32_YEAR_END` is 2147483648-01-01 — which is
 # the same test as the year's and needs no calendar. Only a host real is
-# checked: a traced value has no host answer to raise on, and the compiled
-# lanes take the eltype-generic kernels, which carry no check.
+# checked: a traced value has no host answer to raise on, so the compiled
+# lanes' eltype-generic kernels apply the same test as a select to NaN
+# (`_cal_guarded`).
 const _DAY_OF_INT32_MIN_YEAR = -784353015833.0
 const _DAY_OF_INT32_YEAR_END = 784351576777.0
 
@@ -655,8 +656,11 @@ end
 #
 # `kernel` is that composition's ELTYPE-GENERIC heart: the branch-free
 # arithmetic itself, without `core`'s `Float64` pin and without `_cal_i32`'s
-# Int32 range check. On a `Float64` argument it computes the same number `core`
-# does (the pin and the check narrow a value, they do not change one), and on a
+# Int32 range check. On an in-range `Float64` argument it computes the same
+# number `core` does (the pin and the check narrow a value, they do not change
+# one); where `core` raises `closed_function_overflow` it answers NaN instead
+# (`_cal_guarded`), the Rust tape's answer, since a compiled lane has no host
+# value to raise on. On a
 # value type that has no `Float64` and no `Int32` — a traced number, a tensor
 # lane — it is the only one of the two that has an answer at all. It is what a
 # COMPILING backend lowers: `ext/reactant_direct/interp.jl` asks for the row's
@@ -665,27 +669,38 @@ end
 # of one calendar is two calendars (see the section header above), so there is
 # exactly one, and every tier reaches it.
 const _FN_TYPED_SCALAR_CORES = (
-    (fname = "datetime.year", arity = 1, kernel = _cal_year,
+    (fname = "datetime.year", arity = 1, kernel = t -> _cal_guarded(_cal_year, t),
      core = t -> Float64(_cal_i32("datetime.year", _cal_year(_cal_t("datetime.year", t))))),
-    (fname = "datetime.month", arity = 1, kernel = _cal_month,
+    (fname = "datetime.month", arity = 1, kernel = t -> _cal_guarded(_cal_month, t),
      core = t -> Float64(_cal_i32("datetime.month", _cal_month(_cal_t("datetime.month", t))))),
-    (fname = "datetime.day", arity = 1, kernel = _cal_day,
+    (fname = "datetime.day", arity = 1, kernel = t -> _cal_guarded(_cal_day, t),
      core = t -> Float64(_cal_i32("datetime.day", _cal_day(_cal_t("datetime.day", t))))),
-    (fname = "datetime.hour", arity = 1, kernel = _cal_hour,
+    (fname = "datetime.hour", arity = 1, kernel = t -> _cal_guarded(_cal_hour, t),
      core = t -> Float64(_cal_i32("datetime.hour", _cal_hour(_cal_t("datetime.hour", t))))),
-    (fname = "datetime.minute", arity = 1, kernel = _cal_minute,
+    (fname = "datetime.minute", arity = 1, kernel = t -> _cal_guarded(_cal_minute, t),
      core = t -> Float64(_cal_i32("datetime.minute", _cal_minute(_cal_t("datetime.minute", t))))),
-    (fname = "datetime.second", arity = 1, kernel = _cal_second,
+    (fname = "datetime.second", arity = 1, kernel = t -> _cal_guarded(_cal_second, t),
      core = t -> Float64(_cal_i32("datetime.second", _cal_second(_cal_t("datetime.second", t))))),
-    (fname = "datetime.day_of_year", arity = 1, kernel = _cal_day_of_year,
+    (fname = "datetime.day_of_year", arity = 1, kernel = t -> _cal_guarded(_cal_day_of_year, t),
      core = t -> Float64(_cal_i32("datetime.day_of_year", _cal_day_of_year(_cal_t("datetime.day_of_year", t))))),
-    (fname = "datetime.is_leap_year", arity = 1, kernel = _cal_is_leap_year,
+    (fname = "datetime.is_leap_year", arity = 1, kernel = t -> _cal_guarded(_cal_is_leap_year, t),
      core = t -> Float64(_cal_i32("datetime.is_leap_year", _cal_is_leap_year(_cal_t("datetime.is_leap_year", t))))),
     # Already `Float64`-valued — the boxed arm's `convert(T, ::Float64)` was
     # the identity, so the core is the kernel behind the overflow gate.
-    (fname = "datetime.julian_day", arity = 1, kernel = _datetime_julian_day,
+    (fname = "datetime.julian_day", arity = 1, kernel = t -> _cal_guarded(_datetime_julian_day, t),
      core = t -> _datetime_julian_day(_cal_t("datetime.julian_day", t))),
 )
+
+# The overflow gate of the eltype-generic kernels: `_cal_t`'s test, as a select.
+# A NaN or ±Inf `t`, or one whose year is outside Int32, gives NaN — no branch
+# and no host comparison, so a traced lane emits it as `compare`/`select`.
+@inline function _cal_guarded(kernel::F, t) where {F}
+    v = kernel(t)
+    days = _cal_split(_value(t))[1]
+    nan = oftype(v, NaN)
+    return ifelse(days >= _DAY_OF_INT32_MIN_YEAR,
+        ifelse(days < _DAY_OF_INT32_YEAR_END, v, nan), nan)
+end
 
 # The eltype-generic kernel of row `id`, for a backend that must lower the
 # function rather than call it. BUILD/EMISSION TIME ONLY: indexing the
