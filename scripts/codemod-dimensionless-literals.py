@@ -1246,7 +1246,8 @@ def _angle_literal_class(val, vec, unit, declared_vecs):
     `classify`. Genuine angle quantities are mechanical: a degree/radian
     conversion factor, a multiple of pi next to an angle (or 2*pi radians per
     cycle), and a radius per radian. Any other literal that needs a power of
-    rad is suspicious, since the angle usually belongs in a declaration."""
+    rad (at scale 1, so not deg) is suspicious, since the angle usually
+    belongs in a declaration."""
     angle_power = vec.get(("d", "[angle]"), 0)
     has_pi = ("pi",) in vec
     if (
@@ -1266,7 +1267,7 @@ def _angle_literal_class(val, vec, unit, declared_vecs):
     dims = {k: e for k, e in vec.items() if k[0] == "d"}
     if dims == {("d", "[length]"): Fraction(1), ("d", "[angle]"): Fraction(-1)}:
         return "mechanical", "a radius per radian (arc length per angle)"
-    if angle_power and set(dims) == {("d", "[angle]")}:
+    if angle_power and set(vec) == {("d", "[angle]")}:
         return (
             "suspicious",
             "the literal needs a bare power of rad; the angle usually belongs in a declaration",
