@@ -73,12 +73,12 @@ def _check_raw_fn(node: dict) -> None:
     name = node.get("name")
     positions = INTERP_CONST_ARG_POSITIONS.get(name if isinstance(name, str) else "")
     args = node.get("args")
-    if not positions or not isinstance(args, list):
+    if not positions:
         return
-    from .registered_functions import _CLOSED_FUNCTIONS
+    from .registered_functions import _CLOSED_FUNCTIONS, _expect_arity
 
-    if len(args) != _CLOSED_FUNCTIONS[name].arity:
-        return
+    args = args if isinstance(args, list) else []
+    _expect_arity(name, args, _CLOSED_FUNCTIONS[name].arity)
     values: list[Any] = [None] * len(args)
     for p in positions:
         a = args[p]

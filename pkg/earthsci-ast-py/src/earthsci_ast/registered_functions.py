@@ -333,10 +333,10 @@ def _is_rank1(v: Any) -> bool:
 
 
 def _is_rank2(v: Any) -> bool:
-    """A rank-2 array: a list whose every entry is a rank-1 array. Rows may
-    differ in length; that is ``interp_axis_length_mismatch``, not a rank
-    error (esm-spec §9.2)."""
-    return isinstance(v, (list, tuple)) and all(_is_rank1(row) for row in v)
+    """A rank-2 array: a NON-EMPTY list whose every entry is a rank-1 array.
+    ``[]`` is rank 1, not rank 2 (esm-spec §9.2, ruling Q-111). Rows may differ
+    in length; that is ``interp_axis_length_mismatch``, not a rank error."""
+    return isinstance(v, (list, tuple)) and len(v) > 0 and all(_is_rank1(row) for row in v)
 
 
 def _describe(v: Any) -> str:
@@ -361,15 +361,21 @@ def check_interp_arguments(name: str, values: Sequence[Any]) -> None:
     every ``fn`` node (esm-spec §9.2 "When the argument checks run", ruling
     Q-106), and the evaluator runs it again before computing.
 
-    Order. ``interp.searchsorted``: not a rank-1 ``const`` array
+    The arity (``closed_function_arity``) comes before all of these; it is
+    checked by :func:`check_closed_function_node` and by the evaluator's
+    dispatch, since ``values`` here already has the right length.
+
+    Order (esm-spec §9.2 "Order of the argument checks", ruling Q-110).
+    ``interp.searchsorted``: not a rank-1 ``const`` array
     (``interp_axis_not_const``), then NaN, then non-decreasing; ``xs = []``
     passes (ruling Q-108). ``interp.linear`` / ``interp.bilinear``, each step
     over every axis before the next (the formal model's order where the spec
-    pins none; the spec pins only NaN before monotonicity): the table, then
-    each axis, as a ``const`` of the required rank (rank 1 for an axis and for
-    ``interp.linear``'s table, rank 2 for ``interp.bilinear``'s, ruling Q-108);
-    then an axis shorter than 2; then the table/axis length relation; then a
-    NaN in an axis; then strict monotonicity.
+    the table, then each axis, as a ``const`` of the required rank (rank 1 for
+    an axis and for ``interp.linear``'s table, rank 2 -- so not ``[]`` -- for
+    ``interp.bilinear``'s, rulings Q-108 and Q-111); then an axis shorter than
+    2; then the table/axis length relation; then a non-finite (NaN or ±Inf)
+    axis entry (ruling Q-113); then strict monotonicity. ``xs`` of
+    ``interp.searchsorted`` rejects only NaN; ±Inf is a valid entry there.
     """
     if name == "interp.searchsorted":
         xs = values[1]
@@ -435,10 +441,11 @@ def check_interp_arguments(name: str, values: Sequence[Any]) -> None:
                 )
     for axis, label in zip(axes, labels):
         for i, v in enumerate(axis):
-            if math.isnan(float(v)):
+            if not math.isfinite(float(v)):
                 raise ClosedFunctionError(
                     INTERP_NAN_IN_AXIS,
-                    f"{name}: {label}[{i + 1}] is NaN; NaN entries in axes are forbidden",
+                    f"{name}: {label}[{i + 1}] is {float(v)}; axis entries must be finite "
+                    f"(no NaN or ±Inf, esm-spec §9.2)",
                 )
     for axis, label in zip(axes, labels):
         for i in range(1, len(axis)):
@@ -451,18 +458,17 @@ def check_interp_arguments(name: str, values: Sequence[Any]) -> None:
 
 
 def check_closed_function_node(node: ExprNode) -> None:
-    """Run :func:`check_interp_arguments` on one ``fn`` node's arguments as
-    written: a ``const`` op contributes its ``value``, anything else
-    :data:`NOT_CONST`. A node whose argument count is wrong is left to the
-    evaluator's ``closed_function_arity`` check."""
+    """Run the load-time argument checks on one ``fn`` node as written: first
+    the arity (``closed_function_arity``, ruling Q-112), then
+    :func:`check_interp_arguments`, where a ``const`` op contributes its
+    ``value`` and anything else :data:`NOT_CONST`. Only the ``interp.*``
+    functions are checked here; ``datetime.*`` arity is left to evaluation."""
     name = node.name
     positions = INTERP_CONST_ARG_POSITIONS.get(name or "")
     if not positions:
         return
     args = list(node.args or [])
-    spec = _CLOSED_FUNCTIONS[name]
-    if len(args) != spec.arity:
-        return
+    _expect_arity(name, args, _CLOSED_FUNCTIONS[name].arity)
     values: list[Any] = [None] * len(args)
     for p in positions:
         a = args[p]
