@@ -345,9 +345,23 @@ def declaration_fixes(text, base, sites, rep):
     if not angle_sites:
         return text
     valid0, errs0, warn0, other0 = engine_report(text, base)
+    deadline = time.monotonic() + DECLARATION_BUDGET
     for ptr in sorted(angle_sites):
         if ptr not in warn0:
             continue  # already repaired by an earlier declaration change
+        if time.monotonic() > deadline:
+            rep["declaration_unresolved"].append(
+                {
+                    "site": ptr,
+                    "equation": _site_equation(
+                        get_at(json.loads(text), sites[ptr][0]), sites[ptr][1]
+                    ),
+                    "tried": [
+                        f"not tried: the {DECLARATION_BUDGET} s declaration search budget was spent"
+                    ],
+                }
+            )
+            continue
         doc = json.loads(text)
         spans = parse_spans(text)
         rpath, kind = sites[ptr]
@@ -387,6 +401,8 @@ def declaration_fixes(text, base, sites, rep):
                 continue
             powers = ([-e] if e else []) + [k for k in (1, -1, 2, -2) if k != -e]
             for k in powers:
+                if time.monotonic() > deadline:
+                    break
                 try:
                     new = _with_angle_power(old, k)
                 except Exception:
@@ -1725,6 +1741,10 @@ def _on_alarm(signum, frame):
 #: Seconds one file may take; a site with very many candidate literals can
 #: make the subset search slow, and one file must not stall a corpus run.
 FILE_TIMEOUT = 1800
+
+#: Seconds the declaration search may spend on one file: each candidate is a
+#: whole-document validation, which is slow for a large file.
+DECLARATION_BUDGET = 300
 
 #: Seconds the literal-subset search may spend on one site.
 SITE_BUDGET = 60
