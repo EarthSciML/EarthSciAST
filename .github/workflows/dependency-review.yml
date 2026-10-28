@@ -1,0 +1,23 @@
+name: Dependency Review
+
+# Fails a pull request only when the pull request itself adds a runtime
+# dependency with a high or critical advisory. Advisories against dependencies
+# already on main are Dependabot alerts, so a newly published one does not turn
+# unrelated pull requests red.
+
+on:
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  dependency-review:
+    name: Dependency Review
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
