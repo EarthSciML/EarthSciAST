@@ -287,6 +287,7 @@ from .units import (
     UNIT_FINDING_DIMENSIONAL_MISMATCH,
     UNIT_FINDING_UNPARSEABLE,
     UNIT_FINDING_ANALYSIS,
+    UNIT_FINDING_DIMENSIONLESS_LITERAL,
     UnitConversionResult,
 )
 
@@ -672,6 +673,7 @@ __all__ = [
     "UNIT_FINDING_DIMENSIONAL_MISMATCH",
     "UNIT_FINDING_UNPARSEABLE",
     "UNIT_FINDING_ANALYSIS",
+    "UNIT_FINDING_DIMENSIONLESS_LITERAL",
     "UnitConversionResult",
     # Editing operations
     "ESMEditor",

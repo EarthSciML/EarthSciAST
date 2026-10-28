@@ -17,6 +17,7 @@
 //! implementation (`EarthSciAST.jl/src/units.jl::
 //! get_expression_dimensions`).
 
+use crate::inline_test_checks::pointer_token;
 use crate::types::{Equation, Expr, ExpressionNode};
 use std::collections::{BTreeMap, HashMap};
 use thiserror::Error;
@@ -485,6 +486,12 @@ pub const UNIT_FINDING_DIMENSIONAL_MISMATCH: &str = crate::diagnostic::codes::DI
 pub const UNIT_FINDING_UNPARSEABLE: &str = crate::diagnostic::codes::UNPARSEABLE_UNIT;
 /// See [`UNIT_FINDING_DIMENSIONAL_MISMATCH`].
 pub const UNIT_FINDING_ANALYSIS: &str = crate::diagnostic::codes::ANALYSIS;
+/// A check site the CURRENT neutral-literal rule passes or skips fails once a
+/// nonzero bare numeric literal is read as dimensionless at scale 1 (esm-spec
+/// §4.8.6). A WARNING at this stage: validity is decided by the current rule
+/// alone.
+pub const UNIT_FINDING_DIMENSIONLESS_LITERAL: &str =
+    crate::diagnostic::codes::UNITS_DIMENSIONLESS_LITERAL_MISMATCH;
 
 /// A single dimensional finding produced while propagating an expression.
 #[derive(Debug, Clone, PartialEq)]
@@ -782,7 +789,10 @@ fn propagate_dim(expr: &Expr, env: &dyn UnitEnv, findings: &mut Vec<UnitFinding>
         // correctly wherever their meaning IS determined: additively they are
         // neutral and adopt their sibling's dimension, an all-literal expression
         // is dimensionless, and an exponent is read BY VALUE.
-        Expr::Number(_) | Expr::Integer(_) => Dim::Unknown,
+        //
+        // Under the esm-spec §4.8.6 rule ([`UnitEnv::dimensionless_literals`])
+        // a NONZERO literal is a pure number instead; zero stays neutral.
+        Expr::Number(_) | Expr::Integer(_) => literal_dim(literal_f64(expr), env),
         Expr::Variable(name) => {
             if let Some(unit) = env.unit_of(name) {
                 Dim::Known(unit.clone())
@@ -916,7 +926,8 @@ fn propagate_operator_dim(
         // `structural.rs` (see [`unresolvable_const_units`]), not here.
         "const" => match op.units.as_deref().map(parse_unit) {
             Some(Ok(unit)) => Dim::Known(unit),
-            _ => Dim::Unknown,
+            Some(Err(_)) => Dim::Unknown,
+            None => literal_dim(op.value.as_ref().and_then(serde_json::Value::as_f64), env),
         },
         // No dimensional rule for this operator — an unregistered user op, or a
         // rewrite-target sugar op (`grad`/`div`/`laplacian`/`fn`/`table_lookup`/
@@ -1081,6 +1092,19 @@ fn propagate_power_dim(
         }
     }
     Dim::Unknown
+}
+
+/// The dimension of a bare numeric literal, or of a `const` that declares no
+/// `units`, whose value is `value` (`None` when it is not a number).
+///
+/// Under the current rule (esm-spec §4.8.3–§4.8.4) it is undeterminable.
+/// Under the §4.8.6 dimensionless-literal rule it is dimensionless at scale 1,
+/// unless it is zero (`0`, `0.0`, `-0.0`), which stays neutral.
+fn literal_dim(value: Option<f64>, env: &dyn UnitEnv) -> Dim {
+    match value {
+        Some(v) if env.dimensionless_literals() && v != 0.0 => Dim::Known(Unit::dimensionless()),
+        _ => Dim::Unknown,
+    }
 }
 
 /// A numeric literal's value. It may arrive as EITHER `Expr::Number` (JSON
@@ -1730,6 +1754,29 @@ pub(crate) trait UnitEnv {
     fn contains(&self, name: &str) -> bool {
         self.unit_of(name).is_some()
     }
+
+    /// The literal rule: `false` (the default, and the current rule) types a
+    /// bare numeric literal and a unit-less `const` as undeterminable; `true`
+    /// (esm-spec §4.8.6) types a nonzero one as dimensionless at scale 1.
+    /// Only [`DimensionlessLiterals`] turns it on.
+    fn dimensionless_literals(&self) -> bool {
+        false
+    }
+}
+
+/// `env` under the esm-spec §4.8.6 dimensionless-literal rule: the same names
+/// with the same units, but a nonzero bare literal (or unit-less `const`) is
+/// dimensionless at scale 1. Used only by [`dimensionless_literal_findings`].
+pub(crate) struct DimensionlessLiterals<'e>(pub(crate) &'e dyn UnitEnv);
+
+impl UnitEnv for DimensionlessLiterals<'_> {
+    fn unit_of(&self, name: &str) -> Option<&Unit> {
+        self.0.unit_of(name)
+    }
+
+    fn dimensionless_literals(&self) -> bool {
+        true
+    }
 }
 
 impl<S: std::hash::BuildHasher> UnitEnv for HashMap<String, Unit, S> {
@@ -1985,6 +2032,257 @@ pub(crate) fn expression_findings(
         )));
     }
     findings
+}
+
+/// A bare numeric literal as the §4.8.6 warning names it: its value, and its
+/// spelling in the document.
+struct BareLiteral {
+    value: f64,
+    text: String,
+}
+
+/// The value of a bare numeric literal, a `const` without `units`, or a unary
+/// `+`/`-` of one (nested to any depth); `None` for anything else.
+fn bare_literal(expr: &Expr) -> Option<BareLiteral> {
+    match expr {
+        Expr::Integer(i) => Some(BareLiteral {
+            value: *i as f64,
+            text: i.to_string(),
+        }),
+        Expr::Number(n) => Some(BareLiteral {
+            value: *n,
+            text: format!("{n:?}"),
+        }),
+        Expr::Variable(_) => None,
+        Expr::Operator(node) => {
+            if node.op == "const" {
+                if node.units.is_some() {
+                    return None;
+                }
+                let value = node.value.as_ref()?;
+                return Some(BareLiteral {
+                    value: value.as_f64()?,
+                    text: value.to_string(),
+                });
+            }
+            if (node.op == "+" || node.op == "-") && node.args.len() == 1 {
+                let inner = bare_literal(&node.args[0])?;
+                if node.op == "+" {
+                    return Some(inner);
+                }
+                let text = match inner.text.strip_prefix('-') {
+                    Some(positive) => positive.to_string(),
+                    None => format!("-{}", inner.text),
+                };
+                return Some(BareLiteral {
+                    value: -inner.value,
+                    text,
+                });
+            }
+            None
+        }
+    }
+}
+
+/// The distinct nonzero bare literals in `exprs`, in walk order — what the
+/// dimensionless-literal warning names. The walk reaches every
+/// expression-bearing child, so an empty result means the two literal rules
+/// type `exprs` identically.
+fn nonzero_bare_literals(exprs: &[&Expr]) -> Vec<String> {
+    fn walk(expr: &Expr, out: &mut Vec<String>) {
+        if let Some(literal) = bare_literal(expr) {
+            if literal.value != 0.0 && !out.contains(&literal.text) {
+                out.push(literal.text);
+            }
+            return;
+        }
+        if let Expr::Operator(node) = expr {
+            node.for_each_child(&mut |child| walk(child, out));
+        }
+    }
+    let mut out = Vec::new();
+    for expr in exprs {
+        walk(expr, &mut out);
+    }
+    out
+}
+
+/// The first provable mismatch in `findings`, if any.
+fn first_mismatch(findings: Vec<UnitFinding>) -> Option<String> {
+    findings
+        .into_iter()
+        .find(UnitFinding::is_error)
+        .map(|f| f.message)
+}
+
+/// One esm-spec §4.8.6 check site: an equation, or a reaction rate.
+enum LiteralSite<'a> {
+    Equation(&'a Equation),
+    Rate(&'a Expr),
+}
+
+impl LiteralSite<'_> {
+    /// The site's first provable mismatch under `env`'s literal rule, or `None`
+    /// when it passes or is skipped. An equation is judged on both sides and
+    /// every operator rule inside either; a rate on the rules inside it only
+    /// (it is not compared with its stoichiometric order here).
+    fn mismatch(&self, env: &dyn UnitEnv) -> Option<String> {
+        match self {
+            LiteralSite::Equation(eq) => first_mismatch(equation_findings(eq, env)),
+            LiteralSite::Rate(rate) => first_mismatch(expression_findings(rate, None, env)),
+        }
+    }
+
+    fn exprs(&self) -> Vec<&Expr> {
+        match self {
+            LiteralSite::Equation(eq) => vec![&eq.lhs, &eq.rhs],
+            LiteralSite::Rate(rate) => vec![rate],
+        }
+    }
+}
+
+/// The esm-spec §4.8.6 warnings: every check site whose verdict is a provable
+/// mismatch when nonzero bare numeric literals are dimensionless at scale 1,
+/// but not under the current neutral-literal rule. Returns `(json_pointer,
+/// message)` pairs in document order.
+///
+/// The sites are every model's `equations` and `initialization_equations`
+/// and every reaction system's `constraint_equations` and reaction rates, in
+/// the top-level components and in their inline subsystems at any depth (a
+/// resolved `{ref}` mount counts; an unresolved one is skipped). Each component
+/// is typed against the environment validation types it against: its own
+/// declarations (unparseable ones skipped), then paths relative to its own
+/// subsystems, then `document_units`. A site the current rule already rejects
+/// carries no warning: it is an error already.
+pub(crate) fn dimensionless_literal_findings(
+    esm_file: &crate::EsmFile,
+    document_units: &HashMap<String, Unit>,
+) -> Vec<(String, String)> {
+    let mut walk = LiteralWalk {
+        document_units,
+        out: Vec::new(),
+    };
+    for (name, model) in esm_file.models.iter().flatten() {
+        walk.model(&format!("/models/{}", pointer_token(name)), model);
+    }
+    for (name, rs) in esm_file.reaction_systems.iter().flatten() {
+        walk.reaction_system(&format!("/reaction_systems/{}", pointer_token(name)), rs);
+    }
+    walk.out
+}
+
+/// The walk behind [`dimensionless_literal_findings`].
+struct LiteralWalk<'d> {
+    document_units: &'d HashMap<String, Unit>,
+    out: Vec<(String, String)>,
+}
+
+impl LiteralWalk<'_> {
+    fn model(&mut self, pointer: &str, model: &crate::Model) {
+        let (own, _) = build_unit_env(&model.variables);
+        let env = ComponentUnitEnv::new(own, model.subsystems.as_ref(), self.document_units);
+        for (i, eq) in model.equations.iter().enumerate() {
+            self.site(
+                format!("{pointer}/equations/{i}"),
+                LiteralSite::Equation(eq),
+                &env,
+            );
+        }
+        for (i, eq) in model.initialization_equations.iter().flatten().enumerate() {
+            self.site(
+                format!("{pointer}/initialization_equations/{i}"),
+                LiteralSite::Equation(eq),
+                &env,
+            );
+        }
+        for (name, sub) in inline_subsystems(model.subsystems.as_ref()) {
+            if let Ok(sub) = serde_json::from_value::<crate::Model>(sub.clone()) {
+                self.model(
+                    &format!("{pointer}/subsystems/{}", pointer_token(name)),
+                    &sub,
+                );
+            }
+        }
+    }
+
+    fn reaction_system(&mut self, pointer: &str, rs: &crate::ReactionSystem) {
+        let declared = rs
+            .species
+            .iter()
+            .map(|(n, sp)| (n, sp.units.as_deref()))
+            .chain(rs.parameters.iter().map(|(n, p)| (n, p.units.as_deref())));
+        let own: HashMap<String, Unit> = declared
+            .filter_map(|(n, units)| Some((n.clone(), parse_unit(units?).ok()?)))
+            .collect();
+        let env = ComponentUnitEnv::new(own, rs.subsystems.as_ref(), self.document_units);
+        for (i, eq) in rs.constraint_equations.iter().flatten().enumerate() {
+            self.site(
+                format!("{pointer}/constraint_equations/{i}"),
+                LiteralSite::Equation(eq),
+                &env,
+            );
+        }
+        for (i, reaction) in rs.reactions.iter().enumerate() {
+            self.site(
+                format!("{pointer}/reactions/{i}"),
+                LiteralSite::Rate(&reaction.rate),
+                &env,
+            );
+        }
+        for (name, sub) in inline_subsystems(rs.subsystems.as_ref()) {
+            if let Ok(sub) = serde_json::from_value::<crate::ReactionSystem>(sub.clone()) {
+                self.reaction_system(
+                    &format!("{pointer}/subsystems/{}", pointer_token(name)),
+                    &sub,
+                );
+            }
+        }
+    }
+
+    /// Judge one site under both literal rules and record the warning when only
+    /// the dimensionless-literal rule fails it.
+    fn site(&mut self, pointer: String, site: LiteralSite<'_>, env: &dyn UnitEnv) {
+        let literals = nonzero_bare_literals(&site.exprs());
+        // With no nonzero literal the two rules type the site identically.
+        if literals.is_empty() {
+            return;
+        }
+        let Some(found) = site.mismatch(&DimensionlessLiterals(env)) else {
+            return;
+        };
+        if site.mismatch(env).is_some() {
+            return;
+        }
+        let message = format!(
+            "{pointer}: with bare numeric literals read as dimensionless (esm-spec §4.8.6), \
+             {found}; bare literal(s): {}. This becomes an error at the next major esm \
+             version; a literal that carries a unit is written const(value, units \"...\") \
+             (esm-spec §4.8.5)",
+            literals.join(", ")
+        );
+        self.out.push((pointer, message));
+    }
+}
+
+/// The inline subsystems of a `subsystems` map: a resolved `{ref}` mount is
+/// already spliced in (and a mounted single-component document is unwrapped to
+/// its component); an unresolved `{ref}` has nothing to type and is skipped.
+fn inline_subsystems(
+    subsystems: Option<&indexmap::IndexMap<String, serde_json::Value>>,
+) -> impl Iterator<Item = (&String, &serde_json::Value)> {
+    subsystems
+        .into_iter()
+        .flatten()
+        .filter_map(|(name, value)| {
+            let component = value
+                .get("models")
+                .or_else(|| value.get("reaction_systems"))
+                .and_then(|m| m.as_object())
+                .filter(|m| m.len() == 1)
+                .and_then(|m| m.values().next())
+                .unwrap_or(value);
+            (component.is_object() && component.get("ref").is_none()).then_some((name, component))
+        })
 }
 
 /// The dimensional analyser's verdict on one equation, in the form a report
@@ -4153,6 +4451,82 @@ mod tests {
                 Err(UnitError::UnknownUnit(_))
             ));
         }
+    }
+
+    /// The esm-spec §4.8.6 literal rule: a nonzero bare literal or unit-less
+    /// `const` is dimensionless at scale 1, while zero in every spelling stays
+    /// neutral exactly as under the current rule.
+    #[test]
+    fn dimensionless_literal_rule_keeps_zero_neutral() {
+        let env = env_of(&[("x", "m")]);
+        let rule = DimensionlessLiterals(&env);
+        let unitless_const = |value: serde_json::Value| {
+            Expr::operator(ExpressionNode {
+                op: "const".to_string(),
+                value: Some(value),
+                ..ExpressionNode::default()
+            })
+        };
+        let zeros = [
+            Expr::Integer(0),
+            Expr::Number(0.0),
+            Expr::Number(-0.0),
+            op("-", vec![Expr::Integer(0)]),
+            op("-", vec![op("-", vec![Expr::Number(0.0)])]),
+            unitless_const(serde_json::json!(0)),
+        ];
+        for zero in &zeros {
+            let mut findings = Vec::new();
+            assert_eq!(
+                propagate_dim(zero, &rule, &mut findings),
+                Dim::Unknown,
+                "{zero:?}"
+            );
+            assert!(findings.is_empty());
+            // Neutral beside a length: `max(x, 0)`, `x + 0` are lengths.
+            for name in ["max", "+"] {
+                let expr = op(name, vec![Expr::Variable("x".into()), zero.clone()]);
+                let mut findings = Vec::new();
+                let dim = propagate_dim(&expr, &rule, &mut findings);
+                assert!(findings.is_empty(), "{name}: {findings:?}");
+                assert!(dim.known().is_some_and(|u| u.same_unit(&env["x"])));
+            }
+        }
+
+        let nonzeros = [
+            Expr::Integer(1),
+            Expr::Number(273.15),
+            op("-", vec![Expr::Integer(1370)]),
+            unitless_const(serde_json::json!(2.5)),
+        ];
+        for literal in &nonzeros {
+            let mut findings = Vec::new();
+            let dim = propagate_dim(literal, &rule, &mut findings);
+            assert!(dim.known().is_some_and(Unit::is_pure_number), "{literal:?}");
+            // Under the current rule it stays undeterminable.
+            assert_eq!(propagate_dim(literal, &env, &mut Vec::new()), Dim::Unknown);
+            // And `x + literal` is a mismatch only under the new rule.
+            let sum = op("+", vec![Expr::Variable("x".into()), literal.clone()]);
+            assert!(
+                expression_findings(&sum, None, &rule)
+                    .iter()
+                    .any(UnitFinding::is_error)
+            );
+            assert!(expression_findings(&sum, None, &env).is_empty());
+        }
+
+        // A unit-bearing `const` keeps its declared unit under the new rule.
+        let with_units = Expr::operator(ExpressionNode {
+            op: "const".to_string(),
+            value: Some(serde_json::json!(273.15)),
+            units: Some("K".to_string()),
+            ..ExpressionNode::default()
+        });
+        let dim = propagate_dim(&with_units, &rule, &mut Vec::new());
+        assert!(
+            dim.known()
+                .is_some_and(|u| u.same_unit(&parse_unit("K").unwrap()))
+        );
     }
 
     /// A sum whose operands are partly undeterminable has the unit of the

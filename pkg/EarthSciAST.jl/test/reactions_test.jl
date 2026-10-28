@@ -226,11 +226,13 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
         @test eq_A !== nothing
 
         # For A + B -> C, d[A]/dt should be negative (consumption)
-        # RHS should be -k1*A*B
+        # RHS is -1 * (k1*A*B): a loss of 1 is the INTEGER literal -1 times the
+        # rate law (esm-libraries-spec §4.6.2), not a unary minus.
         @test eq_A.rhs isa OpExpr
-        @test eq_A.rhs.op == "-"
-        @test length(eq_A.rhs.args) == 1
-        @test eq_A.rhs.args[1] isa OpExpr  # k1*A*B
+        @test eq_A.rhs.op == "*"
+        @test length(eq_A.rhs.args) == 2
+        @test eq_A.rhs.args[1] isa IntExpr && eq_A.rhs.args[1].value == -1
+        @test eq_A.rhs.args[2] isa OpExpr  # k1*A*B
 
         # Test multiple reactions
         reaction1 = Reaction(Dict("A" => 1), Dict("B" => 1), VarExpr("k1"))
@@ -275,7 +277,8 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
         eq_sink = model_sink.equations[1]
         @test eq_sink.lhs.args[1].name == "A"
         @test eq_sink.rhs isa OpExpr
-        @test eq_sink.rhs.op == "-"
+        @test eq_sink.rhs.op == "*"
+        @test eq_sink.rhs.args[1] isa IntExpr && eq_sink.rhs.args[1].value == -1
     end
 
     @testset "Complex Reaction Networks" begin

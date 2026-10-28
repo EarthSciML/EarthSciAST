@@ -68,7 +68,9 @@ Fields and their JSON spellings match Go's `UnitWarning`
   `UnitFinding*`, Rust's `UNIT_FINDING_*` and TypeScript's
   `UnitWarning['code']` union share: `dimensional_mismatch` (a PROVABLE
   inconsistency), `unparseable_unit` (a declared unit string denoting no real
-  unit), `analysis` (the checker could not DETERMINE a dimension). It is NOT
+  unit), `analysis` (the checker could not DETERMINE a dimension), and the
+  warning `units_dimensionless_literal_mismatch`
+  ([`UNIT_FINDING_DIMENSIONLESS_LITERAL`](@ref), esm-spec §4.8.6). It is NOT
   the `unit_inconsistency` / `unit_parse_error` pair, which names the
   STRUCTURAL error each finding is promoted to.
 * `message` — human-readable description (binding-local prose).
@@ -218,9 +220,21 @@ const _SCHEMA_ANNOTATION_KEYS = Set{String}([
     "readOnly", "writeOnly", "contentEncoding", "contentMediaType",
 ])
 
+# A fresh, empty instance path for JSONSchema.jl's private `_validate`. Before
+# v1.6 the path is a `String`; from v1.6 it is an `_InstancePath` segment vector
+# that the library pushes to and pops from while it descends, so each call gets
+# its own. Only the pass/fail verdict is read here, never the path, so the root
+# path is all either version needs.
+@static if isdefined(JSONSchema, :_InstancePath)
+    _jsonschema_root_path() = JSONSchema._InstancePath()
+else
+    _jsonschema_root_path() = ""
+end
+
 # Does instance `x` satisfy `subschema` in full? Delegated to JSONSchema.jl so
 # the branch-selection verdict is identical to the library's.
-_schema_matches(x, subschema) = JSONSchema._validate(x, subschema, "") === nothing
+_schema_matches(x, subschema) =
+    JSONSchema._validate(x, subschema, _jsonschema_root_path()) === nothing
 
 function _schema_error_message(keyword::AbstractString)::String
     keyword == "required"             && return "missing required property"
@@ -355,7 +369,7 @@ function _collect_schema_keyword!(errors::Vector{SchemaError}, x, schema, k::Str
         # `pattern`, `exclusiveMinimum`, …): evaluated by JSONSchema.jl exactly
         # as in a normal validation. A non-`nothing` return means it failed at
         # THIS node; the standard keyword name is `k`.
-        JSONSchema._validate(x, schema, Val{Symbol(k)}(), v, path) === nothing ||
+        JSONSchema._validate(x, schema, Val{Symbol(k)}(), v, _jsonschema_root_path()) === nothing ||
             _push_schema_error!(errors, path, k)
     end
     return errors
@@ -426,7 +440,30 @@ Error paths use 0-based JSON-Pointer slash style (e.g.
 `/models/M/equations/0`), matching the shared cross-language fixtures in
 `tests/invalid/expected_errors.json` and the TS/Python bindings.
 """
-function validate_structural(file::EsmFile)::Vector{StructuralError}
+validate_structural(file::EsmFile)::Vector{StructuralError} =
+    _validate_structural(file, _UnitsInputs(file))
+
+# What the units checks of one validation pass share, built once: the
+# document-wide scoped-reference units (esm-spec §4.8.4; units.jl's
+# `_ScopedUnits`) and each top-level model's template-expanded view
+# (`_units_view`).
+struct _UnitsInputs
+    file::EsmFile
+    toplevel::Dict{String, Union{String, Nothing}}
+    models::Dict{String, Model}
+end
+
+function _UnitsInputs(file::EsmFile)
+    models = Dict{String, Model}()
+    if file.models !== nothing
+        for (name, model) in file.models
+            models[name] = _units_view(file, name, model)
+        end
+    end
+    return _UnitsInputs(file, _toplevel_scoped_units(file), models)
+end
+
+function _validate_structural(file::EsmFile, units::_UnitsInputs)::Vector{StructuralError}
     errors = StructuralError[]
 
     # 1. Validate model equation-unknown balance.
@@ -458,7 +495,7 @@ function validate_structural(file::EsmFile)::Vector{StructuralError}
     # 3. Validate reaction system consistency
     # The document-wide part of every component's scoped-reference units
     # (esm-spec §4.8.4), built once for the whole pass.
-    scoped_toplevel = _toplevel_scoped_units(file)
+    scoped_toplevel = units.toplevel
     if file.reaction_systems !== nothing
         for (rs_name, rs) in file.reaction_systems
             append!(errors, validate_reaction_consistency(rs, "/reaction_systems/$rs_name";
@@ -554,7 +591,7 @@ function validate_structural(file::EsmFile)::Vector{StructuralError}
             # is why `validate()` accepted every dimensionally-inconsistent
             # fixture in the shared corpus.
             append!(errors, validate_model_unit_consistency(
-                _units_view(file, model_name, model), "/models/$model_name";
+                units.models[model_name], "/models/$model_name";
                 toplevel=scoped_toplevel))
         end
     end
@@ -666,20 +703,43 @@ function validate(file::EsmFile)::ValidationResult
     data = serialize_esm_file(file)
 
     schema_errors = validate_schema(data)
-    structural_errors = validate_structural(file)
+    units = _UnitsInputs(file)
+    structural_errors = _validate_structural(file, units)
     # Mirror the TS binding (validate.ts): unit findings are surfaced both as
     # `unit_warnings` records and as promoted `unit_inconsistency` structural
     # errors, so neither channel is dead. The SET and ORDER of findings is
     # exactly what it has always been — only the element type gained structure
     # (finding D-8), so `[w.message for w in result.unit_warnings]` reproduces
     # the old `Vector{String}` byte for byte.
-    unit_warnings = [UnitWarning(e.path, _unit_finding_code(e.error_type), e.message,
-                                 string(get(e.details, "lhs_units", "")),
-                                 string(get(e.details, "rhs_units", "")))
-                     for e in structural_errors
-                     if e.error_type == ERROR_CODES.UNIT_INCONSISTENCY]
+    unit_warnings = UnitWarning[
+        UnitWarning(e.path, _unit_finding_code(e.error_type), e.message,
+                    string(get(e.details, "lhs_units", "")),
+                    string(get(e.details, "rhs_units", "")))
+        for e in structural_errors if e.error_type == ERROR_CODES.UNIT_INCONSISTENCY]
+    _push_dimensionless_literal_warnings!(unit_warnings, units)
 
     return ValidationResult(schema_errors, structural_errors, unit_warnings=unit_warnings)
+end
+
+# Bare numeric literals read as dimensionless (esm-spec §4.8.6): a WARNING at
+# this stage, so it is never a structural error and never touches `is_valid`. A
+# failure of the pass itself says nothing about the file: it is downgraded to an
+# `analysis` unit warning, never an error and never a throw out of `validate`.
+# `findings` is the pass, an argument so a test can make it fail.
+function _push_dimensionless_literal_warnings!(unit_warnings::Vector{UnitWarning}, units,
+                                               findings=_dimensionless_literal_findings)
+    found = try
+        findings(units)
+    catch e
+        e isa InterruptException && rethrow()
+        push!(unit_warnings, UnitWarning("", ERROR_CODES.ANALYSIS,
+            "Dimensionless-literal check failed: $(sprint(showerror, e))"))
+        return unit_warnings
+    end
+    for (path, message) in found
+        push!(unit_warnings, UnitWarning(path, UNIT_FINDING_DIMENSIONLESS_LITERAL, message))
+    end
+    return unit_warnings
 end
 
 """
@@ -1802,6 +1862,20 @@ function _units_view(file::EsmFile, model_name::AbstractString, model::Model)
     reg === nothing && return model
     view = deepcopy(model)
     _expand_model_refs!(view, reg)
+    return view
+end
+
+# The reaction system the units engine judges: `_units_view` for a reaction
+# system — the surviving `apply_expression_template` references in its rates
+# and constraint equations, and in those of its subsystems at any depth,
+# expanded on a copy.
+function _reaction_system_units_view(file::EsmFile, rs_name::AbstractString,
+                                     rs::ReactionSystem)
+    file.component_templates === nothing && return rs
+    reg = get(file.component_templates, "reaction_systems.$rs_name", nothing)
+    reg === nothing && return rs
+    view = deepcopy(rs)
+    _expand_reaction_system_refs!(view, reg)
     return view
 end
 

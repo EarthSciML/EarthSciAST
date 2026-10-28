@@ -312,6 +312,11 @@ export const ERROR_CODES = {
   // The internal UnitWarning code that validate() promotes to UNIT_PARSE_ERROR.
   // See UnitWarning.code in units.ts for the severity policy.
   UNPARSEABLE_UNIT: 'unparseable_unit',
+  // A check site the current neutral-literal rule passes or skips fails once a
+  // nonzero bare numeric literal is read as DIMENSIONLESS at scale 1 (esm-spec
+  // §4.8.6). A WARNING at this stage (a UnitWarning code, never promoted);
+  // Python `UNIT_FINDING_DIMENSIONLESS_LITERAL`.
+  UNITS_DIMENSIONLESS_LITERAL_MISMATCH: 'units_dimensionless_literal_mismatch',
   UNRESOLVED_SCOPED_REF: 'unresolved_scoped_ref',
   UNRESOLVED_SUBSYSTEM_REF: 'unresolved_subsystem_ref',
 

@@ -1075,6 +1075,10 @@ UNIT_FINDING_UNPARSEABLE = "unparseable_unit"
 #: operator with no dimensional rule, an unknown variable, a missing pint.
 #: A statement about the checker, not the file.
 UNIT_FINDING_ANALYSIS = "analysis"
+#: A check the CURRENT neutral-literal rule skips or passes fails once a bare
+#: numeric literal is read as dimensionless (esm-spec §4.8.6). A WARNING at this
+#: stage: validity is decided by the current rule alone.
+UNIT_FINDING_DIMENSIONLESS_LITERAL = "units_dimensionless_literal_mismatch"
 
 
 @dataclass
@@ -1307,6 +1311,10 @@ class UnitValidator:
 
         self.ureg = ureg
         self.known_units: dict[str, pint.Quantity] = {}
+        # esm-spec §4.8.6: when True, a bare numeric literal (and a unit-less
+        # `const`) other than zero is DIMENSIONLESS at scale 1 instead of
+        # undeterminable. Only the dimensionless-literal warning pass sets it.
+        self.dimensionless_literals = False
         # Targets of the current component's scoped references (`Leaf.p`,
         # `sub.v`), consulted after `known_units` (see ScopedUnits).
         self.scoped_units: Mapping[str, ScopedUnit] = {}
@@ -1382,30 +1390,25 @@ class UnitValidator:
         # Scope the known-units registry to this component so that a variable
         # name reused in another model/reaction system cannot collide during
         # bare-name dimension lookups in _get_expression_dimension.
-        self.known_units = {}
-        self.scoped_units = (scoped or ScopedUnits(None)).for_component(model)
+        unparseable = self._enter_component(model, scoped)
 
         if not model.variables:
             return result
 
-        # Build unit registry for this model
+        # Build unit registry for this model. An unparseable unit is a HARD
+        # ERROR: a string that does not denote a real unit is a defect in the
+        # FILE, not a limit of the checker (see UnparseableUnitError). The
+        # variable is still omitted from known_units, so it propagates as an
+        # unknown dimension and cannot ALSO manufacture a spurious
+        # dimensional-mismatch error downstream.
         for var_name, var_info in model.variables.items():
-            if var_info.units:
-                try:
-                    unit = parse_unit(var_info.units)
-                    result.unit_registry[var_name] = var_info.units
-                    self.known_units[var_name] = unit
-                except UnparseableUnitError as e:
-                    # An unparseable unit is a HARD ERROR: a string that does not
-                    # denote a real unit is a defect in the FILE, not a limit of
-                    # the checker (see UnparseableUnitError). The variable is
-                    # still omitted from known_units, so it propagates as an
-                    # unknown dimension and cannot ALSO manufacture a spurious
-                    # dimensional-mismatch error downstream.
-                    result.add_error(
-                        UNIT_FINDING_UNPARSEABLE,
-                        f"Invalid unit '{var_info.units}' for variable '{var_name}': {e}",
-                    )
+            if var_name in self.known_units:
+                result.unit_registry[var_name] = var_info.units
+        for var_name, spelled, e in unparseable:
+            result.add_error(
+                UNIT_FINDING_UNPARSEABLE,
+                f"Invalid unit '{spelled}' for variable '{var_name}': {e}",
+            )
 
         # Validate equations. An observed unknown's DEFINING equation is
         # skipped here and typed below instead, under the VARIABLE's name --
@@ -1458,42 +1461,21 @@ class UnitValidator:
         result = UnitValidationResult(is_valid=True)
 
         # Scope the known-units registry to this component (see validate_model).
-        self.known_units = {}
-        self.scoped_units = (scoped or ScopedUnits(None)).for_component(rs)
+        unparseable = self._enter_component(rs, scoped)
 
-        # Register species units
-        if rs.species:
-            for species in rs.species:
-                if species.units:
-                    try:
-                        unit = parse_unit(species.units)
-                        result.unit_registry[species.name] = species.units
-                        self.known_units[species.name] = unit
-                    except UnparseableUnitError as e:
-                        # Unparseable unit is a HARD ERROR (see validate_model);
-                        # the species is still omitted from known_units, so it is
-                        # treated as unknown downstream.
-                        result.add_error(
-                            UNIT_FINDING_UNPARSEABLE,
-                            f"Invalid unit '{species.units}' for species '{species.name}': {e}",
-                        )
-
-        # Register parameter units
-        if rs.parameters:
-            for param in rs.parameters:
-                if param.units:
-                    try:
-                        unit = parse_unit(param.units)
-                        result.unit_registry[param.name] = param.units
-                        self.known_units[param.name] = unit
-                    except UnparseableUnitError as e:
-                        # Unparseable unit is a HARD ERROR (see validate_model);
-                        # the parameter is still omitted from known_units, so it
-                        # is treated as unknown downstream.
-                        result.add_error(
-                            UNIT_FINDING_UNPARSEABLE,
-                            f"Invalid unit '{param.units}' for parameter '{param.name}': {e}",
-                        )
+        # Register species and parameter units. An unparseable unit is a HARD
+        # ERROR (see validate_model); the name is still omitted from
+        # known_units, so it is treated as unknown downstream.
+        species_names = {sp.name for sp in rs.species or []}
+        for name, spelled in _declared_units(rs).items():
+            if name in self.known_units:
+                result.unit_registry[name] = spelled
+        for name, spelled, e in unparseable:
+            kind = "species" if name in species_names else "parameter"
+            result.add_error(
+                UNIT_FINDING_UNPARSEABLE,
+                f"Invalid unit '{spelled}' for {kind} '{name}': {e}",
+            )
 
         # Validate reactions
         if rs.reactions:
@@ -1505,6 +1487,24 @@ class UnitValidator:
 
         result.is_valid = len(result.errors) == 0
         return result
+
+    def _enter_component(
+        self, component: Any, scoped: ScopedUnits | None = None
+    ) -> list[tuple[str, str, UnparseableUnitError]]:
+        """Scope the typer to one model or reaction system: its own declared
+        units, then its scoped references (esm-spec §4.8.4). A name reused in
+        another component cannot collide. Returns the declarations whose unit
+        string does not parse, as ``(name, units, error)``; those names stay
+        undeterminable."""
+        self.known_units = {}
+        self.scoped_units = (scoped or ScopedUnits(None)).for_component(component)
+        unparseable = []
+        for name, spelled in _declared_units(component).items():
+            try:
+                self.known_units[name] = parse_unit(spelled)
+            except UnparseableUnitError as e:
+                unparseable.append((name, spelled, e))
+        return unparseable
 
     def _unit_of(self, name: str):
         """The unit of a name: a component-local declaration, else a scoped
@@ -1531,7 +1531,24 @@ class UnitValidator:
             lhs = self._type(equation.lhs)
             rhs = self._type(equation.rhs)
 
-            if lhs is not None and rhs is not None:
+            # `D(x)` with respect to an undeclared time is undeterminable, so
+            # the plain LHS-vs-RHS comparison below cannot see it. Whatever unit
+            # the time carries contributes only powers of TIME, so a ratio with
+            # any other dimension is provably irreconcilable (esm-spec §4.8.4).
+            state = _derivative_of_undeclared_time(self, equation.lhs)
+            state_typed = self._type(state) if state is not None else None
+            if state_typed is not None and rhs is not None:
+                ratio = state_typed.dim / rhs.dim
+                if any(axis != "[time]" and power != 0 for axis, power in ratio.items()):
+                    result.add_error(
+                        UNIT_FINDING_DIMENSIONAL_MISMATCH,
+                        f"Equation {equation_id}: No time unit can reconcile "
+                        f"d({state_typed.dim})/dt with {rhs.dim} "
+                        f"(their ratio {ratio} is not a power of time)",
+                        lhs_units=str(state_typed.dim),
+                        rhs_units=str(rhs.dim),
+                    )
+            elif lhs is not None and rhs is not None:
                 if not self._dimensions_compatible(lhs.dim, rhs.dim):
                     result.add_error(
                         UNIT_FINDING_DIMENSIONAL_MISMATCH,
@@ -1671,12 +1688,18 @@ class UnitValidator:
             return self._dimensionless
 
         if isinstance(expr, (int, float)):
-            return None
+            return self._literal_type(expr)
 
         if isinstance(expr, str):
             unit = self._unit_of(expr)
             if unit is not None:
                 return _Typed(unit.dimensionality, exact_scale_of(unit))
+            if expr == op_registry.STRUCTURAL_DERIVATIVE_WRT:
+                # The implicit independent variable has the time dimension, in
+                # seconds (esm-spec §4.9.1), as in the other bindings. A
+                # derivative taken with respect to it stays undeterminable when
+                # it is undeclared (see `D` below and `validate_equation`).
+                return _Typed(self.ureg.parse_units("s").dimensionality, ExactScale.one())
             # Undeclared symbol: unknown dimension, so it is skipped rather
             # than assumed dimensionless.
             return None
@@ -1685,6 +1708,15 @@ class UnitValidator:
             return self._type_node(expr)
 
         return None
+
+    def _literal_type(self, value: Any) -> _Typed | None:
+        """The unit of a bare numeric literal (or a unit-less ``const``):
+        undeterminable under the current rule (esm-spec §4.8.4); under the
+        §4.8.6 rule, dimensionless at scale 1 unless it is zero, which stays
+        neutral."""
+        if not self.dimensionless_literals or value == 0:
+            return None
+        return self._dimensionless
 
     @property
     def _dimensionless(self) -> _Typed:
@@ -1797,6 +1829,9 @@ class UnitValidator:
             # unresolvable string is reported at the containing expression field,
             # not here.
             if node.units is None:
+                value = node.value
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    return self._literal_type(value)
                 return None
             try:
                 unit = parse_unit(node.units)
@@ -2067,6 +2102,169 @@ class UnitValidator:
 
         result.is_valid = len(result.errors) == 0
         return result
+
+
+def bare_literal_value(expr: Any) -> float | None:
+    """The value of a bare numeric literal, a ``const`` without ``units``, or a
+    unary ``+``/``-`` of one (nested to any depth); ``None`` for anything else."""
+    if isinstance(expr, bool):
+        return None
+    if isinstance(expr, (int, float)):
+        return expr
+    if isinstance(expr, ExprNode):
+        if expr.op == "const" and expr.units is None:
+            value = expr.value
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                return value
+            return None
+        if expr.op in ("+", "-") and len(expr.args or []) == 1:
+            inner = bare_literal_value(expr.args[0])
+            if inner is None:
+                return None
+            return -inner if expr.op == "-" else inner
+    return None
+
+
+def _nonzero_literals(exprs: list[Any]) -> list[str]:
+    """The distinct nonzero bare literals in ``exprs``, in walk order, spelled
+    as JSON numbers -- what the dimensionless-literal warning names."""
+    out: list[str] = []
+
+    def walk(node: Any) -> None:
+        value = bare_literal_value(node)
+        if value is not None:
+            if value != 0:
+                text = repr(value)
+                if text not in out:
+                    out.append(text)
+            return
+        if isinstance(node, ExprNode):
+            for child in node.args or []:
+                walk(child)
+            for child in (node.expr, node.filter):
+                if child is not None:
+                    walk(child)
+            for child in node.values or []:
+                walk(child)
+
+    for expr in exprs:
+        walk(expr)
+    return out
+
+
+def _declared_units(component: Any) -> dict[str, str]:
+    """The unit strings a model (its ``variables``) or a reaction system (its
+    ``species``, then its ``parameters``) declares, by name."""
+    if hasattr(component, "variables"):
+        return {n: v.units for n, v in (component.variables or {}).items() if v.units}
+    declared = {sp.name: sp.units for sp in component.species or [] if sp.units}
+    declared.update({p.name: p.units for p in component.parameters or [] if p.units})
+    return declared
+
+
+def _derivative_of_undeclared_time(validator: UnitValidator, lhs: Any) -> Any:
+    """The operand ``x`` when ``lhs`` is ``D(x)`` taken with respect to an
+    independent variable the component does not declare, else ``None``."""
+    if not isinstance(lhs, ExprNode) or lhs.op != "D" or len(lhs.args or []) != 1:
+        return None
+    wrt = lhs.wrt or op_registry.STRUCTURAL_DERIVATIVE_WRT
+    if validator._unit_of(wrt) is not None:
+        return None
+    return lhs.args[0]
+
+
+def dimensionless_literal_findings(esm_file: EsmFile) -> list[tuple[str, str]]:
+    """The esm-spec §4.8.6 warnings: every check site whose verdict is a
+    provable mismatch when bare numeric literals are dimensionless, but not
+    under the current neutral-literal rule. Returns ``(json_pointer, message)``
+    pairs in document order.
+
+    The sites are every model's ``equations`` and ``initialization_equations``
+    and every reaction system's ``constraint_equations`` and reaction rates,
+    in the top-level components and in their inline subsystems at any depth.
+    Each site is judged by the check validation applies to it
+    (:meth:`UnitValidator.validate_equation`, or
+    :meth:`UnitValidator._validate_reaction` for a rate) in the component's
+    own unit environment, once per literal rule. A site the current rule
+    already rejects carries no warning: it is an error already.
+    """
+    if not PINT_AVAILABLE:
+        return []
+    from .structural_checks import _pointer_token
+
+    scoped = ScopedUnits(esm_file)
+    out: list[tuple[str, str]] = []
+
+    def visit(pointer: str, validator: UnitValidator, exprs: list[Any], check) -> None:
+        literals = _nonzero_literals(exprs)
+        # With no nonzero literal the two rules type the site identically.
+        if not literals:
+            return
+        validator.dimensionless_literals = True
+        found = check().errors
+        if not found:
+            return
+        validator.dimensionless_literals = False
+        if check().errors:
+            return
+        out.append(
+            (
+                pointer,
+                f"{pointer}: with bare numeric literals read as dimensionless "
+                f"(esm-spec §4.8.6), {found[0]}; bare literal(s): {', '.join(literals)}. "
+                "This becomes an error at the next major esm version; a literal that "
+                'carries a unit is written const(value, units "...") '
+                "(esm-spec §4.8.5)",
+            )
+        )
+
+    def equation(pointer: str, validator: UnitValidator, eq: Any) -> None:
+        equation_id = pointer.rsplit("/", 2)[-2:]
+        visit(
+            pointer,
+            validator,
+            [eq.lhs, eq.rhs],
+            lambda: validator.validate_equation(eq, "/".join(equation_id)),
+        )
+
+    def walk_model(pointer: str, model: Any) -> None:
+        validator = UnitValidator()
+        validator._enter_component(model, scoped)
+        for field_name in ("equations", "initialization_equations"):
+            for i, eq in enumerate(getattr(model, field_name, None) or []):
+                equation(f"{pointer}/{field_name}/{i}", validator, eq)
+        walk_subsystems(pointer, model, walk_model)
+
+    def walk_reaction_system(pointer: str, rs: Any) -> None:
+        validator = UnitValidator()
+        validator._enter_component(rs, scoped)
+        for i, eq in enumerate(rs.constraint_equations or []):
+            equation(f"{pointer}/constraint_equations/{i}", validator, eq)
+        for i, reaction in enumerate(rs.reactions or []):
+            rate = getattr(reaction, "rate_constant", None)
+            if rate is None:
+                continue
+            visit(
+                f"{pointer}/reactions/{i}",
+                validator,
+                [rate],
+                lambda reaction=reaction: validator._validate_reaction(reaction),
+            )
+        walk_subsystems(pointer, rs, walk_reaction_system)
+
+    def walk_subsystems(pointer: str, component: Any, walk) -> None:
+        # Inline subsystems at any depth; an unresolved `{ref}` mount is a raw
+        # dict and has nothing to type.
+        for name, sub in (getattr(component, "subsystems", None) or {}).items():
+            if isinstance(sub, dict):
+                continue
+            walk(f"{pointer}/subsystems/{_pointer_token(str(name))}", sub)
+
+    for mname, model in (esm_file.models or {}).items():
+        walk_model(f"/models/{_pointer_token(str(mname))}", model)
+    for sname, rs in (esm_file.reaction_systems or {}).items():
+        walk_reaction_system(f"/reaction_systems/{_pointer_token(str(sname))}", rs)
+    return out
 
 
 def angle_normalization_factor(unit) -> float | None:

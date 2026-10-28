@@ -27,7 +27,7 @@ fn strip_element_suffix(name: &str) -> (&str, bool) {
 }
 
 /// Escape one JSON Pointer reference token (RFC 6901).
-fn pointer_token(key: &str) -> String {
+pub(crate) fn pointer_token(key: &str) -> String {
     key.replace('~', "~0").replace('/', "~1")
 }
 

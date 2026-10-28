@@ -1397,16 +1397,25 @@ func collectReactionSystem(file *ESMFile, rs *ReactionSystem, fullPrefix, docPat
 // where the rate law is `k · ∏ Sᵢ^nᵢ` (esm-spec §7.4 — `rate` is the rate
 // COEFFICIENT, so the substrate product is always applied).
 //
+// The tree is the canonical form of esm-libraries-spec §4.6.2, which every
+// binding emits byte for byte (tests/conformance/reactions/lowering_form.json):
+// the rate law is `k` alone for a source reaction and otherwise ONE n-ary `*`
+// with `k` first and a factor per substrate in listed order; a species' term is
+// the rate law for a net coefficient of exactly 1 and `coefficient * rate`
+// otherwise, the coefficient an integer literal when integral; the right-hand
+// side is the only term or ONE n-ary `+` over the terms in reaction order.
+// Nothing is simplified — a literal `1` or `0` rate stays in the tree.
+//
 // Species are visited in DECLARATION order, so the derived equations are in
-// declaration order too; a species with a zero net rate gets no equation, and a
+// declaration order too; a species with no term gets no equation, and a
 // reservoir species (`constant: true`) gets none either.
 func lowerReactionsToEquations(rs *ReactionSystem, speciesOrder []string) ([]Equation, error) {
 	if len(rs.Reactions) == 0 {
 		return nil, nil
 	}
-	rates := make(map[string]Expression, len(speciesOrder))
+	terms := make(map[string][]any, len(speciesOrder))
 	for _, name := range speciesOrder {
-		rates[name] = 0
+		terms[name] = nil
 	}
 
 	for _, reaction := range rs.Reactions {
@@ -1416,30 +1425,30 @@ func lowerReactionsToEquations(rs *ReactionSystem, speciesOrder []string) ([]Equ
 		reactants := map[string]float64{}
 		products := map[string]float64{}
 		for _, s := range reaction.Substrates {
-			if _, ok := rates[s.Species]; !ok {
+			if _, ok := terms[s.Species]; !ok {
 				return nil, fmt.Errorf("flatten: reactant %s not found in species list", s.Species)
 			}
 			reactants[s.Species] += s.Stoichiometry
 		}
 		for _, p := range reaction.Products {
-			if _, ok := rates[p.Species]; !ok {
+			if _, ok := terms[p.Species]; !ok {
 				return nil, fmt.Errorf("flatten: product %s not found in species list", p.Species)
 			}
 			products[p.Species] += p.Stoichiometry
 		}
 
 		rateExpr := reaction.Rate
-		for _, s := range reaction.Substrates {
-			if s.Stoichiometry == 1 {
-				rateExpr = multiplyExprs(rateExpr, s.Species)
-				continue
+		if len(reaction.Substrates) > 0 {
+			factors := []any{reaction.Rate}
+			for _, s := range reaction.Substrates {
+				if s.Stoichiometry == 1 {
+					factors = append(factors, s.Species)
+					continue
+				}
+				factors = append(factors,
+					ExprNode{Op: "^", Args: []any{s.Species, stoichLiteral(s.Stoichiometry)}})
 			}
-			if s.Stoichiometry == 0 {
-				rateExpr = multiplyExprs(rateExpr, 1)
-				continue
-			}
-			rateExpr = multiplyExprs(rateExpr,
-				ExprNode{Op: "^", Args: []any{s.Species, stoichLiteral(s.Stoichiometry)}})
+			rateExpr = ExprNode{Op: "*", Args: factors}
 		}
 
 		for _, name := range speciesOrder {
@@ -1447,7 +1456,11 @@ func lowerReactionsToEquations(rs *ReactionSystem, speciesOrder []string) ([]Equ
 			if net == 0 {
 				continue
 			}
-			rates[name] = addExprs(rates[name], multiplyExprs(stoichLiteral(net), rateExpr))
+			if net == 1 {
+				terms[name] = append(terms[name], rateExpr)
+				continue
+			}
+			terms[name] = append(terms[name], ExprNode{Op: "*", Args: []any{stoichLiteral(net), rateExpr}})
 		}
 	}
 
@@ -1457,23 +1470,31 @@ func lowerReactionsToEquations(rs *ReactionSystem, speciesOrder []string) ([]Equ
 		if sp.Constant != nil && *sp.Constant {
 			continue
 		}
-		if isNumericZero(rates[name]) {
+		speciesTerms := terms[name]
+		if len(speciesTerms) == 0 {
 			continue
+		}
+		var rhs Expression = speciesTerms[0]
+		if len(speciesTerms) > 1 {
+			rhs = ExprNode{Op: "+", Args: speciesTerms}
 		}
 		wrt := DefaultIndepVar
 		out = append(out, Equation{
 			LHS: ExprNode{Op: OpDerivative, Args: []any{name}, Wrt: &wrt},
-			RHS: rates[name],
+			RHS: rhs,
 		})
 	}
 	return out, nil
 }
 
-// stoichLiteral renders a stoichiometric coefficient as the numeric literal the
-// expression tree carries: an integer-valued coefficient as an int (so it
-// renders and round-trips as `2`, not `2.0`), a fractional one as a float.
+// stoichLiteral renders a stoichiometric coefficient or exponent as the numeric
+// literal the expression tree carries: an integral value representable in int64
+// as an int (so it renders and round-trips as `2`, not `2.0`), anything else as
+// a float (CONFORMANCE_SPEC §5.5.3.1 rule 3, esm-libraries-spec §4.6.2 rule 5).
+// Every integral float64 in [-2^63, 2^63) converts to int64 exactly, so the
+// bound is int64's range, not intExactCutoff, matching the other bindings.
 func stoichLiteral(v float64) any {
-	if v == math.Trunc(v) && math.Abs(v) < intExactCutoff {
+	if v == math.Trunc(v) && v >= -(1<<63) && v < 1<<63 {
 		return int64(v)
 	}
 	return v

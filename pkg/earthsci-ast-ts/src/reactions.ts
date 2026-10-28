@@ -13,6 +13,7 @@ import type {
   Equation,
   Expression,
 } from './types.js'
+import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
 
 /**
  * Derive ODEs from a reaction system using mass action kinetics
@@ -35,10 +36,12 @@ export function deriveOdes(system: ReactionSystem): Model {
   const variables: { [key: string]: ModelVariable } = {}
   const equations: Equation[] = []
 
-  // Convert species to UNKNOWNS. Each gets a `D(s,t)` equation below, which is
-  // what makes it an ODE state under the derived classification — the 0.x
-  // `type: 'state'` declaration said the same thing twice, and 1.0.0 keeps only
-  // the equation (esm-spec 6.3.1).
+  // Convert species to UNKNOWNS. A species some reaction moves gets a `D(s,t)`
+  // equation below, which is what makes it an ODE state under the derived
+  // classification — the 0.x `type: 'state'` declaration said the same thing
+  // twice, and 1.0.0 keeps only the equation (esm-spec 6.3.1). A species no
+  // reaction moves (inert, or a catalyst everywhere) gets no equation, so it is
+  // an ALGEBRAIC unknown (esm-libraries-spec §4.6.1).
   //
   // EXCEPT a reservoir species (`constant: true`, esm-spec 7.4), which is held
   // fixed and gets no ODE, so it lowers to a PARAMETER carrying its declared
@@ -68,48 +71,9 @@ export function deriveOdes(system: ReactionSystem): Model {
     }
   }
 
-  // Build ODE right-hand sides for each species
-  const odeRhs: { [species: string]: Expression[] } = {}
-
-  // Initialize ODE RHS for each species. A reservoir is held fixed, so it gets
-  // no slot and therefore no equation — while still contributing to the OTHER
-  // species' rate laws, because `buildRateLaw` reads the substrate list, not
-  // this map.
-  for (const [speciesName, species] of Object.entries(system.species)) {
-    if (species.constant === true) continue
-    odeRhs[speciesName] = []
-  }
-
-  // Process each reaction
-  for (const reaction of system.reactions) {
-    const rateLaw = buildRateLaw(reaction)
-
-    // Add contributions to species ODEs
-    addReactionContribution(odeRhs, reaction, rateLaw)
-  }
-
-  // Create ODE equations (d[species]/dt = RHS)
-  for (const [speciesName, rhsTerms] of Object.entries(odeRhs)) {
-    if (rhsTerms.length === 0) {
-      // No reactions affect this species
-      equations.push({
-        lhs: { op: 'D', args: [speciesName], wrt: 't' },
-        rhs: 0,
-      })
-    } else if (rhsTerms.length === 1) {
-      // Single term
-      equations.push({
-        lhs: { op: 'D', args: [speciesName], wrt: 't' },
-        rhs: rhsTerms[0],
-      })
-    } else {
-      // Sum multiple terms - ensure we have at least one term for the non-empty array requirement
-      equations.push({
-        lhs: { op: 'D', args: [speciesName], wrt: 't' },
-        rhs: { op: '+', args: rhsTerms as [Expression, ...Expression[]] },
-      })
-    }
-  }
+  // The species' ODEs: the one lowering flatten uses too, so a system's
+  // equations are the same whichever entry point reached them.
+  equations.push(...lowerReactionsToEquations(system))
 
   // Add constraint equations if present
   if (system.constraint_equations) {
@@ -124,111 +88,102 @@ export function deriveOdes(system: ReactionSystem): Model {
 }
 
 /**
- * Build mass action rate law for a reaction
+ * Lower a reaction list to `D(species, t) = Σ net_stoich · rate` equations by
+ * mass action (esm-spec §7.4), in the canonical form of esm-libraries-spec
+ * §4.6.2, which every binding emits byte for byte
+ * (`tests/conformance/reactions/lowering_form.json`):
  *
- * For a reaction with rate constant k and substrates {Si} with stoichiometries {ni}:
- * rate_law = k * prod(Si^ni)
+ * - the rate law is the reaction's `rate` alone when it has no substrates, and
+ *   otherwise ONE n-ary `*` whose first operand is the `rate` and whose further
+ *   operands are its substrates in listed order (the bare species for a
+ *   coefficient of 1, `species ^ coefficient` otherwise);
+ * - a species' term for a reaction is that rate law when its net coefficient
+ *   `P - S` is exactly 1, and `{op: '*', args: [coefficient, rateLaw]}`
+ *   otherwise (a loss of 1 is `-1 * rateLaw`, not a unary minus); a net
+ *   coefficient of 0 contributes no term;
+ * - the right-hand side is the only term, or ONE n-ary `+` over the terms in
+ *   reaction order. Nothing is simplified: a literal `1` or `0` rate stays.
  *
- * For source reactions (null substrates): rate_law = k (direct production)
- * For sink reactions: rate_law includes substrate concentrations as normal
+ * Species are visited in declaration order. A reservoir species
+ * (`constant: true`) and a species with no term get no equation
+ * (esm-libraries-spec §4.6.1); a reservoir is still a factor in the rate laws.
  *
- * @param reaction Reaction to build rate law for
- * @returns Expression representing the rate law
+ * This binding's numbers carry no integer/float distinction, so the integer
+ * literal the specification asks for is simply the number.
  */
-function buildRateLaw(reaction: Reaction): Expression {
-  const rate = reaction.rate
+export function lowerReactionsToEquations(system: ReactionSystem): Equation[] {
+  const speciesNames = Object.keys(system.species ?? {})
+  const terms: Record<string, Expression[]> = {}
+  for (const name of speciesNames) terms[name] = []
 
-  // For source reactions (null substrates), rate is used directly
-  if (!reaction.substrates) {
-    return rate
-  }
+  for (const reaction of system.reactions ?? []) {
+    // Each species this reaction names, in first-mention order, with its product
+    // and substrate coefficients each summed in listed order (`P` and `S`).
+    const sums = new Map<string, { produced: number; consumed: number }>()
+    const sides = [
+      [reaction.substrates ?? [], false],
+      [reaction.products ?? [], true],
+    ] as const
+    for (const [entries, isProduct] of sides) {
+      for (const entry of entries) {
+        // A substrate or product the system does not declare is refused, not
+        // dropped: dropping it lowers a different reaction (a product that is
+        // never produced) with no diagnostic (esm-spec §7.2,
+        // `undefined_species`). The other bindings refuse it too.
+        if (!Object.hasOwn(terms, entry.species)) {
+          throw new EsmDiagnosticError(
+            ERROR_CODES.UNDEFINED_SPECIES,
+            `reaction '${reaction.id}' names species '${entry.species}', which the reaction system does not declare`,
+            { species: entry.species, reaction_id: reaction.id },
+          )
+        }
+        let sum = sums.get(entry.species)
+        if (sum === undefined) {
+          sum = { produced: 0, consumed: 0 }
+          sums.set(entry.species, sum)
+        }
+        if (isProduct) sum.produced += entry.stoichiometry
+        else sum.consumed += entry.stoichiometry
+      }
+    }
 
-  // For reactions with substrates, build mass action kinetics
-  const terms: Expression[] = [rate]
-
-  for (const substrate of reaction.substrates) {
-    if (substrate.stoichiometry === 1) {
-      // Simple first-order term
-      terms.push(substrate.species)
-    } else {
-      // Higher-order term: [species]^stoichiometry
-      terms.push({
-        op: '^',
-        args: [substrate.species, substrate.stoichiometry],
-      })
+    const rateLaw = massActionRate(reaction)
+    for (const [name, { produced, consumed }] of sums) {
+      const net = produced - consumed
+      if (net === 0) continue
+      terms[name].push(net === 1 ? rateLaw : { op: '*', args: [net, rateLaw] })
     }
   }
 
-  if (terms.length === 1) {
-    return terms[0]
-  } else if (terms.length > 1) {
-    return {
-      op: '*',
-      args: terms as [Expression, ...Expression[]],
-    }
-  } else {
-    // Should not happen, but handle empty case
-    return 1
+  const equations: Equation[] = []
+  for (const name of speciesNames) {
+    if ((system.species ?? {})[name]?.constant === true) continue
+    const speciesTerms = terms[name]
+    if (speciesTerms.length === 0) continue
+    equations.push({
+      lhs: { op: 'D', args: [name], wrt: 't' },
+      rhs:
+        speciesTerms.length === 1
+          ? speciesTerms[0]
+          : { op: '+', args: speciesTerms as [Expression, ...Expression[]] },
+    })
   }
+  return equations
 }
 
-/**
- * Add reaction contribution to species ODE right-hand sides
- *
- * For each species involved in the reaction, add term:
- * net_stoich_X * rate_law
- *
- * where net_stoich_X = product_stoich - substrate_stoich
- *
- * @param odeRhs Object mapping species names to arrays of RHS terms
- * @param reaction Reaction to process
- * @param rateLaw Rate law expression for this reaction
- */
-function addReactionContribution(
-  odeRhs: { [species: string]: Expression[] },
-  reaction: Reaction,
-  rateLaw: Expression,
-): void {
-  // Calculate net stoichiometry for each species
-  const netStoich: { [species: string]: number } = {}
-
-  // Subtract substrate stoichiometries
-  if (reaction.substrates) {
-    for (const substrate of reaction.substrates) {
-      netStoich[substrate.species] = (netStoich[substrate.species] || 0) - substrate.stoichiometry
-    }
+/** The mass-action rate law `k · ∏ Sᵢ^nᵢ` of one reaction (see above). */
+function massActionRate(reaction: Reaction): Expression {
+  const substrates = reaction.substrates ?? []
+  if (substrates.length === 0) return reaction.rate
+  const factors: Expression[] = [reaction.rate]
+  for (const substrate of substrates) {
+    factors.push(
+      substrate.stoichiometry === 1
+        ? substrate.species
+        : { op: '^', args: [substrate.species, substrate.stoichiometry] },
+    )
   }
-
-  // Add product stoichiometries
-  if (reaction.products) {
-    for (const product of reaction.products) {
-      netStoich[product.species] = (netStoich[product.species] || 0) + product.stoichiometry
-    }
-  }
-
-  // Add terms to ODE RHS for each affected species
-  for (const [speciesName, stoich] of Object.entries(netStoich)) {
-    if (stoich === 0) {
-      // No net change for this species
-      continue
-    }
-
-    let term: Expression
-    if (stoich === 1) {
-      // Coefficient of 1, use rate law directly
-      term = rateLaw
-    } else if (stoich === -1) {
-      // Coefficient of -1, negate rate law
-      term = { op: '-', args: [rateLaw] }
-    } else {
-      // Other coefficient, multiply
-      term = { op: '*', args: [stoich, rateLaw] }
-    }
-
-    if (odeRhs[speciesName]) {
-      odeRhs[speciesName].push(term)
-    }
-  }
+  return { op: '*', args: factors as [Expression, ...Expression[]] }
 }
 
 /**

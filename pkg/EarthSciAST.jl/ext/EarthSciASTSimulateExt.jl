@@ -272,6 +272,10 @@ SciMLBase.remake(prob::EsmProblem; kwargs...) = EarthSciAST.remake(prob; kwargs.
 #     ens = EnsembleProblem(prob, (p, i, repeat) -> remake(p; p = Dict("k" => ks[i])))
 #     sols = solve(ens, Tsit5(), EnsembleSerial(); trajectories = length(ks))
 #
+# The rewrite is SciMLBase's `prob_func`, so its signature follows the loaded
+# SciMLBase: `(prob, i, repeat)` under SciMLBase 2, `(prob, ctx)` under SciMLBase
+# 3 (`ctx.sim_id` is the trajectory index, `ctx.repeat` the repeat count).
+#
 # `safetycopy = false` because `remake` already returns a fresh problem sharing
 # only what a substitution cannot invalidate; deep-copying an `EsmProblem` would
 # clone the compiled RHS and BREAK the aliasing between the live forcing buffers

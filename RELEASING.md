@@ -30,6 +30,12 @@ commit the Julia General registry accepted:
    `pkg/EarthSciAST.jl` tree is the one General registered, then publishes to
    PyPI, crates.io, npm and the Go proxy and attaches the binaries.
 
+The jobs these three run live in the organization's shared reusable workflows,
+[`EarthSciML/.github`](https://github.com/EarthSciML/.github/blob/main/RELEASING.md)
+(`release-*.yml`), which EarthSciASTDiff, EarthSciIntegrator and EarthSciIO use
+too. This repository's files only say what to publish. The PyPI job is the
+exception: it stays in `release.yml` itself (see PyPI below).
+
 The order exists because General can refuse a registration, and the other
 registries never let a version be reused. v0.3.0 is the case in point: it
 reached npm, PyPI, crates.io and Go, while its General PR sat refused by
@@ -97,17 +103,11 @@ Install the [JuliaRegistrator](https://github.com/JuliaRegistries/Registrator)
 GitHub App on the repository.
 
 ### TagBot
-TagBot pushes the release tag with an SSH deploy key, because a tag pushed with
-`GITHUB_TOKEN` starts no workflow and `release.yml` would never run.
-
-1. `ssh-keygen -t ed25519 -N "" -C TagBot -f tagbot` (no passphrase).
-2. Repository **Settings → Deploy keys → Add deploy key**: paste `tagbot.pub`,
-   tick **Allow write access**.
-3. Repository **Settings → Secrets and variables → Actions → New repository
-   secret**: name `TAGBOT_SSH_KEY`, value the contents of `tagbot` (the private
-   key). Then delete both files.
-4. **Settings → Actions → General → Workflow permissions** must be **Read and
-   write**, which TagBot needs to create the release with `GITHUB_TOKEN`.
+A tag created with `GITHUB_TOKEN` starts no workflow, so `release.yml` would
+never run. TagBot instead authenticates as the organization's TagBot GitHub
+App, which must be installed on this repository; its client ID and key are the
+org-level `TAGBOT_APP_CLIENT_ID` variable and `TAGBOT_APP_PRIVATE_KEY` secret.
+Setup is in [EarthSciML/.github's RELEASING.md](https://github.com/EarthSciML/.github/blob/main/RELEASING.md#the-tagbot-github-app-once-per-organization).
 
 TagBot is triggered by the JuliaTagBot account commenting on an issue in this
 repository, so issues must stay enabled. It can also be run by hand from the

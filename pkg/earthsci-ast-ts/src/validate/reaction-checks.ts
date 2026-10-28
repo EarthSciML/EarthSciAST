@@ -9,6 +9,7 @@ import { ERROR_CODES } from '../errors.js'
 import {
   checkDimensions,
   tryParseUnit,
+  reactionSystemUnitBindings,
   withScopedReferenceUnits,
   topLevelScopedUnits,
   isDimensionless,
@@ -187,34 +188,6 @@ export function validateReactionSystemICs(
 }
 
 /**
- * Build a unit-binding map for a single reaction system covering its species
- * and parameters. Mirrors the binding environment used by validateUnits but
- * scoped to one system so dimensional checks see the author-declared units
- * for each symbol.
- */
-function buildReactionSystemUnitBindings(reactionSystem: ReactionSystem): Map<string, ParsedUnit> {
-  const bindings = new Map<string, ParsedUnit>()
-  // An unparseable declaration leaves the symbol UNBOUND (dimension unknown)
-  // rather than bound to a fabricated dimensionless value — `checkDimensions`
-  // then reports it as indeterminate and skips comparisons involving it.
-  const bind = (name: string, units: string): void => {
-    const parsed = tryParseUnit(units)
-    if (parsed !== null) bindings.set(name, parsed)
-  }
-  if ('species' in reactionSystem && reactionSystem.species) {
-    for (const [name, species] of Object.entries(reactionSystem.species)) {
-      if (species && species.units) bind(name, species.units)
-    }
-  }
-  if ('parameters' in reactionSystem && reactionSystem.parameters) {
-    for (const [name, param] of Object.entries(reactionSystem.parameters)) {
-      if (param && param.units) bind(name, param.units)
-    }
-  }
-  return bindings
-}
-
-/**
  * If the rate expression is a bare variable reference (species or parameter
  * name), return its declared unit string. Otherwise returns the empty string.
  * Matches Go's rateVarName + unit lookup so rate_units details align across
@@ -254,7 +227,7 @@ export function validateReactionRateUnits(
   // (esm-spec §4.8.4, EarthSciAST#414). `scopedTopLevel` lets a caller that
   // checks many systems build the document-wide part once.
   const bindings = withScopedReferenceUnits(
-    buildReactionSystemUnitBindings(reactionSystem),
+    reactionSystemUnitBindings(reactionSystem),
     esmFile,
     reactionSystem,
     scopedTopLevel ?? topLevelScopedUnits(esmFile),

@@ -938,6 +938,24 @@
       "note": "A unit string that does not parse or names a non-registry symbol is always the hard error unit_parse_error, never a warning or dimensionless."
     },
     {
+      "id": "spec.4.8.6.dimensionless-literal-warning",
+      "section": "4.8.6",
+      "quote": "Where the dimensionless-literal rule gives FAIL and the current rule gives PASS, a binding MUST emit `units_dimensionless_literal_mismatch` at warning severity, once per site, as a unit warning whose `path` is the site's pointer.",
+      "class": "semantic",
+      "phase": 2,
+      "area": "units",
+      "note": "For each equation of a top-level model and each rate of a top-level reaction system, a warning at the site's pointer exists iff the site has a provable mismatch with nonzero literals dimensionless at scale 1 and none with literals neutral."
+    },
+    {
+      "id": "spec.4.8.6.warning-never-changes-validity",
+      "section": "4.8.6",
+      "quote": "Errors and `is_valid` MUST be decided by the current rule alone",
+      "class": "semantic",
+      "phase": 2,
+      "area": "units",
+      "note": "The validity verdict and error set are the same as with the dimensionless-literal pass removed."
+    },
+    {
       "id": "spec.4.9.in-scope-symbols-resolve",
       "section": "4.9",
       "quote": "Name Resolution: what a checker MUST NOT call undefined `undefined_variable`, `undefined_parameter`, `event_var_undeclared` and `unresolved_scoped_ref` are hard errors, so every symbol this section declares to be **in scope** is a symbol a checker MUST resolve.",

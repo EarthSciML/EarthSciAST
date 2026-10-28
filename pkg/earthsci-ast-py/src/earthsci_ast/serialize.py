@@ -693,7 +693,7 @@ def _serialize_reaction(reaction: Reaction) -> dict[str, Any]:
     if reaction.reactants:
         result["substrates"] = [
             {"species": species, "stoichiometry": _emit_stoich(coeff)}
-            for species, coeff in reaction.reactants.items()
+            for species, coeff in reaction.substrate_list()
         ]
     else:
         result["substrates"] = None
@@ -701,7 +701,7 @@ def _serialize_reaction(reaction: Reaction) -> dict[str, Any]:
     if reaction.products:
         result["products"] = [
             {"species": species, "stoichiometry": _emit_stoich(coeff)}
-            for species, coeff in reaction.products.items()
+            for species, coeff in reaction.product_list()
         ]
     else:
         result["products"] = None

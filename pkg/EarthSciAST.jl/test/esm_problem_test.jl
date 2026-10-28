@@ -203,9 +203,14 @@ end
     @testset "EnsembleProblem sweeps a parameter (§2.5.8)" begin
         prob = esm_problem(scalar_esm("k"), (0.0, 1.0))
         ks = [1.0, 2.0, 4.0]
-        ens = EnsembleProblem(prob, (pr, i, repeat) -> remake(pr; p = Dict("M.k" => ks[i])))
+        # The rewrite is SciMLBase's `prob_func`: `(prob, i, repeat)` under
+        # SciMLBase 2, `(prob, ctx)` under SciMLBase 3. Both methods, so the
+        # test runs under either.
+        rewrite(pr, i, repeat) = remake(pr; p = Dict("M.k" => ks[i]))
+        rewrite(pr, ctx) = rewrite(pr, ctx.sim_id, ctx.repeat)
+        ens = EnsembleProblem(prob, rewrite)
         sols = solve(ens, Tsit5(), EnsembleSerial(); trajectories = length(ks))
-        @test [s[Y][end] for s in sols] ≈ ks atol = 1e-6
+        @test [s[Y][end] for s in sols.u] ≈ ks atol = 1e-6
         # The sweep left the base problem alone.
         @test isapprox(solve(prob, Tsit5())[Y][end], 1.0; atol = 1e-6)
     end

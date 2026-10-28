@@ -61,6 +61,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("expression_test.jl")
     include("reactions_test.jl")
     include("reaction_species_order_test.jl")  # species ORDER = declaration order (API_SPEC §5.10)
+    include("reaction_lowering_form_test.jl")  # exact lowered tree (esm-libraries-spec §4.6.2)
     include("display_test.jl")
     include("display_conformance_test.jl")
     include("expression_parse_conformance_test.jl")  # infix-text parser ≡ TS oracle
@@ -68,6 +69,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("unit_exact_scale_test.jl")
     include("transcendental_scale_test.jl")
     include("const_units_test.jl")
+    include("dimensionless_literal_conformance_test.jl")  # esm-spec §4.8.6 warning stage
     include("graph_test.jl")
     include("graph_conformance_test.jl")  # component/expression graphs ≡ TS oracle
 

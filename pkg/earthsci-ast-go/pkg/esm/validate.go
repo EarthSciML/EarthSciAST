@@ -58,7 +58,7 @@ func countStructuralErrorLevel(errs []StructuralError) int {
 // the UnitFinding* constants in units.go for the policy.
 type UnitWarning struct {
 	Path     string `json:"path"`      // RFC 6901 JSON Pointer to the equation/expression (see StructuralError.Path)
-	Code     string `json:"code"`      // UnitFindingDimensionalMismatch | UnitFindingUnparseable | UnitFindingAnalysis
+	Code     string `json:"code"`      // UnitFindingDimensionalMismatch | UnitFindingUnparseable | UnitFindingAnalysis | UnitFindingDimensionlessLiteral
 	Message  string `json:"message"`   // Human-readable description
 	LHSUnits string `json:"lhs_units"` // Inferred units of the LHS
 	RHSUnits string `json:"rhs_units"` // Inferred units of the RHS
@@ -353,6 +353,9 @@ func ValidateStructuralWithCodes(file *ESMFile) *StructuralValidationResult {
 		validateReactionRateUnits(systemName, &system, fmt.Sprintf("/reaction_systems/%s", systemName), scoped, result)
 	}
 	result.StructuralErrors = append(result.StructuralErrors, promoteUnitFindings(result.UnitWarnings)...)
+	// Bare numeric literals read as dimensionless (esm-spec §4.8.6): warnings
+	// only, appended after promotion so they can never become errors.
+	result.UnitWarnings = append(result.UnitWarnings, dimensionlessLiteralFindings(file, scoped)...)
 
 	// Valid is computed once from the accumulated errors so that checks
 	// appending StructuralErrors need not maintain the flag themselves;

@@ -78,7 +78,9 @@ class UnitWarning:
       silently reclassify it. One of
       :data:`~earthsci_ast.units.UNIT_FINDING_DIMENSIONAL_MISMATCH`,
       :data:`~earthsci_ast.units.UNIT_FINDING_UNPARSEABLE`,
-      :data:`~earthsci_ast.units.UNIT_FINDING_ANALYSIS`. This is the SECOND,
+      :data:`~earthsci_ast.units.UNIT_FINDING_ANALYSIS`, or the warning
+      :data:`~earthsci_ast.units.UNIT_FINDING_DIMENSIONLESS_LITERAL`
+      (esm-spec §4.8.6). This is the SECOND,
       smaller unit vocabulary — NOT the ``unit_inconsistency`` /
       ``unit_parse_error`` pair, which names the STRUCTURAL error a finding is
       promoted to.
@@ -270,6 +272,10 @@ def validate(esm_file: EsmFile, *, base_path: str | None = None) -> ValidationRe
 
         # 5. Unit validation (warnings only)
         _validate_units(esm_file, unit_warnings)
+
+        # 5b. Bare numeric literals read as dimensionless (esm-spec §4.8.6):
+        # warnings only at this stage, so validity is untouched.
+        _validate_dimensionless_literals(esm_file, unit_warnings)
 
     except Exception as e:
         # Catch-all for unexpected errors
@@ -1472,6 +1478,37 @@ def _validate_imported_coupling_edges(
                         },
                     )
                 )
+
+
+def _validate_dimensionless_literals(esm_file: EsmFile, unit_warnings: list[UnitWarning]) -> None:
+    """esm-spec §4.8.6: one ``units_dimensionless_literal_mismatch`` warning
+    per check site that the dimensionless-literal rule rejects and the current
+    neutral-literal rule does not. Never an error at this stage: a failure of
+    the pass itself is an analysis warning, as in :func:`_validate_units`."""
+    try:
+        from .units import UNIT_FINDING_DIMENSIONLESS_LITERAL, dimensionless_literal_findings
+
+        findings = dimensionless_literal_findings(esm_file)
+    except Exception as e:
+        unit_warnings.append(
+            UnitWarning(
+                path="",
+                message=f"Dimensionless-literal analysis failed: {str(e)}",
+                # The checker blew up; that says nothing about the file.
+                code=UNIT_FINDING_ANALYSIS,
+                details={"validation_type": "dimensionless_literal", "exception": str(e)},
+            )
+        )
+        return
+    for path, message in findings:
+        unit_warnings.append(
+            UnitWarning(
+                path=path,
+                message=message,
+                code=UNIT_FINDING_DIMENSIONLESS_LITERAL,
+                details={"validation_type": "dimensionless_literal"},
+            )
+        )
 
 
 def _validate_units(esm_file: EsmFile, unit_warnings: list[UnitWarning]) -> None:

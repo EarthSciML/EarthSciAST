@@ -103,6 +103,7 @@ from .esm_types import (
     TimeSpan,
     Tolerance,
     VariableMapCoupling,
+    _sum_entries,
 )
 from .json_walk import expand_ref_env, read_ref_text
 
@@ -848,14 +849,15 @@ def _parse_parameter(param_data: dict[str, Any]) -> Parameter:
     )
 
 
-def _parse_stoichiometry(entries: Any) -> dict[str, Any]:
-    """Build a ``{species: stoichiometry}`` map from substrate/product entries.
+def _parse_stoichiometry(entries: Any) -> list[tuple[str, Any]]:
+    """The ``(species, stoichiometry)`` substrate/product entries, in listed
+    order with repeats kept.
 
     Preserves `int` vs `float` coefficients so a parse/re-emit cycle stays
     byte-identical for integer-only fixtures and round-trips fractional
     stoichiometries untouched.
     """
-    return {e["species"]: e["stoichiometry"] for e in entries or []}
+    return [(e["species"], e["stoichiometry"]) for e in entries or []]
 
 
 def _parse_reaction(reaction_data: dict[str, Any]) -> Reaction:
@@ -869,8 +871,8 @@ def _parse_reaction(reaction_data: dict[str, Any]) -> Reaction:
     name = reaction_data["name"] if name_authored else rxn_id
 
     # Substrates in the schema become reactants in the model.
-    reactants = _parse_stoichiometry(reaction_data.get("substrates"))
-    products = _parse_stoichiometry(reaction_data.get("products"))
+    substrate_entries = _parse_stoichiometry(reaction_data.get("substrates"))
+    product_entries = _parse_stoichiometry(reaction_data.get("products"))
 
     # Parse rate
     rate_constant = None
@@ -880,11 +882,13 @@ def _parse_reaction(reaction_data: dict[str, Any]) -> Reaction:
     return Reaction(
         name=name,
         id=rxn_id,
-        reactants=reactants,
-        products=products,
+        reactants=_sum_entries(substrate_entries),
+        products=_sum_entries(product_entries),
         rate_constant=rate_constant,
         reference=_parse_optional_reference(reaction_data),
         name_authored=name_authored,
+        substrate_entries=substrate_entries,
+        product_entries=product_entries,
     )
 
 

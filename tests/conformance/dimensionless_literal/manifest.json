@@ -1,0 +1,28 @@
+{
+  "suite": "dimensionless_literal",
+  "spec": "esm-spec §4.8.6 (bare numeric literals read as dimensionless: the warning stage); CONFORMANCE_SPEC §7.1 (`units_dimensionless_literal_mismatch`)",
+  "description": "Stage 1 of the transition that makes a bare numeric literal DIMENSIONLESS at scale 1 (the literal zero excepted). At this stage every binding evaluates each check site under BOTH the current neutral-literal rule and the new rule, and reports a `units_dimensionless_literal_mismatch` WARNING where only the new rule finds a mismatch. Validity is decided by the current rule alone, so every file here is valid.",
+  "golden": "golden/expected_warnings.json",
+  "cases": [
+    {
+      "id": "pattern_classes_warn",
+      "input": "fixtures/dimensionless_literal.esm",
+      "assert": "warns at /models/Literals/equations/0..6 (additive offset T - 273.15; 1 + x; conversion factor P_pa / 101325.0; exp(-1370 / T); literal coefficient 1.4 * phi carrying a unit; dx [m] = 1 / 64; H_ice > 0.01) and at /reaction_systems/Chem/reactions/0 (exp(-1370 / T) in a rate)"
+    },
+    {
+      "id": "controls_quiet",
+      "input": "fixtures/dimensionless_literal.esm",
+      "assert": "NO warning at /models/Literals/equations/7..14 (max(x, 0); ifelse(c > 0, x, 0); D(q) = -(k * q); ic(q) = 0.0; ifelse(x > 0, 1, 0); T - const(273.15, units K); 2 * pi * f * tau; 0.5 * x + x) nor at /reaction_systems/Chem/reactions/1"
+    },
+    {
+      "id": "still_valid",
+      "input": "fixtures/dimensionless_literal.esm",
+      "assert": "validate() is_valid == true: the warning never changes validity at this stage"
+    },
+    {
+      "id": "neutral_literal_pins_warn",
+      "input": "(the 27 tests/valid files the golden lists with a nonempty warning set: 83 warnings)",
+      "assert": "each stays VALID and carries exactly the listed warnings; these files pin today's neutral-literal rule and are rewritten by the next stage's codemod, not here"
+    }
+  ]
+}

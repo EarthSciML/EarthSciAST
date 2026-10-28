@@ -1399,6 +1399,12 @@ single failure. Measured before the change:
 Declaration order was canonical on both counts: it is the majority in both
 columns, and it is what this section already said. Two bindings moved.
 
+**The derived equations are one exact tree in all five bindings**, in
+`derive_odes` and in `flatten` alike: esm-libraries-spec §4.6.2 fixes operand
+order, how each coefficient is written (a loss of 1 is `-1 * rate`, an integral
+coefficient an integer literal) and one n-ary `+` per species. Pinned
+cross-binding by `tests/conformance/reactions/lowering_form.json`.
+
 **Rust** dropped the sort in `stoichiometric_matrix` (`src/reactions.rs`) and in
 its `parallel`-feature twin (`src/performance.rs`, which sorted to stay
 consistent with it). The sort's stated justification was "so indices are
@@ -1602,6 +1608,7 @@ reading that as a gap.
 | `species` | type | `Species` | – | `Species` | `Species` | `Species` |
 | `substitute_in_model` | function | – | `substituteInModel` | `substitute_in_model` | `substitute_in_model` | `SubstituteInModel` |
 | `substitute_in_reaction_system` | function | – | `substituteInReactionSystem` | `substitute_in_reaction_system` | `substitute_in_reaction_system` | `SubstituteInReactionSystem` |
+| `unit_finding_dimensionless_literal` | constant | `UNIT_FINDING_DIMENSIONLESS_LITERAL` | – | `UNIT_FINDING_DIMENSIONLESS_LITERAL` | `UNIT_FINDING_DIMENSIONLESS_LITERAL` | `UnitFindingDimensionlessLiteral` |
 | `vertex_kind` | type | – | `VertexKind` | `VertexKind` | `VertexKind` | `VertexKind` |
 
 #### Exported by three of the five

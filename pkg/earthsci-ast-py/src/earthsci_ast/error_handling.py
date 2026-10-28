@@ -236,6 +236,11 @@ SOLVER_TIME_SPAN_INVALID = "solver_time_span_invalid"
 # (esm-spec §4.8.5), raised as ``ConstUnitsError`` from ``units.py``.
 CONST_UNITS_VERSION_TOO_OLD = "const_units_version_too_old"
 
+# A bare numeric literal read as DIMENSIONLESS (esm-spec §4.8.6) produces a
+# dimension or scale mismatch the current neutral-literal rule does not. A
+# WARNING at this stage, emitted on ``unit_warnings`` by ``validation.py``.
+UNITS_DIMENSIONLESS_LITERAL_MISMATCH = "units_dimensionless_literal_mismatch"
+
 # ===========================================================================
 # Template-library import / metaparameter codes (esm-spec §9.7), raised as
 # ``ExpressionTemplateError`` from ``template_imports.py`` (and
