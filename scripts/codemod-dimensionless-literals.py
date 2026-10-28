@@ -400,6 +400,7 @@ class SymbolicValidator:
                 known = [t for t in operands if t is not None]
                 if not known:
                     return None
+                known = _angle_cancels(known, op)
                 for t in known[1:]:
                     self.equal(known[0], t, op)
                 return known[0]
@@ -425,6 +426,21 @@ class SymbolicValidator:
         return V
 
 
+def _angle_cancels(known, op):
+    """The engine's "an angle meets a pure number" rule (esm-spec §4.8.3) over
+    operands whose unit is fully known; an operand carrying an unknown literal
+    unit is left alone, so the solver never treats a candidate as an angle."""
+    if not hasattr(U, "_ANGLE_AGREEMENT_OPS") or op not in U._ANGLE_AGREEMENT_OPS:
+        return known
+    plain = [t for t in known if not typed_vec(t)[0]]
+    if any(U._is_pure_number(t.dim) for t in plain) and any(U._is_pure_angle(t.dim) for t in plain):
+        return [
+            U._angle_as_number(t) if not typed_vec(t)[0] and U._is_pure_angle(t.dim) else t
+            for t in known
+        ]
+    return known
+
+
 def check_site(v, lhs, rhs):
     """Type one site under v, recording constraints (mirrors units._site_mismatch)."""
     left = v._type(lhs) if lhs is not None else None
@@ -438,6 +454,8 @@ def check_site(v, lhs, rhs):
         return
     if lhs is None or left is None or right is None:
         return
+    if hasattr(U, "_angle_meets_number") and not typed_vec(left)[0] and not typed_vec(right)[0]:
+        left, right = U._angle_meets_number(left, right)
     v.equal(left, right, "lhs=rhs")
 
 
@@ -1615,57 +1633,14 @@ def main(argv=None):
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_text("".join(diff))
     reports.sort(key=lambda r: r["rel"])
-    mount_notes = mounting_parents(reports)
-    for line in mount_notes:
-        print("NOTE:", line)
     if args.json:
         Path(args.json).write_text(json.dumps(reports, indent=1, default=str))
     if args.summary:
-        Path(args.summary).write_text(summary_md(reports, args.title, args, mount_notes))
+        Path(args.summary).write_text(summary_md(reports, args.title, args))
     return 0
 
 
-def _refs(node):
-    if isinstance(node, dict):
-        for k, v in node.items():
-            if k == "ref" and isinstance(v, str):
-                yield v
-            else:
-                yield from _refs(v)
-    elif isinstance(node, list):
-        for v in node:
-            yield from _refs(v)
-
-
-def mounting_parents(reports):
-    """Files that mount (`{ref}`) a file this run raised to esm 1.2.0 while
-    declaring an older version themselves. At least one binding (Go) applies
-    the §4.8.5 version gate to the RESOLVED document, so such a parent stops
-    loading there until it is raised too."""
-    bumped = {str(Path(r["file"]).resolve()) for r in reports if r.get("bumped")}
-    out = []
-    for r in reports:
-        if r.get("bumped"):
-            continue  # raised in this same run
-        try:
-            doc = json.loads(Path(r["file"]).read_text())
-        except Exception:
-            continue
-        v = version_tuple(doc.get("esm"))
-        if v is not None and v >= MIN_CONST_UNITS_VERSION:
-            continue
-        for ref in _refs(doc):
-            target = str((Path(r["file"]).parent / ref.split("#")[0]).resolve())
-            if target in bumped:
-                out.append(
-                    f"`{r['rel']}` declares esm {doc.get('esm')} and mounts `{ref}`, which this "
-                    "run raised to 1.2.0 and gave a unit-bearing const: raise the parent to 1.2.0 "
-                    "too (Go applies the const-units version gate to the resolved document)"
-                )
-    return out
-
-
-def summary_md(reports, title, args, mount_notes=()):
+def summary_md(reports, title, args):
     from collections import Counter
 
     touched = [r for r in reports if any(x["applied"] for x in r["rewrites"])]
@@ -1758,9 +1733,6 @@ def summary_md(reports, title, args, mount_notes=()):
     if failed:
         lines += ["", "## Files the codemod could not process", ""]
         lines += [f"- `{r['rel']}`: {r['status']}" for r in failed]
-    if mount_notes:
-        lines += ["", "## Mounting files that must be raised with their mounted file", ""]
-        lines += [f"- {m}" for m in mount_notes]
     lines += ["", "## Mechanical rewrites", ""]
     for r in reports:
         for x in r["rewrites"]:

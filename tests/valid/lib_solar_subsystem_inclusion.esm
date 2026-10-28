@@ -1,5 +1,5 @@
 {
-  "esm": "1.2.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "LibSolarSubsystemInclusion",
     "description": "Demonstrates §4.7 subsystem inclusion of the standard-library solar subsystem (lib/solar.esm). A trivial photolysis-rate consumer model `Photolysis` mounts `Solar` as a subsystem-by-reference and references `Solar.solar_zenith_angle` via §4.6 dot notation to compute a cosine-of-zenith-weighted rate. Validates that the closed `datetime.*` + AST composition shipped under lib/ resolves end-to-end through subsystem inclusion. See docs/standard_library.md.",
