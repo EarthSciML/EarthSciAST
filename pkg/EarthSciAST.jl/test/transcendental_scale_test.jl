@@ -22,13 +22,14 @@
 # cannot tell an angle from a pure number by DIMENSION and reads the unit's own
 # symbol instead (`EarthSciAST._is_plane_angle` for the two plane angles,
 # `EarthSciAST._is_angle_bearing` for the whole axis). Reading only the plane
-# angles left `sr`, `rad^2` and a bare `rad` under a strict transcendental
-# looking dimensionless, so this binding ACCEPTED `sin(x [sr])`, `log(x [rad])`
-# and `asin(x [rad])` where the other four -- which carry `rad` as a real axis
-# and see `rad^2` -- refuse all three. That was the one place where one binding
-# said VALID and the other four said INVALID, and it is closed here; the
-# `an angle-bearing unit is not dimensionless` testset below is what holds it
-# closed.
+# angles left `sr` looking like a plane angle, so this binding ACCEPTED
+# `sin(x [sr])` where the other four -- which carry `rad` as a real axis and see
+# `rad^2` -- refuse it. That was one place where one binding said VALID and the
+# other four said INVALID, and it is closed here; the `an angle-bearing unit is
+# not dimensionless` testset below is what holds it closed. Where a PURE angle
+# meets a pure number (`log(x [rad])`, `asin(x [rad])`), esm-spec §4.8.3 "An
+# angle meets a pure number" removes the axis and keeps the scale, so `rad` is
+# accepted there and `deg` refused for its scale, in all five bindings.
 
 using Test
 using EarthSciAST
@@ -102,23 +103,33 @@ end
                                "dimensionless", found[1])
             end
         end
-        # A strict transcendental takes a PURE NUMBER. An angle is not one —
-        # `log(x [rad])` is a dimensional mismatch, not a scale question.
-        for op in ("ln", "log", "log10", "exp", "sinh", "cosh", "tanh")
-            for bad in ("rad", "deg", "sr", "rad^2")
+        # A strict transcendental and an inverse circular function take a PURE
+        # NUMBER, and a PURE angle meeting one loses its angle axis but KEEPS
+        # its scale (esm-spec §4.8.3 "An angle meets a pure number"): `rad`,
+        # `sr` and `rad^2` (scale 1) are accepted, `deg` and `rad*deg` (scale
+        # π/180) are refused for their scale. A unit whose angles cancel
+        # (`rad/deg`) is not a pure angle and keeps the dimensional refusal.
+        for op in ("ln", "log", "log10", "exp", "sinh", "cosh", "tanh",
+                   "asin", "acos", "atan")
+            for ok in ("rad", "sr", "rad^2", "1/rad")
+                @test isempty(_arg_findings(op, ok))
+            end
+            for bad in ("deg", "rad*deg")
                 found = _arg_findings(op, bad)
                 @test length(found) == 1
-                @test occursin("argument must be dimensionless", found[1])
+                @test occursin("at a scale other than 1 rad", found[1])
             end
         end
-        # An inverse circular function RETURNS an angle; it does not take one.
+        for op in ("ln", "log", "log10", "exp", "sinh", "cosh", "tanh")
+            found = _arg_findings(op, "rad/deg")
+            @test length(found) == 1
+            @test occursin("argument must be dimensionless", found[1])
+        end
         for op in ("asin", "acos", "atan")
-            for bad in ("rad", "deg", "sr", "rad^2")
-                found = _arg_findings(op, bad)
-                @test length(found) == 1
-                @test occursin("Inverse circular function argument must be " *
-                               "dimensionless", found[1])
-            end
+            found = _arg_findings(op, "rad/deg")
+            @test length(found) == 1
+            @test occursin("Inverse circular function argument must be " *
+                           "dimensionless", found[1])
         end
         # The predicate must not catch a unit that only LOOKS dimensionless:
         # a pure number and the mixing ratios are not on the angle axis.
@@ -137,6 +148,36 @@ end
         # a trig argument must not make the declaration unusable.
         @test EarthSciAST.parse_units("sr") !== nothing
         @test isempty(_arg_findings("abs", "sr"))
+    end
+
+    # esm-spec §4.8.3 "An angle meets a pure number": at `+ - min max ifelse`
+    # and the comparisons the pure angle's axis is removed and its scale kept,
+    # and an agreeing pair has the PURE NUMBER's unit.
+    @testset "an angle meets a pure number" begin
+        E = EarthSciAST.ASTExpr
+        V = EarthSciAST.VarExpr
+        O = EarthSciAST.OpExpr
+        vu = Dict("th" => "rad", "dg" => "deg", "n" => "1", "pct" => "percent",
+                  "sa" => "sr", "L" => "m")
+        unit(e) = (f = String[]; u = EarthSciAST._expr_dimensions!(f, e, vu); (u, f))
+        for op in ("+", "-", "min", "max")
+            u, f = unit(O(op, E[V("th"), V("n")]))
+            @test isempty(f)
+            @test !EarthSciAST._is_angle_bearing(u)
+            # deg keeps its scale, and so does percent: both are mismatches.
+            @test !isempty(last(unit(O(op, E[V("dg"), V("n")]))))
+            @test !isempty(last(unit(O(op, E[V("th"), V("pct")]))))
+        end
+        u, f = unit(O("ifelse", E[O(">", E[V("th"), V("n")]), V("th"), V("n")]))
+        @test isempty(f) && !EarthSciAST._is_angle_bearing(u)
+        @test !isempty(last(unit(O("<", E[V("dg"), V("n")]))))
+        # The cancelled angle can feed anything a pure number feeds: a symbolic
+        # `^` exponent, which on its own refuses an angle.
+        @test isempty(last(unit(O("^", E[V("L"), O("-", E[V("th"), V("n")])]))))
+        @test !isempty(last(unit(O("^", E[V("L"), V("th")]))))
+        # Two angles, and atan2, keep the result they had.
+        @test EarthSciAST._is_angle_bearing(first(unit(O("+", E[V("th"), V("th")]))))
+        @test first(unit(O("atan", E[V("th"), V("n")]))) == u"rad"
     end
 
     @testset "the angle normalization factor" begin

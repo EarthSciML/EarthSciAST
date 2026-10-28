@@ -114,6 +114,8 @@ include("testutils.jl")
             "esm-spec §4.7: the same assembly-of-an-assembly at the `subsystems.<k>` attachment point; the mounted file's own top-level edge is consumed at load just the same",
         "tests/valid/units_mount_subsystem_consistent.esm" =>
             "esm-spec §4.7: the `subsystems.<k>` {ref} mount is replaced in place by the referenced component",
+        "tests/valid/version_gate_older_mounts_newer.esm" =>
+            "esm-spec §4.7: the `subsystems.<k>` {ref} mount is replaced in place by the referenced component",
         "tests/valid/units_mount_toplevel_consistent.esm" =>
             "esm-spec §4.7: a top-level `models.<k>` mount consumed at load — the component is spliced in under its mount key",
         "tests/valid/units_array_mount_index_faq_consistent.esm" =>
