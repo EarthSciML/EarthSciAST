@@ -60,7 +60,7 @@ jobs:
       run:
         working-directory: pkg/earthsci-ast-rs
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@master
@@ -68,7 +68,7 @@ jobs:
           toolchain: ${{ env.RUST_VERSION }}
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
@@ -76,7 +76,7 @@ jobs:
       # conformance-testing.yml gives: a cached `target` costs more disk than
       # it saves.
       - name: Cache Rust dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -113,7 +113,7 @@ jobs:
 
       - name: Upload results
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: scaling-rust-${{ matrix.family }}
           path: scaling-results/
@@ -135,16 +135,16 @@ jobs:
                  suffix_scan, ragged_contraction,
                  makearray_nested_sum]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Julia
         id: setup-julia
-        uses: julia-actions/setup-julia@v2
+        uses: julia-actions/setup-julia@v3
         with:
           version: ${{ env.JULIA_VERSION }}
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
@@ -152,7 +152,7 @@ jobs:
       # depot and saves it from main. Its exact key also carries the ISO week;
       # the prefix match below picks up the newest one.
       - name: Restore Julia depot
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: |
             ~/.julia/artifacts
@@ -188,7 +188,7 @@ jobs:
 
       - name: Upload results
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: scaling-julia-${{ matrix.family }}
           path: scaling-results/
@@ -200,15 +200,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Download results
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: scaling-*
           path: scaling-results
@@ -232,7 +232,7 @@ jobs:
 
       - name: Upload the report
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: scaling-check
           path: |
