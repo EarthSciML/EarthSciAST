@@ -270,18 +270,19 @@ fn lower_expr(expr: &Expr, tables: &IndexMap<String, FunctionTable>) -> Result<E
     lower_node(&rebuilt, tables)
 }
 
-/// The §9.5.3 lowering of one `table_lookup` node.
-fn lower_node(
-    node: &ExpressionNode,
-    tables: &IndexMap<String, FunctionTable>,
-) -> Result<Expr, CompileError> {
+/// The `function_tables` entry a `table_lookup` node names, with its id, or
+/// `table_lookup_unknown_table`.
+fn named_table<'t>(
+    node: &'t ExpressionNode,
+    tables: Option<&'t IndexMap<String, FunctionTable>>,
+) -> Result<(&'t str, &'t FunctionTable), CompileError> {
     let table_id = node.table.as_deref().ok_or_else(|| {
         err(
             codes::TABLE_LOOKUP_UNKNOWN_TABLE,
             "a `table_lookup` node carries no `table` id (esm-spec §9.5.2)",
         )
     })?;
-    let table = tables.get(table_id).ok_or_else(|| {
+    let table = tables.and_then(|t| t.get(table_id)).ok_or_else(|| {
         err(
             codes::TABLE_LOOKUP_UNKNOWN_TABLE,
             format!(
@@ -290,6 +291,33 @@ fn lower_node(
             ),
         )
     })?;
+    Ok((table_id, table))
+}
+
+/// The esm-spec §9.5.5 "Order of the lookup checks" on one `table_lookup`
+/// node (rulings Q-107, Q-112): `table_lookup_unknown_table`, the ten checks
+/// of the table it names, then `table_lookup_args_nonempty`,
+/// `table_lookup_axis_name_mismatch`, `table_lookup_output_out_of_range`.
+/// Load and `validate()` run it on every node wherever it appears
+/// ([`crate::load_checks`]); the lowering below makes the same checks, in the
+/// same order, on its way to the lowered tree.
+pub(crate) fn check_lookup(
+    node: &ExpressionNode,
+    tables: Option<&IndexMap<String, FunctionTable>>,
+) -> Result<(), CompileError> {
+    let (table_id, table) = named_table(node, tables)?;
+    validate_table(table, table_id)?;
+    axis_inputs(node, table, table_id)?;
+    output_index(node, table, table_id)?;
+    Ok(())
+}
+
+/// The §9.5.3 lowering of one `table_lookup` node.
+fn lower_node(
+    node: &ExpressionNode,
+    tables: &IndexMap<String, FunctionTable>,
+) -> Result<Expr, CompileError> {
+    let (table_id, table) = named_table(node, Some(tables))?;
     // esm-spec §9.5.1. `clamp` (the default) is exactly what `interp.linear` /
     // `interp.bilinear` do at the ends, so the lowering IS the semantics there;
     // `error` is the same tree carrying the table id, which makes the
@@ -946,12 +974,19 @@ mod tests {
         assert_eq!(once, rhs(&file));
     }
 
-    /// `source` must LOAD (every §9.5.5 condition below is a build-time
-    /// refusal, not a schema error) and then be refused by the lowering with
-    /// the named code — not with a bare `unevaluable_operator`, and not with
-    /// a panic.
+    /// `source` must be refused at LOAD with the named code (the lookup
+    /// checks run at load, ruling Q-112) and — deserialized without load, as a
+    /// document built in memory would be — by the lowering with the same
+    /// code: not with a bare `unevaluable_operator`, and not with a panic.
     fn assert_refused_with(source: &str, code: &str) {
-        let mut file = load_string(source).expect("loads");
+        let msg = load_string(source)
+            .expect_err("load must refuse")
+            .to_string();
+        assert!(
+            msg.contains(&format!("[{code}]")),
+            "load: expected {code}, got: {msg}"
+        );
+        let mut file: EsmFile = serde_json::from_str(source).expect("deserializes");
         let e = lower_table_lookups(&mut file).expect_err("must be refused");
         assert!(e.to_string().starts_with(code), "expected {code}, got: {e}");
     }

@@ -317,6 +317,16 @@ pub enum StructuralErrorCode {
     TableDataShapeMismatch,
     /// A function-table `data` leaf that is not finite (esm-spec §9.5.5).
     TableDataNan,
+    /// An `interp.*` `fn` node with the wrong number of arguments (esm-spec §9.2).
+    ClosedFunctionArity,
+    /// A `table_lookup` naming a table `function_tables` does not declare (esm-spec §9.5.5).
+    TableLookupUnknownTable,
+    /// A `table_lookup` with a non-empty `args` (esm-spec §9.5.5).
+    TableLookupArgsNonempty,
+    /// A `table_lookup` whose `axes` keys differ from its table's axis names (esm-spec §9.5.5).
+    TableLookupAxisNameMismatch,
+    /// A `table_lookup` whose `output` its table does not have (esm-spec §9.5.5).
+    TableLookupOutputOutOfRange,
 }
 
 use crate::diagnostic::codes;
@@ -379,6 +389,11 @@ impl std::fmt::Display for StructuralErrorCode {
             Self::TableOutputsLengthMismatch => codes::TABLE_OUTPUTS_LENGTH_MISMATCH,
             Self::TableDataShapeMismatch => codes::TABLE_DATA_SHAPE_MISMATCH,
             Self::TableDataNan => codes::TABLE_DATA_NAN,
+            Self::ClosedFunctionArity => codes::CLOSED_FUNCTION_ARITY,
+            Self::TableLookupUnknownTable => codes::TABLE_LOOKUP_UNKNOWN_TABLE,
+            Self::TableLookupArgsNonempty => codes::TABLE_LOOKUP_ARGS_NONEMPTY,
+            Self::TableLookupAxisNameMismatch => codes::TABLE_LOOKUP_AXIS_NAME_MISMATCH,
+            Self::TableLookupOutputOutOfRange => codes::TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE,
         };
         write!(f, "{s}")
     }
@@ -406,6 +421,11 @@ impl StructuralErrorCode {
             codes::TABLE_OUTPUTS_LENGTH_MISMATCH => Self::TableOutputsLengthMismatch,
             codes::TABLE_DATA_SHAPE_MISMATCH => Self::TableDataShapeMismatch,
             codes::TABLE_DATA_NAN => Self::TableDataNan,
+            codes::CLOSED_FUNCTION_ARITY => Self::ClosedFunctionArity,
+            codes::TABLE_LOOKUP_UNKNOWN_TABLE => Self::TableLookupUnknownTable,
+            codes::TABLE_LOOKUP_ARGS_NONEMPTY => Self::TableLookupArgsNonempty,
+            codes::TABLE_LOOKUP_AXIS_NAME_MISMATCH => Self::TableLookupAxisNameMismatch,
+            codes::TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE => Self::TableLookupOutputOutOfRange,
             _ => return None,
         })
     }

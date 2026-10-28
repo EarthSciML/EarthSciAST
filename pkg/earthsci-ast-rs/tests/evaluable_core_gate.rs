@@ -297,11 +297,15 @@ fn no_scalar_document_both_validates_and_returns_nan() {
     /// undefined variables. That op therefore reaches an evaluator only from a
     /// TYPED document — which is how the array half of this file builds all
     /// nine — and the gate must still refuse it, so it stays in the list with
-    /// the validation half skipped rather than being dropped.
+    /// the validation half skipped rather than being dropped. The same holds
+    /// for `table_lookup`, whose probe names no table: load and `validate()`
+    /// refuse that with `table_lookup_unknown_table` (esm-spec §9.5.5, ruling
+    /// Q-112), so it too reaches an evaluator only from a typed document.
     #[derive(PartialEq)]
     enum Validates {
         Yes,
         NoBecauseSymbolOperands,
+        NoBecauseNoTable,
     }
     use Validates::*;
 
@@ -329,7 +333,7 @@ fn no_scalar_document_both_validates_and_returns_nan() {
         ),
         (
             "table_lookup",
-            Yes,
+            NoBecauseNoTable,
             json!({ "op": "table_lookup", "args": [] }),
         ),
         (

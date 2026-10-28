@@ -798,7 +798,7 @@ fn prepare_pushdown_l1_builds_under_native_bit_identical_to_the_interpreter() {
 /// A strict refusal whose cause has nothing to do with the gated data is
 /// raised BEFORE the gated fetch: an observed that reads no gated slab is
 /// evaluated ahead of it, so the refusal costs no fetch. The refusal names
-/// what the overlay and the tape each declined. (`probe_interp` is the rule
+/// what the overlay and the tape each declined. (`probe_fn` is the rule
 /// refused once every other rule of the document lowers; until then it may
 /// be an earlier one.)
 #[test]
@@ -807,18 +807,20 @@ fn a_native_refusal_unrelated_to_the_gated_data_comes_before_the_gated_fetch() {
     let m = &mut doc["models"]["ISRM"];
     m["variables"]["probe_tbl"] =
         serde_json::json!({"type": "unknown", "units": "1", "shape": ["emis_records"]});
-    m["variables"]["probe_interp"] =
+    m["variables"]["probe_fn"] =
         serde_json::json!({"type": "unknown", "units": "1", "shape": ["emis_records"]});
     let eqs = m["equations"].as_array_mut().unwrap();
     eqs.push(serde_json::json!({"lhs": "probe_tbl", "rhs": {
         "op": "faq", "args": [], "output_idx": ["e"], "ranges": {"e": {"from": "emis_records"}},
         "expr": {"op": "*", "args": [2.0, {"op": "index", "args": ["emis_annual", "e"]}]}}}));
-    // `interp.linear` over a table that is not a literal `const`: neither the
-    // overlay nor the tape lowers it (esm-spec §9.2).
-    eqs.push(serde_json::json!({"lhs": "probe_interp", "rhs": {
+    // `datetime.year` at arity 2, which the registry answers with
+    // `closed_function_arity` at evaluation: neither the overlay nor the tape
+    // lowers it. (An `interp.linear` over a non-`const` table used to be the
+    // probe; load now refuses that document, esm-spec §9.2, ruling Q-106.)
+    eqs.push(serde_json::json!({"lhs": "probe_fn", "rhs": {
         "op": "faq", "args": [], "output_idx": ["e"], "ranges": {"e": {"from": "emis_records"}},
-        "expr": {"op": "fn", "name": "interp.linear",
-                 "args": ["probe_tbl", "emis_annual", {"op": "index", "args": ["emis_annual", "e"]}]}}}));
+        "expr": {"op": "fn", "name": "datetime.year",
+                 "args": [{"op": "index", "args": ["probe_tbl", "e"]}, 1.0]}}}));
 
     let (native, logs) = l1_build(&doc, earthsci_ast::Compiler::Native);
     match native {
@@ -830,8 +832,8 @@ fn a_native_refusal_unrelated_to_the_gated_data_comes_before_the_gated_fetch() {
             assert_eq!(kind, "build-time observed");
             assert!(reason.contains("whole-array overlay declined"), "{reason}");
             assert!(reason.contains("the tape declined it"), "{reason}");
-            if rule == "ISRM.probe_interp" {
-                assert!(reason.contains("interp.linear"), "{reason}");
+            if rule == "ISRM.probe_fn" {
+                assert!(reason.contains("datetime.year"), "{reason}");
             }
         }
         Err(e) => panic!("expected compiler_refused_rule, got {e}"),

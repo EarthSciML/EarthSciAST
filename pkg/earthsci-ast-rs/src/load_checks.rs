@@ -1,11 +1,15 @@
-//! The esm-spec §9.2 closed-function argument checks and the §9.5.5 function
-//! table checks, run at load and in `validate()` (ruling Q-106).
+//! The esm-spec §9.2 closed-function argument checks, the §9.5.5 function
+//! table checks and the `table_lookup` node checks, run at load and in
+//! `validate()` (rulings Q-106, Q-112).
 //!
-//! Both sets of checks are load-time rules: a document with a broken
-//! `function_tables` entry, or with an `interp.*` call whose `const` arguments
-//! break §9.2, does not load — whether or not anything references the table or
-//! evaluates the call. The rules themselves live with the code that relies on
-//! them ([`crate::lower_table_lookup::validate_table`],
+//! All three are load-time rules: a document with a broken `function_tables`
+//! entry, an `interp.*` call whose arguments break §9.2, or a `table_lookup`
+//! node that names no table or binds the wrong axes or output, does not load —
+//! whether or not anything references the table or evaluates the node. Every
+//! table is checked before any expression node (ruling Q-113), so a document
+//! with both is reported with the table's code. The rules themselves live with
+//! the code that relies on them ([`crate::lower_table_lookup::validate_table`],
+//! [`crate::lower_table_lookup::check_lookup`],
 //! [`crate::registered_functions::check_closed_function_args`]); this module
 //! only decides WHERE they run:
 //!
@@ -23,6 +27,7 @@
 
 use std::collections::HashSet;
 
+use indexmap::IndexMap;
 use serde_json::Value;
 
 use crate::json_visit::JsonPath;
@@ -48,40 +53,64 @@ impl std::fmt::Display for Finding {
     }
 }
 
-/// The ten esm-spec §9.5.5 checks on one table, as a [`Finding`].
-fn check_table(table: &FunctionTable, id: &str) -> Result<(), Finding> {
-    crate::lower_table_lookup::validate_table(table, id).map_err(|e| match e {
+/// A §9.5.5 table or lookup diagnostic as a [`Finding`] at `path`.
+fn compile_finding(e: crate::compile_error::CompileError, path: String) -> Finding {
+    match e {
         crate::compile_error::CompileError::TableLookupLowering { code, reason } => Finding {
             code: code.to_string(),
-            path: format!("/function_tables/{id}"),
+            path,
             message: reason,
         },
         other => Finding {
             code: String::new(),
-            path: format!("/function_tables/{id}"),
+            path,
             message: other.to_string(),
         },
-    })
+    }
 }
 
-/// Whether `value` is a `fn` node naming one of the functions whose arguments
-/// §9.2 checks at load — what the loader's template scan looks for, so a
-/// document with none is not walked again.
-pub(crate) fn is_checked_fn_node(value: &Value) -> bool {
+/// The ten esm-spec §9.5.5 checks on one table, as a [`Finding`].
+fn check_table(table: &FunctionTable, id: &str) -> Result<(), Finding> {
+    crate::lower_table_lookup::validate_table(table, id)
+        .map_err(|e| compile_finding(e, format!("/function_tables/{id}")))
+}
+
+/// Whether `value` is a node load checks: a `fn` node naming one of the
+/// functions whose arguments §9.2 checks, or a `table_lookup` node — what the
+/// loader's template scan looks for, so a document with none is not walked
+/// again.
+pub(crate) fn is_load_checked_node(value: &Value) -> bool {
+    is_checked_fn_node(value) || is_table_lookup_node(value)
+}
+
+fn op_of(value: &Value) -> Option<&str> {
     let Value::Object(obj) = value else {
-        return false;
+        return None;
     };
-    crate::json_visit::small_get(obj, "op").and_then(Value::as_str) == Some("fn")
-        && crate::json_visit::small_get(obj, "name")
+    crate::json_visit::small_get(obj, "op").and_then(Value::as_str)
+}
+
+fn is_checked_fn_node(value: &Value) -> bool {
+    op_of(value) == Some("fn")
+        && value
+            .get("name")
             .and_then(Value::as_str)
             .is_some_and(has_load_time_argument_checks)
 }
 
+fn is_table_lookup_node(value: &Value) -> bool {
+    op_of(value) == Some("table_lookup")
+}
+
 /// The §9.5.5 checks on every entry of the raw document's `function_tables`
-/// block, in declaration order; the first failure is returned.
-pub(crate) fn check_raw_function_tables(doc: &Value) -> Result<(), Finding> {
+/// block, in declaration order; the first failure is returned. On success,
+/// the tables, for the lookup checks.
+pub(crate) fn check_raw_function_tables(
+    doc: &Value,
+) -> Result<IndexMap<String, FunctionTable>, Finding> {
+    let mut out = IndexMap::new();
     let Some(tables) = doc.get("function_tables").and_then(Value::as_object) else {
-        return Ok(());
+        return Ok(out);
     };
     for (id, raw) in tables {
         // The schema has already accepted the entry, so it deserializes; a
@@ -94,25 +123,32 @@ pub(crate) fn check_raw_function_tables(doc: &Value) -> Result<(), Finding> {
                 message: format!("table `{id}` does not deserialize: {e}"),
             })?;
         check_table(&table, id)?;
+        out.insert(id.clone(), table);
     }
-    Ok(())
+    Ok(out)
 }
 
-/// The §9.2 argument checks on every `interp.*` `fn` node of the raw
-/// document, in document order; the first failure is returned.
+/// The §9.2 argument checks on every `interp.*` `fn` node and the §9.5.5
+/// lookup checks on every `table_lookup` node of the raw document, in
+/// document order; the first failure is returned. `tables` is what
+/// [`check_raw_function_tables`] returned.
 ///
 /// `expression_templates` blocks are not entered: a template body is checked
 /// where it is applied (esm-spec §9.2), and by the time this runs the loader
 /// has expanded every application.
-pub(crate) fn check_raw_closed_function_calls(doc: &Value) -> Result<(), Finding> {
-    walk_raw(doc, &JsonPath::Root(""), &mut Err)
+pub(crate) fn check_raw_expression_nodes(
+    doc: &Value,
+    tables: &IndexMap<String, FunctionTable>,
+) -> Result<(), Finding> {
+    walk_raw(doc, &JsonPath::Root(""), Some(tables), &mut Err)
 }
 
-/// Pre-order walk of a raw value, handing each failing `interp.*` node's
-/// finding to `sink`; the walk stops at the first `Err` the sink returns.
+/// Pre-order walk of a raw value, handing each failing node's finding to
+/// `sink`; the walk stops at the first `Err` the sink returns.
 fn walk_raw(
     value: &Value,
     path: &JsonPath<'_>,
+    tables: Option<&IndexMap<String, FunctionTable>>,
     sink: &mut dyn FnMut(Finding) -> Result<(), Finding>,
 ) -> Result<(), Finding> {
     match value {
@@ -122,22 +158,49 @@ fn walk_raw(
             {
                 sink(f)?;
             }
+            if is_table_lookup_node(value)
+                && let Err(f) = check_raw_lookup_node(value, path, tables)
+            {
+                sink(f)?;
+            }
             for (key, child) in obj {
                 if key == "expression_templates" {
                     continue;
                 }
-                walk_raw(child, &JsonPath::Key(path, key), sink)?;
+                walk_raw(child, &JsonPath::Key(path, key), tables, sink)?;
             }
             Ok(())
         }
         Value::Array(items) => {
             for (i, child) in items.iter().enumerate() {
-                walk_raw(child, &JsonPath::Index(path, i), sink)?;
+                walk_raw(child, &JsonPath::Index(path, i), tables, sink)?;
             }
             Ok(())
         }
         _ => Ok(()),
     }
+}
+
+fn check_raw_lookup_node(
+    value: &Value,
+    path: &JsonPath<'_>,
+    tables: Option<&IndexMap<String, FunctionTable>>,
+) -> Result<(), Finding> {
+    // The schema has accepted the node, so it deserializes; it is small (its
+    // axis inputs are the only expressions under it).
+    let node = match <Expr as serde::Deserialize>::deserialize(value) {
+        Ok(Expr::Operator(node)) => node,
+        Ok(_) => return Ok(()),
+        Err(e) => {
+            return Err(Finding {
+                code: crate::diagnostic::codes::TABLE_LOOKUP_UNKNOWN_TABLE.to_string(),
+                path: path.to_string(),
+                message: format!("a `table_lookup` node does not deserialize: {e}"),
+            });
+        }
+    };
+    crate::lower_table_lookup::check_lookup(&node, tables)
+        .map_err(|e| compile_finding(e, path.to_string()))
 }
 
 fn check_raw_fn_node(
@@ -161,9 +224,10 @@ fn check_raw_fn_node(
 // validate(): the same checks on a typed document
 // ---------------------------------------------------------------------------
 
-/// Every §9.5.5 table finding and every §9.2 argument finding of `file`, as
-/// structural errors: one per failing table (its first rule, in the pinned
-/// order) and one per failing `fn` node.
+/// Every §9.5.5 table finding, then every §9.2 argument finding and §9.5.5
+/// lookup finding of `file`, as structural errors: one per failing table (its
+/// first rule, in the pinned order) and one per failing `fn` or `table_lookup`
+/// node.
 pub(crate) fn validate_findings(file: &EsmFile, errors: &mut Vec<StructuralError>) {
     let mut findings = Vec::new();
     for (id, table) in file.function_tables.iter().flatten() {
@@ -173,6 +237,7 @@ pub(crate) fn validate_findings(file: &EsmFile, errors: &mut Vec<StructuralError
     }
     let mut walk = TypedWalk {
         seen: HashSet::new(),
+        tables: file.function_tables.as_ref(),
         findings: &mut findings,
     };
     walk.document(file);
@@ -186,7 +251,7 @@ pub(crate) fn validate_findings(file: &EsmFile, errors: &mut Vec<StructuralError
     }));
 }
 
-/// The typed counterpart of [`check_raw_closed_function_calls`]: every expression-bearing field of a
+/// The typed counterpart of [`check_raw_expression_nodes`]: every expression-bearing field of a
 /// typed document, and the raw-JSON fields it carries (subsystems, guesses,
 /// coupling) through [`walk_raw`] itself.
 struct TypedWalk<'f> {
@@ -194,6 +259,7 @@ struct TypedWalk<'f> {
     /// ([`crate::intern`]), so one node can sit at many positions; it is
     /// checked — and reported — once.
     seen: HashSet<*const ExpressionNode>,
+    tables: Option<&'f IndexMap<String, FunctionTable>>,
     findings: &'f mut Vec<Finding>,
 }
 
@@ -306,10 +372,10 @@ impl TypedWalk<'_> {
         }
     }
 
-    /// Every failing `fn` node under a raw-JSON field (not only the first).
+    /// Every failing node under a raw-JSON field (not only the first).
     fn raw(&mut self, value: &Value, base: &str) {
         let findings = &mut *self.findings;
-        let _ = walk_raw(value, &JsonPath::Root(base), &mut |f| {
+        let _ = walk_raw(value, &JsonPath::Root(base), self.tables, &mut |f| {
             findings.push(f);
             Ok(())
         });
@@ -321,6 +387,11 @@ impl TypedWalk<'_> {
         };
         if !self.seen.insert(std::sync::Arc::as_ptr(node)) {
             return;
+        }
+        if node.op == "table_lookup"
+            && let Err(e) = crate::lower_table_lookup::check_lookup(node, self.tables)
+        {
+            self.findings.push(compile_finding(e, path.to_string()));
         }
         if node.op == "fn"
             && let Some(name) = node.name.as_deref()

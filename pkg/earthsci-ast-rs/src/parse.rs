@@ -334,13 +334,13 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     // reserved binders, which are then not walked for again.
     let mut reserved = ReservedIndexScan::new(&json_value);
     let mut has_enum_ops = false;
-    let mut has_checked_fn = false;
+    let mut has_checked_node = false;
     let (has_templates, scanned_whole) =
         crate::lower_expression_templates::lower_expression_templates_visiting(
             &mut json_value,
             &mut |path, value| {
                 has_enum_ops |= crate::lower_enums::is_enum_node(value);
-                has_checked_fn |= crate::load_checks::is_checked_fn_node(value);
+                has_checked_node |= crate::load_checks::is_load_checked_node(value);
                 reserved.visit(path, value);
             },
         )
@@ -382,19 +382,20 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     }
     .map_err(|e| EsmError::StructuralValidation(e.to_string()))?;
 
-    // esm-spec §9.5.5 and §9.2 "When the … checks run" (ruling Q-106): the ten
-    // table checks on EVERY `function_tables` entry, referenced or not, then
-    // the argument checks on every `interp.*` `fn` node wherever it appears.
+    // esm-spec §9.5.5 and §9.2 "When the … checks run" (rulings Q-106, Q-112,
+    // Q-113): the ten table checks on EVERY `function_tables` entry, referenced
+    // or not, and only then the argument checks on every `interp.*` `fn` node
+    // and the lookup checks on every `table_lookup` node, wherever they appear.
     // HERE, on the fully rewritten form, so a node a template expansion
     // produced is checked with the arguments the application gave it. Raised
     // the way `enum_duplicate_value` is: a `[code]`-prefixed load error, which
     // `validate_text` reports as an invalid document. The template scan above
     // already saw the whole document when it carried no template machinery,
-    // so a document it found no `interp.*` node in is not walked again.
-    crate::load_checks::check_raw_function_tables(&json_value)
+    // so a document it found no such node in is not walked again.
+    let tables = crate::load_checks::check_raw_function_tables(&json_value)
         .map_err(|f| EsmError::SchemaValidation(f.to_string()))?;
-    if has_checked_fn || !scanned_whole {
-        crate::load_checks::check_raw_closed_function_calls(&json_value)
+    if has_checked_node || !scanned_whole {
+        crate::load_checks::check_raw_expression_nodes(&json_value, &tables)
             .map_err(|f| EsmError::SchemaValidation(f.to_string()))?;
     }
 

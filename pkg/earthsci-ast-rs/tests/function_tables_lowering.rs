@@ -387,8 +387,9 @@ fn replace_non_finite_strings(v: &mut Value) {
 /// `"Inf"`, `"-Inf"` as those binary64 values) into a document beside one
 /// equation whose right-hand side is the case's `table_lookup`, and run
 /// through `validate()` — the same §9.5.5 table check load runs on every
-/// `function_tables` entry (ruling Q-106). Its finding must be the case's
-/// `expected_error_code` at `/function_tables/T`; `null` means no finding.
+/// `function_tables` entry (ruling Q-106), then the lookup check load runs on
+/// every `table_lookup` node (ruling Q-112). Its findings must carry the
+/// case's `expected_error_code`; `null` means no finding.
 /// The document is then built through `esm_problem` too, whose lowering
 /// repeats the check on the table a lookup names: it must refuse with the
 /// same code, or build.
@@ -484,19 +485,33 @@ fn load_error_ledger_codes_and_order() {
         let expected = case["expected_error_code"].as_str();
         let description = case["description"].as_str().unwrap_or("");
 
-        // The load-time table check, through `validate()`.
-        let table_path = format!("/function_tables/{table_id}");
-        let findings: Vec<String> = validate(&file)
+        // The load-time checks, through `validate()`: every table first, then
+        // every `table_lookup` node (rulings Q-106, Q-112, Q-113). The first
+        // finding must be the case's code, and every finding that code (a
+        // failing table is reported at the table and again at the lookup
+        // naming it); `null` means none.
+        let findings: Vec<(String, String)> = validate(&file)
             .structural_errors
             .iter()
-            .filter(|e| e.path == table_path)
-            .map(|e| e.code.to_string())
+            .map(|e| (e.code.to_string(), e.path.clone()))
+            .filter(|(code, _)| code.starts_with("table_"))
             .collect();
-        assert_eq!(
-            findings,
-            expected.into_iter().map(str::to_string).collect::<Vec<_>>(),
-            "{name}: validate(): {description}"
-        );
+        match expected {
+            None => assert!(findings.is_empty(), "{name}: validate(): {findings:?}"),
+            Some(code) => {
+                assert!(
+                    !findings.is_empty() && findings.iter().all(|(c, _)| c == code),
+                    "{name}: validate(): expected {code}, got {findings:?}: {description}"
+                );
+                let table_path = format!("/function_tables/{table_id}");
+                let at_table = findings.iter().any(|(_, p)| *p == table_path);
+                assert_eq!(
+                    at_table,
+                    !code.starts_with("table_lookup_"),
+                    "{name}: a table code is reported at the table: {findings:?}"
+                );
+            }
+        }
 
         // The lowering repeats it.
         let got = match esm_problem(&file, (0.0, 1.0), ProblemOptions::default()) {

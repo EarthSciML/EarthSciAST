@@ -60,14 +60,22 @@ fn closed_function_and_table_fixtures_are_refused_at_load_with_the_pinned_code()
         );
 
         let typed: EsmFile = serde_json::from_str(&text).expect("deserializes without load");
+        // The first of its load-check findings: every table is checked before
+        // any expression node (ruling Q-113).
         let codes: Vec<String> = validate(&typed)
             .structural_errors
             .iter()
             .map(|e| e.code.to_string())
+            .filter(|c| {
+                ["interp_", "searchsorted_", "table_", "closed_function_"]
+                    .iter()
+                    .any(|p| c.starts_with(p))
+            })
             .collect();
-        assert!(
-            codes.iter().any(|c| c == code),
-            "{name}: validate() must report {code}; got {codes:?}"
+        assert_eq!(
+            codes.first().map(String::as_str),
+            Some(code),
+            "{name}: validate() must report {code} first; got {codes:?}"
         );
     }
 }

@@ -364,30 +364,42 @@ pub(crate) fn has_load_time_argument_checks(name: &str) -> bool {
 
 /// The esm-spec §9.2 load-time argument checks of one `fn` call — the checks
 /// load and `validate()` run on every `interp.*` node wherever it appears
-/// (ruling Q-106). `Ok` for any other function name, and for a call with too
-/// few arguments to check (its arity is the evaluator's
-/// `closed_function_arity`).
+/// (rulings Q-106, Q-112). `Ok` for any other function name.
 ///
-/// Order: each array argument must be a literal `const` of the function's rank
-/// (`table`, then the axes, in argument order — `interp_table_not_const` /
-/// `interp_axis_not_const`); then each axis in argument order (fewer than 2
-/// entries, then NaN, then not strictly increasing); then the length relation.
-/// `interp.searchsorted`'s `xs` is checked for rank, then NaN, then
-/// monotonicity. These are the checks the evaluator's own registry entries
-/// make, in the same order, so a call that passes here evaluates.
+/// Order (§9.2 "Order of the argument checks", ruling Q-110): the arity
+/// (`closed_function_arity`); each array argument a literal `const` of the
+/// function's rank (`table`, then the axes in argument order —
+/// `interp_table_not_const` / `interp_axis_not_const`); then, each step over
+/// every axis, too short, the length relation, a non-finite entry, not
+/// strictly increasing. `interp.searchsorted`: arity, then the rank of `xs`,
+/// then NaN, then monotonicity. These are the checks the evaluator's own
+/// registry entries make, in the same order, so a call that passes here
+/// evaluates.
 pub fn check_closed_function_args(
     name: &str,
     args: &[ClosedArgLiteral],
 ) -> Result<(), ClosedFunctionError> {
     use ClosedArgLiteral as L;
+    let arity = match name {
+        "interp.searchsorted" => 2,
+        "interp.linear" => 3,
+        "interp.bilinear" => 5,
+        _ => return Ok(()),
+    };
+    if args.len() != arity {
+        return Err(ClosedFunctionError::new(
+            codes::CLOSED_FUNCTION_ARITY,
+            format!("{name} expects {arity} argument(s), got {}", args.len()),
+        ));
+    }
     match name {
-        "interp.searchsorted" if args.len() >= 2 => {
+        "interp.searchsorted" => {
             let L::Array(xs) = &args[1] else {
                 return Err(not_const(name, codes::INTERP_AXIS_NOT_CONST, "xs", 1));
             };
             check_searchsorted_xs(name, xs)
         }
-        "interp.linear" if args.len() >= 3 => {
+        "interp.linear" => {
             let L::Array(table) = &args[0] else {
                 return Err(not_const(name, codes::INTERP_TABLE_NOT_CONST, "table", 1));
             };
@@ -396,7 +408,7 @@ pub fn check_closed_function_args(
             };
             check_linear_table(table, axis)
         }
-        "interp.bilinear" if args.len() >= 5 => {
+        "interp.bilinear" => {
             let L::Array2D(table) = &args[0] else {
                 return Err(not_const(name, codes::INTERP_TABLE_NOT_CONST, "table", 2));
             };
@@ -631,18 +643,19 @@ fn interp_linear(table: &[f64], axis: &[f64], x: f64) -> Result<f64, ClosedFunct
 
 /// The esm-spec §9.2 checks on `interp.linear`'s rank-1 `table` and `axis`.
 fn check_linear_table(table: &[f64], axis: &[f64]) -> Result<(), ClosedFunctionError> {
-    validate_axis("interp.linear", "axis", axis)?;
-    if table.len() != axis.len() {
-        return Err(ClosedFunctionError::new(
-            codes::INTERP_AXIS_LENGTH_MISMATCH,
-            format!(
-                "interp.linear: len(table)={} != len(axis)={}",
-                table.len(),
-                axis.len()
-            ),
-        ));
-    }
-    Ok(())
+    check_axes("interp.linear", &[("axis", axis)], || {
+        if table.len() != axis.len() {
+            return Err(ClosedFunctionError::new(
+                codes::INTERP_AXIS_LENGTH_MISMATCH,
+                format!(
+                    "interp.linear: len(table)={} != len(axis)={}",
+                    table.len(),
+                    axis.len()
+                ),
+            ));
+        }
+        Ok(())
+    })
 }
 
 /// The blend half of [`interp_linear`], with `table` and `axis` taken as
@@ -705,32 +718,37 @@ fn check_bilinear_table(
     axis_x: &[f64],
     axis_y: &[f64],
 ) -> Result<(), ClosedFunctionError> {
-    validate_axis("interp.bilinear", "axis_x", axis_x)?;
-    validate_axis("interp.bilinear", "axis_y", axis_y)?;
-    if table.len() != axis_x.len() {
-        return Err(ClosedFunctionError::new(
-            codes::INTERP_AXIS_LENGTH_MISMATCH,
-            format!(
-                "interp.bilinear: outer len(table)={} != len(axis_x)={}",
-                table.len(),
-                axis_x.len()
-            ),
-        ));
-    }
-    let ny = axis_y.len();
-    for (i, row) in table.iter().enumerate() {
-        if row.len() != ny {
-            return Err(ClosedFunctionError::new(
-                codes::INTERP_AXIS_LENGTH_MISMATCH,
-                format!(
-                    "interp.bilinear: table row {row_idx} has len={got} but len(axis_y)={ny}",
-                    row_idx = i + 1,
-                    got = row.len(),
-                ),
-            ));
-        }
-    }
-    Ok(())
+    check_axes(
+        "interp.bilinear",
+        &[("axis_x", axis_x), ("axis_y", axis_y)],
+        || {
+            if table.len() != axis_x.len() {
+                return Err(ClosedFunctionError::new(
+                    codes::INTERP_AXIS_LENGTH_MISMATCH,
+                    format!(
+                        "interp.bilinear: outer len(table)={} != len(axis_x)={}",
+                        table.len(),
+                        axis_x.len()
+                    ),
+                ));
+            }
+            let ny = axis_y.len();
+            for (i, row) in table.iter().enumerate() {
+                if row.len() != ny {
+                    return Err(ClosedFunctionError::new(
+                        codes::INTERP_AXIS_LENGTH_MISMATCH,
+                        format!(
+                            "interp.bilinear: table row {row_idx} has len={got} but \
+                             len(axis_y)={ny}",
+                            row_idx = i + 1,
+                            got = row.len(),
+                        ),
+                    ));
+                }
+            }
+            Ok(())
+        },
+    )
 }
 
 /// [`interp_bilinear`] over a ROW-MAJOR FLAT table (`table[i * ny + j]`),
@@ -811,39 +829,47 @@ fn locate_cell(axis: &[f64], q: f64) -> usize {
     i
 }
 
-// Shared axis-validation helper for `interp.linear` and
-// `interp.bilinear`. Diagnoses (in order of precedence): too-short,
-// NaN-in-axis, non-monotonic. Strict monotonicity (`<`, not `≤`) is
-// required because equal-adjacent entries would zero the blend
-// denominator — `interp.searchsorted` permits non-decreasing because it
-// returns an index, not a blend.
-fn validate_axis(fn_name: &str, label: &str, axis: &[f64]) -> Result<(), ClosedFunctionError> {
-    if axis.len() < 2 {
-        return Err(ClosedFunctionError::new(
-            codes::INTERP_AXIS_TOO_SHORT,
-            format!(
-                "{fn_name}: {label} has {len} entries; need at least 2 (no interval to blend across)",
-                len = axis.len()
-            ),
-        ));
-    }
-    for (i, v) in axis.iter().copied().enumerate() {
-        if v.is_nan() {
+// The esm-spec §9.2 "Order of the argument checks" (ruling Q-110) for
+// `interp.linear` and `interp.bilinear`, after the arity and rank checks:
+// every axis too short, then the table/axis length relation (`lengths`), then
+// a non-finite entry in any axis (ruling Q-113), then any axis not strictly
+// increasing. Each step covers every axis before the next begins. Strict
+// monotonicity (`<`, not `≤`) is required because equal-adjacent entries
+// would zero the blend denominator — `interp.searchsorted` permits
+// non-decreasing because it returns an index, not a blend.
+fn check_axes(
+    fn_name: &str,
+    axes: &[(&str, &[f64])],
+    lengths: impl FnOnce() -> Result<(), ClosedFunctionError>,
+) -> Result<(), ClosedFunctionError> {
+    for (label, axis) in axes {
+        if axis.len() < 2 {
             return Err(ClosedFunctionError::new(
-                codes::INTERP_NAN_IN_AXIS,
+                codes::INTERP_AXIS_TOO_SHORT,
                 format!(
-                    "{fn_name}: {label}[{idx}] is NaN; NaN entries in axes are forbidden",
-                    idx = i + 1
+                    "{fn_name}: {label} has {len} entries; need at least 2 (no interval to blend across)",
+                    len = axis.len()
                 ),
             ));
         }
     }
-    // NaN was filtered above, so `>=` here is well-defined and detects
-    // both equal-adjacent and decreasing pairs (the strict-monotonicity
-    // requirement that distinguishes interp.linear/bilinear from
-    // searchsorted's non-decreasing rule).
-    for w in axis.windows(2) {
-        if w[0] >= w[1] {
+    lengths()?;
+    for (label, axis) in axes {
+        if let Some(i) = axis.iter().position(|v| !v.is_finite()) {
+            return Err(ClosedFunctionError::new(
+                codes::INTERP_NAN_IN_AXIS,
+                format!(
+                    "{fn_name}: {label}[{idx}] is {v}, not finite; axis entries must be finite",
+                    idx = i + 1,
+                    v = axis[i]
+                ),
+            ));
+        }
+    }
+    // Every entry is finite here, so `>=` is well-defined and detects both
+    // equal-adjacent and decreasing pairs.
+    for (label, axis) in axes {
+        if let Some(w) = axis.windows(2).find(|w| w[0] >= w[1]) {
             return Err(ClosedFunctionError::new(
                 codes::INTERP_NON_MONOTONIC_AXIS,
                 format!(
