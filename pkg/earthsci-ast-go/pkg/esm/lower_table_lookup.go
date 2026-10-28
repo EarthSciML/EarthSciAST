@@ -414,8 +414,10 @@ func validateFunctionTable(id string, table FunctionTable) error {
 
 // tableImpliedShape is `[len(outputs)] ++ [len(axis.values) for each axis]`,
 // without the leading entry when `outputs` is absent (esm-spec §9.5.1).
+// The slice grows by append rather than from a precomputed capacity, so no
+// size arithmetic on document-controlled lengths feeds an allocation.
 func tableImpliedShape(table FunctionTable) []int {
-	shape := make([]int, 0, len(table.Axes)+1)
+	var shape []int
 	if len(table.Outputs) > 0 {
 		shape = append(shape, len(table.Outputs))
 	}
