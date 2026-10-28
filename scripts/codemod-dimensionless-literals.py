@@ -371,12 +371,21 @@ def declaration_fixes(text, base, sites, rep):
         if not isinstance(variables, dict):
             continue
         raw = get_at(doc, rpath)
+        if _has_angle_constant(raw):
+            # A pi multiple or a degree/radian factor at the site is a genuine
+            # angle literal; the literal pass gives it its rad.
+            continue
         names = []
         for side in ("lhs", "rhs", "rate"):
             if side in raw:
                 for n in _raw_names(raw[side]):
                     if n not in names:
                         names.append(n)
+        if any(_is_mixed_angle_unit((variables.get(n) or {}).get("units")) for n in names):
+            # An angular quantity (rad/s, rad*m) meets units without the angle:
+            # the Coriolis pattern, which each model author resolves (the
+            # literal pass lists it). No declaration is changed automatically.
+            continue
         observed = {
             eq.get("lhs")
             for eq in comp.get("equations") or []
@@ -448,6 +457,41 @@ def declaration_fixes(text, base, sites, rep):
                 {**info, "tried": tried or ["no variable at the site carries a declared unit"]}
             )
     return text
+
+
+_ANGLE_CONSTANTS = (2 * math.pi, math.pi, math.pi / 2, math.pi / 4, 180 / math.pi, math.pi / 180)
+
+
+def _has_angle_constant(raw):
+    """Whether an equation or rate carries a literal (or literal-only
+    subexpression) equal to a pi multiple or a degree/radian factor."""
+    found = []
+    for side in ("lhs", "rhs", "rate"):
+        if side in raw:
+            eligible_literals(raw[side], (side,), found, set())
+    for path, kind in found:
+        node = get_at(raw, path)
+        val = (
+            node
+            if kind == "number"
+            else node.get("value")
+            if kind == "const"
+            else fold_literal_only(node)
+        )
+        if any(_near(abs(val), c, 1e-4) for c in _ANGLE_CONSTANTS if isinstance(val, (int, float))):
+            return True
+    return False
+
+
+def _is_mixed_angle_unit(spelled):
+    if not isinstance(spelled, str):
+        return False
+    try:
+        dv = unit_vec(U.parse_unit(spelled))
+    except Exception:
+        return False
+    axes = {k for k in dv if k[0] == "d"}
+    return ("d", "[angle]") in axes and len(axes) > 1
 
 
 def _raw_names(expr):
@@ -1190,6 +1234,75 @@ def role_of(site_exprs, mid):
     return None, False, []
 
 
+def _near(value, target, rel=2e-5):
+    return isinstance(value, (int, float)) and abs(float(value) - target) <= rel * abs(target)
+
+
+_RAD = {("d", "[angle]"): Fraction(1)}
+
+
+def _angle_literal_class(val, vec, unit, declared_vecs):
+    """(class, why) for a literal that carries an angle, or None to defer to
+    `classify`. Genuine angle quantities are mechanical: a degree/radian
+    conversion factor, a multiple of pi next to an angle (or 2*pi radians per
+    cycle), and a radius per radian. Any other literal that needs a power of
+    rad is suspicious, since the angle usually belongs in a declaration."""
+    angle_power = vec.get(("d", "[angle]"), 0)
+    has_pi = ("pi",) in vec
+    if (
+        (_near(val, 180 / math.pi) or _near(val, 180))
+        and has_pi
+        and not any(k[0] == "d" for k in vec)
+    ):
+        return "mechanical", "degree/radian conversion factor (deg/rad)"
+    if (
+        (_near(val, math.pi / 180) or _near(val, 1 / 180))
+        and has_pi
+        and not any(k[0] == "d" for k in vec)
+    ):
+        return "mechanical", "radian/degree conversion factor (rad/deg)"
+    if vec == _RAD and any(_near(abs(val), m * math.pi) for m in (2, 1, 0.5, 0.25, 4)):
+        return "mechanical", "a multiple of pi in radians (an angle, or radians per cycle)"
+    dims = {k: e for k, e in vec.items() if k[0] == "d"}
+    if dims == {("d", "[length]"): Fraction(1), ("d", "[angle]"): Fraction(-1)}:
+        return "mechanical", "a radius per radian (arc length per angle)"
+    if angle_power and set(dims) == {("d", "[angle]")}:
+        return (
+            "suspicious",
+            "the literal needs a bare power of rad; the angle usually belongs in a declaration",
+        )
+    return None
+
+
+def _angle_velocity_mismatch(val, vec, declared):
+    """A message template when a literal would need a pure power of rad at a site
+    where a mixed angular unit (rad/s, rad*m, ...) meets units without the angle
+    (the Coriolis pattern), else None."""
+    if set(k for k in vec if k[0] == "d") != {("d", "[angle]")} or ("pi",) in vec:
+        return None
+    if isinstance(val, (int, float)) and any(_near(abs(val), c, 1e-4) for c in _ANGLE_CONSTANTS):
+        return None  # 2*pi radians per cycle, pi/2 ...: a genuine angle literal
+    mixed = []
+    for name, spelled in declared.items():
+        try:
+            dv = unit_vec(U.parse_unit(spelled))
+        except Exception:
+            continue
+        axes = {k for k in dv if k[0] == "d"}
+        if ("d", "[angle]") in axes and len(axes) > 1:
+            mixed.append(f"{name} [{spelled}]")
+    if not mixed:
+        return None
+    return (
+        "an angular quantity ({m}) meets a quantity without the angle in `{{eq}}`; under the "
+        "strict angle rule the formula consumes a radian, so literal {{val}} would need "
+        "units rad^{p}. Either keep the left-hand side's declaration and write the literal "
+        "with that rad power (for f = 2*Omega*sin(lat): declare f in 1/s and write "
+        'const(2, units "1/rad")), or declare the angular quantity without rad '
+        "(Omega in 1/s). Each model author decides which; nothing is proposed."
+    ).format(m=", ".join(mixed), p=vec[("d", "[angle]")])
+
+
 #: Suspicious sub-kinds, most alarming first; the summary lists them in this order.
 ODD_REASONS = (
     "the needed unit has an axis no declared unit at the site has",
@@ -1475,18 +1588,12 @@ def process_file(path: str, bump: bool, evaluate: bool = True) -> dict:
         atoms = []
         for ptr, _ in uses:
             atoms += list(site_info[ptr]["declared"].values())
-        if set(vec) == {("d", "[angle]")}:
-            # A bare power of rad on a literal is the signature of a declaration
-            # that drops (or adds) the angle: never written onto a literal.
+        coriolis = _angle_velocity_mismatch(val, vec, site_info[ptr0]["declared"])
+        if coriolis is not None:
+            # An angular quantity meets a length or a 1/s quantity, and a literal
+            # would have to consume the radian: that is a modelling decision.
             for ptr, _ in uses:
-                bad_sites.add(
-                    (
-                        ptr,
-                        f"literal {val} would need units rad^{vec[('d', '[angle]')]}: the angle "
-                        "belongs in a declaration, and no single declaration change verified "
-                        "(see the declaration section)",
-                    )
-                )
+                bad_sites.add((ptr, coriolis.format(val=val, eq=site_info[ptr]["equation"])))
             continue
         unit = spell_unit(vec, atoms)
         if unit is None:
@@ -1509,6 +1616,9 @@ def process_file(path: str, bump: bool, evaluate: bool = True) -> dict:
         site_symbols = {sym for s in info["declared"].values() for sym in _SYMBOL_RE.findall(s)}
         lhs_is_d = isinstance(info["lhs"], ExprNode) and info["lhs"].op == "D"
         cls, why = classify(vec, unit, role, whole, declared_vecs, site_symbols, chain, lhs_is_d)
+        angle = _angle_literal_class(val, vec, unit, declared_vecs)
+        if angle is not None:
+            cls, why = angle
         if k == "fold":
             why += f"; the literal-only `{show(get_at(doc, p))}` is folded to {json.dumps(val)}"
         edits[p] = {
@@ -1592,6 +1702,10 @@ def process_file(path: str, bump: bool, evaluate: bool = True) -> dict:
         edits = edits_out
     rep["bumped"] = bool(rep.get("new_text")) and needs_bump
     rep["applied"] = bool(rep.get("new_text"))
+    final_warn = set(rep.get("warnings_after", warn0) if rep.get("new_text") else warn0)
+    rep["declaration_unresolved"] = [
+        d for d in rep["declaration_unresolved"] if d["site"] in final_warn
+    ]
     if not rep.get("new_text") and rep["declarations"]:
         # Only declaration changes verified: they stand on their own.
         rep["new_text"] = text
@@ -1904,7 +2018,9 @@ def summary_md(reports, title, args):
         "left-hand variable is tried first, then observed variables, then the rest; a "
         "change is kept only if validity is unchanged, the site stops warning and no "
         "other site that uses the variable starts warning or erroring. `rad` has scale "
-        "1, so no value changes.",
+        "1, so no value changes. A Coriolis-type site, where an angular quantity "
+        "(`rad/s`) meets a quantity without the angle, is never changed automatically: "
+        "it is listed under Unresolved for the model author to decide.",
         "",
     ]
     if not decls:
