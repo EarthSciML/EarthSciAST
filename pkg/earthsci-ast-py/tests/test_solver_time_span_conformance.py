@@ -248,3 +248,79 @@ def test_a_trailing_newline_is_not_a_date_time() -> None:
             _in_memory("2019-07-03T00:00:00Z\n", "2019-07-04T00:00:00Z", {})
         )
     assert "not an RFC 3339 UTC timestamp" in str(excinfo.value)
+
+
+# --- the §2.2.7 public accessors: time_origin / timestamp_to_seconds ----------
+
+#: Each fixture's time origin as POSIX seconds: reference_time, else
+#: temporal.start, else the epoch. `numbers` declares no `domain.temporal`.
+_ORIGIN_SECONDS = {
+    "timestamps_posix": 0.0,
+    "timestamps_reference_time": 1561939200.0,  # 2019-07-01T00:00:00Z
+    "timestamps_temporal_start": 1561852800.0,  # 2019-06-30T00:00:00Z
+    "origin_with_offset": 1561939200.0,  # 2019-07-01T02:00:00+02:00
+    "fractional_seconds": 1561939200.25,  # 2019-07-01T00:00:00.25Z
+    "numbers": 0.0,
+}
+
+
+@pytest.mark.parametrize(("fixture_id", "expected"), sorted(_ORIGIN_SECONDS.items()))
+def test_time_origin_is_the_instant_the_document_names(fixture_id: str, expected: float) -> None:
+    assert earthsci_ast.time_origin(_load(BY_ID[fixture_id])) == expected
+
+
+@pytest.mark.parametrize("fixture", WITH_SPAN, ids=[f["id"] for f in WITH_SPAN])
+def test_timestamp_to_seconds_agrees_with_resolve_time_span(fixture: dict) -> None:
+    """The converter IS the span's arithmetic on a bare timestamp."""
+    loaded = _load(fixture)
+    span = fixture["solver"]["time_span"]
+    resolved = earthsci_ast.resolve_time_span(loaded)
+    assert resolved is not None
+    for index, key in ((0, "start"), (1, "end")):
+        if isinstance(span[key], str):
+            assert earthsci_ast.timestamp_to_seconds(loaded, span[key]) == resolved[index]
+
+
+def test_timestamp_to_seconds_counts_from_the_document_origin() -> None:
+    ref = _load(BY_ID["timestamps_reference_time"])
+    assert earthsci_ast.timestamp_to_seconds(ref, "2019-07-01T00:00:00Z") == 0.0
+    assert earthsci_ast.timestamp_to_seconds(ref, "2019-07-03T00:00:00Z") == 172800.0
+    frac = _load(BY_ID["fractional_seconds"])
+    assert earthsci_ast.timestamp_to_seconds(frac, "2019-07-01T00:00:00.5Z") == 0.25
+    assert earthsci_ast.timestamp_to_seconds(frac, "2019-07-01T00:00:01.25Z") == 1.0
+
+
+def test_the_origin_and_converter_are_consistent_for_any_timestamp() -> None:
+    """`time_origin + timestamp_to_seconds == the POSIX time of the timestamp`."""
+    posix = _load(BY_ID["timestamps_posix"])
+    ref = _load(BY_ID["timestamps_reference_time"])
+    for stamp in ("2019-07-01T00:00:00Z", "2019-07-03T00:00:00Z", "2019-07-01T00:00:00.5Z"):
+        assert earthsci_ast.timestamp_to_seconds(posix, stamp) == earthsci_ast.time_origin(
+            ref
+        ) + earthsci_ast.timestamp_to_seconds(ref, stamp)
+
+
+def test_time_origin_refuses_an_unreadable_origin() -> None:
+    f = _in_memory(0, 1, {"reference_time": "not-a-date"})
+    with pytest.raises(earthsci_ast.SolverBlockError) as excinfo:
+        earthsci_ast.time_origin(f)
+    assert excinfo.value.code == "solver_time_span_invalid"
+    assert "/domain/temporal/reference_time" in str(excinfo.value)
+
+
+def test_timestamp_to_seconds_refuses_a_bad_timestamp_or_origin() -> None:
+    ref = _load(BY_ID["timestamps_reference_time"])
+    with pytest.raises(earthsci_ast.SolverBlockError) as excinfo:
+        earthsci_ast.timestamp_to_seconds(ref, "2019-07-01")
+    assert excinfo.value.code == "solver_time_span_invalid"
+    assert "not an RFC 3339 UTC timestamp" in str(excinfo.value)
+
+    with pytest.raises(earthsci_ast.SolverBlockError) as excinfo:
+        earthsci_ast.timestamp_to_seconds(ref, "2019-02-30T00:00:00Z")
+    assert "names no calendar day" in str(excinfo.value)
+
+    with pytest.raises(earthsci_ast.SolverBlockError) as excinfo:
+        earthsci_ast.timestamp_to_seconds(
+            _in_memory(0, 1, {"reference_time": "not-a-date"}), "2019-07-01T00:00:00Z"
+        )
+    assert "/domain/temporal/reference_time" in str(excinfo.value)

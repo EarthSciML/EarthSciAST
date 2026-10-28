@@ -47,6 +47,8 @@ __all__ = [
     "resolve_time_span",
     "resolve_tolerances",
     "solver_external_location",
+    "time_origin",
+    "timestamp_to_seconds",
 ]
 
 #: Canonical cross-binding tolerance defaults (API_SPEC §5.8), and the bottom of
@@ -522,6 +524,75 @@ def resolve_time_span(
     domain = getattr(esm_file, "domain", None)
     temporal = getattr(domain, "temporal", None) if domain is not None else None
     return _time_span_seconds(span.start, span.end, temporal)
+
+
+def _document_origin_parts(esm_file: EsmFile) -> tuple[int, float]:
+    """(*W₀*, *f₀*) of the document's time origin, or a refusal (esm-spec §2.2.7).
+
+    The origin is ``domain.temporal.reference_time``, else
+    ``domain.temporal.start``, else the POSIX epoch. Raises
+    ``solver_time_span_invalid`` naming ``/domain/temporal/...`` when the field
+    that applies is present but is not an RFC 3339 date-time naming a calendar
+    day.
+    """
+    domain = getattr(esm_file, "domain", None)
+    temporal = getattr(domain, "temporal", None) if domain is not None else None
+    pointer, authored = _origin_field(temporal)
+    parsed = _parse_origin(authored)
+    if parsed is None:
+        raise SolverBlockError(
+            SOLVER_TIME_SPAN_INVALID,
+            f"the document's time origin {pointer} ({authored!r}) is not an RFC 3339 "
+            "date-time naming a calendar day (esm-spec §2.2.7)",
+        )
+    return parsed
+
+
+def time_origin(esm_file: EsmFile) -> float:
+    """The document's time origin in binary64 seconds from the POSIX epoch.
+
+    The instant ``domain.temporal.reference_time`` -- else
+    ``domain.temporal.start``, else the epoch itself -- names, as ``W0 + f0``:
+    whole seconds in integers and the fraction in binary64. This is the origin a
+    ``solver.time_span`` timestamp counts from (esm-spec §2.2.7), exposed so a
+    caller does the same arithmetic for a timestamp of its own with
+    :func:`timestamp_to_seconds`.
+
+    Raises ``solver_time_span_invalid`` naming ``/domain/temporal/...`` when the
+    origin field that applies is present but is not an RFC 3339 date-time naming
+    a calendar day.
+    """
+    whole, frac = _document_origin_parts(esm_file)
+    return float(whole) + frac
+
+
+def timestamp_to_seconds(esm_file: EsmFile, timestamp: str) -> float:
+    """``timestamp`` as seconds from ``esm_file``'s time origin (esm-spec §2.2.7).
+
+    ``timestamp`` is an RFC 3339 UTC timestamp (``YYYY-MM-DDThh:mm:ss[.f]Z``,
+    the ``solver.time_span`` bound form). The result is ``(W - W0) + (f - f0)``:
+    the whole-second difference in integers, then the fractions added in
+    binary64 -- exactly what :func:`resolve_time_span` does to a ``time_span``
+    timestamp. The origin is :func:`time_origin`.
+
+    Raises ``solver_time_span_invalid`` when ``timestamp`` is not of that form or
+    names no calendar day, or when the document's origin cannot be read.
+    """
+    if not isinstance(timestamp, str) or _BOUND_RE.match(timestamp) is None:
+        raise SolverBlockError(
+            SOLVER_TIME_SPAN_INVALID,
+            f'timestamp "{timestamp}" is not an RFC 3339 UTC timestamp '
+            "(YYYY-MM-DDThh:mm:ss[.f]Z) (esm-spec §2.2.7)",
+        )
+    try:
+        whole, frac = _parse_bound_timestamp("timestamp", timestamp)
+    except _NoCalendarDay:
+        raise SolverBlockError(
+            SOLVER_TIME_SPAN_INVALID,
+            f'timestamp "{timestamp}" names no calendar day (esm-spec §2.2.7)',
+        ) from None
+    w0, f0 = _document_origin_parts(esm_file)
+    return float(whole - w0) + (frac - f0)
 
 
 def resolve_tolerances(

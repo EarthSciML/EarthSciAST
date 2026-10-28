@@ -430,10 +430,39 @@ fn time_span_invalid(why: impl std::fmt::Display) -> DiagnosticError {
     )
 }
 
+/// Why the origin field that applies cannot serve as a time origin.
+///
+/// The message is assembled by [`OriginFault::message`] with a caller-supplied
+/// subject: the `resolve_time_span` path names a timestamp bound, the public
+/// accessors name the input they were handed.
+struct OriginFault {
+    /// JSON pointer of the offending field.
+    pointer: String,
+    /// The authored value's text, when it was a string.
+    text: Option<String>,
+    /// The text matched the RFC 3339 shape but names no calendar day.
+    no_day: bool,
+}
+
+impl OriginFault {
+    fn message(&self, subject: &str) -> String {
+        let pointer = &self.pointer;
+        match (&self.text, self.no_day) {
+            (Some(t), true) => {
+                format!("{subject} {pointer} = \"{t}\", which names no calendar day")
+            }
+            (Some(t), false) => {
+                format!("{subject} {pointer} = \"{t}\", which is not an RFC 3339 date-time")
+            }
+            (None, _) => format!("{subject} {pointer}, which is not an RFC 3339 date-time"),
+        }
+    }
+}
+
 /// The time origin of esm-spec §2.2.7, first match wins:
 /// `domain.temporal.reference_time`, then `domain.temporal.start`, then the
-/// POSIX epoch. Read only when a bound is a timestamp.
-fn time_origin(temporal: Option<&Value>) -> Result<Instant, DiagnosticError> {
+/// POSIX epoch.
+fn time_origin_of(temporal: Option<&Value>) -> Result<Instant, OriginFault> {
     let epoch = Instant {
         whole: 0,
         frac: 0.0,
@@ -447,21 +476,19 @@ fn time_origin(temporal: Option<&Value>) -> Result<Instant, DiagnosticError> {
         };
         let pointer = format!("/domain/temporal/{key}");
         let Some(text) = v.as_str() else {
-            return Err(time_span_invalid(format_args!(
-                "a timestamp bound is counted from the time origin {pointer}, \
-                 which is not an RFC 3339 date-time"
-            )));
+            return Err(OriginFault {
+                pointer,
+                text: None,
+                no_day: false,
+            });
         };
         return match parse_date_time(text, false) {
             Ok(origin) => Ok(origin),
-            Err(StampError::Form) => Err(time_span_invalid(format_args!(
-                "a timestamp bound is counted from the time origin {pointer} = \"{text}\", \
-                 which is not an RFC 3339 date-time"
-            ))),
-            Err(StampError::NoDay) => Err(time_span_invalid(format_args!(
-                "a timestamp bound is counted from the time origin {pointer} = \"{text}\", \
-                 which names no calendar day"
-            ))),
+            Err(kind) => Err(OriginFault {
+                pointer,
+                text: Some(text.to_string()),
+                no_day: matches!(kind, StampError::NoDay),
+            }),
         };
     }
     Ok(epoch)
@@ -491,7 +518,12 @@ fn time_span_seconds(
         }
     }
     let origin = if stamps.iter().any(Option::is_some) {
-        Some(time_origin(temporal)?)
+        Some(time_origin_of(temporal).map_err(|f| {
+            time_span_invalid(format_args!(
+                "{}",
+                f.message("a timestamp bound is counted from the time origin")
+            ))
+        })?)
     } else {
         None
     };
@@ -573,6 +605,66 @@ pub fn resolve_time_span(
         temporal,
     )
     .map(Some)
+}
+
+/// Neutral `solver_time_span_invalid` for the public §2.2.7 accessors: the
+/// message names the offending input, not `/solver/time_span`.
+fn accessor_error(fault: &OriginFault) -> DiagnosticError {
+    err(
+        codes::SOLVER_TIME_SPAN_INVALID,
+        format!(
+            "{} (esm-spec §2.2.7).",
+            fault.message("the document's time origin")
+        ),
+    )
+}
+
+/// The document's time origin in seconds from the POSIX epoch (esm-spec
+/// §2.2.7): `domain.temporal.reference_time`, else `domain.temporal.start`,
+/// else the epoch itself, as `W0 + f0` -- whole seconds converted, the
+/// fraction added in binary64.
+///
+/// This is the origin a `solver.time_span` timestamp counts from: the `W0`/`f0`
+/// half of what [`resolve_time_span`] does, exposed so a caller can convert a
+/// timestamp of its own with [`timestamp_to_seconds`]. A field that is present
+/// but is not an RFC 3339 date-time naming a calendar day fails with
+/// `solver_time_span_invalid`, naming its pointer.
+pub fn time_origin(file: &crate::EsmFile) -> Result<f64, DiagnosticError> {
+    let temporal = file.domain.as_ref().and_then(|d| d.temporal.as_ref());
+    let origin = time_origin_of(temporal).map_err(|f| accessor_error(&f))?;
+    Ok(origin.whole as f64 + origin.frac)
+}
+
+/// `timestamp` as seconds from `file`'s time origin (esm-spec §2.2.7).
+///
+/// `timestamp` is an RFC 3339 UTC timestamp (`YYYY-MM-DDThh:mm:ss[.f]Z`, the
+/// `solver.time_span` bound form). The result is `(W - W0) + (f - f0)`: the
+/// whole-second difference in integers, then the fractions added in binary64,
+/// exactly as [`resolve_time_span`] converts a `time_span` timestamp. The
+/// origin is [`time_origin`].
+///
+/// Fails with `solver_time_span_invalid` when `timestamp` is not of that form
+/// or names no calendar day, or when the document's origin cannot be read.
+pub fn timestamp_to_seconds(
+    file: &crate::EsmFile,
+    timestamp: &str,
+) -> Result<f64, DiagnosticError> {
+    let stamp = parse_date_time(timestamp, true).map_err(|kind| {
+        let why = match kind {
+            StampError::NoDay => format!("timestamp \"{timestamp}\" names no calendar day"),
+            StampError::Form => format!(
+                "timestamp \"{timestamp}\" is not an RFC 3339 UTC timestamp \
+                 (YYYY-MM-DDThh:mm:ss[.f]Z)"
+            ),
+        };
+        err(
+            codes::SOLVER_TIME_SPAN_INVALID,
+            format!("{why} (esm-spec §2.2.7)."),
+        )
+    })?;
+    let temporal = file.domain.as_ref().and_then(|d| d.temporal.as_ref());
+    let origin = time_origin_of(temporal).map_err(|f| accessor_error(&f))?;
+    Ok((stamp.whole - origin.whole) as f64 + (stamp.frac - origin.frac))
 }
 
 /// Resolve integration tolerances most-specific first (esm-spec §2.2.2):
