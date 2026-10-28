@@ -73,16 +73,26 @@ export function checkFunctionTablesAndClosedFunctionCalls(doc: unknown): void {
     }
   }
   const validTables = tables !== null && typeof tables === 'object' ? tables : undefined
+  // Template expansion shares subtrees, so the loaded document is a DAG: visit
+  // each object once, or a nested-template chain is walked exponentially.
+  const seen = new WeakSet<object>()
   for (const [key, child] of Object.entries(doc)) {
     if (key === 'function_tables') continue
-    walk(child, `/${escapePointer(key)}`, validTables)
+    walk(child, `/${escapePointer(key)}`, validTables, seen)
   }
 }
 
-function walk(value: unknown, path: string, tables: FunctionTables | undefined): void {
+function walk(
+  value: unknown,
+  path: string,
+  tables: FunctionTables | undefined,
+  seen: WeakSet<object>,
+): void {
   if (value === null || typeof value !== 'object') return
+  if (seen.has(value)) return
+  seen.add(value)
   if (Array.isArray(value)) {
-    for (let i = 0; i < value.length; i++) walk(value[i], `${path}/${i}`, tables)
+    for (let i = 0; i < value.length; i++) walk(value[i], `${path}/${i}`, tables, seen)
     return
   }
   const node = value as { op?: unknown; name?: unknown; args?: unknown }
@@ -95,6 +105,6 @@ function walk(value: unknown, path: string, tables: FunctionTables | undefined):
   for (const [key, child] of Object.entries(value)) {
     // A `const` node's `value` is data: there is no expression inside it.
     if (node.op === 'const' && key === 'value') continue
-    walk(child, `${path}/${escapePointer(key)}`, tables)
+    walk(child, `${path}/${escapePointer(key)}`, tables, seen)
   }
 }
