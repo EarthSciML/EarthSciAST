@@ -1,17 +1,22 @@
 # ===========================================================================
 # load_time_checks.jl — closed-function argument and function-table checks at
 # load and in `validate()` (esm-spec §9.2 "When the argument checks run",
-# §9.5.5 "When the table checks run"; rulings Q-106..Q-109)
+# §9.5.5 "When the table checks run"; rulings Q-106..Q-113)
 # ===========================================================================
 #
-# Two families of checks the spec makes LOAD diagnostics:
+# Three families of checks the spec makes LOAD diagnostics:
 #
 #   * the ten §9.5.5 checks on EVERY `function_tables` entry, whether or not a
 #     `table_lookup` references it (`_validate_function_table`,
 #     lower_table_lookup.jl);
-#   * the §9.2 argument checks on EVERY `fn` node naming `interp.searchsorted`,
-#     `interp.linear` or `interp.bilinear`, wherever it sits in the document,
-#     whether or not anything ever evaluates it.
+#   * the §9.2 argument checks — arity first (ruling Q-112) — on EVERY `fn` node
+#     naming `interp.searchsorted`, `interp.linear` or `interp.bilinear`,
+#     wherever it sits in the document, whether or not anything ever evaluates
+#     it;
+#   * the §9.5.5 checks of EVERY `table_lookup` node (ruling Q-112:
+#     `_check_table_lookup_node`, lower_table_lookup.jl).
+#
+# Every table is checked before any expression node (ruling Q-113).
 #
 # Both reuse the validators the build already runs (the tree-walk const-arg
 # protocol `_FN_CONST_ARG_SPECS` / `_const_array_arg` and the `_build_interp_*`
@@ -55,16 +60,18 @@ end
     _check_interp_fn_node(e::OpExpr) -> Nothing
 
 The esm-spec §9.2 load-time argument checks on ONE `fn` node, or nothing when it
-names no `interp.*` function. The const-ness of every array position first (in
-argument order), then each array's rank, then the axis values and lengths — the
-order the tree-walk build checks them in. A call of the wrong arity is left to
-the arity diagnostic of the build.
+names no `interp.*` function, in the pinned "Order of the argument checks"
+(esm-spec §9.2, ruling Q-110): `closed_function_arity`; the const-ness of every
+array position in argument order; then the spec builders' rank, length, finite
+and monotonicity steps (`_validate_interp_*_args`).
 """
 function _check_interp_fn_node(e::OpExpr)::Nothing
     (e.op == "fn" && e.name !== nothing && e.name in _INTERP_FN_NAMES) || return nothing
     fname = String(e.name)
     cspec = _fn_const_arg_spec(fname)
-    length(e.args) == cspec.arity || return nothing
+    length(e.args) == cspec.arity || throw(ClosedFunctionError(
+        ERROR_CODES.CLOSED_FUNCTION_ARITY,
+        "$(fname) expects $(cspec.arity) arguments, got $(length(e.args)) (esm-spec §9.2)"))
     const_args = Any[_const_array_arg(e.args[pos], cspec.const_errs[k])
                      for (k, pos) in enumerate(cspec.const_positions)]
     if fname == "interp.linear"
@@ -77,26 +84,32 @@ function _check_interp_fn_node(e::OpExpr)::Nothing
     return nothing
 end
 
-# Every `fn` node under `root`, through every expression-bearing field (the
-# generated `OPEXPR_FIELD_TABLE` walk). `seen` is shared across the whole
-# document, so a subtree the template machinery shares between fields is
-# checked once.
+# Every `fn` and `table_lookup` node under `root`, through every
+# expression-bearing field (the generated `OPEXPR_FIELD_TABLE` walk). `seen` is
+# shared across the whole document, so a subtree the template machinery shares
+# between fields is checked once.
 function _check_interp_fns_in!(findings::Vector{_LoadCheckFinding}, root, path::String,
-                               seen::IdDict{OpExpr,Nothing})
+                               seen::IdDict{OpExpr,Nothing}, tables)
     root isa ASTExpr || return nothing
     try
         _foreach_subexpr_once(root, seen) do x
-            x isa OpExpr && _check_interp_fn_node(x)
+            x isa OpExpr || return nothing
+            if x.op == _TABLE_LOOKUP_OP
+                _check_table_lookup_node(x, tables)
+            else
+                _check_interp_fn_node(x)
+            end
         end
     catch err
-        err isa ClosedFunctionError || rethrow()
+        (err isa ClosedFunctionError || err isa TableLookupError) || rethrow()
         push!(findings, (path, err))
     end
     return nothing
 end
 
 # The registry a component's surviving `apply_expression_template` references
-# expand against, when one of its template bodies calls an `interp.*` function;
+# expand against, when one of its template bodies calls an `interp.*` function
+# or holds a `table_lookup`;
 # `nothing` otherwise. Option B keeps references unexpanded in the typed
 # document, and a `fn` node inside a template body is checked where the
 # template is applied, on the arguments the expansion gives it (esm-spec §9.2).
@@ -112,8 +125,9 @@ end
 function _raw_mentions_interp(x)
     if x isa AbstractDict
         n = get(x, "name", nothing)
-        get(x, "op", nothing) == "fn" && n isa AbstractString && n in _INTERP_FN_NAMES &&
-            return true
+        op = get(x, "op", nothing)
+        op == "fn" && n isa AbstractString && n in _INTERP_FN_NAMES && return true
+        op == _TABLE_LOOKUP_OP && return true
         return any(_raw_mentions_interp, values(x))
     elseif x isa AbstractVector
         return any(_raw_mentions_interp, x)
@@ -274,7 +288,7 @@ end
 
 Every load-time closed-function and function-table finding of `file`: the
 table checks on every `function_tables` entry, then the `interp.*` argument
-checks on every expression field. `first_only` stops at the first finding (the
+checks and the `table_lookup` checks on every expression field. `first_only` stops at the first finding (the
 load path, which throws it).
 """
 function _load_time_check_findings(file::EsmFile; first_only::Bool=false)
@@ -284,7 +298,8 @@ function _load_time_check_findings(file::EsmFile; first_only::Bool=false)
     seen = IdDict{OpExpr,Nothing}()
     _foreach_expression_field(file) do expr, path, reg
         first_only && !isempty(findings) && return nothing
-        _check_interp_fns_in!(findings, _expand_for_check(expr, reg), path, seen)
+        _check_interp_fns_in!(findings, _expand_for_check(expr, reg), path, seen,
+                              file.function_tables)
     end
     return findings
 end

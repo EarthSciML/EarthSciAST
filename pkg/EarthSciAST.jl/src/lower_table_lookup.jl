@@ -57,10 +57,12 @@ Codes: the lookup's own `table_lookup_args_nonempty`,
 `out_of_bounds: "error"` table), and the evaluation-time
 `table_lookup_out_of_bounds` a strict table raises for a query outside its axis.
 
-The ten table checks are LOAD diagnostics: load and `validate()` run them on
-every `function_tables` entry (esm-spec §9.5.5), so a document holding a broken
-table does not load. The lookup's own codes and the evaluation-time codes are
-raised where the lookup is lowered or evaluated.
+The ten table checks and the lookup's own codes are LOAD diagnostics: load and
+`validate()` run them on every `function_tables` entry and every `table_lookup`
+node (esm-spec §9.5.5, rulings Q-106 and Q-112), so such a document does not
+load; the lowering repeats them for a document built in memory. The §9.5.3a
+refusal and the evaluation-time code are raised where the lookup is lowered or
+evaluated.
 """
 struct TableLookupError <: EarthSciASTError
     code::String
@@ -373,6 +375,42 @@ end
 # the lookup's own fields — `args`, axis keys, output.
 function _lower_table_lookup_node(node::OpExpr,
                                   tables::AbstractDict{String,FunctionTable})::ASTExpr
+    table_id, table = _resolve_lookup_table(node, tables)
+    # esm-spec §9.5.1. `clamp` (the default) is exactly what the `interp.*`
+    # cores do at the ends, so the lowered tree IS the clamp semantics. An
+    # `error` table lowers to the same tree with its id on the node that reads
+    # the query (`interp.linear` / `interp.bilinear`, or `interp.searchsorted`
+    # for `nearest`): the evaluator checks each query against its axis before
+    # the core and raises `table_lookup_out_of_bounds` outside it. A `table`
+    # field on a `fn` node is never authored (it belongs to `table_lookup`), so
+    # the marker cannot collide with a document. A compiler that cannot run the
+    # check refuses the marked node by name.
+    strict = table.out_of_bounds == "error" ? String(table_id) : nothing
+
+    inputs = _table_axis_inputs(node, table, table_id)
+    slice = _table_output_slice(table, _table_output_index(node, table, table_id))
+    return _lowered_lookup_tree(table, inputs, slice, strict)
+end
+
+"""
+    _check_table_lookup_node(node::OpExpr, tables) -> Nothing
+
+Every esm-spec §9.5.5 check of ONE `table_lookup` node, in the pinned "Order of
+the lookup checks" — the table reference, the named table's ten checks, then the
+node's `args`, axis keys and output — without lowering it. Load and `validate()`
+run it on every node (ruling Q-112); the lowering runs the same steps.
+"""
+function _check_table_lookup_node(node::OpExpr, tables)::Nothing
+    reg = tables === nothing ? Dict{String,FunctionTable}() : tables
+    table_id, table = _resolve_lookup_table(node, reg)
+    _table_axis_inputs(node, table, table_id)
+    _table_output_index(node, table, table_id)
+    return nothing
+end
+
+# The steps of the lookup checks that precede the axis keys: the table reference,
+# the named table's ten checks, then `args`. Returns `(table_id, table)`.
+function _resolve_lookup_table(node::OpExpr, tables::AbstractDict{String,FunctionTable})
     table_id = node.table
     table_id === nothing && throw(TableLookupError(
         ERROR_CODES.TABLE_LOOKUP_UNKNOWN_TABLE,
@@ -388,19 +426,11 @@ function _lower_table_lookup_node(node::OpExpr,
         "`table_lookup` on table `$(table_id)` carries $(length(node.args)) " *
         "positional `args`; the per-axis inputs live under `axes` and `args` MUST " *
         "be empty (esm-spec §9.5.2)"))
-    # esm-spec §9.5.1. `clamp` (the default) is exactly what the `interp.*`
-    # cores do at the ends, so the lowered tree IS the clamp semantics. An
-    # `error` table lowers to the same tree with its id on the node that reads
-    # the query (`interp.linear` / `interp.bilinear`, or `interp.searchsorted`
-    # for `nearest`): the evaluator checks each query against its axis before
-    # the core and raises `table_lookup_out_of_bounds` outside it. A `table`
-    # field on a `fn` node is never authored (it belongs to `table_lookup`), so
-    # the marker cannot collide with a document. A compiler that cannot run the
-    # check refuses the marked node by name.
-    strict = table.out_of_bounds == "error" ? String(table_id) : nothing
+    return String(table_id), table
+end
 
-    inputs = _table_axis_inputs(node, table, table_id)
-    slice = _table_output_slice(table, _table_output_index(node, table, table_id))
+# The §9.5.3 tree for a lookup whose checks all passed.
+function _lowered_lookup_tree(table::FunctionTable, inputs, slice, strict)::ASTExpr
     kind = something(table.interpolation, "linear")
     axis_const(i) = OpExpr("const", ASTExpr[]; value=copy(table.axes[i].values))
     if kind == "linear"

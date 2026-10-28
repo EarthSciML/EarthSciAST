@@ -309,10 +309,10 @@ const ERROR_CODES = (
     INTERP_AXIS_NOT_CONST = "interp_axis_not_const",
 
     # ── Sampled function tables (esm-spec §9.5.5; lower_table_lookup.jl, raised
-    #    as `TableLookupError`). The ten table checks are LOAD diagnostics, run
-    #    on every `function_tables` entry by load and `validate()`
-    #    (load_time_checks.jl); the lookup's own codes are raised where the
-    #    BUILD-time `table_lookup` → `interp.*` lowering runs. Added to all five
+    #    as `TableLookupError`). The ten table checks and the lookup's own codes
+    #    are LOAD diagnostics, run on every `function_tables` entry and every
+    #    `table_lookup` node by load and `validate()` (load_time_checks.jl), and
+    #    repeated by the BUILD-time `table_lookup` → `interp.*` lowering. Added to all five
     #    bindings together, which is what a §9.5.5 code family requires of this
     #    registry. ─────────────────────────────────────────────────────────
     TABLE_LOOKUP_UNKNOWN_TABLE = "table_lookup_unknown_table",

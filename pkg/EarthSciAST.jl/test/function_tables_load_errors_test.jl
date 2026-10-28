@@ -55,8 +55,16 @@ end
         push!(seen, name)
         @testset "$(name)" begin
             tables = Dict{String,EarthSciAST.FunctionTable}(table_id => _ftle_table(c.table))
-            node = EarthSciAST.expression_from_json(
-                JSON3.read(JSON3.write(c.lookup), Dict{String,Any}))
+            # The parser refuses a non-empty `args` on its own (a document
+            # reaches it only past the schema's `maxItems`), so the node is
+            # parsed without them and they are put back in memory — the shape a
+            # node built in memory has.
+            raw = JSON3.read(JSON3.write(c.lookup), Dict{String,Any})
+            raw_args = get(raw, "args", Any[])
+            raw["args"] = Any[]
+            node = EarthSciAST.expression_from_json(raw)
+            append!(node.args, EarthSciAST.ASTExpr[EarthSciAST.expression_from_json(a)
+                                                    for a in raw_args])
             code = try
                 EarthSciAST._lower_expr_table_lookups(node, tables)
                 nothing
@@ -66,7 +74,19 @@ end
             end
             findings = EarthSciAST._check_function_tables(tables,
                 EarthSciAST._LoadCheckFinding[])
-            load_code = isempty(findings) ? nothing : findings[1][2].code
+            # Load runs the table checks on every table first, then the
+            # lookup's own load-time checks (ruling Q-112).
+            load_code = if !isempty(findings)
+                findings[1][2].code
+            else
+                try
+                    EarthSciAST._check_table_lookup_node(node, tables)
+                    nothing
+                catch err
+                    err isa EarthSciAST.TableLookupError || rethrow()
+                    err.code
+                end
+            end
             expected = c.expected_error_code === nothing ? nothing :
                        String(c.expected_error_code)
             @test load_code == expected

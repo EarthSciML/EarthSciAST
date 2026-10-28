@@ -111,7 +111,8 @@ Raised by the closed function registry when the spec contract is violated.
 - `interp_axis_length_mismatch` — `interp.linear`: `len(table) != len(axis)`;
   `interp.bilinear`: `len(table) != len(axis_x)`, or any inner row length
   differs from `len(axis_y)`.
-- `interp_nan_in_axis` — any `axis` (or `axis_x`, `axis_y`) contains a NaN.
+- `interp_nan_in_axis` — any `axis` (or `axis_x`, `axis_y`) contains a value
+  that is not finite (NaN, +Inf or -Inf; ruling Q-113).
 - `interp_axis_too_short` — any axis has fewer than 2 entries.
 - `interp_table_not_const` / `interp_axis_not_const` — table / axis (or
   `interp.searchsorted` `xs`) argument is not a literal `const`-op array of
@@ -812,10 +813,11 @@ end
 # where a flat one belongs, a flat one where rows belong) is the same diagnostic
 # as an argument that is not a `const` at all: `interp_table_not_const` /
 # `interp_axis_not_const`. Ragged rows are still rank 2 (that is
-# `interp_axis_length_mismatch`), and `[]` is both ranks.
+# `interp_axis_length_mismatch`). `[]` is rank 1 and never rank 2 (ruling Q-111):
+# as `interp.bilinear`'s table it is `interp_table_not_const`.
 _interp_number(x) = x isa Real && !(x isa Bool)
 _interp_rank1(v) = v isa AbstractVector && all(_interp_number, v)
-_interp_rank2(v) = v isa AbstractVector && all(_interp_rank1, v)
+_interp_rank2(v) = v isa AbstractVector && !isempty(v) && all(_interp_rank1, v)
 
 function _require_interp_rank(name::String, v, rank::Int, code::String, label::String)
     (rank == 1 ? _interp_rank1(v) : _interp_rank2(v)) && return nothing
@@ -825,34 +827,78 @@ function _require_interp_rank(name::String, v, rank::Int, code::String, label::S
         "(esm-spec §9.2); got $(got)"))
 end
 
-# Validate a 1-D axis used by `interp.linear` / `interp.bilinear`. Per
-# esm-spec §9.2: strictly increasing, no NaN, length ≥ 2. Returns the axis
-# coerced to `Vector{Float64}` for downstream blending. `axis_label` names
-# the failing axis ("axis", "axis_x", "axis_y") for the diagnostic.
-function _validate_interp_axis(name::String, axis_raw, axis_label::String)::Vector{Float64}
-    _require_interp_rank(name, axis_raw, 1, ERROR_CODES.INTERP_AXIS_NOT_CONST, axis_label)
+# The esm-spec §9.2 argument checks of `interp.linear` / `interp.bilinear`, in
+# the pinned "Order of the argument checks" (ruling Q-110), each step over every
+# axis before the next: (arity is the caller's) the rank of the table, then of
+# each axis in argument order; any axis shorter than 2; the length relation
+# between table and axes; a non-finite axis entry (`interp_nan_in_axis`, NaN or
+# ±Inf, ruling Q-113); an axis not strictly increasing. Shared by the registry,
+# the build's spec builders and the load-time check, so they cannot disagree.
+# Return the axes coerced to `Vector{Float64}`.
+function _interp_axis_long_enough(name::String, axis_raw, label::String)
     n = length(axis_raw)
-    if n < 2
-        throw(ClosedFunctionError(ERROR_CODES.INTERP_AXIS_TOO_SHORT,
-            "$(name): `$(axis_label)` has $(n) entries; need ≥ 2 to define a blend interval."))
+    n >= 2 || throw(ClosedFunctionError(ERROR_CODES.INTERP_AXIS_TOO_SHORT,
+        "$(name): `$(label)` has $(n) entries; need ≥ 2 to define a blend interval."))
+    return nothing
+end
+
+function _interp_axis_finite(name::String, axis::Vector{Float64}, label::String)
+    @inbounds for i in eachindex(axis)
+        isfinite(axis[i]) || throw(ClosedFunctionError(ERROR_CODES.INTERP_NAN_IN_AXIS,
+            "$(name): `$(label)`[$(i)] = $(axis[i]) is not finite; axis arrays must be " *
+            "all-finite."))
     end
-    out = Vector{Float64}(undef, n)
-    # NaN over the whole axis before monotonicity (esm-spec §9.2): an axis
-    # holding a NaN is `interp_nan_in_axis` whatever its other entries.
-    @inbounds for i in 1:n
-        out[i] = Float64(axis_raw[i])
-        isnan(out[i]) && throw(ClosedFunctionError(ERROR_CODES.INTERP_NAN_IN_AXIS,
-            "$(name): `$(axis_label)`[$(i)] is NaN; axis arrays must be all-finite."))
+    return nothing
+end
+
+function _interp_axis_increasing(name::String, axis::Vector{Float64}, label::String)
+    @inbounds for i in 2:length(axis)
+        axis[i] > axis[i-1] || throw(ClosedFunctionError(ERROR_CODES.INTERP_NON_MONOTONIC_AXIS,
+            "$(name): `$(label)` is not strictly increasing " *
+            "(`$(label)`[$(i)] = $(axis[i]) is not > `$(label)`[$(i-1)] = $(axis[i-1]))."))
     end
-    @inbounds for i in 2:n
-        v = out[i]
-        if !(v > out[i-1])
-            throw(ClosedFunctionError(ERROR_CODES.INTERP_NON_MONOTONIC_AXIS,
-                "$(name): `$(axis_label)` is not strictly increasing " *
-                "(`$(axis_label)`[$(i)] = $(v) is not > `$(axis_label)`[$(i-1)] = $(out[i-1]))."))
-        end
+    return nothing
+end
+
+_interp_axis_f64(axis_raw)::Vector{Float64} = Float64[Float64(v) for v in axis_raw]
+
+function _validate_interp_linear_args(name::String, table_raw, axis_raw)::Vector{Float64}
+    _require_interp_rank(name, table_raw, 1, ERROR_CODES.INTERP_TABLE_NOT_CONST, "table")
+    _require_interp_rank(name, axis_raw, 1, ERROR_CODES.INTERP_AXIS_NOT_CONST, "axis")
+    _interp_axis_long_enough(name, axis_raw, "axis")
+    length(table_raw) == length(axis_raw) || throw(ClosedFunctionError(
+        ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH,
+        "$(name): `len(table)` = $(length(table_raw)) but `len(axis)` = $(length(axis_raw))."))
+    axis = _interp_axis_f64(axis_raw)
+    _interp_axis_finite(name, axis, "axis")
+    _interp_axis_increasing(name, axis, "axis")
+    return axis
+end
+
+function _validate_interp_bilinear_args(name::String, table_raw, axis_x_raw, axis_y_raw)
+    _require_interp_rank(name, table_raw, 2, ERROR_CODES.INTERP_TABLE_NOT_CONST, "table")
+    _require_interp_rank(name, axis_x_raw, 1, ERROR_CODES.INTERP_AXIS_NOT_CONST, "axis_x")
+    _require_interp_rank(name, axis_y_raw, 1, ERROR_CODES.INTERP_AXIS_NOT_CONST, "axis_y")
+    _interp_axis_long_enough(name, axis_x_raw, "axis_x")
+    _interp_axis_long_enough(name, axis_y_raw, "axis_y")
+    Nx = length(axis_x_raw)
+    Ny = length(axis_y_raw)
+    length(table_raw) == Nx || throw(ClosedFunctionError(
+        ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH,
+        "$(name): outer `len(table)` = $(length(table_raw)) but `len(axis_x)` = $(Nx)."))
+    # Every inner row's length matches Ny (rejects ragged tables).
+    for (i, row) in enumerate(table_raw)
+        length(row) == Ny || throw(ClosedFunctionError(
+            ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH,
+            "$(name): `len(table[$(i)])` = $(length(row)) but `len(axis_y)` = $(Ny)."))
     end
-    return out
+    axis_x = _interp_axis_f64(axis_x_raw)
+    axis_y = _interp_axis_f64(axis_y_raw)
+    _interp_axis_finite(name, axis_x, "axis_x")
+    _interp_axis_finite(name, axis_y, "axis_y")
+    _interp_axis_increasing(name, axis_x, "axis_x")
+    _interp_axis_increasing(name, axis_y, "axis_y")
+    return axis_x, axis_y
 end
 
 # Validation-free `interp.linear` kernel: extrapolate-flat clamps + pinned
@@ -882,7 +928,7 @@ end
             return Float64(table[n])
         end
         # In-range: locate i with axis[i] ≤ x < axis[i+1]. n ≥ 2 guaranteed by
-        # `_validate_interp_axis`. Linear scan; tables are §9.2-capped at the
+        # `_validate_interp_linear_args`. Linear scan; tables are §9.2-capped at the
         # const-op inline limit, so this is O(N) on small N.
         i = 1
         for k in 1:(n - 1)
@@ -904,12 +950,7 @@ end
 # `interp.linear` per esm-spec §9.2 — validate the axis/table, then run the
 # kernel. Behaviour is byte-identical to the pre-`ess-wrh` monolithic form.
 function _interp_linear(name::String, table_raw, axis_raw, x::Real)
-    _require_interp_rank(name, table_raw, 1, ERROR_CODES.INTERP_TABLE_NOT_CONST, "table")
-    axis = _validate_interp_axis(name, axis_raw, "axis")
-    if length(table_raw) != length(axis)
-        throw(ClosedFunctionError(ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH,
-            "$(name): `len(table)` = $(length(table_raw)) but `len(axis)` = $(length(axis))."))
-    end
+    axis = _validate_interp_linear_args(name, table_raw, axis_raw)
     return _interp_linear_core(table_raw, axis, x)
 end
 
@@ -970,36 +1011,11 @@ end
     end
 end
 
-# The rank of every array argument of `interp.bilinear`, before any axis VALUE
-# is looked at (the order the load-time check and the build share).
-function _interp_bilinear_ranks(name::String, table_raw, axis_x_raw, axis_y_raw)
-    _require_interp_rank(name, table_raw, 2, ERROR_CODES.INTERP_TABLE_NOT_CONST, "table")
-    _require_interp_rank(name, axis_x_raw, 1, ERROR_CODES.INTERP_AXIS_NOT_CONST, "axis_x")
-    _require_interp_rank(name, axis_y_raw, 1, ERROR_CODES.INTERP_AXIS_NOT_CONST, "axis_y")
-    return nothing
-end
-
 # `interp.bilinear` per esm-spec §9.2 — validate the axes/table, then run the
 # kernel. Behaviour is byte-identical to the pre-`ess-wrh` monolithic form.
 function _interp_bilinear(name::String, table_raw, axis_x_raw, axis_y_raw,
                           x::Real, y::Real)
-    _interp_bilinear_ranks(name, table_raw, axis_x_raw, axis_y_raw)
-    axis_x = _validate_interp_axis(name, axis_x_raw, "axis_x")
-    axis_y = _validate_interp_axis(name, axis_y_raw, "axis_y")
-    Nx = length(axis_x)
-    Ny = length(axis_y)
-    if length(table_raw) != Nx
-        throw(ClosedFunctionError(ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH,
-            "$(name): outer `len(table)` = $(length(table_raw)) but `len(axis_x)` = $(Nx)."))
-    end
-    # Validate every inner row length matches Ny (rejects ragged tables).
-    @inbounds for i in 1:Nx
-        row = table_raw[i]
-        if length(row) != Ny
-            throw(ClosedFunctionError(ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH,
-                "$(name): `len(table[$(i)])` = $(length(row)) but `len(axis_y)` = $(Ny)."))
-        end
-    end
+    axis_x, axis_y = _validate_interp_bilinear_args(name, table_raw, axis_x_raw, axis_y_raw)
     return _interp_bilinear_core(table_raw, axis_x, axis_y, x, y)
 end
 
@@ -1111,34 +1127,19 @@ end
 
 function _build_interp_linear_spec(name::String, table_raw, axis_raw;
                                    strict::String = "")::_InterpLinearSpec
-    _require_interp_rank(name, table_raw, 1, ERROR_CODES.INTERP_TABLE_NOT_CONST, "table")
+    axis  = _validate_interp_linear_args(name, table_raw, axis_raw)
     table = _coerce_f64_vec(name, table_raw, "table")
-    axis  = _validate_interp_axis(name, axis_raw, "axis")
-    if length(table) != length(axis)
-        throw(ClosedFunctionError(ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH,
-            "$(name): `len(table)` = $(length(table)) but `len(axis)` = $(length(axis))."))
-    end
     return _InterpLinearSpec(table, axis, strict)
 end
 
 function _build_interp_bilinear_spec(name::String, table_raw, axis_x_raw,
                                      axis_y_raw; strict::String = "")::_InterpBilinearSpec
-    _interp_bilinear_ranks(name, table_raw, axis_x_raw, axis_y_raw)
-    axis_x = _validate_interp_axis(name, axis_x_raw, "axis_x")
-    axis_y = _validate_interp_axis(name, axis_y_raw, "axis_y")
+    axis_x, axis_y = _validate_interp_bilinear_args(name, table_raw, axis_x_raw, axis_y_raw)
     Nx = length(axis_x)
     Ny = length(axis_y)
-    if length(table_raw) != Nx
-        throw(ClosedFunctionError(ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH,
-            "$(name): outer `len(table)` = $(length(table_raw)) but `len(axis_x)` = $(Nx)."))
-    end
     table = Vector{Vector{Float64}}(undef, Nx)
     @inbounds for i in 1:Nx
         row = table_raw[i]
-        if length(row) != Ny
-            throw(ClosedFunctionError(ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH,
-                "$(name): `len(table[$(i)])` = $(length(row)) but `len(axis_y)` = $(Ny)."))
-        end
         col = Vector{Float64}(undef, Ny)
         for j in 1:Ny
             col[j] = Float64(row[j])
