@@ -1624,8 +1624,14 @@ func TestUnitsV2_TrigReturnsAnAngle(t *testing.T) {
 		if err != nil || u == nil || !u.Dim.IsDimensionless() {
 			t.Errorf("%s(pure number) must be dimensionless: %v (err %v)", op, u, err)
 		}
-		if _, err := PropagateDimension(ExprNode{Op: op, Args: []any{"theta"}}, env); err == nil {
-			t.Errorf("%s takes a DIMENSIONLESS argument — an angle must be rejected", op)
+		// An angle meets a pure number (esm-spec §4.8.3): the angle axis is
+		// removed and the scale kept, so `rad` passes and `deg` is refused for
+		// its scale, like `percent`.
+		if u, err := PropagateDimension(ExprNode{Op: op, Args: []any{"theta"}}, env); err != nil || u == nil || !u.Dim.IsDimensionless() {
+			t.Errorf("%s(rad) must be accepted as a pure number: %v (err %v)", op, u, err)
+		}
+		if _, err := PropagateDimension(ExprNode{Op: op, Args: []any{"azimuth"}}, env); err == nil {
+			t.Errorf("%s(deg) must be refused: a deg argument is a pure number at scale pi/180", op)
 		}
 		if _, err := PropagateDimension(ExprNode{Op: op, Args: []any{"mass"}}, env); err == nil {
 			t.Errorf("%s(kg) must be rejected", op)

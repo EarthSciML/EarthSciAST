@@ -35,6 +35,27 @@ type loadOptions struct {
 	// withAuthoredMountDeclared. Unexported, with no exported way to set it.
 	authoredMountDeclared    map[string]bool
 	authoredMountDeclaredSet bool
+	// fileVersionGatesChecked records that the caller already ran the
+	// file-level version gates (fileVersionGates) on the AUTHORED document; see
+	// withFileVersionGatesChecked.
+	fileVersionGatesChecked bool
+}
+
+// withFileVersionGatesChecked tells LoadString that the version gates of
+// fileVersionGates were already run on the AUTHORED document, so it does not
+// run them again on the text it receives.
+//
+// esm-spec §4.7 "Each file is held to its OWN declared `esm` version": a gate
+// judges the file that contains the gated construct against that file's own
+// `esm`. LoadPath splices the root's §4.7 mounts into the root BEFORE
+// LoadString, so the text LoadString receives holds every mounted leaf's
+// content under the root's version, and gating it there rejects a 1.0.0 root
+// for a unit-bearing `const` its 1.2.0 leaf carries
+// (tests/valid/version_gate_older_mounts_newer.esm). LoadPath gates the root's
+// authored bytes instead, and each leaf is gated against its own version where
+// it is read (resolveSubsystemMap).
+func withFileVersionGatesChecked() LoadOption {
+	return func(o *loadOptions) { o.fileVersionGatesChecked = true }
 }
 
 // withAuthoredMountDeclared hands LoadString the §8.9.4 mount-declared
@@ -131,6 +152,20 @@ func LoadPath(path string, opts ...LoadOption) (*ESMFile, error) {
 		}
 		mountOpts = []LoadOption{withAuthoredMountDeclared(md)}
 
+		// esm-spec §4.7 "Each file is held to its OWN declared `esm` version":
+		// the root's version gates read the AUTHORED root, here, before the
+		// inlining below puts the mounted leaves' content under the root's
+		// version. Each leaf is gated against its own version as it is read.
+		if documentHasSubsystemRefs(rootView) {
+			if _, gerr := prepareDocumentOps(string(data)); gerr != nil {
+				return nil, gerr
+			}
+			if gerr := fileVersionGates(rootView); gerr != nil {
+				return nil, gerr
+			}
+			mountOpts = append(mountOpts, withFileVersionGatesChecked())
+		}
+
 		// esm-spec §4.7: a `{ref}` resolves "before validation or any other
 		// processing". Splice the root's own mounts in HERE, ahead of
 		// LoadString's §9.7 machinery, so the §9.6.3 fixpoint lowers through the
@@ -189,6 +224,51 @@ func LoadPath(path string, opts ...LoadOption) (*ESMFile, error) {
 	}
 
 	return esmFile, nil
+}
+
+// fileVersionGates runs every version gate that reads a document's raw view
+// against that document's own declared `esm` (esm-spec §4.7 "Each file is held
+// to its OWN declared `esm` version"): the gates on the content a mount
+// carries (mountedContentVersionGates), then `solver` (1.1.0) and
+// `solver.external` and `solver.time_span` (1.3.0). The `faq` gate is applied
+// at the wire boundary, prepareDocumentOps.
+//
+// It must be given ONE file's authored view, the root's before its mounts are
+// inlined. Given a document with mounted content spliced in, it would judge
+// that content against the mounting file's version.
+func fileVersionGates(view map[string]any) error {
+	if err := mountedContentVersionGates(view); err != nil {
+		return err
+	}
+	for _, gate := range []func(map[string]any) error{
+		RejectSolverPreV11,
+		RejectSolverExternalPreV13,
+		RejectSolverTimeSpanPreV13,
+	} {
+		if err := gate(view); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// mountedContentVersionGates is the part of fileVersionGates a MOUNTED leaf is
+// held to, against the leaf's own `esm`: apply_expression_template (0.4.0),
+// the §9.7 template constructs (0.8.0) and unit-bearing expression nodes
+// (1.2.0). A leaf's `solver` block does not cross the mount (esm-spec §2.2.6
+// "Mounting"), so the solver gates do not reach it
+// (tests/conformance/solver_external/fixtures/mount_leaf_v120.esm).
+func mountedContentVersionGates(view map[string]any) error {
+	for _, gate := range []func(map[string]any) error{
+		RejectExpressionTemplatesPreV04,
+		RejectTemplateImportsPreV08,
+		rejectConstUnitsPreV12,
+	} {
+		if err := gate(view); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // refuseTopLevelReactionSystemRefs returns `mount_form_unsupported`, pointing at
@@ -306,24 +386,18 @@ func LoadString(jsonStr string, opts ...LoadOption) (*ESMFile, error) {
 		predec := json.NewDecoder(bytes.NewReader([]byte(jsonStr)))
 		predec.UseNumber()
 		if err := predec.Decode(&preCheck); err == nil {
-			if err := RejectExpressionTemplatesPreV04(preCheck); err != nil {
-				return nil, err
-			}
-			if err := RejectTemplateImportsPreV08(preCheck); err != nil {
-				return nil, err
+			// The version gates read the document's own `esm` (esm-spec §4.7
+			// "Each file is held to its OWN declared `esm` version"); a caller
+			// that inlined mounts into this text already ran them on the
+			// authored document.
+			if !o.fileVersionGatesChecked {
+				if err := fileVersionGates(preCheck); err != nil {
+					return nil, err
+				}
 			}
 			// Top-level `expression_templates` beside a component payload is a
 			// template-library payload no component can see (esm-spec §9.7.1).
 			if err := rejectImpureTemplateLibrary(preCheck); err != nil {
-				return nil, err
-			}
-			if err := RejectSolverPreV11(preCheck); err != nil {
-				return nil, err
-			}
-			if err := RejectSolverExternalPreV13(preCheck); err != nil {
-				return nil, err
-			}
-			if err := RejectSolverTimeSpanPreV13(preCheck); err != nil {
 				return nil, err
 			}
 			if err := rejectSolverExternalUnresolved(preCheck); err != nil {
@@ -332,9 +406,6 @@ func LoadString(jsonStr string, opts ...LoadOption) (*ESMFile, error) {
 			// esm-spec §2.2.7: on the root alone -- a mounted leaf's `solver`
 			// block never reaches this view.
 			if err := rejectSolverTimeSpanInvalid(preCheck); err != nil {
-				return nil, err
-			}
-			if err := rejectConstUnitsPreV12(preCheck); err != nil {
 				return nil, err
 			}
 		}

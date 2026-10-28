@@ -173,6 +173,7 @@ var transformingFixtures = map[string]string{
 	"units_mount_subsystem_consistent.esm":       "subsystem ref resolution",
 	"units_mount_toplevel_consistent.esm":        "top-level `models.<k>` {ref} resolution",
 	"units_array_mount_index_faq_consistent.esm": "top-level `models.<k>` {ref} resolution + index_sets merge",
+	"version_gate_older_mounts_newer.esm":        "subsystem ref resolution",
 
 	// An assembly mounted by another assembly: the mount form composes with
 	// itself, so the inner edge is consumed at load too and BOTH levels are

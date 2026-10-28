@@ -581,11 +581,12 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 			leafEffective = leafPrecision
 		}
 
-		// Spec-version gates (esm-spec §9.6.5).
-		if err := RejectExpressionTemplatesPreV04(view); err != nil {
-			return err
-		}
-		if err := RejectTemplateImportsPreV08(view); err != nil {
+		// The spec-version gates, against the LEAF's own declared `esm`
+		// (esm-spec §4.7 "Each file is held to its OWN declared `esm`
+		// version"): its content is about to be spliced into a document that
+		// may declare an older one, and is not gated again there. The `faq`
+		// gate already ran on these bytes, in loadRefBytes.
+		if err := mountedContentVersionGates(view); err != nil {
 			return err
 		}
 
