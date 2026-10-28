@@ -422,7 +422,7 @@ func isArrayValue(v any) bool {
 
 // interpRank1Array extracts a rank-1 array argument of an interp.* function —
 // searchsorted's `xs`, linear's `table`, an axis — refusing one of any other
-// rank (a scalar, or an array with an array entry) with `code`:
+// rank (a scalar, or an array with an array or non-numeric entry) with `code`:
 // `interp_axis_not_const` for an axis or `xs`, `interp_table_not_const` for a
 // table (esm-spec §9.2, ruling Q-108). The rank is decided over the WHOLE value
 // before any entry is read as a number, so a nested array holding a NaN is
@@ -439,6 +439,11 @@ func interpRank1Array(name, role, code string, v any) ([]float64, error) {
 				return nil, newClosedFunctionError(code, fmt.Sprintf(
 					"%s: %s must be a rank-1 `const`-op array, got a nested array "+
 						"(%s[%d] is an array) (esm-spec §9.2)", name, role, role, i+1))
+			}
+			if _, ok := toFloat64Strict(e); !ok {
+				return nil, newClosedFunctionError(code, fmt.Sprintf(
+					"%s: %s must be a rank-1 `const`-op array of numbers, got %s[%d] = %v (%T) "+
+						"(esm-spec §9.2)", name, role, role, i+1, e, e))
 			}
 		}
 	default:
@@ -479,6 +484,10 @@ func interpRank2Array(name, role, code string, v any) ([][]float64, error) {
 						return nil, notRank2(fmt.Sprintf(
 							"an array nested deeper than rank 2 (%s[%d][%d] is an array)",
 							role, i+1, j+1))
+					}
+					if _, ok := toFloat64Strict(e); !ok {
+						return nil, notRank2(fmt.Sprintf(
+							"a non-numeric entry (%s[%d][%d] = %v, %T)", role, i+1, j+1, e, e))
 					}
 				}
 			}

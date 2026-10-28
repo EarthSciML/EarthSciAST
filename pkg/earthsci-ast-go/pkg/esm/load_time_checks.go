@@ -300,9 +300,11 @@ func visitExprNodes(expr Expression, visit func(ExprNode) bool) bool {
 // position of the document with its JSON Pointer: the positions mapFileExprs
 // rewrites (variable update sites, equations, initialization equations, events,
 // reaction rates, constraint equations, connector equations), plus those it
-// does not — `guesses`, inline-test assertion `reference`s and per-test
-// `initial_conditions` / `parameter_overrides`, a `variable_map` expression
-// `transform`, and inline `subsystems` (raw JSON, walked whole). It only reads.
+// does not — `guesses`, reaction-system parameter `update` sites, inline-test
+// assertion `reference`s and per-test `initial_conditions` /
+// `parameter_overrides`, a `variable_map` expression `transform`, an `event`
+// coupling's conditions, trigger and affects, and inline `subsystems` (raw
+// JSON, walked whole). It only reads.
 // visit returns false to stop.
 func visitDocumentExprs(file *ESMFile, visit func(path string, expr Expression) bool) {
 	w := docExprVisitor{visit: visit, ok: true}
@@ -325,6 +327,15 @@ func visitDocumentExprs(file *ESMFile, visit func(path string, expr Expression) 
 			if c.TransformIsExpression() {
 				w.at(base+"/transform", c.Transform)
 			}
+		case EventCoupling:
+			for j, cond := range c.Conditions {
+				w.at(fmt.Sprintf("%s/conditions/%d", base, j), cond)
+			}
+			if c.Trigger != nil {
+				w.at(base+"/trigger/expression", c.Trigger.Expression)
+			}
+			w.affects(base+"/affects", c.Affects)
+			w.affects(base+"/affect_neg", c.AffectNeg)
 		}
 	}
 }
@@ -361,6 +372,9 @@ func (w *docExprVisitor) model(base string, m Model) {
 }
 
 func (w *docExprVisitor) reactionSystem(base string, rs ReactionSystem) {
+	for _, name := range sortedKeys(rs.Parameters) {
+		w.updateRules(base+"/parameters/"+escapeJSONPointerSegment(name), rs.Parameters[name].UpdateRules())
+	}
 	for i, r := range rs.Reactions {
 		w.at(fmt.Sprintf("%s/reactions/%d/rate", base, i), r.Rate)
 	}
@@ -370,6 +384,22 @@ func (w *docExprVisitor) reactionSystem(base string, rs ReactionSystem) {
 	w.tests(base+"/tests", rs.Tests)
 	for _, name := range sortedKeys(rs.Subsystems) {
 		w.at(base+"/subsystems/"+escapeJSONPointerSegment(name), rs.Subsystems[name])
+	}
+}
+
+// updateRules visits the expression sites of a reaction-system parameter's
+// `update`, at the same paths VariableExprSites gives a model variable's.
+func (w *docExprVisitor) updateRules(base string, rules []ParameterUpdate) {
+	for i, r := range rules {
+		prefix := base + "/update"
+		if len(rules) > 1 {
+			prefix = fmt.Sprintf("%s/update/%d", base, i)
+		}
+		w.at(prefix+"/when", r.When)
+		w.at(prefix+"/expression", r.Expression)
+		if r.From != nil {
+			w.at(prefix+"/from/unit_conversion", r.From.UnitConversion)
+		}
 	}
 }
 
