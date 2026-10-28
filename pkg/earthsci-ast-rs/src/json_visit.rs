@@ -83,41 +83,6 @@ pub(crate) fn visit_values(root: &Value, f: &mut impl FnMut(&JsonPath<'_>, &Valu
     go(root, &JsonPath::Root(""), f);
 }
 
-/// The path (in [`visit_values`]'s spelling) of the FIRST value, in its
-/// pre-order, that `hit` accepts; `None` when none does.
-///
-/// For the load-time checks that look for one offending node: only the hit's
-/// path is formatted, so a clean document costs no string work at all.
-pub(crate) fn find_value_path(
-    root: &Value,
-    hit: &mut impl FnMut(&Value) -> bool,
-) -> Option<String> {
-    fn go(v: &Value, at: &JsonPath<'_>, hit: &mut impl FnMut(&Value) -> bool) -> Option<String> {
-        if hit(v) {
-            return Some(at.to_string());
-        }
-        match v {
-            Value::Array(arr) => {
-                for (i, child) in arr.iter().enumerate() {
-                    if let Some(p) = go(child, &JsonPath::Index(at, i), hit) {
-                        return Some(p);
-                    }
-                }
-            }
-            Value::Object(obj) => {
-                for (k, child) in obj {
-                    if let Some(p) = go(child, &JsonPath::Key(at, k), hit) {
-                        return Some(p);
-                    }
-                }
-            }
-            _ => {}
-        }
-        None
-    }
-    go(root, &JsonPath::Root(""), hit)
-}
-
 /// Mutable pre-order visit: `f` sees each value BEFORE its children, so when
 /// `f` replaces a value, the walk descends into the replacement's children
 /// (the replacement itself is not re-visited).
@@ -183,19 +148,6 @@ mod tests {
                 ("/a".to_string(), json!(true)),
             ]
         );
-    }
-
-    /// The first hit in pre-order, with the path `visit_values` would give it.
-    #[test]
-    fn find_value_path_returns_the_first_hit_in_pre_order() {
-        let doc = json!({"b": [1, {"op": "x"}], "a": {"op": "x"}});
-        let mut is_x = |v: &Value| v.get("op").and_then(|o| o.as_str()) == Some("x");
-        assert_eq!(find_value_path(&doc, &mut is_x), Some("/b/1".to_string()));
-        assert_eq!(
-            find_value_path(&json!({"op": "x"}), &mut is_x),
-            Some(String::new())
-        );
-        assert_eq!(find_value_path(&json!([1, 2]), &mut is_x), None);
     }
 
     /// A replacement installed by the visitor is descended into, not
