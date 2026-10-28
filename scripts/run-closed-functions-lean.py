@@ -64,7 +64,12 @@ def check_fixture(path, verbose):
     proc = subprocess.run([str(BINARY), mode, str(path)], capture_output=True, text=True)
     msgs = [f"{rel}: {line}" for line in proc.stderr.splitlines()] if verbose else []
     if proc.returncode != 0:
-        return 0, len(scenarios), 0, [f"FAIL {rel}: esm-lean exited {proc.returncode}: {proc.stderr.strip()}"]
+        return (
+            0,
+            len(scenarios),
+            0,
+            [f"FAIL {rel}: esm-lean exited {proc.returncode}: {proc.stderr.strip()}"],
+        )
     results = {r["name"]: r for r in json.loads(proc.stdout)["results"]}
     tol = fixture.get("tolerance", {})
     passed = failed = 0
@@ -87,7 +92,9 @@ def check_fixture(path, verbose):
         else:
             failed += 1
             want = s.get("expected_error_code", s.get("expected"))
-            msgs.append(f"FAIL {rel} {name}: inputs {s.get('inputs')} expected {want!r}, got {got!r}")
+            msgs.append(
+                f"FAIL {rel} {name}: inputs {s.get('inputs')} expected {want!r}, got {got!r}"
+            )
     return passed, failed, 0, msgs
 
 
@@ -98,7 +105,11 @@ def check_table_ledger(path):
     rel = path.relative_to(ROOT) if path.is_relative_to(ROOT) else path
     proc = subprocess.run([str(BINARY), "tables", str(path)], capture_output=True, text=True)
     if proc.returncode != 0:
-        return 0, len(cases), [f"FAIL {rel}: esm-lean exited {proc.returncode}: {proc.stderr.strip()}"]
+        return (
+            0,
+            len(cases),
+            [f"FAIL {rel}: esm-lean exited {proc.returncode}: {proc.stderr.strip()}"],
+        )
     results = {r["name"]: r for r in json.loads(proc.stdout)["results"]}
     passed = failed = 0
     msgs = []
@@ -109,18 +120,26 @@ def check_table_ledger(path):
             passed += 1
         else:
             failed += 1
-            msgs.append(f"FAIL {rel} {c['name']}: expected {c.get('expected_error_code')!r}, got {got!r}")
+            msgs.append(
+                f"FAIL {rel} {c['name']}: expected {c.get('expected_error_code')!r}, got {got!r}"
+            )
     return passed, failed, msgs
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
     ap.add_argument("fixtures", nargs="*", type=Path)
-    ap.add_argument("--no-build", action="store_true", help="do not run `lake build esm-lean` first")
-    ap.add_argument("-v", "--verbose", action="store_true", help="also show the adapter's diagnostics")
+    ap.add_argument(
+        "--no-build", action="store_true", help="do not run `lake build esm-lean` first"
+    )
+    ap.add_argument(
+        "-v", "--verbose", action="store_true", help="also show the adapter's diagnostics"
+    )
     args = ap.parse_args()
     if not args.no_build:
-        b = subprocess.run(["lake", "build", "esm-lean"], cwd=FORMAL, capture_output=True, text=True)
+        b = subprocess.run(
+            ["lake", "build", "esm-lean"], cwd=FORMAL, capture_output=True, text=True
+        )
         if b.returncode != 0:
             print(b.stdout + b.stderr)
             print("closed-functions (lean): build failed")

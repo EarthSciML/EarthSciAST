@@ -369,8 +369,8 @@ def check_interp_arguments(name: str, values: Sequence[Any]) -> None:
     ``interp.searchsorted``: not a rank-1 ``const`` array
     (``interp_axis_not_const``), then NaN, then non-decreasing; ``xs = []``
     passes (ruling Q-108). ``interp.linear`` / ``interp.bilinear``, each step
-    over every axis before the next (the formal model's order where the spec
-    the table, then each axis, as a ``const`` of the required rank (rank 1 for
+    over every axis before the next begins: the table, then each axis, as a
+    ``const`` of the required rank (rank 1 for
     an axis and for ``interp.linear``'s table, rank 2 -- so not ``[]`` -- for
     ``interp.bilinear``'s, rulings Q-108 and Q-111); then an axis shorter than
     2; then the table/axis length relation; then a non-finite (NaN or ±Inf)

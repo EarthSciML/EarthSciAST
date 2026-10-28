@@ -81,8 +81,12 @@ def main():
             else:
                 if g.get("resolved"):
                     failures.append(f"{key} {u!r}: resolves, must not")
-                elif key == "reject_scaling_factor" and "scaling factor" not in (g.get("error") or ""):
-                    failures.append(f"{key} {u!r}: diagnostic lacks 'scaling factor': {g.get('error')!r}")
+                elif key == "reject_scaling_factor" and "scaling factor" not in (
+                    g.get("error") or ""
+                ):
+                    failures.append(
+                        f"{key} {u!r}: diagnostic lacks 'scaling factor': {g.get('error')!r}"
+                    )
     for f in failures:
         print(f"  - {f}")
     total = sum(counts.values())

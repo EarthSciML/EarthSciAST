@@ -243,8 +243,11 @@ EXTRA = [
     ("frac_example_86399_9999999", 86399.9999999, "ruling example: 23:59:59 of 1970-01-01"),
     ("frac_example_minus_1e_7", -1e-7, "ruling example: 23:59:59 of 1969-12-31"),
     ("frac_epoch_negative_zero", -0.0, "negative zero is the epoch itself"),
-    ("frac_epoch_min_subnormal_below", -5e-324,
-     "smallest subnormal below the epoch: 1969-12-31T23:59:59, although 86400 - 5e-324 rounds to 86400 in binary64"),
+    (
+        "frac_epoch_min_subnormal_below",
+        -5e-324,
+        "smallest subnormal below the epoch: 1969-12-31T23:59:59, although 86400 - 5e-324 rounds to 86400 in binary64",
+    ),
 ]
 
 
@@ -254,16 +257,20 @@ def int32_edges():
     lo = float(t_of(INT32_MIN))  # first instant of year -2^31
     assert Fraction(hi) == t_of(INT32_MAX + 1) and Fraction(lo) == t_of(INT32_MIN)
     ok = [
-        ("int32_year_max_last_double", math.nextafter(hi, -math.inf),
-         "largest binary64 whose year is 2147483647 (Int32 max)"),
-        ("int32_year_min_first_instant", lo,
-         "first instant of year -2147483648 (Int32 min)"),
+        (
+            "int32_year_max_last_double",
+            math.nextafter(hi, -math.inf),
+            "largest binary64 whose year is 2147483647 (Int32 max)",
+        ),
+        ("int32_year_min_first_instant", lo, "first instant of year -2147483648 (Int32 min)"),
     ]
     over = [
-        ("int32_year_max_plus_one", hi,
-         "first instant of year 2147483648: one past Int32 max"),
-        ("int32_year_min_minus_one", math.nextafter(lo, -math.inf),
-         "largest binary64 before year -2147483648: year -2147483649, one past Int32 min"),
+        ("int32_year_max_plus_one", hi, "first instant of year 2147483648: one past Int32 max"),
+        (
+            "int32_year_min_minus_one",
+            math.nextafter(lo, -math.inf),
+            "largest binary64 before year -2147483648: year -2147483649, one past Int32 min",
+        ),
     ]
     return ok, over
 
@@ -300,8 +307,17 @@ def jd_points():
     return out
 
 
-FUNCTIONS = ["year", "month", "day", "hour", "minute", "second",
-             "day_of_year", "julian_day", "is_leap_year"]
+FUNCTIONS = [
+    "year",
+    "month",
+    "day",
+    "hour",
+    "minute",
+    "second",
+    "day_of_year",
+    "julian_day",
+    "is_leap_year",
+]
 
 
 def generated_scenarios(fn):
@@ -309,19 +325,23 @@ def generated_scenarios(fn):
     points = []
     for label, b in BOUNDARIES:
         for suffix, t in probes(b):
-            points.append((f"frac_{label}_{suffix}", t, f"{PROBE_TEXT[suffix]} the {label} boundary"))
+            points.append(
+                (f"frac_{label}_{suffix}", t, f"{PROBE_TEXT[suffix]} the {label} boundary")
+            )
     points += EXTRA
     ok, _ = int32_edges()
     points += ok
     if fn == "julian_day":
         points += jd_points()
     for name, t, why in points:
-        out.append({
-            "name": name,
-            "description": f"t_utc = {t!r} -> {iso(t)} ({why}). Fields floor toward -inf (esm-spec §9.2).",
-            "inputs": [t],
-            "expected": evaluate(fn, t),
-        })
+        out.append(
+            {
+                "name": name,
+                "description": f"t_utc = {t!r} -> {iso(t)} ({why}). Fields floor toward -inf (esm-spec §9.2).",
+                "inputs": [t],
+                "expected": evaluate(fn, t),
+            }
+        )
     return out
 
 
@@ -334,21 +354,25 @@ def generated_errors(fn):
             raise AssertionError(f"{name} does not overflow")
         except Overflow:
             pass
-        errs.append({
-            "name": name,
-            "description": f"t_utc = {t!r} ({why}). The year of t is outside Int32, so every "
-                           "datetime.* function MUST raise `closed_function_overflow` (esm-spec §9.2).",
-            "inputs": [t],
-            "expected_error_code": "closed_function_overflow",
-        })
+        errs.append(
+            {
+                "name": name,
+                "description": f"t_utc = {t!r} ({why}). The year of t is outside Int32, so every "
+                "datetime.* function MUST raise `closed_function_overflow` (esm-spec §9.2).",
+                "inputs": [t],
+                "expected_error_code": "closed_function_overflow",
+            }
+        )
     for name, lit in NONFINITE:
-        errs.append({
-            "name": name,
-            "description": f"t_utc = {lit}. A non-finite t MUST raise `closed_function_overflow` "
-                           "in every datetime.* function (esm-spec §9.2).",
-            "inputs": [lit],
-            "expected_error_code": "closed_function_overflow",
-        })
+        errs.append(
+            {
+                "name": name,
+                "description": f"t_utc = {lit}. A non-finite t MUST raise `closed_function_overflow` "
+                "in every datetime.* function (esm-spec §9.2).",
+                "inputs": [lit],
+                "expected_error_code": "closed_function_overflow",
+            }
+        )
     return errs
 
 
@@ -373,17 +397,24 @@ def main():
             tol = spec["tolerance"]
             diff = abs(want - s["expected"])
             if diff > max(tol["abs"], tol["rel"] * max(1.0, abs(want))):
-                bad.append(f"{fn}/{s['name']}: fixture has {s['expected']!r}, exact value is {want!r}")
+                bad.append(
+                    f"{fn}/{s['name']}: fixture has {s['expected']!r}, exact value is {want!r}"
+                )
         gen = generated_scenarios(fn)
         added += len(gen)
         spec["scenarios"] = keep + gen
-        keep_err = [e for e in spec.get("error_scenarios", [])
-                    if not e["name"].startswith(GENERATED_PREFIXES)]
+        keep_err = [
+            e
+            for e in spec.get("error_scenarios", [])
+            if not e["name"].startswith(GENERATED_PREFIXES)
+        ]
         for e in keep_err:
             if e.get("expected_error_code") == "closed_function_overflow":
                 try:
                     evaluate(fn, e["inputs"][0])
-                    bad.append(f"{fn}/{e['name']}: fixture expects an overflow, the exact value fits")
+                    bad.append(
+                        f"{fn}/{e['name']}: fixture expects an overflow, the exact value fits"
+                    )
                 except Overflow:
                     pass
         errs = keep_err + generated_errors(fn)
@@ -399,8 +430,10 @@ def main():
     for b in bad:
         print("MISMATCH", b)
     verb = "would change" if args.check else "wrote"
-    print(f"{added} generated scenarios; {verb} {len(changed)} file(s); "
-          f"{len(bad)} hand-written scenario mismatch(es)")
+    print(
+        f"{added} generated scenarios; {verb} {len(changed)} file(s); "
+        f"{len(bad)} hand-written scenario mismatch(es)"
+    )
     if bad or (args.check and changed):
         sys.exit(1)
 
