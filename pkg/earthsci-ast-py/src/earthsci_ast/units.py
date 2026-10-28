@@ -1036,6 +1036,40 @@ _COMPARISON_OPS = frozenset({">", "<", ">=", "<=", "==", "!="})
 #: ±1) yield a dimensionless result regardless of operand dimensions.
 _DIMENSIONLESS_RESULT_OPS = frozenset({"and", "or", "not", "sign", "true", "false"})
 
+#: The places where an angle meeting a pure number counts as dimensionless
+#: (esm-spec §4.8.3 "An angle meets a pure number"): the operands of these
+#: ops, an equation's two sides, and a pure-number argument. NOT `atan2`,
+#: `concat` or `makearray`, which keep the strict rule.
+_ANGLE_AGREEMENT_OPS = frozenset({"+", "-", "min", "max", "ifelse"}) | _COMPARISON_OPS
+
+
+def _is_pure_angle(dim) -> bool:
+    """A dimension that is a nonzero power of ``[angle]`` and nothing else."""
+    axes = {axis for axis, power in dim.items() if power != 0}
+    return axes == {"[angle]"}
+
+
+def _is_pure_number(dim) -> bool:
+    return not any(power != 0 for power in dim.values())
+
+
+def _angle_as_number(typed: _Typed) -> _Typed:
+    """``typed`` (a pure angle) with its ``[angle]`` axis removed and its exact
+    scale KEPT: ``rad`` becomes a pure number at scale 1, ``deg`` one at
+    scale π/180 (esm-spec §4.8.3 "An angle meets a pure number")."""
+    return _Typed(typed.dim / typed.dim, typed.scale)
+
+
+def _angle_meets_number(a: _Typed, b: _Typed) -> tuple[_Typed, _Typed]:
+    """The pair to compare when ``a`` and ``b`` meet at an equation side or an
+    agreement position: a pure angle meeting a pure number loses its angle
+    axis; anything else is returned unchanged."""
+    if _is_pure_angle(a.dim) and _is_pure_number(b.dim):
+        return _angle_as_number(a), b
+    if _is_pure_number(a.dim) and _is_pure_angle(b.dim):
+        return a, _angle_as_number(b)
+    return a, b
+
 
 #: The unit-finding vocabulary -- the SECOND, smaller unit code set, shared
 #: with Go's ``UnitFinding*``, Rust's ``UNIT_FINDING_*`` and TypeScript's
@@ -1532,6 +1566,7 @@ class UnitValidator:
                         rhs_units=str(rhs.dim),
                     )
             elif lhs is not None and rhs is not None:
+                lhs, rhs = _angle_meets_number(lhs, rhs)
                 if not self._dimensions_compatible(lhs.dim, rhs.dim):
                     result.add_error(
                         UNIT_FINDING_DIMENSIONAL_MISMATCH,
@@ -1752,6 +1787,10 @@ class UnitValidator:
         """
         if typed is None:
             return
+        if _is_pure_angle(typed.dim):
+            # An angle meets a pure number (esm-spec §4.8.3): `rad` passes,
+            # `deg` is refused for its scale like `percent`.
+            typed = _angle_as_number(typed)
         if not self._dimensions_compatible(typed.dim, self._dimensionless.dim):
             raise DimensionalMismatchError(f"{op} {what} must be dimensionless, got {typed.dim}")
         if not typed.scale.is_one():
@@ -1771,6 +1810,14 @@ class UnitValidator:
         known = [t for t in operands if t is not None]
         if not known:
             return None
+        if (
+            op in _ANGLE_AGREEMENT_OPS
+            and any(_is_pure_number(t.dim) for t in known)
+            and any(_is_pure_angle(t.dim) for t in known)
+        ):
+            # An angle meets a pure number (esm-spec §4.8.3): the angle axis
+            # cancels, the scale is kept, and the result is a pure number.
+            known = [_angle_as_number(t) if _is_pure_angle(t.dim) else t for t in known]
         first = known[0]
         for typed in known[1:]:
             if not self._dimensions_compatible(first.dim, typed.dim):

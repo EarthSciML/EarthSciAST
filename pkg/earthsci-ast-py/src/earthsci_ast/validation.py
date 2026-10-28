@@ -1105,6 +1105,8 @@ def _validate_observed_dimensions(
             ScopedUnits,
             UnitValidator,
             UnparseableUnitError,
+            _angle_meets_number,
+            _Typed,
             exact_scale_of,
             parse_unit,
         )
@@ -1170,6 +1172,10 @@ def _validate_observed_dimensions(
 
             if typed is None:
                 continue  # undeterminable (§4.8.4) — skip, never assume dimensionless
+            # An angle meets a pure number (esm-spec §4.8.3): the angle axis
+            # cancels and the scales are compared.
+            declared_typed, typed = _angle_meets_number(_Typed(declared, declared_scale), typed)
+            declared, declared_scale = declared_typed.dim, declared_typed.scale
             computed = typed.dim
             if computed == declared and typed.scale == declared_scale:
                 continue

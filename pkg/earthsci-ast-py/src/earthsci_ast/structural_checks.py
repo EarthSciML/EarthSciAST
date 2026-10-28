@@ -2745,6 +2745,35 @@ def _is_angle_unit(unit: str | None) -> bool:
         return False
 
 
+def _is_pure_angle_unit(unit: str | None) -> bool:
+    """A unit whose dimension is a nonzero power of ``[angle]`` alone (``rad``,
+    ``deg``, ``sr``, ``1/rad``) -- esm-spec §4.8.3 "An angle meets a pure number"."""
+    if unit is None:
+        return False
+    try:
+        dim = _unit_dimensionality(_normalize_unit(unit))
+    except _pint_unverifiable_errors():
+        return False
+    return {axis for axis, power in dim.items() if power != 0} == {"[angle]"}
+
+
+def _angle_scale_is_one(unit: str) -> bool:
+    """Whether a pure angle has exact scale 1 (``rad``ⁿ, not ``deg``)."""
+    from .units import exact_scale_of, parse_unit
+
+    return exact_scale_of(parse_unit(unit)).is_one()
+
+
+def _units_agree_where_angle_meets_number(u1: str, u2: str) -> bool:
+    """`_units_compatible`, plus: a pure angle meeting a pure number agrees in
+    dimension (esm-spec §4.8.3); the units engine compares their scales."""
+    if _units_compatible(u1, u2):
+        return True
+    return (_is_pure_angle_unit(u1) and _is_dimensionless_unit(u2)) or (
+        _is_dimensionless_unit(u1) and _is_pure_angle_unit(u2)
+    )
+
+
 def _scaled_dimensionless_refusal(op: str, unit: str | None) -> str | None:
     """The esm-spec §4.8.3 refusal when ``unit`` is dimensionless at a scale
     OTHER than 1 — ``ppm``, ``percent`` (issue #409), or ``None``.
@@ -3277,7 +3306,23 @@ def _walk_expression_for_dimensionless_arg_checks(
             arg_units = var_units.get(arg)
             operation, subject = _DIMENSIONLESS_ARG_FUNCS[op]
             scaled = _scaled_dimensionless_refusal(op, arg_units)
-            if arg_units is not None and not _is_dimensionless_unit(arg_units):
+            if _is_pure_angle_unit(arg_units):
+                # An angle meets a pure number (esm-spec §4.8.3): `rad` is
+                # admitted; any other scale (`deg`) is refused for its scale.
+                scaled = (
+                    None
+                    if _angle_scale_is_one(arg_units)
+                    else (
+                        f"{subject} argument in '{arg_units}' is an angle at a scale other "
+                        "than 1 rad; where an angle meets a pure number its scale is kept "
+                        "(esm-spec §4.8.3), so convert it to rad first"
+                    )
+                )
+            if (
+                arg_units is not None
+                and not _is_dimensionless_unit(arg_units)
+                and not _is_pure_angle_unit(arg_units)
+            ):
                 errors.append(
                     (
                         report_path,
@@ -3400,7 +3445,7 @@ def _check_unit_consistency(data: dict[str, Any], tables: dict[str, Any], errors
                     if len(non_none) >= 2:
                         ref = non_none[0]
                         for u in non_none[1:]:
-                            if not _units_compatible(ref, u):
+                            if not _units_agree_where_angle_meets_number(ref, u):
                                 op_name = "addition" if expr.get("op") == "+" else "subtraction"
                                 verb = "add" if expr.get("op") == "+" else "subtract"
                                 errors.append(
