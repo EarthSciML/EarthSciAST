@@ -790,7 +790,7 @@ theorem nearestIdx_spec (r : List ℝ) (hr : r.Pairwise (· < ·)) (hn : 1 ≤ r
 theorem validateLinear_eq (t : List Num) (r : List ℝ) (hlen : t.length = r.length)
     (h2 : 2 ≤ r.length) (hr : r.Pairwise (· < ·)) :
     validateLinear (Arg.const1 t) (Arg.const1 (r.map Num.fin)) = .ok (t, r.map Num.fin) := by
-  have h3 : anyNaN (r.map Num.fin) = false := (anyNaN_false_iff _).mpr ⟨r, rfl⟩
+  have h3 : anyNonFinite (r.map Num.fin) = false := (anyNaN_false_iff _).mpr ⟨r, rfl⟩
   have h4 := (adjAll_lt_iff r).mpr hr
   have c1 : ¬ (r.map Num.fin).length < 2 := by simp; omega
   have c2 : t.length = (r.map Num.fin).length := by simpa using hlen
@@ -802,8 +802,8 @@ theorem validateBilinear_eq (M : List (List Num)) (rx ry : List ℝ) (hlen : M.l
     (hx : rx.Pairwise (· < ·)) (hy : ry.Pairwise (· < ·)) :
     validateBilinear (Arg.const2 M) (Arg.const1 (rx.map Num.fin)) (Arg.const1 (ry.map Num.fin)) =
       .ok (M, rx.map Num.fin, ry.map Num.fin) := by
-  have n1 : anyNaN (rx.map Num.fin) = false := (anyNaN_false_iff _).mpr ⟨rx, rfl⟩
-  have n2 : anyNaN (ry.map Num.fin) = false := (anyNaN_false_iff _).mpr ⟨ry, rfl⟩
+  have n1 : anyNonFinite (rx.map Num.fin) = false := (anyNaN_false_iff _).mpr ⟨rx, rfl⟩
+  have n2 : anyNonFinite (ry.map Num.fin) = false := (anyNaN_false_iff _).mpr ⟨ry, rfl⟩
   have m1 := (adjAll_lt_iff rx).mpr hx
   have m2 := (adjAll_lt_iff ry).mpr hy
   have c1 : (decide ((rx.map Num.fin).length < 2) || decide ((ry.map Num.fin).length < 2)) = false := by

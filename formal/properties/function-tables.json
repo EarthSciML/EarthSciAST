@@ -417,7 +417,8 @@
       "id": "P-tables-lookup-checks-at-load",
       "clauses": [
         "spec.9.5.5.table-checks-at-load",
-        "spec.9.5.5.lookup-check-order"
+        "spec.9.5.5.lookup-check-order",
+        "spec.9.5.5.lookup-checks-at-load"
       ],
       "statement": "Q-106: a table_lookup node anywhere in an expression that fails its checks makes the document fail to load.",
       "lean_statement": "∀ (d : Esm.Closed.Tables.Doc) (e : Esm.Closed.Tables.Expr), e ∈ d.exprs → ∀ (tid : String) (axes : List (String × Esm.Closed.Tables.Expr)) (out : Option Esm.Closed.Tables.OutSel) (args : List Esm.Closed.Tables.Expr) (c : Esm.Closed.Code), Esm.Closed.Tables.Expr.lookup tid axes out args ∈ Esm.Closed.Tables.nodes e → Esm.Closed.Tables.prepLookup d.loaded tid (List.map Prod.fst axes) out args = Except.error c → ∃ (c' : Esm.Closed.Code), Esm.Closed.Tables.loadCheck d = Except.error c'",
@@ -435,6 +436,27 @@
       "status": "proven",
       "theorem": "Esm.Closed.Tables.lookup_check_order",
       "supersedes": "P-tables-lookup-args-nonempty, which checked args before the table reference and the table (Q-107)."
+    },
+    {
+      "id": "P-tables-before-nodes",
+      "clauses": [
+        "spec.9.5.5.tables-before-nodes"
+      ],
+      "statement": "Q-113: a document with a failing function table is reported with the code of one of its failing tables, whatever its expression nodes hold.",
+      "lean_statement": "∀ (d : Esm.Closed.Tables.Doc), (∃ p ∈ d.tables, ∃ (c : Esm.Closed.Code), Esm.Closed.Tables.validateRaw p.2 = Except.error c) → ∃ p ∈ d.tables, ∃ (c : Esm.Closed.Code), Esm.Closed.Tables.validateRaw p.2 = Except.error c ∧ Esm.Closed.Tables.loadCheck d = Except.error c",
+      "status": "proven",
+      "theorem": "Esm.Closed.Tables.tables_before_nodes"
+    },
+    {
+      "id": "P-tables-raw-lookup-agrees",
+      "clauses": [
+        "spec.9.5.5.lookup-check-order",
+        "spec.9.5.5.lookup-checks-at-load"
+      ],
+      "statement": "The lookup check on tables as read (checkLookupRaw, which the esm-lean tables adapter runs at Float) is the exact model's prepLookup on the tables they load as.",
+      "lean_statement": "∀ (tables : List (String × Esm.Closed.Tables.RTable Esm.Closed.Tables.Lit)) (tid : String) (keys : List String) (out : Option Esm.Closed.Tables.OutSel) (args : List Esm.Closed.Tables.Expr), Esm.Closed.Tables.checkLookupRaw tables tid keys out args.length = Except.map (fun (_ : Esm.Closed.Tables.FTable × Esm.Closed.Tables.Nested) => ()) (Esm.Closed.Tables.prepLookup (List.map (fun (p : String × Esm.Closed.Tables.RTable Esm.Closed.Tables.Lit) => (p.1, p.2.load)) tables) tid keys out args)",
+      "status": "proven",
+      "theorem": "Esm.Closed.Tables.checkLookupRaw_eq"
     }
   ]
 }

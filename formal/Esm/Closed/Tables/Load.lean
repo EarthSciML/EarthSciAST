@@ -526,14 +526,33 @@ def nodesAxes : List (String × Expr) → List Expr
   | (_, e) :: rest => nodes e ++ nodesAxes rest
 end
 
-/-- The load-time check of ONE node: the §9.2 argument check of an `interp.*`
-call (on its array arguments as written), the §9.5.5 lookup checks of a
-`table_lookup`; nothing else. -/
-noncomputable def checkNode (tables : List (String × FTable)) : Expr → Except Code Unit
-  | .fn "interp.searchsorted" [_, xs] => (validateSearchsorted (argOf xs)).map (fun _ => ())
-  | .fn "interp.linear" [t, ax, _] => (validateLinear (argOf t) (argOf ax)).map (fun _ => ())
-  | .fn "interp.bilinear" [T, ax, ay, _, _] =>
+def closedFunctionArity : Code := "closed_function_arity"
+
+/-- The arity of the three `interp.*` functions (§9.2 Arity columns); other
+names have no load-time arity check (Q-112 rules it for `interp.*` only). -/
+def interpArity : String → Option ℕ
+  | "interp.searchsorted" => some 2
+  | "interp.linear" => some 3
+  | "interp.bilinear" => some 5
+  | _ => none
+
+/-- The §9.2 argument check of an `interp.*` call of the right arity, on its
+array arguments as written. -/
+noncomputable def checkInterpArgs : String → List Expr → Except Code Unit
+  | "interp.searchsorted", [_, xs] => (validateSearchsorted (argOf xs)).map (fun _ => ())
+  | "interp.linear", [t, ax, _] => (validateLinear (argOf t) (argOf ax)).map (fun _ => ())
+  | "interp.bilinear", [T, ax, ay, _, _] =>
     (validateBilinear (argOf T) (argOf ax) (argOf ay)).map (fun _ => ())
+  | _, _ => .ok ()
+
+/-- The load-time check of ONE node: for an `interp.*` call, its arity first
+(`closed_function_arity`, Q-110, Q-112), then the §9.2 argument check; for a
+`table_lookup`, the §9.5.5 lookup checks (Q-107, Q-112); nothing else. -/
+noncomputable def checkNode (tables : List (String × FTable)) : Expr → Except Code Unit
+  | .fn name args =>
+    match interpArity name with
+    | none => .ok ()
+    | some n => if args.length ≠ n then .error closedFunctionArity else checkInterpArgs name args
   | .lookup tid axes out args =>
     (prepLookup tables tid (axes.map Prod.fst) out args).map (fun _ => ())
   | _ => .ok ()
@@ -614,7 +633,7 @@ theorem interp_checks_at_load (d : Doc) (e : Expr) (he : e ∈ d.exprs) :
       rw [hc] at this; cases this)
   refine ⟨fun x xs c hn hc => key _ hn c ?_, fun t ax x c hn hc => key _ hn c ?_,
     fun T ax ay x y c hn hc => key _ hn c ?_⟩ <;>
-    simp [checkNode, hc, Except.map]
+    simp [checkNode, interpArity, checkInterpArgs, hc, Except.map]
 
 /-- §9.5.5 (Q-106, Q-107): a `table_lookup` node anywhere in an expression that
 fails its checks makes the document fail to load. -/
@@ -730,7 +749,123 @@ theorem load_is_not_evaluation :
   let e := Expr.op "ifelse" [.lit (.fin 1), .lit (.fin 0), bad]
   refine ⟨⟨[], [e]⟩, e, .num (.fin 0), rfl, ?_, ?_⟩
   · simp [e, eval, evalOp, Val.asNum, Num.truthy, bind, Except.bind]
-  · simp [loadCheck, allOk, e, bad, nodes, nodesList, checkNode, argOf, validateLinear,
-      Except.map, Codes.interpTableNotConst]
+  · simp [loadCheck, allOk, e, bad, nodes, nodesList, checkNode, interpArity, checkInterpArgs,
+      argOf, validateLinear, Except.map, Codes.interpTableNotConst]
+
+/-! ## Arity, tables first, lookups at load (Q-110, Q-112, Q-113) -/
+
+/-- §9.2 "Order of the argument checks", step 1 (Q-110, Q-112): an
+`interp.searchsorted` / `interp.linear` / `interp.bilinear` node with a number
+of arguments other than 2 / 3 / 5 is `closed_function_arity`, whatever its
+arguments hold; with the right number, the node check is the §9.2 argument
+check. -/
+theorem interp_arity_first (tables : List (String × FTable)) :
+    interpArity "interp.searchsorted" = some 2 ∧ interpArity "interp.linear" = some 3 ∧
+    interpArity "interp.bilinear" = some 5 ∧
+    ∀ (name : String) (args : List Expr) (n : ℕ), interpArity name = some n →
+      (args.length ≠ n → checkNode tables (.fn name args) = .error "closed_function_arity") ∧
+      (args.length = n → checkNode tables (.fn name args) = checkInterpArgs name args) := by
+  refine ⟨rfl, rfl, rfl, fun name args n hn => ⟨fun h => ?_, fun h => ?_⟩⟩
+  · simp [checkNode, hn, h, closedFunctionArity]
+  · simp [checkNode, hn, h]
+
+/-- Q-111 on an expression: an `interp.bilinear` whose table is the `const`
+array `[]` is `interp_table_not_const`, whatever the axes. -/
+theorem bilinear_empty_table_expr (ax ay : Expr) :
+    validateBilinear (argOf (.const (.node []))) (argOf ax) (argOf ay) =
+      .error "interp_table_not_const" := by
+  simp only [argOf, argOfNested, Nested.toVec, List.mapM_nil]
+  exact validateBilinear_empty_table _ _
+
+theorem allOk_error {β : Type} {f : β → Except Code Unit} :
+    ∀ {l : List β} {c : Code}, allOk f l = .error c → ∃ x ∈ l, f x = .error c
+  | [], c, h => by simp [allOk] at h
+  | x :: xs, c, h => by
+    simp only [allOk] at h
+    cases hx : f x with
+    | error c' => rw [hx] at h; cases h; exact ⟨x, by simp, hx⟩
+    | ok u =>
+      rw [hx] at h
+      obtain ⟨y, hy, hfy⟩ := allOk_error h
+      exact ⟨y, List.mem_cons_of_mem _ hy, hfy⟩
+
+/-- §9.5.5 "Bindings MUST check every table before any expression node"
+(Q-113): a document with a failing table is reported with the code of one of
+its failing tables, whatever its expression nodes hold. -/
+theorem tables_before_nodes (d : Doc) (h : ∃ p ∈ d.tables, ∃ c, validateRaw p.2 = .error c) :
+    ∃ p ∈ d.tables, ∃ c, validateRaw p.2 = .error c ∧ loadCheck d = .error c := by
+  cases ht : allOk (fun p => validateRaw p.2) d.tables with
+  | error c =>
+    obtain ⟨p, hp, hpc⟩ := allOk_error ht
+    exact ⟨p, hp, c, hpc, by simp [loadCheck, ht]⟩
+  | ok u =>
+    cases u
+    obtain ⟨p, hp, c, hc⟩ := h
+    have := (allOk_ok_iff _ _).mp ht p hp
+    rw [hc] at this; cases this
+
+/-! ## The lookup checks on tables as read (the `esm-lean tables` adapter) -/
+
+/-- A table with only its `outputs`: what `resolveOutput` reads. -/
+def RTable.shell {α : Type} (R : RTable α) : FTable := { axes := [], outputs := R.outputs, data := .node [] }
+
+/-- The §9.5.5 lookup checks (Q-107) on tables as read, for any value type: the
+table reference, the ten checks of the named table, `args` (its length), the
+axis keys, the output. -/
+def checkLookupRaw {α : Type} [TableValue α] (tables : List (String × RTable α)) (tid : String)
+    (keys : List String) (out : Option OutSel) (nargs : ℕ) : Except Code Unit :=
+  match tables.lookup tid with
+  | none => .error Codes.lookupUnknownTable
+  | some R =>
+    match validateRaw R with
+    | .error c => .error c
+    | .ok _ =>
+      if nargs ≠ 0 then .error Codes.lookupArgsNonempty
+      else if !keysMatch keys (R.axes.map (·.name)) then .error Codes.lookupAxisNameMismatch
+      else (resolveOutput R.shell out).map (fun _ => ())
+
+theorem lookup_map_load (tables : List (String × RTable Lit)) (tid : String) :
+    (tables.map (fun p => (p.1, p.2.load))).lookup tid = (tables.lookup tid).map RTable.load := by
+  induction tables with
+  | nil => rfl
+  | cons p ps ih =>
+    obtain ⟨k, R⟩ := p
+    simp only [List.map_cons, List.lookup]
+    cases h : (tid == k) <;> simp [ih]
+
+theorem resolveOutput_shell (R : RTable Lit) (out : Option OutSel) :
+    resolveOutput R.shell out = resolveOutput R.load out := by
+  cases out with
+  | none => rfl
+  | some s => cases s <;> rfl
+
+/-- The adapter's lookup check on tables as read is the exact model's
+`prepLookup` on the tables they load as. -/
+theorem checkLookupRaw_eq (tables : List (String × RTable Lit)) (tid : String)
+    (keys : List String) (out : Option OutSel) (args : List Expr) :
+    checkLookupRaw tables tid keys out args.length =
+      (prepLookup (tables.map (fun p => (p.1, p.2.load))) tid keys out args).map (fun _ => ()) := by
+  unfold checkLookupRaw prepLookup
+  rw [lookup_map_load]
+  cases hl : tables.lookup tid with
+  | none => rfl
+  | some R =>
+    dsimp only [Option.map]
+    rw [validateRaw_eq]
+    cases hv : validateTable R.load with
+    | error c => simp [bind, Except.bind, Except.map]
+    | ok u =>
+      cases u
+      rw [load_names, resolveOutput_shell]
+      cases args with
+      | cons a as => simp [bind, Except.bind, Except.map]
+      | nil =>
+        simp only [bind, Except.bind, List.length_nil, ne_eq, not_true_eq_false, ↓reduceIte,
+          List.isEmpty_nil, Bool.not_true, Bool.false_eq_true]
+        cases keysMatch keys (R.axes.map (·.name)) with
+        | false => simp [Except.map]
+        | true =>
+          simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte]
+          cases resolveOutput R.load out <;> simp [Except.map, pure, Except.pure]
 
 end Esm.Closed.Tables

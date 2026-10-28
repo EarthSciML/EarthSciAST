@@ -48,6 +48,8 @@ class Scalar (α : Type) where
   le : α → α → Bool
   lt : α → α → Bool
   isNaN : α → Bool
+  /-- Not a finite number: NaN, or (where the type has them) ±Inf. -/
+  nonFinite : α → Bool
 
 /-- A scalar as §9.2 sees it: a finite real, or NaN. (Infinite inputs are not
 modelled over ℝ; the axes are required finite and JSON cannot spell an
@@ -94,6 +96,7 @@ noncomputable instance : Scalar Num where
   le := Num.le
   lt := Num.lt
   isNaN := Num.isNaN
+  nonFinite := Num.isNaN
 
 instance : Scalar Float where
   nan := (0.0 : Float) / 0.0
@@ -104,6 +107,7 @@ instance : Scalar Float where
   le := fun a b => a ≤ b
   lt := fun a b => a < b
   isNaN := Float.isNaN
+  nonFinite := fun x => !x.isFinite
 
 section Generic
 
@@ -186,6 +190,9 @@ def adjAll (r : α → α → Bool) : List α → Bool
 
 def anyNaN (l : List α) : Bool := l.any isNaN
 
+/-- Some entry is not finite (Q-113: the `interp_nan_in_axis` test). -/
+def anyNonFinite (l : List α) : Bool := l.any nonFinite
+
 end Generic
 
 /-- Diagnostic codes. -/
@@ -217,17 +224,18 @@ def validateSearchsorted : Arg α → Except Code (List α)
     else .ok xs
   | _ => .error Codes.interpAxisNotConst
 
-/-- `interp.linear`'s load-time check (§9.2). The table must be a rank-1
+/-- `interp.linear`'s load-time check (§9.2), in the order §9.2 pins (Q-110,
+"Order of the argument checks"; arity, step 1, is a property of the `fn` node
+and is checked by `Esm.Closed.Tables.checkNode`). The table must be a rank-1
 `const` array (`interp_table_not_const` otherwise: a non-`const` argument or a
 `const` of any other rank, Q-108), then the axis likewise
-(`interp_axis_not_const`). The order of the remaining checks, where the spec
-gives none (it pins only Q-4's NaN-before-monotonic): axis length, shape
-relation, NaN, monotonicity. -/
+(`interp_axis_not_const`); then axis length, shape relation, a non-finite axis
+entry (Q-113: `nonFinite`, NaN or ±Inf), monotonicity. -/
 def validateLinear : Arg α → Arg α → Except Code (List α × List α)
   | .const1 t, .const1 ax =>
     if ax.length < 2 then .error Codes.interpTooShort
     else if t.length ≠ ax.length then .error Codes.interpLengthMismatch
-    else if anyNaN ax then .error Codes.interpNaNInAxis
+    else if anyNonFinite ax then .error Codes.interpNaNInAxis
     else if !adjAll lt ax then .error Codes.interpNonMonotonic
     else .ok (t, ax)
   | .const1 _, _ => .error Codes.interpAxisNotConst
@@ -235,21 +243,74 @@ def validateLinear : Arg α → Arg α → Except Code (List α × List α)
 
 /-- `interp.bilinear`'s load-time check (§9.2): a rank-2 `const` table
 (`interp_table_not_const` otherwise, Q-108), then rank-1 `const` axes
-(`interp_axis_not_const` otherwise), then the same order as `validateLinear`,
-each stage over both axes before the next (so a NaN in either axis beats a
-non-monotonic other axis, Q-4). -/
+(`interp_axis_not_const` otherwise), then the same order as `validateLinear`
+(Q-110), each stage over both axes before the next (so a non-finite entry in
+either axis beats a non-monotonic other axis, Q-4, Q-113). An empty `[]` table
+is rank 1, so `interp_table_not_const` (Q-111). -/
 def validateBilinear : Arg α → Arg α → Arg α → Except Code (List (List α) × List α × List α)
   | .const2 T, .const1 ax, .const1 ay =>
     if ax.length < 2 || ay.length < 2 then .error Codes.interpTooShort
     else if T.length ≠ ax.length || T.any (fun row => row.length ≠ ay.length) then
       .error Codes.interpLengthMismatch
-    else if anyNaN ax || anyNaN ay then .error Codes.interpNaNInAxis
+    else if anyNonFinite ax || anyNonFinite ay then .error Codes.interpNaNInAxis
     else if !(adjAll lt ax && adjAll lt ay) then .error Codes.interpNonMonotonic
     else .ok (T, ax, ay)
   | .const2 _, _, _ => .error Codes.interpAxisNotConst
   | _, _, _ => .error Codes.interpTableNotConst
 
 end Validation
+
+/-! ## The pinned order of the argument checks (Q-110, Q-113), for every scalar type
+
+Stated for every `Scalar` instance, so for the exact `Num` (no infinities:
+`nonFinite` is NaN) and for the adapter's `Float` (`nonFinite` is
+`!Float.isFinite`: NaN, +Inf, −Inf). Step 1 (arity) is a property of the `fn`
+node (`Esm.Closed.Tables.interp_arity_first`); step 2 (not `const` / wrong rank)
+is `validateLinear_rank` / `validateBilinear_rank`. -/
+
+section Order
+
+variable {α : Type} [Scalar α]
+
+open Classical in
+/-- §9.2 "Order of the argument checks", steps 3–6, for `interp.linear`:
+too short, then length mismatch, then a non-finite axis entry, then not
+strictly increasing; the first rule broken names the code. -/
+theorem validateLinear_order (t a : List α) :
+    (validateLinear (Arg.const1 t) (Arg.const1 a)).map (fun _ => ()) =
+      if a.length < 2 then .error "interp_axis_too_short"
+      else if t.length ≠ a.length then .error "interp_axis_length_mismatch"
+      else if ∃ x ∈ a, Scalar.nonFinite x = true then .error "interp_nan_in_axis"
+      else if adjAll Scalar.lt a = false then .error "interp_non_monotonic_axis"
+      else .ok () := by
+  simp only [validateLinear]
+  split_ifs <;> simp_all [Except.map, anyNonFinite, Codes.interpTooShort,
+    Codes.interpLengthMismatch, Codes.interpNaNInAxis, Codes.interpNonMonotonic]
+
+open Classical in
+/-- §9.2 "Order of the argument checks", steps 3–6, for `interp.bilinear`,
+each step over both axes before the next. -/
+theorem validateBilinear_order (T : List (List α)) (a b : List α) :
+    (validateBilinear (Arg.const2 T) (Arg.const1 a) (Arg.const1 b)).map (fun _ => ()) =
+      if a.length < 2 ∨ b.length < 2 then .error "interp_axis_too_short"
+      else if T.length ≠ a.length ∨ ∃ row ∈ T, row.length ≠ b.length then
+        .error "interp_axis_length_mismatch"
+      else if (∃ x ∈ a, Scalar.nonFinite x = true) ∨ ∃ y ∈ b, Scalar.nonFinite y = true then
+        .error "interp_nan_in_axis"
+      else if adjAll Scalar.lt a = false ∨ adjAll Scalar.lt b = false then
+        .error "interp_non_monotonic_axis"
+      else .ok () := by
+  simp only [validateBilinear]
+  split_ifs <;> simp_all [Except.map, anyNonFinite, Codes.interpTooShort,
+    Codes.interpLengthMismatch, Codes.interpNaNInAxis, Codes.interpNonMonotonic]
+
+/-- Q-111: an empty table `[]` (rank 1) for `interp.bilinear` is
+`interp_table_not_const`, whatever the axes. -/
+theorem validateBilinear_empty_table (ax ay : Arg α) :
+    validateBilinear (Arg.const1 ([] : List α)) ax ay = .error "interp_table_not_const" := by
+  cases ax <;> cases ay <;> rfl
+
+end Order
 
 /-! ## The exact model: simp lemmas for `Num` -/
 
@@ -281,6 +342,9 @@ namespace Num
 @[simp] theorem isNaN_nan' : nan.isNaN = true := rfl
 
 end Num
+
+/-- `Num` has no infinities: its non-finite values are exactly NaN. -/
+theorem anyNonFinite_num (l : List Num) : anyNonFinite l = anyNaN l := rfl
 
 open Num in
 theorem getD_map_fin {a : List ℝ} {k : ℕ} (hk : k < a.length) :
@@ -1013,11 +1077,11 @@ theorem validateLinear_ok_iff (t ax : Arg Num) :
     cases t <;> cases ax <;> simp only [validateLinear, reduceCtorEq] at hv
     case const1.const1 t ax =>
       split_ifs at hv with h1 h2 h3 h4
-      obtain ⟨r, rfl⟩ := (anyNaN_false_iff ax).mp (by simpa using h3)
+      obtain ⟨r, rfl⟩ := (anyNaN_false_iff ax).mp (show anyNonFinite ax = false by simpa using h3)
       exact ⟨t, _, rfl, rfl, by simpa using h1, by simpa using h2, r, rfl,
         (adjAll_lt_iff r).mp (by simpa using h4)⟩
   · rintro ⟨t, _, rfl, rfl, h1, h2, r, rfl, hr⟩
-    have h3 : anyNaN (r.map Num.fin) = false := (anyNaN_false_iff _).mpr ⟨r, rfl⟩
+    have h3 : anyNonFinite (r.map Num.fin) = false := (anyNaN_false_iff _).mpr ⟨r, rfl⟩
     have h4 := (adjAll_lt_iff r).mpr hr
     refine ⟨(t, r.map Num.fin), ?_⟩
     have c1 : ¬ (r.map Num.fin).length < 2 := by omega
@@ -1071,7 +1135,7 @@ theorem validateLinear_code_sound (t ax : List Num) (c : Code)
   · exact Or.inl ⟨rfl, h1⟩
   · exact Or.inr (Or.inl ⟨rfl, h2⟩)
   · exact Or.inr (Or.inr (Or.inl ⟨rfl, (anyNaN_true_iff ax).mp h3⟩))
-  · obtain ⟨r, rfl⟩ := (anyNaN_false_iff ax).mp (by simpa using h3)
+  · obtain ⟨r, rfl⟩ := (anyNaN_false_iff ax).mp (show anyNonFinite ax = false by simpa using h3)
     refine Or.inr (Or.inr (Or.inr ⟨rfl, r, rfl, fun hr => ?_⟩))
     exact absurd ((adjAll_lt_iff r).mpr hr) (by simpa using h4)
 
@@ -1080,7 +1144,7 @@ theorem validateLinear_code_sound (t ax : List Num) (c : Code)
 theorem validateLinear_nan_precedence (t ax : List Num) (hlen : 2 ≤ ax.length)
     (heq : t.length = ax.length) (hn : ∃ x ∈ ax, x.isNaN = true) :
     validateLinear (Arg.const1 t) (Arg.const1 ax) = .error "interp_nan_in_axis" := by
-  have := (anyNaN_true_iff ax).mpr hn
+  have : anyNonFinite ax = true := (anyNaN_true_iff ax).mpr hn
   simp [validateLinear, this, heq, show ¬ ax.length < 2 by omega, Codes.interpNaNInAxis]
 
 /-- §9.2 argument contract for `interp.bilinear` (shape relation of
@@ -1104,8 +1168,8 @@ theorem validateBilinear_ok_iff (T : List (List Num)) (ax ay : List Num) :
     exact ⟨h1.1, h1.2, h2.1, h2.2, ⟨rx, rfl, (adjAll_lt_iff rx).mp h4.1⟩,
       ⟨ry, rfl, (adjAll_lt_iff ry).mp h4.2⟩⟩
   · rintro ⟨h1, h2, h3, h4, ⟨rx, rfl, hx⟩, ⟨ry, rfl, hy⟩⟩
-    have n1 : anyNaN (rx.map Num.fin) = false := (anyNaN_false_iff _).mpr ⟨rx, rfl⟩
-    have n2 : anyNaN (ry.map Num.fin) = false := (anyNaN_false_iff _).mpr ⟨ry, rfl⟩
+    have n1 : anyNonFinite (rx.map Num.fin) = false := (anyNaN_false_iff _).mpr ⟨rx, rfl⟩
+    have n2 : anyNonFinite (ry.map Num.fin) = false := (anyNaN_false_iff _).mpr ⟨ry, rfl⟩
     have m1 := (adjAll_lt_iff rx).mpr hx
     have m2 := (adjAll_lt_iff ry).mpr hy
     have c1 : (decide ((rx.map Num.fin).length < 2) || decide ((ry.map Num.fin).length < 2)) = false := by
@@ -1164,10 +1228,10 @@ theorem validateBilinear_nan_precedence (T : List (List Num)) (ax ay : List Num)
     (h4 : ∀ row ∈ T, row.length = ay.length)
     (hn : (∃ x ∈ ax, x.isNaN = true) ∨ ∃ y ∈ ay, y.isNaN = true) :
     validateBilinear (Arg.const2 T) (Arg.const1 ax) (Arg.const1 ay) = .error "interp_nan_in_axis" := by
-  have hn' : (anyNaN ax || anyNaN ay) = true := by
+  have hn' : (anyNonFinite ax || anyNonFinite ay) = true := by
     rcases hn with hn | hn
-    · simp [(anyNaN_true_iff ax).mpr hn]
-    · simp [(anyNaN_true_iff ay).mpr hn]
+    · simp [show anyNonFinite ax = true from (anyNaN_true_iff ax).mpr hn]
+    · simp [show anyNonFinite ay = true from (anyNaN_true_iff ay).mpr hn]
   have c1 : (decide (ax.length < 2) || decide (ay.length < 2)) = false := by
     simp only [Bool.or_eq_false_iff, decide_eq_false_iff_not, not_lt]; omega
   have c2 : (decide (T.length ≠ ax.length) ||

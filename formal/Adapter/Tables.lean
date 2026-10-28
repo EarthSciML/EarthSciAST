@@ -7,17 +7,18 @@ import Esm.Closed.Tables.Load
 
 For every case, builds the table IN MEMORY as an `RTable Float` — the strings
 `"NaN"`, `"Inf"` and `"-Inf"` are those binary64 values (ruling Q-109) — and
-runs the model's table check `Esm.Closed.Tables.validateRaw`, the generic
-definition the exact model's theorems are about (`validateRaw_eq`,
-`validateRaw_ladder`), instantiated at `Float`. Prints
+runs the case's `lookup` through the model's load-time lookup check
+`Esm.Closed.Tables.checkLookupRaw` (ruling Q-112): unknown table, then the ten
+table checks `validateRaw`, then `args`, axis keys, output (Q-107). Both are the
+generic definitions the exact model's theorems are about (`validateRaw_eq`,
+`validateRaw_ladder`, `checkLookupRaw_eq`), instantiated at `Float`. Prints
 
 ```json
 {"results": [{"name": "control_valid", "error": null},
              {"name": "axis_pos_inf", "error": "table_axis_nan"}]}
 ```
 
-The case's `lookup` is not run: every lookup in the ledger is well-formed, and
-the lookup order (Q-107) is the exact model's `lookup_check_order`. Exit status
+Exit status
 0 on a well-formed ledger, 2 on a usage or parse error. -/
 
 namespace Adapter.Tables
@@ -57,13 +58,31 @@ def tableOf (j : Json) : Except String (RTable Float) := do
   return { axes, interpolation := interp, outOfBounds := oob, outputs,
            data := ← nestedOf (← j.getObjVal? "data"), shape }
 
+def outputOf (j : Json) : Except String (Option OutSel) :=
+  match j with
+  | .null => .ok none
+  | .str s => .ok (some (.name s))
+  | .num n =>
+    if n.exponent == 0 && n.mantissa ≥ 0 then .ok (some (.idx n.mantissa.toNat))
+    else .error s!"bad output {j.compress}"
+  | _ => .error s!"bad output {j.compress}"
+
 def runLedger (j : Json) : Except String Json := do
   let cases ← (← j.getObjVal? "cases").getArr?
+  let tid := (j.getObjValAs? String "table_id").toOption.getD "T"
   let mut out : Array Json := #[]
   for c in cases do
     let name ← c.getObjValAs? String "name"
     let t ← tableOf (← c.getObjVal? "table")
-    let err : Json := match validateRaw t with
+    let lk ← c.getObjVal? "lookup"
+    let ref ← lk.getObjValAs? String "table"
+    let keys ← match lk.getObjValD "axes" with
+      | .obj kv => pure (kv.foldl (init := []) (fun acc k _ => acc ++ [k]))
+      | .null => pure []
+      | a => throw s!"bad lookup axes {a.compress}"
+    let nargs := ((lk.getObjValD "args").getArr?.toOption.getD #[]).size
+    let outSel ← outputOf (lk.getObjValD "output")
+    let err : Json := match checkLookupRaw [(tid, t)] ref keys outSel nargs with
       | .ok () => .null
       | .error code => .str code
     out := out.push (Json.mkObj [("name", name), ("error", err)])

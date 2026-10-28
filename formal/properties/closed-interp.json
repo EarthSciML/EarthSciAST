@@ -269,7 +269,9 @@
       "statement": "Q-4: when the shape checks pass, a NaN axis entry is interp_nan_in_axis, never interp_non_monotonic_axis.",
       "lean_statement": "∀ (t ax : List Esm.Closed.Num), (2 : ℕ) ≤ ax.length → t.length = ax.length → (∃ x ∈ ax, x.isNaN = Bool.true) → Esm.Closed.validateLinear (Esm.Closed.Arg.const1 t) (Esm.Closed.Arg.const1 ax) = Except.error \"interp_nan_in_axis\"",
       "status": "proven",
-      "theorem": "Esm.Closed.validateLinear_nan_precedence"
+      "theorem": "Esm.Closed.validateLinear_nan_precedence",
+      "retired": "Q-113",
+      "note": "Retired by ruling Q-113 (2026-10-27): the precedence now covers every non-finite axis entry (NaN, +Inf, -Inf), not only NaN. Still proven of Num, which has no infinities. Superseded by P-interp-linear-order."
     },
     {
       "id": "P-interp-bilinear-accept",
@@ -314,7 +316,9 @@
       "statement": "Q-4: a NaN in either axis is interp_nan_in_axis, even when the other axis is non-monotonic.",
       "lean_statement": "∀ (T : List (List Esm.Closed.Num)) (ax ay : List Esm.Closed.Num), (2 : ℕ) ≤ ax.length → (2 : ℕ) ≤ ay.length → T.length = ax.length → (∀ row ∈ T, row.length = ay.length) → ((∃ x ∈ ax, x.isNaN = Bool.true) ∨ ∃ y ∈ ay, y.isNaN = Bool.true) → Esm.Closed.validateBilinear (Esm.Closed.Arg.const2 T) (Esm.Closed.Arg.const1 ax) (Esm.Closed.Arg.const1 ay) = Except.error \"interp_nan_in_axis\"",
       "status": "proven",
-      "theorem": "Esm.Closed.validateBilinear_nan_precedence"
+      "theorem": "Esm.Closed.validateBilinear_nan_precedence",
+      "retired": "Q-113",
+      "note": "Retired by ruling Q-113 (2026-10-27): the precedence now covers every non-finite axis entry (NaN, +Inf, -Inf), not only NaN. Still proven of Num, which has no infinities. Superseded by P-interp-bilinear-order."
     },
     {
       "id": "P-interp-fma-blend-two-ulp",
@@ -596,6 +600,54 @@
       "lean_statement": "∃ (d : Esm.Closed.Tables.Doc) (e : Esm.Closed.Tables.Expr) (v : Esm.Closed.Tables.Val), d.exprs = [e] ∧ Esm.Closed.Tables.eval d.loaded (fun (_ : String) => Esm.Closed.Num.nan) e = Except.ok v ∧ Esm.Closed.Tables.loadCheck d = Except.error \"interp_table_not_const\"",
       "status": "proven",
       "theorem": "Esm.Closed.Tables.load_is_not_evaluation"
+    },
+    {
+      "id": "P-interp-linear-order",
+      "clauses": [
+        "spec.9.2.interp-check-order",
+        "spec.9.2.interp-axis-no-nan",
+        "spec.9.2.interp-nan-precedence"
+      ],
+      "statement": "Q-110 + Q-113, for every scalar type (exact Num, the adapter's Float): on const rank-1 arguments interp.linear reports the first of: axis too short, length mismatch, a non-finite axis entry (Scalar.nonFinite: NaN, or ±Inf where the type has them), axis not strictly increasing.",
+      "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] (t a : List α), Except.map (fun (_ : List α × List α) => ()) (Esm.Closed.validateLinear (Esm.Closed.Arg.const1 t) (Esm.Closed.Arg.const1 a)) = open Classical in (if a.length < 2 then Except.error \"interp_axis_too_short\" else if t.length ≠ a.length then Except.error \"interp_axis_length_mismatch\" else if ∃ x ∈ a, Esm.Closed.Scalar.nonFinite x = Bool.true then Except.error \"interp_nan_in_axis\" else if Esm.Closed.adjAll Esm.Closed.Scalar.lt a = Bool.false then Except.error \"interp_non_monotonic_axis\" else Except.ok ())",
+      "status": "proven",
+      "theorem": "Esm.Closed.validateLinear_order",
+      "supersedes": "P-interp-linear-nan-precedence (NaN only; Q-113)."
+    },
+    {
+      "id": "P-interp-bilinear-order",
+      "clauses": [
+        "spec.9.2.interp-check-order",
+        "spec.9.2.interp-axis-no-nan",
+        "spec.9.2.interp-nan-precedence"
+      ],
+      "statement": "Q-110 + Q-113, for every scalar type: on const arguments interp.bilinear reports the first of: an axis too short, a length mismatch (outer or any row), a non-finite entry in either axis, an axis not strictly increasing; each step over both axes.",
+      "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] (T : List (List α)) (a b : List α), Except.map (fun (_ : List (List α) × List α × List α) => ()) (Esm.Closed.validateBilinear (Esm.Closed.Arg.const2 T) (Esm.Closed.Arg.const1 a) (Esm.Closed.Arg.const1 b)) = open Classical in (if a.length < 2 ∨ b.length < 2 then Except.error \"interp_axis_too_short\" else if T.length ≠ a.length ∨ ∃ row ∈ T, row.length ≠ b.length then Except.error \"interp_axis_length_mismatch\" else if (∃ x ∈ a, Esm.Closed.Scalar.nonFinite x = Bool.true) ∨ ∃ y ∈ b, Esm.Closed.Scalar.nonFinite y = Bool.true then Except.error \"interp_nan_in_axis\" else if Esm.Closed.adjAll Esm.Closed.Scalar.lt a = Bool.false ∨ Esm.Closed.adjAll Esm.Closed.Scalar.lt b = Bool.false then Except.error \"interp_non_monotonic_axis\" else Except.ok ())",
+      "status": "proven",
+      "theorem": "Esm.Closed.validateBilinear_order",
+      "supersedes": "P-interp-bilinear-nan-precedence (NaN only; Q-113)."
+    },
+    {
+      "id": "P-interp-bilinear-empty-table",
+      "clauses": [
+        "spec.9.2.interp-const-finite-shape",
+        "spec.9.2.interp-check-order"
+      ],
+      "statement": "Q-111: an empty const array [] is rank 1, so as the table of interp.bilinear it is interp_table_not_const, whatever the axes.",
+      "lean_statement": "∀ (ax ay : Esm.Closed.Tables.Expr), Esm.Closed.validateBilinear (Esm.Closed.Tables.argOf (Esm.Closed.Tables.Expr.const (Esm.Closed.Tables.Nested.node []))) (Esm.Closed.Tables.argOf ax) (Esm.Closed.Tables.argOf ay) = Except.error \"interp_table_not_const\"",
+      "status": "proven",
+      "theorem": "Esm.Closed.Tables.bilinear_empty_table_expr"
+    },
+    {
+      "id": "P-interp-arity-first",
+      "clauses": [
+        "spec.9.2.interp-check-order",
+        "spec.9.2.interp-checks-at-load"
+      ],
+      "statement": "Q-110 + Q-112: the load check of an interp.searchsorted / interp.linear / interp.bilinear node with other than 2 / 3 / 5 arguments is closed_function_arity, whatever its arguments; with the right number it is the §9.2 argument check.",
+      "lean_statement": "∀ (tables : List (String × Esm.Closed.Tables.FTable)), Esm.Closed.Tables.interpArity \"interp.searchsorted\" = Option.some 2 ∧ Esm.Closed.Tables.interpArity \"interp.linear\" = Option.some 3 ∧ Esm.Closed.Tables.interpArity \"interp.bilinear\" = Option.some 5 ∧ ∀ (name : String) (args : List Esm.Closed.Tables.Expr) (n : ℕ), Esm.Closed.Tables.interpArity name = Option.some n → (args.length ≠ n → Esm.Closed.Tables.checkNode tables (Esm.Closed.Tables.Expr.fn name args) = Except.error \"closed_function_arity\") ∧ (args.length = n → Esm.Closed.Tables.checkNode tables (Esm.Closed.Tables.Expr.fn name args) = Esm.Closed.Tables.checkInterpArgs name args)",
+      "status": "proven",
+      "theorem": "Esm.Closed.Tables.interp_arity_first"
     }
   ]
 }
