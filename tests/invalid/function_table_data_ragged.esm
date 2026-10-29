@@ -1,0 +1,75 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "FunctionTable_data_ragged",
+    "description": "Table `T`'s second row of `data` has one value over a two-value axis `y` (step 8). No `table_lookup` references `T`.",
+    "authors": [
+      "EarthSciML"
+    ],
+    "created": "2026-10-27T00:00:00Z"
+  },
+  "function_tables": {
+    "T": {
+      "axes": [
+        {
+          "name": "x",
+          "values": [
+            0,
+            1
+          ]
+        },
+        {
+          "name": "y",
+          "values": [
+            0,
+            1
+          ]
+        }
+      ],
+      "interpolation": "bilinear",
+      "data": [
+        [
+          1,
+          2
+        ],
+        [
+          3
+        ]
+      ]
+    }
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "y": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        },
+        "x": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.5
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "y"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              -1.0,
+              "y"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

@@ -10,6 +10,7 @@ package esm
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 )
 
 // EnumLoweringError carries the spec-defined diagnostic codes for the
@@ -18,6 +19,7 @@ import (
 //   - unknown_enum         — `enum` op names an undeclared enum.
 //   - unknown_enum_symbol  — `enum` op names a symbol not declared under
 //     that enum.
+//   - enum_duplicate_value — two symbols of one enum map to the same integer.
 type EnumLoweringError struct {
 	Code    string
 	Message string
@@ -50,7 +52,44 @@ func newEnumLoweringError(code, msg string) *EnumLoweringError {
 // arguments are not two strings is left for LowerEnums, which owns the
 // malformed-op diagnostic.
 func lowerEnumOpsForFile(document map[string]any, target any, openNames map[string]bool) (any, error) {
-	return lowerRawEnumOps(target, rawEnumsBlock(document), openNames)
+	enums := rawEnumsBlock(document)
+	if err := checkEnumValuesUnique(enums); err != nil {
+		return nil, err
+	}
+	return lowerRawEnumOps(target, enums, openNames)
+}
+
+// checkEnumValuesUnique rejects an `enums` block in which two symbols of ONE
+// enum map to the same integer (esm-spec §9.3, CONFORMANCE_SPEC §5.26.5). The
+// check is on the block itself, before any `enum` op resolves, so a duplicate
+// no op names is rejected too; `0` is a value like any other. Values MAY
+// coincide across enums. Enums and symbols are visited in sorted order so the
+// diagnostic is deterministic.
+func checkEnumValuesUnique(enums map[string]map[string]int) error {
+	names := make([]string, 0, len(enums))
+	for name := range enums {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		members := enums[name]
+		syms := make([]string, 0, len(members))
+		for sym := range members {
+			syms = append(syms, sym)
+		}
+		sort.Strings(syms)
+		seen := make(map[int]string, len(syms))
+		for _, sym := range syms {
+			v := members[sym]
+			if prev, dup := seen[v]; dup {
+				return newEnumLoweringError(CodeEnumDuplicateValue, fmt.Sprintf(
+					"/enums/%s: symbols %q and %q both map to %d; values MUST be unique "+
+						"within one enum (esm-spec §9.3)", name, prev, sym, v))
+			}
+			seen[v] = sym
+		}
+	}
+	return nil
 }
 
 // rawEnumsBlock reads a raw document's `enums` block into its typed form.
@@ -84,6 +123,9 @@ func rawEnumsBlock(document map[string]any) map[string]map[string]int {
 // call site. Everything else is lowered with no open names.
 func lowerMountedDocumentEnums(document map[string]any) error {
 	enums := rawEnumsBlock(document)
+	if err := checkEnumValuesUnique(enums); err != nil {
+		return err
+	}
 	for k, v := range document {
 		lowered, err := lowerMountedEnumOps(k, v, enums)
 		if err != nil {
@@ -329,6 +371,9 @@ func LowerEnumsMut(file *ESMFile) error {
 	enums := file.Enums
 	if enums == nil {
 		enums = map[string]map[string]int{}
+	}
+	if err := checkEnumValuesUnique(enums); err != nil {
+		return err
 	}
 	// mapFileExprs enumerates the document's Expression-bearing positions once,
 	// for every lowering pass. Spelling that walk here is how an `enum` inside

@@ -500,6 +500,15 @@ func LoadString(jsonStr string, opts ...LoadOption) (*ESMFile, error) {
 		return nil, err
 	}
 
+	// esm-spec §9.2 / §9.5.5 (ruling Q-106): the closed-function argument
+	// checks on every interp.* `fn` node and the ten table checks on every
+	// `function_tables` entry run HERE, on the document as loaded — templates
+	// applied, enums lowered — whether or not anything evaluates the node or
+	// references the table. A document that fails one does not load.
+	if err := checkFunctionsAtLoad(&esmFile); err != nil {
+		return nil, err
+	}
+
 	// According to spec Section 2.1a: load() should succeed for valid JSON that
 	// passes schema validation but fails structural validation. Structural issues
 	// should only be reported by the separate validate() function.

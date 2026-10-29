@@ -17,6 +17,8 @@
  */
 import { describe, it, expect } from 'vitest'
 import { evaluateExpression } from './codegen.js'
+import { dispatchClosedFunction } from './closed-functions.js'
+import { getOpInfo } from './op-registry.js'
 import { deepEqualExpr } from './expression.js'
 import { ERROR_CODES } from './errors.js'
 import {
@@ -163,6 +165,22 @@ describe('out_of_bounds_error fixture: `error` mode is refused, not clamped (esm
     ).toBe(ERROR_CODES.TABLE_OUT_OF_BOUNDS_UNSUPPORTED)
   })
 
+  it("checks the lookup's own fields before refusing `error` mode (esm-spec §9.5.5, ruling Q-107)", () => {
+    const block = tables({
+      T: { axes: [{ name: 'x', values: [0, 1] }], data: [1, 2], out_of_bounds: 'error' },
+    })
+    const lookup = (fields: object) => ({ op: 'table_lookup', table: 'T', ...fields }) as Expr
+    expect(loweringErrorCode(() => lowerTableLookups(lookup({ axes: { y: 0.5 } }), block))).toBe(
+      ERROR_CODES.TABLE_LOOKUP_AXIS_NAME_MISMATCH,
+    )
+    expect(
+      loweringErrorCode(() => lowerTableLookups(lookup({ axes: { x: 0.5 }, output: 3 }), block)),
+    ).toBe(ERROR_CODES.TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE)
+    expect(loweringErrorCode(() => lowerTableLookups(lookup({ axes: { x: 0.5 } }), block))).toBe(
+      ERROR_CODES.TABLE_OUT_OF_BOUNDS_UNSUPPORTED,
+    )
+  })
+
   it('still round-trips the refused document verbatim (§9.5.4)', () => {
     const file = fixture('out_of_bounds_error')
     const reloaded = JSON.parse(toJson(file)) as {
@@ -198,31 +216,6 @@ describe('the §9.5.3 lowered form', () => {
     const data = dataOf(tablesOf(file)!.F_actinic)
     expect(constValue(byName.args[0])).toEqual(data[0])
     expect(constValue(byIndex.args[0])).toEqual(data[1])
-  })
-
-  it('lowers a `nearest` table to `index` over `interp.searchsorted`', () => {
-    const block = tables({
-      t: {
-        axes: [{ name: 'p', values: [1, 2, 3] }],
-        interpolation: 'nearest',
-        data: [10, 20, 30],
-      },
-    })
-    const lowered = lowerTableLookups(
-      { op: 'table_lookup', table: 't', axes: { p: 'p_in' }, args: [] },
-      block,
-    )
-    expect(lowered).toEqual({
-      op: 'index',
-      args: [
-        { op: 'const', args: [], value: [10, 20, 30] },
-        {
-          op: 'fn',
-          name: 'interp.searchsorted',
-          args: ['p_in', { op: 'const', args: [], value: [1, 2, 3] }],
-        },
-      ],
-    })
   })
 
   it('lowers BOTTOM-UP, so a table_lookup nested in an axis input is lowered too', () => {
@@ -292,10 +285,16 @@ describe('§9.5.5 diagnostics', () => {
     ).toBe(ERROR_CODES.TABLE_LOOKUP_AXIS_NAME_MISMATCH)
   })
 
-  it('names positional `args` on a table_lookup `table_lookup_axis_name_mismatch`', () => {
+  it('names positional `args` on a table_lookup `table_lookup_args_nonempty`', () => {
     expect(loweringErrorCode(() => lowerTableLookups(lookup({ args: ['p_in'] }), block))).toBe(
-      ERROR_CODES.TABLE_LOOKUP_AXIS_NAME_MISMATCH,
+      ERROR_CODES.TABLE_LOOKUP_ARGS_NONEMPTY,
     )
+  })
+
+  it('reads an absent `args` as `[]` (esm-spec §9.5.2)', () => {
+    const node = { op: 'table_lookup', table: 't', axes: { p: 'p_in' } } as unknown as Expr
+    const withArgs = lowerTableLookups(lookup(), block)
+    expect(lowerTableLookups(node, block)).toEqual(withArgs)
   })
 
   it('names an out-of-range output index `table_lookup_output_out_of_range`', () => {
@@ -317,6 +316,29 @@ describe('§9.5.5 diagnostics', () => {
     )
   })
 
+  it.each(['a', '0'])('rejects any string output (%s) on a single-output table', (name) => {
+    const single = tables({ t: { axes: [{ name: 'p', values: [1, 2] }], data: [10, 20] } })
+    expect(loweringErrorCode(() => lowerTableLookups(lookup({ output: name }), single))).toBe(
+      ERROR_CODES.TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE,
+    )
+  })
+
+  it.each([undefined, 0])(
+    'lowers a single-output table with the WHOLE `data` for output %s (esm-spec §9.5.3)',
+    (output) => {
+      const single = tables({ t: { axes: [{ name: 'p', values: [1, 2] }], data: [10, 20] } })
+      const node = nodeOf(lowerTableLookups(lookup(output === undefined ? {} : { output }), single))
+      expect(constValue(node.args[0])).toEqual([10, 20])
+    },
+  )
+
+  it('reads an omitted output on a multi-output table as output 0', () => {
+    const omitted = nodeOf(lowerTableLookups(lookup(), block))
+    const zero = nodeOf(lowerTableLookups(lookup({ output: 0 }), block))
+    expect(constValue(omitted.args[0])).toEqual([10, 20, 30, 40])
+    expect(omitted).toEqual(zero)
+  })
+
   it('names an interpolation/axis-count disagreement `table_interpolation_axes_mismatch`', () => {
     const oneAxisBilinear = tables({
       t: { axes: [{ name: 'p', values: [1, 2] }], interpolation: 'bilinear', data: [10, 20] },
@@ -326,14 +348,76 @@ describe('§9.5.5 diagnostics', () => {
     )
   })
 
-  it('names a `data` block with no row for the selected output `table_data_shape_mismatch`', () => {
-    const short = tables({
-      t: { axes: [{ name: 'p', values: [1, 2] }], outputs: ['a', 'b'], data: [[10, 20]] },
+  // esm-spec §9.5.5: the table is checked before the lookup, so even output
+  // `a` (whose row exists) is refused, and `outputs` vs the leading dimension
+  // of `data` is its own code.
+  it.each(['a', 'b'])(
+    'names a `data` block shorter than `outputs` `table_outputs_length_mismatch` (output %s)',
+    (output) => {
+      const short = tables({
+        t: { axes: [{ name: 'p', values: [1, 2] }], outputs: ['a', 'b'], data: [[10, 20]] },
+      })
+      expect(loweringErrorCode(() => lowerTableLookups(lookup({ output }), short))).toBe(
+        ERROR_CODES.TABLE_OUTPUTS_LENGTH_MISMATCH,
+      )
+    },
+  )
+
+  it('checks the table before the lookup: a broken table beats a misspelled axis key', () => {
+    const bad = tables({ t: { axes: [{ name: 'p', values: [2, 1] }], data: [10, 20] } })
+    expect(loweringErrorCode(() => lowerTableLookups(lookup({ axes: { q: 1 } }), bad))).toBe(
+      ERROR_CODES.TABLE_AXIS_NON_MONOTONIC,
+    )
+  })
+
+  it('checks the table before refusing `out_of_bounds: "error"`', () => {
+    const bad = tables({
+      t: { axes: [{ name: 'p', values: [1, 2] }], out_of_bounds: 'error', data: [10, 20, 30] },
     })
-    expect(loweringErrorCode(() => lowerTableLookups(lookup({ output: 'b' }), short))).toBe(
+    expect(loweringErrorCode(() => lowerTableLookups(lookup(), bad))).toBe(
       ERROR_CODES.TABLE_DATA_SHAPE_MISMATCH,
     )
   })
+
+  it.each([Infinity, -Infinity, NaN])(
+    'names a non-finite `data` leaf (%s) `table_data_nan`',
+    (v) => {
+      const bad = tables({ t: { axes: [{ name: 'p', values: [1, 2] }], data: [10, v] } })
+      expect(loweringErrorCode(() => lowerTableLookups(lookup(), bad))).toBe(
+        ERROR_CODES.TABLE_DATA_NAN,
+      )
+    },
+  )
+
+  it('names a non-numeric `data` leaf `table_data_shape_mismatch`', () => {
+    const bad = tables({ t: { axes: [{ name: 'p', values: [1, 2] }], data: [10, 'x'] } })
+    expect(loweringErrorCode(() => lowerTableLookups(lookup(), bad))).toBe(
+      ERROR_CODES.TABLE_DATA_SHAPE_MISMATCH,
+    )
+  })
+
+  it('names a non-increasing axis `table_axis_non_monotonic`', () => {
+    for (const values of [
+      [1, 1, 2],
+      [3, 1, 2],
+    ]) {
+      const bad = tables({ t: { axes: [{ name: 'p', values }], data: [10, 20, 30] } })
+      expect(loweringErrorCode(() => lowerTableLookups(lookup(), bad))).toBe(
+        ERROR_CODES.TABLE_AXIS_NON_MONOTONIC,
+      )
+    }
+  })
+
+  // §9.5.5: NaN takes precedence over non-monotonic, wherever the NaN sits.
+  it.each([[[3, 1, NaN]], [[NaN, 1, 2]]])(
+    'names an axis %j `table_axis_nan`, not `table_axis_non_monotonic`',
+    (values) => {
+      const bad = tables({ t: { axes: [{ name: 'p', values }], data: [10, 20, 30] } })
+      expect(loweringErrorCode(() => lowerTableLookups(lookup(), bad))).toBe(
+        ERROR_CODES.TABLE_AXIS_NAN,
+      )
+    },
+  )
 
   it('names a NaN axis knot `table_axis_nan`', () => {
     const nan = tables({ t: { axes: [{ name: 'p', values: [1, NaN] }], data: [10, 20] } })
@@ -350,6 +434,111 @@ describe('§9.5.5 diagnostics', () => {
     expect(loweringErrorCode(() => lowerTableLookups(lookup(), inf))).toBe(
       ERROR_CODES.TABLE_AXIS_NAN,
     )
+  })
+})
+
+describe('lookup_defaults fixture: omitted `output` is 0, single-output lowers the whole `data`', () => {
+  const file = fixture('lookup_defaults')
+  const model = modelOf(file, 'LookupDefaults')
+  const testCase = model.tests![0]
+  const bindings = bindingsFor(model, testCase.parameter_overrides ?? {})
+  for (const assertion of testCase.assertions as Array<{ variable: string; expected: number }>) {
+    it(`evaluates observed \`${assertion.variable}\` to ${assertion.expected}`, () => {
+      const actual = evaluateExpression(definitionOf(model, assertion.variable), bindings, {
+        functionTables: tablesOf(file),
+      })
+      expect(actual).toBe(assertion.expected)
+    })
+  }
+})
+
+/**
+ * Evaluate a lowered `nearest` tree. The production scalar evaluator refuses
+ * `index` (an array op), so this adds the one rule it lacks — `index` of a
+ * `const` array at a 1-based scalar position — and takes every other op from
+ * the same op registry and closed-function dispatch `evaluateExpression` uses.
+ */
+function evalLowered(expr: Expr, bindings: Map<string, number>): number {
+  if (typeof expr === 'number') return expr
+  if (typeof expr === 'string') {
+    const v = bindings.get(expr)
+    if (v === undefined) throw new Error(`unbound ${expr}`)
+    return v
+  }
+  const node = nodeOf(expr)
+  const constArray = (e: Expr): number[] | null => {
+    const n = nodeOf(e)
+    return n.op === 'const' && Array.isArray(n.value) ? (n.value as number[]) : null
+  }
+  if (node.op === 'index') {
+    const array = constArray(node.args[0])!
+    const k = evalLowered(node.args[1], bindings)
+    if (!Number.isInteger(k) || k < 1 || k > array.length) {
+      throw new Error(`index ${k} out of 1..${array.length}`)
+    }
+    return array[k - 1]!
+  }
+  if (node.op === 'ifelse') {
+    return evalLowered(node.args[0], bindings) !== 0
+      ? evalLowered(node.args[1], bindings)
+      : evalLowered(node.args[2], bindings)
+  }
+  if (node.op === 'fn') {
+    const args = node.args.map((a): unknown => constArray(a) ?? evalLowered(a, bindings))
+    return dispatchClosedFunction(node.name as string, args)
+  }
+  return getOpInfo(node.op)!.evaluate!(node.args.map((a) => evalLowered(a, bindings)))
+}
+
+describe('nearest fixture: the §9.5.3 nearest-knot composition (Q-13)', () => {
+  const file = fixture('nearest')
+  const model = modelOf(file, 'NearestLookup')
+  const testCase = model.tests![0]
+  const bindings = bindingsFor(model, testCase.parameter_overrides ?? {})
+
+  it('lowers `n_tie_2_4` to exactly the hand-spelled tree of `n_tie_2_4_hand`', () => {
+    const lowered = lowerTableLookups(definitionOf(model, 'n_tie_2_4'), tablesOf(file))
+    expect(lowered).toEqual(definitionOf(model, 'n_tie_2_4_hand'))
+  })
+
+  for (const assertion of testCase.assertions as Array<{ variable: string; expected: number }>) {
+    it(`evaluates the lowered \`${assertion.variable}\` to ${assertion.expected}`, () => {
+      const lowered = lowerTableLookups(definitionOf(model, assertion.variable), tablesOf(file))
+      expect(evalLowered(lowered, bindings)).toBe(assertion.expected)
+    })
+  }
+
+  it('returns NaN for a NaN query', () => {
+    const lowered = lowerTableLookups(definitionOf(model, 'n_knot'), tablesOf(file))
+    expect(evalLowered(lowered, new Map([['q_knot', NaN]]))).toBeNaN()
+  })
+
+  it('is refused by the scalar evaluator as `unevaluable_operator` (it has no `index` rule)', () => {
+    let code = 'NO_ERROR'
+    try {
+      evaluateExpression(definitionOf(model, 'n_knot'), bindings, {
+        functionTables: tablesOf(file),
+      })
+    } catch (e) {
+      code = (e as { code?: string }).code ?? 'NO_CODE'
+    }
+    expect(code).toBe(ERROR_CODES.UNEVALUABLE_OPERATOR)
+  })
+
+  it('still refuses `out_of_bounds: "error"` with `table_out_of_bounds_unsupported`', () => {
+    const strict = tables({
+      t: {
+        axes: [{ name: 'p', values: [1, 2] }],
+        interpolation: 'nearest',
+        out_of_bounds: 'error',
+        data: [10, 20],
+      },
+    })
+    expect(
+      loweringErrorCode(() =>
+        lowerTableLookups({ op: 'table_lookup', table: 't', axes: { p: 'x' }, args: [] }, strict),
+      ),
+    ).toBe(ERROR_CODES.TABLE_OUT_OF_BOUNDS_UNSUPPORTED)
   })
 })
 

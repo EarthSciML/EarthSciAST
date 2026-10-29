@@ -334,11 +334,13 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
     // reserved binders, which are then not walked for again.
     let mut reserved = ReservedIndexScan::new(&json_value);
     let mut has_enum_ops = false;
+    let mut has_checked_node = false;
     let (has_templates, scanned_whole) =
         crate::lower_expression_templates::lower_expression_templates_visiting(
             &mut json_value,
             &mut |path, value| {
                 has_enum_ops |= crate::lower_enums::is_enum_node(value);
+                has_checked_node |= crate::load_checks::is_load_checked_node(value);
                 reserved.visit(path, value);
             },
         )
@@ -379,6 +381,24 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
         None => reject_reserved_index_symbols(&json_value),
     }
     .map_err(|e| EsmError::StructuralValidation(e.to_string()))?;
+
+    // esm-spec §9.5.5 and §9.2 "When the … checks run" (rulings Q-106, Q-112,
+    // Q-113): the ten table checks on EVERY `function_tables` entry, referenced
+    // or not, and only then the argument checks on every `interp.*` `fn` node
+    // and the lookup checks on every `table_lookup` node, wherever they appear.
+    // HERE, on the fully rewritten form, so a node a template expansion
+    // produced is checked with the arguments the application gave it. Raised
+    // as a `[code]`-prefixed structural error, as the reserved-index-symbol
+    // check above is: the document is schema-valid, and `validate_text`
+    // reports it invalid with the code among its structural errors. The template scan above
+    // already saw the whole document when it carried no template machinery,
+    // so a document it found no such node in is not walked again.
+    let tables = crate::load_checks::check_raw_function_tables(&json_value)
+        .map_err(|f| EsmError::StructuralValidation(f.to_string()))?;
+    if has_checked_node || !scanned_whole {
+        crate::load_checks::check_raw_expression_nodes(&json_value, &tables)
+            .map_err(|f| EsmError::StructuralValidation(f.to_string()))?;
+    }
 
     // Deserialize into our types. The interning scope makes every
     // structurally repeated operator subtree share ONE allocation as it is

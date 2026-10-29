@@ -1,0 +1,79 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "FunctionTable_lookup_unevaluated_branch",
+    "description": "The bad `table_lookup` (unknown table `U`) sits in the untaken branch of an `ifelse` whose condition is the constant comparison 1 < 0. Load checks every node, evaluated or not.",
+    "authors": [
+      "EarthSciML"
+    ],
+    "created": "2026-10-27T00:00:00Z"
+  },
+  "function_tables": {
+    "T": {
+      "axes": [
+        {
+          "name": "x",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "interpolation": "linear",
+      "data": [
+        10,
+        20,
+        30
+      ]
+    }
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "y": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        },
+        "x": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.5
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "y"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "ifelse",
+            "args": [
+              {
+                "op": "<",
+                "args": [
+                  1.0,
+                  0.0
+                ]
+              },
+              {
+                "op": "table_lookup",
+                "table": "U",
+                "axes": {
+                  "x": "x"
+                },
+                "args": []
+              },
+              0.0
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,476 @@
+{
+  "properties": [
+    {
+      "id": "P-units-axes-exactly-eight",
+      "clauses": [
+        "spec.4.8.1.eight-axes-fixed"
+      ],
+      "statement": "A dimension is a rational vector over exactly the eight axes m, kg, s, mol, K, A, cd, rad: every axis is one of them, there are eight, and they are distinct.",
+      "lean_statement": "(∀ a : Esm.Units.Axis, a ∈ Esm.Units.Axis.all) ∧ Esm.Units.Axis.all.length = 8 ∧ Esm.Units.Axis.all.Nodup",
+      "status": "proven",
+      "theorem": "Esm.Units.Axis.exactly_eight"
+    },
+    {
+      "id": "P-units-table-flat",
+      "clauses": [
+        "spec.4.8.1.no-si-prefix-mechanism",
+        "spec.4.8.1.units-library-constrained"
+      ],
+      "statement": "The table is flat and there is no SI-prefix mechanism: a single run of identifier characters starting with a letter resolves iff it is a §4.8.1 key exactly as spelled (so nothing composes a prefix with a key and nothing splits a run).",
+      "lean_statement": "∀ a : List Char, Esm.Units.IdentRun a → ((∃ u, Esm.Units.resolveChars a = .ok u) ↔ String.ofList a ∈ Esm.Units.keys)",
+      "status": "proven",
+      "theorem": "Esm.Units.resolve_ident_run"
+    },
+    {
+      "id": "P-units-lookup-flat",
+      "clauses": [
+        "spec.4.8.1.no-si-prefix-mechanism"
+      ],
+      "statement": "Symbol lookup is exact: a symbol has a table entry iff it is a key exactly as spelled.",
+      "lean_statement": "∀ s : String, (Esm.Units.lookup s).isSome ↔ s ∈ Esm.Units.keys",
+      "status": "proven",
+      "theorem": "Esm.Units.lookup_isSome_iff"
+    },
+    {
+      "id": "P-units-exclusions",
+      "clauses": [
+        "spec.4.8.1.no-si-prefix-mechanism",
+        "spec.4.8.4.unresolvable-unit-hard-error"
+      ],
+      "statement": "The exclusions §4.8.1 lists (ton, t, d, in, yd, foot, feet, mile, miles, mph, …) and prefixed spellings absent from the table (kmolec, nppb, Tm, dam, dg, PW, fs, cm3, s2) do not resolve.",
+      "lean_statement": "∀ s ∈ [\"ton\", \"t\", \"d\", \"in\", \"yd\", \"foot\", \"feet\", \"mile\", \"miles\", \"mph\", \"tons\", \"metric_ton\", \"short_tons\", \"gallon\", \"pound\", \"kmolec\", \"nppb\", \"Tm\", \"dam\", \"dg\", \"PW\", \"fs\", \"cm3\", \"s2\"], ¬ Esm.Units.Resolves s",
+      "status": "proven",
+      "theorem": "Esm.Units.exclusions_do_not_resolve"
+    },
+    {
+      "id": "P-units-dimensionless-entries",
+      "clauses": [
+        "spec.4.8.1.eight-axes-fixed"
+      ],
+      "statement": "The mixing ratios, fractions, counts and dimensionless spellings carry no dimension (counts are not mol and not cd).",
+      "lean_statement": "∀ k ∈ [\"ppm\", \"ppb\", \"ppt\", \"ppmv\", \"ppbv\", \"pptv\", \"%\", \"percent\", \"psu\", \"molec\", \"molecule\", \"individuals\", \"vehicles\", \"units\", \"count\", \"\", \"1\", \"dimensionless\"], (Esm.Units.sym k).dim = 0",
+      "status": "proven",
+      "theorem": "Esm.Units.dimensionless_entries"
+    },
+    {
+      "id": "P-units-percent-and-counts",
+      "clauses": [
+        "spec.4.8.1.eight-axes-fixed"
+      ],
+      "statement": "`%` and `percent` are dimensionless at scale exactly 0.01; the counts and `psu` are dimensionless at scale 1.",
+      "lean_statement": "(Esm.Units.sym \"%\").Agree (Esm.Units.num 0.01) ∧ (Esm.Units.sym \"percent\").Agree (Esm.Units.num 0.01) ∧ ∀ k ∈ [\"molec\", \"molecule\", \"individuals\", \"vehicles\", \"units\", \"count\", \"psu\"], (Esm.Units.sym k).Agree Esm.Units.U.one",
+      "status": "proven",
+      "theorem": "Esm.Units.percent_and_counts"
+    },
+    {
+      "id": "P-units-C-coulomb",
+      "clauses": [
+        "spec.4.8.1.eight-axes-fixed"
+      ],
+      "statement": "`C` is the coulomb A·s, with no temperature component.",
+      "lean_statement": "(Esm.Units.sym \"C\").Agree ((Esm.Units.sym \"A\").mul (Esm.Units.sym \"s\")) ∧ (Esm.Units.sym \"C\").dim .K = 0",
+      "status": "proven",
+      "theorem": "Esm.Units.C_is_coulomb",
+      "closed_ok": "the spec states this identity about named table entries; it is a fixed fact of the registry, checked exactly"
+    },
+    {
+      "id": "P-units-abelian-group",
+      "clauses": [
+        "spec.4.8.1.scale-agreement-exact"
+      ],
+      "statement": "Units under multiplication form an abelian group up to agreement (equal dimension and equal exact scale), and agreement is a congruence for multiplication.",
+      "lean_statement": "(∀ u v w : Esm.Units.U, ((u.mul v).mul w).Agree (u.mul (v.mul w))) ∧ (∀ u v : Esm.Units.U, (u.mul v).Agree (v.mul u)) ∧ (∀ u : Esm.Units.U, (Esm.Units.U.one.mul u).Agree u) ∧ (∀ u : Esm.Units.U, (u.mul u.inv).Agree Esm.Units.U.one) ∧ (∀ u u' v v' : Esm.Units.U, u.Agree u' → v.Agree v' → (u.mul v).Agree (u'.mul v'))",
+      "status": "proven",
+      "theorem": "Esm.Units.U.abelian_group"
+    },
+    {
+      "id": "P-units-rpow-laws",
+      "clauses": [
+        "spec.4.8.1.scale-agreement-exact"
+      ],
+      "statement": "Rational powers obey the exponent laws exactly: (u^a)^b = u^(ba), u^(a+b) = u^a·u^b, (uv)^q = u^q v^q, u^1 = u, u^0 = 1, and agreement is a congruence for powers.",
+      "lean_statement": "(∀ (u : Esm.Units.U) (a b : ℚ), ((u.rpow a).rpow b).Agree (u.rpow (b * a))) ∧ (∀ (u : Esm.Units.U) (a b : ℚ), (u.rpow (a + b)).Agree ((u.rpow a).mul (u.rpow b))) ∧ (∀ (u v : Esm.Units.U) (q : ℚ), ((u.mul v).rpow q).Agree ((u.rpow q).mul (v.rpow q))) ∧ (∀ u : Esm.Units.U, (u.rpow 1).Agree u) ∧ (∀ u : Esm.Units.U, (u.rpow 0).Agree Esm.Units.U.one) ∧ (∀ (u u' : Esm.Units.U) (q : ℚ), u.Agree u' → (u.rpow q).Agree (u'.rpow q))",
+      "status": "proven",
+      "theorem": "Esm.Units.U.rpow_laws"
+    },
+    {
+      "id": "P-units-scale-real-hom",
+      "clauses": [
+        "spec.4.8.1.scale-agreement-exact"
+      ],
+      "statement": "The real value of an exact scale is positive, multiplicative, sends rational powers to real powers, and is equal on agreeing units: composing exact scales is exact.",
+      "lean_statement": "(∀ s : Esm.Units.Scale, 0 < Esm.Units.Scale.real s) ∧ (∀ s t : Esm.Units.Scale, Esm.Units.Scale.real (s ++ t) = Esm.Units.Scale.real s * Esm.Units.Scale.real t) ∧ (∀ (s : Esm.Units.Scale) (q : ℚ), Esm.Units.Scale.real (Esm.Units.Scale.rpow s q) = Esm.Units.Scale.real s ^ (q : ℝ)) ∧ (∀ u v : Esm.Units.U, u.Agree v → Esm.Units.Scale.real u.scale = Esm.Units.Scale.real v.scale)",
+      "status": "proven",
+      "theorem": "Esm.Units.U.real_hom"
+    },
+    {
+      "id": "P-units-ofRat-faithful",
+      "clauses": [
+        "spec.4.8.1.scale-agreement-exact"
+      ],
+      "statement": "The exact (prime-factor) scale of a positive rational determines it: two positive rationals have the same exact scale iff they are equal.",
+      "lean_statement": "∀ (q r : ℚ), 0 < q → 0 < r → (Esm.Units.Scale.exp (Esm.Units.Scale.ofRat q) = Esm.Units.Scale.exp (Esm.Units.Scale.ofRat r) ↔ q = r)",
+      "status": "proven",
+      "theorem": "Esm.Units.Scale.exp_ofRat_inj"
+    },
+    {
+      "id": "P-units-ofRat-mul",
+      "clauses": [
+        "spec.4.8.1.scale-agreement-exact"
+      ],
+      "statement": "Multiplying nonzero rationals adds their exact scales.",
+      "lean_statement": "∀ (q r : ℚ), q ≠ 0 → r ≠ 0 → Esm.Units.Scale.exp (Esm.Units.Scale.ofRat (q * r)) = Esm.Units.Scale.exp (Esm.Units.Scale.ofRat q ++ Esm.Units.Scale.ofRat r)",
+      "status": "proven",
+      "theorem": "Esm.Units.Scale.exp_ofRat_mul"
+    },
+    {
+      "id": "P-units-ofRat-real",
+      "clauses": [
+        "spec.4.8.1.scale-agreement-exact"
+      ],
+      "statement": "The exact scale of a positive rational q denotes q.",
+      "lean_statement": "∀ (q : ℚ), 0 < q → Esm.Units.Scale.real (Esm.Units.Scale.ofRat q) = (q : ℝ)",
+      "status": "proven",
+      "theorem": "Esm.Units.Scale.real_ofRat"
+    },
+    {
+      "id": "P-units-mi-5280-ft",
+      "clauses": [
+        "spec.4.8.1.customary-scales-pinned"
+      ],
+      "statement": "mi is exactly 5280 × ft.",
+      "lean_statement": "(Esm.Units.sym \"mi\").Agree ((Esm.Units.num 5280).mul (Esm.Units.sym \"ft\"))",
+      "status": "proven",
+      "theorem": "Esm.Units.mi_eq_5280_ft",
+      "closed_ok": "the spec states this identity about named table entries; it is a fixed fact of the registry, checked exactly"
+    },
+    {
+      "id": "P-units-mi-factorization",
+      "clauses": [
+        "spec.4.8.1.customary-scales-pinned",
+        "spec.4.8.1.scale-agreement-exact"
+      ],
+      "statement": "The exact scale of mi is 2⁴·3²·5⁻³·11·127 (m), the factorization the spec writes out.",
+      "lean_statement": "(Esm.Units.sym \"mi\").scale.exp = Esm.Units.Scale.exp [(.prime ⟨2, Nat.prime_two⟩, 4), (.prime ⟨3, Nat.prime_three⟩, 2), (.prime ⟨5, Nat.prime_five⟩, -3), (.prime ⟨11, by norm_num⟩, 1), (.prime ⟨127, by norm_num⟩, 1)]",
+      "status": "proven",
+      "theorem": "Esm.Units.mi_factorization",
+      "closed_ok": "the spec states this identity about named table entries; it is a fixed fact of the registry, checked exactly"
+    },
+    {
+      "id": "P-units-lb-short-ton",
+      "clauses": [
+        "spec.4.8.1.customary-scales-pinned"
+      ],
+      "statement": "lb is exactly short_ton / 2000.",
+      "lean_statement": "(Esm.Units.sym \"lb\").Agree ((Esm.Units.sym \"short_ton\").div (Esm.Units.num 2000))",
+      "status": "proven",
+      "theorem": "Esm.Units.lb_eq_short_ton_div_2000",
+      "closed_ok": "the spec states this identity about named table entries; it is a fixed fact of the registry, checked exactly"
+    },
+    {
+      "id": "P-units-short-ton-inmap",
+      "clauses": [
+        "spec.4.8.1.customary-scales-pinned"
+      ],
+      "statement": "short_ton is exactly 907184740000 ug (InMAP's conversion constant).",
+      "lean_statement": "(Esm.Units.sym \"short_ton\").Agree ((Esm.Units.num 907184740000).mul (Esm.Units.sym \"ug\"))",
+      "status": "proven",
+      "theorem": "Esm.Units.short_ton_eq_ug",
+      "closed_ok": "the spec states this identity about named table entries; it is a fixed fact of the registry, checked exactly"
+    },
+    {
+      "id": "P-units-torr-atm",
+      "clauses": [
+        "spec.4.8.1.customary-scales-pinned"
+      ],
+      "statement": "The table's Torr (stated by the spec as 101325/760 Pa, and built from it) equals atm / 760 given atm = 101325 Pa, and equals 20265/152 Pa. This confirms only consistency with the atm entry. (Reworded after the hollow-proof review of 2026-10-26.)",
+      "lean_statement": "(Esm.Units.sym \"Torr\").Agree ((Esm.Units.sym \"atm\").div (Esm.Units.num 760)) ∧ (Esm.Units.sym \"Torr\").Agree (Esm.Units.mk Esm.Units.Dims.pressure (20265 / 152))",
+      "status": "proven",
+      "theorem": "Esm.Units.torr_eq_atm_div_760",
+      "closed_ok": "the spec states this identity about named table entries; it is a fixed fact of the registry, checked exactly"
+    },
+    {
+      "id": "P-units-torr-ne-mmHg",
+      "clauses": [
+        "spec.4.8.1.customary-scales-pinned",
+        "spec.4.8.1.scale-agreement-exact"
+      ],
+      "statement": "Torr is NOT mmHg: same dimension, different exact scale.",
+      "lean_statement": "¬ (Esm.Units.sym \"Torr\").Agree (Esm.Units.sym \"mmHg\")",
+      "status": "proven",
+      "theorem": "Esm.Units.torr_ne_mmHg",
+      "closed_ok": "the spec states this identity about named table entries; it is a fixed fact of the registry, checked exactly"
+    },
+    {
+      "id": "P-units-inHg-mmHg",
+      "clauses": [
+        "spec.4.8.1.customary-scales-pinned"
+      ],
+      "statement": "inHg is exactly 25.4 × mmHg.",
+      "lean_statement": "(Esm.Units.sym \"inHg\").Agree ((Esm.Units.num 25.4).mul (Esm.Units.sym \"mmHg\"))",
+      "status": "proven",
+      "theorem": "Esm.Units.inHg_eq_25_4_mmHg",
+      "closed_ok": "the spec states this identity about named table entries; it is a fixed fact of the registry, checked exactly"
+    },
+    {
+      "id": "P-units-psi",
+      "clauses": [
+        "spec.4.8.1.customary-scales-pinned"
+      ],
+      "statement": "The table's psi equals the spec's stated product lb × 9.80665 m s⁻² / (0.0254 m)² exactly, given lb = 0.45359237 kg. The psi entry is itself built from that product, so this confirms only consistency with the lb entry. (Reworded after the hollow-proof review of 2026-10-26.)",
+      "lean_statement": "(Esm.Units.sym \"psi\").Agree ((((Esm.Units.num 9.80665).mul (Esm.Units.sym \"lb\")).mul ((Esm.Units.sym \"m\").mul ((Esm.Units.sym \"s\").rpow (-2)))).div (((Esm.Units.num 0.0254).mul (Esm.Units.sym \"m\")).rpow 2))",
+      "status": "proven",
+      "theorem": "Esm.Units.psi_eq_lbf_per_in2",
+      "closed_ok": "the spec states this identity about named table entries; it is a fixed fact of the registry, checked exactly"
+    },
+    {
+      "id": "P-units-hp-definition",
+      "clauses": [
+        "spec.4.8.1.customary-scales-pinned"
+      ],
+      "statement": "The table's hp equals the spec's stated product 550 × ft × lb × 9.80665 W exactly, given ft = 0.3048 m and lb = 0.45359237 kg. The hp entry is itself built from that product, so this confirms only consistency with the ft and lb entries; the independent check is P-units-hp-binary64-fold. (Reworded after the hollow-proof review of 2026-10-26.)",
+      "lean_statement": "(Esm.Units.sym \"hp\").Agree (((((Esm.Units.num 550).mul (Esm.Units.sym \"ft\")).mul (Esm.Units.sym \"lb\")).mul (Esm.Units.num 9.80665)).mul ((Esm.Units.sym \"m\").mul ((Esm.Units.sym \"s\").rpow (-3))))",
+      "status": "proven",
+      "theorem": "Esm.Units.hp_eq_550_ft_lbf_per_s",
+      "closed_ok": "the spec states this identity about named table entries; it is a fixed fact of the registry, checked exactly"
+    },
+    {
+      "id": "P-units-hp-binary64-fold",
+      "clauses": [
+        "spec.4.8.1.customary-scales-pinned"
+      ],
+      "statement": "In binary64 the left-to-right fold ((550 × 0.3048) × 0.45359237) × 9.80665 of the rounded literals lands on the double nearest 745.6998715822702, which is also the double nearest the exact product.",
+      "lean_statement": "Esm.F64.fmul (Esm.F64.fmul (Esm.F64.fmul (Esm.F64.rn (550 : ℚ)) (Esm.F64.rn 0.3048)) (Esm.F64.rn 0.45359237)) (Esm.F64.rn 9.80665) = Esm.F64.rn (745.6998715822702 : ℚ) ∧ Esm.F64.rn (745.6998715822702 : ℚ) = Esm.F64.rn (550 * 0.3048 * 0.45359237 * 9.80665 : ℚ)",
+      "status": "proven",
+      "theorem": "Esm.Units.hp_fold_left_to_right",
+      "closed_ok": "a fixed binary64 computation the spec pins (the fold order of one named constant)"
+    },
+    {
+      "id": "P-units-hp-fold-order-matters",
+      "clauses": [
+        "spec.4.8.1.customary-scales-pinned"
+      ],
+      "statement": "The fold order is what pins hp's double: folding as (550 × 0.3048 × 9.80665) × 0.45359237 gives a different double, and the exact product is not a double.",
+      "lean_statement": "Esm.F64.fmul (Esm.F64.fmul (Esm.F64.fmul (Esm.F64.rn (550 : ℚ)) (Esm.F64.rn 0.3048)) (Esm.F64.rn 9.80665)) (Esm.F64.rn 0.45359237) ≠ Esm.F64.fmul (Esm.F64.fmul (Esm.F64.fmul (Esm.F64.rn (550 : ℚ)) (Esm.F64.rn 0.3048)) (Esm.F64.rn 0.45359237)) (Esm.F64.rn 9.80665) ∧ Esm.F64.rn (550 * 0.3048 * 0.45359237 * 9.80665 : ℚ) ≠ 550 * 0.3048 * 0.45359237 * 9.80665",
+      "status": "proven",
+      "theorem": "Esm.Units.hp_fold_order_matters",
+      "closed_ok": "a fixed binary64 computation the spec's rationale for the fold order rests on"
+    },
+    {
+      "id": "P-units-yr-julian",
+      "clauses": [
+        "spec.4.8.1.customary-scales-pinned"
+      ],
+      "statement": "yr = year = the Julian year, 31557600 s = 365.25 day.",
+      "lean_statement": "Esm.Units.sym \"yr\" = Esm.Units.sym \"year\" ∧ (Esm.Units.sym \"yr\").Agree (Esm.Units.mk Esm.Units.Dims.time 31557600) ∧ (Esm.Units.sym \"yr\").Agree ((Esm.Units.num 365.25).mul (Esm.Units.sym \"day\"))",
+      "status": "proven",
+      "theorem": "Esm.Units.yr_julian",
+      "closed_ok": "the spec states this identity about named table entries; it is a fixed fact of the registry, checked exactly"
+    },
+    {
+      "id": "P-units-deg",
+      "clauses": [
+        "spec.4.8.1.scale-agreement-exact"
+      ],
+      "statement": "deg has dimension rad¹ and scale exactly π/180.",
+      "lean_statement": "(Esm.Units.sym \"deg\").dim = Esm.Units.Dims.angle ∧ Esm.Units.Scale.real (Esm.Units.sym \"deg\").scale = Real.pi / 180",
+      "status": "proven",
+      "theorem": "Esm.Units.deg_eq_pi_div_180",
+      "closed_ok": "the spec states this identity about named table entries; it is a fixed fact of the registry, checked exactly"
+    },
+    {
+      "id": "P-units-sr",
+      "clauses": [
+        "spec.4.8.1.eight-axes-fixed"
+      ],
+      "statement": "sr = rad², not a ninth axis.",
+      "lean_statement": "(Esm.Units.sym \"sr\").Agree ((Esm.Units.sym \"rad\").rpow 2)",
+      "status": "proven",
+      "theorem": "Esm.Units.sr_eq_rad_sq",
+      "closed_ok": "the spec states this identity about named table entries; it is a fixed fact of the registry, checked exactly"
+    },
+    {
+      "id": "P-units-dobson",
+      "clauses": [
+        "spec.4.8.1.dobson-scale"
+      ],
+      "statement": "DU and Dobson have dimension m⁻² and scale exactly 2.6867e20.",
+      "lean_statement": "(Esm.Units.sym \"DU\").Agree (Esm.Units.mk ((-2 : ℚ) • Esm.Units.Dims.len) 2.6867e20) ∧ Esm.Units.sym \"Dobson\" = Esm.Units.sym \"DU\" ∧ Esm.Units.Scale.real (Esm.Units.sym \"DU\").scale = 2.6867e20",
+      "status": "proven",
+      "theorem": "Esm.Units.dobson",
+      "closed_ok": "the spec states this identity about named table entries; it is a fixed fact of the registry, checked exactly"
+    },
+    {
+      "id": "P-units-customary-scales",
+      "clauses": [
+        "spec.4.8.1.customary-scales-pinned"
+      ],
+      "statement": "The pinned scales of ft, mi, lb, hp, gal, inHg, Torr, psi, degF and BTU are exactly the values the §4.8.1 table gives.",
+      "lean_statement": "Esm.Units.Scale.real (Esm.Units.sym \"ft\").scale = 0.3048 ∧ Esm.Units.Scale.real (Esm.Units.sym \"mi\").scale = 1609.344 ∧ Esm.Units.Scale.real (Esm.Units.sym \"lb\").scale = 0.45359237 ∧ Esm.Units.Scale.real (Esm.Units.sym \"hp\").scale = 550 * 0.3048 * 0.45359237 * 9.80665 ∧ Esm.Units.Scale.real (Esm.Units.sym \"gal\").scale = 0.003785411784 ∧ Esm.Units.Scale.real (Esm.Units.sym \"inHg\").scale = 3386.388640341 ∧ Esm.Units.Scale.real (Esm.Units.sym \"Torr\").scale = 101325 / 760 ∧ Esm.Units.Scale.real (Esm.Units.sym \"psi\").scale = 0.45359237 * 9.80665 / 0.0254 ^ 2 ∧ Esm.Units.Scale.real (Esm.Units.sym \"degF\").scale = 5 / 9 ∧ Esm.Units.Scale.real (Esm.Units.sym \"BTU\").scale = 1055.05585262",
+      "status": "proven",
+      "theorem": "Esm.Units.customary_scales",
+      "closed_ok": "the spec states this identity about named table entries; it is a fixed fact of the registry, checked exactly"
+    },
+    {
+      "id": "P-units-mi-per-h",
+      "clauses": [
+        "spec.4.8.1.customary-scales-pinned"
+      ],
+      "statement": "mi/h is exactly 0.44704 m/s.",
+      "lean_statement": "((Esm.Units.sym \"mi\").div (Esm.Units.sym \"h\")).Agree (Esm.Units.mk (Esm.Units.Dims.len - Esm.Units.Dims.time) 0.44704)",
+      "status": "proven",
+      "theorem": "Esm.Units.mi_per_h",
+      "closed_ok": "the spec states this identity about named table entries; it is a fixed fact of the registry, checked exactly"
+    },
+    {
+      "id": "P-units-gal-231-in3",
+      "clauses": [
+        "spec.4.8.1.customary-scales-pinned"
+      ],
+      "statement": "gal is exactly 231 in³ with the international inch 0.0254 m.",
+      "lean_statement": "(Esm.Units.sym \"gal\").Agree ((Esm.Units.num 231).mul (((Esm.Units.num 0.0254).mul (Esm.Units.sym \"m\")).rpow 3))",
+      "status": "proven",
+      "theorem": "Esm.Units.gal_eq_231_in3",
+      "closed_ok": "the spec states this identity about named table entries; it is a fixed fact of the registry, checked exactly"
+    },
+    {
+      "id": "P-units-grammar-left-fold",
+      "clauses": [
+        "spec.4.8.4.unresolvable-unit-hard-error"
+      ],
+      "statement": "`*`, `/` and juxtaposition are one precedence level folded left to right: any chain of symbols joined by them parses as the left fold (J/mol*K is (J/mol)*K).",
+      "lean_statement": "∀ (a : String) (ops : List (Esm.Units.Op × String)), Esm.Units.parse (.sym a :: Esm.Units.opToks ops) = .ok (Esm.Units.foldOps (.sym a) ops)",
+      "status": "proven",
+      "theorem": "Esm.Units.parse_fold",
+      "note": "grammar rule with no MUST in §4.8.2; see inventory gap"
+    },
+    {
+      "id": "P-units-grammar-pow-binds",
+      "clauses": [
+        "spec.4.8.4.unresolvable-unit-hard-error"
+      ],
+      "statement": "`^` and `**` bind tighter than `/`: a/b^q parses as a/(b^q), for signed or unsigned numeric exponents.",
+      "lean_statement": "∀ (a b lit : String) (q : ℚ) (i : Bool) (pw : Esm.Units.Tok), (pw = .caret ∨ pw = .dstar) → Esm.Units.parse [.sym a, .slash, .sym b, pw, .num lit q i] = .ok (.div (.sym a) (.pow (.sym b) q)) ∧ Esm.Units.parse [.sym a, .slash, .sym b, pw, .minus, .num lit q i] = .ok (.div (.sym a) (.pow (.sym b) (-q)))",
+      "status": "proven",
+      "theorem": "Esm.Units.parse_pow_binds",
+      "note": "grammar rule with no MUST in §4.8.2; see inventory gap"
+    },
+    {
+      "id": "P-units-grammar-rational-exponent",
+      "clauses": [
+        "spec.4.8.4.unresolvable-unit-hard-error"
+      ],
+      "statement": "A parenthesised rational exponent ^(p/q) or ^(-p/q) is the exact rational ±p/q.",
+      "lean_statement": "∀ (p q : ℕ) (neg : Bool) (lp lq : String) (ts : List Esm.Units.Tok), q ≠ 0 → Esm.Units.pExp (.lp :: (if neg then [Esm.Units.Tok.minus] else []) ++ .num lp (p : ℚ) true :: .slash :: .num lq (q : ℚ) true :: .rp :: ts) = .ok ((if neg then -(p : ℚ) else p) / q, ts)",
+      "status": "proven",
+      "theorem": "Esm.Units.pExp_rational",
+      "note": "grammar rule with no MUST in §4.8.2; see inventory gap"
+    },
+    {
+      "id": "P-units-grammar-scaling-factor-head-literal",
+      "clauses": [
+        "spec.4.8.2.scaling-factor-diagnostic-text",
+        "spec.4.8.4.unresolvable-unit-hard-error"
+      ],
+      "statement": "A numeric atom other than the literal `1` at the head of a unit string is a scaling-factor error. (Supersedes P-units-grammar-scaling-factor-head, which assumed only the value ≠ 1; ruling Q-104 makes `01` and `1.0` scaling factors too.)",
+      "lean_statement": "∀ (lit : String) (v : ℚ) (i : Bool) (ts : List Esm.Units.Tok), lit ≠ \"1\" → Esm.Units.parse (.num lit v i :: ts) = .error (.scalingFactor lit)",
+      "status": "proven",
+      "theorem": "Esm.Units.parse_scaling_factor_head"
+    },
+    {
+      "id": "P-units-grammar-scaling-factor-after-literal",
+      "clauses": [
+        "spec.4.8.2.scaling-factor-diagnostic-text",
+        "spec.4.8.4.unresolvable-unit-hard-error"
+      ],
+      "statement": "A numeric atom other than the literal `1` after a chain of BARE SYMBOLS joined by `*`, `/` or juxtaposition, and a `*` or `/`, is a scaling-factor error. (Chains containing powers or parentheses are not covered here; `(m/s)^-1/3` is the fixed example P-units-scaling-factor-m-per-s.) Narrowed after the hollow-proof review of 2026-10-26. (Supersedes P-units-grammar-scaling-factor-after, which assumed only the value ≠ 1; ruling Q-104 makes `01` and `1.0` scaling factors too.)",
+      "lean_statement": "∀ (a : String) (ops : List (Esm.Units.Op × String)) (op : Esm.Units.Tok) (lit : String) (v : ℚ) (i : Bool) (rest : List Esm.Units.Tok), (op = .star ∨ op = .slash) → lit ≠ \"1\" → Esm.Units.parse (.sym a :: Esm.Units.opToks ops ++ op :: .num lit v i :: rest) = .error (.scalingFactor lit)",
+      "status": "proven",
+      "theorem": "Esm.Units.parse_scaling_factor_after"
+    },
+    {
+      "id": "P-units-grammar-minus-not-operator",
+      "clauses": [
+        "spec.4.8.4.unresolvable-unit-hard-error"
+      ],
+      "statement": "`-` is not an operator: a `-` after a chain of BARE SYMBOLS joined by `*`, `/` or juxtaposition is a parse error. Narrowed after the hollow-proof review of 2026-10-26; `g/hp-hr` is the fixed example P-units-g-per-hp-hr-rejected.",
+      "lean_statement": "∀ (a : String) (ops : List (Esm.Units.Op × String)) (rest : List Esm.Units.Tok), ∃ err, Esm.Units.parse (.sym a :: Esm.Units.opToks ops ++ .minus :: rest) = .error err",
+      "status": "proven",
+      "theorem": "Esm.Units.parse_minus_rejected"
+    },
+    {
+      "id": "P-units-grammar-minus-string",
+      "clauses": [
+        "spec.4.8.4.unresolvable-unit-hard-error"
+      ],
+      "statement": "At the string level, `a-b` never resolves for two symbol runs a and b (e.g. `hp-hr`). Narrowed after the hollow-proof review of 2026-10-26; `g/hp-hr` is P-units-g-per-hp-hr-rejected.",
+      "lean_statement": "∀ a b : List Char, Esm.Units.IdentRun a → Esm.Units.IdentRun b → ¬ ∃ u, Esm.Units.resolveChars (a ++ '-' :: b) = .ok u",
+      "status": "proven",
+      "theorem": "Esm.Units.resolve_minus_rejected"
+    },
+    {
+      "id": "P-units-grammar-whitespace-multiplies",
+      "clauses": [
+        "spec.4.8.4.unresolvable-unit-hard-error"
+      ],
+      "statement": "Whitespace between terms is multiplication: `a b` resolves exactly as `a*b` for any two symbol runs.",
+      "lean_statement": "∀ a b : List Char, Esm.Units.IdentRun a → Esm.Units.IdentRun b → Esm.Units.resolveChars (a ++ ' ' :: b) = Esm.Units.resolveChars (a ++ '*' :: b)",
+      "status": "proven",
+      "theorem": "Esm.Units.resolve_space_eq_star",
+      "note": "grammar rule with no MUST in §4.8.2; see inventory gap"
+    },
+    {
+      "id": "P-units-percent-symbol-token",
+      "clauses": [
+        "spec.4.8.2.percent-symbol-token"
+      ],
+      "statement": "`%` is a symbol token: resolve \"%\" succeeds with a unit agreeing with dimensionless scale 0.01, and resolve \"%/h\" succeeds with a unit agreeing with h⁻¹ at scale 1/360000.",
+      "lean_statement": "(∃ u, Esm.Units.resolve \"%\" = .ok u ∧ u.Agree (Esm.Units.num 0.01)) ∧ (∃ u, Esm.Units.resolve \"%/h\" = .ok u ∧ u.Agree (Esm.Units.mk (Esm.Units.Dims.dimless - Esm.Units.Dims.time) (1 / 360000)))",
+      "status": "proven",
+      "theorem": "Esm.Units.percent_resolves",
+      "closed_ok": "the clause names these specific strings; a fixed fact checked end to end through resolve"
+    },
+    {
+      "id": "P-units-scaling-factor-m-per-s",
+      "clauses": [
+        "spec.4.8.2.scaling-factor-diagnostic-text",
+        "spec.4.8.4.unresolvable-unit-hard-error"
+      ],
+      "statement": "resolve \"(m/s)^-1/3\" fails with the scaling-factor error for the literal 3 (it reads as ((m/s)^-1)/3).",
+      "lean_statement": "Esm.Units.resolve \"(m/s)^-1/3\" = .error (.scalingFactor \"3\")",
+      "status": "proven",
+      "theorem": "Esm.Units.m_per_s_pow_scaling_factor",
+      "closed_ok": "the clause names these specific strings; a fixed fact checked end to end through resolve"
+    },
+    {
+      "id": "P-units-g-per-hp-hr-rejected",
+      "clauses": [
+        "spec.4.8.4.unresolvable-unit-hard-error"
+      ],
+      "statement": "resolve \"g/hp-hr\" fails: `-` is not an operator.",
+      "lean_statement": "Esm.Units.resolve \"g/hp-hr\" = .error (.syntax \"'-' is not an operator in a unit string (a negative exponent is ^-n)\")",
+      "status": "proven",
+      "theorem": "Esm.Units.g_per_hp_hr_rejected",
+      "closed_ok": "the spec names this string (MOVES's spelling)"
+    },
+    {
+      "id": "P-units-scaling-factor-message",
+      "clauses": [
+        "spec.4.8.2.scaling-factor-diagnostic-text"
+      ],
+      "statement": "For every literal, the scaling-factor diagnostic contains `scaling factor` and `^(p/q)`.",
+      "lean_statement": "∀ lit : String, \"scaling factor\".toList <:+: (Esm.Units.Err.scalingFactor lit).message.toList ∧ \"^(p/q)\".toList <:+: (Esm.Units.Err.scalingFactor lit).message.toList",
+      "status": "proven",
+      "theorem": "Esm.Units.scaling_factor_message"
+    },
+    {
+      "id": "P-units-grammar-run-lexing",
+      "clauses": [
+        "spec.4.8.2.percent-symbol-token"
+      ],
+      "statement": "A symbol is a maximal run delimited by character class, so a digit run joined to a symbol (s1, kgm, cm3) is one token; the alternative reading (longest table-key prefix, so s1 = s·1 and kgm = kg·m) is pending.",
+      "status": "question",
+      "question": "Q-25"
+    }
+  ]
+}

@@ -234,17 +234,20 @@ const _UNIT_REGISTRY = Dict{String, Unitful.Units}(
 # (esm-spec §4.8.4), a normaliser that does not know them does not merely warn:
 # it rejects a legitimate file.
 # ---------------------------------------------------------------------------
+#
+# This is the WHOLE §4.8.2 rewrite table. A degree sign is rewritten only as
+# part of `°C`/`°F`: a bare `°` (or `°K`) stays an unexpected character and the
+# string does not resolve. `%` is NOT rewritten here: it is a one-character
+# symbol token of its own (`_up_atom!`), so `%h` is `%`·`h`.
 const _UNIT_SPELLINGS = [
-    "°C" => "degC",
-    "°F" => "degF",
-    "°K" => "K",
-    "°"  => "deg",
-    "µ"  => "u",      # U+00B5 MICRO SIGN
-    "μ"  => "u",      # U+03BC GREEK SMALL LETTER MU
-    "Ω"  => "Ohm",    # U+03A9 GREEK CAPITAL LETTER OMEGA
-    "·"  => "*",      # U+00B7 MIDDLE DOT — multiplication
-    "⋅"  => "*",      # U+22C5 DOT OPERATOR — multiplication
-    "%"  => "percent",
+    "\u00B0C" => "degC",
+    "\u00B0F" => "degF",
+    "\u00B5"  => "u",      # MICRO SIGN
+    "\u03BC"  => "u",      # GREEK SMALL LETTER MU
+    "\u03A9"  => "Ohm",    # GREEK CAPITAL LETTER OMEGA
+    "\u2126"  => "Ohm",    # OHM SIGN
+    "\u00B7"  => "*",      # MIDDLE DOT — multiplication
+    "\u22C5"  => "*",      # DOT OPERATOR — multiplication
 ]
 
 # Superscript digits and the superscript minus. A RUN of these is an exponent:
@@ -313,8 +316,11 @@ _u_pow(a, n) = _linear(a)^n
 
 _up_eof(p::_UnitParser) = p.pos > length(p.src)
 
+# §4.8.2 whitespace is ASCII: space, tab, carriage return, line feed.
+_up_space(c::Char) = c == ' ' || c == '\t' || c == '\r' || c == '\n'
+
 function _up_skip_space!(p::_UnitParser)
-    while !_up_eof(p) && isspace(p.src[p.pos])
+    while !_up_eof(p) && _up_space(p.src[p.pos])
         p.pos += 1
     end
 end
@@ -325,11 +331,35 @@ function _up_peek(p::_UnitParser)
     _up_eof(p) ? nothing : p.src[p.pos]
 end
 
-_up_ident_start(c::Char) = ('a' <= c <= 'z') || ('A' <= c <= 'Z') || c == '_'
-_up_ident_cont(c::Char) = _up_ident_start(c) || ('0' <= c <= '9')
+_up_digit(c::Char) = '0' <= c <= '9'
+# The §4.8.2 identifier characters: a RUN of these is one token.
+_up_ident(c::Char) = ('a' <= c <= 'z') || ('A' <= c <= 'Z') || _up_digit(c) || c == '_'
 # Can `c` BEGIN an atom? This is the lookahead that drives implicit
-# multiplication (`"ppb^-1 s^-1"`).
-_up_starts_atom(c) = c !== nothing && (_up_ident_start(c) || ('0' <= c <= '9') || c == '(')
+# multiplication (`"ppb^-1 s^-1"`, `"%h"`).
+_up_starts_atom(c) = c !== nothing && (_up_ident(c) || c == '(' || c == '%')
+
+# Scan one RUN token starting at `p.pos` (esm-spec §4.8.2): a maximal sequence
+# of identifier characters. A run of digits alone, optionally followed by `.`
+# and a second digit-only run, is a NUMBER; every other run is ONE symbol, so
+# `s1`, `1s`, `kgm` are never split into a table key and a remainder, and `1e3`
+# is a symbol, not exponent notation. Returns `(text, is_number)`.
+function _up_run!(p::_UnitParser)
+    start = p.pos
+    while !_up_eof(p) && _up_ident(p.src[p.pos])
+        p.pos += 1
+    end
+    run = p.src[start:(p.pos - 1)]
+    all(_up_digit, run) || return (String(run), false)
+    if p.pos + 1 <= length(p.src) && p.src[p.pos] == '.' && _up_digit(p.src[p.pos + 1])
+        p.pos += 1
+        frac = p.pos
+        while !_up_eof(p) && _up_ident(p.src[p.pos])
+            p.pos += 1
+        end
+        return (String(p.src[start:(p.pos - 1)]), all(_up_digit, p.src[frac:(p.pos - 1)]))
+    end
+    return (String(run), true)
+end
 
 # unit := term (('*' | '/')? term)*
 #
@@ -384,43 +414,36 @@ function _up_atom!(p::_UnitParser)
         return u
     end
 
-    if '0' <= c <= '9'
-        start = p.pos
-        while !_up_eof(p) && (('0' <= p.src[p.pos] <= '9') || p.src[p.pos] == '.')
-            p.pos += 1
-        end
-        tok = String(p.src[start:(p.pos - 1)])
-        val = tryparse(Float64, tok)
-        val === nothing && throw(_UnitParseError("invalid number '$tok'"))
-        # A numeric atom is admissible ONLY when its value is exactly 1 -- the
-        # leading `1` of `1/s`. Any other number is a SCALING FACTOR, and a unit string
-        # denotes a UNIT, not a quantity. This is not pedantry: `(m/s)^-1/3` -- an author
-        # reaching for a rational exponent -- parses under this grammar as `((m/s)^-1)/3`,
-        # and the five bindings gave it three different meanings (magnitude dropped,
-        # magnitude retained, whole string rejected). Rejecting the scaling factor makes
-        # `^(-1/3)` the only spelling of that unit, so the same string cannot silently
-        # mean two things.
-        #
-        # Before this rule Julia returned `Unitful.NoUnits` here and SILENTLY
-        # DROPPED the magnitude, so `"1000/s"` resolved to the dimension 1/s.
-        val == 1 || throw(_UnitParseError(
+    if c == '%'
+        # `%` is a one-character symbol token whatever is adjacent (§4.8.2).
+        p.pos += 1
+        return u"percent"
+    end
+
+    _up_ident(c) || throw(_UnitParseError("unexpected '$c' at position $(p.pos)"))
+    tok, is_number = _up_run!(p)
+    if is_number
+        # A numeric atom is admissible ONLY when it is the LITERAL `1` -- the
+        # leading `1` of `1/s`. Any other number (`1000`, `0.5`, and also `01`
+        # and `1.0`) is a SCALING FACTOR, and a unit string denotes a UNIT, not
+        # a quantity. This is not pedantry: `(m/s)^-1/3` -- an author reaching
+        # for a rational exponent -- parses under this grammar as
+        # `((m/s)^-1)/3`, and the five bindings gave it three different
+        # meanings (magnitude dropped, magnitude retained, whole string
+        # rejected). Rejecting the scaling factor makes `^(-1/3)` the only
+        # spelling of that unit, so the same string cannot silently mean two
+        # things.
+        tok == "1" || throw(_UnitParseError(
             "a number other than 1 is a scaling factor, not a unit (esm-spec 4.8.2); a rational exponent is spelled ^(p/q)"))
         return Unitful.NoUnits
     end
-
-    _up_ident_start(c) || throw(_UnitParseError("unexpected '$c' at position $(p.pos)"))
-    start = p.pos
-    p.pos += 1
-    while !_up_eof(p) && _up_ident_cont(p.src[p.pos])
-        p.pos += 1
-    end
-    sym = String(p.src[start:(p.pos - 1)])
-    u = get(_UNIT_REGISTRY, sym, nothing)
-    u === nothing && throw(_UnitParseError("unknown unit '$sym'"))
+    tok == "dimensionless" && return Unitful.NoUnits
+    u = get(_UNIT_REGISTRY, tok, nothing)
+    u === nothing && throw(_UnitParseError("unknown unit '$tok'"))
     return u
 end
 
-# exponent := integer | decimal | '(' integer '/' integer ')'
+# exponent := '-'? (integer | decimal) | '(' '-'? integer '/' '-'? integer ')'
 #
 # RATIONAL exponents are legitimate, not a curiosity: `1/s^0.5` is the noise
 # intensity of an SDE and is already in the corpus. A grammar restricted to
@@ -444,44 +467,43 @@ function _up_exponent!(p::_UnitParser)
         return num // den
     end
 
+    negative = _up_minus!(p)
+    _up_eof(p) && throw(_UnitParseError("expected an exponent"))
     start = p.pos
-    if p.src[p.pos] == '-' || p.src[p.pos] == '+'
-        p.pos += 1
-    end
-    digits = p.pos
-    while !_up_eof(p) && '0' <= p.src[p.pos] <= '9'
-        p.pos += 1
-    end
-    # Decimal: `s^0.5`. A fractional part must follow the dot.
-    if !_up_eof(p) && p.src[p.pos] == '.'
-        p.pos += 1
-        frac = p.pos
-        while !_up_eof(p) && '0' <= p.src[p.pos] <= '9'
-            p.pos += 1
-        end
-        (digits == p.pos || frac == p.pos) &&
-            throw(_UnitParseError("malformed decimal exponent at position $start"))
-        v = parse(Float64, String(p.src[start:(p.pos - 1)]))
-        # Unitful represents a non-integer power as a Rational, not a Float.
-        return rationalize(v)
-    end
-    digits == p.pos && throw(_UnitParseError("expected an exponent at position $start"))
-    return parse(Int, String(p.src[start:(p.pos - 1)]))
+    _up_digit(p.src[p.pos]) || throw(_UnitParseError(
+        "an exponent must be an integer, a decimal, or a rational ^(p/q) at position $start"))
+    tok, is_number = _up_run!(p)
+    is_number || throw(_UnitParseError("malformed exponent '$tok' at position $start"))
+    # EXACT: a decimal `1.5` is 15//10, never a float rationalised back.
+    ip, fp = occursin('.', tok) ? split(tok, '.') : (tok, "")
+    n = tryparse(Int, ip * fp)
+    (n === nothing || length(fp) > 18) && throw(_UnitParseError("exponent '$tok' out of range"))
+    v = isempty(fp) ? n : n // 10^length(fp)
+    return negative ? -v : v
+end
+
+# An optional exponent sign. Only `-` exists: a positive exponent is unsigned
+# and `m^+2` does not resolve (§4.8.2). Whitespace may follow the sign.
+function _up_minus!(p::_UnitParser)
+    _up_skip_space!(p)
+    neg = !_up_eof(p) && p.src[p.pos] == '-'
+    neg && (p.pos += 1)
+    _up_skip_space!(p)
+    return neg
 end
 
 # A bare signed integer — the components of a parenthesised rational exponent.
 function _up_signed_int!(p::_UnitParser)
-    _up_skip_space!(p)
+    negative = _up_minus!(p)
     start = p.pos
-    if !_up_eof(p) && (p.src[p.pos] == '-' || p.src[p.pos] == '+')
-        p.pos += 1
-    end
-    digits = p.pos
-    while !_up_eof(p) && '0' <= p.src[p.pos] <= '9'
-        p.pos += 1
-    end
-    digits == p.pos && throw(_UnitParseError("expected an integer at position $start"))
-    return parse(Int, String(p.src[start:(p.pos - 1)]))
+    (!_up_eof(p) && _up_digit(p.src[p.pos])) ||
+        throw(_UnitParseError("expected an integer at position $start"))
+    tok, is_number = _up_run!(p)
+    (is_number && !occursin('.', tok)) ||
+        throw(_UnitParseError("expected an integer at position $start"))
+    v = tryparse(Int, tok)
+    v === nothing && throw(_UnitParseError("integer '$tok' out of range"))
+    return negative ? -v : v
 end
 
 """
@@ -497,9 +519,8 @@ can be surfaced and pinned (`tests/conformance/unit_registry`) without changing
 the corpus-pinned `unit_parse_error` message text.
 """
 function parse_units_reason(unit_str::AbstractString)::Union{String, Nothing}
-    s = strip(unit_str)
-    (isempty(s) || s == "dimensionless" || s == "1") && return nothing
-    p = _UnitParser(collect(_normalize_unit_string(s)), 1)
+    isempty(unit_str) && return nothing
+    p = _UnitParser(collect(_normalize_unit_string(unit_str)), 1)
     try
         _up_unit!(p)
         _up_skip_space!(p)
@@ -520,16 +541,17 @@ grammar (§4.8.2):
 
     unit     := term (('*' | '/')? term)*
     term     := atom (('^' | '**') exponent)?
-    exponent := integer | decimal | '(' integer '/' integer ')'
+    exponent := '-'? (integer | decimal) | '(' '-'? integer '/' '-'? integer ')'
     atom     := '1' | symbol | '(' unit ')'
 
-Whitespace between terms is multiplication (`"ppb^-1 s^-1"`); division is
+A symbol is a whole run of `[A-Za-z0-9_]` (or `%`) and must be a table key;
+the only numeric atom is the literal `1`. Whitespace between terms is multiplication (`"ppb^-1 s^-1"`); division is
 LEFT-associative (`"L/mol/s"` is L·mol⁻¹·s⁻¹); parentheses group a compound
 denominator (`"J/(mol*K)"`). An exponent may be RATIONAL — `"1/s^0.5"` is the
 noise intensity of an SDE and is in the corpus.
 
-Normalised before parsing: `µ`/`μ`→`u`, `°C`→`degC`, `Ω`→`Ohm`, `·`/`⋅`→`*`,
-`%`→`percent`, and superscript runs (`m²`, `cm³`, `m⁻³`) → `^n`. `""`, `"1"` and
+Normalised before parsing: `µ`/`μ`→`u`, `°C`→`degC`, `°F`→`degF`, `Ω`→`Ohm`,
+`·`/`⋅`→`*`, and superscript runs (`m²`, `cm³`, `m⁻³`) → `^n`. `""`, `"1"` and
 `"dimensionless"` are the dimensionless unit.
 
 Returns `nothing` when the string does not parse or names a symbol outside the
@@ -540,12 +562,11 @@ registry must be fixed by extending the registry, never by downgrading this to
 a warning.
 """
 function parse_units(unit_str::AbstractString)::Union{Unitful.Units, Nothing}
-    s = strip(unit_str)
-    if isempty(s) || s == "dimensionless" || s == "1"
-        return Unitful.NoUnits
-    end
+    # Only "" is the empty unit. A whitespace-only string has no tokens and is
+    # rejected by the grammar (§4.8.2), not read as dimensionless.
+    isempty(unit_str) && return Unitful.NoUnits
 
-    p = _UnitParser(collect(_normalize_unit_string(s)), 1)
+    p = _UnitParser(collect(_normalize_unit_string(unit_str)), 1)
     try
         u = _up_unit!(p)
         _up_skip_space!(p)

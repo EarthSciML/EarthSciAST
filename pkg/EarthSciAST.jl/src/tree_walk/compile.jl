@@ -391,20 +391,26 @@ end
 # bad axis (non-monotonic / NaN / too-short / length-mismatch) fail fast at build
 # with its pinned `ClosedFunctionError` code, matching the vectorized path
 # (ess-wrh) which already validated at build time. `const_errs` are the pinned
-# per-position diagnostics for a non-const argument.
+# per-position `(code, message)` diagnostics for a non-const argument.
 const _FN_CONST_ARG_SPECS = (
     # Spec arg order: (x, xs) — xs const, x scalar.
     (fname = "interp.searchsorted", arity = 2, const_positions = (2,),
-     const_errs = ("interp.searchsorted: 2nd arg must be a `const`-op array",)),
+     const_errs = ((ERROR_CODES.INTERP_AXIS_NOT_CONST,
+                    "interp.searchsorted: `xs` (2nd arg) must be a `const`-op array"),)),
     # Spec arg order: (table, axis, x) — table & axis const, x scalar.
     (fname = "interp.linear", arity = 3, const_positions = (1, 2),
-     const_errs = ("interp.linear: `table` argument must be a `const`-op array node",
-                   "interp.linear: `axis` argument must be a `const`-op array node")),
+     const_errs = ((ERROR_CODES.INTERP_TABLE_NOT_CONST,
+                    "interp.linear: `table` argument must be a `const`-op array node"),
+                   (ERROR_CODES.INTERP_AXIS_NOT_CONST,
+                    "interp.linear: `axis` argument must be a `const`-op array node"))),
     # Spec arg order: (table, axis_x, axis_y, x, y) — first three const.
     (fname = "interp.bilinear", arity = 5, const_positions = (1, 2, 3),
-     const_errs = ("interp.bilinear: `table` argument must be a `const`-op array node",
-                   "interp.bilinear: `axis_x` argument must be a `const`-op array node",
-                   "interp.bilinear: `axis_y` argument must be a `const`-op array node")),
+     const_errs = ((ERROR_CODES.INTERP_TABLE_NOT_CONST,
+                    "interp.bilinear: `table` argument must be a `const`-op array node"),
+                   (ERROR_CODES.INTERP_AXIS_NOT_CONST,
+                    "interp.bilinear: `axis_x` argument must be a `const`-op array node"),
+                   (ERROR_CODES.INTERP_AXIS_NOT_CONST,
+                    "interp.bilinear: `axis_y` argument must be a `const`-op array node"))),
 )
 
 # The `_FN_CONST_ARG_SPECS` entry for `fname`, or `nothing` for a closed
@@ -418,13 +424,19 @@ const _FN_CONST_ARG_SPECS = (
     return nothing
 end
 
-# A `const`-op array argument's payload, or throw the pinned per-position
-# diagnostic from `_FN_CONST_ARG_SPECS`.
-@inline function _const_array_arg(arg, errmsg::String)
-    if arg isa OpExpr && arg.op == "const" && arg.value isa AbstractVector
+# A `const`-op argument's payload, or throw the pinned per-position esm-spec §9.2
+# diagnostic (`interp_table_not_const` / `interp_axis_not_const`) from
+# `_FN_CONST_ARG_SPECS` for an argument that is not a `const` array (a variable
+# reference, a non-`const` expression, a scalar `const`). A NESTED `const` where a
+# rank-1 one belongs is the spec builder's to refuse
+# (`_validate_searchsorted_table` raises the same `interp_axis_not_const`).
+@inline function _const_array_arg(arg, err::Tuple{String,String})
+    arg isa OpExpr && arg.op == "const" && arg.value isa AbstractVector &&
         return arg.value
-    end
-    throw(TreeWalkError("E_TREEWALK_FN_ARG_NOT_CONST", errmsg))
+    throw(ClosedFunctionError(err[1], err[2] * " (esm-spec §9.2); got " *
+        (arg isa OpExpr ? (arg.op == "const" ? "a scalar `const`" :
+                           "a `$(arg.op)` expression") :
+         arg isa VarExpr ? "the variable reference `$(arg.name)`" : "a $(typeof(arg))")))
 end
 
 # Build the validated, typed `_Interp*Spec` (registered_functions.jl) for a

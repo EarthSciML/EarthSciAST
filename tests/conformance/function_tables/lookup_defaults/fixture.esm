@@ -1,0 +1,331 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "function_tables_lookup_defaults_conformance",
+    "description": "esm-spec §9.5.2 / §9.5.3 defaults exercised through each binding's inline-test runner. An omitted `table_lookup.output` means 0 whether or not the table declares `outputs`,. (`args` is always written: the schema requires it on every expression node.) On a multi-output table the lowering reads the slice data[output]; on a single-output table (no `outputs`) it reads the WHOLE `data`, never data[0]. Each default is asserted beside the same read spelled out explicitly, and beside a read of a different output so that a binding ignoring the selector cannot pass.",
+    "authors": [
+      "EarthSciML"
+    ]
+  },
+  "function_tables": {
+    "multi": {
+      "description": "Two outputs over one axis (synthetic, 1-D linear).",
+      "axes": [
+        {
+          "name": "p",
+          "values": [
+            1.0,
+            2.0,
+            3.0
+          ]
+        }
+      ],
+      "interpolation": "linear",
+      "outputs": [
+        "A",
+        "B"
+      ],
+      "data": [
+        [
+          10.0,
+          20.0,
+          30.0
+        ],
+        [
+          100.0,
+          200.0,
+          300.0
+        ]
+      ]
+    },
+    "multi2d": {
+      "description": "Two outputs over two axes (synthetic, bilinear).",
+      "axes": [
+        {
+          "name": "p",
+          "values": [
+            1.0,
+            2.0
+          ]
+        },
+        {
+          "name": "q",
+          "values": [
+            0.0,
+            1.0
+          ]
+        }
+      ],
+      "interpolation": "bilinear",
+      "outputs": [
+        "A",
+        "B"
+      ],
+      "data": [
+        [
+          [
+            1.0,
+            2.0
+          ],
+          [
+            3.0,
+            4.0
+          ]
+        ],
+        [
+          [
+            10.0,
+            20.0
+          ],
+          [
+            30.0,
+            40.0
+          ]
+        ]
+      ]
+    },
+    "single": {
+      "description": "One output, no `outputs` list (synthetic, 1-D linear).",
+      "axes": [
+        {
+          "name": "p",
+          "values": [
+            1.0,
+            2.0,
+            3.0
+          ]
+        }
+      ],
+      "interpolation": "linear",
+      "data": [
+        5.0,
+        7.0,
+        11.0
+      ]
+    }
+  },
+  "models": {
+    "LookupDefaults": {
+      "variables": {
+        "x": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        },
+        "y_omitted": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0
+        },
+        "y_zero": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0
+        },
+        "y_named": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0
+        },
+        "y_other": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0
+        },
+        "y2_omitted": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0
+        },
+        "y2_other": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0
+        },
+        "s_omitted": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0
+        },
+        "s_zero": {
+          "type": "unknown",
+          "units": "1",
+          "default": 0.0
+        },
+        "p": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1.5
+        },
+        "q": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.5
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "x"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "const",
+            "args": [],
+            "value": 0.0
+          }
+        },
+        {
+          "lhs": "y_omitted",
+          "rhs": {
+            "op": "table_lookup",
+            "table": "multi",
+            "axes": {
+              "p": "p"
+            },
+            "args": []
+          }
+        },
+        {
+          "lhs": "y_zero",
+          "rhs": {
+            "op": "table_lookup",
+            "table": "multi",
+            "axes": {
+              "p": "p"
+            },
+            "output": 0,
+            "args": []
+          }
+        },
+        {
+          "lhs": "y_named",
+          "rhs": {
+            "op": "table_lookup",
+            "table": "multi",
+            "axes": {
+              "p": "p"
+            },
+            "output": "A",
+            "args": []
+          }
+        },
+        {
+          "lhs": "y_other",
+          "rhs": {
+            "op": "table_lookup",
+            "table": "multi",
+            "axes": {
+              "p": "p"
+            },
+            "output": "B",
+            "args": []
+          }
+        },
+        {
+          "lhs": "y2_omitted",
+          "rhs": {
+            "op": "table_lookup",
+            "table": "multi2d",
+            "axes": {
+              "p": "p",
+              "q": "q"
+            },
+            "args": []
+          }
+        },
+        {
+          "lhs": "y2_other",
+          "rhs": {
+            "op": "table_lookup",
+            "table": "multi2d",
+            "axes": {
+              "p": "p",
+              "q": "q"
+            },
+            "output": 1,
+            "args": []
+          }
+        },
+        {
+          "lhs": "s_omitted",
+          "rhs": {
+            "op": "table_lookup",
+            "table": "single",
+            "axes": {
+              "p": "p"
+            },
+            "args": []
+          }
+        },
+        {
+          "lhs": "s_zero",
+          "rhs": {
+            "op": "table_lookup",
+            "table": "single",
+            "axes": {
+              "p": "p"
+            },
+            "output": 0,
+            "args": []
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "omitted_output_is_zero_and_single_output_reads_whole_data",
+          "description": "p = 1.5, q = 0.5. multi: output A gives 15, B gives 150; y_omitted (no `output`) must equal y_zero and y_named. multi2d: output 0 gives 2.5 and output 1 gives 25; y2_omitted must be 2.5. single: the whole data [5, 7, 11] at 1.5 gives 6, with `output` omitted or 0 (lowering with data[0] = 5 would not even be an array).",
+          "time_span": {
+            "start": 0.0,
+            "end": 1.0
+          },
+          "assertions": [
+            {
+              "variable": "y_omitted",
+              "time": 0.0,
+              "expected": 15.0
+            },
+            {
+              "variable": "y_zero",
+              "time": 0.0,
+              "expected": 15.0
+            },
+            {
+              "variable": "y_named",
+              "time": 0.0,
+              "expected": 15.0
+            },
+            {
+              "variable": "y_other",
+              "time": 0.0,
+              "expected": 150.0
+            },
+            {
+              "variable": "y2_omitted",
+              "time": 0.0,
+              "expected": 2.5
+            },
+            {
+              "variable": "y2_other",
+              "time": 0.0,
+              "expected": 25.0
+            },
+            {
+              "variable": "s_omitted",
+              "time": 0.0,
+              "expected": 6.0
+            },
+            {
+              "variable": "s_zero",
+              "time": 0.0,
+              "expected": 6.0
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

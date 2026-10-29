@@ -11,6 +11,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use earthsci_ast::adapter_support::{ClosedArgLiteral, check_closed_function_args};
 use earthsci_ast::load_string;
 use earthsci_ast::{
     ClosedArg, ClosedFunctionError, ClosedValue, closed_function_names, evaluate_closed_function,
@@ -231,6 +232,17 @@ fn run_fixture(fixture_dir: &Path, total_scenarios: &mut usize, total_errors: &m
             .iter()
             .map(decode_input)
             .collect();
+        if fn_name.starts_with("interp.") {
+            let label = format!("{}::{sname}", expected.display());
+            check_at_load(
+                &fn_name,
+                scenario["inputs"]
+                    .as_array()
+                    .expect("scenario.inputs is array"),
+                None,
+                &label,
+            );
+        }
         let actual = evaluate_closed_function(&fn_name, &inputs).unwrap_or_else(|e| {
             panic!(
                 "{}::{sname}: closed-function dispatch errored unexpectedly: {e}",
@@ -250,18 +262,25 @@ fn run_fixture(fixture_dir: &Path, total_scenarios: &mut usize, total_errors: &m
         for err in errs {
             *total_errors += 1;
             let ename = err["name"].as_str().unwrap_or("(unnamed)");
-            let inputs: Vec<ClosedArg> = err["inputs"]
+            let raw_inputs = err["inputs"]
                 .as_array()
-                .expect("error_scenario.inputs is array")
-                .iter()
-                .map(decode_input)
-                .collect();
+                .expect("error_scenario.inputs is array");
             let expected_code = err["expected_error_code"].as_str().unwrap_or_else(|| {
                 panic!(
                     "{}::{ename}: missing expected_error_code",
                     expected.display()
                 )
             });
+            let label = format!("{}::{ename}", expected.display());
+            if fn_name.starts_with("interp.") {
+                check_at_load(&fn_name, raw_inputs, Some(expected_code), &label);
+            }
+            // The evaluator's registry raises the same code, for the inputs a
+            // `ClosedArg` can carry (rank 2 at most).
+            if raw_inputs.iter().any(|v| literal_rank(v) > 2) {
+                continue;
+            }
+            let inputs: Vec<ClosedArg> = raw_inputs.iter().map(decode_input).collect();
             match evaluate_closed_function(&fn_name, &inputs) {
                 Ok(v) => panic!(
                     "{}::{ename}: expected error {expected_code} but got {v:?}",
@@ -275,6 +294,105 @@ fn run_fixture(fixture_dir: &Path, total_scenarios: &mut usize, total_errors: &m
                     e.message,
                 ),
             }
+        }
+    }
+}
+
+/// The nesting depth of a fixture input: 0 for a scalar (a number or a
+/// `"NaN"`/`"Inf"`/`"-Inf"` string), 1 + the deepest element for an array.
+fn literal_rank(v: &Value) -> usize {
+    match v {
+        Value::Array(items) => 1 + items.iter().map(literal_rank).max().unwrap_or(0),
+        _ => 0,
+    }
+}
+
+fn literal_number(v: &Value) -> Option<f64> {
+    match v {
+        Value::Number(n) => n.as_f64(),
+        Value::String(s) => match s.as_str() {
+            "NaN" => Some(f64::NAN),
+            "Inf" => Some(f64::INFINITY),
+            "-Inf" => Some(f64::NEG_INFINITY),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// A fixture input as the load-time check sees a `const` argument holding it
+/// (`"NaN"`, `"Inf"`, `"-Inf"` decoded to those values, which no document can
+/// carry).
+fn decode_literal(v: &Value) -> ClosedArgLiteral {
+    let numbers =
+        |items: &[Value]| -> Option<Vec<f64>> { items.iter().map(literal_number).collect() };
+    match v {
+        Value::Array(items) => {
+            if let Some(flat) = numbers(items) {
+                return ClosedArgLiteral::Array(flat);
+            }
+            items
+                .iter()
+                .map(|row| row.as_array().and_then(|r| numbers(r)))
+                .collect::<Option<Vec<_>>>()
+                .map_or(ClosedArgLiteral::OtherRank, ClosedArgLiteral::Array2D)
+        }
+        other => {
+            literal_number(other).map_or(ClosedArgLiteral::OtherRank, ClosedArgLiteral::Scalar)
+        }
+    }
+}
+
+fn has_non_finite_string(v: &Value) -> bool {
+    match v {
+        Value::String(_) => true,
+        Value::Array(items) => items.iter().any(has_non_finite_string),
+        _ => false,
+    }
+}
+
+/// Drive one scenario through the esm-spec §9.2 load-time argument check
+/// (ruling Q-106): `expected_code` is the code it must raise, `None` that it
+/// must pass. Every input becomes a `const` argument. The check runs on the
+/// literals directly, and — when no input needs a non-finite value, which no
+/// document can carry — on a document whose one equation is that `fn` node,
+/// through `load_string`, which must refuse it with the code (or load it).
+fn check_at_load(fn_name: &str, inputs: &[Value], expected_code: Option<&str>, label: &str) {
+    let literals: Vec<ClosedArgLiteral> = inputs.iter().map(decode_literal).collect();
+    let got = check_closed_function_args(fn_name, &literals).err();
+    assert_eq!(
+        got.as_ref().map(|e| e.code.as_str()),
+        expected_code,
+        "{label}: load-time argument check ({got:?})"
+    );
+    if inputs.iter().any(has_non_finite_string) {
+        return;
+    }
+    let args: Vec<Value> = inputs
+        .iter()
+        .map(|v| serde_json::json!({"op": "const", "args": [], "value": v}))
+        .collect();
+    let doc = serde_json::json!({
+        "esm": "1.0.0",
+        "metadata": {"name": "closed_fn_load_check", "authors": ["test"]},
+        "models": {"M": {
+            "variables": {"y": {"type": "unknown", "default": 0.0}},
+            "equations": [{
+                "lhs": {"op": "D", "args": ["y"], "wrt": "t"},
+                "rhs": {"op": "fn", "name": fn_name, "args": args}
+            }]
+        }}
+    });
+    let loaded = load_string(&doc.to_string());
+    match expected_code {
+        Some(code) => {
+            let msg = loaded
+                .expect_err(&format!("{label}: the document must be refused at load"))
+                .to_string();
+            assert!(msg.contains(&format!("[{code}]")), "{label}: got: {msg}");
+        }
+        None => {
+            loaded.unwrap_or_else(|e| panic!("{label}: the document must load: {e}"));
         }
     }
 }

@@ -1,0 +1,68 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "FunctionTable_shape_assertion_mismatch",
+    "description": "Table `T`'s `data` matches its axes, but the redundant `shape` assertion says [4] (step 10). No `table_lookup` references `T`.",
+    "authors": [
+      "EarthSciML"
+    ],
+    "created": "2026-10-27T00:00:00Z"
+  },
+  "function_tables": {
+    "T": {
+      "axes": [
+        {
+          "name": "x",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "interpolation": "linear",
+      "data": [
+        1,
+        2,
+        3
+      ],
+      "shape": [
+        4
+      ]
+    }
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "y": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        },
+        "x": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.5
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "y"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              -1.0,
+              "y"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

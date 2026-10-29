@@ -221,3 +221,33 @@ fn zero_and_negative_enum_members_round_trip() {
     assert_eq!(enums["operating_mode"]["Braking"], 0);
     assert_eq!(enums["pol_process"]["Unassociated"], -1);
 }
+
+/// esm-spec §9.3 / CONFORMANCE_SPEC §5.26.5: a duplicate value within one
+/// enum is refused at load with `enum_duplicate_value` — a duplicate positive
+/// in an enum whose `enum` op names a third member, and two members mapping
+/// to `0` that no op names. The code is read from the shared
+/// `expected_errors.json`, so the pin follows the corpus.
+#[test]
+fn duplicate_enum_values_are_refused_at_load_with_the_pinned_code() {
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/invalid");
+    let expected: Value = serde_json::from_str(
+        &std::fs::read_to_string(format!("{dir}/expected_errors.json")).expect("read"),
+    )
+    .expect("parse expected_errors.json");
+    for fixture in ["enum_duplicate_value.esm", "enum_duplicate_zero_value.esm"] {
+        let entry = &expected[fixture];
+        assert_eq!(
+            entry["resolver_error_code"], "enum_duplicate_value",
+            "{fixture}"
+        );
+        assert_eq!(entry["is_valid"], false, "{fixture}");
+        let path = format!("{dir}/{fixture}");
+        let msg = load_path(&path)
+            .expect_err("a duplicate enum value must be refused at load")
+            .to_string();
+        assert!(
+            msg.contains("[enum_duplicate_value]"),
+            "{fixture}: got: {msg}"
+        );
+    }
+}

@@ -1,0 +1,32 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "EnumDuplicateValue",
+    "description": "Within one enum, values MUST be unique (esm-spec §9.3; CONFORMANCE_SPEC §5.26.5). `land_use.forest` and `land_use.woodland` both map to 3, so the document is rejected at load with `enum_duplicate_value`. The one `enum` op names `urban`, a third member whose value is not duplicated: the check is on the `enums` block, not on the members an `enum` op happens to resolve. The `season` enum also uses 3, which is legal: values MAY coincide across enums.",
+    "authors": ["EarthSciML"],
+    "created": "2026-10-26T00:00:00Z"
+  },
+  "enums": {
+    "land_use": {
+      "urban": 1,
+      "forest": 3,
+      "woodland": 3
+    },
+    "season": {
+      "summer": 3
+    }
+  },
+  "models": {
+    "EnumDuplicate": {
+      "variables": {
+        "code": { "type": "unknown", "units": "1", "default": 0.0 }
+      },
+      "equations": [
+        {
+          "lhs": "code",
+          "rhs": { "op": "enum", "args": ["land_use", "urban"] }
+        }
+      ]
+    }
+  }
+}

@@ -2451,12 +2451,15 @@ pub fn parse_unit(unit_str: &str) -> Result<Unit, UnitError> {
 ///
 /// * superscript digits `⁰¹²³⁴⁵⁶⁷⁸⁹` and superscript minus `⁻` → `^n`
 /// * middot `·` (U+00B7) and dot-operator `⋅` (U+22C5) → `*`
-/// * `µ` (U+00B5) / `μ` (U+03BC) → `u`  (so `μg` is the `u` + `g` prefix form)
-/// * `°C` → `degC`, `Ω` → `Ohm`
-/// * `**` → `^`  (the Python spelling of a power)
+/// * `µ` (U+00B5) / `μ` (U+03BC) → `u`  (so `μg` is the table key `ug`)
+/// * `°C` → `degC`, `°F` → `degF`; a bare `°` is NOT rewritten (it stays an
+///   unexpected character)
+/// * `Ω` (U+2126 OHM SIGN and U+03A9 GREEK CAPITAL OMEGA) → `Ohm`
+///
+/// That is the whole §4.8.2 table; nothing else is rewritten.
 fn normalize_unit_str(s: &str) -> String {
-    // `°C` and `**` are two-character sequences, so handle them first.
-    let s = s.replace("°C", "degC").replace("**", "^");
+    // `°C` and `°F` are two-character sequences, so handle them first.
+    let s = s.replace("\u{00B0}C", "degC").replace("\u{00B0}F", "degF");
 
     let mut out = String::with_capacity(s.len());
     let mut in_superscript = false;
@@ -2487,9 +2490,9 @@ fn normalize_unit_str(s: &str) -> String {
             None => {
                 in_superscript = false;
                 match c {
-                    '·' | '⋅' | '×' => out.push('*'),
-                    'µ' | 'μ' => out.push('u'),
-                    'Ω' => out.push_str("Ohm"),
+                    '\u{00B7}' | '\u{22C5}' => out.push('*'),
+                    '\u{00B5}' | '\u{03BC}' => out.push('u'),
+                    '\u{2126}' | '\u{03A9}' => out.push_str("Ohm"),
                     _ => out.push(c),
                 }
             }
@@ -2498,232 +2501,283 @@ fn normalize_unit_str(s: &str) -> String {
     out
 }
 
-/// Parse an already-normalized unit string. `original` is carried only for
-/// error messages, so a diagnostic quotes what the author actually wrote.
-fn parse_normalized(s: &str, original: &str) -> Result<Unit, UnitError> {
-    let s = s.trim();
-    if s.is_empty() || s == "1" || s == "dimensionless" {
-        return Ok(Unit::dimensionless());
-    }
-
-    // Strip a single layer of surrounding parentheses when they balance.
-    if s.starts_with('(') && s.ends_with(')') && parens_balance(&s[1..s.len() - 1]) {
-        return parse_normalized(&s[1..s.len() - 1], original);
-    }
-
-    let base_units = get_base_units();
-    if let Some(unit) = base_units.get(s) {
-        return Ok(unit.clone());
-    }
-    // An SI-PREFIXED symbol (`mg`, `um`, `nm`, `mL`, `umol`, `dm`). Tried only
-    // after the exact table, so a name that merely LOOKS prefixed (`min`, `mol`,
-    // `cd`, `day`) keeps its own meaning. This is what makes the `µ`/`μ` → `u`
-    // normalization above mean anything: `μg/m^3` reaches here as `ug/m^3`.
-    if let Some(unit) = parse_si_prefixed(s, base_units) {
-        return Ok(unit);
-    }
-
-    // Product / quotient. `*` and `/` share one precedence level and bind
-    // LEFT-associatively, so we split at the LAST top-level operator and
-    // recurse on the left. Splitting on `/` as a separate, looser level (as
-    // this parser used to) pulls every `*` factor appearing after the last `/`
-    // into the DENOMINATOR: `J/mol*K` parsed as `J/(mol*K)`, silently negating
-    // K's exponent, and `kg/m^3*s` came out as `kg/(m^3*s)`. Equal-precedence
-    // left association is the reading of the Go reference parser and of
-    // pint/Unitful.
-    //
-    // WHITESPACE between two terms is an implicit multiplication (`ppb^-1 s^-1`),
-    // so it is a top-level operator too.
-    if let Some((idx, len, sym)) = find_last_top_level_operator(s) {
-        let (left, right) = (&s[..idx], &s[idx + len..]);
-        if left.trim().is_empty() || right.trim().is_empty() {
-            return Err(UnitError::ParseError(format!(
-                "Dangling '{sym}' in unit \"{original}\""
-            )));
-        }
-        let l = parse_normalized(left, original)?;
-        let r = parse_normalized(right, original)?;
-        return Ok(match sym {
-            '/' => l.divide(&r),
-            _ => l.multiply(&r),
-        });
-    }
-
-    // Power: right-most '^'. The exponent is RATIONAL — `s^0.5` and `m^(1/2)`
-    // are legitimate (an SDE noise intensity carries `1/s^0.5`).
-    if let Some(idx) = s.rfind('^') {
-        let (base_s, pow_s) = (&s[..idx], &s[idx + 1..]);
-        let base_unit = parse_normalized(base_s, original)?;
-        let power = parse_exponent(pow_s).ok_or_else(|| {
-            UnitError::ParseError(format!(
-                "Invalid exponent \"{pow_s}\" in unit \"{original}\""
-            ))
-        })?;
-        return Ok(base_unit.power_rational(power));
-    }
-
-    // A numeric atom is admissible ONLY when its value is exactly 1 -- the
-    // leading `1` of `1/s`. Any other number is a SCALING FACTOR, and a unit string
-    // denotes a UNIT, not a quantity. This is not pedantry: `(m/s)^-1/3` -- an author
-    // reaching for a rational exponent -- parses under this grammar as `((m/s)^-1)/3`,
-    // and the five bindings gave it three different meanings (magnitude dropped,
-    // magnitude retained, whole string rejected). Rejecting the scaling factor makes
-    // `^(-1/3)` the only spelling of that unit, so the same string cannot silently
-    // mean two things.
-    //
-    // Before this rule Rust RETAINED the magnitude here, so `"1000/s"` came out
-    // as 1/s scaled by 1000 while Julia read the same string as a bare 1/s.
-    if let Ok(v) = s.parse::<f64>() {
-        if v != 1.0 {
-            return Err(UnitError::ParseError(format!(
-                "unit \"{original}\": a number other than 1 is a scaling factor, not a unit (esm-spec 4.8.2); a rational exponent is spelled ^(p/q)"
-            )));
-        }
-        return Ok(Unit {
-            dimensions: HashMap::new(),
-            scale: 1.0,
-            exact: ExactScale::one(),
-        });
-    }
-
-    Err(UnitError::UnknownUnit(original.to_string()))
+/// A §4.8.2 token. Symbols and numbers borrow from the normalized string.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum UnitTok<'a> {
+    /// A run that is not a number, or the one-character `%`.
+    Sym(&'a str),
+    /// A run of digits, optionally `.` and a second run of digits.
+    Num(&'a str),
+    Star,
+    Pow,
+    Slash,
+    Minus,
+    LParen,
+    RParen,
 }
 
-/// Decompose an SI-prefixed symbol into prefix × base (`mg` → milli × gram).
+fn is_ident_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
+/// Split a normalized unit string into §4.8.2 tokens.
 ///
-/// Only the symbols in [`PREFIXABLE`] take a prefix, which keeps the
-/// decomposition from inventing units out of arbitrary identifiers — `not_a_unit`
-/// must still fail to parse, and a count like `units` must not be read as
-/// micro-something. Prefixes are tried LONGEST-first so `da` (deca) is not
-/// mistaken for `d` (deci).
-fn parse_si_prefixed(s: &str, base_units: &HashMap<String, Unit>) -> Option<Unit> {
-    /// (symbol, factor, power of ten), longest symbol first.
-    const PREFIXES: [(&str, f64, i32); 20] = [
-        ("da", 1e1, 1),
-        ("Y", 1e24, 24),
-        ("Z", 1e21, 21),
-        ("E", 1e18, 18),
-        ("P", 1e15, 15),
-        ("T", 1e12, 12),
-        ("G", 1e9, 9),
-        ("M", 1e6, 6),
-        ("k", 1e3, 3),
-        ("h", 1e2, 2),
-        ("d", 1e-1, -1),
-        ("c", 1e-2, -2),
-        ("m", 1e-3, -3),
-        ("u", 1e-6, -6),
-        ("n", 1e-9, -9),
-        ("p", 1e-12, -12),
-        ("f", 1e-15, -15),
-        ("a", 1e-18, -18),
-        ("z", 1e-21, -21),
-        ("y", 1e-24, -24),
-    ];
-    /// Symbols that admit an SI prefix.
-    const PREFIXABLE: [&str; 13] = [
-        "m", "g", "s", "mol", "K", "A", "cd", "L", "N", "Pa", "J", "W", "rad",
-    ];
-
-    for (prefix, factor, power) in PREFIXES {
-        let Some(base) = s.strip_prefix(prefix) else {
-            continue;
-        };
-        if !PREFIXABLE.contains(&base) {
-            continue;
-        }
-        let mut unit = base_units.get(base)?.clone();
-        unit.scale *= factor;
-        unit.exact = unit.exact.multiply(&ExactScale::power_of_ten(power));
-        return Some(unit);
-    }
-    None
-}
-
-/// Parse a unit exponent: an integer (`2`, `-1`), a decimal (`0.5`, `-1.5`), or
-/// a parenthesised fraction (`(1/2)`).
-fn parse_exponent(s: &str) -> Option<Rational> {
-    let s = s.trim();
-    let inner = s
-        .strip_prefix('(')
-        .and_then(|rest| rest.strip_suffix(')'))
-        .unwrap_or(s)
-        .trim();
-    if let Some((num, den)) = inner.split_once('/') {
-        return Some(Rational::new(
-            num.trim().parse().ok()?,
-            den.trim().parse().ok()?,
-        ));
-    }
-    if let Ok(n) = inner.parse::<i32>() {
-        return Some(Rational::int(n));
-    }
-    Rational::from_f64(inner.parse::<f64>().ok()?)
-}
-
-/// Find the *last* top-level (outside any parenthesised group) `*` or `/`,
-/// returning its byte index and which operator it is.
-///
-/// `parse_unit` splits here and recurses on the *left* substring, which makes
-/// the two operators share a precedence level and associate left-to-right:
-/// `a/b/c` is `(a/b)/c`, `a*b/c` is `(a*b)/c`, and `a/b*c` is `(a/b)*c`. This
-/// gives the conventional reading of `W/m^2/K` as `W/(m^2*K)` while keeping
-/// `J/mol*K` as `(J/mol)*K`, and matches the sibling parsers (Go's recursive
-/// descent, Python/pint, Julia's Unitful `uparse`).
-/// Returns `(byte index, byte length, operator)`. The length matters because an
-/// implicit multiplication is a RUN of whitespace, which the caller must skip
-/// whole.
-fn find_last_top_level_operator(s: &str) -> Option<(usize, usize, char)> {
+/// A RUN is a maximal sequence of `[A-Za-z0-9_]`. A run of digits alone,
+/// optionally followed by `.` and a second digit-only run, is a number; every
+/// other run is ONE symbol, so `s1`, `1s` and `kgm` are never split into a table
+/// key and a remainder (and `1e3` is a symbol, not exponent notation). `%` is a
+/// one-character symbol whatever is adjacent. Whitespace separates tokens and is
+/// otherwise dropped; any other character (`+`, `,`, a stray `.`, `°`) is an
+/// error.
+fn lex_unit<'a>(s: &'a str, original: &str) -> Result<Vec<UnitTok<'a>>, UnitError> {
     let bytes = s.as_bytes();
-    let mut depth = 0i32;
-    let mut last = None;
+    let mut toks = Vec::new();
     let mut i = 0usize;
     while i < bytes.len() {
-        let c = bytes[i] as char;
-        match c {
-            '(' => depth += 1,
-            ')' => depth -= 1,
-            '*' | '/' if depth == 0 => last = Some((i, 1, c)),
-            ' ' | '\t' if depth == 0 => {
-                // A run of whitespace BETWEEN two terms is an implicit `*`.
-                // Whitespace merely padding an explicit operator (`m / s`) is
-                // not: the operator arm above already claimed that position, and
-                // a run adjacent to one must not be treated as a second operator.
+        let b = bytes[i];
+        let tok = match b {
+            b' ' | b'\t' | b'\r' | b'\n' => {
+                i += 1;
+                continue;
+            }
+            b'*' if bytes.get(i + 1) == Some(&b'*') => {
+                i += 2;
+                toks.push(UnitTok::Pow);
+                continue;
+            }
+            b'*' => UnitTok::Star,
+            b'^' => UnitTok::Pow,
+            b'/' => UnitTok::Slash,
+            b'-' => UnitTok::Minus,
+            b'(' => UnitTok::LParen,
+            b')' => UnitTok::RParen,
+            b'%' => UnitTok::Sym("%"),
+            _ if is_ident_byte(b) => {
                 let start = i;
-                while i < bytes.len() && matches!(bytes[i] as char, ' ' | '\t') {
+                while i < bytes.len() && is_ident_byte(bytes[i]) {
                     i += 1;
                 }
-                let before = s[..start].trim_end().chars().last();
-                let after = s[i..].chars().next();
-                let padding = matches!(before, Some('*' | '/' | '^') | None)
-                    || matches!(after, Some('*' | '/' | '^') | None);
-                if !padding {
-                    last = Some((start, i - start, '*'));
+                let run = &s[start..i];
+                if !run.bytes().all(|c| c.is_ascii_digit()) {
+                    toks.push(UnitTok::Sym(run));
+                    continue;
+                }
+                if bytes.get(i) == Some(&b'.') && bytes.get(i + 1).is_some_and(u8::is_ascii_digit) {
+                    let frac_start = i + 1;
+                    i = frac_start;
+                    while i < bytes.len() && is_ident_byte(bytes[i]) {
+                        i += 1;
+                    }
+                    let lit = &s[start..i];
+                    if s[frac_start..i].bytes().all(|c| c.is_ascii_digit()) {
+                        toks.push(UnitTok::Num(lit));
+                    } else {
+                        toks.push(UnitTok::Sym(lit));
+                    }
+                } else {
+                    toks.push(UnitTok::Num(run));
                 }
                 continue;
             }
-            _ => {}
-        }
+            _ => {
+                let c = s[i..].chars().next().unwrap_or('?');
+                return Err(UnitError::ParseError(format!(
+                    "unexpected character '{c}' in unit \"{original}\""
+                )));
+            }
+        };
+        toks.push(tok);
         i += 1;
     }
-    last
+    Ok(toks)
 }
 
-fn parens_balance(s: &str) -> bool {
-    let mut depth = 0i32;
-    for c in s.chars() {
-        match c {
-            '(' => depth += 1,
-            ')' => {
-                depth -= 1;
-                if depth < 0 {
-                    return false;
+/// Recursive-descent parser for the §4.8.2 grammar:
+///
+/// ```text
+/// unit     := term (('*' | '/')? term)*
+/// term     := atom (('^' | '**') exponent)?
+/// exponent := '-'? (integer | decimal) | '(' '-'? integer '/' '-'? integer ')'
+/// atom     := '1' | symbol | '(' unit ')'
+/// ```
+///
+/// `*`, `/` and juxtaposition are ONE precedence level folded LEFT to right, so
+/// `J/mol*K` is `(J/mol)*K` and `W/m^2/K` is `W/(m^2*K)`.
+struct UnitParser<'a, 'o> {
+    toks: Vec<UnitTok<'a>>,
+    pos: usize,
+    original: &'o str,
+}
+
+impl<'a> UnitParser<'a, '_> {
+    fn peek(&self) -> Option<UnitTok<'a>> {
+        self.toks.get(self.pos).copied()
+    }
+
+    fn bump(&mut self) -> Option<UnitTok<'a>> {
+        let t = self.peek();
+        self.pos += 1;
+        t
+    }
+
+    fn err(&self, why: &str) -> UnitError {
+        UnitError::ParseError(format!("unit \"{}\": {why}", self.original))
+    }
+
+    fn unit(&mut self) -> Result<Unit, UnitError> {
+        let mut acc = self.term()?;
+        loop {
+            match self.peek() {
+                Some(UnitTok::Star) => {
+                    self.bump();
+                    acc = acc.multiply(&self.term()?);
                 }
+                Some(UnitTok::Slash) => {
+                    self.bump();
+                    acc = acc.divide(&self.term()?);
+                }
+                // Juxtaposition (whitespace between terms, or `%h`) multiplies.
+                Some(UnitTok::Sym(_) | UnitTok::Num(_) | UnitTok::LParen) => {
+                    acc = acc.multiply(&self.term()?);
+                }
+                Some(UnitTok::Minus) => {
+                    return Err(self.err(
+                        "'-' is not an operator in a unit string (a negative exponent is ^-n)",
+                    ));
+                }
+                _ => return Ok(acc),
             }
-            _ => {}
         }
     }
-    depth == 0
+
+    fn term(&mut self) -> Result<Unit, UnitError> {
+        let base = self.atom()?;
+        if self.peek() == Some(UnitTok::Pow) {
+            self.bump();
+            let exponent = self.exponent()?;
+            return Ok(base.power_rational(exponent));
+        }
+        Ok(base)
+    }
+
+    /// `'-'? integer` inside a parenthesised rational exponent.
+    fn signed_integer(&mut self) -> Option<i64> {
+        let negative = if self.peek() == Some(UnitTok::Minus) {
+            self.bump();
+            true
+        } else {
+            false
+        };
+        match self.bump() {
+            Some(UnitTok::Num(lit)) if !lit.contains('.') => {
+                let v: i64 = lit.parse().ok()?;
+                Some(if negative { -v } else { v })
+            }
+            _ => None,
+        }
+    }
+
+    fn exponent(&mut self) -> Result<Rational, UnitError> {
+        if self.peek() == Some(UnitTok::LParen) {
+            self.bump();
+            let bad = "a rational exponent is spelled ^(p/q) with integers p and q";
+            let p = self.signed_integer().ok_or_else(|| self.err(bad))?;
+            if self.bump() != Some(UnitTok::Slash) {
+                return Err(self.err(bad));
+            }
+            let q = self.signed_integer().ok_or_else(|| self.err(bad))?;
+            if self.bump() != Some(UnitTok::RParen) {
+                return Err(self.err(bad));
+            }
+            if q == 0 {
+                return Err(self.err("zero denominator in a rational exponent"));
+            }
+            return Rational::checked_from_i64(p, q)
+                .ok_or_else(|| self.err("rational exponent out of range"));
+        }
+        let negative = if self.peek() == Some(UnitTok::Minus) {
+            self.bump();
+            true
+        } else {
+            false
+        };
+        let Some(UnitTok::Num(lit)) = self.bump() else {
+            return Err(self.err("an exponent must be an integer, a decimal, or a rational ^(p/q)"));
+        };
+        // Exact decimal: `1.5` is 15/10, never a float approximation.
+        let (int_part, frac_part) = lit.split_once('.').unwrap_or((lit, ""));
+        let den = u32::try_from(frac_part.len())
+            .ok()
+            .and_then(|k| 10i64.checked_pow(k));
+        let num = format!("{int_part}{frac_part}").parse::<i64>().ok();
+        let value = match (num, den) {
+            (Some(n), Some(d)) => Rational::checked_from_i64(if negative { -n } else { n }, d),
+            _ => None,
+        };
+        value.ok_or_else(|| self.err("exponent out of range"))
+    }
+
+    fn atom(&mut self) -> Result<Unit, UnitError> {
+        match self.bump() {
+            // A numeric atom is admissible ONLY when it is the LITERAL `1` -- the
+            // leading `1` of `1/s`. Any other number (`1000`, `0.5`, and also `01`
+            // and `1.0`) is a SCALING FACTOR, and a unit string denotes a UNIT, not
+            // a quantity. `(m/s)^-1/3` -- an author reaching for a rational
+            // exponent -- parses as `((m/s)^-1)/3`, and the five bindings gave it
+            // three different meanings (magnitude dropped, magnitude retained,
+            // whole string rejected). Rejecting the scaling factor makes `^(-1/3)`
+            // the only spelling of that unit.
+            Some(UnitTok::Num("1")) => Ok(Unit::dimensionless()),
+            Some(UnitTok::Num(_)) => Err(UnitError::ParseError(format!(
+                "unit \"{}\": a number other than 1 is a scaling factor, not a unit (esm-spec 4.8.2); a rational exponent is spelled ^(p/q)",
+                self.original
+            ))),
+            Some(UnitTok::Sym(name)) => {
+                if name == "dimensionless" {
+                    return Ok(Unit::dimensionless());
+                }
+                // The table is FLAT (esm-spec §4.8.1): a symbol resolves only
+                // when the whole run is a key. There is no SI-prefix fallback,
+                // so `Tm`, `dam`, `kmolec` do not resolve.
+                get_base_units()
+                    .get(name)
+                    .cloned()
+                    .ok_or_else(|| UnitError::UnknownUnit(self.original.to_string()))
+            }
+            Some(UnitTok::LParen) => {
+                let inner = self.unit()?;
+                if self.bump() != Some(UnitTok::RParen) {
+                    return Err(self.err("missing ')'"));
+                }
+                Ok(inner)
+            }
+            Some(_) => Err(self.err("expected a unit symbol, 1, or '('")),
+            None => Err(self.err("unexpected end of the unit string")),
+        }
+    }
+}
+
+/// Parse an already-normalized unit string. `original` is carried only for
+/// error messages, so a diagnostic quotes what the author actually wrote.
+///
+/// Only `""` is the empty unit: a whitespace-only string has no tokens, derives
+/// no `unit`, and is rejected (esm-spec §4.8.2).
+fn parse_normalized(s: &str, original: &str) -> Result<Unit, UnitError> {
+    if s.is_empty() {
+        return Ok(Unit::dimensionless());
+    }
+    let mut parser = UnitParser {
+        toks: lex_unit(s, original)?,
+        pos: 0,
+        original,
+    };
+    let unit = parser.unit()?;
+    match parser.peek() {
+        None => Ok(unit),
+        Some(UnitTok::Pow) => Err(parser.err("a term takes one exponent (`a^b^c` is not a unit)")),
+        Some(UnitTok::RParen) => Err(parser.err("unbalanced ')'")),
+        Some(_) => Err(parser.err("unexpected token")),
+    }
 }
 
 /// Get commonly used base units
@@ -2936,18 +2990,8 @@ fn build_base_units() -> HashMap<String, Unit> {
     );
 
     // Derived units
-    // Velocity: m/s
-    units.insert(
-        "m/s".to_string(),
-        Unit::base(Dimension::Length, 1, 1.0).divide(&Unit::base(Dimension::Time, 1, 1.0)),
-    );
-
-    // Concentration: mol/L (mol/m^3)
+    // Molar concentration: M = mol/L (10³ mol/m³).
     let liter = Unit::base(Dimension::Length, 3, 0.001).with_exact(ExactScale::power_of_ten(-3));
-    units.insert(
-        "mol/L".to_string(),
-        Unit::base(Dimension::Amount, 1, 1.0).divide(&liter),
-    );
     units.insert(
         "M".to_string(),
         Unit::base(Dimension::Amount, 1, 1.0).divide(&liter),
@@ -3194,6 +3238,41 @@ fn build_base_units() -> HashMap<String, Unit> {
         "DU".to_string(),
         Unit::base(Dimension::Length, -2, 2.6867e20).with_exact(ExactScale::decimal("2.6867e20")),
     );
+
+    // The table's PREFIXED entries, each an explicit key. The table is flat
+    // (esm-spec §4.8.1): there is no SI-prefix mechanism, so `Tm`, `dam`, `dg`,
+    // `PW`, `fs` and `kmolec` do not resolve, and a prefixed unit exists only
+    // when it is listed here.
+    for (key, base, power) in [
+        ("mg", "g", -3),
+        ("ug", "g", -6),
+        ("dm", "m", -1),
+        ("um", "m", -6),
+        ("nm", "m", -9),
+        ("ms", "s", -3),
+        ("us", "s", -6),
+        ("ns", "s", -9),
+        ("mL", "L", -3),
+        ("kmol", "mol", 3),
+        ("mmol", "mol", -3),
+        ("umol", "mol", -6),
+        ("nmol", "mol", -9),
+        ("kW", "W", 3),
+        ("MW", "W", 6),
+        ("hPa", "Pa", 2),
+        ("kPa", "Pa", 3),
+        ("mbar", "bar", -3),
+    ] {
+        let mut unit = units[base].clone();
+        unit.scale *= format!("1e{power}")
+            .parse::<f64>()
+            .expect("a decimal power of ten");
+        unit.exact = unit.exact.multiply(&ExactScale::power_of_ten(power));
+        units.insert(key.to_string(), unit);
+    }
+    // `l` is the lower-case spelling of the litre.
+    let litre = units["L"].clone();
+    units.insert("l".to_string(), litre);
 
     units
 }
@@ -4208,20 +4287,6 @@ mod tests {
         );
         // Length cancels: m^2 (from W) divided by m^2 leaves power 0 (absent).
         assert_eq!(u.dimensions.get(&Dimension::Length), None);
-    }
-
-    #[test]
-    fn test_find_last_top_level_operator() {
-        // `a/b/c` splits at the *last* top-level operator so parse_unit recurses
-        // on the left `a/b`, yielding left-associative `(a/b)/c`.
-        assert_eq!(find_last_top_level_operator("a/b/c"), Some((3, 1, '/')));
-        assert_eq!(find_last_top_level_operator("a*b*c"), Some((3, 1, '*')));
-        // `*` and `/` share one precedence level, so the LAST of either wins:
-        // `a/b*c` is `(a/b)*c`, not `a/(b*c)`.
-        assert_eq!(find_last_top_level_operator("a/b*c"), Some((3, 1, '*')));
-        // Separators inside parentheses are hidden from the top-level scan.
-        assert_eq!(find_last_top_level_operator("a/(b/c)"), Some((1, 1, '/')));
-        assert_eq!(find_last_top_level_operator("kg"), None);
     }
 
     /// `*` and `/` are the SAME precedence level and associate left-to-right.

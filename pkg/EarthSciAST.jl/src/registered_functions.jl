@@ -37,8 +37,11 @@ only as a *difference between evaluator paths* (the array paths raise
 where the scalar path silently skipped), and that divergence is a **contract
 violation by the function author, not an evaluator bug**. The spec-defined
 `datetime.*` / `interp.*` set honors this contract (the calendar functions are
-total on finite `Float64`; the interpolators extrapolate flat rather than
-raising). Any future closed primitive must too.
+total on every finite `Float64` whose proleptic-Gregorian year is an Int32 —
+|t| below about 6.8e16 s; outside that, and for NaN/±Inf, esm-spec §9.2 makes
+every one of them raise `closed_function_overflow`, which they do; the
+interpolators extrapolate flat rather than raising). Any future closed
+primitive must too.
 
 This module provides:
 
@@ -50,16 +53,16 @@ This module provides:
   [`EsmFile`](@ref) to a `const` integer per esm-spec §9.3.
 - [`ClosedFunctionError`](@ref) — error type carrying spec-defined diagnostic
   codes (`unknown_closed_function`, `closed_function_overflow`,
-  `searchsorted_non_monotonic`, `closed_function_arity`).
+  `searchsorted_non_monotonic`, `closed_function_arity`, `interp_axis_not_const`, …).
 
 Calendar arithmetic is a BRANCH-FREE closed form over the proleptic-Gregorian
 calendar (Hinnant's `civil_from_days`), computed in the argument's own value
 type rather than through `Dates` — see the calendar section below for why an
 opaque host call is a wall for a traced or otherwise non-host evaluator. The
 v0.3.0 spec contract forbids leap-second consultation, which this honors by
-construction. `julian_day` is computed via the Fliegel–van Flandern (1968)
-integer formula plus the fractional-day offset, giving ≤ 1 ulp agreement with
-the spec reference. `Dates` remains the ORACLE: `test/datetime_arithmetic_
+construction. `julian_day` is the standard Julian Date `t/86400 + 2440587.5`
+for every `t`, evaluated in binary64 from the same exact split as esm-spec
+§9.2 pins it (≤ 1 ulp). `Dates` remains the ORACLE: `test/datetime_arithmetic_
 test.jl` pins every field against it exhaustively over 1600–2400.
 """
 
@@ -99,18 +102,25 @@ Raised by the closed function registry when the spec contract is violated.
 - `closed_function_arity` — wrong number of arguments for the named function.
 - `closed_function_overflow` — integer-typed result would overflow Int32.
 - `searchsorted_non_monotonic` — `xs` is not non-decreasing.
-- `searchsorted_nan_in_table` — `xs` contains a NaN entry.
+- `searchsorted_nan` — `xs` contains a NaN entry (checked before monotonicity).
+- `interp_axis_not_const` — `interp.searchsorted`'s `xs` is not a rank-1 array
+  of numbers (a scalar, a nested array); checked before `searchsorted_nan`.
 - `interp_non_monotonic_axis` — `interp.linear` / `interp.bilinear` axis is
   not strictly increasing (esm-spec §9.2; equal-adjacent rejected because the
   blend denominator would be zero).
 - `interp_axis_length_mismatch` — `interp.linear`: `len(table) != len(axis)`;
   `interp.bilinear`: `len(table) != len(axis_x)`, or any inner row length
   differs from `len(axis_y)`.
-- `interp_nan_in_axis` — any `axis` (or `axis_x`, `axis_y`) contains a NaN.
+- `interp_nan_in_axis` — any `axis` (or `axis_x`, `axis_y`) contains a value
+  that is not finite (NaN, +Inf or -Inf; ruling Q-113).
 - `interp_axis_too_short` — any axis has fewer than 2 entries.
-- `interp_table_not_const` / `interp_axis_not_const` — table / axis argument
-  is not a literal `const`-op array (e.g. a variable reference). Raised by
-  the AST extraction site, not by `evaluate_closed_function` directly.
+- `interp_table_not_const` / `interp_axis_not_const` — table / axis (or
+  `interp.searchsorted` `xs`) argument is not a literal `const`-op array of
+  the required rank (e.g. a variable reference, a scalar `const`, a nested
+  array where a flat one belongs; ruling Q-108). Raised at load and by
+  `validate()` on every `interp.*` `fn` node (load_time_checks.jl), by the
+  build's const-arg protocol and the MTK lowering, and — for a value of the
+  wrong rank — by `evaluate_closed_function` itself.
 """
 struct ClosedFunctionError <: EarthSciASTError
     code::String
@@ -179,6 +189,31 @@ end
 # a silently wrong number.
 @inline _cal_narrow(name::String, v) = v isa Real ? _cal_i32(name, v) : v
 
+# The overflow gate every `datetime.*` entry passes its argument through
+# (esm-spec §9.2): a NaN or ±Inf `t`, and one whose proleptic-Gregorian year
+# is outside Int32, raise `closed_function_overflow` WHICHEVER field is asked
+# for. The year test is on the day number — `_DAY_OF_INT32_MIN_YEAR` is
+# -2147483648-01-01, `_DAY_OF_INT32_YEAR_END` is 2147483648-01-01 — which is
+# the same test as the year's and needs no calendar. Only a host real is
+# checked: a traced value has no host answer to raise on, so the compiled
+# lanes' eltype-generic kernels apply the same test as a select to NaN
+# (`_cal_guarded`).
+const _DAY_OF_INT32_MIN_YEAR = -784353015833.0
+const _DAY_OF_INT32_YEAR_END = 784351576777.0
+
+@inline function _cal_t(name::String, t)
+    t isa Real || return t
+    isfinite(t) || _cal_overflow(name, t)
+    days = _cal_split(t)[1]
+    (_DAY_OF_INT32_MIN_YEAR <= days < _DAY_OF_INT32_YEAR_END) || _cal_overflow(name, t)
+    return t
+end
+
+@noinline _cal_overflow(name::String, t) =
+    throw(ClosedFunctionError(ERROR_CODES.CLOSED_FUNCTION_OVERFLOW,
+        isfinite(t) ? "$(name): the year of t_utc $(t) overflows Int32" :
+                      "$(name): t_utc $(t) is not finite"))
+
 function _cal_i32(name::String, v)::Int32
     fv = Float64(v)
     if !isfinite(fv) || fv < typemin(Int32) || fv > typemax(Int32)
@@ -226,31 +261,31 @@ function evaluate_closed_function(name::String, args::AbstractVector)
 
     if name == "datetime.year"
         _expect_arity(name, args, 1)
-        return _cal_i32(name, _cal_year(_value(args[1])))
+        return _cal_i32(name, _cal_year(_cal_t(name, _value(args[1]))))
     elseif name == "datetime.month"
         _expect_arity(name, args, 1)
-        return _cal_i32(name, _cal_month(_value(args[1])))
+        return _cal_i32(name, _cal_month(_cal_t(name, _value(args[1]))))
     elseif name == "datetime.day"
         _expect_arity(name, args, 1)
-        return _cal_i32(name, _cal_day(_value(args[1])))
+        return _cal_i32(name, _cal_day(_cal_t(name, _value(args[1]))))
     elseif name == "datetime.hour"
         _expect_arity(name, args, 1)
-        return _cal_i32(name, _cal_hour(_value(args[1])))
+        return _cal_i32(name, _cal_hour(_cal_t(name, _value(args[1]))))
     elseif name == "datetime.minute"
         _expect_arity(name, args, 1)
-        return _cal_i32(name, _cal_minute(_value(args[1])))
+        return _cal_i32(name, _cal_minute(_cal_t(name, _value(args[1]))))
     elseif name == "datetime.second"
         _expect_arity(name, args, 1)
-        return _cal_i32(name, _cal_second(_value(args[1])))
+        return _cal_i32(name, _cal_second(_cal_t(name, _value(args[1]))))
     elseif name == "datetime.day_of_year"
         _expect_arity(name, args, 1)
-        return _cal_i32(name, _cal_day_of_year(_value(args[1])))
+        return _cal_i32(name, _cal_day_of_year(_cal_t(name, _value(args[1]))))
     elseif name == "datetime.julian_day"
         _expect_arity(name, args, 1)
-        return _datetime_julian_day(Float64(args[1]))::Float64
+        return _datetime_julian_day(_cal_t(name, Float64(args[1])))::Float64
     elseif name == "datetime.is_leap_year"
         _expect_arity(name, args, 1)
-        return _cal_i32(name, _cal_is_leap_year(_value(args[1])))
+        return _cal_i32(name, _cal_is_leap_year(_cal_t(name, _value(args[1]))))
     elseif name == "interp.searchsorted"
         _expect_arity(name, args, 2)
         return _interp_searchsorted(name, args[1], args[2])
@@ -299,6 +334,7 @@ index is a build-time table position, not a value the traced program computes.
 function evaluate_closed_function_ad(name::String, args::AbstractVector)
     if name == "datetime.julian_day"
         _expect_arity(name, args, 1)
+        _cal_t(name, _value(args[1]))
         return _datetime_julian_day(args[1])
     elseif name == "interp.linear"
         _expect_arity(name, args, 3)
@@ -321,21 +357,21 @@ function evaluate_closed_function_ad(name::String, args::AbstractVector)
     # these are piecewise constant) rather than partials leaking through the
     # floor divisions.
     elseif name == "datetime.year"
-        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_year(_value(args[1])))
+        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_year(_cal_t(name, _value(args[1]))))
     elseif name == "datetime.month"
-        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_month(_value(args[1])))
+        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_month(_cal_t(name, _value(args[1]))))
     elseif name == "datetime.day"
-        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_day(_value(args[1])))
+        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_day(_cal_t(name, _value(args[1]))))
     elseif name == "datetime.hour"
-        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_hour(_value(args[1])))
+        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_hour(_cal_t(name, _value(args[1]))))
     elseif name == "datetime.minute"
-        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_minute(_value(args[1])))
+        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_minute(_cal_t(name, _value(args[1]))))
     elseif name == "datetime.second"
-        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_second(_value(args[1])))
+        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_second(_cal_t(name, _value(args[1]))))
     elseif name == "datetime.day_of_year"
-        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_day_of_year(_value(args[1])))
+        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_day_of_year(_cal_t(name, _value(args[1]))))
     elseif name == "datetime.is_leap_year"
-        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_is_leap_year(_value(args[1])))
+        _expect_arity(name, args, 1); return _cal_narrow(name, _cal_is_leap_year(_cal_t(name, _value(args[1]))))
     end
     # Discrete-valued or already-generic: the pinned registry handles duals.
     return evaluate_closed_function(name, args)
@@ -372,8 +408,7 @@ end
 # So the calendar is re-derived here as ARITHMETIC. Nothing about it is
 # approximate: the proleptic-Gregorian calendar is a closed-form function of
 # the day number, and Howard Hinnant's `civil_from_days` computes it with no
-# branch and no table — the exact inverse of the Fliegel–van Flandern formula
-# `_datetime_julian_day` already runs in the forward direction below. Every
+# branch and no table — the exact inverse of `_days_from_civil` below. Every
 # step is `+ - * /`, `floor`, a comparison and a `select`, all of which the
 # compiled backends already lower (`ifelse` is a VALUE-level select — both arms
 # are computed and the condition picks one — not control flow, which is
@@ -386,22 +421,18 @@ end
 # surfaces as an `:oop`-vs-`:inplace` mismatch in a model, not as a test
 # failure here. `test/datetime_arithmetic_test.jl` pins agreement with `Dates`
 # EXHAUSTIVELY: every day from 1600-01-01 to 2400-01-01 (292,000 days), every
-# second of four representative days, and the millisecond-rounding boundaries.
+# second of four representative days, and fractional seconds on both sides
+# of the epoch.
 #
-# MILLISECOND RESOLUTION IS PART OF THE CONTRACT, not an implementation
-# detail. `Dates.unix2datetime(x)` is `DateTime(UTM(UNIXEPOCH + trunc(Int64,
-# 1000x)))`, so the sub-millisecond remainder of `t` is DISCARDED, and working
-# in whole milliseconds from the start is what reproduces that. Decomposing
-# `t` directly in seconds disagrees at every sub-millisecond boundary — caught
-# by the ms-boundary phase of the test, which is the only phase that can see
-# it (an exact-integer `t` truncates and rounds alike).
-#
-# `trunc`, NOT `round`, and the distinction is load-bearing: at
-# `t = …59.9995 s` rounding lands on the next second and truncation stays put,
-# and `Dates` stays put. Note this makes the cut asymmetric about the epoch —
-# truncation goes toward ZERO, so a sub-second time in 1969 moves forward
-# while one in 1971 moves back. That is `Dates`' behavior, faithfully copied,
-# not a choice made here.
+# FRACTIONAL SECONDS FLOOR TOWARD −∞ (esm-spec §9.2): the day number is
+# `floor(t/86400)` and the time of day `t − 86400·floor(t/86400)`, both
+# exact, and the fields come from `floor(time of day)`. Because 86400 is an
+# integer that is the floor-divmod of `floor(t)`, which is exact in binary64,
+# so the decomposition starts from the whole second `t` falls in. This is NOT
+# `Dates.unix2datetime`, which truncates `1000t` toward ZERO: there a time
+# just before the epoch (`-1e-7`) lands on 1970-01-01T00:00:00 rather than
+# 1969-12-31T23:59:59. Every whole-second `t` agrees with `Dates`, which is
+# what the test's sweeps compare against.
 
 # Floor division. PRECONDITION: `a` and `b` are exact integers in the value
 # type and `b > 0` — true of every call in this section.
@@ -443,26 +474,22 @@ end
                   ifelse(r >= b, q + oftype(q, 1), q))
 end
 
-# Truncation toward zero, spelled with the two primitives a compiled backend
-# already lowers. `Base.trunc` would do on the host but is a third op to demand
-# of a backend for no gain, and `floor` + a select is exactly the pair the rest
-# of this section is built from.
-@inline _ctrunc(x) = ifelse(x < 0, -floor(-x), floor(x))
-
-# Days since 1970-01-01 and milliseconds-of-day, from a UTC second count.
+# Days since 1970-01-01 and the whole second of the day, in [0, 86400), from a
+# UTC second count — the esm-spec §9.2 floor-divmod (see the section comment).
 #
-# `ms` is an exact integer — the precondition `_cdiv` needs — for every
-# `|t| < 9e12 s`, about ±285,000 years around the epoch. Past that the ms
-# count leaves Float64's exact-integer range and the fields stop being
-# meaningful; on the `Float64` path `_cal_i32` then rejects them as
-# non-Int32. That is the same place the old `Dates` path gave up (an
-# `InexactError` from inside `trunc(Int64, ·)`), so the domain has not
-# narrowed — but note it IS a throw, and the TOTALITY CONTRACT at the top of
-# this file scopes the calendar to finite in-range inputs for that reason.
+# `s = floor(t)` is an exact integer for every finite `t`. `_cdiv(s, 86400)` is
+# exact further out than its general `2⁵³` precondition: `86400 = 2⁷·675`, so
+# the product `q·86400` stays exact while `q·675 < 2⁵³` (|t| up to ~1.1e18 s),
+# and the remainder `s − q·86400` is then an exact difference of two close
+# exact numbers. That covers the whole Int32 year range (|t| < 6.8e16 s), so
+# `datetime.year` reaches ±2³¹ exactly and `_cal_i32` raises the overflow one
+# year past it. Far beyond that the fields stop being meaningful, and the
+# TOTALITY CONTRACT at the top of this file scopes the calendar to in-range
+# inputs for that reason.
 @inline function _cal_split(t_utc)
-    ms = _ctrunc(1000 * t_utc)
-    days = _cdiv(ms, 86400000)
-    return days, ms - days * 86400000
+    s = floor(t_utc)
+    days = _cdiv(s, 86400)
+    return days, s - days * 86400
 end
 
 # (year, month, day) from days since the Unix epoch — Hinnant's
@@ -521,25 +548,28 @@ end
 end
 
 @inline function _cal_hour(t)
-    msod = _cal_split(t)[2]
-    return _cdiv(msod, 3600000)
+    sod = _cal_split(t)[2]
+    return _cdiv(sod, 3600)
 end
 
 @inline function _cal_minute(t)
-    msod = _cal_split(t)[2]
-    return _cdiv(msod - _cdiv(msod, 3600000) * 3600000, 60000)
+    sod = _cal_split(t)[2]
+    return _cdiv(sod - _cdiv(sod, 3600) * 3600, 60)
 end
 
 @inline function _cal_second(t)
-    msod = _cal_split(t)[2]
-    rem_min = msod - _cdiv(msod, 60000) * 60000
-    return _cdiv(rem_min, 1000)
+    sod = _cal_split(t)[2]
+    return sod - _cdiv(sod, 60) * 60
 end
 
-# Fliegel–van Flandern (1968) integer JDN, plus fractional-day offset from
-# noon-UTC. Returns Float64 with ≤ 1 ulp agreement to the spec reference
-# computation — the only floating-point operation is the final divide by
-# 86400 (one rounded operation).
+# The standard Julian Date `t/86400 + 2440587.5`, for every `t` (esm-spec
+# §9.2), evaluated as the spec pins it from the exact split:
+# `(days + 2440588) + ((sod − 43200) + (t − floor(t))) / 86400`. `days +
+# 2440588` and `sod − 43200` are exact integers and `t − floor(t)` is exact in
+# binary64 except for −0.5 < t < 0 (where `1 + t` can round), so the inner
+# add, the divide and the outer add are the only other roundings (≤ 1 ulp). The day term is the LINEAR day number, not the
+# Fliegel–van Flandern JDN of the calendar date: the two agree from
+# -4800-03-01 on, and before that FvF is off by -2 to +1 days.
 #
 # UNLIKE the rest of `datetime.*`, this one is genuinely CONTINUOUS in `t_utc`
 # (d(julian_day)/d(t_utc) = 1/86400 a.e.), so the query is `Real` and the
@@ -547,43 +577,19 @@ end
 # derivative comes back out. This is load-bearing for stiff solvers — a
 # Rosenbrock method needs ∂f/∂t, and in models whose photolysis rates are driven
 # by solar geometry that path runs through `julian_day`. Only the DISCRETE
-# integer JDN is taken off the primal (`_value`), which is exactly right: the
-# day-number is piecewise constant, so it contributes no derivative.
+# day number is taken off the primal (`_value`), which is exactly right: it is
+# piecewise constant, so it contributes no derivative.
 #
-# `mod(t_utc, 86400.0)` is left generic rather than split into
-# `t - 86400*floor(t/86400)`: ForwardDiff differentiates `mod` directly, and on a
-# `Float64` query this is bit-for-bit the same call as before (`_value` is the
-# identity), preserving the spec's pinned ≤1 ulp / cross-binding contract.
-#
-# The (y, m, d) decomposition comes from the branch-free calendar above rather
-# than from `Dates`, so this traces like everything else — which matters more
-# here than for the discrete fields, because a Rosenbrock ∂f/∂t through solar
-# geometry runs straight down this path.
-#
-# `÷` BECAME `_cdiv` ONLY WHERE THAT IS THE SAME OPERATION. Julia's integer `÷`
-# truncates toward zero; `_cdiv` floors. The two agree exactly when the
-# numerator is non-negative, which holds for all three of the divisions kept
-# below (the `1461·(…)`, `367·(…)` and `3·(…)/100` terms are positive for every
-# year > -4800, the same implicit domain the Fliegel–van Flandern form always
-# carried). The ONE place they differ is `(m - 14) ÷ 12`, whose numerator runs
-# -13..-2: truncation gives -1 for every month, flooring would give -2 at
-# January. That term is written as the select it actually is.
+# `sod` and the floor come from the SAME split as the day: a separate
+# `mod(t, 86400.0)` rounds `86400 − 5e-324` up to 86400 while the floor says
+# the day before. The floor is of the PRIMAL, a constant, so `t_utc − s` keeps
+# `t`'s derivative. Every step is `+ - * /` and `floor`, so this traces like
+# the rest of the calendar. The overflow gate (`_cal_t`) is the caller's.
 function _datetime_julian_day(t_utc)
-    y, m, d = _civil_from_days(_cal_split(_value(t_utc))[1])
-    a = ifelse(m <= 2, oftype(m, -1), oftype(m, 0))   # == (m - 14) ÷ 12, truncated
-    jdn = _cdiv(1461 * (y + 4800 + a), 4) +
-          _cdiv(367 * (m - 2 - 12 * a), 12) -
-          _cdiv(3 * _cdiv(y + 4900 + a, 100), 4) +
-          d - 32075
-    # JDN counts noon-to-noon; convert time-of-day seconds (since 00:00 UTC)
-    # to a fractional offset relative to noon. The spec pins this offset as
-    # `(time_of_day_seconds − 43200) / 86400` (esm-spec §9.2.1).
-    seconds_in_day = mod(t_utc, 86400.0)
-    # `jdn` is already a value of the argument's own type — the branch-free
-    # decomposition never leaves it. The `Float64(jdn)` that stood here was
-    # narrowing an `Int` returned by `Dates`, and on a traced value it is the
-    # same wall as `_to_datetime`'s.
-    return jdn + (seconds_in_day - 43200.0) / 86400.0
+    t0 = _value(t_utc)
+    days, sod = _cal_split(t0)
+    from_noon = (sod - 43200) + (t_utc - floor(t0))
+    return (days + 2440588) + from_noon / 86400.0
 end
 
 # ============================================================
@@ -650,8 +656,11 @@ end
 #
 # `kernel` is that composition's ELTYPE-GENERIC heart: the branch-free
 # arithmetic itself, without `core`'s `Float64` pin and without `_cal_i32`'s
-# Int32 range check. On a `Float64` argument it computes the same number `core`
-# does (the pin and the check narrow a value, they do not change one), and on a
+# Int32 range check. On an in-range `Float64` argument it computes the same
+# number `core` does (the pin and the check narrow a value, they do not change
+# one); where `core` raises `closed_function_overflow` it answers NaN instead
+# (`_cal_guarded`), the Rust tape's answer, since a compiled lane has no host
+# value to raise on. On a
 # value type that has no `Float64` and no `Int32` — a traced number, a tensor
 # lane — it is the only one of the two that has an answer at all. It is what a
 # COMPILING backend lowers: `ext/reactant_direct/interp.jl` asks for the row's
@@ -660,27 +669,38 @@ end
 # of one calendar is two calendars (see the section header above), so there is
 # exactly one, and every tier reaches it.
 const _FN_TYPED_SCALAR_CORES = (
-    (fname = "datetime.year", arity = 1, kernel = _cal_year,
-     core = t -> Float64(_cal_i32("datetime.year", _cal_year(t)))),
-    (fname = "datetime.month", arity = 1, kernel = _cal_month,
-     core = t -> Float64(_cal_i32("datetime.month", _cal_month(t)))),
-    (fname = "datetime.day", arity = 1, kernel = _cal_day,
-     core = t -> Float64(_cal_i32("datetime.day", _cal_day(t)))),
-    (fname = "datetime.hour", arity = 1, kernel = _cal_hour,
-     core = t -> Float64(_cal_i32("datetime.hour", _cal_hour(t)))),
-    (fname = "datetime.minute", arity = 1, kernel = _cal_minute,
-     core = t -> Float64(_cal_i32("datetime.minute", _cal_minute(t)))),
-    (fname = "datetime.second", arity = 1, kernel = _cal_second,
-     core = t -> Float64(_cal_i32("datetime.second", _cal_second(t)))),
-    (fname = "datetime.day_of_year", arity = 1, kernel = _cal_day_of_year,
-     core = t -> Float64(_cal_i32("datetime.day_of_year", _cal_day_of_year(t)))),
-    (fname = "datetime.is_leap_year", arity = 1, kernel = _cal_is_leap_year,
-     core = t -> Float64(_cal_i32("datetime.is_leap_year", _cal_is_leap_year(t)))),
+    (fname = "datetime.year", arity = 1, kernel = t -> _cal_guarded(_cal_year, t),
+     core = t -> Float64(_cal_i32("datetime.year", _cal_year(_cal_t("datetime.year", t))))),
+    (fname = "datetime.month", arity = 1, kernel = t -> _cal_guarded(_cal_month, t),
+     core = t -> Float64(_cal_i32("datetime.month", _cal_month(_cal_t("datetime.month", t))))),
+    (fname = "datetime.day", arity = 1, kernel = t -> _cal_guarded(_cal_day, t),
+     core = t -> Float64(_cal_i32("datetime.day", _cal_day(_cal_t("datetime.day", t))))),
+    (fname = "datetime.hour", arity = 1, kernel = t -> _cal_guarded(_cal_hour, t),
+     core = t -> Float64(_cal_i32("datetime.hour", _cal_hour(_cal_t("datetime.hour", t))))),
+    (fname = "datetime.minute", arity = 1, kernel = t -> _cal_guarded(_cal_minute, t),
+     core = t -> Float64(_cal_i32("datetime.minute", _cal_minute(_cal_t("datetime.minute", t))))),
+    (fname = "datetime.second", arity = 1, kernel = t -> _cal_guarded(_cal_second, t),
+     core = t -> Float64(_cal_i32("datetime.second", _cal_second(_cal_t("datetime.second", t))))),
+    (fname = "datetime.day_of_year", arity = 1, kernel = t -> _cal_guarded(_cal_day_of_year, t),
+     core = t -> Float64(_cal_i32("datetime.day_of_year", _cal_day_of_year(_cal_t("datetime.day_of_year", t))))),
+    (fname = "datetime.is_leap_year", arity = 1, kernel = t -> _cal_guarded(_cal_is_leap_year, t),
+     core = t -> Float64(_cal_i32("datetime.is_leap_year", _cal_is_leap_year(_cal_t("datetime.is_leap_year", t))))),
     # Already `Float64`-valued — the boxed arm's `convert(T, ::Float64)` was
-    # the identity, so the core is the raw kernel.
-    (fname = "datetime.julian_day", arity = 1, kernel = _datetime_julian_day,
-     core = _datetime_julian_day),
+    # the identity, so the core is the kernel behind the overflow gate.
+    (fname = "datetime.julian_day", arity = 1, kernel = t -> _cal_guarded(_datetime_julian_day, t),
+     core = t -> _datetime_julian_day(_cal_t("datetime.julian_day", t))),
 )
+
+# The overflow gate of the eltype-generic kernels: `_cal_t`'s test, as a select.
+# A NaN or ±Inf `t`, or one whose year is outside Int32, gives NaN — no branch
+# and no host comparison, so a traced lane emits it as `compare`/`select`.
+@inline function _cal_guarded(kernel::F, t) where {F}
+    v = kernel(t)
+    days = _cal_split(_value(t))[1]
+    nan = oftype(v, NaN)
+    return ifelse(days >= _DAY_OF_INT32_MIN_YEAR,
+        ifelse(days < _DAY_OF_INT32_YEAR_END, v, nan), nan)
+end
 
 # The eltype-generic kernel of row `id`, for a backend that must lower the
 # function rather than call it. BUILD/EMISSION TIME ONLY: indexing the
@@ -728,22 +748,31 @@ end
                      _fn_typed_core_call_r(Base.tail(rows), id - 1, x)
 end
 
-# Validate an `interp.searchsorted` table `xs`: must be a vector, non-decreasing,
-# with no NaN entries (esm-spec §9.2.2). Factored out of the per-call kernel so
-# the access-kernel array path can validate ONCE at build time instead of re-walking
-# the build-time-constant table every lane (ess-wrh).
+# Validate an `interp.searchsorted` table `xs` (esm-spec §9.2), in the spec's
+# order: a rank-1 array of numbers (`interp_axis_not_const` — a scalar or a
+# nested array is not one), then no NaN entry (`searchsorted_nan`), then
+# non-decreasing (`searchsorted_non_monotonic`). Factored out of the per-call
+# kernel so the access-kernel array path can validate ONCE at build time instead
+# of re-walking the build-time-constant table every lane (ess-wrh). Every path
+# that reads an `xs` — this registry, the tree-walk build's const-arg protocol,
+# the MTK lowering — runs it.
 function _validate_searchsorted_table(name::String, xs)::Nothing
-    if !(xs isa AbstractVector)
-        throw(ClosedFunctionError(ERROR_CODES.CLOSED_FUNCTION_ARITY,
-            "$(name): xs argument must be an array (got $(typeof(xs)))"))
+    if !(xs isa AbstractVector && all(x -> x isa Real && !(x isa Bool), xs))
+        throw(ClosedFunctionError(ERROR_CODES.INTERP_AXIS_NOT_CONST,
+            "$(name): xs must be a rank-1 `const`-op array of numbers (esm-spec §9.2); " *
+            "got $(xs isa AbstractVector ? "an array whose entries are not all numbers" :
+                   "a $(typeof(xs))")"))
+    end
+    # NaN first, over the whole array (esm-spec §9.2): a NaN compares false with
+    # everything, so a monotonicity verdict on an `xs` holding one would depend
+    # on how the comparison is written.
+    for (i, raw) in enumerate(xs)
+        isnan(Float64(raw)) && throw(ClosedFunctionError(ERROR_CODES.SEARCHSORTED_NAN,
+            "$(name): xs[$(i)] is NaN; NaN entries in xs are forbidden"))
     end
     prev = NaN
     for (i, raw) in enumerate(xs)
         v = Float64(raw)
-        if isnan(v)
-            throw(ClosedFunctionError(ERROR_CODES.SEARCHSORTED_NAN_IN_TABLE,
-                "$(name): xs[$(i)] is NaN; NaN entries in xs are forbidden"))
-        end
         if i > 1 && v < prev
             throw(ClosedFunctionError(ERROR_CODES.SEARCHSORTED_NON_MONOTONIC,
                 "$(name): xs is not non-decreasing (xs[$(i)]=$(v) < xs[$(i-1)]=$(prev))"))
@@ -792,35 +821,99 @@ function _interp_searchsorted(name::String, x::Real, xs)::Int32
     return _interp_searchsorted_core(name, x, xs)
 end
 
-# Validate a 1-D axis used by `interp.linear` / `interp.bilinear`. Per
-# esm-spec §9.2: strictly increasing, no NaN, length ≥ 2. Returns the axis
-# coerced to `Vector{Float64}` for downstream blending. `axis_label` names
-# the failing axis ("axis", "axis_x", "axis_y") for the diagnostic.
-function _validate_interp_axis(name::String, axis_raw, axis_label::String)::Vector{Float64}
-    if !(axis_raw isa AbstractVector)
-        throw(ClosedFunctionError(ERROR_CODES.CLOSED_FUNCTION_ARITY,
-            "$(name): `$(axis_label)` must be an array (got $(typeof(axis_raw)))"))
-    end
+# esm-spec §9.2 (ruling Q-108): the `table` and axis arguments of `interp.linear`
+# and `interp.bilinear` are `const` arrays OF A FIXED RANK — rank 1 for an axis
+# and for `interp.linear`'s table, rank 2 (an array of rank-1 rows) for
+# `interp.bilinear`'s table. A `const` of any other rank (a scalar, a nested array
+# where a flat one belongs, a flat one where rows belong) is the same diagnostic
+# as an argument that is not a `const` at all: `interp_table_not_const` /
+# `interp_axis_not_const`. Ragged rows are still rank 2 (that is
+# `interp_axis_length_mismatch`). `[]` is rank 1 and never rank 2 (ruling Q-111):
+# as `interp.bilinear`'s table it is `interp_table_not_const`.
+_interp_number(x) = x isa Real && !(x isa Bool)
+_interp_rank1(v) = v isa AbstractVector && all(_interp_number, v)
+_interp_rank2(v) = v isa AbstractVector && !isempty(v) && all(_interp_rank1, v)
+
+function _require_interp_rank(name::String, v, rank::Int, code::String, label::String)
+    (rank == 1 ? _interp_rank1(v) : _interp_rank2(v)) && return nothing
+    got = v isa AbstractVector ? "an array that is not rank $(rank)" : "a $(typeof(v))"
+    throw(ClosedFunctionError(code,
+        "$(name): `$(label)` must be a rank-$(rank) `const`-op array of numbers " *
+        "(esm-spec §9.2); got $(got)"))
+end
+
+# The esm-spec §9.2 argument checks of `interp.linear` / `interp.bilinear`, in
+# the pinned "Order of the argument checks" (ruling Q-110), each step over every
+# axis before the next: (arity is the caller's) the rank of the table, then of
+# each axis in argument order; any axis shorter than 2; the length relation
+# between table and axes; a non-finite axis entry (`interp_nan_in_axis`, NaN or
+# ±Inf, ruling Q-113); an axis not strictly increasing. Shared by the registry,
+# the build's spec builders and the load-time check, so they cannot disagree.
+# Return the axes coerced to `Vector{Float64}`.
+function _interp_axis_long_enough(name::String, axis_raw, label::String)
     n = length(axis_raw)
-    if n < 2
-        throw(ClosedFunctionError(ERROR_CODES.INTERP_AXIS_TOO_SHORT,
-            "$(name): `$(axis_label)` has $(n) entries; need ≥ 2 to define a blend interval."))
+    n >= 2 || throw(ClosedFunctionError(ERROR_CODES.INTERP_AXIS_TOO_SHORT,
+        "$(name): `$(label)` has $(n) entries; need ≥ 2 to define a blend interval."))
+    return nothing
+end
+
+function _interp_axis_finite(name::String, axis::Vector{Float64}, label::String)
+    @inbounds for i in eachindex(axis)
+        isfinite(axis[i]) || throw(ClosedFunctionError(ERROR_CODES.INTERP_NAN_IN_AXIS,
+            "$(name): `$(label)`[$(i)] = $(axis[i]) is not finite; axis arrays must be " *
+            "all-finite."))
     end
-    out = Vector{Float64}(undef, n)
-    @inbounds for i in 1:n
-        v = Float64(axis_raw[i])
-        if isnan(v)
-            throw(ClosedFunctionError(ERROR_CODES.INTERP_NAN_IN_AXIS,
-                "$(name): `$(axis_label)`[$(i)] is NaN; axis arrays must be all-finite."))
-        end
-        if i > 1 && !(v > out[i-1])
-            throw(ClosedFunctionError(ERROR_CODES.INTERP_NON_MONOTONIC_AXIS,
-                "$(name): `$(axis_label)` is not strictly increasing " *
-                "(`$(axis_label)`[$(i)] = $(v) is not > `$(axis_label)`[$(i-1)] = $(out[i-1]))."))
-        end
-        out[i] = v
+    return nothing
+end
+
+function _interp_axis_increasing(name::String, axis::Vector{Float64}, label::String)
+    @inbounds for i in 2:length(axis)
+        axis[i] > axis[i-1] || throw(ClosedFunctionError(ERROR_CODES.INTERP_NON_MONOTONIC_AXIS,
+            "$(name): `$(label)` is not strictly increasing " *
+            "(`$(label)`[$(i)] = $(axis[i]) is not > `$(label)`[$(i-1)] = $(axis[i-1]))."))
     end
-    return out
+    return nothing
+end
+
+_interp_axis_f64(axis_raw)::Vector{Float64} = Float64[Float64(v) for v in axis_raw]
+
+function _validate_interp_linear_args(name::String, table_raw, axis_raw)::Vector{Float64}
+    _require_interp_rank(name, table_raw, 1, ERROR_CODES.INTERP_TABLE_NOT_CONST, "table")
+    _require_interp_rank(name, axis_raw, 1, ERROR_CODES.INTERP_AXIS_NOT_CONST, "axis")
+    _interp_axis_long_enough(name, axis_raw, "axis")
+    length(table_raw) == length(axis_raw) || throw(ClosedFunctionError(
+        ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH,
+        "$(name): `len(table)` = $(length(table_raw)) but `len(axis)` = $(length(axis_raw))."))
+    axis = _interp_axis_f64(axis_raw)
+    _interp_axis_finite(name, axis, "axis")
+    _interp_axis_increasing(name, axis, "axis")
+    return axis
+end
+
+function _validate_interp_bilinear_args(name::String, table_raw, axis_x_raw, axis_y_raw)
+    _require_interp_rank(name, table_raw, 2, ERROR_CODES.INTERP_TABLE_NOT_CONST, "table")
+    _require_interp_rank(name, axis_x_raw, 1, ERROR_CODES.INTERP_AXIS_NOT_CONST, "axis_x")
+    _require_interp_rank(name, axis_y_raw, 1, ERROR_CODES.INTERP_AXIS_NOT_CONST, "axis_y")
+    _interp_axis_long_enough(name, axis_x_raw, "axis_x")
+    _interp_axis_long_enough(name, axis_y_raw, "axis_y")
+    Nx = length(axis_x_raw)
+    Ny = length(axis_y_raw)
+    length(table_raw) == Nx || throw(ClosedFunctionError(
+        ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH,
+        "$(name): outer `len(table)` = $(length(table_raw)) but `len(axis_x)` = $(Nx)."))
+    # Every inner row's length matches Ny (rejects ragged tables).
+    for (i, row) in enumerate(table_raw)
+        length(row) == Ny || throw(ClosedFunctionError(
+            ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH,
+            "$(name): `len(table[$(i)])` = $(length(row)) but `len(axis_y)` = $(Ny)."))
+    end
+    axis_x = _interp_axis_f64(axis_x_raw)
+    axis_y = _interp_axis_f64(axis_y_raw)
+    _interp_axis_finite(name, axis_x, "axis_x")
+    _interp_axis_finite(name, axis_y, "axis_y")
+    _interp_axis_increasing(name, axis_x, "axis_x")
+    _interp_axis_increasing(name, axis_y, "axis_y")
+    return axis_x, axis_y
 end
 
 # Validation-free `interp.linear` kernel: extrapolate-flat clamps + pinned
@@ -850,7 +943,7 @@ end
             return Float64(table[n])
         end
         # In-range: locate i with axis[i] ≤ x < axis[i+1]. n ≥ 2 guaranteed by
-        # `_validate_interp_axis`. Linear scan; tables are §9.2-capped at the
+        # `_validate_interp_linear_args`. Linear scan; tables are §9.2-capped at the
         # const-op inline limit, so this is O(N) on small N.
         i = 1
         for k in 1:(n - 1)
@@ -872,15 +965,7 @@ end
 # `interp.linear` per esm-spec §9.2 — validate the axis/table, then run the
 # kernel. Behaviour is byte-identical to the pre-`ess-wrh` monolithic form.
 function _interp_linear(name::String, table_raw, axis_raw, x::Real)
-    if !(table_raw isa AbstractVector)
-        throw(ClosedFunctionError(ERROR_CODES.CLOSED_FUNCTION_ARITY,
-            "$(name): `table` must be an array (got $(typeof(table_raw)))"))
-    end
-    axis = _validate_interp_axis(name, axis_raw, "axis")
-    if length(table_raw) != length(axis)
-        throw(ClosedFunctionError(ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH,
-            "$(name): `len(table)` = $(length(table_raw)) but `len(axis)` = $(length(axis))."))
-    end
+    axis = _validate_interp_linear_args(name, table_raw, axis_raw)
     return _interp_linear_core(table_raw, axis, x)
 end
 
@@ -945,30 +1030,7 @@ end
 # kernel. Behaviour is byte-identical to the pre-`ess-wrh` monolithic form.
 function _interp_bilinear(name::String, table_raw, axis_x_raw, axis_y_raw,
                           x::Real, y::Real)
-    if !(table_raw isa AbstractVector)
-        throw(ClosedFunctionError(ERROR_CODES.CLOSED_FUNCTION_ARITY,
-            "$(name): `table` must be an array (got $(typeof(table_raw)))"))
-    end
-    axis_x = _validate_interp_axis(name, axis_x_raw, "axis_x")
-    axis_y = _validate_interp_axis(name, axis_y_raw, "axis_y")
-    Nx = length(axis_x)
-    Ny = length(axis_y)
-    if length(table_raw) != Nx
-        throw(ClosedFunctionError(ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH,
-            "$(name): outer `len(table)` = $(length(table_raw)) but `len(axis_x)` = $(Nx)."))
-    end
-    # Validate every inner row length matches Ny (rejects ragged tables).
-    @inbounds for i in 1:Nx
-        row = table_raw[i]
-        if !(row isa AbstractVector)
-            throw(ClosedFunctionError(ERROR_CODES.CLOSED_FUNCTION_ARITY,
-                "$(name): `table[$(i)]` must be an array (got $(typeof(row)))"))
-        end
-        if length(row) != Ny
-            throw(ClosedFunctionError(ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH,
-                "$(name): `len(table[$(i)])` = $(length(row)) but `len(axis_y)` = $(Ny)."))
-        end
-    end
+    axis_x, axis_y = _validate_interp_bilinear_args(name, table_raw, axis_x_raw, axis_y_raw)
     return _interp_bilinear_core(table_raw, axis_x, axis_y, x, y)
 end
 
@@ -1080,40 +1142,19 @@ end
 
 function _build_interp_linear_spec(name::String, table_raw, axis_raw;
                                    strict::String = "")::_InterpLinearSpec
+    axis  = _validate_interp_linear_args(name, table_raw, axis_raw)
     table = _coerce_f64_vec(name, table_raw, "table")
-    axis  = _validate_interp_axis(name, axis_raw, "axis")
-    if length(table) != length(axis)
-        throw(ClosedFunctionError(ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH,
-            "$(name): `len(table)` = $(length(table)) but `len(axis)` = $(length(axis))."))
-    end
     return _InterpLinearSpec(table, axis, strict)
 end
 
 function _build_interp_bilinear_spec(name::String, table_raw, axis_x_raw,
                                      axis_y_raw; strict::String = "")::_InterpBilinearSpec
-    if !(table_raw isa AbstractVector)
-        throw(ClosedFunctionError(ERROR_CODES.CLOSED_FUNCTION_ARITY,
-            "$(name): `table` must be an array (got $(typeof(table_raw)))"))
-    end
-    axis_x = _validate_interp_axis(name, axis_x_raw, "axis_x")
-    axis_y = _validate_interp_axis(name, axis_y_raw, "axis_y")
+    axis_x, axis_y = _validate_interp_bilinear_args(name, table_raw, axis_x_raw, axis_y_raw)
     Nx = length(axis_x)
     Ny = length(axis_y)
-    if length(table_raw) != Nx
-        throw(ClosedFunctionError(ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH,
-            "$(name): outer `len(table)` = $(length(table_raw)) but `len(axis_x)` = $(Nx)."))
-    end
     table = Vector{Vector{Float64}}(undef, Nx)
     @inbounds for i in 1:Nx
         row = table_raw[i]
-        if !(row isa AbstractVector)
-            throw(ClosedFunctionError(ERROR_CODES.CLOSED_FUNCTION_ARITY,
-                "$(name): `table[$(i)]` must be an array (got $(typeof(row)))"))
-        end
-        if length(row) != Ny
-            throw(ClosedFunctionError(ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH,
-                "$(name): `len(table[$(i)])` = $(length(row)) but `len(axis_y)` = $(Ny)."))
-        end
         col = Vector{Float64}(undef, Ny)
         for j in 1:Ny
             col[j] = Float64(row[j])
@@ -1256,6 +1297,28 @@ end
 Base.showerror(io::IO, e::EnumLoweringError) =
     print(io, "EnumLoweringError(", e.code, "): ", e.message)
 
+# esm-spec §9.3: within ONE enum the integer values are unique — `0` included —
+# and a duplicate is a defect of the block itself, raised whether or not any
+# `enum` op names either symbol and before any op resolves. Values may coincide
+# ACROSS enums. Takes the typed map or the raw JSON block; a non-integer value
+# is left to the coercer's own diagnostic.
+function _check_enum_values_unique(enums)::Nothing
+    (enums === nothing || !(enums isa AbstractDict)) && return nothing
+    for (enum_name, mapping) in pairs(enums)
+        mapping isa AbstractDict || continue
+        seen = Dict{Int,String}()
+        for (sym, v) in pairs(mapping)
+            (v isa Integer && !(v isa Bool)) || continue
+            prior = get(seen, Int(v), nothing)
+            prior === nothing || throw(EnumLoweringError(ERROR_CODES.ENUM_DUPLICATE_VALUE,
+                "enums.$(enum_name): symbols `$(prior)` and `$(sym)` both map to " *
+                "$(Int(v)); values within one enum must be unique (esm-spec §9.3)"))
+            seen[Int(v)] = string(sym)
+        end
+    end
+    return nothing
+end
+
 """
     _lower_enum_ops_for_file(document, target, open_names) -> target′
 
@@ -1277,6 +1340,7 @@ diagnostic. Raises [`EnumLoweringError`](@ref).
 function _lower_enum_ops_for_file(document, target,
                                   open_names::AbstractSet{String}=Set{String}())
     enums = _is_object(document) ? _raw_get(document, "enums") : nothing
+    _check_enum_values_unique(enums)
     return _lower_raw_enum_ops(target, enums, open_names)
 end
 
@@ -1400,6 +1464,7 @@ Mutates `file` in place; returns the file for convenience.
 """
 function lower_enums!(file::EsmFile)::EsmFile
     enums = file.enums === nothing ? Dict{String,Dict{String,Int}}() : file.enums
+    _check_enum_values_unique(enums)
     if file.models !== nothing
         for (_, m) in file.models
             _lower_model_enums!(m, enums)

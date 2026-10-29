@@ -116,6 +116,11 @@ include("expression.jl")
 # enum lowering), so it sits with the expression rewrites and is called from the
 # build front doors in simulate.jl / the two inline-test runners.
 include("lower_table_lookup.jl")
+# esm-spec §9.2 / §9.5.5 (rulings Q-106..Q-113): the closed-function argument
+# checks, the function-table checks and the `table_lookup` checks, run at LOAD
+# on every table, every `interp.*` call and every lookup, and reported by
+# `validate()`.
+include("load_time_checks.jl")
 # Structural interning (hash-consing) of the expression AST — perf plan A1.
 include("intern.jl")
 include("display.jl")

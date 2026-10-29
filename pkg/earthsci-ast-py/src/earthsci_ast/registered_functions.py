@@ -27,16 +27,21 @@ list (diagnostic ``unknown_closed_function``). This module provides:
 - :class:`ClosedFunctionError` — error type carrying spec-defined diagnostic
   codes (``unknown_closed_function``, ``closed_function_overflow``,
   ``searchsorted_non_monotonic``, ``closed_function_arity``,
-  ``searchsorted_nan_in_table``, ``interp_non_monotonic_axis``,
+  ``searchsorted_nan``, ``interp_non_monotonic_axis``,
   ``interp_axis_length_mismatch``, ``interp_nan_in_axis``,
-  ``interp_axis_too_short``).
+  ``interp_axis_too_short``, ``interp_table_not_const``,
+  ``interp_axis_not_const``).
 
-Calendar arithmetic uses Python's stdlib :mod:`datetime` with the
-proleptic-Gregorian default; the v0.3.0 spec contract forbids leap-second
-consultation, which :class:`datetime.datetime` already honors.
-``datetime.julian_day`` is computed via the Fliegel–van Flandern (1968)
-integer formula plus the fractional-day offset, giving ≤ 1 ulp agreement
-with the spec reference computation.
+Calendar arithmetic is exact integer arithmetic on the floor-divmod of
+``t_utc`` by 86400 (no leap-second consultation), with Hinnant's
+``civil_from_days`` for the proleptic-Gregorian date. It does not use
+:mod:`datetime`: ``timedelta`` rounds to the nearest microsecond, so a time a
+few nanoseconds before midnight would land on the next day, and its years stop
+at 1..9999. ``datetime.julian_day`` is the standard Julian Date
+``t / 86400 + 2440587.5`` for every ``t``, evaluated in binary64 from the same
+exact split (esm-spec §9.2). Every ``datetime.*`` function raises
+``closed_function_overflow`` when ``t_utc`` is NaN or ±Inf or its year is
+outside Int32.
 """
 
 from __future__ import annotations
@@ -44,17 +49,19 @@ from __future__ import annotations
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from .error_handling import (
     CLOSED_FUNCTION_ARITY,
     CLOSED_FUNCTION_OVERFLOW,
+    ENUM_DUPLICATE_VALUE,
     INTERP_AXIS_LENGTH_MISMATCH,
+    INTERP_AXIS_NOT_CONST,
     INTERP_AXIS_TOO_SHORT,
     INTERP_NAN_IN_AXIS,
     INTERP_NON_MONOTONIC_AXIS,
-    SEARCHSORTED_NAN_IN_TABLE,
+    INTERP_TABLE_NOT_CONST,
+    SEARCHSORTED_NAN,
     SEARCHSORTED_NON_MONOTONIC,
     UNKNOWN_CLOSED_FUNCTION,
     UNKNOWN_ENUM,
@@ -79,7 +86,13 @@ class ClosedFunctionError(EarthSciAstError):
     - ``closed_function_arity`` — wrong number of arguments for the named function.
     - ``closed_function_overflow`` — integer-typed result would overflow Int32.
     - ``searchsorted_non_monotonic`` — ``xs`` is not non-decreasing.
-    - ``searchsorted_nan_in_table`` — ``xs`` contains a NaN entry.
+    - ``searchsorted_nan`` — ``xs`` contains a NaN entry (checked before
+      monotonicity).
+    - ``interp_table_not_const`` / ``interp_axis_not_const`` — an ``interp.*``
+      table / axis argument is not a literal ``const``-op array of the
+      required rank (rank 1 for an axis and ``interp.linear``'s table, rank 2
+      for ``interp.bilinear``'s); for ``interp.searchsorted``, an ``xs`` that
+      is not a RANK-1 ``const`` array (checked before ``searchsorted_nan``).
 
     The code constants themselves are defined in
     :mod:`earthsci_ast.error_handling`; their string values are part of the
@@ -119,22 +132,20 @@ class _ClosedFunction:
 # module-level helper functions defined further below; the deferred lookup means
 # definition order does not matter (the helpers only need to exist at call time).
 _CLOSED_FUNCTIONS: dict[str, _ClosedFunction] = {
-    "datetime.year": _ClosedFunction(
-        1, lambda name, args: _check_int32(name, _to_datetime(args[0]).year)
-    ),
-    "datetime.month": _ClosedFunction(1, lambda name, args: _to_datetime(args[0]).month),
-    "datetime.day": _ClosedFunction(1, lambda name, args: _to_datetime(args[0]).day),
-    "datetime.hour": _ClosedFunction(1, lambda name, args: _to_datetime(args[0]).hour),
-    "datetime.minute": _ClosedFunction(1, lambda name, args: _to_datetime(args[0]).minute),
-    "datetime.second": _ClosedFunction(1, lambda name, args: _to_datetime(args[0]).second),
+    "datetime.year": _ClosedFunction(1, lambda name, args: _decompose_utc(args[0]).year),
+    "datetime.month": _ClosedFunction(1, lambda name, args: _decompose_utc(args[0]).month),
+    "datetime.day": _ClosedFunction(1, lambda name, args: _decompose_utc(args[0]).day),
+    "datetime.hour": _ClosedFunction(1, lambda name, args: _decompose_utc(args[0]).hour),
+    "datetime.minute": _ClosedFunction(1, lambda name, args: _decompose_utc(args[0]).minute),
+    "datetime.second": _ClosedFunction(1, lambda name, args: _decompose_utc(args[0]).second),
     "datetime.day_of_year": _ClosedFunction(
-        1, lambda name, args: _day_of_year(_to_datetime(args[0]))
+        1, lambda name, args: _day_of_year(_decompose_utc(args[0]))
     ),
     "datetime.julian_day": _ClosedFunction(
         1, lambda name, args: _datetime_julian_day(float(args[0]))
     ),
     "datetime.is_leap_year": _ClosedFunction(
-        1, lambda name, args: 1 if _is_leap_year(_to_datetime(args[0]).year) else 0
+        1, lambda name, args: 1 if _is_leap_year(_decompose_utc(args[0]).year) else 0
     ),
     "interp.searchsorted": _ClosedFunction(
         2, lambda name, args: _interp_searchsorted(name, float(args[0]), args[1]), (1,)
@@ -198,63 +209,92 @@ def _expect_arity(name: str, args: Sequence[Any], n: int) -> None:
         )
 
 
-def _to_datetime(t_utc: Any) -> datetime:
-    """Convert a UTC scalar (seconds since Unix epoch) to a tz-aware datetime.
+@dataclass(frozen=True)
+class _UtcParts:
+    """The esm-spec §9.2 decomposition of one ``t_utc``."""
 
-    Uses ``datetime.fromtimestamp(..., tz=timezone.utc)`` which honors the
-    proleptic-Gregorian calendar and (per the spec contract) does not consult
-    leap seconds.
+    day_count: int  # floor(t_utc / 86400): days after 1970-01-01
+    second_of_day: int  # floor of the time of day, in [0, 86400)
+    fraction: float  # t - floor(t), in [0, 1]; see _datetime_julian_day
+    year: int
+    month: int
+    day: int
+
+    @property
+    def hour(self) -> int:
+        return self.second_of_day // 3600
+
+    @property
+    def minute(self) -> int:
+        return self.second_of_day % 3600 // 60
+
+    @property
+    def second(self) -> int:
+        return self.second_of_day % 60
+
+
+def _decompose_utc(t_utc: Any) -> _UtcParts:
+    """Split a UTC scalar (seconds since the Unix epoch) per esm-spec §9.2,
+    raising ``closed_function_overflow`` for a NaN or ±Inf ``t_utc`` and for
+    one whose year is outside Int32 — whichever field the caller then reads.
+
+    The day number is ``floor(t / 86400)`` and the time of day
+    ``t - 86400 * floor(t / 86400)``, both exact, with the fields taken from
+    ``floor(time of day)`` — a fractional time floors toward −∞. Flooring
+    ``t`` to a whole second first and then divmod-ing the (arbitrary-
+    precision) integer gives exactly that pair, because 86400 is an integer:
+    ``floor(t / 86400) == floor(t) // 86400``, so no step of the split rounds.
+    (``fraction`` is a binary64 ``t - floor(t)``: exact except for
+    ``-0.5 < t < 0``, where ``1 + t`` can round, up to 1.0 at worst.)
     """
     seconds = float(t_utc)
     if not math.isfinite(seconds):
         raise ClosedFunctionError(
-            CLOSED_FUNCTION_ARITY,
+            CLOSED_FUNCTION_OVERFLOW,
             f"datetime.*: t_utc must be finite, got {seconds}",
         )
-    # `datetime.fromtimestamp(..., tz=utc)` accepts negative values for
-    # pre-epoch times on all supported platforms (CPython implements its own
-    # proleptic-Gregorian arithmetic and does not delegate to libc gmtime).
-    return datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(seconds=seconds)
+    whole = math.floor(seconds)
+    day_count, second_of_day = divmod(whole, 86400)
+    year, month, day = _civil_from_days(day_count)
+    if year < _INT32_MIN or year > _INT32_MAX:
+        raise ClosedFunctionError(
+            CLOSED_FUNCTION_OVERFLOW,
+            f"datetime.*: the year {year} of t_utc {seconds!r} overflows Int32",
+        )
+    return _UtcParts(day_count, second_of_day, seconds - whole, year, month, day)
 
 
-def _trunc_div(a: int, b: int) -> int:
-    """Truncated integer division (rounds toward zero), C/Julia ÷ semantics.
-
-    Python's ``//`` is floor division — it disagrees with the C-style
-    semantics the Fliegel–van Flandern (1968) formula assumes whenever the
-    dividend is negative (e.g. ``(M − 14)`` for ``M ∈ [1, 12]``). Misusing
-    ``//`` here produces JDN values that drift by 1–2 days from the spec.
-    """
-    q, r = divmod(a, b)
-    if r != 0 and (a < 0) != (b < 0):
-        q += 1
-    return q
+def _civil_from_days(z: int) -> tuple[int, int, int]:
+    """Hinnant's ``civil_from_days``: days after 1970-01-01 to proleptic-
+    Gregorian ``(year, month, day)``, exact for any integer (ISO 8601 years:
+    1 BC = 0)."""
+    z += 719468
+    era = z // 146097
+    doe = z - era * 146097  # [0, 146096]
+    yoe = (doe - doe // 1460 + doe // 36524 - doe // 146096) // 365  # [0, 399]
+    doy = doe - (365 * yoe + yoe // 4 - yoe // 100)  # [0, 365], March-based
+    mp = (5 * doy + 2) // 153  # [0, 11]
+    day = doy - (153 * mp + 2) // 5 + 1
+    month = mp + 3 if mp < 10 else mp - 9
+    year = yoe + era * 400 + (1 if month <= 2 else 0)
+    return year, month, day
 
 
 def _datetime_julian_day(t_utc: float) -> float:
-    """Fliegel–van Flandern (1968) integer JDN + fractional-day offset.
+    """The standard Julian Date ``t / 86400 + 2440587.5`` (esm-spec §9.2).
 
-    Returns a Float64 with ≤ 1 ulp agreement to the spec reference
-    computation. The only floating-point operation in the inner formula is
-    the final divide by 86400 (one rounded operation).
+    Evaluated as §9.2 pins it, from the exact split:
+    ``(day + 2440588) + ((second_of_day − 43200) + fraction) / 86400``. The
+    day term and ``second_of_day − 43200`` are exact integers and the fraction
+    is exact except for ``-0.5 < t < 0`` (where ``1 + t`` can round), so the
+    inner add, the divide and the outer add are the only other roundings —
+    ≤ 1 ulp of the exact value. The day number is linear, not
+    the Fliegel–van Flandern JDN of the date: the two agree from -4800-03-01
+    on, and before that FvF is off by -2 to +1 days.
     """
-    dt = _to_datetime(t_utc)
-    y, m, d = dt.year, dt.month, dt.day
-    a = _trunc_div(m - 14, 12)
-    jdn = (
-        _trunc_div(1461 * (y + 4800 + a), 4)
-        + _trunc_div(367 * (m - 2 - 12 * a), 12)
-        - _trunc_div(3 * _trunc_div(y + 4900 + a, 100), 4)
-        + d
-        - 32075
-    )
-    # JDN counts noon-to-noon; convert time-of-day seconds (since 00:00 UTC)
-    # to a fractional offset relative to noon. The spec pins this offset as
-    # `(time_of_day_seconds − 43200) / 86400` (esm-spec §9.2.1).
-    seconds_in_day = math.fmod(float(t_utc), 86400.0)
-    if seconds_in_day < 0:
-        seconds_in_day += 86400.0
-    return float(jdn) + (seconds_in_day - 43200.0) / 86400.0
+    p = _decompose_utc(t_utc)
+    from_noon = float(p.second_of_day - 43200) + p.fraction
+    return float(p.day_count + 2440588) + from_noon / 86400.0
 
 
 def _is_leap_year(year: int) -> bool:
@@ -266,44 +306,187 @@ _DOY_CUMULATIVE_NORMAL = (0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334)
 _DOY_CUMULATIVE_LEAP = (0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335)
 
 
-def _day_of_year(dt: datetime) -> int:
-    table = _DOY_CUMULATIVE_LEAP if _is_leap_year(dt.year) else _DOY_CUMULATIVE_NORMAL
-    return table[dt.month - 1] + dt.day
+def _day_of_year(p: _UtcParts) -> int:
+    table = _DOY_CUMULATIVE_LEAP if _is_leap_year(p.year) else _DOY_CUMULATIVE_NORMAL
+    return table[p.month - 1] + p.day
+
+
+def _is_number(v: Any) -> bool:
+    """A numeric leaf of a ``const`` array: a real number that is not a bool."""
+    if isinstance(v, bool):
+        return False
+    try:
+        float(v)
+    except (TypeError, ValueError):
+        return False
+    return not isinstance(v, (str, bytes, list, tuple, dict))
+
+
+#: Stand-in for an argument that is not a ``const`` op at all (a variable
+#: reference, a computed expression) in :func:`check_interp_arguments`.
+NOT_CONST: Any = type("_NotConst", (), {"__repr__": lambda self: "<not const>"})()
+
+
+def _is_rank1(v: Any) -> bool:
+    """A rank-1 array: a list whose every entry is a number (``[]`` included)."""
+    return isinstance(v, (list, tuple)) and all(_is_number(e) for e in v)
+
+
+def _is_rank2(v: Any) -> bool:
+    """A rank-2 array: a NON-EMPTY list whose every entry is a rank-1 array.
+    ``[]`` is rank 1, not rank 2 (esm-spec §9.2, ruling Q-111). Rows may differ
+    in length; that is ``interp_axis_length_mismatch``, not a rank error."""
+    return isinstance(v, (list, tuple)) and len(v) > 0 and all(_is_rank1(row) for row in v)
+
+
+def _describe(v: Any) -> str:
+    if v is NOT_CONST:
+        return "an argument that is not a `const` op"
+    if isinstance(v, (list, tuple)):
+        return "a `const` array of the wrong rank"
+    return f"a `const` {type(v).__name__}"
+
+
+def check_interp_arguments(name: str, values: Sequence[Any]) -> None:
+    """The esm-spec §9.2 load-time ARGUMENT checks of ``interp.searchsorted``,
+    ``interp.linear`` and ``interp.bilinear``, on the argument values.
+
+    ``values`` is the full argument list; each ``const``-only slot (see
+    :data:`INTERP_CONST_ARG_POSITIONS`) holds the ``const`` op's ``value``, or
+    :data:`NOT_CONST` when the argument is not a ``const`` op. The scalar query
+    slots are not inspected. Raises :class:`ClosedFunctionError` with the first
+    code that applies; any other function name is a no-op.
+
+    This is the ONE implementation: the loader and ``validate()`` run it on
+    every ``fn`` node (esm-spec §9.2 "When the argument checks run", ruling
+    Q-106), and the evaluator runs it again before computing.
+
+    The arity (``closed_function_arity``) comes before all of these; it is
+    checked by :func:`check_closed_function_node` and by the evaluator's
+    dispatch, since ``values`` here already has the right length.
+
+    Order (esm-spec §9.2 "Order of the argument checks", ruling Q-110).
+    ``interp.searchsorted``: not a rank-1 ``const`` array
+    (``interp_axis_not_const``), then NaN, then non-decreasing; ``xs = []``
+    passes (ruling Q-108). ``interp.linear`` / ``interp.bilinear``, each step
+    over every axis before the next begins: the table, then each axis, as a
+    ``const`` of the required rank (rank 1 for
+    an axis and for ``interp.linear``'s table, rank 2 -- so not ``[]`` -- for
+    ``interp.bilinear``'s, rulings Q-108 and Q-111); then an axis shorter than
+    2; then the table/axis length relation; then a non-finite (NaN or ±Inf)
+    axis entry (ruling Q-113); then strict monotonicity. ``xs`` of
+    ``interp.searchsorted`` rejects only NaN; ±Inf is a valid entry there.
+    """
+    if name == "interp.searchsorted":
+        xs = values[1]
+        if not _is_rank1(xs):
+            raise ClosedFunctionError(
+                INTERP_AXIS_NOT_CONST,
+                f"{name}: xs must be a rank-1 `const` array of numbers, got {_describe(xs)}",
+            )
+        floats = [float(v) for v in xs]
+        for i, v in enumerate(floats):
+            if math.isnan(v):
+                raise ClosedFunctionError(
+                    SEARCHSORTED_NAN,
+                    f"{name}: xs[{i + 1}] is NaN; NaN entries in xs are forbidden",
+                )
+        for i in range(1, len(floats)):
+            if floats[i] < floats[i - 1]:
+                raise ClosedFunctionError(
+                    SEARCHSORTED_NON_MONOTONIC,
+                    f"{name}: xs is not non-decreasing "
+                    f"(xs[{i + 1}]={floats[i]} < xs[{i}]={floats[i - 1]})",
+                )
+        return
+    if name == "interp.linear":
+        table, axes, labels = values[0], [values[1]], ["axis"]
+        table_ok = _is_rank1(table)
+    elif name == "interp.bilinear":
+        table, axes, labels = values[0], [values[1], values[2]], ["axis_x", "axis_y"]
+        table_ok = _is_rank2(table)
+    else:
+        return
+    if not table_ok:
+        raise ClosedFunctionError(
+            INTERP_TABLE_NOT_CONST,
+            f"{name}: table must be an inline rank-{len(axes)} `const` array, "
+            f"got {_describe(table)}",
+        )
+    for axis, label in zip(axes, labels):
+        if not _is_rank1(axis):
+            raise ClosedFunctionError(
+                INTERP_AXIS_NOT_CONST,
+                f"{name}: {label} must be an inline rank-1 `const` array, got {_describe(axis)}",
+            )
+    for axis, label in zip(axes, labels):
+        if len(axis) < 2:
+            raise ClosedFunctionError(
+                INTERP_AXIS_TOO_SHORT,
+                f"{name}: {label} has {len(axis)} entries; need ≥ 2 to define a cell",
+            )
+    if len(table) != len(axes[0]):
+        raise ClosedFunctionError(
+            INTERP_AXIS_LENGTH_MISMATCH,
+            f"{name}: {'outer ' if len(axes) == 2 else ''}len(table)={len(table)} "
+            f"!= len({labels[0]})={len(axes[0])}",
+        )
+    if len(axes) == 2:
+        for i, row in enumerate(table):
+            if len(row) != len(axes[1]):
+                raise ClosedFunctionError(
+                    INTERP_AXIS_LENGTH_MISMATCH,
+                    f"{name}: table row {i + 1} has length {len(row)} "
+                    f"!= len(axis_y)={len(axes[1])}",
+                )
+    for axis, label in zip(axes, labels):
+        for i, v in enumerate(axis):
+            if not math.isfinite(float(v)):
+                raise ClosedFunctionError(
+                    INTERP_NAN_IN_AXIS,
+                    f"{name}: {label}[{i + 1}] is {float(v)}; axis entries must be finite "
+                    f"(no NaN or ±Inf, esm-spec §9.2)",
+                )
+    for axis, label in zip(axes, labels):
+        for i in range(1, len(axis)):
+            if float(axis[i]) <= float(axis[i - 1]):
+                raise ClosedFunctionError(
+                    INTERP_NON_MONOTONIC_AXIS,
+                    f"{name}: {label} is not strictly increasing "
+                    f"({label}[{i + 1}]={axis[i]} ≤ {label}[{i}]={axis[i - 1]})",
+                )
+
+
+def check_closed_function_node(node: ExprNode) -> None:
+    """Run the load-time argument checks on one ``fn`` node as written: first
+    the arity (``closed_function_arity``, ruling Q-112), then
+    :func:`check_interp_arguments`, where a ``const`` op contributes its
+    ``value`` and anything else :data:`NOT_CONST`. Only the ``interp.*``
+    functions are checked here; ``datetime.*`` arity is left to evaluation."""
+    name = node.name
+    positions = INTERP_CONST_ARG_POSITIONS.get(name or "")
+    if not positions:
+        return
+    args = list(node.args or [])
+    _expect_arity(name, args, _CLOSED_FUNCTIONS[name].arity)
+    values: list[Any] = [None] * len(args)
+    for p in positions:
+        a = args[p]
+        values[p] = a.value if isinstance(a, ExprNode) and a.op == "const" else NOT_CONST
+    check_interp_arguments(name, values)
 
 
 def _interp_searchsorted(name: str, x: float, xs: Any) -> int:
     """``interp.searchsorted`` per esm-spec §9.2.2.
 
     1-based, left-side bias (smallest ``i`` with ``xs[i] ≥ x``); out-of-range
-    below → 1, above → ``N+1``; NaN ``x`` → ``N+1``; NaN entries in ``xs``
-    raise; non-monotonic ``xs`` raises.
+    below → 1, above → ``N+1``; NaN ``x`` → ``N+1``; ``xs = []`` → 1 for every
+    ``x``. The argument checks are :func:`check_interp_arguments`.
     """
-    if not isinstance(xs, (list, tuple)):
-        raise ClosedFunctionError(
-            CLOSED_FUNCTION_ARITY,
-            f"{name}: xs argument must be an array (got {type(xs).__name__})",
-        )
+    check_interp_arguments(name, [x, xs])
     n = len(xs)
-    if n == 0:
-        # Empty table — extends "above-range → N+1" to N=0; the only consistent
-        # extension that composes with `index`.
-        return 1
-    # Validate monotonicity + NaN-in-table once per call.
-    prev = float("nan")
-    for i, raw in enumerate(xs):
-        v = float(raw)
-        if math.isnan(v):
-            raise ClosedFunctionError(
-                SEARCHSORTED_NAN_IN_TABLE,
-                f"{name}: xs[{i + 1}] is NaN; NaN entries in xs are forbidden",
-            )
-        if i > 0 and v < prev:
-            raise ClosedFunctionError(
-                SEARCHSORTED_NON_MONOTONIC,
-                f"{name}: xs is not non-decreasing (xs[{i + 1}]={v} < xs[{i}]={prev})",
-            )
-        prev = v
-    # NaN x → N+1 (treated as "greater than every finite element").
+    # NaN x → N+1 (treated as "greater than every finite element"); with
+    # xs = [] every query is N + 1 = 1.
     if math.isnan(x):
         return _check_int32(name, n + 1)
     # Linear scan for the smallest 1-based index with xs[i] ≥ x. The spec
@@ -314,61 +497,14 @@ def _interp_searchsorted(name: str, x: float, xs: Any) -> int:
     return _check_int32(name, n + 1)
 
 
-def _validate_interp_axis(name: str, axis: Sequence[Any], axis_label: str) -> list[float]:
-    """Validate a 1-D interpolation axis and return it as a list of floats.
-
-    Spec §9.2 ``interp.*`` subsection requires axes be strictly increasing
-    (no equal-adjacent), contain no NaN, and have at least two entries —
-    otherwise there is no interval to blend across.
-    """
-    if not isinstance(axis, (list, tuple)):
-        raise ClosedFunctionError(
-            CLOSED_FUNCTION_ARITY,
-            f"{name}: {axis_label} must be an inline `const` array (got {type(axis).__name__})",
-        )
-    n = len(axis)
-    if n < 2:
-        raise ClosedFunctionError(
-            INTERP_AXIS_TOO_SHORT,
-            f"{name}: {axis_label} has {n} entries; need ≥ 2 to define a cell",
-        )
-    out: list[float] = []
-    prev = float("-inf")
-    for i, raw in enumerate(axis):
-        v = float(raw)
-        if math.isnan(v):
-            raise ClosedFunctionError(
-                INTERP_NAN_IN_AXIS,
-                f"{name}: {axis_label}[{i + 1}] is NaN; NaN entries in axes are forbidden",
-            )
-        if i > 0 and v <= prev:
-            raise ClosedFunctionError(
-                INTERP_NON_MONOTONIC_AXIS,
-                f"{name}: {axis_label} is not strictly increasing "
-                f"({axis_label}[{i + 1}]={v} ≤ {axis_label}[{i}]={prev})",
-            )
-        out.append(v)
-        prev = v
-    return out
-
-
 def _interp_linear(name: str, table: Any, axis: Any, x: float) -> float:
     """``interp.linear`` per esm-spec §9.2 ``interp.*`` subsection.
 
     Extrapolate-flat boundary, pinned blend ``t[i] + w*(t[i+1] - t[i])``.
     """
-    if not isinstance(table, (list, tuple)):
-        raise ClosedFunctionError(
-            CLOSED_FUNCTION_ARITY,
-            f"{name}: table must be an inline `const` array (got {type(table).__name__})",
-        )
-    axis_vals = _validate_interp_axis(name, axis, "axis")
+    check_interp_arguments(name, [table, axis, x])
+    axis_vals = [float(a) for a in axis]
     n = len(axis_vals)
-    if len(table) != n:
-        raise ClosedFunctionError(
-            INTERP_AXIS_LENGTH_MISMATCH,
-            f"{name}: len(table)={len(table)} != len(axis)={n}",
-        )
     table_vals = [float(t) for t in table]
     if math.isnan(x):
         # Spec step 4: the clamps in steps 1–2 use IEEE `≤` / `≥` which return
@@ -405,32 +541,11 @@ def _interp_bilinear(
     Two pinned 1-D x-blends followed by one 1-D y-blend; per-axis
     extrapolate-flat clamp; row-major ``table[i][j]`` at ``(axis_x[i], axis_y[j])``.
     """
-    if not isinstance(table, (list, tuple)):
-        raise ClosedFunctionError(
-            CLOSED_FUNCTION_ARITY,
-            f"{name}: table must be an inline `const` 2-D array (got {type(table).__name__})",
-        )
-    ax = _validate_interp_axis(name, axis_x, "axis_x")
-    ay = _validate_interp_axis(name, axis_y, "axis_y")
+    check_interp_arguments(name, [table, axis_x, axis_y, x, y])
+    ax = [float(a) for a in axis_x]
+    ay = [float(a) for a in axis_y]
     nx, ny = len(ax), len(ay)
-    if len(table) != nx:
-        raise ClosedFunctionError(
-            INTERP_AXIS_LENGTH_MISMATCH,
-            f"{name}: outer len(table)={len(table)} != len(axis_x)={nx}",
-        )
-    table_rows: list[list[float]] = []
-    for i, row in enumerate(table):
-        if not isinstance(row, (list, tuple)):
-            raise ClosedFunctionError(
-                INTERP_AXIS_LENGTH_MISMATCH,
-                f"{name}: table row {i + 1} is not an array (got {type(row).__name__})",
-            )
-        if len(row) != ny:
-            raise ClosedFunctionError(
-                INTERP_AXIS_LENGTH_MISMATCH,
-                f"{name}: table row {i + 1} has length {len(row)} != len(axis_y)={ny}",
-            )
-        table_rows.append([float(v) for v in row])
+    table_rows = [[float(v) for v in row] for row in table]
     if math.isnan(x) or math.isnan(y):
         # Spec step 5: NaN inputs propagate through the corresponding axis
         # weight. Short-circuit to NaN.
@@ -492,24 +607,41 @@ def evaluate_closed_function(name: str, args: Sequence[Any]) -> int | float:
 # ============================================================
 
 
-def extract_const_array(node: Any) -> list[Any]:
-    """Extract a const-op array argument as a (possibly nested) Python list.
+def _not_const_code(name: str, position: int) -> str:
+    """The esm-spec §9.2 code for a non-``const`` argument in ``position`` of
+    ``name``: ``interp_table_not_const`` for the ``table`` slot of
+    ``interp.linear`` / ``interp.bilinear`` (slot 0), ``interp_axis_not_const``
+    for every axis slot, including ``interp.searchsorted``'s ``xs``."""
+    if name in ("interp.linear", "interp.bilinear") and position == 0:
+        return INTERP_TABLE_NOT_CONST
+    return INTERP_AXIS_NOT_CONST
+
+
+def extract_const_arg(name: str, position: int, node: Any) -> Any:
+    """Unwrap argument ``position`` of closed function ``name``, which MUST be a
+    ``const``-op array (one of :data:`INTERP_CONST_ARG_POSITIONS`).
 
     The ``interp.*`` closed functions take inline ``const`` arrays for their
-    table and axis arguments (see esm-spec §9.2 ``interp.*`` subsection):
-    ``interp.searchsorted`` for ``xs``; ``interp.linear`` for ``table`` and
-    ``axis``; ``interp.bilinear`` for ``table`` (2-D), ``axis_x``, and
-    ``axis_y``. Evaluators must pass the raw array — not a per-element-
-    evaluated value — to the closed function dispatch. This helper unwraps
-    ``{op: "const", value: [...]}``.
+    table and axis arguments (esm-spec §9.2): ``interp.searchsorted`` for
+    ``xs``; ``interp.linear`` for ``table`` and ``axis``; ``interp.bilinear``
+    for ``table`` (2-D), ``axis_x`` and ``axis_y``. Evaluators pass the raw
+    array -- not a per-element-evaluated value -- to the dispatch.
+
+    A variable reference or any non-``const`` expression in that slot raises
+    the slot's esm-spec §9.2 code (``interp_table_not_const`` /
+    ``interp_axis_not_const``) rather than being evaluated: the slot takes
+    literal data only. A ``const`` whose value is a scalar is returned as is, so
+    the closed function itself reports it under the same code (with the rank
+    check ``interp.searchsorted`` makes before its NaN check).
     """
     if isinstance(node, ExprNode) and node.op == "const":
-        return list(node.value or [])
-    if isinstance(node, (list, tuple)):
-        return list(node)
+        value = node.value
+        return list(value) if isinstance(value, (list, tuple)) else value
+    what = f"`{node.op}` expression" if isinstance(node, ExprNode) else repr(node)
     raise ClosedFunctionError(
-        CLOSED_FUNCTION_ARITY,
-        "interp.*: table / axis argument must be an inline `const` array",
+        _not_const_code(name, position),
+        f"{name}: argument {position + 1} must be an inline `const`-op array, "
+        f"got {what} (esm-spec §9.2)",
     )
 
 
@@ -522,7 +654,7 @@ class EnumLoweringError(EarthSciAstError, ValueError):
     """Raised when enum lowering (esm-spec §9.3) fails.
 
     Carries the stable diagnostic ``code`` (``unknown_enum`` /
-    ``unknown_enum_symbol``) as a structured attribute — like
+    ``unknown_enum_symbol`` / ``enum_duplicate_value``) as a structured attribute — like
     :class:`ClosedFunctionError` — instead of interpolating it into the message
     text. Also subclasses :class:`ValueError`, so ``except ValueError`` catches
     it.
@@ -532,6 +664,34 @@ class EnumLoweringError(EarthSciAstError, ValueError):
         super().__init__(f"{code}: {message}")
         self.code = code
         self.message = message
+
+
+def check_enum_block(enums: Any) -> None:
+    """Reject an ``enums`` block in which two symbols of ONE enum map to the
+    same integer, ``0`` included (esm-spec §9.3), with
+    :class:`EnumLoweringError` ``enum_duplicate_value``.
+
+    A defect of the block itself: it is raised whether or not any ``enum`` op
+    names either symbol, and before any op resolves. Values may coincide across
+    enums. Entries that are not objects, or values that are not integers, are
+    left to the parser's own type checks.
+    """
+    if not isinstance(enums, dict):
+        return
+    for enum_name, mapping in enums.items():
+        if not isinstance(mapping, dict):
+            continue
+        seen: dict[int, str] = {}
+        for sym, val in mapping.items():
+            if not isinstance(val, int) or isinstance(val, bool):
+                continue
+            if val in seen:
+                raise EnumLoweringError(
+                    ENUM_DUPLICATE_VALUE,
+                    f"enums/{enum_name}: symbols `{seen[val]}` and `{sym}` both map to "
+                    f"{val}; values must be unique within an enum (esm-spec §9.3)",
+                )
+            seen[val] = sym
 
 
 def lower_enum_ops_for_file(
@@ -551,12 +711,13 @@ def lower_enum_ops_for_file(
     the call site decides what it spells and the op resolves there. An op whose
     arguments are not two strings is left for :func:`lower_enums`.
 
-    Raises :class:`EnumLoweringError` (``unknown_enum`` /
-    ``unknown_enum_symbol``). ``target`` is not modified.
+    Raises :class:`EnumLoweringError` (``enum_duplicate_value`` /
+    ``unknown_enum`` / ``unknown_enum_symbol``). ``target`` is not modified.
     """
     enums = document.get("enums") if isinstance(document, dict) else None
     if not isinstance(enums, dict):
         enums = {}
+    check_enum_block(enums)
 
     def walk(node: Any) -> Any:
         if isinstance(node, list):

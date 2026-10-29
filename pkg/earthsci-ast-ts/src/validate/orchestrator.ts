@@ -18,6 +18,8 @@ import {
 import { EsmMachineryError } from '../lower-expression-templates.js'
 import { CircularReferenceError, RefLoadError, resolveSubsystemRefsSync } from '../ref-loading.js'
 import { EnumLoweringError } from '../lower-enums.js'
+import { ClosedFunctionError } from '../closed-functions.js'
+import { TableLookupLoweringError } from '../lower-table-lookups.js'
 import {
   LosslessJsonParseError,
   CanonicalNonfiniteError,
@@ -402,6 +404,11 @@ function loadErrorCode(error: Error): string {
   if (error instanceof ParseError) return ERROR_CODES.PARSE_ERROR
   if (error instanceof EsmMachineryError) return ERROR_CODES.EXPRESSION_TEMPLATE_ERROR
   if (error instanceof EnumLoweringError) return ERROR_CODES.ENUM_LOWERING_ERROR
+  // The load-time closed-function argument and function-table checks (esm-spec
+  // §9.2, §9.5.5; ruling Q-106) each carry the one code the spec names for the
+  // defect, so report that code rather than a generic `load_error`.
+  if (error instanceof ClosedFunctionError) return error.code
+  if (error instanceof TableLookupLoweringError) return error.code
   if (error instanceof LosslessJsonParseError) return ERROR_CODES.JSON_PARSE_ERROR
   if (error instanceof CanonicalNonfiniteError) return ERROR_CODES.NONFINITE_NUMBER
   return ERROR_CODES.LOAD_ERROR

@@ -52,3 +52,9 @@ pub fn write_report(
     )?;
     Ok(())
 }
+
+/// The esm-spec §9.2 load-time argument check on one `interp.*` call, for the
+/// closed-function conformance harness: it drives the `error_scenarios` the
+/// fixtures cannot carry as a document (a NaN in an axis) through the very
+/// check `load` and `validate()` run on every `fn` node (ruling Q-106).
+pub use crate::registered_functions::{ClosedArgLiteral, check_closed_function_args};

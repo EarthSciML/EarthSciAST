@@ -420,41 +420,61 @@ const (
 	codeDataSourceURLUnresolved = "data_source_url_unresolved"
 )
 
-// --- Diagnostic codes: §9.5 sampled function tables — the §9.5.3
-// `table_lookup` lowering (raised via newTableLookupError from
-// lower_table_lookup.go).
+// --- Diagnostic codes: §9.5 sampled function tables — the §9.5.5 table
+// checks and the §9.5.3 `table_lookup` lowering (raised via
+// newTableLookupError from lower_table_lookup.go).
 //
 // A CROSS-BINDING vocabulary: every binding raises these same strings from its
 // own §9.5.3 lowering, so they belong in the shared registry rather than beside
-// the pass. Only the codes THIS binding actually emits are declared — the
-// remaining §9.5.5 codes (`table_axis_non_monotonic`, `table_data_nan`,
-// `table_outputs_length_mismatch`, `table_axis_duplicate_name`,
-// `table_outputs_duplicate_name`) are load-time table-well-formedness checks
-// this binding does not perform, and a constant for a code nothing raises would
-// advertise a diagnostic it cannot report. ---
+// the pass. Only the codes THIS binding actually emits are declared. It emits
+// all ten §9.5.5 table-well-formedness codes (validateFunctionTable runs them
+// in the spec's pinned order on every table a lookup resolves to) and every
+// `table_lookup_*` code except `table_lookup_out_of_bounds`, which belongs to
+// the `out_of_bounds: "error"` mode this binding refuses instead
+// (CodeTableOutOfBoundsUnsupported, esm-spec §9.5.3a). ---
 const (
 	// CodeTableLookupUnknownTable: a `table_lookup` names no table, or one the
 	// document's `function_tables` block does not declare.
 	CodeTableLookupUnknownTable = "table_lookup_unknown_table"
 	// CodeTableLookupAxisNameMismatch: the key set of `table_lookup.axes` does
-	// not match the axis names the referenced table declares — or the node
-	// carries positional `args`, which §9.5.2 requires to be empty.
+	// not match the axis names the referenced table declares.
 	CodeTableLookupAxisNameMismatch = "table_lookup_axis_name_mismatch"
+	// CodeTableLookupArgsNonempty: a `table_lookup` node carries a non-empty
+	// positional `args` (esm-spec §9.5.2); an absent `args` means `[]`. The
+	// schema rejects the same node, so this is what a node that skipped
+	// schema validation (one built in memory) reports.
+	CodeTableLookupArgsNonempty = "table_lookup_args_nonempty"
 	// CodeTableLookupOutputOutOfRange: `table_lookup.output` selects no output
 	// of the referenced table — an index past `len(outputs)` (or past 0 for a
 	// single-output table), a name absent from `outputs`, or a non-integer /
 	// non-string selector.
 	CodeTableLookupOutputOutOfRange = "table_lookup_output_out_of_range"
+	// CodeTableAxisDuplicateName: two axes of one table share a `name`.
+	CodeTableAxisDuplicateName = "table_axis_duplicate_name"
+	// CodeTableOutputsDuplicateName: two entries of `outputs` share a name.
+	CodeTableOutputsDuplicateName = "table_outputs_duplicate_name"
 	// CodeTableInterpolationAxesMismatch: `interpolation` and the axis count
 	// disagree — `linear` and `nearest` require 1 axis, `bilinear` 2.
 	CodeTableInterpolationAxesMismatch = "table_interpolation_axes_mismatch"
-	// CodeTableDataShapeMismatch: `data`'s nesting does not match the shape
-	// `axes` (and `outputs`, when present) imply, so the selected output names
-	// no sub-array.
-	CodeTableDataShapeMismatch = "table_data_shape_mismatch"
-	// CodeTableAxisNaN: an axis's `values` carries a non-finite entry; §9.5.1
-	// requires strictly-increasing FINITE floats.
+	// CodeTableAxisNaN: an axis's `values` carries a value that is not finite
+	// (NaN, +Inf or -Inf; esm-spec §9.5.5, ruling Q-109).
 	CodeTableAxisNaN = "table_axis_nan"
+	// CodeTableAxisNonMonotonic: an axis's `values` is not strictly increasing.
+	CodeTableAxisNonMonotonic = "table_axis_non_monotonic"
+	// CodeTableAxisTooShort: an axis's `values` has fewer than 2 entries. The
+	// schema rejects such an axis too; this is what a table built in memory
+	// reports.
+	CodeTableAxisTooShort = "table_axis_too_short"
+	// CodeTableOutputsLengthMismatch: `outputs` is declared, `data` is an
+	// array, and its length is not `len(outputs)`.
+	CodeTableOutputsLengthMismatch = "table_outputs_length_mismatch"
+	// CodeTableDataShapeMismatch: `data`'s nesting does not match the shape
+	// `axes` (and `outputs`, when present) imply, or the redundant `shape`
+	// assertion does not match that shape.
+	CodeTableDataShapeMismatch = "table_data_shape_mismatch"
+	// CodeTableDataNaN: a leaf of `data` is not finite (NaN, +Inf or -Inf;
+	// esm-spec §9.5.5, ruling Q-109).
+	CodeTableDataNaN = "table_data_nan"
 	// CodeTableOutOfBoundsUnsupported: the referenced table declares
 	// `out_of_bounds: "error"`, which this binding does not implement. Per
 	// esm-spec §9.5.3a the lookup is REFUSED at the point it would otherwise
@@ -479,8 +499,9 @@ const (
 	// CodeSearchsortedNonMonotonic: a `searchsorted` table is not
 	// non-decreasing.
 	CodeSearchsortedNonMonotonic = "searchsorted_non_monotonic"
-	// CodeSearchsortedNaNInTable: a `searchsorted` table contains a NaN.
-	CodeSearchsortedNaNInTable = "searchsorted_nan_in_table"
+	// CodeSearchsortedNaN: a `searchsorted` table contains a NaN. Checked
+	// before CodeSearchsortedNonMonotonic (esm-spec §9.2).
+	CodeSearchsortedNaN = "searchsorted_nan"
 	// CodeInterpNonMonotonicAxis: an `interp` axis is not strictly increasing.
 	CodeInterpNonMonotonicAxis = "interp_non_monotonic_axis"
 	// CodeInterpAxisLengthMismatch: an `interp` axis length does not match the
@@ -490,6 +511,18 @@ const (
 	CodeInterpNaNInAxis = "interp_nan_in_axis"
 	// CodeInterpAxisTooShort: an `interp` axis has fewer than two points.
 	CodeInterpAxisTooShort = "interp_axis_too_short"
+	// CodeInterpAxisNotConst: an axis of `interp.linear` / `interp.bilinear`,
+	// or the `xs` of `interp.searchsorted`, is not a rank-1 `const`-op array —
+	// a variable reference, a non-`const` expression, or a `const` whose value
+	// is a scalar or a nested array (esm-spec §9.2, ruling Q-108). Checked
+	// before CodeSearchsortedNaN and CodeSearchsortedNonMonotonic.
+	CodeInterpAxisNotConst = "interp_axis_not_const"
+	// codeInterpTableNotConst: the `table` of `interp.linear` /
+	// `interp.bilinear` is not a `const`-op array of the required rank (1 for
+	// linear, 2 for bilinear) — a variable reference, a non-`const`
+	// expression, or a `const` of the wrong rank (esm-spec §9.2, ruling Q-108).
+	// Unexported until api-surface.json records it.
+	codeInterpTableNotConst = "interp_table_not_const"
 )
 
 // --- Diagnostic codes: §9.3 enum lowering (raised via newEnumLoweringError
@@ -505,6 +538,10 @@ const (
 	CodeInvalidEnumArity = "invalid_enum_arity"
 	// CodeInvalidEnumArg: an `enum` node argument is not a string.
 	CodeInvalidEnumArg = "invalid_enum_arg"
+	// CodeEnumDuplicateValue: two symbols of ONE `enums` entry map to the same
+	// integer (esm-spec §9.3). Raised on the block itself, whether or not an
+	// `enum` op names either symbol; values MAY coincide across enums.
+	CodeEnumDuplicateValue = "enum_duplicate_value"
 )
 
 // --- Diagnostic codes: expression EVALUATION (EvaluationError, raised from

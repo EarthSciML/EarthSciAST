@@ -1,0 +1,92 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "FunctionTable_axis_duplicate_name",
+    "description": "Table `T` has two axes named `x` (step 1) and two outputs named `a` (step 2); step 1 is reported. No `table_lookup` references `T`.",
+    "authors": [
+      "EarthSciML"
+    ],
+    "created": "2026-10-27T00:00:00Z"
+  },
+  "function_tables": {
+    "T": {
+      "axes": [
+        {
+          "name": "x",
+          "values": [
+            0,
+            1
+          ]
+        },
+        {
+          "name": "x",
+          "values": [
+            0,
+            1
+          ]
+        }
+      ],
+      "interpolation": "bilinear",
+      "outputs": [
+        "a",
+        "a"
+      ],
+      "data": [
+        [
+          [
+            1,
+            2
+          ],
+          [
+            3,
+            4
+          ]
+        ],
+        [
+          [
+            5,
+            6
+          ],
+          [
+            7,
+            8
+          ]
+        ]
+      ]
+    }
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "y": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        },
+        "x": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.5
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "y"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              -1.0,
+              "y"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

@@ -33,9 +33,18 @@ import (
 // (esm-spec §9.2). Named to replace the inline magic literals the audit
 // flagged in toUnixDateTime / datetimeJulianDay.
 const (
-	secondsPerDay     = 86400.0 // seconds in a UTC day (floor-divmod split)
-	secondsPerHalfDay = 43200.0 // noon offset for the continuous Julian Day
-	nanosPerSecond    = 1e9     // fractional-second → nanosecond scale
+	secondsPerDay     = 86400 // seconds in a UTC day (floor-divmod split)
+	secondsPerHalfDay = 43200 // noon offset for the continuous Julian Day
+	// julianDayOfEpochDay is the Julian Day Number of 1970-01-01 (noon), so
+	// the Julian Date of day number d at time of day s is
+	// (d + julianDayOfEpochDay) + (s − 43200)/86400.
+	julianDayOfEpochDay = 2440588
+	// maxCalendarSeconds bounds |floor(t_utc)| so the whole-second count fits
+	// an int64 with room for time.Unix's internal epoch shift. It is not the
+	// overflow rule — that is the Int32 year (yearInInt32) — but ~1.5e11
+	// years, far past it, so every t_utc it rejects has a year outside Int32
+	// too and the two raise the same closed_function_overflow.
+	maxCalendarSeconds = 1 << 62
 )
 
 // ClosedFunctionError carries the spec-defined diagnostic codes pinned by
@@ -45,7 +54,11 @@ const (
 //   - closed_function_arity       — wrong number of arguments.
 //   - closed_function_overflow    — integer-typed result would overflow Int32.
 //   - searchsorted_non_monotonic  — xs is not non-decreasing.
-//   - searchsorted_nan_in_table   — xs contains a NaN entry.
+//   - searchsorted_nan            — xs contains a NaN entry (checked before monotonicity).
+//   - interp_axis_not_const       — an axis, or searchsorted's xs, is not a rank-1
+//     `const` array (checked before searchsorted_nan).
+//   - interp_table_not_const      — an interp.linear/bilinear table is not a `const`
+//     array of rank 1 (linear) or rank 2 (bilinear).
 //   - interp_non_monotonic_axis   — interp.linear/bilinear axis is not strictly increasing.
 //   - interp_axis_length_mismatch — table shape disagrees with axis length(s).
 //   - interp_nan_in_axis          — interp.linear/bilinear axis contains NaN.
@@ -103,9 +116,9 @@ func IsClosedFunction(name string) bool {
 
 // datetimeFieldAccessors maps the seven datetime.* field-extraction functions
 // (esm-spec §9.2) to their calendar accessor. Each takes a single UTC-scalar
-// argument, decomposes it via toUnixDateTime, and returns a signed 32-bit
-// integer (range-checked uniformly through checkInt32 — the small calendar
-// fields never overflow, so this only ever matters for datetime.year).
+// argument, decomposes it via toUnixDateTime (which raises
+// closed_function_overflow when the year of t_utc is outside Int32, for every
+// field), and returns a signed 32-bit integer.
 var datetimeFieldAccessors = map[string]func(time.Time) int{
 	"datetime.year":        func(t time.Time) int { return t.Year() },
 	"datetime.month":       func(t time.Time) int { return int(t.Month()) },
@@ -156,7 +169,7 @@ func EvaluateClosedFunction(name string, args []any) (any, error) {
 			return nil, newClosedFunctionError(CodeClosedFunctionArity,
 				fmt.Sprintf("%s: argument must be numeric, got %T", name, args[0]))
 		}
-		return datetimeJulianDay(f), nil
+		return datetimeJulianDay(f)
 	case "datetime.is_leap_year":
 		if err := expectArity(name, args, 1); err != nil {
 			return nil, err
@@ -178,7 +191,7 @@ func EvaluateClosedFunction(name string, args []any) (any, error) {
 			return nil, newClosedFunctionError(CodeClosedFunctionArity,
 				fmt.Sprintf("%s: first argument (x) must be numeric, got %T", name, args[0]))
 		}
-		xs, err := toFloat64Array(name, "xs", args[1])
+		xs, err := interpRank1Array(name, "xs", CodeInterpAxisNotConst, args[1])
 		if err != nil {
 			return nil, err
 		}
@@ -187,11 +200,11 @@ func EvaluateClosedFunction(name string, args []any) (any, error) {
 		if err := expectArity(name, args, 3); err != nil {
 			return nil, err
 		}
-		table, err := toFloat64Array(name, "table", args[0])
+		table, err := interpRank1Array(name, "table", codeInterpTableNotConst, args[0])
 		if err != nil {
 			return nil, err
 		}
-		axis, err := toFloat64Array(name, "axis", args[1])
+		axis, err := interpRank1Array(name, "axis", CodeInterpAxisNotConst, args[1])
 		if err != nil {
 			return nil, err
 		}
@@ -205,15 +218,15 @@ func EvaluateClosedFunction(name string, args []any) (any, error) {
 		if err := expectArity(name, args, 5); err != nil {
 			return nil, err
 		}
-		table, err := toInterpMatrix(name, "table", args[0])
+		table, err := interpRank2Array(name, "table", codeInterpTableNotConst, args[0])
 		if err != nil {
 			return nil, err
 		}
-		axisX, err := toFloat64Array(name, "axis_x", args[1])
+		axisX, err := interpRank1Array(name, "axis_x", CodeInterpAxisNotConst, args[1])
 		if err != nil {
 			return nil, err
 		}
-		axisY, err := toFloat64Array(name, "axis_y", args[2])
+		axisY, err := interpRank1Array(name, "axis_y", CodeInterpAxisNotConst, args[2])
 		if err != nil {
 			return nil, err
 		}
@@ -256,52 +269,88 @@ func checkInt32(name string, v int64) (int32, error) {
 }
 
 // toUnixDateTime converts a UTC scalar time (seconds since Unix epoch) to
-// time.Time at UTC. The spec pins floor-divmod by 86400 for the
-// (date, time-of-day) split; time.Unix already does this with the
-// proleptic-Gregorian calendar. Float fractional seconds are converted to
-// nanoseconds before construction.
+// the time.Time of the WHOLE second it falls in, at UTC. It raises
+// closed_function_overflow for a NaN or ±Inf t_utc and for one whose year is
+// outside Int32 (esm-spec §9.2), so every datetime.* field shares the rule. esm-spec §9.2 takes
+// the fields from floor(time of day), where time of day is
+// t − 86400·floor(t/86400) taken exactly; since 86400 is an integer, that is
+// the same instant as floor(t) seconds, so a fractional t floors toward −∞
+// (59.9999999 → 00:00:59, −1e-7 → 23:59:59 of 1969-12-31) and never rounds
+// into the next second. time.Unix then does the floored divmod and the
+// proleptic-Gregorian conversion in exact integer arithmetic.
 func toUnixDateTime(v any) (time.Time, error) {
 	f, ok := toFloat64(v)
 	if !ok {
 		return time.Time{}, newClosedFunctionError(CodeClosedFunctionArity,
 			fmt.Sprintf("argument must be numeric, got %T", v))
 	}
-	// Split into integer seconds and fractional nanoseconds. Use
-	// math.Floor so that negative-fractional inputs ("0.5 seconds before
-	// epoch") follow Python-style floored division per esm-spec §9.2.
-	whole := math.Floor(f)
-	frac := f - whole
-	sec := int64(whole)
-	nsec := int64(math.Round(frac * nanosPerSecond))
-	if nsec >= nanosPerSecond {
-		sec++
-		nsec -= nanosPerSecond
+	whole, err := wholeSeconds(f)
+	if err != nil {
+		return time.Time{}, err
 	}
-	return time.Unix(sec, nsec).UTC(), nil
+	t := time.Unix(whole, 0).UTC()
+	if err := yearInInt32(t, f); err != nil {
+		return time.Time{}, err
+	}
+	return t, nil
 }
 
-// datetimeJulianDay computes the continuous Julian Day Number (JDN) for a
-// UTC scalar time, including the fractional time-of-day offset relative
-// to noon UTC. Uses the Fliegel–van Flandern (1968) integer formula plus
-// `(time_of_day_seconds − 43200) / 86400`, ≤ 1 ulp agreement to the spec
-// reference per esm-spec §9.2.1.
-func datetimeJulianDay(tUTC float64) float64 {
-	t, _ := toUnixDateTime(tUTC)
-	y := t.Year()
-	m := int(t.Month())
-	d := t.Day()
-	mAdj := (m - 14) / 12
-	jdn := (1461*(y+4800+mAdj))/4 +
-		(367*(m-2-12*mAdj))/12 -
-		(3*((y+4900+mAdj)/100))/4 +
-		d - 32075
-	// JDN counts noon-to-noon; convert time-of-day seconds (since 00:00 UTC)
-	// to a fractional offset relative to noon.
-	secondsInDay := math.Mod(tUTC, secondsPerDay)
-	if secondsInDay < 0 {
-		secondsInDay += secondsPerDay
+// yearInInt32 raises closed_function_overflow when the proleptic-Gregorian
+// year of t (the decomposition of t_utc) is outside Int32: esm-spec §9.2
+// makes every datetime.* function raise then, whatever field it returns.
+func yearInInt32(t time.Time, tUTC float64) error {
+	if y := int64(t.Year()); y < math.MinInt32 || y > math.MaxInt32 {
+		return newClosedFunctionError(CodeClosedFunctionOverflow,
+			fmt.Sprintf("datetime.*: the year %d of t_utc %g overflows Int32", y, tUTC))
 	}
-	return float64(jdn) + (secondsInDay-secondsPerHalfDay)/secondsPerDay
+	return nil
+}
+
+// wholeSeconds is floor(t_utc) as an int64 (exact: a floored binary64 is an
+// integer). A NaN or ±Inf t_utc raises closed_function_overflow (esm-spec
+// §9.2). So does one outside ±maxCalendarSeconds, where the int64 conversion
+// would be implementation-defined; its year is far outside Int32, so that is
+// the year rule's answer too.
+func wholeSeconds(f float64) (int64, error) {
+	whole := math.Floor(f)
+	if !(whole >= -maxCalendarSeconds && whole < maxCalendarSeconds) {
+		return 0, newClosedFunctionError(CodeClosedFunctionOverflow,
+			fmt.Sprintf("datetime.*: t_utc %g is outside the calendar range", f))
+	}
+	return int64(whole), nil
+}
+
+// datetimeJulianDay is the standard Julian Date t_utc/86400 + 2440587.5 for
+// every t_utc, evaluated in binary64 as esm-spec §9.2 pins it, from the exact
+// split: (day + 2440588) + ((second_of_day − 43200) + (t − floor(t))) / 86400.
+// The day term and second_of_day − 43200 are exact integers and t − floor(t)
+// is exact in binary64 except for −0.5 < t < 0 (where 1 + t can round), so
+// beyond that only the inner add, the divide and the outer add round
+// (≤ 1 ulp). The day term is the linear day number, not the
+// Fliegel–van Flandern JDN of the date, which agrees only from -4800-03-01 on.
+// Like every datetime.* function it raises closed_function_overflow for a
+// non-finite t_utc or a year outside Int32.
+func datetimeJulianDay(tUTC float64) (float64, error) {
+	whole, err := wholeSeconds(tUTC)
+	if err != nil {
+		return 0, err
+	}
+	if err := yearInInt32(time.Unix(whole, 0).UTC(), tUTC); err != nil {
+		return 0, err
+	}
+	day := floorDiv(whole, secondsPerDay)
+	secondOfDay := whole - secondsPerDay*day
+	fromNoon := float64(secondOfDay-secondsPerHalfDay) + (tUTC - math.Floor(tUTC))
+	return float64(day+julianDayOfEpochDay) + fromNoon/secondsPerDay, nil
+}
+
+// floorDiv is integer division rounding toward −∞ (Go's `/` truncates).
+func floorDiv(a, b int64) int64 {
+	q := a / b
+	if (a%b != 0) && ((a < 0) != (b < 0)) {
+		q--
+	}
+	return q
 }
 
 // isLeapYear: proleptic-Gregorian. Pure integer arithmetic, exact zero
@@ -315,23 +364,14 @@ func isLeapYear(y int) bool {
 // → 1, above → N+1, NaN x → N+1, NaN entries in xs → error, non-monotonic
 // xs → error.
 func interpSearchsorted(name string, x float64, xs []float64) (int32, error) {
+	if err := validateSearchsortedXs(name, xs); err != nil {
+		return 0, err
+	}
 	n := len(xs)
 	if n == 0 {
-		// Empty table: extends "above-range → N+1" rule to N=0; the only
-		// consistent extension that composes with `index`.
+		// Empty table (esm-spec §9.2): a valid rank-1 xs; every query, a NaN x
+		// included, is N + 1 = 1.
 		return int32(1), nil
-	}
-	// Validate monotonicity + NaN-in-table once per call.
-	for i := 0; i < n; i++ {
-		if math.IsNaN(xs[i]) {
-			return 0, newClosedFunctionError(CodeSearchsortedNaNInTable,
-				fmt.Sprintf("%s: xs[%d] is NaN; NaN entries in xs are forbidden", name, i+1))
-		}
-		if i > 0 && xs[i] < xs[i-1] {
-			return 0, newClosedFunctionError(CodeSearchsortedNonMonotonic,
-				fmt.Sprintf("%s: xs is not non-decreasing (xs[%d]=%g < xs[%d]=%g)",
-					name, i+1, xs[i], i, xs[i-1]))
-		}
 	}
 	// NaN x → N+1 ("greater than every finite element").
 	if math.IsNaN(x) {
@@ -347,13 +387,128 @@ func interpSearchsorted(name string, x float64, xs []float64) (int32, error) {
 	return checkInt32(name, int64(n+1))
 }
 
+// validateSearchsortedXs runs the esm-spec §9.2 checks on a rank-1 `xs`: NaN
+// in its own pass BEFORE monotonicity, so an xs holding a NaN is
+// `searchsorted_nan` whatever its other entries and a decreasing pair ahead of
+// the NaN cannot win; then non-decreasing (`searchsorted_non_monotonic`). An
+// empty xs passes both. It is shared by the load-time argument check
+// (load_time_checks.go) and the evaluator.
+func validateSearchsortedXs(name string, xs []float64) error {
+	for i, v := range xs {
+		if math.IsNaN(v) {
+			return newClosedFunctionError(CodeSearchsortedNaN,
+				fmt.Sprintf("%s: xs[%d] is NaN; NaN entries in xs are forbidden", name, i+1))
+		}
+	}
+	for i := 1; i < len(xs); i++ {
+		if xs[i] < xs[i-1] {
+			return newClosedFunctionError(CodeSearchsortedNonMonotonic,
+				fmt.Sprintf("%s: xs is not non-decreasing (xs[%d]=%g < xs[%d]=%g)",
+					name, i+1, xs[i], i, xs[i-1]))
+		}
+	}
+	return nil
+}
+
+// isArrayValue reports whether v is an array (a decoded []any or an in-memory
+// []float64 / [][]float64).
+func isArrayValue(v any) bool {
+	switch v.(type) {
+	case []any, []float64, [][]float64:
+		return true
+	}
+	return false
+}
+
+// interpRank1Array extracts a rank-1 array argument of an interp.* function —
+// searchsorted's `xs`, linear's `table`, an axis — refusing one of any other
+// rank (a scalar, or an array with an array or non-numeric entry) with `code`:
+// `interp_axis_not_const` for an axis or `xs`, `interp_table_not_const` for a
+// table (esm-spec §9.2, ruling Q-108). The rank is decided over the WHOLE value
+// before any entry is read as a number, so a nested array holding a NaN is
+// still the rank code, never a NaN code. (The AST-level half of the same rule —
+// an argument that is not a `const` node at all — is checkInterpArgsNode, since
+// by the time a value reaches here a variable reference has already been
+// reduced to a scalar.)
+func interpRank1Array(name, role, code string, v any) ([]float64, error) {
+	switch xs := v.(type) {
+	case []float64:
+	case []any:
+		for i, e := range xs {
+			if isArrayValue(e) {
+				return nil, newClosedFunctionError(code, fmt.Sprintf(
+					"%s: %s must be a rank-1 `const`-op array, got a nested array "+
+						"(%s[%d] is an array) (esm-spec §9.2)", name, role, role, i+1))
+			}
+			if _, ok := toFloat64Strict(e); !ok {
+				return nil, newClosedFunctionError(code, fmt.Sprintf(
+					"%s: %s must be a rank-1 `const`-op array of numbers, got %s[%d] = %v (%T) "+
+						"(esm-spec §9.2)", name, role, role, i+1, e, e))
+			}
+		}
+	default:
+		return nil, newClosedFunctionError(code, fmt.Sprintf(
+			"%s: %s must be a rank-1 `const`-op array, got a scalar (%T) (esm-spec §9.2)",
+			name, role, v))
+	}
+	return toFloat64Array(name, role, v)
+}
+
+// interpRank2Array extracts interp.bilinear's `table`, refusing anything but a
+// rank-2 array — a scalar, a rank-1 array, or a row that is itself nested —
+// with `code` (`interp_table_not_const`, esm-spec §9.2, ruling Q-108). Ragged
+// rows ARE rank 2; their lengths are interpBilinear's
+// `interp_axis_length_mismatch`.
+func interpRank2Array(name, role, code string, v any) ([][]float64, error) {
+	notRank2 := func(what string) error {
+		return newClosedFunctionError(code, fmt.Sprintf(
+			"%s: %s must be a rank-2 `const`-op array, got %s (esm-spec §9.2)",
+			name, role, what))
+	}
+	switch outer := v.(type) {
+	case [][]float64:
+		if len(outer) == 0 {
+			return nil, notRank2("`[]`, which is rank 1 (ruling Q-111)")
+		}
+	case []any:
+		if len(outer) == 0 {
+			return nil, notRank2("`[]`, which is rank 1 (ruling Q-111)")
+		}
+		for i, row := range outer {
+			if !isArrayValue(row) {
+				return nil, notRank2(fmt.Sprintf("a row that is not an array (%s[%d])", role, i+1))
+			}
+			if r, ok := row.([]any); ok {
+				for j, e := range r {
+					if isArrayValue(e) {
+						return nil, notRank2(fmt.Sprintf(
+							"an array nested deeper than rank 2 (%s[%d][%d] is an array)",
+							role, i+1, j+1))
+					}
+					if _, ok := toFloat64Strict(e); !ok {
+						return nil, notRank2(fmt.Sprintf(
+							"a non-numeric entry (%s[%d][%d] = %v, %T)", role, i+1, j+1, e, e))
+					}
+				}
+			}
+			if _, ok := row.([][]float64); ok {
+				return nil, notRank2(fmt.Sprintf(
+					"an array nested deeper than rank 2 (%s[%d])", role, i+1))
+			}
+		}
+	default:
+		return nil, notRank2(fmt.Sprintf("a scalar (%T)", v))
+	}
+	return toInterpMatrix(name, role, v)
+}
+
 // toFloat64Array extracts a 1-D []float64 from an evaluated `const`-op array
 // argument to a closed function (the `xs` table of interp.searchsorted; the
 // table / axes of interp.linear / interp.bilinear). Accepts []float64
 // (programmatically built) and []interface{} (post-parse). NaN entries are
 // preserved: NaN string literals are already coerced to a float64 NaN by
 // toFloat64 (strconv.ParseFloat accepts "NaN"/"nan"), and downstream validators
-// reject NaN where the spec forbids it (searchsorted_nan_in_table,
+// reject NaN where the spec forbids it (searchsorted_nan,
 // interp_nan_in_axis). `role` names the argument in diagnostics.
 //
 // This replaces the former toFloat64Slice + toInterpAxisOrTable pair, which
@@ -412,54 +567,96 @@ func toInterpMatrix(name, role string, v any) ([][]float64, error) {
 	}
 }
 
-// validateInterpAxis checks an axis array against the load-time contract
-// (esm-spec §9.2): length ≥ 2, no NaN entries, strictly increasing.
-// Order: too_short → nan_in_axis → non_monotonic, so each fixture's
-// isolated-error scenario surfaces the spec-named diagnostic regardless
-// of which other constraints would also fail given a more pathological
-// input.
-func validateInterpAxis(fnName, axisName string, axis []float64) error {
-	if len(axis) < 2 {
-		return newClosedFunctionError(CodeInterpAxisTooShort,
-			fmt.Sprintf("%s: %s has %d entries; need ≥ 2 to form an interval to blend across",
-				fnName, axisName, len(axis)))
-	}
-	for i, v := range axis {
-		if math.IsNaN(v) {
-			return newClosedFunctionError(CodeInterpNaNInAxis,
-				fmt.Sprintf("%s: %s[%d] is NaN; axes MUST NOT contain NaN", fnName, axisName, i+1))
+// validateInterpAxesValues runs the last two steps of the esm-spec §9.2
+// "Order of the argument checks" over the named axes, each step over EVERY
+// axis before the next begins (ruling Q-110): a non-finite entry (NaN, +Inf
+// or -Inf; ruling Q-113) in any axis is `interp_nan_in_axis`, then any axis
+// not strictly increasing is `interp_non_monotonic_axis`. Lengths are the
+// caller's earlier steps.
+func validateInterpAxesValues(fnName string, names []string, axes [][]float64) error {
+	for k, axis := range axes {
+		for i, v := range axis {
+			if math.IsNaN(v) || math.IsInf(v, 0) {
+				return newClosedFunctionError(CodeInterpNaNInAxis,
+					fmt.Sprintf("%s: %s[%d] is %v; axis entries MUST be finite",
+						fnName, names[k], i+1, v))
+			}
 		}
 	}
-	for i := 1; i < len(axis); i++ {
-		if axis[i] <= axis[i-1] {
-			return newClosedFunctionError(CodeInterpNonMonotonicAxis,
-				fmt.Sprintf("%s: %s is not strictly increasing (%s[%d]=%g ≤ %s[%d]=%g)",
-					fnName, axisName, axisName, i+1, axis[i], axisName, i, axis[i-1]))
+	for k, axis := range axes {
+		for i := 1; i < len(axis); i++ {
+			if axis[i] <= axis[i-1] {
+				return newClosedFunctionError(CodeInterpNonMonotonicAxis,
+					fmt.Sprintf("%s: %s is not strictly increasing (%s[%d]=%g ≤ %s[%d]=%g)",
+						fnName, names[k], names[k], i+1, axis[i], names[k], i, axis[i-1]))
+			}
 		}
 	}
 	return nil
 }
 
-// interpLinear implements `interp.linear` per esm-spec §9.2. Validation
-// order: length-mismatch (between table and axis), then axis well-formedness
-// via validateInterpAxis. Evaluation uses the spec-pinned form
-// `t[i] + w*(t[i+1] - t[i])` so that w=0 returns t[i] exactly and w=1
-// returns t[i+1] without 1−w cancellation.
-func interpLinear(table, axis []float64, x float64) (float64, error) {
+// validateInterpLinearArgs runs the esm-spec §9.2 argument checks of
+// interp.linear on its rank-1 table and axis, in the pinned order (ruling
+// Q-110): too short, length mismatch, non-finite entry, not strictly
+// increasing. Shared by the load-time argument check
+// (load_time_checks.go) and the evaluator.
+func validateInterpLinearArgs(table, axis []float64) error {
 	const fnName = "interp.linear"
-	// `axis_too_short` MUST take precedence over a length mismatch when
-	// both could apply; checking the axis first satisfies that ordering
-	// when N=1 with a matching table length.
 	if len(axis) < 2 {
-		return 0, newClosedFunctionError(CodeInterpAxisTooShort,
+		return newClosedFunctionError(CodeInterpAxisTooShort,
 			fmt.Sprintf("%s: axis has %d entries; need ≥ 2 to form an interval to blend across",
 				fnName, len(axis)))
 	}
 	if len(table) != len(axis) {
-		return 0, newClosedFunctionError(CodeInterpAxisLengthMismatch,
+		return newClosedFunctionError(CodeInterpAxisLengthMismatch,
 			fmt.Sprintf("%s: len(table)=%d != len(axis)=%d", fnName, len(table), len(axis)))
 	}
-	if err := validateInterpAxis(fnName, "axis", axis); err != nil {
+	return validateInterpAxesValues(fnName, []string{"axis"}, [][]float64{axis})
+}
+
+// validateInterpBilinearArgs runs the esm-spec §9.2 argument checks of
+// interp.bilinear on its rank-2 table and two axes, in this order:
+//  1. axis_x too short
+//  2. axis_y too short
+//  3. table outer length vs len(axis_x)
+//  4. each inner row length vs len(axis_y) (also catches ragged rows)
+//  5. a non-finite entry in axis_x or axis_y, then either axis not strictly
+//     increasing (validateInterpAxesValues)
+//
+// This is the order of esm-spec §9.2 "Order of the argument checks" (ruling
+// Q-110), each step over both axes before the next.
+func validateInterpBilinearArgs(table [][]float64, axisX, axisY []float64) error {
+	const fnName = "interp.bilinear"
+	if len(axisX) < 2 {
+		return newClosedFunctionError(CodeInterpAxisTooShort,
+			fmt.Sprintf("%s: axis_x has %d entries; need ≥ 2", fnName, len(axisX)))
+	}
+	if len(axisY) < 2 {
+		return newClosedFunctionError(CodeInterpAxisTooShort,
+			fmt.Sprintf("%s: axis_y has %d entries; need ≥ 2", fnName, len(axisY)))
+	}
+	if len(table) != len(axisX) {
+		return newClosedFunctionError(CodeInterpAxisLengthMismatch,
+			fmt.Sprintf("%s: outer len(table)=%d != len(axis_x)=%d",
+				fnName, len(table), len(axisX)))
+	}
+	for i, row := range table {
+		if len(row) != len(axisY) {
+			return newClosedFunctionError(CodeInterpAxisLengthMismatch,
+				fmt.Sprintf("%s: len(table[%d])=%d != len(axis_y)=%d",
+					fnName, i+1, len(row), len(axisY)))
+		}
+	}
+	return validateInterpAxesValues(fnName, []string{"axis_x", "axis_y"},
+		[][]float64{axisX, axisY})
+}
+
+// interpLinear implements `interp.linear` per esm-spec §9.2, after the
+// argument checks of validateInterpLinearArgs. Evaluation uses the spec-pinned form
+// `t[i] + w*(t[i+1] - t[i])` so that w=0 returns t[i] exactly and w=1
+// returns t[i+1] without 1−w cancellation.
+func interpLinear(table, axis []float64, x float64) (float64, error) {
+	if err := validateInterpLinearArgs(table, axis); err != nil {
 		return 0, err
 	}
 	n := len(axis)
@@ -490,44 +687,13 @@ func interpLinear(table, axis []float64, x float64) (float64, error) {
 	return table[i] + w*(table[i+1]-table[i]), nil
 }
 
-// interpBilinear implements `interp.bilinear` per esm-spec §9.2.
-// Validation order:
-//  1. axis_x too short
-//  2. axis_y too short
-//  3. table outer length vs len(axis_x)
-//  4. each inner row length vs len(axis_y) (also catches ragged rows)
-//  5. axis_x / axis_y NaN + monotonicity (via validateInterpAxis)
-//
-// Evaluation uses the spec-pinned form: two 1-D x-blends followed by one
+// interpBilinear implements `interp.bilinear` per esm-spec §9.2, after the
+// argument checks of validateInterpBilinearArgs. Evaluation uses the spec-pinned form: two 1-D x-blends followed by one
 // y-blend, each in `a + w*(b - a)`. Cell location uses the "largest index
 // in [0, N-2] with axis[i] ≤ q" convention so that a query exactly on an
 // interior knot lands on `i = k` (wx = 0) per esm-spec §9.2.
 func interpBilinear(table [][]float64, axisX, axisY []float64, x, y float64) (float64, error) {
-	const fnName = "interp.bilinear"
-	if len(axisX) < 2 {
-		return 0, newClosedFunctionError(CodeInterpAxisTooShort,
-			fmt.Sprintf("%s: axis_x has %d entries; need ≥ 2", fnName, len(axisX)))
-	}
-	if len(axisY) < 2 {
-		return 0, newClosedFunctionError(CodeInterpAxisTooShort,
-			fmt.Sprintf("%s: axis_y has %d entries; need ≥ 2", fnName, len(axisY)))
-	}
-	if len(table) != len(axisX) {
-		return 0, newClosedFunctionError(CodeInterpAxisLengthMismatch,
-			fmt.Sprintf("%s: outer len(table)=%d != len(axis_x)=%d",
-				fnName, len(table), len(axisX)))
-	}
-	for i, row := range table {
-		if len(row) != len(axisY) {
-			return 0, newClosedFunctionError(CodeInterpAxisLengthMismatch,
-				fmt.Sprintf("%s: len(table[%d])=%d != len(axis_y)=%d",
-					fnName, i+1, len(row), len(axisY)))
-		}
-	}
-	if err := validateInterpAxis(fnName, "axis_x", axisX); err != nil {
-		return 0, err
-	}
-	if err := validateInterpAxis(fnName, "axis_y", axisY); err != nil {
+	if err := validateInterpBilinearArgs(table, axisX, axisY); err != nil {
 		return 0, err
 	}
 	// NaN x or y: spec says result is NaN. Shortcut the cell-location step,
