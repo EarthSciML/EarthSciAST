@@ -38,13 +38,13 @@ jobs:
     outputs:
       bindings: ${{ steps.plan.outputs.bindings }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
           repository: EarthSciML/earthsci.dev
           ref: main
           path: .earthsci-dev
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       # Prints the bindings in docs/api/config.toml as a JSON array ([] when
@@ -66,7 +66,7 @@ jobs:
       matrix:
         binding: ${{ fromJSON(needs.plan.outputs.bindings) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: EarthSciML/earthsci.dev/.github/actions/api-extract@main
         with:
           binding: ${{ matrix.binding }}
@@ -79,7 +79,7 @@ jobs:
     permissions:
       contents: write   # push the docs-bundle branch
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Prebuild: every narrative page is assembled, validated, tested and
       # plotted. A broken model in the documentation fails here, on
@@ -93,7 +93,7 @@ jobs:
 
       - name: Download extracted docstrings
         continue-on-error: true
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: api-docs-*
           path: build/api-docs
@@ -104,7 +104,7 @@ jobs:
       - name: Create site dispatch token
         id: app-token
         if: ${{ github.event_name != 'pull_request' }}
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.DOCS_APP_ID }}
           private-key: ${{ secrets.DOCS_APP_PRIVATE_KEY }}

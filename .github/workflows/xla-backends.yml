@@ -138,7 +138,7 @@ jobs:
       CARGO_INCREMENTAL: '0'
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Rust (stable)
         uses: dtolnay/rust-toolchain@stable
@@ -149,7 +149,7 @@ jobs:
       # ran the runner disk out. The same applies here, more so -- the `xla`
       # feature's dependency graph is larger, not smaller.
       - name: Cache Rust dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -176,7 +176,7 @@ jobs:
       # the SHA-256 of each archive, so any bump to either changes this key and
       # re-downloads. Nothing else can change what the script produces.
       - name: Cache the xla_extension release
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/xla-ext
           key: xla-ext-cpu-${{ env.XLA_EXTENSION_VERSION }}-${{ hashFiles('scripts/fetch-xla-extension.sh') }}
@@ -240,7 +240,7 @@ jobs:
 
       - name: Upload the compiled_rhs report
         if: ${{ !cancelled() && steps.producer.outcome != 'skipped' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: compiled-rhs-rust-${{ github.run_number }}
           path: conformance-results/compiled_rhs/rust_compiled_report.json
@@ -280,7 +280,7 @@ jobs:
 
       - name: Upload the compiler_agreement reports
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: compiler-agreement-xla-${{ github.run_number }}
           path: conformance-results/compiler_agreement/
@@ -319,15 +319,15 @@ jobs:
     env:
       ESM_TEST_REACTANT: '1'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Julia
-        uses: julia-actions/setup-julia@v2
+        uses: julia-actions/setup-julia@v3
         with:
           version: ${{ env.JULIA_VERSION }}
           arch: x64   # Reactant's prebuilt XLA runtime is x86_64-linux only
 
-      - uses: julia-actions/cache@v2
+      - uses: julia-actions/cache@v3
 
       # The adapter self-bootstraps this env on first use
       # (compiled_rhs_adapter.jl: activate, `Pkg.develop` the package when
@@ -413,7 +413,7 @@ jobs:
 
       - name: Upload the compiled_rhs report
         if: ${{ !cancelled() && steps.producer.outcome != 'skipped' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: compiled-rhs-julia-${{ github.run_number }}
           path: conformance-results/compiled_rhs/julia_compiled_report.json

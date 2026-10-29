@@ -83,12 +83,12 @@ jobs:
     # measurement.
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || '' }}
 
       - name: Setup Julia
-        uses: julia-actions/setup-julia@v2
+        uses: julia-actions/setup-julia@v3
         with:
           version: ${{ env.JULIA_VERSION }}
 
@@ -96,7 +96,7 @@ jobs:
       # installed here. Pinned anyway so a runner image bump cannot change what
       # this job runs.
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.11'
 
@@ -106,7 +106,7 @@ jobs:
       # then saved under the same key the two would evict each other's work on
       # every run.
       - name: Cache the Julia depot
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.julia
           key: ${{ runner.os }}-mtk-compiler-${{ env.JULIA_VERSION }}-${{ hashFiles('pkg/EarthSciAST.jl/Project.toml', 'pkg/EarthSciAST.jl/scripts/compiler_agreement_mtk_env/Project.toml') }}
@@ -140,7 +140,7 @@ jobs:
 
       - name: Upload the compiler-agreement reports
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: compiler-agreement-mtk-${{ github.run_number }}
           path: conformance-results/compiler_agreement/

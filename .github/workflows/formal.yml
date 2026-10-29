@@ -40,7 +40,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     # The inventory and token checks need no Lean, so they run first and
     # report even when the Lean build fails.
@@ -50,7 +50,7 @@ jobs:
         python3 scripts/formal-audit.py inventory
 
     - name: Cache Lean toolchain
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: ~/.elan
         key: ${{ runner.os }}-elan-${{ hashFiles('formal/lean-toolchain') }}
@@ -66,7 +66,7 @@ jobs:
     # which pins every package revision; the model's own build output is not
     # cached, so a stale olean can never stand in for a proof.
     - name: Cache Lake packages
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: formal/.lake/packages
         key: ${{ runner.os }}-lake-${{ hashFiles('formal/lean-toolchain', 'formal/lake-manifest.json') }}

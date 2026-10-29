@@ -46,7 +46,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     # REQUIRED, not an optimisation. Three of the seven artifacts
     # `sync-schema.sh --check` covers are TypeScript files it can only verify by
@@ -60,7 +60,7 @@ jobs:
     # merged with BOTH TypeScript artifacts stale, and they stayed stale until
     # someone happened to run the TS suite locally. A gate that cannot fail is
     # worse than no gate, because it is also a claim.
-    - uses: actions/setup-node@v4
+    - uses: actions/setup-node@v7
       with:
         node-version: '20'
         cache: 'npm'

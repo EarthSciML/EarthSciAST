@@ -108,24 +108,24 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || '' }}
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
           cache-dependency-path: pkg/earthsci-ast-ts/package-lock.json
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: '1.23'
           cache-dependency-path: pkg/earthsci-ast-go/go.sum
@@ -138,7 +138,7 @@ jobs:
           targets: aarch64-unknown-linux-gnu
 
       - name: Cache Rust dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -227,7 +227,7 @@ jobs:
 
       - name: golangci-lint (pinned)
         if: ${{ !cancelled() }}
-        uses: golangci/golangci-lint-action@v8
+        uses: golangci/golangci-lint-action@v9
         with:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
           working-directory: pkg/earthsci-ast-go
@@ -270,13 +270,13 @@ jobs:
       run:
         working-directory: pkg/EarthSciAST.jl
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || '' }}
 
       - name: Setup Julia
         id: setup-julia
-        uses: julia-actions/setup-julia@v2
+        uses: julia-actions/setup-julia@v3
         with:
           version: ${{ matrix.julia-version }}
 
@@ -311,7 +311,7 @@ jobs:
 
       - name: Restore Julia depot
         id: julia-depot
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: |
             ~/.julia/artifacts
@@ -348,7 +348,7 @@ jobs:
           directories: pkg/EarthSciAST.jl/src
 
       - name: Upload Julia coverage to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         if: matrix.julia-version == 'lts'
         with:
           files: lcov.info
@@ -360,7 +360,7 @@ jobs:
       # first.
       - name: Save Julia depot
         if: ${{ always() && github.ref == 'refs/heads/main' && steps.julia-depot.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: |
             ~/.julia/artifacts
@@ -380,13 +380,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || '' }}
 
       - name: Setup Julia
         id: setup-julia
-        uses: julia-actions/setup-julia@v2
+        uses: julia-actions/setup-julia@v3
         with:
           version: '1'
 
@@ -398,7 +398,7 @@ jobs:
           echo "prefix=julia-depot-v2-${{ runner.os }}-${{ steps.setup-julia.outputs.julia-version }}-" >> "$GITHUB_OUTPUT"
 
       - name: Restore Julia depot
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: |
             ~/.julia/artifacts
@@ -469,12 +469,12 @@ jobs:
       run:
         working-directory: pkg/earthsci-ast-ts
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || '' }}
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
           cache: 'npm'
@@ -503,17 +503,17 @@ jobs:
       run:
         working-directory: pkg/earthsci-ast-py
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || '' }}
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
 
       - name: Cache Python dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ hashFiles('pkg/earthsci-ast-py/pyproject.toml') }}
@@ -531,7 +531,7 @@ jobs:
           pytest tests/ -v --cov=src/earthsci_ast --cov-report=xml
 
       - name: Upload Python coverage to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         if: matrix.python-version == '3.11'
         with:
           files: pkg/earthsci-ast-py/coverage.xml
@@ -560,7 +560,7 @@ jobs:
       run:
         working-directory: pkg/earthsci-ast-rs
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || '' }}
 
@@ -596,7 +596,7 @@ jobs:
       # restore-key. Harmless for a download cache; it is why the entry is
       # rewritten on every run.)
       - name: Cache Rust dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -726,17 +726,17 @@ jobs:
       run:
         working-directory: pkg/earthsci-ast-go
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || '' }}
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: ${{ matrix.go-version }}
 
       - name: Cache Go modules
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/go/pkg/mod
           key: ${{ runner.os }}-go-${{ matrix.go-version }}-${{ hashFiles('pkg/earthsci-ast-go/go.sum') }}
@@ -756,7 +756,7 @@ jobs:
         run: go test -v -race -coverprofile=coverage.out ./...
 
       - name: Upload Go coverage to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         if: matrix.go-version == '1.23'
         with:
           files: pkg/earthsci-ast-go/coverage.out
@@ -810,24 +810,24 @@ jobs:
     # tiers took the job past 45 minutes.
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || '' }}
 
       - name: Setup Julia
-        uses: julia-actions/setup-julia@v2
+        uses: julia-actions/setup-julia@v3
         with:
           version: ${{ env.JULIA_VERSION }}
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
           cache-dependency-path: pkg/earthsci-ast-ts/package-lock.json
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
@@ -837,7 +837,7 @@ jobs:
           toolchain: ${{ env.RUST_VERSION }}
 
       - name: Cache dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.julia
@@ -926,7 +926,7 @@ jobs:
 
       # Upload conformance results (best-effort — partial output is useful for debugging)
       - name: Upload standard conformance results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: conformance-results-${{ github.run_number }}
@@ -953,7 +953,7 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || '' }}
 
@@ -987,7 +987,7 @@ jobs:
       # Download all results
       - name: Download standard conformance results
         if: ${{ needs.standard-conformance-testing.result == 'success' || needs.standard-conformance-testing.result == 'failure' }}
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: conformance-results-${{ github.run_number }}
           path: standard-results/
@@ -1003,7 +1003,7 @@ jobs:
       # its own and is not a statement about the red binding.
       - name: Comment PR with enhanced conformance results
         if: ${{ github.event_name == 'pull_request' && (needs.standard-conformance-testing.result == 'success' || needs.standard-conformance-testing.result == 'failure') }}
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const fs = require('fs');
