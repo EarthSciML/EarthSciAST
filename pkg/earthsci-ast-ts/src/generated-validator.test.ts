@@ -85,28 +85,35 @@ describe('the precompiled validator', () => {
     expect(files.length).toBeGreaterThan(0)
   })
 
-  it.each(MUTATIONS)('agrees with a freshly compiled Ajv (%s)', (_label, mutate) => {
-    let compared = 0
-    for (const file of files) {
-      let doc: Record<string, unknown>
-      try {
-        doc = JSON.parse(readFileSync(file, 'utf8'))
-      } catch {
-        continue // not every fixture is JSON; those are other tests' problem
+  // Each case validates the whole fixture corpus twice: a few seconds alone,
+  // which can cross vitest's 5 s default while the rest of the suite runs in
+  // parallel.
+  it.each(MUTATIONS)(
+    'agrees with a freshly compiled Ajv (%s)',
+    (_label, mutate) => {
+      let compared = 0
+      for (const file of files) {
+        let doc: Record<string, unknown>
+        try {
+          doc = JSON.parse(readFileSync(file, 'utf8'))
+        } catch {
+          continue // not every fixture is JSON; those are other tests' problem
+        }
+        const data = mutate(doc)
+
+        const expectedValid = reference(data)
+        const expectedErrors = JSON.stringify(reference.errors ?? null)
+        const actualValid = precompiled(data)
+        const actualErrors = JSON.stringify(precompiled.errors ?? null)
+
+        expect(actualValid, `verdict differs for ${file}`).toBe(expectedValid)
+        expect(actualErrors, `errors differ for ${file}`).toBe(expectedErrors)
+        compared++
       }
-      const data = mutate(doc)
-
-      const expectedValid = reference(data)
-      const expectedErrors = JSON.stringify(reference.errors ?? null)
-      const actualValid = precompiled(data)
-      const actualErrors = JSON.stringify(precompiled.errors ?? null)
-
-      expect(actualValid, `verdict differs for ${file}`).toBe(expectedValid)
-      expect(actualErrors, `errors differ for ${file}`).toBe(expectedErrors)
-      compared++
-    }
-    expect(compared, 'nothing was actually compared').toBeGreaterThan(0)
-  })
+      expect(compared, 'nothing was actually compared').toBeGreaterThan(0)
+    },
+    60_000,
+  )
 
   it('is in sync with the canonical schema', () => {
     // The drift guard lives HERE rather than in `scripts/sync-schema.sh`, which
