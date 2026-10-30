@@ -16,7 +16,7 @@
 
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { execSync } from 'node:child_process'
+import { execFileSync } from 'node:child_process'
 import {
   buildReferenceGraph,
   resolveReferences,
@@ -299,7 +299,7 @@ describe('buildReferenceGraph', () => {
 
 describe('reference resolution over the shared corpus', () => {
   const validDir = fixturesDir('valid')
-  const files = execSync(`find ${JSON.stringify(validDir)} -name '*.esm'`, { encoding: 'utf-8' })
+  const files = execFileSync('find', [validDir, '-name', '*.esm'], { encoding: 'utf-8' })
     .trim()
     .split('\n')
     .sort()
