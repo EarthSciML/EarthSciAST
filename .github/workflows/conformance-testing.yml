@@ -16,17 +16,16 @@ on:
       - 'scripts/**'
       - '.github/workflows/conformance-testing.yml'
   workflow_call:
+    # Every checkout below is the default one: on a call that is the caller's
+    # `github.sha`, the release commit. There is deliberately no `ref` input. A
+    # checkout of a caller-chosen ref in a job that saves a cache would let that
+    # ref's code write the cache every later run on main restores.
     inputs:
       release_validation:
         description: 'Run as part of release validation'
         required: false
         type: boolean
         default: false
-      ref:
-        description: 'Git ref to check out (e.g. a release tag)'
-        required: false
-        type: string
-        default: ''
   workflow_dispatch:  # Allow manual triggering
 
 permissions:
@@ -42,8 +41,8 @@ concurrency:
   # Julia registration. `github.workflow` is this file's name on its own run and
   # the caller's name on a called one, so the two groups differ; the literal
   # prefix keeps the called group distinct from any group the caller declares.
-  # `inputs.ref` (the release commit, set only on a call) keeps two releases apart.
-  group: conformance-${{ github.workflow }}-${{ inputs.ref || github.ref }}
+  # On a release call the commit (`github.sha`, the caller's) keeps two releases apart.
+  group: conformance-${{ github.workflow }}-${{ inputs.release_validation && github.sha || github.ref }}
   # Cancel superseded runs everywhere, main included. The julia matrix runs
   # ~55 min, so queueing meant each push to main waited out the previous
   # commit's full matrix before testing the code anyone actually cares about.
@@ -72,8 +71,6 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.ref || '' }}
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -118,8 +115,6 @@ jobs:
         working-directory: pkg/EarthSciAST.jl
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.ref || '' }}
 
       - name: Setup Julia
         id: setup-julia
@@ -228,8 +223,6 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.ref || '' }}
 
       - name: Setup Julia
         id: setup-julia
@@ -317,8 +310,6 @@ jobs:
         working-directory: pkg/earthsci-ast-ts
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.ref || '' }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v7
@@ -351,8 +342,6 @@ jobs:
         working-directory: pkg/earthsci-ast-py
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.ref || '' }}
 
       - name: Setup Python
         uses: actions/setup-python@v7
@@ -408,8 +397,6 @@ jobs:
         working-directory: pkg/earthsci-ast-rs
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.ref || '' }}
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@master
@@ -574,8 +561,6 @@ jobs:
         working-directory: pkg/earthsci-ast-go
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.ref || '' }}
 
       - name: Setup Go
         uses: actions/setup-go@v7
@@ -657,8 +642,6 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.ref || '' }}
 
       - name: Setup Julia
         uses: julia-actions/setup-julia@v3
@@ -800,8 +783,6 @@ jobs:
       pull-requests: write
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.ref || '' }}
 
       # Report NOT RUN and stop. No artifact exists to download, no verdict
       # exists to comment, and inventing either is the bug this guards against.

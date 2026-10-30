@@ -81,9 +81,14 @@ jobs:
         with:
           version: ${{ env.JULIA_VERSION }}
 
-      - name: Cache the Julia depot
+      # The caches are restored on every run but saved only when EarthSciModels
+      # is its default branch (see the save steps after the census). A run by
+      # hand on another EarthSciModels ref runs that ref's documents, and must
+      # not write a cache the scheduled run restores.
+      - name: Restore the Julia depot
+        id: julia-cache
         if: matrix.binding == 'julia'
-        uses: actions/cache@v6
+        uses: actions/cache/restore@v6
         with:
           path: ~/.julia
           key: ${{ runner.os }}-native-coverage-${{ env.JULIA_VERSION }}-${{ hashFiles('EarthSciAST/pkg/EarthSciAST.jl/Project.toml', 'EarthSciAST/pkg/EarthSciAST.jl/scripts/compiler_agreement_env/Project.toml') }}
@@ -109,9 +114,10 @@ jobs:
         if: matrix.binding == 'rust'
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache cargo
+      - name: Restore cargo
+        id: cargo-cache
         if: matrix.binding == 'rust'
-        uses: actions/cache@v6
+        uses: actions/cache/restore@v6
         with:
           path: |
             ~/.cargo/registry
@@ -131,6 +137,22 @@ jobs:
             --bindings ${{ matrix.binding }} \
             --jobs 2 \
             --timeout 600
+
+      - name: Save the Julia depot
+        if: matrix.binding == 'julia' && inputs.earthscimodels_ref == '' && steps.julia-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ~/.julia
+          key: ${{ steps.julia-cache.outputs.cache-primary-key }}
+
+      - name: Save cargo
+        if: matrix.binding == 'rust' && inputs.earthscimodels_ref == '' && steps.cargo-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
 
       - name: Upload the census
         if: ${{ !cancelled() }}

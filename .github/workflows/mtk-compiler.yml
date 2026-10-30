@@ -42,12 +42,16 @@ on:
       - 'scripts/**'
       - '.github/workflows/mtk-compiler.yml'
   workflow_call:
+    # Every checkout below is the default one: on a call that is the caller's
+    # `github.sha`, the release commit. There is deliberately no `ref` input. A
+    # checkout of a caller-chosen ref in a job that saves a cache would let that
+    # ref's code write the cache every later run on main restores.
     inputs:
-      ref:
-        description: 'Git ref to check out (e.g. a release tag)'
+      release_validation:
+        description: 'Run as part of release validation'
         required: false
-        type: string
-        default: ''
+        type: boolean
+        default: false
   workflow_dispatch:
 
 permissions:
@@ -63,8 +67,8 @@ concurrency:
   # Julia registration. `github.workflow` is this file's name on its own run and
   # the caller's name on a called one, so the two groups differ; the literal
   # prefix keeps the called group distinct from any group the caller declares.
-  # `inputs.ref` (the release commit, set only on a call) keeps two releases apart.
-  group: mtk-compiler-${{ github.workflow }}-${{ inputs.ref || github.ref }}
+  # On a release call the commit (`github.sha`, the caller's) keeps two releases apart.
+  group: mtk-compiler-${{ github.workflow }}-${{ inputs.release_validation && github.sha || github.ref }}
   # Same reasoning as the conformance workflow: a superseded run must not hold a
   # runner while HEAD queues behind it.
   cancel-in-progress: true
@@ -84,8 +88,6 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.ref || '' }}
 
       - name: Setup Julia
         uses: julia-actions/setup-julia@v3
