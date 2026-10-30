@@ -1,5 +1,5 @@
 {
-  "esm": "1.2.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "datetime_log10",
     "description": "The `compiled_rhs` gate for the two constructs a compiled backend cannot reach by lowering arithmetic alone: the nine-function `datetime.*` closed calendar (esm-spec \u00a79.2.1) and `log10`. Every one of the nine functions has its own equation, so a backend that lowers eight of them fails HERE rather than in a model. The probe times are chosen for the cases a calendar gets wrong: NEGATIVE times (floored division, not truncated), both signs of a leap day, a year boundary, a sub-second remainder (the family truncates to whole milliseconds), and `t` exactly on and just below a day boundary. `datetime.julian_day` is the one continuous member and is pinned to the same tolerance as the rest; the eight integer fields are exact in every binding and the class's 1e-12 is slack on them.",
@@ -279,7 +279,7 @@
                 "op": "/",
                 "args": [
                   "longitude",
-                  {"op": "const", "args": [], "value": 15.0, "units": "s*degrees"}
+                  15.0
                 ]
               }
             ]

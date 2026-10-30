@@ -21,8 +21,8 @@
     },
     {
       "id": "neutral_literal_pins_warn",
-      "input": "(the 27 tests/valid files the golden lists with a nonempty warning set: 83 warnings)",
-      "assert": "each stays VALID and carries exactly the listed warnings; these files pin today's neutral-literal rule and are rewritten by the next stage's codemod, not here"
+      "input": "(the 13 tests/valid files the golden lists with a nonempty warning set: 44 warnings)",
+      "assert": "each stays VALID and carries exactly the listed warnings; these are the files that pin today's neutral-literal rule, which the stage-2 codemod (scripts/codemod-dimensionless-literals.py) deliberately leaves alone, and the sites no literal rewrite repairs"
     }
   ]
 }

@@ -1,5 +1,5 @@
 {
-  "esm": "1.2.0",
+  "esm": "1.0.0",
   "metadata": {
     "name": "OperatorComposeResolutionFixtures",
     "description": "Test fixtures for operator_compose coupling resolution algorithm (Section 4.7.1)",
@@ -36,7 +36,7 @@
           "type": "parameter"
         },
         "k2": {
-          "units": "cm^3/molec/s",
+          "units": "1/s",
           "default": 1.8e-12,
           "description": "Reaction rate 2",
           "type": "parameter"
@@ -87,7 +87,7 @@
           "rhs": {
             "op": "*",
             "args": [
-              {"op": "const", "args": [], "value": -1, "units": "1/cm^3"},
+              -1,
               "k2",
               "NO2"
             ]

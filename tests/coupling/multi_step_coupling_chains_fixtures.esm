@@ -42,7 +42,7 @@
           "type": "parameter"
         },
         "k_NO_HO2": {
-          "units": "cm^3/molec/s",
+          "units": "1/s",
           "default": 8e-12,
           "description": "NO + HO2 rate constant",
           "type": "parameter"
@@ -128,7 +128,7 @@
               {
                 "op": "*",
                 "args": [
-                  -1e-14,
+                  {"op": "const", "args": [], "value": -1e-14, "units": "1/s"},
                   "O3",
                   "NO"
                 ]
@@ -164,7 +164,7 @@
           "rhs": {
             "op": "*",
             "args": [
-              {"op": "const", "args": [], "value": -1, "units": "1/cm^3"},
+              -1,
               "k_NO_HO2",
               "NO",
               "HO2"
@@ -332,7 +332,7 @@
           "description": "Nutrient concentration"
         },
         "primary_production_rate": {
-          "units": "1/s",
+          "units": "m^3/(mol*s)",
           "default": 1e-07,
           "description": "Primary production rate",
           "type": "parameter"
@@ -372,7 +372,7 @@
               {
                 "op": "*",
                 "args": [
-                  {"op": "const", "args": [], "value": -1, "units": "m^3/mol"},
+                  -1,
                   "primary_production_rate",
                   "DIC",
                   "nutrients"
@@ -433,7 +433,7 @@
               {
                 "op": "*",
                 "args": [
-                  {"op": "const", "args": [], "value": -1, "units": "m^3/mol"},
+                  -1,
                   "primary_production_rate",
                   "DIC",
                   "nutrients"
