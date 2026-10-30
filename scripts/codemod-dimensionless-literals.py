@@ -406,7 +406,10 @@ def declaration_fixes(text, base, sites, rep):
                 continue
             old = var["units"]
             e = _angle_power(old)
-            if e is None:
+            if e is None or not _has_non_angle_axis(old):
+                # Giving a pure number or a pure angle a power of rad relabels
+                # what the quantity IS (an hour of day is not an angle); the
+                # site is left to the literal pass and the model author.
                 continue
             powers = ([-e] if e else []) + [k for k in (1, -1, 2, -2) if k != -e]
             for k in powers:
@@ -481,6 +484,14 @@ def _has_angle_constant(raw):
         if any(_near(abs(val), c, 1e-4) for c in _ANGLE_CONSTANTS if isinstance(val, (int, float))):
             return True
     return False
+
+
+def _has_non_angle_axis(spelled):
+    try:
+        dv = unit_vec(U.parse_unit(spelled))
+    except Exception:
+        return False
+    return any(k[0] == "d" and k != ("d", "[angle]") for k in dv)
 
 
 def _is_mixed_angle_unit(spelled):
@@ -944,7 +955,8 @@ def eligible_literals(expr, path, out, templates_used):
     if folded is not None:
         # A literal-only subexpression (`1 / 64`, `2 * 3600`): any of its
         # literals could carry the unit, so it is ONE candidate, rewritten as
-        # a single const of its folded IEEE value.
+        # a single const of its folded IEEE value. Only one level is folded:
+        # a nested literal tree is structure the author wrote on purpose.
         if folded != 0:
             out.append((path, "fold"))
         return
@@ -982,8 +994,9 @@ def _leaf_value(e):
 
 
 def fold_literal_only(expr):
-    """The folded value of a literal-only `+ - * /` subexpression with at
-    least two literals (left folds, in the evaluator's order), else None."""
+    """The folded value of a `+ - * /` node with at least two arguments, every
+    one a literal or a negated literal (left folds, in the evaluator's order),
+    else None. A node with a nested operator among its arguments is not folded."""
     if not isinstance(expr, dict) or expr.get("op") not in ("+", "-", "*", "/"):
         return None
     args = expr.get("args") or []
@@ -992,8 +1005,6 @@ def fold_literal_only(expr):
     vals = []
     for a in args:
         v = _leaf_value(a)
-        if v is None:
-            v = fold_literal_only(a)
         if v is None:
             return None
         vals.append(v)
@@ -2012,16 +2023,22 @@ def summary_md(reports, title, args):
         + ("All patched files passed." if touched else "No file was patched."),
         "",
     ]
-    lines += ["## Declaration changes (angle units)", ""]
+    lines += ["## Declaration changes (angle units) — review each", ""]
     lines += [
         "A site whose only mismatch is a `rad` factor is repaired by changing one "
         "variable's declared `units`, never by a literal `1/rad`. The equation's "
         "left-hand variable is tried first, then observed variables, then the rest; a "
         "change is kept only if validity is unchanged, the site stops warning and no "
         "other site that uses the variable starts warning or erroring. `rad` has scale "
-        "1, so no value changes. A Coriolis-type site, where an angular quantity "
-        "(`rad/s`) meets a quantity without the angle, is never changed automatically: "
-        "it is listed under Unresolved for the model author to decide.",
+        "1, so no value changes. Only a unit with some axis besides the angle is "
+        "changed (`1/s` -> `rad/s`): a pure number or a pure angle never gains or "
+        "loses a `rad`. A Coriolis-type site, where an angular quantity (`rad/s`) "
+        "meets a quantity without the angle, is never changed automatically: it is "
+        "listed under Unresolved for the model author to decide.",
+        "",
+        "Each change below says what a model variable IS, which the checker cannot "
+        "judge: confirm the new unit is right for the quantity, or reject the change "
+        "and repair the model instead.",
         "",
     ]
     if not decls:
