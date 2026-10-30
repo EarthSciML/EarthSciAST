@@ -119,3 +119,22 @@ describe('toMathML(reaction)', () => {
     expect(ml).toContain('&#x2205;') // ∅
   })
 })
+
+describe('reaction term coefficient split', () => {
+  // The coefficient is the longest number prefix that still leaves a species,
+  // exactly as the regex this scanner replaced chose it.
+  it('pins the split on ambiguous terms', () => {
+    const r = parseReaction('22 + 1e5 + 2.5e3X + 1.2.3 -> [k] Y')
+    expect(r.substrates).toEqual([
+      { species: '2', stoichiometry: 2 },
+      { species: 'e5', stoichiometry: 1 },
+      { species: 'X', stoichiometry: 2500 },
+      { species: '.3', stoichiometry: 1.2 },
+    ])
+  })
+
+  it('handles a long digit run without polynomial backtracking', () => {
+    const digits = '0'.repeat(20000)
+    expect(() => parseReaction(`${digits}x${digits} y -> [k] Y`)).toThrow(ExpressionParseError)
+  })
+})
