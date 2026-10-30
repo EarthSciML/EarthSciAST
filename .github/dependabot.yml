@@ -22,6 +22,15 @@ updates:
     directory: "/pkg/earthsci-ast-ts"
     schedule:
       interval: "weekly"
+    ignore:
+      # No typescript-eslint release accepts TypeScript 7 yet (its peer range
+      # stops below 6.1), so the bump makes `npm ci` fail. Drop this once it does.
+      - dependency-name: "typescript"
+        versions: [">=7"]
+      # Each major from 14 on changes the shape of the generated src/generated.ts,
+      # which is part of the published types. Adopt a new major as its own change.
+      - dependency-name: "json-schema-to-typescript"
+        update-types: ["version-update:semver-major"]
     groups:
       npm:
         patterns: ["*"]
