@@ -178,7 +178,7 @@ func EvaluateClosedFunction(name string, args []any) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		if isLeapYear(t.Year()) {
+		if isLeapYear(int64(t.Year())) {
 			return int32(1), nil
 		}
 		return int32(0), nil
@@ -355,7 +355,7 @@ func floorDiv(a, b int64) int64 {
 
 // isLeapYear: proleptic-Gregorian. Pure integer arithmetic, exact zero
 // error vs. the spec.
-func isLeapYear(y int) bool {
+func isLeapYear(y int64) bool {
 	return (y%4 == 0 && y%100 != 0) || y%400 == 0
 }
 

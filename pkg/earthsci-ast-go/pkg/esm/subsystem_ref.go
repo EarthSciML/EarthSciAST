@@ -388,7 +388,7 @@ func mergeSubsystemIndexSets(registry map[string]IndexSet, view map[string]any, 
 		if existing, has := registry[n]; has {
 			if !indexSetDeepEqual(existing, decl) {
 				return newETErr(CodeSubsystemIndexSetConflict,
-					fmt.Sprintf("index set '%s' from subsystem ref '%s' (%s) collides with a non-deep-equal declaration already in the importing document's registry (%s) — contributed by the document's own `index_sets` or by an earlier mount (subsystem index_sets merge into the importing registry; deep-equal redeclaration is idempotent, a size/kind disagreement is a load-time error — esm-spec §4.7). If the two are genuinely different axes that happen to share a name, rename one at its mount edge with `index_set_rename` (esm-spec §4.7 \"Mount-edge index-set renaming\"), e.g. {\"ref\": \"%s\", \"index_set_rename\": {\"%s\": \"%s_2\"}}", n, ref, showIndexSet(decl), showIndexSet(existing), ref, n, n))
+					fmt.Sprintf("index set '%s' from subsystem ref '%s' (%s) collides with a non-deep-equal declaration already in the importing document's registry (%s) — contributed by the document's own `index_sets` or by an earlier mount (subsystem index_sets merge into the importing registry; deep-equal redeclaration is idempotent, a size/kind disagreement is a load-time error — esm-spec §4.7). If the two are genuinely different axes that happen to share a name, rename one at its mount edge with `index_set_rename` (esm-spec §4.7 \"Mount-edge index-set renaming\"), e.g. {\"ref\": \"%s\", \"index_set_rename\": {\"%s\": \"%s_2\"}}", quoteSafe(n), quoteSafe(ref), quoteSafe(showIndexSet(decl)), quoteSafe(showIndexSet(existing)), quoteSafe(ref), quoteSafe(n), quoteSafe(n)))
 			}
 			continue
 		}
@@ -445,7 +445,7 @@ func foldNestedIndexSets(view map[string]any, leafRegistry map[string]IndexSet, 
 			}
 			if !indexSetDeepEqual(existing, decl) {
 				return newETErr(CodeSubsystemIndexSetConflict,
-					fmt.Sprintf("index set '%s' contributed by a mount nested inside ref '%s' (%s) collides with a non-deep-equal declaration of the same name in that document itself (%s) — deep-equal redeclaration is idempotent, a size/kind disagreement is a load-time error (esm-spec §4.7)", n, ref, showIndexSet(decl), showIndexSet(existing)))
+					fmt.Sprintf("index set '%s' contributed by a mount nested inside ref '%s' (%s) collides with a non-deep-equal declaration of the same name in that document itself (%s) — deep-equal redeclaration is idempotent, a size/kind disagreement is a load-time error (esm-spec §4.7)", quoteSafe(n), quoteSafe(ref), quoteSafe(showIndexSet(decl)), quoteSafe(showIndexSet(existing))))
 			}
 			continue
 		}

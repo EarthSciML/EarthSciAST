@@ -32,7 +32,7 @@ type Rat struct {
 
 // newRat builds a Rat in lowest terms with a positive denominator. A zero
 // denominator is treated as 1 (see the Rat doc comment). A value outside the
-// int32 range is truncated; newRatChecked reports it instead.
+// int32 range yields the zero Rat; newRatChecked reports it instead.
 func newRat(num, den int64) Rat {
 	r, _ := newRatChecked(num, den)
 	return r
@@ -50,8 +50,10 @@ func newRatChecked(num, den int64) (Rat, bool) {
 	if g := gcd64(num, den); g > 1 {
 		num, den = num/g, den/g
 	}
-	ok := num >= math.MinInt32 && num <= math.MaxInt32 && den <= math.MaxInt32
-	return Rat{Num: int32(num), Den: int32(den)}, ok
+	if num < math.MinInt32 || num > math.MaxInt32 || den < 1 || den > math.MaxInt32 {
+		return Rat{}, false
+	}
+	return Rat{Num: int32(num), Den: int32(den)}, true
 }
 
 func gcd64(a, b int64) int64 {
@@ -1389,7 +1391,11 @@ func ratFromDecimalLiteral(lit string) (Rat, error) {
 	if neg {
 		n = -n
 	}
-	return newRat(n, den), nil
+	r, ok := newRatChecked(n, den)
+	if !ok {
+		return Rat{}, fmt.Errorf("exponent %q does not reduce to an int32 fraction", lit)
+	}
+	return r, nil
 }
 
 // Unit-finding codes. A unit finding is either a DEFECT IN THE FILE — which
@@ -2177,7 +2183,7 @@ func buildModelUnitEnv(model *Model) (map[string]Unit, map[string]error) {
 // declared units of its species and parameters. See BuildUnitEnv for the
 // return-value contract.
 func buildSystemUnitEnv(system *ReactionSystem) (map[string]Unit, map[string]error) {
-	raw := make(map[string]string, len(system.Species)+len(system.Parameters))
+	raw := make(map[string]string, len(system.Species))
 	for name, sp := range system.Species {
 		if sp.Units != nil {
 			raw[name] = *sp.Units

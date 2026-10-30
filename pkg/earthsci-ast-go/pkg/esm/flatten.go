@@ -765,7 +765,7 @@ func namespaceExprTree(expr Expression, prefix string, leaveAlone, subsystemKeys
 	// handling needed is adding them to `leaveAlone` for the children.
 	localLeave := leaveAlone
 	if node.Op == "faq" {
-		localLeave = make(map[string]bool, len(leaveAlone)+len(node.OutputIdx)+len(node.Ranges))
+		localLeave = make(map[string]bool, len(leaveAlone))
 		for k, v := range leaveAlone {
 			localLeave[k] = v
 		}
@@ -786,7 +786,7 @@ func namespaceExprTree(expr Expression, prefix string, leaveAlone, subsystemKeys
 		// THIS node's own loop symbols, not localLeave (which also holds
 		// enclosing nodes'). A join column resolves against this node's
 		// `ranges`, so its own binders are the exact shadowing set.
-		binders := make(map[string]bool, len(out.OutputIdx)+len(out.Ranges))
+		binders := make(map[string]bool, len(out.Ranges))
 		for _, s := range out.OutputIdx {
 			if name, ok := s.(string); ok {
 				binders[name] = true
@@ -1971,7 +1971,7 @@ func applyOperatorCompose(components map[string]*componentSystem, entry Operator
 	// document-wide rename (issue #230). `inverted` rides along because it is
 	// the same operation pointed the other way -- the loser of an ownership
 	// decision is merged away exactly like the loser of a translation match.
-	made := make(map[string]string, len(mergedAway)+len(inverted))
+	made := make(map[string]string, len(mergedAway))
 	for gone, survivor := range mergedAway {
 		made[gone] = survivor
 	}

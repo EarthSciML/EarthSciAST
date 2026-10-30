@@ -158,7 +158,7 @@ func lhsFreeSymbols(e Expression, bound map[string]bool, declared func(string) b
 	}
 	switch n.Op {
 	case "faq", "aggregate":
-		inner := make(map[string]bool, len(bound)+len(n.Ranges))
+		inner := make(map[string]bool, len(bound))
 		for k := range bound {
 			inner[k] = true
 		}
@@ -248,7 +248,7 @@ func (s *structuralScan) validateLHSRules(modelName string, sc lhsScope, basePat
 				Path: path,
 				Code: ErrorEquationDefinesParameter,
 				Message: fmt.Sprintf("Equation %d defines '%s', which is a parameter; "+
-					"an equation defines unknowns only", i, base),
+					"an equation defines unknowns only", i, quoteSafe(base)),
 				Details: map[string]any{"variable": base},
 			})
 		}
@@ -264,7 +264,7 @@ func (s *structuralScan) validateLHSRules(modelName string, sc lhsScope, basePat
 				Path: path,
 				Code: ErrorUnboundIndexSymbol,
 				Message: fmt.Sprintf("Equation %d (defining '%s') subscripts its left-hand side "+
-					"with '%s', which no faq binds", i, lhsDefinedName(lhs), sym),
+					"with '%s', which no faq binds", i, quoteSafe(lhsDefinedName(lhs)), quoteSafe(sym)),
 				Details: map[string]any{"symbol": sym, "variable": lhsDefinedName(lhs)},
 			})
 		}

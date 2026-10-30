@@ -48,7 +48,7 @@ func DeriveODEs(system *ReactionSystem) (*Model, error) {
 	}
 
 	speciesOrder := orderedKeys(system.Species, system.speciesOrder)
-	variables := make(map[string]ModelVariable, len(system.Species)+len(system.Parameters))
+	variables := make(map[string]ModelVariable, len(system.Species))
 	for _, name := range speciesOrder {
 		sp := system.Species[name]
 		varType := VarTypeUnknown
