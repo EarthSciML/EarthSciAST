@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-
-	"github.com/go-playground/validator/v10"
 )
 
 // ========================================
@@ -1243,8 +1241,8 @@ type Coordinate struct {
 
 // ESMFile represents the top-level ESM file structure
 type ESMFile struct {
-	ESM             string                    `json:"esm" validate:"required"`
-	Metadata        Metadata                  `json:"metadata" validate:"required"`
+	ESM             string                    `json:"esm"`
+	Metadata        Metadata                  `json:"metadata"`
 	Models          map[string]Model          `json:"models,omitempty"`
 	ReactionSystems map[string]ReactionSystem `json:"reaction_systems,omitempty"`
 	// DataSources is the document-scoped ingest registry (esm-spec 8). It is
@@ -1418,19 +1416,14 @@ type FunctionTable struct {
 // 10. Validation and Utility Methods
 // ========================================
 
-// validate is the shared go-playground struct validator. validator.New()
-// builds and caches struct metadata on first use, so it is documented as
-// cache-heavy and MUST be reused rather than reconstructed per call.
-var validate = validator.New()
-
-// ValidateStruct runs the go-playground struct validation over the ESM file
-// (required fields, tag constraints) plus the "at least one component present"
+// ValidateStruct checks the field-level invariants of the ESM file (the
+// required `esm` version string) plus the "at least one component present"
 // invariant. It is intentionally named distinctly from the package-level
 // semantic validator Validate(*ESMFile) (validate.go), which performs the
 // richer structural/reference/unit checks — the two are different layers.
 func (e *ESMFile) ValidateStruct() error {
-	if err := validate.Struct(e); err != nil {
-		return err
+	if e.ESM == "" {
+		return fmt.Errorf("required field 'esm' is missing or empty")
 	}
 
 	// At least one of models, reaction_systems, or data_sources must be present.
