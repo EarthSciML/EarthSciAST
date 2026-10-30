@@ -83,6 +83,68 @@ fn a_table_lookup_observed_evaluates_like_its_hand_lowered_twin() {
     );
 }
 
+/// Run every inline test of the shared fixture `rel` and assert each passes,
+/// returning the assertion count.
+fn run_fixture_inline_tests(rel: &str, compiler: earthsci_ast::Compiler) -> usize {
+    let path = common::repo_fixture(rel);
+    let file = load_path(&path).unwrap_or_else(|e| panic!("{rel} loads: {e}"));
+    let results = earthsci_ast::run_inline_tests_with_options(
+        &file,
+        &earthsci_ast::InlineTestOptions {
+            solve: SolveOptions::default(),
+            base_dir: path.parent().map(std::path::Path::to_path_buf),
+            compiler: Some(compiler),
+            ..Default::default()
+        },
+        None,
+    );
+    for r in &results {
+        assert!(
+            r.passed,
+            "[{rel}] {}: actual={:?} expected={} {}",
+            r.variable, r.actual, r.expected, r.message
+        );
+    }
+    results.len()
+}
+
+/// esm-spec §9.5.3 `nearest`: the knot nearest the query, ties to the lower
+/// knot, clamped outside the axis, through the inline-test runner. The
+/// fixture includes the hand-spelled lowering as an assertion, which must agree.
+/// `index` with a run-time subscript is not taped, so this runs on the
+/// interpreter.
+#[test]
+fn nearest_fixture_inline_tests_pass() {
+    assert_eq!(
+        run_fixture_inline_tests(
+            "conformance/function_tables/nearest/fixture.esm",
+            earthsci_ast::Compiler::Interpreter,
+        ),
+        13
+    );
+}
+
+/// esm-spec §9.5.2 / §9.5.3 defaults: an omitted `output` is output 0 on
+/// multi-output tables, and a single-output table lowers with its whole
+/// `data`. Both compilers: these lookups are `interp.linear` /
+/// `interp.bilinear`, which the tape lowers.
+#[test]
+fn lookup_defaults_fixture_inline_tests_pass() {
+    for compiler in [
+        earthsci_ast::Compiler::Interpreter,
+        earthsci_ast::Compiler::Native,
+    ] {
+        assert_eq!(
+            run_fixture_inline_tests(
+                "conformance/function_tables/lookup_defaults/fixture.esm",
+                compiler,
+            ),
+            8,
+            "[{compiler:?}]"
+        );
+    }
+}
+
 /// esm-spec §9.5.1 `out_of_bounds: "error"`. This binding implements the mode,
 /// so the fixture BUILDS under both compilers, and an in-range query answers
 /// exactly what the clamp lowering answers: `p = 2.5` blends the 20.0 and 30.0

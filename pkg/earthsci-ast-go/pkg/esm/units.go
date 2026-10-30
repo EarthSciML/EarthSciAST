@@ -8,7 +8,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"unicode"
 	"unicode/utf8"
 )
 
@@ -953,13 +952,15 @@ func buildUnitRegistry() map[string]Unit {
 // in the registry — and it runs before the byte-level scanner, which only
 // recognizes ASCII bytes:
 //
-//   - SUPERSCRIPT DIGITS ⁰¹²³⁴⁵⁶⁷⁸⁹ and superscript sign ⁻/⁺ → "^n"
+//   - SUPERSCRIPT DIGITS ⁰¹²³⁴⁵⁶⁷⁸⁹ and superscript minus ⁻ → "^n"
 //     ("W/m²" → "W/m^2", "cm³" → "cm^3", "m⁻³" → "m^-3"). A RUN of superscript
 //     characters is one exponent, so "m¹⁰" is m^10, not m^1*0.
 //   - MIDDOT · (U+00B7) and DOT OPERATOR ⋅ (U+22C5) → "*" ("J/(kg·K)",
 //     "kg⋅m/s"). Both are multiplication in SI typography.
 //   - U+00B5 MICRO SIGN and U+03BC GREEK SMALL LETTER MU → "u" ("μg" → "ug")
-//   - "°C"/"°F"/"°K" → degC/degF/K, and a bare "°" → "deg"
+//   - "°C"/"°F" → degC/degF. Nothing else involving a degree sign is
+//     rewritten: a bare "°" (or "°K") stays an unexpected character, so the
+//     string does not resolve (esm-spec §4.8.2 maps only these two).
 //   - Ω (U+03A9 GREEK CAPITAL OMEGA) and Ω (U+2126 OHM SIGN) → "Ohm"
 //
 // These spellings are pervasive in tests/libraries and the spec's own examples;
@@ -1002,13 +1003,9 @@ func normalizeUnitString(s string) string {
 					b.WriteString("degF")
 					i++
 					continue
-				case 'K':
-					b.WriteString("K")
-					i++
-					continue
 				}
 			}
-			b.WriteString("deg")
+			b.WriteRune(r)
 		default:
 			b.WriteRune(r)
 		}
@@ -1030,7 +1027,7 @@ func isASCIIString(s string) bool {
 var superscriptTable = map[rune]byte{
 	'⁰': '0', '¹': '1', '²': '2', '³': '3', '⁴': '4',
 	'⁵': '5', '⁶': '6', '⁷': '7', '⁸': '8', '⁹': '9',
-	'⁻': '-', '⁺': '+',
+	'⁻': '-',
 }
 
 func isSuperscriptRune(r rune) bool {
@@ -1044,8 +1041,15 @@ func superscriptASCII(r rune) byte { return superscriptTable[r] }
 //
 //	unit     := term ( ('*'|'/')? term )*
 //	term     := atom ( ('^'|'**') exponent )?
-//	exponent := integer | decimal | '(' integer '/' integer ')'
+//	exponent := '-'? (integer | decimal) | '(' '-'? integer '/' '-'? integer ')'
 //	atom     := '1' | symbol | '%' | '(' unit ')'
+//
+// TOKENS (esm-spec §4.8.2). A RUN is a maximal sequence of [A-Za-z0-9_]. A run
+// of digits alone, optionally followed by '.' and a second digit-only run, is a
+// NUMBER; every other run is ONE symbol, which must be a table key as a whole:
+// "s1", "1s" and "kgm" are never split into a key and a remainder, and "1e3" is
+// a symbol, not exponent notation. The only numeric atom is the literal "1"
+// ("01" and "1.0" are scaling factors). Exponents take no '+' sign.
 //
 // EXPONENTS ARE RATIONAL. "1/s^0.5" (SDE noise intensity), "s^(-1/2)" and
 // "m^(3/2)" are legitimate corpus units; an integer-only exponent grammar
@@ -1056,7 +1060,8 @@ func superscriptASCII(r rune) byte { return superscriptTable[r] }
 // "J/mol*K" is (J/mol)*K, NOT J/(mol*K), and "a/b/c" is a/(b*c). Giving '*' a
 // tighter binding silently negates the exponent of every factor after a '/'.
 //
-// Whitespace separates tokens and, between two terms, means MULTIPLICATION —
+// Whitespace (space, tab, CR, LF) separates tokens and, between two terms,
+// means MULTIPLICATION —
 // the SI style "kg m^2 s^-2" and the corpus's "ppb^-1 s^-1" (== ppb^-1 *
 // s^-1). An explicit '*' is equivalent. '**' is accepted as a synonym for '^'
 // (the Python/pint spelling, e.g. "Pa*m**3").
@@ -1064,7 +1069,9 @@ func superscriptASCII(r rune) byte { return superscriptTable[r] }
 // A unit string carries DIMENSIONS ONLY: there is no species-tag convention, so
 // the "C" of "kg C/m^2" is the coulomb, not a carbon tag.
 //
-// The empty string, "1" and "dimensionless" are the dimensionless unit.
+// The empty string, "1" and "dimensionless" are the dimensionless unit. Only
+// the EMPTY string is the empty unit: a whitespace-only string has no tokens and
+// does not resolve.
 // Non-ASCII spellings (μg, °C, W/m², J/(kg·K), Ω) are normalized first — see
 // normalizeUnitString. Examples that must parse:
 //
@@ -1072,8 +1079,7 @@ func superscriptASCII(r rune) byte { return superscriptTable[r] }
 //	"Pa", "J/(mol*K)", "Pa*m**3", "ppb^-1 s^-1", "μg/m^3", "°C", "1/s^0.5",
 //	"s^(-1/2)", "W/m²", "J/(kg·K)", "%", "".
 func ParseUnit(s string) (Unit, error) {
-	s = strings.TrimSpace(s)
-	if s == "" || s == "1" || s == "dimensionless" {
+	if s == "" {
 		return Unit{Scale: 1}, nil
 	}
 	src := normalizeUnitString(s)
@@ -1095,7 +1101,7 @@ type unitParser struct {
 }
 
 func (p *unitParser) skipSpace() {
-	for p.pos < len(p.src) && unicode.IsSpace(rune(p.src[p.pos])) {
+	for p.pos < len(p.src) && isUnitSpace(p.src[p.pos]) {
 		p.pos++
 	}
 }
@@ -1148,7 +1154,49 @@ func (p *unitParser) parseUnit() (Unit, error) {
 // or a parenthesized sub-unit) — the lookahead that drives implicit
 // multiplication.
 func startsAtom(c byte) bool {
-	return isIdentStart(c) || (c >= '0' && c <= '9') || c == '(' || c == '%'
+	return isIdentByte(c) || c == '(' || c == '%'
+}
+
+// isUnitSpace reports the §4.8.2 whitespace bytes: space, tab, CR, LF.
+func isUnitSpace(c byte) bool { return c == ' ' || c == '\t' || c == '\r' || c == '\n' }
+
+func isDigitByte(c byte) bool { return c >= '0' && c <= '9' }
+
+// isIdentByte reports the §4.8.2 identifier characters; a RUN of them is one
+// token.
+func isIdentByte(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || isDigitByte(c) || c == '_'
+}
+
+func allDigits(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if !isDigitByte(s[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// scanRun scans one RUN token at p.pos and reports whether it is a NUMBER
+// (digits, optionally '.' and more digits) or a symbol.
+func (p *unitParser) scanRun() (string, bool) {
+	start := p.pos
+	for p.pos < len(p.src) && isIdentByte(p.src[p.pos]) {
+		p.pos++
+	}
+	run := p.src[start:p.pos]
+	if !allDigits(run) {
+		return run, false
+	}
+	if p.pos+1 < len(p.src) && p.src[p.pos] == '.' && isDigitByte(p.src[p.pos+1]) {
+		p.pos++
+		frac := p.pos
+		for p.pos < len(p.src) && isIdentByte(p.src[p.pos]) {
+			p.pos++
+		}
+		return p.src[start:p.pos], allDigits(p.src[frac:p.pos])
+	}
+	return run, true
 }
 
 func (p *unitParser) parseTerm() (Unit, error) {
@@ -1196,41 +1244,28 @@ func (p *unitParser) parseAtom() (Unit, error) {
 		p.pos++
 		return unitRegistry["%"], nil
 	}
-	// A numeric atom is admissible ONLY when its value is exactly 1 -- the
-	// leading `1` of `1/s`. Any other number is a SCALING FACTOR, and a unit string
-	// denotes a UNIT, not a quantity. This is not pedantry: `(m/s)^-1/3` -- an author
-	// reaching for a rational exponent -- parses under this grammar as `((m/s)^-1)/3`,
-	// and the five bindings gave it three different meanings (magnitude dropped,
-	// magnitude retained, whole string rejected). Rejecting the scaling factor makes
-	// `^(-1/3)` the only spelling of that unit, so the same string cannot silently
-	// mean two things.
-	//
-	// Before this rule Go RETAINED the magnitude here, so "1000/s" came out as
-	// 1/s scaled by 1000 while Julia read the same string as a bare 1/s.
-	if c >= '0' && c <= '9' {
-		start := p.pos
-		for p.pos < len(p.src) && ((p.src[p.pos] >= '0' && p.src[p.pos] <= '9') || p.src[p.pos] == '.') {
-			p.pos++
-		}
-		val, err := strconv.ParseFloat(p.src[start:p.pos], 64)
-		if err != nil {
-			return Unit{}, fmt.Errorf("invalid number %q", p.src[start:p.pos])
-		}
-		if val != 1 {
+	if !isIdentByte(c) {
+		return Unit{}, fmt.Errorf("unexpected %q at position %d", c, p.pos)
+	}
+	sym, isNumber := p.scanRun()
+	// A numeric atom is admissible ONLY when it is the LITERAL `1` -- the
+	// leading `1` of `1/s`. Any other number (`1000`, `0.5`, and also `01` and
+	// `1.0`) is a SCALING FACTOR, and a unit string denotes a UNIT, not a
+	// quantity. This is not pedantry: `(m/s)^-1/3` -- an author reaching for a
+	// rational exponent -- parses under this grammar as `((m/s)^-1)/3`, and the
+	// five bindings gave it three different meanings (magnitude dropped,
+	// magnitude retained, whole string rejected). Rejecting the scaling factor
+	// makes `^(-1/3)` the only spelling of that unit, so the same string cannot
+	// silently mean two things.
+	if isNumber {
+		if sym != "1" {
 			return Unit{}, fmt.Errorf("a number other than 1 is a scaling factor, not a unit (esm-spec 4.8.2); a rational exponent is spelled ^(p/q)")
 		}
 		return Unit{Scale: 1}, nil
 	}
-	// Identifier: letters followed by letters/digits/underscore.
-	if !isIdentStart(c) {
-		return Unit{}, fmt.Errorf("unexpected %q at position %d", c, p.pos)
+	if sym == "dimensionless" {
+		return Unit{Scale: 1}, nil
 	}
-	start := p.pos
-	p.pos++
-	for p.pos < len(p.src) && isIdentCont(p.src[p.pos]) {
-		p.pos++
-	}
-	sym := p.src[start:p.pos]
 	u, ok := unitRegistry[sym]
 	if !ok {
 		return Unit{}, fmt.Errorf("unknown unit %q", sym)
@@ -1240,68 +1275,69 @@ func (p *unitParser) parseAtom() (Unit, error) {
 
 // parseExponent parses a RATIONAL exponent:
 //
-//	exponent := integer | decimal | '(' integer '/' integer ')'
+//	exponent := '-'? (integer | decimal) | '(' '-'? integer '/' '-'? integer ')'
 //
-// e.g. "2", "-1", "0.5", "(1/2)", "(-1/2)". A parenthesized form may also hold
-// a plain (possibly decimal) number — "m^(-2)" is the common pint spelling.
-// The decimal form is converted EXACTLY (0.5 → 1/2, 1.25 → 5/4), never through
-// a float, so two spellings of the same exponent compare equal.
+// e.g. "2", "-1", "0.5", "(1/2)", "(-1/2)". The decimal form is converted
+// EXACTLY (0.5 → 1/2, 1.25 → 5/4), never through a float, so two spellings of
+// the same exponent compare equal. There is no '+' sign, no exponent notation,
+// and a parenthesised exponent is always a ratio of integers.
 func (p *unitParser) parseExponent() (Rat, error) {
 	p.skipSpace()
 	if p.pos < len(p.src) && p.src[p.pos] == '(' {
 		p.pos++
-		num, err := p.parseSignedNumber()
+		num, err := p.parseSignedNumber(true)
 		if err != nil {
 			return Rat{}, err
 		}
-		exp := num
-		if p.peek() == '/' {
-			p.pos++
-			den, err := p.parseSignedNumber()
-			if err != nil {
-				return Rat{}, err
-			}
-			if den.IsZero() {
-				return Rat{}, fmt.Errorf("zero denominator in exponent")
-			}
-			// Both sides are rationals; the quotient is num * den^-1.
-			d := den.fix()
-			exp = num.Mul(Rat{Num: d.Den, Den: d.Num})
+		if p.peek() != '/' {
+			return Rat{}, fmt.Errorf("a rational exponent is spelled ^(p/q) with integers p and q")
+		}
+		p.pos++
+		den, err := p.parseSignedNumber(true)
+		if err != nil {
+			return Rat{}, err
+		}
+		if den.IsZero() {
+			return Rat{}, fmt.Errorf("zero denominator in exponent")
 		}
 		if p.peek() != ')' {
 			return Rat{}, fmt.Errorf("missing ')' closing exponent at position %d", p.pos)
 		}
 		p.pos++
-		return exp, nil
+		// Both sides are rationals; the quotient is num * den^-1.
+		d := den.fix()
+		return num.Mul(Rat{Num: d.Den, Den: d.Num}), nil
 	}
-	return p.parseSignedNumber()
+	return p.parseSignedNumber(false)
 }
 
-// parseSignedNumber scans an optionally signed integer or decimal literal and
-// returns it as an exact rational.
-func (p *unitParser) parseSignedNumber() (Rat, error) {
-	p.skipSpace()
-	start := p.pos
-	if p.pos < len(p.src) && (p.src[p.pos] == '-' || p.src[p.pos] == '+') {
+// parseSignedNumber scans an optional '-' and a NUMBER token (an integer only,
+// when integerOnly) and returns it as an exact rational. Whitespace may follow
+// the sign.
+func (p *unitParser) parseSignedNumber(integerOnly bool) (Rat, error) {
+	neg := false
+	if p.peek() == '-' {
+		neg = true
 		p.pos++
 	}
-	digits := 0
-	for p.pos < len(p.src) && p.src[p.pos] >= '0' && p.src[p.pos] <= '9' {
-		p.pos++
-		digits++
-	}
-	frac := 0
-	if p.pos < len(p.src) && p.src[p.pos] == '.' {
-		p.pos++
-		for p.pos < len(p.src) && p.src[p.pos] >= '0' && p.src[p.pos] <= '9' {
-			p.pos++
-			frac++
-		}
-	}
-	if digits == 0 && frac == 0 {
+	start := p.skipThenPos()
+	if start >= len(p.src) || !isDigitByte(p.src[start]) {
 		return Rat{}, fmt.Errorf("expected a numeric exponent at position %d", start)
 	}
-	return ratFromDecimalLiteral(p.src[start:p.pos])
+	lit, isNumber := p.scanRun()
+	if !isNumber || (integerOnly && strings.Contains(lit, ".")) {
+		return Rat{}, fmt.Errorf("malformed exponent %q at position %d", lit, start)
+	}
+	if neg {
+		lit = "-" + lit
+	}
+	return ratFromDecimalLiteral(lit)
+}
+
+// skipThenPos skips whitespace and returns the new position.
+func (p *unitParser) skipThenPos() int {
+	p.skipSpace()
+	return p.pos
 }
 
 // ratFromFloat converts a literal exponent VALUE from the AST (where a number
@@ -1354,14 +1390,6 @@ func ratFromDecimalLiteral(lit string) (Rat, error) {
 		n = -n
 	}
 	return newRat(n, den), nil
-}
-
-func isIdentStart(c byte) bool {
-	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'
-}
-
-func isIdentCont(c byte) bool {
-	return isIdentStart(c) || (c >= '0' && c <= '9')
 }
 
 // Unit-finding codes. A unit finding is either a DEFECT IN THE FILE — which

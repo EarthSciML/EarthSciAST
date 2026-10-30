@@ -91,6 +91,23 @@ fn compile(doc: &str) -> ArrayCompiled {
     ArrayCompiled::from_file(&file).unwrap_or_else(|e| panic!("compile: {e:?}"))
 }
 
+/// A document that load refuses — its `interp.*` arguments break esm-spec
+/// §9.2, which load checks (ruling Q-106) — deserialized WITHOUT load, as one
+/// built in memory would be, so the build's own repeat of the check is what
+/// is exercised. Asserts load does refuse it, with `code`.
+fn compile_unloaded(doc: &str, code: &str) -> ArrayCompiled {
+    let file = unloaded(doc, code);
+    ArrayCompiled::from_file(&file).unwrap_or_else(|e| panic!("compile: {e:?}"))
+}
+
+fn unloaded(doc: &str, code: &str) -> earthsci_ast::EsmFile {
+    let msg = load_string(doc)
+        .expect_err("load must refuse the document (esm-spec §9.2, ruling Q-106)")
+        .to_string();
+    assert!(msg.contains(&format!("[{code}]")), "load: {msg}");
+    serde_json::from_str(doc).unwrap_or_else(|e| panic!("deserialize: {e}"))
+}
+
 /// The tape's answer and the per-cell oracle's, for one probe state.
 fn both(compiled: &ArrayCompiled, u: &[f64], t: f64) -> (Vec<f64>, Vec<f64>) {
     let p: HashMap<String, f64> = HashMap::new();
@@ -608,7 +625,7 @@ fn a_non_const_table_bails_by_name() {
           "q" ]} }
     ] } }
 }"#;
-    let compiled = compile(doc);
+    let compiled = compile_unloaded(doc, "interp_axis_not_const");
     let report = compiled.debug_build_tape_report();
     let reasons: Vec<&str> = report.fallbacks.iter().map(|f| f.1.as_str()).collect();
     assert!(
@@ -617,6 +634,56 @@ fn a_non_const_table_bails_by_name() {
             .any(|r| r.contains("interp.linear") && (r.contains("const") || r.contains("§9.2"))),
         "the decline must name the function and say the argument is not a const array: {reasons:?}"
     );
+}
+
+/// esm-spec §9.2: an `interp.searchsorted` `xs` that is not a rank-1 `const`
+/// array — a variable reference, a non-`const` expression, a scalar `const`,
+/// a nested `const` (one holding a NaN included: the rank is decided first) —
+/// is `interp_axis_not_const`. The strict `native` build refuses the rule and
+/// its reason carries that code.
+#[test]
+fn a_searchsorted_xs_that_is_not_a_rank_1_const_is_interp_axis_not_const() {
+    let doc = |xs: &str| {
+        format!(
+            r#"{{
+  "esm": "1.0.0",
+  "metadata": {{ "name": "SearchsortedXs", "authors": ["test"] }},
+  "models": {{ "M": {{ "variables": {{
+      "q": {{ "type": "unknown", "units": "1", "default": 0.0 }},
+      "w": {{ "type": "parameter", "units": "1", "default": 1.0 }},
+      "y": {{ "type": "unknown", "units": "1", "default": 0.0 }}
+    }},
+    "equations": [
+      {{ "lhs": {{ "op": "D", "args": ["q"], "wrt": "t" }}, "rhs": 0.0 }},
+      {{ "lhs": {{ "op": "D", "args": ["y"], "wrt": "t" }},
+        "rhs": {{ "op": "fn", "name": "interp.searchsorted", "args": ["q", {xs}] }} }}
+    ] }} }}
+}}"#
+        )
+    };
+    for xs in [
+        r#""w""#,
+        r#"{ "op": "*", "args": [{ "op": "const", "args": [], "value": [0.0, 1.0] }, 2.0] }"#,
+        r#"{ "op": "const", "args": [], "value": 3.0 }"#,
+        r#"{ "op": "const", "args": [], "value": [[1.0, 2.0], [3.0, 4.0]] }"#,
+    ] {
+        let file = unloaded(&doc(xs), "interp_axis_not_const");
+        let e = match esm_problem(
+            &file,
+            (0.0, 1.0),
+            ProblemOptions {
+                compiler: Some(Compiler::Native),
+                ..Default::default()
+            },
+        ) {
+            Ok(_) => panic!("xs = {xs}: the native build must refuse"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            e.contains("interp.searchsorted") && e.contains("interp_axis_not_const"),
+            "xs = {xs}: {e}"
+        );
+    }
 }
 
 /// A table the registry itself rejects — here an axis that is not strictly
@@ -641,7 +708,7 @@ fn a_table_the_registry_rejects_bails_rather_than_blending() {
           "q" ]} }
     ] } }
 }"#;
-    let compiled = compile(doc);
+    let compiled = compile_unloaded(doc, "interp_non_monotonic_axis");
     let report = compiled.debug_build_tape_report();
     let reasons: Vec<&str> = report.fallbacks.iter().map(|f| f.1.as_str()).collect();
     assert!(
@@ -833,8 +900,8 @@ fn a_strict_bilinear_table_checks_both_axes() {
     }
 }
 
-/// `nearest` lowers to `index(data, interp.searchsorted(q, axis))`, and the
-/// marker sits on the search. The tape does not lower an `index` whose
+/// `nearest` lowers to the esm-spec §9.5.3 composition over
+/// `interp.searchsorted`, and the marker sits on each search. The tape does not lower an `index` whose
 /// subscript is a run-time value (native refuses that document whatever the
 /// table's `out_of_bounds`), so this one is checked on the oracle alone.
 #[test]
@@ -862,7 +929,11 @@ fn a_strict_nearest_table_checks_its_query() {
     for (x, want) in [
         (-1.0, None),
         (0.0, Some(10.0)),
+        // The 1.0..2.5 midpoint is a tie, which goes to the lower knot.
+        (1.75, Some(20.0)),
         (2.5, Some(40.0)),
+        // Nearer 3.0 than 2.5.
+        (2.8, Some(80.0)),
         (7.0, Some(160.0)),
         (7.5, None),
     ] {

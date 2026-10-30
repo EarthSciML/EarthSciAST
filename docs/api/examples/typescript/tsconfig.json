@@ -1,6 +1,6 @@
 {
   // Type-checks the examples against the built package's declarations.
-  // `scripts/api_docs/typescript.sh` builds the package first.
+  // earthsci.dev `tools/api_docs/typescript.sh` builds the package first.
   "compilerOptions": {
     "target": "ES2022",
     "module": "ESNext",

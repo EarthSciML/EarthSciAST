@@ -56,57 +56,20 @@ env:
   PYTHON_VERSION: '3.11'
   JULIA_VERSION: '1.10'
   RUST_VERSION: 'stable'
-  # Linter versions are PINNED. An unpinned linter re-lints unchanged code
-  # against new rules on every run, so a green commit turns red with no
-  # commit behind it -- which is how this workflow drifted red before.
-  RUFF_VERSION: '0.16.4'
-  GOLANGCI_LINT_VERSION: 'v2.6.2'
-  # Same reasoning for clippy, which is a linter like the other two: on a
-  # floating `stable` a new rustc turns the gate red with no commit behind it.
-  # (It just did -- 1.98 added a for_kv_map finding 1.95 did not make.) The
-  # rust-tests matrix below deliberately KEEPS floating stable/beta, because
-  # there the point is compile/test coverage against moving toolchains.
-  RUST_LINT_VERSION: '1.98.0'
   # Resource limits for conformance testing
   CONFORMANCE_MEMORY_LIMIT: '4g'
   CONFORMANCE_CPU_LIMIT: '2.0'
   CONFORMANCE_TIMEOUT: '300s'
 
 jobs:
-  # Every lint and format gate for every language, in ONE job.
-  #
-  # These used to sit as steps INSIDE each language's test job, ahead of the
-  # test steps -- so a single prettier nit or rustfmt diff failed the job
-  # before a single test ran, and the real test status stayed invisible. That
-  # is how this workflow stayed red for 40 consecutive runs while nobody could
-  # see whether the suites underneath actually passed.
-  #
-  # Split out, the test jobs report test results and this job reports style.
-  # It also de-duplicates work: rust lint ran 3x across its matrix, python 4x,
-  # typescript 2x. Here each runs once.
-  #
-  # Every gate below carries `if: ${{ !cancelled() }}` so that ONE failing
-  # linter does not skip the ones after it. Steps run in sequence and a failed
-  # step normally short-circuits the rest, which meant a dirty `cargo fmt` --
-  # cosmetic and self-fixing -- silently skipped `cargo clippy`, eslint,
-  # prettier, gofmt, golangci-lint and the version-sync check: one reported
-  # failure, while three other languages' substantive linters and the
-  # cross-binding version check were never consulted at all (#217). The job
-  # still fails if any gate fails; it just consults all of them first, so one
-  # push surfaces every finding instead of one finding per round trip.
-  #
-  # `!cancelled()` rather than `always()`: this workflow sets
-  # `cancel-in-progress: true`, and `always()` would keep running lint steps
-  # through a cancellation instead of letting the superseded run stop.
-  #
-  # The `Setup *` / cache steps above deliberately have NO condition: those are
-  # infrastructure, and linting against a toolchain that failed to install
-  # produces noise, not signal. (A failure there still leaves the other
-  # languages' gates to run, since they carry the condition.)
-  lint:
-    name: Lint and format (all languages)
+  # The lint and format gates run in lint.yml, through the shared workflow in
+  # EarthSciML/.github, which pins the tool versions. What stays here are the
+  # repository-specific consistency checks that used to ride along in that
+  # lint job; both are plain Python or shell.
+  repo-checks:
+    name: Repository consistency checks
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
@@ -117,122 +80,6 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-          cache-dependency-path: pkg/earthsci-ast-ts/package-lock.json
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.23'
-          cache-dependency-path: pkg/earthsci-ast-go/go.sum
-
-      - name: Setup Rust (pinned)
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ env.RUST_LINT_VERSION }}
-          components: rustfmt, clippy
-          targets: aarch64-unknown-linux-gnu
-
-      - name: Cache Rust dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            pkg/earthsci-ast-rs/target
-          key: ${{ runner.os }}-cargo-lint-${{ hashFiles('pkg/earthsci-ast-rs/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-lint-
-
-      # --- Python -------------------------------------------------------
-      - name: Install ruff (pinned)
-        if: ${{ !cancelled() }}
-        run: pip install "ruff==${RUFF_VERSION}"
-
-      - name: ruff check / ruff format
-        if: ${{ !cancelled() }}
-        working-directory: pkg/earthsci-ast-py
-        run: |
-          # Config lives in the repo-root ruff.toml.
-          ruff check src/ tests/ ../../scripts/
-          ruff format --check src/ tests/ ../../scripts/
-
-      # --- Rust ---------------------------------------------------------
-      - name: cargo fmt
-        if: ${{ !cancelled() }}
-        working-directory: pkg/earthsci-ast-rs
-        run: cargo fmt --all -- --check
-
-      # Every feature EXCEPT `xla`, spelled out -- the same list the
-      # `rust-tests` stable/beta legs test with. On the default feature set,
-      # clippy never compiled the feature-gated code: `esio_provider` (behind
-      # `esio`), the gated items inside `performance` and its SIMD paths
-      # (behind `parallel`/`simd`/`zero_copy`/`custom_alloc`), the `wasm`
-      # bindings and their feature-gated tests, the conformance adapter
-      # binaries, and `benches/benchmarks.rs` (a
-      # `required-features = ["benchmarks"]` target, so `--all-targets` alone
-      # skips it). Those were compiled by `rust-tests` but never linted (#242).
-      #
-      # `--all-features` has no "except" form, hence the list. `xla` is left
-      # out because its build script needs a separately fetched
-      # `xla_extension` release (`XLA_EXTENSION_DIR`) plus libclang, neither of
-      # which this job installs; that feature is built and tested in
-      # `xla-backends.yml`. `esio` raises the effective MSRV to 1.91 (earthsciio
-      # -> zarrs), which is fine here because the lint toolchain is pinned to
-      # RUST_LINT_VERSION.
-      - name: cargo clippy
-        if: ${{ !cancelled() }}
-        working-directory: pkg/earthsci-ast-rs
-        run: |
-          cargo clippy --all-targets --features \
-            conformance-adapters,wasm,parallel,simd,zero_copy,custom_alloc,benchmarks,performance,esio \
-            -- -D warnings
-
-      # The same crate linted for a NON-x86 target. The SIMD bit-identity
-      # comparisons (`tape/exec/simd_tests.rs`) and the AVX clones they check
-      # compile only on x86_64, so a helper or variable used only inside them
-      # warns on every other architecture -- which the x86_64 step above can
-      # never see (#243). Check-only: no aarch64 linker or C compiler needed.
-      - name: cargo clippy (aarch64)
-        if: ${{ !cancelled() }}
-        working-directory: pkg/earthsci-ast-rs
-        run: cargo clippy --lib --tests --target aarch64-unknown-linux-gnu --features simd -- -D warnings
-
-      # --- TypeScript ---------------------------------------------------
-      - name: Install TypeScript dependencies
-        if: ${{ !cancelled() }}
-        working-directory: pkg/earthsci-ast-ts
-        run: npm ci
-
-      - name: eslint / prettier
-        if: ${{ !cancelled() }}
-        working-directory: pkg/earthsci-ast-ts
-        run: |
-          npm run lint
-          npm run format:check
-
-      # --- Go -----------------------------------------------------------
-      - name: gofmt
-        if: ${{ !cancelled() }}
-        working-directory: pkg/earthsci-ast-go
-        run: |
-          unformatted=$(gofmt -l .)
-          if [ -n "$unformatted" ]; then
-            echo "gofmt needs to run on:"; echo "$unformatted"; exit 1
-          fi
-
-      - name: golangci-lint (pinned)
-        if: ${{ !cancelled() }}
-        uses: golangci/golangci-lint-action@v8
-        with:
-          version: ${{ env.GOLANGCI_LINT_VERSION }}
-          working-directory: pkg/earthsci-ast-go
-
-      # --- Cross-binding ------------------------------------------------
       # Six files carry the one release version; two of them are hand-kept
       # mirrors with no manifest to derive from. v0.2.0 published with both
       # mirrors stale. Cheap to check, so check it on every run.
@@ -270,13 +117,13 @@ jobs:
       run:
         working-directory: pkg/EarthSciAST.jl
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || '' }}
 
       - name: Setup Julia
         id: setup-julia
-        uses: julia-actions/setup-julia@v2
+        uses: julia-actions/setup-julia@v3
         with:
           version: ${{ matrix.julia-version }}
 
@@ -311,7 +158,7 @@ jobs:
 
       - name: Restore Julia depot
         id: julia-depot
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: |
             ~/.julia/artifacts
@@ -348,7 +195,7 @@ jobs:
           directories: pkg/EarthSciAST.jl/src
 
       - name: Upload Julia coverage to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         if: matrix.julia-version == 'lts'
         with:
           files: lcov.info
@@ -360,7 +207,7 @@ jobs:
       # first.
       - name: Save Julia depot
         if: ${{ always() && github.ref == 'refs/heads/main' && steps.julia-depot.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: |
             ~/.julia/artifacts
@@ -380,13 +227,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || '' }}
 
       - name: Setup Julia
         id: setup-julia
-        uses: julia-actions/setup-julia@v2
+        uses: julia-actions/setup-julia@v3
         with:
           version: '1'
 
@@ -398,7 +245,7 @@ jobs:
           echo "prefix=julia-depot-v2-${{ runner.os }}-${{ steps.setup-julia.outputs.julia-version }}-" >> "$GITHUB_OUTPUT"
 
       - name: Restore Julia depot
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: |
             ~/.julia/artifacts
@@ -469,12 +316,12 @@ jobs:
       run:
         working-directory: pkg/earthsci-ast-ts
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || '' }}
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
           cache: 'npm'
@@ -503,17 +350,17 @@ jobs:
       run:
         working-directory: pkg/earthsci-ast-py
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || '' }}
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
 
       - name: Cache Python dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ hashFiles('pkg/earthsci-ast-py/pyproject.toml') }}
@@ -531,7 +378,7 @@ jobs:
           pytest tests/ -v --cov=src/earthsci_ast --cov-report=xml
 
       - name: Upload Python coverage to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         if: matrix.python-version == '3.11'
         with:
           files: pkg/earthsci-ast-py/coverage.xml
@@ -560,7 +407,7 @@ jobs:
       run:
         working-directory: pkg/earthsci-ast-rs
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || '' }}
 
@@ -596,7 +443,7 @@ jobs:
       # restore-key. Harmless for a download cache; it is why the entry is
       # rewritten on every run.)
       - name: Cache Rust dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -700,9 +547,9 @@ jobs:
       # reuses that feature resolution instead of rebuilding the dependency
       # graph under a second one.
       #
-      # `!cancelled()` for the reason spelled out on the lint job: a failing
-      # test run must not silently skip this check, or a broken bench could
-      # hide behind an unrelated red suite -- which is how the drift got here.
+      # `!cancelled()`: a failing test run must not silently skip this check,
+      # or a broken bench could hide behind an unrelated red suite -- which is
+      # how the drift got here.
       - name: Build bench targets
         if: ${{ !cancelled() && matrix.rust != '1.89.0' }}
         run: |
@@ -726,17 +573,17 @@ jobs:
       run:
         working-directory: pkg/earthsci-ast-go
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || '' }}
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: ${{ matrix.go-version }}
 
       - name: Cache Go modules
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/go/pkg/mod
           key: ${{ runner.os }}-go-${{ matrix.go-version }}-${{ hashFiles('pkg/earthsci-ast-go/go.sum') }}
@@ -756,7 +603,7 @@ jobs:
         run: go test -v -race -coverprofile=coverage.out ./...
 
       - name: Upload Go coverage to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         if: matrix.go-version == '1.23'
         with:
           files: pkg/earthsci-ast-go/coverage.out
@@ -767,12 +614,11 @@ jobs:
 
   # Cross-language conformance testing — runs concurrently with the per-language suites.
   #
-  # Deliberately NOT gated on `lint`, and no longer gated on anything else
-  # either. Whether a file is prettier-clean has no bearing on whether the five
-  # bindings agree on a document. Gating this suite on style would put it back
-  # behind exactly the kind of nit that kept the whole workflow red for 40
-  # runs. `lint` still runs and still fails the workflow on its own — it just
-  # does not withhold this signal while it does.
+  # Deliberately NOT gated on lint (now its own workflow, lint.yml), and no
+  # longer gated on anything else either. Whether a file is prettier-clean has
+  # no bearing on whether the five bindings agree on a document. Gating this
+  # suite on style would put it back behind exactly the kind of nit that kept
+  # the whole workflow red for 40 runs.
   #
   # `--skip-binding-suites` below is still load-bearing and still means what it
   # always did (#224). The harness used to re-run all five suites itself before
@@ -810,24 +656,24 @@ jobs:
     # tiers took the job past 45 minutes.
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || '' }}
 
       - name: Setup Julia
-        uses: julia-actions/setup-julia@v2
+        uses: julia-actions/setup-julia@v3
         with:
           version: ${{ env.JULIA_VERSION }}
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
           cache-dependency-path: pkg/earthsci-ast-ts/package-lock.json
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
@@ -837,7 +683,7 @@ jobs:
           toolchain: ${{ env.RUST_VERSION }}
 
       - name: Cache dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.julia
@@ -926,7 +772,7 @@ jobs:
 
       # Upload conformance results (best-effort — partial output is useful for debugging)
       - name: Upload standard conformance results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: conformance-results-${{ github.run_number }}
@@ -953,7 +799,7 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || '' }}
 
@@ -987,7 +833,7 @@ jobs:
       # Download all results
       - name: Download standard conformance results
         if: ${{ needs.standard-conformance-testing.result == 'success' || needs.standard-conformance-testing.result == 'failure' }}
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: conformance-results-${{ github.run_number }}
           path: standard-results/
@@ -1003,7 +849,7 @@ jobs:
       # its own and is not a statement about the red binding.
       - name: Comment PR with enhanced conformance results
         if: ${{ github.event_name == 'pull_request' && (needs.standard-conformance-testing.result == 'success' || needs.standard-conformance-testing.result == 'failure') }}
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const fs = require('fs');

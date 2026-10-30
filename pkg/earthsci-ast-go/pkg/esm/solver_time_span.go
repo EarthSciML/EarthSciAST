@@ -249,11 +249,11 @@ func (o timeOriginSource) instant() (civilInstant, error) {
 			return inst, nil
 		}
 		return civilInstant{}, timeSpanError(fmt.Sprintf(
-			"a timestamp bound is counted from the time origin %s = %q, which is not an RFC 3339 "+
+			"a timestamp is counted from the time origin %s = %q, which is not an RFC 3339 "+
 				"date-time naming a calendar day (esm-spec §2.2.7)", o.pointer, o.value))
 	}
 	return civilInstant{}, timeSpanError(fmt.Sprintf(
-		"a timestamp bound is counted from the time origin %s, which is not an RFC 3339 "+
+		"a timestamp is counted from the time origin %s, which is not an RFC 3339 "+
 			"date-time string (esm-spec §2.2.7)", o.pointer))
 }
 

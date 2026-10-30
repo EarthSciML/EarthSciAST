@@ -412,6 +412,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("const_array_index_mtk_test.jl")    # #286: a bare const array as an index base
     include("function_tables_test.jl")
     include("function_tables_lowering_test.jl")
+    include("function_tables_load_errors_test.jl")  # §9.5.5 the pinned order of the table checks
     # …and the same lowering on the path that EVALUATES a document (#188):
     # the harness above does the lowering itself, so it cannot see whether the
     # build front doors do.
@@ -475,10 +476,18 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
                         # in tests/invalid/template_imports/ and never reached
                         # here. tests/invalid/data_source_url_env_var.esm is
                         # the first top-level fixture that raises it.
+                        # The three code-carrying load rejections the
+                        # `resolver_only` fixtures pin: `enum_duplicate_value`
+                        # (§9.3), and the §9.2 closed-function argument and
+                        # §9.5.5 function-table checks load runs on every
+                        # `interp.*` call and every table.
                         (e isa EarthSciAST.ParseError ||
                          e isa EarthSciAST.SchemaValidationError ||
                          e isa EarthSciAST.SubsystemRefError ||
-                         e isa EarthSciAST.ExpressionTemplateError) || rethrow()
+                         e isa EarthSciAST.ExpressionTemplateError ||
+                         e isa EarthSciAST.EnumLoweringError ||
+                         e isa EarthSciAST.ClosedFunctionError ||
+                         e isa EarthSciAST.TableLookupError) || rethrow()
                         true
                     end
                     if rejected

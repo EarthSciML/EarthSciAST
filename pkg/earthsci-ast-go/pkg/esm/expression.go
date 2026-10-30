@@ -1,6 +1,7 @@
 package esm
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"strconv"
@@ -612,6 +613,13 @@ func checkEvaluable(expr Expression) error {
 			}
 		}
 		return nil
+	case "index":
+		// Only the scalar read of a 1-D `const` literal has a rule here (see
+		// constVectorIndex); every other `index` stays unevaluable.
+		if _, ok := constVectorIndex(node); !ok {
+			return unevaluableOpError(node)
+		}
+		return checkEvaluable(node.Args[1])
 	}
 	_, lazy := lazyOps[node.Op]
 	_, arith := arithOpTable[node.Op]
@@ -669,6 +677,8 @@ func evaluateExprNode(node ExprNode, bindings map[string]float64) (float64, erro
 		return 0, enumNotLoweredError()
 	case "fn":
 		return evaluateFnNode(node, bindings)
+	case "index":
+		return evaluateConstVectorIndex(node, bindings)
 	case "D":
 		// esm-spec §4.2 / §9.6.8: `D` is evaluable-core only in its STRUCTURAL
 		// equation-LHS role. One reaching the evaluator is an unlowered
@@ -704,6 +714,61 @@ func evaluateExprNode(node ExprNode, bindings map[string]float64) (float64, erro
 		return 0, fmt.Errorf("%s: got %d argument(s), expected %s", node.Op, len(args), arityDesc(op))
 	}
 	return op.apply(args)
+}
+
+// constVectorIndex recognizes the one `index` form the scalar evaluator reduces:
+// `index(<const 1-D numeric array>, i)`, a single 1-based subscript into an
+// inline literal (esm-spec §4.3.3). It is what the §9.5.3 `nearest` lowering of
+// a `table_lookup` produces, so without it a nearest lookup would lower but not
+// evaluate. It returns the literal's entries.
+func constVectorIndex(node ExprNode) ([]float64, bool) {
+	if len(node.Args) != 2 {
+		return nil, false
+	}
+	arr, ok := asExprNode(node.Args[0])
+	if !ok || arr.Op != OpConst {
+		return nil, false
+	}
+	var values []float64
+	switch v := arr.Value.(type) {
+	case []float64:
+		values = v
+	case []any:
+		values = make([]float64, len(v))
+		for i, e := range v {
+			f, ok := toFloat64Strict(e)
+			if !ok {
+				if n, isNum := e.(json.Number); isNum {
+					if g, err := n.Float64(); err == nil {
+						values[i] = g
+						continue
+					}
+				}
+				return nil, false
+			}
+			values[i] = f
+		}
+	default:
+		return nil, false
+	}
+	return values, true
+}
+
+// evaluateConstVectorIndex evaluates `index(<const 1-D array>, i)`. The
+// subscript must be an integer in 1..N.
+func evaluateConstVectorIndex(node ExprNode, bindings map[string]float64) (float64, error) {
+	values, ok := constVectorIndex(node)
+	if !ok {
+		return 0, unevaluableOpError(node)
+	}
+	sub, err := evaluateExpr(node.Args[1], bindings)
+	if err != nil {
+		return 0, err
+	}
+	if sub != math.Trunc(sub) || sub < 1 || sub > float64(len(values)) {
+		return 0, fmt.Errorf("index: subscript %v is not an integer in 1..%d", sub, len(values))
+	}
+	return values[int(sub)-1], nil
 }
 
 // enumNotLoweredError reports an `enum` node reaching evaluation: an
@@ -852,6 +917,12 @@ func evaluateFnNode(node ExprNode, bindings map[string]float64) (float64, error)
 	if node.Name == nil || *node.Name == "" {
 		return 0, fmt.Errorf("fn op missing required `name` field (esm-spec §4.4)")
 	}
+	// Load ran the full §9.2 argument checks (load_time_checks.go); a tree
+	// built in memory gets them here: the AST half now, the value half in
+	// EvaluateClosedFunction.
+	if err := checkInterpArgsAreConst(node); err != nil {
+		return 0, err
+	}
 	args := make([]any, len(node.Args))
 	for i, raw := range node.Args {
 		v, err := evaluateFnArg(raw, bindings)
@@ -874,6 +945,21 @@ func evaluateFnNode(node ExprNode, bindings map[string]float64) (float64, error)
 	default:
 		return 0, fmt.Errorf("closed function %q returned unsupported scalar type %T", *node.Name, out)
 	}
+}
+
+// describeFnArg names a non-`const` closed-function argument for a diagnostic.
+func describeFnArg(arg any) string {
+	switch a := arg.(type) {
+	case string:
+		return fmt.Sprintf("the variable reference %q", a)
+	case ExprNode:
+		return fmt.Sprintf("a non-`const` %q expression", a.Op)
+	case *ExprNode:
+		if a != nil {
+			return fmt.Sprintf("a non-`const` %q expression", a.Op)
+		}
+	}
+	return fmt.Sprintf("a %T", arg)
 }
 
 // evaluateFnArg evaluates a single argument to a `fn` op. Most args are

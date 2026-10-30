@@ -108,7 +108,7 @@ const { loadString, toJson, validate } = require('@earthsciml/ast');
 
 ## API Reference
 
-The generated API reference (built by `scripts/api_docs/typescript.sh` from
+The generated API reference (built by `tools/api_docs/typescript.sh` in [EarthSciML/earthsci.dev](https://github.com/EarthSciML/earthsci.dev) from
 the doc comments) covers every export. The most common entry points:
 
 ### Core Functions

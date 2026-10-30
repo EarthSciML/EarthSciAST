@@ -36,8 +36,8 @@ use thiserror::Error;
 pub struct ClosedFunctionError {
     /// Stable diagnostic code: `unknown_closed_function`,
     /// `closed_function_arity`, `closed_function_overflow`,
-    /// `searchsorted_non_monotonic`, `searchsorted_nan_in_table`,
-    /// `closed_function_arg_type`.
+    /// `searchsorted_non_monotonic`, `searchsorted_nan`,
+    /// `closed_function_arg_type`, and the `interp_*` codes of §9.2.
     pub code: String,
 
     /// Human-readable diagnostic message.
@@ -83,36 +83,6 @@ impl ClosedArg {
             ClosedArg::Array(_) | ClosedArg::Array2D(_) => Err(ClosedFunctionError::new(
                 codes::CLOSED_FUNCTION_ARG_TYPE,
                 format!("{name}: arg #{} must be scalar, got array", position + 1),
-            )),
-        }
-    }
-
-    fn expect_array(&self, name: &str, position: usize) -> Result<&[f64], ClosedFunctionError> {
-        match self {
-            ClosedArg::Array(v) => Ok(v.as_slice()),
-            ClosedArg::Scalar(_) | ClosedArg::Array2D(_) => Err(ClosedFunctionError::new(
-                codes::CLOSED_FUNCTION_ARG_TYPE,
-                format!(
-                    "{name}: arg #{} must be 1-D array, got other shape",
-                    position + 1
-                ),
-            )),
-        }
-    }
-
-    fn expect_array2d(
-        &self,
-        name: &str,
-        position: usize,
-    ) -> Result<&[Vec<f64>], ClosedFunctionError> {
-        match self {
-            ClosedArg::Array2D(v) => Ok(v.as_slice()),
-            ClosedArg::Scalar(_) | ClosedArg::Array(_) => Err(ClosedFunctionError::new(
-                codes::CLOSED_FUNCTION_ARG_TYPE,
-                format!(
-                    "{name}: arg #{} must be 2-D array, got other shape",
-                    position + 1
-                ),
             )),
         }
     }
@@ -216,8 +186,8 @@ pub fn evaluate_closed_function(
 fn cf_datetime_year(name: &str, args: &[ClosedArg]) -> Result<ClosedValue, ClosedFunctionError> {
     expect_arity(name, args, 1)?;
     let t = args[0].expect_scalar(name, 0)?;
-    let (y, _, _, _, _, _) = decompose_utc(t);
-    Ok(ClosedValue::Integer(check_i32(name, y as i64)?))
+    let (y, _, _, _, _, _) = decompose_utc(t)?;
+    Ok(ClosedValue::Integer(check_i32(name, y)?))
 }
 
 fn cf_datetime_day_of_year(
@@ -226,7 +196,7 @@ fn cf_datetime_day_of_year(
 ) -> Result<ClosedValue, ClosedFunctionError> {
     expect_arity(name, args, 1)?;
     let t = args[0].expect_scalar(name, 0)?;
-    let (y, m, d, _, _, _) = decompose_utc(t);
+    let (y, m, d, _, _, _) = decompose_utc(t)?;
     Ok(ClosedValue::Integer(day_of_year(y, m, d) as i32))
 }
 
@@ -236,7 +206,7 @@ fn cf_datetime_julian_day(
 ) -> Result<ClosedValue, ClosedFunctionError> {
     expect_arity(name, args, 1)?;
     let t = args[0].expect_scalar(name, 0)?;
-    Ok(ClosedValue::Float(julian_day(t)))
+    Ok(ClosedValue::Float(julian_day(t)?))
 }
 
 fn cf_datetime_is_leap_year(
@@ -245,7 +215,7 @@ fn cf_datetime_is_leap_year(
 ) -> Result<ClosedValue, ClosedFunctionError> {
     expect_arity(name, args, 1)?;
     let t = args[0].expect_scalar(name, 0)?;
-    let (y, _, _, _, _, _) = decompose_utc(t);
+    let (y, _, _, _, _, _) = decompose_utc(t)?;
     Ok(ClosedValue::Integer(if is_leap_year(y) { 1 } else { 0 }))
 }
 
@@ -255,7 +225,13 @@ fn cf_interp_searchsorted(
 ) -> Result<ClosedValue, ClosedFunctionError> {
     expect_arity(name, args, 2)?;
     let x = args[0].expect_scalar(name, 0)?;
-    let xs = args[1].expect_array(name, 1)?;
+    // esm-spec §9.2: an `xs` that is not a rank-1 `const` array is
+    // `interp_axis_not_const` — the code the two tensor entries' axes use —
+    // and that is decided before `searchsorted_nan` / `_non_monotonic` look
+    // at its entries.
+    let ClosedArg::Array(xs) = &args[1] else {
+        return Err(not_const(name, codes::INTERP_AXIS_NOT_CONST, "xs", 1));
+    };
     Ok(ClosedValue::Integer(check_i32(
         name,
         searchsorted(name, x, xs)?,
@@ -264,17 +240,30 @@ fn cf_interp_searchsorted(
 
 fn cf_interp_linear(name: &str, args: &[ClosedArg]) -> Result<ClosedValue, ClosedFunctionError> {
     expect_arity(name, args, 3)?;
-    let table = args[0].expect_array(name, 0)?;
-    let axis = args[1].expect_array(name, 1)?;
+    // esm-spec §9.2 (ruling Q-108): a `table` or axis of the wrong rank is
+    // `interp_table_not_const` / `interp_axis_not_const`, the codes the
+    // load-time argument check ([`check_closed_function_args`]) raises.
+    let ClosedArg::Array(table) = &args[0] else {
+        return Err(not_const(name, codes::INTERP_TABLE_NOT_CONST, "table", 1));
+    };
+    let ClosedArg::Array(axis) = &args[1] else {
+        return Err(not_const(name, codes::INTERP_AXIS_NOT_CONST, "axis", 1));
+    };
     let x = args[2].expect_scalar(name, 2)?;
     Ok(ClosedValue::Float(interp_linear(table, axis, x)?))
 }
 
 fn cf_interp_bilinear(name: &str, args: &[ClosedArg]) -> Result<ClosedValue, ClosedFunctionError> {
     expect_arity(name, args, 5)?;
-    let table = args[0].expect_array2d(name, 0)?;
-    let axis_x = args[1].expect_array(name, 1)?;
-    let axis_y = args[2].expect_array(name, 2)?;
+    let ClosedArg::Array2D(table) = &args[0] else {
+        return Err(not_const(name, codes::INTERP_TABLE_NOT_CONST, "table", 2));
+    };
+    let ClosedArg::Array(axis_x) = &args[1] else {
+        return Err(not_const(name, codes::INTERP_AXIS_NOT_CONST, "axis_x", 1));
+    };
+    let ClosedArg::Array(axis_y) = &args[2] else {
+        return Err(not_const(name, codes::INTERP_AXIS_NOT_CONST, "axis_y", 1));
+    };
     let x = args[3].expect_scalar(name, 3)?;
     let y = args[4].expect_scalar(name, 4)?;
     Ok(ClosedValue::Float(interp_bilinear(
@@ -282,16 +271,169 @@ fn cf_interp_bilinear(name: &str, args: &[ClosedArg]) -> Result<ClosedValue, Clo
     )?))
 }
 
+/// The `interp_table_not_const` / `interp_axis_not_const` diagnostic for an
+/// argument `label` that is not a literal `const`-op array of rank `rank`.
+fn not_const(name: &str, code: &str, label: &str, rank: usize) -> ClosedFunctionError {
+    ClosedFunctionError::new(
+        code,
+        format!("{name}: `{label}` must be a literal rank-{rank} `const`-op array (esm-spec §9.2)"),
+    )
+}
+
+/// What the esm-spec §9.2 load-time argument checks see of one argument of an
+/// `interp.*` `fn` node: whether it is a literal `const`-op node at all, and if
+/// so the rank of its `value`.
+///
+/// It is a separate type from [`ClosedArg`] because the load-time checks have
+/// to tell apart what an evaluated argument cannot: a variable reference from a
+/// `const` scalar, and a rank-3 literal from a ragged rank-2 one.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ClosedArgLiteral {
+    /// Not a `const`-op node: a variable reference, a bare number, or any
+    /// other expression.
+    NotConst,
+    /// A `const` whose `value` is a number.
+    Scalar(f64),
+    /// A `const` whose `value` is an array of numbers (`[]` included).
+    Array(Vec<f64>),
+    /// A `const` whose `value` is an array of arrays of numbers. The rows may
+    /// differ in length; that is `interp_axis_length_mismatch`, not a rank
+    /// error.
+    Array2D(Vec<Vec<f64>>),
+    /// A `const` whose `value` is nested deeper, mixes numbers and arrays, or
+    /// holds a leaf that is not a number.
+    OtherRank,
+}
+
+impl ClosedArgLiteral {
+    /// Classify a `const` node's `value`.
+    pub fn from_const_value(value: &serde_json::Value) -> Self {
+        use serde_json::Value as J;
+        let numbers = |items: &[J]| -> Option<Vec<f64>> {
+            items
+                .iter()
+                .map(|v| v.as_number().and_then(|n| n.as_f64()))
+                .collect()
+        };
+        match value {
+            J::Number(n) => n.as_f64().map_or(Self::OtherRank, Self::Scalar),
+            J::Array(items) => {
+                if let Some(flat) = numbers(items) {
+                    return Self::Array(flat);
+                }
+                let rows: Option<Vec<Vec<f64>>> = items
+                    .iter()
+                    .map(|row| row.as_array().and_then(|r| numbers(r)))
+                    .collect();
+                rows.map_or(Self::OtherRank, Self::Array2D)
+            }
+            _ => Self::OtherRank,
+        }
+    }
+
+    /// Classify a typed argument expression.
+    pub fn from_expr(arg: &crate::Expr) -> Self {
+        match arg {
+            crate::Expr::Operator(node) if node.op == "const" => node
+                .value
+                .as_ref()
+                .map_or(Self::NotConst, Self::from_const_value),
+            _ => Self::NotConst,
+        }
+    }
+
+    /// Classify a raw-JSON argument, as the loader walks it.
+    pub(crate) fn from_json(arg: &serde_json::Value) -> Self {
+        match arg.as_object() {
+            Some(obj) if obj.get("op").and_then(|o| o.as_str()) == Some("const") => obj
+                .get("value")
+                .map_or(Self::NotConst, Self::from_const_value),
+            _ => Self::NotConst,
+        }
+    }
+}
+
+/// Whether `name` is one of the three closed functions whose arguments the
+/// load-time checks of esm-spec §9.2 cover.
+pub(crate) fn has_load_time_argument_checks(name: &str) -> bool {
+    matches!(
+        name,
+        "interp.searchsorted" | "interp.linear" | "interp.bilinear"
+    )
+}
+
+/// The esm-spec §9.2 load-time argument checks of one `fn` call — the checks
+/// load and `validate()` run on every `interp.*` node wherever it appears
+/// (rulings Q-106, Q-112). `Ok` for any other function name.
+///
+/// Order (§9.2 "Order of the argument checks", ruling Q-110): the arity
+/// (`closed_function_arity`); each array argument a literal `const` of the
+/// function's rank (`table`, then the axes in argument order —
+/// `interp_table_not_const` / `interp_axis_not_const`); then, each step over
+/// every axis, too short, the length relation, a non-finite entry, not
+/// strictly increasing. `interp.searchsorted`: arity, then the rank of `xs`,
+/// then NaN, then monotonicity. These are the checks the evaluator's own
+/// registry entries make, in the same order, so a call that passes here
+/// evaluates.
+pub fn check_closed_function_args(
+    name: &str,
+    args: &[ClosedArgLiteral],
+) -> Result<(), ClosedFunctionError> {
+    use ClosedArgLiteral as L;
+    let arity = match name {
+        "interp.searchsorted" => 2,
+        "interp.linear" => 3,
+        "interp.bilinear" => 5,
+        _ => return Ok(()),
+    };
+    if args.len() != arity {
+        return Err(ClosedFunctionError::new(
+            codes::CLOSED_FUNCTION_ARITY,
+            format!("{name} expects {arity} argument(s), got {}", args.len()),
+        ));
+    }
+    match name {
+        "interp.searchsorted" => {
+            let L::Array(xs) = &args[1] else {
+                return Err(not_const(name, codes::INTERP_AXIS_NOT_CONST, "xs", 1));
+            };
+            check_searchsorted_xs(name, xs)
+        }
+        "interp.linear" => {
+            let L::Array(table) = &args[0] else {
+                return Err(not_const(name, codes::INTERP_TABLE_NOT_CONST, "table", 1));
+            };
+            let L::Array(axis) = &args[1] else {
+                return Err(not_const(name, codes::INTERP_AXIS_NOT_CONST, "axis", 1));
+            };
+            check_linear_table(table, axis)
+        }
+        "interp.bilinear" => {
+            let L::Array2D(table) = &args[0] else {
+                return Err(not_const(name, codes::INTERP_TABLE_NOT_CONST, "table", 2));
+            };
+            let L::Array(axis_x) = &args[1] else {
+                return Err(not_const(name, codes::INTERP_AXIS_NOT_CONST, "axis_x", 1));
+            };
+            let L::Array(axis_y) = &args[2] else {
+                return Err(not_const(name, codes::INTERP_AXIS_NOT_CONST, "axis_y", 1));
+            };
+            check_bilinear_table(table, axis_x, axis_y)
+        }
+        _ => Ok(()),
+    }
+}
+
 /// Evaluate a unary `datetime.*` accessor that returns one `u32` field of the
 /// UTC decomposition as an integer (month, day, hour, minute, second).
 fn datetime_field(
     name: &str,
     args: &[ClosedArg],
-    select: impl Fn((i32, u32, u32, u32, u32, u32)) -> u32,
+    select: impl Fn((i64, u32, u32, u32, u32, u32)) -> u32,
 ) -> Result<ClosedValue, ClosedFunctionError> {
     expect_arity(name, args, 1)?;
     let t = args[0].expect_scalar(name, 0)?;
-    Ok(ClosedValue::Integer(select(decompose_utc(t)) as i32))
+    Ok(ClosedValue::Integer(select(decompose_utc(t)?) as i32))
 }
 
 fn expect_arity(name: &str, args: &[ClosedArg], n: usize) -> Result<(), ClosedFunctionError> {
@@ -315,49 +457,75 @@ fn check_i32(name: &str, v: i64) -> Result<i32, ClosedFunctionError> {
 }
 
 // ---------------------------------------------------------------------------
-// Calendar arithmetic — integer ymd/hms decomposition, Fliegel–van Flandern
-// JDN. The spec pins floored division by 86400 to split (date, time-of-day);
-// we use Python-style floor / mod so negative `t_utc` decomposes the same as
-// Julia's `unix2datetime`.
+// Calendar arithmetic — integer ymd/hms decomposition and the Julian Date.
+// esm-spec §9.2 splits `t_utc` by ONE floor-divmod by 86400 into the day
+// number `floor(t/86400)` and the time of day `t − 86400·floor(t/86400)`, both
+// exact (as reals), and takes hour/minute/second from `floor(time of day)`:
+// fractional time floors toward −∞ (ruling Q-3).
 // ---------------------------------------------------------------------------
 
-// Floored division/modulus on f64 → integer day count and seconds-of-day.
-// `seconds_in_day` lands in `[0.0, 86400.0)` (inclusive of 0, exclusive of
-// 86400) so the per-component decomposition is unambiguous.
+/// The esm-spec §9.2 floor-divmod of `t_utc` by 86400, done exactly:
+/// `(day count, whole second of the day in [0, 86400), fractional second in
+/// [0, 1))`.
+///
+/// Because 86400 is an integer, `floor(t/86400) == floor(floor(t)/86400)`, so
+/// the split is the Euclidean divmod of the whole second `floor(t)` — an exact
+/// integer in binary64. Nothing rounds, so the date and the time of day can
+/// never disagree about which day `t` is in. (The fractional second
+/// `t − floor(t)` is exact too, except for `−0.5 < t < 0`, where `1 + t` can
+/// round — up to 1.0 at worst; only `julian_day` reads it.)
+/// (Dividing `t / 86400.0` in floating point instead rounds just below a day
+/// boundary, and `86400 − 5e-324` rounds up to 86400.)
+///
+/// Also the overflow gate every `datetime.*` entry passes through (esm-spec
+/// §9.2): a NaN or ±Inf `t_utc`, and one whose year is outside Int32, raise
+/// `closed_function_overflow` whichever field is asked for. Outside `±2^63` s
+/// the `as i64` cast saturates, but the year there is far outside Int32, so
+/// the year check rejects it all the same.
 #[inline]
-fn floor_div_mod(t_utc: f64) -> (i64, f64) {
-    let day = (t_utc / 86400.0).floor();
-    let mut sec = t_utc - day * 86400.0;
-    // Defensive: floating-point rounding may push `sec` to exactly 86400.0
-    // for inputs near a day boundary. Re-map onto the half-open interval.
-    if sec >= 86400.0 {
-        sec -= 86400.0;
-    } else if sec < 0.0 {
-        sec += 86400.0;
+fn floor_div_mod(t_utc: f64) -> Result<(i64, i64, f64), ClosedFunctionError> {
+    if !t_utc.is_finite() {
+        return Err(ClosedFunctionError::new(
+            codes::CLOSED_FUNCTION_OVERFLOW,
+            format!("datetime.*: t_utc {t_utc} is not finite"),
+        ));
     }
-    (day as i64, sec)
+    let whole = t_utc.floor();
+    let s = whole as i64;
+    let day_count = s.div_euclid(86400);
+    if !(DAY_OF_INT32_MIN_YEAR..DAY_OF_INT32_YEAR_END).contains(&day_count) {
+        return Err(ClosedFunctionError::new(
+            codes::CLOSED_FUNCTION_OVERFLOW,
+            format!("datetime.*: the year of t_utc {t_utc} overflows Int32"),
+        ));
+    }
+    Ok((day_count, s.rem_euclid(86400), t_utc - whole))
 }
+
+/// Day number (days after 1970-01-01) of -2147483648-01-01, the first day
+/// whose year is an Int32.
+pub(crate) const DAY_OF_INT32_MIN_YEAR: i64 = -784_353_015_833;
+/// Day number of 2147483648-01-01, the first day past the Int32 years.
+pub(crate) const DAY_OF_INT32_YEAR_END: i64 = 784_351_576_777;
 
 // Decompose a UTC scalar into (year, month, day, hour, minute, second). Uses
 // the Hinnant civil_from_days algorithm (see howardhinnant.github.io/date_algorithms.html)
 // extended to the proleptic-Gregorian calendar; the algorithm is exact on
-// the full i64 day-count domain, far beyond the i32 year contract.
-fn decompose_utc(t_utc: f64) -> (i32, u32, u32, u32, u32, u32) {
-    let (day_count, sec_in_day) = floor_div_mod(t_utc);
+// the full i64 day-count domain, far beyond the i32 year contract. The year
+// stays `i64`; `floor_div_mod` has already confined it to Int32.
+fn decompose_utc(t_utc: f64) -> Result<(i64, u32, u32, u32, u32, u32), ClosedFunctionError> {
+    let (day_count, s, _) = floor_div_mod(t_utc)?;
     let (y, m, d) = civil_from_days(day_count);
-    // Truncate fractional seconds — the spec pins integer outputs and
-    // forbids leap-second slots (so seconds ∈ 0..=59).
-    let s = sec_in_day.trunc() as i64;
     let hour = (s / 3600) as u32;
     let minute = ((s % 3600) / 60) as u32;
     let second = (s % 60) as u32;
-    (y, m, d, hour, minute, second)
+    Ok((y, m, d, hour, minute, second))
 }
 
 // Hinnant's algorithm: days since 1970-01-01 → (y, m, d) on the proleptic-
 // Gregorian calendar. Negative day counts produce negative / pre-Common-Era
 // years per ISO 8601 (1 BC = 0, 2 BC = -1).
-fn civil_from_days(z: i64) -> (i32, u32, u32) {
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let z = z + 719468;
     let era = if z >= 0 { z } else { z - 146096 } / 146097;
     let doe = (z - era * 146097) as u64; // [0, 146096]
@@ -368,14 +536,14 @@ fn civil_from_days(z: i64) -> (i32, u32, u32) {
     let d = (doy - (153 * mp + 2) / 5 + 1) as u32; // [1, 31]
     let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32; // [1, 12]
     let y = if m <= 2 { y + 1 } else { y };
-    (y as i32, m, d)
+    (y, m, d)
 }
 
-fn is_leap_year(y: i32) -> bool {
+fn is_leap_year(y: i64) -> bool {
     (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0)
 }
 
-fn day_of_year(y: i32, m: u32, d: u32) -> u32 {
+fn day_of_year(y: i64, m: u32, d: u32) -> u32 {
     const CUM: [u32; 12] = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
     let mut doy = CUM[(m - 1) as usize] + d;
     if m > 2 && is_leap_year(y) {
@@ -384,55 +552,57 @@ fn day_of_year(y: i32, m: u32, d: u32) -> u32 {
     doy
 }
 
-// Fliegel–van Flandern (1968) JDN on the integer date component, plus the
-// fractional-day offset relative to noon UTC. Matches the Julia reference
-// (which uses Julia's `÷` — truncate-toward-zero — for the inner divides) to
-// within ≤ 1 ulp; the only float op is the final divide by 86400. Rust's
-// integer `/` is also truncate-toward-zero, so the inner divides match Julia
-// directly. Using `div_euclid` here would shift the (m − 14)/12 term by one
-// for Jan/Feb (off by ±2 days) and fail epoch — keep `/`.
-fn julian_day(t_utc: f64) -> f64 {
-    let (day_count, sec_in_day) = floor_div_mod(t_utc);
-    let (y, m, d) = civil_from_days(day_count);
-    let y = y as i64;
-    let m = m as i64;
-    let d = d as i64;
-    let jdn = (1461 * (y + 4800 + (m - 14) / 12)) / 4 + (367 * (m - 2 - 12 * ((m - 14) / 12))) / 12
-        - (3 * ((y + 4900 + (m - 14) / 12) / 100)) / 4
-        + d
-        - 32075;
-    (jdn as f64) + (sec_in_day - 43200.0) / 86400.0
+// The standard Julian Date `t / 86400 + 2440587.5`, evaluated as esm-spec
+// §9.2 pins it from the exact split:
+// `(day + 2440588) + ((second_of_day − 43200) + fraction) / 86400`. The day
+// term and `second_of_day − 43200` are exact integers and the fraction is
+// exact except for `−0.5 < t < 0` (where `1 + t` can round), so the inner
+// add, the divide and the outer add are the only other roundings (≤ 1 ulp). The day term is the LINEAR day number, not the
+// Fliegel–van Flandern JDN of the date: the two agree from -4800-03-01 on,
+// and before that FvF is off by -2 to +1 days.
+fn julian_day(t_utc: f64) -> Result<f64, ClosedFunctionError> {
+    let (day_count, sec_of_day, frac) = floor_div_mod(t_utc)?;
+    Ok(((day_count + 2440588) as f64) + (((sec_of_day - 43200) as f64) + frac) / 86400.0)
 }
 
 // `interp.searchsorted` per esm-spec §9.2: 1-based, left-side bias on
 // duplicates / exact matches; out-of-range below → 1, above → N+1; NaN x →
 // N+1; NaN entries in xs → error; non-monotonic xs → error.
 fn searchsorted(name: &str, x: f64, xs: &[f64]) -> Result<i64, ClosedFunctionError> {
-    // Validate monotonicity + NaN-in-table once per call (matches Julia).
-    let mut prev = f64::NAN;
-    for (i, v) in xs.iter().copied().enumerate() {
-        if v.is_nan() {
-            return Err(ClosedFunctionError::new(
-                codes::SEARCHSORTED_NAN_IN_TABLE,
-                format!(
-                    "{name}: xs[{idx}] is NaN; NaN entries in xs are forbidden",
-                    idx = i + 1
-                ),
-            ));
-        }
-        if i > 0 && v < prev {
+    check_searchsorted_xs(name, xs)?;
+    Ok(searchsorted_at(x, xs))
+}
+
+/// The esm-spec §9.2 checks on a rank-1 `xs`: NaN, then monotonicity. An
+/// empty `xs` passes (ruling Q-108).
+fn check_searchsorted_xs(name: &str, xs: &[f64]) -> Result<(), ClosedFunctionError> {
+    // NaN is checked over the WHOLE table before monotonicity (esm-spec
+    // §9.2): every comparison with NaN is false, so a monotonicity verdict on
+    // a table holding one would depend on how the comparison is written.
+    if let Some(i) = xs.iter().position(|v| v.is_nan()) {
+        return Err(ClosedFunctionError::new(
+            codes::SEARCHSORTED_NAN,
+            format!(
+                "{name}: xs[{idx}] is NaN; NaN entries in xs are forbidden",
+                idx = i + 1
+            ),
+        ));
+    }
+    for (i, w) in xs.windows(2).enumerate() {
+        if w[1] < w[0] {
             return Err(ClosedFunctionError::new(
                 codes::SEARCHSORTED_NON_MONOTONIC,
                 format!(
                     "{name}: xs is not non-decreasing (xs[{idx}]={v} < xs[{prev_idx}]={prev})",
-                    idx = i + 1,
-                    prev_idx = i,
+                    idx = i + 2,
+                    prev_idx = i + 1,
+                    v = w[1],
+                    prev = w[0],
                 ),
             ));
         }
-        prev = v;
     }
-    Ok(searchsorted_at(x, xs))
+    Ok(())
 }
 
 /// The search half of [`searchsorted`], with the table taken as ALREADY
@@ -467,18 +637,25 @@ pub(crate) fn searchsorted_at(x: f64, xs: &[f64]) -> i64 {
 // pinned form `result = t[i] + w * (t[i+1] - t[i])` so endpoints are
 // recovered exactly under IEEE-754 round-to-nearest.
 fn interp_linear(table: &[f64], axis: &[f64], x: f64) -> Result<f64, ClosedFunctionError> {
-    validate_axis("interp.linear", "axis", axis)?;
-    if table.len() != axis.len() {
-        return Err(ClosedFunctionError::new(
-            codes::INTERP_AXIS_LENGTH_MISMATCH,
-            format!(
-                "interp.linear: len(table)={} != len(axis)={}",
-                table.len(),
-                axis.len()
-            ),
-        ));
-    }
+    check_linear_table(table, axis)?;
     Ok(interp_linear_at(table, axis, x))
+}
+
+/// The esm-spec §9.2 checks on `interp.linear`'s rank-1 `table` and `axis`.
+fn check_linear_table(table: &[f64], axis: &[f64]) -> Result<(), ClosedFunctionError> {
+    check_axes("interp.linear", &[("axis", axis)], || {
+        if table.len() != axis.len() {
+            return Err(ClosedFunctionError::new(
+                codes::INTERP_AXIS_LENGTH_MISMATCH,
+                format!(
+                    "interp.linear: len(table)={} != len(axis)={}",
+                    table.len(),
+                    axis.len()
+                ),
+            ));
+        }
+        Ok(())
+    })
 }
 
 /// The blend half of [`interp_linear`], with `table` and `axis` taken as
@@ -530,32 +707,48 @@ fn interp_bilinear(
     x: f64,
     y: f64,
 ) -> Result<f64, ClosedFunctionError> {
-    validate_axis("interp.bilinear", "axis_x", axis_x)?;
-    validate_axis("interp.bilinear", "axis_y", axis_y)?;
-    if table.len() != axis_x.len() {
-        return Err(ClosedFunctionError::new(
-            codes::INTERP_AXIS_LENGTH_MISMATCH,
-            format!(
-                "interp.bilinear: outer len(table)={} != len(axis_x)={}",
-                table.len(),
-                axis_x.len()
-            ),
-        ));
-    }
-    let ny = axis_y.len();
-    for (i, row) in table.iter().enumerate() {
-        if row.len() != ny {
-            return Err(ClosedFunctionError::new(
-                codes::INTERP_AXIS_LENGTH_MISMATCH,
-                format!(
-                    "interp.bilinear: table row {row_idx} has len={got} but len(axis_y)={ny}",
-                    row_idx = i + 1,
-                    got = row.len(),
-                ),
-            ));
-        }
-    }
+    check_bilinear_table(table, axis_x, axis_y)?;
     Ok(bilinear_at(|i, j| table[i][j], axis_x, axis_y, x, y))
+}
+
+/// The esm-spec §9.2 checks on `interp.bilinear`'s rank-2 `table` and its two
+/// rank-1 axes.
+fn check_bilinear_table(
+    table: &[Vec<f64>],
+    axis_x: &[f64],
+    axis_y: &[f64],
+) -> Result<(), ClosedFunctionError> {
+    check_axes(
+        "interp.bilinear",
+        &[("axis_x", axis_x), ("axis_y", axis_y)],
+        || {
+            if table.len() != axis_x.len() {
+                return Err(ClosedFunctionError::new(
+                    codes::INTERP_AXIS_LENGTH_MISMATCH,
+                    format!(
+                        "interp.bilinear: outer len(table)={} != len(axis_x)={}",
+                        table.len(),
+                        axis_x.len()
+                    ),
+                ));
+            }
+            let ny = axis_y.len();
+            for (i, row) in table.iter().enumerate() {
+                if row.len() != ny {
+                    return Err(ClosedFunctionError::new(
+                        codes::INTERP_AXIS_LENGTH_MISMATCH,
+                        format!(
+                            "interp.bilinear: table row {row_idx} has len={got} but \
+                             len(axis_y)={ny}",
+                            row_idx = i + 1,
+                            got = row.len(),
+                        ),
+                    ));
+                }
+            }
+            Ok(())
+        },
+    )
 }
 
 /// [`interp_bilinear`] over a ROW-MAJOR FLAT table (`table[i * ny + j]`),
@@ -636,39 +829,47 @@ fn locate_cell(axis: &[f64], q: f64) -> usize {
     i
 }
 
-// Shared axis-validation helper for `interp.linear` and
-// `interp.bilinear`. Diagnoses (in order of precedence): too-short,
-// NaN-in-axis, non-monotonic. Strict monotonicity (`<`, not `≤`) is
-// required because equal-adjacent entries would zero the blend
-// denominator — `interp.searchsorted` permits non-decreasing because it
-// returns an index, not a blend.
-fn validate_axis(fn_name: &str, label: &str, axis: &[f64]) -> Result<(), ClosedFunctionError> {
-    if axis.len() < 2 {
-        return Err(ClosedFunctionError::new(
-            codes::INTERP_AXIS_TOO_SHORT,
-            format!(
-                "{fn_name}: {label} has {len} entries; need at least 2 (no interval to blend across)",
-                len = axis.len()
-            ),
-        ));
-    }
-    for (i, v) in axis.iter().copied().enumerate() {
-        if v.is_nan() {
+// The esm-spec §9.2 "Order of the argument checks" (ruling Q-110) for
+// `interp.linear` and `interp.bilinear`, after the arity and rank checks:
+// every axis too short, then the table/axis length relation (`lengths`), then
+// a non-finite entry in any axis (ruling Q-113), then any axis not strictly
+// increasing. Each step covers every axis before the next begins. Strict
+// monotonicity (`<`, not `≤`) is required because equal-adjacent entries
+// would zero the blend denominator — `interp.searchsorted` permits
+// non-decreasing because it returns an index, not a blend.
+fn check_axes(
+    fn_name: &str,
+    axes: &[(&str, &[f64])],
+    lengths: impl FnOnce() -> Result<(), ClosedFunctionError>,
+) -> Result<(), ClosedFunctionError> {
+    for (label, axis) in axes {
+        if axis.len() < 2 {
             return Err(ClosedFunctionError::new(
-                codes::INTERP_NAN_IN_AXIS,
+                codes::INTERP_AXIS_TOO_SHORT,
                 format!(
-                    "{fn_name}: {label}[{idx}] is NaN; NaN entries in axes are forbidden",
-                    idx = i + 1
+                    "{fn_name}: {label} has {len} entries; need at least 2 (no interval to blend across)",
+                    len = axis.len()
                 ),
             ));
         }
     }
-    // NaN was filtered above, so `>=` here is well-defined and detects
-    // both equal-adjacent and decreasing pairs (the strict-monotonicity
-    // requirement that distinguishes interp.linear/bilinear from
-    // searchsorted's non-decreasing rule).
-    for w in axis.windows(2) {
-        if w[0] >= w[1] {
+    lengths()?;
+    for (label, axis) in axes {
+        if let Some(i) = axis.iter().position(|v| !v.is_finite()) {
+            return Err(ClosedFunctionError::new(
+                codes::INTERP_NAN_IN_AXIS,
+                format!(
+                    "{fn_name}: {label}[{idx}] is {v}, not finite; axis entries must be finite",
+                    idx = i + 1,
+                    v = axis[i]
+                ),
+            ));
+        }
+    }
+    // Every entry is finite here, so `>=` is well-defined and detects both
+    // equal-adjacent and decreasing pairs.
+    for (label, axis) in axes {
+        if let Some(w) = axis.windows(2).find(|w| w[0] >= w[1]) {
             return Err(ClosedFunctionError::new(
                 codes::INTERP_NON_MONOTONIC_AXIS,
                 format!(
@@ -758,6 +959,43 @@ mod tests {
         assert_eq!(v, ClosedValue::Integer(366));
     }
 
+    /// esm-spec §9.2 (rulings Q-100, Q-101): every `datetime.*` entry raises
+    /// `closed_function_overflow` for a non-finite `t` and for one whose year
+    /// is outside Int32, and still answers one double inside each edge.
+    #[test]
+    fn datetime_overflow_every_entry() {
+        let names = closed_function_names();
+        let hi: f64 = 6.776_797_623_353_28e16; // first instant of year 2^31
+        let lo: f64 = -6.776_810_056_797_12e16; // first instant of year -2^31
+        for name in names.iter().filter(|n| n.starts_with("datetime.")) {
+            for t in [
+                f64::NAN,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                hi,
+                lo.next_down(),
+                1e300,
+            ] {
+                let err = evaluate_closed_function(name, &[s(t)]).unwrap_err();
+                assert_eq!(err.code, codes::CLOSED_FUNCTION_OVERFLOW, "{name}({t})");
+            }
+            for t in [hi.next_down(), lo] {
+                assert!(
+                    evaluate_closed_function(name, &[s(t)]).is_ok(),
+                    "{name}({t})"
+                );
+            }
+        }
+    }
+
+    /// `julian_day` is the standard Julian Date before -4800-03-01 too, where
+    /// the Fliegel–van Flandern JDN is a day ahead (-4800-02-29T12:00Z).
+    #[test]
+    fn datetime_julian_day_before_fvf_domain() {
+        let v = evaluate_closed_function("datetime.julian_day", &[s(-213_635_448_000.0)]).unwrap();
+        assert_eq!(v, ClosedValue::Float(-32045.0));
+    }
+
     #[test]
     fn searchsorted_exact_boundary() {
         let v = evaluate_closed_function(
@@ -803,7 +1041,37 @@ mod tests {
         let err =
             evaluate_closed_function("interp.searchsorted", &[s(2.0), a(&[1.0, f64::NAN, 3.0])])
                 .unwrap_err();
-        assert_eq!(err.code, "searchsorted_nan_in_table");
+        assert_eq!(err.code, "searchsorted_nan");
+    }
+
+    /// esm-spec §9.2: NaN in `xs` is checked before monotonicity, so a NaN
+    /// first, or a NaN after a decreasing pair, is still `searchsorted_nan`.
+    #[test]
+    fn searchsorted_nan_takes_precedence_over_non_monotonic() {
+        for xs in [
+            &[f64::NAN, 1.0, 2.0, 3.0][..],
+            &[3.0, 1.0, f64::NAN, 4.0][..],
+        ] {
+            let err =
+                evaluate_closed_function("interp.searchsorted", &[s(2.0), a(xs)]).unwrap_err();
+            assert_eq!(err.code, "searchsorted_nan", "xs = {xs:?}");
+        }
+    }
+
+    /// esm-spec §9.2: an `xs` that is not a rank-1 array is
+    /// `interp_axis_not_const`, decided before its entries are looked at — a
+    /// nested `xs` holding a NaN is still `interp_axis_not_const`.
+    #[test]
+    fn searchsorted_non_rank_1_xs_is_interp_axis_not_const() {
+        for xs in [
+            ClosedArg::Scalar(3.0),
+            ClosedArg::Array2D(vec![vec![1.0, 2.0], vec![3.0, 4.0]]),
+            ClosedArg::Array2D(vec![vec![1.0, f64::NAN], vec![3.0, 4.0]]),
+        ] {
+            let err =
+                evaluate_closed_function("interp.searchsorted", &[s(2.0), xs.clone()]).unwrap_err();
+            assert_eq!(err.code, "interp_axis_not_const", "xs = {xs:?}");
+        }
     }
 
     #[test]
@@ -934,6 +1202,23 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.code, "interp_nan_in_axis");
+    }
+
+    /// esm-spec §9.2 Errors: within an axis, a NaN is `interp_nan_in_axis`
+    /// whatever the other entries — after a decreasing pair, or first.
+    #[test]
+    fn interp_nan_in_axis_takes_precedence_over_non_monotonic() {
+        for axis in [
+            &[0.0, 2.0, 1.0, f64::NAN][..],
+            &[f64::NAN, 1.0, 2.0, 3.0][..],
+        ] {
+            let err = evaluate_closed_function(
+                "interp.linear",
+                &[a(&[10.0, 20.0, 30.0, 40.0]), a(axis), s(1.0)],
+            )
+            .unwrap_err();
+            assert_eq!(err.code, "interp_nan_in_axis", "axis = {axis:?}");
+        }
     }
 
     #[test]

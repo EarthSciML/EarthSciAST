@@ -1,0 +1,58 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "ClosedFn_linear_not_const__too_short",
+    "description": "Ruling Q-110: the order is not-const/rank, too short, length mismatch, non-finite, non-monotonic, each step over every axis. `interp.linear` whose table is the parameter `p` and whose axis [0] has one entry: not-const is reported.",
+    "authors": [
+      "EarthSciML"
+    ],
+    "created": "2026-10-27T00:00:00Z"
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "y": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        },
+        "x": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.5
+        },
+        "p": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "y"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "fn",
+            "name": "interp.linear",
+            "args": [
+              "p",
+              {
+                "op": "const",
+                "args": [],
+                "value": [
+                  0.0
+                ]
+              },
+              "x"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

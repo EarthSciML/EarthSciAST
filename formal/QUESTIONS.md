@@ -54,6 +54,7 @@ with a pending question among its own clauses.
 - Found by: inventory
 - Problem: The bound is defined by whatever tolerance a fixture file carries, so it is not a spec-level property; and rel 4e-16 cannot hold in general: fusing t_i + w*(d) removes one rounding of w*d, which relative to a result near zero by cancellation is unbounded.
 - Ruling: Allow FMA with an absolute bound in ulps of max(|tᵢ|,|tᵢ₊₁|) (2026-10-26); the constant is proven in phase 1 before it enters the spec; the rel 4e-16 relaxation is removed.
+- Done (phase 1): `interp.linear` 2·ulp(max(|tᵢ|,|tᵢ₊₁|)), attained (`P-interp-fma-two-ulp-attained`); `interp.bilinear` 17/2·ulp(max |corner|), proven but not known tight (`P-interp-bilinear-fma-bound`; least constant open, `P-interp-bilinear-fma-least-constant`, ≥ 4 by search). Both in §9.2's tolerance paragraph; the rel 4e-16 relaxation is gone from §9.2 and §9.5.6.
 
 ## Q-7 esm-spec.md §9.2: searchsorted xs monotone
 - Clauses: `spec.9.2.searchsorted-xs-monotone`
@@ -186,7 +187,7 @@ with a pending question among its own clauses.
 - Phase: 2
 - Found by: inventory
 - Problem: 'A symbol is a maximal run of characters that is a table key' does not say whether a run is delimited by character class (so `s1` is one unresolvable token) or is the longest table-key prefix (so `s1` lexes as `s` followed by the legal atom `1`, i.e. `s*1`, which the grammar's optional-operator juxtaposition accepts); the two readings disagree on strings like `kg1` and `s1`.
-- Ruling: (pending)
+- Ruling: Character-class runs (2026-10-26, reading A): a run of letters/digits is one symbol, so `s1`, `kgm`, `cm3` are unresolvable; bindings that split by longest table-key prefix are fixed.
 
 ## Q-26 esm-spec.md §4.8.3: agreement dimension and scale
 - Clauses: `spec.4.8.3.agreement-dimension-and-scale`
@@ -684,3 +685,122 @@ with a pending question among its own clauses.
 - Found by: inventory
 - Problem: Phrased as an author MUST NOT, yet the same sentence requires bindings to accept and substitute such a body; a violating document is not rejected by anything, so this behaves as a SHOULD and a document can be non-conforming while every conforming tool accepts it.
 - Ruling: (pending)
+
+## Q-97 esm-spec.md §9.2: interp endpoint and alternative-cell claims (editorial)
+- Clauses: `spec.9.2.interp-fma-tolerance`
+- Phase: 1
+- Found by: phase-1 formalization (`Esm.Closed.Rounding.blend64_w_one_refuted`)
+- Problem: §9.2 claimed `w = 1 ⇒ result = tᵢ₊₁` and that bilinear's alternative cell `i = k − 1` is bit-identical to the pinned `i = k`. In binary64 `1 ⊕ (1 ⊗ (2⁻⁶⁰ ⊖ 1)) = 0`, refuting both. Also: the "equivalent formulation" of the bilinear cell via `interp.searchsorted` picks `k − 1` at an interior knot; the linear composition rationale clamped the index but not the weight, so it extrapolated; `w = 0` exactness needs `tᵢ₊₁` finite; the `interp.searchsorted` row said `(1..N)` where it returns `1..N+1`.
+- Ruling: Editorial (2026-10-26): text corrected to the proven facts (exact at `w = 0` for finite `tᵢ₊₁`; at `w = 1` exact under Sterbenz, else within 3/2 ulp; alternative cell equal over ℝ only; searchsorted formulation marked not equivalent; rationale clamps `x`; return range `1..N+1`).
+
+## Q-98 esm-spec.md §9.5.3: nearest is decided on binary64 differences, not exact distance
+- Clauses: `spec.9.5.table-lookup-bit-equivalent`
+- Phase: 1
+- Found by: phase-1 formalization (`nearest64_not_exact`, `nearest64_spec`)
+- Problem: Ruling Q-13 says "true nearest knot". The §9.5.3 lowering written for it decides on the binary64 differences `A[hi] − x` and `x − A[lo]`. On axis `[−1, 1]` with `x = 2⁻⁶⁰` both round to `1.0`, so it returns the lower knot although the upper is nearer. Proven: it is otherwise exact, it errs only toward the lower knot, and only when the exact distances differ by at most `ulp(x − A[lo])`. Fixture `q_rounding_tie` pins the binary64 answer.
+- Ruling: Keep the binary64 comparison as the definition (2026-10-26): nearest is decided on the two rounded differences; amends Q-13. The spec states the proven bound (it can err only toward the lower knot, and only when the exact distances differ by at most ulp(x − A[lo])).
+
+## Q-99 esm-spec.md §9.2: julian_day before −4800-03-01
+- Clauses: `spec.9.2.datetime-exact-integer`
+- Phase: 1
+- Found by: phase-1 formalization (`julianDay_ne_standard`)
+- Problem: §9.2 names Fliegel–van Flandern with truncating division as the reference computation and the standard Julian Date (JD 0 at noon, 4713 BC Jan 1) as the convention. They agree from −4800-03-01 on and disagree by −2 to +1 days on most earlier dates (FvF is 1 day ahead on −4800-02-29). Python, Go, Julia and Rust use FvF; TypeScript the standard JD. No fixture pins a date before −4800-03-01.
+- Ruling: The standard Julian Date everywhere (2026-10-26; the user chose the more scientifically accurate of the two): julian_day = t/86400 + 2440587.5 for every t. Fliegel–van Flandern becomes an informative note valid from −4800-03-01. Python, Go, Julia and Rust change for dates before −4800-03-01; fixtures there.
+
+## Q-100 esm-spec.md §9.2: datetime of a non-finite t
+- Clauses: `spec.9.2.datetime-exact-integer`
+- Phase: 1
+- Found by: phase-1 formalization
+- Problem: No result or diagnostic is given for a NaN or ±Inf `t_utc`.
+- Ruling: Raise closed_function_overflow (2026-10-26) for a NaN or ±Inf t in every datetime.* function; fixtures and a guard per binding.
+
+## Q-101 esm-spec.md §9.2: datetime fields when the year overflows
+- Clauses: `spec.9.2.datetime-exact-integer`
+- Phase: 1
+- Found by: phase-1 binding work
+- Problem: "If a result would overflow" — only `year` can leave Int32. It is unspecified whether `month`, `day`, `hour`, … raise `closed_function_overflow` too for such a `t`. Go raises for |t| ≥ 2⁶²; the others return deterministic values.
+- Ruling: All fields raise (2026-10-26): every datetime.* function raises closed_function_overflow when the year of t is outside Int32.
+
+## Q-102 esm-spec.md §9.2: single floor-divmod "zero drift" (editorial)
+- Clauses: `spec.9.2.datetime-exact-integer`
+- Phase: 1
+- Found by: phase-1 formalization (`fSecondOfDay_ne`)
+- Problem: "A single floor-divmod gives zero drift on the integer outputs" is false for a binary64 floor-divmod: at `t = −1 − 2⁻⁵²`, `86400 ⊕ t` rounds to 86399.
+- Ruling: Editorial (2026-10-26): the Q-3 text defines the day number and time of day exactly, as real numbers; reproducer `tests/closed_functions/datetime/second/expected.json` scenario `frac_pre_epoch_minute_1969_12_31T23_59_below_ulp`.
+
+## Q-103 esm-spec.md §4.8.1: unit scales with no stated value
+- Clauses: `spec.4.8.1.customary-scales-pinned`
+- Phase: 1
+- Found by: phase-1 formalization
+- Problem: `cal`, `kcal`, `ppm`, `ppb` and `ppt` have no stated scale. The model uses cal = 4.184 J and ppt = 10⁻¹² (every binding agrees), but `ppt` reads as parts per trillion or per thousand.
+- Ruling: Pin what the bindings do (2026-10-26): cal = 4.184 J (thermochemical), kcal = 4184 J, ppm/ppb/ppt and the v forms = 1e-6/1e-9/1e-12, ppt explicitly parts per trillion.
+
+## Q-104 esm-spec.md §4.8.2: unit-string grammar edge cases
+- Clauses: `spec.4.8.2.percent-symbol-token`
+- Phase: 1
+- Found by: phase-1 formalization (Python compared)
+- Problem: Unspecified: (a) a whitespace-only string (Python: dimensionless; model: reject); (b) `m^+2` (Python accepts; model rejects); (c) `01/s` and `1.0/s` — the grammar's atom is literally `'1'`, the prose says "value exactly 1"; (d) whether `%h` is `%`·`h`; (e) whitespace inside a term (`m ^ 2`), accepted by both.
+- Ruling: Strict grammar (2026-10-26): (a) a whitespace-only string is rejected (only "" is dimensionless); (b) no `+` sign on exponents; (c) only the literal `1` (`01`, `1.0` are scaling-factor errors); (d) `%h` is `%`·`h`; (e) whitespace is allowed around `^`, `*`, `/`. Python changes for (a)–(c).
+
+## Q-105 esm-spec.md §9.2, §9.5.5: unnamed diagnostic codes and check order
+- Clauses: `spec.9.2.searchsorted-xs-monotone`
+- Phase: 1
+- Found by: phase-1 formalization
+- Problem: No code is named for an `interp.searchsorted` `xs` that is not a rank-1 const array, nor for a function-table axis with fewer than 2 values; the order of the §9.5.5 checks beyond Q-4 is unpinned (the model's order is in `Esm/Closed/Tables.lean`).
+- Ruling: (2026-10-26) searchsorted's non-const xs reuses interp_axis_not_const; new code table_axis_too_short; the model's §9.5.5 check order is pinned in the spec. Fixtures; bindings fixed where they differ.
+
+## Q-106 esm-spec.md §9.2, §9.5.5: when closed-function and table checks run
+- Clauses: `spec.9.5.5.table-check-order`, `spec.9.2.searchsorted-xs-not-const`
+- Phase: 1
+- Found by: phase-1 binding work
+- Problem: The spec says these errors are raised at load time; every binding raises them at build or evaluation instead, so an unreferenced broken table is never reported and none of these cases can be a `tests/invalid` fixture.
+- Ruling: Bindings check at load (2026-10-27): every binding runs the closed-function argument checks and the §9.5.5 table checks in load/`validate()`, for every table whether referenced or not; the cases become `tests/invalid` fixtures.
+
+## Q-107 esm-spec.md §9.5.5: lookup checks relative to the table checks
+- Clauses: `spec.9.5.5.table-check-order`
+- Phase: 1
+- Found by: phase-1 binding work
+- Problem: Unpinned whether a `table_lookup`'s own checks (args, axis keys, output) come before or after validating the table it names. The model and Julia check args first; the other four after.
+- Ruling: Table checks first (2026-10-27): unknown table, then the ten table checks, then the lookup's args, axis keys and output. Julia and the model change.
+
+## Q-108 esm-spec.md §9.2: empty searchsorted table; wrong-rank interp arrays
+- Clauses: `spec.9.2.searchsorted-xs-not-const`
+- Phase: 1
+- Found by: phase-1 binding work
+- Problem: (1) Whether `xs = []` is a valid rank-1 table (Python and the model return 1; TypeScript rejects). (2) The code for a wrong-rank `const` axis or table of `interp.linear`/`interp.bilinear` differs across bindings and the model.
+- Ruling: (2026-10-27) (1) `[]` is valid and searchsorted returns 1; (2) a wrong-rank axis or table is `interp_axis_not_const` / `interp_table_not_const`.
+
+## Q-109 esm-spec.md §9.5.1, §9.5.5: infinite table values (editorial)
+- Clauses: `spec.9.5.5.table-check-order`
+- Phase: 1
+- Found by: phase-1 binding work
+- Problem: §9.5.1 and the schema require finite values, but the codes only name NaN; bindings differ on infinities in tables built in memory.
+- Ruling: Editorial (2026-10-27): a non-finite value (NaN or ±Inf) is reported by `table_axis_nan` / `table_data_nan`; the code descriptions say "not finite".
+
+## Q-110 esm-spec.md §9.2: order of the interp.linear / interp.bilinear argument checks
+- Clauses: `spec.9.2.interp-axis-no-nan`
+- Phase: 1
+- Found by: phase-1 binding work
+- Problem: Beyond not-const first and Q-4, the order of too-short, length-mismatch, NaN and non-monotonic differs across bindings.
+- Ruling: (2026-10-27) not-const/rank → too short → length mismatch → NaN → non-monotonic (the Lean/Python order).
+
+## Q-111 esm-spec.md §9.2: an empty table for interp.bilinear
+- Clauses: `spec.9.2.interp-axis-no-nan`
+- Phase: 1
+- Found by: phase-1 binding work
+- Problem: `[]` as a bilinear table reads as rank 1 (Rust, Lean) or an empty rank-2 table (Go, TypeScript).
+- Ruling: (2026-10-27) `[]` is rank 1, so `interp_table_not_const` (Q-108's wrong-rank rule).
+
+## Q-112 esm-spec.md §9.2, §9.5.2: the remaining static checks run at load
+- Clauses: `spec.9.5.5.table-check-order`
+- Phase: 1
+- Found by: phase-1 binding work
+- Problem: After Q-106, a `table_lookup`'s own checks (unknown table, non-empty args, axis keys, output) and `interp.*` arity still run at lowering/evaluation in most bindings.
+- Ruling: (2026-10-27) Both move to load and `validate()`, like Q-106; they become `tests/invalid` fixtures.
+
+## Q-113 esm-spec.md §9.2, §9.5: editorial consequences of Q-106..Q-112
+- Clauses: `spec.9.5.5.table-check-order`
+- Phase: 1
+- Found by: phase-1 binding work
+- Problem: (a) which error a document with several failures reports; (b) an infinite `interp.*` axis entry has no code; (c) a `fn` inside an expression-template body.
+- Ruling: Editorial (2026-10-27): (a) tables are checked before `fn` nodes, as all five bindings already do, and the spec says so; (b) a non-finite axis entry is `interp_nan_in_axis` (the Q-109 reading); (c) checked where the template is applied.

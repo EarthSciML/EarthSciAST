@@ -60,30 +60,30 @@ jobs:
     steps:
       # Both checkouts under the workspace, side by side: the census names a
       # corpus document `tests/…` or `EarthSciModels/…` relative to them.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: EarthSciAST
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: EarthSciML/EarthSciModels
           ref: ${{ inputs.earthscimodels_ref || '' }}
           path: EarthSciModels
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.11'
 
       - name: Setup Julia
         if: matrix.binding == 'julia'
-        uses: julia-actions/setup-julia@v2
+        uses: julia-actions/setup-julia@v3
         with:
           version: ${{ env.JULIA_VERSION }}
 
       - name: Cache the Julia depot
         if: matrix.binding == 'julia'
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.julia
           key: ${{ runner.os }}-native-coverage-${{ env.JULIA_VERSION }}-${{ hashFiles('EarthSciAST/pkg/EarthSciAST.jl/Project.toml', 'EarthSciAST/pkg/EarthSciAST.jl/scripts/compiler_agreement_env/Project.toml') }}
@@ -111,7 +111,7 @@ jobs:
 
       - name: Cache cargo
         if: matrix.binding == 'rust'
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -134,7 +134,7 @@ jobs:
 
       - name: Upload the census
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: native-coverage-${{ matrix.binding }}-${{ github.run_number }}
           path: |

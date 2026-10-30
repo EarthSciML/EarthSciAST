@@ -1,0 +1,91 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "FunctionTable_axis_non_monotonic",
+    "description": "Table `T`'s second axis `y` is not strictly increasing (step 5) and `data` has one output slab where `outputs` names two (step 7); step 5 is reported. No `table_lookup` references `T`.",
+    "authors": [
+      "EarthSciML"
+    ],
+    "created": "2026-10-27T00:00:00Z"
+  },
+  "function_tables": {
+    "T": {
+      "axes": [
+        {
+          "name": "x",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        },
+        {
+          "name": "y",
+          "values": [
+            0,
+            2,
+            1
+          ]
+        }
+      ],
+      "interpolation": "bilinear",
+      "outputs": [
+        "a",
+        "b"
+      ],
+      "data": [
+        [
+          [
+            1,
+            2,
+            3
+          ],
+          [
+            4,
+            5,
+            6
+          ],
+          [
+            7,
+            8,
+            9
+          ]
+        ]
+      ]
+    }
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "y": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        },
+        "x": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.5
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "y"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              -1.0,
+              "y"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

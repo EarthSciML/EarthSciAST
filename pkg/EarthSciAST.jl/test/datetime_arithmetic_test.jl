@@ -17,14 +17,18 @@
 #   * every second of six chosen days (a leap day, a year end, a pre-epoch
 #     day, a century-boundary day, and both Feb 28ths that precede a leap and
 #     a non-leap March);
-#   * the millisecond-truncation and sign boundaries, which are the ONLY place
-#     a `trunc`-vs-`round` slip is visible — an exact-integer `t` truncates
-#     and rounds alike, so a test built from whole seconds cannot see it. It
-#     was a real bug during development, caught here.
+#   * fractional seconds on both sides of the epoch, which are the ONLY place
+#     a floor-vs-trunc-vs-round slip is visible — an exact-integer `t`
+#     floors, truncates and rounds alike, so a test built from whole seconds
+#     cannot see it. esm-spec §9.2 floors toward −∞ (ruling Q-3), which
+#     `Dates.unix2datetime` does NOT do (it truncates `1000t` toward zero), so
+#     the oracle is `Dates` applied to `floor(t)`.
 #
 # `julian_day` is pinned separately against the previous `Dates`-based
-# Fliegel–van Flandern spelling, bitwise, because it is the one member of the
-# family that is continuous in `t` and feeds a Rosenbrock ∂f/∂t.
+# Fliegel–van Flandern spelling, bitwise over 1600–2400 (where FvF equals the
+# linear day number §9.2 now pins), because it is the one member of the
+# family that is continuous in `t` and feeds a Rosenbrock ∂f/∂t. Before
+# -4800-03-01 FvF is not the Julian Date; the shared fixtures pin that range.
 
 using Test
 using Dates
@@ -38,9 +42,9 @@ const _DT_FIELDS = ["datetime.year", "datetime.month", "datetime.day",
                     "datetime.hour", "datetime.minute", "datetime.second",
                     "datetime.day_of_year", "datetime.is_leap_year"]
 
-# The oracle: Julia's `Dates`, reached exactly the way the registry used to.
+# The oracle: Julia's `Dates` on the whole second `t` falls in.
 function _dt_ref(name::String, t)
-    dt = unix2datetime(t)
+    dt = unix2datetime(floor(t))
     name == "datetime.year"         && return Int32(year(dt))
     name == "datetime.month"        && return Int32(month(dt))
     name == "datetime.day"          && return Int32(day(dt))
@@ -107,21 +111,30 @@ end
         end
     end
 
-    # The millisecond cut is `trunc` toward ZERO (Dates' own `unix2datetime`),
-    # not `round`. These fractions straddle every place the two disagree, and
-    # the negative ones straddle the epoch, where truncation is asymmetric.
-    @testset "millisecond truncation and sign boundaries" begin
+    # Fractions are floored toward −∞, not truncated or rounded. These
+    # straddle every millisecond/microsecond place where `round` or `trunc`
+    # would disagree, and the negative ones straddle the epoch, where
+    # truncation toward zero would move a 1969 time forward into 1970.
+    @testset "fractional-second floor and sign boundaries" begin
         bases = (datetime2unix(DateTime(2016, 6, 15, 3, 59, 59)),
                  datetime2unix(DateTime(2015, 12, 31, 23, 59, 59)),
                  datetime2unix(DateTime(1969, 12, 31, 23, 59, 59)),
                  datetime2unix(DateTime(1965, 3, 10, 7, 0, 0)),
                  datetime2unix(DateTime(2016, 2, 28, 23, 59, 59)))
-        fracs = (-0.9999, -0.5, -0.001, 0.0, 0.0004, 0.0005, 0.4,
+        fracs = (-0.9999, -0.5, -0.001, -1e-7, 0.0, 0.0004, 0.0005, 0.4,
                  0.4994, 0.4995, 0.4996, 0.5, 0.9,
                  0.9994, 0.9995, 0.9996, 0.999999, 0.9999999999)
         bad, first_bad = _dt_sweep(b + f for b in bases for f in fracs)
         @test bad == 0
         bad == 0 || @info "first mismatch" first_bad
+        # The ruling's worked examples, and the subnormal just below the epoch
+        # (where `86400 - 5e-324` rounds to 86400 in binary64).
+        for (t, fields) in ((59.9999999, (1970, 1, 1, 0, 0, 59)),
+                            (86399.9999999, (1970, 1, 1, 23, 59, 59)),
+                            (-1e-7, (1969, 12, 31, 23, 59, 59)),
+                            (-5e-324, (1969, 12, 31, 23, 59, 59)))
+            @test Tuple(_dt_eval(n, t) for n in _DT_FIELDS[1:6]) == fields
+        end
     end
 
     @testset "julian_day is bitwise the previous Dates-based value" begin
@@ -173,18 +186,30 @@ end
         @test _DT_M._cal_narrow("datetime.year", v) === v
     end
 
-    # Non-finite `t` is out of the calendar's domain. The old path threw from
-    # inside `round(Int64, NaN)` with no diagnostic code; this one carries one.
-    @testset "non-finite t raises a coded error" begin
-        for bad_t in (NaN, Inf, -Inf)
-            err = try
-                _dt_eval("datetime.year", bad_t)
-                nothing
-            catch e
-                e
-            end
-            @test err isa EarthSciAST.ClosedFunctionError
-            @test err.code == "closed_function_overflow"
+    # esm-spec §9.2: a NaN or ±Inf `t`, and one whose year is outside Int32,
+    # raise `closed_function_overflow` in EVERY entry (rulings Q-100, Q-101) —
+    # through the pinned registry, its AD twin and the typed scalar cores.
+    @testset "non-finite t and Int32-overflowing years raise overflow, every entry" begin
+        coded(f) = try
+            f()
+            nothing
+        catch e
+            e isa EarthSciAST.ClosedFunctionError ? e.code : e
+        end
+        hi = 6.77679762335328e16            # first instant of year 2^31
+        lo = prevfloat(-6.77681005679712e16) # last double of year -2^31 - 1
+        names = vcat(_DT_FIELDS, ["datetime.julian_day"])
+        for name in names, bad_t in (NaN, Inf, -Inf, hi, lo)
+            @test coded(() -> _dt_eval(name, bad_t)) == "closed_function_overflow"
+            @test coded(() -> _DT_M.evaluate_closed_function_ad(name, Any[bad_t])) ==
+                  "closed_function_overflow"
+            spec = _DT_M._fn_typed_core_spec(name)
+            @test coded(() -> _DT_M._fn_typed_core_call(spec.id, bad_t)) ==
+                  "closed_function_overflow"
+        end
+        # One step inside each edge every entry still answers.
+        for name in names, ok_t in (prevfloat(hi), -6.77681005679712e16)
+            @test coded(() -> _dt_eval(name, ok_t)) === nothing
         end
     end
 end

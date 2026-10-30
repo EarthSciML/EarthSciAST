@@ -105,6 +105,7 @@ pub(crate) mod inline_test_checks;
 pub mod intern;
 pub(crate) mod join;
 pub(crate) mod json_visit;
+pub(crate) mod load_checks;
 pub(crate) mod lower_enums;
 pub(crate) mod lower_expression_templates;
 pub(crate) mod lower_table_lookup;
@@ -308,7 +309,8 @@ pub use template_imports::{
 // advisory.
 pub use solver::{
     reject_solver_external_pre_v13, reject_solver_pre_v11, reject_solver_time_span_pre_v13,
-    resolve_time_span, resolve_tolerances, solver_external_location,
+    resolve_time_span, resolve_tolerances, solver_external_location, time_origin,
+    timestamp_to_seconds,
 };
 pub use types::{
     AffectEquation, AutoRecords, ContinuousEvent, Coordinate, CouplingEntry, CouplingRole,

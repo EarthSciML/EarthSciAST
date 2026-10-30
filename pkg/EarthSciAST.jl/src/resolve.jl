@@ -241,6 +241,11 @@ function _load_document(raw_data, base_path::String;
     # document with no location of its own leaves `flatten`'s `base_path` in
     # charge, as it does in the other four bindings.
     record_import_base && _record_coupling_import_base!(file, base_path)
+    # esm-spec §9.2 "When the argument checks run" / §9.5.5 "When the table
+    # checks run": on the document AS LOADED — templates lowered, enums lowered,
+    # mounts resolved — every `interp.*` call and every function table. A
+    # document that fails one does not load.
+    check_closed_functions_and_tables(file)
     return file
 end
 

@@ -65,9 +65,8 @@ made, so the message is part of the contract.
 | Julia | `pkg/EarthSciAST.jl/test/unit_registry_conformance_test.jl` |
 | Python | `pkg/earthsci-ast-py/tests/test_unit_registry_conformance.py` |
 | Rust | `pkg/earthsci-ast-rs/tests/unit_registry_conformance.rs` |
-
-Go and TypeScript are `scope_excluded` in the manifest: both carry the same
-table and assert it in their own unit tests, but neither has an adapter yet.
+| Go | `pkg/earthsci-ast-go/pkg/esm/units_registry_conformance_test.go` (the exact-scale half is `TestUnitRegistryGoldenExactScales` in `units_exact_scale_test.go`) |
+| TypeScript | `pkg/earthsci-ast-ts/src/unit-registry-conformance.test.ts` (the exact-scale half is in `src/unit-exact-scale.test.ts`) |
 
 The document-level halves of the same contract are
 `tests/valid/units_inventory_registry.esm` (the FF10 units),
@@ -87,23 +86,17 @@ its conversions out as explicit factors, `distance_m * 0.001`). A ratio of two
 commensurate quantities is dimensionless whatever the mile is worth, so a
 binding whose `mi` is 1609.0 still validates these documents clean.
 
-**So scales are pinned HERE and nowhere else, and only for the three bindings
-that read this golden** — Rust (`tests/unit_registry_conformance.rs`), Python
-(`tests/test_unit_registry_conformance.py`) and Julia
-(`test/unit_registry_conformance_test.jl`). Go and TypeScript have no adapter,
-so their scales are pinned only by their own per-binding unit tests
-(`pkg/esm/units_test.go`, `src/unit-conversion.test.ts`), which can drift from
-this golden without anything going red. That is the real remaining gap, and it
-is why `inHg` could go into the Rust table alone and survive: it was named at
-NEITHER layer. A new entry belongs in the golden below AND in one of those
-documents, and closing the gap properly means giving Go and TypeScript an
-adapter that reads this golden.
+**So scales are pinned HERE and nowhere else**, and all five bindings read this
+golden. Until Go and TypeScript had adapters, their scales were pinned only by
+their own per-binding unit tests, which could drift from this golden without
+anything going red — which is how `inHg` went into the Rust table alone and
+survived: it was named at NEITHER layer. A new entry belongs in the golden
+above AND in one of those documents.
 
 ## Known divergences this file deliberately does not pin
 
 Listed in `manifest.json` under `known_divergences_not_pinned_here`, so that a
-green run here is not misread as "the five unit implementations agree". The
-largest is that **Rust still has an SI-prefix mechanism** (`parse_si_prefixed`),
-which §4.8.1 says a binding MUST disable or gate on the table — so Rust resolves
-`Tm`, `dam`, `dg`, `PW`, `fs`, which every other binding rejects. Those strings
-are absent from `reject` for that reason, and the divergence is its own fix.
+green run here is not misread as "the five unit implementations agree" on
+everything. Rust's SI-prefix mechanism (`parse_si_prefixed`), which resolved
+`Tm`, `dam`, `dg`, `PW`, `fs` against §4.8.1's flat table, was the largest; it
+is gone, and those strings are now pinned as rejects.

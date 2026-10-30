@@ -1,0 +1,72 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "ClosedFn_linear_in_reaction_rate",
+    "description": "`interp.linear` inside a REACTION RATE (not a model equation): the axis [300, 200] is decreasing. The argument checks run on every `fn` call wherever it appears.",
+    "authors": [
+      "EarthSciML"
+    ],
+    "created": "2026-10-27T00:00:00Z"
+  },
+  "reaction_systems": {
+    "R": {
+      "species": {
+        "A": {
+          "units": "mol/mol",
+          "default": 1.0
+        }
+      },
+      "parameters": {
+        "T": {
+          "units": "K",
+          "default": 298.0
+        },
+        "k": {
+          "units": "1/s",
+          "default": 1.0
+        }
+      },
+      "reactions": [
+        {
+          "id": "r1",
+          "substrates": [
+            {
+              "species": "A",
+              "stoichiometry": 1
+            }
+          ],
+          "products": null,
+          "rate": {
+            "op": "*",
+            "args": [
+              {
+                "op": "fn",
+                "name": "interp.linear",
+                "args": [
+                  {
+                    "op": "const",
+                    "args": [],
+                    "value": [
+                      1.0,
+                      2.0
+                    ]
+                  },
+                  {
+                    "op": "const",
+                    "args": [],
+                    "value": [
+                      300.0,
+                      200.0
+                    ]
+                  },
+                  "T"
+                ]
+              },
+              "k"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

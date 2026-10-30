@@ -20,10 +20,14 @@
  *     top-level `enums` block (esm-spec §4.5).
  *   - `unknown_enum_symbol` — reference to an unknown member of a declared
  *     enum (esm-spec §4.5).
+ *   - `enum_duplicate_value` — two symbols of one enum map to the same integer
+ *     (esm-spec §9.3). A defect of the `enums` block itself, so it is checked on
+ *     the block before any `enum` op resolves, whether or not an op names
+ *     either symbol.
  */
 
 import type { EsmFile } from './types.js'
-import { isNumericLiteral } from './numeric-literal.js'
+import { isNumericLiteral, numericValue } from './numeric-literal.js'
 import { EXPRESSION_CHILD_KEYS } from './expression.js'
 import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
 
@@ -44,6 +48,33 @@ export class EnumLoweringError extends EsmDiagnosticError {
 }
 
 type EnumsMap = { [k: string]: { [k: string]: number } }
+
+/**
+ * Reject an `enums` block in which two symbols of ONE enum map to the same
+ * integer (esm-spec §9.3). `0` is a value like any other. Values may coincide
+ * across enums: each enum is its own namespace. Anything that is not an object
+ * of objects is left to the schema.
+ */
+export function checkEnumsBlock(block: unknown): void {
+  if (block === null || typeof block !== 'object' || Array.isArray(block)) return
+  for (const [enumName, decl] of Object.entries(block as Record<string, unknown>)) {
+    if (decl === null || typeof decl !== 'object' || Array.isArray(decl)) continue
+    const seen = new Map<number, string>()
+    for (const [symbol, raw] of Object.entries(decl as Record<string, unknown>)) {
+      const value = numericValue(raw)
+      if (value === undefined) continue
+      const first = seen.get(value)
+      if (first !== undefined) {
+        throw new EnumLoweringError(
+          ERROR_CODES.ENUM_DUPLICATE_VALUE,
+          `enum '${enumName}' maps both '${first}' and '${symbol}' to ${value}; ` +
+            'values within one enum must be unique (esm-spec §9.3)',
+        )
+      }
+      seen.set(value, symbol)
+    }
+  }
+}
 
 /** The `const` node `enums[enumName][memberName]` lowers to. */
 function lowerEnumReference(
@@ -156,6 +187,7 @@ function lowerExprUncached(expr: object, enums: EnumsMap, memo: Map<object, unkn
  */
 export function lowerEnums(file: EsmFile): EsmFile {
   const enums = (file as unknown as { enums?: EnumsMap }).enums
+  checkEnumsBlock(enums)
   if (!enums || Object.keys(enums).length === 0) {
     // Still scan: an enum op without a declaration is an error and we
     // want it surfaced even if the user forgot the block.
@@ -190,6 +222,7 @@ export function lowerEnumOpsForFile(
       ? (document as { enums?: unknown }).enums
       : undefined
   const enums = (block !== null && typeof block === 'object' ? block : {}) as EnumsMap
+  checkEnumsBlock(enums)
   const walk = (node: unknown): unknown => {
     if (Array.isArray(node)) return node.map(walk)
     if (node === null || typeof node !== 'object' || isNumericLiteral(node)) return node
@@ -229,6 +262,9 @@ export function lowerEnumOpsForFile(
  * call site. Everything else is lowered with no open names.
  */
 export function lowerMountedDocumentEnums<T>(document: T): T {
+  if (document !== null && typeof document === 'object') {
+    checkEnumsBlock((document as { enums?: unknown }).enums)
+  }
   const lowerTemplates = (templates: Record<string, unknown>): Record<string, unknown> => {
     const out: Record<string, unknown> = {}
     for (const [name, decl] of Object.entries(templates)) {

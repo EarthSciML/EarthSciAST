@@ -11,7 +11,12 @@ whose observed was defined by a ``table_lookup`` therefore validated, and then
 could not evaluate a single inline-test assertion that depended on it, while the
 same lookup written out by hand worked (issue #188).
 
-**This runs at BUILD, not at load, and that is the point.** §9.5.4 makes
+The §9.5.5 CHECKS are not deferred to this pass: the loader and
+``validate()`` run :func:`check_function_tables` on every table and
+:func:`check_table_lookup` on every lookup (§9.5.5 "When the table checks
+run"). Only the rewrite itself waits for the build.
+
+**The rewrite runs at BUILD, not at load, and that is the point.** §9.5.4 makes
 ``function_tables`` / ``table_lookup`` first-class AUTHORED constructs that must
 survive a round trip, and this binding serializes the typed
 :class:`~earthsci_ast.esm_types.EsmFile` it loaded (``load_document`` ->
@@ -62,7 +67,13 @@ from .expr_walk import any_child, map_children
 if TYPE_CHECKING:
     from .flatten import FlattenedEquation, FlattenedSystem, FlattenedVariable
 
-__all__ = ["TableLookupError", "lower_flattened_table_lookups", "lower_table_lookups"]
+__all__ = [
+    "TableLookupError",
+    "check_function_tables",
+    "check_table_lookup",
+    "lower_flattened_table_lookups",
+    "lower_table_lookups",
+]
 
 #: The op this pass consumes.
 _TABLE_LOOKUP = "table_lookup"
@@ -104,11 +115,16 @@ def lower_table_lookups(file: EsmFile) -> EsmFile:
     handed, including one an inline-test runner already lowered.
 
     Raises :class:`TableLookupError` carrying one of the esm-spec §9.5.5 codes
-    (``table_lookup_unknown_table``, ``table_lookup_axis_name_mismatch``,
-    ``table_lookup_output_out_of_range``, ``table_interpolation_axes_mismatch``,
-    ``table_data_shape_mismatch``, ``table_axis_nan``), or
+    -- ``table_lookup_unknown_table``; then the first of the ten table checks
+    the referenced table fails, in §9.5.5's pinned order (see
+    :func:`_validate_table`); then ``table_lookup_args_nonempty``,
+    ``table_lookup_axis_name_mismatch`` and ``table_lookup_output_out_of_range``
+    (:func:`check_table_lookup`); then, on a lookup that passed all of those,
     ``table_out_of_bounds_unsupported`` for the §9.5.1 ``out_of_bounds:
-    "error"`` mode this binding does not implement (§9.5.3a).
+    "error"`` mode this binding does not implement (§9.5.3a). The loader has
+    already run every check but the last (:func:`check_function_tables`,
+    :func:`check_table_lookup`); they are repeated here for a document built
+    or edited in memory.
     """
     tables = file.function_tables or {}
     if not tables:
@@ -513,8 +529,32 @@ def _lower_expr(expr: Expr, tables: dict[str, FunctionTable]) -> Expr:
     return _lower_node(node, tables)
 
 
-def _lower_node(node: ExprNode, tables: dict[str, FunctionTable]) -> ExprNode:
-    """The §9.5.3 lowering of one ``table_lookup`` node."""
+def check_function_tables(tables: dict[str, FunctionTable] | None) -> None:
+    """Run the ten esm-spec §9.5.5 table checks on EVERY ``function_tables``
+    entry, in declaration order, whether or not any ``table_lookup`` names it
+    (§9.5.5 "When the table checks run", ruling Q-106). Raises
+    :class:`TableLookupError` with the first code the first failing table
+    breaks. The loader and ``validate()`` run this; the lowering repeats it per
+    lookup."""
+    for table_id, table in (tables or {}).items():
+        _validate_table(table, table_id)
+
+
+def check_table_lookup(node: ExprNode, tables: dict[str, FunctionTable] | None) -> None:
+    """Check one ``table_lookup`` node in the esm-spec §9.5.5 order:
+    ``table_lookup_unknown_table``; the ten checks of the table it names;
+    ``table_lookup_args_nonempty``, ``table_lookup_axis_name_mismatch``,
+    ``table_lookup_output_out_of_range`` (ruling Q-107). Raises
+    :class:`TableLookupError`. ``table_out_of_bounds_unsupported`` is not part
+    of this check: it belongs where the lookup lowers (§9.5.3a)."""
+    _check_lookup(node, tables or {})
+
+
+def _check_lookup(
+    node: ExprNode, tables: dict[str, FunctionTable]
+) -> tuple[FunctionTable, list[Expr], int]:
+    """:func:`check_table_lookup`, returning the table, the per-axis inputs
+    in declared axis order, and the 0-based output row."""
     table_id = node.table
     if not table_id:
         raise _err(
@@ -528,6 +568,20 @@ def _lower_node(node: ExprNode, tables: dict[str, FunctionTable]) -> ExprNode:
             f"`table_lookup` references table `{table_id}`, which the document's "
             f"`function_tables` block does not declare",
         )
+    # The table is checked as soon as the id resolves, before anything about
+    # the lookup itself (formal: `Esm.Closed.Tables.validateTable`).
+    _validate_table(table, table_id)
+    inputs = _axis_inputs(node, table, table_id)
+    output = _output_index(node, table, table_id)
+    return table, inputs, output
+
+
+def _lower_node(node: ExprNode, tables: dict[str, FunctionTable]) -> ExprNode:
+    """The §9.5.3 lowering of one ``table_lookup`` node."""
+    table_id = node.table
+    table, inputs, output = _check_lookup(node, tables)
+    # Raised only on a lookup that passed every check (esm-spec §9.5.5 "Order
+    # of the lookup checks"; §9.5.3a).
     if table.out_of_bounds == "error":
         raise _err(
             ErrorCode.TABLE_OUT_OF_BOUNDS_UNSUPPORTED,
@@ -538,50 +592,222 @@ def _lower_node(node: ExprNode, tables: dict[str, FunctionTable]) -> ExprNode:
             f"is a wrong number with nothing in the result to say so",
         )
 
-    inputs = _axis_inputs(node, table, table_id)
-    data = _output_slice(table, _output_index(node, table, table_id), table_id)
+    # Without `outputs` the table is single-output and `data` is the whole
+    # literal (§9.5.1); with them, row `output` of the leading dimension, which
+    # `_validate_table` has proven exists.
+    data = table.data if table.outputs is None else table.data[output]
     kind = table.interpolation or "linear"
     axes = table.axes
 
-    if kind == "linear" and len(axes) == 1:
-        return _closed_fn(
-            "interp.linear", [_const(data), _axis_const(axes[0], table_id), inputs[0]]
-        )
-    if kind == "bilinear" and len(axes) == 2:
+    if kind == "linear":
+        return _closed_fn("interp.linear", [_const(data), _const(axes[0].values), inputs[0]])
+    if kind == "bilinear":
         return _closed_fn(
             "interp.bilinear",
             [
                 _const(data),
-                _axis_const(axes[0], table_id),
-                _axis_const(axes[1], table_id),
+                _const(axes[0].values),
+                _const(axes[1].values),
                 inputs[0],
                 inputs[1],
             ],
         )
-    if kind == "nearest" and len(axes) == 1:
-        # `nearest` is an `index` of the table slice at the searchsorted
-        # position, not an `interp` blend.
-        return ExprNode(
-            op="index",
-            args=[
-                _const(data),
-                _closed_fn("interp.searchsorted", [inputs[0], _axis_const(axes[0], table_id)]),
-            ],
+    return _nearest(data, axes[0], inputs[0])
+
+
+#: The number of axes each `interpolation` admits (§9.5.1).
+_INTERPOLATION_ARITY = {"linear": 1, "bilinear": 2, "nearest": 1}
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _has_shape(value: Any, shape: list[int]) -> bool:
+    """Whether the nesting of ``value`` is EXACTLY ``shape``: a number for
+    ``[]``, else a list of ``shape[0]`` entries each of shape ``shape[1:]``. A
+    non-numeric leaf (a string, a bool, ``None``) matches no shape."""
+    if not shape:
+        return _is_number(value)
+    return (
+        isinstance(value, list)
+        and len(value) == shape[0]
+        and all(_has_shape(v, shape[1:]) for v in value)
+    )
+
+
+def _any_non_finite(value: Any) -> bool:
+    """Whether a leaf of ``value`` is NaN, +Inf or -Inf (esm-spec §9.5.1,
+    ruling Q-109)."""
+    if isinstance(value, list):
+        return any(_any_non_finite(v) for v in value)
+    return isinstance(value, float) and not math.isfinite(value)
+
+
+def _first_duplicate(names: list[Any]) -> Any:
+    seen: set[Any] = set()
+    for name in names:
+        if name in seen:
+            return name
+        seen.add(name)
+    return None
+
+
+def _validate_table(table: FunctionTable, table_id: str) -> None:
+    """The esm-spec §9.5.5 load-time checks on one function table, raising the
+    FIRST rule it breaks in the spec's pinned order. Each step covers every
+    axis before the next begins:
+
+    1. ``table_axis_duplicate_name``;
+    2. ``table_outputs_duplicate_name``;
+    3. ``table_interpolation_axes_mismatch``;
+    4. ``table_axis_nan`` (a value that is not finite, in any axis);
+    5. ``table_axis_non_monotonic`` (any axis);
+    6. ``table_axis_too_short`` (any axis);
+    7. ``table_outputs_length_mismatch``;
+    8. ``table_data_shape_mismatch`` (the nesting of ``data``);
+    9. ``table_data_nan`` (a ``data`` leaf that is not finite);
+    10. ``table_data_shape_mismatch`` (the ``shape`` assertion).
+
+    The order is the formal model's (``Esm.Closed.Tables.validateTable``).
+    Step 4 rejects a NaN or infinite axis entry (ruling Q-109) and also a
+    non-numeric one, since §9.5.1 requires axis values to be finite floats;
+    step 8 treats a non-numeric ``data`` leaf as a nesting mismatch.
+    """
+    axes = table.axes
+    duplicate = _first_duplicate([axis.name for axis in axes])
+    if duplicate is not None:
+        raise _err(
+            ErrorCode.TABLE_AXIS_DUPLICATE_NAME,
+            f"table `{table_id}` declares two axes named `{duplicate}` (esm-spec §9.5.1)",
         )
-    raise _err(
-        ErrorCode.TABLE_INTERPOLATION_AXES_MISMATCH,
-        f'table `{table_id}` declares `interpolation: "{kind}"` over {len(axes)} axes; '
-        f"`linear` and `nearest` require 1, `bilinear` requires 2 (esm-spec §9.5.1)",
+    outputs = table.outputs
+    if outputs is not None:
+        duplicate = _first_duplicate(list(outputs))
+        if duplicate is not None:
+            raise _err(
+                ErrorCode.TABLE_OUTPUTS_DUPLICATE_NAME,
+                f"table `{table_id}` declares the output `{duplicate}` twice (esm-spec §9.5.1)",
+            )
+    kind = table.interpolation or "linear"
+    if _INTERPOLATION_ARITY.get(kind) != len(axes):
+        raise _err(
+            ErrorCode.TABLE_INTERPOLATION_AXES_MISMATCH,
+            f'table `{table_id}` declares `interpolation: "{kind}"` over {len(axes)} axes; '
+            f"`linear` and `nearest` require 1, `bilinear` requires 2 (esm-spec §9.5.1)",
+        )
+    for axis in axes:
+        for value in axis.values:
+            if not _is_number(value) or not math.isfinite(value):
+                raise _err(
+                    ErrorCode.TABLE_AXIS_NAN,
+                    f"table `{table_id}`: axis `{axis.name}` carries the value {value!r}; "
+                    f"axis `values` must be strictly-increasing finite floats "
+                    f"(esm-spec §9.5.1)",
+                )
+    for axis in axes:
+        values = axis.values
+        for i in range(1, len(values)):
+            if not values[i] > values[i - 1]:
+                raise _err(
+                    ErrorCode.TABLE_AXIS_NON_MONOTONIC,
+                    f"table `{table_id}`: axis `{axis.name}` is not strictly increasing "
+                    f"(values[{i}]={values[i]!r} after values[{i - 1}]="
+                    f"{values[i - 1]!r}; esm-spec §9.5.1)",
+                )
+    for axis in axes:
+        if len(axis.values) < 2:
+            raise _err(
+                ErrorCode.TABLE_AXIS_TOO_SHORT,
+                f"table `{table_id}`: axis `{axis.name}` has {len(axis.values)} values; "
+                f"an axis needs at least 2 (esm-spec §9.5.1)",
+            )
+    data = table.data
+    if outputs is not None and isinstance(data, list) and len(data) != len(outputs):
+        raise _err(
+            ErrorCode.TABLE_OUTPUTS_LENGTH_MISMATCH,
+            f"table `{table_id}`: `data` has {len(data)} rows but the table declares "
+            f"{len(outputs)} outputs; its leading dimension must equal `len(outputs)` "
+            f"(esm-spec §9.5.1)",
+        )
+    implied = [len(axis.values) for axis in axes]
+    if outputs is not None:
+        implied = [len(outputs), *implied]
+    if not _has_shape(data, implied):
+        raise _err(
+            ErrorCode.TABLE_DATA_SHAPE_MISMATCH,
+            f"table `{table_id}`: the nesting of `data` is not the shape {implied} its "
+            f"axes{' and outputs' if outputs is not None else ''} imply (esm-spec §9.5.1)",
+        )
+    if _any_non_finite(data):
+        raise _err(
+            ErrorCode.TABLE_DATA_NAN,
+            f"table `{table_id}`: `data` holds a leaf that is not finite (NaN or "
+            f"±Inf); `data` leaves must be finite numbers (esm-spec §9.5.1)",
+        )
+    if table.shape is not None and list(table.shape) != implied:
+        raise _err(
+            ErrorCode.TABLE_DATA_SHAPE_MISMATCH,
+            f"table `{table_id}`: the `shape` assertion {list(table.shape)} differs from "
+            f"the shape {implied} its axes{' and outputs' if outputs is not None else ''} "
+            f"imply (esm-spec §9.5.1)",
+        )
+
+
+def _nearest(data: Any, axis: FunctionTableAxis, x: Expr) -> ExprNode:
+    """The §9.5.3 ``interpolation: "nearest"`` composition, built node for node
+    as the spec writes it (same ops, same operand order), so every binding
+    decides a tie on the same two ``binary64`` differences::
+
+        ifelse(x == x,
+               index(D, ifelse(A[hi] - x < x - A[lo], hi, lo)),
+               x)
+
+    with ``j = interp.searchsorted(x, A)``, ``lo = max(j - 1, 1)`` and
+    ``hi = min(j, N)``. A tie goes to ``lo``; both indices stay in ``1..N``, so
+    a query outside the axis clamps to the end knot and no ``index`` reads out
+    of range; a NaN query takes the outer else branch and returns NaN. Every use
+    of ``x`` and ``A`` is a fresh copy, so the lowered tree shares no nodes.
+    """
+    n = len(axis.values)
+    axis_const = _const(axis.values)
+
+    def xq() -> Expr:
+        return copy.deepcopy(x)
+
+    def a() -> ExprNode:
+        return copy.deepcopy(axis_const)
+
+    def j() -> ExprNode:
+        return _closed_fn("interp.searchsorted", [xq(), a()])
+
+    def lo() -> ExprNode:
+        return ExprNode(op="max", args=[ExprNode(op="-", args=[j(), 1]), 1])
+
+    def hi() -> ExprNode:
+        return ExprNode(op="min", args=[j(), n])
+
+    upper_gap = ExprNode(op="-", args=[ExprNode(op="index", args=[a(), hi()]), xq()])
+    lower_gap = ExprNode(op="-", args=[xq(), ExprNode(op="index", args=[a(), lo()])])
+    knot = ExprNode(op="ifelse", args=[ExprNode(op="<", args=[upper_gap, lower_gap]), hi(), lo()])
+    return ExprNode(
+        op="ifelse",
+        args=[
+            ExprNode(op="==", args=[xq(), xq()]),
+            ExprNode(op="index", args=[_const(data), knot]),
+            xq(),
+        ],
     )
 
 
 def _axis_inputs(node: ExprNode, table: FunctionTable, table_id: str) -> list[Expr]:
     """The node's per-axis input expressions, in the table's DECLARED axis order
     (which is the order of ``data``'s inner dimensions, and therefore the
-    argument order of ``interp.bilinear``)."""
+    argument order of ``interp.bilinear``). An absent ``args`` is ``[]``; a
+    non-empty one is ``table_lookup_args_nonempty`` (§9.5.2)."""
     if node.args:
         raise _err(
-            ErrorCode.TABLE_LOOKUP_AXIS_NAME_MISMATCH,
+            ErrorCode.TABLE_LOOKUP_ARGS_NONEMPTY,
             f"`table_lookup` on table `{table_id}` carries {len(node.args)} positional "
             f"`args`; the per-axis inputs live under `axes` and `args` MUST be empty "
             f"(esm-spec §9.5.2)",
@@ -658,41 +884,6 @@ def _output_index(node: ExprNode, table: FunctionTable, table_id: str) -> int:
             f"outputs ({', '.join(outputs)})",
         )
     return outputs.index(output)
-
-
-def _output_slice(table: FunctionTable, output: int, table_id: str) -> Any:
-    """The ``data`` sub-array the lowered ``const`` carries: row ``output`` of
-    the leading dimension for a multi-output table, and the whole literal for a
-    single-output one (which has no leading output dimension, §9.5.1)."""
-    if table.outputs is None:
-        return table.data
-    if not isinstance(table.data, list) or output >= len(table.data):
-        raise _err(
-            ErrorCode.TABLE_DATA_SHAPE_MISMATCH,
-            f"table `{table_id}`: `data` has no row {output} for the selected output — "
-            f"its leading dimension must equal `len(outputs)` (esm-spec §9.5.1)",
-        )
-    return table.data[output]
-
-
-def _axis_const(axis: FunctionTableAxis, table_id: str) -> ExprNode:
-    """``{"op": "const", "value": <axis values>}`` for one declared axis."""
-    for value in axis.values:
-        if not isinstance(value, (int, float)) or isinstance(value, bool):
-            raise _err(
-                ErrorCode.TABLE_AXIS_NAN,
-                f"table `{table_id}`: axis `{axis.name}` carries the non-numeric value "
-                f"{value!r}; axis `values` must be strictly-increasing finite floats "
-                f"(esm-spec §9.5.1)",
-            )
-        if not math.isfinite(value):
-            raise _err(
-                ErrorCode.TABLE_AXIS_NAN,
-                f"table `{table_id}`: axis `{axis.name}` carries the non-finite value "
-                f"{value!r}; axis `values` must be strictly-increasing finite floats "
-                f"(esm-spec §9.5.1)",
-            )
-    return _const(axis.values)
 
 
 def _const(value: Any) -> ExprNode:

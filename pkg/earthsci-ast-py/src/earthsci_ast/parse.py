@@ -1439,30 +1439,25 @@ def _parse_esm_data(data: dict[str, Any]) -> EsmFile:
     # Parse top-level enums block (esm-spec §9.3). Values are ANY integer --
     # negative, zero or positive: an enum member is a categorical code, not a
     # 1-based position (CONFORMANCE_SPEC, "An `enums` Member Is a Code, Not
-    # a Position"). Unique-within-enum is enforced here, since a JSON Schema
-    # cannot express it.
+    # a Position"). Unique-within-enum (`enum_duplicate_value`) is enforced
+    # here, since a JSON Schema cannot express it.
     enums: dict[str, dict[str, int]] = {}
     if "enums" in data and data["enums"] is not None:
+        from .registered_functions import check_enum_block
+
+        check_enum_block(data["enums"])
         for enum_name, mapping in data["enums"].items():
             if not isinstance(mapping, dict):
                 raise ParseError(
                     f"enums/{enum_name}: must be an object mapping symbol names "
                     f"to integers (esm-spec §9.3)"
                 )
-            seen_values: dict[int, str] = {}
             decoded: dict[str, int] = {}
             for sym, val in mapping.items():
                 if not isinstance(val, int) or isinstance(val, bool):
                     raise ParseError(
                         f"enums/{enum_name}/{sym}: value must be an integer (got {val!r})"
                     )
-                if val in seen_values:
-                    raise ParseError(
-                        f"enums/{enum_name}: duplicate value {val} for symbols "
-                        f"`{seen_values[val]}` and `{sym}` (values must be unique "
-                        f"within an enum, esm-spec §9.3)"
-                    )
-                seen_values[val] = sym
                 decoded[sym] = val
             enums[enum_name] = decoded
 
@@ -3073,6 +3068,14 @@ def _load_data(
     if top_discrete_events:
         for ev in top_discrete_events:
             esm_file.events.append(_parse_discrete_event(ev))
+
+    # The §9.2 closed-function argument checks on every `interp.*` `fn` node and
+    # the §9.5.5 checks on every function table and `table_lookup`, on the tree
+    # as loaded (templates expanded, enums lowered): they run at load, not when
+    # something first evaluates or lowers the node (ruling Q-106).
+    from .load_checks import check_document
+
+    check_document(esm_file)
 
     return esm_file
 

@@ -1759,7 +1759,7 @@ A binding MUST NOT introduce a ninth axis, and MUST NOT map a registry symbol on
 | Electromagnetic | `C` `V` `Ohm` `F` `T` |
 | Temperature / angle | `degC` `degF` `deg` |
 | Solid angle | `sr` (steradian — `rad²`) |
-| Mixing ratios (dimensionless) | `ppm` `ppb` `ppt` `ppmv` `ppbv` `pptv` |
+| Mixing ratios (dimensionless) | `ppm` `ppb` `ppt` `ppmv` `ppbv` `pptv` (`ppt` is parts per **trillion**; scales below) |
 | Fractions (dimensionless) | `%` (scale 0.01) · `psu` (scale 1 — practical salinity is a pure number by definition) |
 | Counts (dimensionless) | `molec` `molecule` `individuals` `vehicles` `units` `count` |
 | Column amount | `Dobson` `DU` |
@@ -1768,20 +1768,25 @@ A binding MUST NOT introduce a ninth axis, and MUST NOT map a registry symbol on
 
 **The US customary entries are in the table because US emission inventories are written in them.** The EPA FF10 point-source format — the input every US air-quality model reads — stores stack height and stack diameter in **feet**, stack velocity in **feet per second**, and the annual emission total in **short tons per year**. EPA MOVES, the onroad and nonroad inventory model, stores link length in **miles** and link speed in **mi/h**, bins its nonroad model on engine ratings in **horsepower**, tabulates every emission rate in **g/(hp·h)** and brake-specific fuel consumption in **lb/(hp·h)**, and stores fuel density and its refuelling and dioxin rates per **US gallon**. A format for air-quality models that cannot spell the units its own input files use forces every such column to be declared in a unit it is not stored in, and that lie is invisible to a dimensional checker: `ft` declared as `m` is dimensionally perfect and numerically wrong by 3.28.
 
-Every one of these is **exact by definition** (`inHg`, by convention), and the **scale** — not only the dimension — is normative, because a scale error is invisible to dimensional analysis:
+Every one of these is **exact by definition** (`inHg`, by convention), and the **scale** — not only the dimension — is normative, because a scale error is invisible to dimensional analysis. The table also pins the calorie and the mixing ratios, whose names alone leave the scale open:
 
 | Symbol | Scale | Exact because |
 |---|---|---|
 | `ft` | `0.3048` m | the international foot, 1959 agreement |
 | `mi` | `1609.344` m | exactly `5280 × ft`, same agreement |
 | `lb` | `0.45359237` kg | the international avoirdupois pound, 1959 — and exactly `short_ton / 2000` |
-| `hp` | `745.6998715822702` W | 550 ft·lbf/s = `550 × ft × lb × 9.80665`, folded LEFT TO RIGHT — unlike `mi` and `short_ton` this product is not exactly representable, so the fold order is what makes every binding land on the same double; NIST SP 811 App. B gives 7.456 999 E+02 W |
+| `hp` | `745.6998715822702` W | 550 ft·lbf/s = `550 × ft × lb × 9.80665`, folded LEFT TO RIGHT — this product of rounded literals lands on different doubles under different fold orders, and its exact value is not a double, so the fold order is what makes every binding land on the same double (proven in `formal/Esm/Units/Identities.lean`); NIST SP 811 App. B gives 7.456 999 E+02 W |
 | `gal` | `0.003785411784` m³ | 231 in³, the US **liquid** gallon; NIST SP 811 App. B |
 | `inHg` | `3386.388640341` Pa | exactly `25.4 × mmHg`, the conventional value; NIST SP 811 |
 | `Torr` | `101325/760` Pa | exactly `atm / 760`, by definition — NOT the same as `mmHg` (133.322387415 Pa), and NOT a rounded decimal |
 | `psi` | `0.45359237 × 9.80665 / 0.0254²` Pa (≈ `6894.757293168361`) | lbf/in²: the international pound, standard gravity and the international inch, all exact |
 | `degF` | `5/9` K | the Fahrenheit degree; its affine offset is not modelled (below) |
 | `BTU` | `1055.05585262` J | the International Table BTU, exact by definition — NOT the rounded `1055.06` some units libraries carry |
+| `cal` | `4.184` J | the **thermochemical** calorie, exact by definition — NOT the International Table calorie (`4.1868` J) |
+| `kcal` | `4184` J | exactly `1000 × cal` |
+| `ppm` `ppmv` | `1e-6` | parts per million |
+| `ppb` `ppbv` | `1e-9` | parts per billion (10⁹) |
+| `ppt` `pptv` | `1e-12` | parts per **trillion** (10¹²) — never parts per thousand |
 
 `hp` and `gal` are why the scale is normative and not merely recommended: the **metric** horsepower (PS) is 735.49875 W and the **imperial** gallon is 4.54609 L. Each shares its dimension with the entry above — 1.4% and 20% away respectively — so a binding that picks the other convention passes every dimensional check and mis-scales every rate in the file. A binding MUST use the values above.
 
@@ -1824,22 +1829,35 @@ Every one of these is **exact by definition** (`inHg`, by convention), and the *
 
 Superscripts normalise **positionally**: a run of `⁻`? followed by superscript digits becomes `^` + the ASCII transliteration of that run.
 
+The table is the whole rewrite. In particular a degree sign is rewritten only as part of `°C` or `°F`: a bare `°` (and `°K`) is not rewritten, so it stays an unexpected character and the string does not resolve. The angle is spelled `deg`.
+
 **The grammar**, applied to the normalised string:
 
 ```
 unit     := term (('*' | '/')? term)*
 term     := atom (('^' | '**') exponent)?
-exponent := integer | decimal | '(' integer '/' integer ')'
+exponent := '-'? (integer | decimal) | '(' '-'? integer '/' '-'? integer ')'
 atom     := '1' | symbol | '(' unit ')'
+integer  := digit+
+decimal  := digit+ '.' digit+
 ```
 
-- **A numeric atom is legal ONLY when its value is exactly `1`.** The leading `1` of `"1/s"` is the whole reason `atom` admits a number at all; any OTHER number is a **scaling factor**, and a unit string denotes a *unit*, not a *quantity*. `"1000/s"` and `"0.5 m"` are hard errors. This is pinned because the alternative produced three different answers for one string: an author writing `"(m/s)^-1/3"` — reaching for a rational exponent — gets `((m/s)^-1)/3` under this grammar, and the bindings variously **dropped** the 1/3 (leaving `s/m`), **retained** it (leaving `s/m` scaled by 1/3), or **rejected** the whole string. None of the three is what the author meant. With the scaling factor illegal, `"(m/s)^(-1/3)"` is the only spelling of that unit and the mistake is a diagnostic instead of a silently wrong dimension. The diagnostic MUST say that a number other than 1 is a scaling factor and that a rational exponent is spelled `^(p/q)`.
+**Tokens.** The normalised string is read as a sequence of tokens: the operators `*`, `**` (one token, never two `*`), `/`, `^`, `-`, the parentheses `(` `)`, the one-character symbol `%`, and **runs**. A run is a maximal sequence of the identifier characters `A`–`Z`, `a`–`z`, `0`–`9` and `_`. A run of digits alone — optionally followed by `.` and a second run of digits alone — is a NUMBER; every other run is a SYMBOL. Whitespace (space, tab, carriage return, line feed) separates tokens and is otherwise ignored, except that whitespace between two terms is multiplication (below). Any other character — `+`, `,`, a `.` that is not inside a number, a bare `°`, a non-ASCII letter left after normalisation — makes the string unresolvable.
+
+A conforming parser MUST resolve exactly the strings this grammar and these token rules derive, and MUST NOT resolve any other string. The consequences that are easy to get wrong:
+
+- **Only `""` is the empty unit.** A whitespace-only string (`" "`, `"\t"`) has no tokens, so it derives no `unit` and does not resolve; it is not a spelling of dimensionless. The dimensionless spellings are the three §4.8.1 lists: `""`, `"1"`, `"dimensionless"`.
+- **An exponent has no `+` sign and no exponent notation.** `m^+2` does not resolve (`+` is not a token; a positive exponent is unsigned). `m^1e3` does not resolve: `1e3` is one run containing a letter, so it is a symbol, not a number, and a symbol is not an exponent.
+- **Whitespace may stand between any two tokens**, so `m ^ 2`, `kg * m / s ^ 2`, `m^- 1` and `(m/s)^( -1 / 3 )` resolve exactly as their unspaced spellings do. Only between two TERMS does whitespace carry meaning (multiplication).
+- **`%` is a token on its own, whatever is adjacent.** `%h` is `%`·`h` and `%/h` is `%`/`h`, exactly as `% h` is.
+
+- **A numeric atom is legal ONLY when it is spelled exactly `1`.** The leading `1` of `"1/s"` is the whole reason `atom` admits a number at all; any OTHER number is a **scaling factor**, and a unit string denotes a *unit*, not a *quantity*. `"1000/s"` and `"0.5 m"` are hard errors, and so are `"01/s"` and `"1.0/s"`: the atom is the literal `1`, not a number whose value is one, and those two get the same scaling-factor diagnostic as `"2/s"`. This is pinned because the alternative produced three different answers for one string: an author writing `"(m/s)^-1/3"` — reaching for a rational exponent — gets `((m/s)^-1)/3` under this grammar, and the bindings variously **dropped** the 1/3 (leaving `s/m`), **retained** it (leaving `s/m` scaled by 1/3), or **rejected** the whole string. None of the three is what the author meant. With the scaling factor illegal, `"(m/s)^(-1/3)"` is the only spelling of that unit and the mistake is a diagnostic instead of a silently wrong dimension. The diagnostic MUST say that a number other than 1 is a scaling factor and that a rational exponent is spelled `^(p/q)`.
 - **Exponents are RATIONAL, not integer.** `2`, `-1`, `0.5`, `1.5`, `(1/2)` are all admissible. An integer-only grammar cannot express `1/s^0.5` — the intensity of a Wiener noise term, which is the unit of every `wiener`-updated parameter in an SDE (`tests/fixtures/sde/*.esm`) — and under the §4.8.4 hard-error severity an integer-only parser would FALSELY REJECT every conforming SDE file in the corpus. A *symbolic* exponent in a unit string remains inadmissible; a symbolic exponent in an *expression* is a different case (§4.8.4).
 - **Whitespace between terms means MULTIPLICATION**, as in pint and UDUNITS — `"ppb^-1 s^-1"` is `ppb⁻¹·s⁻¹`. This is what makes a species tag (§4.8.1) illegal rather than merely discouraged.
 - **`*` and `/` are ONE precedence level, evaluated LEFT to RIGHT.** `"J/mol*K"` is `(J/mol)*K` = `J·mol⁻¹·K`, NOT `J/(mol·K)`. A parser that gives `*` a higher precedence than `/` silently negates the exponent of every symbol after the first `/` — it read `J/mol*K` as `J·mol⁻¹·K⁻¹` — and, because the result is a *plausible* dimension, nothing downstream can detect it. Likewise `"kg/m*s"` is `kg·m⁻¹·s`, and `"L/mol/s"` is `L·mol⁻¹·s⁻¹`.
 - **Parentheses are REQUIRED for a compound denominator**: `"J/(mol*K)"`, `"cm^3/(molec*s)"`. A parser that cannot handle parentheses reads `J/(mol*K)` as dimensionless and silently disables every check downstream of it.
-- A `symbol` is a maximal run of characters that is a §4.8.1 table key. Table keys are alphanumeric with two exceptions — `%` and the empty string — so a lexer MUST admit `%` as a symbol token (`"%"`, `"%/h"`).
-- A digit run that is NOT separated from a symbol by `^`/`**` is a *different symbol*, not an implicit exponent: `"cm3"` and `"m/s2"` do not resolve (`cm3` is not a table key). Write `"cm^3"`, `"m/s^2"`.
+- A `symbol` is a whole run (the token rules above), and it resolves only when the WHOLE run is a §4.8.1 table key. A run is never split into a table-key prefix and a remainder: `s1`, `kgm`, `1s` and `mil` are each one symbol, none is a table key, and none resolves — `s1` is not `s`·`1`, `kgm` is not `kg`·`m`. Table keys are alphanumeric, plus `_` (as in `short_ton`), with two further exceptions — `%` and the empty string — so a lexer MUST admit `%` as a symbol token (`"%"`, `"%/h"`).
+- A digit run that is NOT separated from a symbol by `^`/`**` is part of the same run, so it makes a *different symbol*, not an implicit exponent: `"cm3"` and `"m/s2"` do not resolve (`cm3` is not a table key). Write `"cm^3"`, `"m/s^2"`.
 
 #### 4.8.3 Dimensional rules for operators
 
@@ -4284,7 +4302,7 @@ The v1 set is intentionally narrow: calendar arithmetic on UTC time, plus a sing
 
 #### `datetime.*` — calendar decomposition
 
-Decomposes a UTC scalar time into proleptic-Gregorian calendar fields. All entries are pure: same input → same output, no system-clock or timezone consultation. Bindings MUST use exact integer arithmetic on the decomposed `(date, time-of-day)` pair after a single floor-divmod by 86400; this guarantees per-binding agreement to the integer (zero ulp drift on the integer outputs, ≤ 1 ulp on `julian_day` because of one floating-point divide).
+Decomposes a UTC scalar time into proleptic-Gregorian calendar fields. All entries are pure: same input → same output, no system-clock or timezone consultation. Bindings MUST use exact integer arithmetic on the decomposed `(date, time-of-day)` pair after a single floor-divmod by 86400: the day number is `floor(t_utc / 86400)` and the time of day is `t_utc − 86400·floor(t_utc / 86400)`, both taken exactly (as real numbers, not as rounded binary64 operations), so the time of day lies in `[0, 86400)`. `hour`, `minute` and `second` come from `floor(time of day)`; a fractional `t_utc` therefore floors toward −∞ and never rounds up into the next second. This guarantees per-binding agreement to the integer (zero ulp drift on the integer outputs, ≤ 1 ulp on `julian_day`, whose binary64 evaluation is pinned below).
 
 | Name | Arity | Args | Return | Range / convention |
 |---|---|---|---|---|
@@ -4295,31 +4313,35 @@ Decomposes a UTC scalar time into proleptic-Gregorian calendar fields. All entri
 | `datetime.minute` | 1 | `t_utc: scalar [s]` | integer scalar (0..59) | UTC minute |
 | `datetime.second` | 1 | `t_utc: scalar [s]` | integer scalar (0..59) | UTC second (no leap-second slot) |
 | `datetime.day_of_year` | 1 | `t_utc: scalar [s]` | integer scalar (1..366) | 1 = Jan 1 |
-| `datetime.julian_day` | 1 | `t_utc: scalar [s]` | scalar | continuous Julian Day Number incl. fractional time-of-day |
+| `datetime.julian_day` | 1 | `t_utc: scalar [s]` | scalar | continuous Julian Date incl. fractional time-of-day |
 | `datetime.is_leap_year` | 1 | `t_utc: scalar [s]` | integer scalar (0 or 1) | 1 if the proleptic-Gregorian year of `t_utc` is a leap year, else 0 |
 
 **Boundary semantics:**
 
 - Negative `t_utc` (pre-1970) is supported. The proleptic-Gregorian calendar extends backwards without modification; `datetime.year` of a pre-1970 instant is the proleptic-Gregorian year (e.g. `1969`, `1900`, `-1` for 2 BC by ISO 8601 convention).
-- `datetime.julian_day` returns the standard JDN convention (JD 0 = noon UTC on 4713 BC Jan 1, proleptic Julian calendar). The reference computation is the Fliegel–van Flandern (1968) integer formula applied to the date part of `t_utc`, plus `(time_of_day_seconds − 43200) / 86400` for the fractional part. Bindings MAY use a faster equivalent if it is bit-exact on the supported domain.
-- All other entries decompose using the rule that the calendar date is `floor(t_utc / 86400)` days after 1970-01-01, with `t_utc mod 86400` giving the time-of-day seconds. Negative-modulo edge cases use Python-style floored division (so `floor(-1.0 / 86400) = -1` and `(-1.0) mod 86400 = 86399`).
+- `datetime.julian_day` is the standard Julian Date (JD 0 = noon UTC on 4713 BC January 1, proleptic Julian calendar) for every `t_utc`: exactly `t_utc / 86400 + 2440587.5`. Its result MUST be the binary64 value of `(d + 2440588) + ((s − 43200) + (t_utc − floor(t_utc))) / 86400`, evaluated in that order from the exact split above, where `d = floor(t_utc / 86400)` is the day number and `s = floor(t_utc) − 86400·d` is the whole second of the day. `d + 2440588` and `s − 43200` are exact integers and `t_utc − floor(t_utc)` is exact in binary64 except when −0.5 < t_utc < 0 (there `1 + t_utc` can round), so beyond that subtraction only the inner addition, the division and the outer addition round; the result is within 1 ulp of the exact Julian Date. Bindings MAY use another computation that gives the same binary64 result. *Informative:* from −4800-03-01 on, the Fliegel–van Flandern (1968) integer formula (with truncating division) applied to the calendar date of `t_utc` equals `d + 2440588`. Before that date it differs by −2 to +1 days, and it is not the result there.
+- Every `datetime.*` function, whatever field it returns, MUST raise `closed_function_overflow` when the proleptic-Gregorian year of `t_utc` is outside the signed 32-bit range (before −2147483648-01-01T00:00:00Z, or at or after 2147483648-01-01T00:00:00Z), and when `t_utc` is NaN or ±Inf.
+- All other entries decompose using the rule that the calendar date is `floor(t_utc / 86400)` days after 1970-01-01, with `t_utc mod 86400` (floored, in `[0, 86400)`) giving the time-of-day seconds. Negative-modulo edge cases use Python-style floored division (so `floor(-1.0 / 86400) = -1` and `(-1.0) mod 86400 = 86399`). Fractional seconds are floored, never rounded: `59.9999999` is 00:00:59 of 1970-01-01, `86399.9999999` is 23:59:59 of 1970-01-01, and `-1e-7` is 23:59:59 of 1969-12-31.
 
-**Tolerance:** integer outputs are exact (zero error). `datetime.julian_day` is ≤ 1 ulp.
+**Tolerance:** integer outputs are exact (zero error). `datetime.julian_day` is ≤ 1 ulp from the exact Julian Date.
 
 #### `interp.*` — search
 
 | Name | Arity | Args | Return |
 |---|---|---|---|
-| `interp.searchsorted` | 2 | `x: scalar, xs: const array[N]` | integer scalar (1..N) |
+| `interp.searchsorted` | 2 | `x: scalar, xs: const array[N]` | integer scalar (1..N+1) |
 
 **Semantics — `interp.searchsorted`:**
 
 Returns the 1-based index `i` of the first element of `xs` that is `≥ x` (left-side bias, equivalent to Julia's `searchsortedfirst`).
 
 - `xs` MUST be a `const`-op array of non-decreasing floats (equal neighbours allowed). Bindings MUST reject non-monotonic `xs` at load time with diagnostic `searchsorted_non_monotonic`.
+- Bindings MUST reject an `xs` that is not a rank-1 `const`-op array — a variable reference, a non-`const` expression, or a `const` whose `value` is a scalar or a nested array — at load time with diagnostic `interp_axis_not_const`, the code `interp.linear` and `interp.bilinear` raise for an axis that is not a `const` array (Errors, below). This check comes first: `searchsorted_nan` and `searchsorted_non_monotonic` are decided only on an `xs` that passes it.
+- `xs` MUST NOT contain NaN. Bindings MUST reject an `xs` containing a NaN entry at load time with diagnostic `searchsorted_nan`, and MUST check for NaN before monotonicity: an `xs` that contains a NaN is reported as `searchsorted_nan` whatever its other entries, never as `searchsorted_non_monotonic`. (A NaN compares false with every value, so whether a comparison-based monotonicity check passes or fails on it depends on how the check is written; checking NaN first makes the verdict independent of that.)
 - Equal values in `xs` (duplicates): the returned index is the **smallest** `i` for which `xs[i] ≥ x`. This makes the result deterministic on duplicate runs and lets authors compose searches (e.g. find the first interval containing `x` even when boundaries coincide).
+- Bindings MUST accept an empty `xs` (`[]`, `N = 0`): it is a rank-1 `const`-op array and trivially non-decreasing, so it passes every check above, and every query against it, a NaN `x` included, returns `N + 1 = 1`.
 - Out-of-range query: if `x ≤ xs[1]`, return `1`. If `x > xs[N]`, return `N + 1` (one past the end). Authors who need clamping wrap the result in `min(N, ...)` using the AST.
-- NaN `x`: result is `N + 1` (treated as "greater than every finite element"). NaN entries in `xs` are forbidden.
+- NaN `x`: result is `N + 1` (treated as "greater than every finite element"). NaN entries in `xs` are rejected at load (`searchsorted_nan`, above).
 
 **Tolerance:** exact (the returned index is integer; the comparison is the IEEE-754 `≥` predicate, which has no rounding tolerance).
 
@@ -4340,7 +4362,7 @@ These primitives are the named, opaque form of the searchsorted-plus-index-plus-
   - `interp.linear`: `len(table) == len(axis) == N` with `N ≥ 2`.
   - `interp.bilinear`: outer length of `table` MUST equal `Nx == len(axis_x)` and every inner row of `table` MUST have length `Ny == len(axis_y)`, with `Nx ≥ 2` and `Ny ≥ 2`. The table is row-major: `table[i][j]` is the value at `(axis_x[i], axis_y[j])`.
 - Each axis array MUST be **strictly increasing**. Equal adjacent axis values are not allowed (they would make a denominator zero in the blend). `interp.searchsorted` permits equal-adjacent (§9.2) because it returns an index, not a blend; `interp.linear` / `interp.bilinear` do not.
-- Axis arrays MUST NOT contain NaN. Table arrays MAY contain NaN (a query landing in a cell whose corner is NaN will produce NaN in the output; this is intentional, since "missing data" is a real use case).
+- Axis arrays MUST NOT contain a non-finite value (NaN, +Inf or −Inf). Table arrays MAY contain NaN (a query landing in a cell whose corner is NaN will produce NaN in the output; this is intentional, since "missing data" is a real use case).
 - Bindings MUST reject violations at file-load time with the diagnostic codes listed under "Errors" below. Loading MUST fail.
 
 **Semantics — `interp.linear`:**
@@ -4356,7 +4378,7 @@ Let `axis = [a₁, ..., aₙ]` (1-based indexing for spec exposition) and `table
    result = tᵢ + w · (tᵢ₊₁ − tᵢ)
    ```
 
-   This form (rather than `(1 − w)·tᵢ + w·tᵢ₊₁`) is required because it is **exact at the endpoints**: `w = 0` ⇒ `result = tᵢ` exactly, and `w = 1` ⇒ `result = tᵢ + (tᵢ₊₁ − tᵢ) = tᵢ₊₁` to within IEEE-754 round-to-nearest, with no rounding error from `1 − w` cancellation when `x` is near `aᵢ₊₁`.
+   This form (rather than `(1 − w)·tᵢ + w·tᵢ₊₁`) is required because it is **exact at the left endpoint** and has no `1 − w` cancellation when `x` is near `aᵢ₊₁`: `w = 0` ⇒ `result = tᵢ` exactly in `binary64` (provided `tᵢ₊₁` is finite; a NaN `tᵢ₊₁` gives NaN). At `w = 1` the result is `tᵢ ⊕ (tᵢ₊₁ ⊖ tᵢ)`, which equals `tᵢ₊₁` exactly when `tᵢ/2 ≤ tᵢ₊₁ ≤ 2·tᵢ` (Sterbenz) and is otherwise within `3/2·ulp(max(|tᵢ|, |tᵢ₊₁|))` of it — for example `tᵢ = 1`, `tᵢ₊₁ = 2⁻⁶⁰` gives `0`. Both facts are proven in `formal/Esm/Closed/Interp/Rounding.lean`.
 
 4. **NaN propagation.** If `x` is NaN, the result is NaN. (The clamp comparisons in steps 1–2 are IEEE-754 `≤` and `≥`, which both return false for NaN, so the function falls through to step 3, where `aᵢ − x` and `(aᵢ₊₁ − aᵢ)` produce a NaN weight that propagates through the blend.)
 
@@ -4365,7 +4387,7 @@ Let `axis = [a₁, ..., aₙ]` (1-based indexing for spec exposition) and `table
 Let `axis_x = [x₁, ..., x_{Nx}]`, `axis_y = [y₁, ..., y_{Ny}]`, and `table[i][j]` be the value at `(xᵢ, yⱼ)`. For scalar queries `(x, y)`:
 
 1. **Per-axis clamp.** Compute `x_q = clamp(x, x₁, x_{Nx})` and `y_q = clamp(y, y₁, y_{Ny})`, where `clamp(v, lo, hi)` is `lo` if `v ≤ lo`, `hi` if `v ≥ hi`, else `v`. This is the 2-D extrapolate-flat rule: queries outside the table are pinned to the nearest edge.
-2. **Cell location.** Choose `i` as the **largest** index in `[1, Nx − 1]` with `xᵢ ≤ x_q`, and `j` as the largest index in `[1, Ny − 1]` with `yⱼ ≤ y_q`. (Equivalent formulation: clamp the result of `interp.searchsorted(x_q, axis_x)` to `[2, Nx]`, then subtract 1; analogously for `y`.) Both assignments are unique because step 1 guarantees `x₁ ≤ x_q ≤ x_{Nx}` and `y₁ ≤ y_q ≤ y_{Ny}`. When `x_q` lands exactly on an interior knot `xₖ` the convention selects `i = k` (so `wx = 0` and the x-blend reduces to the row at knot `k` exactly); the same blend evaluated under the alternative `i = k − 1` (so `wx = 1`) produces the bit-identical result under the pinned form, but the spec pins the convention for definiteness.
+2. **Cell location.** Choose `i` as the **largest** index in `[1, Nx − 1]` with `xᵢ ≤ x_q`, and `j` as the largest index in `[1, Ny − 1]` with `yⱼ ≤ y_q`. (Clamping the result of `interp.searchsorted(x_q, axis_x)` to `[2, Nx]` and subtracting 1 is **not** an equivalent formulation: `interp.searchsorted` returns the first knot `≥ x_q`, so at an interior knot `xₖ` it selects `i = k − 1`.) Both assignments are unique because step 1 guarantees `x₁ ≤ x_q ≤ x_{Nx}` and `y₁ ≤ y_q ≤ y_{Ny}`. When `x_q` lands exactly on an interior knot `xₖ` the convention selects `i = k` (so `wx = 0` and the x-blend reduces to the row at knot `k` exactly); the same blend evaluated under the alternative `i = k − 1` (so `wx = 1`) gives the same value in exact arithmetic but not always the same `binary64` result (rows `1` and `2⁻⁶⁰` blend to `0` at `wx = 1`; see the `w = 1` note under `interp.linear`), which is why the spec pins `i = k`.
 3. **Weights.**
 
    ```
@@ -4389,19 +4411,41 @@ Let `axis_x = [x₁, ..., x_{Nx}]`, `axis_y = [y₁, ..., y_{Ny}]`, and `table[i
 |---|---|
 | `interp_non_monotonic_axis` | Any `axis` (or `axis_x`, `axis_y`) is not strictly increasing. Includes equal-adjacent and decreasing pairs. |
 | `interp_axis_length_mismatch` | `interp.linear`: `len(table) != len(axis)`. `interp.bilinear`: outer length of `table` differs from `len(axis_x)`, or any row's length differs from `len(axis_y)`. |
-| `interp_nan_in_axis` | Any axis contains NaN. |
+| `interp_nan_in_axis` | Any axis contains a value that is not finite (NaN, +Inf or −Inf). Takes precedence over `interp_non_monotonic_axis`: an axis containing a non-finite value MUST be reported with `interp_nan_in_axis`, whatever its other entries. |
 | `interp_axis_too_short` | Any axis has fewer than 2 entries (no interval to blend across). |
-| `interp_table_not_const` / `interp_axis_not_const` | The `table` or any axis argument is not a literal `const`-op array (e.g. it is a variable reference or a non-`const` expression). |
+| `interp_table_not_const` / `interp_axis_not_const` | The `table` or any axis argument is not a literal `const`-op array of the required rank (e.g. it is a variable reference or a non-`const` expression, or a `const` whose `value` has the wrong rank: anything but rank 1 for an axis or for the `table` of `interp.linear`, anything but rank 2 for the `table` of `interp.bilinear`). `interp_axis_not_const` is also the code for an `interp.searchsorted` `xs` that is not a rank-1 `const`-op array (see `interp.searchsorted` above), checked before `searchsorted_nan` and `searchsorted_non_monotonic`. An empty `const` array `[]` is rank 1, so as the `table` of `interp.bilinear` it is `interp_table_not_const`. |
+| `closed_function_arity` | A `fn` node naming `interp.searchsorted`, `interp.linear` or `interp.bilinear` has a number of arguments other than the function's arity (the Arity column of the tables above). Checked before every other argument check, since the arguments' roles are defined only by position. |
 
-**Tolerance:** when bindings implement the pinned evaluation order in IEEE-754 `binary64` arithmetic, agreement is **bit-exact** (`{ "abs": 0, "rel": 0 }`) for fixtures whose inputs are exactly representable and whose intermediate arithmetic does not require an FMA (the spec does not require FMA usage; bindings that use FMA selectively MUST ensure their results still match the non-FMA reference within the per-fixture tolerance). For mixed-FMA / non-FMA cross-binding comparisons the harness MAY relax to `{ "abs": 0, "rel": 4e-16 }` (~2 ulp at unit magnitude); see `tests/closed_functions/interp/linear/expected.json` and `bilinear/expected.json` for the per-fixture tolerance fields actually applied in CI.
+**Order of the argument checks.** An `interp.linear` or `interp.bilinear` call can break several of the rules above at once; such a call is reported with a single code, and bindings MUST report the first rule the call breaks in this order:
+
+1. `closed_function_arity`;
+2. `interp_table_not_const`, then `interp_axis_not_const` — the `table`, then each axis in argument order, not a `const`-op array of the required rank;
+3. `interp_axis_too_short` — any axis with fewer than 2 entries;
+4. `interp_axis_length_mismatch`;
+5. `interp_nan_in_axis` — a non-finite entry in any axis;
+6. `interp_non_monotonic_axis`.
+
+Each step covers every axis before the next step begins, so a bilinear call whose `axis_x` disagrees with the table's outer length and whose `axis_y` has one entry is `interp_axis_too_short`. For `interp.searchsorted` the order is `closed_function_arity`, `interp_axis_not_const`, `searchsorted_nan`, `searchsorted_non_monotonic`.
+
+**When the argument checks run.** The load-time argument checks of this section — `closed_function_arity`, `interp_axis_not_const`, `searchsorted_nan` and `searchsorted_non_monotonic` for `interp.searchsorted`, and the Errors table above for `interp.linear` and `interp.bilinear` — MUST run during load, and in `validate()`, on every `fn` node that names one of these functions, wherever it appears in the document (every expression-bearing field, §4.9.5) and whether or not anything ever evaluates it. A document that fails one of them does not load. A binding MAY repeat the checks when it builds or evaluates an expression, but MUST NOT defer them to then. A `fn` node inside an expression-template body (§9.6) is checked where the template is applied, on the arguments the expansion gives it. Fixtures: `tests/invalid/closed_fn_*.esm`; the cases JSON cannot express (a NaN) are the `error_scenarios` of `tests/closed_functions/interp/*/expected.json`.
+
+**Tolerance:** when bindings implement the pinned evaluation order in IEEE-754 `binary64` arithmetic without fused multiply-add, agreement is **bit-exact** (`{ "abs": 0, "rel": 0 }`) for fixtures whose inputs are exactly representable. The spec does not require FMA, but a binding MAY contract a blend `a + w·(b − a)` into one. Bindings that use FMA selectively MUST ensure their results stay within these absolute bounds of the pinned non-FMA result, where `ulp(v) = 2^max(⌊log₂|v|⌋ − 52, −1074)` is the spacing of `binary64` values at `v`:
+
+- `interp.linear`: `2·ulp(max(|tᵢ|, |tᵢ₊₁|))`, over the two table entries of the cell. The constant is attained, so no smaller integer bound holds.
+- `interp.bilinear`: `17/2·ulp(m)`, where `m` is the largest magnitude among the four cell corners. This bound is proven but not known to be tight; differences of `4·ulp(m)` occur.
+
+Both bounds are proven in `formal/` (`Esm/Closed/Interp/Rounding.lean`, `Esm/Closed/Interp/Bilinear64.lean`). No relative tolerance is sound: with FMA, `interp.linear([1, −2], [0, 3], 1)` is `2⁻⁵⁴` where the pinned result is `0`. The fixtures under `tests/closed_functions/interp/` are bit-exact (`0/0`) and avoid FMA-sensitive inputs.
 
 **Composition rationale (informative):** `interp.linear(table, axis, x)` is exactly equivalent to the following AST composition (modulo evaluation order / FMA effects, which the spec pins above):
 
 ```jsonc
-// Let i = interp.searchsorted(x, axis) clamped to [2, N], i_lo = i − 1.
+// Let xc = clamp(x, axis[1], axis[N]) (extrapolate-flat; clamping the index alone
+// would clamp the cell but not the weight, and so extrapolate), then
+// i = interp.searchsorted(xc, axis) clamped to [2, N], i_lo = i − 1.
 // Then the linear blend is:
-//   table[i_lo] + (x − axis[i_lo]) / (axis[i] − axis[i_lo]) · (table[i] − table[i_lo])
-// (with extrapolate-flat handled by clamping the search result before the index lookup).
+//   table[i_lo] + (xc − axis[i_lo]) / (axis[i] − axis[i_lo]) · (table[i] − table[i_lo])
+// (At an interior knot this picks the cell to the LEFT of the knot, w = 1, where the
+// pinned form picks the cell to the right, w = 0; the two agree in exact arithmetic.)
 ```
 
 The named primitive exists so that symbolic layers in bindings (notably the Julia MTK extension) can mark each lookup as opaque to alias elimination via `@register_symbolic`, instead of paying the structural-simplify cost of ~10 alias-eliminated intermediates per lookup. With ~230 lookups per `fastjx` photolysis evaluation (18 wavelengths × 13 species), that difference is the gap between MTK simplification finishing in seconds versus minutes-to-hours (see escalation `hq-wisp-y6g6`).
@@ -4440,7 +4484,7 @@ The `enums` top-level block declares file-local symbol → integer mappings used
 
 - `enums` is a JSON object. Keys are enum names (strings); values are objects mapping **string** keys (the symbolic names) to **integers** (the resolved values). The value domain is the **whole integer range** — negative, zero and positive. An enum member is a categorical CODE, not a position: it lowers to a `const` number used in arithmetic and in `join.on` key comparisons, where `0` and `-1` are ordinary values (a source table whose `opModeID` is `0` or whose `polProcessID` is `-1` is naming a real category, not an absence). Bindings MUST NOT reject a zero or negative member.
 - The two 1-based constructs in this format — `index`-op / index-set coordinates (§4.3.3, §5.2) and `makearray` regions (§4.3.2) — are separate and carry their own bounds validation. Using an enum member as an `index` argument (the §4.5 example) is an authoring choice that the `index` op bounds-checks like any other operand; it does not constrain what an `enums` block may declare.
-- Within a single enum, integer values MUST be unique — `0` is a value like any other, so two symbols MAY NOT both map to `0`. Across enums, values MAY collide (each enum defines its own namespace).
+- Within a single enum, integer values MUST be unique — `0` is a value like any other, so two symbols MUST NOT both map to `0`. Bindings MUST reject an enum in which two symbols map to the same integer at load time with diagnostic `enum_duplicate_value`, whether or not any `enum` op names either symbol. Across enums, values MAY collide (each enum defines its own namespace).
 - Two `.esm` files may declare an enum of the same name with different mappings: enums are file-local and never merged across files. A component mounted by a §4.7 `ref` resolves its `enum` ops against the enums declared in the *referenced* file, not the enclosing one (next bullet).
 - **Mounted files (§4.7).** An `enum` op in a file mounted at either mount form — a `subsystems.<k>` `{ref}` or a top-level `models.<k>` / `reaction_systems.<k>` `{ref}` — resolves against **the mounted file's** `enums` block. It is lowered at the mount edge, once the mounted document has resolved in its own scope (§4.7 "Edge pipeline", step 1; its own nested mounts were lowered at their own edges) and before its component splices in. The mounted file's `enums` block does not merge into the mounting document. So two mounted files that declare the same enum name with different mappings each keep their own values; a mounting document that declares an enum of the same name, with the same or a different mapping, changes neither; and the mounting document's own `enum` ops resolve against its own block only, so naming an enum that only a mounted file declares is `unknown_enum`. An op spelled by one of a template's `params` is decided by the call that binds that parameter, as at a template-library import edge (next bullet); a mounting document cannot call a mounted file's component-local templates, so every such call is the mounted file's own, and the edge expands it before lowering. The op therefore resolves against the mounted file's block too, whether or not that file carries §9.7 import machinery. The one exception is the top-level `reaction_systems.<k>` form, which only Julia mounts and which is still the raw pre-pass "Two mount forms, one mechanism" (§4.7) names as the remaining gap: it defers the mounted reaction system's template resolution to the mounting document, so an op spelled by a parameter there still resolves against the mounting document's block, and closes when that gap does. A mounted file naming an enum or symbol it does not declare is `unknown_enum` / `unknown_enum_symbol` at the edge, exactly as when that file loads on its own. Fixtures: `tests/conformance/mount_enums/`.
 - **Template libraries (§9.7).** An `enum` op written in a template-library file's template `body` resolves against **that library's** `enums` block, never the importer's. It is lowered at the import edge, while the library resolves in its own scope (§9.7.7 edge pipeline, step 1), so the templates reach the importer with the op already a `const` (§9.7.5). An importer therefore needs no copy of a library's enums, and an importer that declares an enum of the same name, with the same or a different mapping, does not change what the library's templates compute. An op whose enum-name or symbol argument is spelled by one of the template's `params` is decided by the file that binds that parameter: parameter substitution is position-blind (§9.6.3 constraint 5), so the binding decides what the op spells. **The library's own calls resolve in the library.** When a library template body calls a template in the library's scope (its own or one it imports) and that call binds the parameter, the edge expands each such call to a template that can still produce an `enum` op (the eager expansion §9.6.4 rule 3 requires at load) and lowers the result against the library's block. **Only parameters the importer binds resolve in the importer.** An op still spelled with a parameter after that step (because the importer calls the template directly, or because the calling library template forwards one of its own `params` into the call) stays as written and resolves with the importing document's enums after expansion. An op whose arguments are not two strings is left to the document-wide pass. A library body naming an enum or symbol the library does not declare, directly or through a symbol it binds in its own call, is `unknown_enum` / `unknown_enum_symbol` at load, reported against the library and the template, even when the importer declares that name.
@@ -4449,6 +4493,7 @@ The `enums` top-level block declares file-local symbol → integer mappings used
 
 - The `enum` op (§4.5) MUST resolve at load time, before any expression evaluation. After lowering, no `enum`-op nodes remain in the in-memory representation; each is replaced by a `{"op": "const", "value": <integer>}` node. Bindings MUST NOT propagate enum strings into evaluated expressions.
 - An `enum` op that names an undeclared enum (`unknown_enum`) or a symbol not declared under that enum (`unknown_enum_symbol`) MUST be rejected at load time. Loading MUST fail.
+- A duplicate value within one enum (`enum_duplicate_value`, above) is a defect of the `enums` block itself, and is reported against the block, before any `enum` op is resolved.
 
 **Use with the `index` op:** the canonical use of `enums` is to keep categorical lookups portable. Tables are encoded as `const` arrays; categorical keys are written as `enum` ops; the existing `index` op (§4.3.3) does the actual lookup — the portable form of, e.g., a Wesely-style canopy resistance lookup (`enum` keys indexing a `const` resistance table, as in §4.5).
 
@@ -4502,11 +4547,11 @@ Components that depend on tabulated functions — most prominently the `fastjx` 
 
 - Each entry is a `FunctionTable` carrying `axes`, `data`, and (optionally) `description`, `interpolation`, `out_of_bounds`, `outputs`, `shape`, `schema_version`.
 - `axes` is an ordered list of named `FunctionTableAxis` entries. Axis order defines the order of inner dimensions of `data` (after the leading output dimension when `outputs` is present). Axis names within a single table MUST be unique. v0.4.0 caps axis count at 2 (matching the §9.2 `interp.linear` / `interp.bilinear` set); higher-dimensional lookups are deferred until the closed registry adds `interp.trilinear`.
-- Each axis declares `name`, `values` (strictly-increasing finite floats, ≥ 2 entries), and an optional advisory `units` string. **`units` is advisory in v0.4.0** — bindings record it for documentation only; load-time unit-checking against `table_lookup.axes` input expressions is deferred to a future units RFC.
-- `interpolation` is `"linear"` (1 axis), `"bilinear"` (2 axes), or `"nearest"` (1 axis, lowering to `index` after `interp.searchsorted`). Default is `"linear"`. Bindings MUST reject mismatched (`linear` with 2 axes, `bilinear` with 1 axis, etc.) at load time with diagnostic `table_interpolation_axes_mismatch`.
+- Each axis declares `name`, `values` (strictly-increasing finite floats, ≥ 2 entries; §9.5.5 names the code for each violation), and an optional advisory `units` string. **`units` is advisory in v0.4.0** — bindings record it for documentation only; load-time unit-checking against `table_lookup.axes` input expressions is deferred to a future units RFC.
+- `interpolation` is `"linear"` (1 axis), `"bilinear"` (2 axes), or `"nearest"` (1 axis: the table value at the knot nearest the query, ties to the lower knot; lowering in §9.5.3). Default is `"linear"`. Bindings MUST reject mismatched (`linear` with 2 axes, `bilinear` with 1 axis, etc.) at load time with diagnostic `table_interpolation_axes_mismatch`.
 - `out_of_bounds` is `"clamp"` (default, matches `interp.linear` / `interp.bilinear` extrapolate-flat semantics) or `"error"` (raise at evaluation time with `table_lookup_out_of_bounds`). v0.4.0 requires all five bindings to implement `"clamp"`; `"error"` is conformant when implemented.
-- `outputs` is an optional ordered list of output names (strings, unique within the table). When present, the leading dimension of `data` MUST equal the length of `outputs`, and `table_lookup.output` MAY name an entry of this list in addition to using a 0-based integer index. When absent, the table is single-output and `table_lookup.output` defaults to `0`.
-- `data` is the canonical, nested-array literal. Leaves MUST be finite numbers — NaN entries are rejected at load time with `table_data_nan`. Shape: `[len(outputs), len(axes[0].values), len(axes[1].values), ...]` when `outputs` is present; `[len(axes[0].values), len(axes[1].values), ...]` otherwise. Loaders verify the actual nesting; mismatched shapes raise `table_data_shape_mismatch`. This is deliberately stricter than the inline §9.2 form, whose `table` MAY contain NaN for missing data: an inline lookup over a table with NaN entries cannot be lifted into `function_tables`.
+- `outputs` is an optional ordered list of output names (strings, unique within the table). When present, the leading dimension of `data` MUST equal the length of `outputs`, and `table_lookup.output` MAY name an entry of this list in addition to using a 0-based integer index. When absent, the table is single-output: `data` has no output dimension, and `0` is its only output. Whether or not `outputs` is declared, an omitted `table_lookup.output` means `0`.
+- `data` is the canonical, nested-array literal. Leaves MUST be finite numbers — a NaN or infinite leaf is rejected at load time with `table_data_nan`. Shape: `[len(outputs), len(axes[0].values), len(axes[1].values), ...]` when `outputs` is present; `[len(axes[0].values), len(axes[1].values), ...]` otherwise. Loaders verify the actual nesting; mismatched shapes raise `table_data_shape_mismatch`. This is deliberately stricter than the inline §9.2 form, whose `table` MAY contain NaN for missing data: an inline lookup over a table with NaN entries cannot be lifted into `function_tables`.
 - `shape` is an optional redundant assertion on `data`'s shape. If present, MUST match the actual nesting; loaders reject mismatches. **`data` is the source of truth — `shape` is a load-time assertion only.** Round-trippers MUST NOT fabricate a `shape` field when the author did not write one.
 
 **Authoring policy:** tables are **opt-in**. Loaders MUST NOT silently auto-promote inline `const`-op arrays into `function_tables` entries during round-trip. The migration of an existing inline-const-heavy `.esm` to `function_tables` is a one-shot author-driven refactor, not a load-time canonicalization. This preserves the existing `tests/` corpus and the `earthsci-ast-go` byte-exact reload guarantee.
@@ -4529,28 +4574,30 @@ Components that depend on tabulated functions — most prominently the `fastjx` 
 
 - `table` (string, required): id of a `function_tables` entry. References to undeclared tables raise `table_lookup_unknown_table` at load time.
 - `axes` (object, required): map from axis name to scalar input expression. The set of keys MUST exactly match the names of the referenced table's `axes[]` (same set, no extras, no omissions); mismatch raises `table_lookup_axis_name_mismatch`. Each value is an arbitrary scalar `Expression` (number literal, variable reference, or AST node).
-- `output` (integer ≥ 0 OR string): which output to return. Integer is a 0-based index into the table's leading data dimension. String MUST be an entry of the table's `outputs` array. Out-of-range integer or unknown name raises `table_lookup_output_out_of_range`. May be omitted when the table has no `outputs` declaration (defaults to `0`).
-- `args` MUST be empty `[]` for a `table_lookup` node — the per-axis input expressions live under `axes`, not `args`.
+- `output` (integer ≥ 0 OR string): which output to return. Integer is a 0-based index into the table's leading data dimension. String MUST be an entry of the table's `outputs` array. Out-of-range integer or unknown name raises `table_lookup_output_out_of_range`. MAY be omitted whether or not the table declares `outputs`; an omitted `output` MUST be read as `0` (the first output of a multi-output table, the only output of a single-output one).
+- `args` MUST be empty `[]` for a `table_lookup` node — the per-axis input expressions live under `axes`, not `args`. An absent `args` means `[]`. (The schema requires `args` on every expression node, so a document always writes it; the absent case is a node that did not pass through schema validation, such as one built in memory.) Bindings MUST reject a `table_lookup` whose `args` is non-empty with diagnostic `table_lookup_args_nonempty` (the schema rejects one too, with `maxItems`; the code is what a binding raises where schema validation did not run).
 
 #### 9.5.3 Lowering to `interp.linear` / `interp.bilinear` / `index`
 
 A `table_lookup` node lowers at load time to a structurally-equivalent `fn` (or `index`) tree using the existing §9.2 closed-function set. The lowered tree is bit-equivalent: a `table_lookup` query and the equivalent inline lookup that an author would have written by hand produce the same IEEE-754 `binary64` result on the same axis weights and table values, modulo the same FMA caveats described in §9.2.
 
-For a `table_lookup` referencing a 1-axis table with `interpolation: "linear"`, output `i`, the lowered AST is:
+In the lowered trees below, `D` is the table the lookup reads, and a binding MUST lower with this `D`. For a table that declares `outputs`, `D` is `data[i]`, the slice of the leading output dimension for the selected output `i` (`table_lookup.output`, `0` when omitted). For a table without `outputs`, `D` is the whole `data`: it has no output dimension to slice, and `0` is the only output it has. `data[0]` of a single-output table is its first row (or first value), not the table, and lowering with it is wrong.
+
+For a `table_lookup` referencing a 1-axis table with `interpolation: "linear"`, the lowered AST is:
 
 ```jsonc
 { "op": "fn", "name": "interp.linear", "args": [
-    { "op": "const", "value": data[i] },           // 1-D table slice for output i
+    { "op": "const", "value": D },               // 1-D table for the selected output
     { "op": "const", "value": axes[0].values },    // axis values
     <axis_input_expression>                         // the user-supplied axes[axis[0].name]
 ] }
 ```
 
-For a 2-axis table with `interpolation: "bilinear"`, output `i`:
+For a 2-axis table with `interpolation: "bilinear"`:
 
 ```jsonc
 { "op": "fn", "name": "interp.bilinear", "args": [
-    { "op": "const", "value": data[i] },           // 2-D table slice for output i (Nx × Ny)
+    { "op": "const", "value": D },               // 2-D table for the selected output (Nx × Ny)
     { "op": "const", "value": axes[0].values },    // axis_x values
     { "op": "const", "value": axes[1].values },    // axis_y values
     <x_input_expression>,                           // axes[axes[0].name]
@@ -4558,16 +4605,26 @@ For a 2-axis table with `interpolation: "bilinear"`, output `i`:
 ] }
 ```
 
-For `interpolation: "nearest"` on a 1-axis table:
+For `interpolation: "nearest"` on a 1-axis table, the lookup MUST return `D[k]` for the knot `k` nearest the query `x`, a tie between two knots going to the lower one, and under `out_of_bounds: "clamp"` a query below the first knot returns `D[1]` and one above the last returns `D[N]` (the nearest knot in both cases). A NaN query returns NaN, as `interp.linear` does. There is no closed function for it: the lowering is an AST composition over `interp.searchsorted`, `index`, `min`, `max`, `-`, `<`, `==` and `ifelse`. With `N = len(axes[0].values)`, `A = { "op": "const", "value": axes[0].values }` and `x` the axis input expression (written once per use below; it is a pure expression, so the copies agree):
 
 ```jsonc
-{ "op": "index", "args": [
-    { "op": "const", "value": data[i] },
-    { "op": "fn", "name": "interp.searchsorted", "args": [
-        <axis_input_expression>,
-        { "op": "const", "value": axes[0].values } ] }
-] }
+// j  = interp.searchsorted(x, A)   ∈ 1..N+1, the first knot ≥ x
+// lo = max(j - 1, 1)               the knot at or below x (1 below the range)
+// hi = min(j, N)                   the knot at or above x (N above the range)
+{ "op": "ifelse", "args": [
+    { "op": "==", "args": [ x, x ] },                         // false only for NaN
+    { "op": "index", "args": [
+        { "op": "const", "value": D },
+        { "op": "ifelse", "args": [
+            { "op": "<", "args": [
+                { "op": "-", "args": [ { "op": "index", "args": [ A, hi ] }, x ] },
+                { "op": "-", "args": [ x, { "op": "index", "args": [ A, lo ] } ] } ] },
+            hi,                                               // strictly nearer the upper knot
+            lo ] } ] },                                       // nearer the lower knot, or a tie
+    x ] }                                                     // NaN query: NaN
 ```
+
+where `j` is `{ "op": "fn", "name": "interp.searchsorted", "args": [ x, A ] }`, `lo` is `{ "op": "max", "args": [ { "op": "-", "args": [ j, 1 ] }, 1 ] }` and `hi` is `{ "op": "min", "args": [ j, N ] }`. Both indices are always in `1..N` — below the range `lo = hi = 1`, above it (and for a NaN query, whose `searchsorted` is `N + 1`) `lo = hi = N` — so no `index` in the tree reads out of range, whichever branch an evaluator takes. "Nearest" and "tie" are decided on the two `binary64` differences `A[hi] − x` and `x − A[lo]` as the tree computes them; because both are computed in every binding with the same two subtractions, every binding picks the same knot, including on a query a rounding error away from a midpoint. The knot so picked is the truly nearest one (by exact distance, ties to the lower) except in one case: when the upper bracketing knot `A[hi]` is strictly nearer to `x` than `A[lo]`, by at most `ulp(x − A[lo])` (the §9.2 spacing), the two rounded differences can compare equal and the tree returns the lower knot. It never errs toward the upper knot. (Proven in `formal/`: `Esm.Closed.Tables.nearest64_spec` for the bound, `Esm.Closed.Tables.nearest64_not_exact` for a query where it is attained; fixture `q_rounding_tie` in `tests/conformance/function_tables/nearest/` pins the binary64 answer.) The result is always an entry of `D`, so it is exact. With `out_of_bounds: "error"`, a binding that implements the mode raises `table_lookup_out_of_bounds` for a query strictly below `A[1]` or strictly above `A[N]` (§9.5.3a) and otherwise evaluates this tree.
 
 Bindings MAY satisfy this lowering by an in-memory transformation at load time (resulting AST contains no `table_lookup` nodes after load) or by a thin evaluator that dispatches on `table_lookup` directly to the existing `interp.linear` / `interp.bilinear` / `index` implementations. Both are conformant. The serializer of every binding MUST round-trip the authored form (see §9.5.4).
 
@@ -4585,17 +4642,38 @@ The migration of inline-const lookups to tables is a one-shot author-driven refa
 | Diagnostic code | Condition |
 |---|---|
 | `table_axis_non_monotonic` | An axis's `values` is not strictly increasing. |
-| `table_axis_nan` | An axis's `values` contains NaN. |
+| `table_axis_nan` | An axis's `values` contains a value that is not finite (NaN, +Inf or −Inf). Takes precedence over `table_axis_non_monotonic`: an axis containing a non-finite value MUST be reported with `table_axis_nan`, whatever its other entries. |
+| `table_axis_too_short` | An axis's `values` has fewer than 2 entries (§9.5.1). The schema rejects such an axis too (`minItems: 2`); the code is what a binding raises where schema validation did not run, such as on a table built in memory. |
 | `table_data_shape_mismatch` | The actual nesting of `data` does not match the shape implied by `axes` (and `outputs`, when present), or the redundant `shape` assertion does not match `data`. |
-| `table_data_nan` | A leaf of `data` is NaN. |
+| `table_data_nan` | A leaf of `data` is not finite (NaN, +Inf or −Inf). |
 | `table_interpolation_axes_mismatch` | `interpolation` and the number of axes are inconsistent (`linear` requires 1, `bilinear` requires 2, `nearest` requires 1). |
 | `table_outputs_length_mismatch` | The leading dimension of `data` does not equal `len(outputs)` when `outputs` is declared. |
 | `table_axis_duplicate_name` | Two axes within a single table share the same `name`. |
 | `table_outputs_duplicate_name` | Two entries of `outputs` share the same name. |
 | `table_lookup_unknown_table` | `table_lookup.table` references an id not declared in `function_tables`. |
 | `table_lookup_axis_name_mismatch` | The set of keys in `table_lookup.axes` does not match the set of axis names declared on the referenced table. |
-| `table_lookup_output_out_of_range` | `table_lookup.output` integer is ≥ `len(outputs)` (or ≥ leading dimension of `data` when `outputs` is absent), or its string is not an entry of `outputs`. |
+| `table_lookup_output_out_of_range` | `table_lookup.output` integer is ≥ `len(outputs)` (or ≥ 1 when `outputs` is absent: a single-output table has only output `0`), or its string is not an entry of `outputs` (any string, when `outputs` is absent). |
+| `table_lookup_args_nonempty` | A `table_lookup` node carries a non-empty `args` (§9.5.2). An absent `args` is `[]` and is not an error. |
 | `table_out_of_bounds_unsupported` | The referenced table declares `out_of_bounds: "error"` and the binding does not implement that mode. Raised where the binding would otherwise lower or evaluate the lookup — see §9.5.3a. |
+
+**Order of the table checks.** A table can break several of the rules above at once; it is then reported with ONE code, and bindings MUST report the first rule it breaks in this order:
+
+1. `table_axis_duplicate_name`;
+2. `table_outputs_duplicate_name`;
+3. `table_interpolation_axes_mismatch`;
+4. `table_axis_nan` — a non-finite value (NaN or ±Inf) in any axis;
+5. `table_axis_non_monotonic` — any axis not strictly increasing;
+6. `table_axis_too_short` — any axis with fewer than 2 values;
+7. `table_outputs_length_mismatch` — `outputs` is declared, `data` is an array, and its length differs from `len(outputs)`;
+8. `table_data_shape_mismatch` — the nesting of `data` differs from the shape implied by `axes` (and `outputs`);
+9. `table_data_nan` — a non-finite leaf of `data`;
+10. `table_data_shape_mismatch` — the redundant `shape` assertion differs from the implied shape.
+
+Each step covers every axis of the table before the next step begins, so a table whose first axis is decreasing and whose second axis holds a NaN is `table_axis_nan`, and one whose first axis has a single value and whose second is decreasing is `table_axis_non_monotonic`. The order is a choice, not a consequence of the rules; it is pinned so that every binding names the same rule. (It is the order of `Esm.Closed.Tables.validateTable` in `formal/`; fixtures: `tests/invalid/function_table_*.esm`, and `tests/conformance/function_tables/load_errors/` for the cases JSON cannot express.)
+
+**When the table checks run.** Bindings MUST run the ten table checks above during load, and in `validate()`, on EVERY entry of `function_tables`, whether or not any `table_lookup` references it. A document with a table that fails one of them does not load. A binding MAY repeat the checks where it lowers or evaluates a lookup, but MUST NOT defer them to then. The checks of every `table_lookup` node (`table_lookup_unknown_table`, `table_lookup_args_nonempty`, `table_lookup_axis_name_mismatch`, `table_lookup_output_out_of_range`) MUST also run at load and in `validate()`, in the same way, on every node wherever it appears, as do the §9.2 argument checks on every `interp.*` `fn` node. Bindings MUST check every table before any expression node, so a document with both a failing table and a failing `fn` or `table_lookup` node is reported with the table's code; among expression nodes, which failing node is reported first is not pinned.
+
+**Order of the lookup checks.** A `table_lookup` node is checked in this order, and bindings MUST report the first code that applies: `table_lookup_unknown_table`; then the ten checks of the table it names, in the order above; then the lookup's own fields — `table_lookup_args_nonempty`, `table_lookup_axis_name_mismatch`, `table_lookup_output_out_of_range`, in that order. So a lookup whose `axes` keys do not match a table whose axis is decreasing is reported as `table_axis_non_monotonic` (fixture `tests/invalid/function_table_referenced_lookup_axis_mismatch.esm`). `table_out_of_bounds_unsupported` is not part of this order: it is raised where the binding would lower or evaluate a lookup that passed every check (§9.5.3a).
 
 ##### 9.5.3a `out_of_bounds: "error"` in a binding that does not implement it
 
@@ -4610,8 +4688,11 @@ Conformance fixtures under `tests/conformance/function_tables/` exercise:
 3. A roundtrip-preservation case (load + save reproduces the authored byte sequence modulo whitespace, with NO promotion or demotion across the inline-const ↔ table_lookup boundary) — `roundtrip/`.
 4. An END-TO-END case run through the binding's own inline-test runner (§6.6) rather than through a lowering harness — `inline_test/`. It pairs an observed defined by a `table_lookup` with a sibling observed spelling the same lookup in the lowered form, plus an out-of-range input that must clamp; a binding whose lowering exists only inside its test harness fails the first and third assertions while passing the second. The lowering is a property of the EVALUATION path, and only this fixture pins that.
 5. The `out_of_bounds: "error"` refusal of §9.5.3a — `out_of_bounds_error/`.
+6. `interpolation: "nearest"` through the inline-test runner: queries on a knot, either side of a midpoint, exactly on a midpoint (the tie goes to the lower knot), and below and above the axis (clamped) — `nearest/`.
+7. The defaults of §9.5.2 and §9.5.3 through the inline-test runner: multi-output tables (one 1-axis, one 2-axis) read with `output` omitted (output `0`) beside the same read spelled out and a read of another output, and a single-output table read with `output` omitted and `0` (lowered with the whole `data`) — `lookup_defaults/`.
+8. The §9.5.5 load-time rejections and their order: tables that each break one rule, or two rules adjacent in the order above (with the first one the one to report). The cases a document can carry are `tests/invalid/function_table_*.esm`, each table unreferenced but one (which pins the lookup order); the rest are `load_errors/`, a `cases.json` ledger of tables a harness builds in memory and runs through the binding's load-time table check, because they need a NaN or an infinity, which JSON cannot carry, or an axis the schema rejects. Non-finite values are written as the strings `"NaN"`, `"Inf"` and `"-Inf"`, as in `tests/closed_functions/`.
 
-Each fixture pairs an `.esm` file with a small numeric harness that asserts the lowered evaluation matches the equivalent inline-const lookup at the §9.2 tolerance contract (`abs: 0, rel: 0` non-FMA, `abs: 0, rel: 4e-16` mixed-FMA cross-binding). All five bindings MUST pass.
+Each fixture pairs an `.esm` file with a small numeric harness that asserts the lowered evaluation matches the equivalent inline-const lookup at the §9.2 tolerance contract (bit-exact without FMA; the §9.2 absolute ulp bounds when FMA is used). All five bindings MUST pass.
 
 ### 9.6 Rewrite rules (expression templates)
 

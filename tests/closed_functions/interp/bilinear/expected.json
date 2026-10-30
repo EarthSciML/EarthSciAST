@@ -156,6 +156,18 @@
       "expected_error_code": "interp_nan_in_axis"
     },
     {
+      "name": "nan_in_non_monotonic_axis_x",
+      "description": "axis_x is BOTH decreasing (2.0 before 1.0) and contains a NaN later on. NaN takes precedence within an axis: bindings MUST reject with `interp_nan_in_axis`, not `interp_non_monotonic_axis` (esm-spec §9.2 Errors).",
+      "inputs": [ [[0.0, 1.0, 2.0], [10.0, 11.0, 12.0], [20.0, 21.0, 22.0]], [2.0, 1.0, "NaN"], [0.0, 10.0, 20.0], 0.5, 5.0 ],
+      "expected_error_code": "interp_nan_in_axis"
+    },
+    {
+      "name": "nan_first_in_axis_y",
+      "description": "A NaN as the FIRST entry of an otherwise increasing axis_y. A comparison-based monotonicity check passes or fails on it depending on how it is written; the verdict MUST be `interp_nan_in_axis` either way (esm-spec §9.2 Errors).",
+      "inputs": [ [[0.0, 1.0, 2.0], [10.0, 11.0, 12.0], [20.0, 21.0, 22.0]], [0.0, 1.0, 2.0], ["NaN", 10.0, 20.0], 0.5, 5.0 ],
+      "expected_error_code": "interp_nan_in_axis"
+    },
+    {
       "name": "axis_x_too_short",
       "description": "axis_x has only one entry (no x-cell to blend across). Bindings MUST reject with `interp_axis_too_short`.",
       "inputs": [ [[0.0, 1.0, 2.0]], [0.0], [0.0, 10.0, 20.0], 0.0, 5.0 ],
@@ -166,6 +178,48 @@
       "description": "axis_y has only one entry (no y-cell to blend across). Bindings MUST reject with `interp_axis_too_short`.",
       "inputs": [ [[0.0], [10.0], [20.0]], [0.0, 1.0, 2.0], [0.0], 0.5, 0.0 ],
       "expected_error_code": "interp_axis_too_short"
+    },
+    {
+      "name": "table_rank1",
+      "description": "Ruling Q-108: a rank-1 `table` (its length equals len(axis_x)) is the wrong rank for interp.bilinear: 'interp_table_not_const' (esm-spec §9.2).",
+      "inputs": [ [1.0, 2.0], [0.0, 1.0], [0.0, 1.0], 0.5, 0.5 ],
+      "expected_error_code": "interp_table_not_const"
+    },
+    {
+      "name": "table_rank3",
+      "description": "Ruling Q-108: a rank-3 `table` is the wrong rank for interp.bilinear: 'interp_table_not_const'.",
+      "inputs": [ [[[1.0, 2.0], [3.0, 4.0]], [[5.0, 6.0], [7.0, 8.0]]], [0.0, 1.0], [0.0, 1.0], 0.5, 0.5 ],
+      "expected_error_code": "interp_table_not_const"
+    },
+    {
+      "name": "axis_x_rank2",
+      "description": "Ruling Q-108: a rank-2 `axis_x` is the wrong rank: 'interp_axis_not_const'.",
+      "inputs": [ [[1.0, 2.0], [3.0, 4.0]], [[0.0, 1.0], [2.0, 3.0]], [0.0, 1.0], 0.5, 0.5 ],
+      "expected_error_code": "interp_axis_not_const"
+    },
+    {
+      "name": "axis_y_scalar",
+      "description": "Ruling Q-108: a scalar `axis_y` is the wrong rank: 'interp_axis_not_const'.",
+      "inputs": [ [[1.0, 2.0], [3.0, 4.0]], [0.0, 1.0], 1.0, 0.5, 0.5 ],
+      "expected_error_code": "interp_axis_not_const"
+    },
+    {
+      "name": "length_mismatch__nan_axis_x",
+      "description": "Ruling Q-110: not-const/rank, too short, length mismatch, non-finite, non-monotonic. A ragged table (second row short) with axis_x [0, NaN]: 'interp_axis_length_mismatch'.",
+      "inputs": [ [[1.0, 2.0], [3.0]], [0.0, "NaN"], [0.0, 1.0], 0.5, 0.5 ],
+      "expected_error_code": "interp_axis_length_mismatch"
+    },
+    {
+      "name": "inf_in_axis_y",
+      "description": "Ruling Q-113: a +Inf entry in axis_y is 'interp_nan_in_axis'.",
+      "inputs": [ [[1.0, 2.0], [3.0, 4.0]], [0.0, 1.0], [0.0, "Inf"], 0.5, 0.5 ],
+      "expected_error_code": "interp_nan_in_axis"
+    },
+    {
+      "name": "table_empty",
+      "description": "Ruling Q-111: the empty array [] is rank 1, so as the bilinear table it is 'interp_table_not_const'.",
+      "inputs": [ [], [0.0, 1.0], [0.0, 1.0], 0.5, 0.5 ],
+      "expected_error_code": "interp_table_not_const"
     }
   ]
 }
