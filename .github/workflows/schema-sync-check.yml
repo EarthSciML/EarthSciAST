@@ -62,7 +62,7 @@ jobs:
     # worse than no gate, because it is also a claim.
     - uses: actions/setup-node@v7
       with:
-        node-version: '20'
+        node-version: 'lts/*'
         cache: 'npm'
         cache-dependency-path: pkg/earthsci-ast-ts/package-lock.json
 

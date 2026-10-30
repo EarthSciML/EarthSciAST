@@ -54,7 +54,7 @@ jobs:
 
       - uses: actions/setup-python@v7
         with:
-          python-version: '3.11'
+          python-version: '3.x'
 
       - name: Build and check distributions
         working-directory: pkg/earthsci-ast-py

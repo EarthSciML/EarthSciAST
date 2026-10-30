@@ -76,7 +76,7 @@ concurrency:
 env:
   # The version conformance-testing.yml runs its harness job at, so this stage is
   # gated at the same Julia as the `interpreter` and `native` ones it left.
-  JULIA_VERSION: '1.10'
+  JULIA_VERSION: 'lts'
 
 jobs:
   mtk-compiler-agreement:
@@ -90,6 +90,7 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Setup Julia
+        id: setup-julia
         uses: julia-actions/setup-julia@v3
         with:
           version: ${{ env.JULIA_VERSION }}
@@ -100,7 +101,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v7
         with:
-          python-version: '3.11'
+          python-version: '3.x'
 
       # This job's OWN depot cache, keyed on the `mtk` environment's
       # Project.toml. It must not share a key with the conformance workflow's:
@@ -111,9 +112,9 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.julia
-          key: ${{ runner.os }}-mtk-compiler-${{ env.JULIA_VERSION }}-${{ hashFiles('pkg/EarthSciAST.jl/Project.toml', 'pkg/EarthSciAST.jl/scripts/compiler_agreement_mtk_env/Project.toml') }}
+          key: ${{ runner.os }}-mtk-compiler-${{ steps.setup-julia.outputs.julia-version }}-${{ hashFiles('pkg/EarthSciAST.jl/Project.toml', 'pkg/EarthSciAST.jl/scripts/compiler_agreement_mtk_env/Project.toml') }}
           restore-keys: |
-            ${{ runner.os }}-mtk-compiler-${{ env.JULIA_VERSION }}-
+            ${{ runner.os }}-mtk-compiler-${{ steps.setup-julia.outputs.julia-version }}-
 
       # The adapter self-bootstraps this env on first use (activate,
       # `Pkg.develop` the package when Manifest.toml is absent, instantiate), so

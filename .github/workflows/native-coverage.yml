@@ -42,7 +42,7 @@ concurrency:
 
 env:
   # The Julia the compiler-agreement and conformance jobs run at.
-  JULIA_VERSION: '1.10'
+  JULIA_VERSION: 'lts'
 
 jobs:
   census:
@@ -73,9 +73,10 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v7
         with:
-          python-version: '3.11'
+          python-version: '3.x'
 
       - name: Setup Julia
+        id: setup-julia
         if: matrix.binding == 'julia'
         uses: julia-actions/setup-julia@v3
         with:
@@ -91,9 +92,9 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: ~/.julia
-          key: ${{ runner.os }}-native-coverage-${{ env.JULIA_VERSION }}-${{ hashFiles('EarthSciAST/pkg/EarthSciAST.jl/Project.toml', 'EarthSciAST/pkg/EarthSciAST.jl/scripts/compiler_agreement_env/Project.toml') }}
+          key: ${{ runner.os }}-native-coverage-${{ steps.setup-julia.outputs.julia-version }}-${{ hashFiles('EarthSciAST/pkg/EarthSciAST.jl/Project.toml', 'EarthSciAST/pkg/EarthSciAST.jl/scripts/compiler_agreement_env/Project.toml') }}
           restore-keys: |
-            ${{ runner.os }}-native-coverage-${{ env.JULIA_VERSION }}-
+            ${{ runner.os }}-native-coverage-${{ steps.setup-julia.outputs.julia-version }}-
 
       # Manifest.toml is gitignored repo-wide, so `Pkg.develop` is what points
       # the census environment at THIS checkout rather than a registered

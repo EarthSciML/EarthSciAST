@@ -46,7 +46,7 @@ jobs:
           path: .earthsci-dev
       - uses: actions/setup-python@v7
         with:
-          python-version: '3.12'
+          python-version: '3.x'
       # Prints the bindings in docs/api/config.toml as a JSON array ([] when
       # the repo has no API reference).
       - id: plan

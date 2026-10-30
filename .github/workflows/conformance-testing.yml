@@ -50,10 +50,12 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Consistent versions across jobs
-  NODE_VERSION: '20'
-  PYTHON_VERSION: '3.11'
-  JULIA_VERSION: '1.10'
+  # Consistent versions across jobs. Each is an alias that follows its
+  # language's releases, so nothing here needs editing at a new release: the
+  # newest Node LTS, the newest Python 3, and Julia's long-term-support release.
+  NODE_VERSION: 'lts/*'
+  PYTHON_VERSION: '3.x'
+  JULIA_VERSION: 'lts'
   RUST_VERSION: 'stable'
   # Resource limits for conformance testing
   CONFORMANCE_MEMORY_LIMIT: '4g'
@@ -304,7 +306,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: [20, 22]
+        # The two newest Node LTS lines, whatever they are when the job runs.
+        node-version: ['lts/-1', 'lts/*']
     defaults:
       run:
         working-directory: pkg/earthsci-ast-ts
@@ -336,7 +339,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.10', '3.11', '3.12']
+        # The oldest Python that still gets security fixes, and the newest.
+        # setup-python has no alias for the oldest, so bump the first entry
+        # when that release reaches end of life (python.org/downloads, each
+        # October).
+        python-version: ['3.11', '3.x']
     defaults:
       run:
         working-directory: pkg/earthsci-ast-py
@@ -368,7 +375,7 @@ jobs:
 
       - name: Upload Python coverage to Codecov
         uses: codecov/codecov-action@v7
-        if: matrix.python-version == '3.11'
+        if: matrix.python-version == '3.x'
         with:
           files: pkg/earthsci-ast-py/coverage.xml
           flags: python
