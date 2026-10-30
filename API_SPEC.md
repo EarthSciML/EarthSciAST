@@ -584,22 +584,49 @@ binding's internals. `timestamp_to_seconds` accepts exactly the bound form
 (`Z`, no offset), so it agrees with `resolve_time_span` bit for bit: the same
 operands in the same order.
 
+**The source.** Both read the origin from a document or from its `domain`
+alone, so a caller can convert a timestamp before the document loads — to
+check a raw document's `solver.time_span` itself, say:
+
+| Binding | Signatures |
+|---|---|
+| Julia | `time_origin(file::EsmFile)`, `time_origin(domain::Union{Domain,AbstractDict,Nothing})`; `timestamp_to_seconds` takes the same first argument, then `timestamp` |
+| Python | `time_origin(source)`, `timestamp_to_seconds(source, timestamp)`, `source` an `EsmFile`, a `Domain`, a raw `dict` or `None`; another type is a `TypeError` |
+| Rust | `time_origin<S: TimeOriginSource + ?Sized>(source: &S) -> Result<f64, _>`, `timestamp_to_seconds(source: &S, timestamp: &str) -> Result<f64, _>`; the sealed trait `TimeOriginSource` is implemented for `EsmFile`, `Domain`, `serde_json::Value`, `Option<T>` and `&T` |
+
+The raw form is the document's `domain` JSON value, `null` (or Julia
+`nothing`, Python `None`, Rust `Value::Null`) for a document without one. It is
+read as the load-time check reads it (esm-spec §2.2.7): a present origin key
+selects its field, `null` included, and a `temporal` that is not an object has
+no origin field. Every form gives the same answer for the same domain.
+
+**Refusals.** Each cause has its own code, so a caller tells them apart without
+reading the message:
+
+| Code | Cause |
+|---|---|
+| `timestamp_malformed` | `timestamp` is not a string, or not of the form `YYYY-MM-DDThh:mm:ss[.f]Z` |
+| `timestamp_no_calendar_day` | `timestamp` is of that form, but its day is not in its month (`2019-02-30`, `02-29` outside a leap year) |
+| `time_origin_invalid` | the origin field that applies is present but is not an RFC 3339 date-time naming a calendar day; the message names its pointer |
+
+`timestamp_to_seconds` checks them in that order, the timestamp before the
+origin, in every binding. `time_origin` can only raise `time_origin_invalid`.
+`resolve_time_span` is unchanged: it and the load-time check raise
+`solver_time_span_invalid` for every cause, naming `/solver/time_span`, since
+esm-spec §2.2.5 gives a `time_span` that is no interval one code.
+
 Reconstructing a timestamp's POSIX time from the pair is a separate matter.
 `time_origin(f) + timestamp_to_seconds(f, ts)` rounds `W₀ + f₀` and
 `(W − W₀) + (f − f₀)` separately before adding them, so it equals `W + f` only
 to within binary64 rounding — exactly when the fractions are representable
 (origin `.25`, timestamp `.5`), one ulp off otherwise (origin `.2`, timestamp
-`.1`). A caller who needs a timestamp's POSIX time converts it with the same
-origin through `resolve_time_span`, rather than reconstructing it from rounded
-parts.
+`.1`). A caller who needs a timestamp's POSIX time converts it against no
+domain, `timestamp_to_seconds(nothing, ts)`, whose origin is the epoch itself.
 
-A present-but-unreadable origin, a malformed timestamp, or a day that names no
-calendar day raises `solver_time_span_invalid` (the code §2.2.7's load check
-already uses); when the timestamp AND the origin are both bad, the timestamp is
-reported first, in every binding. Julia, Python and Rust carry all three
-operations. TypeScript and Go carry `resolve_time_span` but not the two new
-accessors — neither binding simulates, and the pair exists for a host driving a
-run.
+Julia, Python and Rust carry all three operations. TypeScript and Go carry
+`resolve_time_span` but not the two accessors — neither binding simulates, and
+the pair exists for a host driving a run — though their code registries list
+the three codes, as every registry lists the whole vocabulary.
 
 #### `compiler`: which strategy builds the right-hand side
 

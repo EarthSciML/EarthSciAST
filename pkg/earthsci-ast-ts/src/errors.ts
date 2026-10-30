@@ -348,6 +348,16 @@ export const ERROR_CODES = {
   //   after `start`, a timestamp naming no calendar day, or an unreadable time
   //   origin (esm-spec §2.2.7).
   SOLVER_TIME_SPAN_INVALID: 'solver_time_span_invalid',
+  // `timestamp_malformed` / `timestamp_no_calendar_day` / `time_origin_invalid`
+  //   — the causes the §2.2.7 clock accessors (`time_origin`,
+  //   `timestamp_to_seconds`; API_SPEC §5.8) report, one code each: a
+  //   timestamp not in the `solver.time_span` bound form, one whose day is not
+  //   in its month, and an unreadable `domain.temporal` origin. This binding
+  //   does not simulate and carries no clock accessor, so it never raises them;
+  //   the entries keep the vocabulary uniform across the five registries.
+  TIMESTAMP_MALFORMED: 'timestamp_malformed',
+  TIMESTAMP_NO_CALENDAR_DAY: 'timestamp_no_calendar_day',
+  TIME_ORIGIN_INVALID: 'time_origin_invalid',
 
   // ---- templates: §9.6 expression-template lowering + §9.7 template-library
   //      imports (lower-expression-templates.ts, template-imports.ts;

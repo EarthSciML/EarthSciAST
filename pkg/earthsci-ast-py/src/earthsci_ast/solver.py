@@ -32,10 +32,13 @@ from .error_handling import (
     SOLVER_TIME_SPAN_INVALID,
     SOLVER_TIME_SPAN_VERSION_TOO_OLD,
     SOLVER_VERSION_TOO_OLD,
+    TIME_ORIGIN_INVALID,
+    TIMESTAMP_MALFORMED,
+    TIMESTAMP_NO_CALENDAR_DAY,
 )
 
 if TYPE_CHECKING:
-    from .esm_types import EsmFile
+    from .esm_types import Domain, EsmFile
 
 __all__ = [
     "SolverBlockError",
@@ -561,29 +564,52 @@ def resolve_time_span(
     return _time_span_seconds(span.start, span.end, temporal)
 
 
-def _document_origin_parts(esm_file: EsmFile) -> tuple[int, float]:
-    """(*W₀*, *f₀*) of the document's time origin, or a refusal (esm-spec §2.2.7).
+def _temporal_of(source: Any) -> Any:
+    """The ``domain.temporal`` the clock accessors read from ``source``.
+
+    ``source`` is an :class:`~earthsci_ast.esm_types.EsmFile`, a typed
+    :class:`~earthsci_ast.esm_types.Domain`, a raw JSON ``domain`` dict (a
+    document that has not been loaded), or ``None`` for a document without a
+    domain. A raw ``temporal`` comes back as it is, for :func:`_origin_field`
+    to read with the load-time check's rules.
+    """
+    from .esm_types import Domain, EsmFile
+
+    if isinstance(source, EsmFile):
+        source = source.domain
+    if source is None:
+        return None
+    if isinstance(source, dict):
+        return source.get("temporal")
+    if isinstance(source, Domain):
+        return source.temporal
+    raise TypeError(
+        "a time origin is read from an EsmFile, a Domain, a raw JSON domain dict "
+        f"or None, not {type(source).__name__}"
+    )
+
+
+def _origin_parts(source: Any) -> tuple[int, float]:
+    """(*W₀*, *f₀*) of ``source``'s time origin, or a refusal (esm-spec §2.2.7).
 
     The origin is ``domain.temporal.reference_time``, else
     ``domain.temporal.start``, else the POSIX epoch. Raises
-    ``solver_time_span_invalid`` naming ``/domain/temporal/...`` when the field
+    ``time_origin_invalid`` naming ``/domain/temporal/...`` when the field
     that applies is present but is not an RFC 3339 date-time naming a calendar
     day.
     """
-    domain = getattr(esm_file, "domain", None)
-    temporal = getattr(domain, "temporal", None) if domain is not None else None
     try:
-        return _read_origin(temporal)
+        return _read_origin(_temporal_of(source))
     except _OriginUnreadable as exc:
         raise SolverBlockError(
-            SOLVER_TIME_SPAN_INVALID,
-            f"the document's time origin {exc.pointer} ({exc.authored!r}) is not an RFC 3339 "
+            TIME_ORIGIN_INVALID,
+            f"the time origin {exc.pointer} ({exc.authored!r}) is not an RFC 3339 "
             "date-time naming a calendar day (esm-spec §2.2.7)",
         ) from None
 
 
-def time_origin(esm_file: EsmFile) -> float:
-    """The document's time origin in binary64 seconds from the POSIX epoch.
+def time_origin(source: EsmFile | Domain | dict[str, Any] | None) -> float:
+    """The time origin in binary64 seconds from the POSIX epoch.
 
     The instant ``domain.temporal.reference_time`` -- else
     ``domain.temporal.start``, else the epoch itself -- names, as ``W0 + f0``:
@@ -592,27 +618,38 @@ def time_origin(esm_file: EsmFile) -> float:
     caller does the same arithmetic for a timestamp of its own with
     :func:`timestamp_to_seconds`.
 
-    Raises ``solver_time_span_invalid`` naming ``/domain/temporal/...`` when the
+    ``source`` is a document (:class:`~earthsci_ast.esm_types.EsmFile`) or its
+    domain alone: a typed :class:`~earthsci_ast.esm_types.Domain`, the raw JSON
+    ``domain`` dict of a document that has not been loaded, or ``None`` for a
+    document without one. The raw form is read as the load-time check reads it:
+    a present key selects its field, ``null`` included, and a ``temporal`` that
+    is not an object has no origin field.
+
+    Raises ``time_origin_invalid`` naming ``/domain/temporal/...`` when the
     origin field that applies is present but is not an RFC 3339 date-time naming
-    a calendar day.
+    a calendar day, and :class:`TypeError` for a ``source`` of another type.
     """
-    whole, frac = _document_origin_parts(esm_file)
+    whole, frac = _origin_parts(source)
     return float(whole) + frac
 
 
-def timestamp_to_seconds(esm_file: EsmFile, timestamp: str) -> float:
-    """``timestamp`` as seconds from ``esm_file``'s time origin (esm-spec §2.2.7).
+def timestamp_to_seconds(source: EsmFile | Domain | dict[str, Any] | None, timestamp: str) -> float:
+    """``timestamp`` as seconds from ``source``'s time origin (esm-spec §2.2.7).
 
     ``timestamp`` is an RFC 3339 UTC timestamp (``YYYY-MM-DDThh:mm:ss[.f]Z``,
     the ``solver.time_span`` bound form). The result is ``(W - W0) + (f - f0)``:
     the whole-second difference in integers, then the fractions added in
     binary64 -- exactly what :func:`resolve_time_span` does to a ``time_span``
-    timestamp. The origin is :func:`time_origin`.
+    timestamp. ``source`` and the origin are as for :func:`time_origin`.
 
-    Raises ``solver_time_span_invalid`` when ``timestamp`` is not of that form or
-    names no calendar day, or when the document's origin cannot be read. The
-    timestamp is checked BEFORE the origin, so the two errors a caller cannot
-    tell apart by code are still reported in the same order in every binding.
+    Each cause has its own code, checked in this order, so the first that
+    applies is the one raised:
+
+    1. ``timestamp_malformed`` -- ``timestamp`` is not a string, or not of that
+       form;
+    2. ``timestamp_no_calendar_day`` -- it is of that form but its day is not
+       in its month (``2019-02-30``, ``02-29`` outside a leap year);
+    3. ``time_origin_invalid`` -- the origin field that applies cannot be read.
     """
     parsed: tuple[int, float] | None = None
     if isinstance(timestamp, str):
@@ -620,17 +657,17 @@ def timestamp_to_seconds(esm_file: EsmFile, timestamp: str) -> float:
             parsed = _parse_bound_timestamp(timestamp)
         except _NoCalendarDay:
             raise SolverBlockError(
-                SOLVER_TIME_SPAN_INVALID,
-                f'timestamp "{timestamp}" names no calendar day (esm-spec §2.2.7)',
+                TIMESTAMP_NO_CALENDAR_DAY,
+                f"timestamp {timestamp!r} names no calendar day (esm-spec §2.2.7)",
             ) from None
     if parsed is None:
         raise SolverBlockError(
-            SOLVER_TIME_SPAN_INVALID,
-            f'timestamp "{timestamp}" is not an RFC 3339 UTC timestamp '
+            TIMESTAMP_MALFORMED,
+            f"timestamp {timestamp!r} is not an RFC 3339 UTC timestamp "
             "(YYYY-MM-DDThh:mm:ss[.f]Z) (esm-spec §2.2.7)",
         )
     whole, frac = parsed
-    w0, f0 = _document_origin_parts(esm_file)
+    w0, f0 = _origin_parts(source)
     return float(whole - w0) + (frac - f0)
 
 

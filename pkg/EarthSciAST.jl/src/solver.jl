@@ -260,23 +260,29 @@ function _datetime_parts(s::AbstractString, re::Regex)
     return (whole, frac)
 end
 
+# Why a `time_span` bound, a timestamp or a time origin has no value in seconds.
+# `code` is the cause's own code, which the clock accessors raise
+# (`timestamp_malformed`, `timestamp_no_calendar_day`, `time_origin_invalid`);
+# the `time_span` paths raise `solver_time_span_invalid` whatever the cause.
 struct _TimeSpanFault
+    code::String
     message::String
 end
 
 # The time origin of §2.2.7 as `(W0, f0)`: `domain.temporal.reference_time`,
 # else `domain.temporal.start`, else the POSIX epoch. Reads raw JSON and the
-# typed `Domain.temporal` dict alike.
+# typed `Domain.temporal` dict alike; a `domain` or `temporal` that is not an
+# object has no origin field.
 function _time_origin(domain)
-    temporal = domain === nothing ? nothing :
-               domain isa Domain ? domain.temporal : _raw_get(domain, "temporal")
+    temporal = domain isa Domain ? domain.temporal :
+               _is_object(domain) ? _raw_get(domain, "temporal") : nothing
     (temporal === nothing || !_is_object(temporal)) && return (0, 0.0)
     for key in ("reference_time", "start")
         # A present key selects its field, `null` included (esm-spec §2.2.7).
         _raw_haskey(temporal, key) || continue
         v = _raw_get(temporal, key)
         parts = v isa AbstractString ? _datetime_parts(v, _RFC3339_DATETIME_RE) : nothing
-        parts === nothing && return _TimeSpanFault(
+        parts === nothing && return _TimeSpanFault(ERROR_CODES.TIME_ORIGIN_INVALID,
             "/domain/temporal/$(key) is \"$(v)\", which is not an RFC 3339 date-time, " *
             "so it cannot serve as the time origin a timestamp is counted from")
         return parts
@@ -288,16 +294,18 @@ end
 function _time_span_seconds(bound, which::String, origin)
     if bound isa Real && !(bound isa Bool)
         v = Float64(bound)
-        isfinite(v) || return _TimeSpanFault(
+        isfinite(v) || return _TimeSpanFault(ERROR_CODES.SOLVER_TIME_SPAN_INVALID,
             "$(which) ($(bound)) is not a finite number of seconds in binary64")
         return v
     end
     bound isa AbstractString && occursin(_TIME_SPAN_TIMESTAMP_RE, bound) ||
-        return _TimeSpanFault("$(which) \"$(bound)\" is not an RFC 3339 UTC timestamp " *
+        return _TimeSpanFault(ERROR_CODES.TIMESTAMP_MALFORMED,
+                              "$(which) \"$(bound)\" is not an RFC 3339 UTC timestamp " *
                               "(YYYY-MM-DDThh:mm:ss[.f]Z)")
     parts = _datetime_parts(bound, _TIME_SPAN_TIMESTAMP_RE)
     parts === nothing &&
-        return _TimeSpanFault("$(which) \"$(bound)\" names no calendar day")
+        return _TimeSpanFault(ERROR_CODES.TIMESTAMP_NO_CALENDAR_DAY,
+                              "$(which) \"$(bound)\" names no calendar day")
     origin isa _TimeSpanFault && return origin
     (w, f), (w0, f0) = parts, origin
     return Float64(w - w0) + (f - f0)
@@ -310,7 +318,7 @@ function _time_span_interval(start, stop, domain)
     s isa _TimeSpanFault && return s
     e = _time_span_seconds(stop, "end", origin)
     e isa _TimeSpanFault && return e
-    e > s || return _TimeSpanFault(
+    e > s || return _TimeSpanFault(ERROR_CODES.SOLVER_TIME_SPAN_INVALID,
         "end ($(e) s) is not after start ($(s) s), so it describes no interval")
     return (s, e)
 end
@@ -364,29 +372,39 @@ function resolve_time_span(file::EsmFile; tspan=nothing)
     return r
 end
 
-# The two §2.2.7 accessors below surface the same calendar `resolve_time_span`
-# uses, but they are not about `/solver/time_span`: their fault names the
-# offending input rather than that path, so they get their own wrapper (the
-# fault message already names `/domain/temporal/...` or the bad timestamp).
-_time_span_accessor_error(fault::_TimeSpanFault) = ExpressionTemplateError(
-    ERROR_CODES.SOLVER_TIME_SPAN_INVALID, fault.message * " (esm-spec §2.2.7).")
+# The §2.2.7 clock accessors below surface the same calendar
+# `resolve_time_span` uses, but they are not about `/solver/time_span`: each
+# raises the code of its cause, and the message names the offending input (the
+# bad timestamp, or `/domain/temporal/...`) rather than that path.
+_time_span_accessor_error(fault::_TimeSpanFault) =
+    ExpressionTemplateError(fault.code, fault.message * " (esm-spec §2.2.7).")
 
 """
     time_origin(file::EsmFile) -> Float64
+    time_origin(domain) -> Float64
 
-The document's time origin in seconds from the POSIX epoch: the instant
+The time origin in seconds from the POSIX epoch: the instant
 `domain.temporal.reference_time` — else `domain.temporal.start`, else the epoch
 itself — names, as `W₀ + f₀`, whole seconds in integers and the fraction in
 binary64. This is the origin a `solver.time_span` timestamp is counted from
 (esm-spec §2.2.7), exposed so a caller does the same arithmetic for a timestamp
 of its own with [`timestamp_to_seconds`](@ref).
 
-Raises `solver_time_span_invalid`, naming `/domain/temporal/...`, when the
-origin field that applies is present but is not an RFC 3339 date-time naming a
+The origin comes from a loaded or in-memory document, or from its `domain`
+alone: a typed `Domain`, the raw JSON `domain` object of a document
+that has not been loaded (any `AbstractDict`, a `JSON3.Object` included), or
+`nothing` for a document without one. The raw form is read as the load-time
+check reads it, so a present key selects its field, `null` included, and a
+`temporal` that is not an object has no origin field.
+
+Raises `time_origin_invalid`, naming `/domain/temporal/...`, when the origin
+field that applies is present but is not an RFC 3339 date-time naming a
 calendar day.
 """
-function time_origin(file::EsmFile)
-    origin = _time_origin(file.domain)
+time_origin(file::EsmFile) = time_origin(file.domain)
+
+function time_origin(domain::Union{Domain,AbstractDict,Nothing})
+    origin = _time_origin(domain)
     origin isa _TimeSpanFault && throw(_time_span_accessor_error(origin))
     w0, f0 = origin
     return Float64(w0) + f0
@@ -394,34 +412,41 @@ end
 
 """
     timestamp_to_seconds(file::EsmFile, timestamp) -> Float64
+    timestamp_to_seconds(domain, timestamp) -> Float64
 
 `timestamp`, an RFC 3339 UTC timestamp (`YYYY-MM-DDThh:mm:ss[.f]Z` — the
-`solver.time_span` bound form), as seconds from `file`'s time origin:
+`solver.time_span` bound form), as seconds from the time origin of `file` or of
+`domain` (typed, raw JSON or `nothing`, as for [`time_origin`](@ref)):
 `(W − W₀) + (f − f₀)`, the whole-second difference in integers and then the
 fractions in binary64, exactly as [`resolve_time_span`](@ref) converts a
-`time_span` timestamp (esm-spec §2.2.7). The origin is
-[`time_origin(file)`](@ref).
+`time_span` timestamp (esm-spec §2.2.7).
 
-Raises `solver_time_span_invalid` when `timestamp` is not a string, is not of
-that form, or names no calendar day, or when the document's origin cannot be
-read. The timestamp is checked before the origin, so the two errors — which
-share a code — are reported in the same order as in the other bindings.
+Each cause has its own code, checked in this order, so the first that applies
+is the one raised:
+
+1. `timestamp_malformed` — `timestamp` is not a string, or not of that form;
+2. `timestamp_no_calendar_day` — it is of that form but its day is not in its
+   month (`2019-02-30`, `02-29` outside a leap year);
+3. `time_origin_invalid` — the origin field that applies cannot be read.
+
+The timestamp is checked before the origin, so a bad timestamp is reported as
+such even when the origin is also unreadable.
 """
-function timestamp_to_seconds(file::EsmFile, timestamp::AbstractString)
-    # `_time_span_seconds` checks the timestamp's form and calendar BEFORE it
-    # consults the origin, so a bad timestamp is reported as such even when the
-    # document's origin is also unreadable.
-    s = _time_span_seconds(timestamp, "timestamp", _time_origin(file.domain))
-    s isa _TimeSpanFault && throw(_time_span_accessor_error(s))
-    return s
-end
+timestamp_to_seconds(file::EsmFile, timestamp) = timestamp_to_seconds(file.domain, timestamp)
 
-# A non-string timestamp is a caller error, not a `MethodError`: report it with
-# the same code and shape as Python (which maps it to `solver_time_span_invalid`).
-function timestamp_to_seconds(file::EsmFile, timestamp)
-    throw(_time_span_accessor_error(_TimeSpanFault(
+function timestamp_to_seconds(domain::Union{Domain,AbstractDict,Nothing}, timestamp)
+    # A non-string timestamp is a caller error, not a `MethodError`, reported
+    # with the same code as in the other bindings.
+    timestamp isa AbstractString || throw(_time_span_accessor_error(_TimeSpanFault(
+        ERROR_CODES.TIMESTAMP_MALFORMED,
         "timestamp ($(repr(timestamp))) is not an RFC 3339 UTC timestamp " *
         "(YYYY-MM-DDThh:mm:ss[.f]Z)")))
+    # `_time_span_seconds` checks the timestamp's form and calendar BEFORE it
+    # consults the origin, so a bad timestamp is reported as such even when the
+    # origin is also unreadable.
+    s = _time_span_seconds(timestamp, "timestamp", _time_origin(domain))
+    s isa _TimeSpanFault && throw(_time_span_accessor_error(s))
+    return s
 end
 
 """

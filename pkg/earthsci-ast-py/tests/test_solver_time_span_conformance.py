@@ -320,7 +320,7 @@ def test_time_origin_refuses_an_unreadable_origin() -> None:
     f = _in_memory(0, 1, {"reference_time": "not-a-date"})
     with pytest.raises(earthsci_ast.SolverBlockError) as excinfo:
         earthsci_ast.time_origin(f)
-    assert excinfo.value.code == "solver_time_span_invalid"
+    assert excinfo.value.code == "time_origin_invalid"
     assert "/domain/temporal/reference_time" in str(excinfo.value)
 
 
@@ -328,24 +328,80 @@ def test_timestamp_to_seconds_refuses_a_bad_timestamp_or_origin() -> None:
     ref = _load(BY_ID["timestamps_reference_time"])
     with pytest.raises(earthsci_ast.SolverBlockError) as excinfo:
         earthsci_ast.timestamp_to_seconds(ref, "2019-07-01")
-    assert excinfo.value.code == "solver_time_span_invalid"
+    assert excinfo.value.code == "timestamp_malformed"
     assert "not an RFC 3339 UTC timestamp" in str(excinfo.value)
 
     with pytest.raises(earthsci_ast.SolverBlockError) as excinfo:
         earthsci_ast.timestamp_to_seconds(ref, "2019-02-30T00:00:00Z")
+    assert excinfo.value.code == "timestamp_no_calendar_day"
     assert "names no calendar day" in str(excinfo.value)
 
     with pytest.raises(earthsci_ast.SolverBlockError) as excinfo:
         earthsci_ast.timestamp_to_seconds(
             _in_memory(0, 1, {"reference_time": "not-a-date"}), "2019-07-01T00:00:00Z"
         )
+    assert excinfo.value.code == "time_origin_invalid"
     assert "/domain/temporal/reference_time" in str(excinfo.value)
 
 
-def test_the_timestamp_is_reported_before_the_origin() -> None:
-    """Both errors share a code, so the order must match Julia and Rust."""
-    f = _in_memory(0, 1, {"reference_time": "not-a-date"})
+def test_resolve_time_span_keeps_its_one_code() -> None:
+    """The accessors' codes are theirs: `resolve_time_span` raises
+    `solver_time_span_invalid` whatever the cause."""
+    f = _in_memory("2019-07-01T00:00:00Z", "2019-07-02T00:00:00Z", {"reference_time": "x"})
     with pytest.raises(earthsci_ast.SolverBlockError) as excinfo:
-        earthsci_ast.timestamp_to_seconds(f, "2019-07-01")
-    assert "not an RFC 3339 UTC timestamp" in str(excinfo.value)
-    assert "/domain/temporal/reference_time" not in str(excinfo.value)
+        earthsci_ast.resolve_time_span(f)
+    assert excinfo.value.code == "solver_time_span_invalid"
+
+
+def test_the_accessors_refuse_a_source_that_is_no_domain() -> None:
+    with pytest.raises(TypeError):
+        earthsci_ast.time_origin("model.esm")  # type: ignore[arg-type]
+
+
+# --- the shared pin of the clock accessors (manifest `clock`) -----------------
+
+CLOCK = MANIFEST["clock"]
+
+
+def test_the_clock_pin_requires_this_binding() -> None:
+    assert "python" in CLOCK["bindings_required"]
+
+
+def _clock_forms(case: dict) -> list:
+    """The case's domain as raw JSON, and, when `typed`, as a typed `Domain`
+    and inside a document built in memory."""
+    from earthsci_ast.esm_types import Domain, TemporalDomain
+
+    raw = case["domain"]
+    forms: list = [raw]
+    if case["typed"]:
+        typed = None
+        if raw is not None:
+            temporal = raw.get("temporal")
+            typed = Domain(temporal=None if temporal is None else TemporalDomain(**temporal))
+            forms.append(typed)
+        forms.append(EsmFile(version="1.3.0", metadata=Metadata(title="m"), domain=typed))
+    return forms
+
+
+def _attempt(call):
+    try:
+        return ("ok", call())
+    except earthsci_ast.SolverBlockError as exc:
+        return ("error", exc.code)
+
+
+def _expected(want: dict):
+    return ("ok", float(want["seconds"])) if "seconds" in want else ("error", want["error_code"])
+
+
+@pytest.mark.parametrize("case", CLOCK["cases"], ids=[c["id"] for c in CLOCK["cases"]])
+def test_the_clock_accessors_on_a_domain(case: dict) -> None:
+    for form in _clock_forms(case):
+        got = _attempt(lambda: earthsci_ast.time_origin(form))  # noqa: B023
+        assert got == _expected(case["origin"]), (type(form).__name__, got)
+        if got[0] == "ok":
+            assert isinstance(got[1], float)
+        for t in case["timestamps"]:
+            got = _attempt(lambda: earthsci_ast.timestamp_to_seconds(form, t["timestamp"]))  # noqa: B023
+            assert got == _expected(t), (type(form).__name__, t["timestamp"], got)

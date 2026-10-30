@@ -7112,6 +7112,20 @@ document carrying the field (`solver_time_span_version_too_old`).
 **The call site.** The manifest's `call_site` cases pass an explicit interval
 to the accessor, which MUST return it whether or not the document declares one.
 
+**The clock accessors.** The manifest's `clock` cases pin `time_origin` and
+`timestamp_to_seconds` (API_SPEC §5.8) in the three bindings that carry them,
+`clock.bindings_required` = `["julia", "python", "rust"]`. Each case gives a
+`domain` as raw JSON, and a binding runs it on that raw value and, where the
+typed form can hold it, on the typed domain and on a document built in memory
+that carries it; all forms MUST agree. The origin and every conversion are
+compared EXACTLY, or by code for a refusal: `timestamp_malformed`,
+`timestamp_no_calendar_day` and `time_origin_invalid`, checked in that order.
+The cases cover the three origins, offsets and a lowercase `t`, fractions on
+both sides, including a pair where `(W − W₀) + (f − f₀)` and
+`(W + f) − (W₀ + f₀)` differ, years 1 and 9999, each malformed shape, days a
+month does not have, and an origin that is unreadable, names no day, is a leap
+second, has an offset out of range, ends in a newline or is `null`.
+
 **Mounting.** At both mount forms, a root reports its own interval or none,
 its emitted `solver` block carries nothing of the leaf's, and a root mounting a
 leaf whose `time_span` is reversed, or a 1.2.0 leaf that carries one, MUST

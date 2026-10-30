@@ -440,7 +440,7 @@ fn a_bad_timestamp_is_reported_before_a_bad_origin() {
     ))
     .expect("typed document");
     let e = earthsci_ast::timestamp_to_seconds(&bad, "2019-07-01").expect_err("bad form");
-    assert_eq!(e.code, "solver_time_span_invalid");
+    assert_eq!(e.code, "timestamp_malformed");
     assert!(
         e.message.contains("not an RFC 3339 UTC timestamp"),
         "{}",
@@ -465,7 +465,7 @@ fn the_accessors_refuse_a_bad_origin_or_timestamp() {
     .expect("typed document");
 
     let e = earthsci_ast::time_origin(&bad).expect_err("an unreadable origin is refused");
-    assert_eq!(e.code, "solver_time_span_invalid");
+    assert_eq!(e.code, "time_origin_invalid");
     assert!(
         e.message.contains("/domain/temporal/reference_time"),
         "{}",
@@ -473,7 +473,7 @@ fn the_accessors_refuse_a_bad_origin_or_timestamp() {
     );
     let e = earthsci_ast::timestamp_to_seconds(&bad, "2019-07-01T00:00:00Z")
         .expect_err("an unreadable origin is refused");
-    assert_eq!(e.code, "solver_time_span_invalid");
+    assert_eq!(e.code, "time_origin_invalid");
     assert!(
         e.message.contains("/domain/temporal/reference_time"),
         "{}",
@@ -482,7 +482,7 @@ fn the_accessors_refuse_a_bad_origin_or_timestamp() {
 
     let reference = load(&fixture_by_id(&m, "timestamps_reference_time")).expect("loads");
     let e = earthsci_ast::timestamp_to_seconds(&reference, "2019-07-01").expect_err("bad form");
-    assert_eq!(e.code, "solver_time_span_invalid");
+    assert_eq!(e.code, "timestamp_malformed");
     assert!(
         e.message.contains("not an RFC 3339 UTC timestamp"),
         "{}",
@@ -490,6 +490,100 @@ fn the_accessors_refuse_a_bad_origin_or_timestamp() {
     );
     let e = earthsci_ast::timestamp_to_seconds(&reference, "2019-02-30T00:00:00Z")
         .expect_err("no such day");
-    assert_eq!(e.code, "solver_time_span_invalid");
+    assert_eq!(e.code, "timestamp_no_calendar_day");
     assert!(e.message.contains("names no calendar day"), "{}", e.message);
+
+    // `resolve_time_span` keeps the one §2.2.7 code whatever the cause.
+    let bad_span: earthsci_ast::EsmFile = serde_json::from_str(&decay_doc(
+        serde_json::json!({"time_span": {
+            "start": "2019-07-01T00:00:00Z", "end": "2019-07-02T00:00:00Z"}}),
+        Some(serde_json::json!({"reference_time": "not-a-date"})),
+    ))
+    .expect("typed document");
+    let e = earthsci_ast::resolve_time_span(&bad_span, None).expect_err("unreadable origin");
+    assert_eq!(e.code, "solver_time_span_invalid");
+}
+
+// --- the shared pin of the clock accessors (manifest `clock`) ----------------
+
+/// `Ok(bits)` or `Err(code)`, so a case compares in one assertion. A macro,
+/// since the accessors' error type is not nameable outside the crate. Bits,
+/// not the f64: binary64 equality, and -0.0 is not 0.0.
+macro_rules! outcome {
+    ($r:expr) => {
+        match $r {
+            Ok(x) => Ok(f64::to_bits(x)),
+            Err(e) => Err(e.code.to_string()),
+        }
+    };
+}
+
+fn expected(want: &Value) -> Result<u64, String> {
+    match want.get("seconds") {
+        Some(x) => Ok(x.as_f64().expect("seconds is a number").to_bits()),
+        None => Err(want["error_code"].as_str().expect("error_code").to_string()),
+    }
+}
+
+/// Run one clock case against one source form: the raw domain, the typed
+/// `Domain`, `Option<Domain>`, or a document carrying it.
+fn check_clock_case<S: earthsci_ast::TimeOriginSource + ?Sized>(
+    case: &Value,
+    form: &str,
+    source: &S,
+) {
+    let id = case["id"].as_str().expect("id");
+    assert_eq!(
+        outcome!(earthsci_ast::time_origin(source)),
+        expected(&case["origin"]),
+        "{id} ({form}): time_origin"
+    );
+    for t in case["timestamps"].as_array().expect("timestamps") {
+        // The signature takes `&str`: a non-string timestamp cannot be passed.
+        let Some(stamp) = t["timestamp"].as_str() else {
+            continue;
+        };
+        assert_eq!(
+            outcome!(earthsci_ast::timestamp_to_seconds(source, stamp)),
+            expected(t),
+            "{id} ({form}): timestamp_to_seconds({stamp:?})"
+        );
+    }
+}
+
+#[test]
+fn the_clock_accessors_on_a_domain() {
+    let m = manifest();
+    let clock = &m["clock"];
+    assert!(
+        clock["bindings_required"]
+            .as_array()
+            .expect("bindings_required")
+            .iter()
+            .any(|b| b == "rust")
+    );
+    let cases = clock["cases"].as_array().expect("cases");
+    assert!(!cases.is_empty());
+    for case in cases {
+        let raw = &case["domain"];
+        check_clock_case(case, "raw", raw);
+        if case["typed"] != Value::Bool(true) {
+            continue;
+        }
+        let typed: Option<earthsci_ast::Domain> = if raw.is_null() {
+            None
+        } else {
+            Some(serde_json::from_value(raw.clone()).expect("a typed domain"))
+        };
+        if let Some(d) = &typed {
+            check_clock_case(case, "typed", d);
+        }
+        check_clock_case(case, "optional", &typed);
+        let mut doc = serde_json::json!({"esm": "1.3.0", "metadata": {"name": "m"}});
+        if !raw.is_null() {
+            doc["domain"] = raw.clone();
+        }
+        let file: earthsci_ast::EsmFile = serde_json::from_value(doc).expect("a typed document");
+        check_clock_case(case, "document", &file);
+    }
 }
