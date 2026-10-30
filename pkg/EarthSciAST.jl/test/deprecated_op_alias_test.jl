@@ -99,6 +99,65 @@ end
         end
     end
 
+    @testset "the other version gates read the RAISED esm, on every path" begin
+        # A 1.0.0 file spelling `aggregate` is raised to 1.1.0 at the wire
+        # boundary, so its `solver` block (a 1.1.0 construct) is legal: as a
+        # root read from a file, as the same root held in memory, and as a
+        # mounted leaf. Only the `faq` gate reads the authored version.
+        err_text(f) = try f(); "" catch e; sprint(showerror, e) end
+        mktempdir() do dir
+            function with_solver(src, version)
+                doc = JSON3.read(read(joinpath(_ALIAS_CONF, src), String), Dict{String,Any})
+                doc["esm"] = version
+                doc["solver"] = Dict{String,Any}("stiffness" => "high")
+                return doc
+            end
+            root = with_solver("aliased.esm", "1.0.0")
+            path = joinpath(dir, "root.esm")
+            write(path, JSON3.write(root))
+            @test EarthSciAST.load_path(path).esm == "1.1.0"
+            @test EarthSciAST.load_document(root).esm == "1.1.0"
+
+            write(joinpath(dir, "ref_child_aliased.esm"),
+                  JSON3.write(with_solver("ref_child_aliased.esm", "1.0.0")))
+            parent = JSON3.read(read(joinpath(_ALIAS_CONF, "ref_parent_aliased.esm"), String),
+                                Dict{String,Any})
+            write(joinpath(dir, "parent.esm"), JSON3.write(parent))
+            @test EarthSciAST.load_path(joinpath(dir, "parent.esm")) isa EarthSciAST.EsmFile
+
+            # The `faq` gate still reads the authored version in memory too.
+            canonical = with_solver("canonical.esm", "1.0.0")
+            @test occursin("faq_version_too_old",
+                           err_text(() -> EarthSciAST.load_document(canonical)))
+            # Without the alias there is nothing to raise: a 1.0.0 `solver`
+            # block is refused.
+            plain = with_solver("canonical.esm", "1.0.0")
+            delete!(plain, "index_sets")
+            plain["models"] = Dict{String,Any}("M" => Dict{String,Any}(
+                "variables" => Dict{String,Any}("u" => Dict{String,Any}("type" => "unknown")),
+                "equations" => Any[Dict{String,Any}(
+                    "lhs" => Dict{String,Any}("op" => "D", "args" => Any["u"], "wrt" => "t"),
+                    "rhs" => 0)]))
+            @test occursin("solver_version_too_old",
+                           err_text(() -> EarthSciAST.load_document(plain)))
+        end
+    end
+
+    @testset "each file is held to its own esm across a mount (§4.7)" begin
+        inv = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid")
+        code(path) = try
+            EarthSciAST.load_path(path); nothing
+        catch e
+            e isa EarthSciAST.ExpressionTemplateError ? e.code : rethrow(e)
+        end
+        @test code(joinpath(inv, "version_gate_newer_mounts_older_const_units.esm")) ==
+              "const_units_version_too_old"
+        @test code(joinpath(inv, "version_gate_newer_mounts_older_solver.esm")) ==
+              "solver_version_too_old"
+        @test EarthSciAST.load_path(joinpath(TESTUTILS_REPO_ROOT, "tests", "valid",
+            "version_gate_older_mounts_newer.esm")) isa EarthSciAST.EsmFile
+    end
+
     @testset "arrayop is rejected by name, not left to the open tier" begin
         # `arrayop` matches the `op` pattern, so without a by-name rejection it
         # would load as an OPEN rewrite-target op (esm-spec §4.2) and fail only

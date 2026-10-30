@@ -1,0 +1,50 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "version_gate_newer_mounts_older_solver",
+    "description": "An esm 1.1.0 document that mounts tests/fixtures/version_gate/leaf_v100_solver.esm, an esm 1.0.0 file carrying a top-level `solver` block. Each file is held to its OWN declared version (esm-spec §4.7), so this MUST be rejected with `solver_version_too_old` even though the root itself may carry a `solver` block.",
+    "authors": [
+      "EarthSciAST"
+    ],
+    "created": "2026-10-30T00:00:00Z",
+    "tags": [
+      "version",
+      "mount"
+    ]
+  },
+  "models": {
+    "Station": {
+      "variables": {
+        "y": {
+          "type": "unknown",
+          "units": "m",
+          "default": 0.0,
+          "description": "Tracks the mounted state."
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "y"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "-",
+            "args": [
+              "Leaf.x",
+              "y"
+            ]
+          }
+        }
+      ],
+      "subsystems": {
+        "Leaf": {
+          "ref": "../fixtures/version_gate/leaf_v100_solver.esm"
+        }
+      }
+    }
+  }
+}

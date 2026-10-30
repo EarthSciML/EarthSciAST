@@ -658,6 +658,27 @@ function computeDimensions(
     return finish(walk({ op: node.fn, args } as ExpressionNode))
   }
 
+  // The argument check of an op that requires a pure number (the strict
+  // transcendentals and `asin` `acos` `atan`): dimensionless AT SCALE 1 (issue
+  // #409). A pure angle meets a pure number here (esm-spec §4.8.3): its `rad`
+  // axis is removed and its scale kept, so `rad` passes and `deg` is refused
+  // for its scale.
+  const requirePureNumberArgument = (arg: ParsedUnit | null): void => {
+    if (arg === null) return
+    if (isPureAngle(arg)) {
+      if (!arg.exact.isOne()) {
+        warn(scaledAngleMessage(op, arg.exact), ERROR_CODES.DIMENSIONAL_MISMATCH)
+      }
+    } else if (!isDimensionless(arg)) {
+      warn(
+        `${op}() requires dimensionless argument, got ${formatDims(arg.dims)}`,
+        ERROR_CODES.DIMENSIONAL_MISMATCH,
+      )
+    } else if (!isPureNumber(arg)) {
+      warn(scaledDimensionlessMessage(op, arg.exact), ERROR_CODES.DIMENSIONAL_MISMATCH)
+    }
+  }
+
   const argResults = args.map((arg) => checkDimensionsMemo(arg, unitBindings, memo, options))
   for (const r of argResults) diagnostics.push(...r.diagnostics)
 
@@ -681,9 +702,11 @@ function computeDimensions(
       // literal silently carries the sibling's unit. It costs no real coverage:
       // a genuine inconsistency (`length + mass`) is between two DECLARED
       // quantities, and is still caught.
+      //
+      // A pure angle meeting a pure number loses its `rad` axis and keeps its
+      // scale (esm-spec §4.8.3), so the agreeing result is the pure number's.
       let first: ParsedUnit | null = null
-      for (let i = 0; i < argDims.length; i++) {
-        const other = get(i)
+      for (const other of angleMeetsNumber(argDims)) {
         if (other === null) continue
         if (first === null) {
           first = other
@@ -860,18 +883,7 @@ function computeDimensions(
       // Returning dimensionless here was the other half of the same bug: it
       // reported `solar_zenith_angle`, declared `"rad"` and computed as
       // `acos(cos_zenith)`, as a mismatch against its own declaration.
-      for (let i = 0; i < argDims.length; i++) {
-        const arg = get(i)
-        if (arg !== null && !isDimensionless(arg)) {
-          warn(
-            `${op}() requires dimensionless argument, got ${formatDims(arg.dims)}`,
-            ERROR_CODES.DIMENSIONAL_MISMATCH,
-          )
-        } else if (arg !== null && !isPureNumber(arg)) {
-          // "Dimensionless" means dimensionless AT SCALE 1 (issue #409).
-          warn(scaledDimensionlessMessage(op, arg.exact), ERROR_CODES.DIMENSIONAL_MISMATCH)
-        }
-      }
+      for (let i = 0; i < argDims.length; i++) requirePureNumberArgument(get(i))
       return finish(angle())
 
     case 'exp':
@@ -890,18 +902,7 @@ function computeDimensions(
       // a hyperbolic angle — a pure number, not a circular `rad`. A dimensional
       // argument is a provable inconsistency (`log(kg)` has no meaning); the
       // shared corpus pins units_invalid_logarithm.esm on exactly this rule.
-      for (let i = 0; i < argDims.length; i++) {
-        const arg = get(i)
-        if (arg !== null && !isDimensionless(arg)) {
-          warn(
-            `${op}() requires dimensionless argument, got ${formatDims(arg.dims)}`,
-            ERROR_CODES.DIMENSIONAL_MISMATCH,
-          )
-        } else if (arg !== null && !isPureNumber(arg)) {
-          // "Dimensionless" means dimensionless AT SCALE 1 (issue #409).
-          warn(scaledDimensionlessMessage(op, arg.exact), ERROR_CODES.DIMENSIONAL_MISMATCH)
-        }
-      }
+      for (let i = 0; i < argDims.length; i++) requirePureNumberArgument(get(i))
       return finish(dimensionless())
 
     case 'atan2': {
@@ -956,9 +957,9 @@ function computeDimensions(
       // `max(x, 0)` / `min(rate, 1e-6)` clamp against a bare literal that
       // carries the operand's implicit unit — literals are neutral here for the
       // same reason they are in `+`/`-`, and `min(1, 2)` is indeterminate.
+      // An angle meeting a pure number agrees as in `+` (esm-spec §4.8.3).
       let ref: ParsedUnit | null = null
-      for (let i = 0; i < argDims.length; i++) {
-        const other = get(i)
+      for (const other of angleMeetsNumber(argDims)) {
         if (other === null) continue
         if (ref === null) {
           ref = other
@@ -987,9 +988,9 @@ function computeDimensions(
       }
       // The condition is not part of the result unit and need not be
       // dimensionless (esm-spec §4.8.3). It is still walked above, so a finding
-      // inside it — `ifelse(x [m] > z [kg], a, b)` — is still reported.
-      const a = get(1)
-      const b = get(2)
+      // inside it — `ifelse(x [m] > z [kg], a, b)` — is still reported. A
+      // branch in `rad` against one in `1` agrees (esm-spec §4.8.3).
+      const [a, b] = angleMeetsNumber([get(1), get(2)])
       if (a !== null && b !== null && !dimsEqual(a.dims, b.dims)) {
         warn(
           `ifelse() branches must have same dimensions, got ${formatDims(a.dims)} and ${formatDims(b.dims)}`,
@@ -1015,8 +1016,8 @@ function computeDimensions(
         warn(arity, ERROR_CODES.ANALYSIS)
         return finish(dimensionless())
       }
-      const a = get(0)
-      const b = get(1)
+      // An angle compared with a pure number agrees as in `+` (esm-spec §4.8.3).
+      const [a, b] = angleMeetsNumber([get(0), get(1)])
       if (a !== null && b !== null && !dimsEqual(a.dims, b.dims)) {
         warn(
           `${op} requires arguments with same dimensions, got ${formatDims(a.dims)} and ${formatDims(b.dims)}`,
@@ -1438,8 +1439,13 @@ export function validateUnits(file: EsmFile): UnitWarning[] {
                   ? tryParseUnit(variable.units)
                   : dimensionless()
                 const exprDims = exprResult.dimensions
+                // An angle against a pure number loses its `rad` axis and keeps
+                // its scale (esm-spec §4.8.3).
+                const [exprCompared, varCompared] = angleMeetsNumber([exprDims, varDims])
                 const mismatch: UnitWarning | null =
-                  varDims !== null && exprDims !== null && !sameUnit(exprDims, varDims)
+                  varDims !== null &&
+                  exprDims !== null &&
+                  !sameUnit(exprCompared as ParsedUnit, varCompared as ParsedUnit)
                     ? {
                         message: `Dimensional mismatch in observed variable ${varName}: declared as ${formatUnit(varDims)}, expression evaluates to ${formatUnit(exprDims)}`,
                         code: ERROR_CODES.DIMENSIONAL_MISMATCH,
@@ -1830,6 +1836,65 @@ function isAngle(unit: ParsedUnit): boolean {
 }
 
 /**
+ * Is this a PURE ANGLE — a nonzero power of the `rad` axis and nothing else
+ * (`rad`, `deg`, `sr`, `1/rad`)? Unlike {@link isAngle} the power is free: this
+ * is the test of esm-spec §4.8.3 "An angle meets a pure number".
+ */
+function isPureAngle(unit: ParsedUnit): boolean {
+  const { rad, ...rest } = unit.dims
+  if (rad == null || rad === 0) return false
+  for (const v of Object.values(rest)) {
+    if (v != null && v !== 0) return false
+  }
+  return true
+}
+
+/**
+ * A pure angle with its `rad` axis removed and its exact scale KEPT: `rad`
+ * becomes a pure number at scale 1, `deg` one at scale π/180 (esm-spec §4.8.3
+ * "An angle meets a pure number").
+ */
+function angleAsNumber(unit: ParsedUnit): ParsedUnit {
+  return { dims: {}, scale: unit.scale, exact: unit.exact }
+}
+
+/**
+ * The operands to compare where angles and pure numbers meet at an agreement
+ * position (`+` `-` `min` `max`, the `ifelse` branches, a comparison) or at an
+ * equation's two sides: when at least one determinable operand is a pure angle
+ * and at least one is a pure number (dimensionless at any scale), every pure
+ * angle loses its `rad` axis (esm-spec §4.8.3). Anything else is returned
+ * unchanged — two angles, `m*rad` against `m`, and the operands of `atan2`,
+ * `concat` and `makearray` keep the strict rule.
+ *
+ * The rule never makes two angles agree with EACH OTHER: when the pure angles
+ * present differ in power (`rad` beside `sr`), nothing is stripped, so
+ * `θ [rad] + ω [sr] + n [1]` still reports `rad` against `sr`. Angles of one
+ * power at different scales (`rad` beside `deg`) are stripped, since the kept
+ * scales still disagree.
+ */
+function angleMeetsNumber(units: ReadonlyArray<ParsedUnit | null>): Array<ParsedUnit | null> {
+  const known = units.filter((u): u is ParsedUnit => u !== null)
+  const angles = known.filter(isPureAngle)
+  if (angles.length === 0 || !known.some(isDimensionless)) return [...units]
+  if (angles.some((a) => !dimsEqual(a.dims, angles[0].dims))) return [...units]
+  return units.map((u) => (u !== null && isPureAngle(u) ? angleAsNumber(u) : u))
+}
+
+/**
+ * The refusal for a pure angle at a scale other than 1 (`deg`) where an op
+ * requires a pure number: the angle axis is removed, the scale is kept
+ * (esm-spec §4.8.3 "An angle meets a pure number").
+ */
+function scaledAngleMessage(op: string, exact: ExactScale): string {
+  return (
+    `Argument to '${op}' must be dimensionless at scale 1, but is an angle at scale ${exact}; ` +
+    `where an angle meets a pure number its scale is kept (esm-spec §4.8.3), so convert it ` +
+    `to rad first`
+  )
+}
+
+/**
  * Is this a PURE NUMBER — dimensionless AND at exact scale 1?
  *
  * This is what esm-spec §4.8.3's "the argument MUST be dimensionless" means for
@@ -2033,8 +2098,11 @@ function checkEquationUnits(
     const message = derivativeTimeMismatch(state.dimensions, rhs)
     if (message !== null) return { diagnostics, mismatch: message }
   }
+  // An angle equated with a pure number loses its `rad` axis and keeps its
+  // scale (esm-spec §4.8.3); the message names the units as declared.
+  const [lhsCompared, rhsCompared] = angleMeetsNumber([lhs, rhs])
   const mismatch =
-    lhs !== null && rhs !== null && !sameUnit(lhs, rhs)
+    lhs !== null && rhs !== null && !sameUnit(lhsCompared as ParsedUnit, rhsCompared as ParsedUnit)
       ? `Dimensional mismatch in equation: LHS has ${formatUnit(lhs)}, RHS has ${formatUnit(rhs)}`
       : null
   return { diagnostics, mismatch }

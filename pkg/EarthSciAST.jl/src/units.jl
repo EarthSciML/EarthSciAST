@@ -1050,7 +1050,29 @@ function _exact_scale(u)::ExactScale
     return scale
 end
 
-_same_unit(a, b) = dimension(a) == dimension(b) && _exact_scale(a) == _exact_scale(b)
+# Same dimension, same exact scale and the same power of the ANGLE axis. The
+# third clause is what Unitful cannot see on its own: it holds `rad` and `sr` as
+# `NoDims` at scale 1, so `rad`, `sr` and `1` would otherwise all be one unit,
+# and `m*rad` would be `m` (esm-spec §4.8.1 makes `rad` an axis).
+_same_unit(a, b) = _same_unit_ignoring_angle(a, b) &&
+    _angle_axis_exponent(a) == _angle_axis_exponent(b)
+
+# Dimension and exact scale only — Unitful's own view, in which the angle axis
+# is already removed (esm-spec §4.8.3 "An angle meets a pure number").
+_same_unit_ignoring_angle(a, b) =
+    dimension(a) == dimension(b) && _exact_scale(a) == _exact_scale(b)
+
+# Do `a` and `b` agree at a position where an angle meets a pure number
+# (esm-spec §4.8.3)? A pure angle against a pure number loses its angle axis and
+# keeps its scale (`rad` agrees with `1`, `deg` does not); every other pair —
+# two angles (`rad` against `sr`), a mixed unit (`m*rad` against `m`) — is held
+# to `_same_unit`.
+function _units_agree_where_angle_meets_number(a, b)::Bool
+    ((_is_pure_angle(a) && _is_angle_free_number(b)) ||
+     (_is_angle_free_number(a) && _is_pure_angle(b))) &&
+        return _same_unit_ignoring_angle(a, b)
+    return _same_unit(a, b)
+end
 
 # The Unitful unit NAMES that denote a PLANE angle. Unitful models `rad` as
 # `NoDims` (esm-spec §4.8.1 makes it an axis, and the other four bindings carry
@@ -1099,6 +1121,32 @@ function _is_angle_bearing(u)::Bool
     end
     return false
 end
+
+# The power of the esm ANGLE axis in `u`, whatever else `u` carries: `rad` and
+# `deg` count 1 each, `sr` counts 2, so `m*rad` has 1 and `rad/deg` has 0.
+function _angle_axis_exponent(u)::Rational{Int}
+    p = 0 // 1
+    for c in typeof(Unitful.FreeUnits(u)).parameters[1]
+        n = Unitful.name(c)
+        n in _PLANE_ANGLE_UNIT_NAMES && (p += c.power)
+        n === :Steradian && (p += 2 * c.power)
+    end
+    return p
+end
+
+# The same power, for a unit with NO other dimension; zero for a unit with a
+# real dimension.
+_angle_axis_power(u)::Rational{Int} =
+    dimension(u) == dimension(Unitful.NoUnits) ? _angle_axis_exponent(u) : 0 // 1
+
+# A PURE ANGLE (esm-spec §4.8.3 "An angle meets a pure number"): a nonzero
+# power of the angle axis and nothing else — `rad`, `deg`, `sr`, `1/rad`.
+_is_pure_angle(u)::Bool = !iszero(_angle_axis_power(u))
+
+# A PURE NUMBER in the same paragraph's sense: an EMPTY dimension at any scale
+# (`1`, `%`, `ppm`), with no angle axis.
+_is_angle_free_number(u)::Bool =
+    dimension(u) == dimension(Unitful.NoUnits) && !_is_angle_bearing(u)
 
 # Is `u` dimensionless **at scale 1** — a PURE NUMBER?
 #
@@ -1174,19 +1222,45 @@ end
 # has x's unit, and a literal adopts its siblings' unit. With no determinable
 # operand at all (`1 + 2`, `min(1, 2)`) the result is undeterminable, never
 # dimensionless (§4.8.4).
-function _same_dimensions_over(args, var_units, findings, describe)
+#
+# `angle_meets_number` marks the places where an angle meets a pure number
+# (esm-spec §4.8.3): `+`, `-`, `min`, `max`, the `ifelse` branches and the
+# comparisons, but not `atan2`, `concat` or `makearray`. There a pure angle is
+# compared with a pure number by dimension and exact scale alone (`deg` against
+# `1` is still a mismatch), but two angles are still compared with each other
+# by `_same_unit`: `θ [rad] + ω [sr] + n [1]` is a mismatch whichever operand
+# comes first. An agreeing pure angle and pure number give the pure number's
+# unit, because the angle cancels.
+function _same_dimensions_over(args, var_units, findings, describe;
+                               angle_meets_number::Bool=false)
     arg_dims = [_expr_dimensions!(findings, arg, var_units) for arg in args]
     valid_dims = filter(d -> d !== nothing, arg_dims)
     isempty(valid_dims) && return nothing
 
     first_dim = valid_dims[1]
+    first_angle = _is_pure_angle(first_dim) ? first_dim : nothing
     for dim in valid_dims[2:end]
         # Same dimension AND same exact scale (esm-spec §4.8.3): metres added to
         # kilometres are different units even though both are lengths.
-        if !_same_unit(dim, first_dim)
+        agree = angle_meets_number ?
+            _units_agree_where_angle_meets_number(dim, first_dim) :
+            _same_unit(dim, first_dim)
+        if !agree
             push!(findings, describe(first_dim, dim))
             return nothing
         end
+        if angle_meets_number && _is_pure_angle(dim)
+            if first_angle === nothing
+                first_angle = dim
+            elseif !_same_unit(dim, first_angle)
+                push!(findings, describe(first_angle, dim))
+                return nothing
+            end
+        end
+    end
+    if angle_meets_number && any(_is_pure_angle, valid_dims)
+        number = findfirst(_is_angle_free_number, valid_dims)
+        number === nothing || return valid_dims[number]
     end
     return first_dim
 end
@@ -1199,7 +1273,8 @@ function _same_dimension_rule(expr, var_units, findings)
         return _expr_dimensions!(findings, expr.args[1], var_units)
     return _same_dimensions_over(expr.args, var_units, findings,
         (first_dim, dim) -> "Cannot $(expr.op == "-" ? "subtract" : "add") quantities with " *
-            "different units: '$(_ustr(first_dim))' $(expr.op) '$(_ustr(dim))'")
+            "different units: '$(_ustr(first_dim))' $(expr.op) '$(_ustr(dim))'";
+        angle_meets_number=true)
 end
 
 # "min" / "max" (esm-spec §4.2): all arguments must share dimensions; the
@@ -1207,7 +1282,7 @@ end
 _minmax_rule(expr, var_units, findings) =
     _same_dimensions_over(expr.args, var_units, findings,
         (first_dim, dim) -> "Dimensional inconsistency in $(expr.op): " *
-            "'$(_ustr(first_dim))' vs '$(_ustr(dim))'")
+            "'$(_ustr(first_dim))' vs '$(_ustr(dim))'"; angle_meets_number=true)
 
 # "*": multiply dimensions. A SINGLE indeterminate factor makes the whole
 # product indeterminate — FABRICATION #2. Skipping the unknown factor and
@@ -1325,10 +1400,12 @@ function _dimensionless_arg_rule(expr, var_units, findings)
     arg_dim = _expr_dimensions!(findings, expr.args[1], var_units)
     # `_is_angle_bearing` is what stands in for the ANGLE AXIS the other four
     # bindings carry in the dimension vector: `rad` is an axis (esm-spec
-    # §4.8.1), so `log(x [rad])` is a dimensional mismatch there and must be one
-    # here. Unitful calls it `NoDims`, so the dimension test alone cannot see it.
+    # §4.8.1). Unitful calls it `NoDims`, so the dimension test alone cannot see
+    # it. A PURE angle is the exception: where an angle meets a pure number its
+    # axis is removed and its scale KEPT (esm-spec §4.8.3), so `exp(x [rad])`
+    # passes and `exp(x [deg])` is refused for its scale below, like `%`.
     if arg_dim !== nothing && (dimension(arg_dim) != dimension(Unitful.NoUnits) ||
-                               _is_angle_bearing(arg_dim))
+                               (_is_angle_bearing(arg_dim) && !_is_pure_angle(arg_dim)))
         push!(findings, "$(_op_family(expr.op)) argument must be dimensionless, " *
                         "got units '$(_ustr(arg_dim))' (function '$(expr.op)')")
         return nothing
@@ -1337,7 +1414,7 @@ function _dimensionless_arg_rule(expr, var_units, findings)
     # `percent` pass every dimension-only test, and the two readings of
     # `log(x [ppm])` differ by `ln(1e-6)`.
     if arg_dim !== nothing && !_is_pure_number(arg_dim)
-        push!(findings, _scaled_dimensionless_message(expr.op, _exact_scale(arg_dim)))
+        push!(findings, _scaled_argument_message(expr.op, arg_dim))
         return nothing
     end
 
@@ -1378,7 +1455,7 @@ function _circular_arg_rule(expr, var_units, findings)
     # than 1 (`percent`) is REFUSED, for the same reason `log(x [ppm])` is
     # (issue #409).
     if arg_dim !== nothing && !_is_plane_angle(arg_dim) && !_is_pure_number(arg_dim)
-        push!(findings, _scaled_dimensionless_message(expr.op, _exact_scale(arg_dim)))
+        push!(findings, _scaled_argument_message(expr.op, arg_dim))
         return nothing
     end
     return Unitful.NoUnits
@@ -1403,11 +1480,12 @@ function _inverse_circular_rule(expr, var_units, findings)
         return nothing
     end
     arg_dim = _expr_dimensions!(findings, expr.args[1], var_units)
-    # An ANGLE is not a dimensionless ratio: `asin` RETURNS an angle, it does
-    # not take one. See `_is_angle_bearing` — the other four refuse this on the
-    # dimension vector alone.
+    # A unit carrying the angle axis is refused, see `_is_angle_bearing`, except
+    # a PURE angle: its argument is a place where an angle meets a pure number
+    # (esm-spec §4.8.3), so the axis is removed, the scale kept, and `deg` is
+    # refused for its scale below.
     if arg_dim !== nothing && (dimension(arg_dim) != dimension(Unitful.NoUnits) ||
-                               _is_angle_bearing(arg_dim))
+                               (_is_angle_bearing(arg_dim) && !_is_pure_angle(arg_dim)))
         push!(findings, "Inverse circular function argument must be " *
                         "dimensionless, got units '$(_ustr(arg_dim))' " *
                         "(function '$(expr.op)')")
@@ -1416,7 +1494,7 @@ function _inverse_circular_rule(expr, var_units, findings)
     # A dimensionless RATIO is a PURE NUMBER, not a `percent` whose reading is
     # unstated (issue #409).
     if arg_dim !== nothing && !_is_pure_number(arg_dim)
-        push!(findings, _scaled_dimensionless_message(expr.op, _exact_scale(arg_dim)))
+        push!(findings, _scaled_argument_message(expr.op, arg_dim))
         return nothing
     end
     return u"rad"
@@ -1429,6 +1507,16 @@ function _op_family(op::AbstractString)
     op in ("log", "ln", "log10", "log2") && return "Logarithm"
     op in ("exp", "expm1") && return "Exponential"
     return "Transcendental function"
+end
+
+# The scale refusal for an argument that must be a pure number: a pure angle
+# at a scale other than 1 rad (`deg`, esm-spec §4.8.3 "An angle meets a pure
+# number") is named as an angle, anything else as a scaled pure number.
+function _scaled_argument_message(op::AbstractString, u)
+    _is_pure_angle(u) || return _scaled_dimensionless_message(op, _exact_scale(u))
+    return "Argument to '$(op)' is an angle in '$(_ustr(u))', at a scale other than " *
+        "1 rad; where an angle meets a pure number its scale is kept (esm-spec " *
+        "§4.8.3), so convert it to rad first"
 end
 
 # Render a unit for a diagnostic. Falls back to the dimension when the unit has
@@ -1449,7 +1537,7 @@ function _ifelse_rule(expr, var_units, findings)
     _expr_dimensions!(findings, expr.args[1], var_units)
     return _same_dimensions_over(expr.args[2:3], var_units, findings,
         (t_dim, f_dim) -> "Unit inconsistency in ifelse branches: " *
-                          "'$(_ustr(t_dim))' vs '$(_ustr(f_dim))'")
+                          "'$(_ustr(t_dim))' vs '$(_ustr(f_dim))'"; angle_meets_number=true)
 end
 
 # "sign": strips dimensions — the result is a dimensionless -1/0/+1.
@@ -1472,7 +1560,7 @@ end
 function _comparison_rule(expr, var_units, findings)
     _same_dimensions_over(expr.args, var_units, findings,
         (first_dim, dim) -> "Cannot compare quantities with different units: " *
-            "'$(_ustr(first_dim))' $(expr.op) '$(_ustr(dim))'")
+            "'$(_ustr(first_dim))' $(expr.op) '$(_ustr(dim))'"; angle_meets_number=true)
     return Unitful.NoUnits
 end
 
@@ -1913,7 +2001,8 @@ function _site_check(lhs, rhs, var_units)::Tuple{Vector{String}, Vector{String}}
             "by $(ratio), not by a power of time)")
         return internal, comparison
     end
-    (left === nothing || right === nothing || _same_unit(left, right)) &&
+    (left === nothing || right === nothing ||
+     _units_agree_where_angle_meets_number(left, right)) &&
         return internal, comparison
     push!(comparison, "Left-hand side has units '$(_message_ustr(left))' but " *
                       "right-hand side has units '$(_message_ustr(right))'")

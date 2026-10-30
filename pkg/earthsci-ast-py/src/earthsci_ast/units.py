@@ -1053,6 +1053,40 @@ _COMPARISON_OPS = frozenset({">", "<", ">=", "<=", "==", "!="})
 #: ±1) yield a dimensionless result regardless of operand dimensions.
 _DIMENSIONLESS_RESULT_OPS = frozenset({"and", "or", "not", "sign", "true", "false"})
 
+#: The places where an angle meeting a pure number counts as dimensionless
+#: (esm-spec §4.8.3 "An angle meets a pure number"): the operands of these
+#: ops, an equation's two sides, and a pure-number argument. NOT `atan2`,
+#: `concat` or `makearray`, which keep the strict rule.
+_ANGLE_AGREEMENT_OPS = frozenset({"+", "-", "min", "max", "ifelse"}) | _COMPARISON_OPS
+
+
+def _is_pure_angle(dim) -> bool:
+    """A dimension that is a nonzero power of ``[angle]`` and nothing else."""
+    axes = {axis for axis, power in dim.items() if power != 0}
+    return axes == {"[angle]"}
+
+
+def _is_pure_number(dim) -> bool:
+    return not any(power != 0 for power in dim.values())
+
+
+def _angle_as_number(typed: _Typed) -> _Typed:
+    """``typed`` (a pure angle) with its ``[angle]`` axis removed and its exact
+    scale KEPT: ``rad`` becomes a pure number at scale 1, ``deg`` one at
+    scale π/180 (esm-spec §4.8.3 "An angle meets a pure number")."""
+    return _Typed(typed.dim / typed.dim, typed.scale)
+
+
+def _angle_meets_number(a: _Typed, b: _Typed) -> tuple[_Typed, _Typed]:
+    """The pair to compare when ``a`` and ``b`` meet at an equation side or an
+    agreement position: a pure angle meeting a pure number loses its angle
+    axis; anything else is returned unchanged."""
+    if _is_pure_angle(a.dim) and _is_pure_number(b.dim):
+        return _angle_as_number(a), b
+    if _is_pure_number(a.dim) and _is_pure_angle(b.dim):
+        return a, _angle_as_number(b)
+    return a, b
+
 
 #: The unit-finding vocabulary -- the SECOND, smaller unit code set, shared
 #: with Go's ``UnitFinding*``, Rust's ``UNIT_FINDING_*`` and TypeScript's
@@ -1514,6 +1548,13 @@ class UnitValidator:
         target = self.scoped_units.get(name)
         return target.unit if target is not None else None
 
+    def _describe_side(self, expr: Expr, typed: _Typed) -> str:
+        """``typed`` for a diagnostic: its dimension and scale, led by the
+        declared unit when ``expr`` is a bare name that has one."""
+        text = f"dimension {typed.dim} at scale {typed.scale}"
+        unit = self._unit_of(expr) if isinstance(expr, str) else None
+        return f"'{expr}' [{unit}], {text}" if unit is not None else text
+
     def validate_equation(self, equation, equation_id: str) -> UnitValidationResult:
         """
         Validate dimensional consistency of an equation.
@@ -1549,7 +1590,10 @@ class UnitValidator:
                         rhs_units=str(rhs.dim),
                     )
             elif lhs is not None and rhs is not None:
-                if not self._dimensions_compatible(lhs.dim, rhs.dim):
+                # The angle-stripped pair is compared; the diagnostic reports
+                # each side as written (esm-spec §4.8.3).
+                lhs_cmp, rhs_cmp = _angle_meets_number(lhs, rhs)
+                if not self._dimensions_compatible(lhs_cmp.dim, rhs_cmp.dim):
                     result.add_error(
                         UNIT_FINDING_DIMENSIONAL_MISMATCH,
                         f"Equation {equation_id}: Dimensional mismatch - "
@@ -1557,13 +1601,13 @@ class UnitValidator:
                         lhs_units=str(lhs.dim),
                         rhs_units=str(rhs.dim),
                     )
-                elif lhs.scale != rhs.scale:
+                elif lhs_cmp.scale != rhs_cmp.scale:
                     # Same dimension, different unit (esm-spec §4.8.3).
                     result.add_error(
                         UNIT_FINDING_DIMENSIONAL_MISMATCH,
                         f"Equation {equation_id}: Scale mismatch - "
-                        f"LHS has dimension {lhs.dim} at scale {lhs.scale}, "
-                        f"RHS at scale {rhs.scale}",
+                        f"LHS has {self._describe_side(equation.lhs, lhs)}, "
+                        f"RHS has {self._describe_side(equation.rhs, rhs)}",
                         lhs_units=str(lhs.dim),
                         rhs_units=str(rhs.dim),
                     )
@@ -1769,6 +1813,10 @@ class UnitValidator:
         """
         if typed is None:
             return
+        if _is_pure_angle(typed.dim):
+            # An angle meets a pure number (esm-spec §4.8.3): `rad` passes,
+            # `deg` is refused for its scale like `percent`.
+            typed = _angle_as_number(typed)
         if not self._dimensions_compatible(typed.dim, self._dimensionless.dim):
             raise DimensionalMismatchError(f"{op} {what} must be dimensionless, got {typed.dim}")
         if not typed.scale.is_one():
@@ -1786,6 +1834,25 @@ class UnitValidator:
         kilometres.
         """
         known = [t for t in operands if t is not None]
+        if not known:
+            return None
+        if (
+            op in _ANGLE_AGREEMENT_OPS
+            and any(_is_pure_number(t.dim) for t in known)
+            and any(_is_pure_angle(t.dim) for t in known)
+        ):
+            # An angle meets a pure number (esm-spec §4.8.3): the angle axis
+            # cancels, the scale is kept, and the result is a pure number. Two
+            # angles never meet a NUMBER with each other, so the angles are
+            # first held to the ordinary rule among themselves (`rad` against
+            # `sr` stays a mismatch however many pure numbers sit beside them).
+            self._require_same(op, [t for t in known if _is_pure_angle(t.dim)])
+            known = [_angle_as_number(t) if _is_pure_angle(t.dim) else t for t in known]
+        return self._require_same(op, known)
+
+    def _require_same(self, op: str, known: list[_Typed]) -> _Typed | None:
+        """Require every operand of ``known`` to have the first one's dimension
+        AND exact scale, and return that first operand (``None`` if empty)."""
         if not known:
             return None
         first = known[0]

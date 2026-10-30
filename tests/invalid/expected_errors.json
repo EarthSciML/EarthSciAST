@@ -4347,5 +4347,21 @@
     "is_valid": false,
     "resolver_error_code": "interp_table_not_const",
     "notes": "Resolver-level invalid (esm-spec \u00a79.2 argument checks, ruling Q-106). SCHEMA-VALID \u2014 the schema does not type `fn` arguments \u2014 so it is a loader check. `is_valid` is false for EVERY binding: all five run the \u00a79.2 closed-function argument checks at load (and in validate()) on every `fn` call of an `interp.*` function, wherever it appears. Ruling Q-111: `interp.bilinear` whose table is the empty `const` array `[]`. `[]` is rank 1, not rank 2, so it is `interp_table_not_const`."
+  },
+  "version_gate_newer_mounts_older_const_units.esm": {
+    "resolver_only": true,
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": false,
+    "resolver_error_code": "const_units_version_too_old",
+    "notes": "The 1.2.0 root mounts a 1.0.0 leaf carrying a unit-bearing `const`. Version gates read the file that holds the construct (esm-spec \u00a74.7), so the leaf is rejected although the root is new enough."
+  },
+  "version_gate_newer_mounts_older_solver.esm": {
+    "resolver_only": true,
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": false,
+    "resolver_error_code": "solver_version_too_old",
+    "notes": "The 1.1.0 root mounts a 1.0.0 leaf carrying a top-level `solver` block. Version gates read the file that holds the construct (esm-spec \u00a74.7), so the leaf's solver block is rejected although the root is new enough."
   }
 }

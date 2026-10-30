@@ -267,16 +267,14 @@ fn load_value(json_value: Value, options: &LoadOptions) -> Result<EsmFile, EsmEr
         })?;
 
     // Declared `units` on a `const` node arrive at esm 1.2.0 (esm-spec §4.8.5).
-    // Ref resolution is the one step since the authored walk that can add
-    // nodes; without a mount it added none, and the walk's answer stands.
-    let const_units = if authored.mounts {
-        crate::units::reject_const_units_pre_v12(&json_value)
-    } else {
-        crate::units::reject_const_units_pre_v12_found(&json_value, || authored.op_with_units)
-    };
-    const_units.map_err(|e: crate::diagnostic::DiagnosticError| {
-        EsmError::SchemaValidation(e.to_string())
-    })?;
+    // The gate reads THIS file's own nodes — the authored walk, taken before
+    // ref resolution spliced anything in. A mounted file is held to its OWN
+    // declared version, when it is loaded (esm-spec §4.7 "Each file is held to
+    // its own declared `esm` version"), so a 1.0.0 document may mount a 1.2.0
+    // leaf that carries unit-bearing `const` nodes.
+    crate::units::reject_const_units_pre_v12(&json_value, || authored.op_with_units).map_err(
+        |e: crate::diagnostic::DiagnosticError| EsmError::SchemaValidation(e.to_string()),
+    )?;
 
     // Validate against schema
     validate_schema(&json_value)?;
@@ -1810,9 +1808,6 @@ pub(crate) struct AuthoredFacts {
     /// The path of the first object, in pre-order, with both an `op` and a
     /// `units` key (what [`crate::units::reject_const_units_pre_v12`] looks for).
     pub(crate) op_with_units: Option<String>,
-    /// Whether any object has a `ref` or a `subsystems` key: without one,
-    /// subsystem ref resolution has nothing to splice in.
-    pub(crate) mounts: bool,
 }
 
 /// [`prepare_document_ops`], returning the [`AuthoredFacts`] its walk noted.
@@ -1841,7 +1836,6 @@ pub(crate) fn prepare_document_ops_scanned(
     scan_document_ops(value, &crate::json_visit::JsonPath::Root(""), &mut scan);
     let facts = AuthoredFacts {
         op_with_units: scan.op_with_units.take(),
-        mounts: scan.mounts,
     };
     // 1. `arrayop` was REMOVED at 0.8.0 — rejected by name, before anything else.
     if let Some(path) = scan.removed {
@@ -1903,7 +1897,6 @@ struct OpScan {
     rewritten: usize,
     /// See [`AuthoredFacts`].
     op_with_units: Option<String>,
-    mounts: bool,
 }
 
 /// Pre-order walk (the root included, a container before its elements, array
@@ -1926,8 +1919,6 @@ fn scan_document_ops(
             {
                 scan.op_with_units = Some(at.to_string());
             }
-            scan.mounts |= crate::json_visit::small_get(map, "ref").is_some()
-                || crate::json_visit::small_get(map, "subsystems").is_some();
             match op.and_then(|v| v.as_str()) {
                 Some("arrayop") => {
                     scan.removed = Some(at.to_string());

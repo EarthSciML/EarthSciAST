@@ -302,6 +302,94 @@ func scaledDimensionlessSpelling(e ExactScale) string {
 // rather than picking one.
 func isPureNumber(u *Unit) bool { return u.Dim.IsDimensionless() && u.Exact.IsOne() }
 
+// isPureAngleDim reports whether d is a nonzero power of the angle axis and of
+// nothing else: rad, deg, sr (rad^2), 1/rad (esm-spec §4.8.3 "An angle meets a
+// pure number").
+func isPureAngleDim(d Dimension) bool {
+	if d[dimAngle].IsZero() {
+		return false
+	}
+	for i := range d {
+		if i != dimAngle && !d[i].IsZero() {
+			return false
+		}
+	}
+	return true
+}
+
+// angleAsNumber is u, a pure angle, with its angle axis removed and its exact
+// scale KEPT: rad becomes a pure number at scale 1, deg one at scale pi/180
+// (esm-spec §4.8.3 "An angle meets a pure number").
+func angleAsNumber(u *Unit) *Unit {
+	return &Unit{Scale: u.Scale, Exact: u.Exact}
+}
+
+// angleMeetsNumber is the pair to compare where a and b meet at an equation's
+// two sides or an observed variable's declared units against its definition: a
+// pure angle meeting a pure number loses its angle axis (esm-spec §4.8.3);
+// any other pair is returned unchanged.
+func angleMeetsNumber(a, b *Unit) (*Unit, *Unit) {
+	if a == nil || b == nil {
+		return a, b
+	}
+	switch {
+	case isPureAngleDim(a.Dim) && b.Dim.IsDimensionless():
+		return angleAsNumber(a), b
+	case a.Dim.IsDimensionless() && isPureAngleDim(b.Dim):
+		return a, angleAsNumber(b)
+	}
+	return a, b
+}
+
+// anglesMeetNumbers applies the same rule to the known operands of an
+// agreement position (+ - min max, the ifelse branches, a comparison): when at
+// least one is a pure number and at least one a pure angle, every pure angle
+// loses its angle axis and keeps its scale, so an agreeing result has the pure
+// number's unit. The rule never makes two angle units agree with each other
+// (esm-spec §4.8.3: `rad` against `sr` is still a mismatch), so when the pure
+// angles do not all share one unit the operands are left as they are and the
+// ordinary comparison reports the disagreement. The slice is modified in place.
+func anglesMeetNumbers(known []*Unit) {
+	number := false
+	var angle *Unit
+	for _, u := range known {
+		number = number || u.Dim.IsDimensionless()
+		if !isPureAngleDim(u.Dim) {
+			continue
+		}
+		if angle == nil {
+			angle = u
+		} else if !angle.Dim.Equal(u.Dim) || !angle.Exact.Equal(u.Exact) {
+			return
+		}
+	}
+	if !number || angle == nil {
+		return
+	}
+	for i, u := range known {
+		if isPureAngleDim(u.Dim) {
+			known[i] = angleAsNumber(u)
+		}
+	}
+}
+
+// pureNumberArgument is the argument an op that requires a pure number reads
+// (the strict transcendentals and asin acos atan): a pure angle loses its angle
+// axis and keeps its scale (esm-spec §4.8.3), so rad passes and deg is refused
+// for its scale. The error is that refusal, nil when the argument may go on to
+// the ordinary checks.
+func pureNumberArgument(op string, arg *Unit) (*Unit, error) {
+	if arg == nil || !isPureAngleDim(arg.Dim) {
+		return arg, nil
+	}
+	if !arg.Exact.IsOne() {
+		return nil, mismatchErrf("Argument to '%s' is an angle at scale %s, not 1 rad; where an "+
+			"angle meets a pure number its scale is kept (esm-spec §4.8.3), so convert it to rad first",
+			op, arg.Exact)
+	}
+	return angleAsNumber(arg), nil
+}
+
 // scaledDimensionlessErr is the §4.8.3 refusal for a dimensionless-but-SCALED
 // argument to an op that requires a pure number.
 //
@@ -1733,6 +1821,9 @@ func (ut unitTyper) propagateNode(node ExprNode, env map[string]Unit) (*Unit, er
 		if err != nil {
 			return nil, err
 		}
+		if arg, err = pureNumberArgument(node.Op, arg); err != nil {
+			return nil, err
+		}
 		if arg != nil && !arg.Dim.IsDimensionless() {
 			return nil, mismatchErrf("argument of '%s' must be dimensionless, got %s", node.Op, arg.Dim)
 		}
@@ -1774,6 +1865,9 @@ func (ut unitTyper) propagateNode(node ExprNode, env map[string]Unit) (*Unit, er
 		}
 		arg, err := ut.propagate(node.Args[0], env)
 		if err != nil {
+			return nil, err
+		}
+		if arg, err = pureNumberArgument(node.Op, arg); err != nil {
 			return nil, err
 		}
 		if arg != nil && !arg.Dim.IsDimensionless() {
@@ -1836,27 +1930,8 @@ func (ut unitTyper) propagateNode(node ExprNode, env map[string]Unit) (*Unit, er
 		// indeterminate operand is skipped, as in `+` (`x > 0` compares nothing
 		// that can disagree). The result is a dimensionless boolean whatever the
 		// operands are, including when none is known (esm-spec §4.8.3).
-		var first *Unit
-		for i, arg := range node.Args {
-			u, err := ut.propagate(arg, env)
-			if err != nil {
-				return nil, err
-			}
-			if u == nil {
-				continue
-			}
-			if first == nil {
-				first = u
-				continue
-			}
-			if !first.Dim.Equal(u.Dim) {
-				return nil, mismatchErrf("dimensional mismatch in %q: arg 0 has %s, arg %d has %s",
-					node.Op, first.Dim, i, u.Dim)
-			}
-			if !first.Exact.Equal(u.Exact) {
-				return nil, mismatchErrf("scale mismatch in %q: arg 0 has %s at scale %s, arg %d at scale %s",
-					node.Op, first.Dim, first.Exact, i, u.Exact)
-			}
+		if _, err := ut.agreeingUnit(node.Op, node.Args, env); err != nil {
+			return nil, err
 		}
 		return &Unit{Scale: 1}, nil
 
@@ -1886,15 +1961,20 @@ func (ut unitTyper) propagateNode(node ExprNode, env map[string]Unit) (*Unit, er
 		if _, err := ut.propagate(node.Args[0], env); err != nil {
 			return nil, err
 		}
-		var first *Unit
+		var known []*Unit
 		for _, arg := range node.Args[1:] {
 			u, err := ut.propagate(arg, env)
 			if err != nil {
 				return nil, err
 			}
-			if u == nil {
-				continue
+			if u != nil {
+				known = append(known, u)
 			}
+		}
+		// An angle branch meeting a pure-number branch (esm-spec §4.8.3).
+		anglesMeetNumbers(known)
+		var first *Unit
+		for _, u := range known {
 			if first == nil {
 				first = u
 				continue
@@ -1954,15 +2034,26 @@ func (ut unitTyper) walkOperands(args []any, env map[string]Unit) error {
 // disagreement is a provable mismatch), an undeterminable operand is skipped,
 // and the result is the shared unit -- undeterminable when no operand is known.
 func (ut unitTyper) agreeingUnit(op string, args []any, env map[string]Unit) (*Unit, error) {
-	var first *Unit
+	var known []*Unit
+	var at []int
 	for i, arg := range args {
 		u, err := ut.propagate(arg, env)
 		if err != nil {
 			return nil, err
 		}
-		if u == nil {
-			continue
+		if u != nil {
+			known = append(known, u)
+			at = append(at, i)
 		}
+	}
+	// An angle meets a pure number (esm-spec §4.8.3) at + - min max and the
+	// comparisons; concat keeps the strict rule.
+	if op != "concat" {
+		anglesMeetNumbers(known)
+	}
+	var first *Unit
+	for k, u := range known {
+		i := at[k]
 		if first == nil {
 			first = u
 			continue
@@ -2272,11 +2363,16 @@ func validateObservedVariableUnits(model *Model, env map[string]Unit, basePath s
 		// Either side being unknown means the check cannot be decided, which is
 		// not a finding (an undeclared unit is not an error; an unparseable one
 		// is already reported above).
-		declared, ok := env[name]
+		declaredUnit, ok := env[name]
 		if !ok || got == nil {
 			continue
 		}
-		if !declared.Dim.Equal(got.Dim) {
+		// An angle meets a pure number (esm-spec §4.8.3): the angle axis
+		// cancels and the scales are compared. The units are reported as
+		// declared.
+		declared := &declaredUnit
+		declaredMet, gotMet := angleMeetsNumber(declared, got)
+		if !declaredMet.Dim.Equal(gotMet.Dim) {
 			result.UnitWarnings = append(result.UnitWarnings, UnitWarning{
 				Path:     path,
 				Code:     UnitFindingDimensionalMismatch,
@@ -2284,13 +2380,18 @@ func validateObservedVariableUnits(model *Model, env map[string]Unit, basePath s
 				LHSUnits: declared.Dim.String(),
 				RHSUnits: got.Dim.String(),
 			})
-		} else if !declared.Exact.Equal(got.Exact) {
+		} else if !declaredMet.Exact.Equal(gotMet.Exact) {
 			// Same dimension, different scale (esm-spec §4.8.3): the number the
 			// expression produces is not in the unit the variable declares.
+			msg := fmt.Sprintf("observed variable %q is declared at scale %s but its expression has scale %s", name, declared.Exact, got.Exact)
+			if declaredMet != declared || gotMet != got {
+				msg = fmt.Sprintf("observed variable %q: %s", name,
+					angleMeetsNumberScaleMessage("declared", declared, "expression", got))
+			}
 			result.UnitWarnings = append(result.UnitWarnings, UnitWarning{
 				Path:     path,
 				Code:     UnitFindingDimensionalMismatch,
-				Message:  fmt.Sprintf("observed variable %q is declared at scale %s but its expression has scale %s", name, declared.Exact, got.Exact),
+				Message:  msg,
 				LHSUnits: declared.Dim.String(),
 				RHSUnits: got.Dim.String(),
 			})
@@ -2370,7 +2471,10 @@ func (ut unitTyper) equationFinding(eq *Equation, env map[string]Unit, path stri
 	if lhs == nil || rhs == nil {
 		return nil
 	}
-	if !lhs.Dim.Equal(rhs.Dim) {
+	// An angle meets a pure number (esm-spec §4.8.3) across the two sides. The
+	// sides are compared as met, and reported as they are.
+	lhsMet, rhsMet := angleMeetsNumber(lhs, rhs)
+	if !lhsMet.Dim.Equal(rhsMet.Dim) {
 		return &UnitWarning{
 			Path:     path,
 			Code:     UnitFindingDimensionalMismatch,
@@ -2379,16 +2483,41 @@ func (ut unitTyper) equationFinding(eq *Equation, env map[string]Unit, path stri
 			RHSUnits: rhs.Dim.String(),
 		}
 	}
-	if !lhs.Exact.Equal(rhs.Exact) {
+	if !lhsMet.Exact.Equal(rhsMet.Exact) {
+		msg := fmt.Sprintf("LHS scale %s does not match RHS scale %s (dimension %s)", lhs.Exact, rhs.Exact, lhs.Dim)
+		if lhsMet != lhs || rhsMet != rhs {
+			msg = angleMeetsNumberScaleMessage("LHS", lhs, "RHS", rhs)
+		}
 		return &UnitWarning{
 			Path:     path,
 			Code:     UnitFindingDimensionalMismatch,
-			Message:  fmt.Sprintf("LHS scale %s does not match RHS scale %s (dimension %s)", lhs.Exact, rhs.Exact, lhs.Dim),
+			Message:  msg,
 			LHSUnits: lhs.Dim.String(),
 			RHSUnits: rhs.Dim.String(),
 		}
 	}
 	return nil
+}
+
+// unitLabel names u for a diagnostic: its declared spelling when it has one
+// (`deg`), else its dimension, with the scale when that is not 1.
+func unitLabel(u *Unit) string {
+	if u.Symbol != "" {
+		return u.Symbol
+	}
+	if u.Exact.IsOne() {
+		return u.Dim.String()
+	}
+	return fmt.Sprintf("%s at scale %s", u.Dim, u.Exact)
+}
+
+// angleMeetsNumberScaleMessage is the scale-mismatch diagnostic where a pure
+// angle met a pure number (esm-spec §4.8.3). It names both units as declared:
+// the comparison removed the angle axis, but `deg` is what the author wrote.
+func angleMeetsNumberScaleMessage(aSide string, a *Unit, bSide string, b *Unit) string {
+	return fmt.Sprintf("%s units %s do not match %s units %s: where an angle meets a pure "+
+		"number its angle axis is removed and its scale kept (esm-spec §4.8.3), so scale %s "+
+		"meets scale %s", aSide, unitLabel(a), bSide, unitLabel(b), a.Exact, b.Exact)
 }
 
 // knownPhysicalConstant pairs a canonical unit string with a human description.

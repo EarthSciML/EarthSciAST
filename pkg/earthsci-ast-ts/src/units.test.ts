@@ -502,9 +502,10 @@ describe('Unit parsing and dimensional analysis', () => {
       })
 
       it('keeps the STRICTLY dimensionless set strict (log, exp, hyperbolics)', () => {
-        const bindings = createUnitBindings({ theta: 'rad', mass: 'kg' })
-        // There is no angle reading of exp/log, and a hyperbolic angle is a pure
-        // number — so `rad` is NOT admitted here, and neither is any dimension.
+        const bindings = createUnitBindings({ theta: 'rad', theta_deg: 'deg', mass: 'kg' })
+        // No dimension is admitted here. An angle meets a pure number (esm-spec
+        // §4.8.3): its `rad` axis is removed and its SCALE kept, so `rad` passes
+        // and `deg` (scale π/180) is refused for its scale.
         for (const op of [
           'ln',
           'log',
@@ -517,13 +518,18 @@ describe('Unit parsing and dimensional analysis', () => {
           'acosh',
           'atanh',
         ]) {
-          for (const arg of ['theta', 'mass']) {
+          for (const arg of ['theta_deg', 'mass']) {
             const r = checkDimensions({ op, args: [arg] }, bindings)
             expect(
               r.diagnostics.some((d) => d.code === 'dimensional_mismatch'),
               `${op}(${arg})`,
             ).toBe(true)
           }
+          const rad = checkDimensions({ op, args: ['theta'] }, bindings)
+          expect(
+            rad.diagnostics.some((d) => d.code === 'dimensional_mismatch'),
+            `${op}(theta)`,
+          ).toBe(false)
         }
       })
 
@@ -620,6 +626,112 @@ describe('Unit parsing and dimensional analysis', () => {
       const result = checkDimensions(ifExpr, bindings)
       expect(dimsOf(result)).toEqual({ m: 1 })
       expect(result.warnings).toEqual([])
+    })
+
+    // esm-spec §4.8.3 "An angle meets a pure number": the `rad` axis is
+    // removed from a pure angle that meets a pure number and the exact scale is
+    // KEPT, so `rad` agrees with a scale-1 number and `deg` does not.
+    describe('an angle meets a pure number', () => {
+      const bindings = createUnitBindings({
+        theta: 'rad',
+        theta_deg: 'deg',
+        omega: 'sr',
+        inv: '1/rad',
+        n: '1',
+        pct: 'percent',
+        len: 'm',
+        arc: 'm*rad',
+      })
+      const mismatches = (expr: Expression, dimensionlessLiterals = false): number =>
+        checkDimensions(expr, bindings, { dimensionlessLiterals }).diagnostics.filter(
+          (d) => d.code === 'dimensional_mismatch',
+        ).length
+
+      it('agrees at every agreement position, with the pure number as the result', () => {
+        for (const expr of [
+          { op: '+', args: ['n', 'theta'] },
+          { op: '-', args: ['theta', 'n', 'theta'] },
+          { op: 'min', args: ['theta', 'n'] },
+          { op: 'max', args: ['n', 'theta'] },
+          { op: 'ifelse', args: [true, 'theta', 'n'] },
+        ] as Expression[]) {
+          const r = checkDimensions(expr, bindings)
+          expect(mismatches(expr), JSON.stringify(expr)).toBe(0)
+          expect(dimsOf(r)).toEqual({})
+        }
+        for (const op of ['>', '<', '>=', '<=', '==', '!=']) {
+          expect(mismatches({ op, args: ['theta', 'n'] } as Expression), op).toBe(0)
+        }
+        // Any nonzero power of the angle axis alone is a pure angle.
+        expect(mismatches({ op: '+', args: ['omega', 'n'] } as Expression)).toBe(0)
+        expect(mismatches({ op: '+', args: ['inv', 'n'] } as Expression)).toBe(0)
+      })
+
+      it('keeps the scale: deg, and rad against percent, are scale mismatches', () => {
+        expect(mismatches({ op: '+', args: ['theta_deg', 'n'] } as Expression)).toBe(1)
+        expect(mismatches({ op: '+', args: ['theta', 'pct'] } as Expression)).toBe(1)
+        expect(mismatches({ op: '>', args: ['theta_deg', 'n'] } as Expression)).toBe(1)
+        // `θ [deg] + 1`: neutral under the current literal rule, a scale
+        // mismatch once the literal is dimensionless (§4.8.6).
+        expect(mismatches({ op: '+', args: ['theta_deg', 1] } as Expression)).toBe(0)
+        expect(mismatches({ op: '+', args: ['theta_deg', 1] } as Expression, true)).toBe(1)
+        expect(mismatches({ op: '+', args: ['theta', 1] } as Expression, true)).toBe(0)
+      })
+
+      it('admits rad and refuses deg where an op requires a pure number', () => {
+        for (const op of ['exp', 'log', 'tanh', 'asin', 'acos', 'atan']) {
+          expect(mismatches({ op, args: ['theta'] } as Expression), op).toBe(0)
+          expect(mismatches({ op, args: ['theta_deg'] } as Expression), op).toBe(1)
+        }
+      })
+
+      it('does not reach two angles, mixed units, atan2, concat or makearray', () => {
+        expect(mismatches({ op: '+', args: ['theta', 'omega'] } as Expression)).toBe(1)
+        expect(mismatches({ op: '+', args: ['arc', 'len'] } as Expression)).toBe(1)
+        expect(mismatches({ op: 'atan2', args: ['theta', 'n'] } as Expression)).toBe(1)
+        expect(mismatches({ op: 'concat', args: ['theta', 'n'] } as Expression)).toBe(1)
+      })
+
+      it('never makes two different angles agree, even beside a pure number', () => {
+        for (const expr of [
+          { op: '+', args: ['theta', 'omega', 'n'] },
+          { op: '-', args: ['n', 'theta', 'omega'] },
+          { op: 'min', args: ['theta', 'omega', 'n'] },
+          { op: 'max', args: ['n', 'omega', 'theta'] },
+        ] as Expression[]) {
+          expect(mismatches(expr), JSON.stringify(expr)).toBeGreaterThan(0)
+        }
+        // One angle unit, repeated, beside a pure number still agrees …
+        expect(mismatches({ op: '+', args: ['theta', 'theta', 'n'] } as Expression)).toBe(0)
+        expect(mismatches({ op: 'min', args: ['omega', 'n', 'omega'] } as Expression)).toBe(0)
+        // … and `theta [rad] + n [1]` stays accepted.
+        expect(mismatches({ op: '+', args: ['theta', 'n'] } as Expression)).toBe(0)
+      })
+
+      it("compares an equation's two sides and an observed definition the same way", () => {
+        const doc = (rhs: string): EsmFile =>
+          ({
+            esm: '1.0.0',
+            metadata: { name: 'angle', authors: ['t'] },
+            models: {
+              M: {
+                variables: {
+                  theta: { type: 'parameter', units: 'rad', default: 0.1 },
+                  theta_deg: { type: 'parameter', units: 'deg', default: 1 },
+                  y: { type: 'unknown', units: '1' },
+                },
+                equations: [{ lhs: 'y', rhs }],
+              },
+            },
+          }) as unknown as EsmFile
+        const defects = (rhs: string) =>
+          validateUnits(doc(rhs)).filter((w) => w.code === 'dimensional_mismatch')
+        expect(defects('theta')).toEqual([])
+        expect(defects('theta_deg').map((w) => w.location)).toEqual([
+          '/models/M/equations/0',
+          '/models/M/variables/y',
+        ])
+      })
     })
 
     // T3: structural ops have NO modelled dimension. Reporting them as

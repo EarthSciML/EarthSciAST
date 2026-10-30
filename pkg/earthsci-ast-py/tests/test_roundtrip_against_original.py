@@ -156,6 +156,7 @@ TRANSFORMING_FIXTURES: dict[str, str] = {
     ),
     "toplevel_ref_metaparameter_axis_lib.esm": _METAPARAMETER_FOLDING,
     "units_mount_subsystem_consistent.esm": _SUBSYSTEM_REF_RESOLUTION,
+    "version_gate_older_mounts_newer.esm": _SUBSYSTEM_REF_RESOLUTION,
     "units_array_mount_index_faq_consistent.esm": (
         "a top-level `models.<k>` mount consumed at load: the referenced "
         "component is spliced in under its mount key and its index sets merge "

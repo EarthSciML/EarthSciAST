@@ -1690,12 +1690,10 @@ def _load_ref_data(
         ExpressionTemplateError,
         expand_document,
         lower_expression_templates,
-        reject_expression_templates_pre_v04,
     )
     from .template_imports import (
         _is_template_library_doc,
         apply_scope_injections,
-        reject_template_imports_pre_v08,
         resolve_template_machinery,
     )
 
@@ -1714,8 +1712,9 @@ def _load_ref_data(
         resolved_path = os.path.normpath(os.path.join(base_path, ref_str))
         new_base = os.path.dirname(resolved_path)
 
-    reject_expression_templates_pre_v04(ref_data)
-    reject_template_imports_pre_v08(ref_data)
+    # Each file is held to its OWN declared `esm` (esm-spec §4.7), so a mounted
+    # leaf runs the same file-level version gates as the root.
+    _reject_file_version_gates(ref_data)
 
     # A §4.7 subsystem ref MUST NOT target a template-library file — the two
     # reference mechanisms are disjoint (esm-spec §9.7.1).
@@ -2744,6 +2743,35 @@ def _refuse_toplevel_reaction_system_refs(data: Any) -> None:
             )
 
 
+def _reject_file_version_gates(data: object) -> None:
+    """Run every file-level ``esm`` version gate on one document.
+
+    Shared by the root (:func:`_load_data`) and every mounted leaf
+    (:func:`_load_ref_data`): each file is held to its OWN declared ``esm``,
+    as raised by :func:`prepare_document_ops` (esm-spec §4.7). Every gate is
+    surfaced before schema validation so the user sees the version hint
+    instead of a generic schema error. The 1.3.0 gates on ``solver.external``
+    and ``solver.time_span`` are NOT here: those fields describe one run of
+    the root, and a mounted document's are not refused for their version
+    (esm-spec §2.2.6, §2.2.7 "Mounting").
+    """
+    from .lower_expression_templates import reject_expression_templates_pre_v04
+    from .solver import reject_solver_pre_v11
+    from .template_imports import reject_template_imports_pre_v08
+    from .units import reject_const_units_pre_v12
+
+    # expression_templates / apply_expression_template arrive at esm 0.4.0
+    # (RFC §5.4 spec-version gate).
+    reject_expression_templates_pre_v04(data)
+    # §9.7 constructs (expression_template_imports, top-level
+    # expression_templates, metaparameters) arrive at esm 0.8.0 (§9.6.5).
+    reject_template_imports_pre_v08(data)
+    # The top-level `solver` block arrives at esm 1.1.0 (§2.2.4).
+    reject_solver_pre_v11(data)
+    # Declared `units` on a `const` node arrive at esm 1.2.0 (§4.8.5).
+    reject_const_units_pre_v12(data)
+
+
 def _load_data(
     data: dict,
     base_path: str,
@@ -2771,20 +2799,14 @@ def _load_data(
     top_continuous_events = data.pop("continuous_events", None) if isinstance(data, dict) else None
     top_discrete_events = data.pop("discrete_events", None) if isinstance(data, dict) else None
 
-    # v0.4.0 expression_templates / apply_expression_template are rejected
-    # when the file declares esm < 0.4.0 (RFC §5.4 spec-version gate).
-    # Surfaced before schema validation so the user sees the version hint
-    # instead of a generic schema error.
     from ._data_source_urls import resolve_data_source_urls
     from .lower_expression_templates import (
         expand_document,
         lower_expression_templates,
-        reject_expression_templates_pre_v04,
     )
     from .solver import (
         reject_solver_external_pre_v13,
         reject_solver_external_unresolved,
-        reject_solver_pre_v11,
         reject_solver_time_span_invalid,
         reject_solver_time_span_pre_v13,
     )
@@ -2794,39 +2816,26 @@ def _load_data(
         collect_mount_declared_metaparameters,
         document_declares_an_extent,
         reject_impure_template_library,
-        reject_template_imports_pre_v08,
         resolve_template_machinery,
     )
 
-    reject_expression_templates_pre_v04(data)
+    _reject_file_version_gates(data)
 
-    # v0.8.0 §9.7 constructs (expression_template_imports, top-level
-    # expression_templates, metaparameters) are rejected when the file
-    # declares esm < 0.8.0 (esm-spec §9.6.5).
-    reject_template_imports_pre_v08(data)
     # Top-level `expression_templates` beside a component payload is a
     # template-library payload no component can see (esm-spec §9.7.1).
     reject_impure_template_library(data)
 
-    # The top-level `solver` block arrives at esm 1.1.0; a file declaring an
-    # earlier version that carries one is rejected (esm-spec §2.2.4).
-    reject_solver_pre_v11(data)
-    # `solver.external` arrives at esm 1.3.0 (§2.2.4 requirement 4), and a
-    # `${` in it is refused rather than expanded (§2.2.6). The older, outer
-    # gate above runs first, so a pre-1.1.0 block is reported as such.
+    # `solver.external` and `solver.time_span` arrive at esm 1.3.0 (§2.2.4
+    # requirement 4); a `${` in `external` is refused rather than expanded
+    # (§2.2.6), and a `time_span` whose `end` is not after its `start` -- or
+    # whose timestamps name no calendar day, or whose time origin cannot be
+    # read -- is refused (§2.2.7). Root only: these fields describe one run, so
+    # a mounted document's are not checked. The 1.1.0 gate on the whole block
+    # has already run, so a pre-1.1.0 block is reported as such.
     reject_solver_external_pre_v13(data)
-    # `solver.time_span` arrives at esm 1.3.0 too (§2.2.4 requirement 4), and
-    # an interval whose `end` is not after its `start` -- or whose timestamps
-    # name no calendar day, or whose time origin cannot be read -- is refused
-    # (§2.2.7). Root only: a mounted document never passes through here.
     reject_solver_time_span_pre_v13(data)
     reject_solver_external_unresolved(data)
     reject_solver_time_span_invalid(data)
-
-    # Declared `units` on a `const` node arrive at esm 1.2.0 (esm-spec §4.8.5).
-    from .units import reject_const_units_pre_v12
-
-    reject_const_units_pre_v12(data)
 
     # esm-spec §8.2.1: resolve every `data_sources[*].source` location against
     # this document's own directory, BEFORE schema validation and before typed
