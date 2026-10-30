@@ -16,15 +16,15 @@ classifiers = [
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: GNU Affero General Public License v3",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering :: Atmospheric Science",
     "Topic :: Scientific/Engineering :: Chemistry",
 ]
 license = {file = "LICENSE"}
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 
 # The BASE install is the format library: parse / validate / serialize /
 # display / canonicalize / graph / edit / flatten / classify, plus expression
