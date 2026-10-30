@@ -3975,5 +3975,21 @@
     ],
     "is_valid": false,
     "notes": "esm-spec \u00a74.8.3 (PR #508 review): index, reshape and transpose take the unit of args[0], but every operand is walked, so a mismatch inside a subscript is reported even though the declared result unit (K) matches the array's."
+  },
+  "version_gate_newer_mounts_older_const_units.esm": {
+    "resolver_only": true,
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": false,
+    "resolver_error_code": "const_units_version_too_old",
+    "notes": "The 1.2.0 root mounts a 1.0.0 leaf carrying a unit-bearing `const`. Version gates read the file that holds the construct (esm-spec \u00a74.7), so the leaf is rejected although the root is new enough."
+  },
+  "version_gate_newer_mounts_older_solver.esm": {
+    "resolver_only": true,
+    "schema_errors": [],
+    "structural_errors": [],
+    "is_valid": false,
+    "resolver_error_code": "solver_version_too_old",
+    "notes": "The 1.1.0 root mounts a 1.0.0 leaf carrying a top-level `solver` block. Version gates read the file that holds the construct (esm-spec \u00a74.7), so the leaf's solver block is rejected although the root is new enough."
   }
 }

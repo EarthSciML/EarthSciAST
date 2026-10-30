@@ -1,0 +1,37 @@
+{
+  "esm": "1.2.0",
+  "metadata": {
+    "name": "version_gate_newer_mounts_older_const_units",
+    "description": "An esm 1.2.0 document that mounts tests/fixtures/version_gate/leaf_v100_const_units.esm, an esm 1.0.0 file carrying a unit-bearing `const`. Each file is held to its OWN declared version (esm-spec §4.7): the root being new enough does not make the leaf legal, so this MUST be rejected with `const_units_version_too_old`. The converse of tests/valid/version_gate_older_mounts_newer.esm.",
+    "authors": [
+      "EarthSciAST"
+    ],
+    "created": "2026-10-30T00:00:00Z",
+    "tags": [
+      "version",
+      "mount"
+    ]
+  },
+  "models": {
+    "Station": {
+      "variables": {
+        "p_reading": {
+          "type": "unknown",
+          "units": "Pa",
+          "description": "The mounted leaf's absolute pressure."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "p_reading",
+          "rhs": "Leaf.p_abs"
+        }
+      ],
+      "subsystems": {
+        "Leaf": {
+          "ref": "../fixtures/version_gate/leaf_v100_const_units.esm"
+        }
+      }
+    }
+  }
+}
