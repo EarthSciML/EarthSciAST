@@ -1,7 +1,6 @@
 package esm
 
 import (
-	"bytes"
 	_ "embed"
 	"encoding/json"
 	"fmt"
@@ -35,27 +34,6 @@ type loadOptions struct {
 	// withAuthoredMountDeclared. Unexported, with no exported way to set it.
 	authoredMountDeclared    map[string]bool
 	authoredMountDeclaredSet bool
-	// fileVersionGatesChecked records that the caller already ran the
-	// file-level version gates (fileVersionGates) on the AUTHORED document; see
-	// withFileVersionGatesChecked.
-	fileVersionGatesChecked bool
-}
-
-// withFileVersionGatesChecked tells LoadString that the version gates of
-// fileVersionGates were already run on the AUTHORED document, so it does not
-// run them again on the text it receives.
-//
-// esm-spec §4.7 "Each file is held to its OWN declared `esm` version": a gate
-// judges the file that contains the gated construct against that file's own
-// `esm`. LoadPath splices the root's §4.7 mounts into the root BEFORE
-// LoadString, so the text LoadString receives holds every mounted leaf's
-// content under the root's version, and gating it there rejects a 1.0.0 root
-// for a unit-bearing `const` its 1.2.0 leaf carries
-// (tests/valid/version_gate_older_mounts_newer.esm). LoadPath gates the root's
-// authored bytes instead, and each leaf is gated against its own version where
-// it is read (resolveSubsystemMap).
-func withFileVersionGatesChecked() LoadOption {
-	return func(o *loadOptions) { o.fileVersionGatesChecked = true }
 }
 
 // withAuthoredMountDeclared hands LoadString the §8.9.4 mount-declared
@@ -134,37 +112,31 @@ func LoadPath(path string, opts ...LoadOption) (*ESMFile, error) {
 	// is the scope against which a §4.7 subsystem mount edge's binding
 	// EXPRESSIONS fold (e.g. `NTGT = NX*NY`, esm-spec §9.7.6 binding site 3),
 	// and the scope a §4.7 contribution folds against as it merges.
+	// The root's wire boundary and version gates, against the AUTHORED root
+	// before the inlining below splices its mounts in (prepareRoot).
+	prepared, rootView, err := prepareRoot(string(data))
+	if err != nil {
+		return nil, err
+	}
+	data = []byte(prepared)
+
 	var rootMetaEnv map[string]int64
 	var staged map[string]IndexSet
 	var mountOpts []LoadOption
-	if rootView, verr := decodeJSONView(data); verr == nil {
+	if rootView != nil {
 		rootMetaEnv = metaEnvFromDecls(rootView["metaparameters"], apiMeta)
 
 		// esm-spec §8.9.4 "When the check is evaluated": collect the
 		// mount-declared metaparameter set — and run the static `extent` check —
 		// on the AUTHORED view, HERE, before the inlining below consumes each
 		// mounted leaf's `metaparameters`. The same collector LoadString would
-		// run, run once, and handed down so LoadString does not recompute it from
-		// text that is no longer the authored text.
+		// run, run once, and handed down so loadPrepared does not recompute it
+		// from text that is no longer the authored text.
 		md, cerr := rootMountContext(rootView, basePath, apiMeta)
 		if cerr != nil {
 			return nil, cerr
 		}
 		mountOpts = []LoadOption{withAuthoredMountDeclared(md)}
-
-		// esm-spec §4.7 "Each file is held to its OWN declared `esm` version":
-		// the root's version gates read the AUTHORED root, here, before the
-		// inlining below puts the mounted leaves' content under the root's
-		// version. Each leaf is gated against its own version as it is read.
-		if documentHasSubsystemRefs(rootView) {
-			if _, gerr := prepareDocumentOps(string(data)); gerr != nil {
-				return nil, gerr
-			}
-			if gerr := fileVersionGates(rootView); gerr != nil {
-				return nil, gerr
-			}
-			mountOpts = append(mountOpts, withFileVersionGatesChecked())
-		}
 
 		// esm-spec §4.7: a `{ref}` resolves "before validation or any other
 		// processing". Splice the root's own mounts in HERE, ahead of
@@ -196,17 +168,19 @@ func LoadPath(path string, opts ...LoadOption) (*ESMFile, error) {
 			// The RAISED FLOOR (docs/content/rfcs/faq-node-rename.md §5.5). This
 			// document is no longer the AUTHORED one: a legal 1.0.0 assembly that
 			// mounts a `faq`-using leaf now CONTAINS `faq` without ever having
-			// spelled it, and LoadString's `faq_version_too_old` gate would refuse
-			// a document nobody authored wrongly. The floor only ever raises, and
-			// it is the same stamp emit applies — one step earlier. Pinned by
+			// spelled it, so its declared version is raised with it to stay
+			// self-consistent. The floor only ever raises, and it is the same
+			// stamp emit applies — one step earlier. Pinned by
 			// TestRaisedFloorAdmitsAnInlinedFaqDocument.
 			data = []byte(raiseFaqEsmFloor(string(inlined)))
+			// The view no longer matches the text; loadPrepared decodes the text.
+			rootView = nil
 			staged = st
 		}
 	}
 
-	esmFile, err := LoadString(string(data),
-		append(append([]LoadOption{WithBasePath(basePath)}, opts...), mountOpts...)...)
+	esmFile, err := loadPrepared(string(data), rootView,
+		applyLoadOptions(append(append([]LoadOption{WithBasePath(basePath)}, opts...), mountOpts...)))
 	if err != nil {
 		return nil, err
 	}
@@ -226,22 +200,46 @@ func LoadPath(path string, opts ...LoadOption) (*ESMFile, error) {
 	return esmFile, nil
 }
 
+// prepareRoot is the root document's wire boundary and version gates, the ONE
+// place both LoadPath and LoadString run them: prepareDocumentOps (which raises
+// a pre-1.1.0 `aggregate` document to the 1.1.0 floor), then fileVersionGates
+// on the decoded result. It returns the prepared text and its decoded view, or
+// a nil view when the text does not decode (schema validation reports that).
+//
+// The gates read the root's declared `esm` AS RAISED (esm-spec §4.7 "Each file
+// is held to its OWN declared `esm` version"): only `faq_version_too_old`
+// reads the authored version, inside prepareDocumentOps. LoadPath calls this
+// before it inlines the root's mounts, so the gates see the root's own content
+// and never a mounted leaf's.
+func prepareRoot(jsonStr string) (string, map[string]any, error) {
+	prepared, err := prepareDocumentOps(jsonStr)
+	if err != nil {
+		return "", nil, err
+	}
+	view, derr := decodeJSONView([]byte(prepared))
+	if derr != nil {
+		return prepared, nil, nil
+	}
+	if err := fileVersionGates(view); err != nil {
+		return "", nil, err
+	}
+	return prepared, view, nil
+}
+
 // fileVersionGates runs every version gate that reads a document's raw view
 // against that document's own declared `esm` (esm-spec §4.7 "Each file is held
-// to its OWN declared `esm` version"): the gates on the content a mount
-// carries (mountedContentVersionGates), then `solver` (1.1.0) and
-// `solver.external` and `solver.time_span` (1.3.0). The `faq` gate is applied
-// at the wire boundary, prepareDocumentOps.
+// to its OWN declared `esm` version"): the gates a mounted leaf is also held to
+// (mountedContentVersionGates), then `solver.external` and `solver.time_span`
+// (1.3.0). The `faq` gate is applied at the wire boundary, prepareDocumentOps.
 //
-// It must be given ONE file's authored view, the root's before its mounts are
-// inlined. Given a document with mounted content spliced in, it would judge
-// that content against the mounting file's version.
+// It must be given ONE file's view, the root's before its mounts are inlined.
+// Given a document with mounted content spliced in, it would judge that
+// content against the mounting file's version.
 func fileVersionGates(view map[string]any) error {
 	if err := mountedContentVersionGates(view); err != nil {
 		return err
 	}
 	for _, gate := range []func(map[string]any) error{
-		RejectSolverPreV11,
 		RejectSolverExternalPreV13,
 		RejectSolverTimeSpanPreV13,
 	} {
@@ -254,14 +252,16 @@ func fileVersionGates(view map[string]any) error {
 
 // mountedContentVersionGates is the part of fileVersionGates a MOUNTED leaf is
 // held to, against the leaf's own `esm`: apply_expression_template (0.4.0),
-// the §9.7 template constructs (0.8.0) and unit-bearing expression nodes
-// (1.2.0). A leaf's `solver` block does not cross the mount (esm-spec §2.2.6
-// "Mounting"), so the solver gates do not reach it
-// (tests/conformance/solver_external/fixtures/mount_leaf_v120.esm).
+// the §9.7 template constructs (0.8.0), the top-level `solver` block (1.1.0)
+// and unit-bearing expression nodes (1.2.0). The `solver.external` and
+// `solver.time_span` gates are the root's alone: those fields do not cross
+// the mount (esm-spec §2.2.6 "Mounting";
+// tests/conformance/solver_external/fixtures/mount_leaf_v120.esm).
 func mountedContentVersionGates(view map[string]any) error {
 	for _, gate := range []func(map[string]any) error{
 		RejectExpressionTemplatesPreV04,
 		RejectTemplateImportsPreV08,
+		RejectSolverPreV11,
 		rejectConstUnitsPreV12,
 	} {
 		if err := gate(view); err != nil {
@@ -324,17 +324,24 @@ func LoadDocument(document map[string]any, opts ...LoadOption) (*ESMFile, error)
 
 // LoadString parses an ESM file from JSON TEXT and validates it against the JSON schema
 func LoadString(jsonStr string, opts ...LoadOption) (*ESMFile, error) {
-	o := applyLoadOptions(opts)
-
 	// esm 1.1.0: settle expression-node `op` spellings at the wire boundary,
 	// ahead of every other pass, so the version gates, the schema, the typed
 	// tree and Emit all see exactly one tag
 	// (docs/content/rfcs/faq-node-rename.md).
-	prepared, err := prepareDocumentOps(jsonStr)
+	prepared, view, err := prepareRoot(jsonStr)
 	if err != nil {
 		return nil, err
 	}
-	jsonStr = prepared
+	return loadPrepared(prepared, view, applyLoadOptions(opts))
+}
+
+// loadPrepared is LoadString after prepareRoot: jsonStr has passed the wire
+// boundary and the root's version gates. view is jsonStr decoded, or nil to
+// have it decoded here (LoadPath hands over inlined text it has no view of).
+func loadPrepared(jsonStr string, view map[string]any, o loadOptions) (*ESMFile, error) {
+	if view == nil {
+		view, _ = decodeJSONView([]byte(jsonStr))
+	}
 
 	// esm-spec §4.7 / §8.9.4: the mount-declared metaparameter set and the static
 	// `extent` check are computed HERE, on the AUTHORED text, before anything
@@ -361,53 +368,31 @@ func LoadString(jsonStr string, opts ...LoadOption) (*ESMFile, error) {
 		// check on the AUTHORED bytes (withAuthoredMountDeclared). The text here
 		// is not the authored text, so neither is run again on it.
 		authoredMountDeclared = o.authoredMountDeclared
-	} else {
-		authoredView, derr := decodeJSONView([]byte(jsonStr))
-		if derr == nil {
-			md, cerr := rootMountContext(authoredView, o.basePath, o.metaparameters)
-			if cerr != nil {
-				return nil, cerr
-			}
-			authoredMountDeclared = md
+	} else if view != nil {
+		md, cerr := rootMountContext(view, o.basePath, o.metaparameters)
+		if cerr != nil {
+			return nil, cerr
 		}
+		authoredMountDeclared = md
 	}
 
-	// v0.4.0 expression_templates / apply_expression_template are rejected
-	// when the file declares esm < 0.4.0 (RFC §5.4 spec-version gate), and
-	// the v0.8.0 §9.7 constructs (expression_template_imports, top-level
-	// expression_templates, metaparameters) when the file declares
-	// esm < 0.8.0 (esm-spec §9.6.5), and the top-level `solver` block when the
-	// file declares esm < 1.1.0 (esm-spec §2.2.4). Surfaced before schema validation so
-	// the user sees the version hint instead of a generic "extra property"
-	// schema error. Operates on a generic map view of the JSON (UseNumber to
-	// preserve int/float).
-	{
-		var preCheck map[string]any
-		predec := json.NewDecoder(bytes.NewReader([]byte(jsonStr)))
-		predec.UseNumber()
-		if err := predec.Decode(&preCheck); err == nil {
-			// The version gates read the document's own `esm` (esm-spec §4.7
-			// "Each file is held to its OWN declared `esm` version"); a caller
-			// that inlined mounts into this text already ran them on the
-			// authored document.
-			if !o.fileVersionGatesChecked {
-				if err := fileVersionGates(preCheck); err != nil {
-					return nil, err
-				}
-			}
-			// Top-level `expression_templates` beside a component payload is a
-			// template-library payload no component can see (esm-spec §9.7.1).
-			if err := rejectImpureTemplateLibrary(preCheck); err != nil {
-				return nil, err
-			}
-			if err := rejectSolverExternalUnresolved(preCheck); err != nil {
-				return nil, err
-			}
-			// esm-spec §2.2.7: on the root alone -- a mounted leaf's `solver`
-			// block never reaches this view.
-			if err := rejectSolverTimeSpanInvalid(preCheck); err != nil {
-				return nil, err
-			}
+	// Load-time checks that read a generic map view of the JSON (UseNumber to
+	// preserve int/float), surfaced before schema validation so the user sees
+	// the specific diagnostic instead of a generic schema error. The version
+	// gates already ran in prepareRoot.
+	if view != nil {
+		// Top-level `expression_templates` beside a component payload is a
+		// template-library payload no component can see (esm-spec §9.7.1).
+		if err := rejectImpureTemplateLibrary(view); err != nil {
+			return nil, err
+		}
+		if err := rejectSolverExternalUnresolved(view); err != nil {
+			return nil, err
+		}
+		// esm-spec §2.2.7: on the root alone -- a mounted leaf's `solver`
+		// block never reaches this view.
+		if err := rejectSolverTimeSpanInvalid(view); err != nil {
+			return nil, err
 		}
 	}
 
@@ -568,6 +553,15 @@ func LoadString(jsonStr string, opts ...LoadOption) (*ESMFile, error) {
 	// form's copy to protect, and copying the whole document on every load
 	// would be pure cost.
 	if err := LowerEnumsMut(&esmFile); err != nil {
+		return nil, err
+	}
+
+	// esm-spec §9.2 / §9.5.5 (ruling Q-106): the closed-function argument
+	// checks on every interp.* `fn` node and the ten table checks on every
+	// `function_tables` entry run HERE, on the document as loaded — templates
+	// applied, enums lowered — whether or not anything evaluates the node or
+	// references the table. A document that fails one does not load.
+	if err := checkFunctionsAtLoad(&esmFile); err != nil {
 		return nil, err
 	}
 

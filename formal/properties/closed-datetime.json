@@ -1,0 +1,262 @@
+{
+  "properties": [
+    {
+      "id": "P-closed-datetime-ranges",
+      "clauses": [
+        "spec.9.2.datetime-exact-integer"
+      ],
+      "statement": "Every integer datetime.* output is in its §9.2 range: month 1..12, day 1..(days in that month) ⊆ 1..31, hour 0..23, minute 0..59, second 0..59, day_of_year 1..(days in that year) ⊆ 1..366, is_leap_year 0 or 1.",
+      "lean_statement": "∀ t : ℝ, (1 ≤ (Esm.Closed.Datetime.IntFn.month.exact t) ∧ (Esm.Closed.Datetime.IntFn.month.exact t) ≤ 12) ∧ (1 ≤ (Esm.Closed.Datetime.IntFn.day.exact t) ∧ (Esm.Closed.Datetime.IntFn.day.exact t) ≤ Esm.Closed.Datetime.monthLength (Esm.Closed.Datetime.isLeapYear (Esm.Closed.Datetime.IntFn.year.exact t)) (Esm.Closed.Datetime.IntFn.month.exact t) ∧ (Esm.Closed.Datetime.IntFn.day.exact t) ≤ 31) ∧ (0 ≤ (Esm.Closed.Datetime.IntFn.hour.exact t) ∧ (Esm.Closed.Datetime.IntFn.hour.exact t) ≤ 23) ∧ (0 ≤ (Esm.Closed.Datetime.IntFn.minute.exact t) ∧ (Esm.Closed.Datetime.IntFn.minute.exact t) ≤ 59) ∧ (0 ≤ (Esm.Closed.Datetime.IntFn.second.exact t) ∧ (Esm.Closed.Datetime.IntFn.second.exact t) ≤ 59) ∧ (1 ≤ (Esm.Closed.Datetime.IntFn.dayOfYear.exact t) ∧ (Esm.Closed.Datetime.IntFn.dayOfYear.exact t) ≤ Esm.Closed.Datetime.yearLength (Esm.Closed.Datetime.IntFn.year.exact t) ∧ (Esm.Closed.Datetime.IntFn.dayOfYear.exact t) ≤ 366) ∧ ((Esm.Closed.Datetime.IntFn.isLeapYear.exact t) = 0 ∨ (Esm.Closed.Datetime.IntFn.isLeapYear.exact t) = 1)",
+      "status": "proven",
+      "theorem": "Esm.Closed.Datetime.ranges"
+    },
+    {
+      "id": "P-closed-datetime-divmod",
+      "clauses": [
+        "spec.9.2.datetime-exact-integer"
+      ],
+      "statement": "The floor-divmod by 86400: t = 86400·⌊t/86400⌋ + tod with 0 ≤ tod < 86400 (Python-style floored modulo).",
+      "lean_statement": "∀ t : ℝ, t = 86400 * (Esm.Closed.Datetime.dayNumber t : ℝ) + Esm.Closed.Datetime.timeOfDay t ∧ 0 ≤ Esm.Closed.Datetime.timeOfDay t ∧ Esm.Closed.Datetime.timeOfDay t < 86400",
+      "status": "proven",
+      "theorem": "Esm.Closed.Datetime.divmod"
+    },
+    {
+      "id": "P-closed-datetime-roundtrip",
+      "clauses": [
+        "spec.9.2.datetime-exact-integer"
+      ],
+      "statement": "The decomposition round-trips to the real instant floor: 86400·days(year, month, day) + 3600·hour + 60·minute + second = ⌊t⌋ (hour/minute/second from ⌊time-of-day⌋, ruling Q-3).",
+      "lean_statement": "∀ t : ℝ, 86400 * Esm.Closed.Datetime.daysFromCivil ⟨(Esm.Closed.Datetime.IntFn.year.exact t), (Esm.Closed.Datetime.IntFn.month.exact t), (Esm.Closed.Datetime.IntFn.day.exact t)⟩ + 3600 * (Esm.Closed.Datetime.IntFn.hour.exact t) + 60 * (Esm.Closed.Datetime.IntFn.minute.exact t) + (Esm.Closed.Datetime.IntFn.second.exact t) = ⌊t⌋",
+      "status": "proven",
+      "theorem": "Esm.Closed.Datetime.roundtrip"
+    },
+    {
+      "id": "P-closed-datetime-civil-inverse",
+      "clauses": [
+        "spec.9.2.datetime-exact-integer"
+      ],
+      "statement": "civil-from-days and days-from-civil are inverse: every day number maps to a valid date and back, and every valid date maps to a day number and back.",
+      "lean_statement": "(∀ n : ℤ, Esm.Closed.Datetime.daysFromCivil (Esm.Closed.Datetime.civilFromDays n) = n ∧ (Esm.Closed.Datetime.civilFromDays n).Valid) ∧ ∀ c : Esm.Closed.Datetime.Date, c.Valid → Esm.Closed.Datetime.civilFromDays (Esm.Closed.Datetime.daysFromCivil c) = c",
+      "status": "proven",
+      "theorem": "Esm.Closed.Datetime.civil_days_inverse"
+    },
+    {
+      "id": "P-closed-datetime-calendar-steps",
+      "clauses": [
+        "spec.9.2.datetime-exact-integer"
+      ],
+      "statement": "The day count is the proleptic-Gregorian calendar: day 0 is 1970-01-01; consecutive days, months of the standard lengths (February 28/29), and years of 365 days, or 366 when divisible by 4 and not by 100 unless by 400, follow one another with no gaps.",
+      "lean_statement": "Esm.Closed.Datetime.daysFromCivil ⟨1970, 1, 1⟩ = 0 ∧ (∀ y m d : ℤ, Esm.Closed.Datetime.daysFromCivil ⟨y, m, d + 1⟩ = Esm.Closed.Datetime.daysFromCivil ⟨y, m, d⟩ + 1) ∧ (∀ y m : ℤ, 1 ≤ m → m ≤ 11 → Esm.Closed.Datetime.daysFromCivil ⟨y, m + 1, 1⟩ = Esm.Closed.Datetime.daysFromCivil ⟨y, m, Esm.Closed.Datetime.monthLength (Esm.Closed.Datetime.isLeapYear y) m⟩ + 1) ∧ (∀ y : ℤ, Esm.Closed.Datetime.daysFromCivil ⟨y + 1, 1, 1⟩ = Esm.Closed.Datetime.daysFromCivil ⟨y, 12, 31⟩ + 1) ∧ (∀ (l : Bool) (m : ℤ), Esm.Closed.Datetime.monthLength l m = if m = 2 then (if l then 29 else 28) else if m = 4 ∨ m = 6 ∨ m = 9 ∨ m = 11 then 30 else 31) ∧ (∀ y : ℤ, Esm.Closed.Datetime.yearLength y = if (4 ∣ y ∧ ¬ 100 ∣ y) ∨ 400 ∣ y then 366 else 365)",
+      "status": "proven",
+      "theorem": "Esm.Closed.Datetime.calendar_steps"
+    },
+    {
+      "id": "P-closed-datetime-leap-rule",
+      "clauses": [
+        "spec.9.2.datetime-exact-integer"
+      ],
+      "statement": "is_leap_year(t) = 1 exactly when the year of t has 366 days, exactly when it has a February 29, and exactly when the year is divisible by 4 and not by 100, or by 400.",
+      "lean_statement": "∀ t : ℝ, ((Esm.Closed.Datetime.IntFn.isLeapYear.exact t) = 1 ↔ Esm.Closed.Datetime.daysFromCivil ⟨(Esm.Closed.Datetime.IntFn.year.exact t) + 1, 1, 1⟩ - Esm.Closed.Datetime.daysFromCivil ⟨(Esm.Closed.Datetime.IntFn.year.exact t), 1, 1⟩ = 366) ∧ ((Esm.Closed.Datetime.IntFn.isLeapYear.exact t) = 1 ↔ (Esm.Closed.Datetime.Date.Valid ⟨(Esm.Closed.Datetime.IntFn.year.exact t), 2, 29⟩)) ∧ ((Esm.Closed.Datetime.IntFn.isLeapYear.exact t) = 1 ↔ (4 ∣ (Esm.Closed.Datetime.IntFn.year.exact t) ∧ ¬ 100 ∣ (Esm.Closed.Datetime.IntFn.year.exact t)) ∨ 400 ∣ (Esm.Closed.Datetime.IntFn.year.exact t))",
+      "status": "proven",
+      "theorem": "Esm.Closed.Datetime.isLeapYear_agrees"
+    },
+    {
+      "id": "P-closed-datetime-day-of-year",
+      "clauses": [
+        "spec.9.2.datetime-exact-integer"
+      ],
+      "statement": "day_of_year agrees with month and day (days before the month plus the day) and counts from January 1 of the same year (1 = Jan 1).",
+      "lean_statement": "∀ t : ℝ, (Esm.Closed.Datetime.IntFn.dayOfYear.exact t) = Esm.Closed.Datetime.daysBeforeMonth (Esm.Closed.Datetime.isLeapYear (Esm.Closed.Datetime.IntFn.year.exact t)) (Esm.Closed.Datetime.IntFn.month.exact t) + (Esm.Closed.Datetime.IntFn.day.exact t) ∧ (Esm.Closed.Datetime.IntFn.dayOfYear.exact t) = Esm.Closed.Datetime.dayNumber t - Esm.Closed.Datetime.daysFromCivil ⟨(Esm.Closed.Datetime.IntFn.year.exact t), 1, 1⟩ + 1",
+      "status": "proven",
+      "theorem": "Esm.Closed.Datetime.dayOfYear_agrees"
+    },
+    {
+      "id": "P-closed-datetime-monotone",
+      "clauses": [
+        "spec.9.2.datetime-exact-integer"
+      ],
+      "statement": "The integer outputs are monotone in t: t ≤ t' implies (year, month, day, hour, minute, second) at t is lexicographically ≤ the same at t'.",
+      "lean_statement": "∀ t t' : ℝ, t ≤ t' → Esm.Closed.Datetime.fieldsKey t ≤ Esm.Closed.Datetime.fieldsKey t'",
+      "status": "proven",
+      "theorem": "Esm.Closed.Datetime.fields_mono"
+    },
+    {
+      "id": "P-closed-datetime-overflow-exact",
+      "clauses": [
+        "spec.9.2.closed-function-overflow"
+      ],
+      "statement": "Each integer datetime.* function returns its exact value when it fits in Int32 and raises closed_function_overflow exactly when it does not.",
+      "lean_statement": "∀ (f : Esm.Closed.Datetime.IntFn) (t : ℝ), f.eval t = .overflow ↔ ¬ (Esm.Closed.Datetime.int32Min ≤ f.exact t ∧ f.exact t ≤ Esm.Closed.Datetime.int32Max)",
+      "status": "refuted",
+      "theorem": "Esm.Closed.Datetime.overflow_iff_refuted",
+      "reproducer": "tests/closed_functions/datetime/month/expected.json",
+      "retired": "Q-101",
+      "note": "Retired by ruling Q-101 (2026-10-26): overflow is decided by the year of t, not by each field's own value. Refuted in the ruled model at the first instant of year 2147483648, where datetime.month is 1 and raises closed_function_overflow (fixture error scenario int32_year_max_plus_one in every datetime fixture). Superseded by P-closed-datetime-overflow-year-rule."
+    },
+    {
+      "id": "P-closed-datetime-overflow-only-year",
+      "clauses": [
+        "spec.9.2.closed-function-overflow"
+      ],
+      "statement": "Only datetime.year can overflow (every other result, is_leap_year included, is a small bounded integer), and it overflows exactly for t before -2147483648-01-01T00:00:00Z or at/after 2147483648-01-01T00:00:00Z.",
+      "lean_statement": "∀ (f : Esm.Closed.Datetime.IntFn) (t : ℝ), (f ≠ .year → f.eval t = .ok (f.exact t)) ∧ (Esm.Closed.Datetime.IntFn.year.eval t = .overflow ↔ t < 86400 * (Esm.Closed.Datetime.daysFromCivil ⟨Esm.Closed.Datetime.int32Min, 1, 1⟩ : ℝ) ∨ 86400 * (Esm.Closed.Datetime.daysFromCivil ⟨Esm.Closed.Datetime.int32Max + 1, 1, 1⟩ : ℝ) ≤ t)",
+      "status": "refuted",
+      "theorem": "Esm.Closed.Datetime.overflow_only_year_refuted",
+      "reproducer": "tests/closed_functions/datetime/month/expected.json",
+      "retired": "Q-101",
+      "note": "Retired by ruling Q-101 (2026-10-26): every datetime.* function raises closed_function_overflow when the year of t is outside Int32, not only datetime.year. Refuted at the first instant of year 2147483648 (datetime.month raises; fixture error scenario int32_year_max_plus_one). Go raised for |t| >= 2^62 only; Python, Julia, Rust and TypeScript raised for year only. Superseded by P-closed-datetime-overflow-year-rule."
+    },
+    {
+      "id": "P-closed-datetime-overflow-year-rule",
+      "clauses": [
+        "spec.9.2.datetime-overflow-year",
+        "spec.9.2.closed-function-overflow"
+      ],
+      "statement": "Ruling Q-101: every datetime.* function, julian_day included, raises closed_function_overflow exactly when the proleptic-Gregorian year of t is outside Int32 — i.e. exactly for t before -2147483648-01-01T00:00:00Z or at/after 2147483648-01-01T00:00:00Z — and otherwise returns its exact value (every integer field then fits in Int32).",
+      "lean_statement": "∀ (f : Esm.Closed.Datetime.IntFn) (t : ℝ), (f.eval t = .overflow ↔ ¬ Esm.Closed.Datetime.YearInInt32 t) ∧ (Esm.Closed.Datetime.YearInInt32 t → f.eval t = .ok (f.exact t)) ∧ (Esm.Closed.Datetime.julianDayEval t = .overflow ↔ ¬ Esm.Closed.Datetime.YearInInt32 t) ∧ (Esm.Closed.Datetime.YearInInt32 t → Esm.Closed.Datetime.julianDayEval t = .ok (Esm.Closed.Datetime.julianDay t)) ∧ (Esm.Closed.Datetime.YearInInt32 t ↔ 86400 * (Esm.Closed.Datetime.daysFromCivil ⟨Esm.Closed.Datetime.int32Min, 1, 1⟩ : ℝ) ≤ t ∧ t < 86400 * (Esm.Closed.Datetime.daysFromCivil ⟨Esm.Closed.Datetime.int32Max + 1, 1, 1⟩ : ℝ))",
+      "status": "proven",
+      "theorem": "Esm.Closed.Datetime.overflow_year_rule",
+      "note": "Fixtures: error scenarios int32_year_max_plus_one / int32_year_min_minus_one in every tests/closed_functions/datetime/*/expected.json; value scenarios int32_year_max_last_double / int32_year_min_first_instant one double inside."
+    },
+    {
+      "id": "P-closed-datetime-fvf-domain",
+      "clauses": [
+        "spec.9.2.datetime-exact-integer"
+      ],
+      "statement": "On and after -4800-03-01 (Gregorian) the Fliegel–van Flandern JDN, with its published truncating division, is the day count plus 2440588 (the JDN of 1970-01-01).",
+      "lean_statement": "∀ c : Esm.Closed.Datetime.Date, c.Valid → Esm.Closed.Datetime.daysFromCivil Esm.Closed.Datetime.fvfFirstDate ≤ Esm.Closed.Datetime.daysFromCivil c → Esm.Closed.Datetime.fvfJdn c = Esm.Closed.Datetime.daysFromCivil c + 2440588",
+      "status": "proven",
+      "theorem": "Esm.Closed.Datetime.fvfJdn_eq"
+    },
+    {
+      "id": "P-closed-datetime-fvf-near",
+      "clauses": [
+        "spec.9.2.datetime-exact-integer"
+      ],
+      "statement": "Everywhere (every valid proleptic-Gregorian date), the FvF JDN is within 3 days of the day count plus 2440588.",
+      "lean_statement": "∀ c : Esm.Closed.Datetime.Date, c.Valid → |Esm.Closed.Datetime.fvfJdn c - (Esm.Closed.Datetime.daysFromCivil c + 2440588)| ≤ 3",
+      "status": "proven",
+      "theorem": "Esm.Closed.Datetime.fvfJdn_near"
+    },
+    {
+      "id": "P-closed-datetime-julian-standard-from-4800",
+      "clauses": [
+        "spec.9.2.datetime-exact-integer"
+      ],
+      "statement": "On and after -4800-03-01T00:00:00Z the spec's reference julian_day (FvF on the date plus (tod − 43200)/86400, exact arithmetic) is the standard continuous Julian Date t/86400 + 2440587.5.",
+      "lean_statement": "∀ t : ℝ, 86400 * (Esm.Closed.Datetime.daysFromCivil Esm.Closed.Datetime.fvfFirstDate : ℝ) ≤ t → Esm.Closed.Datetime.fvfJulianDay t = t / 86400 + 2440587.5",
+      "status": "proven",
+      "theorem": "Esm.Closed.Datetime.fvfJulianDay_eq_of_ge",
+      "note": "Retired by ruling Q-99 (2026-10-26): FvF is no longer the spec's reference computation but §9.2's informative note; superseded by P-closed-datetime-fvf-note-from-4800. The proposition is unchanged — the model renamed the FvF julian_day from julianDay to fvfJulianDay when julianDay became the ruled standard Julian Date — and stays proven.",
+      "retired": "Q-99"
+    },
+    {
+      "id": "P-closed-datetime-fvf-note-from-4800",
+      "clauses": [
+        "spec.9.2.datetime-julian-standard"
+      ],
+      "statement": "§9.2's informative note: from -4800-03-01T00:00:00Z on, the Fliegel–van Flandern computation (FvF JDN of the date, with truncating division, plus (tod − 43200)/86400, exact arithmetic) equals julian_day, the standard Julian Date t/86400 + 2440587.5.",
+      "lean_statement": "∀ t : ℝ, 86400 * (Esm.Closed.Datetime.daysFromCivil Esm.Closed.Datetime.fvfFirstDate : ℝ) ≤ t → Esm.Closed.Datetime.fvfJulianDay t = t / 86400 + 2440587.5",
+      "status": "proven",
+      "theorem": "Esm.Closed.Datetime.fvfJulianDay_eq_of_ge",
+      "note": "Before that date it is not the Julian Date (Esm.Closed.Datetime.fvfJulianDay_ne_standard: one day ahead on -4800-02-29), and is off by −2..+1 days there (P-closed-datetime-fvf-near bounds it by 3)."
+    },
+    {
+      "id": "P-closed-datetime-julian-standard-everywhere",
+      "clauses": [
+        "spec.9.2.datetime-julian-standard"
+      ],
+      "statement": "For every t, the spec's reference julian_day equals the standard Julian Date t/86400 + 2440587.5 (§9.2: 'the standard JDN convention (JD 0 = noon UTC on 4713 BC Jan 1, proleptic Julian)').",
+      "lean_statement": "∀ t : ℝ, Esm.Closed.Datetime.julianDay t = t / 86400 + 2440587.5",
+      "status": "proven",
+      "note": "Ruling Q-99 (2026-10-26): julian_day is the standard Julian Date for every t; Esm.Closed.Datetime.julianDay is now the exact value of the expression §9.2 pins, (d + 2440588) + (tod − 43200)/86400. The Fliegel–van Flandern computation is §9.2's informative note (Esm.Closed.Datetime.fvfJulianDay), which is NOT the Julian Date before -4800-03-01 (Esm.Closed.Datetime.fvfJulianDay_ne_standard). Fixtures: tests/closed_functions/datetime/julian_day/expected.json scenarios jd_* and frac_*minus_4800*.",
+      "theorem": "Esm.Closed.Datetime.julianDay_eq_standard"
+    },
+    {
+      "id": "P-closed-datetime-nonfinite",
+      "clauses": [
+        "spec.9.2.datetime-overflow-year"
+      ],
+      "statement": "The result of a datetime.* function at a NaN or infinite t_utc. Ruling Q-100: it is closed_function_overflow in every datetime.* function (the eight integer functions and julian_day); a finite t_utc is evaluated as for a real t.",
+      "status": "proven",
+      "note": "Was a question entry with no Lean statement (§9.2 specified no result); ruling Q-100 (2026-10-26) supplies the result, appended to the statement. Definitional in the model (Time, IntFn.evalTime, julianDayEvalTime transcribe the ruled sentence); the substance is in the fixtures' nonfinite_* error scenarios, which the adapter and all five bindings pass. Python raised closed_function_arity and Rust returned the epoch's fields before the ruling.",
+      "lean_statement": "∀ f : Esm.Closed.Datetime.IntFn, (∀ t : ℝ, f.evalTime (.finite t) = f.eval t ∧ Esm.Closed.Datetime.julianDayEvalTime (.finite t) = Esm.Closed.Datetime.julianDayEval t) ∧ f.evalTime (.nan : Esm.Closed.Datetime.Time ℝ) = .overflow ∧ f.evalTime (.posInf : Esm.Closed.Datetime.Time ℝ) = .overflow ∧ f.evalTime (.negInf : Esm.Closed.Datetime.Time ℝ) = .overflow ∧ Esm.Closed.Datetime.julianDayEvalTime (.nan : Esm.Closed.Datetime.Time ℝ) = .overflow ∧ Esm.Closed.Datetime.julianDayEvalTime (.posInf : Esm.Closed.Datetime.Time ℝ) = .overflow ∧ Esm.Closed.Datetime.julianDayEvalTime (.negInf : Esm.Closed.Datetime.Time ℝ) = .overflow",
+      "theorem": "Esm.Closed.Datetime.nonfinite_overflow"
+    },
+    {
+      "id": "P-closed-datetime-binary64-floor",
+      "clauses": [
+        "spec.9.2.datetime-exact-integer"
+      ],
+      "statement": "Binary64 claim (a), precise range: for every double t with |t| < 2^60, ⌊fl(t/86400)⌋ = ⌊t/86400⌋, except the negative t with t/86400 underflowing to zero, -43200·2^-1074 ≤ t < 0.",
+      "lean_statement": "∀ t : ℝ, Esm.F64.IsF64 t → |t| < 2 ^ (60 : ℤ) → ¬ (-(43200 * 2 ^ (-1074 : ℤ)) ≤ t ∧ t < 0) → Esm.Closed.Datetime.fDayNumber t = Esm.Closed.Datetime.dayNumber t",
+      "status": "proven",
+      "theorem": "Esm.Closed.Datetime.fDayNumber_exact"
+    },
+    {
+      "id": "P-closed-datetime-binary64-floor-underflow",
+      "clauses": [
+        "spec.9.2.datetime-exact-integer"
+      ],
+      "statement": "In the underflow band -43200·2^-1074 ≤ t < 0 the binary64 floor is one day late: t/86400 rounds to 0 (day 0, 1970-01-01) while ⌊t/86400⌋ = -1.",
+      "lean_statement": "∀ t : ℝ, -(43200 * 2 ^ (-1074 : ℤ)) ≤ t → t < 0 → Esm.Closed.Datetime.fDayNumber t = Esm.Closed.Datetime.dayNumber t + 1",
+      "status": "proven",
+      "theorem": "Esm.Closed.Datetime.fDayNumber_underflow"
+    },
+    {
+      "id": "P-closed-datetime-binary64-floor-large",
+      "clauses": [
+        "spec.9.2.datetime-exact-integer"
+      ],
+      "statement": "The 2^60 bound on claim (a) is nearly tight: t = 86400·(2^44 + 1) − 128 (about 1.52e18 s, a double below 2^61) has t/86400 rounding up to the integer 2^44 + 1.",
+      "lean_statement": "¬ ∀ t : ℝ, Esm.F64.IsF64 t → |t| < 2 ^ (61 : ℤ) → Esm.Closed.Datetime.fDayNumber t = Esm.Closed.Datetime.dayNumber t",
+      "status": "proven",
+      "theorem": "Esm.Closed.Datetime.fDayNumber_ne_large"
+    },
+    {
+      "id": "P-closed-datetime-binary64-divmod-exact",
+      "clauses": [
+        "spec.9.2.datetime-exact-integer"
+      ],
+      "statement": "For every double t with |t| ≤ 2^59 outside (−43200, 0), the binary64 floor-divmod (d = ⌊t ⊘ 86400⌋, tod = t ⊖ 86400 ⊗ d) is exact, so every integer output equals the exact model's.",
+      "lean_statement": "∀ t : ℝ, Esm.F64.IsF64 t → |t| ≤ 2 ^ (59 : ℤ) → ¬ (-43200 < t ∧ t < 0) → Esm.Closed.Datetime.fDayNumber t = Esm.Closed.Datetime.dayNumber t ∧ Esm.Closed.Datetime.fTimeOfDay t = Esm.Closed.Datetime.timeOfDay t ∧ Esm.Closed.Datetime.fSecondOfDay t = Esm.Closed.Datetime.secondOfDay t",
+      "status": "proven",
+      "theorem": "Esm.Closed.Datetime.fDivmod_exact"
+    },
+    {
+      "id": "P-closed-datetime-binary64-divmod-claim",
+      "clauses": [
+        "spec.9.2.datetime-exact-integer"
+      ],
+      "statement": "§9.2's claim that the floor-divmod by 86400 gives zero drift on the integer outputs, for the binary64 floor-divmod: for every double |t| ≤ 2^59 the binary64 day and ⌊tod⌋ equal the exact ones.",
+      "lean_statement": "∀ t : ℝ, Esm.F64.IsF64 t → |t| ≤ 2 ^ (59 : ℤ) → Esm.Closed.Datetime.fDayNumber t = Esm.Closed.Datetime.dayNumber t ∧ Esm.Closed.Datetime.fSecondOfDay t = Esm.Closed.Datetime.secondOfDay t",
+      "status": "refuted",
+      "theorem": "Esm.Closed.Datetime.fDivmod_not_exact",
+      "reproducer": "tests/closed_functions/datetime/second/expected.json",
+      "note": "Counterexample t = -1 - 2^-52: 86400 + t rounds to 86399, so the binary64 ⌊tod⌋ is 86399 (23:59:59) where the exact one is 86398 (23:59:58). The fixture scenario that exercises this class is frac_pre_epoch_minute_1969_12_31T23_59_below_ulp (t = -60.00000000000001: binary64 pipeline second 0, exact 59), added on formal/p1-bind-datetime. In the underflow band the binary64 time of day is t itself, negative, so a binding that uses it reports hour -1 (P-closed-datetime-binary64-floor-underflow; scenario frac_epoch_below_ulp, t = -5e-324). Bindings must compute ⌊tod⌋ as ⌊t⌋ - 86400·d in integers (secondOfDay_eq) to meet ruling Q-3."
+    },
+    {
+      "id": "P-closed-datetime-julian-ulp",
+      "clauses": [
+        "spec.9.2.datetime-exact-integer"
+      ],
+      "statement": "Binary64 claim (b), stated precisely: the spec's binary64 julian_day (JDN ⊕ ((tod ⊖ 43200) ⊘ 86400), with d = ⌊t ⊘ 86400⌋ and tod = t ⊖ 86400 ⊗ d) is within 1 ulp of the exact real value of the same formula on the exact (day, tod) pair, ulp taken at the exact value, for every double |t| ≤ 2^59 (the underflow band and (−43200, 0) included). Within the 1 ulp: the final add contributes at most half an ulp, the divide and the earlier subtractions together at most another half.",
+      "lean_statement": "∀ t : ℝ, Esm.F64.IsF64 t → |t| ≤ 2 ^ (59 : ℤ) → |Esm.Closed.Datetime.fFvfJulianDay t - Esm.Closed.Datetime.fvfJulianDay t| ≤ Esm.F64.ulp (Esm.Closed.Datetime.fvfJulianDay t)",
+      "status": "proven",
+      "theorem": "Esm.Closed.Datetime.fFvfJulianDay_within_ulp",
+      "retired": "Q-99",
+      "note": "Retired by ruling Q-99 (2026-10-26): §9.2 no longer pins this formula (it is the informative Fliegel–van Flandern note); superseded by P-closed-datetime-julian-ulp-split. The proposition is unchanged — the model renamed its definitions fJulianDay/julianDay to fFvfJulianDay/fvfJulianDay when those names went to the ruled formula — and stays proven."
+    },
+    {
+      "id": "P-closed-datetime-julian-ulp-split",
+      "clauses": [
+        "spec.9.2.datetime-julian-standard"
+      ],
+      "statement": "The binary64 julian_day §9.2 pins (ruling Q-99), (d + 2440588) ⊕ (((s − 43200) ⊕ (t ⊖ ⌊t⌋)) ⊘ 86400) on the exact split d = ⌊t/86400⌋, s = ⌊t⌋ − 86400·d, with the two integers converted to doubles, is within 1 ulp of the exact Julian Date t/86400 + 2440587.5 (ulp at the exact value), for every double |t| ≤ 2^59 (every t whose year is an Int32 included). The final add contributes at most half an ulp; t ⊖ ⌊t⌋, the inner add and the divide together at most another half.",
+      "lean_statement": "∀ t : ℝ, Esm.F64.IsF64 t → |t| ≤ 2 ^ (59 : ℤ) → |Esm.Closed.Datetime.fJulianDay t - Esm.Closed.Datetime.julianDay t| ≤ Esm.F64.ulp (Esm.Closed.Datetime.julianDay t)",
+      "status": "proven",
+      "theorem": "Esm.Closed.Datetime.fJulianDay_within_ulp",
+      "note": "t ⊖ ⌊t⌋ is NOT always exact: for −0.5 < t < 0 it is 1 + t rounded (t = −1e−7, t = −5e−324). The bound holds anyway; near Julian Date 0 (|J| < 8, so t < −2^16) every step before the divide is exact (repr_frac, repr_tod_sub)."
+    }
+  ]
+}

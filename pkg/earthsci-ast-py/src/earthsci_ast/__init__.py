@@ -63,6 +63,8 @@ from .solver import (
     resolve_time_span,
     resolve_tolerances,
     solver_external_location,
+    time_origin,
+    timestamp_to_seconds,
 )
 
 # Core parsing and serialization.
@@ -515,6 +517,8 @@ __all__ = [
     "resolve_time_span",
     "resolve_tolerances",
     "solver_external_location",
+    "time_origin",
+    "timestamp_to_seconds",
     "Parameter",
     "Reaction",
     "ReactionSystem",

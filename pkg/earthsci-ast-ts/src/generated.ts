@@ -263,7 +263,7 @@ export type ExpressionNode = ExpressionNode1 & {
     [k: string]: Expression;
   };
   /**
-   * For table_lookup: which output of a multi-output table to return. Either a non-negative integer (0-based index into the leading data dimension) or a string (an entry in the table's `outputs` array). Single-output tables MAY omit this field (defaults to 0). Out-of-range or unknown-name selectors are rejected with 'table_lookup_output_out_of_range'.
+   * For table_lookup: which output of a multi-output table to return. Either a non-negative integer (0-based index into the leading data dimension) or a string (an entry in the table's `outputs` array). MAY be omitted whether or not the table declares `outputs`; an omitted output means 0. Out-of-range or unknown-name selectors are rejected with 'table_lookup_output_out_of_range'.
    */
   output?: number | string;
   /**
@@ -1666,7 +1666,7 @@ export interface Domain {
   array_type?: string;
 }
 /**
- * A sampled function table (esm-spec.md §9.5). Carries one or more named axes and a literal nested-array data block. The shape of `data` is [len(outputs), len(axes[0].values), len(axes[1].values), ...] when `outputs` is declared; otherwise [len(axes[0].values), ...] (single-output convenience form). `table_lookup` AST nodes evaluate this table by supplying a per-axis input expression and selecting an output. Tables are syntactic sugar over `interp.linear` (1 axis) / `interp.bilinear` (2 axes) / `index` (nearest); the materialized AST a binding produces from a `table_lookup` MUST be bit-equivalent to the equivalent inline-const lookup.
+ * A sampled function table (esm-spec.md §9.5). Carries one or more named axes and a literal nested-array data block. The shape of `data` is [len(outputs), len(axes[0].values), len(axes[1].values), ...] when `outputs` is declared; otherwise [len(axes[0].values), ...] (single-output convenience form). `table_lookup` AST nodes evaluate this table by supplying a per-axis input expression and selecting an output. Tables are syntactic sugar over `interp.linear` (1 axis) / `interp.bilinear` (2 axes) / the nearest-knot `index` composition (nearest, esm-spec 9.5.3); the materialized AST a binding produces from a `table_lookup` MUST be bit-equivalent to the equivalent inline-const lookup.
  */
 export interface FunctionTable {
   description?: string;
@@ -1678,7 +1678,7 @@ export interface FunctionTable {
    */
   axes: [FunctionTableAxis] | [FunctionTableAxis, FunctionTableAxis];
   /**
-   * Interpolation kind applied by `table_lookup`. 'linear' (1 axis) lowers to `interp.linear`. 'bilinear' (2 axes) lowers to `interp.bilinear`. 'nearest' lowers to `index` after `interp.searchsorted`. The chosen kind MUST be consistent with the number of axes; mismatch is rejected at load time with diagnostic 'table_interpolation_axes_mismatch'.
+   * Interpolation kind applied by `table_lookup`. 'linear' (1 axis) lowers to `interp.linear`. 'bilinear' (2 axes) lowers to `interp.bilinear`. 'nearest' returns the table value at the knot nearest the query, ties to the lower knot, clamped to the end values (an AST composition over `interp.searchsorted` and `index`, esm-spec 9.5.3). The chosen kind MUST be consistent with the number of axes; mismatch is rejected at load time with diagnostic 'table_interpolation_axes_mismatch'.
    */
   interpolation?: "linear" | "bilinear" | "nearest";
   /**

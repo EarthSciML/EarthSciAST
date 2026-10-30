@@ -95,18 +95,18 @@
     }
   },
   "counts": {
-    "symbols": 994,
+    "symbols": 1005,
     "note": "`by_binding` counts exported SPELLINGS (so alias pairs count twice); `symbols` counts canonical (name, kind) entries.",
     "by_binding": {
-      "julia": 342,
+      "julia": 344,
       "typescript": 245,
-      "python": 272,
-      "rust": 383,
-      "go": 461
+      "python": 274,
+      "rust": 385,
+      "go": 470
     },
     "by_tier": {
-      "extension": 691,
-      "stable": 303
+      "extension": 700,
+      "stable": 305
     }
   },
   "planned": [
@@ -1318,6 +1318,14 @@
       }
     },
     {
+      "name": "code_enum_duplicate_value",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeEnumDuplicateValue"
+      }
+    },
+    {
       "name": "code_geometry_manifold_invalid",
       "kind": "constant",
       "tier": "extension",
@@ -1339,6 +1347,14 @@
       "tier": "extension",
       "bindings": {
         "go": "CodeInterpAxisLengthMismatch"
+      }
+    },
+    {
+      "name": "code_interp_axis_not_const",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeInterpAxisNotConst"
       }
     },
     {
@@ -1598,11 +1614,11 @@
       }
     },
     {
-      "name": "code_searchsorted_na_n_in_table",
+      "name": "code_searchsorted_na_n",
       "kind": "constant",
       "tier": "extension",
       "bindings": {
-        "go": "CodeSearchsortedNaNInTable"
+        "go": "CodeSearchsortedNaN"
       }
     },
     {
@@ -1694,11 +1710,43 @@
       }
     },
     {
+      "name": "code_table_axis_duplicate_name",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTableAxisDuplicateName"
+      }
+    },
+    {
       "name": "code_table_axis_na_n",
       "kind": "constant",
       "tier": "extension",
       "bindings": {
         "go": "CodeTableAxisNaN"
+      }
+    },
+    {
+      "name": "code_table_axis_non_monotonic",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTableAxisNonMonotonic"
+      }
+    },
+    {
+      "name": "code_table_axis_too_short",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTableAxisTooShort"
+      }
+    },
+    {
+      "name": "code_table_data_na_n",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTableDataNaN"
       }
     },
     {
@@ -1715,6 +1763,14 @@
       "tier": "extension",
       "bindings": {
         "go": "CodeTableInterpolationAxesMismatch"
+      }
+    },
+    {
+      "name": "code_table_lookup_args_nonempty",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTableLookupArgsNonempty"
       }
     },
     {
@@ -1747,6 +1803,22 @@
       "tier": "extension",
       "bindings": {
         "go": "CodeTableOutOfBoundsUnsupported"
+      }
+    },
+    {
+      "name": "code_table_outputs_duplicate_name",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTableOutputsDuplicateName"
+      }
+    },
+    {
+      "name": "code_table_outputs_length_mismatch",
+      "kind": "constant",
+      "tier": "extension",
+      "bindings": {
+        "go": "CodeTableOutputsLengthMismatch"
       }
     },
     {
@@ -8005,6 +8077,16 @@
       }
     },
     {
+      "name": "time_origin",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "time_origin",
+        "python": "time_origin",
+        "rust": "time_origin"
+      }
+    },
+    {
       "name": "time_point",
       "kind": "type",
       "tier": "stable",
@@ -8020,6 +8102,16 @@
       "bindings": {
         "go": "TimeSpan",
         "rust": "TimeSpan"
+      }
+    },
+    {
+      "name": "timestamp_to_seconds",
+      "kind": "function",
+      "tier": "stable",
+      "bindings": {
+        "julia": "timestamp_to_seconds",
+        "python": "timestamp_to_seconds",
+        "rust": "timestamp_to_seconds"
       }
     },
     {

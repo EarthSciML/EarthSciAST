@@ -1,2 +1,2 @@
-# Seeded from pkg/earthsci-ast-rs/Cargo.lock by scripts/api_docs/rust.sh.
+# Seeded from pkg/earthsci-ast-rs/Cargo.lock by earthsci.dev tools/api_docs/rust.sh.
 /Cargo.lock

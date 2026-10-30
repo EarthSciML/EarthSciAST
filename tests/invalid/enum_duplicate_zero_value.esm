@@ -1,0 +1,29 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "EnumDuplicateZeroValue",
+    "description": "Within one enum, values MUST be unique, and 0 is a value like any other, so two symbols MUST NOT both map to 0 (esm-spec §9.3; CONFORMANCE_SPEC §5.26, §5.26.5). `operating_mode.Braking` and `operating_mode.Stopped` both map to 0, so the document is rejected at load with `enum_duplicate_value`. No `enum` op names either symbol: a binding that checks uniqueness only while resolving an `enum` op, or that treats 0 as an absent value, accepts this document and is not conformant.",
+    "authors": ["EarthSciML"],
+    "created": "2026-10-26T00:00:00Z"
+  },
+  "enums": {
+    "operating_mode": {
+      "Braking": 0,
+      "Stopped": 0,
+      "Idling": 1
+    }
+  },
+  "models": {
+    "EnumDuplicateZero": {
+      "variables": {
+        "x": { "type": "unknown", "units": "1", "default": 1.0 }
+      },
+      "equations": [
+        {
+          "lhs": { "op": "D", "args": ["x"], "wrt": "t" },
+          "rhs": { "op": "*", "args": [-0.1, "x"] }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,67 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "ClosedFn_linear_axis_nested",
+    "description": "Ruling Q-108: `interp.linear` whose `axis` is the rank-2 `const` [[0, 1], [2, 3]] beside a two-value table. A `const` of the wrong rank is `interp_axis_not_const`.",
+    "authors": [
+      "EarthSciML"
+    ],
+    "created": "2026-10-27T00:00:00Z"
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "y": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        },
+        "x": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.5
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "y"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "fn",
+            "name": "interp.linear",
+            "args": [
+              {
+                "op": "const",
+                "args": [],
+                "value": [
+                  10.0,
+                  20.0
+                ]
+              },
+              {
+                "op": "const",
+                "args": [],
+                "value": [
+                  [
+                    0.0,
+                    1.0
+                  ],
+                  [
+                    2.0,
+                    3.0
+                  ]
+                ]
+              },
+              "x"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

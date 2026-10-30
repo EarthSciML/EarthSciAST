@@ -236,3 +236,43 @@ func TestZeroAndNegativeEnumMembers(t *testing.T) {
 		}
 	}
 }
+
+// Two symbols of ONE enum mapping to the same integer are rejected at load with
+// `enum_duplicate_value` (esm-spec §9.3, CONFORMANCE_SPEC §5.26.5), a duplicate
+// `0` exactly like a duplicate positive, and whether or not an `enum` op names
+// either symbol. Both are the pinned resolver_only fixtures.
+func TestEnumDuplicateValueFixtures(t *testing.T) {
+	root := dsuRepoRoot(t)
+	pins := resolverOnlyPins(t, root)
+	for _, name := range []string{"enum_duplicate_value.esm", "enum_duplicate_zero_value.esm"} {
+		t.Run(name, func(t *testing.T) {
+			if want := pins[name]; want != CodeEnumDuplicateValue {
+				t.Fatalf("%s must be pinned resolver_only with code %q, got %q",
+					name, CodeEnumDuplicateValue, want)
+			}
+			_, err := LoadPath(filepath.Join(root, "tests", "invalid", name))
+			var de DiagnosticError
+			if !errors.As(err, &de) || de.DiagnosticCode() != CodeEnumDuplicateValue {
+				t.Fatalf("load error %v must carry code %q", err, CodeEnumDuplicateValue)
+			}
+		})
+	}
+}
+
+// The uniqueness check is per enum: values MAY coincide across enums, and a
+// block with distinct values (0 and negatives included) passes.
+func TestEnumDuplicateValueIsPerEnum(t *testing.T) {
+	ok := map[string]map[string]int{
+		"a": {"x": 0, "y": -1, "z": 3},
+		"b": {"x": 0, "w": 3},
+	}
+	if err := checkEnumValuesUnique(ok); err != nil {
+		t.Fatalf("values shared across enums must pass: %v", err)
+	}
+	file := &ESMFile{Enums: map[string]map[string]int{"a": {"p": 0, "q": 0}}}
+	err := LowerEnumsMut(file)
+	var de DiagnosticError
+	if !errors.As(err, &de) || de.DiagnosticCode() != CodeEnumDuplicateValue {
+		t.Fatalf("LowerEnumsMut on a duplicate 0 = %v, want code %q", err, CodeEnumDuplicateValue)
+	}
+}

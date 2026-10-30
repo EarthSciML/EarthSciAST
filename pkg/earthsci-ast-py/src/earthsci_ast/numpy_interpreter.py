@@ -994,15 +994,18 @@ def eval_expr(expr: Expr, ctx: EvalContext) -> float | np.ndarray:
             f"`const` op value must be a number or nested array, got {type(v).__name__}"
         )
     if op == "fn":
-        from .registered_functions import extract_const_array
+        from .registered_functions import extract_const_arg
 
         if expr.name is None:
             raise NumpyInterpreterError("`fn` op requires a `name` field")
         evaluated_args = []
         const_arg_positions = _INTERP_CONST_ARG_POSITIONS.get(expr.name, ())
         for i, a in enumerate(expr.args):
-            if i in const_arg_positions and isinstance(a, ExprNode) and a.op == "const":
-                evaluated_args.append(extract_const_array(a))
+            if i in const_arg_positions:
+                # A table / axis slot takes literal data only (esm-spec §9.2): a
+                # variable or computed expression there is refused with the
+                # slot's code, never evaluated and passed through.
+                evaluated_args.append(extract_const_arg(expr.name, i, a))
             else:
                 evaluated_args.append(eval_expr(a, ctx))
         return _eval_fn_lifted(expr.name, evaluated_args, const_arg_positions)

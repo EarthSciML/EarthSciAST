@@ -820,7 +820,9 @@ func TestAuditT4_UndeterminableFindingsStayWarnings(t *testing.T) {
 	//
 	//   - `x ^ alpha`  — a SYMBOLIC exponent: the dimension depends on alpha's
 	//                    runtime VALUE.
-	//   - `table_lookup(x)` — an operator the units engine has no rule for.
+	//   - `table_lookup` — an operator the units engine has no rule for. It is a
+	//                    well-formed lookup into a declared table, because load and
+	//                    validate() check every lookup (esm-spec §9.5.5, ruling Q-112).
 	//
 	// Built as structs (not JSON) so the case is about the units policy and not
 	// about satisfying the schema's shape rules for these ops.
@@ -843,11 +845,17 @@ func TestAuditT4_UndeterminableFindingsStayWarnings(t *testing.T) {
 					},
 				},
 			},
+			FunctionTables: map[string]FunctionTable{
+				"T": {Axes: []FunctionTableAxis{{Name: "x", Values: []float64{0, 1}}},
+					Data: []any{1.0, 2.0}},
+			},
 		}
 	}
+	lookupTable := "T"
 	cases := map[string]Expression{
 		"symbolic_exponent": ExprNode{Op: "^", Args: []any{"x", "alpha"}},
-		"unknown_op":        ExprNode{Op: "table_lookup", Args: []any{"x"}},
+		"unknown_op": ExprNode{Op: OpTableLookup, Table: &lookupTable,
+			TableAxes: map[string]Expression{"x": "x"}, Args: []any{}},
 	}
 	for label, expr := range cases {
 		t.Run(label, func(t *testing.T) {
@@ -964,7 +972,6 @@ func TestUnitsV2_RationalExponents(t *testing.T) {
 		{"s^(-1/2)", dimRat(dimTime, -1, 2)},
 		{"m^(3/2)", dimRat(dimLength, 3, 2)},
 		{"m^1.5", dimRat(dimLength, 3, 2)},
-		{"m^(-2)", dim(dimLength, -2)},
 		{"kg^0.25", dimRat(dimMass, 1, 4)},
 		{"m**0.5", dimRat(dimLength, 1, 2)},
 	} {
@@ -974,6 +981,15 @@ func TestUnitsV2_RationalExponents(t *testing.T) {
 		}
 		if !u.Dim.Equal(c.want) {
 			t.Errorf("ParseUnit(%q).Dim = %s, want %s", c.in, u.Dim, c.want)
+		}
+	}
+
+	// A parenthesised exponent is ALWAYS a ratio of integers (esm-spec 4.8.2):
+	// `m^(-2)` and `m^(1.5/2)` are outside the grammar, so `m^-2` is the
+	// spelling.
+	for _, in := range []string{"m^(-2)", "m^(1.5/2)"} {
+		if _, err := ParseUnit(in); err == nil {
+			t.Errorf("ParseUnit(%q) must fail: a parenthesised exponent is ^(p/q)", in)
 		}
 	}
 

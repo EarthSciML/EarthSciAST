@@ -493,13 +493,17 @@ All contributions must include appropriate documentation:
 The API reference is generated from docstrings and runnable examples; see
 [`docs/api/README.md`](docs/api/README.md).
 
+The tooling lives in [EarthSciML/earthsci.dev](https://github.com/EarthSciML/earthsci.dev)
+(`tools/api_docs/`), not in this repo. With a checkout of it beside this one:
+
 ```bash
 # Extract one binding's docstrings and run its examples (likewise julia,
-# typescript, rust, go), then render the reference and serve the site
-scripts/api_docs/python.sh
-python3 scripts/api_docs/render.py
-hugo server --source docs
+# typescript, rust, go), then render the reference
+../earthsci.dev/tools/api_docs/python.sh --repo-root .
+python3 ../earthsci.dev/tools/api_docs/render.py --repo-root .
 ```
+
+See `tools/api_docs/README.md` there ("Local preview") to serve the full site.
 
 ## Release Process
 
@@ -516,7 +520,7 @@ All packages follow semantic versioning:
 1. **Version Coordination**: All language packages maintain synchronized versions
 2. **Testing**: Full conformance test suite must pass (`./scripts/test-conformance.sh`)
 3. **Documentation**: Update all relevant documentation
-4. **Security**: Run security scans (`./scripts/package-security-scanner.py`) and address vulnerabilities
+4. **Security**: Check the repository's Dependabot alerts and resolve any high or critical ones
 5. **Changelog**: Generate comprehensive changelog
 6. **Tagging**: Tag and publish each language package per its ecosystem (e.g., `npm publish`, `cargo publish`, Julia registry PR)
 

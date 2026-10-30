@@ -1,36 +1,39 @@
 # EarthSciAST Documentation
 
-This directory is the source of the documentation site, built with
-[Hugo](https://gohugo.io/) and deployed to GitHub Pages by
-[`.github/workflows/pages.yml`](../.github/workflows/pages.yml).
+This directory holds the **content** of EarthSciAST's documentation. The site
+itself (Hugo config, layouts, theme, API-doc tooling) lives in [EarthSciML/earthsci.dev](https://github.com/EarthSciML/earthsci.dev), which
+publishes it at <https://earthsci.dev/ast/>. On every push to `main`,
+[`.github/workflows/docs.yml`](../.github/workflows/docs.yml) builds a docs
+bundle and notifies earthsci.dev, which rebuilds the whole site.
 
 ## Layout
 
 | Path | Contents |
 | --- | --- |
+| [`site.toml`](site.toml) | Project metadata and nav for earthsci.dev. |
 | [`content/`](content/) | All documentation pages. [`content/_index.md`](content/_index.md) is the landing page and the canonical table of contents. |
-| `content/generated/` | Pages produced at build time: the API reference and guides by [`scripts/api_docs/render.py`](../scripts/api_docs/render.py), the narrative pages by `esm-narrative`. Not checked in. |
-| [`api/`](api/) | Inputs to the API reference: the [contract](api/README.md), topic groups, example programs and usage guides. |
-| [`hugo.toml`](hugo.toml) | Site configuration. |
-| `layouts/`, `static/` | Templates and static assets (including the `lib/` standard-library `.esm` files). |
+| `content/generated/` | Pages produced at build time: the API reference and guides by earthsci.dev's `tools/api_docs/render.py`, the narrative pages by `esm-narrative`. Not checked in. |
+| [`api/`](api/) | Inputs to the API reference: [`config.toml`](api/config.toml), topic groups, example programs and usage guides. |
+| [`narrative/`](narrative/) | Narrative page sources. |
+| `static/` | Static assets (including the `lib/` standard-library `.esm` files), published under `/ast/`. |
 | [`README-DOCS.md`](README-DOCS.md) | How the build and generation pipeline works. |
 
-Start from [`content/_index.md`](content/_index.md) rather than this file — it is
-the index the site actually renders, so it does not drift from what is published.
+Start from [`content/_index.md`](content/_index.md) rather than this file.
+Write root-relative links as if this project were the site root
+(`/generated/api/ref/load_path`); the site build prefixes `/ast`.
 
 ## Building locally
 
-```bash
-# Generate the API reference (optional; the site builds without it). Uses
-# whatever build/api-docs/<binding>.json the scripts/api_docs/<binding>.sh
-# scripts have produced; see api/README.md.
-python3 scripts/api_docs/render.py
+Check out [EarthSciML/earthsci.dev](https://github.com/EarthSciML/earthsci.dev) next to this repo.
 
-# Serve at http://localhost:1313
-hugo server --source docs
+```bash
+# API reference (optional): extract with ../earthsci.dev/tools/api_docs/<binding>.sh --repo-root .
+python3 ../earthsci.dev/tools/api_docs/render.py --repo-root .
+cargo run --manifest-path pkg/earthsci-narrative/Cargo.toml --bin esm-narrative -- build
 ```
 
-Hugo **extended** is required, matching the version pinned in `pages.yml`.
+Then follow earthsci.dev's `tools/api_docs/README.md` ("Local preview") to
+assemble and serve the full site.
 
 ## Specification
 

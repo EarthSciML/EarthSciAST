@@ -11,6 +11,7 @@ import type { EsmFile } from './types.js'
 import { validateUnits, type UnitWarning } from './units.js'
 import { losslessJsonParse, stripNumericLiterals } from './numeric-literal.js'
 import { lowerEnums } from './lower-enums.js'
+import { checkFunctionTablesAndClosedFunctionCalls } from './load-function-checks.js'
 import {
   expandDocument,
   lowerExpressionTemplates,
@@ -479,38 +480,23 @@ function loadInput(input: string | object, options?: LoadOptions): EsmFile {
   // Julia ref `parse.jl` rejection so cross-binding behavior is uniform.
   rejectRemovedV02Blocks(validationView)
 
-  // Step 2b: v0.4.0 expression_templates / apply_expression_template are
-  // rejected when the file declares esm < 0.4.0 (RFC §5.4 spec-version gate).
-  // Surfaced with a stable diagnostic before schema validation so the user
-  // sees the version hint instead of a generic "extra property" error.
-  rejectExpressionTemplatesPreV04(validationView)
-
-  // Step 2c: v0.8.0 §9.7 constructs (expression_template_imports, top-level
-  // expression_templates, metaparameters) are rejected when the file
-  // declares esm < 0.8.0 (esm-spec §9.6.5).
-  rejectTemplateImportsPreV08(validationView)
+  // Steps 2b–2e: every file-level version gate, before schema validation so
+  // the user sees the version hint instead of a generic "extra property" error.
+  // A mounted leaf runs the same list against its own `esm` (esm-spec §4.7).
+  rejectVersionGatedConstructs(validationView)
   // Top-level `expression_templates` beside a component payload is a
   // template-library payload no component can see (esm-spec §9.7.1).
   rejectImpureTemplateLibrary(validationView)
-
-  // Step 2d: the top-level `solver` block is rejected when the file declares
-  // esm < 1.1.0 (esm-spec §2.2.4). Before schema validation for the same reason
-  // as the gates above: the version hint beats a generic "extra property"
-  // error.
-  rejectSolverPreV11(validationView)
-  // `solver.external` arrives at esm 1.3.0 (esm-spec §2.2.4), and a
-  // `${` in it is refused (§2.2.6). After the whole-block gate, so a document
-  // below 1.1.0 is told about the block first.
+  // `solver.external` and `solver.time_span` arrive at esm 1.3.0 (§2.2.4); a
+  // `${` in `external` is refused (§2.2.6), and `time_span` must describe an
+  // interval once its bounds are converted to seconds (§2.2.7). Root only: a
+  // mounted leaf's block never reaches these passes. After the whole-block
+  // gate, so a document below 1.1.0 is told about the block first. Skips a
+  // bound the schema will report.
   rejectSolverExternalPreV13(validationView)
-  // `solver.time_span` likewise arrives at esm 1.3.0 (§2.2.4) …
   rejectSolverTimeSpanPreV13(validationView)
   rejectSolverExternalUnresolved(validationView)
-  // … and must describe an interval once its bounds are converted to seconds
-  // (§2.2.7). Root only, like the `${` refusal: a mounted leaf's block never
-  // reaches this pass. Skips a bound the schema will report.
   rejectSolverTimeSpanInvalid(validationView)
-  // Step 2e: declared `units` on a `const` node arrive at esm 1.2.0 (esm-spec §4.8.5).
-  rejectConstUnitsPreV12(validationView)
   // Then §2.2's one normalization — an EMPTY block means what absence means, so
   // it is dropped here rather than surviving to emit. Applied to BOTH views for
   // the same reason `resolveDataSourceUrls` is: in canonical mode
@@ -636,6 +622,13 @@ function loadInput(input: string | object, options?: LoadOptions): EsmFile {
   // codegen runner sees only `const` — `evaluateExpression()` rejects
   // any leftover `enum` op as an unlowered file.
   const loweredData = lowerEnums(typedData)
+
+  // Step 4a: the esm-spec §9.5.5 table checks on EVERY `function_tables` entry,
+  // referenced or not, and the §9.2 argument checks on EVERY `interp.*` `fn`
+  // call, wherever it sits (ruling Q-106). On the document as loaded — after
+  // template expansion and enum lowering — so a call inside a template body is
+  // checked where the template was applied. A failure does not load.
+  checkFunctionTablesAndClosedFunctionCalls(loweredData)
 
   // Attach the captured Option-B registries (NON-SCHEMA, loader-populated —
   // see `EsmFile.componentTemplates` in `types.ts`). Omitted entirely when the
@@ -870,6 +863,34 @@ function declaredBelowV11(doc: unknown): boolean {
   const [major, minor] = esm.split('.').map((x) => Number.parseInt(x, 10))
   if (Number.isNaN(major) || Number.isNaN(minor)) return false
   return major < 1 || (major === 1 && minor < 1)
+}
+
+/**
+ * Every file-level version gate: a construct the document spells while
+ * declaring an `esm` older than the one that introduced it is rejected with
+ * that construct's `*_version_too_old`-style diagnostic. Run against the root
+ * by {@link loadDocument} and against every §4.7-mounted leaf on its OWN
+ * declared `esm` (esm-spec §4.7), so the two paths cannot drift.
+ *
+ * Reads `esm` as raised by {@link prepareDocumentOps} (the `aggregate` → `faq`
+ * normalization's 1.1.0 floor), so callers run that first. The `faq` gate
+ * itself lives there, because it alone reads the AUTHORED version.
+ *
+ * - `expression_templates` / `apply_expression_template` — esm 0.4.0
+ * - `expression_template_imports`, top-level `expression_templates`,
+ *   `metaparameters` — esm 0.8.0 (esm-spec §9.6.5)
+ * - the top-level `solver` block — esm 1.1.0 (esm-spec §2.2.4)
+ * - declared `units` on a `const` node — esm 1.2.0 (esm-spec §4.8.5)
+ *
+ * Not here: the esm 1.3.0 gates on `solver.external` and `solver.time_span`
+ * are checks on the root alone (esm-spec §2.2.6 and §2.2.7 "Mounting"), so
+ * {@link loadDocument} runs them itself, after this.
+ */
+export function rejectVersionGatedConstructs(view: unknown): void {
+  rejectExpressionTemplatesPreV04(view)
+  rejectTemplateImportsPreV08(view)
+  rejectSolverPreV11(view)
+  rejectConstUnitsPreV12(view)
 }
 
 /**

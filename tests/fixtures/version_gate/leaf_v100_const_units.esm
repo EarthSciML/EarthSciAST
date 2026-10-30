@@ -1,0 +1,49 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "leaf_v100_const_units",
+    "description": "A leaf that declares esm 1.0.0 but carries a unit-bearing `const`, which arrives at 1.2.0 (esm-spec §4.8.5 item 6). Invalid on its own. tests/invalid/version_gate_newer_mounts_older_const_units.esm mounts it from a 1.2.0 root: the gate reads THIS file's version (esm-spec §4.7), so the mount is still rejected.",
+    "authors": [
+      "EarthSciAST"
+    ],
+    "created": "2026-10-30T00:00:00Z",
+    "tags": [
+      "version",
+      "mount"
+    ]
+  },
+  "models": {
+    "Leaf": {
+      "variables": {
+        "p_gauge": {
+          "type": "parameter",
+          "units": "Pa",
+          "default": 2500.0,
+          "description": "Gauge pressure."
+        },
+        "p_abs": {
+          "type": "unknown",
+          "units": "Pa",
+          "description": "Absolute pressure."
+        }
+      },
+      "equations": [
+        {
+          "lhs": "p_abs",
+          "rhs": {
+            "op": "+",
+            "args": [
+              "p_gauge",
+              {
+                "op": "const",
+                "args": [],
+                "value": 101325.0,
+                "units": "Pa"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

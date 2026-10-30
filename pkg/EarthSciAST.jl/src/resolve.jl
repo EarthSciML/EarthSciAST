@@ -92,8 +92,12 @@ function load_document(doc::AbstractDict;
               base_path::Union{Nothing,AbstractString}=nothing,
               metaparameters::AbstractDict{String,<:Integer}=Dict{String,Int}())::EsmFile
     # Wire boundary for the in-memory path: normalize the caller's dict (which
-    # may be symbol-keyed, or nest JSON3 values) into the one post-wire carrier.
-    return _load_document(_to_ordered(doc), String(something(base_path, pwd()));
+    # may be symbol-keyed, or nest JSON3 values) into the one post-wire carrier,
+    # and settle its `op` spellings as `_read_json_document` does for text, so
+    # the version gates read the same RAISED `esm` on both paths (esm-spec §4.7).
+    raw_data = _to_ordered(doc)
+    _prepare_document_ops!(raw_data)
+    return _load_document(raw_data, String(something(base_path, pwd()));
                           metaparameters=metaparameters,
                           record_import_base=base_path !== nothing)
 end
@@ -237,6 +241,11 @@ function _load_document(raw_data, base_path::String;
     # document with no location of its own leaves `flatten`'s `base_path` in
     # charge, as it does in the other four bindings.
     record_import_base && _record_coupling_import_base!(file, base_path)
+    # esm-spec §9.2 "When the argument checks run" / §9.5.5 "When the table
+    # checks run": on the document AS LOADED — templates lowered, enums lowered,
+    # mounts resolved — every `interp.*` call and every function table. A
+    # document that fails one does not load.
+    check_closed_functions_and_tables(file)
     return file
 end
 
@@ -439,10 +448,10 @@ function _load_parsed(raw_data; base_path::AbstractString=pwd(),
                       mounted_leaf::Bool=false,
                       authored_checked::Bool=false,
                       enclosing_env::AbstractDict{String,<:Integer}=Dict{String,Int}())::EsmFile
-    # `load_document` hands us an in-memory dict that never passed through
-    # `_read_json_document`, so the wire-boundary op pass runs here too. It is
-    # idempotent: a document that already came through the reader carries no
-    # alias, so this is a silent no-op rather than a second warning.
+    # The wire-boundary op pass runs here too, for the floor below. It is
+    # idempotent: a document that already came through the reader or
+    # `load_document` carries no alias, so this is a silent no-op rather than a
+    # second warning.
     #
     # `gate=false`: top-level `{ref}` inlining has already run by this point, so
     # this document is no longer the AUTHORED one. A legal 1.0.0 parent that

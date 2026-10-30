@@ -16,6 +16,7 @@
  */
 
 import { EsmDiagnosticError, ERROR_CODES } from './errors.js'
+import { numericValue } from './numeric-literal.js'
 
 /**
  * The stable diagnostic codes a {@link ClosedFunctionError} can carry: an
@@ -29,7 +30,7 @@ export type ClosedFunctionErrorCode =
   | 'closed_function_arity'
   | 'closed_function_overflow'
   | 'searchsorted_non_monotonic'
-  | 'searchsorted_nan_in_table'
+  | 'searchsorted_nan'
   | 'interp_non_monotonic_axis'
   | 'interp_axis_length_mismatch'
   | 'interp_nan_in_axis'
@@ -55,29 +56,33 @@ export class ClosedFunctionError extends EsmDiagnosticError {
 // set and the evaluator can never drift out of sync.
 
 const SECONDS_PER_DAY = 86400
-// Days from proleptic-Gregorian year 0000-01-01 to Unix epoch 1970-01-01.
-// Matches the Julia ref (Date(1970,1,1) - Date(0,1,1)).value = 719528.
-const UNIX_EPOCH_DAYS_FROM_YEAR_ZERO = 719528
 
 const INT32_MIN = -2147483648
 const INT32_MAX = 2147483647
 
-function checkInt32(name: string, v: number): number {
-  if (!Number.isFinite(v) || v < INT32_MIN || v > INT32_MAX) {
+function checkYearInt32(tUtc: number, year: number): void {
+  if (year < INT32_MIN || year > INT32_MAX) {
     throw new ClosedFunctionError(
       ERROR_CODES.CLOSED_FUNCTION_OVERFLOW,
-      `${name} result ${v} overflows signed 32-bit integer range`,
+      `datetime.*: the year ${year} of t_utc ${tUtc} overflows signed 32-bit integer range`,
     )
   }
-  return v
 }
 
 /**
- * Floor-division of two integers (matches Math.floor semantics for
- * negative dividends, which Julia's `fld` and Python's `//` also use).
+ * Floor division of an exact integer `a` by a positive integer `b`
+ * (Julia's `fld`, Python's `//`).
+ *
+ * The quotient `Math.floor(a / b)` is only a candidate: when `a` is large the
+ * rounded divide can land on the integer above a quotient just below it. The
+ * remainder `a - q*b` is exact for every `a` this module passes (the product
+ * `q*b` stays an exact integer far past the Int32 year range), and the true
+ * floor is the unique `q` with `0 <= r < b`, so one step either way repairs it.
  */
 function fdiv(a: number, b: number): number {
-  return Math.floor(a / b)
+  const q = Math.floor(a / b)
+  const r = a - q * b
+  return r < 0 ? q - 1 : r >= b ? q + 1 : q
 }
 
 /**
@@ -107,17 +112,16 @@ function isLeapProleptic(y: number): boolean {
 const DAYS_BEFORE_MONTH_NORMAL = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334]
 const DAYS_BEFORE_MONTH_LEAP = [0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335]
 
-/** Convert "days since 0000-01-01" (proleptic Gregorian) to Y/M/D. */
-function daysToYMD(dayOfEra: number): { year: number; month: number; day: number } {
-  // Howard Hinnant's civil_from_days (http://howardhinnant.github.io/date_algorithms.html),
-  // shifted so day 0 is 0000-01-01. Hinnant's era is March-based (0000-03-01)
-  // so the leap day falls at the year's end; `z` re-bases dayOfEra onto that
-  // epoch (year 0 is a Gregorian leap year, so Jan+Feb = 60 days), and the
-  // closing `m`/`year` step maps the March-based month back to a calendar
-  // date. Pure integer-floor arithmetic — bit-exact with the Julia reference's
-  // Dates.Date computation.
-  const z = dayOfEra - 60 // days since 0000-03-01
-  const era = fdiv(z >= 0 ? z : z - 146096, 146097)
+/** Convert days since 1970-01-01 (proleptic Gregorian) to Y/M/D. */
+function daysToYMD(days: number): { year: number; month: number; day: number } {
+  // Howard Hinnant's civil_from_days (http://howardhinnant.github.io/date_algorithms.html).
+  // Hinnant's era is March-based (0000-03-01) so the leap day falls at the
+  // year's end; the closing `m`/`year` step maps the March-based month back
+  // to a calendar date. `era` is a FLOORED division: Hinnant's C spelling
+  // `(z >= 0 ? z : z - 146096) / 146097` is that floor written with C's
+  // truncating `/`, and must not be combined with a floor a second time.
+  const z = days + 719468 // days since 0000-03-01
+  const era = fdiv(z, 146097)
   const doe = z - era * 146097 // [0, 146096]
   const yoe = fdiv(doe - fdiv(doe, 1460) + fdiv(doe, 36524) - fdiv(doe, 146096), 365)
   const y = yoe + era * 400
@@ -135,14 +139,26 @@ function dayOfYear(year: number, month: number, day: number): number {
 }
 
 /**
- * Julian Day Number (continuous including fractional day-of-day).
- * 1970-01-01T00:00:00 UTC → 2440587.5.
+ * Continuous Julian Day: the standard JD, linear in the day number,
+ * `(totalDays + 2440588) + ((secondOfDay − 43200) + fraction) / 86400`
+ * (1970-01-01T00:00:00 UTC → 2440587.5). The first sum is an exact integer
+ * and the offset comes from the same exact floor-divmod as the date, so the
+ * time of day rounds once, then the divide and the add round once each —
+ * no cancellation near JD 0. (`fraction = t − floor(t)` is itself exact
+ * except for −0.5 < t < 0, where `1 + t` can round.) This is the evaluation esm-spec §9.2 pins; the
+ * day term is the linear day number, which equals the informative
+ * Fliegel–van Flandern JDN from -4800-03-01 on (and not before).
  */
-function julianDayValue(tUtc: number): number {
-  // Constant offset by Unix-epoch JDN. The only float op is the divide.
-  return 2440587.5 + tUtc / SECONDS_PER_DAY
+function julianDayValue(totalDays: number, secondOfDay: number, fraction: number): number {
+  return totalDays + 2440588 + (secondOfDay - 43200 + fraction) / SECONDS_PER_DAY
 }
 
+/**
+ * Every `datetime.*` field goes through here, so the two overflow rules of
+ * esm-spec §9.2 hold for all of them alike: a NaN or ±Inf `t_utc`, and one
+ * whose proleptic-Gregorian year is outside Int32, raise
+ * `closed_function_overflow` whichever field is asked for.
+ */
 function decomposeUtcSeconds(tUtc: number): DateParts {
   if (!Number.isFinite(tUtc)) {
     throw new ClosedFunctionError(
@@ -150,21 +166,20 @@ function decomposeUtcSeconds(tUtc: number): DateParts {
       `datetime input ${tUtc} is not a finite value`,
     )
   }
-  const totalDays = fdiv(tUtc, SECONDS_PER_DAY) // floor seconds → days
-  const remSeconds = tUtc - totalDays * SECONDS_PER_DAY // [0, 86400)
-  const dayOfEra = totalDays + UNIX_EPOCH_DAYS_FROM_YEAR_ZERO
+  // esm-spec §9.2: day number floor(t / 86400), time of day
+  // t − 86400·floor(t / 86400) in [0, 86400), both exact; the fields come
+  // from floor(time of day). Because 86400 is an integer that pair is the
+  // floor-divmod of floor(t), which is exact in binary64 — so a fractional
+  // time floors toward −∞ and the date and the time of day always agree.
+  const whole = Math.floor(tUtc)
+  const totalDays = fdiv(whole, SECONDS_PER_DAY)
+  const secondOfDay = whole - totalDays * SECONDS_PER_DAY // exact, in [0, 86400)
 
-  const { year, month, day } = daysToYMD(dayOfEra)
-  // remSeconds may be fractional; Y/M/D/h/m/s integer outputs are taken
-  // from the floored second count.
-  const wholeRem = Math.floor(remSeconds)
-  const hour = fdiv(wholeRem, 3600)
-  const minute = fdiv(wholeRem - hour * 3600, 60)
-  const second = wholeRem - hour * 3600 - minute * 60
-
-  const doy = dayOfYear(year, month, day)
-  const jdn = julianDayValue(tUtc)
-  const isLeap = isLeapProleptic(year) ? 1 : 0
+  const { year, month, day } = daysToYMD(totalDays)
+  checkYearInt32(tUtc, year)
+  const hour = fdiv(secondOfDay, 3600)
+  const minute = fdiv(secondOfDay - hour * 3600, 60)
+  const second = secondOfDay - hour * 3600 - minute * 60
 
   return {
     year,
@@ -173,9 +188,9 @@ function decomposeUtcSeconds(tUtc: number): DateParts {
     hour,
     minute,
     second,
-    dayOfYear: doy,
-    julianDay: jdn,
-    isLeapYear: isLeap,
+    dayOfYear: dayOfYear(year, month, day),
+    julianDay: julianDayValue(totalDays, secondOfDay, tUtc - whole),
+    isLeapYear: isLeapProleptic(year) ? 1 : 0,
   }
 }
 
@@ -197,26 +212,26 @@ function asNumber(name: string, v: unknown, idx = 0): number {
 }
 
 /**
- * Validate a `searchsorted` xs table. Throws on NaN entries or
- * non-monotonic order. Empty arrays are rejected with the spec arity
- * code (the registry requires N ≥ 1).
+ * Validate a `searchsorted` xs table, in esm-spec §9.2's order: a value that
+ * is not a rank-1 array of numbers is `interp_axis_not_const` (checked at run
+ * time too, since a JavaScript caller can hand over anything), then a NaN entry
+ * is `searchsorted_nan`, then a decreasing pair is `searchsorted_non_monotonic`.
+ * An empty `xs` is a valid rank-1 table (N = 0, trivially non-decreasing), and
+ * every query against it returns 1 (esm-spec §9.2, ruling Q-108).
  */
 export function validateSearchsortedTable(
   xs: readonly number[],
   where = 'interp.searchsorted',
 ): void {
-  if (xs.length === 0) {
+  if (!Array.isArray(xs) || !xs.every((e) => typeof e === 'number')) {
     throw new ClosedFunctionError(
-      ERROR_CODES.CLOSED_FUNCTION_ARITY,
-      `${where}: xs table is empty (must have at least one entry)`,
+      ERROR_CODES.INTERP_AXIS_NOT_CONST,
+      `${where}: xs must be a rank-1 const-array of numbers`,
     )
   }
   for (let i = 0; i < xs.length; i++) {
     if (Number.isNaN(xs[i]!)) {
-      throw new ClosedFunctionError(
-        ERROR_CODES.SEARCHSORTED_NAN_IN_TABLE,
-        `${where}: xs[${i + 1}] is NaN`,
-      )
+      throw new ClosedFunctionError(ERROR_CODES.SEARCHSORTED_NAN, `${where}: xs[${i + 1}] is NaN`)
     }
   }
   for (let i = 1; i < xs.length; i++) {
@@ -253,43 +268,67 @@ export function searchsortedFirst(x: number, xs: readonly number[]): number {
   return lo + 1
 }
 
-/**
- * Validate a 1-D interpolation axis (`interp.linear` / `interp.bilinear`).
- * Strictly increasing, no NaN, length ≥ 2. Diagnostic codes match
- * esm-spec §9.2 "Errors (load time)" table.
- */
-export function validateInterpAxis(axis: readonly number[], where: string): void {
-  if (axis.length < 2) {
-    throw new ClosedFunctionError(
-      ERROR_CODES.INTERP_AXIS_TOO_SHORT,
-      `${where}: axis has ${axis.length} entries (must have at least 2)`,
-    )
-  }
-  for (let i = 0; i < axis.length; i++) {
-    if (Number.isNaN(axis[i]!)) {
+/** One interpolation axis and the label its diagnostics name it by. */
+type LabelledAxis = readonly [axis: readonly number[], where: string]
+
+/** esm-spec §9.2 order step 3, over every axis: fewer than 2 entries. */
+function checkAxesLength(axes: readonly LabelledAxis[]): void {
+  for (const [axis, where] of axes) {
+    if (axis.length < 2) {
       throw new ClosedFunctionError(
-        ERROR_CODES.INTERP_NAN_IN_AXIS,
-        `${where}: axis[${i + 1}] is NaN`,
-      )
-    }
-  }
-  for (let i = 1; i < axis.length; i++) {
-    if (axis[i]! <= axis[i - 1]!) {
-      throw new ClosedFunctionError(
-        ERROR_CODES.INTERP_NON_MONOTONIC_AXIS,
-        `${where}: axis is not strictly increasing at index ${i + 1} (axis[${i + 1}]=${axis[i]} ≤ axis[${i}]=${axis[i - 1]})`,
+        ERROR_CODES.INTERP_AXIS_TOO_SHORT,
+        `${where}: axis has ${axis.length} entries (must have at least 2)`,
       )
     }
   }
 }
 
 /**
+ * esm-spec §9.2 order steps 5 and 6, each over every axis: a non-finite entry
+ * (NaN, +Inf or -Inf; ruling Q-113) is `interp_nan_in_axis`, then a pair that
+ * is not strictly increasing is `interp_non_monotonic_axis`.
+ */
+function checkAxesValues(axes: readonly LabelledAxis[]): void {
+  for (const [axis, where] of axes) {
+    for (let i = 0; i < axis.length; i++) {
+      if (!Number.isFinite(axis[i]!)) {
+        throw new ClosedFunctionError(
+          ERROR_CODES.INTERP_NAN_IN_AXIS,
+          `${where}: axis[${i + 1}] is ${axis[i]}, not a finite number`,
+        )
+      }
+    }
+  }
+  for (const [axis, where] of axes) {
+    for (let i = 1; i < axis.length; i++) {
+      if (axis[i]! <= axis[i - 1]!) {
+        throw new ClosedFunctionError(
+          ERROR_CODES.INTERP_NON_MONOTONIC_AXIS,
+          `${where}: axis is not strictly increasing at index ${i + 1} (axis[${i + 1}]=${axis[i]} ≤ axis[${i}]=${axis[i - 1]})`,
+        )
+      }
+    }
+  }
+}
+
+/**
+ * Validate a 1-D interpolation axis (`interp.linear` / `interp.bilinear`):
+ * at least 2 entries, every entry finite, strictly increasing — in that order
+ * (esm-spec §9.2 "Order of the argument checks").
+ */
+export function validateInterpAxis(axis: readonly number[], where: string): void {
+  checkAxesLength([[axis, where]])
+  checkAxesValues([[axis, where]])
+}
+
+/**
  * Coerce a value to a const-array of numbers, raising `code` when it is not
  * (e.g. a variable reference or non-`const` expression). The code is passed in
  * because esm-spec §9.2 pins DISTINCT diagnostics per argument role: a `table`
- * argument raises `interp_table_not_const`, an axis raises
- * `interp_axis_not_const`, and `interp.searchsorted`'s `xs` raises the older
- * `closed_function_arity`.
+ * argument raises `interp_table_not_const`, and an axis — `interp.searchsorted`'s
+ * `xs` included — raises `interp_axis_not_const`. A value that is not a rank-1
+ * array of numbers (a scalar, a nested array, or an unevaluated expression the
+ * evaluator passed through) fails here, before any NaN or monotonicity check.
  */
 function asNumberArray(
   name: string,
@@ -304,8 +343,10 @@ function asNumberArray(
 }
 
 function asNumberMatrix(name: string, v: unknown): number[][] {
+  // An empty array is rank 1, not rank 2 (ruling Q-111).
   if (
     !Array.isArray(v) ||
+    v.length === 0 ||
     !v.every((row) => Array.isArray(row) && row.every((e) => typeof e === 'number'))
   ) {
     throw new ClosedFunctionError(
@@ -317,6 +358,58 @@ function asNumberMatrix(name: string, v: unknown): number[][] {
 }
 
 /**
+ * The esm-spec §9.2 shape and axis checks of `interp.linear` on arrays already
+ * known to be rank 1: `interp_axis_length_mismatch`, then the axis checks of
+ * {@link validateInterpAxis}. Shared by evaluation and the load-time check.
+ */
+function validateLinearArrays(table: readonly number[], axis: readonly number[]): void {
+  const axes: LabelledAxis[] = [[axis, 'interp.linear']]
+  checkAxesLength(axes)
+  if (table.length !== axis.length) {
+    throw new ClosedFunctionError(
+      ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH,
+      `interp.linear: len(table)=${table.length} != len(axis)=${axis.length}`,
+    )
+  }
+  checkAxesValues(axes)
+}
+
+/**
+ * The esm-spec §9.2 shape and axis checks of `interp.bilinear` on a rank-2
+ * `table` and rank-1 axes, in the pinned order (each step over both axes):
+ * too short, length mismatch, non-finite entry, not strictly increasing.
+ * Shared by evaluation and the load-time check.
+ */
+function validateBilinearArrays(
+  table: readonly (readonly number[])[],
+  axisX: readonly number[],
+  axisY: readonly number[],
+): void {
+  const axes: LabelledAxis[] = [
+    [axisX, 'interp.bilinear axis_x'],
+    [axisY, 'interp.bilinear axis_y'],
+  ]
+  checkAxesLength(axes)
+  const nx = axisX.length
+  const ny = axisY.length
+  if (table.length !== nx) {
+    throw new ClosedFunctionError(
+      ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH,
+      `interp.bilinear: outer len(table)=${table.length} != len(axis_x)=${nx}`,
+    )
+  }
+  for (let r = 0; r < table.length; r++) {
+    if (table[r]!.length !== ny) {
+      throw new ClosedFunctionError(
+        ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH,
+        `interp.bilinear: table row ${r + 1} has length ${table[r]!.length}, expected len(axis_y)=${ny}`,
+      )
+    }
+  }
+  checkAxesValues(axes)
+}
+
+/**
  * 1-D linear interpolation with extrapolate-flat clamps. Pinned form
  * `result = t[i] + w * (t[i+1] - t[i])` so that w=0/1 reproduce the
  * endpoint exactly under IEEE-754 round-to-nearest.
@@ -325,13 +418,7 @@ function asNumberMatrix(name: string, v: unknown): number[][] {
  * matches the `searchsortedFirst` convention in this module).
  */
 export function interpLinear(table: readonly number[], axis: readonly number[], x: number): number {
-  if (table.length !== axis.length) {
-    throw new ClosedFunctionError(
-      ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH,
-      `interp.linear: len(table)=${table.length} != len(axis)=${axis.length}`,
-    )
-  }
-  validateInterpAxis(axis, 'interp.linear')
+  validateLinearArrays(table, axis)
   const n = axis.length
   if (x <= axis[0]!) return table[0]!
   if (x >= axis[n - 1]!) return table[n - 1]!
@@ -363,24 +450,9 @@ export function interpBilinear(
   x: number,
   y: number,
 ): number {
+  validateBilinearArrays(table, axisX, axisY)
   const nx = axisX.length
   const ny = axisY.length
-  if (table.length !== nx) {
-    throw new ClosedFunctionError(
-      ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH,
-      `interp.bilinear: outer len(table)=${table.length} != len(axis_x)=${nx}`,
-    )
-  }
-  for (let r = 0; r < table.length; r++) {
-    if (table[r]!.length !== ny) {
-      throw new ClosedFunctionError(
-        ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH,
-        `interp.bilinear: table row ${r + 1} has length ${table[r]!.length}, expected len(axis_y)=${ny}`,
-      )
-    }
-  }
-  validateInterpAxis(axisX, 'interp.bilinear axis_x')
-  validateInterpAxis(axisY, 'interp.bilinear axis_y')
 
   // Per-axis clamp (extrapolate-flat). NaN passes through unchanged
   // because both comparisons return false for NaN, propagating to wx/wy.
@@ -437,7 +509,8 @@ type ClosedFunctionHandler = (name: string, args: unknown[]) => number
  *  - datetime.* take a single scalar `t_utc` (number).
  *  - interp.searchsorted takes [scalar x, number[] xs]. The xs array MUST be a
  *    plain array of numbers (the AST evaluator extracts it from a `const`-op
- *    child without numeric-collapsing it).
+ *    child without numeric-collapsing it); anything else is
+ *    `interp_axis_not_const`.
  *  - interp.linear takes [number[] table, number[] axis, scalar x].
  *  - interp.bilinear takes
  *    [number[][] table, number[] axis_x, number[] axis_y, scalar x, scalar y].
@@ -445,7 +518,7 @@ type ClosedFunctionHandler = (name: string, args: unknown[]) => number
 const CLOSED_FUNCTION_DISPATCH: Record<string, ClosedFunctionHandler> = {
   'datetime.year': (name, args) => {
     requireArity(name, args, 1)
-    return checkInt32(name, decomposeUtcSeconds(asNumber(name, args[0])).year)
+    return decomposeUtcSeconds(asNumber(name, args[0])).year
   },
   'datetime.month': (name, args) => {
     requireArity(name, args, 1)
@@ -482,10 +555,10 @@ const CLOSED_FUNCTION_DISPATCH: Record<string, ClosedFunctionHandler> = {
   'interp.searchsorted': (name, args) => {
     requireArity(name, args, 2)
     const x = asNumber(name, args[0], 0)
-    // searchsorted's xs predates the interp_* codes and is spec-pinned to the
-    // arity diagnostic (esm-spec §9.2); pass it explicitly through the shared
-    // const-array helper so the code lives at one call site.
-    const xs = asNumberArray(name, args[1], 'xs (arg 2)', ERROR_CODES.CLOSED_FUNCTION_ARITY)
+    // esm-spec §9.2: an `xs` that is not a rank-1 const array is
+    // `interp_axis_not_const`, decided before `searchsorted_nan` /
+    // `searchsorted_non_monotonic` (which `searchsortedFirst` checks).
+    const xs = asNumberArray(name, args[1], 'xs (arg 2)', ERROR_CODES.INTERP_AXIS_NOT_CONST)
     return searchsortedFirst(x, xs)
   },
   'interp.linear': (name, args) => {
@@ -542,4 +615,104 @@ export function dispatchClosedFunction(name: string, args: unknown[]): number {
     )
   }
   return handler(name, args)
+}
+
+/**
+ * The value an argument of an `interp.*` call carries when it is a literal
+ * `const` node — its `value`, with any tagged `NumericLiteral` leaf (a
+ * `{canonical: true}` load) unwrapped to a plain number — or `undefined` when
+ * the argument is not a `const` node at all (a variable reference, any other
+ * expression).
+ */
+function constArgValue(arg: unknown): unknown {
+  if (typeof arg !== 'object' || arg === null || Array.isArray(arg)) return undefined
+  if ((arg as { op?: unknown }).op !== 'const') return undefined
+  return plainLeaves((arg as { value?: unknown }).value)
+}
+
+function plainLeaves(value: unknown): unknown {
+  const n = numericValue(value)
+  if (n !== undefined) return n
+  if (Array.isArray(value)) return value.map(plainLeaves)
+  return value
+}
+
+/**
+ * The esm-spec §9.2 LOAD-TIME argument checks of one `fn` call (ruling Q-106):
+ * the call names `name` and carries `args`, as written in the loaded document.
+ * Only `interp.searchsorted`, `interp.linear` and `interp.bilinear` have
+ * argument checks; any other name returns at once.
+ *
+ * In order (esm-spec §9.2 "Order of the argument checks", ruling Q-110): a
+ * wrong number of arguments is `closed_function_arity` (ruling Q-112); then,
+ * for each array argument in argument order: not a `const` node, or
+ * a `const` of the wrong rank (rank 1 for an axis, `xs` and `interp.linear`'s
+ * `table`; rank 2 for `interp.bilinear`'s `table`) is `interp_table_not_const`
+ * / `interp_axis_not_const` (ruling Q-108); then the value checks evaluation
+ * runs — the very same functions, so the two cannot disagree.
+ *
+ * `where` (a JSON Pointer) is prefixed to the message.
+ */
+export function checkClosedFunctionArguments(
+  name: string,
+  args: readonly unknown[],
+  where = '',
+): void {
+  try {
+    switch (name) {
+      case 'interp.searchsorted': {
+        requireArity(name, args as unknown[], 2)
+        const xs = asNumberArray(
+          name,
+          constArgValue(args[1]),
+          'xs (arg 2)',
+          ERROR_CODES.INTERP_AXIS_NOT_CONST,
+        )
+        validateSearchsortedTable(xs)
+        return
+      }
+      case 'interp.linear': {
+        requireArity(name, args as unknown[], 3)
+        const table = asNumberArray(
+          name,
+          constArgValue(args[0]),
+          'table',
+          ERROR_CODES.INTERP_TABLE_NOT_CONST,
+        )
+        const axis = asNumberArray(
+          name,
+          constArgValue(args[1]),
+          'axis',
+          ERROR_CODES.INTERP_AXIS_NOT_CONST,
+        )
+        validateLinearArrays(table, axis)
+        return
+      }
+      case 'interp.bilinear': {
+        requireArity(name, args as unknown[], 5)
+        const table = asNumberMatrix(name, constArgValue(args[0]))
+        const axisX = asNumberArray(
+          name,
+          constArgValue(args[1]),
+          'axis_x',
+          ERROR_CODES.INTERP_AXIS_NOT_CONST,
+        )
+        const axisY = asNumberArray(
+          name,
+          constArgValue(args[2]),
+          'axis_y',
+          ERROR_CODES.INTERP_AXIS_NOT_CONST,
+        )
+        validateBilinearArrays(table, axisX, axisY)
+        return
+      }
+      default:
+        return
+    }
+  } catch (e) {
+    if (e instanceof ClosedFunctionError && where !== '') {
+      throw new ClosedFunctionError(e.code, `${where}: ${e.message.replace(/^\[[a-z_]+\] /, '')}`)
+    }
+    throw e
+  }
 }

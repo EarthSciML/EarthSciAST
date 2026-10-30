@@ -152,4 +152,35 @@ const MTK3 = ModelingToolkit
         @test elapsed < 5.0
     end
 
+    # --------------------------------------------------------------
+    # 4. esm-spec §9.2: a searchsorted `xs` (or an interp axis / table)
+    # that is not a rank-1 `const` array carries its spec code out of
+    # the MTK lowering, as it does out of the tree-walk build.
+    # --------------------------------------------------------------
+    @testset "non-const interp.* arrays raise their §9.2 code" begin
+        vars = OrderedDict{String,ESM3.ModelVariable}(
+            "x"  => ESM3.ModelVariable(ESM3.ParameterVariable; default=0.5),
+            "xs" => ESM3.ModelVariable(ESM3.ParameterVariable; default=1.0),
+            "z"  => ESM3.ModelVariable(ESM3.UnknownVariable;   default=0.0),
+        )
+        mtk_code(rhs) = try
+            MTK3.System(ESM3.Model(vars, ESM3.Equation[ESM3.Equation(_op_D("z"), rhs)]);
+                        name=:NotConst)
+            nothing
+        catch e
+            e isa ESM3.ClosedFunctionError || rethrow()
+            e.code
+        end
+        @test mtk_code(_fn("interp.searchsorted", _v("x"), _v("xs"))) ==
+              "interp_axis_not_const"
+        @test mtk_code(_fn("interp.searchsorted", _v("x"),
+                           _const(Any[[1.0, NaN], [3.0, 4.0]]))) == "interp_axis_not_const"
+        @test mtk_code(_fn("interp.searchsorted", _v("x"), _const([3.0, NaN, 1.0]))) ==
+              "searchsorted_nan"
+        @test mtk_code(_fn("interp.linear", _v("xs"), _const([0.0, 1.0]), _v("x"))) ==
+              "interp_table_not_const"
+        @test mtk_code(_fn("interp.linear", _const([0.0, 1.0]), _v("xs"), _v("x"))) ==
+              "interp_axis_not_const"
+    end
+
 end

@@ -1,0 +1,59 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "ClosedFn_linear_axis_too_short",
+    "description": "`interp.linear` with a one-value table over a one-value axis: no interval to blend across.",
+    "authors": [
+      "EarthSciML"
+    ],
+    "created": "2026-10-27T00:00:00Z"
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "y": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        },
+        "x": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.5
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "y"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "fn",
+            "name": "interp.linear",
+            "args": [
+              {
+                "op": "const",
+                "args": [],
+                "value": [
+                  42.0
+                ]
+              },
+              {
+                "op": "const",
+                "args": [],
+                "value": [
+                  0.0
+                ]
+              },
+              "x"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1866,10 +1866,18 @@ function angleAsNumber(unit: ParsedUnit): ParsedUnit {
  * angle loses its `rad` axis (esm-spec §4.8.3). Anything else is returned
  * unchanged — two angles, `m*rad` against `m`, and the operands of `atan2`,
  * `concat` and `makearray` keep the strict rule.
+ *
+ * The rule never makes two angles agree with EACH OTHER: when the pure angles
+ * present differ in power (`rad` beside `sr`), nothing is stripped, so
+ * `θ [rad] + ω [sr] + n [1]` still reports `rad` against `sr`. Angles of one
+ * power at different scales (`rad` beside `deg`) are stripped, since the kept
+ * scales still disagree.
  */
 function angleMeetsNumber(units: ReadonlyArray<ParsedUnit | null>): Array<ParsedUnit | null> {
   const known = units.filter((u): u is ParsedUnit => u !== null)
-  if (!known.some(isPureAngle) || !known.some(isDimensionless)) return [...units]
+  const angles = known.filter(isPureAngle)
+  if (angles.length === 0 || !known.some(isDimensionless)) return [...units]
+  if (angles.some((a) => !dimsEqual(a.dims, angles[0].dims))) return [...units]
   return units.map((u) => (u !== null && isPureAngle(u) ? angleAsNumber(u) : u))
 }
 

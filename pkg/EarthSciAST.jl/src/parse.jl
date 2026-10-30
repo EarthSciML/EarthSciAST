@@ -309,7 +309,8 @@ function _coerce_table_lookup_axes(table, axes_raw, args::Vector{ASTExpr})::Dict
         axes[string(k)] = expression_from_json(v)
     end
     if !isempty(args)
-        throw(ParseError("`table_lookup` op must have empty `args` (per-axis inputs live under `axes`, esm-spec §9.5)"))
+        throw(ParseError("`table_lookup` op must have empty `args` (per-axis inputs live under `axes`, esm-spec §9.5.2)";
+                         code=ERROR_CODES.TABLE_LOOKUP_ARGS_NONEMPTY))
     end
     return axes
 end
@@ -795,9 +796,10 @@ Coerce the top-level `enums` JSON block into the typed map carried on
 - values are integers — ANY integer, negative, zero or positive: an enum
   member is a categorical code, not a 1-based position (CONFORMANCE_SPEC,
   "An `enums` Member Is a Code, Not a Position")
-- within a single enum, integer values are unique
+- within a single enum, integer values are unique — an
+  [`EnumLoweringError`](@ref) with code `enum_duplicate_value`
 
-Throws [`ParseError`](@ref) on any violation.
+Throws [`ParseError`](@ref) on any other violation.
 """
 function coerce_enums(data)::Dict{String,Dict{String,Int}}
     out = Dict{String,Dict{String,Int}}()
@@ -810,7 +812,6 @@ function coerce_enums(data)::Dict{String,Dict{String,Int}}
             throw(ParseError("enums.$(enum_name): mapping must be a JSON object"))
         end
         mapping = Dict{String,Int}()
-        seen_values = Set{Int}()
         for (sym_raw, int_raw) in pairs(mapping_raw)
             sym = string(sym_raw)
             if isempty(sym)
@@ -819,15 +820,11 @@ function coerce_enums(data)::Dict{String,Dict{String,Int}}
             if !(int_raw isa Integer) || int_raw isa Bool
                 throw(ParseError("enums.$(enum_name).$(sym): value must be an integer (got $(typeof(int_raw)))"))
             end
-            int_v = Int(int_raw)
-            if int_v in seen_values
-                throw(ParseError("enums.$(enum_name): integer value $(int_v) is duplicated"))
-            end
-            push!(seen_values, int_v)
-            mapping[sym] = int_v
+            mapping[sym] = Int(int_raw)
         end
         out[enum_name] = mapping
     end
+    _check_enum_values_unique(out)
     return out
 end
 

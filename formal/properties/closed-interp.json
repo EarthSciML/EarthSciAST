@@ -1,0 +1,653 @@
+{
+  "properties": [
+    {
+      "id": "P-interp-searchsorted-least",
+      "clauses": [
+        "spec.9.2.searchsorted-xs-monotone",
+        "spec.9.2.closed-function-overflow"
+      ],
+      "statement": "searchsorted returns the least 1-based k with xs[k] ≥ x, or N+1; so its result is in [1, N+1] (and fits Int32 for N < 2^31 − 1).",
+      "lean_statement": "∀ (xs : List ℝ) (x : ℝ), have k := Esm.Closed.searchsorted (Esm.Closed.Num.fin x) (List.map Esm.Closed.Num.fin xs); (1 : ℕ) ≤ k ∧ k ≤ xs.length + (1 : ℕ) ∧ (∀ (j : ℕ), j + (1 : ℕ) < k → xs.getD j (0 : ℝ) < x) ∧ (k ≤ xs.length → x ≤ xs.getD (k - (1 : ℕ)) (0 : ℝ))",
+      "status": "proven",
+      "theorem": "Esm.Closed.searchsorted_least"
+    },
+    {
+      "id": "P-interp-searchsorted-nan",
+      "clauses": [
+        "spec.9.2.searchsorted-xs-monotone"
+      ],
+      "statement": "A NaN query returns N+1, whatever xs holds.",
+      "lean_statement": "∀ (xs : List Esm.Closed.Num), Esm.Closed.searchsorted Esm.Closed.Num.nan xs = xs.length + (1 : ℕ)",
+      "status": "proven",
+      "theorem": "Esm.Closed.searchsorted_nan"
+    },
+    {
+      "id": "P-interp-searchsorted-mono",
+      "clauses": [
+        "spec.9.2.searchsorted-xs-monotone"
+      ],
+      "statement": "searchsorted is monotone in x, with NaN above every real.",
+      "lean_statement": "∀ (xs : List ℝ) (x y : ℝ), x ≤ y → Esm.Closed.searchsorted (Esm.Closed.Num.fin x) (List.map Esm.Closed.Num.fin xs) ≤ Esm.Closed.searchsorted (Esm.Closed.Num.fin y) (List.map Esm.Closed.Num.fin xs) ∧ Esm.Closed.searchsorted (Esm.Closed.Num.fin y) (List.map Esm.Closed.Num.fin xs) ≤ Esm.Closed.searchsorted Esm.Closed.Num.nan (List.map Esm.Closed.Num.fin xs)",
+      "status": "proven",
+      "theorem": "Esm.Closed.searchsorted_mono"
+    },
+    {
+      "id": "P-interp-searchsorted-out-of-range",
+      "clauses": [
+        "spec.9.2.searchsorted-xs-monotone"
+      ],
+      "statement": "x ≤ xs[1] gives 1; on a non-decreasing xs, x > xs[N] gives N+1.",
+      "lean_statement": "∀ (xs : List ℝ) (x : ℝ), xs ≠ [] → (x ≤ xs.getD (0 : ℕ) (0 : ℝ) → Esm.Closed.searchsorted (Esm.Closed.Num.fin x) (List.map Esm.Closed.Num.fin xs) = (1 : ℕ)) ∧ (List.Pairwise (fun (x1 x2 : ℝ) => x1 ≤ x2) xs → xs.getD (xs.length - (1 : ℕ)) (0 : ℝ) < x → Esm.Closed.searchsorted (Esm.Closed.Num.fin x) (List.map Esm.Closed.Num.fin xs) = xs.length + (1 : ℕ))",
+      "status": "proven",
+      "theorem": "Esm.Closed.searchsorted_out_of_range"
+    },
+    {
+      "id": "P-interp-searchsorted-accept",
+      "clauses": [
+        "spec.9.2.searchsorted-xs-monotone"
+      ],
+      "statement": "A const xs is accepted iff it is NaN-free and non-decreasing (Q-7).",
+      "lean_statement": "∀ (xs : List Esm.Closed.Num), (∃ (v : List Esm.Closed.Num), Esm.Closed.validateSearchsorted (Esm.Closed.Arg.const1 xs) = Except.ok v) ↔ ∃ (r : List ℝ), xs = List.map Esm.Closed.Num.fin r ∧ List.Pairwise (fun (x1 x2 : ℝ) => x1 ≤ x2) r",
+      "status": "proven",
+      "theorem": "Esm.Closed.validateSearchsorted_ok_iff"
+    },
+    {
+      "id": "P-interp-searchsorted-nan-code",
+      "clauses": [
+        "spec.9.2.searchsorted-xs-monotone"
+      ],
+      "statement": "Q-7: a NaN in xs is searchsorted_nan, checked before monotonicity.",
+      "lean_statement": "∀ (xs : List Esm.Closed.Num), (∃ x ∈ xs, x.isNaN = Bool.true) → Esm.Closed.validateSearchsorted (Esm.Closed.Arg.const1 xs) = Except.error \"searchsorted_nan\"",
+      "status": "proven",
+      "theorem": "Esm.Closed.validateSearchsorted_nan"
+    },
+    {
+      "id": "P-interp-searchsorted-non-monotonic-code",
+      "clauses": [
+        "spec.9.2.searchsorted-xs-monotone"
+      ],
+      "statement": "A NaN-free xs that is not non-decreasing is searchsorted_non_monotonic.",
+      "lean_statement": "∀ (r : List ℝ), ¬List.Pairwise (fun (x1 x2 : ℝ) => x1 ≤ x2) r → Esm.Closed.validateSearchsorted (Esm.Closed.Arg.const1 (List.map Esm.Closed.Num.fin r)) = Except.error \"searchsorted_non_monotonic\"",
+      "status": "proven",
+      "theorem": "Esm.Closed.validateSearchsorted_non_monotonic"
+    },
+    {
+      "id": "P-interp-linear-in-cell",
+      "clauses": [
+        "spec.9.2.interp-fma-tolerance"
+      ],
+      "statement": "Inside a cell a_i ≤ x < a_{i+1} (x > a_1), interp.linear is the pinned blend t_i + w·(t_{i+1} − t_i) with w = (x − a_i)/(a_{i+1} − a_i).",
+      "lean_statement": "∀ (t : List Esm.Closed.Num) (a : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) a → ∀ (i : ℕ) (x : ℝ), i + (1 : ℕ) < a.length → a.getD i (0 : ℝ) ≤ x → x < a.getD (i + (1 : ℕ)) (0 : ℝ) → a.getD (0 : ℕ) (0 : ℝ) < x → Esm.Closed.linear t (List.map Esm.Closed.Num.fin a) (Esm.Closed.Num.fin x) = Esm.Closed.blend (t.getD i Esm.Closed.Num.nan) (t.getD (i + (1 : ℕ)) Esm.Closed.Num.nan) (Esm.Closed.Num.fin ((x - a.getD i (0 : ℝ)) / (a.getD (i + (1 : ℕ)) (0 : ℝ) - a.getD i (0 : ℝ))))",
+      "status": "proven",
+      "theorem": "Esm.Closed.linear_in_cell"
+    },
+    {
+      "id": "P-interp-linear-clamp-below",
+      "clauses": [
+        "spec.9.2.interp-fma-tolerance"
+      ],
+      "statement": "x ≤ a_1 returns t_1.",
+      "lean_statement": "∀ (t : List Esm.Closed.Num) (a : List ℝ), (2 : ℕ) ≤ a.length → ∀ x ≤ a.getD (0 : ℕ) (0 : ℝ), Esm.Closed.linear t (List.map Esm.Closed.Num.fin a) (Esm.Closed.Num.fin x) = t.getD (0 : ℕ) Esm.Closed.Num.nan",
+      "status": "proven",
+      "theorem": "Esm.Closed.linear_clamp_below"
+    },
+    {
+      "id": "P-interp-linear-clamp-above",
+      "clauses": [
+        "spec.9.2.interp-fma-tolerance"
+      ],
+      "statement": "x ≥ a_N returns t_N.",
+      "lean_statement": "∀ (t : List Esm.Closed.Num) (a : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) a → (2 : ℕ) ≤ a.length → ∀ (x : ℝ), a.getD (a.length - (1 : ℕ)) (0 : ℝ) ≤ x → Esm.Closed.linear t (List.map Esm.Closed.Num.fin a) (Esm.Closed.Num.fin x) = t.getD (a.length - (1 : ℕ)) Esm.Closed.Num.nan",
+      "status": "proven",
+      "theorem": "Esm.Closed.linear_clamp_above"
+    },
+    {
+      "id": "P-interp-linear-nan-query",
+      "clauses": [
+        "spec.9.2.interp-fma-tolerance"
+      ],
+      "statement": "A NaN query returns NaN.",
+      "lean_statement": "∀ (t ax : List Esm.Closed.Num), Esm.Closed.linear t ax Esm.Closed.Num.nan = Esm.Closed.Num.nan",
+      "status": "proven",
+      "theorem": "Esm.Closed.linear_nan"
+    },
+    {
+      "id": "P-interp-linear-knot-exact",
+      "clauses": [
+        "spec.9.2.interp-fma-tolerance"
+      ],
+      "statement": "Over ℝ, a query on knot k returns t_k exactly, provided (for an interior knot) t_{k+1} is not NaN.",
+      "lean_statement": "∀ (t : List Esm.Closed.Num) (a : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) a → (2 : ℕ) ≤ a.length → ∀ k < a.length, ((0 : ℕ) < k → k + (1 : ℕ) < a.length → (t.getD (k + (1 : ℕ)) Esm.Closed.Num.nan).isNaN = Bool.false) → Esm.Closed.linear t (List.map Esm.Closed.Num.fin a) (Esm.Closed.Num.fin (a.getD k (0 : ℝ))) = t.getD k Esm.Closed.Num.nan",
+      "status": "proven",
+      "theorem": "Esm.Closed.linear_knot"
+    },
+    {
+      "id": "P-interp-linear-knot-nan-neighbour",
+      "clauses": [
+        "spec.9.2.interp-fma-tolerance"
+      ],
+      "statement": "An interior knot whose right neighbour is NaN returns NaN (the knot belongs to the cell with the NaN corner); the spec's unconditional 'w = 0 ⇒ result = t_i' needs that proviso.",
+      "lean_statement": "∀ (t : List Esm.Closed.Num) (a : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) a → ∀ (k : ℕ), (0 : ℕ) < k → k + (1 : ℕ) < a.length → (t.getD (k + (1 : ℕ)) Esm.Closed.Num.nan).isNaN = Bool.true → Esm.Closed.linear t (List.map Esm.Closed.Num.fin a) (Esm.Closed.Num.fin (a.getD k (0 : ℝ))) = Esm.Closed.Num.nan",
+      "status": "proven",
+      "theorem": "Esm.Closed.linear_knot_nan_neighbour"
+    },
+    {
+      "id": "P-interp-linear-between",
+      "clauses": [
+        "spec.9.2.interp-fma-tolerance"
+      ],
+      "statement": "An in-range result lies between the two bracketing table values.",
+      "lean_statement": "∀ (t : List Esm.Closed.Num) (a : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) a → (2 : ℕ) ≤ a.length → ∀ (i : ℕ) (x p q : ℝ), i + (1 : ℕ) < a.length → a.getD i (0 : ℝ) ≤ x → x < a.getD (i + (1 : ℕ)) (0 : ℝ) → t.getD i Esm.Closed.Num.nan = Esm.Closed.Num.fin p → t.getD (i + (1 : ℕ)) Esm.Closed.Num.nan = Esm.Closed.Num.fin q → ∃ (r : ℝ), Esm.Closed.linear t (List.map Esm.Closed.Num.fin a) (Esm.Closed.Num.fin x) = Esm.Closed.Num.fin r ∧ Min.min p q ≤ r ∧ r ≤ Max.max p q",
+      "status": "proven",
+      "theorem": "Esm.Closed.linear_between"
+    },
+    {
+      "id": "P-interp-linear-nan-corner",
+      "clauses": [
+        "spec.9.2.interp-fma-tolerance"
+      ],
+      "statement": "A query in a cell with a NaN corner returns NaN.",
+      "lean_statement": "∀ (t : List Esm.Closed.Num) (a : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) a → ∀ (i : ℕ) (x : ℝ), i + (1 : ℕ) < a.length → a.getD i (0 : ℝ) ≤ x → x < a.getD (i + (1 : ℕ)) (0 : ℝ) → a.getD (0 : ℕ) (0 : ℝ) < x → (t.getD i Esm.Closed.Num.nan).isNaN = Bool.true ∨ (t.getD (i + (1 : ℕ)) Esm.Closed.Num.nan).isNaN = Bool.true → Esm.Closed.linear t (List.map Esm.Closed.Num.fin a) (Esm.Closed.Num.fin x) = Esm.Closed.Num.nan",
+      "status": "proven",
+      "theorem": "Esm.Closed.linear_nan_corner"
+    },
+    {
+      "id": "P-interp-bilinear-clamp",
+      "clauses": [
+        "spec.9.2.interp-fma-tolerance"
+      ],
+      "statement": "Outside the table, bilinear equals bilinear at the query clamped per axis (extrapolate-flat).",
+      "lean_statement": "∀ (T : List (List Esm.Closed.Num)) (ax ay : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) ax → List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) ay → (2 : ℕ) ≤ ax.length → (2 : ℕ) ≤ ay.length → ∀ (x y : ℝ), Esm.Closed.bilinear T (List.map Esm.Closed.Num.fin ax) (List.map Esm.Closed.Num.fin ay) (Esm.Closed.Num.fin x) (Esm.Closed.Num.fin y) = Esm.Closed.bilinear T (List.map Esm.Closed.Num.fin ax) (List.map Esm.Closed.Num.fin ay) (Esm.Closed.Num.fin (Max.max (ax.getD (0 : ℕ) (0 : ℝ)) (Min.min x (ax.getD (ax.length - (1 : ℕ)) (0 : ℝ))))) (Esm.Closed.Num.fin (Max.max (ay.getD (0 : ℕ) (0 : ℝ)) (Min.min y (ay.getD (ay.length - (1 : ℕ)) (0 : ℝ)))))",
+      "status": "proven",
+      "theorem": "Esm.Closed.bilinear_clamp"
+    },
+    {
+      "id": "P-interp-bilinear-nan-query",
+      "clauses": [
+        "spec.9.2.interp-fma-tolerance"
+      ],
+      "statement": "NaN x or NaN y gives NaN.",
+      "lean_statement": "∀ (T : List (List Esm.Closed.Num)) (ax ay : List Esm.Closed.Num) (v : Esm.Closed.Num), Esm.Closed.bilinear T ax ay Esm.Closed.Num.nan v = Esm.Closed.Num.nan ∧ Esm.Closed.bilinear T ax ay v Esm.Closed.Num.nan = Esm.Closed.Num.nan",
+      "status": "proven",
+      "theorem": "Esm.Closed.bilinear_nan"
+    },
+    {
+      "id": "P-interp-bilinear-in-cell",
+      "clauses": [
+        "spec.9.2.interp-fma-tolerance"
+      ],
+      "statement": "A query in cell (i, j) is the pinned two-x-blends-then-y-blend in that cell.",
+      "lean_statement": "∀ (T : List (List Esm.Closed.Num)) (ax ay : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) ax → List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) ay → ∀ (i j : ℕ) (x y : ℝ), Esm.Closed.InCell ax i x → Esm.Closed.InCell ay j y → Esm.Closed.bilinear T (List.map Esm.Closed.Num.fin ax) (List.map Esm.Closed.Num.fin ay) (Esm.Closed.Num.fin x) (Esm.Closed.Num.fin y) = Esm.Closed.bilinearCell T (List.map Esm.Closed.Num.fin ax) (List.map Esm.Closed.Num.fin ay) i j (Esm.Closed.Num.fin x) (Esm.Closed.Num.fin y)",
+      "status": "proven",
+      "theorem": "Esm.Closed.bilinear_in_cell"
+    },
+    {
+      "id": "P-interp-bilinear-knot-exact",
+      "clauses": [
+        "spec.9.2.interp-fma-tolerance"
+      ],
+      "statement": "Over ℝ on a finite table, a query on knot (k, l) returns table[k][l].",
+      "lean_statement": "∀ (U : List (List ℝ)) (ax ay : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) ax → List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) ay → (2 : ℕ) ≤ ax.length → (2 : ℕ) ≤ ay.length → Esm.Closed.TableShape U ax.length ay.length → ∀ (k l : ℕ), k < ax.length → l < ay.length → Esm.Closed.bilinear (Esm.Closed.finTable U) (List.map Esm.Closed.Num.fin ax) (List.map Esm.Closed.Num.fin ay) (Esm.Closed.Num.fin (ax.getD k (0 : ℝ))) (Esm.Closed.Num.fin (ay.getD l (0 : ℝ))) = Esm.Closed.Num.fin (Esm.Closed.rentry U k l)",
+      "status": "proven",
+      "theorem": "Esm.Closed.bilinear_knot"
+    },
+    {
+      "id": "P-interp-bilinear-between",
+      "clauses": [
+        "spec.9.2.interp-fma-tolerance"
+      ],
+      "statement": "Over ℝ on a finite table, the result lies between the min and max of its cell's four corners.",
+      "lean_statement": "∀ (U : List (List ℝ)) (ax ay : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) ax → List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) ay → Esm.Closed.TableShape U ax.length ay.length → ∀ (i j : ℕ) (x y : ℝ), Esm.Closed.InCell ax i x → Esm.Closed.InCell ay j y → ∃ (r : ℝ), Esm.Closed.bilinear (Esm.Closed.finTable U) (List.map Esm.Closed.Num.fin ax) (List.map Esm.Closed.Num.fin ay) (Esm.Closed.Num.fin x) (Esm.Closed.Num.fin y) = Esm.Closed.Num.fin r ∧ Min.min (Min.min (Esm.Closed.rentry U i j) (Esm.Closed.rentry U (i + (1 : ℕ)) j)) (Min.min (Esm.Closed.rentry U i (j + (1 : ℕ))) (Esm.Closed.rentry U (i + (1 : ℕ)) (j + (1 : ℕ)))) ≤ r ∧ r ≤ Max.max (Max.max (Esm.Closed.rentry U i j) (Esm.Closed.rentry U (i + (1 : ℕ)) j)) (Max.max (Esm.Closed.rentry U i (j + (1 : ℕ))) (Esm.Closed.rentry U (i + (1 : ℕ)) (j + (1 : ℕ))))",
+      "status": "proven",
+      "theorem": "Esm.Closed.bilinear_between"
+    },
+    {
+      "id": "P-interp-bilinear-alt-cell",
+      "clauses": [
+        "spec.9.2.interp-fma-tolerance"
+      ],
+      "statement": "Over ℝ, at an interior x-knot the alternative cell i = k−1 (w = 1) gives the same value as the pinned i = k (w = 0).",
+      "lean_statement": "∀ (U : List (List ℝ)) (ax ay : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) ax → ∀ (k j : ℕ), (0 : ℕ) < k → k + (1 : ℕ) < ax.length → ∀ (y : ℝ), Esm.Closed.realCell U ax ay (k - (1 : ℕ)) j (ax.getD k (0 : ℝ)) y = Esm.Closed.realCell U ax ay k j (ax.getD k (0 : ℝ)) y",
+      "status": "proven",
+      "theorem": "Esm.Closed.bilinear_alt_cell"
+    },
+    {
+      "id": "P-interp-bilinear-nan-corner",
+      "clauses": [
+        "spec.9.2.interp-fma-tolerance"
+      ],
+      "statement": "A query in a cell with a NaN corner gives NaN.",
+      "lean_statement": "∀ (T : List (List Esm.Closed.Num)) (ax ay : List ℝ), List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) ax → List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) ay → ∀ (i j : ℕ) (x y : ℝ), Esm.Closed.InCell ax i x → Esm.Closed.InCell ay j y → (Esm.Closed.entry T i j).isNaN = Bool.true ∨ (Esm.Closed.entry T (i + (1 : ℕ)) j).isNaN = Bool.true ∨ (Esm.Closed.entry T i (j + (1 : ℕ))).isNaN = Bool.true ∨ (Esm.Closed.entry T (i + (1 : ℕ)) (j + (1 : ℕ))).isNaN = Bool.true → Esm.Closed.bilinear T (List.map Esm.Closed.Num.fin ax) (List.map Esm.Closed.Num.fin ay) (Esm.Closed.Num.fin x) (Esm.Closed.Num.fin y) = Esm.Closed.Num.nan",
+      "status": "proven",
+      "theorem": "Esm.Closed.bilinear_nan_corner"
+    },
+    {
+      "id": "P-interp-linear-accept",
+      "clauses": [
+        "spec.9.2.interp-const-finite-shape",
+        "spec.9.2.interp-axis-strict",
+        "spec.9.2.interp-axis-no-nan",
+        "spec.9.2.interp-reject-at-load"
+      ],
+      "statement": "interp.linear's arguments are accepted iff both are rank-1 const arrays, len(axis) ≥ 2, the lengths agree, and the axis is NaN-free and strictly increasing (table entries may be NaN, Q-5).",
+      "lean_statement": "∀ (t ax : Esm.Closed.Arg Esm.Closed.Num), (∃ (v : List Esm.Closed.Num × List Esm.Closed.Num), Esm.Closed.validateLinear t ax = Except.ok v) ↔ ∃ (t' : List Esm.Closed.Num) (ax' : List Esm.Closed.Num), t = Esm.Closed.Arg.const1 t' ∧ ax = Esm.Closed.Arg.const1 ax' ∧ (2 : ℕ) ≤ ax'.length ∧ t'.length = ax'.length ∧ ∃ (r : List ℝ), ax' = List.map Esm.Closed.Num.fin r ∧ List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) r",
+      "status": "proven",
+      "theorem": "Esm.Closed.validateLinear_ok_iff"
+    },
+    {
+      "id": "P-interp-linear-not-const",
+      "clauses": [
+        "spec.9.2.interp-const-finite-shape",
+        "spec.9.2.interp-reject-at-load"
+      ],
+      "statement": "A non-const table is interp_table_not_const; a const table with a non-const axis is interp_axis_not_const.",
+      "lean_statement": "∀ (t ax : Esm.Closed.Arg Esm.Closed.Num), Esm.Closed.validateLinear Esm.Closed.Arg.other ax = Except.error \"interp_table_not_const\" ∧ (t ≠ Esm.Closed.Arg.other → Esm.Closed.validateLinear t Esm.Closed.Arg.other = Except.error \"interp_axis_not_const\")",
+      "status": "refuted",
+      "theorem": "Esm.Closed.validateLinear_not_const_refuted",
+      "reproducer": "tests/closed_functions/interp/linear/expected.json",
+      "retired": "Q-108",
+      "note": "Retired by ruling Q-108 (2026-10-27): a const table of the wrong rank (a scalar, say) is interp_table_not_const, checked before the axis. Refuted at a scalar table with a non-const axis (fixture error scenario table_scalar in tests/closed_functions/interp/linear/expected.json). Superseded by P-interp-linear-rank."
+    },
+    {
+      "id": "P-interp-linear-code-sound",
+      "clauses": [
+        "spec.9.2.interp-reject-at-load",
+        "spec.9.2.interp-axis-strict",
+        "spec.9.2.interp-axis-no-nan",
+        "spec.9.2.interp-const-finite-shape"
+      ],
+      "statement": "Every rejection of rank-1 const arguments names a condition that is violated.",
+      "lean_statement": "∀ (t ax : List Esm.Closed.Num) (c : Esm.Closed.Code), Esm.Closed.validateLinear (Esm.Closed.Arg.const1 t) (Esm.Closed.Arg.const1 ax) = Except.error c → c = \"interp_axis_too_short\" ∧ ax.length < (2 : ℕ) ∨ c = \"interp_axis_length_mismatch\" ∧ t.length ≠ ax.length ∨ (c = \"interp_nan_in_axis\" ∧ ∃ x ∈ ax, x.isNaN = Bool.true) ∨ c = \"interp_non_monotonic_axis\" ∧ ∃ (r : List ℝ), ax = List.map Esm.Closed.Num.fin r ∧ ¬List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) r",
+      "status": "proven",
+      "theorem": "Esm.Closed.validateLinear_code_sound"
+    },
+    {
+      "id": "P-interp-linear-nan-precedence",
+      "clauses": [
+        "spec.9.2.interp-axis-no-nan"
+      ],
+      "statement": "Q-4: when the shape checks pass, a NaN axis entry is interp_nan_in_axis, never interp_non_monotonic_axis.",
+      "lean_statement": "∀ (t ax : List Esm.Closed.Num), (2 : ℕ) ≤ ax.length → t.length = ax.length → (∃ x ∈ ax, x.isNaN = Bool.true) → Esm.Closed.validateLinear (Esm.Closed.Arg.const1 t) (Esm.Closed.Arg.const1 ax) = Except.error \"interp_nan_in_axis\"",
+      "status": "proven",
+      "theorem": "Esm.Closed.validateLinear_nan_precedence",
+      "retired": "Q-113",
+      "note": "Retired by ruling Q-113 (2026-10-27): the precedence now covers every non-finite axis entry (NaN, +Inf, -Inf), not only NaN. Still proven of Num, which has no infinities. Superseded by P-interp-linear-order."
+    },
+    {
+      "id": "P-interp-bilinear-accept",
+      "clauses": [
+        "spec.9.2.interp-bilinear-shape",
+        "spec.9.2.interp-axis-strict",
+        "spec.9.2.interp-axis-no-nan",
+        "spec.9.2.interp-reject-at-load"
+      ],
+      "statement": "interp.bilinear's const arguments are accepted iff Nx, Ny ≥ 2, the table is Nx rows of length Ny, and both axes are NaN-free and strictly increasing.",
+      "lean_statement": "∀ (T : List (List Esm.Closed.Num)) (ax ay : List Esm.Closed.Num), (∃ (v : List (List Esm.Closed.Num) × List Esm.Closed.Num × List Esm.Closed.Num), Esm.Closed.validateBilinear (Esm.Closed.Arg.const2 T) (Esm.Closed.Arg.const1 ax) (Esm.Closed.Arg.const1 ay) = Except.ok v) ↔ (2 : ℕ) ≤ ax.length ∧ (2 : ℕ) ≤ ay.length ∧ T.length = ax.length ∧ (∀ row ∈ T, row.length = ay.length) ∧ (∃ (r : List ℝ), ax = List.map Esm.Closed.Num.fin r ∧ List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) r) ∧ ∃ (r : List ℝ), ay = List.map Esm.Closed.Num.fin r ∧ List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) r",
+      "status": "proven",
+      "theorem": "Esm.Closed.validateBilinear_ok_iff"
+    },
+    {
+      "id": "P-interp-bilinear-needs-const",
+      "clauses": [
+        "spec.9.2.interp-const-finite-shape",
+        "spec.9.2.interp-reject-at-load"
+      ],
+      "statement": "A non-const table is interp_table_not_const, and only rank-2/rank-1/rank-1 const arguments are accepted.",
+      "lean_statement": "∀ (T ax ay : Esm.Closed.Arg Esm.Closed.Num), Esm.Closed.validateBilinear Esm.Closed.Arg.other ax ay = Except.error \"interp_table_not_const\" ∧ ((∃ (v : List (List Esm.Closed.Num) × List Esm.Closed.Num × List Esm.Closed.Num), Esm.Closed.validateBilinear T ax ay = Except.ok v) → ∃ (T' : List (List Esm.Closed.Num)) (ax' : List Esm.Closed.Num) (ay' : List Esm.Closed.Num), T = Esm.Closed.Arg.const2 T' ∧ ax = Esm.Closed.Arg.const1 ax' ∧ ay = Esm.Closed.Arg.const1 ay')",
+      "status": "proven",
+      "theorem": "Esm.Closed.validateBilinear_needs_const"
+    },
+    {
+      "id": "P-interp-bilinear-code-sound",
+      "clauses": [
+        "spec.9.2.interp-reject-at-load",
+        "spec.9.2.interp-bilinear-shape"
+      ],
+      "statement": "Every rejection of const bilinear arguments names a violated condition.",
+      "lean_statement": "∀ (T : List (List Esm.Closed.Num)) (ax ay : List Esm.Closed.Num) (c : Esm.Closed.Code), Esm.Closed.validateBilinear (Esm.Closed.Arg.const2 T) (Esm.Closed.Arg.const1 ax) (Esm.Closed.Arg.const1 ay) = Except.error c → c = \"interp_axis_too_short\" ∧ (ax.length < (2 : ℕ) ∨ ay.length < (2 : ℕ)) ∨ c = \"interp_axis_length_mismatch\" ∧ (T.length ≠ ax.length ∨ ∃ row ∈ T, row.length ≠ ay.length) ∨ c = \"interp_nan_in_axis\" ∧ ((∃ x ∈ ax, x.isNaN = Bool.true) ∨ ∃ y ∈ ay, y.isNaN = Bool.true) ∨ c = \"interp_non_monotonic_axis\" ∧ ((∃ (r : List ℝ), ax = List.map Esm.Closed.Num.fin r ∧ ¬List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) r) ∨ ∃ (r : List ℝ), ay = List.map Esm.Closed.Num.fin r ∧ ¬List.Pairwise (fun (x1 x2 : ℝ) => x1 < x2) r)",
+      "status": "proven",
+      "theorem": "Esm.Closed.validateBilinear_code_sound"
+    },
+    {
+      "id": "P-interp-bilinear-nan-precedence",
+      "clauses": [
+        "spec.9.2.interp-axis-no-nan"
+      ],
+      "statement": "Q-4: a NaN in either axis is interp_nan_in_axis, even when the other axis is non-monotonic.",
+      "lean_statement": "∀ (T : List (List Esm.Closed.Num)) (ax ay : List Esm.Closed.Num), (2 : ℕ) ≤ ax.length → (2 : ℕ) ≤ ay.length → T.length = ax.length → (∀ row ∈ T, row.length = ay.length) → ((∃ x ∈ ax, x.isNaN = Bool.true) ∨ ∃ y ∈ ay, y.isNaN = Bool.true) → Esm.Closed.validateBilinear (Esm.Closed.Arg.const2 T) (Esm.Closed.Arg.const1 ax) (Esm.Closed.Arg.const1 ay) = Except.error \"interp_nan_in_axis\"",
+      "status": "proven",
+      "theorem": "Esm.Closed.validateBilinear_nan_precedence",
+      "retired": "Q-113",
+      "note": "Retired by ruling Q-113 (2026-10-27): the precedence now covers every non-finite axis entry (NaN, +Inf, -Inf), not only NaN. Still proven of Num, which has no infinities. Superseded by P-interp-bilinear-order."
+    },
+    {
+      "id": "P-interp-fma-blend-two-ulp",
+      "clauses": [
+        "spec.9.2.interp-fma-tolerance"
+      ],
+      "statement": "Q-6: for doubles t, u and any w ∈ [0, 1], the pinned blend t ⊕ (w ⊗ (u ⊖ t)) and the FMA blend fma(w, u ⊖ t, t) differ by at most 2·ulp(max(|t|, |u|)).",
+      "lean_statement": "∀ (t u w : ℝ), Esm.F64.Repr t → Esm.F64.Repr u → (0 : ℝ) ≤ w → w ≤ (1 : ℝ) → |Esm.Closed.Rounding.blend64 t u w - Esm.Closed.Rounding.blendFMA t u w| ≤ (2 : ℝ) * Esm.F64.ulp (Max.max |t| |u|)",
+      "status": "proven",
+      "theorem": "Esm.Closed.Rounding.blend_fma_le_two_ulp"
+    },
+    {
+      "id": "P-interp-fma-linear-two-ulp",
+      "clauses": [
+        "spec.9.2.interp-fma-tolerance"
+      ],
+      "statement": "Q-6 for interp.linear (and each blend of interp.bilinear): with the pinned binary64 weight of a query in its cell, FMA and non-FMA results differ by at most 2·ulp(max(|t_i|, |t_{i+1}|)).",
+      "lean_statement": "∀ (t u x lo hi : ℝ), Esm.F64.Repr t → Esm.F64.Repr u → lo ≤ x → x ≤ hi → |Esm.Closed.Rounding.blend64 t u (Esm.Closed.Rounding.weight64 x lo hi) - Esm.Closed.Rounding.blendFMA t u (Esm.Closed.Rounding.weight64 x lo hi)| ≤ (2 : ℝ) * Esm.F64.ulp (Max.max |t| |u|)",
+      "status": "proven",
+      "theorem": "Esm.Closed.Rounding.linear_fma_le_two_ulp"
+    },
+    {
+      "id": "P-interp-fma-two-ulp-attained",
+      "clauses": [
+        "spec.9.2.interp-fma-tolerance"
+      ],
+      "statement": "The constant 2 is attained (interp.linear([−(2^53−1)·2^−55, (2^53−3)·2^−54], [0, 1], 0.75)), so 2 is the least integer constant.",
+      "lean_statement": "∃ (t : ℝ) (u : ℝ) (x : ℝ) (lo : ℝ) (hi : ℝ), Esm.F64.Repr t ∧ Esm.F64.Repr u ∧ Esm.F64.Repr x ∧ Esm.F64.Repr lo ∧ Esm.F64.Repr hi ∧ lo ≤ x ∧ x ≤ hi ∧ |Esm.Closed.Rounding.blend64 t u (Esm.Closed.Rounding.weight64 x lo hi) - Esm.Closed.Rounding.blendFMA t u (Esm.Closed.Rounding.weight64 x lo hi)| = (2 : ℝ) * Esm.F64.ulp (Max.max |t| |u|)",
+      "status": "proven",
+      "theorem": "Esm.Closed.Rounding.blend_fma_two_ulp_attained"
+    },
+    {
+      "id": "P-interp-fma-rel-4e-16",
+      "clauses": [
+        "spec.9.2.interp-fma-tolerance"
+      ],
+      "statement": "The spec's mixed-FMA relaxation {abs: 0, rel: 4e-16} bounds the FMA difference. REFUTED by cancellation: interp.linear([1, −2], [0, 3], 1) is 0 pinned and 2^−54 with FMA.",
+      "lean_statement": "∀ t u x lo hi : ℝ, Esm.F64.Repr t → Esm.F64.Repr u → Esm.F64.Repr x → Esm.F64.Repr lo → Esm.F64.Repr hi → lo ≤ x → x ≤ hi → |Esm.Closed.Rounding.blendFMA t u (Esm.Closed.Rounding.weight64 x lo hi) - Esm.Closed.Rounding.blend64 t u (Esm.Closed.Rounding.weight64 x lo hi)| ≤ 4e-16 * |Esm.Closed.Rounding.blend64 t u (Esm.Closed.Rounding.weight64 x lo hi)|",
+      "status": "refuted",
+      "theorem": "Esm.Closed.Rounding.linear_fma_rel_refuted",
+      "reproducer": "formal/QUESTIONS.md#Q-6"
+    },
+    {
+      "id": "P-interp-endpoint-w0-binary64",
+      "clauses": [
+        "spec.9.2.interp-fma-tolerance"
+      ],
+      "statement": "§9.2 'w = 0 ⇒ result = t_i exactly' holds in binary64 (signed zero not modelled).",
+      "lean_statement": "∀ (t u : ℝ), Esm.F64.Repr t → Esm.Closed.Rounding.blend64 t u (0 : ℝ) = t",
+      "status": "proven",
+      "theorem": "Esm.Closed.Rounding.blend64_w_zero"
+    },
+    {
+      "id": "P-interp-weight-at-left-knot",
+      "clauses": [
+        "spec.9.2.interp-fma-tolerance"
+      ],
+      "statement": "A query on its cell's left knot has pinned binary64 weight exactly 0.",
+      "lean_statement": "∀ (lo hi : ℝ), Esm.Closed.Rounding.weight64 lo lo hi = (0 : ℝ)",
+      "status": "proven",
+      "theorem": "Esm.Closed.Rounding.weight64_at_lo"
+    },
+    {
+      "id": "P-interp-endpoint-w1-sterbenz",
+      "clauses": [
+        "spec.9.2.interp-fma-tolerance"
+      ],
+      "statement": "At w = 1 the pinned blend returns t_{i+1} exactly when t_i/2 ≤ t_{i+1} ≤ 2·t_i (exact subtraction).",
+      "lean_statement": "∀ (t u : ℝ), Esm.F64.Repr t → Esm.F64.Repr u → t / (2 : ℝ) ≤ u → u ≤ (2 : ℝ) * t → Esm.Closed.Rounding.blend64 t u (1 : ℝ) = u",
+      "status": "proven",
+      "theorem": "Esm.Closed.Rounding.blend64_w_one_sterbenz"
+    },
+    {
+      "id": "P-interp-endpoint-w1-bound",
+      "clauses": [
+        "spec.9.2.interp-fma-tolerance"
+      ],
+      "statement": "At w = 1 the pinned blend is within 3/2·ulp(max(|t_i|, |t_{i+1}|)) of t_{i+1}.",
+      "lean_statement": "∀ (t u : ℝ), Esm.F64.Repr t → Esm.F64.Repr u → |Esm.Closed.Rounding.blend64 t u (1 : ℝ) - u| ≤ (3 / 2 : ℝ) * Esm.F64.ulp (Max.max |t| |u|)",
+      "status": "proven",
+      "theorem": "Esm.Closed.Rounding.blend64_w_one_le"
+    },
+    {
+      "id": "P-interp-bilinear-errs",
+      "clauses": [
+        "spec.9.2.interp-fma-tolerance"
+      ],
+      "statement": "For double corners and weights in [0, 1], the pinned binary64 bilinear result is within 11/2·ulp(max |corner|) of the exact bilinear value, and the all-FMA result within 3·ulp.",
+      "lean_statement": "∀ (t00 t10 t01 t11 wx wy : ℝ), Esm.F64.Repr t00 → Esm.F64.Repr t10 → Esm.F64.Repr t01 → Esm.F64.Repr t11 → (0 : ℝ) ≤ wx → wx ≤ (1 : ℝ) → (0 : ℝ) ≤ wy → wy ≤ (1 : ℝ) → have M := Max.max (Max.max |t00| |t10|) (Max.max |t01| |t11|); |Esm.Closed.Rounding.bilinear64 t00 t10 t01 t11 wx wy - Esm.Closed.Rounding.bilinearR t00 t10 t01 t11 wx wy| ≤ (11 / 2 : ℝ) * Esm.F64.ulp M ∧ |Esm.Closed.Rounding.bilinearFMA t00 t10 t01 t11 wx wy - Esm.Closed.Rounding.bilinearR t00 t10 t01 t11 wx wy| ≤ (3 : ℝ) * Esm.F64.ulp M",
+      "status": "proven",
+      "theorem": "Esm.Closed.Rounding.bilinear_errs"
+    },
+    {
+      "id": "P-interp-bilinear-fma-bound",
+      "clauses": [
+        "spec.9.2.interp-fma-tolerance"
+      ],
+      "statement": "Q-6 for interp.bilinear: the all-FMA and the pinned evaluations differ by at most 17/2·ulp(max |corner|).",
+      "lean_statement": "∀ (t00 t10 t01 t11 wx wy : ℝ), Esm.F64.Repr t00 → Esm.F64.Repr t10 → Esm.F64.Repr t01 → Esm.F64.Repr t11 → (0 : ℝ) ≤ wx → wx ≤ (1 : ℝ) → (0 : ℝ) ≤ wy → wy ≤ (1 : ℝ) → |Esm.Closed.Rounding.bilinear64 t00 t10 t01 t11 wx wy - Esm.Closed.Rounding.bilinearFMA t00 t10 t01 t11 wx wy| ≤ (17 / 2 : ℝ) * Esm.F64.ulp (Max.max (Max.max |t00| |t10|) (Max.max |t01| |t11|))",
+      "status": "proven",
+      "theorem": "Esm.Closed.Rounding.bilinear_fma_le"
+    },
+    {
+      "id": "P-enum-unique-values",
+      "clauses": [
+        "spec.9.3.enum-values-unique",
+        "conf.5.26.enum-values-unique",
+        "conf.5.26.5.uniqueness-restated",
+        "spec.9.3.enum-zero-negative-allowed"
+      ],
+      "statement": "Q-2/Q-8: an enums block loads iff values are unique within each enum (no constraint on the values themselves, so 0 and negatives load); a duplicate is enum_duplicate_value.",
+      "lean_statement": "∀ (es : Esm.Closed.Enums.EnumsBlock), (Esm.Closed.Enums.validateEnums es = Except.ok () ↔ ∀ e ∈ es, (List.map Prod.snd e.2).Nodup) ∧ ((∃ e ∈ es, ¬(List.map Prod.snd e.2).Nodup) → Esm.Closed.Enums.validateEnums es = Except.error \"enum_duplicate_value\")",
+      "status": "proven",
+      "theorem": "Esm.Closed.Enums.validateEnums_iff"
+    },
+    {
+      "id": "P-enum-cross-collision",
+      "clauses": [
+        "spec.9.3.enum-values-unique"
+      ],
+      "statement": "Values may coincide across enums.",
+      "lean_statement": "∀ (n₁ n₂ : String) (m₁ m₂ : Esm.Closed.Enums.Enum), (List.map Prod.snd m₁).Nodup → (List.map Prod.snd m₂).Nodup → Esm.Closed.Enums.validateEnums [(n₁, m₁), (n₂, m₂)] = Except.ok ()",
+      "status": "proven",
+      "theorem": "Esm.Closed.Enums.validateEnums_cross"
+    },
+    {
+      "id": "P-enum-resolve-exact",
+      "clauses": [
+        "conf.5.26.enum-any-integer",
+        "spec.9.3.enum-zero-negative-allowed"
+      ],
+      "statement": "An enum op resolves to exactly its declared integer (zero and negatives included; no clamping or defaulting).",
+      "lean_statement": "∀ (es : Esm.Closed.Enums.EnumsBlock) (name sym : String) (m : Esm.Closed.Enums.Enum) (v : ℤ), List.lookup name es = Option.some m → List.lookup sym m = Option.some v → Esm.Closed.Enums.resolve es name sym = Except.ok v",
+      "status": "proven",
+      "theorem": "Esm.Closed.Enums.resolve_exact"
+    },
+    {
+      "id": "P-enum-unknown-codes",
+      "clauses": [
+        "spec.9.3.enum-unknown-rejected"
+      ],
+      "statement": "An undeclared enum is unknown_enum, an undeclared symbol unknown_enum_symbol.",
+      "lean_statement": "∀ (es : Esm.Closed.Enums.EnumsBlock) (name sym : String), (List.lookup name es = Option.none → Esm.Closed.Enums.resolve es name sym = Except.error \"unknown_enum\") ∧ ∀ (m : Esm.Closed.Enums.Enum), List.lookup name es = Option.some m → List.lookup sym m = Option.none → Esm.Closed.Enums.resolve es name sym = Except.error \"unknown_enum_symbol\"",
+      "status": "proven",
+      "theorem": "Esm.Closed.Enums.resolve_unknown"
+    },
+    {
+      "id": "P-interp-endpoint-w1-exact-binary64",
+      "clauses": [
+        "spec.9.2.interp-fma-tolerance"
+      ],
+      "status": "refuted",
+      "statement": "§9.2 (old text) 'w = 1 ⇒ result = t_i + (t_{i+1} − t_i) = t_{i+1}' as exact binary64 equality. REFUTED: 1 ⊕ (1 ⊗ (2^−60 ⊖ 1)) = 0. The text now states what holds (P-interp-endpoint-w1-sterbenz, -bound).",
+      "lean_statement": "∀ t u : ℝ, Esm.F64.Repr t → Esm.F64.Repr u → Esm.Closed.Rounding.blend64 t u 1 = u",
+      "theorem": "Esm.Closed.Rounding.blend64_w_one_refuted",
+      "reproducer": "formal/QUESTIONS.md#Q-97"
+    },
+    {
+      "id": "P-interp-bilinear-alt-cell-binary64",
+      "clauses": [
+        "spec.9.2.interp-fma-tolerance"
+      ],
+      "status": "refuted",
+      "statement": "§9.2 bilinear step 2 (old text): the alternative cell i = k−1 (wx = 1) is bit-identical to the pinned i = k (wx = 0, which returns the row at knot k exactly). That needs the wx = 1 blend of rows t[k−1], t[k] to return t[k] exactly in binary64, which fails for rows 1 and 2^−60. The text now says the two agree over ℝ only.",
+      "lean_statement": "∀ t u : ℝ, Esm.F64.Repr t → Esm.F64.Repr u → Esm.Closed.Rounding.blend64 t u 1 = u",
+      "theorem": "Esm.Closed.Rounding.blend64_w_one_refuted",
+      "reproducer": "formal/QUESTIONS.md#Q-97"
+    },
+    {
+      "id": "P-interp-bilinear-fma-least-constant",
+      "clauses": [
+        "spec.9.2.interp-fma-tolerance"
+      ],
+      "status": "open",
+      "statement": "The LEAST constant c with |bilinear64 − bilinearFMA| ≤ c·ulp(max |corner|). Proven c ≤ 17/2 (P-interp-bilinear-fma-bound); a randomized search over sparse-mantissa doubles attains 4. The gap [4, 17/2] is open."
+    },
+    {
+      "id": "P-interp-searchsorted-xs-not-const",
+      "clauses": [
+        "spec.9.2.searchsorted-xs-not-const"
+      ],
+      "statement": "Q-105: interp.searchsorted's xs is rejected with interp_axis_not_const exactly when it is not a rank-1 const array (the first of its three checks).",
+      "lean_statement": "∀ (a : Esm.Closed.Arg Esm.Closed.Num), Esm.Closed.validateSearchsorted a = Except.error \"interp_axis_not_const\" ↔ ∀ (xs : List Esm.Closed.Num), a ≠ Esm.Closed.Arg.const1 xs",
+      "status": "proven",
+      "theorem": "Esm.Closed.validateSearchsorted_not_const_iff"
+    },
+    {
+      "id": "P-interp-searchsorted-nan-first",
+      "clauses": [
+        "spec.9.2.searchsorted-xs-no-nan",
+        "spec.9.2.searchsorted-xs-not-const"
+      ],
+      "statement": "Q-7 + Q-105: searchsorted_nan exactly when xs is a rank-1 const array (the first check passes) holding a NaN.",
+      "lean_statement": "∀ (a : Esm.Closed.Arg Esm.Closed.Num), Esm.Closed.validateSearchsorted a = Except.error \"searchsorted_nan\" ↔ ∃ (xs : List Esm.Closed.Num), a = Esm.Closed.Arg.const1 xs ∧ ∃ x ∈ xs, x.isNaN = Bool.true",
+      "status": "proven",
+      "theorem": "Esm.Closed.validateSearchsorted_nan_iff"
+    },
+    {
+      "id": "P-interp-searchsorted-non-monotonic-first",
+      "clauses": [
+        "spec.9.2.searchsorted-xs-monotone",
+        "spec.9.2.searchsorted-xs-not-const"
+      ],
+      "statement": "Q-105: searchsorted_non_monotonic exactly when xs is a NaN-free rank-1 const array (the first two checks pass) that is not non-decreasing.",
+      "lean_statement": "∀ (a : Esm.Closed.Arg Esm.Closed.Num), Esm.Closed.validateSearchsorted a = Except.error \"searchsorted_non_monotonic\" ↔ ∃ (r : List ℝ), a = Esm.Closed.Arg.const1 (List.map Esm.Closed.Num.fin r) ∧ ¬List.Pairwise (fun (x1 x2 : ℝ) => x1 ≤ x2) r",
+      "status": "proven",
+      "theorem": "Esm.Closed.validateSearchsorted_non_monotonic_iff"
+    },
+    {
+      "id": "P-interp-linear-rank",
+      "clauses": [
+        "spec.9.2.interp-const-finite-shape",
+        "spec.9.2.interp-reject-at-load"
+      ],
+      "statement": "Q-108: interp.linear is interp_table_not_const exactly when the table is not a rank-1 const array (checked first), and interp_axis_not_const exactly when the table is one and the axis is not (a non-const argument or a const of the wrong rank).",
+      "lean_statement": "∀ (t ax : Esm.Closed.Arg Esm.Closed.Num), (Esm.Closed.validateLinear t ax = Except.error \"interp_table_not_const\" ↔ ∀ (t' : List Esm.Closed.Num), t ≠ Esm.Closed.Arg.const1 t') ∧ (Esm.Closed.validateLinear t ax = Except.error \"interp_axis_not_const\" ↔ (∃ (t' : List Esm.Closed.Num), t = Esm.Closed.Arg.const1 t') ∧ ∀ (a' : List Esm.Closed.Num), ax ≠ Esm.Closed.Arg.const1 a')",
+      "status": "proven",
+      "theorem": "Esm.Closed.validateLinear_rank",
+      "supersedes": "P-interp-linear-not-const, which reported any non-const axis as interp_axis_not_const whatever the table; Q-108 checks the table rank first."
+    },
+    {
+      "id": "P-interp-bilinear-rank",
+      "clauses": [
+        "spec.9.2.interp-const-finite-shape",
+        "spec.9.2.interp-reject-at-load"
+      ],
+      "statement": "Q-108: interp.bilinear is interp_table_not_const exactly when the table is not a rank-2 const array (checked first), and interp_axis_not_const exactly when it is one and some axis is not a rank-1 const array.",
+      "lean_statement": "∀ (T ax ay : Esm.Closed.Arg Esm.Closed.Num), (Esm.Closed.validateBilinear T ax ay = Except.error \"interp_table_not_const\" ↔ ∀ (T' : List (List Esm.Closed.Num)), T ≠ Esm.Closed.Arg.const2 T') ∧ (Esm.Closed.validateBilinear T ax ay = Except.error \"interp_axis_not_const\" ↔ (∃ (T' : List (List Esm.Closed.Num)), T = Esm.Closed.Arg.const2 T') ∧ ¬((∃ (a' : List Esm.Closed.Num), ax = Esm.Closed.Arg.const1 a') ∧ ∃ (b' : List Esm.Closed.Num), ay = Esm.Closed.Arg.const1 b'))",
+      "status": "proven",
+      "theorem": "Esm.Closed.validateBilinear_rank"
+    },
+    {
+      "id": "P-interp-searchsorted-empty-xs",
+      "clauses": [
+        "spec.9.2.searchsorted-empty-xs"
+      ],
+      "statement": "Q-108: xs = [] passes the load check, and every query against it, NaN included, returns 1.",
+      "lean_statement": "∀ (x : Esm.Closed.Num), Esm.Closed.validateSearchsorted (Esm.Closed.Arg.const1 ([] : List Esm.Closed.Num)) = Except.ok [] ∧ Esm.Closed.searchsorted x [] = (1 : ℕ)",
+      "status": "proven",
+      "theorem": "Esm.Closed.searchsorted_empty"
+    },
+    {
+      "id": "P-interp-searchsorted-empty-xs-eval",
+      "clauses": [
+        "spec.9.2.searchsorted-empty-xs"
+      ],
+      "statement": "Q-108: an interp.searchsorted node whose xs is the const array [] evaluates to 1 for every scalar query, NaN included.",
+      "lean_statement": "∀ (tables : List (String × Esm.Closed.Tables.FTable)) (env : String → Esm.Closed.Num) (xe : Esm.Closed.Tables.Expr) (x : Esm.Closed.Num), Esm.Closed.Tables.eval tables env xe = Except.ok (Esm.Closed.Tables.Val.num x) → Esm.Closed.Tables.eval tables env (Esm.Closed.Tables.Expr.fn \"interp.searchsorted\" [xe, Esm.Closed.Tables.Expr.const (Esm.Closed.Tables.Nested.node [])]) = Except.ok (Esm.Closed.Tables.Val.num (Esm.Closed.Num.fin 1))",
+      "status": "proven",
+      "theorem": "Esm.Closed.Tables.eval_searchsorted_empty"
+    },
+    {
+      "id": "P-interp-checks-at-load",
+      "clauses": [
+        "spec.9.2.interp-checks-at-load",
+        "spec.9.2.interp-reject-at-load"
+      ],
+      "statement": "Q-106: an interp.searchsorted / interp.linear / interp.bilinear node anywhere in an expression of the document whose arguments fail the §9.2 check makes the document fail to load, whether or not it is evaluated.",
+      "lean_statement": "∀ (d : Esm.Closed.Tables.Doc) (e : Esm.Closed.Tables.Expr), e ∈ d.exprs → (∀ (x xs : Esm.Closed.Tables.Expr) (c : Esm.Closed.Code), Esm.Closed.Tables.Expr.fn \"interp.searchsorted\" [x, xs] ∈ Esm.Closed.Tables.nodes e → Esm.Closed.validateSearchsorted (Esm.Closed.Tables.argOf xs) = Except.error c → ∃ (c' : Esm.Closed.Code), Esm.Closed.Tables.loadCheck d = Except.error c') ∧ (∀ (t ax x : Esm.Closed.Tables.Expr) (c : Esm.Closed.Code), Esm.Closed.Tables.Expr.fn \"interp.linear\" [t, ax, x] ∈ Esm.Closed.Tables.nodes e → Esm.Closed.validateLinear (Esm.Closed.Tables.argOf t) (Esm.Closed.Tables.argOf ax) = Except.error c → ∃ (c' : Esm.Closed.Code), Esm.Closed.Tables.loadCheck d = Except.error c') ∧ ∀ (T0 ax ay x y : Esm.Closed.Tables.Expr) (c : Esm.Closed.Code), Esm.Closed.Tables.Expr.fn \"interp.bilinear\" [T0, ax, ay, x, y] ∈ Esm.Closed.Tables.nodes e → Esm.Closed.validateBilinear (Esm.Closed.Tables.argOf T0) (Esm.Closed.Tables.argOf ax) (Esm.Closed.Tables.argOf ay) = Except.error c → ∃ (c' : Esm.Closed.Code), Esm.Closed.Tables.loadCheck d = Except.error c'",
+      "status": "proven",
+      "theorem": "Esm.Closed.Tables.interp_checks_at_load"
+    },
+    {
+      "id": "P-interp-checks-nodes-cover",
+      "clauses": [
+        "spec.9.2.interp-checks-at-load"
+      ],
+      "statement": "The nodes the load check visits are every node of the tree: the root, and closed under taking children (fn / index / op arguments, table_lookup axes and arguments).",
+      "lean_statement": "∀ (root : Esm.Closed.Tables.Expr), root ∈ Esm.Closed.Tables.nodes root ∧ ∀ n ∈ Esm.Closed.Tables.nodes root, ∀ c ∈ Esm.Closed.Tables.children n, c ∈ Esm.Closed.Tables.nodes root",
+      "status": "proven",
+      "theorem": "Esm.Closed.Tables.nodes_cover"
+    },
+    {
+      "id": "P-interp-load-not-evaluation",
+      "clauses": [
+        "spec.9.2.interp-checks-at-load"
+      ],
+      "statement": "Q-106: load is not evaluation: some document has an expression that evaluates (the ifelse never takes the branch with a malformed interp.linear) and still does not load.",
+      "lean_statement": "∃ (d : Esm.Closed.Tables.Doc) (e : Esm.Closed.Tables.Expr) (v : Esm.Closed.Tables.Val), d.exprs = [e] ∧ Esm.Closed.Tables.eval d.loaded (fun (_ : String) => Esm.Closed.Num.nan) e = Except.ok v ∧ Esm.Closed.Tables.loadCheck d = Except.error \"interp_table_not_const\"",
+      "status": "proven",
+      "theorem": "Esm.Closed.Tables.load_is_not_evaluation"
+    },
+    {
+      "id": "P-interp-linear-order",
+      "clauses": [
+        "spec.9.2.interp-check-order",
+        "spec.9.2.interp-axis-no-nan",
+        "spec.9.2.interp-nan-precedence"
+      ],
+      "statement": "Q-110 + Q-113, for every scalar type (exact Num, the adapter's Float): on const rank-1 arguments interp.linear reports the first of: axis too short, length mismatch, a non-finite axis entry (Scalar.nonFinite: NaN, or ±Inf where the type has them), axis not strictly increasing.",
+      "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] (t a : List α), Except.map (fun (_ : List α × List α) => ()) (Esm.Closed.validateLinear (Esm.Closed.Arg.const1 t) (Esm.Closed.Arg.const1 a)) = open Classical in (if a.length < 2 then Except.error \"interp_axis_too_short\" else if t.length ≠ a.length then Except.error \"interp_axis_length_mismatch\" else if ∃ x ∈ a, Esm.Closed.Scalar.nonFinite x = Bool.true then Except.error \"interp_nan_in_axis\" else if Esm.Closed.adjAll Esm.Closed.Scalar.lt a = Bool.false then Except.error \"interp_non_monotonic_axis\" else Except.ok ())",
+      "status": "proven",
+      "theorem": "Esm.Closed.validateLinear_order",
+      "supersedes": "P-interp-linear-nan-precedence (NaN only; Q-113)."
+    },
+    {
+      "id": "P-interp-bilinear-order",
+      "clauses": [
+        "spec.9.2.interp-check-order",
+        "spec.9.2.interp-axis-no-nan",
+        "spec.9.2.interp-nan-precedence"
+      ],
+      "statement": "Q-110 + Q-113, for every scalar type: on const arguments interp.bilinear reports the first of: an axis too short, a length mismatch (outer or any row), a non-finite entry in either axis, an axis not strictly increasing; each step over both axes.",
+      "lean_statement": "∀ {α : Type} [inst : Esm.Closed.Scalar α] (T : List (List α)) (a b : List α), Except.map (fun (_ : List (List α) × List α × List α) => ()) (Esm.Closed.validateBilinear (Esm.Closed.Arg.const2 T) (Esm.Closed.Arg.const1 a) (Esm.Closed.Arg.const1 b)) = open Classical in (if a.length < 2 ∨ b.length < 2 then Except.error \"interp_axis_too_short\" else if T.length ≠ a.length ∨ ∃ row ∈ T, row.length ≠ b.length then Except.error \"interp_axis_length_mismatch\" else if (∃ x ∈ a, Esm.Closed.Scalar.nonFinite x = Bool.true) ∨ ∃ y ∈ b, Esm.Closed.Scalar.nonFinite y = Bool.true then Except.error \"interp_nan_in_axis\" else if Esm.Closed.adjAll Esm.Closed.Scalar.lt a = Bool.false ∨ Esm.Closed.adjAll Esm.Closed.Scalar.lt b = Bool.false then Except.error \"interp_non_monotonic_axis\" else Except.ok ())",
+      "status": "proven",
+      "theorem": "Esm.Closed.validateBilinear_order",
+      "supersedes": "P-interp-bilinear-nan-precedence (NaN only; Q-113)."
+    },
+    {
+      "id": "P-interp-bilinear-empty-table",
+      "clauses": [
+        "spec.9.2.interp-const-finite-shape",
+        "spec.9.2.interp-check-order"
+      ],
+      "statement": "Q-111: an empty const array [] is rank 1, so as the table of interp.bilinear it is interp_table_not_const, whatever the axes.",
+      "lean_statement": "∀ (ax ay : Esm.Closed.Tables.Expr), Esm.Closed.validateBilinear (Esm.Closed.Tables.argOf (Esm.Closed.Tables.Expr.const (Esm.Closed.Tables.Nested.node []))) (Esm.Closed.Tables.argOf ax) (Esm.Closed.Tables.argOf ay) = Except.error \"interp_table_not_const\"",
+      "status": "proven",
+      "theorem": "Esm.Closed.Tables.bilinear_empty_table_expr"
+    },
+    {
+      "id": "P-interp-arity-first",
+      "clauses": [
+        "spec.9.2.interp-check-order",
+        "spec.9.2.interp-checks-at-load"
+      ],
+      "statement": "Q-110 + Q-112: the load check of an interp.searchsorted / interp.linear / interp.bilinear node with other than 2 / 3 / 5 arguments is closed_function_arity, whatever its arguments; with the right number it is the §9.2 argument check.",
+      "lean_statement": "∀ (tables : List (String × Esm.Closed.Tables.FTable)), Esm.Closed.Tables.interpArity \"interp.searchsorted\" = Option.some 2 ∧ Esm.Closed.Tables.interpArity \"interp.linear\" = Option.some 3 ∧ Esm.Closed.Tables.interpArity \"interp.bilinear\" = Option.some 5 ∧ ∀ (name : String) (args : List Esm.Closed.Tables.Expr) (n : ℕ), Esm.Closed.Tables.interpArity name = Option.some n → (args.length ≠ n → Esm.Closed.Tables.checkNode tables (Esm.Closed.Tables.Expr.fn name args) = Except.error \"closed_function_arity\") ∧ (args.length = n → Esm.Closed.Tables.checkNode tables (Esm.Closed.Tables.Expr.fn name args) = Esm.Closed.Tables.checkInterpArgs name args)",
+      "status": "proven",
+      "theorem": "Esm.Closed.Tables.interp_arity_first"
+    }
+  ]
+}

@@ -291,6 +291,9 @@ const ERROR_CODES = (
     ENUM_OP_MALFORMED = "enum_op_malformed",
     UNKNOWN_ENUM = "unknown_enum",
     UNKNOWN_ENUM_SYMBOL = "unknown_enum_symbol",
+    # Two symbols of ONE enum map to the same integer (esm-spec §9.3). A defect
+    # of the `enums` block itself, reported before any `enum` op resolves.
+    ENUM_DUPLICATE_VALUE = "enum_duplicate_value",
 
     # ── Closed function registry (esm-spec §9.1–§9.2;
     #    registered_functions.jl, raised as `ClosedFunctionError`). ─────────
@@ -298,29 +301,50 @@ const ERROR_CODES = (
     CLOSED_FUNCTION_ARITY = "closed_function_arity",
     CLOSED_FUNCTION_OVERFLOW = "closed_function_overflow",
     SEARCHSORTED_NON_MONOTONIC = "searchsorted_non_monotonic",
-    SEARCHSORTED_NAN_IN_TABLE = "searchsorted_nan_in_table",
+    # Checked BEFORE monotonicity (esm-spec §9.2): an `xs` holding a NaN is this
+    # code whatever its other entries.
+    SEARCHSORTED_NAN = "searchsorted_nan",
     INTERP_NON_MONOTONIC_AXIS = "interp_non_monotonic_axis",
     INTERP_AXIS_LENGTH_MISMATCH = "interp_axis_length_mismatch",
     INTERP_NAN_IN_AXIS = "interp_nan_in_axis",
     INTERP_AXIS_TOO_SHORT = "interp_axis_too_short",
-    # Raised by the AST extraction site rather than by
-    # `evaluate_closed_function`; registered here because `ClosedFunctionError`
-    # documents them as part of its code vocabulary.
+    # An argument that is not a `const` array of the required rank (ruling
+    # Q-108): raised by load, `validate()` and the build on the `fn` node, and by
+    # `evaluate_closed_function` for a value of the wrong rank.
     INTERP_TABLE_NOT_CONST = "interp_table_not_const",
     INTERP_AXIS_NOT_CONST = "interp_axis_not_const",
 
     # ── Sampled function tables (esm-spec §9.5.5; lower_table_lookup.jl, raised
-    #    as `TableLookupError`). The `table_lookup` → `interp.*` lowering is a
-    #    BUILD-time pass, so these are build diagnostics, not load ones — a
-    #    document carrying a malformed lookup still loads and still round-trips.
-    #    Added to all five bindings together, which is what a §9.5.5 code
-    #    family requires of this registry. ──────────────────────────────────
+    #    as `TableLookupError`). The ten table checks and the lookup's own codes
+    #    are LOAD diagnostics, run on every `function_tables` entry and every
+    #    `table_lookup` node by load and `validate()` (load_time_checks.jl), and
+    #    repeated by the BUILD-time `table_lookup` → `interp.*` lowering. Added to all five
+    #    bindings together, which is what a §9.5.5 code family requires of this
+    #    registry. ─────────────────────────────────────────────────────────
     TABLE_LOOKUP_UNKNOWN_TABLE = "table_lookup_unknown_table",
     TABLE_LOOKUP_AXIS_NAME_MISMATCH = "table_lookup_axis_name_mismatch",
     TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE = "table_lookup_output_out_of_range",
     TABLE_INTERPOLATION_AXES_MISMATCH = "table_interpolation_axes_mismatch",
     TABLE_DATA_SHAPE_MISMATCH = "table_data_shape_mismatch",
+    # An axis's `values` holds a value that is not finite (NaN, +Inf or -Inf;
+    # ruling Q-109).
     TABLE_AXIS_NAN = "table_axis_nan",
+    # An axis's `values` is not strictly increasing. `table_axis_nan` takes
+    # precedence: an axis holding a non-finite value is reported as that, never
+    # as this.
+    TABLE_AXIS_NON_MONOTONIC = "table_axis_non_monotonic",
+    # An axis's `values` has fewer than 2 entries (§9.5.1). The schema's
+    # `minItems: 2` refuses it in a document; this is the code for a table
+    # built in memory.
+    TABLE_AXIS_TOO_SHORT = "table_axis_too_short",
+    TABLE_AXIS_DUPLICATE_NAME = "table_axis_duplicate_name",
+    TABLE_OUTPUTS_DUPLICATE_NAME = "table_outputs_duplicate_name",
+    TABLE_OUTPUTS_LENGTH_MISMATCH = "table_outputs_length_mismatch",
+    # A leaf of `data` is not finite (NaN, +Inf or -Inf; ruling Q-109).
+    TABLE_DATA_NAN = "table_data_nan",
+    # A `table_lookup` node carrying a non-empty `args` (esm-spec §9.5.2), raised
+    # where schema validation did not run (an in-memory node).
+    TABLE_LOOKUP_ARGS_NONEMPTY = "table_lookup_args_nonempty",
     # esm-spec §9.5.3a: `out_of_bounds: "clamp"` is required of every binding
     # and `"error"` is "conformant when implemented" (§9.5.1). A compiler that
     # cannot run the second (`:mtk`) refuses the lookup where it would otherwise

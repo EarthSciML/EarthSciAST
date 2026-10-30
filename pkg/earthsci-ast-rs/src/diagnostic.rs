@@ -245,6 +245,9 @@ diagnostic_code_registry! {
 
     // ---- enums: §9.3 load-time enum lowering (`lower_enums.rs`) ----
 
+    /// Two symbols of ONE enum map to the same integer (esm-spec §9.3). Raised
+    /// on the `enums` block itself, whether or not an `enum` op names them.
+    ENUM_DUPLICATE_VALUE = "enum_duplicate_value";
     /// An enum operator applied to an argument list its arity does not admit.
     ENUM_INVALID_ARGS = "enum_invalid_args";
     /// An enum construct survived lowering — nothing downstream can interpret
@@ -260,31 +263,55 @@ diagnostic_code_registry! {
     // ---- function tables: §9.5 `table_lookup` lowering
     //      (`lower_table_lookup.rs`) ----
     //
-    // The §9.5.5 subset this binding actually raises. Carried on
-    // `CompileError::TableLookupLowering` rather than `DiagnosticError`,
-    // because the lowering runs at BUILD (§9.5.4 requires the authored form
-    // to round-trip, so it cannot run at load) — but the CODES are the same
-    // cross-binding vocabulary either way, which is what this registry is.
+    // Every §9.5.5 code: the table checks (`validate_table`, in the spec's
+    // pinned order) and the lookup checks. The table checks run at load and in
+    // `validate()` on every table (`load_checks.rs`, ruling Q-106); the lookup
+    // checks run where a lookup is lowered, at BUILD (§9.5.4 requires the
+    // authored form to round-trip, so the lowering cannot run at load), which
+    // is why they are carried on `CompileError::TableLookupLowering` rather
+    // than `DiagnosticError` — but the CODES are the same cross-binding
+    // vocabulary either way, which is what this registry is.
 
     /// `table_lookup.table` names an id the document's `function_tables`
     /// block does not declare.
     TABLE_LOOKUP_UNKNOWN_TABLE = "table_lookup_unknown_table";
     /// The key set of `table_lookup.axes` does not match the axis names the
-    /// referenced table declares (an extra key, a missing one, or a
-    /// positional `args` list where the axes map belongs).
+    /// referenced table declares (an extra key or a missing one).
     TABLE_LOOKUP_AXIS_NAME_MISMATCH = "table_lookup_axis_name_mismatch";
     /// `table_lookup.output` selects a row the table's leading `data`
     /// dimension does not have, or a name its `outputs` list does not carry.
     TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE = "table_lookup_output_out_of_range";
+    /// A `table_lookup` node carrying a non-empty `args` (esm-spec §9.5.2);
+    /// an absent `args` is `[]`. The schema rejects it too, so this is what a
+    /// node that skipped schema validation (one built in memory) gets.
+    TABLE_LOOKUP_ARGS_NONEMPTY = "table_lookup_args_nonempty";
     /// A table whose `interpolation` and axis count disagree (`linear` and
     /// `nearest` require 1 axis, `bilinear` 2).
     TABLE_INTERPOLATION_AXES_MISMATCH = "table_interpolation_axes_mismatch";
     /// The nesting of `data` does not match the shape `axes` (and `outputs`,
-    /// when present) imply.
+    /// when present) imply, or the redundant `shape` assertion does not.
     TABLE_DATA_SHAPE_MISMATCH = "table_data_shape_mismatch";
-    /// An axis's `values` carries a non-finite entry; §9.5.1 requires
-    /// strictly-increasing FINITE floats.
+    /// A leaf of `data` is not finite (NaN, +Inf or -Inf). This binding's
+    /// `data` is a JSON value, which cannot hold a non-finite number, so the
+    /// check is in place but cannot fire here.
+    TABLE_DATA_NAN = "table_data_nan";
+    /// Two axes of one table share a `name`.
+    TABLE_AXIS_DUPLICATE_NAME = "table_axis_duplicate_name";
+    /// Two entries of a table's `outputs` share a name.
+    TABLE_OUTPUTS_DUPLICATE_NAME = "table_outputs_duplicate_name";
+    /// `outputs` is declared, `data` is an array, and its leading dimension
+    /// is not `len(outputs)`.
+    TABLE_OUTPUTS_LENGTH_MISMATCH = "table_outputs_length_mismatch";
+    /// An axis's `values` has fewer than 2 entries (esm-spec §9.5.1). The
+    /// schema rejects one too; this is what a table built in memory gets.
+    TABLE_AXIS_TOO_SHORT = "table_axis_too_short";
+    /// An axis's `values` carries a value that is not finite (NaN, +Inf or
+    /// -Inf); §9.5.1 requires strictly-increasing FINITE floats.
     TABLE_AXIS_NAN = "table_axis_nan";
+    /// An axis's `values` is not strictly increasing (equal-adjacent or
+    /// decreasing). A non-finite entry is `table_axis_nan` instead, whatever
+    /// the other entries (esm-spec §9.5.5).
+    TABLE_AXIS_NON_MONOTONIC = "table_axis_non_monotonic";
     /// A lookup into an `out_of_bounds: "error"` table was queried outside an
     /// axis range (esm-spec §9.5.1). Raised at evaluation time, through the
     /// evaluators' fail-closed fault channel.
@@ -548,8 +575,9 @@ diagnostic_code_registry! {
     CLOSED_FUNCTION_ARG_TYPE = "closed_function_arg_type";
     /// A `searchsorted` table that is not monotonically non-decreasing.
     SEARCHSORTED_NON_MONOTONIC = "searchsorted_non_monotonic";
-    /// A `searchsorted` table containing a NaN.
-    SEARCHSORTED_NAN_IN_TABLE = "searchsorted_nan_in_table";
+    /// A `searchsorted` table containing a NaN (checked before monotonicity,
+    /// esm-spec §9.2).
+    SEARCHSORTED_NAN = "searchsorted_nan";
     /// An `interp` axis that is not strictly increasing.
     INTERP_NON_MONOTONIC_AXIS = "interp_non_monotonic_axis";
     /// An `interp` axis whose length does not match the table's.
@@ -558,6 +586,15 @@ diagnostic_code_registry! {
     INTERP_NAN_IN_AXIS = "interp_nan_in_axis";
     /// An `interp` axis with fewer than two points.
     INTERP_AXIS_TOO_SHORT = "interp_axis_too_short";
+    /// An `interp.*` axis argument, or `interp.searchsorted`'s `xs`, that is
+    /// not a rank-1 `const`-op array: a variable reference, a non-`const`
+    /// expression, or a `const` whose value is a scalar or a nested array
+    /// (esm-spec §9.2). Checked before `searchsorted_nan` and
+    /// `searchsorted_non_monotonic`.
+    INTERP_AXIS_NOT_CONST = "interp_axis_not_const";
+    /// An `interp.linear` / `interp.bilinear` `table` argument that is not a
+    /// literal `const`-op array of the function's rank (esm-spec §9.2).
+    INTERP_TABLE_NOT_CONST = "interp_table_not_const";
 }
 
 /// Every diagnostic code string in [`ERROR_CODES`], sorted. Handy for
@@ -657,6 +694,7 @@ mod error_code_tests {
             "dimensional_mismatch",
             "domain_unit_mismatch",
             "element_type_uncarried",
+            "enum_duplicate_value",
             "enum_invalid_args",
             "enum_lowering_residual",
             "equation_count_mismatch",
@@ -668,9 +706,11 @@ mod error_code_tests {
             "ic_in_reaction_system",
             "indexed_definition_unsupported_form",
             "interp_axis_length_mismatch",
+            "interp_axis_not_const",
             "interp_axis_too_short",
             "interp_nan_in_axis",
             "interp_non_monotonic_axis",
+            "interp_table_not_const",
             "invalid_broadcast_fn",
             "invalid_enums_block",
             "join_key_invalid_type",
@@ -695,7 +735,7 @@ mod error_code_tests {
             "reserved_index_symbol",
             "reserved_variable_name",
             "rewrite_rule_nonterminating",
-            "searchsorted_nan_in_table",
+            "searchsorted_nan",
             "searchsorted_non_monotonic",
             "solver_external_unresolved",
             "solver_external_version_too_old",
@@ -707,14 +747,21 @@ mod error_code_tests {
             "subsystem_index_set_rename_unsupported_mount_form",
             "subsystem_ref_is_coupling_library",
             "subsystem_ref_is_template_library",
+            "table_axis_duplicate_name",
             "table_axis_nan",
+            "table_axis_non_monotonic",
+            "table_axis_too_short",
+            "table_data_nan",
             "table_data_shape_mismatch",
             "table_interpolation_axes_mismatch",
+            "table_lookup_args_nonempty",
             "table_lookup_axis_name_mismatch",
             "table_lookup_out_of_bounds",
             "table_lookup_output_out_of_range",
             "table_lookup_unknown_table",
             "table_out_of_bounds_unsupported",
+            "table_outputs_duplicate_name",
+            "table_outputs_length_mismatch",
             "template_body_expansion_too_deep",
             "template_body_references_coupling_rewritten_variable",
             "template_constraint_unknown_index_set",

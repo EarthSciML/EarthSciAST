@@ -1,0 +1,67 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "FunctionTable_lookup_axis_name_mismatch",
+    "description": "The `table_lookup` on the well-formed table `T` binds axis `z`; `T` declares only `x`. It also asks for output 1 of a single-output table (`table_lookup_output_out_of_range`); axis keys are checked first (esm-spec §9.5.5, ruling Q-107).",
+    "authors": [
+      "EarthSciML"
+    ],
+    "created": "2026-10-27T00:00:00Z"
+  },
+  "function_tables": {
+    "T": {
+      "axes": [
+        {
+          "name": "x",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "interpolation": "linear",
+      "data": [
+        10,
+        20,
+        30
+      ]
+    }
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "y": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        },
+        "x": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.5
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "y"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "table_lookup",
+            "table": "T",
+            "axes": {
+              "z": "x"
+            },
+            "output": 1,
+            "args": []
+          }
+        }
+      ]
+    }
+  }
+}

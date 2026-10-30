@@ -1,0 +1,727 @@
+{
+  "_comment": "esm-spec §9.5.5 load-time table checks and their pinned order: the cases JSON cannot express as a `.esm` document. Each case is one function table (id `T`) and one `table_lookup` node referencing it. A harness builds the table IN MEMORY from `table`, writing each string \"NaN\", \"Inf\" or \"-Inf\" as that binary64 value (JSON cannot carry them), and runs it through the SAME load-time table check that the binding's load / validate() runs on every `function_tables` entry (ruling Q-106); the axes with fewer than 2 values are here because the schema rejects them (`minItems: 2`). The harness then runs the case's `lookup` through the binding's load-time `table_lookup` check (ruling Q-112: unknown table, the ten table checks, args, axis keys, output) and asserts the diagnostic code (`expected_error_code`; null means the table and the lookup pass and the lookup lowers). The lookups with a non-empty `args` are here because the schema rejects them (`maxItems: 0`). Cases that break two rules break two ADJACENT rules of the order; `breaks` lists the rules each case breaks, first the one to report. The schema-valid cases are ordinary documents under tests/invalid/ (function_table_*.esm, pinned `resolver_only` with `resolver_error_code` in tests/invalid/expected_errors.json). A non-finite value (NaN, +Inf or -Inf) in an axis is `table_axis_nan` and in `data` is `table_data_nan` (ruling Q-109). A binding whose table data cannot hold a non-finite value at all (its data type has none) may skip a case whose `data` holds one, and says so in its harness.",
+  "spec": "esm-spec §9.5.5 (Order of the table checks); formal: Esm.Closed.Tables.validateTable",
+  "table_id": "T",
+  "order": [
+    "table_axis_duplicate_name",
+    "table_outputs_duplicate_name",
+    "table_interpolation_axes_mismatch",
+    "table_axis_nan (any non-finite axis value)",
+    "table_axis_non_monotonic",
+    "table_axis_too_short",
+    "table_outputs_length_mismatch",
+    "table_data_shape_mismatch (nesting of data)",
+    "table_data_nan (any non-finite data leaf)",
+    "table_data_shape_mismatch (shape assertion)"
+  ],
+  "cases": [
+    {
+      "name": "control_valid",
+      "description": "A well-formed 1-axis linear table. It lowers; no code. Proves the harness reaches the lowering with a table it built.",
+      "breaks": [],
+      "table": {
+        "axes": [
+          {
+            "name": "x",
+            "values": [
+              0,
+              1,
+              2
+            ]
+          }
+        ],
+        "interpolation": "linear",
+        "data": [
+          10,
+          20,
+          30
+        ]
+      },
+      "lookup": {
+        "op": "table_lookup",
+        "table": "T",
+        "axes": {
+          "x": 0.5
+        },
+        "args": []
+      },
+      "expected_error_code": null
+    },
+    {
+      "name": "interpolation_axes_mismatch__axis_nan",
+      "description": "Steps 3 and 4: `linear` over two axes, the first holding a NaN. Step 3 wins.",
+      "breaks": [
+        "table_interpolation_axes_mismatch",
+        "table_axis_nan"
+      ],
+      "table": {
+        "axes": [
+          {
+            "name": "x",
+            "values": [
+              0,
+              "NaN"
+            ]
+          },
+          {
+            "name": "y",
+            "values": [
+              0,
+              1
+            ]
+          }
+        ],
+        "interpolation": "linear",
+        "data": [
+          [
+            1,
+            2
+          ],
+          [
+            3,
+            4
+          ]
+        ]
+      },
+      "lookup": {
+        "op": "table_lookup",
+        "table": "T",
+        "axes": {
+          "x": 0.5,
+          "y": 0.5
+        },
+        "args": []
+      },
+      "expected_error_code": "table_interpolation_axes_mismatch"
+    },
+    {
+      "name": "axis_nan__axis_non_monotonic_same_axis",
+      "description": "Steps 4 and 5 on one axis: [2, 1, NaN] decreases before its NaN. Step 4 wins (Q-4).",
+      "breaks": [
+        "table_axis_nan",
+        "table_axis_non_monotonic"
+      ],
+      "table": {
+        "axes": [
+          {
+            "name": "x",
+            "values": [
+              2,
+              1,
+              "NaN"
+            ]
+          }
+        ],
+        "interpolation": "linear",
+        "data": [
+          1,
+          2,
+          3
+        ]
+      },
+      "lookup": {
+        "op": "table_lookup",
+        "table": "T",
+        "axes": {
+          "x": 0.5
+        },
+        "args": []
+      },
+      "expected_error_code": "table_axis_nan"
+    },
+    {
+      "name": "axis_non_monotonic_first__axis_nan_second",
+      "description": "Steps 4 and 5 on different axes: the FIRST axis decreases, the SECOND holds a NaN. Each step covers every axis before the next, so step 4 wins; a binding that checks one axis completely before the next reports table_axis_non_monotonic.",
+      "breaks": [
+        "table_axis_nan",
+        "table_axis_non_monotonic"
+      ],
+      "table": {
+        "axes": [
+          {
+            "name": "x",
+            "values": [
+              1,
+              0
+            ]
+          },
+          {
+            "name": "y",
+            "values": [
+              0,
+              "NaN"
+            ]
+          }
+        ],
+        "interpolation": "bilinear",
+        "data": [
+          [
+            1,
+            2
+          ],
+          [
+            3,
+            4
+          ]
+        ]
+      },
+      "lookup": {
+        "op": "table_lookup",
+        "table": "T",
+        "axes": {
+          "x": 0.5,
+          "y": 0.5
+        },
+        "args": []
+      },
+      "expected_error_code": "table_axis_nan"
+    },
+    {
+      "name": "axis_non_monotonic_first__axis_too_short_second",
+      "description": "Steps 5 and 6: the first axis decreases, the second has one value. Step 5 wins.",
+      "breaks": [
+        "table_axis_non_monotonic",
+        "table_axis_too_short"
+      ],
+      "table": {
+        "axes": [
+          {
+            "name": "x",
+            "values": [
+              1,
+              0
+            ]
+          },
+          {
+            "name": "y",
+            "values": [
+              5
+            ]
+          }
+        ],
+        "interpolation": "bilinear",
+        "data": [
+          [
+            1
+          ],
+          [
+            2
+          ]
+        ]
+      },
+      "lookup": {
+        "op": "table_lookup",
+        "table": "T",
+        "axes": {
+          "x": 0.5,
+          "y": 0.5
+        },
+        "args": []
+      },
+      "expected_error_code": "table_axis_non_monotonic"
+    },
+    {
+      "name": "axis_too_short_first__axis_non_monotonic_second",
+      "description": "Steps 5 and 6 with the axes swapped: the FIRST axis has one value, the SECOND decreases. Step 5 still wins, because step 5 covers every axis before step 6 begins.",
+      "breaks": [
+        "table_axis_non_monotonic",
+        "table_axis_too_short"
+      ],
+      "table": {
+        "axes": [
+          {
+            "name": "x",
+            "values": [
+              5
+            ]
+          },
+          {
+            "name": "y",
+            "values": [
+              1,
+              0
+            ]
+          }
+        ],
+        "interpolation": "bilinear",
+        "data": [
+          [
+            1,
+            2
+          ]
+        ]
+      },
+      "lookup": {
+        "op": "table_lookup",
+        "table": "T",
+        "axes": {
+          "x": 0.5,
+          "y": 0.5
+        },
+        "args": []
+      },
+      "expected_error_code": "table_axis_non_monotonic"
+    },
+    {
+      "name": "axis_too_short",
+      "description": "Step 6 alone: an axis with one value.",
+      "breaks": [
+        "table_axis_too_short"
+      ],
+      "table": {
+        "axes": [
+          {
+            "name": "x",
+            "values": [
+              5
+            ]
+          }
+        ],
+        "interpolation": "linear",
+        "data": [
+          1
+        ]
+      },
+      "lookup": {
+        "op": "table_lookup",
+        "table": "T",
+        "axes": {
+          "x": 0.5
+        },
+        "args": []
+      },
+      "expected_error_code": "table_axis_too_short"
+    },
+    {
+      "name": "axis_empty",
+      "description": "Step 6 alone: an axis with no values (`data` is the empty array its shape implies).",
+      "breaks": [
+        "table_axis_too_short"
+      ],
+      "table": {
+        "axes": [
+          {
+            "name": "x",
+            "values": []
+          }
+        ],
+        "interpolation": "linear",
+        "data": []
+      },
+      "lookup": {
+        "op": "table_lookup",
+        "table": "T",
+        "axes": {
+          "x": 0.5
+        },
+        "args": []
+      },
+      "expected_error_code": "table_axis_too_short"
+    },
+    {
+      "name": "axis_too_short__outputs_length_mismatch",
+      "description": "Steps 6 and 7: a one-value axis, and two outputs over a one-row `data`. Step 6 wins.",
+      "breaks": [
+        "table_axis_too_short",
+        "table_outputs_length_mismatch"
+      ],
+      "table": {
+        "axes": [
+          {
+            "name": "x",
+            "values": [
+              5
+            ]
+          }
+        ],
+        "interpolation": "linear",
+        "outputs": [
+          "a",
+          "b"
+        ],
+        "data": [
+          [
+            1
+          ]
+        ]
+      },
+      "lookup": {
+        "op": "table_lookup",
+        "table": "T",
+        "axes": {
+          "x": 0.5
+        },
+        "args": []
+      },
+      "expected_error_code": "table_axis_too_short"
+    },
+    {
+      "name": "data_shape_mismatch__data_nan",
+      "description": "Steps 8 and 9: `data` has 2 entries for a 3-knot axis, one of them NaN. Step 8 wins.",
+      "breaks": [
+        "table_data_shape_mismatch",
+        "table_data_nan"
+      ],
+      "table": {
+        "axes": [
+          {
+            "name": "x",
+            "values": [
+              0,
+              1,
+              2
+            ]
+          }
+        ],
+        "interpolation": "linear",
+        "data": [
+          1,
+          "NaN"
+        ]
+      },
+      "lookup": {
+        "op": "table_lookup",
+        "table": "T",
+        "axes": {
+          "x": 0.5
+        },
+        "args": []
+      },
+      "expected_error_code": "table_data_shape_mismatch"
+    },
+    {
+      "name": "data_nan__shape_assertion_mismatch",
+      "description": "Steps 9 and 10: `data` has the implied nesting but holds a NaN, and the `shape` assertion is wrong. Step 9 wins.",
+      "breaks": [
+        "table_data_nan",
+        "table_data_shape_mismatch"
+      ],
+      "table": {
+        "axes": [
+          {
+            "name": "x",
+            "values": [
+              0,
+              1,
+              2
+            ]
+          }
+        ],
+        "interpolation": "linear",
+        "data": [
+          1,
+          "NaN",
+          3
+        ],
+        "shape": [
+          4
+        ]
+      },
+      "lookup": {
+        "op": "table_lookup",
+        "table": "T",
+        "axes": {
+          "x": 0.5
+        },
+        "args": []
+      },
+      "expected_error_code": "table_data_nan"
+    },
+    {
+      "name": "axis_pos_inf",
+      "description": "Ruling Q-109: an axis value of +Inf. The axis is strictly increasing, so the only rule broken is that axis values are finite; a non-finite axis value is `table_axis_nan`.",
+      "breaks": [
+        "table_axis_nan"
+      ],
+      "table": {
+        "axes": [
+          {
+            "name": "x",
+            "values": [
+              0,
+              1,
+              "Inf"
+            ]
+          }
+        ],
+        "interpolation": "linear",
+        "data": [
+          1,
+          2,
+          3
+        ]
+      },
+      "lookup": {
+        "op": "table_lookup",
+        "table": "T",
+        "axes": {
+          "x": 0.5
+        },
+        "args": []
+      },
+      "expected_error_code": "table_axis_nan"
+    },
+    {
+      "name": "axis_neg_inf",
+      "description": "Ruling Q-109: an axis value of -Inf at the start of an increasing axis: `table_axis_nan`.",
+      "breaks": [
+        "table_axis_nan"
+      ],
+      "table": {
+        "axes": [
+          {
+            "name": "x",
+            "values": [
+              "-Inf",
+              0,
+              1
+            ]
+          }
+        ],
+        "interpolation": "linear",
+        "data": [
+          1,
+          2,
+          3
+        ]
+      },
+      "lookup": {
+        "op": "table_lookup",
+        "table": "T",
+        "axes": {
+          "x": 0.5
+        },
+        "args": []
+      },
+      "expected_error_code": "table_axis_nan"
+    },
+    {
+      "name": "axis_inf__axis_non_monotonic_same_axis",
+      "description": "Ruling Q-109 with steps 4 and 5: the axis [+Inf, 0] is decreasing and holds a non-finite value. Step 4 wins: `table_axis_nan`.",
+      "breaks": [
+        "table_axis_nan",
+        "table_axis_non_monotonic"
+      ],
+      "table": {
+        "axes": [
+          {
+            "name": "x",
+            "values": [
+              "Inf",
+              0
+            ]
+          }
+        ],
+        "interpolation": "linear",
+        "data": [
+          1,
+          2
+        ]
+      },
+      "lookup": {
+        "op": "table_lookup",
+        "table": "T",
+        "axes": {
+          "x": 0.5
+        },
+        "args": []
+      },
+      "expected_error_code": "table_axis_nan"
+    },
+    {
+      "name": "data_pos_inf",
+      "description": "Ruling Q-109: a data leaf of +Inf is `table_data_nan`.",
+      "breaks": [
+        "table_data_nan"
+      ],
+      "table": {
+        "axes": [
+          {
+            "name": "x",
+            "values": [
+              0,
+              1,
+              2
+            ]
+          }
+        ],
+        "interpolation": "linear",
+        "data": [
+          1,
+          "Inf",
+          3
+        ]
+      },
+      "lookup": {
+        "op": "table_lookup",
+        "table": "T",
+        "axes": {
+          "x": 0.5
+        },
+        "args": []
+      },
+      "expected_error_code": "table_data_nan"
+    },
+    {
+      "name": "data_neg_inf_bilinear",
+      "description": "Ruling Q-109: a data leaf of -Inf in a 2-axis table is `table_data_nan`.",
+      "breaks": [
+        "table_data_nan"
+      ],
+      "table": {
+        "axes": [
+          {
+            "name": "x",
+            "values": [
+              0,
+              1
+            ]
+          },
+          {
+            "name": "y",
+            "values": [
+              0,
+              1
+            ]
+          }
+        ],
+        "interpolation": "bilinear",
+        "data": [
+          [
+            1,
+            2
+          ],
+          [
+            3,
+            "-Inf"
+          ]
+        ]
+      },
+      "lookup": {
+        "op": "table_lookup",
+        "table": "T",
+        "axes": {
+          "x": 0.5
+        },
+        "args": []
+      },
+      "expected_error_code": "table_data_nan"
+    },
+    {
+      "name": "lookup_args_nonempty",
+      "description": "Ruling Q-112: the lookup on a well-formed table carries args [1] (the schema rejects it, maxItems 0): `table_lookup_args_nonempty`.",
+      "breaks": [
+        "table_lookup_args_nonempty"
+      ],
+      "table": {
+        "axes": [
+          {
+            "name": "x",
+            "values": [
+              0,
+              1,
+              2
+            ]
+          }
+        ],
+        "interpolation": "linear",
+        "data": [
+          10,
+          20,
+          30
+        ]
+      },
+      "lookup": {
+        "op": "table_lookup",
+        "table": "T",
+        "axes": {
+          "x": 0.5
+        },
+        "args": [
+          1
+        ]
+      },
+      "expected_error_code": "table_lookup_args_nonempty"
+    },
+    {
+      "name": "lookup_args_nonempty__axis_name_mismatch",
+      "description": "Ruling Q-107: args are checked before axis keys. The lookup carries args [1] and binds axis `z`: `table_lookup_args_nonempty`.",
+      "breaks": [
+        "table_lookup_args_nonempty",
+        "table_lookup_axis_name_mismatch"
+      ],
+      "table": {
+        "axes": [
+          {
+            "name": "x",
+            "values": [
+              0,
+              1,
+              2
+            ]
+          }
+        ],
+        "interpolation": "linear",
+        "data": [
+          10,
+          20,
+          30
+        ]
+      },
+      "lookup": {
+        "op": "table_lookup",
+        "table": "T",
+        "axes": {
+          "z": 0.5
+        },
+        "args": [
+          1
+        ]
+      },
+      "expected_error_code": "table_lookup_args_nonempty"
+    },
+    {
+      "name": "table_axis_nan__lookup_args_nonempty",
+      "description": "Ruling Q-107: the table is checked before the lookup's own fields. The table's axis holds a NaN and the lookup carries args [1]: `table_axis_nan`.",
+      "breaks": [
+        "table_axis_nan",
+        "table_lookup_args_nonempty"
+      ],
+      "table": {
+        "axes": [
+          {
+            "name": "x",
+            "values": [
+              0,
+              "NaN",
+              2
+            ]
+          }
+        ],
+        "interpolation": "linear",
+        "data": [
+          10,
+          20,
+          30
+        ]
+      },
+      "lookup": {
+        "op": "table_lookup",
+        "table": "T",
+        "axes": {
+          "x": 0.5
+        },
+        "args": [
+          1
+        ]
+      },
+      "expected_error_code": "table_axis_nan"
+    }
+  ],
+  "moved_to_tests_invalid": {
+    "axis_duplicate_name__outputs_duplicate_name": "function_table_axis_duplicate_name.esm",
+    "outputs_duplicate_name__interpolation_axes_mismatch": "function_table_outputs_duplicate_name.esm",
+    "outputs_length_mismatch__data_shape_mismatch": "function_table_outputs_length_mismatch.esm",
+    "shape_assertion_mismatch": "function_table_shape_assertion_mismatch.esm"
+  }
+}

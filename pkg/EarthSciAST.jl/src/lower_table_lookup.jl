@@ -45,15 +45,24 @@ carrying the stable §9.5.5 diagnostic `code` as a structured field rather than
 interpolated into the message — the same shape as [`EnumLoweringError`](@ref)
 and [`ClosedFunctionError`](@ref).
 
-Codes: `table_lookup_unknown_table`, `table_lookup_axis_name_mismatch`,
-`table_lookup_output_out_of_range`, `table_interpolation_axes_mismatch`,
-`table_data_shape_mismatch`, `table_axis_nan`, the §9.5.3a refusal
+Codes: the lookup's own `table_lookup_args_nonempty`,
+`table_lookup_unknown_table`, `table_lookup_axis_name_mismatch` and
+`table_lookup_output_out_of_range`; the ten table checks of
+`_validate_function_table` (`table_axis_duplicate_name`,
+`table_outputs_duplicate_name`, `table_interpolation_axes_mismatch`,
+`table_axis_nan`, `table_axis_non_monotonic`, `table_axis_too_short`,
+`table_outputs_length_mismatch`, `table_data_shape_mismatch`,
+`table_data_nan`); the §9.5.3a refusal
 `table_out_of_bounds_unsupported` (from a compiler that cannot run an
 `out_of_bounds: "error"` table), and the evaluation-time
 `table_lookup_out_of_bounds` a strict table raises for a query outside its axis.
 
-A build diagnostic, not a load one: the offending document still loads and
-still round-trips (§9.5.4) — it simply does not evaluate.
+The ten table checks and the lookup's own codes are LOAD diagnostics: load and
+`validate()` run them on every `function_tables` entry and every `table_lookup`
+node (esm-spec §9.5.5, rulings Q-106 and Q-112), so such a document does not
+load; the lowering repeats them for a document built in memory. The §9.5.3a
+refusal and the evaluation-time code are raised where the lookup is lowered or
+evaluated.
 """
 struct TableLookupError <: EarthSciASTError
     code::String
@@ -360,18 +369,13 @@ function _lower_expr_table_lookups(e::OpExpr, tables::_TableRegistry,
     return res
 end
 
-# The §9.5.3 lowering of ONE `table_lookup` node.
+# The §9.5.3 lowering of ONE `table_lookup` node. The order of its checks is
+# esm-spec §9.5.5 "Order of the lookup checks" (ruling Q-107): the table
+# reference, the named table's OWN ten checks (`_validate_function_table`), then
+# the lookup's own fields — `args`, axis keys, output.
 function _lower_table_lookup_node(node::OpExpr,
                                   tables::AbstractDict{String,FunctionTable})::ASTExpr
-    table_id = node.table
-    table_id === nothing && throw(TableLookupError(
-        ERROR_CODES.TABLE_LOOKUP_UNKNOWN_TABLE,
-        "a `table_lookup` node carries no `table` id (esm-spec §9.5.2)"))
-    haskey(tables, table_id) || throw(TableLookupError(
-        ERROR_CODES.TABLE_LOOKUP_UNKNOWN_TABLE,
-        "`table_lookup` references table `$(table_id)`, which the document's " *
-        "`function_tables` block does not declare"))
-    table = tables[table_id]
+    table_id, table = _resolve_lookup_table(node, tables)
     # esm-spec §9.5.1. `clamp` (the default) is exactly what the `interp.*`
     # cores do at the ends, so the lowered tree IS the clamp semantics. An
     # `error` table lowers to the same tree with its id on the node that reads
@@ -384,31 +388,200 @@ function _lower_table_lookup_node(node::OpExpr,
     strict = table.out_of_bounds == "error" ? String(table_id) : nothing
 
     inputs = _table_axis_inputs(node, table, table_id)
-    slice = _table_output_slice(table, _table_output_index(node, table, table_id),
-                                table_id)
+    slice = _table_output_slice(table, _table_output_index(node, table, table_id))
+    return _lowered_lookup_tree(table, inputs, slice, strict)
+end
+
+"""
+    _check_table_lookup_node(node::OpExpr, tables) -> Nothing
+
+Every esm-spec §9.5.5 check of ONE `table_lookup` node, in the pinned "Order of
+the lookup checks" — the table reference, the named table's ten checks, then the
+node's `args`, axis keys and output — without lowering it. Load and `validate()`
+run it on every node (ruling Q-112); the lowering runs the same steps.
+"""
+function _check_table_lookup_node(node::OpExpr, tables)::Nothing
+    reg = tables === nothing ? Dict{String,FunctionTable}() : tables
+    table_id, table = _resolve_lookup_table(node, reg)
+    _table_axis_inputs(node, table, table_id)
+    _table_output_index(node, table, table_id)
+    return nothing
+end
+
+# The steps of the lookup checks that precede the axis keys: the table reference,
+# the named table's ten checks, then `args`. Returns `(table_id, table)`.
+function _resolve_lookup_table(node::OpExpr, tables::AbstractDict{String,FunctionTable})
+    table_id = node.table
+    table_id === nothing && throw(TableLookupError(
+        ERROR_CODES.TABLE_LOOKUP_UNKNOWN_TABLE,
+        "a `table_lookup` node carries no `table` id (esm-spec §9.5.2)"))
+    haskey(tables, table_id) || throw(TableLookupError(
+        ERROR_CODES.TABLE_LOOKUP_UNKNOWN_TABLE,
+        "`table_lookup` references table `$(table_id)`, which the document's " *
+        "`function_tables` block does not declare"))
+    table = tables[table_id]
+    _validate_function_table(table, table_id)
+    isempty(node.args) || throw(TableLookupError(
+        ERROR_CODES.TABLE_LOOKUP_ARGS_NONEMPTY,
+        "`table_lookup` on table `$(table_id)` carries $(length(node.args)) " *
+        "positional `args`; the per-axis inputs live under `axes` and `args` MUST " *
+        "be empty (esm-spec §9.5.2)"))
+    return String(table_id), table
+end
+
+# The §9.5.3 tree for a lookup whose checks all passed.
+function _lowered_lookup_tree(table::FunctionTable, inputs, slice, strict)::ASTExpr
     kind = something(table.interpolation, "linear")
-    if kind == "linear" && length(table.axes) == 1
-        return OpExpr("fn", ASTExpr[_table_const(slice),
-                                    _table_axis_const(table.axes[1], table_id),
-                                    inputs[1]]; name="interp.linear", table=strict)
-    elseif kind == "bilinear" && length(table.axes) == 2
-        return OpExpr("fn", ASTExpr[_table_const(slice),
-                                    _table_axis_const(table.axes[1], table_id),
-                                    _table_axis_const(table.axes[2], table_id),
+    axis_const(i) = OpExpr("const", ASTExpr[]; value=copy(table.axes[i].values))
+    if kind == "linear"
+        return OpExpr("fn", ASTExpr[_table_const(slice), axis_const(1), inputs[1]];
+                      name="interp.linear", table=strict)
+    elseif kind == "bilinear"
+        return OpExpr("fn", ASTExpr[_table_const(slice), axis_const(1), axis_const(2),
                                     inputs[1], inputs[2]]; name="interp.bilinear",
                       table=strict)
-    elseif kind == "nearest" && length(table.axes) == 1
-        # `nearest` is an `index` of the table slice at the searchsorted
-        # position, not an `interp` blend.
-        return OpExpr("index", ASTExpr[_table_const(slice),
-            OpExpr("fn", ASTExpr[inputs[1],
-                                 _table_axis_const(table.axes[1], table_id)];
-                   name="interp.searchsorted", table=strict)])
     end
-    throw(TableLookupError(ERROR_CODES.TABLE_INTERPOLATION_AXES_MISMATCH,
-        "table `$(table_id)` declares `interpolation: \"$(kind)\"` over " *
-        "$(length(table.axes)) axes; `linear` and `nearest` require 1, `bilinear` " *
-        "requires 2 (esm-spec §9.5.1)"))
+    # `nearest`: `_validate_function_table` admits no other `interpolation`.
+    return _nearest_lookup_tree(_table_const(slice), axis_const(1),
+                                length(table.axes[1].values), inputs[1], strict)
+end
+
+"""
+    _validate_function_table(table::FunctionTable, table_id) -> Nothing
+
+The esm-spec §9.5.5 checks on ONE function table, in the order §9.5.5 pins
+("Order of the table checks"; the formal model is
+`Esm.Closed.Tables.validateTable`). Throws a [`TableLookupError`](@ref) with the
+code of the FIRST rule the table breaks; each step covers every axis before the
+next begins:
+
+ 1. `table_axis_duplicate_name`;
+ 2. `table_outputs_duplicate_name`;
+ 3. `table_interpolation_axes_mismatch` (`linear` / `nearest` need 1 axis,
+    `bilinear` 2; any other `interpolation` value is this code too);
+ 4. `table_axis_nan` — a non-finite value in any axis;
+ 5. `table_axis_non_monotonic` — any axis not strictly increasing;
+ 6. `table_axis_too_short` — any axis with fewer than 2 values;
+ 7. `table_outputs_length_mismatch` — `outputs` declared, `data` an array, and
+    `length(data) != length(outputs)`;
+ 8. `table_data_shape_mismatch` — the nesting of `data` is not exactly the
+    implied shape `[len(outputs)?, len(axis_1), …]` (a leaf that is not a
+    number — a string, a boolean, `nothing` — is a nesting mismatch);
+ 9. `table_data_nan` — a non-finite leaf of `data`;
+10. `table_data_shape_mismatch` — the `shape` assertion differs from the
+    implied shape.
+
+The one validator of a `function_tables` entry in this binding. Load and
+`validate()` run it on EVERY entry, referenced or not
+([`_check_function_tables`](@ref), esm-spec §9.5.5 "When the table checks
+run"); the §9.5.3 lowering runs it again as soon as a lookup's table id
+resolves, before any check about the lookup itself (§9.5.5 "Order of the lookup
+checks"), which covers a table built in memory.
+"""
+function _validate_function_table(table::FunctionTable, table_id::AbstractString)::Nothing
+    fail(code, msg) = throw(TableLookupError(code,
+        "table `$(table_id)`: " * msg * " (esm-spec §9.5.5)"))
+    axes = table.axes
+    names = String[ax.name for ax in axes]
+    allunique(names) || fail(ERROR_CODES.TABLE_AXIS_DUPLICATE_NAME,
+        "two axes share the name `$(_first_duplicate(names))`")
+    outputs = table.outputs
+    (outputs === nothing || allunique(outputs)) ||
+        fail(ERROR_CODES.TABLE_OUTPUTS_DUPLICATE_NAME,
+             "two `outputs` share the name `$(_first_duplicate(outputs))`")
+    kind = something(table.interpolation, "linear")
+    n = length(axes)
+    (((kind == "linear" || kind == "nearest") && n == 1) ||
+     (kind == "bilinear" && n == 2)) ||
+        fail(ERROR_CODES.TABLE_INTERPOLATION_AXES_MISMATCH,
+             "`interpolation: \"$(kind)\"` over $(n) axes; `linear` and `nearest` " *
+             "require 1, `bilinear` requires 2")
+    # NaN over EVERY axis before monotonicity on any: a NaN compares false with
+    # everything, so a monotonicity verdict on an axis holding one would depend
+    # on how the comparison is written.
+    for ax in axes
+        all(isfinite, ax.values) || fail(ERROR_CODES.TABLE_AXIS_NAN,
+            "axis `$(ax.name)` carries a value that is not finite (NaN, +Inf or -Inf); axis `values` must be " *
+            "strictly-increasing finite floats")
+    end
+    for ax in axes
+        vals = ax.values
+        for i in 2:length(vals)
+            vals[i] > vals[i-1] || fail(ERROR_CODES.TABLE_AXIS_NON_MONOTONIC,
+                "axis `$(ax.name)` is not strictly increasing (values[$(i)] = " *
+                "$(vals[i]) is not > values[$(i - 1)] = $(vals[i - 1]))")
+        end
+    end
+    for ax in axes
+        length(ax.values) >= 2 || fail(ERROR_CODES.TABLE_AXIS_TOO_SHORT,
+            "axis `$(ax.name)` has $(length(ax.values)) values; an axis needs at least 2")
+    end
+    data = table.data
+    (outputs !== nothing && data isa AbstractVector && length(data) != length(outputs)) &&
+        fail(ERROR_CODES.TABLE_OUTPUTS_LENGTH_MISMATCH,
+             "`data` has leading dimension $(length(data)) but the table declares " *
+             "$(length(outputs)) `outputs`")
+    implied = Int[length(ax.values) for ax in axes]
+    outputs === nothing || pushfirst!(implied, length(outputs))
+    _table_has_shape(data, implied, 1) || fail(ERROR_CODES.TABLE_DATA_SHAPE_MISMATCH,
+        "the nesting of `data` is not the shape $(implied) implied by its axes" *
+        (outputs === nothing ? "" : " and `outputs`"))
+    _table_all_finite(data) || fail(ERROR_CODES.TABLE_DATA_NAN,
+        "a leaf of `data` is not finite (NaN, +Inf or -Inf); table data must be finite")
+    (table.shape === nothing || table.shape == implied) ||
+        fail(ERROR_CODES.TABLE_DATA_SHAPE_MISMATCH,
+             "the `shape` assertion $(table.shape) differs from the shape $(implied) " *
+             "implied by its axes" * (outputs === nothing ? "" : " and `outputs`"))
+    return nothing
+end
+
+function _first_duplicate(xs)
+    seen = Set{eltype(xs)}()
+    for x in xs
+        x in seen && return x
+        push!(seen, x)
+    end
+    return nothing
+end
+
+# A number leaf of a table literal. `Bool <: Real` in Julia, but a JSON boolean
+# is not a number.
+_table_leaf(x) = x isa Real && !(x isa Bool)
+
+# `data`'s nesting is EXACTLY `shape[d:end]`: a leaf at full depth, an array of
+# the right length above it (the formal model's `Nested.hasShape`).
+function _table_has_shape(x, shape::Vector{Int}, d::Int)::Bool
+    d > length(shape) && return _table_leaf(x)
+    (x isa AbstractVector && length(x) == shape[d]) || return false
+    return all(c -> _table_has_shape(c, shape, d + 1), x)
+end
+
+# Every leaf finite (run after `_table_has_shape`, so every leaf is a number).
+_table_all_finite(x) = x isa AbstractVector ? all(_table_all_finite, x) : isfinite(x)
+
+# The esm-spec §9.5.3 `nearest` composition, op for op and operand for operand
+# (every binding builds this same tree so ties are decided on the same two
+# binary64 differences):
+#
+#   j  = interp.searchsorted(x, A)       lo = max(j - 1, 1)       hi = min(j, N)
+#   ifelse(x == x, index(D, ifelse(A[hi] - x < x - A[lo], hi, lo)), x)
+#
+# A tie goes to `lo`, the lower knot; below the axis `lo = hi = 1` and above it
+# (and for a NaN query, whose search is N + 1) `lo = hi = N`, so no `index`
+# reads out of range on either branch; a NaN query takes the outer else-branch
+# and returns NaN. For an `out_of_bounds: "error"` table every `searchsorted`
+# carries the table id, so the evaluator's strict check on the query runs
+# whichever copy it reaches first.
+function _nearest_lookup_tree(D::OpExpr, A::OpExpr, N::Int, x::ASTExpr,
+                              strict::Union{String,Nothing})::OpExpr
+    j() = OpExpr("fn", ASTExpr[x, A]; name="interp.searchsorted", table=strict)
+    lo() = OpExpr("max", ASTExpr[OpExpr("-", ASTExpr[j(), IntExpr(1)]), IntExpr(1)])
+    hi() = OpExpr("min", ASTExpr[j(), IntExpr(N)])
+    nearer_hi = OpExpr("<", ASTExpr[
+        OpExpr("-", ASTExpr[OpExpr("index", ASTExpr[A, hi()]), x]),
+        OpExpr("-", ASTExpr[x, OpExpr("index", ASTExpr[A, lo()])])])
+    pick = OpExpr("index", ASTExpr[D, OpExpr("ifelse", ASTExpr[nearer_hi, hi(), lo()])])
+    return OpExpr("ifelse", ASTExpr[OpExpr("==", ASTExpr[x, x]), pick, x])
 end
 
 # The node's per-axis input expressions, in the table's DECLARED axis order —
@@ -416,11 +589,6 @@ end
 # order of `interp.bilinear`.
 function _table_axis_inputs(node::OpExpr, table::FunctionTable,
                             table_id::String)::Vector{ASTExpr}
-    isempty(node.args) || throw(TableLookupError(
-        ERROR_CODES.TABLE_LOOKUP_AXIS_NAME_MISMATCH,
-        "`table_lookup` on table `$(table_id)` carries $(length(node.args)) positional " *
-        "`args`; the per-axis inputs live under `axes` and `args` MUST be empty " *
-        "(esm-spec §9.5.2)"))
     axes = node.table_axes
     supplied = axes === nothing ? 0 : length(axes)
     out = Vector{ASTExpr}(undef, length(table.axes))
@@ -487,15 +655,10 @@ end
 
 # The `data` sub-array the lowered `const` carries: row `output` of the leading
 # dimension for a multi-output table, and the whole literal for a single-output
-# one (which has no leading output dimension, §9.5.1).
-function _table_output_slice(table::FunctionTable, output::Int, table_id::String)
-    table.outputs === nothing && return table.data
-    (table.data isa AbstractVector && output <= length(table.data)) ||
-        throw(TableLookupError(ERROR_CODES.TABLE_DATA_SHAPE_MISMATCH,
-            "table `$(table_id)`: `data` has no row $(output - 1) for the selected " *
-            "output — its leading dimension must equal `len(outputs)` (esm-spec §9.5.1)"))
-    return table.data[output]
-end
+# one (which has no leading output dimension, §9.5.1). `_validate_function_table`
+# has already checked the leading dimension equals `len(outputs)`.
+_table_output_slice(table::FunctionTable, output::Int) =
+    table.outputs === nothing ? table.data : table.data[output]
 
 # `{"op": "const", "value": <data slice>}`. The value is materialized as the
 # concrete `Vector{Float64}` / `Vector{Vector{Float64}}` the `interp.*`
@@ -504,18 +667,8 @@ end
 # bit-equivalence promise) rather than a `Vector{Any}` of JSON leftovers.
 _table_const(slice) = OpExpr("const", ASTExpr[]; value=_table_data_value(slice))
 
-function _table_data_value(slice)
-    slice isa AbstractVector || throw(TableLookupError(
-        ERROR_CODES.TABLE_DATA_SHAPE_MISMATCH,
-        "a function table's `data` slice must be a nested array of finite numbers, " *
-        "got a $(typeof(slice)) (esm-spec §9.5.1)"))
-    all(x -> x isa Real, slice) && return Float64[Float64(x) for x in slice]
-    return Vector{Float64}[_table_data_value(row) for row in slice]
-end
-
-function _table_axis_const(axis::FunctionTableAxis, table_id::String)::ASTExpr
-    all(isfinite, axis.values) || throw(TableLookupError(ERROR_CODES.TABLE_AXIS_NAN,
-        "table `$(table_id)`: axis `$(axis.name)` carries a non-finite value; axis " *
-        "`values` must be strictly-increasing FINITE floats (esm-spec §9.5.1)"))
-    return OpExpr("const", ASTExpr[]; value=copy(axis.values))
-end
+# `_validate_function_table` has already checked the nesting and that every
+# leaf is a number.
+_table_data_value(slice::AbstractVector) =
+    all(_table_leaf, slice) ? Float64[Float64(x) for x in slice] :
+                              Vector{Float64}[_table_data_value(row) for row in slice]

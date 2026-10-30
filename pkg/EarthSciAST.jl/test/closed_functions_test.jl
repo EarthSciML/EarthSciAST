@@ -48,6 +48,27 @@ function _within_tol(actual, expected, abs_tol, rel_tol)
     return diff <= abs_tol || diff <= rel_tol * max(1.0, abs(e))
 end
 
+# The code the load-time argument check (`_check_interp_fn_node`, run by load
+# and `validate()` on every `interp.*` call) raises on a `fn` node whose array
+# positions are `const` nodes holding `inputs` and whose scalar positions are
+# variable references, or "" when it passes.
+function _cf_load_check_code(fn_name::String, inputs)
+    cspec = EarthSciAST._fn_const_arg_spec(fn_name)
+    args = EarthSciAST.ASTExpr[
+        pos in cspec.const_positions ?
+            EarthSciAST.OpExpr("const", EarthSciAST.ASTExpr[]; value=inputs[pos]) :
+            EarthSciAST.VarExpr("q$(pos)")
+        for pos in eachindex(inputs)]
+    node = EarthSciAST.OpExpr("fn", args; name=fn_name)
+    return try
+        EarthSciAST._check_interp_fn_node(node)
+        ""
+    catch e
+        e isa ClosedFunctionError || rethrow()
+        e.code
+    end
+end
+
 @testset "Closed function registry conformance (esm-tzp / esm-4aw)" begin
     @test isdir(_CF_FIX_ROOT)
 
@@ -122,6 +143,13 @@ end
                                 if err_caught isa ClosedFunctionError
                                     @test err_caught.code == expected_code
                                 end
+                                # The LOAD-time argument check (esm-spec §9.2,
+                                # ruling Q-106) on the `fn` node, the array
+                                # inputs as `const` args.
+                                if startswith(fn_name, "interp.")
+                                    @test _cf_load_check_code(fn_name, inputs_decoded) ==
+                                          expected_code
+                                end
                             end
                         end
                     end
@@ -159,6 +187,43 @@ end
         @test err isa ClosedFunctionError
         @test (err::ClosedFunctionError).code == "unknown_closed_function"
     end
+end
+
+# ---------------------------------------------------------------------------
+# esm-spec §9.2: an `interp.searchsorted` `xs` that is not a rank-1 `const`-op
+# array — a variable reference, a non-`const` expression, a scalar or nested
+# `const` — is `interp_axis_not_const`, decided BEFORE `searchsorted_nan` and
+# `searchsorted_non_monotonic`. The fixture's `error_scenarios` above pin the
+# wrong-RANK forms on the registry; these pin the forms a value harness cannot
+# express, on the tree-walk build a document actually goes through.
+# ---------------------------------------------------------------------------
+@testset "interp.searchsorted xs must be a rank-1 const array (esm-spec §9.2)" begin
+    v(n) = VarExpr(n)
+    cst(x) = OpExpr("const", EarthSciAST.ASTExpr[]; value=x)
+    model_with(xs) = Model(
+        Dict("y" => ModelVariable(EarthSciAST.UnknownVariable; default=0.0),
+             "a" => ModelVariable(EarthSciAST.ParameterVariable; default=1.0),
+             "b" => ModelVariable(EarthSciAST.ParameterVariable; default=2.0)),
+        [Equation(OpExpr("D", EarthSciAST.ASTExpr[v("y")]; wrt="t"),
+                  OpExpr("fn", EarthSciAST.ASTExpr[v("a"), xs];
+                         name="interp.searchsorted"))])
+    build_code(xs) = try
+        EarthSciAST._build_evaluator(model_with(xs))
+        nothing
+    catch e
+        e isa ClosedFunctionError || rethrow()
+        e.code
+    end
+    @test build_code(v("b")) == "interp_axis_not_const"
+    @test build_code(OpExpr("+", EarthSciAST.ASTExpr[v("a"), v("b")])) ==
+          "interp_axis_not_const"
+    @test build_code(cst(3.0)) == "interp_axis_not_const"
+    @test build_code(cst(Any[[1.0, 2.0], [3.0, 4.0]])) == "interp_axis_not_const"
+    @test build_code(cst(Any[[1.0, NaN], [3.0, 4.0]])) == "interp_axis_not_const"
+    # Rank first, then NaN, then monotonicity.
+    @test build_code(cst([3.0, NaN, 1.0])) == "searchsorted_nan"
+    @test build_code(cst([3.0, 1.0])) == "searchsorted_non_monotonic"
+    @test build_code(cst([1.0, 2.0, 3.0])) === nothing
 end
 
 # ---------------------------------------------------------------------------
@@ -281,9 +346,122 @@ end
     # "seen set" using 0 as its own sentinel would pass the positive case and
     # let this one through.
     _doc(enums) = """{"esm":"1.0.0","metadata":{"name":"T","description":"d","authors":["a"]},"enums":$enums,"models":{"M":{"variables":{"x":{"type":"unknown","units":"1"}},"equations":[{"lhs":"x","rhs":{"op":"enum","args":["m","A"]}}]}}}"""
-    @test_throws ParseError load_string(_doc("""{"m":{"A":0,"B":0}}"""))
-    @test_throws ParseError load_string(_doc("""{"m":{"A":3,"B":3}}"""))
+    dup_code(f) = try
+        f(); ""
+    catch e
+        e isa EnumLoweringError || rethrow()
+        e.code
+    end
+    @test dup_code(() -> load_string(_doc("""{"m":{"A":0,"B":0}}"""))) == "enum_duplicate_value"
+    @test dup_code(() -> load_string(_doc("""{"m":{"A":3,"B":3}}"""))) == "enum_duplicate_value"
+    # Whether or not any `enum` op names the duplicated symbols.
+    @test dup_code(() -> load_string(_doc("""{"m":{"A":1,"B":2,"C":2}}"""))) ==
+          "enum_duplicate_value"
+    # Values MAY coincide across enums.
+    @test dup_code(() -> load_string(_doc("""{"m":{"A":1},"n":{"A":1}}"""))) == ""
+    # A file built in memory (no coercer) is checked by the lowering.
+    mem = EsmFile("1.0.0", Metadata("E"); enums=Dict("m" => Dict("A" => 0, "B" => 0)))
+    @test dup_code(() -> lower_enums(mem)) == "enum_duplicate_value"
     ok = load_string(_doc("""{"m":{"A":0,"B":-1}}"""))
     @test ok.enums["m"]["A"] == 0
     @test ok.enums["m"]["B"] == -1
+
+    # The two tests/invalid fixtures (resolver_only, pinned code).
+    for f in ("enum_duplicate_value.esm", "enum_duplicate_zero_value.esm")
+        @test dup_code(() -> load_path(joinpath(_CF_REPO_ROOT, "tests", "invalid", f))) ==
+              "enum_duplicate_value"
+    end
+end
+
+# esm-spec §9.2 / §9.5.5: NaN is checked over the whole array BEFORE monotonicity,
+# so the verdict on an array holding a NaN does not depend on where it sits.
+@testset "NaN precedes non-monotonic (esm-spec §9.2)" begin
+    cf_code(name, args) = try
+        evaluate_closed_function(name, args); ""
+    catch e
+        e isa ClosedFunctionError || rethrow()
+        e.code
+    end
+    for xs in ([3.0, 1.0, NaN], [NaN, 1.0, 2.0], [1.0, NaN, 0.0])
+        @test cf_code("interp.searchsorted", Any[1.0, xs]) == "searchsorted_nan"
+        @test cf_code("interp.linear", Any[[1.0, 2.0, 3.0], xs, 1.0]) == "interp_nan_in_axis"
+        @test cf_code("interp.bilinear",
+                      Any[[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], [0.0, 1.0], xs, 0.5, 1.0]) ==
+              "interp_nan_in_axis"
+    end
+    @test cf_code("interp.searchsorted", Any[1.0, [3.0, 1.0, 2.0]]) == "searchsorted_non_monotonic"
+end
+
+# esm-spec §9.2 "When the argument checks run" and §9.5.5 "When the table checks
+# run" (ruling Q-106): every `tests/invalid/closed_fn_*.esm` and
+# `tests/invalid/function_table_*.esm` is schema-valid and pinned
+# `resolver_only` with a `resolver_error_code`, the `enum_duplicate_value.esm`
+# convention. Load raises that code; `validate()` on the same document (coerced
+# without the load-time check, as a document built in memory would be) reports
+# it as a structural error; and `validate_path` renders the load failure as an
+# invalid verdict carrying the code.
+@testset "closed-function and function-table checks at load (esm-spec §9.2, §9.5.5)" begin
+    invalid_dir = joinpath(_CF_REPO_ROOT, "tests", "invalid")
+    pins = JSON3.read(read(joinpath(invalid_dir, "expected_errors.json"), String))
+    files = sort([f for f in readdir(invalid_dir)
+                  if endswith(f, ".esm") &&
+                     (startswith(f, "closed_fn_") || startswith(f, "function_table_"))])
+    # A missing fixture set is a failure, not a vacuous pass.
+    @test length(files) >= 30
+    for f in files
+        @testset "$(f)" begin
+            pin = pins[Symbol(f)]
+            @test pin.resolver_only === true
+            @test pin.is_valid === false
+            expected = String(pin.resolver_error_code)
+            path = joinpath(invalid_dir, f)
+            code = try
+                load_path(path); ""
+            catch e
+                (e isa ClosedFunctionError || e isa EarthSciAST.TableLookupError) || rethrow()
+                e.code
+            end
+            @test code == expected
+            mem = EarthSciAST.coerce_esm_file(JSON3.read(read(path, String), Dict{String,Any}))
+            result = validate(mem)
+            @test !result.is_valid
+            @test any(e -> e.error_type == expected, result.structural_errors)
+            @test any(e -> e.error_type == expected,
+                      EarthSciAST.validate_closed_functions_and_tables(mem))
+            vp = EarthSciAST.validate_path(path)
+            @test !vp.is_valid
+            @test any(e -> e.error_type == expected, vp.structural_errors)
+        end
+    end
+end
+
+# Ruling Q-108 (1): `xs = []` is a valid rank-1 searchsorted table; every query,
+# a NaN one included, returns 1 — at load, through the registry, and through
+# the tree-walk build a document goes through.
+@testset "empty searchsorted xs (esm-spec §9.2, ruling Q-108)" begin
+    @test evaluate_closed_function("interp.searchsorted", Any[2.0, Any[]]) == 1
+    @test evaluate_closed_function("interp.searchsorted", Any[NaN, Float64[]]) == 1
+    @test _cf_load_check_code("interp.searchsorted", Any[2.0, Any[]]) == ""
+end
+
+# esm-spec §9.2: a `fn` node inside an expression-template body is checked where
+# the template is applied, on the arguments the expansion gives it — never in
+# the body, whose `ax` is only a parameter there.
+@testset "interp.* call in a template body is checked at the application (esm-spec §9.2)" begin
+    doc(ax) = """{"esm":"1.0.0","metadata":{"name":"T","description":"d","authors":["a"]},
+     "models":{"M":{"expression_templates":{"lin":{"params":["ax","q"],
+       "body":{"op":"fn","name":"interp.linear","args":[{"op":"const","args":[],"value":[1.0,2.0]},"ax","q"]}}},
+      "variables":{"y":{"type":"unknown","units":"1"},"x":{"type":"parameter","units":"1","default":0.5}},
+      "equations":[{"lhs":"y","rhs":{"op":"apply_expression_template","args":[],"name":"lin",
+         "bindings":{"ax":{"op":"const","args":[],"value":$ax},"q":"x"}}}]}}}"""
+    code(ax) = try
+        load_string(doc(ax)); ""
+    catch e
+        e isa ClosedFunctionError || rethrow()
+        e.code
+    end
+    @test code("[0.0, 1.0]") == ""
+    @test code("[1.0, 0.0]") == "interp_non_monotonic_axis"
+    @test code("[0.0]") == "interp_axis_too_short"
+    @test code("[[0.0, 1.0], [2.0, 3.0]]") == "interp_axis_not_const"
 end

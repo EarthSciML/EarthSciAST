@@ -543,26 +543,8 @@ impl ModelVariable {
     /// the array form, then the site (`/when`, `/expression`,
     /// `/from/unit_conversion`).
     pub fn for_each_expression_at(&self, f: &mut impl FnMut(&Expr, &str)) {
-        let Some(spec) = &self.update else { return };
-        let indexed = matches!(spec, ParameterUpdateSpec::Several(_));
-        for (i, rule) in spec.rules().iter().enumerate() {
-            let rule_path = if indexed {
-                format!("/{i}")
-            } else {
-                String::new()
-            };
-            if let Some(when) = rule.when() {
-                f(when, &format!("{rule_path}/when"));
-            }
-            let Some(value) = rule.value() else { continue };
-            if let Some(expr) = &value.expression {
-                f(expr, &format!("{rule_path}/expression"));
-            }
-            if let Some(UnitConversion::Expression(expr)) =
-                value.from.as_ref().and_then(|b| b.unit_conversion.as_ref())
-            {
-                f(expr, &format!("{rule_path}/from/unit_conversion"));
-            }
+        if let Some(spec) = &self.update {
+            spec.for_each_expression_at(f);
         }
     }
 
@@ -749,6 +731,33 @@ pub enum ParameterUpdateSpec {
 }
 
 impl ParameterUpdateSpec {
+    /// The expression sites of these rules with their JSON-pointer suffixes
+    /// relative to `update`; see [`ModelVariable::for_each_expression_at`].
+    /// Shared with the reaction-system [`crate::Parameter`], whose `update` is
+    /// the same union.
+    pub fn for_each_expression_at(&self, f: &mut impl FnMut(&Expr, &str)) {
+        let indexed = matches!(self, ParameterUpdateSpec::Several(_));
+        for (i, rule) in self.rules().iter().enumerate() {
+            let rule_path = if indexed {
+                format!("/{i}")
+            } else {
+                String::new()
+            };
+            if let Some(when) = rule.when() {
+                f(when, &format!("{rule_path}/when"));
+            }
+            let Some(value) = rule.value() else { continue };
+            if let Some(expr) = &value.expression {
+                f(expr, &format!("{rule_path}/expression"));
+            }
+            if let Some(UnitConversion::Expression(expr)) =
+                value.from.as_ref().and_then(|b| b.unit_conversion.as_ref())
+            {
+                f(expr, &format!("{rule_path}/from/unit_conversion"));
+            }
+        }
+    }
+
     /// The rules, in declaration order. The single form yields a one-element
     /// slice, so every consumer reads one shape.
     pub fn rules(&self) -> &[ParameterUpdate] {

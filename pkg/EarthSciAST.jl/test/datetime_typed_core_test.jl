@@ -127,6 +127,17 @@ end
             kj = ESM._fn_typed_core_kernel(spj.id)
             @test kj(t) === ESM._fn_typed_core_call(spj.id, t)
         end
+        # Where `core` raises `closed_function_overflow` (a non-finite `t`, or a
+        # year outside Int32) the kernel answers NaN — the Rust tape's answer —
+        # never an unchecked number, since a compiled lane cannot raise.
+        for t in (1.0e17, -1.0e17, NaN, Inf, -Inf)
+            for name in ("datetime.year", "datetime.hour", "datetime.is_leap_year",
+                         "datetime.julian_day")
+                sp = ESM._fn_typed_core_spec(name)
+                @test isnan(ESM._fn_typed_core_kernel(sp.id)(t))
+                @test_throws ESM.ClosedFunctionError ESM._fn_typed_core_call(sp.id, t)
+            end
+        end
         # An id outside the table is a loud registry error, not a bounds crash.
         @test_throws ESM.ClosedFunctionError ESM._fn_typed_core_kernel(0)
         @test_throws ESM.ClosedFunctionError ESM._fn_typed_core_kernel(99)

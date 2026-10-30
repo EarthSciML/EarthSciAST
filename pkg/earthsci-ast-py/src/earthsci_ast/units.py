@@ -518,7 +518,9 @@ _UNIT_PARSE_ERRORS: tuple[type[BaseException], ...] = (
 
 #: Unicode → ASCII rewrites applied BEFORE parsing (esm-spec §4.8.2). A pure
 #: SPELLING normalization: no unit is invented, every target is already a table
-#: entry. Longest-first so ``°C`` wins over a bare ``°``.
+#: entry. A degree sign is rewritten ONLY as part of ``°C`` or ``°F``: a bare
+#: ``°`` (or ``°K``) is not in the §4.8.2 table, so it stays an unexpected
+#: character and the string does not resolve.
 #:
 #: Spelled with explicit ``\u`` ESCAPES, never with the literal glyph. Several of
 #: these characters have a visually identical twin at another codepoint
@@ -532,8 +534,6 @@ _UNIT_PARSE_ERRORS: tuple[type[BaseException], ...] = (
 _UNICODE_REWRITES: tuple[tuple[str, str], ...] = (
     ("\u00b0C", "degC"),
     ("\u00b0F", "degF"),
-    ("\u00b0K", "K"),
-    ("\u00b0", "deg"),  # bare DEGREE SIGN
     ("\u00b5", "u"),  # MICRO SIGN
     ("\u03bc", "u"),  # GREEK SMALL LETTER MU
     ("\u00b7", "*"),  # MIDDLE DOT
@@ -615,17 +615,24 @@ def normalize_unit_string(unit: str) -> str:
 # admissible.
 # ---------------------------------------------------------------------------
 
+#: The §4.8.2 token rules. A RUN is a maximal sequence of ``[A-Za-z0-9_]``: a
+#: run of digits alone (optionally ``.`` and a second digit-only run) is a
+#: number, every other run is ONE symbol -- `s1`, `1s`, `kgm` are never split
+#: into a table key and a remainder. The lookaheads make the number branch
+#: refuse a digit run that continues into identifier characters (`1s`, `1e3`),
+#: which then falls through to the symbol branch. There is no `+` token and no
+#: exponent notation; whitespace is ASCII only.
 _TOKEN_RE = re.compile(
     r"""
-      (?P<space>\s+)
+      (?P<space>[ \t\r\n]+)
     | (?P<pow>\*\*|\^)
     | (?P<mul>\*)
     | (?P<div>/)
     | (?P<lpar>\()
     | (?P<rpar>\))
-    | (?P<sign>[+-])
-    | (?P<number>\d+(?:\.\d*)?(?:[eE][+-]?\d+)?|\.\d+(?:[eE][+-]?\d+)?)
-    | (?P<symbol>%|[A-Za-z_][A-Za-z0-9_]*)
+    | (?P<sign>-)
+    | (?P<number>[0-9]+(?:\.[0-9]+)?(?![A-Za-z0-9_.]))
+    | (?P<symbol>%|[A-Za-z0-9_]+)
     """,
     re.VERBOSE,
 )
@@ -695,23 +702,26 @@ class _UnitGrammar:
         if self.peek() == "lpar":
             # A rational exponent: `(1/2)`, `(-3/2)`.
             self.take()
-            self.signed_number()
+            self.signed_number(integer_only=True)
             if self.peek() != "div":
                 self.fail("a parenthesised exponent must be a rational `(p/q)`")
             self.take()
-            self.signed_number()
+            self.signed_number(integer_only=True)
             if self.peek() != "rpar":
                 self.fail("unclosed exponent '('")
             self.take()
             return
         self.signed_number()
 
-    def signed_number(self) -> None:
+    def signed_number(self, integer_only: bool = False) -> None:
         if self.peek() == "sign":
             self.take()
         if self.peek() != "number":
             self.fail("an exponent must be an integer, a decimal, or a rational `(p/q)`")
-        self.take()
+        _, text = self.take()
+        if integer_only and "." in text:
+            # `(p/q)` is a ratio of INTEGERS (esm-spec 4.8.2): `m^(1.5/2)` is out.
+            self.fail("a rational exponent is spelled ^(p/q) with integers p and q")
 
     def atom(self) -> None:
         kind = self.peek()
@@ -736,7 +746,9 @@ class _UnitGrammar:
             # only spelling of that unit. Python already refused it, but only
             # DOWNSTREAM in pint ("Unit expression cannot have a scaling
             # factor"), which named neither the rule nor the fix.
-            if float(text) != 1.0:
+            # The atom is the LITERAL `1`: `01` and `1.0` are scaling factors
+            # too, with the same diagnostic (esm-spec 4.8.2).
+            if text != "1":
                 self.fail(
                     "a number other than 1 is a scaling factor, not a unit (esm-spec 4.8.2); a rational exponent is spelled ^(p/q)"
                 )
@@ -778,8 +790,13 @@ def parse_unit(unit: str | None):
         raise ImportError("pint library is required for unit parsing")
     if unit is None:
         return ureg.parse_units("")
-    text = normalize_unit_string(unit).strip()
-    if text in _DIMENSIONLESS_SPELLINGS:
+    text = normalize_unit_string(unit)
+    if text == "":
+        return ureg.parse_units("")
+    # Only "" is the empty unit: a whitespace-only string has no tokens and is
+    # rejected by the grammar below, not read as dimensionless (esm-spec 4.8.2).
+    text = text.strip(" \t\r\n")
+    if text in _DIMENSIONLESS_SPELLINGS and text:
         return ureg.parse_units("")
     # Gate on the contract grammar + table FIRST, so the accepted string set is
     # the spec's rather than pint's.
@@ -1531,6 +1548,13 @@ class UnitValidator:
         target = self.scoped_units.get(name)
         return target.unit if target is not None else None
 
+    def _describe_side(self, expr: Expr, typed: _Typed) -> str:
+        """``typed`` for a diagnostic: its dimension and scale, led by the
+        declared unit when ``expr`` is a bare name that has one."""
+        text = f"dimension {typed.dim} at scale {typed.scale}"
+        unit = self._unit_of(expr) if isinstance(expr, str) else None
+        return f"'{expr}' [{unit}], {text}" if unit is not None else text
+
     def validate_equation(self, equation, equation_id: str) -> UnitValidationResult:
         """
         Validate dimensional consistency of an equation.
@@ -1566,8 +1590,10 @@ class UnitValidator:
                         rhs_units=str(rhs.dim),
                     )
             elif lhs is not None and rhs is not None:
-                lhs, rhs = _angle_meets_number(lhs, rhs)
-                if not self._dimensions_compatible(lhs.dim, rhs.dim):
+                # The angle-stripped pair is compared; the diagnostic reports
+                # each side as written (esm-spec §4.8.3).
+                lhs_cmp, rhs_cmp = _angle_meets_number(lhs, rhs)
+                if not self._dimensions_compatible(lhs_cmp.dim, rhs_cmp.dim):
                     result.add_error(
                         UNIT_FINDING_DIMENSIONAL_MISMATCH,
                         f"Equation {equation_id}: Dimensional mismatch - "
@@ -1575,13 +1601,13 @@ class UnitValidator:
                         lhs_units=str(lhs.dim),
                         rhs_units=str(rhs.dim),
                     )
-                elif lhs.scale != rhs.scale:
+                elif lhs_cmp.scale != rhs_cmp.scale:
                     # Same dimension, different unit (esm-spec §4.8.3).
                     result.add_error(
                         UNIT_FINDING_DIMENSIONAL_MISMATCH,
                         f"Equation {equation_id}: Scale mismatch - "
-                        f"LHS has dimension {lhs.dim} at scale {lhs.scale}, "
-                        f"RHS at scale {rhs.scale}",
+                        f"LHS has {self._describe_side(equation.lhs, lhs)}, "
+                        f"RHS has {self._describe_side(equation.rhs, rhs)}",
                         lhs_units=str(lhs.dim),
                         rhs_units=str(rhs.dim),
                     )
@@ -1816,8 +1842,19 @@ class UnitValidator:
             and any(_is_pure_angle(t.dim) for t in known)
         ):
             # An angle meets a pure number (esm-spec §4.8.3): the angle axis
-            # cancels, the scale is kept, and the result is a pure number.
+            # cancels, the scale is kept, and the result is a pure number. Two
+            # angles never meet a NUMBER with each other, so the angles are
+            # first held to the ordinary rule among themselves (`rad` against
+            # `sr` stays a mismatch however many pure numbers sit beside them).
+            self._require_same(op, [t for t in known if _is_pure_angle(t.dim)])
             known = [_angle_as_number(t) if _is_pure_angle(t.dim) else t for t in known]
+        return self._require_same(op, known)
+
+    def _require_same(self, op: str, known: list[_Typed]) -> _Typed | None:
+        """Require every operand of ``known`` to have the first one's dimension
+        AND exact scale, and return that first operand (``None`` if empty)."""
+        if not known:
+            return None
         first = known[0]
         for typed in known[1:]:
             if not self._dimensions_compatible(first.dim, typed.dim):

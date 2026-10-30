@@ -300,12 +300,12 @@
     {
       "id": "conf.5.26.enum-values-unique",
       "section": "5.26",
-      "quote": "within one enum, values MUST be unique, and `0` is a value like any other, so two symbols MAY NOT both map to `0`",
+      "quote": "within one enum, values MUST be unique, and `0` is a value like any other, so two symbols MUST NOT both map to `0`. A binding MUST reject a duplicate at load time with diagnostic `enum_duplicate_value`",
       "class": "semantic",
       "phase": 1,
       "area": "schema",
-      "note": "A document in which two members of one enum share a value (0 included) is rejected at load; values may coincide across different enums.",
-      "concern": "'MAY NOT' is not an RFC 2119 keyword and can be read as 'is permitted not to'; and no diagnostic code is named for the duplicate-value rejection (5.26.5 records three bindings accepting duplicates silently)."
+      "note": "A document in which two members of one enum share a value (0 included) is rejected at load with enum_duplicate_value; values may coincide across different enums.",
+      "concern": "'MAY NOT' is not an RFC 2119 keyword and can be read as 'is permitted not to'; and no diagnostic code is named for the duplicate-value rejection (5.26.5 records three bindings accepting duplicates silently). Resolved 2026-10-26 (Q-2): MUST NOT, code enum_duplicate_value."
     },
     {
       "id": "conf.5.26.3.binding-must-show",
@@ -323,6 +323,15 @@
       "phase": 1,
       "area": "schema",
       "note": "Restatement of conf.5.26.enum-values-unique (enforced by loaders, not the schema); same property."
+    },
+    {
+      "id": "conf.5.26.5.duplicate-code",
+      "section": "5.26.5",
+      "quote": "lives in each binding's loader, and every binding MUST raise it as `enum_duplicate_value`",
+      "class": "semantic",
+      "phase": 1,
+      "area": "schema",
+      "note": "Restatement of conf.5.26.enum-values-unique with its code: the duplicate is rejected on the enums block, referenced or not."
     },
     {
       "id": "conf.5.27.answer-at-sampled-state",

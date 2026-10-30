@@ -1,0 +1,77 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "FunctionTable_lookup_missing_axis",
+    "description": "The `table_lookup` on the 2-axis table `T` binds only `x`, omitting `y`.",
+    "authors": [
+      "EarthSciML"
+    ],
+    "created": "2026-10-27T00:00:00Z"
+  },
+  "function_tables": {
+    "T": {
+      "axes": [
+        {
+          "name": "x",
+          "values": [
+            0,
+            1
+          ]
+        },
+        {
+          "name": "y",
+          "values": [
+            0,
+            1
+          ]
+        }
+      ],
+      "interpolation": "bilinear",
+      "data": [
+        [
+          1,
+          2
+        ],
+        [
+          3,
+          4
+        ]
+      ]
+    }
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "y": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        },
+        "x": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.5
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "y"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "table_lookup",
+            "table": "T",
+            "axes": {
+              "x": "x"
+            },
+            "args": []
+          }
+        }
+      ]
+    }
+  }
+}

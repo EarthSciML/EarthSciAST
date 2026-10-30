@@ -697,7 +697,9 @@ const SUPERSCRIPT_CLASS = `[${SUPERSCRIPT_DIGITS}${SUPERSCRIPT_MINUS}]`
  *   - MIDDOT `·` (U+00B7) and DOT OPERATOR `⋅` (U+22C5) → `*`, the two spellings
  *     of multiplication the corpus uses (`J/(kg·K)`, `kg⋅m/s`).
  *   - U+00B5 MICRO SIGN and U+03BC GREEK SMALL LETTER MU → `u` (`μg` → `ug`)
- *   - `°C` / `°F` / `°K` → `degC` / `degF` / `K`, and a bare `°` → `deg`
+ *   - `°C` / `°F` → `degC` / `degF`. Nothing else involving a degree sign is
+ *     rewritten: a bare `°` (or `°K`) stays an unexpected character and the
+ *     string does not resolve (esm-spec §4.8.2 maps only these two).
  *   - `Ω` (U+03A9 / U+2126) → `Ohm`
  *
  * Runs before the scanner, which only recognizes ASCII identifier characters —
@@ -711,8 +713,6 @@ function normalizeUnitString(s: string): string {
   return s
     .replace(/°C/g, 'degC')
     .replace(/°F/g, 'degF')
-    .replace(/°K/g, 'K')
-    .replace(/°/g, 'deg')
     .replace(/[µμ]/g, 'u')
     .replace(/[ΩΩ]/g, 'Ohm')
     .replace(/[·⋅]/g, '*')
@@ -736,9 +736,18 @@ function normalizeUnitString(s: string): string {
  * ```
  *   unit     := term ( ('*' | '/')? term )*
  *   term     := atom ( ('^' | '**') exponent )?
- *   exponent := integer | decimal | '(' integer '/' integer ')'
+ *   exponent := '-'? (integer | decimal) | '(' '-'? integer '/' '-'? integer ')'
  *   atom     := '1' | symbol | '(' unit ')'
  * ```
+ *
+ * TOKENS (esm-spec §4.8.2). A RUN is a maximal sequence of `[A-Za-z0-9_]`. A run
+ * of digits alone, optionally followed by `.` and a second digit-only run, is a
+ * NUMBER; every other run is ONE symbol, which must be a table key as a whole:
+ * `s1`, `1s` and `kgm` are never split into a key and a remainder, and `1e3` is a
+ * symbol, not exponent notation. `%` is a one-character symbol whatever is
+ * adjacent (`%h` is `%`·`h`). The only numeric atom is the literal `1` (`01` and
+ * `1.0` are scaling factors). Exponents take no `+` sign. Whitespace is ASCII
+ * space, tab, CR and LF.
  *
  * EXPONENTS ARE RATIONAL, not integral: `1/s^0.5` (an SDE noise intensity) and
  * `m^(1/2)` are legitimate corpus units, and a dimension vector may therefore
@@ -756,19 +765,20 @@ function normalizeUnitString(s: string): string {
  * Python/pint spelling, e.g. the corpus's `Pa*m**3`).
  *
  * The empty string, `"1"` and `"dimensionless"` are the dimensionless unit.
- * Non-ASCII spellings (`μg`, `°C`) are normalized first — see
+ * Only the EMPTY string is the empty unit: a whitespace-only string has no
+ * tokens and does not resolve. Non-ASCII spellings (`μg`, `°C`) are normalized first — see
  * {@link normalizeUnitString}.
  *
  * @throws {UnitConversionError} on unknown unit names, malformed tokens,
  *   unbalanced parentheses, or trailing input.
  */
 export function parseUnitForConversion(unitStr: string): ParsedUnit {
-  const trimmed = (unitStr ?? '').trim()
-  if (trimmed === '' || trimmed === 'dimensionless' || trimmed === '1') {
+  const text = unitStr ?? ''
+  if (text === '') {
     return { dims: {}, scale: 1, exact: ExactScale.one() }
   }
 
-  const parser = new UnitParser(normalizeUnitString(trimmed))
+  const parser = new UnitParser(normalizeUnitString(text))
   const result = parser.parseUnit()
   parser.expectEnd()
 
@@ -833,11 +843,13 @@ function powerParsed(u: ParsedUnit, exp: number): ParsedUnit {
   return { dims, scale: Math.pow(intervalOf(u).scale, exp), exact: u.exact.power(exp) }
 }
 
-const isIdentStart = (c: string): boolean => /[A-Za-z_%]/.test(c)
-const isIdentCont = (c: string): boolean => /[A-Za-z0-9_]/.test(c)
-const isDigit = (c: string): boolean => c >= '0' && c <= '9'
+/** The §4.8.2 identifier characters; a RUN of them is one token. */
+const isIdent = (c: string | undefined): boolean => c !== undefined && /^[A-Za-z0-9_]$/.test(c)
+const isDigit = (c: string | undefined): boolean => c !== undefined && c >= '0' && c <= '9'
+const isUnitSpace = (c: string): boolean => c === ' ' || c === '\t' || c === '\r' || c === '\n'
+const allDigits = (s: string): boolean => /^[0-9]+$/.test(s)
 /** Can `c` begin an atom? The lookahead that drives implicit multiplication. */
-const startsAtom = (c: string): boolean => isIdentStart(c) || isDigit(c) || c === '('
+const startsAtom = (c: string): boolean => isIdent(c) || c === '(' || c === '%'
 
 class UnitParser {
   private pos = 0
@@ -845,7 +857,28 @@ class UnitParser {
   constructor(private readonly src: string) {}
 
   private skipSpace(): void {
-    while (this.pos < this.src.length && /\s/.test(this.src[this.pos])) this.pos++
+    while (this.pos < this.src.length && isUnitSpace(this.src[this.pos])) this.pos++
+  }
+
+  /**
+   * Scan one RUN token at `pos`: digits (optionally `.` and more digits) are a
+   * NUMBER, any other run is one symbol.
+   */
+  private scanRun(): { text: string; isNumber: boolean } {
+    const start = this.pos
+    while (this.pos < this.src.length && isIdent(this.src[this.pos])) this.pos++
+    const run = this.src.slice(start, this.pos)
+    if (!allDigits(run)) return { text: run, isNumber: false }
+    if (this.src[this.pos] === '.' && isDigit(this.src[this.pos + 1])) {
+      this.pos++
+      const frac = this.pos
+      while (this.pos < this.src.length && isIdent(this.src[this.pos])) this.pos++
+      return {
+        text: this.src.slice(start, this.pos),
+        isNumber: allDigits(this.src.slice(frac, this.pos)),
+      }
+    }
+    return { text: run, isNumber: true }
   }
 
   private peek(): string {
@@ -925,49 +958,42 @@ class UnitParser {
       return inner
     }
 
-    // A numeric atom is admissible ONLY when its value is exactly 1 -- the
-    // leading `1` of `1/s`. Any other number is a SCALING FACTOR, and a unit string
-    // denotes a UNIT, not a quantity. This is not pedantry: `(m/s)^-1/3` -- an author
-    // reaching for a rational exponent -- parses under this grammar as `((m/s)^-1)/3`,
-    // and the five bindings gave it three different meanings (magnitude dropped,
-    // magnitude retained, whole string rejected). Rejecting the scaling factor makes
-    // `^(-1/3)` the only spelling of that unit, so the same string cannot silently
-    // mean two things.
-    //
-    // Before this rule TypeScript RETAINED the magnitude here, so "1000/s" came
-    // out as 1/s scaled by 1000 while Julia read the same string as a bare 1/s.
-    if (isDigit(c)) {
-      const start = this.pos
-      while (
-        this.pos < this.src.length &&
-        (isDigit(this.src[this.pos]) || this.src[this.pos] === '.')
-      ) {
-        this.pos++
-      }
-      const text = this.src.slice(start, this.pos)
-      const value = Number(text)
-      if (!Number.isFinite(value)) {
-        throw new UnitConversionError(`Cannot parse unit "${this.src}": invalid number "${text}"`)
-      }
-      if (value !== 1) {
+    // `%` is a one-character symbol token whatever is adjacent (§4.8.2).
+    if (c === '%') {
+      this.pos++
+      return this.lookup('%')
+    }
+
+    if (!isIdent(c)) {
+      throw new UnitConversionError(
+        `Cannot parse unit "${this.src}": unexpected "${c}" at position ${this.pos}`,
+      )
+    }
+
+    const { text: name, isNumber } = this.scanRun()
+    // A numeric atom is admissible ONLY when it is the LITERAL `1` -- the
+    // leading `1` of `1/s`. Any other number (`1000`, `0.5`, and also `01` and
+    // `1.0`) is a SCALING FACTOR, and a unit string denotes a UNIT, not a
+    // quantity. This is not pedantry: `(m/s)^-1/3` -- an author reaching for a
+    // rational exponent -- parses under this grammar as `((m/s)^-1)/3`, and the
+    // five bindings gave it three different meanings (magnitude dropped,
+    // magnitude retained, whole string rejected). Rejecting the scaling factor
+    // makes `^(-1/3)` the only spelling of that unit, so the same string cannot
+    // silently mean two things.
+    if (isNumber) {
+      if (name !== '1') {
         throw new UnitConversionError(
           `Cannot parse unit "${this.src}": a number other than 1 is a scaling factor, not a unit (esm-spec 4.8.2); a rational exponent is spelled ^(p/q)`,
         )
       }
       return { dims: {}, scale: 1, exact: ExactScale.one() }
     }
+    if (name === 'dimensionless') return { dims: {}, scale: 1, exact: ExactScale.one() }
+    return this.lookup(name)
+  }
 
-    if (!isIdentStart(c)) {
-      throw new UnitConversionError(
-        `Cannot parse unit "${this.src}": unexpected "${c}" at position ${this.pos}`,
-      )
-    }
-
-    const start = this.pos
-    this.pos++
-    while (this.pos < this.src.length && isIdentCont(this.src[this.pos])) this.pos++
-    const name = this.src.slice(start, this.pos)
-
+  /** A table symbol, exactly as spelled (the table is flat: no prefixes). */
+  private lookup(name: string): ParsedUnit {
     const spec = UNIT_TABLE[name]
     if (!spec) {
       throw new UnitConversionError(`Unknown unit "${name}"`)
@@ -982,7 +1008,7 @@ class UnitParser {
   }
 
   /**
-   * exponent := integer | decimal | '(' integer '/' integer ')'
+   * exponent := '-'? (integer | decimal) | '(' '-'? integer '/' '-'? integer ')'
    *
    * A dimension exponent is RATIONAL, not integral. `1/s^0.5` is the ordinary
    * spelling of an SDE noise intensity (`tests/fixtures/sde/*.esm`), and
@@ -1000,14 +1026,14 @@ class UnitParser {
     // '(' integer '/' integer ')' — the exact-ratio spelling, e.g. `m^(1/2)`.
     if (this.peek() === '(') {
       this.pos++
-      const numerator = this.parseSignedNumber()
+      const numerator = this.parseSignedNumber(true)
       if (this.peek() !== '/') {
         throw new UnitConversionError(
           `Cannot parse unit "${this.src}": expected "/" in rational exponent at position ${this.pos}`,
         )
       }
       this.pos++
-      const denominator = this.parseSignedNumber()
+      const denominator = this.parseSignedNumber(true)
       if (this.peek() !== ')') {
         throw new UnitConversionError(
           `Cannot parse unit "${this.src}": missing ")" closing rational exponent`,
@@ -1031,32 +1057,30 @@ class UnitParser {
     return value
   }
 
-  /** A signed integer or decimal (`2`, `-1`, `0.5`, `+3`). */
-  private parseSignedNumber(): number {
+  /**
+   * An optional `-` and a NUMBER token (`2`, `-1`, `0.5`; an integer only when
+   * `integerOnly`). There is no `+` sign and no exponent notation; whitespace
+   * may follow the sign.
+   */
+  private parseSignedNumber(integerOnly = false): number {
+    let negative = false
+    if (this.peek() === '-') {
+      negative = true
+      this.pos++
+    }
     this.skipSpace()
     const start = this.pos
-    if (this.pos < this.src.length && (this.src[this.pos] === '-' || this.src[this.pos] === '+')) {
-      this.pos++
-    }
-    const digitsStart = this.pos
-    while (
-      this.pos < this.src.length &&
-      (isDigit(this.src[this.pos]) || this.src[this.pos] === '.')
-    ) {
-      this.pos++
-    }
-    if (this.pos === digitsStart) {
+    if (!isDigit(this.src[this.pos])) {
       throw new UnitConversionError(
         `Cannot parse unit "${this.src}": expected a numeric exponent at position ${start}`,
       )
     }
-    const value = Number(this.src.slice(start, this.pos))
-    if (!Number.isFinite(value)) {
-      throw new UnitConversionError(
-        `Cannot parse unit "${this.src}": invalid exponent "${this.src.slice(start, this.pos)}"`,
-      )
+    const { text, isNumber } = this.scanRun()
+    if (!isNumber || (integerOnly && text.includes('.'))) {
+      throw new UnitConversionError(`Cannot parse unit "${this.src}": invalid exponent "${text}"`)
     }
-    return value
+    const value = Number(text)
+    return negative ? -value : value
   }
 }
 

@@ -2158,7 +2158,10 @@ impl<'m> TapeBuilder<'m> {
     //
     // That is possible because the spec's own recipe — ONE floored divmod of
     // `t_utc` by 86400, then exact integer arithmetic on the resulting (days,
-    // seconds-of-day) pair — carries in `f64` with no rounding at all. Every
+    // seconds-of-day) pair — carries in `f64` with no rounding at all. The
+    // divmod is taken of `floor(t_utc)`, which is exact and gives the same
+    // pair (86400 is an integer), so the fields floor toward −∞ (ruling Q-3)
+    // and the time of day is never rounded up into the next day. Every
     // intermediate is an integer well inside binary64's 2^53 exact-integer
     // range, where `+`, `-` and `*` are exact; and `floor(a / b)` for integer
     // `a`, `b` is the integer quotient whenever `|a| << 2^52`, because the
@@ -2175,9 +2178,12 @@ impl<'m> TapeBuilder<'m> {
     // one short. See `dt_floor_div`.
     //
     // The reference reproduced step for step is `crate::registered_functions`
-    // (Hinnant's `civil_from_days` for the calendar, Fliegel-van Flandern for
-    // the Julian day), because that is what the per-cell oracle evaluates for
-    // a `fn` node and what a taped rule has to agree with bit for bit.
+    // (Hinnant's `civil_from_days` for the calendar, the linear day number for
+    // the Julian Date), because that is what the per-cell oracle evaluates for
+    // a `fn` node and what a taped rule has to agree with bit for bit. Where
+    // the reference raises `closed_function_overflow` — a NaN or ±Inf `t_utc`,
+    // or a year outside Int32, for every entry alike (esm-spec §9.2) — the
+    // oracle's `eval_fn` answers NaN, and so does the tape (`dt_in_range`).
     //
     // DOMAIN: the agreement holds wherever the reference's own `i64` pipeline
     // is meaningful, i.e. for `t_utc` whose day count stays far inside 2^52.
@@ -2513,16 +2519,25 @@ impl<'m> TapeBuilder<'m> {
         label: &str,
         rank: usize,
     ) -> LResult<(Vec<usize>, Vec<f64>)> {
+        // esm-spec §9.2 names the refusal: `interp_table_not_const` for the
+        // `table`, `interp_axis_not_const` for an axis and for
+        // `interp.searchsorted`'s `xs`. The tape decides it first, before the
+        // registry probe looks at any entry (NaN, monotonicity).
+        let code = if label == "table" {
+            crate::diagnostic::codes::INTERP_TABLE_NOT_CONST
+        } else {
+            crate::diagnostic::codes::INTERP_AXIS_NOT_CONST
+        };
         let Expr::Operator(n) = arg else {
             bail_tape!(
                 "op: closed function `{name}`'s `{label}` argument is not an inline \
-                 `const` array (esm-spec §9.2 requires a literal `const`)"
+                 `const` array (esm-spec §9.2 requires a literal `const`): {code}"
             );
         };
         if n.op != "const" {
             bail_tape!(
                 "op: closed function `{name}`'s `{label}` argument is a `{}` node, not \
-                 an inline `const` array (esm-spec §9.2)",
+                 an inline `const` array (esm-spec §9.2): {code}",
                 n.op
             );
         }
@@ -2534,7 +2549,7 @@ impl<'m> TapeBuilder<'m> {
             }
             _ => bail_tape!(
                 "op: closed function `{name}`'s `{label}` argument is not a rank-{rank} \
-                 `const` array"
+                 `const` array: {code}"
             ),
         }
     }
@@ -2564,10 +2579,18 @@ impl<'m> TapeBuilder<'m> {
     /// dead-code pass, so an unconditional seconds-of-day would be six
     /// instructions the interpreter runs on every call of `datetime.year`.
     fn lower_datetime(&mut self, name: &str, t: LV) -> LResult<LV> {
-        let day = self.dt_day_count(t.clone())?;
+        let whole = self.emit_un(UnCode::Floor, t.clone());
+        let day = self.dt_day_count(whole.clone())?;
+        let in_range = self.dt_in_range(day.clone())?;
+        let value = self.lower_datetime_field(name, t, whole, day)?;
+        self.dt_select(in_range, value, LV::Lit(f64::NAN))
+    }
+
+    /// The field [`Self::lower_datetime`] guards, before the guard.
+    fn lower_datetime_field(&mut self, name: &str, t: LV, whole: LV, day: LV) -> LResult<LV> {
         match name {
             "datetime.hour" | "datetime.minute" | "datetime.second" => {
-                let sec = self.dt_sec_in_day(t, day)?;
+                let sec = self.dt_sec_of_day(whole, day)?;
                 let (hour, minute, second) = self.dt_hms(sec)?;
                 Ok(match name {
                     "datetime.hour" => hour,
@@ -2576,8 +2599,11 @@ impl<'m> TapeBuilder<'m> {
                 })
             }
             "datetime.julian_day" => {
-                let sec = self.dt_sec_in_day(t, day.clone())?;
-                self.dt_julian_day(day, sec)
+                let sec = self.dt_sec_of_day(whole.clone(), day.clone())?;
+                // `t − floor(t)`, as the reference rounds it (exact except
+                // for −0.5 < t < 0).
+                let frac = self.emit_bin(BinCode::Sub, t, whole)?;
+                self.dt_julian_day(day, sec, frac)
             }
             _ => {
                 let (y, m, d) = self.dt_civil_from_days(day)?;
@@ -2606,15 +2632,6 @@ impl<'m> TapeBuilder<'m> {
             return Ok(if c != 0.0 { a } else { b });
         }
         self.emit_select(cond, a, b)
-    }
-
-    /// `trunc(q)` — round toward zero, which is what Rust's `as i64` and its
-    /// integer `/` do, and what `f64::trunc` does in the reference.
-    fn dt_trunc(&mut self, q: LV) -> LResult<LV> {
-        let neg = self.dt_op(BinCode::Lt, q.clone(), 0.0)?;
-        let up = self.emit_un(UnCode::Ceil, q.clone());
-        let down = self.emit_un(UnCode::Floor, q);
-        self.dt_select(neg, up, down)
     }
 
     /// `floor(a / k)` — floored integer division (`k > 0`), with the quotient
@@ -2661,8 +2678,7 @@ impl<'m> TapeBuilder<'m> {
     }
 
     /// `a / k` rounded TOWARD ZERO — Rust's `i64` division, which the
-    /// Fliegel-van Flandern formula depends on (using a floored division for
-    /// its `(m - 14) / 12` term would shift January and February by a day).
+    /// reference's hour/minute/second split uses.
     ///
     /// Built on [`Self::dt_floor_div`]'s repaired quotient rather than on a raw
     /// one, for the reason spelled out there, and then stepped back toward zero
@@ -2680,42 +2696,36 @@ impl<'m> TapeBuilder<'m> {
         self.dt_select(step, up, q)
     }
 
-    /// The reference casts the day count and the truncated seconds-of-day to
-    /// `i64` before doing any integer work, and Rust's float-to-int cast
-    /// saturates: NaN becomes 0. So `datetime.year(NaN)` there is 1970, not
-    /// NaN. Reproduce that — otherwise a NaN state during a rejected solver
-    /// step would be the one input on which the tape and the oracle disagree.
-    fn dt_nan_to_zero(&mut self, v: LV) -> LResult<LV> {
-        let is_nan = self.emit_bin(BinCode::Ne, v.clone(), v.clone())?;
-        self.dt_select(is_nan, LV::Lit(0.0), v)
+    /// `1.0` when the reference returns a value rather than
+    /// `closed_function_overflow`: the day count lies in the Int32 years
+    /// (`DAY_OF_INT32_MIN_YEAR <= day < DAY_OF_INT32_YEAR_END`, the
+    /// reference's own test). A NaN or ±Inf `t_utc` fails it too, with no
+    /// separate check: `floor(NaN)` stays NaN through `dt_floor_div`, ±Inf
+    /// stays ±Inf, and every comparison with those is false (or out of range).
+    fn dt_in_range(&mut self, day: LV) -> LResult<LV> {
+        use crate::registered_functions::{DAY_OF_INT32_MIN_YEAR, DAY_OF_INT32_YEAR_END};
+        let lo = self.dt_op(BinCode::Ge, day.clone(), DAY_OF_INT32_MIN_YEAR as f64)?;
+        let hi = self.dt_op(BinCode::Lt, day, DAY_OF_INT32_YEAR_END as f64)?;
+        self.emit_bin(BinCode::And, lo, hi)
     }
 
     /// The day half of `floor_div_mod` — the ONE floored divmod by 86400 the
-    /// spec allows before all the arithmetic goes integer.
-    fn dt_day_count(&mut self, t: LV) -> LResult<LV> {
-        self.dt_floor_div(t, 86400.0)
+    /// spec allows before all the arithmetic goes integer — of the whole
+    /// second `floor(t_utc)`.
+    fn dt_day_count(&mut self, whole: LV) -> LResult<LV> {
+        self.dt_floor_div(whole, 86400.0)
     }
 
-    /// The seconds-of-day half, in `[0, 86400)`.
-    fn dt_sec_in_day(&mut self, t: LV, day: LV) -> LResult<LV> {
+    /// The whole second of the day, in `[0, 86400)`: the exact remainder of the
+    /// same divmod, so it needs no re-mapping and always agrees with the day.
+    fn dt_sec_of_day(&mut self, whole: LV, day: LV) -> LResult<LV> {
         let off = self.dt_op(BinCode::Mul, day, 86400.0)?;
-        let sec = self.emit_bin(BinCode::Sub, t, off)?;
-        // The reference re-maps a `sec` that floating-point rounding pushed out
-        // of [0, 86400) and deliberately leaves the day count alone; mirror
-        // both halves, including the `else if` (so the two adjustments cannot
-        // both apply).
-        let hi = self.dt_op(BinCode::Ge, sec.clone(), 86400.0)?;
-        let lo = self.dt_op(BinCode::Lt, sec.clone(), 0.0)?;
-        let down = self.dt_op(BinCode::Sub, sec.clone(), 86400.0)?;
-        let up = self.dt_op(BinCode::Add, sec.clone(), 86400.0)?;
-        let inner = self.dt_select(lo, up, sec)?;
-        self.dt_select(hi, down, inner)
+        self.emit_bin(BinCode::Sub, whole, off)
     }
 
     /// Hinnant's `civil_from_days`: a day count since 1970-01-01 to
     /// `(year, month, day)` on the proleptic-Gregorian calendar.
     fn dt_civil_from_days(&mut self, day_count: LV) -> LResult<(LV, LV, LV)> {
-        let day_count = self.dt_nan_to_zero(day_count)?;
         let z = self.dt_op(BinCode::Add, day_count, 719468.0)?;
         // The reference spells `era` as `(z >= 0 ? z : z - 146096) / 146097`
         // with C's truncating `/`, which is the standard way to write
@@ -2762,12 +2772,11 @@ impl<'m> TapeBuilder<'m> {
         Ok((y, m, d))
     }
 
-    /// `(hour, minute, second)` from the seconds-of-day. The reference
-    /// truncates the fractional second away first, then does `i64` `/` and `%`
-    /// — both round toward zero.
-    fn dt_hms(&mut self, sec_in_day: LV) -> LResult<(LV, LV, LV)> {
-        let s = self.dt_trunc(sec_in_day)?;
-        let s = self.dt_nan_to_zero(s)?;
+    /// `(hour, minute, second)` from the whole second of the day. The
+    /// reference does `i64` `/` and `%` — both round toward zero, and the
+    /// operand is never negative.
+    fn dt_hms(&mut self, sec_of_day: LV) -> LResult<(LV, LV, LV)> {
+        let s = sec_of_day;
         let hour = self.dt_trunc_div(s.clone(), 3600.0)?;
         let whole_hours = self.dt_op(BinCode::Mul, hour.clone(), 3600.0)?;
         let rem = self.emit_bin(BinCode::Sub, s.clone(), whole_hours)?; // s % 3600
@@ -2822,42 +2831,18 @@ impl<'m> TapeBuilder<'m> {
         self.emit_bin(BinCode::Sub, doy, shift)
     }
 
-    /// Fliegel-van Flandern (1968) Julian Day Number on the date part, plus the
-    /// fractional day measured from noon UTC. The one floating-point divide is
-    /// the final `/ 86400`, which is where the spec's "<= 1 ulp" allowance for
-    /// this entry (and only this entry) comes from.
-    fn dt_julian_day(&mut self, day_count: LV, sec_in_day: LV) -> LResult<LV> {
-        let (y, m, d) = self.dt_civil_from_days(day_count)?;
-        // `a = (m - 14) / 12` truncated. With `m` in [1, 12] the numerator is
-        // in [-13, -2], so the quotient is -1 exactly for January and February
-        // and 0 otherwise — one select instead of a division.
-        let jan_feb = self.dt_op(BinCode::Le, m.clone(), 2.0)?;
-        let a = self.dt_select(jan_feb, LV::Lit(-1.0), LV::Lit(0.0))?;
-        // (1461 * (y + 4800 + a)) / 4
-        let t1 = self.dt_op(BinCode::Add, y.clone(), 4800.0)?;
-        let t1 = self.emit_bin(BinCode::Add, t1, a.clone())?;
-        let t1 = self.dt_op(BinCode::Mul, t1, 1461.0)?;
-        let t1 = self.dt_trunc_div(t1, 4.0)?;
-        // (367 * (m - 2 - 12*a)) / 12
-        let t2 = self.dt_op(BinCode::Sub, m, 2.0)?;
-        let a12 = self.dt_op(BinCode::Mul, a.clone(), 12.0)?;
-        let t2 = self.emit_bin(BinCode::Sub, t2, a12)?;
-        let t2 = self.dt_op(BinCode::Mul, t2, 367.0)?;
-        let t2 = self.dt_trunc_div(t2, 12.0)?;
-        // (3 * ((y + 4900 + a) / 100)) / 4
-        let t3 = self.dt_op(BinCode::Add, y, 4900.0)?;
-        let t3 = self.emit_bin(BinCode::Add, t3, a)?;
-        let t3 = self.dt_trunc_div(t3, 100.0)?;
-        let t3 = self.dt_op(BinCode::Mul, t3, 3.0)?;
-        let t3 = self.dt_trunc_div(t3, 4.0)?;
-        let jdn = self.emit_bin(BinCode::Add, t1, t2)?;
-        let jdn = self.emit_bin(BinCode::Sub, jdn, t3)?;
-        let jdn = self.emit_bin(BinCode::Add, jdn, d)?;
-        let jdn = self.dt_op(BinCode::Sub, jdn, 32075.0)?;
-        // (jdn as f64) + (sec_in_day - 43200.0) / 86400.0
-        let frac = self.dt_op(BinCode::Sub, sec_in_day, 43200.0)?;
-        let frac = self.dt_op(BinCode::Div, frac, 86400.0)?;
-        self.emit_bin(BinCode::Add, jdn, frac)
+    /// The standard Julian Date, as the reference evaluates it from the exact
+    /// split: `(day + 2440588) + ((sec_of_day - 43200) + frac) / 86400`. The
+    /// two integer sums are exact, so the inner add, the divide and the outer
+    /// add are the only roundings, in the reference's order; the day term is
+    /// the linear day number (not the Fliegel-van Flandern JDN of the date).
+    fn dt_julian_day(&mut self, day_count: LV, sec_of_day: LV, frac: LV) -> LResult<LV> {
+        let jdn = self.dt_op(BinCode::Add, day_count, 2440588.0)?;
+        // (jdn as f64) + (((sec_of_day - 43200) as f64) + frac) / 86400.0
+        let from_noon = self.dt_op(BinCode::Sub, sec_of_day, 43200.0)?;
+        let from_noon = self.emit_bin(BinCode::Add, from_noon, frac)?;
+        let from_noon = self.dt_op(BinCode::Div, from_noon, 86400.0)?;
+        self.emit_bin(BinCode::Add, jdn, from_noon)
     }
 
     // -- ifelse ---------------------------------------------------------------

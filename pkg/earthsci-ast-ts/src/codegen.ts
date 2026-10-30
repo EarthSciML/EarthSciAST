@@ -241,6 +241,17 @@ function constArrayValue(arg: Expression): unknown[] | null {
   return null
 }
 
+/**
+ * The 0-based argument positions of each closed function whose operand is an
+ * array, not a scalar (esm-spec §9.2 signatures): these are never
+ * scalar-evaluated.
+ */
+const ARRAY_ARG_POSITIONS: { [name: string]: readonly number[] | undefined } = {
+  'interp.searchsorted': [1],
+  'interp.linear': [0, 1],
+  'interp.bilinear': [0, 1, 2],
+}
+
 function evalExprNode(
   expr: Expr,
   bindings: Map<string, number>,
@@ -303,9 +314,18 @@ function evalExprNode(
           'fn op missing required string `name` field',
         )
       }
-      const fnArgs: unknown[] = node.args.map((arg): unknown => {
+      const arrayPositions = ARRAY_ARG_POSITIONS[fnName]
+      const fnArgs: unknown[] = node.args.map((arg, i): unknown => {
         const arr = constArrayValue(arg)
-        return arr !== null ? arr : evalExprNode(arg, bindings, options)
+        if (arr !== null) return arr
+        // An array-typed position (a `table`, an axis, searchsorted's `xs`)
+        // must hold a `const` array literal (esm-spec §9.2). Anything else — a
+        // variable reference, a non-`const` expression, a scalar `const` — is
+        // handed over UNEVALUATED, so the closed function rejects it with its
+        // `*_not_const` code rather than this walker failing first on, say, an
+        // unbound variable.
+        if (arrayPositions?.includes(i)) return arg
+        return evalExprNode(arg, bindings, options)
       })
       return dispatchClosedFunction(fnName, fnArgs)
     }

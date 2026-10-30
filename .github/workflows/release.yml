@@ -2,7 +2,8 @@ name: Release 3 - Publish
 
 # Step 3 of 3 (see release-register.yml). TagBot's push of `v<version>` starts
 # this run, which publishes every non-Julia binding from that tag and attaches
-# the command-line tools to the GitHub release TagBot created.
+# the `esm` and `esm-narrative` command-line tools to the GitHub release TagBot
+# created. The jobs themselves live in EarthSciML/.github (RELEASING.md there).
 #
 # Every publish step treats "already published" as success, so a run that
 # failed partway is finished by running this workflow by hand on the same tag.
@@ -22,68 +23,17 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # ---------------------------------------------------------------------------
-  # The tag must be the commit General accepted. A `v*` tag pushed by hand,
-  # ahead of or instead of the registration, would otherwise publish four
-  # registries from a commit Julia never got.
-  # ---------------------------------------------------------------------------
+  # The tag must be the commit General accepted.
   resolve:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    outputs:
-      tag: ${{ steps.resolve.outputs.tag }}
-      version: ${{ steps.resolve.outputs.version }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.tag || github.ref }}
+    uses: EarthSciML/.github/.github/workflows/release-resolve.yml@main
+    with:
+      julia-package: EarthSciAST
+      julia-subdir: pkg/EarthSciAST.jl
+      tag: ${{ inputs.tag || github.ref_name }}
+      version-check: ./scripts/check-version-sync.sh
 
-      - name: Check that every version site agrees
-        run: ./scripts/check-version-sync.sh
-
-      - name: Match the tag against General
-        id: resolve
-        env:
-          TAG: ${{ inputs.tag || github.ref_name }}
-        run: |
-          set -euo pipefail
-          case "$TAG" in
-            v[0-9]*) ;;
-            *) echo "::error::'$TAG' is not a release tag (v<version>)."; exit 1 ;;
-          esac
-          VERSION=${TAG#v}
-          MANIFEST=$(grep -m1 '^version = ' pkg/EarthSciAST.jl/Project.toml | sed 's/.*"\(.*\)".*/\1/')
-          if [ "$MANIFEST" != "$VERSION" ]; then
-            echo "::error::$TAG points at a commit whose manifests say $MANIFEST."
-            exit 1
-          fi
-
-          # General records the tree of the registered subdirectory, not a
-          # commit. raw.githubusercontent.com caches for a few minutes, so a
-          # merge moments ago may not be visible on the first try.
-          WANT=$(git rev-parse "HEAD:pkg/EarthSciAST.jl")
-          for attempt in $(seq 1 10); do
-            GOT=$(curl -sfL https://raw.githubusercontent.com/JuliaRegistries/General/master/E/EarthSciAST/Versions.toml \
-                  | awk -v v="[\"$VERSION\"]" '$0 == v { found = 1; next } found && /git-tree-sha1/ { gsub(/.*= *"|"/, ""); print; exit }' || true)
-            [ -n "$GOT" ] && break
-            sleep 60
-          done
-          if [ -z "$GOT" ]; then
-            echo "::error::EarthSciAST $VERSION is not in General. Release tags come from TagBot after General accepts a registration; see RELEASING.md."
-            exit 1
-          fi
-          if [ "$GOT" != "$WANT" ]; then
-            echo "::error::General registered tree $GOT for $VERSION, but $TAG has $WANT at pkg/EarthSciAST.jl."
-            exit 1
-          fi
-
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-
-  # ---------------------------------------------------------------------------
   # Python. Published from this workflow directly, never from a reusable one:
   # PyPI's trusted publishing cannot match a reusable workflow (RELEASING.md).
-  # ---------------------------------------------------------------------------
   publish-pypi:
     needs: resolve
     runs-on: ubuntu-latest
@@ -94,11 +44,11 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.resolve.outputs.tag }}
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
 
@@ -115,470 +65,39 @@ jobs:
           # PyPI refuses a version that already exists; let a re-run be a no-op.
           skip-existing: true
 
-  # ---------------------------------------------------------------------------
-  # Rust: publish to crates.io. The `esm` binary is built per platform below.
-  # ---------------------------------------------------------------------------
-  publish-crates:
+  # crates.io, npm, the Go proxy, and the command-line tools.
+  publish:
     needs: resolve
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.resolve.outputs.tag }}
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Build for release
-        working-directory: pkg/earthsci-ast-rs
-        # NOT --all-features: `esio` resolves earthsciio through a path into the
-        # sibling EarthSciIO checkout, which does not exist on a CI runner, and
-        # `wasm` targets a different architecture. Default features are what the
-        # released `esm` binary ships with.
-        run: cargo build --release
-
-      - name: Publish to crates.io
-        working-directory: pkg/earthsci-ast-rs
-        env:
-          VERSION: ${{ needs.resolve.outputs.version }}
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: |
-          # Publishing is not idempotent: crates.io rejects a version that
-          # already exists, and a version can never be reused. Treat "already
-          # there" as success so re-running a release, or releasing a version
-          # that was published by hand, does not fail the pipeline.
-          if curl -sf -o /dev/null \
-               -H "User-Agent: EarthSciAST release (github.com/EarthSciML/EarthSciAST)" \
-               "https://crates.io/api/v1/crates/earthsci-ast/$VERSION"; then
-            echo "::notice::earthsci-ast $VERSION is already on crates.io — skipping publish."
-            exit 0
-          fi
-          cargo publish
-
-  # ---------------------------------------------------------------------------
-  # Go: module tagging / index trigger. The Go package ships as a library only
-  # (API_SPEC.md H-5), so a Go release is a module tag and a proxy fetch.
-  # ---------------------------------------------------------------------------
-  publish-go:
-    needs: resolve
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
     permissions:
       contents: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.resolve.outputs.tag }}
+    uses: EarthSciML/.github/.github/workflows/release-publish.yml@main
+    with:
+      tag: ${{ needs.resolve.outputs.tag }}
+      version: ${{ needs.resolve.outputs.version }}
+      # Default features only: `esio` resolves earthsciio through a path into
+      # the sibling EarthSciIO checkout, which does not exist on a CI runner.
+      crates: pkg/earthsci-ast-rs
+      npm-dir: pkg/earthsci-ast-ts
+      # Ships as a library only (API_SPEC.md H-5): a module tag and a proxy fetch.
+      go-module-dir: pkg/earthsci-ast-go
+      cli-name: esm-cli
+      cli-bins: pkg/earthsci-ast-rs:esm pkg/earthsci-narrative:esm-narrative
+      install-notes: |
+        ```
+        using Pkg; Pkg.add("EarthSciAST")   # Julia
+        npm install @earthsciml/ast          # TypeScript
+        pip install earthsci-ast             # Python
+        cargo add earthsci-ast               # Rust
+        go get github.com/EarthSciML/EarthSciAST/pkg/earthsci-ast-go
+        ```
+    secrets: inherit
 
-      - name: Tag Go module
-        env:
-          VERSION: ${{ needs.resolve.outputs.version }}
-        run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          # The module path ends in /pkg/earthsci-ast-go, so that is the tag
-          # prefix Go resolves. The Go proxy caches a tag immutably, so an
-          # existing one is already what consumers resolve.
-          TAG="pkg/earthsci-ast-go/v$VERSION"
-          if git ls-remote --exit-code --tags origin "$TAG" >/dev/null 2>&1; then
-            echo "::notice::$TAG already exists — skipping."
-          else
-            git tag -a "$TAG" -m "Go module v$VERSION"
-            git push origin "$TAG"
-          fi
-
-      - name: Trigger module indexing
-        env:
-          VERSION: ${{ needs.resolve.outputs.version }}
-        run: |
-          MODULE_PATH="github.com/EarthSciML/EarthSciAST/pkg/earthsci-ast-go"
-          curl -X GET "https://proxy.golang.org/$MODULE_PATH/@v/v$VERSION.info" || true
-
-  # ---------------------------------------------------------------------------
-  # npm
-  # ---------------------------------------------------------------------------
-  publish-npm:
-    needs: resolve
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.resolve.outputs.tag }}
-
-      - name: Use Node.js 22
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          registry-url: 'https://registry.npmjs.org'
-          cache: 'npm'
-          cache-dependency-path: pkg/earthsci-ast-ts/package-lock.json
-
-      - name: Install dependencies
-        working-directory: pkg/earthsci-ast-ts
-        run: npm ci
-
-      - name: Build package
-        working-directory: pkg/earthsci-ast-ts
-        run: npm run build
-
-      - name: Publish to NPM
-        working-directory: pkg/earthsci-ast-ts
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          set -euo pipefail
-          VERSION=$(node -p "require('./package.json').version")
-          # npm refuses to publish over an existing version (E403). Treat that as
-          # success so re-running a release is a no-op rather than a failure.
-          if npm view "@earthsciml/ast@$VERSION" version >/dev/null 2>&1; then
-            echo "::notice::@earthsciml/ast@$VERSION is already on npm — skipping."
-            exit 0
-          fi
-          npm publish
-
-  # ---------------------------------------------------------------------------
-  # Command-line tools: `esm` (pkg/earthsci-ast-rs) and `esm-narrative`
-  # (pkg/earthsci-narrative), each built on its platform's own runner and
-  # shipped together in one archive per platform.
-  # ---------------------------------------------------------------------------
-  build-binaries:
-    name: Build ${{ matrix.config.name }}
-    needs: resolve
-    runs-on: ${{ matrix.config.os }}
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        config:
-          # `glibc` is the oldest glibc the Linux binaries must run on. Built
-          # natively on ubuntu-latest they required the runner's own (2.39),
-          # so v0.3.0's `esm` would not start on RHEL 9 (2.34) or anything
-          # older than Ubuntu 24.04. 2.17 is the floor Rust itself supports,
-          # and glibc is backward compatible, so these run on every glibc
-          # Linux of the last decade. A static musl build would also cover
-          # Alpine, but musl's libm can differ from glibc's in the last bit,
-          # and these binaries should compute what the crate computes.
-          - { name: "Linux x64",   os: ubuntu-latest,     platform: linux-x64,   rust_target: x86_64-unknown-linux-gnu,  exe: "",     archive_ext: tar.gz, glibc: "2.17" }
-          - { name: "Linux ARM64", os: ubuntu-24.04-arm,  platform: linux-arm64, rust_target: aarch64-unknown-linux-gnu, exe: "",     archive_ext: tar.gz, glibc: "2.17" }
-          - { name: "macOS x64",   os: macos-latest,      platform: macos-x64,   rust_target: x86_64-apple-darwin,       exe: "",     archive_ext: tar.gz }
-          - { name: "macOS ARM64", os: macos-latest,      platform: macos-arm64, rust_target: aarch64-apple-darwin,      exe: "",     archive_ext: tar.gz }
-          - { name: "Windows x64", os: windows-latest,    platform: windows-x64, rust_target: x86_64-pc-windows-gnu,     exe: ".exe", archive_ext: zip }
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.resolve.outputs.tag }}
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.config.rust_target }}
-
-      - name: Setup Rust Cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            pkg/earthsci-ast-rs
-            pkg/earthsci-narrative
-
-      - name: Install build tools
-        if: runner.os == 'Windows'
-        run: choco install mingw
-
-      # cargo-zigbuild links against the glibc named in the target suffix
-      # (`x86_64-unknown-linux-gnu.2.28`) using zig's bundled libc stubs, and
-      # still writes to target/x86_64-unknown-linux-gnu. It finds zig through
-      # the `ziglang` wheel, so both go into one Python environment.
-      - uses: actions/setup-python@v5
-        if: matrix.config.glibc
-        with:
-          python-version: '3.12'
-
-      - name: Install cargo-zigbuild
-        if: matrix.config.glibc
-        run: pip install cargo-zigbuild==0.23.4 ziglang==0.17.0
-
-      - name: Build esm and esm-narrative
-        shell: bash
-        env:
-          TARGET: ${{ matrix.config.rust_target }}
-          GLIBC: ${{ matrix.config.glibc }}
-        run: |
-          set -euo pipefail
-          if [ -n "$GLIBC" ]; then
-            build=(cargo zigbuild --target "$TARGET.$GLIBC")
-          else
-            build=(cargo build --target "$TARGET")
-          fi
-          "${build[@]}" --release --manifest-path pkg/earthsci-ast-rs/Cargo.toml --bin esm
-          "${build[@]}" --release --manifest-path pkg/earthsci-narrative/Cargo.toml --bin esm-narrative
-
-      - name: Check the glibc floor
-        if: matrix.config.glibc
-        env:
-          TARGET: ${{ matrix.config.rust_target }}
-          GLIBC: ${{ matrix.config.glibc }}
-        run: |
-          set -euo pipefail
-          for bin in pkg/earthsci-ast-rs/target/$TARGET/release/esm pkg/earthsci-narrative/target/$TARGET/release/esm-narrative; do
-            need=$(objdump -T "$bin" | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' | sed 's/GLIBC_//' | sort -uV | tail -n 1)
-            echo "$bin needs glibc $need"
-            if [ "$(printf '%s\n%s\n' "$need" "$GLIBC" | sort -V | tail -n 1)" != "$GLIBC" ]; then
-              echo "::error::$bin needs glibc $need, newer than the $GLIBC floor."
-              exit 1
-            fi
-          done
-
-      - name: Package
-        shell: bash
-        env:
-          VERSION: ${{ needs.resolve.outputs.version }}
-          PLATFORM: ${{ matrix.config.platform }}
-          TARGET: ${{ matrix.config.rust_target }}
-          EXE: ${{ matrix.config.exe }}
-        run: |
-          set -euo pipefail
-          DIST_DIR="esm-cli-${VERSION}-${PLATFORM}"
-          mkdir -p "$DIST_DIR"
-          cp "pkg/earthsci-ast-rs/target/$TARGET/release/esm$EXE" "$DIST_DIR/"
-          cp "pkg/earthsci-narrative/target/$TARGET/release/esm-narrative$EXE" "$DIST_DIR/"
-          cp README.md LICENSE "$DIST_DIR/"
-
-          if [ -n "$EXE" ]; then
-            cat > "$DIST_DIR/install.bat" << 'INSTALL_EOF'
-          @echo off
-          setlocal enabledelayedexpansion
-          echo Installing esm and esm-narrative...
-          set "INSTALL_DIR=%USERPROFILE%\.local\bin"
-          if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%"
-          copy esm.exe "%INSTALL_DIR%\" >nul
-          copy esm-narrative.exe "%INSTALL_DIR%\" >nul
-          echo %PATH% | findstr /C:"%INSTALL_DIR%" >nul
-          if errorlevel 1 (
-              echo Adding %INSTALL_DIR% to PATH...
-              setx PATH "%PATH%;%INSTALL_DIR%"
-              echo Please restart your command prompt.
-          )
-          echo Installed. Run 'esm --help' or 'esm-narrative --help' to get started.
-          pause
-          INSTALL_EOF
-            7z a "$DIST_DIR.zip" "$DIST_DIR"
-          else
-            cat > "$DIST_DIR/install.sh" << 'INSTALL_EOF'
-          #!/bin/bash
-          set -euo pipefail
-          INSTALL_DIR="${HOME}/.local/bin"
-          echo "Installing esm and esm-narrative..."
-          mkdir -p "$INSTALL_DIR"
-          for bin in esm esm-narrative; do
-              cp "$bin" "$INSTALL_DIR/"
-              chmod +x "$INSTALL_DIR/$bin"
-          done
-          if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
-              if [ -n "${ZSH_VERSION:-}" ]; then
-                  SHELL_CONFIG="$HOME/.zshrc"
-              elif [ -n "${BASH_VERSION:-}" ]; then
-                  SHELL_CONFIG="$HOME/.bashrc"
-              else
-                  SHELL_CONFIG="$HOME/.profile"
-              fi
-              echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$SHELL_CONFIG"
-              echo "Added to PATH in $SHELL_CONFIG"
-              echo "Restart shell or run: source $SHELL_CONFIG"
-          fi
-          echo "✓ Installed esm and esm-narrative."
-          INSTALL_EOF
-            chmod +x "$DIST_DIR/install.sh"
-            tar -czf "$DIST_DIR.tar.gz" "$DIST_DIR"
-          fi
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: esm-cli-${{ matrix.config.platform }}
-          path: esm-cli-*.${{ matrix.config.archive_ext }}
-          if-no-files-found: error
-
-  # ---------------------------------------------------------------------------
-  # Attach the archives, their checksums and the installer to TagBot's release,
-  # and add download and install instructions below TagBot's notes.
-  # ---------------------------------------------------------------------------
-  attach-release-assets:
-    needs: [ resolve, build-binaries ]
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    permissions:
-      contents: write
-    env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      GH_REPO: ${{ github.repository }}
-      TAG: ${{ needs.resolve.outputs.tag }}
-      VERSION: ${{ needs.resolve.outputs.version }}
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: esm-cli-*
-          path: dist
-          merge-multiple: true
-
-      # One checksum format for every platform: `sha256sum -c` reads it.
-      - name: Checksums
-        working-directory: dist
-        run: for f in esm-cli-*; do sha256sum "$f" > "$f.sha256"; done
-
-      - name: Write the installer
-        run: |
-          cat > dist/update.sh << 'UPDATE_EOF'
-          #!/bin/bash
-          # Installs or updates esm and esm-narrative from the latest release.
-          set -euo pipefail
-
-          REPO="EarthSciML/EarthSciAST"
-          INSTALL_DIR="${HOME}/.local/bin"
-
-          detect_platform() {
-              case "$(uname -s)/$(uname -m)" in
-                  Linux/x86_64|Linux/amd64)       echo linux-x64 ;;
-                  Linux/aarch64|Linux/arm64)      echo linux-arm64 ;;
-                  Darwin/x86_64)                  echo macos-x64 ;;
-                  Darwin/arm64)                   echo macos-arm64 ;;
-                  CYGWIN*|MINGW*|MSYS*)           echo windows-x64 ;;
-                  *)                              echo unsupported ;;
-              esac
-          }
-
-          platform="$(detect_platform)"
-          if [ "$platform" = unsupported ]; then
-              echo "Unsupported platform: $(uname -s) $(uname -m)"
-              exit 1
-          fi
-
-          tag="$(curl -s "https://api.github.com/repos/$REPO/releases/latest" \
-                 | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')"
-          if [ -z "$tag" ]; then
-              echo "Failed to get the latest version"
-              exit 1
-          fi
-
-          if command -v esm > /dev/null && [ "v$(esm --version 2>/dev/null | grep -o '[0-9][0-9.]*' | sed -n 1p)" = "$tag" ]; then
-              echo "Already up to date ($tag)"
-              exit 0
-          fi
-
-          ext=tar.gz; exe=""
-          if [ "$platform" = windows-x64 ]; then ext=zip; exe=.exe; fi
-          name="esm-cli-${tag#v}-$platform"
-
-          tmp="$(mktemp -d)"
-          trap 'rm -rf "$tmp"' EXIT
-          echo "Downloading $name.$ext..."
-          curl -fL -o "$tmp/$name.$ext" "https://github.com/$REPO/releases/download/$tag/$name.$ext"
-          if [ "$ext" = zip ]; then unzip -q "$tmp/$name.$ext" -d "$tmp"; else tar -xzf "$tmp/$name.$ext" -C "$tmp"; fi
-
-          mkdir -p "$INSTALL_DIR"
-          for bin in esm esm-narrative; do
-              cp "$tmp/$name/$bin$exe" "$INSTALL_DIR/"
-              chmod +x "$INSTALL_DIR/$bin$exe"
-          done
-
-          if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
-              echo "Add $INSTALL_DIR to your PATH to use esm and esm-narrative."
-          fi
-          echo "Installed esm and esm-narrative $tag."
-          UPDATE_EOF
-          chmod +x dist/update.sh
-
-      # TagBot pushes the tag and then creates the release, so the release can
-      # trail this run's start; the builds above usually cover the gap. TagBot
-      # cannot create the release at all when the tagged commit edits a
-      # workflow file (it opens an issue instead), so after waiting this job
-      # creates one itself rather than leave the binaries unattached.
-      - name: Wait for the GitHub release
-        run: |
-          for attempt in $(seq 1 20); do
-            gh release view "$TAG" > /dev/null 2>&1 && exit 0
-            sleep 60
-          done
-          echo "::warning::TagBot created no release for $TAG; creating one."
-          gh release create "$TAG" --verify-tag --title "$TAG" \
-            --notes "See the [Julia registration](https://github.com/JuliaRegistries/General/pulls?q=EarthSciAST+v$VERSION) for this release's notes."
-
-      - name: Upload assets
-        run: gh release upload "$TAG" dist/* --clobber
-
-      - name: Add install instructions to the release notes
-        run: |
-          set -euo pipefail
-          MARKER='<!-- release.yml: install instructions -->'
-          gh release view "$TAG" --json body --jq .body > body.md
-          # Rewrite only below the marker, so a re-run replaces this section
-          # rather than appending a second copy under TagBot's notes.
-          awk -v m="$MARKER" '$0 == m { exit } { print }' body.md > notes.md
-          BASE="https://github.com/$GH_REPO/releases/download/$TAG"
-          {
-            echo "$MARKER"
-            echo ""
-            echo "## Installation"
-            echo ""
-            echo '```'
-            echo 'using Pkg; Pkg.add("EarthSciAST")   # Julia'
-            echo 'npm install @earthsciml/ast          # TypeScript'
-            echo 'pip install earthsci-ast             # Python'
-            echo 'cargo add earthsci-ast               # Rust'
-            echo 'go get github.com/EarthSciML/EarthSciAST/pkg/earthsci-ast-go'
-            echo '```'
-            echo ""
-            echo "### Command-line tools: \`esm\` and \`esm-narrative\`"
-            echo ""
-            echo '```bash'
-            echo "curl -sSL https://github.com/$GH_REPO/releases/latest/download/update.sh | bash"
-            echo '```'
-            echo ""
-            echo "Or download an archive, extract it and run \`install.sh\` (\`install.bat\` on Windows):"
-            echo ""
-            for p in linux-x64:tar.gz linux-arm64:tar.gz macos-x64:tar.gz macos-arm64:tar.gz windows-x64:zip; do
-              f="esm-cli-$VERSION-${p%%:*}.${p#*:}"
-              echo "- [$f]($BASE/$f) ([sha256]($BASE/$f.sha256))"
-            done
-          } >> notes.md
-          gh release edit "$TAG" --notes-file notes.md
-
-  # ---------------------------------------------------------------------------
   report:
-    needs: [ resolve, publish-pypi, publish-crates, publish-go, publish-npm, build-binaries, attach-release-assets ]
+    needs: [ resolve, publish-pypi, publish ]
     if: always() && needs.resolve.result == 'success'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
     permissions:
       issues: write
-    steps:
-      - name: Summarize
-        run: |
-          {
-            echo "## Release ${{ needs.resolve.outputs.tag }}"
-            echo ""
-            echo "| Step | Result |"
-            echo "| --- | --- |"
-            echo "| PyPI | \`${{ needs.publish-pypi.result }}\` |"
-            echo "| crates.io | \`${{ needs.publish-crates.result }}\` |"
-            echo "| Go module | \`${{ needs.publish-go.result }}\` |"
-            echo "| npm | \`${{ needs.publish-npm.result }}\` |"
-            echo "| Binaries | \`${{ needs.build-binaries.result }}\` |"
-            echo "| Release assets | \`${{ needs.attach-release-assets.result }}\` |"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      # The Julia package is already registered at this point, so a failure
-      # here leaves the release half-published until someone re-runs it.
-      - name: Open an issue on failure
-        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          TAG: ${{ needs.resolve.outputs.tag }}
-        run: |
-          gh issue create --title "Release $TAG is partially published" --label release --body "$(cat <<BODY
-          Run: https://github.com/$GH_REPO/actions/runs/${{ github.run_id }}
-
-          Julia's General registry already has this version. Fix the cause, then run the **Release 3 - Publish** workflow by hand with tag \`$TAG\`; steps that already published are skipped.
-          BODY
-          )" || gh issue create --title "Release $TAG is partially published" --body "Run: https://github.com/$GH_REPO/actions/runs/${{ github.run_id }}"
+    uses: EarthSciML/.github/.github/workflows/release-report.yml@main
+    with:
+      tag: ${{ needs.resolve.outputs.tag }}
+      results: ${{ toJSON(needs) }}

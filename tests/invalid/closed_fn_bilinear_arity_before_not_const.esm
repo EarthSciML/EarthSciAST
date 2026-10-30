@@ -1,0 +1,67 @@
+{
+  "esm": "1.0.0",
+  "metadata": {
+    "name": "ClosedFn_bilinear_arity_before_not_const",
+    "description": "Ruling Q-112: `interp.bilinear` called with four arguments (arity 5), whose table is also a variable reference. Arity is checked first.",
+    "authors": [
+      "EarthSciML"
+    ],
+    "created": "2026-10-27T00:00:00Z"
+  },
+  "models": {
+    "M": {
+      "variables": {
+        "y": {
+          "type": "unknown",
+          "units": "1",
+          "default": 1.0
+        },
+        "x": {
+          "type": "parameter",
+          "units": "1",
+          "default": 0.5
+        },
+        "p": {
+          "type": "parameter",
+          "units": "1",
+          "default": 1.0
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "y"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "fn",
+            "name": "interp.bilinear",
+            "args": [
+              "p",
+              {
+                "op": "const",
+                "args": [],
+                "value": [
+                  0.0,
+                  1.0
+                ]
+              },
+              {
+                "op": "const",
+                "args": [],
+                "value": [
+                  0.0,
+                  1.0
+                ]
+              },
+              "x"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

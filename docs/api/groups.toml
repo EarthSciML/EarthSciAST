@@ -1,5 +1,5 @@
 # Topic grouping of the canonical STABLE operations, for the generated API
-# reference (scripts/api_docs/render.py). Groups appear in this order.
+# reference (earthsci.dev tools/api_docs/render.py). Groups appear in this order.
 #
 # Each [[group]] has:
 #   id          URL slug of the topic page

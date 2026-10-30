@@ -4164,8 +4164,10 @@ rejections ("value must be a positive integer"). The bound is removed.
 positive. A binding MUST accept a zero-valued and a negative-valued member, MUST
 resolve it to exactly its declared integer, and MUST NOT clamp it, treat it as
 absent, or take it for a default. Uniqueness is unchanged: within one enum,
-values MUST be unique, and `0` is a value like any other, so two symbols MAY NOT
-both map to `0`. Across enums, values MAY still collide.
+values MUST be unique, and `0` is a value like any other, so two symbols MUST NOT
+both map to `0`. A binding MUST reject a duplicate at load time with diagnostic
+`enum_duplicate_value` (esm-spec §9.3, §5.26.5). Across enums, values MAY still
+collide.
 
 #### 5.26.1 Why the bound looked right and was not
 
@@ -4255,13 +4257,20 @@ comparison is too.
 #### 5.26.5 Uniqueness, which the schema cannot state
 
 "Values MUST be unique within an enum" is not expressible in JSON Schema, so it
-lives in each binding's loader. Python (`parse.py`) and Julia (`coerce_enums`)
-enforce it; both reject a duplicate `0` and a duplicate positive alike, so
-neither uses `0` as its own sentinel. Rust, TypeScript and Go accept a duplicate
-value silently — a gap that predates this section and is not created by it (they
-accept a duplicate *positive* value too), recorded here rather than left
-unstated. It is BEHAV-13's deferred column in
-`ESM_COMPLIANCE_VALIDATION_MATRIX.md`.
+lives in each binding's loader, and every binding MUST raise it as
+`enum_duplicate_value`. The check is on the `enums` block itself: a duplicate is
+rejected whether or not any `enum` op names either symbol, a duplicate `0` exactly
+like a duplicate positive (no binding may use `0` as its own sentinel), and only
+within one enum — two enums MAY share a value.
+
+Until 2026-10-26 Rust, TypeScript and Go accepted a duplicate value silently, and
+Python and Julia rejected one under a generic loader error with no code: "MAY
+NOT" in this section and in esm-spec §9.3 was not a requirement, and no code was
+named. All five now reject it with `enum_duplicate_value`, pinned by two
+`resolver_only` fixtures: `tests/invalid/enum_duplicate_value.esm` (a duplicate
+positive value in an enum whose `enum` op names a third, unduplicated symbol) and
+`tests/invalid/enum_duplicate_zero_value.esm` (two symbols mapping to `0`, named by
+no `enum` op). This is BEHAV-13-005 in `ESM_COMPLIANCE_VALIDATION_MATRIX.md`.
 
 ### 5.27 Inline-Test Assertions on an ARRAY OBSERVED (normative)
 
@@ -7433,6 +7442,10 @@ ever emitted it, and the code had zero real coverage.
 | `assertion_rank_mismatch` | Structural | An assertion whose form does not match the declared rank of the variable it names (esm-spec §6.6.5): pointwise on a variable declared with a non-empty `shape` (unless the target is an element name such as `u[1]`), or `coords` / `reduce` on a variable declared without one. Checked for targets the asserting component declares by a bare name. Pointer: the assertion, e.g. `/models/M/tests/0/assertions/0`. Fixtures: `tests/invalid/assertion_rank_mismatch_*.esm`. |
 | `reserved_variable_name` | Structural | A declaration spelled with a globally-scoped name — the document's independent variable (`domain.independent_variable`, default `"t"`) or the §6.4 `_var` placeholder (esm-spec §4.9.1.1). Both are in scope in every model and resolve BY NAME, so the declaration is unreachable and every reader silently gets the implicit symbol instead. Covers all three declaration maps: `models[M].variables` (recursing into every INLINE subsystem, at any depth), `reaction_systems[S].species`, `reaction_systems[S].parameters`. Pointer: the offending key, e.g. `/models/M/variables/t`, `/models/M/subsystems/S/variables/t`. Hard error in EVERY binding — the pre-fix behaviour was a validated document whose equations silently read the simulation clock. The reserved set FOLLOWS the document, exactly as `reserved_index_symbol` does; a binding that hard-codes the literal `"t"` fails `tests/valid/independent_variable_renamed.esm`. |
 | `array_default_without_shape` | Structural | Inline array data as the `default` of a variable that declares no `shape` — omitted, `null` or empty (esm-spec §6.3). Inline array data is a shaped variable's value, so with no shape there is nothing for it to fill and no scalar reading of it. Covers both declared types and the `variables` of every INLINE subsystem, at any depth. Pointer: the offending `default`, e.g. `/models/M/variables/k/default`, `/models/M/subsystems/S/variables/x/default`. Hard error in every binding, and a structural check rather than a schema constraint because whether an array is legal depends on the sibling `shape` field. Fixture: `tests/invalid/array_default_without_shape.esm`. |
+| `enum_duplicate_value` | Load | Two symbols of ONE `enums` entry map to the same integer (esm-spec §9.3, §5.26.5). Raised on the block itself, whether or not an `enum` op names either symbol; `0` is a value like any other. Values MAY coincide across different enums. Hard error in every binding. Fixtures: `tests/invalid/enum_duplicate_value.esm`, `tests/invalid/enum_duplicate_zero_value.esm` (`resolver_only`). |
+| `searchsorted_nan` | Load | The `xs` of an `interp.searchsorted` call contains a NaN (esm-spec §9.2). Checked BEFORE `searchsorted_non_monotonic`, so an `xs` holding a NaN is reported with this code whatever its other entries. The same precedence holds for `interp_nan_in_axis` over `interp_non_monotonic_axis` (§9.2) and `table_axis_nan` over `table_axis_non_monotonic` (§9.5.5). An `xs` that is not a rank-1 `const`-op array is neither: it is `interp_axis_not_const`, checked before both (esm-spec §9.2). Fixture: `tests/closed_functions/interp/searchsorted/expected.json` (`error_scenarios`). |
+| `table_lookup_args_nonempty` | Load | A `table_lookup` node carries a non-empty `args` (esm-spec §9.5.2); an absent `args` means `[]`. The schema rejects the same node (`maxItems: 0`), so a document reaches the code only by not passing through schema validation — a node built in memory, or a binding that lowers before it validates. |
+| `table_axis_too_short` | Load | An axis of a `function_tables` entry has fewer than 2 `values` (esm-spec §9.5.1, §9.5.5). The schema rejects the same axis (`minItems: 2`), so a document reaches the code only by not passing through schema validation — a table built in memory, or a binding that lowers before it validates. Sixth in the pinned order of the §9.5.5 table checks: after `table_axis_nan` and `table_axis_non_monotonic` (over every axis), before `table_outputs_length_mismatch`. Fixture: `tests/conformance/function_tables/load_errors/cases.json`. |
 | `E_NO_DAE_SUPPORT` | DAE | A model's equations contain algebraic equations alongside differential ones, and DAE support is disabled in the binding (RFC §12). The error message must name at least one algebraic-equation path and the enabling knob. |
 | `E_TREEWALK_RECUR_UNAVAILABLE` | Runtime | A causal self-read (esm-spec §4.3.1.1) named a position outside the recurrence axis, or a cell the sweep has not published yet. Fail-closed: never the §5.5.5 zero ghost, and never a bare NaN (a `max(x, 0)` in the body would launder one). See §5.19.4. |
 | `E_TREEWALK_UNBOUND_NAME` | Runtime | An expression referenced a name bound in NO resolution scope — not the independent variable, a loop binder, a state, an observed, a parameter or a forcing channel. Fail-closed: never a NaN sentinel, which `max(x, floor)` or any comparison launders by DROPPING the operand rather than propagating it. The general case of the previous row. See §5.23. |

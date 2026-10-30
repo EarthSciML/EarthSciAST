@@ -1,0 +1,22 @@
+id = "ast"
+title = "EarthSciAST"
+description = "The EarthSciML Abstract Syntax Tree format: schema, operators, coupling, and five language bindings."
+repo = "EarthSciML/EarthSciAST"
+# Built by the caller workflow (.github/workflows/docs.yml) before bundling.
+prebuild = ["cargo run --manifest-path pkg/earthsci-narrative/Cargo.toml --bin esm-narrative -- build"]
+
+[[nav]]
+title = "File structure"
+path = "file-structure/"
+
+[[nav]]
+title = "Operators"
+path = "operators/"
+
+[[nav]]
+title = "Coupling"
+path = "coupling/"
+
+[[nav]]
+title = "Templates"
+path = "templates/"

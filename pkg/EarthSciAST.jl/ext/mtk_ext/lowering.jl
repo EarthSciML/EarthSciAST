@@ -513,18 +513,22 @@ end
 # act as the non-symbolic-arg discriminators in `@register_symbolic`; the
 # scalar query argument(s) are the only symbolic args MTK traces.
 #
-# `interp.searchsorted` is intentionally NOT registered here — its return
-# is an integer index, and the only spec-supported composition with `index`
-# requires array-shaped intermediate evaluation that does not lower cleanly
-# to MTK. Callers needing searchsorted in symbolic contexts should use the
-# named tensor-interp primitives instead (which were added precisely for
-# that reason).
+# `interp.searchsorted` is registered too, as an opaque integer-valued scalar:
+# it composes with `min` / `max` / `-` and a run-time `index` into a `const`
+# array (`_esm_const_gather`), which is the §9.5.3 `nearest` lowering.
 
 # 1-D linear interp registered op. The `table` and `axis` arguments are
 # concrete vectors; `x` is the symbolic query that MTK's tracer flows.
 function _esm_interp_linear(table::Vector{Float64}, axis::Vector{Float64}, x::Real)::Float64
     return EarthSciAST.evaluate_closed_function("interp.linear",
         Any[table, axis, Float64(x)])::Float64
+end
+
+# `interp.searchsorted` registered op: the 1-based index as a Float64, so it
+# flows through symbolic arithmetic; `_esm_const_gather` rounds it back.
+function _esm_interp_searchsorted(xs::Vector{Float64}, x::Real)::Float64
+    return Float64(EarthSciAST.evaluate_closed_function("interp.searchsorted",
+        Any[Float64(x), xs]))
 end
 
 # 2-D bilinear interp registered op. The `table` is a row-major nested
@@ -544,6 +548,7 @@ end
 # of the spec contract; downstream users who need analytic gradients must
 # define them separately.
 @register_symbolic _esm_interp_linear(table::Vector{Float64}, axis::Vector{Float64}, x) false
+@register_symbolic _esm_interp_searchsorted(xs::Vector{Float64}, x) false
 @register_symbolic _esm_interp_bilinear(table::Vector{Vector{Float64}}, axis_x::Vector{Float64}, axis_y::Vector{Float64}, x, y) false
 
 # The registration's symtype promotion does not match a call whose table
@@ -553,6 +558,7 @@ end
 # calls is a real scalar, so say so for any argument types.
 Symbolics.SymbolicUtils.promote_symtype(::typeof(_esm_interp_linear), args...) = Real
 Symbolics.SymbolicUtils.promote_symtype(::typeof(_esm_interp_bilinear), args...) = Real
+Symbolics.SymbolicUtils.promote_symtype(::typeof(_esm_interp_searchsorted), args...) = Real
 
 # Recursively coerce a JSON-parsed const-array value into the concrete
 # vector type the registered op expects. Inputs may be Vector{Any} of
@@ -577,15 +583,17 @@ function _to_float64_table_2d(v)::Vector{Vector{Float64}}
     throw(ArgumentError("expected a 2-D nested vector, got $(typeof(v))"))
 end
 
-# Pull a `const`-op array value out of an AST argument node. Errors give
-# the same `interp_*_not_const` flavor the spec defines for load-time
-# validation, surfaced as plain Julia errors during MTK lowering.
-function _extract_const_array_node(arg::EsmExpr, fname::String, label::String)
+# Pull a `const`-op array value out of an AST argument node, or raise the
+# esm-spec §9.2 `interp_table_not_const` / `interp_axis_not_const` code (`code`)
+# as the `ClosedFunctionError` the tree-walk build raises for the same node.
+function _extract_const_array_node(arg::EsmExpr, fname::String, label::String,
+                                   code::String)
     if arg isa OpExpr && arg.op == "const" && arg.value isa AbstractVector
         return arg.value
     end
-    throw(ArgumentError("$(fname): `$(label)` argument must be a `const`-op array " *
-          "(esm-spec §9.2); got $(typeof(arg))"))
+    throw(EarthSciAST.ClosedFunctionError(code,
+        "$(fname): `$(label)` argument must be a `const`-op array " *
+        "(esm-spec §9.2); got $(arg isa OpExpr ? "a `$(arg.op)` node" : typeof(arg))"))
 end
 
 function _build_fn(expr::OpExpr, var_dict::Dict{String,Any},
@@ -604,27 +612,42 @@ function _build_fn(expr::OpExpr, var_dict::Dict{String,Any},
     if fname == "interp.linear"
         length(expr.args) == 3 ||
             throw(ArgumentError("interp.linear expects 3 args, got $(length(expr.args))"))
-        table = _to_float64_vector(_extract_const_array_node(expr.args[1], fname, "table"))
-        axis  = _to_float64_vector(_extract_const_array_node(expr.args[2], fname, "axis"))
+        table = _to_float64_vector(_extract_const_array_node(expr.args[1], fname, "table",
+            EarthSciAST.ERROR_CODES.INTERP_TABLE_NOT_CONST))
+        axis  = _to_float64_vector(_extract_const_array_node(expr.args[2], fname, "axis",
+            EarthSciAST.ERROR_CODES.INTERP_AXIS_NOT_CONST))
         x_sym = _esm_to_symbolic(expr.args[3], var_dict, t_sym, dim_dict)
         return _esm_interp_linear(table, axis, x_sym)
     elseif fname == "interp.bilinear"
         length(expr.args) == 5 ||
             throw(ArgumentError("interp.bilinear expects 5 args, got $(length(expr.args))"))
-        table  = _to_float64_table_2d(_extract_const_array_node(expr.args[1], fname, "table"))
-        axis_x = _to_float64_vector(_extract_const_array_node(expr.args[2], fname, "axis_x"))
-        axis_y = _to_float64_vector(_extract_const_array_node(expr.args[3], fname, "axis_y"))
+        table  = _to_float64_table_2d(_extract_const_array_node(expr.args[1], fname, "table",
+            EarthSciAST.ERROR_CODES.INTERP_TABLE_NOT_CONST))
+        axis_x = _to_float64_vector(_extract_const_array_node(expr.args[2], fname, "axis_x",
+            EarthSciAST.ERROR_CODES.INTERP_AXIS_NOT_CONST))
+        axis_y = _to_float64_vector(_extract_const_array_node(expr.args[3], fname, "axis_y",
+            EarthSciAST.ERROR_CODES.INTERP_AXIS_NOT_CONST))
         x_sym  = _esm_to_symbolic(expr.args[4], var_dict, t_sym, dim_dict)
         y_sym  = _esm_to_symbolic(expr.args[5], var_dict, t_sym, dim_dict)
         return _esm_interp_bilinear(table, axis_x, axis_y, x_sym, y_sym)
+    elseif fname == "interp.searchsorted"
+        length(expr.args) == 2 ||
+            throw(ArgumentError("interp.searchsorted expects 2 args, got $(length(expr.args))"))
+        xs_raw = _extract_const_array_node(expr.args[2], fname, "xs",
+            EarthSciAST.ERROR_CODES.INTERP_AXIS_NOT_CONST)
+        # Validate at build, as the tree-walk build does: the registered call is
+        # opaque, so a bad table would otherwise surface mid-solve. BEFORE the
+        # Float64 coercion, so a nested `xs` is `interp_axis_not_const` and not
+        # a conversion error.
+        EarthSciAST._validate_searchsorted_table(fname, xs_raw)
+        xs = _to_float64_vector(xs_raw)
+        x_sym = _esm_to_symbolic(expr.args[1], var_dict, t_sym, dim_dict)
+        return _esm_interp_searchsorted(xs, x_sym)
     end
-    # Other closed functions (datetime.*, interp.searchsorted) are not
-    # exposed as registered symbolic ops — they're either unused in MTK
-    # contexts or whose return shape (integer index) doesn't compose with
-    # symbolic arithmetic.
+    # The datetime.* closed functions are not exposed as registered symbolic ops.
     throw(ArgumentError("Unsupported `fn` name in MTK lowering: `$(fname)`. " *
-          "Only `interp.linear` and `interp.bilinear` are registered as " *
-          "@register_symbolic operators (esm-94w)."))
+          "Only `interp.linear`, `interp.bilinear` and `interp.searchsorted` are " *
+          "registered as @register_symbolic operators (esm-94w)."))
 end
 
 function _get_or_make_dim(dim_dict::Dict{String,Any}, name::AbstractString)

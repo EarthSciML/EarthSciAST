@@ -124,6 +124,102 @@ _ft_path_fixture(name) = joinpath(FT_PATH_FIXTURES_ROOT, name, "fixture.esm")
               ERROR_CODES.TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE
         @test code(lookup(table="sigma_O3_298", table_axes=axes_ok, output=false)) ==
               ERROR_CODES.TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE
+        # A single-output table (no `outputs`) has only output 0: 1 and any
+        # string are out of range, 0 and an omitted `output` are the table.
+        @test code(lookup(table="sigma_O3_298", table_axes=axes_ok, output=1)) ==
+              ERROR_CODES.TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE
+        @test code(lookup(table="sigma_O3_298", table_axes=axes_ok, output=0)) == ""
+        @test code(lookup(table="sigma_O3_298", table_axes=axes_ok)) == ""
+
+        # §9.5.2: `args` MUST be empty; an absent `args` is `[]`. A node built
+        # in memory skips the schema's `maxItems`, so the lowering refuses it.
+        @test code(OpExpr("table_lookup", EarthSciAST.ASTExpr[VarExpr("lambda")];
+                          table="sigma_O3_298", table_axes=axes_ok)) ==
+              ERROR_CODES.TABLE_LOOKUP_ARGS_NONEMPTY
+        # The expression parser (which a document reaches only after the
+        # schema's `maxItems` has refused it) carries the same code.
+        perr = try
+            _FTP.expression_from_json(Dict{String,Any}("op" => "table_lookup",
+                "table" => "sigma_O3_298", "axes" => Dict("lambda_idx" => "lambda"),
+                "args" => Any["lambda"]))
+            nothing
+        catch err
+            err
+        end
+        @test perr isa _FTP.ParseError &&
+              perr.code == ERROR_CODES.TABLE_LOOKUP_ARGS_NONEMPTY
+
+        # §9.5.5: NaN is checked over the whole axis before monotonicity.
+        with_axis(vals) = Dict("t" => _FTP.FunctionTable(
+            [_FTP.FunctionTableAxis("p", Float64.(vals))], Any[1.0, 2.0, 3.0]))
+        acode(vals) = try
+            _FTP._lower_expr_table_lookups(lookup(table="t",
+                table_axes=Dict{String,EarthSciAST.ASTExpr}("p" => VarExpr("x"))),
+                with_axis(vals))
+            ""
+        catch err
+            err isa _FTP.TableLookupError || rethrow()
+            err.code
+        end
+        @test acode([3.0, 1.0, NaN]) == ERROR_CODES.TABLE_AXIS_NAN
+        @test acode([NaN, 1.0, 2.0]) == ERROR_CODES.TABLE_AXIS_NAN
+        @test acode([1.0, 3.0, 2.0]) == ERROR_CODES.TABLE_AXIS_NON_MONOTONIC
+        @test acode([1.0, 1.0, 2.0]) == ERROR_CODES.TABLE_AXIS_NON_MONOTONIC
+        @test acode([1.0, 2.0, 3.0]) == ""
+    end
+
+    @testset "lowering with D: the whole data, or data[i] with outputs (§9.5.3)" begin
+        file = _FTP.load_path(_ft_path_fixture("lookup_defaults"))
+        tables = file.function_tables
+        rhs = Dict((eq.lhs isa VarExpr ? eq.lhs.name : "") => eq.rhs
+                   for eq in file.models[only(keys(file.models))].equations)
+        low(n) = _FTP._lower_expr_table_lookups(rhs[n], tables)::OpExpr
+        # Single-output: the whole `data`, whether `output` is omitted or 0.
+        @test low("s_omitted").args[1].value == [5.0, 7.0, 11.0]
+        @test low("s_zero").args[1].value == [5.0, 7.0, 11.0]
+        # Multi-output: `output` omitted is output 0.
+        @test low("y_omitted").args[1].value == [10.0, 20.0, 30.0]
+        @test low("y_other").args[1].value == [100.0, 200.0, 300.0]
+        @test low("y2_omitted").args[1].value == [[1.0, 2.0], [3.0, 4.0]]
+        @test low("y2_other").args[1].value == [[10.0, 20.0], [30.0, 40.0]]
+    end
+
+    @testset "nearest lowers to the §9.5.3 composition" begin
+        file = _FTP.load_path(_ft_path_fixture("nearest"))
+        model = file.models["NearestLookup"]
+        rhs = Dict((eq.lhs isa VarExpr ? eq.lhs.name : "") => eq.rhs for eq in model.equations)
+        lowered = _FTP._lower_expr_table_lookups(rhs["n_tie_2_4"], file.function_tables)
+        # Op for op and operand for operand the fixture's hand-spelled lowering.
+        @test _FTP.serialize_expression(lowered) ==
+              _FTP.serialize_expression(rhs["n_tie_2_4_hand"])
+        # Evaluated by both tree-walk compilers on a non-uniform axis: ties
+        # low, clamped outside the axis, NaN -> NaN.
+        doc = Dict{String,Any}("esm" => "1.0.0",
+            "metadata" => Dict("name" => "N", "authors" => Any["a"]),
+            "function_tables" => Dict("t" => Dict(
+                "axes" => Any[Dict("name" => "p", "values" => [1.0, 2.0, 4.0, 8.0])],
+                "interpolation" => "nearest", "data" => [10.0, 20.0, 40.0, 80.0])),
+            "models" => Dict("M" => Dict(
+                "variables" => Dict("x" => Dict("type" => "unknown", "default" => 1.0)),
+                "equations" => Any[Dict(
+                    "lhs" => Dict("op" => "D", "args" => Any["x"], "wrt" => "t"),
+                    "rhs" => Dict("op" => "table_lookup", "table" => "t",
+                                  "axes" => Dict("p" => "x"), "args" => Any[]))])))
+        for compiler in (:interpreter, :native)
+            prob = _FTP.esm_problem(doc, (0.0, 1.0); compiler = compiler)
+            ix = prob.var_map["M.x"]
+            ev(x) = begin
+                u = copy(prob.u0); u[ix] = x
+                du = zero(u); prob.f!(du, u, prob.p, 0.0); du[ix]
+            end
+            for (x, want) in ((0.0, 10.0), (1.0, 10.0), (1.5, 10.0), (2.9, 20.0),
+                              (3.0, 20.0), (3.1, 40.0), (4.0, 40.0), (6.0, 40.0),
+                              (6.5, 80.0), (8.0, 80.0), (100.0, 80.0), (-Inf, 10.0),
+                              (Inf, 80.0))
+                @test ev(x) == want
+            end
+            @test isnan(ev(NaN))
+        end
     end
 
     # ---- The regression itself: the shared end-to-end fixture, run through the
@@ -148,6 +244,24 @@ _ft_path_fixture(name) = joinpath(FT_PATH_FIXTURES_ROOT, name, "fixture.esm")
         # inline-const one are the SAME computation, not merely close.
         @test by["y"].actual == by["z"].actual
         @test exit_code == 0
+    end
+
+    # The §9.5.3 `nearest` composition and the §9.5.2 / §9.5.3 defaults, through
+    # the same runner. Each fixture's assertions carry their expected values.
+    for name in ("nearest", "lookup_defaults")
+        @testset "$(name) fixture through the inline-test runner" begin
+            dir = joinpath(FT_PATH_FIXTURES_ROOT, name)
+            doc = JSON3.read(read(_ft_path_fixture(name), String))
+            want = Dict(String(a.variable) => Float64(a.expected)
+                        for m in values(doc.models) for t in m.tests for a in t.assertions)
+            results, exit_code = _FTP.run_esm_tests([dir]; root=dir, verbose=false)
+            @test length(results) == length(want)
+            for r in results
+                @test r.status == _FTP.PASS
+                @test r.actual == want[r.variable]
+            end
+            @test exit_code == 0
+        end
     end
 
     @testset "the tree-walk build evaluates a lowered lookup" begin
@@ -193,8 +307,6 @@ _ft_path_fixture(name) = joinpath(FT_PATH_FIXTURES_ROOT, name, "fixture.esm")
         doc = JSON3.read(read(path, String), Dict{String,Any})
         # A state reads the strict table through a scalar lookup and a lookup in
         # an array equation (the array tiers), and a bilinear one on each axis.
-        # (`nearest` with a run-time query is an index computed at run time,
-        # which this binding's evaluator does not take for any table.)
         doc["function_tables"]["bi_tab"] = Dict{String,Any}(
             "axes" => Any[Dict("name" => "a", "values" => [0.0, 1.0]),
                           Dict("name" => "b", "values" => [0.0, 2.0, 4.0])],
@@ -267,6 +379,45 @@ _ft_path_fixture(name) = joinpath(FT_PATH_FIXTURES_ROOT, name, "fixture.esm")
         # table by name rather than clamp.
         e3 = raised(() -> _FTP.esm_problem(path, (0.0, 1.0); compiler = :mtk))
         @test e3 isa _FTP.TableLookupError
+        @test e3 isa _FTP.TableLookupError &&
+              e3.code == ERROR_CODES.TABLE_OUT_OF_BOUNDS_UNSUPPORTED
+    end
+
+    @testset "out_of_bounds: \"error\" on a nearest table (§9.5.3)" begin
+        doc = JSON3.read(read(_ft_path_fixture("out_of_bounds_error"), String),
+                         Dict{String,Any})
+        doc["function_tables"]["strict_tab"]["interpolation"] = "nearest"
+        m = doc["models"]["M"]
+        m["variables"]["x"] = Dict{String,Any}("type" => "unknown", "default" => 2.5)
+        push!(m["equations"], Dict("lhs" => Dict("op" => "D", "args" => Any["x"], "wrt" => "t"),
+            "rhs" => Dict("op" => "table_lookup", "table" => "strict_tab",
+                          "axes" => Dict("p" => "x"), "args" => Any[])))
+        raised(f) = try
+            f(); nothing
+        catch err
+            err
+        end
+        for compiler in (:interpreter, :native)
+            prob = _FTP.esm_problem(doc, (0.0, 1.0); compiler = compiler)
+            ix = prob.var_map["M.x"]
+            du_at(x) = begin
+                u = copy(prob.u0); u[ix] = x
+                du = zero(u); prob.f!(du, u, prob.p, 0.0); du[ix]
+            end
+            # In range, end knots included: the nearest knot, ties low.
+            @test du_at(2.5) == 20.0
+            @test du_at(2.6) == 30.0
+            @test du_at(1.0) == 10.0
+            @test du_at(4.0) == 40.0
+            # A NaN query is not out of bounds: it returns NaN.
+            @test isnan(du_at(NaN))
+            for bad in (0.999, 4.001)
+                e = raised(() -> du_at(bad))
+                @test e isa _FTP.TableLookupError &&
+                      e.code == ERROR_CODES.TABLE_LOOKUP_OUT_OF_BOUNDS
+            end
+        end
+        e3 = raised(() -> _FTP.esm_problem(doc, (0.0, 1.0); compiler = :mtk))
         @test e3 isa _FTP.TableLookupError &&
               e3.code == ERROR_CODES.TABLE_OUT_OF_BOUNDS_UNSUPPORTED
     end
