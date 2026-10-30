@@ -288,3 +288,65 @@ func TestSharedScaledArgumentFixtures(t *testing.T) {
 		t.Fatalf("the repaired spelling must be accepted, got %+v", r.StructuralErrors)
 	}
 }
+
+// esm-spec §4.8.3 "An angle meets a pure number": the rule strips the angle
+// axis where an angle meets a pure number, but never makes two different angle
+// units agree, with or without a pure number among the operands.
+func TestAngleMeetsNumberDoesNotJoinTwoAngleUnits(t *testing.T) {
+	env, bad := BuildUnitEnv(map[string]string{"theta": "rad", "omega": "sr", "n": "1"})
+	if len(bad) != 0 {
+		t.Fatalf("units did not parse: %v", bad)
+	}
+	accepted := ExprNode{Op: "+", Args: []any{"theta", "n"}}
+	if u, err := PropagateDimension(accepted, env); err != nil || u == nil || !u.Dim.IsDimensionless() {
+		t.Fatalf("theta [rad] + n [1] must be accepted as a pure number: %v (err %v)", u, err)
+	}
+	for _, refused := range []ExprNode{
+		{Op: "+", Args: []any{"theta", "omega"}},
+		{Op: "+", Args: []any{"theta", "omega", "n"}},
+		{Op: "+", Args: []any{"n", "theta", "omega"}},
+		{Op: "min", Args: []any{"theta", "omega", "n"}},
+		{Op: "max", Args: []any{"theta", "omega", "n"}},
+	} {
+		_, err := PropagateDimension(refused, env)
+		if err == nil || findingCode(err) != UnitFindingDimensionalMismatch {
+			t.Fatalf("%s(%v) must be a dimensional mismatch: rad against sr, got %v", refused.Op, refused.Args, err)
+		}
+	}
+}
+
+// A scale mismatch where an angle met a pure number names the units the author
+// declared, not the angle-stripped unit the comparison used.
+func TestAngleMeetsNumberDiagnosticNamesDeclaredUnits(t *testing.T) {
+	doc := `{
+  "esm": "1.2.0",
+  "metadata": {"name": "angle_message"},
+  "models": {"M": {
+    "variables": {
+      "theta": {"type": "parameter", "units": "deg", "default": 1.0},
+      "psi": {"type": "unknown", "units": "1"}
+    },
+    "equations": [{"lhs": "psi", "rhs": "theta"}]
+  }}
+}`
+	file, err := LoadString(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The observed-variable check (psi is defined by its equation).
+	var observed string
+	for _, w := range Validate(file).UnitWarnings {
+		if w.Path == "/models/M/variables/psi" {
+			observed = w.Message
+		}
+	}
+	if !strings.Contains(observed, "deg") {
+		t.Fatalf("the observed-variable diagnostic must name the declared `deg`, got %q", observed)
+	}
+	// The equation check, on the same two sides.
+	env, _ := BuildUnitEnv(map[string]string{"theta": "deg", "psi": "1"})
+	w := ValidateEquationDimensions(&Equation{LHS: "psi", RHS: "theta"}, env, "/eq")
+	if w == nil || !strings.Contains(w.Message, "deg") {
+		t.Fatalf("the equation diagnostic must name the declared `deg`, got %+v", w)
+	}
+}
