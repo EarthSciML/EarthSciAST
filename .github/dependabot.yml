@@ -41,6 +41,19 @@ updates:
       - "/pkg/earthsci-typst-plugin"
     schedule:
       interval: "weekly"
+    ignore:
+      # diffsol 0.18 changes the integrator's numbers (two data-source tests
+      # move by ~1.5e-6 against a 1e-6 bar). Take it as its own numerics review.
+      - dependency-name: "diffsol"
+        versions: [">=0.12"]
+      # criterion 0.8 pulls in `alloca`, a C build that breaks the lint
+      # workflow's aarch64 clippy step.
+      - dependency-name: "criterion"
+        versions: [">=0.8"]
+      # Everything in the graph links getrandom 0.3, and 0.4's `wasm_js` does
+      # not build under the Typst plugin's custom random source.
+      - dependency-name: "getrandom"
+        versions: [">=0.4"]
     groups:
       cargo:
         patterns: ["*"]
