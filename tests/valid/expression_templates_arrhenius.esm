@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.2.0",
   "metadata": {
     "name": "expression_templates_arrhenius_valid",
     "description": "Authoring-fixture demonstration of the v0.4.0 expression_templates / apply_expression_template mechanism (esm-spec §9.6 / docs/rfcs/ast-expression-templates.md, esm-giy). A 2-parameter `arrhenius` template factors three reactions whose rates share the same A·exp(-Ea/T)·num_density form. After load-time expansion, the canonical AST is the inline form (Option A round-trip); this file is the source-of-truth on disk.",
@@ -41,7 +41,7 @@
           "rate": {
             "op": "apply_expression_template", "args": [],
             "name": "arrhenius",
-            "bindings": {"A_pre": 1.8e-12, "Ea": 1500}
+            "bindings": {"A_pre": 1.8e-12, "Ea": {"op": "const", "args": [], "value": 1500, "units": "K"}}
           }
         },
         {
@@ -51,7 +51,7 @@
           "rate": {
             "op": "apply_expression_template", "args": [],
             "name": "arrhenius",
-            "bindings": {"A_pre": 3.4e-13, "Ea": 800}
+            "bindings": {"A_pre": 3.4e-13, "Ea": {"op": "const", "args": [], "value": 800, "units": "K"}}
           }
         },
         {
@@ -61,7 +61,7 @@
           "rate": {
             "op": "apply_expression_template", "args": [],
             "name": "arrhenius",
-            "bindings": {"A_pre": 6.1e-14, "Ea": 200}
+            "bindings": {"A_pre": 6.1e-14, "Ea": {"op": "const", "args": [], "value": 200, "units": "K"}}
           }
         }
       ]

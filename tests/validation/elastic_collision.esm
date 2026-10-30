@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.2.0",
   "metadata": {
     "name": "ElasticCollisionValidation",
     "description": "Two-body elastic collision whose continuous event exchanges momentum between the bodies. Split out of mathematical_correctness.esm so that document's other components do not share a document with a continuous event: evaluators that do not run continuous events refuse the whole document (esm-spec \u00a79.6.6 unsupported_construct).",
@@ -115,7 +115,7 @@
               "x1"
             ]
           },
-          "rhs": -1.0
+          "rhs": {"op": "const", "args": [], "value": -1.0, "units": "m"}
         },
         {
           "lhs": {
@@ -124,7 +124,7 @@
               "x2"
             ]
           },
-          "rhs": 1.0
+          "rhs": {"op": "const", "args": [], "value": 1.0, "units": "m"}
         },
         {
           "lhs": {
@@ -133,7 +133,7 @@
               "v1"
             ]
           },
-          "rhs": 1.0
+          "rhs": {"op": "const", "args": [], "value": 1.0, "units": "m/s"}
         },
         {
           "lhs": {
@@ -142,7 +142,7 @@
               "v2"
             ]
           },
-          "rhs": -0.5
+          "rhs": {"op": "const", "args": [], "value": -0.5, "units": "m/s"}
         },
         {
           "lhs": "total_momentum",

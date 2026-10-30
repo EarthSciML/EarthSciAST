@@ -1,5 +1,5 @@
 {
- "esm": "1.1.0",
+ "esm": "1.2.0",
  "metadata": {
   "name": "AngleArrayElement",
   "description": "esm-spec §4.8.3 'And an angle is CONVERTED': a circular-trig argument in `deg` is brought to radians before it is evaluated, and that includes an ARRAY ELEMENT. `index(lat, i)` with `lat` declared `deg` is a number in degrees exactly as a bare `lat` is, so `cos(index(lat, i))` over lat = [0, 60, 90] deg is [1, 0.5, 0]. Julia, Python, Go and TypeScript used to read the argument's unit with the checker's rules, which have none for `index` or `faq` (§4.8.4), so the flatten pass left the argument unconverted and Julia and Python returned cos(60 RADIANS) = -0.9524129804151563. Four readings are pinned: the element of a declared parameter (`cos_lat`); the element of an observed that an `faq` DEFINES in `deg` (`sin_colat`, colatitude = 90 - lat); `sin` of an element inside a REDUCING `faq` body (`sin_sum` = sin 0 + sin 60 + sin 90 = 1 + sqrt(3)/2); and the `rad` control (`cos_lat_rad`), which was always right and must stay right, so 'the scale is applied' is told apart from 'the scale is applied twice'. The scalar `sin(latitude)` row is the contrast every binding already converted.",
@@ -177,7 +177,7 @@
       "expr": {
        "op": "-",
        "args": [
-        90.0,
+        {"op": "const", "args": [], "value": 90.0, "units": "deg"},
         {
          "op": "index",
          "args": [

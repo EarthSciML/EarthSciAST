@@ -1,5 +1,5 @@
 {
-  "esm": "1.1.0",
+  "esm": "1.2.0",
   "metadata": {
     "name": "InterfaceDefinitions",
     "description": "Cross-grid tropopause coupling. Stratospheric ozone (a SPATIALLY-VARYING field on the 3-cell stratospheric grid) is remapped onto the DIFFERENT 4-cell tropospheric grid by a REAL conservative regrid whose overlap weights W[u,l] = A[u,l]/A_l are computed INLINE from cell geometry (bin-skolem broad phase + fused polygon_intersection_area narrow phase, esm-spec.md §8.6.1), not supplied. The regridded boundary O3_boundary drives D(O3) (stratosphere-troposphere exchange). Spatial<->0-D maps use the coupling lifting field.",
@@ -83,7 +83,7 @@
               "T"
             ]
           },
-          "rhs": 220.0
+          "rhs": {"op": "const", "args": [], "value": 220.0, "units": "K"}
         },
         {
           "lhs": {
@@ -467,7 +467,7 @@
               "T"
             ]
           },
-          "rhs": 288.0
+          "rhs": {"op": "const", "args": [], "value": 288.0, "units": "K"}
         },
         {
           "lhs": {
@@ -983,7 +983,7 @@
               "T_soil"
             ]
           },
-          "rhs": 290.0
+          "rhs": {"op": "const", "args": [], "value": 290.0, "units": "K"}
         },
         {
           "lhs": {
@@ -1016,7 +1016,7 @@
             "op": "/",
             "args": [
               "atm_precip",
-              1000.0
+              {"op": "const", "args": [], "value": 1000.0, "units": "kg/m^2"}
             ]
           }
         }
@@ -1045,7 +1045,7 @@
               "thickness"
             ]
           },
-          "rhs": 1000.0
+          "rhs": {"op": "const", "args": [], "value": 1000.0, "units": "m"}
         },
         {
           "lhs": {

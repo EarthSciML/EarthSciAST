@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.2.0",
   "metadata": {
     "name": "EventSystemEdgeCases",
     "description": "Edge case test fixtures for advanced event system behaviors",
@@ -401,11 +401,11 @@
           "rhs": {
             "op": "*",
             "args": [
-              0.1,
+              {"op": "const", "args": [], "value": 0.1, "units": "1/s"},
               {
                 "op": "-",
                 "args": [
-                  273.15,
+                  {"op": "const", "args": [], "value": 273.15, "units": "K"},
                   "temperature"
                 ]
               }

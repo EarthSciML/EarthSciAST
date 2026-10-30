@@ -36,7 +36,7 @@
           "type": "parameter"
         },
         "k2": {
-          "units": "cm^3/molec/s",
+          "units": "1/s",
           "default": 1.8e-12,
           "description": "Reaction rate 2",
           "type": "parameter"

@@ -1,5 +1,5 @@
 {
-  "esm": "1.1.0",
+  "esm": "1.2.0",
   "metadata": {
     "name": "CrossDomainCoupling",
     "description": "Cross-domain air-sea coupling. The atmosphere-grid sensible flux (a SPATIALLY-VARYING field on the 4-cell atmosphere surface grid) is remapped onto the DIFFERENT 3-cell ocean surface grid by a REAL conservative regrid whose overlap weights W[a,o] = A[a,o]/A_o are computed INLINE from cell geometry (bin-skolem broad phase + fused polygon_intersection_area narrow phase, esm-spec.md §8.6.1), not supplied. 0-D<->spatial maps to the bulk flux calculator use the coupling lifting field.",
@@ -371,7 +371,7 @@
               "SST"
             ]
           },
-          "rhs": 290.0
+          "rhs": {"op": "const", "args": [], "value": 290.0, "units": "K"}
         },
         {
           "lhs": {
@@ -868,7 +868,7 @@
               "T_air"
             ]
           },
-          "rhs": 288.0
+          "rhs": {"op": "const", "args": [], "value": 288.0, "units": "K"}
         },
         {
           "lhs": {
@@ -877,7 +877,7 @@
               "wind_speed"
             ]
           },
-          "rhs": 5.0
+          "rhs": {"op": "const", "args": [], "value": 5.0, "units": "m/s"}
         },
         {
           "lhs": {

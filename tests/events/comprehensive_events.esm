@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.2.0",
   "metadata": {
     "name": "ComprehensiveEventTests",
     "description": "Complete test coverage for all event system capabilities",
@@ -438,11 +438,11 @@
           "rhs": {
             "op": "*",
             "args": [
-              0.001,
+              {"op": "const", "args": [], "value": 0.001, "units": "1/s"},
               {
                 "op": "-",
                 "args": [
-                  300,
+                  {"op": "const", "args": [], "value": 300, "units": "K"},
                   "temperature"
                 ]
               }

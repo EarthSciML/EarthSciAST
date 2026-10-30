@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.2.0",
   "metadata": {
     "name": "MultiStepCouplingChainsFixtures",
     "description": "Test fixtures for complex multi-step coupling resolution chains",
@@ -42,7 +42,7 @@
           "type": "parameter"
         },
         "k_NO_HO2": {
-          "units": "cm^3/molec/s",
+          "units": "1/s",
           "default": 8e-12,
           "description": "NO + HO2 rate constant",
           "type": "parameter"
@@ -98,7 +98,7 @@
               {
                 "op": "*",
                 "args": [
-                  1e-14,
+                  {"op": "const", "args": [], "value": 1e-14, "units": "1/s"},
                   "O3",
                   "NO"
                 ]
@@ -128,7 +128,7 @@
               {
                 "op": "*",
                 "args": [
-                  -1e-14,
+                  {"op": "const", "args": [], "value": -1e-14, "units": "1/s"},
                   "O3",
                   "NO"
                 ]
@@ -332,7 +332,7 @@
           "description": "Nutrient concentration"
         },
         "primary_production_rate": {
-          "units": "1/s",
+          "units": "m^3/(mol*s)",
           "default": 1e-07,
           "description": "Primary production rate",
           "type": "parameter"

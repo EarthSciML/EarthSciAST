@@ -15,12 +15,12 @@
         },
         "v_dep": {
           "type": "unknown",
-          "units": "m/s",
+          "units": "s",
           "description": "Observed: defined by a bare-variable-LHS equation"
         },
         "SO4": {
           "type": "unknown",
-          "units": "mol",
+          "units": "1/s^0.5",
           "default": 0.5,
           "description": "Algebraic: constrained only by an expression-LHS equation"
         },

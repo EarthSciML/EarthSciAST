@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.2.0",
   "metadata": {
     "name": "ModelOnly",
     "description": "Valid ESM file containing only models section, no reaction_systems\nMigrated from ESM v0.1.0 to v0.2.0 via esm-migrate.",
@@ -335,7 +335,7 @@
                     "op": "-",
                     "args": [
                       "T",
-                      298.15
+                      {"op": "const", "args": [], "value": 298.15, "units": "K"}
                     ]
                   }
                 ]
@@ -456,7 +456,7 @@
                     "op": "*",
                     "args": [
                       "rho",
-                      1005.0
+                      {"op": "const", "args": [], "value": 1005.0, "units": "m^2/(K*s^2)"}
                     ]
                   }
                 ]
@@ -566,7 +566,7 @@
               "phi"
             ]
           },
-          "rhs": 1.0
+          "rhs": {"op": "const", "args": [], "value": 1.0, "units": "m"}
         }
       ]
     },
@@ -726,7 +726,7 @@
               "prey"
             ]
           },
-          "rhs": 100.0
+          "rhs": {"op": "const", "args": [], "value": 100.0, "units": "individuals/km^2"}
         },
         {
           "lhs": {
@@ -735,7 +735,7 @@
               "predator"
             ]
           },
-          "rhs": 10.0
+          "rhs": {"op": "const", "args": [], "value": 10.0, "units": "individuals/km^2"}
         }
       ]
     }

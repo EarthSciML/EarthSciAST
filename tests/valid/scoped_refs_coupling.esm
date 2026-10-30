@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.2.0",
   "metadata": {
     "name": "ScopedReferencesCouplingTest",
     "description": "Test fixture for scoped references in coupling transformations and cross-system dependencies",
@@ -82,14 +82,14 @@
                   {
                     "op": "*",
                     "args": [
-                      0.1,
+                      {"op": "const", "args": [], "value": 0.1, "units": "m^2/kg"},
                       "EmissionSources.Transportation.NOx_emissions"
                     ]
                   },
                   {
                     "op": "*",
                     "args": [
-                      -0.01,
+                      {"op": "const", "args": [], "value": -0.01, "units": "cm^3/s"},
                       "NO2",
                       "AtmosphericChemistry.OH_concentration"
                     ]
@@ -145,14 +145,14 @@
                       {
                         "op": "*",
                         "args": [
-                          0.05,
+                          {"op": "const", "args": [], "value": 0.05, "units": "ppbv*m^2/g"},
                           "EmissionSources.Biogenic.VOC_emissions"
                         ]
                       },
                       {
                         "op": "*",
                         "args": [
-                          -0.001,
+                          {"op": "const", "args": [], "value": -0.001, "units": "cm^3/s"},
                           "SOA_precursor",
                           "AtmosphericChemistry.OH_concentration",
                           {
@@ -161,7 +161,7 @@
                               {
                                 "op": "/",
                                 "args": [
-                                  -1000,
+                                  {"op": "const", "args": [], "value": -1000, "units": "K"},
                                   "AtmosphericChemistry.temperature"
                                 ]
                               }
@@ -191,7 +191,7 @@
                     "op": "*",
                     "args": [
                       "AtmosphericChemistry.Aerosols.nucleation_rate",
-                      1000000.0
+                      {"op": "const", "args": [], "value": 1000000.0, "units": "\u03bcg*cm^3/m^3"}
                     ]
                   },
                   {
@@ -204,14 +204,14 @@
                   {
                     "op": "*",
                     "args": [
-                      0.5,
+                      {"op": "const", "args": [], "value": 0.5, "units": "kg/(m^3*s)"},
                       "AtmosphericChemistry.Aerosols.SecondaryOrganic.SOA_precursor"
                     ]
                   },
                   {
                     "op": "*",
                     "args": [
-                      -0.01,
+                      {"op": "const", "args": [], "value": -0.01, "units": "1/s"},
                       "PM25"
                     ]
                   }
@@ -238,13 +238,13 @@
                 "args": [
                   "AtmosphericChemistry.GasPhase.photolysis_rate",
                   "Meteorology.SolarRadiation.UV_intensity",
-                  1000.0
+                  {"op": "const", "args": [], "value": 1000.0, "units": "m^2/(cm^3*W)"}
                 ]
               },
               {
                 "op": "*",
                 "args": [
-                  -0.1,
+                  {"op": "const", "args": [], "value": -0.1, "units": "1/(s*ppbv)"},
                   "AtmosphericChemistry.OH_concentration",
                   "AtmosphericChemistry.GasPhase.NO2"
                 ]
@@ -384,7 +384,7 @@
                   "rhs": {
                     "op": "*",
                     "args": [
-                      0.1,
+                      {"op": "const", "args": [], "value": 0.1, "units": "mg/(h*K*\u03bcmol)"},
                       {
                         "op": "*",
                         "args": [
@@ -402,10 +402,10 @@
                                 "op": "-",
                                 "args": [
                                   "Meteorology.Temperature.surface_temp",
-                                  298
+                                  {"op": "const", "args": [], "value": 298, "units": "K"}
                                 ]
                               },
-                              10
+                              {"op": "const", "args": [], "value": 10, "units": "K"}
                             ]
                           }
                         ]
@@ -461,19 +461,19 @@
                   {
                     "op": "*",
                     "args": [
-                      1e-05,
+                      {"op": "const", "args": [], "value": 1e-05, "units": "K*s^2/kg"},
                       "Meteorology.SolarRadiation.total_irradiance"
                     ]
                   },
                   {
                     "op": "*",
                     "args": [
-                      -0.0001,
+                      {"op": "const", "args": [], "value": -0.0001, "units": "1/s"},
                       {
                         "op": "-",
                         "args": [
                           "surface_temp",
-                          298.0
+                          {"op": "const", "args": [], "value": 298.0, "units": "K"}
                         ]
                       }
                     ]

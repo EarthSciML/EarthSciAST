@@ -500,7 +500,7 @@
         {
           "name": "M.SO4",
           "role": "state",
-          "units": "mol",
+          "units": "1/s^0.5",
           "default": 0.5,
           "shape": null,
           "update_kinds": [],
@@ -546,7 +546,7 @@
         {
           "name": "M.v_dep",
           "role": "observed",
-          "units": "m/s",
+          "units": "s",
           "default": null,
           "shape": null,
           "update_kinds": [],
@@ -3522,7 +3522,7 @@
         {
           "name": "ChemistrySystem.k2",
           "role": "parameter",
-          "units": "cm^3/molec/s",
+          "units": "1/s",
           "default": 1.8e-12,
           "shape": null,
           "update_kinds": [],

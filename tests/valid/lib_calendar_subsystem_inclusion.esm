@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.2.0",
   "metadata": {
     "name": "LibCalendarSubsystemInclusion",
     "description": "Demonstrates §4.7 subsystem inclusion of the standard-library calendar subsystem (lib/calendar.esm). A trivial diurnal-cycle consumer mounts `Calendar` as a subsystem-by-reference and uses `Calendar.seconds_since_midnight` to construct a sin-of-time-of-day weight. Validates that the AST veneer over the closed `datetime.*` registry resolves through subsystem inclusion. See docs/standard_library.md.",
@@ -63,7 +63,7 @@
                   {
                     "op": "*",
                     "args": [
-                      7.27220521664304e-05,
+                      {"op": "const", "args": [], "value": 7.27220521664304e-05, "units": "1/s"},
                       "Calendar.seconds_since_midnight"
                     ]
                   }

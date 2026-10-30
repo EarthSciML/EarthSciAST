@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.2.0",
   "metadata": {
     "name": "TwoComponentStatic",
     "description": "Two mounted components and no differential equations: purely algebraic, so there is nothing to integrate and the document's whole content is its observed graph. Pins observed_field's name resolution (API_SPEC 5.8) — 'Sites.North.u' and 'Sites.South.u' both resolve, while the bare 'u' they share must be refused rather than bound to one of them. 'North.ur' has no twin and must still be refused, because the gate is the component count, not ambiguity.",
@@ -37,7 +37,7 @@
           },
           "equations": [
             {"lhs": "u", "rhs": {"op": "*", "args": ["k", 3]}},
-            {"lhs": "ur", "rhs": {"op": "+", "args": ["k", 1]}}
+            {"lhs": "ur", "rhs": {"op": "+", "args": ["k", {"op": "const", "args": [], "value": 1, "units": "m"}]}}
           ]
         },
         "South": {

@@ -20,7 +20,7 @@
           "name": "Box.E",
           "dims": ["time"],
           "dtype": "float64",
-          "attrs": { "units": "J" },
+          "attrs": { "units": "kg" },
           "shape": [],
           "flat_indices": [2]
         },

@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.2.0",
   "metadata": {
     "name": "BoundaryConditionTests",
     "description": "Test boundary condition implementation for atmospheric models (ESM v0.2.0 — model-level BCs per docs/rfcs/discretization.md §9)",
@@ -222,7 +222,7 @@
               "temperature"
             ]
           },
-          "rhs": 288.15
+          "rhs": {"op": "const", "args": [], "value": 288.15, "units": "K"}
         }
       ]
     },

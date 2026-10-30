@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.2.0",
   "metadata": {
     "name": "CoupledOscillatorsTest",
     "description": "Coupled harmonic oscillators with energy conservation verification",
@@ -149,7 +149,7 @@
               "x1"
             ]
           },
-          "rhs": 1.0
+          "rhs": {"op": "const", "args": [], "value": 1.0, "units": "m"}
         },
         {
           "lhs": {
@@ -167,7 +167,7 @@
               "x2"
             ]
           },
-          "rhs": -0.5
+          "rhs": {"op": "const", "args": [], "value": -0.5, "units": "m"}
         },
         {
           "lhs": {

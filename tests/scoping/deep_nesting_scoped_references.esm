@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.2.0",
   "metadata": {
     "name": "DeepNestingScopedReferences",
     "description": "Test fixture for deeply nested scoped references (5+ levels) to validate parser robustness with arbitrary nesting depth",
@@ -32,7 +32,7 @@
               "AtmosphereComponent.total_column_ozone"
             ]
           },
-          "rhs": 300.0
+          "rhs": {"op": "const", "args": [], "value": 300.0, "units": "DU"}
         },
         {
           "lhs": {
@@ -41,7 +41,7 @@
               "AtmosphereComponent.TroposphereSubsystem.BoundaryLayerModule.SurfaceChemistryProcess.PhotolysisRateCalculation.J_NO2"
             ]
           },
-          "rhs": 0.001
+          "rhs": {"op": "const", "args": [], "value": 0.001, "units": "1/s"}
         }
       ],
       "subsystems": {
@@ -124,7 +124,7 @@
                                 "args": [
                                   "actinic_flux",
                                   "absorption_cross_section",
-                                  0.0001
+                                  {"op": "const", "args": [], "value": 0.0001, "units": "s/(cm^2*kg)"}
                                 ]
                               }
                             }
@@ -186,7 +186,7 @@
               "global_ocean_heat_content"
             ]
           },
-          "rhs": 1e+24
+          "rhs": {"op": "const", "args": [], "value": 1e+24, "units": "J"}
         },
         {
           "lhs": {
@@ -195,7 +195,7 @@
               "SurfaceOceanLayer.mixed_layer_temperature"
             ]
           },
-          "rhs": 288.0
+          "rhs": {"op": "const", "args": [], "value": 288.0, "units": "K"}
         },
         {
           "lhs": {
@@ -204,7 +204,7 @@
               "SurfaceOceanLayer.MicrobialLoop.bacterial_production"
             ]
           },
-          "rhs": 50.0
+          "rhs": {"op": "const", "args": [], "value": 50.0, "units": "mg/m^3/day"}
         },
         {
           "lhs": {
@@ -213,7 +213,7 @@
               "SurfaceOceanLayer.MicrobialLoop.NitrogenCycle.nitrate_concentration"
             ]
           },
-          "rhs": 10.0
+          "rhs": {"op": "const", "args": [], "value": 10.0, "units": "umol/L"}
         },
         {
           "lhs": {
@@ -222,7 +222,7 @@
               "SurfaceOceanLayer.MicrobialLoop.NitrogenCycle.Denitrification.AnoxicMicroenvironment.enzyme_activity"
             ]
           },
-          "rhs": 0.5
+          "rhs": {"op": "const", "args": [], "value": 0.5, "units": "umol/(min*mg)"}
         }
       ],
       "subsystems": {

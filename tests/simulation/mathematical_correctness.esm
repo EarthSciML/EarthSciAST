@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.2.0",
   "metadata": {
     "name": "MathematicalCorrectnessTests",
     "description": "Test mathematical correctness of ESM operations: mass conservation, ODE derivation, and numerical accuracy",
@@ -410,7 +410,7 @@
         },
         "energy": {
           "type": "unknown",
-          "units": "J",
+          "units": "J/kg",
           "description": "Total energy (should be conserved)"
         }
       },
@@ -459,7 +459,7 @@
               "x"
             ]
           },
-          "rhs": 1.0
+          "rhs": {"op": "const", "args": [], "value": 1.0, "units": "m"}
         },
         {
           "lhs": {
@@ -661,7 +661,7 @@
               {
                 "op": "*",
                 "args": [
-                  0.1,
+                  {"op": "const", "args": [], "value": 0.1, "units": "1/s"},
                   "y_fast"
                 ]
               }

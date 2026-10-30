@@ -72,6 +72,17 @@ def metadata(name, description):
     return {"name": name, "description": description, "authors": AUTHORS}
 
 
+def layer_dz(idx):
+    """dz[idx] = 100 m * (1 + 0.5 * sin(idx)): the 100 carries the metre, so
+    the formula checks under the dimensionless-literal rule (esm-spec §4.8.6)."""
+    hundred_m = {"op": "const", "args": [], "value": 100.0, "units": "m"}
+    return op("*", hundred_m, op("+", 1, op("*", 0.5, op("sin", idx))))
+
+
+#: A document whose expressions carry a unit-bearing `const` (esm-spec §4.8.5).
+CONST_UNITS_ESM_VERSION = "1.2.0"
+
+
 def doc(name, description, index_sets, models, **top):
     d = {"esm": ESM_VERSION, "metadata": metadata(name, description)}
     if index_sets:
@@ -352,9 +363,7 @@ def prefix_scan(n):
         "equations": [
             {
                 "lhs": "dz",
-                "rhs": faq(
-                    op("*", 100.0, op("+", 1, op("*", 0.5, op("sin", "i")))), ["i"], ranges_i
-                ),
+                "rhs": faq(layer_dz("i"), ["i"], ranges_i),
             },
             {
                 "lhs": faq_lhs("u", ["i"], ranges_i),
@@ -373,7 +382,9 @@ def prefix_scan(n):
         ],
     }
     desc = f"inclusive measure-weighted prefix scan over a {n}-layer column"
-    return doc("prefix_scan", desc, {"x": n}, {"Column": model}), {"cells": n, "states": n}
+    return doc(
+        "prefix_scan", desc, {"x": n}, {"Column": model}, esm=CONST_UNITS_ESM_VERSION
+    ), {"cells": n, "states": n}
 
 
 def source_receptor(n):
@@ -898,7 +909,7 @@ def makearray_scan(n):
             {
                 "lhs": "dz",
                 "rhs": faq(
-                    op("*", 100.0, op("+", 1, op("*", 0.5, op("sin", "l")))),
+                    layer_dz("l"),
                     ["l"],
                     {"l": {"from": "lev"}},
                 ),
@@ -928,7 +939,9 @@ def makearray_scan(n):
     }
     desc = f"two-region makearray of a column prefix scan and its total, {ncol} columns x {L} layers"
     index_sets = {"col": ncol, "lev": L, "lev_nodes": L + 1}
-    return doc("makearray_scan", desc, index_sets, {"Column": model}), {
+    return doc(
+        "makearray_scan", desc, index_sets, {"Column": model}, esm=CONST_UNITS_ESM_VERSION
+    ), {
         "cells": ncol * L,
         "states": ncol * L,
         "ncol": ncol,
@@ -967,7 +980,7 @@ def suffix_scan(n):
             {
                 "lhs": "dz",
                 "rhs": faq(
-                    op("*", 100.0, op("+", 1, op("*", 0.5, op("sin", "l")))),
+                    layer_dz("l"),
                     ["l"],
                     {"l": {"from": "lev"}},
                 ),
@@ -997,7 +1010,9 @@ def suffix_scan(n):
     }
     desc = f"two-region makearray of a column to-top scan and a zero lid, {ncol} columns x {L} layers"
     index_sets = {"col": ncol, "lev": L, "lev_nodes": L + 1}
-    return doc("suffix_scan", desc, index_sets, {"Column": model}), {
+    return doc(
+        "suffix_scan", desc, index_sets, {"Column": model}, esm=CONST_UNITS_ESM_VERSION
+    ), {
         "cells": ncol * L,
         "states": ncol * L,
         "ncol": ncol,

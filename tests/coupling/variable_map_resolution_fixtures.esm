@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.2.0",
   "metadata": {
     "name": "VariableMapResolutionFixtures",
     "description": "Test fixtures for variable_map coupling resolution algorithm (Section 4.7.3)",
@@ -107,7 +107,7 @@
               {
                 "op": "*",
                 "args": [
-                  0.001,
+                  {"op": "const", "args": [], "value": 0.001, "units": "s^2/kg"},
                   "solar_radiation",
                   "ozone"
                 ]
@@ -115,7 +115,7 @@
               {
                 "op": "*",
                 "args": [
-                  -0.0001,
+                  {"op": "const", "args": [], "value": -0.0001, "units": "1/(K*s)"},
                   "temperature",
                   "ozone"
                 ]

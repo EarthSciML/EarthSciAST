@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.2.0",
   "metadata": {
     "name": "LandAtmosphereHydrology",
     "description": "End-to-end test for coupled land-atmosphere water and energy cycles with vegetation dynamics\nMigrated from ESM v0.1.0 to v0.2.0 via esm-migrate.",
@@ -181,7 +181,7 @@
               "air_temperature"
             ]
           },
-          "rhs": 295.15
+          "rhs": {"op": "const", "args": [], "value": 295.15, "units": "K"}
         },
         {
           "lhs": {
@@ -199,7 +199,7 @@
               "wind_speed"
             ]
           },
-          "rhs": 3.0
+          "rhs": {"op": "const", "args": [], "value": 3.0, "units": "m/s"}
         },
         {
           "lhs": "relative_humidity",
@@ -225,7 +225,7 @@
                                 "op": "-",
                                 "args": [
                                   "air_temperature",
-                                  273.15
+                                  {"op": "const", "args": [], "value": 273.15, "units": "K"}
                                 ]
                               }
                             ]
@@ -237,10 +237,10 @@
                                 "op": "-",
                                 "args": [
                                   "air_temperature",
-                                  273.15
+                                  {"op": "const", "args": [], "value": 273.15, "units": "K"}
                                 ]
                               },
-                              243.5
+                              {"op": "const", "args": [], "value": 243.5, "units": "K"}
                             ]
                           }
                         ]
@@ -689,7 +689,7 @@
                       {
                         "op": "-",
                         "args": [
-                          285.15,
+                          {"op": "const", "args": [], "value": 285.15, "units": "K"},
                           "soil_temperature_layer3"
                         ]
                       }
@@ -741,7 +741,7 @@
               "soil_temperature_layer1"
             ]
           },
-          "rhs": 288.15
+          "rhs": {"op": "const", "args": [], "value": 288.15, "units": "K"}
         },
         {
           "lhs": {
@@ -750,7 +750,7 @@
               "soil_temperature_layer2"
             ]
           },
-          "rhs": 288.15
+          "rhs": {"op": "const", "args": [], "value": 288.15, "units": "K"}
         },
         {
           "lhs": {
@@ -759,7 +759,7 @@
               "soil_temperature_layer3"
             ]
           },
-          "rhs": 288.15
+          "rhs": {"op": "const", "args": [], "value": 288.15, "units": "K"}
         },
         {
           "lhs": "root_zone_moisture",
@@ -1125,7 +1125,7 @@
               "above_ground_biomass"
             ]
           },
-          "rhs": 2.0
+          "rhs": {"op": "const", "args": [], "value": 2.0, "units": "kg/m^2"}
         },
         {
           "lhs": {
@@ -1134,7 +1134,7 @@
               "below_ground_biomass"
             ]
           },
-          "rhs": 1.5
+          "rhs": {"op": "const", "args": [], "value": 1.5, "units": "kg/m^2"}
         },
         {
           "lhs": "photosynthesis_rate",
@@ -1324,7 +1324,7 @@
                   }
                 ]
               },
-              500000.0
+              {"op": "const", "args": [], "value": 500000.0, "units": "kg/(K*s^2)"}
             ]
           }
         },
@@ -1335,7 +1335,7 @@
               "surface_temperature"
             ]
           },
-          "rhs": 290.15
+          "rhs": {"op": "const", "args": [], "value": 290.15, "units": "K"}
         },
         {
           "lhs": "net_radiation",
@@ -1383,7 +1383,7 @@
           "rhs": {
             "op": "*",
             "args": [
-              1200.0,
+              {"op": "const", "args": [], "value": 1200.0, "units": "W*s/(m^3*K)"},
               "aerodynamic_conductance",
               {
                 "op": "-",
@@ -1430,7 +1430,7 @@
                                             "op": "-",
                                             "args": [
                                               "surface_temperature",
-                                              273.15
+                                              {"op": "const", "args": [], "value": 273.15, "units": "K"}
                                             ]
                                           }
                                         ]
@@ -1442,10 +1442,10 @@
                                             "op": "-",
                                             "args": [
                                               "surface_temperature",
-                                              273.15
+                                              {"op": "const", "args": [], "value": 273.15, "units": "K"}
                                             ]
                                           },
-                                          243.5
+                                          {"op": "const", "args": [], "value": 243.5, "units": "K"}
                                         ]
                                       }
                                     ]

@@ -1,5 +1,5 @@
 {
-  "esm": "1.0.0",
+  "esm": "1.2.0",
   "metadata": {
     "name": "JuliaMTKIntegration",
     "description": "Test Julia ModelingToolkit integration and simulation capability",
@@ -89,7 +89,7 @@
               "x"
             ]
           },
-          "rhs": 1.0
+          "rhs": {"op": "const", "args": [], "value": 1.0, "units": "meters"}
         },
         {
           "lhs": {

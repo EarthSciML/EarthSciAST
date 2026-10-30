@@ -38,7 +38,7 @@
         },
         "E": {
           "type": "unknown",
-          "units": "J",
+          "units": "kg",
           "default": 0.0
         },
         "k": {
