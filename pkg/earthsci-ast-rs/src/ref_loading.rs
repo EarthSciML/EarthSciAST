@@ -368,7 +368,11 @@ fn load_ref_document(
         // The const-units gate (esm-spec §4.8.5 item 6) judges this file's
         // own nodes against this file's own `esm` (§4.7 "Each file is held to
         // its own declared `esm` version"), never the mounting document's.
+        // The `solver` gate (§2.2.4) likewise reads this file's own `esm`: a
+        // leaf's block does not cross the mount edge, but it must still be
+        // legal in the file that carries it.
         crate::units::reject_const_units_pre_v12(&parsed, || authored.op_with_units)
+            .and_then(|()| crate::solver::reject_solver_pre_v11(&parsed))
             .map_err(|e| err(e.code, format!("{}: {}", canonical.display(), e.message)))?;
         Ok(parsed)
     })();
@@ -1711,6 +1715,48 @@ mod tests {
         let e = resolve_subsystem_refs_raw(&mut root.clone(), dir.path())
             .expect_err("a 1.0.0 leaf carrying a unit-bearing const is refused");
         assert_eq!(e.code, codes::CONST_UNITS_VERSION_TOO_OLD, "{e}");
+    }
+
+    /// A mounted leaf's top-level `solver` block is gated against the leaf's
+    /// OWN declared `esm` (esm-spec §2.2.4, §4.7): a 1.0.0 leaf carrying one is
+    /// refused even when a 1.1.0 document mounts it, and a 1.1.0 leaf is not.
+    #[test]
+    fn solver_gate_reads_each_files_own_version() {
+        let dir = TempDir::new().unwrap();
+        let leaf = |esm: &str| {
+            json!({
+                "esm": esm,
+                "metadata": { "name": "leaf" },
+                "solver": { "stiffness": "high" },
+                "models": { "Leaf": {
+                    "variables": { "q": { "type": "unknown", "units": "1", "default": 1.0 } },
+                    "equations": [{ "lhs": { "op": "D", "args": ["q"], "wrt": "t" }, "rhs": 0.0 }]
+                } }
+            })
+        };
+        let root = |file: &str| {
+            json!({
+                "esm": "1.1.0",
+                "metadata": { "name": "root" },
+                "models": { "Outer": {
+                    "variables": {},
+                    "equations": [],
+                    "subsystems": { "Leaf": { "ref": file } }
+                } }
+            })
+        };
+        std::fs::write(dir.path().join("old_leaf.esm"), leaf("1.0.0").to_string()).unwrap();
+        std::fs::write(dir.path().join("new_leaf.esm"), leaf("1.1.0").to_string()).unwrap();
+        let e = resolve_subsystem_refs_raw(&mut root("old_leaf.esm"), dir.path())
+            .expect_err("a 1.0.0 leaf carrying a `solver` block is refused");
+        assert_eq!(e.code, codes::SOLVER_VERSION_TOO_OLD, "{e}");
+        resolve_subsystem_refs_raw(&mut root("new_leaf.esm"), dir.path())
+            .expect("a 1.1.0 leaf may carry a `solver` block");
+
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/invalid/version_gate_newer_mounts_older_solver.esm");
+        let e = crate::load_path(&fixture).expect_err("the shared fixture is refused");
+        assert!(e.to_string().contains(codes::SOLVER_VERSION_TOO_OLD), "{e}");
     }
 
     #[test]

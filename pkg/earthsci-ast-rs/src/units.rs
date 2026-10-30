@@ -999,8 +999,10 @@ fn agree_where_angle_meets_number(a: &Unit, b: &Unit) -> bool {
 ///
 /// Under [`AngleRule::Applies`], when a pure angle meets a pure number among
 /// the operands, every pure angle loses its `[angle]` axis (keeping its scale)
-/// before the comparison, and the result is the pure number's unit (esm-spec
-/// §4.8.3 "An angle meets a pure number").
+/// before the comparison against the operands before it, and the result is the
+/// pure number's unit (esm-spec §4.8.3 "An angle meets a pure number"). The
+/// pure angles are still held to each other unstripped, so `rad + sr + 1` is a
+/// mismatch. Findings name each operand's declared unit, not the stripped one.
 fn propagate_matching_dim(
     op: &ExpressionNode,
     env: &dyn UnitEnv,
@@ -1025,36 +1027,58 @@ fn propagate_matching_dim(
         && known().any(Unit::is_pure_angle);
     let pure_number = known().find(|u| u.is_dimensionless()).cloned();
 
-    let mut first: Option<Unit> = None;
+    let mismatch = |declared_a: &Unit, a: &Unit, declared_b: &Unit, b: &Unit| {
+        if !a.is_compatible(b) {
+            Some(format!(
+                "Incompatible dimensions in '{}': {} vs {}",
+                op.op,
+                describe(declared_a),
+                describe(declared_b)
+            ))
+        } else if a.exact != b.exact {
+            Some(format!(
+                "Incompatible scales in '{}': {} vs {}",
+                op.op,
+                describe_scaled(declared_a),
+                describe_scaled(declared_b)
+            ))
+        } else {
+            None
+        }
+    };
+    // `first` is (declared, compared) for the first resolved operand;
+    // `first_angle` the first pure angle, which every later one must match
+    // unstripped.
+    let mut first: Option<(Unit, Unit)> = None;
+    let mut first_angle: Option<Unit> = None;
     for (dim, own) in walked {
         findings.extend(own);
-        let Some(unit) = dim.known() else {
+        let Some(declared) = dim.known() else {
             continue;
         };
-        let unit = if angle_meets_number && unit.is_pure_angle() {
-            unit.angle_as_number()
+        let stripped = angle_meets_number && declared.is_pure_angle();
+        if stripped {
+            if let Some(a) = &first_angle {
+                if let Some(message) = mismatch(a, a, declared, declared) {
+                    findings.push(UnitFinding::error(message));
+                    continue;
+                }
+            } else {
+                first_angle = Some(declared.clone());
+            }
+        }
+        let compared = if stripped {
+            declared.angle_as_number()
         } else {
-            unit.clone()
+            declared.clone()
         };
         match &first {
-            None => first = Some(unit),
-            Some(f) if !f.is_compatible(&unit) => {
-                findings.push(UnitFinding::error(format!(
-                    "Incompatible dimensions in '{}': {} vs {}",
-                    op.op,
-                    describe(f),
-                    describe(&unit)
-                )));
+            None => first = Some((declared.clone(), compared)),
+            Some((fd, fc)) => {
+                if let Some(message) = mismatch(fd, fc, declared, &compared) {
+                    findings.push(UnitFinding::error(message));
+                }
             }
-            Some(f) if f.exact != unit.exact => {
-                findings.push(UnitFinding::error(format!(
-                    "Incompatible scales in '{}': {} vs {}",
-                    op.op,
-                    describe_scaled(f),
-                    describe_scaled(&unit)
-                )));
-            }
-            _ => {}
         }
     }
     match first {
@@ -1062,7 +1086,7 @@ fn propagate_matching_dim(
         Some(_) if angle_meets_number => {
             Dim::Known(pure_number.unwrap_or_else(Unit::dimensionless))
         }
-        Some(unit) => Dim::Known(unit),
+        Some((_, compared)) => Dim::Known(compared),
         None => Dim::Unknown,
     }
 }
@@ -1572,7 +1596,8 @@ fn propagate_ifelse_dim(
     // An angle meets a pure number (esm-spec §4.8.3): the angle branch loses
     // its `[angle]` axis, keeps its scale, and an agreeing result has the
     // pure number's unit.
-    let (t, f, pure_number) = match (t.known(), f.known()) {
+    // Findings name each branch's declared unit, not the stripped one.
+    let (t_cmp, f_cmp, pure_number) = match (t.known(), f.known()) {
         (Some(a), Some(b)) if a.is_pure_angle() && b.is_dimensionless() => (
             Dim::Known(a.angle_as_number()),
             Dim::Known(b.clone()),
@@ -1583,22 +1608,22 @@ fn propagate_ifelse_dim(
             Dim::Known(b.angle_as_number()),
             Some(a.clone()),
         ),
-        _ => (t, f, None),
+        _ => (t.clone(), f.clone(), None),
     };
-    match (t.known(), f.known()) {
+    match (t_cmp.known(), f_cmp.known()) {
         (Some(a), Some(b)) if !a.is_compatible(b) => {
             findings.push(UnitFinding::error(format!(
                 "'ifelse' branches must share dimensions: {} vs {}",
-                describe(a),
-                describe(b)
+                describe(t.known().unwrap_or(a)),
+                describe(f.known().unwrap_or(b))
             )));
             Dim::Unknown
         }
         (Some(a), Some(b)) if a.exact != b.exact => {
             findings.push(UnitFinding::error(format!(
                 "'ifelse' branches must share a scale: {} vs {}",
-                describe_scaled(a),
-                describe_scaled(b)
+                describe_scaled(t.known().unwrap_or(a)),
+                describe_scaled(f.known().unwrap_or(b))
             )));
             Dim::Unknown
         }
@@ -4197,6 +4222,77 @@ mod tests {
         // The agreeing sum has the pure number's unit, so it multiplies on.
         let sum = op("+", vec![var("n"), var("theta")]);
         assert!(errs(&op("*", vec![sum, var("len")]), Some("m")).is_empty());
+    }
+
+    /// The angle rule never makes two different angle units agree: with a pure
+    /// number present, `rad` and `sr` still disagree with each other (esm-spec
+    /// §4.8.3 "The rule does NOT reach: two units that both carry `[angle]`").
+    #[test]
+    fn an_angle_meeting_a_pure_number_does_not_reconcile_two_angles() {
+        let env = env_of(&[
+            ("theta", "rad"),
+            ("theta2", "rad"),
+            ("theta_deg", "deg"),
+            ("omega", "sr"),
+            ("n", "1"),
+        ]);
+        let var = |n: &str| Expr::Variable(n.into());
+        let errs = |e: &Expr| -> Vec<String> {
+            check_expression_dimensions(e, None, &env)
+                .into_iter()
+                .filter(UnitFinding::is_error)
+                .map(|f| f.message)
+                .collect()
+        };
+        for name in ["+", "-", "min", "max"] {
+            let e = op(name, vec![var("theta"), var("omega"), var("n")]);
+            assert_eq!(errs(&e).len(), 1, "{name}: {:?}", errs(&e));
+            let e = op(name, vec![var("n"), var("theta"), var("omega")]);
+            assert_eq!(errs(&e).len(), 1, "{name}: {:?}", errs(&e));
+            // rad against deg is a scale mismatch between the two angles.
+            let e = op(name, vec![var("theta"), var("theta_deg"), var("n")]);
+            assert!(!errs(&e).is_empty(), "{name}");
+            // Two operands in the SAME angle unit still meet the number.
+            let e = op(name, vec![var("theta"), var("theta2"), var("n")]);
+            assert!(errs(&e).is_empty(), "{name}: {:?}", errs(&e));
+            let e = op(name, vec![var("theta"), var("n")]);
+            assert!(errs(&e).is_empty(), "{name}: {:?}", errs(&e));
+        }
+    }
+
+    /// Where the angle rule applies, a finding names the operand's DECLARED
+    /// unit, never the angle-stripped one: `psi [1] = theta [deg]` reports an
+    /// angle, not a bare scaled number.
+    #[test]
+    fn angle_rule_findings_name_the_declared_unit() {
+        let env = env_of(&[("theta_deg", "deg"), ("psi", "1"), ("n", "1")]);
+        let var = |n: &str| Expr::Variable(n.into());
+        let eq = Equation {
+            comment: None,
+            lhs: var("psi"),
+            rhs: var("theta_deg"),
+        };
+        let msgs: Vec<String> = check_equation_dimensions(&eq, &env)
+            .into_iter()
+            .filter(UnitFinding::is_error)
+            .map(|f| f.message)
+            .collect();
+        assert_eq!(msgs.len(), 1, "{msgs:?}");
+        assert!(msgs[0].contains("angle"), "{msgs:?}");
+        let declared = parse_unit("1").unwrap();
+        for e in [
+            var("theta_deg"),
+            op("+", vec![var("n"), var("theta_deg")]),
+            op("ifelse", vec![var("n"), var("theta_deg"), var("n")]),
+        ] {
+            let msgs: Vec<String> = check_expression_dimensions(&e, Some(&declared), &env)
+                .into_iter()
+                .filter(UnitFinding::is_error)
+                .map(|f| f.message)
+                .collect();
+            assert_eq!(msgs.len(), 1, "{msgs:?}");
+            assert!(msgs[0].contains("angle"), "{msgs:?}");
+        }
     }
 
     /// A `const` that declares its units has that unit, a `const` without units
