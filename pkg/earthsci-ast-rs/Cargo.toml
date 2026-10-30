@@ -149,7 +149,13 @@ s2rst = "=0.5.0"
 # changes; `--no-default-features` (or `default-features = false, features =
 # ["cli"]`) now yields a crate that parses, validates, flattens, classifies and
 # BUILDS a Problem with no ODE solver linked at all.
-diffsol = { version = "0.18", optional = true }
+#
+# Held at 0.11 deliberately. 0.18 restructures the vector types (batched
+# columns, no host slice) and changes the integrator's numbers: the
+# data_source_unbound tests' exp(-k) checks move by 1.0e-6 to 1.6e-6, past their
+# 1e-6 bar. Moving up is a numerics change to review on its own, not a
+# lockfile bump; no advisory touches diffsol.
+diffsol = { version = "0.11", optional = true }
 # faer, the dense linear algebra under diffsol (the same 0.24 diffsol links),
 # named directly only to set its process-wide parallelism for an explicit
 # solve: see `simulate::driver::SequentialFaer`.
@@ -174,7 +180,9 @@ rustc-hash = "2"
 bumpalo = { version = "3.14", optional = true }
 wide = { version = "1.7", optional = true }
 bytemuck = { version = "1.14", optional = true }
-criterion = { version = "0.8", optional = true }
+# 0.7, not 0.8: criterion 0.8 links `alloca`, whose C build script needs a
+# cross compiler for the aarch64 clippy leg of the lint workflow.
+criterion = { version = "0.7", optional = true }
 # OPT-IN data-provider bridge (feature `esio`, src/esio_provider.rs). Resolved
 # from crates.io, NOT by path: cargo resolves every dependency in the manifest at
 # metadata time, optional ones included, so a path into a sibling EarthSciIO
@@ -198,10 +206,17 @@ time = { version = "0.3", optional = true }
 # crate's declared 1.89 -- the `xla` crate and its transitive dependencies
 # carry their own `rust-version` floors -- so the MSRV leg of CI tests every
 # feature EXCEPT this one.
-xla = { version = "0.5", optional = true }
+#
+# At least 0.5.4: earlier 0.5 releases depend on zip 0.6, which carries
+# GHSA-m665-v7pm-7grj and two other advisories fixed only in zip 9.
+xla = { version = "0.5.4", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-getrandom = { version = "0.4", features = ["wasm_js"] }
+# Not used directly: it turns on `wasm_js` for the getrandom the dependency
+# graph links (0.3, through ahash and faer's rand). Keep it on 0.3. Naming 0.4
+# here would reach no dependency, and 0.4.3 with `wasm_js` on fails to compile
+# under the Typst plugin's `getrandom_backend="custom"`.
+getrandom = { version = "0.3", features = ["wasm_js"] }
 
 # The tape executor splits large right-hand-side calls across the caller's
 # rayon pool on native targets (src/simulate_array/tape/exec/par.rs). Always
@@ -217,12 +232,12 @@ rayon = "1.8"
 # (`tests/wasm_suite.rs`) needs none of them, so gating them off wasm keeps
 # `wasm-pack test` from dragging them into the wasm build.
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-criterion = { version = "0.8", features = ["html_reports"] }
+criterion = { version = "0.7", features = ["html_reports"] }
 proptest = "1.4"
 tempfile = "3.10"
 # Writes the FF10 zip fixture the loader-ingest test decodes (the same pure-Rust
 # `zip` crate EarthSciIO's reader uses; test-only, never a library dependency).
-zip = { version = "9", default-features = false, features = ["deflate"] }
+zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 
 # The wasm test harness — drives `tests/wasm_suite.rs` under node/headless-browser
 # via `wasm-pack test`.

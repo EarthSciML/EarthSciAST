@@ -1,4 +1,4 @@
-use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use earthsci_ast::{
     EsmFile, Expr, ExpressionNode, InlineValue, Metadata, Model, Reaction, ReactionSystem, Species,
     StoichiometricEntry, load_string, performance::CompactExpr, stoichiometric_matrix, to_json,
@@ -6,6 +6,7 @@ use earthsci_ast::{
 };
 use indexmap::IndexMap;
 use std::collections::HashMap;
+use std::hint::black_box;
 
 fn bin_op(op: &str, left: Expr, right: Expr) -> Expr {
     Expr::operator(ExpressionNode {
