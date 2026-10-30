@@ -1531,6 +1531,13 @@ class UnitValidator:
         target = self.scoped_units.get(name)
         return target.unit if target is not None else None
 
+    def _describe_side(self, expr: Expr, typed: _Typed) -> str:
+        """``typed`` for a diagnostic: its dimension and scale, led by the
+        declared unit when ``expr`` is a bare name that has one."""
+        text = f"dimension {typed.dim} at scale {typed.scale}"
+        unit = self._unit_of(expr) if isinstance(expr, str) else None
+        return f"'{expr}' [{unit}], {text}" if unit is not None else text
+
     def validate_equation(self, equation, equation_id: str) -> UnitValidationResult:
         """
         Validate dimensional consistency of an equation.
@@ -1566,8 +1573,10 @@ class UnitValidator:
                         rhs_units=str(rhs.dim),
                     )
             elif lhs is not None and rhs is not None:
-                lhs, rhs = _angle_meets_number(lhs, rhs)
-                if not self._dimensions_compatible(lhs.dim, rhs.dim):
+                # The angle-stripped pair is compared; the diagnostic reports
+                # each side as written (esm-spec §4.8.3).
+                lhs_cmp, rhs_cmp = _angle_meets_number(lhs, rhs)
+                if not self._dimensions_compatible(lhs_cmp.dim, rhs_cmp.dim):
                     result.add_error(
                         UNIT_FINDING_DIMENSIONAL_MISMATCH,
                         f"Equation {equation_id}: Dimensional mismatch - "
@@ -1575,13 +1584,13 @@ class UnitValidator:
                         lhs_units=str(lhs.dim),
                         rhs_units=str(rhs.dim),
                     )
-                elif lhs.scale != rhs.scale:
+                elif lhs_cmp.scale != rhs_cmp.scale:
                     # Same dimension, different unit (esm-spec §4.8.3).
                     result.add_error(
                         UNIT_FINDING_DIMENSIONAL_MISMATCH,
                         f"Equation {equation_id}: Scale mismatch - "
-                        f"LHS has dimension {lhs.dim} at scale {lhs.scale}, "
-                        f"RHS at scale {rhs.scale}",
+                        f"LHS has {self._describe_side(equation.lhs, lhs)}, "
+                        f"RHS has {self._describe_side(equation.rhs, rhs)}",
                         lhs_units=str(lhs.dim),
                         rhs_units=str(rhs.dim),
                     )
@@ -1816,8 +1825,19 @@ class UnitValidator:
             and any(_is_pure_angle(t.dim) for t in known)
         ):
             # An angle meets a pure number (esm-spec §4.8.3): the angle axis
-            # cancels, the scale is kept, and the result is a pure number.
+            # cancels, the scale is kept, and the result is a pure number. Two
+            # angles never meet a NUMBER with each other, so the angles are
+            # first held to the ordinary rule among themselves (`rad` against
+            # `sr` stays a mismatch however many pure numbers sit beside them).
+            self._require_same(op, [t for t in known if _is_pure_angle(t.dim)])
             known = [_angle_as_number(t) if _is_pure_angle(t.dim) else t for t in known]
+        return self._require_same(op, known)
+
+    def _require_same(self, op: str, known: list[_Typed]) -> _Typed | None:
+        """Require every operand of ``known`` to have the first one's dimension
+        AND exact scale, and return that first operand (``None`` if empty)."""
+        if not known:
+            return None
         first = known[0]
         for typed in known[1:]:
             if not self._dimensions_compatible(first.dim, typed.dim):

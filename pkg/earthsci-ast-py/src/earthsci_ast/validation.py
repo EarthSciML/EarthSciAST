@@ -1172,29 +1172,31 @@ def _validate_observed_dimensions(
 
             if typed is None:
                 continue  # undeterminable (§4.8.4) — skip, never assume dimensionless
-            # An angle meets a pure number (esm-spec §4.8.3): the angle axis
-            # cancels and the scales are compared.
-            declared_typed, typed = _angle_meets_number(_Typed(declared, declared_scale), typed)
-            declared, declared_scale = declared_typed.dim, declared_typed.scale
             computed = typed.dim
-            if computed == declared and typed.scale == declared_scale:
+            # An angle meets a pure number (esm-spec §4.8.3): the angle axis
+            # cancels and the scales are compared. The comparison reads the
+            # stripped pair; the diagnostic reports the units as written.
+            declared_cmp, typed_cmp = _angle_meets_number(_Typed(declared, declared_scale), typed)
+            if declared_cmp == typed_cmp:
                 continue
-            if computed == declared:
+            if declared_cmp.dim == typed_cmp.dim:
                 # Same dimension, different unit (esm-spec §4.8.3): the number the
                 # expression produces is not in the unit the variable declares.
+                written = validator._describe_side(definition, typed)
                 structural_errors.append(
                     ValidationError(
                         path=path,
                         message=(
                             f"Observed variable '{vname}' is declared as '{var.units}' "
-                            f"(scale {declared_scale}) but its expression has scale "
-                            f"{typed.scale}"
+                            f"({declared} at scale {declared_scale}) but its expression "
+                            f"has {written}"
                         ),
                         code=ErrorCode.UNIT_INCONSISTENCY.value,
                         details={
                             "variable": vname,
                             "declared_units": var.units,
                             "declared_scale": str(declared_scale),
+                            "expression_dimension": str(computed),
                             "expression_scale": str(typed.scale),
                         },
                     )

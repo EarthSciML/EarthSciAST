@@ -41,6 +41,7 @@ module-import graph acyclic.
 
 from __future__ import annotations
 
+import itertools
 import re
 from collections.abc import Iterator
 from typing import Any
@@ -2745,23 +2746,30 @@ def _is_angle_unit(unit: str | None) -> bool:
         return False
 
 
-def _is_pure_angle_unit(unit: str | None) -> bool:
-    """A unit whose dimension is a nonzero power of ``[angle]`` alone (``rad``,
-    ``deg``, ``sr``, ``1/rad``) -- esm-spec §4.8.3 "An angle meets a pure number"."""
+def _pure_angle_scale_is_one(unit: str | None) -> bool | None:
+    """For a pure angle -- a unit whose dimension is a nonzero power of
+    ``[angle]`` alone (``rad``, ``deg``, ``sr``, ``1/rad``), esm-spec §4.8.3
+    "An angle meets a pure number" -- whether its exact scale is 1 (``rad``ⁿ,
+    not ``deg``). ``None`` when ``unit`` is not a pure angle or cannot be
+    parsed: both questions are answered from ONE parse, so a spelling cannot
+    pass the first and crash the second."""
     if unit is None:
-        return False
+        return None
     try:
-        dim = _unit_dimensionality(_normalize_unit(unit))
+        from .units import exact_scale_of, parse_unit
+
+        parsed = parse_unit(_normalize_unit(unit))
     except _pint_unverifiable_errors():
-        return False
-    return {axis for axis, power in dim.items() if power != 0} == {"[angle]"}
+        return None
+    axes = {axis for axis, power in parsed.dimensionality.items() if power != 0}
+    if axes != {"[angle]"}:
+        return None
+    return exact_scale_of(parsed).is_one()
 
 
-def _angle_scale_is_one(unit: str) -> bool:
-    """Whether a pure angle has exact scale 1 (``rad``ⁿ, not ``deg``)."""
-    from .units import exact_scale_of, parse_unit
-
-    return exact_scale_of(parse_unit(unit)).is_one()
+def _is_pure_angle_unit(unit: str | None) -> bool:
+    """Whether ``unit`` is a pure angle (see :func:`_pure_angle_scale_is_one`)."""
+    return _pure_angle_scale_is_one(unit) is not None
 
 
 def _units_agree_where_angle_meets_number(u1: str, u2: str) -> bool:
@@ -3306,12 +3314,13 @@ def _walk_expression_for_dimensionless_arg_checks(
             arg_units = var_units.get(arg)
             operation, subject = _DIMENSIONLESS_ARG_FUNCS[op]
             scaled = _scaled_dimensionless_refusal(op, arg_units)
-            if _is_pure_angle_unit(arg_units):
+            angle_scale_is_one = _pure_angle_scale_is_one(arg_units)
+            if angle_scale_is_one is not None:
                 # An angle meets a pure number (esm-spec §4.8.3): `rad` is
                 # admitted; any other scale (`deg`) is refused for its scale.
                 scaled = (
                     None
-                    if _angle_scale_is_one(arg_units)
+                    if angle_scale_is_one
                     else (
                         f"{subject} argument in '{arg_units}' is an angle at a scale other "
                         "than 1 rad; where an angle meets a pure number its scale is kept "
@@ -3321,7 +3330,7 @@ def _walk_expression_for_dimensionless_arg_checks(
             if (
                 arg_units is not None
                 and not _is_dimensionless_unit(arg_units)
-                and not _is_pure_angle_unit(arg_units)
+                and angle_scale_is_one is None
             ):
                 errors.append(
                     (
@@ -3443,8 +3452,10 @@ def _check_unit_consistency(data: dict[str, Any], tables: dict[str, Any], errors
                             sub_units.append(var_units.get(arg))
                     non_none = [u for u in sub_units if u is not None]
                     if len(non_none) >= 2:
-                        ref = non_none[0]
-                        for u in non_none[1:]:
+                        # Every PAIR must agree, not each operand with the
+                        # first: `1 + rad + sr` pairs rad with sr, which stays
+                        # a mismatch (esm-spec §4.8.3).
+                        for ref, u in itertools.combinations(non_none, 2):
                             if not _units_agree_where_angle_meets_number(ref, u):
                                 op_name = "addition" if expr.get("op") == "+" else "subtraction"
                                 verb = "add" if expr.get("op") == "+" else "subtract"
