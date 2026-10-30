@@ -148,8 +148,7 @@ func liftRHSToCell(expr Expression, arrayvars map[string]bool, loops []string) E
 // indexArgs builds the `index` argument list: the gathered operand followed by
 // one loop symbol per dimension.
 func indexArgs(head any, loops []string) []any {
-	args := make([]any, 0, len(loops)+1)
-	args = append(args, head)
+	args := []any{head}
 	for _, l := range loops {
 		args = append(args, l)
 	}

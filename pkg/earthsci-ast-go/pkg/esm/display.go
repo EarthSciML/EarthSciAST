@@ -1730,7 +1730,7 @@ func formatJoinClause(join []any, format string) string {
 			continue
 		}
 		onRaw, _ := cm["on"].([]any)
-		parts := make([]string, 0, len(onRaw)+1)
+		parts := make([]string, 0, len(onRaw))
 		for _, p := range onRaw {
 			pp, ok := p.([]any)
 			if !ok || len(pp) < 2 {

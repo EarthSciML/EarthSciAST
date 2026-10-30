@@ -158,7 +158,7 @@ func lhsFreeSymbols(e Expression, bound map[string]bool, declared func(string) b
 	}
 	switch n.Op {
 	case "faq", "aggregate":
-		inner := make(map[string]bool, len(bound)+len(n.Ranges))
+		inner := make(map[string]bool, len(bound))
 		for k := range bound {
 			inner[k] = true
 		}

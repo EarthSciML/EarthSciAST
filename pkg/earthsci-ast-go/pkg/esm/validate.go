@@ -1211,7 +1211,7 @@ func unionScope(base map[string]bool, extra map[string]bool) map[string]bool {
 func (s *structuralScan) validateExprNodeChildren(node ExprNode, allVars map[string]bool, path, currentSystem string) {
 	scope := allVars
 	if bound := boundIndexSymbols(node); len(bound) > 0 {
-		scope = make(map[string]bool, len(allVars)+len(bound))
+		scope = make(map[string]bool, len(allVars))
 		for k, v := range allVars {
 			scope[k] = v
 		}
@@ -2501,7 +2501,7 @@ func sortedKeysOfSet(set map[string]bool) []string {
 // (esm-spec §8), so naming one here must be `undefined_system` — external data
 // reaches a model through a parameter of that model.
 func couplableSystemNames(file *ESMFile) map[string]bool {
-	names := make(map[string]bool, len(file.Models)+len(file.ReactionSystems))
+	names := make(map[string]bool, len(file.Models))
 	for name := range file.Models {
 		names[name] = true
 	}

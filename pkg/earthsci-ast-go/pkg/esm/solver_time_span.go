@@ -150,7 +150,7 @@ func daysInMonth(y, m int64) int64 {
 	case 4, 6, 9, 11:
 		return 30
 	case 2:
-		if isLeapYear(int(y)) {
+		if isLeapYear(y) {
 			return 29
 		}
 		return 28

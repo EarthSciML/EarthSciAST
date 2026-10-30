@@ -132,7 +132,7 @@ func newEditError(code, format string, args ...any) *EditError {
 // empty (non-nil) map, so an operation on an absent collection still produces a
 // collection the caller can read back.
 func copyMap[V any](m map[string]V) map[string]V {
-	out := make(map[string]V, len(m)+1)
+	out := make(map[string]V, len(m))
 	for k, v := range m {
 		out[k] = v
 	}
