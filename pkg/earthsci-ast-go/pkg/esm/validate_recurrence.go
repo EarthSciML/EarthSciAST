@@ -266,7 +266,7 @@ func analyzeRecurrenceEquation(eq Equation, file *ESMFile, arrayShaped map[strin
 			code: codeRecurrenceNotWellfounded,
 			message: fmt.Sprintf("'%s' is read bare inside its own defining equation as well as "+
 				"through `index`. A bare read names the whole array, which does not exist while "+
-				"the recurrence sweeps it (esm-spec §4.3.1.1).", varName),
+				"the recurrence sweeps it (esm-spec §4.3.1.1).", quoteSafe(varName)),
 		}
 	}
 
@@ -281,7 +281,7 @@ func analyzeRecurrenceEquation(eq Equation, file *ESMFile, arrayShaped map[strin
 				"`reshape`/`transpose`/`concat`/`broadcast` operand — so no cell-by-cell sweep can "+
 				"supply it. A `makearray`'s region order fixes which write WINS, not the order "+
 				"cells are EVALUATED in (esm-spec §4.3.1.1, §4.3.2); write the recurrence as one "+
-				"`faq` with the base case as an `ifelse` guard in the body.", varName),
+				"`faq` with the base case as an `ifelse` guard in the body.", quoteSafe(varName)),
 		}
 	}
 
@@ -298,7 +298,7 @@ func analyzeRecurrenceEquation(eq Equation, file *ESMFile, arrayShaped map[strin
 			message: fmt.Sprintf("the definition of '%s' reads '%s' at another position, but the "+
 				"equation declares no cell frame to sweep: its RHS is not a `faq` over the "+
 				"variable's axes and its LHS is not the indexed-`faq` form "+
-				"`faq{expr: index(%s, k…)}` (esm-spec §4.3.1.1).", varName, varName, varName),
+				"`faq{expr: index(%s, k…)}` (esm-spec §4.3.1.1).", quoteSafe(varName), quoteSafe(varName), quoteSafe(varName)),
 		}
 	}
 
@@ -308,7 +308,7 @@ func analyzeRecurrenceEquation(eq Equation, file *ESMFile, arrayShaped map[strin
 			code: codeRecurrenceUnsupportedForm,
 			message: fmt.Sprintf("the recurrence definition of '%s' has no symbolic output index "+
 				"to fold along (%v); a literal singleton dimension cannot be a recurrence axis "+
-				"(esm-spec §4.3.1.1).", varName, idxNames),
+				"(esm-spec §4.3.1.1).", quoteSafe(varName), idxNames),
 		}
 	}
 
@@ -327,7 +327,7 @@ func checkRecurrenceReads(varName string, frameSyms []string, frameEnv map[strin
 				code: codeRecurrenceNotWellfounded,
 				message: fmt.Sprintf("a causal self-read of '%s' supplies %d indices but its frame "+
 					"has %d axes; every self-read indexes every axis (esm-spec §4.3.1.1).",
-					varName, len(read.args), len(frameSyms)),
+					quoteSafe(varName), len(read.args), len(frameSyms)),
 			}
 		}
 
@@ -357,7 +357,7 @@ func checkRecurrenceReads(varName string, frameSyms []string, frameEnv map[strin
 						"the preceding position and the lag is the constant 1, or range a contracted "+
 						"index `a` over the lag's bounds and select the matching term with "+
 						"`ifelse(index(lag, %s) == a, <term reading index(%s, %s - a)>, 0)`.",
-						d, varName, sym, sym, sym, sym, sym, sym, sym, varName, sym),
+						d, quoteSafe(varName), quoteSafe(sym), quoteSafe(sym), quoteSafe(sym), quoteSafe(sym), quoteSafe(sym), quoteSafe(sym), quoteSafe(sym), quoteSafe(varName), quoteSafe(sym)),
 				}
 			}
 			// The MANDATORY half of the proof: coefficient exactly 1. Without it
@@ -369,7 +369,7 @@ func checkRecurrenceReads(varName string, frameSyms []string, frameEnv map[strin
 					message: fmt.Sprintf("index %d of a causal self-read of '%s' carries its frame "+
 						"symbol '%s' with coefficient %d, not 1, so it does not name a position "+
 						"relative to the cell being written (esm-spec §4.3.1.1).",
-						d, varName, sym, affine.coef),
+						d, quoteSafe(varName), quoteSafe(sym), affine.coef),
 				}
 			}
 			// The OPTIONAL half: an unbounded constant part is a lag of unknown
@@ -385,7 +385,7 @@ func checkRecurrenceReads(varName string, frameSyms []string, frameEnv map[strin
 						axis: sym,
 						message: fmt.Sprintf("a causal self-read of '%s' is offset on more than "+
 							"one axis. A recurrence folds along exactly ONE axis; every other "+
-							"index must be the bare frame symbol (esm-spec §4.3.1.1).", varName),
+							"index must be the bare frame symbol (esm-spec §4.3.1.1).", quoteSafe(varName)),
 					}
 				}
 				lagged = d
@@ -405,7 +405,7 @@ func checkRecurrenceReads(varName string, frameSyms []string, frameEnv map[strin
 					message: fmt.Sprintf("index %d of a causal self-read of '%s' names the cell "+
 						"being written, or a later one, on axis '%s'. A causal self-reference reads "+
 						"strictly EARLIER positions; no sweep order can satisfy a same-cell or "+
-						"forward read (esm-spec §4.3.1.1).", d, varName, sym),
+						"forward read (esm-spec §4.3.1.1).", d, quoteSafe(varName), quoteSafe(sym)),
 				}
 			}
 			if lagged >= 0 {
@@ -414,7 +414,7 @@ func checkRecurrenceReads(varName string, frameSyms []string, frameEnv map[strin
 					axis: sym,
 					message: fmt.Sprintf("a causal self-read of '%s' is offset on more than one "+
 						"axis. A recurrence folds along exactly ONE axis; every other index must be "+
-						"the bare frame symbol (esm-spec §4.3.1.1).", varName),
+						"the bare frame symbol (esm-spec §4.3.1.1).", quoteSafe(varName)),
 				}
 			}
 			lagged = d
@@ -425,7 +425,7 @@ func checkRecurrenceReads(varName string, frameSyms []string, frameEnv map[strin
 				code: codeRecurrenceNotWellfounded,
 				message: fmt.Sprintf("a causal self-read of '%s' is at the same cell on every "+
 					"axis, so it defines '%s' in terms of itself rather than of an earlier "+
-					"position (esm-spec §4.3.1.1).", varName, varName),
+					"position (esm-spec §4.3.1.1).", quoteSafe(varName), quoteSafe(varName)),
 			}
 		}
 		switch {
@@ -439,7 +439,7 @@ func checkRecurrenceReads(varName string, frameSyms []string, frameEnv map[strin
 				axis: frameSyms[lagged],
 				message: fmt.Sprintf("the causal self-reads of '%s' disagree on the recurrence "+
 					"axis: one folds along '%s' and another along '%s'. A definition folds along "+
-					"exactly one axis (esm-spec §4.3.1.1).", varName, frameSyms[axis], frameSyms[lagged]),
+					"exactly one axis (esm-spec §4.3.1.1).", quoteSafe(varName), quoteSafe(frameSyms[axis]), quoteSafe(frameSyms[lagged])),
 			}
 		}
 	}

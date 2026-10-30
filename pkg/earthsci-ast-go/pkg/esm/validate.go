@@ -998,7 +998,7 @@ func (s *structuralScan) validateExpressionVariables(expr Expression, allVars ma
 				s.addErr(StructuralError{
 					Path:    path,
 					Code:    ErrorUnresolvedScopedRef,
-					Message: fmt.Sprintf("Unresolved scoped reference '%s'", e),
+					Message: fmt.Sprintf("Unresolved scoped reference '%s'", quoteSafe(e)),
 					Details: map[string]any{
 						"variable":       e,
 						"current_system": currentSystem,
@@ -1010,7 +1010,7 @@ func (s *structuralScan) validateExpressionVariables(expr Expression, allVars ma
 		s.addErr(StructuralError{
 			Path:    path,
 			Code:    s.undefinedNameCode(),
-			Message: fmt.Sprintf("Undefined variable '%s'", e),
+			Message: fmt.Sprintf("Undefined variable '%s'", quoteSafe(e)),
 			Details: map[string]any{
 				"variable":       e,
 				"current_system": currentSystem,

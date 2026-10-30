@@ -389,7 +389,7 @@ func tryFold(x any, ctx string) (val int64, folded bool, err error) {
 		op, _ := opRaw.(string)
 		if op != "+" && op != "-" && op != "*" && op != "/" {
 			return 0, false, newETErr(CodeMetaparamTypeError,
-				fmt.Sprintf("%s: op '%s' is not allowed in a metaparameter expression (only + - * /)", ctx, op))
+				fmt.Sprintf("%s: op '%s' is not allowed in a metaparameter expression (only + - * /)", ctx, quoteSafe(op)))
 		}
 		acc := vals[0]
 		if op == "-" && len(vals) == 1 {

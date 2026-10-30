@@ -248,7 +248,7 @@ func (s *structuralScan) validateLHSRules(modelName string, sc lhsScope, basePat
 				Path: path,
 				Code: ErrorEquationDefinesParameter,
 				Message: fmt.Sprintf("Equation %d defines '%s', which is a parameter; "+
-					"an equation defines unknowns only", i, base),
+					"an equation defines unknowns only", i, quoteSafe(base)),
 				Details: map[string]any{"variable": base},
 			})
 		}
@@ -264,7 +264,7 @@ func (s *structuralScan) validateLHSRules(modelName string, sc lhsScope, basePat
 				Path: path,
 				Code: ErrorUnboundIndexSymbol,
 				Message: fmt.Sprintf("Equation %d (defining '%s') subscripts its left-hand side "+
-					"with '%s', which no faq binds", i, lhsDefinedName(lhs), sym),
+					"with '%s', which no faq binds", i, quoteSafe(lhsDefinedName(lhs)), quoteSafe(sym)),
 				Details: map[string]any{"symbol": sym, "variable": lhsDefinedName(lhs)},
 			})
 		}

@@ -248,7 +248,7 @@ func validateTemplates(templates map[string]any, scope string) error {
 			if _, exists := seen[ps]; exists {
 				return newETErr(
 					CodeApplyExpressionTemplateInvalidDeclaration,
-					fmt.Sprintf("%s.expression_templates.%s: param '%s' declared twice", scope, name, ps),
+					fmt.Sprintf("%s.expression_templates.%s: param '%s' declared twice", scope, name, quoteSafe(ps)),
 				)
 			}
 			seen[ps] = struct{}{}
@@ -453,21 +453,21 @@ func expandApply(node map[string]any, templates map[string]any, scope string) (a
 	if !ok {
 		return nil, newETErr(
 			CodeApplyExpressionTemplateUnknownTemplate,
-			fmt.Sprintf("%s: apply_expression_template references undeclared template '%s'", scope, nameRaw),
+			fmt.Sprintf("%s: apply_expression_template references undeclared template '%s'", scope, quoteSafe(nameRaw)),
 		)
 	}
 	decl, ok := declRaw.(map[string]any)
 	if !ok {
 		return nil, newETErr(
 			CodeApplyExpressionTemplateInvalidDeclaration,
-			fmt.Sprintf("%s: template '%s' declaration is not an object", scope, nameRaw),
+			fmt.Sprintf("%s: template '%s' declaration is not an object", scope, quoteSafe(nameRaw)),
 		)
 	}
 	bindingsRaw, ok := node["bindings"].(map[string]any)
 	if !ok {
 		return nil, newETErr(
 			CodeApplyExpressionTemplateBindingsMismatch,
-			fmt.Sprintf("%s: apply_expression_template '%s' missing 'bindings' object", scope, nameRaw),
+			fmt.Sprintf("%s: apply_expression_template '%s' missing 'bindings' object", scope, quoteSafe(nameRaw)),
 		)
 	}
 	paramsArr, _ := decl["params"].([]any)
@@ -483,7 +483,7 @@ func expandApply(node map[string]any, templates map[string]any, scope string) (a
 		if _, ok := bindingsRaw[p]; !ok {
 			return nil, newETErr(
 				CodeApplyExpressionTemplateBindingsMismatch,
-				fmt.Sprintf("%s: apply_expression_template '%s' missing binding for param '%s'", scope, nameRaw, p),
+				fmt.Sprintf("%s: apply_expression_template '%s' missing binding for param '%s'", scope, quoteSafe(nameRaw), quoteSafe(p)),
 			)
 		}
 	}
@@ -491,7 +491,7 @@ func expandApply(node map[string]any, templates map[string]any, scope string) (a
 		if _, ok := declared[k]; !ok {
 			return nil, newETErr(
 				CodeApplyExpressionTemplateBindingsMismatch,
-				fmt.Sprintf("%s: apply_expression_template '%s' supplies unknown param '%s'", scope, nameRaw, k),
+				fmt.Sprintf("%s: apply_expression_template '%s' supplies unknown param '%s'", scope, quoteSafe(nameRaw), quoteSafe(k)),
 			)
 		}
 	}
@@ -765,7 +765,7 @@ func registeredWhere(decl map[string]any, isetNames map[string]struct{}, scope, 
 		for _, s := range req {
 			if _, ok := isetNames[s]; !ok {
 				return nil, newETErr(CodeTemplateConstraintUnknownIndexSet,
-					fmt.Sprintf("%s.expression_templates.%s: where.%s.shape names index set '%s', which the consuming document's index_sets registry does not declare (esm-spec §9.6.1/§9.6.6)", scope, tname, p, s))
+					fmt.Sprintf("%s.expression_templates.%s: where.%s.shape names index set '%s', which the consuming document's index_sets registry does not declare (esm-spec §9.6.1/§9.6.6)", scope, tname, p, quoteSafe(s)))
 			}
 		}
 		out[p] = req

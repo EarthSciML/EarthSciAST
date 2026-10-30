@@ -316,7 +316,7 @@ func checkDataSourceExtents(view map[string]any, baseDir string, mountDeclared m
 			continue
 		}
 		return newETErr(CodeTemplateImportUnknownName,
-			fmt.Sprintf("data_sources.%s.extent binds metaparameter '%s', which neither this document nor any document it mounts declares (esm-spec §8.9.4, §9.7.6)", key, name))
+			fmt.Sprintf("data_sources.%s.extent binds metaparameter '%s', which neither this document nor any document it mounts declares (esm-spec §8.9.4, §9.7.6)", key, quoteSafe(name)))
 	}
 	return nil
 }
