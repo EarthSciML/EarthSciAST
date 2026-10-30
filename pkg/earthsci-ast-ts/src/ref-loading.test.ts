@@ -1,6 +1,8 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { resolveSubsystemRefs, CircularReferenceError, RefLoadError } from './ref-loading.js'
 import type { EsmFile, Model, ReactionSystem } from './types.js'
+import { loadPath } from './parse.js'
+import { fixturesDir } from './test-helpers.js'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -207,5 +209,57 @@ describe('resolveSubsystemRefs', () => {
     const sub = (file.reaction_systems!.Chem as ReactionSystem).subsystems!.Sub as any
     expect(sub.ref).toBeUndefined()
     expect(sub.species.O3).toBeDefined()
+  })
+})
+
+// esm-spec §4.7: each file is held to its OWN declared `esm`, by every
+// file-level version gate the root gets, read as raised by the `aggregate` →
+// `faq` normalization.
+describe('a mounted leaf runs every version gate on its own esm', () => {
+  const codeOf = async (p: string): Promise<string | null> => {
+    try {
+      await resolveSubsystemRefs(loadPath(p), path.dirname(p))
+      return null
+    } catch (e) {
+      return (e as { code?: string }).code ?? String(e)
+    }
+  }
+
+  it.each([
+    ['version_gate_newer_mounts_older_const_units.esm', 'const_units_version_too_old'],
+    ['version_gate_newer_mounts_older_solver.esm', 'solver_version_too_old'],
+  ])('rejects %s with %s', async (name, code) => {
+    expect(await codeOf(fixturesDir('invalid', name))).toBe(code)
+  })
+
+  it('accepts an older root mounting a newer leaf', async () => {
+    expect(await codeOf(fixturesDir('valid', 'version_gate_older_mounts_newer.esm'))).toBe(null)
+  })
+
+  it('reads the leaf version as raised by the aggregate normalization', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'esm-leaf-gate-'))
+    try {
+      const alias = fixturesDir('conformance', 'deprecated_op_alias')
+      const child = JSON.parse(
+        await fs.readFile(path.join(alias, 'ref_child_aliased.esm'), 'utf-8'),
+      )
+      // A 1.0.0 leaf spelling `aggregate` is raised to 1.1.0, so its `solver`
+      // block is in range.
+      child.esm = '1.0.0'
+      child.solver = { stiffness: 'high' }
+      await fs.writeFile(path.join(dir, 'ref_child_aliased.esm'), JSON.stringify(child))
+      await fs.copyFile(
+        path.join(alias, 'ref_parent_aliased.esm'),
+        path.join(dir, 'ref_parent_aliased.esm'),
+      )
+      const quiet = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        expect(await codeOf(path.join(dir, 'ref_parent_aliased.esm'))).toBe(null)
+      } finally {
+        quiet.mockRestore()
+      }
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true })
+    }
   })
 })

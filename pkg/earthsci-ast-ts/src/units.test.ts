@@ -692,6 +692,22 @@ describe('Unit parsing and dimensional analysis', () => {
         expect(mismatches({ op: 'concat', args: ['theta', 'n'] } as Expression)).toBe(1)
       })
 
+      it('never makes two different angles agree, even beside a pure number', () => {
+        for (const expr of [
+          { op: '+', args: ['theta', 'omega', 'n'] },
+          { op: '-', args: ['n', 'theta', 'omega'] },
+          { op: 'min', args: ['theta', 'omega', 'n'] },
+          { op: 'max', args: ['n', 'omega', 'theta'] },
+        ] as Expression[]) {
+          expect(mismatches(expr), JSON.stringify(expr)).toBeGreaterThan(0)
+        }
+        // One angle unit, repeated, beside a pure number still agrees …
+        expect(mismatches({ op: '+', args: ['theta', 'theta', 'n'] } as Expression)).toBe(0)
+        expect(mismatches({ op: 'min', args: ['omega', 'n', 'omega'] } as Expression)).toBe(0)
+        // … and `theta [rad] + n [1]` stays accepted.
+        expect(mismatches({ op: '+', args: ['theta', 'n'] } as Expression)).toBe(0)
+      })
+
       it("compares an equation's two sides and an observed definition the same way", () => {
         const doc = (rhs: string): EsmFile =>
           ({

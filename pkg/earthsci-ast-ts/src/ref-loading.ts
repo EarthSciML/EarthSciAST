@@ -25,7 +25,6 @@ import {
   deepEqual,
   expandDocument,
   lowerExpressionTemplates,
-  rejectExpressionTemplatesPreV04,
 } from './lower-expression-templates.js'
 import {
   appendComponentImports,
@@ -35,7 +34,6 @@ import {
   foldMountContribution,
   evalMetaExpr,
   isTemplateLibraryDoc,
-  rejectTemplateImportsPreV08,
   requireMetaExpr,
   resolveTemplateMachinery,
 } from './template-imports.js'
@@ -52,7 +50,7 @@ import {
 import { ERROR_CODES, EsmDiagnosticError } from './errors.js'
 import { loadString, validateSchema, ROOT_PATH } from './parse.js'
 import { toJson } from './serialize.js'
-import { prepareDocumentOps, raiseFaqVersionFloor } from './parse.js'
+import { prepareDocumentOps, raiseFaqVersionFloor, rejectVersionGatedConstructs } from './parse.js'
 
 /**
  * Error thrown when a circular reference is detected during subsystem resolution.
@@ -615,8 +613,9 @@ function resolveRefDocument(
       `${mountLabel} targets a coupling-library file; libraries are imported via a coupling_import coupling entry (esm-spec §10.9)`,
     )
   }
-  rejectExpressionTemplatesPreV04(parsed)
-  rejectTemplateImportsPreV08(parsed)
+  // esm-spec §4.7: the leaf is held to its OWN declared `esm` (as raised by the
+  // `faq` normalization its caller already ran), by the same gates as the root.
+  rejectVersionGatedConstructs(parsed)
   // esm-spec §4.7: a `{ ref }` resolves "before validation or any other
   // processing", so the referenced document's OWN nested mounts are inlined
   // HERE, ahead of the §9.7.10 injection and the §9.6.3 fixpoint below.
