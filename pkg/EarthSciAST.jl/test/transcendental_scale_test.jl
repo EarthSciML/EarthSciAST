@@ -178,6 +178,39 @@ end
         # Two angles, and atan2, keep the result they had.
         @test EarthSciAST._is_angle_bearing(first(unit(O("+", E[V("th"), V("th")]))))
         @test first(unit(O("atan", E[V("th"), V("n")]))) == u"rad"
+
+        # The rule never makes two DIFFERENT angles agree, whichever operand
+        # comes first: Unitful holds `rad` and `sr` both as `NoDims` at scale 1,
+        # so the angle axis power is what separates them.
+        for op in ("+", "min")
+            for args in (E[V("th"), V("sa")], E[V("th"), V("sa"), V("n")],
+                         E[V("n"), V("th"), V("sa")], E[V("th"), V("n"), V("sa")])
+                @test !isempty(last(unit(O(op, args))))
+            end
+        end
+        # Nor a unit that mixes the angle axis with another one.
+        vu["Lr"] = "m*rad"
+        @test !isempty(last(unit(O("+", E[V("Lr"), V("L")]))))
+        # `atan2`, `concat` and `makearray` are outside the rule: an angle
+        # there is not a pure number.
+        @test !isempty(last(unit(O("atan", E[V("th"), V("n")]))))
+        @test isempty(last(unit(O("atan", E[V("n"), V("n")]))))
+        @test !isempty(last(unit(O("concat", E[V("th"), V("n")]))))
+        @test !isempty(last(unit(O("concat", E[V("n"), V("th")]))))
+        @test isempty(last(unit(O("concat", E[V("th"), V("th")]))))
+        mk = O("makearray", E[]; regions = [[[1, 1]], [[2, 2]]],
+               values = E[V("th"), V("n")])
+        @test !isempty(last(unit(mk)))
+
+        # The two sides of an equation are a place the rule reaches, and the
+        # finding names the units as declared, not with the angle removed.
+        site(lhs, rhs) = last(EarthSciAST._site_check(V(lhs), V(rhs), vu))
+        @test isempty(site("n", "th"))
+        @test isempty(site("th", "n"))
+        @test !isempty(site("n", "dg"))
+        found = site("th", "sa")
+        @test length(found) == 1
+        @test occursin("'rad'", found[1]) && occursin("'sr'", found[1])
     end
 
     @testset "the angle normalization factor" begin

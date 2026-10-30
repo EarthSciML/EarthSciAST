@@ -1029,7 +1029,29 @@ function _exact_scale(u)::ExactScale
     return scale
 end
 
-_same_unit(a, b) = dimension(a) == dimension(b) && _exact_scale(a) == _exact_scale(b)
+# Same dimension, same exact scale and the same power of the ANGLE axis. The
+# third clause is what Unitful cannot see on its own: it holds `rad` and `sr` as
+# `NoDims` at scale 1, so `rad`, `sr` and `1` would otherwise all be one unit,
+# and `m*rad` would be `m` (esm-spec §4.8.1 makes `rad` an axis).
+_same_unit(a, b) = _same_unit_ignoring_angle(a, b) &&
+    _angle_axis_exponent(a) == _angle_axis_exponent(b)
+
+# Dimension and exact scale only — Unitful's own view, in which the angle axis
+# is already removed (esm-spec §4.8.3 "An angle meets a pure number").
+_same_unit_ignoring_angle(a, b) =
+    dimension(a) == dimension(b) && _exact_scale(a) == _exact_scale(b)
+
+# Do `a` and `b` agree at a position where an angle meets a pure number
+# (esm-spec §4.8.3)? A pure angle against a pure number loses its angle axis and
+# keeps its scale (`rad` agrees with `1`, `deg` does not); every other pair —
+# two angles (`rad` against `sr`), a mixed unit (`m*rad` against `m`) — is held
+# to `_same_unit`.
+function _units_agree_where_angle_meets_number(a, b)::Bool
+    ((_is_pure_angle(a) && _is_angle_free_number(b)) ||
+     (_is_angle_free_number(a) && _is_pure_angle(b))) &&
+        return _same_unit_ignoring_angle(a, b)
+    return _same_unit(a, b)
+end
 
 # The Unitful unit NAMES that denote a PLANE angle. Unitful models `rad` as
 # `NoDims` (esm-spec §4.8.1 makes it an axis, and the other four bindings carry
@@ -1079,11 +1101,9 @@ function _is_angle_bearing(u)::Bool
     return false
 end
 
-# The power of the esm ANGLE axis in `u`: `rad` and `deg` count 1 each, `sr`
-# counts 2. Zero for a unit with a real dimension, and for one whose angles
-# cancel (`rad/deg`).
-function _angle_axis_power(u)::Rational{Int}
-    dimension(u) == dimension(Unitful.NoUnits) || return 0 // 1
+# The power of the esm ANGLE axis in `u`, whatever else `u` carries: `rad` and
+# `deg` count 1 each, `sr` counts 2, so `m*rad` has 1 and `rad/deg` has 0.
+function _angle_axis_exponent(u)::Rational{Int}
     p = 0 // 1
     for c in typeof(Unitful.FreeUnits(u)).parameters[1]
         n = Unitful.name(c)
@@ -1092,6 +1112,11 @@ function _angle_axis_power(u)::Rational{Int}
     end
     return p
 end
+
+# The same power, for a unit with NO other dimension; zero for a unit with a
+# real dimension.
+_angle_axis_power(u)::Rational{Int} =
+    dimension(u) == dimension(Unitful.NoUnits) ? _angle_axis_exponent(u) : 0 // 1
 
 # A PURE ANGLE (esm-spec §4.8.3 "An angle meets a pure number"): a nonzero
 # power of the angle axis and nothing else — `rad`, `deg`, `sr`, `1/rad`.
@@ -1179,11 +1204,12 @@ end
 #
 # `angle_meets_number` marks the places where an angle meets a pure number
 # (esm-spec §4.8.3): `+`, `-`, `min`, `max`, the `ifelse` branches and the
-# comparisons, but not `atan2`, `concat` or `makearray`. Unitful already holds
-# `rad` as `NoDims`, so removing the angle axis is what `_same_unit` does
-# anyway and the scale is still compared (`deg` against `1` is a mismatch);
-# what the flag adds is the RESULT: an agreeing pure angle and pure number
-# give the pure number's unit, because the angle cancels.
+# comparisons, but not `atan2`, `concat` or `makearray`. There a pure angle is
+# compared with a pure number by dimension and exact scale alone (`deg` against
+# `1` is still a mismatch), but two angles are still compared with each other
+# by `_same_unit`: `θ [rad] + ω [sr] + n [1]` is a mismatch whichever operand
+# comes first. An agreeing pure angle and pure number give the pure number's
+# unit, because the angle cancels.
 function _same_dimensions_over(args, var_units, findings, describe;
                                angle_meets_number::Bool=false)
     arg_dims = [_expr_dimensions!(findings, arg, var_units) for arg in args]
@@ -1191,12 +1217,24 @@ function _same_dimensions_over(args, var_units, findings, describe;
     isempty(valid_dims) && return nothing
 
     first_dim = valid_dims[1]
+    first_angle = _is_pure_angle(first_dim) ? first_dim : nothing
     for dim in valid_dims[2:end]
         # Same dimension AND same exact scale (esm-spec §4.8.3): metres added to
         # kilometres are different units even though both are lengths.
-        if !_same_unit(dim, first_dim)
+        agree = angle_meets_number ?
+            _units_agree_where_angle_meets_number(dim, first_dim) :
+            _same_unit(dim, first_dim)
+        if !agree
             push!(findings, describe(first_dim, dim))
             return nothing
+        end
+        if angle_meets_number && _is_pure_angle(dim)
+            if first_angle === nothing
+                first_angle = dim
+            elseif !_same_unit(dim, first_angle)
+                push!(findings, describe(first_angle, dim))
+                return nothing
+            end
         end
     end
     if angle_meets_number && any(_is_pure_angle, valid_dims)
@@ -1942,7 +1980,8 @@ function _site_check(lhs, rhs, var_units)::Tuple{Vector{String}, Vector{String}}
             "by $(ratio), not by a power of time)")
         return internal, comparison
     end
-    (left === nothing || right === nothing || _same_unit(left, right)) &&
+    (left === nothing || right === nothing ||
+     _units_agree_where_angle_meets_number(left, right)) &&
         return internal, comparison
     push!(comparison, "Left-hand side has units '$(_message_ustr(left))' but " *
                       "right-hand side has units '$(_message_ustr(right))'")
