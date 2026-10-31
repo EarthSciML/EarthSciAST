@@ -77,12 +77,7 @@ why. Each binding's test asserts that an excluded fixture still FAILS there (a
 refusal, an error or a wrong value), so a fix turns the stale exclusion red
 until it is removed from `generate.py`.
 
-| Fixture | Binding | Why |
-|---|---|---|
-| `ragged` | Python | the NumPy evaluator refuses a filter over a ragged contracted range |
-| `ragged_contracted_parent` | Julia | `E_TREEWALK_UNBOUND_LOOP_VAR` on a ragged range whose parent is contracted, under both compilers |
-| `ragged_contracted_parent` | Rust | the interpreter silently returns 0 for cells 2 to 4 (only cell 1 is right); native refuses (the ragged bound's parent is not an output index) |
-| `ragged_contracted_parent` | Python | as for `ragged` |
+No fixture is excluded today.
 
 ## Who runs it
 
