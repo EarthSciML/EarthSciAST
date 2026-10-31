@@ -486,6 +486,12 @@ pub struct PreparedBuild {
     pub model_name: String,
     /// Observed name → build-time field (dependency-complete).
     pub fields: HashMap<String, ArrayD<f64>>,
+    /// Data-fed parameter name (model-local) → the values its provider
+    /// supplied, as the build read them. A data-fed parameter is not an
+    /// observed, so it is not in [`Self::fields`], but it is as observable:
+    /// an inline-test assertion or an `observed_field` request may name it
+    /// (finding F43).
+    pub data_fields: HashMap<String, ArrayD<f64>>,
     /// Value-invention producer id (`from_faq`) → sorted-distinct member ids.
     pub members: HashMap<String, Vec<i64>>,
     /// Value-invention producer id → derived index-set extent.
@@ -2477,11 +2483,21 @@ impl<'o> BuildState<'o> {
     }
 
     /// Assemble the [`PreparedBuild`] artifact from the accumulated state.
-    fn finish(self, doc: JsonValue) -> PreparedBuild {
+    fn finish(mut self, doc: JsonValue) -> PreparedBuild {
+        // The namespace is dropped here, so a data-fed parameter's array is
+        // MOVED out of it, never copied.
+        let data_fields: HashMap<String, ArrayD<f64>> = self
+            .model
+            .variables
+            .iter()
+            .filter(|(_, v)| v.update.as_ref().is_some_and(crate::data_fed::is_data_fed))
+            .filter_map(|(name, _)| Some((name.clone(), self.arrays.remove(name)?)))
+            .collect();
         PreparedBuild {
             doc,
             model_name: self.model_name,
             fields: self.fields,
+            data_fields,
             members: self.members,
             extents: self.extents,
             gated_provider_keys: self.gated_keys,

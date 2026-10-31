@@ -839,8 +839,9 @@ fn observed_field(
 ) -> Option<(Vec<f64>, Vec<Vec<i64>>)> {
     let model = model_at(file, model_name)?;
     let v = model.variables.get(variable)?;
-    // OBSERVED is derived from the equations (esm-spec §6.3.1), not declared.
-    if !crate::classification::Classification::of(&model).is_observed(variable) {
+    // OBSERVED is derived from the equations (esm-spec §6.3.1), not declared;
+    // a data-fed parameter's field is its ingested values.
+    if !is_build_field_variable(&model, variable) {
         return None;
     }
     let shape = v.shape.as_ref()?;
@@ -985,8 +986,9 @@ fn scoped_state_cells(
 /// row: the STATE-FREE SCALAR OBSERVED of that name, read from the
 /// [`BuildInspection`]'s materialized fields. The 0-D twin of
 /// [`observed_field`], with the same two guards — the variable must be an
-/// OBSERVED (derived from the equations, esm-spec §6.3.1, never a state or a
-/// parameter) and its field must be one the build actually materialized — so a
+/// OBSERVED (derived from the equations, esm-spec §6.3.1) or a DATA-FED
+/// parameter ([`is_build_field_variable`]), never a state or an ordinary
+/// parameter, and its field must be one the build actually materialized — so a
 /// variable the build never bound is `None`, and the caller reports it, rather
 /// than reading a plausible zero out of an unbound slot.
 ///
@@ -1007,7 +1009,7 @@ fn scalar_observed(
     if v.shape.as_ref().is_some_and(|s| !s.is_empty()) {
         return None;
     }
-    if !crate::classification::Classification::of(&model).is_observed(variable) {
+    if !is_build_field_variable(&model, variable) {
         return None;
     }
     let arr = build_field(insp, file, model_name, variable)?;
@@ -2437,6 +2439,45 @@ fn build_pipeline_fields(
     (!fields.is_empty()).then_some(fields)
 }
 
+/// The entries of `data_fields` (a build's ingested data-fed parameters, keyed
+/// model-locally — `p`, or `Sub.p` for a mounted subsystem's) that some
+/// assertion of `t` may name: those whose key is the asserted name or ends in
+/// `.`+ it, or that the asserted name ends in. A superset is harmless — the
+/// assertion reader still resolves the name under its owner's spellings
+/// ([`build_field`]) — while copying an unnamed table would cost a clone of it
+/// per test.
+fn asserted_data_fields(
+    data_fields: &HashMap<String, ndarray::ArrayD<f64>>,
+    t: &crate::types::ModelTest,
+) -> BuiltFields {
+    if data_fields.is_empty() {
+        return Vec::new();
+    }
+    let names_it = |k: &str, a: &str| {
+        k == a
+            || k.strip_suffix(a).is_some_and(|h| h.ends_with('.'))
+            || a.strip_suffix(k).is_some_and(|h| h.ends_with('.'))
+    };
+    data_fields
+        .iter()
+        .filter(|(k, _)| t.assertions.iter().any(|a| names_it(k, &a.variable)))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect()
+}
+
+/// Is `variable` of `model` a field the assertion readers may answer from the
+/// build: an OBSERVED (derived from the equations, esm-spec §6.3.1), or a
+/// DATA-FED parameter (`update: {kind: "data"}`, esm-spec §5.4), whose field is
+/// the provider's values (finding F43). Never a state, and never an ordinary
+/// parameter — a value the build did not materialize is not guessed at.
+fn is_build_field_variable(model: &crate::types::Model, variable: &str) -> bool {
+    model.variables.get(variable).is_some_and(|v| {
+        v.update
+            .as_ref()
+            .is_some_and(crate::data_fed::is_data_fed)
+    }) || crate::classification::Classification::of(model).is_observed(variable)
+}
+
 /// Run every inline test of one COMPONENT, appending per-assertion results.
 ///
 /// Takes the component's `tests` and `tolerance` rather than a `&Model`,
@@ -2554,6 +2595,13 @@ fn run_component_tests(
                     .iter()
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect();
+                // The ingested values of the DATA-FED parameters this test's
+                // assertions name (finding F43): a data-fed parameter is
+                // asserted like a computed variable, read from what its
+                // provider supplied. Kept out of `fields`, whose emptiness
+                // decides the no-integration fallbacks below, and copied only
+                // when named, since an ingested table can be large.
+                let data: BuiltFields = asserted_data_fields(prob.data_fields(), t);
                 // Re-arm the state a FRESHLY BUILT problem is in. Construction
                 // leaves `inspection` empty, `solve` fills it only on the array
                 // backend, and `take_inspection` DRAINS it — so without this a
@@ -2660,7 +2708,7 @@ fn run_component_tests(
                 }
                 .inspect(|_sol| {
                     insp = prob.take_inspection();
-                    for (k, v) in fields {
+                    for (k, v) in fields.into_iter().chain(data) {
                         insp.setup_arrays.entry(k).or_insert(v);
                     }
                 })

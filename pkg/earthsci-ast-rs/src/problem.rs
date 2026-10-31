@@ -690,6 +690,12 @@ pub(crate) enum Backend {
 pub(crate) struct BuildProducts {
     /// Observed name → build-time field (dependency-complete).
     pub fields: HashMap<String, ArrayD<f64>>,
+    /// Data-fed parameter name → the values the build pipeline's provider
+    /// supplied ([`crate::prepare::PreparedBuild::data_fields`]). Kept apart
+    /// from `fields` so the default `esm simulate` output (every observed) is
+    /// unchanged, while [`observed_field`] and the inline-test runner can
+    /// still answer for one by name.
+    pub data_fields: HashMap<String, ArrayD<f64>>,
     /// Value-invention producer id (`from_faq`) → sorted-distinct member ids.
     pub members: HashMap<String, Vec<i64>>,
     /// Value-invention producer id → derived index-set extent.
@@ -983,6 +989,13 @@ impl EsmProblem {
         &self.build.fields
     }
 
+    /// The values the build pipeline ingested for each DATA-FED parameter
+    /// (esm-spec §5.4 `update: {kind: "data"}`), keyed like
+    /// [`Self::observed_fields`]. Empty when no provider fed the build.
+    pub(crate) fn data_fields(&self) -> &HashMap<String, ArrayD<f64>> {
+        &self.build.data_fields
+    }
+
     /// The names of the OBSERVED VARIABLES [`observed_trajectory`] can report a
     /// trajectory for.
     ///
@@ -1095,6 +1108,9 @@ fn field_components(prob: &EsmProblem) -> std::collections::BTreeSet<String> {
     for k in prob.inspection.borrow().setup_arrays.keys() {
         out.insert(component_of(&qualify(model, k)).to_string());
     }
+    for k in prob.build.data_fields.keys() {
+        out.insert(component_of(&qualify(model, k)).to_string());
+    }
     out
 }
 
@@ -1201,6 +1217,14 @@ pub fn observed_field(prob: &EsmProblem, name: &str) -> Result<ArrayD<f64>, Simu
     {
         return Ok(inspection.setup_arrays[&k].clone());
     }
+    // A DATA-FED parameter is as observable as a computed variable: its value
+    // is what the provider supplied (finding F43). Consulted last, so it never
+    // shadows an observed of the same spelling.
+    if let NameResolution::Key(k) =
+        resolve_observed_key(prob.build.data_fields.keys(), model, single, name)
+    {
+        return Ok(prob.build.data_fields[&k].clone());
+    }
     // A bare name that WOULD have resolved but for the component gate gets the
     // remedy in the diagnostic: the author has to qualify it, and cannot know
     // which spellings exist without being told. (`Ambiguous` under a SINGLE
@@ -1211,7 +1235,8 @@ pub fn observed_field(prob: &EsmProblem, name: &str) -> Result<ArrayD<f64>, Simu
             prob.build
                 .fields
                 .keys()
-                .chain(inspection.setup_arrays.keys()),
+                .chain(inspection.setup_arrays.keys())
+                .chain(prob.build.data_fields.keys()),
             model,
             single,
             name,
@@ -1917,6 +1942,7 @@ pub fn esm_problem<'a>(
             rewritten_by_pipeline = true;
             model_name = Some(prepared.model_name);
             build.fields = prepared.fields;
+            build.data_fields = prepared.data_fields;
             build.members = prepared.members;
             build.extents = prepared.extents;
             build.gated_provider_keys = prepared.gated_provider_keys;

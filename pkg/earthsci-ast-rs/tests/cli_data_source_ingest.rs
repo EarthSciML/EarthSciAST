@@ -502,6 +502,162 @@ fn csv_emit_sizes_its_rows_by_the_discovered_extent() {
 }
 
 // --------------------------------------------------------------------------- //
+// FINDING F43: a data-fed parameter is assertable where it arrives
+// --------------------------------------------------------------------------- //
+
+/// The base document with its inline test replaced by assertions that name the
+/// DATA-FED parameter `annual` itself — `coords` on two rows, and a `reduce` —
+/// rather than the identity observed over it. `scale` multiplies every
+/// expectation, so `1.0` is the truth and anything else must FAIL.
+#[cfg(feature = "esio")]
+fn document_asserting_the_ingested_parameter(url: &str, scale: f64) -> Value {
+    let mut doc = document(url, None, Sizing::Literal);
+    doc["models"]["Ingest"]["tests"] = json!([{
+        "id": "ingested_column_where_it_arrives",
+        "description": "Assertions on the data-fed parameter itself (finding F43).",
+        "time_span": {"start": 0.0, "end": 0.0},
+        "assertions": [
+            {"variable": "annual", "time": 0.0, "coords": {"records": 1},
+             "expected": ANN[0] * scale},
+            {"variable": "annual", "time": 0.0, "coords": {"records": 3},
+             "expected": ANN[2] * scale},
+            {"variable": "annual", "time": 0.0, "reduce": "sum",
+             "expected": ANN_TOTAL * scale, "tolerance": {"rel": 1e-12}}
+        ]
+    }]);
+    doc
+}
+
+/// Write `doc` into `dir` as `name`, returning its path.
+#[cfg(feature = "esio")]
+fn write_doc(dir: &Path, name: &str, doc: &Value) -> PathBuf {
+    let path = dir.join(name);
+    fs::write(&path, serde_json::to_string_pretty(doc).expect("doc renders"))
+        .expect("write document");
+    path
+}
+
+/// THE regression for F43. Before the fix every one of these ERRORED with
+/// `array state 'annual' has no cells in var_map`: the data were read (the
+/// identity observed over the same column passes), but naming the ingested
+/// variable itself found nothing to read.
+#[cfg(feature = "esio")]
+#[test]
+fn an_ingested_parameter_is_assertable_where_it_arrives() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let url = write_ff10_zip(tmp.path());
+    let doc = write_doc(
+        tmp.path(),
+        "ingest_param.esm",
+        &document_asserting_the_ingested_parameter(&url, 1.0),
+    );
+    let (ok, out) = esm(tmp.path(), &["test", doc.to_str().expect("utf-8 path")]);
+    assert!(ok, "every assertion on the ingested column must pass; got:\n{out}");
+    assert_eq!(total_row(&out), (3, 0, 0), "in:\n{out}");
+}
+
+/// ...and is JUDGED: the same assertions off by a factor FAIL with the value on
+/// disk — never error, and never pass on a runner that reports any number.
+#[cfg(feature = "esio")]
+#[test]
+fn an_ingested_parameter_assertion_is_judged_against_its_expectation() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let url = write_ff10_zip(tmp.path());
+    let doc = write_doc(
+        tmp.path(),
+        "ingest_param.esm",
+        &document_asserting_the_ingested_parameter(&url, 2.0),
+    );
+    let (ok, out) = esm(tmp.path(), &["test", doc.to_str().expect("utf-8 path")]);
+    assert!(!ok, "a wrong expectation must not exit 0; got:\n{out}");
+    assert_eq!(total_row(&out), (0, 3, 0), "in:\n{out}");
+    assert!(
+        out.contains(&format!("actual={}", ANN[0])),
+        "the FAIL must name the value read from disk:\n{out}"
+    );
+}
+
+/// The same through a §4.7 SUBSYSTEM mount, the shape a fixture that mounts a
+/// whole model takes: `Leaf.annual` is data-fed inside the mounted file, the
+/// source is the assembly's, and the assertion names it scoped.
+#[cfg(feature = "esio")]
+#[test]
+fn an_ingested_parameter_of_a_mounted_subsystem_is_assertable() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let url = write_ff10_zip(tmp.path());
+    let base = document(&url, None, Sizing::Literal);
+    let mut leaf_model = base["models"]["Ingest"].clone();
+    leaf_model.as_object_mut().expect("model").remove("tests");
+    let leaf = json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "Leaf", "description": "A model with one data-fed column."},
+        "metaparameters": base["metaparameters"].clone(),
+        "index_sets": base["index_sets"].clone(),
+        "models": {"Leaf": leaf_model}
+    });
+    write_doc(tmp.path(), "leaf.esm", &leaf);
+    let host = json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "Host", "description": "Mounts the leaf and asserts on its input."},
+        "data_sources": base["data_sources"].clone(),
+        "models": {"Host": {
+            "variables": {},
+            "equations": [],
+            "subsystems": {"Leaf": {"ref": "leaf.esm"}},
+            "tests": [{
+                "id": "mounted_ingested_column",
+                "description": "A scoped assertion on a mounted data-fed parameter.",
+                "time_span": {"start": 0.0, "end": 0.0},
+                "assertions": [
+                    {"variable": "Leaf.annual", "time": 0.0, "coords": {"records": 2},
+                     "expected": ANN[1]},
+                    {"variable": "Leaf.annual_obs", "time": 0.0, "coords": {"records": 2},
+                     "expected": ANN[1]}
+                ]
+            }]
+        }}
+    });
+    let doc = write_doc(tmp.path(), "host.esm", &host);
+    let (ok, out) = esm(tmp.path(), &["test", doc.to_str().expect("utf-8 path")]);
+    assert!(ok, "the mounted data-fed parameter must be assertable; got:\n{out}");
+    assert_eq!(total_row(&out), (2, 0, 0), "in:\n{out}");
+}
+
+/// `esm simulate --observed` reads the same values `esm test` asserts: a
+/// data-fed parameter named there is written, not refused as "not a
+/// build-time-evaluable observed".
+#[cfg(feature = "esio")]
+#[test]
+fn simulate_observed_emits_an_ingested_parameter() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let doc = fixture(tmp.path(), None, Sizing::Literal);
+    let out_csv = tmp.path().join("rows.csv");
+    let (ok, out) = esm(
+        tmp.path(),
+        &[
+            "simulate",
+            doc.to_str().expect("utf-8 path"),
+            "--time",
+            "0",
+            "--format",
+            "csv",
+            "--observed",
+            "annual",
+            "--observed",
+            "annual_obs",
+            "--output",
+            out_csv.to_str().expect("utf-8 path"),
+        ],
+    );
+    assert!(ok, "--observed on a data-fed parameter must succeed:\n{out}");
+    assert_eq!(
+        fs::read_to_string(&out_csv).expect("read csv"),
+        "i1,annual,annual_obs\n1,100,100\n2,50,50\n3,30,30\n",
+        "the ingested column beside the identity observed over it"
+    );
+}
+
+// --------------------------------------------------------------------------- //
 // With no reader linked (the default build)
 // --------------------------------------------------------------------------- //
 
