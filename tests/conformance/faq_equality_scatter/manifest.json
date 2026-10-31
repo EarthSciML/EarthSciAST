@@ -82,6 +82,12 @@
     "rust": "the interpreter silently returns 0 for pm[2..4] (only pm[1] is right); native refuses (ragged bound's parent is not an output index)",
     "python": "the NumPy evaluator refuses a filter over a ragged contracted range"
    }
+  },
+  {
+   "id": "derived_sum",
+   "path": "fixtures/derived_sum.esm",
+   "golden": "golden/derived_sum.json",
+   "excluded": {}
   }
  ]
 }

@@ -475,6 +475,56 @@ def case_ragged_contracted_parent():
             sets, variables, eqs, du)
 
 
+def case_derived_sum():
+    """The spelling an EarthSciASTDiff product document uses (issue #613):
+    a whole-array derivative `D(v) = F1 + F2` whose operands are
+    equality-filtered `faq`s over INTEGER output bounds `[1, n]` (not index
+    sets), one output index per axis named `_j1`, `_j2`."""
+    variables, eqs, du = source_state()
+    wd = lambda v: op("D", v, wrt="t")
+    # v: the band transpose of a tridiagonal, (i - 1) == _j1 plus (i + 1) == _j1.
+    variables["v"] = state_var("v", ["n8"], "D(v) = F1 + F2, F1[_j1] = sum_{i in 2..7 : i - 1 == _j1} C[i] s[i], F2[_j1] = sum_{i in 2..7 : i + 1 == _j1} -0.5 C[i] s[i].")
+    f1 = faq(["_j1"], {"_j1": [1, 8], "i": [2, 7]}, op("*", ix(const(C12), "i"), s_of("i")),
+             filt=op("==", op("-", "i", 1), "_j1"))
+    f2 = faq(["_j1"], {"_j1": [1, 8], "i": [2, 7]}, op("*", -0.5, op("*", ix(const(C12), "i"), s_of("i"))),
+             filt=op("==", op("+", "i", 1), "_j1"))
+    eqs.append({"lhs": wd("v"), "rhs": op("+", f1, f2)})
+    put1(du, "v", [
+        fold("+", [C12[i - 1] for i in rng(2, 7) if i - 1 == j]) +
+        fold("+", [-0.5 * C12[i - 1] for i in rng(2, 7) if i + 1 == j])
+        for j in rng(1, 8)
+    ])
+    # g: an `ifelse` guard repeating the filter, where the reduced name j
+    # appears only in the filter and the guard; each cell's terms vary along i.
+    variables["g"] = state_var("g", ["n5"], "D(g) = F1 + F2, F1[_j1] = sum_{i, j : j <= i and j == _j1} ifelse(same, C[i] s[i], 0), F2[_j1] = sum_{i : i == _j1} 2 s[i].")
+    guard = op("and", op("<=", "j", "i"), op("==", "j", "_j1"))
+    g1 = faq(["_j1"], {"_j1": [1, 5], "i": [1, 5], "j": [1, 5]},
+             op("ifelse", guard, op("*", ix(const(C12), "i"), s_of("i")), 0.0), filt=guard)
+    g2 = faq(["_j1"], {"_j1": [1, 5], "i": [1, 5]}, op("*", 2, s_of("i")), filt=op("==", "i", "_j1"))
+    eqs.append({"lhs": wd("g"), "rhs": op("+", g1, g2)})
+    put1(du, "g", [
+        fold("+", [C12[i - 1] for i in rng(1, 5) if j <= i]) +
+        fold("+", [2.0 for i in rng(1, 5) if i == j])
+        for j in rng(1, 5)
+    ])
+    # q: a 2-D output, both indices pinned, plus a constant pin `1 == _j1`.
+    T34 = [C12[0:4], C12[4:8], C12[8:12]]
+    variables["q"] = state_var("q", ["n3", "n4"], "D(q) = Q1 + Q2, Q1[_j1,_j2] = sum_{gi, gk : gi == _j1 and gk == _j2} T[gi,gk] s[gk], Q2[_j1,_j2] = sum_{i : 1 == _j1 and i + 1 == _j2} C[i] s[i].")
+    q1 = faq(["_j1", "_j2"], {"_j1": [1, 3], "_j2": [1, 4], "gi": [1, 3], "gk": [1, 4]},
+             op("*", ix(const(T34), "gi", "gk"), s_of("gk")),
+             filt=op("and", op("==", "gi", "_j1"), op("==", "gk", "_j2")))
+    q2 = faq(["_j1", "_j2"], {"_j1": [1, 3], "_j2": [1, 4], "i": [1, 4]},
+             op("*", ix(const(C12), "i"), s_of("i")),
+             filt=op("and", op("==", 1, "_j1"), op("==", op("+", "i", 1), "_j2")))
+    eqs.append({"lhs": wd("q"), "rhs": op("+", q1, q2)})
+    put2(du, "q", [[
+        fold("+", [T34[gi - 1][gk - 1] for gk in rng(1, 4) for gi in rng(1, 3) if gi == a and gk == b]) +
+        fold("+", [C12[i - 1] for i in rng(1, 4) if a == 1 and i + 1 == b])
+        for b in rng(1, 4)] for a in rng(1, 3)])
+    return ("The EarthSciASTDiff product-document spelling: whole-array sums of equality-filtered `faq`s over integer output bounds, an `ifelse` guard repeating the filter, a 2-D output and a constant pin.",
+            {"n3": 3, "n4": 4, "n5": 5, "n8": 8}, variables, eqs, du)
+
+
 CASES = {
     "plus_cancelling": case_plus_cancelling,
     "max_min_nan": case_max_min_nan,
@@ -487,6 +537,7 @@ CASES = {
     "runtime_map": case_runtime_map,
     "ragged": case_ragged,
     "ragged_contracted_parent": case_ragged_contracted_parent,
+    "derived_sum": case_derived_sum,
 }
 
 

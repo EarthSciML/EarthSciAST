@@ -21,6 +21,7 @@
 using Test
 using EarthSciAST
 using ForwardDiff
+using JSON3
 
 const ESX = EarthSciAST
 
@@ -402,6 +403,35 @@ const _SX_CANCEL = (1.0e16, 1.0, -1.0e16, 1.0)
         ma = _sx("makearray"; regions = Any[Any[Any[1, n - 1]], Any[Any[n, n]]], values = Any[scat, tail])
         doc = _sx_doc(ma; outs = ["j"], osizes = [n], ushape = [n], rhs_is_whole = true)
         _sx_check(doc, _sx_ics([n], i -> _SX_CANCEL[mod1(i, 4)] * i); form = :shift)
+    end
+
+    @testset "EarthSciASTDiff product documents" begin
+        # Copied from EarthSciASTDiff's tests/goldens (68fe059): Jᵀλ and hvp
+        # products spelled as whole-array sums of equality-filtered faqs over
+        # integer output bounds. Native refused every one of these before the
+        # scatter; now it builds them and agrees with the interpreter at a
+        # state of mixed 1e8 magnitudes.
+        dir = joinpath(@__DIR__, "fixtures", "equality_scatter")
+        for f in sort(readdir(dir))
+            doc = JSON3.read(read(joinpath(dir, f), String), Dict{String, Any})
+            model = String(first(keys(doc["models"])))
+            dus = map((:native, :interpreter)) do c
+                ESX._reset_cascade_tally!()
+                f!, u0, p, _t, vm = ESX._build_evaluator(doc; model_name = model, compiler = c)
+                tally = copy(ESX._CASCADE_TALLY)
+                names = sort!(collect(keys(vm)))
+                u = copy(u0)
+                for (r, nm) in enumerate(names)
+                    u[vm[nm]] = (isodd(r) ? 1.0e8 : -0.5) * (0.5 + 0.3 * sin(1.7 * r))
+                end
+                du = fill(NaN, length(u0))
+                f!(du, u, p, 0.0)
+                (Float64[du[vm[nm]] for nm in names], tally)
+            end
+            @test _sx_bits(dus[1][1]) == _sx_bits(dus[2][1])
+            @test _sx_fired(dus[1][2]) >= 1
+            @test _sx_fired(dus[2][2]) == 0
+        end
     end
 
     @testset "the call allocates nothing and scales linearly" begin
