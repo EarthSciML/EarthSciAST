@@ -7420,6 +7420,47 @@ holds the state in the `prob.u0` field and Python only as `init(prob).u`, and
 neither exports `initial_state` yet (`bindings_pending` in the manifest says so).
 Go and TypeScript do not simulate.
 
+### 5.54 Mount-Edge Data-Source Location Binding (`url_substitutions`) (normative)
+
+esm-spec §4.7 "Binding a data source's location at the mount" lets a mount edge
+bind the bare `{name}` placeholders of the referenced document's `data_sources`
+locations, so one shared catalogue can be pointed at a different data directory
+by each document that mounts it. All **five** bindings are in scope, for the
+same reason as §5.22: the rule decides which bytes a document reads.
+
+The shared pin is `tests/conformance/url_substitutions/manifest.json`. It holds
+two kinds of claim:
+
+- **`cases`** pin the edge rule as a document normalization, independent of
+  how a binding mounts: a one-source document, the edge applied with the
+  MOUNTING document's directory (`binder_dir`), then ordinary §8.2.1 resolution
+  with the DECLARING document's directory (`declaring_dir`). They cover a
+  spliced segment, a spliced `..`, a leading relative / absolute / URL value,
+  repeated occurrences, mirrors, an unbound placeholder and a formatted
+  `{date:…}` passing through, an already-resolved location renormalized, and
+  the three refusals (an unknown key, a formatted substitution named as a key,
+  a value carrying a brace). Expectations use §5.22.2's `repo_path` /
+  `verbatim` convention, so no golden holds an absolute path.
+- **`fixtures`** pin it through a real load at both mount forms: accepted /
+  refused with the code, for every binding; and `hoisted_sources`, the
+  locations the mounting document carries after load, for a binding that
+  hoists a top-level `models.<k>` leaf's `data_sources` (Rust, Julia). The
+  nested fixture, whose outer edge binds a placeholder an inner edge left open,
+  reaches its edge only through such a hoist and is skipped elsewhere.
+
+The two unknown-key fixtures also enter the §2.2.1 sweep as `resolver_only`
+entries of `tests/invalid/expected_errors.json`.
+
+Each binding's own suite reads the manifest — Rust
+`pkg/earthsci-ast-rs/src/data_source_urls.rs` (`cases`) and
+`tests/url_substitutions_conformance.rs` (`fixtures`, plus an `esio` ingest of
+one catalogue mounted twice), Python
+`pkg/earthsci-ast-py/tests/test_url_substitutions_conformance.py`, Julia
+`pkg/EarthSciAST.jl/test/url_substitutions_conformance_test.jl`, TypeScript
+`pkg/earthsci-ast-ts/src/url-substitutions.test.ts`, Go
+`pkg/earthsci-ast-go/pkg/esm/url_substitutions_conformance_test.go` — and
+`./scripts/test-conformance.sh` already runs all five suites.
+
 ## 6. CI Integration
 
 ### 6.1 GitHub Actions Workflow
