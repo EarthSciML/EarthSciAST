@@ -772,7 +772,7 @@ func namespaceExprBound(expr Expression, prefix string, leaveAlone, subsystemKey
 	// the only handling needed is adding them to `bound` for the children.
 	childBound := bound
 	if len(node.OutputIdx) > 0 || len(node.Ranges) > 0 || node.Var != nil {
-		childBound = make(map[string]bool, len(bound)+len(node.OutputIdx)+len(node.Ranges)+1)
+		childBound = make(map[string]bool, len(bound))
 		for k, v := range bound {
 			childBound[k] = v
 		}
