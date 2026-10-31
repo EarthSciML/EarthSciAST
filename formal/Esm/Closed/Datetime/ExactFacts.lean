@@ -310,7 +310,7 @@ theorem month_overflows_at_int32_end :
   have hy : ¬ YearInInt32 ((86400 : ℝ) * ((784351576777 : ℤ) : ℝ)) := by
     unfold YearInInt32; rw [IntFn.exact_year, hd]; unfold int32Max; norm_num
   refine ⟨?_, ?_⟩
-  · unfold IntFn.eval; rw [ite_cond_eq_false _ _ (eq_false hy)]
+  · unfold IntFn.eval; rw [ite_eq_right_of_eq_false _ _ (eq_false hy)]
   · rw [IntFn.exact_month, hd]
 
 /-- Retired by ruling Q-101: the overflow is no longer decided by each field's

@@ -130,7 +130,7 @@ theorem nearest64_not_exact : ¬ NearestExactClaim := by
     rw [this]; norm_num
   rw [r1, r2] at hc
   have : (1 : ℝ) - ((1 / 2 ^ 60 : ℚ) : ℝ) < ((1 / 2 ^ 60 : ℚ) : ℝ) - -1 := by linarith
-  rw [if_neg (lt_irrefl 1), if_pos this] at hc
+  rw [ite_eq_right (lt_irrefl 1), ite_eq_left this] at hc
   exact absurd hc (by norm_num)
 
 end

@@ -584,7 +584,7 @@ theorem allShape_one_iff (xs : List Nested) (n : ℕ) :
     · rintro ⟨hx, hxs⟩
       obtain ⟨m, rfl, hm⟩ := ih.mp hxs
       obtain ⟨v, rfl, hv⟩ := hasShape_one hx
-      exact ⟨v :: m, rfl, by simp [hv, hm]; intro a ha; exact hm a ha⟩
+      exact ⟨v :: m, rfl, by simp [hv]; intro a ha; exact hm a ha⟩
     · rintro ⟨m, hm, hlen⟩
       cases m with
       | nil => simp at hm
@@ -992,9 +992,9 @@ theorem nearestIdx_bracket (a : List ℝ) (hr : a.Pairwise (· < ·)) (hn : 2 �
   · -- below (or on) the first knot
     rw [h0] at hat ⊢
     have hx0 := hat (by omega)
-    simp only [Nat.zero_min, Nat.zero_sub, lt_self_iff_false, sub_lt_self_iff, ↓reduceIte]
+    simp only [Nat.zero_min, Nat.zero_sub]
     have : ¬ (a.getD 0 0 - x < x - a.getD 0 0) := by intro h; linarith
-    rw [if_neg this]
+    rw [ite_eq_right this]
     apply findIdx_eq_of (by omega)
     · intro h
       have := pw_getD_lt hr (i := 0) (j := 1) (by omega) (by omega)
@@ -1189,10 +1189,10 @@ theorem eval_nearest_lowered (tables : List (String × FTable)) (env : String �
     by_cases hc : r0.getD (min j (r0.length - 1)) 0 - x < x - r0.getD (j - 1) 0
     · simp only [Num.ofBool, hc, decide_true, Num.truthy, ↓reduceIte, ne_eq, one_ne_zero,
         not_false_eq_true] at hbr
-      rw [ev_index_vec tables env v _ _ hbr (by omega) (by omega), Nat.add_sub_cancel, if_pos hc]
+      rw [ev_index_vec tables env v _ _ hbr (by omega) (by omega), Nat.add_sub_cancel, ite_eq_left hc]
     · simp only [Num.ofBool, hc, decide_false, Num.truthy, Bool.false_eq_true, ↓reduceIte, ne_eq,
-        not_true_eq_false, decide_true, Decidable.not_not] at hbr
-      rw [ev_index_vec tables env v _ _ hbr (by omega) (by omega), Nat.add_sub_cancel, if_neg hc]
+        not_true_eq_false] at hbr
+      rw [ev_index_vec tables env v _ _ hbr (by omega) (by omega), Nat.add_sub_cancel, ite_eq_right hc]
 
 /-- The lowered tree computes `lookupCore` on the inputs evaluated in table
 axis order. -/
@@ -1201,7 +1201,7 @@ theorem lower_eval_core (tables : List (String × FTable)) (env : String → Num
     (T : FTable) (s : Nested) (vals : List (String × Num))
     (hl : lower tables tid axes out args = .ok e)
     (hp : prepLookup tables tid (axes.map Prod.fst) out args = .ok (T, s))
-    (hvals : evalAxes tables env axes = .ok vals)
+    (_hvals : evalAxes tables env axes = .ok vals)
     (hlk : ∀ k e, axes.lookup k = some e →
       ∃ v, eval tables env e = .ok (.num v) ∧ vals.lookup k = some v) :
     eval tables env e =
@@ -1594,35 +1594,35 @@ theorem validateTable_ladder (T : FTable) : validateTable T =
     else .ok () := by
   unfold validateTable
   by_cases h1 : Rule.axisDupName T
-  · rw [if_pos ((b1 T).mpr h1), if_pos h1] <;> rfl
-  rw [if_neg (mt (b1 T).mp h1), if_neg h1]
+  · rw [ite_eq_left ((b1 T).mpr h1), ite_eq_left h1]; rfl
+  rw [ite_eq_right (mt (b1 T).mp h1), ite_eq_right h1]
   by_cases h2 : Rule.outputsDupName T
-  · rw [if_pos ((b2 T).mpr h2), if_pos h2] <;> rfl
-  rw [if_neg (mt (b2 T).mp h2), if_neg h2]
+  · rw [ite_eq_left ((b2 T).mpr h2), ite_eq_left h2]; rfl
+  rw [ite_eq_right (mt (b2 T).mp h2), ite_eq_right h2]
   by_cases h3 : Rule.arity T
-  · rw [if_pos ((b3 T).mpr h3), if_pos h3] <;> rfl
-  rw [if_neg (mt (b3 T).mp h3), if_neg h3]
+  · rw [ite_eq_left ((b3 T).mpr h3), ite_eq_left h3]; rfl
+  rw [ite_eq_right (mt (b3 T).mp h3), ite_eq_right h3]
   by_cases h4 : Rule.axisNaN T
-  · rw [if_pos ((b4 T).mpr h4), if_pos h4] <;> rfl
-  rw [if_neg (mt (b4 T).mp h4), if_neg h4]
+  · rw [ite_eq_left ((b4 T).mpr h4), ite_eq_left h4]; rfl
+  rw [ite_eq_right (mt (b4 T).mp h4), ite_eq_right h4]
   by_cases h5 : Rule.axisNonMonotonic T
-  · rw [if_pos ((b5 T h4).mpr h5), if_pos h5] <;> rfl
-  rw [if_neg (mt (b5 T h4).mp h5), if_neg h5]
+  · rw [ite_eq_left ((b5 T h4).mpr h5), ite_eq_left h5]; rfl
+  rw [ite_eq_right (mt (b5 T h4).mp h5), ite_eq_right h5]
   by_cases h6 : Rule.axisTooShort T
-  · rw [if_pos ((b6 T).mpr h6), if_pos h6] <;> rfl
-  rw [if_neg (mt (b6 T).mp h6), if_neg h6]
+  · rw [ite_eq_left ((b6 T).mpr h6), ite_eq_left h6]; rfl
+  rw [ite_eq_right (mt (b6 T).mp h6), ite_eq_right h6]
   by_cases h7 : Rule.outputsLength T
-  · rw [if_pos ((b7 T).mpr h7), if_pos h7] <;> rfl
-  rw [if_neg (mt (b7 T).mp h7), if_neg h7]
+  · rw [ite_eq_left ((b7 T).mpr h7), ite_eq_left h7]; rfl
+  rw [ite_eq_right (mt (b7 T).mp h7), ite_eq_right h7]
   by_cases h8 : Rule.nesting T
-  · rw [if_pos ((b8 T).mpr h8), if_pos h8] <;> rfl
-  rw [if_neg (mt (b8 T).mp h8), if_neg h8]
+  · rw [ite_eq_left ((b8 T).mpr h8), ite_eq_left h8]; rfl
+  rw [ite_eq_right (mt (b8 T).mp h8), ite_eq_right h8]
   by_cases h9 : Rule.dataNaN T
-  · rw [if_pos (show T.data.anyNaN = true from h9), if_pos h9] <;> rfl
-  rw [if_neg (show ¬ T.data.anyNaN = true from h9), if_neg h9]
+  · rw [ite_eq_left (show T.data.anyNaN = true from h9), ite_eq_left h9]; rfl
+  rw [ite_eq_right (show ¬ T.data.anyNaN = true from h9), ite_eq_right h9]
   by_cases h10 : Rule.shapeAssertion T
-  · rw [if_pos ((b10 T).mpr h10), if_pos h10] <;> rfl
-  rw [if_neg (mt (b10 T).mp h10), if_neg h10]
+  · rw [ite_eq_left ((b10 T).mpr h10), ite_eq_left h10]; rfl
+  rw [ite_eq_right (mt (b10 T).mp h10), ite_eq_right h10]
 
 /-- Step 1 of the pinned order: `table_axis_duplicate_name` exactly when two
 axes share a name. -/
