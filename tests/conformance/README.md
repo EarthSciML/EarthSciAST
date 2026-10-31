@@ -57,6 +57,12 @@ tests/conformance/
 │   ├── fixtures/<id>.esm           #   one document authored here (six more are REFERENCED)
 │   └── golden/<id>.json            #   the Julia-INTERPRETER actual for every assertion
 ├── bool_and_or_reductions/         # scalar `bool_and_or` reductions run everywhere (CONFORMANCE_SPEC §5.6.1, §5.45.4)
+├── faq_equality_scatter/           # a faq whose filter pins an output index by equality (esm-spec §4.3.1, issue #613)
+│   ├── README.md                   #   the contract: what each fixture pins, who runs it
+│   ├── generate.py                 #   writes the fixtures, the goldens (an independent naive loop) and the manifest
+│   ├── manifest.json
+│   ├── fixtures/<id>.esm
+│   └── golden/<id>.json            #   the right-hand side at the initial state, bit for bit
 ├── native_model_shapes/            # downstream-model shapes native must run, static and dynamic (CONFORMANCE_SPEC §5.45.4)
 │   ├── README.md                   #   the contract, and the divergence it closed
 │   ├── manifest.json               #   `"runner": "inline_tests"`
