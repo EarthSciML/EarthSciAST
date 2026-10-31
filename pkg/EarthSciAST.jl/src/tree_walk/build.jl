@@ -6525,6 +6525,37 @@ function _compile_faq_equation!(
             idx_names, contract_names, contract_ranges, contract_const,
             agg_gates, agg_filter, rhs_oplus
         )
+        # Every key a ±1 shift of its own contracted index: the equation splits
+        # into pieces the cascade takes as ordinary equations (the shift form).
+        pieces = sc === nothing ? nothing : _scatter_shift_pieces(
+            sc, eq, rhs_expr::OpExpr, lhs_body, idx_names, range_iters,
+            contract_names, contract_ranges, contract_const, rhs_body,
+            rhs_oplus, rhs_zerobar
+        )
+        if pieces !== nothing
+            _tally_cascade!(:equality_scatter_shift)
+            rec = _build_record()
+            declines = rec === nothing ? Pair{Symbol, Symbol}[] : copy(rec.declines)
+            for (w, plo, phi, peq) in pieces
+                where_ = join(
+                    (
+                        "$(idx_names[d])=$(plo[d])..$(phi[d])"
+                            for d in eachindex(idx_names)
+                    ), ", "
+                )
+                plabel = w == 0 ? "$(label), cells no point reaches ($(where_))" :
+                    "$(label), shifted scatter ($(where_))"
+                _compile_faq_equation!(
+                    percell_scalar, acc_kernels, scan_folds,
+                    array_contractions, covered, peq, resolved_obs, array_var_info,
+                    var_map, const_registry, pgather, param_sym_set, reg_funcs;
+                    template_sites = template_sites, xeq = xeq, pooled_cells = pooled_cells,
+                    rhs_list_compiled = rhs_list_compiled, obs_nst = obs_nst,
+                    rule_label = plabel, rule_declines = declines
+                )
+            end
+            return nothing
+        end
         if sc !== nothing
             push!(offered, :equality_scatter)
             ac = _try_compile_array_contraction(

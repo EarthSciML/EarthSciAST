@@ -564,6 +564,129 @@ function _try_codegen_scatter(
     return _ArrayContraction(f, tabpack, _SecTCache(nfree, true, work))
 end
 
+# THE SHIFT FORM. When every pinned key is `±k + c` on its own contracted
+# index `k` (unit-step), each output cell names exactly one value of `k`, and
+# its terms are the points with `k` at that value, the other contracted indices
+# varying in their product order. That is an ordinary contraction over the
+# other contracted indices with `k := ±(j - c)` substituted, which needs no
+# scatter map at all: the equation is split along each pinned axis into the run
+# of cells that `k`'s range reaches, where it takes that contraction, and the
+# cells outside it, where it takes 0̄. The pieces go back through the cascade as
+# equations of their own, so a band transpose (`L[j] = Σ_{i+1=j} a[i] u[i]`)
+# becomes the affine stencil `L[j] = 0 + a[j-1] u[j-1]` on cells 2..N and 0 on
+# cell 1.
+#
+# The values are the naive fold's. A cell's admitted points are folded in the
+# same order from the same seed: with another contracted index left, the piece
+# is a contraction seeded from 0̄ and guarded by the remaining conjuncts; with
+# none, its one point is written `0̄ ⊕ ifelse(rem, term, 0̄)`, the seed kept as
+# an operand, since `0̄ ⊕ t` is not `t` (+0.0 + -0.0 is +0.0).
+#
+# Returns `(region, lo, hi, equation)` pieces (region 1 for a live piece, 0 for
+# a 0̄ one), or `nothing` when the shape does not qualify.
+function _scatter_shift_pieces(
+        sc::_ScatterSpec, eq::Equation, rhs_op::OpExpr, lhs_body::OpExpr,
+        idx_names::Vector{String}, range_iters, contract_names::Vector{String},
+        contract_ranges, contract_const, rhs_body::ASTExpr,
+        oplus::String, zerobar::Float64
+    )
+    all(r -> r isa UnitRange{Int} && !isempty(r), range_iters) || return nothing
+    nd = length(idx_names)
+    subs = Dict{String, ASTExpr}()
+    live = Dict{Int, Tuple{Int, Int}}()
+    for (pos, e) in sc.pins
+        aff = _lhs_index_affine(e, contract_names)
+        aff === nothing && return nothing
+        kp, coef, c = aff
+        (kp != 0 && (coef == 1 || coef == -1)) || return nothing
+        kname = contract_names[kp]
+        haskey(subs, kname) && return nothing
+        kc = contract_const[kp]
+        (kc !== nothing && !isempty(kc) && _is_unit_run(kc)) || return nothing
+        klo, khi = first(kc), last(kc)
+        jlo, jhi = first(range_iters[pos]), last(range_iters[pos])
+        a, b = coef == 1 ? (klo + c, khi + c) : (c - khi, c - klo)
+        live[pos] = (max(a, jlo), min(b, jhi))
+        jv = VarExpr(idx_names[pos])
+        subs[kname] = coef == 1 ?
+            (c == 0 ? jv : OpExpr("-", ASTExpr[jv, IntExpr(Int64(c))])) :
+            OpExpr("-", ASTExpr[IntExpr(Int64(c)), jv])
+    end
+    others = String[n for n in contract_names if !haskey(subs, n)]
+    # A remaining range bound read through a substituted index would change
+    # with the cell.
+    for n in others
+        d = findfirst(==(n), contract_names)
+        for x in contract_ranges[d]
+            x isa ASTExpr || continue
+            any(m -> haskey(subs, m), _referenced_var_names(x)) && return nothing
+        end
+    end
+    body = _sub_preserving(rhs_body, subs)
+    rem = sc.rem === nothing ? nothing : _sub_preserving(sc.rem, subs)
+    # Without its equality the piece's filter could read as a reverse window
+    # (`j <= i` alone), which folds descending; the node folds ascending.
+    !isempty(others) && _reverse_window(rem, others, idx_names) && return nothing
+    zero = NumExpr(zerobar)
+    live_rhs(ranges) = if isempty(others)
+        term = rem === nothing ? body : OpExpr("ifelse", ASTExpr[rem, body, zero])
+        OpExpr(
+            "faq", ASTExpr[]; output_idx = Any[n for n in idx_names], ranges = ranges,
+            expr_body = OpExpr(oplus, ASTExpr[zero, term])
+        )
+    else
+        for n in others
+            d = findfirst(==(n), contract_names)
+            ranges[n] = contract_ranges[d]
+        end
+        reconstruct(
+            rhs_op; output_idx = Any[n for n in idx_names], ranges = ranges,
+            expr_body = body, filter = rem
+        )
+    end
+    # Each pinned axis in up to three segments: below the live run, the run,
+    # above it. Every other output axis whole.
+    segs = Vector{Vector{Tuple{Int, Int, Bool}}}(undef, nd)
+    for d in 1:nd
+        jlo, jhi = first(range_iters[d]), last(range_iters[d])
+        if haskey(live, d)
+            a, b = live[d]
+            sd = Tuple{Int, Int, Bool}[]
+            if a > b
+                push!(sd, (jlo, jhi, false))
+            else
+                a > jlo && push!(sd, (jlo, a - 1, false))
+                push!(sd, (a, b, true))
+                b < jhi && push!(sd, (b + 1, jhi, false))
+            end
+            segs[d] = sd
+        else
+            segs[d] = [(jlo, jhi, true)]
+        end
+    end
+    out = Tuple{Int, Vector{Int}, Vector{Int}, Equation}[]
+    for I in Iterators.product(segs...)
+        plo = Int[I[d][1] for d in 1:nd]
+        phi = Int[I[d][2] for d in 1:nd]
+        alive = all(d -> I[d][3], 1:nd)
+        ranges = Dict{String, Any}(idx_names[d] => Any[plo[d], phi[d]] for d in 1:nd)
+        prhs = alive ? live_rhs(copy(ranges)) :
+            OpExpr(
+                "faq", ASTExpr[]; output_idx = Any[n for n in idx_names],
+                ranges = copy(ranges), expr_body = zero
+            )
+        peq = Equation(
+            OpExpr(
+                "faq", ASTExpr[]; output_idx = Any[n for n in idx_names],
+                ranges = ranges, expr_body = lhs_body
+            ),
+            prhs; _comment = eq._comment
+        )
+        push!(out, (alive ? 1 : 0, plo, phi, peq))
+    end
+    return out
+end
+
 # `e` resolved and compiled once with every index symbolic: `(output counters,
 # contracted counters, node)`, or `nothing` when it does not lower.
 function _scatter_symbolic(

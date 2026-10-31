@@ -5,15 +5,17 @@
 # each contracted point into one output cell. `compiler = :native` folds it as
 # one pass over the contracted box (a build-time TABLE when every key is static,
 # a generated pass when a key reads a run-time value); `compiler = :interpreter`
-# keeps the naive guarded fold over the whole output × contracted box. What is
+# keeps the naive guarded fold over the whole output × contracted box. A key
+# that is a ±1 shift of its own contracted index takes the SHIFT form instead:
+# the equation is split into pieces the cascade takes as ordinary equations. What is
 # pinned here:
 #
 #   * BIT-IDENTITY of native against the interpreter, on data whose sum changes
 #     with the association (`[1e16, 1, -1e16, 1]`), under +, *, max and min
 #     (with a NaN in a window), for every shape the rule names;
-#   * that the scatter actually FIRED (`:equality_scatter_table` /
-#     `:equality_scatter_pass` in the cascade tally) — a silent decline would
-#     make every comparison pass trivially;
+#   * that the scatter actually FIRED (`:equality_scatter_shift`,
+#     `:equality_scatter_table` or `:equality_scatter_pass` in the cascade
+#     tally) — a silent decline would make every comparison pass trivially;
 #   * that the run-time call allocates nothing and the cost grows linearly.
 
 using Test
@@ -123,7 +125,8 @@ function _sx_run(doc, ics; compiler = :native)
 end
 
 _sx_bits(v) = reinterpret(UInt64, v)
-_sx_fired(t) = get(t, :equality_scatter_table, 0) + get(t, :equality_scatter_pass, 0)
+_sx_fired(t) = get(t, :equality_scatter_table, 0) + get(t, :equality_scatter_pass, 0) +
+    get(t, :equality_scatter_shift, 0)
 
 # native ≡ interpreter bit for bit, with the scatter fired (`form` = :table or
 # :pass, or `nothing` to only require one of them).
@@ -132,7 +135,9 @@ function _sx_check(doc, ics; form = nothing, nfired = 1)
     b = _sx_run(doc, ics; compiler = :interpreter)
     @test a.names == b.names
     @test _sx_bits(a.du) == _sx_bits(b.du)
-    if form === :table
+    if form === :shift
+        @test get(a.tally, :equality_scatter_shift, 0) == nfired
+    elseif form === :table
         @test get(a.tally, :equality_scatter_table, 0) == nfired
     elseif form === :pass
         @test get(a.tally, :equality_scatter_pass, 0) == nfired
@@ -161,7 +166,7 @@ const _SX_CANCEL = (1.0e16, 1.0, -1.0e16, 1.0)
                 filt = _sx("==", "j", e), body = _sxi("u", "i", "k")
             )
             doc = _sx_doc(rhs; outs = ["j"], osizes = [4], ushape = [4, 4])
-            a, _ = _sx_check(doc, _sx_ics([4, 4], (i, k) -> _SX_CANCEL[k]); form = rt ? :pass : :table)
+            a, _ = _sx_check(doc, _sx_ics([4, 4], (i, k) -> _SX_CANCEL[k]); form = rt ? :pass : :shift)
             @test all(==(1.0), a.du)
         end
         # Pinned by the SLOW contracted index (k), the terms of a cell run along
@@ -171,7 +176,7 @@ const _SX_CANCEL = (1.0e16, 1.0, -1.0e16, 1.0)
             filt = _sx("==", "k", "j"), body = _sxi("u", "i", "k")
         )
         doc = _sx_doc(rhs; outs = ["j"], osizes = [4], ushape = [4, 4])
-        a, _ = _sx_check(doc, _sx_ics([4, 4], (i, k) -> _SX_CANCEL[i]); form = :table)
+        a, _ = _sx_check(doc, _sx_ics([4, 4], (i, k) -> _SX_CANCEL[i]); form = :shift)
         @test all(==(1.0), a.du)
         # Many points to one cell through a `const` gather (a static key the
         # build evaluates through the compiled node, not an affine form).
@@ -212,7 +217,7 @@ const _SX_CANCEL = (1.0e16, 1.0, -1.0e16, 1.0)
                 body = _sx("*", _sxi("u", "i", "k"), _sx("+", "j1", _sx("*", 0.25, "j2")))
             )
             doc = _sx_doc(rhs; outs = ["j1", "j2"], osizes = [5, 4], ushape = [4, 4])
-            _sx_check(doc, _sx_ics([4, 4], (i, k) -> 0.1 * i - 0.3 * k); form = rt ? :pass : :table)
+            _sx_check(doc, _sx_ics([4, 4], (i, k) -> 0.1 * i - 0.3 * k); form = rt ? :pass : :shift)
         end
         # Two pinned keys mapping several points onto each cell, cancelling.
         rhs = _sx_faq(
@@ -236,7 +241,7 @@ const _SX_CANCEL = (1.0e16, 1.0, -1.0e16, 1.0)
                 body = _sx("*", _sxi("u", "i", "m"), _sx("+", "m", 0.5))
             )
             doc = _sx_doc(rhs; outs = ["j", "m"], osizes = [5, 3], ushape = [4, 3])
-            _sx_check(doc, _sx_ics([4, 3], (i, m) -> _SX_CANCEL[i] + m); form = rt ? :pass : :table)
+            _sx_check(doc, _sx_ics([4, 3], (i, m) -> _SX_CANCEL[i] + m); form = rt ? :pass : :shift)
         end
         # The free index read by a remaining conjunct.
         rhs = _sx_faq(
@@ -245,7 +250,7 @@ const _SX_CANCEL = (1.0e16, 1.0, -1.0e16, 1.0)
             body = _sxi("u", "i", "k")
         )
         doc = _sx_doc(rhs; outs = ["m", "j"], osizes = [3, 4], ushape = [4, 3])
-        _sx_check(doc, _sx_ics([4, 3], (i, k) -> _SX_CANCEL[mod1(i + k, 4)]); form = :table)
+        _sx_check(doc, _sx_ics([4, 3], (i, k) -> _SX_CANCEL[mod1(i + k, 4)]); form = :shift)
     end
 
     @testset "a key outside the range, or not an integer, is skipped" begin
@@ -260,7 +265,7 @@ const _SX_CANCEL = (1.0e16, 1.0, -1.0e16, 1.0)
                 body = _sx("+", _sxi("u", "i"), 1.0)
             )
             doc = _sx_doc(rhs; outs = ["j"], osizes = [4], ushape = [6])
-            _sx_check(doc, _sx_ics([6], i -> 10.0 * i); form = rt ? :pass : :table)
+            _sx_check(doc, _sx_ics([6], i -> 10.0 * i); form = rt ? :pass : nothing)
         end
         # Run-time keys read from a state: in range, out of range, non-integer,
         # NaN, negative.
@@ -305,7 +310,7 @@ const _SX_CANCEL = (1.0e16, 1.0, -1.0e16, 1.0)
                 body = _sx("+", _sxi("u", "i", "k"), 0.5)
             )
             doc = _sx_doc(rhs; outs = ["j"], osizes = [4], ushape = [4, 4])
-            _sx_check(doc, _sx_ics([4, 4], (i, k) -> 3.0 * i + k); form = rt ? :pass : :table)
+            _sx_check(doc, _sx_ics([4, 4], (i, k) -> 3.0 * i + k); form = rt ? :pass : :shift, nfired = rt ? 1 : 2)
         end
     end
 
@@ -392,12 +397,11 @@ const _SX_CANCEL = (1.0e16, 1.0, -1.0e16, 1.0)
             filter = _sx("==", "j", _sx("-", "i", 1))
         )
         tail = _sx("faq"; output_idx = Any["j"], expr = 7.0, ranges = Dict{String, Any}("j" => Any[n, n]))
+        # `D(c) = makearray(…)`: the region holding the scatter becomes its own
+        # equation (`_makearray_region_equations`), which the scatter takes.
         ma = _sx("makearray"; regions = Any[Any[Any[1, n - 1]], Any[Any[n, n]]], values = Any[scat, tail])
-        rhs = _sx("faq"; output_idx = Any["j"], expr = _sxi(ma, "j"), ranges = Dict("j" => Dict("from" => "O1")))
-        doc = _sx_doc(rhs; outs = ["j"], osizes = [n], ushape = [n])
-        a = _sx_run(doc, _sx_ics([n], i -> _SX_CANCEL[mod1(i, 4)] * i))
-        b = _sx_run(doc, _sx_ics([n], i -> _SX_CANCEL[mod1(i, 4)] * i); compiler = :interpreter)
-        @test _sx_bits(a.du) == _sx_bits(b.du)
+        doc = _sx_doc(ma; outs = ["j"], osizes = [n], ushape = [n], rhs_is_whole = true)
+        _sx_check(doc, _sx_ics([n], i -> _SX_CANCEL[mod1(i, 4)] * i); form = :shift)
     end
 
     @testset "the call allocates nothing and scales linearly" begin
