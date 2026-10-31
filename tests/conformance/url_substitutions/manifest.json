@@ -124,7 +124,7 @@
       "id": "an_already_resolved_location_is_renormalized_after_the_splice",
       "url_template": "file:///data/snapshots/{snapshot}/t.parquet",
       "url_substitutions": {
-        "snapshot": "../b"
+        "snapshot": "x/../b"
       },
       "expect": {
         "url_template": {
