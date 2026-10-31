@@ -7125,13 +7125,16 @@ function _faq_diagnostic_cell(
             build(sub_rhs)
             return :cell
         end
-        iters = Vector{Int}[
-            contract_const[d] === nothing ?
-                _expand_contract_range(contract_ranges[d], idx_env, const_registry) :
-                contract_const[d] for d in eachindex(contract_names)
-        ]
-        whole = prod(length, iters) <= _REFUSAL_DIAGNOSTIC_TERMS
-        whole || (iters = Vector{Int}[unique!([first(c), last(c)]) for c in iters])
+        iters = _contract_iters_at(
+            contract_names, contract_ranges, idx_env, const_registry, contract_const
+        )
+        whole = (iters isa _ContractNest ? length(iters.tuples) : prod(length, iters)) <=
+            _REFUSAL_DIAGNOSTIC_TERMS
+        whole || (
+            iters = iters isa _ContractNest ?
+                _ContractNest(iters.tuples[1:_REFUSAL_DIAGNOSTIC_TERMS]) :
+                Vector{Int}[unique!([first(c), last(c)]) for c in iters]
+        )
         filt = agg_filter === nothing ? nothing : _sub_preserving(agg_filter, idx_exprs)
         n = 0
         capped = false
@@ -7369,6 +7372,8 @@ function _ac_table_fill!(
         zerobar, const_registry, reverse::Bool = false
     )
     nc = length(contract_names)
+    # A ragged range whose parent is contracted: each cell lists its nest.
+    deps = _contracted_parent_deps(contract_names, contract_ranges)
     c = 0
     for idx_tuple in cells
         c += 1
@@ -7376,6 +7381,7 @@ function _ac_table_fill!(
             idx_env[idx_names[d]] = idx_tuple[d]
         end
         for d in 1:nc
+            deps === nothing || break
             cc = contract_const === nothing ? nothing : contract_const[d]
             if cc !== nothing
                 iters[d] = cc
@@ -7384,7 +7390,9 @@ function _ac_table_fill!(
             end
         end
         # A reverse window's entries run from the top down (`_reverse_window`).
-        run = reverse ? [collect(Int, Iterators.reverse(iters[1]))] : iters
+        run = deps !== nothing ?
+            _contract_nest(contract_names, contract_ranges, deps, idx_env, const_registry) :
+            reverse ? [collect(Int, Iterators.reverse(iters[1]))] : iters
         _foreach_aggregate_term(
             nothing, contract_names, run, agg_gates, nothing,
             zerobar, idx_env
@@ -7538,16 +7546,12 @@ function _compile_faq_percell!(
                 # the current `idx_env` (variable-valence segment reduction —
                 # the per-cell bound is the cell's true valence, so absent
                 # neighbour slots are never iterated; no host-side padding).
-                cell_contract_iters = Vector{Vector{Int}}(undef, length(contract_names))
-                for d in 1:length(contract_names)
-                    cc = contract_const[d]
-                    cell_contract_iters[d] = cc === nothing ?
-                        _expand_contract_range(
-                            contract_ranges[d], idx_env,
-                            const_registry
-                        ) :
-                        cc
-                end
+                # A ragged range whose parent is contracted lists the cell's
+                # nest instead (`_contract_iters_at`).
+                cell_contract_iters = _contract_iters_at(
+                    contract_names, contract_ranges, idx_env,
+                    const_registry, contract_const
+                )
                 # M2 (§5.3 / §7.2) via the shared `_foreach_aggregate_term` core:
                 # a join-rejected combination is dropped (so a degenerate join
                 # keeps every term and is byte-identical); a filter-rejected one
