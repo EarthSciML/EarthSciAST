@@ -734,6 +734,21 @@ func resolveSubsystemMap(subsystems map[string]any, basePath string, visited map
 			return fmt.Errorf("%s %q: resolving nested refs in %q: %w", form.noun, key, refKey, err)
 		}
 
+		// esm-spec §4.7 "Binding a data source's location at the mount": the
+		// edge's `url_substitutions` bind the referenced document's data-source
+		// placeholders, on the document as resolved at this edge and before its
+		// own §8.2.1 resolution, with a leading value anchored on THIS (the
+		// mounting) document's directory. Both mount forms run through here
+		// ("Two mount forms, one mechanism"). This binding hoists neither
+		// form's `data_sources`, so what survives is the verdict: an unknown
+		// key or a non-text value is refused here, as in every binding.
+		if m, ok := value.(map[string]any); ok {
+			if err := applyMountURLSubstitutions(view, m["url_substitutions"], basePath,
+				fmt.Sprintf("%s ref %q", form.noun, ref)); err != nil {
+				return err
+			}
+		}
+
 		// esm-spec §9.7.10 form A: fold the edge's injected imports into the
 		// referenced file's single top-level component BEFORE resolution, so its
 		// rewrite-targets lower under the assembler-chosen discretization — and,
