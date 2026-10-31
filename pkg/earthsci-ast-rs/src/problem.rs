@@ -1877,7 +1877,7 @@ pub fn esm_problem<'a>(
                     crate::compile_error::CompileError::CompilerRefusedRule {
                         compiler: compiler.as_str(),
                         kind: r.kind,
-                        rule: qualify(&prepared.model_name, &r.name),
+                        rule: qualify(prepared.model_name.as_deref().unwrap_or(""), &r.name),
                         tier: "const",
                         reason,
                     },
@@ -1887,7 +1887,7 @@ pub fn esm_problem<'a>(
             // `interpreter` included, so its rows say which observeds the
             // overlay served.
             route_rows.extend(prepared.rules.iter().map(|r| {
-                let rule = qualify(&prepared.model_name, &r.name);
+                let rule = qualify(prepared.model_name.as_deref().unwrap_or(""), &r.name);
                 match &r.route {
                     crate::prepare::Route::Relational => CompilerRuleReport {
                         rule,
@@ -1915,7 +1915,9 @@ pub fn esm_problem<'a>(
             json_from_text = false;
             source_text = None;
             rewritten_by_pipeline = true;
-            model_name = Some(prepared.model_name);
+            // The whole-document build (several models, none selected) keeps
+            // `None`: its names are qualified already, as on the compile path.
+            model_name = prepared.model_name;
             build.fields = prepared.fields;
             build.members = prepared.members;
             build.extents = prepared.extents;

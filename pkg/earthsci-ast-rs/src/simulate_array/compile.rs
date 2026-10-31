@@ -215,6 +215,38 @@ pub(crate) fn parse_subsystem_model(
     }
 }
 
+/// The flattened system as one synthetic [`Model`]: the typed variable maps
+/// re-merged into a single registry (each variable already carries its
+/// `var_type`) over the flattened equations, every name dot-namespaced.
+///
+/// The maps are disjoint by construction (a variable has exactly one
+/// `var_type`), so no key collides. `parameters` is the WHOLE parameter set of
+/// every cadence (esm-libraries-spec §4.7.5 step 4: the wiener / discrete
+/// subsets partition it rather than sitting beside it), so a Brownian
+/// parameter still reaches `from_model` and gets its explicit "no SDE"
+/// rejection, and a `data`-kind discrete parameter still reaches the provider
+/// forcing seam `classify_variables` routes.
+///
+/// Shared by [`ArrayCompiled::from_flattened_with`] and the build pipeline's
+/// whole-document build (`crate::prepare`), so a document of several models
+/// is one namespaced system on both routes.
+pub(crate) fn model_from_flattened(flat: &FlattenedSystem) -> Model {
+    let mut variables: IndexMap<String, ModelVariable> = IndexMap::new();
+    for (name, var) in flat
+        .state_variables
+        .iter()
+        .chain(&flat.parameters)
+        .chain(&flat.observed_variables)
+    {
+        variables.insert(name.clone(), var.clone());
+    }
+    Model {
+        variables,
+        equations: flat.equations.clone(),
+        ..Default::default()
+    }
+}
+
 /// Mount every subsystem of `model` into the model's own registries under
 /// dot-prefixed names (esm-spec §4.6): each subsystem variable `x` becomes
 /// `"<sub>.x"` (with sibling references inside its expression renamed to the
@@ -586,35 +618,7 @@ impl ArrayCompiled {
             ));
         }
 
-        // Re-merge the typed variable maps into one registry. The maps are
-        // disjoint by construction (a variable has exactly one `var_type`), so
-        // no key collides. `parameters` is the WHOLE parameter set of every
-        // cadence (esm-libraries-spec §4.7.5 step 4: the wiener / discrete
-        // subsets partition it rather than sitting beside it), so a Brownian
-        // parameter still reaches `from_model` and gets its explicit "no SDE"
-        // rejection, and a `data`-kind discrete parameter still reaches the
-        // provider forcing seam `classify_variables` routes.
-        let mut variables: IndexMap<String, ModelVariable> = IndexMap::new();
-        for (name, var) in &flat.state_variables {
-            variables.insert(name.clone(), var.clone());
-        }
-        for (name, var) in &flat.parameters {
-            variables.insert(name.clone(), var.clone());
-        }
-        for (name, var) in &flat.observed_variables {
-            variables.insert(name.clone(), var.clone());
-        }
-
-        // `index_sets` is not carried through flatten today, so coupled models
-        // that address `faq` ranges via `{ "from": <set> }`
-        // are not yet resolvable on this path (tracked as follow-up). Dense
-        // `[lo, hi]` ranges — what discretized stencils emit — need no
-        // registry and work here.
-        let model = Model {
-            variables,
-            equations: flat.equations.clone(),
-            ..Default::default()
-        };
+        let model = model_from_flattened(flat);
         // The document `index_sets` registry is carried through flatten
         // (`FlattenedSystem::index_sets`), so a coupled array system can resolve
         // `faq` `ranges` `{ "from": <set> }`, `join.on` gates, and

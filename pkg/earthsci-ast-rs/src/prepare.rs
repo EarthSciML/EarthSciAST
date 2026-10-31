@@ -90,6 +90,7 @@ use crate::simulate_array::{
 };
 use crate::template_imports::resolve_template_machinery;
 use crate::types::{Expr, IndexSet, Model, VariableType};
+use indexmap::IndexMap;
 
 /// What a [`crate::problem::ProblemOptions::progress`] observer wants the build
 /// to do next —
@@ -482,8 +483,10 @@ impl fmt::Debug for PrepareOptions {
 pub struct PreparedBuild {
     /// The (possibly rewritten) raw document.
     pub doc: JsonValue,
-    /// The prepared model's name.
-    pub model_name: String,
+    /// The prepared model's name, or `None` when the build is the whole
+    /// document: several models and none selected, built as one
+    /// dot-namespaced system whose names (`Model.var`) are already qualified.
+    pub model_name: Option<String>,
     /// Observed name → build-time field (dependency-complete).
     pub fields: HashMap<String, ArrayD<f64>>,
     /// Value-invention producer id (`from_faq`) → sorted-distinct member ids.
@@ -738,7 +741,7 @@ fn observed_defs(model: &Model) -> HashMap<String, Expr> {
 /// which must broadcast rather than be dropped — is issue #219.)
 fn scalar_params(
     model: &Model,
-    model_name: &str,
+    model_name: Option<&str>,
     overrides: &HashMap<String, f64>,
 ) -> (Vec<f64>, Vec<String>) {
     let mut names: Vec<String> = model
@@ -760,7 +763,7 @@ fn scalar_params(
             // in), or by its bare tail.
             overrides
                 .get(n)
-                .or_else(|| overrides.get(&format!("{model_name}.{n}")))
+                .or_else(|| model_name.and_then(|m| overrides.get(&format!("{m}.{n}"))))
                 .or_else(|| overrides.get(n.rsplit('.').next().unwrap_or(n)))
                 .copied()
                 .unwrap_or_else(|| {
@@ -1634,9 +1637,11 @@ fn check_discovered_gate_conflict(
 /// phase; [`run_prepare`] is the phase list.
 struct BuildState<'o> {
     opts: &'o PrepareOptions,
-    /// The typed model under build.
+    /// The typed model under build: the selected (or only) model, or the
+    /// whole document's flattened system.
     model: Model,
-    model_name: String,
+    /// `None` for the whole-document build (see [`PreparedBuild::model_name`]).
+    model_name: Option<String>,
     index_sets: HashMap<String, IndexSet>,
     /// The scalar evaluation scope (declared 0-D parameter defaults, overridden).
     param_vals: Vec<f64>,
@@ -1734,32 +1739,17 @@ impl<'o> BuildState<'o> {
             .models
             .as_ref()
             .ok_or_else(|| err("document has no models"))?;
-        let model_name = match &opts.model_name {
-            Some(n) => n.clone(),
-            None if models.len() == 1 => models.keys().next().unwrap().clone(),
-            None => return Err(err("document holds several models; pass model_name")),
+        let (model, model_name) = match &opts.model_name {
+            Some(n) => (Self::authored_model(models, n, &mut index_sets)?, Some(n.clone())),
+            None if models.len() == 1 => {
+                let n = models.keys().next().expect("len checked above");
+                (Self::authored_model(models, n, &mut index_sets)?, Some(n.clone()))
+            }
+            None => (Self::whole_document(&file, &mut index_sets)?, None),
         };
-        let mut model = models
-            .get(&model_name)
-            .ok_or_else(|| err(format!("model '{model_name}' not found in the document")))?
-            .clone();
-        // This route reads the AUTHORED model, not a flattened one, so it makes
-        // the rewrites `flatten` would have made, exactly as the array
-        // runtime's single-model route does: a self-qualified `M.a` resolves
-        // to `a`, a right-hand-side `D` to the tendency it names (or a refusal,
-        // never a `NaN`), and a `sin` of a `deg` angle takes radians — without
-        // that last one `sin(40 deg)` evaluated as `sin(40)` here and nowhere
-        // else. The rewrites run after the subsystems are mounted, as on the
-        // array runtime, so a mounted subsystem's equations and declarations
-        // are in scope under their mounted names (`D(North.u)`, a `deg`
-        // `North.theta`).
-        crate::simulate_array::mount_subsystems(&mut model, &mut index_sets)
-            .map_err(|e| err(format!("model '{model_name}': {e}")))?;
-        crate::simulate_array::resolve_model_self_references(&mut model, &model_name);
-        crate::simulate_array::apply_flatten_rewrites(&mut model)
-            .map_err(|e| err(format!("model '{model_name}': {e}")))?;
 
-        let (param_vals, param_names) = scalar_params(&model, &model_name, &opts.parameters);
+        let (param_vals, param_names) =
+            scalar_params(&model, model_name.as_deref(), &opts.parameters);
 
         Ok(BuildState {
             opts,
@@ -1784,6 +1774,62 @@ impl<'o> BuildState<'o> {
             obs_done: 0,
             obs_total: 0,
         })
+    }
+
+    /// The model `name` as authored, with the rewrites `flatten` would have
+    /// made applied in place: a self-qualified `M.a` resolves to `a`, a
+    /// right-hand-side `D` to the tendency it names (or a refusal, never a
+    /// `NaN`), and a `sin` of a `deg` angle takes radians — without that last
+    /// one `sin(40 deg)` evaluated as `sin(40)` here and nowhere else. The
+    /// rewrites run after the subsystems are mounted, as on the array runtime,
+    /// so a mounted subsystem's equations and declarations are in scope under
+    /// their mounted names (`D(North.u)`, a `deg` `North.theta`).
+    ///
+    /// Names resolve in this model's scope, model-locally: an explicit
+    /// selection builds that model alone, so a name another top-level model
+    /// declares is not in scope (see [`Self::whole_document`]).
+    fn authored_model(
+        models: &IndexMap<String, Model>,
+        name: &str,
+        index_sets: &mut HashMap<String, IndexSet>,
+    ) -> Result<Model, PrepareError> {
+        let mut model = models
+            .get(name)
+            .ok_or_else(|| err(format!("model '{name}' not found in the document")))?
+            .clone();
+        crate::simulate_array::mount_subsystems(&mut model, index_sets)
+            .map_err(|e| err(format!("model '{name}': {e}")))?;
+        crate::simulate_array::resolve_model_self_references(&mut model, name);
+        crate::simulate_array::apply_flatten_rewrites(&mut model)
+            .map_err(|e| err(format!("model '{name}': {e}")))?;
+        Ok(model)
+    }
+
+    /// A document of several models, with none selected, built WHOLE — the
+    /// way every other route builds it (the compile path's
+    /// `build_array_compiled` and the state-free static evaluation both
+    /// `flatten` the document; so do the Julia and Python `esm_problem`). One
+    /// dot-namespaced system: each model's variables under `Model.var`, its
+    /// subsystems under `Model.Sub.var`, a cross-model reference `Other.x`
+    /// bound to the model that declares it, and the document's `coupling`
+    /// applied — the flattener's resolution, not a second copy of it. A
+    /// provider key is `"<ModelPath>.<param>"`, which is exactly the flattened
+    /// name, so every model's data-fed parameters bind.
+    ///
+    /// `flatten` makes the rewrites [`Self::authored_model`] stands in for
+    /// (the right-hand-side `D` resolution and the angle normalization) itself.
+    fn whole_document(
+        file: &crate::EsmFile,
+        index_sets: &mut HashMap<String, IndexSet>,
+    ) -> Result<Model, PrepareError> {
+        let flat = crate::flatten::flatten(file)
+            .map_err(|e| err(format!("flatten the document's models: {e}")))?;
+        // The flattened registry carries every mounted subsystem's index sets
+        // as well as the document's own; the document's declaration wins.
+        for (k, v) in &flat.index_sets {
+            index_sets.entry(k.clone()).or_insert_with(|| v.clone());
+        }
+        Ok(crate::simulate_array::model_from_flattened(&flat))
     }
 
     /// Record one evaluation. Under [`PrepareOptions::refuse_per_cell`] a
@@ -1902,7 +1948,12 @@ impl<'o> BuildState<'o> {
         // is published, and in this build that name means the mounted
         // variable, so it REPLACES a same-spelled key a top-level model `Leaf`
         // with its own `p` provider would otherwise have supplied.
-        let prefix = format!("{}.", self.model_name);
+        // The whole-document build spells a mounted parameter by its full
+        // path already, which is its provider key: there is nothing to alias.
+        let Some(model_name) = &self.model_name else {
+            return;
+        };
+        let prefix = format!("{model_name}.");
         let local: Vec<(String, String)> = self
             .arrays
             .keys()
