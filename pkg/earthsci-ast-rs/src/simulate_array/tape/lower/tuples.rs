@@ -730,7 +730,7 @@ impl TapeBuilder<'_> {
 
     /// Resolve each contracted dimension's bound: a static interval as it
     /// stands, a ragged one against its offsets factor's build-time values.
-    fn tuple_dim_bounds(
+    pub(super) fn tuple_dim_bounds(
         &mut self,
         idx_names: &[String],
         contract_dims: &[ContractDim],
@@ -1643,7 +1643,7 @@ fn intersect(slot: &mut Option<Vec<i64>>, parts: &[i64]) -> bool {
 /// `ragged_upper_bound` over build-time values: the offsets factor at the
 /// cell's parents, rounded; `0` for a parent below 1 or out of range, or for
 /// a factor whose rank is not the parent count.
-fn ragged_bound(shape: &[usize], vals: &[f64], parents: &[usize], cell: &[i64]) -> i64 {
+pub(super) fn ragged_bound(shape: &[usize], vals: &[f64], parents: &[usize], cell: &[i64]) -> i64 {
     if shape.is_empty() {
         return vals[0].round() as i64;
     }
