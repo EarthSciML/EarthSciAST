@@ -4,9 +4,6 @@ name: Lint
 # pins the tool versions. This repository's rules live in each package's own
 # config: pkg/earthsci-ast-py/pyproject.toml and ruff.toml, the crates'
 # Cargo.toml, pkg/earthsci-ast-ts/eslint.config.js, and formal/lakefile.toml.
-#
-# Julia (Runic) is not enabled yet: formatting pkg/EarthSciAST.jl touches
-# files open pull requests also change, so it lands once they merge.
 
 on:
   pull_request:
@@ -43,7 +40,4 @@ jobs:
       ts-dir: pkg/earthsci-ast-ts
       go-dir: pkg/earthsci-ast-go
       lean-dir: formal
-      # Not --wfail yet: the proofs build with ~150 warnings (deprecated
-      # if_pos/if_neg, unused simp arguments and tactics, Mathlib's module-system
-      # import notes). The axiom audit still fails on any sorry.
-      lean-build-args: ""
+      julia-paths: "."

@@ -1,0 +1,5 @@
+# Formatting-only commits, skipped by `git blame` (GitHub reads this file;
+# locally: git config blame.ignoreRevsFile .git-blame-ignore-revs).
+
+# style: format the Julia sources with Runic
+30efd48dfb72e4af6129ebd8dc1cdb48c3cb780f
