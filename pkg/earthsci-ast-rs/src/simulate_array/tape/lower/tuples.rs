@@ -58,12 +58,43 @@ pub(in crate::simulate_array::tape) struct TupleFrame {
 enum DimBound {
     Static(i64, i64),
     /// `[1, offsets[parent...]]`: the offsets factor's row-major values and
-    /// shape (empty for a scalar), and the output-axis position of each parent.
+    /// shape (empty for a scalar), and where each parent is bound.
     Ragged {
         shape: DimU,
         vals: Rc<Vec<f64>>,
-        parents: Vec<usize>,
+        parents: Vec<Parent>,
     },
+}
+
+/// Where a ragged bound's parent index is bound: an output axis (fixed for
+/// the whole cell) or another contracted dim (bound by an outer level of the
+/// cell's nest, esm-spec §4.3.1 "Ragged ranges").
+#[derive(Clone, Copy)]
+enum Parent {
+    Output(usize),
+    Contracted(usize),
+}
+
+impl DimBound {
+    /// Does this bound read a contracted dim, so it is only known once that
+    /// dim is bound?
+    fn reads_contracted(&self) -> bool {
+        matches!(self, DimBound::Ragged { parents, .. }
+            if parents.iter().any(|p| matches!(p, Parent::Contracted(_))))
+    }
+
+    /// The bound under the output `cell` and the contracted values `cur`
+    /// bound so far.
+    fn at(&self, cell: &[i64], cur: &[i64]) -> (i64, i64) {
+        match self {
+            DimBound::Static(l, h) => (*l, *h),
+            DimBound::Ragged {
+                shape,
+                vals,
+                parents,
+            } => (1, ragged_bound(shape, vals, parents, cell, cur)),
+        }
+    }
 }
 
 /// An `on` clause the gate planner is pricing ([`TapeBuilder::build_join_gates`]).
@@ -231,11 +262,14 @@ impl TapeBuilder<'_> {
         if shape.contains(&0) {
             bail_tape!("faq: empty output box");
         }
-        let bounds = self.tuple_dim_bounds(idx_names, contract_dims)?;
+        let bounds = self.tuple_dim_bounds(idx_names, contract_names, contract_dims)?;
         let gates = match join {
             Some(j) => self.build_join_gates(j)?,
             None => Vec::new(),
         };
+        if !gates.is_empty() && bounds.iter().any(DimBound::reads_contracted) {
+            bail_tape!("contracted: a join gate over a ragged range whose parent is contracted");
+        }
         let spec = TupleSpec {
             idx_names,
             ranges,
@@ -733,6 +767,7 @@ impl TapeBuilder<'_> {
     fn tuple_dim_bounds(
         &mut self,
         idx_names: &[String],
+        contract_names: &[String],
         contract_dims: &[ContractDim],
     ) -> LResult<Vec<DimBound>> {
         let mut out = Vec::with_capacity(contract_dims.len());
@@ -740,20 +775,26 @@ impl TapeBuilder<'_> {
             out.push(match d {
                 ContractDim::Static(l, h) => DimBound::Static(*l, *h),
                 ContractDim::Ragged { offsets, of } => {
-                    // The interpreter reads each parent from the output
-                    // cell's binds; a parent bound by the contraction itself
-                    // would be read before it is bound.
+                    // A parent is an output index (read from the cell) or
+                    // another contracted index (read from the nest, which
+                    // binds it first; see `parent_first_order`).
                     let parents = of
                         .iter()
                         .map(|p| {
-                            idx_names.iter().position(|n| n == p).ok_or_else(|| Bail {
-                                reason: format!(
-                                    "contracted: ragged bound's parent `{p}` is not an output \
-                                     index"
-                                ),
-                            })
+                            if let Some(i) = idx_names.iter().position(|n| n == p) {
+                                Ok(Parent::Output(i))
+                            } else if let Some(i) = contract_names.iter().position(|n| n == p) {
+                                Ok(Parent::Contracted(i))
+                            } else {
+                                Err(Bail {
+                                    reason: format!(
+                                        "contracted: ragged bound's parent `{p}` is not an index \
+                                         of the node"
+                                    ),
+                                })
+                            }
                         })
-                        .collect::<LResult<Vec<usize>>>()?;
+                        .collect::<LResult<Vec<Parent>>>()?;
                     let (shape, vals) = self.known_named(offsets).ok_or_else(|| Bail {
                         reason: format!(
                             "contracted: ragged offsets factor `{offsets}` is not build-time data"
@@ -1296,7 +1337,6 @@ fn visit_tuples(
         gates,
         ..
     } = spec;
-    let nr = idx_names.len();
     let nc = contract_names.len();
     let placed: Vec<(GateAxis, GateAxis)> = gates
         .iter()
@@ -1316,19 +1356,25 @@ fn visit_tuples(
         .product::<usize>()
         .max(1);
     let mut cur: Vec<i64> = vec![0; nc];
+    // A ragged dim whose parent is contracted has no bound until that parent
+    // is bound: the cell's tuples are then a nest, not a box (no gates here;
+    // `lower_tuple_contraction` refuses the pair).
+    let nest = bounds
+        .iter()
+        .any(DimBound::reads_contracted)
+        .then(|| parent_first_order(bounds));
     for _ in 0..n_cells {
+        if let Some(order) = &nest {
+            let mut push = |t: &[i64]| tuple(&cell, t);
+            if !walk_nest(bounds, order, 0, &cell, &mut cur, &mut push) {
+                return Ok(false);
+            }
+            cell_done()?;
+            next_cell(&mut cell, ranges);
+            continue;
+        }
         // This cell's contraction bounds.
-        let cell_ranges: Vec<(i64, i64)> = bounds
-            .iter()
-            .map(|b| match b {
-                DimBound::Static(l, h) => (*l, *h),
-                DimBound::Ragged {
-                    shape,
-                    vals,
-                    parents,
-                } => (1, ragged_bound(shape, vals, parents, &cell)),
-            })
-            .collect();
+        let cell_ranges: Vec<(i64, i64)> = bounds.iter().map(|b| b.at(&cell, &cur)).collect();
         // The gates' conjunction for this cell (`reduce_contraction_gated`,
         // phase 1).
         let mut restrict: Vec<Option<Vec<i64>>> = vec![None; nc];
@@ -1394,18 +1440,78 @@ fn visit_tuples(
             return Ok(false);
         }
         cell_done()?;
-        // Next output cell, row-major.
-        let mut d = nr;
-        while d > 0 {
-            d -= 1;
-            cell[d] += 1;
-            if cell[d] <= ranges[d].1 {
-                break;
-            }
-            cell[d] = ranges[d].0;
-        }
+        next_cell(&mut cell, ranges);
     }
     Ok(true)
+}
+
+/// Step `cell` to the next output cell of `ranges`, row-major.
+fn next_cell(cell: &mut [i64], ranges: &[(i64, i64)]) {
+    let mut d = cell.len();
+    while d > 0 {
+        d -= 1;
+        cell[d] += 1;
+        if cell[d] <= ranges[d].1 {
+            break;
+        }
+        cell[d] = ranges[d].0;
+    }
+}
+
+/// The contracted dims' nest order: the odometer's own order (first dim
+/// outermost), except that a ragged dim moves after every contracted parent
+/// it reads, stably — the interpreter's `parent_first_order`.
+fn parent_first_order(bounds: &[DimBound]) -> Vec<usize> {
+    let n = bounds.len();
+    let parents_of = |i: usize| -> Vec<usize> {
+        match &bounds[i] {
+            DimBound::Ragged { parents, .. } => parents
+                .iter()
+                .filter_map(|p| match p {
+                    Parent::Contracted(j) if *j != i => Some(*j),
+                    _ => None,
+                })
+                .collect(),
+            DimBound::Static(..) => Vec::new(),
+        }
+    };
+    let mut order = Vec::with_capacity(n);
+    let mut placed = vec![false; n];
+    while order.len() < n {
+        let next = (0..n)
+            .find(|&i| !placed[i] && parents_of(i).iter().all(|&j| placed[j]))
+            .or_else(|| (0..n).find(|&i| !placed[i]))
+            .expect("an unplaced dim remains");
+        placed[next] = true;
+        order.push(next);
+    }
+    order
+}
+
+/// The nest over the contracted dims in `order`, each level's bound resolved
+/// once every outer level is bound, ascending at every level: the order the
+/// interpreter's `fold_dependent_nest` visits. `cur` stays indexed by
+/// contracted position, so the tuple's columns keep their usual order.
+fn walk_nest(
+    bounds: &[DimBound],
+    order: &[usize],
+    depth: usize,
+    cell: &[i64],
+    cur: &mut Vec<i64>,
+    push: &mut impl FnMut(&[i64]) -> bool,
+) -> bool {
+    if depth == order.len() {
+        return push(cur);
+    }
+    let d = order[depth];
+    let (lo, hi) = bounds[d].at(cell, cur);
+    for v in lo..=hi {
+        cur[d] = v;
+        if !walk_nest(bounds, order, depth + 1, cell, cur, push) {
+            return false;
+        }
+    }
+    true
 }
 
 /// Split the output box `ranges` (of `shape`, row-major `strides`) into
@@ -1641,9 +1747,16 @@ fn intersect(slot: &mut Option<Vec<i64>>, parts: &[i64]) -> bool {
 }
 
 /// `ragged_upper_bound` over build-time values: the offsets factor at the
-/// cell's parents, rounded; `0` for a parent below 1 or out of range, or for
-/// a factor whose rank is not the parent count.
-fn ragged_bound(shape: &[usize], vals: &[f64], parents: &[usize], cell: &[i64]) -> i64 {
+/// parents' values (from the output `cell` or the contracted values `cur`),
+/// rounded; `0` for a parent below 1 or out of range, or for a factor whose
+/// rank is not the parent count.
+fn ragged_bound(
+    shape: &[usize],
+    vals: &[f64],
+    parents: &[Parent],
+    cell: &[i64],
+    cur: &[i64],
+) -> i64 {
     if shape.is_empty() {
         return vals[0].round() as i64;
     }
@@ -1652,7 +1765,10 @@ fn ragged_bound(shape: &[usize], vals: &[f64], parents: &[usize], cell: &[i64]) 
     }
     let mut flat = 0usize;
     for (d, &p) in parents.iter().enumerate() {
-        let v = cell[p];
+        let v = match p {
+            Parent::Output(i) => cell[i],
+            Parent::Contracted(i) => cur[i],
+        };
         if v < 1 || v as usize > shape[d] {
             return 0;
         }
