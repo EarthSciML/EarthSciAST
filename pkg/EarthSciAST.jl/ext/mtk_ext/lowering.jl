@@ -208,9 +208,10 @@ end
 #
 # Regions are 1-based and may overlap; later regions in the sequence
 # override earlier ones, matching both the schema contract and the
-# `@makearray` runtime semantics. Each region's value is currently a
-# scalar expression that is broadcast across the region; array-valued
-# region fills (not used by any fixture) would need additional handling.
+# `@makearray` runtime semantics. A scalar region value is broadcast across
+# the region; an array-valued one (an interior-stencil `faq`, say) fills it
+# element by element and must match the region's shape once singleton
+# dimensions are dropped (esm-spec §4.3.2).
 function _build_makearray(
         expr::OpExpr, var_dict::Dict{String, Any},
         t_sym, dim_dict::Dict{String, Any}
@@ -234,13 +235,36 @@ function _build_makearray(
     fill!(result, Symbolics.Num(0))
     for (region, val_expr) in zip(expr.regions, expr.values)
         v = _esm_to_symbolic(val_expr, var_dict, t_sym, dim_dict)
-        v_num = v isa Symbolics.Num ? v : Symbolics.Num(v)
         region_axes = Tuple(pair[1]:pair[2] for pair in region)
-        for idx in Iterators.product(region_axes...)
-            result[idx...] = v_num
+        if v isa Symbolics.Arr || v isa AbstractArray
+            _fill_makearray_region!(result, region_axes, v)
+        else
+            v_num = v isa Symbolics.Num ? v : Symbolics.Num(v)
+            for idx in Iterators.product(region_axes...)
+                result[idx...] = v_num
+            end
         end
     end
     return result
+end
+
+# Copy an array-valued region fill into `result`, element by element in
+# column-major order, after checking its non-singleton extents match the
+# region's.
+function _fill_makearray_region!(result, region_axes, v)
+    vals = collect(Symbolics.scalarize(v))
+    squeeze(dims) = filter(!=(1), collect(dims))
+    region_size = map(length, region_axes)
+    squeeze(size(vals)) == squeeze(region_size) || throw(
+        ArgumentError(
+            "makearray region of size $(region_size) cannot take an " *
+                "array value of size $(size(vals))"
+        )
+    )
+    for (idx, val) in zip(Iterators.product(region_axes...), vals)
+        result[idx...] = val isa Symbolics.Num ? val : Symbolics.Num(val)
+    end
+    return nothing
 end
 
 # ---- Const-array gathers (esm-spec §9.2, CONFORMANCE_SPEC §5.5.5) ----
