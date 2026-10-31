@@ -632,6 +632,15 @@
       "note": "Non-vacuity control of the fixture set."
     },
     {
+      "id": "conf.5.53.initial-state-equals-solve-start",
+      "section": "5.53",
+      "quote": "It MUST equal, bit for bit, the state at `tspan[0]` of a solve of the same Problem.",
+      "class": "later",
+      "phase": 6,
+      "area": "simulation",
+      "note": "initial_state(prob) equals, bitwise, the state a solve of the same Problem holds at tspan[0]."
+    },
+    {
       "id": "conf.5.46.missing-data-fails",
       "section": "5.46",
       "quote": "build MUST FAIL at construction with `E_TREEWALK_MISSING_DATA`, naming the parameter and the data source that feeds it. It MUST NOT bind the parameter from zero or from a NaN sentinel",

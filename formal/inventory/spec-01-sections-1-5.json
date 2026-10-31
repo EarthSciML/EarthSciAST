@@ -702,6 +702,15 @@
       "note": "On a mount edge, an injected template import must name a template library (else template_import_not_library) and the subsystem ref a component file."
     },
     {
+      "id": "spec.4.7.version-gate-own-file",
+      "section": "4.7",
+      "quote": "A gate MUST NOT be applied to the resolved document against the mounting file's version, which would make a valid file invalid only because something mounted it.",
+      "class": "semantic",
+      "phase": 5,
+      "area": "flatten",
+      "note": "Each version gate judges the file that holds the gated construct against that file's own esm: an older document mounting a newer leaf is accepted, and a newer document does not legalize an older leaf's gated construct."
+    },
+    {
       "id": "spec.4.8.1.eight-axes-fixed",
       "section": "4.8.1",
       "quote": "A binding MUST NOT introduce a ninth axis, and MUST NOT map a registry symbol onto an axis the table below does not give it.",
