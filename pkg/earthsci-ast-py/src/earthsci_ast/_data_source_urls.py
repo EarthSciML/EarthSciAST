@@ -23,15 +23,20 @@ learn about a base directory. It is idempotent (its output is scheme-led), so
 
 from __future__ import annotations
 
+import json
 import os
 import posixpath
 import re
 from typing import Any
 
-from .error_handling import DATA_SOURCE_URL_UNRESOLVED
+from .error_handling import DATA_SOURCE_URL_UNRESOLVED, URL_SUBSTITUTION_UNKNOWN_NAME
 from .json_walk import ExpressionTemplateError
 
-__all__ = ["resolve_data_source_urls", "resolve_source_url"]
+__all__ = [
+    "apply_mount_url_substitutions",
+    "resolve_data_source_urls",
+    "resolve_source_url",
+]
 
 # esm-spec §8.2.1: a template is already a URL when it is scheme-led. The `://`
 # is required (rather than a bare `scheme:`) so a Windows drive letter and a
@@ -176,3 +181,150 @@ def _resolved(template: str, base_dir: str, where: str) -> str:
         raise ExpressionTemplateError(
             DATA_SOURCE_URL_UNRESOLVED, f"{where}: {str(e).split('] ', 1)[-1]}"
         ) from None
+
+
+# esm-spec §4.7 "Binding a data source's location at the mount": a placeholder a
+# mount edge can bind is a brace pair enclosing a C identifier and nothing else.
+# A formatted substitution such as `{date:%Y%m%d}` is never one, so an edge can
+# never rewrite the runtime's own date expansion.
+_PLACEHOLDER_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def _locations(data: dict) -> list[tuple[str, str]]:
+    """Every ``url_template`` and ``mirrors`` string of ``data``'s
+    ``data_sources``, with the site each one is reported at."""
+    out: list[tuple[str, str]] = []
+    sources = data.get("data_sources")
+    if not isinstance(sources, dict):
+        return out
+    for name, entry in sources.items():
+        src = entry.get("source") if isinstance(entry, dict) else None
+        if not isinstance(src, dict):
+            continue
+        if isinstance(src.get("url_template"), str):
+            out.append((f"data_sources.{name}.source.url_template", src["url_template"]))
+        if isinstance(src.get("mirrors"), list):
+            out.extend(
+                (f"data_sources.{name}.source.mirrors[{i}]", m)
+                for i, m in enumerate(src["mirrors"])
+                if isinstance(m, str)
+            )
+    return out
+
+
+def apply_mount_url_substitutions(data: Any, edge: Any, binder_dir: str, where: str) -> None:
+    """Apply a mount edge's ``url_substitutions`` to the referenced document's
+    ``data_sources`` (esm-spec §4.7 "Binding a data source's location at the
+    mount").
+
+    ``data`` is the referenced document as resolved at this edge and
+    ``binder_dir`` the directory of the MOUNTING document, the one that wrote
+    the edge. Three rules:
+
+    * A key names a bare ``{key}`` placeholder of some location in ``data``; one
+      that names none is ``url_substitution_unknown_name``, so a misspelt key
+      fails at the edge rather than leaving the placeholder for a read to trip
+      over.
+    * A value is text: a string carrying no ``{`` or ``}``, so a substitution
+      never introduces another one (``data_source_url_unresolved`` otherwise).
+    * Who wrote the location decides what it anchors on (§8.2.1). A placeholder
+      that LEADS a template supplies the whole location, so the bound value is
+      the mounting document's location and a relative one joins onto
+      ``binder_dir``. A placeholder anywhere else is a segment of a location the
+      referenced document wrote, so the value is spliced in as text and the
+      result resolves against the referenced document's directory, as before.
+
+    A placeholder the edge does not bind is left as written. Copy-on-write, like
+    :func:`resolve_data_source_urls`: only ``data["data_sources"]`` is reassigned.
+    """
+    if not isinstance(edge, dict) or "url_substitutions" not in edge:
+        return
+    raw = edge["url_substitutions"]
+    if not isinstance(raw, dict):
+        raise ExpressionTemplateError(
+            DATA_SOURCE_URL_UNRESOLVED,
+            f"{where}: `url_substitutions` must be an object mapping a placeholder "
+            "name to a string (esm-spec §4.7)",
+        )
+    if not raw:
+        return
+    for k, v in raw.items():
+        if not isinstance(v, str):
+            raise ExpressionTemplateError(
+                DATA_SOURCE_URL_UNRESOLVED,
+                f"{where}: `url_substitutions.{k}` must be a string, got "
+                f"{json.dumps(v)} (esm-spec §4.7)",
+            )
+        if "{" in v or "}" in v:
+            raise ExpressionTemplateError(
+                DATA_SOURCE_URL_UNRESOLVED,
+                f"{where}: `url_substitutions.{k}` = {v!r} carries a brace; a bound "
+                "value is text and may not introduce another substitution "
+                "(esm-spec §4.7)",
+            )
+
+    present = (
+        {m.group(1) for _, t in _locations(data) for m in _PLACEHOLDER_RE.finditer(t)}
+        if isinstance(data, dict)
+        else set()
+    )
+    for k in raw:
+        if k not in present:
+            raise ExpressionTemplateError(
+                URL_SUBSTITUTION_UNKNOWN_NAME,
+                f"{where}: `url_substitutions` binds {k!r}, which no `url_template` or "
+                "`mirrors` entry of the referenced document's data_sources spells as a "
+                f"placeholder `{{{k}}}` (available: [{', '.join(sorted(present))}]); a "
+                "mount edge never invents a placeholder (esm-spec §4.7)",
+            )
+
+    def lead(v: str) -> str:
+        # The value a LEADING placeholder contributes: the mounting document's
+        # location, per §8.2.1's own forms.
+        if _SCHEME_RE.match(v) or v.startswith("/"):
+            return v
+        return posixpath.join(_abs_base(binder_dir), v)
+
+    def substitute(t: str, site: str) -> str:
+        def one(m: re.Match) -> str:
+            n = m.group(1)
+            if n not in raw:
+                return m.group(0)
+            return lead(raw[n]) if m.start() == 0 else raw[n]
+
+        out = _PLACEHOLDER_RE.sub(one, t)
+        if out == t or not out.startswith("file:///"):
+            return out
+        # A location that was already resolved (hoisted from a nested mount, or
+        # made absolute by a leading value) is renormalized here, since §8.2.1
+        # leaves a scheme-led template alone: a spliced `..` must not survive.
+        p = _remove_dot_segments(out[len("file://") :])
+        if "?" in p or "#" in p:
+            raise ExpressionTemplateError(
+                DATA_SOURCE_URL_UNRESOLVED,
+                f"{where}: {site}: the substituted location {out!r} carries a '?' or "
+                "'#' (esm-spec §8.2.1)",
+            )
+        return "file://" + p
+
+    rebuilt: dict[str, Any] = {}
+    for name, entry in data["data_sources"].items():
+        rebuilt[name] = entry
+        src = entry.get("source") if isinstance(entry, dict) else None
+        if not isinstance(src, dict):
+            continue
+        new_src = dict(src)
+        if isinstance(src.get("url_template"), str):
+            new_src["url_template"] = substitute(
+                src["url_template"], f"data_sources.{name}.source.url_template"
+            )
+        if isinstance(src.get("mirrors"), list):
+            new_src["mirrors"] = [
+                substitute(m, f"data_sources.{name}.source.mirrors[{i}]")
+                if isinstance(m, str)
+                else m
+                for i, m in enumerate(src["mirrors"])
+            ]
+        if new_src != src:
+            rebuilt[name] = {**entry, "source": new_src}
+    data["data_sources"] = rebuilt

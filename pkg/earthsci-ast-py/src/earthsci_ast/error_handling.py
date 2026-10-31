@@ -277,6 +277,11 @@ TEMPLATE_IMPORT_RENAME_INVALID = "template_import_rename_invalid"
 # renaming"): the mount-edge mirror of `template_import_rename_unknown_name`.
 SUBSYSTEM_INDEX_SET_RENAME_UNKNOWN_NAME = "subsystem_index_set_rename_unknown_name"
 
+# Mount-edge data-source location binding (esm-spec §4.7 "Binding a data
+# source's location at the mount"): a `url_substitutions` key that names no bare
+# `{name}` placeholder of the referenced document's `data_sources`.
+URL_SUBSTITUTION_UNKNOWN_NAME = "url_substitution_unknown_name"
+
 # `index_set_rename` on a mount form that does not implement it (esm-spec §4.7
 # "Mount-edge index-set renaming", "Where it applies"). Python honours the field
 # at BOTH mount forms -- the top-level `models.<k>` `{ref}` and the

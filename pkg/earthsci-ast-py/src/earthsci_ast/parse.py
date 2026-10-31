@@ -1657,6 +1657,7 @@ def _load_ref_data(
     parent_metaparameters: dict[str, int] | None = None,
     index_set_rename: Any = None,
     rename_where: str = "mount edge",
+    mount_edge: Any = None,
 ) -> tuple:
     """Fetch, gate, schema-validate, §9.7-resolve, and template-lower a
     referenced ESM document (esm-spec §4.7 / §9.7.6 binding site 3).
@@ -1685,6 +1686,11 @@ def _load_ref_data(
     single-root-resolve semantics; explicit edge ``bindings`` (site 3) win over
     them, and names the leaf does not declare are dropped (never forwarded, so
     they cannot raise ``template_import_unknown_name`` against the leaf).
+
+    ``mount_edge`` is the raw ``{ref}`` edge object; its ``url_substitutions``
+    (esm-spec §4.7 "Binding a data source's location at the mount") bind the
+    referenced document's data-source placeholders here, with a leading value
+    anchored on ``base_path`` (the MOUNTING document's dir).
     """
     from .lower_expression_templates import (
         ExpressionTemplateError,
@@ -1855,6 +1861,17 @@ def _load_ref_data(
     from .template_imports import apply_mount_index_set_rename
 
     apply_mount_index_set_rename(ref_data, index_set_rename, rename_where)
+
+    # esm-spec §4.7 "Binding a data source's location at the mount": this edge's
+    # `url_substitutions` bind the referenced document's `data_sources`
+    # placeholders, a leading value anchoring on THIS edge's author (the
+    # mounting document, `base_path`). Applied at both mount forms, so an
+    # unknown key is refused identically at each. This binding resolves no
+    # mounted document's locations further, and hoists none into the mounting
+    # document: a mounted leaf's `data_sources` do not cross the mount here.
+    from ._data_source_urls import apply_mount_url_substitutions
+
+    apply_mount_url_substitutions(ref_data, mount_edge, base_path, rename_where)
 
     return ref_data, new_base, leaf_env
 
@@ -2100,6 +2117,7 @@ def _resolve_subsystems_generic(
                     loader_metaparameters=api_meta,
                     index_set_rename=sub_value.get("index_set_rename"),
                     rename_where=f"subsystem ref '{ref_str}'",
+                    mount_edge=sub_value,
                 )
 
                 parsed = _parse_esm_data(ref_data)
@@ -2469,6 +2487,7 @@ def resolve_model_refs(
             parent_metaparameters=parent_metaparameters,
             index_set_rename=model_value.get("index_set_rename"),
             rename_where=f"top-level model ref '{ref_str}'",
+            mount_edge=model_value,
         )
 
         parsed = _parse_esm_data(ref_data)

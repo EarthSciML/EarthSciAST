@@ -330,6 +330,7 @@ _OPAQUE_KEYS = frozenset(
         "rename",
         "rebind",
         "index_set_rename",
+        "url_substitutions",
         "source",
         "file_variable",
         "path",
@@ -400,6 +401,7 @@ _NAME_KEYED_MAP_KEYS = frozenset(
         "rename",
         "rebind",
         "index_set_rename",
+        "url_substitutions",
         "where",
     }
 )
