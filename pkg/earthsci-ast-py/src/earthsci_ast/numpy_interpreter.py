@@ -2666,9 +2666,9 @@ def _eval_faq_dispatch(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
     if policy is not None and policy.every_tier_off:
         policy.decline("interpreter", "compiler='interpreter': every fast tier is off")
         if ragged_reduce:
-            if join_clauses or filter_expr is not None:
+            if join_clauses:
                 raise NumpyInterpreterError(
-                    "aggregate 'join'/'filter' with a ragged contracted range is not "
+                    "aggregate 'join' with a ragged contracted range is not "
                     "supported; equi-join keys are dense interval / categorical index "
                     "sets (RFC semiring-faq-unified-ir §5.3)"
                 )
@@ -2682,6 +2682,7 @@ def _eval_faq_dispatch(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
                 resolved,
                 reducer,
                 empty_zero,
+                filter_expr,
             )
         return _eval_faq_scalar(
             expr,
@@ -2725,6 +2726,12 @@ def _eval_faq_dispatch(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
         else:
             _decline("nested-reduce", "a ragged range under an enclosing whole-box binding")
         if ragged_reduce:
+            if join_clauses:
+                raise NumpyInterpreterError(
+                    "aggregate 'join' with a ragged contracted range is not "
+                    "supported; equi-join keys are dense interval / categorical index "
+                    "sets (RFC semiring-faq-unified-ir §5.3)"
+                )
             return _eval_faq_ragged(
                 expr,
                 ctx,
@@ -2735,6 +2742,7 @@ def _eval_faq_dispatch(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
                 resolved,
                 reducer,
                 empty_zero,
+                filter_expr,
             )
         return _eval_faq_scalar(
             expr,
@@ -2773,13 +2781,13 @@ def _eval_faq_dispatch(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
                 policy.land("batched-leaf")
             return batched
 
-    if join_clauses or filter_expr is not None:
-        if ragged_reduce:
-            raise NumpyInterpreterError(
-                "aggregate 'join'/'filter' with a ragged contracted range is not "
-                "supported; equi-join keys are dense interval / categorical index "
-                "sets (RFC semiring-faq-unified-ir §5.3)"
-            )
+    if ragged_reduce and join_clauses:
+        raise NumpyInterpreterError(
+            "aggregate 'join' with a ragged contracted range is not "
+            "supported; equi-join keys are dense interval / categorical index "
+            "sets (RFC semiring-faq-unified-ir §5.3)"
+        )
+    if (join_clauses or filter_expr is not None) and not ragged_reduce:
         # Forward cumulative (prefix) reduction (esm-spec §4.3.1): recognized
         # BEFORE the dense gated paths, because they would materialize the whole
         # N×N triangle just to mask half of it away. Declines (→ None) for
@@ -2928,6 +2936,7 @@ def _eval_faq_dispatch(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
             resolved,
             reducer,
             empty_zero,
+            filter_expr,
         )
         if csr is not None:
             if policy is not None:
@@ -2943,6 +2952,7 @@ def _eval_faq_dispatch(expr: ExprNode, ctx: EvalContext) -> np.ndarray:
             resolved,
             reducer,
             empty_zero,
+            filter_expr,
         )
 
     if red_ranges_exp is None:
@@ -3052,33 +3062,6 @@ def _iter_output_cells(
         yield multi_idx, local_binding
 
 
-def _reduce_over(
-    body: Expr,
-    ctx: EvalContext,
-    local_binding: dict[str, int],
-    reduce_syms: list[str],
-    cartesian_red: list[tuple[int, ...]],
-    reducer: str,
-    empty_zero: float,
-) -> float:
-    """Reduce ``body`` over the contracted-index cartesian product with ⊕.
-
-    The ungated case of :func:`_reduce_over_gated` (no join / filter); returns the
-    semiring's empty-reduction identity ``empty_zero`` (0̄) when the contracted
-    ranges are empty (RFC §5.1)."""
-    return _reduce_over_gated(
-        body,
-        ctx,
-        local_binding,
-        reduce_syms,
-        cartesian_red,
-        reducer,
-        empty_zero,
-        gates=[],
-        filter_expr=None,
-    )
-
-
 def _eval_faq_ragged(
     expr: ExprNode,
     ctx: EvalContext,
@@ -3089,19 +3072,84 @@ def _eval_faq_ragged(
     resolved: dict[str, Any],
     reducer: str,
     empty_zero: float,
+    filter_expr: Expr | None = None,
 ) -> np.ndarray:
     """Scalar evaluation path for aggregates whose contracted bounds are ragged.
 
     A ragged reduce range depends on the enclosing (output) indices via its
     ``offsets`` factor, so the contracted ranges are recomputed for each output
     point — the named, first-class form of the per-parent dynamic bound (RFC
-    §5.2). Non-ragged reduce ranges in the same node expand statically.
+    §5.2). Non-ragged reduce ranges in the same node expand statically. A
+    ragged range whose parent is itself contracted is expanded per value of
+    that parent, the parent outer (:func:`_ragged_cell_tuples`). A ``filter``
+    skips the points it excludes.
     """
     _enter_per_cell("ragged")
     out = np.zeros(out_shape, dtype=float)
     for multi_idx, local_binding in _iter_output_cells(out_syms, out_ranges_exp, out_shape):
         parent_binding = dict(ctx.locals)
         parent_binding.update(local_binding)
+        out[multi_idx] = _reduce_over_gated(
+            expr.expr,
+            ctx,
+            local_binding,
+            reduce_syms,
+            _ragged_cell_tuples(reduce_syms, resolved, ctx, parent_binding),
+            reducer,
+            empty_zero,
+            gates=[],
+            filter_expr=filter_expr,
+        )
+    return out
+
+
+def _ragged_nest_order(reduce_syms: list[str], resolved: dict[str, Any]) -> list[int]:
+    """The contracted symbols' visit order, as positions into ``reduce_syms``:
+    the declared order (first outermost, :func:`_cartesian`'s), except that a
+    ragged symbol moves after every CONTRACTED parent it names, stably — its
+    bound is only known once that parent is bound (esm-spec §4.3.1 "Ragged
+    ranges")."""
+    n = len(reduce_syms)
+    pos = {s: i for i, s in enumerate(reduce_syms)}
+
+    def parents(i: int) -> list[int]:
+        rs = resolved[reduce_syms[i]]
+        if not isinstance(rs, _RaggedRange):
+            return []
+        return [pos[p] for p in rs.of if p in pos and pos[p] != i]
+
+    order: list[int] = []
+    placed = [False] * n
+    while len(order) < n:
+        nxt = next(
+            (i for i in range(n) if not placed[i] and all(placed[j] for j in parents(i))),
+            None,
+        )
+        if nxt is None:  # a cycle (never valid): the first unplaced symbol
+            nxt = placed.index(False)
+        placed[nxt] = True
+        order.append(nxt)
+    return order
+
+
+def _ragged_cell_tuples(
+    reduce_syms: list[str],
+    resolved: dict[str, Any],
+    ctx: EvalContext,
+    parent_binding: dict[str, int],
+) -> list[tuple[int, ...]]:
+    """One output cell's contraction points over ragged ranges, in visit order,
+    each point a tuple in ``reduce_syms`` order. Without a contracted parent this
+    is :func:`_cartesian` of the cell's ranges; with one it is the nest of
+    :func:`_ragged_nest_order`, each level's range expanded under the values
+    the outer levels bound."""
+    order = _ragged_nest_order(reduce_syms, resolved)
+    reduce_set = set(reduce_syms)
+    nested = any(
+        isinstance(resolved[s], _RaggedRange) and any(p in reduce_set for p in resolved[s].of)
+        for s in reduce_syms
+    )
+    if not nested:
         red_ranges: list[list[int]] = []
         for s in reduce_syms:
             rs = resolved[s]
@@ -3109,17 +3157,28 @@ def _eval_faq_ragged(
                 red_ranges.append(_expand_ragged(rs, ctx, parent_binding))
             else:
                 red_ranges.append(_expand_range(rs))
-        cartesian_red = _cartesian(red_ranges)
-        out[multi_idx] = _reduce_over(
-            expr.expr,
-            ctx,
-            local_binding,
-            reduce_syms,
-            cartesian_red,
-            reducer,
-            empty_zero,
+        return _cartesian(red_ranges)
+    points: list[tuple[int, ...]] = []
+    cur = [0] * len(reduce_syms)
+    binding = dict(parent_binding)
+
+    def walk(depth: int) -> None:
+        if depth == len(order):
+            points.append(tuple(cur))
+            return
+        i = order[depth]
+        s = reduce_syms[i]
+        rs = resolved[s]
+        vals = (
+            _expand_ragged(rs, ctx, binding) if isinstance(rs, _RaggedRange) else _expand_range(rs)
         )
-    return out
+        for v in vals:
+            cur[i] = v
+            binding[s] = v
+            walk(depth + 1)
+
+    walk(0)
+    return points
 
 
 # ---------------------------------------------------------------------------
@@ -3304,6 +3363,7 @@ def _eval_faq_ragged_csr(
     resolved: dict[str, Any],
     reducer: str,
     empty_zero: float,
+    filter_expr: Expr | None = None,
 ) -> np.ndarray | None:
     """Whole-array tier for a contraction over a RAGGED range (esm-spec §4.3.1
     ``{from, of}``, RFC §5.2): the CSR form of :func:`_eval_faq_ragged`.
@@ -3318,10 +3378,14 @@ def _eval_faq_ragged_csr(
     ``rows × max row length`` box, and the answer is bit-for-bit the per-cell
     walk's.
 
+    A ragged range whose parent is itself contracted is expanded level by level
+    in :func:`_ragged_nest_order` (:func:`_ragged_nest_entries`), the per-cell
+    walk's nest. A ``filter`` is evaluated over the entries and the excluded ones
+    are dropped before the body, as the per-cell walk skips them.
+
     Declines inside a recurrence sweep (§5.19.2), when an enclosing tier has
     bound an index symbol to an array, or when a ragged range's parent is
-    neither an output symbol nor a scalar enclosing binding (a parent that is
-    itself contracted).
+    neither an index of the node nor a scalar enclosing binding.
     """
     tier = "ragged-csr"
     if ctx.recur is not None:
@@ -3337,6 +3401,37 @@ def _eval_faq_ragged_csr(
         s: np.asarray(r, dtype=np.int64)[cell[a]]
         for a, (s, r) in enumerate(zip(out_syms, out_ranges_exp))
     }
+    out = np.empty(n_rows, dtype=float)
+
+    reduce_set = set(reduce_syms)
+    if any(
+        isinstance(resolved[s], _RaggedRange) and any(p in reduce_set for p in resolved[s].of)
+        for s in reduce_syms
+    ):
+        built = _ragged_nest_entries(ctx, n_rows, out_vals, reduce_syms, resolved, tier)
+        if built is None:
+            return None
+        row_all, bind_all = built
+        counts = np.bincount(row_all, minlength=n_rows).astype(np.int64)
+        starts = np.zeros(n_rows + 1, dtype=np.int64)
+        np.cumsum(counts, out=starts[1:])
+        for lo, hi in _row_chunks(counts, _CONTRACTION_BOX_CAP):
+            a, b = int(starts[lo]), int(starts[hi])
+            folded = _fold_ragged_entries(
+                expr,
+                ctx,
+                row_all[a:b] - lo,
+                {s: v[a:b] for s, v in bind_all.items()},
+                hi - lo,
+                filter_expr,
+                reducer,
+                empty_zero,
+                tier,
+            )
+            if folded is None:
+                return None
+            out[lo:hi] = folded
+        return out.reshape(out_shape)
 
     # Per contracted symbol: its per-row length (ragged) or its value list (dense).
     sizes: list[np.ndarray | int] = []
@@ -3348,34 +3443,14 @@ def _eval_faq_ragged_csr(
             dense_vals[s] = vals
             sizes.append(int(vals.size))
             continue
-        try:
-            off = np.asarray(_resolve_keyed_factor(rs.offsets, ctx), dtype=float)
-            if off.ndim == 0:
-                n = np.full(n_rows, int(round(float(off))), dtype=np.int64)
-            else:
-                parents = []
-                for p in rs.of:
-                    if p in out_vals:
-                        parents.append(out_vals[p] - 1)
-                    elif p in ctx.locals and np.ndim(ctx.locals[p]) == 0:
-                        parents.append(np.full(n_rows, int(ctx.locals[p]) - 1, dtype=np.int64))
-                    else:
-                        return _decline(
-                            tier,
-                            f"ragged set {rs.name!r} has parent {p!r}, which is neither an "
-                            f"output symbol nor a scalar enclosing binding",
-                        )
-                n = np.rint(off[tuple(parents)]).astype(np.int64)
-        except (NumpyInterpreterError, IndexError, ValueError, TypeError, KeyError) as exc:
-            return _decline(
-                tier, f"the offsets factor does not resolve: {type(exc).__name__}: {exc}"
-            )
-        sizes.append(np.maximum(np.broadcast_to(n, (n_rows,)), 0))
+        n = _ragged_lengths(rs, ctx, out_vals, n_rows, tier)
+        if n is None:
+            return None
+        sizes.append(n)
 
     counts = np.ones(n_rows, dtype=np.int64)
     for sz in sizes:
         counts = counts * sz
-    out = np.empty(n_rows, dtype=float)
     for lo, hi in _row_chunks(counts, _CONTRACTION_BOX_CAP):
         c = counts[lo:hi]
         n_ent = int(c.sum())
@@ -3389,11 +3464,127 @@ def _eval_faq_ragged_csr(
             digit = t % size
             t = t // size
             bindings[s] = dense_vals[s][digit] if s in dense_vals else digit + 1
-        vals = _eval_body_on_entries(expr.expr, ctx, bindings, n_ent, tier)
-        if vals is None:
+        folded = _fold_ragged_entries(
+            expr, ctx, row - lo, bindings, hi - lo, filter_expr, reducer, empty_zero, tier
+        )
+        if folded is None:
             return None
-        out[lo:hi] = _segmented_fold(reducer, vals, c, empty_zero)
+        out[lo:hi] = folded
     return out.reshape(out_shape)
+
+
+def _ragged_lengths(
+    rs: _RaggedRange,
+    ctx: EvalContext,
+    bound: dict[str, np.ndarray],
+    n: int,
+    tier: str,
+) -> np.ndarray | None:
+    """Each entry's ``offsets[parent…]`` for the ragged range ``rs``, its parents
+    read from ``bound`` (one value per entry) or a scalar enclosing binding;
+    clipped below at 0. ``None`` (declined) when a parent is neither, or the
+    offsets factor does not resolve."""
+    try:
+        off = np.asarray(_resolve_keyed_factor(rs.offsets, ctx), dtype=float)
+        if off.ndim == 0:
+            return np.full(n, max(int(round(float(off))), 0), dtype=np.int64)
+        parents = []
+        for p in rs.of:
+            if p in bound:
+                parents.append(bound[p] - 1)
+            elif p in ctx.locals and np.ndim(ctx.locals[p]) == 0:
+                parents.append(np.full(n, int(ctx.locals[p]) - 1, dtype=np.int64))
+            else:
+                return _decline(
+                    tier,
+                    f"ragged set {rs.name!r} has parent {p!r}, which is neither an "
+                    f"index of the node nor a scalar enclosing binding",
+                )
+        lengths = np.rint(off[tuple(parents)]).astype(np.int64)
+    except (NumpyInterpreterError, IndexError, ValueError, TypeError, KeyError) as exc:
+        return _decline(tier, f"the offsets factor does not resolve: {type(exc).__name__}: {exc}")
+    return np.maximum(np.broadcast_to(lengths, (n,)), 0)
+
+
+def _ragged_nest_entries(
+    ctx: EvalContext,
+    n_rows: int,
+    out_vals: dict[str, np.ndarray],
+    reduce_syms: list[str],
+    resolved: dict[str, Any],
+    tier: str,
+) -> tuple[np.ndarray, dict[str, np.ndarray]] | None:
+    """The flat entries of a ragged contraction with a CONTRACTED parent:
+    ``(row, bindings)``, grouped by output row in C order and, within a row, in
+    the per-cell walk's nest (:func:`_ragged_nest_order`). Built one level at a
+    time: every entry so far is repeated by the next symbol's length under the
+    values already bound, so a ragged symbol's parent is bound before it is
+    read. ``None`` (declined) over the materialization cap."""
+    row = np.arange(n_rows, dtype=np.int64)
+    bind: dict[str, np.ndarray] = dict(out_vals)
+    for i in _ragged_nest_order(reduce_syms, resolved):
+        s = reduce_syms[i]
+        rs = resolved[s]
+        dense = None
+        if isinstance(rs, _RaggedRange):
+            n = _ragged_lengths(rs, ctx, bind, row.size, tier)
+            if n is None:
+                return None
+        else:
+            dense = np.asarray(_expand_range(rs), dtype=np.int64)
+            n = np.full(row.size, dense.size, dtype=np.int64)
+        total = int(n.sum())
+        if total > _CONTRACTION_BOX_CAP:
+            return _decline(
+                tier,
+                f"{total} entries, over the {_CONTRACTION_BOX_CAP}-entry materialization cap",
+            )
+        rep = np.repeat(np.arange(row.size, dtype=np.int64), n)
+        first = np.zeros(row.size, dtype=np.int64)
+        np.cumsum(n[:-1], out=first[1:])
+        digit = np.arange(total, dtype=np.int64) - first[rep]
+        row = row[rep]
+        bind = {k: v[rep] for k, v in bind.items()}
+        bind[s] = dense[digit] if dense is not None else digit + 1
+    return row, bind
+
+
+def _fold_ragged_entries(
+    expr: ExprNode,
+    ctx: EvalContext,
+    row: np.ndarray,
+    bindings: dict[str, np.ndarray],
+    n_rows: int,
+    filter_expr: Expr | None,
+    reducer: str,
+    empty_zero: float,
+    tier: str,
+) -> np.ndarray | None:
+    """⊕-fold the flat entries of ``n_rows`` output rows (``row`` 0-based within
+    them, grouped and in visit order): drop the entries ``filter_expr`` excludes,
+    evaluate the body over the rest, and fold each row's terms in order — the
+    per-cell walk's skip-then-fold, bit for bit. ``None`` when declined."""
+    if filter_expr is not None and row.size:
+        prev = dict(ctx.locals)
+        try:
+            for s, v in bindings.items():
+                ctx.locals[s] = np.asarray(v, dtype=float)
+            kept = np.asarray(_require_real(_compile_expr(filter_expr)(ctx), "aggregate filter"))
+            kept = np.broadcast_to(kept.astype(bool), (row.size,))
+        except (NumpyInterpreterError, IndexError, ValueError, TypeError, KeyError) as exc:
+            return _decline(
+                tier,
+                f"the filter does not evaluate over the flat entries: {type(exc).__name__}: {exc}",
+            )
+        finally:
+            ctx.locals = prev
+        row = row[kept]
+        bindings = {s: v[kept] for s, v in bindings.items()}
+    vals = _eval_body_on_entries(expr.expr, ctx, bindings, int(row.size), tier)
+    if vals is None:
+        return None
+    counts = np.bincount(row, minlength=n_rows).astype(np.int64)
+    return _segmented_fold(reducer, vals, counts, empty_zero)
 
 
 def _value_positions(range_vals: list[int], probe: np.ndarray) -> tuple[np.ndarray, np.ndarray]:

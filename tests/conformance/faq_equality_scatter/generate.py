@@ -544,16 +544,7 @@ CASES = {
 #: Per fixture, the bindings that do not run it today and why. Each binding's
 #: test asserts that an excluded fixture still FAILS there (a refusal, an
 #: error or a wrong value), so a fix makes the stale exclusion red.
-EXCLUSIONS = {
-    "ragged": {
-        "python": "the NumPy evaluator refuses a filter over a ragged contracted range",
-    },
-    "ragged_contracted_parent": {
-        "julia": "E_TREEWALK_UNBOUND_LOOP_VAR on a ragged range whose parent is a contracted index, under both compilers",
-        "rust": "the interpreter silently returns 0 for pm[2..4] (only pm[1] is right); native refuses (ragged bound's parent is not an output index)",
-        "python": "the NumPy evaluator refuses a filter over a ragged contracted range",
-    },
-}
+EXCLUSIONS: dict[str, dict[str, str]] = {}
 
 
 def golden_value(x: float):

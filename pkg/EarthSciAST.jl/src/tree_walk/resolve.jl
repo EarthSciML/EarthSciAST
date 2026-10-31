@@ -285,6 +285,17 @@ end
 # entry list, `_array_contraction_table`). A filter is not applied in keys mode.
 const _AggBody = Union{ASTExpr, Nothing}
 
+# ---- A ragged range whose parent is itself contracted (esm-spec §4.3.1) -------
+# `{from: <ragged>, of: [r]}` with `r` contracted too: the range of `k` is
+# `[1, index(offsets, r)]`, unknown until `r` is bound, so the contracted tuples
+# are not a product of per-index iterators but a nest, `r` outer to `k`. The
+# nest is listed once per cell (`_ContractNest`), each tuple in
+# `contract_names` order, and `_foreach_aggregate_term` visits that list in
+# place of the product.
+struct _ContractNest
+    tuples::Vector{Vector{Int}}
+end
+
 # A REVERSE scan folds DESCENDING (esm-spec §4.3.1): its suffix `⊕_{j ≥ i}` is
 # the left fold `((b_N ⊕ b_{N-1}) ⊕ …) ⊕ b_i`, so one running accumulator
 # walking the axis from the top computes every cell of it exactly (the scan
@@ -330,7 +341,8 @@ function _foreach_aggregate_term(
     # a `join.on` value-equality match set (§5.5.8) alike — routed to
     # `_foreach_aggregate_term_gated`. Everything else (no join, a gate that
     # materialised no index) takes the untouched product below.
-    ov = gates === nothing ? nothing : _drivable_gate(gates)
+    ov = (gates === nothing || contract_iters isa _ContractNest) ? nothing :
+        _drivable_gate(gates)
     ov === nothing || return _foreach_aggregate_term_gated(
         emit!, body,
         contract_names, contract_iters, gates, filt, zerobar, binding, ov, k_exprs
@@ -352,9 +364,9 @@ function _foreach_aggregate_product(
         contract_names::Vector{String}, iters, gates, filt, zerobar::Float64,
         binding, k_exprs::Dict{String, ASTExpr}, ::Val{COUNT}
     ) where {F, COUNT}
-    body === nothing && length(iters) == 1 &&
+    body === nothing && iters isa AbstractVector && length(iters) == 1 &&
         return _foreach_keys1(emit!, contract_names[1], iters[1], gates, binding, Val(COUNT))
-    for k_tuple in Iterators.product(iters...)
+    for k_tuple in _agg_tuples(iters)
         if binding !== nothing
             COUNT && (_VI_ENUM_VISITS[] += 1)
             for d in 1:length(contract_names)
@@ -378,6 +390,11 @@ function _foreach_aggregate_product(
     end
     return nothing
 end
+
+# The contracted tuples `_foreach_aggregate_product` visits: the product of the
+# per-index iterators, or a nest's own list (`_ContractNest`).
+_agg_tuples(iters) = Iterators.product(iters...)
+_agg_tuples(nest::_ContractNest) = nest.tuples
 
 # Keys mode over one contracted index: the product above with a single
 # iterator, behind a function barrier so the loop is typed.
@@ -505,6 +522,87 @@ end
 _contracted_index_names(ranges_dict, output_idx) =
     sort!(String[n for n in keys(ranges_dict) if !(n in output_idx)])
 
+_ast_reads(e, name::AbstractString) =
+    e isa VarExpr ? (e::VarExpr).name == name :
+    e isa OpExpr ? any(a -> _ast_reads(a, name), (e::OpExpr).args) : false
+
+# For each contracted index, the other contracted indices its range reads, or
+# `nothing` when no range reads one (the common case: a product).
+function _contracted_parent_deps(contract_names, rspecs)
+    deps = [Int[] for _ in contract_names]
+    found = false
+    for d in eachindex(contract_names), x in rspecs[d]
+        x isa ASTExpr || continue
+        for (j, n) in enumerate(contract_names)
+            if j != d && _ast_reads(x, n) && !(j in deps[d])
+                push!(deps[d], j)
+                found = true
+            end
+        end
+    end
+    return found ? deps : nothing
+end
+
+# The nest of one cell. Outer to inner it runs the product's own order (the
+# LAST contracted name outermost, `contract_names[1]` fastest), except that an
+# index moves inside every contracted index its range reads, stably; each level
+# is expanded under the values the outer levels bound, ascending.
+function _contract_nest(
+        contract_names, rspecs, deps, idx_env::Dict{String, Int},
+        const_arrays::AbstractDict
+    )
+    nc = length(contract_names)
+    order = Int[]
+    placed = falses(nc)
+    while length(order) < nc
+        nxt = 0
+        for d in nc:-1:1
+            if !placed[d] && all(j -> placed[j], deps[d])
+                nxt = d
+                break
+            end
+        end
+        nxt == 0 && (nxt = findlast(!, placed))  # a cycle (never valid)
+        placed[nxt] = true
+        push!(order, nxt)
+    end
+    env = Dict{String, Int}(idx_env)
+    cur = zeros(Int, nc)
+    tuples = Vector{Int}[]
+    function walk(depth)
+        if depth > nc
+            push!(tuples, copy(cur))
+            return nothing
+        end
+        d = order[depth]
+        for v in _expand_contract_range(rspecs[d], env, const_arrays)
+            cur[d] = v
+            env[contract_names[d]] = v
+            walk(depth + 1)
+        end
+        return nothing
+    end
+    walk(1)
+    return _ContractNest(tuples)
+end
+
+# The contracted iterators of one cell under `idx_env`: each range expanded
+# (or its constant iterator in `consts`, when given), or the cell's
+# `_ContractNest` when a range reads another contracted index.
+function _contract_iters_at(
+        contract_names, rspecs, idx_env::Dict{String, Int},
+        const_arrays::AbstractDict, consts = nothing
+    )
+    deps = _contracted_parent_deps(contract_names, rspecs)
+    deps === nothing ||
+        return _contract_nest(contract_names, rspecs, deps, idx_env, const_arrays)
+    return Vector{Int}[
+        (consts !== nothing && consts[d] !== nothing) ? consts[d] :
+            _expand_contract_range(rspecs[d], idx_env, const_arrays)
+            for d in eachindex(contract_names)
+    ]
+end
+
 # Expand one contracted-range spec to its concrete iteration vector. A constant
 # `[lo,hi]`/`[lo,step,hi]` bound expands directly; an *expression-valued* bound —
 # a RAGGED index-set range (`{from: <ragged>, of: [i]}`, esm-spec §4.3.1 /
@@ -595,10 +693,9 @@ function _resolve_index_of_faq(
             var_map, const_arrays, pgather, bound_syms
         )
     end
-    contract_iters = [
-        _expand_contract_range(ranges_dict[n], _out_idx_env, const_arrays)
-            for n in contract_names
-    ]
+    contract_iters = _contract_iters_at(
+        contract_names, [ranges_dict[n] for n in contract_names], _out_idx_env, const_arrays
+    )
 
     gates = faq_expr.join_gates
     filt0 = faq_expr.filter
@@ -1304,10 +1401,9 @@ function _resolve_scalar_faq(
     # so the bound is evaluable now via `_eval_const_int` against `const_arrays`
     # with the empty idx_env (any surviving symbol would be unbound — an error,
     # as before). Constant bounds pass through unchanged (backward compatible).
-    contract_iters = [
-        _expand_contract_range(ranges_dict[n], _EMPTY_IDX_ENV, const_arrays)
-            for n in contract_names
-    ]
+    contract_iters = _contract_iters_at(
+        contract_names, [ranges_dict[n] for n in contract_names], _EMPTY_IDX_ENV, const_arrays
+    )
     # M2 (§5.3 / §7.2): build-time join gates + runtime filter guard. Every join
     # key of a scalar aggregate is a contracted symbol, so the binding is the
     # contraction tuple (no output-index seed). With neither join nor filter,
