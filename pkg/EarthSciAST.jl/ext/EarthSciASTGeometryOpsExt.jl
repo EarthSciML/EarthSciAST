@@ -21,7 +21,7 @@ module EarthSciASTGeometryOpsExt
 
 # Explicit imports so we can add extension methods to these core generics.
 import EarthSciAST: _spherical_clip_geometryops, broad_phase_candidates,
-                    build_spatial_index, _env4
+    build_spatial_index, _env4
 import GeometryOps as GO
 import GeoInterface as GI
 import SortTileRecursiveTree as STR
@@ -41,8 +41,8 @@ end
 # convention: tight enough that genuinely distinct lon-lat vertices are never
 # merged (1e-7° ≈ 1 cm on Earth), loose enough to absorb the float noise of
 # the unit-sphere round-trip.
-const _RING_CLOSE_ATOL = 1e-9
-const _RING_CLOSE_RTOL = 1e-7
+const _RING_CLOSE_ATOL = 1.0e-9
+const _RING_CLOSE_RTOL = 1.0e-7
 
 # Extract the exterior-ring lon-lat vertices from a clipped polygon (its coords are
 # UnitSphericalPoints), dropping the closing duplicate so the result matches the
@@ -59,9 +59,9 @@ function _ring_lonlat(poly, to_geo)
         out[i, 2] = lonlat[2]
     end
     if npt >= 2 &&
-       isapprox(out[1, 1], out[npt, 1]; atol=_RING_CLOSE_ATOL, rtol=_RING_CLOSE_RTOL) &&
-       isapprox(out[1, 2], out[npt, 2]; atol=_RING_CLOSE_ATOL, rtol=_RING_CLOSE_RTOL)
-        out = out[1:npt-1, :]
+            isapprox(out[1, 1], out[npt, 1]; atol = _RING_CLOSE_ATOL, rtol = _RING_CLOSE_RTOL) &&
+            isapprox(out[1, 2], out[npt, 2]; atol = _RING_CLOSE_ATOL, rtol = _RING_CLOSE_RTOL)
+        out = out[1:(npt - 1), :]
     end
     return out
 end
@@ -69,14 +69,18 @@ end
 # Spherical / geodesic clip via GeometryOps `ConvexConvexSutherlandHodgman`. `a` and
 # `b` are `n×2` distinct lon-lat vertex matrices; returns the overlap ring as `n×2`
 # distinct lon-lat vertices (empty `0×2` when the cells do not overlap).
-function _spherical_clip_geometryops(a::AbstractMatrix, b::AbstractMatrix,
-                                     manifold::AbstractString)
+function _spherical_clip_geometryops(
+        a::AbstractMatrix, b::AbstractMatrix,
+        manifold::AbstractString
+    )
     to_unit = GO.UnitSphereFromGeographic()
     to_geo = GO.GeographicFromUnitSphere()
     pa = _unitsphere_polygon(a, to_unit)
     pb = _unitsphere_polygon(b, to_unit)
-    res = GO.intersection(GO.ConvexConvexSutherlandHodgman(GO.Spherical()), pa, pb;
-                          target=GI.PolygonTrait())
+    res = GO.intersection(
+        GO.ConvexConvexSutherlandHodgman(GO.Spherical()), pa, pb;
+        target = GI.PolygonTrait()
+    )
     if res isa AbstractVector
         poly = isempty(res) ? nothing : first(res)
     else
@@ -116,10 +120,10 @@ end
 # bit-for-bit.
 @inline function _env_to_extent(env, eps::Float64)
     xmin, ymin, xmax, ymax = _env4(env)
-    return Extents.Extent(X=(xmin - eps, xmax + eps), Y=(ymin - eps, ymax + eps))
+    return Extents.Extent(X = (xmin - eps, xmax + eps), Y = (ymin - eps, ymax + eps))
 end
 
-function build_spatial_index(cell_envs::AbstractVector; eps::Real=0.0)
+function build_spatial_index(cell_envs::AbstractVector; eps::Real = 0.0)
     e = Float64(eps)
     n = length(cell_envs)
     n == 0 && return EarthSciASTSpatialIndex(nothing, 0, e)
@@ -127,13 +131,18 @@ function build_spatial_index(cell_envs::AbstractVector; eps::Real=0.0)
     return EarthSciASTSpatialIndex(STR.STRtree(exts), n, e)
 end
 
-function broad_phase_candidates(query_envs::AbstractVector,
-                                index::EarthSciASTSpatialIndex;
-                                eps::Real=index.eps)
-    out = Tuple{Int,Int}[]
-    Float64(eps) == index.eps || throw(ArgumentError(
-        "broad_phase_candidates: eps=$(eps) does not match eps=$(index.eps) baked into " *
-        "build_spatial_index; rebuild the index with the query eps"))
+function broad_phase_candidates(
+        query_envs::AbstractVector,
+        index::EarthSciASTSpatialIndex;
+        eps::Real = index.eps
+    )
+    out = Tuple{Int, Int}[]
+    Float64(eps) == index.eps || throw(
+        ArgumentError(
+            "broad_phase_candidates: eps=$(eps) does not match eps=$(index.eps) baked into " *
+                "build_spatial_index; rebuild the index with the query eps"
+        )
+    )
     (isempty(query_envs) || index.n == 0) && return out
     e = index.eps
     qexts = [_env_to_extent(query_envs[i], e) for i in 1:length(query_envs)]

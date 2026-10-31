@@ -10,7 +10,7 @@ built = OpExpr("+", [OpExpr("*", [VarExpr("k"), VarExpr("x")]), VarExpr("y")])
 @assert free_variables(expr) == Set(["k", "x", "y"])
 
 # `substitute` takes a Dict{String,ASTExpr}: give the value type explicitly.
-replaced = substitute(expr, Dict{String,ASTExpr}("y" => parse_expression("2 * x")))
+replaced = substitute(expr, Dict{String, ASTExpr}("y" => parse_expression("2 * x")))
 @assert to_ascii(replaced) == "k * x + 2 * x"
 @assert free_variables(replaced) == Set(["k", "x"])
 

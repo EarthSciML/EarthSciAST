@@ -1,0 +1,249 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "faq_31_lifted_column_mean",
+    "description": "A whole-array equation D(u) = faq_(i,k)(index(makearray(...), i, k)), the form an operator's derived document writes for a lifted column operator: the makearray's one region holds c*(sum_kk u[i,kk]/4 - u[i,k]), so a contracting faq (the column sum) sits inside the region value of a lifted equation. Julia's native compiler once refused it by name. Each column's mean m_i is conserved and u[i,k](t) = m_i + (u[i,k](0) - m_i) exp(-c t).",
+    "authors": [
+      "EarthSciAST contributors"
+    ],
+    "tags": [
+      "faq",
+      "makearray",
+      "contraction",
+      "lifted",
+      "column",
+      "conformance"
+    ]
+  },
+  "index_sets": {
+    "x": {
+      "kind": "interval",
+      "size": 3
+    },
+    "z": {
+      "kind": "interval",
+      "size": 4
+    }
+  },
+  "models": {
+    "ColumnMean": {
+      "tolerance": {
+        "rel": 1e-06,
+        "abs": 1e-09
+      },
+      "variables": {
+        "u": {
+          "type": "unknown",
+          "shape": [
+            "x",
+            "z"
+          ]
+        },
+        "c": {
+          "type": "parameter",
+          "default": 0.5
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "u"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "i",
+              "k"
+            ],
+            "ranges": {
+              "i": {
+                "from": "x"
+              },
+              "k": {
+                "from": "z"
+              }
+            },
+            "expr": {
+              "op": "index",
+              "args": [
+                {
+                  "op": "makearray",
+                  "args": [],
+                  "regions": [
+                    [
+                      [
+                        1,
+                        3
+                      ],
+                      [
+                        1,
+                        4
+                      ]
+                    ]
+                  ],
+                  "values": [
+                    {
+                      "op": "faq",
+                      "args": [],
+                      "output_idx": [
+                        "i",
+                        "k"
+                      ],
+                      "ranges": {
+                        "i": [
+                          1,
+                          3
+                        ],
+                        "k": [
+                          1,
+                          4
+                        ]
+                      },
+                      "expr": {
+                        "op": "*",
+                        "args": [
+                          "c",
+                          {
+                            "op": "-",
+                            "args": [
+                              {
+                                "op": "/",
+                                "args": [
+                                  {
+                                    "op": "faq",
+                                    "args": [],
+                                    "output_idx": [],
+                                    "ranges": {
+                                      "kk": [
+                                        1,
+                                        4
+                                      ]
+                                    },
+                                    "expr": {
+                                      "op": "index",
+                                      "args": [
+                                        "u",
+                                        "i",
+                                        "kk"
+                                      ]
+                                    }
+                                  },
+                                  4
+                                ]
+                              },
+                              {
+                                "op": "index",
+                                "args": [
+                                  "u",
+                                  "i",
+                                  "k"
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                },
+                "i",
+                "k"
+              ]
+            }
+          }
+        }
+      ],
+      "tests": [
+        {
+          "id": "column_relax_t2",
+          "description": "Each column relaxes to its conserved mean: u[i,k](2) = m_i + (u[i,k](0) - m_i) exp(-1), m_i = i + 1.875.",
+          "initial_conditions": {
+            "u[1,1]": 1.25,
+            "u[2,1]": 2.25,
+            "u[3,1]": 3.25,
+            "u[1,2]": 2.0,
+            "u[2,2]": 3.0,
+            "u[3,2]": 4.0,
+            "u[1,3]": 3.25,
+            "u[2,3]": 4.25,
+            "u[3,3]": 5.25,
+            "u[1,4]": 5.0,
+            "u[2,4]": 6.0,
+            "u[3,4]": 7.0
+          },
+          "time_span": {
+            "start": 0.0,
+            "end": 2.0
+          },
+          "assertions": [
+            {
+              "variable": "u[1,1]",
+              "time": 2.0,
+              "expected": 2.277195908096406
+            },
+            {
+              "variable": "u[2,1]",
+              "time": 2.0,
+              "expected": 3.277195908096406
+            },
+            {
+              "variable": "u[3,1]",
+              "time": 2.0,
+              "expected": 4.277195908096406
+            },
+            {
+              "variable": "u[1,2]",
+              "time": 2.0,
+              "expected": 2.553105488974988
+            },
+            {
+              "variable": "u[2,2]",
+              "time": 2.0,
+              "expected": 3.553105488974988
+            },
+            {
+              "variable": "u[3,2]",
+              "time": 2.0,
+              "expected": 4.553105488974988
+            },
+            {
+              "variable": "u[1,3]",
+              "time": 2.0,
+              "expected": 3.012954790439291
+            },
+            {
+              "variable": "u[2,3]",
+              "time": 2.0,
+              "expected": 4.012954790439291
+            },
+            {
+              "variable": "u[3,3]",
+              "time": 2.0,
+              "expected": 5.012954790439291
+            },
+            {
+              "variable": "u[1,4]",
+              "time": 2.0,
+              "expected": 3.656743812489315
+            },
+            {
+              "variable": "u[2,4]",
+              "time": 2.0,
+              "expected": 4.6567438124893155
+            },
+            {
+              "variable": "u[3,4]",
+              "time": 2.0,
+              "expected": 5.6567438124893155
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

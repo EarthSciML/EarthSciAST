@@ -34,10 +34,10 @@ It is called at MTK build time from `ext/EarthSciASTMTKExt.jl` so
 scalar-only callers pay no cost.
 """
 function infer_array_shapes(equations::Vector{Equation})
-    shapes = Dict{String,Vector{UnitRange{Int}}}()
+    shapes = Dict{String, Vector{UnitRange{Int}}}()
     for eq in equations
-        _scan_shape!(shapes, eq.lhs, Dict{String,UnitRange{Int}}())
-        _scan_shape!(shapes, eq.rhs, Dict{String,UnitRange{Int}}())
+        _scan_shape!(shapes, eq.lhs, Dict{String, UnitRange{Int}}())
+        _scan_shape!(shapes, eq.rhs, Dict{String, UnitRange{Int}}())
     end
     return shapes
 end
@@ -46,9 +46,11 @@ end
 # maps index-symbol name (`"i"`, `"j"`) to the UnitRange it iterates over
 # in the enclosing `faq`, so `index(u, i-1, j+1)` inside `i in 2:9` can
 # be resolved to a concrete range on each axis.
-function _scan_shape!(shapes::Dict{String,Vector{UnitRange{Int}}},
-                      expr::ASTExpr,
-                      idx_env::Dict{String,UnitRange{Int}})
+function _scan_shape!(
+        shapes::Dict{String, Vector{UnitRange{Int}}},
+        expr::ASTExpr,
+        idx_env::Dict{String, UnitRange{Int}}
+    )
     if expr isa NumExpr || expr isa IntExpr || expr isa VarExpr
         return
     end
@@ -99,6 +101,7 @@ function _scan_shape!(shapes::Dict{String,Vector{UnitRange{Int}}},
     for a in expr.args
         _scan_shape!(shapes, a, idx_env)
     end
+    return
 end
 
 # An index-set reference (RFC §5.2) carries no statically-known bound here
@@ -118,9 +121,11 @@ end
 # Record a shape entry for `u` from `index(u, i1, i2, ...)`. Each index
 # expression is evaluated against `idx_env` to determine the range it
 # sweeps over on that axis. Returns nothing on a miss (scalar access).
-function _record_index!(shapes::Dict{String,Vector{UnitRange{Int}}},
-                        idx_node::OpExpr,
-                        idx_env::Dict{String,UnitRange{Int}})
+function _record_index!(
+        shapes::Dict{String, Vector{UnitRange{Int}}},
+        idx_node::OpExpr,
+        idx_env::Dict{String, UnitRange{Int}}
+    )
     isempty(idx_node.args) && return
     first_arg = idx_node.args[1]
     first_arg isa VarExpr || return
@@ -132,12 +137,15 @@ function _record_index!(shapes::Dict{String,Vector{UnitRange{Int}}},
         push!(axis_ranges, r)
     end
 
-    if haskey(shapes, vname)
+    return if haskey(shapes, vname)
         existing = shapes[vname]
         if length(existing) != length(axis_ranges)
-            throw(ArgumentError(
-                "Inconsistent dimensionality for variable '$vname': " *
-                "saw $(length(existing))-D and $(length(axis_ranges))-D references"))
+            throw(
+                ArgumentError(
+                    "Inconsistent dimensionality for variable '$vname': " *
+                        "saw $(length(existing))-D and $(length(axis_ranges))-D references"
+                )
+            )
         end
         for (i, r) in enumerate(axis_ranges)
             existing[i] = min(first(existing[i]), first(r)):max(last(existing[i]), last(r))
@@ -152,7 +160,7 @@ end
 # affine offsets `op("+", [idx, NumExpr(k)])` / `op("-", ...)` with either
 # operand order. Returns a UnitRange representing the range that expression
 # sweeps, or `nothing` if the shape cannot be inferred from this node alone.
-function _eval_index_range(idx_expr::ASTExpr, idx_env::Dict{String,UnitRange{Int}})
+function _eval_index_range(idx_expr::ASTExpr, idx_env::Dict{String, UnitRange{Int}})
     if idx_expr isa IntExpr
         v = Int(idx_expr.value)
         return v:v

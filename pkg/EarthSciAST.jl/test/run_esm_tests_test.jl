@@ -20,23 +20,27 @@ const _inline_dir = joinpath(@__DIR__, "fixtures", "inline_tests")
     end
 
     @testset "root keyword resolves relative roots (no esm_root override)" begin
-        found = discover_esm_files(["inline_tests"];
-                                   root=joinpath(@__DIR__, "fixtures"))
+        found = discover_esm_files(
+            ["inline_tests"];
+            root = joinpath(@__DIR__, "fixtures")
+        )
         @test length(found) == 3
         @test all(endswith(f, ".esm") for f in found)
     end
 
     @testset "zero-file discovery warns" begin
         @test_logs (:warn, r"discovered no \.esm files") begin
-            results, exit_code = run_esm_tests(["no_such_dir_anywhere"];
-                                                verbose=false)
+            results, exit_code = run_esm_tests(
+                ["no_such_dir_anywhere"];
+                verbose = false
+            )
             @test isempty(results)
             @test exit_code == 0
         end
     end
 
     @testset "discover_esm_files honours exclude" begin
-        kw = discover_esm_files([_inline_dir]; exclude=["failing_decay"])
+        kw = discover_esm_files([_inline_dir]; exclude = ["failing_decay"])
         @test length(kw) == 2
         @test any(endswith(f, "passing_decay.esm") for f in kw)
         @test any(endswith(f, "subsystem_composed_decay.esm") for f in kw)
@@ -58,10 +62,14 @@ const _inline_dir = joinpath(@__DIR__, "fixtures", "inline_tests")
 
     @testset "passing fixture → all PASS" begin
         passing = joinpath(_inline_dir, "passing_decay.esm")
-        results, exit_code = run_esm_tests([_inline_dir];
-                                            verbose=false,
-                                            exclude=["failing_decay",
-                                                     "subsystem_composed"])
+        results, exit_code = run_esm_tests(
+            [_inline_dir];
+            verbose = false,
+            exclude = [
+                "failing_decay",
+                "subsystem_composed",
+            ]
+        )
         passing_results = filter(r -> r.file == passing, results)
         @test !isempty(passing_results)
         @test all(r -> r.status == EarthSciAST.PASS, passing_results)
@@ -70,10 +78,14 @@ const _inline_dir = joinpath(@__DIR__, "fixtures", "inline_tests")
 
     @testset "failing fixture → reports FAIL, exit_code != 0" begin
         failing = joinpath(_inline_dir, "failing_decay.esm")
-        results, exit_code = run_esm_tests([_inline_dir];
-                                            verbose=false,
-                                            exclude=["passing_decay",
-                                                     "subsystem_composed"])
+        results, exit_code = run_esm_tests(
+            [_inline_dir];
+            verbose = false,
+            exclude = [
+                "passing_decay",
+                "subsystem_composed",
+            ]
+        )
         failing_results = filter(r -> r.file == failing, results)
         @test !isempty(failing_results)
         @test any(r -> r.status == EarthSciAST.FAIL, failing_results)
@@ -85,10 +97,14 @@ const _inline_dir = joinpath(@__DIR__, "fixtures", "inline_tests")
         # and parameter_overrides use spec §10.7 fully-qualified refs of the
         # form "ModelName.sub.var", which MTK exposes as the model-relative
         # "sub_var" property (stripping the system-name prefix).
-        results, exit_code = run_esm_tests([_inline_dir];
-                                            verbose=false,
-                                            exclude=["failing_decay",
-                                                     "passing_decay"])
+        results, exit_code = run_esm_tests(
+            [_inline_dir];
+            verbose = false,
+            exclude = [
+                "failing_decay",
+                "passing_decay",
+            ]
+        )
         @test !isempty(results)
         @test all(r -> r.status == EarthSciAST.PASS, results)
         @test exit_code == 0
@@ -97,8 +113,10 @@ const _inline_dir = joinpath(@__DIR__, "fixtures", "inline_tests")
     @testset "junit XML emission" begin
         mktempdir() do tmp
             xml_path = joinpath(tmp, "report.xml")
-            results, _ = run_esm_tests([_inline_dir];
-                                        verbose=false, junit_xml=xml_path)
+            results, _ = run_esm_tests(
+                [_inline_dir];
+                verbose = false, junit_xml = xml_path
+            )
             @test isfile(xml_path)
             content = read(xml_path, String)
             @test occursin("<testsuites", content)
@@ -108,14 +126,22 @@ const _inline_dir = joinpath(@__DIR__, "fixtures", "inline_tests")
     end
 
     @testset "per-test duration split evenly across assertions (no N-fold overcount)" begin
-        results, _ = run_esm_tests([_inline_dir];
-                                    verbose=false,
-                                    exclude=["failing_decay",
-                                             "subsystem_composed"])
-        by_test = Dict{Tuple{String,String,String},Vector{Float64}}()
+        results, _ = run_esm_tests(
+            [_inline_dir];
+            verbose = false,
+            exclude = [
+                "failing_decay",
+                "subsystem_composed",
+            ]
+        )
+        by_test = Dict{Tuple{String, String, String}, Vector{Float64}}()
         for r in results
-            push!(get!(by_test, (r.file, r.container_name, r.test_id),
-                        Float64[]), r.duration_s)
+            push!(
+                get!(
+                    by_test, (r.file, r.container_name, r.test_id),
+                    Float64[]
+                ), r.duration_s
+            )
         end
         @test !isempty(by_test)
         # Every assertion of one test carries the SAME even share of the
@@ -132,7 +158,8 @@ const _inline_dir = joinpath(@__DIR__, "fixtures", "inline_tests")
         # exactly the sum of its assertions' duration_s.
         mk(i, dur) = EarthSciAST.AssertionResult(
             "f.esm", :model, "M", "t1", i, "x", 0.0, 1.0, 1.0,
-            EarthSciAST.PASS, "", dur)
+            EarthSciAST.PASS, "", dur
+        )
         results = [mk(1, 0.125), mk(2, 0.125), mk(3, 0.125)]
         mktempdir() do tmp
             xml_path = joinpath(tmp, "durations.xml")

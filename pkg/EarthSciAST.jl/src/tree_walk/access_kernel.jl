@@ -88,18 +88,18 @@ end
 # (`_AccStateAffine(Δ)`, `_AccConstBox(arr, s1, s2, s3, off)`, …); only the storage
 # and `_fetch` changed. Fields are shared across kinds (an `Int` slot serves
 # `delta`/`idx`/… as the kind dictates), the way `_Node` shares `payload`/`idx`.
-const _AK_STATE_AFFINE       = UInt8(1)   # u[oln + delta]              (Cartesian stencil workhorse)
-const _AK_CONST_AFFINE       = UInt8(2)   # arr[oln + delta]            (const, full-grid layout)
-const _AK_CONST_BOX          = UInt8(3)   # arr[off + Σ(midx_d-1)·s_d]  (const on its own reduced-rank grid)
-const _AK_STATE_FIXED        = UInt8(4)   # u[idx]                      (invariant pinned state slot)
-const _AK_LOOP_IDX           = UInt8(5)   # Float64(midx[dim])          (loop index as a value)
-const _AK_SCALAR             = UInt8(6)   # v                           (hoisted invariant / literal leaf)
-const _AK_CONST_CELL         = UInt8(7)   # arr[c]                      (per-cell const)
-const _AK_CONST_EDGE         = UInt8(8)   # arr[(c-1)·width + n]        (per-edge, variable valence)
-const _AK_ARR_FIXED          = UInt8(9)   # arr[idx]                    (invariant forcing gather)
-const _AK_STATE_INDIRECT     = UInt8(10)  # u[conn[(c-1)·width + n]]    (unstructured neighbour gather)
+const _AK_STATE_AFFINE = UInt8(1)   # u[oln + delta]              (Cartesian stencil workhorse)
+const _AK_CONST_AFFINE = UInt8(2)   # arr[oln + delta]            (const, full-grid layout)
+const _AK_CONST_BOX = UInt8(3)   # arr[off + Σ(midx_d-1)·s_d]  (const on its own reduced-rank grid)
+const _AK_STATE_FIXED = UInt8(4)   # u[idx]                      (invariant pinned state slot)
+const _AK_LOOP_IDX = UInt8(5)   # Float64(midx[dim])          (loop index as a value)
+const _AK_SCALAR = UInt8(6)   # v                           (hoisted invariant / literal leaf)
+const _AK_CONST_CELL = UInt8(7)   # arr[c]                      (per-cell const)
+const _AK_CONST_EDGE = UInt8(8)   # arr[(c-1)·width + n]        (per-edge, variable valence)
+const _AK_ARR_FIXED = UInt8(9)   # arr[idx]                    (invariant forcing gather)
+const _AK_STATE_INDIRECT = UInt8(10)  # u[conn[(c-1)·width + n]]    (unstructured neighbour gather)
 const _AK_STATE_INDIRECT_COL = UInt8(11)  # u[conn[(c-1)·width + col]]  (unstructured fixed column)
-const _AK_FORCING_BOX        = UInt8(12)  # flat[off + Σ(midx_d-1)·s_d] (LIVE forcing on its own grid)
+const _AK_FORCING_BOX = UInt8(12)  # flat[off + Σ(midx_d-1)·s_d] (LIVE forcing on its own grid)
 # Unstructured state gather over a Cartesian box: a per-box SLOT TABLE addressed
 # by the cell multi-index (`conn[off + Σ(midx_d-1)·s_d]`, box-local dense
 # layout), holding the state slot each cell reads — or 0 for a ghost, which
@@ -110,19 +110,19 @@ const _AK_FORCING_BOX        = UInt8(12)  # flat[off + Σ(midx_d-1)·s_d] (LIVE 
 # bit-identical to the per-cell resolve. The table is O(box) Ints — the same
 # order as the connectivity input itself, and strictly less than the per-cell
 # fallback's per-lane slot vectors.
-const _AK_STATE_TBL_BOX      = UInt8(13)  # u[conn[off + Σ(midx_d-1)·s_d]] (0 ⇒ ghost 0.0)
+const _AK_STATE_TBL_BOX = UInt8(13)  # u[conn[off + Σ(midx_d-1)·s_d]] (0 ⇒ ghost 0.0)
 # A Float64 buffer read through an Int index table, box-addressed. The per-cell
 # merge (acc_merge.jl) emits it for a LIVE forcing gather whose linear offset
 # varies per cell (`_NK_PARAM_GATHER` lanes): `arr` is the aliased
 # `_PGatherArray.flat` buffer — refreshed in place, so the read must stay live,
 # which is why the VALUES are never materialized the way a const lane's are.
-const _AK_ARR_TBL_BOX        = UInt8(14)  # arr[conn[off + Σ(midx_d-1)·s_d]] (LIVE forcing table)
+const _AK_ARR_TBL_BOX = UInt8(14)  # arr[conn[off + Σ(midx_d-1)·s_d]] (LIVE forcing table)
 
 struct _AccDesc
     kind::UInt8
     arr::Vector{Float64}   # CONST_*, ARR_FIXED, FORCING_BOX (empty sentinel otherwise)
-    conn::Union{Vector{Int},UnitRange{Int}}  # STATE_INDIRECT[_COL], *_TBL_BOX (empty sentinel otherwise);
-                                             # a range is an identity table (`_state_slot_identity`)
+    conn::Union{Vector{Int}, UnitRange{Int}}  # STATE_INDIRECT[_COL], *_TBL_BOX (empty sentinel otherwise);
+    # a range is an identity table (`_state_slot_identity`)
     delta::Int             # STATE_AFFINE, CONST_AFFINE
     idx::Int               # STATE_FIXED, ARR_FIXED
     width::Int             # STATE_INDIRECT[_COL], CONST_EDGE
@@ -140,14 +140,16 @@ struct _AccDesc
     sx::Vector{Int}
 end
 
-const _AK_NO_ARR  = Float64[]
+const _AK_NO_ARR = Float64[]
 const _AK_NO_CONN = Int[]
 
-@inline _mkacc(kind::UInt8; arr::Vector{Float64}=_AK_NO_ARR,
-               conn::Union{Vector{Int},UnitRange{Int}}=_AK_NO_CONN,
-               delta::Int=0, idx::Int=0, width::Int=0, col::Int=0, dim::Int=0,
-               s1::Int=0, s2::Int=0, s3::Int=0, off::Int=0, v::Float64=0.0,
-               sx::Vector{Int}=_AK_NO_CONN) =
+@inline _mkacc(
+    kind::UInt8; arr::Vector{Float64} = _AK_NO_ARR,
+    conn::Union{Vector{Int}, UnitRange{Int}} = _AK_NO_CONN,
+    delta::Int = 0, idx::Int = 0, width::Int = 0, col::Int = 0, dim::Int = 0,
+    s1::Int = 0, s2::Int = 0, s3::Int = 0, off::Int = 0, v::Float64 = 0.0,
+    sx::Vector{Int} = _AK_NO_CONN
+) =
     _AccDesc(kind, arr, conn, delta, idx, width, col, dim, s1, s2, s3, off, v, sx)
 
 # A box-addressed descriptor's per-dim strides, any rank: the first three go to
@@ -157,48 +159,56 @@ _box_sx(s::AbstractVector{Int}) = length(s) > 3 ? Vector{Int}(s[4:end]) : _AK_NO
 
 # Named constructors — the descriptor call sites (stencil_affine.jl, tests) use
 # these and are unchanged by the tagged-struct storage.
-_AccStateAffine(delta::Int)                      = _mkacc(_AK_STATE_AFFINE; delta=delta)
-_AccStateIndirect(conn::Vector{Int}, width::Int) = _mkacc(_AK_STATE_INDIRECT; conn=conn, width=width)
+_AccStateAffine(delta::Int) = _mkacc(_AK_STATE_AFFINE; delta = delta)
+_AccStateIndirect(conn::Vector{Int}, width::Int) = _mkacc(_AK_STATE_INDIRECT; conn = conn, width = width)
 _AccStateIndirectCol(conn::Vector{Int}, width::Int, col::Int) =
-    _mkacc(_AK_STATE_INDIRECT_COL; conn=conn, width=width, col=col)
-_AccConstAffine(arr::Vector{Float64}, delta::Int) = _mkacc(_AK_CONST_AFFINE; arr=arr, delta=delta)
+    _mkacc(_AK_STATE_INDIRECT_COL; conn = conn, width = width, col = col)
+_AccConstAffine(arr::Vector{Float64}, delta::Int) = _mkacc(_AK_CONST_AFFINE; arr = arr, delta = delta)
 _AccConstBox(arr::Vector{Float64}, s1::Int, s2::Int, s3::Int, off::Int) =
-    _mkacc(_AK_CONST_BOX; arr=arr, s1=s1, s2=s2, s3=s3, off=off)
+    _mkacc(_AK_CONST_BOX; arr = arr, s1 = s1, s2 = s2, s3 = s3, off = off)
 _AccConstBox(arr::Vector{Float64}, s::AbstractVector{Int}, off::Int) =
-    _mkacc(_AK_CONST_BOX; arr=arr, s1=_box_s(s, 1), s2=_box_s(s, 2), s3=_box_s(s, 3),
-           off=off, sx=_box_sx(s))
+    _mkacc(
+    _AK_CONST_BOX; arr = arr, s1 = _box_s(s, 1), s2 = _box_s(s, 2), s3 = _box_s(s, 3),
+    off = off, sx = _box_sx(s)
+)
 # LIVE forcing gather with a lane-affine flat index. Same addressing as CONST_BOX
 # but `arr` MUST be the aliased `_PGatherArray.flat` buffer (a data-refresh mutates
 # it in place, so a captured reference stays live) — never a copy. A distinct kind
 # from CONST_BOX so an invariant/const-hoisting analysis can never freeze it.
 _AccForcingBox(arr::Vector{Float64}, s1::Int, s2::Int, s3::Int, off::Int) =
-    _mkacc(_AK_FORCING_BOX; arr=arr, s1=s1, s2=s2, s3=s3, off=off)
+    _mkacc(_AK_FORCING_BOX; arr = arr, s1 = s1, s2 = s2, s3 = s3, off = off)
 _AccForcingBox(arr::Vector{Float64}, s::AbstractVector{Int}, off::Int) =
-    _mkacc(_AK_FORCING_BOX; arr=arr, s1=_box_s(s, 1), s2=_box_s(s, 2), s3=_box_s(s, 3),
-           off=off, sx=_box_sx(s))
-_AccConstCell(arr::Vector{Float64})              = _mkacc(_AK_CONST_CELL; arr=arr)
-_AccConstEdge(arr::Vector{Float64}, width::Int)  = _mkacc(_AK_CONST_EDGE; arr=arr, width=width)
-_AccStateFixed(idx::Int)                         = _mkacc(_AK_STATE_FIXED; idx=idx)
-_AccArrFixed(arr::Vector{Float64}, idx::Int)     = _mkacc(_AK_ARR_FIXED; arr=arr, idx=idx)
-_AccLoopIdx(dim::Int)                            = _mkacc(_AK_LOOP_IDX; dim=dim)
-_AccScalar(v::Float64)                           = _mkacc(_AK_SCALAR; v=v)
-_AccStateTblBox(conn::Union{Vector{Int},UnitRange{Int}}, s1::Int, s2::Int, s3::Int, off::Int) =
-    _mkacc(_AK_STATE_TBL_BOX; conn=conn, s1=s1, s2=s2, s3=s3, off=off)
-_AccStateTblBox(conn::Union{Vector{Int},UnitRange{Int}}, s::AbstractVector{Int}, off::Int) =
-    _mkacc(_AK_STATE_TBL_BOX; conn=conn, s1=_box_s(s, 1), s2=_box_s(s, 2),
-           s3=_box_s(s, 3), off=off, sx=_box_sx(s))
+    _mkacc(
+    _AK_FORCING_BOX; arr = arr, s1 = _box_s(s, 1), s2 = _box_s(s, 2), s3 = _box_s(s, 3),
+    off = off, sx = _box_sx(s)
+)
+_AccConstCell(arr::Vector{Float64}) = _mkacc(_AK_CONST_CELL; arr = arr)
+_AccConstEdge(arr::Vector{Float64}, width::Int) = _mkacc(_AK_CONST_EDGE; arr = arr, width = width)
+_AccStateFixed(idx::Int) = _mkacc(_AK_STATE_FIXED; idx = idx)
+_AccArrFixed(arr::Vector{Float64}, idx::Int) = _mkacc(_AK_ARR_FIXED; arr = arr, idx = idx)
+_AccLoopIdx(dim::Int) = _mkacc(_AK_LOOP_IDX; dim = dim)
+_AccScalar(v::Float64) = _mkacc(_AK_SCALAR; v = v)
+_AccStateTblBox(conn::Union{Vector{Int}, UnitRange{Int}}, s1::Int, s2::Int, s3::Int, off::Int) =
+    _mkacc(_AK_STATE_TBL_BOX; conn = conn, s1 = s1, s2 = s2, s3 = s3, off = off)
+_AccStateTblBox(conn::Union{Vector{Int}, UnitRange{Int}}, s::AbstractVector{Int}, off::Int) =
+    _mkacc(
+    _AK_STATE_TBL_BOX; conn = conn, s1 = _box_s(s, 1), s2 = _box_s(s, 2),
+    s3 = _box_s(s, 3), off = off, sx = _box_sx(s)
+)
 _AccArrTblBox(arr::Vector{Float64}, conn::Vector{Int}, s1::Int, s2::Int, s3::Int, off::Int) =
-    _mkacc(_AK_ARR_TBL_BOX; arr=arr, conn=conn, s1=s1, s2=s2, s3=s3, off=off)
+    _mkacc(_AK_ARR_TBL_BOX; arr = arr, conn = conn, s1 = s1, s2 = s2, s3 = s3, off = off)
 _AccArrTblBox(arr::Vector{Float64}, conn::Vector{Int}, s::AbstractVector{Int}, off::Int) =
-    _mkacc(_AK_ARR_TBL_BOX; arr=arr, conn=conn, s1=_box_s(s, 1), s2=_box_s(s, 2),
-           s3=_box_s(s, 3), off=off, sx=_box_sx(s))
+    _mkacc(
+    _AK_ARR_TBL_BOX; arr = arr, conn = conn, s1 = _box_s(s, 1), s2 = _box_s(s, 2),
+    s3 = _box_s(s, 3), off = off, sx = _box_sx(s)
+)
 
 # The box address `off + Σ_d (midx_d - 1)·s_d` of a box-addressed descriptor.
 # `midx` carries one entry per loop dim (padded with 1s to three), so the `sx`
 # terms read the dims past the third; at rank ≤ 3 `sx` is empty and this is the
 # three-term sum.
 @inline function _acc_boxaddr(a::_AccDesc, midx::Tuple{Vararg{Int}})
-    x = a.off + (midx[1]-1)*a.s1 + (midx[2]-1)*a.s2 + (midx[3]-1)*a.s3
+    x = a.off + (midx[1] - 1) * a.s1 + (midx[2] - 1) * a.s2 + (midx[3] - 1) * a.s3
     sx = a.sx
     @inbounds for d in eachindex(sx)
         x += (midx[d + 3] - 1) * sx[d]
@@ -227,15 +237,15 @@ end
     elseif k === _AK_CONST_CELL
         return @inbounds a.arr[c]
     elseif k === _AK_CONST_EDGE
-        return @inbounds a.arr[(c-1)*a.width + n]
+        return @inbounds a.arr[(c - 1) * a.width + n]
     elseif k === _AK_ARR_FIXED
         return @inbounds a.arr[a.idx]
     elseif k === _AK_FORCING_BOX
         return @inbounds a.arr[_acc_boxaddr(a, midx)]
     elseif k === _AK_STATE_INDIRECT
-        return @inbounds u[a.conn[(c-1)*a.width + n]]
+        return @inbounds u[a.conn[(c - 1) * a.width + n]]
     elseif k === _AK_STATE_INDIRECT_COL
-        return @inbounds u[a.conn[(c-1)*a.width + a.col]]
+        return @inbounds u[a.conn[(c - 1) * a.width + a.col]]
     elseif k === _AK_STATE_TBL_BOX
         s = @inbounds a.conn[_acc_boxaddr(a, midx)]
         return s == 0 ? 0.0 : @inbounds u[s]     # 0 ⇒ ghost literal, as per cell
@@ -247,10 +257,14 @@ end
 
 # ---- Reduction bound (fixed structured count vs runtime per-cell valence) ----
 abstract type _Bound end
-struct _FixedBound <: _Bound; k::Int; end
-struct _VarBound   <: _Bound; valence::Vector{Int}; end   # per-cell edge count (an input)
+struct _FixedBound <: _Bound
+    k::Int
+end
+struct _VarBound <: _Bound
+    valence::Vector{Int}
+end   # per-cell edge count (an input)
 @inline _nbrcount(b::_FixedBound, c) = b.k
-@inline _nbrcount(b::_VarBound,   c) = @inbounds b.valence[c]
+@inline _nbrcount(b::_VarBound, c) = @inbounds b.valence[c]
 
 # ---- Output cell set ----
 # STRUCTURED (Cartesian box): `strides` are the state grid's per-loop-dim linear
@@ -280,8 +294,10 @@ struct _CellSet
     outs::Vector{Int}
     slab::Vector{Bool}
 end
-_CellSet(strides::Vector{Int}, ranges::Vector{UnitRange{Int}}, base::Int,
-         outs::Vector{Int}=Int[]) = _CellSet(strides, ranges, base, outs, Bool[])
+_CellSet(
+    strides::Vector{Int}, ranges::Vector{UnitRange{Int}}, base::Int,
+    outs::Vector{Int} = Int[]
+) = _CellSet(strides, ranges, base, outs, Bool[])
 @inline _cellset_slab(cs::_CellSet, d::Int) = d <= length(cs.slab) && cs.slab[d]
 _contig_cells(ncell::Int) = _CellSet(Int[], UnitRange{Int}[1:ncell], 0)
 _outs_cells(outs::Vector{Int}) = _CellSet(Int[], UnitRange{Int}[1:length(outs)], 0, outs)
@@ -354,8 +370,10 @@ end
 # construction, and every reference-free build).
 _AccKernel(cells::_CellSet, spine::_Node, acc::Vector{_AccDesc}, bound::_Bound, zerobar::Float64) =
     _AccKernel(cells, spine, acc, bound, zerobar, _ACC_NO_CSE, _AccKernel[])
-_AccKernel(cells::_CellSet, spine::_Node, acc::Vector{_AccDesc}, bound::_Bound,
-           zerobar::Float64, cse::_AccCSE) =
+_AccKernel(
+    cells::_CellSet, spine::_Node, acc::Vector{_AccDesc}, bound::_Bound,
+    zerobar::Float64, cse::_AccCSE
+) =
     _AccKernel(cells, spine, acc, bound, zerobar, cse, _AccKernel[])
 
 # ---- The evaluator ----
@@ -374,12 +392,16 @@ _AccKernel(cells::_CellSet, spine::_Node, acc::Vector{_AccDesc}, bound::_Bound,
 # reduction), `oln` output slot, `midx` the cell's (i,j,k) loop multi-index
 # (padded with 1s). The 9-arg form derives `T` from the runtime inputs (the
 # build-time / test entry point), mirroring `_eval_node`'s 4-arg convenience form.
-@inline _eval_acc(nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
-                  midx::Tuple{Vararg{Int}}, K::_AccKernel) =
+@inline _eval_acc(
+    nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
+    midx::Tuple{Vararg{Int}}, K::_AccKernel
+) =
     _eval_acc(nd, u, p, t, c, n, oln, midx, K, _rhs_value_type(u, p, t))
 
-function _eval_acc(nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
-                   midx::Tuple{Vararg{Int}}, K::_AccKernel, ::Type{T}) where {T}
+function _eval_acc(
+        nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
+        midx::Tuple{Vararg{Int}}, K::_AccKernel, ::Type{T}
+    ) where {T}
     k = nd.kind
     if k === _NK_ACCESS
         return _fetch(K.acc[nd.idx], u, c, n, oln, midx)
@@ -440,18 +462,24 @@ end
 
 # The affine reduction's fold (`_NK_AREDUCE`): `midx` is widened to cover the
 # contracted dims, which the nest below binds, the last dim outermost.
-function _eval_acc_areduce(nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
-                           midx::Tuple{Vararg{Int}}, K::_AccKernel, ::Type{T}) where {T}
+function _eval_acc_areduce(
+        nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
+        midx::Tuple{Vararg{Int}}, K::_AccKernel, ::Type{T}
+    ) where {T}
     spec = nd.payload::_AReduceSpec
     m = max(length(midx), maximum(spec.dims))
     mi = ntuple(i -> i <= length(midx) ? midx[i] : 1, m)
-    return _areduce_fold(nd.children[1], spec, length(spec.dims), nd.literal, nd.op,
-                         u, p, t, c, n, oln, mi, K, T)
+    return _areduce_fold(
+        nd.children[1], spec, length(spec.dims), nd.literal, nd.op,
+        u, p, t, c, n, oln, mi, K, T
+    )
 end
 
-function _areduce_fold(body::_Node, spec::_AReduceSpec, r::Int, s, op::Symbol,
-                       u, p, t, c::Int, n::Int, oln::Int, midx::Tuple{Vararg{Int}},
-                       K::_AccKernel, ::Type{T}) where {T}
+function _areduce_fold(
+        body::_Node, spec::_AReduceSpec, r::Int, s, op::Symbol,
+        u, p, t, c::Int, n::Int, oln::Int, midx::Tuple{Vararg{Int}},
+        K::_AccKernel, ::Type{T}
+    ) where {T}
     d = spec.dims[r]
     for j in spec.ranges[r]
         mi = Base.setindex(midx, j, d)
@@ -469,8 +497,10 @@ end
 # `nd.literal` (the 0̄ identity baked on at build time) — byte-for-byte the
 # `_eval_contraction` (compile.jl) fold shape, with `_eval_acc` as the child
 # walker.
-function _eval_acc_contraction(nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
-                               midx::Tuple{Vararg{Int}}, K::_AccKernel, ::Type{T}) where {T}
+function _eval_acc_contraction(
+        nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
+        midx::Tuple{Vararg{Int}}, K::_AccKernel, ::Type{T}
+    ) where {T}
     op = nd.op
     ch = nd.children
     if op === :+
@@ -520,74 +550,96 @@ end
 # malformed spine. `min`/`max` keep their historical `< 2` guard.
 let arms = :(return nothing)
     for row in reverse(_UNARY_ELEMENTWISE_OPS)
-        arms = Core.Expr(:if, :(op === $(QuoteNode(row.sym))),
-                         quote
-                             return $(row.sym)(_eval_acc(ch[1], u, p, t, c, n, oln, midx, K, T))
-                         end,
-                         arms)
+        arms = Core.Expr(
+            :if, :(op === $(QuoteNode(row.sym))),
+            quote
+                return $(row.sym)(_eval_acc(ch[1], u, p, t, c, n, oln, midx, K, T))
+            end,
+            arms
+        )
     end
-    @eval @inline function _eval_acc_unary_elementwise(op::Symbol, ch::Vector{_Node},
-                                                       u, p, t, c::Int, n::Int, oln::Int,
-                                                       midx::Tuple{Vararg{Int}}, K::_AccKernel,
-                                                       ::Type{T}) where {T}
+    @eval @inline function _eval_acc_unary_elementwise(
+            op::Symbol, ch::Vector{_Node},
+            u, p, t, c::Int, n::Int, oln::Int,
+            midx::Tuple{Vararg{Int}}, K::_AccKernel,
+            ::Type{T}
+        ) where {T}
         $arms
     end
 end
 
 let arms = :(return nothing)
     for row in reverse(_COMPARISON_ELEMENTWISE_OPS)
-        arms = Core.Expr(:if, :(op === $(QuoteNode(row.sym))),
-                         quote
-                             return $(row.fnsym)(
-                                 _eval_acc(ch[1], u, p, t, c, n, oln, midx, K, T),
-                                 _eval_acc(ch[2], u, p, t, c, n, oln, midx, K, T)) ? 1.0 : 0.0
-                         end,
-                         arms)
+        arms = Core.Expr(
+            :if, :(op === $(QuoteNode(row.sym))),
+            quote
+                return $(row.fnsym)(
+                        _eval_acc(ch[1], u, p, t, c, n, oln, midx, K, T),
+                        _eval_acc(ch[2], u, p, t, c, n, oln, midx, K, T)
+                    ) ? 1.0 : 0.0
+            end,
+            arms
+        )
     end
-    @eval @inline function _eval_acc_comparison(op::Symbol, ch::Vector{_Node},
-                                                u, p, t, c::Int, n::Int, oln::Int,
-                                                midx::Tuple{Vararg{Int}}, K::_AccKernel,
-                                                ::Type{T}) where {T}
+    @eval @inline function _eval_acc_comparison(
+            op::Symbol, ch::Vector{_Node},
+            u, p, t, c::Int, n::Int, oln::Int,
+            midx::Tuple{Vararg{Int}}, K::_AccKernel,
+            ::Type{T}
+        ) where {T}
         $arms
     end
 end
 
 let arms = :(return nothing)
     for row in reverse(_BINARY_ELEMENTWISE_OPS)
-        arms = Core.Expr(:if, :(op === $(QuoteNode(row.sym))),
-                         quote
-                             return $(row.fnsym)(
-                                 _eval_acc(ch[1], u, p, t, c, n, oln, midx, K, T),
-                                 _eval_acc(ch[2], u, p, t, c, n, oln, midx, K, T))
-                         end,
-                         arms)
+        arms = Core.Expr(
+            :if, :(op === $(QuoteNode(row.sym))),
+            quote
+                return $(row.fnsym)(
+                    _eval_acc(ch[1], u, p, t, c, n, oln, midx, K, T),
+                    _eval_acc(ch[2], u, p, t, c, n, oln, midx, K, T)
+                )
+            end,
+            arms
+        )
     end
-    @eval @inline function _eval_acc_binary_elementwise(op::Symbol, ch::Vector{_Node},
-                                                        u, p, t, c::Int, n::Int, oln::Int,
-                                                        midx::Tuple{Vararg{Int}}, K::_AccKernel,
-                                                        ::Type{T}) where {T}
+    @eval @inline function _eval_acc_binary_elementwise(
+            op::Symbol, ch::Vector{_Node},
+            u, p, t, c::Int, n::Int, oln::Int,
+            midx::Tuple{Vararg{Int}}, K::_AccKernel,
+            ::Type{T}
+        ) where {T}
         $arms
     end
 end
 
 let arms = :(return nothing)
     for row in reverse(_NARY_MINMAX_OPS)
-        arms = Core.Expr(:if, :(op === $(QuoteNode(row.sym))),
-                         quote
-                             length(ch) < 2 && throw(TreeWalkError("E_TREEWALK_ARITY",
-                                 $(row.name * " needs ≥2 args")))
-                             s = _eval_acc(ch[1], u, p, t, c, n, oln, midx, K, T)
-                             @inbounds for i in 2:length(ch)
-                                 s = $(row.fnsym)(s, _eval_acc(ch[i], u, p, t, c, n, oln, midx, K, T))
-                             end
-                             return s
-                         end,
-                         arms)
+        arms = Core.Expr(
+            :if, :(op === $(QuoteNode(row.sym))),
+            quote
+                length(ch) < 2 && throw(
+                    TreeWalkError(
+                        "E_TREEWALK_ARITY",
+                        $(row.name * " needs ≥2 args")
+                    )
+                )
+                s = _eval_acc(ch[1], u, p, t, c, n, oln, midx, K, T)
+                @inbounds for i in 2:length(ch)
+                    s = $(row.fnsym)(s, _eval_acc(ch[i], u, p, t, c, n, oln, midx, K, T))
+                end
+                return s
+            end,
+            arms
+        )
     end
-    @eval @inline function _eval_acc_minmax(op::Symbol, ch::Vector{_Node},
-                                            u, p, t, c::Int, n::Int, oln::Int,
-                                            midx::Tuple{Vararg{Int}}, K::_AccKernel,
-                                            ::Type{T}) where {T}
+    @eval @inline function _eval_acc_minmax(
+            op::Symbol, ch::Vector{_Node},
+            u, p, t, c::Int, n::Int, oln::Int,
+            midx::Tuple{Vararg{Int}}, K::_AccKernel,
+            ::Type{T}
+        ) where {T}
         $arms
     end
 end
@@ -600,18 +652,24 @@ end
 # `_NK_REDUCE`). The mechanical arms are generated from the SAME registry tables
 # as `_eval_node_op`'s (see above), so those cannot drift by construction; the
 # hand-written remainder is still caught by the differential test.
-function _eval_acc_op(nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
-                      midx::Tuple{Vararg{Int}}, K::_AccKernel, ::Type{T}) where {T}
+function _eval_acc_op(
+        nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
+        midx::Tuple{Vararg{Int}}, K::_AccKernel, ::Type{T}
+    ) where {T}
     op = nd.op
     ch = nd.children
     @inline ev(x) = _eval_acc(x, u, p, t, c, n, oln, midx, K, T)
     if op === :+
         length(ch) == 1 && return ev(ch[1])
-        s = ev(ch[1]); @inbounds for i in 2:length(ch); s += ev(ch[i]); end
+        s = ev(ch[1]); @inbounds for i in 2:length(ch)
+            s += ev(ch[i])
+        end
         return s
     elseif op === :*
         length(ch) == 1 && return ev(ch[1])
-        s = ev(ch[1]); @inbounds for i in 2:length(ch); s *= ev(ch[i]); end
+        s = ev(ch[1]); @inbounds for i in 2:length(ch)
+            s *= ev(ch[i])
+        end
         return s
     elseif op === :-
         length(ch) == 1 && return -ev(ch[1])
@@ -620,20 +678,24 @@ function _eval_acc_op(nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
     elseif op === :neg
         return -ev(ch[1])
 
-    # Fixed-2-ary elementwise (`/`, `^`, `pow`, `atan2`) — GENERATED (registry).
+        # Fixed-2-ary elementwise (`/`, `^`, `pow`, `atan2`) — GENERATED (registry).
     elseif (bin = _eval_acc_binary_elementwise(op, ch, u, p, t, c, n, oln, midx, K, T)) !== nothing
         return bin
 
-    # Comparisons → 1.0/0.0 — GENERATED (registry).
+        # Comparisons → 1.0/0.0 — GENERATED (registry).
     elseif (cmp = _eval_acc_comparison(op, ch, u, p, t, c, n, oln, midx, K, T)) !== nothing
         return cmp
 
-    # Logical
+        # Logical
     elseif op === :and
-        @inbounds for x in ch; ev(x) == 0 && return 0.0; end
+        @inbounds for x in ch
+            ev(x) == 0 && return 0.0
+        end
         return 1.0
     elseif op === :or
-        @inbounds for x in ch; ev(x) != 0 && return 1.0; end
+        @inbounds for x in ch
+            ev(x) != 0 && return 1.0
+        end
         return 0.0
     elseif op === :not
         return ev(ch[1]) == 0 ? 1.0 : 0.0
@@ -641,9 +703,9 @@ function _eval_acc_op(nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
     elseif op === :ifelse
         return ev(ch[1]) != 0 ? ev(ch[2]) : ev(ch[3])
 
-    # Elementary functions — the mechanical unary arms (`sin` … `ceil`) are
-    # GENERATED (registry); `atan` (1-or-2-ary) stays hand-written, `atan2` is
-    # handled by the binary probe above.
+        # Elementary functions — the mechanical unary arms (`sin` … `ceil`) are
+        # GENERATED (registry); `atan` (1-or-2-ary) stays hand-written, `atan2` is
+        # handled by the binary probe above.
     elseif (unary = _eval_acc_unary_elementwise(op, ch, u, p, t, c, n, oln, midx, K, T)) !== nothing
         return unary
     elseif op === :atan
@@ -651,7 +713,7 @@ function _eval_acc_op(nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
         length(ch) == 2 && return atan(ev(ch[1]), ev(ch[2]))
         throw(TreeWalkError("E_TREEWALK_ARITY", "atan expects 1 or 2 args"))
 
-    # n-ary min/max (arity ≥ 2) — GENERATED (registry).
+        # n-ary min/max (arity ≥ 2) — GENERATED (registry).
     elseif (mm = _eval_acc_minmax(op, ch, u, p, t, c, n, oln, midx, K, T)) !== nothing
         return mm
     elseif op === :pi || op === :π
@@ -670,34 +732,34 @@ function _eval_acc_op(nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
         # `_eval_node`'d; everything else is identical. `isa`-matching the whole
         # concrete tuple type keeps the inline spec unboxed (see compile.jl).
         pl = nd.payload
-        if pl isa Tuple{String,_InterpLinearSpec}
+        if pl isa Tuple{String, _InterpLinearSpec}
             spec = pl[2]
             return _interp_linear_core(spec, ev(ch[1]))
-        elseif pl isa Tuple{String,_InterpBilinearSpec}
+        elseif pl isa Tuple{String, _InterpBilinearSpec}
             spec = pl[2]
             return _interp_bilinear_core(spec, ev(ch[1]), ev(ch[2]))
-        elseif pl isa Tuple{String,_InterpSearchsortedSpec}
+        elseif pl isa Tuple{String, _InterpSearchsortedSpec}
             spec = pl[2]
             # `convert(T, …)` not `Float64(…)` — same reasoning as the mirrored
             # `:fn` arm in compile.jl: keep the arm in the evaluator's value type
             # so it stays AD-clean and concretely inferred.
             return convert(T, _interp_searchsorted_core(spec, ev(ch[1])))
-        elseif pl isa Tuple{String,_InterpLinearLaneSpec}
+        elseif pl isa Tuple{String, _InterpLinearLaneSpec}
             # Per-LANE spec table (kernel-class merge): select THIS cell's
             # member spec by the box lane addressing, then call the SAME core
             # the member kernel called — bit-identical per lane by construction.
             h = pl[2]
             sp = @inbounds h.specs[_interp_lane(h, midx)]
             return _interp_linear_core(sp, ev(ch[1]))
-        elseif pl isa Tuple{String,_InterpBilinearLaneSpec}
+        elseif pl isa Tuple{String, _InterpBilinearLaneSpec}
             h = pl[2]
             sp = @inbounds h.specs[_interp_lane(h, midx)]
             return _interp_bilinear_core(sp, ev(ch[1]), ev(ch[2]))
-        elseif pl isa Tuple{String,_InterpSearchsortedLaneSpec}
+        elseif pl isa Tuple{String, _InterpSearchsortedLaneSpec}
             h = pl[2]
             sp = @inbounds h.specs[_interp_lane(h, midx)]
             return convert(T, _interp_searchsorted_core(sp, ev(ch[1])))
-        elseif pl isa Tuple{String,_FnTypedCoreSpec}
+        elseif pl isa Tuple{String, _FnTypedCoreSpec}
             # Registry-declared typed scalar core — MIRRORS compile.jl's `:fn`
             # arm: `T === Float64` folds at compile time and calls the unary
             # core directly (no `Any[]` box, bit-identical to the boxed
@@ -708,7 +770,7 @@ function _eval_acc_op(nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
             end
             args_evaluated = Any[ev(ci) for ci in ch]
             return convert(T, _eval_closed_fn(pl[1], args_evaluated, T))
-        elseif pl isa Tuple{String,Nothing}
+        elseif pl isa Tuple{String, Nothing}
             # Undeclared all-scalar closed fn (none in the v0.3.0 set — kept
             # as the registry's boxed fallback contract). `_eval_closed_fn`
             # selects the pinned vs. AD registry on the compile-time `T` —
@@ -719,8 +781,12 @@ function _eval_acc_op(nd::_Node, u, p, t, c::Int, n::Int, oln::Int,
             args_evaluated = Any[ev(ci) for ci in ch]
             return convert(T, _eval_closed_fn(fname, args_evaluated, T))
         end
-        throw(TreeWalkError("E_TREEWALK_UNKNOWN_CLOSED_FUNCTION",
-            "fn payload $(typeof(pl)) is neither a typed interp spec tuple nor (String, Nothing)"))
+        throw(
+            TreeWalkError(
+                "E_TREEWALK_UNKNOWN_CLOSED_FUNCTION",
+                "fn payload $(typeof(pl)) is neither a typed interp spec tuple nor (String, Nothing)"
+            )
+        )
     end
     throw(TreeWalkError("E_TREEWALK_ACC_UNSUPPORTED_OP", String(op)))
 end
@@ -730,8 +796,10 @@ end
 # the scratch. With no CSE (`_has_cse` false) this is exactly the bare spine walk —
 # zero extra work, so non-CSE kernels are byte-identical to before. `n = 0`: CSE is
 # only built for reduce-free spines, so the neighbour index never matters here.
-@inline function _eval_cell(K::_AccKernel, u, p, t, c::Int, oln::Int,
-                            midx::Tuple{Vararg{Int}}, ::Type{T}) where {T}
+@inline function _eval_cell(
+        K::_AccKernel, u, p, t, c::Int, oln::Int,
+        midx::Tuple{Vararg{Int}}, ::Type{T}
+    ) where {T}
     cse = K.cse
     if _has_cse(cse)
         buf = _acc_scratch_buf(cse.scratch, T)
@@ -796,30 +864,32 @@ end
 function _run_box_kernel!(du, u, p, t, K::_AccKernel, cs::_CellSet, ::Type{T}) where {T}
     st = cs.strides
     rg = cs.ranges
-    b  = cs.base
+    b = cs.base
     nd = length(st)
     if nd == 1
         s1 = st[1]
         @inbounds for i in rg[1]
-            oln = b + i*s1
+            oln = b + i * s1
             du[oln] = _eval_cell(K, u, p, t, oln, oln, (i, 1, 1), T)
         end
     elseif nd == 2
         s1 = st[1]; s2 = st[2]
         @inbounds for j in rg[2], i in rg[1]
-            oln = b + i*s1 + j*s2
+            oln = b + i * s1 + j * s2
             du[oln] = _eval_cell(K, u, p, t, oln, oln, (i, j, 1), T)
         end
     elseif nd == 3
         s1 = st[1]; s2 = st[2]; s3 = st[3]
         @inbounds for k in rg[3], j in rg[2], i in rg[1]
-            oln = b + i*s1 + j*s2 + k*s3
+            oln = b + i * s1 + j * s2 + k * s3
             du[oln] = _eval_cell(K, u, p, t, oln, oln, (i, j, k), T)
         end
     else
         @inbounds for idxs in Iterators.product(rg...)
             oln = b
-            for d in 1:nd; oln += idxs[d]*st[d]; end
+            for d in 1:nd
+                oln += idxs[d] * st[d]
+            end
             du[oln] = _eval_cell(K, u, p, t, oln, oln, Tuple(idxs), T)
         end
     end
@@ -842,9 +912,9 @@ end
 # builders memoize by node identity), and the per-path recursion was
 # exponential on a doubling chain. A predicate is path-multiplicity-
 # insensitive, so a visited set is exactly equivalent.
-_acc_has_reduce(n::_Node) = _acc_has_kind(n, _NK_REDUCE, IdDict{_Node,Nothing}())
-_acc_has_areduce(n::_Node) = _acc_has_kind(n, _NK_AREDUCE, IdDict{_Node,Nothing}())
-function _acc_has_kind(n::_Node, kind::UInt8, seen::IdDict{_Node,Nothing})
+_acc_has_reduce(n::_Node) = _acc_has_kind(n, _NK_REDUCE, IdDict{_Node, Nothing}())
+_acc_has_areduce(n::_Node) = _acc_has_kind(n, _NK_AREDUCE, IdDict{_Node, Nothing}())
+function _acc_has_kind(n::_Node, kind::UInt8, seen::IdDict{_Node, Nothing})
     n.kind === kind && return true
     haskey(seen, n) && return false
     seen[n] = nothing
@@ -885,8 +955,10 @@ Base.:(==)(a::_AccFnPayKey, b::_AccFnPayKey) = isequal(a, b)
 # `isequal ⇒ equal hash` holds arm by arm: each eq/hash pair folds the same fields.
 _acc_fn_spec_hash0(s) = _fn_spec_hash(s)
 _acc_fn_spec_eq(a, b) = _fn_spec_content_equal(a, b)
-for (LS, seed) in ((:_InterpLinearLaneSpec, 0x44), (:_InterpBilinearLaneSpec, 0x55),
-                   (:_InterpSearchsortedLaneSpec, 0x66))
+for (LS, seed) in (
+        (:_InterpLinearLaneSpec, 0x44), (:_InterpBilinearLaneSpec, 0x55),
+        (:_InterpSearchsortedLaneSpec, 0x66),
+    )
     @eval function _acc_fn_spec_hash0(h::$LS)
         x = UInt($seed)
         for s in h.specs
@@ -919,7 +991,7 @@ _acc_fn_spec_keyable(::_FnTypedCoreSpec) = true
 _acc_fn_spec_keyable(::Any) = false
 
 function _acc_fn_pay_key(payload)
-    if payload isa Tuple{String,Any}
+    if payload isa Tuple{String, Any}
         fname, spec = payload
         _acc_fn_spec_keyable(spec) && return _AccFnPayKey(fname, spec)
     end
@@ -932,14 +1004,16 @@ end
 # minted as distinct objects still merge; unmodelled payloads key on identity.
 function _acc_vn_key(n::_Node, childvns::Vector{Int}, acc::Vector{_AccDesc})
     k = n.kind
-    k === _NK_ACCESS  && return (0x1, _desc_key(acc[n.idx]))
-    k === _NK_LITERAL && return (0x2, reinterpret(UInt64, n.literal))
-    k === _NK_PARAM   && return (0x3, n.sym)
-    k === _NK_TIME    && return (0x4, :t)
-    k === _NK_OP      && return (0x5, n.op,
-                                 n.payload === nothing ? UInt(0) :
-                                                         _acc_fn_pay_key(n.payload),
-                                 childvns)
+    k === _NK_ACCESS  && return (0x01, _desc_key(acc[n.idx]))
+    k === _NK_LITERAL && return (0x02, reinterpret(UInt64, n.literal))
+    k === _NK_PARAM   && return (0x03, n.sym)
+    k === _NK_TIME    && return (0x04, :t)
+    k === _NK_OP      && return (
+        0x05, n.op,
+        n.payload === nothing ? UInt(0) :
+            _acc_fn_pay_key(n.payload),
+        childvns,
+    )
     return (0xff, objectid(n))     # _NK_CACHED / anything else — never merged
 end
 
@@ -964,7 +1038,7 @@ end
     pl isa Tuple && length(pl) >= 2 || return false
     s = pl[2]
     return s isa _InterpLinearLaneSpec || s isa _InterpBilinearLaneSpec ||
-           s isa _InterpSearchsortedLaneSpec
+        s isa _InterpSearchsortedLaneSpec
 end
 
 # A value-number key (`_acc_vn_key`) with its hash, compared type first. The
@@ -987,7 +1061,7 @@ Base.isequal(a::_VNKey, b::_VNKey) =
 function _build_acc_cse(spine::_Node, acc::Vector{_AccDesc})
     _acc_has_reduce(spine) && return (spine, _ACC_NO_CSE)
     inv_only = _acc_has_areduce(spine)
-    key_to_vn = Dict{_VNKey,Int}()
+    key_to_vn = Dict{_VNKey, Int}()
     counts = Int[]; is_op = Bool[]; is_inv = Bool[]; rep = _Node[]
     # Occurrence counting must stay PER PATH (a value occurring on ≥2 paths is
     # exactly what earns a CSE slot — collapsing to distinct-node visits would
@@ -1008,7 +1082,7 @@ function _build_acc_cse(spine::_Node, acc::Vector{_AccDesc})
     # the build's top self-time. Entry-marking + `order` are byte-identical to the
     # prior `seen`-set walk, so vn/mult/slot decisions are unchanged.
     order = _Node[]
-    pos_of = IdDict{_Node,Int}()
+    pos_of = IdDict{_Node, Int}()
     function collect_postorder(n::_Node)
         haskey(pos_of, n) && return
         pos_of[n] = 0                  # mark in-progress (entry-marked, as prior `seen`)
@@ -1016,7 +1090,7 @@ function _build_acc_cse(spine::_Node, acc::Vector{_AccDesc})
             collect_postorder(c)
         end
         push!(order, n)
-        pos_of[n] = length(order)      # final dense position (spine ends up == P)
+        return pos_of[n] = length(order)      # final dense position (spine ends up == P)
     end
     collect_postorder(spine)
     P = length(order)
@@ -1029,11 +1103,13 @@ function _build_acc_cse(spine::_Node, acc::Vector{_AccDesc})
             vn = length(counts) + 1
             key_to_vn[key] = vn
             k = n.kind
-            inv = k === _NK_LITERAL || k === _NK_PARAM || k === _NK_TIME ?  true :
-                  k === _NK_ACCESS ? _acc_desc_invariant(acc[n.idx].kind) :
-                  k === _NK_OP     ? (all(v -> is_inv[v], childvns) &&
-                                      !_acc_fn_pay_lane_varying(n.payload)) :
-                  false                       # _NK_REDUCE excluded upstream; be safe
+            inv = k === _NK_LITERAL || k === _NK_PARAM || k === _NK_TIME ? true :
+                k === _NK_ACCESS ? _acc_desc_invariant(acc[n.idx].kind) :
+                k === _NK_OP ? (
+                    all(v -> is_inv[v], childvns) &&
+                    !_acc_fn_pay_lane_varying(n.payload)
+                ) :
+                false                       # _NK_REDUCE excluded upstream; be safe
             push!(counts, 0); push!(is_op, k === _NK_OP); push!(is_inv, inv); push!(rep, n)
         end
         vn_by_pos[p] = vn
@@ -1054,7 +1130,7 @@ function _build_acc_cse(spine::_Node, acc::Vector{_AccDesc})
     # its parent's, so each tier's recipes end up dependency-ordered): every
     # invariant OP is hoisted to a per-call slot (once per call beats once per
     # cell); every remaining SHARED cell-varying OP gets a per-cell CSE slot.
-    inv_slot = Dict{Int,Int}(); cell_slot = Dict{Int,Int}()
+    inv_slot = Dict{Int, Int}(); cell_slot = Dict{Int, Int}()
     for vn in 1:length(counts)
         is_op[vn] || continue
         if is_inv[vn]
@@ -1071,7 +1147,7 @@ function _build_acc_cse(spine::_Node, acc::Vector{_AccDesc})
     # node — without the memo the per-path rebuild re-inflated a shared spine
     # into an exponentially large tree (ESS-0hh). Values are unchanged: the
     # runner evaluates the same ops on the same inputs either way.
-    rw_cache = Vector{Union{Nothing,_Node}}(nothing, P)
+    rw_cache = Vector{Union{Nothing, _Node}}(nothing, P)
     function rw(n::_Node)
         p = pos_of[n]
         cached = rw_cache[p]
@@ -1079,37 +1155,47 @@ function _build_acc_cse(spine::_Node, acc::Vector{_AccDesc})
         vn = vn_by_pos[p]
         s = get(inv_slot, vn, 0)
         result = if s != 0
-            _mknode(kind=_NK_CACHED, idx=s, payload=inv_scratch)
+            _mknode(kind = _NK_CACHED, idx = s, payload = inv_scratch)
         else
             s = get(cell_slot, vn, 0)
             if s != 0
-                _mknode(kind=_NK_CACHED, idx=s, payload=cell_scratch)
+                _mknode(kind = _NK_CACHED, idx = s, payload = cell_scratch)
             elseif isempty(n.children)
                 n
             else
-                _mknode(kind=n.kind, op=n.op, literal=n.literal, idx=n.idx,
-                        sym=n.sym, payload=n.payload,
-                        children=_Node[rw(c) for c in n.children])
+                _mknode(
+                    kind = n.kind, op = n.op, literal = n.literal, idx = n.idx,
+                    sym = n.sym, payload = n.payload,
+                    children = _Node[rw(c) for c in n.children]
+                )
             end
         end
         rw_cache[p] = result
         return result
     end
-    _recipe(vn) = (r = rep[vn];
-        _mknode(kind=r.kind, op=r.op, literal=r.literal, idx=r.idx, sym=r.sym,
-                payload=r.payload, children=_Node[rw(c) for c in r.children]))
+    _recipe(vn) = (
+        r = rep[vn];
+        _mknode(
+            kind = r.kind, op = r.op, literal = r.literal, idx = r.idx, sym = r.sym,
+            payload = r.payload, children = _Node[rw(c) for c in r.children]
+        )
+    )
     inv_recipes = Vector{_Node}(undef, length(inv_slot))
-    for (vn, s) in inv_slot; inv_recipes[s] = _recipe(vn); end
+    for (vn, s) in inv_slot
+        inv_recipes[s] = _recipe(vn)
+    end
     cell_recipes = Vector{_Node}(undef, length(cell_slot))
-    for (vn, s) in cell_slot; cell_recipes[s] = _recipe(vn); end
+    for (vn, s) in cell_slot
+        cell_recipes[s] = _recipe(vn)
+    end
     return (rw(spine), _AccCSE(cell_recipes, cell_scratch, inv_recipes, inv_scratch))
 end
 
 # ---- Small builders (used by tests and, later, the polyhedral build) ----
-_acc(id::Int) = _mknode(kind=_NK_ACCESS, idx=id)
-_areduce(body::_Node) = _mknode(kind=_NK_REDUCE, children=_Node[body])
-_aop(op::Symbol, kids::_Node...) = _mknode(kind=_NK_OP, op=op, children=collect(_Node, kids))
-_alit(v::Real) = _mknode(kind=_NK_LITERAL, literal=Float64(v))
+_acc(id::Int) = _mknode(kind = _NK_ACCESS, idx = id)
+_areduce(body::_Node) = _mknode(kind = _NK_REDUCE, children = _Node[body])
+_aop(op::Symbol, kids::_Node...) = _mknode(kind = _NK_OP, op = op, children = collect(_Node, kids))
+_alit(v::Real) = _mknode(kind = _NK_LITERAL, literal = Float64(v))
 
 # ---- Threading infrastructure (RFC threaded-eval-tier) ----------------------
 #
@@ -1154,7 +1240,7 @@ _alit(v::Real) = _mknode(kind=_NK_LITERAL, literal=Float64(v))
 #   :cg_serial_shared_outs    — two emitted cells (same or different kernel)
 #                               target the same `du` slot; the section never
 #                               chunks (see `_cg_covered_outs_disjoint`)
-const _THREAD_TALLY = Dict{Symbol,Int}()
+const _THREAD_TALLY = Dict{Symbol, Int}()
 _tally_thread!(k::Symbol) = (_THREAD_TALLY[k] = get(_THREAD_TALLY, k, 0) + 1; nothing)
 _reset_thread_tally!() = (empty!(_THREAD_TALLY); nothing)
 
@@ -1209,7 +1295,7 @@ not overlap cannot collide. Anything else (an `outs` list, overlapping hulls)
 is decided exactly on a bit map of the slot range.
 """
 function _cellsets_outs_unique(css)
-    boxes = Tuple{Int,Vector{Int},Vector{UnitRange{Int}}}[]
+    boxes = Tuple{Int, Vector{Int}, Vector{UnitRange{Int}}}[]
     lists = Vector{Int}[]
     for cs in css
         if _is_outs(cs)
@@ -1256,11 +1342,11 @@ end
 
 # `true`/`false` when box arithmetic decides it, `nothing` when it cannot.
 function _boxes_outs_unique(boxes)
-    groups = Dict{Tuple{Int,Vector{Int}},Vector{Int}}()
+    groups = Dict{Tuple{Int, Vector{Int}}, Vector{Int}}()
     for (k, (b, st, _)) in enumerate(boxes)
         push!(get!(groups, (b, st), Int[]), k)
     end
-    hulls = Tuple{Int,Int}[]
+    hulls = Tuple{Int, Int}[]
     for ((b, st), ks) in groups
         length(ks) > 4096 && return nothing
         nd = length(st)
@@ -1300,8 +1386,10 @@ function _outs_unique_bitmap(boxes, lists)
     lo > hi && return true
     seen = falses(hi - lo + 1)
     for (b, st, rg) in boxes
-        _mark_box_slots!(seen, lo, b, ntuple(d -> st[d], length(st)),
-                         ntuple(d -> rg[d], length(rg))) || return false
+        _mark_box_slots!(
+            seen, lo, b, ntuple(d -> st[d], length(st)),
+            ntuple(d -> rg[d], length(rg))
+        ) || return false
     end
     for outs in lists
         _mark_list_slots!(seen, lo, outs) || return false
@@ -1309,8 +1397,10 @@ function _outs_unique_bitmap(boxes, lists)
     return true
 end
 
-function _mark_box_slots!(seen::BitVector, lo::Int, b::Int, st::NTuple{N,Int},
-                          rg::NTuple{N,UnitRange{Int}}) where {N}
+function _mark_box_slots!(
+        seen::BitVector, lo::Int, b::Int, st::NTuple{N, Int},
+        rg::NTuple{N, UnitRange{Int}}
+    ) where {N}
     for I in CartesianIndices(rg)
         o = b
         @inbounds for d in 1:N

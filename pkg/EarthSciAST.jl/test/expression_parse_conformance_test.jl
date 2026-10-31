@@ -69,8 +69,10 @@ end
 # containers.
 _epc_norm(x) = _normj(x)
 
-const _EPC_CORPUS = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance",
-    "expression_parse", "cases.json")
+const _EPC_CORPUS = joinpath(
+    TESTUTILS_REPO_ROOT, "tests", "conformance",
+    "expression_parse", "cases.json"
+)
 
 @testset "Expression text-parser conformance" begin
     if _require_fixture(_EPC_CORPUS)
@@ -106,10 +108,14 @@ const _EPC_CORPUS = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance",
                 text = String(case.text)
                 @testset "[$i] $(text)" begin
                     eq = ESMP.parse_equation(text)
-                    @test _epc_eq(_epc_norm(ESMP.serialize_expression(eq.lhs)),
-                        _epc_norm(case.lhs))
-                    @test _epc_eq(_epc_norm(ESMP.serialize_expression(eq.rhs)),
-                        _epc_norm(case.rhs))
+                    @test _epc_eq(
+                        _epc_norm(ESMP.serialize_expression(eq.lhs)),
+                        _epc_norm(case.lhs)
+                    )
+                    @test _epc_eq(
+                        _epc_norm(ESMP.serialize_expression(eq.rhs)),
+                        _epc_norm(case.rhs)
+                    )
                 end
             end
         end
@@ -154,9 +160,10 @@ const _EPC_CORPUS = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance",
     @testset "text and JSON entry points are distinct" begin
         from_text = ESMP.parse_expression("k * A")
         from_json = ESMP.expression_from_json(
-            Dict{String,Any}("op" => "*", "args" => Any["k", "A"]))
+            Dict{String, Any}("op" => "*", "args" => Any["k", "A"])
+        )
         @test ESMP.serialize_expression(from_text) ==
-              ESMP.serialize_expression(from_json)
+            ESMP.serialize_expression(from_json)
     end
 
     # The text parser builds the overlap clause directly, so it must enforce the

@@ -51,11 +51,11 @@ _vi_typed_fixture(rel, name) = _vi_typed(_vi_raw(rel), name)
 # (esm-spec v0.8.0) and the model mounted as `models.M`.
 function _vi_inline_model(json)
     m = ESS.Cadence.to_native(JSON3.read(json))
-    doc = Dict{String,Any}(
+    doc = Dict{String, Any}(
         "esm" => "0.9.0",
-        "metadata" => Dict{String,Any}("name" => "inline"),
-        "index_sets" => get(m, "index_sets", Dict{String,Any}()),
-        "models" => Dict{String,Any}("M" => m),
+        "metadata" => Dict{String, Any}("name" => "inline"),
+        "index_sets" => get(m, "index_sets", Dict{String, Any}()),
+        "models" => Dict{String, Any}("M" => m),
     )
     return _vi_typed(doc, "M")
 end
@@ -74,14 +74,15 @@ const _VI_EDGE_GOLDEN = "[[1,2],[1,3],[2,3],[2,4],[3,4]]"
         # bounds {3,4,5}; distinct dc/dv make area_eff a non-trivial check.
         ca = Dict(
             "n_verts_on_face" => Float64[3, 3],
-            "verts_on_face"   => Float64[1 2 3; 2 3 4],
+            "verts_on_face" => Float64[1 2 3; 2 3 4],
             "n_edges_on_cell" => Float64[3, 3],
-            "edges_on_cell"   => Float64[1 2 3; 3 4 5],
+            "edges_on_cell" => Float64[1 2 3; 3 4 5],
             "dc" => Float64[2, 3, 5, 7, 11],
-            "dv" => Float64[13, 17, 19, 23, 29])
+            "dv" => Float64[13, 17, 19, 23, 29]
+        )
 
         m, isets = _vi_typed(raw, "EdgeEnumerationAreaEff")
-        vi = ESS.materialize_value_invention(m, isets, ca, Dict{String,Float64}())
+        vi = ESS.materialize_value_invention(m, isets, ca, Dict{String, Float64}())
 
         # (1) the derived `edges` set materializes via the relational engine,
         #     BYTE-IDENTICAL to the M3 determinism golden.
@@ -93,8 +94,10 @@ const _VI_EDGE_GOLDEN = "[[1,2],[1,3],[2,3],[2,4],[3,4]]"
 
         # (2) build_evaluator runs end-to-end: the derived-index-set throw is gone,
         #     only the geometric `area_eff` FAQ remains in the ODE.
-        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(raw; model_name="EdgeEnumerationAreaEff",
-                                             const_arrays=ca)
+        f!, u0, p, _, vmap = EarthSciAST._build_evaluator(
+            raw; model_name = "EdgeEnumerationAreaEff",
+            const_arrays = ca
+        )
         @test sort(collect(keys(vmap))) == ["area_eff[1]", "area_eff[2]"]
         du = similar(u0); fill!(du, NaN); f!(du, u0, p, 0.0)
         # area_eff[i] = 1/4 · Σ_{k∈edges_of_cell(i)} dc[e]·dv[e]
@@ -108,10 +111,12 @@ const _VI_EDGE_GOLDEN = "[[1,2],[1,3],[2,3],[2,4],[3,4]]"
     @testset "edge-enumeration: a missing ragged factor is refused by name" begin
         # With no connectivity the producer cannot run: the derived set is
         # refused under its own name, never a KeyError from the engine.
-        m, isets = _vi_typed_fixture("tests/valid/faq/edge_enumeration_area_eff.esm",
-                                     "EdgeEnumerationAreaEff")
+        m, isets = _vi_typed_fixture(
+            "tests/valid/faq/edge_enumeration_area_eff.esm",
+            "EdgeEnumerationAreaEff"
+        )
         err = try
-            ESS.materialize_value_invention(m, isets, Dict{String,Any}(), Dict{String,Float64}())
+            ESS.materialize_value_invention(m, isets, Dict{String, Any}(), Dict{String, Float64}())
             nothing
         catch e
             e
@@ -126,7 +131,7 @@ const _VI_EDGE_GOLDEN = "[[1,2],[1,3],[2,3],[2,4],[3,4]]"
         # unknown defined by a `const` node, registered under its flattened
         # name, while the ragged set names its factors by bare name.
         path = _vi_fixture("tests/conformance/value_invention_geometry/fixtures/edge_enumeration_ode.esm")
-        dus = Dict{Symbol,Vector{Float64}}()
+        dus = Dict{Symbol, Vector{Float64}}()
         for c in (:interpreter, :native)
             prob = ESS.esm_problem(path, (0.0, 1.0); compiler = c)
             du = fill(NaN, length(prob.u0))
@@ -142,11 +147,13 @@ const _VI_EDGE_GOLDEN = "[[1,2],[1,3],[2,3],[2,4],[3,4]]"
         # derived edge set is sized and the ODE builds under both compilers.
         path = _vi_fixture("tests/valid/faq/skolem_distinct_rank.esm")
         lo = Float64[mod1(f + l, 5) for f in 1:12, l in 1:3]
-        ca = Dict{String,Any}("edge_lo" => lo, "edge_hi" => lo .+ 1)
-        dus = Dict{Symbol,Vector{Float64}}()
+        ca = Dict{String, Any}("edge_lo" => lo, "edge_hi" => lo .+ 1)
+        dus = Dict{Symbol, Vector{Float64}}()
         for c in (:interpreter, :native)
-            prob = ESS.esm_problem(path, (0.0, 1.0); compiler = c, const_arrays = ca,
-                                   u0 = harness_u0(path))
+            prob = ESS.esm_problem(
+                path, (0.0, 1.0); compiler = c, const_arrays = ca,
+                u0 = harness_u0(path)
+            )
             du = fill(NaN, length(prob.u0))
             prob.f!(du, ones(length(prob.u0)), prob.p, 0.0)
             dus[c] = du
@@ -157,14 +164,16 @@ const _VI_EDGE_GOLDEN = "[[1,2],[1,3],[2,3],[2,4],[3,4]]"
 
     @testset "argmin: a right-hand side gathers through the assignment buffer" begin
         path = _vi_fixture("tests/conformance/value_invention_geometry/fixtures/nearest_generator_ode.esm")
-        dus = Dict{Symbol,Vector{Float64}}()
+        dus = Dict{Symbol, Vector{Float64}}()
         for c in (:interpreter, :native)
             prob = ESS.esm_problem(path, (0.0, 1.0); compiler = c)
             du = fill(NaN, length(prob.u0))
             prob.f!(du, zeros(length(prob.u0)), prob.p, 0.0)
             dus[c] = du
-            w = [du[prob.var_map[only(k for k in keys(prob.var_map) if endswith(k, "w[$i]"))]]
-                 for i in 1:4]
+            w = [
+                du[prob.var_map[only(k for k in keys(prob.var_map) if endswith(k, "w[$i]"))]]
+                    for i in 1:4
+            ]
             @test w == [0.0, 1.0, 1.0, 2.0]    # gx[assign], assign = [1, 2, 2, 3]
         end
         @test reinterpret(UInt64, dus[:native]) == reinterpret(UInt64, dus[:interpreter])
@@ -175,13 +184,17 @@ const _VI_EDGE_GOLDEN = "[[1,2],[1,3],[2,3],[2,4],[3,4]]"
         # the identical canonically-sorted edge set (the relational engine's job).
         rel = "tests/valid/faq/edge_enumeration_area_eff.esm"
         m, isets = _vi_typed_fixture(rel, "EdgeEnumerationAreaEff")
-        base = Dict("n_verts_on_face" => Float64[3, 3],
-                    "verts_on_face"   => Float64[1 2 3; 2 3 4])
+        base = Dict(
+            "n_verts_on_face" => Float64[3, 3],
+            "verts_on_face" => Float64[1 2 3; 2 3 4]
+        )
         # reversed winding of each face (same undirected edges)
-        rev = Dict("n_verts_on_face" => Float64[3, 3],
-                   "verts_on_face"   => Float64[3 2 1; 4 3 2])
+        rev = Dict(
+            "n_verts_on_face" => Float64[3, 3],
+            "verts_on_face" => Float64[3 2 1; 4 3 2]
+        )
         for ca in (base, rev)
-            vi = ESS.materialize_value_invention(m, isets, ca, Dict{String,Float64}())
+            vi = ESS.materialize_value_invention(m, isets, ca, Dict{String, Float64}())
             @test ESS.Relational.canonical_index_set_json(vi.members["edge_set"]) == _VI_EDGE_GOLDEN
         end
     end
@@ -189,12 +202,14 @@ const _VI_EDGE_GOLDEN = "[[1,2],[1,3],[2,3],[2,4],[3,4]]"
     @testset "regridder: candidate_pairs = bin-Skolem equi-join (§A.8 broad phase)" begin
         rel = "tests/valid/geometry/conservative_regrid_overlap_join.esm"
         m, isets = _vi_typed_fixture(rel, "ConservativeRegridOverlapJoin")
-        params = Dict("dx" => 1.0, "dy" => 1.0, "atol" => 1e-12)
+        params = Dict("dx" => 1.0, "dy" => 1.0, "atol" => 1.0e-12)
 
         # Aligned grids: src/tgt cell i share bin (i-1, 0) ⇒ candidate set is the
         # diagonal {(1,1),(2,2),(3,3)}.
-        aligned = Dict("src_lon" => Float64[0.2, 1.2, 2.2], "src_lat" => Float64[0, 0, 0],
-                       "tgt_lon" => Float64[0.2, 1.2, 2.2], "tgt_lat" => Float64[0, 0, 0])
+        aligned = Dict(
+            "src_lon" => Float64[0.2, 1.2, 2.2], "src_lat" => Float64[0, 0, 0],
+            "tgt_lon" => Float64[0.2, 1.2, 2.2], "tgt_lat" => Float64[0, 0, 0]
+        )
         vi = ESS.materialize_value_invention(m, isets, aligned, params)
         @test vi.members["candidate_set"] == [(1, 1), (2, 2), (3, 3)]
         @test vi.extents["candidate_set"] == 3
@@ -203,48 +218,55 @@ const _VI_EDGE_GOLDEN = "[[1,2],[1,3],[2,3],[2,4],[3,4]]"
 
         # Shifted target grid: only the overlapping bins join (the broad phase is
         # load-bearing — it is NOT the full cross product).
-        shifted = Dict("src_lon" => Float64[0.2, 1.2, 2.2], "src_lat" => Float64[0, 0, 0],
-                       "tgt_lon" => Float64[1.2, 2.2, 9.9], "tgt_lat" => Float64[0, 0, 0])
+        shifted = Dict(
+            "src_lon" => Float64[0.2, 1.2, 2.2], "src_lat" => Float64[0, 0, 0],
+            "tgt_lon" => Float64[1.2, 2.2, 9.9], "tgt_lat" => Float64[0, 0, 0]
+        )
         vi2 = ESS.materialize_value_invention(m, isets, shifted, params)
         @test vi2.members["candidate_set"] == [(2, 1), (3, 2)]
 
         # Permuting the cell order must NOT change the canonical candidate set
         # (order-independence, §5.5 rule 2).
         @test ESS.materialize_value_invention(m, isets, aligned, params).members["candidate_set"] ==
-              ESS.materialize_value_invention(m, isets, aligned, params).members["candidate_set"]
+            ESS.materialize_value_invention(m, isets, aligned, params).members["candidate_set"]
     end
 
     @testset "guard: a CONTINUOUS relational node is rejected (§5.7 guard 2)" begin
         # A distinct producer whose key reads a genuine `state` variable (not a
         # value-invention buffer) classifies CONTINUOUS and must be refused — the
         # relational engine may not run per step.
-        m, isets = _vi_inline_model("""
-        {"index_sets": {"items": {"kind": "interval", "size": 2},
-                        "tags":  {"kind": "derived", "from_faq": "tag_set"}},
-         "variables": {"u":   {"type": "unknown", "shape": ["items"]},
-                       "tag": {"type": "unknown", "shape": ["tags"]}},
-         "equations": [{"lhs": {"op": "index", "args": ["tag", "p"]},
-           "rhs": {"op": "faq", "id": "tag_set",
-                   "semiring": "bool_and_or", "distinct": true,
-                   "output_idx": ["p"],
-                   "ranges": {"i": {"from": "items"}},
-                   "key": {"op": "skolem",
-                           "args": ["t", {"op": "index", "args": ["u", "i"]}]},
-                   "expr": {"op": "true", "args": []}}}]}
-        """)
+        m, isets = _vi_inline_model(
+            """
+            {"index_sets": {"items": {"kind": "interval", "size": 2},
+                            "tags":  {"kind": "derived", "from_faq": "tag_set"}},
+             "variables": {"u":   {"type": "unknown", "shape": ["items"]},
+                           "tag": {"type": "unknown", "shape": ["tags"]}},
+             "equations": [{"lhs": {"op": "index", "args": ["tag", "p"]},
+               "rhs": {"op": "faq", "id": "tag_set",
+                       "semiring": "bool_and_or", "distinct": true,
+                       "output_idx": ["p"],
+                       "ranges": {"i": {"from": "items"}},
+                       "key": {"op": "skolem",
+                               "args": ["t", {"op": "index", "args": ["u", "i"]}]},
+                       "expr": {"op": "true", "args": []}}}]}
+            """
+        )
         @test_throws ESS.TreeWalkError ESS.materialize_value_invention(
-            m, isets, Dict("u" => Float64[1, 2]), Dict{String,Float64}())
+            m, isets, Dict("u" => Float64[1, 2]), Dict{String, Float64}()
+        )
     end
 
     @testset "no-op: a model with no value-invention is untouched" begin
         # _vi_detect reports has_vi=false and materialization returns empties, so a
         # plain model flows through build_evaluator byte-identically.
-        m, isets = _vi_inline_model("""
-        {"variables": {"x": {"type": "unknown", "shape": []}},
-         "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
-                        "rhs": -1.0}]}
-        """)
-        vi = ESS.materialize_value_invention(m, isets, Dict{String,Any}(), Dict{String,Float64}())
+        m, isets = _vi_inline_model(
+            """
+            {"variables": {"x": {"type": "unknown", "shape": []}},
+             "equations": [{"lhs": {"op": "D", "args": ["x"], "wrt": "t"},
+                            "rhs": -1.0}]}
+            """
+        )
+        vi = ESS.materialize_value_invention(m, isets, Dict{String, Any}(), Dict{String, Float64}())
         @test isempty(vi.extents)
         @test isempty(vi.vi_var_names)
         @test isempty(vi.assignments)
@@ -268,8 +290,9 @@ end
         # from generators 2 (1.0) and 3 (2.0) — the deliberate tie.
         ca = Dict(
             "gx" => Float64[0, 1, 2], "gy" => Float64[0, 0, 0],
-            "px" => Float64[0.0, 1.0, 1.5, 2.0], "py" => Float64[0.0, 0.5, 0.0, 0.0])
-        vi = ESS.materialize_value_invention(m, isets, ca, Dict{String,Float64}())
+            "px" => Float64[0.0, 1.0, 1.5, 2.0], "py" => Float64[0.0, 0.5, 0.0, 0.0]
+        )
+        vi = ESS.materialize_value_invention(m, isets, ca, Dict{String, Float64}())
         # 1-based nearest-generator ids; point 3's tie resolves to the SMALLER id (2).
         @test vi.assignments["assign"] == [1, 2, 2, 3]
         # the arg-witness LHS var leaves the ODE (materialised at setup).
@@ -277,8 +300,8 @@ end
         # a pure arg-witness map: no producers / derived index sets.
         @test isempty(vi.extents)
         # pure function of inputs — re-running is identical.
-        @test ESS.materialize_value_invention(m, isets, ca, Dict{String,Float64}()).assignments["assign"] ==
-              [1, 2, 2, 3]
+        @test ESS.materialize_value_invention(m, isets, ca, Dict{String, Float64}()).assignments["assign"] ==
+            [1, 2, 2, 3]
     end
 
     @testset "bin-Skolem-pruned argmin: same-bin candidate join (§5.3 broad phase)" begin
@@ -288,7 +311,8 @@ end
         # Each point's join keeps only its same-bin generator → [1,2,3,2].
         ca = Dict(
             "gx" => Float64[0, 1, 2], "gy" => Float64[0, 0, 0],
-            "px" => Float64[0.1, 1.1, 2.1, 1.9], "py" => Float64[0, 0, 0, 0])
+            "px" => Float64[0.1, 1.1, 2.1, 1.9], "py" => Float64[0, 0, 0, 0]
+        )
         vi = ESS.materialize_value_invention(m, isets, ca, params)
         @test vi.assignments["assign_binned"] == [1, 2, 3, 2]
         # the bin map buffers + the assignment all leave the ODE.
@@ -298,66 +322,74 @@ end
     @testset "argmax: farthest-generator INDEX + smallest-id tie-break" begin
         # Mirror op: argmax keeps the GREATEST distance. Point 2 at (1.0) is dist 1
         # from both generator 1 (0.0) and generator 3 (2.0) → tie to the SMALLER id.
-        m, isets = _vi_inline_model("""
-        {"index_sets": {"points": {"kind": "interval", "size": 2},
-                        "generators": {"kind": "interval", "size": 3}},
-         "variables": {"gx": {"type": "parameter", "shape": ["generators"]},
-                       "px": {"type": "parameter", "shape": ["points"]},
-                       "far": {"type": "unknown", "shape": ["points"]}},
-         "equations": [{"lhs": {"op": "index", "args": ["far", "i"]},
-           "rhs": {"op": "faq", "output_idx": ["i"],
-             "ranges": {"i": {"from": "points"}},
-             "expr": {"op": "argmax", "arg": "g",
-               "ranges": {"g": {"from": "generators"}},
-               "expr": {"op": "*", "args": [
-                 {"op": "-", "args": [{"op": "index", "args": ["px", "i"]}, {"op": "index", "args": ["gx", "g"]}]},
-                 {"op": "-", "args": [{"op": "index", "args": ["px", "i"]}, {"op": "index", "args": ["gx", "g"]}]}]}}}}]}
-        """)
+        m, isets = _vi_inline_model(
+            """
+            {"index_sets": {"points": {"kind": "interval", "size": 2},
+                            "generators": {"kind": "interval", "size": 3}},
+             "variables": {"gx": {"type": "parameter", "shape": ["generators"]},
+                           "px": {"type": "parameter", "shape": ["points"]},
+                           "far": {"type": "unknown", "shape": ["points"]}},
+             "equations": [{"lhs": {"op": "index", "args": ["far", "i"]},
+               "rhs": {"op": "faq", "output_idx": ["i"],
+                 "ranges": {"i": {"from": "points"}},
+                 "expr": {"op": "argmax", "arg": "g",
+                   "ranges": {"g": {"from": "generators"}},
+                   "expr": {"op": "*", "args": [
+                     {"op": "-", "args": [{"op": "index", "args": ["px", "i"]}, {"op": "index", "args": ["gx", "g"]}]},
+                     {"op": "-", "args": [{"op": "index", "args": ["px", "i"]}, {"op": "index", "args": ["gx", "g"]}]}]}}}}]}
+            """
+        )
         ca = Dict("gx" => Float64[0, 1, 2], "px" => Float64[0.0, 1.0])
-        vi = ESS.materialize_value_invention(m, isets, ca, Dict{String,Float64}())
+        vi = ESS.materialize_value_invention(m, isets, ca, Dict{String, Float64}())
         @test vi.assignments["far"] == [3, 1]
     end
 
     @testset "guard: empty candidate set is an error (no index witnesses argmin)" begin
         # A filter that excludes every candidate leaves the argmin undefined.
-        m, isets = _vi_inline_model("""
-        {"index_sets": {"points": {"kind": "interval", "size": 1},
-                        "generators": {"kind": "interval", "size": 2}},
-         "variables": {"gx": {"type": "parameter", "shape": ["generators"]},
-                       "px": {"type": "parameter", "shape": ["points"]},
-                       "assign": {"type": "unknown", "shape": ["points"]}},
-         "equations": [{"lhs": {"op": "index", "args": ["assign", "i"]},
-           "rhs": {"op": "faq", "output_idx": ["i"],
-             "ranges": {"i": {"from": "points"}},
-             "expr": {"op": "argmin", "arg": "g",
-               "ranges": {"g": {"from": "generators"}},
-               "filter": {"op": "false", "args": []},
-               "expr": {"op": "*", "args": [
-                 {"op": "index", "args": ["gx", "g"]}, {"op": "index", "args": ["gx", "g"]}]}}}}]}
-        """)
+        m, isets = _vi_inline_model(
+            """
+            {"index_sets": {"points": {"kind": "interval", "size": 1},
+                            "generators": {"kind": "interval", "size": 2}},
+             "variables": {"gx": {"type": "parameter", "shape": ["generators"]},
+                           "px": {"type": "parameter", "shape": ["points"]},
+                           "assign": {"type": "unknown", "shape": ["points"]}},
+             "equations": [{"lhs": {"op": "index", "args": ["assign", "i"]},
+               "rhs": {"op": "faq", "output_idx": ["i"],
+                 "ranges": {"i": {"from": "points"}},
+                 "expr": {"op": "argmin", "arg": "g",
+                   "ranges": {"g": {"from": "generators"}},
+                   "filter": {"op": "false", "args": []},
+                   "expr": {"op": "*", "args": [
+                     {"op": "index", "args": ["gx", "g"]}, {"op": "index", "args": ["gx", "g"]}]}}}}]}
+            """
+        )
         @test_throws ESS.TreeWalkError ESS.materialize_value_invention(
-            m, isets, Dict("gx" => Float64[0, 1], "px" => Float64[0.5]), Dict{String,Float64}())
+            m, isets, Dict("gx" => Float64[0, 1], "px" => Float64[0.5]), Dict{String, Float64}()
+        )
     end
 
     @testset "guard: a CONTINUOUS arg-witness assignment is rejected (§5.7 guard 2)" begin
         # An argmin whose distance reads a genuine `state` coordinate classifies
         # CONTINUOUS — a per-step assignment is out of scope for v1.
-        m, isets = _vi_inline_model("""
-        {"index_sets": {"points": {"kind": "interval", "size": 1},
-                        "generators": {"kind": "interval", "size": 2}},
-         "variables": {"gx": {"type": "unknown", "shape": ["generators"]},
-                       "px": {"type": "parameter", "shape": ["points"]},
-                       "assign": {"type": "unknown", "shape": ["points"]}},
-         "equations": [{"lhs": {"op": "index", "args": ["assign", "i"]},
-           "rhs": {"op": "faq", "output_idx": ["i"],
-             "ranges": {"i": {"from": "points"}},
-             "expr": {"op": "argmin", "arg": "g",
-               "ranges": {"g": {"from": "generators"}},
-               "expr": {"op": "*", "args": [
-                 {"op": "index", "args": ["gx", "g"]}, {"op": "index", "args": ["gx", "g"]}]}}}}]}
-        """)
+        m, isets = _vi_inline_model(
+            """
+            {"index_sets": {"points": {"kind": "interval", "size": 1},
+                            "generators": {"kind": "interval", "size": 2}},
+             "variables": {"gx": {"type": "unknown", "shape": ["generators"]},
+                           "px": {"type": "parameter", "shape": ["points"]},
+                           "assign": {"type": "unknown", "shape": ["points"]}},
+             "equations": [{"lhs": {"op": "index", "args": ["assign", "i"]},
+               "rhs": {"op": "faq", "output_idx": ["i"],
+                 "ranges": {"i": {"from": "points"}},
+                 "expr": {"op": "argmin", "arg": "g",
+                   "ranges": {"g": {"from": "generators"}},
+                   "expr": {"op": "*", "args": [
+                     {"op": "index", "args": ["gx", "g"]}, {"op": "index", "args": ["gx", "g"]}]}}}}]}
+            """
+        )
         @test_throws ESS.TreeWalkError ESS.materialize_value_invention(
-            m, isets, Dict("gx" => Float64[0, 1], "px" => Float64[0.5]), Dict{String,Float64}())
+            m, isets, Dict("gx" => Float64[0, 1], "px" => Float64[0.5]), Dict{String, Float64}()
+        )
     end
 end
 
@@ -382,8 +414,9 @@ end
         ca = Dict(
             "gx" => Float64[0, 1, 2],
             "px" => Float64[0.0, 0.75, 1.25, 2.0],
-            "rho" => Float64[1, 1, 3, 4])
-        vi = ESS.materialize_value_invention(m, isets, ca, Dict{String,Float64}())
+            "rho" => Float64[1, 1, 3, 4]
+        )
+        vi = ESS.materialize_value_invention(m, isets, ca, Dict{String, Float64}())
         # The argmin group key (E1) — byte-identical integer buffer.
         @test vi.assignments["assign"] == [1, 2, 2, 3]
         # The grouped sum_product buffers — bit-exact (exact-dyadic inputs).
@@ -394,8 +427,8 @@ end
         # assign + the three grouped/derived buffers all leave the ODE (build-time).
         @test vi.vi_var_names == Set(["assign", "num", "den", "centroid"])
         # Pure function of inputs — re-running is identical.
-        @test ESS.materialize_value_invention(m, isets, ca, Dict{String,Float64}()).groups["centroid"] ==
-              [0.0, 1.125, 2.0]
+        @test ESS.materialize_value_invention(m, isets, ca, Dict{String, Float64}()).groups["centroid"] ==
+            [0.0, 1.125, 2.0]
     end
 
     @testset "empty group folds to the 0̄ identity (no assigned points)" begin
@@ -406,8 +439,9 @@ end
         ca = Dict(
             "gx" => Float64[0, 1, 2],
             "px" => Float64[0.0, 0.1, 0.2, 0.3],
-            "rho" => Float64[2, 1, 1, 1])
-        vi = ESS.materialize_value_invention(m, isets, ca, Dict{String,Float64}())
+            "rho" => Float64[2, 1, 1, 1]
+        )
+        vi = ESS.materialize_value_invention(m, isets, ca, Dict{String, Float64}())
         @test vi.assignments["assign"] == [1, 1, 1, 1]
         @test vi.groups["den"] == [5.0, 0.0, 0.0]          # 0̄ for the empty groups
         @test vi.groups["num"][2] == 0.0 && vi.groups["num"][3] == 0.0
@@ -417,31 +451,34 @@ end
     @testset "guard: a grouped reduction reading live state is rejected (§5.7 guard 2)" begin
         # `rho` retyped to `state` ⇒ the grouped numerator reads a hot-path quantity;
         # a build-time reduction's inputs must be CONST/DISCRETE.
-        m, isets = _vi_inline_model("""
-        {"index_sets": {"points": {"kind": "interval", "size": 2},
-                        "generators": {"kind": "interval", "size": 1}},
-         "variables": {"gx": {"type": "parameter", "shape": ["generators"]},
-                       "px": {"type": "parameter", "shape": ["points"]},
-                       "rho": {"type": "unknown", "shape": ["points"]},
-                       "assign": {"type": "unknown", "shape": ["points"]},
-                       "num": {"type": "unknown", "shape": ["generators"]}},
-         "equations": [
-           {"lhs": {"op": "index", "args": ["assign", "i"]},
-            "rhs": {"op": "faq", "output_idx": ["i"], "ranges": {"i": {"from": "points"}},
-              "args": ["px", "gx"],
-              "expr": {"op": "argmin", "args": ["px", "gx"], "arg": "g",
-                "ranges": {"g": {"from": "generators"}},
-                "expr": {"op": "*", "args": [
-                  {"op": "-", "args": [{"op": "index", "args": ["px", "i"]}, {"op": "index", "args": ["gx", "g"]}]},
-                  {"op": "-", "args": [{"op": "index", "args": ["px", "i"]}, {"op": "index", "args": ["gx", "g"]}]}]}}}},
-           {"lhs": {"op": "index", "args": ["num", "g"]},
-            "rhs": {"op": "faq", "output_idx": ["g"],
-              "ranges": {"g": {"from": "generators"}, "p": {"from": "points"}},
-              "semiring": "sum_product", "join": [{"on": [["assign", "g"]]}],
-              "args": ["assign", "rho"],
-              "expr": {"op": "index", "args": ["rho", "p"]}}}]}
-        """)
+        m, isets = _vi_inline_model(
+            """
+            {"index_sets": {"points": {"kind": "interval", "size": 2},
+                            "generators": {"kind": "interval", "size": 1}},
+             "variables": {"gx": {"type": "parameter", "shape": ["generators"]},
+                           "px": {"type": "parameter", "shape": ["points"]},
+                           "rho": {"type": "unknown", "shape": ["points"]},
+                           "assign": {"type": "unknown", "shape": ["points"]},
+                           "num": {"type": "unknown", "shape": ["generators"]}},
+             "equations": [
+               {"lhs": {"op": "index", "args": ["assign", "i"]},
+                "rhs": {"op": "faq", "output_idx": ["i"], "ranges": {"i": {"from": "points"}},
+                  "args": ["px", "gx"],
+                  "expr": {"op": "argmin", "args": ["px", "gx"], "arg": "g",
+                    "ranges": {"g": {"from": "generators"}},
+                    "expr": {"op": "*", "args": [
+                      {"op": "-", "args": [{"op": "index", "args": ["px", "i"]}, {"op": "index", "args": ["gx", "g"]}]},
+                      {"op": "-", "args": [{"op": "index", "args": ["px", "i"]}, {"op": "index", "args": ["gx", "g"]}]}]}}}},
+               {"lhs": {"op": "index", "args": ["num", "g"]},
+                "rhs": {"op": "faq", "output_idx": ["g"],
+                  "ranges": {"g": {"from": "generators"}, "p": {"from": "points"}},
+                  "semiring": "sum_product", "join": [{"on": [["assign", "g"]]}],
+                  "args": ["assign", "rho"],
+                  "expr": {"op": "index", "args": ["rho", "p"]}}}]}
+            """
+        )
         @test_throws ESS.TreeWalkError ESS.materialize_value_invention(
-            m, isets, Dict("gx" => Float64[0], "px" => Float64[0.0, 1.0]), Dict{String,Float64}())
+            m, isets, Dict("gx" => Float64[0], "px" => Float64[0.0, 1.0]), Dict{String, Float64}()
+        )
     end
 end

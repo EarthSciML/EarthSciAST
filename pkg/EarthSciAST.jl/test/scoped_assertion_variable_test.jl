@@ -17,11 +17,15 @@ import OrdinaryDiffEqTsit5
 
 include("testutils.jl")  # TESTUTILS_REPO_ROOT
 
-const _SAV_DIR = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance",
-                          "scoped_assertion_variable", "fixtures")
+const _SAV_DIR = joinpath(
+    TESTUTILS_REPO_ROOT, "tests", "conformance",
+    "scoped_assertion_variable", "fixtures"
+)
 
-_sav_run(name) = run_inline_tests(joinpath(_SAV_DIR, name);
-                                  alg=OrdinaryDiffEqTsit5.Tsit5())
+_sav_run(name) = run_inline_tests(
+    joinpath(_SAV_DIR, name);
+    alg = OrdinaryDiffEqTsit5.Tsit5()
+)
 
 function _sav_actuals(results)
     for r in results
@@ -45,10 +49,10 @@ end
             results = _sav_run(name)
             @test [r.container_name for r in results] == fill("Host", 5)
             @test [r.variable for r in results] ==
-                  ["w", "Leaf.u", "Leaf.v", "Leaf.key", "Leaf.key"]
+                ["w", "Leaf.u", "Leaf.v", "Leaf.key", "Leaf.key"]
             actual = _sav_actuals(results)
             e = exp(-1)
-            @test all(isapprox.(actual, [3e, e, 2e, 7.0, 9.0]; rtol=1e-4))
+            @test all(isapprox.(actual, [3e, e, 2e, 7.0, 9.0]; rtol = 1.0e-4))
         end
     end
 
@@ -56,7 +60,7 @@ end
     # when it has one; an assertion must read the same component.
     @testset "a subsystem shadows a top-level component of the same name" begin
         actual = _sav_actuals(_sav_run("shadowed_mount.esm"))
-        @test all(isapprox.(actual, [6.0, 2.0, 1.0, 3.0]; rtol=1e-4))
+        @test all(isapprox.(actual, [6.0, 2.0, 1.0, 3.0]; rtol = 1.0e-4))
     end
 
     # THREE levels: the owner path runs two mounts below the root, which a
@@ -66,7 +70,7 @@ end
         @test [r.container_name for r in results] == fill("Host", 5)
         actual = _sav_actuals(results)
         e = exp(-1)
-        @test all(isapprox.(actual, [3e, e, 2e, 7.0, 9.0]; rtol=1e-4))
+        @test all(isapprox.(actual, [3e, e, 2e, 7.0, 9.0]; rtol = 1.0e-4))
     end
 
     # Only the WRONG component's field is a build product, so a runner that
@@ -74,6 +78,6 @@ end
     # top-level leaf's [7, 9, 4] where the subsystem owns [5, 10, 15].
     @testset "a scoped field is never read from another component" begin
         actual = _sav_actuals(_sav_run("shadowed_dynamic_field.esm"))
-        @test all(isapprox.(actual, [15.0, 15.0, 5.0]; rtol=1e-4))
+        @test all(isapprox.(actual, [15.0, 15.0, 5.0]; rtol = 1.0e-4))
     end
 end

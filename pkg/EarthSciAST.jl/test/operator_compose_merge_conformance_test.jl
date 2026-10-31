@@ -37,8 +37,10 @@ using Logging
 
 include("testutils.jl")  # TESTUTILS_REPO_ROOT
 
-const _OCM_DIR = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance",
-                          "operator_compose_merge")
+const _OCM_DIR = joinpath(
+    TESTUTILS_REPO_ROOT, "tests", "conformance",
+    "operator_compose_merge"
+)
 
 # A missing manifest is a hard failure, not a skip: the manifest IS the contract
 # this file exists to enforce.
@@ -60,7 +62,7 @@ Flatten the fixture at `relpath`, returning `(system, diagnostics)` where
 """
 function _ocm_flatten(relpath)
     path = joinpath(_OCM_DIR, relpath)
-    logs, system = Test.collect_test_logs(min_level=Logging.Warn) do
+    logs, system = Test.collect_test_logs(min_level = Logging.Warn) do
         flatten(load_path(path))
     end
     msgs = [string(r.message) for r in logs if startswith(string(r.message), "operator_compose_")]
@@ -93,7 +95,7 @@ end
             # The manifest names an error type per binding per code; reading
             # Julia's column back keeps the record from drifting silently.
             @test String(_OCM_MANIFEST.diagnostic_surface.errors[Symbol(code)].julia) ==
-                  string(nameof(_OCM_ERRORS[code]))
+                string(nameof(_OCM_ERRORS[code]))
         end
     end
 
@@ -143,7 +145,7 @@ end
             end
             if haskey(case, :surviving_state)
                 @test system.state_variables[String(case.surviving_state)].default ==
-                      case.surviving_default
+                    case.surviving_default
             end
         end
     end
@@ -157,9 +159,9 @@ end
         # fails on disagreement even if both were re-recorded.
         by_id = Dict(String(c.id) => c for c in _OCM_MANIFEST.cases)
         for (left, right) in (
-            ("ambiguous_bare_name", "ambiguous_bare_name_flipped"),
-            ("owner_rename_state_wins_observed_first", "owner_rename_state_wins_state_first"),
-        )
+                ("ambiguous_bare_name", "ambiguous_bare_name_flipped"),
+                ("owner_rename_state_wins_observed_first", "owner_rename_state_wins_state_first"),
+            )
             a, b = by_id[left], by_id[right]
             @test String.(a.systems) == reverse(String.(b.systems))
             @test _ocm_outcome(a) == _ocm_outcome(b)

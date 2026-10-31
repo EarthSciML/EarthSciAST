@@ -5,30 +5,40 @@ using Test
 import EarthSciAST as ESS
 const E = ESS
 
-op(o, a...) = Dict{String,Any}("op"=>o, "args"=>collect(Any, a))
-ix(a...)    = Dict{String,Any}("op"=>"index", "args"=>collect(Any, a))
+op(o, a...) = Dict{String, Any}("op" => o, "args" => collect(Any, a))
+ix(a...) = Dict{String, Any}("op" => "index", "args" => collect(Any, a))
 
 # index set c (size 3); f[c] array param; a=f*2, b=a+f scalar-authored; s = Σ_c b.
 function syn()
-    agg = Dict{String,Any}("op"=>"faq","semiring"=>"sum_product","output_idx"=>Any[],
-        "ranges"=>Dict{String,Any}("k"=>Dict{String,Any}("from"=>"c")),
-        "args"=>Any[], "expr"=>ix("b","k"))
-    Dict{String,Any}("esm"=>"0.5.0","metadata"=>Dict("name"=>"P"),
-      # esm-spec v0.8.0: index_sets is a single document-scoped registry.
-      "index_sets"=>Dict{String,Any}("c"=>Dict{String,Any}("kind"=>"interval","size"=>3)),
-      "models"=>Dict{String,Any}("M"=>Dict{String,Any}(
-        "variables"=>Dict{String,Any}(
-            "f"=>Dict{String,Any}("type"=>"parameter","shape"=>Any["c"]),
-            # esm 1.0.0 §6.3: an observed unknown is an `unknown` DEFINED by a
-            # bare-variable-LHS equation; there is no variable-level `expression`.
-            "a"=>Dict{String,Any}("type"=>"unknown"),
-            "b"=>Dict{String,Any}("type"=>"unknown"),
-            "s"=>Dict{String,Any}("type"=>"unknown")),
-        "equations"=>Any[
-            Dict{String,Any}("lhs"=>"a","rhs"=>op("*","f",2)),
-            Dict{String,Any}("lhs"=>"b","rhs"=>op("+","a","f")),
-            Dict{String,Any}(
-            "lhs"=>Dict{String,Any}("op"=>"D","args"=>Any["s"],"wrt"=>"t"),"rhs"=>agg)])))
+    agg = Dict{String, Any}(
+        "op" => "faq", "semiring" => "sum_product", "output_idx" => Any[],
+        "ranges" => Dict{String, Any}("k" => Dict{String, Any}("from" => "c")),
+        "args" => Any[], "expr" => ix("b", "k")
+    )
+    return Dict{String, Any}(
+        "esm" => "0.5.0", "metadata" => Dict("name" => "P"),
+        # esm-spec v0.8.0: index_sets is a single document-scoped registry.
+        "index_sets" => Dict{String, Any}("c" => Dict{String, Any}("kind" => "interval", "size" => 3)),
+        "models" => Dict{String, Any}(
+            "M" => Dict{String, Any}(
+                "variables" => Dict{String, Any}(
+                    "f" => Dict{String, Any}("type" => "parameter", "shape" => Any["c"]),
+                    # esm 1.0.0 §6.3: an observed unknown is an `unknown` DEFINED by a
+                    # bare-variable-LHS equation; there is no variable-level `expression`.
+                    "a" => Dict{String, Any}("type" => "unknown"),
+                    "b" => Dict{String, Any}("type" => "unknown"),
+                    "s" => Dict{String, Any}("type" => "unknown")
+                ),
+                "equations" => Any[
+                    Dict{String, Any}("lhs" => "a", "rhs" => op("*", "f", 2)),
+                    Dict{String, Any}("lhs" => "b", "rhs" => op("+", "a", "f")),
+                    Dict{String, Any}(
+                        "lhs" => Dict{String, Any}("op" => "D", "args" => Any["s"], "wrt" => "t"), "rhs" => agg
+                    ),
+                ]
+            )
+        )
+    )
 end
 
 @testset "M2-1: promote_downstream_shapes" begin
@@ -36,8 +46,10 @@ end
     prom = E.promote_downstream_shapes(flat)
 
     @testset "shape inference: scalar chain promoted, reduction stays scalar" begin
-        sh(n) = (v = get(prom.observed_variables, n, get(prom.state_variables, n, nothing));
-                 v === nothing ? :absent : (v.shape === nothing ? String[] : v.shape))
+        sh(n) = (
+            v = get(prom.observed_variables, n, get(prom.state_variables, n, nothing));
+            v === nothing ? :absent : (v.shape === nothing ? String[] : v.shape)
+        )
         @test sh("M.a") == ["c"]              # promoted (downstream of array f); c is document-scoped
         @test sh("M.b") == ["c"]              # promoted
         @test sh("M.s") == String[]           # reduction boundary — stays scalar
@@ -45,8 +57,10 @@ end
 
     @testset "equations rewritten to faqs; evaluates per-cell" begin
         doc = E.flattened_to_esm(prom)
-        f!, u0, p, _t, vmap = E._build_evaluator(doc;
-            const_arrays=Dict("M.f"=>[1.0,2.0,3.0]), initial_conditions=Dict("M.s"=>0.0))
+        f!, u0, p, _t, vmap = E._build_evaluator(
+            doc;
+            const_arrays = Dict("M.f" => [1.0, 2.0, 3.0]), initial_conditions = Dict("M.s" => 0.0)
+        )
         du = similar(u0); f!(du, u0, p, 0.0)
         # f=[1,2,3] → a=[2,4,6], b=[3,6,9], s=Σb=18
         @test du[vmap["M.s"]] ≈ 18.0
@@ -54,18 +68,26 @@ end
     end
 
     @testset "transform is a no-op for an all-scalar system" begin
-        sc = Dict{String,Any}("esm"=>"0.5.0","metadata"=>Dict("name"=>"S"),
-            "models"=>Dict{String,Any}("M"=>Dict{String,Any}("variables"=>Dict{String,Any}(
-                "x"=>Dict{String,Any}("type"=>"parameter","default"=>2.0),
-                "y"=>Dict{String,Any}("type"=>"unknown"),
-                "z"=>Dict{String,Any}("type"=>"unknown")),
-              "equations"=>Any[
-                Dict{String,Any}("lhs"=>"y","rhs"=>op("*","x",3)),
-                Dict{String,Any}("lhs"=>Dict{String,Any}("op"=>"D","args"=>Any["z"],"wrt"=>"t"),"rhs"=>"y")])))
+        sc = Dict{String, Any}(
+            "esm" => "0.5.0", "metadata" => Dict("name" => "S"),
+            "models" => Dict{String, Any}(
+                "M" => Dict{String, Any}(
+                    "variables" => Dict{String, Any}(
+                        "x" => Dict{String, Any}("type" => "parameter", "default" => 2.0),
+                        "y" => Dict{String, Any}("type" => "unknown"),
+                        "z" => Dict{String, Any}("type" => "unknown")
+                    ),
+                    "equations" => Any[
+                        Dict{String, Any}("lhs" => "y", "rhs" => op("*", "x", 3)),
+                        Dict{String, Any}("lhs" => Dict{String, Any}("op" => "D", "args" => Any["z"], "wrt" => "t"), "rhs" => "y"),
+                    ]
+                )
+            )
+        )
         f2 = E.flatten(ESS.coerce_esm_file(ESS.JSON3.read(ESS.JSON3.write(sc))))
         p2 = E.promote_downstream_shapes(f2)
         @test all(v -> v.shape === nothing || isempty(v.shape), values(p2.observed_variables))
-        f!, u0, p, _t, vmap = E._build_evaluator(E.flattened_to_esm(p2); initial_conditions=Dict("M.z"=>0.0))
+        f!, u0, p, _t, vmap = E._build_evaluator(E.flattened_to_esm(p2); initial_conditions = Dict("M.z" => 0.0))
         du = similar(u0); f!(du, u0, p, 0.0)
         @test du[vmap["M.z"]] ≈ 6.0           # y = x*3 = 6, unchanged
     end
@@ -73,21 +95,29 @@ end
     @testset "algebraic_states_to_observeds reclassifies bare-eq states" begin
         # `a` is a STATE defined by a bare algebraic eq (a = x*2); `z` is a real ODE
         # state (D(z,t)=a). Reclassify `a` → observed; leave `z` a state.
-        d = Dict{String,Any}("esm"=>"0.5.0","metadata"=>Dict("name"=>"S"),
-            "models"=>Dict{String,Any}("M"=>Dict{String,Any}("variables"=>Dict{String,Any}(
-                "x"=>Dict{String,Any}("type"=>"parameter","default"=>3.0),
-                "a"=>Dict{String,Any}("type"=>"unknown"),
-                "z"=>Dict{String,Any}("type"=>"unknown")),
-              "equations"=>Any[
-                Dict{String,Any}("lhs"=>"a","rhs"=>op("*","x",2)),
-                Dict{String,Any}("lhs"=>Dict{String,Any}("op"=>"D","args"=>Any["z"],"wrt"=>"t"),"rhs"=>"a")])))
+        d = Dict{String, Any}(
+            "esm" => "0.5.0", "metadata" => Dict("name" => "S"),
+            "models" => Dict{String, Any}(
+                "M" => Dict{String, Any}(
+                    "variables" => Dict{String, Any}(
+                        "x" => Dict{String, Any}("type" => "parameter", "default" => 3.0),
+                        "a" => Dict{String, Any}("type" => "unknown"),
+                        "z" => Dict{String, Any}("type" => "unknown")
+                    ),
+                    "equations" => Any[
+                        Dict{String, Any}("lhs" => "a", "rhs" => op("*", "x", 2)),
+                        Dict{String, Any}("lhs" => Dict{String, Any}("op" => "D", "args" => Any["z"], "wrt" => "t"), "rhs" => "a"),
+                    ]
+                )
+            )
+        )
         flat = E.flatten(ESS.coerce_esm_file(ESS.JSON3.read(ESS.JSON3.write(d))))
         norm = E.algebraic_states_to_observeds(flat)
         @test haskey(norm.observed_variables, "M.a")    # algebraic state → observed
         @test !haskey(norm.state_variables, "M.a")
         @test haskey(norm.state_variables, "M.z")        # ODE state preserved
         # runs: a = x*2 = 6, D(z) = a = 6
-        f!, u0, p, _t, vmap = E._build_evaluator(E.flattened_to_esm(norm); initial_conditions=Dict("M.z"=>0.0))
+        f!, u0, p, _t, vmap = E._build_evaluator(E.flattened_to_esm(norm); initial_conditions = Dict("M.z" => 0.0))
         du = similar(u0); f!(du, u0, p, 0.0)
         @test du[vmap["M.z"]] ≈ 6.0
     end
@@ -98,21 +128,29 @@ end
     # is folded into the equations that read it and dropped — the library form of the
     # level-set fold. a = f+1, b = a*2 (both [c]); D(s) = f - b. After inlining, a and b
     # vanish and D(s)'s RHS references only f.
-    d = Dict{String,Any}("esm"=>"0.5.0","metadata"=>Dict("name"=>"P"),
-      # esm-spec v0.8.0: index_sets is a single document-scoped registry.
-      "index_sets"=>Dict{String,Any}("c"=>Dict{String,Any}("kind"=>"interval","size"=>3)),
-      "models"=>Dict{String,Any}("M"=>Dict{String,Any}(
-        "variables"=>Dict{String,Any}(
-          "f"=>Dict{String,Any}("type"=>"parameter","shape"=>Any["c"]),
-          "a"=>Dict{String,Any}("type"=>"unknown","shape"=>Any["c"]),
-          "b"=>Dict{String,Any}("type"=>"unknown","shape"=>Any["c"]),
-          "s"=>Dict{String,Any}("type"=>"unknown","shape"=>Any["c"])),
-        "equations"=>Any[
-          Dict{String,Any}("lhs"=>"a","rhs"=>op("+","f",1)),
-          Dict{String,Any}("lhs"=>"b","rhs"=>op("*","a",2)),
-          Dict{String,Any}(
-          "lhs"=>Dict{String,Any}("op"=>"D","args"=>Any["s"],"wrt"=>"t"),
-          "rhs"=>op("-","f","b"))])))
+    d = Dict{String, Any}(
+        "esm" => "0.5.0", "metadata" => Dict("name" => "P"),
+        # esm-spec v0.8.0: index_sets is a single document-scoped registry.
+        "index_sets" => Dict{String, Any}("c" => Dict{String, Any}("kind" => "interval", "size" => 3)),
+        "models" => Dict{String, Any}(
+            "M" => Dict{String, Any}(
+                "variables" => Dict{String, Any}(
+                    "f" => Dict{String, Any}("type" => "parameter", "shape" => Any["c"]),
+                    "a" => Dict{String, Any}("type" => "unknown", "shape" => Any["c"]),
+                    "b" => Dict{String, Any}("type" => "unknown", "shape" => Any["c"]),
+                    "s" => Dict{String, Any}("type" => "unknown", "shape" => Any["c"])
+                ),
+                "equations" => Any[
+                    Dict{String, Any}("lhs" => "a", "rhs" => op("+", "f", 1)),
+                    Dict{String, Any}("lhs" => "b", "rhs" => op("*", "a", 2)),
+                    Dict{String, Any}(
+                        "lhs" => Dict{String, Any}("op" => "D", "args" => Any["s"], "wrt" => "t"),
+                        "rhs" => op("-", "f", "b")
+                    ),
+                ]
+            )
+        )
+    )
     flat = E.flatten(ESS.coerce_esm_file(ESS.JSON3.read(ESS.JSON3.write(d))))
     @test haskey(flat.observed_variables, "M.a")
     @test haskey(flat.observed_variables, "M.b")
@@ -126,14 +164,22 @@ end
     @test !("M.a" in fv) && !("M.b" in fv)           # no dangling refs to the folded vars
 
     # No elementwise array observed ⇒ a no-op: the scalar observed survives untouched.
-    sc = Dict{String,Any}("esm"=>"0.5.0","metadata"=>Dict("name"=>"S"),
-      "models"=>Dict{String,Any}("M"=>Dict{String,Any}("variables"=>Dict{String,Any}(
-        "x"=>Dict{String,Any}("type"=>"parameter","default"=>2.0),
-        "y"=>Dict{String,Any}("type"=>"unknown"),
-        "z"=>Dict{String,Any}("type"=>"unknown")),
-        "equations"=>Any[
-          Dict{String,Any}("lhs"=>"y","rhs"=>op("*","x",3)),
-          Dict{String,Any}("lhs"=>Dict{String,Any}("op"=>"D","args"=>Any["z"],"wrt"=>"t"),"rhs"=>"y")])))
+    sc = Dict{String, Any}(
+        "esm" => "0.5.0", "metadata" => Dict("name" => "S"),
+        "models" => Dict{String, Any}(
+            "M" => Dict{String, Any}(
+                "variables" => Dict{String, Any}(
+                    "x" => Dict{String, Any}("type" => "parameter", "default" => 2.0),
+                    "y" => Dict{String, Any}("type" => "unknown"),
+                    "z" => Dict{String, Any}("type" => "unknown")
+                ),
+                "equations" => Any[
+                    Dict{String, Any}("lhs" => "y", "rhs" => op("*", "x", 3)),
+                    Dict{String, Any}("lhs" => Dict{String, Any}("op" => "D", "args" => Any["z"], "wrt" => "t"), "rhs" => "y"),
+                ]
+            )
+        )
+    )
     f2 = E.flatten(ESS.coerce_esm_file(ESS.JSON3.read(ESS.JSON3.write(sc))))
     n2 = E.inline_elementwise_array_observeds(f2)
     @test haskey(n2.observed_variables, "M.y")       # scalar observed untouched
@@ -147,21 +193,31 @@ end
     # `S_n`, …). Without `_fold_elementwise_array_observeds`, build_evaluator
     # rejects a, b as E_TREEWALK_UNSUPPORTED_SHAPE; the fold inlines them so the
     # state RHS carries `-((psi+1)*2)` and evaluates per cell.
-    d = Dict{String,Any}("esm"=>"0.5.0","metadata"=>Dict("name"=>"P"),
-      "index_sets"=>Dict{String,Any}("c"=>Dict{String,Any}("kind"=>"interval","size"=>3)),
-      "models"=>Dict{String,Any}("M"=>Dict{String,Any}(
-        "variables"=>Dict{String,Any}(
-          "psi"=>Dict{String,Any}("type"=>"unknown","shape"=>Any["c"]),
-          "a"=>Dict{String,Any}("type"=>"unknown","shape"=>Any["c"]),
-          "b"=>Dict{String,Any}("type"=>"unknown","shape"=>Any["c"])),
-        "equations"=>Any[
-          Dict{String,Any}("lhs"=>"a","rhs"=>op("+","psi",1)),
-          Dict{String,Any}("lhs"=>"b","rhs"=>op("*","a",2)),
-          Dict{String,Any}(
-          "lhs"=>Dict{String,Any}("op"=>"D","args"=>Any["psi"],"wrt"=>"t"),
-          "rhs"=>op("-","b"))])))
-    f!, u0, p, _t, vmap = E._build_evaluator(d;
-        initial_conditions=Dict("psi[1]"=>1.0, "psi[2]"=>2.0, "psi[3]"=>3.0))
+    d = Dict{String, Any}(
+        "esm" => "0.5.0", "metadata" => Dict("name" => "P"),
+        "index_sets" => Dict{String, Any}("c" => Dict{String, Any}("kind" => "interval", "size" => 3)),
+        "models" => Dict{String, Any}(
+            "M" => Dict{String, Any}(
+                "variables" => Dict{String, Any}(
+                    "psi" => Dict{String, Any}("type" => "unknown", "shape" => Any["c"]),
+                    "a" => Dict{String, Any}("type" => "unknown", "shape" => Any["c"]),
+                    "b" => Dict{String, Any}("type" => "unknown", "shape" => Any["c"])
+                ),
+                "equations" => Any[
+                    Dict{String, Any}("lhs" => "a", "rhs" => op("+", "psi", 1)),
+                    Dict{String, Any}("lhs" => "b", "rhs" => op("*", "a", 2)),
+                    Dict{String, Any}(
+                        "lhs" => Dict{String, Any}("op" => "D", "args" => Any["psi"], "wrt" => "t"),
+                        "rhs" => op("-", "b")
+                    ),
+                ]
+            )
+        )
+    )
+    f!, u0, p, _t, vmap = E._build_evaluator(
+        d;
+        initial_conditions = Dict("psi[1]" => 1.0, "psi[2]" => 2.0, "psi[3]" => 3.0)
+    )
     # The elementwise array observeds are gone from the ODE partition (folded).
     @test !any(k -> occursin(r"^[ab]\[", k), keys(vmap))
     du = similar(u0); f!(du, u0, p, 0.0)
@@ -172,20 +228,29 @@ end
 
 @testset "shape promotion errors use the typed flatten taxonomy" begin
     # Conflicting operand shapes -> DimensionPromotionError (was ArgumentError).
-    d = Dict{String,Any}("esm"=>"0.8.0","metadata"=>Dict("name"=>"X"),
-      "index_sets"=>Dict{String,Any}(
-        "c"=>Dict{String,Any}("kind"=>"interval","size"=>3),
-        "d"=>Dict{String,Any}("kind"=>"interval","size"=>4)),
-      "models"=>Dict{String,Any}("M"=>Dict{String,Any}(
-        "variables"=>Dict{String,Any}(
-          "f"=>Dict{String,Any}("type"=>"parameter","shape"=>Any["c"]),
-          "g"=>Dict{String,Any}("type"=>"parameter","shape"=>Any["d"]),
-          "a"=>Dict{String,Any}("type"=>"unknown"),
-          "s"=>Dict{String,Any}("type"=>"unknown")),
-        "equations"=>Any[
-          Dict{String,Any}("lhs"=>"a","rhs"=>op("+","f","g")),
-          Dict{String,Any}(
-          "lhs"=>Dict{String,Any}("op"=>"D","args"=>Any["s"],"wrt"=>"t"),"rhs"=>"a")])))
+    d = Dict{String, Any}(
+        "esm" => "0.8.0", "metadata" => Dict("name" => "X"),
+        "index_sets" => Dict{String, Any}(
+            "c" => Dict{String, Any}("kind" => "interval", "size" => 3),
+            "d" => Dict{String, Any}("kind" => "interval", "size" => 4)
+        ),
+        "models" => Dict{String, Any}(
+            "M" => Dict{String, Any}(
+                "variables" => Dict{String, Any}(
+                    "f" => Dict{String, Any}("type" => "parameter", "shape" => Any["c"]),
+                    "g" => Dict{String, Any}("type" => "parameter", "shape" => Any["d"]),
+                    "a" => Dict{String, Any}("type" => "unknown"),
+                    "s" => Dict{String, Any}("type" => "unknown")
+                ),
+                "equations" => Any[
+                    Dict{String, Any}("lhs" => "a", "rhs" => op("+", "f", "g")),
+                    Dict{String, Any}(
+                        "lhs" => Dict{String, Any}("op" => "D", "args" => Any["s"], "wrt" => "t"), "rhs" => "a"
+                    ),
+                ]
+            )
+        )
+    )
     flat = E.flatten(ESS.coerce_esm_file(ESS.JSON3.read(ESS.JSON3.write(d))))
     @test_throws E.DimensionPromotionError E.promote_downstream_shapes(flat)
 end
@@ -204,25 +269,31 @@ end
 # which reads as a defect in the author's model rather than a state that simply
 # needed no lifting.
 @testset "pointwise lift considers only still-scalar states" begin
-    ma = E.OpExpr("makearray", E.ASTExpr[E.VarExpr("Mx")];
-                  regions=[[[1, 4]]], values=E.ASTExpr[E.VarExpr("Mx")])
+    ma = E.OpExpr(
+        "makearray", E.ASTExpr[E.VarExpr("Mx")];
+        regions = [[[1, 4]]], values = E.ASTExpr[E.VarExpr("Mx")]
+    )
     # Two states with a makearray RHS: one scalar (a 0-D species), one already spatial.
     eqs = E.Equation[
-        E.Equation(E.OpExpr("D", E.ASTExpr[E.VarExpr("O3")]; wrt="t"), ma),
-        E.Equation(E.OpExpr("D", E.ASTExpr[E.VarExpr("m")]; wrt="t"), ma),
+        E.Equation(E.OpExpr("D", E.ASTExpr[E.VarExpr("O3")]; wrt = "t"), ma),
+        E.Equation(E.OpExpr("D", E.ASTExpr[E.VarExpr("m")]; wrt = "t"), ma),
     ]
-    states = E.OrderedDict{String,E.ModelVariable}(
+    states = E.OrderedDict{String, E.ModelVariable}(
         "O3" => E.ModelVariable(E.UnknownVariable),                      # scalar ⇒ liftable
-        "m"  => E.ModelVariable(E.UnknownVariable; shape=["lon"]),       # already spatial ⇒ not
+        "m" => E.ModelVariable(E.UnknownVariable; shape = ["lon"]),       # already spatial ⇒ not
     )
     lifted = E._pointwise_lifted_species(eqs, states)
     @test "O3" in lifted
     @test !("m" in lifted)
 
     # A state with no makearray in its RHS is not a lift candidate either.
-    eqs2 = E.Equation[E.Equation(E.OpExpr("D", E.ASTExpr[E.VarExpr("x")]; wrt="t"),
-                                 E.NumExpr(0.0))]
-    states2 = E.OrderedDict{String,E.ModelVariable}("x" => E.ModelVariable(E.UnknownVariable))
+    eqs2 = E.Equation[
+        E.Equation(
+            E.OpExpr("D", E.ASTExpr[E.VarExpr("x")]; wrt = "t"),
+            E.NumExpr(0.0)
+        ),
+    ]
+    states2 = E.OrderedDict{String, E.ModelVariable}("x" => E.ModelVariable(E.UnknownVariable))
     @test isempty(E._pointwise_lifted_species(eqs2, states2))
 end
 
@@ -231,30 +302,49 @@ end
 # an array), under both compilers; a declared shape that disagrees is refused.
 @testset "shape from a faq's inline ranges" begin
     repo = joinpath(@__DIR__, "..", "..", "..")
-    doc = joinpath(repo, "tests", "conformance", "expression_templates",
-                   "metaparameter_resolutions", "expanded_n4.esm")
+    doc = joinpath(
+        repo, "tests", "conformance", "expression_templates",
+        "metaparameter_resolutions", "expanded_n4.esm"
+    )
     for compiler in (:interpreter, :native)
         prob = E.esm_problem(doc, (0.0, 1.0); compiler = compiler)
         @test E.observed_field(prob, "Sweep.Problem.ramp"; u = [3.0], t = 0.0) == [3.0, 6.0]
     end
-    ramp(shape) = Dict{String,Any}("esm"=>"1.1.0", "metadata"=>Dict("name"=>"R"),
-        "index_sets"=>Dict{String,Any}("c"=>Dict{String,Any}("kind"=>"interval","size"=>3)),
-        "models"=>Dict{String,Any}("M"=>Dict{String,Any}(
-            "variables"=>Dict{String,Any}(
-                "u"=>Dict{String,Any}("type"=>"unknown","default"=>1.0),
-                "ramp"=>merge(Dict{String,Any}("type"=>"unknown"),
-                              shape === nothing ? Dict{String,Any}() :
-                                                  Dict{String,Any}("shape"=>Any[shape]))),
-            "equations"=>Any[
-                Dict{String,Any}("lhs"=>Dict{String,Any}("op"=>"D","args"=>Any["u"],"wrt"=>"t"),
-                                 "rhs"=>op("*", -1, "u")),
-                Dict{String,Any}("lhs"=>"ramp","rhs"=>Dict{String,Any}("op"=>"faq",
-                    "args"=>Any[], "output_idx"=>Any["i"],
-                    "ranges"=>Dict{String,Any}("i"=>Any[1, 2]), "expr"=>op("*","u","i")))])))
+    ramp(shape) = Dict{String, Any}(
+        "esm" => "1.1.0", "metadata" => Dict("name" => "R"),
+        "index_sets" => Dict{String, Any}("c" => Dict{String, Any}("kind" => "interval", "size" => 3)),
+        "models" => Dict{String, Any}(
+            "M" => Dict{String, Any}(
+                "variables" => Dict{String, Any}(
+                    "u" => Dict{String, Any}("type" => "unknown", "default" => 1.0),
+                    "ramp" => merge(
+                        Dict{String, Any}("type" => "unknown"),
+                        shape === nothing ? Dict{String, Any}() :
+                            Dict{String, Any}("shape" => Any[shape])
+                    )
+                ),
+                "equations" => Any[
+                    Dict{String, Any}(
+                        "lhs" => Dict{String, Any}("op" => "D", "args" => Any["u"], "wrt" => "t"),
+                        "rhs" => op("*", -1, "u")
+                    ),
+                    Dict{String, Any}(
+                        "lhs" => "ramp", "rhs" => Dict{String, Any}(
+                            "op" => "faq",
+                            "args" => Any[], "output_idx" => Any["i"],
+                            "ranges" => Dict{String, Any}("i" => Any[1, 2]), "expr" => op("*", "u", "i")
+                        )
+                    ),
+                ]
+            )
+        )
+    )
     for compiler in (:interpreter, :native)
         prob = E.esm_problem(ramp(nothing), (0.0, 1.0); compiler = compiler)
         @test E.observed_field(prob, "M.ramp"; u = [2.0], t = 0.0) == [2.0, 4.0]
-        @test_throws E.DimensionPromotionError E.esm_problem(ramp("c"), (0.0, 1.0);
-                                                             compiler = compiler)
+        @test_throws E.DimensionPromotionError E.esm_problem(
+            ramp("c"), (0.0, 1.0);
+            compiler = compiler
+        )
     end
 end

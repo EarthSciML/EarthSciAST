@@ -44,7 +44,11 @@ using OrdinaryDiffEqTsit5: Tsit5
 
     tspan = (0.0, 100.0)
     times = [25.0, 50.0, 75.0, 100.0]
-    seed! = (u0, _vm) -> (@inbounds for i in eachindex(u0); u0[i] = Float64(i); end)
+    seed! = (u0, _vm) -> (
+        @inbounds for i in eachindex(u0)
+            u0[i] = Float64(i)
+        end
+    )
 
     dir = mktempdir()
     store_path = joinpath(dir, "out.zarr")
@@ -57,8 +61,10 @@ using OrdinaryDiffEqTsit5: Tsit5
 
     # (2) coordinate VALUES read back through the real reader.
     cache = EarthSciIO.Cache(EarthSciIO.LocalStore(joinpath(dir, "cache")); offline = false)
-    nds = EarthSciIO.read_store(EarthSciIO.ZarrReader(), cache, base_url;
-                                variables = String["Grid.c", "lon", "lat", "time"])
+    nds = EarthSciIO.read_store(
+        EarthSciIO.ZarrReader(), cache, base_url;
+        variables = String["Grid.c", "lon", "lat", "time"]
+    )
     @test collect(nds.variables["lon"].data) == [-100.0, -90.0, -80.0]
     @test collect(nds.variables["lat"].data) == [30.0, 40.0]
     @test nds.variables["lon"].dims == ["lon"]     # CF dimension coordinate (name == dim)

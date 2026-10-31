@@ -54,7 +54,7 @@ _refresh_fixture(name) = joinpath(@__DIR__, "fixtures", "refresh", name)
 # the cadence tests can assert exactly-once-per-boundary and never-in-between.
 mutable struct _RefreshLogProvider
     times::Vector{Float64}
-    fields::Dict{Float64,Dict{String,Vector{Float64}}}
+    fields::Dict{Float64, Dict{String, Vector{Float64}}}
     samples::Vector{Float64}
 end
 _RefreshLogProvider(times, fields) =
@@ -70,7 +70,7 @@ end
 
 # Scalar initial conditions over the coupled fixture's two 3-cell array states.
 function _coupled_ics()
-    ics = Dict{String,Float64}()
+    ics = Dict{String, Float64}()
     for k in 1:3
         ics["c[$k]"] = 0.0
         ics["d[$k]"] = 0.0
@@ -89,23 +89,29 @@ end
         @test file isa EarthSciAST.EsmFile
         model = file.models["M"]
 
-        scale  = [1.0, 2.0, 3.0]          # CONST factor — materialized once at build
+        scale = [1.0, 2.0, 3.0]          # CONST factor — materialized once at build
         srcbuf = [1.0, 1.0, 1.0]          # DISCRETE live buffer — the [0,1) segment value
-        f!, u0, p, _ts, vm = EarthSciAST._build_evaluator(file;
-            initial_conditions=_coupled_ics(),
-            const_arrays=Dict("scale" => scale),    # CONST: inlined once (no tstops)
-            param_arrays =Dict("src"  => srcbuf))   # DISCRETE: aliased, refreshed live
+        f!, u0, p, _ts, vm = EarthSciAST._build_evaluator(
+            file;
+            initial_conditions = _coupled_ics(),
+            const_arrays = Dict("scale" => scale),    # CONST: inlined once (no tstops)
+            param_arrays = Dict("src" => srcbuf)
+        )   # DISCRETE: aliased, refreshed live
 
-        prov = _RefreshLogProvider([1.0, 2.0], Dict(
-            1.0 => Dict("src" => [2.0, 2.0, 2.0]),
-            2.0 => Dict("src" => [3.0, 3.0, 3.0])))
+        prov = _RefreshLogProvider(
+            [1.0, 2.0], Dict(
+                1.0 => Dict("src" => [2.0, 2.0, 2.0]),
+                2.0 => Dict("src" => [3.0, 3.0, 3.0])
+            )
+        )
         cb, tstops = build_refresh_callback(;
-            providers=Dict("src" => prov),
-            buffers  =RefreshBuffers(Dict("src" => srcbuf)))   # SAME buffer object as param_arrays
+            providers = Dict("src" => prov),
+            buffers = RefreshBuffers(Dict("src" => srcbuf))
+        )   # SAME buffer object as param_arrays
         @test tstops == [1.0, 2.0]
 
         prob = ODE.ODEProblem(f!, u0, (0.0, 3.0), p)
-        sol  = ODE.solve(prob, ODE.Tsit5(); callback=cb, tstops=tstops)
+        sol = ODE.solve(prob, ODE.Tsit5(); callback = cb, tstops = tstops)
         @test sol.retcode == ODE.SciMLBase.ReturnCode.Success
 
         # rate r_k = scale .* src_k:  r0=[1,2,3], r1=[2,4,6], r2=[3,6,9].
@@ -113,44 +119,50 @@ end
         #   d(3) = 2.5·r0 + 1.5·r1 + 0.5·r2 = [7,14,21]       (coupled integral of c)
         c = [sol.u[end][vm["c[$k]"]] for k in 1:3]
         d = [sol.u[end][vm["d[$k]"]] for k in 1:3]
-        @test isapprox(c, [6.0, 12.0, 18.0]; atol=1e-7)
-        @test isapprox(d, [7.0, 14.0, 21.0]; atol=1e-7)   # dependent var recomputes from the refreshed buffer
+        @test isapprox(c, [6.0, 12.0, 18.0]; atol = 1.0e-7)
+        @test isapprox(d, [7.0, 14.0, 21.0]; atol = 1.0e-7)   # dependent var recomputes from the refreshed buffer
         @test srcbuf == [3.0, 3.0, 3.0]                   # buffer holds the LAST refresh (in place, not realloc)
     end
 
     @testset "cadence: CONST materialized once; DISCRETE once per boundary, no-op between" begin
         # The Julia mirror of Rust's const_materialized_once_discrete_refreshed_once_per_boundary.
-        file  = EarthSciAST.load_path(_refresh_fixture("coupled_forced.esm"))
+        file = EarthSciAST.load_path(_refresh_fixture("coupled_forced.esm"))
         model = file.models["M"]
-        scale  = [1.0, 2.0, 3.0]
+        scale = [1.0, 2.0, 3.0]
         srcbuf = [1.0, 1.0, 1.0]
-        f!, u0, p, _ts, _vm = EarthSciAST._build_evaluator(file;
-            initial_conditions=_coupled_ics(),
-            const_arrays=Dict("scale" => scale),
-            param_arrays =Dict("src"  => srcbuf))
+        f!, u0, p, _ts, _vm = EarthSciAST._build_evaluator(
+            file;
+            initial_conditions = _coupled_ics(),
+            const_arrays = Dict("scale" => scale),
+            param_arrays = Dict("src" => srcbuf)
+        )
 
         # DISCRETE `src`: refreshes at THREE interior anchors.
-        disc = _RefreshLogProvider([1.0, 2.0, 3.0], Dict(
-            1.0 => Dict("src" => [2.0, 2.0, 2.0]),
-            2.0 => Dict("src" => [3.0, 3.0, 3.0]),
-            3.0 => Dict("src" => [4.0, 4.0, 4.0])))
+        disc = _RefreshLogProvider(
+            [1.0, 2.0, 3.0], Dict(
+                1.0 => Dict("src" => [2.0, 2.0, 2.0]),
+                2.0 => Dict("src" => [3.0, 3.0, 3.0]),
+                3.0 => Dict("src" => [4.0, 4.0, 4.0])
+            )
+        )
         # CONST `scale`: empty refresh_times ⇒ provider_is_const ⇒ contributes no
         # tstops, is dropped from the callback, and is never sampled during the
         # solve (the materialize-once-at-setup witness). It need NOT be a buffer:
         # _group_discrete_providers drops CONST providers before the buffer check.
-        const_scale = _RefreshLogProvider(Float64[], Dict{Float64,Dict{String,Vector{Float64}}}())
+        const_scale = _RefreshLogProvider(Float64[], Dict{Float64, Dict{String, Vector{Float64}}}())
         @test provider_is_const(const_scale)
 
         cb, tstops = build_refresh_callback(;
-            providers=Dict("src" => disc, "scale" => const_scale),
-            buffers  =RefreshBuffers(Dict("src" => srcbuf)))
+            providers = Dict("src" => disc, "scale" => const_scale),
+            buffers = RefreshBuffers(Dict("src" => srcbuf))
+        )
         @test tstops == [1.0, 2.0, 3.0]   # union of the DISCRETE anchors; the CONST provider adds none
 
         # Cap the step size so the solver takes MANY interior steps. The affect
         # must still fire only at the anchors (no-op between) — proving the refresh
         # is cadence-driven, not per-step.
         prob = ODE.ODEProblem(f!, u0, (0.0, 4.0), p)
-        sol  = ODE.solve(prob, ODE.Tsit5(); callback=cb, tstops=tstops, dtmax=0.1)
+        sol = ODE.solve(prob, ODE.Tsit5(); callback = cb, tstops = tstops, dtmax = 0.1)
         @test sol.retcode == ODE.SciMLBase.ReturnCode.Success
         @test length(sol.t) >= 30                 # genuinely many steps within the window
 
@@ -164,14 +176,16 @@ end
         # The hot per-step path only READS the live buffer, so it must allocate
         # nothing — both before any refresh and after one driven through the full
         # callback machinery (sample → buf .=), which mutates in place.
-        file  = EarthSciAST.load_path(_refresh_fixture("coupled_forced.esm"))
+        file = EarthSciAST.load_path(_refresh_fixture("coupled_forced.esm"))
         model = file.models["M"]
-        scale  = [1.0, 2.0, 3.0]
+        scale = [1.0, 2.0, 3.0]
         srcbuf = [1.0, 1.0, 1.0]
-        f!, u0, p, _ts, _vm = EarthSciAST._build_evaluator(file;
-            initial_conditions=_coupled_ics(),
-            const_arrays=Dict("scale" => scale),
-            param_arrays =Dict("src"  => srcbuf))
+        f!, u0, p, _ts, _vm = EarthSciAST._build_evaluator(
+            file;
+            initial_conditions = _coupled_ics(),
+            const_arrays = Dict("scale" => scale),
+            param_arrays = Dict("src" => srcbuf)
+        )
         du = similar(u0)
 
         @test rhs_alloc_bytes(f!, du, u0, p, 0.0) == 0   # before any refresh
@@ -180,10 +194,11 @@ end
         # a real in-place refresh through the machinery, not a hand-poked buffer.
         prov = _RefreshLogProvider([1.0], Dict(1.0 => Dict("src" => [9.0, 9.0, 9.0])))
         cb, tstops = build_refresh_callback(;
-            providers=Dict("src" => prov),
-            buffers  =RefreshBuffers(Dict("src" => srcbuf)))
+            providers = Dict("src" => prov),
+            buffers = RefreshBuffers(Dict("src" => srcbuf))
+        )
         prob = ODE.ODEProblem(f!, u0, (0.0, 1.5), p)
-        sol  = ODE.solve(prob, ODE.Tsit5(); callback=cb, tstops=tstops)
+        sol = ODE.solve(prob, ODE.Tsit5(); callback = cb, tstops = tstops)
         @test sol.retcode == ODE.SciMLBase.ReturnCode.Success
         @test prov.samples == [1.0]
         @test srcbuf == [9.0, 9.0, 9.0]                  # the buffer was genuinely refreshed in place

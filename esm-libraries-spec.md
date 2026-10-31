@@ -1372,6 +1372,17 @@ All libraries (including Core tier) must implement the flattening algorithm. Fla
      `integral`'s `int_var`) are resolved positionally and are NOT namespaced — and a join
      name that is one of the clause-bearing node's OWN binders stays a loop symbol even when
      a local variable of that name is declared, a shadowing esm-spec §4.3.1 permits.
+   - The same shadowing holds for a loop symbol's **occurrences** in expression position,
+     not only for the binder fields themselves (esm-spec §4.3, "Shadowing"). Inside a node
+     of any `op` that binds `j` (an `output_idx` entry, a `ranges` key, or an `integral`'s
+     `int_var`), a bare `j` in any of the node's children — `expr`, `filter`, `key`, range
+     bounds, an integrand, nested nodes — is the loop index and MUST NOT be prefixed, even
+     when the component declares a variable named `j`; a `j` outside that node is the
+     variable and is prefixed as usual. A dotted `j.x` is not shadowed: if `j` is a local
+     subsystem it is prefixed like any other subsystem-local reference. Prefixing the bound
+     occurrence turns `faq(output_idx: [j], expr: index(u, j))` into a read of `u` at the
+     constant subscript `Component.j`, a different model with no diagnostic. Pinned by
+     `tests/scoping/index_symbol_shadows_variable.esm` in the flatten conformance corpus.
 
    **Between steps 2 and 3 — Expand coupling imports (esm-spec §10.10).** Before applying coupling
    rules, replace each `coupling_import` entry in the coupling sequence with the concrete edges its

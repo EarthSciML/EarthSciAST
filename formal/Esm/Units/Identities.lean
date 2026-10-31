@@ -40,7 +40,7 @@ theorem mk_div (d d' : Dim) (q q' : ℚ) (hq : q ≠ 0) (hq' : q' ≠ 0) :
   refine U.agree_trans (mk_mul d (-d') q q'⁻¹ hq (inv_ne_zero hq')) ?_
   exact agree_mk (by abel) (by rw [div_eq_mul_inv])
 
-theorem mk_rpow_nat (d : Dim) (q : ℚ) (hq : q ≠ 0) (n : ℕ) :
+theorem mk_rpow_nat (d : Dim) (q : ℚ) (_hq : q ≠ 0) (n : ℕ) :
     ((mk d q).rpow n).Agree (mk ((n : ℚ) • d) (q ^ n)) := by
   rw [U.agree_iff]
   refine ⟨rfl, ?_⟩
@@ -127,7 +127,7 @@ theorem mi_factorization :
       padicValRat.mul (by norm_num) (by norm_num), padicValRat.inv]
     simp only [padicValRat.pow, n2, n3, n5, n11, n127]
     rcases p with ⟨p, hp⟩
-    simp only [Scale.exp_cons, Scale.exp_nil, Base.prime.injEq, Subtype.mk.injEq]
+    simp only [Scale.exp_cons, Scale.exp_nil]
     by_cases h2 : p = 2
     · subst h2; simp only [Base.prime_mk_eq]; norm_num
     by_cases h3 : p = 3
@@ -181,7 +181,7 @@ theorem psi_eq_lbf_per_in2 :
         (((num 0.0254).mul (sym "m")).rpow 2)) := by
   rw [U.agree_iff]
   simp only [sym_psi, sym_lb, sym_m, sym_s, num, mk, U.div, U.mul, U.inv, U.rpow]
-  refine ⟨dim_ext fun a => by cases a <;> simp [dimless, pressure, mass, len, time, D] <;> norm_num, ?_⟩
+  refine ⟨dim_ext fun a => by cases a <;> simp [dimless, pressure, mass, len, time, D]; norm_num, ?_⟩
   funext b
   cases b with
   | pi => simp
@@ -199,7 +199,7 @@ theorem hp_eq_550_ft_lbf_per_s :
         ((sym "m").mul ((sym "s").rpow (-3)))) := by
   rw [U.agree_iff]
   simp only [sym_hp, sym_ft, sym_lb, sym_m, sym_s, num, mk, U.mul, U.rpow]
-  refine ⟨dim_ext fun a => by cases a <;> simp [dimless, power, mass, len, time, D] <;> norm_num, ?_⟩
+  refine ⟨dim_ext fun a => by cases a <;> simp [dimless, power, mass, len, time, D]; norm_num, ?_⟩
   funext b
   cases b with
   | pi => simp
@@ -233,7 +233,7 @@ theorem deg_eq_pi_div_180 :
 theorem sr_eq_rad_sq : (sym "sr").Agree ((sym "rad").rpow 2) := by
   rw [sym_sr, sym_rad]
   refine U.agree_symm (U.agree_trans (mk_rpow_nat _ _ (by norm_num) 2) ?_)
-  exact agree_mk (dim_ext fun a => by cases a <;> simp [solidAngle, angle, D] <;> norm_num)
+  exact agree_mk (dim_ext fun a => by cases a <;> simp [solidAngle, angle, D])
     (by norm_num)
 
 /-- The mixing ratios, fractions and counts are dimensionless. -/
@@ -304,7 +304,7 @@ theorem gal_eq_231_in3 :
     (sym "gal").Agree ((num 231).mul (((num 0.0254).mul (sym "m")).rpow 3)) := by
   rw [U.agree_iff]
   simp only [sym_gal, sym_m, num, mk, U.mul, U.rpow]
-  refine ⟨dim_ext fun a => by cases a <;> simp [dimless, vol, len, D] <;> norm_num, ?_⟩
+  refine ⟨dim_ext fun a => by cases a <;> simp [dimless, vol, len, D], ?_⟩
   funext b
   cases b with
   | pi => simp

@@ -59,7 +59,7 @@ function create_atmospheric_chemistry_system()
         Reaction(k1, [NO, O3], [NO2]),
 
         # NO2 photolysis: NO2 → NO + O (simplified as producing O3)
-        Reaction(jNO2, [NO2], [NO, O3])
+        Reaction(jNO2, [NO2], [NO, O3]),
     ]
 
     @named rs = ReactionSystem(rxs, t)
@@ -79,28 +79,28 @@ function setup_initial_conditions_and_parameters()
         :k1 => 1.8e-12,     # NO + O3 rate constant (cm³/molec/s)
         :jNO2 => 0.005,     # NO2 photolysis rate (1/s)
         :T => 298.15,       # Temperature (K)
-        :M => 2.46e19       # Air number density (molec/cm³)
+        :M => 2.46e19,       # Air number density (molec/cm³)
     ]
 
     # Initial conditions (concentrations in mol/mol)
     u0 = [
-        :O3 => 40e-9,       # 40 ppb ozone
+        :O3 => 40.0e-9,       # 40 ppb ozone
         :NO => 0.1e-9,      # 0.1 ppb NO
-        :NO2 => 1.0e-9      # 1 ppb NO2
+        :NO2 => 1.0e-9,      # 1 ppb NO2
     ]
 
     println("✓ Initial conditions and parameters set")
-    println("  O3: $(u0[1][2]*1e9) ppb")
-    println("  NO: $(u0[2][2]*1e9) ppb")
-    println("  NO2: $(u0[3][2]*1e9) ppb")
+    println("  O3: $(u0[1][2] * 1.0e9) ppb")
+    println("  NO: $(u0[2][2] * 1.0e9) ppb")
+    println("  NO2: $(u0[3][2] * 1.0e9) ppb")
 
     return u0, params
 end
 
-function run_atmospheric_simulation(rs, u0, params; tspan=(0.0, 6*3600))
+function run_atmospheric_simulation(rs, u0, params; tspan = (0.0, 6 * 3600))
     """Run the atmospheric chemistry simulation using DifferentialEquations.jl."""
 
-    println("✓ Running chemistry simulation for $(tspan[2]/3600) hours...")
+    println("✓ Running chemistry simulation for $(tspan[2] / 3600) hours...")
 
     # Convert to ODE system
     osys = convert(ODESystem, rs)
@@ -109,7 +109,7 @@ function run_atmospheric_simulation(rs, u0, params; tspan=(0.0, 6*3600))
     oprob = ODEProblem(osys, u0, tspan, params)
 
     # Solve with appropriate solver for atmospheric chemistry (stiff system)
-    sol = solve(oprob, Rosenbrock23(), reltol=1e-8, abstol=1e-10)
+    sol = solve(oprob, Rosenbrock23(), reltol = 1.0e-8, abstol = 1.0e-10)
 
     if sol.retcode == :Success
         println("✅ Simulation completed successfully")
@@ -133,11 +133,11 @@ function verify_chemistry_results(sol, u0)
     species_names = ["O3", "NO", "NO2"]
     initial_values = [u0[1][2], u0[2][2], u0[3][2]]  # Extract values from pairs
 
-    println("Final concentrations after $(sol.t[end]/3600) hours:")
+    println("Final concentrations after $(sol.t[end] / 3600) hours:")
     for (i, (name, init_val)) in enumerate(zip(species_names, initial_values))
         final_val = final_state[i]
         change = ((final_val - init_val) / init_val * 100)
-        println("  $name: $(final_val*1e9) ppb ($(change > 0 ? "+" : "")$(round(change, digits=1))%)")
+        println("  $name: $(final_val * 1.0e9) ppb ($(change > 0 ? "+" : "")$(round(change, digits = 1))%)")
     end
 
     verification_passed = true
@@ -150,7 +150,7 @@ function verify_chemistry_results(sol, u0)
     final_nox = final_state[2] + final_state[3]
     nox_error = abs(final_nox - initial_nox) / initial_nox * 100
 
-    println("   NOx conservation: $(round(nox_error, digits=6))% error")
+    println("   NOx conservation: $(round(nox_error, digits = 6))% error")
     if nox_error > 0.1
         println("   ❌ NOx not well conserved")
         verification_passed = false
@@ -167,10 +167,10 @@ function verify_chemistry_results(sol, u0)
         if conc < 0
             println("   ❌ $name concentration is negative: $conc")
             all_positive = false
-        elseif conc > 1e-6
-            println("   ⚠️  $name concentration unusually high: $(conc*1e6) ppm")
+        elseif conc > 1.0e-6
+            println("   ⚠️  $name concentration unusually high: $(conc * 1.0e6) ppm")
         else
-            println("   ✅ $name concentration reasonable: $(round(conc*1e9, digits=1)) ppb")
+            println("   ✅ $name concentration reasonable: $(round(conc * 1.0e9, digits = 1)) ppb")
         end
     end
 
@@ -182,7 +182,7 @@ function verify_chemistry_results(sol, u0)
     println("\n3️⃣ Chemical Behavior Check:")
 
     o3_change = ((final_state[1] - initial_values[1]) / initial_values[1] * 100)
-    println("   O3 change: $(o3_change > 0 ? "+" : "")$(round(o3_change, digits=1))%")
+    println("   O3 change: $(o3_change > 0 ? "+" : "")$(round(o3_change, digits = 1))%")
 
     if abs(o3_change) > 50
         println("   ⚠️  O3 change is large but may be realistic for photochemistry")
@@ -225,38 +225,46 @@ function create_verification_plots(sol, u0)
     t_hours = sol.t ./ 3600
 
     # Extract species time series
-    o3_series = [u[1] for u in sol.u] .* 1e9  # Convert to ppb
-    no_series = [u[2] for u in sol.u] .* 1e9
-    no2_series = [u[3] for u in sol.u] .* 1e9
+    o3_series = [u[1] for u in sol.u] .* 1.0e9  # Convert to ppb
+    no_series = [u[2] for u in sol.u] .* 1.0e9
+    no2_series = [u[3] for u in sol.u] .* 1.0e9
 
     # Create plots
-    p1 = plot(t_hours, [o3_series no_series no2_series],
-              labels=["O3" "NO" "NO2"],
-              xlabel="Time (hours)", ylabel="Concentration (ppb)",
-              title="Species Evolution",
-              linewidth=2, grid=true)
+    p1 = plot(
+        t_hours, [o3_series no_series no2_series],
+        labels = ["O3" "NO" "NO2"],
+        xlabel = "Time (hours)", ylabel = "Concentration (ppb)",
+        title = "Species Evolution",
+        linewidth = 2, grid = true
+    )
 
     # NOx conservation plot
     nox_total = no_series .+ no2_series
-    initial_nox = (u0[2][2] + u0[3][2]) * 1e9
+    initial_nox = (u0[2][2] + u0[3][2]) * 1.0e9
 
-    p2 = plot(t_hours, nox_total,
-              label="Total NOx", color=:purple, linewidth=2,
-              xlabel="Time (hours)", ylabel="NOx (ppb)",
-              title="NOx Conservation", grid=true)
-    hline!([initial_nox], label="Initial NOx", linestyle=:dash, color=:purple, alpha=0.5)
+    p2 = plot(
+        t_hours, nox_total,
+        label = "Total NOx", color = :purple, linewidth = 2,
+        xlabel = "Time (hours)", ylabel = "NOx (ppb)",
+        title = "NOx Conservation", grid = true
+    )
+    hline!([initial_nox], label = "Initial NOx", linestyle = :dash, color = :purple, alpha = 0.5)
 
     # Phase plot: NO vs NO2
-    p3 = plot(no_series, no2_series,
-              color=:darkgreen, linewidth=2,
-              xlabel="NO (ppb)", ylabel="NO2 (ppb)",
-              title="NO-NO2 Phase Space", grid=true, label="")
-    scatter!([no_series[1]], [no2_series[1]], color=:green, markersize=6, label="Start")
-    scatter!([no_series[end]], [no2_series[end]], color=:red, markersize=6, label="End")
+    p3 = plot(
+        no_series, no2_series,
+        color = :darkgreen, linewidth = 2,
+        xlabel = "NO (ppb)", ylabel = "NO2 (ppb)",
+        title = "NO-NO2 Phase Space", grid = true, label = ""
+    )
+    scatter!([no_series[1]], [no2_series[1]], color = :green, markersize = 6, label = "Start")
+    scatter!([no_series[end]], [no2_series[end]], color = :red, markersize = 6, label = "End")
 
     # Combine plots
-    combined_plot = plot(p1, p2, p3, layout=(2,2), size=(800, 600),
-                        plot_title="Atmospheric Chemistry Simulation Verification")
+    combined_plot = plot(
+        p1, p2, p3, layout = (2, 2), size = (800, 600),
+        plot_title = "Atmospheric Chemistry Simulation Verification"
+    )
 
     # Save plot
     output_path = joinpath(@__DIR__, "atmospheric_chemistry_verification_julia.png")
@@ -278,7 +286,7 @@ function run_end_to_end_verification()
     """
 
     println("🌍 Starting End-to-End Atmospheric Chemistry Verification (Julia)")
-    println("=" ^ 70)
+    println("="^70)
 
     try
         # Step 1: Load ESM file
@@ -306,7 +314,7 @@ function run_end_to_end_verification()
         create_verification_plots(sol, u0)
 
         # Final summary
-        println("\n" * "=" ^ 70)
+        println("\n" * "="^70)
         if verification_passed
             println("🎉 END-TO-END VERIFICATION PASSED!")
             println("   The ESM format atmospheric chemistry application works correctly.")

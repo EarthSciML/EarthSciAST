@@ -15,24 +15,26 @@ Based on ESM Format Specification Section 6.1 algorithms.
 """
 
 # Element lookup table for chemical subscript detection (118 elements)
-const ELEMENTS = Set([
-    # Period 1
-    "H", "He",
-    # Period 2
-    "Li", "Be", "B", "C", "N", "O", "F", "Ne",
-    # Period 3
-    "Na", "Mg", "Al", "Si", "P", "S", "Cl", "Ar",
-    # Period 4
-    "K", "Ca", "Sc", "Ti", "V", "Cr", "Mn", "Fe", "Co", "Ni", "Cu", "Zn", "Ga", "Ge", "As", "Se", "Br", "Kr",
-    # Period 5
-    "Rb", "Sr", "Y", "Zr", "Nb", "Mo", "Tc", "Ru", "Rh", "Pd", "Ag", "Cd", "In", "Sn", "Sb", "Te", "I", "Xe",
-    # Period 6
-    "Cs", "Ba", "La", "Ce", "Pr", "Nd", "Pm", "Sm", "Eu", "Gd", "Tb", "Dy", "Ho", "Er", "Tm", "Yb", "Lu",
-    "Hf", "Ta", "W", "Re", "Os", "Ir", "Pt", "Au", "Hg", "Tl", "Pb", "Bi", "Po", "At", "Rn",
-    # Period 7
-    "Fr", "Ra", "Ac", "Th", "Pa", "U", "Np", "Pu", "Am", "Cm", "Bk", "Cf", "Es", "Fm", "Md", "No", "Lr",
-    "Rf", "Db", "Sg", "Bh", "Hs", "Mt", "Ds", "Rg", "Cn", "Nh", "Fl", "Mc", "Lv", "Ts", "Og"
-])
+const ELEMENTS = Set(
+    [
+        # Period 1
+        "H", "He",
+        # Period 2
+        "Li", "Be", "B", "C", "N", "O", "F", "Ne",
+        # Period 3
+        "Na", "Mg", "Al", "Si", "P", "S", "Cl", "Ar",
+        # Period 4
+        "K", "Ca", "Sc", "Ti", "V", "Cr", "Mn", "Fe", "Co", "Ni", "Cu", "Zn", "Ga", "Ge", "As", "Se", "Br", "Kr",
+        # Period 5
+        "Rb", "Sr", "Y", "Zr", "Nb", "Mo", "Tc", "Ru", "Rh", "Pd", "Ag", "Cd", "In", "Sn", "Sb", "Te", "I", "Xe",
+        # Period 6
+        "Cs", "Ba", "La", "Ce", "Pr", "Nd", "Pm", "Sm", "Eu", "Gd", "Tb", "Dy", "Ho", "Er", "Tm", "Yb", "Lu",
+        "Hf", "Ta", "W", "Re", "Os", "Ir", "Pt", "Au", "Hg", "Tl", "Pb", "Bi", "Po", "At", "Rn",
+        # Period 7
+        "Fr", "Ra", "Ac", "Th", "Pa", "U", "Np", "Pu", "Am", "Cm", "Bk", "Cf", "Es", "Fm", "Md", "No", "Lr",
+        "Rf", "Db", "Sg", "Bh", "Hs", "Mt", "Ds", "Rg", "Cn", "Nh", "Fl", "Mc", "Lv", "Ts", "Og",
+    ]
+)
 
 # Unicode subscripts for digits 0-9
 const SUBSCRIPT_MAP = Dict(
@@ -60,45 +62,47 @@ end
 # Named Greek spellings (lowercase + selected capitalized). Used to decide
 # whether a bare variable is a Greek letter that must pass through the LaTeX
 # `\mathrm{}` wrap untouched (the `convert_greek_letters` step maps it later).
-const GREEK_NAMES = Set([
-    "alpha","beta","gamma","delta","epsilon","zeta","eta","theta","iota",
-    "kappa","lambda","mu","nu","xi","omicron","pi","rho","sigma","tau",
-    "upsilon","phi","chi","psi","omega",
-    "Gamma","Delta","Theta","Lambda","Xi","Pi","Sigma","Upsilon","Phi","Psi","Omega",
-])
+const GREEK_NAMES = Set(
+    [
+        "alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta", "iota",
+        "kappa", "lambda", "mu", "nu", "xi", "omicron", "pi", "rho", "sigma", "tau",
+        "upsilon", "phi", "chi", "psi", "omega",
+        "Gamma", "Delta", "Theta", "Lambda", "Xi", "Pi", "Sigma", "Upsilon", "Phi", "Psi", "Omega",
+    ]
+)
 
 # name / unicode-symbol → LaTeX command.
-const GREEK_TO_LATEX = Dict{String,String}(
-    "alpha"=>"\\alpha","beta"=>"\\beta","gamma"=>"\\gamma","delta"=>"\\delta",
-    "epsilon"=>"\\epsilon","zeta"=>"\\zeta","eta"=>"\\eta","theta"=>"\\theta",
-    "iota"=>"\\iota","kappa"=>"\\kappa","lambda"=>"\\lambda","mu"=>"\\mu",
-    "nu"=>"\\nu","xi"=>"\\xi","omicron"=>"\\omicron","pi"=>"\\pi","rho"=>"\\rho",
-    "sigma"=>"\\sigma","tau"=>"\\tau","upsilon"=>"\\upsilon","phi"=>"\\phi",
-    "chi"=>"\\chi","psi"=>"\\psi","omega"=>"\\omega",
-    "Gamma"=>"\\Gamma","Delta"=>"\\Delta","Theta"=>"\\Theta","Lambda"=>"\\Lambda",
-    "Xi"=>"\\Xi","Pi"=>"\\Pi","Sigma"=>"\\Sigma","Upsilon"=>"\\Upsilon",
-    "Phi"=>"\\Phi","Psi"=>"\\Psi","Omega"=>"\\Omega",
-    "α"=>"\\alpha","β"=>"\\beta","γ"=>"\\gamma","δ"=>"\\delta","ε"=>"\\epsilon",
-    "ζ"=>"\\zeta","η"=>"\\eta","θ"=>"\\theta","ι"=>"\\iota","κ"=>"\\kappa",
-    "λ"=>"\\lambda","μ"=>"\\mu","ν"=>"\\nu","ξ"=>"\\xi","ο"=>"\\omicron",
-    "π"=>"\\pi","ρ"=>"\\rho","σ"=>"\\sigma","τ"=>"\\tau","υ"=>"\\upsilon",
-    "φ"=>"\\phi","χ"=>"\\chi","ψ"=>"\\psi","ω"=>"\\omega",
+const GREEK_TO_LATEX = Dict{String, String}(
+    "alpha" => "\\alpha", "beta" => "\\beta", "gamma" => "\\gamma", "delta" => "\\delta",
+    "epsilon" => "\\epsilon", "zeta" => "\\zeta", "eta" => "\\eta", "theta" => "\\theta",
+    "iota" => "\\iota", "kappa" => "\\kappa", "lambda" => "\\lambda", "mu" => "\\mu",
+    "nu" => "\\nu", "xi" => "\\xi", "omicron" => "\\omicron", "pi" => "\\pi", "rho" => "\\rho",
+    "sigma" => "\\sigma", "tau" => "\\tau", "upsilon" => "\\upsilon", "phi" => "\\phi",
+    "chi" => "\\chi", "psi" => "\\psi", "omega" => "\\omega",
+    "Gamma" => "\\Gamma", "Delta" => "\\Delta", "Theta" => "\\Theta", "Lambda" => "\\Lambda",
+    "Xi" => "\\Xi", "Pi" => "\\Pi", "Sigma" => "\\Sigma", "Upsilon" => "\\Upsilon",
+    "Phi" => "\\Phi", "Psi" => "\\Psi", "Omega" => "\\Omega",
+    "α" => "\\alpha", "β" => "\\beta", "γ" => "\\gamma", "δ" => "\\delta", "ε" => "\\epsilon",
+    "ζ" => "\\zeta", "η" => "\\eta", "θ" => "\\theta", "ι" => "\\iota", "κ" => "\\kappa",
+    "λ" => "\\lambda", "μ" => "\\mu", "ν" => "\\nu", "ξ" => "\\xi", "ο" => "\\omicron",
+    "π" => "\\pi", "ρ" => "\\rho", "σ" => "\\sigma", "τ" => "\\tau", "υ" => "\\upsilon",
+    "φ" => "\\phi", "χ" => "\\chi", "ψ" => "\\psi", "ω" => "\\omega",
 )
 
 # named Greek → unicode symbol.
-const GREEK_NAME_TO_UNICODE = Dict{String,String}(
-    "phi"=>"φ","theta"=>"θ","gamma"=>"γ","alpha"=>"α","beta"=>"β","delta"=>"δ",
-    "epsilon"=>"ε","zeta"=>"ζ","eta"=>"η","iota"=>"ι","kappa"=>"κ","lambda"=>"λ",
-    "mu"=>"μ","nu"=>"ν","xi"=>"ξ","omicron"=>"ο","pi"=>"π","rho"=>"ρ",
-    "sigma"=>"σ","tau"=>"τ","upsilon"=>"υ","chi"=>"χ","psi"=>"ψ","omega"=>"ω",
+const GREEK_NAME_TO_UNICODE = Dict{String, String}(
+    "phi" => "φ", "theta" => "θ", "gamma" => "γ", "alpha" => "α", "beta" => "β", "delta" => "δ",
+    "epsilon" => "ε", "zeta" => "ζ", "eta" => "η", "iota" => "ι", "kappa" => "κ", "lambda" => "λ",
+    "mu" => "μ", "nu" => "ν", "xi" => "ξ", "omicron" => "ο", "pi" => "π", "rho" => "ρ",
+    "sigma" => "σ", "tau" => "τ", "upsilon" => "υ", "chi" => "χ", "psi" => "ψ", "omega" => "ω",
 )
 
 # unicode symbol → ascii name.
-const GREEK_UNICODE_TO_ASCII = Dict{String,String}(
-    "φ"=>"phi","θ"=>"theta","γ"=>"gamma","α"=>"alpha","β"=>"beta","δ"=>"delta",
-    "ε"=>"epsilon","ζ"=>"zeta","η"=>"eta","ι"=>"iota","κ"=>"kappa","λ"=>"lambda",
-    "μ"=>"mu","ν"=>"nu","ξ"=>"xi","ο"=>"omicron","π"=>"pi","ρ"=>"rho","σ"=>"sigma",
-    "τ"=>"tau","υ"=>"upsilon","χ"=>"chi","ψ"=>"psi","ω"=>"omega",
+const GREEK_UNICODE_TO_ASCII = Dict{String, String}(
+    "φ" => "phi", "θ" => "theta", "γ" => "gamma", "α" => "alpha", "β" => "beta", "δ" => "delta",
+    "ε" => "epsilon", "ζ" => "zeta", "η" => "eta", "ι" => "iota", "κ" => "kappa", "λ" => "lambda",
+    "μ" => "mu", "ν" => "nu", "ξ" => "xi", "ο" => "omicron", "π" => "pi", "ρ" => "rho", "σ" => "sigma",
+    "τ" => "tau", "υ" => "upsilon", "χ" => "chi", "ψ" => "psi", "ω" => "omega",
 )
 
 const _GREEK_NAME_ALT = "alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kappa|lambda|mu|nu|xi|omicron|pi|rho|sigma|tau|upsilon|phi|chi|psi|omega"
@@ -155,7 +159,7 @@ function _scan_element_tokens(on_element::Function, on_other::Function, variable
 
     while i <= n
         # Try 2-character element first (greedy matching), then 1-character.
-        len = if i + 1 <= n && String(chars[i:i+1]) in ELEMENTS
+        len = if i + 1 <= n && String(chars[i:(i + 1)]) in ELEMENTS
             2
         elseif string(chars[i]) in ELEMENTS
             1
@@ -171,13 +175,13 @@ function _scan_element_tokens(on_element::Function, on_other::Function, variable
         end
 
         found = true
-        element = String(chars[i:i+len-1])
+        element = String(chars[i:(i + len - 1)])
         i += len
         digit_start = i
         while i <= n && isdigit(chars[i])
             i += 1
         end
-        on_element(element, String(chars[digit_start:i-1]))
+        on_element(element, String(chars[digit_start:(i - 1)]))
     end
 
     return found
@@ -200,7 +204,8 @@ function has_element_pattern(variable::AbstractString)
     _scan_element_tokens(
         (element, digits) -> (hasel[] = true),
         c -> (('A' <= c <= 'Z' || 'a' <= c <= 'z') && (disq[] = true)),
-        clean)
+        clean
+    )
     return hasel[] && !disq[]
 end
 
@@ -247,8 +252,8 @@ function get_chemical_suffix(variable::AbstractString)
     end
     # Character-based split (byte slicing throws on multi-byte names like "α2").
     chars = collect(v)
-    for i in 1:length(chars)-1
-        pre = String(chars[1:i]); suf = String(chars[i+1:end])
+    for i in 1:(length(chars) - 1)
+        pre = String(chars[1:i]); suf = String(chars[(i + 1):end])
         has_element_pattern(suf) && !has_element_pattern(pre) && return (pre, suf)
     end
     return nothing
@@ -349,7 +354,7 @@ function format_chemical_latex(variable::AbstractString)
         if any(has_element_pattern, parts)
             base = parts[1]
             result = (length(base) == 1 && occursin(r"[A-Za-z]", base)) ? String(base) :
-                     has_element_pattern(base) ? format_chemical_latex(base) : "\\mathrm{$base}"
+                has_element_pattern(base) ? format_chemical_latex(base) : "\\mathrm{$base}"
             for i in 2:length(parts)
                 part = parts[i]
                 if has_element_pattern(part)
@@ -415,8 +420,12 @@ function format_chemical_unicode(variable::AbstractString)
         if occursin("_", v)
             parts = split(v, "_")
             if any(has_element_pattern, parts)
-                return join((has_element_pattern(p) ? format_chemical_unicode(String(p)) : String(p)
-                             for p in parts), "_")
+                return join(
+                    (
+                        has_element_pattern(p) ? format_chemical_unicode(String(p)) : String(p)
+                            for p in parts
+                    ), "_"
+                )
             end
         end
         return v
@@ -432,7 +441,8 @@ function format_chemical_unicode(variable::AbstractString)
             end
         end,
         c -> print(buf, (isdigit(c) && haskey(SUBSCRIPT_MAP, c)) ? SUBSCRIPT_MAP[c] : c),
-        v)
+        v
+    )
     return String(take!(buf))
 end
 
@@ -501,7 +511,7 @@ function format_number(num::Real, format::Symbol)
         # rounding instead lost precision (4.4308006468156513e-17 printed as
         # 4.43080064681565e-17, which reads back as a different number).
         ms = (num < 0 ? "-" : "") * digits[1:1] * "." *
-             (length(digits) == 1 ? "0" : digits[2:end])
+            (length(digits) == 1 ? "0" : digits[2:end])
         if format == :unicode
             return "$(_uni_minus(ms))×10$(to_superscript(string(exp)))"
         elseif format == :latex
@@ -522,7 +532,7 @@ end
 # from the op registry's `display_prec` column (src/op_registry.jl; pinned
 # literal-for-literal by test/op_registry_test.jl). Hoisted to a module const:
 # `get_operator_precedence` runs for every operand rendered.
-const _DISPLAY_OP_PRECEDENCE = let d = Dict{String,Int}()
+const _DISPLAY_OP_PRECEDENCE = let d = Dict{String, Int}()
     for s in _OP_TABLE
         s.display_prec === nothing || (d[s.name] = s.display_prec)
     end
@@ -601,8 +611,10 @@ a unary `-` from a binary one; it defaults to the binary case. Under
 `format=:latex` a product never parenthesizes a binary `/` operand, since
 `\\frac{…}{…}` is self-delimiting.
 """
-function needs_parentheses(parent_op::String, child::ASTExpr, is_right_operand::Bool=false,
-                           parent_argc::Int=2; format::Symbol=:ascii)
+function needs_parentheses(
+        parent_op::String, child::ASTExpr, is_right_operand::Bool = false,
+        parent_argc::Int = 2; format::Symbol = :ascii
+    )
     if isa(child, NumExpr) || isa(child, IntExpr) || isa(child, VarExpr)
         return false
     end
@@ -669,7 +681,7 @@ Unicode display: chemical subscripts via element-aware tokenizer, ∂x/∂t deri
 · for multiplication, − for unary minus, scientific notation with Unicode superscripts.
 """
 function Base.show(io::IO, ::MIME"text/plain", expr::ASTExpr)
-    print(io, format_expression_unicode(expr))
+    return print(io, format_expression_unicode(expr))
 end
 
 """
@@ -678,7 +690,7 @@ end
 LaTeX display: \\frac{}{}, \\partial, \\mathrm{} for species.
 """
 function Base.show(io::IO, ::MIME"text/latex", expr::ASTExpr)
-    print(io, format_expression_latex(expr))
+    return print(io, format_expression_latex(expr))
 end
 
 """
@@ -687,7 +699,7 @@ end
 ASCII display: plain ASCII mathematical notation with standard operators (*, /, ^).
 """
 function Base.show(io::IO, ::MIME"text/ascii", expr::ASTExpr)
-    print(io, format_expression_ascii(expr))
+    return print(io, format_expression_ascii(expr))
 end
 
 """
@@ -758,9 +770,9 @@ end
 # Raw name for an `enum` type/member arg (the leaf identifier, not its rendered
 # form — the whole `Type.Member` label is wrapped once in LaTeX).
 _enum_name(e) = e isa VarExpr ? e.name :
-                e isa IntExpr ? string(e.value) :
-                e isa NumExpr ? format_number(e.value, :ascii) :
-                format_expression(e, :ascii)
+    e isa IntExpr ? string(e.value) :
+    e isa NumExpr ? format_number(e.value, :ascii) :
+    format_expression(e, :ascii)
 
 """Format a `const` node's literal value (scalar number or nested array)."""
 function format_const_value(value, format::Symbol)
@@ -796,12 +808,12 @@ end
 function aggregate_symbol(semiring, reduce, format::Symbol)
     fam = if semiring !== nothing
         (semiring == "max_product" || semiring == "max_sum") ? :max :
-        semiring == "min_sum" ? :min :
-        semiring == "bool_and_or" ? :bool : :plus
+            semiring == "min_sum" ? :min :
+            semiring == "bool_and_or" ? :bool : :plus
     else
         reduce == "*" ? :times :
-        reduce == "max" ? :max :
-        reduce == "min" ? :min : :plus
+            reduce == "max" ? :max :
+            reduce == "min" ? :min : :plus
     end
     tbl = Dict(
         :plus => ("Σ", "\\sum", "sum"),
@@ -842,7 +854,7 @@ end
 function _display_join_clause(clause::_OverlapJoinSpec, format::Symbol)
     slack = clause.eps_given ? ", eps=$(format_number(clause.eps, format))" : ""
     return "overlap(src=[$(join(clause.src_env, ", "))], " *
-           "tgt=[$(join(clause.tgt_env, ", "))]$slack)"
+        "tgt=[$(join(clause.tgt_env, ", "))]$slack)"
 end
 function _display_join_clause(clause, format::Symbol)
     body = join(["$(p[1])=$(p[2])" for p in clause], ", ")
@@ -960,7 +972,7 @@ function format_structural_op(node::OpExpr, format::Symbol)
         end
     elseif op == "table_lookup"
         table = node.table === nothing ? "" : node.table
-        axes = node.table_axes === nothing ? Dict{String,ASTExpr}() : node.table_axes
+        axes = node.table_axes === nothing ? Dict{String, ASTExpr}() : node.table_axes
         eq = format == :latex ? " = " : "="
         bindings = join(["$k$eq$(r(axes[k]))" for k in sort(collect(keys(axes)))], ", ")
         outv = node.output
@@ -969,7 +981,7 @@ function format_structural_op(node::OpExpr, format::Symbol)
         return "$name[$bindings]$out_str"
     elseif op == "apply_expression_template"
         name = node.name === nothing ? "" : node.name
-        binds = node.bindings === nothing ? Dict{String,ASTExpr}() : node.bindings
+        binds = node.bindings === nothing ? Dict{String, ASTExpr}() : node.bindings
         eq = format == :latex ? " = " : "="
         inner = join(["$k$eq$(r(binds[k]))" for k in sort(collect(keys(binds)))], ", ")
         if format == :latex
@@ -985,8 +997,11 @@ function format_structural_op(node::OpExpr, format::Symbol)
         parts = String[]
         for (i, region) in enumerate(regions)
             reg_str = join(
-                ["$(format_bound(dim[1], format)):$(format_bound(dim[2], format))"
-                 for dim in region], ", ")
+                [
+                    "$(format_bound(dim[1], format)):$(format_bound(dim[2], format))"
+                        for dim in region
+                ], ", "
+            )
             val = i <= length(values) ? r(values[i]) : "?"
             push!(parts, "[$reg_str] = $val")
         end
@@ -1058,14 +1073,14 @@ end
 # `getproperty(row, format)`. "=" is the wire alias of "==" (see the
 # `_DISPLAY_OP_PRECEDENCE` note): same separators, no registry row.
 const _INFIX_SEPARATORS =
-    let d = Dict{String,NamedTuple{(:ascii, :unicode, :latex),NTuple{3,String}}}()
-        for s in _OP_TABLE
-            s.infix_sep === nothing && continue
-            d[s.name] = NamedTuple{(:ascii, :unicode, :latex)}(s.infix_sep)
-        end
-        d["="] = d["=="]
-        d
+let d = Dict{String, NamedTuple{(:ascii, :unicode, :latex), NTuple{3, String}}}()
+    for s in _OP_TABLE
+        s.infix_sep === nothing && continue
+        d[s.name] = NamedTuple{(:ascii, :unicode, :latex)}(s.infix_sep)
     end
+    d["="] = d["=="]
+    d
+end
 
 _infix_separator(op::String, format::Symbol) =
     getproperty(_INFIX_SEPARATORS[op], format)
@@ -1078,11 +1093,13 @@ _latex_product_sep(args) =
     any(a -> a isa VarExpr && occursin("\\", a.name), args) ? " " : " \\cdot "
 
 """Format one operand of `op`, parenthesizing per [`needs_parentheses`](@ref)."""
-function _format_operand(op::String, arg::ASTExpr, format::Symbol,
-                         is_right_operand::Bool=false, parent_argc::Int=2)
+function _format_operand(
+        op::String, arg::ASTExpr, format::Symbol,
+        is_right_operand::Bool = false, parent_argc::Int = 2
+    )
     result = format_expression(arg, format)
     return needs_parentheses(op, arg, is_right_operand, parent_argc; format) ? "($result)" :
-           result
+        result
 end
 
 # LaTeX function-call: `\left( \right)` only when the argument is tall
@@ -1096,7 +1113,7 @@ end
 function _format_infix_op(node::OpExpr, format::Symbol)
     op = node.op
     left, right = node.args
-    fa(arg, is_right_operand=false) = _format_operand(op, arg, format, is_right_operand)
+    fa(arg, is_right_operand = false) = _format_operand(op, arg, format, is_right_operand)
 
     if op == "+"
         # Simplify `a + (-b)` → `a - b` by rendering as a binary subtraction
@@ -1218,7 +1235,7 @@ function _format_unary_op(node::OpExpr, format::Symbol)
             return "ceil($(fa(arg)))"
         end
     elseif op in ["asin", "acos", "atan"]
-        arc = replace(op, "a" => "arc"; count=1)
+        arc = replace(op, "a" => "arc"; count = 1)
         if format == :unicode
             return "$arc($(fa(arg)))"
         elseif format == :latex
@@ -1227,7 +1244,7 @@ function _format_unary_op(node::OpExpr, format::Symbol)
             return "$op($(fa(arg)))"
         end
     elseif op in ["asinh", "acosh", "atanh"]
-        hyp = replace(op, "a" => ""; count=1)
+        hyp = replace(op, "a" => ""; count = 1)
         if format == :unicode
             # `$(hyp)` (not `$hyp`) — the superscript chars are identifier
             # continuation chars, so `$hyp⁻¹` would interpolate `hyp⁻¹`.
@@ -1261,7 +1278,7 @@ end
 function _format_nary_op(node::OpExpr, format::Symbol)
     op = node.op
     args = node.args
-    fa(arg, is_right_operand=false) = _format_operand(op, arg, format, is_right_operand)
+    fa(arg, is_right_operand = false) = _format_operand(op, arg, format, is_right_operand)
 
     if length(args) == 3 && op == "ifelse"
         cond, thenx, elsex = args
@@ -1279,8 +1296,10 @@ function _format_nary_op(node::OpExpr, format::Symbol)
             sep = format == :latex ? _latex_product_sep(args) : _infix_separator(op, format)
             return join([fa(arg, i > 1) for (i, arg) in enumerate(args)], sep)
         elseif op == "or" || op == "and"
-            return join([fa(arg, i > 1) for (i, arg) in enumerate(args)],
-                        _infix_separator(op, format))
+            return join(
+                [fa(arg, i > 1) for (i, arg) in enumerate(args)],
+                _infix_separator(op, format)
+            )
         end
     end
 
@@ -1342,7 +1361,7 @@ Display equation in Unicode format.
 function Base.show(io::IO, equation::Equation)
     lhs_str = format_expression_unicode(equation.lhs)
     rhs_str = format_expression_unicode(equation.rhs)
-    print(io, "$lhs_str = $rhs_str")
+    return print(io, "$lhs_str = $rhs_str")
 end
 
 """
@@ -1352,8 +1371,10 @@ Compact one-line Model display (used in reprs and collections).
 The multi-line summary lives on the `MIME"text/plain"` method.
 """
 function Base.show(io::IO, model::Model)
-    print(io, "Model(", length(model.variables), " variables, ",
-          length(model.equations), " equations)")
+    return print(
+        io, "Model(", length(model.variables), " variables, ",
+        length(model.equations), " equations)"
+    )
 end
 
 """
@@ -1421,7 +1442,7 @@ function Base.show(io::IO, ::MIME"text/plain", model::Model)
         end
     end
 
-    if length(model.subsystems) > 0
+    return if length(model.subsystems) > 0
         println(io, "  Subsystems ($(length(model.subsystems))):")
         for (name, _) in model.subsystems
             println(io, "    $name")
@@ -1436,7 +1457,7 @@ Compact one-line EsmFile display (used in reprs and collections).
 The multi-line summary lives on the `MIME"text/plain"` method.
 """
 function Base.show(io::IO, esm_file::EsmFile)
-    print(io, "EsmFile(v", esm_file.esm, ", \"", esm_file.metadata.name, "\")")
+    return print(io, "EsmFile(v", esm_file.esm, ", \"", esm_file.metadata.name, "\")")
 end
 
 """
@@ -1480,7 +1501,7 @@ function Base.show(io::IO, ::MIME"text/plain", esm_file::EsmFile)
         println(io, "Components: $(join(components, ", "))")
     end
 
-    if !isnothing(esm_file.domain)
+    return if !isnothing(esm_file.domain)
         println(io, "Domain: configured")
     end
 end
@@ -1492,8 +1513,10 @@ Compact one-line ReactionSystem display (used in reprs and collections).
 The multi-line summary lives on the `MIME"text/plain"` method.
 """
 function Base.show(io::IO, reaction_system::ReactionSystem)
-    print(io, "ReactionSystem(", length(reaction_system.species), " species, ",
-          length(reaction_system.reactions), " reactions)")
+    return print(
+        io, "ReactionSystem(", length(reaction_system.species), " species, ",
+        length(reaction_system.reactions), " reactions)"
+    )
 end
 
 """
@@ -1510,17 +1533,22 @@ coefficient/species separator itself, e.g. `"2*"` for code emitters or `"2"`
 for chemical notation). `empty` is returned for a `nothing`/empty side.
 Shared by the ReactionSystem summary below and codegen.jl's reaction emitters.
 """
-function _format_stoichiometry_side(entries::Union{Vector{StoichiometryEntry},Nothing};
-                                    format_species::Function = identity,
-                                    format_coefficient::Function = string,
-                                    empty::String = "∅")
+function _format_stoichiometry_side(
+        entries::Union{Vector{StoichiometryEntry}, Nothing};
+        format_species::Function = identity,
+        format_coefficient::Function = string,
+        empty::String = "∅"
+    )
     if entries === nothing || isempty(entries)
         return empty
     end
     return join(
-        [(entry.stoichiometry == 1 ? "" : format_coefficient(entry.stoichiometry)) *
-         format_species(entry.species)
-         for entry in entries], " + ")
+        [
+            (entry.stoichiometry == 1 ? "" : format_coefficient(entry.stoichiometry)) *
+                format_species(entry.species)
+                for entry in entries
+        ], " + "
+    )
 end
 
 """
@@ -1569,12 +1597,16 @@ function Base.show(io::IO, ::MIME"text/plain", reaction_system::ReactionSystem)
         # raw_substrates/raw_products: the ordered StoichiometryEntry vectors
         # (the `get_reactants_dict`/`get_products_dict` Dict views lose author
         # order).
-        reactants_str = _format_stoichiometry_side(raw_substrates(reaction);
-            format_species=unicode_species, format_coefficient=chem_coefficient,
-            empty="")
-        products_str = _format_stoichiometry_side(raw_products(reaction);
-            format_species=unicode_species, format_coefficient=chem_coefficient,
-            empty="")
+        reactants_str = _format_stoichiometry_side(
+            raw_substrates(reaction);
+            format_species = unicode_species, format_coefficient = chem_coefficient,
+            empty = ""
+        )
+        products_str = _format_stoichiometry_side(
+            raw_products(reaction);
+            format_species = unicode_species, format_coefficient = chem_coefficient,
+            empty = ""
+        )
 
         # Arrow type (no reversible field in new schema)
         arrow = " → "
@@ -1585,7 +1617,7 @@ function Base.show(io::IO, ::MIME"text/plain", reaction_system::ReactionSystem)
         println(io, "    $i. $reactants_str$arrow$products_str  [k = $rate_str]")
     end
 
-    if length(reaction_system.subsystems) > 0
+    return if length(reaction_system.subsystems) > 0
         println(io, "  Subsystems ($(length(reaction_system.subsystems))):")
         for (name, _) in reaction_system.subsystems
             println(io, "    $name")
@@ -1628,8 +1660,9 @@ to_ascii(target::Real) = format_number(target, :ascii)
 # world) carries ±Infinity / NaN as STRINGS. When a bare string denotes one of
 # them, render it as the non-finite NUMBER it names (∞ / −∞ / NaN) per
 # RENDERING_CONTRACT.md, not as a variable/chemical name.
-const _NONFINITE_TOKENS = Dict{String,Float64}(
-    "Infinity" => Inf, "-Infinity" => -Inf, "NaN" => NaN)
+const _NONFINITE_TOKENS = Dict{String, Float64}(
+    "Infinity" => Inf, "-Infinity" => -Inf, "NaN" => NaN
+)
 
 _maybe_nonfinite(target::AbstractString, format::Symbol) =
     haskey(_NONFINITE_TOKENS, target) ? format_number(_NONFINITE_TOKENS[target], format) : nothing

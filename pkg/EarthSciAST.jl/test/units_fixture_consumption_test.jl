@@ -42,7 +42,7 @@ end
 # official tree-walk evaluator (`evaluate_expr`), so this fixture consumer
 # shares the production runner's dispatch table and lives on the
 # `.esm → AST → official runner` simulation pathway.
-function _resolve_observed!(model, defs::AbstractDict, bindings::Dict{String,Float64})
+function _resolve_observed!(model, defs::AbstractDict, bindings::Dict{String, Float64})
     for _ in 1:(length(model.variables) + 1)
         progress = false
         for (vname, rhs) in defs
@@ -56,14 +56,17 @@ function _resolve_observed!(model, defs::AbstractDict, bindings::Dict{String,Flo
         end
         progress || break
     end
+    return
 end
 
 function _run_units_test(mname::AbstractString, model, t::_ESM_UF.InlineTest)
     defs = _ESM_UF.observed_definitions(model)
-    bindings = Dict{String,Float64}()
+    bindings = Dict{String, Float64}()
     for (vname, var) in model.variables
-        (var.type == _ESM_UF.ParameterVariable ||
-         var.type == _ESM_UF.UnknownVariable) || continue
+        (
+            var.type == _ESM_UF.ParameterVariable ||
+                var.type == _ESM_UF.UnknownVariable
+        ) || continue
         # An observed unknown's value comes from its defining equation, never
         # from a `default` seed — seeding it would mask the very computation
         # these fixtures assert.
@@ -85,13 +88,14 @@ function _run_units_test(mname::AbstractString, model, t::_ESM_UF.InlineTest)
         @test haskey(bindings, a.variable)
         actual = bindings[a.variable]
         if abs_ > 0 && iszero(a.expected)
-            @test isapprox(actual, a.expected; atol=abs_)
+            @test isapprox(actual, a.expected; atol = abs_)
         elseif rel > 0
-            @test isapprox(actual, a.expected; rtol=rel, atol=abs_)
+            @test isapprox(actual, a.expected; rtol = rel, atol = abs_)
         else
-            @test isapprox(actual, a.expected; atol=abs_)
+            @test isapprox(actual, a.expected; atol = abs_)
         end
     end
+    return
 end
 
 @testset "Units fixtures inline tests execution (gt-dt0o)" begin
@@ -100,11 +104,13 @@ end
     # units_ifelse_undeterminable_branch.esm and
     # units_comparisons_and_connectives.esm declare units alone and are wired
     # into the cross-binding validate suite in units_test.jl instead.
-    fixtures = ["units_conversions.esm",
-                "units_dimensional_analysis.esm",
-                "units_propagation.esm",
-                "units_negated_literal_neutral.esm",
-                "units_sum_undeterminable_operands.esm"]
+    fixtures = [
+        "units_conversions.esm",
+        "units_dimensional_analysis.esm",
+        "units_propagation.esm",
+        "units_negated_literal_neutral.esm",
+        "units_sum_undeterminable_operands.esm",
+    ]
 
     any_tests_across_fixtures = false
     for fname in fixtures

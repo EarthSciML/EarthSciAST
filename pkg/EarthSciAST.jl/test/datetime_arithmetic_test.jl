@@ -38,9 +38,11 @@ const _DT_M = EarthSciAST
 
 _dt_eval(name, t) = _DT_M.evaluate_closed_function(name, Any[t])
 
-const _DT_FIELDS = ["datetime.year", "datetime.month", "datetime.day",
-                    "datetime.hour", "datetime.minute", "datetime.second",
-                    "datetime.day_of_year", "datetime.is_leap_year"]
+const _DT_FIELDS = [
+    "datetime.year", "datetime.month", "datetime.day",
+    "datetime.hour", "datetime.minute", "datetime.second",
+    "datetime.day_of_year", "datetime.is_leap_year",
+]
 
 # The oracle: Julia's `Dates` on the whole second `t` falls in.
 function _dt_ref(name::String, t)
@@ -79,9 +81,9 @@ function _dt_julian_ref(t)
     dt = unix2datetime(Float64(t))
     y = year(dt); m = month(dt); d = day(dt)
     jdn = (1461 * (y + 4800 + (m - 14) ÷ 12)) ÷ 4 +
-          (367 * (m - 2 - 12 * ((m - 14) ÷ 12))) ÷ 12 -
-          (3 * ((y + 4900 + (m - 14) ÷ 12) ÷ 100)) ÷ 4 +
-          d - 32075
+        (367 * (m - 2 - 12 * ((m - 14) ÷ 12))) ÷ 12 -
+        (3 * ((y + 4900 + (m - 14) ÷ 12) ÷ 100)) ÷ 4 +
+        d - 32075
     return Float64(jdn) + (mod(t, 86400.0) - 43200.0) / 86400.0
 end
 
@@ -97,12 +99,14 @@ end
     end
 
     @testset "every second of six representative days" begin
-        days = (DateTime(2016, 2, 29),   # leap day
-                DateTime(2015, 12, 31),  # year end
-                DateTime(1969, 7, 20),   # pre-epoch (negative t)
-                DateTime(2100, 3, 1),    # day after a NON-leap century's Feb
-                DateTime(2000, 2, 28),   # Feb 28 of a leap century
-                DateTime(1900, 2, 28))   # Feb 28 of a non-leap century
+        days = (
+            DateTime(2016, 2, 29),   # leap day
+            DateTime(2015, 12, 31),  # year end
+            DateTime(1969, 7, 20),   # pre-epoch (negative t)
+            DateTime(2100, 3, 1),    # day after a NON-leap century's Feb
+            DateTime(2000, 2, 28),   # Feb 28 of a leap century
+            DateTime(1900, 2, 28),
+        )   # Feb 28 of a non-leap century
         for d0 in days
             t0 = datetime2unix(d0)
             bad, first_bad = _dt_sweep(t0 + s for s in 0:86399)
@@ -116,23 +120,29 @@ end
     # would disagree, and the negative ones straddle the epoch, where
     # truncation toward zero would move a 1969 time forward into 1970.
     @testset "fractional-second floor and sign boundaries" begin
-        bases = (datetime2unix(DateTime(2016, 6, 15, 3, 59, 59)),
-                 datetime2unix(DateTime(2015, 12, 31, 23, 59, 59)),
-                 datetime2unix(DateTime(1969, 12, 31, 23, 59, 59)),
-                 datetime2unix(DateTime(1965, 3, 10, 7, 0, 0)),
-                 datetime2unix(DateTime(2016, 2, 28, 23, 59, 59)))
-        fracs = (-0.9999, -0.5, -0.001, -1e-7, 0.0, 0.0004, 0.0005, 0.4,
-                 0.4994, 0.4995, 0.4996, 0.5, 0.9,
-                 0.9994, 0.9995, 0.9996, 0.999999, 0.9999999999)
+        bases = (
+            datetime2unix(DateTime(2016, 6, 15, 3, 59, 59)),
+            datetime2unix(DateTime(2015, 12, 31, 23, 59, 59)),
+            datetime2unix(DateTime(1969, 12, 31, 23, 59, 59)),
+            datetime2unix(DateTime(1965, 3, 10, 7, 0, 0)),
+            datetime2unix(DateTime(2016, 2, 28, 23, 59, 59)),
+        )
+        fracs = (
+            -0.9999, -0.5, -0.001, -1.0e-7, 0.0, 0.0004, 0.0005, 0.4,
+            0.4994, 0.4995, 0.4996, 0.5, 0.9,
+            0.9994, 0.9995, 0.9996, 0.999999, 0.9999999999,
+        )
         bad, first_bad = _dt_sweep(b + f for b in bases for f in fracs)
         @test bad == 0
         bad == 0 || @info "first mismatch" first_bad
         # The ruling's worked examples, and the subnormal just below the epoch
         # (where `86400 - 5e-324` rounds to 86400 in binary64).
-        for (t, fields) in ((59.9999999, (1970, 1, 1, 0, 0, 59)),
-                            (86399.9999999, (1970, 1, 1, 23, 59, 59)),
-                            (-1e-7, (1969, 12, 31, 23, 59, 59)),
-                            (-5e-324, (1969, 12, 31, 23, 59, 59)))
+        for (t, fields) in (
+                (59.9999999, (1970, 1, 1, 0, 0, 59)),
+                (86399.9999999, (1970, 1, 1, 23, 59, 59)),
+                (-1.0e-7, (1969, 12, 31, 23, 59, 59)),
+                (-5.0e-324, (1969, 12, 31, 23, 59, 59)),
+            )
             @test Tuple(_dt_eval(n, t) for n in _DT_FIELDS[1:6]) == fields
         end
     end
@@ -202,10 +212,10 @@ end
         for name in names, bad_t in (NaN, Inf, -Inf, hi, lo)
             @test coded(() -> _dt_eval(name, bad_t)) == "closed_function_overflow"
             @test coded(() -> _DT_M.evaluate_closed_function_ad(name, Any[bad_t])) ==
-                  "closed_function_overflow"
+                "closed_function_overflow"
             spec = _DT_M._fn_typed_core_spec(name)
             @test coded(() -> _DT_M._fn_typed_core_call(spec.id, bad_t)) ==
-                  "closed_function_overflow"
+                "closed_function_overflow"
         end
         # One step inside each edge every entry still answers.
         for name in names, ok_t in (prevfloat(hi), -6.77681005679712e16)

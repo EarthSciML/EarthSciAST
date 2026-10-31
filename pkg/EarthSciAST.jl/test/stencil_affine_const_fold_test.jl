@@ -32,12 +32,16 @@ const ESM = EarthSciAST
 # (`oln_rep`, `base`, `strides`) are inert placeholders.
 # ---------------------------------------------------------------------------
 function _cf_lane(arr, ix, n)
-    rec = ESM._LaneRecipe(ESM.LANE_CONST, "W", EarthSciAST.ASTExpr[ix],
-                          Int[], Int[], arr, "")
+    rec = ESM._LaneRecipe(
+        ESM.LANE_CONST, "W", EarthSciAST.ASTExpr[ix],
+        Int[], Int[], arr, ""
+    )
     box = (1:n,)
-    ESM._derive_lane_repl(rec, ["j"], Int[1], ESM._box_corners(box), Bool[false],
-                          0, 0, Int[1], 1, Dict{String,Int}(), Dict{String,Any}(),
-                          IdDict{Any,Vector{Float64}}(), box)
+    return ESM._derive_lane_repl(
+        rec, ["j"], Int[1], ESM._box_corners(box), Bool[false],
+        0, 0, Int[1], 1, Dict{String, Int}(), Dict{String, Any}(),
+        IdDict{Any, Vector{Float64}}(), box
+    )
 end
 
 @testset "LANE_CONST fold is index-derived, not value-sampled (ess-affine)" begin
@@ -67,12 +71,16 @@ end
     @testset "unit: a one-cell (thin) box folds to a literal" begin
         # Degenerate box 1:1 — the index cannot move, so the fold is legal even
         # though the array varies.
-        rec = ESM._LaneRecipe(ESM.LANE_CONST, "W", EarthSciAST.ASTExpr[_v("j")],
-                              Int[], Int[], [1.0, 5.0, 1.0], "")
+        rec = ESM._LaneRecipe(
+            ESM.LANE_CONST, "W", EarthSciAST.ASTExpr[_v("j")],
+            Int[], Int[], [1.0, 5.0, 1.0], ""
+        )
         box = (2:2,)
-        r = ESM._derive_lane_repl(rec, ["j"], Int[2], ESM._box_corners(box), Bool[true],
-                                  0, 0, Int[1], 1, Dict{String,Int}(), Dict{String,Any}(),
-                                  IdDict{Any,Vector{Float64}}(), box)
+        r = ESM._derive_lane_repl(
+            rec, ["j"], Int[2], ESM._box_corners(box), Bool[true],
+            0, 0, Int[1], 1, Dict{String, Int}(), Dict{String, Any}(),
+            IdDict{Any, Vector{Float64}}(), box
+        )
         @test r isa ESM._LitRepl
         @test r.v == 5.0
     end
@@ -81,9 +89,11 @@ end
     # End-to-end: affine ≡ per-cell ≡ analytic.
     # -----------------------------------------------------------------------
     function _cf_build(model, ics, const_arrays; affine::Bool)
-        f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(model;
-            initial_conditions=ics, const_arrays=const_arrays,
-            compiler = affine ? :native : :interpreter)
+        f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(
+            model;
+            initial_conditions = ics, const_arrays = const_arrays,
+            compiler = affine ? :native : :interpreter
+        )
         du = zero(u0); f!(du, u0, p, 0.0)
         return (du, vm, diag)
     end
@@ -94,11 +104,17 @@ end
         N, W = 3, [1.0, 5.0, 1.0]
         vars = Dict("c" => ESM.ModelVariable(ESM.UnknownVariable))
         body = _op("*", _idx("W", _v("j")), _idx("c", _v("j")))
-        m = ESM.Model(vars, [ESM.Equation(_ao1(_Didx("c", _v("j")), "j", 1, N),
-                                          _ao1(body, "j", 1, N))])
+        m = ESM.Model(
+            vars, [
+                ESM.Equation(
+                    _ao1(_Didx("c", _v("j")), "j", 1, N),
+                    _ao1(body, "j", 1, N)
+                ),
+            ]
+        )
         ics = Dict("c[$j]" => Float64(j) for j in 1:N)
-        du_a, vm, d = _cf_build(m, ics, Dict("W" => W); affine=true)
-        du_r, _, _ = _cf_build(m, ics, Dict("W" => W); affine=false)
+        du_a, vm, d = _cf_build(m, ics, Dict("W" => W); affine = true)
+        du_r, _, _ = _cf_build(m, ics, Dict("W" => W); affine = false)
         @test d.n_acc_kernels >= 1          # affine path fired, not a silent fallback
         @test du_a == du_r                  # bit-identical to the per-cell oracle
         @test [du_a[vm["c[$j]"]] for j in 1:N] == [1.0, 10.0, 3.0]   # analytic
@@ -109,19 +125,25 @@ end
         # Read along j at fixed i, row 3 of W is (0, 0.5, 0) — the corner
         # coincidence from the report. Under the old fold rows 3 and 4 vanished
         # and du[2] came out 0.0 instead of 2.0.
-        W = [0.5 0.0 0.0; 0.5 0.0 0.0; 0.0 0.5 0.0
-             0.0 0.5 0.0; 0.0 0.0 0.5; 0.0 0.0 0.5]
+        W = [
+            0.5 0.0 0.0; 0.5 0.0 0.0; 0.0 0.5 0.0
+            0.0 0.5 0.0; 0.0 0.0 0.5; 0.0 0.0 0.5
+        ]
         xs = [0.0, 2.0, 1.0, 3.0, 2.0, 4.0]
-        want = vec(sum(W .* xs; dims=1))                 # [1.0, 2.0, 3.0]
+        want = vec(sum(W .* xs; dims = 1))                 # [1.0, 2.0, 3.0]
         body = _op("*", _idx("W", _v("i"), _v("j")), _idx("x", _v("i")))
-        rhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["j"], expr_body=body,
-                         ranges=Dict("j" => [1, 3], "i" => [1, 6]), reduce="+")
+        rhs = ESM.OpExpr(
+            "faq", ESM.ASTExpr[]; output_idx = Any["j"], expr_body = body,
+            ranges = Dict("j" => [1, 3], "i" => [1, 6]), reduce = "+"
+        )
         vars = Dict(v => ESM.ModelVariable(ESM.UnknownVariable) for v in ("y", "x"))
         m = ESM.Model(vars, [ESM.Equation(_ao1(_Didx("y", _v("j")), "j", 1, 3), rhs)])
-        ics = merge(Dict("y[$j]" => 0.0 for j in 1:3),
-                    Dict("x[$i]" => xs[i] for i in 1:6))
-        du_a, vm, d = _cf_build(m, ics, Dict("W" => W); affine=true)
-        du_r, _, _ = _cf_build(m, ics, Dict("W" => W); affine=false)
+        ics = merge(
+            Dict("y[$j]" => 0.0 for j in 1:3),
+            Dict("x[$i]" => xs[i] for i in 1:6)
+        )
+        du_a, vm, d = _cf_build(m, ics, Dict("W" => W); affine = true)
+        du_r, _, _ = _cf_build(m, ics, Dict("W" => W); affine = false)
         @test d.n_acc_kernels >= 1
         @test du_a == du_r
         @test [du_a[vm["y[$j]"]] for j in 1:3] == want
@@ -133,16 +155,20 @@ end
         # of the same trap.
         N = 4
         K = [(i == 1 || i == N || j == 1 || j == N) ? 1.0 : 4.0 for i in 1:N, j in 1:N]
-        vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable; shape=["i", "j"]))
+        vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable; shape = ["i", "j"]))
         body = _op("*", _idx("K", _v("i"), _v("j")), _idx("u", _v("i"), _v("j")))
-        lhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i", "j"],
-            expr_body=_Didx("u", _v("i"), _v("j")), ranges=Dict("i" => [1, N], "j" => [1, N]))
-        rhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i", "j"],
-            expr_body=body, ranges=Dict("i" => [1, N], "j" => [1, N]))
+        lhs = ESM.OpExpr(
+            "faq", ESM.ASTExpr[]; output_idx = Any["i", "j"],
+            expr_body = _Didx("u", _v("i"), _v("j")), ranges = Dict("i" => [1, N], "j" => [1, N])
+        )
+        rhs = ESM.OpExpr(
+            "faq", ESM.ASTExpr[]; output_idx = Any["i", "j"],
+            expr_body = body, ranges = Dict("i" => [1, N], "j" => [1, N])
+        )
         m = ESM.Model(vars, [ESM.Equation(lhs, rhs)])
         ics = Dict("u[$i,$j]" => Float64(10i + j) for i in 1:N, j in 1:N)
-        du_a, vm, d = _cf_build(m, ics, Dict("K" => K); affine=true)
-        du_r, _, _ = _cf_build(m, ics, Dict("K" => K); affine=false)
+        du_a, vm, d = _cf_build(m, ics, Dict("K" => K); affine = true)
+        du_r, _, _ = _cf_build(m, ics, Dict("K" => K); affine = false)
         @test d.n_acc_kernels >= 1
         @test du_a == du_r
         @test all(du_a[vm["u[$i,$j]"]] == K[i, j] * (10i + j) for i in 1:N, j in 1:N)

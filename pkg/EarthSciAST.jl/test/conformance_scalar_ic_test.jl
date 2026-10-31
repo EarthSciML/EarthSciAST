@@ -25,7 +25,7 @@ import OrdinaryDiffEqTsit5
 
 include("testutils.jl")  # TESTUTILS_REPO_ROOT
 
-const _SIC_CAT_DIR  = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "scalar_ic")
+const _SIC_CAT_DIR = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "scalar_ic")
 const _SIC_MANIFEST = joinpath(_SIC_CAT_DIR, "manifest.json")
 
 @testset "Conformance: scalar_ic (manifest-driven)" begin
@@ -43,7 +43,7 @@ const _SIC_MANIFEST = joinpath(_SIC_CAT_DIR, "manifest.json")
     for fixture in manifest.fixtures
         id = String(fixture.id)
         @testset "$(id)" begin
-            esm_path    = joinpath(_SIC_CAT_DIR, String(fixture.path))
+            esm_path = joinpath(_SIC_CAT_DIR, String(fixture.path))
             golden_path = joinpath(_SIC_CAT_DIR, String(fixture.golden))
             @test isfile(esm_path)
             @test isfile(golden_path)
@@ -51,9 +51,11 @@ const _SIC_MANIFEST = joinpath(_SIC_CAT_DIR, "manifest.json")
             golden = JSON3.read(read(golden_path, String))
             @test String(golden.reference_binding) == "julia"
 
-            results = run_inline_tests(esm_path; model_name=String(fixture.model),
-                                    alg=OrdinaryDiffEqTsit5.Tsit5(),
-                                    reltol=1e-12, abstol=1e-14)
+            results = run_inline_tests(
+                esm_path; model_name = String(fixture.model),
+                alg = OrdinaryDiffEqTsit5.Tsit5(),
+                reltol = 1.0e-12, abstol = 1.0e-14
+            )
             @test length(results) == length(golden.assertions)
 
             # Index by (test_id, assertion_idx) and gate each against BOTH the
@@ -66,7 +68,7 @@ const _SIC_MANIFEST = joinpath(_SIC_CAT_DIR, "manifest.json")
                 r = by_key[key]
                 @test r.passed
                 @test r.actual !== nothing
-                @test isapprox(r.actual, Float64(g.actual); rtol=rtol, atol=atol)
+                @test isapprox(r.actual, Float64(g.actual); rtol = rtol, atol = atol)
             end
         end
     end
@@ -82,7 +84,7 @@ end
     at0(sim, name) = sim[Symbol(name)][1]
 
     # (1) Defaults: each state takes its own ic; `z` has none and takes 7.0.
-    sim = solve(EarthSciAST.esm_problem(esm_path, (0.0, 1.0)), OrdinaryDiffEqTsit5.Tsit5(); saveat=[0.0])
+    sim = solve(EarthSciAST.esm_problem(esm_path, (0.0, 1.0)), OrdinaryDiffEqTsit5.Tsit5(); saveat = [0.0])
     @test SciMLBase.successful_retcode(sim)
     @test at0(sim, "M.u") == 3.0
     @test at0(sim, "M.q") == 2.0
@@ -92,8 +94,12 @@ end
     # (2) A parameter override reaches the ic's build-time scope (§6.6.5),
     # under either spelling of the key (§6.6.2).
     for key in ("A", "M.A")
-        sim = solve(EarthSciAST.esm_problem(esm_path, (0.0, 1.0);
-                                   p=Dict(key => 10.0)), OrdinaryDiffEqTsit5.Tsit5(); saveat=[0.0])
+        sim = solve(
+            EarthSciAST.esm_problem(
+                esm_path, (0.0, 1.0);
+                p = Dict(key => 10.0)
+            ), OrdinaryDiffEqTsit5.Tsit5(); saveat = [0.0]
+        )
         @test SciMLBase.successful_retcode(sim)
         @test at0(sim, "M.w") == 20.0
         @test at0(sim, "M.u") == 3.0   # parameter-free ic unmoved
@@ -103,8 +109,12 @@ end
     # either spelling of the key. `u` is the LOCAL name esm-spec §6.6.2 pins for
     # a test's `initial_conditions`; flattening qualifies the state as `M.u`.
     for key in ("u", "M.u")
-        sim = solve(EarthSciAST.esm_problem(esm_path, (0.0, 1.0);
-                                   u0=Dict(key => 9.0)), OrdinaryDiffEqTsit5.Tsit5(); saveat=[0.0])
+        sim = solve(
+            EarthSciAST.esm_problem(
+                esm_path, (0.0, 1.0);
+                u0 = Dict(key => 9.0)
+            ), OrdinaryDiffEqTsit5.Tsit5(); saveat = [0.0]
+        )
         @test SciMLBase.successful_retcode(sim)
         @test at0(sim, "M.u") == 9.0
         @test at0(sim, "M.w") == 4.0   # a state the override does not name keeps its ic
@@ -112,7 +122,10 @@ end
 
     # (4) An `initial_conditions` key naming no state is still rejected — the
     # local-name resolution widened what resolves, not what is accepted.
-    @test_throws EarthSciAST.SimulateError solve(EarthSciAST.esm_problem(
-        esm_path, (0.0, 1.0);
-        u0=Dict("not_a_state" => 1.0)), OrdinaryDiffEqTsit5.Tsit5(); saveat=[0.0])
+    @test_throws EarthSciAST.SimulateError solve(
+        EarthSciAST.esm_problem(
+            esm_path, (0.0, 1.0);
+            u0 = Dict("not_a_state" => 1.0)
+        ), OrdinaryDiffEqTsit5.Tsit5(); saveat = [0.0]
+    )
 end

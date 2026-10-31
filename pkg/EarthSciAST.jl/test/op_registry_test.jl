@@ -20,15 +20,17 @@ const ESM = EarthSciAST
 @testset "op registry pins" begin
 
     @testset "_WS4_FOLDABLE_ELEMENTWISE_OPS membership (pre-registry literal)" begin
-        @test ESM._WS4_FOLDABLE_ELEMENTWISE_OPS == Set{String}([
-            "+", "-", "*", "/", "^", "neg", "pow",
-            "sqrt", "abs", "sign",
-            "exp", "log", "log10",
-            "sin", "cos", "tan", "asin", "acos", "atan",
-            "sinh", "cosh", "tanh",
-            "max", "min", "floor", "ceil",
-            "ifelse",
-        ])
+        @test ESM._WS4_FOLDABLE_ELEMENTWISE_OPS == Set{String}(
+            [
+                "+", "-", "*", "/", "^", "neg", "pow",
+                "sqrt", "abs", "sign",
+                "exp", "log", "log10",
+                "sin", "cos", "tan", "asin", "acos", "atan",
+                "sinh", "cosh", "tanh",
+                "max", "min", "floor", "ceil",
+                "ifelse",
+            ]
+        )
         @test ESM._WS4_FOLDABLE_ELEMENTWISE_OPS isa Set{String}
     end
 
@@ -46,24 +48,28 @@ const ESM = EarthSciAST
         # or an unregistered custom op is non-hoistable uniformly, by predicate,
         # not by a `cse=true` flag or an op-name list. `D`/`ic` KEEP `cse=true`
         # (they stay CSE barriers via their own `_compile_op` arms).
-        @test ESM._CSE_OPAQUE_OPS == Set{String}([
-            "const", "enum", "call", "D", "ic",
-            "faq", "faq", "makearray", "broadcast", "reshape",
-            "transpose", "concat", "index",
-        ])
+        @test ESM._CSE_OPAQUE_OPS == Set{String}(
+            [
+                "const", "enum", "call", "D", "ic",
+                "faq", "faq", "makearray", "broadcast", "reshape",
+                "transpose", "concat", "index",
+            ]
+        )
         @test ESM._CSE_OPAQUE_OPS isa Set{String}
         @test !("fn" in ESM._CSE_OPAQUE_OPS)
     end
 
     @testset "_STENCIL_ELEMENTWISE_OPS membership (pre-registry literal)" begin
-        @test ESM._STENCIL_ELEMENTWISE_OPS == Set{String}([
-            "+", "*", "-", "neg", "/", "^", "pow",
-            "<", "<=", ">", ">=", "==", "!=", "and", "or", "not", "ifelse",
-            "sin", "cos", "tan", "asin", "acos", "atan", "atan2",
-            "sinh", "cosh", "tanh", "asinh", "acosh", "atanh",
-            "exp", "log", "log10", "sqrt", "abs", "sign", "floor", "ceil",
-            "min", "max", "pi", "π", "e", "Pre",
-        ])
+        @test ESM._STENCIL_ELEMENTWISE_OPS == Set{String}(
+            [
+                "+", "*", "-", "neg", "/", "^", "pow",
+                "<", "<=", ">", ">=", "==", "!=", "and", "or", "not", "ifelse",
+                "sin", "cos", "tan", "asin", "acos", "atan", "atan2",
+                "sinh", "cosh", "tanh", "asinh", "acosh", "atanh",
+                "exp", "log", "log10", "sqrt", "abs", "sign", "floor", "ceil",
+                "min", "max", "pi", "π", "e", "Pre",
+            ]
+        )
         @test ESM._STENCIL_ELEMENTWISE_OPS isa Set{String}
     end
 
@@ -78,14 +84,16 @@ const ESM = EarthSciAST
         # the evaluator: `_eval_node_op`'s `:and` / `:or` / `:not` arms
         # (tree_walk/compile.jl) already existed; only the vocabulary gate was
         # missing. See CONFORMANCE_SPEC §5.5.7 "Cell-axis arrays".
-        @test ESM._GEO_EVAL_OPS == Set{String}([
-            "+", "*", "-", "/", "^", "max", "min", "sqrt", "abs", "cos", "sin",
-            "atan2",
-            "ifelse", "floor", "ceil", ">", "<", ">=", "<=", "==", "!=",
-            "and", "or", "not",
-            "index", "intersect_polygon", "polygon_intersection_area", "skolem",
-            "true", "false", "faq", "faq",
-        ])
+        @test ESM._GEO_EVAL_OPS == Set{String}(
+            [
+                "+", "*", "-", "/", "^", "max", "min", "sqrt", "abs", "cos", "sin",
+                "atan2",
+                "ifelse", "floor", "ceil", ">", "<", ">=", "<=", "==", "!=",
+                "and", "or", "not",
+                "index", "intersect_polygon", "polygon_intersection_area", "skolem",
+                "true", "false", "faq", "faq",
+            ]
+        )
         @test ESM._GEO_EVAL_OPS isa Set{String}
         # Previously a plain (non-const) global — a bug-adjacent oversight.
         @test isconst(ESM, :_GEO_EVAL_OPS)
@@ -96,17 +104,19 @@ const ESM = EarthSciAST
     @testset "MTK-ext _KNOWN_OPS source (pre-registry literal)" begin
         # The extension defines `const _KNOWN_OPS = EarthSciAST._ops_with(:mtk_known)`;
         # pin the accessor output here so the pin holds without loading MTK.
-        @test ESM._ops_with(:mtk_known) == Set{String}([
-            "+", "-", "*", "/", "^",
-            "exp", "log", "log10", "sin", "cos", "tan", "sinh", "cosh", "tanh",
-            "asin", "acos", "atan", "sqrt", "abs",
-            "min", "max",
-            ">", "<", ">=", "<=", "==", "!=",
-            "D",  # grad/div/laplacian dropped (§4.2): unregistered user-op tier
-            "faq", "faq", "makearray", "index", "broadcast",
-            "reshape", "transpose",
-            "concat", "Pre", "ifelse", "call", "fn", "ic",
-        ])
+        @test ESM._ops_with(:mtk_known) == Set{String}(
+            [
+                "+", "-", "*", "/", "^",
+                "exp", "log", "log10", "sin", "cos", "tan", "sinh", "cosh", "tanh",
+                "asin", "acos", "atan", "sqrt", "abs",
+                "min", "max",
+                ">", "<", ">=", "<=", "==", "!=",
+                "D",  # grad/div/laplacian dropped (§4.2): unregistered user-op tier
+                "faq", "faq", "makearray", "index", "broadcast",
+                "reshape", "transpose",
+                "concat", "Pre", "ifelse", "call", "fn", "ic",
+            ]
+        )
         @test ESM._ops_with(:mtk_known) isa Set{String}
     end
 
@@ -142,10 +152,10 @@ const ESM = EarthSciAST
         # self-indexing nodes (producers + `index`) the leaf-indexing
         # rewrites never descend into.
         @test ESM._ARRAY_PRODUCER_OPS ==
-              Set{String}(["faq", "faq", "makearray"])
+            Set{String}(["faq", "faq", "makearray"])
         @test ESM._ARRAY_PRODUCER_OPS isa Set{String}
         @test ESM._SELF_INDEXED_OPS ==
-              Set{String}(["faq", "faq", "makearray", "index"])
+            Set{String}(["faq", "faq", "makearray", "index"])
         @test ESM._SELF_INDEXED_OPS isa Set{String}
     end
 
@@ -163,12 +173,14 @@ const ESM = EarthSciAST
         # registry's `builtin_fn` flag (the :elementary rows + ifelse/Pre).
         # Mirrors Rust `is_builtin_function` (structural.rs) — a drift here is
         # a cross-binding divergence, not just a Julia one.
-        @test ESM._BUILTIN_FUNCTION_NAMES == Set{String}([
-            "exp", "log", "log10", "sqrt", "abs", "sign",
-            "sin", "cos", "tan", "asin", "acos", "atan", "atan2",
-            "sinh", "cosh", "tanh", "asinh", "acosh", "atanh",
-            "min", "max", "floor", "ceil", "ifelse", "Pre",
-        ])
+        @test ESM._BUILTIN_FUNCTION_NAMES == Set{String}(
+            [
+                "exp", "log", "log10", "sqrt", "abs", "sign",
+                "sin", "cos", "tan", "asin", "acos", "atan", "atan2",
+                "sinh", "cosh", "tanh", "asinh", "acosh", "atanh",
+                "min", "max", "floor", "ceil", "ifelse", "Pre",
+            ]
+        )
         @test ESM._BUILTIN_FUNCTION_NAMES isa Set{String}
     end
 
@@ -178,22 +190,26 @@ const ESM = EarthSciAST
         # additionally unions the spec-adjacent spellings ln/log2/expm1, which
         # deliberately have NO registry row (`_op_in_T` classifies unregistered
         # ops as open-namespace rewrite targets — a row would change that).
-        @test ESM._TRANSCENDENTAL_OPS == Set{String}([
-            "exp", "log", "ln", "log10", "log2", "expm1",
-            "tanh", "sinh", "cosh", "asinh", "acosh", "atanh",
-        ])
+        @test ESM._TRANSCENDENTAL_OPS == Set{String}(
+            [
+                "exp", "log", "ln", "log10", "log2", "expm1",
+                "tanh", "sinh", "cosh", "asinh", "acosh", "atanh",
+            ]
+        )
         # `sqrt` must never be transcendental: it halves its argument's
         # dimension (`_sqrt_rule`) rather than requiring a dimensionless one.
         @test !("sqrt" in ESM._TRANSCENDENTAL_OPS)
         @test ESM._CIRCULAR_OPS == Set{String}(["sin", "cos", "tan"])
         @test ESM._INVERSE_CIRCULAR_OPS ==
-              Set{String}(["asin", "acos", "atan", "atan2"])
+            Set{String}(["asin", "acos", "atan", "atan2"])
         @test ESM._COMPARISON_OPS ==
-              Set{String}(["<", ">", "<=", ">=", "==", "!="])
+            Set{String}(["<", ">", "<=", ">=", "==", "!="])
         @test ESM._BOOLEAN_OPS == Set{String}(["and", "or", "not"])
-        for s in (ESM._TRANSCENDENTAL_OPS, ESM._CIRCULAR_OPS,
-                  ESM._INVERSE_CIRCULAR_OPS, ESM._COMPARISON_OPS,
-                  ESM._BOOLEAN_OPS)
+        for s in (
+                ESM._TRANSCENDENTAL_OPS, ESM._CIRCULAR_OPS,
+                ESM._INVERSE_CIRCULAR_OPS, ESM._COMPARISON_OPS,
+                ESM._BOOLEAN_OPS,
+            )
             @test s isa Set{String}
         end
         # The spellings with no registry row stay OUT of the registry (their
@@ -210,7 +226,7 @@ const ESM = EarthSciAST
         # derive from the registry (`display_prec` / `infix_sep`) plus the
         # derivation-site wire alias "=" ↦ the "==" row's values ("=" has no
         # registry row for the same `_op_in_T` reason as above).
-        @test ESM._DISPLAY_OP_PRECEDENCE == Dict{String,Int}(
+        @test ESM._DISPLAY_OP_PRECEDENCE == Dict{String, Int}(
             "or" => 1,
             "and" => 2,
             "==" => 3, "=" => 3, "!=" => 3,
@@ -221,15 +237,15 @@ const ESM = EarthSciAST
             "^" => 7,
         )
         @test ESM._INFIX_SEPARATORS == Dict(
-            "-"   => (ascii = " - ",   unicode = " − ", latex = " - "),
-            "*"   => (ascii = " * ",   unicode = "·",   latex = " \\cdot "),
-            ">="  => (ascii = " >= ",  unicode = " ≥ ", latex = " \\geq "),
-            "<="  => (ascii = " <= ",  unicode = " ≤ ", latex = " \\leq "),
-            "=="  => (ascii = " == ",  unicode = " = ", latex = " = "),
-            "="   => (ascii = " == ",  unicode = " = ", latex = " = "),
-            "!="  => (ascii = " != ",  unicode = " ≠ ", latex = " \\neq "),
+            "-" => (ascii = " - ", unicode = " − ", latex = " - "),
+            "*" => (ascii = " * ", unicode = "·", latex = " \\cdot "),
+            ">=" => (ascii = " >= ", unicode = " ≥ ", latex = " \\geq "),
+            "<=" => (ascii = " <= ", unicode = " ≤ ", latex = " \\leq "),
+            "==" => (ascii = " == ", unicode = " = ", latex = " = "),
+            "=" => (ascii = " == ", unicode = " = ", latex = " = "),
+            "!=" => (ascii = " != ", unicode = " ≠ ", latex = " \\neq "),
             "and" => (ascii = " and ", unicode = " ∧ ", latex = " \\land "),
-            "or"  => (ascii = " or ",  unicode = " ∨ ", latex = " \\lor "),
+            "or" => (ascii = " or ", unicode = " ∨ ", latex = " \\lor "),
         )
         @test ESM._op_spec("=") === nothing
         # Anything without an explicit infix precedence binds atom-tight.
@@ -280,10 +296,13 @@ end
         :expect_cadence, :attrs,
     )
     # The two annotations fail CLOSED rather than being silently dropped.
-    for kw in (:expect_cadence => "const", :attrs => Dict{String,Any}("gamma" => 1.4))
+    for kw in (:expect_cadence => "const", :attrs => Dict{String, Any}("gamma" => 1.4))
         @test_throws CanonicalizeError ESM._emit_node_json(
-            OpExpr("+", EarthSciAST.ASTExpr[VarExpr("a"), VarExpr("b")];
-                   NamedTuple{(kw[1],)}((kw[2],))...))
+            OpExpr(
+                "+", EarthSciAST.ASTExpr[VarExpr("a"), VarExpr("b")];
+                NamedTuple{(kw[1],)}((kw[2],))...
+            )
+        )
     end
     # `units` joins the closed emissible set at esm 1.2.0: a `const` node's
     # declared unit is meaning-bearing, so canonical JSON carries it and two
@@ -293,18 +312,37 @@ end
     # non-emissible literal): a node carrying them still canonicalizes.
     @test ESM._CANONICAL_IGNORED_FIELDS == (:arg, :bindings)
     # Fail-closed: the three tuples exactly partition fieldnames(OpExpr).
-    @test sort(collect((ESM._EMISSIBLE_FIELDS..., ESM._CANONICAL_IGNORED_FIELDS...,
-                        ESM._NON_EMISSIBLE_FIELDS...))) ==
-          sort(collect(fieldnames(OpExpr)))
+    @test sort(
+        collect(
+            (
+                ESM._EMISSIBLE_FIELDS..., ESM._CANONICAL_IGNORED_FIELDS...,
+                ESM._NON_EMISSIBLE_FIELDS...,
+            )
+        )
+    ) ==
+        sort(collect(fieldnames(OpExpr)))
     # Behavior spot-checks on the emitter itself (bypassing `canonicalize`'s
     # rewrites): ignored fields emit fine, non-emissible ones throw.
-    @test ESM._emit_node_json(OpExpr("+", EarthSciAST.ASTExpr[VarExpr("a"),
-                                                           VarExpr("b")];
-                                     arg="i")) ==
-          ESM._emit_node_json(OpExpr("+", EarthSciAST.ASTExpr[VarExpr("a"),
-                                                           VarExpr("b")]))
+    @test ESM._emit_node_json(
+        OpExpr(
+            "+", EarthSciAST.ASTExpr[
+                VarExpr("a"),
+                VarExpr("b"),
+            ];
+            arg = "i"
+        )
+    ) ==
+        ESM._emit_node_json(
+        OpExpr(
+            "+", EarthSciAST.ASTExpr[
+                VarExpr("a"),
+                VarExpr("b"),
+            ]
+        )
+    )
     @test_throws CanonicalizeError ESM._emit_node_json(
-        OpExpr("+", EarthSciAST.ASTExpr[VarExpr("a")]; shape=Any[2]))
+        OpExpr("+", EarthSciAST.ASTExpr[VarExpr("a")]; shape = Any[2])
+    )
 end
 
 @testset "Wave-1 foundation smoke checks" begin
@@ -313,12 +351,18 @@ end
         # An aggregate whose variables hide in expr_body / filter — the fields
         # a hand-rolled args-only walk misses.
         body = OpExpr("*", EarthSciAST.ASTExpr[VarExpr("w"), VarExpr("u")])
-        agg = OpExpr("faq", EarthSciAST.ASTExpr[];
-                     output_idx=Any["i"],
-                     ranges=Dict{String,Any}("i" => [1, 4]),
-                     expr_body=body,
-                     filter=OpExpr(">", EarthSciAST.ASTExpr[VarExpr("w"),
-                                                         NumExpr(0.0)]))
+        agg = OpExpr(
+            "faq", EarthSciAST.ASTExpr[];
+            output_idx = Any["i"],
+            ranges = Dict{String, Any}("i" => [1, 4]),
+            expr_body = body,
+            filter = OpExpr(
+                ">", EarthSciAST.ASTExpr[
+                    VarExpr("w"),
+                    NumExpr(0.0),
+                ]
+            )
+        )
         seen = String[]
         ESM.foreach_subexpr(agg) do e
             e isa VarExpr && push!(seen, e.name)
@@ -361,7 +405,7 @@ end
             n isa Real && return n + 1
             return ESM._JSON_DESCEND
         end
-        @test out isa AbstractDict{String,Any}
+        @test out isa AbstractDict{String, Any}
         @test collect(keys(out)) == ["op", "args", "note"]
         @test out["note"] == "rewritten"
         @test out["args"][2] == 4.5

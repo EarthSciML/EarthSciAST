@@ -69,9 +69,11 @@ end
         # the LEAF's own default — not skipped, not resolved in the root's scope.
         dir = mktempdir()
         _tmp_write(dir, "leaf.esm", _SELF_CONTAINED_LEAF)
-        host = _tmp_write(dir, "host.esm",
+        host = _tmp_write(
+            dir, "host.esm",
             """{"esm":"1.0.0","metadata":{"name":"host"},
-                "models":{"M":{"ref":"./leaf.esm"}}}""")
+            "models":{"M":{"ref":"./leaf.esm"}}}"""
+        )
         f = EarthSciAST.load_path(host)
         @test f.index_sets["lev"].size == 4
         # The mount is a real splice shaped over the merged axis.
@@ -84,21 +86,25 @@ end
         # `bindings` at this mount form were read by nobody.
         dir = mktempdir()
         _tmp_write(dir, "leaf.esm", _SELF_CONTAINED_LEAF)
-        host = _tmp_write(dir, "host.esm",
+        host = _tmp_write(
+            dir, "host.esm",
             """{"esm":"1.0.0","metadata":{"name":"host"},
-                "models":{"M":{"ref":"./leaf.esm","bindings":{"NLEV":9}}}}""")
+            "models":{"M":{"ref":"./leaf.esm","bindings":{"NLEV":9}}}}"""
+        )
         f = EarthSciAST.load_path(host)
         @test f.index_sets["lev"].size == 9
 
         # A binding VALUE is a metaparameter EXPRESSION folded against the
         # MOUNTING document's closed environment (esm-spec §9.7.6) — the one use
         # that environment has at this edge.
-        _tmp_write(dir, "expr.esm",
+        _tmp_write(
+            dir, "expr.esm",
             """{"esm":"1.0.0","metadata":{"name":"expr"},
-                "metaparameters":{"NX":{"type":"integer","default":3},
-                                  "NY":{"type":"integer","default":5}},
-                "models":{"M":{"ref":"./leaf.esm",
-                               "bindings":{"NLEV":{"op":"*","args":["NX","NY"]}}}}}""")
+            "metaparameters":{"NX":{"type":"integer","default":3},
+                              "NY":{"type":"integer","default":5}},
+            "models":{"M":{"ref":"./leaf.esm",
+                           "bindings":{"NLEV":{"op":"*","args":["NX","NY"]}}}}}"""
+        )
         @test EarthSciAST.load_path(joinpath(dir, "expr.esm")).index_sets["lev"].size == 15
     end
 
@@ -110,10 +116,12 @@ end
         # FOLDED.
         dir = mktempdir()
         _tmp_write(dir, "leaf.esm", _SELF_CONTAINED_LEAF)
-        host = _tmp_write(dir, "host.esm",
+        host = _tmp_write(
+            dir, "host.esm",
             """{"esm":"1.0.0","metadata":{"name":"host"},
-                "index_sets":{"lev":{"kind":"interval","size":59}},
-                "models":{"M":{"ref":"./leaf.esm"}}}""")
+            "index_sets":{"lev":{"kind":"interval","size":59}},
+            "models":{"M":{"ref":"./leaf.esm"}}}"""
+        )
         err = _err_or_nothing(() -> EarthSciAST.load_path(host))
         @test err isa ExpressionTemplateError
         @test err.code == ERROR_CODES.SUBSYSTEM_INDEX_SET_CONFLICT
@@ -140,15 +148,19 @@ end
         # way.
         dir = mktempdir()
         _tmp_write(dir, "leaf.esm", _ASSEMBLER_SCOPED_LEAF)
-        verbose = _tmp_write(dir, "verbose.esm",
+        verbose = _tmp_write(
+            dir, "verbose.esm",
             """{"esm":"1.0.0","metadata":{"name":"verbose"},
-                "metaparameters":{"n_rows":{"type":"integer","default":7}},
-                "index_sets":{"rows":{"kind":"interval","size":"n_rows"}},
-                "models":{"M":{"ref":"./leaf.esm"}}}""")
-        terse = _tmp_write(dir, "terse.esm",
+            "metaparameters":{"n_rows":{"type":"integer","default":7}},
+            "index_sets":{"rows":{"kind":"interval","size":"n_rows"}},
+            "models":{"M":{"ref":"./leaf.esm"}}}"""
+        )
+        terse = _tmp_write(
+            dir, "terse.esm",
             """{"esm":"1.0.0","metadata":{"name":"terse"},
-                "metaparameters":{"n_rows":{"type":"integer","default":7}},
-                "models":{"M":{"ref":"./leaf.esm"}}}""")
+            "metaparameters":{"n_rows":{"type":"integer","default":7}},
+            "models":{"M":{"ref":"./leaf.esm"}}}"""
+        )
         a = EarthSciAST.load_path(verbose)
         b = EarthSciAST.load_path(terse)
         @test a.index_sets["rows"].size == 7
@@ -177,21 +189,25 @@ end
         # expression was factored into a library it imports and never calls" —
         # so the boolean is gone and the two leaves below must agree.
         dir = mktempdir()
-        _tmp_write(dir, "leaf.esm", """
-        {
-          "esm": "1.0.0",
-          "metadata": {"name": "leaf"},
-          "metaparameters": {"UNRELATED": {"type": "integer", "default": 1}},
-          "index_sets": {"rows": {"kind": "interval", "size": "n_rows"}},
-          "models": {"Census": {
-            "variables": {"u": {"type":"unknown","units":"1","shape":["rows"],"default":1.0}},
-            "equations": [{"lhs": {"op":"D","args":["u"],"wrt":"t"},
-                           "rhs": {"op":"*","args":[-1.0,"u"]}}]}}}
-        """)
-        host = _tmp_write(dir, "host.esm",
+        _tmp_write(
+            dir, "leaf.esm", """
+            {
+              "esm": "1.0.0",
+              "metadata": {"name": "leaf"},
+              "metaparameters": {"UNRELATED": {"type": "integer", "default": 1}},
+              "index_sets": {"rows": {"kind": "interval", "size": "n_rows"}},
+              "models": {"Census": {
+                "variables": {"u": {"type":"unknown","units":"1","shape":["rows"],"default":1.0}},
+                "equations": [{"lhs": {"op":"D","args":["u"],"wrt":"t"},
+                               "rhs": {"op":"*","args":[-1.0,"u"]}}]}}}
+            """
+        )
+        host = _tmp_write(
+            dir, "host.esm",
             """{"esm":"1.0.0","metadata":{"name":"host"},
-                "metaparameters":{"n_rows":{"type":"integer","default":7}},
-                "models":{"M":{"ref":"./leaf.esm"}}}""")
+            "metaparameters":{"n_rows":{"type":"integer","default":7}},
+            "models":{"M":{"ref":"./leaf.esm"}}}"""
+        )
         f = EarthSciAST.load_path(host)
         # The assembler's close sized the leaf's axis, exactly as it does for the
         # machinery-free leaf in the testset above.
@@ -202,12 +218,14 @@ end
         # block. Whether a shared name was factored out into a declaration the
         # leaf never reads must not change whether the assembly resolves.
         _tmp_write(dir, "leaf_bare.esm", _ASSEMBLER_SCOPED_LEAF)
-        bare_host = _tmp_write(dir, "bare_host.esm",
+        bare_host = _tmp_write(
+            dir, "bare_host.esm",
             """{"esm":"1.0.0","metadata":{"name":"bare_host"},
-                "metaparameters":{"n_rows":{"type":"integer","default":7}},
-                "models":{"M":{"ref":"./leaf_bare.esm"}}}""")
+            "metaparameters":{"n_rows":{"type":"integer","default":7}},
+            "models":{"M":{"ref":"./leaf_bare.esm"}}}"""
+        )
         @test EarthSciAST.load_path(bare_host).index_sets["rows"].size ==
-              f.index_sets["rows"].size
+            f.index_sets["rows"].size
 
         # STILL STRICT AT A ROOT. The same leaf loaded as the load TARGET has no
         # enclosing scope to close `n_rows`, so it is `metaparameter_unbound` —
@@ -234,19 +252,23 @@ end
         _tmp_write(dir, "leaf.esm", _SELF_CONTAINED_LEAF)
         # The assembler happens to declare a metaparameter of the SAME NAME, for
         # its own purposes, and does not bind it on the edge.
-        top = _tmp_write(dir, "top.esm",
+        top = _tmp_write(
+            dir, "top.esm",
             """{"esm":"1.0.0","metadata":{"name":"top"},
-                "metaparameters":{"NLEV":{"type":"integer","default":12}},
-                "models":{"M":{"ref":"./leaf.esm"}}}""")
+            "metaparameters":{"NLEV":{"type":"integer","default":12}},
+            "models":{"M":{"ref":"./leaf.esm"}}}"""
+        )
         # The same leaf, the same assembler, through the OTHER attachment point.
-        sub = _tmp_write(dir, "sub.esm",
+        sub = _tmp_write(
+            dir, "sub.esm",
             """{"esm":"1.0.0","metadata":{"name":"sub"},
-                "metaparameters":{"NLEV":{"type":"integer","default":12}},
-                "models":{"Host":{
-                  "subsystems":{"M":{"ref":"./leaf.esm"}},
-                  "variables":{"q":{"type":"unknown","units":"1","default":1.0}},
-                  "equations":[{"lhs":{"op":"D","args":["q"],"wrt":"t"},
-                                "rhs":{"op":"*","args":[-1.0,"q"]}}]}}}""")
+            "metaparameters":{"NLEV":{"type":"integer","default":12}},
+            "models":{"Host":{
+              "subsystems":{"M":{"ref":"./leaf.esm"}},
+              "variables":{"q":{"type":"unknown","units":"1","default":1.0}},
+              "equations":[{"lhs":{"op":"D","args":["q"],"wrt":"t"},
+                            "rhs":{"op":"*","args":[-1.0,"q"]}}]}}}"""
+        )
         a = EarthSciAST.load_path(top)
         b = EarthSciAST.load_path(sub)
         @test a.index_sets["lev"].size == 4        # the LEAF's own default wins
@@ -268,29 +290,37 @@ end
         # precisely the remainder: the host's own DEFAULTS.
         dir = mktempdir()
         _tmp_write(dir, "leaf.esm", _SELF_CONTAINED_LEAF)
-        bare = _tmp_write(dir, "bare.esm",
+        bare = _tmp_write(
+            dir, "bare.esm",
             """{"esm":"1.0.0","metadata":{"name":"bare"},
-                "metaparameters":{"NLEV":{"type":"integer","default":12}},
-                "models":{"M":{"ref":"./leaf.esm"}}}""")
-        bound = _tmp_write(dir, "bound.esm",
+            "metaparameters":{"NLEV":{"type":"integer","default":12}},
+            "models":{"M":{"ref":"./leaf.esm"}}}"""
+        )
+        bound = _tmp_write(
+            dir, "bound.esm",
             """{"esm":"1.0.0","metadata":{"name":"bound"},
-                "metaparameters":{"NLEV":{"type":"integer","default":12}},
-                "models":{"M":{"ref":"./leaf.esm","bindings":{"NLEV":7}}}}""")
+            "metaparameters":{"NLEV":{"type":"integer","default":12}},
+            "models":{"M":{"ref":"./leaf.esm","bindings":{"NLEV":7}}}}"""
+        )
         api = Dict("NLEV" => 9)
-        @test EarthSciAST.load_path(bare; metaparameters=api).index_sets["lev"].size == 9
-        @test EarthSciAST.load_path(bound; metaparameters=api).index_sets["lev"].size == 7
+        @test EarthSciAST.load_path(bare; metaparameters = api).index_sets["lev"].size == 9
+        @test EarthSciAST.load_path(bound; metaparameters = api).index_sets["lev"].size == 7
         # And with the SAME host, no API binding: the host's own default of 12
         # must NOT reach the leaf.
         @test EarthSciAST.load_path(bare).index_sets["lev"].size == 4
 
         # A name the LEAF does not declare is never forwarded, so it cannot raise
         # `template_import_unknown_name` against the leaf.
-        other = _tmp_write(dir, "other.esm",
+        other = _tmp_write(
+            dir, "other.esm",
             """{"esm":"1.0.0","metadata":{"name":"other"},
-                "metaparameters":{"NROWS":{"type":"integer","default":2}},
-                "models":{"M":{"ref":"./leaf.esm"}}}""")
-        @test EarthSciAST.load_path(other;
-            metaparameters=Dict("NROWS" => 3)).index_sets["lev"].size == 4
+            "metaparameters":{"NROWS":{"type":"integer","default":2}},
+            "models":{"M":{"ref":"./leaf.esm"}}}"""
+        )
+        @test EarthSciAST.load_path(
+            other;
+            metaparameters = Dict("NROWS" => 3)
+        ).index_sets["lev"].size == 4
     end
 
     @testset "a concrete restatement of a symbolic leaf axis is idempotent" begin
@@ -309,11 +339,13 @@ end
         # spellings fold to 7 and both are idempotent. All five bindings agree.
         dir = mktempdir()
         _tmp_write(dir, "leaf.esm", _ASSEMBLER_SCOPED_LEAF)
-        host = _tmp_write(dir, "host.esm",
+        host = _tmp_write(
+            dir, "host.esm",
             """{"esm":"1.0.0","metadata":{"name":"host"},
-                "metaparameters":{"n_rows":{"type":"integer","default":7}},
-                "index_sets":{"rows":{"kind":"interval","size":7}},
-                "models":{"M":{"ref":"./leaf.esm"}}}""")
+            "metaparameters":{"n_rows":{"type":"integer","default":7}},
+            "index_sets":{"rows":{"kind":"interval","size":7}},
+            "models":{"M":{"ref":"./leaf.esm"}}}"""
+        )
         f = EarthSciAST.load_path(host)
         @test f.index_sets["rows"].size == 7
     end
@@ -329,26 +361,32 @@ end
         # merge point, so the two forms answer the same document identically —
         # which is also issue #198's report.
         dir = mktempdir()
-        _tmp_write(dir, "leaf.esm",
+        _tmp_write(
+            dir, "leaf.esm",
             """{"esm":"1.0.0","metadata":{"name":"leaf"},
-                "metaparameters":{"NLEV":{"type":"integer","default":40}},
-                "index_sets":{"lev":{"kind":"interval","size":"NLEV"}},
-                "models":{"Column":{
-                  "variables":{"t":{"type":"unknown","units":"K","shape":["lev"],"default":1.0}},
-                  "equations":[{"lhs":{"op":"D","args":["t"],"wrt":"t"},
-                                "rhs":{"op":"*","args":[-1.0,"t"]}}]}}}""")
+            "metaparameters":{"NLEV":{"type":"integer","default":40}},
+            "index_sets":{"lev":{"kind":"interval","size":"NLEV"}},
+            "models":{"Column":{
+              "variables":{"t":{"type":"unknown","units":"K","shape":["lev"],"default":1.0}},
+              "equations":[{"lhs":{"op":"D","args":["t"],"wrt":"t"},
+                            "rhs":{"op":"*","args":[-1.0,"t"]}}]}}}"""
+        )
         decls = """"metaparameters":{"NLEV":{"type":"integer","default":40}},
-                   "index_sets":{"lev":{"kind":"interval","size":"NLEV"}}"""
-        top = _tmp_write(dir, "top.esm",
+        "index_sets":{"lev":{"kind":"interval","size":"NLEV"}}"""
+        top = _tmp_write(
+            dir, "top.esm",
             """{"esm":"1.0.0","metadata":{"name":"top"}, $(decls),
-                "models":{"Col":{"ref":"./leaf.esm"}}}""")
-        sub = _tmp_write(dir, "sub.esm",
+            "models":{"Col":{"ref":"./leaf.esm"}}}"""
+        )
+        sub = _tmp_write(
+            dir, "sub.esm",
             """{"esm":"1.0.0","metadata":{"name":"sub"}, $(decls),
-                "models":{"Host":{
-                  "variables":{"z":{"type":"unknown","units":"1","default":0.0}},
-                  "equations":[{"lhs":{"op":"D","args":["z"],"wrt":"t"},
-                                "rhs":{"op":"*","args":[-1.0,"z"]}}],
-                  "subsystems":{"Col":{"ref":"./leaf.esm"}}}}}""")
+            "models":{"Host":{
+              "variables":{"z":{"type":"unknown","units":"1","default":0.0}},
+              "equations":[{"lhs":{"op":"D","args":["z"],"wrt":"t"},
+                            "rhs":{"op":"*","args":[-1.0,"z"]}}],
+              "subsystems":{"Col":{"ref":"./leaf.esm"}}}}}"""
+        )
         a = EarthSciAST.load_path(top)
         b = EarthSciAST.load_path(sub)
         @test a.index_sets["lev"].size == 40
@@ -364,17 +402,21 @@ end
         # inliner used to append them to the spliced model instead and defer the
         # resolution to the root, which is observationally close but is not the
         # edge pipeline: nothing of the leaf closed at the mount.
-        conf = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance",
-                        "expression_templates", "inject_subsystem_ref")
+        conf = joinpath(
+            TESTUTILS_REPO_ROOT, "tests", "conformance",
+            "expression_templates", "inject_subsystem_ref"
+        )
         dir = mktempdir()
-        host = _tmp_write(dir, "host.esm", """
-        {"esm":"1.0.0","metadata":{"name":"toplevel_inject"},
-         "models":{"Runoff":{
-           "ref":"$(joinpath(conf, "leaf.esm"))",
-           "expression_template_imports":[
-             {"ref":"$(joinpath(conf, "central_D_lon_zero_grad_bc.esm"))",
-              "only":["central_D_lon_zero_grad_bc"],
-              "bindings":{"NLON":288,"NLAT":181}}]}}}""")
+        host = _tmp_write(
+            dir, "host.esm", """
+            {"esm":"1.0.0","metadata":{"name":"toplevel_inject"},
+             "models":{"Runoff":{
+               "ref":"$(joinpath(conf, "leaf.esm"))",
+               "expression_template_imports":[
+                 {"ref":"$(joinpath(conf, "central_D_lon_zero_grad_bc.esm"))",
+                  "only":["central_D_lon_zero_grad_bc"],
+                  "bindings":{"NLON":288,"NLAT":181}}]}}}"""
+        )
         f = EarthSciAST.expanded_file(EarthSciAST.load_path(host))
         # The agnostic leaf's `D(c, wrt: lon)` is lowered by the injected rule.
         @test f.models["Runoff"].equations[1].rhs.args[2].op == "makearray"
@@ -391,10 +433,12 @@ end
         # edge left to rename and reaches the same registry.
         dir = mktempdir()
         _tmp_write(dir, "leaf.esm", _SELF_CONTAINED_LEAF)
-        host = _tmp_write(dir, "host.esm",
+        host = _tmp_write(
+            dir, "host.esm",
             """{"esm":"1.0.0","metadata":{"name":"host"},
-                "models":{"M":{"ref":"./leaf.esm","bindings":{"NLEV":6},
-                               "index_set_rename":{"lev":"soil.lev"}}}}""")
+            "models":{"M":{"ref":"./leaf.esm","bindings":{"NLEV":6},
+                           "index_set_rename":{"lev":"soil.lev"}}}}"""
+        )
         first_load = EarthSciAST.load_path(host)
         @test first_load.index_sets["soil.lev"].size == 6
         @test !haskey(first_load.index_sets, "lev")

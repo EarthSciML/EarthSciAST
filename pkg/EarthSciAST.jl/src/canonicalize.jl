@@ -56,8 +56,12 @@ function canonicalize end
 canonicalize(e::IntExpr) = e
 
 function canonicalize(e::NumExpr)
-    isfinite(e.value) || throw(CanonicalizeError("E_CANONICAL_NONFINITE",
-        "non-finite float in canonical form"))
+    isfinite(e.value) || throw(
+        CanonicalizeError(
+            "E_CANONICAL_NONFINITE",
+            "non-finite float in canonical form"
+        )
+    )
     return e
 end
 
@@ -72,7 +76,7 @@ function canonicalize(e::OpExpr)
     # output, join, filter, join_gates, id, manifold, distinct, key, …) —
     # matching the field-preserving rebuilds in the TS/Python/Rust bindings.
     # A hand-listed keyword subset here previously dropped ~11 fields.
-    work = reconstruct(e; args=new_args)
+    work = reconstruct(e; args = new_args)
     return _canonicalize_shallow(work)
 end
 
@@ -225,7 +229,7 @@ end
 _all_float_literals(args::Vector{ASTExpr}) = !isempty(args) && all(a -> a isa NumExpr, args)
 
 _is_zero_any(e) = (e isa IntExpr && e.value == 0) || (e isa NumExpr && e.value == 0.0)
-_is_one_any(e)  = (e isa IntExpr && e.value == 1) || (e isa NumExpr && e.value == 1.0)
+_is_one_any(e) = (e isa IntExpr && e.value == 1) || (e isa NumExpr && e.value == 1.0)
 
 function _arg_tier(e::ASTExpr)
     if e isa IntExpr || e isa NumExpr
@@ -240,10 +244,10 @@ end
 
 _numeric_key(e::IntExpr) = Float64(e.value)
 _numeric_key(e::NumExpr) = e.value
-_numeric_key(e::ASTExpr)    = 0.0
+_numeric_key(e::ASTExpr) = 0.0
 
 function _sort_args!(args::Vector{ASTExpr})
-    cache = Dict{Int,String}()
+    cache = Dict{Int, String}()
     function get_json(idx::Int, e::ASTExpr)
         haskey(cache, idx) && return cache[idx]
         s = _emit_json(e)
@@ -256,6 +260,7 @@ function _sort_args!(args::Vector{ASTExpr})
     for i in 1:length(args)
         args[i] = snap[i]
     end
+    return
 end
 
 function _compare(a::ASTExpr, b::ASTExpr, ia::Int, ib::Int, get_json)
@@ -316,8 +321,12 @@ function _emit_json(e::ASTExpr)::String
     # Defensively unreachable: the four branches above cover every concrete
     # `ASTExpr` subtype. Typed like the rest of the canonicalizer's failures so a
     # future node type surfaces as a CanonicalizeError, not an ErrorException.
-    throw(CanonicalizeError("E_CANONICAL_BAD_NODE",
-        "cannot canonicalize value of type $(typeof(e))"))
+    throw(
+        CanonicalizeError(
+            "E_CANONICAL_BAD_NODE",
+            "cannot canonicalize value of type $(typeof(e))"
+        )
+    )
 end
 
 # OpExpr fields WITH a pinned slot in the cross-binding canonical JSON node
@@ -353,8 +362,12 @@ const _CANONICAL_IGNORED_FIELDS = (:arg, :bindings)
 # to one of the two closed tuples above deliberately. `setdiff` preserves
 # `fieldnames` order, keeping the E_CANONICAL_UNSUPPORTED_FIELD message's
 # field listing byte-identical to the former literal tuple.
-const _NON_EMISSIBLE_FIELDS = Tuple(setdiff(fieldnames(OpExpr),
-    (_EMISSIBLE_FIELDS..., _CANONICAL_IGNORED_FIELDS...)))
+const _NON_EMISSIBLE_FIELDS = Tuple(
+    setdiff(
+        fieldnames(OpExpr),
+        (_EMISSIBLE_FIELDS..., _CANONICAL_IGNORED_FIELDS...)
+    )
+)
 
 function _emit_node_json(n::OpExpr)::String
     offending = String[]
@@ -362,12 +375,16 @@ function _emit_node_json(n::OpExpr)::String
         getfield(n, f) === nothing || push!(offending, String(f))
     end
     if !isempty(offending)
-        throw(CanonicalizeError("E_CANONICAL_UNSUPPORTED_FIELD",
-            "op '$(n.op)' carries field(s) [$(join(offending, ", "))] outside " *
-            "the canonical JSON node encoding (op/args/wrt/dim/fn/name/value/units); " *
-            "emitting them would be lossy and non-portable (RFC §5.4.6)"))
+        throw(
+            CanonicalizeError(
+                "E_CANONICAL_UNSUPPORTED_FIELD",
+                "op '$(n.op)' carries field(s) [$(join(offending, ", "))] outside " *
+                    "the canonical JSON node encoding (op/args/wrt/dim/fn/name/value/units); " *
+                    "emitting them would be lossy and non-portable (RFC §5.4.6)"
+            )
+        )
     end
-    entries = Tuple{String,String}[]
+    entries = Tuple{String, String}[]
     push!(entries, ("op", _json_string(n.op)))
     args_str = "[" * join((_emit_json(a) for a in n.args), ",") * "]"
     push!(entries, ("args", args_str))
@@ -443,8 +460,12 @@ function _emit_canonical_value(v)::String
     # Julia-local code: an unsupported-TYPE payload is internal misuse, not a
     # non-finite float — reusing E_CANONICAL_NONFINITE here would corrupt the
     # RFC §5.4.6/§5.4.7 stable-code contract for that code.
-    throw(CanonicalizeError("E_CANONICAL_BAD_CONST",
-        "unsupported `const` value type: $(typeof(v))"))
+    throw(
+        CanonicalizeError(
+            "E_CANONICAL_BAD_CONST",
+            "unsupported `const` value type: $(typeof(v))"
+        )
+    )
 end
 
 """
@@ -453,13 +474,17 @@ end
 Format a finite `Float64` per RFC §5.4.6.
 """
 function format_canonical_float(f::Float64)::String
-    isfinite(f) || throw(CanonicalizeError("E_CANONICAL_NONFINITE",
-        "non-finite float in canonical form"))
+    isfinite(f) || throw(
+        CanonicalizeError(
+            "E_CANONICAL_NONFINITE",
+            "non-finite float in canonical form"
+        )
+    )
     if f == 0.0
         return signbit(f) ? "-0.0" : "0.0"
     end
     a = abs(f)
-    use_exp = a < 1e-6 || a >= 1e21
+    use_exp = a < 1.0e-6 || a >= 1.0e21
     if use_exp
         # Julia's default Base.show gives shortest round-trip ("Ryu"); for
         # scientific values it prints e.g. "1.0e25" or "5.0e-324". Need to
@@ -484,7 +509,7 @@ function _normalize_julia_exp(s::String)::String
     if !occursin('e', s)
         return s
     end
-    parts = split(s, 'e'; limit=2)
+    parts = split(s, 'e'; limit = 2)
     mant = parts[1]
     exp = parts[2]
     # Strip mantissa trailing zeros after '.'.
@@ -551,5 +576,5 @@ function _shift_decimal(mant::AbstractString, exp::Int)::String
     if pos == length(digits)
         return string(sign, digits)
     end
-    return string(sign, digits[1:pos], ".", digits[pos+1:end])
+    return string(sign, digits[1:pos], ".", digits[(pos + 1):end])
 end

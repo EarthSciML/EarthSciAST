@@ -41,29 +41,44 @@ _shifted(n, by) = Float64[i - by for i in 1:n]
 # the two sides of the join are two ranges over one relation.
 #
 # `syms` (or `nothing`), and `ranges` naming however many symbols the case wants.
-function _self_join_doc(n::Int; key_col = "row_prior", syms = nothing,
-                        range_syms = ["a", "b"], out_sym = "a")
-    clause = Dict{String,Any}("on" => [[key_col, "row_id"]])
+function _self_join_doc(
+        n::Int; key_col = "row_prior", syms = nothing,
+        range_syms = ["a", "b"], out_sym = "a"
+    )
+    clause = Dict{String, Any}("on" => [[key_col, "row_id"]])
     syms === nothing || (clause["syms"] = syms)
-    Dict("esm" => "1.1.0",
-         "metadata" => Dict("name" => "self_join"),
-         "index_sets" => Dict("rows" => Dict("kind" => "interval", "size" => n)),
-         "models" => Dict("S" => Dict(
-             "variables" => Dict{String,Any}(
-                 "row_id"    => Dict("type" => "parameter", "shape" => ["rows"]),
-                 "row_prior" => Dict("type" => "parameter", "shape" => ["rows"]),
-                 "row_back"  => Dict("type" => "parameter", "shape" => ["rows"]),
-                 "payload"   => Dict("type" => "parameter", "shape" => ["rows"]),
-                 "out"       => Dict("type" => "unknown", "shape" => ["rows"],
-                                     "default" => 0.0)),
-             "equations" => [Dict(
-                 "lhs" => Dict("op" => "D", "args" => ["out"], "wrt" => "t"),
-                 "rhs" => Dict("op" => "faq", "args" => [],
-                     "output_idx" => [out_sym], "semiring" => "sum_product",
-                     "reduce" => "+",
-                     "ranges" => Dict(s => Dict("from" => "rows") for s in range_syms),
-                     "join" => [clause],
-                     "expr" => _ix("payload", "b" in range_syms ? "b" : range_syms[end])))])))
+    return Dict(
+        "esm" => "1.1.0",
+        "metadata" => Dict("name" => "self_join"),
+        "index_sets" => Dict("rows" => Dict("kind" => "interval", "size" => n)),
+        "models" => Dict(
+            "S" => Dict(
+                "variables" => Dict{String, Any}(
+                    "row_id" => Dict("type" => "parameter", "shape" => ["rows"]),
+                    "row_prior" => Dict("type" => "parameter", "shape" => ["rows"]),
+                    "row_back" => Dict("type" => "parameter", "shape" => ["rows"]),
+                    "payload" => Dict("type" => "parameter", "shape" => ["rows"]),
+                    "out" => Dict(
+                        "type" => "unknown", "shape" => ["rows"],
+                        "default" => 0.0
+                    )
+                ),
+                "equations" => [
+                    Dict(
+                        "lhs" => Dict("op" => "D", "args" => ["out"], "wrt" => "t"),
+                        "rhs" => Dict(
+                            "op" => "faq", "args" => [],
+                            "output_idx" => [out_sym], "semiring" => "sum_product",
+                            "reduce" => "+",
+                            "ranges" => Dict(s => Dict("from" => "rows") for s in range_syms),
+                            "join" => [clause],
+                            "expr" => _ix("payload", "b" in range_syms ? "b" : range_syms[end])
+                        )
+                    ),
+                ]
+            )
+        )
+    )
 end
 
 const BACK = 3
@@ -71,13 +86,17 @@ const BACK = 3
 # Build + evaluate, returning `(out::Vector{Float64}, driven leaf visits)`.
 function _run(doc, n::Int; disable::Bool = false)
     file = ESS.coerce_esm_file(JSON3.read(JSON3.write(doc)))
-    ca = Dict{String,Any}("row_id" => _ids(n), "row_prior" => _shifted(n, 1),
-                          "row_back" => _shifted(n, BACK), "payload" => _payload(n))
+    ca = Dict{String, Any}(
+        "row_id" => _ids(n), "row_prior" => _shifted(n, 1),
+        "row_back" => _shifted(n, BACK), "payload" => _payload(n)
+    )
     let
         ESS._VI_ENUM_VISITS[] = 0
-        f!, u0, p, _, _ = EarthSciAST._build_evaluator(file; model_name = "S", const_arrays = ca,
-                                          initial_conditions = Dict("out" => zeros(n)),
-                                          compiler = disable ? :interpreter : :native)
+        f!, u0, p, _, _ = EarthSciAST._build_evaluator(
+            file; model_name = "S", const_arrays = ca,
+            initial_conditions = Dict("out" => zeros(n)),
+            compiler = disable ? :interpreter : :native
+        )
         du = similar(u0)
         f!(du, u0, p, 0.0)
         return (Float64[du[i] for i in 1:n], ESS._VI_ENUM_VISITS[])
@@ -85,9 +104,9 @@ function _run(doc, n::Int; disable::Bool = false)
 end
 
 # Independent oracles, so a shared mistake cannot pass.
-_prior_oracle(n) = Float64[i == 1 ? 0.0 : _payload(n)[i-1] for i in 1:n]
-_back_oracle(n) = Float64[i <= BACK ? 0.0 : _payload(n)[i-BACK] for i in 1:n]
-_next_oracle(n) = Float64[i == n ? 0.0 : _payload(n)[i+1] for i in 1:n]
+_prior_oracle(n) = Float64[i == 1 ? 0.0 : _payload(n)[i - 1] for i in 1:n]
+_back_oracle(n) = Float64[i <= BACK ? 0.0 : _payload(n)[i - BACK] for i in 1:n]
+_next_oracle(n) = Float64[i == n ? 0.0 : _payload(n)[i + 1] for i in 1:n]
 
 # ===========================================================================
 # The value, and the specific wrong value it must not be
@@ -185,19 +204,28 @@ end
     doc = _self_join_doc(n)
     file = ESS.coerce_esm_file(JSON3.read(JSON3.write(doc)))
     function _eval(ca)
-        f!, u0, p, _, _ = EarthSciAST._build_evaluator(file; model_name = "S", const_arrays = ca,
-                                          initial_conditions = Dict("out" => zeros(n)))
+        f!, u0, p, _, _ = EarthSciAST._build_evaluator(
+            file; model_name = "S", const_arrays = ca,
+            initial_conditions = Dict("out" => zeros(n))
+        )
         du = similar(u0); f!(du, u0, p, 0.0)
         return Float64[du[i] for i in 1:n]
     end
-    base = _eval(Dict{String,Any}("row_id" => _ids(n), "row_prior" => _shifted(n, 1),
-                                  "row_back" => _shifted(n, BACK), "payload" => _payload(n)))
+    base = _eval(
+        Dict{String, Any}(
+            "row_id" => _ids(n), "row_prior" => _shifted(n, 1),
+            "row_back" => _shifted(n, BACK), "payload" => _payload(n)
+        )
+    )
     # Two unrelated permutations, so a fixture symmetric under one cannot pass
     # by accident.
     for perm in ([mod1(i + 5, n) for i in 1:n], collect(n:-1:1))
-        out = _eval(Dict{String,Any}(
-            "row_id" => _ids(n)[perm], "row_prior" => _shifted(n, 1)[perm],
-            "row_back" => _shifted(n, BACK)[perm], "payload" => _payload(n)[perm]))
+        out = _eval(
+            Dict{String, Any}(
+                "row_id" => _ids(n)[perm], "row_prior" => _shifted(n, 1)[perm],
+                "row_back" => _shifted(n, BACK)[perm], "payload" => _payload(n)[perm]
+            )
+        )
         @test out == base[perm]
         @test out != base          # not vacuous
     end

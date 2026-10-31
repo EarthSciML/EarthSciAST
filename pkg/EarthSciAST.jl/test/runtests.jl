@@ -252,7 +252,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
         include("compiler_xla_test.jl")              # esm_problem(; compiler = :xla): the emitter on the SOLVE path
     else
         @info "skipping the reactant_*_test.jl files (set ESM_TEST_REACTANT=1, " *
-              "with Reactant in the environment, to run the compiled backend)"
+            "with Reactant in the environment, to run the compiled backend)"
     end
     include("tree_walk_allocation_test.jl")
     include("tree_walk_param_gather_test.jl")
@@ -319,6 +319,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
     include("makearray_nested_reduction_test.jl")   # #547: a nested scalar reduction in a makearray region
     include("affine_reduce_test.jl")                # the affine tier's run-time contraction fold
     include("native_probe_fixtures_test.jl")        # native's probe fixtures: rank > 3, fill sections, const subscripts
+    include("native_lifted_makearray_test.jl")      # a makearray gathered in a lifted equation (EarthSciIntegrator #34)
     include("tree_walk_tcadence_test.jl")           # B3 time-cadence tier (t-memoized slots)
     # `compiler=:interpreter`: an in-place build that skips no prelude slot,
     # which is what the tiering tests above use as their differential oracle.
@@ -462,7 +463,8 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
                     # exception propagates with its full stack trace.
                     rejected = try
                         result = EarthSciAST.validate(
-                            EarthSciAST.load_path(filepath))
+                            EarthSciAST.load_path(filepath)
+                        )
                         !result.is_valid
                     catch e
                         # `ExpressionTemplateError` is the carrier for the
@@ -481,13 +483,15 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
                         # (§9.3), and the §9.2 closed-function argument and
                         # §9.5.5 function-table checks load runs on every
                         # `interp.*` call and every table.
-                        (e isa EarthSciAST.ParseError ||
-                         e isa EarthSciAST.SchemaValidationError ||
-                         e isa EarthSciAST.SubsystemRefError ||
-                         e isa EarthSciAST.ExpressionTemplateError ||
-                         e isa EarthSciAST.EnumLoweringError ||
-                         e isa EarthSciAST.ClosedFunctionError ||
-                         e isa EarthSciAST.TableLookupError) || rethrow()
+                        (
+                            e isa EarthSciAST.ParseError ||
+                                e isa EarthSciAST.SchemaValidationError ||
+                                e isa EarthSciAST.SubsystemRefError ||
+                                e isa EarthSciAST.ExpressionTemplateError ||
+                                e isa EarthSciAST.EnumLoweringError ||
+                                e isa EarthSciAST.ClosedFunctionError ||
+                                e isa EarthSciAST.TableLookupError
+                        ) || rethrow()
                         true
                     end
                     if rejected
@@ -531,7 +535,7 @@ include("testutils.jl")  # shared prelude: repo root, AST builders, _normj, _req
                         # {description, tests: [...]} groups keep their shape.
                         for case in cases
                             if case isa JSON3.Object && haskey(case, :input) &&
-                               case[:input] isa JSON3.Object
+                                    case[:input] isa JSON3.Object
                                 expr = EarthSciAST.expression_from_json(case[:input])
                                 @test expr isa EarthSciAST.ASTExpr
                             elseif case isa JSON3.Object && haskey(case, :tests)

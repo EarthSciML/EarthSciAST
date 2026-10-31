@@ -88,7 +88,7 @@ end
 
 # Every slot of `cache` an array kernel reads (spine, both recipe tiers,
 # sub-kernels): those slots must be in the cache when the kernel section runs.
-function _sc_kernel_reads!(acc::Set{Int}, K::_AccKernel, cache::_CSECache, seen::IdDict{Any,Nothing})
+function _sc_kernel_reads!(acc::Set{Int}, K::_AccKernel, cache::_CSECache, seen::IdDict{Any, Nothing})
     haskey(seen, K) && return acc
     seen[K] = nothing
     nodes = _Node[K.spine]
@@ -113,15 +113,21 @@ end
 # joins every dynamic slot it reads. Returns the units, plus the positions
 # (slots and equations) that cannot be emitted because a tree reads a foreign
 # scratch — those components stay on the walker whole.
-function _sc_dynamic_units(rhs_list, n_rhs::Int, prelude::AbstractVector{_Node},
-                           cache::_CSECache, dyn_slots::AbstractVector{Int})
+function _sc_dynamic_units(
+        rhs_list, n_rhs::Int, prelude::AbstractVector{_Node},
+        cache::_CSECache, dyn_slots::AbstractVector{Int}
+    )
     nd_ = length(dyn_slots)
-    pos = Dict{Int,Int}()                     # dynamic slot -> union-find node
+    pos = Dict{Int, Int}()                     # dynamic slot -> union-find node
     for (i, s) in enumerate(dyn_slots)
         pos[s] = i
     end
     parent = collect(1:(nd_ + n_rhs))
-    find(x) = (while parent[x] != x; parent[x] = parent[parent[x]]; x = parent[x]; end; x)
+    find(x) = (
+        while parent[x] != x
+            parent[x] = parent[parent[x]]; x = parent[x]
+        end; x
+    )
     unite(a, b) = (ra = find(a); rb = find(b); ra == rb || (parent[max(ra, rb)] = min(ra, rb)); nothing)
     bad = falses(nd_ + n_rhs)
     reads = Int[]
@@ -141,7 +147,7 @@ function _sc_dynamic_units(rhs_list, n_rhs::Int, prelude::AbstractVector{_Node},
             j == 0 || unite(nd_ + k, j)
         end
     end
-    roots = Dict{Int,Int}()
+    roots = Dict{Int, Int}()
     units = _ScUnit[]
     badroot = Set{Int}()
     for x in 1:(nd_ + n_rhs)
@@ -164,8 +170,10 @@ function _sc_dynamic_units(rhs_list, n_rhs::Int, prelude::AbstractVector{_Node},
         push!(r in badroot ? resid : good, U)
     end
     # Deterministic order: by the unit's first equation, then its first slot.
-    key(U) = (isempty(U.outs) ? typemax(Int) : U.outs[1],
-              isempty(U.slots) ? typemax(Int) : U.slots[1])
+    key(U) = (
+        isempty(U.outs) ? typemax(Int) : U.outs[1],
+        isempty(U.slots) ? typemax(Int) : U.slots[1],
+    )
     sort!(good; by = key); sort!(resid; by = key)
     return good, resid
 end
@@ -173,30 +181,32 @@ end
 # ---- Signatures ---------------------------------------------------------
 # Hole kinds of the integer holes.
 const _SCH_STATE = UInt8(1)   # a state slot read
-const _SCH_OUT   = UInt8(2)   # an equation's output slot
+const _SCH_OUT = UInt8(2)   # an equation's output slot
 const _SCH_STORE = UInt8(3)   # a prelude slot's own cache index
 const _SCH_CREAD = UInt8(4)   # a cache read of a slot outside the unit
 const _SCH_PGIDX = UInt8(5)   # a live forcing buffer's offset
 
 mutable struct _ScSigCtx
     cache::_CSECache
-    syms::Dict{Symbol,Int}
-    objs::IdDict{Any,Int}
+    syms::Dict{Symbol, Int}
+    objs::IdDict{Any, Int}
     sig::Vector{Int}
     ih::Vector{Int}
     ikind::Vector{UInt8}
     fh::Vector{Float64}
-    memo::IdDict{_Node,Int}          # node -> visit number (DAG sharing)
+    memo::IdDict{_Node, Int}          # node -> visit number (DAG sharing)
     nvisit::Int
     loops::Vector{Any}               # enclosing contraction-loop refs
-    localpos::Dict{Int,Int}          # slot -> its statement position in the unit
+    localpos::Dict{Int, Int}          # slot -> its statement position in the unit
     # Recording (the class representative only): node -> its hole number,
     # negative for a Float64 hole.
-    rec::Union{Nothing,IdDict{_Node,Int}}
+    rec::Union{Nothing, IdDict{_Node, Int}}
 end
 _ScSigCtx(cache::_CSECache, syms, objs) =
-    _ScSigCtx(cache, syms, objs, Int[], Int[], UInt8[], Float64[],
-              IdDict{_Node,Int}(), 0, Any[], Dict{Int,Int}(), nothing)
+    _ScSigCtx(
+    cache, syms, objs, Int[], Int[], UInt8[], Float64[],
+    IdDict{_Node, Int}(), 0, Any[], Dict{Int, Int}(), nothing
+)
 
 function _sc_reset!(S::_ScSigCtx)
     empty!(S.sig); empty!(S.ih); empty!(S.ikind); empty!(S.fh)
@@ -234,8 +244,10 @@ function _sc_sig!(S::_ScSigCtx, nd::_Node)
     elseif k === _NK_TIME
         push!(sig, 4)
     elseif k === _NK_OP
-        push!(sig, 5, _sc_sym(S, nd.op), length(nd.children),
-              nd.op === :fn ? _sc_obj(S, nd.payload) : 0)
+        push!(
+            sig, 5, _sc_sym(S, nd.op), length(nd.children),
+            nd.op === :fn ? _sc_obj(S, nd.payload) : 0
+        )
         for c in nd.children
             _sc_sig!(S, c)
         end
@@ -269,8 +281,10 @@ function _sc_sig!(S::_ScSigCtx, nd::_Node)
         push!(sig, 10, d)
     elseif k === _NK_CONTRACTION_LOOP
         spec = nd.payload::_ContractLoop
-        push!(sig, 11, _sc_sym(S, nd.op), reinterpret(Int, nd.literal),
-              spec.lo, spec.step, spec.hi)
+        push!(
+            sig, 11, _sc_sym(S, nd.op), reinterpret(Int, nd.literal),
+            spec.lo, spec.step, spec.hi
+        )
         push!(S.loops, spec.ref)
         _sc_sig!(S, nd.children[1])
         pop!(S.loops)
@@ -316,10 +330,12 @@ _sc_unit_nodes(U::_ScUnit, rhs_list, prelude) =
 
 # Group units into classes, in first-seen order. A unit whose signature walk
 # declines is returned in `declined`.
-function _sc_classes(units::Vector{_ScUnit}, rhs_list, prelude, cache::_CSECache,
-                     ext::Set{Int}, level::Vector{Int})
-    S = _ScSigCtx(cache, Dict{Symbol,Int}(), IdDict{Any,Int}())
-    byclass = Dict{Tuple{Int,Vector{Int}},Int}()
+function _sc_classes(
+        units::Vector{_ScUnit}, rhs_list, prelude, cache::_CSECache,
+        ext::Set{Int}, level::Vector{Int}
+    )
+    S = _ScSigCtx(cache, Dict{Symbol, Int}(), IdDict{Any, Int}())
+    byclass = Dict{Tuple{Int, Vector{Int}}, Int}()
     classes = _ScClass[]
     declined = Int[]
     for (ui, U) in enumerate(units)
@@ -333,9 +349,13 @@ function _sc_classes(units::Vector{_ScUnit}, rhs_list, prelude, cache::_CSECache
         key = (level[ui], S.sig)
         ci = get(byclass, key, 0)
         if ci == 0
-            push!(classes, _ScClass(ui, Int[], Int[], Float64[], length(S.ih),
-                                    length(S.fh), copy(S.ikind),
-                                    _sc_unit_nodes(U, rhs_list, prelude)))
+            push!(
+                classes, _ScClass(
+                    ui, Int[], Int[], Float64[], length(S.ih),
+                    length(S.fh), copy(S.ikind),
+                    _sc_unit_nodes(U, rhs_list, prelude)
+                )
+            )
             ci = byclass[(level[ui], copy(S.sig))] = length(classes)
         end
         C = classes[ci]
@@ -352,9 +372,9 @@ end
 # literal, a table read, a prefetched state local); `locals[pos]` is the
 # expression a read of the unit's `pos`-th slot emits.
 struct _CGUnitCtx
-    holes::IdDict{_Node,Any}
-    locals::Dict{Int,Any}            # slot -> expression of its value
-    loops::IdDict{Any,Symbol}
+    holes::IdDict{_Node, Any}
+    locals::Dict{Int, Any}            # slot -> expression of its value
+    loops::IdDict{Any, Symbol}
 end
 
 _cg_boxaddr(::_CGCtx, ::_CGUnitCtx, ::Int, ::Int, ::Int, ::Int, ::Vector{Int}, key) =
@@ -474,7 +494,7 @@ function _sc_layout(C::_ScClass, cachemode::Bool, alwaysstore::Bool, ext::Set{In
     M = length(C.members)
     ni, nf = C.nih, C.nfh
     ibake = fill(true, ni); icol = zeros(Int, ni)
-    cols = Dict{Vector{Int},Int}()
+    cols = Dict{Vector{Int}, Int}()
     for h in 1:ni
         v1 = C.ih[h]
         C.ikind[h] === _SCH_STORE && !(cachemode || alwaysstore || v1 in ext) && continue
@@ -495,8 +515,8 @@ function _sc_layout(C::_ScClass, cachemode::Bool, alwaysstore::Bool, ext::Set{In
         itab[(m - 1) * nicol + c] = col[m]
     end
     fbake = fill(true, nf); fcol = zeros(Int, nf)
-    fcols = Dict{Vector{UInt64},Int}()
-    fvals = Dict{Int,Vector{Float64}}()
+    fcols = Dict{Vector{UInt64}, Int}()
+    fvals = Dict{Int, Vector{Float64}}()
     for h in 1:nf
         b1 = reinterpret(UInt64, C.fh[h])
         col = Vector{UInt64}(undef, M)
@@ -522,11 +542,13 @@ end
 
 # Emit one item: a `let` block looping over this chunk's share of the class's
 # members. `stored[s]` (local mode) says a slot must also be stored to the cache.
-function _sc_emit_item!(ctx::_CGCtx, it::_ScItem, C::_ScClass, L::_ScLayout,
-                        U::_ScUnit, cachemode::Bool, S::_ScSigCtx, rhs_list, prelude,
-                        ext::Set{Int}, alwaysstore::Bool)
+function _sc_emit_item!(
+        ctx::_CGCtx, it::_ScItem, C::_ScClass, L::_ScLayout,
+        U::_ScUnit, cachemode::Bool, S::_ScSigCtx, rhs_list, prelude,
+        ext::Set{Int}, alwaysstore::Bool
+    )
     # Re-walk the representative to number its holes by node.
-    S.rec = IdDict{_Node,Int}()
+    S.rec = IdDict{_Node, Int}()
     _sc_unit_sig!(S, U, rhs_list, prelude, ext)
     rec = S.rec
     S.rec = nothing
@@ -540,7 +562,7 @@ function _sc_emit_item!(ctx::_CGCtx, it::_ScItem, C::_ScClass, L::_ScLayout,
     # store/out holes of the statements interleave with the tree holes. Their
     # emitted expressions:
     iexpr = Vector{Any}(undef, C.nih)
-    prefetch = Dict{Int,Symbol}()            # state table column -> local
+    prefetch = Dict{Int, Symbol}()            # state table column -> local
     preorder = Int[]
     for h in 1:C.nih
         if L.ibake[h]
@@ -563,7 +585,7 @@ function _sc_emit_item!(ctx::_CGCtx, it::_ScItem, C::_ScClass, L::_ScLayout,
     for h in 1:C.nfh
         fexpr[h] = L.fbake[h] ? C.fh[h] : :($ftv[$bfv + $(L.fcol[h])])
     end
-    holes = IdDict{_Node,Any}()
+    holes = IdDict{_Node, Any}()
     for (nd, h) in rec
         holes[nd] = h > 0 ? iexpr[h] : fexpr[-h]
     end
@@ -572,7 +594,7 @@ function _sc_emit_item!(ctx::_CGCtx, it::_ScItem, C::_ScClass, L::_ScLayout,
     recorded = Set(values(rec))
     stmt_hole = Int[h for h in 1:C.nih if !(h in recorded)]
     ns = length(U.slots)
-    kc = _CGUnitCtx(holes, Dict{Int,Any}(), IdDict{Any,Symbol}())
+    kc = _CGUnitCtx(holes, Dict{Int, Any}(), IdDict{Any, Symbol}())
     for i in 1:ns
         s = U.slots[i]
         h = stmt_hole[i]
@@ -586,8 +608,10 @@ function _sc_emit_item!(ctx::_CGCtx, it::_ScItem, C::_ScClass, L::_ScLayout,
         ex = _cg_emit(ctx, kc, tree)
         if cachemode
             ex = _cg_bound_body!(ctx, ex)
-            push!(body, is_slot ? :(_cgcache[$(iexpr[h])] = $ex) :
-                                  :(du[$(iexpr[h])] = $ex))
+            push!(
+                body, is_slot ? :(_cgcache[$(iexpr[h])] = $ex) :
+                    :(du[$(iexpr[h])] = $ex)
+            )
         elseif is_slot
             lv = _cg_name(ctx, "s")
             push!(body, :(local $lv = convert(_cgT, $ex)))
@@ -599,8 +623,10 @@ function _sc_emit_item!(ctx::_CGCtx, it::_ScItem, C::_ScClass, L::_ScLayout,
     end
     # Prefetch only the state columns this item's statements read.
     used = _cg_collect_syms!(Set{Symbol}(), Expr(:block, body...))
-    pre = Any[:(local $(prefetch[c]) = u[$itv[$bv + $c]]) for c in preorder
-              if prefetch[c] in used]
+    pre = Any[
+        :(local $(prefetch[c]) = u[$itv[$bv + $c]]) for c in preorder
+            if prefetch[c] in used
+    ]
     hdr = Any[]
     L.nicol > 0 && push!(hdr, :(local $bv = ($jv - 1) * $(L.nicol)))
     L.nfcol > 0 && push!(hdr, :(local $bfv = ($jv - 1) * $(L.nfcol)))
@@ -625,49 +651,72 @@ function _sc_emit_item!(ctx::_CGCtx, it::_ScItem, C::_ScClass, L::_ScLayout,
 end
 
 # One generated function over a run of items.
-struct _ScGen{F,TB}
+struct _ScGen{F, TB}
     f::F
     tabs::TB
 end
 
-function _sc_build_gen(items::AbstractVector{_ScItem}, classes, layouts, units, cachemode,
-                       S::_ScSigCtx, rhs_list, prelude, ext::Set{Int}, alwaysstore::Bool)
+function _sc_build_gen(
+        items::AbstractVector{_ScItem}, classes, layouts, units, cachemode,
+        S::_ScSigCtx, rhs_list, prelude, ext::Set{Int}, alwaysstore::Bool
+    )
     ctx = _CGCtx(typemax(Int), nothing)
     loops = Any[]
     for it in items
         C = classes[it.class]
-        push!(loops, _sc_emit_item!(ctx, it, C, layouts[it.class], units[C.rep],
-                                    cachemode[it.class], S, rhs_list, prelude, ext,
-                                    alwaysstore))
+        push!(
+            loops, _sc_emit_item!(
+                ctx, it, C, layouts[it.class], units[C.rep],
+                cachemode[it.class], S, rhs_list, prelude, ext,
+                alwaysstore
+            )
+        )
     end
     ln = LineNumberNode(0, Symbol("ess-scalar-codegen"))
     ngrp = length(ctx.tab_types)
     grpstmts = Any[:(local $(_cg_grp_sym(g)) = tabs[$g]) for g in 1:ngrp]
     byval = _cg_split_by_value()
     fnstmts = byval && !isempty(ctx.helpers) ?
-              Any[:(local $(_CG_FNS) = tabs[$(ngrp + 1)])] : Any[]
+        Any[:(local $(_CG_FNS) = tabs[$(ngrp + 1)])] : Any[]
     helperdefs = byval ? Any[] : ctx.helpers
     # `u` is read-only in an alias scope, as in the kernel section: the scalar
     # section writes only `du` and the cache, never `u`.
-    run = Expr(:macrocall, GlobalRef(Base.Experimental, Symbol("@aliasscope")), ln,
-               Expr(:let, Expr(:block, :(u = _cg_readonly(u))),
-                    Expr(:block,
-                         Expr(:macrocall, Symbol("@inbounds"), ln,
-                              Expr(:block, loops...)))))
-    body = Expr(:block, grpstmts..., fnstmts...,
-                :(local _cgT = _rhs_value_type(u, p, t)),
-                ctx.geosink...,
-                helperdefs...,
-                run,
-                :(return nothing))
-    ex = Expr(:function,
-              Expr(:tuple, :du, :u, :p, :t, :_cgcache, :tabs, :_cgci, :_cgnc), body)
+    run = Expr(
+        :macrocall, GlobalRef(Base.Experimental, Symbol("@aliasscope")), ln,
+        Expr(
+            :let, Expr(:block, :(u = _cg_readonly(u))),
+            Expr(
+                :block,
+                Expr(
+                    :macrocall, Symbol("@inbounds"), ln,
+                    Expr(:block, loops...)
+                )
+            )
+        )
+    )
+    body = Expr(
+        :block, grpstmts..., fnstmts...,
+        :(local _cgT = _rhs_value_type(u, p, t)),
+        ctx.geosink...,
+        helperdefs...,
+        run,
+        :(return nothing)
+    )
+    ex = Expr(
+        :function,
+        Expr(:tuple, :du, :u, :p, :t, :_cgcache, :tabs, :_cgci, :_cgnc), body
+    )
     f = RuntimeGeneratedFunctions.RuntimeGeneratedFunction(@__MODULE__, @__MODULE__, ex)
     tabpack = ntuple(g -> Vector{ctx.tab_types[g]}(ctx.tab_objs[g]), ngrp)
     if byval && !isempty(ctx.helpers)
-        tabpack = (tabpack...,
-                   Tuple(RuntimeGeneratedFunctions.RuntimeGeneratedFunction(
-                             @__MODULE__, @__MODULE__, h) for h in ctx.helpers))
+        tabpack = (
+            tabpack...,
+            Tuple(
+                RuntimeGeneratedFunctions.RuntimeGeneratedFunction(
+                    @__MODULE__, @__MODULE__, h
+                ) for h in ctx.helpers
+            )
+        )
     end
     return _ScGen(f, tabpack)
 end
@@ -697,7 +746,7 @@ end
 # share nothing but the cache slots they read (filled before) and write
 # (distinct per member), so a chunked call is bit-identical to the serial one,
 # at every value type.
-struct _ScChunk{G,C}
+struct _ScChunk{G, C}
     gens::G
     cache::C
 end
@@ -706,7 +755,7 @@ end
 
 @inline function (sp::_ScalarProgram)(du, u, p, t, cache, ::Type{T}) where {T}
     if sp.threaded && _threads_available() &&
-       _sec_prep_threads!(sp.tcache).state == 1
+            _sec_prep_threads!(sp.tcache).state == 1
         _run_chunked!(sp.tcache, _ScChunk(sp.gens, cache), (du, u, p, t))
     else
         _run_scgens!(sp.gens, du, u, p, t, cache, 1, 1)
@@ -715,8 +764,10 @@ end
 end
 
 # Emit `units` (already in run order, `level[u]` nondecreasing) into a program.
-function _sc_program(units::Vector{_ScUnit}, level::Vector{Int}, rhs_list, prelude,
-                     cache::_CSECache, ext::Set{Int}; alwaysstore::Bool, threaded::Bool)
+function _sc_program(
+        units::Vector{_ScUnit}, level::Vector{Int}, rhs_list, prelude,
+        cache::_CSECache, ext::Set{Int}; alwaysstore::Bool, threaded::Bool
+    )
     classes, declined = _sc_classes(units, rhs_list, prelude, cache, ext, level)
     cap = _codegen_fn_node_cap()
     # The build's emitted-node budget (`ESS_CODEGEN_NODE_BUDGET`, the backstop
@@ -731,9 +782,11 @@ function _sc_program(units::Vector{_ScUnit}, level::Vector{Int}, rhs_list, prelu
         end
     end
     items, cachemode = _sc_items(classes, units, rhs_list, prelude, cap)
-    layouts = _ScLayout[_sc_layout(C, cachemode[ci], alwaysstore, ext)
-                        for (ci, C) in enumerate(classes)]
-    S = _ScSigCtx(cache, Dict{Symbol,Int}(), IdDict{Any,Int}())
+    layouts = _ScLayout[
+        _sc_layout(C, cachemode[ci], alwaysstore, ext)
+            for (ci, C) in enumerate(classes)
+    ]
+    S = _ScSigCtx(cache, Dict{Symbol, Int}(), IdDict{Any, Int}())
     # Pack items into generated functions of at most `cap` nodes (items keep
     # their order, which is the level order).
     gens = Any[]
@@ -747,19 +800,25 @@ function _sc_program(units::Vector{_ScUnit}, level::Vector{Int}, rhs_list, prelu
             end
             while !isempty(run)
                 try
-                    push!(gens, _sc_build_gen(run, classes, layouts, units, cachemode, S,
-                                              rhs_list, prelude, ext, alwaysstore))
+                    push!(
+                        gens, _sc_build_gen(
+                            run, classes, layouts, units, cachemode, S,
+                            rhs_list, prelude, ext, alwaysstore
+                        )
+                    )
                     break
                 catch err
                     err isa _CodegenDecline || rethrow()
                     # Find the declining class by emitting each alone.
                     bad = findfirst(run) do it
                         try
-                            _sc_emit_item!(_CGCtx(typemax(Int), nothing), it,
-                                           classes[it.class], layouts[it.class],
-                                           units[classes[it.class].rep],
-                                           cachemode[it.class], S, rhs_list, prelude,
-                                           ext, alwaysstore)
+                            _sc_emit_item!(
+                                _CGCtx(typemax(Int), nothing), it,
+                                classes[it.class], layouts[it.class],
+                                units[classes[it.class].rep],
+                                cachemode[it.class], S, rhs_list, prelude,
+                                ext, alwaysstore
+                            )
                             false
                         catch e2
                             e2 isa _CodegenDecline || rethrow()
@@ -804,7 +863,7 @@ end
 # Dependency levels of a cadence tier's slots: 1 + the deepest level among the
 # slots of the same tier a slot reads.
 function _sc_tier_levels(slots::AbstractVector{Int}, prelude, cache::_CSECache)
-    lvl = Dict{Int,Int}()
+    lvl = Dict{Int, Int}()
     reads = Int[]
     out = Vector{Int}(undef, length(slots))
     for (i, s) in enumerate(sort(collect(slots)))
@@ -826,30 +885,40 @@ end
 # Everything `_make_rhs` needs: a program per cadence tier (or `nothing`,
 # leaving that tier on the walker), the dynamic program, and what the walker
 # still has to do (`resid_dyn` slots, `resid_rhs` equations).
-struct _ScalarSection{CP,TP,DP,W}
+struct _ScalarSection{CP, TP, DP, W}
     constp::CP
     timep::TP
     dynp::DP
     resid_dyn::Vector{Int}
-    resid_rhs::Vector{Tuple{Int,_Node}}
+    resid_rhs::Vector{Tuple{Int, _Node}}
     emitted_outs::Vector{Int}        # `rhs_list` positions now compiled
     walk::W                          # `_PerCellLicense` when anything is walked
-    function _ScalarSection(constp::CP, timep::TP, dynp::DP, resid_dyn::Vector{Int},
-                            resid_rhs::Vector{Tuple{Int,_Node}}, emitted_outs::Vector{Int},
-                            walk::W) where {CP,TP,DP,W<:Union{Nothing,_PerCellLicense}}
+    function _ScalarSection(
+            constp::CP, timep::TP, dynp::DP, resid_dyn::Vector{Int},
+            resid_rhs::Vector{Tuple{Int, _Node}}, emitted_outs::Vector{Int},
+            walk::W
+        ) where {CP, TP, DP, W <: Union{Nothing, _PerCellLicense}}
         (W === Nothing && !(isempty(resid_dyn) && isempty(resid_rhs))) &&
-            throw(ArgumentError("a scalar section that leaves slots or equations " *
-                                "on the walker must hold a per-cell license"))
-        return new{CP,TP,DP,W}(constp, timep, dynp, resid_dyn, resid_rhs,
-                               emitted_outs, walk)
+            throw(
+            ArgumentError(
+                "a scalar section that leaves slots or equations " *
+                    "on the walker must hold a per-cell license"
+            )
+        )
+        return new{CP, TP, DP, W}(
+            constp, timep, dynp, resid_dyn, resid_rhs,
+            emitted_outs, walk
+        )
     end
 end
 
 # The scalar walker: prelude slots and equations evaluated from their trees on
 # every call. With no license there is nothing to walk (the section and
 # `_make_rhs` build none then), and the calls are empty.
-@inline function _walk_prelude_slots!(::_PerCellLicense, cache, slots, prelude,
-                                      u, p, t, ::Type{T}) where {T}
+@inline function _walk_prelude_slots!(
+        ::_PerCellLicense, cache, slots, prelude,
+        u, p, t, ::Type{T}
+    ) where {T}
     @inbounds for i in eachindex(slots)
         s = slots[i]
         cache[s] = _eval_node(prelude[s], u, p, t, T)
@@ -858,8 +927,10 @@ end
 end
 @inline _walk_prelude_slots!(::Nothing, cache, slots, prelude, u, p, t, ::Type{T}) where {T} =
     nothing
-@inline function _walk_scalar_rhs!(::_PerCellLicense, du, entries, u, p, t,
-                                   ::Type{T}) where {T}
+@inline function _walk_scalar_rhs!(
+        ::_PerCellLicense, du, entries, u, p, t,
+        ::Type{T}
+    ) where {T}
     @inbounds for k in 1:length(entries)
         idx_and_node = entries[k]
         du[idx_and_node[1]] = _eval_node(idx_and_node[2], u, p, t, T)
@@ -874,22 +945,27 @@ end
 # compiler first checks the operator arities of the walked trees (`walked()`
 # returns them), so a malformed document (a three-operand `/`) raises the walker's
 # own arity error rather than a refusal that blames the compiler.
-function _scalar_walk_license(walks::Bool, rule::AbstractString, what::AbstractString,
-                              walked = () -> ())
+function _scalar_walk_license(
+        walks::Bool, rule::AbstractString, what::AbstractString,
+        walked = () -> ()
+    )
     walks || return nothing
-    return _percell_license(rule,
+    return _percell_license(
+        rule,
         "$what could not be modelled by the scalar code generator (a node kind " *
-        "it has no arm for, a read of another section's scratch, or past the " *
-        "build's emitted-node budget, ESS_CODEGEN_NODE_BUDGET), so they " *
-        "would be evaluated as trees by the scalar walker on every " *
-        "right-hand-side call. Build with compiler=:interpreter to run it, or " *
-        "grow the scalar emitter to cover this construct";
-        probe = _ -> foreach(_sc_check_arity, walked()))
+            "it has no arm for, a read of another section's scratch, or past the " *
+            "build's emitted-node budget, ESS_CODEGEN_NODE_BUDGET), so they " *
+            "would be evaluated as trees by the scalar walker on every " *
+            "right-hand-side call. Build with compiler=:interpreter to run it, or " *
+            "grow the scalar emitter to cover this construct";
+        probe = _ -> foreach(_sc_check_arity, walked())
+    )
 end
 
 # The operator arities the registry declares (esm-spec §4.2), by node op.
-const _SC_OP_ARITY = Dict{Symbol,UnitRange{Int}}(
-    Symbol(s.name) => s.arity for s in _OP_TABLE if s.arity !== nothing)
+const _SC_OP_ARITY = Dict{Symbol, UnitRange{Int}}(
+    Symbol(s.name) => s.arity for s in _OP_TABLE if s.arity !== nothing
+)
 
 # Throw the walker's `E_TREEWALK_ARITY` for the first operator node in `nd`
 # whose child count the registry does not allow.
@@ -899,11 +975,15 @@ function _sc_check_arity(nd::_Node)
         n = length(nd.children)
         if ar !== nothing && !(n in ar)
             want = first(ar) == last(ar) ? "$(first(ar))" :
-                   last(ar) == typemax(Int) ? "at least $(first(ar))" :
-                   last(ar) == first(ar) + 1 ? "$(first(ar)) or $(last(ar))" :
-                   "$(first(ar)) to $(last(ar))"
-            throw(TreeWalkError("E_TREEWALK_ARITY",
-                                "$(nd.op) expects $want args, got $n"))
+                last(ar) == typemax(Int) ? "at least $(first(ar))" :
+                last(ar) == first(ar) + 1 ? "$(first(ar)) or $(last(ar))" :
+                "$(first(ar)) to $(last(ar))"
+            throw(
+                TreeWalkError(
+                    "E_TREEWALK_ARITY",
+                    "$(nd.op) expects $want args, got $n"
+                )
+            )
         end
     end
     foreach(_sc_check_arity, nd.children)
@@ -917,8 +997,10 @@ function _sc_tier_program(slots::AbstractVector{Int}, prelude, cache::_CSECache)
     order = sortperm(collect(zip(lv, slots)))
     units = _ScUnit[_ScUnit([slots[i]], Int[]) for i in order]
     level = lv[order]
-    prog, _, resid = _sc_program(units, level, Tuple{Int,_Node}[], prelude, cache,
-                                 Set{Int}(); alwaysstore = true, threaded = false)
+    prog, _, resid = _sc_program(
+        units, level, Tuple{Int, _Node}[], prelude, cache,
+        Set{Int}(); alwaysstore = true, threaded = false
+    )
     isempty(resid) || return nothing
     return prog
 end
@@ -926,43 +1008,54 @@ end
 # Build the scalar section. The first `n_rhs` entries of `rhs_list` are the
 # scalar equations; any after them (the forced per-cell reference) stay walked.
 # Returns `nothing` when the tier is off.
-function _build_scalar_section(rhs_list::AbstractVector{Tuple{Int,_Node}}, n_rhs::Int,
-                               prelude::AbstractVector{_Node}, cache::_CSECache,
-                               const_slots::AbstractVector{Int},
-                               time_slots::AbstractVector{Int},
-                               dyn_slots::AbstractVector{Int},
-                               acc_kernels::AbstractVector{_AccKernel};
-                               rule_of = slot -> "state slot $slot")
+function _build_scalar_section(
+        rhs_list::AbstractVector{Tuple{Int, _Node}}, n_rhs::Int,
+        prelude::AbstractVector{_Node}, cache::_CSECache,
+        const_slots::AbstractVector{Int},
+        time_slots::AbstractVector{Int},
+        dyn_slots::AbstractVector{Int},
+        acc_kernels::AbstractVector{_AccKernel};
+        rule_of = slot -> "state slot $slot"
+    )
     _scalar_codegen_disabled() && return nothing
     constp = _sc_tier_program(const_slots, prelude, cache)
     timep = _sc_tier_program(time_slots, prelude, cache)
     ext = Set{Int}()
-    seen = IdDict{Any,Nothing}()
+    seen = IdDict{Any, Nothing}()
     for K in acc_kernels
         _sc_kernel_reads!(ext, K, cache, seen)
     end
     good, bad = _sc_dynamic_units(rhs_list, n_rhs, prelude, cache, dyn_slots)
-    dynp, emitted, resid = _sc_program(good, ones(Int, length(good)), rhs_list, prelude,
-                                       cache, ext; alwaysstore = false, threaded = true)
+    dynp, emitted, resid = _sc_program(
+        good, ones(Int, length(good)), rhs_list, prelude,
+        cache, ext; alwaysstore = false, threaded = true
+    )
     resid_units = vcat(bad, good[resid])
     resid_dyn = sort!(reduce(vcat, (U.slots for U in resid_units); init = Int[]))
     resid_pos = sort!(reduce(vcat, (U.outs for U in resid_units); init = Int[]))
     append!(resid_pos, (n_rhs + 1):length(rhs_list))
-    resid_rhs = Tuple{Int,_Node}[rhs_list[k] for k in resid_pos]
+    resid_rhs = Tuple{Int, _Node}[rhs_list[k] for k in resid_pos]
     emitted_outs = sort!(reduce(vcat, (good[u].outs for u in emitted); init = Int[]))
     isempty(emitted) || _tally_cascade!(:scalar_codegen)
     isempty(resid_units) || _tally_cascade!(:scalar_codegen_decline)
     n_slots = length(resid_dyn) + (constp === nothing ? length(const_slots) : 0) +
-              (timep === nothing ? length(time_slots) : 0)
-    what = join(filter(!isempty, [
-        isempty(resid_rhs) ? "" : "$(length(resid_rhs)) scalar equation" *
-                                  (length(resid_rhs) == 1 ? "" : "s"),
-        n_slots == 0 ? "" : "$n_slots shared-subexpression slot" *
-                            (n_slots == 1 ? "" : "s")]), " and ")
+        (timep === nothing ? length(time_slots) : 0)
+    what = join(
+        filter(
+            !isempty, [
+                isempty(resid_rhs) ? "" : "$(length(resid_rhs)) scalar equation" *
+                    (length(resid_rhs) == 1 ? "" : "s"),
+                n_slots == 0 ? "" : "$n_slots shared-subexpression slot" *
+                    (n_slots == 1 ? "" : "s"),
+            ]
+        ), " and "
+    )
     rule = isempty(resid_rhs) ? "the scalar prelude" : rule_of(resid_rhs[1][1])
-    walked() = vcat(_Node[nd for (_, nd) in resid_rhs], _Node[prelude[s] for s in resid_dyn],
-                    constp === nothing ? _Node[prelude[s] for s in const_slots] : _Node[],
-                    timep === nothing ? _Node[prelude[s] for s in time_slots] : _Node[])
+    walked() = vcat(
+        _Node[nd for (_, nd) in resid_rhs], _Node[prelude[s] for s in resid_dyn],
+        constp === nothing ? _Node[prelude[s] for s in const_slots] : _Node[],
+        timep === nothing ? _Node[prelude[s] for s in time_slots] : _Node[]
+    )
     walk = _scalar_walk_license(n_slots + length(resid_rhs) > 0, rule, what, walked)
     return _ScalarSection(constp, timep, dynp, resid_dyn, resid_rhs, emitted_outs, walk)
 end
@@ -980,7 +1073,7 @@ function _retier_scalar_rules!(var_map, rhs_list, sec::_ScalarSection)
     for (i, r) in enumerate(rec.rules)
         r.kind === :equation || continue
         newtier = r.tier === :scalar ? :scalar_codegen :
-                  r.tier === :scalar_loop ? :scalar_loop_codegen : nothing
+            r.tier === :scalar_loop ? :scalar_loop_codegen : nothing
         newtier === nothing && continue
         get(var_map, r.rule, 0) in outs || continue
         rec.rules[i] = CompilerRuleRecord(r.rule, r.kind, newtier, r.declines)
@@ -996,21 +1089,23 @@ end
 # walker; then the kernels, the scan folds and the contractions. The walked
 # prelude is captured only when something is still walked, so a fully emitted
 # build carries no tree.
-function _make_rhs_scalar_cg(sec::_ScalarSection, full_prelude::AbstractVector{_Node},
-                             cse_cache::_CSECache,
-                             acc_kernels::AbstractVector{_AccKernel},
-                             const_slots::AbstractVector{Int},
-                             time_slots::AbstractVector{Int},
-                             scan_section::_ScanSection,
-                             array_contractions; nst::Int=0)
-    kernel_section = _make_kernel_section(acc_kernels; shared_cache=cse_cache, nst=nst)
+function _make_rhs_scalar_cg(
+        sec::_ScalarSection, full_prelude::AbstractVector{_Node},
+        cse_cache::_CSECache,
+        acc_kernels::AbstractVector{_AccKernel},
+        const_slots::AbstractVector{Int},
+        time_slots::AbstractVector{Int},
+        scan_section::_ScanSection,
+        array_contractions; nst::Int = 0
+    )
+    kernel_section = _make_kernel_section(acc_kernels; shared_cache = cse_cache, nst = nst)
     constp = sec.constp
     timep = sec.timep
     dynp = sec.dynp
     resid_dyn = sec.resid_dyn
     resid_rhs = sec.resid_rhs
     walks_prelude = (constp === nothing && !isempty(const_slots)) ||
-                    (timep === nothing && !isempty(time_slots)) || !isempty(resid_dyn)
+        (timep === nothing && !isempty(time_slots)) || !isempty(resid_dyn)
     # Named as `_make_rhs`'s capture is, so the walked prelude is introspectable
     # the same way whichever builder made `f!`.
     cse_prelude = walks_prelude ? collect(_Node, full_prelude) : _Node[]

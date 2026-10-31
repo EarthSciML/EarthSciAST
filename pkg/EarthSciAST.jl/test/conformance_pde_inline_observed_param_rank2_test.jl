@@ -24,9 +24,11 @@ import OrdinaryDiffEqTsit5
 include("testutils.jl")  # TESTUTILS_REPO_ROOT
 
 const _OPR2_REPO_ROOT = TESTUTILS_REPO_ROOT
-const _OPR2_CAT_DIR   = joinpath(_OPR2_REPO_ROOT, "tests", "conformance",
-                                 "pde_inline_observed_param_rank2")
-const _OPR2_MANIFEST  = joinpath(_OPR2_CAT_DIR, "manifest.json")
+const _OPR2_CAT_DIR = joinpath(
+    _OPR2_REPO_ROOT, "tests", "conformance",
+    "pde_inline_observed_param_rank2"
+)
+const _OPR2_MANIFEST = joinpath(_OPR2_CAT_DIR, "manifest.json")
 
 @testset "Conformance: pde_inline_observed_param_rank2 (manifest-driven)" begin
     @test isfile(_OPR2_MANIFEST)
@@ -43,7 +45,7 @@ const _OPR2_MANIFEST  = joinpath(_OPR2_CAT_DIR, "manifest.json")
     for fixture in manifest.fixtures
         id = String(fixture.id)
         @testset "$(id)" begin
-            esm_path    = joinpath(_OPR2_CAT_DIR, String(fixture.path))
+            esm_path = joinpath(_OPR2_CAT_DIR, String(fixture.path))
             golden_path = joinpath(_OPR2_CAT_DIR, String(fixture.golden))
             @test isfile(esm_path)
             @test isfile(golden_path)
@@ -51,9 +53,11 @@ const _OPR2_MANIFEST  = joinpath(_OPR2_CAT_DIR, "manifest.json")
             golden = JSON3.read(read(golden_path, String))
             @test String(golden.reference_binding) == "julia"
 
-            results = run_inline_tests(esm_path; model_name=String(fixture.model),
-                                    alg=OrdinaryDiffEqTsit5.Tsit5(),
-                                    reltol=1e-12, abstol=1e-14)
+            results = run_inline_tests(
+                esm_path; model_name = String(fixture.model),
+                alg = OrdinaryDiffEqTsit5.Tsit5(),
+                reltol = 1.0e-12, abstol = 1.0e-14
+            )
             @test length(results) == length(golden.assertions)
 
             # Index the Julia run by assertion_idx and gate each against BOTH
@@ -66,7 +70,7 @@ const _OPR2_MANIFEST  = joinpath(_OPR2_CAT_DIR, "manifest.json")
                 r = by_idx[gi]
                 @test r.passed
                 @test r.actual !== nothing
-                @test isapprox(r.actual, Float64(g.actual); rtol=rtol, atol=atol)
+                @test isapprox(r.actual, Float64(g.actual); rtol = rtol, atol = atol)
             end
         end
     end

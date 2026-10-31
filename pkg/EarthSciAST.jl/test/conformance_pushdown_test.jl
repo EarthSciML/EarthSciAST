@@ -15,7 +15,7 @@ const EA = EarthSciAST
 
 include("testutils.jl")  # TESTUTILS_REPO_ROOT
 
-const _TESTS_DIR     = joinpath(TESTUTILS_REPO_ROOT, "tests")
+const _TESTS_DIR = joinpath(TESTUTILS_REPO_ROOT, "tests")
 const _MANIFEST_PATH = joinpath(_TESTS_DIR, "conformance", "pushdown", "manifest.json")
 
 # Order-insensitive (keys), numeric-by-value deep equality on parsed JSON.
@@ -50,7 +50,7 @@ _deep_eq(a, b) = isequal(a, b)
             pristine = JSON.parsefile(input_path)
 
             rewritten = mn === nothing ? EA.desugar_pushdown(input) :
-                        EA.desugar_pushdown(input; model_name=String(mn))
+                EA.desugar_pushdown(input; model_name = String(mn))
             if fires
                 @test isfile(golden_path)
                 golden = JSON.parsefile(golden_path)
@@ -64,7 +64,7 @@ _deep_eq(a, b) = isequal(a, b)
             if diag_path !== nothing
                 @test isfile(diag_path)
                 diags = mn === nothing ? EA.pushdown_diagnostics(input) :
-                        EA.pushdown_diagnostics(input; model_name=String(mn))
+                    EA.pushdown_diagnostics(input; model_name = String(mn))
                 @test _deep_eq(diags, JSON.parsefile(diag_path))
             end
             @test _deep_eq(input, pristine)           # input not mutated

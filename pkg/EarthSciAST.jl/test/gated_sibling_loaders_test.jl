@@ -28,12 +28,12 @@ const EA = EarthSciAST
 
 # A gated provider that slices its own [layer, src, rcv] block per selection.
 mutable struct SiblingMock
-    full::Array{Float64,3}
+    full::Array{Float64, 3}
     calls::Vector{Any}
 end
 EA.provider_supports_selection(::SiblingMock) = true
 EA.provider_refresh_times(::SiblingMock) = Float64[]
-function EA.provider_sample(m::SiblingMock, ::Real; selection=nothing)
+function EA.provider_sample(m::SiblingMock, ::Real; selection = nothing)
     selection === nothing && (push!(m.calls, (:wholesale,)); return m.full)
     push!(m.calls, (:selection, deepcopy(selection)))
     lay, src, rcv = selection[1], selection[2], selection[3]
@@ -45,21 +45,31 @@ end
     full = reshape(collect(1.0:(N_LAYER * N_SRC * N_RCV)), (N_LAYER, N_SRC, N_RCV))
     members = [2, 4, 6]                      # 1-based support-set members
 
-    idx = Dict{String,Any}("supp" =>
-        EA.IndexSet("derived"; from_faq="faq1", member_factor=nothing))
-    vi = (members = Dict{String,Vector{Any}}("faq1" => Any[members...]),
-          extents = Dict{String,Int}("faq1" => length(members)))
+    idx = Dict{String, Any}(
+        "supp" =>
+            EA.IndexSet("derived"; from_faq = "faq1", member_factor = nothing)
+    )
+    vi = (
+        members = Dict{String, Vector{Any}}("faq1" => Any[members...]),
+        extents = Dict{String, Int}("faq1" => length(members)),
+    )
     # The post-flatten model: one variable per (loader, layer), all tail "SOA".
-    model = (variables = Dict{String,Any}("SR_L$(L).SOA" => nothing for L in 0:2),)
+    model = (variables = Dict{String, Any}("SR_L$(L).SOA" => nothing for L in 0:2),)
 
     mocks = Dict(L => SiblingMock(copy(full), Any[]) for L in 0:2)
-    gated = Dict{String,Any}(
-        "SR_L$(L).SOA" => (prov = mocks[L],
-                           gate = Dict{String,Any}(
-                               "axes" => Any[Dict("fixed" => Any[L]),
-                                             Dict("gated_by" => "supp"), "all"],
-                               "applies_to" => Any["SOA"]))
-        for L in 0:2)
+    gated = Dict{String, Any}(
+        "SR_L$(L).SOA" => (
+            prov = mocks[L],
+            gate = Dict{String, Any}(
+                "axes" => Any[
+                    Dict("fixed" => Any[L]),
+                    Dict("gated_by" => "supp"), "all",
+                ],
+                "applies_to" => Any["SOA"]
+            ),
+        )
+            for L in 0:2
+    )
 
     out = EA._fetch_gated_providers(gated, idx, vi, 0.0, model)
 
@@ -92,14 +102,21 @@ end
     # is unchanged: with one claimant, both the bare name and the flattened
     # alias are published, exactly as before.
     full = reshape(collect(1.0:24.0), (2, 6, 2))
-    idx = Dict{String,Any}("supp" => EA.IndexSet("derived"; from_faq="faq1"))
-    vi = (members = Dict{String,Vector{Any}}("faq1" => Any[1, 3]),
-          extents = Dict{String,Int}("faq1" => 2))
-    model = (variables = Dict{String,Any}("Flattened.SR" => nothing),)
-    gated = Dict{String,Any}("L.SR" => (prov = SiblingMock(copy(full), Any[]),
-        gate = Dict{String,Any}(
-            "axes" => Any[Dict("fixed" => Any[0]), Dict("gated_by" => "supp"), "all"],
-            "applies_to" => Any["SR"])))
+    idx = Dict{String, Any}("supp" => EA.IndexSet("derived"; from_faq = "faq1"))
+    vi = (
+        members = Dict{String, Vector{Any}}("faq1" => Any[1, 3]),
+        extents = Dict{String, Int}("faq1" => 2),
+    )
+    model = (variables = Dict{String, Any}("Flattened.SR" => nothing),)
+    gated = Dict{String, Any}(
+        "L.SR" => (
+            prov = SiblingMock(copy(full), Any[]),
+            gate = Dict{String, Any}(
+                "axes" => Any[Dict("fixed" => Any[0]), Dict("gated_by" => "supp"), "all"],
+                "applies_to" => Any["SR"]
+            ),
+        )
+    )
     out = EA._fetch_gated_providers(gated, idx, vi, 0.0, model)
     @test sort!(collect(keys(out))) == ["Flattened.SR", "SR"]
     @test out["SR"] == full[1, [1, 3], :]

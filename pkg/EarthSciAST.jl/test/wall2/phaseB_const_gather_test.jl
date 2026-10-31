@@ -25,7 +25,7 @@ _lit(i::Integer) = ESM._mknode(kind = ESM._NK_LITERAL, literal = Float64(i))
 _par(sym::Symbol) = ESM._mknode(kind = ESM._NK_PARAM, sym = sym)
 
 @testset "wall2 Phase B — _NK_CONST_GATHER" begin
-    Random.seed!(0xB0B)  # deterministic arrays across runs
+    Random.seed!(0x0B0B)  # deterministic arrays across runs
     u = Float64[]
     p0 = NamedTuple()
     t = 0.0
@@ -112,8 +112,12 @@ _par(sym::Symbol) = ESM._mknode(kind = ESM._NK_PARAM, sym = sym)
     @testset "out of range on one axis raises E_TREEWALK_CONSTARRAY_OOB" begin
         A = Float64[1 2; 3 4; 5 6]
         gather_err(i, j) = try
-            ESM._eval_node(ESM._const_gather_node(A, ESM._Node[_lit(i), _lit(j)];
-                                                  name="A"), u, p0, t)
+            ESM._eval_node(
+                ESM._const_gather_node(
+                    A, ESM._Node[_lit(i), _lit(j)];
+                    name = "A"
+                ), u, p0, t
+            )
             nothing
         catch err
             err
@@ -122,12 +126,16 @@ _par(sym::Symbol) = ESM._mknode(kind = ESM._NK_PARAM, sym = sym)
             err = gather_err(i, j)
             @test err isa ESM.TreeWalkError && err.code == "E_TREEWALK_CONSTARRAY_OOB"
         end
-        @test ESM._eval_node(ESM._const_gather_node(A, ESM._Node[_lit(3), _lit(2)]),
-                             u, p0, t) === 6.0
+        @test ESM._eval_node(
+            ESM._const_gather_node(A, ESM._Node[_lit(3), _lit(2)]),
+            u, p0, t
+        ) === 6.0
         # A declared boundary policy resolves on the run-time path exactly as it
         # does when the gather folds (`_resolve_const_index`).
         B = ESM._wrap_bounded_const(A, [:periodic, :clamp], "B")
-        @test ESM._eval_node(ESM._const_gather_node(B, ESM._Node[_lit(4), _lit(3)]),
-                             u, p0, t) === A[1, 2]
+        @test ESM._eval_node(
+            ESM._const_gather_node(B, ESM._Node[_lit(4), _lit(3)]),
+            u, p0, t
+        ) === A[1, 2]
     end
 end

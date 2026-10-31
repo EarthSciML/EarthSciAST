@@ -23,12 +23,14 @@ using Test
 import EarthSciAST as ESS
 const E = ESS
 
-op(o, a...) = Dict{String,Any}("op"=>o, "args"=>collect(Any, a))
-ix(a...)    = Dict{String,Any}("op"=>"index", "args"=>collect(Any, a))
-isref(n)    = Dict{String,Any}("from"=>n)
-agg(oi, ranges, body) = Dict{String,Any}("op"=>"faq",
-    "semiring"=>"sum_product", "output_idx"=>oi, "ranges"=>ranges,
-    "args"=>Any[], "expr"=>body)
+op(o, a...) = Dict{String, Any}("op" => o, "args" => collect(Any, a))
+ix(a...) = Dict{String, Any}("op" => "index", "args" => collect(Any, a))
+isref(n) = Dict{String, Any}("from" => n)
+agg(oi, ranges, body) = Dict{String, Any}(
+    "op" => "faq",
+    "semiring" => "sum_product", "output_idx" => oi, "ranges" => ranges,
+    "args" => Any[], "expr" => body
+)
 
 roundtrip(d) = E.flatten(ESS.coerce_esm_file(ESS.JSON3.read(ESS.JSON3.write(d))))
 
@@ -38,21 +40,32 @@ roundtrip(d) = E.flatten(ESS.coerce_esm_file(ESS.JSON3.read(ESS.JSON3.write(d)))
 # a §10.5 pointwise lift produces — whose aggregate body references `j` BARE:
 #   aggregate[i∈c]( D(s[i],t) ) = aggregate[i∈c]( j * s[i] )
 function lifted_consumer_doc()
-    lhs = agg(Any["i"], Dict{String,Any}("i"=>isref("c")),
-              Dict{String,Any}("op"=>"D", "args"=>Any[ix("s","i")], "wrt"=>"t"))
-    rhs = agg(Any["i"], Dict{String,Any}("i"=>isref("c")),
-              op("*", "j", ix("s","i")))
-    Dict{String,Any}("esm"=>"0.5.0", "metadata"=>Dict("name"=>"P"),
-      "index_sets"=>Dict{String,Any}("c"=>Dict{String,Any}("kind"=>"interval","size"=>3)),
-      "models"=>Dict{String,Any}("M"=>Dict{String,Any}(
-        "variables"=>Dict{String,Any}(
-          "f"=>Dict{String,Any}("type"=>"parameter","shape"=>Any["c"]),
-          # esm 1.0.0 §6.3: `j` is an `unknown` DEFINED by its bare-LHS equation.
-          "j"=>Dict{String,Any}("type"=>"unknown"),
-          "s"=>Dict{String,Any}("type"=>"unknown","shape"=>Any["c"])),
-        "equations"=>Any[
-          Dict{String,Any}("lhs"=>"j", "rhs"=>op("*","f",2)),
-          Dict{String,Any}("lhs"=>lhs, "rhs"=>rhs)])))
+    lhs = agg(
+        Any["i"], Dict{String, Any}("i" => isref("c")),
+        Dict{String, Any}("op" => "D", "args" => Any[ix("s", "i")], "wrt" => "t")
+    )
+    rhs = agg(
+        Any["i"], Dict{String, Any}("i" => isref("c")),
+        op("*", "j", ix("s", "i"))
+    )
+    return Dict{String, Any}(
+        "esm" => "0.5.0", "metadata" => Dict("name" => "P"),
+        "index_sets" => Dict{String, Any}("c" => Dict{String, Any}("kind" => "interval", "size" => 3)),
+        "models" => Dict{String, Any}(
+            "M" => Dict{String, Any}(
+                "variables" => Dict{String, Any}(
+                    "f" => Dict{String, Any}("type" => "parameter", "shape" => Any["c"]),
+                    # esm 1.0.0 §6.3: `j` is an `unknown` DEFINED by its bare-LHS equation.
+                    "j" => Dict{String, Any}("type" => "unknown"),
+                    "s" => Dict{String, Any}("type" => "unknown", "shape" => Any["c"])
+                ),
+                "equations" => Any[
+                    Dict{String, Any}("lhs" => "j", "rhs" => op("*", "f", 2)),
+                    Dict{String, Any}("lhs" => lhs, "rhs" => rhs),
+                ]
+            )
+        )
+    )
 end
 
 # The CONSUMER equation's RHS — the one that references the promoted variable.
@@ -67,16 +80,18 @@ end
 # consumer carried `aggregate` — but those were always the same node, and esm
 # 1.1.0 collapses them to `faq` (docs/content/rfcs/faq-node-rename.md). This
 # helper never meant "the only `faq`"; it meant "the consumer".
-consumer_rhs(sys) = only(eq for eq in sys.equations
-                         if eq.rhs isa E.OpExpr && eq.rhs.op == "faq" &&
-                            !(eq.lhs isa E.VarExpr)).rhs
+consumer_rhs(sys) = only(
+    eq for eq in sys.equations
+        if eq.rhs isa E.OpExpr && eq.rhs.op == "faq" &&
+        !(eq.lhs isa E.VarExpr)
+).rhs
 
 @testset "consumer refs to promoted vars are gathered in-loop" begin
     flat = lifted_consumer_doc() |> roundtrip
-    pre  = E.algebraic_states_to_observeds(flat)
+    pre = E.algebraic_states_to_observeds(flat)
 
     @testset "kill switch pins the pre-fix symptom" begin
-        broken = E.promote_downstream_shapes(pre; index_consumer_refs=false)
+        broken = E.promote_downstream_shapes(pre; index_consumer_refs = false)
         # `M.j` IS promoted to [c] …
         @test broken.observed_variables["M.j"].shape == ["c"]
         # … but its consumer still references it bare inside the lift body,
@@ -86,9 +101,11 @@ consumer_rhs(sys) = only(eq for eq in sys.equations
         # The exact downstream symptom (reseact saw it as
         # "E_TREEWALK_UNBOUND_VARIABLE: FastJX.j_NO2"):
         err = try
-            f!, u0, p, _t, vmap = E._build_evaluator(E.flattened_to_esm(broken);
-                const_arrays=Dict("M.f"=>[1.0,2.0,3.0]),
-                initial_conditions=Dict("M.s[$i]"=>1.0 for i in 1:3))
+            f!, u0, p, _t, vmap = E._build_evaluator(
+                E.flattened_to_esm(broken);
+                const_arrays = Dict("M.f" => [1.0, 2.0, 3.0]),
+                initial_conditions = Dict("M.s[$i]" => 1.0 for i in 1:3)
+            )
             du = similar(u0); f!(du, u0, p, 0.0)
             nothing
         catch e
@@ -104,14 +121,18 @@ consumer_rhs(sys) = only(eq for eq in sys.equations
         @test prom.observed_variables["M.j"].shape == ["c"]
         body = consumer_rhs(prom).expr_body
         # j is gathered at the lift's OWN loop (`i`), not left bare.
-        gathers = [c for c in E.child_exprs(body)
-                   if c isa E.OpExpr && c.op == "index" &&
-                      c.args[1] == E.VarExpr("M.j")]
+        gathers = [
+            c for c in E.child_exprs(body)
+                if c isa E.OpExpr && c.op == "index" &&
+                c.args[1] == E.VarExpr("M.j")
+        ]
         @test length(gathers) == 1
         @test gathers[1].args[2:end] == E.ASTExpr[E.VarExpr("i")]
-        f!, u0, p, _t, vmap = E._build_evaluator(E.flattened_to_esm(prom);
-            const_arrays=Dict("M.f"=>[1.0,2.0,3.0]),
-            initial_conditions=Dict("M.s[$i]"=>1.0 for i in 1:3))
+        f!, u0, p, _t, vmap = E._build_evaluator(
+            E.flattened_to_esm(prom);
+            const_arrays = Dict("M.f" => [1.0, 2.0, 3.0]),
+            initial_conditions = Dict("M.s[$i]" => 1.0 for i in 1:3)
+        )
         du = similar(u0); f!(du, u0, p, 0.0)
         # f=[1,2,3] → j=[2,4,6]; s≡1 → D(s[i]) = j[i]·s[i] = j[i]
         for (i, expect) in zip(1:3, (2.0, 4.0, 6.0))
@@ -124,25 +145,35 @@ end
     # A SCALAR reduction consuming the promoted var bare: D(z,t) = Σ_{k∈c} j.
     # The loop `k` is CONTRACTED (empty output_idx) — the case the downstream
     # per-equation workaround skipped and the ranges-scoped env closes.
-    red = agg(Any[], Dict{String,Any}("k"=>isref("c")), "j")
-    d = Dict{String,Any}("esm"=>"0.5.0", "metadata"=>Dict("name"=>"P"),
-      "index_sets"=>Dict{String,Any}("c"=>Dict{String,Any}("kind"=>"interval","size"=>3)),
-      "models"=>Dict{String,Any}("M"=>Dict{String,Any}(
-        "variables"=>Dict{String,Any}(
-          "f"=>Dict{String,Any}("type"=>"parameter","shape"=>Any["c"]),
-          "j"=>Dict{String,Any}("type"=>"unknown"),
-          "z"=>Dict{String,Any}("type"=>"unknown")),
-        "equations"=>Any[
-          Dict{String,Any}("lhs"=>"j", "rhs"=>op("*","f",2)),
-          Dict{String,Any}(
-          "lhs"=>Dict{String,Any}("op"=>"D","args"=>Any["z"],"wrt"=>"t"),
-          "rhs"=>red)])))
+    red = agg(Any[], Dict{String, Any}("k" => isref("c")), "j")
+    d = Dict{String, Any}(
+        "esm" => "0.5.0", "metadata" => Dict("name" => "P"),
+        "index_sets" => Dict{String, Any}("c" => Dict{String, Any}("kind" => "interval", "size" => 3)),
+        "models" => Dict{String, Any}(
+            "M" => Dict{String, Any}(
+                "variables" => Dict{String, Any}(
+                    "f" => Dict{String, Any}("type" => "parameter", "shape" => Any["c"]),
+                    "j" => Dict{String, Any}("type" => "unknown"),
+                    "z" => Dict{String, Any}("type" => "unknown")
+                ),
+                "equations" => Any[
+                    Dict{String, Any}("lhs" => "j", "rhs" => op("*", "f", 2)),
+                    Dict{String, Any}(
+                        "lhs" => Dict{String, Any}("op" => "D", "args" => Any["z"], "wrt" => "t"),
+                        "rhs" => red
+                    ),
+                ]
+            )
+        )
+    )
     prom = E.promote_downstream_shapes(roundtrip(d))
     body = consumer_rhs(prom).expr_body
     @test body isa E.OpExpr && body.op == "index" &&
-          body.args == E.ASTExpr[E.VarExpr("M.j"), E.VarExpr("k")]
-    f!, u0, p, _t, vmap = E._build_evaluator(E.flattened_to_esm(prom);
-        const_arrays=Dict("M.f"=>[1.0,2.0,3.0]), initial_conditions=Dict("M.z"=>0.0))
+        body.args == E.ASTExpr[E.VarExpr("M.j"), E.VarExpr("k")]
+    f!, u0, p, _t, vmap = E._build_evaluator(
+        E.flattened_to_esm(prom);
+        const_arrays = Dict("M.f" => [1.0, 2.0, 3.0]), initial_conditions = Dict("M.z" => 0.0)
+    )
     du = similar(u0); f!(du, u0, p, 0.0)
     @test du[vmap["M.z"]] ≈ 12.0                     # Σ 2f = 2+4+6
 end
@@ -151,29 +182,43 @@ end
     # g[d,c] seeds jj with shape [d,c]; the consumer body iterates [i∈c, k∈d]
     # (the PERMUTED order). The gather must follow jj's DECLARED axis order —
     # index(jj, k, i) — not the loop order, or c≠d would mis-shape / transpose.
-    lhs = agg(Any["i","k"],
-              Dict{String,Any}("i"=>isref("c"), "k"=>isref("d")),
-              Dict{String,Any}("op"=>"D", "args"=>Any[ix("s2","i","k")], "wrt"=>"t"))
-    rhs = agg(Any["i","k"],
-              Dict{String,Any}("i"=>isref("c"), "k"=>isref("d")),
-              op("*", "jj", ix("s2","i","k")))
-    d = Dict{String,Any}("esm"=>"0.5.0", "metadata"=>Dict("name"=>"P"),
-      "index_sets"=>Dict{String,Any}(
-        "c"=>Dict{String,Any}("kind"=>"interval","size"=>3),
-        "d"=>Dict{String,Any}("kind"=>"interval","size"=>2)),
-      "models"=>Dict{String,Any}("M"=>Dict{String,Any}(
-        "variables"=>Dict{String,Any}(
-          "g"=>Dict{String,Any}("type"=>"parameter","shape"=>Any["d","c"]),
-          "jj"=>Dict{String,Any}("type"=>"unknown"),
-          "s2"=>Dict{String,Any}("type"=>"unknown","shape"=>Any["c","d"])),
-        "equations"=>Any[
-          Dict{String,Any}("lhs"=>"jj", "rhs"=>op("*","g",2)),
-          Dict{String,Any}("lhs"=>lhs, "rhs"=>rhs)])))
+    lhs = agg(
+        Any["i", "k"],
+        Dict{String, Any}("i" => isref("c"), "k" => isref("d")),
+        Dict{String, Any}("op" => "D", "args" => Any[ix("s2", "i", "k")], "wrt" => "t")
+    )
+    rhs = agg(
+        Any["i", "k"],
+        Dict{String, Any}("i" => isref("c"), "k" => isref("d")),
+        op("*", "jj", ix("s2", "i", "k"))
+    )
+    d = Dict{String, Any}(
+        "esm" => "0.5.0", "metadata" => Dict("name" => "P"),
+        "index_sets" => Dict{String, Any}(
+            "c" => Dict{String, Any}("kind" => "interval", "size" => 3),
+            "d" => Dict{String, Any}("kind" => "interval", "size" => 2)
+        ),
+        "models" => Dict{String, Any}(
+            "M" => Dict{String, Any}(
+                "variables" => Dict{String, Any}(
+                    "g" => Dict{String, Any}("type" => "parameter", "shape" => Any["d", "c"]),
+                    "jj" => Dict{String, Any}("type" => "unknown"),
+                    "s2" => Dict{String, Any}("type" => "unknown", "shape" => Any["c", "d"])
+                ),
+                "equations" => Any[
+                    Dict{String, Any}("lhs" => "jj", "rhs" => op("*", "g", 2)),
+                    Dict{String, Any}("lhs" => lhs, "rhs" => rhs),
+                ]
+            )
+        )
+    )
     prom = E.promote_downstream_shapes(roundtrip(d))
-    @test prom.observed_variables["M.jj"].shape == ["d","c"]
+    @test prom.observed_variables["M.jj"].shape == ["d", "c"]
     body = consumer_rhs(prom).expr_body
-    gathers = [c for c in E.child_exprs(body)
-               if c isa E.OpExpr && c.op == "index" && c.args[1] == E.VarExpr("M.jj")]
+    gathers = [
+        c for c in E.child_exprs(body)
+            if c isa E.OpExpr && c.op == "index" && c.args[1] == E.VarExpr("M.jj")
+    ]
     @test length(gathers) == 1
     # Declared-axis order [d,c] → loops (k, i), NOT the body's (i, k).
     @test gathers[1].args[2:end] == E.ASTExpr[E.VarExpr("k"), E.VarExpr("i")]
@@ -184,21 +229,31 @@ end
     # references the promoted chain in SCALAR position. Its loops do not exist
     # yet; `index_promoted_refs!` closes it after `discretize`, so the promote
     # pass must leave it bare.
-    d = Dict{String,Any}("esm"=>"0.5.0", "metadata"=>Dict("name"=>"P"),
-      "index_sets"=>Dict{String,Any}("c"=>Dict{String,Any}("kind"=>"interval","size"=>3)),
-      "models"=>Dict{String,Any}("M"=>Dict{String,Any}(
-        "variables"=>Dict{String,Any}(
-          "f"=>Dict{String,Any}("type"=>"parameter","shape"=>Any["c"]),
-          "j"=>Dict{String,Any}("type"=>"unknown"),
-          "psi"=>Dict{String,Any}("type"=>"unknown","shape"=>Any["c"])),
-        "equations"=>Any[
-          Dict{String,Any}("lhs"=>"j", "rhs"=>op("*","f",2)),
-          Dict{String,Any}(
-          "lhs"=>Dict{String,Any}("op"=>"D","args"=>Any["psi"],"wrt"=>"t"),
-          "rhs"=>op("-","j"))])))
+    d = Dict{String, Any}(
+        "esm" => "0.5.0", "metadata" => Dict("name" => "P"),
+        "index_sets" => Dict{String, Any}("c" => Dict{String, Any}("kind" => "interval", "size" => 3)),
+        "models" => Dict{String, Any}(
+            "M" => Dict{String, Any}(
+                "variables" => Dict{String, Any}(
+                    "f" => Dict{String, Any}("type" => "parameter", "shape" => Any["c"]),
+                    "j" => Dict{String, Any}("type" => "unknown"),
+                    "psi" => Dict{String, Any}("type" => "unknown", "shape" => Any["c"])
+                ),
+                "equations" => Any[
+                    Dict{String, Any}("lhs" => "j", "rhs" => op("*", "f", 2)),
+                    Dict{String, Any}(
+                        "lhs" => Dict{String, Any}("op" => "D", "args" => Any["psi"], "wrt" => "t"),
+                        "rhs" => op("-", "j")
+                    ),
+                ]
+            )
+        )
+    )
     prom = E.promote_downstream_shapes(roundtrip(d))
-    deq = only(eq for eq in prom.equations
-               if eq.lhs isa E.OpExpr && eq.lhs.op == "D")
+    deq = only(
+        eq for eq in prom.equations
+            if eq.lhs isa E.OpExpr && eq.lhs.op == "D"
+    )
     @test deq.rhs isa E.OpExpr && deq.rhs.args == E.ASTExpr[E.VarExpr("M.j")]
 end
 
@@ -206,26 +261,36 @@ end
     # The original M2-1 fixture indexes the promoted chain EXPLICITLY
     # (`index(b,k)`); the consumer pass must not rewrap it — behaviour and
     # numbers identical to the pre-fix pass.
-    aggd = agg(Any[], Dict{String,Any}("k"=>isref("c")), ix("b","k"))
-    d = Dict{String,Any}("esm"=>"0.5.0","metadata"=>Dict("name"=>"P"),
-      "index_sets"=>Dict{String,Any}("c"=>Dict{String,Any}("kind"=>"interval","size"=>3)),
-      "models"=>Dict{String,Any}("M"=>Dict{String,Any}(
-        "variables"=>Dict{String,Any}(
-            "f"=>Dict{String,Any}("type"=>"parameter","shape"=>Any["c"]),
-            "a"=>Dict{String,Any}("type"=>"unknown"),
-            "b"=>Dict{String,Any}("type"=>"unknown"),
-            "s"=>Dict{String,Any}("type"=>"unknown")),
-        "equations"=>Any[
-            Dict{String,Any}("lhs"=>"a","rhs"=>op("*","f",2)),
-            Dict{String,Any}("lhs"=>"b","rhs"=>op("+","a","f")),
-            Dict{String,Any}(
-            "lhs"=>Dict{String,Any}("op"=>"D","args"=>Any["s"],"wrt"=>"t"),"rhs"=>aggd)])))
+    aggd = agg(Any[], Dict{String, Any}("k" => isref("c")), ix("b", "k"))
+    d = Dict{String, Any}(
+        "esm" => "0.5.0", "metadata" => Dict("name" => "P"),
+        "index_sets" => Dict{String, Any}("c" => Dict{String, Any}("kind" => "interval", "size" => 3)),
+        "models" => Dict{String, Any}(
+            "M" => Dict{String, Any}(
+                "variables" => Dict{String, Any}(
+                    "f" => Dict{String, Any}("type" => "parameter", "shape" => Any["c"]),
+                    "a" => Dict{String, Any}("type" => "unknown"),
+                    "b" => Dict{String, Any}("type" => "unknown"),
+                    "s" => Dict{String, Any}("type" => "unknown")
+                ),
+                "equations" => Any[
+                    Dict{String, Any}("lhs" => "a", "rhs" => op("*", "f", 2)),
+                    Dict{String, Any}("lhs" => "b", "rhs" => op("+", "a", "f")),
+                    Dict{String, Any}(
+                        "lhs" => Dict{String, Any}("op" => "D", "args" => Any["s"], "wrt" => "t"), "rhs" => aggd
+                    ),
+                ]
+            )
+        )
+    )
     flat = roundtrip(d)
-    prom_on  = E.promote_downstream_shapes(flat)
-    prom_off = E.promote_downstream_shapes(flat; index_consumer_refs=false)
+    prom_on = E.promote_downstream_shapes(flat)
+    prom_off = E.promote_downstream_shapes(flat; index_consumer_refs = false)
     for prom in (prom_on, prom_off)
-        f!, u0, p, _t, vmap = E._build_evaluator(E.flattened_to_esm(prom);
-            const_arrays=Dict("M.f"=>[1.0,2.0,3.0]), initial_conditions=Dict("M.s"=>0.0))
+        f!, u0, p, _t, vmap = E._build_evaluator(
+            E.flattened_to_esm(prom);
+            const_arrays = Dict("M.f" => [1.0, 2.0, 3.0]), initial_conditions = Dict("M.s" => 0.0)
+        )
         du = similar(u0); f!(du, u0, p, 0.0)
         @test du[vmap["M.s"]] ≈ 18.0
     end

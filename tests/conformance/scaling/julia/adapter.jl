@@ -62,20 +62,24 @@
 
 import Pkg
 # A child runs in the environment its parent has already instantiated.
-get(ENV, "SCALING_ADAPTER_CHILD", "") == "1" || let env = normpath(joinpath(@__DIR__, "..", "..", "..", "..", "pkg", "EarthSciAST.jl",
-                            "scripts", "scaling_env")),
-    manifest = joinpath(env, "Manifest.toml")
+get(ENV, "SCALING_ADAPTER_CHILD", "") == "1" || let env = normpath(
+        joinpath(
+            @__DIR__, "..", "..", "..", "..", "pkg", "EarthSciAST.jl",
+            "scripts", "scaling_env"
+        )
+    ),
+        manifest = joinpath(env, "Manifest.toml")
     bootstrap() = begin
-        Pkg.activate(env; io=devnull)
+        Pkg.activate(env; io = devnull)
         isfile(manifest) ||
-            Pkg.develop(path=normpath(joinpath(env, "..", "..")); io=devnull)
-        Pkg.instantiate(; io=devnull)
+            Pkg.develop(path = normpath(joinpath(env, "..", "..")); io = devnull)
+        Pkg.instantiate(; io = devnull)
     end
     try
         bootstrap()
     catch err
         @warn "$(basename(env)) did not instantiate; rebuilding Manifest.toml" exception = (err, catch_backtrace())
-        rm(manifest; force=true)
+        rm(manifest; force = true)
         bootstrap()
     end
 end
@@ -93,10 +97,12 @@ include(joinpath(@__DIR__, "hand_loops.jl"))
 # ---------------------------------------------------------------------------
 
 function parse_args(args)
-    o = Dict{String,Any}("family" => String[], "max-n" => typemax(Int), "budget" => 0.25,
-                         "max-build" => 1800.0, "compiler" => "native",
-                         "interpreter-max-states" => 2_000, "timeout-s" => 1800.0,
-                         "max-rss-gb" => 12.0, "in-process" => false)
+    o = Dict{String, Any}(
+        "family" => String[], "max-n" => typemax(Int), "budget" => 0.25,
+        "max-build" => 1800.0, "compiler" => "native",
+        "interpreter-max-states" => 2_000, "timeout-s" => 1800.0,
+        "max-rss-gb" => 12.0, "in-process" => false
+    )
     i = 1
     while i <= length(args)
         a = args[i]
@@ -108,7 +114,7 @@ function parse_args(args)
             continue
         end
         i < length(args) || error("$a needs a value")
-        v = args[i+1]
+        v = args[i + 1]
         if k == "family"
             push!(o["family"], v)
         elseif k in ("max-n", "interpreter-max-states")
@@ -142,9 +148,9 @@ end
 # either are skipped, so the slot tables and constants that do grow with N are
 # never read.
 
-_exprsize(ex) = ex isa Expr ? 1 + sum(_exprsize, ex.args; init=0) : 1
+_exprsize(ex) = ex isa Expr ? 1 + sum(_exprsize, ex.args; init = 0) : 1
 
-const _MAYHOLD = IdDict{Any,Bool}()
+const _MAYHOLD = IdDict{Any, Bool}()
 function _mayhold(@nospecialize T)
     haskey(_MAYHOLD, T) && return _MAYHOLD[T]
     T isa DataType || return true
@@ -165,7 +171,7 @@ function _mayhold(@nospecialize T)
 end
 
 function code_size(root)
-    seen = IdDict{Any,Nothing}()
+    seen = IdDict{Any, Nothing}()
     rgfs = Set{Any}()
     kernels = 0
     emitted = 0
@@ -211,7 +217,7 @@ end
 function _median(x)
     y = sort(x)
     m = length(y)
-    return isodd(m) ? y[(m+1)÷2] : (y[m÷2] + y[m÷2+1]) / 2
+    return isodd(m) ? y[(m + 1) ÷ 2] : (y[m ÷ 2] + y[m ÷ 2 + 1]) / 2
 end
 
 function timeit(f::F; budget = 0.25) where {F}
@@ -221,7 +227,7 @@ function timeit(f::F; budget = 0.25) where {F}
     while length(samples) < 5 || (total < budget && length(samples) < 1000)
         t0 = time_ns()
         f()
-        dt = (time_ns() - t0) / 1e9
+        dt = (time_ns() - t0) / 1.0e9
         push!(samples, dt)
         total += dt
     end
@@ -240,12 +246,12 @@ end
 # ---------------------------------------------------------------------------
 
 _refused(err) = hasproperty(err, :code) &&
-                String(getproperty(err, :code)) == ESA.ERROR_CODES.COMPILER_REFUSED_RULE
+    String(getproperty(err, :code)) == ESA.ERROR_CODES.COMPILER_REFUSED_RULE
 
 _msg(err) = first(sprint(showerror, err), 2000)
 
 function blank_result(entry)
-    return Dict{String,Any}(
+    return Dict{String, Any}(
         "family" => String(entry["family"]), "n" => Int(entry["n"]),
         "n_cells" => Int(entry["n_cells"]), "n_states" => Int(entry["n_states"]),
         "status" => "error", "reason" => nothing,
@@ -260,7 +266,8 @@ function blank_result(entry)
         # Julia's own fields, beyond the tier's format:
         "tiers" => nothing, "code_size_parts" => nothing, "hand_loop_serial_s" => nothing,
         "hand_loop_threads" => nothing, "hand_loop_checked_against" => nothing,
-        "interpreter_note" => nothing, "peak_rss_bytes" => nothing)
+        "interpreter_note" => nothing, "peak_rss_bytes" => nothing
+    )
 end
 
 # The state every call is measured at (the tier's README, "The measured
@@ -354,9 +361,9 @@ const SERIAL_NATIVE_MAX_CELLS = 10_000
 function declared_extents(path)
     flat = ESA.flatten(ESA.load_path(path); base_path = dirname(path))
     sets = flat.index_sets
-    ext = Dict{String,Vector{Int}}()
+    ext = Dict{String, Vector{Int}}()
     for vars in (flat.state_variables, flat.parameters, flat.observed_variables),
-        (name, v) in vars
+            (name, v) in vars
         (v.shape === nothing || isempty(v.shape)) && continue
         prefix = first(rsplit(name, '.'; limit = 2))
         dims = Int[]
@@ -394,8 +401,10 @@ function measure!(rec, path, entry, compiler, budget, interp_cap)
             prob = nothing
             insp = ESA.BuildInspection()
             GC.gc(false)
-            dt = @elapsed prob = ESA.esm_problem(path, (0.0, 1.0);
-                                                 compiler = compiler, inspect = insp)
+            dt = @elapsed prob = ESA.esm_problem(
+                path, (0.0, 1.0);
+                compiler = compiler, inspect = insp
+            )
             best = min(best, dt)
             spent += dt
             repeats += 1
@@ -418,8 +427,10 @@ function measure!(rec, path, entry, compiler, budget, interp_cap)
         rec["tiers"] = [[String(t), n] for (t, n) in ESA.tier_histogram(ESA.compiler_report(prob))]
         cs = code_size(prob.f!)
         rec["code_size"] = cs.emitted_nodes + cs.walked_nodes
-        rec["code_size_parts"] = Dict("kernels" => cs.kernels, "emitted_nodes" => cs.emitted_nodes,
-                                      "walked_nodes" => cs.walked_nodes)
+        rec["code_size_parts"] = Dict(
+            "kernels" => cs.kernels, "emitted_nodes" => cs.emitted_nodes,
+            "walked_nodes" => cs.walked_nodes
+        )
         f! = prob.f!
         p = prob.p
         u = probe_state(prob, fam, entry)
@@ -485,7 +496,7 @@ function hand_loop!(rec, prob, path, entry, du, budget, against)
     end
     try
         u = probe_state(prob, fam, entry)
-        doc = JSON3.read(read(path, String), Dict{String,Any})
+        doc = JSON3.read(read(path, String), Dict{String, Any})
         st = hl.setup(prob, doc, entry)
         row! = hl.row!
         duh = fill(NaN, length(u))
@@ -543,7 +554,7 @@ function serial_native!(rec, path, entry, compiler, ref, budget)
     catch err
         err isa InterruptException && rethrow()
         rec["reason"] = (rec["reason"] === nothing ? "" : rec["reason"] * "; ") *
-                        "serial native: " * _msg(err)
+            "serial native: " * _msg(err)
     end
     return
 end
@@ -592,7 +603,7 @@ function write_results(path, header, results)
         JSON3.pretty(io, JSON3.write(merge(header, Dict("results" => results))))
         println(io)
     end
-    mv(tmp, path; force = true)
+    return mv(tmp, path; force = true)
 end
 
 # Whether to stop a family's ladder after `rec`: its build went over
@@ -603,7 +614,7 @@ function ladder_stop(rec, prev, next, max_build)
     b === nothing && return nothing
     if b > max_build
         return "not attempted: the build at n = $(rec["n"]) took $(round(b; digits = 1)) s, " *
-               "over this run's --max-build of $(max_build) s"
+            "over this run's --max-build of $(max_build) s"
     end
     (next === nothing || prev === nothing || b < 1.0) && return nothing
     s0, b0 = prev
@@ -613,24 +624,27 @@ function ladder_stop(rec, prev, next, max_build)
     proj = b * (s2 / s1)^slope
     proj > max_build || return nothing
     return "not attempted: the build grew as n_states^$(round(slope; digits = 2)) up to " *
-           "n = $(rec["n"]) ($(round(b; digits = 1)) s), which projects $(round(proj; digits = 0)) s " *
-           "at n = $(next["n"]), over this run's --max-build of $(max_build) s"
+        "n = $(rec["n"]) ($(round(b; digits = 1)) s), which projects $(round(proj; digits = 0)) s " *
+        "at n = $(next["n"]), over this run's --max-build of $(max_build) s"
 end
 
 function run_header(o, compiler)
-    return Dict{String,Any}(
+    return Dict{String, Any}(
         "binding" => "julia", "compiler" => String(compiler), "threads" => Threads.nthreads(),
         "commit" => git_commit(), "host" => gethostname(),
         "target" => string(Sys.MACHINE), "julia_version" => string(VERSION),
         "machine" => machine_note(), "load_average" => load_average(),
         "cpus" => Sys.CPU_THREADS, "max_rss_gb" => o["in-process"] ? nothing : _gb(_cap(o)),
-        "timeout_s" => o["in-process"] ? nothing : o["timeout-s"])
+        "timeout_s" => o["in-process"] ? nothing : o["timeout-s"]
+    )
 end
 
 function selected(o)
-    index = JSON3.read(read(joinpath(o["docs"], "index.json"), String), Dict{String,Any})
-    entries = [e for e in index["documents"]
-               if (isempty(o["family"]) || e["family"] in o["family"]) && e["n"] <= o["max-n"]]
+    index = JSON3.read(read(joinpath(o["docs"], "index.json"), String), Dict{String, Any})
+    entries = [
+        e for e in index["documents"]
+            if (isempty(o["family"]) || e["family"] in o["family"]) && e["n"] <= o["max-n"]
+    ]
     fams = unique(String(e["family"]) for e in entries)
     ladders = [sort([e for e in entries if e["family"] == fam]; by = e -> e["n"]) for fam in fams]
     return fams, ladders
@@ -638,10 +652,12 @@ end
 
 function log_result(rec)
     peak = rec["peak_rss_bytes"] === nothing ? "" : " peak_rss=$(_gb(rec["peak_rss_bytes"]))GB"
-    println(stderr, "[$(rec["family"]) n=$(rec["n"])] $(rec["status"]) build=$(rec["build_s"]) " *
-                    "code=$(rec["code_size"]) rhs=$(rec["steady_rhs_s"]) hand=$(rec["hand_loop_s"]) " *
-                    "alloc=$(rec["allocs_per_call"]) diff=$(rec["hand_loop_max_abs_diff"])$peak" *
-                    (rec["reason"] === nothing ? "" : "  -- " * first(rec["reason"], 200)))
+    return println(
+        stderr, "[$(rec["family"]) n=$(rec["n"])] $(rec["status"]) build=$(rec["build_s"]) " *
+            "code=$(rec["code_size"]) rhs=$(rec["steady_rhs_s"]) hand=$(rec["hand_loop_s"]) " *
+            "alloc=$(rec["allocs_per_call"]) diff=$(rec["hand_loop_max_abs_diff"])$peak" *
+            (rec["reason"] === nothing ? "" : "  -- " * first(rec["reason"], 200))
+    )
 end
 
 # Measure every selected ladder in this process.
@@ -667,10 +683,14 @@ function run_in_process(o)
                 rec["reason"] = stop
             else
                 GC.gc()
-                measure!(rec, joinpath(o["docs"], e["path"]), e, compiler, o["budget"],
-                         o["interpreter-max-states"])
-                stop = ladder_stop(rec, prev, li < length(ladder) ? ladder[li+1] : nothing,
-                                   o["max-build"])
+                measure!(
+                    rec, joinpath(o["docs"], e["path"]), e, compiler, o["budget"],
+                    o["interpreter-max-states"]
+                )
+                stop = ladder_stop(
+                    rec, prev, li < length(ladder) ? ladder[li + 1] : nothing,
+                    o["max-build"]
+                )
                 rec["build_s"] === nothing || (prev = (rec["n_states"], rec["build_s"]))
             end
             push!(results, rec)
@@ -700,17 +720,23 @@ const INTERLEAVE_BUDGET_S = 5.0  # seconds of interleaved building per family, a
 # builds would not fit INTERLEAVE_MIN pairs in INTERLEAVE_BUDGET_S keeps the
 # ladder's build_s (the fields stay null).
 function interleave_slope_ends!(results, fam, o, compiler)
-    built = [r for r in results if r["family"] == fam && r["status"] == "ok" &&
-             r["build_s"] !== nothing && r["n_cells"] <= 1_000_000]
+    built = [
+        r for r in results if r["family"] == fam && r["status"] == "ok" &&
+            r["build_s"] !== nothing && r["n_cells"] <= 1_000_000
+    ]
     length(built) < 2 && return
     lo = built[argmin([r["n_states"] for r in built])]
     hi = built[argmax([r["n_states"] for r in built])]
     lo["n_states"] == hi["n_states"] && return
     repeats = min(INTERLEAVE_MAX, floor(Int, INTERLEAVE_BUDGET_S / (lo["build_s"] + hi["build_s"])))
     repeats < INTERLEAVE_MIN && return
-    index = JSON3.read(read(joinpath(o["docs"], "index.json"), String), Dict{String,Any})
-    path(r) = joinpath(o["docs"], only(e["path"] for e in index["documents"]
-                                       if e["family"] == fam && e["n"] == r["n"]))
+    index = JSON3.read(read(joinpath(o["docs"], "index.json"), String), Dict{String, Any})
+    path(r) = joinpath(
+        o["docs"], only(
+            e["path"] for e in index["documents"]
+                if e["family"] == fam && e["n"] == r["n"]
+        )
+    )
     plo, phi = path(lo), path(hi)
     # The collector stays out of every timed build: a young collection before
     # it, and none inside. Otherwise a collection of the ladder's garbage lands
@@ -772,7 +798,7 @@ end
 function child_results(path)
     isfile(path) || return Any[]
     try
-        return collect(Any, JSON3.read(read(path, String), Dict{String,Any})["results"])
+        return collect(Any, JSON3.read(read(path, String), Dict{String, Any})["results"])
     catch
         return Any[]
     end
@@ -790,8 +816,10 @@ function run_family(o, fam, ladder)
            --max-n $(o["max-n"]) --budget $(o["budget"]) --max-build $(o["max-build"])
            --compiler $(o["compiler"]) --interpreter-max-states $(o["interpreter-max-states"])
            --output $part`
-    proc = run(pipeline(addenv(cmd, "SCALING_ADAPTER_CHILD" => "1"); stdout = stdout, stderr = stderr);
-               wait = false)
+    proc = run(
+        pipeline(addenv(cmd, "SCALING_ADAPTER_CHILD" => "1"); stdout = stdout, stderr = stderr);
+        wait = false
+    )
     cap = _cap(o)
     done = 0
     peaks = Int[]          # the highest resident memory sampled while each document ran
@@ -814,8 +842,8 @@ function run_family(o, fam, ladder)
         end
         if r > cap
             killed = "out of memory: the process measuring this document reached $(_gb(r)) GB " *
-                     "resident after $(round(Int, time() - since)) s on it, over this run's " *
-                     "--max-rss-gb of $(_gb(cap)) GB"
+                "resident after $(round(Int, time() - since)) s on it, over this run's " *
+                "--max-rss-gb of $(_gb(cap)) GB"
         elseif time() - since > o["timeout-s"]
             killed = "timeout: no result within $(round(Int, o["timeout-s"])) s"
         end
@@ -835,17 +863,17 @@ function run_family(o, fam, ladder)
         startswith(something(rec["reason"], ""), "not attempted") || (rec["peak_rss_bytes"] = p)
     end
     if length(got) < length(ladder)
-        e = ladder[length(got)+1]
+        e = ladder[length(got) + 1]
         rec = blank_result(e)
         rec["peak_rss_bytes"] = peak
         rec["reason"] = killed !== nothing ? killed :
-                        proc.termsignal != 0 ?
-                        "the child process was killed by signal $(proc.termsignal) (9 is usually out of memory)" :
-                        "the child process exited with code $(proc.exitcode) before this document's result"
+            proc.termsignal != 0 ?
+            "the child process was killed by signal $(proc.termsignal) (9 is usually out of memory)" :
+            "the child process exited with code $(proc.exitcode) before this document's result"
         log_result(rec)
         why = "not attempted: the document at n = $(e["n"]) did not finish ($(rec["reason"]))"
         push!(got, rec)
-        for e2 in ladder[length(got)+1:end]
+        for e2 in ladder[(length(got) + 1):end]
             r2 = blank_result(e2)
             r2["reason"] = why
             log_result(r2)

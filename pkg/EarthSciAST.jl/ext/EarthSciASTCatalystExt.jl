@@ -55,31 +55,38 @@ include("shared/eval_var_macro.jl")
 # The unary elementwise ops the rate interpreter accepts — deliberately
 # NARROWER than the MTK lowering's set (no sinh/asin/…); membership is
 # behavior, so it stays explicit.
-const _RATE_UNARY_SCALAR_OPS = ("exp", "log", "log10", "sin", "cos", "tan",
-                                "sqrt", "abs")
+const _RATE_UNARY_SCALAR_OPS = (
+    "exp", "log", "log10", "sin", "cos", "tan",
+    "sqrt", "abs",
+)
 
 # Lower an ESM rate expression to Symbolics. The extension-independent
 # scalar arms live in the shared `_esm_to_symbolic_core`
 # (ext/shared/esm_to_symbolic.jl); the hooks below carry this extension's
 # policies: NumExpr values pass through untouched (no Int promotion), and
 # any op outside the scalar vocabulary is an error.
-function _esm_to_symbolic(expr::EsmExpr, var_dict::Dict{String,Any})
-    return _esm_to_symbolic_core(expr, a -> _esm_to_symbolic(a, var_dict);
+function _esm_to_symbolic(expr::EsmExpr, var_dict::Dict{String, Any})
+    return _esm_to_symbolic_core(
+        expr, a -> _esm_to_symbolic(a, var_dict);
         number_value = identity,
         resolve_var = name -> _resolve_rate_var(name, var_dict),
         unary_ops = _RATE_UNARY_SCALAR_OPS,
-        extended_op = (op, _) -> throw(ArgumentError(
-            "Unsupported operator in rate expression: $op")))
+        extended_op = (op, _) -> throw(
+            ArgumentError(
+                "Unsupported operator in rate expression: $op"
+            )
+        )
+    )
 end
 
 # Unknown-variable policy of the rate interpreter: AUTO-CREATE a fresh real
 # symbol and cache it. The MTK lowering throws instead; the divergence is
 # live behavior (see ext/shared/esm_to_symbolic.jl).
-function _resolve_rate_var(name::String, var_dict::Dict{String,Any})
+function _resolve_rate_var(name::String, var_dict::Dict{String, Any})
     if haskey(var_dict, name)
         return var_dict[name]
     else
-        sym = Symbolics.variable(Symbol(name); T=Real)
+        sym = Symbolics.variable(Symbol(name); T = Real)
         var_dict[name] = sym
         return sym
     end
@@ -97,8 +104,10 @@ end
 # `let` binding.
 function _make_species(name::Symbol, t_sym)
     call = Core.Expr(:call, name, :__esm_t)
-    return _eval_var_macro(Catalyst, Symbol("@species"), call;
-                           bindings=[:__esm_t => t_sym])
+    return _eval_var_macro(
+        Catalyst, Symbol("@species"), call;
+        bindings = [:__esm_t => t_sym]
+    )
 end
 
 _make_catalyst_param(name::Symbol) =
@@ -124,14 +133,16 @@ _make_catalyst_independent_var(name::Symbol) =
 
 Build a `Catalyst.ReactionSystem` from an ESM `ReactionSystem`.
 """
-function Catalyst.ReactionSystem(rsys::EarthSciAST.ReactionSystem;
-                                 name::Union{Symbol,AbstractString}=:anonymous,
-                                 kwargs...)
+function Catalyst.ReactionSystem(
+        rsys::EarthSciAST.ReactionSystem;
+        name::Union{Symbol, AbstractString} = :anonymous,
+        kwargs...
+    )
     t = _make_catalyst_independent_var(:t)
 
-    species_dict = Dict{String,Any}()
+    species_dict = Dict{String, Any}()
     species_syms = Any[]
-    param_dict = Dict{String,Any}()
+    param_dict = Dict{String, Any}()
     param_syms = Any[]
     for sp in rsys.species
         if sp.constant === true
@@ -162,9 +173,12 @@ function Catalyst.ReactionSystem(rsys::EarthSciAST.ReactionSystem;
         reactants_syms = Any[]
         reactant_stoich = Real[]
         for (spname, st) in get_reactants_dict(esm_rxn)
-            haskey(species_dict, spname) || throw(ArgumentError(
-                "reaction reactant '$(spname)' is not declared in the " *
-                "reaction system's species list"))
+            haskey(species_dict, spname) || throw(
+                ArgumentError(
+                    "reaction reactant '$(spname)' is not declared in the " *
+                        "reaction system's species list"
+                )
+            )
             push!(reactants_syms, species_dict[spname])
             push!(reactant_stoich, st)
         end
@@ -172,28 +186,45 @@ function Catalyst.ReactionSystem(rsys::EarthSciAST.ReactionSystem;
         products_syms = Any[]
         product_stoich = Real[]
         for (spname, st) in get_products_dict(esm_rxn)
-            haskey(species_dict, spname) || throw(ArgumentError(
-                "reaction product '$(spname)' is not declared in the " *
-                "reaction system's species list"))
+            haskey(species_dict, spname) || throw(
+                ArgumentError(
+                    "reaction product '$(spname)' is not declared in the " *
+                        "reaction system's species list"
+                )
+            )
             push!(products_syms, species_dict[spname])
             push!(product_stoich, st)
         end
 
         if isempty(reactants_syms) && !isempty(products_syms)
-            push!(rxns, Catalyst.Reaction(rate, nothing, products_syms,
-                                          nothing, product_stoich))
+            push!(
+                rxns, Catalyst.Reaction(
+                    rate, nothing, products_syms,
+                    nothing, product_stoich
+                )
+            )
         elseif !isempty(reactants_syms) && isempty(products_syms)
-            push!(rxns, Catalyst.Reaction(rate, reactants_syms, nothing,
-                                          reactant_stoich, nothing))
+            push!(
+                rxns, Catalyst.Reaction(
+                    rate, reactants_syms, nothing,
+                    reactant_stoich, nothing
+                )
+            )
         elseif !isempty(reactants_syms) && !isempty(products_syms)
-            push!(rxns, Catalyst.Reaction(rate, reactants_syms, products_syms,
-                                          reactant_stoich, product_stoich))
+            push!(
+                rxns, Catalyst.Reaction(
+                    rate, reactants_syms, products_syms,
+                    reactant_stoich, product_stoich
+                )
+            )
         end
     end
 
     sys_name = name isa Symbol ? name : Symbol(name)
-    return Catalyst.ReactionSystem(rxns, t, species_syms, param_syms;
-                                   name=sys_name, kwargs...)
+    return Catalyst.ReactionSystem(
+        rxns, t, species_syms, param_syms;
+        name = sys_name, kwargs...
+    )
 end
 
 # ========================================
@@ -210,18 +241,20 @@ function EarthSciAST.ReactionSystem(rs::Catalyst.ReactionSystem)
     # No fabrication: an ESM `default` field is omitted rather than invented
     # (same policy as `_lookup_default` in the MTK extension).
     _default_or_nothing(sym) = try
-        v = Symbolics.getmetadata(Symbolics.unwrap(sym),
-                                  Symbolics.VariableDefaultValue, nothing)
+        v = Symbolics.getmetadata(
+            Symbolics.unwrap(sym),
+            Symbolics.VariableDefaultValue, nothing
+        )
         v isa Number ? Float64(v) : nothing
     catch e
-        @debug "ReactionSystem export: default metadata unreadable for $(sym)" exception=(e, catch_backtrace())
+        @debug "ReactionSystem export: default metadata unreadable for $(sym)" exception = (e, catch_backtrace())
         nothing
     end
 
     species = Species[]
     for sp in Catalyst.species(rs)
         name = _strip_time(string(Catalyst.getname(sp)))
-        push!(species, Species(name; default=_default_or_nothing(sp)))
+        push!(species, Species(name; default = _default_or_nothing(sp)))
     end
 
     parameters = Parameter[]
@@ -232,7 +265,7 @@ function EarthSciAST.ReactionSystem(rs::Catalyst.ReactionSystem)
         # isconstantspecies=true metadata; recover them as ESM species with
         # constant=true rather than as ordinary parameters.
         if Catalyst.isconstant(p)
-            push!(species, Species(pname; default=default, constant=true))
+            push!(species, Species(pname; default = default, constant = true))
         else
             # `Parameter.default` is optional (esm-schema.json's `Parameter`
             # declares no `required` list), so absence travels as absence —
@@ -245,7 +278,7 @@ function EarthSciAST.ReactionSystem(rs::Catalyst.ReactionSystem)
 
     reactions = Reaction[]
     for rxn in Catalyst.reactions(rs)
-        reactants = Dict{String,Float64}()
+        reactants = Dict{String, Float64}()
         if !isempty(rxn.substrates)
             for (i, s) in enumerate(rxn.substrates)
                 name = _strip_time(string(Catalyst.getname(s)))
@@ -253,7 +286,7 @@ function EarthSciAST.ReactionSystem(rs::Catalyst.ReactionSystem)
                 reactants[name] = stoich
             end
         end
-        products = Dict{String,Float64}()
+        products = Dict{String, Float64}()
         if !isempty(rxn.products)
             for (i, pr) in enumerate(rxn.products)
                 name = _strip_time(string(Catalyst.getname(pr)))
@@ -265,7 +298,7 @@ function EarthSciAST.ReactionSystem(rs::Catalyst.ReactionSystem)
         push!(reactions, Reaction(reactants, products, rate))
     end
 
-    return ReactionSystem(species, reactions; parameters=parameters)
+    return ReactionSystem(species, reactions; parameters = parameters)
 end
 
 # (`_strip_time` is shared from src/mtk_export.jl.)
@@ -331,7 +364,7 @@ Fields populated from the reactions:
 Placeholders filled in Phase 2: `description`, `version`, `reference`,
 `tests`, `analyses`, `metadata.tags`, `metadata.source_ref`.
 """
-function mtk2esm(rs::Catalyst.ReactionSystem; metadata=(;))
+function mtk2esm(rs::Catalyst.ReactionSystem; metadata = (;))
     gaps = GapReport[]
 
     sys_name = _resolve_sys_name(rs, metadata, "UnnamedReactionSystem")
@@ -341,9 +374,13 @@ function mtk2esm(rs::Catalyst.ReactionSystem; metadata=(;))
     esm_rs = try
         EarthSciAST.ReactionSystem(rs)
     catch e
-        push!(gaps, GapReport("unknown",
-            "failed to convert Catalyst.ReactionSystem: $(sprint(showerror, e))",
-            "reaction_system"))
+        push!(
+            gaps, GapReport(
+                "unknown",
+                "failed to convert Catalyst.ReactionSystem: $(sprint(showerror, e))",
+                "reaction_system"
+            )
+        )
         # Build an empty ESM reaction system so the output stays schema-valid.
         ReactionSystem(Species[], Reaction[])
     end
@@ -355,16 +392,16 @@ function mtk2esm(rs::Catalyst.ReactionSystem; metadata=(;))
     # schema-sanctioned free-form text slot at the reaction_system level.
     ref_notes_lines = _reference_notes(metadata, gaps)
     if !isempty(ref_notes_lines)
-        rs_dict["reference"] = Dict{String,Any}("notes" => join(ref_notes_lines, "\n"))
+        rs_dict["reference"] = Dict{String, Any}("notes" => join(ref_notes_lines, "\n"))
     end
     rs_dict["tests"] = Any[]
     rs_dict["analyses"] = Any[]
 
     # Top-level EsmFile-shaped dict
-    out = Dict{String,Any}(
+    out = Dict{String, Any}(
         "esm" => EarthSciAST.SCHEMA_VERSION,
         "metadata" => _esm_file_metadata(metadata, sys_name),
-        "reaction_systems" => Dict{String,Any}(sys_name => rs_dict),
+        "reaction_systems" => Dict{String, Any}(sys_name => rs_dict),
     )
 
     _warn_gaps(gaps, "ReactionSystem $(sys_name)")

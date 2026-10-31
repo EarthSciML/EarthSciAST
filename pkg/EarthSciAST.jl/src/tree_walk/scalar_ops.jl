@@ -19,12 +19,14 @@
 # own registry tables.
 let arms = :(return nothing)
     for row in reverse(_UNARY_ELEMENTWISE_OPS)
-        arms = Core.Expr(:if, :(op === $(QuoteNode(row.sym))),
-                         quote
-                             _expect_arity_n(op, c, 1)
-                             return $(row.sym).(c[1])
-                         end,
-                         arms)
+        arms = Core.Expr(
+            :if, :(op === $(QuoteNode(row.sym))),
+            quote
+                _expect_arity_n(op, c, 1)
+                return $(row.sym).(c[1])
+            end,
+            arms
+        )
     end
     @eval @inline function _unary_elementwise(op::Symbol, c::AbstractVector)
         $arms
@@ -38,15 +40,19 @@ end
 # the fused blend is unchanged.
 let arms = :(return nothing)
     for row in reverse(_COMPARISON_ELEMENTWISE_OPS)
-        arms = Core.Expr(:if, :(op === $(QuoteNode(row.sym))),
-                         quote
-                             _expect_arity_n(op, c, 2)
-                             return ifelse.($(row.fnsym).(c[1], c[2]), one(T), zero(T))
-                         end,
-                         arms)
+        arms = Core.Expr(
+            :if, :(op === $(QuoteNode(row.sym))),
+            quote
+                _expect_arity_n(op, c, 2)
+                return ifelse.($(row.fnsym).(c[1], c[2]), one(T), zero(T))
+            end,
+            arms
+        )
     end
-    @eval @inline function _comparison(op::Symbol, c::AbstractVector,
-                                           ::Type{T}) where {T}
+    @eval @inline function _comparison(
+            op::Symbol, c::AbstractVector,
+            ::Type{T}
+        ) where {T}
         $arms
     end
 end
@@ -59,12 +65,14 @@ end
 # Dual walk keeps the power rule.
 let arms = :(return nothing)
     for row in reverse(_BINARY_ELEMENTWISE_OPS)
-        arms = Core.Expr(:if, :(op === $(QuoteNode(row.sym))),
-                         quote
-                             _expect_arity_n(op, c, 2)
-                             return $(row.fnsym).(c[1], c[2])
-                         end,
-                         arms)
+        arms = Core.Expr(
+            :if, :(op === $(QuoteNode(row.sym))),
+            quote
+                _expect_arity_n(op, c, 2)
+                return $(row.fnsym).(c[1], c[2])
+            end,
+            arms
+        )
     end
     @eval @inline function _binary_elementwise(op::Symbol, c::AbstractVector)
         $arms
@@ -75,17 +83,23 @@ end
 # same guard and fold order as the in-place ladders.
 let arms = :(return nothing)
     for row in reverse(_NARY_MINMAX_OPS)
-        arms = Core.Expr(:if, :(op === $(QuoteNode(row.sym))),
-                         quote
-                             length(c) < 2 && throw(TreeWalkError("E_TREEWALK_ARITY",
-                                 $(row.name * " needs ≥2 args")))
-                             r = $(row.fnsym).(c[1], c[2])
-                             for i in 3:length(c)
-                                 r = $(row.fnsym).(r, c[i])
-                             end
-                             return r
-                         end,
-                         arms)
+        arms = Core.Expr(
+            :if, :(op === $(QuoteNode(row.sym))),
+            quote
+                length(c) < 2 && throw(
+                    TreeWalkError(
+                        "E_TREEWALK_ARITY",
+                        $(row.name * " needs ≥2 args")
+                    )
+                )
+                r = $(row.fnsym).(c[1], c[2])
+                for i in 3:length(c)
+                    r = $(row.fnsym).(r, c[i])
+                end
+                return r
+            end,
+            arms
+        )
     end
     @eval @inline function _minmax(op::Symbol, c::AbstractVector)
         $arms
@@ -118,18 +132,18 @@ function _scalar_op(op::Symbol, c::AbstractVector, ::Type{T}) where {T}
     elseif op === :neg
         _expect_arity_n(op, c, 1)
         return .-c[1]
-    # Fixed-2-ary elementwise (`/`, `^`, `pow`, `atan2`) — GENERATED from the
-    # registry (`_binary_elementwise` above). The probe sits where `/` sat.
+        # Fixed-2-ary elementwise (`/`, `^`, `pow`, `atan2`) — GENERATED from the
+        # registry (`_binary_elementwise` above). The probe sits where `/` sat.
     elseif (bin = _binary_elementwise(op, c)) !== nothing
         return bin
 
-    # Comparisons → 1/0 in the value type — GENERATED from the registry
-    # (`_comparison` above, where the piecewise-constant AD note lives).
+        # Comparisons → 1/0 in the value type — GENERATED from the registry
+        # (`_comparison` above, where the piecewise-constant AD note lives).
     elseif (cmp = _comparison(op, c, T)) !== nothing
         return cmp
 
-    # Logical — folded (not short-circuited), matching `_eval_acc_op`; every child
-    # is evaluated either way, so the values agree with the scalar arm too.
+        # Logical — folded (not short-circuited), matching `_eval_acc_op`; every child
+        # is evaluated either way, so the values agree with the scalar arm too.
     elseif op === :and
         r = one(T)
         for a in eachindex(c)
@@ -155,8 +169,8 @@ function _scalar_op(op::Symbol, c::AbstractVector, ::Type{T}) where {T}
         length(c) == 1 && return atan.(c[1])
         length(c) == 2 && return atan.(c[1], c[2])
         throw(TreeWalkError("E_TREEWALK_ARITY", "atan expects 1 or 2 args"))
-    # n-ary min/max (arity ≥ 2) — GENERATED from the registry (`_minmax`
-    # above). (`atan2` is handled by the binary probe near the ladder top.)
+        # n-ary min/max (arity ≥ 2) — GENERATED from the registry (`_minmax`
+        # above). (`atan2` is handled by the binary probe near the ladder top.)
     elseif (mm = _minmax(op, c)) !== nothing
         return mm
 
@@ -220,7 +234,7 @@ function _index_int(n::_Node)::Int
         elseif op === :-
             length(c) == 1 && return -_index_int(c[1])
             return _index_int(c[1]) -
-                   _index_int(c[2])
+                _index_int(c[2])
         elseif op === :*
             s = 1
             @inbounds for d in eachindex(c)
@@ -228,15 +242,21 @@ function _index_int(n::_Node)::Int
             end
             return s
         elseif op === :/
-            return div(_index_int(c[1]),
-                       _index_int(c[2]))
+            return div(
+                _index_int(c[1]),
+                _index_int(c[2])
+            )
         end
     end
-    throw(TreeWalkError("E_TREEWALK_TRACED_SUBSCRIPT",
-        "an out-of-place gather subscript must resolve to a build-time / " *
-        "loop-counter integer, but this one is node kind $(k)" *
-        (k === _NK_OP ? " (op $(n.op))" : "") *
-        ". A subscript computed from the STATE cannot be resolved while tracing " *
-        "— XLA would need the value to pick a slot. Run the interpreted " *
-        "evaluator (`form = :inplace`), which resolves it per call."))
+    throw(
+        TreeWalkError(
+            "E_TREEWALK_TRACED_SUBSCRIPT",
+            "an out-of-place gather subscript must resolve to a build-time / " *
+                "loop-counter integer, but this one is node kind $(k)" *
+                (k === _NK_OP ? " (op $(n.op))" : "") *
+                ". A subscript computed from the STATE cannot be resolved while tracing " *
+                "— XLA would need the value to pick a slot. Run the interpreted " *
+                "evaluator (`form = :inplace`), which resolves it per call."
+        )
+    )
 end

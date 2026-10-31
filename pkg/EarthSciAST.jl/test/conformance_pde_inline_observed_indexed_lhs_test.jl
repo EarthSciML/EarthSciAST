@@ -27,8 +27,10 @@ import OrdinaryDiffEqTsit5
 
 include("testutils.jl")  # TESTUTILS_REPO_ROOT
 
-const _OIL_CAT_DIR  = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance",
-                               "pde_inline_observed_indexed_lhs")
+const _OIL_CAT_DIR = joinpath(
+    TESTUTILS_REPO_ROOT, "tests", "conformance",
+    "pde_inline_observed_indexed_lhs"
+)
 const _OIL_MANIFEST = joinpath(_OIL_CAT_DIR, "manifest.json")
 
 @testset "Conformance: pde_inline_observed_indexed_lhs (manifest-driven)" begin
@@ -46,7 +48,7 @@ const _OIL_MANIFEST = joinpath(_OIL_CAT_DIR, "manifest.json")
     for fixture in manifest.fixtures
         id = String(fixture.id)
         @testset "$(id)" begin
-            esm_path    = joinpath(_OIL_CAT_DIR, String(fixture.path))
+            esm_path = joinpath(_OIL_CAT_DIR, String(fixture.path))
             golden_path = joinpath(_OIL_CAT_DIR, String(fixture.golden))
             @test isfile(esm_path)
             @test isfile(golden_path)
@@ -54,9 +56,11 @@ const _OIL_MANIFEST = joinpath(_OIL_CAT_DIR, "manifest.json")
             golden = JSON3.read(read(golden_path, String))
             @test String(golden.reference_binding) == "julia"
 
-            results = run_inline_tests(esm_path; model_name=String(fixture.model),
-                                    alg=OrdinaryDiffEqTsit5.Tsit5(),
-                                    reltol=1e-12, abstol=1e-14)
+            results = run_inline_tests(
+                esm_path; model_name = String(fixture.model),
+                alg = OrdinaryDiffEqTsit5.Tsit5(),
+                reltol = 1.0e-12, abstol = 1.0e-14
+            )
             @test length(results) == length(golden.assertions)
 
             # Index by assertion_idx and gate each against BOTH the golden
@@ -70,7 +74,7 @@ const _OIL_MANIFEST = joinpath(_OIL_CAT_DIR, "manifest.json")
                 @test r.variable == String(g.variable)
                 @test r.passed
                 @test r.actual !== nothing
-                @test isapprox(r.actual, Float64(g.actual); rtol=rtol, atol=atol)
+                @test isapprox(r.actual, Float64(g.actual); rtol = rtol, atol = atol)
             end
             for decl in fixture.assertions
                 r = by_idx[Int(decl.assertion_idx)]
@@ -91,10 +95,12 @@ end
     @test !isempty(manifest.refusals)
     for ref in manifest.refusals
         @testset "$(ref.id)" begin
-            results = run_inline_tests(joinpath(_OIL_CAT_DIR, String(ref.path));
-                                       model_name=String(ref.model),
-                                       alg=OrdinaryDiffEqTsit5.Tsit5(),
-                                       reltol=1e-12, abstol=1e-14)
+            results = run_inline_tests(
+                joinpath(_OIL_CAT_DIR, String(ref.path));
+                model_name = String(ref.model),
+                alg = OrdinaryDiffEqTsit5.Tsit5(),
+                reltol = 1.0e-12, abstol = 1.0e-14
+            )
             @test length(results) == Int(ref.assertion_count)
             for r in results
                 @test !r.passed

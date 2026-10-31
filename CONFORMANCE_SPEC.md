@@ -6375,14 +6375,16 @@ Go and TypeScript are **out of scope**: neither has a Problem type, so neither
 has a compiler to name (`API_SPEC.md` §3, capability profiles).
 
 **What answers today.** Julia, Rust and Python each answer for `interpreter` and
-`native` on all six fixtures with no refusals and are `bindings_required` for both;
+`native` on all eight fixtures with no refusals and are `bindings_required` for both;
 Python is required for `sympy`, which runs the two scalar fixtures and refuses the
-four array ones by name. **Julia is required for `mtk`** as of 2026-09-22 — it runs
-all six, the array fixtures included, because their stencils are already
+six array ones by name. **Julia is required for `mtk`** as of 2026-09-22 — it runs
+the six fixtures of that date, the array fixtures included, because their stencils are already
 `arrayop` over an index set and carry no continuous spatial dimension for that
-compiler to refuse. What `mtk` DOES refuse is not exercised by these fixtures: a
-document fed by loaded data, one with a continuous spatial dimension, a geometry
-operator, and a time derivative of an expression. **Rust is `bindings_required`
+compiler to refuse. It refuses by name the two lifted fixtures added on
+2026-10-30, whose `makearray` region values are themselves arrays (it fills a
+region with one scalar). The rest of what `mtk` refuses is not exercised by these
+fixtures: a document fed by loaded data, one with a continuous spatial dimension,
+a geometry operator, and a time derivative of an expression. **Rust is `bindings_required`
 for `xla` as of 2026-09-22**: `esm_problem(…, compiler = Xla)` emits the model's
 tape as an XLA computation and solves on the compiled right-hand side, and all
 six fixtures agree with the golden with no refusals. That entry carries a BUILD
@@ -7112,6 +7114,22 @@ document carrying the field (`solver_time_span_version_too_old`).
 **The call site.** The manifest's `call_site` cases pass an explicit interval
 to the accessor, which MUST return it whether or not the document declares one.
 
+**The clock accessors.** The manifest's `clock` cases pin `time_origin` and
+`timestamp_to_seconds` (API_SPEC §5.8) in the three bindings that carry them,
+`clock.bindings_required` = `["julia", "python", "rust"]`. Each case gives a
+`domain` as raw JSON, and a binding runs it on that raw value and, where the
+typed form can hold it, on the typed domain and on a document built in memory
+that carries it; all forms MUST agree. The origin and every conversion are
+compared EXACTLY, or by code for a refusal: `timestamp_malformed`,
+`timestamp_no_calendar_day` and `time_origin_invalid`, checked in that order.
+The cases cover the three origins, offsets and a lowercase `t`, fractions on
+both sides, including a pair where `(W − W₀) + (f − f₀)` and
+`(W + f) − (W₀ + f₀)` differ, years 1 and 9999, each malformed shape, days a
+month does not have, and an origin that is unreadable, names no day, is a leap
+second, has an offset out of range, ends in a newline or is `null`, and a
+`domain` that is not an object (a string, an array, a number), which every
+binding refuses as `time_origin_invalid` rather than reading it as the epoch.
+
 **Mounting.** At both mount forms, a root reports its own interval or none,
 its emitted `solver` block carries nothing of the leaf's, and a root mounting a
 leaf whose `time_span` is reversed, or a 1.2.0 leaf that carries one, MUST
@@ -7362,6 +7380,47 @@ the evaluator. Go and TypeScript do not simulate; they only register the code.
 hands both equations to `mtkcompile`, which reports the imbalance in its own
 vocabulary.
 
+### 5.53 The Initial State a Problem Integrates From (normative)
+
+**Decision pinned.** `initial_state(prob)` (API_SPEC §5.8) returns the state a
+solve of `prob` starts from, one value per state element, without integrating:
+per element the first of the Problem's `u0` entry, an initialization equation
+(esm-spec §6.2), an `ic` equation or field initial condition (§11.4, §11.4.1),
+and the declared `default`, with the Problem's `p` (else the parameter defaults)
+bound in every initial condition's scope (§6.6.5). It MUST equal, bit for bit,
+the state at `tspan[0]` of a solve of the same Problem.
+
+**Reason.** A host that drives its own integrator (an operator-splitting
+planner, a restart writer) needs the initial state as the binding builds it, and
+the declared defaults are not it: an `ic` equation, a field `ic` or an
+initialization equation overrides them, and only the build knows which applies.
+Before the accessor a Rust caller recovered it by solving over a zero-length
+span, which is what each case is checked against.
+
+**Shape.** `tests/conformance/initial_state/manifest.json` lists eleven cases
+over four REFERENCED documents (`scalar_ic/fixtures/*.esm` and
+`pde_inline_ic_param_override/fixtures/ic_param_override.esm`, whose inline
+tests pin the same values at `t = 0` through a solve): a scalar `ic` that
+const-folds, one that reads a parameter, one a `u0` entry overrides, and a state
+with no `ic` that keeps its default; a broadcast array `ic` beside a 0-D one; a
+`faq` initialization equation with a filtered-out cell and cells outside its
+range; and a coordinate-expression `ic` under three values of its parameter.
+Each case gives the Problem's `p` and `u0` and the expected value of EVERY state
+element keyed by its flattened name (`M.u`, `F.u[2]`), so a binding checks the
+whole vector, not a sample. The expected values are the documents' own
+formulas, evaluated in binary64 in the documents' operation order by
+`scripts/gen-initial-state-manifest.py`, which reads the expressions from the
+fixtures (`--check` reports a manifest a fixture edit left stale); the
+tolerance (`rtol` 1e-14, `atol` 1e-15) leaves room only for a `cos` that differs
+in its last bit.
+
+**Adapters.** Rust — `pkg/earthsci-ast-rs/tests/initial_state_conformance.rs`,
+which also checks each case against a zero-length solve bit for bit, and that a
+static Problem and a Float32 Problem that integrates have no initial state. `bindings_required` is `["rust"]`: Julia
+holds the state in the `prob.u0` field and Python only as `init(prob).u`, and
+neither exports `initial_state` yet (`bindings_pending` in the manifest says so).
+Go and TypeScript do not simulate.
+
 ## 6. CI Integration
 
 ### 6.1 GitHub Actions Workflow
@@ -7508,7 +7567,7 @@ Eight further pins from esm-spec §4.8, each of which a binding has violated:
 | **Counts are dimensionless**; the axes are exactly `m kg s mol K A cd rad` | §4.8.1 | A binding delegating to `pint` typed `molec` as substance and the unit `units` as micro-nit (a luminance), so `units/L` became `cd·m⁻⁵`. |
 | **`DU` = 2.6867e20 m⁻²**, exactly; **no SI-prefix mechanism** | §4.8.1 | Two bindings shipped different Dobson roundings (2.6867e20 vs 2.69e20) and one compared to 1e-9 tolerance, so the same file errored in one and not the other. |
 | A **numeric atom is legal only when its value is exactly `1`** | §4.8.2 | `(m/s)^-1/3` — what an author writes reaching for a rational exponent — parses as `((m/s)^-1)/3`, and FOUR bindings accepted it with THREE different meanings: Julia dropped the 1/3, Rust/Go/TS retained it, Python rejected the string. Two of those differ only in SCALE, which a dimensional checker cannot see. `^(-1/3)` is now the only spelling, and the diagnostic must say "scaling factor". Fixtures: `tests/invalid/units_discriminator_scaling_factor.esm`, `tests/conformance/unit_registry`. |
-| The registry holds the **US customary family — `ft`, `mi`, `lb`, `hp`, `gal`, `short_ton`, `tonne`, `inHg`** — and deliberately **no `ton`, no `t`, no `in`, no `yd`, no `mph`** | §4.8.1 | The FF10 point-source format stores stack geometry in feet and the annual total in short tons; MOVES stores link length in miles, link speed in mi/h, engine ratings in horsepower, its emission rates in g/(hp*h), fuel consumption in lb/(hp*h), fuel density in g/gal and barometric pressure in inHg. Without those entries a document must either lie (`kg/yr` on a short-ton column: dimensionally perfect, wrong by 907.18474, invisible) or be rejected. `ton` is excluded because it is three different masses; `t` because a one-letter mass symbol reads as tera-; `in`/`yd` because no corpus column uses them; `mph` because it is a fused spelling of a compound the grammar already builds. Scales are pinned EXACTLY, and the SCALE is the contract wherever two conventions share a dimension: `ft` = 0.3048 m, `mi` = 1609.344 m (= 5280 ft), `lb` = 0.45359237 kg, `short_ton` = 907.18474 kg (= 2000 lb), `hp` = 745.6998715822702 W (MECHANICAL, 550 ft*lbf/s — the metric PS is 735.49875 W, 1.4% away), `gal` = 0.003785411784 m³ (US LIQUID — the imperial gallon is 4.54609 L, 20% away), `inHg` = 3386.388640341 Pa (= 25.4 mmHg). `short_ton` and `tonne`, `hp` and PS, `gal` and the imperial gallon each share a dimension, so only the scale distinguishes them. Fixtures: `tests/valid/units_inventory_registry.esm`, `tests/valid/units_moves_registry.esm`, `tests/conformance/unit_registry`. |
+| The registry holds the **US customary family — `ft`, `mi`, `lb`, `hp`, `gal`, `short_ton`, `tonne`, `inHg`** — plus the **megajoule `MJ`** MOVES tabulates fuel energy content in, and deliberately **no `ton`, no `t`, no `in`, no `yd`, no `mph`** | §4.8.1 | The FF10 point-source format stores stack geometry in feet and the annual total in short tons; MOVES stores link length in miles, link speed in mi/h, engine ratings in horsepower, its emission rates in g/(hp*h), fuel consumption in lb/(hp*h), fuel density in g/gal, barometric pressure in inHg and fuel energy content in MJ/kg. Without those entries a document must either lie (`kg/yr` on a short-ton column: dimensionally perfect, wrong by 907.18474, invisible) or be rejected. `ton` is excluded because it is three different masses; `t` because a one-letter mass symbol reads as tera-; `in`/`yd` because no corpus column uses them; `mph` because it is a fused spelling of a compound the grammar already builds. Scales are pinned EXACTLY, and the SCALE is the contract wherever two conventions share a dimension: `ft` = 0.3048 m, `mi` = 1609.344 m (= 5280 ft), `lb` = 0.45359237 kg, `short_ton` = 907.18474 kg (= 2000 lb), `hp` = 745.6998715822702 W (MECHANICAL, 550 ft*lbf/s — the metric PS is 735.49875 W, 1.4% away), `gal` = 0.003785411784 m³ (US LIQUID — the imperial gallon is 4.54609 L, 20% away), `inHg` = 3386.388640341 Pa (= 25.4 mmHg). `MJ` = 1e6 J exactly, and it is a flat-table entry like `MW`, not a prefix: `M` alone is molar, and `GJ`, `MPa`, `MWh` and `Mmol` are pinned rejects so a binding that resolves `MJ` through a units library's prefix rules cannot stay green. `short_ton` and `tonne`, `hp` and PS, `gal` and the imperial gallon each share a dimension, so only the scale distinguishes them. Fixtures: `tests/valid/units_inventory_registry.esm`, `tests/valid/units_moves_registry.esm`, `tests/conformance/unit_registry`. |
 
 #### 7.1.2 The `tests/invalid/expected_errors.json` pin contract
 

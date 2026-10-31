@@ -138,20 +138,22 @@ Return the v0.3.0 closed function set. Bindings MUST reject any `fn`-op
 require a spec rev (esm-spec §9.1).
 """
 function closed_function_names()::Set{String}
-    return Set{String}([
-        "datetime.year",
-        "datetime.month",
-        "datetime.day",
-        "datetime.hour",
-        "datetime.minute",
-        "datetime.second",
-        "datetime.day_of_year",
-        "datetime.julian_day",
-        "datetime.is_leap_year",
-        "interp.searchsorted",
-        "interp.linear",
-        "interp.bilinear",
-    ])
+    return Set{String}(
+        [
+            "datetime.year",
+            "datetime.month",
+            "datetime.day",
+            "datetime.hour",
+            "datetime.minute",
+            "datetime.second",
+            "datetime.day_of_year",
+            "datetime.julian_day",
+            "datetime.is_leap_year",
+            "interp.searchsorted",
+            "interp.linear",
+            "interp.bilinear",
+        ]
+    )
 end
 
 const _CLOSED_FUNCTION_NAMES = closed_function_names()
@@ -161,8 +163,12 @@ const _CLOSED_FUNCTION_NAMES = closed_function_names()
 # principle exceed that for absurd inputs.
 function _check_int32(name::String, v::Integer)::Int32
     if v < typemin(Int32) || v > typemax(Int32)
-        throw(ClosedFunctionError(ERROR_CODES.CLOSED_FUNCTION_OVERFLOW,
-            "$(name): result $(v) overflows Int32"))
+        throw(
+            ClosedFunctionError(
+                ERROR_CODES.CLOSED_FUNCTION_OVERFLOW,
+                "$(name): result $(v) overflows Int32"
+            )
+        )
     end
     return Int32(v)
 end
@@ -210,15 +216,23 @@ const _DAY_OF_INT32_YEAR_END = 784351576777.0
 end
 
 @noinline _cal_overflow(name::String, t) =
-    throw(ClosedFunctionError(ERROR_CODES.CLOSED_FUNCTION_OVERFLOW,
+    throw(
+    ClosedFunctionError(
+        ERROR_CODES.CLOSED_FUNCTION_OVERFLOW,
         isfinite(t) ? "$(name): the year of t_utc $(t) overflows Int32" :
-                      "$(name): t_utc $(t) is not finite"))
+            "$(name): t_utc $(t) is not finite"
+    )
+)
 
 function _cal_i32(name::String, v)::Int32
     fv = Float64(v)
     if !isfinite(fv) || fv < typemin(Int32) || fv > typemax(Int32)
-        throw(ClosedFunctionError(ERROR_CODES.CLOSED_FUNCTION_OVERFLOW,
-            "$(name): result $(fv) is not a finite Int32"))
+        throw(
+            ClosedFunctionError(
+                ERROR_CODES.CLOSED_FUNCTION_OVERFLOW,
+                "$(name): result $(fv) is not a finite Int32"
+            )
+        )
     end
     return Int32(fv)
 end
@@ -254,9 +268,13 @@ Throws [`ClosedFunctionError`](@ref) on contract violations.
 """
 function evaluate_closed_function(name::String, args::AbstractVector)
     if !(name in _CLOSED_FUNCTION_NAMES)
-        throw(ClosedFunctionError(ERROR_CODES.UNKNOWN_CLOSED_FUNCTION,
-            "`fn` name `$(name)` is not in the v0.3.0 closed function registry " *
-            "(esm-spec §9.2). Adding a primitive requires a spec rev."))
+        throw(
+            ClosedFunctionError(
+                ERROR_CODES.UNKNOWN_CLOSED_FUNCTION,
+                "`fn` name `$(name)` is not in the v0.3.0 closed function registry " *
+                    "(esm-spec §9.2). Adding a primitive requires a spec rev."
+            )
+        )
     end
 
     if name == "datetime.year"
@@ -294,12 +312,18 @@ function evaluate_closed_function(name::String, args::AbstractVector)
         return _interp_linear(name, args[1], args[2], Float64(args[3]))::Float64
     elseif name == "interp.bilinear"
         _expect_arity(name, args, 5)
-        return _interp_bilinear(name, args[1], args[2], args[3],
-                                Float64(args[4]), Float64(args[5]))::Float64
+        return _interp_bilinear(
+            name, args[1], args[2], args[3],
+            Float64(args[4]), Float64(args[5])
+        )::Float64
     end
     # Should be unreachable — `name in _CLOSED_FUNCTION_NAMES` covered above.
-    throw(ClosedFunctionError(ERROR_CODES.UNKNOWN_CLOSED_FUNCTION,
-        "internal: `fn` name `$(name)` is in the registry but has no dispatch arm"))
+    throw(
+        ClosedFunctionError(
+            ERROR_CODES.UNKNOWN_CLOSED_FUNCTION,
+            "internal: `fn` name `$(name)` is in the registry but has no dispatch arm"
+        )
+    )
 end
 
 """
@@ -342,20 +366,20 @@ function evaluate_closed_function_ad(name::String, args::AbstractVector)
     elseif name == "interp.bilinear"
         _expect_arity(name, args, 5)
         return _interp_bilinear(name, args[1], args[2], args[3], args[4], args[5])
-    # ---- Calendar fields ----
-    # These used to fall through to the pinned registry, which was correct for
-    # a `Dual` (whose primal `_value` recovers) and a wall for anything a host
-    # `Float64` cannot represent — a traced value, where `Int32(...)` has no
-    # answer to give. `_cal_narrow` keeps the OLD behavior wherever the old
-    # behavior was possible and only widens where it was not, so a `Dual`
-    # query still returns exactly the `Int32` the `Float64` path returns
-    # (pinned by `closed_functions_autodiff_test.jl`) and a traced query
-    # returns a traced number, keeping the decomposition inside the program.
-    #
-    # `_value` is the identity on a traced number and the primal of a `Dual`,
-    # so a differentiating walk still gets the exact a.e. derivative (zero —
-    # these are piecewise constant) rather than partials leaking through the
-    # floor divisions.
+        # ---- Calendar fields ----
+        # These used to fall through to the pinned registry, which was correct for
+        # a `Dual` (whose primal `_value` recovers) and a wall for anything a host
+        # `Float64` cannot represent — a traced value, where `Int32(...)` has no
+        # answer to give. `_cal_narrow` keeps the OLD behavior wherever the old
+        # behavior was possible and only widens where it was not, so a `Dual`
+        # query still returns exactly the `Int32` the `Float64` path returns
+        # (pinned by `closed_functions_autodiff_test.jl`) and a traced query
+        # returns a traced number, keeping the decomposition inside the program.
+        #
+        # `_value` is the identity on a traced number and the primal of a `Dual`,
+        # so a differentiating walk still gets the exact a.e. derivative (zero —
+        # these are piecewise constant) rather than partials leaking through the
+        # floor divisions.
     elseif name == "datetime.year"
         _expect_arity(name, args, 1); return _cal_narrow(name, _cal_year(_cal_t(name, _value(args[1]))))
     elseif name == "datetime.month"
@@ -383,7 +407,7 @@ end
 # zero-allocation property exactly; at a dual `T` it folds to the generic twin.
 @inline function _eval_closed_fn(name::String, args::AbstractVector, ::Type{T}) where {T}
     return T === Float64 ? evaluate_closed_function(name, args) :
-                           evaluate_closed_function_ad(name, args)
+        evaluate_closed_function_ad(name, args)
 end
 
 # ========================================================================
@@ -470,8 +494,10 @@ end
 @inline function _cdiv(a, b)
     q = floor(a / b)
     r = a - q * b
-    return ifelse(r < 0, q - oftype(q, 1),
-                  ifelse(r >= b, q + oftype(q, 1), q))
+    return ifelse(
+        r < 0, q - oftype(q, 1),
+        ifelse(r >= b, q + oftype(q, 1), q)
+    )
 end
 
 # Days since 1970-01-01 and the whole second of the day, in [0, 86400), from a
@@ -499,8 +525,10 @@ end
     z = days + 719468
     era = _cdiv(z, 146097)                       # 400-year era
     doe = z - era * 146097                       # day-of-era, 0..146096
-    yoe = _cdiv(doe - _cdiv(doe, 1460) + _cdiv(doe, 36524) -
-                _cdiv(doe, 146096), 365)         # year-of-era, 0..399
+    yoe = _cdiv(
+        doe - _cdiv(doe, 1460) + _cdiv(doe, 36524) -
+            _cdiv(doe, 146096), 365
+    )         # year-of-era, 0..399
     doy = doe - (365 * yoe + _cdiv(yoe, 4) - _cdiv(yoe, 100))  # days since Mar 1
     mp = _cdiv(5 * doy + 2, 153)                 # month index, Mar = 0 .. Feb = 11
     d = doy - _cdiv(153 * mp + 2, 5) + 1
@@ -525,9 +553,9 @@ end
 # field; the unused arithmetic is dead code that LLVM drops on the host path
 # and XLA's DCE drops in the traced program, so computing (y, m, d) together
 # costs nothing at either end.
-@inline _cal_year(t)   = _civil_from_days(_cal_split(t)[1])[1]
-@inline _cal_month(t)  = _civil_from_days(_cal_split(t)[1])[2]
-@inline _cal_day(t)    = _civil_from_days(_cal_split(t)[1])[3]
+@inline _cal_year(t) = _civil_from_days(_cal_split(t)[1])[1]
+@inline _cal_month(t) = _civil_from_days(_cal_split(t)[1])[2]
+@inline _cal_day(t) = _civil_from_days(_cal_split(t)[1])[3]
 
 @inline function _cal_day_of_year(t)
     days = _cal_split(t)[1]
@@ -669,26 +697,44 @@ end
 # of one calendar is two calendars (see the section header above), so there is
 # exactly one, and every tier reaches it.
 const _FN_TYPED_SCALAR_CORES = (
-    (fname = "datetime.year", arity = 1, kernel = t -> _cal_guarded(_cal_year, t),
-     core = t -> Float64(_cal_i32("datetime.year", _cal_year(_cal_t("datetime.year", t))))),
-    (fname = "datetime.month", arity = 1, kernel = t -> _cal_guarded(_cal_month, t),
-     core = t -> Float64(_cal_i32("datetime.month", _cal_month(_cal_t("datetime.month", t))))),
-    (fname = "datetime.day", arity = 1, kernel = t -> _cal_guarded(_cal_day, t),
-     core = t -> Float64(_cal_i32("datetime.day", _cal_day(_cal_t("datetime.day", t))))),
-    (fname = "datetime.hour", arity = 1, kernel = t -> _cal_guarded(_cal_hour, t),
-     core = t -> Float64(_cal_i32("datetime.hour", _cal_hour(_cal_t("datetime.hour", t))))),
-    (fname = "datetime.minute", arity = 1, kernel = t -> _cal_guarded(_cal_minute, t),
-     core = t -> Float64(_cal_i32("datetime.minute", _cal_minute(_cal_t("datetime.minute", t))))),
-    (fname = "datetime.second", arity = 1, kernel = t -> _cal_guarded(_cal_second, t),
-     core = t -> Float64(_cal_i32("datetime.second", _cal_second(_cal_t("datetime.second", t))))),
-    (fname = "datetime.day_of_year", arity = 1, kernel = t -> _cal_guarded(_cal_day_of_year, t),
-     core = t -> Float64(_cal_i32("datetime.day_of_year", _cal_day_of_year(_cal_t("datetime.day_of_year", t))))),
-    (fname = "datetime.is_leap_year", arity = 1, kernel = t -> _cal_guarded(_cal_is_leap_year, t),
-     core = t -> Float64(_cal_i32("datetime.is_leap_year", _cal_is_leap_year(_cal_t("datetime.is_leap_year", t))))),
+    (
+        fname = "datetime.year", arity = 1, kernel = t -> _cal_guarded(_cal_year, t),
+        core = t -> Float64(_cal_i32("datetime.year", _cal_year(_cal_t("datetime.year", t)))),
+    ),
+    (
+        fname = "datetime.month", arity = 1, kernel = t -> _cal_guarded(_cal_month, t),
+        core = t -> Float64(_cal_i32("datetime.month", _cal_month(_cal_t("datetime.month", t)))),
+    ),
+    (
+        fname = "datetime.day", arity = 1, kernel = t -> _cal_guarded(_cal_day, t),
+        core = t -> Float64(_cal_i32("datetime.day", _cal_day(_cal_t("datetime.day", t)))),
+    ),
+    (
+        fname = "datetime.hour", arity = 1, kernel = t -> _cal_guarded(_cal_hour, t),
+        core = t -> Float64(_cal_i32("datetime.hour", _cal_hour(_cal_t("datetime.hour", t)))),
+    ),
+    (
+        fname = "datetime.minute", arity = 1, kernel = t -> _cal_guarded(_cal_minute, t),
+        core = t -> Float64(_cal_i32("datetime.minute", _cal_minute(_cal_t("datetime.minute", t)))),
+    ),
+    (
+        fname = "datetime.second", arity = 1, kernel = t -> _cal_guarded(_cal_second, t),
+        core = t -> Float64(_cal_i32("datetime.second", _cal_second(_cal_t("datetime.second", t)))),
+    ),
+    (
+        fname = "datetime.day_of_year", arity = 1, kernel = t -> _cal_guarded(_cal_day_of_year, t),
+        core = t -> Float64(_cal_i32("datetime.day_of_year", _cal_day_of_year(_cal_t("datetime.day_of_year", t)))),
+    ),
+    (
+        fname = "datetime.is_leap_year", arity = 1, kernel = t -> _cal_guarded(_cal_is_leap_year, t),
+        core = t -> Float64(_cal_i32("datetime.is_leap_year", _cal_is_leap_year(_cal_t("datetime.is_leap_year", t)))),
+    ),
     # Already `Float64`-valued — the boxed arm's `convert(T, ::Float64)` was
     # the identity, so the core is the kernel behind the overflow gate.
-    (fname = "datetime.julian_day", arity = 1, kernel = t -> _cal_guarded(_datetime_julian_day, t),
-     core = t -> _datetime_julian_day(_cal_t("datetime.julian_day", t))),
+    (
+        fname = "datetime.julian_day", arity = 1, kernel = t -> _cal_guarded(_datetime_julian_day, t),
+        core = t -> _datetime_julian_day(_cal_t("datetime.julian_day", t)),
+    ),
 )
 
 # The overflow gate of the eltype-generic kernels: `_cal_t`'s test, as a select.
@@ -698,8 +744,10 @@ const _FN_TYPED_SCALAR_CORES = (
     v = kernel(t)
     days = _cal_split(_value(t))[1]
     nan = oftype(v, NaN)
-    return ifelse(days >= _DAY_OF_INT32_MIN_YEAR,
-        ifelse(days < _DAY_OF_INT32_YEAR_END, v, nan), nan)
+    return ifelse(
+        days >= _DAY_OF_INT32_MIN_YEAR,
+        ifelse(days < _DAY_OF_INT32_YEAR_END, v, nan), nan
+    )
 end
 
 # The eltype-generic kernel of row `id`, for a backend that must lower the
@@ -719,7 +767,7 @@ end
 # TIME ONLY (a linear scan over a heterogeneous tuple — type-unstable and
 # happily so); the runtime hot paths carry the resolved `_FnTypedCoreSpec` on
 # the node payload instead.
-function _fn_typed_core_spec(fname::AbstractString)::Union{Nothing,_FnTypedCoreSpec}
+function _fn_typed_core_spec(fname::AbstractString)::Union{Nothing, _FnTypedCoreSpec}
     for (i, row) in enumerate(_FN_TYPED_SCALAR_CORES)
         row.fname == fname && return _FnTypedCoreSpec(i, row.arity)
     end
@@ -729,8 +777,12 @@ end
 # Should be unreachable: every `id` in a `_FnTypedCoreSpec` payload was minted
 # by `_fn_typed_core_spec` from the same const table this indexes.
 @noinline _fn_typed_core_id_oob(id::Int) =
-    throw(ClosedFunctionError(ERROR_CODES.UNKNOWN_CLOSED_FUNCTION,
-        "internal: typed-core id $(id) has no _FN_TYPED_SCALAR_CORES row"))
+    throw(
+    ClosedFunctionError(
+        ERROR_CODES.UNKNOWN_CLOSED_FUNCTION,
+        "internal: typed-core id $(id) has no _FN_TYPED_SCALAR_CORES row"
+    )
+)
 
 # The typed unary call, shared by EVERY tier's `Float64` fast path (scalar
 # walker, access interpreter, codegen, both `:oop` paths) — one
@@ -745,7 +797,7 @@ end
     _fn_typed_core_id_oob(id)
 @inline function _fn_typed_core_call_r(rows::Tuple, id::Int, x::Float64)::Float64
     return id == 1 ? Float64(first(rows).core(x)) :
-                     _fn_typed_core_call_r(Base.tail(rows), id - 1, x)
+        _fn_typed_core_call_r(Base.tail(rows), id - 1, x)
 end
 
 # Validate an `interp.searchsorted` table `xs` (esm-spec §9.2), in the spec's
@@ -758,24 +810,38 @@ end
 # the MTK lowering — runs it.
 function _validate_searchsorted_table(name::String, xs)::Nothing
     if !(xs isa AbstractVector && all(x -> x isa Real && !(x isa Bool), xs))
-        throw(ClosedFunctionError(ERROR_CODES.INTERP_AXIS_NOT_CONST,
-            "$(name): xs must be a rank-1 `const`-op array of numbers (esm-spec §9.2); " *
-            "got $(xs isa AbstractVector ? "an array whose entries are not all numbers" :
-                   "a $(typeof(xs))")"))
+        throw(
+            ClosedFunctionError(
+                ERROR_CODES.INTERP_AXIS_NOT_CONST,
+                "$(name): xs must be a rank-1 `const`-op array of numbers (esm-spec §9.2); " *
+                    "got $(
+                    xs isa AbstractVector ? "an array whose entries are not all numbers" :
+                        "a $(typeof(xs))"
+                )"
+            )
+        )
     end
     # NaN first, over the whole array (esm-spec §9.2): a NaN compares false with
     # everything, so a monotonicity verdict on an `xs` holding one would depend
     # on how the comparison is written.
     for (i, raw) in enumerate(xs)
-        isnan(Float64(raw)) && throw(ClosedFunctionError(ERROR_CODES.SEARCHSORTED_NAN,
-            "$(name): xs[$(i)] is NaN; NaN entries in xs are forbidden"))
+        isnan(Float64(raw)) && throw(
+            ClosedFunctionError(
+                ERROR_CODES.SEARCHSORTED_NAN,
+                "$(name): xs[$(i)] is NaN; NaN entries in xs are forbidden"
+            )
+        )
     end
     prev = NaN
     for (i, raw) in enumerate(xs)
         v = Float64(raw)
         if i > 1 && v < prev
-            throw(ClosedFunctionError(ERROR_CODES.SEARCHSORTED_NON_MONOTONIC,
-                "$(name): xs is not non-decreasing (xs[$(i)]=$(v) < xs[$(i-1)]=$(prev))"))
+            throw(
+                ClosedFunctionError(
+                    ERROR_CODES.SEARCHSORTED_NON_MONOTONIC,
+                    "$(name): xs is not non-decreasing (xs[$(i)]=$(v) < xs[$(i - 1)]=$(prev))"
+                )
+            )
         end
         prev = v
     end
@@ -837,9 +903,13 @@ _interp_rank2(v) = v isa AbstractVector && !isempty(v) && all(_interp_rank1, v)
 function _require_interp_rank(name::String, v, rank::Int, code::String, label::String)
     (rank == 1 ? _interp_rank1(v) : _interp_rank2(v)) && return nothing
     got = v isa AbstractVector ? "an array that is not rank $(rank)" : "a $(typeof(v))"
-    throw(ClosedFunctionError(code,
-        "$(name): `$(label)` must be a rank-$(rank) `const`-op array of numbers " *
-        "(esm-spec §9.2); got $(got)"))
+    throw(
+        ClosedFunctionError(
+            code,
+            "$(name): `$(label)` must be a rank-$(rank) `const`-op array of numbers " *
+                "(esm-spec §9.2); got $(got)"
+        )
+    )
 end
 
 # The esm-spec §9.2 argument checks of `interp.linear` / `interp.bilinear`, in
@@ -852,25 +922,37 @@ end
 # Return the axes coerced to `Vector{Float64}`.
 function _interp_axis_long_enough(name::String, axis_raw, label::String)
     n = length(axis_raw)
-    n >= 2 || throw(ClosedFunctionError(ERROR_CODES.INTERP_AXIS_TOO_SHORT,
-        "$(name): `$(label)` has $(n) entries; need ≥ 2 to define a blend interval."))
+    n >= 2 || throw(
+        ClosedFunctionError(
+            ERROR_CODES.INTERP_AXIS_TOO_SHORT,
+            "$(name): `$(label)` has $(n) entries; need ≥ 2 to define a blend interval."
+        )
+    )
     return nothing
 end
 
 function _interp_axis_finite(name::String, axis::Vector{Float64}, label::String)
     @inbounds for i in eachindex(axis)
-        isfinite(axis[i]) || throw(ClosedFunctionError(ERROR_CODES.INTERP_NAN_IN_AXIS,
-            "$(name): `$(label)`[$(i)] = $(axis[i]) is not finite; axis arrays must be " *
-            "all-finite."))
+        isfinite(axis[i]) || throw(
+            ClosedFunctionError(
+                ERROR_CODES.INTERP_NAN_IN_AXIS,
+                "$(name): `$(label)`[$(i)] = $(axis[i]) is not finite; axis arrays must be " *
+                    "all-finite."
+            )
+        )
     end
     return nothing
 end
 
 function _interp_axis_increasing(name::String, axis::Vector{Float64}, label::String)
     @inbounds for i in 2:length(axis)
-        axis[i] > axis[i-1] || throw(ClosedFunctionError(ERROR_CODES.INTERP_NON_MONOTONIC_AXIS,
-            "$(name): `$(label)` is not strictly increasing " *
-            "(`$(label)`[$(i)] = $(axis[i]) is not > `$(label)`[$(i-1)] = $(axis[i-1]))."))
+        axis[i] > axis[i - 1] || throw(
+            ClosedFunctionError(
+                ERROR_CODES.INTERP_NON_MONOTONIC_AXIS,
+                "$(name): `$(label)` is not strictly increasing " *
+                    "(`$(label)`[$(i)] = $(axis[i]) is not > `$(label)`[$(i - 1)] = $(axis[i - 1]))."
+            )
+        )
     end
     return nothing
 end
@@ -881,9 +963,12 @@ function _validate_interp_linear_args(name::String, table_raw, axis_raw)::Vector
     _require_interp_rank(name, table_raw, 1, ERROR_CODES.INTERP_TABLE_NOT_CONST, "table")
     _require_interp_rank(name, axis_raw, 1, ERROR_CODES.INTERP_AXIS_NOT_CONST, "axis")
     _interp_axis_long_enough(name, axis_raw, "axis")
-    length(table_raw) == length(axis_raw) || throw(ClosedFunctionError(
-        ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH,
-        "$(name): `len(table)` = $(length(table_raw)) but `len(axis)` = $(length(axis_raw))."))
+    length(table_raw) == length(axis_raw) || throw(
+        ClosedFunctionError(
+            ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH,
+            "$(name): `len(table)` = $(length(table_raw)) but `len(axis)` = $(length(axis_raw))."
+        )
+    )
     axis = _interp_axis_f64(axis_raw)
     _interp_axis_finite(name, axis, "axis")
     _interp_axis_increasing(name, axis, "axis")
@@ -898,14 +983,20 @@ function _validate_interp_bilinear_args(name::String, table_raw, axis_x_raw, axi
     _interp_axis_long_enough(name, axis_y_raw, "axis_y")
     Nx = length(axis_x_raw)
     Ny = length(axis_y_raw)
-    length(table_raw) == Nx || throw(ClosedFunctionError(
-        ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH,
-        "$(name): outer `len(table)` = $(length(table_raw)) but `len(axis_x)` = $(Nx)."))
+    length(table_raw) == Nx || throw(
+        ClosedFunctionError(
+            ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH,
+            "$(name): outer `len(table)` = $(length(table_raw)) but `len(axis_x)` = $(Nx)."
+        )
+    )
     # Every inner row's length matches Ny (rejects ragged tables).
     for (i, row) in enumerate(table_raw)
-        length(row) == Ny || throw(ClosedFunctionError(
-            ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH,
-            "$(name): `len(table[$(i)])` = $(length(row)) but `len(axis_y)` = $(Ny)."))
+        length(row) == Ny || throw(
+            ClosedFunctionError(
+                ERROR_CODES.INTERP_AXIS_LENGTH_MISMATCH,
+                "$(name): `len(table[$(i)])` = $(length(row)) but `len(axis_y)` = $(Ny)."
+            )
+        )
     end
     axis_x = _interp_axis_f64(axis_x_raw)
     axis_y = _interp_axis_f64(axis_y_raw)
@@ -952,12 +1043,12 @@ end
                 break
             end
         end
-        ai   = axis[i];     ai1   = axis[i + 1]
-        ti   = Float64(table[i]);    ti1 = Float64(table[i + 1])
+        ai = axis[i];     ai1 = axis[i + 1]
+        ti = Float64(table[i]);    ti1 = Float64(table[i + 1])
         # The blend weight carries the query's partials — this is where the
         # derivative of a piecewise-linear table comes from, and it is exact:
         # d/dx [ti + w*(ti1 - ti)] = (ti1 - ti)/(ai1 - ai), the cell's slope.
-        w    = (x - ai) / (ai1 - ai)
+        w = (x - ai) / (ai1 - ai)
         return ti + w * (ti1 - ti)
     end
 end
@@ -978,8 +1069,10 @@ end
 # while the access-kernel path passes a build-time-coerced `Vector{Vector{Float64}}`
 # (no-op coercion). Shared by the scalar `:fn` arm and `_eval_acc_op`'s `:fn` arm
 # → bit-identical (ess-wrh).
-@inline function _interp_bilinear_core(table, axis_x, axis_y,
-                                       x::Real, y::Real)
+@inline function _interp_bilinear_core(
+        table, axis_x, axis_y,
+        x::Real, y::Real
+    )
     Nx = length(axis_x)
     Ny = length(axis_y)
     # Per-axis extrapolate-flat clamp. NaN x or y propagates through (IEEE-754
@@ -988,9 +1081,9 @@ end
     # — correct, and NOT a lost derivative: flat extrapolation has zero slope out
     # there, which is exactly what a `Float64` contributes downstream.
     x_q = x <= axis_x[1] ? axis_x[1] :
-          x >= axis_x[Nx] ? axis_x[Nx] : x
+        x >= axis_x[Nx] ? axis_x[Nx] : x
     y_q = y <= axis_y[1] ? axis_y[1] :
-          y >= axis_y[Ny] ? axis_y[Ny] : y
+        y >= axis_y[Ny] ? axis_y[Ny] : y
     # Cell location: largest i in [1, Nx-1] with axis_x[i] ≤ x_q (analog j).
     # Default to last cell so the corner-at-max case (wx = 1) lands correctly
     # in the pinned-form blend. NaN x_q falls through with i = Nx-1 (irrelevant
@@ -1010,26 +1103,28 @@ end
         end
     end
     @inbounds begin
-        xi   = axis_x[i];   xip1 = axis_x[i + 1]
-        yj   = axis_y[j];   yjp1 = axis_y[j + 1]
+        xi = axis_x[i];   xip1 = axis_x[i + 1]
+        yj = axis_y[j];   yjp1 = axis_y[j + 1]
         wx = (x_q - xi) / (xip1 - xi)
         wy = (y_q - yj) / (yjp1 - yj)
         # Two 1-D x-blends, then one y-blend. Pinned form `a + w*(b - a)`
         # required for cross-binding bit-equivalence (esm-spec §9.2).
-        t_ij     = Float64(table[i][j])
-        t_i1j    = Float64(table[i + 1][j])
-        t_ijp1   = Float64(table[i][j + 1])
-        t_i1jp1  = Float64(table[i + 1][j + 1])
-        row_j   = t_ij    + wx * (t_i1j   - t_ij)
-        row_jp1 = t_ijp1  + wx * (t_i1jp1 - t_ijp1)
+        t_ij = Float64(table[i][j])
+        t_i1j = Float64(table[i + 1][j])
+        t_ijp1 = Float64(table[i][j + 1])
+        t_i1jp1 = Float64(table[i + 1][j + 1])
+        row_j = t_ij + wx * (t_i1j - t_ij)
+        row_jp1 = t_ijp1 + wx * (t_i1jp1 - t_ijp1)
         return row_j + wy * (row_jp1 - row_j)
     end
 end
 
 # `interp.bilinear` per esm-spec §9.2 — validate the axes/table, then run the
 # kernel. Behaviour is byte-identical to the pre-`ess-wrh` monolithic form.
-function _interp_bilinear(name::String, table_raw, axis_x_raw, axis_y_raw,
-                          x::Real, y::Real)
+function _interp_bilinear(
+        name::String, table_raw, axis_x_raw, axis_y_raw,
+        x::Real, y::Real
+    )
     axis_x, axis_y = _validate_interp_bilinear_args(name, table_raw, axis_x_raw, axis_y_raw)
     return _interp_bilinear_core(table_raw, axis_x, axis_y, x, y)
 end
@@ -1080,24 +1175,30 @@ _InterpSearchsortedSpec(xs) = _InterpSearchsortedSpec(xs, "")
 # knot is in range, and a NaN query fails both compares and propagates through
 # the core (the Rust binding's rule, which this matches). `which` is the axis
 # number in the table's declared order.
-@inline function _interp_strict_check(strict::String, which::Int, axis::Vector{Float64},
-                                      x::Real)
+@inline function _interp_strict_check(
+        strict::String, which::Int, axis::Vector{Float64},
+        x::Real
+    )
     isempty(strict) && return nothing
     (x < axis[1] || x > axis[end]) && _throw_table_oob(strict, which, axis, x)
     return nothing
 end
 @noinline function _throw_table_oob(strict::String, which::Int, axis::Vector{Float64}, x)
     xv = x isa AbstractFloat ? x : float(x)
-    throw(TableLookupError(ERROR_CODES.TABLE_LOOKUP_OUT_OF_BOUNDS,
-        "table `$(strict)` declares `out_of_bounds: \"error\"`, and the query " *
-        "$(xv) on its axis $(which) lies outside the axis range " *
-        "[$(axis[1]), $(axis[end])] (esm-spec §9.5.1)"))
+    throw(
+        TableLookupError(
+            ERROR_CODES.TABLE_LOOKUP_OUT_OF_BOUNDS,
+            "table `$(strict)` declares `out_of_bounds: \"error\"`, and the query " *
+                "$(xv) on its axis $(which) lies outside the axis range " *
+                "[$(axis[1]), $(axis[end])] (esm-spec §9.5.1)"
+        )
+    )
 end
 
 # The strict table id a `:fn` payload's spec carries, or "" (per-lane specs
 # answer for their first strict member). For the compiled backends that cannot
 # raise at run time, which refuse such a lookup by name.
-_interp_strict_id(s::Union{_InterpLinearSpec,_InterpBilinearSpec,_InterpSearchsortedSpec}) =
+_interp_strict_id(s::Union{_InterpLinearSpec, _InterpBilinearSpec, _InterpSearchsortedSpec}) =
     s.strict
 function _interp_strict_id(s)
     hasproperty(s, :specs) || return ""
@@ -1130,8 +1231,12 @@ end
 # `Float64(raw[i])` the scalar kernel would do.
 function _coerce_f64_vec(name::String, v, label::String)::Vector{Float64}
     if !(v isa AbstractVector)
-        throw(ClosedFunctionError(ERROR_CODES.CLOSED_FUNCTION_ARITY,
-            "$(name): `$(label)` must be an array (got $(typeof(v)))"))
+        throw(
+            ClosedFunctionError(
+                ERROR_CODES.CLOSED_FUNCTION_ARITY,
+                "$(name): `$(label)` must be an array (got $(typeof(v)))"
+            )
+        )
     end
     out = Vector{Float64}(undef, length(v))
     @inbounds for i in eachindex(v)
@@ -1140,15 +1245,19 @@ function _coerce_f64_vec(name::String, v, label::String)::Vector{Float64}
     return out
 end
 
-function _build_interp_linear_spec(name::String, table_raw, axis_raw;
-                                   strict::String = "")::_InterpLinearSpec
-    axis  = _validate_interp_linear_args(name, table_raw, axis_raw)
+function _build_interp_linear_spec(
+        name::String, table_raw, axis_raw;
+        strict::String = ""
+    )::_InterpLinearSpec
+    axis = _validate_interp_linear_args(name, table_raw, axis_raw)
     table = _coerce_f64_vec(name, table_raw, "table")
     return _InterpLinearSpec(table, axis, strict)
 end
 
-function _build_interp_bilinear_spec(name::String, table_raw, axis_x_raw,
-                                     axis_y_raw; strict::String = "")::_InterpBilinearSpec
+function _build_interp_bilinear_spec(
+        name::String, table_raw, axis_x_raw,
+        axis_y_raw; strict::String = ""
+    )::_InterpBilinearSpec
     axis_x, axis_y = _validate_interp_bilinear_args(name, table_raw, axis_x_raw, axis_y_raw)
     Nx = length(axis_x)
     Ny = length(axis_y)
@@ -1164,8 +1273,10 @@ function _build_interp_bilinear_spec(name::String, table_raw, axis_x_raw,
     return _InterpBilinearSpec(table, axis_x, axis_y, strict)
 end
 
-function _build_interp_searchsorted_spec(name::String, xs_raw;
-                                         strict::String = "")::_InterpSearchsortedSpec
+function _build_interp_searchsorted_spec(
+        name::String, xs_raw;
+        strict::String = ""
+    )::_InterpSearchsortedSpec
     _validate_searchsorted_table(name, xs_raw)
     return _InterpSearchsortedSpec(_coerce_f64_vec(name, xs_raw, "xs"), strict)
 end
@@ -1198,8 +1309,10 @@ struct _InterpLinearLaneSpec
     axis_cols::Vector{Vector{Float64}}
     s1::Int; s2::Int; s3::Int; off::Int
 end
-function _InterpLinearLaneSpec(specs::Vector{_InterpLinearSpec},
-                               s1::Int, s2::Int, s3::Int, off::Int)
+function _InterpLinearLaneSpec(
+        specs::Vector{_InterpLinearSpec},
+        s1::Int, s2::Int, s3::Int, off::Int
+    )
     # Content-intern the per-lane specs (build-scoped pool; acc_merge.jl):
     # content-equal lanes come out holding the SAME (`===`) spec object, so a
     # backend keying tables by identity shares one copy per DISTINCT table
@@ -1208,10 +1321,10 @@ function _InterpLinearLaneSpec(specs::Vector{_InterpLinearSpec},
     specs = _lane_intern_specs(specs)
     L = length(specs); n = length(specs[1].axis)
     table_cols = Vector{Vector{Float64}}(undef, n)
-    axis_cols  = Vector{Vector{Float64}}(undef, n)
+    axis_cols = Vector{Vector{Float64}}(undef, n)
     for k in 1:n
         table_cols[k] = Float64[specs[l].table[k] for l in 1:L]
-        axis_cols[k]  = Float64[specs[l].axis[k]  for l in 1:L]
+        axis_cols[k] = Float64[specs[l].axis[k]  for l in 1:L]
     end
     return _InterpLinearLaneSpec(specs, table_cols, axis_cols, s1, s2, s3, off)
 end
@@ -1223,8 +1336,10 @@ struct _InterpBilinearLaneSpec
     axis_y_cols::Vector{Vector{Float64}}
     s1::Int; s2::Int; s3::Int; off::Int
 end
-function _InterpBilinearLaneSpec(specs::Vector{_InterpBilinearSpec},
-                                 s1::Int, s2::Int, s3::Int, off::Int)
+function _InterpBilinearLaneSpec(
+        specs::Vector{_InterpBilinearSpec},
+        s1::Int, s2::Int, s3::Int, off::Int
+    )
     specs = _lane_intern_specs(specs)   # see the linear twin above
     L = length(specs)
     Nx = length(specs[1].axis_x); Ny = length(specs[1].axis_y)
@@ -1240,8 +1355,10 @@ function _InterpBilinearLaneSpec(specs::Vector{_InterpBilinearSpec},
     for k in 1:Ny
         axis_y_cols[k] = Float64[specs[l].axis_y[k] for l in 1:L]
     end
-    return _InterpBilinearLaneSpec(specs, table_cols, axis_x_cols, axis_y_cols,
-                                   s1, s2, s3, off)
+    return _InterpBilinearLaneSpec(
+        specs, table_cols, axis_x_cols, axis_y_cols,
+        s1, s2, s3, off
+    )
 end
 
 struct _InterpSearchsortedLaneSpec
@@ -1249,8 +1366,10 @@ struct _InterpSearchsortedLaneSpec
     xs_cols::Vector{Vector{Float64}}
     s1::Int; s2::Int; s3::Int; off::Int
 end
-function _InterpSearchsortedLaneSpec(specs::Vector{_InterpSearchsortedSpec},
-                                     s1::Int, s2::Int, s3::Int, off::Int)
+function _InterpSearchsortedLaneSpec(
+        specs::Vector{_InterpSearchsortedSpec},
+        s1::Int, s2::Int, s3::Int, off::Int
+    )
     specs = _lane_intern_specs(specs)   # see the linear twin above
     L = length(specs); n = length(specs[1].xs)
     xs_cols = Vector{Vector{Float64}}(undef, n)
@@ -1263,12 +1382,16 @@ end
 # The lane a per-lane spec serves at cell multi-index `midx` — byte-for-byte
 # the `_AccStateTblBox`/`_AccConstBox` box addressing in `_fetch`.
 @inline _interp_lane(h, midx::Tuple{Vararg{Int}}) =
-    h.off + (midx[1]-1)*h.s1 + (midx[2]-1)*h.s2 + (midx[3]-1)*h.s3
+    h.off + (midx[1] - 1) * h.s1 + (midx[2] - 1) * h.s2 + (midx[3] - 1) * h.s3
 
 @inline function _expect_arity(name::String, args::AbstractVector, n::Int)
     length(args) == n ||
-        throw(ClosedFunctionError(ERROR_CODES.CLOSED_FUNCTION_ARITY,
-            "$(name) expects $(n) argument(s), got $(length(args))"))
+        throw(
+        ClosedFunctionError(
+            ERROR_CODES.CLOSED_FUNCTION_ARITY,
+            "$(name) expects $(n) argument(s), got $(length(args))"
+        )
+    )
     return nothing
 end
 
@@ -1306,13 +1429,17 @@ function _check_enum_values_unique(enums)::Nothing
     (enums === nothing || !(enums isa AbstractDict)) && return nothing
     for (enum_name, mapping) in pairs(enums)
         mapping isa AbstractDict || continue
-        seen = Dict{Int,String}()
+        seen = Dict{Int, String}()
         for (sym, v) in pairs(mapping)
             (v isa Integer && !(v isa Bool)) || continue
             prior = get(seen, Int(v), nothing)
-            prior === nothing || throw(EnumLoweringError(ERROR_CODES.ENUM_DUPLICATE_VALUE,
-                "enums.$(enum_name): symbols `$(prior)` and `$(sym)` both map to " *
-                "$(Int(v)); values within one enum must be unique (esm-spec §9.3)"))
+            prior === nothing || throw(
+                EnumLoweringError(
+                    ERROR_CODES.ENUM_DUPLICATE_VALUE,
+                    "enums.$(enum_name): symbols `$(prior)` and `$(sym)` both map to " *
+                        "$(Int(v)); values within one enum must be unique (esm-spec §9.3)"
+                )
+            )
             seen[Int(v)] = string(sym)
         end
     end
@@ -1337,8 +1464,10 @@ site decides what it spells and the op resolves there. An op whose arguments are
 not two strings is left for [`lower_enums!`](@ref), which owns the malformed-op
 diagnostic. Raises [`EnumLoweringError`](@ref).
 """
-function _lower_enum_ops_for_file(document, target,
-                                  open_names::AbstractSet{String}=Set{String}())
+function _lower_enum_ops_for_file(
+        document, target,
+        open_names::AbstractSet{String} = Set{String}()
+    )
     enums = _is_object(document) ? _raw_get(document, "enums") : nothing
     _check_enum_values_unique(enums)
     return _lower_raw_enum_ops(target, enums, open_names)
@@ -1350,21 +1479,33 @@ function _lower_raw_enum_ops(node, enums, open_names::AbstractSet{String})
     elseif _is_object(node)
         if _raw_get(node, "op") == "enum"
             args = _raw_get(node, "args")
-            (args !== nothing && _is_array(args) && length(args) == 2 &&
-             all(a -> a isa AbstractString, args) &&
-             !any(a -> String(a) in open_names, args)) || return node
+            (
+                args !== nothing && _is_array(args) && length(args) == 2 &&
+                    all(a -> a isa AbstractString, args) &&
+                    !any(a -> String(a) in open_names, args)
+            ) || return node
             enum_name, symbol = String(args[1]), String(args[2])
             mapping = enums !== nothing && _is_object(enums) ?
                 _raw_get(enums, enum_name) : nothing
-            mapping === nothing && throw(EnumLoweringError(ERROR_CODES.UNKNOWN_ENUM,
-                "enum `$(enum_name)` is not declared in the file's `enums` block"))
+            mapping === nothing && throw(
+                EnumLoweringError(
+                    ERROR_CODES.UNKNOWN_ENUM,
+                    "enum `$(enum_name)` is not declared in the file's `enums` block"
+                )
+            )
             (_is_object(mapping) && _raw_haskey(mapping, symbol)) ||
-                throw(EnumLoweringError(ERROR_CODES.UNKNOWN_ENUM_SYMBOL,
-                    "symbol `$(symbol)` is not declared under enum `$(enum_name)`"))
-            return OrderedDict{String,Any}("op" => "const", "args" => Any[],
-                                           "value" => Int(_raw_get(mapping, symbol)))
+                throw(
+                EnumLoweringError(
+                    ERROR_CODES.UNKNOWN_ENUM_SYMBOL,
+                    "symbol `$(symbol)` is not declared under enum `$(enum_name)`"
+                )
+            )
+            return OrderedDict{String, Any}(
+                "op" => "const", "args" => Any[],
+                "value" => Int(_raw_get(mapping, symbol))
+            )
         end
-        out = OrderedDict{String,Any}()
+        out = OrderedDict{String, Any}()
         for (k, v) in pairs(node)
             out[string(k)] = _lower_raw_enum_ops(v, enums, open_names)
         end
@@ -1390,7 +1531,7 @@ open, as at the import edge ([`_lower_enum_ops_for_file`](@ref)): an op spelled
 with a parameter resolves at the call site. Everything else is lowered with no
 open names. Raises [`EnumLoweringError`](@ref).
 """
-function _lower_mounted_document_enums(document, target=document)
+function _lower_mounted_document_enums(document, target = document)
     enums = _is_object(document) ? _raw_get(document, "enums") : nothing
     return _lower_mounted_enum_ops(target, enums)
 end
@@ -1400,7 +1541,7 @@ function _lower_mounted_enum_ops(node, enums)
         return Any[_lower_mounted_enum_ops(v, enums) for v in node]
     elseif _is_object(node)
         _raw_get(node, "op") == "enum" && return _lower_raw_enum_ops(node, enums, Set{String}())
-        out = OrderedDict{String,Any}()
+        out = OrderedDict{String, Any}()
         for (k, v) in pairs(node)
             key = string(k)
             out[key] = key == "expression_templates" && _is_object(v) ?
@@ -1412,14 +1553,16 @@ function _lower_mounted_enum_ops(node, enums)
 end
 
 function _lower_template_body_enums(templates, enums)
-    out = OrderedDict{String,Any}()
+    out = OrderedDict{String, Any}()
     for (name, decl) in pairs(templates)
         if _is_object(decl) && _raw_haskey(decl, "body")
             params_raw = _raw_get(decl, "params")
-            params = Set{String}(String(p) for p in
-                (params_raw !== nothing && _is_array(params_raw) ? params_raw : Any[])
-                if p isa AbstractString)
-            lowered = OrderedDict{String,Any}(string(k) => v for (k, v) in pairs(decl))
+            params = Set{String}(
+                String(p) for p in
+                    (params_raw !== nothing && _is_array(params_raw) ? params_raw : Any[])
+                    if p isa AbstractString
+            )
+            lowered = OrderedDict{String, Any}(string(k) => v for (k, v) in pairs(decl))
             lowered["body"] = _lower_raw_enum_ops(_raw_get(decl, "body"), enums, params)
             out[string(name)] = lowered
         else
@@ -1463,7 +1606,7 @@ rules and the [`EnumLoweringError`](@ref) codes both raise.
 Mutates `file` in place; returns the file for convenience.
 """
 function lower_enums!(file::EsmFile)::EsmFile
-    enums = file.enums === nothing ? Dict{String,Dict{String,Int}}() : file.enums
+    enums = file.enums === nothing ? Dict{String, Dict{String, Int}}() : file.enums
     _check_enum_values_unique(enums)
     if file.models !== nothing
         for (_, m) in file.models
@@ -1483,7 +1626,7 @@ function lower_enums!(file::EsmFile)::EsmFile
     return file
 end
 
-function _lower_model_enums!(model::Model, enums::Dict{String,Dict{String,Int}})
+function _lower_model_enums!(model::Model, enums::Dict{String, Dict{String, Int}})
     # esm 1.0.0: a variable carries no defining expression, so the only
     # per-variable expression positions left are a parameter update's `when`
     # trigger and its `expression` value form (esm-spec §5.4).
@@ -1495,27 +1638,39 @@ function _lower_model_enums!(model::Model, enums::Dict{String,Dict{String,Int}})
             nw = r.when === nothing ? nothing : _lower_expr_enums(r.when, enums)
             ne = r.expression === nothing ? nothing : _lower_expr_enums(r.expression, enums)
             (nw !== r.when || ne !== r.expression) && (changed = true)
-            push!(rules, ParameterUpdate(r.kind; times=r.times, interval=r.interval,
-                initial_offset=r.initial_offset, when=nw, direction=r.direction,
-                source=r.source, hook=r.hook, expression=ne, from=r.from,
-                handler=r.handler))
+            push!(
+                rules, ParameterUpdate(
+                    r.kind; times = r.times, interval = r.interval,
+                    initial_offset = r.initial_offset, when = nw, direction = r.direction,
+                    source = r.source, hook = r.hook, expression = ne, from = r.from,
+                    handler = r.handler
+                )
+            )
         end
-        changed && (model.variables[name] = reconstruct(var; update=rules))
+        changed && (model.variables[name] = reconstruct(var; update = rules))
     end
     new_eqs = Equation[]
     for eq in model.equations
-        push!(new_eqs, Equation(_lower_expr_enums(eq.lhs, enums),
-                                _lower_expr_enums(eq.rhs, enums);
-                                _comment=eq._comment))
+        push!(
+            new_eqs, Equation(
+                _lower_expr_enums(eq.lhs, enums),
+                _lower_expr_enums(eq.rhs, enums);
+                _comment = eq._comment
+            )
+        )
     end
     empty!(model.equations)
     append!(model.equations, new_eqs)
 
     new_init_eqs = Equation[]
     for eq in model.initialization_equations
-        push!(new_init_eqs, Equation(_lower_expr_enums(eq.lhs, enums),
-                                     _lower_expr_enums(eq.rhs, enums);
-                                     _comment=eq._comment))
+        push!(
+            new_init_eqs, Equation(
+                _lower_expr_enums(eq.lhs, enums),
+                _lower_expr_enums(eq.rhs, enums);
+                _comment = eq._comment
+            )
+        )
     end
     empty!(model.initialization_equations)
     append!(model.initialization_equations, new_init_eqs)
@@ -1525,32 +1680,42 @@ function _lower_model_enums!(model::Model, enums::Dict{String,Dict{String,Int}})
         sub isa Model || continue
         _lower_model_enums!(sub, enums)
     end
+    return
 end
 
-function _lower_reaction_system_enums!(rs::ReactionSystem,
-                                       enums::Dict{String,Dict{String,Int}})
+function _lower_reaction_system_enums!(
+        rs::ReactionSystem,
+        enums::Dict{String, Dict{String, Int}}
+    )
     new_reactions = Reaction[]
     for r in rs.reactions
         # `raw_substrates`/`raw_products`: the ordered StoichiometryEntry
         # fields (`get_reactants_dict`/`get_products_dict` give the unordered
         # `Dict{String,Float64}` view instead).
-        push!(new_reactions, Reaction(r.id,
-            raw_substrates(r),
-            raw_products(r),
-            _lower_expr_enums(r.rate, enums);
-            name=r.name,
-            reference=r.reference))
+        push!(
+            new_reactions, Reaction(
+                r.id,
+                raw_substrates(r),
+                raw_products(r),
+                _lower_expr_enums(r.rate, enums);
+                name = r.name,
+                reference = r.reference
+            )
+        )
     end
     empty!(rs.reactions)
     append!(rs.reactions, new_reactions)
     for (_, sub) in rs.subsystems
         _lower_reaction_system_enums!(sub, enums)
     end
+    return
 end
 
-function _lower_coupling_entry_enums!(ce::CouplingEntry,
-                                      enums::Dict{String,Dict{String,Int}})
-    if ce isa CouplingCouple && haskey(ce.connector, "equations")
+function _lower_coupling_entry_enums!(
+        ce::CouplingEntry,
+        enums::Dict{String, Dict{String, Int}}
+    )
+    return if ce isa CouplingCouple && haskey(ce.connector, "equations")
         eqs = ce.connector["equations"]
         if eqs isa AbstractVector
             for (i, e) in enumerate(eqs)
@@ -1568,9 +1733,15 @@ end
 # Recursive enum-op lowering. Returns a new tree only if a substitution
 # occurred; otherwise returns the input unchanged so identity-based caching
 # upstream still works.
-function _lower_expr_enums(e::NumExpr, _) ; return e end
-function _lower_expr_enums(e::IntExpr, _) ; return e end
-function _lower_expr_enums(e::VarExpr, _) ; return e end
+function _lower_expr_enums(e::NumExpr, _)
+    return e
+end
+function _lower_expr_enums(e::IntExpr, _)
+    return e
+end
+function _lower_expr_enums(e::VarExpr, _)
+    return e
+end
 
 # Identity-memoized entry: enum lowering is a pure, context-free function of
 # the node, so a subtree shared under many parents (template expansion stores
@@ -1578,16 +1749,20 @@ function _lower_expr_enums(e::VarExpr, _) ; return e end
 # respliced — keeping this pass linear in UNIQUE nodes instead of exponential
 # in paths, and preserving the sharing for downstream consumers (the
 # build-time `IdDict` memo caches in tree_walk/compile.jl key on it).
-function _lower_expr_enums(e::OpExpr,
-                           enums::Dict{String,Dict{String,Int}})::ASTExpr
-    return _lower_expr_enums(e, enums, IdDict{OpExpr,ASTExpr}())
+function _lower_expr_enums(
+        e::OpExpr,
+        enums::Dict{String, Dict{String, Int}}
+    )::ASTExpr
+    return _lower_expr_enums(e, enums, IdDict{OpExpr, ASTExpr}())
 end
 
-_lower_expr_enums(e::ASTExpr, _, ::IdDict{OpExpr,ASTExpr}) = e
+_lower_expr_enums(e::ASTExpr, _, ::IdDict{OpExpr, ASTExpr}) = e
 
-function _lower_expr_enums(e::OpExpr,
-                           enums::Dict{String,Dict{String,Int}},
-                           memo::IdDict{OpExpr,ASTExpr})::ASTExpr
+function _lower_expr_enums(
+        e::OpExpr,
+        enums::Dict{String, Dict{String, Int}},
+        memo::IdDict{OpExpr, ASTExpr}
+    )::ASTExpr
     r = get(memo, e, nothing)
     r === nothing || return r
     res = _lower_expr_enums_uncached(e, enums, memo)
@@ -1595,36 +1770,58 @@ function _lower_expr_enums(e::OpExpr,
     return res
 end
 
-function _lower_expr_enums_uncached(e::OpExpr,
-                                    enums::Dict{String,Dict{String,Int}},
-                                    memo::IdDict{OpExpr,ASTExpr})::ASTExpr
+function _lower_expr_enums_uncached(
+        e::OpExpr,
+        enums::Dict{String, Dict{String, Int}},
+        memo::IdDict{OpExpr, ASTExpr}
+    )::ASTExpr
     if e.op == "enum"
         # esm-spec §4.5: args are exactly two strings — the enum name and the
         # symbolic key. Strings come through `expression_from_json` as `VarExpr`,
         # so we read `.name` to recover them.
         if length(e.args) != 2
-            throw(EnumLoweringError(ERROR_CODES.ENUM_OP_MALFORMED,
-                "`enum` op expects 2 args (enum_name, symbol_name), got $(length(e.args))"))
+            throw(
+                EnumLoweringError(
+                    ERROR_CODES.ENUM_OP_MALFORMED,
+                    "`enum` op expects 2 args (enum_name, symbol_name), got $(length(e.args))"
+                )
+            )
         end
         a1, a2 = e.args[1], e.args[2]
         enum_name = a1 isa VarExpr ? a1.name :
-                    a1 isa OpExpr && a1.op == "const" && a1.value isa AbstractString ? String(a1.value) :
-                    throw(EnumLoweringError(ERROR_CODES.ENUM_OP_MALFORMED,
-                        "`enum` op: first arg must be a string"))
+            a1 isa OpExpr && a1.op == "const" && a1.value isa AbstractString ? String(a1.value) :
+            throw(
+                EnumLoweringError(
+                    ERROR_CODES.ENUM_OP_MALFORMED,
+                    "`enum` op: first arg must be a string"
+                )
+            )
         symbol_name = a2 isa VarExpr ? a2.name :
-                      a2 isa OpExpr && a2.op == "const" && a2.value isa AbstractString ? String(a2.value) :
-                      throw(EnumLoweringError(ERROR_CODES.ENUM_OP_MALFORMED,
-                          "`enum` op: second arg must be a string"))
+            a2 isa OpExpr && a2.op == "const" && a2.value isa AbstractString ? String(a2.value) :
+            throw(
+                EnumLoweringError(
+                    ERROR_CODES.ENUM_OP_MALFORMED,
+                    "`enum` op: second arg must be a string"
+                )
+            )
         if !haskey(enums, enum_name)
-            throw(EnumLoweringError(ERROR_CODES.UNKNOWN_ENUM,
-                "enum `$(enum_name)` is not declared in the file's `enums` block"))
+            throw(
+                EnumLoweringError(
+                    ERROR_CODES.UNKNOWN_ENUM,
+                    "enum `$(enum_name)` is not declared in the file's `enums` block"
+                )
+            )
         end
         mapping = enums[enum_name]
         if !haskey(mapping, symbol_name)
-            throw(EnumLoweringError(ERROR_CODES.UNKNOWN_ENUM_SYMBOL,
-                "symbol `$(symbol_name)` is not declared under enum `$(enum_name)`"))
+            throw(
+                EnumLoweringError(
+                    ERROR_CODES.UNKNOWN_ENUM_SYMBOL,
+                    "symbol `$(symbol_name)` is not declared under enum `$(enum_name)`"
+                )
+            )
         end
-        return OpExpr("const", ASTExpr[]; value=mapping[symbol_name])
+        return OpExpr("const", ASTExpr[]; value = mapping[symbol_name])
     end
     # Recurse into EVERY expression-bearing field via the shared field-preserving
     # rewrite (`map_children`), so an `enum` nested in an integral bound, a

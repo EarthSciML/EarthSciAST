@@ -25,10 +25,14 @@ const EA = EarthSciAST
 
 isdefined(@__MODULE__, :TESTUTILS_REPO_ROOT) || include("testutils.jl")
 
-const ONE_COMPONENT = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid",
-                               "nonlinear_mogi_shape.esm")
-const TWO_COMPONENT = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid",
-                               "nonlinear_two_component_static.esm")
+const ONE_COMPONENT = joinpath(
+    TESTUTILS_REPO_ROOT, "tests", "valid",
+    "nonlinear_mogi_shape.esm"
+)
+const TWO_COMPONENT = joinpath(
+    TESTUTILS_REPO_ROOT, "tests", "valid",
+    "nonlinear_two_component_static.esm"
+)
 
 # The Mogi fixture's two closed-form displacements at the declared defaults
 # (dV = 1e6, d = 3000, r = 1000, nu = 0.25), computed WITHOUT the library so a
@@ -60,8 +64,10 @@ end
             # `ur` is linear in `dV`, so the field must describe the problem
             # that was built rather than the document's declared default.
             ur, _ = mogi_oracle()
-            prob = EA.esm_problem(ONE_COMPONENT, (0.0, 1.0);
-                                  p = Dict("MogiModel.dV" => 2.0e6))
+            prob = EA.esm_problem(
+                ONE_COMPONENT, (0.0, 1.0);
+                p = Dict("MogiModel.dV" => 2.0e6)
+            )
             @test EA.observed_field(prob, "ur")[1] ≈ 2ur
         end
     end

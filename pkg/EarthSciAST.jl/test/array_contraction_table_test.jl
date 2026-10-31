@@ -24,7 +24,7 @@ function _act_problem(path, compiler)
     _ACT._reset_cascade_tally!()
     # The starting values the documents' ODE states leave to the harness
     # (esm-spec §11.4).
-    prob = _ACT.esm_problem(path, (0.0, 1.0); compiler=compiler, u0=harness_u0(path))
+    prob = _ACT.esm_problem(path, (0.0, 1.0); compiler = compiler, u0 = harness_u0(path))
     return prob, copy(_ACT._CASCADE_TALLY)
 end
 
@@ -32,7 +32,7 @@ function _act_du(prob, u)
     du = similar(u)
     fill!(du, NaN)
     prob.f!(du, u, prob.p, 0.3)
-    du
+    return du
 end
 
 # du under native and the interpreter, at a state perturbed off the initial one
@@ -66,8 +66,8 @@ end
 # (the scaling tier's code-size measure, less the walked trees).
 function _act_emitted(root)
     RGF = _ACT.RuntimeGeneratedFunctions
-    sz(e) = e isa Expr ? 1 + sum(sz, e.args; init=0) : 1
-    seen = IdDict{Any,Nothing}(); ids = Set{Any}(); total = 0
+    sz(e) = e isa Expr ? 1 + sum(sz, e.args; init = 0) : 1
+    seen = IdDict{Any, Nothing}(); ids = Set{Any}(); total = 0
     stack = Any[root]
     while !isempty(stack)
         x = pop!(stack)
@@ -84,11 +84,15 @@ function _act_emitted(root)
         end
         if x isa Array
             eltype(x) <: Number && continue
-            for i in eachindex(x); isassigned(x, i) && push!(stack, x[i]); end
+            for i in eachindex(x)
+                isassigned(x, i) && push!(stack, x[i])
+            end
         elseif x isa AbstractDict
             continue
         else
-            for i in 1:nfields(x); isdefined(x, i) && push!(stack, getfield(x, i)); end
+            for i in 1:nfields(x)
+                isdefined(x, i) && push!(stack, getfield(x, i))
+            end
         end
     end
     return total
@@ -99,7 +103,8 @@ end
     @testset "$(basename(rel))" for rel in (
             "tests/valid/faq/join_moves_running_exhaust.esm",   # join gate
             "tests/valid/faq/ragged_member_gather.esm",         # ragged bound
-            "tests/valid/geometry/conservative_regrid_assembly.esm")  # join + filter
+            "tests/valid/geometry/conservative_regrid_assembly.esm",
+        )  # join + filter
         same, tally, tiers, _, _ = _act_agree(_act_fixture(rel))
         @test same
         @test get(tally, :array_contraction_codegen, 0) >= 1
@@ -159,9 +164,12 @@ end
         # A derivative through the parameters (a dual-valued `p`).
         kd = Symbol("Regrid.kd")
         dk(prob, uu) = ForwardDiff.derivative(
-            x -> (d = zeros(typeof(x), length(uu));
-                  prob.f!(d, uu, merge(prob.p, NamedTuple{(kd,)}((x,))), 0.3); d),
-            prob.p[kd])
+            x -> (
+                d = zeros(typeof(x), length(uu));
+                prob.f!(d, uu, merge(prob.p, NamedTuple{(kd,)}((x,))), 0.3); d
+            ),
+            prob.p[kd]
+        )
         gn, gi = dk(pn, u), dk(pi_, ui)
         @test all(gn[pn.var_map[k]] === gi[j] for (k, j) in pi_.var_map)
         # A solver differentiating through `p` alternates Float64 and dual-valued
@@ -188,7 +196,7 @@ end
     end
 
     @testset "two contracted indices fold into one accumulator ($(tier))" for
-            (asc, tier) in ((false, :array_contraction_codegen), (true, :affine_reduce))
+        (asc, tier) in ((false, :array_contraction_codegen), (true, :affine_reduce))
         # Non-integer data, so the association of the fold shows in the last
         # bit: the expansion's fold is ((0̄ ⊕ t₁₁) ⊕ t₂₁) ⊕ …, one accumulator
         # over the whole (k, l) product, never a sum of per-l partial folds.
@@ -200,29 +208,48 @@ end
         W = [[[w(i, k, l) for l in 1:m2] for k in 1:m1] for i in 1:n]
         idx(v, a...) = Dict("op" => "index", "args" => Any[v, a...])
         op(o, a...) = Dict("op" => o, "args" => Any[a...])
-        body = op("*", idx(Dict("op" => "const", "args" => Any[], "value" => W), "i", "k", "l"),
-                  op("+", idx("e", "k"), op("*", 0.5, idx("g", "l"))))
-        dlhs(v, i, n) = Dict("op" => "faq", "args" => Any[], "output_idx" => Any[i],
+        body = op(
+            "*", idx(Dict("op" => "const", "args" => Any[], "value" => W), "i", "k", "l"),
+            op("+", idx("e", "k"), op("*", 0.5, idx("g", "l")))
+        )
+        dlhs(v, i, n) = Dict(
+            "op" => "faq", "args" => Any[], "output_idx" => Any[i],
             "ranges" => Dict(i => Any[1, n]),
-            "expr" => Dict("op" => "D", "args" => Any[idx(v, i)], "wrt" => "t"))
-        decay(v, i, n) = Dict("op" => "faq", "args" => Any[], "output_idx" => Any[i],
-            "ranges" => Dict(i => Any[1, n]), "expr" => op("*", -0.2, idx(v, i)))
-        doc = Dict{String,Any}("esm" => "1.1.0", "metadata" => Dict("name" => "act_two"),
-            "models" => Dict("M" => Dict{String,Any}(
-                "variables" => Dict(
-                    "y" => Dict("type" => "unknown", "shape" => Any["i"]),
-                    "e" => Dict("type" => "unknown", "shape" => Any["k"]),
-                    "g" => Dict("type" => "unknown", "shape" => Any["l"])),
-                "equations" => Any[
-                    Dict("lhs" => dlhs("e", "k", m1), "rhs" => decay("e", "k", m1)),
-                    Dict("lhs" => dlhs("g", "l", m2), "rhs" => decay("g", "l", m2)),
-                    Dict("lhs" => dlhs("y", "i", n),
-                         "rhs" => Dict("op" => "faq", "args" => Any[], "reduce" => "+",
-                             "output_idx" => Any["i"],
-                             "ranges" => Dict("i" => Any[1, n],
-                                              "k" => asc ? Any[1, m1] : Any[m1, -1, 1],
-                                              "l" => asc ? Any[1, m2] : Any[m2, -1, 1]),
-                             "expr" => body))])))
+            "expr" => Dict("op" => "D", "args" => Any[idx(v, i)], "wrt" => "t")
+        )
+        decay(v, i, n) = Dict(
+            "op" => "faq", "args" => Any[], "output_idx" => Any[i],
+            "ranges" => Dict(i => Any[1, n]), "expr" => op("*", -0.2, idx(v, i))
+        )
+        doc = Dict{String, Any}(
+            "esm" => "1.1.0", "metadata" => Dict("name" => "act_two"),
+            "models" => Dict(
+                "M" => Dict{String, Any}(
+                    "variables" => Dict(
+                        "y" => Dict("type" => "unknown", "shape" => Any["i"]),
+                        "e" => Dict("type" => "unknown", "shape" => Any["k"]),
+                        "g" => Dict("type" => "unknown", "shape" => Any["l"])
+                    ),
+                    "equations" => Any[
+                        Dict("lhs" => dlhs("e", "k", m1), "rhs" => decay("e", "k", m1)),
+                        Dict("lhs" => dlhs("g", "l", m2), "rhs" => decay("g", "l", m2)),
+                        Dict(
+                            "lhs" => dlhs("y", "i", n),
+                            "rhs" => Dict(
+                                "op" => "faq", "args" => Any[], "reduce" => "+",
+                                "output_idx" => Any["i"],
+                                "ranges" => Dict(
+                                    "i" => Any[1, n],
+                                    "k" => asc ? Any[1, m1] : Any[m1, -1, 1],
+                                    "l" => asc ? Any[1, m2] : Any[m2, -1, 1]
+                                ),
+                                "expr" => body
+                            )
+                        ),
+                    ]
+                )
+            )
+        )
         path = joinpath(mktempdir(), "act_two.esm")
         open(io -> JSON3.write(io, doc), path, "w")
         same, tally, tiers, _, _ = _act_agree(path)
@@ -237,47 +264,100 @@ end
         mk(sizes) = begin
             n = length(sizes)
             mx = maximum(sizes)
-            members = [vcat(collect(sum(sizes[1:i-1]; init=0) .+ (1:sizes[i])),
-                            zeros(Int, mx - sizes[i])) for i in 1:n]
+            members = [
+                vcat(
+                    collect(sum(sizes[1:(i - 1)]; init = 0) .+ (1:sizes[i])),
+                    zeros(Int, mx - sizes[i])
+                ) for i in 1:n
+            ]
             flat = [10.0 + 0.5k + 0.01k^2 for k in 1:sum(sizes)]
-            Dict{String,Any}("esm" => "1.1.0", "metadata" => Dict("name" => "act_ragged"),
+            Dict{String, Any}(
+                "esm" => "1.1.0", "metadata" => Dict("name" => "act_ragged"),
                 "index_sets" => Dict(
                     "parents" => Dict("kind" => "interval", "size" => n),
                     "maxm" => Dict("kind" => "interval", "size" => mx),
                     "flat" => Dict("kind" => "interval", "size" => sum(sizes)),
-                    "mop" => Dict("kind" => "ragged", "of" => Any["parents"],
-                                  "offsets" => "cnt", "values" => "mem")),
-                "models" => Dict("M" => Dict{String,Any}(
-                    "variables" => Dict(
-                        "cnt" => Dict("type" => "unknown", "shape" => Any["parents"]),
-                        "mem" => Dict("type" => "unknown", "shape" => Any["parents", "maxm"]),
-                        "x" => Dict("type" => "unknown", "shape" => Any["flat"]),
-                        "tot" => Dict("type" => "unknown", "shape" => Any["parents"])),
-                    "equations" => Any[
-                        Dict("lhs" => "cnt", "rhs" => Dict("op" => "const", "args" => Any[],
-                                                            "value" => sizes)),
-                        Dict("lhs" => "mem", "rhs" => Dict("op" => "const", "args" => Any[],
-                                                            "value" => members)),
-                        Dict("lhs" => Dict("op" => "faq", "args" => Any[],
-                                 "output_idx" => Any["k"], "ranges" => Dict("k" => Dict("from" => "flat")),
-                                 "expr" => Dict("op" => "D", "args" => Any[
-                                     Dict("op" => "index", "args" => Any["x", "k"])], "wrt" => "t")),
-                             "rhs" => Dict("op" => "faq", "args" => Any[],
-                                 "output_idx" => Any["k"], "ranges" => Dict("k" => Dict("from" => "flat")),
-                                 "expr" => Dict("op" => "*", "args" => Any[-0.1,
-                                     Dict("op" => "index", "args" => Any["x", "k"])]))),
-                        Dict("lhs" => Dict("op" => "faq", "args" => Any[],
-                                 "output_idx" => Any["i"], "ranges" => Dict("i" => Dict("from" => "parents")),
-                                 "expr" => Dict("op" => "D", "args" => Any[
-                                     Dict("op" => "index", "args" => Any["tot", "i"])], "wrt" => "t")),
-                             "rhs" => Dict("op" => "faq", "args" => Any[], "semiring" => "sum_product",
-                                 "output_idx" => Any["i"],
-                                 "ranges" => Dict("i" => Dict("from" => "parents"),
-                                                  "j" => Dict("from" => "mop", "of" => Any["i"])),
-                                 "expr" => Dict("op" => "*", "args" => Any[
-                                     Dict("op" => "index", "args" => Any["x",
-                                         Dict("op" => "index", "args" => Any["mem", "i", "j"])]),
-                                     Dict("op" => "+", "args" => Any["j", 0.5])])))])))
+                    "mop" => Dict(
+                        "kind" => "ragged", "of" => Any["parents"],
+                        "offsets" => "cnt", "values" => "mem"
+                    )
+                ),
+                "models" => Dict(
+                    "M" => Dict{String, Any}(
+                        "variables" => Dict(
+                            "cnt" => Dict("type" => "unknown", "shape" => Any["parents"]),
+                            "mem" => Dict("type" => "unknown", "shape" => Any["parents", "maxm"]),
+                            "x" => Dict("type" => "unknown", "shape" => Any["flat"]),
+                            "tot" => Dict("type" => "unknown", "shape" => Any["parents"])
+                        ),
+                        "equations" => Any[
+                            Dict(
+                                "lhs" => "cnt", "rhs" => Dict(
+                                    "op" => "const", "args" => Any[],
+                                    "value" => sizes
+                                )
+                            ),
+                            Dict(
+                                "lhs" => "mem", "rhs" => Dict(
+                                    "op" => "const", "args" => Any[],
+                                    "value" => members
+                                )
+                            ),
+                            Dict(
+                                "lhs" => Dict(
+                                    "op" => "faq", "args" => Any[],
+                                    "output_idx" => Any["k"], "ranges" => Dict("k" => Dict("from" => "flat")),
+                                    "expr" => Dict(
+                                        "op" => "D", "args" => Any[
+                                            Dict("op" => "index", "args" => Any["x", "k"]),
+                                        ], "wrt" => "t"
+                                    )
+                                ),
+                                "rhs" => Dict(
+                                    "op" => "faq", "args" => Any[],
+                                    "output_idx" => Any["k"], "ranges" => Dict("k" => Dict("from" => "flat")),
+                                    "expr" => Dict(
+                                        "op" => "*", "args" => Any[
+                                            -0.1,
+                                            Dict("op" => "index", "args" => Any["x", "k"]),
+                                        ]
+                                    )
+                                )
+                            ),
+                            Dict(
+                                "lhs" => Dict(
+                                    "op" => "faq", "args" => Any[],
+                                    "output_idx" => Any["i"], "ranges" => Dict("i" => Dict("from" => "parents")),
+                                    "expr" => Dict(
+                                        "op" => "D", "args" => Any[
+                                            Dict("op" => "index", "args" => Any["tot", "i"]),
+                                        ], "wrt" => "t"
+                                    )
+                                ),
+                                "rhs" => Dict(
+                                    "op" => "faq", "args" => Any[], "semiring" => "sum_product",
+                                    "output_idx" => Any["i"],
+                                    "ranges" => Dict(
+                                        "i" => Dict("from" => "parents"),
+                                        "j" => Dict("from" => "mop", "of" => Any["i"])
+                                    ),
+                                    "expr" => Dict(
+                                        "op" => "*", "args" => Any[
+                                            Dict(
+                                                "op" => "index", "args" => Any[
+                                                    "x",
+                                                    Dict("op" => "index", "args" => Any["mem", "i", "j"]),
+                                                ]
+                                            ),
+                                            Dict("op" => "+", "args" => Any["j", 0.5]),
+                                        ]
+                                    )
+                                )
+                            ),
+                        ]
+                    )
+                )
+            )
         end
         nodes = Int[]
         for sizes in ([1, 3, 2, 0, 4], [2, 1, 5, 3, 0, 1, 6, 2])
@@ -303,46 +383,72 @@ end
         # `C[j]` past its end is the run's error under both compilers.
         sizes = [1, 3, 2, 0, 4]
         n, mx, nf = length(sizes), maximum(sizes), sum(sizes)
-        members = [vcat(collect(sum(sizes[1:i-1]; init=0) .+ (1:sizes[i])),
-                        zeros(Int, mx - sizes[i])) for i in 1:n]
+        members = [
+            vcat(
+                collect(sum(sizes[1:(i - 1)]; init = 0) .+ (1:sizes[i])),
+                zeros(Int, mx - sizes[i])
+            ) for i in 1:n
+        ]
         idx(v, a...) = Dict("op" => "index", "args" => Any[v, a...])
         op(o, a...) = Dict("op" => o, "args" => Any[a...])
         cst(v) = Dict("op" => "const", "args" => Any[], "value" => v)
-        dlhs(v, i, set) = Dict("op" => "faq", "args" => Any[], "output_idx" => Any[i],
+        dlhs(v, i, set) = Dict(
+            "op" => "faq", "args" => Any[], "output_idx" => Any[i],
             "ranges" => Dict(i => Dict("from" => set)),
-            "expr" => Dict("op" => "D", "args" => Any[idx(v, i)], "wrt" => "t"))
-        decay(v, i, set) = Dict("op" => "faq", "args" => Any[], "output_idx" => Any[i],
-            "ranges" => Dict(i => Dict("from" => set)), "expr" => op("*", -0.1, idx(v, i)))
-        mk(term) = Dict{String,Any}("esm" => "1.1.0", "metadata" => Dict("name" => "act_entry"),
+            "expr" => Dict("op" => "D", "args" => Any[idx(v, i)], "wrt" => "t")
+        )
+        decay(v, i, set) = Dict(
+            "op" => "faq", "args" => Any[], "output_idx" => Any[i],
+            "ranges" => Dict(i => Dict("from" => set)), "expr" => op("*", -0.1, idx(v, i))
+        )
+        mk(term) = Dict{String, Any}(
+            "esm" => "1.1.0", "metadata" => Dict("name" => "act_entry"),
             "index_sets" => Dict(
                 "parents" => Dict("kind" => "interval", "size" => n),
                 "maxm" => Dict("kind" => "interval", "size" => mx),
                 "short" => Dict("kind" => "interval", "size" => mx - 1),
                 "flat" => Dict("kind" => "interval", "size" => nf),
-                "mop" => Dict("kind" => "ragged", "of" => Any["parents"],
-                              "offsets" => "cnt", "values" => "mem")),
-            "models" => Dict("M" => Dict{String,Any}(
-                "variables" => Dict(
-                    "cnt" => Dict("type" => "unknown", "shape" => Any["parents"]),
-                    "mem" => Dict("type" => "unknown", "shape" => Any["parents", "maxm"]),
-                    "C" => Dict("type" => "unknown", "shape" => Any["short"]),
-                    "x" => Dict("type" => "unknown", "shape" => Any["flat"]),
-                    "y" => Dict("type" => "unknown", "shape" => Any["short"]),
-                    "tot" => Dict("type" => "unknown", "shape" => Any["parents"])),
-                "equations" => Any[
-                    Dict("lhs" => "cnt", "rhs" => cst(sizes)),
-                    Dict("lhs" => "mem", "rhs" => cst(members)),
-                    Dict("lhs" => "C", "rhs" => cst([1.5 + 0.25k for k in 1:mx-1])),
-                    Dict("lhs" => dlhs("x", "k", "flat"), "rhs" => decay("x", "k", "flat")),
-                    Dict("lhs" => dlhs("y", "k", "short"), "rhs" => decay("y", "k", "short")),
-                    Dict("lhs" => dlhs("tot", "i", "parents"),
-                         "rhs" => Dict("op" => "faq", "args" => Any[], "semiring" => "sum_product",
-                             "output_idx" => Any["i"],
-                             "ranges" => Dict("i" => Dict("from" => "parents"),
-                                              "j" => Dict("from" => "mop", "of" => Any["i"])),
-                             "expr" => term))])))
-        good = op("+", op("*", idx("x", idx("mem", "i", "j")), op("+", "j", 0.5)),
-                  op("*", idx("y", "j"), op("+", idx("mem", "i", "j"), 0.25)))
+                "mop" => Dict(
+                    "kind" => "ragged", "of" => Any["parents"],
+                    "offsets" => "cnt", "values" => "mem"
+                )
+            ),
+            "models" => Dict(
+                "M" => Dict{String, Any}(
+                    "variables" => Dict(
+                        "cnt" => Dict("type" => "unknown", "shape" => Any["parents"]),
+                        "mem" => Dict("type" => "unknown", "shape" => Any["parents", "maxm"]),
+                        "C" => Dict("type" => "unknown", "shape" => Any["short"]),
+                        "x" => Dict("type" => "unknown", "shape" => Any["flat"]),
+                        "y" => Dict("type" => "unknown", "shape" => Any["short"]),
+                        "tot" => Dict("type" => "unknown", "shape" => Any["parents"])
+                    ),
+                    "equations" => Any[
+                        Dict("lhs" => "cnt", "rhs" => cst(sizes)),
+                        Dict("lhs" => "mem", "rhs" => cst(members)),
+                        Dict("lhs" => "C", "rhs" => cst([1.5 + 0.25k for k in 1:(mx - 1)])),
+                        Dict("lhs" => dlhs("x", "k", "flat"), "rhs" => decay("x", "k", "flat")),
+                        Dict("lhs" => dlhs("y", "k", "short"), "rhs" => decay("y", "k", "short")),
+                        Dict(
+                            "lhs" => dlhs("tot", "i", "parents"),
+                            "rhs" => Dict(
+                                "op" => "faq", "args" => Any[], "semiring" => "sum_product",
+                                "output_idx" => Any["i"],
+                                "ranges" => Dict(
+                                    "i" => Dict("from" => "parents"),
+                                    "j" => Dict("from" => "mop", "of" => Any["i"])
+                                ),
+                                "expr" => term
+                            )
+                        ),
+                    ]
+                )
+            )
+        )
+        good = op(
+            "+", op("*", idx("x", idx("mem", "i", "j")), op("+", "j", 0.5)),
+            op("*", idx("y", "j"), op("+", idx("mem", "i", "j"), 0.25))
+        )
         path = joinpath(mktempdir(), "act_entry.esm")
         open(io -> JSON3.write(io, mk(good)), path, "w")
         same, tally, tiers, (pn, u), _ = _act_agree(path)
@@ -351,7 +457,7 @@ end
         @test !haskey(tiers, :percell_build)
         RGF = _ACT.RuntimeGeneratedFunctions
         src = Ref("")
-        seen = IdDict{Any,Nothing}()
+        seen = IdDict{Any, Nothing}()
         walk(x) = begin
             T = typeof(x)
             (isbitstype(T) || x isa AbstractString || x isa Symbol || x isa Module) && return
@@ -363,9 +469,13 @@ end
                 src[] *= string(RGF.get_expression(x.f))
             elseif x isa Array
                 eltype(x) <: Number && return
-                for i in eachindex(x); isassigned(x, i) && walk(x[i]); end
+                for i in eachindex(x)
+                    isassigned(x, i) && walk(x[i])
+                end
             elseif !(x isa AbstractDict)
-                for i in 1:nfields(x); isdefined(x, i) && walk(getfield(x, i)); end
+                for i in 1:nfields(x)
+                    isdefined(x, i) && walk(getfield(x, i))
+                end
             end
         end
         walk(pn.f!)
@@ -392,8 +502,11 @@ end
     # so every tier and the interpreter compute it. The conformance fixture filters an equation's own right-hand
     # side and, through a materialized observed, an identity gather.
     @testset "a pointwise filter, with no contracted index" begin
-        same, _, tiers, (pn, u), _ = _act_agree(_act_fixture(
-            "tests/conformance/faq_pointwise_filter/fixtures/pointwise_filter.esm"))
+        same, _, tiers, (pn, u), _ = _act_agree(
+            _act_fixture(
+                "tests/conformance/faq_pointwise_filter/fixtures/pointwise_filter.esm"
+            )
+        )
         @test same
         @test !haskey(tiers, :percell_build)
         du = _act_du(pn, u)
@@ -404,26 +517,47 @@ end
         # 0.0 would show) over a live forcing buffer.
         n = 8
         idx(v, a...) = Dict("op" => "index", "args" => Any[v, a...])
-        doc = Dict{String,Any}("esm" => "1.1.0", "metadata" => Dict("name" => "act_pf"),
-            "models" => Dict("M" => Dict{String,Any}(
-                "variables" => Dict{String,Any}(
-                    "u" => Dict("type" => "unknown", "shape" => Any["i"]),
-                    "c" => Dict("type" => "parameter", "shape" => Any["i"])),
-                "equations" => Any[Dict(
-                    "lhs" => Dict("op" => "faq", "args" => Any[], "output_idx" => Any["i"],
-                        "ranges" => Dict("i" => Any[1, n]),
-                        "expr" => Dict("op" => "D", "args" => Any[idx("u", "i")], "wrt" => "t")),
-                    "rhs" => Dict("op" => "faq", "args" => Any[], "output_idx" => Any["i"],
-                        "ranges" => Dict("i" => Any[1, n]), "semiring" => "max_sum",
-                        "expr" => Dict("op" => "+", "args" => Any[
-                            Dict("op" => "*", "args" => Any[-0.5, idx("u", "i")]), idx("c", "i")]),
-                        "filter" => Dict("op" => "and", "args" => Any[
-                            Dict("op" => ">=", "args" => Any["i", 3]),
-                            Dict("op" => "<=", "args" => Any["i", n - 2])])))])))
+        doc = Dict{String, Any}(
+            "esm" => "1.1.0", "metadata" => Dict("name" => "act_pf"),
+            "models" => Dict(
+                "M" => Dict{String, Any}(
+                    "variables" => Dict{String, Any}(
+                        "u" => Dict("type" => "unknown", "shape" => Any["i"]),
+                        "c" => Dict("type" => "parameter", "shape" => Any["i"])
+                    ),
+                    "equations" => Any[
+                        Dict(
+                            "lhs" => Dict(
+                                "op" => "faq", "args" => Any[], "output_idx" => Any["i"],
+                                "ranges" => Dict("i" => Any[1, n]),
+                                "expr" => Dict("op" => "D", "args" => Any[idx("u", "i")], "wrt" => "t")
+                            ),
+                            "rhs" => Dict(
+                                "op" => "faq", "args" => Any[], "output_idx" => Any["i"],
+                                "ranges" => Dict("i" => Any[1, n]), "semiring" => "max_sum",
+                                "expr" => Dict(
+                                    "op" => "+", "args" => Any[
+                                        Dict("op" => "*", "args" => Any[-0.5, idx("u", "i")]), idx("c", "i"),
+                                    ]
+                                ),
+                                "filter" => Dict(
+                                    "op" => "and", "args" => Any[
+                                        Dict("op" => ">=", "args" => Any["i", 3]),
+                                        Dict("op" => "<=", "args" => Any["i", n - 2]),
+                                    ]
+                                )
+                            )
+                        ),
+                    ]
+                )
+            )
+        )
         function pf_du(c)
-            f!, u0, p, _, vm = _ACT._build_evaluator(doc; compiler = c,
+            f!, u0, p, _, vm = _ACT._build_evaluator(
+                doc; compiler = c,
                 initial_conditions = Dict("u[$i]" => 0.1i + 0.3 for i in 1:n),
-                param_arrays = Dict("c" => collect(1.0:n)))
+                param_arrays = Dict("c" => collect(1.0:n))
+            )
             d = similar(u0); f!(d, u0, p, 0.0)
             [d[vm["u[$i]"]] for i in 1:n]
         end
@@ -443,62 +577,92 @@ end
         idx(v, a...) = Dict("op" => "index", "args" => Any[v, a...])
         op(o, a...) = Dict("op" => o, "args" => Any[a...])
         cst(v) = Dict("op" => "const", "args" => Any[], "value" => v)
-        ragged(expr, reduce = "+") = Dict{String,Any}("op" => "faq", "args" => Any[],
+        ragged(expr, reduce = "+") = Dict{String, Any}(
+            "op" => "faq", "args" => Any[],
             "output_idx" => Any["i"], "reduce" => reduce,
-            "ranges" => Dict("i" => Dict("from" => "cells"),
-                             "k" => Dict("from" => "edges_of_cell", "of" => Any["i"])),
-            "expr" => expr)
+            "ranges" => Dict(
+                "i" => Dict("from" => "cells"),
+                "k" => Dict("from" => "edges_of_cell", "of" => Any["i"])
+            ),
+            "expr" => expr
+        )
         # Rows of 5..7 edges like an MPAS mesh, one empty row, the edge ids a
         # permutation-like scatter so neighbouring cells read distant edges.
         function mesh_doc(n; shifted = false)
             lens = [i == 2 ? 0 : 5 + mod(i, 3) for i in 1:n]
             mx, ne = 7, 3n
             eoc = [[k <= lens[i] ? 1 + mod(7i + 13k, ne) : 0 for k in 1:mx] for i in 1:n]
-            sgn = [[k <= lens[i] ? (isodd(i + k) ? 1.0 : -1.0) : 0.0 for k in 1:mx]
-                   for i in 1:n]
-            term = op("/", op("*", idx("sgn", "i", "k"), idx("F", idx("eoc", "i", "k"))),
-                      op("+", 1.0, op("*", 0.1, "i")))
-            Dict{String,Any}("esm" => "1.2.0", "metadata" => Dict("name" => "act_mpas"),
+            sgn = [
+                [k <= lens[i] ? (isodd(i + k) ? 1.0 : -1.0) : 0.0 for k in 1:mx]
+                    for i in 1:n
+            ]
+            term = op(
+                "/", op("*", idx("sgn", "i", "k"), idx("F", idx("eoc", "i", "k"))),
+                op("+", 1.0, op("*", 0.1, "i"))
+            )
+            Dict{String, Any}(
+                "esm" => "1.2.0", "metadata" => Dict("name" => "act_mpas"),
                 "index_sets" => Dict(
                     "cells" => Dict("kind" => "interval", "size" => n),
                     "edges" => Dict("kind" => "interval", "size" => ne),
                     "maxe" => Dict("kind" => "interval", "size" => mx),
-                    "edges_of_cell" => Dict("kind" => "ragged", "of" => Any["cells"],
-                                            "offsets" => "nE", "values" => "eoc")),
-                "models" => Dict("M" => Dict{String,Any}(
-                    "variables" => Dict(
-                        "nE" => Dict("type" => "unknown", "shape" => Any["cells"]),
-                        "eoc" => Dict("type" => "unknown", "shape" => Any["cells", "maxe"]),
-                        "sgn" => Dict("type" => "unknown", "shape" => Any["cells", "maxe"]),
-                        "F" => Dict("type" => "unknown", "shape" => Any["edges"]),
-                        "u" => Dict("type" => "unknown", "shape" => Any["cells"]),
-                        "v" => Dict("type" => "unknown", "shape" => Any["cells"])),
-                    "equations" => Any[
-                        Dict("lhs" => "nE", "rhs" => cst(lens)),
-                        Dict("lhs" => "eoc", "rhs" => cst(eoc)),
-                        Dict("lhs" => "sgn", "rhs" => cst(sgn)),
-                        Dict("lhs" => op("D", "F"), "rhs" => op("*", -0.1, "F")),
-                        # The divergence, negated outside the sum.
-                        Dict("lhs" => op("D", "u"), "rhs" => op("-", ragged(term))),
-                        # A max over the row, scaled and combined outside it.
-                        shifted ?
-                        # The row's gather inside another ragged fold's term:
-                        # that fold's entries are the table's, and the inner
-                        # row keeps its per-call bounds.
-                        Dict("lhs" => op("D", "v"),
-                             "rhs" => Dict("op" => "faq", "args" => Any[],
-                                 "output_idx" => Any["i"],
-                                 "ranges" => Dict("i" => Dict("from" => "cells"),
-                                     "m" => Dict("from" => "edges_of_cell", "of" => Any["i"])),
-                                 "expr" => op("*", idx("sgn", "i", "m"),
-                                              idx(ragged(term), "i")))) :
-                        Dict("lhs" => op("D", "v"),
-                             "rhs" => op("+", op("*", 0.3, ragged(term, "max")),
-                                         op("*", -0.2, "v")))])))
+                    "edges_of_cell" => Dict(
+                        "kind" => "ragged", "of" => Any["cells"],
+                        "offsets" => "nE", "values" => "eoc"
+                    )
+                ),
+                "models" => Dict(
+                    "M" => Dict{String, Any}(
+                        "variables" => Dict(
+                            "nE" => Dict("type" => "unknown", "shape" => Any["cells"]),
+                            "eoc" => Dict("type" => "unknown", "shape" => Any["cells", "maxe"]),
+                            "sgn" => Dict("type" => "unknown", "shape" => Any["cells", "maxe"]),
+                            "F" => Dict("type" => "unknown", "shape" => Any["edges"]),
+                            "u" => Dict("type" => "unknown", "shape" => Any["cells"]),
+                            "v" => Dict("type" => "unknown", "shape" => Any["cells"])
+                        ),
+                        "equations" => Any[
+                            Dict("lhs" => "nE", "rhs" => cst(lens)),
+                            Dict("lhs" => "eoc", "rhs" => cst(eoc)),
+                            Dict("lhs" => "sgn", "rhs" => cst(sgn)),
+                            Dict("lhs" => op("D", "F"), "rhs" => op("*", -0.1, "F")),
+                            # The divergence, negated outside the sum.
+                            Dict("lhs" => op("D", "u"), "rhs" => op("-", ragged(term))),
+                            # A max over the row, scaled and combined outside it.
+                            shifted ?
+                                # The row's gather inside another ragged fold's term:
+                                # that fold's entries are the table's, and the inner
+                                # row keeps its per-call bounds.
+                                Dict(
+                                    "lhs" => op("D", "v"),
+                                    "rhs" => Dict(
+                                        "op" => "faq", "args" => Any[],
+                                        "output_idx" => Any["i"],
+                                        "ranges" => Dict(
+                                            "i" => Dict("from" => "cells"),
+                                            "m" => Dict("from" => "edges_of_cell", "of" => Any["i"])
+                                        ),
+                                        "expr" => op(
+                                            "*", idx("sgn", "i", "m"),
+                                            idx(ragged(term), "i")
+                                        )
+                                    )
+                                ) :
+                                Dict(
+                                    "lhs" => op("D", "v"),
+                                    "rhs" => op(
+                                        "+", op("*", 0.3, ragged(term, "max")),
+                                        op("*", -0.2, "v")
+                                    )
+                                ),
+                        ]
+                    )
+                )
+            )
         end
         function rgens(f)
             out = Any[]
-            seen = IdDict{Any,Nothing}()
+            seen = IdDict{Any, Nothing}()
             walk(x) = begin
                 T = typeof(x)
                 (isbitstype(T) || x isa AbstractString || x isa Symbol || x isa Module) &&
@@ -511,9 +675,13 @@ end
                     push!(out, x)
                 elseif x isa Array
                     eltype(x) <: Number && return
-                    for i in eachindex(x); isassigned(x, i) && walk(x[i]); end
+                    for i in eachindex(x)
+                        isassigned(x, i) && walk(x[i])
+                    end
                 elseif !(x isa AbstractDict)
-                    for i in 1:nfields(x); isdefined(x, i) && walk(getfield(x, i)); end
+                    for i in 1:nfields(x)
+                        isdefined(x, i) && walk(getfield(x, i))
+                    end
                 end
             end
             walk(f)
@@ -546,8 +714,12 @@ end
             @test all(dz[pn.var_map[k]] === dzi[j] for (k, j) in pi_.var_map)
             # The rows are laid out as entries at build: the call reads each
             # gather of the row from a per-entry column.
-            src = join((string(_ACT.RuntimeGeneratedFunctions.get_expression(g.f))
-                        for g in rgens(pn.f!)), "\n")
+            src = join(
+                (
+                    string(_ACT.RuntimeGeneratedFunctions.get_expression(g.f))
+                        for g in rgens(pn.f!)
+                ), "\n"
+            )
             @test occursin("_cgrent", src)
             @test !occursin("_const_gather_sub", src)
             # Each contraction's cell chunks reproduce its serial pass.

@@ -19,11 +19,13 @@ const ESM = EarthSciAST
 
 # Build an evaluator under the (default) affine path or the byte-identical
 # per-cell reference (`compiler=:interpreter`). Returns (f, u0, p, vmap, diag);
-function _affine_f(model, ics; affine::Bool, const_arrays=Dict())
+function _affine_f(model, ics; affine::Bool, const_arrays = Dict())
     f, u0, p, _tspan, vmap, diag =
-        ESM._build_evaluator_impl(model; initial_conditions=ics,
-                                  const_arrays=const_arrays,
-                                  compiler = affine ? :native : :interpreter)
+        ESM._build_evaluator_impl(
+        model; initial_conditions = ics,
+        const_arrays = const_arrays,
+        compiler = affine ? :native : :interpreter
+    )
     return (f, u0, p, vmap, diag)
 end
 
@@ -36,42 +38,65 @@ _du(f!, u0, p) = (d = similar(u0); fill!(d, 0); f!(d, u0, p, 0.0); d)
 
 # 2-D 5-point Laplacian over the full i×j range (ghosts on all four edges).
 function _ad_2d_model(N)
-    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable; shape=["i", "j"]))
-    body = _op("+",
+    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable; shape = ["i", "j"]))
+    body = _op(
+        "+",
         _idx("u", _op("-", _v("i"), _i(1)), _v("j")),
         _op("*", _n(-4.0), _idx("u", _v("i"), _v("j"))),
         _idx("u", _op("+", _v("i"), _i(1)), _v("j")),
         _idx("u", _v("i"), _op("-", _v("j"), _i(1))),
-        _idx("u", _v("i"), _op("+", _v("j"), _i(1))))
-    lhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i", "j"],
-        expr_body=_Didx("u", _v("i"), _v("j")), ranges=Dict("i" => [1, N], "j" => [1, N]))
-    rhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i", "j"],
-        expr_body=body, ranges=Dict("i" => [1, N], "j" => [1, N]))
-    ESM.Model(vars, [ESM.Equation(lhs, rhs)])
+        _idx("u", _v("i"), _op("+", _v("j"), _i(1)))
+    )
+    lhs = ESM.OpExpr(
+        "faq", ESM.ASTExpr[]; output_idx = Any["i", "j"],
+        expr_body = _Didx("u", _v("i"), _v("j")), ranges = Dict("i" => [1, N], "j" => [1, N])
+    )
+    rhs = ESM.OpExpr(
+        "faq", ESM.ASTExpr[]; output_idx = Any["i", "j"],
+        expr_body = body, ranges = Dict("i" => [1, N], "j" => [1, N])
+    )
+    return ESM.Model(vars, [ESM.Equation(lhs, rhs)])
 end
 
 # 1-D variable-coefficient diffusion K[i]·Δ²u (K a const array) — exercises
 # `_AccConstBox` const reads (Float64 data, zero derivative) alongside the AD.
 function _ad_const_coef_model(N)
     vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
-    lap = _op("+", _idx("u", _op("-", _v("i"), _i(1))),
-                   _op("*", _n(-2.0), _idx("u", _v("i"))),
-                   _idx("u", _op("+", _v("i"), _i(1))))
-    ESM.Model(vars, [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
-                                  _ao1(_op("*", _idx("K", _v("i")), lap), "i", 1, N))])
+    lap = _op(
+        "+", _idx("u", _op("-", _v("i"), _i(1))),
+        _op("*", _n(-2.0), _idx("u", _v("i"))),
+        _idx("u", _op("+", _v("i"), _i(1)))
+    )
+    return ESM.Model(
+        vars, [
+            ESM.Equation(
+                _ao1(_Didx("u", _v("i")), "i", 1, N),
+                _ao1(_op("*", _idx("K", _v("i")), lap), "i", 1, N)
+            ),
+        ]
+    )
 end
 
 # 1-D diffusion α·Δ²u with α a SCALAR PARAMETER — the `_NK_PARAM` leaf in the
 # access spine, so ForwardDiff-over-parameters exercises the generic param arm.
-function _ad_param_model(N; alpha=0.5)
-    vars = Dict{String,ESM.ModelVariable}(
+function _ad_param_model(N; alpha = 0.5)
+    vars = Dict{String, ESM.ModelVariable}(
         "u" => ESM.ModelVariable(ESM.UnknownVariable),
-        "alpha" => ESM.ModelVariable(ESM.ParameterVariable; default=alpha))
-    lap = _op("+", _idx("u", _op("-", _v("i"), _i(1))),
-                   _op("*", _n(-2.0), _idx("u", _v("i"))),
-                   _idx("u", _op("+", _v("i"), _i(1))))
-    ESM.Model(vars, [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
-                                  _ao1(_op("*", _v("alpha"), lap), "i", 1, N))])
+        "alpha" => ESM.ModelVariable(ESM.ParameterVariable; default = alpha)
+    )
+    lap = _op(
+        "+", _idx("u", _op("-", _v("i"), _i(1))),
+        _op("*", _n(-2.0), _idx("u", _v("i"))),
+        _idx("u", _op("+", _v("i"), _i(1)))
+    )
+    return ESM.Model(
+        vars, [
+            ESM.Equation(
+                _ao1(_Didx("u", _v("i")), "i", 1, N),
+                _ao1(_op("*", _v("alpha"), lap), "i", 1, N)
+            ),
+        ]
+    )
 end
 
 @testset "affine access kernels: AD + out-of-place (ess-affine)" begin
@@ -79,18 +104,20 @@ end
     # ---- 1. State Jacobian: affine ≡ per-cell, bit-for-bit ----
     @testset "state Jacobian ≡ per-cell — 1D 2nd-diff (N=$N)" for N in (8, 24)
         ics = Dict("u[$k]" => sin(0.3k) + 0.1k for k in 1:N)
-        f_aff, u0, p, _, d = _affine_f(_stencil_model(N), ics; affine=true)
-        f_ref, _, _, _, _  = _affine_f(_stencil_model(N), ics; affine=false)
+        f_aff, u0, p, _, d = _affine_f(_stencil_model(N), ics; affine = true)
+        f_ref, _, _, _, _ = _affine_f(_stencil_model(N), ics; affine = false)
         @test d.n_acc_kernels >= 1
         @test d.n_vec_kernels == 0
         @test _jac_u(f_aff, u0, p) == _jac_u(f_ref, u0, p)
     end
 
     @testset "state Jacobian ≡ per-cell — 2D 5-point (N=$N)" for N in (5, 12)
-        ics = Dict("u[$i,$j]" => sin(0.2i) + 0.3cos(0.1j) + 0.01i * j
-                   for i in 1:N, j in 1:N)
-        f_aff, u0, p, _, d = _affine_f(_ad_2d_model(N), ics; affine=true)
-        f_ref, _, _, _, _  = _affine_f(_ad_2d_model(N), ics; affine=false)
+        ics = Dict(
+            "u[$i,$j]" => sin(0.2i) + 0.3cos(0.1j) + 0.01i * j
+                for i in 1:N, j in 1:N
+        )
+        f_aff, u0, p, _, d = _affine_f(_ad_2d_model(N), ics; affine = true)
+        f_ref, _, _, _, _ = _affine_f(_ad_2d_model(N), ics; affine = false)
         @test d.n_acc_kernels >= 1
         @test _jac_u(f_aff, u0, p) == _jac_u(f_ref, u0, p)
     end
@@ -99,8 +126,8 @@ end
         K = Float64[0.5 + 0.3sin(0.2k) for k in 1:N]
         ics = Dict("u[$k]" => sin(0.3k) + 0.1k for k in 1:N)
         ca = Dict("K" => K)
-        f_aff, u0, p, _, d = _affine_f(_ad_const_coef_model(N), ics; affine=true, const_arrays=ca)
-        f_ref, _, _, _, _  = _affine_f(_ad_const_coef_model(N), ics; affine=false, const_arrays=ca)
+        f_aff, u0, p, _, d = _affine_f(_ad_const_coef_model(N), ics; affine = true, const_arrays = ca)
+        f_ref, _, _, _, _ = _affine_f(_ad_const_coef_model(N), ics; affine = false, const_arrays = ca)
         @test d.n_acc_kernels >= 1
         @test _jac_u(f_aff, u0, p) == _jac_u(f_ref, u0, p)
     end
@@ -108,23 +135,28 @@ end
     # ---- 2. Parameter Jacobian: the generic `_NK_PARAM` arm ----
     @testset "parameter Jacobian ≡ per-cell — α·Δ²u (N=$N)" for N in (8, 20)
         ics = Dict("u[$k]" => cos(0.25k) + 0.05k for k in 1:N)
-        f_aff, u0, p, _, d = _affine_f(_ad_param_model(N), ics; affine=true)
-        f_ref, _, _, _, _  = _affine_f(_ad_param_model(N), ics; affine=false)
+        f_aff, u0, p, _, d = _affine_f(_ad_param_model(N), ics; affine = true)
+        f_ref, _, _, _, _ = _affine_f(_ad_param_model(N), ics; affine = false)
         @test d.n_acc_kernels >= 1
         # differentiate du w.r.t. the scalar parameter α (u fixed at Float64, so
         # only `p.alpha` goes Dual — the path `eltype(u)`-only sizing would break)
         jp(f!) = ForwardDiff.jacobian(
-            a -> (dd = similar(u0, eltype(a)); fill!(dd, 0);
-                  f!(dd, u0, (; p..., alpha=a[1]), 0.0); dd), [p.alpha])
+            a -> (
+                dd = similar(u0, eltype(a)); fill!(dd, 0);
+                f!(dd, u0, (; p..., alpha = a[1]), 0.0); dd
+            ), [p.alpha]
+        )
         @test jp(f_aff) == jp(f_ref)
     end
 
     # ---- 3. 2-D affine box ≡ the per-cell reference ---------------------------
     @testset "affine ≡ per-cell — 2D 5-point (N=$N)" for N in (5, 12)
-        ics = Dict("u[$i,$j]" => sin(0.2i) + 0.3cos(0.1j) + 0.01i * j
-                   for i in 1:N, j in 1:N)
-        f_aff, u0, p, _, d = _affine_f(_ad_2d_model(N), ics; affine=true)
-        f_ref, _, _, _, _  = _affine_f(_ad_2d_model(N), ics; affine=false)
+        ics = Dict(
+            "u[$i,$j]" => sin(0.2i) + 0.3cos(0.1j) + 0.01i * j
+                for i in 1:N, j in 1:N
+        )
+        f_aff, u0, p, _, d = _affine_f(_ad_2d_model(N), ics; affine = true)
+        f_ref, _, _, _, _ = _affine_f(_ad_2d_model(N), ics; affine = false)
         @test d.n_acc_kernels >= 1
         @test _du(f_aff, u0, p) == _du(f_ref, u0, p)
     end

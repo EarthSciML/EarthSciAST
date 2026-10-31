@@ -29,9 +29,19 @@ include("testutils.jl")
     end
 
     @testset "const units are gated at esm 1.2.0" begin
-        doc(esm) = Dict{String,Any}("esm" => esm, "models" => Dict{String,Any}("M" => Dict{String,Any}(
-            "equations" => Any[Dict{String,Any}("lhs" => "x", "rhs" => Dict{String,Any}(
-                "op" => "const", "args" => Any[], "value" => 1.0, "units" => "m"))])))
+        doc(esm) = Dict{String, Any}(
+            "esm" => esm, "models" => Dict{String, Any}(
+                "M" => Dict{String, Any}(
+                    "equations" => Any[
+                        Dict{String, Any}(
+                            "lhs" => "x", "rhs" => Dict{String, Any}(
+                                "op" => "const", "args" => Any[], "value" => 1.0, "units" => "m"
+                            )
+                        ),
+                    ]
+                )
+            )
+        )
         err = try
             EarthSciAST.reject_const_units_pre_v12(doc("1.1.0"))
             nothing

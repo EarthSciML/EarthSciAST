@@ -22,7 +22,7 @@ a cell-axis shard. It exists so that the unsharded specialization of the traced
 body does not contain the `sharding_constraint` call at all; see `_de_constrain`
 below for why that matters.
 """
-mutable struct DirectRHS{F,SHARDED} <: DirectCallable{SHARDED}
+mutable struct DirectRHS{F, SHARDED} <: DirectCallable{SHARDED}
     # THESE THREE FIELDS AND NO OTHERS. `Reactant.@compile d(u, p, t)` traces
     # the callable itself, so every field here is walked by Reactant and
     # inferred through at the call site. WHERE the program runs — the XLA
@@ -31,8 +31,8 @@ mutable struct DirectRHS{F,SHARDED} <: DirectCallable{SHARDED}
     # compile (see the long note in device.jl). Read the placement with
     # `direct_client` / `direct_shard`.
     f::F
-    names::Dict{Int,String}
-    stats::Dict{Symbol,Int}
+    names::Dict{Int, String}
+    stats::Dict{Symbol, Int}
 end
 
 """
@@ -49,8 +49,8 @@ nothing recompiles.
 Build one with [`direct_rhs_with_buffers`](@ref). It shares the wrapped RHS and
 the `stats` dictionary with the `DirectRHS` it came from.
 """
-struct DirectRHSBuffers{F,SHARDED} <: DirectCallable{SHARDED}
-    d::DirectRHS{F,SHARDED}
+struct DirectRHSBuffers{F, SHARDED} <: DirectCallable{SHARDED}
+    d::DirectRHS{F, SHARDED}
 end
 
 """
@@ -95,9 +95,11 @@ is not Julia's `^`, `stablehlo.maximum`/`minimum` do not pin Julia's NaN
 propagation, and a long `⊕`-fold becomes one `stablehlo.reduce`, which XLA may
 reassociate (see ops.jl). Emitted programs are never compared.
 """
-function direct_rhs(f::_E._OopRHS; var_map = nothing, client = nothing,
-                    sharding = nothing)
-    names = Dict{Int,String}()
+function direct_rhs(
+        f::_E._OopRHS; var_map = nothing, client = nothing,
+        sharding = nothing
+    )
+    names = Dict{Int, String}()
     if var_map !== nothing
         for (nm, idx) in var_map
             names[Int(idx)] = String(nm)
@@ -109,8 +111,9 @@ function direct_rhs(f::_E._OopRHS; var_map = nothing, client = nothing,
         _de_resolve_shard(sharding, cl, n_states, names)
     end
     return _de_register_place!(
-        DirectRHS{typeof(f),shard !== nothing}(f, names, Dict{Symbol,Int}()),
-        DirectPlace(cl, shard))
+        DirectRHS{typeof(f), shard !== nothing}(f, names, Dict{Symbol, Int}()),
+        DirectPlace(cl, shard)
+    )
 end
 
 """
@@ -141,25 +144,33 @@ direct_rhs_with_buffers(f::_E._OopRHS; kwargs...) =
 
 # ---- the emission itself -----------------------------------------------------
 
-function _de_run(d::DirectRHS, u::TracedRArray{Float64,1}, p, t, bufs,
-                 hostkeys::Vector{Vector{Float64}})
+function _de_run(
+        d::DirectRHS, u::TracedRArray{Float64, 1}, p, t, bufs,
+        hostkeys::Vector{Vector{Float64}}
+    )
     rhs = d.f.rhs
     n_states = getfield(rhs, :n_states)::Int
     n_total = getfield(rhs, :n_total)::Int
     length(u) == n_states ||
-        _de_refuse("a state vector of length $(length(u))",
-            "this model's flat state has $n_states elements.")
-    ctx = _DECtx(n_states, n_total, p, _de_time(t), _DEVal(u.mlir_data, n_states),
-                 bufs, hostkeys, d.names)
+        _de_refuse(
+        "a state vector of length $(length(u))",
+        "this model's flat state has $n_states elements."
+    )
+    ctx = _DECtx(
+        n_states, n_total, p, _de_time(t), _DEVal(u.mlir_data, n_states),
+        bufs, hostkeys, d.names
+    )
     out = _de_rule!("the right-hand side") do
         _de_emit!(ctx, rhs)
     end
     d.stats = copy(ctx.stats)
     out.len == n_states ||
-        _de_refuse("an assembled `du` of length $(out.len)",
-            "the output slot map assembled to the wrong width; expected " *
-            "$n_states.")
-    du = TracedRArray{Float64,1}((), out.v, (n_states,))
+        _de_refuse(
+        "an assembled `du` of length $(out.len)",
+        "the output slot map assembled to the wrong width; expected " *
+            "$n_states."
+    )
+    du = TracedRArray{Float64, 1}((), out.v, (n_states,))
     return _de_constrain(du, d)
 end
 
@@ -188,27 +199,31 @@ function _de_constrain(du, d::DirectCallable{true})
     return Reactant.Ops.sharding_constraint(du, sh.state)
 end
 
-function (d::DirectRHS)(u::TracedRArray{Float64,1}, p, t)
+function (d::DirectRHS)(u::TracedRArray{Float64, 1}, p, t)
     host = _E.forcing_buffers(d.f)
     named = join(String[String(k) for k in keys(host)], ", ")
     isempty(host) ||
-        _de_refuse("a live forcing buffer under the three-argument form",
-            "this model binds $(length(host)) live forcing buffer(s) " *
+        _de_refuse(
+        "a live forcing buffer under the three-argument form",
+        "this model binds $(length(host)) live forcing buffer(s) " *
             "($named). The three-argument " *
             "form would forward the build's HOST arrays, which a compiled " *
             "program can only bake in as constants — the silent-staleness " *
             "configuration. Compile `direct_rhs_with_buffers(d)` and pass " *
-            "`map(ConcreteRArray, forcing_buffers(f))` as a fourth argument.")
+            "`map(ConcreteRArray, forcing_buffers(f))` as a fourth argument."
+    )
     return _de_run(d, u, p, t, (), Vector{Float64}[])
 end
 
-function (b::DirectRHSBuffers)(u::TracedRArray{Float64,1}, p, t, buffers)
+function (b::DirectRHSBuffers)(u::TracedRArray{Float64, 1}, p, t, buffers)
     d = b.d
     host = _E.forcing_buffers(d.f)
     length(buffers) == length(host) ||
-        _de_refuse("a `buffers` argument of length $(length(buffers))",
-            "it must be aligned with `forcing_buffers(f)`, which has " *
-            "$(length(host)) entry/entries in name-sorted order.")
+        _de_refuse(
+        "a `buffers` argument of length $(length(buffers))",
+        "it must be aligned with `forcing_buffers(f)`, which has " *
+            "$(length(host)) entry/entries in name-sorted order."
+    )
     hostkeys = Vector{Float64}[v for v in values(host)]
     return _de_run(d, u, p, t, buffers, hostkeys)
 end
@@ -219,23 +234,27 @@ end
 # phase — answering it in a precision the document did not declare is a wrong
 # number with nothing in the result to say so — and the `compiled_rhs` manifest
 # excludes exactly those fixtures for the same reason.
-(d::DirectRHS)(u::TracedRArray{T,1}, p, t) where {T} = _de_wrong_eltype(T)
-(b::DirectRHSBuffers)(u::TracedRArray{T,1}, p, t, buffers) where {T} =
+(d::DirectRHS)(u::TracedRArray{T, 1}, p, t) where {T} = _de_wrong_eltype(T)
+(b::DirectRHSBuffers)(u::TracedRArray{T, 1}, p, t, buffers) where {T} =
     _de_wrong_eltype(T)
 
 _de_wrong_eltype(::Type{T}) where {T} =
-    _de_refuse("a state vector with element type $T",
-        "direct emission is Float64 throughout — every emitted value is a " *
+    _de_refuse(
+    "a state vector with element type $T",
+    "direct emission is Float64 throughout — every emitted value is a " *
         "`tensor<Lxf64>` — and it will not widen a narrower state into Float64 " *
         "behind the author's back. Precision-changing models are out of scope " *
-        "for this phase; run them with the interpreter.")
+        "for this phase; run them with the interpreter."
+)
 
 # Called outside a trace: say so, rather than failing somewhere in MLIR.
 (d::DirectRHS)(u, p, t) = _de_not_traced(u)
 (b::DirectRHSBuffers)(u, p, t, buffers) = _de_not_traced(u)
 
-_de_not_traced(u) = _de_refuse("a call on a state vector of type $(typeof(u))",
+_de_not_traced(u) = _de_refuse(
+    "a call on a state vector of type $(typeof(u))",
     "direct emission builds StableHLO and only runs under `Reactant.@compile`. " *
-    "Pass a `ConcreteRArray{Float64,1}` (which the trace turns into a " *
-    "`TracedRArray`), or call the out-of-place RHS itself for a host " *
-    "evaluation.")
+        "Pass a `ConcreteRArray{Float64,1}` (which the trace turns into a " *
+        "`TracedRArray`), or call the out-of-place RHS itself for a host " *
+        "evaluation."
+)

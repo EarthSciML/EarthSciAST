@@ -162,7 +162,7 @@ function reverse_grad(f, label, ref)
             return g
         end
         rel = maximum(abs.(g .- ref)) / max(maximum(abs.(ref)), eps())
-        tag = rel < 1e-10 ? "MATCH" : "DIFFER"
+        tag = rel < 1.0e-10 ? "MATCH" : "DIFFER"
         @printf("  %-34s reverse  OK   rel=%.3e %s\n", label, rel, tag)
         return g
     catch e
@@ -172,22 +172,22 @@ function reverse_grad(f, label, ref)
     end
 end
 
-println("=" ^ 78)
+println("="^78)
 println("Reactant ", pkgversion(Reactant), "   NSTEP=", NSTEP)
-println("=" ^ 78)
+println("="^78)
 
 println("\n--- PRIMALS (all of these must work, or the test is meaningless) ---")
 p_host = primal(loss_host, "host-unrolled (no @trace)")
 for (f, l) in [
-    (loss_for_none, "@trace for, ckpt=false [DEFAULT]"),
-    (loss_for_ckpt_true, "@trace for, ckpt=true"),
-    (loss_for_periodic, "@trace for, ckpt=Periodic(3)"),
-    (loss_for_binomial, "@trace for, ckpt=Binomial(3)"),
-    (loss_for_binomial_mincut, "@trace for, Binomial(3)+mincut"),
-    (loss_while_none, "@trace while, ckpt=false [DEFAULT]"),
-    (loss_while_periodic, "@trace while, ckpt=Periodic(3)"),
-    (loss_while_binomial_mincut, "@trace while, Binomial(3)+mincut"),
-]
+        (loss_for_none, "@trace for, ckpt=false [DEFAULT]"),
+        (loss_for_ckpt_true, "@trace for, ckpt=true"),
+        (loss_for_periodic, "@trace for, ckpt=Periodic(3)"),
+        (loss_for_binomial, "@trace for, ckpt=Binomial(3)"),
+        (loss_for_binomial_mincut, "@trace for, Binomial(3)+mincut"),
+        (loss_while_none, "@trace while, ckpt=false [DEFAULT]"),
+        (loss_while_periodic, "@trace while, ckpt=Periodic(3)"),
+        (loss_while_binomial_mincut, "@trace while, Binomial(3)+mincut"),
+    ]
     primal(f, l)
 end
 
@@ -197,22 +197,22 @@ ref = reverse_grad(loss_host, "host-unrolled (no @trace)", nothing)
 println("\n--- REVERSE THROUGH @trace for (STATIC trip count) ---")
 println("    The claim's key datum: 'fails for a FIXED trip count as well'.")
 for (f, l) in [
-    (loss_for_none, "ckpt=false [DEFAULT: as measured]"),
-    (loss_for_ckpt_true, "ckpt=true"),
-    (loss_for_periodic, "ckpt=Periodic(3)"),
-    (loss_for_binomial, "ckpt=Binomial(3)"),
-    (loss_for_binomial_mincut, "ckpt=Binomial(3) + mincut"),
-]
+        (loss_for_none, "ckpt=false [DEFAULT: as measured]"),
+        (loss_for_ckpt_true, "ckpt=true"),
+        (loss_for_periodic, "ckpt=Periodic(3)"),
+        (loss_for_binomial, "ckpt=Binomial(3)"),
+        (loss_for_binomial_mincut, "ckpt=Binomial(3) + mincut"),
+    ]
     reverse_grad(f, l, ref)
 end
 
 println("\n--- REVERSE THROUGH @trace while (DATA-DEPENDENT cond) ---")
 println("    Our adaptive-controller shape; cf. Enzyme-JAX #2565 (OPEN).")
 for (f, l) in [
-    (loss_while_none, "ckpt=false [DEFAULT: as measured]"),
-    (loss_while_periodic, "ckpt=Periodic(3)"),
-    (loss_while_binomial_mincut, "ckpt=Binomial(3) + mincut"),
-]
+        (loss_while_none, "ckpt=false [DEFAULT: as measured]"),
+        (loss_while_periodic, "ckpt=Periodic(3)"),
+        (loss_while_binomial_mincut, "ckpt=Binomial(3) + mincut"),
+    ]
     reverse_grad(f, l, ref)
 end
 

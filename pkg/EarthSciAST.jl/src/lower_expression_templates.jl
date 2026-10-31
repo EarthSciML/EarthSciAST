@@ -185,17 +185,20 @@ const _KNOWN_DIAGNOSTIC_CODES = (
 function _assert_no_nested_apply(body, template_name::String, path::String)
     if _is_array(body)
         for (i, child) in enumerate(body)
-            _assert_no_nested_apply(child, template_name, "$path/$(i-1)")
+            _assert_no_nested_apply(child, template_name, "$path/$(i - 1)")
         end
         return
     end
-    if _is_object(body)
+    return if _is_object(body)
         op = _raw_get(body, "op")
         op_str = op === nothing ? "" : string(op)
         if op_str == APPLY_EXPRESSION_TEMPLATE_OP
-            throw(ExpressionTemplateError(
-                ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-                "expression_templates.$(template_name): `match` contains an 'apply_expression_template' node at $path; match patterns MUST NOT reference templates (esm-spec §9.7.3)"))
+            throw(
+                ExpressionTemplateError(
+                    ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
+                    "expression_templates.$(template_name): `match` contains an 'apply_expression_template' node at $path; match patterns MUST NOT reference templates (esm-spec §9.7.3)"
+                )
+            )
         end
         for (k, v) in pairs(body)
             _assert_no_nested_apply(v, template_name, "$path/$(string(k))")
@@ -203,41 +206,56 @@ function _assert_no_nested_apply(body, template_name::String, path::String)
     end
 end
 
-function _validate_templates(templates::AbstractDict{String,Any}, scope::String)
+function _validate_templates(templates::AbstractDict{String, Any}, scope::String)
     for (name, decl) in templates
         if !_is_object(decl)
-            throw(ExpressionTemplateError(
-                ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-                "$scope.expression_templates.$name: entry must be an object with params + body"))
+            throw(
+                ExpressionTemplateError(
+                    ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
+                    "$scope.expression_templates.$name: entry must be an object with params + body"
+                )
+            )
         end
         # `params` MAY be empty (esm-spec §9.6.1, 0.8.0): a zero-parameter
         # template is a named constant fragment (common in library files).
         params = _raw_get(decl, "params")
         if params === nothing || !_is_array(params)
-            throw(ExpressionTemplateError(
-                ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-                "$scope.expression_templates.$name: 'params' must be an array of strings"))
+            throw(
+                ExpressionTemplateError(
+                    ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
+                    "$scope.expression_templates.$name: 'params' must be an array of strings"
+                )
+            )
         end
         seen = Set{String}()
         for p in params
             if !(p isa AbstractString) || isempty(p)
-                throw(ExpressionTemplateError(
-                    ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-                    "$scope.expression_templates.$name: param names must be non-empty strings"))
+                throw(
+                    ExpressionTemplateError(
+                        ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
+                        "$scope.expression_templates.$name: param names must be non-empty strings"
+                    )
+                )
             end
             ps = string(p)
             if ps in seen
-                throw(ExpressionTemplateError(
-                    ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-                    "$scope.expression_templates.$name: param '$ps' is declared twice"))
+                throw(
+                    ExpressionTemplateError(
+                        ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
+                        "$scope.expression_templates.$name: param '$ps' is declared twice"
+                    )
+                )
             end
             push!(seen, ps)
         end
         body = _raw_get(decl, "body")
         if body === nothing
-            throw(ExpressionTemplateError(
-                ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-                "$scope.expression_templates.$name: 'body' is required"))
+            throw(
+                ExpressionTemplateError(
+                    ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
+                    "$scope.expression_templates.$name: 'body' is required"
+                )
+            )
         end
         # A body MAY reference other match-less in-scope templates via
         # apply_expression_template nodes (esm-spec §9.7.3); those are checked
@@ -265,47 +283,69 @@ function _validate_templates(templates::AbstractDict{String,Any}, scope::String)
         # `index_sets` registry is in scope) — see `_registered_where`.
         whr = _raw_get(decl, "where")
         if whr !== nothing
-            match === nothing && throw(ExpressionTemplateError(
-                ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-                "$scope.expression_templates.$name: 'where' is only admissible " *
-                "alongside 'match' — constraints scope an auto-applied rewrite " *
-                "rule, not a named fragment (esm-spec §9.6.1)"))
+            match === nothing && throw(
+                ExpressionTemplateError(
+                    ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
+                    "$scope.expression_templates.$name: 'where' is only admissible " *
+                        "alongside 'match' — constraints scope an auto-applied rewrite " *
+                        "rule, not a named fragment (esm-spec §9.6.1)"
+                )
+            )
             (_is_object(whr) && !isempty(collect(pairs(whr)))) ||
-                throw(ExpressionTemplateError(
+                throw(
+                ExpressionTemplateError(
                     ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
                     "$scope.expression_templates.$name: 'where' must be a " *
-                    "non-empty object mapping declared params to constraint objects"))
+                        "non-empty object mapping declared params to constraint objects"
+                )
+            )
             for (p, cobj) in pairs(whr)
                 ps = string(p)
-                ps in seen || throw(ExpressionTemplateError(
-                    ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-                    "$scope.expression_templates.$name: 'where' constrains '$ps', " *
-                    "which is not a declared param (esm-spec §9.6.1)"))
-                _is_object(cobj) || throw(ExpressionTemplateError(
-                    ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-                    "$scope.expression_templates.$name: where.$ps must be a " *
-                    "constraint object (v1 admits exactly the 'shape' kind)"))
+                ps in seen || throw(
+                    ExpressionTemplateError(
+                        ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
+                        "$scope.expression_templates.$name: 'where' constrains '$ps', " *
+                            "which is not a declared param (esm-spec §9.6.1)"
+                    )
+                )
+                _is_object(cobj) || throw(
+                    ExpressionTemplateError(
+                        ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
+                        "$scope.expression_templates.$name: where.$ps must be a " *
+                            "constraint object (v1 admits exactly the 'shape' kind)"
+                    )
+                )
                 ckeys = Set{String}(string(k) for (k, _) in pairs(cobj))
-                ckeys == Set(["shape"]) || throw(ExpressionTemplateError(
-                    ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-                    "$scope.expression_templates.$name: where.$ps carries " *
-                    "constraint kind(s) $(join(sort(collect(ckeys)), ", ")); the " *
-                    "v1 constraint vocabulary is exactly {shape} (esm-spec §9.6.1)"))
+                ckeys == Set(["shape"]) || throw(
+                    ExpressionTemplateError(
+                        ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
+                        "$scope.expression_templates.$name: where.$ps carries " *
+                            "constraint kind(s) $(join(sort(collect(ckeys)), ", ")); the " *
+                            "v1 constraint vocabulary is exactly {shape} (esm-spec §9.6.1)"
+                    )
+                )
                 shp = _raw_get(cobj, "shape")
-                (_is_array(shp) && !isempty(shp)) || throw(ExpressionTemplateError(
-                    ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-                    "$scope.expression_templates.$name: where.$ps.shape must be a " *
-                    "non-empty array of index-set names"))
+                (_is_array(shp) && !isempty(shp)) || throw(
+                    ExpressionTemplateError(
+                        ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
+                        "$scope.expression_templates.$name: where.$ps.shape must be a " *
+                            "non-empty array of index-set names"
+                    )
+                )
                 for s in shp
                     (s isa AbstractString && !isempty(string(s))) ||
-                        throw(ExpressionTemplateError(
+                        throw(
+                        ExpressionTemplateError(
                             ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
                             "$scope.expression_templates.$name: where.$ps.shape " *
-                            "entries must be non-empty strings"))
+                                "entries must be non-empty strings"
+                        )
+                    )
                 end
             end
         end
     end
+    return
 end
 
 # ---------------------------------------------------------------------------
@@ -333,12 +373,12 @@ copies-with-changes; the one in-place mutation on the raw view
 commute. The memo is keyed on node IDENTITY so shared subtrees are
 substituted once.
 """
-function _substitute(body, bindings::Dict{String,Any})
+function _substitute(body, bindings::Dict{String, Any})
     isempty(bindings) && return body
-    return _subst_shared(body, bindings, IdDict{Any,Any}())
+    return _subst_shared(body, bindings, IdDict{Any, Any}())
 end
 
-function _subst_shared(n, bindings::Dict{String,Any}, memo::IdDict{Any,Any})
+function _subst_shared(n, bindings::Dict{String, Any}, memo::IdDict{Any, Any})
     if n isa AbstractString
         return haskey(bindings, string(n)) ? bindings[string(n)] : n
     elseif _is_array(n)
@@ -364,7 +404,7 @@ function _subst_shared(n, bindings::Dict{String,Any}, memo::IdDict{Any,Any})
         op = _raw_get(n, "op")
         is_apply = op !== nothing && string(op) == APPLY_EXPRESSION_TEMPLATE_OP
         changed = false
-        buf = OrderedDict{String,Any}()
+        buf = OrderedDict{String, Any}()
         for (k, v) in pairs(n)
             ks = string(k)
             if is_apply && ks == "name"
@@ -395,41 +435,61 @@ after the declaration lookup, preserving the historical error precedence — a
 reference to a `match` rewrite rule (only match-less templates are invocable
 by name, esm-spec §9.6.2). Throws the stable §9.6.6 diagnostics.
 """
-function _resolve_apply_site(node, templates::AbstractDict, scope::String;
-                             reject_match_rule::Bool=false)
+function _resolve_apply_site(
+        node, templates::AbstractDict, scope::String;
+        reject_match_rule::Bool = false
+    )
     name_raw = _raw_get(node, "name")
-    name_raw === nothing && throw(ExpressionTemplateError(
-        ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
-        "$scope: apply_expression_template node missing 'name'"))
+    name_raw === nothing && throw(
+        ExpressionTemplateError(
+            ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_INVALID_DECLARATION,
+            "$scope: apply_expression_template node missing 'name'"
+        )
+    )
     name = string(name_raw)
     decl = get(templates, name, nothing)
-    decl === nothing && throw(ExpressionTemplateError(
-        ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
-        "$scope: apply_expression_template references undeclared template '$name'"))
-    if reject_match_rule && _raw_get(decl, "match") !== nothing
-        throw(ExpressionTemplateError(
+    decl === nothing && throw(
+        ExpressionTemplateError(
             ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
-            "$scope: apply_expression_template references '$name', a `match` " *
-            "rewrite rule — only match-less templates are invocable by name (esm-spec §9.6.2)"))
+            "$scope: apply_expression_template references undeclared template '$name'"
+        )
+    )
+    if reject_match_rule && _raw_get(decl, "match") !== nothing
+        throw(
+            ExpressionTemplateError(
+                ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
+                "$scope: apply_expression_template references '$name', a `match` " *
+                    "rewrite rule — only match-less templates are invocable by name (esm-spec §9.6.2)"
+            )
+        )
     end
     bindings_raw = _raw_get(node, "bindings")
-    (bindings_raw === nothing || !_is_object(bindings_raw)) && throw(ExpressionTemplateError(
-        ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
-        "$scope: apply_expression_template '$name' missing 'bindings' object"))
+    (bindings_raw === nothing || !_is_object(bindings_raw)) && throw(
+        ExpressionTemplateError(
+            ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
+            "$scope: apply_expression_template '$name' missing 'bindings' object"
+        )
+    )
     decl_params_raw = _raw_get(decl, "params")
     decl_params = decl_params_raw === nothing ? String[] :
         String[string(p) for p in decl_params_raw]
     declared = Set(decl_params)
     provided = Set{String}([string(k) for (k, _) in pairs(bindings_raw)])
     for p in decl_params
-        p in provided || throw(ExpressionTemplateError(
-            ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
-            "$scope: apply_expression_template '$name' missing binding for param '$p'"))
+        p in provided || throw(
+            ExpressionTemplateError(
+                ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
+                "$scope: apply_expression_template '$name' missing binding for param '$p'"
+            )
+        )
     end
     for p in provided
-        p in declared || throw(ExpressionTemplateError(
-            ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
-            "$scope: apply_expression_template '$name' supplies unknown param '$p'"))
+        p in declared || throw(
+            ExpressionTemplateError(
+                ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_BINDINGS_MISMATCH,
+                "$scope: apply_expression_template '$name' supplies unknown param '$p'"
+            )
+        )
     end
     return (name, decl, bindings_raw)
 end
@@ -441,7 +501,7 @@ function _expand_apply(node, templates::AbstractDict, scope::String)
     # expanded), so they are consumed as-is here. The template `body` is
     # instantiated by pure structural substitution and is NOT re-scanned
     # (esm-spec §9.6.3 rule 2: a replacement body is not re-matched).
-    resolved = Dict{String,Any}()
+    resolved = Dict{String, Any}()
     for (k, v) in pairs(bindings_raw)
         resolved[string(k)] = v
     end
@@ -459,7 +519,7 @@ diagnostics as `_expand_apply` (`apply_expression_template_unknown_template`,
 reference is preserved (§9.6.4 rule 1).
 """
 function _validate_apply_ref(node, templates::AbstractDict, scope::String)
-    _resolve_apply_site(node, templates, scope; reject_match_rule=true)
+    _resolve_apply_site(node, templates, scope; reject_match_rule = true)
     return
 end
 
@@ -471,8 +531,10 @@ Walk `node` and run [`_validate_apply_ref`](@ref) on every surviving
 checks). Descends into references' `bindings` too — a binding value MAY itself
 be a surviving reference.
 """
-function _check_surviving_refs(node, templates::AbstractDict, scope::String,
-                               seen::IdDict{Any,Nothing}=IdDict{Any,Nothing}())
+function _check_surviving_refs(
+        node, templates::AbstractDict, scope::String,
+        seen::IdDict{Any, Nothing} = IdDict{Any, Nothing}()
+    )
     if _is_array(node)
         haskey(seen, node) && return
         seen[node] = nothing
@@ -507,8 +569,12 @@ implements); `apply_expression_template` itself is excluded — nested
 references are handled through the §9.7.3 reference DAG, not by op membership.
 """
 const _REWRITE_TARGET_OPS =
-    Set{String}(["D", "grad", "div", "laplacian", "integral",
-                 "table_lookup", "enum"])
+    Set{String}(
+    [
+        "D", "grad", "div", "laplacian", "integral",
+        "table_lookup", "enum",
+    ]
+)
 
 """
     _op_in_T(op) -> Bool
@@ -534,8 +600,10 @@ object whose `op` satisfies `pred(op::String)`. Does NOT follow references to
 other templates — that transitive step is [`_transitive_op_flags`](@ref).
 Identity-`seen` so a structurally-shared subtree is visited once.
 """
-function _direct_op_hit(node, pred,
-                        seen::IdDict{Any,Nothing}=IdDict{Any,Nothing}())::Bool
+function _direct_op_hit(
+        node, pred,
+        seen::IdDict{Any, Nothing} = IdDict{Any, Nothing}()
+    )::Bool
     if _is_array(node)
         haskey(seen, node) && return false
         seen[node] = nothing
@@ -578,8 +646,8 @@ the §9.7.3-checked acyclic DAG — a flagged template. Memoized DFS; defensive
 against a cycle the checker somehow missed (an in-progress node is treated as
 non-contributing — acyclicity is enforced earlier).
 """
-function _transitive_op_flags(templates::AbstractDict, pred)::Dict{String,Bool}
-    flags = Dict{String,Bool}()
+function _transitive_op_flags(templates::AbstractDict, pred)::Dict{String, Bool}
+    flags = Dict{String, Bool}()
     inprogress = Set{String}()
     function visit(name::String)::Bool
         haskey(flags, name) && return flags[name]
@@ -615,7 +683,7 @@ Per-template **target-bearing** flag (esm-spec §9.6.4 rule 3): body contains
 an op in **T** anywhere, or transitively references a target-bearing template.
 [`_transitive_op_flags`](@ref) with the `_op_in_T` predicate.
 """
-_template_target_bearing(templates::AbstractDict)::Dict{String,Bool} =
+_template_target_bearing(templates::AbstractDict)::Dict{String, Bool} =
     _transitive_op_flags(templates, _op_in_T)
 
 """
@@ -627,7 +695,7 @@ values contains an op in **T**. (After innermost-first eager expansion of the
 bindings, a "nested eager reference" always manifests as a T-op in the
 bindings, so this predicate subsumes that clause — see `_expand_eager`.)
 """
-function _ref_is_eager(node, target_bearing::AbstractDict{String,Bool})::Bool
+function _ref_is_eager(node, target_bearing::AbstractDict{String, Bool})::Bool
     name_raw = _raw_get(node, "name")
     name_raw === nothing && return false
     get(target_bearing, string(name_raw), false) && return true
@@ -647,8 +715,10 @@ by pure substitution (`_expand_apply`) and its instantiated body re-walked;
 any other reference is returned intact. Unchanged subtrees are returned by
 identity and the memo preserves DAG sharing.
 """
-function _expand_refs_walk(node, named::AbstractDict, scope::String,
-                           expand_pred, memo::IdDict{Any,Any})
+function _expand_refs_walk(
+        node, named::AbstractDict, scope::String,
+        expand_pred, memo::IdDict{Any, Any}
+    )
     if _is_object(node)
         r = get(memo, node, _JSON_DESCEND)
         r === _JSON_DESCEND || return r
@@ -660,7 +730,7 @@ function _expand_refs_walk(node, named::AbstractDict, scope::String,
             b = _raw_get(node, "bindings")
             newnode = node
             if b !== nothing && _is_object(b)
-                nb = OrderedDict{String,Any}()
+                nb = OrderedDict{String, Any}()
                 changed = false
                 for (k, v) in pairs(b)
                     rv = _expand_refs_walk(v, named, scope, expand_pred, memo)
@@ -668,7 +738,7 @@ function _expand_refs_walk(node, named::AbstractDict, scope::String,
                     nb[string(k)] = rv
                 end
                 if changed
-                    newnode = OrderedDict{String,Any}()
+                    newnode = OrderedDict{String, Any}()
                     for (k, v) in pairs(node)
                         newnode[string(k)] = (string(k) == "bindings") ? nb : v
                     end
@@ -682,7 +752,7 @@ function _expand_refs_walk(node, named::AbstractDict, scope::String,
             end
         else
             changed = false
-            buf = OrderedDict{String,Any}()
+            buf = OrderedDict{String, Any}()
             for (k, v) in pairs(node)
                 rv = _expand_refs_walk(v, named, scope, expand_pred, memo)
                 rv === v || (changed = true)
@@ -719,8 +789,10 @@ and only eager nodes ([`_ref_is_eager`](@ref)). Non-eager (surviving)
 references are returned intact. Consumes no `MAX_REWRITE_PASSES` budget (it
 is a separate pre-pass). Sharing is preserved via the identity memo.
 """
-_expand_eager(node, named::AbstractDict, target_bearing::AbstractDict{String,Bool},
-              scope::String, memo::IdDict{Any,Any}=IdDict{Any,Any}()) =
+_expand_eager(
+    node, named::AbstractDict, target_bearing::AbstractDict{String, Bool},
+    scope::String, memo::IdDict{Any, Any} = IdDict{Any, Any}()
+) =
     _expand_refs_walk(node, named, scope, n -> _ref_is_eager(n, target_bearing), memo)
 
 # ---------------------------------------------------------------------------
@@ -736,8 +808,10 @@ body is instantiated, and the instantiated body is re-expanded). This is the
 per-registry kernel of the public [`Expand`](@ref) function (esm-spec §9.6.4
 rule 2). Deterministic and sharing-preserving.
 """
-_expand_all(node, named::AbstractDict, scope::String,
-            memo::IdDict{Any,Any}=IdDict{Any,Any}()) =
+_expand_all(
+    node, named::AbstractDict, scope::String,
+    memo::IdDict{Any, Any} = IdDict{Any, Any}()
+) =
     _expand_refs_walk(node, named, scope, _ -> true, memo)
 
 # ---------------------------------------------------------------------------
@@ -792,7 +866,7 @@ match literally; arrays match elementwise (same length); objects match when
 every pattern key is present on `node` and matches (extra `node` keys are
 allowed, so a pattern constrains only the fields it names).
 """
-function _match_pattern(pattern, node, params::Set{String}, bindings::Dict{String,Any})::Bool
+function _match_pattern(pattern, node, params::Set{String}, bindings::Dict{String, Any})::Bool
     if pattern isa Bool
         return (node isa Bool) && node == pattern
     elseif pattern isa AbstractString
@@ -846,8 +920,8 @@ no `shape` (scalars) are absent from the environment, as are species /
 parameters of reaction systems (which carry no `shape` field): a
 shape-constrained rule can only fire on a declared, shaped model variable.
 """
-function _component_shape_env(comp)::Dict{String,Vector{String}}
-    env = Dict{String,Vector{String}}()
+function _component_shape_env(comp)::Dict{String, Vector{String}}
+    env = Dict{String, Vector{String}}()
     vars = _raw_get(comp, "variables")
     (vars !== nothing && _is_object(vars)) || return env
     for (vn, vd) in pairs(vars)
@@ -860,7 +934,7 @@ function _component_shape_env(comp)::Dict{String,Vector{String}}
     return env
 end
 
-const _EMPTY_SHAPE_ENV = Dict{String,Vector{String}}()
+const _EMPTY_SHAPE_ENV = Dict{String, Vector{String}}()
 
 """
     _where_satisfied(where_c, bindings, shape_env) -> Bool
@@ -876,8 +950,10 @@ reference, an undeclared name, a scalar variable, or a param that never bound
 conservative: no shape inference over compound expressions, so eligibility
 depends only on declarations and is byte-identical across bindings.
 """
-function _where_satisfied(where_c, bindings::Dict{String,Any},
-                          shape_env::Dict{String,Vector{String}})::Bool
+function _where_satisfied(
+        where_c, bindings::Dict{String, Any},
+        shape_env::Dict{String, Vector{String}}
+    )::Bool
     where_c === nothing && return true
     for (p, req) in where_c
         b = get(bindings, p, nothing)
@@ -901,20 +977,25 @@ component, not when a library file is loaded standalone: constraints name
 index sets as spelled in the consuming document's registry (post-§9.7.5
 merge, composing with import-edge index-set renaming).
 """
-function _registered_where(decl, iset_names::Set{String}, scope::String,
-                           tname::String)
+function _registered_where(
+        decl, iset_names::Set{String}, scope::String,
+        tname::String
+    )
     whr = _raw_get(decl, "where")
     whr === nothing && return nothing
-    out = Dict{String,Vector{String}}()
+    out = Dict{String, Vector{String}}()
     for (p, cobj) in pairs(whr)
         shp = _raw_get(cobj, "shape")
         req = String[string(s) for s in shp]
         for s in req
-            s in iset_names || throw(ExpressionTemplateError(
-                ERROR_CODES.TEMPLATE_CONSTRAINT_UNKNOWN_INDEX_SET,
-                "$scope.expression_templates.$tname: where.$(string(p)).shape " *
-                "names index set '$s', which the consuming document's " *
-                "index_sets registry does not declare (esm-spec §9.6.1/§9.6.6)"))
+            s in iset_names || throw(
+                ExpressionTemplateError(
+                    ERROR_CODES.TEMPLATE_CONSTRAINT_UNKNOWN_INDEX_SET,
+                    "$scope.expression_templates.$tname: where.$(string(p)).shape " *
+                        "names index set '$s', which the consuming document's " *
+                        "index_sets registry does not declare (esm-spec §9.6.1/§9.6.6)"
+                )
+            )
         end
         out[string(p)] = req
     end
@@ -962,7 +1043,7 @@ struct _RewriteRule
     body::Any
     priority::Int
     decl_index::Int
-    where_clause::Union{Nothing,Dict{String,Vector{String}}}
+    where_clause::Union{Nothing, Dict{String, Vector{String}}}
 end
 
 """
@@ -978,10 +1059,10 @@ everything needed to rewrite a coupling `variable_map` transform against the
 RECEIVING component (esm-spec §10.4).
 """
 struct _ComponentRegistry
-    named::Dict{String,Any}
+    named::Dict{String, Any}
     match_rules::Vector{_RewriteRule}
-    shape_env::Dict{String,Vector{String}}
-    target_bearing::Dict{String,Bool}
+    shape_env::Dict{String, Vector{String}}
+    target_bearing::Dict{String, Bool}
 end
 
 """
@@ -1009,11 +1090,13 @@ subtree; `last` (a `Ref{String}`) records the op of the most recent rewrite,
 for the non-convergence diagnostic. `shape_env` is the enclosing component's
 static shape environment (`_component_shape_env`).
 """
-function _rewrite_pass(node, named::Dict{String,Any},
-                       sorted_rules::Vector{_RewriteRule},
-                       scope::String, last::Ref{String},
-                       shape_env::Dict{String,Vector{String}},
-                       target_bearing::Dict{String,Bool})
+function _rewrite_pass(
+        node, named::Dict{String, Any},
+        sorted_rules::Vector{_RewriteRule},
+        scope::String, last::Ref{String},
+        shape_env::Dict{String, Vector{String}},
+        target_bearing::Dict{String, Bool}
+    )
     changed = Ref(false)
     # Identity-memoized recursion (not `_map_json`): the rewrite of a node is a
     # pure function of the node itself (pattern matching is structural, the
@@ -1022,18 +1105,22 @@ function _rewrite_pass(node, named::Dict{String,Any},
     # preserving the DAG `_substitute` builds instead of exploding it back
     # into a tree, and keeping pass cost linear in UNIQUE nodes. Unchanged
     # subtrees are returned by identity for the same reason.
-    memo = IdDict{Any,Any}()
-    out = _rewrite_node(node, named, sorted_rules, scope, last, shape_env,
-                        target_bearing, memo, changed)
+    memo = IdDict{Any, Any}()
+    out = _rewrite_node(
+        node, named, sorted_rules, scope, last, shape_env,
+        target_bearing, memo, changed
+    )
     return (out, changed[])
 end
 
-function _rewrite_node(n, named::Dict{String,Any},
-                       sorted_rules::Vector{_RewriteRule},
-                       scope::String, last::Ref{String},
-                       shape_env::Dict{String,Vector{String}},
-                       target_bearing::Dict{String,Bool},
-                       memo::IdDict{Any,Any}, changed::Base.RefValue{Bool})
+function _rewrite_node(
+        n, named::Dict{String, Any},
+        sorted_rules::Vector{_RewriteRule},
+        scope::String, last::Ref{String},
+        shape_env::Dict{String, Vector{String}},
+        target_bearing::Dict{String, Bool},
+        memo::IdDict{Any, Any}, changed::Base.RefValue{Bool}
+    )
     if _is_object(n)
         r = get(memo, n, _JSON_DESCEND)
         r === _JSON_DESCEND || return r
@@ -1058,9 +1145,9 @@ function _rewrite_node(n, named::Dict{String,Any},
         else
             fired = false
             for rule in sorted_rules
-                bindings = Dict{String,Any}()
+                bindings = Dict{String, Any}()
                 if _match_pattern(rule.pattern, n, rule.params, bindings) &&
-                   _where_satisfied(rule.where_clause, bindings, shape_env)
+                        _where_satisfied(rule.where_clause, bindings, shape_env)
                     last[] = op_str
                     changed[] = true
                     # Instantiate by pure substitution (through nested
@@ -1077,10 +1164,12 @@ function _rewrite_node(n, named::Dict{String,Any},
                 # (2) No rule fired here — descend into children,
                 # identity-preserving.
                 kids_changed = false
-                buf = OrderedDict{String,Any}()
+                buf = OrderedDict{String, Any}()
                 for (k, v) in pairs(n)
-                    rv = _rewrite_node(v, named, sorted_rules, scope, last,
-                                       shape_env, target_bearing, memo, changed)
+                    rv = _rewrite_node(
+                        v, named, sorted_rules, scope, last,
+                        shape_env, target_bearing, memo, changed
+                    )
                     rv === v || (kids_changed = true)
                     buf[string(k)] = rv
                 end
@@ -1095,8 +1184,10 @@ function _rewrite_node(n, named::Dict{String,Any},
         kids_changed = false
         buf = Vector{Any}(undef, length(n))
         for (i, v) in enumerate(n)
-            rv = _rewrite_node(v, named, sorted_rules, scope, last,
-                               shape_env, target_bearing, memo, changed)
+            rv = _rewrite_node(
+                v, named, sorted_rules, scope, last,
+                shape_env, target_bearing, memo, changed
+            )
             rv === v || (kids_changed = true)
             buf[i] = rv
         end
@@ -1118,10 +1209,12 @@ run without converging. This bound — not a static check — is the authoritati
 termination guard, so a self-reintroducing rule fails to converge rather than
 being flagged up front.
 """
-function _rewrite_to_fixpoint(node, named::Dict{String,Any},
-                              sorted_rules::Vector{_RewriteRule}, scope::String,
-                              shape_env::Dict{String,Vector{String}}=_EMPTY_SHAPE_ENV,
-                              target_bearing::Dict{String,Bool}=_template_target_bearing(named))
+function _rewrite_to_fixpoint(
+        node, named::Dict{String, Any},
+        sorted_rules::Vector{_RewriteRule}, scope::String,
+        shape_env::Dict{String, Vector{String}} = _EMPTY_SHAPE_ENV,
+        target_bearing::Dict{String, Bool} = _template_target_bearing(named)
+    )
     last = Ref{String}("")
     # esm-spec §9.6.4 rule 3 / §7.1 step 5: the eager-expansion pre-pass runs
     # BEFORE the fixpoint and consumes no `MAX_REWRITE_PASSES` budget. It
@@ -1130,16 +1223,21 @@ function _rewrite_to_fixpoint(node, named::Dict{String,Any},
     # rewrite-target op hides inside a surviving reference.
     current = _expand_eager(node, named, target_bearing, scope)
     for _pass in 1:MAX_REWRITE_PASSES
-        current, changed = _rewrite_pass(current, named, sorted_rules, scope, last,
-                                         shape_env, target_bearing)
+        current, changed = _rewrite_pass(
+            current, named, sorted_rules, scope, last,
+            shape_env, target_bearing
+        )
         changed || return current   # fixpoint reached
     end
-    throw(ExpressionTemplateError(
-        ERROR_CODES.REWRITE_RULE_NONTERMINATING,
-        "$scope: expression-template rewriting did not converge within " *
-        "MAX_REWRITE_PASSES=$MAX_REWRITE_PASSES passes (last rewritten op " *
-        "'$(last[])'). A `match` rule likely re-introduces its own pattern " *
-        "(esm-spec §9.6.3)."))
+    throw(
+        ExpressionTemplateError(
+            ERROR_CODES.REWRITE_RULE_NONTERMINATING,
+            "$scope: expression-template rewriting did not converge within " *
+                "MAX_REWRITE_PASSES=$MAX_REWRITE_PASSES passes (last rewritten op " *
+                "'$(last[])'). A `match` rule likely re-introduces its own pattern " *
+                "(esm-spec §9.6.3)."
+        )
+    )
 end
 
 # ---------------------------------------------------------------------------
@@ -1149,11 +1247,11 @@ end
 function _find_apply_paths!(hits::Vector{String}, x, path::String)
     if _is_array(x)
         for (i, child) in enumerate(x)
-            _find_apply_paths!(hits, child, "$path/$(i-1)")
+            _find_apply_paths!(hits, child, "$path/$(i - 1)")
         end
         return
     end
-    if _is_object(x)
+    return if _is_object(x)
         op = _raw_get(x, "op")
         op_str = op === nothing ? "" : string(op)
         if op_str == APPLY_EXPRESSION_TEMPLATE_OP
@@ -1169,7 +1267,7 @@ function _has_apply_op(x)
     found = false
     # Visit each unique container once (`seen`): on a structurally-shared
     # expanded tree the same subtree hangs under exponentially many paths.
-    seen = IdDict{Any,Nothing}()
+    seen = IdDict{Any, Nothing}()
     _walk_json(x) do _, n
         found && return false   # already answered — prune the rest
         n isa AbstractVector && _leaves_only(n) && return false   # holds no object
@@ -1247,15 +1345,17 @@ an out-of-set value here is a real defect (e.g. a template invocation binding
 the manifold parameter to a non-member literal). Throws
 [`ExpressionTemplateError`](@ref) with code `geometry_manifold_invalid`.
 """
-function _validate_geometry_manifolds(x, path::String="",
-                                       seen::IdDict{Any,Nothing}=IdDict{Any,Nothing}())
+function _validate_geometry_manifolds(
+        x, path::String = "",
+        seen::IdDict{Any, Nothing} = IdDict{Any, Nothing}()
+    )
     if _is_array(x)
         _may_hold_object(x) || return
         haskey(seen, x) && return
         seen[x] = nothing
         for (i, child) in enumerate(x)
             (_is_array(child) || _is_object(child)) || continue
-            _validate_geometry_manifolds(child, "$path/$(i-1)", seen)
+            _validate_geometry_manifolds(child, "$path/$(i - 1)", seen)
         end
         return
     end
@@ -1267,13 +1367,16 @@ function _validate_geometry_manifolds(x, path::String="",
     if op_str in GEOMETRY_MANIFOLD_OPS
         m = _raw_get(x, "manifold")
         if m !== nothing && !(m isa AbstractString && string(m) in GEOMETRY_MANIFOLD_VALUES)
-            throw(ExpressionTemplateError(
-                ERROR_CODES.GEOMETRY_MANIFOLD_INVALID,
-                "$path: `$op_str` carries manifold $(repr(m)), not a member of the " *
-                "closed set {planar, spherical, geodesic}. The manifold enum is " *
-                "enforced on the expanded form (esm-spec §9.6.4; CONFORMANCE_SPEC " *
-                "§5.8.4) — a template parameter substituted into this scalar field " *
-                "must be bound to one of the closed-set literals."))
+            throw(
+                ExpressionTemplateError(
+                    ERROR_CODES.GEOMETRY_MANIFOLD_INVALID,
+                    "$path: `$op_str` carries manifold $(repr(m)), not a member of the " *
+                        "closed set {planar, spherical, geodesic}. The manifold enum is " *
+                        "enforced on the expanded form (esm-spec §9.6.4; CONFORMANCE_SPEC " *
+                        "§5.8.4) — a template parameter substituted into this scalar field " *
+                        "must be bound to one of the closed-set literals."
+                )
+            )
         end
     end
     for (k, v) in pairs(x)
@@ -1303,8 +1406,10 @@ only concrete integer pairs are checked (a fully-folded document tree carries
 nothing else in bound position). Throws [`ExpressionTemplateError`](@ref) with
 code `makearray_region_inverted`.
 """
-function _validate_makearray_regions(x, path::String="",
-                                     seen::IdDict{Any,Nothing}=IdDict{Any,Nothing}())
+function _validate_makearray_regions(
+        x, path::String = "",
+        seen::IdDict{Any, Nothing} = IdDict{Any, Nothing}()
+    )
     if _is_array(x)
         _may_hold_object(x) || return
         haskey(seen, x) && return
@@ -1313,7 +1418,7 @@ function _validate_makearray_regions(x, path::String="",
             # A scalar holds no region; skipping it spares a path string per
             # element of a large inline number array.
             (_is_array(child) || _is_object(child)) || continue
-            _validate_makearray_regions(child, "$path/$(i-1)", seen)
+            _validate_makearray_regions(child, "$path/$(i - 1)", seen)
         end
         return
     end
@@ -1330,18 +1435,23 @@ function _validate_makearray_regions(x, path::String="",
                 for (di, bounds) in enumerate(region)
                     (_is_array(bounds) && length(bounds) == 2) || continue
                     lo, hi = bounds[1], bounds[2]
-                    (lo isa Integer && !(lo isa Bool) &&
-                     hi isa Integer && !(hi isa Bool)) || continue
+                    (
+                        lo isa Integer && !(lo isa Bool) &&
+                            hi isa Integer && !(hi isa Bool)
+                    ) || continue
                     if hi < lo - 1
-                        throw(ExpressionTemplateError(
-                            ERROR_CODES.MAKEARRAY_REGION_INVERTED,
-                            "$path: makearray regions[$(ri-1)] dimension $(di-1) " *
-                            "bound pair [$lo, $hi] is inverted (stop < start - 1). " *
-                            "An empty bound is spelled [start, start-1] and " *
-                            "contributes no elements (esm-spec §4.3.2); a further-" *
-                            "inverted pair is an authoring error — e.g. an interior " *
-                            "stencil region [2, N-1] instantiated at N below the " *
-                            "scheme's minimum extent (§9.6.8)."))
+                        throw(
+                            ExpressionTemplateError(
+                                ERROR_CODES.MAKEARRAY_REGION_INVERTED,
+                                "$path: makearray regions[$(ri - 1)] dimension $(di - 1) " *
+                                    "bound pair [$lo, $hi] is inverted (stop < start - 1). " *
+                                    "An empty bound is spelled [start, start-1] and " *
+                                    "contributes no elements (esm-spec §4.3.2); a further-" *
+                                    "inverted pair is an authoring error — e.g. an interior " *
+                                    "stencil region [2, N-1] instantiated at N below the " *
+                                    "scheme's minimum extent (§9.6.8)."
+                            )
+                        )
                     end
                 end
             end
@@ -1375,8 +1485,10 @@ function _validate_makearray_regions_in_registries(registries)
         for (tname, decl) in reg.named
             body = _raw_get(decl, "body")
             body === nothing && continue
-            _validate_makearray_regions(body,
-                "expression_templates.$tname/body")
+            _validate_makearray_regions(
+                body,
+                "expression_templates.$tname/body"
+            )
         end
     end
     return
@@ -1391,7 +1503,7 @@ references to these templates need per-instantiation manifold validation
 (§9.6.9); everything else is skipped, so a geometry-free document pays nothing.
 [`_transitive_op_flags`](@ref) with the geometry-kernel predicate.
 """
-_template_manifold_bearing(named::AbstractDict)::Dict{String,Bool} =
+_template_manifold_bearing(named::AbstractDict)::Dict{String, Bool} =
     _transitive_op_flags(named, op -> op in GEOMETRY_MANIFOLD_OPS)
 
 """
@@ -1419,7 +1531,7 @@ function _validate_geometry_manifolds_refaware(root, registries)
             reg === nothing && continue
             manifold_bearing = _template_manifold_bearing(reg.named)
             any(values(manifold_bearing)) || continue   # no geometry: nothing to check
-            memo = IdDict{Any,Nothing}()
+            memo = IdDict{Any, Nothing}()
             for (k, v) in pairs(comp)
                 string(k) == "expression_templates" && continue
                 base = "$compkind.$(string(cname)).$(string(k))"
@@ -1432,10 +1544,12 @@ function _validate_geometry_manifolds_refaware(root, registries)
                 if string(k) in ("equations", "initialization_equations") && _is_array(v)
                     for (i, eq) in enumerate(v)
                         lhs = _is_object(eq) ? _raw_get(eq, "lhs") : nothing
-                        label = lhs isa AbstractString ? "$(base)/$(i-1)[$(lhs)]" :
-                                                         "$(base)/$(i-1)"
-                        _validate_manifolds_in_refs(eq, reg.named, manifold_bearing,
-                                                    label, memo)
+                        label = lhs isa AbstractString ? "$(base)/$(i - 1)[$(lhs)]" :
+                            "$(base)/$(i - 1)"
+                        _validate_manifolds_in_refs(
+                            eq, reg.named, manifold_bearing,
+                            label, memo
+                        )
                     end
                 else
                     _validate_manifolds_in_refs(v, reg.named, manifold_bearing, base, memo)
@@ -1446,15 +1560,17 @@ function _validate_geometry_manifolds_refaware(root, registries)
     return
 end
 
-function _validate_manifolds_in_refs(node, named::AbstractDict,
-                                     manifold_bearing::Dict{String,Bool},
-                                     path::String,
-                                     memo::IdDict{Any,Nothing})
+function _validate_manifolds_in_refs(
+        node, named::AbstractDict,
+        manifold_bearing::Dict{String, Bool},
+        path::String,
+        memo::IdDict{Any, Nothing}
+    )
     if _is_array(node)
         haskey(memo, node) && return
         memo[node] = nothing
         for (i, c) in enumerate(node)
-            _validate_manifolds_in_refs(c, named, manifold_bearing, "$path/$(i-1)", memo)
+            _validate_manifolds_in_refs(c, named, manifold_bearing, "$path/$(i - 1)", memo)
         end
     elseif _is_object(node)
         haskey(memo, node) && return
@@ -1477,9 +1593,13 @@ function _validate_manifolds_in_refs(node, named::AbstractDict,
                 catch e
                     e isa ExpressionTemplateError &&
                         e.code == ERROR_CODES.GEOMETRY_MANIFOLD_INVALID || rethrow()
-                    throw(ExpressionTemplateError(ERROR_CODES.GEOMETRY_MANIFOLD_INVALID,
-                        "$path: instantiation of template '$name' — $(e.message) " *
-                        "(esm-spec §9.6.9; per-instantiation manifold check)"))
+                    throw(
+                        ExpressionTemplateError(
+                            ERROR_CODES.GEOMETRY_MANIFOLD_INVALID,
+                            "$path: instantiation of template '$name' — $(e.message) " *
+                                "(esm-spec §9.6.9; per-instantiation manifold check)"
+                        )
+                    )
                 end
             end
         end
@@ -1527,10 +1647,13 @@ function reject_expression_templates_pre_v04(raw_data)
     end
     _find_apply_paths!(offences, raw_data, "")
 
-    if !isempty(offences)
-        throw(ExpressionTemplateError(
-            ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_VERSION_TOO_OLD,
-            "expression_templates / apply_expression_template require esm >= 0.4.0; file declares $(string(esm_raw)). Offending paths: $(join(offences, ", "))"))
+    return if !isempty(offences)
+        throw(
+            ExpressionTemplateError(
+                ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_VERSION_TOO_OLD,
+                "expression_templates / apply_expression_template require esm >= 0.4.0; file declares $(string(esm_raw)). Offending paths: $(join(offences, ", "))"
+            )
+        )
     end
 end
 
@@ -1583,7 +1706,7 @@ function _narrow_arg_literals!(x)
     # expanded tree the same node hangs under many parents, and narrowing is
     # idempotent and value-local, so a single visit of the shared object is
     # exactly equivalent to (exponentially many) repeated ones.
-    seen = IdDict{Any,Nothing}()
+    seen = IdDict{Any, Nothing}()
     _walk_json(x) do key, n
         # Narrow the DIRECT elements of every `args` array in place; the walk
         # then descends into the (mutated) array, recursing through nested
@@ -1649,7 +1772,7 @@ function lower_expression_templates(raw_data)
         return raw_data
     end
 
-    root = _to_ordered(raw_data)::OrderedDict{String,Any}
+    root = _to_ordered(raw_data)::OrderedDict{String, Any}
 
     # The consuming document's merged index_sets registry (post-§9.7.5): the
     # namespace `where` shape constraints resolve against at registration
@@ -1667,7 +1790,7 @@ function lower_expression_templates(raw_data)
     # expression transforms (esm-spec §10.4) can be rewritten against the
     # RECEIVING component's registry below. Models are registered first; a
     # reaction system never overwrites a same-named model.
-    registries = Dict{String,_ComponentRegistry}()
+    registries = Dict{String, _ComponentRegistry}()
 
     for compkind in ("models", "reaction_systems")
         comps = get(root, compkind, nothing)
@@ -1675,7 +1798,7 @@ function lower_expression_templates(raw_data)
         _is_object(comps) || continue
         for (cname, compraw) in pairs(comps)
             _is_object(compraw) || continue
-            comp = compraw::OrderedDict{String,Any}
+            comp = compraw::OrderedDict{String, Any}
             # Static shape environment for `where` constraint evaluation
             # (esm-spec §9.6.1): declared variable shapes only.
             shape_env = _component_shape_env(comp)
@@ -1684,13 +1807,13 @@ function lower_expression_templates(raw_data)
             #                 `apply_expression_template` (order-independent).
             # `match_rules` — the auto-applied `match` rules, in template
             #                 DECLARATION order (esm-spec §9.6.3).
-            named = Dict{String,Any}()
+            named = Dict{String, Any}()
             match_rules = _RewriteRule[]
             if _is_object(tplraw)
                 # `root` is order-preserving (`_to_ordered`), so this map's key
                 # order IS the authored declaration order — the `match`-rule
                 # precedence tie-break (esm-spec §9.6.3) reads straight off it.
-                templates = OrderedDict{String,Any}()
+                templates = OrderedDict{String, Any}()
                 for (tname, tdecl) in pairs(tplraw)
                     templates[string(tname)] = tdecl
                 end
@@ -1707,19 +1830,27 @@ function lower_expression_templates(raw_data)
                     m = _raw_get(decl, "match")
                     if m !== nothing
                         params_raw = _raw_get(decl, "params")
-                        params = Set{String}(string(p) for p in
-                                             something(params_raw, String[]))
+                        params = Set{String}(
+                            string(p) for p in
+                                something(params_raw, String[])
+                        )
                         body = _raw_get(decl, "body")
                         # `where` registration: normalize constraints and
                         # resolve every referenced index-set name against the
                         # consuming document's registry (esm-spec §9.6.1;
                         # `template_constraint_unknown_index_set`).
-                        where_c = _registered_where(decl, iset_names,
-                                                    "$compkind.$(string(cname))", tname)
-                        push!(match_rules,
-                              _RewriteRule(tname, m, params, body,
-                                           _rule_priority(decl), decl_index,
-                                           where_c))
+                        where_c = _registered_where(
+                            decl, iset_names,
+                            "$compkind.$(string(cname))", tname
+                        )
+                        push!(
+                            match_rules,
+                            _RewriteRule(
+                                tname, m, params, body,
+                                _rule_priority(decl), decl_index,
+                                where_c
+                            )
+                        )
                     end
                 end
                 # Deterministic selection order (esm-spec §9.6.3): highest
@@ -1737,8 +1868,10 @@ function lower_expression_templates(raw_data)
             cscope = "$compkind.$(string(cname))"
             for k in collect(keys(comp))
                 k == "expression_templates" && continue
-                comp[k] = _rewrite_to_fixpoint(comp[k], named, match_rules,
-                                   "$cscope.$k", shape_env, target_bearing)
+                comp[k] = _rewrite_to_fixpoint(
+                    comp[k], named, match_rules,
+                    "$cscope.$k", shape_env, target_bearing
+                )
                 # Call-site checks on surviving references (§9.6.9): unknown
                 # name / bindings mismatch. Known surviving references are the
                 # new normal (Option B) — no longer an error.
@@ -1749,8 +1882,10 @@ function lower_expression_templates(raw_data)
             # registry that emit materializes (§9.6.4 rule 5) and Expand
             # consumes (§9.6.4 rule 2).
             haskey(registries, string(cname)) ||
-                (registries[string(cname)] =
-                    _ComponentRegistry(named, match_rules, shape_env, target_bearing))
+                (
+                registries[string(cname)] =
+                    _ComponentRegistry(named, match_rules, shape_env, target_bearing)
+            )
         end
     end
 
@@ -1769,15 +1904,19 @@ function lower_expression_templates(raw_data)
             _is_object(tr) || continue
             target = get(entry, "to", nothing)
             target isa AbstractString || continue
-            comp_name = String(first(split(target, "."; limit=2)))
+            comp_name = String(first(split(target, "."; limit = 2)))
             reg = get(registries, comp_name, nothing)
             reg === nothing && continue
-            entry["transform"] = _rewrite_to_fixpoint(tr, reg.named,
-                                     reg.match_rules,
-                                     "coupling[$(i)].transform", reg.shape_env,
-                                     reg.target_bearing)
-            _check_surviving_refs(entry["transform"], reg.named,
-                                  "coupling[$(i)].transform")
+            entry["transform"] = _rewrite_to_fixpoint(
+                tr, reg.named,
+                reg.match_rules,
+                "coupling[$(i)].transform", reg.shape_env,
+                reg.target_bearing
+            )
+            _check_surviving_refs(
+                entry["transform"], reg.named,
+                "coupling[$(i)].transform"
+            )
         end
     end
 
@@ -1839,7 +1978,7 @@ _expand_expr_refs(e::OpExpr, reg) = _expand_expr_refs(e, reg, nothing)
 # (one compiled body per use site × region class) while every other consumer
 # sees the plain Option-A expanded tree. `sites === nothing` is the plain
 # expansion (byte-identical to the pre-tier behavior).
-const _TemplateSites = Union{Nothing,IdDict{OpExpr,OpExpr}}
+const _TemplateSites = Union{Nothing, IdDict{OpExpr, OpExpr}}
 
 # Expansion memo (perf plan A4): the recursive expansion of an
 # `apply_expression_template` node is a PURE function of (template name,
@@ -1864,19 +2003,24 @@ const _TemplateSites = Union{Nothing,IdDict{OpExpr,OpExpr}}
 # oracles), so the memo is not a choice of evaluator and every compiler keeps
 # it; `nothing` is the per-site re-expansion, for a caller that wants the
 # sharing measured rather than assumed.
-const _ExpandMemo = Union{Nothing,Dict{Tuple{String,String},OpExpr}}
+const _ExpandMemo = Union{Nothing, Dict{Tuple{String, String}, OpExpr}}
 
-_expand_expr_refs(e::VarExpr, reg, ::_TemplateSites, ::_ExpandMemo=nothing) = e
-_expand_expr_refs(e::NumExpr, reg, ::_TemplateSites, ::_ExpandMemo=nothing) = e
-_expand_expr_refs(e::IntExpr, reg, ::_TemplateSites, ::_ExpandMemo=nothing) = e
-function _expand_expr_refs(e::OpExpr, reg, sites::_TemplateSites,
-                           memo::_ExpandMemo=nothing)
+_expand_expr_refs(e::VarExpr, reg, ::_TemplateSites, ::_ExpandMemo = nothing) = e
+_expand_expr_refs(e::NumExpr, reg, ::_TemplateSites, ::_ExpandMemo = nothing) = e
+_expand_expr_refs(e::IntExpr, reg, ::_TemplateSites, ::_ExpandMemo = nothing) = e
+function _expand_expr_refs(
+        e::OpExpr, reg, sites::_TemplateSites,
+        memo::_ExpandMemo = nothing
+    )
     if e.op == APPLY_EXPRESSION_TEMPLATE_OP
         name = e.name
         (name !== nothing && reg !== nothing && haskey(reg, name)) || throw(
-            ExpressionTemplateError(ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
+            ExpressionTemplateError(
+                ERROR_CODES.APPLY_EXPRESSION_TEMPLATE_UNKNOWN_TEMPLATE,
                 "apply_expression_template references template " *
-                "'$(name === nothing ? "?" : name)' with no in-scope registry entry"))
+                    "'$(name === nothing ? "?" : name)' with no in-scope registry entry"
+            )
+        )
         # Canonical bindings key: name-sorted `k=serialized(v)` pairs. The same
         # serialization feeds `_substitute` below, so the key captures exactly
         # what determines the expansion (two sites collide iff they substitute
@@ -1884,8 +2028,14 @@ function _expand_expr_refs(e::OpExpr, reg, sites::_TemplateSites,
         mkey = nothing
         if memo !== nothing
             bkey = e.bindings === nothing ? "" :
-                join(sort!(String[string(k) * "\0" * _stable_json(serialize_expression(v))
-                                  for (k, v) in e.bindings]), "\x01")
+                join(
+                    sort!(
+                        String[
+                            string(k) * "\0" * _stable_json(serialize_expression(v))
+                            for (k, v) in e.bindings
+                        ]
+                    ), "\x01"
+                )
             mkey = (name::String, bkey)
             cached = get(memo, mkey, nothing)
             if cached !== nothing
@@ -1894,7 +2044,7 @@ function _expand_expr_refs(e::OpExpr, reg, sites::_TemplateSites,
             end
         end
         body_raw = _raw_get(reg[name], "body")
-        bindings_raw = Dict{String,Any}()
+        bindings_raw = Dict{String, Any}()
         if e.bindings !== nothing
             for (k, v) in e.bindings
                 bindings_raw[string(k)] = serialize_expression(v)
@@ -1959,9 +2109,11 @@ file with no surviving references comes back by identity.
 function expanded_file(file::EsmFile)::EsmFile
     file.component_templates === nothing && return file
     out = _expand_refs!(deepcopy(file))
-    return _with_declarations(out, out.expression_templates, out.metaparameters;
-                              component_templates = nothing, esm = out.esm,
-                              coordinates = out.coordinates)
+    return _with_declarations(
+        out, out.expression_templates, out.metaparameters;
+        component_templates = nothing, esm = out.esm,
+        coordinates = out.coordinates
+    )
 end
 
 
@@ -1969,48 +2121,62 @@ end
 # changed, so every caller can pass the variable through BY IDENTITY rather than
 # reconstructing it. Shared by the load-time walk and the `FlattenedSystem`
 # boundary seam so the two cannot drift on which positions they expand.
-function _expand_update_refs(var::ModelVariable, reg, sites::_TemplateSites,
-                             memo::_ExpandMemo)
+function _expand_update_refs(
+        var::ModelVariable, reg, sites::_TemplateSites,
+        memo::_ExpandMemo
+    )
     var.update === nothing && return nothing
     rules = ParameterUpdate[]
     changed = false
     for r in var.update
         nw = r.when === nothing ? nothing :
-             _expand_expr_refs(r.when, reg, sites, memo)
+            _expand_expr_refs(r.when, reg, sites, memo)
         ne = r.expression === nothing ? nothing :
-             _expand_expr_refs(r.expression, reg, sites, memo)
+            _expand_expr_refs(r.expression, reg, sites, memo)
         (nw !== r.when || ne !== r.expression) && (changed = true)
-        push!(rules, ParameterUpdate(r.kind; times=r.times, interval=r.interval,
-            initial_offset=r.initial_offset, when=nw, direction=r.direction,
-            source=r.source, hook=r.hook, expression=ne, from=r.from,
-            handler=r.handler))
+        push!(
+            rules, ParameterUpdate(
+                r.kind; times = r.times, interval = r.interval,
+                initial_offset = r.initial_offset, when = nw, direction = r.direction,
+                source = r.source, hook = r.hook, expression = ne, from = r.from,
+                handler = r.handler
+            )
+        )
     end
     return changed ? rules : nothing
 end
 
-function _expand_model_refs!(model::Model, reg; sites::_TemplateSites=nothing,
-                             memo::_ExpandMemo=Dict{Tuple{String,String},OpExpr}())
+function _expand_model_refs!(
+        model::Model, reg; sites::_TemplateSites = nothing,
+        memo::_ExpandMemo = Dict{Tuple{String, String}, OpExpr}()
+    )
     # esm 1.0.0: the only per-variable expression positions are a parameter
     # update's `when` trigger and `expression` value form (esm-spec §5.4); an
     # observed unknown's body is an equation, expanded just below.
     for (name, var) in model.variables
         rules = _expand_update_refs(var, reg, sites, memo)
-        rules === nothing || (model.variables[name] = reconstruct(var; update=rules))
+        rules === nothing || (model.variables[name] = reconstruct(var; update = rules))
     end
-    _expand_equations_refs!(model.equations, reg; sites=sites, memo=memo)
-    _expand_equations_refs!(model.initialization_equations, reg; sites=sites, memo=memo)
+    _expand_equations_refs!(model.equations, reg; sites = sites, memo = memo)
+    _expand_equations_refs!(model.initialization_equations, reg; sites = sites, memo = memo)
     for (_, sub) in model.subsystems
-        sub isa Model && _expand_model_refs!(sub, reg; sites=sites, memo=memo)
+        sub isa Model && _expand_model_refs!(sub, reg; sites = sites, memo = memo)
     end
     return
 end
 
-function _expand_equations_refs!(eqs::Vector{Equation}, reg; sites::_TemplateSites=nothing,
-                                 memo::_ExpandMemo=nothing)
+function _expand_equations_refs!(
+        eqs::Vector{Equation}, reg; sites::_TemplateSites = nothing,
+        memo::_ExpandMemo = nothing
+    )
     isempty(eqs) && return
-    new_eqs = Equation[Equation(_expand_expr_refs(eq.lhs, reg, sites, memo),
-                                _expand_expr_refs(eq.rhs, reg, sites, memo); _comment=eq._comment)
-                       for eq in eqs]
+    new_eqs = Equation[
+        Equation(
+            _expand_expr_refs(eq.lhs, reg, sites, memo),
+            _expand_expr_refs(eq.rhs, reg, sites, memo); _comment = eq._comment
+        )
+            for eq in eqs
+    ]
     empty!(eqs); append!(eqs, new_eqs)
     return
 end
@@ -2018,8 +2184,12 @@ end
 function _expand_reaction_system_refs!(rs::ReactionSystem, reg)
     new_reactions = Reaction[]
     for r in rs.reactions
-        push!(new_reactions, Reaction(r.id, raw_substrates(r), raw_products(r),
-            _expand_expr_refs(r.rate, reg); name=r.name, reference=r.reference))
+        push!(
+            new_reactions, Reaction(
+                r.id, raw_substrates(r), raw_products(r),
+                _expand_expr_refs(r.rate, reg); name = r.name, reference = r.reference
+            )
+        )
     end
     empty!(rs.reactions); append!(rs.reactions, new_reactions)
     _expand_equations_refs!(rs.constraint_equations, reg)
@@ -2060,31 +2230,38 @@ per-site re-expansion. Sharing is safe here for the same reason it is in
 `_expand_model_refs!` — the expanded set becomes a DAG, which is what interning
 would produce one pass later anyway.
 """
-function expand_flattened_refs(flat::FlattenedSystem;
-        memo::_ExpandMemo = Dict{Tuple{String,String},OpExpr}())::FlattenedSystem
+function expand_flattened_refs(
+        flat::FlattenedSystem;
+        memo::_ExpandMemo = Dict{Tuple{String, String}, OpExpr}()
+    )::FlattenedSystem
     reg = flat.template_registry
     isempty(reg) && return flat
     # Expansion rewrites inside each contribution (esm-libraries-spec §4.7.5): a
     # reference whose body is a sum expands into terms that all inherit the
     # contribution's origins.
     neweqs, newcontribs = _rewrite_flat_equations(
-        e -> _expand_expr_refs(e, reg, nothing, memo), flat)
-    return FlattenedSystem(flat; equations=neweqs, equation_contributions=newcontribs,
-        state_variables=_expand_vars_refs(flat.state_variables, reg, memo),
-        parameters=_expand_vars_refs(flat.parameters, reg, memo),
-        observed_variables=_expand_vars_refs(flat.observed_variables, reg, memo))
+        e -> _expand_expr_refs(e, reg, nothing, memo), flat
+    )
+    return FlattenedSystem(
+        flat; equations = neweqs, equation_contributions = newcontribs,
+        state_variables = _expand_vars_refs(flat.state_variables, reg, memo),
+        parameters = _expand_vars_refs(flat.parameters, reg, memo),
+        observed_variables = _expand_vars_refs(flat.observed_variables, reg, memo)
+    )
 end
 
 # One variable bucket of a `FlattenedSystem`, expanded. Unchanged variables are
 # passed through BY IDENTITY (`_expand_update_refs` returns `nothing`), so a
 # bucket with no references costs one dictionary rebuild and no `ModelVariable`
 # allocation.
-function _expand_vars_refs(vars::OrderedDict{String,ModelVariable}, reg,
-                           memo::_ExpandMemo)
-    out = OrderedDict{String,ModelVariable}()
+function _expand_vars_refs(
+        vars::OrderedDict{String, ModelVariable}, reg,
+        memo::_ExpandMemo
+    )
+    out = OrderedDict{String, ModelVariable}()
     for (name, var) in vars
         rules = _expand_update_refs(var, reg, nothing, memo)
-        out[name] = rules === nothing ? var : reconstruct(var; update=rules)
+        out[name] = rules === nothing ? var : reconstruct(var; update = rules)
     end
     return out
 end
@@ -2108,17 +2285,17 @@ copied first.
 """
 function expand_document(loaded)
     (loaded === nothing || !_is_object(loaded)) && return loaded
-    root = _to_ordered(loaded)::OrderedDict{String,Any}
+    root = _to_ordered(loaded)::OrderedDict{String, Any}
 
     # Capture each component's named registry BEFORE stripping the blocks.
-    comp_named = Dict{Tuple{String,String},Dict{String,Any}}()
+    comp_named = Dict{Tuple{String, String}, Dict{String, Any}}()
     for compkind in ("models", "reaction_systems")
         comps = get(root, compkind, nothing)
         comps === nothing && continue
         _is_object(comps) || continue
         for (cname, comp) in pairs(comps)
             _is_object(comp) || continue
-            named = Dict{String,Any}()
+            named = Dict{String, Any}()
             tpl = get(comp, "expression_templates", nothing)
             if _is_object(tpl)
                 for (n, d) in pairs(tpl)
@@ -2154,9 +2331,11 @@ function expand_document(loaded)
             _is_object(tr) || continue
             target = get(entry, "to", nothing)
             target isa AbstractString || continue
-            comp_name = String(first(split(target, "."; limit=2)))
-            named = get(comp_named, ("models", comp_name),
-                        get(comp_named, ("reaction_systems", comp_name), nothing))
+            comp_name = String(first(split(target, "."; limit = 2)))
+            named = get(
+                comp_named, ("models", comp_name),
+                get(comp_named, ("reaction_systems", comp_name), nothing)
+            )
             named === nothing && continue
             entry["transform"] = _expand_all(tr, named, "coupling[$(i)].transform")
         end
@@ -2207,8 +2386,8 @@ Per-component MATCH-LESS template names authored in-file in `raw_source`
 (compkind.cname → ordered names). Emit keeps these verbatim as authored entries
 (esm-spec §9.6.4 rule 5); imported/derived templates are materialized instead.
 """
-function _authored_template_names(raw_source)::Dict{String,Vector{String}}
-    authored = Dict{String,Vector{String}}()
+function _authored_template_names(raw_source)::Dict{String, Vector{String}}
+    authored = Dict{String, Vector{String}}()
     (raw_source === nothing || !_is_object(raw_source)) && return authored
     for compkind in ("models", "reaction_systems")
         comps = _raw_get(raw_source, compkind)
@@ -2243,11 +2422,11 @@ with a non-empty block) and `bump` (true iff any surviving reference or
 materialized entry remains → §9.6.4 rule 8 version stamp). Shared by
 [`emit_document`](@ref) (raw emit) and the typed load path (`_lower_and_coerce`).
 """
-function _materialize_components!(root, authored::Dict{String,Vector{String}})
+function _materialize_components!(root, authored::Dict{String, Vector{String}})
     # ORDERED by component: `_merge_flat_registry` consumes this map positionally
     # (esm-libraries-spec §4.7.5 step 4 makes the merged registry document-
     # ordered), and `pairs(comps)` below walks the raw document's own order.
-    blocks = OrderedDict{String,OrderedDict{String,Any}}()
+    blocks = OrderedDict{String, OrderedDict{String, Any}}()
     bump = false
     for compkind in ("models", "reaction_systems")
         comps = get(root, compkind, nothing)
@@ -2257,7 +2436,7 @@ function _materialize_components!(root, authored::Dict{String,Vector{String}})
             _is_object(comp) || continue
             key = "$compkind.$(string(cname))"
             tpl = get(comp, "expression_templates", nothing)
-            named = Dict{String,Any}()
+            named = Dict{String, Any}()
             if _is_object(tpl)
                 for (n, d) in pairs(tpl)
                     named[string(n)] = d
@@ -2265,8 +2444,10 @@ function _materialize_components!(root, authored::Dict{String,Vector{String}})
             end
             refnames = Set{String}()
             for (k, v) in comp
-                (string(k) == "expression_templates" ||
-                 string(k) == "expression_template_imports") && continue
+                (
+                    string(k) == "expression_templates" ||
+                        string(k) == "expression_template_imports"
+                ) && continue
                 for r in _collect_apply_names!(String[], v)
                     push!(refnames, r)
                 end
@@ -2276,7 +2457,7 @@ function _materialize_components!(root, authored::Dict{String,Vector{String}})
             authored_here = get(authored, key, String[])
             authored_set = Set(authored_here)
 
-            emit_block = OrderedDict{String,Any}()
+            emit_block = OrderedDict{String, Any}()
             for n in authored_here
                 haskey(named, n) && (emit_block[n] = named[n])
             end
@@ -2327,7 +2508,7 @@ references a name inside it, so deduped entries need no reference rewriting.
 """
 function _registry_collision_names(byname::AbstractDict)::Set{String}
     collide = Set{String}()
-    refs = Dict{String,Set{String}}()
+    refs = Dict{String, Set{String}}()
     for (name, occ) in byname
         all(o -> _json_equal(occ[1][2], o[2]), occ) || push!(collide, name)
         s = Set{String}()
@@ -2368,10 +2549,10 @@ component's reference sites — `flatten` does so alongside namespacing — or t
 renamed entries become unreachable. `nothing` in ⇒ empty out.
 """
 function _merge_flat_registry(component_templates)
-    merged = OrderedDict{String,Any}()
-    rename = OrderedDict{String,Dict{String,String}}()
+    merged = OrderedDict{String, Any}()
+    rename = OrderedDict{String, Dict{String, String}}()
     component_templates === nothing && return (merged, rename)
-    byname = OrderedDict{String,Vector{Tuple{String,Any}}}()
+    byname = OrderedDict{String, Vector{Tuple{String, Any}}}()
     # DOCUMENT ORDER (esm-libraries-spec §4.7.5 step 4, normative): components in
     # the order the file declares them, entries in the order their block declares
     # them. Both loops previously sorted "so dedup first-occurrence and the
@@ -2381,10 +2562,10 @@ function _merge_flat_registry(component_templates)
     # dedup / collision-rename SEMANTICS below are untouched.
     for (compkey, block) in component_templates
         _is_object(block) || continue
-        path = String(last(split(compkey, "."; limit=2)))
+        path = String(last(split(compkey, "."; limit = 2)))
         for (k, _) in pairs(block)
             name = string(k)
-            push!(get!(byname, name, Tuple{String,Any}[]), (path, _raw_get(block, name)))
+            push!(get!(byname, name, Tuple{String, Any}[]), (path, _raw_get(block, name)))
         end
     end
     collide = _registry_collision_names(byname)
@@ -2393,7 +2574,7 @@ function _merge_flat_registry(component_templates)
             for (path, decl) in occ
                 newname = "$path.$name"
                 merged[newname] = decl
-                get!(rename, path, Dict{String,String}())[name] = newname
+                get!(rename, path, Dict{String, String}())[name] = newname
             end
         else
             merged[name] = occ[1][2]
@@ -2428,7 +2609,7 @@ function _expand_coupling_transform_refs!(root)
         _is_object(tr) || continue
         target = get(entry, "to", nothing)
         target isa AbstractString || continue
-        comp_name = String(first(split(target, "."; limit=2)))
+        comp_name = String(first(split(target, "."; limit = 2)))
         named = nothing
         for ck in ("models", "reaction_systems")
             comps = get(root, ck, nothing)
@@ -2437,7 +2618,7 @@ function _expand_coupling_transform_refs!(root)
             comp isa AbstractDict || continue
             tpl = get(comp, "expression_templates", nothing)
             if _is_object(tpl)
-                named = Dict{String,Any}(string(n) => d for (n, d) in pairs(tpl))
+                named = Dict{String, Any}(string(n) => d for (n, d) in pairs(tpl))
             end
             break
         end
@@ -2501,7 +2682,7 @@ function emit_document(raw_source, base_path::AbstractString)
     loaded = lower_expression_templates(src)
     # Fast path returns `src` by identity; normalize it into a fresh mutable
     # native tree. The processed path already returns one.
-    root = loaded === src ? _to_ordered(loaded)::OrderedDict{String,Any} : loaded
+    root = loaded === src ? _to_ordered(loaded)::OrderedDict{String, Any} : loaded
     _blocks, bump = _materialize_components!(root, authored)
     bump && (root["esm"] = _esm_stamp_floor(get(root, "esm", nothing)))
     return root
@@ -2512,22 +2693,24 @@ end
 
 _emit_norm(x) =
     (x isa AbstractDict) ?
-        OrderedDict{String,Any}(string(k) => _emit_norm(v) for (k, v) in pairs(x)) :
+    OrderedDict{String, Any}(string(k) => _emit_norm(v) for (k, v) in pairs(x)) :
     (_is_object(x)) ?
-        OrderedDict{String,Any}(string(k) => _emit_norm(v) for (k, v) in pairs(x)) :
+    OrderedDict{String, Any}(string(k) => _emit_norm(v) for (k, v) in pairs(x)) :
     (x isa AbstractVector || _is_array(x)) ? Any[_emit_norm(v) for v in x] : x
 
-function _emit_write(io::IO, x, indent::Int; preserve::Bool=false)
+function _emit_write(io::IO, x, indent::Int; preserve::Bool = false)
     pad = "  "^indent
     pad1 = "  "^(indent + 1)
-    if x isa AbstractDict
+    return if x isa AbstractDict
         isempty(x) && return print(io, "{}")
         ks = preserve ? collect(keys(x)) : sort(collect(keys(x)))
         print(io, "{\n")
         for (i, k) in enumerate(ks)
             print(io, pad1, JSON3.write(string(k)), ": ")
-            _emit_write(io, x[k], indent + 1;
-                        preserve = (string(k) == "expression_templates"))
+            _emit_write(
+                io, x[k], indent + 1;
+                preserve = (string(k) == "expression_templates")
+            )
             i < length(ks) && print(io, ",")
             print(io, "\n")
         end
@@ -2559,7 +2742,7 @@ Rewrite the `name` of every `apply_expression_template` reference in `node`
 according to `rename` (old name → new name), in lockstep with a registry
 rename. Sharing-preserving.
 """
-function _rename_apply_refs(node, rename::AbstractDict{String,String})
+function _rename_apply_refs(node, rename::AbstractDict{String, String})
     if _is_array(node)
         changed = false
         buf = Vector{Any}(undef, length(node))
@@ -2573,7 +2756,7 @@ function _rename_apply_refs(node, rename::AbstractDict{String,String})
         op = _raw_get(node, "op")
         is_apply = op !== nothing && string(op) == APPLY_EXPRESSION_TEMPLATE_OP
         changed = false
-        buf = OrderedDict{String,Any}()
+        buf = OrderedDict{String, Any}()
         for (k, v) in pairs(node)
             ks = string(k)
             if is_apply && ks == "name" && v isa AbstractString && haskey(rename, string(v))
@@ -2600,14 +2783,14 @@ in lockstep with the flatten-time registry rename (esm-spec §10.7). Recurses vi
 `map_children`, which descends `bindings` values too, so a nested reference
 passed as a binding is renamed as well. Returns `e` unchanged when nothing hits.
 """
-_rename_expr_apply_refs(e::VarExpr, ::AbstractDict{String,String}) = e
-_rename_expr_apply_refs(e::NumExpr, ::AbstractDict{String,String}) = e
-_rename_expr_apply_refs(e::IntExpr, ::AbstractDict{String,String}) = e
-function _rename_expr_apply_refs(e::OpExpr, rename::AbstractDict{String,String})
+_rename_expr_apply_refs(e::VarExpr, ::AbstractDict{String, String}) = e
+_rename_expr_apply_refs(e::NumExpr, ::AbstractDict{String, String}) = e
+_rename_expr_apply_refs(e::IntExpr, ::AbstractDict{String, String}) = e
+function _rename_expr_apply_refs(e::OpExpr, rename::AbstractDict{String, String})
     r = map_children(c -> _rename_expr_apply_refs(c, rename), e)::OpExpr
     if r.op == APPLY_EXPRESSION_TEMPLATE_OP && r.name !== nothing &&
-       haskey(rename, r.name::String)
-        return reconstruct(r; name=rename[r.name::String])
+            haskey(rename, r.name::String)
+        return reconstruct(r; name = rename[r.name::String])
     end
     return r
 end
@@ -2640,15 +2823,15 @@ or `Expand` them (§9.6.4 rule 2). `match` rules are not merged (only match-less
 templates are referenceable, §9.6.2).
 """
 function flatten_template_registries(loaded)
-    root = _to_ordered(loaded)::OrderedDict{String,Any}
+    root = _to_ordered(loaded)::OrderedDict{String, Any}
     # (path, compkind, cname, comp, named)
-    comps = Tuple{String,String,String,OrderedDict{String,Any},Dict{String,Any}}[]
+    comps = Tuple{String, String, String, OrderedDict{String, Any}, Dict{String, Any}}[]
     for compkind in ("models", "reaction_systems")
         cs = get(root, compkind, nothing)
         (cs !== nothing && _is_object(cs)) || continue
         for (cname, comp) in pairs(cs)
             _is_object(comp) || continue
-            named = Dict{String,Any}()
+            named = Dict{String, Any}()
             tpl = get(comp, "expression_templates", nothing)
             if _is_object(tpl)
                 for (n, d) in pairs(tpl)
@@ -2656,21 +2839,25 @@ function flatten_template_registries(loaded)
                     named[string(n)] = d
                 end
             end
-            push!(comps, (string(cname), compkind, string(cname),
-                          comp::OrderedDict{String,Any}, named))
+            push!(
+                comps, (
+                    string(cname), compkind, string(cname),
+                    comp::OrderedDict{String, Any}, named,
+                )
+            )
         end
     end
 
     # Group each template name across components (preserving first-seen path).
-    byname = OrderedDict{String,Vector{Tuple{String,Any}}}()
+    byname = OrderedDict{String, Vector{Tuple{String, Any}}}()
     for (path, _, _, _, named) in comps
         for n in sort(collect(keys(named)))
-            push!(get!(byname, n, Tuple{String,Any}[]), (path, named[n]))
+            push!(get!(byname, n, Tuple{String, Any}[]), (path, named[n]))
         end
     end
 
-    merged = OrderedDict{String,Any}()
-    rename = Dict{String,Dict{String,String}}()   # path => (old => new)
+    merged = OrderedDict{String, Any}()
+    rename = Dict{String, Dict{String, String}}()   # path => (old => new)
     collide = _registry_collision_names(byname)
     for name in sort(collect(keys(byname)))
         occ = byname[name]
@@ -2678,7 +2865,7 @@ function flatten_template_registries(loaded)
             for (path, decl) in occ                 # collision: owner-path rename
                 newname = "$path.$name"
                 merged[newname] = decl
-                get!(rename, path, Dict{String,String}())[name] = newname
+                get!(rename, path, Dict{String, String}())[name] = newname
             end
         else
             merged[name] = occ[1][2]                # deep-equal dedup

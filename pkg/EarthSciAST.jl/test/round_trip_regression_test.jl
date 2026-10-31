@@ -38,153 +38,219 @@ const ESM = EarthSciAST
     # and always present; join_gates is internal).
     E(x...) = ESM.ASTExpr[x...]
     specs = [
-        (field = :wrt,
-         json = """{"op":"D","args":["x"],"wrt":"t"}""",
-         expected = "t",
-         cop = "D", cargs = E(VarExpr("x")), kw = (wrt = "t",)),
-        (field = :dim,
-         json = """{"op":"grad","args":["u"],"dim":"x"}""",
-         expected = "x",
-         cop = "grad", cargs = E(VarExpr("u")), kw = (dim = "x",)),
-        (field = :int_var,
-         json = """{"op":"integral","args":["f"],"var":"s","lower":0.5,"upper":1.5}""",
-         expected = "s",
-         cop = "integral", cargs = E(VarExpr("f")), kw = (int_var = "s",)),
-        (field = :lower,
-         json = """{"op":"integral","args":["f"],"var":"s","lower":0.5,"upper":1.5}""",
-         expected = NumExpr(0.5),
-         cop = "integral", cargs = E(VarExpr("f")), kw = (lower = NumExpr(0.5),)),
-        (field = :upper,
-         json = """{"op":"integral","args":["f"],"var":"s","lower":0.5,"upper":1.5}""",
-         expected = NumExpr(1.5),
-         cop = "integral", cargs = E(VarExpr("f")), kw = (upper = NumExpr(1.5),)),
-        (field = :output_idx,
-         json = """{"op":"faq","args":[],"output_idx":["i",1]}""",
-         expected = Any["i", 1],
-         cop = "faq", cargs = E(), kw = (output_idx = Any["i", 1],)),
-        (field = :expr_body,
-         json = """{"op":"faq","args":[],"expr":2.5}""",
-         expected = NumExpr(2.5),
-         cop = "faq", cargs = E(), kw = (expr_body = NumExpr(2.5),)),
-        (field = :reduce,
-         json = """{"op":"faq","args":[],"reduce":"max"}""",
-         expected = "max",
-         cop = "faq", cargs = E(), kw = (reduce = "max",)),
-        (field = :semiring,
-         json = """{"op":"faq","args":[],"semiring":"max_product"}""",
-         expected = "max_product",
-         cop = "faq", cargs = E(), kw = (semiring = "max_product",)),
-        (field = :ranges,
-         json = """{"op":"faq","args":[],"ranges":{"i":[1,4]}}""",
-         expected = Dict{String,Any}("i" => Any[1, 4]),
-         cop = "faq", cargs = E(),
-         kw = (ranges = Dict{String,Any}("i" => Any[1, 4]),)),
-        (field = :regions,
-         json = """{"op":"makearray","args":[],"regions":[[[1,2]]]}""",
-         expected = [[[1, 2]]],
-         cop = "makearray", cargs = E(),
-         kw = (regions = Vector{Vector{Vector{Int}}}([[[1, 2]]]),)),
-        (field = :values,
-         json = """{"op":"makearray","args":[],"values":[1.5]}""",
-         expected = E(NumExpr(1.5)),
-         cop = "makearray", cargs = E(), kw = (values = E(NumExpr(1.5)),)),
-        (field = :shape,
-         json = """{"op":"reshape","args":["u"],"shape":[2,"n"]}""",
-         expected = Any[2, "n"],
-         cop = "reshape", cargs = E(VarExpr("u")), kw = (shape = Any[2, "n"],)),
-        (field = :perm,
-         json = """{"op":"transpose","args":["u"],"perm":[1,0]}""",
-         expected = [1, 0],
-         cop = "transpose", cargs = E(VarExpr("u")), kw = (perm = [1, 0],)),
-        (field = :axis,
-         json = """{"op":"concat","args":["u","v"],"axis":0}""",
-         expected = 0,
-         cop = "concat", cargs = E(VarExpr("u"), VarExpr("v")), kw = (axis = 0,)),
-        (field = :fn,
-         json = """{"op":"broadcast","args":["u"],"fn":"exp"}""",
-         expected = "exp",
-         cop = "broadcast", cargs = E(VarExpr("u")), kw = (fn = "exp",)),
-        (field = :name,
-         json = """{"op":"fn","args":[1.5],"name":"interp.linear"}""",
-         expected = "interp.linear",
-         cop = "fn", cargs = E(NumExpr(1.5)), kw = (name = "interp.linear",)),
-        (field = :value,
-         json = """{"op":"const","args":[],"value":[1,2]}""",
-         expected = Any[1, 2],
-         cop = "const", cargs = E(), kw = (value = Any[1, 2],)),
-        (field = :table,
-         json = """{"op":"table_lookup","args":[],"table":"T","axes":{"x":2.5}}""",
-         expected = "T",
-         cop = "table_lookup", cargs = E(), kw = (table = "T",)),
-        (field = :table_axes,
-         json = """{"op":"table_lookup","args":[],"table":"T","axes":{"x":2.5}}""",
-         expected = Dict{String,ESM.ASTExpr}("x" => NumExpr(2.5)),
-         cop = "table_lookup", cargs = E(),
-         kw = (table_axes = Dict{String,ESM.ASTExpr}("x" => NumExpr(2.5)),)),
-        (field = :output,
-         json = """{"op":"table_lookup","args":[],"table":"T","axes":{"x":2.5},"output":"a"}""",
-         expected = "a",
-         cop = "table_lookup", cargs = E(), kw = (output = "a",)),
-        (field = :join,
-         json = """{"op":"faq","args":[],"join":[{"on":[["a","b"]]}]}""",
-         expected = Any[[("a", "b")]],
-         cop = "faq", cargs = E(), kw = (join = Any[[("a", "b")]],)),
-        (field = :filter,
-         json = """{"op":"faq","args":[],"filter":{"op":">","args":["i",1]}}""",
-         expected = OpExpr(">", E(VarExpr("i"), IntExpr(1))),
-         cop = "faq", cargs = E(),
-         kw = (filter = OpExpr(">", E(VarExpr("i"), IntExpr(1))),)),
-        (field = :id,
-         json = """{"op":"faq","args":[],"id":"n1"}""",
-         expected = "n1",
-         cop = "faq", cargs = E(), kw = (id = "n1",)),
-        (field = :manifold,
-         json = """{"op":"intersect_polygon","args":[],"manifold":"planar"}""",
-         expected = "planar",
-         cop = "intersect_polygon", cargs = E(), kw = (manifold = "planar",)),
-        (field = :units,
-         json = """{"op":"faq","args":[],"units":"m"}""",
-         expected = "m",
-         cop = "faq", cargs = E(), kw = (units = "m",)),
-        (field = :distinct,
-         json = """{"op":"faq","args":[],"distinct":true}""",
-         expected = true,
-         cop = "faq", cargs = E(), kw = (distinct = true,)),
-        (field = :key,
-         json = """{"op":"faq","args":[],"key":{"op":"skolem","args":["i"]}}""",
-         expected = OpExpr("skolem", E(VarExpr("i"))),
-         cop = "faq", cargs = E(),
-         kw = (key = OpExpr("skolem", E(VarExpr("i"))),)),
-        (field = :arg,
-         json = """{"op":"argmin","args":[],"arg":"g"}""",
-         expected = "g",
-         cop = "argmin", cargs = E(), kw = (arg = "g",)),
-        (field = :bindings,
-         json = """{"op":"faq","args":[],"bindings":{"f":"u"}}""",
-         expected = Dict{String,ESM.ASTExpr}("f" => VarExpr("u")),
-         cop = "faq", cargs = E(),
-         kw = (bindings = Dict{String,ESM.ASTExpr}("f" => VarExpr("u")),)),
-        (field = :label,
-         json = """{"op":"skolem","args":["a","b"],"label":"edge"}""",
-         expected = "edge",
-         cop = "skolem", cargs = E(VarExpr("a"), VarExpr("b")), kw = (label = "edge",)),
+        (
+            field = :wrt,
+            json = """{"op":"D","args":["x"],"wrt":"t"}""",
+            expected = "t",
+            cop = "D", cargs = E(VarExpr("x")), kw = (wrt = "t",),
+        ),
+        (
+            field = :dim,
+            json = """{"op":"grad","args":["u"],"dim":"x"}""",
+            expected = "x",
+            cop = "grad", cargs = E(VarExpr("u")), kw = (dim = "x",),
+        ),
+        (
+            field = :int_var,
+            json = """{"op":"integral","args":["f"],"var":"s","lower":0.5,"upper":1.5}""",
+            expected = "s",
+            cop = "integral", cargs = E(VarExpr("f")), kw = (int_var = "s",),
+        ),
+        (
+            field = :lower,
+            json = """{"op":"integral","args":["f"],"var":"s","lower":0.5,"upper":1.5}""",
+            expected = NumExpr(0.5),
+            cop = "integral", cargs = E(VarExpr("f")), kw = (lower = NumExpr(0.5),),
+        ),
+        (
+            field = :upper,
+            json = """{"op":"integral","args":["f"],"var":"s","lower":0.5,"upper":1.5}""",
+            expected = NumExpr(1.5),
+            cop = "integral", cargs = E(VarExpr("f")), kw = (upper = NumExpr(1.5),),
+        ),
+        (
+            field = :output_idx,
+            json = """{"op":"faq","args":[],"output_idx":["i",1]}""",
+            expected = Any["i", 1],
+            cop = "faq", cargs = E(), kw = (output_idx = Any["i", 1],),
+        ),
+        (
+            field = :expr_body,
+            json = """{"op":"faq","args":[],"expr":2.5}""",
+            expected = NumExpr(2.5),
+            cop = "faq", cargs = E(), kw = (expr_body = NumExpr(2.5),),
+        ),
+        (
+            field = :reduce,
+            json = """{"op":"faq","args":[],"reduce":"max"}""",
+            expected = "max",
+            cop = "faq", cargs = E(), kw = (reduce = "max",),
+        ),
+        (
+            field = :semiring,
+            json = """{"op":"faq","args":[],"semiring":"max_product"}""",
+            expected = "max_product",
+            cop = "faq", cargs = E(), kw = (semiring = "max_product",),
+        ),
+        (
+            field = :ranges,
+            json = """{"op":"faq","args":[],"ranges":{"i":[1,4]}}""",
+            expected = Dict{String, Any}("i" => Any[1, 4]),
+            cop = "faq", cargs = E(),
+            kw = (ranges = Dict{String, Any}("i" => Any[1, 4]),),
+        ),
+        (
+            field = :regions,
+            json = """{"op":"makearray","args":[],"regions":[[[1,2]]]}""",
+            expected = [[[1, 2]]],
+            cop = "makearray", cargs = E(),
+            kw = (regions = Vector{Vector{Vector{Int}}}([[[1, 2]]]),),
+        ),
+        (
+            field = :values,
+            json = """{"op":"makearray","args":[],"values":[1.5]}""",
+            expected = E(NumExpr(1.5)),
+            cop = "makearray", cargs = E(), kw = (values = E(NumExpr(1.5)),),
+        ),
+        (
+            field = :shape,
+            json = """{"op":"reshape","args":["u"],"shape":[2,"n"]}""",
+            expected = Any[2, "n"],
+            cop = "reshape", cargs = E(VarExpr("u")), kw = (shape = Any[2, "n"],),
+        ),
+        (
+            field = :perm,
+            json = """{"op":"transpose","args":["u"],"perm":[1,0]}""",
+            expected = [1, 0],
+            cop = "transpose", cargs = E(VarExpr("u")), kw = (perm = [1, 0],),
+        ),
+        (
+            field = :axis,
+            json = """{"op":"concat","args":["u","v"],"axis":0}""",
+            expected = 0,
+            cop = "concat", cargs = E(VarExpr("u"), VarExpr("v")), kw = (axis = 0,),
+        ),
+        (
+            field = :fn,
+            json = """{"op":"broadcast","args":["u"],"fn":"exp"}""",
+            expected = "exp",
+            cop = "broadcast", cargs = E(VarExpr("u")), kw = (fn = "exp",),
+        ),
+        (
+            field = :name,
+            json = """{"op":"fn","args":[1.5],"name":"interp.linear"}""",
+            expected = "interp.linear",
+            cop = "fn", cargs = E(NumExpr(1.5)), kw = (name = "interp.linear",),
+        ),
+        (
+            field = :value,
+            json = """{"op":"const","args":[],"value":[1,2]}""",
+            expected = Any[1, 2],
+            cop = "const", cargs = E(), kw = (value = Any[1, 2],),
+        ),
+        (
+            field = :table,
+            json = """{"op":"table_lookup","args":[],"table":"T","axes":{"x":2.5}}""",
+            expected = "T",
+            cop = "table_lookup", cargs = E(), kw = (table = "T",),
+        ),
+        (
+            field = :table_axes,
+            json = """{"op":"table_lookup","args":[],"table":"T","axes":{"x":2.5}}""",
+            expected = Dict{String, ESM.ASTExpr}("x" => NumExpr(2.5)),
+            cop = "table_lookup", cargs = E(),
+            kw = (table_axes = Dict{String, ESM.ASTExpr}("x" => NumExpr(2.5)),),
+        ),
+        (
+            field = :output,
+            json = """{"op":"table_lookup","args":[],"table":"T","axes":{"x":2.5},"output":"a"}""",
+            expected = "a",
+            cop = "table_lookup", cargs = E(), kw = (output = "a",),
+        ),
+        (
+            field = :join,
+            json = """{"op":"faq","args":[],"join":[{"on":[["a","b"]]}]}""",
+            expected = Any[[("a", "b")]],
+            cop = "faq", cargs = E(), kw = (join = Any[[("a", "b")]],),
+        ),
+        (
+            field = :filter,
+            json = """{"op":"faq","args":[],"filter":{"op":">","args":["i",1]}}""",
+            expected = OpExpr(">", E(VarExpr("i"), IntExpr(1))),
+            cop = "faq", cargs = E(),
+            kw = (filter = OpExpr(">", E(VarExpr("i"), IntExpr(1))),),
+        ),
+        (
+            field = :id,
+            json = """{"op":"faq","args":[],"id":"n1"}""",
+            expected = "n1",
+            cop = "faq", cargs = E(), kw = (id = "n1",),
+        ),
+        (
+            field = :manifold,
+            json = """{"op":"intersect_polygon","args":[],"manifold":"planar"}""",
+            expected = "planar",
+            cop = "intersect_polygon", cargs = E(), kw = (manifold = "planar",),
+        ),
+        (
+            field = :units,
+            json = """{"op":"faq","args":[],"units":"m"}""",
+            expected = "m",
+            cop = "faq", cargs = E(), kw = (units = "m",),
+        ),
+        (
+            field = :distinct,
+            json = """{"op":"faq","args":[],"distinct":true}""",
+            expected = true,
+            cop = "faq", cargs = E(), kw = (distinct = true,),
+        ),
+        (
+            field = :key,
+            json = """{"op":"faq","args":[],"key":{"op":"skolem","args":["i"]}}""",
+            expected = OpExpr("skolem", E(VarExpr("i"))),
+            cop = "faq", cargs = E(),
+            kw = (key = OpExpr("skolem", E(VarExpr("i"))),),
+        ),
+        (
+            field = :arg,
+            json = """{"op":"argmin","args":[],"arg":"g"}""",
+            expected = "g",
+            cop = "argmin", cargs = E(), kw = (arg = "g",),
+        ),
+        (
+            field = :bindings,
+            json = """{"op":"faq","args":[],"bindings":{"f":"u"}}""",
+            expected = Dict{String, ESM.ASTExpr}("f" => VarExpr("u")),
+            cop = "faq", cargs = E(),
+            kw = (bindings = Dict{String, ESM.ASTExpr}("f" => VarExpr("u")),),
+        ),
+        (
+            field = :label,
+            json = """{"op":"skolem","args":["a","b"],"label":"edge"}""",
+            expected = "edge",
+            cop = "skolem", cargs = E(VarExpr("a"), VarExpr("b")), kw = (label = "edge",),
+        ),
         # Author cadence assertion (CONFORMANCE_SPEC.md §5.7.6 rule 3) — a
         # diagnostic hook that changes no semantics, but IS authored content, so
         # it must survive the typed round trip or the assertion is disarmed on
         # every document this binding re-emits.
-        (field = :expect_cadence,
-         json = """{"op":"+","args":["a","b"],"expect_cadence":"continuous"}""",
-         expected = "continuous",
-         cop = "+", cargs = E(VarExpr("a"), VarExpr("b")),
-         kw = (expect_cadence = "continuous",)),
+        (
+            field = :expect_cadence,
+            json = """{"op":"+","args":["a","b"],"expect_cadence":"continuous"}""",
+            expected = "continuous",
+            cop = "+", cargs = E(VarExpr("a"), VarExpr("b")),
+            kw = (expect_cadence = "continuous",),
+        ),
         # Scheme parameters of an OPEN rewrite-target op (esm-spec §4.2). The
         # values are ordinary JSON scalars and come back as a native
         # `Dict{String,Any}` (no JSON3 types leak into the typed IR).
-        (field = :attrs,
-         json = """{"op":"godunov_hamiltonian","args":["u"],"attrs":{"gamma":1.4,"scheme":"lf"}}""",
-         expected = Dict{String,Any}("gamma" => 1.4, "scheme" => "lf"),
-         cop = "godunov_hamiltonian", cargs = E(VarExpr("u")),
-         kw = (attrs = Dict{String,Any}("gamma" => 1.4, "scheme" => "lf"),)),
+        (
+            field = :attrs,
+            json = """{"op":"godunov_hamiltonian","args":["u"],"attrs":{"gamma":1.4,"scheme":"lf"}}""",
+            expected = Dict{String, Any}("gamma" => 1.4, "scheme" => "lf"),
+            cop = "godunov_hamiltonian", cargs = E(VarExpr("u")),
+            kw = (attrs = Dict{String, Any}("gamma" => 1.4, "scheme" => "lf"),),
+        ),
     ]
 
     # The spec list must cover every field except op/args (structural) and
@@ -208,11 +274,11 @@ const ESM = EarthSciAST
                 if s.expected isa ESM.ASTExpr
                     @test got isa ESM.ASTExpr && exprs_equal(got, s.expected)
                 elseif s.expected isa AbstractDict &&
-                       !isempty(s.expected) && first(values(s.expected)) isa ESM.ASTExpr
+                        !isempty(s.expected) && first(values(s.expected)) isa ESM.ASTExpr
                     @test got isa AbstractDict && keys(got) == keys(s.expected)
                     @test all(exprs_equal(got[k], s.expected[k]) for k in keys(s.expected))
                 elseif s.expected isa AbstractVector && !isempty(s.expected) &&
-                       first(s.expected) isa ESM.ASTExpr
+                        first(s.expected) isa ESM.ASTExpr
                     @test length(got) == length(s.expected)
                     @test all(exprs_equal(g, e) for (g, e) in zip(got, s.expected))
                 else
@@ -323,21 +389,31 @@ end
     # Two or more rules take the ARRAY form; one rule never does. Both spellings
     # are asserted directly on `serialize_model_variable` so the object/array
     # decision is pinned independently of any document that happens to use it.
-    one_rule = ModelVariable(ParameterVariable; default = 2.5,
-        update = ParameterUpdate("condition";
+    one_rule = ModelVariable(
+        ParameterVariable; default = 2.5,
+        update = ParameterUpdate(
+            "condition";
             when = OpExpr(">", ESM.ASTExpr[VarExpr("x"), NumExpr(1.0)]),
-            handler = ESM.FunctionalUpdate("h")))
+            handler = ESM.FunctionalUpdate("h")
+        )
+    )
     @test ESM.serialize_model_variable(one_rule)["update"] isa AbstractDict
 
-    two_rules = ModelVariable(ParameterVariable; default = 2.5,
+    two_rules = ModelVariable(
+        ParameterVariable; default = 2.5,
         shape = String[],
         update = ParameterUpdate[
-            ParameterUpdate("schedule"; interval = 3600.5,
-                            expression = NumExpr(0.5)),
-            ParameterUpdate("condition";
+            ParameterUpdate(
+                "schedule"; interval = 3600.5,
+                expression = NumExpr(0.5)
+            ),
+            ParameterUpdate(
+                "condition";
                 when = OpExpr(">", ESM.ASTExpr[VarExpr("x"), NumExpr(1.0)]),
-                handler = ESM.FunctionalUpdate("h")),
-        ])
+                handler = ESM.FunctionalUpdate("h")
+            ),
+        ]
+    )
     emitted = ESM.serialize_model_variable(two_rules)["update"]
     @test emitted isa AbstractVector && length(emitted) == 2
     @test emitted[1]["kind"] == "schedule"
@@ -347,14 +423,27 @@ end
     # `event_affects_parameter` defect (§5.4/§6.3.1) — the replacement for the
     # 0.x `discrete_parameters` write channel, which no longer exists.
     bad_model = ESM.Model(
-        Dict("x" => ModelVariable(UnknownVariable; default = 1.5),
-             "K" => ModelVariable(ParameterVariable; default = 2.5)),
-        [ESM.Equation(OpExpr("D", ESM.ASTExpr[VarExpr("x")]; wrt = "t"),
-                      NumExpr(0.5))];
-        discrete_events = [DiscreteEvent(PeriodicTrigger(1.5),
-                                         [AffectEquation("K", NumExpr(0.5))])])
-    bad_file = EsmFile(ESM.SCHEMA_VERSION, ESM.Metadata("bad_event");
-                       models = Dict("M" => bad_model))
+        Dict(
+            "x" => ModelVariable(UnknownVariable; default = 1.5),
+            "K" => ModelVariable(ParameterVariable; default = 2.5)
+        ),
+        [
+            ESM.Equation(
+                OpExpr("D", ESM.ASTExpr[VarExpr("x")]; wrt = "t"),
+                NumExpr(0.5)
+            ),
+        ];
+        discrete_events = [
+            DiscreteEvent(
+                PeriodicTrigger(1.5),
+                [AffectEquation("K", NumExpr(0.5))]
+            ),
+        ]
+    )
+    bad_file = EsmFile(
+        ESM.SCHEMA_VERSION, ESM.Metadata("bad_event");
+        models = Dict("M" => bad_model)
+    )
     codes = [e.error_type for e in validate(bad_file).structural_errors]
     @test "event_affects_parameter" in codes
 end
@@ -396,7 +485,7 @@ end
     # ContinuousEvent's does — no placeholder, no raw struct dump.
     emitted = ESM.serialize_discrete_event(event)
     @test !haskey(emitted, "functional_affect")
-    @test emitted["affects"] == Any[Dict{String,Any}("lhs" => "x", "rhs" => 0.5)]
+    @test emitted["affects"] == Any[Dict{String, Any}("lhs" => "x", "rhs" => 0.5)]
 
     # Full save → load idempotence (the saved form must itself be schema-valid).
     buf = IOBuffer()

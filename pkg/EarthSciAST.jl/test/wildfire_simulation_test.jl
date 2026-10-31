@@ -47,14 +47,16 @@ end
 # Index of `t` in the saved time grid (the run `saveat`s the assertion times).
 function _wf_time_index(times::Vector{Float64}, t::Float64)
     for (i, tv) in enumerate(times)
-        isapprox(tv, t; atol = 1e-9) && return i
+        isapprox(tv, t; atol = 1.0e-9) && return i
     end
     error("no saved time point at t=$t (saved: $times)")
 end
 
 @testset "wildfire_atmosphere_ocean.esm — inline regrid + coupled SST simulation" begin
-    fixture = joinpath(@__DIR__, "..", "..", "..", "tests", "valid",
-                       "wildfire_atmosphere_ocean.esm")
+    fixture = joinpath(
+        @__DIR__, "..", "..", "..", "tests", "valid",
+        "wildfire_atmosphere_ocean.esm"
+    )
     @test isfile(fixture)
 
     file = _ESS_WF.load_path(fixture)
@@ -68,7 +70,7 @@ end
             tspan = (t.time_span.start, t.time_span.stop)
 
             prob = _ESS_WF.esm_problem(fixture, tspan)
-            r = solve(prob, Tsit5(); reltol = 1e-9, abstol = 1e-11, saveat = atimes)
+            r = solve(prob, Tsit5(); reltol = 1.0e-9, abstol = 1.0e-11, saveat = atimes)
             @test SciMLBase.successful_retcode(r)
 
             for a in t.assertions
@@ -90,11 +92,13 @@ end
             # side has grad terms over structurally-0-D fields (→ 0) and no
             # activating dynamics, so it stays at its initial condition. This
             # guards the grad-on-scalar zeroing and the flatten coupling.
-            for (k, expected) in ("AtmosphericDynamics.T" => 288.0,
-                                  "WildfirePropagation.phi" => 1.0,
-                                  "WildfirePropagation.fuel" => 10.0)
+            for (k, expected) in (
+                    "AtmosphericDynamics.T" => 288.0,
+                    "WildfirePropagation.phi" => 1.0,
+                    "WildfirePropagation.fuel" => 10.0,
+                )
                 if haskey(prob.var_map, k)
-                    @test isapprox(r[Symbol(k)][end], expected; atol = 1e-8)
+                    @test isapprox(r[Symbol(k)][end], expected; atol = 1.0e-8)
                 end
             end
         end

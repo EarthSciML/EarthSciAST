@@ -31,13 +31,13 @@ const ESM = EarthSciAST
 # The nine declared functions and their `Dates` oracles (`dt` is the
 # ms-truncated `unix2datetime(t)` — the same truncation the spec pins).
 const _DTC_FIELDS = [
-    ("datetime.year",         dt -> Dates.year(dt)),
-    ("datetime.month",        dt -> Dates.month(dt)),
-    ("datetime.day",          dt -> Dates.day(dt)),
-    ("datetime.hour",         dt -> Dates.hour(dt)),
-    ("datetime.minute",       dt -> Dates.minute(dt)),
-    ("datetime.second",       dt -> Dates.second(dt)),
-    ("datetime.day_of_year",  dt -> Dates.dayofyear(dt)),
+    ("datetime.year", dt -> Dates.year(dt)),
+    ("datetime.month", dt -> Dates.month(dt)),
+    ("datetime.day", dt -> Dates.day(dt)),
+    ("datetime.hour", dt -> Dates.hour(dt)),
+    ("datetime.minute", dt -> Dates.minute(dt)),
+    ("datetime.second", dt -> Dates.second(dt)),
+    ("datetime.day_of_year", dt -> Dates.dayofyear(dt)),
     ("datetime.is_leap_year", dt -> Dates.isleapyear(Dates.year(dt)) ? 1 : 0),
 ]
 
@@ -45,15 +45,17 @@ const _DTC_FIELDS = [
 # month ends, year ends, Feb 29 (leap), Feb 28→Mar 1 of a NON-leap century
 # (2100), the leap century (2000), pre-epoch, and sub-second fractions.
 function _dtc_grid()
-    ds = [DateTime(1969, 12, 31, 23, 0, 0),   DateTime(1970, 1, 1),
-          DateTime(1999, 12, 31, 23, 59, 59), DateTime(2000, 2, 28, 12),
-          DateTime(2000, 2, 29),              DateTime(2000, 3, 1),
-          DateTime(2015, 12, 31, 23, 59, 30), DateTime(2016, 1, 1, 0, 0, 30),
-          DateTime(2016, 2, 28, 23, 59, 59),  DateTime(2016, 2, 29, 11, 30, 15),
-          DateTime(2016, 3, 1),               DateTime(2016, 12, 31),
-          DateTime(2017, 1, 1),               DateTime(2099, 12, 31, 6, 7, 8),
-          DateTime(2100, 2, 28, 23, 0, 0),    DateTime(2100, 3, 1, 1, 2, 3),
-          DateTime(2024, 6, 30, 23, 59, 59),  DateTime(2024, 7, 1)]
+    ds = [
+        DateTime(1969, 12, 31, 23, 0, 0), DateTime(1970, 1, 1),
+        DateTime(1999, 12, 31, 23, 59, 59), DateTime(2000, 2, 28, 12),
+        DateTime(2000, 2, 29), DateTime(2000, 3, 1),
+        DateTime(2015, 12, 31, 23, 59, 30), DateTime(2016, 1, 1, 0, 0, 30),
+        DateTime(2016, 2, 28, 23, 59, 59), DateTime(2016, 2, 29, 11, 30, 15),
+        DateTime(2016, 3, 1), DateTime(2016, 12, 31),
+        DateTime(2017, 1, 1), DateTime(2099, 12, 31, 6, 7, 8),
+        DateTime(2100, 2, 28, 23, 0, 0), DateTime(2100, 3, 1, 1, 2, 3),
+        DateTime(2024, 6, 30, 23, 59, 59), DateTime(2024, 7, 1),
+    ]
     ts = Float64[Dates.datetime2unix(d) for d in ds]
     # Sub-second offsets (exact ms, so the Dates oracle sees the same instant).
     append!(ts, ts[1:6] .+ 0.25)
@@ -104,7 +106,8 @@ end
         @test_throws ESM.ClosedFunctionError ESM._fn_typed_core_call(spy.id, 1.0e300)
         @test_throws ESM.ClosedFunctionError ESM._fn_typed_core_call(spy.id, NaN)
         @test_throws ESM.ClosedFunctionError evaluate_closed_function(
-            "datetime.year", Any[1.0e300])
+            "datetime.year", Any[1.0e300]
+        )
     end
 
     # ---- The eltype-generic kernel beside the Float64 core -----------------
@@ -131,8 +134,10 @@ end
         # year outside Int32) the kernel answers NaN — the Rust tape's answer —
         # never an unchecked number, since a compiled lane cannot raise.
         for t in (1.0e17, -1.0e17, NaN, Inf, -Inf)
-            for name in ("datetime.year", "datetime.hour", "datetime.is_leap_year",
-                         "datetime.julian_day")
+            for name in (
+                    "datetime.year", "datetime.hour", "datetime.is_leap_year",
+                    "datetime.julian_day",
+                )
                 sp = ESM._fn_typed_core_spec(name)
                 @test isnan(ESM._fn_typed_core_kernel(sp.id)(t))
                 @test_throws ESM.ClosedFunctionError ESM._fn_typed_core_call(sp.id, t)
@@ -144,28 +149,32 @@ end
     end
 
     # ---- Payload minting + scalar walker, typed vs boxed (negative control) -
-    tnode() = ESM._mknode(kind=ESM._NK_TIME)
-    fnnode(name, spec, kids...) = ESM._mknode(kind=ESM._NK_OP, op=:fn,
-        children=ESM._Node[kids...], payload=(name, spec))
+    tnode() = ESM._mknode(kind = ESM._NK_TIME)
+    fnnode(name, spec, kids...) = ESM._mknode(
+        kind = ESM._NK_OP, op = :fn,
+        children = ESM._Node[kids...], payload = (name, spec)
+    )
 
     @testset "compile mints the typed payload; boxed nodes still evaluate" begin
         for (name, _) in _DTC_FIELDS
-            expr = _op("fn", _v("t"); name=name)
-            nd = ESM._compile(expr, Dict{String,Int}(), Set{Symbol}(), nothing)
-            @test nd.payload isa Tuple{String,ESM._FnTypedCoreSpec}
+            expr = _op("fn", _v("t"); name = name)
+            nd = ESM._compile(expr, Dict{String, Int}(), Set{Symbol}(), nothing)
+            @test nd.payload isa Tuple{String, ESM._FnTypedCoreSpec}
             @test nd.payload[1] == name
         end
         # interp keeps its own spec family, untouched.
-        ssx = _op("fn", _v("t"), _const([0.0, 1.0, 2.0]); name="interp.searchsorted")
-        nds = ESM._compile(ssx, Dict{String,Int}(), Set{Symbol}(), nothing)
-        @test nds.payload isa Tuple{String,ESM._InterpSearchsortedSpec}
+        ssx = _op("fn", _v("t"), _const([0.0, 1.0, 2.0]); name = "interp.searchsorted")
+        nds = ESM._compile(ssx, Dict{String, Int}(), Set{Symbol}(), nothing)
+        @test nds.payload isa Tuple{String, ESM._InterpSearchsortedSpec}
 
         # NEGATIVE CONTROL: a hand-built `(name, nothing)` node — what an
         # UNDECLARED all-scalar closed fn compiles to — takes the boxed arm
         # and agrees bit-for-bit with the typed node, in both the scalar
         # walker (`_eval_node`) and the access evaluator (`_eval_acc`).
-        K0 = ESM._AccKernel(ESM._contig_cells(1), ESM._alit(0.0), ESM._AccDesc[],
-                            ESM._FixedBound(0), 0.0)
+        K0 = ESM._AccKernel(
+            ESM._contig_cells(1), ESM._alit(0.0), ESM._AccDesc[],
+            ESM._FixedBound(0), 0.0
+        )
         for t in (1462345200.0, Dates.datetime2unix(DateTime(2016, 2, 29, 23, 59, 59)))
             for (name, _) in _DTC_FIELDS
                 typednd = fnnode(name, ESM._fn_typed_core_spec(name), tnode())
@@ -173,10 +182,14 @@ end
                 vt = ESM._eval_node(typednd, Float64[], (;), t, Float64)
                 vb = ESM._eval_node(boxednd, Float64[], (;), t, Float64)
                 @test Float64(vt) === Float64(vb)
-                at = ESM._eval_acc(typednd, Float64[], (;), t, 1, 0, 1, (1, 1, 1),
-                                   K0, Float64)
-                ab = ESM._eval_acc(boxednd, Float64[], (;), t, 1, 0, 1, (1, 1, 1),
-                                   K0, Float64)
+                at = ESM._eval_acc(
+                    typednd, Float64[], (;), t, 1, 0, 1, (1, 1, 1),
+                    K0, Float64
+                )
+                ab = ESM._eval_acc(
+                    boxednd, Float64[], (;), t, 1, 0, 1, (1, 1, 1),
+                    K0, Float64
+                )
                 @test Float64(at) === Float64(ab)
                 @test Float64(at) === Float64(vt)
             end
@@ -189,16 +202,24 @@ end
         u = Float64[(-1.0)^k * (0.05 + 0.03k) for k in 1:N]
         tval = Dates.datetime2unix(DateTime(2016, 2, 29, 12))   # leap noon
         cells = ESM._CellSet([1], UnitRange{Int}[1:N], 0)
-        mkK(spine) = ESM._AccKernel(cells, spine,
-            ESM._AccDesc[ESM._AccStateAffine(0)], ESM._FixedBound(0), 0.0)
+        mkK(spine) = ESM._AccKernel(
+            cells, spine,
+            ESM._AccDesc[ESM._AccStateAffine(0)], ESM._FixedBound(0), 0.0
+        )
         # Lane-varying arg (t + u[i]·3600) through day_of_year, plus the
         # lane-invariant julian_day(t) — one spine exercising both the
         # per-lane loop and the invariant one-call broadcast.
-        spine(spec_of) = ESM._aop(:+,
-            fnnode("datetime.day_of_year", spec_of("datetime.day_of_year"),
-                   ESM._aop(:+, tnode(),
-                            ESM._aop(:*, ESM._acc(1), ESM._alit(3600.0)))),
-            fnnode("datetime.julian_day", spec_of("datetime.julian_day"), tnode()))
+        spine(spec_of) = ESM._aop(
+            :+,
+            fnnode(
+                "datetime.day_of_year", spec_of("datetime.day_of_year"),
+                ESM._aop(
+                    :+, tnode(),
+                    ESM._aop(:*, ESM._acc(1), ESM._alit(3600.0))
+                )
+            ),
+            fnnode("datetime.julian_day", spec_of("datetime.julian_day"), tnode())
+        )
 
         Kt = mkK(spine(name -> ESM._fn_typed_core_spec(name)))
         Kb = mkK(spine(name -> nothing))
@@ -231,11 +252,19 @@ end
     function _dtc_model(N)
         vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
         targ = _op("+", _v("t"), _op("*", _idx("u", _v("i")), _n(3600.0)))
-        body = _op("+",
-            _op("fn", targ; name="datetime.day_of_year"),
-            _op("*", _op("fn", _v("t"); name="datetime.julian_day"), _n(1.0e-3)))
-        ESM.Model(vars, [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
-                                      _ao1(body, "i", 1, N))])
+        body = _op(
+            "+",
+            _op("fn", targ; name = "datetime.day_of_year"),
+            _op("*", _op("fn", _v("t"); name = "datetime.julian_day"), _n(1.0e-3))
+        )
+        ESM.Model(
+            vars, [
+                ESM.Equation(
+                    _ao1(_Didx("u", _v("i")), "i", 1, N),
+                    _ao1(body, "i", 1, N)
+                ),
+            ]
+        )
     end
 
     @testset "kernel bit-identity: interpreter ≡ codegen" begin
@@ -243,8 +272,10 @@ end
         ics = Dict("u[$k]" => 0.2 + 0.15k for k in 1:N)
         function build(compiler)
             ESM._reset_cascade_tally!()
-            f, u0, p, _t, _vm, _d = ESM._build_evaluator_impl(_dtc_model(N);
-                initial_conditions=ics, compiler=compiler)
+            f, u0, p, _t, _vm, _d = ESM._build_evaluator_impl(
+                _dtc_model(N);
+                initial_conditions = ics, compiler = compiler
+            )
             return (f, u0, p, copy(ESM._CASCADE_TALLY))
         end
         fref, u0, pref, _ = build(:interpreter)
@@ -252,9 +283,11 @@ end
         @test get(cgtally, :codegen_kernel, 0) >= 1   # codegen really fired
 
         run!(f!, u, p, t) = (d = zeros(length(u)); f!(d, u, p, t); d)
-        ts = [Dates.datetime2unix(DateTime(2015, 12, 31, 23, 59, 30)),
-              Dates.datetime2unix(DateTime(2016, 2, 29, 11, 30, 15)),
-              Dates.datetime2unix(DateTime(2100, 2, 28, 23, 30, 0)) + 0.25]
+        ts = [
+            Dates.datetime2unix(DateTime(2015, 12, 31, 23, 59, 30)),
+            Dates.datetime2unix(DateTime(2016, 2, 29, 11, 30, 15)),
+            Dates.datetime2unix(DateTime(2100, 2, 28, 23, 30, 0)) + 0.25,
+        ]
         for t in ts, k in 1:3
             u = k == 1 ? copy(u0) :
                 Float64[0.4 + 0.9 * sin(1.3i + 0.7k) for i in 1:N]
@@ -308,10 +341,12 @@ end
         # `_cgT === Float64` branch) vs the scalar reference, bit-identical.
         N = 8
         ics = Dict("u[$k]" => 0.2 + 0.15k for k in 1:N)
-        fref, u0, pref, _t1, _v1, _d1 = ESM._build_evaluator_impl(_dtc_model(N);
-            initial_conditions=ics, compiler=:interpreter)
+        fref, u0, pref, _t1, _v1, _d1 = ESM._build_evaluator_impl(
+            _dtc_model(N);
+            initial_conditions = ics, compiler = :interpreter
+        )
         fcg, v0, pcg, _t2, _v2, _d2 =
-            ESM._build_evaluator_impl(_dtc_model(N); initial_conditions=ics)
+            ESM._build_evaluator_impl(_dtc_model(N); initial_conditions = ics)
         du!(f!, u, p, t) = (d = zeros(eltype(u), length(u)); f!(d, u, p, t); d)
         Jr = ForwardDiff.jacobian(uu -> du!(fref, uu, pref, t0), u0)
         Jc = ForwardDiff.jacobian(uu -> du!(fcg, uu, pcg, t0), v0)

@@ -19,39 +19,65 @@ _prt_op(op, args...) = Dict("op" => op, "args" => Any[args...])
 # can make one evaluation fault.
 function _prt_doc(nx::Int, ny::Int)
     u(i, j) = _prt_idx("u", i, j)
-    lap = _prt_op("+", u(_prt_op("-", "i", 1), "j"), u(_prt_op("+", "i", 1), "j"),
-                  u("i", _prt_op("-", "j", 1)), u("i", _prt_op("+", "j", 1)),
-                  _prt_op("*", -4, u("i", "j")))
-    faq(e) = Dict("op" => "faq", "args" => Any[], "output_idx" => Any["i", "j"],
-                  "ranges" => Dict("i" => Dict("from" => "x"), "j" => Dict("from" => "y")),
-                  "expr" => e)
+    lap = _prt_op(
+        "+", u(_prt_op("-", "i", 1), "j"), u(_prt_op("+", "i", 1), "j"),
+        u("i", _prt_op("-", "j", 1)), u("i", _prt_op("+", "j", 1)),
+        _prt_op("*", -4, u("i", "j"))
+    )
+    faq(e) = Dict(
+        "op" => "faq", "args" => Any[], "output_idx" => Any["i", "j"],
+        "ranges" => Dict("i" => Dict("from" => "x"), "j" => Dict("from" => "y")),
+        "expr" => e
+    )
     du = faq(Dict("op" => "D", "args" => Any[u("i", "j")], "wrt" => "t"))
-    rhs = faq(_prt_op("+", _prt_op("*", "k", lap),
-                      _prt_op("*", _prt_idx("F", "i", "j"),
-                              _prt_op("exp", _prt_op("*", -1, "k", "t")))))
-    return Dict{String,Any}(
+    rhs = faq(
+        _prt_op(
+            "+", _prt_op("*", "k", lap),
+            _prt_op(
+                "*", _prt_idx("F", "i", "j"),
+                _prt_op("exp", _prt_op("*", -1, "k", "t"))
+            )
+        )
+    )
+    return Dict{String, Any}(
         "esm" => "1.2.0",
         "metadata" => Dict("name" => "prt"),
-        "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => nx),
-                             "y" => Dict("kind" => "interval", "size" => ny),
-                             "n" => Dict("kind" => "interval", "size" => 3)),
-        "models" => Dict("M" => Dict(
-            "variables" => Dict(
-                "u" => Dict("type" => "unknown", "shape" => ["x", "y"], "default" => 1.0),
-                "y" => Dict("type" => "unknown", "default" => 0.0),
-                "w" => Dict("type" => "unknown", "default" => 0.0),
-                "F" => Dict("type" => "parameter", "shape" => ["x", "y"]),
-                "G" => Dict("type" => "parameter", "shape" => ["n"]),
-                "C" => Dict("type" => "parameter", "shape" => ["n"],
-                            "default" => Any[10.0, 20.0, 30.0]),
-                "k" => Dict("type" => "parameter", "default" => 0.25)),
-            "equations" => Any[
-                Dict("lhs" => du, "rhs" => rhs),
-                Dict("lhs" => _prt_op("D", "y"),
-                     "rhs" => _prt_op("+", _prt_op("*", "k", _prt_idx("F", 1, 1)),
-                                      _prt_op("*", "k", _prt_idx("F", 1, 1)))),
-                Dict("lhs" => _prt_op("D", "w"),
-                     "rhs" => _prt_idx("C", _prt_idx("G", 1)))])))
+        "index_sets" => Dict(
+            "x" => Dict("kind" => "interval", "size" => nx),
+            "y" => Dict("kind" => "interval", "size" => ny),
+            "n" => Dict("kind" => "interval", "size" => 3)
+        ),
+        "models" => Dict(
+            "M" => Dict(
+                "variables" => Dict(
+                    "u" => Dict("type" => "unknown", "shape" => ["x", "y"], "default" => 1.0),
+                    "y" => Dict("type" => "unknown", "default" => 0.0),
+                    "w" => Dict("type" => "unknown", "default" => 0.0),
+                    "F" => Dict("type" => "parameter", "shape" => ["x", "y"]),
+                    "G" => Dict("type" => "parameter", "shape" => ["n"]),
+                    "C" => Dict(
+                        "type" => "parameter", "shape" => ["n"],
+                        "default" => Any[10.0, 20.0, 30.0]
+                    ),
+                    "k" => Dict("type" => "parameter", "default" => 0.25)
+                ),
+                "equations" => Any[
+                    Dict("lhs" => du, "rhs" => rhs),
+                    Dict(
+                        "lhs" => _prt_op("D", "y"),
+                        "rhs" => _prt_op(
+                            "+", _prt_op("*", "k", _prt_idx("F", 1, 1)),
+                            _prt_op("*", "k", _prt_idx("F", 1, 1))
+                        )
+                    ),
+                    Dict(
+                        "lhs" => _prt_op("D", "w"),
+                        "rhs" => _prt_idx("C", _prt_idx("G", 1))
+                    ),
+                ]
+            )
+        )
+    )
 end
 
 _prt_bits(x) = reinterpret(UInt64, x)
@@ -59,18 +85,20 @@ _prt_bits(x) = reinterpret(UInt64, x)
 function _prt_problem(nx, ny; compiler = :native)
     F = reshape(collect(range(0.5, 2.0; length = nx * ny)), nx, ny)
     G = [2.0, 1.0, 3.0]
-    return esm_problem(_prt_doc(nx, ny), (0.0, 1.0); compiler = compiler,
-                       param_arrays = Dict("M.F" => F, "M.G" => G))
+    return esm_problem(
+        _prt_doc(nx, ny), (0.0, 1.0); compiler = compiler,
+        param_arrays = Dict("M.F" => F, "M.G" => G)
+    )
 end
 
 _prt_alloc(du, x, ws, u, aux, p, t, fs) = @allocated rhs!(du, x, ws, u, aux, p, t, fs)
 
 # Every object reachable from `f`, by identity.
 function _prt_objects(f)
-    seen = IdDict{Any,Nothing}()
+    seen = IdDict{Any, Nothing}()
     function walk(x)
         isbits(x) && return
-        x isa Union{String,Symbol,Expr,Module,DataType,UnionAll,Core.TypeName,Method} && return
+        x isa Union{String, Symbol, Expr, Module, DataType, UnionAll, Core.TypeName, Method} && return
         haskey(seen, x) && return
         seen[x] = nothing
         if x isa Array
@@ -78,7 +106,7 @@ function _prt_objects(f)
             foreach(i -> isassigned(x, i) && walk(x[i]), eachindex(x))
             return
         end
-        foreach(i -> isdefined(x, i) && walk(getfield(x, i)), 1:nfields(x))
+        return foreach(i -> isdefined(x, i) && walk(getfield(x, i)), 1:nfields(x))
     end
     walk(f)
     return seen
@@ -89,10 +117,10 @@ _prt_is_data(x) = x isa Array && isbitstype(eltype(x))
 # Every `_SecTCache` reachable from `f`.
 function _prt_tcaches(f)
     out = Any[]
-    seen = IdDict{Any,Nothing}()
+    seen = IdDict{Any, Nothing}()
     function walk(x)
         isbits(x) && return
-        x isa Union{String,Symbol,Expr,Module,DataType} && return
+        x isa Union{String, Symbol, Expr, Module, DataType} && return
         haskey(seen, x) && return
         seen[x] = nothing
         x isa PRT._SecTCache && (push!(out, x); return)
@@ -101,7 +129,7 @@ function _prt_tcaches(f)
             foreach(i -> isassigned(x, i) && walk(x[i]), eachindex(x))
             return
         end
-        foreach(i -> isdefined(x, i) && walk(getfield(x, i)), 1:nfields(x))
+        return foreach(i -> isdefined(x, i) && walk(getfield(x, i)), 1:nfields(x))
     end
     walk(f)
     return out
@@ -163,8 +191,10 @@ end
 
     @testset "state layout" begin
         @test n_states(prog) == L.n_u == nx * ny + 2
-        @test state_layout(prog) == [StateBlock("M.w", 1, Int[]), StateBlock("M.y", 2, Int[]),
-                                     StateBlock("M.u", 3, [nx, ny])]
+        @test state_layout(prog) == [
+            StateBlock("M.w", 1, Int[]), StateBlock("M.y", 2, Int[]),
+            StateBlock("M.u", 3, [nx, ny]),
+        ]
     end
 
     fs = default_forcing_set(prog)
@@ -180,8 +210,10 @@ end
         @test _prt_bits.(du) == _prt_bits.(G)
         iprob = _prt_problem(nx, ny; compiler = :interpreter)
         iprog = rhs_program(iprob)
-        rhs!(du, iprog, rhs_workspace(iprog), u0, noaux, parameter_vector(iprog), 0.3,
-             default_forcing_set(iprog))
+        rhs!(
+            du, iprog, rhs_workspace(iprog), u0, noaux, parameter_vector(iprog), 0.3,
+            default_forcing_set(iprog)
+        )
         @test du ≈ G
     end
 
@@ -197,7 +229,7 @@ end
     draws = [(0.5 .+ rand(rng, L.n_u), [0.1 + 0.4 * rand(rng)], rand(rng)) for _ in 1:8]
     F2 = 3.0 .* fs.bufs[1]
     sets = [fs, replace_forcing(fs, 1, F2)]
-    ref = Dict{Tuple{Int,Int},Vector{Float64}}()
+    ref = Dict{Tuple{Int, Int}, Vector{Float64}}()
     for (i, (u, p, t)) in enumerate(draws), k in 1:2
         du = fill(NaN, L.n_u)
         rhs!(du, prog, rhs_workspace(prog), u, noaux, p, t, sets[k])
@@ -323,8 +355,10 @@ end
         kinds = prog.shared.factory.kinds
         @test !isempty(kinds) && !any(x -> haskey(kinds, x), keys(o1))
         @test !isempty(w1.caches)
-        @test all(c -> !haskey(o2, c.f64) && !haskey(ot, c.f64),
-                  [c for c in w1.caches if c isa PRT._CSECache])
+        @test all(
+            c -> !haskey(o2, c.f64) && !haskey(ot, c.f64),
+            [c for c in w1.caches if c isa PRT._CSECache]
+        )
         @test all(b -> isempty(b) || !haskey(o2, b), w1.fbufs)
         # Evaluating leaves every shared array as it was.
         shared = [x for x in keys(o1) if haskey(o2, x) && _prt_is_data(x)]
@@ -381,8 +415,10 @@ end
         rhs!(du, other, rhs_workspace(other), u, noaux, p, t, fs)
         @test _prt_bits.(du) == _prt_bits.(ref[(1, 1)])
         sel = select(prog)
-        @test_throws ArgumentError rhs!(fill(NaN, tile_layout(sel).n_u), sel,
-                                        rhs_workspace(prog), u, noaux, p, t, fs)
+        @test_throws ArgumentError rhs!(
+            fill(NaN, tile_layout(sel).n_u), sel,
+            rhs_workspace(prog), u, noaux, p, t, fs
+        )
     end
 
     @static if VERSION >= v"1.12"
@@ -405,25 +441,39 @@ end
 # domain throws midway through refilling a tier.
 function _prt_fault_doc()
     two(e) = _prt_op("+", e, e)
-    return Dict{String,Any}(
+    return Dict{String, Any}(
         "esm" => "1.2.0",
         "metadata" => Dict("name" => "prt_fault"),
-        "models" => Dict("M" => Dict(
-            "variables" => Dict(
-                "a" => Dict("type" => "unknown", "default" => 0.0),
-                "b" => Dict("type" => "unknown", "default" => 0.0),
-                "c" => Dict("type" => "unknown", "default" => 0.0),
-                "d" => Dict("type" => "unknown", "default" => 0.0),
-                "k" => Dict("type" => "parameter", "default" => 0.5)),
-            "equations" => Any[
-                Dict("lhs" => _prt_op("D", "a"),
-                     "rhs" => _prt_op("+", two(_prt_op("exp", "k")), two(_prt_op("*", "k", "k")))),
-                Dict("lhs" => _prt_op("D", "b"), "rhs" => two(_prt_op("log", "k"))),
-                Dict("lhs" => _prt_op("D", "c"),
-                     "rhs" => _prt_op("+", two(_prt_op("exp", _prt_op("*", "k", "t"))),
-                                      two(_prt_op("cos", "t")))),
-                Dict("lhs" => _prt_op("D", "d"),
-                     "rhs" => two(_prt_op("log", _prt_op("-", 2, "t"))))])))
+        "models" => Dict(
+            "M" => Dict(
+                "variables" => Dict(
+                    "a" => Dict("type" => "unknown", "default" => 0.0),
+                    "b" => Dict("type" => "unknown", "default" => 0.0),
+                    "c" => Dict("type" => "unknown", "default" => 0.0),
+                    "d" => Dict("type" => "unknown", "default" => 0.0),
+                    "k" => Dict("type" => "parameter", "default" => 0.5)
+                ),
+                "equations" => Any[
+                    Dict(
+                        "lhs" => _prt_op("D", "a"),
+                        "rhs" => _prt_op("+", two(_prt_op("exp", "k")), two(_prt_op("*", "k", "k")))
+                    ),
+                    Dict("lhs" => _prt_op("D", "b"), "rhs" => two(_prt_op("log", "k"))),
+                    Dict(
+                        "lhs" => _prt_op("D", "c"),
+                        "rhs" => _prt_op(
+                            "+", two(_prt_op("exp", _prt_op("*", "k", "t"))),
+                            two(_prt_op("cos", "t"))
+                        )
+                    ),
+                    Dict(
+                        "lhs" => _prt_op("D", "d"),
+                        "rhs" => two(_prt_op("log", _prt_op("-", 2, "t")))
+                    ),
+                ]
+            )
+        )
+    )
 end
 
 @testset "a call that throws leaves no stale cache" begin
@@ -449,20 +499,32 @@ end
 # A shaped parameter with a document default, as const data (the default) or
 # as a run-time input.
 function _prt_ap_doc(n::Int)
-    faq(e) = Dict("op" => "faq", "args" => Any[], "output_idx" => Any["i"],
-                  "ranges" => Dict("i" => Dict("from" => "x")), "expr" => e)
-    return Dict{String,Any}(
+    faq(e) = Dict(
+        "op" => "faq", "args" => Any[], "output_idx" => Any["i"],
+        "ranges" => Dict("i" => Dict("from" => "x")), "expr" => e
+    )
+    return Dict{String, Any}(
         "esm" => "1.2.0",
         "metadata" => Dict("name" => "prt_ap"),
         "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => n)),
-        "models" => Dict("M" => Dict(
-            "variables" => Dict(
-                "u" => Dict("type" => "unknown", "shape" => ["x"], "default" => 1.0),
-                "K" => Dict("type" => "parameter", "shape" => ["x"],
-                            "default" => Any[0.1 * i for i in 1:n])),
-            "equations" => Any[Dict(
-                "lhs" => faq(Dict("op" => "D", "args" => Any[_prt_idx("u", "i")], "wrt" => "t")),
-                "rhs" => faq(_prt_op("*", -1, _prt_idx("K", "i"), _prt_idx("u", "i"))))])))
+        "models" => Dict(
+            "M" => Dict(
+                "variables" => Dict(
+                    "u" => Dict("type" => "unknown", "shape" => ["x"], "default" => 1.0),
+                    "K" => Dict(
+                        "type" => "parameter", "shape" => ["x"],
+                        "default" => Any[0.1 * i for i in 1:n]
+                    )
+                ),
+                "equations" => Any[
+                    Dict(
+                        "lhs" => faq(Dict("op" => "D", "args" => Any[_prt_idx("u", "i")], "wrt" => "t")),
+                        "rhs" => faq(_prt_op("*", -1, _prt_idx("K", "i"), _prt_idx("u", "i")))
+                    ),
+                ]
+            )
+        )
+    )
 end
 
 @testset "runtime_array_parameters" begin
@@ -481,8 +543,10 @@ end
     baked.f!(G, u, baked.p, 0.0)
     @test du ≈ G
     K2 = collect(range(1.0, 2.0; length = n))
-    rhs!(du, prog, rhs_workspace(prog), u, Float64[], parameter_vector(prog), 0.0,
-         replace_forcing(fs, 1, K2))
+    rhs!(
+        du, prog, rhs_workspace(prog), u, Float64[], parameter_vector(prog), 0.0,
+        replace_forcing(fs, 1, K2)
+    )
     @test du ≈ -K2 .* u
 end
 
@@ -492,8 +556,10 @@ end
     u = collect(1.0:n)
     pv = Float64[]
     off = esm_problem(_prt_ap_doc(n), (0.0, 1.0); const_arrays = Dict("M.K" => Kc))
-    on = esm_problem(_prt_ap_doc(n), (0.0, 1.0); const_arrays = Dict("M.K" => Kc),
-                     runtime_array_parameters = true)
+    on = esm_problem(
+        _prt_ap_doc(n), (0.0, 1.0); const_arrays = Dict("M.K" => Kc),
+        runtime_array_parameters = true
+    )
     # Off: the caller's array is build-time data, no slot.
     poff = rhs_program(off)
     @test isempty(forcing_slots(poff))
@@ -518,24 +584,44 @@ end
 
 # A pointwise operator a lane program serves: `D(u[i, j]) = F[i, j] - k·u[i, j]`.
 function _prt_lane_doc(nx::Int, ny::Int)
-    faq(e) = Dict("op" => "faq", "args" => Any[], "output_idx" => Any["i", "j"],
-                  "ranges" => Dict("i" => Dict("from" => "x"), "j" => Dict("from" => "y")),
-                  "expr" => e)
-    return Dict{String,Any}(
+    faq(e) = Dict(
+        "op" => "faq", "args" => Any[], "output_idx" => Any["i", "j"],
+        "ranges" => Dict("i" => Dict("from" => "x"), "j" => Dict("from" => "y")),
+        "expr" => e
+    )
+    return Dict{String, Any}(
         "esm" => "1.2.0",
         "metadata" => Dict("name" => "prt_lane"),
-        "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => nx),
-                             "y" => Dict("kind" => "interval", "size" => ny)),
-        "models" => Dict("M" => Dict(
-            "variables" => Dict(
-                "u" => Dict("type" => "unknown", "shape" => ["x", "y"], "default" => 1.0),
-                "F" => Dict("type" => "parameter", "shape" => ["x", "y"]),
-                "k" => Dict("type" => "parameter", "default" => 0.25)),
-            "equations" => Any[Dict(
-                "lhs" => faq(Dict("op" => "D", "args" => Any[_prt_idx("u", "i", "j")],
-                                  "wrt" => "t")),
-                "rhs" => faq(_prt_op("-", _prt_idx("F", "i", "j"),
-                                     _prt_op("*", "k", _prt_idx("u", "i", "j")))))])))
+        "index_sets" => Dict(
+            "x" => Dict("kind" => "interval", "size" => nx),
+            "y" => Dict("kind" => "interval", "size" => ny)
+        ),
+        "models" => Dict(
+            "M" => Dict(
+                "variables" => Dict(
+                    "u" => Dict("type" => "unknown", "shape" => ["x", "y"], "default" => 1.0),
+                    "F" => Dict("type" => "parameter", "shape" => ["x", "y"]),
+                    "k" => Dict("type" => "parameter", "default" => 0.25)
+                ),
+                "equations" => Any[
+                    Dict(
+                        "lhs" => faq(
+                            Dict(
+                                "op" => "D", "args" => Any[_prt_idx("u", "i", "j")],
+                                "wrt" => "t"
+                            )
+                        ),
+                        "rhs" => faq(
+                            _prt_op(
+                                "-", _prt_idx("F", "i", "j"),
+                                _prt_op("*", "k", _prt_idx("u", "i", "j"))
+                            )
+                        )
+                    ),
+                ]
+            )
+        )
+    )
 end
 
 @testset "lanes on workspaces" begin
@@ -548,8 +634,10 @@ end
     fs2 = replace_forcing(fs, 1, 5.0 .* F)
     u = collect(range(0.5, 1.5; length = nx * ny))
     p = parameter_vector(prog)
-    whole(s) = (d = fill(NaN, nx * ny);
-                rhs!(d, prog, rhs_workspace(prog), u, Float64[], p, 0.0, s); d)
+    whole(s) = (
+        d = fill(NaN, nx * ny);
+        rhs!(d, prog, rhs_workspace(prog), u, Float64[], p, 0.0, s); d
+    )
     G1, G2 = whole(fs), whole(fs2)
     @test G1 != G2
     allcells = [(i, j) for j in 1:ny for i in 1:nx]
@@ -558,13 +646,15 @@ end
         ul = Float64[u[(cells[2, l] - 1) * nx + cells[1, l]] for l in 1:nl]
         dl = fill(NaN, nl)
         li === nothing ? rhs!(dl, lp, ws, ul, Float64[], p, 0.0, s, cells, nl) :
-                         rhs!(dl, lp, ws, ul, Float64[], p, 0.0, li, cells, nl)
+            rhs!(dl, lp, ws, ul, Float64[], p, 0.0, li, cells, nl)
         return dl
     end
     expect(G, cells) = Float64[G[(cells[2, l] - 1) * nx + cells[1, l]] for l in axes(cells, 2)]
     rng = Xoshiro(7)
-    batches = [Int32[c[d] for d in 1:2, c in allcells[randperm(rng, nx * ny)[1:k]]]
-               for k in (1, 5, nx * ny)]
+    batches = [
+        Int32[c[d] for d in 1:2, c in allcells[randperm(rng, nx * ny)[1:k]]]
+            for k in (1, 5, nx * ny)
+    ]
     # Distinct workspaces on concurrent tasks; every per-call buffer is theirs.
     ok = fill(false, 16)
     @sync for q in 1:16
@@ -574,7 +664,7 @@ end
             for r in 1:20, (bi, cells) in enumerate(batches)
                 local s, G = isodd(q + r + bi) ? (fs, G1) : (fs2, G2)
                 good &= reinterpret(UInt64, batch(ws, s, cells)) ==
-                        reinterpret(UInt64, expect(G, cells))
+                    reinterpret(UInt64, expect(G, cells))
             end
             ok[q] = good
         end
@@ -599,13 +689,17 @@ end
     @test batch(ws, fs2, cells; li = li) == expect(G2, cells)
     # Inputs, sets and batches that do not fit are refused before any write.
     other = rhs_program(esm_problem(_prt_ap_doc(3), (0.0, 1.0); runtime_array_parameters = true))
-    @test_throws ArgumentError gather_lane_inputs!(li, lp, p, 0.0, default_forcing_set(other),
-                                                   cells, nb)
+    @test_throws ArgumentError gather_lane_inputs!(
+        li, lp, p, 0.0, default_forcing_set(other),
+        cells, nb
+    )
     @test_throws DimensionMismatch gather_lane_inputs!(li, lp, p, 0.0, fs, cells, 0)
     @test_throws DimensionMismatch gather_lane_inputs!(li, lp, p, 0.0, fs, cells, nb + 1)
     @test_throws DimensionMismatch gather_lane_inputs!(li, lp, p, 0.0, fs, cells[1:1, :], nb)
-    @test_throws DimensionMismatch gather_lane_inputs!(li, lp, p, 0.0, fs, cells[:, 1:(nb - 1)],
-                                                       nb - 1)
+    @test_throws DimensionMismatch gather_lane_inputs!(
+        li, lp, p, 0.0, fs, cells[:, 1:(nb - 1)],
+        nb - 1
+    )
     lp2 = lanes(prog, :cells, ["x", "y"])
     @test_throws ArgumentError gather_lane_inputs!(lane_inputs(lp2, nb), lp, p, 0.0, fs, cells, nb)
     @test_throws ArgumentError rhs!(db, lp, ws, ub, noaux, p, 0.0, lane_inputs(lp2, nb), cells, nb)
@@ -614,8 +708,10 @@ end
     @test_throws DimensionMismatch rhs!(db, lp, ws, ub, noaux, Float64[], 0.0, fs, cells, nb)
     # A tile of the same operator on its own workspace.
     dec = Decomposition(axes = ["x" => (period = nothing,), "y" => (period = nothing,)])
-    tile = restrict(prog, dec; owned = ("x" => 1:4, "y" => 2:4),
-                    storage = ("x" => 1:4, "y" => 2:4))
+    tile = restrict(
+        prog, dec; owned = ("x" => 1:4, "y" => 2:4),
+        storage = ("x" => 1:4, "y" => 2:4)
+    )
     T = tile_layout(tile)
     b = only(T.u)
     uS = vec(Float64[u[(c[2] - 1) * nx + c[1]] for c in CartesianIndices(Tuple(b.storage))])
@@ -623,9 +719,11 @@ end
     tws = rhs_workspace(tile)
     rhs!(duS, tile, tws, uS, Float64[], p, 0.0, fs2)
     @test_throws DimensionMismatch rhs!(duS, tile, tws, uS, Float64[], [p; p], 0.0, fs2)
-    @test all(c -> reinterpret(UInt64, duS[PRT._tile_slot(b, (c[1], c[2]))]) ==
-                   reinterpret(UInt64, G2[(c[2] - 1) * nx + c[1]]),
-              CartesianIndices(Tuple(b.owned)))
+    @test all(
+        c -> reinterpret(UInt64, duS[PRT._tile_slot(b, (c[1], c[2]))]) ==
+            reinterpret(UInt64, G2[(c[2] - 1) * nx + c[1]]),
+        CartesianIndices(Tuple(b.owned))
+    )
     @static if VERSION >= v"1.12"
         nb = size(cells, 2)
         ub = zeros(nb)
@@ -649,38 +747,66 @@ end
 # A scalar parameter fed by a data source is a 0-d forcing slot, not a
 # parameter; a shaped one is a slot of its shape.
 function _prt_fed_doc(n::Int)
-    faq(e) = Dict("op" => "faq", "args" => Any[], "output_idx" => Any["i"],
-                  "ranges" => Dict("i" => Dict("from" => "x")), "expr" => e)
+    faq(e) = Dict(
+        "op" => "faq", "args" => Any[], "output_idx" => Any["i"],
+        "ranges" => Dict("i" => Dict("from" => "x")), "expr" => e
+    )
     fed(fv) = Dict("kind" => "data", "source" => "met", "from" => Dict("file_variable" => fv))
-    return Dict{String,Any}(
+    return Dict{String, Any}(
         "esm" => "1.2.0",
         "metadata" => Dict("name" => "prt_fed"),
         "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => n)),
-        "data_sources" => Dict("met" => Dict("kind" => "grid",
-                                             "source" => Dict("url_template" => "file:///met.nc"))),
-        "models" => Dict("M" => Dict(
-            "variables" => Dict(
-                "u" => Dict("type" => "unknown", "shape" => ["x"], "default" => 1.0),
-                "y" => Dict("type" => "unknown", "default" => 0.0),
-                "s" => Dict("type" => "parameter", "shape" => Any[], "default" => 2.0,
-                            "update" => fed("s")),
-                "E" => Dict("type" => "parameter", "shape" => ["x"], "default" => 0.5,
-                            "update" => fed("E")),
-                "k" => Dict("type" => "parameter", "default" => 0.25)),
-            "equations" => Any[
-                Dict("lhs" => faq(Dict("op" => "D", "args" => Any[_prt_idx("u", "i")],
-                                       "wrt" => "t")),
-                     "rhs" => faq(_prt_op("-", _prt_op("*", "s", _prt_idx("E", "i")),
-                                          _prt_op("*", "k", _prt_idx("u", "i"))))),
-                Dict("lhs" => _prt_op("D", "y"), "rhs" => _prt_op("*", "s", "k"))])))
+        "data_sources" => Dict(
+            "met" => Dict(
+                "kind" => "grid",
+                "source" => Dict("url_template" => "file:///met.nc")
+            )
+        ),
+        "models" => Dict(
+            "M" => Dict(
+                "variables" => Dict(
+                    "u" => Dict("type" => "unknown", "shape" => ["x"], "default" => 1.0),
+                    "y" => Dict("type" => "unknown", "default" => 0.0),
+                    "s" => Dict(
+                        "type" => "parameter", "shape" => Any[], "default" => 2.0,
+                        "update" => fed("s")
+                    ),
+                    "E" => Dict(
+                        "type" => "parameter", "shape" => ["x"], "default" => 0.5,
+                        "update" => fed("E")
+                    ),
+                    "k" => Dict("type" => "parameter", "default" => 0.25)
+                ),
+                "equations" => Any[
+                    Dict(
+                        "lhs" => faq(
+                            Dict(
+                                "op" => "D", "args" => Any[_prt_idx("u", "i")],
+                                "wrt" => "t"
+                            )
+                        ),
+                        "rhs" => faq(
+                            _prt_op(
+                                "-", _prt_op("*", "s", _prt_idx("E", "i")),
+                                _prt_op("*", "k", _prt_idx("u", "i"))
+                            )
+                        )
+                    ),
+                    Dict("lhs" => _prt_op("D", "y"), "rhs" => _prt_op("*", "s", "k")),
+                ]
+            )
+        )
+    )
 end
 
 @testset "externally fed parameters are forcing slots" begin
     n = 5
     prob = esm_problem(_prt_fed_doc(n), (0.0, 1.0))
     prog = rhs_program(prob)
-    @test forcing_slots(prog) == [ForcingSlot("M.E", [n], :forcing),
-                                  ForcingSlot("M.s", Int[], :forcing)]
+    @test forcing_slots(prog) == [
+        ForcingSlot("M.E", [n], :forcing),
+        ForcingSlot("M.s", Int[], :forcing),
+    ]
     @test parameters(prog) == [ParamSlot("M.k", 0.25)]
     D = default_forcing_set(prog)
     @test D.bufs == [fill(0.5, n), [2.0]]

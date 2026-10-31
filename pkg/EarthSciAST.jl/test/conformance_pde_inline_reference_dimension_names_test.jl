@@ -23,9 +23,11 @@ import OrdinaryDiffEqTsit5
 include("testutils.jl")  # TESTUTILS_REPO_ROOT
 
 const _RDN_REPO_ROOT = TESTUTILS_REPO_ROOT
-const _RDN_CAT_DIR   = joinpath(_RDN_REPO_ROOT, "tests", "conformance",
-                                "pde_inline_reference_dimension_names")
-const _RDN_MANIFEST  = joinpath(_RDN_CAT_DIR, "manifest.json")
+const _RDN_CAT_DIR = joinpath(
+    _RDN_REPO_ROOT, "tests", "conformance",
+    "pde_inline_reference_dimension_names"
+)
+const _RDN_MANIFEST = joinpath(_RDN_CAT_DIR, "manifest.json")
 
 @testset "Conformance: pde_inline_reference_dimension_names (manifest-driven)" begin
     @test isfile(_RDN_MANIFEST)
@@ -49,7 +51,7 @@ const _RDN_MANIFEST  = joinpath(_RDN_CAT_DIR, "manifest.json")
     for fixture in manifest.fixtures
         id = String(fixture.id)
         @testset "$(id)" begin
-            esm_path    = joinpath(_RDN_CAT_DIR, String(fixture.path))
+            esm_path = joinpath(_RDN_CAT_DIR, String(fixture.path))
             golden_path = joinpath(_RDN_CAT_DIR, String(fixture.golden))
             @test isfile(esm_path)
             @test isfile(golden_path)
@@ -57,9 +59,11 @@ const _RDN_MANIFEST  = joinpath(_RDN_CAT_DIR, "manifest.json")
             golden = JSON3.read(read(golden_path, String))
             @test String(golden.reference_binding) == "julia"
 
-            results = run_inline_tests(esm_path; model_name=String(fixture.model),
-                                    alg=OrdinaryDiffEqTsit5.Tsit5(),
-                                    reltol=solver_reltol, abstol=solver_abstol)
+            results = run_inline_tests(
+                esm_path; model_name = String(fixture.model),
+                alg = OrdinaryDiffEqTsit5.Tsit5(),
+                reltol = solver_reltol, abstol = solver_abstol
+            )
             @test length(results) == length(golden.assertions)
 
             # Index by assertion_idx and gate each against BOTH the golden
@@ -73,7 +77,7 @@ const _RDN_MANIFEST  = joinpath(_RDN_CAT_DIR, "manifest.json")
                 @test r.variable == String(g.variable)
                 @test r.passed
                 @test r.actual !== nothing
-                @test isapprox(r.actual, Float64(g.actual); rtol=rtol, atol=atol)
+                @test isapprox(r.actual, Float64(g.actual); rtol = rtol, atol = atol)
             end
             for decl in fixture.assertions
                 r = by_idx[Int(decl.assertion_idx)]

@@ -75,8 +75,8 @@ Base.showerror(io::IO, e::SimulateError) =
 # duplicating the literals; they are what `solve(prob, alg)` uses when the
 # caller names no `reltol` / `abstol`.
 # --------------------------------------------------------------------------- #
-const DEFAULT_SIM_RELTOL = 1e-4
-const DEFAULT_SIM_ABSTOL = 1e-6
+const DEFAULT_SIM_RELTOL = 1.0e-4
+const DEFAULT_SIM_ABSTOL = 1.0e-6
 
 # --------------------------------------------------------------------------- #
 # Input coercion: path | native Dict | EsmFile | FlattenedSystem → a runnable
@@ -142,9 +142,12 @@ function _refuse_unsupported_major_version(version)
     m === nothing && return nothing
     supported = parse(Int, match(r"^(\d+)\.", SCHEMA_VERSION).captures[1])
     major = parse(Int, m.captures[1])
-    major == supported || throw(ParseError(
-        "Unsupported major version $major. This library supports major version " *
-        "$supported only."))
+    major == supported || throw(
+        ParseError(
+            "Unsupported major version $major. This library supports major version " *
+                "$supported only."
+        )
+    )
     return nothing
 end
 
@@ -156,8 +159,12 @@ function _refuse_reserved_declaration_names(file::EsmFile)
     errors = _check_reserved_file_names!(StructuralError[], file)
     isempty(errors) && return nothing
     e = first(errors)
-    throw(ParseError("[$(e.error_type)] $(e.path): $(e.message) (esm-spec §4.9.1.1)";
-                     code=e.error_type, path=e.path, details=e.details))
+    throw(
+        ParseError(
+            "[$(e.error_type)] $(e.path): $(e.message) (esm-spec §4.9.1.1)";
+            code = e.error_type, path = e.path, details = e.details
+        )
+    )
 end
 
 # esm-spec §9.6.6 `callback_unregistered`: an equation that reads a variable a
@@ -165,7 +172,7 @@ end
 # only a registered callback supplies. Nothing registers one at construction, so
 # a build would read a placeholder the document does not describe.
 function _refuse_unregistered_callback_reads(file::EsmFile)
-    injected = Dict{String,String}()          # variable name => callback_id
+    injected = Dict{String, String}()          # variable name => callback_id
     for entry in file.coupling
         entry isa CouplingCallback || continue
         cfg = entry.config
@@ -183,18 +190,24 @@ function _refuse_unregistered_callback_reads(file::EsmFile)
     return nothing
 end
 
-function _refuse_callback_reads_in(model::Model, path::AbstractString,
-                                   injected::AbstractDict{String,String})
+function _refuse_callback_reads_in(
+        model::Model, path::AbstractString,
+        injected::AbstractDict{String, String}
+    )
     for eq in model.equations, side in (eq.lhs, eq.rhs)
         for v in sort!(collect(free_variables(side)))
             haskey(model.variables, v) && continue
             id = get(injected, v, nothing)
             id === nothing && continue
-            throw(TreeWalkError(ERROR_CODES.CALLBACK_UNREGISTERED,
-                "'$path' reads '$v', which the `callback` coupling '$id' supplies, " *
-                "but no callback is registered to supply it at construction; refusing " *
-                "the build rather than reading a value the document does not give " *
-                "(esm-spec §9.6.6)"))
+            throw(
+                TreeWalkError(
+                    ERROR_CODES.CALLBACK_UNREGISTERED,
+                    "'$path' reads '$v', which the `callback` coupling '$id' supplies, " *
+                        "but no callback is registered to supply it at construction; refusing " *
+                        "the build rather than reading a value the document does not give " *
+                        "(esm-spec §9.6.6)"
+                )
+            )
         end
     end
     for (sub_name, sub) in model.subsystems
@@ -220,8 +233,12 @@ function _refuse_reference_integrity_errors(file::EsmFile; supplied_names = ())
         # `param_arrays` or `providers` key — is in scope for this build.
         e.error_type == ERROR_CODES.UNDEFINED_VARIABLE &&
             get(e.details, "variable", nothing) in supplied_names && continue
-        throw(ParseError("[$(e.error_type)] $(e.path): $(e.message) (esm-libraries-spec §2.5.2)";
-                         code=e.error_type, path=e.path, details=e.details))
+        throw(
+            ParseError(
+                "[$(e.error_type)] $(e.path): $(e.message) (esm-libraries-spec §2.5.2)";
+                code = e.error_type, path = e.path, details = e.details
+            )
+        )
     end
     return nothing
 end
@@ -233,17 +250,19 @@ end
 # `FlattenMetadata`, so this out-parameter is the only channel a caller's
 # `parameter_overrides` / `initial_conditions` keys have to reach it. Optional so
 # the existing callers that want only the doc are unchanged.
-function _prepare_run_doc(input; metaparameters::AbstractDict = Dict{String,Int}(),
-                          base_path::AbstractString = pwd(),
-                          renames_out::Union{Nothing,AbstractDict} = nothing,
-                          supplied_names = (),
-                          flat_out::Union{Nothing,Base.RefValue{Any}} = nothing)
+function _prepare_run_doc(
+        input; metaparameters::AbstractDict = Dict{String, Int}(),
+        base_path::AbstractString = pwd(),
+        renames_out::Union{Nothing, AbstractDict} = nothing,
+        supplied_names = (),
+        flat_out::Union{Nothing, Base.RefValue{Any}} = nothing
+    )
     if input isa AbstractString
         isfile(input) || throw(SimulateError("simulate: no such file '$input'"))
-        input = load_path(input; metaparameters=metaparameters)
+        input = load_path(input; metaparameters = metaparameters)
     end
     if input isa AbstractDict
-        input = load_document(input; base_path=base_path, metaparameters=metaparameters)
+        input = load_document(input; base_path = base_path, metaparameters = metaparameters)
     end
     # Capture the verbatim document-scoped `coordinates` registry (RFC §8.3) BEFORE
     # flattening drops it (it rides on `EsmFile`, not `FlattenedSystem`); re-inject
@@ -265,7 +284,7 @@ function _prepare_run_doc(input; metaparameters::AbstractDict = Dict{String,Int}
         _refuse_unsupported_major_version(input.esm)
         _refuse_reserved_declaration_names(input)
         _refuse_unregistered_callback_reads(input)
-        _refuse_reference_integrity_errors(input; supplied_names=supplied_names)
+        _refuse_reference_integrity_errors(input; supplied_names = supplied_names)
         run_coordinates = input.coordinates
         run_solver = input.solver
         for (mname, model) in something(input.models, ())
@@ -296,18 +315,28 @@ function _prepare_run_doc(input; metaparameters::AbstractDict = Dict{String,Int}
             merge!(renames_out, input.metadata.merged_variable_renames)
         # The last point the per-term provenance (`equation_contributions`) is
         # still in hand: `rhs_program` selects operators from it.
-        flat_out === nothing || (flat_out[] = (flat = input, coordinates = run_coordinates,
-                                               solver = run_solver, init = run_init))
+        flat_out === nothing || (
+            flat_out[] = (
+                flat = input, coordinates = run_coordinates,
+                solver = run_solver, init = run_init,
+            )
+        )
         return _flat_run_doc(input, run_coordinates, run_solver, run_init)
     end
-    throw(SimulateError("simulate: unsupported input of type $(typeof(input)); " *
-                        "pass a path, EsmFile, FlattenedSystem, or native ESM Dict"))
+    throw(
+        SimulateError(
+            "simulate: unsupported input of type $(typeof(input)); " *
+                "pass a path, EsmFile, FlattenedSystem, or native ESM Dict"
+        )
+    )
 end
 
 # The run document of the table-lowered flattened system `input`, with the
 # document-scoped blocks flatten does not carry re-attached.
-function _flat_run_doc(input::FlattenedSystem, run_coordinates, run_solver,
-                       run_init::Vector{Equation})
+function _flat_run_doc(
+        input::FlattenedSystem, run_coordinates, run_solver,
+        run_init::Vector{Equation}
+    )
     # Surviving references are THE behavior: they ride through
     # `flattened_to_esm` to the build boundary, where `_build_evaluator_impl`
     # expands them with SITE RECORDING — the SINGLE evaluator-side expansion
@@ -363,10 +392,16 @@ function _collect_initialization_faqs!(out::Vector{Equation}, model::Model, pref
         push!(local_names, sub_name)
     end
     for eq in model.initialization_equations
-        (eq.lhs isa VarExpr && eq.rhs isa OpExpr && _is_faq_op(eq.rhs.op) &&
-         eq.rhs.output_idx !== nothing && !isempty(eq.rhs.output_idx)) || continue
-        push!(out, Equation(namespace_expr(eq.lhs, prefix, local_names),
-                            namespace_expr(eq.rhs, prefix, local_names)))
+        (
+            eq.lhs isa VarExpr && eq.rhs isa OpExpr && _is_faq_op(eq.rhs.op) &&
+                eq.rhs.output_idx !== nothing && !isempty(eq.rhs.output_idx)
+        ) || continue
+        push!(
+            out, Equation(
+                namespace_expr(eq.lhs, prefix, local_names),
+                namespace_expr(eq.rhs, prefix, local_names)
+            )
+        )
     end
     for (sub_name, sub_model) in model.subsystems
         sub_model isa Model || continue
@@ -380,8 +415,10 @@ end
 # a key may be a scalar name, an explicit element `name[i,j]`, or a bare array
 # name that broadcasts a single value over every element of that array.
 # --------------------------------------------------------------------------- #
-function _apply_initial_conditions!(u0::Vector{Float64}, var_map::AbstractDict,
-                                    ics::AbstractDict)
+function _apply_initial_conditions!(
+        u0::Vector{Float64}, var_map::AbstractDict,
+        ics::AbstractDict
+    )
     isempty(ics) && return u0
     # esm-spec §6.6.2 keys `initial_conditions` by LOCAL variable name (`u`),
     # but every document front-door reaches the run through `flatten`, which
@@ -405,11 +442,11 @@ function _apply_initial_conditions!(u0::Vector{Float64}, var_map::AbstractDict,
     # what a broadcast scalar writes, and the multi-index is what INLINE ARRAY
     # DATA (esm-spec §6.3 / §6.6.2) is read at, so a whole authored profile
     # lands cell-for-cell rather than by flat position.
-    cells_of = Dict{String,Vector{Tuple{Vector{Int},Int}}}()
+    cells_of = Dict{String, Vector{Tuple{Vector{Int}, Int}}}()
     for (vname, idx) in var_map
         parsed = _parse_cell_key(String(vname))
         parsed === nothing && continue
-        push!(get!(cells_of, parsed[1], Tuple{Vector{Int},Int}[]), (parsed[2], idx))
+        push!(get!(cells_of, parsed[1], Tuple{Vector{Int}, Int}[]), (parsed[2], idx))
     end
     base_names = Set{String}(keys(cells_of))
     element_alias = _suffix_alias_groups(element_names)
@@ -424,7 +461,7 @@ function _apply_initial_conditions!(u0::Vector{Float64}, var_map::AbstractDict,
     # state is a document authoring error, not a last-write-wins race: the caller
     # wrote two initial conditions and only one can take effect (Decision: §6.6.2
     # "two keys, one name"). An EXACT key wins outright and never collides.
-    claimed = Dict{String,Vector{String}}()
+    claimed = Dict{String, Vector{String}}()
     exact_keys = Set{String}()
     for (rawkey, _) in ics
         key = String(rawkey)
@@ -442,17 +479,25 @@ function _apply_initial_conditions!(u0::Vector{Float64}, var_map::AbstractDict,
     end
     for name in sort!(collect(keys(claimed)))
         (name in exact_keys || length(claimed[name]) < 2) && continue
-        throw(SimulateError(_override_collision_message(
-            "initial_conditions", "state", name, sort!(claimed[name]))))
+        throw(
+            SimulateError(
+                _override_collision_message(
+                    "initial_conditions", "state", name, sort!(claimed[name])
+                )
+            )
+        )
     end
     for (rawkey, value) in ics
         key = String(rawkey)
         resolved = _resolve_state_key(key, element_names, element_alias, namespaces)
         if resolved !== nothing
-            is_inline_array(value) && throw(SimulateError(
-                "simulate: initial_conditions['$key'] carries inline array data for a " *
-                "single state element; only a SHAPED unknown's whole-variable key takes " *
-                "a nested array (esm-spec §6.6.2)"))
+            is_inline_array(value) && throw(
+                SimulateError(
+                    "simulate: initial_conditions['$key'] carries inline array data for a " *
+                        "single state element; only a SHAPED unknown's whole-variable key takes " *
+                        "a nested array (esm-spec §6.6.2)"
+                )
+            )
             u0[var_map[resolved]] = Float64(value)
             continue
         end
@@ -461,11 +506,14 @@ function _apply_initial_conditions!(u0::Vector{Float64}, var_map::AbstractDict,
             cells = cells_of[resolved]
             if is_inline_array(value)
                 for (idxs, idx) in cells
-                    checkbounds(Bool, value, idxs...) || throw(SimulateError(
-                        "simulate: initial_conditions['$key'] has shape $(size(value)), " *
-                        "which does not cover cell $(Tuple(idxs)) of '$resolved' " *
-                        "(esm-spec §6.6.2 — the array MUST match the variable's declared " *
-                        "shape after metaparameter folding)"))
+                    checkbounds(Bool, value, idxs...) || throw(
+                        SimulateError(
+                            "simulate: initial_conditions['$key'] has shape $(size(value)), " *
+                                "which does not cover cell $(Tuple(idxs)) of '$resolved' " *
+                                "(esm-spec §6.6.2 — the array MUST match the variable's declared " *
+                                "shape after metaparameter folding)"
+                        )
+                    )
                     u0[idx] = Float64(value[idxs...])
                 end
             else
@@ -476,8 +524,12 @@ function _apply_initial_conditions!(u0::Vector{Float64}, var_map::AbstractDict,
             end
             continue
         end
-        throw(SimulateError("simulate: initial_conditions names unknown " *
-                            "state element '$key'"))
+        throw(
+            SimulateError(
+                "simulate: initial_conditions names unknown " *
+                    "state element '$key'"
+            )
+        )
     end
     return u0
 end
@@ -487,7 +539,7 @@ end
 # admits EVERY proper suffix of a build name, not only its trailing segment, so
 # a flattened `P.sub.u` is reachable as `sub.u` as well as `u`.
 function _suffix_alias_groups(names::AbstractSet{String})
-    groups = Dict{String,Vector{String}}()
+    groups = Dict{String, Vector{String}}()
     for n in names
         for s in _dotted_suffixes(n)
             push!(get!(groups, s, String[]), n)
@@ -503,9 +555,11 @@ end
 # components' states both carry) raises its own diagnostic rather than being
 # lumped in with "unknown" — silently binding one of the candidates would be a
 # wrong answer, not a missing one.
-function _resolve_state_key(key::AbstractString, names::AbstractSet{String},
-                            alias::AbstractDict{String,Vector{String}},
-                            namespaces::AbstractSet{String})
+function _resolve_state_key(
+        key::AbstractString, names::AbstractSet{String},
+        alias::AbstractDict{String, Vector{String}},
+        namespaces::AbstractSet{String}
+    )
     key in names && return String(key)
     # Rule 2, leading segments validated (`_dotted_suffix_hit`): a dotted key
     # resolves to the LONGEST of its dotted suffixes that is a state name, and
@@ -517,10 +571,14 @@ function _resolve_state_key(key::AbstractString, names::AbstractSet{String},
     cands = get(alias, String(key), nothing)
     cands === nothing && return nothing
     length(cands) == 1 && return cands[1]
-    throw(SimulateError("simulate: initial_conditions names the ambiguous local " *
-                        "state '$key' — $(length(cands)) states carry it as a suffix " *
-                        "($(join(sort(cands), ", "))). Qualify it further with its " *
-                        "owning component (esm-spec §6.6.2)."))
+    throw(
+        SimulateError(
+            "simulate: initial_conditions names the ambiguous local " *
+                "state '$key' — $(length(cands)) states carry it as a suffix " *
+                "($(join(sort(cands), ", "))). Qualify it further with its " *
+                "owning component (esm-spec §6.6.2)."
+        )
+    )
 end
 
 """
@@ -542,8 +600,10 @@ off `var_map` itself, so no key is built per grid node. An expression the
 compiler does not accept is evaluated per cell by `evaluate_expr` instead,
 which a strict compiler plan in force refuses.
 """
-function seed_expression_ic!(u0::Vector{Float64}, var_map::AbstractDict,
-                             var_name::AbstractString, expr::ASTExpr, coords)
+function seed_expression_ic!(
+        u0::Vector{Float64}, var_map::AbstractDict,
+        var_name::AbstractString, expr::ASTExpr, coords
+    )
     pairs_ = collect(coords)
     dims = String[String(first(p)) for p in pairs_]
     axes_ = [collect(Float64, last(p)) for p in pairs_]
@@ -571,21 +631,27 @@ function seed_expression_ic!(u0::Vector{Float64}, var_map::AbstractDict,
         end
         return u0
     end
-    binding(c) = Dict{String,Any}(dims[d] => axes_[d][idx[(c - 1) * nd + d]]
-                                  for d in eachindex(dims))
+    binding(c) = Dict{String, Any}(
+        dims[d] => axes_[d][idx[(c - 1) * nd + d]]
+            for d in eachindex(dims)
+    )
     # An expression no form can evaluate — an undeclared name — is the caller's
     # error, not a compiler's refusal, so a strict compiler's probe evaluates
     # the first cell, for its diagnostic only, before the refusal is raised.
-    lic = _percell_evaluation_license("seed_expression_ic!($(var_name))",
+    lic = _percell_evaluation_license(
+        "seed_expression_ic!($(var_name))",
         "the expression initial-state seed", length(slots);
         one_cell = !isempty(slots),
-        probe = _ -> isempty(slots) || evaluate_expr(expr, binding(1)))
+        probe = _ -> isempty(slots) || evaluate_expr(expr, binding(1))
+    )
     return _seed_expression_percell!(lic, u0, slots, expr, binding)
 end
 
 # The per-cell seed: the expression evaluated from its tree at every cell.
-function _seed_expression_percell!(::_PerCellLicense, u0::Vector{Float64},
-                                   slots::Vector{Int}, expr::ASTExpr, binding)
+function _seed_expression_percell!(
+        ::_PerCellLicense, u0::Vector{Float64},
+        slots::Vector{Int}, expr::ASTExpr, binding
+    )
     for c in eachindex(slots)
         u0[slots[c]] = evaluate_expr(expr, binding(c))
     end
@@ -594,11 +660,15 @@ end
 
 # Read the indices of a `name[i,j,…]` key into `buf` without allocating; false
 # when the key is another variable's, has another rank, or lies off the grid.
-function _seed_cell_indices!(buf::Vector{Int}, key::String, name::AbstractString,
-                             sizes::Tuple)
+function _seed_cell_indices!(
+        buf::Vector{Int}, key::String, name::AbstractString,
+        sizes::Tuple
+    )
     n = ncodeunits(name)
-    (ncodeunits(key) > n + 2 && startswith(key, name) &&
-     codeunit(key, n + 1) == UInt8('[') && codeunit(key, ncodeunits(key)) == UInt8(']')) ||
+    (
+        ncodeunits(key) > n + 2 && startswith(key, name) &&
+            codeunit(key, n + 1) == UInt8('[') && codeunit(key, ncodeunits(key)) == UInt8(']')
+    ) ||
         return false
     d = 1; v = 0; seen = false
     @inbounds for i in (n + 2):(ncodeunits(key) - 1)
@@ -627,18 +697,18 @@ function _seed_expression_compile(expr::ASTExpr, dims::Vector{String})
     allunique(dims) || return nothing
     psyms = Symbol[Symbol(d) for d in dims]
     node = try
-        _compile(expr, Dict{String,Int}(), Set{Symbol}(psyms), Dict{String,Any}())
+        _compile(expr, Dict{String, Int}(), Set{Symbol}(psyms), Dict{String, Any}())
     catch err
         _is_resource_error(err) && rethrow()
         return nothing
     end
-    return _CoordEval{Tuple(psyms),length(dims)}(node)
+    return _CoordEval{Tuple(psyms), length(dims)}(node)
 end
 
-struct _CoordEval{syms,N}
+struct _CoordEval{syms, N}
     node::_Node
 end
-@inline (ce::_CoordEval{syms,N})(vals::AbstractVector{Float64}) where {syms,N} =
+@inline (ce::_CoordEval{syms, N})(vals::AbstractVector{Float64}) where {syms, N} =
     _eval_node(ce.node, _NO_STATE_U, NamedTuple{syms}(ntuple(d -> @inbounds(vals[d]), Val(N))), 0.0)
 
 # --------------------------------------------------------------------------- #
@@ -660,9 +730,12 @@ _provider_const_field(sample, var::AbstractString) =
 # extensions, so SciMLBase is loaded by then and the extension method wins.
 # --------------------------------------------------------------------------- #
 function _callback_set end
-_callback_set(cbs) = throw(SimulateError(
-    "composing $(length(cbs)) problem-level callbacks needs the SciMLBase extension; " *
-    "add `using SciMLBase` so EarthSciASTSimulateExt is active"))
+_callback_set(cbs) = throw(
+    SimulateError(
+        "composing $(length(cbs)) problem-level callbacks needs the SciMLBase extension; " *
+            "add `using SciMLBase` so EarthSciASTSimulateExt is active"
+    )
+)
 
 _compose_callbacks(cbs::AbstractVector) =
     isempty(cbs) ? nothing : length(cbs) == 1 ? cbs[1] : _callback_set(cbs)
@@ -700,12 +773,15 @@ function _mtk_problem end
 # calling `SciMLBase.solve(prob, alg; …)`, so there is exactly one solve path.
 # --------------------------------------------------------------------------- #
 function _solve_problem end
-_solve_problem(prob, alg; kwargs...) = throw(SimulateError(
-    alg === nothing ?
-    "solving an EsmProblem needs an ODE algorithm: pass `alg = Tsit5()` " *
-    "(and `using OrdinaryDiffEqTsit5`)" :
-    "solving an EsmProblem needs the SciMLBase extension; add `using SciMLBase` " *
-    "plus a solver (e.g. OrdinaryDiffEqTsit5) so EarthSciASTSimulateExt is active"))
+_solve_problem(prob, alg; kwargs...) = throw(
+    SimulateError(
+        alg === nothing ?
+            "solving an EsmProblem needs an ODE algorithm: pass `alg = Tsit5()` " *
+            "(and `using OrdinaryDiffEqTsit5`)" :
+            "solving an EsmProblem needs the SciMLBase extension; add `using SciMLBase` " *
+            "plus a solver (e.g. OrdinaryDiffEqTsit5) so EarthSciASTSimulateExt is active"
+    )
+)
 
 # --------------------------------------------------------------------------- #
 # EsmProblem — the run-ready artifact, built exactly once per document.
@@ -759,13 +835,13 @@ and `output_meta` are the ones downstream code reads.
 """
 struct EsmProblem
     f!::Function                          # the built RHS, in-place, whatever
-                                          # `compiler` produced it
+    # `compiler` produced it
     u0::Vector{Float64}                   # seeded initial state; COPIED per run
-    tspan::Tuple{Float64,Float64}         # integration interval
+    tspan::Tuple{Float64, Float64}         # integration interval
     p::Any                                # parameter NamedTuple (or nothing)
-    var_map::AbstractDict{String,Int}     # state-element name → flat index (a `StateLayout`)
-    param_buffers::Dict{String,Any}       # live forcing buffers, aliased into f!
-    discrete_providers::Dict{String,Any}  # forcing var → DISCRETE data Provider
+    var_map::AbstractDict{String, Int}     # state-element name → flat index (a `StateLayout`)
+    param_buffers::Dict{String, Any}       # live forcing buffers, aliased into f!
+    discrete_providers::Dict{String, Any}  # forcing var → DISCRETE data Provider
     dm::DiscreteMaterializer              # discrete-cadence cache sink (may be empty)
     n_equations::Int                      # flattened equation count (display only)
     buffer_time::Base.RefValue{Float64}   # t the discrete buffers currently hold
@@ -775,13 +851,13 @@ struct EsmProblem
     # built from — the carrier [`observed_field`](@ref) resolves shapes and
     # index sets against, so a caller can read build-time observeds through the
     # PUBLIC problem surface instead of re-running the document pipeline.
-    run_doc::Dict{String,Any}
+    run_doc::Dict{String, Any}
     run_file::Base.RefValue{Any}          # lazy coerce_esm_file(run_doc) memo
     # The parameter PARTITION this build produced (see `parameter_classes`):
     # name → `:numeric` / `:structural` / `:const_folded` / `:forcing`. Derived
     # from what the build-time consumers actually READ, which is what decides
     # whether an override can ride `p` at solve time or needs a rebuild.
-    param_classes::Dict{String,Symbol}
+    param_classes::Dict{String, Symbol}
     # Build observability, owned by the PROBLEM (§5.8: `observed_field(prob,
     # name)` is two arguments). The caller no longer threads a `BuildInspection`
     # through construction and back into the accessor; one is always allocated
@@ -804,7 +880,7 @@ struct EsmProblem
     # and because a NAME-KEYED read of this problem — `observed_field(prob, name)`
     # — is naming a quantity that MOVED, not one that never existed. Empty for a
     # document with no renaming merge, which is the overwhelming majority.
-    merged_renames::OrderedDict{String,String}
+    merged_renames::OrderedDict{String, String}
 end
 
 function Base.show(io::IO, prob::EsmProblem)
@@ -814,9 +890,11 @@ function Base.show(io::IO, prob::EsmProblem)
     # parameter PARTITION is per declared name under every compiler, so it is
     # what says how many parameters this problem has.
     np = _compiler_backend(prob.f!) === nothing ?
-         (prob.p === nothing ? 0 : length(prob.p)) : length(prob.param_classes)
-    print(io, "EsmProblem(", length(prob.u0), " state elements, ",
-          prob.n_equations, " equations, ", np, " parameters, tspan=", prob.tspan)
+        (prob.p === nothing ? 0 : length(prob.p)) : length(prob.param_classes)
+    print(
+        io, "EsmProblem(", length(prob.u0), " state elements, ",
+        prob.n_equations, " equations, ", np, " parameters, tspan=", prob.tspan
+    )
     isempty(prob.discrete_providers) ||
         print(io, ", ", length(prob.discrete_providers), " discrete forcings")
     prob.callback === nothing || print(io, ", callbacks")
@@ -827,7 +905,7 @@ function Base.show(io::IO, prob::EsmProblem)
     hist = tier_histogram(rep)
     isempty(hist) ||
         print(io, " [", join(("$(t)=$(n)" for (t, n) in hist), ", "), "]")
-    print(io, ")")
+    return print(io, ")")
 end
 
 """
@@ -894,7 +972,7 @@ forcing_buffers(prob::EsmProblem)::NamedTuple = prob.inspection.forcing_buffers
 Name → position in [`forcing_buffers`](@ref)`(prob)`, and in any container
 aligned with it. Treat as read-only.
 """
-forcing_buffer_index(prob::EsmProblem)::Dict{String,Int} =
+forcing_buffer_index(prob::EsmProblem)::Dict{String, Int} =
     prob.inspection.forcing_buffer_index
 
 
@@ -917,16 +995,23 @@ end
 # whether it matched.
 function _pushdown_input(input, model_name, metaparams, base_path)
     pfile = input isa EsmFile ? input :
-            input isa AbstractString ?
-                (isfile(input) || throw(SimulateError("esm_problem: no such file '$input'"));
-                 load_path(input; metaparameters=metaparams)) :
-            input isa AbstractDict ? load_document(input; base_path=base_path,
-                                                   metaparameters=metaparams) :
-            throw(SimulateError(
+        input isa AbstractString ?
+        (
+            isfile(input) || throw(SimulateError("esm_problem: no such file '$input'"));
+            load_path(input; metaparameters = metaparams)
+        ) :
+        input isa AbstractDict ? load_document(
+            input; base_path = base_path,
+            metaparameters = metaparams
+        ) :
+        throw(
+            SimulateError(
                 "esm_problem: pushdown_rewrite=true needs a path, native Dict, or " *
-                "EsmFile input — a FlattenedSystem is already past the rewrite point"))
+                "EsmFile input — a FlattenedSystem is already past the rewrite point"
+            )
+        )
     raw = serialize_esm_file(pfile)
-    rewritten = desugar_pushdown(raw; model_name=model_name)
+    rewritten = desugar_pushdown(raw; model_name = model_name)
     return rewritten !== raw ? (rewritten, true) : (pfile, false)
 end
 
@@ -938,18 +1023,18 @@ end
 struct _ProgramSeedRecipe
     input::Any                        # the caller's document, before any rewrite
     pushdown::Bool
-    metaparams::Dict{String,Int}
+    metaparams::Dict{String, Int}
     base_path::String
     supplied::Set{String}
-    model_name::Union{Nothing,String}
+    model_name::Union{Nothing, String}
     compiler::Symbol
     overrides::AbstractDict
     const_arrays::AbstractDict        # the caller's, not the merged registry
     providers::Any
     discovered::Set{String}           # providers the extent pre-pass sampled
     pd_gated::Set{String}             # providers the pushdown record gates
-    pd_coupling::Vector{Pair{String,String}}
-    gated_providers::Dict{String,Any}
+    pd_coupling::Vector{Pair{String, String}}
+    gated_providers::Dict{String, Any}
     sample_time::Float64
     runtime_array_parameters::Bool
     memo::Base.RefValue{Any}
@@ -967,30 +1052,38 @@ function _program_seed(prob)
             first(_pushdown_input(r.input, r.model_name, r.metaparams, r.base_path)) :
             r.input
         flat = Ref{Any}(nothing)
-        _prepare_run_doc(input; metaparameters=r.metaparams, base_path=r.base_path,
-                         supplied_names=r.supplied, flat_out=flat)
+        _prepare_run_doc(
+            input; metaparameters = r.metaparams, base_path = r.base_path,
+            supplied_names = r.supplied, flat_out = flat
+        )
         # The const registry `esm_problem` merged, provider by provider as it
         # routed them; the live forcing buffers are the Problem's own.
-        merged_const = Dict{String,Any}(String(k) => v for (k, v) in r.const_arrays)
+        merged_const = Dict{String, Any}(String(k) => v for (k, v) in r.const_arrays)
         if r.providers !== nothing
             for (rawk, prov) in r.providers
                 k = String(rawk)
                 if k in r.discovered
-                    merged_const[k] = Array{Float64}(_sample_field(
-                        provider_sample(prov, r.sample_time), k))
+                    merged_const[k] = Array{Float64}(
+                        _sample_field(
+                            provider_sample(prov, r.sample_time), k
+                        )
+                    )
                 elseif !(k in r.pd_gated) && !provider_is_gated(prov) &&
-                       provider_is_const(prov)
+                        provider_is_const(prov)
                     merged_const[k] = _provider_const_field(
-                        provider_sample(prov, r.sample_time), k)
+                        provider_sample(prov, r.sample_time), k
+                    )
                 end
             end
         end
         r.pushdown && _inject_pushdown_aliases!(merged_const, prob.run_doc, r.pd_coupling)
-        r.memo[] = (; flat[]..., compiler = r.compiler, model_name = r.model_name,
-                    overrides = r.overrides, const_arrays = merged_const,
-                    param_arrays = Dict{String,Any}(prob.param_buffers),
-                    gated_providers = r.gated_providers, sample_time = r.sample_time,
-                    runtime_array_parameters = r.runtime_array_parameters)
+        r.memo[] = (;
+            flat[]..., compiler = r.compiler, model_name = r.model_name,
+            overrides = r.overrides, const_arrays = merged_const,
+            param_arrays = Dict{String, Any}(prob.param_buffers),
+            gated_providers = r.gated_providers, sample_time = r.sample_time,
+            runtime_array_parameters = r.runtime_array_parameters,
+        )
     end
 end
 
@@ -1004,34 +1097,43 @@ end
 # reuses them instead of re-reading (a zipped inventory is decoded once).
 # --------------------------------------------------------------------------- #
 function _discover_loader_extents(providers, metaparameters::AbstractDict, t0::Float64)
-    out = Dict{String,Int}(String(k) => Int(v) for (k, v) in metaparameters)
-    discovered = Dict{String,Any}()
+    out = Dict{String, Int}(String(k) => Int(v) for (k, v) in metaparameters)
+    discovered = Dict{String, Any}()
     providers === nothing && return out, discovered
     # `by` records which provider bound each metaparameter, so a disagreement
     # names BOTH sides. Sorted keys keep that naming deterministic.
-    by = Dict{String,Tuple{Int,String}}()
+    by = Dict{String, Tuple{Int, String}}()
     for rawk in sort!(String[String(k) for k in keys(providers)])
         prov = providers[rawk]
         mp = provider_extent_metaparameter(prov)
         mp === nothing && continue
         mp = String(mp)
-        provider_is_gated(prov) && throw(SimulateError(
-            "provider '$rawk' both GATES on a derived index set and declares the " *
-            "extent metaparameter '$mp'; a gated slab's extent is the gating set's, " *
-            "not a discovered one"))
+        provider_is_gated(prov) && throw(
+            SimulateError(
+                "provider '$rawk' both GATES on a derived index set and declares the " *
+                    "extent metaparameter '$mp'; a gated slab's extent is the gating set's, " *
+                    "not a discovered one"
+            )
+        )
         sample = provider_sample(prov, t0)
         field = _sample_field(sample, rawk)
         n = ndims(field) == 0 ? 1 : size(field, 1)
         if haskey(by, mp)
             prev, prevk = by[mp]
-            prev == n || throw(SimulateError(
-                "loader extent '$mp' is $prev from provider '$prevk' but $n from " *
-                "'$rawk' — the loader's variables are not aligned on one record axis"))
+            prev == n || throw(
+                SimulateError(
+                    "loader extent '$mp' is $prev from provider '$prevk' but $n from " *
+                        "'$rawk' — the loader's variables are not aligned on one record axis"
+                )
+            )
         elseif haskey(out, mp) && out[mp] != n
-            throw(SimulateError(
-                "metaparameter '$mp' was closed at $(out[mp]) by the caller but " *
-                "provider '$rawk' discovers $n records; drop the binding and let the " *
-                "loader declare its own extent"))
+            throw(
+                SimulateError(
+                    "metaparameter '$mp' was closed at $(out[mp]) by the caller but " *
+                        "provider '$rawk' discovers $n records; drop the binding and let the " *
+                        "loader declare its own extent"
+                )
+            )
         end
         by[mp] = (n, rawk)
         out[mp] = n
@@ -1233,29 +1335,31 @@ Per-RUN knobs (`alg`, `abstol`, `reltol`, `saveat`, `callback`, `maxiters`)
 belong to `solve(prob, alg; …)`; §2.5.9 keeps the solver out of construction, so
 this call needs neither SciMLBase nor an OrdinaryDiffEq package.
 """
-function esm_problem(input, tspan;
-                     p::AbstractDict = Dict{String,Float64}(),
-                     u0 = nothing,
-                     providers::Union{Nothing,AbstractDict} = nothing,
-                     model_name::Union{Nothing,AbstractString} = nothing,
-                     metaparameters::AbstractDict = Dict{String,Int}(),
-                     base_path::AbstractString = pwd(),
-                     compiler::Symbol = :native,
-                     sample_time::Union{Nothing,Real} = nothing,
-                     runtime_array_parameters::Bool = false,
-                     # ---- Julia extension seam (§2.5.2) ----
-                     const_arrays::AbstractDict = Dict{String,Any}(),
-                     param_arrays::AbstractDict = Dict{String,Any}(),
-                     inspect::Union{Nothing,BuildInspection} = nothing,
-                     materialize_out::Union{Nothing,DiscreteMaterializer} = nothing,
-                     pushdown_rewrite::Bool = false,
-                     seed_ic! = nothing,
-                     sinks = (),
-                     snapshot = state_snapshot,
-                     pre_write = () -> nothing,
-                     checkpoint_predicates = (),
-                     checkpoint_sinks = nothing,
-                     terminate_on_checkpoint::Bool = true)
+function esm_problem(
+        input, tspan;
+        p::AbstractDict = Dict{String, Float64}(),
+        u0 = nothing,
+        providers::Union{Nothing, AbstractDict} = nothing,
+        model_name::Union{Nothing, AbstractString} = nothing,
+        metaparameters::AbstractDict = Dict{String, Int}(),
+        base_path::AbstractString = pwd(),
+        compiler::Symbol = :native,
+        sample_time::Union{Nothing, Real} = nothing,
+        runtime_array_parameters::Bool = false,
+        # ---- Julia extension seam (§2.5.2) ----
+        const_arrays::AbstractDict = Dict{String, Any}(),
+        param_arrays::AbstractDict = Dict{String, Any}(),
+        inspect::Union{Nothing, BuildInspection} = nothing,
+        materialize_out::Union{Nothing, DiscreteMaterializer} = nothing,
+        pushdown_rewrite::Bool = false,
+        seed_ic! = nothing,
+        sinks = (),
+        snapshot = state_snapshot,
+        pre_write = () -> nothing,
+        checkpoint_predicates = (),
+        checkpoint_sinks = nothing,
+        terminate_on_checkpoint::Bool = true
+    )
     # The compiler is resolved before anything else runs: `compiler_unknown` and
     # `compiler_unavailable` are answers about the REQUEST, and making the
     # caller wait through a load and a flatten to hear one would be a worse
@@ -1268,7 +1372,8 @@ function esm_problem(input, tspan;
     # evaluator, so it takes the whole construction (EarthSciASTMTKExt). The
     # plan above has already answered `compiler_unavailable` if MTK is absent.
     if compiler === :mtk
-        return _mtk_problem(input, span; p = p, u0 = u0, providers = providers,
+        return _mtk_problem(
+            input, span; p = p, u0 = u0, providers = providers,
             model_name = model_name, metaparameters = metaparameters,
             base_path = base_path, sample_time = t_sample,
             const_arrays = const_arrays, param_arrays = param_arrays,
@@ -1277,7 +1382,8 @@ function esm_problem(input, tspan;
             sinks = sinks, snapshot = snapshot, pre_write = pre_write,
             checkpoint_predicates = checkpoint_predicates,
             checkpoint_sinks = checkpoint_sinks,
-            terminate_on_checkpoint = terminate_on_checkpoint)
+            terminate_on_checkpoint = terminate_on_checkpoint
+        )
     end
     # ---- extent discovery: a loader that measures its OWN record count ------
     # FIRST, because a discovered extent CLOSES a metaparameter and every load
@@ -1290,14 +1396,19 @@ function esm_problem(input, tspan;
     # exactly the failure this seam exists to prevent.
     if !isempty(metaparams) && !(input isa AbstractString || input isa AbstractDict)
         why = isempty(discovered) ? "" :
-              string(". ", join(sort!(collect(keys(discovered))), ", "),
-                     " DISCOVERED its own extent, which only a not-yet-loaded ",
-                     "document can be sized by")
-        throw(SimulateError(
-            "esm_problem: metaparameters $(sort!(collect(keys(metaparams)))) must be bound " *
-            "at the loader API, but `input` is a $(typeof(input)) whose metaparameters " *
-            "are already closed — pass the path or the native Dict to esm_problem (and drop " *
-            "the pre-`load`), or bind them in that `load` call instead" * why))
+            string(
+                ". ", join(sort!(collect(keys(discovered))), ", "),
+                " DISCOVERED its own extent, which only a not-yet-loaded ",
+                "document can be sized by"
+            )
+        throw(
+            SimulateError(
+                "esm_problem: metaparameters $(sort!(collect(keys(metaparams)))) must be bound " *
+                    "at the loader API, but `input` is a $(typeof(input)) whose metaparameters " *
+                    "are already closed — pass the path or the native Dict to esm_problem (and drop " *
+                    "the pre-`load`), or bind them in that `load` call instead" * why
+            )
+        )
     end
 
     # ---- Phase 1 (clean consolidation): pushdown prepass, BEFORE flatten ----
@@ -1308,8 +1419,8 @@ function esm_problem(input, tspan;
     # BEFORE the provider classification below needs it. `desugar_pushdown` is
     # idempotent (guarded on its own record), so the front door's own hook —
     # never triggered from here — stays safe for direct callers.
-    pd_gates = Dict{String,Any}()
-    pd_coupling = Pair{String,String}[]
+    pd_gates = Dict{String, Any}()
+    pd_coupling = Pair{String, String}[]
     authored_input = input
     if pushdown_rewrite
         input, matched = _pushdown_input(input, model_name, metaparams, base_path)
@@ -1323,10 +1434,13 @@ function esm_problem(input, tspan;
     # not materialised yet. (The provider's OWN gate is caught in the pre-pass;
     # this catches the gate the rewrite record derives, which only exists now.)
     for k in keys(discovered)
-        haskey(pd_gates, k) && throw(SimulateError(
-            "provider '$k' both GATES on a derived index set and declares the extent " *
-            "metaparameter '$(provider_extent_metaparameter(providers[k]))'; a gated " *
-            "slab's extent is the gating set's, not a discovered one"))
+        haskey(pd_gates, k) && throw(
+            SimulateError(
+                "provider '$k' both GATES on a derived index set and declares the extent " *
+                    "metaparameter '$(provider_extent_metaparameter(providers[k]))'; a gated " *
+                    "slab's extent is the gating set's, not a discovered one"
+            )
+        )
     end
     # `merged_renames` records the state spellings an `operator_compose` renaming
     # match DELETED (issue #230). A caller holding `"Sink.O3"` after the merge
@@ -1334,11 +1448,15 @@ function esm_problem(input, tspan;
     # rewrites the strings a caller holds — so the key resolves to nothing and
     # the state silently runs from its default. Resolve those keys here, where
     # the flattened system's metadata is still reachable.
-    merged_renames = OrderedDict{String,String}()
-    supplied = Set{String}(string(k) for d in (const_arrays, param_arrays, providers)
-                           if d !== nothing for k in keys(d))
-    doc = _prepare_run_doc(input; metaparameters=metaparams, base_path=base_path,
-                           renames_out=merged_renames, supplied_names=supplied)
+    merged_renames = OrderedDict{String, String}()
+    supplied = Set{String}(
+        string(k) for d in (const_arrays, param_arrays, providers)
+            if d !== nothing for k in keys(d)
+    )
+    doc = _prepare_run_doc(
+        input; metaparameters = metaparams, base_path = base_path,
+        renames_out = merged_renames, supplied_names = supplied
+    )
 
     # esm-spec §6.6.2: a `p` binding is a scalar, or — for a SHAPED parameter —
     # INLINE ARRAY DATA (a row-major nested array supplying the whole column).
@@ -1347,9 +1465,10 @@ function esm_problem(input, tspan;
     # which is where an array-shaped parameter's value has always lived.
     overrides = _resolve_merged_renames(
         merged_renames,
-        Dict{String,Any}(String(k) => _coerce_inline_value(v) for (k, v) in p))
+        Dict{String, Any}(String(k) => _coerce_inline_value(v) for (k, v) in p)
+    )
     u0 = u0 === nothing || isempty(merged_renames) ? u0 :
-         (u0 isa AbstractDict ? _resolve_merged_renames(merged_renames, u0) : u0)
+        (u0 isa AbstractDict ? _resolve_merged_renames(merged_renames, u0) : u0)
 
     # Provider injection (DESIGN pde_simulation_pipeline §2). Loaded fields enter
     # through the Provider seam, never as raw `const_arrays` keyed by internal
@@ -1358,14 +1477,14 @@ function esm_problem(input, tspan;
     # loader variable name — reachable when scoped-`ic` folds `Loader.*` into u0
     # (R2) and when the loader→consumer `variable_map` binding routes a consumer
     # gather to the loader name. DISCRETE providers ride the refresh callback.
-    merged_const = Dict{String,Any}(String(k) => v for (k, v) in const_arrays)
-    merged_param = Dict{String,Any}(String(k) => v for (k, v) in param_arrays)
-    discrete_providers = Dict{String,Any}()
+    merged_const = Dict{String, Any}(String(k) => v for (k, v) in const_arrays)
+    merged_param = Dict{String, Any}(String(k) => v for (k, v) in param_arrays)
+    discrete_providers = Dict{String, Any}()
     # Phase 2b Hook 2: GATED providers are DEFERRED — not pulled whole here, but
     # stashed and fetched pre-sliced after value-invention (the const-tier
     # dependency edge). A provider is gated when it reports a `provider_gate_spec`
     # (the runner sets it from the loader's `gated_select`; a mock carries it).
-    gated_providers = Dict{String,Any}()
+    gated_providers = Dict{String, Any}()
     if providers !== nothing
         for (rawk, prov) in providers
             k = String(rawk)
@@ -1379,12 +1498,12 @@ function esm_problem(input, tspan;
                 # `metadata.x_esd.pushdown.gated_select`, mapped onto this
                 # provider through the document coupling. Takes precedence over
                 # a provider-implemented `provider_gate_spec`.
-                gated_providers[k] = (prov=prov, gate=pd_gate)
+                gated_providers[k] = (prov = prov, gate = pd_gate)
             elseif provider_is_gated(prov)
                 # Defer: value-invention must derive the gating set's members
                 # before we know which rows to fetch. Bundle the gate spec so the
                 # build resolves the selection without re-consulting the provider.
-                gated_providers[k] = (prov=prov, gate=provider_gate_spec(prov))
+                gated_providers[k] = (prov = prov, gate = provider_gate_spec(prov))
             elseif provider_is_const(prov)
                 merged_const[k] = _provider_const_field(provider_sample(prov, t_sample), k)
             else
@@ -1428,7 +1547,7 @@ function esm_problem(input, tspan;
     # `:forcing`, derived from which names its BUILD-TIME consumers read. It is
     # what lets `remake(prob; p = …)` accept the numeric half instead of refusing
     # every override.
-    param_classes = Dict{String,Symbol}()
+    param_classes = Dict{String, Symbol}()
     # `:xla` refuses live forcing buffers, and every one a caller or a discrete
     # provider binds is already in `merged_param`: refuse those now rather than
     # after a build that can take hours. src/compiler_xla.jl keeps the check on
@@ -1441,36 +1560,42 @@ function esm_problem(input, tspan;
     # promises, just below. Every other compiler builds the in-place evaluator
     # directly. See src/compiler_xla.jl.
     f!, u0_built, p_built, _tspan, var_map = _with_caller_u0(u0) do
-      _build_evaluator(doc;
-        compiler = compiler,
-        form = compiler === :xla ? :oop : :inplace,
-        model_name = model_name,
-        parameter_overrides = overrides,
-        const_arrays = merged_const,
-        param_arrays = merged_param,
-        inspect = insp,
-        materialize_out = dm,
-        _param_classes = param_classes,
-        _runtime_array_parameters = runtime_array_parameters,
-        # Phase 2b Hook 2: deferred gated providers + the build-time sample tick.
-        # The front door fetches these pre-sliced right after value-invention.
-        _gated_providers = gated_providers,
-        _sample_time = t_sample)
+        _build_evaluator(
+            doc;
+            compiler = compiler,
+            form = compiler === :xla ? :oop : :inplace,
+            model_name = model_name,
+            parameter_overrides = overrides,
+            const_arrays = merged_const,
+            param_arrays = merged_param,
+            inspect = insp,
+            materialize_out = dm,
+            _param_classes = param_classes,
+            _runtime_array_parameters = runtime_array_parameters,
+            # Phase 2b Hook 2: deferred gated providers + the build-time sample tick.
+            # The front door fetches these pre-sliced right after value-invention.
+            _gated_providers = gated_providers,
+            _sample_time = t_sample
+        )
     end
 
     if compiler === :xla
-        f! = _xla_problem_rhs(f!, var_map, u0_built, p_built,
-                              insp.compiler_report)
+        f! = _xla_problem_rhs(
+            f!, var_map, u0_built, p_built,
+            insp.compiler_report
+        )
     end
     # What `rhs_program` rebuilds its seed from, on its first call: the
     # caller's own inputs, not the flattened system or the merged arrays, so a
     # Problem no program is made from keeps nothing extra alive.
-    insp.program_seed = _ProgramSeedRecipe(authored_input, pushdown_rewrite, metaparams,
+    insp.program_seed = _ProgramSeedRecipe(
+        authored_input, pushdown_rewrite, metaparams,
         String(base_path), supplied, model_name === nothing ? nothing : String(model_name),
         compiler, overrides, const_arrays, providers,
         Set{String}(keys(discovered)), Set{String}(keys(pd_gates)), pd_coupling,
         gated_providers, t_sample, runtime_array_parameters,
-        Ref{Any}(nothing), ReentrantLock())
+        Ref{Any}(nothing), ReentrantLock()
+    )
 
     # ---- initial state: the document's own ICs, then the caller's -----------
     # Under the build's plan: a `seed_ic!` hook (`seed_expression_ic!`) is an
@@ -1492,7 +1617,8 @@ function esm_problem(input, tspan;
         cb, ts = build_refresh_callback(;
             providers = discrete_providers,
             buffers = RefreshBuffers(merged_param),
-            post_refresh = dm.materialize!)   # recompute discrete caches per boundary
+            post_refresh = dm.materialize!
+        )   # recompute discrete caches per boundary
         push!(cbs, cb)
         tstops = _union_tstops(tstops, ts)
     end
@@ -1511,7 +1637,8 @@ function esm_problem(input, tspan;
     snapshot = _observed_snapshot(snapshot, sink_vec, prob_ref)
     if !isempty(sink_vec)
         out_cb, out_tstops = build_output_callback(;
-            sinks = sink_vec, snapshot = snapshot, pre_write = pre_write)
+            sinks = sink_vec, snapshot = snapshot, pre_write = pre_write
+        )
         tstops = _union_tstops(tstops, out_tstops)
         push!(cbs, out_cb)
         save_everystep = false
@@ -1527,7 +1654,8 @@ function esm_problem(input, tspan;
     if !isempty(collect(Any, checkpoint_predicates))
         ck_cb = build_checkpoint_callback(;
             sinks = ck_vec, predicates = checkpoint_predicates, snapshot = snapshot,
-            pre_write = pre_write, terminate_on_fire = terminate_on_checkpoint)
+            pre_write = pre_write, terminate_on_fire = terminate_on_checkpoint
+        )
         push!(cbs, ck_cb)
         save_everystep = false
     end
@@ -1538,13 +1666,15 @@ function esm_problem(input, tspan;
         insp.observed_build = run_file
         insp.observed_ctx === nothing || (insp.observed_ctxs[run_file] = insp.observed_ctx)
     end
-    prob = EsmProblem(f!, u0_run, span, p_built, var_map, merged_param,
-                      discrete_providers, dm, _doc_equation_count(doc),
-                      Ref(t_sample), Ref(false), derive_output_meta(doc), doc,
-                      run_file, param_classes, insp,
-                      _compose_callbacks(cbs), tstops, save_everystep,
-                      sink_vec, _distinct_sinks(sink_vec, ck_vec), Ref{Any}(nothing),
-                      merged_renames)
+    prob = EsmProblem(
+        f!, u0_run, span, p_built, var_map, merged_param,
+        discrete_providers, dm, _doc_equation_count(doc),
+        Ref(t_sample), Ref(false), derive_output_meta(doc), doc,
+        run_file, param_classes, insp,
+        _compose_callbacks(cbs), tstops, save_everystep,
+        sink_vec, _distinct_sinks(sink_vec, ck_vec), Ref{Any}(nothing),
+        merged_renames
+    )
     prob_ref[] = prob
     return prob
 end
@@ -1566,9 +1696,13 @@ function _observed_snapshot(snapshot, sinks, prob_ref::Base.RefValue{Any})
     return function (integrator)
         u = integrator.u
         t = Float64(integrator.t)
-        obs = Dict{String,Array}(n => _observed_field_read(prob_ref[], n, Array(u), t,
-                                                           integrator.p)
-                                 for n in names)
+        obs = Dict{String, Array}(
+            n => _observed_field_read(
+                prob_ref[], n, Array(u), t,
+                integrator.p
+            )
+                for n in names
+        )
         return StateSnapshot(t, state_snapshot(integrator), obs)
     end
 end
@@ -1583,8 +1717,10 @@ end
 # seed (`BuildInspection.unvalued_slots`, holding a 0.0 placeholder); a caller
 # `u0` that names them, a whole replacement vector, or a `seed_ic!` hook covers
 # them.
-function _refuse_missing_initial_values(unvalued::Vector{Int}, u0_built::Vector{Float64},
-                                        var_map::AbstractDict, u0, seed_ic!)
+function _refuse_missing_initial_values(
+        unvalued::Vector{Int}, u0_built::Vector{Float64},
+        var_map::AbstractDict, u0, seed_ic!
+    )
     isempty(unvalued) && return nothing
     (u0 isa AbstractVector || seed_ic! !== nothing) && return nothing
     probe = copy(u0_built)
@@ -1597,16 +1733,26 @@ function _refuse_missing_initial_values(unvalued::Vector{Int}, u0_built::Vector{
     # document names) and keep their placeholder.
     base(k) = String(first(split(String(k), '['; limit = 2)))
     partly = Set(base(k) for (k, s) in var_map if !(s in missing_slots))
-    names = sort!(unique!(String[base(k) for (k, s) in var_map
-                                 if s in missing_slots && !(base(k) in partly)]))
+    names = sort!(
+        unique!(
+            String[
+                base(k) for (k, s) in var_map
+                    if s in missing_slots && !(base(k) in partly)
+            ]
+        )
+    )
     isempty(names) && return nothing
     shown = join(("'$(n)'" for n in first(names, 5)), ", ") * (length(names) > 5 ? ", …" : "")
-    throw(TreeWalkError("E_TREEWALK_MISSING_INITIAL_VALUE",
-        "no starting value for $(length(names)) unknown(s) ($(shown)): the unknown " *
-        "declares no `default`, and no initial condition, `ic` equation or caller " *
-        "`u0` sets it. An unknown with no starting value is an error when a problem " *
-        "is built (esm-spec §11.4). To supply it, pass `u0 = Dict(\"$(first(names))\" " *
-        "=> value)` to `esm_problem`, or declare a `default` on the unknown."))
+    throw(
+        TreeWalkError(
+            "E_TREEWALK_MISSING_INITIAL_VALUE",
+            "no starting value for $(length(names)) unknown(s) ($(shown)): the unknown " *
+                "declares no `default`, and no initial condition, `ic` equation or caller " *
+                "`u0` sets it. An unknown with no starting value is an error when a problem " *
+                "is built (esm-spec §11.4). To supply it, pass `u0 = Dict(\"$(first(names))\" " *
+                "=> value)` to `esm_problem`, or declare a `default` on the unknown."
+        )
+    )
 end
 
 function _seed_u0(u0_built::Vector{Float64}, var_map::AbstractDict, u0, seed_ic!)
@@ -1614,14 +1760,20 @@ function _seed_u0(u0_built::Vector{Float64}, var_map::AbstractDict, u0, seed_ic!
     if u0 isa AbstractDict
         isempty(u0) || _apply_initial_conditions!(out, var_map, u0)
     elseif u0 isa AbstractVector
-        length(u0) == length(out) || throw(SimulateError(
-            "u0 has $(length(u0)) elements but the flattened state vector has " *
-            "$(length(out)); pass a Dict of named overrides to set a subset"))
+        length(u0) == length(out) || throw(
+            SimulateError(
+                "u0 has $(length(u0)) elements but the flattened state vector has " *
+                    "$(length(out)); pass a Dict of named overrides to set a subset"
+            )
+        )
         out = collect(Float64, u0)
     elseif u0 !== nothing
-        throw(SimulateError(
-            "u0 must be an AbstractDict of named overrides or an AbstractVector " *
-            "replacing the whole state, got a $(typeof(u0))"))
+        throw(
+            SimulateError(
+                "u0 must be an AbstractDict of named overrides or an AbstractVector " *
+                    "replacing the whole state, got a $(typeof(u0))"
+            )
+        )
     end
     seed_ic! === nothing || seed_ic!(out, var_map)
     return out
@@ -1647,9 +1799,13 @@ end
 # sorted — the candidates a refused bare lookup must name so the author can
 # qualify it (esm-spec §6.6.2 requires the same of an ambiguous override key).
 function _bare_candidates(model, v::AbstractString)
-    return sort!(String[String(k) for k in observed_unknowns(model)
-                        if occursin('.', String(k)) &&
-                           String(rsplit(String(k), '.'; limit = 2)[2]) == v])
+    return sort!(
+        String[
+            String(k) for k in observed_unknowns(model)
+                if occursin('.', String(k)) &&
+                String(rsplit(String(k), '.'; limit = 2)[2]) == v
+        ]
+    )
 end
 
 """
@@ -1696,17 +1852,21 @@ Throws a `SimulateError` when `name` is not an evaluable observed (an unsized
 axis, or not an observed at all), or when it reads the state and no `u` was
 given.
 """
-function observed_field(prob::EsmProblem, name::AbstractString;
-                        u::Union{Nothing,AbstractVector} = nothing,
-                        t::Union{Nothing,Real} = nothing)
+function observed_field(
+        prob::EsmProblem, name::AbstractString;
+        u::Union{Nothing, AbstractVector} = nothing,
+        t::Union{Nothing, Real} = nothing
+    )
     return _observed_field_read(prob, String(name), u, t, prob.p)
 end
 
 # `observed_field` with the parameter carrier `p` to read at: the problem's own,
 # or a running integrator's (an output sink's snapshot).
-function _observed_field_read(prob::EsmProblem, name::String,
-                              u::Union{Nothing,AbstractVector},
-                              t::Union{Nothing,Real}, p)
+function _observed_field_read(
+        prob::EsmProblem, name::String,
+        u::Union{Nothing, AbstractVector},
+        t::Union{Nothing, Real}, p
+    )
     # A compiler that built its own program answers for its own observeds: under
     # `:mtk` the value lives in the compiled system's OBSERVED EQUATIONS, which
     # this package's build-time observed graph knows nothing about.
@@ -1737,9 +1897,11 @@ const _OUTPUT_TIERS = (:output_compiled, :output_compiled_once, :output_percell)
 # parameters, which a `p` or `u0` swap does not change. A read at a state or
 # time is the observed as a function of `(u, p, t)`, so it binds `p` — the
 # reading problem's, or the running integrator's.
-function _observed_field_memo(prob::EsmProblem, name::String,
-                              u::Union{Nothing,AbstractVector} = nothing,
-                              t::Union{Nothing,Real} = nothing, p = nothing)
+function _observed_field_memo(
+        prob::EsmProblem, name::String,
+        u::Union{Nothing, AbstractVector} = nothing,
+        t::Union{Nothing, Real} = nothing, p = nothing
+    )
     insp = prob.inspection
     memoizable = u === nothing && t === nothing
     memoizable && (p = nothing)
@@ -1759,32 +1921,43 @@ function _observed_field_memo(prob::EsmProblem, name::String,
         # record describes (a problem built earlier with the same record reads
         # through it, but files nothing into another build's report).
         if insp.observed_build === prob.run_file &&
-           !any(r -> r.kind === :observed && r.rule == name && r.tier in _OUTPUT_TIERS,
-                insp.compiler_report.rules)
+                !any(
+                r -> r.kind === :observed && r.rule == name && r.tier in _OUTPUT_TIERS,
+                insp.compiler_report.rules
+            )
             tier = nprog > 0 ? :output_compiled :
-                   percell > 0 ? :output_percell : :output_compiled_once
-            push!(insp.compiler_report.rules,
-                  CompilerRuleRecord(name, :observed, tier, Pair{Symbol,Symbol}[]))
+                percell > 0 ? :output_percell : :output_compiled_once
+            push!(
+                insp.compiler_report.rules,
+                CompilerRuleRecord(name, :observed, tier, Pair{Symbol, Symbol}[])
+            )
         end
         memoizable && (insp.observed_memo[key] = _ObservedMemo(epoch, copy(v)))
     end
     return v
 end
 
-function _observed_field_impl(prob::EsmProblem, name::AbstractString;
-                              u::Union{Nothing,AbstractVector} = nothing,
-                              t::Union{Nothing,Real} = nothing, p = nothing)
+function _observed_field_impl(
+        prob::EsmProblem, name::AbstractString;
+        u::Union{Nothing, AbstractVector} = nothing,
+        t::Union{Nothing, Real} = nothing, p = nothing
+    )
     insp = prob.inspection
     ctx = _obs_ctx(prob)
     if prob.run_file[] === nothing
         prob.run_file[] = coerce_esm_file(prob.run_doc)
     end
     file = prob.run_file[]::EsmFile
-    (file.models !== nothing && !isempty(file.models)) || throw(SimulateError(
-        "observed_field: prepared document has no model"))
+    (file.models !== nothing && !isempty(file.models)) || throw(
+        SimulateError(
+            "observed_field: prepared document has no model"
+        )
+    )
     mname = String(first(keys(file.models)))
-    field_of(k) = _observed_field(insp, file, mname, k; ctx = ctx, u = u, t = t,
-                                  var_map = prob.var_map, p = p)
+    field_of(k) = _observed_field(
+        insp, file, mname, k; ctx = ctx, u = u, t = t,
+        var_map = prob.var_map, p = p
+    )
     # A name an `operator_compose` renaming match DELETED addresses a field that
     # MOVED (issue #230). The merge only ever REMOVES a spelling, so resolving
     # here can never shadow a live field.
@@ -1804,10 +1977,13 @@ function _observed_field_impl(prob::EsmProblem, name::AbstractString;
                 fld === nothing || break
             end
         elseif !isempty(cands)
-            throw(SimulateError(
-                "observed_field: '$name' is a bare name and this problem has " *
-                "$(length(comps)) components ($(join(sort!(collect(comps)), ", "))); " *
-                "qualify it as one of: $(join(cands, ", "))"))
+            throw(
+                SimulateError(
+                    "observed_field: '$name' is a bare name and this problem has " *
+                        "$(length(comps)) components ($(join(sort!(collect(comps)), ", "))); " *
+                        "qualify it as one of: $(join(cands, ", "))"
+                )
+            )
         end
     end
     if fld === nothing
@@ -1840,12 +2016,19 @@ function _observed_field_impl(prob::EsmProblem, name::AbstractString;
         # holds every array-valued PARAMETER, and quietly returning one of those
         # from `observed_field` would turn a wrong name into a plausible answer.
         obs = Set{String}(observed_unknowns(model))
-        is_obs = any(k -> (String(k) == v ||
-                           (single && String(split(String(k), '.')[end]) == v))
-                          && String(k) in obs, keys(model.variables))
-        is_obs || throw(SimulateError(
-            "observed_field: '$name' is not a build-time-evaluable observed of the " *
-            "prepared document"))
+        is_obs = any(
+            k -> (
+                String(k) == v ||
+                    (single && String(split(String(k), '.')[end]) == v)
+            )
+                && String(k) in obs, keys(model.variables)
+        )
+        is_obs || throw(
+            SimulateError(
+                "observed_field: '$name' is not a build-time-evaluable observed of the " *
+                    "prepared document"
+            )
+        )
         arr = nothing
         for reg in (insp.setup_arrays, insp.const_arrays)
             arr = get(reg, mname * "." * v, get(reg, v, nothing))
@@ -1853,16 +2036,21 @@ function _observed_field_impl(prob::EsmProblem, name::AbstractString;
                 # Bare tail, single-component only — same §5.8 gate the observed
                 # graph applies above, so the two fallbacks cannot disagree
                 # about whether a bare name is answerable.
-                hits = [k for k in keys(reg)
-                        if occursin('.', k) && String(split(k, '.')[end]) == v]
+                hits = [
+                    k for k in keys(reg)
+                        if occursin('.', k) && String(split(k, '.')[end]) == v
+                ]
                 length(hits) == 1 && (arr = reg[first(hits)])
             end
             arr isa AbstractArray || (arr = nothing)
             arr === nothing || break
         end
-        arr === nothing && throw(SimulateError(
-            "observed_field: '$name' is not a build-time-evaluable observed of the " *
-            "prepared document"))
+        arr === nothing && throw(
+            SimulateError(
+                "observed_field: '$name' is not a build-time-evaluable observed of the " *
+                    "prepared document"
+            )
+        )
         return ndims(arr) > 1 ? vec(permutedims(arr, reverse(1:ndims(arr)))) : vec(arr)
     end
     return fld[1]
@@ -1917,13 +2105,13 @@ function _param_class_refusal(name::AbstractString, cls::Symbol)
         "where it can decide the SHAPE of the problem — length(u0), the compiled " *
         "kernels. A value swapped into `p` at solve time would contradict the one " *
         "already baked into the build" :
-      cls === :const_folded ?
+        cls === :const_folded ?
         "CONST-FOLDED DATA: it is supplied as const data (a const provider / a " *
         "`const_arrays` entry), frozen into the build and inlined into the RHS, so " *
         "it never reaches the runtime `p` at all. An override here would be silently " *
         "ignored — and so is a derivative: ∂/∂(this) is an unconditional zero that a " *
         "finite-difference check on its declared default would CONFIRM" :
-      cls === :forcing ?
+        cls === :forcing ?
         "LIVE FORCING DATA: it is bound to a forcing buffer that a discrete provider " *
         "rewrites in place at each refresh, so it never reaches the runtime `p`. " *
         "Change the provider or write the buffer" :
@@ -1934,7 +2122,7 @@ function _param_class_refusal(name::AbstractString, cls::Symbol)
         "structural change is an explicit rebuild, never something hidden " *
         "inside a `p` swap"
     return "remake(prob::EsmProblem; p): '$name' is $what. " *
-           "To change it, $fix."
+        "To change it, $fix."
 end
 
 """
@@ -1972,20 +2160,35 @@ function remake_parameters(prob::EsmProblem, overrides::AbstractDict)
     namespaces = _override_namespaces(names)
     normalized, unknown, ambiguous, collisions =
         _canonicalize_override_keys(Any, names, namespaces, overrides)
-    isempty(collisions) || throw(SimulateError(_override_collision_message(
-        "remake(prob; p)", "parameter",
-        first(sort!(collect(collisions), by = first))...)))
-    isempty(unknown) || throw(SimulateError(
-        "remake(prob; p): no parameter named " *
-        join(("'" * k * "'" for k in sort(unknown)), ", ") *
-        " in the problem (keys may be local or namespaced; a name the " *
-        "flattener's coupling rewired onto a loader variable is spelled by its " *
-        "SURVIVING name). Known: " * _elide_names(sort(collect(names)))))
-    isempty(ambiguous) || throw(SimulateError(
-        "remake(prob; p): ambiguous parameter key(s) " *
-        join(("'" * k * "' (matches " * join(sort(v), ", ") * ")"
-              for (k, v) in sort(collect(ambiguous), by = first)), "; ") *
-        "; spell the namespaced name."))
+    isempty(collisions) || throw(
+        SimulateError(
+            _override_collision_message(
+                "remake(prob; p)", "parameter",
+                first(sort!(collect(collisions), by = first))...
+            )
+        )
+    )
+    isempty(unknown) || throw(
+        SimulateError(
+            "remake(prob; p): no parameter named " *
+                join(("'" * k * "'" for k in sort(unknown)), ", ") *
+                " in the problem (keys may be local or namespaced; a name the " *
+                "flattener's coupling rewired onto a loader variable is spelled by its " *
+                "SURVIVING name). Known: " * _elide_names(sort(collect(names)))
+        )
+    )
+    isempty(ambiguous) || throw(
+        SimulateError(
+            "remake(prob; p): ambiguous parameter key(s) " *
+                join(
+                (
+                    "'" * k * "' (matches " * join(sort(v), ", ") * ")"
+                        for (k, v) in sort(collect(ambiguous), by = first)
+                ), "; "
+            ) *
+                "; spell the namespaced name."
+        )
+    )
     syms = Symbol[]
     vals = Any[]
     for name in sort(collect(keys(normalized)))
@@ -1993,10 +2196,13 @@ function remake_parameters(prob::EsmProblem, overrides::AbstractDict)
         cls === :numeric || throw(SimulateError(_param_class_refusal(name, cls)))
         # A `:numeric` parameter is by definition a slot of `p`; if it somehow is
         # not, refuse rather than silently drop the override.
-        haskey(pm, name) || throw(SimulateError(
-            "remake(prob; p): '$name' classifies :numeric but is not a " *
-            "slot of the problem's `p` — refusing to apply an override that would " *
-            "have no effect (this is a build bug; please report it)."))
+        haskey(pm, name) || throw(
+            SimulateError(
+                "remake(prob; p): '$name' classifies :numeric but is not a " *
+                    "slot of the problem's `p` — refusing to apply an override that would " *
+                    "have no effect (this is a build bug; please report it)."
+            )
+        )
         push!(syms, Symbol(name))
         push!(vals, normalized[name])
     end
@@ -2084,23 +2290,27 @@ class that makes it un-substitutable (`:structural`, `:const_folded`,
 `remake(prob; …)` works from a session that has `using OrdinaryDiffEq` without
 EarthSciAST exporting a second `remake` into the conflict.
 """
-function remake(prob::EsmProblem; p = nothing, u0 = nothing, tspan = nothing,
-                callback = _KEEP_CALLBACKS)
+function remake(
+        prob::EsmProblem; p = nothing, u0 = nothing, tspan = nothing,
+        callback = _KEEP_CALLBACKS
+    )
     p_new = p === nothing ? prob.p :
-            p isa AbstractDict ? remake_parameters(prob, p) : p
+        p isa AbstractDict ? remake_parameters(prob, p) : p
     u0_new = u0 === nothing ? copy(prob.u0) :
-             _seed_u0(prob.u0, prob.var_map, u0, nothing)
+        _seed_u0(prob.u0, prob.var_map, u0, nothing)
     span = tspan === nothing ? prob.tspan : (Float64(tspan[1]), Float64(tspan[2]))
     cb = callback === _KEEP_CALLBACKS ? prob.callback : callback
     # The symbol cache is a function of `var_map` and the `p` NAMES, neither of
     # which a Dict-driven swap can change — so it is shared. A verbatim carrier
     # could carry different names, so that path gets a fresh (lazy) slot.
     sc = (p === nothing || p isa AbstractDict) ? prob.symcache : Ref{Any}(nothing)
-    return EsmProblem(prob.f!, u0_new, span, p_new, prob.var_map,
-                      prob.param_buffers, prob.discrete_providers, prob.dm,
-                      prob.n_equations, prob.buffer_time, prob.dirty,
-                      prob.output_meta, prob.run_doc, prob.run_file,
-                      prob.param_classes, prob.inspection, cb, prob.tstops,
-                      prob.save_everystep, prob.sinks, prob.lifecycle_sinks, sc,
-                      prob.merged_renames)
+    return EsmProblem(
+        prob.f!, u0_new, span, p_new, prob.var_map,
+        prob.param_buffers, prob.discrete_providers, prob.dm,
+        prob.n_equations, prob.buffer_time, prob.dirty,
+        prob.output_meta, prob.run_doc, prob.run_file,
+        prob.param_classes, prob.inspection, cb, prob.tstops,
+        prob.save_everystep, prob.sinks, prob.lifecycle_sinks, sc,
+        prob.merged_renames
+    )
 end

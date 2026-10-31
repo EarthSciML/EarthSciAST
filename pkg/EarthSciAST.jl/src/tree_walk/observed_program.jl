@@ -47,12 +47,12 @@ mutable struct _ObsProgramCtx
     pgather::AbstractDict
     reg_funcs::AbstractDict
     template_sites::Any
-    discrete_caches::Dict{String,Array{Float64}}
+    discrete_caches::Dict{String, Array{Float64}}
     # Every observed definition the build's split published (inlined and
     # materialized), by build name, as authored after lowering.
-    defs::Dict{String,ASTExpr}
+    defs::Dict{String, ASTExpr}
     state_names::Set{String}
-    programs::Dict{String,Any}
+    programs::Dict{String, Any}
     lock::ReentrantLock
 end
 
@@ -72,7 +72,7 @@ struct _ObservedProgram
     cells::Vector{Vector{Int}}
     levels::Tuple
     scalar::Any                          # `_Node` or `nothing`
-    cache::Union{Nothing,Array{Float64}}
+    cache::Union{Nothing, Array{Float64}}
     n_total::Int
     n_states::Int
     out_slots::Vector{Int}
@@ -82,8 +82,10 @@ end
 
 # Whether the plan in force runs the array cascade — `native` and `xla` do,
 # `interpreter` does not.
-_array_cascade_on() = (pl = _compiler_plan_now(); pl.stencil || pl.codegen ||
-                       pl.array_contraction)
+_array_cascade_on() = (
+    pl = _compiler_plan_now(); pl.stencil || pl.codegen ||
+        pl.array_contraction
+)
 
 # Whether `def` reads a continuous state and whether it reads `t`, in any
 # expression field. Loop symbols the definition binds are not references.
@@ -119,7 +121,7 @@ end
 # fastest, so each reversed multi-index read back to front is the next cell.
 function _row_major_cells(dims::AbstractVector{<:Integer})
     n = length(dims)
-    out = Vector{Vector{Int}}(undef, prod(dims; init=1))
+    out = Vector{Vector{Int}}(undef, prod(dims; init = 1))
     k = 0
     for I in CartesianIndices(Tuple(reverse(dims)))
         c = Vector{Int}(undef, n)
@@ -136,7 +138,7 @@ end
 # (the caller then takes the build-time cellwise route). Refusals raised while
 # compiling propagate.
 function _observed_program!(ctx::_ObsProgramCtx, name::String)
-    lock(ctx.lock) do
+    return lock(ctx.lock) do
         haskey(ctx.programs, name) && return ctx.programs[name]
         prog = _build_observed_program(ctx, name)
         ctx.programs[name] = prog
@@ -154,7 +156,7 @@ end
 const _OWN_SLOT_TABLES_LOCK = ReentrantLock()
 
 function _with_own_state_slot_tables(f)
-    lock(_OWN_SLOT_TABLES_LOCK) do
+    return lock(_OWN_SLOT_TABLES_LOCK) do
         saved = copy(_STATE_SLOT_TABLES)
         empty!(_STATE_SLOT_TABLES)
         try
@@ -176,8 +178,10 @@ function _build_observed_program_impl(ctx::_ObsProgramCtx, name::String)
     if haskey(ctx.discrete_caches, name)
         cache = ctx.discrete_caches[name]
         dims = collect(Int, size(cache))
-        return _ObservedProgram(name, dims, _row_major_cells(dims), (), nothing,
-                                cache, 0, ctx.n_states, Int[], false, false)
+        return _ObservedProgram(
+            name, dims, _row_major_cells(dims), (), nothing,
+            cache, 0, ctx.n_states, Int[], false, false
+        )
     end
     haskey(ctx.defs, name) || return nothing
     shaped = _is_array_shape(v.shape)
@@ -187,8 +191,10 @@ function _build_observed_program_impl(ctx::_ObsProgramCtx, name::String)
     shaped && !(name in ctx.cls.array_inline_vars) && return nothing
     dims = Int[]
     if shaped
-        d = _materialized_obs_dims(ctx.defs[name], v.shape, ctx.index_sets,
-                                   ctx.parts.derived_extents)
+        d = _materialized_obs_dims(
+            ctx.defs[name], v.shape, ctx.index_sets,
+            ctx.parts.derived_extents
+        )
         (d === nothing || isempty(d) || any(<=(0), d)) && return nothing
         length(v.shape) == length(d) || return nothing
         dims = d
@@ -208,16 +214,19 @@ function _build_observed_program_impl(ctx::_ObsProgramCtx, name::String)
     _, resolved_obs, raw_obs, mat_defs = _split_observed_and_derivatives(
         parts.equations, parts.observed_names, cls.geom_ring_vars,
         cls.geom_setup_vars, cls.geom_inline_vars, cls.array_inline_vars,
-        union(mat, _recurrence_names(ctx.defs, shaped_vars)), shaped_vars)
+        union(mat, _recurrence_names(ctx.defs, shaped_vars)), shaped_vars
+    )
     # The extended layout: the state, then one block per materialized observed.
-    mat_dims = Dict{String,Vector{Int}}()
+    mat_dims = Dict{String, Vector{Int}}()
     for m in mat_vars
         mat_dims[m] = m == name ? dims :
-            _materialized_obs_dims(mat_defs[m], model.variables[m].shape,
-                                   ctx.index_sets, parts.derived_extents)
+            _materialized_obs_dims(
+                mat_defs[m], model.variables[m].shape,
+                ctx.index_sets, parts.derived_extents
+            )
     end
     avi = copy(ctx.array_var_info)
-    blocks = Pair{String,Tuple{Vector{Int},Vector{Int}}}[]
+    blocks = Pair{String, Tuple{Vector{Int}, Vector{Int}}}[]
     for m in sort(mat_vars)
         avi[m] = (ones(Int, length(mat_dims[m])), copy(mat_dims[m]))
         push!(blocks, m => avi[m])
@@ -229,15 +238,17 @@ function _build_observed_program_impl(ctx::_ObsProgramCtx, name::String)
     st = false
     tm = false
     for m in mat_vars
-        s1, t1 = _def_state_time_refs(_sub_preserving(mat_defs[m], resolved_obs),
-                                      ctx.state_names)
+        s1, t1 = _def_state_time_refs(
+            _sub_preserving(mat_defs[m], resolved_obs),
+            ctx.state_names
+        )
         st |= s1; tm |= t1
     end
     levels = Any[]
     if !isempty(mat_vars)
         recur_names = _recurrence_names(mat_defs, mat)
         for lvl in _materialized_obs_levels(mat_defs, mat, raw_obs)
-            lvl_scalars = Tuple{Int,_Node}[]
+            lvl_scalars = Tuple{Int, _Node}[]
             lvl_kernels = _AccKernel[]
             lvl_scans = _ScanFold[]
             lvl_acs = _ArrayContraction[]
@@ -246,23 +257,35 @@ function _build_observed_program_impl(ctx::_ObsProgramCtx, name::String)
                 if m in recur_names
                     # The same sweep the right-hand side's fill levels run
                     # (recurrence_sweep.jl), against this program's layout.
-                    push!(lvl_recurs, _with_open_rule_label(m) do
-                        _compile_recurrence_sweep(m, mat_defs[m], mat_dims[m],
-                            get(model.variables, m, nothing), resolved_obs, avi, vm,
-                            ctx.const_registry, ctx.pgather, ctx.param_sym_set,
-                            ctx.reg_funcs)
-                    end)
+                    push!(
+                        lvl_recurs, _with_open_rule_label(m) do
+                            _compile_recurrence_sweep(
+                                m, mat_defs[m], mat_dims[m],
+                                get(model.variables, m, nothing), resolved_obs, avi, vm,
+                                ctx.const_registry, ctx.pgather, ctx.param_sym_set,
+                                ctx.reg_funcs
+                            )
+                        end
+                    )
                     continue
                 end
                 feqs = _materialized_fill_equations(m, mat_defs[m], mat_dims[m])
                 se, pcs, aks, sfs, acs = _with_rule_alias(m, m) do
-                    _compile_derivative_equations(feqs, resolved_obs, avi, vm,
+                    _compile_derivative_equations(
+                        feqs, resolved_obs, avi, vm,
                         ctx.const_registry, ctx.pgather, ctx.param_sym_set,
-                        ctx.reg_funcs, n_total; template_sites=ctx.template_sites)
+                        ctx.reg_funcs, n_total; template_sites = ctx.template_sites
+                    )
                 end
                 for (slot, ex) in se
-                    push!(lvl_scalars, (slot, _compile(ex, vm, ctx.param_sym_set,
-                                                       ctx.reg_funcs)))
+                    push!(
+                        lvl_scalars, (
+                            slot, _compile(
+                                ex, vm, ctx.param_sym_set,
+                                ctx.reg_funcs
+                            ),
+                        )
+                    )
                 end
                 append!(lvl_scalars, pcs)
                 append!(lvl_kernels, aks)
@@ -273,8 +296,12 @@ function _build_observed_program_impl(ctx::_ObsProgramCtx, name::String)
             section = _with_open_rule_label(name) do
                 _make_kernel_section(merged)
             end
-            push!(levels, (lvl_scalars, section, lvl_scans,
-                           _make_contraction_section(lvl_acs), Tuple(lvl_recurs)))
+            push!(
+                levels, (
+                    lvl_scalars, section, lvl_scans,
+                    _make_contraction_section(lvl_acs), Tuple(lvl_recurs),
+                )
+            )
         end
     end
     scalar = nothing
@@ -288,11 +315,15 @@ function _build_observed_program_impl(ctx::_ObsProgramCtx, name::String)
         body === nothing && return nothing
         s1, t1 = _def_state_time_refs(body, ctx.state_names)
         st |= s1; tm |= t1
-        scalar = _compile(_resolve_indices(body, avi, vm, ctx.const_registry, ctx.pgather),
-                          vm, ctx.param_sym_set, ctx.reg_funcs)
+        scalar = _compile(
+            _resolve_indices(body, avi, vm, ctx.const_registry, ctx.pgather),
+            vm, ctx.param_sym_set, ctx.reg_funcs
+        )
     end
-    return _ObservedProgram(name, dims, cells, Tuple(levels), scalar, nothing,
-                            n_total, ctx.n_states, out_slots, st, tm)
+    return _ObservedProgram(
+        name, dims, cells, Tuple(levels), scalar, nothing,
+        n_total, ctx.n_states, out_slots, st, tm
+    )
 end
 
 # Whether the observed `name`'s definition reaches a causal self-reference —
@@ -344,10 +375,14 @@ function _program_materialized_set(ctx::_ObsProgramCtx, name::String, shaped::Bo
         haskey(ctx.discrete_caches, r) && continue
         rv = get(model.variables, r, nothing)
         (rv !== nothing && _is_array_shape(rv.shape)) || continue
-        d = _materialized_obs_dims(defs[r], rv.shape, ctx.index_sets,
-                                   ctx.parts.derived_extents)
-        (d === nothing || isempty(d) || any(<=(0), d) ||
-         length(rv.shape) != length(d)) && continue
+        d = _materialized_obs_dims(
+            defs[r], rv.shape, ctx.index_sets,
+            ctx.parts.derived_extents
+        )
+        (
+            d === nothing || isempty(d) || any(<=(0), d) ||
+                length(rv.shape) != length(d)
+        ) && continue
         push!(out, r)
     end
     producers = setdiff(out, (name,))
@@ -366,16 +401,22 @@ end
 # and parameters `p` — the reading problem's own, which a `remake` may have
 # swapped; `nothing` reads the build's. Returns the field in row-major cell
 # order. Kernel sections carry scratch, so one program runs one call at a time.
-function _run_observed_program(ctx::_ObsProgramCtx, prog::_ObservedProgram,
-                               u::Union{Nothing,AbstractVector}, t::Float64,
-                               p = nothing)
+function _run_observed_program(
+        ctx::_ObsProgramCtx, prog::_ObservedProgram,
+        u::Union{Nothing, AbstractVector}, t::Float64,
+        p = nothing
+    )
     if prog.cache !== nothing
         c = prog.cache
         return ndims(c) > 1 ? vec(permutedims(c, reverse(1:ndims(c)))) : vec(copy(c))
     end
     if u !== nothing && length(u) != prog.n_states
-        throw(SimulateError("observed_field: `u` has $(length(u)) elements but the " *
-                            "problem's state vector has $(prog.n_states)"))
+        throw(
+            SimulateError(
+                "observed_field: `u` has $(length(u)) elements but the " *
+                    "problem's state vector has $(prog.n_states)"
+            )
+        )
     end
     pp = p !== nothing ? p : ctx.p === nothing ? NamedTuple() : ctx.p
     return lock(ctx.lock) do
@@ -390,8 +431,10 @@ end
 # The build name a read resolves to: the component-qualified spelling first,
 # then the bare one where the caller allows it — the order `_observed_field`
 # looks the published forms up in.
-function _program_build_name(ctx::_ObsProgramCtx, qualified::String,
-                             bare::Union{Nothing,String})
+function _program_build_name(
+        ctx::_ObsProgramCtx, qualified::String,
+        bare::Union{Nothing, String}
+    )
     known(n) = haskey(ctx.defs, n) || haskey(ctx.discrete_caches, n)
     known(qualified) && return qualified
     (bare !== nothing && known(bare)) && return bare
@@ -400,8 +443,10 @@ end
 
 # The program context `prob`'s own build captured, or `nothing` for a problem
 # whose build captured none (a compiler that builds its own program).
-_obs_ctx(prob) = lock(() -> get(prob.inspection.observed_ctxs, prob.run_file, nothing),
-                      prob.inspection.observed_lock)
+_obs_ctx(prob) = lock(
+    () -> get(prob.inspection.observed_ctxs, prob.run_file, nothing),
+    prob.inspection.observed_lock
+)
 
 # Whether a read was served by a compiled observed program: the output-time
 # row's tier says so. Task-local, like the per-cell count beside it
@@ -417,5 +462,7 @@ function _counting_program_reads(f)
 end
 
 _note_program_read!() =
-    (r = get(task_local_storage(), _PROGRAM_READ_KEY, nothing);
-     r === nothing || (r[] += 1); nothing)
+    (
+    r = get(task_local_storage(), _PROGRAM_READ_KEY, nothing);
+    r === nothing || (r[] += 1); nothing
+)

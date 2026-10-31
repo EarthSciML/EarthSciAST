@@ -480,7 +480,7 @@ nothing converted a custom unit; `tests/conformance/unit_registry`, which pins
 SCALES and not only dimensions, is what converts them.
 """
 function __init__()
-    Unitful.register(EarthSciAST)
+    return Unitful.register(EarthSciAST)
 end
 
 include("precompile_workload.jl")

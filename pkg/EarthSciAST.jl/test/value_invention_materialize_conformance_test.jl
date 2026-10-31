@@ -12,25 +12,31 @@ import OrdinaryDiffEqTsit5
 
 include("testutils.jl")  # TESTUTILS_REPO_ROOT
 
-const _VIM_DIR = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance",
-                          "value_invention_materialize")
+const _VIM_DIR = joinpath(
+    TESTUTILS_REPO_ROOT, "tests", "conformance",
+    "value_invention_materialize"
+)
 
 @testset "value_invention_materialize conformance" begin
     manifest = JSON3.read(read(joinpath(_VIM_DIR, "manifest.json"), String))
     @test manifest.category == "value_invention_materialize"
     @test "julia" in manifest.bindings_required
     @test Set(String(c.outcome) for fx in manifest.fixtures for c in fx.cases) ==
-          Set(["value", "refused"])
+        Set(["value", "refused"])
 
     for fx in manifest.fixtures
         @testset "$(fx.id)" begin
-            results = run_inline_tests(joinpath(_VIM_DIR, String(fx.path));
-                                       model_name=String(fx.model),
-                                       alg=OrdinaryDiffEqTsit5.Tsit5())
+            results = run_inline_tests(
+                joinpath(_VIM_DIR, String(fx.path));
+                model_name = String(fx.model),
+                alg = OrdinaryDiffEqTsit5.Tsit5()
+            )
             @test length(results) == length(fx.cases)
             for case in fx.cases
-                idx = findfirst(r -> r.test_id == String(fx.test_id) &&
-                                     r.assertion_idx == case.assertion_idx, results)
+                idx = findfirst(
+                    r -> r.test_id == String(fx.test_id) &&
+                        r.assertion_idx == case.assertion_idx, results
+                )
                 @test idx !== nothing
                 idx === nothing && continue
                 r = results[idx]
@@ -38,7 +44,7 @@ const _VIM_DIR = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance",
                 if case.outcome == "value"
                     r.passed || @info "$(fx.id) did not pass" r.message
                     @test r.passed
-                    @test r.actual !== nothing && isapprox(r.actual, case.expected; rtol=1e-12)
+                    @test r.actual !== nothing && isapprox(r.actual, case.expected; rtol = 1.0e-12)
                 else
                     @test !r.passed
                     @test r.actual === nothing

@@ -14,7 +14,7 @@ using EarthSciAST
 include("testutils.jl")  # TESTUTILS_REPO_ROOT
 
 const _CF_REPO_ROOT = TESTUTILS_REPO_ROOT
-const _CF_FIX_ROOT   = joinpath(_CF_REPO_ROOT, "tests", "closed_functions")
+const _CF_FIX_ROOT = joinpath(_CF_REPO_ROOT, "tests", "closed_functions")
 
 # Convert a JSON3-decoded scenario input to the value the closed function
 # expects. Strings used as numeric placeholders (e.g. "NaN") are decoded;
@@ -56,10 +56,11 @@ function _cf_load_check_code(fn_name::String, inputs)
     cspec = EarthSciAST._fn_const_arg_spec(fn_name)
     args = EarthSciAST.ASTExpr[
         pos in cspec.const_positions ?
-            EarthSciAST.OpExpr("const", EarthSciAST.ASTExpr[]; value=inputs[pos]) :
+            EarthSciAST.OpExpr("const", EarthSciAST.ASTExpr[]; value = inputs[pos]) :
             EarthSciAST.VarExpr("q$(pos)")
-        for pos in eachindex(inputs)]
-    node = EarthSciAST.OpExpr("fn", args; name=fn_name)
+            for pos in eachindex(inputs)
+    ]
+    node = EarthSciAST.OpExpr("fn", args; name = fn_name)
     return try
         EarthSciAST._check_interp_fn_node(node)
         ""
@@ -81,7 +82,7 @@ end
                 fixture_dir = joinpath(full_module, fname_dir)
                 isdir(fixture_dir) || continue
                 canonical = joinpath(fixture_dir, "canonical.esm")
-                expected  = joinpath(fixture_dir, "expected.json")
+                expected = joinpath(fixture_dir, "expected.json")
                 @testset "$(fname_dir)" begin
                     @test isfile(canonical)
                     @test isfile(expected)
@@ -148,7 +149,7 @@ end
                                 # inputs as `const` args.
                                 if startswith(fn_name, "interp.")
                                     @test _cf_load_check_code(fn_name, inputs_decoded) ==
-                                          expected_code
+                                        expected_code
                                 end
                             end
                         end
@@ -199,14 +200,23 @@ end
 # ---------------------------------------------------------------------------
 @testset "interp.searchsorted xs must be a rank-1 const array (esm-spec §9.2)" begin
     v(n) = VarExpr(n)
-    cst(x) = OpExpr("const", EarthSciAST.ASTExpr[]; value=x)
+    cst(x) = OpExpr("const", EarthSciAST.ASTExpr[]; value = x)
     model_with(xs) = Model(
-        Dict("y" => ModelVariable(EarthSciAST.UnknownVariable; default=0.0),
-             "a" => ModelVariable(EarthSciAST.ParameterVariable; default=1.0),
-             "b" => ModelVariable(EarthSciAST.ParameterVariable; default=2.0)),
-        [Equation(OpExpr("D", EarthSciAST.ASTExpr[v("y")]; wrt="t"),
-                  OpExpr("fn", EarthSciAST.ASTExpr[v("a"), xs];
-                         name="interp.searchsorted"))])
+        Dict(
+            "y" => ModelVariable(EarthSciAST.UnknownVariable; default = 0.0),
+            "a" => ModelVariable(EarthSciAST.ParameterVariable; default = 1.0),
+            "b" => ModelVariable(EarthSciAST.ParameterVariable; default = 2.0)
+        ),
+        [
+            Equation(
+                OpExpr("D", EarthSciAST.ASTExpr[v("y")]; wrt = "t"),
+                OpExpr(
+                    "fn", EarthSciAST.ASTExpr[v("a"), xs];
+                    name = "interp.searchsorted"
+                )
+            ),
+        ]
+    )
     build_code(xs) = try
         EarthSciAST._build_evaluator(model_with(xs))
         nothing
@@ -216,7 +226,7 @@ end
     end
     @test build_code(v("b")) == "interp_axis_not_const"
     @test build_code(OpExpr("+", EarthSciAST.ASTExpr[v("a"), v("b")])) ==
-          "interp_axis_not_const"
+        "interp_axis_not_const"
     @test build_code(cst(3.0)) == "interp_axis_not_const"
     @test build_code(cst(Any[[1.0, 2.0], [3.0, 4.0]])) == "interp_axis_not_const"
     @test build_code(cst(Any[[1.0, NaN], [3.0, 4.0]])) == "interp_axis_not_const"
@@ -239,14 +249,20 @@ end
     enum_expr() = OpExpr("enum", EarthSciAST.ASTExpr[VarExpr("Phase"), VarExpr("LIQUID")])
 
     function _file(; enums)
-        model = Model(Dict("x" => ModelVariable(EarthSciAST.UnknownVariable)),
-                      [Equation(OpExpr("D", EarthSciAST.ASTExpr[VarExpr("x")]; wrt="t"),
-                                enum_expr())])
-        return EsmFile("1.0.0", Metadata("Enums"); models=Dict("M" => model), enums=enums)
+        model = Model(
+            Dict("x" => ModelVariable(EarthSciAST.UnknownVariable)),
+            [
+                Equation(
+                    OpExpr("D", EarthSciAST.ASTExpr[VarExpr("x")]; wrt = "t"),
+                    enum_expr()
+                ),
+            ]
+        )
+        return EsmFile("1.0.0", Metadata("Enums"); models = Dict("M" => model), enums = enums)
     end
 
     @testset "the pure form leaves its argument alone" begin
-        file = _file(enums=Dict("Phase" => Dict("SOLID" => 0, "LIQUID" => 1)))
+        file = _file(enums = Dict("Phase" => Dict("SOLID" => 0, "LIQUID" => 1)))
         lowered = lower_enums(file)
 
         rhs_of(f) = f.models["M"].equations[1].rhs
@@ -268,7 +284,7 @@ end
 
     @testset "every rejection is an EnumLoweringError, not a ParseError" begin
         undeclared = try
-            lower_enums(_file(enums=Dict("Other" => Dict("A" => 0))))
+            lower_enums(_file(enums = Dict("Other" => Dict("A" => 0))))
             nothing
         catch e
             e
@@ -278,7 +294,7 @@ end
         @test undeclared.code == "unknown_enum"
 
         no_symbol = try
-            lower_enums(_file(enums=Dict("Phase" => Dict("SOLID" => 0))))
+            lower_enums(_file(enums = Dict("Phase" => Dict("SOLID" => 0))))
             nothing
         catch e
             e
@@ -286,13 +302,23 @@ end
         @test no_symbol isa EnumLoweringError
         @test no_symbol.code == "unknown_enum_symbol"
 
-        malformed_model = Model(Dict("x" => ModelVariable(EarthSciAST.UnknownVariable)),
-            [Equation(OpExpr("D", EarthSciAST.ASTExpr[VarExpr("x")]; wrt="t"),
-                      OpExpr("enum", EarthSciAST.ASTExpr[VarExpr("Phase")]))])
+        malformed_model = Model(
+            Dict("x" => ModelVariable(EarthSciAST.UnknownVariable)),
+            [
+                Equation(
+                    OpExpr("D", EarthSciAST.ASTExpr[VarExpr("x")]; wrt = "t"),
+                    OpExpr("enum", EarthSciAST.ASTExpr[VarExpr("Phase")])
+                ),
+            ]
+        )
         malformed = try
-            lower_enums(EsmFile("1.0.0", Metadata("Enums");
-                                models=Dict("M" => malformed_model),
-                                enums=Dict("Phase" => Dict("LIQUID" => 1))))
+            lower_enums(
+                EsmFile(
+                    "1.0.0", Metadata("Enums");
+                    models = Dict("M" => malformed_model),
+                    enums = Dict("Phase" => Dict("LIQUID" => 1))
+                )
+            )
             nothing
         catch e
             e
@@ -337,9 +363,9 @@ end
     @test rhs.values[2].op == "const"
     @test rhs.values[2].value == -1
     # values[3] — both read through ARITHMETIC: 0 + 10*1 + (-1) = 9.
-    @test evaluate_expr(rhs.values[1], Dict{String,Float64}()) == 0.0
-    @test evaluate_expr(rhs.values[2], Dict{String,Float64}()) == -1.0
-    @test evaluate_expr(rhs.values[3], Dict{String,Float64}()) == 9.0
+    @test evaluate_expr(rhs.values[1], Dict{String, Float64}()) == 0.0
+    @test evaluate_expr(rhs.values[2], Dict{String, Float64}()) == -1.0
+    @test evaluate_expr(rhs.values[3], Dict{String, Float64}()) == 9.0
 
     # Uniqueness is unchanged by the widened domain: `0` is a value like any
     # other. Written as its own case beside the positive duplicate because a
@@ -356,11 +382,11 @@ end
     @test dup_code(() -> load_string(_doc("""{"m":{"A":3,"B":3}}"""))) == "enum_duplicate_value"
     # Whether or not any `enum` op names the duplicated symbols.
     @test dup_code(() -> load_string(_doc("""{"m":{"A":1,"B":2,"C":2}}"""))) ==
-          "enum_duplicate_value"
+        "enum_duplicate_value"
     # Values MAY coincide across enums.
     @test dup_code(() -> load_string(_doc("""{"m":{"A":1},"n":{"A":1}}"""))) == ""
     # A file built in memory (no coercer) is checked by the lowering.
-    mem = EsmFile("1.0.0", Metadata("E"); enums=Dict("m" => Dict("A" => 0, "B" => 0)))
+    mem = EsmFile("1.0.0", Metadata("E"); enums = Dict("m" => Dict("A" => 0, "B" => 0)))
     @test dup_code(() -> lower_enums(mem)) == "enum_duplicate_value"
     ok = load_string(_doc("""{"m":{"A":0,"B":-1}}"""))
     @test ok.enums["m"]["A"] == 0
@@ -369,7 +395,7 @@ end
     # The two tests/invalid fixtures (resolver_only, pinned code).
     for f in ("enum_duplicate_value.esm", "enum_duplicate_zero_value.esm")
         @test dup_code(() -> load_path(joinpath(_CF_REPO_ROOT, "tests", "invalid", f))) ==
-              "enum_duplicate_value"
+            "enum_duplicate_value"
     end
 end
 
@@ -385,9 +411,11 @@ end
     for xs in ([3.0, 1.0, NaN], [NaN, 1.0, 2.0], [1.0, NaN, 0.0])
         @test cf_code("interp.searchsorted", Any[1.0, xs]) == "searchsorted_nan"
         @test cf_code("interp.linear", Any[[1.0, 2.0, 3.0], xs, 1.0]) == "interp_nan_in_axis"
-        @test cf_code("interp.bilinear",
-                      Any[[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], [0.0, 1.0], xs, 0.5, 1.0]) ==
-              "interp_nan_in_axis"
+        @test cf_code(
+            "interp.bilinear",
+            Any[[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], [0.0, 1.0], xs, 0.5, 1.0]
+        ) ==
+            "interp_nan_in_axis"
     end
     @test cf_code("interp.searchsorted", Any[1.0, [3.0, 1.0, 2.0]]) == "searchsorted_non_monotonic"
 end
@@ -403,9 +431,13 @@ end
 @testset "closed-function and function-table checks at load (esm-spec §9.2, §9.5.5)" begin
     invalid_dir = joinpath(_CF_REPO_ROOT, "tests", "invalid")
     pins = JSON3.read(read(joinpath(invalid_dir, "expected_errors.json"), String))
-    files = sort([f for f in readdir(invalid_dir)
-                  if endswith(f, ".esm") &&
-                     (startswith(f, "closed_fn_") || startswith(f, "function_table_"))])
+    files = sort(
+        [
+            f for f in readdir(invalid_dir)
+                if endswith(f, ".esm") &&
+                (startswith(f, "closed_fn_") || startswith(f, "function_table_"))
+        ]
+    )
     # A missing fixture set is a failure, not a vacuous pass.
     @test length(files) >= 30
     for f in files
@@ -422,12 +454,14 @@ end
                 e.code
             end
             @test code == expected
-            mem = EarthSciAST.coerce_esm_file(JSON3.read(read(path, String), Dict{String,Any}))
+            mem = EarthSciAST.coerce_esm_file(JSON3.read(read(path, String), Dict{String, Any}))
             result = validate(mem)
             @test !result.is_valid
             @test any(e -> e.error_type == expected, result.structural_errors)
-            @test any(e -> e.error_type == expected,
-                      EarthSciAST.validate_closed_functions_and_tables(mem))
+            @test any(
+                e -> e.error_type == expected,
+                EarthSciAST.validate_closed_functions_and_tables(mem)
+            )
             vp = EarthSciAST.validate_path(path)
             @test !vp.is_valid
             @test any(e -> e.error_type == expected, vp.structural_errors)
@@ -449,11 +483,11 @@ end
 # the body, whose `ax` is only a parameter there.
 @testset "interp.* call in a template body is checked at the application (esm-spec §9.2)" begin
     doc(ax) = """{"esm":"1.0.0","metadata":{"name":"T","description":"d","authors":["a"]},
-     "models":{"M":{"expression_templates":{"lin":{"params":["ax","q"],
-       "body":{"op":"fn","name":"interp.linear","args":[{"op":"const","args":[],"value":[1.0,2.0]},"ax","q"]}}},
-      "variables":{"y":{"type":"unknown","units":"1"},"x":{"type":"parameter","units":"1","default":0.5}},
-      "equations":[{"lhs":"y","rhs":{"op":"apply_expression_template","args":[],"name":"lin",
-         "bindings":{"ax":{"op":"const","args":[],"value":$ax},"q":"x"}}}]}}}"""
+    "models":{"M":{"expression_templates":{"lin":{"params":["ax","q"],
+      "body":{"op":"fn","name":"interp.linear","args":[{"op":"const","args":[],"value":[1.0,2.0]},"ax","q"]}}},
+     "variables":{"y":{"type":"unknown","units":"1"},"x":{"type":"parameter","units":"1","default":0.5}},
+     "equations":[{"lhs":"y","rhs":{"op":"apply_expression_template","args":[],"name":"lin",
+        "bindings":{"ax":{"op":"const","args":[],"value":$ax},"q":"x"}}}]}}}"""
     code(ax) = try
         load_string(doc(ax)); ""
     catch e

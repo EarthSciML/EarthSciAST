@@ -56,7 +56,7 @@ struct Opts
     compare::Bool
     baseline::String
     json::String
-    only::Union{Nothing,Set{String}}
+    only::Union{Nothing, Set{String}}
 end
 function parse_opts(args)
     full = false; compare = false
@@ -64,21 +64,31 @@ function parse_opts(args)
     jsonout = joinpath(BENCH_DIR, "results.json")
     only = nothing
     for a in args
-        if a == "--full"; full = true
-        elseif a == "--compare"; compare = true
-        elseif startswith(a, "--baseline="); baseline = split(a, "="; limit = 2)[2]
-        elseif startswith(a, "--json="); jsonout = split(a, "="; limit = 2)[2]
-        elseif startswith(a, "--only="); only = Set(split(split(a, "="; limit = 2)[2], ","))
-        else; error("unknown option $a (see header of run_bench.jl)")
+        if a == "--full"
+            full = true
+        elseif a == "--compare"
+            compare = true
+        elseif startswith(a, "--baseline=")
+            baseline = split(a, "="; limit = 2)[2]
+        elseif startswith(a, "--json=")
+            jsonout = split(a, "="; limit = 2)[2]
+        elseif startswith(a, "--only=")
+            only = Set(split(split(a, "="; limit = 2)[2], ","))
+        else
+            error("unknown option $a (see header of run_bench.jl)")
         end
     end
-    Opts(full, compare, String(baseline), String(jsonout), only)
+    return Opts(full, compare, String(baseline), String(jsonout), only)
 end
 
-const RESEACT_ROOT = get(ENV, "RESEACT_ROOT",
-    "/projects/illinois/eng/cee/ctessum/ctessum/code/reseact.esm")
-const ESD_ROOT = get(ENV, "ESD_ROOT",
-    normpath(joinpath(RESEACT_ROOT, "..", "EarthSciDiscretizations")))
+const RESEACT_ROOT = get(
+    ENV, "RESEACT_ROOT",
+    "/projects/illinois/eng/cee/ctessum/ctessum/code/reseact.esm"
+)
+const ESD_ROOT = get(
+    ENV, "ESD_ROOT",
+    normpath(joinpath(RESEACT_ROOT, "..", "EarthSciDiscretizations"))
+)
 
 # ---------------------------------------------------------------------------- #
 # Measurement helpers
@@ -104,9 +114,11 @@ function timed_build(doc; kwargs...)
     t0 = time()
     built = EA.build_evaluator(doc; kwargs...)
     build_s = time() - t0
-    stats = (build_s = build_s,
-             body_variants = EA._BENCH_BODY_VARIANTS[],
-             compile_calls = EA._BENCH_COMPILE_CALLS[])
+    stats = (
+        build_s = build_s,
+        body_variants = EA._BENCH_BODY_VARIANTS[],
+        compile_calls = EA._BENCH_COMPILE_CALLS[],
+    )
     EA._BENCH_ON[] = false
     return built, stats
 end
@@ -121,15 +133,17 @@ function bench_rhs(f!, u0, p, t)
     # Dual through the SAME in-place evaluator (the tree-walk RHS is generic in
     # its value type; see test/tree_walk_iip_generic_test.jl). One partial is
     # enough to exercise the Dual arithmetic path.
-    DT = ForwardDiff.Dual{Nothing,Float64,1}
+    DT = ForwardDiff.Dual{Nothing, Float64, 1}
     uD = DT.(u0)
     duD = similar(uD)
     f!(duD, uD, p, t)
     t_dual = @belapsed $f!($duD, $uD, $p, $t) seconds = 3
     allocs_dual = @allocated f!(duD, uD, p, t)
 
-    return (rhs_f64_s = t_f64, rhs_f64_allocs = Int(allocs_f64),
-            rhs_dual_s = t_dual, rhs_dual_allocs = Int(allocs_dual))
+    return (
+        rhs_f64_s = t_f64, rhs_f64_allocs = Int(allocs_f64),
+        rhs_dual_s = t_dual, rhs_dual_allocs = Int(allocs_dual),
+    )
 end
 
 # ---------------------------------------------------------------------------- #
@@ -150,13 +164,15 @@ end
 
 function _generate_t3d(nlev::Int)
     out = joinpath(_stage_dir(), "transport_3d_bench_$(nlev).esm")
-    cmd = String["python3", joinpath(BENCH_DIR, "gen_transport_fixture.py"),
-                 ESD_ROOT, out, string(nlev)]
+    cmd = String[
+        "python3", joinpath(BENCH_DIR, "gen_transport_fixture.py"),
+        ESD_ROOT, out, string(nlev),
+    ]
     nlev == 7 ||
         push!(cmd, joinpath(RESEACT_ROOT, "prototypes", "reseact_3d", "hybrid_coefs.json"))
     run(Cmd(cmd))
     co = JSON3.read(read(out * ".hybrid_coefs.json", String))
-    ca = Dict{String,Any}("dA" => Float64.(co.dA), "dB" => Float64.(co.dB))
+    ca = Dict{String, Any}("dA" => Float64.(co.dA), "dB" => Float64.(co.dB))
     return out, ca
 end
 
@@ -185,14 +201,16 @@ function _committed_t3d_compatible_impl(esm_path::String)
     m = first(values(doc.models))
     nmax = 0
     for eq in m.equations, node in (eq.lhs.op == "D" ? eq.rhs.args[1].args : ())
-        (node isa JSON3.Object && get(node, :op, "") == "D" &&
-         get(node, :wrt, "") == "lon") || continue
+        (
+            node isa JSON3.Object && get(node, :op, "") == "D" &&
+                get(node, :wrt, "") == "lon"
+        ) || continue
         nmax = max(nmax, length(node.args))
     end
     nmax == 0 && return false, "no D-lon site found in $(esm_path)"
     nmax == want_dargs && return true, ""
     return false, "committed artifact has $(nmax)-operand D-lon inflow sites, " *
-                  "on-disk ESD rules expect $(want_dargs) (contract skew across ESD e358325)"
+        "on-disk ESD rules expect $(want_dargs) (contract skew across ESD e358325)"
 end
 
 function prepare_t3d(nlev::Int)
@@ -217,8 +235,10 @@ end
 # Fixture runners: each returns a Dict of recorded metrics
 # ---------------------------------------------------------------------------- #
 
-function run_esm_fixture(name, esm_path; const_arrays = Dict{String,Any}(),
-                         warm_rebuild::Bool = false, source = "committed")
+function run_esm_fixture(
+        name, esm_path; const_arrays = Dict{String, Any}(),
+        warm_rebuild::Bool = false, source = "committed"
+    )
     println("== fixture $name ==")
     println("   esm: $esm_path")
     flush(stdout)
@@ -227,13 +247,16 @@ function run_esm_fixture(name, esm_path; const_arrays = Dict{String,Any}(),
     load_s = time() - t0
     built, b1 = timed_build(doc; const_arrays)
     f!, u0, p, tspan, _ = built
-    @printf("   build: %.2f s   body_variants=%d compile_calls=%d   nstates=%d\n",
-            b1.build_s, b1.body_variants, b1.compile_calls, length(u0))
+    @printf(
+        "   build: %.2f s   body_variants=%d compile_calls=%d   nstates=%d\n",
+        b1.build_s, b1.body_variants, b1.compile_calls, length(u0)
+    )
     flush(stdout)
-    r = Dict{String,Any}(
+    r = Dict{String, Any}(
         "esm" => esm_path, "source" => source, "nstates" => length(u0),
         "load_s" => load_s, "build_s" => b1.build_s,
-        "body_variants" => b1.body_variants, "compile_calls" => b1.compile_calls)
+        "body_variants" => b1.body_variants, "compile_calls" => b1.compile_calls
+    )
     if warm_rebuild
         # Second in-session build: the build machinery is JIT-compiled now, so
         # this is the number comparable across engine changes (and the one the
@@ -245,7 +268,9 @@ function run_esm_fixture(name, esm_path; const_arrays = Dict{String,Any}(),
     rhs = bench_rhs(f!, u0, p, tspan[1])
     @printf("   rhs f64:  %.6g s/call  %d B/call\n", rhs.rhs_f64_s, rhs.rhs_f64_allocs)
     @printf("   rhs dual: %.6g s/call  %d B/call\n", rhs.rhs_dual_s, rhs.rhs_dual_allocs)
-    for (k, v) in pairs(rhs); r[String(k)] = v; end
+    for (k, v) in pairs(rhs)
+        r[String(k)] = v
+    end
     r["peak_rss_mb"] = peak_rss_mb()
     @printf("   peak RSS: %.0f MiB (process high-water mark)\n", r["peak_rss_mb"])
     flush(stdout)
@@ -258,22 +283,27 @@ function run_ref_kernel(; nlon = 7, nlat = 7, nlev = 72)
     t_sweep = @belapsed BenchRefKernel.ppm_lon_sweep!($(s.du), $(s.q), $(s.U), $(s.w), $(s.ws)) seconds = 3
     allocs = @allocated BenchRefKernel.ppm_lon_sweep!(s.du, s.q, s.U, s.w, s.ws)
     ncells = nlon * nlat * nlev
-    r = Dict{String,Any}(
+    r = Dict{String, Any}(
         "grid" => "$(nlon)x$(nlat)x$(nlev)", "ncells" => ncells,
         "sweep_s" => t_sweep, "sweep_allocs" => Int(allocs),
         # per-RHS-equivalent: 3 axes x 3 advected fields (m/mq/dev structure)
-        "rhs_equiv_s" => 9 * t_sweep, "rhs_equiv_convention" => "9 x lon sweep (3 axes x 3 fields)")
-    @printf("   sweep: %.6g s (%d cells, %d B)   per-RHS-equivalent (x9): %.6g s\n",
-            t_sweep, ncells, allocs, r["rhs_equiv_s"])
+        "rhs_equiv_s" => 9 * t_sweep, "rhs_equiv_convention" => "9 x lon sweep (3 axes x 3 fields)"
+    )
+    @printf(
+        "   sweep: %.6g s (%d cells, %d B)   per-RHS-equivalent (x9): %.6g s\n",
+        t_sweep, ncells, allocs, r["rhs_equiv_s"]
+    )
     return r
 end
 
 # ---------------------------------------------------------------------------- #
 # Baseline comparison: >10% regression on any tracked metric fails the run.
 # ---------------------------------------------------------------------------- #
-const COMPARE_METRICS = ["build_s", "build_warm_s", "rhs_f64_s", "rhs_dual_s",
-                         "rhs_f64_allocs", "rhs_dual_allocs",
-                         "body_variants", "compile_calls", "sweep_s", "rhs_equiv_s"]
+const COMPARE_METRICS = [
+    "build_s", "build_warm_s", "rhs_f64_s", "rhs_dual_s",
+    "rhs_f64_allocs", "rhs_dual_allocs",
+    "body_variants", "compile_calls", "sweep_s", "rhs_equiv_s",
+]
 
 function compare_results(results, baseline_path)
     isfile(baseline_path) || error("baseline not found: $baseline_path")
@@ -287,9 +317,13 @@ function compare_results(results, baseline_path)
             bv = Float64(b[Symbol(m)]); cv = Float64(cur[m])
             bv > 0 || continue
             ratio = cv / bv
-            if ratio > 1.10
-                push!(fails, @sprintf("%s.%s: %.6g -> %.6g (%.0f%% regression)",
-                                      fname, m, bv, cv, (ratio - 1) * 100))
+            if ratio > 1.1
+                push!(
+                    fails, @sprintf(
+                        "%s.%s: %.6g -> %.6g (%.0f%% regression)",
+                        fname, m, bv, cv, (ratio - 1) * 100
+                    )
+                )
             end
         end
         if haskey(b, :source) && haskey(cur, "source") && String(b.source) != cur["source"]
@@ -306,22 +340,28 @@ function main(args)
     opts = parse_opts(args)
     torun(n) = opts.only === nothing || n in opts.only
 
-    results = Dict{String,Any}()
+    results = Dict{String, Any}()
 
     if torun("proxy27")
-        results["proxy27"] = run_esm_fixture("proxy27",
+        results["proxy27"] = run_esm_fixture(
+            "proxy27",
             joinpath(BENCH_DIR, "fixtures", "proxy27.esm"); warm_rebuild = true,
-            source = "committed")
+            source = "committed"
+        )
     end
     if torun("t3d_7x7x7")
         path, ca, source = prepare_t3d(7)
-        results["t3d_7x7x7"] = run_esm_fixture("t3d_7x7x7", path;
-            const_arrays = ca, source = source)
+        results["t3d_7x7x7"] = run_esm_fixture(
+            "t3d_7x7x7", path;
+            const_arrays = ca, source = source
+        )
     end
     if opts.full && torun("t3d_7x7x72")
         path, ca, source = prepare_t3d(72)
-        results["t3d_7x7x72"] = run_esm_fixture("t3d_7x7x72", path;
-            const_arrays = ca, source = source)
+        results["t3d_7x7x72"] = run_esm_fixture(
+            "t3d_7x7x72", path;
+            const_arrays = ca, source = source
+        )
     end
     if torun("ref_kernel")
         results["ref_kernel"] = run_ref_kernel()
@@ -329,38 +369,52 @@ function main(args)
 
     # ---- table ----
     println()
-    @printf("%-12s %10s %10s %8s %8s %12s %10s %12s %10s %9s\n",
-            "fixture", "nstates", "build[s]", "bodyvar", "compile",
-            "rhs f64[s]", "allocs[B]", "rhs dual[s]", "allocs[B]", "RSS[MiB]")
+    @printf(
+        "%-12s %10s %10s %8s %8s %12s %10s %12s %10s %9s\n",
+        "fixture", "nstates", "build[s]", "bodyvar", "compile",
+        "rhs f64[s]", "allocs[B]", "rhs dual[s]", "allocs[B]", "RSS[MiB]"
+    )
     for name in ["proxy27", "t3d_7x7x7", "t3d_7x7x72"]
         haskey(results, name) || continue
         r = results[name]
-        @printf("%-12s %10d %10.2f %8d %8d %12.3g %10d %12.3g %10d %9.0f\n",
-                name, r["nstates"], r["build_s"], r["body_variants"], r["compile_calls"],
-                r["rhs_f64_s"], r["rhs_f64_allocs"], r["rhs_dual_s"], r["rhs_dual_allocs"],
-                r["peak_rss_mb"])
+        @printf(
+            "%-12s %10d %10.2f %8d %8d %12.3g %10d %12.3g %10d %9.0f\n",
+            name, r["nstates"], r["build_s"], r["body_variants"], r["compile_calls"],
+            r["rhs_f64_s"], r["rhs_f64_allocs"], r["rhs_dual_s"], r["rhs_dual_allocs"],
+            r["peak_rss_mb"]
+        )
     end
     if haskey(results, "ref_kernel")
         r = results["ref_kernel"]
-        @printf("%-12s %10s %10s %8s %8s %12.3g %10d %12s %10s %9s\n",
-                "ref_kernel", r["grid"], "-", "-", "-",
-                r["rhs_equiv_s"], r["sweep_allocs"], "-", "-", "-")
+        @printf(
+            "%-12s %10s %10s %8s %8s %12.3g %10d %12s %10s %9s\n",
+            "ref_kernel", r["grid"], "-", "-", "-",
+            r["rhs_equiv_s"], r["sweep_allocs"], "-", "-", "-"
+        )
         for t in ["t3d_7x7x7", "t3d_7x7x72"]
             haskey(results, t) &&
-                @printf("   %s rhs f64 / ref rhs-equiv = %.1fx\n",
-                        t, results[t]["rhs_f64_s"] / r["rhs_equiv_s"])
+                @printf(
+                "   %s rhs f64 / ref rhs-equiv = %.1fx\n",
+                t, results[t]["rhs_f64_s"] / r["rhs_equiv_s"]
+            )
         end
     end
 
     # ---- JSON ----
-    out = Dict{String,Any}(
-        "meta" => Dict{String,Any}(
+    out = Dict{String, Any}(
+        "meta" => Dict{String, Any}(
             "timestamp" => string(now()),
             "julia" => string(VERSION),
             "hostname" => gethostname(),
-            "commit" => try readchomp(`git -C $REPO_ROOT rev-parse --short HEAD`) catch; "unknown" end,
-            "reseact_root" => RESEACT_ROOT, "esd_root" => ESD_ROOT),
-        "fixtures" => results)
+            "commit" => try
+                readchomp(`git -C $REPO_ROOT rev-parse --short HEAD`)
+            catch
+                "unknown"
+            end,
+            "reseact_root" => RESEACT_ROOT, "esd_root" => ESD_ROOT
+        ),
+        "fixtures" => results
+    )
     open(opts.json, "w") do io
         JSON3.pretty(io, out)
     end

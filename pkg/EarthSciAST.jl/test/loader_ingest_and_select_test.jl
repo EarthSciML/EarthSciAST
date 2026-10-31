@@ -59,22 +59,36 @@ end
 #   | nox   |   7 | -92 | kept, code 36 (`case_insensitive`)          |
 #   | VOC   |   3 | -93 | kept, code 1                                |
 function _lis_write_ff10_zip(dir)
-    header = join(vcat(["country_cd", "region_cd", "tribal_code", "facility_id",
-                        "unit_id", "rel_point_id", "process_id", "agy_facility_id",
-                        "agy_unit_id", "agy_rel_point_id", "agy_process_id", "scc",
-                        "polid", "ann_value"],
-                       ["col$i" for i in 14:(_LIS_N_COL - 1)]), ",")
+    header = join(
+        vcat(
+            [
+                "country_cd", "region_cd", "tribal_code", "facility_id",
+                "unit_id", "rel_point_id", "process_id", "agy_facility_id",
+                "agy_unit_id", "agy_rel_point_id", "agy_process_id", "scc",
+                "polid", "ann_value",
+            ],
+            ["col$i" for i in 14:(_LIS_N_COL - 1)]
+        ), ","
+    )
     member(rows) = "#FORMAT=FF10_POINT\n$header\n" * join(rows, "\n") * "\n"
     path = joinpath(dir, "2016fd_inputs_point.zip")
     w = ZipFile.Writer(path)
     for (name, rows) in [
-        ("point/egu_alpha.csv", [_lis_ff10_row("NOX", "100.0", "-90.0", "40.0"),
-                                 _lis_ff10_row("CO", "50.0", "-91.0", "41.0"),
-                                 _lis_ff10_row("SO2", "25.0", "", "42.0")]),
-        ("point/egu_beta.csv", [_lis_ff10_row("nox", "7.0", "-92.0", "43.0"),
-                                _lis_ff10_row("VOC", "3.0", "-93.0", "44.0")]),
-        ("point/ptnonipm.csv", [_lis_ff10_row("NOX", "999.0", "-94.0", "45.0")]),
-    ]
+            (
+                "point/egu_alpha.csv", [
+                    _lis_ff10_row("NOX", "100.0", "-90.0", "40.0"),
+                    _lis_ff10_row("CO", "50.0", "-91.0", "41.0"),
+                    _lis_ff10_row("SO2", "25.0", "", "42.0"),
+                ],
+            ),
+            (
+                "point/egu_beta.csv", [
+                    _lis_ff10_row("nox", "7.0", "-92.0", "43.0"),
+                    _lis_ff10_row("VOC", "3.0", "-93.0", "44.0"),
+                ],
+            ),
+            ("point/ptnonipm.csv", [_lis_ff10_row("NOX", "999.0", "-94.0", "45.0")]),
+        ]
         f = ZipFile.addfile(w, name; method = ZipFile.Store)
         write(f, member(rows))
     end
@@ -87,10 +101,15 @@ function _lis_write_grid_store(dir, n)
     store = joinpath(dir, "grid.zarr")
     arr = joinpath(store, "W")
     mkpath(arr)
-    write(joinpath(arr, ".zarray"), JSON.json(Dict(
-        "zarr_format" => 2, "shape" => [n], "chunks" => [n], "dtype" => "<f8",
-        "compressor" => nothing, "fill_value" => 0.0, "order" => "C",
-        "filters" => nothing)))
+    write(
+        joinpath(arr, ".zarray"), JSON.json(
+            Dict(
+                "zarr_format" => 2, "shape" => [n], "chunks" => [n], "dtype" => "<f8",
+                "compressor" => nothing, "fill_value" => 0.0, "order" => "C",
+                "filters" => nothing
+            )
+        )
+    )
     write(joinpath(arr, ".zattrs"), JSON.json(Dict("_ARRAY_DIMENSIONS" => ["cell"])))
     open(joinpath(arr, "0"), "w") do io
         for i in 0:(n - 1)
@@ -109,8 +128,11 @@ function _lis_document(dir)
     return doc
 end
 
-_lis_sample(doc, cache_root, key) = Float64.(EA_LIS.provider_sample(
-    EA_LIS.providers_from_document(doc; cache_root = cache_root)[key], 0.0))
+_lis_sample(doc, cache_root, key) = Float64.(
+    EA_LIS.provider_sample(
+        EA_LIS.providers_from_document(doc; cache_root = cache_root)[key], 0.0
+    )
+)
 
 """The `update.from` binding of the parameter a provider key names.
 
@@ -174,8 +196,10 @@ end
             insp = EA_LIS.BuildInspection()
             # NOTE the absent metaparameters: the caller passes NO N_REC. The
             # document declares that the loader knows it (FORMAT-08-A-010).
-            prep = EA_LIS.esm_problem(doc, (0.0, 1.0); providers = providers, inspect = insp,
-                                  pushdown_rewrite = true)
+            prep = EA_LIS.esm_problem(
+                doc, (0.0, 1.0); providers = providers, inspect = insp,
+                pushdown_rewrite = true
+            )
             @test EA_LIS.observed_field(prep, "is_NOx") == [1.0, 1.0, 0.0]
             # 100 + 7 — the dropped CO/SO2 records contribute nothing, because
             # they are not records.
@@ -188,8 +212,10 @@ end
             doc = _lis_document(dir)
             providers = EA_LIS.providers_from_document(doc; cache_root = joinpath(dir, "cache"))
             err = try
-                EA_LIS.esm_problem(doc, (0.0, 1.0); providers = providers, pushdown_rewrite = true,
-                               metaparameters = Dict("N_REC" => 5))  # the RAW row count
+                EA_LIS.esm_problem(
+                    doc, (0.0, 1.0); providers = providers, pushdown_rewrite = true,
+                    metaparameters = Dict("N_REC" => 5)
+                )  # the RAW row count
                 nothing
             catch e
                 e
@@ -211,19 +237,19 @@ end
             doc = _lis_document(dir)
             # A second model reading the same source, whose `lon` is the LATITUDE
             # column — so a collision would be visible as latitude values.
-            doc["models"]["Ingest2"] = Dict{String,Any}(
+            doc["models"]["Ingest2"] = Dict{String, Any}(
                 "system_kind" => "nonlinear",
                 "equations" => Any[],
-                "variables" => Dict{String,Any}(
-                    "lon" => Dict{String,Any}(
+                "variables" => Dict{String, Any}(
+                    "lon" => Dict{String, Any}(
                         "type" => "parameter",
                         "units" => "degree",
                         "default" => 0.0,
                         "shape" => Any["emis_records"],
-                        "update" => Dict{String,Any}(
+                        "update" => Dict{String, Any}(
                             "kind" => "data",
                             "source" => "EGU_Emis",
-                            "from" => Dict{String,Any}("file_variable" => "LATITUDE"),
+                            "from" => Dict{String, Any}("file_variable" => "LATITUDE"),
                         ),
                     ),
                 ),
@@ -303,9 +329,11 @@ end
             pushed = Float64.(EA_LIS.provider_sample(src, 0.0))
             # the same provider forced onto the post-read path
             EXT = Base.get_extension(EarthSciAST, :EarthSciASTEarthSciIOExt)
-            engine = EXT.DeclaredProvider(src.key, src.varname, src.inner, src.table,
-                                          src.column, src.select, false, src.extent_mp,
-                                          src.unit_conversion)
+            engine = EXT.DeclaredProvider(
+                src.key, src.varname, src.inner, src.table,
+                src.column, src.select, false, src.extent_mp,
+                src.unit_conversion
+            )
             @test Float64.(EA_LIS.provider_sample(engine, 0.0)) == pushed
         end
     end
@@ -333,8 +361,10 @@ end
                 Dict("axes" => [Dict("range" => Dict("start" => 0, "stop" => 2))])
             providers = EA_LIS.providers_from_document(doc; cache_root = joinpath(dir, "cache"))
             insp = EA_LIS.BuildInspection()
-            prep = EA_LIS.esm_problem(doc, (0.0, 1.0); providers = providers, inspect = insp,
-                                  pushdown_rewrite = true)
+            prep = EA_LIS.esm_problem(
+                doc, (0.0, 1.0); providers = providers, inspect = insp,
+                pushdown_rewrite = true
+            )
             @test only(EA_LIS.observed_field(prep, "E_NOx")) == 107.0
             # N_REC follows the DELIVERED records, so a reduced run needs no
             # other knob.
@@ -347,8 +377,10 @@ end
             doc = _lis_document(dir)
             providers = EA_LIS.providers_from_document(doc; cache_root = joinpath(dir, "cache"))
             insp = EA_LIS.BuildInspection()
-            prep = EA_LIS.esm_problem(doc, (0.0, 1.0); providers = providers, inspect = insp,
-                                  pushdown_rewrite = true)
+            prep = EA_LIS.esm_problem(
+                doc, (0.0, 1.0); providers = providers, inspect = insp,
+                pushdown_rewrite = true
+            )
             w = EA_LIS.observed_field(prep, "src_width")
             # src_W is delivered on src_cells (N_SRC), not the full pop_cells axis
             @test size(w) == (4,)

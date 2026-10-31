@@ -26,7 +26,7 @@ using EarthSciAST
         @test op_expr isa EarthSciAST.ASTExpr
 
         # Test OpExpr with optional parameters
-        diff_expr = OpExpr("D", EarthSciAST.ASTExpr[VarExpr("x")], wrt="t", dim="time")
+        diff_expr = OpExpr("D", EarthSciAST.ASTExpr[VarExpr("x")], wrt = "t", dim = "time")
         @test diff_expr.wrt == "t"
         @test diff_expr.dim == "time"
     end
@@ -35,7 +35,7 @@ using EarthSciAST
         # Test Equation. Qualify ESM.Equation: under MTK 11 + Pkg.test
         # extras the test session has both ESS and MTK loaded into Main,
         # which makes the bare `Equation` reference ambiguous.
-        lhs = OpExpr("D", EarthSciAST.ASTExpr[VarExpr("x")], wrt="t")
+        lhs = OpExpr("D", EarthSciAST.ASTExpr[VarExpr("x")], wrt = "t")
         rhs = OpExpr("*", EarthSciAST.ASTExpr[NumExpr(2.0), VarExpr("x")])
         eq = EarthSciAST.Equation(lhs, rhs)
         @test eq.lhs == lhs
@@ -52,10 +52,10 @@ using EarthSciAST
         @test UnknownVariable isa ModelVariableType
         @test ParameterVariable isa ModelVariableType
         @test Set(instances(ModelVariableType)) ==
-              Set([UnknownVariable, ParameterVariable])
+            Set([UnknownVariable, ParameterVariable])
 
         # Test ModelVariable
-        mv = ModelVariable(UnknownVariable, default=1.0, description="Test variable")
+        mv = ModelVariable(UnknownVariable, default = 1.0, description = "Test variable")
         @test mv.type == UnknownVariable
         @test mv.default == 1.0
         @test mv.description == "Test variable"
@@ -67,9 +67,11 @@ using EarthSciAST
 
         # A parameter's value model: `default`, or a distribution, optionally
         # refreshed by an update (esm-spec §5.4, §6.3).
-        w = ModelVariable(ParameterVariable; units="1/s^0.5",
-            distribution=Distribution("normal"; location=0.0, scale=1.0),
-            update=ParameterUpdate("wiener"))
+        w = ModelVariable(
+            ParameterVariable; units = "1/s^0.5",
+            distribution = Distribution("normal"; location = 0.0, scale = 1.0),
+            update = ParameterUpdate("wiener")
+        )
         @test w.distribution.kind == "normal"
         @test w.distribution.location == 0.0
         @test w.distribution.scale == 1.0
@@ -79,35 +81,42 @@ using EarthSciAST
         @test w.update[1].kind == "wiener"
 
         # An ordered array of two or more rules (esm-spec §5.4) keeps its order.
-        multi = ModelVariable(ParameterVariable; default=1.0, update=[
-            ParameterUpdate("condition"; when=VarExpr("a"), expression=NumExpr(1.0)),
-            ParameterUpdate("condition"; when=VarExpr("b"), expression=NumExpr(2.0))])
+        multi = ModelVariable(
+            ParameterVariable; default = 1.0, update = [
+                ParameterUpdate("condition"; when = VarExpr("a"), expression = NumExpr(1.0)),
+                ParameterUpdate("condition"; when = VarExpr("b"), expression = NumExpr(2.0)),
+            ]
+        )
         @test length(multi.update) == 2
         @test multi.update[1].when == VarExpr("a")
 
         # The `data` value form binds one file variable of a data source.
-        fed = ModelVariable(ParameterVariable; units="K", shape=String[],
-            update=ParameterUpdate("data"; source="MET",
-                                   from=DataSourceBinding("T2M")))
+        fed = ModelVariable(
+            ParameterVariable; units = "K", shape = String[],
+            update = ParameterUpdate(
+                "data"; source = "MET",
+                from = DataSourceBinding("T2M")
+            )
+        )
         @test fed.update[1].source == "MET"
         @test fed.update[1].from.file_variable == "T2M"
 
         # A registered handler is the third value form (esm-spec §5.5).
-        h = FunctionalUpdate("PIDController"; read_vars=["T"], read_params=["Kp"])
+        h = FunctionalUpdate("PIDController"; read_vars = ["T"], read_params = ["Kp"])
         @test h.handler_id == "PIDController"
         @test h.read_vars == ["T"]
     end
 
     @testset "Model Component Types" begin
         # Test Species
-        species = Species("CO2", units="mol/m^3", default=1e-6)
+        species = Species("CO2", units = "mol/m^3", default = 1.0e-6)
         @test species.name == "CO2"
         @test species.units == "mol/m^3"
-        @test species.default == 1e-6
+        @test species.default == 1.0e-6
         @test species.description === nothing
 
         # Test Parameter
-        param = Parameter("k", 0.1, description="Rate constant", units="1/s")
+        param = Parameter("k", 0.1, description = "Rate constant", units = "1/s")
         @test param.name == "k"
         @test param.default == 0.1
         @test param.description == "Rate constant"
@@ -129,7 +138,7 @@ using EarthSciAST
         @test cond_trigger isa DiscreteEventTrigger
         @test cond_trigger.expression isa VarExpr
 
-        periodic_trigger = PeriodicTrigger(10.0, phase=2.0)
+        periodic_trigger = PeriodicTrigger(10.0, phase = 2.0)
         @test periodic_trigger isa DiscreteEventTrigger
         @test periodic_trigger.period == 10.0
         @test periodic_trigger.phase == 2.0
@@ -149,24 +158,26 @@ using EarthSciAST
 
     @testset "System Configuration Types" begin
         # Test Reference
-        ref = Reference(doi="10.1000/test", citation="Test paper")
+        ref = Reference(doi = "10.1000/test", citation = "Test paper")
         @test ref.doi == "10.1000/test"
         @test ref.citation == "Test paper"
         @test ref.url === nothing
         @test ref.notes === nothing
 
         # Test Metadata
-        metadata = Metadata("test_model",
-                          description="A test model",
-                          authors=["Test Author"],
-                          license="MIT")
+        metadata = Metadata(
+            "test_model",
+            description = "A test model",
+            authors = ["Test Author"],
+            license = "MIT"
+        )
         @test metadata.name == "test_model"
         @test metadata.description == "A test model"
         @test metadata.authors == ["Test Author"]
         @test metadata.license == "MIT"
 
         # Test Domain (esm-spec v0.8.0: temporal-only; the spatial table was removed)
-        domain = Domain(temporal=Dict("t" => [0.0, 100.0]))
+        domain = Domain(temporal = Dict("t" => [0.0, 100.0]))
         @test domain.temporal isa Dict
 
         # Test EsmFile
@@ -199,14 +210,16 @@ using EarthSciAST
         # hand-maintained ladders (parse coerce, serialize, graph kind). The
         # rows are pinned literal-for-literal so the cut is provably
         # behavior-neutral; a failure means the vocabulary drifted.
-        @test Tuple((row.enum, row.wire, row.legacy)
-                    for row in ESM.MODEL_VARIABLE_TYPE_TABLE) == (
-            (UnknownVariable,   "unknown",   ("UnknownVariable",)),
+        @test Tuple(
+            (row.enum, row.wire, row.legacy)
+                for row in ESM.MODEL_VARIABLE_TYPE_TABLE
+        ) == (
+            (UnknownVariable, "unknown", ("UnknownVariable",)),
             (ParameterVariable, "parameter", ("ParameterVariable",)),
         )
         # One row per enum member, in order (also asserted at load time).
         @test [row.enum for row in ESM.MODEL_VARIABLE_TYPE_TABLE] ==
-              collect(instances(ESM.ModelVariableType))
+            collect(instances(ESM.ModelVariableType))
 
         # Derived lookups: serialize target == graph kind == wire spelling.
         for row in ESM.MODEL_VARIABLE_TYPE_TABLE

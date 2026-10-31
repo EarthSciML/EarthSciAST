@@ -8,7 +8,7 @@ using JSON3
         # Unit-level behaviors not expressible as fixture cases:
         # object-identity preservation, wrt/dim passthrough.
         num = NumExpr(3.14)
-        bindings = Dict{String,EarthSciAST.ASTExpr}("x" => NumExpr(2.0))
+        bindings = Dict{String, EarthSciAST.ASTExpr}("x" => NumExpr(2.0))
         @test substitute(num, bindings) === num
 
         var_x = VarExpr("x")
@@ -17,7 +17,7 @@ using JSON3
         var_y = VarExpr("y")
         @test substitute(var_y, bindings) === var_y
 
-        diff_expr = OpExpr("D", EarthSciAST.ASTExpr[var_x], wrt="t", dim="time")
+        diff_expr = OpExpr("D", EarthSciAST.ASTExpr[var_x], wrt = "t", dim = "time")
         result = substitute(diff_expr, bindings)
         @test result.wrt == "t"
         @test result.dim == "time"
@@ -42,16 +42,16 @@ using JSON3
                     label = haskey(case, :description) ? String(case[:description]) : "case $i"
                     @testset "$label" begin
                         input_expr = EarthSciAST.expression_from_json(case[:input])
-                        bindings = Dict{String,EarthSciAST.ASTExpr}(
+                        bindings = Dict{String, EarthSciAST.ASTExpr}(
                             string(k) => EarthSciAST.expression_from_json(v)
-                            for (k, v) in pairs(case[:bindings])
+                                for (k, v) in pairs(case[:bindings])
                         )
                         expected = EarthSciAST.expression_from_json(case[:expected])
                         result = substitute(input_expr, bindings)
                         # ASTExpr structs have no `==` method, so compare via the
                         # canonical JSON-serialized form.
                         @test EarthSciAST.serialize_expression(result) ==
-                              EarthSciAST.serialize_expression(expected)
+                            EarthSciAST.serialize_expression(expected)
                     end
                 end
             end
@@ -76,7 +76,7 @@ using JSON3
         @test free_variables(nested) == Set(["x", "y"])
 
         # Test OpExpr with wrt field
-        diff_expr = OpExpr("D", EarthSciAST.ASTExpr[VarExpr("x")], wrt="t")
+        diff_expr = OpExpr("D", EarthSciAST.ASTExpr[VarExpr("x")], wrt = "t")
         @test free_variables(diff_expr) == Set(["x", "t"])
 
         # Test expression with repeated variables
@@ -107,7 +107,7 @@ using JSON3
         @test !EarthSciAST.contains(nested, "z")
 
         # Test OpExpr with wrt field
-        diff_expr = OpExpr("D", EarthSciAST.ASTExpr[VarExpr("x")], wrt="t")
+        diff_expr = OpExpr("D", EarthSciAST.ASTExpr[VarExpr("x")], wrt = "t")
         @test EarthSciAST.contains(diff_expr, "x")
         @test EarthSciAST.contains(diff_expr, "t")
         @test !EarthSciAST.contains(diff_expr, "y")
@@ -194,7 +194,7 @@ using JSON3
         # `x` yields `y` — the replacement `y` is NOT re-resolved.
         var_x = VarExpr("x")
         var_y = VarExpr("y")
-        circular_bindings = Dict{String,EarthSciAST.ASTExpr}(
+        circular_bindings = Dict{String, EarthSciAST.ASTExpr}(
             "x" => var_y,
             "y" => var_x,
         )
@@ -202,7 +202,7 @@ using JSON3
         @test substitute(var_y, circular_bindings) === var_x
 
         # Self-referential binding {x => x} must terminate with x unchanged.
-        self_bindings = Dict{String,EarthSciAST.ASTExpr}("x" => var_x)
+        self_bindings = Dict{String, EarthSciAST.ASTExpr}("x" => var_x)
         @test substitute(var_x, self_bindings) === var_x
 
         # Mutual reference within a compound expression: each var rewritten once.
@@ -221,13 +221,14 @@ using JSON3
         var_a = VarExpr("a")
         var_b = VarExpr("b")
         var_c = VarExpr("c")
-        chained_bindings = Dict{String,EarthSciAST.ASTExpr}(
+        chained_bindings = Dict{String, EarthSciAST.ASTExpr}(
             "a" => var_b,
             "b" => var_c,
         )
         @test substitute(var_a, chained_bindings) === var_b
         chained_result = substitute(
-            OpExpr("+", EarthSciAST.ASTExpr[var_a, var_b]), chained_bindings)
+            OpExpr("+", EarthSciAST.ASTExpr[var_a, var_b]), chained_bindings
+        )
         @test chained_result isa OpExpr
         @test chained_result.args[1] === var_b
         @test chained_result.args[2] === var_c
@@ -236,16 +237,17 @@ using JSON3
         # Every occurrence in the input is substituted, at every sibling
         # position; repetition alone must never be mistaken for a cycle.
         a_times_a = OpExpr("*", EarthSciAST.ASTExpr[var_a, var_a])
-        repeated_bindings = Dict{String,EarthSciAST.ASTExpr}("x" => a_times_a)
+        repeated_bindings = Dict{String, EarthSciAST.ASTExpr}("x" => a_times_a)
         repeated_result = substitute(
-            OpExpr("*", EarthSciAST.ASTExpr[var_x, var_x]), repeated_bindings)
+            OpExpr("*", EarthSciAST.ASTExpr[var_x, var_x]), repeated_bindings
+        )
         @test repeated_result isa OpExpr
         @test repeated_result.args[1] === a_times_a
         @test repeated_result.args[2] === a_times_a
 
         # Self-reference inside a nested replacement: inner x NOT re-substituted.
         inner_x_plus_one = OpExpr("+", EarthSciAST.ASTExpr[var_x, NumExpr(1.0)])
-        nested_self = Dict{String,EarthSciAST.ASTExpr}("x" => inner_x_plus_one)
+        nested_self = Dict{String, EarthSciAST.ASTExpr}("x" => inner_x_plus_one)
         nested_result = substitute(var_x, nested_self)
         @test nested_result isa OpExpr
         @test nested_result.op == "+"
@@ -260,7 +262,7 @@ using JSON3
         for i in 0:(depth - 1)
             deep_expr = OpExpr("+", EarthSciAST.ASTExpr[deep_expr, VarExpr("v$i")])
         end
-        deep_bindings = Dict{String,EarthSciAST.ASTExpr}("x" => NumExpr(1.0))
+        deep_bindings = Dict{String, EarthSciAST.ASTExpr}("x" => NumExpr(1.0))
         deep_result = substitute(deep_expr, deep_bindings)
 
         # Walk the left spine down to the innermost x; it should be replaced.
@@ -277,7 +279,7 @@ using JSON3
         # Closest analogue to Python's {"op": "+"} (missing args) — an OpExpr
         # with empty args is valid and substitution returns an equivalent node.
         empty_op = OpExpr("+", EarthSciAST.ASTExpr[])
-        any_bindings = Dict{String,EarthSciAST.ASTExpr}("x" => NumExpr(42.0))
+        any_bindings = Dict{String, EarthSciAST.ASTExpr}("x" => NumExpr(42.0))
         empty_result = substitute(empty_op, any_bindings)
         @test empty_result isa OpExpr
         @test empty_result.op == "+"
@@ -290,10 +292,10 @@ using JSON3
                 var_x,
                 OpExpr("+", EarthSciAST.ASTExpr[var_y, NumExpr(1.0)]),
             ];
-            wrt="t",
-            dim="time",
+            wrt = "t",
+            dim = "time",
         )
-        empty_bindings = Dict{String,EarthSciAST.ASTExpr}()
+        empty_bindings = Dict{String, EarthSciAST.ASTExpr}()
         id_result = substitute(compound, empty_bindings)
         @test id_result isa OpExpr
         @test id_result.op == "*"
@@ -302,8 +304,8 @@ using JSON3
         @test id_result.args[1] === var_x
 
         # --- Metadata preservation through substitution ---
-        d_expr = OpExpr("D", EarthSciAST.ASTExpr[var_x]; wrt="t", dim="time")
-        num_bindings = Dict{String,EarthSciAST.ASTExpr}("x" => NumExpr(3.14))
+        d_expr = OpExpr("D", EarthSciAST.ASTExpr[var_x]; wrt = "t", dim = "time")
+        num_bindings = Dict{String, EarthSciAST.ASTExpr}("x" => NumExpr(3.14))
         d_result = substitute(d_expr, num_bindings)
         @test d_result.op == "D"
         @test d_result.wrt == "t"
@@ -314,7 +316,7 @@ using JSON3
     @testset "Integration tests" begin
         # Test substitute + simplify
         expr = OpExpr("*", EarthSciAST.ASTExpr[OpExpr("+", EarthSciAST.ASTExpr[VarExpr("x"), NumExpr(0.0)]), VarExpr("y")])
-        bindings = Dict{String,EarthSciAST.ASTExpr}("y" => NumExpr(1.0))
+        bindings = Dict{String, EarthSciAST.ASTExpr}("y" => NumExpr(1.0))
         substituted = substitute(expr, bindings)
         simplified = simplify(substituted)
         @test simplified === VarExpr("x")
@@ -337,16 +339,22 @@ using JSON3
         E = EarthSciAST
         # aggregate whose body/filter/bounds/table-axes/key carry variables
         # invisible to an args-only traversal.
-        agg = OpExpr("faq", E.ASTExpr[];
-            output_idx=Any["i"],
-            ranges=Dict{String,Any}(
+        agg = OpExpr(
+            "faq", E.ASTExpr[];
+            output_idx = Any["i"],
+            ranges = Dict{String, Any}(
                 "i" => E.IndexSetRef("cells"),
-                "j" => Any[IntExpr(1), VarExpr("n_upper")]),
-            expr_body=OpExpr("*", E.ASTExpr[
-                OpExpr("index", E.ASTExpr[VarExpr("A"), VarExpr("i")]),
-                VarExpr("w")]),
-            filter=OpExpr(">", E.ASTExpr[VarExpr("thresh"), NumExpr(0.0)]),
-            key=VarExpr("keyvar"))
+                "j" => Any[IntExpr(1), VarExpr("n_upper")]
+            ),
+            expr_body = OpExpr(
+                "*", E.ASTExpr[
+                    OpExpr("index", E.ASTExpr[VarExpr("A"), VarExpr("i")]),
+                    VarExpr("w"),
+                ]
+            ),
+            filter = OpExpr(">", E.ASTExpr[VarExpr("thresh"), NumExpr(0.0)]),
+            key = VarExpr("keyvar")
+        )
         outer = OpExpr("+", E.ASTExpr[VarExpr("base"), agg])
 
         @testset "free_variables sees nested bodies, subtracts binders" begin
@@ -374,9 +382,10 @@ using JSON3
         end
 
         @testset "substitute rewrites key and range-bound expressions" begin
-            bindings = Dict{String,E.ASTExpr}(
+            bindings = Dict{String, E.ASTExpr}(
                 "w" => NumExpr(2.0), "n_upper" => IntExpr(10),
-                "keyvar" => VarExpr("keyvar2"))
+                "keyvar" => VarExpr("keyvar2")
+            )
             r = substitute(agg, bindings)
             @test r.expr_body.args[2] == NumExpr(2.0)
             @test r.ranges["j"][2] == IntExpr(10)
@@ -387,19 +396,24 @@ using JSON3
         end
 
         @testset "integral int_var is a binder for free_variables" begin
-            integ = OpExpr("integrate", E.ASTExpr[];
-                int_var="s",
-                lower=NumExpr(0.0), upper=VarExpr("T"),
-                expr_body=OpExpr("*", E.ASTExpr[VarExpr("s"), VarExpr("k")]))
+            integ = OpExpr(
+                "integrate", E.ASTExpr[];
+                int_var = "s",
+                lower = NumExpr(0.0), upper = VarExpr("T"),
+                expr_body = OpExpr("*", E.ASTExpr[VarExpr("s"), VarExpr("k")])
+            )
             fv = free_variables(integ)
             @test fv == Set(["T", "k"])
             @test EarthSciAST.contains(integ, "s")  # containment still true
         end
 
         @testset "table_lookup axis inputs traversed" begin
-            tl = OpExpr("table_lookup", E.ASTExpr[]; table="fuel",
-                table_axes=Dict{String,E.ASTExpr}(
-                    "code" => OpExpr("+", E.ASTExpr[VarExpr("fm"), IntExpr(1)])))
+            tl = OpExpr(
+                "table_lookup", E.ASTExpr[]; table = "fuel",
+                table_axes = Dict{String, E.ASTExpr}(
+                    "code" => OpExpr("+", E.ASTExpr[VarExpr("fm"), IntExpr(1)])
+                )
+            )
             @test free_variables(tl) == Set(["fm"])
             @test EarthSciAST.contains(tl, "fm")
         end

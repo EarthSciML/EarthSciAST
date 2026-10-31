@@ -107,13 +107,17 @@ struct _ScanFold
     lstride::Int
     kstride::Int
 end
-function _ScanFold(slots::Vector{Int}, len::Int, oplus::Symbol, zerobar::Float64,
-                   inclusive::Bool, terms::Vector{Any})
+function _ScanFold(
+        slots::Vector{Int}, len::Int, oplus::Symbol, zerobar::Float64,
+        inclusive::Bool, terms::Vector{Any}
+    )
     ls, ks = _scan_strides(slots, len)
     return _ScanFold(slots, len, oplus, zerobar, inclusive, terms, ls, ks)
 end
-_ScanFold(slots::Vector{Int}, len::Int, oplus::Symbol, zerobar::Float64,
-          inclusive::Bool) = _ScanFold(slots, len, oplus, zerobar, inclusive, Any[])
+_ScanFold(
+    slots::Vector{Int}, len::Int, oplus::Symbol, zerobar::Float64,
+    inclusive::Bool
+) = _ScanFold(slots, len, oplus, zerobar, inclusive, Any[])
 
 function _scan_strides(slots::Vector{Int}, len::Int)
     (len >= 2 && !isempty(slots)) || return (0, 0)
@@ -145,8 +149,10 @@ _apply_scan_folds!(du, u, p, t, folds::AbstractVector{_ScanFold}) =
     _apply_scan_folds!(du, folds)
 
 # Fold lanes `l1:l2` of `S` (all of them by default); lanes are independent.
-function _apply_scan_fold!(du, S::_ScanFold, l1::Int = 1,
-                           l2::Int = S.len >= 1 ? div(length(S.slots), S.len) : 0)
+function _apply_scan_fold!(
+        du, S::_ScanFold, l1::Int = 1,
+        l2::Int = S.len >= 1 ? div(length(S.slots), S.len) : 0
+    )
     op = S.oplus
     # Resolve the semiring ⊕ ONCE per fold, then run a type-stable lane loop
     # specialized on the concrete function (the `where {F}` on `_scan_lanes!`).
@@ -159,8 +165,12 @@ function _apply_scan_fold!(du, S::_ScanFold, l1::Int = 1,
     elseif op === :min
         _scan_lanes!(du, S, min, l1, l2)
     else
-        throw(TreeWalkError("E_TREEWALK_SCAN_UNKNOWN_OPLUS",
-            "prefix scan carries unsupported ⊕ '$(op)'; expected +, *, max or min"))
+        throw(
+            TreeWalkError(
+                "E_TREEWALK_SCAN_UNKNOWN_OPLUS",
+                "prefix scan carries unsupported ⊕ '$(op)'; expected +, *, max or min"
+            )
+        )
     end
     return nothing
 end
@@ -173,7 +183,7 @@ function _scan_lanes!(du, S::_ScanFold, combine::F, l1::Int, l2::Int) where {F}
     # A strided scan whose running value is stored exactly by `du` (the value
     # type ⊕ yields is `du`'s own) runs level by level.
     if S.lstride == 1 && abs(S.kstride) >= l2 - l1 + 1 && l2 > l1 &&
-       typeof(combine(z, zero(eltype(du)))) === eltype(du)
+            typeof(combine(z, zero(eltype(du)))) === eltype(du)
         return _scan_lanes_strided!(du, S, combine, l1, l2)
     end
     @inbounds for l in l1:l2
@@ -221,8 +231,10 @@ end
 function _scan_lanes_strided!(du, S::_ScanFold, combine::F, l1::Int, l2::Int) where {F}
     lo, hi = _scan_strided_extent(S, l1, l2)
     v, off = _scan_dense(du, lo, hi)
-    _scan_strided_run!(v, S.slots[1] - off, S.kstride, S.len, S.zerobar, S.inclusive,
-                       combine, l1, l2)
+    _scan_strided_run!(
+        v, S.slots[1] - off, S.kstride, S.len, S.zerobar, S.inclusive,
+        combine, l1, l2
+    )
     return nothing
 end
 
@@ -236,8 +248,10 @@ function _scan_strided_extent(S::_ScanFold, l1::Int, l2::Int)
     return (min(a, b, a + d, b + d), max(a, b, a + d, b + d))
 end
 
-function _scan_strided_run!(du, s1::Int, ks::Int, len::Int, z::Float64,
-                            inclusive::Bool, combine::F, l1::Int, l2::Int) where {F}
+function _scan_strided_run!(
+        du, s1::Int, ks::Int, len::Int, z::Float64,
+        inclusive::Bool, combine::F, l1::Int, l2::Int
+    ) where {F}
     a = s1 + l1 - 1
     b = s1 + l2 - 1
     @inbounds begin

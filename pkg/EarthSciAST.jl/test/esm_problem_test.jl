@@ -31,7 +31,7 @@ const ESM_P = EarthSciAST
 # data_refresh_e2e mock): per-tick (var => field) tables keyed by t.
 mutable struct _PrepLogProvider
     times::Vector{Float64}
-    fields::Dict{Float64,Dict{String,Vector{Float64}}}
+    fields::Dict{Float64, Dict{String, Vector{Float64}}}
     samples::Vector{Float64}
 end
 _PrepLogProvider(times, fields) =
@@ -46,14 +46,19 @@ function ESM_P.provider_sample(p::_PrepLogProvider, t::Real)
 end
 
 @testset "EsmProblem — build once, solve many" begin
-    _D(v) = Dict{String,Any}("op" => "D", "args" => Any[v], "wrt" => "t")
-    scalar_esm(rhs) = Dict{String,Any}(
-        "esm" => "1.0.0", "metadata" => Dict{String,Any}("name" => "S"),
-        "models" => Dict{String,Any}("M" => Dict{String,Any}(
-            "variables" => Dict{String,Any}(
-                "y" => Dict{String,Any}("type" => "unknown", "default" => 0.0),
-                "k" => Dict{String,Any}("type" => "parameter", "default" => 1.0)),
-            "equations" => Any[Dict{String,Any}("lhs" => _D("y"), "rhs" => rhs)])))
+    _D(v) = Dict{String, Any}("op" => "D", "args" => Any[v], "wrt" => "t")
+    scalar_esm(rhs) = Dict{String, Any}(
+        "esm" => "1.0.0", "metadata" => Dict{String, Any}("name" => "S"),
+        "models" => Dict{String, Any}(
+            "M" => Dict{String, Any}(
+                "variables" => Dict{String, Any}(
+                    "y" => Dict{String, Any}("type" => "unknown", "default" => 0.0),
+                    "k" => Dict{String, Any}("type" => "parameter", "default" => 1.0)
+                ),
+                "equations" => Any[Dict{String, Any}("lhs" => _D("y"), "rhs" => rhs)]
+            )
+        )
+    )
     Y = Symbol("M.y")
 
     @testset "snapshot + no re-derivation: input mutation after construction is not seen" begin
@@ -61,7 +66,7 @@ end
         # Fresh oracles over the PRE-mutation document (deepcopy: `esm` stays pristine).
         fresh2 = solve(esm_problem(deepcopy(esm), (0.0, 2.0)), Tsit5())
         fresh3 = solve(esm_problem(deepcopy(esm), (0.0, 3.0)), Tsit5())
-        @test isapprox(fresh2[Y][end], 2.0; rtol = 1e-5)   # D(y)=k, k=1
+        @test isapprox(fresh2[Y][end], 2.0; rtol = 1.0e-5)   # D(y)=k, k=1
 
         prob = esm_problem(esm, (0.0, 2.0))
         @test prob isa EsmProblem
@@ -70,7 +75,7 @@ end
         esm["models"]["M"]["variables"]["k"]["default"] = 100.0
         # ...a freshly built problem over the mutated Dict sees it:
         mutated = solve(esm_problem(esm, (0.0, 2.0)), Tsit5())
-        @test isapprox(mutated[Y][end], 200.0; rtol = 1e-5)
+        @test isapprox(mutated[Y][end], 200.0; rtol = 1.0e-5)
         # ...but the built problem does NOT: two runs at different tspans both
         # match the pre-mutation fresh runs exactly, proving the snapshot was
         # taken AND that neither call re-derived anything from `esm`. The second
@@ -87,7 +92,7 @@ end
     @testset "a :numeric override rides `p`; a build-consumed one is refused" begin
         prob = esm_problem(scalar_esm("k"), (0.0, 3.0); p = Dict("M.k" => 2.5))
         r = solve(prob, Tsit5())
-        @test isapprox(r[Y][end], 7.5; rtol = 1e-5)
+        @test isapprox(r[Y][end], 7.5; rtol = 1.0e-5)
 
         # `M.k` is an ordinary scalar that lives in the runtime `p`, so its
         # class is `:numeric` and `remake(prob; p = …)` is a `p` SWAP, not a
@@ -95,9 +100,9 @@ end
         # of the other classes is pinned by class in `parameter_classes_test.jl`.
         @test parameter_classes(prob)["M.k"] === :numeric
         r_swap = solve(remake(prob; p = Dict("M.k" => 1.0)), Tsit5())
-        @test isapprox(r_swap[Y][end], 3.0; rtol = 1e-5)   # D(y)=k, k=1
+        @test isapprox(r_swap[Y][end], 3.0; rtol = 1.0e-5)   # D(y)=k, k=1
         # The swap is a NEW problem: the original's value is untouched by it.
-        @test isapprox(solve(prob, Tsit5())[Y][end], 7.5; rtol = 1e-5)
+        @test isapprox(solve(prob, Tsit5())[Y][end], 7.5; rtol = 1.0e-5)
 
         # A name the problem does not carry is refused rather than silently dropped.
         err = try
@@ -109,23 +114,25 @@ end
         @test err isa ESM_P.SimulateError
 
         # An explicitly EMPTY `p` is fine (and returns the same carrier).
-        @test remake(prob; p = Dict{String,Float64}()).p === prob.p
+        @test remake(prob; p = Dict{String, Float64}()).p === prob.p
     end
 
     @testset "per-run independence: u0 overrides never leak into the next run" begin
         prob = esm_problem(scalar_esm(1.0), (0.0, 1.0))
         r1 = solve(remake(prob; u0 = Dict("M.y" => 5.0)), Tsit5())
-        @test isapprox(r1[Y][end], 6.0; atol = 1e-6)
+        @test isapprox(r1[Y][end], 6.0; atol = 1.0e-6)
         # No override → the problem's own default (0.0), not the previous run's 5.0.
         r2 = solve(prob, Tsit5())
-        @test isapprox(r2[Y][end], 1.0; atol = 1e-6)
+        @test isapprox(r2[Y][end], 1.0; atol = 1.0e-6)
         # `seed_ic!` is a construction-time hook and runs on that problem's copy.
-        p3 = esm_problem(scalar_esm(1.0), (0.0, 1.0);
-                         seed_ic! = (u0, vm) -> (u0[vm["M.y"]] = 2.0))
-        @test isapprox(solve(p3, Tsit5())[Y][end], 3.0; atol = 1e-6)
-        @test isapprox(solve(prob, Tsit5())[Y][end], 1.0; atol = 1e-6)
+        p3 = esm_problem(
+            scalar_esm(1.0), (0.0, 1.0);
+            seed_ic! = (u0, vm) -> (u0[vm["M.y"]] = 2.0)
+        )
+        @test isapprox(solve(p3, Tsit5())[Y][end], 3.0; atol = 1.0e-6)
+        @test isapprox(solve(prob, Tsit5())[Y][end], 1.0; atol = 1.0e-6)
         # A whole-vector u0 is accepted too, and is likewise non-mutating.
-        @test isapprox(solve(remake(prob; u0 = [4.0]), Tsit5())[Y][end], 5.0; atol = 1e-6)
+        @test isapprox(solve(remake(prob; u0 = [4.0]), Tsit5())[Y][end], 5.0; atol = 1.0e-6)
         @test prob.u0 == [0.0]
     end
 
@@ -141,30 +148,51 @@ end
         @test integ.t > 0.0
         sol = solve!(integ)
         @test sol.retcode == ReturnCode.Success
-        @test isapprox(sol[Y][end], 1.0; atol = 1e-6)
+        @test isapprox(sol[Y][end], 1.0; atol = 1.0e-6)
 
         # esm-spec §2.2.2: the chain runs wherever a document is INTEGRATED, not
         # at the `solve()` call site, so `init` resolves it too — a stepping
         # caller who names no tolerance gets the DOCUMENT's, and an explicit
         # argument still wins. Both doors go through `_run_kwargs`, which is what
         # keeps them from drifting; this pins that they have not.
-        with_solver(block) = merge(scalar_esm(1.0), Dict{String,Any}(
-            "esm" => "1.1.0", "solver" => block))
-        declared = init(esm_problem(with_solver(Dict{String,Any}(
-            "abstol" => 1e-8, "reltol" => 1e-6)), (0.0, 1.0)), Tsit5())
-        @test declared.opts.abstol == 1e-8
-        @test declared.opts.reltol == 1e-6
+        with_solver(block) = merge(
+            scalar_esm(1.0), Dict{String, Any}(
+                "esm" => "1.1.0", "solver" => block
+            )
+        )
+        declared = init(
+            esm_problem(
+                with_solver(
+                    Dict{String, Any}(
+                        "abstol" => 1.0e-8, "reltol" => 1.0e-6
+                    )
+                ), (0.0, 1.0)
+            ), Tsit5()
+        )
+        @test declared.opts.abstol == 1.0e-8
+        @test declared.opts.reltol == 1.0e-6
 
-        explicit = init(esm_problem(with_solver(Dict{String,Any}(
-            "abstol" => 1e-8, "reltol" => 1e-6)), (0.0, 1.0)), Tsit5();
-            abstol = 1e-12, reltol = 1e-11)
-        @test explicit.opts.abstol == 1e-12
-        @test explicit.opts.reltol == 1e-11
+        explicit = init(
+            esm_problem(
+                with_solver(
+                    Dict{String, Any}(
+                        "abstol" => 1.0e-8, "reltol" => 1.0e-6
+                    )
+                ), (0.0, 1.0)
+            ), Tsit5();
+            abstol = 1.0e-12, reltol = 1.0e-11
+        )
+        @test explicit.opts.abstol == 1.0e-12
+        @test explicit.opts.reltol == 1.0e-11
 
         # Per FIELD: what the document leaves unsaid falls through to level 3.
-        partial = init(esm_problem(with_solver(Dict{String,Any}("reltol" => 1e-9)),
-                                   (0.0, 1.0)), Tsit5())
-        @test partial.opts.reltol == 1e-9
+        partial = init(
+            esm_problem(
+                with_solver(Dict{String, Any}("reltol" => 1.0e-9)),
+                (0.0, 1.0)
+            ), Tsit5()
+        )
+        @test partial.opts.reltol == 1.0e-9
         @test partial.opts.abstol == EarthSciAST.DEFAULT_SIM_ABSTOL
     end
 
@@ -197,7 +225,7 @@ end
         @test SciMLBase.SymbolicIndexingInterface.variable_symbols(sol) == [Y]
         @test sol[Y] == [u[1] for u in sol.u]
         @test SciMLBase.SymbolicIndexingInterface.parameter_symbols(sol) ==
-              [Symbol("M.k")]
+            [Symbol("M.k")]
     end
 
     @testset "EnsembleProblem sweeps a parameter (§2.5.8)" begin
@@ -210,9 +238,9 @@ end
         rewrite(pr, ctx) = rewrite(pr, ctx.sim_id, ctx.repeat)
         ens = EnsembleProblem(prob, rewrite)
         sols = solve(ens, Tsit5(), EnsembleSerial(); trajectories = length(ks))
-        @test [s[Y][end] for s in sols.u] ≈ ks atol = 1e-6
+        @test [s[Y][end] for s in sols.u] ≈ ks atol = 1.0e-6
         # The sweep left the base problem alone.
-        @test isapprox(solve(prob, Tsit5())[Y][end], 1.0; atol = 1e-6)
+        @test isapprox(solve(prob, Tsit5())[Y][end], 1.0; atol = 1.0e-6)
     end
 
     @testset "show summarizes the problem" begin
@@ -232,17 +260,22 @@ end
         # is piecewise-constant, so c(3) = [6,12,18], d(3) = [7,14,21] exactly.
         fixture = joinpath(@__DIR__, "fixtures", "refresh", "coupled_forced.esm")
         scale = [1.0, 2.0, 3.0]
-        mkprov() = _PrepLogProvider([1.0, 2.0], Dict(
-            0.0 => Dict("src" => [1.0, 1.0, 1.0]),
-            1.0 => Dict("src" => [2.0, 2.0, 2.0]),
-            2.0 => Dict("src" => [3.0, 3.0, 3.0])))
+        mkprov() = _PrepLogProvider(
+            [1.0, 2.0], Dict(
+                0.0 => Dict("src" => [1.0, 1.0, 1.0]),
+                1.0 => Dict("src" => [2.0, 2.0, 2.0]),
+                2.0 => Dict("src" => [3.0, 3.0, 3.0])
+            )
+        )
 
         # Oracle — and the pin that construction samples each provider exactly
         # once at t0 and the run once per anchor (NO double seeding).
         prov_f = mkprov()
-        prob_f = esm_problem(fixture, (0.0, 3.0);
-                             const_arrays = Dict{String,Any}("scale" => scale),
-                             providers = Dict{String,Any}("src" => prov_f))
+        prob_f = esm_problem(
+            fixture, (0.0, 3.0);
+            const_arrays = Dict{String, Any}("scale" => scale),
+            providers = Dict{String, Any}("src" => prov_f)
+        )
         @test prov_f.samples == [0.0]
         # The refresh callback is the PROBLEM's, composed at construction (§2.5.4).
         @test callbacks(prob_f) !== nothing
@@ -251,17 +284,19 @@ end
         @test prov_f.samples == [0.0, 1.0, 2.0]
         c_f = [rf[Symbol("M.c[$k]")][end] for k in 1:3]
         d_f = [rf[Symbol("M.d[$k]")][end] for k in 1:3]
-        @test isapprox(c_f, [6.0, 12.0, 18.0]; atol = 1e-6)
-        @test isapprox(d_f, [7.0, 14.0, 21.0]; atol = 1e-6)
+        @test isapprox(c_f, [6.0, 12.0, 18.0]; atol = 1.0e-6)
+        @test isapprox(d_f, [7.0, 14.0, 21.0]; atol = 1.0e-6)
 
         # Build once → run twice. Run 1 starts from the construction-time seed
         # (t0 == sample_time, buffers pristine → no re-sample); run 2 finds the
         # buffers refreshed by run 1's callback and re-seeds them at t0, so the
         # runs are INDEPENDENT — and bit-identical.
         prov = mkprov()
-        prob = esm_problem(fixture, (0.0, 3.0); sample_time = 0.0,
-                           const_arrays = Dict{String,Any}("scale" => scale),
-                           providers = Dict{String,Any}("src" => prov))
+        prob = esm_problem(
+            fixture, (0.0, 3.0); sample_time = 0.0,
+            const_arrays = Dict{String, Any}("scale" => scale),
+            providers = Dict{String, Any}("src" => prov)
+        )
         @test prov.samples == [0.0]
         r1 = solve(prob, Tsit5())
         @test prov.samples == [0.0, 1.0, 2.0]
@@ -269,8 +304,8 @@ end
         @test prov.samples == [0.0, 1.0, 2.0, 0.0, 1.0, 2.0]
         @test successful_retcode(r1) && successful_retcode(r2)
         @test r1.u[end] == r2.u[end]
-        @test [r1[Symbol("M.c[$k]")][end] for k in 1:3] ≈ c_f atol = 1e-9
-        @test [r2[Symbol("M.d[$k]")][end] for k in 1:3] ≈ d_f atol = 1e-9
+        @test [r1[Symbol("M.c[$k]")][end] for k in 1:3] ≈ c_f atol = 1.0e-9
+        @test [r2[Symbol("M.d[$k]")][end] for k in 1:3] ≈ d_f atol = 1.0e-9
     end
 end
 
@@ -293,19 +328,26 @@ end
     msg = refusal("tests/events/mixed_event_interactions.esm")
     @test occursin("unsupported_construct", msg) && occursin("update of parameter", msg)
     # A document of another major version (esm-libraries-spec §8.1).
-    @test occursin("Unsupported major version 0",
-                   refusal("tests/version_compatibility/version_0_1_0_pre_break.esm"))
+    @test occursin(
+        "Unsupported major version 0",
+        refusal("tests/version_compatibility/version_0_1_0_pre_break.esm")
+    )
     # reserved_variable_name (§4.9.1.1) and undefined_species.
     @test occursin("reserved_variable_name", refusal("tests/invalid/reserved_variable_name_observed.esm"))
     @test occursin("undefined_species", refusal("tests/invalid/undefined_species.esm"))
     # A degenerate polygon operand in a state-free observed nothing reads (§8.6.1).
-    @test occursin("E_TREEWALK_GEOMETRY_CLIP",
-                   refusal("tests/conformance/pushdown/fixtures/pushdown_polygon_area.esm"))
+    @test occursin(
+        "E_TREEWALK_GEOMETRY_CLIP",
+        refusal("tests/conformance/pushdown/fixtures/pushdown_polygon_area.esm")
+    )
     # A reference-integrity finding refuses the build with the validator's code
     # (esm-libraries-spec §2.5.2).
-    @test occursin("[undefined_variable]",
-                   refusal("tests/invalid/undefined_variable_in_observed_expression.esm"))
+    @test occursin(
+        "[undefined_variable]",
+        refusal("tests/invalid/undefined_variable_in_observed_expression.esm")
+    )
     # A NUL in a declared name is a schema error at load (§4.9.1.2), not a crash.
     @test_throws EarthSciAST.SchemaValidationError EarthSciAST.load_path(
-        doc("tests/future/security/null_byte_injection.esm"))
+        doc("tests/future/security/null_byte_injection.esm")
+    )
 end

@@ -35,13 +35,13 @@ in the meantime.
 """
 function build_evaluator(input, args...; kwargs...)
     @warn """
-          `build_evaluator` is deprecated and will be removed in the next minor \
-          version: it was the extension seam under the runners, not stable API \
-          (API_SPEC §8 item 23). Build an `esm_problem(input, tspan; …)` and \
-          read `prob.f!` / `prob.u0` / `prob.p` / `prob.var_map` off it; for \
-          the compiled StableHLO right-hand side that `form = :oop` used to \
-          hand a backend, build with `compiler = :xla`. `forcing_buffers`, \
-          `forcing_buffer_index` and `compiler_report` all take the Problem \
-          now.""" maxlog = 1
+    `build_evaluator` is deprecated and will be removed in the next minor \
+    version: it was the extension seam under the runners, not stable API \
+    (API_SPEC §8 item 23). Build an `esm_problem(input, tspan; …)` and \
+    read `prob.f!` / `prob.u0` / `prob.p` / `prob.var_map` off it; for \
+    the compiled StableHLO right-hand side that `form = :oop` used to \
+    hand a backend, build with `compiler = :xla`. `forcing_buffers`, \
+    `forcing_buffer_index` and `compiler_report` all take the Problem \
+    now.""" maxlog = 1
     return _build_evaluator(input, args...; kwargs...)
 end

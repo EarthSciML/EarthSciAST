@@ -215,6 +215,24 @@ CASES: list[tuple[str, str, str]] = [
         "edge_enumeration_area_eff",
         "valid/faq/edge_enumeration_area_eff.esm",
     ),
+    # A loop symbol spelled like a variable of the model that holds it
+    # (esm-spec §4.3 "Shadowing", esm-libraries-spec §4.7.5 step 2): the bound
+    # `j`/`k` must stay bare while the free `j`/`k` become `Shadow.j`/`Shadow.k`.
+    # EarthSciAST.jl 0.6.0 prefixed the bound occurrences too (found by
+    # EarthSciIntegrator's planner).
+    (
+        "arrayed",
+        "index_symbol_shadows_variable",
+        "scoping/index_symbol_shadows_variable.esm",
+    ),
+    # The same rule's edges: an `integral`'s `var` and a non-faq (`argmin`)
+    # `ranges` key shadow parameters of the same name, and a dotted `j.x`
+    # reaching a subsystem `j` inside a node that binds `j` is still prefixed.
+    (
+        "arrayed",
+        "loop_binder_shadowing_edges",
+        "scoping/loop_binder_shadowing_edges.esm",
+    ),
     # --- function_tables / table_lookup --------------------------------------
     (
         "function_tables",

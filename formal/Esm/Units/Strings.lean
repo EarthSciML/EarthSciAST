@@ -15,7 +15,7 @@ namespace Esm.Units
 theorem resolveChars_eq (cs : List Char) (h : cs ≠ []) :
     resolveChars cs = (lex (normalize cs) >>= parse) >>= UExpr.eval := by
   unfold resolveChars
-  rw [if_neg h]
+  rw [ite_eq_right h]
   cases lex (normalize cs) with
   | error e => rfl
   | ok ts => cases parse ts <;> rfl

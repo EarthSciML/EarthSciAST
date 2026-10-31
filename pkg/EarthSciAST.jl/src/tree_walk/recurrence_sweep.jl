@@ -55,12 +55,12 @@
 # emitter reads, which has no run method. Concretely parameterized so a level
 # holds its sweeps in a tuple and every call is statically dispatched
 # (`_fill_obs_levels!` explains why).
-struct _RecurrenceSweep{F,TB}
+struct _RecurrenceSweep{F, TB}
     name::String
     gen::F                              # generated sweep, license (walked), or draft
     tabs::TB                            # its by-type tab containers
     body::_Node                         # the cell's term (no fold)
-    fold::Union{Nothing,_ACFold}        # the cell's reduction, if it contracts
+    fold::Union{Nothing, _ACFold}        # the cell's reduction, if it contracts
     out_refs::Vector{Base.RefValue{Int}}  # output-index counters, `output_idx` order
     cur::Base.RefValue{Int}             # sweep position of the cell being evaluated
     order::Vector{Int}                  # output axes, outermost first
@@ -102,8 +102,10 @@ end
 # expression-bearing field.
 function _collect_self_read_args!(out::Vector{Vector{ASTExpr}}, e::ASTExpr, name::String)
     foreach_subexpr_once(e) do x
-        (x isa OpExpr && x.op == "index" && !isempty(x.args) &&
-         x.args[1] isa VarExpr && (x.args[1]::VarExpr).name == name) || return nothing
+        (
+            x isa OpExpr && x.op == "index" && !isempty(x.args) &&
+                x.args[1] isa VarExpr && (x.args[1]::VarExpr).name == name
+        ) || return nothing
         push!(out, ASTExpr[x.args[2:end]...])
         return nothing
     end
@@ -117,7 +119,7 @@ end
 # self-read that is not well founded: it is refused here with the validator's
 # code.
 function _recurrence_axis(name::String, def::OpExpr, idx_names::Vector{String})
-    env = Dict{String,Tuple{Int,Int}}()
+    env = Dict{String, Tuple{Int, Int}}()
     ranges = _ranges_dict(def)
     for (sym, spec) in ranges
         (spec isa AbstractVector && _is_const_int_range(spec)) || continue
@@ -128,32 +130,48 @@ function _recurrence_axis(name::String, def::OpExpr, idx_names::Vector{String})
     body = def.expr_body
     body === nothing || _collect_self_read_args!(reads, body, name)
     def.filter === nothing || _collect_self_read_args!(reads, def.filter, name)
-    bad(msg) = throw(TreeWalkError(ERROR_CODES.RECURRENCE_NOT_WELLFOUNDED,
-        "'$name': $msg (esm-spec §4.3.1.1)"))
-    isempty(reads) && throw(TreeWalkError(ERROR_CODES.RECURRENCE_UNSUPPORTED_FORM,
-        "'$name' reads itself outside the body of its defining `faq`; a causal " *
-        "self-read must sit in the body a cell evaluates (esm-spec §4.3.1.1)"))
+    bad(msg) = throw(
+        TreeWalkError(
+            ERROR_CODES.RECURRENCE_NOT_WELLFOUNDED,
+            "'$name': $msg (esm-spec §4.3.1.1)"
+        )
+    )
+    isempty(reads) && throw(
+        TreeWalkError(
+            ERROR_CODES.RECURRENCE_UNSUPPORTED_FORM,
+            "'$name' reads itself outside the body of its defining `faq`; a causal " *
+                "self-read must sit in the body a cell evaluates (esm-spec §4.3.1.1)"
+        )
+    )
     axis = 0
     for args in reads
         length(args) == length(idx_names) ||
-            bad("a causal self-read supplies $(length(args)) indices but the frame " *
-                "has $(length(idx_names)) axes")
+            bad(
+            "a causal self-read supplies $(length(args)) indices but the frame " *
+                "has $(length(idx_names)) axes"
+        )
         lagged = 0
         for (d, arg) in enumerate(args)
             aff = _recurrence_affine_in_sym(arg, idx_names[d], env)
             aff === nothing &&
-                bad("index $(d-1) of a causal self-read is not affine in its frame " *
-                    "symbol '$(idx_names[d])'")
+                bad(
+                "index $(d - 1) of a causal self-read is not affine in its frame " *
+                    "symbol '$(idx_names[d])'"
+            )
             coef, konst = aff
             coef == 1 ||
-                bad("index $(d-1) of a causal self-read carries its frame symbol with " *
-                    "coefficient $coef, not 1")
+                bad(
+                "index $(d - 1) of a causal self-read carries its frame symbol with " *
+                    "coefficient $coef, not 1"
+            )
             if konst !== nothing
                 lag_lo, lag_hi = -konst[2], -konst[1]
                 (lag_lo == 0 && lag_hi == 0) && continue
                 lag_hi <= 0 &&
-                    bad("a causal self-read names the cell being written, or a later " *
-                        "one, on axis '$(idx_names[d])'")
+                    bad(
+                    "a causal self-read names the cell being written, or a later " *
+                        "one, on axis '$(idx_names[d])'"
+                )
             end
             lagged == 0 || bad("a causal self-read is offset on more than one axis")
             lagged = d
@@ -161,8 +179,10 @@ function _recurrence_axis(name::String, def::OpExpr, idx_names::Vector{String})
         lagged == 0 && bad("a causal self-read is at the same cell on every axis")
         axis == 0 && (axis = lagged)
         axis == lagged ||
-            bad("the causal self-reads disagree on the recurrence axis " *
-                "('$(idx_names[axis])' and '$(idx_names[lagged])')")
+            bad(
+            "the causal self-reads disagree on the recurrence axis " *
+                "('$(idx_names[axis])' and '$(idx_names[lagged])')"
+        )
     end
     return axis
 end
@@ -174,27 +194,35 @@ end
 function _check_recurrence_precision(name::String, var)
     et = var === nothing ? nothing : var.element_type
     (et === nothing || et == "Float64") && return nothing
-    throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_RECURRENCE",
-        "'$name' is a recurrence (esm-spec §4.3.1.1) whose variable declares " *
-        "element_type $(et). CONFORMANCE_SPEC §5.19.3a requires the carried value " *
-        "to be rounded to that precision at every cell, with the body's arithmetic " *
-        "in it (esm-spec §11.3.1); this binding evaluates in binary64 only, and " *
-        "folding in binary64 would return a more precise answer than the document " *
-        "defines. Refusing rather than returning it"))
+    throw(
+        TreeWalkError(
+            "E_TREEWALK_UNSUPPORTED_RECURRENCE",
+            "'$name' is a recurrence (esm-spec §4.3.1.1) whose variable declares " *
+                "element_type $(et). CONFORMANCE_SPEC §5.19.3a requires the carried value " *
+                "to be rounded to that precision at every cell, with the body's arithmetic " *
+                "in it (esm-spec §11.3.1); this binding evaluates in binary64 only, and " *
+                "folding in binary64 would return a more precise answer than the document " *
+                "defines. Refusing rather than returning it"
+        )
+    )
 end
 
 # Replace every self-read `index(name, …)` in `e` by the `__recur_read` marker
 # that `_compile` lowers to `_NK_RECUR_GATHER`, with the subscripts as its args.
-function _mark_self_reads(e::ASTExpr, name::String, ref::_RecurGatherRef,
-                          memo::IdDict{OpExpr,ASTExpr}=IdDict{OpExpr,ASTExpr}())
+function _mark_self_reads(
+        e::ASTExpr, name::String, ref::_RecurGatherRef,
+        memo::IdDict{OpExpr, ASTExpr} = IdDict{OpExpr, ASTExpr}()
+    )
     e isa OpExpr || return e
     got = get(memo, e, nothing)
     got === nothing || return got
     r = if e.op == "index" && !isempty(e.args) && e.args[1] isa VarExpr &&
-           (e.args[1]::VarExpr).name == name
-        OpExpr("__recur_read",
-               ASTExpr[_mark_self_reads(a, name, ref, memo) for a in e.args[2:end]];
-               value=ref)
+            (e.args[1]::VarExpr).name == name
+        OpExpr(
+            "__recur_read",
+            ASTExpr[_mark_self_reads(a, name, ref, memo) for a in e.args[2:end]];
+            value = ref
+        )
     else
         map_children(c -> _mark_self_reads(c, name, ref, memo), e)
     end
@@ -208,31 +236,49 @@ end
 # (already checked to be the dense `1…dims[d]` box its buffer block holds), and
 # the rest the resolve/compile context the fill route compiles against, with
 # `var_map`/`array_var_info` the EXTENDED layout that carries the buffer block.
-function _compile_recurrence_sweep(name::String, def::ASTExpr, dims::Vector{Int},
-        var, resolved_obs::Dict{String,ASTExpr}, array_var_info,
-        var_map::AbstractDict{String,Int}, const_registry::AbstractDict,
-        pgather::AbstractDict, param_sym_set, reg_funcs)
+function _compile_recurrence_sweep(
+        name::String, def::ASTExpr, dims::Vector{Int},
+        var, resolved_obs::Dict{String, ASTExpr}, array_var_info,
+        var_map::AbstractDict{String, Int}, const_registry::AbstractDict,
+        pgather::AbstractDict, param_sym_set, reg_funcs
+    )
     _check_recurrence_precision(name, var)
-    (def isa OpExpr && _is_faq_op((def::OpExpr).op) &&
-     (def::OpExpr).expr_body !== nothing) ||
-        throw(TreeWalkError(ERROR_CODES.RECURRENCE_UNSUPPORTED_FORM,
+    (
+        def isa OpExpr && _is_faq_op((def::OpExpr).op) &&
+            (def::OpExpr).expr_body !== nothing
+    ) ||
+        throw(
+        TreeWalkError(
+            ERROR_CODES.RECURRENCE_UNSUPPORTED_FORM,
             "'$name' reads itself but its definition is not a `faq` over its axes; " *
-            "a recurrence is one `faq` with the base case as an `ifelse` guard in " *
-            "the body (esm-spec §4.3.1.1)"))
+                "a recurrence is one `faq` with the base case as an `ifelse` guard in " *
+                "the body (esm-spec §4.3.1.1)"
+        )
+    )
     dop = def::OpExpr
     idx_names = _output_idx_strings(dop)
     rank = length(idx_names)
     rank == length(dims) ||
-        throw(TreeWalkError(ERROR_CODES.RECURRENCE_UNSUPPORTED_FORM,
+        throw(
+        TreeWalkError(
+            ERROR_CODES.RECURRENCE_UNSUPPORTED_FORM,
             "'$name': its defining `faq` has $rank output indices but the variable " *
-            "has $(length(dims)) axes"))
+                "has $(length(dims)) axes"
+        )
+    )
     axis = _recurrence_axis(name, dop, idx_names)
     order = _recurrence_order(axis, rank)
     blk = _layout_block(var_map, name)
-    blk === nothing && throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_RECURRENCE",
-        "'$name' has no buffer block in this build's layout"))
-    rg = _RecurGather(name, copy(dims), _recurrence_sweep_weights(order, dims),
-                      blk.base, copy(blk.strides), Ref(0))
+    blk === nothing && throw(
+        TreeWalkError(
+            "E_TREEWALK_UNSUPPORTED_RECURRENCE",
+            "'$name' has no buffer block in this build's layout"
+        )
+    )
+    rg = _RecurGather(
+        name, copy(dims), _recurrence_sweep_weights(order, dims),
+        blk.base, copy(blk.strides), Ref(0)
+    )
 
     # The cell body: the `faq`'s term, its filter as the term's guard, the
     # observeds this build inlines substituted, every self-read marked.
@@ -244,50 +290,75 @@ function _compile_recurrence_sweep(name::String, def::ASTExpr, dims::Vector{Int}
         (term = OpExpr("ifelse", ASTExpr[dop.filter, term, NumExpr(zerobar)]))
     isempty(resolved_obs) || (term = _sub_preserving(term, resolved_obs))
     term = _mark_self_reads(term, name, _RecurGatherRef(rg))
-    got = _resolve_array_contraction_term(term, idx_names, contract_names,
-                                          array_var_info, var_map, const_registry, pgather)
-    got === nothing && throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_RECURRENCE",
-        "the body of recurrence '$name' does not resolve with its indices kept " *
-        "symbolic (a read this build can only resolve at a concrete cell, such as a " *
-        "live forcing buffer gathered at a loop index), so it has no sweep"))
+    got = _resolve_array_contraction_term(
+        term, idx_names, contract_names,
+        array_var_info, var_map, const_registry, pgather
+    )
+    got === nothing && throw(
+        TreeWalkError(
+            "E_TREEWALK_UNSUPPORTED_RECURRENCE",
+            "the body of recurrence '$name' does not resolve with its indices kept " *
+                "symbolic (a read this build can only resolve at a concrete cell, such as a " *
+                "live forcing buffer gathered at a loop index), so it has no sweep"
+        )
+    )
     out_refs, contract_refs, resolved = got
     body = _compile(resolved, var_map, param_sym_set, reg_funcs)
     fold = nothing
     if !isempty(contract_names)
         contract_ranges = Vector{Any}[collect(ranges[n]) for n in contract_names]
-        contract_const = Union{Vector{Int},Nothing}[
+        contract_const = Union{Vector{Int}, Nothing}[
             _is_const_int_range(r) ? collect(_expand_int_range(r)) : nothing
-            for r in contract_ranges]
+                for r in contract_ranges
+        ]
         rev = _reverse_window(dop.filter, contract_names, idx_names)
         fold = if dop.join_gates !== nothing || rev || any(c -> c === nothing, contract_const)
             # Per-cell admitted tuples, indexed by the cell's position in
             # `Iterators.product` order over the output ranges — dimension 1
             # fastest, which for a dense `1…dims` frame is the buffer offset.
-            _array_contraction_table(contract_refs, idx_names,
+            _array_contraction_table(
+                contract_refs, idx_names,
                 [collect(1:dims[d]) for d in 1:rank], contract_names,
                 contract_ranges, contract_const, dop.join_gates, oplus, zerobar,
-                const_registry; reverse=rev)
+                const_registry; reverse = rev
+            )
         else
-            _ACFold(contract_refs, Symbol(oplus), zerobar,
-                    StepRange{Int,Int}[(r = _expand_int_range(c);
-                                        first(r):step(r):last(r))
-                                       for c in contract_ranges])
+            _ACFold(
+                contract_refs, Symbol(oplus), zerobar,
+                StepRange{Int, Int}[
+                    (
+                        r = _expand_int_range(c);
+                        first(r):step(r):last(r)
+                    )
+                        for c in contract_ranges
+                ]
+            )
         end
     end
     ncells = prod(dims)
-    draft = _RecurrenceSweep(name, nothing, (), body, fold, out_refs, rg.cur,
-                             order, copy(dims), blk.base, copy(blk.strides), ncells)
+    draft = _RecurrenceSweep(
+        name, nothing, (), body, fold, out_refs, rg.cur,
+        order, copy(dims), blk.base, copy(blk.strides), ncells
+    )
     if _codegen_disabled()
-        return _walked_recurrence(draft, _percell_license(name,
-            "an ordered recurrence sweep (esm-spec §4.3.1.1) under this compiler has " *
-            "only its walked form, which evaluates the body as a tree per cell"))
+        return _walked_recurrence(
+            draft, _percell_license(
+                name,
+                "an ordered recurrence sweep (esm-spec §4.3.1.1) under this compiler has " *
+                    "only its walked form, which evaluates the body as a tree per cell"
+            )
+        )
     end
     gen = _try_codegen_recurrence(draft)
     if gen isa Symbol
-        return _walked_recurrence(draft, _percell_license(name,
-            "the emitter for its ordered recurrence sweep (esm-spec §4.3.1.1) " *
-            "declined ($(gen)), and the walked form evaluates the body as a tree per " *
-            "cell. Build with compiler=:interpreter to run it"))
+        return _walked_recurrence(
+            draft, _percell_license(
+                name,
+                "the emitter for its ordered recurrence sweep (esm-spec §4.3.1.1) " *
+                    "declined ($(gen)), and the walked form evaluates the body as a tree per " *
+                    "cell. Build with compiler=:interpreter to run it"
+            )
+        )
     end
     _note_recurrence!(:recurrence_sweep)
     return gen
@@ -296,8 +367,10 @@ end
 # The walked form of a drafted sweep: the interpreter's, so it carries a license.
 function _walked_recurrence(d::_RecurrenceSweep{Nothing}, lic::_PerCellLicense)
     _note_recurrence!(:recurrence_walk)
-    return _RecurrenceSweep(d.name, lic, (), d.body, d.fold, d.out_refs, d.cur,
-                            d.order, d.dims, d.base, d.strides, d.ncells)
+    return _RecurrenceSweep(
+        d.name, lic, (), d.body, d.fold, d.out_refs, d.cur,
+        d.order, d.dims, d.base, d.strides, d.ncells
+    )
 end
 
 # The cascade tally and the compiler report row for one recurrence: `native`'s
@@ -321,13 +394,17 @@ _recurrence_tier(sw::_RecurrenceSweep) =
     return _run_recurrence_sweeps!(Base.tail(sws), ue, p, t, T)
 end
 
-@inline function _run_recurrence_sweep!(sw::_RecurrenceSweep{_PerCellLicense}, ue, p, t,
-                                        ::Type{T}) where {T}
+@inline function _run_recurrence_sweep!(
+        sw::_RecurrenceSweep{_PerCellLicense}, ue, p, t,
+        ::Type{T}
+    ) where {T}
     _walk_recurrence!(sw, ue, p, t, T)
     return nothing
 end
-@inline function _run_recurrence_sweep!(sw::_RecurrenceSweep, ue, p, t,
-                                        ::Type{T}) where {T}
+@inline function _run_recurrence_sweep!(
+        sw::_RecurrenceSweep, ue, p, t,
+        ::Type{T}
+    ) where {T}
     sw.gen(ue, p, t, sw.tabs)
     return nothing
 end
@@ -335,8 +412,10 @@ end
 # The walked form: the cells in sweep order, each evaluated and published before
 # the next. Position `c` decodes into the output indices with the last axis of
 # `order` fastest.
-function _walk_recurrence!(sw::_RecurrenceSweep{_PerCellLicense}, ue, p, t,
-                           ::Type{T}) where {T}
+function _walk_recurrence!(
+        sw::_RecurrenceSweep{_PerCellLicense}, ue, p, t,
+        ::Type{T}
+    ) where {T}
     refs = sw.out_refs
     order = sw.order
     dims = sw.dims
@@ -364,8 +443,12 @@ end
 @inline _recur_oplus(op::Symbol, a, b) =
     op === :+ ? a + b : op === :* ? a * b : op === :max ? max(a, b) :
     op === :min ? min(a, b) : op === :or ? _or_combine(a, b) :
-    throw(TreeWalkError("E_TREEWALK_ARRAYOP_UNKNOWN_REDUCE",
-                        "no fold for the reduction '$op' in a recurrence body"))
+    throw(
+        TreeWalkError(
+            "E_TREEWALK_ARRAYOP_UNKNOWN_REDUCE",
+            "no fold for the reduction '$op' in a recurrence body"
+        )
+    )
 
 # The cell's reduction, as `_cg_fold` (array_contraction.jl) emits it: one
 # accumulator seeded from the Float64 0̄, the TABLE form's entries for the cell at
@@ -386,13 +469,15 @@ function _recur_fold(fold::_ACFold, pc::Int, body::_Node, ue, p, t, ::Type{T}) w
     return _recur_fold_static(fold, length(fold.refs), acc, body, ue, p, t, T)
 end
 
-function _recur_fold_static(fold::_ACFold, d::Int, acc, body::_Node, ue, p, t,
-                            ::Type{T}) where {T}
+function _recur_fold_static(
+        fold::_ACFold, d::Int, acc, body::_Node, ue, p, t,
+        ::Type{T}
+    ) where {T}
     ref = fold.refs[d]
     @inbounds for k in fold.ranges[d]
         ref[] = k
         acc = d == 1 ? _recur_oplus(fold.op, acc, _eval_node(body, ue, p, t, T)) :
-              _recur_fold_static(fold, d - 1, acc, body, ue, p, t, T)
+            _recur_fold_static(fold, d - 1, acc, body, ue, p, t, T)
     end
     return acc
 end
@@ -457,17 +542,24 @@ function _try_codegen_recurrence(sw::_RecurrenceSweep)
     end
     ngrp = length(ctx.tab_types)
     grpstmts = Any[:(local $(_cg_grp_sym(g)) = tabs[$g]) for g in 1:ngrp]
-    ex = Expr(:function, Expr(:tuple, :u, :p, :t, :tabs),
-        Expr(:block, grpstmts...,
-             :(local _cgT = _rhs_value_type(u, p, t)),
-             ctx.helpers...,
-             Expr(:macrocall, Symbol("@inbounds"), ln, loop),
-             :(return nothing)))
+    ex = Expr(
+        :function, Expr(:tuple, :u, :p, :t, :tabs),
+        Expr(
+            :block, grpstmts...,
+            :(local _cgT = _rhs_value_type(u, p, t)),
+            ctx.helpers...,
+            Expr(:macrocall, Symbol("@inbounds"), ln, loop),
+            :(return nothing)
+        )
+    )
     f = RuntimeGeneratedFunctions.RuntimeGeneratedFunction(
-        @__MODULE__, @__MODULE__, ex)
+        @__MODULE__, @__MODULE__, ex
+    )
     tabpack = ntuple(g -> Vector{ctx.tab_types[g]}(ctx.tab_objs[g]), ngrp)
-    return _RecurrenceSweep(sw.name, f, tabpack, sw.body, sw.fold, sw.out_refs, sw.cur,
-                            sw.order, sw.dims, sw.base, sw.strides, sw.ncells)
+    return _RecurrenceSweep(
+        sw.name, f, tabpack, sw.body, sw.fold, sw.out_refs, sw.cur,
+        sw.order, sw.dims, sw.base, sw.strides, sw.ncells
+    )
 end
 
 # `_NK_RECUR_GATHER` (mirrors `_eval_recur_gather`): each subscript evaluated and
@@ -484,24 +576,36 @@ function _cg_recur_gather(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node)
     return Expr(:let, Expr(:block, :($rgv = $(_cg_tab!(ctx, rg)))), Expr(:block, inner))
 end
 
-function _cg_recur_gather_dim(ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node, rg::_RecurGather,
-                              rgv::Symbol, cv::Symbol, d::Int, ord::Vector{Any},
-                              slot::Vector{Any}, subs::Vector{Symbol})
+function _cg_recur_gather_dim(
+        ctx::_CGCtx, kc::_CGScalarCtx, nd::_Node, rg::_RecurGather,
+        rgv::Symbol, cv::Symbol, d::Int, ord::Vector{Any},
+        slot::Vector{Any}, subs::Vector{Symbol}
+    )
     children = nd.children
     if d > length(children)
-        return :($(_cg_foldl(:+, ord)) < $cv ? u[$(_cg_foldl(:+, slot))] :
-                 _recur_unavailable_at($rgv, $cv, Int[$(subs...)]))
+        return :(
+            $(_cg_foldl(:+, ord)) < $cv ? u[$(_cg_foldl(:+, slot))] :
+                _recur_unavailable_at($rgv, $cv, Int[$(subs...)])
+        )
     end
     sd = _cg_name(ctx, "rgs")
     dim = _cg_geo!(ctx, rg.dims[d], (rg.dims, d))
     w = _cg_geo!(ctx, rg.sweep_w[d], (rg.sweep_w, d), true)
     st = _cg_geo!(ctx, rg.strides[d], (rg.strides, d), true)
     nsubs = vcat(subs, sd)
-    nxt = _cg_recur_gather_dim(ctx, kc, nd, rg, rgv, cv, d + 1,
-                               push!(copy(ord), :(($sd - 1) * $w)),
-                               push!(copy(slot), :(($sd - 1) * $st)), nsubs)
-    return Expr(:let,
+    nxt = _cg_recur_gather_dim(
+        ctx, kc, nd, rg, rgv, cv, d + 1,
+        push!(copy(ord), :(($sd - 1) * $w)),
+        push!(copy(slot), :(($sd - 1) * $st)), nsubs
+    )
+    return Expr(
+        :let,
         Expr(:block, :($sd = round(Int, $(_cg_emit(ctx, kc, children[d]))))),
-        Expr(:block, :((1 <= $sd <= $dim) ? $nxt :
-                       _recur_unavailable_at($rgv, $cv, Int[$(nsubs...)]))))
+        Expr(
+            :block, :(
+                (1 <= $sd <= $dim) ? $nxt :
+                    _recur_unavailable_at($rgv, $cv, Int[$(nsubs...)])
+            )
+        )
+    )
 end

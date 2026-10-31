@@ -22,13 +22,15 @@ function _find_unknown(sys, suffix::AbstractString)
     error("No unknown with suffix $(suffix) in $(MTK.unknowns(sys))")
 end
 
-function _solve_ode(model::ESM.Model, name::Symbol, tspan::Tuple{Float64,Float64};
-                    solver=OrdinaryDiffEqTsit5.Tsit5(),
-                    reltol=1e-8, abstol=1e-10, kwargs...)
-    sys = MTK.System(model; name=name)
+function _solve_ode(
+        model::ESM.Model, name::Symbol, tspan::Tuple{Float64, Float64};
+        solver = OrdinaryDiffEqTsit5.Tsit5(),
+        reltol = 1.0e-8, abstol = 1.0e-10, kwargs...
+    )
+    sys = MTK.System(model; name = name)
     simp = MTK.mtkcompile(sys)
-    prob = MTK.ODEProblem(simp, Dict{Any,Any}(), tspan)
-    sol = OrdinaryDiffEqTsit5.solve(prob, solver; reltol=reltol, abstol=abstol, kwargs...)
+    prob = MTK.ODEProblem(simp, Dict{Any, Any}(), tspan)
+    sol = OrdinaryDiffEqTsit5.solve(prob, solver; reltol = reltol, abstol = abstol, kwargs...)
     return sol, simp
 end
 
@@ -40,16 +42,18 @@ end
     @testset "Exponential decay: D(x,t) = -k*x" begin
         k_val = 0.1
         x0 = 1.0
-        vars = Dict{String,ModelVariable}(
-            "x" => ModelVariable(UnknownVariable; default=x0),
-            "k" => ModelVariable(ParameterVariable; default=k_val),
+        vars = Dict{String, ModelVariable}(
+            "x" => ModelVariable(UnknownVariable; default = x0),
+            "k" => ModelVariable(ParameterVariable; default = k_val),
         )
         eq = Equation(
-            OpExpr("D", ESM.ASTExpr[VarExpr("x")], wrt="t"),
-            OpExpr("*", ESM.ASTExpr[
-                OpExpr("-", ESM.ASTExpr[VarExpr("k")]),
-                VarExpr("x"),
-            ]),
+            OpExpr("D", ESM.ASTExpr[VarExpr("x")], wrt = "t"),
+            OpExpr(
+                "*", ESM.ASTExpr[
+                    OpExpr("-", ESM.ASTExpr[VarExpr("k")]),
+                    VarExpr("x"),
+                ]
+            ),
         )
         model = Model(vars, [eq])
 
@@ -57,11 +61,11 @@ end
         x_sym = _find_unknown(simp, "x")
         x_end = sol[x_sym][end]
         expected = x0 * exp(-k_val * 10.0)
-        @test isapprox(x_end, expected; rtol=1e-6)
+        @test isapprox(x_end, expected; rtol = 1.0e-6)
 
         # Sample several intermediate points against the analytical curve.
         for t in (1.0, 2.5, 5.0, 7.5)
-            @test isapprox(sol(t, idxs=x_sym), x0 * exp(-k_val * t); rtol=1e-6)
+            @test isapprox(sol(t, idxs = x_sym), x0 * exp(-k_val * t); rtol = 1.0e-6)
         end
     end
 
@@ -74,29 +78,35 @@ end
         # Model directly as ODEs so we fully control the equations
         # (the test's purpose is solve correctness, not reaction-to-ODE
         # derivation — that path is covered by test case 3 below).
-        vars = Dict{String,ModelVariable}(
-            "A" => ModelVariable(UnknownVariable; default=A0),
-            "B" => ModelVariable(UnknownVariable; default=B0),
-            "k1" => ModelVariable(ParameterVariable; default=k1),
-            "k2" => ModelVariable(ParameterVariable; default=k2),
+        vars = Dict{String, ModelVariable}(
+            "A" => ModelVariable(UnknownVariable; default = A0),
+            "B" => ModelVariable(UnknownVariable; default = B0),
+            "k1" => ModelVariable(ParameterVariable; default = k1),
+            "k2" => ModelVariable(ParameterVariable; default = k2),
         )
         # dA/dt = -k1*A + k2*B
         eqA = Equation(
-            OpExpr("D", ESM.ASTExpr[VarExpr("A")], wrt="t"),
-            OpExpr("+", ESM.ASTExpr[
-                OpExpr("-", ESM.ASTExpr[
-                    OpExpr("*", ESM.ASTExpr[VarExpr("k1"), VarExpr("A")]),
-                ]),
-                OpExpr("*", ESM.ASTExpr[VarExpr("k2"), VarExpr("B")]),
-            ]),
+            OpExpr("D", ESM.ASTExpr[VarExpr("A")], wrt = "t"),
+            OpExpr(
+                "+", ESM.ASTExpr[
+                    OpExpr(
+                        "-", ESM.ASTExpr[
+                            OpExpr("*", ESM.ASTExpr[VarExpr("k1"), VarExpr("A")]),
+                        ]
+                    ),
+                    OpExpr("*", ESM.ASTExpr[VarExpr("k2"), VarExpr("B")]),
+                ]
+            ),
         )
         # dB/dt =  k1*A - k2*B
         eqB = Equation(
-            OpExpr("D", ESM.ASTExpr[VarExpr("B")], wrt="t"),
-            OpExpr("-", ESM.ASTExpr[
-                OpExpr("*", ESM.ASTExpr[VarExpr("k1"), VarExpr("A")]),
-                OpExpr("*", ESM.ASTExpr[VarExpr("k2"), VarExpr("B")]),
-            ]),
+            OpExpr("D", ESM.ASTExpr[VarExpr("B")], wrt = "t"),
+            OpExpr(
+                "-", ESM.ASTExpr[
+                    OpExpr("*", ESM.ASTExpr[VarExpr("k1"), VarExpr("A")]),
+                    OpExpr("*", ESM.ASTExpr[VarExpr("k2"), VarExpr("B")]),
+                ]
+            ),
         )
         model = Model(vars, [eqA, eqB])
 
@@ -114,9 +124,9 @@ end
         A_expected = k2 * total / (k1 + k2)  # 1/3
         B_expected = k1 * total / (k1 + k2)  # 2/3
 
-        @test isapprox(A_eq, A_expected; rtol=1e-6)
-        @test isapprox(B_eq, B_expected; rtol=1e-6)
-        @test isapprox(A_eq + B_eq, total; rtol=1e-10)
+        @test isapprox(A_eq, A_expected; rtol = 1.0e-6)
+        @test isapprox(B_eq, B_expected; rtol = 1.0e-6)
+        @test isapprox(A_eq + B_eq, total; rtol = 1.0e-10)
     end
 
     # ====================================================================
@@ -130,24 +140,28 @@ end
         # NOTE: `mass_action_rate` multiplies the user-supplied rate by the
         # substrate species automatically, so the `rate` below is the rate
         # constant only. Effective rate: k * A * B.
-        rxn = ESM.Reaction("auto",
+        rxn = ESM.Reaction(
+            "auto",
             [ESM.StoichiometryEntry("A", 1), ESM.StoichiometryEntry("B", 1)],
             [ESM.StoichiometryEntry("B", 2)],
-            VarExpr("k"))
-        rsys = ESM.ReactionSystem(
-            [ESM.Species("A"; default=A0), ESM.Species("B"; default=B0)],
-            [rxn];
-            parameters=[ESM.Parameter("k", k)],
+            VarExpr("k")
         )
-        flat = flatten(rsys; name="Auto")
-        sys = MTK.System(flat; name=:Auto)
+        rsys = ESM.ReactionSystem(
+            [ESM.Species("A"; default = A0), ESM.Species("B"; default = B0)],
+            [rxn];
+            parameters = [ESM.Parameter("k", k)],
+        )
+        flat = flatten(rsys; name = "Auto")
+        sys = MTK.System(flat; name = :Auto)
         simp = MTK.mtkcompile(sys)
         # Logistic time scale: 1/(k * total) = 1/(2 * 1.01) ≈ 0.495. Half-life
         # from x(0)=0.01 takes ~ln((M-x0)/x0)/(k*M) = ln(99)/2.02 ≈ 2.27.
         # Integrate to t = 10 (≈ 20 half-times) — A should be ~0.
-        prob = MTK.ODEProblem(simp, Dict{Any,Any}(), (0.0, 10.0))
-        sol = OrdinaryDiffEqTsit5.solve(prob, OrdinaryDiffEqTsit5.Tsit5();
-            reltol=1e-10, abstol=1e-12, saveat=0.25)
+        prob = MTK.ODEProblem(simp, Dict{Any, Any}(), (0.0, 10.0))
+        sol = OrdinaryDiffEqTsit5.solve(
+            prob, OrdinaryDiffEqTsit5.Tsit5();
+            reltol = 1.0e-10, abstol = 1.0e-12, saveat = 0.25
+        )
 
         Asym = _find_unknown(simp, "A")
         Bsym = _find_unknown(simp, "B")
@@ -159,18 +173,18 @@ end
 
         # Mass conservation at every stored time step
         totals = As .+ Bs
-        @test maximum(abs.(totals .- total0)) < 1e-8
+        @test maximum(abs.(totals .- total0)) < 1.0e-8
 
         # Sanity: autocatalysis should drive A → 0, B → total.
-        @test As[end] < 1e-6
-        @test isapprox(Bs[end], total0; rtol=1e-6)
+        @test As[end] < 1.0e-6
+        @test isapprox(Bs[end], total0; rtol = 1.0e-6)
 
         # Also verify the logistic solution along the trajectory at
         # several intermediate points.
         for t in (1.0, 2.0, 3.0, 5.0)
-            x = total0 / (1 + (total0/B0 - 1) * exp(-k * total0 * t))  # B(t)
-            @test isapprox(sol(t, idxs=Bsym), x; rtol=1e-5)
-            @test isapprox(sol(t, idxs=Asym), total0 - x; rtol=1e-5)
+            x = total0 / (1 + (total0 / B0 - 1) * exp(-k * total0 * t))  # B(t)
+            @test isapprox(sol(t, idxs = Bsym), x; rtol = 1.0e-5)
+            @test isapprox(sol(t, idxs = Asym), total0 - x; rtol = 1.0e-5)
         end
     end
 
@@ -179,10 +193,10 @@ end
     # ====================================================================
     @testset "Robertson stiff benchmark — reference values to reltol 1e-4" begin
         A0, B0, C0 = 1.0, 0.0, 0.0
-        vars = Dict{String,ModelVariable}(
-            "A" => ModelVariable(UnknownVariable; default=A0),
-            "B" => ModelVariable(UnknownVariable; default=B0),
-            "C" => ModelVariable(UnknownVariable; default=C0),
+        vars = Dict{String, ModelVariable}(
+            "A" => ModelVariable(UnknownVariable; default = A0),
+            "B" => ModelVariable(UnknownVariable; default = B0),
+            "C" => ModelVariable(UnknownVariable; default = C0),
         )
         _n(x) = NumExpr(x)
         _v(n) = VarExpr(n)
@@ -190,31 +204,39 @@ end
 
         # dA/dt = -0.04*A + 1e4*B*C
         eqA = Equation(
-            _op("D", _v("A"); wrt="t"),
-            _op("+", _op("*", _n(-0.04), _v("A")),
-                     _op("*", _n(1.0e4), _v("B"), _v("C"))),
+            _op("D", _v("A"); wrt = "t"),
+            _op(
+                "+", _op("*", _n(-0.04), _v("A")),
+                _op("*", _n(1.0e4), _v("B"), _v("C"))
+            ),
         )
         # dB/dt =  0.04*A - 1e4*B*C - 3e7*B*B
         eqB = Equation(
-            _op("D", _v("B"); wrt="t"),
-            _op("-",
-                _op("-",
+            _op("D", _v("B"); wrt = "t"),
+            _op(
+                "-",
+                _op(
+                    "-",
                     _op("*", _n(0.04), _v("A")),
-                    _op("*", _n(1.0e4), _v("B"), _v("C"))),
-                _op("*", _n(3.0e7), _v("B"), _v("B"))),
+                    _op("*", _n(1.0e4), _v("B"), _v("C"))
+                ),
+                _op("*", _n(3.0e7), _v("B"), _v("B"))
+            ),
         )
         # dC/dt =  3e7*B*B
         eqC = Equation(
-            _op("D", _v("C"); wrt="t"),
+            _op("D", _v("C"); wrt = "t"),
             _op("*", _n(3.0e7), _v("B"), _v("B")),
         )
         model = Model(vars, [eqA, eqB, eqC])
 
-        sys = MTK.System(model; name=:Robertson)
+        sys = MTK.System(model; name = :Robertson)
         simp = MTK.mtkcompile(sys)
-        prob = MTK.ODEProblem(simp, Dict{Any,Any}(), (0.0, 4.0e10))
-        sol = OrdinaryDiffEqRosenbrock.solve(prob, OrdinaryDiffEqRosenbrock.Rodas5P();
-            reltol=1e-10, abstol=1e-14)
+        prob = MTK.ODEProblem(simp, Dict{Any, Any}(), (0.0, 4.0e10))
+        sol = OrdinaryDiffEqRosenbrock.solve(
+            prob, OrdinaryDiffEqRosenbrock.Rodas5P();
+            reltol = 1.0e-10, abstol = 1.0e-14
+        )
 
         Asym = _find_unknown(simp, "A")
         Bsym = _find_unknown(simp, "B")
@@ -223,36 +245,36 @@ end
         # Reference values from Hairer & Wanner, "Solving ODEs II",
         # Table 1.4, p.3 (Robertson problem). Six significant digits.
         refs = [
-            (0.4,     0.98517,     3.3864e-5,   0.014796),
-            (4.0,     0.90551,     2.2405e-5,   0.094464),
-            (40.0,    0.71583,     9.1856e-6,   0.28416),
-            (400.0,   0.45053,     3.2229e-6,   0.54946),
-            (4000.0,  0.18320,     8.9416e-7,   0.81680),
-            (40000.0, 0.038996,    1.6225e-7,   0.96100),
+            (0.4, 0.98517, 3.3864e-5, 0.014796),
+            (4.0, 0.90551, 2.2405e-5, 0.094464),
+            (40.0, 0.71583, 9.1856e-6, 0.28416),
+            (400.0, 0.45053, 3.2229e-6, 0.54946),
+            (4000.0, 0.1832, 8.9416e-7, 0.8168),
+            (40000.0, 0.038996, 1.6225e-7, 0.961),
         ]
 
         for (t, A_ref, B_ref, C_ref) in refs
-            A_val = sol(t, idxs=Asym)
-            B_val = sol(t, idxs=Bsym)
-            C_val = sol(t, idxs=Csym)
+            A_val = sol(t, idxs = Asym)
+            B_val = sol(t, idxs = Bsym)
+            C_val = sol(t, idxs = Csym)
             # Hairer & Wanner reference values are 5 significant digits.
             # Allow rtol = 5e-4 so a numerical solution matching H&W's
             # tabulated digits exactly still passes.
-            @test isapprox(A_val, A_ref; rtol=5e-4)
-            @test isapprox(B_val, B_ref; rtol=5e-3)  # B is tiny; looser rtol
-            @test isapprox(C_val, C_ref; rtol=5e-4)
+            @test isapprox(A_val, A_ref; rtol = 5.0e-4)
+            @test isapprox(B_val, B_ref; rtol = 5.0e-3)  # B is tiny; looser rtol
+            @test isapprox(C_val, C_ref; rtol = 5.0e-4)
             # Mass conservation: A + B + C = 1 always
-            @test isapprox(A_val + B_val + C_val, 1.0; atol=1e-6)
+            @test isapprox(A_val + B_val + C_val, 1.0; atol = 1.0e-6)
         end
 
         # Final state at t = 4e10: A → 0, B → 0, C → 1
         A_final = sol[Asym][end]
         B_final = sol[Bsym][end]
         C_final = sol[Csym][end]
-        @test A_final < 1e-6
-        @test B_final < 1e-12
-        @test isapprox(C_final, 1.0; rtol=1e-4)
-        @test isapprox(A_final + B_final + C_final, 1.0; atol=1e-6)
+        @test A_final < 1.0e-6
+        @test B_final < 1.0e-12
+        @test isapprox(C_final, 1.0; rtol = 1.0e-4)
+        @test isapprox(A_final + B_final + C_final, 1.0; atol = 1.0e-6)
     end
 
     # Case 5 (fixture simple_ode.esm vs SciPy reference) removed in gt-l5b:

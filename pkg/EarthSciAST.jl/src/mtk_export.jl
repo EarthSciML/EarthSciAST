@@ -65,10 +65,13 @@ function mtk2esm end
 # data_refresh.jl): the extension methods are typed on MTK/Catalyst system
 # types, so any call reaching this untyped method means the extension that
 # defines them is not loaded.
-mtk2esm(sys; kwargs...) = throw(ArgumentError(
-    "mtk2esm requires a package extension: load ModelingToolkit (plus " *
-    "Symbolics and DomainSets) to activate EarthSciASTMTKExt, or " *
-    "Catalyst to activate EarthSciASTCatalystExt, then retry"))
+mtk2esm(sys; kwargs...) = throw(
+    ArgumentError(
+        "mtk2esm requires a package extension: load ModelingToolkit (plus " *
+            "Symbolics and DomainSets) to activate EarthSciASTMTKExt, or " *
+            "Catalyst to activate EarthSciASTCatalystExt, then retry"
+    )
+)
 
 """
     mtk2esm_gaps(sys)
@@ -80,10 +83,13 @@ checks. Extensions override this with concrete implementations.
 Raises a clear `ArgumentError` if the MTK extension hasn't been loaded.
 """
 function mtk2esm_gaps end
-mtk2esm_gaps(sys) = throw(ArgumentError(
-    "mtk2esm_gaps requires a package extension: load ModelingToolkit (plus " *
-    "Symbolics and DomainSets) to activate EarthSciASTMTKExt, " *
-    "then retry"))
+mtk2esm_gaps(sys) = throw(
+    ArgumentError(
+        "mtk2esm_gaps requires a package extension: load ModelingToolkit (plus " *
+            "Symbolics and DomainSets) to activate EarthSciASTMTKExt, " *
+            "then retry"
+    )
+)
 
 # ========================================
 # MTK-independent export helpers
@@ -92,7 +98,7 @@ mtk2esm_gaps(sys) = throw(ArgumentError(
 # MTK/Catalyst types, so they live here next to `GapReport`.
 
 "Strip a trailing `(t)` time-dependence suffix from a printed symbolic name."
-_strip_time(s::AbstractString) = endswith(s, "(t)") ? s[1:end-3] : s
+_strip_time(s::AbstractString) = endswith(s, "(t)") ? s[1:(end - 3)] : s
 
 """
     _meta_string(metadata, key, default) -> String
@@ -138,7 +144,7 @@ function _resolve_sys_name(sys, metadata, fallback::String)
         sn = String(nameof(sys))
         return sn == "" ? fallback : sn
     catch e
-        @debug "mtk2esm: nameof(sys) unavailable" exception=(e, catch_backtrace())
+        @debug "mtk2esm: nameof(sys) unavailable" exception = (e, catch_backtrace())
         return fallback
     end
 end
@@ -172,7 +178,7 @@ Build the top-level `metadata` object of an exported ESM file from the
 caller-supplied migration metadata (name/description/authors/tags).
 """
 function _esm_file_metadata(metadata, sys_name::String)
-    file_meta = Dict{String,Any}("name" => sys_name)
+    file_meta = Dict{String, Any}("name" => sys_name)
     file_desc = _meta_string(metadata, :description, "")
     isempty(file_desc) || (file_meta["description"] = file_desc)
     authors = _meta_vec_string(metadata, :authors)
@@ -191,8 +197,12 @@ when `gaps` is empty.
 """
 function _warn_gaps(gaps::Vector{GapReport}, label::String)
     isempty(gaps) && return nothing
-    gap_lines = join(["  - [$(g.bead_id)] $(g.description) @ $(g.location)"
-                      for g in gaps], "\n")
+    gap_lines = join(
+        [
+            "  - [$(g.bead_id)] $(g.description) @ $(g.location)"
+                for g in gaps
+        ], "\n"
+    )
     @warn "mtk2esm: $(length(gaps)) schema-gap construct(s) in $(label):\n$(gap_lines)"
     return nothing
 end

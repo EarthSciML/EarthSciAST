@@ -28,9 +28,9 @@ using OrdinaryDiffEqTsit5: Tsit5
     # SLURM walltime: fires within the margin, not outside; false when unset.
     withenv("SLURM_JOB_END_TIME" => "1000") do
         near = slurm_walltime_predicate(; margin_seconds = 300, clock = () -> 800.0)
-        far  = slurm_walltime_predicate(; margin_seconds = 300, clock = () -> 600.0)
+        far = slurm_walltime_predicate(; margin_seconds = 300, clock = () -> 600.0)
         @test near() == true      # 1000 - 800 = 200 <= 300
-        @test far()  == false     # 1000 - 600 = 400 >  300
+        @test far() == false     # 1000 - 600 = 400 >  300
     end
     withenv("SLURM_JOB_END_TIME" => nothing) do
         @test slurm_walltime_predicate(; clock = () -> 0.0)() == false   # not under SLURM
@@ -38,7 +38,11 @@ using OrdinaryDiffEqTsit5: Tsit5
 
     # --- a predicate-fired checkpoint, verified analytically ---
     fixture = joinpath(@__DIR__, "fixtures", "streaming_decay_grid.esm")
-    _ckpt_seed! = (u0, _vm) -> (@inbounds for i in eachindex(u0); u0[i] = Float64(i); end)
+    _ckpt_seed! = (u0, _vm) -> (
+        @inbounds for i in eachindex(u0)
+            u0[i] = Float64(i)
+        end
+    )
     prep = esm_problem(fixture, (0.0, 100.0); seed_ic! = _ckpt_seed!)
     k = 0.001                                   # fixture's decay rate (scalar param)
 
@@ -46,17 +50,23 @@ using OrdinaryDiffEqTsit5: Tsit5
     base_url = "file://" * joinpath(dir, "ckpt.zarr")
     # predicate-only sink: no fixed output cadence (output_times empty), lossless
     # checkpoint codec, one record per shard so each checkpoint auto-commits.
-    cksink = build_zarr_sink(prep, base_url; output_times = Float64[],
-                             profile = :checkpoint, records_per_shard = 1)
+    cksink = build_zarr_sink(
+        prep, base_url; output_times = Float64[],
+        profile = :checkpoint, records_per_shard = 1
+    )
 
     # An always-true predicate fires at the first accepted step: checkpoint the full
     # state there, flush, and terminate for a clean early exit.
     # The checkpoint sink + predicates are PROBLEM-level declarations (§2.5.4):
     # they compose into the callback set the problem carries.
-    solve(esm_problem(fixture, (0.0, 100.0);
-             sinks = Any[], checkpoint_sinks = Any[cksink],
-             checkpoint_predicates = Any[() -> true],
-             terminate_on_checkpoint = true, seed_ic! = _ckpt_seed!), Tsit5())
+    solve(
+        esm_problem(
+            fixture, (0.0, 100.0);
+            sinks = Any[], checkpoint_sinks = Any[cksink],
+            checkpoint_predicates = Any[() -> true],
+            terminate_on_checkpoint = true, seed_ic! = _ckpt_seed!
+        ), Tsit5()
+    )
 
     man = cksink.manifest
     @test man !== nothing
@@ -69,7 +79,7 @@ using OrdinaryDiffEqTsit5: Tsit5
     @test 0.0 <= t1 < 100.0        # terminated early (well before the end)
     @test length(u1) == length(prep.u0)
     for i in eachindex(u1)
-        @test isapprox(u1[i], Float64(i) * exp(-k * t1); rtol = 1e-4, atol = 1e-6)
+        @test isapprox(u1[i], Float64(i) * exp(-k * t1); rtol = 1.0e-4, atol = 1.0e-6)
     end
 
     # --- restart CONTINUATION: resume from (t1, u1), reach the same end within tol ---
@@ -77,12 +87,16 @@ using OrdinaryDiffEqTsit5: Tsit5
     uend_ref = ref.u[end]
 
     seed_from_u1 = (u0, _vm) -> (u0 .= u1)
-    cont = solve(esm_problem(fixture, (t1, 100.0);
-                    seed_ic! = seed_from_u1), Tsit5(); saveat = [100.0])
+    cont = solve(
+        esm_problem(
+            fixture, (t1, 100.0);
+            seed_ic! = seed_from_u1
+        ), Tsit5(); saveat = [100.0]
+    )
     uend_cont = cont.u[end]
 
     @test length(uend_cont) == length(uend_ref)
     for i in eachindex(uend_ref)
-        @test isapprox(uend_cont[i], uend_ref[i]; rtol = 1e-5, atol = 1e-6)
+        @test isapprox(uend_cont[i], uend_ref[i]; rtol = 1.0e-5, atol = 1.0e-6)
     end
 end

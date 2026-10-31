@@ -27,7 +27,11 @@ using OrdinaryDiffEqTsit5: Tsit5
 
     ka, kb = 0.001, 0.002
     rate_of = base -> base == "Grid.a" ? ka : kb
-    seed! = (u0, _vm) -> (@inbounds for i in eachindex(u0); u0[i] = Float64(i); end)
+    seed! = (u0, _vm) -> (
+        @inbounds for i in eachindex(u0)
+            u0[i] = Float64(i)
+        end
+    )
 
     tspan = (0.0, 100.0)
     times = [40.0, 80.0]
@@ -35,12 +39,14 @@ using OrdinaryDiffEqTsit5: Tsit5
 
     # one sink per grid → its own store (the RFC §9 "separable" layout).
     sinks = Any[]
-    stores = Dict{String,String}()
+    stores = Dict{String, String}()
     for grp in groups
         bases = String[g.base for g in grp]
         label = join(sig(grp), "_")
         url = "file://" * joinpath(dir, "grid_$(label).zarr")
-        for b in bases; stores[b] = url; end
+        for b in bases
+            stores[b] = url
+        end
         push!(sinks, build_zarr_sink(prep, url; output_times = times, variables = bases))
     end
     @test length(sinks) == 2
@@ -57,8 +63,10 @@ using OrdinaryDiffEqTsit5: Tsit5
     for grp in groups
         url = stores[grp[1].base]
         varnames = String[g.base for g in grp]
-        nds = EarthSciIO.read_store(EarthSciIO.ZarrReader(), cache, url;
-                                    variables = String[varnames..., "time"])
+        nds = EarthSciIO.read_store(
+            EarthSciIO.ZarrReader(), cache, url;
+            variables = String[varnames..., "time"]
+        )
         tdata = collect(nds.variables["time"].data)
         @test length(tdata) == length(times)
         for g in grp
@@ -66,7 +74,7 @@ using OrdinaryDiffEqTsit5: Tsit5
             r = rate_of(g.base)
             @test Set(v.dims) == Set(String[g.dimnames..., "time"])
             for t in times
-                ti = findfirst(x -> isapprox(x, t; atol = 1e-9), tdata)
+                ti = findfirst(x -> isapprox(x, t; atol = 1.0e-9), tdata)
                 for m in eachindex(g.flat_indices)
                     fi = g.flat_indices[m]
                     cart = g.cart[m]
@@ -74,8 +82,10 @@ using OrdinaryDiffEqTsit5: Tsit5
                     for (p, dn) in enumerate(v.dims)
                         idx[p] = dn == "time" ? ti : cart[findfirst(==(dn), g.dimnames)]
                     end
-                    @test isapprox(v.data[idx...], Float64(fi) * exp(-r * t);
-                                   rtol = 1e-4, atol = 1e-6)
+                    @test isapprox(
+                        v.data[idx...], Float64(fi) * exp(-r * t);
+                        rtol = 1.0e-4, atol = 1.0e-6
+                    )
                 end
             end
         end

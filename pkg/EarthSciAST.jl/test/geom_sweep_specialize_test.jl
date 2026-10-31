@@ -38,21 +38,24 @@ using EarthSciAST
 const EA = EarthSciAST
 
 # ---- small JSON AST builders ----
-_op(o, args...) = Dict{String,Any}("op" => o, "args" => Any[args...])
-_ix(f, args...) = Dict{String,Any}("op" => "index", "args" => Any[f, args...])
+_op(o, args...) = Dict{String, Any}("op" => o, "args" => Any[args...])
+_ix(f, args...) = Dict{String, Any}("op" => "index", "args" => Any[f, args...])
 function _agg(output_idx, ranges, expr; kw...)
-    d = Dict{String,Any}("op" => "faq", "output_idx" => collect(output_idx),
-                         "ranges" => Dict{String,Any}(
-                             k => (v isa AbstractString ? Dict{String,Any}("from" => v) : v)
-                             for (k, v) in ranges),
-                         "args" => Any[], "expr" => expr)
+    d = Dict{String, Any}(
+        "op" => "faq", "output_idx" => collect(output_idx),
+        "ranges" => Dict{String, Any}(
+            k => (v isa AbstractString ? Dict{String, Any}("from" => v) : v)
+                for (k, v) in ranges
+        ),
+        "args" => Any[], "expr" => expr
+    )
     for (k, v) in kw
         d[String(k)] = v
     end
     return d
 end
 
-const IDX = Dict{String,Int}("I" => 5, "J" => 4, "V" => 3, "C" => 2)
+const IDX = Dict{String, Int}("I" => 5, "J" => 4, "V" => 3, "C" => 2)
 
 # A source field carrying a signed zero, negatives and a huge value, so the
 # bodies below actually produce -0.0, ±Inf and NaN.
@@ -61,9 +64,11 @@ const B = Float64[i + 10j for i in 1:5, j in 1:4]
 const R = Float64[i + 0.25v + 0.5c for i in 1:5, v in 1:3, c in 1:2]
 const KI = Float64[mod(i, 2) for i in 1:5]
 const KJ = Float64[mod(j, 2) for j in 1:4]
-const ENV0 = Dict{String,Any}("A" => A, "B" => B, "R" => R, "kI" => KI, "kJ" => KJ,
-                              "s" => 1.5, "thr" => 0.0)
-const SHAPES = Dict{String,Vector{String}}("kI" => ["I"], "kJ" => ["J"])
+const ENV0 = Dict{String, Any}(
+    "A" => A, "B" => B, "R" => R, "kI" => KI, "kJ" => KJ,
+    "s" => 1.5, "thr" => 0.0
+)
+const SHAPES = Dict{String, Vector{String}}("kI" => ["I"], "kJ" => ["J"])
 
 # Materialize `json` both ways and return (fast, reference, fastcount, refcount).
 function both_ways(json, env = ENV0, idx = IDX)
@@ -94,23 +99,47 @@ end
         Bij = _ix("B", "i", "j")
         cases = Dict(
             # rank 2, signed zero out of the false arm of a gated branch
-            "rank2_gated" => (_agg(["i", "j"], ["i" => "I", "j" => "J"],
-                _op("ifelse", _op(">", Aij, "thr"),
-                    _op("*", Aij, "s"), _op("*", -1.0, _op("*", 0.0, Bij)))), IDX),
+            "rank2_gated" => (
+                _agg(
+                    ["i", "j"], ["i" => "I", "j" => "J"],
+                    _op(
+                        "ifelse", _op(">", Aij, "thr"),
+                        _op("*", Aij, "s"), _op("*", -1.0, _op("*", 0.0, Bij))
+                    )
+                ), IDX,
+            ),
             # rank 2, ±Inf where A is zero
-            "rank2_inf" => (_agg(["i", "j"], ["i" => "I", "j" => "J"],
-                _op("/", "s", Aij)), IDX),
+            "rank2_inf" => (
+                _agg(
+                    ["i", "j"], ["i" => "I", "j" => "J"],
+                    _op("/", "s", Aij)
+                ), IDX,
+            ),
             # rank 2, NaN (0/0) where A is zero
-            "rank2_nan" => (_agg(["i", "j"], ["i" => "I", "j" => "J"],
-                _op("/", Aij, Aij)), IDX),
+            "rank2_nan" => (
+                _agg(
+                    ["i", "j"], ["i" => "I", "j" => "J"],
+                    _op("/", Aij, Aij)
+                ), IDX,
+            ),
             # rank 1
-            "rank1" => (_agg(["i"], ["i" => "I"],
-                _op("/", "s", _ix("A", "i", 2))), IDX),
+            "rank1" => (
+                _agg(
+                    ["i"], ["i" => "I"],
+                    _op("/", "s", _ix("A", "i", 2))
+                ), IDX,
+            ),
             # rank 3 over a [pos, vert, coord] ring stack — the shape a
             # constructed cell ring materializes into
-            "rank3" => (_agg(["i", "v", "c"], ["i" => "I", "v" => "V", "c" => "C"],
-                _op("+", _op("*", _ix("R", "i", "v", "c"), "s"),
-                         _op("-", _ix("R", "i", "v", "c"), _ix("A", "i", 1)))), IDX),
+            "rank3" => (
+                _agg(
+                    ["i", "v", "c"], ["i" => "I", "v" => "V", "c" => "C"],
+                    _op(
+                        "+", _op("*", _ix("R", "i", "v", "c"), "s"),
+                        _op("-", _ix("R", "i", "v", "c"), _ix("A", "i", 1))
+                    )
+                ), IDX,
+            ),
         )
         seen = Float64[]
         for (nm, (j, idx)) in cases
@@ -129,10 +158,12 @@ end
         # A `-0.0` summand and a `NaN` summand both reach the accumulator here,
         # so a reordered or dropped term shows up as a bit difference.
         body = _op("*", _ix("A", "i", "j"), _ix("B", "i", "j"))
-        for (nm, extra) in ("sum" => Dict{String,Any}(),
-                            "min" => Dict{String,Any}("reduce" => "min"),
-                            "max" => Dict{String,Any}("reduce" => "max"),
-                            "prod" => Dict{String,Any}("reduce" => "prod"))
+        for (nm, extra) in (
+                "sum" => Dict{String, Any}(),
+                "min" => Dict{String, Any}("reduce" => "min"),
+                "max" => Dict{String, Any}("reduce" => "max"),
+                "prod" => Dict{String, Any}("reduce" => "prod"),
+            )
             j = _agg(["j"], ["i" => "I", "j" => "J"], body)
             merge!(j, extra)
             fast, ref, nf, nr = both_ways(j)
@@ -142,8 +173,12 @@ end
         end
         # A NaN in the fold: `+` propagates it, so the contraction is not
         # vacuously finite.
-        jn = _agg(["j"], ["i" => "I", "j" => "J"], _op("/", _ix("A", "i", "j"),
-                                                          _ix("A", "i", "j")))
+        jn = _agg(
+            ["j"], ["i" => "I", "j" => "J"], _op(
+                "/", _ix("A", "i", "j"),
+                _ix("A", "i", "j")
+            )
+        )
         fast, ref, nf, nr = both_ways(jn)
         @test (nf, nr) == (1, 0)
         @test bitsame(fast, ref)
@@ -170,17 +205,21 @@ end
         dense = EA._plan_with(EA._compiler_plan(:native); strict = false, join_on_gate = false)
         dense_ways(j) = EA._with_compiler_plan(() -> both_ways(j), dense)
         body = _op("+", _ix("A", "i", "j"), "s")
-        j = _agg(["i", "j"], ["i" => "I", "j" => "J"], body;
-                 join = Any[Dict{String,Any}("on" => Any[Any["kI", "kJ"]])])
+        j = _agg(
+            ["i", "j"], ["i" => "I", "j" => "J"], body;
+            join = Any[Dict{String, Any}("on" => Any[Any["kI", "kJ"]])]
+        )
         fast, ref, nf, nr = dense_ways(j)
         @test (nf, nr) == (1, 0)
         @test bitsame(fast, ref)
         @test any(iszero, fast)            # the gate really rejected something
         @test !all(iszero, fast)
         # ... and the same gate on the CONTRACTED index, with a filter on top.
-        jc = _agg(["j"], ["i" => "I", "j" => "J"], _ix("B", "i", "j");
-                  join = Any[Dict{String,Any}("on" => Any[Any["kI", "kJ"]])],
-                  filter = _op(">", _ix("A", "i", "j"), "thr"))
+        jc = _agg(
+            ["j"], ["i" => "I", "j" => "J"], _ix("B", "i", "j");
+            join = Any[Dict{String, Any}("on" => Any[Any["kI", "kJ"]])],
+            filter = _op(">", _ix("A", "i", "j"), "thr")
+        )
         fastc, refc, nfc, nrc = dense_ways(jc)
         @test (nfc, nrc) == (1, 0)
         @test bitsame(fastc, refc)
@@ -191,8 +230,10 @@ end
         # `:geo_agg` allocates its own frame slots from the shared counter, so
         # the specialized sweep must not disturb them.
         inner = _agg(String[], ["v" => "V"], _ix("R", "i", "v", 1))
-        j = _agg(["i", "j"], ["i" => "I", "j" => "J"],
-                 _op("*", inner, _ix("A", "i", "j")))
+        j = _agg(
+            ["i", "j"], ["i" => "I", "j" => "J"],
+            _op("*", inner, _ix("A", "i", "j"))
+        )
         fast, ref, nf, nr = both_ways(j)
         @test (nf, nr) == (1, 0)
         @test bitsame(fast, ref)
@@ -203,8 +244,10 @@ end
         # `out` empty ⇒ a 0-dimensional `Array{Float64,0}`. `CartesianIndices`
         # yields exactly one empty index, as `Iterators.product()` yields one
         # empty tuple — the arm must not fall over on N == 0.
-        j = _agg(String[], ["i" => "I", "j" => "J"],
-                 _op("*", _ix("A", "i", "j"), _ix("B", "i", "j")))
+        j = _agg(
+            String[], ["i" => "I", "j" => "J"],
+            _op("*", _ix("A", "i", "j"), _ix("B", "i", "j"))
+        )
         fast, ref, nf, nr = both_ways(j)
         @test (nf, nr) == (1, 0)
         @test bitsame(fast, ref)
@@ -221,17 +264,21 @@ end
         big = Float64[(-1.0)^(i + j) * (i - 3) * (j - 2) / 4 for i in 1:7, j in 1:6]
         vA = view(big, 1:5, 1:4)
         @test vA == A                       # same values, different type
-        @test !(vA isa Array{Float64,2})    # ... and it really misses the arm
-        bodies = (_op("/", _ix("A", "i", "j"), _ix("A", "i", "j")),
-                  _op("*", _ix("A", "i", "j"), "s"),
-                  _op("ifelse", _op(">", _ix("A", "i", "j"), "thr"),
-                      _op("/", "s", _ix("A", "i", "j")),
-                      _op("*", -1.0, _op("*", 0.0, _ix("B", "i", "j")))))
+        @test !(vA isa Array{Float64, 2})    # ... and it really misses the arm
+        bodies = (
+            _op("/", _ix("A", "i", "j"), _ix("A", "i", "j")),
+            _op("*", _ix("A", "i", "j"), "s"),
+            _op(
+                "ifelse", _op(">", _ix("A", "i", "j"), "thr"),
+                _op("/", "s", _ix("A", "i", "j")),
+                _op("*", -1.0, _op("*", 0.0, _ix("B", "i", "j")))
+            ),
+        )
         for body in bodies
             j = _agg(["i", "j"], ["i" => "I", "j" => "J"], body)
             rhs = EA.expression_from_json(j)
             dense = EA._materialize_geom_array(rhs, copy(ENV0), nothing, IDX, SHAPES)
-            envv = merge(copy(ENV0), Dict{String,Any}("A" => vA))
+            envv = merge(copy(ENV0), Dict{String, Any}("A" => vA))
             sub = EA._materialize_geom_array(rhs, envv, nothing, IDX, SHAPES)
             @test bitsame(dense, sub)
             @test length(unique(dense)) > 1
@@ -258,20 +305,26 @@ end
         for p in 1:3
             sq!(tgtp, p, (p - 1) * 1.0, 0.0, 1.0)
         end
-        env = Dict{String,Any}("src_poly" => srcp, "tgt_poly" => tgtp)
-        pia = Dict{String,Any}("op" => "polygon_intersection_area",
-                               "manifold" => "planar",
-                               "args" => Any[_ix("src_poly", "i"), _ix("tgt_poly", "j")])
+        env = Dict{String, Any}("src_poly" => srcp, "tgt_poly" => tgtp)
+        pia = Dict{String, Any}(
+            "op" => "polygon_intersection_area",
+            "manifold" => "planar",
+            "args" => Any[_ix("src_poly", "i"), _ix("tgt_poly", "j")]
+        )
         j = _agg(["i", "j"], ["i" => "S", "j" => "T"], pia)
-        idx = Dict{String,Int}("S" => 6, "T" => 3)
+        idx = Dict{String, Int}("S" => 6, "T" => 3)
         rhs = EA.expression_from_json(j)
         f0, r0 = EA._GEOM_SWEEP_FAST[], EA._GEOM_SWEEP_REF[]
-        fast = EA._materialize_geom_array(rhs, copy(env), nothing, idx,
-                                          Dict{String,Vector{String}}())
+        fast = EA._materialize_geom_array(
+            rhs, copy(env), nothing, idx,
+            Dict{String, Vector{String}}()
+        )
         @test (EA._GEOM_SWEEP_FAST[] - f0, EA._GEOM_SWEEP_REF[] - r0) == (1, 0)
         ref = EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
-            EA._materialize_geom_array(rhs, copy(env), nothing, idx,
-                                       Dict{String,Vector{String}}())
+            EA._materialize_geom_array(
+                rhs, copy(env), nothing, idx,
+                Dict{String, Vector{String}}()
+            )
         end
         @test bitsame(fast, ref)
         @test count(!iszero, fast) == 6          # each src square sits in one tgt
@@ -281,15 +334,22 @@ end
         # The `:geo_pia` arm narrows `_GeoRingRef` operands with a concrete
         # `isa`; a WHOLE-ARRAY operand misses that arm and takes the generic
         # call. Same two polygons either way ⇒ same area, bit for bit.
-        env2 = merge(copy(env), Dict{String,Any}(
-            "ring_a" => Array{Float64}(srcp[1, :, :]),
-            "ring_b" => Array{Float64}(tgtp[1, :, :])))
-        whole = Dict{String,Any}("op" => "polygon_intersection_area",
-                                 "manifold" => "planar",
-                                 "args" => Any["ring_a", "ring_b"])
+        env2 = merge(
+            copy(env), Dict{String, Any}(
+                "ring_a" => Array{Float64}(srcp[1, :, :]),
+                "ring_b" => Array{Float64}(tgtp[1, :, :])
+            )
+        )
+        whole = Dict{String, Any}(
+            "op" => "polygon_intersection_area",
+            "manifold" => "planar",
+            "args" => Any["ring_a", "ring_b"]
+        )
         jw = _agg(["i"], ["i" => "S"], whole)
-        got = EA._materialize_geom_array(EA.expression_from_json(jw), env2, nothing,
-                                         idx, Dict{String,Vector{String}}())
+        got = EA._materialize_geom_array(
+            EA.expression_from_json(jw), env2, nothing,
+            idx, Dict{String, Vector{String}}()
+        )
         @test all(x -> isequal(x, fast[1, 1]), got)
         @test !iszero(fast[1, 1])
     end

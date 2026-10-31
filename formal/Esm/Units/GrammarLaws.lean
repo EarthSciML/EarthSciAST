@@ -82,7 +82,7 @@ theorem pTail_ops (ops : List (Op × String)) (ts : List Tok) (hts : NoPowHead t
       refine ⟨m, hm, ?_⟩
       simp only [opToks, List.cons_append, foldOps]
       rw [pTail.eq_def]
-      simp only [startsTerm, if_true]
+      simp only [startsTerm, ite_true]
       rw [pTerm_sym j b _ hX]; exact e
 
 theorem length_opToks (ops : List (Op × String)) : ops.length ≤ (opToks ops).length := by
@@ -209,7 +209,7 @@ theorem not_digit_of_alpha {c : Char} (h : isAlphaC c = true) : isDigitC c = fal
 theorem ascii_of_ident {c : Char} (h : isIdent c = true) : c.toNat < 128 := by
   simp [isIdent, isAlphaC, isDigitC, Char.le_def, UInt32.le_iff_toNat_le] at h
   have : c.toNat = c.val.toNat := rfl
-  rcases h with (h | h) | h | h <;> first | omega | decide | (subst h; decide)
+  rcases h with (h | h) | h | h <;> first | omega | decide
 
 theorem ne_of_alpha {c : Char} (h : isAlphaC c = true) (d : Char) (hd : isAlphaC d = false) :
     c ≠ d := by
@@ -230,7 +230,7 @@ theorem span_append (p : Char → Bool) (a rest : List Char) (ha : ∀ x ∈ a, 
   | nil =>
     cases rest with
     | nil => simp
-    | cons c r => have := hr c r rfl; simp [List.takeWhile_cons, List.dropWhile_cons, this]
+    | cons c r => have := hr c r rfl; simp [this]
   | cons x a ih =>
     have hx := ha x (by simp)
     have ih' := ih (fun y hy => ha y (by simp [hy]))
@@ -252,11 +252,11 @@ theorem lexAux_run (a rest : List Char) (ha : IdentRun a) (hr : RunEnds rest) (k
   have hall : (c :: t).all isDigitC = false := by simp [not_digit_of_alpha hc]
   rw [List.cons_append, lexAux.eq_def]
   dsimp only
-  rw [if_neg (by simp [isSpace_of_alpha hc]), if_neg (ne_of_alpha hc '*' (by decide)),
-    if_neg (ne_of_alpha hc '/' (by decide)), if_neg (ne_of_alpha hc '^' (by decide)),
-    if_neg (ne_of_alpha hc '(' (by decide)), if_neg (ne_of_alpha hc ')' (by decide)),
-    if_neg (ne_of_alpha hc '-' (by decide)), if_neg (ne_of_alpha hc '%' (by decide)),
-    if_pos (isIdent_of_alpha hc)]
+  rw [ite_eq_right (by simp [isSpace_of_alpha hc]), ite_eq_right (ne_of_alpha hc '*' (by decide)),
+    ite_eq_right (ne_of_alpha hc '/' (by decide)), ite_eq_right (ne_of_alpha hc '^' (by decide)),
+    ite_eq_right (ne_of_alpha hc '(' (by decide)), ite_eq_right (ne_of_alpha hc ')' (by decide)),
+    ite_eq_right (ne_of_alpha hc '-' (by decide)), ite_eq_right (ne_of_alpha hc '%' (by decide)),
+    ite_eq_left (isIdent_of_alpha hc)]
   simp only [hspan, hall, Bool.false_eq_true, ite_false]
 
 theorem lexAux_nil (k : ℕ) : lexAux (k + 1) [] = .ok [] := by simp [lexAux]
@@ -318,7 +318,7 @@ theorem resolve_ident_run :
   have hp : parse [.sym (String.ofList a)] = .ok (.sym (String.ofList a)) := by
     simpa [opToks, foldOps] using parse_fold (String.ofList a) []
   unfold resolveChars
-  rw [if_neg (identRun_ne_nil ha), normalize_ascii a (identRun_ascii ha), lex_run a ha]
+  rw [ite_eq_right (identRun_ne_nil ha), normalize_ascii a (identRun_ascii ha), lex_run a ha]
   simp only [bind, Except.bind, hp, UExpr.eval]
   rw [← lookup_isSome_iff]
   cases lookup (String.ofList a) <;> simp
@@ -375,7 +375,7 @@ theorem resolve_space_eq_star :
     simpa [opToks, foldOps] using parse_fold (String.ofList a) [(.star, String.ofList b)]
   unfold resolveChars
   have ne : ∀ sep : Char, a ++ sep :: b ≠ [] := by simp
-  rw [if_neg (ne ' '), if_neg (ne '*'), normalize_ascii _ (hascii ' ' (by decide)),
+  rw [ite_eq_right (ne ' '), ite_eq_right (ne '*'), normalize_ascii _ (hascii ' ' (by decide)),
     normalize_ascii _ (hascii '*' (by decide)), lsp, lst]
   simp only [bind, Except.bind, pj, ps]
 
@@ -398,7 +398,7 @@ theorem resolve_minus_rejected :
   obtain ⟨err, he⟩ := parse_minus_rejected (String.ofList a) [] [.sym (String.ofList b)]
   simp only [opToks, List.cons_append, List.nil_append] at he
   unfold resolveChars
-  rw [if_neg (by simp), normalize_ascii _ hascii, lm]
+  rw [ite_eq_right (by simp), normalize_ascii _ hascii, lm]
   simp [bind, Except.bind, he]
 
 /-! ## The listed exclusions -/

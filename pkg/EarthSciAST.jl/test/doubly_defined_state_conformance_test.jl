@@ -22,8 +22,10 @@ using OrdinaryDiffEqTsit5   # the inline-test surface needs an ODE algorithm
 
 include("testutils.jl")  # TESTUTILS_REPO_ROOT
 
-const _DD_DIR = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance",
-                         "doubly_defined_state")
+const _DD_DIR = joinpath(
+    TESTUTILS_REPO_ROOT, "tests", "conformance",
+    "doubly_defined_state"
+)
 
 @assert isfile(joinpath(_DD_DIR, "manifest.json")) "manifest not found in $(_DD_DIR)"
 const _DD_MANIFEST = JSON3.read(read(joinpath(_DD_DIR, "manifest.json"), String))
@@ -45,7 +47,7 @@ const _DD_MANIFEST = JSON3.read(read(joinpath(_DD_DIR, "manifest.json"), String)
                 # must not depend on which one the caller names.
                 for compiler in (:native, :interpreter)
                     err = try
-                        EarthSciAST.esm_problem(doc, (0.0, 1.0); compiler=compiler)
+                        EarthSciAST.esm_problem(doc, (0.0, 1.0); compiler = compiler)
                         nothing
                     catch e
                         e
@@ -63,11 +65,13 @@ const _DD_MANIFEST = JSON3.read(read(joinpath(_DD_DIR, "manifest.json"), String)
                 # a property of the file rather than of the evaluator.
                 result = EarthSciAST.validate(doc)
                 @test !result.is_valid
-                @test any(e -> e.error_type == "equation_count_mismatch",
-                          result.structural_errors)
+                @test any(
+                    e -> e.error_type == "equation_count_mismatch",
+                    result.structural_errors
+                )
 
                 # An inline test reports the refusal, not a number.
-                results = run_inline_tests(path; alg=Tsit5())
+                results = run_inline_tests(path; alg = Tsit5())
                 @test !isempty(results)
                 for r in results
                     @test r.passed == false
@@ -75,7 +79,7 @@ const _DD_MANIFEST = JSON3.read(read(joinpath(_DD_DIR, "manifest.json"), String)
                     @test occursin("equation_count_mismatch", r.message)
                 end
             else
-                results = run_inline_tests(path; alg=Tsit5())
+                results = run_inline_tests(path; alg = Tsit5())
                 @test !isempty(results)
                 @test all(r -> r.passed, results)
             end

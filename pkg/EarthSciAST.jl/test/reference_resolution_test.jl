@@ -54,13 +54,13 @@ using EarthSciAST
 
         # Create a simple model with one variable
         variables = Dict(
-            "O3" => ModelVariable(UnknownVariable, default=0.0, description="Ozone concentration", units="ppbv")
+            "O3" => ModelVariable(UnknownVariable, default = 0.0, description = "Ozone concentration", units = "ppbv")
         )
         equations = [Equation(VarExpr("D(O3, t)"), NumExpr(0.0))]
         simple_model = Model(variables, equations)
 
         models = Dict("AtmosphereChemistry" => simple_model)
-        esm_file = EsmFile("0.1.0", metadata, models=models)
+        esm_file = EsmFile("0.1.0", metadata, models = models)
 
         # Test successful resolution
         result = resolve_qualified_reference(esm_file, "AtmosphereChemistry.O3")
@@ -88,33 +88,33 @@ using EarthSciAST
 
         # Inner-most subsystem (GasPhase)
         gas_phase_vars = Dict(
-            "O3" => ModelVariable(UnknownVariable, default=0.0, description="Ozone", units="ppbv"),
-            "NO2" => ModelVariable(UnknownVariable, default=0.0, description="Nitrogen dioxide", units="ppbv")
+            "O3" => ModelVariable(UnknownVariable, default = 0.0, description = "Ozone", units = "ppbv"),
+            "NO2" => ModelVariable(UnknownVariable, default = 0.0, description = "Nitrogen dioxide", units = "ppbv")
         )
         gas_phase_eqs = [
             Equation(VarExpr("D(O3, t)"), NumExpr(0.1)),
-            Equation(VarExpr("D(NO2, t)"), NumExpr(-0.05))
+            Equation(VarExpr("D(NO2, t)"), NumExpr(-0.05)),
         ]
         gas_phase = Model(gas_phase_vars, gas_phase_eqs)
 
         # Middle level (Chemistry) with GasPhase as subsystem
         chemistry_vars = Dict(
-            "temperature" => ModelVariable(ParameterVariable, default=298.15, description="Temperature", units="K")
+            "temperature" => ModelVariable(ParameterVariable, default = 298.15, description = "Temperature", units = "K")
         )
         chemistry_eqs = Equation[]
         chemistry_subsystems = Dict("GasPhase" => gas_phase)
-        chemistry = Model(chemistry_vars, chemistry_eqs, subsystems=chemistry_subsystems)
+        chemistry = Model(chemistry_vars, chemistry_eqs, subsystems = chemistry_subsystems)
 
         # Top level (Atmosphere) with Chemistry as subsystem
         atmosphere_vars = Dict(
-            "pressure" => ModelVariable(ParameterVariable, default=101325.0, description="Pressure", units="Pa")
+            "pressure" => ModelVariable(ParameterVariable, default = 101325.0, description = "Pressure", units = "Pa")
         )
         atmosphere_eqs = Equation[]
         atmosphere_subsystems = Dict("Chemistry" => chemistry)
-        atmosphere = Model(atmosphere_vars, atmosphere_eqs, subsystems=atmosphere_subsystems)
+        atmosphere = Model(atmosphere_vars, atmosphere_eqs, subsystems = atmosphere_subsystems)
 
         models = Dict("Atmosphere" => atmosphere)
-        esm_file = EsmFile("0.1.0", metadata, models=models)
+        esm_file = EsmFile("0.1.0", metadata, models = models)
 
         # Test resolution at different levels
 
@@ -157,26 +157,26 @@ using EarthSciAST
 
         # Create species and parameters
         species = [
-            Species("O3", units="ppb", default=80.0, description="Ozone"),
-            Species("NO", units="ppb", default=10.0, description="Nitric oxide")
+            Species("O3", units = "ppb", default = 80.0, description = "Ozone"),
+            Species("NO", units = "ppb", default = 10.0, description = "Nitric oxide"),
         ]
         parameters = [
-            Parameter("k1", 1.0e-3, description="Rate constant", units="1/s")
+            Parameter("k1", 1.0e-3, description = "Rate constant", units = "1/s"),
         ]
         reactions = [
-            Reaction(Dict("O3" => 1, "NO" => 1), Dict("NO2" => 1, "O2" => 1), VarExpr("k1"))
+            Reaction(Dict("O3" => 1, "NO" => 1), Dict("NO2" => 1, "O2" => 1), VarExpr("k1")),
         ]
 
         # Create subsystem
-        sub_species = [Species("HO2", units="ppb", default=0.1, description="Hydroperoxy radical")]
-        sub_params = [Parameter("k2", 2.0e-4, description="HO2 rate", units="1/s")]
+        sub_species = [Species("HO2", units = "ppb", default = 0.1, description = "Hydroperoxy radical")]
+        sub_params = [Parameter("k2", 2.0e-4, description = "HO2 rate", units = "1/s")]
         sub_reactions = [Reaction(Dict("HO2" => 2), Dict("H2O2" => 1, "O2" => 1), VarExpr("k2"))]
-        subsystem = ReactionSystem(sub_species, sub_reactions, parameters=sub_params)
+        subsystem = ReactionSystem(sub_species, sub_reactions, parameters = sub_params)
 
-        main_system = ReactionSystem(species, reactions, parameters=parameters, subsystems=Dict("HO2Chemistry" => subsystem))
+        main_system = ReactionSystem(species, reactions, parameters = parameters, subsystems = Dict("HO2Chemistry" => subsystem))
 
         reaction_systems = Dict("FastChemistry" => main_system)
-        esm_file = EsmFile("0.1.0", metadata, reaction_systems=reaction_systems)
+        esm_file = EsmFile("0.1.0", metadata, reaction_systems = reaction_systems)
 
         # Test species resolution
         result = resolve_qualified_reference(esm_file, "FastChemistry.O3")
@@ -212,15 +212,15 @@ using EarthSciAST
         metadata = Metadata("MixedSystemTest")
 
         # Model
-        model_vars = Dict("temperature" => ModelVariable(UnknownVariable, default=298.15, units="K"))
+        model_vars = Dict("temperature" => ModelVariable(UnknownVariable, default = 298.15, units = "K"))
         model_eqs = [Equation(VarExpr("D(temperature, t)"), NumExpr(0.0))]
         model = Model(model_vars, model_eqs)
 
         # ReactionSystem
-        species = [Species("O3", description="Ozone")]
-        reactions = [Reaction(Dict("O3" => 1), Dict{String,Int}(), VarExpr("k_loss"))]
-        params = [Parameter("k_loss", 1.0e-5, units="1/s")]
-        reaction_system = ReactionSystem(species, reactions, parameters=params)
+        species = [Species("O3", description = "Ozone")]
+        reactions = [Reaction(Dict("O3" => 1), Dict{String, Int}(), VarExpr("k_loss"))]
+        params = [Parameter("k_loss", 1.0e-5, units = "1/s")]
+        reaction_system = ReactionSystem(species, reactions, parameters = params)
 
         # DataSource — an INGEST REGISTRY ENTRY from esm 1.0.0, not a component:
         # it exposes no variables of its own and can never be the root of a
@@ -228,10 +228,12 @@ using EarthSciAST
         dl_source = DataSourceLocation("file:///path/to/data_{date:%Y%m%d}.nc")
         data_loader = DataSource("grid", dl_source)
 
-        esm_file = EsmFile("0.1.0", metadata,
-                          models=Dict("Meteorology" => model),
-                          reaction_systems=Dict("Chemistry" => reaction_system),
-                          data_sources=Dict("MetData" => data_loader))
+        esm_file = EsmFile(
+            "0.1.0", metadata,
+            models = Dict("Meteorology" => model),
+            reaction_systems = Dict("Chemistry" => reaction_system),
+            data_sources = Dict("MetData" => data_loader)
+        )
 
         # Test model variable
         result = resolve_qualified_reference(esm_file, "Meteorology.temperature")
@@ -265,18 +267,29 @@ using EarthSciAST
         # rather than through a mounted component.
         metadata = Metadata("SourceConsumerTest")
 
-        source = DataSource("grid",
-            DataSourceLocation("file:///GEOSFP.{date:%Y%m%d}.I3.4x5.nc"))
+        source = DataSource(
+            "grid",
+            DataSourceLocation("file:///GEOSFP.{date:%Y%m%d}.I3.4x5.nc")
+        )
 
-        parent = Model(Dict(
-                "w_time" => ModelVariable(UnknownVariable, units="1"),
-                "PS" => ModelVariable(ParameterVariable; units="Pa", shape=String[],
-                    update=ParameterUpdate("data"; source="I3",
-                                           from=DataSourceBinding("PS")))),
-            Equation[])
+        parent = Model(
+            Dict(
+                "w_time" => ModelVariable(UnknownVariable, units = "1"),
+                "PS" => ModelVariable(
+                    ParameterVariable; units = "Pa", shape = String[],
+                    update = ParameterUpdate(
+                        "data"; source = "I3",
+                        from = DataSourceBinding("PS")
+                    )
+                )
+            ),
+            Equation[]
+        )
 
-        esm_file = EsmFile("0.1.0", metadata, models=Dict("GEOSFP" => parent),
-                           data_sources=Dict("I3" => source))
+        esm_file = EsmFile(
+            "0.1.0", metadata, models = Dict("GEOSFP" => parent),
+            data_sources = Dict("I3" => source)
+        )
 
         # The loaded field resolves as an ordinary variable of its consumer.
         result = resolve_qualified_reference(esm_file, "GEOSFP.PS")
@@ -308,15 +321,17 @@ using EarthSciAST
         @test_throws QualifiedReferenceError resolve_qualified_reference(empty_esm, "AnySystem.var")
 
         # ESM file with empty collections
-        esm_with_empty = EsmFile("0.1.0", metadata,
-                                models=Dict{String,Model}(),
-                                reaction_systems=Dict{String,ReactionSystem}())
+        esm_with_empty = EsmFile(
+            "0.1.0", metadata,
+            models = Dict{String, Model}(),
+            reaction_systems = Dict{String, ReactionSystem}()
+        )
 
         @test_throws QualifiedReferenceError resolve_qualified_reference(esm_with_empty, "AnySystem.var")
 
         # Test malformed references
         valid_model = Model(Dict("var" => ModelVariable(UnknownVariable)), Equation[])
-        valid_esm = EsmFile("0.1.0", metadata, models=Dict("System" => valid_model))
+        valid_esm = EsmFile("0.1.0", metadata, models = Dict("System" => valid_model))
 
         @test_throws QualifiedReferenceError resolve_qualified_reference(valid_esm, "")
         @test_throws QualifiedReferenceError resolve_qualified_reference(valid_esm, "var")  # bare reference

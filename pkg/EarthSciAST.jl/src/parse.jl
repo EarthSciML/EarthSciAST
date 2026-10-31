@@ -16,7 +16,7 @@ Exception thrown when JSON parsing fails.
 """
 struct ParseError <: EarthSciASTError
     message::String
-    original_error::Union{Exception,Nothing}
+    original_error::Union{Exception, Nothing}
     # MACHINE-READABLE half, defaulting empty. A few parse/load-time rejections
     # are ALSO pinned structural findings the conformance harness reports as
     # `(code, path)` — `ic_in_reaction_system` at
@@ -26,12 +26,14 @@ struct ParseError <: EarthSciASTError
     # parse failure with no pinned structural shape.
     code::String
     path::String
-    details::Dict{String,Any}
+    details::Dict{String, Any}
 
-    ParseError(message::String, original_error=nothing;
-               code::AbstractString="", path::AbstractString="",
-               details::AbstractDict=Dict{String,Any}()) =
-        new(message, original_error, String(code), String(path), Dict{String,Any}(details))
+    ParseError(
+        message::String, original_error = nothing;
+        code::AbstractString = "", path::AbstractString = "",
+        details::AbstractDict = Dict{String, Any}()
+    ) =
+        new(message, original_error, String(code), String(path), Dict{String, Any}(details))
 end
 
 Base.showerror(io::IO, e::ParseError) = print(io, "ParseError: ", e.message)
@@ -55,7 +57,7 @@ function _to_native_json(x)
     if x isa JSON3.Array || x isa AbstractVector
         return Any[_to_native_json(v) for v in x]
     elseif x isa JSON3.Object || x isa AbstractDict
-        return Dict{String,Any}(string(k) => _to_native_json(v) for (k, v) in pairs(x))
+        return Dict{String, Any}(string(k) => _to_native_json(v) for (k, v) in pairs(x))
     else
         return x
     end
@@ -88,7 +90,7 @@ function expression_from_json(data::Any)::ASTExpr
         # round-trip as `1.0/N.0` and could never be byte-identical across the
         # five bindings. Non-integral floats stay `NumExpr`.
         if isfinite(data) && isinteger(data) &&
-           typemin(Int64) <= data <= typemax(Int64) && Float64(Int64(data)) == data
+                typemin(Int64) <= data <= typemax(Int64) && Float64(Int64(data)) == data
             return IntExpr(Int64(data))
         end
         return NumExpr(Float64(data))
@@ -127,8 +129,10 @@ behavior.
 const _PARSE_EXPR_MEMO_KEY = :_earthsci_ast_parse_expression_memo
 
 function _parse_op_dict_memoized(data)
-    memo = get(task_local_storage(), _PARSE_EXPR_MEMO_KEY,
-               nothing)::Union{Nothing,IdDict{Any,ASTExpr}}
+    memo = get(
+        task_local_storage(), _PARSE_EXPR_MEMO_KEY,
+        nothing
+    )::Union{Nothing, IdDict{Any, ASTExpr}}
     memo === nothing && return _parse_op_dict(data)
     r = get(memo, data, nothing)
     r === nothing || return r
@@ -150,27 +154,35 @@ end
 # is the one op-conditional extraction: the `axes` key is only parsed for a
 # `table_lookup` node, and its coercer needs the already-extracted `table` id
 # and `args` (the table row order guarantees `table` is bound first).
-function _parse_op_field_stmt(f::Symbol, spec)::Union{Expr,Nothing}
+function _parse_op_field_stmt(f::Symbol, spec)::Union{Expr, Nothing}
     (f === :op || f === :args) && return nothing        # structural, hand-parsed
     spec.kind === :internal && return nothing           # never on the wire
     w = QuoteNode(spec.wire)
     rhs = if f === :table_axes
-        :(op == "table_lookup" ?
-            _coerce_table_lookup_axes(table, _get_field(data, $w, nothing), args) :
-            nothing)
+        :(
+            op == "table_lookup" ?
+                _coerce_table_lookup_axes(table, _get_field(data, $w, nothing), args) :
+                nothing
+        )
     elseif spec.kind === :expr
         :(_maybe(expression_from_json, _get_field(data, $w, nothing)))
     elseif spec.kind === :expr_vec
-        :(let raw = _get_field(data, $w, nothing)
-            raw === nothing ? nothing :
-                Vector{ASTExpr}([expression_from_json(v) for v in raw])
-        end)
+        :(
+            let raw = _get_field(data, $w, nothing)
+                raw === nothing ? nothing :
+                    Vector{ASTExpr}([expression_from_json(v) for v in raw])
+            end
+        )
     elseif spec.kind === :expr_map
-        :(let raw = _get_field(data, $w, nothing)
-            raw === nothing ? nothing :
-                Dict{String,ASTExpr}(string(k) => expression_from_json(v)
-                                     for (k, v) in pairs(raw))
-        end)
+        :(
+            let raw = _get_field(data, $w, nothing)
+                raw === nothing ? nothing :
+                    Dict{String, ASTExpr}(
+                        string(k) => expression_from_json(v)
+                        for (k, v) in pairs(raw)
+                    )
+            end
+        )
     elseif spec.kind === :ranges
         :(_coerce_ranges(_get_field(data, $w, nothing)))
     elseif spec.kind === :join
@@ -180,9 +192,11 @@ function _parse_op_field_stmt(f::Symbol, spec)::Union{Expr,Nothing}
     elseif spec.parse === :int
         :(_opt_int(data, $w))
     elseif spec.parse === :int_vec
-        :(let raw = _get_field(data, $w, nothing)
-            raw === nothing ? nothing : Vector{Int}([Int(x) for x in raw])
-        end)
+        :(
+            let raw = _get_field(data, $w, nothing)
+                raw === nothing ? nothing : Vector{Int}([Int(x) for x in raw])
+            end
+        )
     elseif spec.parse === :bool
         :(_maybe(Bool, _get_field(data, $w, nothing)))
     elseif spec.parse === :json
@@ -199,29 +213,45 @@ function _parse_op_field_stmt(f::Symbol, spec)::Union{Expr,Nothing}
     elseif spec.parse === :attrs
         :(_coerce_attrs(_get_field(data, $w, nothing)))
     elseif spec.parse === :int_or_string
-        :(let raw = _get_field(data, $w, nothing)
-            raw === nothing ? nothing : (raw isa Integer ? Int(raw) : string(raw))
-        end)
+        :(
+            let raw = _get_field(data, $w, nothing)
+                raw === nothing ? nothing : (raw isa Integer ? Int(raw) : string(raw))
+            end
+        )
     else
-        error("OPEXPR_FIELD_TABLE row $(f) has no parse recipe " *
-              "(kind=$(spec.kind), parse=$(spec.parse))")
+        error(
+            "OPEXPR_FIELD_TABLE row $(f) has no parse recipe " *
+                "(kind=$(spec.kind), parse=$(spec.parse))"
+        )
     end
     return :($f = $rhs)
 end
 
 # Per-op structural validators spliced in AFTER the named field's extraction.
-const _PARSE_OP_VALIDATOR_AFTER = Dict{Symbol,Expr}(
+const _PARSE_OP_VALIDATOR_AFTER = Dict{Symbol, Expr}(
     :upper => :(op == "integral" && _validate_integral_op(int_var, lower, upper)),
     :manifold => :(op == "intersect_polygon" && _validate_intersect_polygon_op(manifold)),
 )
 
 @eval function _parse_op_optional_fields(data, op::String, args::Vector{ASTExpr})
-    $((stmt for (f, spec) in pairs(OPEXPR_FIELD_TABLE)
-       for stmt in (_parse_op_field_stmt(f, spec),
-                    get(_PARSE_OP_VALIDATOR_AFTER, f, nothing))
-       if stmt !== nothing)...)
-    return (; $((f for (f, spec) in pairs(OPEXPR_FIELD_TABLE)
-                 if f !== :op && f !== :args && spec.kind !== :internal)...))
+    $(
+        (
+            stmt for (f, spec) in pairs(OPEXPR_FIELD_TABLE)
+                for stmt in (
+                    _parse_op_field_stmt(f, spec),
+                    get(_PARSE_OP_VALIDATOR_AFTER, f, nothing),
+                )
+                if stmt !== nothing
+        )...
+    )
+    return (;
+        $(
+            (
+                f for (f, spec) in pairs(OPEXPR_FIELD_TABLE)
+                    if f !== :op && f !== :args && spec.kind !== :internal
+            )...
+        ),
+    )
 end
 
 # Shared implementation for every dict-like carrier. The optional-field
@@ -238,9 +268,13 @@ function _parse_op_dict(data)
         # survived that removal inside the bindings until esm 1.1.0. The wire
         # boundary rejects it first; this is the belt-and-braces guard for
         # callers that build a node directly.
-        throw(ParseError("[E_REMOVED_OP] `arrayop` op was removed in v0.8.0; use `faq` " *
-                         "(the Functional Aggregate Query node). " *
-                         "See docs/content/rfcs/faq-node-rename.md."))
+        throw(
+            ParseError(
+                "[E_REMOVED_OP] `arrayop` op was removed in v0.8.0; use `faq` " *
+                    "(the Functional Aggregate Query node). " *
+                    "See docs/content/rfcs/faq-node-rename.md."
+            )
+        )
     end
     if op == "aggregate"
         # Deprecated alias for `faq`, removed at esm 2.0.0. The load pipeline
@@ -255,8 +289,12 @@ function _parse_op_dict(data)
         # v0.3.0 (esm-spec §9 closure, RFC `closed-function-registry.md`).
         # Files written against the v0.2.x escape hatch must migrate to AST
         # ops or `fn` invocations of closed registry entries.
-        throw(ParseError("`call` op is not valid in v0.3.0+ (removed by esm-spec §9 closure). " *
-                         "Migrate to AST ops or `fn` invocations of the closed function registry."))
+        throw(
+            ParseError(
+                "`call` op is not valid in v0.3.0+ (removed by esm-spec §9 closure). " *
+                    "Migrate to AST ops or `fn` invocations of the closed function registry."
+            )
+        )
     end
     # `apply_expression_template` is normally expanded by
     # `lower_expression_templates` before any tree reaches `expression_from_json`
@@ -297,20 +335,24 @@ end
 # per-axis input expression map (wire key `axes` — struct field `table_axes`);
 # ``args`` MUST be empty (per-axis inputs live under `axes`). Returns the
 # parsed axes map.
-function _coerce_table_lookup_axes(table, axes_raw, args::Vector{ASTExpr})::Dict{String,ASTExpr}
+function _coerce_table_lookup_axes(table, axes_raw, args::Vector{ASTExpr})::Dict{String, ASTExpr}
     if table === nothing
         throw(ParseError("`table_lookup` op requires `table` field (esm-spec §9.5)"))
     end
     if axes_raw === nothing
         throw(ParseError("`table_lookup` op requires `axes` field (per-axis input expression map, esm-spec §9.5)"))
     end
-    axes = Dict{String,ASTExpr}()
+    axes = Dict{String, ASTExpr}()
     for (k, v) in pairs(axes_raw)
         axes[string(k)] = expression_from_json(v)
     end
     if !isempty(args)
-        throw(ParseError("`table_lookup` op must have empty `args` (per-axis inputs live under `axes`, esm-spec §9.5.2)";
-                         code=ERROR_CODES.TABLE_LOOKUP_ARGS_NONEMPTY))
+        throw(
+            ParseError(
+                "`table_lookup` op must have empty `args` (per-axis inputs live under `axes`, esm-spec §9.5.2)";
+                code = ERROR_CODES.TABLE_LOOKUP_ARGS_NONEMPTY
+            )
+        )
     end
     return axes
 end
@@ -319,8 +361,12 @@ end
 # (the schema enforces it); fail fast here so a hand-built node mirrors that.
 function _validate_intersect_polygon_op(manifold)
     if manifold === nothing
-        throw(ParseError("`intersect_polygon` op requires a `manifold` field " *
-                         "(planar / spherical / geodesic); it carries no default"))
+        throw(
+            ParseError(
+                "`intersect_polygon` op requires a `manifold` field " *
+                    "(planar / spherical / geodesic); it carries no default"
+            )
+        )
     end
     return nothing
 end
@@ -367,7 +413,7 @@ _opt_int(data, key::Symbol) = _maybe(Int, _get_field(data, key, nothing))
 
 function _coerce_ranges(data)
     data === nothing && return nothing
-    result = Dict{String,Any}()
+    result = Dict{String, Any}()
     for (k, v) in pairs(data)
         sv = string(k)
         if v isa AbstractVector
@@ -381,12 +427,15 @@ function _coerce_ranges(data)
             # Index-set reference (RFC semiring-faq-unified-ir §5.2):
             # { "from": <index_sets key>, "of"?: [parent index names] }.
             from_val = _get_field(v, :from, nothing)
-            from_val === nothing && throw(ParseError(
-                "ranges entry `$sv` must be a dense array [lo,hi]/[lo,step,hi] " *
-                "or an index-set reference object with a `from` key"))
+            from_val === nothing && throw(
+                ParseError(
+                    "ranges entry `$sv` must be a dense array [lo,hi]/[lo,step,hi] " *
+                        "or an index-set reference object with a `from` key"
+                )
+            )
             of_raw = _get_field(v, :of, nothing)
             of_names = of_raw === nothing ? String[] : String[string(x) for x in of_raw]
-            result[sv] = IndexSetRef(string(from_val); of=of_names)
+            result[sv] = IndexSetRef(string(from_val); of = of_names)
         end
     end
     return result
@@ -410,17 +459,26 @@ _valid_env_arity(k::Int) = (k == 1 || k == 2 || k == 4)
 function _coerce_overlap_clause(ov)
     src_raw = _get_field(ov, :src_env, nothing)
     tgt_raw = _get_field(ov, :tgt_env, nothing)
-    (src_raw === nothing || tgt_raw === nothing) && throw(ParseError(
-        "join `overlap` clause requires both `src_env` and `tgt_env` arrays of " *
-        "envelope factor names (Phase 2a spatial overlap gate)"))
+    (src_raw === nothing || tgt_raw === nothing) && throw(
+        ParseError(
+            "join `overlap` clause requires both `src_env` and `tgt_env` arrays of " *
+                "envelope factor names (Phase 2a spatial overlap gate)"
+        )
+    )
     src_env = String[string(x) for x in src_raw]
     tgt_env = String[string(x) for x in tgt_raw]
-    _valid_env_arity(length(src_env)) || throw(ParseError(
-        "join `overlap` `src_env` must name 1 (rings), 2 (point [x,y]), or 4 " *
-        "(rect [xmin,ymin,xmax,ymax]) factors; got $(length(src_env))"))
-    _valid_env_arity(length(tgt_env)) || throw(ParseError(
-        "join `overlap` `tgt_env` must name 1 (rings), 2 (point [x,y]), or 4 " *
-        "(rect [xmin,ymin,xmax,ymax]) factors; got $(length(tgt_env))"))
+    _valid_env_arity(length(src_env)) || throw(
+        ParseError(
+            "join `overlap` `src_env` must name 1 (rings), 2 (point [x,y]), or 4 " *
+                "(rect [xmin,ymin,xmax,ymax]) factors; got $(length(src_env))"
+        )
+    )
+    _valid_env_arity(length(tgt_env)) || throw(
+        ParseError(
+            "join `overlap` `tgt_env` must name 1 (rings), 2 (point [x,y]), or 4 " *
+                "(rect [xmin,ymin,xmax,ymax]) factors; got $(length(tgt_env))"
+        )
+    )
     eps_raw = _get_field(ov, :eps, nothing)
     eps = eps_raw === nothing ? 0.0 : Float64(eps_raw)
     return _OverlapJoinSpec(src_env, tgt_env, eps, eps_raw !== nothing)
@@ -436,19 +494,28 @@ function _coerce_join(data)
             continue
         end
         on_raw = _get_field(clause, :on, nothing)
-        on_raw === nothing && throw(ParseError(
-            "join clause requires an `on` array of [left, right] key-column " *
-            "pairs, or an `overlap` object with `src_env`/`tgt_env` envelope " *
-            "factors (RFC semiring-faq-unified-ir §5.3 / Phase 2a)"))
-        pairs_vec = Vector{Tuple{String,String}}()
+        on_raw === nothing && throw(
+            ParseError(
+                "join clause requires an `on` array of [left, right] key-column " *
+                    "pairs, or an `overlap` object with `src_env`/`tgt_env` envelope " *
+                    "factors (RFC semiring-faq-unified-ir §5.3 / Phase 2a)"
+            )
+        )
+        pairs_vec = Vector{Tuple{String, String}}()
         for pair in on_raw
-            length(pair) == 2 || throw(ParseError(
-                "join `on` entry must be a 2-element [left, right] pair, got " *
-                "$(length(pair)) element(s) (RFC §5.3)"))
+            length(pair) == 2 || throw(
+                ParseError(
+                    "join `on` entry must be a 2-element [left, right] pair, got " *
+                        "$(length(pair)) element(s) (RFC §5.3)"
+                )
+            )
             push!(pairs_vec, (string(pair[1]), string(pair[2])))
         end
-        isempty(pairs_vec) && throw(ParseError(
-            "join clause `on` requires at least one key-column pair (RFC §5.3)"))
+        isempty(pairs_vec) && throw(
+            ParseError(
+                "join clause `on` requires at least one key-column pair (RFC §5.3)"
+            )
+        )
         # `syms` names the two RANGE SYMBOLS the clause's pairs are read at
         # (CONFORMANCE_SPEC §5.5.8) — the self-join disambiguation. Only its
         # SHAPE is checked here; whether the names are ranges of the node is a
@@ -456,10 +523,13 @@ function _coerce_join(data)
         syms_raw = _get_field(clause, :syms, nothing)
         syms = nothing
         if syms_raw !== nothing
-            length(syms_raw) == 2 || throw(ParseError(
-                "join `syms` must be a 2-element [left, right] pair of range " *
-                "symbols, got \$(length(syms_raw)) element(s) " *
-                "(CONFORMANCE_SPEC §5.5.8)"))
+            length(syms_raw) == 2 || throw(
+                ParseError(
+                    "join `syms` must be a 2-element [left, right] pair of range " *
+                        "symbols, got \$(length(syms_raw)) element(s) " *
+                        "(CONFORMANCE_SPEC §5.5.8)"
+                )
+            )
             syms = (string(syms_raw[1]), string(syms_raw[2]))
         end
         push!(clauses, _OnJoinSpec(pairs_vec, syms))
@@ -480,11 +550,17 @@ _coerce_region_bound(x) =
 
 function _coerce_regions(data)
     data === nothing && return nothing
-    return Vector{Vector{Vector{Any}}}([
-        Vector{Vector{Any}}([Vector{Any}([_coerce_region_bound(x) for x in ax])
-                             for ax in region])
-        for region in data
-    ])
+    return Vector{Vector{Vector{Any}}}(
+        [
+            Vector{Vector{Any}}(
+                [
+                    Vector{Any}([_coerce_region_bound(x) for x in ax])
+                        for ax in region
+                ]
+            )
+                for region in data
+        ]
+    )
 end
 
 # `attrs` — the OPEN rewrite-target op's named scalar attributes (esm-spec
@@ -497,9 +573,13 @@ function _coerce_attrs(data)
     data === nothing && return nothing
     # `JSON3.Object <: AbstractDict`, so this covers both dict-like carriers.
     isa(data, AbstractDict) ||
-        throw(ParseError("`attrs` must be a JSON object of named scalar " *
-                         "attributes (esm-spec §4.2), got $(typeof(data))"))
-    return Dict{String,Any}(string(k) => _to_native_json(v) for (k, v) in pairs(data))
+        throw(
+        ParseError(
+            "`attrs` must be a JSON object of named scalar " *
+                "attributes (esm-spec §4.2), got $(typeof(data))"
+        )
+    )
+    return Dict{String, Any}(string(k) => _to_native_json(v) for (k, v) in pairs(data))
 end
 
 function _coerce_shape(data)
@@ -560,7 +640,7 @@ function coerce_trigger(data)::DiscreteEventTrigger
             phase_val = _get_field(data, :phase, 0.0)
         end
         phase = Float64(phase_val)
-        return PeriodicTrigger(period, phase=phase)
+        return PeriodicTrigger(period, phase = phase)
     elseif trigger_type_str == "preset_times" || (trigger_type_str === nothing && _has_field(data, :times))
         times_val = _get_field(data, :times, nothing)
         if times_val === nothing
@@ -591,8 +671,10 @@ a `JSON3.read(JSON3.write(doc))` type-launder. Coercion only reads the tree, so
 inline number arrays are shared with `data` rather than copied
 (`_to_ordered_shared`).
 """
-function coerce_esm_file(data::Any;
-                         document_base::Union{Nothing,AbstractString}=nothing)::EsmFile
+function coerce_esm_file(
+        data::Any;
+        document_base::Union{Nothing, AbstractString} = nothing
+    )::EsmFile
     data = _to_ordered_shared(data)
 
     # Extract required fields
@@ -607,16 +689,18 @@ function coerce_esm_file(data::Any;
     # reports a JSON `null` as absent, matching the previous per-field
     # `haskey(data, :x) && data.x !== nothing` guards.
     models = _maybe(_get_field(data, :models, nothing)) do m
-        OrderedDict{String,Model}(string(k) => coerce_model(v) for (k, v) in pairs(m))
+        OrderedDict{String, Model}(string(k) => coerce_model(v) for (k, v) in pairs(m))
     end
 
     reaction_systems = _maybe(_get_field(data, :reaction_systems, nothing)) do rs
-        OrderedDict{String,ReactionSystem}(string(k) => coerce_reaction_system(v)
-                                          for (k, v) in pairs(rs))
+        OrderedDict{String, ReactionSystem}(
+            string(k) => coerce_reaction_system(v)
+                for (k, v) in pairs(rs)
+        )
     end
 
     data_sources = _maybe(_get_field(data, :data_sources, nothing)) do dl
-        Dict{String,DataSource}(string(k) => coerce_data_source(v) for (k, v) in pairs(dl))
+        Dict{String, DataSource}(string(k) => coerce_data_source(v) for (k, v) in pairs(dl))
     end
 
     # esm-spec v0.3.0 (§9 closure) removed the top-level `operators` block:
@@ -627,15 +711,23 @@ function coerce_esm_file(data::Any;
     # fields survive for in-memory compatibility only and stay `nothing`
     # on every parse path.)
     if _get_field(data, :operators, nothing) !== nothing
-        throw(ParseError("`operators` block is not valid in v0.3.0+ " *
-                         "(removed by esm-spec §9 closure). Migrate per " *
-                         "`docs/rfcs/closed-function-registry.md` §6."))
+        throw(
+            ParseError(
+                "`operators` block is not valid in v0.3.0+ " *
+                    "(removed by esm-spec §9 closure). Migrate per " *
+                    "`docs/rfcs/closed-function-registry.md` §6."
+            )
+        )
     end
 
     if _get_field(data, :registered_functions, nothing) !== nothing
-        throw(ParseError("`registered_functions` block is not valid in v0.3.0+ " *
-                         "(removed by esm-spec §9 closure). Use the closed " *
-                         "function registry via `fn` ops with spec-defined names."))
+        throw(
+            ParseError(
+                "`registered_functions` block is not valid in v0.3.0+ " *
+                    "(removed by esm-spec §9 closure). Use the closed " *
+                    "function registry via `fn` ops with spec-defined names."
+            )
+        )
     end
 
     coupling_raw = _get_field(data, :coupling, nothing)
@@ -657,8 +749,10 @@ function coerce_esm_file(data::Any;
     # Component-scoped sampled function tables (esm-spec §9.5, v0.4.0). Each
     # entry carries named axes plus a literal nested-array data block;
     # referenced by table_lookup AST nodes via the table id key.
-    function_tables = _maybe(coerce_function_tables,
-                             _get_field(data, :function_tables, nothing))
+    function_tables = _maybe(
+        coerce_function_tables,
+        _get_field(data, :function_tables, nothing)
+    )
 
     # Document-scoped index-set registry (RFC semiring-faq-unified-ir §5.2;
     # esm-spec v0.8.0). A single top-level `index_sets` object — sibling of
@@ -666,7 +760,7 @@ function coerce_esm_file(data::Any;
     # and ESI categorical dims. `ranges[*]` `{from: <name>}` references, array
     # `shape`s, and derived-set `from_faq` edges resolve against it. Empty when
     # the document declares none.
-    index_sets = OrderedDict{String,IndexSet}()
+    index_sets = OrderedDict{String, IndexSet}()
     index_sets_raw = _get_field(data, :index_sets, nothing)
     if index_sets_raw !== nothing
         for (k, v) in pairs(index_sets_raw)
@@ -690,9 +784,11 @@ function coerce_esm_file(data::Any;
     # in the coerced expressions stay resolvable; without this the references
     # compile into opaque op nodes that only fail at RHS evaluation time.
     component_templates = nothing
-    let ct = OrderedDict{String,Any}()
-        for (compkind, comps_raw) in (("models", _get_field(data, :models, nothing)),
-                                      ("reaction_systems", _get_field(data, :reaction_systems, nothing)))
+    let ct = OrderedDict{String, Any}()
+        for (compkind, comps_raw) in (
+                ("models", _get_field(data, :models, nothing)),
+                ("reaction_systems", _get_field(data, :reaction_systems, nothing)),
+            )
             comps_raw === nothing && continue
             for (k, v) in pairs(comps_raw)
                 tpl = _get_field(v, :expression_templates, nothing)
@@ -718,19 +814,21 @@ function coerce_esm_file(data::Any;
     # because `solve` READS it (§2.2.2 resolution order).
     solver = coerce_solver(_get_field(data, :solver, nothing))
 
-    file = EsmFile(esm, metadata,
-                  models=models,
-                  reaction_systems=reaction_systems,
-                  data_sources=data_sources,
-                  coupling=coupling,
-                  domain=domain,
-                  enums=enums,
-                  function_tables=function_tables,
-                  index_sets=index_sets,
-                  component_templates=component_templates,
-                  coupling_roles=coupling_roles,
-                  solver=solver,
-                  document_base=document_base === nothing ? nothing : String(document_base))
+    file = EsmFile(
+        esm, metadata,
+        models = models,
+        reaction_systems = reaction_systems,
+        data_sources = data_sources,
+        coupling = coupling,
+        domain = domain,
+        enums = enums,
+        function_tables = function_tables,
+        index_sets = index_sets,
+        component_templates = component_templates,
+        coupling_roles = coupling_roles,
+        solver = solver,
+        document_base = document_base === nothing ? nothing : String(document_base)
+    )
     # Lower every `enum` op to a `const` integer using the file-local map.
     # This runs once at load time so downstream consumers (evaluators,
     # canonicalize, codegen) never see enum strings in expression trees.
@@ -762,25 +860,33 @@ function coerce_solver(data)
     # read (`0`, not `0.0`). An integer past Int64 has no exact home and is
     # carried as its binary64 value.
     _bound(v) = v isa AbstractString ? String(v) :
-                v isa Int64 ? v :
-                v isa Integer && typemin(Int64) <= v <= typemax(Int64) ? Int64(v) :
-                Float64(v)
+        v isa Int64 ? v :
+        v isa Integer && typemin(Int64) <= v <= typemax(Int64) ? Int64(v) :
+        Float64(v)
     span = _f("time_span")
-    s = Solver(stiffness=_str(_f("stiffness")),
-               abstol=_num(_f("abstol")),
-               reltol=_num(_f("reltol")),
-               splitting=_str(_f("splitting")),
-               external=_str(_f("external")),
-               time_span=span === nothing ? nothing :
-                         SolverTimeSpan(_bound(_raw_get(span, "start")),
-                                        _bound(_raw_get(span, "end"))))
+    s = Solver(
+        stiffness = _str(_f("stiffness")),
+        abstol = _num(_f("abstol")),
+        reltol = _num(_f("reltol")),
+        splitting = _str(_f("splitting")),
+        external = _str(_f("external")),
+        time_span = span === nothing ? nothing :
+            SolverTimeSpan(
+                _bound(_raw_get(span, "start")),
+                _bound(_raw_get(span, "end"))
+            )
+    )
     # §2.2: an EMPTY block normalizes to absence at load. `{}` is legal and
     # means what omitting the block means, so the typed document never holds a
     # block with nothing set — which is what keeps the five bindings from
     # disagreeing about whether `{}` survives `parse -> emit`. A block holding
     # only `external`, or only `time_span`, is not empty.
-    all(isnothing, (s.stiffness, s.abstol, s.reltol, s.splitting, s.external,
-                    s.time_span)) &&
+    all(
+        isnothing, (
+            s.stiffness, s.abstol, s.reltol, s.splitting, s.external,
+            s.time_span,
+        )
+    ) &&
         return nothing
     return s
 end
@@ -801,8 +907,8 @@ Coerce the top-level `enums` JSON block into the typed map carried on
 
 Throws [`ParseError`](@ref) on any other violation.
 """
-function coerce_enums(data)::Dict{String,Dict{String,Int}}
-    out = Dict{String,Dict{String,Int}}()
+function coerce_enums(data)::Dict{String, Dict{String, Int}}
+    out = Dict{String, Dict{String, Int}}()
     for (enum_name_raw, mapping_raw) in pairs(data)
         enum_name = string(enum_name_raw)
         if isempty(enum_name)
@@ -811,7 +917,7 @@ function coerce_enums(data)::Dict{String,Dict{String,Int}}
         if !(mapping_raw isa AbstractDict)
             throw(ParseError("enums.$(enum_name): mapping must be a JSON object"))
         end
-        mapping = Dict{String,Int}()
+        mapping = Dict{String, Int}()
         for (sym_raw, int_raw) in pairs(mapping_raw)
             sym = string(sym_raw)
             if isempty(sym)
@@ -836,8 +942,8 @@ carried on [`EsmFile`](@ref) (esm-spec §9.5, v0.4.0). Each entry holds
 ordered named axes plus a literal nested-array data block referenced by
 `table_lookup` AST nodes.
 """
-function coerce_function_tables(data)::OrderedDict{String,FunctionTable}
-    out = OrderedDict{String,FunctionTable}()
+function coerce_function_tables(data)::OrderedDict{String, FunctionTable}
+    out = OrderedDict{String, FunctionTable}()
     for (table_name_raw, entry_raw) in pairs(data)
         table_name = string(table_name_raw)
         if isempty(table_name)
@@ -862,7 +968,7 @@ function coerce_function_tables(data)::OrderedDict{String,FunctionTable}
             end
             ax_values = Vector{Float64}([Float64(v) for v in ax_values_raw])
             ax_units = _maybe(string, get(ax_raw, "units", nothing))
-            push!(axes_vec, FunctionTableAxis(ax_name, ax_values; units=ax_units))
+            push!(axes_vec, FunctionTableAxis(ax_name, ax_values; units = ax_units))
         end
         if !haskey(entry_raw, "data")
             throw(ParseError("function_tables.$(table_name): `data` is required (esm-spec §9.5)"))
@@ -878,16 +984,15 @@ function coerce_function_tables(data)::OrderedDict{String,FunctionTable}
             Vector{Int}([Int(s) for s in shp])
         end
         schema_version = _opt_string(entry_raw, :schema_version)
-        out[table_name] = FunctionTable(axes_vec, data_native;
-            description=description, interpolation=interpolation,
-            out_of_bounds=out_of_bounds, outputs=outputs, shape=shape,
-            schema_version=schema_version)
+        out[table_name] = FunctionTable(
+            axes_vec, data_native;
+            description = description, interpolation = interpolation,
+            out_of_bounds = out_of_bounds, outputs = outputs, shape = shape,
+            schema_version = schema_version
+        )
     end
     return out
 end
-
-
-
 
 
 """
@@ -921,14 +1026,14 @@ function _coerce_subsystem_entry(name::String, v)
         # expression to a concrete int; a value naming a metaparameter the
         # document does not declare survives the substitution and fails
         # loudly with `template_import_unknown_name`.
-        bindings = Dict{String,Int}()
+        bindings = Dict{String, Int}()
         bindings_raw = _get_field(v, :bindings, nothing)
         if bindings_raw !== nothing
             for (bk, bv) in pairs(bindings_raw)
                 bctx = "subsystems.$(name): binding '$(string(bk))'"
                 expr = require_meta_expr(_to_native_json(bv), bctx)
                 bindings[string(bk)] =
-                    Int(eval_meta_expr(expr, Dict{String,Int64}(), bctx))
+                    Int(eval_meta_expr(expr, Dict{String, Int64}(), bctx))
             end
         end
         # Optional `expression_template_imports` injects a discretization
@@ -953,29 +1058,27 @@ function _coerce_subsystem_entry(name::String, v)
             # A malformed (non-object) map is left for `_name_map` to reject with
             # `template_import_rename_invalid` at the mount, not stringified here.
             iset_rename = _is_object(rename_raw) ?
-                OrderedDict{String,String}(
-                    string(rk) => string(rv) for (rk, rv) in pairs(rename_raw)) :
-                OrderedDict{String,String}()
-            _is_object(rename_raw) || throw(ExpressionTemplateError(
-                ERROR_CODES.TEMPLATE_IMPORT_RENAME_INVALID,
-                "subsystems.$(name): `index_set_rename` must be an object mapping " *
-                "index-set names to names (esm-spec §4.7)"))
+                OrderedDict{String, String}(
+                    string(rk) => string(rv) for (rk, rv) in pairs(rename_raw)
+                ) :
+                OrderedDict{String, String}()
+            _is_object(rename_raw) || throw(
+                ExpressionTemplateError(
+                    ERROR_CODES.TEMPLATE_IMPORT_RENAME_INVALID,
+                    "subsystems.$(name): `index_set_rename` must be an object mapping " *
+                        "index-set names to names (esm-spec §4.7)"
+                )
+            )
         end
-        return SubsystemRef(string(v["ref"]),
-                            Dict{String,Int}(bindings), Any[e for e in injected],
-                            iset_rename)
+        return SubsystemRef(
+            string(v["ref"]),
+            Dict{String, Int}(bindings), Any[e for e in injected],
+            iset_rename
+        )
     else
         return coerce_model(v)
     end
 end
-
-
-
-
-
-
-
-
 
 
 """
@@ -1010,13 +1113,15 @@ function coerce_reaction_system(data::Any)::ReactionSystem
     reference = _maybe(coerce_reference, _get_field(data, :reference, nothing))
     subsystems = _coerce_reaction_system_subsystems(_get_field(data, :subsystems, nothing))
 
-    return ReactionSystem(species, reactions; parameters=parameters,
-                          constraint_equations=constraint_equations,
-                          discrete_events=discrete_events,
-                          continuous_events=continuous_events,
-                          subsystems=subsystems,
-                          tolerance=tolerance, tests=tests,
-                          analyses=analyses, reference=reference)
+    return ReactionSystem(
+        species, reactions; parameters = parameters,
+        constraint_equations = constraint_equations,
+        discrete_events = discrete_events,
+        continuous_events = continuous_events,
+        subsystems = subsystems,
+        tolerance = tolerance, tests = tests,
+        analyses = analyses, reference = reference
+    )
 end
 
 """
@@ -1034,17 +1139,20 @@ way `Model.subsystems` does (`SubsystemNode`), and `resolve_subsystem_refs!`
 walks models only — so accepting one could only mean dropping it again, which
 is the defect this function exists to close. An explicit rejection says so.
 """
-function _coerce_reaction_system_subsystems(raw)::OrderedDict{String,ReactionSystem}
-    out = OrderedDict{String,ReactionSystem}()
+function _coerce_reaction_system_subsystems(raw)::OrderedDict{String, ReactionSystem}
+    out = OrderedDict{String, ReactionSystem}()
     raw === nothing && return out
     for (k, v) in pairs(raw)
         name = string(k)
         if v isa AbstractDict && _has_field(v, :ref)
-            throw(ParseError(
-                "reaction system subsystem '$(name)' is a `{ref}` include, which " *
-                "is not supported: a reaction-system subsystem must be inline " *
-                "(esm-schema.json ReactionSystem.subsystems oneOf arm 1)";
-                path = "/subsystems/$(name)/ref"))
+            throw(
+                ParseError(
+                    "reaction system subsystem '$(name)' is a `{ref}` include, which " *
+                        "is not supported: a reaction-system subsystem must be inline " *
+                        "(esm-schema.json ReactionSystem.subsystems oneOf arm 1)";
+                    path = "/subsystems/$(name)/ref"
+                )
+            )
         end
         out[name] = coerce_reaction_system(v)
     end
@@ -1065,8 +1173,10 @@ function coerce_reaction(data::Any)::Reaction
     # Stoichiometry may be integer or fractional per v0.2.x schema — the
     # StoichiometryEntry constructor enforces finite positivity.
     stoich_entries(key) = _maybe(get(data, key, nothing)) do entries
-        [StoichiometryEntry(string(entry["species"]), entry["stoichiometry"])
-         for entry in entries]
+        [
+            StoichiometryEntry(string(entry["species"]), entry["stoichiometry"])
+                for entry in entries
+        ]
     end
     substrates = stoich_entries("substrates")
     products = stoich_entries("products")
@@ -1075,13 +1185,8 @@ function coerce_reaction(data::Any)::Reaction
 
     reference = _maybe(coerce_reference, get(data, "reference", nothing))
 
-    return Reaction(id, substrates, products, rate, name=name, reference=reference)
+    return Reaction(id, substrates, products, rate, name = name, reference = reference)
 end
-
-
-
-
-
 
 
 """
@@ -1114,8 +1219,6 @@ function coerce_coupling_entry(data::Any)::CouplingEntry
         throw(ParseError("Unknown coupling type: $coupling_type"))
     end
 end
-
-
 
 
 """
@@ -1154,7 +1257,7 @@ function coerce_variable_map(data::AbstractDict)::CouplingVariableMap
     # that `ArgumentError` as a `ParseError` carrying the historical parse-side
     # message, so the error type/message seen from `load` is unchanged.
     try
-        return CouplingVariableMap(from, to, transform; factor=factor, description=description, lifting=lifting)
+        return CouplingVariableMap(from, to, transform; factor = factor, description = description, lifting = lifting)
     catch e
         if e isa ArgumentError && transform isa ASTExpr && factor !== nothing
             throw(ParseError("variable_map: an expression 'transform' takes no 'factor' (fold the scaling into the expression)"))
@@ -1162,10 +1265,6 @@ function coerce_variable_map(data::AbstractDict)::CouplingVariableMap
         rethrow()
     end
 end
-
-
-
-
 
 
 # ========================================
@@ -1184,7 +1283,7 @@ end
 # ── Hand-written `:custom` parse hooks (named by RECORD_FIELD_TABLES rows) ──
 # Model `guesses`: number-or-Expression solver-guess map (gt-ebuq).
 function _coerce_model_guesses(v)
-    guesses = Dict{String,Union{Float64,ASTExpr}}()
+    guesses = Dict{String, Union{Float64, ASTExpr}}()
     for (k, x) in pairs(v)
         guesses[string(k)] = x isa Number ? Float64(x) : expression_from_json(x)
     end
@@ -1194,8 +1293,9 @@ end
 # Model `subsystems` (schema §4.7): each entry is oneOf [Model, SubsystemRef],
 # sniffed per entry by `_coerce_subsystem_entry` (the key is threaded in for
 # metaparameter-binding diagnostics).
-_coerce_model_subsystems(v) = OrderedDict{String,SubsystemNode}(
-    string(k) => _coerce_subsystem_entry(string(k), x) for (k, x) in pairs(v))
+_coerce_model_subsystems(v) = OrderedDict{String, SubsystemNode}(
+    string(k) => _coerce_subsystem_entry(string(k), x) for (k, x) in pairs(v)
+)
 
 
 # DiscreteEvent `affects`: each entry must carry both lhs and rhs (pinned
@@ -1230,29 +1330,37 @@ function coerce_distribution(data)
     num_or_vec(v) = v isa AbstractVector ? Float64[Float64(x) for x in v] : Float64(v)
     cov = let c = _get_field(data, :cov, nothing)
         c === nothing ? nothing :
-        Vector{Float64}[Float64[Float64(x) for x in row] for row in c]
+            Vector{Float64}[Float64[Float64(x) for x in row] for row in c]
     end
     if kind == "normal"
         loc = _get_field(data, :mean, nothing)
         loc === nothing && throw(ParseError("normal distribution requires 'mean'"))
         sc = _get_field(data, :std, nothing)
-        return Distribution("normal"; location=num_or_vec(loc),
-                            scale=(sc === nothing ? nothing : num_or_vec(sc)), cov=cov)
+        return Distribution(
+            "normal"; location = num_or_vec(loc),
+            scale = (sc === nothing ? nothing : num_or_vec(sc)), cov = cov
+        )
     elseif kind == "lognormal"
         loc = _get_field(data, :mu, nothing)
         loc === nothing && throw(ParseError("lognormal distribution requires 'mu'"))
         sc = _get_field(data, :sigma, nothing)
-        return Distribution("lognormal"; location=num_or_vec(loc),
-                            scale=(sc === nothing ? nothing : num_or_vec(sc)), cov=cov)
+        return Distribution(
+            "lognormal"; location = num_or_vec(loc),
+            scale = (sc === nothing ? nothing : num_or_vec(sc)), cov = cov
+        )
     elseif kind == "uniform"
         lo = _get_field(data, :low, nothing)
         hi = _get_field(data, :high, nothing)
         (lo === nothing || hi === nothing) &&
             throw(ParseError("uniform distribution requires 'low' and 'high'"))
-        return Distribution("uniform"; low=num_or_vec(lo), high=num_or_vec(hi))
+        return Distribution("uniform"; low = num_or_vec(lo), high = num_or_vec(hi))
     end
-    throw(ParseError("Invalid distribution kind: $(kind) " *
-                     "(expected one of normal, lognormal, uniform)"))
+    throw(
+        ParseError(
+            "Invalid distribution kind: $(kind) " *
+                "(expected one of normal, lognormal, uniform)"
+        )
+    )
 end
 
 """
@@ -1269,15 +1377,21 @@ re-emitted as the legal form.
 """
 function _coerce_parameter_update_spec(v)
     if v isa AbstractVector
-        length(v) >= 2 || throw(ParseError(
-            "parameter `update` array requires at least two rules; a single " *
-            "rule MUST be written as the object form (esm-spec 5.4)"))
+        length(v) >= 2 || throw(
+            ParseError(
+                "parameter `update` array requires at least two rules; a single " *
+                    "rule MUST be written as the object form (esm-spec 5.4)"
+            )
+        )
         rules = ParameterUpdate[coerce_parameter_update(x) for x in v]
         for r in rules
-            r.kind == "wiener" && throw(ParseError(
-                "parameter `update` array may not contain a `wiener` rule: a " *
-                "driving noise process is the parameter's whole value " *
-                "(esm-spec 5.4)"))
+            r.kind == "wiener" && throw(
+                ParseError(
+                    "parameter `update` array may not contain a `wiener` rule: a " *
+                        "driving noise process is the parameter's whole value " *
+                        "(esm-spec 5.4)"
+                )
+            )
         end
         return rules
     end
@@ -1294,7 +1408,7 @@ function _coerce_assertion_reference(ref)
     reftype = ref isa AbstractDict && haskey(ref, "type") ?
         string(ref["type"]) : ""
     if reftype == "from_file"
-        reference = Dict{String,Any}()
+        reference = Dict{String, Any}()
         for (k, v) in pairs(ref)
             reference[string(k)] = v
         end
@@ -1309,7 +1423,7 @@ function _coerce_coupling_import_bind(v)
     if !(v isa AbstractDict)
         throw(ParseError("coupling_import 'bind' must be an object mapping role names to components"))
     end
-    bind = Dict{String,String}()
+    bind = Dict{String, String}()
     for (k, x) in pairs(v)
         bind[string(k)] = String(x)
     end
@@ -1330,7 +1444,7 @@ _coerce_index_set_members_raw(v) =
 # coercing `v` (the fetched wire value) per the row's `kind`.
 function _record_parse_expr(row, v)
     kind = row.kind
-    if kind === :string
+    return if kind === :string
         :(string($v))
     elseif kind === :string_strict
         :(String($v))
@@ -1341,9 +1455,17 @@ function _record_parse_expr(row, v)
     elseif kind === :bool
         :(Bool($v))
     elseif kind === :number_or_string
-        :(let x = $v; x isa Number ? Int(x) : string(x) end)
+        :(
+            let x = $v
+                x isa Number ? Int(x) : string(x)
+            end
+        )
     elseif kind === :number_or_expr
-        :(let x = $v; x isa Number ? Float64(x) : expression_from_json(x) end)
+        :(
+            let x = $v
+                x isa Number ? Float64(x) : expression_from_json(x)
+            end
+        )
     elseif kind === :expr
         :(expression_from_json($v))
     elseif kind === :expr_vec
@@ -1355,16 +1477,16 @@ function _record_parse_expr(row, v)
     elseif kind === :string_vec_strict
         :(Vector{String}($v))
     elseif kind === :float_map
-        :(Dict{String,Float64}(string(k) => Float64(x) for (k, x) in pairs($v)))
+        :(Dict{String, Float64}(string(k) => Float64(x) for (k, x) in pairs($v)))
     elseif kind === :value_map
         # esm-spec §6.6.2: a value is a scalar or INLINE ARRAY DATA (a row-major
         # nested JSON array for a shaped variable), coerced to Float64 / a dense
         # Array{Float64,N} by `_coerce_inline_value`.
-        :(Dict{String,Any}(string(k) => _coerce_inline_value(x) for (k, x) in pairs($v)))
+        :(Dict{String, Any}(string(k) => _coerce_inline_value(x) for (k, x) in pairs($v)))
     elseif kind === :inline_value
         :(_coerce_inline_value($v))
     elseif kind === :str_keyed_copy
-        :(Dict{String,Any}(string(k) => x for (k, x) in pairs($v)))
+        :(Dict{String, Any}(string(k) => x for (k, x) in pairs($v)))
     elseif kind === :raw
         :(_to_native_json($v))
     elseif kind === :raw_vec
@@ -1376,8 +1498,12 @@ function _record_parse_expr(row, v)
     elseif kind === :record_vec
         :($(row.eltype)[$(Symbol(:coerce_, row.of))(x) for x in $v])
     elseif kind === :record_map
-        :(OrderedDict{String,$(row.eltype)}(string(k) => $(Symbol(:coerce_, row.of))(x)
-                                            for (k, x) in pairs($v)))
+        :(
+            OrderedDict{String, $(row.eltype)}(
+                string(k) => $(Symbol(:coerce_, row.of))(x)
+                    for (k, x) in pairs($v)
+            )
+        )
     elseif kind === :custom
         :($(row.parse_fn)($v))
     else
@@ -1393,13 +1519,15 @@ function _record_coerce_stmt(row)
     key = QuoteNode(Symbol(row.wire))
     w = row.wire
     mode = row.mode
-    if mode === :req
+    return if mode === :req
         :($f = $(_record_parse_expr(row, :(data[$w]))))
     elseif mode === :req_err
         body = haskey(row, :default) ?
-            :(let v = _get_field(data, $key, nothing)
-                  v === nothing ? $(row.default) : $(_record_parse_expr(row, :v))
-              end) :
+            :(
+                let v = _get_field(data, $key, nothing)
+                    v === nothing ? $(row.default) : $(_record_parse_expr(row, :v))
+            end
+            ) :
             _record_parse_expr(row, :(_get_field(data, $key, nothing)))
         quote
             _has_field(data, $key) || throw(ParseError($(row.req_err)))
@@ -1413,13 +1541,17 @@ function _record_coerce_stmt(row)
             end
         end
     elseif mode === :opt
-        :($f = let v = _get_field(data, $key, nothing)
-              v === nothing ? nothing : $(_record_parse_expr(row, :v))
-          end)
+        :(
+            $f = let v = _get_field(data, $key, nothing)
+                v === nothing ? nothing : $(_record_parse_expr(row, :v))
+            end
+        )
     elseif mode === :opt_empty || mode === :default
-        :($f = let v = _get_field(data, $key, nothing)
-              v === nothing ? $(row.default) : $(_record_parse_expr(row, :v))
-          end)
+        :(
+            $f = let v = _get_field(data, $key, nothing)
+                v === nothing ? $(row.default) : $(_record_parse_expr(row, :v))
+            end
+        )
     elseif mode === :force
         :($f = $(_record_parse_expr(row, :(_get_field(data, $key, nothing)))))
     else
@@ -1446,11 +1578,13 @@ for spec in RECORD_FIELD_TABLES
         $(stmts...)
         return $ctor
     end
-    @eval @doc $("""
-        coerce_$(spec.fn)($(injected ? "name, " : "")data) -> $(spec.T)
+    @eval @doc $(
+        """
+            coerce_$(spec.fn)($(injected ? "name, " : "")data) -> $(spec.T)
 
-    Coerce JSON data into `$(spec.T)`. GENERATED from `RECORD_FIELD_TABLES`
-    (types.jl) — one extraction per row in table (historical parse) order;
-    the serialize direction is generated from the same table in serialize.jl.
-    """) $fname
+        Coerce JSON data into `$(spec.T)`. GENERATED from `RECORD_FIELD_TABLES`
+        (types.jl) — one extraction per row in table (historical parse) order;
+        the serialize direction is generated from the same table in serialize.jl.
+        """
+    ) $fname
 end

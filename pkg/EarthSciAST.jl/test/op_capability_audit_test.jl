@@ -28,10 +28,10 @@ const ESM = EarthSciAST
     # The four registry-derived mechanical ladder tables, with the arity each
     # tier is probed at (a representative legal arity per table).
     ladder_tables = [
-        ("_UNARY_ELEMENTWISE_OPS",      ESM._UNARY_ELEMENTWISE_OPS,      1),
-        ("_BINARY_ELEMENTWISE_OPS",     ESM._BINARY_ELEMENTWISE_OPS,     2),
+        ("_UNARY_ELEMENTWISE_OPS", ESM._UNARY_ELEMENTWISE_OPS, 1),
+        ("_BINARY_ELEMENTWISE_OPS", ESM._BINARY_ELEMENTWISE_OPS, 2),
         ("_COMPARISON_ELEMENTWISE_OPS", ESM._COMPARISON_ELEMENTWISE_OPS, 2),
-        ("_NARY_MINMAX_OPS",            ESM._NARY_MINMAX_OPS,            2),
+        ("_NARY_MINMAX_OPS", ESM._NARY_MINMAX_OPS, 2),
     ]
 
     # ---- Expected-decline manifests (ops) -----------------------------------
@@ -39,20 +39,22 @@ const ESM = EarthSciAST
     # dicts map every op in all four registry tables (they consume the tables
     # directly). If a future registry op is DELIBERATELY unsupported by the
     # tier, list it here with the reason; an unlisted gap fails below.
-    CG_UNARY_DECLINES   = Dict{Symbol,String}()
-    CG_BINARY_DECLINES  = Dict{Symbol,String}()
-    CG_CMP_DECLINES     = Dict{Symbol,String}()
-    CG_MINMAX_DECLINES  = Dict{Symbol,String}()
+    CG_UNARY_DECLINES = Dict{Symbol, String}()
+    CG_BINARY_DECLINES = Dict{Symbol, String}()
+    CG_CMP_DECLINES = Dict{Symbol, String}()
+    CG_MINMAX_DECLINES = Dict{Symbol, String}()
 
     @testset "codegen dicts map every registry ladder op (else add to CG_*_DECLINES)" begin
         for (tname, table, dict, manifest) in [
-            ("_UNARY_ELEMENTWISE_OPS",      ESM._UNARY_ELEMENTWISE_OPS,      ESM._CG_UNARY_FN,  CG_UNARY_DECLINES),
-            ("_BINARY_ELEMENTWISE_OPS",     ESM._BINARY_ELEMENTWISE_OPS,     ESM._CG_BINARY_FN, CG_BINARY_DECLINES),
-            ("_COMPARISON_ELEMENTWISE_OPS", ESM._COMPARISON_ELEMENTWISE_OPS, ESM._CG_CMP_FN,    CG_CMP_DECLINES),
-            ("_NARY_MINMAX_OPS",            ESM._NARY_MINMAX_OPS,            ESM._CG_MINMAX_FN, CG_MINMAX_DECLINES),
-        ]
-            gaps = Symbol[row.sym for row in table
-                          if !haskey(dict, row.sym) && !haskey(manifest, row.sym)]
+                ("_UNARY_ELEMENTWISE_OPS", ESM._UNARY_ELEMENTWISE_OPS, ESM._CG_UNARY_FN, CG_UNARY_DECLINES),
+                ("_BINARY_ELEMENTWISE_OPS", ESM._BINARY_ELEMENTWISE_OPS, ESM._CG_BINARY_FN, CG_BINARY_DECLINES),
+                ("_COMPARISON_ELEMENTWISE_OPS", ESM._COMPARISON_ELEMENTWISE_OPS, ESM._CG_CMP_FN, CG_CMP_DECLINES),
+                ("_NARY_MINMAX_OPS", ESM._NARY_MINMAX_OPS, ESM._CG_MINMAX_FN, CG_MINMAX_DECLINES),
+            ]
+            gaps = Symbol[
+                row.sym for row in table
+                    if !haskey(dict, row.sym) && !haskey(manifest, row.sym)
+            ]
             @testset "$tname" begin
                 @test gaps == Symbol[]
             end
@@ -67,13 +69,15 @@ const ESM = EarthSciAST
         # Membership pin (the pre-registry hand list minus its four dead
         # entries — expm1/log2/log1p/cbrt had no registry row, so they could
         # never match a spine op; dropping them changed no behavior).
-        @test ESM._XCSE_EXPENSIVE_OPS == Set{Symbol}([
-            :fn,
-            :exp, :log, :log10,
-            :sin, :cos, :tan, :asin, :acos, :atan, :atan2,
-            :sinh, :cosh, :tanh, :asinh, :acosh, :atanh,
-            :sqrt, :^, :pow,
-        ])
+        @test ESM._XCSE_EXPENSIVE_OPS == Set{Symbol}(
+            [
+                :fn,
+                :exp, :log, :log10,
+                :sin, :cos, :tan, :asin, :acos, :atan, :atan2,
+                :sinh, :cosh, :tanh, :asinh, :acosh, :atanh,
+                :sqrt, :^, :pow,
+            ]
+        )
     end
 
     # ---- fn-payload shape parity across the tiers ---------------------------
@@ -85,14 +89,14 @@ const ESM = EarthSciAST
     # codegen: _CodegenDecline). Any other exception is a probe bug and
     # rethrows.
 
-    lin  = ESM._InterpLinearSpec([0.0, 1.0], [0.0, 1.0])
-    bil  = ESM._InterpBilinearSpec([[0.0, 1.0], [1.0, 2.0]], [0.0, 1.0], [0.0, 1.0])
-    ss   = ESM._InterpSearchsortedSpec([0.0, 1.0])
+    lin = ESM._InterpLinearSpec([0.0, 1.0], [0.0, 1.0])
+    bil = ESM._InterpBilinearSpec([[0.0, 1.0], [1.0, 2.0]], [0.0, 1.0], [0.0, 1.0])
+    ss = ESM._InterpSearchsortedSpec([0.0, 1.0])
     # Lane-spec boxes with degenerate addressing (s=0, off=1): every midx
     # resolves to lane 1, so the scalar probe below is well-defined.
     linL = ESM._InterpLinearLaneSpec([lin], 0, 0, 0, 1)
     bilL = ESM._InterpBilinearLaneSpec([bil], 0, 0, 0, 1)
-    ssL  = ESM._InterpSearchsortedLaneSpec([ss], 0, 0, 0, 1)
+    ssL = ESM._InterpSearchsortedLaneSpec([ss], 0, 0, 0, 1)
 
     # The payload-shape universe: everything ANY tier accepts today, keyed for
     # the manifests below. (name, payload, nargs) — nargs matches the interp
@@ -105,14 +109,14 @@ const ESM = EarthSciAST
     tcore = ESM._fn_typed_core_spec("datetime.hour")
     @test tcore isa ESM._FnTypedCoreSpec   # datetime.* must be declared
     shapes = [
-        (:linear,            ("interp.linear",       lin),     1),
-        (:bilinear,          ("interp.bilinear",     bil),     2),
-        (:searchsorted,      ("interp.searchsorted", ss),      1),
-        (:linear_lane,       ("interp.linear",       linL),    1),
-        (:bilinear_lane,     ("interp.bilinear",     bilL),    2),
-        (:searchsorted_lane, ("interp.searchsorted", ssL),     1),
-        (:boxed,             ("datetime.hour",       nothing), 1),
-        (:typed_core,        ("datetime.hour",       tcore),   1),
+        (:linear, ("interp.linear", lin), 1),
+        (:bilinear, ("interp.bilinear", bil), 2),
+        (:searchsorted, ("interp.searchsorted", ss), 1),
+        (:linear_lane, ("interp.linear", linL), 1),
+        (:bilinear_lane, ("interp.bilinear", bilL), 2),
+        (:searchsorted_lane, ("interp.searchsorted", ssL), 1),
+        (:boxed, ("datetime.hour", nothing), 1),
+        (:typed_core, ("datetime.hour", tcore), 1),
     ]
     ALL_SHAPES = Set(first.(shapes))
 
@@ -128,14 +132,18 @@ const ESM = EarthSciAST
     CG_FN_PAYLOAD_GAP = Set(Symbol[])
     CG_FN_ACCEPTS = setdiff(ALL_SHAPES, CG_FN_PAYLOAD_GAP)
 
-    fnnode(payload, nargs) = ESM._mknode(kind=ESM._NK_OP, op=:fn,
-        children=ESM._Node[ESM._alit(0.5) for _ in 1:nargs],
-        payload=payload)
+    fnnode(payload, nargs) = ESM._mknode(
+        kind = ESM._NK_OP, op = :fn,
+        children = ESM._Node[ESM._alit(0.5) for _ in 1:nargs],
+        payload = payload
+    )
 
     # Minimal kernel context: literal-only children never touch the descriptor
     # table, bound, or CSE scratch, so the empty kernel is sufficient.
-    K = ESM._AccKernel(ESM._contig_cells(1), ESM._alit(0.0), ESM._AccDesc[],
-                       ESM._FixedBound(0), 0.0)
+    K = ESM._AccKernel(
+        ESM._contig_cells(1), ESM._alit(0.0), ESM._AccDesc[],
+        ESM._FixedBound(0), 0.0
+    )
 
     function interp_accepts(payload, nargs)
         nd = fnnode(payload, nargs)
@@ -143,8 +151,10 @@ const ESM = EarthSciAST
             ESM._eval_acc(nd, Float64[], (;), 0.0, 1, 0, 1, (1, 1, 1), K, Float64)
             return true
         catch err
-            (err isa ESM.TreeWalkError &&
-             err.code == "E_TREEWALK_UNKNOWN_CLOSED_FUNCTION") && return false
+            (
+                err isa ESM.TreeWalkError &&
+                    err.code == "E_TREEWALK_UNKNOWN_CLOSED_FUNCTION"
+            ) && return false
             rethrow()
         end
     end
@@ -172,11 +182,11 @@ const ESM = EarthSciAST
 
     @testset "interpreter fn-payload shapes (else update INTERP_FN_ACCEPTS/shapes)" begin
         @test Set(k for (k, pl, n) in shapes if interp_accepts(pl, n)) ==
-              INTERP_FN_ACCEPTS
+            INTERP_FN_ACCEPTS
     end
 
     @testset "codegen fn-payload shapes (else update CG_FN_PAYLOAD_GAP/shapes)" begin
         @test Set(k for (k, pl, n) in shapes if cg_accepts(pl, n)) ==
-              CG_FN_ACCEPTS
+            CG_FN_ACCEPTS
     end
 end

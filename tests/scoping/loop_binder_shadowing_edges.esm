@@ -1,0 +1,184 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "LoopBinderShadowingEdges",
+    "description": "The edges of the loop-symbol shadowing rule (esm-spec §4.3, \"Shadowing\") that index_symbol_shadows_variable.esm does not reach. Model Edges declares parameters `z` and `g`. Its first equation holds an `integral` whose `var` is `z`, so the `z` inside the integrand is the integration variable while the outer factor `z` is the parameter. Its second equation holds an `argmin` (not a `faq`) whose `ranges` key is `g`, so the `g` inside its body is the loop index while the outer factor `g` is the parameter. Model Outer mounts a subsystem named `j` and holds a faq that binds `j`: the bare `j` in the body is the loop index, but the dotted `j.x` is never a loop index and must become Outer.j.x.",
+    "authors": [
+      "ESM Test Suite"
+    ],
+    "tags": [
+      "scoping",
+      "integral",
+      "argmin",
+      "index-symbols",
+      "shadowing"
+    ]
+  },
+  "index_sets": {
+    "cell": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "models": {
+    "Edges": {
+      "variables": {
+        "a": {
+          "type": "unknown",
+          "default": 1.0,
+          "description": "Driven by an integral"
+        },
+        "b": {
+          "type": "unknown",
+          "default": 1.0,
+          "description": "Driven by an argmin"
+        },
+        "w": {
+          "type": "parameter",
+          "shape": [
+            "cell"
+          ],
+          "default": 1.0,
+          "description": "Arrayed weights"
+        },
+        "z": {
+          "type": "parameter",
+          "default": 0.5,
+          "description": "Parameter spelled like the integration variable"
+        },
+        "g": {
+          "type": "parameter",
+          "default": 2.0,
+          "description": "Parameter spelled like the argmin range symbol"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "a"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              "z",
+              {
+                "op": "integral",
+                "args": [
+                  {
+                    "op": "*",
+                    "args": [
+                      "z",
+                      "a"
+                    ]
+                  }
+                ],
+                "var": "z",
+                "lower": 0,
+                "upper": 1
+              }
+            ]
+          }
+        },
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "b"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "*",
+            "args": [
+              "g",
+              {
+                "op": "argmin",
+                "args": [],
+                "output_idx": [],
+                "expr": {
+                  "op": "index",
+                  "args": [
+                    "w",
+                    "g"
+                  ]
+                },
+                "arg": "g",
+                "ranges": {
+                  "g": [
+                    1,
+                    3
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "Outer": {
+      "variables": {
+        "u": {
+          "type": "unknown",
+          "shape": [
+            "cell"
+          ],
+          "default": 1.0,
+          "description": "Arrayed state"
+        }
+      },
+      "subsystems": {
+        "j": {
+          "variables": {
+            "x": {
+              "type": "parameter",
+              "default": 3.0,
+              "description": "Subsystem variable reached as j.x"
+            }
+          },
+          "equations": []
+        }
+      },
+      "equations": [
+        {
+          "lhs": {
+            "op": "D",
+            "args": [
+              "u"
+            ],
+            "wrt": "t"
+          },
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": [
+              "j"
+            ],
+            "ranges": {
+              "j": [
+                1,
+                3
+              ]
+            },
+            "expr": {
+              "op": "*",
+              "args": [
+                {
+                  "op": "index",
+                  "args": [
+                    "u",
+                    "j"
+                  ]
+                },
+                "j.x"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

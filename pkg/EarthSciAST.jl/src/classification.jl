@@ -97,8 +97,10 @@ not `"t"`, or one of the `grad` / `div` / `laplacian` sugar ops (esm-spec
 §6.3.1). Both spellings count: they are open-tier rewrite targets, so neither
 is canonical."""
 _is_spatial_derivative(e::ASTExpr)::Bool =
-    e isa OpExpr && ((e.op == "D" && e.wrt !== nothing && e.wrt != "t") ||
-                     e.op == "grad" || e.op == "div" || e.op == "laplacian")
+    e isa OpExpr && (
+    (e.op == "D" && e.wrt !== nothing && e.wrt != "t") ||
+        e.op == "grad" || e.op == "div" || e.op == "laplacian"
+)
 
 """
     _lhs_role(lhs::ASTExpr) -> Tuple{Symbol,String}
@@ -107,7 +109,7 @@ The role an equation's LHS plays in classification: `(:derivative, base)`,
 `(:definition, base)`, `(:none, "")` for an `ic` LHS, or `(:implicit, "")` for
 an expression LHS that constrains its operands only implicitly.
 """
-function _lhs_role(lhs::ASTExpr)::Tuple{Symbol,String}
+function _lhs_role(lhs::ASTExpr)::Tuple{Symbol, String}
     head = _lhs_unwrap(lhs)
     # A DOTTED name is not rejected here. In a FLATTENED system every variable
     # key is `<ModelPath>.<name>`, so rejecting dots would leave a flattened
@@ -174,9 +176,9 @@ An unknown that is also an ODE state is excluded (a `D(y)` equation defines
 `y`'s dynamics, not `y` itself). Where more than one equation has the same
 bare-variable LHS the FIRST wins, matching the reference implementation.
 """
-function observed_definitions(model::Model)::Dict{String,ASTExpr}
+function observed_definitions(model::Model)::Dict{String, ASTExpr}
     states = Set(ode_states(model))
-    defs = Dict{String,ASTExpr}()
+    defs = Dict{String, ASTExpr}()
     for eq in model.equations
         role, name = _lhs_role(eq.lhs)
         role === :definition || continue
@@ -300,8 +302,12 @@ Parameters whose `update.kind` is `"wiener"` — the SDE noise sources
 [`system_kind`](@ref) `"sde"`.
 """
 brownian_parameters(model::Model)::Vector{String} =
-    sort!(String[n for (n, v) in model.variables
-                 if v.type == ParameterVariable && _is_wiener(v)])
+    sort!(
+    String[
+        n for (n, v) in model.variables
+            if v.type == ParameterVariable && _is_wiener(v)
+    ]
+)
 
 """
     discrete_parameters(model::Model) -> Vector{String}
@@ -311,9 +317,13 @@ refreshes (esm-spec §6.3.1). Sorted lexicographically. These are the sole seed
 of the DISCRETE cadence class (CONFORMANCE_SPEC §5.7.2).
 """
 discrete_parameters(model::Model)::Vector{String} =
-    sort!(String[n for (n, v) in model.variables
-                 if v.type == ParameterVariable && !isempty(_update_rules(v)) &&
-                    !_is_wiener(v)])
+    sort!(
+    String[
+        n for (n, v) in model.variables
+            if v.type == ParameterVariable && !isempty(_update_rules(v)) &&
+            !_is_wiener(v)
+    ]
+)
 
 """
     sampled_parameters(model::Model) -> Vector{String}
@@ -322,9 +332,13 @@ Parameters with a `distribution` and no `update` — drawn ONCE at setup
 (uncertainty quantification, ensembles). Sorted lexicographically.
 """
 sampled_parameters(model::Model)::Vector{String} =
-    sort!(String[n for (n, v) in model.variables
-                 if v.type == ParameterVariable && v.distribution !== nothing &&
-                    isempty(_update_rules(v))])
+    sort!(
+    String[
+        n for (n, v) in model.variables
+            if v.type == ParameterVariable && v.distribution !== nothing &&
+            isempty(_update_rules(v))
+    ]
+)
 
 """
     constant_parameters(model::Model) -> Vector{String}
@@ -333,9 +347,13 @@ Parameters with neither a `distribution` nor an `update` — plain constants.
 Sorted lexicographically.
 """
 constant_parameters(model::Model)::Vector{String} =
-    sort!(String[n for (n, v) in model.variables
-                 if v.type == ParameterVariable && v.distribution === nothing &&
-                    isempty(_update_rules(v))])
+    sort!(
+    String[
+        n for (n, v) in model.variables
+            if v.type == ParameterVariable && v.distribution === nothing &&
+            isempty(_update_rules(v))
+    ]
+)
 
 # ── System kind ─────────────────────────────────────────────────────────────
 
@@ -416,7 +434,7 @@ Contrast [`system_kind`](@ref), which ignores the field and derives the kind
 from the equations and parameters, and [`effective_system_kind`](@ref), which
 composes the two.
 """
-declared_system_kind(model::Model)::Union{String,Nothing} = model.system_kind
+declared_system_kind(model::Model)::Union{String, Nothing} = model.system_kind
 
 """
     effective_system_kind(model::Model) -> String
@@ -452,8 +470,12 @@ function assert_classification_partitions(model::Model)
     length(covered) == length(unique(covered)) ||
         throw(ArgumentError("unknown sets overlap: $(sort!(covered))"))
     sort(covered) == all_u ||
-        throw(ArgumentError("unknown sets do not cover the unknowns: " *
-                            "$(sort!(covered)) vs $(all_u)"))
+        throw(
+        ArgumentError(
+            "unknown sets do not cover the unknowns: " *
+                "$(sort!(covered)) vs $(all_u)"
+        )
+    )
 
     pb = brownian_parameters(model)
     pd = discrete_parameters(model)
@@ -464,7 +486,11 @@ function assert_classification_partitions(model::Model)
     length(pcov) == length(unique(pcov)) ||
         throw(ArgumentError("parameter sets overlap: $(sort!(pcov))"))
     sort(pcov) == all_p ||
-        throw(ArgumentError("parameter sets do not cover the parameters: " *
-                            "$(sort!(pcov)) vs $(all_p)"))
+        throw(
+        ArgumentError(
+            "parameter sets do not cover the parameters: " *
+                "$(sort!(pcov)) vs $(all_p)"
+        )
+    )
     return nothing
 end

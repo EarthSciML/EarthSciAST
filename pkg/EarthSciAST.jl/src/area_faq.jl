@@ -30,20 +30,26 @@ function _clip_unit_vec(idx::ASTExpr)
     lon = OpExpr("*", ASTExpr[_clip_col(idx, 1), NumExpr(_AREA_DEG2RAD)])
     lat = OpExpr("*", ASTExpr[_clip_col(idx, 2), NumExpr(_AREA_DEG2RAD)])
     cos_lat = OpExpr("cos", ASTExpr[lat])
-    return (OpExpr("*", ASTExpr[cos_lat, OpExpr("cos", ASTExpr[lon])]),
-            OpExpr("*", ASTExpr[cos_lat, OpExpr("sin", ASTExpr[lon])]),
-            OpExpr("sin", ASTExpr[lat]))
+    return (
+        OpExpr("*", ASTExpr[cos_lat, OpExpr("cos", ASTExpr[lon])]),
+        OpExpr("*", ASTExpr[cos_lat, OpExpr("sin", ASTExpr[lon])]),
+        OpExpr("sin", ASTExpr[lat]),
+    )
 end
 
-_dot3(u, v) = OpExpr("+", ASTExpr[
-    OpExpr("*", ASTExpr[u[1], v[1]]),
-    OpExpr("*", ASTExpr[u[2], v[2]]),
-    OpExpr("*", ASTExpr[u[3], v[3]])])
+_dot3(u, v) = OpExpr(
+    "+", ASTExpr[
+        OpExpr("*", ASTExpr[u[1], v[1]]),
+        OpExpr("*", ASTExpr[u[2], v[2]]),
+        OpExpr("*", ASTExpr[u[3], v[3]]),
+    ]
+)
 
 _cross3(u, v) = (
     OpExpr("-", ASTExpr[OpExpr("*", ASTExpr[u[2], v[3]]), OpExpr("*", ASTExpr[u[3], v[2]])]),
     OpExpr("-", ASTExpr[OpExpr("*", ASTExpr[u[3], v[1]]), OpExpr("*", ASTExpr[u[1], v[3]])]),
-    OpExpr("-", ASTExpr[OpExpr("*", ASTExpr[u[1], v[2]]), OpExpr("*", ASTExpr[u[2], v[1]])]))
+    OpExpr("-", ASTExpr[OpExpr("*", ASTExpr[u[1], v[2]]), OpExpr("*", ASTExpr[u[2], v[1]])]),
+)
 
 # Van Oosterom–Strackee signed solid angle of triangle a,b,c:
 # 2·atan2(a·(b×c), 1 + a·b + b·c + c·a).
@@ -68,11 +74,13 @@ carry zero excess, so the sum collapses to the `Σ_{i=2}^{n-1}` fan the oracle
 function _spherical_area_faq(n::Int)::OpExpr
     apex = _clip_unit_vec(IntExpr(1))
     here = _clip_unit_vec(VarExpr("v"))
-    nxt  = _clip_unit_vec(OpExpr("+", ASTExpr[VarExpr("v"), IntExpr(1)]))
-    return OpExpr("faq", ASTExpr[VarExpr("overlap_clip")];
-                  semiring="sum_product", output_idx=Any[],
-                  ranges=Dict{String,Any}("v" => [1, n]),
-                  expr_body=_spherical_excess(apex, here, nxt))
+    nxt = _clip_unit_vec(OpExpr("+", ASTExpr[VarExpr("v"), IntExpr(1)]))
+    return OpExpr(
+        "faq", ASTExpr[VarExpr("overlap_clip")];
+        semiring = "sum_product", output_idx = Any[],
+        ranges = Dict{String, Any}("v" => [1, n]),
+        expr_body = _spherical_excess(apex, here, nxt)
+    )
 end
 
 """
@@ -103,11 +111,11 @@ function _polygon_area_via_faq(closed_ring::AbstractMatrix, manifold::AbstractSt
     # the bulk of the build-time area cost.
     manifold == "planar" && return _planar_shoelace_area(closed_ring, n)
     faq = _spherical_area_faq(n)
-    const_arrays = Dict{String,AbstractArray{Float64}}("overlap_clip" => Matrix{Float64}(closed_ring))
-    array_var_info = Dict{String,Tuple{Vector{Int},Vector{Int}}}()
-    var_map = Dict{String,Int}()
+    const_arrays = Dict{String, AbstractArray{Float64}}("overlap_clip" => Matrix{Float64}(closed_ring))
+    array_var_info = Dict{String, Tuple{Vector{Int}, Vector{Int}}}()
+    var_map = Dict{String, Int}()
     resolved = _resolve_indices(faq, array_var_info, var_map, const_arrays)
-    return abs(evaluate_expr(resolved, Dict{String,Float64}()))
+    return abs(evaluate_expr(resolved, Dict{String, Float64}()))
 end
 
 # Direct evaluation of the planar shoelace `sum_product` FAQ over the closed clip
@@ -119,8 +127,10 @@ end
 @inline function _planar_shoelace_area(closed_ring::AbstractMatrix, n::Int)::Float64
     acc = 0.0
     @inbounds for v in 1:n
-        acc += 0.5 * (closed_ring[v, 1] * closed_ring[v+1, 2] -
-                      closed_ring[v+1, 1] * closed_ring[v, 2])
+        acc += 0.5 * (
+            closed_ring[v, 1] * closed_ring[v + 1, 2] -
+                closed_ring[v + 1, 1] * closed_ring[v, 2]
+        )
     end
     return abs(acc)
 end

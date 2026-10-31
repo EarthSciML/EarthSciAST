@@ -48,24 +48,26 @@ const _ESS_BO = EarthSciAST
         # setup-field and trajectory goldens, not which compiler ran, so it is
         # measured under the reference evaluator, as CONFORMANCE_SPEC §5.44 has
         # every non-compiler conformance stage pin.
-        prob = _ESS_BO.esm_problem(fixture, tspan; inspect = insp,
-                                   compiler = :interpreter)
-        r = solve(prob, Tsit5(); reltol = 1e-10, abstol = 1e-12, saveat = atimes)
+        prob = _ESS_BO.esm_problem(
+            fixture, tspan; inspect = insp,
+            compiler = :interpreter
+        )
+        r = solve(prob, Tsit5(); reltol = 1.0e-10, abstol = 1.0e-12, saveat = atimes)
         @test SciMLBase.successful_retcode(r)
 
         # (c) setup fields materialized correctly (Gap 1: makearray at setup).
         for (name, want) in golden["setup_fields"]
             got = insp.setup_arrays[String(name)]
-            @test vec(Float64.(got)) ≈ Float64.(collect(want)) atol = 1e-9
+            @test vec(Float64.(got)) ≈ Float64.(collect(want)) atol = 1.0e-9
         end
 
         # (d) trajectory band (manifest §5.12 tolerances) — Gap 2: darea gathered
         # into the ODE RHS.
-        rtol = 1e-4; atol = 1e-6
+        rtol = 1.0e-4; atol = 1.0e-6
         for tk in keys(traj)
             String(tk) == "comment" && continue
             t = parse(Float64, String(tk))
-            ti = findfirst(x -> isapprox(x, t; atol = 1e-9), r.t)
+            ti = findfirst(x -> isapprox(x, t; atol = 1.0e-9), r.t)
             @test ti !== nothing
             for cell in ("Field.u[1]", "Field.u[2]", "Field.u[3]")
                 @test haskey(prob.var_map, cell)

@@ -632,6 +632,15 @@
       "note": "Non-vacuity control of the fixture set."
     },
     {
+      "id": "conf.5.53.initial-state-equals-solve-start",
+      "section": "5.53",
+      "quote": "It MUST equal, bit for bit, the state at `tspan[0]` of a solve of the same Problem.",
+      "class": "later",
+      "phase": 6,
+      "area": "simulation",
+      "note": "initial_state(prob) equals, bitwise, the state a solve of the same Problem holds at tspan[0]."
+    },
+    {
       "id": "conf.5.46.missing-data-fails",
       "section": "5.46",
       "quote": "build MUST FAIL at construction with `E_TREEWALK_MISSING_DATA`, naming the parameter and the data source that feeds it. It MUST NOT bind the parameter from zero or from a NaN sentinel",
@@ -743,6 +752,14 @@
       "class": "out_of_scope",
       "area": "api",
       "note": "Behaviour of a binding's time-span accessor given a call-site interval."
+    },
+    {
+      "id": "conf.5.49.1.clock-accessor-forms-agree",
+      "section": "5.49.1",
+      "quote": "that carries it; all forms MUST agree.",
+      "class": "out_of_scope",
+      "area": "api",
+      "note": "The clock accessors time_origin and timestamp_to_seconds give the same answer for a domain whether it is passed as raw JSON, as a typed domain, or inside a document: binding API behaviour."
     },
     {
       "id": "conf.5.49.1.leaf-time-span-not-checked",

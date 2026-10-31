@@ -27,13 +27,15 @@ const FIX = joinpath(ROOT, "tests", "bench", "transport_3axis_7cubed.esm")
 # the affine box processor fires and the 5×5×5 branch-key cross-product is real.
 const FIX_FULLRANK = joinpath(ROOT, "tests", "bench", "transport_3axis_7cubed_fullrank.esm")
 
-_count_distinct(x, seen=Base.IdSet{Any}()) = begin
+_count_distinct(x, seen = Base.IdSet{Any}()) = begin
     (x isa AbstractDict || x isa AbstractVector) || return 0
     x in seen && return 0
     push!(seen, x)
     n = 1
     vals = x isa AbstractDict ? (v for (_, v) in x) : x
-    for v in vals; n += _count_distinct(v, seen); end
+    for v in vals
+        n += _count_distinct(v, seen)
+    end
     n
 end
 
@@ -48,12 +50,14 @@ function representation()
     println("── representation (load-time) ──")
     println("  RHS distinct AST objects  Option A (Expand): ", _count_distinct(rhsA))
     println("  RHS distinct AST objects  Option B (refs):   ", _count_distinct(rhsB))
-    println("  whole-doc distinct objects A / B:            ",
-            _count_distinct(expA), " / ", _count_distinct(dB))
+    return println(
+        "  whole-doc distinct objects A / B:            ",
+        _count_distinct(expA), " / ", _count_distinct(dB)
+    )
 end
 
 function build_once(fix::AbstractString, disable::Bool)
-    withenv("ESS_TEMPLATE_REF_DISABLE" => (disable ? "1" : nothing)) do
+    return withenv("ESS_TEMPLATE_REF_DISABLE" => (disable ? "1" : nothing)) do
         # Fast path (default): references survive load and are ALWAYS carried
         # into the FlattenedSystem by `flatten`, then compiled once per (use
         # site, region class) as sub-kernels by the affine build (RFC §7.7

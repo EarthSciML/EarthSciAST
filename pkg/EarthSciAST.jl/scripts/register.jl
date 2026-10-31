@@ -21,7 +21,7 @@ function print_banner()
     println("="^60)
     println("   EarthSciAST.jl Package Registration Tool")
     println("="^60)
-    println()
+    return println()
 end
 
 function check_project_structure()
@@ -31,7 +31,7 @@ function check_project_structure()
         "Project.toml",
         "src/EarthSciAST.jl",
         "test/runtests.jl",
-        "README.md"
+        "README.md",
     ]
 
     missing_files = []
@@ -130,7 +130,7 @@ function check_documentation()
     required_docs = [
         "docs/Project.toml",
         "docs/make.jl",
-        "docs/src/index.md"
+        "docs/src/index.md",
     ]
 
     missing_docs = []
@@ -204,7 +204,7 @@ function print_registration_instructions()
     println()
     println("4. Wait for the registration pull request to be merged")
     println("5. Once merged, users can install with: Pkg.add(\"$pkg_name\")")
-    println()
+    return println()
 end
 
 function main()
@@ -230,7 +230,7 @@ function main()
 
     println()
 
-    if checks_passed
+    return if checks_passed
         println("🎉 All validation checks passed!")
 
         if !check_only

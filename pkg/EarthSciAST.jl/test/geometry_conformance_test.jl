@@ -38,8 +38,10 @@ const _SQUARE_B = [1.0 1.0; 3.0 1.0; 3.0 3.0; 1.0 3.0]
 
 # Unordered vertex set of a ring (rounded), so a clip's rotation/orientation does
 # not matter for the comparison.
-_vertset(ring) = Set((round(ring[i, 1]; digits=9), round(ring[i, 2]; digits=9))
-                     for i in 1:size(ring, 1))
+_vertset(ring) = Set(
+    (round(ring[i, 1]; digits = 9), round(ring[i, 2]; digits = 9))
+        for i in 1:size(ring, 1)
+)
 
 @testset "M4 geometry kernel — intersect_polygon + polygon_area (ess-my4.4.3)" begin
 
@@ -55,7 +57,7 @@ _vertset(ring) = Set((round(ring[i, 1]; digits=9), round(ring[i, 2]; digits=9))
     @testset "planar clip of overlapping squares" begin
         ring = ESS.intersect_polygon(_SQUARE_A, _SQUARE_B, "planar")
         @test _vertset(ring) == Set([(1.0, 1.0), (2.0, 1.0), (2.0, 2.0), (1.0, 2.0)])
-        @test isapprox(ESS.polygon_area(ring, "planar"), 1.0; atol=1e-12)
+        @test isapprox(ESS.polygon_area(ring, "planar"), 1.0; atol = 1.0e-12)
     end
 
     @testset "planar clip of disjoint cells is empty" begin
@@ -70,7 +72,7 @@ _vertset(ring) = Set((round(ring[i, 1]; digits=9), round(ring[i, 2]; digits=9))
         a_cw = _SQUARE_A[end:-1:1, :]
         b_cw = _SQUARE_B[end:-1:1, :]
         ring = ESS.intersect_polygon(a_cw, b_cw, "planar")
-        @test isapprox(ESS.polygon_area(ring, "planar"), 1.0; atol=1e-12)
+        @test isapprox(ESS.polygon_area(ring, "planar"), 1.0; atol = 1.0e-12)
     end
 
     @testset "intersect_polygon requires a manifold (parse)" begin
@@ -90,13 +92,14 @@ _vertset(ring) = Set((round(ring[i, 1]; digits=9), round(ring[i, 2]; digits=9))
         # The clip runs at setup: src_poly / tgt_poly are supplied as const_arrays
         # (RFC App. B.1). tracer IC = 1 so d(tracer)/dt = −area·tracer = −area.
         f!, u0, p, _, vmap = EarthSciAST._build_evaluator(
-            file; model_name="PolygonClipAreaPlanar",
-            initial_conditions=Dict("tracer" => 1.0),
-            const_arrays=Dict("src_poly" => _SQUARE_A, "tgt_poly" => _SQUARE_B))
+            file; model_name = "PolygonClipAreaPlanar",
+            initial_conditions = Dict("tracer" => 1.0),
+            const_arrays = Dict("src_poly" => _SQUARE_A, "tgt_poly" => _SQUARE_B)
+        )
         du = similar(u0)
         f!(du, u0, p, 0.0)
         # area = polygon_area(clip) = 1.0  ⇒  d(tracer)/dt = −1.0·1.0 = −1.0.
-        @test isapprox(du[vmap["tracer"]], -1.0; atol=1e-12)
+        @test isapprox(du[vmap["tracer"]], -1.0; atol = 1.0e-12)
     end
 
     @testset "derived clip-ring index set requires materialization" begin
@@ -110,35 +113,39 @@ _vertset(ring) = Set((round(ring[i, 1]; digits=9), round(ring[i, 2]; digits=9))
                 "coord" => Dict("kind" => "interval", "size" => 2),
                 "ghost_ring" => Dict("kind" => "derived", "from_faq" => "missing_clip"),
             ),
-            "models" => Dict("M" => Dict(
-                "variables" => Dict(
-                    "y" => Dict("type" => "unknown", "shape" => []),
-                ),
-                "equations" => [Dict(
-                    "lhs" => Dict("op" => "D", "args" => ["y"], "wrt" => "t"),
-                    "rhs" => Dict(
-                        "op" => "faq", "semiring" => "sum_product",
-                        "output_idx" => [], "args" => [],
-                        "ranges" => Dict("v" => Dict("from" => "ghost_ring")),
-                        "expr" => 1.0,
+            "models" => Dict(
+                "M" => Dict(
+                    "variables" => Dict(
+                        "y" => Dict("type" => "unknown", "shape" => []),
                     ),
-                )],
-            )),
+                    "equations" => [
+                        Dict(
+                            "lhs" => Dict("op" => "D", "args" => ["y"], "wrt" => "t"),
+                            "rhs" => Dict(
+                                "op" => "faq", "semiring" => "sum_product",
+                                "output_idx" => [], "args" => [],
+                                "ranges" => Dict("v" => Dict("from" => "ghost_ring")),
+                                "expr" => 1.0,
+                            ),
+                        ),
+                    ],
+                )
+            ),
         )
-        @test_throws EarthSciAST.TreeWalkError EarthSciAST._build_evaluator(bad; model_name="M")
+        @test_throws EarthSciAST.TreeWalkError EarthSciAST._build_evaluator(bad; model_name = "M")
     end
 
     # --- spherical / geodesic area (closed-form excess, no backend) ---
     @testset "spherical area of an octant is π/2 (unit sphere)" begin
         octant = [0.0 0.0; 90.0 0.0; 0.0 90.0]
-        @test isapprox(ESS.polygon_area(octant, "spherical"), π / 2; atol=1e-12)
+        @test isapprox(ESS.polygon_area(octant, "spherical"), π / 2; atol = 1.0e-12)
     end
 
     @testset "spherical area ≈ planar area for a tiny cell" begin
-        cell = [0.0 0.0; 1e-3 0.0; 1e-3 1e-3; 0.0 1e-3]
+        cell = [0.0 0.0; 1.0e-3 0.0; 1.0e-3 1.0e-3; 0.0 1.0e-3]
         sph = ESS.polygon_area(cell, "spherical")
         planar_rad2 = ESS.polygon_area(cell, "planar") * deg2rad(1.0)^2
-        @test isapprox(sph, planar_rad2; rtol=1e-3)
+        @test isapprox(sph, planar_rad2; rtol = 1.0e-3)
     end
 
     @testset "geodesic reuses the spherical (great-circle) area" begin
@@ -154,7 +161,7 @@ _vertset(ring) = Set((round(ring[i, 1]; digits=9), round(ring[i, 2]; digits=9))
     @testset "spherical area FAQ (Van Oosterom–Strackee fan) evaluates octant to π/2" begin
         octant = [0.0 0.0; 90.0 0.0; 0.0 90.0]
         faq = ESS._polygon_area_via_faq(ESS.close_ring(octant), "spherical")
-        @test isapprox(faq, π / 2; atol=1e-12)
+        @test isapprox(faq, π / 2; atol = 1.0e-12)
     end
 
     @testset "area FAQ matches the imperative oracle (planar + spherical + geodesic)" begin
@@ -164,7 +171,7 @@ _vertset(ring) = Set((round(ring[i, 1]; digits=9), round(ring[i, 2]; digits=9))
         for manifold in ("planar", "spherical", "geodesic")
             faq = ESS._polygon_area_via_faq(closed, manifold)
             oracle = ESS.polygon_area(ring, manifold)
-            @test isapprox(faq, oracle; rtol=1e-12, atol=1e-14)
+            @test isapprox(faq, oracle; rtol = 1.0e-12, atol = 1.0e-14)
         end
     end
 
@@ -175,7 +182,7 @@ _vertset(ring) = Set((round(ring[i, 1]; digits=9), round(ring[i, 2]; digits=9))
         if ESS._spherical_clip_available()
             clipped = ESS.intersect_polygon(_SQUARE_A, _SQUARE_B, "spherical")
             faq = ESS._polygon_area_via_faq(ESS.close_ring(clipped), "spherical")
-            @test ESS.area_tolerance_ok(faq, ESS.polygon_area(clipped, "spherical"); rtol=1e-9)
+            @test ESS.area_tolerance_ok(faq, ESS.polygon_area(clipped, "spherical"); rtol = 1.0e-9)
         else
             @test_skip "GeometryOps spherical clip extension not loaded"
         end
@@ -202,7 +209,7 @@ _vertset(ring) = Set((round(ring[i, 1]; digits=9), round(ring[i, 2]; digits=9))
         a_dense = ESS.polygon_area(dense, "spherical")
         err_dense = abs(a_dense - a_true) / a_true
         @test err_dense < err_coarse                   # densification reduces the error
-        @test err_dense < 1e-3                          # and converges to the true area
+        @test err_dense < 1.0e-3                          # and converges to the true area
         # Monotone: finer densification ⇒ smaller error.
         err_5 = abs(ESS.polygon_area(ESS.densify_parallel_edges(cell, 5.0), "spherical") - a_true) / a_true
         @test err_dense < err_5 < err_coarse
@@ -222,7 +229,7 @@ _vertset(ring) = Set((round(ring[i, 1]; digits=9), round(ring[i, 2]; digits=9))
         # Inserted vertices lie exactly on the parallel (constant latitude).
         cell = [0.0 70.0; 40.0 70.0; 40.0 71.0; 0.0 71.0]
         d2 = ESS.densify_parallel_edges(cell, 10.0)
-        @test Set(round(d2[i, 2]; digits=9) for i in 1:size(d2, 1)) == Set([70.0, 71.0])
+        @test Set(round(d2[i, 2]; digits = 9) for i in 1:size(d2, 1)) == Set([70.0, 71.0])
     end
 
     # --- spherical clip via GeometryOps + Girard cross-check ---
@@ -230,7 +237,7 @@ _vertset(ring) = Set((round(ring[i, 1]; digits=9), round(ring[i, 2]; digits=9))
         ring = ESS.intersect_polygon(_SQUARE_A, _SQUARE_B, "spherical")
         @test size(ring, 1) >= 3
         # The overlap is the ~unit box, slightly bowed by the great-circle edges.
-        @test isapprox(ESS.polygon_area(ring, "planar"), 1.0; atol=1e-3)
+        @test isapprox(ESS.polygon_area(ring, "planar"), 1.0; atol = 1.0e-3)
         # The closed-form spherical excess (unit sphere) must agree with
         # GeometryOps' own Girard area of the SAME ring (also unit sphere) — both
         # use the great-circle-edge model (B.5 / §5.8.2 S2-vs-GeometryOps band).
@@ -239,20 +246,20 @@ _vertset(ring) = Set((round(ring[i, 1]; digits=9), round(ring[i, 2]; digits=9))
         pts = [to_unit((ring[i, 1], ring[i, 2])) for i in 1:size(ring, 1)]
         push!(pts, pts[1])
         gi = GI.Polygon([GI.LinearRing(pts)])
-        a_go = GO.area(GO.Spherical(radius=1.0), gi)
-        @test ESS.area_tolerance_ok(a_excess, a_go; rtol=1e-9)
+        a_go = GO.area(GO.Spherical(radius = 1.0), gi)
+        @test ESS.area_tolerance_ok(a_excess, a_go; rtol = 1.0e-9)
     end
 
     # --- B.5 / §5.8.2 area-tolerance gate ---
     @testset "area-tolerance gate" begin
-        @test ESS.area_tolerance_ok(1.0, 1.0; rtol=1e-12)
+        @test ESS.area_tolerance_ok(1.0, 1.0; rtol = 1.0e-12)
         # "present-but-tiny" and "absent" both pass (sub-sliver floor).
-        @test ESS.area_tolerance_ok(1e-20, 0.0; rtol=1e-12)
-        @test ESS.area_tolerance_ok(0.0, 1e-20; rtol=1e-12)
-        @test !ESS.area_tolerance_ok(1.0, 2.0; rtol=1e-9)
+        @test ESS.area_tolerance_ok(1.0e-20, 0.0; rtol = 1.0e-12)
+        @test ESS.area_tolerance_ok(0.0, 1.0e-20; rtol = 1.0e-12)
+        @test !ESS.area_tolerance_ok(1.0, 2.0; rtol = 1.0e-9)
         # A 1e-6 relative error passes at rtol 1e-5 but fails at rtol 1e-7.
-        @test ESS.area_tolerance_ok(1.0 + 1e-6, 1.0; rtol=1e-5)
-        @test !ESS.area_tolerance_ok(1.0 + 1e-6, 1.0; rtol=1e-7)
+        @test ESS.area_tolerance_ok(1.0 + 1.0e-6, 1.0; rtol = 1.0e-5)
+        @test !ESS.area_tolerance_ok(1.0 + 1.0e-6, 1.0; rtol = 1.0e-7)
     end
 
     # --- manifold / id parse + serialize round-trip ---

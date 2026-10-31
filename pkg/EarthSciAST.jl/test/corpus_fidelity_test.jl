@@ -57,7 +57,7 @@ include("testutils.jl")
 @testset "corpus round-trip fidelity (save(load(F)) == F)" begin
 
     # Spec-mandated load-time rewrites. Key: path relative to the repo root.
-    TRANSFORMED_AT_LOAD = Dict{String,String}(
+    TRANSFORMED_AT_LOAD = Dict{String, String}(
         # esm-spec §8.2.1: a scheme-less `source.url_template` is a filesystem
         # path, and a relative one resolves at load against the directory of the
         # file that declared it — the same base and the same timing rule §4.7
@@ -172,7 +172,7 @@ include("testutils.jl")
     """
     function relax(v, key::String)
         if v isa AbstractDict
-            out = OrderedDict{String,Any}()
+            out = OrderedDict{String, Any}()
             for (k, x) in v
                 ks = String(k)
                 y = relax(x, ks)
@@ -236,9 +236,13 @@ include("testutils.jl")
     exercised = Set{String}()
     for path in fixtures
         rel = replace(relpath(path, TESTUTILS_REPO_ROOT), '\\' => '/')
-        original = relax(JSON3.read(read(path, String), OrderedDict{String,Any}))
-        emitted = relax(JSON3.read(to_json_compact(load_path(path)),
-                                   OrderedDict{String,Any}))
+        original = relax(JSON3.read(read(path, String), OrderedDict{String, Any}))
+        emitted = relax(
+            JSON3.read(
+                to_json_compact(load_path(path)),
+                OrderedDict{String, Any}
+            )
+        )
         diff = json_diff(original, emitted)
         if haskey(TRANSFORMED_AT_LOAD, rel)
             push!(exercised, rel)
@@ -247,8 +251,10 @@ include("testutils.jl")
             @test !isempty(diff)
         else
             @test isempty(diff) ||
-                  error("$(rel) does not survive save(load(F)):\n  " *
-                        join(diff, "\n  "))
+                error(
+                "$(rel) does not survive save(load(F)):\n  " *
+                    join(diff, "\n  ")
+            )
         end
     end
 
@@ -265,7 +271,7 @@ include("testutils.jl")
     @testset "named fields survive the round trip" begin
         function emit_of(rel)
             path = joinpath(TESTUTILS_REPO_ROOT, rel)
-            return JSON3.read(to_json_compact(load_path(path)), OrderedDict{String,Any})
+            return JSON3.read(to_json_compact(load_path(path)), OrderedDict{String, Any})
         end
 
         # Model.reference — 26 of 94 fixtures carried one and every one lost it.
@@ -283,19 +289,22 @@ include("testutils.jl")
         @test haskey(rs["parameters"]["T"], "shape")
 
         # ContinuousEvent.affect_neg / root_find.
-        ev = emit_of("tests/valid/events_continuous_affect_neg.esm"
-                     )["models"]["BouncingBallSystem"]["continuous_events"][1]
+        ev = emit_of(
+            "tests/valid/events_continuous_affect_neg.esm"
+        )["models"]["BouncingBallSystem"]["continuous_events"][1]
         @test haskey(ev, "affect_neg")
         @test haskey(ev, "root_find")
 
         # DiscreteEvent.reinitialize.
-        de = emit_of("tests/valid/events_discrete_periodic.esm"
-                     )["models"]["PharmacokineticModel"]["discrete_events"][1]
+        de = emit_of(
+            "tests/valid/events_discrete_periodic.esm"
+        )["models"]["PharmacokineticModel"]["discrete_events"][1]
         @test haskey(de, "reinitialize")
 
         # DataSource.reader_options / record_filter / extent.
-        ds = emit_of("tests/valid/data_sources_ingest_and_select.esm"
-                     )["data_sources"]["EGU_Emis"]
+        ds = emit_of(
+            "tests/valid/data_sources_ingest_and_select.esm"
+        )["data_sources"]["EGU_Emis"]
         @test haskey(ds, "reader_options")
         @test haskey(ds, "record_filter")
         @test haskey(ds, "extent")
@@ -304,8 +313,9 @@ include("testutils.jl")
         # source-level `select`, and `temporal.records_per_sample` (how many
         # records the source returns per QUERY TIME, as against
         # `records_per_file`, which counts records IN one file).
-        rean = emit_of("pkg/EarthSciAST.jl/test/fixtures/round_trip/parameter_value_model.esm"
-                       )["data_sources"]["Reanalysis"]
+        rean = emit_of(
+            "pkg/EarthSciAST.jl/test/fixtures/round_trip/parameter_value_model.esm"
+        )["data_sources"]["Reanalysis"]
         @test length(rean["select"]["axes"]) == 3
         @test rean["temporal"]["records_per_sample"] == 2
 
@@ -338,8 +348,10 @@ include("testutils.jl")
         @test EarthSciAST._is_coupling_library_doc(lib)
         @test sort(collect(keys(lib["coupling_roles"]))) == ["Fuel", "Spread"]
         # ... and `CouplingEvent.name`, found by the same sweep.
-        @test any(e -> get(e, "type", nothing) == "event" && haskey(e, "name"),
-                  lib["coupling"])
+        @test any(
+            e -> get(e, "type", nothing) == "event" && haskey(e, "name"),
+            lib["coupling"]
+        )
 
         # `ExpressionNode.attrs` — the scheme parameters of an OPEN
         # rewrite-target op (esm-spec §4.2). NO fixture in ANY binding
@@ -362,9 +374,11 @@ include("testutils.jl")
         # at one path: the assertion's whole point is that it sits on every
         # meaningful node, and reading the expected count off the fixture keeps
         # the pin from rotting when a fixture gains a node.
-        for rel in ("tests/valid/cadence/pure_pointwise.esm",
-                    "tests/valid/cadence/mixed_stencil.esm",
-                    "tests/valid/cadence/discrete_remesh_stencil.esm")
+        for rel in (
+                "tests/valid/cadence/pure_pointwise.esm",
+                "tests/valid/cadence/mixed_stencil.esm",
+                "tests/valid/cadence/discrete_remesh_stencil.esm",
+            )
             path = joinpath(TESTUTILS_REPO_ROOT, rel)
             n = count("\"expect_cadence\"", read(path, String))
             @test n > 0
@@ -377,30 +391,43 @@ include("testutils.jl")
     # document. Julia's field table pinned `default` as required, which made
     # such a file a hard `KeyError` at load — a rejection, not a drop.
     @testset "a distribution-valued parameter needs no `default`" begin
-        doc = Dict{String,Any}(
+        doc = Dict{String, Any}(
             "esm" => "1.0.0",
-            "metadata" => Dict{String,Any}("name" => "DistOnly"),
-            "reaction_systems" => Dict{String,Any}("RS" => Dict{String,Any}(
-                "species" => Dict{String,Any}(
-                    "A" => Dict{String,Any}("units" => "ppb", "default" => 1.0)),
-                "parameters" => Dict{String,Any}("k" => Dict{String,Any}(
-                    "units" => "s^-1",
-                    "distribution" => Dict{String,Any}(
-                        "kind" => "normal", "mean" => 1.0, "std" => 0.1))),
-                "reactions" => Any[Dict{String,Any}(
-                    "id" => "r1",
-                    "substrates" => Any[Dict{String,Any}(
-                        "species" => "A", "stoichiometry" => 1)],
-                    "products" => nothing,
-                    "rate" => Dict{String,Any}("op" => "*", "args" => Any["k", "A"]))],
-            )),
+            "metadata" => Dict{String, Any}("name" => "DistOnly"),
+            "reaction_systems" => Dict{String, Any}(
+                "RS" => Dict{String, Any}(
+                    "species" => Dict{String, Any}(
+                        "A" => Dict{String, Any}("units" => "ppb", "default" => 1.0)
+                    ),
+                    "parameters" => Dict{String, Any}(
+                        "k" => Dict{String, Any}(
+                            "units" => "s^-1",
+                            "distribution" => Dict{String, Any}(
+                                "kind" => "normal", "mean" => 1.0, "std" => 0.1
+                            )
+                        )
+                    ),
+                    "reactions" => Any[
+                        Dict{String, Any}(
+                            "id" => "r1",
+                            "substrates" => Any[
+                                Dict{String, Any}(
+                                    "species" => "A", "stoichiometry" => 1
+                                ),
+                            ],
+                            "products" => nothing,
+                            "rate" => Dict{String, Any}("op" => "*", "args" => Any["k", "A"])
+                        ),
+                    ],
+                )
+            ),
         )
         @test isempty(validate_schema(doc))
         file = load_document(doc)
         k = only(file.reaction_systems["RS"].parameters)
         @test k.default === nothing
         @test k.distribution.kind == "normal"
-        emitted = JSON3.read(to_json_compact(file), OrderedDict{String,Any})
+        emitted = JSON3.read(to_json_compact(file), OrderedDict{String, Any})
         p = emitted["reaction_systems"]["RS"]["parameters"]["k"]
         @test !haskey(p, "default")
         @test p["distribution"]["mean"] == 1.0

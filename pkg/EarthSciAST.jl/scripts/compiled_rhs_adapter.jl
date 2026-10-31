@@ -91,14 +91,16 @@ const ENGINE = let e = "interpreter"
     end
     e
 end
-let env = joinpath(@__DIR__, ENGINE == "compiled" ? "compiled_rhs_reactant_env" :
-                             "pde_sim_adapter"),
-    manifest = joinpath(env, "Manifest.toml")
+let env = joinpath(
+        @__DIR__, ENGINE == "compiled" ? "compiled_rhs_reactant_env" :
+            "pde_sim_adapter"
+    ),
+        manifest = joinpath(env, "Manifest.toml")
     bootstrap() = begin
-        Pkg.activate(env; io=devnull)
+        Pkg.activate(env; io = devnull)
         isfile(manifest) ||
-            Pkg.develop(path=normpath(joinpath(@__DIR__, "..")); io=devnull)
-        Pkg.instantiate(; io=devnull)
+            Pkg.develop(path = normpath(joinpath(@__DIR__, "..")); io = devnull)
+        Pkg.instantiate(; io = devnull)
     end
     try
         bootstrap()
@@ -109,7 +111,7 @@ let env = joinpath(@__DIR__, ENGINE == "compiled" ? "compiled_rhs_reactant_env" 
         # writes the Manifest here — EarthSciAST is already in the Project's
         # [deps], so the tracked Project.toml is not touched.
         @warn "$(basename(env)) env did not instantiate; rebuilding Manifest.toml" exception = (err, catch_backtrace())
-        rm(manifest; force=true)
+        rm(manifest; force = true)
         bootstrap()
     end
 end
@@ -151,9 +153,11 @@ function parse_args(args)
     engine in ("interpreter", "compiled") ||
         error("--engine must be 'interpreter' or 'compiled', got '$engine'")
     compiler in COMPILER_VOCABULARY ||
-        error("--compiler must be one of " * join(COMPILER_VOCABULARY, ", ") *
-              ", got '$compiler'")
-    (manifest, output, engine, compiler)
+        error(
+        "--compiler must be one of " * join(COMPILER_VOCABULARY, ", ") *
+            ", got '$compiler'"
+    )
+    return (manifest, output, engine, compiler)
 end
 
 # Strip a leading `Model.` namespace so element names compare across bindings
@@ -177,6 +181,7 @@ function tests_root(manifest_path)
         parent == cur && return dir
         cur = parent
     end
+    return
 end
 
 # The flat state layout the manifest's `state_order` names: bare element name ->
@@ -184,11 +189,11 @@ end
 # manifest that drifts from the evaluator's layout is caught by name here rather
 # than silently evaluated at the wrong slot.
 function bare_var_map(var_map)
-    out = Dict{String,Int}()
+    out = Dict{String, Int}()
     for (name, idx) in var_map
         out[_bare(String(name))] = idx
     end
-    out
+    return out
 end
 
 # Apply the fixture's `parameters` overrides to the built parameter object.
@@ -206,29 +211,35 @@ function apply_parameters(p, overrides)
         push!(names, sym)
         push!(vals, Float64(v))
     end
-    merge(p, NamedTuple{Tuple(names)}(Tuple(vals)))
+    return merge(p, NamedTuple{Tuple(names)}(Tuple(vals)))
 end
 
 function fixture_rhs(fx, base, compiler)
     path = joinpath(base, String(fx.path))
     file = load_path(path)
-    f!, u0, p, _, var_map = EarthSciAST._build_evaluator(file; model_name = String(fx.model),
-                                            compiler = Symbol(compiler))
+    f!, u0, p, _, var_map = EarthSciAST._build_evaluator(
+        file; model_name = String(fx.model),
+        compiler = Symbol(compiler)
+    )
     slot = bare_var_map(var_map)
 
     order = [String(s) for s in fx.state_order]
     for name in order
         haskey(slot, name) ||
-            error("state_order element '$name' is not in the evaluator var map for " *
-                  "$(fx.id) (have: $(join(sort(collect(keys(slot))), ", ")))")
+            error(
+            "state_order element '$name' is not in the evaluator var map for " *
+                "$(fx.id) (have: $(join(sort(collect(keys(slot))), ", ")))"
+        )
     end
     length(order) == length(u0) ||
-        error("state_order for $(fx.id) has $(length(order)) elements but the " *
-              "evaluator's state vector has $(length(u0))")
+        error(
+        "state_order for $(fx.id) has $(length(order)) elements but the " *
+            "evaluator's state vector has $(length(u0))"
+    )
 
     p_fx = apply_parameters(p, get(fx, :parameters, nothing))
 
-    rhs = Dict{String,Any}()
+    rhs = Dict{String, Any}()
     for pr in fx.rhs_probes
         u = copy(u0)
         for (rawname, val) in pairs(pr.state)
@@ -244,10 +255,12 @@ function fixture_rhs(fx, base, compiler)
         # whose shape inference invents an extra flat element must not smuggle it
         # into the comparison, where it would become a requirement every other
         # binding had to reproduce.
-        rhs[String(pr.id)] = Dict{String,Float64}(name => Float64(du[slot[name]])
-                                                  for name in order)
+        rhs[String(pr.id)] = Dict{String, Float64}(
+            name => Float64(du[slot[name]])
+                for name in order
+        )
     end
-    Dict("rhs" => rhs)
+    return Dict("rhs" => rhs)
 end
 
 # ── The compiled engine ────────────────────────────────────────────────────
@@ -302,7 +315,7 @@ const XLA_CLIENT_ERROR = Ref{Any}(nothing)
 function resolve_client()
     ext = Base.get_extension(EarthSciAST, :EarthSciASTReactantExt)
     ext === nothing && error("the Reactant extension did not load")
-    try
+    return try
         XLA_CLIENT[] = ext.direct_client(XLA_DEVICE)
         true
     catch err
@@ -345,20 +358,26 @@ function fixture_rhs_compiled(fx, base, compiler)
 
     path = joinpath(base, String(fx.path))
     file = load_path(path)
-    fo, u0, p, _, var_map = EarthSciAST._build_evaluator(file; model_name = String(fx.model),
-                                            form = :oop,
-                                            compiler = Symbol(compiler))
+    fo, u0, p, _, var_map = EarthSciAST._build_evaluator(
+        file; model_name = String(fx.model),
+        form = :oop,
+        compiler = Symbol(compiler)
+    )
     slot = bare_var_map(var_map)
 
     order = [String(s) for s in fx.state_order]
     for name in order
         haskey(slot, name) ||
-            error("state_order element '$name' is not in the evaluator var map for " *
-                  "$(fx.id) (have: $(join(sort(collect(keys(slot))), ", ")))")
+            error(
+            "state_order element '$name' is not in the evaluator var map for " *
+                "$(fx.id) (have: $(join(sort(collect(keys(slot))), ", ")))"
+        )
     end
     length(order) == length(u0) ||
-        error("state_order for $(fx.id) has $(length(order)) elements but the " *
-              "evaluator's state vector has $(length(u0))")
+        error(
+        "state_order for $(fx.id) has $(length(order)) elements but the " *
+            "evaluator's state vector has $(length(u0))"
+    )
 
     p_fx = apply_parameters(p, get(fx, :parameters, nothing))
 
@@ -368,25 +387,31 @@ function fixture_rhs_compiled(fx, base, compiler)
     t_dev = ext.direct_time(d, 0.0)
     compiled = compile_rhs(d, u_dev, p_dev, t_dev)
 
-    rhs = Dict{String,Any}()
+    rhs = Dict{String, Any}()
     for pr in fx.rhs_probes
         u = copy(u0)
         for (rawname, val) in pairs(pr.state)
             u[slot[String(rawname)]] = Float64(val)
         end
-        du = run_rhs(compiled, ext.direct_state(d, u), p_dev,
-                     ext.direct_time(d, Float64(pr.t)))
-        rhs[String(pr.id)] = Dict{String,Float64}(name => Float64(du[slot[name]])
-                                                  for name in order)
+        du = run_rhs(
+            compiled, ext.direct_state(d, u), p_dev,
+            ext.direct_time(d, Float64(pr.t))
+        )
+        rhs[String(pr.id)] = Dict{String, Float64}(
+            name => Float64(du[slot[name]])
+                for name in order
+        )
     end
-    Dict("rhs" => rhs)
+    return Dict("rhs" => rhs)
 end
 
 function main()
     manifest_path, output_path, engine, compiler = parse_args(ARGS)
     engine == ENGINE ||
-        error("the bootstrap read engine '$ENGINE' off ARGS but parse_args read " *
-              "'$engine'; the adapter would be running in the wrong environment")
+        error(
+        "the bootstrap read engine '$ENGINE' off ARGS but parse_args read " *
+            "'$engine'; the adapter would be running in the wrong environment"
+    )
 
     if engine == "compiled" && !HAVE_REACTANT
         # The whole-output `unavailable` shape (README "Adapter contract"): the
@@ -400,7 +425,7 @@ function main()
             "engine" => engine,
             "status" => "unavailable",
             "reason" => "Reactant could not be loaded, so there is no XLA client " *
-                        "to compile on: " * sprint(showerror, REACTANT_LOAD_ERROR[]),
+                "to compile on: " * sprint(showerror, REACTANT_LOAD_ERROR[]),
         )
         open(output_path, "w") do io
             JSON3.write(io, payload)
@@ -418,8 +443,8 @@ function main()
             "engine" => engine,
             "status" => "unavailable",
             "reason" => "EARTHSCI_JULIA_XLA_DEVICE=$XLA_DEVICE, but that XLA " *
-                        "client could not be created on this machine: " *
-                        sprint(showerror, XLA_CLIENT_ERROR[]),
+                "client could not be created on this machine: " *
+                sprint(showerror, XLA_CLIENT_ERROR[]),
         )
         open(output_path, "w") do io
             JSON3.write(io, payload)
@@ -430,16 +455,18 @@ function main()
     if engine == "compiled"
         # The platform announcement (see "WHICH DEVICE" above): stderr, because
         # the report schema has no field for it.
-        println(stderr, "compiled_rhs_adapter: julia engine=compiled ",
-                "device=", XLA_DEVICE,
-                " platform=", Reactant.XLA.platform_name(XLA_CLIENT[]),
-                " addressable_devices=",
-                length(Reactant.XLA.addressable_devices(XLA_CLIENT[])))
+        println(
+            stderr, "compiled_rhs_adapter: julia engine=compiled ",
+            "device=", XLA_DEVICE,
+            " platform=", Reactant.XLA.platform_name(XLA_CLIENT[]),
+            " addressable_devices=",
+            length(Reactant.XLA.addressable_devices(XLA_CLIENT[]))
+        )
     end
 
     manifest = JSON3.read(read(manifest_path, String))
     base = tests_root(manifest_path)
-    fixtures = Dict{String,Any}()
+    fixtures = Dict{String, Any}()
     failed = false
     for fx in manifest.fixtures
         id = String(fx.id)
@@ -451,13 +478,19 @@ function main()
             fixtures[id] = fixture_rhs_compiled(fx, base, compiler)
         catch err
             if err isa EarthSciAST.DirectEmitError
-                fixtures[id] = Dict("status" => "refused",
-                                    "rule" => err.rule,
-                                    "reason" => string(err.construct, ": ", err.detail))
+                fixtures[id] = Dict(
+                    "status" => "refused",
+                    "rule" => err.rule,
+                    "reason" => string(err.construct, ": ", err.detail)
+                )
             else
                 failed = true
-                fixtures[id] = Dict("error" => string(typeof(err), ": ",
-                                                      sprint(showerror, err)))
+                fixtures[id] = Dict(
+                    "error" => string(
+                        typeof(err), ": ",
+                        sprint(showerror, err)
+                    )
+                )
             end
         end
     end
@@ -469,7 +502,7 @@ function main()
     # one fixture errored" (README, Adapter contract). A REFUSAL is not an error:
     # it is the documented outcome of the hard-error policy, and the runner
     # decides whether it fails the gate from `compiled_required`.
-    failed && exit(1)
+    return failed && exit(1)
 end
 
 main()

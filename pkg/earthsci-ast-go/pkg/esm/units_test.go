@@ -140,6 +140,18 @@ func TestParseUnitDerivedSymbols(t *testing.T) {
 	if !j.Dim.Equal(wantJ) {
 		t.Errorf("J.Dim = %v, want %v", j.Dim, wantJ)
 	}
+
+	// Megajoule: a flat-table entry, exactly 1e6 J. `M` alone is molar.
+	mj, err := ParseUnit("MJ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !mj.Dim.Equal(wantJ) {
+		t.Errorf("MJ.Dim = %v, want %v", mj.Dim, wantJ)
+	}
+	if mj.Scale != 1e6 {
+		t.Errorf("MJ.Scale = %v, want 1e6", mj.Scale)
+	}
 }
 
 func TestParseUnitDimensionalEquality(t *testing.T) {

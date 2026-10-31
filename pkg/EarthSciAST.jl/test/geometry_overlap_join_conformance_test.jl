@@ -37,8 +37,10 @@ const ESS = EarthSciAST
 include("testutils.jl")  # TESTUTILS_REPO_ROOT
 
 const _OJ_REPO_ROOT = TESTUTILS_REPO_ROOT
-const _OJ_FIXTURE = joinpath(_OJ_REPO_ROOT, "tests", "valid", "geometry",
-                             "conservative_regrid_overlap_join.esm")
+const _OJ_FIXTURE = joinpath(
+    _OJ_REPO_ROOT, "tests", "valid", "geometry",
+    "conservative_regrid_overlap_join.esm"
+)
 
 # A closed axis-aligned spherical cell as a CCW lon/lat vertex ring (degrees).
 _rect(x0, x1, y0, y1) = [x0 y0; x1 y0; x1 y1; x0 y1]
@@ -75,26 +77,30 @@ _oj_const_arrays(A_ij, dst_areas) = Dict(
     "A_ij" => A_ij, "F_src" => _F_SRC, "dst_areas" => dst_areas,
     "src_lon" => _SRC_LON, "src_lat" => _SRC_LAT,
     "tgt_lon" => _TGT_LON, "tgt_lat" => _TGT_LAT,
-    "src_poly_rep" => _SRC[_OJ_REP_I], "tgt_poly_rep" => _TGT[_OJ_REP_J])
+    "src_poly_rep" => _SRC[_OJ_REP_I], "tgt_poly_rep" => _TGT[_OJ_REP_J]
+)
 
 # Drive the overlap-join fixture through build_evaluator, returning
 # (A_j, F_tgt, narrow_phase_area). du = f!(u0) at the zero IC IS the assembled
 # value for each constant-RHS D-equation.
-function _oj_eval(A_ij, dst_areas; atol::Float64=1e-15)
+function _oj_eval(A_ij, dst_areas; atol::Float64 = 1.0e-15)
     # The VALUE-INVENTION broad phase (src_bin/tgt_bin/candidate_pairs) is
     # materialised only on the AbstractDict front-door, so drive the RAW document
     # through build_evaluator (NOT the typed EsmFile path, which skips it).
     raw = JSON3.read(read(_OJ_FIXTURE, String))
     n = length(dst_areas)
-    ics = Dict("narrow_phase_area" => 0.0,
-               ("A_j[$j]" => 0.0 for j in 1:n)...,
-               ("F_tgt[$j]" => 0.0 for j in 1:n)...)
+    ics = Dict(
+        "narrow_phase_area" => 0.0,
+        ("A_j[$j]" => 0.0 for j in 1:n)...,
+        ("F_tgt[$j]" => 0.0 for j in 1:n)...
+    )
     f!, u0, p, _, vmap = EarthSciAST._build_evaluator(
-        raw; model_name="ConservativeRegridOverlapJoin",
-        initial_conditions=ics, const_arrays=_oj_const_arrays(A_ij, dst_areas),
-        parameter_overrides=Dict("dx" => _DX, "dy" => _DY, "atol" => atol))
+        raw; model_name = "ConservativeRegridOverlapJoin",
+        initial_conditions = ics, const_arrays = _oj_const_arrays(A_ij, dst_areas),
+        parameter_overrides = Dict("dx" => _DX, "dy" => _DY, "atol" => atol)
+    )
     du = similar(u0); f!(du, u0, p, 0.0)
-    A_j   = [du[vmap["A_j[$j]"]] for j in 1:n]
+    A_j = [du[vmap["A_j[$j]"]] for j in 1:n]
     F_tgt = [du[vmap["F_tgt[$j]"]] for j in 1:n]
     return A_j, F_tgt, du[vmap["narrow_phase_area"]]
 end
@@ -102,8 +108,8 @@ end
 @testset "M4 conservative-regridding overlap-join end-to-end (ess-3lj.3)" begin
 
     A_ij = _oj_build_Aij()
-    dst_areas = vec(sum(A_ij; dims=1))   # column sums = A_j = dst_areas
-    src_areas = vec(sum(A_ij; dims=2))   # row sums (overlap mass per source cell)
+    dst_areas = vec(sum(A_ij; dims = 1))   # column sums = A_j = dst_areas
+    src_areas = vec(sum(A_ij; dims = 2))   # row sums (overlap mass per source cell)
 
     @testset "fixture loads (schema + structural)" begin
         @test isfile(_OJ_FIXTURE)
@@ -118,9 +124,12 @@ end
         vi = ESS.materialize_value_invention(
             ESS._select_model(_oj_file, "ConservativeRegridOverlapJoin"),
             _oj_file.index_sets,
-            Dict("src_lon" => _SRC_LON, "src_lat" => _SRC_LAT,
-                 "tgt_lon" => _TGT_LON, "tgt_lat" => _TGT_LAT),
-            Dict("dx" => _DX, "dy" => _DY, "atol" => 1e-15))
+            Dict(
+                "src_lon" => _SRC_LON, "src_lat" => _SRC_LAT,
+                "tgt_lon" => _TGT_LON, "tgt_lat" => _TGT_LAT
+            ),
+            Dict("dx" => _DX, "dy" => _DY, "atol" => 1.0e-15)
+        )
         @test vi.members["candidate_set"] == [(1, 1), (1, 2), (2, 1), (2, 2), (3, 3)]
         @test vi.extents["candidate_set"] == 5
         @test vi.vi_var_names == Set(["src_bin", "tgt_bin", "pair_exists"])
@@ -137,8 +146,8 @@ end
     @testset "narrow phase: spherical clip + VOS area FAQ through the evaluator" begin
         A_j, F_tgt, narrow = _oj_eval(A_ij, dst_areas)
         clip = ESS.intersect_polygon(_SRC[_OJ_REP_I], _TGT[_OJ_REP_J], "spherical")
-        @test isapprox(narrow, ESS.polygon_area(clip, "spherical"); rtol=1e-9, atol=1e-14)
-        @test isapprox(narrow, A_ij[_OJ_REP_I, _OJ_REP_J]; rtol=1e-9, atol=1e-14)
+        @test isapprox(narrow, ESS.polygon_area(clip, "spherical"); rtol = 1.0e-9, atol = 1.0e-14)
+        @test isapprox(narrow, A_ij[_OJ_REP_I, _OJ_REP_J]; rtol = 1.0e-9, atol = 1.0e-14)
         @test narrow > 0
     end
 
@@ -152,8 +161,10 @@ end
     # (4)+(5) APPLY + NORMALIZE — F_tgt[j] = (1/dst_areas[j])·Σ_i A_ij·F_src[i].
     @testset "assembly: apply + normalize" begin
         _, F_tgt, _ = _oj_eval(A_ij, dst_areas)
-        F_tgt_expected = [sum(A_ij[i, j] * _F_SRC[i] for i in 1:length(_SRC)) / dst_areas[j]
-                          for j in 1:length(_TGT)]
+        F_tgt_expected = [
+            sum(A_ij[i, j] * _F_SRC[i] for i in 1:length(_SRC)) / dst_areas[j]
+                for j in 1:length(_TGT)
+        ]
         @test F_tgt ≈ F_tgt_expected
     end
 
@@ -164,7 +175,7 @@ end
         A_j, _, _ = _oj_eval(A_ij, dst_areas)
         for j in 1:length(_TGT)
             w_sum = sum(A_ij[i, j] for i in 1:length(_SRC)) / A_j[j]
-            @test isapprox(w_sum, 1.0; rtol=1e-12, atol=1e-12)
+            @test isapprox(w_sum, 1.0; rtol = 1.0e-12, atol = 1.0e-12)
         end
     end
 
@@ -174,7 +185,7 @@ end
     # the cell's own spherical area) holds to the great-circle edge tolerance.
     @testset "CONSERVATION: Σ_j A_j·F_tgt = Σ_i A_i·F_src" begin
         A_j, F_tgt, _ = _oj_eval(A_ij, dst_areas)
-        @test isapprox(sum(A_j .* F_tgt), sum(src_areas .* _F_SRC); rtol=1e-12, atol=1e-12)
+        @test isapprox(sum(A_j .* F_tgt), sum(src_areas .* _F_SRC); rtol = 1.0e-12, atol = 1.0e-12)
         # physical full-coverage: each source cell's overlap mass ≈ its own spherical
         # area, to the GREAT-CIRCLE edge-model tolerance (§5.8.3: "conservation
         # tolerance is application-set and resolution-dependent"). The clip of a cell
@@ -182,7 +193,7 @@ end
         # great-circle top edges, so coverage is exact only up to that edge model
         # (≈1e-5 here); the source cells fully contained in one target are exact.
         for i in 1:length(_SRC)
-            @test isapprox(src_areas[i], ESS.polygon_area(_SRC[i], "spherical"); rtol=1e-4)
+            @test isapprox(src_areas[i], ESS.polygon_area(_SRC[i], "spherical"); rtol = 1.0e-4)
         end
     end
 
@@ -194,8 +205,8 @@ end
         contaminated = copy(A_ij)
         contaminated[1, 3] = 99.0     # src 1 (bin 0) × tgt 3 (bin 1): cross-bin
         A_j, F_tgt, _ = _oj_eval(contaminated, dst_areas)
-        @test isapprox(A_j[3], dst_areas[3]; rtol=1e-12)   # 99.0 excluded
-        @test isapprox(sum(A_j .* F_tgt), sum(src_areas .* _F_SRC); rtol=1e-12)
+        @test isapprox(A_j[3], dst_areas[3]; rtol = 1.0e-12)   # 99.0 excluded
+        @test isapprox(sum(A_j .* F_tgt), sum(src_areas .* _F_SRC); rtol = 1.0e-12)
     end
 
     # The ZERO-AREA FILTER is load-bearing: filter A_ij > atol drops sub-atol
@@ -207,10 +218,10 @@ end
         # atol are scaled to that magnitude: a 1e-9 sliver is dropped by atol=1e-7
         # (well below the real ~1.5e-4 overlaps) and admitted by atol=1e-12.
         slivered = copy(A_ij)
-        slivered[1, 2] = 1e-9         # src 1 (bin 0) × tgt 2 (bin 0): within-bin sliver
-        A_j_drop, _, _ = _oj_eval(slivered, dst_areas; atol=1e-7)
-        @test isapprox(A_j_drop[2], dst_areas[2]; rtol=1e-9)            # dropped
-        A_j_admit, _, _ = _oj_eval(slivered, dst_areas; atol=1e-12)
-        @test isapprox(A_j_admit[2], dst_areas[2] + 1e-9; rtol=1e-5)    # admitted
+        slivered[1, 2] = 1.0e-9         # src 1 (bin 0) × tgt 2 (bin 0): within-bin sliver
+        A_j_drop, _, _ = _oj_eval(slivered, dst_areas; atol = 1.0e-7)
+        @test isapprox(A_j_drop[2], dst_areas[2]; rtol = 1.0e-9)            # dropped
+        A_j_admit, _, _ = _oj_eval(slivered, dst_areas; atol = 1.0e-12)
+        @test isapprox(A_j_admit[2], dst_areas[2] + 1.0e-9; rtol = 1.0e-5)    # admitted
     end
 end

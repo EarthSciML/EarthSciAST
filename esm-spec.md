@@ -350,6 +350,9 @@ Advisory as the fields are, six things are **required** of every binding:
 | `solver_external_unresolved` | `solver.external` contains `${` (§2.2.6). |
 | `solver_time_span_version_too_old` | File declares `esm` < 1.3.0 but `solver` carries `time_span` (§2.2.4). |
 | `solver_time_span_invalid` | `solver.time_span` does not describe an interval: `end` is not after `start`, a timestamp names no calendar day, or the time origin a timestamp needs cannot be read (§2.2.7). |
+| `timestamp_malformed` | A timestamp handed to a binding's clock accessor is not in the `time_span` bound form (§2.2.7). Raised by the accessor (API_SPEC §5.8), never at load. |
+| `timestamp_no_calendar_day` | A timestamp handed to a binding's clock accessor is in the bound form but names no calendar day (§2.2.7). Raised by the accessor, never at load. |
+| `time_origin_invalid` | The time origin a binding's clock accessor reads is present but cannot be read, or the raw `domain` handed to the accessor is not an object (§2.2.7). Raised by the accessor, never at load; a load reports the same fault as `solver_time_span_invalid`. |
 
 #### 2.2.6 `external`: resolving the run-configuration reference
 
@@ -993,7 +996,7 @@ These accompany `faq` in Functional Aggregate Query expressions (RFC semiring-fa
 
 Earth-system models frequently need to serialize operations on arrays and tensors — discretized PDEs, matrix multiplies, stencils, index contractions, block assemblies. The array ops listed in Section 4.2 cover these cases. Their data model mirrors [`SymbolicUtils.jl`](https://github.com/JuliaSymbolics/SymbolicUtils.jl)'s `ArrayOp` and `ArrayMaker` (see `src/types.jl`, `src/arrayop.jl`, `src/arraymaker.jl`).
 
-**Implicit dimensions.** Array ops use an *implicit* dimension model: there is no per-variable `dimensions` field on schema variables. Index symbols are local to the enclosing `faq` node, and lengths are resolved at runtime from the declared `index_sets` and the shapes of the operand arrays. A given string can be a variable reference in most contexts but serves as an index symbol inside `aggregate.output_idx`, `aggregate.expr`, and `aggregate.ranges` keys. Callers must not rely on cross-node scoping of index symbols.
+**Implicit dimensions.** Array ops use an *implicit* dimension model: there is no per-variable `dimensions` field on schema variables. Index symbols are local to the enclosing `faq` node, and lengths are resolved at runtime from the declared `index_sets` and the shapes of the operand arrays. A given string can be a variable reference in most contexts but serves as an index symbol inside `faq.output_idx`, `faq.expr`, and `faq.ranges` keys. Callers must not rely on cross-node scoping of index symbols. **Shadowing (normative).** A name a node binds as a loop symbol — an `output_idx` entry, a `ranges` key, or an `integral`'s `int_var` — denotes that loop index everywhere inside the node's children (`expr`, `filter`, `key`, range bounds, an integrand and any nested node), whatever the node's `op` (`faq`, `argmin`, `argmax`, `integral`, …), even when the component holding the expression declares a variable, parameter or species of the same name: the binder shadows the declaration there. A nested node that rebinds the name shadows it again, and outside the binding node the name keeps its ordinary meaning. Only a bare name is shadowed: a dotted reference such as `j.x` is never a loop index, so its first segment still resolves against the component's declarations (a subsystem `j`) inside a node that binds `j`. So in a model declaring a parameter `j`, the `j` in `faq(output_idx: ["j"], expr: index(u, j))` is the loop index and the `j` in a sibling term `-j * y` is the parameter. Every transform that resolves names against a component's declarations MUST honor this, flattening's dot-namespacing (esm-libraries-spec §4.7.5 step 2) in particular: it prefixes the parameter reference and leaves the bound occurrence as written. (`tests/scoping/index_symbol_shadows_variable.esm`, pinned by the flatten conformance corpus.)
 
 #### 4.3.1 `faq`
 
@@ -1753,7 +1756,7 @@ A binding MUST NOT introduce a ninth axis, and MUST NOT map a registry symbol on
 | Time | `ms` `us` `ns` `min` `h` `hr` `day` `yr` `year` (`yr` = `year` = the **Julian** year, `31557600` s exactly = 365.25 × 86400 — pinned because one binding shipped a 365-day year, 0.0685% short, and a scale error is invisible to dimensional analysis) |
 | Volume | `L` `l` `mL` `gal` |
 | Amount | `kmol` `mmol` `umol` `nmol` `M` |
-| Derived | `Hz` `N` `Pa` `J` `kJ` `cal` `kcal` `W` `kW` `MW` `hp` |
+| Derived | `Hz` `N` `Pa` `J` `kJ` `MJ` `cal` `kcal` `W` `kW` `MW` `hp` |
 | Pressure | `atm` `uatm` `bar` `hPa` `kPa` `mbar` `Torr` `mmHg` `inHg` `psi` |
 | Energy | `erg` `BTU` `Wh` `kWh` |
 | Electromagnetic | `C` `V` `Ohm` `F` `T` |

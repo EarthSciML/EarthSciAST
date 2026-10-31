@@ -12,8 +12,10 @@ using EarthSciAST
 
 const RRC = EarthSciAST
 
-const _RRC_DIR = joinpath(@__DIR__, "..", "..", "..", "tests", "conformance",
-                          "range_restricted_rhs")
+const _RRC_DIR = joinpath(
+    @__DIR__, "..", "..", "..", "tests", "conformance",
+    "range_restricted_rhs"
+)
 
 # ---- the generated state (README "The state") ----
 
@@ -48,9 +50,12 @@ function _rrc_value(v::String, g, ext::Vector{Int})
 end
 
 # The global extents of every block of a whole-domain program.
-_rrc_extents(op) = Dict{String,Vector{Int}}(
-    b.name => Int[last(r) for r in b.storage] for b in vcat(RRC.tile_layout(op).u,
-                                                            RRC.tile_layout(op).aux))
+_rrc_extents(op) = Dict{String, Vector{Int}}(
+    b.name => Int[last(r) for r in b.storage] for b in vcat(
+            RRC.tile_layout(op).u,
+            RRC.tile_layout(op).aux
+        )
+)
 
 # A buffer in `blocks`' layout holding the global state; a storage cell outside
 # the domain takes its periodic image or NaN.
@@ -73,30 +78,39 @@ end
 _rrc_bits(x::Float64) = reinterpret(UInt64, x)
 
 function _rrc_dec(d)
-    RRC.Decomposition(
-        axes = [String(a.index_set) => (period = a.period === nothing ? nothing : Int(a.period),)
-                for a in d.axes],
-        faces = [String(f[1]) => String(f[2]) for f in d.faces])
+    return RRC.Decomposition(
+        axes = [
+            String(a.index_set) => (period = a.period === nothing ? nothing : Int(a.period),)
+                for a in d.axes
+        ],
+        faces = [String(f[1]) => String(f[2]) for f in d.faces]
+    )
 end
 
 _rrc_terms(t) = t == "all" ? :all :
-    [haskey(o, :component) ? RRC.TermOrigin(component = String(o.component)) :
-                             RRC.TermOrigin(coupling = Int(o.coupling)) for o in t]
+    [
+        haskey(o, :component) ? RRC.TermOrigin(component = String(o.component)) :
+        RRC.TermOrigin(coupling = Int(o.coupling)) for o in t
+    ]
 _rrc_writes(w) = w == "all" ? :all : String[String(x) for x in w]
 _rrc_box(b) = [String(k) => Int(v[1]):Int(v[2]) for (k, v) in pairs(b)]
 
 function _rrc_problem(c)
     mp = haskey(c, :metaparameters) ?
-         Dict{String,Int}(String(k) => Int(v) for (k, v) in pairs(c.metaparameters)) :
-         Dict{String,Int}()
-    return RRC.esm_problem(joinpath(_RRC_DIR, c.document), (0.0, 1.0);
-                           metaparameters = mp, compiler = :native)
+        Dict{String, Int}(String(k) => Int(v) for (k, v) in pairs(c.metaparameters)) :
+        Dict{String, Int}()
+    return RRC.esm_problem(
+        joinpath(_RRC_DIR, c.document), (0.0, 1.0);
+        metaparameters = mp, compiler = :native
+    )
 end
 
 function _rrc_op(c, prob)
     prog = RRC.rhs_program(prob)
-    return prog, RRC.select(prog; writes = _rrc_writes(c.selection.writes),
-                            terms = _rrc_terms(c.selection.terms))
+    return prog, RRC.select(
+            prog; writes = _rrc_writes(c.selection.writes),
+            terms = _rrc_terms(c.selection.terms)
+        )
 end
 
 # G: the whole-domain evaluation at the generated state.
@@ -188,8 +202,10 @@ function _rrc_tile_partition(c, prob)
             owned_all = Set{Int}()
             for t in tiling.tiles
                 if shared && du_shared === nothing
-                    tile0 = RRC.restrict(op, dec; owned = _rrc_box(t.owned),
-                                         storage = _rrc_box(t.storage))
+                    tile0 = RRC.restrict(
+                        op, dec; owned = _rrc_box(t.owned),
+                        storage = _rrc_box(t.storage)
+                    )
                     du_shared = fill(NaN, RRC.tile_layout(tile0).n_u)
                 end
                 cov, os, _ = _rrc_check_tile!(op, dec, t, G, ext, prob.p; du_shared = du_shared)
@@ -202,6 +218,7 @@ function _rrc_tile_partition(c, prob)
             @test all(==(1), counts)
         end
     end
+    return
 end
 
 function _rrc_expect_error(f, c)
@@ -219,6 +236,7 @@ function _rrc_expect_error(f, c)
     for k in (:variable, :index_set)
         haskey(c.expect_error, k) && @test occursin(String(c.expect_error[k]), msg)
     end
+    return
 end
 
 _rrc_lane_kind(c) = Symbol(String(c.lane_kind))
@@ -293,6 +311,7 @@ function _rrc_lanes(c, prob)
             end
         end
     end
+    return
 end
 
 # The global cell of a lane element: the lane sets from `cell`, the others from
@@ -331,7 +350,7 @@ function _rrc_selection_sum(c, prob)
         end
     end
     rel = Float64(c.tolerance.rel)
-    @test all(k -> abs(sumG[k] - F[k]) <= rel * sumA[k], eachindex(F))
+    return @test all(k -> abs(sumG[k] - F[k]) <= rel * sumA[k], eachindex(F))
 end
 
 function _rrc_selection_ok(c, prob)
@@ -343,6 +362,7 @@ function _rrc_selection_ok(c, prob)
         n = isempty(b.storage) ? 1 : prod(length, b.storage)
         @test all(==(0.0), G[b.base:(b.base + n - 1)])
     end
+    return
 end
 
 @testset "range_restricted_rhs conformance (§5.50)" begin
@@ -364,13 +384,17 @@ end
             elseif k == "tile_error"
                 _, op = _rrc_op(c, prob)
                 _rrc_expect_error(c) do
-                    RRC.restrict(op, _rrc_dec(c.decomposition); owned = _rrc_box(c.tile.owned),
-                                 storage = _rrc_box(c.tile.storage))
+                    RRC.restrict(
+                        op, _rrc_dec(c.decomposition); owned = _rrc_box(c.tile.owned),
+                        storage = _rrc_box(c.tile.storage)
+                    )
                 end
             elseif k == "halo_ok"
                 _, op = _rrc_op(c, prob)
-                want = Dict((String(r.variable), String(r.index_set)) => (Int(r.lo), Int(r.hi))
-                            for r in c.halo)
+                want = Dict(
+                    (String(r.variable), String(r.index_set)) => (Int(r.lo), Int(r.hi))
+                        for r in c.halo
+                )
                 @test RRC.halo(op, _rrc_dec(c.decomposition)) == want
             elseif k == "halo_error"
                 _, op = _rrc_op(c, prob)

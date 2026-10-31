@@ -169,7 +169,7 @@ function _blas_subst(e, target::OpExpr, repl::ASTExpr)
         newargs[i] = na; n += k
     end
     n == 0 && return (e, 0)
-    return (reconstruct(e; args=newargs), n)
+    return (reconstruct(e; args = newargs), n)
 end
 
 # conc[out…] = Σ_{c∈crange} A[c,out…]·E[c] via ONE BLAS `mul!`. `A` is reshaped to
@@ -178,16 +178,18 @@ end
 # sub-`crange` selects rows through a strided view (still one gemv). The result is
 # reshaped to the output extents column-major — matching A's storage and the
 # const-gather read order — so `conc[out…]` equals the contracted value.
-function _blas_matvec(A::AbstractArray, E::AbstractArray,
-                      crange::AbstractUnitRange, out_sizes::Tuple)
+function _blas_matvec(
+        A::AbstractArray, E::AbstractArray,
+        crange::AbstractUnitRange, out_sizes::Tuple
+    )
     Af = A isa Array{Float64} ? A : Array{Float64}(A)   # dense Float64 ⇒ no copy
     Ef = E isa Vector{Float64} ? E : Vector{Float64}(E)
     N_c = size(Af, 1)
-    K = prod(out_sizes; init=1)
+    K = prod(out_sizes; init = 1)
     Amat = reshape(Af, N_c, K)                          # shares Af's buffer
     full = (first(crange) == 1 && last(crange) == N_c)
     Asel = full ? Amat : view(Amat, crange, :)
-    Esel = full ? Ef   : view(Ef, crange)
+    Esel = full ? Ef : view(Ef, crange)
     conc_flat = Vector{Float64}(undef, K)
     mul!(conc_flat, Asel', Esel)                        # BLAS gemv on A' (no transpose copy)
     return reshape(conc_flat, out_sizes)
@@ -220,12 +222,14 @@ caller falls back to the Phase C compile-once path). Rank-1 and rank-≥2 output
 both handled (via a reshape to `(N_c × ∏out)`). NOT bit-identical to Phase C — see
 the module note — but agrees to machine precision.
 """
-function _evaluate_cellwise_blas(expr::ASTExpr,
-                                 cells::AbstractVector{<:AbstractVector{<:Integer}},
-                                 const_arrays::AbstractDict,
-                                 registered_functions::AbstractDict,
-                                 params::AbstractDict,
-                                 t::Float64=0.0)
+function _evaluate_cellwise_blas(
+        expr::ASTExpr,
+        cells::AbstractVector{<:AbstractVector{<:Integer}},
+        const_arrays::AbstractDict,
+        registered_functions::AbstractDict,
+        params::AbstractDict,
+        t::Float64 = 0.0
+    )
     nidx = length(first(cells))
     (nidx >= 1 && all(c -> length(c) == nidx, cells)) || return nothing
 
@@ -239,14 +243,16 @@ function _evaluate_cellwise_blas(expr::ASTExpr,
     oz = _pd_oplus(agg); oz === nothing && return nothing
     (oz[1] == "+" && oz[2] == 0.0) || return nothing
     # A PLAIN contraction only — no relational join / filter / value-invention.
-    (agg.join === nothing && agg.join_gates === nothing && agg.filter === nothing &&
-     agg.distinct === nothing && agg.key === nothing) || return nothing
+    (
+        agg.join === nothing && agg.join_gates === nothing && agg.filter === nothing &&
+            agg.distinct === nothing && agg.key === nothing
+    ) || return nothing
 
     out_syms = _blas_out_syms(agg)
     (out_syms !== nothing && length(out_syms) == nidx) || return nothing
 
     # Exactly one contracted index (the cell axis summed over), disjoint from outputs.
-    ranges = agg.ranges === nothing ? Dict{String,Any}() : agg.ranges
+    ranges = agg.ranges === nothing ? Dict{String, Any}() : agg.ranges
     length(ranges) == 1 || return nothing
     c_sym = String(first(keys(ranges)))
     c_sym in out_syms && return nothing
@@ -295,14 +301,20 @@ function _evaluate_cellwise_blas(expr::ASTExpr,
     end
     concname = "__esm_blas_conc"
     haskey(const_arrays, concname) && return nothing
-    gather = OpExpr("index", ASTExpr[VarExpr(concname),
-                                     (VarExpr(s) for s in out_syms)...])
+    gather = OpExpr(
+        "index", ASTExpr[
+            VarExpr(concname),
+            (VarExpr(s) for s in out_syms)...,
+        ]
+    )
     expr2, nrep = _blas_subst(expr, agg, gather)
     nrep == 1 || return nothing
-    aug = Dict{String,Any}(String(k) => v for (k, v) in const_arrays)
+    aug = Dict{String, Any}(String(k) => v for (k, v) in const_arrays)
     aug[concname] = conc
-    ce = _cellwise_compile_once(expr2, nidx, aug, registered_functions, params;
-                                bind_syms=out_syms, t=t)
+    ce = _cellwise_compile_once(
+        expr2, nidx, aug, registered_functions, params;
+        bind_syms = out_syms, t = t
+    )
     ce === nothing && return nothing
     return _eval_cells(ce, cells)
 end
@@ -360,9 +372,11 @@ end
 
 # Evaluate the gated aggregate at every cell of `cells` by walking the gate's
 # admitted key sequence and folding the once-compiled term `ce`.
-function _gated_field(ce, out_syms::Vector{String}, contract_names::Vector{String},
-                      contract_iters, gates, oplus::String, zerobar::Float64,
-                      cells::AbstractVector)
+function _gated_field(
+        ce, out_syms::Vector{String}, contract_names::Vector{String},
+        contract_iters, gates, oplus::String, zerobar::Float64,
+        cells::AbstractVector
+    )
     nidx = length(out_syms); nc = length(contract_names)
     sentinel = OpExpr(_GATED_KEYS_OP, ASTExpr[VarExpr(n) for n in contract_names])
     key = Vector{Int}(undef, nidx + nc)
@@ -372,10 +386,12 @@ function _gated_field(ce, out_syms::Vector{String}, contract_names::Vector{Strin
         @inbounds for d in 1:nidx
             key[d] = Int(cell[d])
         end
-        out_env = Dict{String,Int}(out_syms[d] => key[d] for d in 1:nidx)
+        out_env = Dict{String, Int}(out_syms[d] => key[d] for d in 1:nidx)
         acc = zerobar
-        _foreach_aggregate_term(sentinel, contract_names, contract_iters,
-                                gates, nothing, zerobar, out_env) do term
+        _foreach_aggregate_term(
+            sentinel, contract_names, contract_iters,
+            gates, nothing, zerobar, out_env
+        ) do term
             ks = (term::OpExpr).args
             @inbounds for d in 1:nc
                 key[nidx + d] = Int((ks[d]::IntExpr).value)
@@ -395,12 +411,14 @@ Phase E. Returns the evaluated field `Vector{Float64}` when `expr` is — or
 elementwise wraps — a single `faq` carrying resolved `join_gates`, else
 `nothing` (⇒ the caller falls through to the per-cell walk it always had).
 """
-function _evaluate_cellwise_gated(expr::ASTExpr,
-                                  cells::AbstractVector{<:AbstractVector{<:Integer}},
-                                  const_arrays::AbstractDict,
-                                  registered_functions::AbstractDict,
-                                  params::AbstractDict,
-                                  t::Float64=0.0)
+function _evaluate_cellwise_gated(
+        expr::ASTExpr,
+        cells::AbstractVector{<:AbstractVector{<:Integer}},
+        const_arrays::AbstractDict,
+        registered_functions::AbstractDict,
+        params::AbstractDict,
+        t::Float64 = 0.0
+    )
     nidx = length(first(cells))
     (nidx >= 1 && all(c -> length(c) == nidx, cells)) || return nothing
 
@@ -414,16 +432,18 @@ function _evaluate_cellwise_gated(expr::ASTExpr,
     gates === nothing && return nothing
     # A PLAIN gated contraction: no value invention, no table lookup, no
     # integral. Each of these means something the term compile does not express.
-    (agg.distinct === nothing && agg.key === nothing && agg.table === nothing &&
-     agg.table_axes === nothing && agg.int_var === nothing &&
-     agg.lower === nothing && agg.upper === nothing) || return nothing
+    (
+        agg.distinct === nothing && agg.key === nothing && agg.table === nothing &&
+            agg.table_axes === nothing && agg.int_var === nothing &&
+            agg.lower === nothing && agg.upper === nothing
+    ) || return nothing
     body = agg.expr_body
     body === nothing && return nothing
 
     out_syms = _blas_out_syms(agg)
     (out_syms !== nothing && length(out_syms) == nidx) || return nothing
 
-    ranges = agg.ranges === nothing ? Dict{String,Any}() : agg.ranges
+    ranges = agg.ranges === nothing ? Dict{String, Any}() : agg.ranges
     contract_names = _contracted_index_names(ranges, out_syms)
     isempty(contract_names) && return nothing
     # CONSTANT contracted bounds only. A ragged (expression-valued) bound is
@@ -466,16 +486,20 @@ function _evaluate_cellwise_gated(expr::ASTExpr,
     # The guard reads the same loop symbols the body does, so binding them as
     # parameters serves both.
     term = agg.filter === nothing ? body :
-           OpExpr("ifelse", ASTExpr[agg.filter::ASTExpr, body, NumExpr(zerobar)])
+        OpExpr("ifelse", ASTExpr[agg.filter::ASTExpr, body, NumExpr(zerobar)])
     allsyms = String[out_syms...]
     append!(allsyms, contract_names)
-    ce = _scalarwise_compile_once(term, allsyms, const_arrays,
-                                  registered_functions, params; t=t)
+    ce = _scalarwise_compile_once(
+        term, allsyms, const_arrays,
+        registered_functions, params; t = t
+    )
     ce === nothing && return nothing
 
     # BARE: `expr` IS the aggregate, so the requested cells are the answer.
-    expr === agg && return _gated_field(ce, out_syms, contract_names,
-                                        contract_iters, gates, oplus, zerobar, cells)
+    expr === agg && return _gated_field(
+        ce, out_syms, contract_names,
+        contract_iters, gates, oplus, zerobar, cells
+    )
 
     # WRAPPED elementwise form `f(agg[out…])`: materialize the aggregate's whole
     # field once, substitute a gather of it for the aggregate, and compile the
@@ -486,22 +510,34 @@ function _evaluate_cellwise_gated(expr::ASTExpr,
     end
     concname = "__esm_gated_conc"
     haskey(const_arrays, concname) && return nothing
-    allcells = vec(Vector{Int}[collect(Int, Tuple(I))
-                               for I in CartesianIndices(out_sizes)])
-    vals = _gated_field(ce, out_syms, contract_names, contract_iters,
-                        gates, oplus, zerobar, allcells)
+    allcells = vec(
+        Vector{Int}[
+            collect(Int, Tuple(I))
+                for I in CartesianIndices(out_sizes)
+        ]
+    )
+    vals = _gated_field(
+        ce, out_syms, contract_names, contract_iters,
+        gates, oplus, zerobar, allcells
+    )
     conc = Array{Float64}(undef, out_sizes...)
     @inbounds for (i, c) in enumerate(allcells)
         conc[CartesianIndex(Tuple(c))] = vals[i]
     end
-    gather = OpExpr("index", ASTExpr[VarExpr(concname),
-                                     (VarExpr(s) for s in out_syms)...])
+    gather = OpExpr(
+        "index", ASTExpr[
+            VarExpr(concname),
+            (VarExpr(s) for s in out_syms)...,
+        ]
+    )
     expr2, nrep = _blas_subst(expr, agg, gather)
     nrep == 1 || return nothing
-    aug = Dict{String,Any}(String(k) => v for (k, v) in const_arrays)
+    aug = Dict{String, Any}(String(k) => v for (k, v) in const_arrays)
     aug[concname] = conc
-    ce2 = _cellwise_compile_once(expr2, nidx, aug, registered_functions, params;
-                                 bind_syms=out_syms, t=t)
+    ce2 = _cellwise_compile_once(
+        expr2, nidx, aug, registered_functions, params;
+        bind_syms = out_syms, t = t
+    )
     ce2 === nothing && return nothing
     return _eval_cells(ce2, cells)
 end
@@ -532,12 +568,14 @@ assertion passes its own `time` (esm-spec §6.6.3), which is what makes an
 observed that is a function of `t` — a solar declination, an hour angle — read
 correctly away from the start of the span.
 """
-function evaluate_cellwise(expr::ASTExpr, cells::AbstractVector{<:AbstractVector{<:Integer}};
-                           const_arrays::AbstractDict=Dict{String,Any}(),
-                           registered_functions::AbstractDict=Dict{String,Function}(),
-                           params::AbstractDict=Dict{String,Float64}(),
-                           blas_accel::Bool=false,
-                           t::Float64=0.0)::Vector{Float64}
+function evaluate_cellwise(
+        expr::ASTExpr, cells::AbstractVector{<:AbstractVector{<:Integer}};
+        const_arrays::AbstractDict = Dict{String, Any}(),
+        registered_functions::AbstractDict = Dict{String, Function}(),
+        params::AbstractDict = Dict{String, Float64}(),
+        blas_accel::Bool = false,
+        t::Float64 = 0.0
+    )::Vector{Float64}
     isempty(cells) && return Float64[]
     # OPT-IN BLAS accelerator (wall2 Phase D): when `blas_accel=true` and the
     # observed is (or elementwise-wraps) the linear sum-product mat-vec
@@ -549,8 +587,10 @@ function evaluate_cellwise(expr::ASTExpr, cells::AbstractVector{<:AbstractVector
     # machine precision (BLAS sums in a different order — NOT bit-identical).
     # `blas_accel=false` (default) skips it entirely ⇒ behaviour is unchanged.
     if blas_accel
-        blas = _evaluate_cellwise_blas(expr, cells, const_arrays,
-                                       registered_functions, params, t)
+        blas = _evaluate_cellwise_blas(
+            expr, cells, const_arrays,
+            registered_functions, params, t
+        )
         blas === nothing || return blas
     end
     # Compile-once fast path (wall2 Phase C — THE Wall #2 fix): resolve+compile the
@@ -567,8 +607,10 @@ function evaluate_cellwise(expr::ASTExpr, cells::AbstractVector{<:AbstractVector
     # the strict compiler's refusal.
     nidx = length(first(cells))
     if all(c -> length(c) == nidx, cells)
-        ce = _cellwise_compile_once(expr, nidx, const_arrays, registered_functions,
-                                    params; t=t)
+        ce = _cellwise_compile_once(
+            expr, nidx, const_arrays, registered_functions,
+            params; t = t
+        )
         ce === nothing || return _eval_cells(ce, cells)
         # The GATED aggregate the plain compile-once form cannot keep symbolic:
         # its admitted terms are chosen per output cell by a build-time join
@@ -577,8 +619,10 @@ function evaluate_cellwise(expr::ASTExpr, cells::AbstractVector{<:AbstractVector
         # every loop symbol, output and contracted alike, bound as a parameter —
         # and walks the gate's own admitted key sequence. Still one compile for
         # the whole field; `nothing` on any shape it does not recognise.
-        gated = _evaluate_cellwise_gated(expr, cells, const_arrays,
-                                         registered_functions, params, t)
+        gated = _evaluate_cellwise_gated(
+            expr, cells, const_arrays,
+            registered_functions, params, t
+        )
         gated === nothing || return gated
     end
     _tally_cascade!(:cellwise_percell)
@@ -587,17 +631,25 @@ function evaluate_cellwise(expr::ASTExpr, cells::AbstractVector{<:AbstractVector
     # `E_TREEWALK_CONSTARRAY_OOB` — so a strict compiler's probe evaluates the
     # first cell, for its diagnostic only, and the refusal is raised when it
     # succeeds.
-    lic = _percell_evaluation_license("(build-time observed / reference)",
+    lic = _percell_evaluation_license(
+        "(build-time observed / reference)",
         "the build-time cellwise evaluator", length(cells);
-        probe = pr -> _eval_cellwise(pr, expr, collect(Int, first(cells));
-                                     const_arrays=const_arrays,
-                                     registered_functions=registered_functions,
-                                     params=params, t=t))
-    vals = Float64[_eval_cellwise(lic, expr, collect(Int, c);
-                                  const_arrays=const_arrays,
-                                  registered_functions=registered_functions,
-                                  params=params, t=t)
-                   for c in cells]
+        probe = pr -> _eval_cellwise(
+            pr, expr, collect(Int, first(cells));
+            const_arrays = const_arrays,
+            registered_functions = registered_functions,
+            params = params, t = t
+        )
+    )
+    vals = Float64[
+        _eval_cellwise(
+            lic, expr, collect(Int, c);
+            const_arrays = const_arrays,
+            registered_functions = registered_functions,
+            params = params, t = t
+        )
+            for c in cells
+    ]
     _note_percell!()
     return vals
 end
@@ -619,15 +671,21 @@ Collapse a spatial field to the scalar a §6.6.5 `reduce` assertion compares
   be scaled by the author until the spec grows a measure concept.
 - `"mean" | "max" | "min"` — pure collapsers of `actual`.
 """
-function field_reduce(kind::AbstractString, actual::AbstractVector{<:Real};
-                      reference::Union{Nothing,AbstractVector{<:Real}}=nothing)::Float64
+function field_reduce(
+        kind::AbstractString, actual::AbstractVector{<:Real};
+        reference::Union{Nothing, AbstractVector{<:Real}} = nothing
+    )::Float64
     k = String(kind)
     if k == "L2_error" || k == "Linf_error"
         reference === nothing &&
             throw(ArgumentError("field_reduce: `$(k)` requires a reference field"))
         length(reference) == length(actual) ||
-            throw(ArgumentError("field_reduce: actual has $(length(actual)) cells " *
-                                "but reference has $(length(reference))"))
+            throw(
+            ArgumentError(
+                "field_reduce: actual has $(length(actual)) cells " *
+                    "but reference has $(length(reference))"
+            )
+        )
         diff = Float64[Float64(a) - Float64(r) for (a, r) in zip(actual, reference)]
         if k == "L2_error"
             refnorm = sqrt(sum(abs2(Float64(r)) for r in reference))
@@ -659,8 +717,10 @@ end
 # collect the exact qualified / exact-bare stems first, and only fall back to
 # the bare-suffix match when no exact stem is present (a bare-keyed single-model
 # build). Same qualified-first hardening as the Python `state_cells`.
-function _state_cells(var_map::StateLayout, variable::AbstractString,
-                      model::AbstractString)
+function _state_cells(
+        var_map::StateLayout, variable::AbstractString,
+        model::AbstractString
+    )
     # The same two-pass match, over the layout's blocks rather than its keys.
     qualified = String(model) * "." * String(variable)
     exact = _ArrayBlock[]
@@ -669,7 +729,7 @@ function _state_cells(var_map::StateLayout, variable::AbstractString,
         if b.name == qualified || b.name == String(variable)
             push!(exact, b)
         else
-            bare = occursin('.', b.name) ? String(split(b.name, '.'; limit=2)[2]) : b.name
+            bare = occursin('.', b.name) ? String(split(b.name, '.'; limit = 2)[2]) : b.name
             bare == String(variable) && push!(fallback, b)
         end
     end
@@ -679,21 +739,23 @@ end
 # Every `(cell, slot)` of `blocks`, in slot order and then sorted by cell — the
 # order the key-parsing forms below produce.
 function _block_cell_pairs(blocks)
-    out = Tuple{Vector{Int},Int}[]
+    out = Tuple{Vector{Int}, Int}[]
     for b in blocks
         for slot in b.base:(b.base + b.len - 1)
             push!(out, (_block_cell(b, slot), slot))
         end
     end
-    sort!(out; by=first)
+    sort!(out; by = first)
     return out
 end
 
-function _state_cells(var_map::AbstractDict, variable::AbstractString,
-                      model::AbstractString)
+function _state_cells(
+        var_map::AbstractDict, variable::AbstractString,
+        model::AbstractString
+    )
     qualified = String(model) * "." * String(variable)
-    exact = Tuple{Vector{Int},Int}[]
-    fallback = Tuple{Vector{Int},Int}[]
+    exact = Tuple{Vector{Int}, Int}[]
+    fallback = Tuple{Vector{Int}, Int}[]
     for (name, slot) in var_map
         # `_parse_cell_key` (tree_walk.jl) is the single inverse of
         # `_cell_key`'s "name[i,j]" encoding — no local regex.
@@ -703,12 +765,12 @@ function _state_cells(var_map::AbstractDict, variable::AbstractString,
         if stem == qualified || stem == String(variable)
             push!(exact, (cell, Int(slot)))
         else
-            bare = occursin('.', stem) ? String(split(stem, '.'; limit=2)[2]) : stem
+            bare = occursin('.', stem) ? String(split(stem, '.'; limit = 2)[2]) : stem
             bare == String(variable) && push!(fallback, (cell, Int(slot)))
         end
     end
     out = isempty(exact) ? fallback : exact
-    sort!(out; by=first)
+    sort!(out; by = first)
     return out
 end
 
@@ -747,9 +809,11 @@ end
 # The suffix enumeration is the override resolver's own `_dotted_suffixes`
 # (src/tree_walk/build.jl), shared rather than re-derived so the two positions
 # cannot drift apart again.
-function _param_scope_with_aliases(params::AbstractDict,
-                                   owner::AbstractString="")::Dict{String,Float64}
-    out = Dict{String,Float64}(String(k) => Float64(v) for (k, v) in params)
+function _param_scope_with_aliases(
+        params::AbstractDict,
+        owner::AbstractString = ""
+    )::Dict{String, Float64}
+    out = Dict{String, Float64}(String(k) => Float64(v) for (k, v) in params)
     # (2) The owner's own namespace, as its equations spell it.
     if !isempty(owner)
         prefix = String(owner) * "."
@@ -761,7 +825,7 @@ function _param_scope_with_aliases(params::AbstractDict,
         end
     end
     # (3) Globally unambiguous dotted suffixes.
-    counts = Dict{String,Int}()
+    counts = Dict{String, Int}()
     for k in keys(params)
         for suffix in _dotted_suffixes(String(k))
             counts[suffix] = get(counts, suffix, 0) + 1
@@ -797,24 +861,27 @@ function _state_scope(var_map::StateLayout, state::AbstractVector)
     # block, so its sample is a reshaped slice, with no key made or parsed. A
     # block whose box does not start at 1 does not tile a dense 1-based array
     # and is skipped, as below.
-    arrays = Dict{String,Any}()
-    scalars = Dict{String,Float64}()
+    arrays = Dict{String, Any}()
+    scalars = Dict{String, Float64}()
     for (i, s) in enumerate(_layout_scalar_names(var_map))
         i <= length(state) && (scalars[s] = Float64(state[i]))
     end
     for b in _layout_blocks(var_map)
         (all(==(1), b.lo) && b.base + b.len - 1 <= length(state)) || continue
         ext = Tuple(b.hi[d] - b.lo[d] + 1 for d in eachindex(b.lo))
-        arrays[b.name] = Array{Float64}(reshape(
-            Float64[state[k] for k in b.base:(b.base + b.len - 1)], ext))
+        arrays[b.name] = Array{Float64}(
+            reshape(
+                Float64[state[k] for k in b.base:(b.base + b.len - 1)], ext
+            )
+        )
     end
     return arrays, scalars
 end
 
 function _state_scope(var_map::AbstractDict, state::AbstractVector)
-    arrays = Dict{String,Any}()
-    scalars = Dict{String,Float64}()
-    cells = Dict{String,Vector{Tuple{Vector{Int},Int}}}()
+    arrays = Dict{String, Any}()
+    scalars = Dict{String, Float64}()
+    cells = Dict{String, Vector{Tuple{Vector{Int}, Int}}}()
     for (name, slot) in var_map
         s = String(name)
         i = Int(slot)
@@ -824,7 +891,7 @@ function _state_scope(var_map::AbstractDict, state::AbstractVector)
             scalars[s] = Float64(state[i])
         else
             stem, cell = parsed
-            push!(get!(cells, String(stem), Tuple{Vector{Int},Int}[]), (cell, i))
+            push!(get!(cells, String(stem), Tuple{Vector{Int}, Int}[]), (cell, i))
         end
     end
     for (stem, entries) in cells
@@ -845,8 +912,10 @@ end
 # sized at build time. Shared by the observed-field materialization and the
 # per-cell lift of an author-level observed body, so both enumerate the same
 # cells from the same index-set registry.
-function _shape_extents(insp::BuildInspection, file::EsmFile,
-                        shape)::Union{Vector{Int},Nothing}
+function _shape_extents(
+        insp::BuildInspection, file::EsmFile,
+        shape
+    )::Union{Vector{Int}, Nothing}
     exts = Int[]
     for s in shape
         iset = get(file.index_sets, String(s), nothing)
@@ -883,8 +952,10 @@ end
 # is the single-model build. Reading the bare key while some `<other>.<name>`
 # exists would answer an `M2` assertion with `M1`'s buffer, which is exactly
 # what the two-pass rule elsewhere in this file exists to prevent.
-function _const_array_key(insp::BuildInspection, mname::AbstractString,
-                          name::AbstractString)::Union{String,Nothing}
+function _const_array_key(
+        insp::BuildInspection, mname::AbstractString,
+        name::AbstractString
+    )::Union{String, Nothing}
     qual = String(mname) * "." * String(name)
     haskey(insp.const_arrays, qual) && return qual
     haskey(insp.const_arrays, String(name)) || return nothing
@@ -930,28 +1001,32 @@ end
 # diagnose). `chain` is the path from the asserted name down to this one, NOT
 # the set of everything visited: two siblings that read the same dead observed
 # are a DIAMOND, not a cycle, and each must resolve it.
-function _authored_observed_body(insp::BuildInspection, file::EsmFile, model::Model,
-                                 mname::AbstractString, variable::AbstractString,
-                                 exts::Vector{Int},
-                                 chain::Vector{String}=String[];
-                                 state_arrays::AbstractDict=Dict{String,Any}(),
-                                 state_scalars::AbstractDict=Dict{String,Float64}())
+function _authored_observed_body(
+        insp::BuildInspection, file::EsmFile, model::Model,
+        mname::AbstractString, variable::AbstractString,
+        exts::Vector{Int},
+        chain::Vector{String} = String[];
+        state_arrays::AbstractDict = Dict{String, Any}(),
+        state_scalars::AbstractDict = Dict{String, Float64}()
+    )
     String(variable) in chain && return nothing
     chain = vcat(chain, String(variable))
     body = observed_definition(model, String(variable))
     body === nothing && return nothing
 
     observed_here = Set{String}(observed_unknowns(model))
-    var_shapes = Dict{String,Vector{String}}()
+    var_shapes = Dict{String, Vector{String}}()
     for (n, mv) in model.variables
         mv.shape === nothing && continue
         var_shapes[String(n)] = String[String(x) for x in mv.shape]
     end
-    arrayvars = Set{String}(String(n) for (n, mv) in model.variables
-                            if _is_array_shape(mv.shape))
+    arrayvars = Set{String}(
+        String(n) for (n, mv) in model.variables
+            if _is_array_shape(mv.shape)
+    )
 
     # (1) Resolve the other observeds this body names.
-    subs = Dict{String,ASTExpr}()
+    subs = Dict{String, ASTExpr}()
     for n in free_variables(body)
         name = String(n)
         (name == String(variable) || !(name in observed_here)) && continue
@@ -964,9 +1039,11 @@ function _authored_observed_body(insp::BuildInspection, file::EsmFile, model::Mo
             nshape = nested.shape === nothing ? String[] : nested.shape
             nexts = _shape_extents(insp, file, nshape)
             producer = nexts === nothing ? nothing :
-                _authored_observed_body(insp, file, model, mname, name, nexts, chain;
-                                        state_arrays=state_arrays,
-                                        state_scalars=state_scalars)
+                _authored_observed_body(
+                    insp, file, model, mname, name, nexts, chain;
+                    state_arrays = state_arrays,
+                    state_scalars = state_scalars
+                )
         end
         producer === nothing || (subs[name] = producer)
     end
@@ -978,18 +1055,22 @@ function _authored_observed_body(insp::BuildInspection, file::EsmFile, model::Mo
     # and the §4.3.4 alignment then cannot drift from the promotion that minted
     # the published bodies this one stands in for.
     if !isempty(exts)
-        body = _lift_to_faq(body, get(var_shapes, String(variable), String[]),
-                                arrayvars, var_shapes; bounds=exts)
+        body = _lift_to_faq(
+            body, get(var_shapes, String(variable), String[]),
+            arrayvars, var_shapes; bounds = exts
+        )
     end
 
     # (3) Rewrite bare operand names into the build's flattened scope.
-    renames = Dict{String,ASTExpr}()
+    renames = Dict{String, ASTExpr}()
     for n in free_variables(body)
         name = String(n)
         haskey(renames, name) && continue
         qual = String(mname) * "." * name
-        (haskey(insp.const_arrays, qual) || haskey(insp.params, qual) ||
-         haskey(state_arrays, qual) || haskey(state_scalars, qual)) || continue
+        (
+            haskey(insp.const_arrays, qual) || haskey(insp.params, qual) ||
+                haskey(state_arrays, qual) || haskey(state_scalars, qual)
+        ) || continue
         renames[name] = VarExpr(qual)
     end
     isempty(renames) || (body = substitute(body, renames))
@@ -999,12 +1080,14 @@ function _authored_observed_body(insp::BuildInspection, file::EsmFile, model::Mo
     # `[1, index(offsets, of…)]` bound, the offsets factor bound by bare name
     # to the in-scope array.
     if _has_index_set_ref(body)
-        scope = Dict{String,Nothing}(String(k) => nothing for k in keys(insp.const_arrays))
+        scope = Dict{String, Nothing}(String(k) => nothing for k in keys(insp.const_arrays))
         for k in keys(state_arrays)
             scope[String(k)] = nothing
         end
-        body = _resolve_isr(body, file.index_sets, insp.derived_extents,
-                            _ragged_factor_scope(file.index_sets, scope))
+        body = _resolve_isr(
+            body, file.index_sets, insp.derived_extents,
+            _ragged_factor_scope(file.index_sets, scope)
+        )
     end
     return body
 end
@@ -1077,8 +1160,10 @@ end
 # unchanged against `mname`, and the caller reports it exactly as before.
 # Identical to the Python `_resolve_asserted_name` and the Rust
 # `resolve_asserted_name`.
-function _resolve_asserted_name(file::EsmFile, mname::AbstractString,
-                                variable::AbstractString)
+function _resolve_asserted_name(
+        file::EsmFile, mname::AbstractString,
+        variable::AbstractString
+    )
     m = String(mname)
     v = String(variable)
     cut = findlast('.', v)
@@ -1098,9 +1183,11 @@ end
 # scoped twin of `_scalar_slot`, whose bare-name passes would return a
 # same-named row belonging to ANOTHER component. Identical to the Python
 # `_scoped_scalar_slot` and the Rust `scoped_scalar_slot`.
-function _scoped_scalar_slot(var_map::AbstractDict, owner::AbstractString,
-                             variable::AbstractString,
-                             renames::AbstractDict=Dict{String,String}())::Int
+function _scoped_scalar_slot(
+        var_map::AbstractDict, owner::AbstractString,
+        variable::AbstractString,
+        renames::AbstractDict = Dict{String, String}()
+    )::Int
     qualified = String(owner) * "." * String(variable)
     for (name, slot) in var_map
         String(name) == qualified && return Int(slot)
@@ -1121,24 +1208,32 @@ end
 # bare-suffix fallback would splice another component's cells into the field.
 # Identical to the Python `_scoped_state_cells` and the Rust
 # `scoped_state_cells`.
-function _scoped_state_cells(var_map::StateLayout, owner::AbstractString,
-                             variable::AbstractString)
+function _scoped_state_cells(
+        var_map::StateLayout, owner::AbstractString,
+        variable::AbstractString
+    )
     qualified = String(owner) * "." * String(variable)
-    return _block_cell_pairs(_ArrayBlock[b for b in _layout_blocks(var_map)
-                                         if b.name == qualified])
+    return _block_cell_pairs(
+        _ArrayBlock[
+            b for b in _layout_blocks(var_map)
+                if b.name == qualified
+        ]
+    )
 end
 
-function _scoped_state_cells(var_map::AbstractDict, owner::AbstractString,
-                             variable::AbstractString)
+function _scoped_state_cells(
+        var_map::AbstractDict, owner::AbstractString,
+        variable::AbstractString
+    )
     qualified = String(owner) * "." * String(variable)
-    out = Tuple{Vector{Int},Int}[]
+    out = Tuple{Vector{Int}, Int}[]
     for (name, slot) in var_map
         parsed = _parse_cell_key(String(name))
         parsed === nothing && continue
         stem, cell = parsed
         stem == qualified && push!(out, (cell, Int(slot)))
     end
-    sort!(out; by=first)
+    sort!(out; by = first)
     return out
 end
 
@@ -1148,7 +1243,7 @@ end
 # the build's own parameter NamedTuple, `ctx.p`.
 _params_at(params::AbstractDict, ::Nothing, ctx) = params
 function _params_at(params::AbstractDict, p::NamedTuple, ctx)
-    out = Dict{String,Float64}(String(k) => Float64(v) for (k, v) in params)
+    out = Dict{String, Float64}(String(k) => Float64(v) for (k, v) in params)
     for (k, v) in pairs(p)
         v isa Real && (out[String(k)] = Float64(v))
     end
@@ -1156,21 +1251,26 @@ function _params_at(params::AbstractDict, p::NamedTuple, ctx)
 end
 function _params_at(params::AbstractDict, p::AbstractVector, ctx)
     names = ctx === nothing || !(ctx.p isa NamedTuple) ? () : keys(ctx.p)
-    length(names) == length(p) || throw(SimulateError(
-        "observed_field: the parameter vector has $(length(p)) elements but the " *
-        "build's parameter set has $(length(names))"))
+    length(names) == length(p) || throw(
+        SimulateError(
+            "observed_field: the parameter vector has $(length(p)) elements but the " *
+                "build's parameter set has $(length(names))"
+        )
+    )
     return _params_at(params, NamedTuple{names}(Tuple(p)), ctx)
 end
 
-function _observed_field(insp::BuildInspection, file::EsmFile,
-                         mname::AbstractString, variable::AbstractString;
-                         state_arrays::AbstractDict=Dict{String,Any}(),
-                         state_scalars::AbstractDict=Dict{String,Float64}(),
-                         ctx=nothing,
-                         u::Union{Nothing,AbstractVector}=nothing,
-                         t::Union{Nothing,Real}=nothing,
-                         var_map::Union{Nothing,AbstractDict}=nothing,
-                         p=nothing)
+function _observed_field(
+        insp::BuildInspection, file::EsmFile,
+        mname::AbstractString, variable::AbstractString;
+        state_arrays::AbstractDict = Dict{String, Any}(),
+        state_scalars::AbstractDict = Dict{String, Float64}(),
+        ctx = nothing,
+        u::Union{Nothing, AbstractVector} = nothing,
+        t::Union{Nothing, Real} = nothing,
+        var_map::Union{Nothing, AbstractDict} = nothing,
+        p = nothing
+    )
     # `p` is the reading problem's parameter carrier (a `remake` may have
     # swapped it since the build); `nothing` reads the build's own values.
     # `models === nothing` for a document that is reaction systems only, whose
@@ -1210,10 +1310,13 @@ function _observed_field(insp::BuildInspection, file::EsmFile,
     if bname !== nothing && (cascade || _obs_reaches_recurrence(ctx, bname))
         prog = _observed_program!(ctx, bname)
         if prog !== nothing && prog.dims == exts
-            (u === nothing && prog.reads_state) && throw(SimulateError(
-                "observed '$(variable)' reads the continuous state, so it is not " *
-                "a build-time field; pass the state to read it at, " *
-                "`observed_field(prob, name; u = …, t = …)`"))
+            (u === nothing && prog.reads_state) && throw(
+                SimulateError(
+                    "observed '$(variable)' reads the continuous state, so it is not " *
+                        "a build-time field; pass the state to read it at, " *
+                        "`observed_field(prob, name; u = …, t = …)`"
+                )
+            )
             vals = _run_observed_program(ctx, prog, u, tval, p)
             # Under the interpreter the program's fills are walked per cell.
             cascade ? _note_program_read!() : _note_percell!()
@@ -1234,13 +1337,19 @@ function _observed_field(insp::BuildInspection, file::EsmFile,
     # The build-time route reads the state out of `var_map` at `u`, when the
     # caller gave a state and not the scope itself.
     if u !== nothing && var_map !== nothing && isempty(state_arrays) &&
-       isempty(state_scalars)
+            isempty(state_scalars)
         state_arrays, state_scalars = _state_scope(var_map, u)
     end
     (t !== nothing && !haskey(state_scalars, "t")) &&
-        (state_scalars = merge(Dict{String,Float64}(String(k) => Float64(v)
-                                                    for (k, v) in state_scalars),
-                               Dict("t" => tval)))
+        (
+        state_scalars = merge(
+            Dict{String, Float64}(
+                String(k) => Float64(v)
+                    for (k, v) in state_scalars
+            ),
+            Dict("t" => tval)
+        )
+    )
     # NEITHER form published, but the build MATERIALIZED the field: an observed
     # whose body is build-once (a document-literal `const` array, a setup
     # geometry buffer) is dropped from the observed graph precisely because its
@@ -1252,7 +1361,7 @@ function _observed_field(insp::BuildInspection, file::EsmFile,
         if buf isa AbstractArray && eltype(buf) <: Real && size(buf) == Tuple(exts)
             # Row-major is column-major of the axes reversed.
             vals = ndims(buf) <= 1 ? Vector{Float64}(vec(buf)) :
-                   Vector{Float64}(vec(permutedims(buf, ndims(buf):-1:1)))
+                Vector{Float64}(vec(permutedims(buf, ndims(buf):-1:1)))
             return (vals, cells)
         end
     end
@@ -1273,22 +1382,31 @@ function _observed_field(insp::BuildInspection, file::EsmFile,
     # once over the cells (`_authored_via_programs`); when that cannot serve
     # it, the authored body below.
     if expr === nothing && ctx !== nothing
-        got = _authored_via_programs(ctx, insp, qualified, cells, u, tval, p, String(mname),
-                                     state_arrays, state_scalars)
+        got = _authored_via_programs(
+            ctx, insp, qualified, cells, u, tval, p, String(mname),
+            state_arrays, state_scalars
+        )
         got === nothing || return (got, cells)
     end
     if expr === nothing
-        expr = _authored_observed_body(insp, file, model, String(mname),
-                                       String(variable), exts;
-                                       state_arrays=state_arrays,
-                                       state_scalars=state_scalars)
+        expr = _authored_observed_body(
+            insp, file, model, String(mname),
+            String(variable), exts;
+            state_arrays = state_arrays,
+            state_scalars = state_scalars
+        )
     end
     expr === nothing && return nothing
     params = _param_scope_with_aliases(_params_at(insp.params, p, ctx), String(mname))
     # The trajectory sample wins over a same-named build constant: a name that
     # is a STATE is not a constant, and its value at this time is the answer.
-    isempty(state_scalars) || (params = merge(params, Dict{String,Float64}(
-        String(k) => Float64(v) for (k, v) in state_scalars)))
+    isempty(state_scalars) || (
+        params = merge(
+            params, Dict{String, Float64}(
+                String(k) => Float64(v) for (k, v) in state_scalars
+            )
+        )
+    )
     # TIME travels on its own argument, not in `params`: the compiler maps the
     # name `t` to the evaluator's time slot and never reads a parameter called
     # `t`, so an observed that is a function of `t` — `y = a·t`, a solar
@@ -1296,8 +1414,10 @@ function _observed_field(insp::BuildInspection, file::EsmFile,
     # through (issue #406). The callsites seed `state_scalars["t"]` with the
     # sampled time; `0.0` is the build-time default for every other caller.
     const_scope = isempty(state_arrays) ? insp.const_arrays :
-        merge(Dict{String,Any}(String(k) => v for (k, v) in insp.const_arrays),
-              Dict{String,Any}(String(k) => v for (k, v) in state_arrays))
+        merge(
+            Dict{String, Any}(String(k) => v for (k, v) in insp.const_arrays),
+            Dict{String, Any}(String(k) => v for (k, v) in state_arrays)
+        )
     # Try the cheap path FIRST, and fall back on any failure. The un-inlined
     # definition names its producers, so it only evaluates when every one of
     # them was materialized; a producer this build-time scope cannot evaluate
@@ -1323,20 +1443,28 @@ function _observed_field(insp::BuildInspection, file::EsmFile,
         n0 = _percell_mark()
         try
             pread = (ctx === nothing || !cascade) ? nothing : (n, ex) -> begin
-                bn = _program_build_name(ctx, String(mname) * "." * n, n)
-                bn === nothing && return nothing
-                prog = _observed_program!(ctx, bn)
-                (prog === nothing || prog.dims != ex ||
-                 (u === nothing && prog.reads_state)) && return nothing
-                _note_program_read!()
-                return _run_observed_program(ctx, prog, u, tval, p)
-            end
-            ca = _materialized_obs_scope(insp, file, mname, String(variable), params;
-                                         base=const_scope, t=tval, program_read=pread)
+                    bn = _program_build_name(ctx, String(mname) * "." * n, n)
+                    bn === nothing && return nothing
+                    prog = _observed_program!(ctx, bn)
+                    (
+                        prog === nothing || prog.dims != ex ||
+                        (u === nothing && prog.reads_state)
+                    ) && return nothing
+                    _note_program_read!()
+                    return _run_observed_program(ctx, prog, u, tval, p)
+                end
+            ca = _materialized_obs_scope(
+                insp, file, mname, String(variable), params;
+                base = const_scope, t = tval, program_read = pread
+            )
             if ca !== const_scope                # something actually materialized
-                return (evaluate_cellwise(raw, cells; const_arrays=ca, params=params,
-                                          t=tval),
-                        cells)
+                return (
+                    evaluate_cellwise(
+                        raw, cells; const_arrays = ca, params = params,
+                        t = tval
+                    ),
+                    cells,
+                )
             end
         catch
             # fall through to the inlined form below; whatever the abandoned
@@ -1344,8 +1472,10 @@ function _observed_field(insp::BuildInspection, file::EsmFile,
             _percell_restore!(n0)
         end
     end
-    field = evaluate_cellwise(expr, cells; const_arrays=const_scope, params=params,
-                              t=tval)
+    field = evaluate_cellwise(
+        expr, cells; const_arrays = const_scope, params = params,
+        t = tval
+    )
     return (field, cells)
 end
 
@@ -1356,13 +1486,15 @@ end
 # scope. `nothing` when the equation, or any observed it reads, has no such
 # form, or the body does not compile once; the caller then takes the authored
 # route.
-function _authored_via_programs(ctx, insp::BuildInspection, qualified::String, cells,
-                                u, t::Float64, p, mname::String,
-                                state_arrays::AbstractDict, state_scalars::AbstractDict)
+function _authored_via_programs(
+        ctx, insp::BuildInspection, qualified::String, cells,
+        u, t::Float64, p, mname::String,
+        state_arrays::AbstractDict, state_scalars::AbstractDict
+    )
     # One array scope and one parameter scope for the whole recursion: a field
     # filled at any level is the same named observed at the same state and time
     # wherever else it is read, so a level reuses what a deeper one filled.
-    ca = Dict{String,Any}(String(k) => v for (k, v) in insp.const_arrays)
+    ca = Dict{String, Any}(String(k) => v for (k, v) in insp.const_arrays)
     for (k, v) in state_arrays
         ca[String(k)] = v
     end
@@ -1373,8 +1505,10 @@ function _authored_via_programs(ctx, insp::BuildInspection, qualified::String, c
     return _authored_via_programs!(ca, params, ctx, qualified, cells, u, t, p, 0)
 end
 
-function _authored_via_programs!(ca::Dict{String,Any}, params::Dict{String,Float64}, ctx,
-                                 qualified::String, cells, u, t::Float64, p, depth::Int)
+function _authored_via_programs!(
+        ca::Dict{String, Any}, params::Dict{String, Float64}, ctx,
+        qualified::String, cells, u, t::Float64, p, depth::Int
+    )
     # The build's model names the observed without the document's outer scope
     # (`Flattened.M.x` asserted, `M.x` built): the longest dotted suffix it has.
     body = nothing
@@ -1382,7 +1516,7 @@ function _authored_via_programs!(ca::Dict{String,Any}, params::Dict{String,Float
     while true
         body = observed_definition(ctx.model, name)
         (body !== nothing || !occursin('.', name)) && break
-        name = name[findfirst('.', name)+1:end]
+        name = name[(findfirst('.', name) + 1):end]
     end
     body === nothing && return nothing
     qualified = name
@@ -1396,8 +1530,8 @@ function _authored_via_programs!(ca::Dict{String,Any}, params::Dict{String,Float
         a = get(ca, n, nothing)
         v = get(ctx.model.variables, n, nothing)
         rank = a isa AbstractArray ? ndims(a) :
-               (haskey(params, n) || v === nothing || v.shape === nothing) ? 0 :
-               length(v.shape)
+            (haskey(params, n) || v === nothing || v.shape === nothing) ? 0 :
+            length(v.shape)
         (rank == 0 || rank == nidx) || return nothing
     end
     for n in _referenced_var_names(body)
@@ -1414,15 +1548,19 @@ function _authored_via_programs!(ca::Dict{String,Any}, params::Dict{String,Float
                 (is isa IndexSet && is.size isa Int && is.size > 0) || return nothing
                 push!(ext, is.size)
             end
-            vals = _authored_via_programs!(ca, params, ctx, n, _row_major_cells(ext), u,
-                                           t, p, depth + 1)
+            vals = _authored_via_programs!(
+                ca, params, ctx, n, _row_major_cells(ext), u,
+                t, p, depth + 1
+            )
             vals === nothing && return nothing
             if isempty(ext)
                 params[n] = Float64(vals[1])
             else
                 ca[n] = length(ext) == 1 ? Vector{Float64}(vals) :
-                        permutedims(reshape(Vector{Float64}(vals), reverse(ext)...),
-                                    length(ext):-1:1)
+                    permutedims(
+                        reshape(Vector{Float64}(vals), reverse(ext)...),
+                        length(ext):-1:1
+                    )
             end
             continue
         end
@@ -1440,12 +1578,14 @@ function _authored_via_programs!(ca::Dict{String,Any}, params::Dict{String,Float
         else
             d = prog.dims
             ca[n] = length(d) == 1 ? Vector{Float64}(vals) :
-                    permutedims(reshape(Vector{Float64}(vals), reverse(d)...),
-                                length(d):-1:1)
+                permutedims(
+                    reshape(Vector{Float64}(vals), reverse(d)...),
+                    length(d):-1:1
+                )
         end
     end
     syms = String["__esm_oidx_$d" for d in 1:nidx]
-    subs = Dict{String,ASTExpr}()
+    subs = Dict{String, ASTExpr}()
     for n in bare
         a = get(ca, n, nothing)
         (a isa AbstractArray && ndims(a) >= 1) || continue
@@ -1454,9 +1594,9 @@ function _authored_via_programs!(ca::Dict{String,Any}, params::Dict{String,Float
     end
     if !isempty(subs)
         body = any(n -> n in targets, keys(subs)) ? _align_bare_reads(body, subs) :
-               _sub_preserving(body, subs)
+            _sub_preserving(body, subs)
     end
-    ce = _cellwise_compile_once(body, nidx, ca, Dict{String,Any}(), params; t=t)
+    ce = _cellwise_compile_once(body, nidx, ca, Dict{String, Any}(), params; t = t)
     ce === nothing && return nothing
     return Float64[ce(c) for c in cells]
 end
@@ -1468,8 +1608,10 @@ _index_target(o::OpExpr) =
 # The names `e` reads BARE — free (no binder inside `e` binds them) and not the
 # target of an explicit `index` read — into `out`, and the explicit targets
 # into `targets`.
-function _bare_reads!(out::Set{String}, targets::Set{String}, e::ASTExpr,
-                      bound::Set{String})
+function _bare_reads!(
+        out::Set{String}, targets::Set{String}, e::ASTExpr,
+        bound::Set{String}
+    )
     if e isa VarExpr
         (e::VarExpr).name in bound || push!(out, (e::VarExpr).name)
         return out, targets
@@ -1489,7 +1631,7 @@ end
 # `e` with each bare read of a name in `subs` (as `_bare_reads!` finds them)
 # replaced by its entry. `_sub_preserving` does the same when no name in
 # `subs` is also an explicit target.
-function _align_bare_reads(e::ASTExpr, subs::Dict{String,ASTExpr})
+function _align_bare_reads(e::ASTExpr, subs::Dict{String, ASTExpr})
     e isa VarExpr && return get(subs, (e::VarExpr).name, e)
     e isa OpExpr || return e
     o = e::OpExpr
@@ -1545,11 +1687,13 @@ Returns `base` ITSELF (by identity, which is how the caller detects the no-op)
 when there is nothing to materialize, so models whose observeds are scalar or
 independent keep the previous behaviour and cost.
 """
-function _materialized_obs_scope(insp::BuildInspection, file::EsmFile,
-                                 mname::AbstractString, target::AbstractString,
-                                 params::AbstractDict;
-                                 base::AbstractDict=insp.const_arrays,
-                                 t::Float64=0.0, program_read=nothing)
+function _materialized_obs_scope(
+        insp::BuildInspection, file::EsmFile,
+        mname::AbstractString, target::AbstractString,
+        params::AbstractDict;
+        base::AbstractDict = insp.const_arrays,
+        t::Float64 = 0.0, program_read = nothing
+    )
     isempty(insp.observed_defs) && return base
     model = _component_at(file, mname)
     model isa Model || return base
@@ -1571,10 +1715,14 @@ function _materialized_obs_scope(insp::BuildInspection, file::EsmFile,
     # inlined into the consumer and re-executed per output cell, which is the
     # exact cost this function exists to remove — silently, because the failure
     # is a caught exception and the fallback is merely slow, not wrong.
-    raw_def(n) = get(insp.observed_defs, String(mname) * "." * n,
-                     get(insp.observed_defs, n, nothing))
-    res_def(n) = get(insp.observed_exprs, String(mname) * "." * n,
-                     get(insp.observed_exprs, n, nothing))
+    raw_def(n) = get(
+        insp.observed_defs, String(mname) * "." * n,
+        get(insp.observed_defs, n, nothing)
+    )
+    res_def(n) = get(
+        insp.observed_exprs, String(mname) * "." * n,
+        get(insp.observed_exprs, n, nothing)
+    )
     function lookup(n)                      # traversal: prefer the un-inlined form
         d = raw_def(n)
         return d === nothing ? res_def(n) : d
@@ -1587,8 +1735,10 @@ function _materialized_obs_scope(insp::BuildInspection, file::EsmFile,
     observed_here = Set{String}(observed_unknowns(model))
     function extents(n)
         v = get(model.variables, n, nothing)
-        (v !== nothing && n in observed_here &&
-         v.shape !== nothing && !isempty(v.shape)) || return nothing
+        (
+            v !== nothing && n in observed_here &&
+                v.shape !== nothing && !isempty(v.shape)
+        ) || return nothing
         ex = Int[]
         for s in v.shape
             iset = get(file.index_sets, String(s), nothing)
@@ -1627,11 +1777,12 @@ function _materialized_obs_scope(insp::BuildInspection, file::EsmFile,
                 lookup(String(r)) === nothing || visit(String(r))
             end
         end
-        delete!(onstack, n); push!(done, n); push!(order, n)
+        delete!(onstack, n); push!(done, n)
+        return push!(order, n)
     end
     visit(String(target))
 
-    ca = Dict{String,Any}(base)
+    ca = Dict{String, Any}(base)
     materialized = 0
     for n in order
         n == String(target) && continue        # the caller evaluates this one
@@ -1655,7 +1806,7 @@ function _materialized_obs_scope(insp::BuildInspection, file::EsmFile,
         for cand in (raw_def(n), res_def(n))
             cand === nothing && continue
             vals = try
-                evaluate_cellwise(cand, cells; const_arrays=ca, params=params, t=t)
+                evaluate_cellwise(cand, cells; const_arrays = ca, params = params, t = t)
             catch
                 nothing
             end
@@ -1688,9 +1839,11 @@ end
 # bare-suffix fallback (reached only when no exact element is present, e.g. a
 # bare-keyed single-model build). Byte-identical selection to the Python
 # `_scalar_slot`.
-function _scalar_slot(var_map::AbstractDict, variable::AbstractString,
-                      model::AbstractString,
-                      renames::AbstractDict=Dict{String,String}())::Int
+function _scalar_slot(
+        var_map::AbstractDict, variable::AbstractString,
+        model::AbstractString,
+        renames::AbstractDict = Dict{String, String}()
+    )::Int
     qualified = String(model) * "." * String(variable)
     # A name with no `[` never equals a cell key, so on a layout only its
     # scalars (slots 1…n, in slot order) can match — no key is made per cell.
@@ -1702,7 +1855,7 @@ function _scalar_slot(var_map::AbstractDict, variable::AbstractString,
     end
     for (name, slot) in names
         s = String(name)
-        bare = occursin('.', s) ? String(split(s, '.'; limit=2)[2]) : s
+        bare = occursin('.', s) ? String(split(s, '.'; limit = 2)[2]) : s
         bare == String(variable) && return Int(slot)
     end
     # A THIRD pass, for a name an `operator_compose` renaming match DELETED
@@ -1758,7 +1911,7 @@ function _array_scope_names(regs...)::Set{String}
             push!(names, String(k))
         end
     end
-    counts = Dict{String,Int}()
+    counts = Dict{String, Int}()
     for n in names
         b = _bare_param_name(n)
         b == n && continue
@@ -1826,9 +1979,11 @@ The array half is not decorative here: Julia hands `evaluate_cellwise` its
 over the index set `lev`) is a name the reference could already read, and
 checking only the parameter half would rebind it to the cell index in silence.
 """
-function bind_dimension_names(expr::ASTExpr, dims::AbstractVector{<:AbstractString},
-                              scope::AbstractDict=Dict{String,Float64}(),
-                              arrays=Set{String}())::ASTExpr
+function bind_dimension_names(
+        expr::ASTExpr, dims::AbstractVector{<:AbstractString},
+        scope::AbstractDict = Dict{String, Float64}(),
+        arrays = Set{String}()
+    )::ASTExpr
     # esm-spec §6.6.5 names what a reference may read, and `t` is not on the
     # list. Reaching the evaluator with it is not an error there — the
     # build-time evaluator has a time slot and it holds `0.0` — so before this
@@ -1844,25 +1999,32 @@ function bind_dimension_names(expr::ASTExpr, dims::AbstractVector{<:AbstractStri
     mentioned = String[String(d) for d in dims if _mentions_free(expr, String(d))]
     isempty(mentioned) && return expr
     clash = findfirst(d -> haskey(scope, d) || d in arrays, mentioned)
-    clash === nothing || throw(InlineTestError(
-        "inline `reference` mentions '$(mentioned[clash])', which is both a dimension " *
-        "of the asserted field and a name the build-time scope already binds " *
-        "($(haskey(scope, mentioned[clash]) ? "a parameter" : "a build-time array")). " *
-        "esm-spec §6.6.5 binds a free dimension name to the cell's 1-based position, " *
-        "which would shadow it. Rename one of them, or gather explicitly with " *
-        "`aggregate(i from $(mentioned[clash]); …)`."))
+    clash === nothing || throw(
+        InlineTestError(
+            "inline `reference` mentions '$(mentioned[clash])', which is both a dimension " *
+                "of the asserted field and a name the build-time scope already binds " *
+                "($(haskey(scope, mentioned[clash]) ? "a parameter" : "a build-time array")). " *
+                "esm-spec §6.6.5 binds a free dimension name to the cell's 1-based position, " *
+                "which would shadow it. Rename one of them, or gather explicitly with " *
+                "`aggregate(i from $(mentioned[clash]); …)`."
+        )
+    )
     names = String[String(d) for d in dims]
-    return OpExpr("faq", ASTExpr[];
-                  output_idx=Any[names...],
-                  ranges=Dict{String,Any}(d => IndexSetRef(d) for d in names),
-                  expr_body=expr)
+    return OpExpr(
+        "faq", ASTExpr[];
+        output_idx = Any[names...],
+        ranges = Dict{String, Any}(d => IndexSetRef(d) for d in names),
+        expr_body = expr
+    )
 end
 
 # The asserted variable's declared spatial shape (ordered index-set names).
 # Errors when the variable is missing or scalar — a `coords` assertion is
 # ill-formed on a 0-D variable per esm-spec §6.6.5.
-function _variable_shape(file::EsmFile, mname::AbstractString,
-                         variable::AbstractString)::Vector{String}
+function _variable_shape(
+        file::EsmFile, mname::AbstractString,
+        variable::AbstractString
+    )::Vector{String}
     component = _component_at(file, mname)
     model = component isa Model ? component : nothing
     if model === nothing
@@ -1871,15 +2033,24 @@ function _variable_shape(file::EsmFile, mname::AbstractString,
         # the component exists, and what is ill-formed is asking a scalar for
         # a grid cell.
         component isa ReactionSystem &&
-            throw(InlineTestError(
-                "`coords` requires a spatially-shaped variable; '$(variable)' is scalar"))
+            throw(
+            InlineTestError(
+                "`coords` requires a spatially-shaped variable; '$(variable)' is scalar"
+            )
+        )
         throw(InlineTestError("model '$(mname)' not found"))
     end
     v = get(model.variables, String(variable), nothing)
-    v === nothing && throw(InlineTestError(
-        "variable '$(variable)' is not declared in model '$(mname)'"))
-    (v.shape === nothing || isempty(v.shape)) && throw(InlineTestError(
-        "`coords` requires a spatially-shaped variable; '$(variable)' is scalar"))
+    v === nothing && throw(
+        InlineTestError(
+            "variable '$(variable)' is not declared in model '$(mname)'"
+        )
+    )
+    (v.shape === nothing || isempty(v.shape)) && throw(
+        InlineTestError(
+            "`coords` requires a spatially-shaped variable; '$(variable)' is scalar"
+        )
+    )
     return String[String(s) for s in v.shape]
 end
 
@@ -1889,32 +2060,50 @@ end
 # allowed) along interval index sets; sampling = nearest grid index with exact
 # half-way ties rounding DOWN (`idx = ceil(c - 1/2)`). A strict subset of
 # dimensions may be pinned only when every remaining dimension is singleton.
-function _coords_cell(coords::AbstractDict, shape::Vector{String},
-                      index_sets::AbstractDict)::Vector{Int}
+function _coords_cell(
+        coords::AbstractDict, shape::Vector{String},
+        index_sets::AbstractDict
+    )::Vector{Int}
     for k in keys(coords)
         String(k) in shape ||
-            throw(InlineTestError("`coords` names unknown dimension '$(k)' " *
-                  "(field dimensions: $(join(shape, ", ")))"))
+            throw(
+            InlineTestError(
+                "`coords` names unknown dimension '$(k)' " *
+                    "(field dimensions: $(join(shape, ", ")))"
+            )
+        )
     end
     cell = Int[]
     for s in shape
         iset = get(index_sets, s, nothing)
         (iset !== nothing && iset.kind == "interval" && iset.size !== nothing) ||
-            throw(InlineTestError("`coords` sampling requires interval index sets " *
-                  "with a declared size; '$(s)' is not one"))
+            throw(
+            InlineTestError(
+                "`coords` sampling requires interval index sets " *
+                    "with a declared size; '$(s)' is not one"
+            )
+        )
         n = Int(iset.size)
         if haskey(coords, s)
             c = Float64(coords[s])
             idx = ceil(Int, c - 0.5)  # nearest index; exact ties round DOWN
             (1 <= idx <= n) ||
-                throw(InlineTestError("`coords` position $(c) along '$(s)' resolves " *
-                      "to index $(idx), outside 1..$(n)"))
+                throw(
+                InlineTestError(
+                    "`coords` position $(c) along '$(s)' resolves " *
+                        "to index $(idx), outside 1..$(n)"
+                )
+            )
             push!(cell, idx)
         else
             n == 1 ||
-                throw(InlineTestError("`coords` leaves dimension '$(s)' unpinned " *
-                      "with $(n) samples; a strict subset pins only when every " *
-                      "remaining dimension is singleton"))
+                throw(
+                InlineTestError(
+                    "`coords` leaves dimension '$(s)' unpinned " *
+                        "with $(n) samples; a strict subset pins only when every " *
+                        "remaining dimension is singleton"
+                )
+            )
             push!(cell, 1)
         end
     end
@@ -1929,16 +2118,28 @@ function _nested_at(data, cell::Vector{Int}, exts::Vector{Int})::Float64
     node = data
     for (d, i) in enumerate(cell)
         node isa AbstractVector ||
-            throw(InlineTestError("from_file reference shape mismatch along " *
-                  "dimension $(d): expected a nested array of length $(exts[d])"))
+            throw(
+            InlineTestError(
+                "from_file reference shape mismatch along " *
+                    "dimension $(d): expected a nested array of length $(exts[d])"
+            )
+        )
         length(node) == exts[d] ||
-            throw(InlineTestError("from_file reference shape mismatch along " *
-                  "dimension $(d): expected length $(exts[d]), found $(length(node))"))
+            throw(
+            InlineTestError(
+                "from_file reference shape mismatch along " *
+                    "dimension $(d): expected length $(exts[d]), found $(length(node))"
+            )
+        )
         node = node[i]
     end
     (node isa Real && !(node isa Bool)) ||
-        throw(InlineTestError("from_file reference shape mismatch at cell " *
-              "[$(join(cell, ","))]: expected a number"))
+        throw(
+        InlineTestError(
+            "from_file reference shape mismatch at cell " *
+                "[$(join(cell, ","))]: expected a number"
+        )
+    )
     return Float64(node)
 end
 
@@ -1947,13 +2148,19 @@ end
 # cross-binding convention: `path` resolves relative to `base_dir` (the .esm
 # file's directory); the default and only v1 `format` is "json" — a row-major
 # nested array exactly matching the field's shape.
-function _from_file_reference(ref::AbstractDict, base_dir::AbstractString,
-                              cell_tuples::Vector{Vector{Int}})::Vector{Float64}
+function _from_file_reference(
+        ref::AbstractDict, base_dir::AbstractString,
+        cell_tuples::Vector{Vector{Int}}
+    )::Vector{Float64}
     fmt_raw = get(ref, "format", nothing)
     fmt = fmt_raw === nothing ? "json" : lowercase(String(fmt_raw))
     fmt == "json" ||
-        throw(InlineTestError("from_file reference format '$(fmt)' is not supported " *
-              "(v1 supports \"json\" only)"))
+        throw(
+        InlineTestError(
+            "from_file reference format '$(fmt)' is not supported " *
+                "(v1 supports \"json\" only)"
+        )
+    )
     path_raw = get(ref, "path", nothing)
     path_raw === nothing && throw(InlineTestError("from_file reference is missing `path`"))
     p = String(path_raw)
@@ -1981,8 +2188,10 @@ from the loaded `file` (`base_dir` anchors the injected `ref`s). This is what
 lets one test suite exercise a discretization-agnostic PDE leaf under several
 schemes with no conflict between tests.
 """
-function _ephemeral_injected_file(file::EsmFile, source_path::Union{Nothing,AbstractString},
-                                  mname::AbstractString, imports, base_dir::AbstractString)::EsmFile
+function _ephemeral_injected_file(
+        file::EsmFile, source_path::Union{Nothing, AbstractString},
+        mname::AbstractString, imports, base_dir::AbstractString
+    )::EsmFile
     raw = source_path !== nothing ?
         _to_native_json(JSON3.read(read(String(source_path), String))) :
         serialize_esm_file(file)
@@ -2002,9 +2211,12 @@ function _ephemeral_injected_file(file::EsmFile, source_path::Union{Nothing,Abst
         injected = true
         break
     end
-    injected || throw(InlineTestError(
-        "component '$(mname)' not found for per-test injection (esm-spec §9.7.10)"))
-    f = load_string(JSON3.write(raw); base_path=String(base_dir))
+    injected || throw(
+        InlineTestError(
+            "component '$(mname)' not found for per-test injection (esm-spec §9.7.10)"
+        )
+    )
+    f = load_string(JSON3.write(raw); base_path = String(base_dir))
     resolve_subsystem_refs!(f, String(base_dir))
     # The ephemeral file is a BUILD input (and the file this test's §6.6.5
     # `reference` expressions evaluate against), and the raw base may have come
@@ -2018,7 +2230,7 @@ end
 # precision, so accept the nearest saved point within this relative tolerance
 # (scaled by `max(1, |t|)`). 1e-9 sits far above Float64 roundoff accumulation
 # yet far below any two distinct assertion times in practice.
-const _SAVED_TIME_RTOL = 1e-9
+const _SAVED_TIME_RTOL = 1.0e-9
 
 # ---------------------------------------------------------------------------
 # Per-assertion evaluation — the §6.6.5 scalar-selection / reduction machinery,
@@ -2026,12 +2238,14 @@ const _SAVED_TIME_RTOL = 1e-9
 # scalar `actual`; throws [`InlineTestError`](@ref) on any spec-relevant failure
 # (the driver records it as an `ERROR` result).
 # ---------------------------------------------------------------------------
-function _evaluate_assertion(a, sim, var_map::AbstractDict,
-                             insp::BuildInspection, eval_file::EsmFile,
-                             mname::AbstractString,
-                             resolved_base::AbstractString,
-                             renames::AbstractDict=Dict{String,String}();
-                             ctx=nothing)::Float64
+function _evaluate_assertion(
+        a, sim, var_map::AbstractDict,
+        insp::BuildInspection, eval_file::EsmFile,
+        mname::AbstractString,
+        resolved_base::AbstractString,
+        renames::AbstractDict = Dict{String, String}();
+        ctx = nothing
+    )::Float64
     # A solve whose `saveat` lies entirely outside the span saves NOTHING, and
     # `argmin` over the empty trajectory raised `ArgumentError: reducing over an
     # empty collection is not allowed` — an internal Julia message where the
@@ -2053,7 +2267,7 @@ function _evaluate_assertion(a, sim, var_map::AbstractDict,
 
     if a.coords === nothing && a.reduce === nothing
         slot = scoped ? _scoped_scalar_slot(var_map, owner, loc, renames) :
-               _scalar_slot(var_map, loc, owner, renames)
+            _scalar_slot(var_map, loc, owner, renames)
         slot == 0 || return state[slot]
         # Not an ODE state — so an OBSERVED, a variable the document defines by
         # an algebraic equation rather than a time derivative. esm-spec §6.6
@@ -2071,8 +2285,10 @@ function _evaluate_assertion(a, sim, var_map::AbstractDict,
         # state-DEPENDENT observed evaluates at the state the solver had. Same
         # function, same scope, same ordering as the `coords` / `reduce` path
         # below — this is a second entry to it, not a second evaluator.
-        obs = _observed_field(insp, eval_file, owner, loc; ctx=ctx, u=state,
-                              t=Float64(sim.t[ti]), var_map=var_map)
+        obs = _observed_field(
+            insp, eval_file, owner, loc; ctx = ctx, u = state,
+            t = Float64(sim.t[ti]), var_map = var_map
+        )
         obs === nothing &&
             throw(InlineTestError("scalar state '$(a.variable)' not found"))
         field, cell_tuples = obs
@@ -2080,12 +2296,18 @@ function _evaluate_assertion(a, sim, var_map::AbstractDict,
         # an absent one: §6.6.5 says pick a cell with `coords` or collapse the
         # field with `reduce`, and silently returning element one would answer a
         # question the author did not ask.
-        length(field) == 1 || throw(InlineTestError(
-            "'$(a.variable)' is a field of $(length(field)) cells; a scalar " *
-            "assertion on it needs `coords` or `reduce` (esm-spec §6.6.5)"))
-        isempty(cell_tuples) || isempty(first(cell_tuples)) || throw(InlineTestError(
-            "'$(a.variable)' is a shaped variable; a scalar assertion on it " *
-            "needs `coords` or `reduce` (esm-spec §6.6.5)"))
+        length(field) == 1 || throw(
+            InlineTestError(
+                "'$(a.variable)' is a field of $(length(field)) cells; a scalar " *
+                    "assertion on it needs `coords` or `reduce` (esm-spec §6.6.5)"
+            )
+        )
+        isempty(cell_tuples) || isempty(first(cell_tuples)) || throw(
+            InlineTestError(
+                "'$(a.variable)' is a shaped variable; a scalar assertion on it " *
+                    "needs `coords` or `reduce` (esm-spec §6.6.5)"
+            )
+        )
         return field[1]
     end
 
@@ -2099,7 +2321,7 @@ function _evaluate_assertion(a, sim, var_map::AbstractDict,
     end
 
     cells = scoped ? _scoped_state_cells(var_map, owner, loc) :
-            _state_cells(var_map, loc, owner)
+        _state_cells(var_map, loc, owner)
     local field::Vector{Float64}, cell_tuples::Vector{Vector{Int}}
     if !isempty(cells)
         field = Float64[state[slot] for (_, slot) in cells]
@@ -2110,17 +2332,26 @@ function _evaluate_assertion(a, sim, var_map::AbstractDict,
         # constants and parameters, so a STATE-DEPENDENT observed evaluates at
         # the state the solver had; a state-free one never reads those names and
         # is unaffected.
-        obs = _observed_field(insp, eval_file, owner, loc; ctx=ctx, u=state,
-                              t=Float64(sim.t[ti]), var_map=var_map)
-        obs === nothing && throw(InlineTestError(
-            "array state '$(a.variable)' has no cells in var_map"))
+        obs = _observed_field(
+            insp, eval_file, owner, loc; ctx = ctx, u = state,
+            t = Float64(sim.t[ti]), var_map = var_map
+        )
+        obs === nothing && throw(
+            InlineTestError(
+                "array state '$(a.variable)' has no cells in var_map"
+            )
+        )
         field, cell_tuples = obs
     end
 
     if coords_target !== nothing
         pos = findfirst(==(coords_target), cell_tuples)
-        pos === nothing && throw(InlineTestError("no grid sample at cell " *
-            "[$(join(coords_target, ","))] of '$(a.variable)'"))
+        pos === nothing && throw(
+            InlineTestError(
+                "no grid sample at cell " *
+                    "[$(join(coords_target, ","))] of '$(a.variable)'"
+            )
+        )
         return field[pos]
     end
 
@@ -2151,18 +2382,20 @@ function _evaluate_assertion(a, sim, var_map::AbstractDict,
             # oracle has no reason to be compiled, and a strict compiler refusing
             # the test's own answer key would be refusing nothing of the model's.
             ref = _with_compiler_plan(_compiler_plan(:interpreter)) do
-                evaluate_cellwise(bind_dimension_names(a.reference, dims, scope, arrays),
-                                  cell_tuples;
-                                  const_arrays=insp.const_arrays, params=scope)
+                evaluate_cellwise(
+                    bind_dimension_names(a.reference, dims, scope, arrays),
+                    cell_tuples;
+                    const_arrays = insp.const_arrays, params = scope
+                )
             end
         elseif a.reference isa AbstractDict &&
-               string(get(a.reference, "type", "")) == "from_file"
+                string(get(a.reference, "type", "")) == "from_file"
             ref = _from_file_reference(a.reference, resolved_base, cell_tuples)
         else
             throw(InlineTestError("unsupported `reference` shape $(typeof(a.reference))"))
         end
     end
-    return field_reduce(a.reduce, field; reference=ref)
+    return field_reduce(a.reduce, field; reference = ref)
 end
 
 # esm-spec §9.7.10 form C: resolve the file test `t` runs against. A test
@@ -2171,16 +2404,20 @@ end
 # rewrite-targets lowered; the persisted `file` is never mutated. A test with
 # no injection runs against the file as loaded. Returns the failure message
 # `String` when the ephemeral build could not be built.
-function _resolve_test_target(file::EsmFile, input, mname::AbstractString, t,
-                              resolved_base::AbstractString)::Union{EsmFile,String}
+function _resolve_test_target(
+        file::EsmFile, input, mname::AbstractString, t,
+        resolved_base::AbstractString
+    )::Union{EsmFile, String}
     isempty(t.expression_template_imports) && return file
     try
         src = input isa AbstractString ? String(input) : nothing
-        return _ephemeral_injected_file(file, src, String(mname),
-            t.expression_template_imports, resolved_base)
+        return _ephemeral_injected_file(
+            file, src, String(mname),
+            t.expression_template_imports, resolved_base
+        )
     catch err
         return "per-test discretization injection failed: " *
-               "$(sprint(showerror, err))"
+            "$(sprint(showerror, err))"
     end
 end
 
@@ -2213,12 +2450,18 @@ struct SimulateTestEngine
 end
 
 SimulateTestEngine(file, input, mname, resolved_base, alg, reltol, abstol) =
-    SimulateTestEngine(file, input, mname, resolved_base, alg, reltol, abstol,
-                       Dict{String,Any}(), Dict{String,Any}(), :native)
-SimulateTestEngine(file, input, mname, resolved_base, alg, reltol, abstol,
-                   seed_p, seed_u0) =
-    SimulateTestEngine(file, input, mname, resolved_base, alg, reltol, abstol,
-                       seed_p, seed_u0, :native)
+    SimulateTestEngine(
+    file, input, mname, resolved_base, alg, reltol, abstol,
+    Dict{String, Any}(), Dict{String, Any}(), :native
+)
+SimulateTestEngine(
+    file, input, mname, resolved_base, alg, reltol, abstol,
+    seed_p, seed_u0
+) =
+    SimulateTestEngine(
+    file, input, mname, resolved_base, alg, reltol, abstol,
+    seed_p, seed_u0, :native
+)
 
 # Per-test handle: the successful simulation plus the build-observability sink
 # (assertions on ARRAY OBSERVEDS evaluate their resolved expression from
@@ -2226,13 +2469,13 @@ SimulateTestEngine(file, input, mname, resolved_base, alg, reltol, abstol,
 # against (the ephemeral injected file when the test injects a discretization).
 struct _SimulateHandle
     sim::Any                      # the SciML solution `solve(prob, alg)` returned
-    var_map::AbstractDict{String,Int}     # state-element name → flat index (from the problem)
+    var_map::AbstractDict{String, Int}     # state-element name → flat index (from the problem)
     insp::BuildInspection
     eval_file::EsmFile
     # The states an `operator_compose` renaming match DELETED, mapped onto the
     # survivors (issue #230). An assertion names its component's LOCAL variable,
     # which a merge may have folded onto another component's.
-    merged_renames::Dict{String,String}
+    merged_renames::Dict{String, String}
     # The compiler that built the problem. Every model-side value an assertion
     # reads is evaluated under this compiler's plan (esm-libraries-spec
     # §2.5.10), so a strict build refuses here exactly what it refuses at
@@ -2285,8 +2528,10 @@ _static_solution(times::Vector{Float64}) =
 # the span ("nearest 1.0") instead of reducing over an empty collection, and so
 # that a test whose asserted times are ALL out of span — or which has no
 # assertions at all — still produces a well-formed evaluation.
-function _static_evaluation_times(times::AbstractVector{<:Real},
-                                  tstart::Real, tstop::Real)::Vector{Float64}
+function _static_evaluation_times(
+        times::AbstractVector{<:Real},
+        tstart::Real, tstop::Real
+    )::Vector{Float64}
     lo, hi = minmax(Float64(tstart), Float64(tstop))
     out = Float64[lo, hi]
     for x in times
@@ -2310,7 +2555,7 @@ end
 # that does not (already qualified, a scoped reference the prefix would double
 # up, or simply wrong) passes through untouched, so `esm_problem` reports on it
 # exactly as it would have.
-_overrides_or_empty(o) = o === nothing ? Dict{String,Any}() : o
+_overrides_or_empty(o) = o === nothing ? Dict{String, Any}() : o
 
 # Lay a caller's SEED under a test's own override map (esm-spec §6.6.2). The
 # document is authoritative about its own test, so the test's key wins; the
@@ -2322,7 +2567,7 @@ _overrides_or_empty(o) = o === nothing ? Dict{String,Any}() : o
 # one parameter, with two values.
 function _seeded_overrides(seed::AbstractDict, authored)
     isempty(seed) && return authored
-    out = Dict{String,Any}()
+    out = Dict{String, Any}()
     for (k, v) in seed
         out[String(k)] = v
     end
@@ -2337,16 +2582,20 @@ function _scope_to_component(overrides, mname, target)
     (overrides === nothing || isempty(overrides)) && return overrides
     known, renames = try
         flat = flatten(target)
-        (union(Set{String}(String(n) for n in keys(flat.parameters)),
-               Set{String}(String(n) for n in keys(flat.state_variables))),
-         flat.metadata.merged_variable_renames)
+        (
+            union(
+                Set{String}(String(n) for n in keys(flat.parameters)),
+                Set{String}(String(n) for n in keys(flat.state_variables))
+            ),
+            flat.metadata.merged_variable_renames,
+        )
     catch
         return overrides   # let `esm_problem` report the real failure
     end
     # `Any`-valued: esm-spec §6.6.2 admits a scalar or INLINE ARRAY DATA (a
     # shaped variable's whole column), and re-scoping must not flatten the
     # second to a number.
-    out = Dict{String,Any}()
+    out = Dict{String, Any}()
     for (rawk, v) in overrides
         k = String(rawk)
         q = string(mname, ".", k)
@@ -2368,15 +2617,21 @@ function _engine_setup(e::SimulateTestEngine, t)
     insp = BuildInspection()
     local prob, sim
     try
-        prob = esm_problem(target, (t.time_span.start, t.time_span.stop);
-                           p=_overrides_or_empty(_scope_to_component(
-                               _seeded_overrides(e.seed_p, t.parameter_overrides),
-                               e.mname, target)),
-                           u0=_scope_to_component(
-                               _seeded_overrides(e.seed_u0, t.initial_conditions),
-                               e.mname, target),
-                           compiler=e.compiler,
-                           inspect=insp)
+        prob = esm_problem(
+            target, (t.time_span.start, t.time_span.stop);
+            p = _overrides_or_empty(
+                _scope_to_component(
+                    _seeded_overrides(e.seed_p, t.parameter_overrides),
+                    e.mname, target
+                )
+            ),
+            u0 = _scope_to_component(
+                _seeded_overrides(e.seed_u0, t.initial_conditions),
+                e.mname, target
+            ),
+            compiler = e.compiler,
+            inspect = insp
+        )
         # A document with NOTHING TO INTEGRATE is EVALUATED, not solved — the
         # same route `simulate` takes for it, and the one this runner did not
         # take until issue #406.
@@ -2394,10 +2649,16 @@ function _engine_setup(e::SimulateTestEngine, t)
         # static evaluation is the one path with no boundary of its own
         # (`_static_evaluation_times`).
         sim = isempty(prob.u0) ?
-              _static_solution(_static_evaluation_times(times, t.time_span.start,
-                                                        t.time_span.stop)) :
-              _solve_problem(prob, e.alg; reltol=e.reltol, abstol=e.abstol,
-                             saveat=times)
+            _static_solution(
+                _static_evaluation_times(
+                    times, t.time_span.start,
+                    t.time_span.stop
+                )
+            ) :
+            _solve_problem(
+                prob, e.alg; reltol = e.reltol, abstol = e.abstol,
+                saveat = times
+            )
     catch err
         return "simulation failed: $(sprint(showerror, err))"
     end
@@ -2405,9 +2666,11 @@ function _engine_setup(e::SimulateTestEngine, t)
     # core file stays solver-free.
     Symbol(sim.retcode) === :Success ||
         return "solver retcode $(sim.retcode)"
-    return _SimulateHandle(sim, prob.var_map, insp, target,
-                           Dict{String,String}(prob.merged_renames),
-                           compiler(prob), _obs_ctx(prob))
+    return _SimulateHandle(
+        sim, prob.var_map, insp, target,
+        Dict{String, String}(prob.merged_renames),
+        compiler(prob), _obs_ctx(prob)
+    )
 end
 
 # Under the plan of the compiler that BUILT the problem, not the process default:
@@ -2415,9 +2678,11 @@ end
 # §2.5.10 puts every one of them under that compiler's refusal rule.
 _engine_actual(e::SimulateTestEngine, h::_SimulateHandle, a) =
     _with_compiler_plan(_compiler_plan(h.compiler)) do
-        _evaluate_assertion(a, h.sim, h.var_map, h.insp, h.eval_file, e.mname,
-                            e.resolved_base, h.merged_renames; ctx=h.ctx)
-    end
+    _evaluate_assertion(
+        a, h.sim, h.var_map, h.insp, h.eval_file, e.mname,
+        e.resolved_base, h.merged_renames; ctx = h.ctx
+    )
+end
 
 _engine_error_message(::SimulateTestEngine, err) =
     "assertion evaluation failed: $(sprint(showerror, err))"
@@ -2449,17 +2714,17 @@ silent gets the caller's. They are merged with the test's map before
 own keys — which is what makes the precedence well defined.
 """
 Base.@kwdef struct InlineTestOptions
-    model_name::Union{Nothing,AbstractString} = nothing
+    model_name::Union{Nothing, AbstractString} = nothing
     alg::Any = nothing
-    reltol::Union{Nothing,Float64} = nothing
-    abstol::Union{Nothing,Float64} = nothing
-    base_dir::Union{Nothing,AbstractString} = nothing
-    initial_conditions::Union{Nothing,AbstractDict} = nothing
-    parameter_overrides::Union{Nothing,AbstractDict} = nothing
+    reltol::Union{Nothing, Float64} = nothing
+    abstol::Union{Nothing, Float64} = nothing
+    base_dir::Union{Nothing, AbstractString} = nothing
+    initial_conditions::Union{Nothing, AbstractDict} = nothing
+    parameter_overrides::Union{Nothing, AbstractDict} = nothing
     # Which compiler builds this document's problems (API_SPEC §5.8); `nothing`
     # defers to the `run_inline_tests` keyword, which itself defaults to the
     # strict `:native`.
-    compiler::Union{Nothing,Symbol} = nothing
+    compiler::Union{Nothing, Symbol} = nothing
 end
 
 # The document's TEST-BEARING components, models first and then reaction
@@ -2478,9 +2743,11 @@ end
 # (scalar-slot) form; nothing about the build changes, because the whole
 # document is flattened either way and a species becomes an ordinary state.
 function _test_components(file::EsmFile, model_name)
-    out = Tuple{String,Symbol,Any}[]
-    for (kind, container) in ((:model, file.models),
-                              (:reaction_system, file.reaction_systems))
+    out = Tuple{String, Symbol, Any}[]
+    for (kind, container) in (
+            (:model, file.models),
+            (:reaction_system, file.reaction_systems),
+        )
         container === nothing && continue
         for (name, component) in container
             model_name !== nothing && String(name) != String(model_name) && continue
@@ -2510,9 +2777,15 @@ end
 # is iterated element-wise.
 function _expand_inputs(inputs)
     items = (inputs isa AbstractString || inputs isa EsmFile) ? Any[inputs] :
-        (applicable(iterate, inputs) ? collect(Any, inputs) :
-         throw(ArgumentError("run_inline_tests expects a path, an EsmFile, a " *
-                             "directory or an iterable of those, got $(typeof(inputs))")))
+        (
+            applicable(iterate, inputs) ? collect(Any, inputs) :
+            throw(
+                ArgumentError(
+                    "run_inline_tests expects a path, an EsmFile, a " *
+                    "directory or an iterable of those, got $(typeof(inputs))"
+                )
+            )
+        )
     out = Any[]
     for item in items
         if item isa EsmFile
@@ -2534,16 +2807,17 @@ end
 # emits for an unparseable file.
 _load_failure_result(path::AbstractString, err) = AssertionResult(
     String(path), :file, "<parse>", "<load>", 0, "", NaN, NaN, nothing,
-    ERROR, "load failed: $(sprint(showerror, err))", 0.0)
+    ERROR, "load failed: $(sprint(showerror, err))", 0.0
+)
 
 # Fold one document's `InlineTestOptions` onto the call-level defaults: a field
 # the override left `nothing` inherits, every other field wins.
 _opt_or(::Nothing, _field, fallback) = fallback
 _opt_or(o::InlineTestOptions, field::Symbol, fallback) =
     (v = getfield(o, field); v === nothing ? fallback : v)
-_opt_dict(::Nothing, _field) = Dict{String,Any}()
+_opt_dict(::Nothing, _field) = Dict{String, Any}()
 _opt_dict(o::InlineTestOptions, field::Symbol) =
-    (v = getfield(o, field); v === nothing ? Dict{String,Any}() : v)
+    (v = getfield(o, field); v === nothing ? Dict{String, Any}() : v)
 
 """
     run_inline_tests(inputs; model_name=nothing, alg=nothing,
@@ -2627,21 +2901,28 @@ default here would silently have suppressed it. These are INTEGRATION
 tolerances and are a different quantity from the §6.6.4 assertion tolerance
 above.
 """
-function run_inline_tests(inputs; model_name::Union{Nothing,AbstractString}=nothing,
-                          alg=nothing,
-                          reltol::Union{Float64,Nothing}=nothing,
-                          abstol::Union{Float64,Nothing}=nothing,
-                          base_dir::Union{Nothing,AbstractString}=nothing,
-                          compiler::Symbol=:native,
-                          options_for=nothing)
+function run_inline_tests(
+        inputs; model_name::Union{Nothing, AbstractString} = nothing,
+        alg = nothing,
+        reltol::Union{Float64, Nothing} = nothing,
+        abstol::Union{Float64, Nothing} = nothing,
+        base_dir::Union{Nothing, AbstractString} = nothing,
+        compiler::Symbol = :native,
+        options_for = nothing
+    )
     documents = _expand_inputs(inputs)
-    batch = !((inputs isa EsmFile) ||
-              (inputs isa AbstractString && !isdir(String(inputs))))
+    batch = !(
+        (inputs isa EsmFile) ||
+            (inputs isa AbstractString && !isdir(String(inputs)))
+    )
     results = AssertionResult[]
     for document in documents
         o = options_for === nothing ? nothing : options_for(document)
-        (o === nothing || o isa InlineTestOptions) || throw(ArgumentError(
-            "options_for must return an InlineTestOptions or nothing, got $(typeof(o))"))
+        (o === nothing || o isa InlineTestOptions) || throw(
+            ArgumentError(
+                "options_for must return an InlineTestOptions or nothing, got $(typeof(o))"
+            )
+        )
         file = document
         if document isa AbstractString
             file = try
@@ -2652,10 +2933,15 @@ function run_inline_tests(inputs; model_name::Union{Nothing,AbstractString}=noth
                 continue
             end
         end
-        file isa EsmFile || throw(ArgumentError(
-            "run_inline_tests expects a path or EsmFile, got $(typeof(document))"))
-        _run_document_tests!(results, file, document, o;
-                             model_name, alg, reltol, abstol, base_dir, compiler)
+        file isa EsmFile || throw(
+            ArgumentError(
+                "run_inline_tests expects a path or EsmFile, got $(typeof(document))"
+            )
+        )
+        _run_document_tests!(
+            results, file, document, o;
+            model_name, alg, reltol, abstol, base_dir, compiler
+        )
     end
     return results
 end
@@ -2664,8 +2950,10 @@ end
 # path it was loaded from, or the `EsmFile` itself — it anchors `from_file`
 # references and the §9.7.10 per-test injection. The per-document body of
 # `run_inline_tests`.
-function _run_document_tests!(results, file::EsmFile, document, o;
-                              model_name, alg, reltol, abstol, base_dir, compiler)
+function _run_document_tests!(
+        results, file::EsmFile, document, o;
+        model_name, alg, reltol, abstol, base_dir, compiler
+    )
     # esm-spec §9.5.3, at the build boundary rather than at load (§9.5.4 wants
     # the authored form to round-trip). `esm_problem` lowers the flattened
     # system it builds, but the file kept HERE is also an evaluated artifact:
@@ -2681,7 +2969,7 @@ function _run_document_tests!(results, file::EsmFile, document, o;
     # nothing to integrate has no business demanding an integrator.
     components = _test_components(file, d_model_name)
     isempty(components) && return results
-    d_alg        = _opt_or(o, :alg, alg)
+    d_alg = _opt_or(o, :alg, alg)
     if d_alg === nothing
         # Nobody named an algorithm, so the DOCUMENT's own stiffness
         # declaration chooses one (esm-spec §2.2: `stiffness` is advisory and a
@@ -2694,9 +2982,13 @@ function _run_document_tests!(results, file::EsmFile, document, o;
         # `_method_for` has always done this; this binding required an `alg`
         # from the caller, and a corpus gate can only pass ONE for every
         # document, which makes a stiff one unrunnable there.)
-        d_alg, _ = _pick_solver(document isa AbstractString ? String(document) : "";
-                                stiffness=(file.solver === nothing ? nothing :
-                                           file.solver.stiffness))
+        d_alg, _ = _pick_solver(
+            document isa AbstractString ? String(document) : "";
+            stiffness = (
+                file.solver === nothing ? nothing :
+                    file.solver.stiffness
+            )
+        )
     end
     # esm-spec §2.2.2, most-specific first: an `options_for` override, then the
     # keyword, then THIS DOCUMENT's `solver` block, then the runner defaults
@@ -2704,11 +2996,11 @@ function _run_document_tests!(results, file::EsmFile, document, o;
     # `nothing` at either of the first two levels is what lets the next one
     # speak. INTEGRATION tolerances; the §6.6.4 assertion tolerance is separate.
     doc_reltol, doc_abstol = _test_integration_tolerances(file.solver)
-    d_reltol     = Float64(_opt_or(o, :reltol, reltol === nothing ? doc_reltol : reltol))
-    d_abstol     = Float64(_opt_or(o, :abstol, abstol === nothing ? doc_abstol : abstol))
-    d_base_dir   = _opt_or(o, :base_dir, base_dir)
-    seed_p       = _opt_dict(o, :parameter_overrides)
-    seed_u0      = _opt_dict(o, :initial_conditions)
+    d_reltol = Float64(_opt_or(o, :reltol, reltol === nothing ? doc_reltol : reltol))
+    d_abstol = Float64(_opt_or(o, :abstol, abstol === nothing ? doc_abstol : abstol))
+    d_base_dir = _opt_or(o, :base_dir, base_dir)
+    seed_p = _opt_dict(o, :parameter_overrides)
+    seed_u0 = _opt_dict(o, :initial_conditions)
     resolved_base = d_base_dir !== nothing ? String(d_base_dir) :
         (document isa AbstractString ? dirname(abspath(String(document))) : pwd())
     # The row's `file` is the document it came from, so a BATCH's results say
@@ -2720,11 +3012,15 @@ function _run_document_tests!(results, file::EsmFile, document, o;
     source = document isa AbstractString ? String(document) : ""
     d_compiler = _opt_or(o, :compiler, compiler)
     for (mname, kind, component) in components
-        engine = SimulateTestEngine(file, document, mname, resolved_base,
-                                    d_alg, d_reltol, d_abstol, seed_p, seed_u0,
-                                    d_compiler)
-        _run_test_frame!(results, engine, source, kind, mname,
-                         component.tolerance, component.tests)
+        engine = SimulateTestEngine(
+            file, document, mname, resolved_base,
+            d_alg, d_reltol, d_abstol, seed_p, seed_u0,
+            d_compiler
+        )
+        _run_test_frame!(
+            results, engine, source, kind, mname,
+            component.tolerance, component.tests
+        )
     end
     return results
 end

@@ -12,8 +12,10 @@ using EarthSciAST
 
 const PRC = EarthSciAST
 
-const _PRC_DIR = joinpath(@__DIR__, "..", "..", "..", "tests", "conformance",
-                          "public_rhs_program")
+const _PRC_DIR = joinpath(
+    @__DIR__, "..", "..", "..", "tests", "conformance",
+    "public_rhs_program"
+)
 
 # ---- the generator (README "The generator") ----
 
@@ -40,7 +42,7 @@ _prc_bits(x::AbstractVector{Float64}) = reinterpret(UInt64, x)
 _prc_kind(k) = k == "array_parameter" ? :array_parameter : Symbol(k)
 
 function _prc_problem(c, opts; param_arrays = nothing)
-    kw = Dict{Symbol,Any}(:compiler => :native)
+    kw = Dict{Symbol, Any}(:compiler => :native)
     haskey(opts, :runtime_array_parameters) &&
         (kw[:runtime_array_parameters] = Bool(opts.runtime_array_parameters))
     param_arrays === nothing || (kw[:param_arrays] = param_arrays)
@@ -59,16 +61,20 @@ function _prc_u(prog, d::Int)
 end
 
 function _prc_p(prog, d::Int)
-    d == 0 && return PRC.parameter_vector(prog, Dict{String,Float64}())
-    ov = Dict{String,Float64}(s.name => 0.5 + _prc_h("p$d/$(s.name)", 1)
-                              for s in PRC.parameters(prog))
+    d == 0 && return PRC.parameter_vector(prog, Dict{String, Float64}())
+    ov = Dict{String, Float64}(
+        s.name => 0.5 + _prc_h("p$d/$(s.name)", 1)
+            for s in PRC.parameters(prog)
+    )
     return PRC.parameter_vector(prog, ov)
 end
 
 _prc_t(d::Int) = d == 0 ? 0.0 : 10 * _prc_h("t$d", 1)
 
-_prc_buf(prefix, s) = Float64[0.5 + _prc_h("$prefix/$(s.name)", k)
-                              for k in 1:prod(s.shape; init = 1)]
+_prc_buf(prefix, s) = Float64[
+    0.5 + _prc_h("$prefix/$(s.name)", k)
+        for k in 1:prod(s.shape; init = 1)
+]
 
 # A state given by name, placed by `state_layout`.
 function _prc_named_state(prog, st)
@@ -98,22 +104,26 @@ function _prc_case(c, M)
     @testset "1 surface" begin
         @test PRC.n_states(prog) == c.n_states
         @test PRC.state_layout(prog) ==
-              [PRC.StateBlock(String(b.name), Int(b.offset) + 1, Int[x for x in b.shape])
-               for b in c.state_layout]
+            [
+            PRC.StateBlock(String(b.name), Int(b.offset) + 1, Int[x for x in b.shape])
+                for b in c.state_layout
+        ]
         @test [s.name for s in PRC.parameters(prog)] == [String(s.name) for s in c.parameters]
         @test all(zip(PRC.parameters(prog), c.parameters)) do (a, b)
             b.default === nothing ? a.default === nothing :
                 reinterpret(UInt64, a.default) == reinterpret(UInt64, Float64(b.default))
         end
-        @test slots == [PRC.ForcingSlot(String(s.name), Int[x for x in s.shape], _prc_kind(s.kind))
-                        for s in c.forcing_slots]
+        @test slots == [
+            PRC.ForcingSlot(String(s.name), Int[x for x in s.shape], _prc_kind(s.kind))
+                for s in c.forcing_slots
+        ]
     end
 
     D = PRC.default_forcing_set(prog)
     @testset "2 default forcing" begin
         for (i, s) in enumerate(slots)
             @test _prc_bits(D.bufs[i]) ==
-                  _prc_bits(Float64[x for x in c.default_forcing[Symbol(s.name)]])
+                _prc_bits(Float64[x for x in c.default_forcing[Symbol(s.name)]])
         end
         @test PRC.forcing_epoch(PRC.default_forcing_set(prog)) == PRC.forcing_epoch(D)
     end
@@ -134,8 +144,8 @@ function _prc_case(c, M)
     end
 
     @testset "4 parameter vector" begin
-        @test PRC.parameter_vector(prog, Dict{String,Float64}()) ==
-              Float64[s.default for s in c.parameters]
+        @test PRC.parameter_vector(prog, Dict{String, Float64}()) ==
+            Float64[s.default for s in c.parameters]
         err = try
             PRC.parameter_vector(prog, Dict("NoSuchModel.nothing" => 1.0))
         catch e
@@ -148,7 +158,7 @@ function _prc_case(c, M)
     ndraw = Int(M.draws.count)
     sets = has_ab ? [D, A, B] : [D]
     setname = has_ab ? ["D", "A", "B"] : ["D"]
-    tasks = Tuple{Vector{Float64},Vector{Float64},Float64,Int}[]
+    tasks = Tuple{Vector{Float64}, Vector{Float64}, Float64, Int}[]
     for d in 0:(ndraw - 1), k in eachindex(sets)
         push!(tasks, (_prc_u(prog, d), _prc_p(prog, d), _prc_t(d), k))
     end
@@ -160,10 +170,12 @@ function _prc_case(c, M)
 
     # Reference Problems: the Problem as built for D; one built with
     # `param_arrays` holding the set's data for A and B.
-    refprob = Dict{Int,Any}(1 => prob)
+    refprob = Dict{Int, Any}(1 => prob)
     for k in 2:length(sets)
-        pa = Dict{String,Any}(s.name => reshape(copy(sets[k].bufs[i]), Tuple(s.shape))
-                              for (i, s) in enumerate(slots))
+        pa = Dict{String, Any}(
+            s.name => reshape(copy(sets[k].bufs[i]), Tuple(s.shape))
+                for (i, s) in enumerate(slots)
+        )
         refprob[k] = _prc_problem(c, opts; param_arrays = pa)
     end
     function reference(j)
@@ -212,7 +224,7 @@ function _prc_case(c, M)
                             e
                         end
                         good &= got isa PRC.TreeWalkError &&
-                                got.code == String(c.expect_error.code)
+                            got.code == String(c.expect_error.code)
                     else
                         local i = floor(Int, _prc_h("c$q", j) * length(tasks)) + 1
                         good &= _prc_bits(run(w, i)) == _prc_bits(serial[i])
@@ -253,14 +265,14 @@ function _prc_case(c, M)
             twin = _prc_problem(c, c.baked_twin.options)
             tp = PRC.rhs_program(twin)
             @test [s.name for s in PRC.parameters(tp)] ==
-                  [String(s.name) for s in c.baked_twin.parameters]
+                [String(s.name) for s in c.baked_twin.parameters]
             @test isempty(c.baked_twin.forcing_slots) && isempty(PRC.forcing_slots(tp))
             tw = PRC.rhs_workspace(tp)
             tD = PRC.default_forcing_set(tp)
             for d in 0:(ndraw - 1)
                 u, p, t = _prc_u(prog, d), _prc_p(prog, d), _prc_t(d)
                 @test _prc_bits(_prc_eval(tp, tw, u, p, t, tD)) ==
-                      _prc_bits(_prc_eval(prog, ws, u, p, t, D))
+                    _prc_bits(_prc_eval(prog, ws, u, p, t, D))
             end
         end
     end
@@ -277,11 +289,11 @@ function _prc_case(c, M)
             @test err isa PRC.TreeWalkError && err.code == String(c.expect_error.code)
             uok = _prc_named_state(prog, c.ok_state)
             @test _prc_bits(_prc_eval(prog, w, uok, p0, 0.0, D)) ==
-                  _prc_bits(_prc_eval(prog, PRC.rhs_workspace(prog), uok, p0, 0.0, D))
+                _prc_bits(_prc_eval(prog, PRC.rhs_workspace(prog), uok, p0, 0.0, D))
         end
     end
 
-    @static if VERSION >= v"1.12"
+    return @static if VERSION >= v"1.12"
         @testset "allocation" begin
             # Alternating two forcing sets and two parameter vectors.
             u = _prc_u(prog, 1)

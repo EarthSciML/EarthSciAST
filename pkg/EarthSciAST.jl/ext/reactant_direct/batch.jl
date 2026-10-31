@@ -85,10 +85,14 @@ function _de_bstatic_uncached(ctx::_DECtx, b::_E._OopBatchNode)::Bool
         return _de_bstatic(ctx, b.children[1])
     elseif k === _E._NK_OP
         b.op === :fn && return false
-        (haskey(_DE_UNARY, b.op) || haskey(_DE_COMPARE, b.op) ||
-         haskey(_DE_UNARY_CHLO, b.op) ||
-         b.op in (:+, :*, :-, :neg, :/, :^, :pow, :max, :min, :ifelse, :not,
-                  :and, :or, :pi, :π, :e, :Pre, :atan, :atan2, :log10)) || return false
+        (
+            haskey(_DE_UNARY, b.op) || haskey(_DE_COMPARE, b.op) ||
+                haskey(_DE_UNARY_CHLO, b.op) ||
+                b.op in (
+                :+, :*, :-, :neg, :/, :^, :pow, :max, :min, :ifelse, :not,
+                :and, :or, :pi, :π, :e, :Pre, :atan, :atan2, :log10,
+            )
+        ) || return false
         return all(c -> _de_bstatic(ctx, c), b.children)
     end
     return false
@@ -128,7 +132,7 @@ function _de_bhostval(ctx::_DECtx, b::_E._OopBatchNode, l::Int)::Float64
     return Float64(_E._scalar_op(b.op, c, Float64))
 end
 
-function _de_btry_fold(ctx::_DECtx, b::_E._OopBatchNode, L::Int)::Union{Nothing,_DEVal}
+function _de_btry_fold(ctx::_DECtx, b::_E._OopBatchNode, L::Int)::Union{Nothing, _DEVal}
     b.kind === _E._NK_LITERAL && return nothing     # already one constant
     _de_bstatic(ctx, b) || return nothing
     _de_tally!(ctx, :const_folded)
@@ -146,32 +150,36 @@ end
 # lane-invariant — `_de_bin` / `_de_fold_terms` broadcast the two together, so
 # they are interchangeable exactly as they are in the batch lowering.
 
-function _de_batch(ctx::_DECtx, b::_E._OopBatchNode, L::Int,
-                   cache::Vector{_DEVal})::_DEVal
+function _de_batch(
+        ctx::_DECtx, b::_E._OopBatchNode, L::Int,
+        cache::Vector{_DEVal}
+    )::_DEVal
     folded = _de_btry_fold(ctx, b, L)
     folded === nothing || return folded
     k = b.kind
     if k === _E._NK_LITERAL
         return isempty(b.lanes_f) ? _de_const(ctx, b.literal) :
-                                    _de_arrconst(ctx, b.lanes_f)
+            _de_arrconst(ctx, b.lanes_f)
     elseif k === _E._NK_STATE
         # THE READ THIS FILE EXISTS FOR: L one-element slices become one gather.
         return isempty(b.slots) ? _de_read(ctx, ctx.ue, b.idx, :state) :
-                                  _de_gather(ctx, ctx.ue, b.slots)
+            _de_gather(ctx, ctx.ue, b.slots)
     elseif k === _E._NK_PARAM
         return _de_param(ctx, b.sym)
     elseif k === _E._NK_TIME
         return ctx.t
     elseif k === _E._NK_CACHED
         (1 <= b.idx <= length(cache)) ||
-            _de_refuse("a lane-batched `_NK_CACHED` read",
-                "the group references CSE slot $(b.idx) on a surface emitted " *
-                "without a CSE cache.")
+            _de_refuse(
+            "a lane-batched `_NK_CACHED` read",
+            "the group references CSE slot $(b.idx) on a surface emitted " *
+                "without a CSE cache."
+        )
         return cache[b.idx]
     elseif k === _E._NK_PARAM_GATHER
         buf = _de_buffer(ctx, b.payload::Vector{Float64})
-        return isempty(b.slots) ? _de_slice(ctx, buf, b.idx, b.idx; why=:pgather) :
-                                  _de_take(ctx, buf, b.slots)
+        return isempty(b.slots) ? _de_slice(ctx, buf, b.idx, b.idx; why = :pgather) :
+            _de_take(ctx, buf, b.slots)
     elseif k === _E._NK_LOOPVAR
         # Per lane: congruent trees may bind DIFFERENT enclosing loops at this
         # position, so read each lane's own counter.
@@ -182,9 +190,11 @@ function _de_batch(ctx::_DECtx, b::_E._OopBatchNode, L::Int,
     elseif k === _E._NK_CONST_GATHER
         # `_de_btry_fold` above already took every case where the subscripts are
         # host data, which is every case `_NK_CONST_GATHER` can be in.
-        _de_refuse("a lane-batched const gather with non-host subscripts",
+        _de_refuse(
+            "a lane-batched const gather with non-host subscripts",
             "a `_NK_CONST_GATHER` subscript is loop-counter and literal " *
-            "arithmetic by construction; this one did not resolve on host.")
+                "arithmetic by construction; this one did not resolve on host."
+        )
     elseif k === _E._NK_STATE_GATHER
         # Per-lane slot resolution on host, then ONE read of the slot map.
         # A ghost lane is a STRUCTURAL ZERO in the read (`_DEMap`'s `nothing`),
@@ -227,8 +237,10 @@ function _de_batch(ctx::_DECtx, b::_E._OopBatchNode, L::Int,
         return _de_fold_terms(ctx, b.op, b.literal, terms)
     elseif k === _E._NK_OP
         if b.op === :fn
-            return _de_fn_pl(ctx, b.payload,
-                             _DEVal[_de_batch(ctx, c, L, cache) for c in b.children])
+            return _de_fn_pl(
+                ctx, b.payload,
+                _DEVal[_de_batch(ctx, c, L, cache) for c in b.children]
+            )
         end
         if (b.op === :^ || b.op === :pow) && length(b.children) == 2
             e = b.children[2]
@@ -240,10 +252,12 @@ function _de_batch(ctx::_DECtx, b::_E._OopBatchNode, L::Int,
         c = _DEVal[_de_batch(ctx, ch, L, cache) for ch in b.children]
         return _de_op(ctx, b.op, c)
     end
-    _de_refuse("the lane-batched node kind $(_de_kindname(k))",
+    return _de_refuse(
+        "the lane-batched node kind $(_de_kindname(k))",
         "no arm of `_de_batch` lowers it. The batch lowering " *
-        "(`_oop_batch_lower`) and this walk must cover the same kinds; a kind " *
-        "it can group and this cannot is the gap.")
+            "(`_oop_batch_lower`) and this walk must cover the same kinds; a kind " *
+            "it can group and this cannot is the gap."
+    )
 end
 
 # ---- one scalar surface ------------------------------------------------------
@@ -252,9 +266,11 @@ end
 # per-entry scalar walk, then each group as one whole-lane evaluation landing
 # through one write into the target slot map.
 
-function _de_scalar_surface!(ctx::_DECtx, out::_DEMap,
-                             sb::_E._OopScalarBatches, cache::Vector{_DEVal},
-                             what::AbstractString)
+function _de_scalar_surface!(
+        ctx::_DECtx, out::_DEMap,
+        sb::_E._OopScalarBatches, cache::Vector{_DEVal},
+        what::AbstractString
+    )
     for (slot, nd) in sb.rest
         _de_rule!("$what for $(_de_slotname(ctx, slot))") do
             _de_write!(ctx, out, Int[slot], _de_scalar(ctx, nd, cache))
@@ -262,8 +278,10 @@ function _de_scalar_surface!(ctx::_DECtx, out::_DEMap,
     end
     for g in sb.groups
         slots = g.slots
-        _de_rule!("$what for the lane-batched group writing " *
-                  "$(_de_slotsname(ctx, slots))") do
+        _de_rule!(
+            "$what for the lane-batched group writing " *
+                "$(_de_slotsname(ctx, slots))"
+        ) do
             val = _de_batch(ctx, g.root, length(slots), cache)
             _de_tally!(ctx, :scalar_batch)
             _de_write!(ctx, out, slots, val)

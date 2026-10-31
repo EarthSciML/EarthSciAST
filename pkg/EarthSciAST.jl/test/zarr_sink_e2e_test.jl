@@ -26,7 +26,11 @@ using OrdinaryDiffEqTsit5: Tsit5
     # Distinct per-element initial conditions so a scatter/placement bug cannot hide
     # behind uniform values (the fixture defaults are all 0.0). Same seed for both
     # runs, so the reference and the streamed store must agree.
-    seed! = (u0, _var_map) -> (@inbounds for i in eachindex(u0); u0[i] = Float64(i); end)
+    seed! = (u0, _var_map) -> (
+        @inbounds for i in eachindex(u0)
+            u0[i] = Float64(i)
+        end
+    )
 
     # (a) reference run: in-RAM trajectory at the output times.
     prep = esm_problem(fixture, tspan; seed_ic! = seed!)
@@ -55,13 +59,15 @@ using OrdinaryDiffEqTsit5: Tsit5
     @test grid[1].dimnames == ["lon", "lat"]      # real dim names, not Grid.c_d0/_d1
 
     cache = EarthSciIO.Cache(EarthSciIO.LocalStore(joinpath(dir, "cache")); offline = false)
-    nds = EarthSciIO.read_store(EarthSciIO.ZarrReader(), cache, base_url;
-                                variables = String[varnames..., "time"])
+    nds = EarthSciIO.read_store(
+        EarthSciIO.ZarrReader(), cache, base_url;
+        variables = String[varnames..., "time"]
+    )
 
     tdata = nds.variables["time"].data
     @test length(tdata) == length(times)
     for t in times
-        @test any(x -> isapprox(x, t; atol = 1e-9), tdata)
+        @test any(x -> isapprox(x, t; atol = 1.0e-9), tdata)
     end
 
     # Element-by-element comparison, robust to read-back dim ordering: index the
@@ -74,8 +80,8 @@ using OrdinaryDiffEqTsit5: Tsit5
         @test length(dims) == length(g.dimnames) + 1     # spatial dims + time
         @test Set(dims) == Set(String[g.dimnames..., "time"])   # real names on disk
         for t in times
-            r = findfirst(x -> isapprox(x, t; atol = 1e-9), tdata)
-            kref = findfirst(x -> isapprox(x, t; atol = 1e-9), ref.t)
+            r = findfirst(x -> isapprox(x, t; atol = 1.0e-9), tdata)
+            kref = findfirst(x -> isapprox(x, t; atol = 1.0e-9), ref.t)
             uref = ref.u[kref]
             for m in eachindex(g.flat_indices)
                 cart = g.cart[m]
@@ -89,8 +95,10 @@ using OrdinaryDiffEqTsit5: Tsit5
                         idx[p] = cart[d]
                     end
                 end
-                @test isapprox(data[idx...], uref[g.flat_indices[m]];
-                               atol = 1e-8, rtol = 1e-8)
+                @test isapprox(
+                    data[idx...], uref[g.flat_indices[m]];
+                    atol = 1.0e-8, rtol = 1.0e-8
+                )
             end
         end
     end
@@ -107,13 +115,18 @@ end
 # under test is the derivation/write shape, and a 0-D model with three scalars is
 # exactly the state vector a solve would hand over.
 @testset "0-D model: scalars share one grid and write [time]-only arrays" begin
-    doc = Dict{String,Any}(
-        "domain" => Dict{String,Any}("independent_variable" => "time"),
-        "models" => Dict{String,Any}("M" => Dict{String,Any}(
-            "variables" => Dict{String,Any}(
-                "a" => Dict{String,Any}("type" => "unknown", "units" => "K"),
-                "b" => Dict{String,Any}("type" => "unknown", "units" => "kg"),
-                "c" => Dict{String,Any}("type" => "unknown")))))
+    doc = Dict{String, Any}(
+        "domain" => Dict{String, Any}("independent_variable" => "time"),
+        "models" => Dict{String, Any}(
+            "M" => Dict{String, Any}(
+                "variables" => Dict{String, Any}(
+                    "a" => Dict{String, Any}("type" => "unknown", "units" => "K"),
+                    "b" => Dict{String, Any}("type" => "unknown", "units" => "kg"),
+                    "c" => Dict{String, Any}("type" => "unknown")
+                )
+            )
+        )
+    )
     var_map = Dict("M.a" => 1, "M.b" => 2, "M.c" => 3)
     meta = derive_output_meta(doc)
     @test meta.time_dim == "time"
@@ -127,27 +140,35 @@ end
     dir = mktempdir()
     base_url = "file://" * joinpath(dir, "scalars.zarr")
     times = [0.0, 1.0, 2.0]
-    sink = build_zarr_sink(var_map, base_url; output_times = times, meta = meta,
-                           records_per_shard = 2)   # forces a partial trailing shard
+    sink = build_zarr_sink(
+        var_map, base_url; output_times = times, meta = meta,
+        records_per_shard = 2
+    )   # forces a partial trailing shard
     sink_open!(sink)
     for (k, t) in enumerate(times)
         u = [10.0k, 20.0k, 30.0k]
-        sink_write!(sink, StateSnapshot(t,
-            Tuple{Array,Tuple{Vararg{UnitRange{Int}}}}[(u, (1:3,))], Dict{String,Array}()))
+        sink_write!(
+            sink, StateSnapshot(
+                t,
+                Tuple{Array, Tuple{Vararg{UnitRange{Int}}}}[(u, (1:3,))], Dict{String, Array}()
+            )
+        )
     end
     man = sink_close!(sink)
     @test man !== nothing
     @test man.n_records == length(times)
 
     cache = EarthSciIO.Cache(EarthSciIO.LocalStore(joinpath(dir, "cache")); offline = false)
-    nds = EarthSciIO.read_store(EarthSciIO.ZarrReader(), cache, base_url;
-                                variables = ["M.a", "M.b", "M.c", "time"])
+    nds = EarthSciIO.read_store(
+        EarthSciIO.ZarrReader(), cache, base_url;
+        variables = ["M.a", "M.b", "M.c", "time"]
+    )
     @test nds.variables["time"].dims == ["time"]
     for (nm, scale) in ("M.a" => 10.0, "M.b" => 20.0, "M.c" => 30.0)
         v = nds.variables[nm]
         @test v.dims == ["time"]                       # NOT ["M.a_d0", "time"]
         @test size(v.data) == (length(times),)
-        @test isapprox(collect(v.data), scale .* [1.0, 2.0, 3.0]; atol = 1e-9)
+        @test isapprox(collect(v.data), scale .* [1.0, 2.0, 3.0]; atol = 1.0e-9)
     end
 
     # The restart direction: a rank-1 slab gathers back into the flat state, which

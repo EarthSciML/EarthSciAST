@@ -36,20 +36,23 @@ dec = Decomposition(axes = ["lon" => (period = 144,), "lat" => (period = nothing
 ```
 """
 struct Decomposition
-    axes::Vector{Pair{String,Union{Nothing,Int}}}
-    faces::Vector{Pair{String,String}}
+    axes::Vector{Pair{String, Union{Nothing, Int}}}
+    faces::Vector{Pair{String, String}}
 end
 
-function Decomposition(; axes, faces = Pair{String,String}[])
-    ax = Pair{String,Union{Nothing,Int}}[]
+function Decomposition(; axes, faces = Pair{String, String}[])
+    ax = Pair{String, Union{Nothing, Int}}[]
     for a in axes
         name, spec = first(a), last(a)
         period = spec isa NamedTuple ? get(spec, :period, nothing) : spec
-        (period === nothing || period isa Integer) || throw(ArgumentError(
-            "Decomposition: the period of axis '$name' must be an integer or `nothing`, got $(repr(period))"))
+        (period === nothing || period isa Integer) || throw(
+            ArgumentError(
+                "Decomposition: the period of axis '$name' must be an integer or `nothing`, got $(repr(period))"
+            )
+        )
         push!(ax, String(name) => (period === nothing ? nothing : Int(period)))
     end
-    fc = Pair{String,String}[String(first(f)) => String(last(f)) for f in faces]
+    fc = Pair{String, String}[String(first(f)) => String(last(f)) for f in faces]
     return Decomposition(ax, fc)
 end
 
@@ -141,18 +144,18 @@ struct RhsProgram{F}
     writes::Vector{String}          # W, flat-layout order
     aux_names::Vector{String}       # R \ W, flat-layout order
     flat::FlattenedSystem           # the selected flattened system
-    doc::Dict{String,Any}           # its run document
+    doc::Dict{String, Any}           # its run document
     front::Any                      # (file, model_name, keywords) of the front door
     f!::F
     internal::StateLayout           # the slot space `f!` addresses
-    shapes::Dict{String,Vector{String}}  # array state → index sets per dim
+    shapes::Dict{String, Vector{String}}  # array state → index sets per dim
     layout::TileLayout
     maps::_CopyMaps
     shared::_RhsShared
     memo::_ProgramMemo              # what its re-lowerings reuse from its build
     # The layout, copy maps and workspace factory of its decomposed form
     # (`_decomposed_form`), for `rhs!` to read without a dynamic lookup.
-    form::Base.RefValue{Union{Nothing,Tuple{TileLayout,_CopyMaps,_RhsShared}}}
+    form::Base.RefValue{Union{Nothing, Tuple{TileLayout, _CopyMaps, _RhsShared}}}
 end
 
 """
@@ -165,8 +168,8 @@ An operator restricted to one tile of a [`Decomposition`](@ref)
 struct TileProgram{F}
     op::RhsProgram
     dec::Decomposition
-    owned::Dict{String,UnitRange{Int}}
-    storage::Dict{String,UnitRange{Int}}
+    owned::Dict{String, UnitRange{Int}}
+    storage::Dict{String, UnitRange{Int}}
     f!::F
     internal::StateLayout
     layout::TileLayout
@@ -182,9 +185,13 @@ _range_error(code::String, msg::AbstractString) = SimulateError(String(msg), cod
 
 function _require_native(x, call::AbstractString)
     c = x isa RhsProgram ? x.compiler : x.op.compiler
-    c === :native || throw(_range_error(ERROR_CODES.COMPILER_UNAVAILABLE,
-        "$call needs a program built with compiler = :native; this one was built " *
-        "with compiler = :$c, which has no range-restricted lowering (API_SPEC §5.8)"))
+    c === :native || throw(
+        _range_error(
+            ERROR_CODES.COMPILER_UNAVAILABLE,
+            "$call needs a program built with compiler = :native; this one was built " *
+                "with compiler = :$c, which has no range-restricted lowering (API_SPEC §5.8)"
+        )
+    )
     return nothing
 end
 
@@ -196,7 +203,7 @@ _origin_eq(a::TermOrigin, b::TermOrigin) =
     a.component == b.component && a.coupling == b.coupling
 
 _origin_str(o::TermOrigin) = o.component !== nothing ? "{component: $(o.component)}" :
-                                                       "{coupling: $(o.coupling)}"
+    "{coupling: $(o.coupling)}"
 
 # The state a flattened equation's left-hand side differentiates, or `nothing`
 # for an equation that is not a `D` equation.
@@ -209,8 +216,10 @@ function _d_target(lhs::ASTExpr)
         return nothing
     a = (body::OpExpr).args[1]
     a isa VarExpr && return (a::VarExpr).name
-    (a isa OpExpr && (a::OpExpr).op == "index" && !isempty((a::OpExpr).args) &&
-     (a::OpExpr).args[1] isa VarExpr) && return ((a::OpExpr).args[1]::VarExpr).name
+    (
+        a isa OpExpr && (a::OpExpr).op == "index" && !isempty((a::OpExpr).args) &&
+            (a::OpExpr).args[1] isa VarExpr
+    ) && return ((a::OpExpr).args[1]::VarExpr).name
     return nothing
 end
 
@@ -219,8 +228,11 @@ _normalize_terms(terms::Symbol) = terms === :all ? :all :
 function _normalize_terms(terms)
     out = TermOrigin[]
     for t in terms
-        t isa TermOrigin || throw(ArgumentError(
-            "select: `terms` is `:all` or a vector of TermOrigin, got an element $(repr(t))"))
+        t isa TermOrigin || throw(
+            ArgumentError(
+                "select: `terms` is `:all` or a vector of TermOrigin, got an element $(repr(t))"
+            )
+        )
         push!(out, t)
     end
     return out
@@ -232,8 +244,10 @@ end
 # `writable` is the set `writes` draws from: every state of `flat` for the
 # Problem's whole model, a program's own written variables for a selection of
 # a selection (whose other states are read-only `aux`).
-function _select_flat(flat::FlattenedSystem, writes, terms,
-                      writable = Set{String}(keys(flat.state_variables)))
+function _select_flat(
+        flat::FlattenedSystem, writes, terms,
+        writable = Set{String}(keys(flat.state_variables))
+    )
     states = flat.state_variables
     W = Set{String}()
     if writes === :all
@@ -241,9 +255,12 @@ function _select_flat(flat::FlattenedSystem, writes, terms,
     else
         for w in writes
             ws = String(w)
-            ws in writable || throw(SimulateError(
-                "select: `writes` names '$ws', which is not a variable this program " *
-                "writes; it writes $(join(sort!(collect(writable)), ", "))"))
+            ws in writable || throw(
+                SimulateError(
+                    "select: `writes` names '$ws', which is not a variable this program " *
+                        "writes; it writes $(join(sort!(collect(writable)), ", "))"
+                )
+            )
             push!(W, ws)
         end
     end
@@ -260,10 +277,14 @@ function _select_flat(flat::FlattenedSystem, writes, terms,
         end
         kept = Contribution[c for c in cs if keep(c)]
         if !(tgt in W)
-            isempty(kept) || throw(_range_error(ERROR_CODES.RANGE_SELECTION_WRITES_INCOMPLETE,
-                "select: '$tgt' has kept contributions authored by " *
-                join(unique!([_origin_str(o) for c in kept for o in c.origins]), ", ") *
-                " but is not in `writes`; add '$tgt' to `writes` or drop those terms"))
+            isempty(kept) || throw(
+                _range_error(
+                    ERROR_CODES.RANGE_SELECTION_WRITES_INCOMPLETE,
+                    "select: '$tgt' has kept contributions authored by " *
+                        join(unique!([_origin_str(o) for c in kept for o in c.origins]), ", ") *
+                        " but is not in `writes`; add '$tgt' to `writes` or drop those terms"
+                )
+            )
             continue
         end
         lifted = _is_lifted(eq, flat.lifted_shapes)
@@ -285,7 +306,7 @@ function _select_flat(flat::FlattenedSystem, writes, terms,
     # the variables its expansion reads.
     sel = FlattenedSystem(flat; equations = eqs, equation_contributions = contribs)
     xeqs = expand_flattened_refs(sel).equations
-    defs = Dict{String,Vector{ASTExpr}}()
+    defs = Dict{String, Vector{ASTExpr}}()
     roots = Set{String}()
     for eq in xeqs
         if _d_target(eq.lhs) !== nothing
@@ -317,24 +338,30 @@ function _select_flat(flat::FlattenedSystem, writes, terms,
     contribs2 = Vector{Contribution}[]
     for (eq, cs) in zip(eqs, contribs)
         if _d_target(eq.lhs) === nothing && eq.lhs isa VarExpr &&
-           !((eq.lhs::VarExpr).name in live)
+                !((eq.lhs::VarExpr).name in live)
             continue
         end
         push!(eqs2, eq)
         push!(contribs2, cs)
     end
-    filt(d) = OrderedDict{String,ModelVariable}(k => v for (k, v) in d if k in live)
-    flat2 = FlattenedSystem(flat;
-        state_variables = OrderedDict{String,ModelVariable}(k => v for (k, v) in states
-                                                            if k in live_states),
+    filt(d) = OrderedDict{String, ModelVariable}(k => v for (k, v) in d if k in live)
+    flat2 = FlattenedSystem(
+        flat;
+        state_variables = OrderedDict{String, ModelVariable}(
+            k => v for (k, v) in states
+                if k in live_states
+        ),
         observed_variables = filt(flat.observed_variables),
-        algebraic_variables = OrderedDict{String,ModelVariable}(
-            k => v for (k, v) in flat.algebraic_variables if k in live_states),
+        algebraic_variables = OrderedDict{String, ModelVariable}(
+            k => v for (k, v) in flat.algebraic_variables if k in live_states
+        ),
         equations = eqs2,
-        field_ics = Pair{String,ASTExpr}[p for p in flat.field_ics if first(p) in live_states],
-        lifted_shapes = OrderedDict{String,Vector{Int}}(
-            k => v for (k, v) in flat.lifted_shapes if k in live_states),
-        equation_contributions = contribs2)
+        field_ics = Pair{String, ASTExpr}[p for p in flat.field_ics if first(p) in live_states],
+        lifted_shapes = OrderedDict{String, Vector{Int}}(
+            k => v for (k, v) in flat.lifted_shapes if k in live_states
+        ),
+        equation_contributions = contribs2
+    )
     return flat2, W, R
 end
 
@@ -376,7 +403,7 @@ end
 _range_memo(s::_CaptureSpec) = s.memo
 _range_memo_records(::_CaptureSpec) = true
 function _range_front_door_done(s::_CaptureSpec, file, model_name, kwd)
-    s.front[] = (file, model_name, Dict{Symbol,Any}(kwd))
+    s.front[] = (file, model_name, Dict{Symbol, Any}(kwd))
     return nothing
 end
 
@@ -384,7 +411,7 @@ end
 # build may extend copied, so one build never sees another's additions.
 function _relower_kwargs(front)
     _, _, kwd = front
-    kw = Dict{Symbol,Any}()
+    kw = Dict{Symbol, Any}()
     for (k, v) in kwd
         kw[k] = (k === :const_arrays || k === :param_arrays) ? copy(v) : v
     end
@@ -401,19 +428,21 @@ end
 # slot), whatever the Problem's own build made of it: the build registers each
 # one the Problem holds no buffer for, filled with its value, in the program's
 # own copy of the buffer registry (`pa`, returned).
-function _program_build(seed, doc::Dict{String,Any})
+function _program_build(seed, doc::Dict{String, Any})
     front = Ref{Any}(nothing)
     memo = _ProgramMemo()
-    pa = Dict{String,Any}(String(k) => v for (k, v) in seed.param_arrays)
+    pa = Dict{String, Any}(String(k) => v for (k, v) in seed.param_arrays)
     cap = _WsCapture()
     f!, _u0, p, _ts, var_map = _with_ws_capture(cap) do
         _with_range_spec(_CaptureSpec(front, memo)) do
-            _build_evaluator(doc; compiler = seed.compiler, form = :inplace,
+            _build_evaluator(
+                doc; compiler = seed.compiler, form = :inplace,
                 model_name = seed.model_name, parameter_overrides = seed.overrides,
                 const_arrays = seed.const_arrays, param_arrays = pa,
                 _gated_providers = seed.gated_providers, _sample_time = seed.sample_time,
                 _runtime_array_parameters = get(seed, :runtime_array_parameters, false),
-                _live_fed_parameters = true)
+                _live_fed_parameters = true
+            )
         end
     end
     return f!, var_map, front[], p, pa, cap, memo
@@ -434,31 +463,43 @@ function _program_shared(seed, p, pa, f!, n::Int, cap::_WsCapture)
     decl = seed.flat.parameters
     function declared(n)
         v = get(decl, n, nothing)
-        (v !== nothing && v.default isa Real) ? Float64(v.default) : nothing
+        return (v !== nothing && v.default isa Real) ? Float64(v.default) : nothing
     end
     params = p === nothing ? ParamSlot[] :
-             ParamSlot[ParamSlot(String(k), declared(String(k))) for k in keys(p)]
+        ParamSlot[ParamSlot(String(k), declared(String(k))) for k in keys(p)]
     sort!(params; by = s -> s.name)
     function kind(n)
         v = get(decl, n, nothing)
         return (v === nothing || _externally_fed(v)) ? :forcing : :array_parameter
     end
     names = sort!(String[String(k) for k in keys(pa)])
-    slots = ForcingSlot[ForcingSlot(n, _is_scalar_slot(get(decl, n, nothing)) ? Int[] :
-                                       collect(Int, size(pa[n])), kind(n)) for n in names]
+    slots = ForcingSlot[
+        ForcingSlot(
+            n, _is_scalar_slot(get(decl, n, nothing)) ? Int[] :
+                collect(Int, size(pa[n])), kind(n)
+        ) for n in names
+    ]
     bufs = _slot_buffers(slots, pa)
-    default = ForcingSet(slots, Vector{Float64}[vec(copy(a)) for a in bufs],
-                         _next_set_epoch())
+    default = ForcingSet(
+        slots, Vector{Float64}[vec(copy(a)) for a in bufs],
+        _next_set_epoch()
+    )
     return _RhsShared(params, slots, default, _ws_factory(f!, n, cap, slots, bufs))
 end
 
 # A derived program's: its parent's signatures and default set, and a factory
 # of its own template.
-_derived_shared(parent::_RhsShared, f!, n::Int, cap::_WsCapture, pa,
-                lane_bufs::Vector{Vector{Float64}} = Vector{Float64}[]) =
-    _RhsShared(parent.params, parent.slots, parent.default,
-               _ws_factory(f!, n, cap, parent.slots, _slot_buffers(parent.slots, pa),
-                           lane_bufs))
+_derived_shared(
+    parent::_RhsShared, f!, n::Int, cap::_WsCapture, pa,
+    lane_bufs::Vector{Vector{Float64}} = Vector{Float64}[]
+) =
+    _RhsShared(
+    parent.params, parent.slots, parent.default,
+    _ws_factory(
+        f!, n, cap, parent.slots, _slot_buffers(parent.slots, pa),
+        lane_bufs
+    )
+)
 
 # Re-lower a program's recorded front-door product under `spec`.
 function _relower(prog::RhsProgram, spec::_RangeSpec)
@@ -478,7 +519,7 @@ end
 # Each array state's index sets, from the flattened declaration (or `dim<d>`
 # for a state whose declaration carries no shape).
 function _state_shapes(flat::FlattenedSystem, internal::StateLayout)
-    out = Dict{String,Vector{String}}()
+    out = Dict{String, Vector{String}}()
     for b in _layout_blocks(internal)
         v = get(flat.state_variables, b.name, nothing)
         sh = v === nothing ? nothing : v.shape
@@ -541,8 +582,10 @@ end
 # `nothing` for a cell the program never reads (a dead halo cell); a cell
 # outside the variable's own block may lie in one of its `extra` blocks (the
 # pieces past a periodic seam).
-function _copy_maps(layout::TileLayout, internal::StateLayout, to_internal,
-                    extra::AbstractDict = Dict{String,Vector{String}}())
+function _copy_maps(
+        layout::TileLayout, internal::StateLayout, to_internal,
+        extra::AbstractDict = Dict{String, Vector{String}}()
+    )
     function fill_in!(src, dst, blocks)
         for b in blocks
             if isempty(b.sets) && isempty(b.storage)
@@ -570,6 +613,7 @@ function _copy_maps(layout::TileLayout, internal::StateLayout, to_internal,
                 push!(dst, s)
             end
         end
+        return
     end
     u_src, u_dst, a_src, a_dst = Int[], Int[], Int[], Int[]
     fill_in!(u_src, u_dst, layout.u)
@@ -592,30 +636,40 @@ function _copy_maps(layout::TileLayout, internal::StateLayout, to_internal,
     return _CopyMaps(u_src, u_dst, a_src, a_dst, du_src, du_dst)
 end
 
-function _whole_program(seed, flat::FlattenedSystem, W::Set{String}, R::Set{String},
-                        writes, terms; parent = nothing)
+function _whole_program(
+        seed, flat::FlattenedSystem, W::Set{String}, R::Set{String},
+        writes, terms; parent = nothing
+    )
     init = seed.init
     live = union(W, R)
     init2 = (init === nothing || isempty(init)) ? Equation[] : _select_init(init, live)
     doc = _flat_run_doc(_scalar_slots_to_arrays(flat), seed.coordinates, seed.solver, init2)
     f!, internal, front, p, pa, cap, memo = _program_build(seed, doc)
-    present = Set{String}(vcat(collect(_layout_scalar_names(internal)),
-                               [b.name for b in _layout_blocks(internal)]))
+    present = Set{String}(
+        vcat(
+            collect(_layout_scalar_names(internal)),
+            [b.name for b in _layout_blocks(internal)]
+        )
+    )
     unames = _flat_order(internal, [n for n in W if n in present])
     anames = _flat_order(internal, [n for n in R if n in present && !(n in W)])
     shapes = _state_shapes(flat, internal)
-    gbox(n) = (b = _layout_block(internal, n);
-               bx = UnitRange{Int}[b.lo[d]:b.hi[d] for d in eachindex(b.lo)]; (bx, bx))
+    gbox(n) = (
+        b = _layout_block(internal, n);
+        bx = UnitRange{Int}[b.lo[d]:b.hi[d] for d in eachindex(b.lo)]; (bx, bx)
+    )
     ublocks, nu = _make_blocks(internal, shapes, unames, gbox; owned = true)
     ablocks, na = _make_blocks(internal, shapes, anames, gbox; owned = false)
     layout = TileLayout(ublocks, ablocks, nu, na)
     maps = _copy_maps(layout, internal, (n, d, x) -> x)
-    return RhsProgram(seed, seed.compiler, unames, anames, flat, doc, front, f!,
-                      internal, shapes, layout, maps,
-                      parent === nothing ?
-                          _program_shared(seed, p, pa, f!, length(internal), cap) :
-                          _derived_shared(parent, f!, length(internal), cap, pa),
-                      memo, Ref{Union{Nothing,Tuple{TileLayout,_CopyMaps,_RhsShared}}}(nothing))
+    return RhsProgram(
+        seed, seed.compiler, unames, anames, flat, doc, front, f!,
+        internal, shapes, layout, maps,
+        parent === nothing ?
+            _program_shared(seed, p, pa, f!, length(internal), cap) :
+            _derived_shared(parent, f!, length(internal), cap, pa),
+        memo, Ref{Union{Nothing, Tuple{TileLayout, _CopyMaps, _RhsShared}}}(nothing)
+    )
 end
 
 """
@@ -636,10 +690,14 @@ function rhs_program(prob::EsmProblem)
     c = compiler(prob)
     seed = c in (:native, :interpreter) ? _program_seed(prob) : nothing
     (seed === nothing || !(c in (:native, :interpreter))) &&
-        throw(_range_error(ERROR_CODES.COMPILER_UNAVAILABLE,
+        throw(
+        _range_error(
+            ERROR_CODES.COMPILER_UNAVAILABLE,
             "rhs_program needs a Problem built by esm_problem with compiler = :native " *
-            "(or :interpreter); this one was built with compiler = :$c, which carries no " *
-            "program of its own (API_SPEC §5.8)"))
+                "(or :interpreter); this one was built with compiler = :$c, which carries no " *
+                "program of its own (API_SPEC §5.8)"
+        )
+    )
     flat, W, R = _select_flat(seed.flat, :all, :all)
     return _whole_program(seed, flat, W, R, :all, :all)
 end
@@ -688,14 +746,14 @@ the positional order the compiled program indexes, each with its default.
 Build a vector with [`parameter_vector`](@ref); `rhs!` also takes the Problem's
 NamedTuple `prob.p`.
 """
-parameters(x::Union{RhsProgram,TileProgram}) = x.shared.params
+parameters(x::Union{RhsProgram, TileProgram}) = x.shared.params
 
 """
     n_states(prog) -> Int
 
 The length of `u` (API_SPEC §5.8, "States and parameters").
 """
-n_states(x::Union{RhsProgram,TileProgram}) = x.layout.n_u
+n_states(x::Union{RhsProgram, TileProgram}) = x.layout.n_u
 
 """
     state_layout(prog) -> Vector{StateBlock}
@@ -704,9 +762,11 @@ The `u` blocks in flat-layout order (0-d states by sorted name, then arrays by
 sorted name): name, 1-based offset, shape. Derived from
 [`tile_layout`](@ref)`(prog)`; a tile's shapes are its storage box's.
 """
-state_layout(x::Union{RhsProgram,TileProgram}) =
-    StateBlock[StateBlock(b.name, b.base, Int[length(r) for r in b.storage])
-               for b in x.layout.u]
+state_layout(x::Union{RhsProgram, TileProgram}) =
+    StateBlock[
+    StateBlock(b.name, b.base, Int[length(r) for r in b.storage])
+        for b in x.layout.u
+]
 
 """
     rhs_workspace(x) -> RhsWorkspace
@@ -742,7 +802,7 @@ end
 # cell past the domain, so its storage crosses no seam.
 function _decomposed_form(op::RhsProgram)
     memo = op.memo
-    lock(memo.lock) do
+    return lock(memo.lock) do
         memo.form[] === missing || return memo.form[]
         dec = memo.dec[]
         dec === nothing && return nothing
@@ -766,9 +826,11 @@ _same_layout(a::TileLayout, b::TileLayout) =
     a.n_u == b.n_u && a.n_aux == b.n_aux && _same_blocks(a.u, b.u) && _same_blocks(a.aux, b.aux)
 _same_blocks(a, b) =
     length(a) == length(b) &&
-    all(((x, y),) -> x.name == y.name && x.sets == y.sets && x.storage == y.storage &&
-                     x.owned == y.owned && x.base == y.base && x.strides == y.strides,
-        zip(a, b))
+    all(
+    ((x, y),) -> x.name == y.name && x.sets == y.sets && x.storage == y.storage &&
+        x.owned == y.owned && x.base == y.base && x.strides == y.strides,
+    zip(a, b)
+)
 
 """
     rhs!(du, x, ws, u, aux, p, t, fs::ForcingSet) -> du
@@ -785,8 +847,10 @@ of the wrong length is a `DimensionMismatch`; a workspace or set of another
 program an `ArgumentError`. A call that throws leaves the workspace usable: the
 next call recomputes everything the failed one may have half written.
 """
-function rhs!(du::AbstractVector, x::Union{RhsProgram,TileProgram}, ws::RhsWorkspace,
-              u::AbstractVector, aux::AbstractVector, p, t, fs::ForcingSet)
+function rhs!(
+        du::AbstractVector, x::Union{RhsProgram, TileProgram}, ws::RhsWorkspace,
+        u::AbstractVector, aux::AbstractVector, p, t, fs::ForcingSet
+    )
     if x isa RhsProgram && ws.shared !== x.shared
         # A workspace of the program's decomposed form (`rhs_workspace`), set
         # before the workspace was made.
@@ -798,16 +862,27 @@ function rhs!(du::AbstractVector, x::Union{RhsProgram,TileProgram}, ws::RhsWorks
     return _rhs_eval!(du, x.layout, x.maps, x.shared, ws, u, aux, p, t, fs)
 end
 
-function _rhs_eval!(du::AbstractVector, L::TileLayout, m::_CopyMaps, shared::_RhsShared,
-                    ws::RhsWorkspace, u::AbstractVector, aux::AbstractVector, p, t,
-                    fs::ForcingSet)
+function _rhs_eval!(
+        du::AbstractVector, L::TileLayout, m::_CopyMaps, shared::_RhsShared,
+        ws::RhsWorkspace, u::AbstractVector, aux::AbstractVector, p, t,
+        fs::ForcingSet
+    )
     _check_workspace(shared, ws)
-    length(u) == L.n_u || throw(DimensionMismatch(
-        "rhs!: `u` has $(length(u)) elements; the layout has $(L.n_u)"))
-    length(aux) == L.n_aux || throw(DimensionMismatch(
-        "rhs!: `aux` has $(length(aux)) elements; the layout has $(L.n_aux)"))
-    length(du) == L.n_u || throw(DimensionMismatch(
-        "rhs!: `du` has $(length(du)) elements; the layout has $(L.n_u)"))
+    length(u) == L.n_u || throw(
+        DimensionMismatch(
+            "rhs!: `u` has $(length(u)) elements; the layout has $(L.n_u)"
+        )
+    )
+    length(aux) == L.n_aux || throw(
+        DimensionMismatch(
+            "rhs!: `aux` has $(length(aux)) elements; the layout has $(L.n_aux)"
+        )
+    )
+    length(du) == L.n_u || throw(
+        DimensionMismatch(
+            "rhs!: `du` has $(length(du)) elements; the layout has $(L.n_u)"
+        )
+    )
     _check_parameters(shared, p, "rhs!")
     _prime!(ws, fs)
     U = ws.u
@@ -936,15 +1011,17 @@ _with_cells(b::_Bind, c::_ISet) = _Bind(c, b.axis, b.dlo, b.dhi, b.contracted, b
 function _bind_merge(a::_Bind, b::_Bind)
     lo = _has_offsets(a) ? (_has_offsets(b) ? min(a.dlo, b.dlo) : a.dlo) : b.dlo
     hi = _has_offsets(a) ? (_has_offsets(b) ? max(a.dhi, b.dhi) : a.dhi) : b.dhi
-    return _Bind(_iset_union(a.cells, b.cells), isempty(a.axis) ? b.axis : a.axis,
-                 lo, hi, a.contracted || b.contracted, a.runtime || b.runtime)
+    return _Bind(
+        _iset_union(a.cells, b.cells), isempty(a.axis) ? b.axis : a.axis,
+        lo, hi, a.contracted || b.contracted, a.runtime || b.runtime
+    )
 end
 
 # The cut axes of a decomposition, measured against the program.
 struct _AxisModel
-    cut::Dict{String,Tuple{String,Bool}}      # index set → (cut axis, is a face set)
-    N::Dict{String,Int}                       # cut axis → its cell extent
-    period::Dict{String,Union{Nothing,Int}}   # cut axis → period
+    cut::Dict{String, Tuple{String, Bool}}      # index set → (cut axis, is a face set)
+    N::Dict{String, Int}                       # cut axis → its cell extent
+    period::Dict{String, Union{Nothing, Int}}   # cut axis → period
 end
 
 _axis_domain(m::_AxisModel, axis::String, face::Bool) = 1:(m.N[axis] + (face ? 1 : 0))
@@ -998,42 +1075,46 @@ end
 mutable struct _NeedCtx
     mode::Symbol                              # :halo, :tile or :lane
     axes::_AxisModel
-    owned::Dict{String,UnitRange{Int}}        # cut axis → owned cells (tile)
-    storage::Dict{String,UnitRange{Int}}      # cut axis → storage cells (tile)
-    shapes::Dict{String,Vector{String}}       # array variable → index sets
-    extents::Dict{String,Vector{Int}}         # array variable → extents
+    owned::Dict{String, UnitRange{Int}}        # cut axis → owned cells (tile)
+    storage::Dict{String, UnitRange{Int}}      # cut axis → storage cells (tile)
+    shapes::Dict{String, Vector{String}}       # array variable → index sets
+    extents::Dict{String, Vector{Int}}         # array variable → extents
     states::Set{String}                       # array states
     scalar_states::Set{String}
-    obs_defs::Dict{String,ASTExpr}            # array observeds
-    scalar_defs::Dict{String,ASTExpr}         # scalar observeds
+    obs_defs::Dict{String, ASTExpr}            # array observeds
+    scalar_defs::Dict{String, ASTExpr}         # scalar observeds
     mat_obs::Set{String}
-    params::Dict{String,Int}                  # integer-valued scalar parameters
+    params::Dict{String, Int}                  # integer-valued scalar parameters
     const_arrays::AbstractDict
     arrays::Set{String}                       # every non-state array name (const, live)
-    reach::Dict{Tuple{String,String},Tuple{Int,Int}}
+    reach::Dict{Tuple{String, String}, Tuple{Int, Int}}
     reads::Set{String}
-    obs_need::Dict{String,Vector{_Bind}}
+    obs_need::Dict{String, Vector{_Bind}}
     work::Vector{String}
-    obs_rule::Dict{String,String}
+    obs_rule::Dict{String, String}
     scalar_stack::Set{String}
     # Seam crossings (tile mode): `(axis, face)` → its seam; the walk's current
     # context (`("", ())` for the state equations, `(observed, sides)` for an
     # observed evaluated on one side of each seam it crosses); the `index`
     # nodes being walked; and, per such node, per (variable, context), which
     # sides of each seam its reads land on (bit 1 near, bit 2 far).
-    seams::Dict{Tuple{String,Bool},_Seam}
-    tag::Tuple{String,Tuple}
+    seams::Dict{Tuple{String, Bool}, _Seam}
+    tag::Tuple{String, Tuple}
     idx_stack::Vector{Any}
-    marks::IdDict{Any,Dict{Tuple{String,Tuple{String,Tuple}},Vector{UInt8}}}
+    marks::IdDict{Any, Dict{Tuple{String, Tuple{String, Tuple}}, Vector{UInt8}}}
 end
 
-_NeedCtx(mode, axes, owned, storage, shapes, extents, states, scalar_states, obs_defs,
-         scalar_defs, mat_obs, params, const_arrays, arrays, reach, reads, obs_need, work,
-         obs_rule, scalar_stack) =
-    _NeedCtx(mode, axes, owned, storage, shapes, extents, states, scalar_states, obs_defs,
-             scalar_defs, mat_obs, params, const_arrays, arrays, reach, reads, obs_need,
-             work, obs_rule, scalar_stack, Dict{Tuple{String,Bool},_Seam}(), ("", ()),
-             Any[], IdDict{Any,Dict{Tuple{String,Tuple{String,Tuple}},Vector{UInt8}}}())
+_NeedCtx(
+    mode, axes, owned, storage, shapes, extents, states, scalar_states, obs_defs,
+    scalar_defs, mat_obs, params, const_arrays, arrays, reach, reads, obs_need, work,
+    obs_rule, scalar_stack
+) =
+    _NeedCtx(
+    mode, axes, owned, storage, shapes, extents, states, scalar_states, obs_defs,
+    scalar_defs, mat_obs, params, const_arrays, arrays, reach, reads, obs_need,
+    work, obs_rule, scalar_stack, Dict{Tuple{String, Bool}, _Seam}(), ("", ()),
+    Any[], IdDict{Any, Dict{Tuple{String, Tuple{String, Tuple}}, Vector{UInt8}}}()
+)
 
 # The seam dimension `d` of variable `n` crosses, or `nothing`.
 function _dim_seam(ctx::_NeedCtx, n::String, d::Int)
@@ -1060,7 +1141,7 @@ function _seam_mark!(ctx::_NeedCtx, n::String, binds::Vector{_Bind})
     end
     any_seam || return nothing
     node = isempty(ctx.idx_stack) ? nothing : ctx.idx_stack[end]
-    d = get!(() -> Dict{Tuple{String,Tuple{String,Tuple}},Vector{UInt8}}(), ctx.marks, node)
+    d = get!(() -> Dict{Tuple{String, Tuple{String, Tuple}}, Vector{UInt8}}(), ctx.marks, node)
     k = (n, ctx.tag)
     cur = get(d, k, nothing)
     d[k] = cur === nothing ? bits : cur .| bits
@@ -1075,10 +1156,12 @@ function _rule_display(name::AbstractString)
     return string(parts[end], " (a nested reduction lifted out of it)")
 end
 
-_global_locality(rule, axis, why) = _range_error(ERROR_CODES.RANGE_GLOBAL_LOCALITY,
+_global_locality(rule, axis, why) = _range_error(
+    ERROR_CODES.RANGE_GLOBAL_LOCALITY,
     "rule '$(_rule_display(rule))' has global locality along the decomposed index set " *
-    "'$axis': $why. A tile cannot evaluate it; keep this operator whole-domain " *
-    "(API_SPEC §5.8, decision 8)")
+        "'$axis': $why. A tile cannot evaluate it; keep this operator whole-domain " *
+        "(API_SPEC §5.8, decision 8)"
+)
 
 # The loop variables and the run-time names a subscript reads.
 function _sub_names(ctx::_NeedCtx, s::ASTExpr, env)
@@ -1100,38 +1183,54 @@ const _IMAGE_LIMIT = 50_000_000
 
 # The binding of one subscript `s` at a dimension on index set `dimset`
 # (`nothing` for an anonymous producer's dimension).
-function _bind_sub(ctx::_NeedCtx, s::ASTExpr, env::Dict{String,_Bind},
-                   anchors::Dict{String,String}, dimset::Union{Nothing,String},
-                   rule::String)
+function _bind_sub(
+        ctx::_NeedCtx, s::ASTExpr, env::Dict{String, _Bind},
+        anchors::Dict{String, String}, dimset::Union{Nothing, String},
+        rule::String
+    )
     cut = dimset === nothing ? nothing : get(ctx.axes.cut, dimset, nothing)
     vars, runtime = _sub_names(ctx, s, env)
     if !isempty(runtime) || any(v -> env[v].runtime, vars)
-        cut === nothing || throw(_global_locality(rule, dimset,
-            "its subscript `$(format_expression(s, :ascii))` is data-dependent"))
+        cut === nothing || throw(
+            _global_locality(
+                rule, dimset,
+                "its subscript `$(format_expression(s, :ascii))` is data-dependent"
+            )
+        )
         return _Bind(_ISet(), "", 1, 0, false, true)
     end
     if cut !== nothing
         for v in vars
-            env[v].contracted && throw(_global_locality(rule, dimset,
-                "it contracts (or scans) over the index `$v` along it"))
+            env[v].contracted && throw(
+                _global_locality(
+                    rule, dimset,
+                    "it contracts (or scans) over the index `$v` along it"
+                )
+            )
         end
     end
     # ---- the image ----
-    idx = Dict{String,Int}(ctx.params)
+    idx = Dict{String, Int}(ctx.params)
     pts = Int[]
     n = prod((length(env[v].cells) for v in vars); init = 1)
-    n > _IMAGE_LIMIT && _refuse_rule(_rule_display(rule),
+    n > _IMAGE_LIMIT && _refuse_rule(
+        _rule_display(rule),
         "tile restriction: the subscript `$(format_expression(s, :ascii))` ranges over " *
-        "$n index combinations")
+            "$n index combinations"
+    )
     evalat() = try
         _eval_const_int(s, idx, ctx.const_arrays)
     catch err
         err isa TreeWalkError || rethrow()
-        cut === nothing || throw(_global_locality(rule, dimset,
-            "its subscript `$(format_expression(s, :ascii))` has no value at build time"))
+        cut === nothing || throw(
+            _global_locality(
+                rule, dimset,
+                "its subscript `$(format_expression(s, :ascii))` has no value at build time"
+            )
+        )
         nothing
     end
-    per_x = length(vars) == 1 ? Tuple{Int,Int}[] : nothing
+    per_x = length(vars) == 1 ? Tuple{Int, Int}[] : nothing
     if isempty(vars)
         g = evalat()
         g === nothing && return _Bind(_ISet(), "", 1, 0, false, true)
@@ -1191,20 +1290,26 @@ end
 
 function _is_arrayish(ctx::_NeedCtx, e::ASTExpr)
     e isa VarExpr && return (e::VarExpr).name in ctx.states ||
-                            haskey(ctx.obs_defs, (e::VarExpr).name) ||
-                            (e::VarExpr).name in ctx.arrays
+        haskey(ctx.obs_defs, (e::VarExpr).name) ||
+        (e::VarExpr).name in ctx.arrays
     e isa OpExpr || return false
     o = e::OpExpr
-    (o.op == "makearray" || (_is_faq_op(o.op) && o.output_idx !== nothing &&
-                             !isempty(o.output_idx))) && return true
+    (
+        o.op == "makearray" || (
+            _is_faq_op(o.op) && o.output_idx !== nothing &&
+                !isempty(o.output_idx)
+        )
+    ) && return true
     o.op == "const" && return o.value isa AbstractVector
     o.op == "index" && return false
     return any(a -> _is_arrayish(ctx, a), o.args)
 end
 
 # Walk an expression evaluated at the cells `env` binds.
-function _need_walk!(ctx::_NeedCtx, e::ASTExpr, env::Dict{String,_Bind},
-                     anchors::Dict{String,String}, rule::String)
+function _need_walk!(
+        ctx::_NeedCtx, e::ASTExpr, env::Dict{String, _Bind},
+        anchors::Dict{String, String}, rule::String
+    )
     if e isa VarExpr
         n = (e::VarExpr).name
         haskey(env, n) && return nothing
@@ -1220,8 +1325,12 @@ function _need_walk!(ctx::_NeedCtx, e::ASTExpr, env::Dict{String,_Bind},
             # A bare whole-array reference in a cell context: every cell.
             sh = get(ctx.shapes, n, String[])
             for s in sh
-                haskey(ctx.axes.cut, s) && throw(_global_locality(rule, s,
-                    "it reads the whole array '$n' along it"))
+                haskey(ctx.axes.cut, s) && throw(
+                    _global_locality(
+                        rule, s,
+                        "it reads the whole array '$n' along it"
+                    )
+                )
             end
         end
         return nothing
@@ -1266,8 +1375,13 @@ function _range_cells(ctx::_NeedCtx, r)
     vals = Int[]
     for x in r
         v = x isa Integer ? Int(x) : x isa ASTExpr ?
-            (try _eval_const_int(x, Dict{String,Int}(ctx.params), ctx.const_arrays)
-             catch err; err isa TreeWalkError || rethrow(); nothing end) : nothing
+            (
+                try
+                    _eval_const_int(x, Dict{String, Int}(ctx.params), ctx.const_arrays)
+            catch err
+                    err isa TreeWalkError || rethrow(); nothing
+            end
+            ) : nothing
         v === nothing && return _ISet()
         push!(vals, v)
     end
@@ -1281,7 +1395,7 @@ function _region_int(ctx::_NeedCtx, x)
     x isa Integer && return Int(x)
     x isa ASTExpr || return nothing
     try
-        return _eval_const_int(x, Dict{String,Int}(ctx.params), ctx.const_arrays)
+        return _eval_const_int(x, Dict{String, Int}(ctx.params), ctx.const_arrays)
     catch err
         err isa TreeWalkError || rethrow()
         return nothing
@@ -1311,14 +1425,19 @@ end
 
 # Restrict `env` to the points whose subscript `s` lands in `r`; `nothing` when
 # none does.
-function _restrict_env(ctx::_NeedCtx, env::Dict{String,_Bind}, s::ASTExpr,
-                       r::UnitRange{Int})
+function _restrict_env(
+        ctx::_NeedCtx, env::Dict{String, _Bind}, s::ASTExpr,
+        r::UnitRange{Int}
+    )
     vars, runtime = _sub_names(ctx, s, env)
     isempty(runtime) || return env
-    idx = Dict{String,Int}(ctx.params)
+    idx = Dict{String, Int}(ctx.params)
     if isempty(vars)
-        g = try _eval_const_int(s, idx, ctx.const_arrays) catch err
-            err isa TreeWalkError || rethrow(); return env end
+        g = try
+            _eval_const_int(s, idx, ctx.const_arrays)
+        catch err
+            err isa TreeWalkError || rethrow(); return env
+        end
         return g in r ? env : nothing
     end
     length(vars) == 1 || return env
@@ -1326,8 +1445,11 @@ function _restrict_env(ctx::_NeedCtx, env::Dict{String,_Bind}, s::ASTExpr,
     keep = Int[]
     for x in _points(env[v].cells)
         idx[v] = x
-        g = try _eval_const_int(s, idx, ctx.const_arrays) catch err
-            err isa TreeWalkError || rethrow(); return env end
+        g = try
+            _eval_const_int(s, idx, ctx.const_arrays)
+        catch err
+            err isa TreeWalkError || rethrow(); return env
+        end
         g in r && push!(keep, x)
     end
     isempty(keep) && return nothing
@@ -1337,8 +1459,10 @@ function _restrict_env(ctx::_NeedCtx, env::Dict{String,_Bind}, s::ASTExpr,
 end
 
 # Walk `index(target, subs…)` at the cells `env` binds.
-function _need_index!(ctx::_NeedCtx, target::ASTExpr, subs::Vector{ASTExpr},
-                      env::Dict{String,_Bind}, anchors::Dict{String,String}, rule::String)
+function _need_index!(
+        ctx::_NeedCtx, target::ASTExpr, subs::Vector{ASTExpr},
+        env::Dict{String, _Bind}, anchors::Dict{String, String}, rule::String
+    )
     for s in subs
         _need_walk!(ctx, s, env, anchors, rule)
     end
@@ -1460,8 +1584,10 @@ end
 # A `makearray` region's value at the cells `env` binds: an array producer is
 # gathered at the cell (at the region's non-singleton axes when its rank is
 # lower), anything else is the cell's value as it stands.
-function _need_region_value!(ctx::_NeedCtx, val::ASTExpr, box::Vector{UnitRange{Int}},
-                             subs::Vector{ASTExpr}, env, anchors, rule::String)
+function _need_region_value!(
+        ctx::_NeedCtx, val::ASTExpr, box::Vector{UnitRange{Int}},
+        subs::Vector{ASTExpr}, env, anchors, rule::String
+    )
     if val isa OpExpr && _is_array_producer(val)
         v = val::OpExpr
         rank = v.op == "makearray" ?
@@ -1469,7 +1595,7 @@ function _need_region_value!(ctx::_NeedCtx, val::ASTExpr, box::Vector{UnitRange{
             length(_output_idx_strings(v))
         if rank > 0
             sel = rank == length(subs) ? subs :
-                  ASTExpr[subs[d] for d in eachindex(subs) if length(box[d]) != 1]
+                ASTExpr[subs[d] for d in eachindex(subs) if length(box[d]) != 1]
             length(sel) == rank &&
                 return _need_index!(ctx, v, sel, env, anchors, rule)
         end
@@ -1518,12 +1644,16 @@ function _record_state_read!(ctx::_NeedCtx, n::String, binds::Vector{_Bind}, rul
         shown = sort!(unique!([_near_storage(ctx, axis, g) for g in missing]))
         runs = _iset_points(shown).ivs
         S = ctx.storage[axis]
-        throw(_range_error(ERROR_CODES.RANGE_HALO_INSUFFICIENT,
-            "rule '$(_rule_display(rule))' reads '$n' along index set '$(sh[d])' at " *
-            join(["[$(first(r)), $(last(r))]" for r in runs], ", ") *
-            " (unwrapped), outside the tile's storage $(face ? "faces $(first(S)):$(last(S) + 1)" : "box $(first(S)):$(last(S))")" *
-            " and with no periodic image in it; widen the storage box by the halo " *
-            "`halo(op, dec)` reports (API_SPEC §5.8, tile rule 2)"))
+        throw(
+            _range_error(
+                ERROR_CODES.RANGE_HALO_INSUFFICIENT,
+                "rule '$(_rule_display(rule))' reads '$n' along index set '$(sh[d])' at " *
+                    join(["[$(first(r)), $(last(r))]" for r in runs], ", ") *
+                    " (unwrapped), outside the tile's storage $(face ? "faces $(first(S)):$(last(S) + 1)" : "box $(first(S)):$(last(S))")" *
+                    " and with no periodic image in it; widen the storage box by the halo " *
+                    "`halo(op, dec)` reports (API_SPEC §5.8, tile rule 2)"
+            )
+        )
     end
     return nothing
 end
@@ -1545,9 +1675,11 @@ function _need_observed!(ctx::_NeedCtx, n::String, binds::Vector{_Bind}, rule::S
     end
     cur = get(ctx.obs_need, n, nothing)
     merged = cur === nothing ? nb : _Bind[_bind_merge(cur[d], nb[d]) for d in eachindex(nb)]
-    grew = cur === nothing || any(d -> merged[d].cells != cur[d].cells ||
-                                       merged[d].dlo != cur[d].dlo ||
-                                       merged[d].dhi != cur[d].dhi, eachindex(merged))
+    grew = cur === nothing || any(
+        d -> merged[d].cells != cur[d].cells ||
+            merged[d].dlo != cur[d].dlo ||
+            merged[d].dhi != cur[d].dhi, eachindex(merged)
+    )
     if grew
         ctx.obs_need[n] = merged
         haskey(ctx.obs_rule, n) || (ctx.obs_rule[n] = rule)
@@ -1572,8 +1704,8 @@ function _need_drain!(ctx::_NeedCtx)
                 bs[d] = _with_cells(bs[d], _seam_side_cells(s, bs[d].cells, sides[k]))
             end
             any(b -> isempty(b.cells) && !b.runtime, bs) && continue
-            env = Dict{String,_Bind}()
-            anchors = Dict{String,String}()
+            env = Dict{String, _Bind}()
+            anchors = Dict{String, String}()
             subs = ASTExpr[]
             for d in eachindex(bs)
                 v = "\0rr\0$d"
@@ -1591,8 +1723,8 @@ end
 
 # The cells of `c` on the near (`far = false`) or far side of seam `s`.
 _seam_side_cells(s::_Seam, c::_ISet, far::Bool) =
-    s.far_high == far ? _iset_intersect(c, (s.cut + 1):typemax(Int) - 1) :
-                        _iset_intersect(c, (typemin(Int) + 1):s.cut)
+    s.far_high == far ? _iset_intersect(c, (s.cut + 1):(typemax(Int) - 1)) :
+    _iset_intersect(c, (typemin(Int) + 1):s.cut)
 
 # ============================================================================
 # §5 The decomposition against a program
@@ -1600,7 +1732,7 @@ _seam_side_cells(s::_Seam, c::_ISet, far::Bool) =
 
 # Every index set the program's states and observeds carry, with its extent.
 function _program_sets(prog::RhsProgram)
-    ext = Dict{String,Int}()
+    ext = Dict{String, Int}()
     for b in _layout_blocks(prog.internal)
         sh = prog.shapes[b.name]
         for d in eachindex(sh)
@@ -1613,39 +1745,57 @@ function _program_sets(prog::RhsProgram)
     return ext
 end
 
-_box_invalid(set, why) = _range_error(ERROR_CODES.RANGE_BOX_INVALID,
-    "index set '$set': $why (API_SPEC §5.8, \"Terms of a decomposition\")")
+_box_invalid(set, why) = _range_error(
+    ERROR_CODES.RANGE_BOX_INVALID,
+    "index set '$set': $why (API_SPEC §5.8, \"Terms of a decomposition\")"
+)
 
 function _axis_model(prog::RhsProgram, dec::Decomposition)
     ext = _program_sets(prog)
-    cut = Dict{String,Tuple{String,Bool}}()
-    N = Dict{String,Int}()
-    period = Dict{String,Union{Nothing,Int}}()
-    faces_of = Dict{String,String}(dec.faces)
+    cut = Dict{String, Tuple{String, Bool}}()
+    N = Dict{String, Int}()
+    period = Dict{String, Union{Nothing, Int}}()
+    faces_of = Dict{String, String}(dec.faces)
     for (a, P) in dec.axes
         haskey(cut, a) && throw(_box_invalid(a, "it is cut twice"))
         n = get(ext, a, nothing)
         if n === nothing
             # An axis only face variables carry: its extent is theirs less one.
             f = findfirst(p -> last(p) == a && haskey(ext, first(p)), dec.faces)
-            f === nothing && throw(_box_invalid(a, "no state or observed of this program " *
-                "is shaped on it; the program's index sets are " *
-                join(sort!(collect(keys(ext))), ", ")))
+            f === nothing && throw(
+                _box_invalid(
+                    a, "no state or observed of this program " *
+                        "is shaped on it; the program's index sets are " *
+                        join(sort!(collect(keys(ext))), ", ")
+                )
+            )
             n = ext[first(dec.faces[f])] - 1
         end
-        (P === nothing || P == n) || throw(_box_invalid(a,
-            "its period is $P but its extent is $n; a period is the axis's global extent"))
+        (P === nothing || P == n) || throw(
+            _box_invalid(
+                a,
+                "its period is $P but its extent is $n; a period is the axis's global extent"
+            )
+        )
         cut[a] = (a, false)
         N[a] = n
         period[a] = P
     end
     for (f, a) in dec.faces
-        haskey(N, a) || throw(_box_invalid(f,
-            "it is declared a face set of '$a', which the decomposition does not cut"))
+        haskey(N, a) || throw(
+            _box_invalid(
+                f,
+                "it is declared a face set of '$a', which the decomposition does not cut"
+            )
+        )
         haskey(cut, f) && throw(_box_invalid(f, "it is both a cut axis and a face set"))
         n = get(ext, f, nothing)
-        (n === nothing || n == N[a] + 1) || throw(_box_invalid(f,
-            "a face set of '$a' has $(N[a] + 1) faces, but '$f' has $n"))
+        (n === nothing || n == N[a] + 1) || throw(
+            _box_invalid(
+                f,
+                "a face set of '$a' has $(N[a] + 1) faces, but '$f' has $n"
+            )
+        )
         cut[f] = (a, true)
     end
     return _AxisModel(cut, N, period)
@@ -1653,11 +1803,15 @@ end
 
 # The `owned`/`storage` keyword of `restrict` as axis → range.
 function _axis_boxes(m::_AxisModel, spec, what::String)
-    out = Dict{String,UnitRange{Int}}()
+    out = Dict{String, UnitRange{Int}}()
     for p in spec
         a, r = String(first(p)), last(p)
-        haskey(m.N, a) || throw(_box_invalid(a, "the $what box names it, but the " *
-            "decomposition does not cut it"))
+        haskey(m.N, a) || throw(
+            _box_invalid(
+                a, "the $what box names it, but the " *
+                    "decomposition does not cut it"
+            )
+        )
         out[a] = Int(first(r)):Int(last(r))
     end
     for a in keys(m.N)
@@ -1673,14 +1827,14 @@ end
 mutable struct _TileSpec <: _RangeSpec
     mode::Symbol                               # :halo or :tile
     axes::_AxisModel
-    owned::Dict{String,UnitRange{Int}}
-    storage::Dict{String,UnitRange{Int}}
-    shapes::Dict{String,Vector{String}}        # array states (from the program)
+    owned::Dict{String, UnitRange{Int}}
+    storage::Dict{String, UnitRange{Int}}
+    shapes::Dict{String, Vector{String}}        # array states (from the program)
     writes::Set{String}
     ctx::Any                                   # the `_NeedCtx` once analysed
     # The far-side blocks of states read past a seam: block name → (state,
     # the dimensions on which it holds the far piece).
-    aliases::Dict{String,Tuple{String,Vector{Bool}}}
+    aliases::Dict{String, Tuple{String, Vector{Bool}}}
     # Sharing code across tiles (range_hooks.jl, "Tiles that share their
     # code"): each clipped equation's whole-domain ranges, keyed by its output
     # variable and its clipped ranges (both over the loop subscripts of the
@@ -1689,20 +1843,22 @@ mutable struct _TileSpec <: _RangeSpec
     # and build table; the affine tier's stores, per build store; and the
     # cell each moved fixed slot reads, per descriptor table
     # (`_range_real_fixed!`).
-    sranges::Dict{Tuple{String,Vector{Tuple{Int,Int}}},Vector{UnitRange{Int}}}
-    whole::Dict{String,Tuple{Vector{Int},Vector{Int}}}
-    views::IdDict{Any,Any}
-    xeqs::IdDict{Any,Any}
-    fixed::IdDict{Any,Dict{Int,Any}}
-    memo::Union{Nothing,_ProgramMemo}          # the program's (`_ProgramMemo`)
+    sranges::Dict{Tuple{String, Vector{Tuple{Int, Int}}}, Vector{UnitRange{Int}}}
+    whole::Dict{String, Tuple{Vector{Int}, Vector{Int}}}
+    views::IdDict{Any, Any}
+    xeqs::IdDict{Any, Any}
+    fixed::IdDict{Any, Dict{Int, Any}}
+    memo::Union{Nothing, _ProgramMemo}          # the program's (`_ProgramMemo`)
 end
 
 _TileSpec(mode, axes, owned, storage, shapes, writes, ctx, memo = nothing) =
-    _TileSpec(mode, axes, owned, storage, shapes, writes, ctx,
-              Dict{String,Tuple{String,Vector{Bool}}}(),
-              Dict{Tuple{String,Vector{Tuple{Int,Int}}},Vector{UnitRange{Int}}}(),
-              Dict{String,Tuple{Vector{Int},Vector{Int}}}(), IdDict{Any,Any}(),
-              IdDict{Any,Any}(), IdDict{Any,Dict{Int,Any}}(), memo)
+    _TileSpec(
+    mode, axes, owned, storage, shapes, writes, ctx,
+    Dict{String, Tuple{String, Vector{Bool}}}(),
+    Dict{Tuple{String, Vector{Tuple{Int, Int}}}, Vector{UnitRange{Int}}}(),
+    Dict{String, Tuple{Vector{Int}, Vector{Int}}}(), IdDict{Any, Any}(),
+    IdDict{Any, Any}(), IdDict{Any, Dict{Int, Any}}(), memo
+)
 
 # Whether a tile shares its code with the operator's other tiles: always, but
 # for one whose storage crosses a periodic seam (its far-side blocks have no
@@ -1724,13 +1880,13 @@ function _range_affine_view(spec::_TileSpec, var, clipped, var_map, avi, xeq)
     sr === nothing && return nothing
     vm, shift, done = get!(spec.views, var_map) do
         V, sh = _range_virtual_layout(var_map, spec.whole)
-        (_RangeVMap(V, Dict{Int,String}()), sh, IdDict{Any,Nothing}())
+        (_RangeVMap(V, Dict{Int, String}()), sh, IdDict{Any, Nothing}())
     end
     # Every array variable's bounds, the whole-domain extents of those the
     # tile cuts: made once per layout and bounds table, which a build fixes
     # before it lowers its first equation.
     wa = get!(spec.views, (var_map, avi)) do
-        w = Dict{String,Tuple{Vector{Int},Vector{Int}}}(avi)
+        w = Dict{String, Tuple{Vector{Int}, Vector{Int}}}(avi)
         for (n, e) in spec.whole
             haskey(w, n) && (w[n] = e)
         end
@@ -1749,7 +1905,7 @@ end
 
 # Ranges as their end points: every empty range is `==` every other, and two
 # empty clips of different regions must stay apart.
-_range_key(rs) = Tuple{Int,Int}[(first(r), last(r)) for r in rs]
+_range_key(rs) = Tuple{Int, Int}[(first(r), last(r)) for r in rs]
 
 # The loop-subscript ranges of a `faq` left-hand side `L` writing `var`, in
 # subscript order, as unit ranges (`nothing` when one is not a single run).
@@ -1778,12 +1934,14 @@ struct _HaloDone <: EarthSciASTError
 end
 
 # The whole-domain build's resolved observed definitions, shapes and extents.
-function _need_context(spec::_TileSpec, model, cls, parts, index_sets, const_arrays,
-                       param_arrays)
-    shapes = Dict{String,Vector{String}}(spec.shapes)
-    extents = Dict{String,Vector{Int}}()
-    obs_defs = Dict{String,ASTExpr}()
-    scalar_defs = Dict{String,ASTExpr}()
+function _need_context(
+        spec::_TileSpec, model, cls, parts, index_sets, const_arrays,
+        param_arrays
+    )
+    shapes = Dict{String, Vector{String}}(spec.shapes)
+    extents = Dict{String, Vector{Int}}()
+    obs_defs = Dict{String, ASTExpr}()
+    scalar_defs = Dict{String, ASTExpr}()
     for eq in parts.equations
         eq.lhs isa VarExpr || continue
         n = (eq.lhs::VarExpr).name
@@ -1800,7 +1958,7 @@ function _need_context(spec::_TileSpec, model, cls, parts, index_sets, const_arr
             scalar_defs[n] = eq.rhs
         end
     end
-    params = Dict{String,Int}()
+    params = Dict{String, Int}()
     for (k, v) in parts.param_scope
         (v isa Real && isfinite(v) && isinteger(v)) && (params[String(k)] = Int(v))
     end
@@ -1808,16 +1966,20 @@ function _need_context(spec::_TileSpec, model, cls, parts, index_sets, const_arr
     union!(arrays, (String(k) for k in keys(param_arrays)))
     union!(arrays, (String(k) for k in keys(cls.const_obs_arrays)))
     ca = isempty(cls.const_obs_arrays) ? const_arrays :
-         merge(Dict{String,Any}(String(k) => v for (k, v) in cls.const_obs_arrays),
-               Dict{String,Any}(String(k) => v for (k, v) in const_arrays))
+        merge(
+            Dict{String, Any}(String(k) => v for (k, v) in cls.const_obs_arrays),
+            Dict{String, Any}(String(k) => v for (k, v) in const_arrays)
+        )
     states = Set{String}(n for n in keys(spec.shapes))
     scalar_states = Set{String}(n for n in parts.state_var_names if !(n in states))
-    ctx = _NeedCtx(spec.mode, spec.axes, spec.owned, spec.storage, shapes, extents,
-                   states, scalar_states, obs_defs, scalar_defs,
-                   Set{String}(cls.mat_array_vars), params, ca, arrays,
-                   Dict{Tuple{String,String},Tuple{Int,Int}}(), Set{String}(),
-                   Dict{String,Vector{_Bind}}(), String[], Dict{String,String}(),
-                   Set{String}())
+    ctx = _NeedCtx(
+        spec.mode, spec.axes, spec.owned, spec.storage, shapes, extents,
+        states, scalar_states, obs_defs, scalar_defs,
+        Set{String}(cls.mat_array_vars), params, ca, arrays,
+        Dict{Tuple{String, String}, Tuple{Int, Int}}(), Set{String}(),
+        Dict{String, Vector{_Bind}}(), String[], Dict{String, String}(),
+        Set{String}()
+    )
     if spec.mode === :tile
         for (a, P) in spec.axes.period
             P === nothing && continue
@@ -1857,7 +2019,7 @@ function _clip_rhs_ranges(rhs::ASTExpr, louts::Vector{String}, clips::AbstractDi
         return rhs
     R = rhs::OpExpr
     routs = _output_idx_strings(R)
-    rr = Dict{String,Any}(String(k) => r for (k, r) in R.ranges)
+    rr = Dict{String, Any}(String(k) => r for (k, r) in R.ranges)
     for (x, r) in clips
         y = if length(routs) == length(louts)
             d = findfirst(==(x), louts)
@@ -1900,9 +2062,9 @@ function _need_root!(ctx::_NeedCtx, eq::Equation, rule::String)
         args = (inner::OpExpr).args[2:end]
         haskey(ctx.shapes, v) && length(ctx.shapes[v]) == length(args) || return eq
         rd = _ranges_dict(L)
-        env = Dict{String,_Bind}()
-        anchors = Dict{String,String}()
-        newr = Dict{String,Any}(String(k) => r for (k, r) in rd)
+        env = Dict{String, _Bind}()
+        anchors = Dict{String, String}()
+        newr = Dict{String, Any}(String(k) => r for (k, r) in rd)
         # Whether the tile runs none of the equation's cells (a subscript
         # misses the owned box) and keeps it all the same.
         keep = _ctx_shares_code(ctx)
@@ -1921,18 +2083,22 @@ function _need_root!(ctx::_NeedCtx, eq::Equation, rule::String)
                 env[x] = isempty(axis) ? _Bind(cells) : _Bind(cells, axis, 0, 0, false, false)
                 isempty(axis) || (anchors[axis] = x)
                 if !isempty(axis) && ctx.mode === :tile
-                    length(cells.ivs) == 1 || _refuse_rule(_rule_display(rule),
-                        "tile restriction: its output cells along '$axis' are not one range")
+                    length(cells.ivs) == 1 || _refuse_rule(
+                        _rule_display(rule),
+                        "tile restriction: its output cells along '$axis' are not one range"
+                    )
                     newr[x] = Any[minimum(cells), maximum(cells)]
                 end
             else
                 g = try
-                    _eval_const_int(a, Dict{String,Int}(ctx.params), ctx.const_arrays)
+                    _eval_const_int(a, Dict{String, Int}(ctx.params), ctx.const_arrays)
                 catch err
                     err isa TreeWalkError || rethrow()
-                    _refuse_rule(_rule_display(rule),
+                    _refuse_rule(
+                        _rule_display(rule),
                         "tile restriction: its left-hand side subscript " *
-                        "`$(format_expression(a, :ascii))` is neither a loop index nor a constant")
+                            "`$(format_expression(a, :ascii))` is neither a loop index nor a constant"
+                    )
                 end
                 cells, axis = _output_cells(ctx, v, d, Any[g, g])
                 if isempty(cells)
@@ -1950,7 +2116,7 @@ function _need_root!(ctx::_NeedCtx, eq::Equation, rule::String)
         # (An equation kept over no cells reads nothing.)
         if !none
             if rhs isa OpExpr && _is_faq_op((rhs::OpExpr).op) &&
-               length(_output_idx_strings(rhs::OpExpr)) == length(outs)
+                    length(_output_idx_strings(rhs::OpExpr)) == length(outs)
                 _need_index!(ctx, rhs, ASTExpr[VarExpr(x) for x in outs], env, anchors, rule)
             else
                 _need_walk!(ctx, rhs, env, anchors, rule)
@@ -1958,7 +2124,7 @@ function _need_root!(ctx::_NeedCtx, eq::Equation, rule::String)
         end
         ctx.mode === :tile || return eq
         newlhs = reconstruct(L; ranges = newr)
-        clips = Dict{String,Any}(x => newr[x] for x in outs if haskey(newr, x))
+        clips = Dict{String, Any}(x => newr[x] for x in outs if haskey(newr, x))
         newrhs = _clip_rhs_ranges(rhs, outs, clips)
         return Equation(newlhs, newrhs; _comment = eq._comment)
     end
@@ -1970,7 +2136,7 @@ function _need_root!(ctx::_NeedCtx, eq::Equation, rule::String)
         if haskey(ctx.shapes, v)
             for (d, x) in enumerate(args)
                 g = try
-                    _eval_const_int(x, Dict{String,Int}(ctx.params), ctx.const_arrays)
+                    _eval_const_int(x, Dict{String, Int}(ctx.params), ctx.const_arrays)
                 catch err
                     err isa TreeWalkError || rethrow()
                     return eq
@@ -1979,19 +2145,25 @@ function _need_root!(ctx::_NeedCtx, eq::Equation, rule::String)
                 isempty(cells) && return nothing
             end
         end
-        _need_walk!(ctx, eq.rhs, Dict{String,_Bind}(), Dict{String,String}(), rule)
+        _need_walk!(ctx, eq.rhs, Dict{String, _Bind}(), Dict{String, String}(), rule)
         return eq
     end
     # A 0-d state.
-    ctx.mode === :tile && throw(_range_error(ERROR_CODES.RANGE_GLOBAL_LOCALITY,
-        "the operator writes the 0-d state '$rule', which no tile owns; a 0-d state " *
-        "write has global locality (API_SPEC §5.8, decision 8)"))
-    _need_walk!(ctx, eq.rhs, Dict{String,_Bind}(), Dict{String,String}(), rule)
+    ctx.mode === :tile && throw(
+        _range_error(
+            ERROR_CODES.RANGE_GLOBAL_LOCALITY,
+            "the operator writes the 0-d state '$rule', which no tile owns; a 0-d state " *
+                "write has global locality (API_SPEC §5.8, decision 8)"
+        )
+    )
+    _need_walk!(ctx, eq.rhs, Dict{String, _Bind}(), Dict{String, String}(), rule)
     return eq
 end
 
-function _range_restrict_parts(spec::_TileSpec, model, cls, parts, index_sets,
-                               const_arrays, param_arrays)
+function _range_restrict_parts(
+        spec::_TileSpec, model, cls, parts, index_sets,
+        const_arrays, param_arrays
+    )
     ctx = _need_context(spec, model, cls, parts, index_sets, const_arrays, param_arrays)
     spec.ctx = ctx
     eqs = Equation[]
@@ -2033,8 +2205,8 @@ _seam_alias(n::String, far::Vector{Bool}) = "__seam_" * join(Int.(far)) * "__" *
 
 struct _SeamRewrite
     ctx::_NeedCtx
-    aliases::Dict{String,Tuple{String,Vector{Bool}}}
-    inline::Dict{Tuple{String,Tuple},ASTExpr}
+    aliases::Dict{String, Tuple{String, Vector{Bool}}}
+    inline::Dict{Tuple{String, Tuple}, ASTExpr}
 end
 
 # The dimensions on which the read of `n` at `node` lands past the seam in
@@ -2055,10 +2227,12 @@ function _seam_far_dims(ctx::_NeedCtx, node, n::String, tag)
     bits === nothing && return nothing
     far = Bool[b == 0x02 for b in bits]
     for d in eachindex(bits)
-        bits[d] == 0x03 && _refuse_rule(_rule_display(n),
+        bits[d] == 0x03 && _refuse_rule(
+            _rule_display(n),
             "tile restriction: one read of '$n' reaches cells on both sides of the " *
-            "periodic seam of '$(ctx.shapes[n][d])' within the tile's storage; give the " *
-            "tile a storage box that does not cross the seam")
+                "periodic seam of '$(ctx.shapes[n][d])' within the tile's storage; give the " *
+                "tile a storage box that does not cross the seam"
+        )
     end
     return any(far) ? far : nothing
 end
@@ -2072,11 +2246,13 @@ function _seam_map(f, o::OpExpr)
     lo = o.lower === nothing ? nothing : f(o.lower)
     hi = o.upper === nothing ? nothing : f(o.upper)
     same = all(k -> args[k] === o.args[k], eachindex(args)) && body === o.expr_body &&
-           filt === o.filter && lo === o.lower && hi === o.upper &&
-           (vals === nothing || all(k -> vals[k] === o.values[k], eachindex(vals)))
+        filt === o.filter && lo === o.lower && hi === o.upper &&
+        (vals === nothing || all(k -> vals[k] === o.values[k], eachindex(vals)))
     same && return o
-    return reconstruct(o; args = args, expr_body = body, filter = filt, values = vals,
-                       lower = lo, upper = hi)
+    return reconstruct(
+        o; args = args, expr_body = body, filter = filt, values = vals,
+        lower = lo, upper = hi
+    )
 end
 
 function _seam_rewrite(rw::_SeamRewrite, e::ASTExpr, tag)
@@ -2118,8 +2294,10 @@ function _seam_target(rw::_SeamRewrite, t::ASTExpr, node, tag)
     end
     t isa OpExpr || return t
     o = t::OpExpr
-    (o.op == "index" || o.op == "makearray" || o.op == "const" ||
-     (_is_faq_op(o.op) && o.expr_body !== nothing)) && return _seam_rewrite(rw, o, tag)
+    (
+        o.op == "index" || o.op == "makearray" || o.op == "const" ||
+            (_is_faq_op(o.op) && o.expr_body !== nothing)
+    ) && return _seam_rewrite(rw, o, tag)
     # An elementwise combination of arrays: each array operand is read at the
     # cells of `node` itself.
     return _seam_map(o) do x
@@ -2128,7 +2306,7 @@ function _seam_target(rw::_SeamRewrite, t::ASTExpr, node, tag)
 end
 
 function _seam_equations(ctx::_NeedCtx, spec::_TileSpec, eqs::Vector{Equation})
-    rw = _SeamRewrite(ctx, spec.aliases, Dict{Tuple{String,Tuple},ASTExpr}())
+    rw = _SeamRewrite(ctx, spec.aliases, Dict{Tuple{String, Tuple}, ASTExpr}())
     out = Equation[]
     for eq in eqs
         rhs = if _d_target(eq.lhs) !== nothing
@@ -2153,7 +2331,7 @@ end
 # (`_seam_alias`) for the reads that land there; a storage that wraps onto
 # itself takes the whole axis.
 function _range_state_boxes!(spec::_TileSpec, avi)
-    seams = spec.ctx === nothing ? Dict{Tuple{String,Bool},_Seam}() : spec.ctx.seams
+    seams = spec.ctx === nothing ? Dict{Tuple{String, Bool}, _Seam}() : spec.ctx.seams
     for (n, (lo, hi)) in collect(avi)
         sh = get(spec.shapes, n, nothing)
         sh === nothing && continue
@@ -2232,16 +2410,20 @@ function _range_fill_equations(spec::_TileSpec, name, def, dims, box)
     for eq in eqs
         L = eq.lhs::OpExpr
         args = ((L.expr_body::OpExpr).args[1]::OpExpr).args[2:end]
-        rd = Dict{String,Any}(String(k) => r for (k, r) in L.ranges)
-        pieces = Vector{Pair{String,Vector{UnitRange{Int}}}}()
+        rd = Dict{String, Any}(String(k) => r for (k, r) in L.ranges)
+        pieces = Vector{Pair{String, Vector{UnitRange{Int}}}}()
         for (d, a) in enumerate(args)
             (a isa VarExpr && haskey(rd, (a::VarExpr).name)) || continue
             haskey(spec.axes.cut, sh[d]) || continue
             x = (a::VarExpr).name
             r = rd[x]
             span = Int(r[1]):Int(r[end])
-            c = _iset_intersect(_obs_near_cells(spec.ctx, name, d,
-                                                _iset_intersect(need[d].cells, 1:dims[d])), span)
+            c = _iset_intersect(
+                _obs_near_cells(
+                    spec.ctx, name, d,
+                    _iset_intersect(need[d].cells, 1:dims[d])
+                ), span
+            )
             push!(pieces, x => c.ivs)
         end
         # A tile that shares its code keeps every region, over the one run of
@@ -2254,7 +2436,7 @@ function _range_fill_equations(spec::_TileSpec, name, def, dims, box)
                 r2[x] = isempty(ivs) ? Any[lo, lo - 1] : Any[first(ivs[1]), last(ivs[1])]
             end
             lhs = reconstruct(L; ranges = r2)
-            clips = Dict{String,Any}(first(p) => r2[first(p)] for p in pieces)
+            clips = Dict{String, Any}(first(p) => r2[first(p)] for p in pieces)
             rhs = _clip_rhs_ranges(eq.rhs, _output_idx_strings(L), clips)
             neq = Equation(lhs, rhs)
             w = _lhs_loop_ranges(spec.ctx, L)
@@ -2271,7 +2453,7 @@ function _range_fill_equations(spec::_TileSpec, name, def, dims, box)
                 r2[first(p)] = Any[first(combo[k]), last(combo[k])]
             end
             lhs = reconstruct(L; ranges = r2)
-            clips = Dict{String,Any}(first(p) => r2[first(p)] for p in pieces)
+            clips = Dict{String, Any}(first(p) => r2[first(p)] for p in pieces)
             rhs = _clip_rhs_ranges(eq.rhs, _output_idx_strings(L), clips)
             push!(out, Equation(lhs, rhs))
         end
@@ -2301,8 +2483,10 @@ function halo(op::RhsProgram, dec::Decomposition)
     _require_native(op, "halo")
     m = _axis_model(op, dec)
     _note_decomposition!(op, dec)
-    spec = _TileSpec(:halo, m, Dict{String,UnitRange{Int}}(), Dict{String,UnitRange{Int}}(),
-                     _array_shapes(op), Set(op.writes), nothing, op.memo)
+    spec = _TileSpec(
+        :halo, m, Dict{String, UnitRange{Int}}(), Dict{String, UnitRange{Int}}(),
+        _array_shapes(op), Set(op.writes), nothing, op.memo
+    )
     ctx = try
         _relower(op, spec)
         error("halo: the build did not reach the range seam")
@@ -2310,7 +2494,7 @@ function halo(op::RhsProgram, dec::Decomposition)
         err isa _HaloDone || rethrow()
         err.ctx
     end
-    out = Dict{Tuple{String,String},Tuple{Int,Int}}()
+    out = Dict{Tuple{String, String}, Tuple{Int, Int}}()
     for n in ctx.reads
         n in ctx.states || continue
         for s in ctx.shapes[n]
@@ -2323,7 +2507,7 @@ function halo(op::RhsProgram, dec::Decomposition)
 end
 
 _array_shapes(op::RhsProgram) =
-    Dict{String,Vector{String}}(b.name => op.shapes[b.name] for b in _layout_blocks(op.internal))
+    Dict{String, Vector{String}}(b.name => op.shapes[b.name] for b in _layout_blocks(op.internal))
 
 """
     restrict(op::RhsProgram, dec::Decomposition; owned, storage) -> TileProgram
@@ -2343,25 +2527,38 @@ function restrict(op::RhsProgram, dec::Decomposition; owned, storage)
     st = _axis_boxes(m, storage, "storage")
     for (a, B) in ow
         isempty(B) && throw(_box_invalid(a, "the owned box $B is empty"))
-        (first(B) >= 1 && last(B) <= m.N[a]) || throw(_box_invalid(a,
-            "the owned box $(first(B)):$(last(B)) is not inside 1:$(m.N[a])"))
-        issubset(B, st[a]) || throw(_box_invalid(a,
-            "the owned box $(first(B)):$(last(B)) is not inside the storage box " *
-            "$(first(st[a])):$(last(st[a]))"))
+        (first(B) >= 1 && last(B) <= m.N[a]) || throw(
+            _box_invalid(
+                a,
+                "the owned box $(first(B)):$(last(B)) is not inside 1:$(m.N[a])"
+            )
+        )
+        issubset(B, st[a]) || throw(
+            _box_invalid(
+                a,
+                "the owned box $(first(B)):$(last(B)) is not inside the storage box " *
+                    "$(first(st[a])):$(last(st[a]))"
+            )
+        )
     end
     for n in op.writes
-        haskey(op.internal.scalars, n) && throw(_range_error(ERROR_CODES.RANGE_GLOBAL_LOCALITY,
-            "the operator writes the 0-d state '$n', which no tile owns; a 0-d state " *
-            "write has global locality (API_SPEC §5.8, decision 8)"))
+        haskey(op.internal.scalars, n) && throw(
+            _range_error(
+                ERROR_CODES.RANGE_GLOBAL_LOCALITY,
+                "the operator writes the 0-d state '$n', which no tile owns; a 0-d state " *
+                    "write has global locality (API_SPEC §5.8, decision 8)"
+            )
+        )
     end
     _note_decomposition!(op, dec)
     shapes = _array_shapes(op)
     spec = _TileSpec(:tile, m, ow, st, shapes, Set(op.writes), nothing, op.memo)
     f!, internal, cap, pa = _relower(op, spec)
     # ---- the tile's layout and copy maps ----
-    gb = Dict{String,Vector{UnitRange{Int}}}(
+    gb = Dict{String, Vector{UnitRange{Int}}}(
         b.name => UnitRange{Int}[b.lo[d]:b.hi[d] for d in eachindex(b.lo)]
-        for b in _layout_blocks(op.internal))
+            for b in _layout_blocks(op.internal)
+    )
     function boxes(n)
         sh = shapes[n]
         st_b = copy(gb[n])
@@ -2390,14 +2587,16 @@ function restrict(op::RhsProgram, dec::Decomposition; owned, storage)
         y = x + P * cld(first(dom) - x, P)
         return y in dom ? y : nothing
     end
-    extra = Dict{String,Vector{String}}()
+    extra = Dict{String, Vector{String}}()
     for (a, (n, _)) in spec.aliases
         push!(get!(() -> String[], extra, n), a)
     end
     foreach(sort!, values(extra))
     maps = _copy_maps(layout, internal, to_internal, extra)
-    return TileProgram(op, dec, ow, st, f!, internal, layout, maps,
-                       _derived_shared(op.shared, f!, length(internal), cap, pa))
+    return TileProgram(
+        op, dec, ow, st, f!, internal, layout, maps,
+        _derived_shared(op.shared, f!, length(internal), cap, pa)
+    )
 end
 
 # ============================================================================
@@ -2425,7 +2624,7 @@ struct _LaneGather
     dims::Vector{Int}                # `size(src)`
     name::String
     subs::Vector{ASTExpr}
-    vars::Vector{Pair{String,Int}}   # loop variable → lane-set row of `cells`
+    vars::Vector{Pair{String, Int}}   # loop variable → lane-set row of `cells`
     consts::AbstractDict             # the const arrays a subscript may read
 end
 
@@ -2457,7 +2656,7 @@ struct LaneProgram{F}
     gather_slots::Vector{Int}        # per gather, its source's forcing slot (0: const)
     ucopy::Vector{_LaneCopy}
     acopy::Vector{_LaneCopy}
-    params::Dict{String,Int}
+    params::Dict{String, Int}
     shared::_RhsShared
 end
 
@@ -2475,22 +2674,22 @@ struct LaneInputs
     # The forcing set of the last gather that finished (`nothing` before the
     # first and after one that threw); `rhs!` evaluates the program's other
     # forcing reads against the same set.
-    fs::Base.RefValue{Union{Nothing,ForcingSet}}
+    fs::Base.RefValue{Union{Nothing, ForcingSet}}
     owner::_RhsShared               # the lane program's
-    env::Dict{String,Int}           # a gather's subscript bindings
+    env::Dict{String, Int}           # a gather's subscript bindings
 end
 
 mutable struct _LaneSpec <: _RangeSpec
     kind::Symbol
     sets::Vector{String}
     C::Int
-    shapes::Dict{String,Vector{String}}       # array states
-    index_bufs::Dict{String,Vector{Float64}}  # lane set → live buffer
+    shapes::Dict{String, Vector{String}}       # array states
+    index_bufs::Dict{String, Vector{Float64}}  # lane set → live buffer
     gathers::Vector{_LaneGather}
     laned::Set{String}                         # states + lane-ified observeds
-    obs_shapes::Dict{String,Vector{String}}
-    params::Dict{String,Int}
-    ext::Dict{String,Int}
+    obs_shapes::Dict{String, Vector{String}}
+    params::Dict{String, Int}
+    ext::Dict{String, Int}
     epoch::Any                                 # the build's forcing epoch
 end
 
@@ -2500,7 +2699,7 @@ _range_build_epoch(spec::_LaneSpec, epoch) = (spec.epoch = epoch; nothing)
 
 _lane_box_dim(spec::_LaneSpec, shape::Vector{String}, d::Int) =
     shape[d] in spec.sets ?
-        (d == findfirst(s -> s in spec.sets, shape) ? (1:spec.C) : (1:1)) : nothing
+    (d == findfirst(s -> s in spec.sets, shape) ? (1:spec.C) : (1:1)) : nothing
 
 function _range_state_boxes!(spec::_LaneSpec, avi)
     for (n, (lo, hi)) in collect(avi)
@@ -2536,7 +2735,7 @@ function _range_fill_equations(spec::_LaneSpec, name, def, dims, box)
     for eq in eqs
         L = eq.lhs::OpExpr
         args = ((L.expr_body::OpExpr).args[1]::OpExpr).args[2:end]
-        rd = Dict{String,Any}(String(k) => r for (k, r) in L.ranges)
+        rd = Dict{String, Any}(String(k) => r for (k, r) in L.ranges)
         for (d, a) in enumerate(args)
             a isa VarExpr && haskey(rd, (a::VarExpr).name) &&
                 (rd[(a::VarExpr).name] = Any[lo[d], hi[d]])
@@ -2549,7 +2748,7 @@ end
 # The lane rewrite of one scope. `lanevars` maps each loop variable bound to a
 # lane set to that set; `first` is the variable carrying the lane index.
 struct _LaneScope
-    lanevars::Dict{String,String}
+    lanevars::Dict{String, String}
     first::String
 end
 
@@ -2575,11 +2774,13 @@ function _lane_rewrite(spec::_LaneSpec, ctx, e::ASTExpr, sc::_LaneScope, rule::S
     body = o.expr_body === nothing ? nothing : _lane_rewrite(spec, ctx, o.expr_body, sc, rule)
     filt = o.filter === nothing ? nothing : _lane_rewrite(spec, ctx, o.filter, sc, rule)
     vals = o.values === nothing ? nothing :
-           ASTExpr[_lane_rewrite(spec, ctx, v, sc, rule) for v in o.values]
+        ASTExpr[_lane_rewrite(spec, ctx, v, sc, rule) for v in o.values]
     if _is_faq_op(o.op) && o.ranges !== nothing
         for k in keys(o.ranges)
-            haskey(sc.lanevars, String(k)) && _lane_refuse(rule,
-                "an aggregate rebinds the lane index '$k'")
+            haskey(sc.lanevars, String(k)) && _lane_refuse(
+                rule,
+                "an aggregate rebinds the lane index '$k'"
+            )
         end
     end
     return reconstruct(o; args = args, expr_body = body, filter = filt, values = vals)
@@ -2597,9 +2798,11 @@ function _lane_rewrite_index(spec::_LaneSpec, ctx, o::OpExpr, sc::_LaneScope, ru
             s = subs[d]
             if sh[d] in spec.sets
                 ok = s isa VarExpr && get(sc.lanevars, (s::VarExpr).name, "") == sh[d]
-                ok || _lane_refuse(rule, "it reads '$n' at `$(format_expression(s, :ascii))` " *
-                    "along the lane set '$(sh[d])', which leaves the " *
-                    (spec.kind === :cells ? "cell" : "column"))
+                ok || _lane_refuse(
+                    rule, "it reads '$n' at `$(format_expression(s, :ascii))` " *
+                        "along the lane set '$(sh[d])', which leaves the " *
+                        (spec.kind === :cells ? "cell" : "column")
+                )
                 push!(new, s)
             else
                 push!(new, _lane_rewrite(spec, ctx, s, sc, rule))
@@ -2616,13 +2819,19 @@ function _lane_rewrite_index(spec::_LaneSpec, ctx, o::OpExpr, sc::_LaneScope, ru
         lane = [r for r in refs if haskey(sc.lanevars, r)]
         # Every subscript input must be const: a pre-gather reads it from the
         # build's data, not from a call's parameters or forcing set.
-        other = [r for r in refs if !haskey(sc.lanevars, r) &&
-                                    !(haskey(ctx.arrays, r) && !(r in ctx.livein))]
+        other = [
+            r for r in refs if !haskey(sc.lanevars, r) &&
+                !(haskey(ctx.arrays, r) && !(r in ctx.livein))
+        ]
         if !isempty(lane) && isempty(other)
             k = length(spec.gathers) + 1
             buf = zeros(spec.C)
-            push!(spec.gathers, _LaneGather(buf, ctx.arrays[n], collect(Int, size(ctx.arrays[n])), n, subs,
-                [r => findfirst(==(sc.lanevars[r]), spec.sets) for r in lane], ctx.arrays))
+            push!(
+                spec.gathers, _LaneGather(
+                    buf, ctx.arrays[n], collect(Int, size(ctx.arrays[n])), n, subs,
+                    [r => findfirst(==(sc.lanevars[r]), spec.sets) for r in lane], ctx.arrays
+                )
+            )
             ctx.live["__lane_in_$k"] = buf
             return OpExpr("index", ASTExpr[VarExpr("__lane_in_$k"), VarExpr(sc.first)])
         end
@@ -2641,18 +2850,26 @@ function _lane_rewrite_index(spec::_LaneSpec, ctx, o::OpExpr, sc::_LaneScope, ru
                 end
                 lo = _region_int(ctx.need, region[d][1])
                 hi = _region_int(ctx.need, region[d][2])
-                (lo == 1 && hi == get(spec.ext, set, -1)) || _lane_refuse(rule,
-                    "a region boundary along the lane set '$set' depends on the cell")
+                (lo == 1 && hi == get(spec.ext, set, -1)) || _lane_refuse(
+                    rule,
+                    "a region boundary along the lane set '$set' depends on the cell"
+                )
                 r = (s::VarExpr).name == sc.first ? (1:spec.C) : (1:1)
                 push!(nr, Any[first(r), last(r)])
             end
             push!(regions, nr)
         end
         vals = ASTExpr[_lane_rewrite(spec, ctx, v, sc, rule) for v in ma.values]
-        newsubs = ASTExpr[(s isa VarExpr && haskey(sc.lanevars, (s::VarExpr).name)) ? s :
-                          _lane_rewrite(spec, ctx, s, sc, rule) for s in subs]
-        return reconstruct(o; args = ASTExpr[reconstruct(ma; regions = regions, values = vals),
-                                             newsubs...])
+        newsubs = ASTExpr[
+            (s isa VarExpr && haskey(sc.lanevars, (s::VarExpr).name)) ? s :
+                _lane_rewrite(spec, ctx, s, sc, rule) for s in subs
+        ]
+        return reconstruct(
+            o; args = ASTExpr[
+                reconstruct(ma; regions = regions, values = vals),
+                newsubs...,
+            ]
+        )
     end
     if target isa OpExpr && _is_array_producer(target)
         _lane_refuse(rule, "an array producer is indexed inside the lane scope")
@@ -2662,11 +2879,13 @@ end
 
 # The lane rewrite of `faq(D(index(v, …)))` / an observed's `faq` definition:
 # the lane loop variables narrowed to the lane index (`1..C`) and `1`.
-function _lane_scope_ranges(spec::_LaneSpec, outs::Vector{String}, sets::Vector{String},
-                            ranges, rule)
-    lanevars = Dict{String,String}()
+function _lane_scope_ranges(
+        spec::_LaneSpec, outs::Vector{String}, sets::Vector{String},
+        ranges, rule
+    )
+    lanevars = Dict{String, String}()
     first = ""
-    newr = Dict{String,Any}(String(k) => r for (k, r) in ranges)
+    newr = Dict{String, Any}(String(k) => r for (k, r) in ranges)
     for (x, s) in zip(outs, sets)
         s in spec.sets || continue
         lanevars[x] = s
@@ -2681,10 +2900,12 @@ function _lane_scope_ranges(spec::_LaneSpec, outs::Vector{String}, sets::Vector{
     return _LaneScope(lanevars, first), newr
 end
 
-function _range_restrict_parts(spec::_LaneSpec, model, cls, parts, index_sets,
-                               const_arrays, param_arrays)
+function _range_restrict_parts(
+        spec::_LaneSpec, model, cls, parts, index_sets,
+        const_arrays, param_arrays
+    )
     # ---- the context: arrays, extents, observeds ----
-    arrays = Dict{String,Any}()
+    arrays = Dict{String, Any}()
     for (k, v) in const_arrays
         arrays[String(k)] = v
     end
@@ -2697,24 +2918,26 @@ function _range_restrict_parts(spec::_LaneSpec, model, cls, parts, index_sets,
     for (k, v) in parts.param_scope
         (v isa Real && isfinite(v) && isinteger(v)) && (spec.params[String(k)] = Int(v))
     end
-    extent = Dict{String,Int}()
+    extent = Dict{String, Int}()
     for (k, is) in index_sets
         is.size === nothing || (extent[String(k)] = is.size)
     end
     states = Set{String}(parts.state_var_names)
-    defs = Dict{String,ASTExpr}()
+    defs = Dict{String, ASTExpr}()
     for eq in parts.equations
         eq.lhs isa VarExpr || continue
         defs[(eq.lhs::VarExpr).name] = eq.rhs
     end
     # The state-dependent observeds.
-    dep = Dict{String,Bool}()
+    dep = Dict{String, Bool}()
     function statedep(n, seen = Set{String}())
         haskey(dep, n) && return dep[n]
         n in seen && return false
         push!(seen, n)
-        r = any(x -> x in states || (haskey(defs, x) && statedep(x, seen)),
-                _referenced_var_names(defs[n]))
+        r = any(
+            x -> x in states || (haskey(defs, x) && statedep(x, seen)),
+            _referenced_var_names(defs[n])
+        )
         dep[n] = r
         return r
     end
@@ -2737,26 +2960,34 @@ function _range_restrict_parts(spec::_LaneSpec, model, cls, parts, index_sets,
     for n in keys(spec.shapes)
         push!(spec.laned, n)
     end
-    live = Dict{String,Any}()
-    needctx = _NeedCtx(:lane, _AxisModel(Dict{String,Tuple{String,Bool}}(), Dict{String,Int}(),
-                       Dict{String,Union{Nothing,Int}}()), Dict{String,UnitRange{Int}}(),
-                       Dict{String,UnitRange{Int}}(), Dict{String,Vector{String}}(),
-                       Dict{String,Vector{Int}}(), Set{String}(), Set{String}(),
-                       Dict{String,ASTExpr}(), Dict{String,ASTExpr}(), Set{String}(),
-                       spec.params, arrays, Set{String}(), Dict{Tuple{String,String},Tuple{Int,Int}}(),
-                       Set{String}(), Dict{String,Vector{_Bind}}(), String[],
-                       Dict{String,String}(), Set{String}())
+    live = Dict{String, Any}()
+    needctx = _NeedCtx(
+        :lane, _AxisModel(
+            Dict{String, Tuple{String, Bool}}(), Dict{String, Int}(),
+            Dict{String, Union{Nothing, Int}}()
+        ), Dict{String, UnitRange{Int}}(),
+        Dict{String, UnitRange{Int}}(), Dict{String, Vector{String}}(),
+        Dict{String, Vector{Int}}(), Set{String}(), Set{String}(),
+        Dict{String, ASTExpr}(), Dict{String, ASTExpr}(), Set{String}(),
+        spec.params, arrays, Set{String}(), Dict{Tuple{String, String}, Tuple{Int, Int}}(),
+        Set{String}(), Dict{String, Vector{_Bind}}(), String[],
+        Dict{String, String}(), Set{String}()
+    )
     livein = Set{String}(String(k) for k in keys(param_arrays))
     ctx = (; arrays, live, livein, extent, need = needctx)
     eqs = Equation[]
     for eq in parts.equations
         tgt = _d_target(eq.lhs)
         if tgt !== nothing
-            haskey(spec.shapes, tgt) || _lane_refuse(tgt,
-                "the operator writes the 0-d state '$tgt', which no lane owns")
+            haskey(spec.shapes, tgt) || _lane_refuse(
+                tgt,
+                "the operator writes the 0-d state '$tgt', which no lane owns"
+            )
             L = eq.lhs
-            (L isa OpExpr && _is_faq_op((L::OpExpr).op)) || _lane_refuse(tgt,
-                "its left-hand side is not an array equation")
+            (L isa OpExpr && _is_faq_op((L::OpExpr).op)) || _lane_refuse(
+                tgt,
+                "its left-hand side is not an array equation"
+            )
             L = L::OpExpr
             inner = (L.expr_body::OpExpr).args[1]::OpExpr
             outs = String[]
@@ -2767,7 +2998,7 @@ function _range_restrict_parts(spec::_LaneSpec, model, cls, parts, index_sets,
             sc, newr = _lane_scope_ranges(spec, outs, spec.shapes[tgt], L.ranges, tgt)
             rhs = eq.rhs
             if rhs isa OpExpr && _is_faq_op((rhs::OpExpr).op) &&
-               length(_output_idx_strings(rhs::OpExpr)) == length(outs)
+                    length(_output_idx_strings(rhs::OpExpr)) == length(outs)
                 R = rhs::OpExpr
                 routs = _output_idx_strings(R)
                 rsc, rr = _lane_scope_ranges(spec, routs, spec.shapes[tgt], R.ranges, tgt)
@@ -2781,16 +3012,26 @@ function _range_restrict_parts(spec::_LaneSpec, model, cls, parts, index_sets,
         elseif eq.lhs isa VarExpr && (eq.lhs::VarExpr).name in spec.laned
             n = (eq.lhs::VarExpr).name
             R = eq.rhs
-            (R isa OpExpr && _is_faq_op((R::OpExpr).op) &&
-             length(_output_idx_strings(R::OpExpr)) == length(spec.obs_shapes[n])) ||
+            (
+                R isa OpExpr && _is_faq_op((R::OpExpr).op) &&
+                    length(_output_idx_strings(R::OpExpr)) == length(spec.obs_shapes[n])
+            ) ||
                 _lane_refuse(n, "the observed '$n' is not defined by an array aggregate")
             R = R::OpExpr
-            sc, rr = _lane_scope_ranges(spec, _output_idx_strings(R), spec.obs_shapes[n],
-                                        R.ranges, n)
+            sc, rr = _lane_scope_ranges(
+                spec, _output_idx_strings(R), spec.obs_shapes[n],
+                R.ranges, n
+            )
             body = _lane_rewrite(spec, ctx, R.expr_body, sc, n)
             filt = R.filter === nothing ? nothing : _lane_rewrite(spec, ctx, R.filter, sc, n)
-            push!(eqs, Equation(eq.lhs, reconstruct(R; ranges = rr, expr_body = body,
-                                                     filter = filt); _comment = eq._comment))
+            push!(
+                eqs, Equation(
+                    eq.lhs, reconstruct(
+                        R; ranges = rr, expr_body = body,
+                        filter = filt
+                    ); _comment = eq._comment
+                )
+            )
         else
             push!(eqs, eq)
         end
@@ -2817,25 +3058,45 @@ naming the rule; lane sets that do not fit the program raise
 """
 function lanes(op::RhsProgram, kind::Symbol, sets; chunk::Int = _LANE_CHUNK)
     _require_native(op, "lanes")
-    kind in (:cells, :columns) || throw(_box_invalid(string(kind),
-        "a lane kind is :cells or :columns"))
+    kind in (:cells, :columns) || throw(
+        _box_invalid(
+            string(kind),
+            "a lane kind is :cells or :columns"
+        )
+    )
     S = String[String(s) for s in sets]
     isempty(S) && throw(_box_invalid("", "no lane sets were given"))
     shapes = _array_shapes(op)
     for n in vcat(op.writes, op.aux_names)
         sh = get(shapes, n, nothing)
-        sh === nothing && throw(_box_invalid(join(S, ", "),
-            "the 0-d state '$n' carries no lane set"))
+        sh === nothing && throw(
+            _box_invalid(
+                join(S, ", "),
+                "the 0-d state '$n' carries no lane set"
+            )
+        )
         for s in S
-            s in sh || throw(_box_invalid(s, "the state '$n' (on $(join(sh, ", "))) " *
-                "does not carry the lane set '$s'"))
+            s in sh || throw(
+                _box_invalid(
+                    s, "the state '$n' (on $(join(sh, ", "))) " *
+                        "does not carry the lane set '$s'"
+                )
+            )
         end
         others = [s for s in sh if !(s in S)]
-        kind === :cells && !isempty(others) && throw(_box_invalid(join(others, ", "),
-            "a :cells lane spans every index set of '$n'; add it to the lane sets " *
-            "or use :columns"))
-        kind === :columns && isempty(others) && throw(_box_invalid(join(S, ", "),
-            "a :columns lane leaves a column, but the lane sets cover every index set of '$n'"))
+        kind === :cells && !isempty(others) && throw(
+            _box_invalid(
+                join(others, ", "),
+                "a :cells lane spans every index set of '$n'; add it to the lane sets " *
+                    "or use :columns"
+            )
+        )
+        kind === :columns && isempty(others) && throw(
+            _box_invalid(
+                join(S, ", "),
+                "a :columns lane leaves a column, but the lane sets cover every index set of '$n'"
+            )
+        )
     end
     inst = _lane_instance(op, kind, S, chunk)
     internal = inst.internal
@@ -2872,31 +3133,40 @@ function lanes(op::RhsProgram, kind::Symbol, sets; chunk::Int = _LANE_CHUNK)
     lane_bufs = vcat(inst.index_bufs, Vector{Float64}[g.buf for g in inst.gathers])
     # A gather of a live buffer reads the call's forcing set: the live buffers
     # are the forcing slots, by name.
-    gslots = Int[something(findfirst(s -> s.name == g.name, op.shared.slots), 0)
-                 for g in inst.gathers]
+    gslots = Int[
+        something(findfirst(s -> s.name == g.name, op.shared.slots), 0)
+            for g in inst.gathers
+    ]
     for (g, k) in zip(inst.gathers, gslots)
         k == 0 && haskey(inst.pa, g.name) && error(
             "internal error: lanes: the pre-gathered input '$(g.name)' is a live buffer " *
-            "but no forcing slot")
+                "but no forcing slot"
+        )
     end
-    return LaneProgram(op, kind, S, chunk, inst.f!, internal, layout, inst.index_bufs,
-                       inst.gathers, gslots, uplan, aplan, inst.params,
-                       _derived_shared(op.shared, inst.f!, length(internal), inst.cap,
-                                       inst.pa, lane_bufs))
+    return LaneProgram(
+        op, kind, S, chunk, inst.f!, internal, layout, inst.index_bufs,
+        inst.gathers, gslots, uplan, aplan, inst.params,
+        _derived_shared(
+            op.shared, inst.f!, length(internal), inst.cap,
+            inst.pa, lane_bufs
+        )
+    )
 end
 
 # One compiled lane program: its right-hand side, the live lane buffers it
 # reads, its gathers and its build's forcing epoch.
 function _lane_instance(op::RhsProgram, kind::Symbol, S::Vector{String}, chunk::Int)
-    index_bufs = Dict{String,Vector{Float64}}(s => zeros(chunk) for s in S)
-    spec = _LaneSpec(kind, S, chunk, _array_shapes(op), index_bufs, _LaneGather[],
-                     Set{String}(), Dict{String,Vector{String}}(), Dict{String,Int}(),
-                     _program_sets(op), nothing)
+    index_bufs = Dict{String, Vector{Float64}}(s => zeros(chunk) for s in S)
+    spec = _LaneSpec(
+        kind, S, chunk, _array_shapes(op), index_bufs, _LaneGather[],
+        Set{String}(), Dict{String, Vector{String}}(), Dict{String, Int}(),
+        _program_sets(op), nothing
+    )
     # The lane-index buffers are live forcing buffers of the build.
     file, model_name, _ = op.front
     kw = _relower_kwargs(op.front)
-    pa = get(kw, :param_arrays, Dict{String,Any}())
-    pa = Dict{String,Any}(String(k) => v for (k, v) in pa)
+    pa = get(kw, :param_arrays, Dict{String, Any}())
+    pa = Dict{String, Any}(String(k) => v for (k, v) in pa)
     for (s, b) in index_bufs
         pa["__lane_" * s] = b
     end
@@ -2910,9 +3180,11 @@ function _lane_instance(op::RhsProgram, kind::Symbol, S::Vector{String}, chunk::
         end
     end
     spec.epoch isa _ForcingEpoch || error("lanes: the build did not report its forcing epoch")
-    return (; f!, internal, index_bufs = Vector{Float64}[index_bufs[s] for s in S],
-            gathers = spec.gathers, params = spec.params, epoch = spec.epoch::_ForcingEpoch,
-            cap, pa)
+    return (;
+        f!, internal, index_bufs = Vector{Float64}[index_bufs[s] for s in S],
+        gathers = spec.gathers, params = spec.params, epoch = spec.epoch::_ForcingEpoch,
+        cap, pa,
+    )
 end
 
 """
@@ -2939,15 +3211,19 @@ index and every pre-gathered array read. Fill them with
 [`gather_lane_inputs!`](@ref).
 """
 lane_inputs(lp::LaneProgram, L::Integer) =
-    LaneInputs([zeros(Int(L)) for _ in lp.index_bufs],
-               [zeros(Int(L)) for _ in lp.gathers], Int(L),
-               Base.RefValue{Union{Nothing,ForcingSet}}(nothing), lp.shared,
-               Dict{String,Int}(lp.params))
+    LaneInputs(
+    [zeros(Int(L)) for _ in lp.index_bufs],
+    [zeros(Int(L)) for _ in lp.gathers], Int(L),
+    Base.RefValue{Union{Nothing, ForcingSet}}(nothing), lp.shared,
+    Dict{String, Int}(lp.params)
+)
 
 # Pre-gathered input `k` at the cell of lane `l` of `cells`, stored into
 # `buf[c]`: read from the call's forcing buffer, or from const data.
-function _lane_gather!(buf::Vector{Float64}, c::Int, lp::LaneProgram, k::Int, fs::ForcingSet,
-                       cells::AbstractMatrix, l::Int, env::Dict{String,Int})
+function _lane_gather!(
+        buf::Vector{Float64}, c::Int, lp::LaneProgram, k::Int, fs::ForcingSet,
+        cells::AbstractMatrix, l::Int, env::Dict{String, Int}
+    )
     g = lp.gathers[k]
     slot = lp.gather_slots[k]
     if slot == 0
@@ -2959,16 +3235,20 @@ function _lane_gather!(buf::Vector{Float64}, c::Int, lp::LaneProgram, k::Int, fs
 end
 
 # A barrier: `src`'s concrete type is known inside, so the read does not box.
-function _lane_gather_store!(buf::Vector{Float64}, c::Int, g::_LaneGather, src::A,
-                             cells::AbstractMatrix, l::Int, env::Dict{String,Int}) where {A}
+function _lane_gather_store!(
+        buf::Vector{Float64}, c::Int, g::_LaneGather, src::A,
+        cells::AbstractMatrix, l::Int, env::Dict{String, Int}
+    ) where {A}
     @inbounds buf[c] = _lane_gather_value(g, src, cells, l, env)
     return nothing
 end
 
 # The value of pre-gathered input `g` (read from `src`, linear over `g.src`'s
 # shape) at the cell of lane `l` of `cells`.
-function _lane_gather_value(g::_LaneGather, src::AbstractArray, cells::AbstractMatrix, l::Int,
-                            env::Dict{String,Int})
+function _lane_gather_value(
+        g::_LaneGather, src::AbstractArray, cells::AbstractMatrix, l::Int,
+        env::Dict{String, Int}
+    )
     for (v, row) in g.vars
         env[v] = Int(cells[row, l])
     end
@@ -3001,19 +3281,33 @@ come from [`lane_inputs`](@ref)`(lanes, L)` and `fs` be a [`ForcingSet`](@ref)
 of `lanes`. A gather that throws leaves `li` holding no gather, so `rhs!`
 refuses it until a gather finishes.
 """
-function gather_lane_inputs!(li::LaneInputs, lp::LaneProgram, p, t, fs::ForcingSet,
-                             cells::AbstractMatrix, n::Integer)
-    li.owner === lp.shared || throw(ArgumentError(
-        "gather_lane_inputs!: the lane inputs were made by lane_inputs of another program"))
+function gather_lane_inputs!(
+        li::LaneInputs, lp::LaneProgram, p, t, fs::ForcingSet,
+        cells::AbstractMatrix, n::Integer
+    )
+    li.owner === lp.shared || throw(
+        ArgumentError(
+            "gather_lane_inputs!: the lane inputs were made by lane_inputs of another program"
+        )
+    )
     _check_forcing_set(lp.shared.slots, fs, "gather_lane_inputs!")
     L = li.L
-    size(cells, 1) == length(lp.sets) || throw(DimensionMismatch(
-        "gather_lane_inputs!: `cells` has $(size(cells, 1)) rows; the lane sets are " *
-        join(lp.sets, ", ")))
-    size(cells, 2) == L || throw(DimensionMismatch(
-        "gather_lane_inputs!: `cells` has $(size(cells, 2)) lanes; the inputs hold $L"))
-    1 <= n <= L || throw(DimensionMismatch(
-        "gather_lane_inputs!: n = $n lanes of an L = $L batch"))
+    size(cells, 1) == length(lp.sets) || throw(
+        DimensionMismatch(
+            "gather_lane_inputs!: `cells` has $(size(cells, 1)) rows; the lane sets are " *
+                join(lp.sets, ", ")
+        )
+    )
+    size(cells, 2) == L || throw(
+        DimensionMismatch(
+            "gather_lane_inputs!: `cells` has $(size(cells, 2)) lanes; the inputs hold $L"
+        )
+    )
+    1 <= n <= L || throw(
+        DimensionMismatch(
+            "gather_lane_inputs!: n = $n lanes of an L = $L batch"
+        )
+    )
     li.fs[] = nothing
     env = li.env
     for l in 1:L
@@ -3033,22 +3327,36 @@ function _lane_check(lp::LaneProgram, ws::RhsWorkspace, du, u, aux, p, cells, n)
     _check_workspace(lp.shared, ws)
     _check_parameters(lp.shared, p, "rhs!")
     L = size(cells, 2)
-    size(cells, 1) == length(lp.sets) || throw(DimensionMismatch(
-        "rhs!: `cells` has $(size(cells, 1)) rows; the lane sets are $(join(lp.sets, ", "))"))
+    size(cells, 1) == length(lp.sets) || throw(
+        DimensionMismatch(
+            "rhs!: `cells` has $(size(cells, 1)) rows; the lane sets are $(join(lp.sets, ", "))"
+        )
+    )
     (1 <= n <= L) || throw(ArgumentError("rhs!: n = $n lanes of an L = $L batch"))
-    length(u) == lp.layout.n_u * L || throw(DimensionMismatch(
-        "rhs!: `u` has $(length(u)) elements; the lane layout needs $(lp.layout.n_u * L)"))
-    length(aux) == lp.layout.n_aux * L || throw(DimensionMismatch(
-        "rhs!: `aux` has $(length(aux)) elements; the lane layout needs $(lp.layout.n_aux * L)"))
-    length(du) == lp.layout.n_u * L || throw(DimensionMismatch(
-        "rhs!: `du` has $(length(du)) elements; the lane layout needs $(lp.layout.n_u * L)"))
+    length(u) == lp.layout.n_u * L || throw(
+        DimensionMismatch(
+            "rhs!: `u` has $(length(u)) elements; the lane layout needs $(lp.layout.n_u * L)"
+        )
+    )
+    length(aux) == lp.layout.n_aux * L || throw(
+        DimensionMismatch(
+            "rhs!: `aux` has $(length(aux)) elements; the lane layout needs $(lp.layout.n_aux * L)"
+        )
+    )
+    length(du) == lp.layout.n_u * L || throw(
+        DimensionMismatch(
+            "rhs!: `du` has $(length(du)) elements; the lane layout needs $(lp.layout.n_u * L)"
+        )
+    )
     return L
 end
 
 # Run lanes `s0+1 … s0+m` of the batch through the program, after its lane
 # buffers hold their inputs.
-function _lane_chunk!(du, lp::LaneProgram, ws::RhsWorkspace, u, aux, p, t, L::Int,
-                      s0::Int, m::Int)
+function _lane_chunk!(
+        du, lp::LaneProgram, ws::RhsWorkspace, u, aux, p, t, L::Int,
+        s0::Int, m::Int
+    )
     U = ws.u
     C = lp.C
     for (plans, buf) in ((lp.ucopy, u), (lp.acopy, aux))
@@ -3089,8 +3397,10 @@ input from `li` ([`gather_lane_inputs!`](@ref)) instead of gathering it here,
 and evaluates against the forcing set `li` was gathered from. Every per-call
 buffer is the workspace's: reentrant across distinct workspaces.
 """
-function rhs!(du::AbstractVector, lp::LaneProgram, ws::RhsWorkspace, u::AbstractVector,
-              aux::AbstractVector, p, t, fs::ForcingSet, cells::AbstractMatrix, n::Integer)
+function rhs!(
+        du::AbstractVector, lp::LaneProgram, ws::RhsWorkspace, u::AbstractVector,
+        aux::AbstractVector, p, t, fs::ForcingSet, cells::AbstractMatrix, n::Integer
+    )
     L = _lane_check(lp, ws, du, u, aux, p, cells, n)
     _prime!(ws, fs)
     C = lp.C
@@ -3113,16 +3423,24 @@ function rhs!(du::AbstractVector, lp::LaneProgram, ws::RhsWorkspace, u::Abstract
     return du
 end
 
-function rhs!(du::AbstractVector, lp::LaneProgram, ws::RhsWorkspace, u::AbstractVector,
-              aux::AbstractVector, p, t, li::LaneInputs, cells::AbstractMatrix, n::Integer)
+function rhs!(
+        du::AbstractVector, lp::LaneProgram, ws::RhsWorkspace, u::AbstractVector,
+        aux::AbstractVector, p, t, li::LaneInputs, cells::AbstractMatrix, n::Integer
+    )
     L = _lane_check(lp, ws, du, u, aux, p, cells, n)
-    li.owner === lp.shared || throw(ArgumentError(
-        "rhs!: the lane inputs were made by lane_inputs of another program"))
+    li.owner === lp.shared || throw(
+        ArgumentError(
+            "rhs!: the lane inputs were made by lane_inputs of another program"
+        )
+    )
     li.L == L || throw(DimensionMismatch("rhs!: the lane inputs hold $(li.L) lanes; the batch has $L"))
     fs = li.fs[]
-    fs === nothing && throw(ArgumentError(
-        "rhs!: the lane inputs hold no gather (gather_lane_inputs! was never called, or " *
-        "its last call threw)"))
+    fs === nothing && throw(
+        ArgumentError(
+            "rhs!: the lane inputs hold no gather (gather_lane_inputs! was never called, or " *
+                "its last call threw)"
+        )
+    )
     _prime!(ws, fs)
     C = lp.C
     ni = length(lp.index_bufs)

@@ -8,14 +8,14 @@ include("testutils.jl")  # _op builder + TESTUTILS_REPO_ROOT
 # Helpers for building expressions inside tests (on top of testutils.jl's _op).
 const _N = EarthSciAST.NumExpr
 const _V = EarthSciAST.VarExpr
-_deriv(name) = _op("D", _V(name); wrt="t")
+_deriv(name) = _op("D", _V(name); wrt = "t")
 
 # Locate a flattened equation whose LHS dependent variable matches `dep`.
 function _find_eq(flat::FlattenedSystem, dep::String)
     for eq in flat.equations
         if eq.lhs isa EarthSciAST.OpExpr && eq.lhs.op == "D" &&
-           !isempty(eq.lhs.args) && eq.lhs.args[1] isa EarthSciAST.VarExpr &&
-           (eq.lhs.args[1]::EarthSciAST.VarExpr).name == dep
+                !isempty(eq.lhs.args) && eq.lhs.args[1] isa EarthSciAST.VarExpr &&
+                (eq.lhs.args[1]::EarthSciAST.VarExpr).name == dep
             return eq
         end
         if eq.lhs isa EarthSciAST.VarExpr && eq.lhs.name == dep
@@ -47,18 +47,26 @@ end
 @testset "Flatten System" begin
 
     @testset "1. Reactions-only Model" begin
-        species = [EarthSciAST.Species("A", default=1.0),
-                   EarthSciAST.Species("B", default=0.0)]
+        species = [
+            EarthSciAST.Species("A", default = 1.0),
+            EarthSciAST.Species("B", default = 0.0),
+        ]
         params = [EarthSciAST.Parameter("k", 0.1)]
         rate = _op("*", _V("k"), _V("A"))
-        rxns = [EarthSciAST.Reaction("r1",
-            [EarthSciAST.StoichiometryEntry("A", 1)],
-            [EarthSciAST.StoichiometryEntry("B", 1)],
-            rate)]
-        rsys = EarthSciAST.ReactionSystem(species, rxns, parameters=params)
-        file = EarthSciAST.EsmFile("0.1.0",
+        rxns = [
+            EarthSciAST.Reaction(
+                "r1",
+                [EarthSciAST.StoichiometryEntry("A", 1)],
+                [EarthSciAST.StoichiometryEntry("B", 1)],
+                rate
+            ),
+        ]
+        rsys = EarthSciAST.ReactionSystem(species, rxns, parameters = params)
+        file = EarthSciAST.EsmFile(
+            "0.1.0",
             EarthSciAST.Metadata("t1"),
-            reaction_systems=Dict("Chem" => rsys))
+            reaction_systems = Dict("Chem" => rsys)
+        )
         flat = flatten(file)
 
         @test haskey(flat.state_variables, "Chem.A")
@@ -77,22 +85,28 @@ end
 
     @testset "2. Mixed equations + reactions (disjoint species)" begin
         vars = Dict{String, ModelVariable}(
-            "T" => ModelVariable(UnknownVariable, default=300.0),
-            "k" => ModelVariable(ParameterVariable, default=0.1),
+            "T" => ModelVariable(UnknownVariable, default = 300.0),
+            "k" => ModelVariable(ParameterVariable, default = 0.1),
         )
         eqs = [Equation(_deriv("T"), _op("*", _V("k"), _V("T")))]
         model = Model(vars, eqs)
 
-        species = [EarthSciAST.Species("A", default=1.0)]
-        rxns = [EarthSciAST.Reaction("r1", nothing,
-            [EarthSciAST.StoichiometryEntry("A", 1)],
-            _N(0.5))]
+        species = [EarthSciAST.Species("A", default = 1.0)]
+        rxns = [
+            EarthSciAST.Reaction(
+                "r1", nothing,
+                [EarthSciAST.StoichiometryEntry("A", 1)],
+                _N(0.5)
+            ),
+        ]
         rsys = EarthSciAST.ReactionSystem(species, rxns)
 
-        file = EarthSciAST.EsmFile("0.1.0",
+        file = EarthSciAST.EsmFile(
+            "0.1.0",
             EarthSciAST.Metadata("t2"),
-            models=Dict("Climate" => model),
-            reaction_systems=Dict("Chem" => rsys))
+            models = Dict("Climate" => model),
+            reaction_systems = Dict("Chem" => rsys)
+        )
         flat = flatten(file)
 
         @test haskey(flat.state_variables, "Climate.T")
@@ -103,21 +117,31 @@ end
     end
 
     @testset "3. Autocatalytic A + B → 2B (net stoich of B is +1)" begin
-        species = [EarthSciAST.Species("A"),
-                   EarthSciAST.Species("B")]
+        species = [
+            EarthSciAST.Species("A"),
+            EarthSciAST.Species("B"),
+        ]
         # Pass k as the rate constant. `mass_action_rate` multiplies by the
         # substrate concentrations (A and B) to form the full rate expression.
         rate = _V("k")
-        rxns = [EarthSciAST.Reaction("r1",
-            [EarthSciAST.StoichiometryEntry("A", 1),
-             EarthSciAST.StoichiometryEntry("B", 1)],
-            [EarthSciAST.StoichiometryEntry("B", 2)],
-            rate)]
+        rxns = [
+            EarthSciAST.Reaction(
+                "r1",
+                [
+                    EarthSciAST.StoichiometryEntry("A", 1),
+                    EarthSciAST.StoichiometryEntry("B", 1),
+                ],
+                [EarthSciAST.StoichiometryEntry("B", 2)],
+                rate
+            ),
+        ]
         params = [EarthSciAST.Parameter("k", 0.3)]
-        rsys = EarthSciAST.ReactionSystem(species, rxns, parameters=params)
-        file = EarthSciAST.EsmFile("0.1.0",
+        rsys = EarthSciAST.ReactionSystem(species, rxns, parameters = params)
+        file = EarthSciAST.EsmFile(
+            "0.1.0",
             EarthSciAST.Metadata("t3"),
-            reaction_systems=Dict("Auto" => rsys))
+            reaction_systems = Dict("Auto" => rsys)
+        )
         flat = flatten(file)
 
         eq_A = _find_eq(flat, "Auto.A")
@@ -162,18 +186,26 @@ end
 
     @testset "4. Source (null substrates) and sink (null products) reactions" begin
         species = [EarthSciAST.Species("X")]
-        source = EarthSciAST.Reaction("src", nothing,
+        source = EarthSciAST.Reaction(
+            "src", nothing,
             [EarthSciAST.StoichiometryEntry("X", 1)],
-            _V("kin"))
-        sink = EarthSciAST.Reaction("snk",
+            _V("kin")
+        )
+        sink = EarthSciAST.Reaction(
+            "snk",
             [EarthSciAST.StoichiometryEntry("X", 1)], nothing,
-            _op("*", _V("kout"), _V("X")))
-        params = [EarthSciAST.Parameter("kin", 1.0),
-                  EarthSciAST.Parameter("kout", 0.5)]
-        rsys = EarthSciAST.ReactionSystem(species, [source, sink], parameters=params)
-        file = EarthSciAST.EsmFile("0.1.0",
+            _op("*", _V("kout"), _V("X"))
+        )
+        params = [
+            EarthSciAST.Parameter("kin", 1.0),
+            EarthSciAST.Parameter("kout", 0.5),
+        ]
+        rsys = EarthSciAST.ReactionSystem(species, [source, sink], parameters = params)
+        file = EarthSciAST.EsmFile(
+            "0.1.0",
             EarthSciAST.Metadata("t4"),
-            reaction_systems=Dict("S" => rsys))
+            reaction_systems = Dict("S" => rsys)
+        )
         flat = flatten(file)
 
         eq_X = _find_eq(flat, "S.X")
@@ -185,25 +217,31 @@ end
     @testset "5. ConflictingDerivativeError for explicit D + reaction on same species" begin
         # Model with explicit D(O3)/dt = ...
         mvars = Dict{String, ModelVariable}(
-            "O3" => ModelVariable(UnknownVariable, default=1e-6),
-            "k" => ModelVariable(ParameterVariable, default=0.1),
+            "O3" => ModelVariable(UnknownVariable, default = 1.0e-6),
+            "k" => ModelVariable(ParameterVariable, default = 0.1),
         )
         meqs = [Equation(_deriv("O3"), _op("-", _op("*", _V("k"), _V("O3"))))]
         model = Model(mvars, meqs)
 
         # Reaction system also touches O3
-        species = [EarthSciAST.Species("O3", default=1e-6)]
+        species = [EarthSciAST.Species("O3", default = 1.0e-6)]
         rate = _V("kr")
-        rxns = [EarthSciAST.Reaction("r1", nothing,
-            [EarthSciAST.StoichiometryEntry("O3", 1)], rate)]
+        rxns = [
+            EarthSciAST.Reaction(
+                "r1", nothing,
+                [EarthSciAST.StoichiometryEntry("O3", 1)], rate
+            ),
+        ]
         params = [EarthSciAST.Parameter("kr", 0.01)]
-        rsys = EarthSciAST.ReactionSystem(species, rxns, parameters=params)
+        rsys = EarthSciAST.ReactionSystem(species, rxns, parameters = params)
 
         # Model prefix is "SimpleOzone" and reaction system is also "SimpleOzone"
-        file = EarthSciAST.EsmFile("0.1.0",
+        file = EarthSciAST.EsmFile(
+            "0.1.0",
             EarthSciAST.Metadata("t5"),
-            models=Dict("SimpleOzone" => model),
-            reaction_systems=Dict("SimpleOzone" => rsys))
+            models = Dict("SimpleOzone" => model),
+            reaction_systems = Dict("SimpleOzone" => rsys)
+        )
 
         # Flatten must throw.
         err = nothing
@@ -217,34 +255,40 @@ end
 
         # Validate must also flag the conflict.
         errs = validate_structural(file)
-        @test any(e -> e.error_type == "conflicting_derivative" &&
-                       occursin("SimpleOzone.O3", e.message), errs)
+        @test any(
+            e -> e.error_type == "conflicting_derivative" &&
+                occursin("SimpleOzone.O3", e.message), errs
+        )
     end
 
     @testset "6. operator_compose across two models (summed RHS)" begin
         # Two models both declaring T with D(T)/dt; compose them.
         vars1 = Dict{String, ModelVariable}(
             "T" => ModelVariable(UnknownVariable),
-            "k" => ModelVariable(ParameterVariable, default=0.1),
+            "k" => ModelVariable(ParameterVariable, default = 0.1),
         )
         eqs1 = [Equation(_deriv("T"), _op("*", _V("k"), _V("T")))]
         m1 = Model(vars1, eqs1)
 
         vars2 = Dict{String, ModelVariable}(
             "T" => ModelVariable(UnknownVariable),
-            "j" => ModelVariable(ParameterVariable, default=0.05),
+            "j" => ModelVariable(ParameterVariable, default = 0.05),
         )
         eqs2 = [Equation(_deriv("T"), _op("*", _V("j"), _V("T")))]
         m2 = Model(vars2, eqs2)
 
         coupling = CouplingEntry[
-            CouplingOperatorCompose(["A", "B"];
-                translate=Dict{String,Any}("A.T" => "B.T")),
+            CouplingOperatorCompose(
+                ["A", "B"];
+                translate = Dict{String, Any}("A.T" => "B.T")
+            ),
         ]
-        file = EarthSciAST.EsmFile("0.1.0",
+        file = EarthSciAST.EsmFile(
+            "0.1.0",
             EarthSciAST.Metadata("t6"),
-            models=Dict("A" => m1, "B" => m2),
-            coupling=coupling)
+            models = Dict("A" => m1, "B" => m2),
+            coupling = coupling
+        )
         flat = flatten(file)
 
         # `"systems": [A, B]` with `translate: {"A.T": "B.T"}`: the KEY names A's
@@ -279,25 +323,31 @@ end
     @testset "7. variable_map param_to_var substitutes and removes parameter" begin
         vars = Dict{String, ModelVariable}(
             "T" => ModelVariable(UnknownVariable),
-            "k" => ModelVariable(ParameterVariable, default=0.1),
-            "external" => ModelVariable(ParameterVariable, default=1.0),
+            "k" => ModelVariable(ParameterVariable, default = 0.1),
+            "external" => ModelVariable(ParameterVariable, default = 1.0),
         )
-        eqs = [Equation(_deriv("T"),
-                        _op("*", _V("external"), _op("*", _V("k"), _V("T"))))]
+        eqs = [
+            Equation(
+                _deriv("T"),
+                _op("*", _V("external"), _op("*", _V("k"), _V("T")))
+            ),
+        ]
         model = Model(vars, eqs)
 
         source_vars = Dict{String, ModelVariable}(
-            "value" => ModelVariable(UnknownVariable, default=0.5),
+            "value" => ModelVariable(UnknownVariable, default = 0.5),
         )
         source_model = Model(source_vars, Equation[])
 
         coupling = CouplingEntry[
             CouplingVariableMap("Source.value", "Target.external", "param_to_var"),
         ]
-        file = EarthSciAST.EsmFile("0.1.0",
+        file = EarthSciAST.EsmFile(
+            "0.1.0",
             EarthSciAST.Metadata("t7"),
-            models=Dict("Target" => model, "Source" => source_model),
-            coupling=coupling)
+            models = Dict("Target" => model, "Source" => source_model),
+            coupling = coupling
+        )
         flat = flatten(file)
 
         # Target.external should be removed from parameters.
@@ -313,24 +363,31 @@ end
         # the parameter `Wrap.inner.gain`, which `Wrap.inner`'s own ODE reads.
         # `to_endpoint` is spelled by the caller so a wrong path can be probed
         # against the same document (issue #198 item 1).
-        function subsystem_map_file(to_endpoint::String; from_endpoint::String="Src.T")
+        function subsystem_map_file(to_endpoint::String; from_endpoint::String = "Src.T")
             inner = Model(
                 Dict{String, ModelVariable}(
-                    "gain" => ModelVariable(ParameterVariable, default=0.0),
+                    "gain" => ModelVariable(ParameterVariable, default = 0.0),
                     "x" => ModelVariable(UnknownVariable),
                 ),
-                [Equation(_deriv("x"), _V("gain"))])
-            wrap = Model(Dict{String, ModelVariable}(), Equation[],
-                         DiscreteEvent[], ContinuousEvent[],
-                         Dict{String, EarthSciAST.SubsystemNode}("inner" => inner))
+                [Equation(_deriv("x"), _V("gain"))]
+            )
+            wrap = Model(
+                Dict{String, ModelVariable}(), Equation[],
+                DiscreteEvent[], ContinuousEvent[],
+                Dict{String, EarthSciAST.SubsystemNode}("inner" => inner)
+            )
             src = Model(
                 Dict{String, ModelVariable}("T" => ModelVariable(UnknownVariable)),
-                [Equation(_deriv("T"), _N(1.0))])
-            return EarthSciAST.EsmFile("1.0.0",
+                [Equation(_deriv("T"), _N(1.0))]
+            )
+            return EarthSciAST.EsmFile(
+                "1.0.0",
                 EarthSciAST.Metadata("t7a"),
-                models=Dict("Src" => src, "Wrap" => wrap),
-                coupling=CouplingEntry[
-                    CouplingVariableMap(from_endpoint, to_endpoint, "param_to_var")])
+                models = Dict("Src" => src, "Wrap" => wrap),
+                coupling = CouplingEntry[
+                    CouplingVariableMap(from_endpoint, to_endpoint, "param_to_var"),
+                ]
+            )
         end
 
         # A `to` endpoint reaching INTO a subsystem resolves by its FULL dot
@@ -348,25 +405,29 @@ end
         # "ignored". The `from` half is the NaN case: the substitution runs
         # regardless, so consumers read a name no table binds.
         @test_throws EarthSciAST.VariableMapUnresolvedEndpointError flatten(
-            subsystem_map_file("Wrap.gain"))
+            subsystem_map_file("Wrap.gain")
+        )
         @test_throws EarthSciAST.VariableMapUnresolvedEndpointError flatten(
-            subsystem_map_file("Wrap.inner.gain"; from_endpoint="Src.Nope.T"))
+            subsystem_map_file("Wrap.inner.gain"; from_endpoint = "Src.Nope.T")
+        )
     end
 
     @testset "7b. variable_map expression transform makes target an observed (esm-spec §10.4)" begin
         # Sink: parameter F_in (target), parameter offset, state u with du/dt = F_in.
         sink_vars = Dict{String, ModelVariable}(
-            "u" => ModelVariable(UnknownVariable, default=0.0),
-            "offset" => ModelVariable(ParameterVariable, default=1.5, units="1"),
-            "F_in" => ModelVariable(ParameterVariable, units="1",
-                                    description="receiving target"),
+            "u" => ModelVariable(UnknownVariable, default = 0.0),
+            "offset" => ModelVariable(ParameterVariable, default = 1.5, units = "1"),
+            "F_in" => ModelVariable(
+                ParameterVariable, units = "1",
+                description = "receiving target"
+            ),
         )
         sink = Model(sink_vars, [Equation(_deriv("u"), _V("F_in"))])
         # Src: observed F = 4.0. esm 1.0.0 §6.3 — an observed unknown is an
         # `unknown` DEFINED by a bare-variable-LHS equation, not a declared type
         # with an `expression` field.
         src_vars = Dict{String, ModelVariable}(
-            "F" => ModelVariable(UnknownVariable, units="1"),
+            "F" => ModelVariable(UnknownVariable, units = "1"),
         )
         src = Model(src_vars, [Equation(_V("F"), _N(4.0))])
         # transform = 2*Src.F + Sink.offset — fully-scoped refs per §10.4.
@@ -374,10 +435,12 @@ end
         coupling = CouplingEntry[
             CouplingVariableMap("Src.F", "Sink.F_in", transform),
         ]
-        file = EarthSciAST.EsmFile("0.8.0",
+        file = EarthSciAST.EsmFile(
+            "0.8.0",
             EarthSciAST.Metadata("t7b"),
-            models=Dict("Sink" => sink, "Src" => src),
-            coupling=coupling)
+            models = Dict("Sink" => sink, "Src" => src),
+            coupling = coupling
+        )
         flat = flatten(file)
 
         # The target parameter is promoted out of the parameters map...
@@ -392,9 +455,14 @@ end
         @test obs.units == "1"
         # And the DERIVED classification agrees: reassembled as one model, the
         # defining equation is what makes `Sink.F_in` an observed unknown.
-        @test "Sink.F_in" in observed_unknowns(Model(
-            merge(Dict(flat.state_variables), Dict(flat.parameters),
-                  Dict(flat.observed_variables)), flat.equations))
+        @test "Sink.F_in" in observed_unknowns(
+            Model(
+                merge(
+                    Dict(flat.state_variables), Dict(flat.parameters),
+                    Dict(flat.observed_variables)
+                ), flat.equations
+            )
+        )
         # A defining equation Sink.F_in ~ transform is synthesized.
         defeq = _find_eq(flat, "Sink.F_in")
         @test defeq !== nothing
@@ -407,27 +475,30 @@ end
 
     @testset "7c. variable_map expression transform must reference `from`" begin
         sink_vars = Dict{String, ModelVariable}(
-            "u" => ModelVariable(UnknownVariable, default=0.0),
-            "F_in" => ModelVariable(ParameterVariable, units="1"),
+            "u" => ModelVariable(UnknownVariable, default = 0.0),
+            "F_in" => ModelVariable(ParameterVariable, units = "1"),
         )
         sink = Model(sink_vars, [Equation(_deriv("u"), _V("F_in"))])
         src_vars = Dict{String, ModelVariable}(
-            "F" => ModelVariable(UnknownVariable, units="1"),
+            "F" => ModelVariable(UnknownVariable, units = "1"),
         )
         src = Model(src_vars, [Equation(_V("F"), _N(4.0))])
         # Bogus transform: never references Src.F.
         transform = _op("*", _N(2.0), _V("Sink.u"))
-        file = EarthSciAST.EsmFile("0.8.0",
+        file = EarthSciAST.EsmFile(
+            "0.8.0",
             EarthSciAST.Metadata("t7c"),
-            models=Dict("Sink" => sink, "Src" => src),
-            coupling=CouplingEntry[CouplingVariableMap("Src.F", "Sink.F_in", transform)])
+            models = Dict("Sink" => sink, "Src" => src),
+            coupling = CouplingEntry[CouplingVariableMap("Src.F", "Sink.F_in", transform)]
+        )
         @test_throws ArgumentError flatten(file)
     end
 
     @testset "7d. expression transform takes no factor" begin
         transform = _op("*", _N(2.0), _V("Src.F"))
         @test_throws ArgumentError CouplingVariableMap(
-            "Src.F", "Sink.F_in", transform; factor=3.0)
+            "Src.F", "Sink.F_in", transform; factor = 3.0
+        )
     end
 
     @testset "8. couple with connector equations" begin
@@ -441,16 +512,18 @@ end
         connector = Dict{String, Any}("equations" => [connector_eq])
 
         coupling = CouplingEntry[CouplingCouple(["A", "B"], connector)]
-        file = EarthSciAST.EsmFile("0.1.0",
+        file = EarthSciAST.EsmFile(
+            "0.1.0",
             EarthSciAST.Metadata("t8"),
-            models=Dict("A" => m1, "B" => m2),
-            coupling=coupling)
+            models = Dict("A" => m1, "B" => m2),
+            coupling = coupling
+        )
         flat = flatten(file)
 
         # The connector equation should appear in the flattened equations.
         found_connector = any(flat.equations) do eq
             eq.lhs isa EarthSciAST.VarExpr && eq.lhs.name == "A.x" &&
-            eq.rhs isa EarthSciAST.VarExpr && eq.rhs.name == "B.y"
+                eq.rhs isa EarthSciAST.VarExpr && eq.rhs.name == "B.y"
         end
         @test found_connector
     end
@@ -470,20 +543,29 @@ end
         # The `+` was pinning that artifact, not the coupling behaviour under
         # test; §4.6.1 removed the artifact and §4.7.2's own rule is what is left.
         rsys = EarthSciAST.ReactionSystem(
-            [EarthSciAST.Species("A", default=2.0)], EarthSciAST.Reaction[])
+            [EarthSciAST.Species("A", default = 2.0)], EarthSciAST.Reaction[]
+        )
         sink = Model(
-            Dict{String, ModelVariable}("k" => ModelVariable(ParameterVariable, default=0.1)),
-            Equation[])
+            Dict{String, ModelVariable}("k" => ModelVariable(ParameterVariable, default = 0.1)),
+            Equation[]
+        )
         # `expression` supplied as an already-parsed ASTExpr: (-Sink.k) * Chem.A.
         expr = _op("*", _op("-", _V("Sink.k")), _V("Chem.A"))
-        conn = Dict{String, Any}("equations" => Any[Dict{String, Any}(
-            "from" => "Sink.k", "to" => "Chem.A",
-            "transform" => "additive", "expression" => expr)])
+        conn = Dict{String, Any}(
+            "equations" => Any[
+                Dict{String, Any}(
+                    "from" => "Sink.k", "to" => "Chem.A",
+                    "transform" => "additive", "expression" => expr
+                ),
+            ]
+        )
         coupling = CouplingEntry[CouplingCouple(["Chem", "Sink"], conn)]
-        file = EarthSciAST.EsmFile("0.8.0", EarthSciAST.Metadata("t8a"),
-            models=Dict("Sink" => sink),
-            reaction_systems=Dict("Chem" => rsys),
-            coupling=coupling)
+        file = EarthSciAST.EsmFile(
+            "0.8.0", EarthSciAST.Metadata("t8a"),
+            models = Dict("Sink" => sink),
+            reaction_systems = Dict("Chem" => rsys),
+            coupling = coupling
+        )
         flat = flatten(file)
 
         # The edge is APPLIED, not dropped onto the opaque-coupling channel.
@@ -498,54 +580,80 @@ end
         @test _uses_var(eq_A.rhs, "Chem.A")
         @test to_ascii(eq_A.rhs) == "(-Sink.k) * Chem.A"
         # Exactly one D(Chem.A) equation (no over-determining duplicate).
-        @test count(eq -> EarthSciAST.differential_lhs_variable(eq.lhs) == "Chem.A",
-                    flat.equations) == 1
+        @test count(
+            eq -> EarthSciAST.differential_lhs_variable(eq.lhs) == "Chem.A",
+            flat.equations
+        ) == 1
     end
 
     @testset "8b. additive connector: raw-JSON expression is parsed" begin
         # Same edge, but `expression` arrives as raw JSON (the load path) rather
         # than a pre-parsed ASTExpr — exercises the expression_from_json branch.
         rsys = EarthSciAST.ReactionSystem(
-            [EarthSciAST.Species("A", default=1.0)], EarthSciAST.Reaction[])
+            [EarthSciAST.Species("A", default = 1.0)], EarthSciAST.Reaction[]
+        )
         sink = Model(
-            Dict{String, ModelVariable}("k" => ModelVariable(ParameterVariable, default=0.3)),
-            Equation[])
-        conn = Dict{String, Any}("equations" => Any[Dict{String, Any}(
-            "from" => "Sink.k", "to" => "Chem.A", "transform" => "additive",
-            "expression" => Dict{String, Any}("op" => "*", "args" => Any[
-                Dict{String, Any}("op" => "-", "args" => Any["Sink.k"]),
-                "Chem.A"]))])
-        file = EarthSciAST.EsmFile("0.8.0", EarthSciAST.Metadata("t8b2"),
-            models=Dict("Sink" => sink),
-            reaction_systems=Dict("Chem" => rsys),
-            coupling=CouplingEntry[CouplingCouple(["Chem", "Sink"], conn)])
+            Dict{String, ModelVariable}("k" => ModelVariable(ParameterVariable, default = 0.3)),
+            Equation[]
+        )
+        conn = Dict{String, Any}(
+            "equations" => Any[
+                Dict{String, Any}(
+                    "from" => "Sink.k", "to" => "Chem.A", "transform" => "additive",
+                    "expression" => Dict{String, Any}(
+                        "op" => "*", "args" => Any[
+                            Dict{String, Any}("op" => "-", "args" => Any["Sink.k"]),
+                            "Chem.A",
+                        ]
+                    )
+                ),
+            ]
+        )
+        file = EarthSciAST.EsmFile(
+            "0.8.0", EarthSciAST.Metadata("t8b2"),
+            models = Dict("Sink" => sink),
+            reaction_systems = Dict("Chem" => rsys),
+            coupling = CouplingEntry[CouplingCouple(["Chem", "Sink"], conn)]
+        )
         flat = flatten(file)
         @test isempty(flat.metadata.opaque_coupling_refs)
         eq_A = _find_eq(flat, "Chem.A")
         @test eq_A !== nothing && _uses_var(eq_A.rhs, "Sink.k") &&
-              _uses_var(eq_A.rhs, "Chem.A")
+            _uses_var(eq_A.rhs, "Chem.A")
     end
 
     @testset "8c. multiplicative connector scales the tendency" begin
         # Chem: A --k--> (decay), giving D(Chem.A) ~ -k*A. A multiplicative
         # edge multiplies that tendency by Sink.s.
-        species = [EarthSciAST.Species("A", default=1.0)]
+        species = [EarthSciAST.Species("A", default = 1.0)]
         params = [EarthSciAST.Parameter("k", 0.1)]
         rate = _op("*", _V("k"), _V("A"))
-        rxns = [EarthSciAST.Reaction("r1",
-            [EarthSciAST.StoichiometryEntry("A", 1)],
-            EarthSciAST.StoichiometryEntry[], rate)]
-        rsys = EarthSciAST.ReactionSystem(species, rxns, parameters=params)
+        rxns = [
+            EarthSciAST.Reaction(
+                "r1",
+                [EarthSciAST.StoichiometryEntry("A", 1)],
+                EarthSciAST.StoichiometryEntry[], rate
+            ),
+        ]
+        rsys = EarthSciAST.ReactionSystem(species, rxns, parameters = params)
         sink = Model(
-            Dict{String, ModelVariable}("s" => ModelVariable(ParameterVariable, default=2.0)),
-            Equation[])
-        conn = Dict{String, Any}("equations" => Any[Dict{String, Any}(
-            "from" => "Sink.s", "to" => "Chem.A",
-            "transform" => "multiplicative", "expression" => _V("Sink.s"))])
-        file = EarthSciAST.EsmFile("0.8.0", EarthSciAST.Metadata("t8c"),
-            models=Dict("Sink" => sink),
-            reaction_systems=Dict("Chem" => rsys),
-            coupling=CouplingEntry[CouplingCouple(["Chem", "Sink"], conn)])
+            Dict{String, ModelVariable}("s" => ModelVariable(ParameterVariable, default = 2.0)),
+            Equation[]
+        )
+        conn = Dict{String, Any}(
+            "equations" => Any[
+                Dict{String, Any}(
+                    "from" => "Sink.s", "to" => "Chem.A",
+                    "transform" => "multiplicative", "expression" => _V("Sink.s")
+                ),
+            ]
+        )
+        file = EarthSciAST.EsmFile(
+            "0.8.0", EarthSciAST.Metadata("t8c"),
+            models = Dict("Sink" => sink),
+            reaction_systems = Dict("Chem" => rsys),
+            coupling = CouplingEntry[CouplingCouple(["Chem", "Sink"], conn)]
+        )
         flat = flatten(file)
         @test isempty(flat.metadata.opaque_coupling_refs)
         eq_A = _find_eq(flat, "Chem.A")
@@ -557,33 +665,51 @@ end
 
     @testset "8d. replacement connector raises a clear error" begin
         rsys = EarthSciAST.ReactionSystem(
-            [EarthSciAST.Species("A", default=1.0)], EarthSciAST.Reaction[])
+            [EarthSciAST.Species("A", default = 1.0)], EarthSciAST.Reaction[]
+        )
         sink = Model(
-            Dict{String, ModelVariable}("v" => ModelVariable(ParameterVariable, default=1.0)),
-            Equation[])
-        conn = Dict{String, Any}("equations" => Any[Dict{String, Any}(
-            "from" => "Sink.v", "to" => "Chem.A",
-            "transform" => "replacement", "expression" => _V("Sink.v"))])
-        file = EarthSciAST.EsmFile("0.8.0", EarthSciAST.Metadata("t8d"),
-            models=Dict("Sink" => sink),
-            reaction_systems=Dict("Chem" => rsys),
-            coupling=CouplingEntry[CouplingCouple(["Chem", "Sink"], conn)])
+            Dict{String, ModelVariable}("v" => ModelVariable(ParameterVariable, default = 1.0)),
+            Equation[]
+        )
+        conn = Dict{String, Any}(
+            "equations" => Any[
+                Dict{String, Any}(
+                    "from" => "Sink.v", "to" => "Chem.A",
+                    "transform" => "replacement", "expression" => _V("Sink.v")
+                ),
+            ]
+        )
+        file = EarthSciAST.EsmFile(
+            "0.8.0", EarthSciAST.Metadata("t8d"),
+            models = Dict("Sink" => sink),
+            reaction_systems = Dict("Chem" => rsys),
+            coupling = CouplingEntry[CouplingCouple(["Chem", "Sink"], conn)]
+        )
         @test_throws ArgumentError flatten(file)
     end
 
     @testset "8e. unknown connector transform raises a clear error" begin
         rsys = EarthSciAST.ReactionSystem(
-            [EarthSciAST.Species("A", default=1.0)], EarthSciAST.Reaction[])
+            [EarthSciAST.Species("A", default = 1.0)], EarthSciAST.Reaction[]
+        )
         sink = Model(
-            Dict{String, ModelVariable}("v" => ModelVariable(ParameterVariable, default=1.0)),
-            Equation[])
-        conn = Dict{String, Any}("equations" => Any[Dict{String, Any}(
-            "from" => "Sink.v", "to" => "Chem.A",
-            "transform" => "bogus_transform", "expression" => _V("Sink.v"))])
-        file = EarthSciAST.EsmFile("0.8.0", EarthSciAST.Metadata("t8e"),
-            models=Dict("Sink" => sink),
-            reaction_systems=Dict("Chem" => rsys),
-            coupling=CouplingEntry[CouplingCouple(["Chem", "Sink"], conn)])
+            Dict{String, ModelVariable}("v" => ModelVariable(ParameterVariable, default = 1.0)),
+            Equation[]
+        )
+        conn = Dict{String, Any}(
+            "equations" => Any[
+                Dict{String, Any}(
+                    "from" => "Sink.v", "to" => "Chem.A",
+                    "transform" => "bogus_transform", "expression" => _V("Sink.v")
+                ),
+            ]
+        )
+        file = EarthSciAST.EsmFile(
+            "0.8.0", EarthSciAST.Metadata("t8e"),
+            models = Dict("Sink" => sink),
+            reaction_systems = Dict("Chem" => rsys),
+            coupling = CouplingEntry[CouplingCouple(["Chem", "Sink"], conn)]
+        )
         @test_throws ArgumentError flatten(file)
     end
 
@@ -591,12 +717,16 @@ end
         inner_v = Dict{String, ModelVariable}("v" => ModelVariable(UnknownVariable))
         inner = Model(inner_v, Equation[])
         outer_v = Dict{String, ModelVariable}("u" => ModelVariable(UnknownVariable))
-        outer = Model(outer_v, Equation[],
-            subsystems=Dict{String, Model}("Child" => inner))
+        outer = Model(
+            outer_v, Equation[],
+            subsystems = Dict{String, Model}("Child" => inner)
+        )
 
-        file = EarthSciAST.EsmFile("0.1.0",
+        file = EarthSciAST.EsmFile(
+            "0.1.0",
             EarthSciAST.Metadata("t9"),
-            models=Dict("Parent" => outer))
+            models = Dict("Parent" => outer)
+        )
         flat = flatten(file)
 
         @test haskey(flat.state_variables, "Parent.u")
@@ -609,18 +739,24 @@ end
         # `<parent_prefix>.Sub.x`, not leave it as `Sub.x` (which would fail
         # to resolve against the flat dictionary).
         sub_vars = Dict{String, ModelVariable}(
-            "x" => ModelVariable(UnknownVariable; default=1.0))
+            "x" => ModelVariable(UnknownVariable; default = 1.0)
+        )
         sub = Model(sub_vars, Equation[])
 
         # esm 1.0.0 §6.3: `y` is an `unknown` DEFINED by `y ~ Sub.x`.
         parent_vars = Dict{String, ModelVariable}(
-            "y" => ModelVariable(UnknownVariable))
-        parent = Model(parent_vars, [Equation(_V("y"), _V("Sub.x"))],
-            subsystems=Dict{String, Model}("Sub" => sub))
+            "y" => ModelVariable(UnknownVariable)
+        )
+        parent = Model(
+            parent_vars, [Equation(_V("y"), _V("Sub.x"))],
+            subsystems = Dict{String, Model}("Sub" => sub)
+        )
 
-        file = EarthSciAST.EsmFile("0.1.0",
+        file = EarthSciAST.EsmFile(
+            "0.1.0",
             EarthSciAST.Metadata("t9b"),
-            models=Dict("Parent" => parent))
+            models = Dict("Parent" => parent)
+        )
         flat = flatten(file)
 
         eq = _find_eq(flat, "Parent.y")
@@ -629,24 +765,111 @@ end
         @test !_uses_var(eq.rhs, "Sub.x")
     end
 
+    @testset "9c. Loop symbols shadow same-named variables (esm-spec §4.3)" begin
+        # A faq binder (`output_idx` entry or `ranges` key) spelled like a
+        # variable of the model holding the equation is the loop index inside
+        # the node and the variable outside it. EarthSciAST.jl 0.6.0 prefixed the
+        # bound occurrences too, so `u[j]` became `u[M.j]`, a constant
+        # subscript (found by EarthSciIntegrator's planner, PR #34).
+        E = EarthSciAST
+        locals_ = Set(["u", "y", "j", "k"])
+        # One subtree object, shared inside and outside the binder: the memo
+        # must not hand the inside rewrite to the outside occurrence.
+        shared = _op("index", _V("u"), _V("j"))
+        inner = E.OpExpr(
+            "faq", E.ASTExpr[]; output_idx = Any[],
+            ranges = Dict{String, Any}("k" => Any[1, 3]),
+            expr_body = _op("index", _V("u"), _V("k"))
+        )
+        outer = E.OpExpr(
+            "faq", E.ASTExpr[]; output_idx = Any["j"],
+            ranges = Dict{String, Any}("j" => Any[1, 3]),
+            expr_body = _op("-", _op("*", _V("k"), shared), inner),
+            filter = _op(">", _V("j"), _V("k"))
+        )
+        out = E.namespace_expr(_op("+", outer, shared), "M", locals_)
+        o = out.args[1]
+        # The binder fields themselves are untouched.
+        @test o.output_idx == Any["j"] && haskey(o.ranges, "j")
+        # Inside the outer faq: `j` is the index, `k` is still the parameter.
+        @test to_ascii(o.expr_body.args[1]) == "M.k * M.u[j]"
+        @test to_ascii(o.filter) == "j > M.k"
+        # The nested faq rebinds `k`, so inside it `k` is the index again.
+        @test to_ascii(o.expr_body.args[2].expr_body) == "M.u[k]"
+        # Outside the binder the same subtree reads the parameter.
+        @test to_ascii(out.args[2]) == "M.u[M.j]"
+
+        # End to end through `flatten`, on the shared conformance fixture.
+        flat = flatten(
+            EarthSciAST.load_path(
+                joinpath(
+                    TESTUTILS_REPO_ROOT,
+                    "tests", "scoping", "index_symbol_shadows_variable.esm"
+                )
+            )
+        )
+        eq_u = _find_eq(flat, "Shadow.u")
+        @test eq_u !== nothing
+        @test to_ascii(eq_u.rhs) == "sum[j] (Shadow.k * Shadow.u[j] - " *
+            "sum[] (Shadow.u[k]) where {k in 1:3}) where {j in 1:3}"
+        @test !_uses_var(eq_u.rhs, "Shadow.j")
+        eq_y = _find_eq(flat, "Shadow.y")
+        @test eq_y !== nothing && _uses_var(eq_y.rhs, "Shadow.j")
+
+        # An integral's `int_var` binds like a faq symbol, and a dotted name is
+        # never a loop index: inside a node binding `j`, `j.x` still reaches the
+        # local subsystem `j`.
+        integ = E.OpExpr(
+            "integral", E.ASTExpr[_op("*", _V("z"), _V("y"))];
+            int_var = "z", lower = E.NumExpr(0.0), upper = E.NumExpr(1.0)
+        )
+        out = E.namespace_expr(_op("*", _V("z"), integ), "M", Set(["y", "z"]))
+        @test to_ascii(out.args[1]) == "M.z"
+        @test to_ascii(out.args[2].args[1]) == "z * M.y"
+        sub = E.OpExpr(
+            "faq", E.ASTExpr[]; output_idx = Any["j"],
+            ranges = Dict{String, Any}("j" => Any[1, 3]),
+            expr_body = _op("*", _op("index", _V("u"), _V("j")), _V("j.x"))
+        )
+        out = E.namespace_expr(sub, "M", Set(["u", "j"]))
+        @test to_ascii(out.expr_body) == "M.u[j] * M.j.x"
+
+        flat = flatten(
+            EarthSciAST.load_path(
+                joinpath(
+                    TESTUTILS_REPO_ROOT,
+                    "tests", "scoping", "loop_binder_shadowing_edges.esm"
+                )
+            )
+        )
+        @test to_ascii(_find_eq(flat, "Edges.a").rhs) ==
+            "Edges.z * integral(z * Edges.a, z, 0, 1)"
+        @test to_ascii(_find_eq(flat, "Edges.b").rhs) ==
+            "Edges.g * argmin[g] (Edges.w[g]) where {g in 1:3}"
+        @test to_ascii(_find_eq(flat, "Outer.u").rhs) ==
+            "sum[j] (Outer.u[j] * Outer.j.x) where {j in 1:3}"
+    end
+
     @testset "14. §4.7.6 DomainUnitMismatchError from real variable_map flatten" begin
         # A variable_map with transform="identity" between two variables
         # carrying DIFFERENT declared units MUST raise DomainUnitMismatchError.
         vars_a = Dict{String, ModelVariable}(
-            "T" => ModelVariable(UnknownVariable; units="K"),
+            "T" => ModelVariable(UnknownVariable; units = "K"),
         )
         m_a = Model(vars_a, Equation[Equation(_deriv("T"), _V("T"))])
         vars_b = Dict{String, ModelVariable}(
-            "T" => ModelVariable(ParameterVariable; units="degC"),
+            "T" => ModelVariable(ParameterVariable; units = "degC"),
         )
         m_b = Model(vars_b, Equation[])
         coupling = CouplingEntry[
             CouplingVariableMap("A.T", "B.T", "identity"),
         ]
-        file = EarthSciAST.EsmFile("0.1.0",
+        file = EarthSciAST.EsmFile(
+            "0.1.0",
             EarthSciAST.Metadata("t14_units"),
-            models=Dict("A" => m_a, "B" => m_b),
-            coupling=coupling)
+            models = Dict("A" => m_a, "B" => m_b),
+            coupling = coupling
+        )
         err = try
             flatten(file); nothing
         catch e
@@ -676,12 +899,18 @@ end
     end
 
     @testset "lower_reactions_to_equations helper" begin
-        species = [EarthSciAST.Species("A"),
-                   EarthSciAST.Species("B")]
-        rxns = [EarthSciAST.Reaction("r1",
-            [EarthSciAST.StoichiometryEntry("A", 1)],
-            [EarthSciAST.StoichiometryEntry("B", 1)],
-            _V("k"))]
+        species = [
+            EarthSciAST.Species("A"),
+            EarthSciAST.Species("B"),
+        ]
+        rxns = [
+            EarthSciAST.Reaction(
+                "r1",
+                [EarthSciAST.StoichiometryEntry("A", 1)],
+                [EarthSciAST.StoichiometryEntry("B", 1)],
+                _V("k")
+            ),
+        ]
         eqs = lower_reactions_to_equations(rxns, species)
         @test length(eqs) == 2
         # Every equation is a D(species, t) = ... form.
@@ -700,10 +929,12 @@ end
             CouplingOperatorApply("my_op"),
             CouplingCallback("cb1"),
         ]
-        file = EarthSciAST.EsmFile("0.1.0",
+        file = EarthSciAST.EsmFile(
+            "0.1.0",
             EarthSciAST.Metadata("mdata"),
-            models=Dict("A" => m1, "B" => m2),
-            coupling=coupling)
+            models = Dict("A" => m1, "B" => m2),
+            coupling = coupling
+        )
         flat = flatten(file)
         @test "A" in flat.metadata.source_systems
         @test "B" in flat.metadata.source_systems
@@ -718,20 +949,28 @@ end
         v2 = Dict{String, ModelVariable}("y" => ModelVariable(UnknownVariable))
         m2 = Model(v2, Equation[Equation(_deriv("y"), _V("y"))])
         # Dict-shaped connector equation whose lhs/rhs are NOT parsed Exprs.
-        connector = Dict{String, Any}("equations" =>
-            Any[Dict{String, Any}("lhs" => "A.x", "rhs" => "B.y")])
+        connector = Dict{String, Any}(
+            "equations" =>
+                Any[Dict{String, Any}("lhs" => "A.x", "rhs" => "B.y")]
+        )
         coupling = CouplingEntry[CouplingCouple(["A", "B"], connector)]
-        file = EarthSciAST.EsmFile("0.8.0",
+        file = EarthSciAST.EsmFile(
+            "0.8.0",
             EarthSciAST.Metadata("t8b"),
-            models=Dict("A" => m1, "B" => m2),
-            coupling=coupling)
+            models = Dict("A" => m1, "B" => m2),
+            coupling = coupling
+        )
         flat = flatten(file)
         # No bogus `__coupling_placeholder__ = 0.0` equation is fabricated...
-        @test !any(eq -> eq.lhs isa EarthSciAST.VarExpr &&
-                         eq.lhs.name == "__coupling_placeholder__", flat.equations)
+        @test !any(
+            eq -> eq.lhs isa EarthSciAST.VarExpr &&
+                eq.lhs.name == "__coupling_placeholder__", flat.equations
+        )
         # ...the skipped entry is visible on the opaque-coupling channel instead.
-        @test any(r -> occursin("unparsed_connector_equation", r),
-                  flat.metadata.opaque_coupling_refs)
+        @test any(
+            r -> occursin("unparsed_connector_equation", r),
+            flat.metadata.opaque_coupling_refs
+        )
     end
 
     @testset "placeholder substitution preserves non-args fields (regression)" begin
@@ -739,14 +978,18 @@ end
         # A `_var` template whose RHS carries a table_lookup (table/table_axes)
         # and an aggregate with filter/bounds — fields the old hand-listed
         # rebuild dropped and never recursed into.
-        tl = E.OpExpr("table_lookup", E.ASTExpr[]; table="fuel", output=1,
-            table_axes=Dict{String,E.ASTExpr}("code" => _V("_var")))
-        agg = E.OpExpr("faq", E.ASTExpr[];
-            output_idx=Any[],
-            ranges=Dict{String,Any}("i" => E.IndexSetRef("cells")),
-            expr_body=_op("*", _V("_var"), _V("w")),
-            filter=_op(">", _V("_var"), _N(0.0)),
-            lower=_V("_var"), upper=_N(1.0))
+        tl = E.OpExpr(
+            "table_lookup", E.ASTExpr[]; table = "fuel", output = 1,
+            table_axes = Dict{String, E.ASTExpr}("code" => _V("_var"))
+        )
+        agg = E.OpExpr(
+            "faq", E.ASTExpr[];
+            output_idx = Any[],
+            ranges = Dict{String, Any}("i" => E.IndexSetRef("cells")),
+            expr_body = _op("*", _V("_var"), _V("w")),
+            filter = _op(">", _V("_var"), _N(0.0)),
+            lower = _V("_var"), upper = _N(1.0)
+        )
         tmpl = _op("+", tl, agg)
         out = E._substitute_placeholder(tmpl, "_var", "Chem.O3")
         otl, oagg = out.args[1], out.args[2]
@@ -770,10 +1013,11 @@ end
         ev = DiscreteEvent(
             PeriodicTrigger(1.0),
             [AffectEquation("x", _N(0.0))];
-            description="periodic reset")
-        vars = Dict{String, ModelVariable}("x" => ModelVariable(UnknownVariable, default=1.0))
-        model = Model(vars, [Equation(_deriv("x"), _V("x"))]; discrete_events=[ev])
-        flat = flatten(model; name="M")
+            description = "periodic reset"
+        )
+        vars = Dict{String, ModelVariable}("x" => ModelVariable(UnknownVariable, default = 1.0))
+        model = Model(vars, [Equation(_deriv("x"), _V("x"))]; discrete_events = [ev])
+        flat = flatten(model; name = "M")
         @test length(flat.discrete_events) == 1
         fev = flat.discrete_events[1]
         @test fev.trigger isa PeriodicTrigger && fev.trigger.period == 1.0
@@ -785,9 +1029,9 @@ end
 
     @testset "current-format version defaults (SCHEMA_VERSION)" begin
         E = EarthSciAST
-        vars = Dict{String, ModelVariable}("x" => ModelVariable(UnknownVariable, default=1.0))
+        vars = Dict{String, ModelVariable}("x" => ModelVariable(UnknownVariable, default = 1.0))
         model = Model(vars, [Equation(_deriv("x"), _V("x"))])
-        flat = flatten(model; name="V")
+        flat = flatten(model; name = "V")
         @test flat isa FlattenedSystem
         doc = E.flattened_to_esm(flat)
         @test doc["esm"] == E.SCHEMA_VERSION
@@ -814,8 +1058,10 @@ end
             @testset "Flatten fixture: $filename" begin
                 esm_data = EarthSciAST.load_path(filepath)
                 n_components = (esm_data.models === nothing ? 0 : length(esm_data.models)) +
-                               (esm_data.reaction_systems === nothing ? 0 :
-                                length(esm_data.reaction_systems))
+                    (
+                    esm_data.reaction_systems === nothing ? 0 :
+                        length(esm_data.reaction_systems)
+                )
                 if n_components == 0
                     @test_throws "nothing to flatten" flatten(esm_data)
                 else

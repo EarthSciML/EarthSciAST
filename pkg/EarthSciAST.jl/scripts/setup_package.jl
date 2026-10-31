@@ -24,7 +24,7 @@ function print_header()
     println("="^70)
     println("   EarthSciAST.jl Package Integration & Registration Setup")
     println("="^70)
-    println()
+    return println()
 end
 
 function setup_documentation()
@@ -35,7 +35,7 @@ function setup_documentation()
 
     # Add dependencies
     try
-        Pkg.develop(PackageSpec(path=pwd()))
+        Pkg.develop(PackageSpec(path = pwd()))
         Pkg.instantiate()
         println("✅ Documentation environment configured")
     catch e
@@ -138,7 +138,7 @@ function generate_summary_report()
     println("4. Create a GitHub release")
     println("5. Run: julia scripts/register.jl")
     println("6. Follow the registration instructions")
-    println()
+    return println()
 end
 
 function main()
@@ -170,7 +170,7 @@ function main()
         success &= check_registry_readiness()
     end
 
-    if success
+    return if success
         generate_summary_report()
     else
         println()

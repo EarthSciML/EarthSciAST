@@ -30,17 +30,20 @@ import SciMLBase: DiscreteCallback, terminate!
 # reach `sink_write!(sink, ::StateSnapshot)` identically.
 _as_snapshot(::Any, snap::StateSnapshot) = snap
 _as_snapshot(t::Float64, state::AbstractVector) =
-    StateSnapshot(t, collect(Tuple{Array,Tuple{Vararg{UnitRange{Int}}}}, state),
-                  Dict{String,Array}())
+    StateSnapshot(
+    t, collect(Tuple{Array, Tuple{Vararg{UnitRange{Int}}}}, state),
+    Dict{String, Array}()
+)
 
 # Zero-positional keyword method (the callback is a pure function of the sink
 # registry and the snapshot/pre_write seams; it never reads the model). More
 # specific than the core's varargs fallback, so it wins whenever this extension is
 # loaded.
 function build_output_callback(;
-                               sinks,
-                               snapshot,
-                               pre_write::Function = () -> nothing)
+        sinks,
+        snapshot,
+        pre_write::Function = () -> nothing
+    )
     # Materialize each sink's output times once (stable order = the `sinks`
     # order), so a sink's `sink_output_times` is consulted once here for the tstops
     # union and reused in `affect!` for the per-tick membership test.
@@ -85,11 +88,12 @@ end
 # integrator for a clean pre-preemption exit. Interval-only checkpointing needs none
 # of this (a checkpoint-profile sink's cadence rides the ordinary PresetTimeCallback).
 function build_checkpoint_callback(;
-                                   sinks,
-                                   predicates,
-                                   snapshot,
-                                   pre_write::Function = () -> nothing,
-                                   terminate_on_fire::Bool = true)
+        sinks,
+        predicates,
+        snapshot,
+        pre_write::Function = () -> nothing,
+        terminate_on_fire::Bool = true
+    )
     # OR the predicates once; the DiscreteCallback `condition` is a pure Bool test
     # of (u, t, integrator) that ignores its args and consults the predicates.
     preds = collect(predicates)

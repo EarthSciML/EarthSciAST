@@ -32,9 +32,11 @@ function _find_sym(simp, system_name::Symbol, local_name::AbstractString)
         nm = string(_MTK_TB.getname(p))
         (nm == local_name || endswith(nm, suffix)) && return p
     end
-    error("No symbol '$local_name' on compiled $(system_name) system " *
-          "(unknowns=$(_MTK_TB.unknowns(simp)), " *
-          "parameters=$(_MTK_TB.parameters(simp)))")
+    error(
+        "No symbol '$local_name' on compiled $(system_name) system " *
+            "(unknowns=$(_MTK_TB.unknowns(simp)), " *
+            "parameters=$(_MTK_TB.parameters(simp)))"
+    )
 end
 
 # esm-spec §6.6.4 and §6.6.3 are `EarthSciAST._resolve_tolerance` and
@@ -55,13 +57,15 @@ end
 #     to Julia's default `rtol = sqrt(eps) ~ 1.5e-8` rather than the exact
 #     equality §6.6.3 requires of that spelling.
 #
-function _run_one_test(simp, system_name::Symbol,
-                       model_tol, t::_ESM_TB.InlineTest)
-    u0_map = Dict{Any,Float64}()
+function _run_one_test(
+        simp, system_name::Symbol,
+        model_tol, t::_ESM_TB.InlineTest
+    )
+    u0_map = Dict{Any, Float64}()
     for (name, val) in t.initial_conditions
         u0_map[_find_sym(simp, system_name, name)] = Float64(val)
     end
-    p_map = Dict{Any,Float64}()
+    p_map = Dict{Any, Float64}()
     for (name, val) in t.parameter_overrides
         p_map[_find_sym(simp, system_name, name)] = Float64(val)
     end
@@ -70,33 +74,40 @@ function _run_one_test(simp, system_name::Symbol,
     # Current MTK prefers a single merged u0+p map; the 4-arg form is
     # deprecated. Merging is safe here because u0_map and p_map key off
     # disjoint symbolic handles (unknowns vs parameters).
-    combined = Dict{Any,Float64}()
-    for (k, v) in u0_map; combined[k] = v; end
-    for (k, v) in p_map;  combined[k] = v; end
+    combined = Dict{Any, Float64}()
+    for (k, v) in u0_map
+        combined[k] = v
+    end
+    for (k, v) in p_map
+        combined[k] = v
+    end
     prob = _MTK_TB.ODEProblem(simp, combined, tspan)
-    sol = OrdinaryDiffEqTsit5.solve(prob, OrdinaryDiffEqTsit5.Tsit5();
-                                    reltol=1e-10, abstol=1e-12)
+    sol = OrdinaryDiffEqTsit5.solve(
+        prob, OrdinaryDiffEqTsit5.Tsit5();
+        reltol = 1.0e-10, abstol = 1.0e-12
+    )
     @test sol.retcode == _MTK_TB.SciMLBase.ReturnCode.Success
 
     for a in t.assertions
         handle = _find_sym(simp, system_name, a.variable)
         rtol, atol = _ESM_TB._resolve_tolerance(model_tol, t.tolerance, a.tolerance)
-        actual = sol(a.time, idxs=handle)
+        actual = sol(a.time, idxs = handle)
         @test _ESM_TB._check_assertion(Float64(actual), a.expected, rtol, atol)
     end
+    return
 end
 
 # Execute every inline `tests` block / `ReactionSystem` tests list inside
 # a single .esm fixture. Shared by the comprehensive fixture and the
 # tests/simulation/ physics fixtures (gt-l5b).
-function _execute_fixture_tests(fpath::AbstractString; label::AbstractString=basename(fpath))
+function _execute_fixture_tests(fpath::AbstractString; label::AbstractString = basename(fpath))
     file = _ESM_TB.load_path(fpath)
     ran = false
     if file.models !== nothing
         for (mname, model) in file.models
             isempty(model.tests) && continue
             ran = true
-            sys = _MTK_TB.System(model; name=Symbol(mname))
+            sys = _MTK_TB.System(model; name = Symbol(mname))
             simp = _MTK_TB.mtkcompile(sys)
             for t in model.tests
                 @testset "$(label)/$(mname)/$(t.id)" begin
@@ -109,8 +120,8 @@ function _execute_fixture_tests(fpath::AbstractString; label::AbstractString=bas
         for (rsname, rsys) in file.reaction_systems
             isempty(rsys.tests) && continue
             ran = true
-            flat = _ESM_TB.flatten(rsys; name=String(rsname))
-            sys = _MTK_TB.System(flat; name=Symbol(rsname))
+            flat = _ESM_TB.flatten(rsys; name = String(rsname))
+            sys = _MTK_TB.System(flat; name = Symbol(rsname))
             simp = _MTK_TB.mtkcompile(sys)
             for t in rsys.tests
                 @testset "$(label)/$(rsname)/$(t.id)" begin
@@ -123,12 +134,14 @@ function _execute_fixture_tests(fpath::AbstractString; label::AbstractString=bas
 end
 
 @testset "Inline tests-block execution runner" begin
-    fixture_path = joinpath(@__DIR__, "..", "..", "..",
-                            "tests", "valid",
-                            "tests_analyses_comprehensive.esm")
+    fixture_path = joinpath(
+        @__DIR__, "..", "..", "..",
+        "tests", "valid",
+        "tests_analyses_comprehensive.esm"
+    )
     @test isfile(fixture_path)
 
-    any_tests = _execute_fixture_tests(fixture_path; label="tests_analyses_comprehensive")
+    any_tests = _execute_fixture_tests(fixture_path; label = "tests_analyses_comprehensive")
     @test any_tests
 
     # tests/simulation/ physics fixtures — gt-l5b migrated these from the
@@ -158,11 +171,17 @@ end
         "spatial_diffusion.esm" => "PDE (no ODE runner path)",
         "spatial_limitation.esm" => "PDE (no ODE runner path)",
     )
-    simulation_dir = joinpath(@__DIR__, "..", "..", "..",
-                              "tests", "simulation")
+    simulation_dir = joinpath(
+        @__DIR__, "..", "..", "..",
+        "tests", "simulation"
+    )
     if isdir(simulation_dir)
-        sim_files = sort(filter(f -> endswith(f, ".esm"),
-                                readdir(simulation_dir)))
+        sim_files = sort(
+            filter(
+                f -> endswith(f, ".esm"),
+                readdir(simulation_dir)
+            )
+        )
         @testset "tests/simulation fixtures" begin
             for fname in sim_files
                 fpath = joinpath(simulation_dir, fname)
@@ -173,12 +192,12 @@ end
                         # ever hide a bug (audit 2026-07-14). Skip the REAL call
                         # instead: unskipping it is then a one-line change and
                         # the recorded Broken entry names the thing it defers.
-                        @test_skip _execute_fixture_tests(fpath; label=fname)
+                        @test_skip _execute_fixture_tests(fpath; label = fname)
                     end
                     continue
                 end
                 @testset "$(fname)" begin
-                    _execute_fixture_tests(fpath; label=fname)
+                    _execute_fixture_tests(fpath; label = fname)
                 end
             end
         end
@@ -206,8 +225,10 @@ end
 # (it expects h(1.984081) = 4.882389; the closed form gives 4.71543).
 # ---------------------------------------------------------------------------
 @testset "continuous events fire (audit J2)" begin
-    fpath = joinpath(@__DIR__, "..", "..", "..",
-                     "tests", "simulation", "bouncing_ball.esm")
+    fpath = joinpath(
+        @__DIR__, "..", "..", "..",
+        "tests", "simulation", "bouncing_ball.esm"
+    )
     @test isfile(fpath)
     model = _ESM_TB.load_path(fpath).models["BallDynamics"]
 
@@ -238,23 +259,25 @@ end
     #    this is a real, falsifiable "the event fired" assertion.
     simp = _MTK_TB.mtkcompile(sys)
     prob = _MTK_TB.ODEProblem(simp, Dict(), (0.0, 2.0))
-    sol = OrdinaryDiffEqTsit5.solve(prob, OrdinaryDiffEqTsit5.Tsit5();
-                                    reltol=1e-10, abstol=1e-12)
+    sol = OrdinaryDiffEqTsit5.solve(
+        prob, OrdinaryDiffEqTsit5.Tsit5();
+        reltol = 1.0e-10, abstol = 1.0e-12
+    )
     @test sol.retcode == _MTK_TB.SciMLBase.ReturnCode.Success
 
     hsym = _find_sym(simp, :BallDynamics, "height")
     vsym = _find_sym(simp, :BallDynamics, "velocity")
 
-    @test isapprox(sol(0.0, idxs=hsym), 10.0; atol=1e-8)          # start
-    @test sol(1.0, idxs=hsym) > 0                                  # still falling
-    @test isapprox(sol(1.0, idxs=hsym), 10 - 9.81/2; atol=1e-4)    # free fall pre-bounce
+    @test isapprox(sol(0.0, idxs = hsym), 10.0; atol = 1.0e-8)          # start
+    @test sol(1.0, idxs = hsym) > 0                                  # still falling
+    @test isapprox(sol(1.0, idxs = hsym), 10 - 9.81 / 2; atol = 1.0e-4)    # free fall pre-bounce
 
     # Post-bounce: above the floor (free fall would be far below it) and moving
     # UPWARD (free fall would still be moving down).
-    h_after = sol(1.984081, idxs=hsym)
-    v_after = sol(1.984081, idxs=vsym)
+    h_after = sol(1.984081, idxs = hsym)
+    v_after = sol(1.984081, idxs = vsym)
     @test h_after > 0
-    @test isapprox(h_after, 4.71543; atol=1e-3)
+    @test isapprox(h_after, 4.71543; atol = 1.0e-3)
     @test v_after > 0
-    @test isapprox(v_after, 11.2056 - 9.81 * (1.984081 - 1.427843); atol=1e-3)
+    @test isapprox(v_after, 11.2056 - 9.81 * (1.984081 - 1.427843); atol = 1.0e-3)
 end

@@ -145,20 +145,22 @@ const _XVN_NONE = 0    # "unkeyable" — never a real value number (those start 
 # NUMBERS, not their own key bytes — that indirection keeps the pass linear
 # (an `_NK_CACHED` expansion is one table lookup, not a re-emission of the
 # fully written-out def).
-const _XVNKey = Tuple{UInt8,Symbol,UInt64,Int,Symbol,Int,Vector{Int}}
+const _XVNKey = Tuple{UInt8, Symbol, UInt64, Int, Symbol, Int, Vector{Int}}
 
 # The global (per-build) interning state shared by every numbering context.
 mutable struct _XShareCtx
     cache::_CSECache                # the scalar prelude scratch every shared read lands on
-    vn::Dict{_XVNKey,Int}           # structural key → value number (the hash-cons table)
-    ident_ids::IdDict{Any,Int}      # payloads keyed by IDENTITY (forcing buffers)
-    content_ids::Dict{Any,Int}      # payloads keyed by CONTENT (`fn` name + spec bits)
+    vn::Dict{_XVNKey, Int}           # structural key → value number (the hash-cons table)
+    ident_ids::IdDict{Any, Int}      # payloads keyed by IDENTITY (forcing buffers)
+    content_ids::Dict{Any, Int}      # payloads keyed by CONTENT (`fn` name + spec bits)
     expensive::Vector{Bool}         # per-vn: body contains an `_XCSE_EXPENSIVE_OPS` op
     next_pay::Int
 end
 _XShareCtx(cache::_CSECache) =
-    _XShareCtx(cache, Dict{_XVNKey,Int}(), IdDict{Any,Int}(), Dict{Any,Int}(),
-               Bool[], 0)
+    _XShareCtx(
+    cache, Dict{_XVNKey, Int}(), IdDict{Any, Int}(), Dict{Any, Int}(),
+    Bool[], 0
+)
 
 function _xpay_ident!(ctx::_XShareCtx, obj)::Int
     id = get(ctx.ident_ids, obj, 0)
@@ -191,7 +193,7 @@ _xf64_bits(v::AbstractVector{Float64}) = UInt64[reinterpret(UInt64, x) for x in 
 # must never share. Every function admitted here is pure and deterministic
 # (see the BIT-EXACTNESS header note).
 function _xfn_content_key(payload)
-    payload isa Tuple{String,Any} || return nothing
+    payload isa Tuple{String, Any} || return nothing
     fname, spec = payload
     if spec === nothing
         return (fname, :none)                      # boxed all-scalar path (undeclared fn)
@@ -202,8 +204,10 @@ function _xfn_content_key(payload)
     elseif spec isa _InterpLinearSpec
         return (fname, :linear, _xf64_bits(spec.table), _xf64_bits(spec.axis), spec.strict)
     elseif spec isa _InterpBilinearSpec
-        return (fname, :bilinear, [_xf64_bits(r) for r in spec.table],
-                _xf64_bits(spec.axis_x), _xf64_bits(spec.axis_y), spec.strict)
+        return (
+            fname, :bilinear, [_xf64_bits(r) for r in spec.table],
+            _xf64_bits(spec.axis_x), _xf64_bits(spec.axis_y), spec.strict,
+        )
     elseif spec isa _InterpSearchsortedSpec
         return (fname, :searchsorted, _xf64_bits(spec.xs), spec.strict)
     end
@@ -220,16 +224,16 @@ end
 # nothing).
 const _XS_NO_SCRATCH = _AccScratch(0)
 struct _XNodeCtx
-    acc::Union{Nothing,Vector{_AccDesc}}
+    acc::Union{Nothing, Vector{_AccDesc}}
     inv_scratch::_AccScratch
     inv_vn::Vector{Int}             # this kernel's inv slot → vn (grows front to back)
     slot_vn::Vector{Int}            # scalar prelude slot → vn (one shared vector)
-    memo::IdDict{_Node,Int}         # node object → vn (identity-memoized per context)
+    memo::IdDict{_Node, Int}         # node object → vn (identity-memoized per context)
 end
 _xkernel_ctx(K::_AccKernel, slot_vn::Vector{Int}) =
-    _XNodeCtx(K.acc, K.cse.inv_scratch, Int[], slot_vn, IdDict{_Node,Int}())
+    _XNodeCtx(K.acc, K.cse.inv_scratch, Int[], slot_vn, IdDict{_Node, Int}())
 _xscalar_ctx(slot_vn::Vector{Int}) =
-    _XNodeCtx(nothing, _XS_NO_SCRATCH, Int[], slot_vn, IdDict{_Node,Int}())
+    _XNodeCtx(nothing, _XS_NO_SCRATCH, Int[], slot_vn, IdDict{_Node, Int}())
 
 function _xnode_vn(n::_Node, nctx::_XNodeCtx, ctx::_XShareCtx)::Int
     v = get(nctx.memo, n, -1)
@@ -288,15 +292,27 @@ function _xnode_vn_uncached(n::_Node, nctx::_XNodeCtx, ctx::_XShareCtx)::Int
         a = nctx.acc[n.idx]
         ak = a.kind
         if ak === _AK_STATE_FIXED
-            return _xintern!(ctx, (_NK_STATE, Symbol(""), UInt64(0), a.idx,
-                                   Symbol(""), 0, Int[]), false)
+            return _xintern!(
+                ctx, (
+                    _NK_STATE, Symbol(""), UInt64(0), a.idx,
+                    Symbol(""), 0, Int[],
+                ), false
+            )
         elseif ak === _AK_ARR_FIXED
             pay = _xpay_ident!(ctx, a.arr)
-            return _xintern!(ctx, (_NK_PARAM_GATHER, Symbol(""), UInt64(0), a.idx,
-                                   Symbol(""), pay, Int[]), false)
+            return _xintern!(
+                ctx, (
+                    _NK_PARAM_GATHER, Symbol(""), UInt64(0), a.idx,
+                    Symbol(""), pay, Int[],
+                ), false
+            )
         elseif ak === _AK_SCALAR
-            return _xintern!(ctx, (_NK_LITERAL, Symbol(""), reinterpret(UInt64, a.v),
-                                   0, Symbol(""), 0, Int[]), false)
+            return _xintern!(
+                ctx, (
+                    _NK_LITERAL, Symbol(""), reinterpret(UInt64, a.v),
+                    0, Symbol(""), 0, Int[],
+                ), false
+            )
         end
         return _XVN_NONE
     end
@@ -310,7 +326,7 @@ function _xnode_vn_uncached(n::_Node, nctx::_XNodeCtx, ctx::_XShareCtx)::Int
         ck === nothing && return _XVN_NONE
         pay = _xpay_content!(ctx, ck)
     elseif k === _NK_LITERAL || k === _NK_STATE || k === _NK_PARAM || k === _NK_TIME ||
-           k === _NK_OP || k === _NK_CONTRACTION
+            k === _NK_OP || k === _NK_CONTRACTION
         # A payload on a kind that is not supposed to carry one means the IR
         # has drifted from what this key models: decline rather than key past it.
         n.payload === nothing || return _XVN_NONE
@@ -325,7 +341,7 @@ function _xnode_vn_uncached(n::_Node, nctx::_XNodeCtx, ctx::_XShareCtx)::Int
     end
     node_exp = (k === _NK_OP || k === _NK_CONTRACTION) && n.op in _XCSE_EXPENSIVE_OPS
     lit = k === _NK_LITERAL ? reinterpret(UInt64, n.literal) :
-          k === _NK_CONTRACTION ? reinterpret(UInt64, n.literal) : UInt64(0)
+        k === _NK_CONTRACTION ? reinterpret(UInt64, n.literal) : UInt64(0)
     return _xintern!(ctx, (k, n.op, lit, n.idx, n.sym, pay, kids), node_exp)
 end
 
@@ -338,19 +354,21 @@ end
 # slot (`slot_of_vn` — the dependency was slotted first; see the sweep).
 # Returns `nothing` when anything is not translatable — the caller then simply
 # declines to hoist this def (fail closed, never a build error).
-function _xcse_translate(n::_Node, nctx::_XNodeCtx, ctx::_XShareCtx,
-                         slot_of_vn::Dict{Int,Int})::Union{Nothing,_Node}
+function _xcse_translate(
+        n::_Node, nctx::_XNodeCtx, ctx::_XShareCtx,
+        slot_of_vn::Dict{Int, Int}
+    )::Union{Nothing, _Node}
     k = n.kind
     if k === _NK_ACCESS
         nctx.acc === nothing && return nothing
         (1 <= n.idx <= length(nctx.acc)) || return nothing
         a = nctx.acc[n.idx]
         if a.kind === _AK_STATE_FIXED
-            return _mknode(kind=_NK_STATE, idx=a.idx)
+            return _mknode(kind = _NK_STATE, idx = a.idx)
         elseif a.kind === _AK_ARR_FIXED
-            return _mknode(kind=_NK_PARAM_GATHER, idx=a.idx, payload=a.arr)
+            return _mknode(kind = _NK_PARAM_GATHER, idx = a.idx, payload = a.arr)
         elseif a.kind === _AK_SCALAR
-            return _mknode(kind=_NK_LITERAL, literal=a.v)
+            return _mknode(kind = _NK_LITERAL, literal = a.v)
         end
         return nothing
     elseif k === _NK_CACHED
@@ -362,7 +380,7 @@ function _xcse_translate(n::_Node, nctx::_XNodeCtx, ctx::_XShareCtx,
             dv == _XVN_NONE && return nothing
             s = get(slot_of_vn, dv, 0)
             s == 0 && return nothing                      # dependency not slotted: decline
-            return _mknode(kind=_NK_CACHED, idx=s, payload=ctx.cache)
+            return _mknode(kind = _NK_CACHED, idx = s, payload = ctx.cache)
         end
         return nothing
     elseif k === _NK_LITERAL || k === _NK_STATE || k === _NK_PARAM || k === _NK_TIME
@@ -386,9 +404,11 @@ end
 # bypass the cost gate: a shared parent implies shared children (the value
 # number is structural over child numbers), so they are always ≥2-shared, and
 # the parent's translated body must read them from a slot.
-function _xwant!(v::Int, wanted::Set{Int},
-                 reps::Dict{Int,Tuple{_Node,_XNodeCtx}},
-                 slot_of_vn::Dict{Int,Int}, ctx::_XShareCtx)
+function _xwant!(
+        v::Int, wanted::Set{Int},
+        reps::Dict{Int, Tuple{_Node, _XNodeCtx}},
+        slot_of_vn::Dict{Int, Int}, ctx::_XShareCtx
+    )
     v in wanted && return nothing
     haskey(reps, v) || return nothing     # no kernel rep (an existing-slot-only vn)
     push!(wanted, v)
@@ -397,9 +417,11 @@ function _xwant!(v::Int, wanted::Set{Int},
     return nothing
 end
 
-function _xwant_deps!(n::_Node, nctx::_XNodeCtx, wanted::Set{Int},
-                      reps::Dict{Int,Tuple{_Node,_XNodeCtx}},
-                      slot_of_vn::Dict{Int,Int}, ctx::_XShareCtx)
+function _xwant_deps!(
+        n::_Node, nctx::_XNodeCtx, wanted::Set{Int},
+        reps::Dict{Int, Tuple{_Node, _XNodeCtx}},
+        slot_of_vn::Dict{Int, Int}, ctx::_XShareCtx
+    )
     if n.kind === _NK_CACHED && n.payload === nctx.inv_scratch
         (1 <= n.idx <= length(nctx.inv_vn)) || return nothing
         dv = nctx.inv_vn[n.idx]
@@ -426,9 +448,11 @@ end
 @inline _xshare_replaceable(n::_Node) =
     n.kind === _NK_OP || n.kind === _NK_CONTRACTION
 
-function _xshare_rewrite(n::_Node, nctx::_XNodeCtx, ctx::_XShareCtx,
-                         new_slot_of_vn::Dict{Int,Int},
-                         memo::IdDict{_Node,_Node}, hits::Base.RefValue{Int})::_Node
+function _xshare_rewrite(
+        n::_Node, nctx::_XNodeCtx, ctx::_XShareCtx,
+        new_slot_of_vn::Dict{Int, Int},
+        memo::IdDict{_Node, _Node}, hits::Base.RefValue{Int}
+    )::_Node
     r = get(memo, n, nothing)
     r === nothing || return r
     r = _xshare_rewrite_uncached(n, nctx, ctx, new_slot_of_vn, memo, hits)
@@ -436,17 +460,19 @@ function _xshare_rewrite(n::_Node, nctx::_XNodeCtx, ctx::_XShareCtx,
     return r
 end
 
-function _xshare_rewrite_uncached(n::_Node, nctx::_XNodeCtx, ctx::_XShareCtx,
-                                  new_slot_of_vn::Dict{Int,Int},
-                                  memo::IdDict{_Node,_Node},
-                                  hits::Base.RefValue{Int})::_Node
+function _xshare_rewrite_uncached(
+        n::_Node, nctx::_XNodeCtx, ctx::_XShareCtx,
+        new_slot_of_vn::Dict{Int, Int},
+        memo::IdDict{_Node, _Node},
+        hits::Base.RefValue{Int}
+    )::_Node
     if _xshare_replaceable(n)
         v = _xnode_vn(n, nctx, ctx)
         if v != _XVN_NONE
             s = get(new_slot_of_vn, v, 0)
             if s != 0
                 hits[] += 1
-                return _mknode(kind=_NK_CACHED, idx=s, payload=ctx.cache)
+                return _mknode(kind = _NK_CACHED, idx = s, payload = ctx.cache)
             end
         end
     end
@@ -469,20 +495,24 @@ end
 # `_AccCSE` are immutable but their `Vector` fields are not) and returns the
 # diagnostic counters. A model with no array kernels — or none with an
 # invariant tier — returns immediately, leaving everything byte-identical.
-const _XCSE_NONE_DIAG = (; n_xcse_slots = 0, n_xcse_kernel_shared = 0,
-                           n_xcse_scalar_shared = 0)
+const _XCSE_NONE_DIAG = (;
+    n_xcse_slots = 0, n_xcse_kernel_shared = 0,
+    n_xcse_scalar_shared = 0,
+)
 
-function _share_kernel_invariants!(rhs_list::Vector{Tuple{Int,_Node}},
-                                   prelude::Vector{_Node},
-                                   cache::_CSECache,
-                                   acc_kernels::AbstractVector{_AccKernel})
+function _share_kernel_invariants!(
+        rhs_list::Vector{Tuple{Int, _Node}},
+        prelude::Vector{_Node},
+        cache::_CSECache,
+        acc_kernels::AbstractVector{_AccKernel}
+    )
     isempty(acc_kernels) && return _XCSE_NONE_DIAG
 
     # Deterministic kernel enumeration: top-level kernels in build order, each
     # followed by its transitive template-body subs, deduplicated by identity
     # (a sub shared by several parents is one def source, not several).
     kernels = _AccKernel[]
-    seenk = IdDict{_AccKernel,Nothing}()
+    seenk = IdDict{_AccKernel, Nothing}()
     function addk(K::_AccKernel)
         haskey(seenk, K) && return nothing
         seenk[K] = nothing
@@ -506,7 +536,7 @@ function _share_kernel_invariants!(rhs_list::Vector{Tuple{Int,_Node}},
     # observed slots can legitimately repeat a vn).
     slot_vn = Int[]
     sctx = _xscalar_ctx(slot_vn)
-    slot_of_vn = Dict{Int,Int}()
+    slot_of_vn = Dict{Int, Int}()
     for s in eachindex(prelude)
         v = _xnode_vn(prelude[s], sctx, ctx)
         push!(slot_vn, v)
@@ -516,8 +546,8 @@ function _share_kernel_invariants!(rhs_list::Vector{Tuple{Int,_Node}},
 
     # ---- 2. Number every kernel's inv defs, tally sharing ----
     kctxs = _XNodeCtx[]
-    counts = Dict{Int,Int}()
-    reps = Dict{Int,Tuple{_Node,_XNodeCtx}}()
+    counts = Dict{Int, Int}()
+    reps = Dict{Int, Tuple{_Node, _XNodeCtx}}()
     for K in kernels
         kctx = _xkernel_ctx(K, slot_vn)
         push!(kctxs, kctx)
@@ -567,7 +597,7 @@ function _share_kernel_invariants!(rhs_list::Vector{Tuple{Int,_Node}},
                 push!(slot_vn, v)
             end
             if slot != 0
-                recs[s] = _mknode(kind=_NK_CACHED, idx=slot, payload=cache)
+                recs[s] = _mknode(kind = _NK_CACHED, idx = slot, payload = cache)
                 kernel_hits += 1
             end
         end
@@ -584,8 +614,8 @@ function _share_kernel_invariants!(rhs_list::Vector{Tuple{Int,_Node}},
     # because a kernel needs it (see the header).
     scalar_hits = Ref(0)
     if n_new > 0
-        new_slot_of_vn = Dict{Int,Int}(v => s for (v, s) in slot_of_vn if s > n_orig)
-        memo = IdDict{_Node,_Node}()
+        new_slot_of_vn = Dict{Int, Int}(v => s for (v, s) in slot_of_vn if s > n_orig)
+        memo = IdDict{_Node, _Node}()
         for k in eachindex(rhs_list)
             slot, node = rhs_list[k]
             r = _xshare_rewrite(node, sctx, ctx, new_slot_of_vn, memo, scalar_hits)
@@ -599,7 +629,9 @@ function _share_kernel_invariants!(rhs_list::Vector{Tuple{Int,_Node}},
     # all of them; `alt` is sized from `f64` on first non-Float64 use.
     n_new == 0 || resize!(cache.f64, length(prelude))
 
-    return (; n_xcse_slots = n_new,
-              n_xcse_kernel_shared = kernel_hits,
-              n_xcse_scalar_shared = scalar_hits[])
+    return (;
+        n_xcse_slots = n_new,
+        n_xcse_kernel_shared = kernel_hits,
+        n_xcse_scalar_shared = scalar_hits[],
+    )
 end

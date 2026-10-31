@@ -1,5 +1,8 @@
 name = "esm"
 defaultTargets = ["Esm", "esm-lean"]
+# Mathlib is built for the module system; these files are not (yet). Without
+# this, Lake warns once per Mathlib import, which `lake build --wfail` fails on.
+allowNonModules = true
 
 [leanOptions]
 autoImplicit = false

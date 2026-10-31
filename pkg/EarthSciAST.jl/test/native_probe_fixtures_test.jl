@@ -70,17 +70,21 @@ function _npf_agree(path)
     same = all(dn[pn.var_map[k]] === di[j] for (k, j) in pi_.var_map)
     Jn = ForwardDiff.jacobian((d, u) -> pn.f!(d, u, pn.p, 0.4), similar(un), un)
     Ji = ForwardDiff.jacobian((d, u) -> pi_.f!(d, u, pi_.p, 0.4), similar(ui), ui)
-    jsame = all(isequal(Jn[pn.var_map[a], pn.var_map[b]], Ji[ia, ib])
-                for (a, ia) in pi_.var_map for (b, ib) in pi_.var_map)
+    jsame = all(
+        isequal(Jn[pn.var_map[a], pn.var_map[b]], Ji[ia, ib])
+            for (a, ia) in pi_.var_map for (b, ib) in pi_.var_map
+    )
     tiers = Dict(_NPF.tier_histogram(_NPF.compiler_report(pn)))
     return (; same, jsame, tally, tiers, pn)
 end
 
 @testset "native probe fixtures" begin
-    @testset "$(f)" for f in ("rank5_stencil.esm", "rank4_contraction.esm",
-                              "fill_shared_invariant.esm",
-                              "native_inline_const_subscript.esm",
-                              "native_neg_weight_gather.esm")
+    @testset "$(f)" for f in (
+            "rank5_stencil.esm", "rank4_contraction.esm",
+            "fill_shared_invariant.esm",
+            "native_inline_const_subscript.esm",
+            "native_neg_weight_gather.esm",
+        )
         r = _npf_agree(_npf_path(f))
         @test r.same
         @test r.jsame
@@ -101,8 +105,12 @@ end
     # The corpus's own categorical lookup (esm-spec §9.3): a const table read
     # at two enum-resolved subscripts, which both compilers used to reject.
     @testset "an enum-subscripted inline table (tests/valid)" begin
-        r = _npf_agree(joinpath(TESTUTILS_REPO_ROOT, "tests", "valid",
-                                "enums_categorical_lookup.esm"))
+        r = _npf_agree(
+            joinpath(
+                TESTUTILS_REPO_ROOT, "tests", "valid",
+                "enums_categorical_lookup.esm"
+            )
+        )
         @test r.same
         @test r.jsame
     end

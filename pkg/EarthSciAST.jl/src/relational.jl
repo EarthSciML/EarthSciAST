@@ -104,10 +104,13 @@ _has_float(_) = false                         # other exact/categorical scalars
 
 @inline function _assert_key(k)
     if _has_float(k)
-        throw(FloatKeyError(
-            "float in relational key $(repr(k)); keys must be integer / " *
-            "categorical IDs (CONFORMANCE_SPEC.md §5.5.1 rule 1). Normalise to " *
-            "an ID before the build-time relational pre-pass."))
+        throw(
+            FloatKeyError(
+                "float in relational key $(repr(k)); keys must be integer / " *
+                    "categorical IDs (CONFORMANCE_SPEC.md §5.5.1 rule 1). Normalise to " *
+                    "an ID before the build-time relational pre-pass."
+            )
+        )
     end
     return k
 end
@@ -137,7 +140,7 @@ relation the order is preserved, so `(1, 2)` and `(2, 1)` stay distinct. Never a
 `Base.hash` — the tuple *is* the content-addressed key. The dense ID then comes
 from [`rank`](@ref).
 """
-function skolem(components::Tuple; symmetric::Bool=false)
+function skolem(components::Tuple; symmetric::Bool = false)
     _assert_key(components)
     symmetric || return components
     return Tuple(sort!(collect(components)))
@@ -197,7 +200,7 @@ Result of [`rank`](@ref):
 """
 struct Ranking{T}
     order::Vector{T}
-    id::Dict{T,Int}
+    id::Dict{T, Int}
     base::Int
 end
 
@@ -210,10 +213,10 @@ Dense integer renumbering (rule 3): assign IDs by position in the sorted
 the conformance suite asserts on. Equivalent to SQL `dense_rank() OVER (ORDER BY
 …)` over the deduplicated rows.
 """
-function rank(rows; base::Int=1)
+function rank(rows; base::Int = 1)
     order = distinct(rows)
     T = eltype(order)
-    id = Dict{T,Int}()
+    id = Dict{T, Int}()
     @inbounds for (i, t) in enumerate(order)
         id[t] = (i - 1) + base
     end
@@ -234,11 +237,11 @@ This is the connectivity-inversion primitive — join an edge→cell table again
 cell table on the shared ID to recover the *edges of cell i*. Join keys must be
 non-float (rule 1).
 """
-function equijoin(left, right; on_left=identity, on_right=identity)
+function equijoin(left, right; on_left = identity, on_right = identity)
     # Dict{Any,...}/abstract containers are acceptable here: this module is
     # build-time-only (one-shot setup, off the per-timestep hot path), where
     # generality over key/row types beats container specialization.
-    buckets = Dict{Any,Vector{Any}}()
+    buckets = Dict{Any, Vector{Any}}()
     for r in right
         k = _assert_key(on_right(r))
         push!(get!(() -> Vector{Any}(), buckets, k), r)
@@ -277,7 +280,7 @@ keeps one code path). Group keys must be non-float (rule 1).
 Mirrors the DuckDB oracle `SELECT key, ⊕(value) … GROUP BY key ORDER BY key`.
 """
 function group_aggregate(rows; key, value, op)
-    buckets = Dict{Any,Vector{Any}}()
+    buckets = Dict{Any, Vector{Any}}()
     for row in rows
         k = _assert_key(key(row))
         push!(get!(() -> Vector{Any}(), buckets, k), value(row))

@@ -70,9 +70,12 @@ The cadence anchors at which `provider`'s data changes, in solver time
 tstops. Concrete impls live in the data binding (EarthSciIO) or a test mock.
 """
 function provider_refresh_times end
-provider_refresh_times(p) = throw(RefreshError(
-    "provider_refresh_times not implemented for $(typeof(p)); the data binding " *
-    "(EarthSciIO) or a mock must add a method"))
+provider_refresh_times(p) = throw(
+    RefreshError(
+        "provider_refresh_times not implemented for $(typeof(p)); the data binding " *
+            "(EarthSciIO) or a mock must add a method"
+    )
+)
 
 """
     provider_is_const(provider) -> Bool
@@ -229,9 +232,12 @@ sorted). A `selection` may only be given to a provider whose
 [`provider_supports_selection`](@ref) is `true`; otherwise the binding errors.
 """
 function provider_sample end
-provider_sample(p, ::Real; selection=nothing) = throw(RefreshError(
-    "provider_sample not implemented for $(typeof(p)); the data binding " *
-    "(EarthSciIO) or a mock must add a method"))
+provider_sample(p, ::Real; selection = nothing) = throw(
+    RefreshError(
+        "provider_sample not implemented for $(typeof(p)); the data binding " *
+            "(EarthSciIO) or a mock must add a method"
+    )
+)
 
 # --------------------------------------------------------------------------- #
 # Forcing-write seam — pull a freshly sampled field out of a provider sample and
@@ -246,14 +252,20 @@ provider_sample(p, ::Real; selection=nothing) = throw(RefreshError(
 # Pull the field for `var` out of an opaque provider sample: an `AbstractDict`
 # keyed by variable name, or a bare `AbstractArray` for a single-variable sample.
 _sample_field(sample::AbstractDict, var::AbstractString) = begin
-    haskey(sample, var) || throw(RefreshError(
-        "provider sample has no variable '$var' (present: $(collect(keys(sample))))"))
+    haskey(sample, var) || throw(
+        RefreshError(
+            "provider sample has no variable '$var' (present: $(collect(keys(sample))))"
+        )
+    )
     sample[var]
 end
 _sample_field(sample::AbstractArray, ::AbstractString) = sample
-_sample_field(sample, var::AbstractString) = throw(RefreshError(
-    "cannot extract '$var' from a provider sample of type $(typeof(sample)); " *
-    "supply an AbstractDict (var => field) or a bare AbstractArray"))
+_sample_field(sample, var::AbstractString) = throw(
+    RefreshError(
+        "cannot extract '$var' from a provider sample of type $(typeof(sample)); " *
+            "supply an AbstractDict (var => field) or a bare AbstractArray"
+    )
+)
 
 """
     _write_forcing!(buffer::Array{Float64}, var::AbstractString, sample) -> buffer
@@ -268,10 +280,13 @@ storage the RHS gathers live.
 """
 function _write_forcing!(buffer::Array{Float64}, var::AbstractString, sample)
     field = _sample_field(sample, var)
-    length(field) == length(buffer) || throw(RefreshError(
-        "forcing '$var': provider field has $(length(field)) elements but the buffer " *
-        "has $(length(buffer)); the provider must deliver the native forcing on the " *
-        "buffer's grid (regridding is an in-model coupling, not a refresh-time transform)"))
+    length(field) == length(buffer) || throw(
+        RefreshError(
+            "forcing '$var': provider field has $(length(field)) elements but the buffer " *
+                "has $(length(buffer)); the provider must deliver the native forcing on the " *
+                "buffer's grid (regridding is an in-model coupling, not a refresh-time transform)"
+        )
+    )
     copyto!(buffer, field)
     # The buffer just changed in place under the RHS's live gathers — invalidate the
     # memoized time-cadence prelude slots (B3, tree_walk/const_tier.jl). A refresh
@@ -308,17 +323,20 @@ buffers = RefreshBuffers(forcing)   # same array objects — aliased, not copied
 ```
 """
 struct RefreshBuffers
-    buffers::Dict{String,Array{Float64}}
+    buffers::Dict{String, Array{Float64}}
 end
 
 function RefreshBuffers(d::AbstractDict)
-    out = Dict{String,Array{Float64}}()
+    out = Dict{String, Array{Float64}}()
     for (k, v) in d
         k_str = String(k)
-        v isa Array{Float64} || throw(RefreshError(
-            "RefreshBuffers['$k_str'] must be a dense Array{Float64} (the SAME object " *
-            "bound to `esm_problem`'s `param_arrays`, captured by reference for live " *
-            "refresh), got $(typeof(v))"))
+        v isa Array{Float64} || throw(
+            RefreshError(
+                "RefreshBuffers['$k_str'] must be a dense Array{Float64} (the SAME object " *
+                    "bound to `esm_problem`'s `param_arrays`, captured by reference for live " *
+                    "refresh), got $(typeof(v))"
+            )
+        )
         out[k_str] = v
     end
     return RefreshBuffers(out)
@@ -396,10 +414,13 @@ function build_refresh_callback end
 
 # Fallback (varargs ⇒ strictly less specific than the extension's
 # zero-positional keyword method): fires only when the extension is NOT loaded.
-build_refresh_callback(args...; kwargs...) = throw(RefreshError(
-    "build_refresh_callback requires the DiffEqCallbacks + SciMLBase extension; " *
-    "add `using DiffEqCallbacks, SciMLBase` (or a solver stack that loads them) so " *
-    "EarthSciASTDataRefreshExt is active"))
+build_refresh_callback(args...; kwargs...) = throw(
+    RefreshError(
+        "build_refresh_callback requires the DiffEqCallbacks + SciMLBase extension; " *
+            "add `using DiffEqCallbacks, SciMLBase` (or a solver stack that loads them) so " *
+            "EarthSciASTDataRefreshExt is active"
+    )
+)
 
 # --------------------------------------------------------------------------- #
 # sync_forcing! — mirror refreshed host buffers into a compiled RHS's argument
@@ -446,9 +467,12 @@ what the refusal is waiting on.
 """
 function sync_forcing!(dest::NamedTuple, src::NamedTuple)
     for k in keys(src)
-        haskey(dest, k) || throw(RefreshError(
-            "sync_forcing!: destination has no buffer '$k' (present: " *
-            "$(collect(keys(dest)))); dest must be aligned with forcing_buffers(f)"))
+        haskey(dest, k) || throw(
+            RefreshError(
+                "sync_forcing!: destination has no buffer '$k' (present: " *
+                    "$(collect(keys(dest)))); dest must be aligned with forcing_buffers(f)"
+            )
+        )
         copyto!(getfield(dest, k), getfield(src, k))
     end
     return dest

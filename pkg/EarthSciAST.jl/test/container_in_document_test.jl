@@ -30,7 +30,7 @@ import OrdinaryDiffEqNonlinearSolve
 const _cid_dir = joinpath(@__DIR__, "fixtures", "container_in_document")
 
 @testset "a container builds over its document" begin
-    results, exit_code = run_esm_tests([_cid_dir]; root=_cid_dir, verbose=false)
+    results, exit_code = run_esm_tests([_cid_dir]; root = _cid_dir, verbose = false)
 
     @test exit_code == 0
     @test !isempty(results)
@@ -39,10 +39,14 @@ const _cid_dir = joinpath(@__DIR__, "fixtures", "container_in_document")
     # Name the two symptoms explicitly: a regression in either one reappears as
     # its own message, and a bare "some assertion failed" would not say which.
     for r in results
-        @test !occursin("Unsupported operator: apply_expression_template",
-                        something(r.message, ""))
-        @test !occursin("not found in variable dictionary",
-                        something(r.message, ""))
+        @test !occursin(
+            "Unsupported operator: apply_expression_template",
+            something(r.message, "")
+        )
+        @test !occursin(
+            "not found in variable dictionary",
+            something(r.message, "")
+        )
     end
 
     # The product-only species P is reached through the same path as the
@@ -105,7 +109,8 @@ end
     # tree-walk engine already did.
     res = _file_counts(
         "tests/conformance/merged_rename_reach/fixtures/" *
-        "inline_test_names_the_merged_away_state.esm")
+            "inline_test_names_the_merged_away_state.esm"
+    )
     @test !isempty(res)
     @test all(r -> r.status == EarthSciAST.PASS, res)
 end

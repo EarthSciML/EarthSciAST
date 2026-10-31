@@ -15,8 +15,12 @@ using JSON3
     fixtures_dir = joinpath(@__DIR__, "fixtures", "data_sources")
     @test isdir(fixtures_dir)
 
-    fixture_files = sort(filter(f -> endswith(f, ".esm"),
-                                 readdir(fixtures_dir)))
+    fixture_files = sort(
+        filter(
+            f -> endswith(f, ".esm"),
+            readdir(fixtures_dir)
+        )
+    )
     @test !isempty(fixture_files)
 
     expected_loaders = [
@@ -44,7 +48,7 @@ using JSON3
             # 2. Schema-validate.
             result = EarthSciAST.validate(original)
             if !result.is_valid
-                @info "Validation errors for $fname" errors=result.schema_errors structural=result.structural_errors
+                @info "Validation errors for $fname" errors = result.schema_errors structural = result.structural_errors
             end
             @test isempty(result.schema_errors)
 
@@ -59,7 +63,7 @@ using JSON3
                     reloaded_source = reloaded.data_sources[name]
                     @test reloaded_source.kind == orig_source.kind
                     @test reloaded_source.source.url_template ==
-                          orig_source.source.url_template
+                        orig_source.source.url_template
                     @test reloaded_source.source.mirrors == orig_source.source.mirrors
                 end
 

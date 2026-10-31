@@ -54,7 +54,7 @@ Base.showerror(io::IO, e::MigrationError) = print(io, "MigrationError: ", e.mess
 # Parsed semantic-version components, or `nothing` for a malformed string.
 # Strict `major.minor.patch`: a prerelease suffix or a two-component string is
 # malformed, matching the schema's `^\d+\.\d+\.\d+$` pattern for `esm`.
-function _migration_parse_version(version::AbstractString)::Union{NTuple{3,Int},Nothing}
+function _migration_parse_version(version::AbstractString)::Union{NTuple{3, Int}, Nothing}
     m = match(r"^(\d+)\.(\d+)\.(\d+)$", version)
     m === nothing && return nothing
     return (parse(Int, m[1]), parse(Int, m[2]), parse(Int, m[3]))
@@ -62,7 +62,7 @@ end
 
 # Numeric, component-wise comparison: `1.10.0` is newer than `1.2.0`, and
 # `1.0.100` is a patch of `1.0`, not a minor bump.
-function _migration_compare_versions(a::NTuple{3,Int}, b::NTuple{3,Int})::Int
+function _migration_compare_versions(a::NTuple{3, Int}, b::NTuple{3, Int})::Int
     a[1] != b[1] && return a[1] - b[1]
     a[2] != b[2] && return a[2] - b[2]
     return a[3] - b[3]
@@ -87,10 +87,10 @@ end
 
 # True when `version` sits on the additive line `1.0.0 … <current>` and can be
 # carried to the current schema version by a marker-only, no-op migration.
-function _on_additive_line(version::NTuple{3,Int})::Bool
+function _on_additive_line(version::NTuple{3, Int})::Bool
     return version[1] == _MIGRATION_CURRENT_VERSION[1] &&
-           _migration_compare_versions(version, _MIGRATION_ADDITIVE_FLOOR) >= 0 &&
-           _migration_compare_versions(version, _MIGRATION_CURRENT_VERSION) <= 0
+        _migration_compare_versions(version, _MIGRATION_ADDITIVE_FLOOR) >= 0 &&
+        _migration_compare_versions(version, _MIGRATION_CURRENT_VERSION) <= 0
 end
 
 """
@@ -161,8 +161,11 @@ function migrate(file::EsmFile, target_version::AbstractString)::EsmFile
     end
 
     if !can_migrate(source_version, target_version)
-        throw(MigrationError(
-            "Migration from $(source_version) to $(target_version) is not supported"))
+        throw(
+            MigrationError(
+                "Migration from $(source_version) to $(target_version) is not supported"
+            )
+        )
     end
 
     # Marker-only bump: every other field is carried across by reference.
@@ -170,21 +173,23 @@ function migrate(file::EsmFile, target_version::AbstractString)::EsmFile
     # added to the struct and not listed here would be silently dropped — the
     # round-trip assertion in test/migration_test.jl walks `fieldnames(EsmFile)`
     # to catch exactly that.
-    return EsmFile(String(target_version), file.metadata;
-        models=file.models,
-        reaction_systems=file.reaction_systems,
-        data_sources=file.data_sources,
-        coupling=file.coupling,
-        domain=file.domain,
-        enums=file.enums,
-        function_tables=file.function_tables,
-        index_sets=file.index_sets,
-        expression_templates=file.expression_templates,
-        metaparameters=file.metaparameters,
-        component_templates=file.component_templates,
-        coordinates=file.coordinates,
+    return EsmFile(
+        String(target_version), file.metadata;
+        models = file.models,
+        reaction_systems = file.reaction_systems,
+        data_sources = file.data_sources,
+        coupling = file.coupling,
+        domain = file.domain,
+        enums = file.enums,
+        function_tables = file.function_tables,
+        index_sets = file.index_sets,
+        expression_templates = file.expression_templates,
+        metaparameters = file.metaparameters,
+        component_templates = file.component_templates,
+        coordinates = file.coordinates,
         # esm-spec §2.2. A migration on the additive line is a no-op MARKER
         # bump; dropping a field here would make it a lossy rewrite.
-        solver=file.solver,
-        document_base=file.document_base)
+        solver = file.solver,
+        document_base = file.document_base
+    )
 end

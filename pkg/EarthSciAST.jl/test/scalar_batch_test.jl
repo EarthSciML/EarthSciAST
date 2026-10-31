@@ -36,8 +36,10 @@ const _SB_ESS = EarthSciAST
 # entries to batch. These reductions are far under the shipped floor, but the
 # floor is named rather than inherited so the routing under test is a fact of the
 # fixture and not of the ambient environment.
-_sb_env() = ("ESS_CONTRACTION_LOOP_MIN" => "8",
-             "ESS_ARRAY_CONTRACTION_MIN" => "1024")
+_sb_env() = (
+    "ESS_CONTRACTION_LOOP_MIN" => "8",
+    "ESS_ARRAY_CONTRACTION_MIN" => "1024",
+)
 _sb_compiler(batch::Bool) = batch ? :native : :interpreter
 
 # The compiled IR behind an out-of-place build.
@@ -51,31 +53,56 @@ _sb_ir(fo) = getfield(fo, :rhs)
 function _sb_halo(M::Int)
     NI, NJ = 2, 2
     NQ = max(NI, NJ) + M - 1
-    W = [ [ [ [ Float64((i+2j+3k+5l) % 7) for l in 1:M ] for k in 1:M ] for j in 1:NJ ] for i in 1:NI ]
-    donor(a, b) = Dict("op"=>"-","args"=>Any[Dict("op"=>"+","args"=>Any[a,b]),1])
-    agg = Dict{String,Any}("op"=>"faq","semiring"=>"sum_product","args"=>Any[],
-        "output_idx"=>Any["i","j"],
-        "ranges"=>Dict("i"=>Any[1,NI],"j"=>Any[1,NJ],"k"=>Any[1,M],"l"=>Any[1,M]),
-        "expr"=>Dict("op"=>"*","args"=>Any[
-            Dict("op"=>"index","args"=>Any[Dict("op"=>"const","args"=>Any[],"value"=>W),"i","j","k","l"]),
-            Dict("op"=>"index","args"=>Any["q", donor("i","k"), donor("j","l")])]))
-    doc = Dict{String,Any}("esm"=>"1.1.0","metadata"=>Dict("name"=>"sb_halo"),
-      "models"=>Dict("R"=>Dict{String,Any}(
-        "variables"=>Dict("q"=>Dict("type"=>"unknown","shape"=>Any["a","b"]),
-                          "out"=>Dict("type"=>"unknown","shape"=>Any["i","j"])),
-        "equations"=>Any[
-          Dict("lhs"=>Dict("op"=>"faq","args"=>Any[],"output_idx"=>Any["a","b"],
-                 "ranges"=>Dict("a"=>Any[1,NQ],"b"=>Any[1,NQ]),
-                 "expr"=>Dict("op"=>"D","args"=>Any[Dict("op"=>"index","args"=>Any["q","a","b"])],"wrt"=>"t")),
-               "rhs"=>Dict("op"=>"faq","args"=>Any[],"output_idx"=>Any["a","b"],
-                 "ranges"=>Dict("a"=>Any[1,NQ],"b"=>Any[1,NQ]),"expr"=>0.0)),
-          Dict("lhs"=>Dict("op"=>"faq","args"=>Any[],"output_idx"=>Any["i","j"],
-                 "ranges"=>Dict("i"=>Any[1,NI],"j"=>Any[1,NJ]),
-                 "expr"=>Dict("op"=>"D","args"=>Any[Dict("op"=>"index","args"=>Any["out","i","j"])],"wrt"=>"t")),
-               "rhs"=>agg)])))
-    ics = Dict{String,Any}("out[1,1]"=>0.0,"out[1,2]"=>0.0,"out[2,1]"=>0.0,"out[2,2]"=>0.0)
-    for a in 1:NQ, b in 1:NQ; ics["q[$a,$b]"] = Float64(10a + b); end
-    (doc, ics, NI, NJ)
+    W = [ [ [ [ Float64((i + 2j + 3k + 5l) % 7) for l in 1:M ] for k in 1:M ] for j in 1:NJ ] for i in 1:NI ]
+    donor(a, b) = Dict("op" => "-", "args" => Any[Dict("op" => "+", "args" => Any[a, b]), 1])
+    agg = Dict{String, Any}(
+        "op" => "faq", "semiring" => "sum_product", "args" => Any[],
+        "output_idx" => Any["i", "j"],
+        "ranges" => Dict("i" => Any[1, NI], "j" => Any[1, NJ], "k" => Any[1, M], "l" => Any[1, M]),
+        "expr" => Dict(
+            "op" => "*", "args" => Any[
+                Dict("op" => "index", "args" => Any[Dict("op" => "const", "args" => Any[], "value" => W), "i", "j", "k", "l"]),
+                Dict("op" => "index", "args" => Any["q", donor("i", "k"), donor("j", "l")]),
+            ]
+        )
+    )
+    doc = Dict{String, Any}(
+        "esm" => "1.1.0", "metadata" => Dict("name" => "sb_halo"),
+        "models" => Dict(
+            "R" => Dict{String, Any}(
+                "variables" => Dict(
+                    "q" => Dict("type" => "unknown", "shape" => Any["a", "b"]),
+                    "out" => Dict("type" => "unknown", "shape" => Any["i", "j"])
+                ),
+                "equations" => Any[
+                    Dict(
+                        "lhs" => Dict(
+                            "op" => "faq", "args" => Any[], "output_idx" => Any["a", "b"],
+                            "ranges" => Dict("a" => Any[1, NQ], "b" => Any[1, NQ]),
+                            "expr" => Dict("op" => "D", "args" => Any[Dict("op" => "index", "args" => Any["q", "a", "b"])], "wrt" => "t")
+                        ),
+                        "rhs" => Dict(
+                            "op" => "faq", "args" => Any[], "output_idx" => Any["a", "b"],
+                            "ranges" => Dict("a" => Any[1, NQ], "b" => Any[1, NQ]), "expr" => 0.0
+                        )
+                    ),
+                    Dict(
+                        "lhs" => Dict(
+                            "op" => "faq", "args" => Any[], "output_idx" => Any["i", "j"],
+                            "ranges" => Dict("i" => Any[1, NI], "j" => Any[1, NJ]),
+                            "expr" => Dict("op" => "D", "args" => Any[Dict("op" => "index", "args" => Any["out", "i", "j"])], "wrt" => "t")
+                        ),
+                        "rhs" => agg
+                    ),
+                ]
+            )
+        )
+    )
+    ics = Dict{String, Any}("out[1,1]" => 0.0, "out[1,2]" => 0.0, "out[2,1]" => 0.0, "out[2,2]" => 0.0)
+    for a in 1:NQ, b in 1:NQ
+        ics["q[$a,$b]"] = Float64(10a + b)
+    end
+    return (doc, ics, NI, NJ)
 end
 
 @testset "lane-batched grouping of the per-cell scalar surface (ess-oop-batch)" begin
@@ -101,12 +128,14 @@ end
         # …and the lowered tree really carries the batched contraction loop.
         root = rb.groups[1].root
         @test root.kind == _SB_ESS._NK_CONTRACTION_LOOP ||
-              any(c -> c.kind == _SB_ESS._NK_CONTRACTION_LOOP, root.children)
+            any(c -> c.kind == _SB_ESS._NK_CONTRACTION_LOOP, root.children)
 
         # Grouping off: every entry stays single, `rest` is the whole surface.
         fn, _, _, _, _ = withenv(_sb_env()...) do
-            EarthSciAST._build_evaluator(doc; initial_conditions = ics, form = :oop,
-                            compiler = :interpreter)
+            EarthSciAST._build_evaluator(
+                doc; initial_conditions = ics, form = :oop,
+                compiler = :interpreter
+            )
         end
         rn = getfield(_sb_ir(fn), :rhs_batches)
         @test isempty(rn.groups)
@@ -126,8 +155,10 @@ end
     @testset "materialized fill levels group per column" begin
         N, M = 6, 12                      # M ≥ the contraction-loop floor
         W = collect(1.0:Float64(M))
-        isets = Dict("x" => _SB_ESS.IndexSet("interval"; size = N),
-                     "y" => _SB_ESS.IndexSet("interval"; size = M))
+        isets = Dict(
+            "x" => _SB_ESS.IndexSet("interval"; size = N),
+            "y" => _SB_ESS.IndexSet("interval"; size = M)
+        )
         vars = Dict(
             "q" => _SB_ESS.ModelVariable(_SB_ESS.UnknownVariable; shape = ["x", "y"]),
             "v" => _SB_ESS.ModelVariable(_SB_ESS.UnknownVariable; shape = ["x"]),
@@ -135,34 +166,56 @@ end
             # equation below is what makes it OBSERVED.
             "S" => _SB_ESS.ModelVariable(_SB_ESS.UnknownVariable; shape = ["x"]),
         )
-        rng_i  = Dict{String,Any}("i" => _SB_ESS.IndexSetRef("x"))
-        rng_ik = Dict{String,Any}("i" => _SB_ESS.IndexSetRef("x"),
-                                  "k" => _SB_ESS.IndexSetRef("y"))
-        rng_ab = Dict{String,Any}("a" => _SB_ESS.IndexSetRef("x"),
-                                  "b" => _SB_ESS.IndexSetRef("y"))
-        Sdef = _op("faq"; output_idx = Any["i"], ranges = rng_ik,
-                   semiring = "sum_product",
-                   expr_body = _op("*", _op("index", _const(W), _v("k")),
-                                   _idx("q", _v("i"), _v("k"))))
+        rng_i = Dict{String, Any}("i" => _SB_ESS.IndexSetRef("x"))
+        rng_ik = Dict{String, Any}(
+            "i" => _SB_ESS.IndexSetRef("x"),
+            "k" => _SB_ESS.IndexSetRef("y")
+        )
+        rng_ab = Dict{String, Any}(
+            "a" => _SB_ESS.IndexSetRef("x"),
+            "b" => _SB_ESS.IndexSetRef("y")
+        )
+        Sdef = _op(
+            "faq"; output_idx = Any["i"], ranges = rng_ik,
+            semiring = "sum_product",
+            expr_body = _op(
+                "*", _op("index", _const(W), _v("k")),
+                _idx("q", _v("i"), _v("k"))
+            )
+        )
         eqs = [
             _SB_ESS.Equation(_v("S"), Sdef),
             _SB_ESS.Equation(
-                _op("faq"; output_idx = Any["a", "b"], ranges = rng_ab,
-                    expr_body = _Didx("q", _v("a"), _v("b"))),
-                _op("faq"; output_idx = Any["a", "b"], ranges = rng_ab,
-                    expr_body = _n(0.0))),
+                _op(
+                    "faq"; output_idx = Any["a", "b"], ranges = rng_ab,
+                    expr_body = _Didx("q", _v("a"), _v("b"))
+                ),
+                _op(
+                    "faq"; output_idx = Any["a", "b"], ranges = rng_ab,
+                    expr_body = _n(0.0)
+                )
+            ),
             _SB_ESS.Equation(
-                _op("faq"; output_idx = Any["i"], ranges = rng_i,
-                    expr_body = _Didx("v", _v("i"))),
-                _op("faq"; output_idx = Any["i"], ranges = rng_i,
-                    expr_body = _idx("S", _v("i")))),
+                _op(
+                    "faq"; output_idx = Any["i"], ranges = rng_i,
+                    expr_body = _Didx("v", _v("i"))
+                ),
+                _op(
+                    "faq"; output_idx = Any["i"], ranges = rng_i,
+                    expr_body = _idx("S", _v("i"))
+                )
+            ),
         ]
         model = _SB_ESS.Model(vars, eqs)
-        ics = Dict{String,Any}("v[$j]" => 0.0 for j in 1:N)
-        for j in 1:N, k in 1:M; ics["q[$j,$k]"] = Float64(3j + k); end
+        ics = Dict{String, Any}("v[$j]" => 0.0 for j in 1:N)
+        for j in 1:N, k in 1:M
+            ics["q[$j,$k]"] = Float64(3j + k)
+        end
         bld(batch) = withenv(_sb_env()...) do
-            EarthSciAST._build_evaluator(model; index_sets = isets, initial_conditions = ics,
-                            form = :oop, compiler = _sb_compiler(batch))[1]
+            EarthSciAST._build_evaluator(
+                model; index_sets = isets, initial_conditions = ics,
+                form = :oop, compiler = _sb_compiler(batch)
+            )[1]
         end
 
         ir = _sb_ir(bld(true))
@@ -192,26 +245,41 @@ end
     # exponent gets a different key and stays in `rest`. That pinning is what
     # keeps a group from blending the power rule under a Dual walk.
     @testset "a differing pow exponent is not taken into the group" begin
-        doc = Dict{String,Any}("esm"=>"0.8.0","metadata"=>Dict("name"=>"sb_pow"),
-          "models"=>Dict("P"=>Dict{String,Any}(
-            "variables"=>Dict("x"=>Dict("type"=>"unknown"),"y"=>Dict("type"=>"unknown"),
-                              "a"=>Dict("type"=>"unknown"),"b"=>Dict("type"=>"unknown"),
-                              "c"=>Dict("type"=>"unknown")),
-            "equations"=>Any[
-              Dict("lhs"=>Dict("op"=>"D","args"=>Any["x"],"wrt"=>"t"),"rhs"=>0.0),
-              Dict("lhs"=>Dict("op"=>"D","args"=>Any["y"],"wrt"=>"t"),"rhs"=>0.0),
-              Dict("lhs"=>Dict("op"=>"D","args"=>Any["a"],"wrt"=>"t"),
-                   "rhs"=>Dict("op"=>"^","args"=>Any["x",2.0])),
-              Dict("lhs"=>Dict("op"=>"D","args"=>Any["b"],"wrt"=>"t"),
-                   "rhs"=>Dict("op"=>"^","args"=>Any["y",2.0])),
-              Dict("lhs"=>Dict("op"=>"D","args"=>Any["c"],"wrt"=>"t"),
-                   "rhs"=>Dict("op"=>"^","args"=>Any["x",3.0])),
-            ])))
-        ics = Dict("x"=>1.5,"y"=>-2.5,"a"=>0.0,"b"=>0.0,"c"=>0.0)
-        fo, _, _, _, vm = EarthSciAST._build_evaluator(doc; initial_conditions=ics, form=:oop)
+        doc = Dict{String, Any}(
+            "esm" => "0.8.0", "metadata" => Dict("name" => "sb_pow"),
+            "models" => Dict(
+                "P" => Dict{String, Any}(
+                    "variables" => Dict(
+                        "x" => Dict("type" => "unknown"), "y" => Dict("type" => "unknown"),
+                        "a" => Dict("type" => "unknown"), "b" => Dict("type" => "unknown"),
+                        "c" => Dict("type" => "unknown")
+                    ),
+                    "equations" => Any[
+                        Dict("lhs" => Dict("op" => "D", "args" => Any["x"], "wrt" => "t"), "rhs" => 0.0),
+                        Dict("lhs" => Dict("op" => "D", "args" => Any["y"], "wrt" => "t"), "rhs" => 0.0),
+                        Dict(
+                            "lhs" => Dict("op" => "D", "args" => Any["a"], "wrt" => "t"),
+                            "rhs" => Dict("op" => "^", "args" => Any["x", 2.0])
+                        ),
+                        Dict(
+                            "lhs" => Dict("op" => "D", "args" => Any["b"], "wrt" => "t"),
+                            "rhs" => Dict("op" => "^", "args" => Any["y", 2.0])
+                        ),
+                        Dict(
+                            "lhs" => Dict("op" => "D", "args" => Any["c"], "wrt" => "t"),
+                            "rhs" => Dict("op" => "^", "args" => Any["x", 3.0])
+                        ),
+                    ]
+                )
+            )
+        )
+        ics = Dict("x" => 1.5, "y" => -2.5, "a" => 0.0, "b" => 0.0, "c" => 0.0)
+        fo, _, _, _, vm = EarthSciAST._build_evaluator(doc; initial_conditions = ics, form = :oop)
         rb = getfield(_sb_ir(fo), :rhs_batches)
-        pow = [g for g in rb.groups if g.root.kind == _SB_ESS._NK_OP &&
-               (g.root.op === :^ || g.root.op === :pow)]
+        pow = [
+            g for g in rb.groups if g.root.kind == _SB_ESS._NK_OP &&
+                (g.root.op === :^ || g.root.op === :pow)
+        ]
         @test length(pow) == 1                 # the two `^2` entries, and only those
         @test sort(pow[1].slots) == sort([vm["a"], vm["b"]])
         # The exponent is PINNED in the lowered tree: a shared literal, not a
@@ -229,10 +297,12 @@ end
     # can only ever show one corner of it at a time.
     @testset "the signature pins the shape and wildcards the cell" begin
         lit(x) = _SB_ESS._mknode(kind = _SB_ESS._NK_LITERAL, literal = x)
-        st(i)  = _SB_ESS._mknode(kind = _SB_ESS._NK_STATE, idx = i)
+        st(i) = _SB_ESS._mknode(kind = _SB_ESS._NK_STATE, idx = i)
         par(s) = _SB_ESS._mknode(kind = _SB_ESS._NK_PARAM, sym = s)
-        op(o, cs...) = _SB_ESS._mknode(kind = _SB_ESS._NK_OP, op = o,
-                                       children = _SB_ESS._Node[cs...])
+        op(o, cs...) = _SB_ESS._mknode(
+            kind = _SB_ESS._NK_OP, op = o,
+            children = _SB_ESS._Node[cs...]
+        )
         sig = _SB_ESS._oop_batch_sig
 
         # WILDCARDED — this is what makes two CELLS of one equation congruent.
@@ -245,7 +315,7 @@ end
         @test sig(op(:^, st(3), lit(2.0))) != sig(op(:^, st(3), lit(3.0)))
         # Tree SHAPE, not just the node at the root.
         @test sig(op(:*, st(3), op(:+, st(4), par(:k)))) !=
-              sig(op(:*, st(3), op(:-, st(4), par(:k))))
+            sig(op(:*, st(3), op(:-, st(4), par(:k))))
         @test sig(op(:*, st(3), par(:k))) != sig(op(:*, st(3), par(:k), par(:k)))
     end
 
@@ -254,12 +324,14 @@ end
     # partition (which entries group, which fall to `rest`) without a fixture
     # that has to route through a particular tier to show it.
     @testset "the surface partitions into groups and a remainder" begin
-        st(i)  = _SB_ESS._mknode(kind = _SB_ESS._NK_STATE, idx = i)
+        st(i) = _SB_ESS._mknode(kind = _SB_ESS._NK_STATE, idx = i)
         par(s) = _SB_ESS._mknode(kind = _SB_ESS._NK_PARAM, sym = s)
-        op(o, cs...) = _SB_ESS._mknode(kind = _SB_ESS._NK_OP, op = o,
-                                       children = _SB_ESS._Node[cs...])
+        op(o, cs...) = _SB_ESS._mknode(
+            kind = _SB_ESS._NK_OP, op = o,
+            children = _SB_ESS._Node[cs...]
+        )
         # Three cells of `k * u[i]`, two cells of `k + u[i]`, one lone `j * u[i]`.
-        entries = Tuple{Int,_SB_ESS._Node}[
+        entries = Tuple{Int, _SB_ESS._Node}[
             (11, op(:*, par(:k), st(1))),
             (12, op(:*, par(:k), st(2))),
             (13, op(:*, par(:k), st(3))),
@@ -278,7 +350,8 @@ end
 
         # Grouping off: no groups, and `rest` is the surface verbatim.
         off = _SB_ESS._with_compiler_plan(
-            _SB_ESS._compiler_plan(:interpreter)) do
+            _SB_ESS._compiler_plan(:interpreter)
+        ) do
             _SB_ESS._oop_batch_scalars(entries)
         end
         @test isempty(off.groups)

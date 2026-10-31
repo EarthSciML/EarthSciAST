@@ -30,10 +30,12 @@ using ForwardDiff
 include("testutils.jl")
 const ESM = EarthSciAST
 
-function _cfs_build(model, ics; compiler::Symbol=:native)
+function _cfs_build(model, ics; compiler::Symbol = :native)
     ESM._reset_cascade_tally!()
-    f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(model;
-        initial_conditions=ics, compiler=compiler)
+    f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(
+        model;
+        initial_conditions = ics, compiler = compiler
+    )
     return (f!, u0, p, vm, diag, copy(ESM._CASCADE_TALLY))
 end
 
@@ -42,7 +44,7 @@ _cfs_bitsame(a, b) = size(a) == size(b) && all(a .=== b)
 _cfs_probe(n, k) =
     Float64[1.2 + 0.8 * sin(1.3i + 0.7k) * cos(0.31i * k) + 0.05i for i in 1:n]
 
-_cfs_fn(name, args...) = ESM.OpExpr("fn", ESM.ASTExpr[args...]; name=String(name))
+_cfs_fn(name, args...) = ESM.OpExpr("fn", ESM.ASTExpr[args...]; name = String(name))
 
 const _CFS_AX = Any[0.0, 0.5, 1.0]
 const _CFS_TBL = Any[1.0, 2.0, 4.0]
@@ -51,34 +53,47 @@ const _CFS_TBL = Any[1.0, 2.0, 4.0]
 # expensive def whose value number is identical in both kernels' invariant
 # tiers, so xcse mints ONE shared scalar prelude slot and rewrites both
 # kernels' inv defs to bare `_CSECache` reads (the foreign shape under test).
-_cfs_J() = _cfs_fn("interp.linear", _const(_CFS_TBL), _const(_CFS_AX),
-                   _op("cos", _op("*", _n(0.1), _v("t"))))
+_cfs_J() = _cfs_fn(
+    "interp.linear", _const(_CFS_TBL), _const(_CFS_AX),
+    _op("cos", _op("*", _n(0.1), _v("t")))
+)
 
 # Two STRUCTURALLY DISTINCT array equations (so the kernel-class merge cannot
 # collapse them into one kernel, which would leave nothing cross-kernel to
 # share): D(a[i]) = J·a[i]  and  D(b[i]) = J·(b[i] + 0.5·sin(b[i])).
 function _cfs_model(N)
     abody = _op("*", _cfs_J(), _idx("a", _v("i")))
-    bbody = _op("*", _cfs_J(),
-                _op("+", _idx("b", _v("i")),
-                    _op("*", _n(0.5), _op("sin", _idx("b", _v("i"))))))
-    eq(x, body) = ESM.Equation(_ao1(_Didx(x, _v("i")), "i", 1, N),
-                               _ao1(body, "i", 1, N))
-    vars = Dict{String,ESM.ModelVariable}(
-        n => ESM.ModelVariable(ESM.UnknownVariable) for n in ("a", "b"))
-    ESM.Model(vars, [eq("a", abody), eq("b", bbody)])
+    bbody = _op(
+        "*", _cfs_J(),
+        _op(
+            "+", _idx("b", _v("i")),
+            _op("*", _n(0.5), _op("sin", _idx("b", _v("i"))))
+        )
+    )
+    eq(x, body) = ESM.Equation(
+        _ao1(_Didx(x, _v("i")), "i", 1, N),
+        _ao1(body, "i", 1, N)
+    )
+    vars = Dict{String, ESM.ModelVariable}(
+        n => ESM.ModelVariable(ESM.UnknownVariable) for n in ("a", "b")
+    )
+    return ESM.Model(vars, [eq("a", abody), eq("b", bbody)])
 end
 
-_cfs_ics(N) = Dict{String,Float64}("$x[$k]" => 0.2j + 0.01k
-                                   for (j, x) in enumerate(("a", "b")), k in 1:N)
+_cfs_ics(N) = Dict{String, Float64}(
+    "$x[$k]" => 0.2j + 0.01k
+        for (j, x) in enumerate(("a", "b")), k in 1:N
+)
 
 @testset "codegen shared-prelude reads (ess-cgfsc)" begin
     N = 8
     model, ics = _cfs_model(N), _cfs_ics(N)
 
     fON, uON, pON, _, dON, tON = _cfs_build(model, ics)
-    fNC, uNC, pNC, _, _, tNC = _cfs_build(_cfs_model(N), ics;
-                                          compiler=:interpreter)
+    fNC, uNC, pNC, _, _, tNC = _cfs_build(
+        _cfs_model(N), ics;
+        compiler = :interpreter
+    )
 
     @testset "(1) routing: the tier emits the shared-prelude read" begin
         # The fixture really exercises xcse (a shared slot was minted) …
@@ -86,7 +101,7 @@ _cfs_ics(N) = Dict{String,Float64}("$x[$k]" => 0.2j + 0.01k
         # … the default build compiles the kernels carrying the foreign read …
         @test get(tON, :cg_foreign_scratch_emit, 0) >= 2
         @test get(tON, :codegen_decline_foreign_scratch, 0) +
-              get(tON, :dual_codegen_decline_foreign_scratch, 0) == 0
+            get(tON, :dual_codegen_decline_foreign_scratch, 0) == 0
         @test get(tON, :codegen_kernel, 0) >= 2
         # … and the interpreter compiles nothing at all, so the comparison
         # below is against a build with no emitted read anywhere.
@@ -109,9 +124,11 @@ _cfs_ics(N) = Dict{String,Float64}("$x[$k]" => 0.2j + 0.01k
         @test _cfs_bitsame(JON, JNC)
         # Direct Dual-seeded in-place call (no jacobian scaffolding): values
         # and the one partial, element by element.
-        DT = ForwardDiff.Dual{:cfs,Float64,1}
-        ud = DT[DT(uON[i], ForwardDiff.Partials((0.5 + 0.01i,)))
-                for i in eachindex(uON)]
+        DT = ForwardDiff.Dual{:cfs, Float64, 1}
+        ud = DT[
+            DT(uON[i], ForwardDiff.Partials((0.5 + 0.01i,)))
+                for i in eachindex(uON)
+        ]
         da = _cfs_du(fON, ud, pON, 0.4)
         db = _cfs_du(fNC, ud, pNC, 0.4)
         @test all(ForwardDiff.value.(da) .=== ForwardDiff.value.(db))

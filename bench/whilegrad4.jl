@@ -28,7 +28,10 @@ Pkg.activate("/tmp/claude-1111265/scanad-env"; io = devnull)
 using Reactant, ForwardDiff, Printf
 const Enzyme = Reactant.Enzyme
 const RX = Reactant
-try; RX.set_default_backend("cpu"); catch; end
+try
+    RX.set_default_backend("cpu")
+catch
+end
 say(s) = (println(s); flush(stdout))
 ok(t, g, m) = say(@sprintf("  [%s] %-30s %s", g ? "PASS" : "FAIL", t, m))
 err1(e) = first(split(sprint(showerror, e), '\n'))
@@ -44,28 +47,39 @@ const H = 0.01
 const NSTEP = 20
 u0 = [0.5 + 0.1i for i in 1:N]
 k0 = 0.7
-host_fixed(u, k, n) = (for _ in 1:n; u = u .+ k .* u .* H; end; sum(u))
+host_fixed(u, k, n) = (
+    for _ in 1:n
+        u = u .+ k .* u .* H
+    end; sum(u)
+)
 const GREF = ForwardDiff.derivative(kk -> host_fixed(u0, kk, NSTEP), k0)
 
-function rev(tag, f, gref, extra...; rtol = 1e-8, showhlo = false)
+function rev(tag, f, gref, extra...; rtol = 1.0e-8, showhlo = false)
     ur = RX.ConcreteRArray(u0); kr = RX.ConcreteRNumber(k0)
-    g = (u, k, e...) -> Enzyme.gradient(Enzyme.Reverse, f, Enzyme.Const(u), k,
-                                        map(Enzyme.Const, e)...)[2]
+    g = (u, k, e...) -> Enzyme.gradient(
+        Enzyme.Reverse, f, Enzyme.Const(u), k,
+        map(Enzyme.Const, e)...
+    )[2]
     nw = -1
     if showhlo
         try
             s = repr(RX.@code_hlo optimize = false g(ur, kr, extra...))
             nw = length(collect(eachmatch(r"stablehlo\.while\b", s)))
-        catch; end
+        catch
+        end
     end
-    try
+    return try
         t0 = time()
         xg = RX.@compile sync = true g(ur, kr, extra...)
         tc = time() - t0
         got = Float64(xg(ur, kr, extra...))
-        ok(tag, isapprox(got, gref; rtol = rtol),
-           @sprintf("got %.12g want %.12g (%.1f s%s)", got, gref, tc,
-                    nw >= 0 ? ", grad has while=$nw" : ""))
+        ok(
+            tag, isapprox(got, gref; rtol = rtol),
+            @sprintf(
+                "got %.12g want %.12g (%.1f s%s)", got, gref, tc,
+                nw >= 0 ? ", grad has while=$nw" : ""
+            )
+        )
     catch e
         ok(tag, false, mlirerr(e))
     end
@@ -78,7 +92,7 @@ function x1(u, k)
     RX.@trace track_numbers = false for _ in 1:NSTEP
         u = u .+ k .* u .* H
     end
-    sum(u)
+    return sum(u)
 end
 rev("X1 for 1:$NSTEP static", x1, GREF; showhlo = true)
 
@@ -88,19 +102,19 @@ function x2(u, k, n)
     RX.@trace track_numbers = false for _ in 1:n
         u = u .+ k .* u .* H
     end
-    sum(u)
+    return sum(u)
 end
 function x2p(u, k, n)
     RX.@trace track_numbers = false checkpointing = RX.Periodic(5) for _ in 1:n
         u = u .+ k .* u .* H
     end
-    sum(u)
+    return sum(u)
 end
 function x2b(u, k, n)
     RX.@trace track_numbers = false checkpointing = RX.Binomial(5) for _ in 1:n
         u = u .+ k .* u .* H
     end
-    sum(u)
+    return sum(u)
 end
 nri = RX.ConcreteRNumber(NSTEP)   # Int64, a real induction bound
 rev("X2 for 1:n traced, plain", x2, GREF, nri)
@@ -115,7 +129,7 @@ function x3(u, k, nlim)
         u = u .+ k .* u .* H
         i = i + 1
     end
-    sum(u)
+    return sum(u)
 end
 function x3p(u, k, nlim)
     i = 0
@@ -123,7 +137,7 @@ function x3p(u, k, nlim)
         u = u .+ k .* u .* H
         i = i + 1
     end
-    sum(u)
+    return sum(u)
 end
 rev("X3 while Int ctr, plain", x3, GREF, nri)
 rev("X3 while Int ctr + Periodic", x3p, GREF, nri)
@@ -135,7 +149,7 @@ function host_adapt(u, k, thresh)
     while s < thresh && it < 500
         u = u .+ k .* u .* H; s = sum(u); it += 1
     end
-    sum(u)
+    return sum(u)
 end
 const GREF_A = ForwardDiff.derivative(kk -> host_adapt(u0, kk, 4.0), k0)
 say("reference (data-dependent) d/dk = $GREF_A")
@@ -146,25 +160,25 @@ function x4(u, k, thresh)
     RX.@trace while (s < thresh) & (it < 500)
         u = u .+ k .* u .* H; s = sum(u); it = it + 1
     end
-    sum(u)
+    return sum(u)
 end
 function x4p(u, k, thresh)
     s = zero(k); it = 0
     RX.@trace checkpointing = RX.Periodic(10) while (s < thresh) & (it < 500)
         u = u .+ k .* u .* H; s = sum(u); it = it + 1
     end
-    sum(u)
+    return sum(u)
 end
 function x4b(u, k, thresh)
     s = zero(k); it = 0
     RX.@trace checkpointing = RX.Binomial(10) while (s < thresh) & (it < 500)
         u = u .+ k .* u .* H; s = sum(u); it = it + 1
     end
-    sum(u)
+    return sum(u)
 end
-rev("X4 adaptive Int cap, plain", x4, GREF_A, thr; rtol = 1e-6)
-rev("X4 adaptive + Periodic(10)", x4p, GREF_A, thr; rtol = 1e-6)
-rev("X4 adaptive + Binomial(10)", x4b, GREF_A, thr; rtol = 1e-6)
+rev("X4 adaptive Int cap, plain", x4, GREF_A, thr; rtol = 1.0e-6)
+rev("X4 adaptive + Periodic(10)", x4p, GREF_A, thr; rtol = 1.0e-6)
+rev("X4 adaptive + Binomial(10)", x4b, GREF_A, thr; rtol = 1.0e-6)
 
 say("")
 say("=== X5  the same adaptive result, as a STATIC-count MASKED for loop ===")
@@ -182,7 +196,7 @@ function x5(u, k, thresh)
         u = ifelse.(live, un, u)
         s = ifelse(live, sum(un), s)
     end
-    sum(u)
+    return sum(u)
 end
-rev("X5 masked for 1:$CAP static", x5, GREF_A, thr; rtol = 1e-6, showhlo = true)
+rev("X5 masked for 1:$CAP static", x5, GREF_A, thr; rtol = 1.0e-6, showhlo = true)
 say("WHILEGRAD4_DONE")

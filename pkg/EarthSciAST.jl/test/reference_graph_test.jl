@@ -16,24 +16,28 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
 # minimal aggregate node dict (build explicitly; `merge` is ambiguous here
 # because EarthSciAST also exports a `merge`).
 function agg(; kw...)
-    d = Dict{String,Any}("op" => "faq", "args" => Any[])
+    d = Dict{String, Any}("op" => "faq", "args" => Any[])
     for (k, v) in kw
         d[string(k)] = v
     end
     return d
 end
-eqn(lhs, rhs) = Dict{String,Any}("lhs" => lhs, "rhs" => rhs)
+eqn(lhs, rhs) = Dict{String, Any}("lhs" => lhs, "rhs" => rhs)
 
 @testset "reference_graph" begin
 
     @testset "(1) from_faq resolves to a specific node" begin
-        producer = agg(id = "edge_faq", output_idx = ["edge"],
-                       ranges = Dict("f" => Dict("from" => "faces")))
-        model = Dict{String,Any}(
+        producer = agg(
+            id = "edge_faq", output_idx = ["edge"],
+            ranges = Dict("f" => Dict("from" => "faces"))
+        )
+        model = Dict{String, Any}(
             "index_sets" => Dict(
                 "faces" => Dict("kind" => "interval", "size" => 8),
-                "edges" => Dict("kind" => "derived", "from_faq" => "edge_faq")),
-            "equations" => [eqn(producer, 0)])
+                "edges" => Dict("kind" => "derived", "from_faq" => "edge_faq")
+            ),
+            "equations" => [eqn(producer, 0)]
+        )
         g = build_reference_graph(model, "M")
 
         ff = ESS.edges_of_kind(g, ESS.REF_EDGE_FROM_FAQ)
@@ -47,9 +51,10 @@ eqn(lhs, rhs) = Dict{String,Any}("lhs" => lhs, "rhs" => rhs)
     end
 
     @testset "from_faq unknown node id errors" begin
-        model = Dict{String,Any}(
+        model = Dict{String, Any}(
             "index_sets" => Dict("edges" => Dict("kind" => "derived", "from_faq" => "missing")),
-            "equations" => [eqn(agg(id = "present"), 0)])
+            "equations" => [eqn(agg(id = "present"), 0)]
+        )
         err = try
             build_reference_graph(model, "M")
             nothing
@@ -61,7 +66,7 @@ eqn(lhs, rhs) = Dict{String,Any}("lhs" => lhs, "rhs" => rhs)
     end
 
     @testset "duplicate node id errors" begin
-        model = Dict{String,Any}("equations" => [eqn(agg(id = "dup"), 0), eqn(agg(id = "dup"), 0)])
+        model = Dict{String, Any}("equations" => [eqn(agg(id = "dup"), 0), eqn(agg(id = "dup"), 0)])
         err = try
             build_reference_graph(model, "M")
             nothing
@@ -74,9 +79,10 @@ eqn(lhs, rhs) = Dict{String,Any}("lhs" => lhs, "rhs" => rhs)
 
     @testset "ranges[*].from resolves to an index set" begin
         node = agg(output_idx = ["i"], ranges = Dict("i" => Dict("from" => "cells")))
-        model = Dict{String,Any}(
+        model = Dict{String, Any}(
             "index_sets" => Dict("cells" => Dict("kind" => "interval", "size" => 4)),
-            "equations" => [eqn(node, 0)])
+            "equations" => [eqn(node, 0)]
+        )
         g = build_reference_graph(model, "M")
         rf = ESS.edges_of_kind(g, ESS.REF_EDGE_RANGE_FROM)
         @test length(rf) == 1
@@ -86,9 +92,10 @@ eqn(lhs, rhs) = Dict{String,Any}("lhs" => lhs, "rhs" => rhs)
 
     @testset "ranges[*].from undeclared index set errors" begin
         node = agg(output_idx = ["i"], ranges = Dict("i" => Dict("from" => "nope")))
-        model = Dict{String,Any}(
+        model = Dict{String, Any}(
             "index_sets" => Dict("cells" => Dict("kind" => "interval", "size" => 4)),
-            "equations" => [eqn(node, 0)])
+            "equations" => [eqn(node, 0)]
+        )
         err = try
             build_reference_graph(model, "M")
             nothing
@@ -105,9 +112,10 @@ eqn(lhs, rhs) = Dict{String,Any}("lhs" => lhs, "rhs" => rhs)
         # a document authored lhs-before-rhs, so the `lhs` range is the one
         # reported — not whichever key the Dict happens to hash first.
         bad(i) = agg(output_idx = [i], ranges = Dict(i => Dict("from" => "nope")))
-        model = Dict{String,Any}(
+        model = Dict{String, Any}(
             "index_sets" => Dict("cells" => Dict("kind" => "interval", "size" => 4)),
-            "equations" => [eqn(bad("i"), bad("j"))])
+            "equations" => [eqn(bad("i"), bad("j"))]
+        )
         err = try
             build_reference_graph(model, "M")
             nothing
@@ -120,21 +128,27 @@ eqn(lhs, rhs) = Dict{String,Any}("lhs" => lhs, "rhs" => rhs)
 
     @testset "dense tuple ranges make no edge (back-compat)" begin
         node = agg(output_idx = ["i"], ranges = Dict("i" => [1, 64]))
-        g = build_reference_graph(Dict{String,Any}("equations" => [eqn(node, 0)]), "M")
+        g = build_reference_graph(Dict{String, Any}("equations" => [eqn(node, 0)]), "M")
         @test isempty(g.edges)
     end
 
     @testset "(2) a join factor resolves to its referenced factor" begin
-        node = agg(output_idx = ["county"],
-                   ranges = Dict("county" => Dict("from" => "county"),
-                                 "src" => Dict("from" => "sourceType")),
-                   join = [Dict("on" => [["activity", "sourceType"]])],
-                   args = ["activity", "base_rate"])
-        model = Dict{String,Any}(
+        node = agg(
+            output_idx = ["county"],
+            ranges = Dict(
+                "county" => Dict("from" => "county"),
+                "src" => Dict("from" => "sourceType")
+            ),
+            join = [Dict("on" => [["activity", "sourceType"]])],
+            args = ["activity", "base_rate"]
+        )
+        model = Dict{String, Any}(
             "index_sets" => Dict(
                 "county" => Dict("kind" => "categorical", "members" => ["A", "B"]),
-                "sourceType" => Dict("kind" => "categorical", "members" => ["x"])),
-            "equations" => [eqn(node, 0)])
+                "sourceType" => Dict("kind" => "categorical", "members" => ["x"])
+            ),
+            "equations" => [eqn(node, 0)]
+        )
         g = build_reference_graph(model, "M")
         jf = ESS.edges_of_kind(g, ESS.REF_EDGE_JOIN_FACTOR)
         @test length(jf) == 1
@@ -144,16 +158,22 @@ eqn(lhs, rhs) = Dict{String,Any}("lhs" => lhs, "rhs" => rhs)
     end
 
     @testset "join factor resolves to a range key (RFC §7.2 spelling)" begin
-        node = agg(output_idx = ["county"],
-                   ranges = Dict("county" => Dict("from" => "county"),
-                                 "src" => Dict("from" => "sourceType")),
-                   join = [Dict("on" => [["src", "sourceType"]])],
-                   args = ["activity"])
-        model = Dict{String,Any}(
+        node = agg(
+            output_idx = ["county"],
+            ranges = Dict(
+                "county" => Dict("from" => "county"),
+                "src" => Dict("from" => "sourceType")
+            ),
+            join = [Dict("on" => [["src", "sourceType"]])],
+            args = ["activity"]
+        )
+        model = Dict{String, Any}(
             "index_sets" => Dict(
                 "county" => Dict("kind" => "categorical", "members" => ["A"]),
-                "sourceType" => Dict("kind" => "categorical", "members" => ["x"])),
-            "equations" => [eqn(node, 0)])
+                "sourceType" => Dict("kind" => "categorical", "members" => ["x"])
+            ),
+            "equations" => [eqn(node, 0)]
+        )
         g = build_reference_graph(model, "M")
         jf = ESS.edges_of_kind(g, ESS.REF_EDGE_JOIN_FACTOR)
         @test length(jf) == 1
@@ -161,11 +181,14 @@ eqn(lhs, rhs) = Dict{String,Any}("lhs" => lhs, "rhs" => rhs)
     end
 
     @testset "join factor unresolved errors" begin
-        node = agg(output_idx = ["i"], ranges = Dict("i" => Dict("from" => "cells")),
-                   join = [Dict("on" => [["ghost", "col"]])], args = ["activity"])
-        model = Dict{String,Any}(
+        node = agg(
+            output_idx = ["i"], ranges = Dict("i" => Dict("from" => "cells")),
+            join = [Dict("on" => [["ghost", "col"]])], args = ["activity"]
+        )
+        model = Dict{String, Any}(
             "index_sets" => Dict("cells" => Dict("kind" => "interval", "size" => 2)),
-            "equations" => [eqn(node, 0)])
+            "equations" => [eqn(node, 0)]
+        )
         err = try
             build_reference_graph(model, "M")
             nothing
@@ -185,19 +208,30 @@ eqn(lhs, rhs) = Dict{String,Any}("lhs" => lhs, "rhs" => rhs)
     # range (`i`) and a string factor arg (`w`), so every registry the check
     # consults is non-empty and the check is genuinely reached.
     @testset "join binder classes (esm-spec §4.9.5)" begin
-        four_class = on -> Dict{String,Any}(
+        four_class = on -> Dict{String, Any}(
             "index_sets" => Dict("cells" => Dict("kind" => "interval", "size" => 4)),
-            "variables" => Dict("bin" => Dict("type" => "parameter"),
-                                "w" => Dict("type" => "parameter")),
-            "equations" => [eqn(agg(id = "j", args = ["w"], output_idx = String[],
-                                    ranges = Dict("i" => Dict("from" => "cells")),
-                                    join = [Dict("on" => [on])]), 0)])
+            "variables" => Dict(
+                "bin" => Dict("type" => "parameter"),
+                "w" => Dict("type" => "parameter")
+            ),
+            "equations" => [
+                eqn(
+                    agg(
+                        id = "j", args = ["w"], output_idx = String[],
+                        ranges = Dict("i" => Dict("from" => "cells")),
+                        join = [Dict("on" => [on])]
+                    ), 0
+                ),
+            ]
+        )
 
         # Each class resolves, on BOTH key columns.
-        for on in (["i", "i"],          # 1. node-local binder (ranges key)
-                   ["w", "w"],          # 2. node-local string factor arg
-                   ["bin", "bin"],      # 3. declared model variable — defect #3
-                   ["cells", "cells"])  # 4. document-scoped index set
+        for on in (
+                ["i", "i"],          # 1. node-local binder (ranges key)
+                ["w", "w"],          # 2. node-local string factor arg
+                ["bin", "bin"],      # 3. declared model variable — defect #3
+                ["cells", "cells"],
+            )  # 4. document-scoped index set
             @test build_reference_graph(four_class(on), "M") isa ESS.ReferenceGraph
         end
 
@@ -217,14 +251,18 @@ eqn(lhs, rhs) = Dict{String,Any}("lhs" => lhs, "rhs" => rhs)
     end
 
     @testset "(3) edges are queryable by the partition pass" begin
-        producer = agg(id = "edge_faq", output_idx = ["edge"],
-                       ranges = Dict("f" => Dict("from" => "faces")))
+        producer = agg(
+            id = "edge_faq", output_idx = ["edge"],
+            ranges = Dict("f" => Dict("from" => "faces"))
+        )
         consumer = agg(output_idx = ["e"], ranges = Dict("e" => Dict("from" => "edges")))
-        model = Dict{String,Any}(
+        model = Dict{String, Any}(
             "index_sets" => Dict(
                 "faces" => Dict("kind" => "interval", "size" => 8),
-                "edges" => Dict("kind" => "derived", "from_faq" => "edge_faq")),
-            "equations" => [eqn(producer, 0), eqn(consumer, 0)])
+                "edges" => Dict("kind" => "derived", "from_faq" => "edge_faq")
+            ),
+            "equations" => [eqn(producer, 0), eqn(consumer, 0)]
+        )
         g = build_reference_graph(model, "M")
         order = ESS.topological_order(g)        # raises on cycle; here acyclic
         @test length(order) == length(g.vertices)
@@ -235,11 +273,14 @@ eqn(lhs, rhs) = Dict{String,Any}("lhs" => lhs, "rhs" => rhs)
     end
 
     @testset "(4) a reference cycle is detectable" begin
-        producer = agg(id = "edge_faq", output_idx = ["edge"],
-                       ranges = Dict("e" => Dict("from" => "edges")))
-        model = Dict{String,Any}(
+        producer = agg(
+            id = "edge_faq", output_idx = ["edge"],
+            ranges = Dict("e" => Dict("from" => "edges"))
+        )
+        model = Dict{String, Any}(
             "index_sets" => Dict("edges" => Dict("kind" => "derived", "from_faq" => "edge_faq")),
-            "equations" => [eqn(producer, 0)])
+            "equations" => [eqn(producer, 0)]
+        )
         g = build_reference_graph(model, "M")
         cyc = ESS.detect_cycle(g)
         @test cyc !== nothing
@@ -248,7 +289,7 @@ eqn(lhs, rhs) = Dict{String,Any}("lhs" => lhs, "rhs" => rhs)
         @test "index_set:edges" in cyc
         # resolve_references surfaces it eagerly as E_REF_CYCLE.
         err = try
-            resolve_references(Dict{String,Any}("models" => Dict("M" => model)))
+            resolve_references(Dict{String, Any}("models" => Dict("M" => model)))
             nothing
         catch e
             e
@@ -258,21 +299,25 @@ eqn(lhs, rhs) = Dict{String,Any}("lhs" => lhs, "rhs" => rhs)
     end
 
     @testset "additive: no references -> empty graph" begin
-        model = Dict{String,Any}(
+        model = Dict{String, Any}(
             "variables" => Dict("u" => Dict("type" => "unknown")),
-            "equations" => [eqn(Dict{String,Any}("op" => "D", "args" => ["u"], "wrt" => "t"), -1)])
+            "equations" => [eqn(Dict{String, Any}("op" => "D", "args" => ["u"], "wrt" => "t"), -1)]
+        )
         g = build_reference_graph(model, "M")
         @test isempty(g.edges)
         @test ESS.detect_cycle(g) === nothing
     end
 
     @testset "resolve_references across models" begin
-        m1 = Dict{String,Any}(
+        m1 = Dict{String, Any}(
             "index_sets" => Dict("cells" => Dict("kind" => "interval", "size" => 4)),
-            "equations" => [eqn(agg(output_idx = ["i"], ranges = Dict("i" => Dict("from" => "cells"))), 0)])
-        m2 = Dict{String,Any}("equations" =>
-            [eqn(Dict{String,Any}("op" => "D", "args" => ["u"], "wrt" => "t"), 0)])
-        graphs = resolve_references(Dict{String,Any}("models" => Dict("A" => m1, "B" => m2)))
+            "equations" => [eqn(agg(output_idx = ["i"], ranges = Dict("i" => Dict("from" => "cells"))), 0)]
+        )
+        m2 = Dict{String, Any}(
+            "equations" =>
+                [eqn(Dict{String, Any}("op" => "D", "args" => ["u"], "wrt" => "t"), 0)]
+        )
+        graphs = resolve_references(Dict{String, Any}("models" => Dict("A" => m1, "B" => m2)))
         @test Set(keys(graphs)) == Set(["A", "B"])
         @test length(ESS.edges_of_kind(graphs["A"], ESS.REF_EDGE_RANGE_FROM)) == 1
         @test isempty(graphs["B"].edges)
@@ -293,16 +338,20 @@ eqn(lhs, rhs) = Dict{String,Any}("lhs" => lhs, "rhs" => rhs)
     @testset "index_sets at DOCUMENT scope (esm 1.0.0 flat shape)" begin
         # One model, no model-local `index_sets`; the registry is a sibling of
         # `models`, exactly as a 1.0.0 document writes it.
-        producer = agg(id = "edge_faq", output_idx = ["edge"],
-                       ranges = Dict("f" => Dict("from" => "faces")))
+        producer = agg(
+            id = "edge_faq", output_idx = ["edge"],
+            ranges = Dict("f" => Dict("from" => "faces"))
+        )
         consumer = agg(output_idx = ["e"], ranges = Dict("e" => Dict("from" => "edges")))
-        model = Dict{String,Any}("equations" => [eqn(producer, 0), eqn(consumer, 1)])
-        document = Dict{String,Any}(
+        model = Dict{String, Any}("equations" => [eqn(producer, 0), eqn(consumer, 1)])
+        document = Dict{String, Any}(
             "esm" => "1.0.0",
             "index_sets" => Dict(
                 "faces" => Dict("kind" => "interval", "size" => 8),
-                "edges" => Dict("kind" => "derived", "from_faq" => "edge_faq")),
-            "models" => Dict("M" => model))
+                "edges" => Dict("kind" => "derived", "from_faq" => "edge_faq")
+            ),
+            "models" => Dict("M" => model)
+        )
 
         # (a) The pre-fix read: no registry threaded, no model-local key, so
         #     the FIRST `ranges[*].from` is undeclared and the build throws.
@@ -337,12 +386,15 @@ eqn(lhs, rhs) = Dict{String,Any}("lhs" => lhs, "rhs" => rhs)
 
         # (d) The registry is shared by EVERY model, not re-declared per model
         #     — the point of hoisting it to document scope.
-        m2 = Dict{String,Any}("equations" =>
-            [eqn(agg(output_idx = ["f"], ranges = Dict("f" => Dict("from" => "faces"))), 0)])
-        doc2 = Dict{String,Any}(
+        m2 = Dict{String, Any}(
+            "equations" =>
+                [eqn(agg(output_idx = ["f"], ranges = Dict("f" => Dict("from" => "faces"))), 0)]
+        )
+        doc2 = Dict{String, Any}(
             "esm" => "1.0.0",
             "index_sets" => Dict("faces" => Dict("kind" => "interval", "size" => 8)),
-            "models" => Dict("A" => m2, "B" => deepcopy(m2)))
+            "models" => Dict("A" => m2, "B" => deepcopy(m2))
+        )
         graphs2 = resolve_references(doc2)
         @test length(ESS.edges_of_kind(graphs2["A"], ESS.REF_EDGE_RANGE_FROM)) == 1
         @test length(ESS.edges_of_kind(graphs2["B"], ESS.REF_EDGE_RANGE_FROM)) == 1
@@ -352,19 +404,30 @@ eqn(lhs, rhs) = Dict{String,Any}("lhs" => lhs, "rhs" => rhs)
         # Omitting the trailing argument keeps the old behaviour for a caller
         # holding only a raw model dict — this is what every test above relies
         # on, and what Python's `index_sets=None` fallback does.
-        model = Dict{String,Any}(
+        model = Dict{String, Any}(
             "index_sets" => Dict("cells" => Dict("kind" => "interval", "size" => 4)),
-            "equations" => [eqn(agg(output_idx = ["i"],
-                                    ranges = Dict("i" => Dict("from" => "cells"))), 0)])
+            "equations" => [
+                eqn(
+                    agg(
+                        output_idx = ["i"],
+                        ranges = Dict("i" => Dict("from" => "cells"))
+                    ), 0
+                ),
+            ]
+        )
         g = build_reference_graph(model, "M")
         @test length(ESS.edges_of_kind(g, ESS.REF_EDGE_RANGE_FROM)) == 1
 
         # A model-local entry wins a key collision with the document registry
         # (the Rust/Go merge rule); no 1.0.0 document can produce this, since
         # the schema allows `index_sets` only at document scope.
-        g2 = build_reference_graph(model, "M",
-            Dict{String,Any}("cells" => Dict("kind" => "interval", "size" => 99),
-                             "other" => Dict("kind" => "interval", "size" => 2)))
+        g2 = build_reference_graph(
+            model, "M",
+            Dict{String, Any}(
+                "cells" => Dict("kind" => "interval", "size" => 99),
+                "other" => Dict("kind" => "interval", "size" => 2)
+            )
+        )
         @test haskey(g2.vertices, "index_set:cells")
         @test haskey(g2.vertices, "index_set:other")
         @test length(ESS.edges_of_kind(g2, ESS.REF_EDGE_RANGE_FROM)) == 1
@@ -379,16 +442,30 @@ eqn(lhs, rhs) = Dict{String,Any}("lhs" => lhs, "rhs" => rhs)
     # made the cross-model shape unresolvable. The consequence: node ids are
     # unique per DOCUMENT, not per model.
     @testset "from_faq resolves at document scope" begin
-        producer = Dict{String,Any}("equations" => [eqn(
-            agg(id = "edge_faq", output_idx = ["edge"],
-                ranges = Dict("f" => Dict("from" => "faces"))), 0)])
-        consumer = Dict{String,Any}("equations" => [eqn(
-            agg(output_idx = String[], ranges = Dict("e" => Dict("from" => "edges"))), 0)])
-        doc = Dict{String,Any}(
+        producer = Dict{String, Any}(
+            "equations" => [
+                eqn(
+                    agg(
+                        id = "edge_faq", output_idx = ["edge"],
+                        ranges = Dict("f" => Dict("from" => "faces"))
+                    ), 0
+                ),
+            ]
+        )
+        consumer = Dict{String, Any}(
+            "equations" => [
+                eqn(
+                    agg(output_idx = String[], ranges = Dict("e" => Dict("from" => "edges"))), 0
+                ),
+            ]
+        )
+        doc = Dict{String, Any}(
             "index_sets" => Dict(
                 "faces" => Dict("kind" => "interval", "size" => 8),
-                "edges" => Dict("kind" => "derived", "from_faq" => "edge_faq")),
-            "models" => Dict("Consumer" => consumer, "Producer" => producer))
+                "edges" => Dict("kind" => "derived", "from_faq" => "edge_faq")
+            ),
+            "models" => Dict("Consumer" => consumer, "Producer" => producer)
+        )
         graphs = resolve_references(doc)
 
         # BOTH graphs carry the edge: the registry entry is document-scoped, so
@@ -406,11 +483,13 @@ eqn(lhs, rhs) = Dict{String,Any}("lhs" => lhs, "rhs" => rhs)
         @test v.path == "models/Producer/equations/0/lhs"
 
         # Widening the scope does not weaken the error.
-        bad = Dict{String,Any}(
+        bad = Dict{String, Any}(
             "index_sets" => Dict("edges" => Dict("kind" => "derived", "from_faq" => "nowhere")),
             "models" => Dict(
-                "A" => Dict{String,Any}("equations" => [eqn(agg(id = "here"), 0)]),
-                "B" => Dict{String,Any}("equations" => [eqn(agg(id = "there"), 0)])))
+                "A" => Dict{String, Any}("equations" => [eqn(agg(id = "here"), 0)]),
+                "B" => Dict{String, Any}("equations" => [eqn(agg(id = "there"), 0)])
+            )
+        )
         err = try
             resolve_references(bad); nothing
         catch e
@@ -423,9 +502,12 @@ eqn(lhs, rhs) = Dict{String,Any}("lhs" => lhs, "rhs" => rhs)
     @testset "a node id duplicated across two models is an error" begin
         # Legal before the §9.7.5 ruling, a load-time error now: one
         # document-wide id namespace cannot hold two.
-        doc = Dict{String,Any}("models" => Dict(
-            "A" => Dict{String,Any}("equations" => [eqn(agg(id = "dup"), 0)]),
-            "B" => Dict{String,Any}("equations" => [eqn(agg(id = "dup"), 0)])))
+        doc = Dict{String, Any}(
+            "models" => Dict(
+                "A" => Dict{String, Any}("equations" => [eqn(agg(id = "dup"), 0)]),
+                "B" => Dict{String, Any}("equations" => [eqn(agg(id = "dup"), 0)])
+            )
+        )
         err = try
             resolve_references(doc); nothing
         catch e
@@ -439,9 +521,11 @@ eqn(lhs, rhs) = Dict{String,Any}("lhs" => lhs, "rhs" => rhs)
     end
 
     @testset "the shared cross-model corpus fixture resolves" begin
-        path = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid", "faq",
-                        "cross_model_from_faq.esm")
-        doc = JSON3.read(read(path, String), Dict{String,Any})
+        path = joinpath(
+            TESTUTILS_REPO_ROOT, "tests", "valid", "faq",
+            "cross_model_from_faq.esm"
+        )
+        doc = JSON3.read(read(path, String), Dict{String, Any})
         graphs = resolve_references(doc)
         @test Set(keys(graphs)) == Set(["EdgeProducer", "FluxConsumer"])
         ff = ESS.edges_of_kind(graphs["FluxConsumer"], ESS.REF_EDGE_FROM_FAQ)
@@ -459,9 +543,11 @@ eqn(lhs, rhs) = Dict{String,Any}("lhs" => lhs, "rhs" => rhs)
     #     written by equations 0 and 1 — rather than node-local binders. Both
     #     columns now resolve through the variable class of `_join_binder_class`.
     @testset "wildfire fixture resolves fully" begin
-        path = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid",
-                        "wildfire_atmosphere_ocean.esm")
-        doc = JSON3.read(read(path, String), Dict{String,Any})
+        path = joinpath(
+            TESTUTILS_REPO_ROOT, "tests", "valid",
+            "wildfire_atmosphere_ocean.esm"
+        )
+        doc = JSON3.read(read(path, String), Dict{String, Any})
         graphs = resolve_references(doc)
         ocean = graphs["OceanDynamics"]
         targets = Set(e.target for e in ESS.edges_of_kind(ocean, ESS.REF_EDGE_JOIN_FACTOR))
@@ -472,9 +558,11 @@ eqn(lhs, rhs) = Dict{String,Any}("lhs" => lhs, "rhs" => rhs)
     # ConservativeRegridAssembly join on [["src_bin","tgt_bin"]], both declared
     # model variables shaped over the join's range index sets.
     @testset "conservative_regrid_assembly resolves" begin
-        path = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid", "geometry",
-                        "conservative_regrid_assembly.esm")
-        doc = JSON3.read(read(path, String), Dict{String,Any})
+        path = joinpath(
+            TESTUTILS_REPO_ROOT, "tests", "valid", "geometry",
+            "conservative_regrid_assembly.esm"
+        )
+        doc = JSON3.read(read(path, String), Dict{String, Any})
         @test resolve_references(doc) isa AbstractDict
     end
 
@@ -497,13 +585,17 @@ eqn(lhs, rhs) = Dict{String,Any}("lhs" => lhs, "rhs" => rhs)
                 # template imports and `{ref}` mounts have merged their index
                 # sets into the registry, so a range over an imported axis
                 # resolves.
-                doc = JSON3.read(ESS.to_json(ESS.load_path(f)), Dict{String,Any})
+                doc = JSON3.read(ESS.to_json(ESS.load_path(f)), Dict{String, Any})
                 for (_, g) in resolve_references(doc)
                     isempty(g.edges) || (with_edges += 1)
                 end
             catch e
-                push!(failures, string(relpath(f, validdir), ": ",
-                                       e isa ESS.ReferenceResolutionError ? e.code : string(typeof(e))))
+                push!(
+                    failures, string(
+                        relpath(f, validdir), ": ",
+                        e isa ESS.ReferenceResolutionError ? e.code : string(typeof(e))
+                    )
+                )
             end
         end
         @test failures == String[]

@@ -27,17 +27,19 @@ const MTK3 = ModelingToolkit
 
     # ---------- Helpers ----------
     _v(name) = ESM3.VarExpr(String(name))
-    _n(x)    = ESM3.NumExpr(Float64(x))
-    _const(v) = ESM3.OpExpr("const", ESM3.ASTExpr[]; value=v)
+    _n(x) = ESM3.NumExpr(Float64(x))
+    _const(v) = ESM3.OpExpr("const", ESM3.ASTExpr[]; value = v)
     _fn(name, args...) =
-        ESM3.OpExpr("fn", ESM3.ASTExpr[args...]; name=String(name))
+        ESM3.OpExpr("fn", ESM3.ASTExpr[args...]; name = String(name))
 
     # Build a Model whose state derivative is `interp.linear(table, axis, x_var)`.
-    function _linear_model(table::Vector{Float64}, axis::Vector{Float64};
-                            x_default::Float64=0.0)
-        vars = OrderedDict{String,ESM3.ModelVariable}(
-            "x" => ESM3.ModelVariable(ESM3.ParameterVariable; default=x_default),
-            "y" => ESM3.ModelVariable(ESM3.UnknownVariable;     default=0.0),
+    function _linear_model(
+            table::Vector{Float64}, axis::Vector{Float64};
+            x_default::Float64 = 0.0
+        )
+        vars = OrderedDict{String, ESM3.ModelVariable}(
+            "x" => ESM3.ModelVariable(ESM3.ParameterVariable; default = x_default),
+            "y" => ESM3.ModelVariable(ESM3.UnknownVariable; default = 0.0),
         )
         rhs = _fn("interp.linear", _const(table), _const(axis), _v("x"))
         eqs = ESM3.Equation[
@@ -46,23 +48,27 @@ const MTK3 = ModelingToolkit
         return ESM3.Model(vars, eqs)
     end
 
-    function _bilinear_model(table::Vector{Vector{Float64}},
-                              axis_x::Vector{Float64}, axis_y::Vector{Float64};
-                              x_default=0.0, y_default=0.0)
-        vars = OrderedDict{String,ESM3.ModelVariable}(
-            "x" => ESM3.ModelVariable(ESM3.ParameterVariable; default=x_default),
-            "y" => ESM3.ModelVariable(ESM3.ParameterVariable; default=y_default),
-            "z" => ESM3.ModelVariable(ESM3.UnknownVariable;     default=0.0),
+    function _bilinear_model(
+            table::Vector{Vector{Float64}},
+            axis_x::Vector{Float64}, axis_y::Vector{Float64};
+            x_default = 0.0, y_default = 0.0
         )
-        rhs = _fn("interp.bilinear", _const(table), _const(axis_x), _const(axis_y),
-                  _v("x"), _v("y"))
+        vars = OrderedDict{String, ESM3.ModelVariable}(
+            "x" => ESM3.ModelVariable(ESM3.ParameterVariable; default = x_default),
+            "y" => ESM3.ModelVariable(ESM3.ParameterVariable; default = y_default),
+            "z" => ESM3.ModelVariable(ESM3.UnknownVariable; default = 0.0),
+        )
+        rhs = _fn(
+            "interp.bilinear", _const(table), _const(axis_x), _const(axis_y),
+            _v("x"), _v("y")
+        )
         eqs = ESM3.Equation[
             ESM3.Equation(_op_D("z"), rhs),
         ]
         return ESM3.Model(vars, eqs)
     end
 
-    _op_D(name) = ESM3.OpExpr("D", ESM3.ASTExpr[_v(name)]; wrt="t")
+    _op_D(name) = ESM3.OpExpr("D", ESM3.ASTExpr[_v(name)]; wrt = "t")
 
     # --------------------------------------------------------------
     # 1. interp.linear lowers + compiles; the registered op appears
@@ -70,9 +76,9 @@ const MTK3 = ModelingToolkit
     # --------------------------------------------------------------
     @testset "interp.linear lowers + mtkcompile" begin
         table = Float64[10, 20, 40, 80, 160]
-        axis  = Float64[0, 1, 2, 3, 4]
-        model = _linear_model(table, axis; x_default=2.5)
-        sys   = MTK3.System(model; name=:LinearSmoke)
+        axis = Float64[0, 1, 2, 3, 4]
+        model = _linear_model(table, axis; x_default = 2.5)
+        sys = MTK3.System(model; name = :LinearSmoke)
         @test sys isa MTK3.AbstractSystem
         simp = MTK3.mtkcompile(sys)
         @test simp isa MTK3.AbstractSystem
@@ -85,11 +91,11 @@ const MTK3 = ModelingToolkit
     # 2. interp.bilinear lowers + compiles.
     # --------------------------------------------------------------
     @testset "interp.bilinear lowers + mtkcompile" begin
-        table  = [Float64[0, 1, 2], Float64[10, 11, 12], Float64[20, 21, 22]]
+        table = [Float64[0, 1, 2], Float64[10, 11, 12], Float64[20, 21, 22]]
         axis_x = Float64[0, 1, 2]
         axis_y = Float64[0, 10, 20]
-        model = _bilinear_model(table, axis_x, axis_y; x_default=0.5, y_default=5.0)
-        sys   = MTK3.System(model; name=:BilinearSmoke)
+        model = _bilinear_model(table, axis_x, axis_y; x_default = 0.5, y_default = 5.0)
+        sys = MTK3.System(model; name = :BilinearSmoke)
         @test sys isa MTK3.AbstractSystem
         simp = MTK3.mtkcompile(sys)
         @test simp isa MTK3.AbstractSystem
@@ -110,41 +116,56 @@ const MTK3 = ModelingToolkit
         # Each call gets a slightly different table so MTK can't trivially CSE
         # them; the registered op identity-by-(table, axis_x, axis_y, x, y)
         # would fold identical calls otherwise.
-        tables = [[[Float64(k), Float64(k + 1), Float64(k + 2)],
-                   [Float64(k + 10), Float64(k + 11), Float64(k + 12)],
-                   [Float64(k + 20), Float64(k + 21), Float64(k + 22)]]
-                  for k in 1:N_CALLS]
+        tables = [
+            [
+                [Float64(k), Float64(k + 1), Float64(k + 2)],
+                [Float64(k + 10), Float64(k + 11), Float64(k + 12)],
+                [Float64(k + 20), Float64(k + 21), Float64(k + 22)],
+            ]
+                for k in 1:N_CALLS
+        ]
 
-        vars = OrderedDict{String,ESM3.ModelVariable}(
-            "x" => ESM3.ModelVariable(ESM3.ParameterVariable; default=0.5),
-            "y" => ESM3.ModelVariable(ESM3.ParameterVariable; default=5.0),
-            "z" => ESM3.ModelVariable(ESM3.UnknownVariable;     default=0.0),
+        vars = OrderedDict{String, ESM3.ModelVariable}(
+            "x" => ESM3.ModelVariable(ESM3.ParameterVariable; default = 0.5),
+            "y" => ESM3.ModelVariable(ESM3.ParameterVariable; default = 5.0),
+            "z" => ESM3.ModelVariable(ESM3.UnknownVariable; default = 0.0),
         )
         # Sum 100 interp.bilinear calls.
         sum_args = ESM3.ASTExpr[]
         for k in 1:N_CALLS
-            push!(sum_args, _fn("interp.bilinear",
-                _const(tables[k]),
-                _const(axis_x), _const(axis_y),
-                _v("x"), _v("y")))
+            push!(
+                sum_args, _fn(
+                    "interp.bilinear",
+                    _const(tables[k]),
+                    _const(axis_x), _const(axis_y),
+                    _v("x"), _v("y")
+                )
+            )
         end
         rhs = ESM3.OpExpr("+", sum_args)
         eqs = ESM3.Equation[ESM3.Equation(_op_D("z"), rhs)]
         model = ESM3.Model(vars, eqs)
 
-        sys  = MTK3.System(model; name=:BilinearPerf)
+        sys = MTK3.System(model; name = :BilinearPerf)
         # Warm-up call to remove first-time MTK compilation costs from the
         # measurement (precompile @register_symbolic dispatch tables, etc.).
-        let warm = ESM3.OpExpr("+", ESM3.ASTExpr[
-                _fn("interp.bilinear", _const(tables[1]), _const(axis_x),
-                    _const(axis_y), _v("x"), _v("y"))])
-            wmodel = ESM3.Model(vars,
-                ESM3.Equation[ESM3.Equation(_op_D("z"), warm)])
-            wsys = MTK3.System(wmodel; name=:BilinearWarm)
+        let warm = ESM3.OpExpr(
+                "+", ESM3.ASTExpr[
+                    _fn(
+                        "interp.bilinear", _const(tables[1]), _const(axis_x),
+                        _const(axis_y), _v("x"), _v("y")
+                    ),
+                ]
+            )
+            wmodel = ESM3.Model(
+                vars,
+                ESM3.Equation[ESM3.Equation(_op_D("z"), warm)]
+            )
+            wsys = MTK3.System(wmodel; name = :BilinearWarm)
             MTK3.mtkcompile(wsys)
         end
         elapsed = @elapsed simp = MTK3.mtkcompile(sys)
-        @info "structural_simplify($(N_CALLS) interp.bilinear calls): $(round(elapsed, digits=2))s"
+        @info "structural_simplify($(N_CALLS) interp.bilinear calls): $(round(elapsed, digits = 2))s"
         @test simp isa MTK3.AbstractSystem
         @test length(MTK3.unknowns(simp)) == 1
         # Generous 5s budget per the bead's acceptance criterion. On dev
@@ -158,29 +179,35 @@ const MTK3 = ModelingToolkit
     # the MTK lowering, as it does out of the tree-walk build.
     # --------------------------------------------------------------
     @testset "non-const interp.* arrays raise their §9.2 code" begin
-        vars = OrderedDict{String,ESM3.ModelVariable}(
-            "x"  => ESM3.ModelVariable(ESM3.ParameterVariable; default=0.5),
-            "xs" => ESM3.ModelVariable(ESM3.ParameterVariable; default=1.0),
-            "z"  => ESM3.ModelVariable(ESM3.UnknownVariable;   default=0.0),
+        vars = OrderedDict{String, ESM3.ModelVariable}(
+            "x" => ESM3.ModelVariable(ESM3.ParameterVariable; default = 0.5),
+            "xs" => ESM3.ModelVariable(ESM3.ParameterVariable; default = 1.0),
+            "z" => ESM3.ModelVariable(ESM3.UnknownVariable; default = 0.0),
         )
         mtk_code(rhs) = try
-            MTK3.System(ESM3.Model(vars, ESM3.Equation[ESM3.Equation(_op_D("z"), rhs)]);
-                        name=:NotConst)
+            MTK3.System(
+                ESM3.Model(vars, ESM3.Equation[ESM3.Equation(_op_D("z"), rhs)]);
+                name = :NotConst
+            )
             nothing
         catch e
             e isa ESM3.ClosedFunctionError || rethrow()
             e.code
         end
         @test mtk_code(_fn("interp.searchsorted", _v("x"), _v("xs"))) ==
-              "interp_axis_not_const"
-        @test mtk_code(_fn("interp.searchsorted", _v("x"),
-                           _const(Any[[1.0, NaN], [3.0, 4.0]]))) == "interp_axis_not_const"
+            "interp_axis_not_const"
+        @test mtk_code(
+            _fn(
+                "interp.searchsorted", _v("x"),
+                _const(Any[[1.0, NaN], [3.0, 4.0]])
+            )
+        ) == "interp_axis_not_const"
         @test mtk_code(_fn("interp.searchsorted", _v("x"), _const([3.0, NaN, 1.0]))) ==
-              "searchsorted_nan"
+            "searchsorted_nan"
         @test mtk_code(_fn("interp.linear", _v("xs"), _const([0.0, 1.0]), _v("x"))) ==
-              "interp_table_not_const"
+            "interp_table_not_const"
         @test mtk_code(_fn("interp.linear", _const([0.0, 1.0]), _v("xs"), _v("x"))) ==
-              "interp_axis_not_const"
+            "interp_axis_not_const"
     end
 
 end

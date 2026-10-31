@@ -25,58 +25,91 @@ const ESM = EarthSciAST
 _scg_n(x) = NumExpr(Float64(x))
 _scg_v(n) = VarExpr(n)
 _scg_op(op, args...) = OpExpr(op, ESM.ASTExpr[args...])
-_scg_D(n) = OpExpr("D", ESM.ASTExpr[VarExpr(n)]; wrt="t")
+_scg_D(n) = OpExpr("D", ESM.ASTExpr[VarExpr(n)]; wrt = "t")
 
 # B boxes of three species each, plus one scalar state reading box 1.
 function _scg_model(B::Int)
-    vars = Dict{String,ESM.ModelVariable}(
-        "k1" => ESM.ModelVariable(ESM.ParameterVariable; default=0.7),
-        "k2" => ESM.ModelVariable(ESM.ParameterVariable; default=1.3),
-        "Ea" => ESM.ModelVariable(ESM.ParameterVariable; default=2.0),
-        "kt" => ESM.ModelVariable(ESM.ParameterVariable; default=0.4),
-        "Z" => ESM.ModelVariable(ESM.UnknownVariable; default=0.2))
+    vars = Dict{String, ESM.ModelVariable}(
+        "k1" => ESM.ModelVariable(ESM.ParameterVariable; default = 0.7),
+        "k2" => ESM.ModelVariable(ESM.ParameterVariable; default = 1.3),
+        "Ea" => ESM.ModelVariable(ESM.ParameterVariable; default = 2.0),
+        "kt" => ESM.ModelVariable(ESM.ParameterVariable; default = 0.4),
+        "Z" => ESM.ModelVariable(ESM.UnknownVariable; default = 0.2)
+    )
     eqs = ESM.Equation[]
     rate2() = _scg_op("*", _scg_v("k2"), _scg_op("exp", _scg_op("neg", _scg_v("Ea"))))
     photo() = _scg_op("*", _scg_op("sin", _scg_op("*", _scg_n(0.3), _scg_v("t"))), _scg_v("kt"))
     for b in 1:B
         a, bb, c = "A_$b", "B_$b", "C_$b"
-        vars[a] = ESM.ModelVariable(ESM.UnknownVariable; default=0.5 + 0.1b)
-        vars[bb] = ESM.ModelVariable(ESM.UnknownVariable; default=0.3 + 0.05b)
-        vars[c] = ESM.ModelVariable(ESM.UnknownVariable; default=0.1 + 0.02b)
+        vars[a] = ESM.ModelVariable(ESM.UnknownVariable; default = 0.5 + 0.1b)
+        vars[bb] = ESM.ModelVariable(ESM.UnknownVariable; default = 0.3 + 0.05b)
+        vars[c] = ESM.ModelVariable(ESM.UnknownVariable; default = 0.1 + 0.02b)
         r1() = _scg_op("*", _scg_v("k1"), _scg_v(a), _scg_v(bb))
-        push!(eqs, ESM.Equation(_scg_D(a),
-            _scg_op("+", _scg_op("neg", r1()), _scg_op("*", rate2(), _scg_v(c)),
-                    _scg_op("ifelse", _scg_op(">", _scg_v(a), _scg_n(0.6)),
-                            _scg_op("*", _scg_n(-0.1), _scg_v(a)), _scg_n(0.0)))))
-        push!(eqs, ESM.Equation(_scg_D(bb),
-            _scg_op("+", _scg_op("neg", r1()), _scg_op("*", photo(), _scg_v(c)))))
-        push!(eqs, ESM.Equation(_scg_D(c),
-            _scg_op("-", _scg_op("+", r1(), _scg_op("/", _scg_op("^", _scg_v(a), _scg_n(2.0)),
-                                                    _scg_op("+", _scg_n(1.0), _scg_v(bb)))),
-                    _scg_op("+", _scg_op("*", rate2(), _scg_v(c)),
-                            _scg_op("*", photo(), _scg_v(c))))))
+        push!(
+            eqs, ESM.Equation(
+                _scg_D(a),
+                _scg_op(
+                    "+", _scg_op("neg", r1()), _scg_op("*", rate2(), _scg_v(c)),
+                    _scg_op(
+                        "ifelse", _scg_op(">", _scg_v(a), _scg_n(0.6)),
+                        _scg_op("*", _scg_n(-0.1), _scg_v(a)), _scg_n(0.0)
+                    )
+                )
+            )
+        )
+        push!(
+            eqs, ESM.Equation(
+                _scg_D(bb),
+                _scg_op("+", _scg_op("neg", r1()), _scg_op("*", photo(), _scg_v(c)))
+            )
+        )
+        push!(
+            eqs, ESM.Equation(
+                _scg_D(c),
+                _scg_op(
+                    "-", _scg_op(
+                        "+", r1(), _scg_op(
+                            "/", _scg_op("^", _scg_v(a), _scg_n(2.0)),
+                            _scg_op("+", _scg_n(1.0), _scg_v(bb))
+                        )
+                    ),
+                    _scg_op(
+                        "+", _scg_op("*", rate2(), _scg_v(c)),
+                        _scg_op("*", photo(), _scg_v(c))
+                    )
+                )
+            )
+        )
     end
-    push!(eqs, ESM.Equation(_scg_D("Z"),
-        _scg_op("+", _scg_op("*", _scg_n(-0.1), _scg_v("Z")), _scg_v("A_1"))))
+    push!(
+        eqs, ESM.Equation(
+            _scg_D("Z"),
+            _scg_op("+", _scg_op("*", _scg_n(-0.1), _scg_v("Z")), _scg_v("A_1"))
+        )
+    )
     return ESM.Model(vars, eqs)
 end
 
-function _scg_build(model; compiler=:native)
+function _scg_build(model; compiler = :native)
     insp = ESM.BuildInspection()
-    f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(model; compiler=compiler,
-                                                        inspect=insp)
-    return (; f!, u0, p, diag, report=insp.compiler_report)
+    f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(
+        model; compiler = compiler,
+        inspect = insp
+    )
+    return (; f!, u0, p, diag, report = insp.compiler_report)
 end
 
 _scg_du(f!, u, p, t) = (d = zeros(eltype(u), length(u)); f!(d, u, p, t); d)
 _scg_bitsame(a, b) = size(a) == size(b) && all(a .=== b)
 _scg_probe(n, k) = Float64[0.4 + 0.3 * sin(1.7i + 0.9k) * cos(0.23i * k) for i in 1:n]
-_scg_pmod(p) = map(x -> x isa Float64 ? 1.01x + 1e-3 : x, p)
+_scg_pmod(p) = map(x -> x isa Float64 ? 1.01x + 1.0e-3 : x, p)
 
 function _scg_agree(bn, bi)
     n = length(bn.u0)
-    for (k, t, pp) in ((1, 0.0, bn.p), (2, 0.8, bn.p), (3, 0.8, _scg_pmod(bn.p)),
-                       (4, 2.5, _scg_pmod(bn.p)), (5, 2.5, bn.p))
+    for (k, t, pp) in (
+            (1, 0.0, bn.p), (2, 0.8, bn.p), (3, 0.8, _scg_pmod(bn.p)),
+            (4, 2.5, _scg_pmod(bn.p)), (5, 2.5, bn.p),
+        )
         u = _scg_probe(n, k)
         _scg_bitsame(_scg_du(bn.f!, u, pp, t), _scg_du(bi.f!, u, pp, t)) || return false
     end
@@ -88,7 +121,7 @@ _scg_tiers(rep) = Dict(ESM.tier_histogram(rep))
 @testset "scalar equations and prelude as generated code" begin
     @testset "bit-identical with the interpreter ($B boxes)" for B in (1, 3, 7)
         bn = _scg_build(_scg_model(B))
-        bi = _scg_build(_scg_model(B); compiler=:interpreter)
+        bi = _scg_build(_scg_model(B); compiler = :interpreter)
         # The fixture exercises every prelude tier.
         @test bn.diag.n_const_slots > 0
         @test bn.diag.n_time_slots > 0
@@ -120,8 +153,10 @@ _scg_tiers(rep) = Dict(ESM.tier_histogram(rep))
     end
 
     @testset "the generated code does not grow with the number of boxes" begin
-        exprs(f!) = [ESM.RuntimeGeneratedFunctions.get_expression(g.f)
-                     for g in getfield(f!, :dynp).gens]
+        exprs(f!) = [
+            ESM.RuntimeGeneratedFunctions.get_expression(g.f)
+                for g in getfield(f!, :dynp).gens
+        ]
         e3 = exprs(_scg_build(_scg_model(3)).f!)
         e7 = exprs(_scg_build(_scg_model(7)).f!)
         @test length(e3) == length(e7)
@@ -145,12 +180,12 @@ _scg_tiers(rep) = Dict(ESM.tier_histogram(rep))
             @test occursin("compiler=:native refuses 'A_1'", err.detail)
             @test occursin("could not be modelled by the scalar code generator", err.detail)
             @test occursin("scalar equation", err.detail)
-            bi = _scg_build(_scg_model(3); compiler=:interpreter)
+            bi = _scg_build(_scg_model(3); compiler = :interpreter)
             @test all(isfinite, _scg_du(bi.f!, bi.u0, bi.p, 0.8))
             # A non-strict native keeps the walker, says so in its report, and
             # agrees with the interpreter bit for bit.
             lax = ESM._plan_with(ESM._compiler_plan(:native); strict = false)
-            bl = _scg_build(_scg_model(3); compiler=lax)
+            bl = _scg_build(_scg_model(3); compiler = lax)
             @test _scg_tiers(bl.report) == Dict(:scalar => 10)
             @test !isempty(getfield(bl.f!, :cse_prelude))
             @test _scg_agree(bl, bi)
@@ -160,13 +195,15 @@ _scg_tiers(rep) = Dict(ESM.tier_histogram(rep))
     @testset "a unit past the node cap is split, slots through the cache" begin
         withenv("ESS_CODEGEN_FN_NODE_CAP" => "12") do
             bn = _scg_build(_scg_model(3))
-            bi = _scg_build(_scg_model(3); compiler=:interpreter)
+            bi = _scg_build(_scg_model(3); compiler = :interpreter)
             @test _scg_tiers(bn.report) == Dict(:scalar_codegen => 10)
             @test length(getfield(bn.f!, :dynp).gens) > 1
             @test _scg_agree(bn, bi)
             u = _scg_probe(length(bn.u0), 7)
-            J(f!, p) = ForwardDiff.jacobian((d, uu) -> f!(d, uu, p, 0.8),
-                                            zeros(length(u)), u)
+            J(f!, p) = ForwardDiff.jacobian(
+                (d, uu) -> f!(d, uu, p, 0.8),
+                zeros(length(u)), u
+            )
             @test _scg_bitsame(J(bn.f!, bn.p), J(bi.f!, bi.p))
         end
     end
@@ -176,22 +213,27 @@ _scg_tiers(rep) = Dict(ESM.tier_histogram(rep))
         # `+`: emitted as a nested call it is 10^4 levels deep, past what
         # Julia's lowering takes, so the fold is emitted as an accumulation.
         nx, nt = 7, 10_000
-        vars = Dict{String,ESM.ModelVariable}(
-            "S" => ESM.ModelVariable(ESM.UnknownVariable; default=0.0),
-            "kx" => ESM.ModelVariable(ESM.ParameterVariable; default=-0.5))
+        vars = Dict{String, ESM.ModelVariable}(
+            "S" => ESM.ModelVariable(ESM.UnknownVariable; default = 0.0),
+            "kx" => ESM.ModelVariable(ESM.ParameterVariable; default = -0.5)
+        )
         eqs = ESM.Equation[]
         for k in 1:nx
-            vars["X_$k"] = ESM.ModelVariable(ESM.UnknownVariable; default=0.1k)
+            vars["X_$k"] = ESM.ModelVariable(ESM.UnknownVariable; default = 0.1k)
             push!(eqs, ESM.Equation(_scg_D("X_$k"), _scg_op("*", _scg_v("kx"), _scg_v("X_$k"))))
         end
         # Catastrophic magnitudes with sign flips: a reassociated sum would not
         # reproduce these bit for bit.
-        terms = ESM.ASTExpr[_scg_op("*", _scg_n((isodd(j) ? 1.0 : -1.0) * 10.0^((j * 7) % 17 - 8)),
-                                    _scg_v("X_$(1 + j % nx)")) for j in 1:nt]
+        terms = ESM.ASTExpr[
+            _scg_op(
+                "*", _scg_n((isodd(j) ? 1.0 : -1.0) * 10.0^((j * 7) % 17 - 8)),
+                _scg_v("X_$(1 + j % nx)")
+            ) for j in 1:nt
+        ]
         push!(eqs, ESM.Equation(_scg_D("S"), OpExpr("+", terms)))
         m = ESM.Model(vars, eqs)
         bn = _scg_build(m)
-        bi = _scg_build(m; compiler=:interpreter)
+        bi = _scg_build(m; compiler = :interpreter)
         @test _scg_tiers(bn.report)[:scalar_codegen] == nx + 1
         @test _scg_agree(bn, bi)
     end

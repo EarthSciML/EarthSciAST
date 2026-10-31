@@ -30,13 +30,15 @@ using Test
 using EarthSciAST
 import JSON3
 
-const _OD_ROOT = joinpath(@__DIR__, "..", "..", "..", "tests", "conformance",
-                          "output_derivation")
+const _OD_ROOT = joinpath(
+    @__DIR__, "..", "..", "..", "tests", "conformance",
+    "output_derivation"
+)
 
 _od_json(path) = JSON3.read(read(path, String))
 # The derivation reads an ordinary nested `AbstractDict`, so documents come back
 # as plain `Dict{String,Any}` rather than JSON3's own object type.
-_od_doc(path) = JSON3.read(read(path, String), Dict{String,Any})
+_od_doc(path) = JSON3.read(read(path, String), Dict{String, Any})
 
 # The plan, rendered into the golden's language-neutral JSON shape. Deliberately a
 # projection of the PRODUCTION `derive_output_plan` result — nothing here re-derives
@@ -44,24 +46,30 @@ _od_doc(path) = JSON3.read(read(path, String), Dict{String,Any})
 function _od_render(plan::OutputPlan)
     grids = Any[]
     for g in plan.grids
-        push!(grids, Dict{String,Any}(
-            "dims" => Any[Any[first(p), last(p)] for p in g.dims],
-            "time_dim" => g.time_dim,
-            "coords" => Any[Dict{String,Any}(
-                "name" => c.name,
-                "values" => Float64[v for v in c.values],
-                "attrs" => Dict{String,Any}(String(k) => v for (k, v) in c.attrs),
-            ) for c in g.coords],
-            "vars" => Any[Dict{String,Any}(
-                "name" => v.name,
-                "dims" => String[d for d in v.dims],
-                "dtype" => v.dtype,
-                "attrs" => Dict{String,Any}(String(k) => v2 for (k, v2) in v.attrs),
-                "shape" => Int[s for s in v.gridding.shape],
-                # 0-based, row-major — the corpus's one shared representation.
-                "flat_indices" => Int[i - 1 for i in row_major_flat_indices(v.gridding)],
-            ) for v in g.vars],
-        ))
+        push!(
+            grids, Dict{String, Any}(
+                "dims" => Any[Any[first(p), last(p)] for p in g.dims],
+                "time_dim" => g.time_dim,
+                "coords" => Any[
+                    Dict{String, Any}(
+                        "name" => c.name,
+                        "values" => Float64[v for v in c.values],
+                        "attrs" => Dict{String, Any}(String(k) => v for (k, v) in c.attrs),
+                    ) for c in g.coords
+                ],
+                "vars" => Any[
+                    Dict{String, Any}(
+                        "name" => v.name,
+                        "dims" => String[d for d in v.dims],
+                        "dtype" => v.dtype,
+                        "attrs" => Dict{String, Any}(String(k) => v2 for (k, v2) in v.attrs),
+                        "shape" => Int[s for s in v.gridding.shape],
+                        # 0-based, row-major — the corpus's one shared representation.
+                        "flat_indices" => Int[i - 1 for i in row_major_flat_indices(v.gridding)],
+                    ) for v in g.vars
+                ],
+            )
+        )
     end
     return grids
 end
@@ -69,23 +77,29 @@ end
 # Golden JSON3 objects -> the same plain-Julia shape `_od_render` produces, so the
 # comparison is on values and never on JSON3's own types.
 function _od_expected(grids)
-    return Any[Dict{String,Any}(
-        "dims" => Any[Any[String(d[1]), Int(d[2])] for d in g["dims"]],
-        "time_dim" => String(g["time_dim"]),
-        "coords" => Any[Dict{String,Any}(
-            "name" => String(c["name"]),
-            "values" => Float64[Float64(v) for v in c["values"]],
-            "attrs" => Dict{String,Any}(String(k) => v for (k, v) in c["attrs"]),
-        ) for c in g["coords"]],
-        "vars" => Any[Dict{String,Any}(
-            "name" => String(v["name"]),
-            "dims" => String[String(d) for d in v["dims"]],
-            "dtype" => String(v["dtype"]),
-            "attrs" => Dict{String,Any}(String(k) => v2 for (k, v2) in v["attrs"]),
-            "shape" => Int[Int(s) for s in v["shape"]],
-            "flat_indices" => Int[Int(i) for i in v["flat_indices"]],
-        ) for v in g["vars"]],
-    ) for g in grids]
+    return Any[
+        Dict{String, Any}(
+            "dims" => Any[Any[String(d[1]), Int(d[2])] for d in g["dims"]],
+            "time_dim" => String(g["time_dim"]),
+            "coords" => Any[
+                Dict{String, Any}(
+                    "name" => String(c["name"]),
+                    "values" => Float64[Float64(v) for v in c["values"]],
+                    "attrs" => Dict{String, Any}(String(k) => v for (k, v) in c["attrs"]),
+                ) for c in g["coords"]
+            ],
+            "vars" => Any[
+                Dict{String, Any}(
+                    "name" => String(v["name"]),
+                    "dims" => String[String(d) for d in v["dims"]],
+                    "dtype" => String(v["dtype"]),
+                    "attrs" => Dict{String, Any}(String(k) => v2 for (k, v2) in v["attrs"]),
+                    "shape" => Int[Int(s) for s in v["shape"]],
+                    "flat_indices" => Int[Int(i) for i in v["flat_indices"]],
+                ) for v in g["vars"]
+            ],
+        ) for g in grids
+    ]
 end
 
 @testset "output-derivation conformance (RFC §7–§9, §16.12)" begin
@@ -105,7 +119,7 @@ end
             # `derive_output_plan` takes a var_map (name => flat index); the manifest
             # lists slot names in flat order, so index i (1-based here, 0-based in the
             # golden's `flat_indices`) is position i.
-            var_map = Dict{String,Int}(s => i for (i, s) in enumerate(slots))
+            var_map = Dict{String, Int}(s => i for (i, s) in enumerate(slots))
             @test length(var_map) == length(slots)   # no duplicate slot names
 
             plan = derive_output_plan(doc, var_map; observed = observed)
@@ -122,7 +136,7 @@ end
             doc = _od_doc(joinpath(_OD_ROOT, String(case["fixture"])))
             slots = String[String(s) for s in case["slot_names"]]
             observed = String[String(s) for s in case["observed"]]
-            var_map = Dict{String,Int}(s => i for (i, s) in enumerate(slots))
+            var_map = Dict{String, Int}(s => i for (i, s) in enumerate(slots))
             err = try
                 derive_output_plan(doc, var_map; observed = observed)
                 nothing
@@ -152,12 +166,14 @@ end
     # and never check coverage).
     @testset "an incomplete or double-covered grid is refused" begin
         @test_throws OutputError derive_output_gridding(
-            Dict("u[1,1]" => 1, "u[2,1]" => 2, "u[1,2]" => 3))       # 3 cells of 4
+            Dict("u[1,1]" => 1, "u[2,1]" => 2, "u[1,2]" => 3)
+        )       # 3 cells of 4
         # Cell count matches the grid, but two keys name the same cell (leading
         # zeros make the STRINGS distinct while the INDICES collide), so the count
         # check alone would pass it through.
         @test_throws OutputError derive_output_gridding(
-            Dict("u[1,1]" => 1, "u[2,2]" => 2, "u[01,1]" => 3, "u[2,02]" => 4))
+            Dict("u[1,1]" => 1, "u[2,2]" => 2, "u[01,1]" => 3, "u[2,02]" => 4)
+        )
         @test_throws OutputError derive_output_gridding(Dict("u[0]" => 1))
     end
 end

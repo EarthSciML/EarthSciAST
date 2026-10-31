@@ -36,35 +36,58 @@ const _PG_ESM = EarthSciAST
 # through the reaction term, and `Ea`/`T` nonlinearly through the hoisted
 # INVARIANT `exp(-Ea/T)` — the arm a build-time constant fold would silently
 # freeze.
-_pg_Dt(v) = Dict{String,Any}("op" => "D", "args" => Any[v], "wrt" => "t")
-_pg_ix(v, i...) = Dict{String,Any}("op" => "index", "args" => Any[v, i...])
-_pg_o(o, a...) = Dict{String,Any}("op" => o, "args" => Any[a...])
-_pg_ao(e) = Dict{String,Any}("op" => "faq", "output_idx" => Any["i"],
-    "ranges" => Dict{String,Any}("i" => Dict{String,Any}("from" => "n")),
-    "args" => Any[], "expr" => e)
-_pg_state(; kw...) = Dict{String,Any}("type" => "unknown",
-                                      (String(k) => v for (k, v) in kw)...)
-_pg_param(v) = Dict{String,Any}("type" => "parameter", "default" => v)
+_pg_Dt(v) = Dict{String, Any}("op" => "D", "args" => Any[v], "wrt" => "t")
+_pg_ix(v, i...) = Dict{String, Any}("op" => "index", "args" => Any[v, i...])
+_pg_o(o, a...) = Dict{String, Any}("op" => o, "args" => Any[a...])
+_pg_ao(e) = Dict{String, Any}(
+    "op" => "faq", "output_idx" => Any["i"],
+    "ranges" => Dict{String, Any}("i" => Dict{String, Any}("from" => "n")),
+    "args" => Any[], "expr" => e
+)
+_pg_state(; kw...) = Dict{String, Any}(
+    "type" => "unknown",
+    (String(k) => v for (k, v) in kw)...
+)
+_pg_param(v) = Dict{String, Any}("type" => "parameter", "default" => v)
 
 function _pg_rd(N)
-    stencil = _pg_o("+", _pg_o("-", _pg_ix("c", _pg_o("-", "i", 1.0)),
-                               _pg_o("*", 2.0, _pg_ix("c", "i"))),
-                    _pg_ix("c", _pg_o("+", "i", 1.0)))
+    stencil = _pg_o(
+        "+", _pg_o(
+            "-", _pg_ix("c", _pg_o("-", "i", 1.0)),
+            _pg_o("*", 2.0, _pg_ix("c", "i"))
+        ),
+        _pg_ix("c", _pg_o("+", "i", 1.0))
+    )
     rate = _pg_o("*", "k_rxn", _pg_o("exp", _pg_o("neg", _pg_o("/", "Ea", "T"))))
-    Dict{String,Any}(
-        "esm" => "0.5.0", "metadata" => Dict{String,Any}("name" => "RD"),
-        "index_sets" => Dict{String,Any}(
-            "n" => Dict{String,Any}("kind" => "interval", "size" => N)),
-        "models" => Dict{String,Any}("M" => Dict{String,Any}(
-            "variables" => Dict{String,Any}(
-                "c" => _pg_state(shape = Any["n"]), "k_diff" => _pg_param(0.1),
-                "k_rxn" => _pg_param(0.3), "Ea" => _pg_param(50.0),
-                "T" => _pg_param(300.0)),
-            "equations" => Any[Dict{String,Any}(
-                "lhs" => _pg_ao(_pg_Dt(_pg_ix("c", "i"))),
-                "rhs" => _pg_ao(_pg_o("-", _pg_o("*", "k_diff", stencil),
-                                      _pg_o("*", rate,
-                                            _pg_o("^", _pg_ix("c", "i"), 2.0)))))])))
+    return Dict{String, Any}(
+        "esm" => "0.5.0", "metadata" => Dict{String, Any}("name" => "RD"),
+        "index_sets" => Dict{String, Any}(
+            "n" => Dict{String, Any}("kind" => "interval", "size" => N)
+        ),
+        "models" => Dict{String, Any}(
+            "M" => Dict{String, Any}(
+                "variables" => Dict{String, Any}(
+                    "c" => _pg_state(shape = Any["n"]), "k_diff" => _pg_param(0.1),
+                    "k_rxn" => _pg_param(0.3), "Ea" => _pg_param(50.0),
+                    "T" => _pg_param(300.0)
+                ),
+                "equations" => Any[
+                    Dict{String, Any}(
+                        "lhs" => _pg_ao(_pg_Dt(_pg_ix("c", "i"))),
+                        "rhs" => _pg_ao(
+                            _pg_o(
+                                "-", _pg_o("*", "k_diff", stencil),
+                                _pg_o(
+                                    "*", rate,
+                                    _pg_o("^", _pg_ix("c", "i"), 2.0)
+                                )
+                            )
+                        )
+                    ),
+                ]
+            )
+        )
+    )
 end
 
 const _PG_N = 8
@@ -108,12 +131,12 @@ const _PG_G_U = ForwardDiff.gradient(uu -> _pg_obj(uu, _PG_P0, _PG_T), _PG_U)
         # about the VALUE, not a rounding allowance.
         fd = similar(_PG_PVEC0)
         for k in eachindex(_PG_PVEC0)
-            h = 1e-6 * max(abs(_PG_PVEC0[k]), 1.0)
+            h = 1.0e-6 * max(abs(_PG_PVEC0[k]), 1.0)
             hi = copy(_PG_PVEC0); hi[k] += h
             lo = copy(_PG_PVEC0); lo[k] -= h
             fd[k] = (_pg_J_iip(hi) - _pg_J_iip(lo)) / (2h)
         end
-        @test isapprox(_PG_G_P, fd; rtol = 1e-6)
+        @test isapprox(_PG_G_P, fd; rtol = 1.0e-6)
     end
 
     @testset "∂/∂p and ∂/∂u are computed in DIFFERENT value types" begin

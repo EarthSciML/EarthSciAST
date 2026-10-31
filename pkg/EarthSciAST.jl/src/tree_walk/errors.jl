@@ -88,9 +88,13 @@ struct DirectEmitError <: EarthSciASTError
 end
 
 DirectEmitError(construct::AbstractString, rule::AbstractString, detail::AbstractString) =
-    DirectEmitError(E_DIRECT_EMIT_UNSUPPORTED, String(construct), String(rule),
-                    String(detail))
+    DirectEmitError(
+    E_DIRECT_EMIT_UNSUPPORTED, String(construct), String(rule),
+    String(detail)
+)
 
 Base.showerror(io::IO, e::DirectEmitError) =
-    print(io, e.code, ": direct StableHLO emission cannot lower ", e.construct,
-          " (from ", e.rule, "): ", e.detail)
+    print(
+    io, e.code, ": direct StableHLO emission cannot lower ", e.construct,
+    " (from ", e.rule, "): ", e.detail
+)

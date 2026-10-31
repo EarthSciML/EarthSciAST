@@ -13,40 +13,52 @@ import Symbolics
     @testset "Extension loads and registers System constructor" begin
         ext = Base.get_extension(EarthSciAST, :EarthSciASTMTKExt)
         @test ext !== nothing
-        @test hasmethod(ModelingToolkit.System,
-                        Tuple{EarthSciAST.Model})
-        @test hasmethod(ModelingToolkit.System,
-                        Tuple{EarthSciAST.FlattenedSystem})
-        @test hasmethod(ModelingToolkit.PDESystem,
-                        Tuple{EarthSciAST.FlattenedSystem})
+        @test hasmethod(
+            ModelingToolkit.System,
+            Tuple{EarthSciAST.Model}
+        )
+        @test hasmethod(
+            ModelingToolkit.System,
+            Tuple{EarthSciAST.FlattenedSystem}
+        )
+        @test hasmethod(
+            ModelingToolkit.PDESystem,
+            Tuple{EarthSciAST.FlattenedSystem}
+        )
     end
 
     @testset "ModelingToolkit.System(::Model) builds a real System" begin
         vars = Dict(
-            "x" => ModelVariable(UnknownVariable; default=1.0),
-            "k" => ModelVariable(ParameterVariable; default=0.5),
+            "x" => ModelVariable(UnknownVariable; default = 1.0),
+            "k" => ModelVariable(ParameterVariable; default = 0.5),
         )
         eq = Equation(
-            OpExpr("D", EarthSciAST.ASTExpr[VarExpr("x")], wrt="t"),
-            OpExpr("*", EarthSciAST.ASTExpr[
-                OpExpr("-", EarthSciAST.ASTExpr[VarExpr("k")]),
-                VarExpr("x"),
-            ]),
+            OpExpr("D", EarthSciAST.ASTExpr[VarExpr("x")], wrt = "t"),
+            OpExpr(
+                "*", EarthSciAST.ASTExpr[
+                    OpExpr("-", EarthSciAST.ASTExpr[VarExpr("k")]),
+                    VarExpr("x"),
+                ]
+            ),
         )
         model = Model(vars, [eq])
-        sys = ModelingToolkit.System(model; name=:RealTest)
+        sys = ModelingToolkit.System(model; name = :RealTest)
 
         type_str = string(typeof(sys))
         @test occursin("System", type_str) || occursin("ODE", type_str)
 
         # After flatten+extension, variables are namespaced as `RealTest.x`
         # and sanitized to `RealTest_x` for symbol construction.
-        un_names = Set(string(ModelingToolkit.getname(u))
-                       for u in ModelingToolkit.unknowns(sys))
+        un_names = Set(
+            string(ModelingToolkit.getname(u))
+                for u in ModelingToolkit.unknowns(sys)
+        )
         @test any(occursin("x", n) for n in un_names)
 
-        pn_names = Set(string(ModelingToolkit.getname(p))
-                       for p in ModelingToolkit.parameters(sys))
+        pn_names = Set(
+            string(ModelingToolkit.getname(p))
+                for p in ModelingToolkit.parameters(sys)
+        )
         @test any(occursin("k", n) for n in pn_names)
     end
 
@@ -54,65 +66,79 @@ import Symbolics
         # The spatial dimension `z` is harvested STRUCTURALLY from the `dim="z"`
         # scalar field carried on the operator nodes (esm-spec §4.9.1(ii)) — by
         # field, not by op name; the `grad` sugar has no privilege (§4.2).
-        vars = Dict{String,ModelVariable}(
-            "u" => ModelVariable(UnknownVariable; default=1.0),
-            "D" => ModelVariable(ParameterVariable; default=0.1),
+        vars = Dict{String, ModelVariable}(
+            "u" => ModelVariable(UnknownVariable; default = 1.0),
+            "D" => ModelVariable(ParameterVariable; default = 0.1),
         )
         eq = Equation(
-            OpExpr("D", EarthSciAST.ASTExpr[VarExpr("u")], wrt="t"),
-            OpExpr("*", EarthSciAST.ASTExpr[
-                VarExpr("D"),
-                OpExpr("grad", EarthSciAST.ASTExpr[
-                    OpExpr("grad", EarthSciAST.ASTExpr[VarExpr("u")], dim="z"),
-                ], dim="z"),
-            ]),
+            OpExpr("D", EarthSciAST.ASTExpr[VarExpr("u")], wrt = "t"),
+            OpExpr(
+                "*", EarthSciAST.ASTExpr[
+                    VarExpr("D"),
+                    OpExpr(
+                        "grad", EarthSciAST.ASTExpr[
+                            OpExpr("grad", EarthSciAST.ASTExpr[VarExpr("u")], dim = "z"),
+                        ], dim = "z"
+                    ),
+                ]
+            ),
         )
         model = Model(vars, [eq])
-        file = EsmFile("0.1.0", Metadata("Diffuse");
-            models=Dict("Diffuse" => model))
+        file = EsmFile(
+            "0.1.0", Metadata("Diffuse");
+            models = Dict("Diffuse" => model)
+        )
         flat = flatten(file)
         @test :z in flat.independent_variables
-        @test_throws ArgumentError ModelingToolkit.System(flat; name=:Diffuse)
+        @test_throws ArgumentError ModelingToolkit.System(flat; name = :Diffuse)
     end
 
     @testset "ModelingToolkit.PDESystem(::FlattenedSystem) errors on pure-ODE input" begin
         vars = Dict(
-            "x" => ModelVariable(UnknownVariable; default=1.0),
-            "k" => ModelVariable(ParameterVariable; default=0.5),
+            "x" => ModelVariable(UnknownVariable; default = 1.0),
+            "k" => ModelVariable(ParameterVariable; default = 0.5),
         )
         eq = Equation(
-            OpExpr("D", EarthSciAST.ASTExpr[VarExpr("x")], wrt="t"),
-            OpExpr("*", EarthSciAST.ASTExpr[
-                OpExpr("-", EarthSciAST.ASTExpr[VarExpr("k")]),
-                VarExpr("x"),
-            ]),
+            OpExpr("D", EarthSciAST.ASTExpr[VarExpr("x")], wrt = "t"),
+            OpExpr(
+                "*", EarthSciAST.ASTExpr[
+                    OpExpr("-", EarthSciAST.ASTExpr[VarExpr("k")]),
+                    VarExpr("x"),
+                ]
+            ),
         )
-        flat = flatten(Model(vars, [eq]); name="OnlyODE")
-        @test_throws ArgumentError ModelingToolkit.PDESystem(flat; name=:OnlyODE)
+        flat = flatten(Model(vars, [eq]); name = "OnlyODE")
+        @test_throws ArgumentError ModelingToolkit.PDESystem(flat; name = :OnlyODE)
     end
 
     @testset "Round-trip: Model → System → Model" begin
         vars = Dict(
-            "x" => ModelVariable(UnknownVariable; default=2.0),
-            "k" => ModelVariable(ParameterVariable; default=0.3),
+            "x" => ModelVariable(UnknownVariable; default = 2.0),
+            "k" => ModelVariable(ParameterVariable; default = 0.3),
         )
         eq = Equation(
-            OpExpr("D", EarthSciAST.ASTExpr[VarExpr("x")], wrt="t"),
-            OpExpr("*", EarthSciAST.ASTExpr[
-                OpExpr("-", EarthSciAST.ASTExpr[VarExpr("k")]),
-                VarExpr("x"),
-            ]),
+            OpExpr("D", EarthSciAST.ASTExpr[VarExpr("x")], wrt = "t"),
+            OpExpr(
+                "*", EarthSciAST.ASTExpr[
+                    OpExpr("-", EarthSciAST.ASTExpr[VarExpr("k")]),
+                    VarExpr("x"),
+                ]
+            ),
         )
         original = Model(vars, [eq])
-        sys = ModelingToolkit.System(original; name=:RT)
+        sys = ModelingToolkit.System(original; name = :RT)
         recovered = EarthSciAST.Model(sys)
         @test recovered isa Model
         # After round-trip, the variables carry the namespaced name from
         # flatten (e.g. `RT_x`, `RT_k` after sanitization for symbol use).
-        state_vars = [v for (n, v) in recovered.variables
-                      if v.type == UnknownVariable]
-        param_vars = [v for (n, v) in recovered.variables
-                      if v.type == ParameterVariable]
+        state_vars = [
+            v for (n, v) in recovered.variables
+                if v.type == UnknownVariable
+        ]
+        param_vars = [
+            v for (n, v) in recovered.variables
+                if v.type == ParameterVariable
+        ]
         @test length(state_vars) == 1
         @test length(param_vars) == 1
     end
@@ -124,40 +150,48 @@ import Symbolics
         # diffusive PDE at z=0.
         ivs = Symbol[:t, :z]
         svars = OrderedDict{String, ModelVariable}(
-            "VertDiff.C" => ModelVariable(UnknownVariable; default=1.0),
-            "VertDiff.C.at_z" => ModelVariable(UnknownVariable; default=1.0),
+            "VertDiff.C" => ModelVariable(UnknownVariable; default = 1.0),
+            "VertDiff.C.at_z" => ModelVariable(UnknownVariable; default = 1.0),
         )
         ps = OrderedDict{String, ModelVariable}(
-            "VertDiff.D" => ModelVariable(ParameterVariable; default=0.1),
-            "SurfaceDep.v_dep" => ModelVariable(ParameterVariable; default=0.01),
+            "VertDiff.D" => ModelVariable(ParameterVariable; default = 0.1),
+            "SurfaceDep.v_dep" => ModelVariable(ParameterVariable; default = 0.01),
         )
         obs = OrderedDict{String, ModelVariable}()
 
         # dC/dt = D * grad(grad(C, z), z)
         diff_eq = Equation(
-            OpExpr("D", EarthSciAST.ASTExpr[VarExpr("VertDiff.C")], wrt="t"),
-            OpExpr("*", EarthSciAST.ASTExpr[
-                VarExpr("VertDiff.D"),
-                OpExpr("grad", EarthSciAST.ASTExpr[
-                    OpExpr("grad", EarthSciAST.ASTExpr[VarExpr("VertDiff.C")], dim="z"),
-                ], dim="z"),
-            ]),
+            OpExpr("D", EarthSciAST.ASTExpr[VarExpr("VertDiff.C")], wrt = "t"),
+            OpExpr(
+                "*", EarthSciAST.ASTExpr[
+                    VarExpr("VertDiff.D"),
+                    OpExpr(
+                        "grad", EarthSciAST.ASTExpr[
+                            OpExpr("grad", EarthSciAST.ASTExpr[VarExpr("VertDiff.C")], dim = "z"),
+                        ], dim = "z"
+                    ),
+                ]
+            ),
         )
         # dC.at_z/dt = -v_dep * C.at_z   (slice-ODE — surface deposition)
         slice_eq = Equation(
-            OpExpr("D", EarthSciAST.ASTExpr[VarExpr("VertDiff.C.at_z")], wrt="t"),
-            OpExpr("*", EarthSciAST.ASTExpr[
-                OpExpr("-", EarthSciAST.ASTExpr[VarExpr("SurfaceDep.v_dep")]),
-                VarExpr("VertDiff.C.at_z"),
-            ]),
+            OpExpr("D", EarthSciAST.ASTExpr[VarExpr("VertDiff.C.at_z")], wrt = "t"),
+            OpExpr(
+                "*", EarthSciAST.ASTExpr[
+                    OpExpr("-", EarthSciAST.ASTExpr[VarExpr("SurfaceDep.v_dep")]),
+                    VarExpr("VertDiff.C.at_z"),
+                ]
+            ),
         )
 
-        flat = FlattenedSystem(ivs, svars, ps, obs, [diff_eq, slice_eq],
+        flat = FlattenedSystem(
+            ivs, svars, ps, obs, [diff_eq, slice_eq],
             ContinuousEvent[], DiscreteEvent[],
             nothing,
-            FlattenMetadata())
+            FlattenMetadata()
+        )
 
-        pde = ModelingToolkit.PDESystem(flat; name=:VertDep)
+        pde = ModelingToolkit.PDESystem(flat; name = :VertDep)
         @test occursin("PDESystem", string(typeof(pde)))
         @test length(pde.bcs) >= 1
         # The BC string should contain a z-derivative and reference the
@@ -173,8 +207,10 @@ import Symbolics
         # And the slice-ODE must NOT appear as a standalone equation in the
         # PDE's equation list — it should have been replaced by the BC.
         eq_strs = [string(eq) for eq in pde.eqs]
-        @test !any(s -> occursin(r"Differential\(t\b", s) && occursin("at_z", s),
-                   eq_strs)
+        @test !any(
+            s -> occursin(r"Differential\(t\b", s) && occursin("at_z", s),
+            eq_strs
+        )
     end
 
     @testset "A state no equation mentions survives into the compiled system" begin
@@ -187,27 +223,36 @@ import Symbolics
         # every solution. `System(::FlattenedSystem)` closes it with
         # `D(X, t) ~ 0` at the lowering instead.
         rsys = EarthSciAST.ReactionSystem(
-            [EarthSciAST.Species("A", default=1.0),
-             EarthSciAST.Species("B", default=0.0),
-             EarthSciAST.Species("Xe", default=5.0)],   # in no reaction
+            [
+                EarthSciAST.Species("A", default = 1.0),
+                EarthSciAST.Species("B", default = 0.0),
+                EarthSciAST.Species("Xe", default = 5.0),
+            ],   # in no reaction
             [EarthSciAST.Reaction(Dict("A" => 1), Dict("B" => 1), VarExpr("k"))],
-            parameters=[EarthSciAST.Parameter("k", 0.1)])
-        flat = EarthSciAST.flatten(rsys; name="Chem")
+            parameters = [EarthSciAST.Parameter("k", 0.1)]
+        )
+        flat = EarthSciAST.flatten(rsys; name = "Chem")
 
         # The DOCUMENT-level artifact is unchanged by the closure: no equation
         # for Xe, and it classifies algebraic.
-        @test !any(EarthSciAST.differential_lhs_variable(eq.lhs) == "Chem.Xe"
-                   for eq in flat.equations)
+        @test !any(
+            EarthSciAST.differential_lhs_variable(eq.lhs) == "Chem.Xe"
+                for eq in flat.equations
+        )
         @test haskey(flat.algebraic_variables, "Chem.Xe")
 
-        sys = ModelingToolkit.System(flat; name=:Chem)
+        sys = ModelingToolkit.System(flat; name = :Chem)
         simp = ModelingToolkit.mtkcompile(sys)
-        names = String[string(ModelingToolkit.getname(u))
-                       for u in ModelingToolkit.unknowns(simp)]
+        names = String[
+            string(ModelingToolkit.getname(u))
+                for u in ModelingToolkit.unknowns(simp)
+        ]
         @test any(endswith(n, "Xe") for n in names)
         # ...and the closure is a ZERO tendency, so it holds its initial value.
-        d_xe = only(eq for eq in ModelingToolkit.equations(simp)
-                    if occursin("Xe", string(eq.lhs)))
+        d_xe = only(
+            eq for eq in ModelingToolkit.equations(simp)
+                if occursin("Xe", string(eq.lhs))
+        )
         @test iszero(Symbolics.value(d_xe.rhs))
     end
 
@@ -232,29 +277,42 @@ import Symbolics
         # (esm-spec §9.6.4 Option B); the MTK constructor must Expand at its
         # boundary (RFC out-of-line-expression-templates §7.7) — `_esm_to_symbolic`
         # has no apply arm, so without the expansion this construction throws.
-        doc = Dict{String,Any}(
+        doc = Dict{String, Any}(
             "esm" => "1.0.0",
-            "metadata" => Dict{String,Any}("name" => "mtk_tpl"),
-            "models" => Dict{String,Any}("M" => Dict{String,Any}(
-                "expression_templates" => Dict{String,Any}("scale" => Dict{String,Any}(
-                    "params" => Any["x"],
-                    "body" => Dict{String,Any}("op" => "*", "args" => Any["k", "x"]))),
-                "variables" => Dict{String,Any}(
-                    "k" => Dict{String,Any}("type" => "parameter", "default" => 0.5),
-                    "y" => Dict{String,Any}("type" => "unknown", "default" => 1.0),
-                    "z" => Dict{String,Any}("type" => "unknown", "default" => 2.0)),
-                "equations" => Any[
-                    Dict{String,Any}(
-                        "lhs" => Dict{String,Any}("op" => "D", "args" => Any["y"], "wrt" => "t"),
-                        "rhs" => Dict{String,Any}("op" => "apply_expression_template",
-                            "args" => Any[], "name" => "scale",
-                            "bindings" => Dict{String,Any}("x" => "z"))),
-                    Dict{String,Any}(
-                        "lhs" => Dict{String,Any}("op" => "D", "args" => Any["z"], "wrt" => "t"),
-                        "rhs" => Dict{String,Any}("op" => "-", "args" => Any["z"]))])))
+            "metadata" => Dict{String, Any}("name" => "mtk_tpl"),
+            "models" => Dict{String, Any}(
+                "M" => Dict{String, Any}(
+                    "expression_templates" => Dict{String, Any}(
+                        "scale" => Dict{String, Any}(
+                            "params" => Any["x"],
+                            "body" => Dict{String, Any}("op" => "*", "args" => Any["k", "x"])
+                        )
+                    ),
+                    "variables" => Dict{String, Any}(
+                        "k" => Dict{String, Any}("type" => "parameter", "default" => 0.5),
+                        "y" => Dict{String, Any}("type" => "unknown", "default" => 1.0),
+                        "z" => Dict{String, Any}("type" => "unknown", "default" => 2.0)
+                    ),
+                    "equations" => Any[
+                        Dict{String, Any}(
+                            "lhs" => Dict{String, Any}("op" => "D", "args" => Any["y"], "wrt" => "t"),
+                            "rhs" => Dict{String, Any}(
+                                "op" => "apply_expression_template",
+                                "args" => Any[], "name" => "scale",
+                                "bindings" => Dict{String, Any}("x" => "z")
+                            )
+                        ),
+                        Dict{String, Any}(
+                            "lhs" => Dict{String, Any}("op" => "D", "args" => Any["z"], "wrt" => "t"),
+                            "rhs" => Dict{String, Any}("op" => "-", "args" => Any["z"])
+                        ),
+                    ]
+                )
+            )
+        )
         flat = EarthSciAST.flatten(EarthSciAST.load_string(IOBuffer(JSON3.write(doc))))
         @test !isempty(flat.template_registry)     # references reached the boundary
-        sys = ModelingToolkit.System(flat; name=:TplRef)
+        sys = ModelingToolkit.System(flat; name = :TplRef)
         eqs = ModelingToolkit.equations(sys)
         @test length(eqs) == 2
         # The expanded body's `k` appears in the lowered equations.

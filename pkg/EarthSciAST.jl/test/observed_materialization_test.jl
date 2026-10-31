@@ -30,15 +30,17 @@ using Test
 using EarthSciAST
 const EA = EarthSciAST
 
-_ix(f, idx...) = Dict{String,Any}("op" => "index", "args" => Any[f, idx...])
-_op(o, args...) = Dict{String,Any}("op" => o, "args" => Any[args...])
-_param(shape) = Dict{String,Any}("type" => "parameter", "default" => 0.0,
-                                 "shape" => Any[shape...])
-_obs(shape) = Dict{String,Any}("type" => "unknown", "shape" => Any[shape...])
-_agg(out, ranges, args, expr; reduce=nothing) = begin
-    d = Dict{String,Any}("op" => "faq", "output_idx" => Any[out...])
+_ix(f, idx...) = Dict{String, Any}("op" => "index", "args" => Any[f, idx...])
+_op(o, args...) = Dict{String, Any}("op" => o, "args" => Any[args...])
+_param(shape) = Dict{String, Any}(
+    "type" => "parameter", "default" => 0.0,
+    "shape" => Any[shape...]
+)
+_obs(shape) = Dict{String, Any}("type" => "unknown", "shape" => Any[shape...])
+_agg(out, ranges, args, expr; reduce = nothing) = begin
+    d = Dict{String, Any}("op" => "faq", "output_idx" => Any[out...])
     reduce === nothing || (d["reduce"] = reduce)
-    d["ranges"] = Dict{String,Any}(k => Dict("from" => v) for (k, v) in ranges)
+    d["ranges"] = Dict{String, Any}(k => Dict("from" => v) for (k, v) in ranges)
     d["args"] = Any[args...]
     d["expr"] = expr
     d
@@ -62,7 +64,7 @@ const PY = [0.5 0.5; 1.5 1.75; 0.2 0.2; 5.0 5.0]
 const KEY = [1.0, 1.0, 2.0, 3.0]
 # EMIS is the PARENT ROAD's total, replicated onto each of its segments.
 const EMIS = [10.0, 10.0, 4.0, 7.0]
-const EPS = 1e-9
+const EPS = 1.0e-9
 
 # Lengths: 1.0, 0.25, 0.6, 1.0.  Road 1 is 1.25 long, so its 10 t split 8 / 2.
 # Cell 1 takes half of segment 1 (4.0); cell 2 takes the other half plus all of
@@ -70,14 +72,18 @@ const EPS = 1e-9
 # nothing, so it never joins the support set. Segment 4 lands nowhere.
 const EXPECT_E = [4.0, 8.0, 2.0]          # over the support set [1, 2, 3]
 const SR = [1.0 0.5; 2.0 0.25; 3.0 0.125; 4.0 0.0625]
-const EXPECT_CONC = [4.0 * 1.0 + 8.0 * 2.0 + 2.0 * 3.0,
-                     4.0 * 0.5 + 8.0 * 0.25 + 2.0 * 0.125]
+const EXPECT_CONC = [
+    4.0 * 1.0 + 8.0 * 2.0 + 2.0 * 3.0,
+    4.0 * 0.5 + 8.0 * 0.25 + 2.0 * 0.125,
+]
 
-_env_overlap() = _op("and",
+_env_overlap() = _op(
+    "and",
     _op("<=", _ix("src_W", "c"), _ix("seg_xmax", "r")),
     _op("<=", _ix("seg_xmin", "r"), _ix("src_E", "c")),
     _op("<=", _ix("src_S", "c"), _ix("seg_ymax", "r")),
-    _op("<=", _ix("seg_ymin", "r"), _ix("src_N", "c")))
+    _op("<=", _ix("seg_ymin", "r"), _ix("src_N", "c"))
+)
 
 # Liang–Barsky, branchless, with a SIGN-PRESERVING floor under each divisor so a
 # segment parallel to an axis does not divide by zero (`ifelse` does not guard
@@ -99,7 +105,7 @@ function _length_share()
 end
 
 function _doc()
-    v = Dict{String,Any}()
+    v = Dict{String, Any}()
     for n in ("src_W", "src_S", "src_E", "src_N")
         v[n] = _param(["src_cells"])
     end
@@ -108,75 +114,143 @@ function _doc()
     for n in ("seg_key", "seg_emis_in")
         v[n] = _param(["emis_records"])
     end
-    v["SR_PM25"] = Dict{String,Any}(
+    v["SR_PM25"] = Dict{String, Any}(
         "type" => "parameter", "default" => 0.0, "units" => "1",
         "shape" => Any["src_cells", "rcv_cells"],
-        "update" => Dict{String,Any}("kind" => "data", "source" => "MockSR",
-                                     "from" => Dict("file_variable" => "PM25")))
+        "update" => Dict{String, Any}(
+            "kind" => "data", "source" => "MockSR",
+            "from" => Dict("file_variable" => "PM25")
+        )
+    )
     # `px` / `py` are the ones that matter: rank-2 maps over the record axis
     # that the build folds into their readers, so they get NO entry in
     # `observed_defs` and are not const arrays either.
     v["px"] = _obs(["emis_records", "seg_vertex"])
     v["py"] = _obs(["emis_records", "seg_vertex"])
-    for n in ("seg_xmin", "seg_xmax", "seg_ymin", "seg_ymax",
-              "seg_len", "road_len", "seg_emis")
+    for n in (
+            "seg_xmin", "seg_xmax", "seg_ymin", "seg_ymax",
+            "seg_len", "road_len", "seg_emis",
+        )
         v[n] = _obs(["emis_records"])
     end
     v["E_PM25"] = _obs(["src_cells"])
     v["conc_PM25"] = _obs(["rcv_cells"])
 
     eqs = Any[]
-    push!(eqs, Dict{String,Any}("lhs" => "px", "rhs" => _agg(
-        ["r", "v"], [("r", "emis_records"), ("v", "seg_vertex")], ["raw_x"],
-        _op("*", _ix("raw_x", "r", "v"), 1.0))))
-    push!(eqs, Dict{String,Any}("lhs" => "py", "rhs" => _agg(
-        ["r", "v"], [("r", "emis_records"), ("v", "seg_vertex")], ["raw_y"],
-        _op("*", _ix("raw_y", "r", "v"), 1.0))))
-    for (nm, col, o) in (("seg_xmin", "px", "min"), ("seg_xmax", "px", "max"),
-                         ("seg_ymin", "py", "min"), ("seg_ymax", "py", "max"))
-        push!(eqs, Dict{String,Any}("lhs" => nm, "rhs" => _agg(
-            ["r"], [("r", "emis_records")], [col],
-            _op(o, _ix(col, "r", 1), _ix(col, "r", 2)))))
+    push!(
+        eqs, Dict{String, Any}(
+            "lhs" => "px", "rhs" => _agg(
+                ["r", "v"], [("r", "emis_records"), ("v", "seg_vertex")], ["raw_x"],
+                _op("*", _ix("raw_x", "r", "v"), 1.0)
+            )
+        )
+    )
+    push!(
+        eqs, Dict{String, Any}(
+            "lhs" => "py", "rhs" => _agg(
+                ["r", "v"], [("r", "emis_records"), ("v", "seg_vertex")], ["raw_y"],
+                _op("*", _ix("raw_y", "r", "v"), 1.0)
+            )
+        )
+    )
+    for (nm, col, o) in (
+            ("seg_xmin", "px", "min"), ("seg_xmax", "px", "max"),
+            ("seg_ymin", "py", "min"), ("seg_ymax", "py", "max"),
+        )
+        push!(
+            eqs, Dict{String, Any}(
+                "lhs" => nm, "rhs" => _agg(
+                    ["r"], [("r", "emis_records")], [col],
+                    _op(o, _ix(col, "r", 1), _ix(col, "r", 2))
+                )
+            )
+        )
     end
-    push!(eqs, Dict{String,Any}("lhs" => "seg_len", "rhs" => _agg(
-        ["r"], [("r", "emis_records")], ["px", "py"],
-        _op("sqrt", _op("+",
-            _op("^", _op("-", _ix("px", "r", 2), _ix("px", "r", 1)), 2.0),
-            _op("^", _op("-", _ix("py", "r", 2), _ix("py", "r", 1)), 2.0))))))
+    push!(
+        eqs, Dict{String, Any}(
+            "lhs" => "seg_len", "rhs" => _agg(
+                ["r"], [("r", "emis_records")], ["px", "py"],
+                _op(
+                    "sqrt", _op(
+                        "+",
+                        _op("^", _op("-", _ix("px", "r", 2), _ix("px", "r", 1)), 2.0),
+                        _op("^", _op("-", _ix("py", "r", 2), _ix("py", "r", 1)), 2.0)
+                    )
+                )
+            )
+        )
+    )
     # The group total is a SELF-JOIN: both symbols range over the record axis.
     # The contracted one is `q` and not `t` on purpose — Python's build-time
     # hoist reads a bound symbol named `t` as the time variable.
-    push!(eqs, Dict{String,Any}("lhs" => "road_len", "rhs" => _agg(
-        ["r"], [("r", "emis_records"), ("q", "emis_records")], ["seg_key", "seg_len"],
-        _op("*", _op("ifelse", _op("==", _ix("seg_key", "q"), _ix("seg_key", "r")),
-                     1.0, 0.0),
-                 _ix("seg_len", "q")); reduce="+")))
-    push!(eqs, Dict{String,Any}("lhs" => "seg_emis", "rhs" => _agg(
-        ["r"], [("r", "emis_records")], ["seg_emis_in", "seg_len", "road_len"],
-        _op("/", _op("*", _ix("seg_emis_in", "r"), _ix("seg_len", "r")),
-                 _ix("road_len", "r")))))
-    push!(eqs, Dict{String,Any}("lhs" => "E_PM25", "rhs" => _agg(
-        ["c"], [("c", "src_cells"), ("r", "emis_records")],
-        ["src_W", "src_S", "src_E", "src_N",
-         "seg_xmin", "seg_ymin", "seg_xmax", "seg_ymax", "px", "py", "seg_emis"],
-        _op("*", _op("ifelse", _env_overlap(), 1.0, 0.0),
-                 _op("*", _ix("seg_emis", "r"), _length_share())); reduce="+")))
-    push!(eqs, Dict{String,Any}("lhs" => "conc_PM25", "rhs" => _agg(
-        ["rcv"], [("rcv", "rcv_cells"), ("s", "src_cells")], ["SR_PM25", "E_PM25"],
-        _op("*", _ix("SR_PM25", "s", "rcv"), _ix("E_PM25", "s")); reduce="+")))
+    push!(
+        eqs, Dict{String, Any}(
+            "lhs" => "road_len", "rhs" => _agg(
+                ["r"], [("r", "emis_records"), ("q", "emis_records")], ["seg_key", "seg_len"],
+                _op(
+                    "*", _op(
+                        "ifelse", _op("==", _ix("seg_key", "q"), _ix("seg_key", "r")),
+                        1.0, 0.0
+                    ),
+                    _ix("seg_len", "q")
+                ); reduce = "+"
+            )
+        )
+    )
+    push!(
+        eqs, Dict{String, Any}(
+            "lhs" => "seg_emis", "rhs" => _agg(
+                ["r"], [("r", "emis_records")], ["seg_emis_in", "seg_len", "road_len"],
+                _op(
+                    "/", _op("*", _ix("seg_emis_in", "r"), _ix("seg_len", "r")),
+                    _ix("road_len", "r")
+                )
+            )
+        )
+    )
+    push!(
+        eqs, Dict{String, Any}(
+            "lhs" => "E_PM25", "rhs" => _agg(
+                ["c"], [("c", "src_cells"), ("r", "emis_records")],
+                [
+                    "src_W", "src_S", "src_E", "src_N",
+                    "seg_xmin", "seg_ymin", "seg_xmax", "seg_ymax", "px", "py", "seg_emis",
+                ],
+                _op(
+                    "*", _op("ifelse", _env_overlap(), 1.0, 0.0),
+                    _op("*", _ix("seg_emis", "r"), _length_share())
+                ); reduce = "+"
+            )
+        )
+    )
+    push!(
+        eqs, Dict{String, Any}(
+            "lhs" => "conc_PM25", "rhs" => _agg(
+                ["rcv"], [("rcv", "rcv_cells"), ("s", "src_cells")], ["SR_PM25", "E_PM25"],
+                _op("*", _ix("SR_PM25", "s", "rcv"), _ix("E_PM25", "s")); reduce = "+"
+            )
+        )
+    )
 
-    return Dict{String,Any}(
+    return Dict{String, Any}(
         "esm" => "1.1.0",
-        "metadata" => Dict{String,Any}("name" => "observed_materialization"),
-        "data_sources" => Dict{String,Any}("MockSR" => Dict{String,Any}(
-            "kind" => "static", "source" => Dict("url_template" => "mock://sr"))),
-        "index_sets" => Dict{String,Any}(
-            "src_cells"    => Dict("kind" => "interval", "size" => 4),
-            "rcv_cells"    => Dict("kind" => "interval", "size" => 2),
+        "metadata" => Dict{String, Any}("name" => "observed_materialization"),
+        "data_sources" => Dict{String, Any}(
+            "MockSR" => Dict{String, Any}(
+                "kind" => "static", "source" => Dict("url_template" => "mock://sr")
+            )
+        ),
+        "index_sets" => Dict{String, Any}(
+            "src_cells" => Dict("kind" => "interval", "size" => 4),
+            "rcv_cells" => Dict("kind" => "interval", "size" => 2),
             "emis_records" => Dict("kind" => "interval", "size" => 4),
-            "seg_vertex"   => Dict("kind" => "interval", "size" => 2)),
-        "models" => Dict{String,Any}("Binned" =>
-            Dict{String,Any}("variables" => v, "equations" => eqs)))
+            "seg_vertex" => Dict("kind" => "interval", "size" => 2)
+        ),
+        "models" => Dict{String, Any}(
+            "Binned" =>
+                Dict{String, Any}("variables" => v, "equations" => eqs)
+        )
+    )
 end
 
 mutable struct MockGatedSR
@@ -185,7 +259,7 @@ mutable struct MockGatedSR
 end
 EA.provider_refresh_times(::MockGatedSR) = Float64[]
 EA.provider_supports_selection(::MockGatedSR) = true
-function EA.provider_sample(m::MockGatedSR, ::Real; selection=nothing)
+function EA.provider_sample(m::MockGatedSR, ::Real; selection = nothing)
     if selection === nothing
         push!(m.calls, (:wholesale,))
         return m.full
@@ -194,18 +268,21 @@ function EA.provider_sample(m::MockGatedSR, ::Real; selection=nothing)
     return m.full[selection[1], selection[2]]
 end
 
-function _prepared(; compiler=:native)
-    ca = Dict{String,Any}(
+function _prepared(; compiler = :native)
+    ca = Dict{String, Any}(
         "src_W" => CW, "src_S" => CS, "src_E" => CE, "src_N" => CN,
-        "raw_x" => PX, "raw_y" => PY, "seg_key" => KEY, "seg_emis_in" => EMIS)
+        "raw_x" => PX, "raw_y" => PY, "seg_key" => KEY, "seg_emis_in" => EMIS
+    )
     for (k, v) in collect(ca)
         ca["Binned." * k] = v
     end
     g = MockGatedSR(SR, Any[])
     insp = EA.BuildInspection()
-    prep = EA.esm_problem(_doc(), (0.0, 1.0); const_arrays=ca,
-                      providers=Dict{String,Any}("Binned.SR_PM25" => g),
-                      inspect=insp, pushdown_rewrite=true, compiler=compiler)
+    prep = EA.esm_problem(
+        _doc(), (0.0, 1.0); const_arrays = ca,
+        providers = Dict{String, Any}("Binned.SR_PM25" => g),
+        inspect = insp, pushdown_rewrite = true, compiler = compiler
+    )
     return prep, insp, g
 end
 
@@ -248,8 +325,10 @@ end
         # Exact, or within 1e-12 relative: the two paths fold the same terms in
         # the same order, so exact is what is expected and the tolerance is the
         # margin, not the claim.
-        @test all(isequal(x, y) || abs(x - y) <= 1e-12 * max(abs(x), abs(y))
-                  for (x, y) in zip(a, b))
+        @test all(
+            isequal(x, y) || abs(x - y) <= 1.0e-12 * max(abs(x), abs(y))
+                for (x, y) in zip(a, b)
+        )
     end
 end
 
@@ -261,8 +340,12 @@ end
     file = prep.run_file[]
     mname = String(first(keys(file.models)))
     vars = keys(file.models[mname].variables)
-    qual(n) = String(first(k for k in vars
-                           if String(k) == n || endswith(String(k), "." * n)))
+    qual(n) = String(
+        first(
+            k for k in vars
+                if String(k) == n || endswith(String(k), "." * n)
+        )
+    )
     params = EA._param_scope_with_aliases(insp.params)
     scope = EA._materialized_obs_scope(insp, file, mname, qual("conc_PM25"), params)
 
@@ -276,8 +359,12 @@ end
     end
     # Buffers, and the right ones: a materialized producer must hold exactly
     # what the consumer would otherwise have recomputed inline.
-    getbuf(n) = scope[first(k for k in keys(scope)
-                            if String(k) == qual(n) || String(k) == n)]
+    getbuf(n) = scope[
+        first(
+            k for k in keys(scope)
+                if String(k) == qual(n) || String(k) == n
+        ),
+    ]
     @test vec(getbuf("seg_len")) ≈ [1.0, 0.25, 0.6, 1.0]
     @test vec(getbuf("E_PM25")) ≈ EXPECT_E
     @test size(getbuf("px")) == (4, 2)

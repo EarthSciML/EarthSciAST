@@ -18,12 +18,16 @@ using EarthSciAST
     function defining_rhs(file, dotted::AbstractString)
         parts = split(dotted, ".")
         node = file.models[String(parts[1])]
-        for sub in parts[2:end-1]
+        for sub in parts[2:(end - 1)]
             node = node.subsystems[String(sub)]
         end
         var = String(parts[end])
-        eq = only(filter(e -> e.lhs isa EarthSciAST.VarExpr && e.lhs.name == var,
-                         node.equations))
+        eq = only(
+            filter(
+                e -> e.lhs isa EarthSciAST.VarExpr && e.lhs.name == var,
+                node.equations
+            )
+        )
         return eq.rhs
     end
 

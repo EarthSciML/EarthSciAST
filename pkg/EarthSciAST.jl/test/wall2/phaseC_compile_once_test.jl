@@ -33,23 +33,29 @@ _op(op, args...; kw...) = OpExpr(String(op), ESM.ASTExpr[args...]; kw...)
 _idxv(var, ix...) = _op("index", _v(var), [_v(String(s)) for s in ix]...)
 
 # conc[rcv] = Σ_c A[c,rcv]·E[c]   (contracting aggregate over const arrays)
-make_conc(N_src) = _op("faq"; output_idx = Any["rcv"], semiring = "sum_product",
+make_conc(N_src) = _op(
+    "faq"; output_idx = Any["rcv"], semiring = "sum_product",
     expr_body = _op("*", _idxv("A", "c", "rcv"), _idxv("E", "c")),
-    ranges = Dict{String,Any}("c" => Any[1, N_src]))
+    ranges = Dict{String, Any}("c" => Any[1, N_src])
+)
 
 # deaths[rcv] = exp(k·conc[rcv]) − 1   (elementwise wrapper over the nested aggregate)
-make_deaths(N_src; k = 1e-3) =
+make_deaths(N_src; k = 1.0e-3) =
     _op("-", _op("exp", _op("*", _num(k), make_conc(N_src))), _num(1.0))
 
 # conc2[i,j] = Σ_c A3[c,i,j]·E[c]   (rank-2 output; two symbolic output indices)
-make_conc2(N_src) = _op("faq"; output_idx = Any["i", "j"], semiring = "sum_product",
+make_conc2(N_src) = _op(
+    "faq"; output_idx = Any["i", "j"], semiring = "sum_product",
     expr_body = _op("*", _idxv("A", "c", "i", "j"), _idxv("E", "c")),
-    ranges = Dict{String,Any}("c" => Any[1, N_src]))
+    ranges = Dict{String, Any}("c" => Any[1, N_src])
+)
 
 # The exact per-cell reference (pre-Phase-C path): resolve+compile+eval one cell.
-_percell(expr, cells; ca, params = Dict{String,Float64}()) =
-    Float64[ESM._eval_cellwise(ESM._PerCellLicense(), expr, collect(Int, c); const_arrays = ca, params = params)
-            for c in cells]
+_percell(expr, cells; ca, params = Dict{String, Float64}()) =
+    Float64[
+    ESM._eval_cellwise(ESM._PerCellLicense(), expr, collect(Int, c); const_arrays = ca, params = params)
+        for c in cells
+]
 
 @testset "wall2 Phase C — compile-once cellwise evaluator" begin
 
@@ -60,10 +66,10 @@ _percell(expr, cells; ca, params = Dict{String,Float64}()) =
                 Random.seed!(seed)
                 A = rand(N_src, N_rcv)
                 E = rand(N_src)
-                ca = Dict{String,Any}("A" => A, "E" => E)
+                ca = Dict{String, Any}("A" => A, "E" => E)
 
                 conc = make_conc(N_src)
-                deaths = make_deaths(N_src; k = 1e-3)
+                deaths = make_deaths(N_src; k = 1.0e-3)
 
                 # `evaluate_cellwise` drives the compile-once fast path…
                 conc_fast = ESM.evaluate_cellwise(conc, cells; const_arrays = ca)
@@ -73,10 +79,14 @@ _percell(expr, cells; ca, params = Dict{String,Float64}()) =
                 @test deaths_fast == _percell(deaths, cells; ca = ca)
 
                 # The fast path must actually be the thing under test here.
-                @test ESM._cellwise_compile_once(conc, 1, ca,
-                    Dict{String,Function}(), Dict{String,Float64}()) !== nothing
-                @test ESM._cellwise_compile_once(deaths, 1, ca,
-                    Dict{String,Function}(), Dict{String,Float64}()) !== nothing
+                @test ESM._cellwise_compile_once(
+                    conc, 1, ca,
+                    Dict{String, Function}(), Dict{String, Float64}()
+                ) !== nothing
+                @test ESM._cellwise_compile_once(
+                    deaths, 1, ca,
+                    Dict{String, Function}(), Dict{String, Float64}()
+                ) !== nothing
             end
         end
     end
@@ -88,13 +98,15 @@ _percell(expr, cells; ca, params = Dict{String,Float64}()) =
                 Random.seed!(seed)
                 A3 = rand(N_src, N_i, N_j)
                 E = rand(N_src)
-                ca = Dict{String,Any}("A" => A3, "E" => E)
+                ca = Dict{String, Any}("A" => A3, "E" => E)
                 conc2 = make_conc2(N_src)
 
                 fast = ESM.evaluate_cellwise(conc2, cells; const_arrays = ca)
                 @test fast == _percell(conc2, cells; ca = ca)
-                @test ESM._cellwise_compile_once(conc2, 2, ca,
-                    Dict{String,Function}(), Dict{String,Float64}()) !== nothing
+                @test ESM._cellwise_compile_once(
+                    conc2, 2, ca,
+                    Dict{String, Function}(), Dict{String, Float64}()
+                ) !== nothing
             end
         end
     end
@@ -105,15 +117,17 @@ _percell(expr, cells; ca, params = Dict{String,Float64}()) =
         Random.seed!(0xC3)
         A = rand(N_src, N_rcv)
         E = rand(N_src)
-        ca = Dict{String,Any}("A" => A, "E" => E)
+        ca = Dict{String, Any}("A" => A, "E" => E)
         cells = [[r] for r in 1:N_rcv]
         deaths_p = _op("-", _op("exp", _op("*", _v("k"), make_conc(N_src))), _num(1.0))
-        params = Dict{String,Float64}("k" => 2.5e-3)
+        params = Dict{String, Float64}("k" => 2.5e-3)
 
         fast = ESM.evaluate_cellwise(deaths_p, cells; const_arrays = ca, params = params)
         @test fast == _percell(deaths_p, cells; ca = ca, params = params)
-        @test ESM._cellwise_compile_once(deaths_p, 1, ca,
-            Dict{String,Function}(), params) !== nothing
+        @test ESM._cellwise_compile_once(
+            deaths_p, 1, ca,
+            Dict{String, Function}(), params
+        ) !== nothing
     end
 
     @testset "per-cell closure — type-stable + allocation-free" begin
@@ -121,12 +135,14 @@ _percell(expr, cells; ca, params = Dict{String,Float64}()) =
         Random.seed!(0xD4)
         A = rand(N_src, N_rcv)
         E = rand(N_src)
-        ca = Dict{String,Any}("A" => A, "E" => E)
+        ca = Dict{String, Any}("A" => A, "E" => E)
         cell = [7]                    # pre-allocated OUTSIDE any measurement
 
-        for expr in (make_conc(N_src), make_deaths(N_src; k = 1e-3))
-            ce = ESM._cellwise_compile_once(expr, 1, ca,
-                Dict{String,Function}(), Dict{String,Float64}())
+        for expr in (make_conc(N_src), make_deaths(N_src; k = 1.0e-3))
+            ce = ESM._cellwise_compile_once(
+                expr, 1, ca,
+                Dict{String, Function}(), Dict{String, Float64}()
+            )
             @test ce !== nothing
             ce(cell)                  # warmup / JIT
             @test (@inferred ce(cell)) isa Float64
@@ -135,8 +151,10 @@ _percell(expr, cells; ca, params = Dict{String,Float64}()) =
 
         # Parameter-dependent closure is zero-alloc too (params captured once).
         deaths_p = _op("-", _op("exp", _op("*", _v("k"), make_conc(N_src))), _num(1.0))
-        cep = ESM._cellwise_compile_once(deaths_p, 1, ca,
-            Dict{String,Function}(), Dict{String,Float64}("k" => 1e-3))
+        cep = ESM._cellwise_compile_once(
+            deaths_p, 1, ca,
+            Dict{String, Function}(), Dict{String, Float64}("k" => 1.0e-3)
+        )
         @test cep !== nothing
         cep(cell)
         @test (@inferred cep(cell)) isa Float64
@@ -148,19 +166,23 @@ _percell(expr, cells; ca, params = Dict{String,Float64}()) =
         Random.seed!(0xE5)
         A = rand(N_src, N_rcv)
         E = rand(N_src)
-        ca = Dict{String,Any}("A" => A, "E" => E)
+        ca = Dict{String, Any}("A" => A, "E" => E)
         cells = [[r] for r in 1:N_rcv]
 
         # A runtime `filter` on the aggregate is NOT handled on the symbolic path.
-        aggf = _op("faq"; output_idx = Any["rcv"], semiring = "sum_product",
+        aggf = _op(
+            "faq"; output_idx = Any["rcv"], semiring = "sum_product",
             expr_body = _op("*", _idxv("A", "c", "rcv"), _idxv("E", "c")),
-            ranges = Dict{String,Any}("c" => Any[1, N_src]),
-            filter = _op("<", _v("c"), _num(10.0)))
+            ranges = Dict{String, Any}("c" => Any[1, N_src]),
+            filter = _op("<", _v("c"), _num(10.0))
+        )
         # It must DECLINE the fast path…
-        @test ESM._cellwise_compile_once(aggf, 1, ca,
-            Dict{String,Function}(), Dict{String,Float64}()) === nothing
+        @test ESM._cellwise_compile_once(
+            aggf, 1, ca,
+            Dict{String, Function}(), Dict{String, Float64}()
+        ) === nothing
         # …and `evaluate_cellwise` must fall back to the per-cell path, bit-exactly.
         @test ESM.evaluate_cellwise(aggf, cells; const_arrays = ca) ==
-              _percell(aggf, cells; ca = ca)
+            _percell(aggf, cells; ca = ca)
     end
 end

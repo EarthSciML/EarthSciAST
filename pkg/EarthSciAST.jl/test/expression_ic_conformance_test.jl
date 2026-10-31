@@ -20,8 +20,10 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT
 const _EXPRIC_REPO_ROOT = TESTUTILS_REPO_ROOT
 
 @testset "expression initial-condition golden loads (ess-gjn)" begin
-    path = joinpath(_EXPRIC_REPO_ROOT, "tests", "valid", "initial_conditions",
-                    "expression_ignition_front_1d.esm")
+    path = joinpath(
+        _EXPRIC_REPO_ROOT, "tests", "valid", "initial_conditions",
+        "expression_ignition_front_1d.esm"
+    )
     @test isfile(path)
 
     # Julia parses the golden into an EsmFile (round-trip / evaluation deferred).
@@ -44,8 +46,10 @@ const _EXPRIC_REPO_ROOT = TESTUTILS_REPO_ROOT
     model = raw["models"]["IgnitionFront1D"]
     @test model["variables"]["u"]["shape"] == ["i"]
 
-    ic_eq = first(e for e in model["equations"]
-                  if e["lhs"] isa AbstractDict && get(e["lhs"], "op", nothing) == "ic")
+    ic_eq = first(
+        e for e in model["equations"]
+            if e["lhs"] isa AbstractDict && get(e["lhs"], "op", nothing) == "ic"
+    )
     @test ic_eq["lhs"]["args"] == ["u"]
     @test ic_eq["rhs"]["op"] == "*"  # psi(x) = 0.5 * (1 + tanh(...))
 end

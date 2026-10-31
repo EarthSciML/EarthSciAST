@@ -72,9 +72,11 @@ function build_spatial_index end
 @inline _env4(e) = (Float64(e[1]), Float64(e[2]), Float64(e[3]), Float64(e[4]))
 
 # CORE brute-force method: the reference oracle. O(nq·nc) exact envelope test.
-function broad_phase_candidates(query_envs::AbstractVector, cell_envs::AbstractVector;
-                                eps::Real=0.0)
-    out = Tuple{Int,Int}[]
+function broad_phase_candidates(
+        query_envs::AbstractVector, cell_envs::AbstractVector;
+        eps::Real = 0.0
+    )
+    out = Tuple{Int, Int}[]
     (isempty(query_envs) || isempty(cell_envs)) && return out
     e = Float64(eps)
     length(query_envs) * length(cell_envs) > _BROAD_PHASE_GRID_MIN &&
@@ -138,7 +140,7 @@ _bin_count(r::Float64, hi::Int) = isnan(r) ? 1 : Int(clamp(ceil(r), 1.0, Float64
 # `nothing` (the caller then tests every pair) when a coordinate is not finite.
 function _broad_phase_grid(query_envs::AbstractVector, cell_envs::AbstractVector, e::Float64)
     nc = length(cell_envs)
-    cells = Vector{NTuple{4,Float64}}(undef, nc)
+    cells = Vector{NTuple{4, Float64}}(undef, nc)
     xlo = ylo = Inf; xhi = yhi = -Inf
     for j in 1:nc
         a, b, c, d = _env4(cell_envs[j])
@@ -161,7 +163,7 @@ function _broad_phase_grid(query_envs::AbstractVector, cell_envs::AbstractVector
     bx(x) = clamp(floor(Int, (clamp(x, xlo, xhi) - xlo) / wx) + 1, 1, gx)
     by(y) = clamp(floor(Int, (clamp(y, ylo, yhi) - ylo) / wy) + 1, 1, gy)
     g = gx
-    bins = [Int[] for _ in 1:gx*gy]
+    bins = [Int[] for _ in 1:(gx * gy)]
     wide = Int[]
     for j in 1:nc
         a, b, c, d = cells[j]
@@ -174,7 +176,7 @@ function _broad_phase_grid(query_envs::AbstractVector, cell_envs::AbstractVector
             push!(bins[(k - 1) * g + i], j)
         end
     end
-    out = Tuple{Int,Int}[]
+    out = Tuple{Int, Int}[]
     cand = Int[]
     for qi in eachindex(query_envs)
         qxmin, qymin, qxmax, qymax = _env4(query_envs[qi])
@@ -203,30 +205,38 @@ function _envelope_vectors_from_cols(env_names::AbstractVector, cols::AbstractVe
     if k == 4
         a, b, c, d = cols
         n = length(a)
-        return NTuple{4,Float64}[
-            (Float64(a[p]), Float64(b[p]), Float64(c[p]), Float64(d[p])) for p in 1:n]
+        return NTuple{4, Float64}[
+            (Float64(a[p]), Float64(b[p]), Float64(c[p]), Float64(d[p])) for p in 1:n
+        ]
     elseif k == 2
         x, y = cols
         n = length(x)
-        return NTuple{4,Float64}[
-            (Float64(x[p]), Float64(y[p]), Float64(x[p]), Float64(y[p])) for p in 1:n]
+        return NTuple{4, Float64}[
+            (Float64(x[p]), Float64(y[p]), Float64(x[p]), Float64(y[p])) for p in 1:n
+        ]
     elseif k == 1
         return _ring_envelopes(cols[1])
     else
-        throw(ArgumentError(
-            "overlap-join env must name 1 (rings), 2 (point [x,y]), or 4 " *
-            "(rect [xmin,ymin,xmax,ymax]) const-array factors; got $k"))
+        throw(
+            ArgumentError(
+                "overlap-join env must name 1 (rings), 2 (point [x,y]), or 4 " *
+                    "(rect [xmin,ymin,xmax,ymax]) const-array factors; got $k"
+            )
+        )
     end
 end
 
 # A `[pos, verts, coord]` ring factor → one AABB envelope per position, remapping
 # `_ring_xybbox`'s `(xmin, xmax, ymin, ymax)` to `(xmin, ymin, xmax, ymax)`.
 function _ring_envelopes(rings::AbstractArray)
-    ndims(rings) == 3 || throw(ArgumentError(
-        "overlap-join single-factor env expects a [pos, verts, coord] 3-D ring " *
-        "array; got a $(ndims(rings))-D factor"))
+    ndims(rings) == 3 || throw(
+        ArgumentError(
+            "overlap-join single-factor env expects a [pos, verts, coord] 3-D ring " *
+                "array; got a $(ndims(rings))-D factor"
+        )
+    )
     npos = size(rings, 1)
-    out = Vector{NTuple{4,Float64}}(undef, npos)
+    out = Vector{NTuple{4, Float64}}(undef, npos)
     for p in 1:npos
         xmin, xmax, ymin, ymax = _ring_xybbox(@view rings[p, :, :])
         out[p] = (Float64(xmin), Float64(ymin), Float64(xmax), Float64(ymax))
@@ -257,22 +267,28 @@ extension is loaded, else the dependency-free brute-force
 [`broad_phase_candidates`](@ref). Both return an identical pair set, so the gate
 is deterministic and backend-independent.
 """
-function _overlap_candidate_set(src_envs::AbstractVector, tgt_envs::AbstractVector;
-                                eps::Real=0.0)
+function _overlap_candidate_set(
+        src_envs::AbstractVector, tgt_envs::AbstractVector;
+        eps::Real = 0.0
+    )
     e = Float64(eps)
     pairs = if hasmethod(build_spatial_index, Tuple{AbstractVector})
-        idx = build_spatial_index(tgt_envs; eps=e)
-        broad_phase_candidates(src_envs, idx; eps=e)
+        idx = build_spatial_index(tgt_envs; eps = e)
+        broad_phase_candidates(src_envs, idx; eps = e)
     else
-        broad_phase_candidates(src_envs, tgt_envs; eps=e)
+        broad_phase_candidates(src_envs, tgt_envs; eps = e)
     end
-    return Set{Tuple{Int,Int}}(pairs)
+    return Set{Tuple{Int, Int}}(pairs)
 end
 
-function _overlap_candidate_set(src_names::AbstractVector, tgt_names::AbstractVector,
-                                arrays::AbstractDict; eps::Real=0.0)
-    return _overlap_candidate_set(_envelope_vectors(src_names, arrays),
-                                  _envelope_vectors(tgt_names, arrays); eps=eps)
+function _overlap_candidate_set(
+        src_names::AbstractVector, tgt_names::AbstractVector,
+        arrays::AbstractDict; eps::Real = 0.0
+    )
+    return _overlap_candidate_set(
+        _envelope_vectors(src_names, arrays),
+        _envelope_vectors(tgt_names, arrays); eps = eps
+    )
 end
 
 # =========================================================================== #
@@ -325,15 +341,15 @@ const _NO_PARTNERS = Int[]
 # PAIR-drive order. Built once, cached on the index.
 function _overlap_sorted_pairs(oi::_OverlapIndex)
     oi.sorted === nothing && (oi.sorted = sort!(collect(oi.pairs)))
-    return oi.sorted::Vector{Tuple{Int,Int}}
+    return oi.sorted::Vector{Tuple{Int, Int}}
 end
 
 # `side == :l` ⇒ `pos_l ⇒ sorted pos_r`s; `side == :r` ⇒ `pos_r ⇒ sorted pos_l`s.
 # Built once per side, cached on the index (see the `_OverlapIndex` note).
 function _overlap_adjacency(oi::_OverlapIndex, side::Symbol)
     cached = side === :l ? oi.adj_l : oi.adj_r
-    cached === nothing || return cached::Dict{Int,Vector{Int}}
-    adj = Dict{Int,Vector{Int}}()
+    cached === nothing || return cached::Dict{Int, Vector{Int}}
+    adj = Dict{Int, Vector{Int}}()
     for (pl, pr) in oi.pairs
         k, v = side === :l ? (pl, pr) : (pr, pl)
         push!(get!(() -> Int[], adj, k), v)
@@ -431,7 +447,7 @@ function _overlap_drive_plan(gate, free_syms, bound, valuesof)
     if lf && rf
         return (:pairs, l, r, _overlap_sorted_pairs(oi))
     elseif lf || rf
-        free  = lf ? l : r
+        free = lf ? l : r
         fixed = lf ? r : l
         haskey(bound, fixed) || return (:none,)     # unbound ⇒ nothing to drive on
         parts = _overlap_partners(oi, lf ? :r : :l, Int(bound[fixed]))
@@ -487,7 +503,7 @@ _eq_match_key(v) = _EQ_KEY_DECLINE
 # gated range symbols bind) and `key_*(p)` the key read at position `p`. Cost
 # O(|L| + |R| + |pairs|).
 function _equality_match_index(pos_l, key_l, pos_r, key_r)
-    right = Dict{Any,Vector{Int}}()
+    right = Dict{Any, Vector{Int}}()
     for p in pos_r
         k = _eq_match_key(key_r(p))
         k === _EQ_KEY_DECLINE && return nothing
@@ -497,7 +513,7 @@ function _equality_match_index(pos_l, key_l, pos_r, key_r)
     for v in values(right)
         sort!(v)
     end
-    pairs = Tuple{Int,Int}[]
+    pairs = Tuple{Int, Int}[]
     for p in sort!(Int[Int(q) for q in pos_l])
         k = _eq_match_key(key_l(p))
         k === _EQ_KEY_DECLINE && return nothing
@@ -506,7 +522,7 @@ function _equality_match_index(pos_l, key_l, pos_r, key_r)
             push!(pairs, (p, q))
         end
     end
-    oi = _OverlapIndex(Set{Tuple{Int,Int}}(pairs))
+    oi = _OverlapIndex(Set{Tuple{Int, Int}}(pairs))
     oi.sorted = pairs
     return oi
 end

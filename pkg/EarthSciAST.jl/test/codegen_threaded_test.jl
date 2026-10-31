@@ -38,89 +38,126 @@ const ESM = EarthSciAST
 # plus a base-offset rank-1 box (second block). Fully budget-declinable, so
 # the budget-0 build exercises the overflow function too.
 function _cgt_1d_model(N)
-    ubody = _op("+",
-        _op("ifelse", _op(">", _idx("u", _v("i")), _n(2.0)),
+    ubody = _op(
+        "+",
+        _op(
+            "ifelse", _op(">", _idx("u", _v("i")), _n(2.0)),
             _op("log", _idx("u", _v("i"))),
-            _op("sin", _idx("u", _v("i")))),
-        _op("*", _n(-0.5), _idx("v", _v("i"))))
-    vbody = _op("*",
+            _op("sin", _idx("u", _v("i")))
+        ),
+        _op("*", _n(-0.5), _idx("v", _v("i")))
+    )
+    vbody = _op(
+        "*",
         _op("exp", _op("*", _n(-0.3), _idx("v", _v("i")))),
-        _op("+", _n(1.0), _op("*", _n(0.25), _op("cos", _idx("u", _v("i"))))))
-    eq(x, body) = ESM.Equation(_ao1(_Didx(x, _v("i")), "i", 1, N),
-                               _ao1(body, "i", 1, N))
-    vars = Dict{String,ESM.ModelVariable}(
-        n => ESM.ModelVariable(ESM.UnknownVariable) for n in ("u", "v"))
-    ESM.Model(vars, [eq("u", ubody), eq("v", vbody)])
+        _op("+", _n(1.0), _op("*", _n(0.25), _op("cos", _idx("u", _v("i")))))
+    )
+    eq(x, body) = ESM.Equation(
+        _ao1(_Didx(x, _v("i")), "i", 1, N),
+        _ao1(body, "i", 1, N)
+    )
+    vars = Dict{String, ESM.ModelVariable}(
+        n => ESM.ModelVariable(ESM.UnknownVariable) for n in ("u", "v")
+    )
+    return ESM.Model(vars, [eq("u", ubody), eq("v", vbody)])
 end
-_cgt_1d_ics(N) = Dict("$x[$k]" => 2.0 + sin(0.3k + 0.1j)
-                      for (j, x) in enumerate(("u", "v")), k in 1:N)
+_cgt_1d_ics(N) = Dict(
+    "$x[$k]" => 2.0 + sin(0.3k + 0.1j)
+        for (j, x) in enumerate(("u", "v")), k in 1:N
+)
 
 # 2-D 5-point Laplacian over full ranges: the stencil pass decomposes it into
 # an interior rank-2 box plus boundary regions — the rank-2 chunked nest.
 function _cgt_2d_model(N)
-    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable; shape=["i", "j"]))
-    body = _op("+",
+    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable; shape = ["i", "j"]))
+    body = _op(
+        "+",
         _idx("u", _op("-", _v("i"), _i(1)), _v("j")),
         _op("*", _n(-4.0), _idx("u", _v("i"), _v("j"))),
         _idx("u", _op("+", _v("i"), _i(1)), _v("j")),
         _idx("u", _v("i"), _op("-", _v("j"), _i(1))),
-        _idx("u", _v("i"), _op("+", _v("j"), _i(1))))
-    lhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i", "j"],
-        expr_body=_Didx("u", _v("i"), _v("j")),
-        ranges=Dict("i" => [1, N], "j" => [1, N]))
-    rhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i", "j"],
-        expr_body=body, ranges=Dict("i" => [1, N], "j" => [1, N]))
-    ESM.Model(vars, [ESM.Equation(lhs, rhs)])
+        _idx("u", _v("i"), _op("+", _v("j"), _i(1)))
+    )
+    lhs = ESM.OpExpr(
+        "faq", ESM.ASTExpr[]; output_idx = Any["i", "j"],
+        expr_body = _Didx("u", _v("i"), _v("j")),
+        ranges = Dict("i" => [1, N], "j" => [1, N])
+    )
+    rhs = ESM.OpExpr(
+        "faq", ESM.ASTExpr[]; output_idx = Any["i", "j"],
+        expr_body = body, ranges = Dict("i" => [1, N], "j" => [1, N])
+    )
+    return ESM.Model(vars, [ESM.Equation(lhs, rhs)])
 end
-_cgt_2d_ics(N) = Dict("u[$i,$j]" => sin(0.3i) * cos(0.2j) + 0.05i
-                      for i in 1:N, j in 1:N)
+_cgt_2d_ics(N) = Dict(
+    "u[$i,$j]" => sin(0.3i) * cos(0.2j) + 0.05i
+        for i in 1:N, j in 1:N
+)
 
 # 3-D 7-point Laplacian, same construction — the rank-3 chunked nest.
 function _cgt_3d_model(Ni, Nj, Nk)
-    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable; shape=["i", "j", "k"]))
+    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable; shape = ["i", "j", "k"]))
     u(i, j, k) = _idx("u", i, j, k)
     I = _v("i"); J = _v("j"); K = _v("k")
-    body = _op("+",
+    body = _op(
+        "+",
         u(_op("-", I, _i(1)), J, K), u(_op("+", I, _i(1)), J, K),
         u(I, _op("-", J, _i(1)), K), u(I, _op("+", J, _i(1)), K),
         u(I, J, _op("-", K, _i(1))), u(I, J, _op("+", K, _i(1))),
-        _op("*", _n(-6.0), u(I, J, K)))
+        _op("*", _n(-6.0), u(I, J, K))
+    )
     rng = Dict("i" => [1, Ni], "j" => [1, Nj], "k" => [1, Nk])
-    lhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i", "j", "k"],
-        expr_body=_Didx("u", I, J, K), ranges=rng)
-    rhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i", "j", "k"],
-        expr_body=body, ranges=rng)
-    ESM.Model(vars, [ESM.Equation(lhs, rhs)])
+    lhs = ESM.OpExpr(
+        "faq", ESM.ASTExpr[]; output_idx = Any["i", "j", "k"],
+        expr_body = _Didx("u", I, J, K), ranges = rng
+    )
+    rhs = ESM.OpExpr(
+        "faq", ESM.ASTExpr[]; output_idx = Any["i", "j", "k"],
+        expr_body = body, ranges = rng
+    )
+    return ESM.Model(vars, [ESM.Equation(lhs, rhs)])
 end
-_cgt_3d_ics(Ni, Nj, Nk) = Dict("u[$i,$j,$k]" => sin(0.3i) * cos(0.2j) + 0.07k
-                               for i in 1:Ni, j in 1:Nj, k in 1:Nk)
+_cgt_3d_ics(Ni, Nj, Nk) = Dict(
+    "u[$i,$j,$k]" => sin(0.3i) * cos(0.2j) + 0.07k
+        for i in 1:Ni, j in 1:Nj, k in 1:Nk
+)
 
 # 4-D 9-point Laplacian — the rank-above-3 chunked nest (a division odometer
 # over the dims past the first, once per row).
 function _cgt_4d_model(Ni, Nj, Nk, Nl)
-    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable; shape=["i", "j", "k", "l"]))
+    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable; shape = ["i", "j", "k", "l"]))
     u(i, j, k, l) = _idx("u", i, j, k, l)
     I = _v("i"); J = _v("j"); K = _v("k"); L = _v("l")
     m(x) = _op("-", x, _i(1)); pl(x) = _op("+", x, _i(1))
-    body = _op("+",
+    body = _op(
+        "+",
         u(m(I), J, K, L), u(pl(I), J, K, L), u(I, m(J), K, L), u(I, pl(J), K, L),
         u(I, J, m(K), L), u(I, J, pl(K), L), u(I, J, K, m(L)), u(I, J, K, pl(L)),
-        _op("*", _n(-8.0), u(I, J, K, L)))
+        _op("*", _n(-8.0), u(I, J, K, L))
+    )
     rng = Dict("i" => [1, Ni], "j" => [1, Nj], "k" => [1, Nk], "l" => [1, Nl])
-    lhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i", "j", "k", "l"],
-        expr_body=_Didx("u", I, J, K, L), ranges=rng)
-    rhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i", "j", "k", "l"],
-        expr_body=body, ranges=rng)
-    ESM.Model(vars, [ESM.Equation(lhs, rhs)])
+    lhs = ESM.OpExpr(
+        "faq", ESM.ASTExpr[]; output_idx = Any["i", "j", "k", "l"],
+        expr_body = _Didx("u", I, J, K, L), ranges = rng
+    )
+    rhs = ESM.OpExpr(
+        "faq", ESM.ASTExpr[]; output_idx = Any["i", "j", "k", "l"],
+        expr_body = body, ranges = rng
+    )
+    return ESM.Model(vars, [ESM.Equation(lhs, rhs)])
 end
-_cgt_4d_ics(Ni, Nj, Nk, Nl) = Dict("u[$i,$j,$k,$l]" => sin(0.3i) * cos(0.2j) + 0.07k - 0.03l
-                                   for i in 1:Ni, j in 1:Nj, k in 1:Nk, l in 1:Nl)
+_cgt_4d_ics(Ni, Nj, Nk, Nl) = Dict(
+    "u[$i,$j,$k,$l]" => sin(0.3i) * cos(0.2j) + 0.07k - 0.03l
+        for i in 1:Ni, j in 1:Nj, k in 1:Nk, l in 1:Nl
+)
 
-function _cgt_build(model, ics; compiler::Symbol=:native, env...)
-    withenv((String(k) => v for (k, v) in pairs(env))...) do
+function _cgt_build(model, ics; compiler::Symbol = :native, env...)
+    return withenv((String(k) => v for (k, v) in pairs(env))...) do
         ESM._reset_cascade_tally!()
-        f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(model;
-            initial_conditions=ics, compiler=compiler)
+        f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(
+            model;
+            initial_conditions = ics, compiler = compiler
+        )
         (f!, u0, p, copy(ESM._CASCADE_TALLY))
     end
 end
@@ -134,8 +171,8 @@ _cgt_alloc(f!, du, u, p, t) = (f!(du, u, p, t); f!(du, u, p, t); @allocated f!(d
 # call, so moving the floor afterwards changes nothing.
 _cgt_serial(model, ics; env...) =
     withenv("ESS_THREADS_MIN_CELLS" => string(typemax(Int))) do
-        _cgt_build(model, ics; env...)
-    end
+    _cgt_build(model, ics; env...)
+end
 _cgt_bitsame(a, b) = size(a) == size(b) && all(a .=== b)
 
 # The section's box-kernel ranks, read off a build whose primary emission
@@ -143,9 +180,9 @@ _cgt_bitsame(a, b) = size(a) == size(b) && all(a .=== b)
 # grid_invariance idiom; the kernel IR under the runners is build-invariant, so
 # the ranks apply to the emitting build too).
 function _cgt_ranks(model, ics)
-    f!, _, _, _ = _cgt_build(model, ics; ESS_CODEGEN_NODE_BUDGET="0")
+    f!, _, _, _ = _cgt_build(model, ics; ESS_CODEGEN_NODE_BUDGET = "0")
     ks = getfield(f!, :kernel_section)
-    [length(K.cells.strides) for K in getfield(ks, :kernels)]
+    return [length(K.cells.strides) for K in getfield(ks, :kernels)]
 end
 
 if get(ENV, "ESS_CGT_CHILD", "") == "1"
@@ -166,14 +203,16 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
             ESM._reset_thread_tally!()
             fA, uA, pA, tallyA = _cgt_build(model, ics)
             fS, _uS, pS, _ = _cgt_serial(model, ics)
-            fR, uR, pR, _ = _cgt_build(model, ics; compiler=:interpreter)
+            fR, uR, pR, _ = _cgt_build(model, ics; compiler = :interpreter)
             @test get(tallyA, :codegen_kernel, 0) >= 1
             ksA = getfield(fA, :kernel_section)
             @test getfield(ksA, :tcache).disjoint      # build-time global check
             for k in 1:4, t in (0.0, 0.7, 3.25)
                 u = k == 1 ? copy(uA) :
-                    Float64[2.0 + 1.3 * sin(1.3i + 0.7k) * cos(0.31i * k) + 0.01i
-                            for i in 1:length(uA)]
+                    Float64[
+                        2.0 + 1.3 * sin(1.3i + 0.7k) * cos(0.31i * k) + 0.01i
+                        for i in 1:length(uA)
+                    ]
                 du_thr = _cgt_du(fA, u, pA, t)
                 du_ser = _cgt_du(fS, u, pS, t)   # same program, serial route
                 du_ref = _cgt_du(fR, u, pR, t)
@@ -225,13 +264,17 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
             r = Ref(0)
             # A term of three nodes: each fold term costs its nodes, each cell
             # its store.
-            body = ESM._mknode(kind=ESM._NK_OP, op=:*,
-                               children=ESM._Node[ESM._mknode(kind=ESM._NK_LITERAL, literal=2.0),
-                                                  ESM._mknode(kind=ESM._NK_LITERAL, literal=3.0)])
+            body = ESM._mknode(
+                kind = ESM._NK_OP, op = :*,
+                children = ESM._Node[
+                    ESM._mknode(kind = ESM._NK_LITERAL, literal = 2.0),
+                    ESM._mknode(kind = ESM._NK_LITERAL, literal = 3.0),
+                ]
+            )
             @test ESM._ac_work(10, nothing, body) == 10 * (1 + 3)
             @test ESM._ac_work(10, ESM._ACFold([r], :+, 0.0, [1:1:3]), body) == 10 + 10 * 3 * 3
             @test ESM._ac_work(2, ESM._ACFold([r], :+, 0.0, [1, 3, 6], [[1, 2, 1, 2, 3]]), body) ==
-                  2 + 5 * 3
+                2 + 5 * 3
             # 600 cells alone stay serial at the floor; their fold terms do not.
             minw = ESM._thread_min_work()
             @test ESM._sec_prep_threads!(ESM._SecTCache(600, true)).state == -1
@@ -247,16 +290,18 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
         @testset "a join-gated TABLE contraction threads below the cell floor, bit-identically" begin
             # The scaling tier's regrid at 1000 cells: 1000 output cells folding
             # about 2000 admitted pairs (1500 past the parameter gate).
-            doc = joinpath(@__DIR__, "..", "..", "..", "tests", "conformance", "scaling",
-                           "fixtures", "regrid", "regrid_N1000.esm")
+            doc = joinpath(
+                @__DIR__, "..", "..", "..", "tests", "conformance", "scaling",
+                "fixtures", "regrid", "regrid_N1000.esm"
+            )
             function rhs(compiler, env...)
                 withenv(env...) do
-                    prob = ESM.esm_problem(doc, (0.0, 1.0); compiler=compiler)
+                    prob = ESM.esm_problem(doc, (0.0, 1.0); compiler = compiler)
                     # A state that differs cell to cell, set by name so the two
                     # compilers' layouts need not agree.
                     u = zeros(length(prob.u0))
                     for (k, i) in prob.var_map
-                        i <= length(u) && (u[i] = 1.0 + 1e-3 * sum(Int, codeunits(k)))
+                        i <= length(u) && (u[i] = 1.0 + 1.0e-3 * sum(Int, codeunits(k)))
                     end
                     du = zeros(length(u))
                     prob.f!(du, u, prob.p, 0.0)
@@ -279,17 +324,19 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
 
         @testset "overflow RGF (budget 0): threaded ≡ serial oracle ≡ interpreter" begin
             ESM._reset_thread_tally!()
-            fO, uO, pO, tallyO = _cgt_build(model, ics; ESS_CODEGEN_NODE_BUDGET="0")
-            fOS, _uOS, pOS, _ = _cgt_serial(model, ics; ESS_CODEGEN_NODE_BUDGET="0")
-            fB, uB, pB, _ = _cgt_build(model, ics; compiler=:interpreter)
+            fO, uO, pO, tallyO = _cgt_build(model, ics; ESS_CODEGEN_NODE_BUDGET = "0")
+            fOS, _uOS, pOS, _ = _cgt_serial(model, ics; ESS_CODEGEN_NODE_BUDGET = "0")
+            fB, uB, pB, _ = _cgt_build(model, ics; compiler = :interpreter)
             @test get(tallyO, :dual_codegen_kernel, 0) >= 1
             @test get(tallyO, :f64_overflow_armed, 0) == 1
             ksO = getfield(fO, :kernel_section)
             @test getfield(ksO, :dualf) !== nothing
             @test getfield(ksO, :dual_tcache).disjoint
             for k in 1:3, t in (0.0, 0.7)
-                u = Float64[2.0 + 1.3 * sin(1.3i + 0.7k) * cos(0.31i * k) + 0.01i
-                            for i in 1:length(uO)]
+                u = Float64[
+                    2.0 + 1.3 * sin(1.3i + 0.7k) * cos(0.31i * k) + 0.01i
+                        for i in 1:length(uO)
+                ]
                 du_thr = _cgt_du(fO, u, pO, t)
                 du_ser = _cgt_du(fOS, u, pOS, t)   # same program, serial route
                 du_int = _cgt_du(fB, u, pB, t)     # the interpreter
@@ -327,8 +374,10 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
                 @eval using ForwardDiff
                 fA, uA, pA, _ = _cgt_build(model, ics)
                 fS, _, pS, _ = _cgt_serial(model, ics)
-                ud = [Base.invokelatest(ForwardDiff.Dual, x, 1.0, -0.5 * i)
-                      for (i, x) in enumerate(uA)]
+                ud = [
+                    Base.invokelatest(ForwardDiff.Dual, x, 1.0, -0.5 * i)
+                        for (i, x) in enumerate(uA)
+                ]
                 dthr = similar(ud); dser = similar(ud)
                 Base.invokelatest(fA, dthr, ud, pA, 0.7)
                 withenv("ESS_THREADS_MIN_CELLS" => string(typemax(Int))) do
@@ -342,9 +391,15 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
         @testset "an error in a chunk reaches the caller" begin
             Ns = 8192
             body = _op("sqrt", _idx("u", _v("i")))
-            vars = Dict{String,ESM.ModelVariable}("u" => ESM.ModelVariable(ESM.UnknownVariable))
-            m = ESM.Model(vars, [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, Ns),
-                                              _ao1(body, "i", 1, Ns))])
+            vars = Dict{String, ESM.ModelVariable}("u" => ESM.ModelVariable(ESM.UnknownVariable))
+            m = ESM.Model(
+                vars, [
+                    ESM.Equation(
+                        _ao1(_Didx("u", _v("i")), "i", 1, Ns),
+                        _ao1(body, "i", 1, Ns)
+                    ),
+                ]
+            )
             ic = Dict("u[$k]" => 1.0 + k for k in 1:Ns)
             fE, uE, pE, _ = _cgt_build(m, ic)
             du = similar(uE)
@@ -360,12 +415,14 @@ if get(ENV, "ESS_CGT_CHILD", "") == "1"
             len = 1000
             folds = ESM._ScanFold[]
             off = 0
-            for (nl, op, z, incl) in ((5, :+, 0.0, true), (3, :max, -Inf, false),
-                                      (6, :*, 1.0, true))
-                push!(folds, ESM._ScanFold(collect(off .+ (1:nl*len)), len, op, z, incl))
+            for (nl, op, z, incl) in (
+                    (5, :+, 0.0, true), (3, :max, -Inf, false),
+                    (6, :*, 1.0, true),
+                )
+                push!(folds, ESM._ScanFold(collect(off .+ (1:(nl * len))), len, op, z, incl))
                 off += nl * len
             end
-            base = [1.0 + 1e-3 * sin(0.37k) for k in 1:off]
+            base = [1.0 + 1.0e-3 * sin(0.37k) for k in 1:off]
             dser = copy(base); ESM._apply_scan_folds!(dser, folds)
             sec = ESM._make_scan_section(folds)
             dthr = copy(base); ESM._apply_scan_folds!(dthr, sec)
@@ -434,10 +491,11 @@ else
         end
 
         @testset "chunk instances reproduce the serial du ($(name))" for (name, model, ics, wantrank) in (
-                    ("1-D contig+box", _cgt_1d_model(37), _cgt_1d_ics(37), 1),
-                    ("2-D boxes", _cgt_2d_model(13), _cgt_2d_ics(13), 2),
-                    ("3-D boxes", _cgt_3d_model(9, 8, 7), _cgt_3d_ics(9, 8, 7), 3),
-                    ("4-D boxes", _cgt_4d_model(6, 5, 4, 5), _cgt_4d_ics(6, 5, 4, 5), 4))
+                ("1-D contig+box", _cgt_1d_model(37), _cgt_1d_ics(37), 1),
+                ("2-D boxes", _cgt_2d_model(13), _cgt_2d_ics(13), 2),
+                ("3-D boxes", _cgt_3d_model(9, 8, 7), _cgt_3d_ics(9, 8, 7), 3),
+                ("4-D boxes", _cgt_4d_model(6, 5, 4, 5), _cgt_4d_ics(6, 5, 4, 5), 4),
+            )
             # The fixture really carries a box of the advertised rank (else
             # this case would silently stop exercising that emission arm).
             @test wantrank in _cgt_ranks(model, ics)
@@ -451,7 +509,7 @@ else
             @test getfield(ks, :tcache).ncells >= length(u0)
             u = copy(u0)
             for (k, t) in ((2, 0.7), (3, 0.0))
-                u .= u0 .* (1.0 .+ 1e-3 .* sin.(k .* (1:length(u0))))
+                u .= u0 .* (1.0 .+ 1.0e-3 .* sin.(k .* (1:length(u0))))
                 du1 = fill(0.0, length(u0))
                 cgf(du1, u, p, t, tabs, 1, 1)          # the serial entry
                 for nc in (2, 3, 5, 8, 64)
@@ -476,8 +534,8 @@ else
             f!, u0, p, _ = _cgt_serial(model, ics)
             ks = getfield(f!, :kernel_section)
             @test getfield(ks, :ntiles) > 1
-            fi!, ui, pi_, _ = _cgt_build(model, ics; compiler=:interpreter)
-            u = u0 .* (1.0 .+ 1e-3 .* sin.(1:length(u0)))
+            fi!, ui, pi_, _ = _cgt_build(model, ics; compiler = :interpreter)
+            u = u0 .* (1.0 .+ 1.0e-3 .* sin.(1:length(u0)))
             du1 = fill(0.0, length(u0))
             getfield(ks, :cgf)(du1, u, p, 0.4, getfield(ks, :cgtabs), 1, 1)
             @test _cgt_bitsame(_cgt_du(f!, u, p, 0.4), du1)
@@ -488,7 +546,7 @@ else
         @testset "overflow RGF chunk instances (budget 0)" begin
             model = _cgt_1d_model(41)
             ics = _cgt_1d_ics(41)
-            f!, u0, p, tally = _cgt_build(model, ics; ESS_CODEGEN_NODE_BUDGET="0")
+            f!, u0, p, tally = _cgt_build(model, ics; ESS_CODEGEN_NODE_BUDGET = "0")
             @test get(tally, :dual_codegen_kernel, 0) >= 1
             ks = getfield(f!, :kernel_section)
             dualf = getfield(ks, :dualf)
@@ -527,7 +585,7 @@ else
             env["ESS_CGT_CHILD"] = "1"
             env["JULIA_PROJECT"] = Base.active_project()
             cmd = setenv(`$(Base.julia_cmd()) --startup-file=no -t 4 $(@__FILE__)`, env)
-            proc = run(pipeline(ignorestatus(cmd); stdout=stdout, stderr=stderr))
+            proc = run(pipeline(ignorestatus(cmd); stdout = stdout, stderr = stderr))
             @test success(proc)
         end
     end

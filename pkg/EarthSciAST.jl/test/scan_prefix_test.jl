@@ -32,34 +32,46 @@ _bits(v::AbstractVector{Float64}) = reinterpret(UInt64, v)
 
 # D(c[i]) = ⊕_{j ⋚ i} body(j), with `u` a state so the RHS reads real values.
 # `u` is held fixed (D(u)=0) so the equation under test owns `c` alone.
-function _scan_model(n::Int; filt="<=", reduce="+", body=nothing)
-    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable),
-                "c" => ESM.ModelVariable(ESM.UnknownVariable))
+function _scan_model(n::Int; filt = "<=", reduce = "+", body = nothing)
+    vars = Dict(
+        "u" => ESM.ModelVariable(ESM.UnknownVariable),
+        "c" => ESM.ModelVariable(ESM.UnknownVariable)
+    )
     b = body === nothing ? _idx("u", _v("j")) : body
-    rhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i"], expr_body=b,
-        ranges=Dict("i" => [1, n], "j" => [1, n]), reduce=reduce,
-        filter=_op(filt, _v("j"), _v("i")))
-    ESM.Model(vars, [
-        ESM.Equation(_ao1(_Didx("c", _v("i")), "i", 1, n), rhs),
-        ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, n), _ao1(_n(0.0), "i", 1, n)),
-    ])
+    rhs = ESM.OpExpr(
+        "faq", ESM.ASTExpr[]; output_idx = Any["i"], expr_body = b,
+        ranges = Dict("i" => [1, n], "j" => [1, n]), reduce = reduce,
+        filter = _op(filt, _v("j"), _v("i"))
+    )
+    return ESM.Model(
+        vars, [
+            ESM.Equation(_ao1(_Didx("c", _v("i")), "i", 1, n), rhs),
+            ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, n), _ao1(_n(0.0), "i", 1, n)),
+        ]
+    )
 end
 
 # The STAGGERED shape: `c` lives on n+1 NODES, the terms on n CENTRES, so the
 # window `j < i` admits every centre below node `i`. `u` is sized to the term
 # axis, which is what makes the last node's term nonexistent — the case the
 # term build must not be asked to construct.
-function _scan_model_staggered(n::Int; filt="<", reduce="+")
-    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable),
-                "c" => ESM.ModelVariable(ESM.UnknownVariable))
-    rhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i"],
-        expr_body=_idx("u", _v("j")),
-        ranges=Dict("i" => [1, n + 1], "j" => [1, n]), reduce=reduce,
-        filter=_op(filt, _v("j"), _v("i")))
-    ESM.Model(vars, [
-        ESM.Equation(_ao1(_Didx("c", _v("i")), "i", 1, n + 1), rhs),
-        ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, n), _ao1(_n(0.0), "i", 1, n)),
-    ])
+function _scan_model_staggered(n::Int; filt = "<", reduce = "+")
+    vars = Dict(
+        "u" => ESM.ModelVariable(ESM.UnknownVariable),
+        "c" => ESM.ModelVariable(ESM.UnknownVariable)
+    )
+    rhs = ESM.OpExpr(
+        "faq", ESM.ASTExpr[]; output_idx = Any["i"],
+        expr_body = _idx("u", _v("j")),
+        ranges = Dict("i" => [1, n + 1], "j" => [1, n]), reduce = reduce,
+        filter = _op(filt, _v("j"), _v("i"))
+    )
+    return ESM.Model(
+        vars, [
+            ESM.Equation(_ao1(_Didx("c", _v("i")), "i", 1, n + 1), rhs),
+            ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, n), _ao1(_n(0.0), "i", 1, n)),
+        ]
+    )
 end
 
 # Build and evaluate one RHS at the catastrophic state vector.
@@ -68,13 +80,13 @@ end
 #   :ref    — `compiler=:interpreter`: no affine tier, no codegen tier and a
 #             prelude refilled in full on every call, all at once, which is the
 #             one reference the vocabulary offers
-function _scan_du(model; tier=:scan)
-    let compiler = tier === :ref ? :interpreter : :native
+function _scan_du(model; tier = :scan)
+    return let compiler = tier === :ref ? :interpreter : :native
         ESM._reset_cascade_tally!()
-        f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(model; compiler=compiler)
+        f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(model; compiler = compiler)
         u = Float64[_sc_val(k) for k in 1:length(u0)]
         du = (buf = zero(u0); f!(buf, u, p, 0.0); buf)
-        (du=du, vm=vm, diag=diag, tally=copy(ESM._CASCADE_TALLY))
+        (du = du, vm = vm, diag = diag, tally = copy(ESM._CASCADE_TALLY))
     end
 end
 
@@ -82,14 +94,14 @@ end
 
     @testset "forward scan ≡ per-cell reference, bitwise" begin
         for n in (1, 2, 3, 8, 33, 64), filt in ("<=", "<"),
-            red in ("+", "*", "max", "min")
-            m = _scan_model(n; filt=filt, reduce=red)
+                red in ("+", "*", "max", "min")
+            m = _scan_model(n; filt = filt, reduce = red)
             a = _scan_du(m)
             @test a.diag.n_scan_folds == 1            # the rewrite FIRED
             @test get(a.tally, :scan, 0) == 1
             # …and its term compiled into the fold's own pass (scan_fused.jl).
             @test get(a.tally, :scan_fused, 0) == 1
-            @test _bits(a.du) == _bits(_scan_du(m; tier=:ref).du)
+            @test _bits(a.du) == _bits(_scan_du(m; tier = :ref).du)
         end
     end
 
@@ -98,33 +110,46 @@ end
         # whole by whichever thread runs it.
         n, nk = 9, 5
         for filt in ("<=", "<"), red in ("+", "*", "max", "min")
-            vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable),
-                        "c" => ESM.ModelVariable(ESM.UnknownVariable))
-            rhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i", "k"],
-                expr_body=_op("*", _idx("u", _v("j"), _v("k")), _n(0.75)),
-                ranges=Dict("i" => [1, n], "j" => [1, n], "k" => [1, nk]),
-                reduce=red, filter=_op(filt, _v("j"), _v("i")))
-            zero2 = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i", "k"],
-                expr_body=_n(0.0), ranges=Dict("i" => [1, n], "k" => [1, nk]))
-            lhs(v) = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i", "k"],
-                expr_body=_Didx(v, _v("i"), _v("k")),
-                ranges=Dict("i" => [1, n], "k" => [1, nk]))
-            m = ESM.Model(vars, [ESM.Equation(lhs("c"), rhs),
-                                 ESM.Equation(lhs("u"), zero2)])
+            vars = Dict(
+                "u" => ESM.ModelVariable(ESM.UnknownVariable),
+                "c" => ESM.ModelVariable(ESM.UnknownVariable)
+            )
+            rhs = ESM.OpExpr(
+                "faq", ESM.ASTExpr[]; output_idx = Any["i", "k"],
+                expr_body = _op("*", _idx("u", _v("j"), _v("k")), _n(0.75)),
+                ranges = Dict("i" => [1, n], "j" => [1, n], "k" => [1, nk]),
+                reduce = red, filter = _op(filt, _v("j"), _v("i"))
+            )
+            zero2 = ESM.OpExpr(
+                "faq", ESM.ASTExpr[]; output_idx = Any["i", "k"],
+                expr_body = _n(0.0), ranges = Dict("i" => [1, n], "k" => [1, nk])
+            )
+            lhs(v) = ESM.OpExpr(
+                "faq", ESM.ASTExpr[]; output_idx = Any["i", "k"],
+                expr_body = _Didx(v, _v("i"), _v("k")),
+                ranges = Dict("i" => [1, n], "k" => [1, nk])
+            )
+            m = ESM.Model(
+                vars, [
+                    ESM.Equation(lhs("c"), rhs),
+                    ESM.Equation(lhs("u"), zero2),
+                ]
+            )
             a = _scan_du(m)
             @test a.diag.n_scan_folds == 1
             @test get(a.tally, :scan_fused, 0) == 1
-            @test _bits(a.du) == _bits(_scan_du(m; tier=:ref).du)
+            @test _bits(a.du) == _bits(_scan_du(m; tier = :ref).du)
         end
         # Dual numbers take the same generated fold: the Jacobian column is the
         # reference build's, bit for bit.
-        m = _scan_model(16; body=_op("*", _idx("u", _v("j")), _idx("u", _v("j"))))
-        fn, u0n, pn, _ = ESM._build_evaluator_impl(m; compiler=:native)
-        fi, u0i, pi_, _ = ESM._build_evaluator_impl(m; compiler=:interpreter)
+        m = _scan_model(16; body = _op("*", _idx("u", _v("j")), _idx("u", _v("j"))))
+        fn, u0n, pn, _ = ESM._build_evaluator_impl(m; compiler = :native)
+        fi, u0i, pi_, _ = ESM._build_evaluator_impl(m; compiler = :interpreter)
         u = Float64[_sc_val(k) for k in 1:length(u0n)]
         seed = Float64[isodd(k) ? 1.0 : -0.5 for k in 1:length(u)]
         jd(f, p) = ForwardDiff.derivative(
-            s -> (du = zeros(typeof(s), length(u)); f(du, u .+ s .* seed, p, 0.0); du), 0.0)
+            s -> (du = zeros(typeof(s), length(u)); f(du, u .+ s .* seed, p, 0.0); du), 0.0
+        )
         @test _bits(jd(fn, pn)) == _bits(jd(fi, pi_))
     end
 
@@ -132,11 +157,13 @@ end
         # u[i] = i via an explicit IC, so the prefix sums are the triangular
         # numbers and the strict variant is shifted by one.
         n = 6
-        for (filt, expected) in (("<=", cumsum(1.0:n)),
-                                 ("<",  [0.0; cumsum(1.0:n-1)]))
-            m = _scan_model(n; filt=filt)
+        for (filt, expected) in (
+                ("<=", cumsum(1.0:n)),
+                ("<", [0.0; cumsum(1.0:(n - 1))]),
+            )
+            m = _scan_model(n; filt = filt)
             ics = Dict("u[$i]" => Float64(i) for i in 1:n)
-            f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(m; initial_conditions=ics)
+            f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(m; initial_conditions = ics)
             du = zero(u0); f!(du, u0, p, 0.0)
             @test diag.n_scan_folds == 1
             @test [du[vm["c[$i]"]] for i in 1:n] == collect(expected)
@@ -148,25 +175,31 @@ end
         # Under `max` that is -Inf, which is exactly the case a hardcoded 0.0
         # identity gets wrong (and did, in the Python port, until this pattern
         # was fixtured).
-        m = _scan_model(4; filt="<", reduce="max")
+        m = _scan_model(4; filt = "<", reduce = "max")
         a = _scan_du(m)
         @test a.diag.n_scan_folds == 1
         @test a.du[a.vm["c[1]"]] == -Inf
-        @test _bits(a.du) == _bits(_scan_du(m; tier=:ref).du)
+        @test _bits(a.du) == _bits(_scan_du(m; tier = :ref).du)
     end
 
     @testset "mirrored spelling `i >= j` is the same forward scan" begin
         n = 16
         m = _scan_model(n)                                   # j <= i
-        vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable),
-                    "c" => ESM.ModelVariable(ESM.UnknownVariable))
-        rhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i"],
-            expr_body=_idx("u", _v("j")), ranges=Dict("i" => [1, n], "j" => [1, n]),
-            reduce="+", filter=_op(">=", _v("i"), _v("j")))   # i >= j
-        mirror = ESM.Model(vars, [
-            ESM.Equation(_ao1(_Didx("c", _v("i")), "i", 1, n), rhs),
-            ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, n), _ao1(_n(0.0), "i", 1, n)),
-        ])
+        vars = Dict(
+            "u" => ESM.ModelVariable(ESM.UnknownVariable),
+            "c" => ESM.ModelVariable(ESM.UnknownVariable)
+        )
+        rhs = ESM.OpExpr(
+            "faq", ESM.ASTExpr[]; output_idx = Any["i"],
+            expr_body = _idx("u", _v("j")), ranges = Dict("i" => [1, n], "j" => [1, n]),
+            reduce = "+", filter = _op(">=", _v("i"), _v("j"))
+        )   # i >= j
+        mirror = ESM.Model(
+            vars, [
+                ESM.Equation(_ao1(_Didx("c", _v("i")), "i", 1, n), rhs),
+                ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, n), _ao1(_n(0.0), "i", 1, n)),
+            ]
+        )
         b = _scan_du(mirror)
         @test b.diag.n_scan_folds == 1
         @test _bits(_scan_du(m).du) == _bits(b.du)
@@ -177,27 +210,33 @@ end
         # `((0̄ ⊕ u_N) ⊕ u_{N-1}) ⊕ … ⊕ u_i`, so one accumulator walking down
         # the axis computes every cell, and the interpreter folds the same way.
         for filt in (">=", ">"), red in ("+", "*", "max", "min"), n in (1, 2, 8, 33)
-            m = _scan_model(n; filt=filt, reduce=red)
+            m = _scan_model(n; filt = filt, reduce = red)
             a = _scan_du(m)
             @test a.diag.n_scan_folds == 1
             @test get(a.tally, :scan, 0) == 1
-            ref = _scan_du(m; tier=:ref)
+            ref = _scan_du(m; tier = :ref)
             @test _bits(a.du) == _bits(ref.du)
             if red == "+"
                 # The descending left fold, by hand.
                 u = Float64[_sc_val(k) for k in 1:(2n)]
                 uv = [u[a.vm["u[$j]"]] for j in 1:n]
-                want = [foldl(+, (uv[j] for j in n:-1:1 if (filt == ">=" ? j >= i : j > i));
-                              init=0.0) for i in 1:n]
+                want = [
+                    foldl(
+                        +, (uv[j] for j in n:-1:1 if (filt == ">=" ? j >= i : j > i));
+                        init = 0.0
+                    ) for i in 1:n
+                ]
                 @test _bits([ref.du[a.vm["c[$i]"]] for i in 1:n]) == _bits(want)
             end
         end
         # The mirrored spelling `i <= j` is the same reverse scan.
-        m = _scan_model(8; filt=">=")
-        mirror = _scan_model(8; filt=">=")
+        m = _scan_model(8; filt = ">=")
+        mirror = _scan_model(8; filt = ">=")
         f = mirror.equations[1].rhs
-        mirror.equations[1] = ESM.Equation(mirror.equations[1].lhs,
-            ESM.reconstruct(f; filter=_op("<=", _v("i"), _v("j"))))
+        mirror.equations[1] = ESM.Equation(
+            mirror.equations[1].lhs,
+            ESM.reconstruct(f; filter = _op("<=", _v("i"), _v("j")))
+        )
         @test _bits(_scan_du(mirror).du) == _bits(_scan_du(m).du)
         @test _scan_du(mirror).diag.n_scan_folds == 1
     end
@@ -205,19 +244,19 @@ end
     @testset "body referencing the scanned symbol declines" begin
         # term = u[j] * u[i] depends on the output cell, so cells share nothing.
         # This is the condition that makes the rewrite sound rather than fast.
-        m = _scan_model(8; body=_op("*", _idx("u", _v("j")), _idx("u", _v("i"))))
+        m = _scan_model(8; body = _op("*", _idx("u", _v("j")), _idx("u", _v("i"))))
         a = _scan_du(m)
         @test a.diag.n_scan_folds == 0
-        @test _bits(a.du) == _bits(_scan_du(m; tier=:ref).du)
+        @test _bits(a.du) == _bits(_scan_du(m; tier = :ref).du)
     end
 
     @testset "measure-weighted term (a cumulative integral)" begin
         # u[j]*dx[j] — a body with real arithmetic in it, not a bare gather.
         n = 12
-        m = _scan_model(n; body=_op("*", _idx("u", _v("j")), _n(0.25)))
+        m = _scan_model(n; body = _op("*", _idx("u", _v("j")), _n(0.25)))
         a = _scan_du(m)
         @test a.diag.n_scan_folds == 1
-        @test _bits(a.du) == _bits(_scan_du(m; tier=:ref).du)
+        @test _bits(a.du) == _bits(_scan_du(m; tier = :ref).du)
     end
 
     @testset "staggered scan: output on the NODES, terms on the CENTRES" begin
@@ -227,13 +266,13 @@ end
         # Same prefix recurrence as the same-range strict scan, run one step
         # further, so it must take the O(N) path and stay bitwise exact.
         for n in (1, 2, 3, 8, 33), red in ("+", "*", "max", "min")
-            m = _scan_model_staggered(n; reduce=red)
+            m = _scan_model_staggered(n; reduce = red)
             a = _scan_du(m)
             @test a.diag.n_scan_folds == 1            # the rewrite FIRED
             @test get(a.tally, :scan, 0) == 1
             # The last node has no term, so the two-pass form runs it.
             @test get(a.tally, :scan_fused, 0) == 0
-            @test _bits(a.du) == _bits(_scan_du(m; tier=:ref).du)
+            @test _bits(a.du) == _bits(_scan_du(m; tier = :ref).du)
         end
     end
 
@@ -244,7 +283,7 @@ end
         n = 6
         m = _scan_model_staggered(n)
         ics = Dict("u[$i]" => Float64(i) for i in 1:n)
-        f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(m; initial_conditions=ics)
+        f!, u0, p, _t, vm, diag = ESM._build_evaluator_impl(m; initial_conditions = ics)
         du = zero(u0); f!(du, u0, p, 0.0)
         @test diag.n_scan_folds == 1
         @test [du[vm["c[$i]"]] for i in 1:(n + 1)] == [0.0; cumsum(1.0:n)]
@@ -253,37 +292,45 @@ end
     @testset "staggered empty window keeps the semiring identity" begin
         # Node 1 reduces over the empty set even though the axis is longer than
         # the term axis; under `max` that is -Inf, not 0.0.
-        m = _scan_model_staggered(4; reduce="max")
+        m = _scan_model_staggered(4; reduce = "max")
         a = _scan_du(m)
         @test a.diag.n_scan_folds == 1
         @test a.du[a.vm["c[1]"]] == -Inf
-        @test _bits(a.du) == _bits(_scan_du(m; tier=:ref).du)
+        @test _bits(a.du) == _bits(_scan_du(m; tier = :ref).du)
     end
 
     @testset "staggered declines that must stay on the triangular path" begin
         # INCLUSIVE `j <= i` over a longer output axis would need a term at the
         # last node, which does not exist — decline, and stay correct.
-        m = _scan_model_staggered(8; filt="<=")
+        m = _scan_model_staggered(8; filt = "<=")
         a = _scan_du(m)
         @test a.diag.n_scan_folds == 0
-        @test _bits(a.du) == _bits(_scan_du(m; tier=:ref).du)
+        @test _bits(a.du) == _bits(_scan_du(m; tier = :ref).du)
         # Terms offset from the FRONT (`j` over 2..n+1) are not a prefix
         # recurrence on this axis at all.
         n = 8
-        vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable),
-                    "c" => ESM.ModelVariable(ESM.UnknownVariable))
-        rhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i"],
-            expr_body=_idx("u", _v("j")),
-            ranges=Dict("i" => [1, n + 1], "j" => [2, n + 1]), reduce="+",
-            filter=_op("<", _v("j"), _v("i")))
-        front = ESM.Model(vars, [
-            ESM.Equation(_ao1(_Didx("c", _v("i")), "i", 1, n + 1), rhs),
-            ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, n + 1),
-                         _ao1(_n(0.0), "i", 1, n + 1)),
-        ])
+        vars = Dict(
+            "u" => ESM.ModelVariable(ESM.UnknownVariable),
+            "c" => ESM.ModelVariable(ESM.UnknownVariable)
+        )
+        rhs = ESM.OpExpr(
+            "faq", ESM.ASTExpr[]; output_idx = Any["i"],
+            expr_body = _idx("u", _v("j")),
+            ranges = Dict("i" => [1, n + 1], "j" => [2, n + 1]), reduce = "+",
+            filter = _op("<", _v("j"), _v("i"))
+        )
+        front = ESM.Model(
+            vars, [
+                ESM.Equation(_ao1(_Didx("c", _v("i")), "i", 1, n + 1), rhs),
+                ESM.Equation(
+                    _ao1(_Didx("u", _v("i")), "i", 1, n + 1),
+                    _ao1(_n(0.0), "i", 1, n + 1)
+                ),
+            ]
+        )
         b = _scan_du(front)
         @test b.diag.n_scan_folds == 0
-        @test _bits(b.du) == _bits(_scan_du(front; tier=:ref).du)
+        @test _bits(b.du) == _bits(_scan_du(front; tier = :ref).du)
     end
 
     @testset "identity gather over a CONTRACTING producer unwraps" begin
@@ -298,13 +345,17 @@ end
         # actually contracts — originally a prefix-scan-only exception, widened
         # once `_derive_lane_repl` stopped folding const lanes by sampled values.
         n = 8
-        ranges_d = Dict{String,Any}("_mo0" => Any[1, n + 1])
-        mkagg(; filt="<", jrange=Any[1, n], out=["gke"], red="+") =
-            ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any[out...],
-                expr_body=_idx("u", _v("gk")),
-                ranges=Dict{String,Any}("gke" => Any[1, n + 1], "gk" => jrange),
-                reduce=red, filter=(filt === nothing ? nothing :
-                                    _op(filt, _v("gk"), _v("gke"))))
+        ranges_d = Dict{String, Any}("_mo0" => Any[1, n + 1])
+        mkagg(; filt = "<", jrange = Any[1, n], out = ["gke"], red = "+") =
+            ESM.OpExpr(
+            "faq", ESM.ASTExpr[]; output_idx = Any[out...],
+            expr_body = _idx("u", _v("gk")),
+            ranges = Dict{String, Any}("gke" => Any[1, n + 1], "gk" => jrange),
+            reduce = red, filter = (
+                filt === nothing ? nothing :
+                    _op(filt, _v("gk"), _v("gke"))
+            )
+        )
         gather(a) = _op("index", a, _v("_mo0"))
 
         unwrapped(a) = begin
@@ -319,37 +370,41 @@ end
         # An UNFILTERED reduction — a plain column integral, ReSEACT's
         # `divh_col` / `dp_col`. Not a scan, but it contracts, so it unwraps and
         # reaches `_unrolled_contraction_body` instead of the per-cell tier.
-        @test unwrapped(mkagg(; filt=nothing))
+        @test unwrapped(mkagg(; filt = nothing))
         # A REVERSE scan is not a FORWARD scan, but it is still a constant-bound
         # contraction: the guarded fold owns it.
-        @test unwrapped(mkagg(; filt=">"))
+        @test unwrapped(mkagg(; filt = ">"))
         # Likewise a neither-same-nor-staggered contracted range.
-        @test unwrapped(mkagg(; jrange=Any[1, n - 3]))
+        @test unwrapped(mkagg(; jrange = Any[1, n - 3]))
 
         # ---- what still keeps the gather form ----
         # NO contraction: the bare form lowers identically, so there is nothing
         # to unlock and the fill synthesizer's default governs.
-        nocon = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["gke"],
-            expr_body=_idx("u", _v("gke")),
-            ranges=Dict{String,Any}("gke" => Any[1, n + 1]), reduce="+")
+        nocon = ESM.OpExpr(
+            "faq", ESM.ASTExpr[]; output_idx = Any["gke"],
+            expr_body = _idx("u", _v("gke")),
+            ranges = Dict{String, Any}("gke" => Any[1, n + 1]), reduce = "+"
+        )
         let g = gather(nocon)
             @test ESM._unwrap_identity_gather(g, ["_mo0"], ranges_d) === g
         end
         # …unless it carries a FILTER: the affine tier does not model one inside
         # a gather, and the bare form carries it as the body's guard.
-        let nf = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["gke"],
-                expr_body=_idx("u", _v("gke")), filter=_op(">=", _v("gke"), _i(2)),
-                ranges=Dict{String,Any}("gke" => Any[1, n + 1]), reduce="+")
+        let nf = ESM.OpExpr(
+                "faq", ESM.ASTExpr[]; output_idx = Any["gke"],
+                expr_body = _idx("u", _v("gke")), filter = _op(">=", _v("gke"), _i(2)),
+                ranges = Dict{String, Any}("gke" => Any[1, n + 1]), reduce = "+"
+            )
             got = ESM._unwrap_identity_gather(gather(nf), ["_mo0"], ranges_d)
             @test got isa ESM.OpExpr && ESM._is_faq_op(got.op) &&
-                  ESM._output_idx_strings(got) == ["_mo0"]
+                ESM._output_idx_strings(got) == ["_mo0"]
         end
         # A VARIABLE-VALENCE contracted bound unwraps too: the whole-array
         # contraction nest takes the bare producer with each cell's admitted
         # indices as a table, where the gather form hides the contraction from
         # it and leaves the per-cell build. Both forms fold from the 0̄ seed
         # (esm-spec §4.3.1), so they agree bit for bit.
-        varb = mkagg(; filt=nothing, jrange=Any[1, "nedges"])
+        varb = mkagg(; filt = nothing, jrange = Any[1, "nedges"])
         @test unwrapped(varb)
         # A non-identity gather (a real reindex) is left alone.
         reidx = _op("index", mkagg(), _op("+", _v("_mo0"), _n(1)))
@@ -362,8 +417,14 @@ end
     @testset "a model with no prefix reduction carries no folds" begin
         n = 8
         vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
-        plain = ESM.Model(vars, [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, n),
-                                              _ao1(_op("-", _idx("u", _v("i"))), "i", 1, n))])
+        plain = ESM.Model(
+            vars, [
+                ESM.Equation(
+                    _ao1(_Didx("u", _v("i")), "i", 1, n),
+                    _ao1(_op("-", _idx("u", _v("i"))), "i", 1, n)
+                ),
+            ]
+        )
         _f, _u0, _p, _t, _vm, diag = ESM._build_evaluator_impl(plain)
         @test diag.n_scan_folds == 0
     end
@@ -375,24 +436,26 @@ end
 # nothing else reads it. `extra` adds a second reader of `w` (an observed `v`
 # feeding a state `z`); `other` makes the state equation read a second observed
 # as well, which a consumer may not.
-function _obs_scan_doc(n; filt="<=", reduce="+", extra=false, other=false)
+function _obs_scan_doc(n; filt = "<=", reduce = "+", extra = false, other = false)
     ix(v, i) = "{\"op\":\"index\",\"args\":[\"$v\",\"$i\"]}"
-    faq(body; j=false, flt=nothing, red=nothing) =
+    faq(body; j = false, flt = nothing, red = nothing) =
         "{\"op\":\"faq\",\"args\":[],\"output_idx\":[\"i\"],\"ranges\":{\"i\":{\"from\":\"x\"}" *
         (j ? ",\"j\":{\"from\":\"x\"}" : "") * "}" *
         (red === nothing ? "" : ",\"reduce\":\"$red\"") *
         (flt === nothing ? "" : ",\"filter\":{\"op\":\"$flt\",\"args\":[\"j\",\"i\"]}") *
         ",\"expr\":$body}"
     dlhs(v) = "{\"op\":\"faq\",\"args\":[],\"output_idx\":[\"i\"],\"ranges\":{\"i\":{\"from\":\"x\"}}," *
-              "\"expr\":{\"op\":\"D\",\"args\":[$(ix(v, "i"))],\"wrt\":\"t\"}}"
+        "\"expr\":{\"op\":\"D\",\"args\":[$(ix(v, "i"))],\"wrt\":\"t\"}}"
     var(v) = "\"$v\":{\"type\":\"unknown\",\"units\":\"1\",\"shape\":[\"x\"],\"default\":1.0}"
     vars = [var("u"), var("w")]
     term = "{\"op\":\"*\",\"args\":[$(ix("u", "j")),$(ix("u", "j"))]}"
     cons = "{\"op\":\"*\",\"args\":[-0.5,$(ix("w", "i"))]}"
     other && (cons = "{\"op\":\"+\",\"args\":[$cons,$(ix("s", "i"))]}")
     cons = "{\"op\":\"+\",\"args\":[$cons,$(ix("u", "i"))]}"
-    eqs = ["{\"lhs\":\"w\",\"rhs\":$(faq(term; j=true, flt=filt, red=reduce))}",
-           "{\"lhs\":$(dlhs("u")),\"rhs\":$(faq(cons))}"]
+    eqs = [
+        "{\"lhs\":\"w\",\"rhs\":$(faq(term; j = true, flt = filt, red = reduce))}",
+        "{\"lhs\":$(dlhs("u")),\"rhs\":$(faq(cons))}",
+    ]
     if extra
         append!(vars, [var("v"), var("z")])
         push!(eqs, "{\"lhs\":\"v\",\"rhs\":$(faq("{\"op\":\"*\",\"args\":[2.0,$(ix("w", "i"))]}"))}")
@@ -403,32 +466,33 @@ function _obs_scan_doc(n; filt="<=", reduce="+", extra=false, other=false)
         push!(eqs, "{\"lhs\":\"s\",\"rhs\":$(faq("{\"op\":\"sin\",\"args\":[$(ix("u", "i"))]}"))}")
     end
     return "{\"esm\":\"1.1.0\",\"metadata\":{\"name\":\"obs_scan\",\"authors\":[\"test\"]}," *
-           "\"index_sets\":{\"x\":{\"kind\":\"interval\",\"size\":$n}}," *
-           "\"models\":{\"Column\":{\"variables\":{$(join(vars, ","))}," *
-           "\"equations\":[$(join(eqs, ","))]}}}"
+        "\"index_sets\":{\"x\":{\"kind\":\"interval\",\"size\":$n}}," *
+        "\"models\":{\"Column\":{\"variables\":{$(join(vars, ","))}," *
+        "\"equations\":[$(join(eqs, ","))]}}}"
 end
 
-function _obs_scan_eval(json; compiler=:native)
+function _obs_scan_eval(json; compiler = :native)
     path = joinpath(mktempdir(), "obs_scan.esm")
     write(path, json)
     ESM._reset_cascade_tally!()
-    prob = ESM.esm_problem(path, (0.0, 1.0); compiler=compiler)
+    prob = ESM.esm_problem(path, (0.0, 1.0); compiler = compiler)
     tally = copy(ESM._CASCADE_TALLY)
     u = Float64[_sc_val(k) for k in 1:length(prob.u0)]
     du = zero(u)
     prob.f!(du, u, prob.p, 0.0)
     seed = Float64[isodd(k) ? 1.0 : -0.5 for k in 1:length(u)]
     jd = ForwardDiff.derivative(
-        s -> (d = zeros(typeof(s), length(u)); prob.f!(d, u .+ s .* seed, prob.p, 0.0); d), 0.0)
+        s -> (d = zeros(typeof(s), length(u)); prob.f!(d, u .+ s .* seed, prob.p, 0.0); d), 0.0
+    )
     allocs = (prob.f!(du, u, prob.p, 0.0); @allocated prob.f!(du, u, prob.p, 0.0))
-    return (du=du, jd=jd, tally=tally, allocs=allocs)
+    return (du = du, jd = jd, tally = tally, allocs = allocs)
 end
 
 @testset "a prefix-scanned observed's state consumer runs inside the fold" begin
     for filt in ("<=", "<"), red in ("+", "max"), n in (1, 7, 40)
-        json = _obs_scan_doc(n; filt=filt, reduce=red)
+        json = _obs_scan_doc(n; filt = filt, reduce = red)
         a = _obs_scan_eval(json)
-        r = _obs_scan_eval(json; compiler=:interpreter)
+        r = _obs_scan_eval(json; compiler = :interpreter)
         @test get(a.tally, :scan_fused_consumer, 0) == 1
         @test get(a.tally, :scan_fused_store_dropped, 0) == 1
         @test _bits(a.du) == _bits(r.du)
@@ -436,15 +500,15 @@ end
         VERSION >= v"1.12" && @test a.allocs == 0
     end
     # A second reader of the observed keeps its store.
-    json = _obs_scan_doc(9; extra=true)
+    json = _obs_scan_doc(9; extra = true)
     a = _obs_scan_eval(json)
     @test get(a.tally, :scan_fused_consumer, 0) == 1
     @test get(a.tally, :scan_fused_store_dropped, 0) == 0
-    @test _bits(a.du) == _bits(_obs_scan_eval(json; compiler=:interpreter).du)
+    @test _bits(a.du) == _bits(_obs_scan_eval(json; compiler = :interpreter).du)
     # A state equation that also reads another observed is not a consumer.
-    json = _obs_scan_doc(9; other=true)
+    json = _obs_scan_doc(9; other = true)
     a = _obs_scan_eval(json)
     @test get(a.tally, :scan_fused_consumer, 0) == 0
     @test get(a.tally, :scan_fused, 0) == 1
-    @test _bits(a.du) == _bits(_obs_scan_eval(json; compiler=:interpreter).du)
+    @test _bits(a.du) == _bits(_obs_scan_eval(json; compiler = :interpreter).du)
 end

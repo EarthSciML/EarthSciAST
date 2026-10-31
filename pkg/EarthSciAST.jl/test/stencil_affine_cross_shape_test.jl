@@ -32,22 +32,36 @@ const ESM_CS = EarthSciAST
 # `a[j]` read from the (i,j) loop is the cross-shape gather: slot(a[j]) is
 # affine in `j` alone while the output slot moves with both `i` and `j`.
 function _cs_model(N)
-    vars = Dict{String,ESM_CS.ModelVariable}(
+    vars = Dict{String, ESM_CS.ModelVariable}(
         "a" => ESM_CS.ModelVariable(ESM_CS.UnknownVariable),
-        "u" => ESM_CS.ModelVariable(ESM_CS.UnknownVariable))
-    ao2(body, lhs) = ESM_CS.OpExpr("faq", ESM_CS.ASTExpr[];
+        "u" => ESM_CS.ModelVariable(ESM_CS.UnknownVariable)
+    )
+    ao2(body, lhs) = ESM_CS.OpExpr(
+        "faq", ESM_CS.ASTExpr[];
         output_idx = Any["i", "j"], expr_body = body,
-        ranges = Dict("i" => [1, N], "j" => [1, N]))
-    ESM_CS.Model(vars, [
-        ESM_CS.Equation(_ao1(_Didx("a", _v("j")), "j", 1, N),
-                        _ao1(_n(0.0), "j", 1, N)),
-        ESM_CS.Equation(ao2(_Didx("u", _v("i"), _v("j")), nothing),
-                        ao2(_op("*", _idx("a", _v("j")),
-                                     _idx("u", _v("i"), _v("j"))), nothing))])
+        ranges = Dict("i" => [1, N], "j" => [1, N])
+    )
+    return ESM_CS.Model(
+        vars, [
+            ESM_CS.Equation(
+                _ao1(_Didx("a", _v("j")), "j", 1, N),
+                _ao1(_n(0.0), "j", 1, N)
+            ),
+            ESM_CS.Equation(
+                ao2(_Didx("u", _v("i"), _v("j")), nothing),
+                ao2(
+                    _op(
+                        "*", _idx("a", _v("j")),
+                        _idx("u", _v("i"), _v("j"))
+                    ), nothing
+                )
+            ),
+        ]
+    )
 end
 
 function _cs_build(N; compiler::Symbol = :native)
-    ics = Dict{String,Float64}()
+    ics = Dict{String, Float64}()
     for j in 1:N
         ics["a[$j]"] = 0.5 + 0.1j
         for i in 1:N
@@ -55,21 +69,29 @@ function _cs_build(N; compiler::Symbol = :native)
         end
     end
     ESM_CS._reset_cascade_tally!()
-    f, u0, p, _t, vm, diag = ESM_CS._build_evaluator_impl(_cs_model(N);
-        initial_conditions = ics, compiler = compiler)
+    f, u0, p, _t, vm, diag = ESM_CS._build_evaluator_impl(
+        _cs_model(N);
+        initial_conditions = ics, compiler = compiler
+    )
     du = zero(u0); f(du, u0, p, 0.0)
     ks = getfield(getfield(f, :kernel_section), :kernels)
-    (u0 = u0, du = du, diag = diag, kernels = ks,
-     tally = copy(ESM_CS._CASCADE_TALLY),
-     n_kernels = length(ks),
-     conn_entries = sum(sum(length(d.conn) for d in K.acc; init = 0)
-                        for K in ks; init = 0))
+    return (
+        u0 = u0, du = du, diag = diag, kernels = ks,
+        tally = copy(ESM_CS._CASCADE_TALLY),
+        n_kernels = length(ks),
+        conn_entries = sum(
+            sum(length(d.conn) for d in K.acc; init = 0)
+                for K in ks; init = 0
+        ),
+    )
 end
 
 # `kernel_section.kernels` is complete only when the primary emission declined
 # everything, which a zero node budget — a retained tuning threshold — forces
 # (the oop_merge/xcse idiom used by grid_invariance_test.jl).
-_cs_run(N) = withenv("ESS_CODEGEN_NODE_BUDGET" => "0") do; _cs_build(N); end
+_cs_run(N) = withenv("ESS_CODEGEN_NODE_BUDGET" => "0") do;
+    _cs_build(N)
+end
 _cs_run_ref(N) = _cs_build(N; compiler = :interpreter)
 
 @testset "cross-shape state gather is grid-independent" begin
@@ -98,7 +120,7 @@ _cs_run_ref(N) = _cs_build(N; compiler = :interpreter)
     @testset "RHS is bit-identical to the per-cell reference" begin
         for N in (N1, N2)
             post = _cs_run(N)
-            ref  = _cs_run_ref(N)
+            ref = _cs_run_ref(N)
             @test post.du == ref.du
             @test all(isfinite, post.du)
         end
@@ -106,8 +128,10 @@ _cs_run_ref(N) = _cs_build(N; compiler = :interpreter)
 
     @testset "the values are right" begin
         # du[u[i,j]] = a[j]·u[i,j]; du[a[j]] = 0
-        vm = ESM_CS._build_evaluator_impl(_cs_model(N1);
-                initial_conditions = Dict("a[1]" => 0.0))[5]
+        vm = ESM_CS._build_evaluator_impl(
+            _cs_model(N1);
+            initial_conditions = Dict("a[1]" => 0.0)
+        )[5]
         for j in 1:N1, i in 1:N1
             aj = 0.5 + 0.1j
             uij = sin(0.3i) + 0.2j
@@ -139,27 +163,41 @@ end
 @testset "cross-shape state box is not licensed by corner agreement" begin
     N, i0 = 40, 20
     perm = collect(1:N); perm[i0] = i0 + 1        # identity but for one swap
-    vars = Dict{String,ESM_CS.ModelVariable}(
+    vars = Dict{String, ESM_CS.ModelVariable}(
         "w" => ESM_CS.ModelVariable(ESM_CS.UnknownVariable),
-        "u" => ESM_CS.ModelVariable(ESM_CS.UnknownVariable))
-    ao2(body) = ESM_CS.OpExpr("faq", ESM_CS.ASTExpr[];
+        "u" => ESM_CS.ModelVariable(ESM_CS.UnknownVariable)
+    )
+    ao2(body) = ESM_CS.OpExpr(
+        "faq", ESM_CS.ASTExpr[];
         output_idx = Any["i", "j"], expr_body = body,
-        ranges = Dict("i" => [1, N], "j" => [1, N]))
-    model = ESM_CS.Model(vars, [
-        ESM_CS.Equation(_ao1(_Didx("w", _v("i")), "i", 1, N),
-                        _ao1(_n(0.0), "i", 1, N)),
-        ESM_CS.Equation(ao2(_Didx("u", _v("i"), _v("j"))),
-                        ao2(_idx("w", _idx("conn", _v("i")))))])
-    ics = Dict{String,Float64}()
+        ranges = Dict("i" => [1, N], "j" => [1, N])
+    )
+    model = ESM_CS.Model(
+        vars, [
+            ESM_CS.Equation(
+                _ao1(_Didx("w", _v("i")), "i", 1, N),
+                _ao1(_n(0.0), "i", 1, N)
+            ),
+            ESM_CS.Equation(
+                ao2(_Didx("u", _v("i"), _v("j"))),
+                ao2(_idx("w", _idx("conn", _v("i"))))
+            ),
+        ]
+    )
+    ics = Dict{String, Float64}()
     for k in 1:N
         ics["w[$k]"] = 10.0k
-        for j in 1:N; ics["u[$k,$j]"] = 0.0; end
+        for j in 1:N
+            ics["u[$k,$j]"] = 0.0
+        end
     end
     ca = Dict("conn" => Float64.(perm))
 
     function ev(compiler = :native)
-        f, u0, p, _t, vm, _d = ESM_CS._build_evaluator_impl(model;
-            initial_conditions = ics, const_arrays = ca, compiler = compiler)
+        f, u0, p, _t, vm, _d = ESM_CS._build_evaluator_impl(
+            model;
+            initial_conditions = ics, const_arrays = ca, compiler = compiler
+        )
         du = fill(NaN, length(u0)); f(du, u0, p, 0.0)
         return (du = du, vm = vm, u0 = u0)
     end
@@ -181,12 +219,14 @@ end
 # an `index(conn, i)` subscript that is the identity at every corner but swaps
 # one interior cell has `Δ = 0` at every corner and a different slot inside.
 @testset "same-shape state gather is not licensed by corner agreement" begin
-    function check(model, ics, ca, cells; pa = Dict{String,Any}())
+    function check(model, ics, ca, cells; pa = Dict{String, Any}())
         function ev(compiler = :native)
-            f, u0, p, _t, vm, _d = ESM_CS._build_evaluator_impl(model;
+            f, u0, p, _t, vm, _d = ESM_CS._build_evaluator_impl(
+                model;
                 initial_conditions = ics, const_arrays = ca,
                 param_arrays = Dict(k => copy(v) for (k, v) in pa),
-                compiler = compiler)
+                compiler = compiler
+            )
             du = fill(NaN, length(u0)); f(du, u0, p, 0.0)
             return (du = du, vm = vm)
         end
@@ -197,44 +237,66 @@ end
             @test got.du[got.vm[c]] == ref.du[ref.vm[c]]
         end
     end
-    vars() = Dict{String,ESM_CS.ModelVariable}(
+    vars() = Dict{String, ESM_CS.ModelVariable}(
         "w" => ESM_CS.ModelVariable(ESM_CS.UnknownVariable),
-        "u" => ESM_CS.ModelVariable(ESM_CS.UnknownVariable))
+        "u" => ESM_CS.ModelVariable(ESM_CS.UnknownVariable)
+    )
 
     # 1-D: D(u[i]) = w[conn[i]]
     N, i0 = 40, 20
     perm = collect(1:N); perm[i0] = i0 + 1
-    m1 = ESM_CS.Model(vars(), [
-        ESM_CS.Equation(_ao1(_Didx("w", _v("i")), "i", 1, N), _ao1(_n(0.0), "i", 1, N)),
-        ESM_CS.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
-                        _ao1(_idx("w", _idx("conn", _v("i"))), "i", 1, N))])
-    ics1 = Dict{String,Float64}()
-    for k in 1:N; ics1["w[$k]"] = 10.0k; ics1["u[$k]"] = 0.0; end
-    check(m1, ics1, Dict("conn" => Float64.(perm)), ["u[$(i0-1)]", "u[$i0]", "u[$(i0+1)]"])
+    m1 = ESM_CS.Model(
+        vars(), [
+            ESM_CS.Equation(_ao1(_Didx("w", _v("i")), "i", 1, N), _ao1(_n(0.0), "i", 1, N)),
+            ESM_CS.Equation(
+                _ao1(_Didx("u", _v("i")), "i", 1, N),
+                _ao1(_idx("w", _idx("conn", _v("i"))), "i", 1, N)
+            ),
+        ]
+    )
+    ics1 = Dict{String, Float64}()
+    for k in 1:N
+        ics1["w[$k]"] = 10.0k; ics1["u[$k]"] = 0.0
+    end
+    check(m1, ics1, Dict("conn" => Float64.(perm)), ["u[$(i0 - 1)]", "u[$i0]", "u[$(i0 + 1)]"])
 
     # 2-D: D(u[i,j]) = w[conn[i], j]
-    ao2(body) = ESM_CS.OpExpr("faq", ESM_CS.ASTExpr[];
+    ao2(body) = ESM_CS.OpExpr(
+        "faq", ESM_CS.ASTExpr[];
         output_idx = Any["i", "j"], expr_body = body,
-        ranges = Dict("i" => [1, N], "j" => [1, N]))
-    m2 = ESM_CS.Model(vars(), [
-        ESM_CS.Equation(ao2(_Didx("w", _v("i"), _v("j"))), ao2(_n(0.0))),
-        ESM_CS.Equation(ao2(_Didx("u", _v("i"), _v("j"))),
-                        ao2(_idx("w", _idx("conn", _v("i")), _v("j"))))])
-    ics2 = Dict{String,Float64}()
+        ranges = Dict("i" => [1, N], "j" => [1, N])
+    )
+    m2 = ESM_CS.Model(
+        vars(), [
+            ESM_CS.Equation(ao2(_Didx("w", _v("i"), _v("j"))), ao2(_n(0.0))),
+            ESM_CS.Equation(
+                ao2(_Didx("u", _v("i"), _v("j"))),
+                ao2(_idx("w", _idx("conn", _v("i")), _v("j")))
+            ),
+        ]
+    )
+    ics2 = Dict{String, Float64}()
     for k in 1:N, j in 1:N
         ics2["w[$k,$j]"] = 10.0k + j; ics2["u[$k,$j]"] = 0.0
     end
-    check(m2, ics2, Dict("conn" => Float64.(perm)), ["u[$i0,1]", "u[$i0,$N]", "u[$(i0+1),1]"])
+    check(m2, ics2, Dict("conn" => Float64.(perm)), ["u[$i0,1]", "u[$i0,$N]", "u[$(i0 + 1),1]"])
 
     # A CONST array read through the same connectivity: the linear index is
     # derived at `rep`, `rep + e_d` and checked at the corners, so an interior
     # swap reads the wrong element, and a table that is 1 at every corner derives
     # a zero stride and folds the whole box to one literal.
-    cvars = Dict{String,ESM_CS.ModelVariable}(
-        "u" => ESM_CS.ModelVariable(ESM_CS.UnknownVariable))
-    mc = ESM_CS.Model(cvars, [ESM_CS.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
-                          _ao1(_idx("c", _idx("conn", _v("i"))), "i", 1, N))])
-    icsc = Dict{String,Float64}("u[$k]" => 0.0 for k in 1:N)
+    cvars = Dict{String, ESM_CS.ModelVariable}(
+        "u" => ESM_CS.ModelVariable(ESM_CS.UnknownVariable)
+    )
+    mc = ESM_CS.Model(
+        cvars, [
+            ESM_CS.Equation(
+                _ao1(_Didx("u", _v("i")), "i", 1, N),
+                _ao1(_idx("c", _idx("conn", _v("i"))), "i", 1, N)
+            ),
+        ]
+    )
+    icsc = Dict{String, Float64}("u[$k]" => 0.0 for k in 1:N)
     cvals = Float64.(10 .* (1:N))
     check(mc, icsc, Dict("conn" => Float64.(perm), "c" => cvals), ["u[$i0]"])
     ones_but = ones(N); ones_but[i0] = 7
@@ -247,18 +309,33 @@ end
 
     # ... and not even for an affine subscript: `3i - 40` over 1:40 is below the
     # bounds at i = 1, above them at i = 40, and in range for 14 ≤ i ≤ 26.
-    ma = ESM_CS.Model(vars(), [
-        ESM_CS.Equation(_ao1(_Didx("w", _v("i")), "i", 1, N), _ao1(_n(0.0), "i", 1, N)),
-        ESM_CS.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
-                        _ao1(_idx("w", _op("-", _op("*", _i(3), _v("i")), _i(40))),
-                             "i", 1, N))])
-    check(ma, ics1, Dict{String,Any}(), ["u[13]", "u[14]", "u[20]", "u[26]", "u[27]"])
+    ma = ESM_CS.Model(
+        vars(), [
+            ESM_CS.Equation(_ao1(_Didx("w", _v("i")), "i", 1, N), _ao1(_n(0.0), "i", 1, N)),
+            ESM_CS.Equation(
+                _ao1(_Didx("u", _v("i")), "i", 1, N),
+                _ao1(
+                    _idx("w", _op("-", _op("*", _i(3), _v("i")), _i(40))),
+                    "i", 1, N
+                )
+            ),
+        ]
+    )
+    check(ma, ics1, Dict{String, Any}(), ["u[13]", "u[14]", "u[20]", "u[26]", "u[27]"])
 
     # The LIVE-FORCING (pgather) lane derives its flat buffer index the same
     # way the const lane derives its linear index, so the same connectivity
     # swap sent it to the wrong buffer element.
-    mp = ESM_CS.Model(cvars, [ESM_CS.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
-                          _ao1(_idx("forcing", _idx("conn", _v("i"))), "i", 1, N))])
-    check(mp, icsc, Dict("conn" => Float64.(perm)), ["u[$i0]"];
-          pa = Dict("forcing" => cvals))
+    mp = ESM_CS.Model(
+        cvars, [
+            ESM_CS.Equation(
+                _ao1(_Didx("u", _v("i")), "i", 1, N),
+                _ao1(_idx("forcing", _idx("conn", _v("i"))), "i", 1, N)
+            ),
+        ]
+    )
+    check(
+        mp, icsc, Dict("conn" => Float64.(perm)), ["u[$i0]"];
+        pa = Dict("forcing" => cvals)
+    )
 end

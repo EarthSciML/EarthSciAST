@@ -38,7 +38,7 @@ end
 
 # First VarExpr leaf name in an index-argument expression (the loop variable of
 # that index position), or `nothing` for a constant position.
-function _index_arg_loop(expr::ASTExpr)::Union{String,Nothing}
+function _index_arg_loop(expr::ASTExpr)::Union{String, Nothing}
     if expr isa VarExpr
         return expr.name
     elseif expr isa OpExpr
@@ -61,10 +61,12 @@ end
 # at the body's expansion — ANALYSIS ONLY, the equation tree is never rewritten,
 # and the compile-once build still receives the reference-preserving form. With
 # `reg === nothing` (no surviving references) the walk is exactly the old one.
-function _detect_lift_loops(ma::OpExpr, lifted::Set{String}, rank::Int,
-                            reg=nothing)
-    result = Ref{Union{Vector{String},Nothing}}(nothing)
-    peek = IdDict{OpExpr,Any}()
+function _detect_lift_loops(
+        ma::OpExpr, lifted::Set{String}, rank::Int,
+        reg = nothing
+    )
+    result = Ref{Union{Vector{String}, Nothing}}(nothing)
+    peek = IdDict{OpExpr, Any}()
     function walk(e)
         result[] === nothing || return
         e isa OpExpr || return
@@ -84,7 +86,7 @@ function _detect_lift_loops(ma::OpExpr, lifted::Set{String}, rank::Int,
             return
         end
         if e.op == "index" && !isempty(e.args) && e.args[1] isa VarExpr &&
-           ((e.args[1]::VarExpr).name in lifted) && length(e.args) - 1 == rank
+                ((e.args[1]::VarExpr).name in lifted) && length(e.args) - 1 == rank
             loops = String[]
             ok = true
             for k in 2:length(e.args)
@@ -106,7 +108,7 @@ function _detect_lift_loops(ma::OpExpr, lifted::Set{String}, rank::Int,
             walk(a)
         end
         e.expr_body === nothing || walk(e.expr_body)
-        if e.values !== nothing
+        return if e.values !== nothing
             for v in e.values
                 walk(v)
             end
@@ -141,11 +143,15 @@ end
 # rewrite (shape_promotion.jl); its typed twin with a different wrap/stop set
 # is `_index_array_leaves`. The stop set here deliberately omits `makearray` —
 # the wrap predicate claims every makearray first.
-function _lift_rhs_to_cell(expr::ASTExpr, arrayvars::Set{String},
-                           loops::Vector{String})::ASTExpr
-    return _wrap_bare_array_refs(expr, arrayvars, loops;
+function _lift_rhs_to_cell(
+        expr::ASTExpr, arrayvars::Set{String},
+        loops::Vector{String}
+    )::ASTExpr
+    return _wrap_bare_array_refs(
+        expr, arrayvars, loops;
         wrap_node = e -> e.op == "makearray",
-        stop_node = e -> e.op == "index" || e.op == "faq")
+        stop_node = e -> e.op == "index" || e.op == "faq"
+    )
 end
 
 """
@@ -158,17 +164,21 @@ with a spatial operator (its merged RHS carries an operator `makearray`) from a
 `faq` over the grid. No-op when no coupling requests pointwise lifting, or
 no merged equation carries a spatial-operator makearray.
 """
-function _apply_pointwise_lift!(equations::Vector{Equation},
-                                contribs::Vector{Vector{Contribution}},
-                                states::OrderedDict{String,ModelVariable},
-                                params::OrderedDict{String,ModelVariable},
-                                observeds::OrderedDict{String,ModelVariable},
-                                index_sets::OrderedDict{String,IndexSet},
-                                coupling;
-                                template_registry=nothing,
-                                lifted_shapes=nothing)
-    any(c -> c isa CouplingOperatorCompose &&
-             (c.lifting !== nothing && c.lifting == "pointwise"), coupling) || return
+function _apply_pointwise_lift!(
+        equations::Vector{Equation},
+        contribs::Vector{Vector{Contribution}},
+        states::OrderedDict{String, ModelVariable},
+        params::OrderedDict{String, ModelVariable},
+        observeds::OrderedDict{String, ModelVariable},
+        index_sets::OrderedDict{String, IndexSet},
+        coupling;
+        template_registry = nothing,
+        lifted_shapes = nothing
+    )
+    any(
+        c -> c isa CouplingOperatorCompose &&
+            (c.lifting !== nothing && c.lifting == "pointwise"), coupling
+    ) || return
 
     lifted = _pointwise_lifted_species(equations, states)
     isempty(lifted) && return
@@ -185,11 +195,13 @@ function _apply_pointwise_lift!(equations::Vector{Equation},
         (isempty(mas) || mas[1].regions === nothing || isempty(mas[1].regions)) && continue
         rank = length(mas[1].regions[1])
         loops = _pointwise_lift_loops(mas, lifted, rank, species, template_registry)
-        gaxes, ranges = _pointwise_lift_axes(mas[1], loops, size_to_names,
-                                             species, rank;
-                                             mas = mas, var_shapes = var_shapes,
-                                             index_sets = index_sets,
-                                             reg = template_registry)
+        gaxes, ranges = _pointwise_lift_axes(
+            mas[1], loops, size_to_names,
+            species, rank;
+            mas = mas, var_shapes = var_shapes,
+            index_sets = index_sets,
+            reg = template_registry
+        )
 
         # Promote the species to the grid shape so the scoped-ic fold, array-cell
         # discovery, and evaluator all see an array state.
@@ -200,8 +212,10 @@ function _apply_pointwise_lift!(equations::Vector{Equation},
         # the cell counts, which only this pass knows.
         lifted_shapes === nothing ||
             (lifted_shapes[species] = _makearray_extents(mas[1]))
-        equations[n], contribs[n] = _pointwise_lift_equation(eq, contribs[n], species,
-                                                             arrayvars, loops, ranges)
+        equations[n], contribs[n] = _pointwise_lift_equation(
+            eq, contribs[n], species,
+            arrayvars, loops, ranges
+        )
     end
     return
 end
@@ -225,8 +239,10 @@ end
 # divergence over `Mx` — so it failed with "could not determine the spatial loop
 # variables", which read as a defect in the author's model rather than as a state
 # that simply needed no lifting.
-function _pointwise_lifted_species(equations::Vector{Equation},
-                                   states::OrderedDict{String,ModelVariable})::Set{String}
+function _pointwise_lifted_species(
+        equations::Vector{Equation},
+        states::OrderedDict{String, ModelVariable}
+    )::Set{String}
     lifted = Set{String}()
     for eq in equations
         species = differential_lhs_variable(eq.lhs)
@@ -244,10 +260,12 @@ end
 
 # Operands to index per cell: the lifted species plus any already array-shaped
 # parameter/observed (e.g. a grid-shaped wind field bound from a loader).
-function _pointwise_lift_operands(lifted::Set{String},
-                                  states::OrderedDict{String,ModelVariable},
-                                  params::OrderedDict{String,ModelVariable},
-                                  observeds::OrderedDict{String,ModelVariable})::Set{String}
+function _pointwise_lift_operands(
+        lifted::Set{String},
+        states::OrderedDict{String, ModelVariable},
+        params::OrderedDict{String, ModelVariable},
+        observeds::OrderedDict{String, ModelVariable}
+    )::Set{String}
     arrayvars = Set{String}(lifted)
     for d in (params, observeds, states)
         for (k, v) in d
@@ -260,8 +278,8 @@ end
 # Grid axis for a makearray dimension is the declared index set whose size
 # matches that dimension's extent (the `index_sets` map is unordered, so this
 # matches by size rather than key order).
-function _index_sets_by_size(index_sets::OrderedDict{String,IndexSet})::Dict{Int,Vector{String}}
-    size_to_names = Dict{Int,Vector{String}}()
+function _index_sets_by_size(index_sets::OrderedDict{String, IndexSet})::Dict{Int, Vector{String}}
+    size_to_names = Dict{Int, Vector{String}}()
     for (name, iset) in index_sets
         iset.size === nothing && continue
         push!(get!(size_to_names, iset.size, String[]), name)
@@ -272,21 +290,26 @@ end
 # The ordered spatial loop variables read off the species' operator makearrays,
 # or throw `DimensionPromotionError` when no makearray carries a full-rank
 # interior-stencil gather.
-function _pointwise_lift_loops(mas::Vector{OpExpr}, lifted::Set{String},
-                               rank::Int, species::String,
-                               reg=nothing)::Vector{String}
+function _pointwise_lift_loops(
+        mas::Vector{OpExpr}, lifted::Set{String},
+        rank::Int, species::String,
+        reg = nothing
+    )::Vector{String}
     for ma in mas
         loops = _detect_lift_loops(ma, lifted, rank, reg)
         loops === nothing || return loops
     end
-    throw(DimensionPromotionError(
-        "pointwise lift: could not determine the spatial loop variables for " *
-        "species '$(species)' from its operator makearray"))
+    throw(
+        DimensionPromotionError(
+            "pointwise lift: could not determine the spatial loop variables for " *
+                "species '$(species)' from its operator makearray"
+        )
+    )
 end
 
 # Every declared array shape in one lookup, for the axis-NAME propagation below.
-function _declared_shapes(ds::OrderedDict{String,ModelVariable}...)::Dict{String,Vector{String}}
-    out = Dict{String,Vector{String}}()
+function _declared_shapes(ds::OrderedDict{String, ModelVariable}...)::Dict{String, Vector{String}}
+    out = Dict{String, Vector{String}}()
     for d in ds, (k, v) in d
         sh = v.shape
         (sh === nothing || isempty(sh)) && continue
@@ -317,21 +340,23 @@ end
 # Walks THROUGH surviving `apply_expression_template` references (analysis only,
 # exactly as `_detect_lift_loops` does): with a monotone rule stack the interior
 # gathers live inside the referenced template bodies, not the equation tree.
-function _lift_axis_names(mas::Vector{OpExpr}, loops::Vector{String},
-                          extents::Vector{Int},
-                          var_shapes::Dict{String,Vector{String}},
-                          index_sets::OrderedDict{String,IndexSet},
-                          reg)::Vector{Union{String,Nothing}}
+function _lift_axis_names(
+        mas::Vector{OpExpr}, loops::Vector{String},
+        extents::Vector{Int},
+        var_shapes::Dict{String, Vector{String}},
+        index_sets::OrderedDict{String, IndexSet},
+        reg
+    )::Vector{Union{String, Nothing}}
     rank = length(loops)
     evidence = [Set{String}() for _ in 1:rank]
-    dim_of = Dict{String,Int}()
+    dim_of = Dict{String, Int}()
     for (d, l) in enumerate(loops)
         # A repeated loop name (a diagonal gather) would make the position
         # ambiguous; drop it rather than guess.
         haskey(dim_of, l) ? (dim_of[l] = 0) : (dim_of[l] = d)
     end
-    peek = IdDict{OpExpr,Any}()
-    seen = IdDict{OpExpr,Bool}()
+    peek = IdDict{OpExpr, Any}()
+    seen = IdDict{OpExpr, Bool}()
     function walk(e)
         e isa OpExpr || return
         get!(seen, e, false) && return
@@ -366,30 +391,35 @@ function _lift_axis_names(mas::Vector{OpExpr}, loops::Vector{String},
         for c in child_exprs(e)
             walk(c)
         end
+        return
     end
     for ma in mas
         walk(ma)
     end
-    return Union{String,Nothing}[length(evidence[d]) == 1 ? first(evidence[d]) :
-                                 nothing for d in 1:rank]
+    return Union{String, Nothing}[
+        length(evidence[d]) == 1 ? first(evidence[d]) :
+            nothing for d in 1:rank
+    ]
 end
 
 # Map each grid dimension to a declared index set — by NAME propagation from the
 # operand gathers where that is decisive (`_lift_axis_names`), else by matching
 # extents — producing the species' new shape axes (`gaxes`) and the aggregate
 # loop `ranges`.
-function _pointwise_lift_axes(ma::OpExpr, loops::Vector{String},
-                              size_to_names::Dict{Int,Vector{String}},
-                              species::String, rank::Int;
-                              mas::Union{Vector{OpExpr},Nothing} = nothing,
-                              var_shapes::Union{Dict{String,Vector{String}},Nothing} = nothing,
-                              index_sets = nothing, reg = nothing)
+function _pointwise_lift_axes(
+        ma::OpExpr, loops::Vector{String},
+        size_to_names::Dict{Int, Vector{String}},
+        species::String, rank::Int;
+        mas::Union{Vector{OpExpr}, Nothing} = nothing,
+        var_shapes::Union{Dict{String, Vector{String}}, Nothing} = nothing,
+        index_sets = nothing, reg = nothing
+    )
     extents = _makearray_extents(ma)
     named = (mas === nothing || var_shapes === nothing || index_sets === nothing) ?
-        Union{String,Nothing}[nothing for _ in 1:rank] :
+        Union{String, Nothing}[nothing for _ in 1:rank] :
         _lift_axis_names(mas, loops, extents, var_shapes, index_sets, reg)
     gaxes = String[]
-    ranges = Dict{String,Any}()
+    ranges = Dict{String, Any}()
     for d in 1:rank
         nm = d <= length(named) ? named[d] : nothing
         if nm !== nothing
@@ -406,12 +436,12 @@ function _pointwise_lift_axes(ma::OpExpr, loops::Vector{String},
             # a synthetic shape axis (still a valid non-scalar shape).
             if length(cands) > 1
                 @warn "pointwise lift: grid dimension $(d) of species " *
-                      "'$(species)' (extent $(extents[d])) matches multiple " *
-                      "declared index sets $(sort(cands)) by size, and no " *
-                      "declared-shape operand gathered at loop " *
-                      "'$(loops[d])' names one of them unambiguously, so a " *
-                      "synthetic dense axis '_liftdim$(d)_$(extents[d])' is " *
-                      "used instead of an index-set reference."
+                    "'$(species)' (extent $(extents[d])) matches multiple " *
+                    "declared index sets $(sort(cands)) by size, and no " *
+                    "declared-shape operand gathered at loop " *
+                    "'$(loops[d])' names one of them unambiguously, so a " *
+                    "synthetic dense axis '_liftdim$(d)_$(extents[d])' is " *
+                    "used instead of an index-set reference."
             end
             # Synthetic-axis naming convention: `_liftdim<dim>_<extent>` — an
             # underscore-prefixed name that cannot collide with a declared
@@ -430,21 +460,33 @@ end
 # and the `faq` wraps their left-fold sum (esm-libraries-spec §4.7.5), so the
 # lifted equation's body — not its right-hand side — is what the contributions
 # sum to. Returns the equation and its lifted contributions.
-function _pointwise_lift_equation(eq::Equation, contributions::Vector{Contribution},
-                                  species::String,
-                                  arrayvars::Set{String},
-                                  loops::Vector{String},
-                                  ranges::Dict{String,Any})
+function _pointwise_lift_equation(
+        eq::Equation, contributions::Vector{Contribution},
+        species::String,
+        arrayvars::Set{String},
+        loops::Vector{String},
+        ranges::Dict{String, Any}
+    )
     oidx = Any[l for l in loops]
-    idx_species = OpExpr("index", ASTExpr[VarExpr(species),
-                         (VarExpr(l) for l in loops)...])
-    new_lhs = OpExpr("faq", ASTExpr[];
-                     output_idx=oidx, ranges=ranges,
-                     expr_body=OpExpr("D", ASTExpr[idx_species], wrt="t"))
-    lifted = Contribution[Contribution(_lift_rhs_to_cell(c.expr, arrayvars, loops), c.origins)
-                          for c in contributions]
-    new_rhs = OpExpr("faq", ASTExpr[];
-                     output_idx=oidx, ranges=ranges,
-                     expr_body=_fold_contributions(lifted))
-    return Equation(new_lhs, new_rhs; _comment=eq._comment), lifted
+    idx_species = OpExpr(
+        "index", ASTExpr[
+            VarExpr(species),
+            (VarExpr(l) for l in loops)...,
+        ]
+    )
+    new_lhs = OpExpr(
+        "faq", ASTExpr[];
+        output_idx = oidx, ranges = ranges,
+        expr_body = OpExpr("D", ASTExpr[idx_species], wrt = "t")
+    )
+    lifted = Contribution[
+        Contribution(_lift_rhs_to_cell(c.expr, arrayvars, loops), c.origins)
+            for c in contributions
+    ]
+    new_rhs = OpExpr(
+        "faq", ASTExpr[];
+        output_idx = oidx, ranges = ranges,
+        expr_body = _fold_contributions(lifted)
+    )
+    return Equation(new_lhs, new_rhs; _comment = eq._comment), lifted
 end

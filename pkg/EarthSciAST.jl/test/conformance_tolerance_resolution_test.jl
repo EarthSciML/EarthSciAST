@@ -33,8 +33,10 @@ using EarthSciAST
 
 include("testutils.jl")  # TESTUTILS_REPO_ROOT
 
-const _TR_CAT_DIR = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance",
-                             "tolerance_resolution")
+const _TR_CAT_DIR = joinpath(
+    TESTUTILS_REPO_ROOT, "tests", "conformance",
+    "tolerance_resolution"
+)
 const _TR_MANIFEST = joinpath(_TR_CAT_DIR, "manifest.json")
 
 # Build a `Tolerance` from a manifest `levels` entry. A missing key and an
@@ -46,7 +48,7 @@ function _tr_tolerance(block)
         v = get(block, name, nothing)
         v === nothing ? nothing : Float64(v)
     end
-    return EarthSciAST.Tolerance(; abs=get_field(:abs), rel=get_field(:rel))
+    return EarthSciAST.Tolerance(; abs = get_field(:abs), rel = get_field(:rel))
 end
 
 # The pre-#228 rule, kept here as the thing the new one must never be tighter
@@ -70,7 +72,7 @@ end
     @test manifest.integrators === nothing
     @test length(manifest.cases) >= 15
     @test length(unique(String[String(c.id) for c in manifest.cases])) ==
-          length(manifest.cases)
+        length(manifest.cases)
     @test count(c -> c.changed_by_228, manifest.cases) >= 5
 
     for case in manifest.cases

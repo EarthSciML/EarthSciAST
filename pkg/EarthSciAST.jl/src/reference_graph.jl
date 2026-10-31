@@ -64,7 +64,7 @@ conformance suite can assert on the failure mode, and a human-readable
 struct ReferenceResolutionError <: EarthSciASTError
     code::String
     message::String
-    cycle::Union{Nothing,Vector{String}}
+    cycle::Union{Nothing, Vector{String}}
 end
 ReferenceResolutionError(code::AbstractString, message::AbstractString) =
     ReferenceResolutionError(String(code), String(message), nothing)
@@ -84,9 +84,9 @@ struct ReferenceVertex
     key::String
     kind::String
     name::String
-    op::Union{Nothing,String}
-    node_id::Union{Nothing,String}
-    path::Union{Nothing,String}
+    op::Union{Nothing, String}
+    node_id::Union{Nothing, String}
+    path::Union{Nothing, String}
 end
 
 """
@@ -110,17 +110,17 @@ the order `class(n) = max(class(inputs))` propagation needs.
 """
 mutable struct ReferenceGraph
     model::String
-    vertices::OrderedDict{String,ReferenceVertex}
+    vertices::OrderedDict{String, ReferenceVertex}
     edges::Vector{ReferenceEdge}
-    out::OrderedDict{String,Vector{String}}
-    incoming::OrderedDict{String,Vector{String}}
+    out::OrderedDict{String, Vector{String}}
+    incoming::OrderedDict{String, Vector{String}}
 end
 ReferenceGraph(model::AbstractString = "") = ReferenceGraph(
     String(model),
-    OrderedDict{String,ReferenceVertex}(),
+    OrderedDict{String, ReferenceVertex}(),
     ReferenceEdge[],
-    OrderedDict{String,Vector{String}}(),
-    OrderedDict{String,Vector{String}}(),
+    OrderedDict{String, Vector{String}}(),
+    OrderedDict{String, Vector{String}}(),
 )
 
 function _ensure_vertex!(g::ReferenceGraph, v::ReferenceVertex)
@@ -132,8 +132,10 @@ function _ensure_vertex!(g::ReferenceGraph, v::ReferenceVertex)
     return g
 end
 
-function _add_edge!(g::ReferenceGraph, source::AbstractString, target::AbstractString,
-                    kind::AbstractString)
+function _add_edge!(
+        g::ReferenceGraph, source::AbstractString, target::AbstractString,
+        kind::AbstractString
+    )
     push!(g.edges, ReferenceEdge(String(source), String(target), String(kind)))
     push!(get!(g.out, String(source), String[]), String(target))
     push!(get!(g.incoming, String(target), String[]), String(source))
@@ -175,14 +177,14 @@ function detect_cycle(g::ReferenceGraph)
     # (cadence.jl) materializes its implicit set→node→set relation into a small
     # `ReferenceGraph` and routes through here rather than carrying a twin.
     WHITE, GRAY, BLACK = 0, 1, 2
-    color = Dict{String,Int}(k => WHITE for k in keys(g.vertices))
+    color = Dict{String, Int}(k => WHITE for k in keys(g.vertices))
     # Precompute sorted adjacency once: the DFS revisits each vertex's
     # neighbour list once per outgoing edge, and re-sorting per visit was
     # needless repeated work.
-    sorted_out = Dict{String,Vector{String}}(k => sort(v) for (k, v) in g.out)
+    sorted_out = Dict{String, Vector{String}}(k => sort(v) for (k, v) in g.out)
     for start in sort(collect(keys(g.vertices)))
         get(color, start, WHITE) == WHITE || continue
-        stack = Tuple{String,Int}[(start, 1)]   # (vertex, 1-based neighbour index)
+        stack = Tuple{String, Int}[(start, 1)]   # (vertex, 1-based neighbour index)
         path = String[start]
         color[start] = GRAY
         while !isempty(stack)
@@ -220,8 +222,11 @@ cycle among reference edges is an out-of-scope implicit/iterative solve (RFC
 """
 function topological_order(g::ReferenceGraph)
     cyc = detect_cycle(g)
-    cyc !== nothing && throw(ReferenceResolutionError(
-        E_REF_CYCLE, "reference cycle detected: " * join(cyc, " -> "), cyc))
+    cyc !== nothing && throw(
+        ReferenceResolutionError(
+            E_REF_CYCLE, "reference cycle detected: " * join(cyc, " -> "), cyc
+        )
+    )
     emitted = String[]
     done = Set{String}()
     # Round-based scan preserving the historical (cross-binding) emission
@@ -311,9 +316,11 @@ _is_node(x) = x isa AbstractDict && _haskey(x, "op")
 # Anything else is unresolvable and raises E_REF_UNRESOLVED_JOIN_FACTOR. Nothing
 # here widens the check to "accept any string": a name in none of the four
 # registries is still a typo and is still reported.
-function _join_binder_class(node::AbstractDict, name::Union{Nothing,AbstractString},
-                            variables::Union{Nothing,AbstractDict},
-                            index_sets::Union{Nothing,AbstractDict})
+function _join_binder_class(
+        node::AbstractDict, name::Union{Nothing, AbstractString},
+        variables::Union{Nothing, AbstractDict},
+        index_sets::Union{Nothing, AbstractDict}
+    )
     (name === nothing || isempty(name)) && return nothing
     nm = String(name)
     # 1. node-local binders (these shadow a same-named variable)
@@ -341,17 +348,22 @@ end
 
 # Diagnose one `join` name, throwing the unresolved-join-factor error when it
 # resolves in none of the four binder classes.
-function _check_join_name(node::AbstractDict, name::Union{Nothing,AbstractString},
-                          variables::Union{Nothing,AbstractDict},
-                          index_sets::Union{Nothing,AbstractDict},
-                          key::AbstractString, model_name::AbstractString,
-                          path::AbstractString; label::AbstractString="join factor")
+function _check_join_name(
+        node::AbstractDict, name::Union{Nothing, AbstractString},
+        variables::Union{Nothing, AbstractDict},
+        index_sets::Union{Nothing, AbstractDict},
+        key::AbstractString, model_name::AbstractString,
+        path::AbstractString; label::AbstractString = "join factor"
+    )
     if _join_binder_class(node, name, variables, index_sets) === nothing
-        throw(ReferenceResolutionError(
-            E_REF_UNRESOLVED_JOIN_FACTOR,
-            "$(label) '$(name === nothing ? "" : name)' of node $(key) names no range, " *
-            "output index, factor arg, declared variable, or index set in scope " *
-            "(model '$(model_name)', at $(path))"))
+        throw(
+            ReferenceResolutionError(
+                E_REF_UNRESOLVED_JOIN_FACTOR,
+                "$(label) '$(name === nothing ? "" : name)' of node $(key) names no range, " *
+                    "output index, factor arg, declared variable, or index set in scope " *
+                    "(model '$(model_name)', at $(path))"
+            )
+        )
     end
     return nothing
 end
@@ -360,17 +372,19 @@ end
 struct _RefNode
     addr::String
     path::String
-    op::Union{Nothing,String}
+    op::Union{Nothing, String}
 end
 
 # The model members whose expression trees carry addressable nodes.
 const _WALK_ROOTS = ("equations", "initialization_equations")
 
-function _register_and_process!(g::ReferenceGraph, node::AbstractDict, path::AbstractString,
-                                model_name::AbstractString,
-                                index_sets::Union{Nothing,AbstractDict},
-                                variables::Union{Nothing,AbstractDict},
-                                id_to_addr::OrderedDict{String,_RefNode})
+function _register_and_process!(
+        g::ReferenceGraph, node::AbstractDict, path::AbstractString,
+        model_name::AbstractString,
+        index_sets::Union{Nothing, AbstractDict},
+        variables::Union{Nothing, AbstractDict},
+        id_to_addr::OrderedDict{String, _RefNode}
+    )
     op = _as_str(_get(node, "op"))
     nid = _nonempty_str(_get(node, "id"))
     is_agg = op !== nothing && op in _AGGREGATE_OPS
@@ -383,10 +397,13 @@ function _register_and_process!(g::ReferenceGraph, node::AbstractDict, path::Abs
 
     if nid !== nothing
         if haskey(id_to_addr, nid)
-            throw(ReferenceResolutionError(
-                E_REF_DUPLICATE_NODE_ID,
-                "duplicate expression-node id '$(nid)' in model '$(model_name)' " *
-                "(at $(path) and $(id_to_addr[nid].path))"))
+            throw(
+                ReferenceResolutionError(
+                    E_REF_DUPLICATE_NODE_ID,
+                    "duplicate expression-node id '$(nid)' in model '$(model_name)' " *
+                        "(at $(path) and $(id_to_addr[nid].path))"
+                )
+            )
         end
         id_to_addr[nid] = _RefNode(addr, String(path), op)
     end
@@ -402,10 +419,13 @@ function _register_and_process!(g::ReferenceGraph, node::AbstractDict, path::Abs
             target = _as_str(_get(spec, "from"))
             declared = index_sets !== nothing && target !== nothing && _haskey(index_sets, target)
             if target === nothing || isempty(target) || !declared
-                throw(ReferenceResolutionError(
-                    E_REF_UNDECLARED_INDEX_SET,
-                    "range '$(idx_name)' of node $(key) references undeclared index set " *
-                    "'$(target === nothing ? "" : target)' (model '$(model_name)', at $(path))"))
+                throw(
+                    ReferenceResolutionError(
+                        E_REF_UNDECLARED_INDEX_SET,
+                        "range '$(idx_name)' of node $(key) references undeclared index set " *
+                            "'$(target === nothing ? "" : target)' (model '$(model_name)', at $(path))"
+                    )
+                )
             end
             _add_edge!(g, key, _index_set_key(target), REF_EDGE_RANGE_FROM)
         end
@@ -429,10 +449,15 @@ function _register_and_process!(g::ReferenceGraph, node::AbstractDict, path::Abs
                     names === nothing && continue
                     for nm in names
                         ref = _as_str(nm)
-                        _check_join_name(node, ref, variables, index_sets, key, model_name, path;
-                                         label="overlap-join env factor")
-                        _ensure_vertex!(g, ReferenceVertex(
-                            _factor_key(ref), REF_VERTEX_FACTOR, ref, nothing, nothing, nothing))
+                        _check_join_name(
+                            node, ref, variables, index_sets, key, model_name, path;
+                            label = "overlap-join env factor"
+                        )
+                        _ensure_vertex!(
+                            g, ReferenceVertex(
+                                _factor_key(ref), REF_VERTEX_FACTOR, ref, nothing, nothing, nothing
+                            )
+                        )
                         _add_edge!(g, key, _factor_key(ref), REF_EDGE_JOIN_FACTOR)
                     end
                 end
@@ -463,8 +488,11 @@ function _register_and_process!(g::ReferenceGraph, node::AbstractDict, path::Abs
                     right === nothing ||
                         _check_join_name(node, right, variables, index_sets, key, model_name, path)
                 end
-                _ensure_vertex!(g, ReferenceVertex(
-                    _factor_key(ref), REF_VERTEX_FACTOR, ref, nothing, nothing, nothing))
+                _ensure_vertex!(
+                    g, ReferenceVertex(
+                        _factor_key(ref), REF_VERTEX_FACTOR, ref, nothing, nothing, nothing
+                    )
+                )
                 _add_edge!(g, key, _factor_key(ref), REF_EDGE_JOIN_FACTOR)
             end
         end
@@ -473,16 +501,20 @@ function _register_and_process!(g::ReferenceGraph, node::AbstractDict, path::Abs
     return g
 end
 
-function _walk!(g::ReferenceGraph, value, path::AbstractString, model_name::AbstractString,
-                index_sets::Union{Nothing,AbstractDict},
-                variables::Union{Nothing,AbstractDict},
-                id_to_addr::OrderedDict{String,_RefNode})
+function _walk!(
+        g::ReferenceGraph, value, path::AbstractString, model_name::AbstractString,
+        index_sets::Union{Nothing, AbstractDict},
+        variables::Union{Nothing, AbstractDict},
+        id_to_addr::OrderedDict{String, _RefNode}
+    )
     if value isa AbstractDict
         _is_node(value) &&
             _register_and_process!(g, value, path, model_name, index_sets, variables, id_to_addr)
         for k in _str_keys(value)
-            _walk!(g, _get(value, k), string(path, "/", k), model_name, index_sets, variables,
-                   id_to_addr)
+            _walk!(
+                g, _get(value, k), string(path, "/", k), model_name, index_sets, variables,
+                id_to_addr
+            )
         end
     elseif value isa AbstractVector
         for (i, v) in enumerate(value)
@@ -494,18 +526,23 @@ end
 
 # Collect every explicit expression-node id under one model's `value`, keyed by
 # id, under a model-qualified path.
-function _collect_ids!(nodes::OrderedDict{String,_RefNode}, value, path::AbstractString,
-                       model_name::AbstractString)
+function _collect_ids!(
+        nodes::OrderedDict{String, _RefNode}, value, path::AbstractString,
+        model_name::AbstractString
+    )
     if value isa AbstractDict
         if _is_node(value)
             nid = _nonempty_str(_get(value, "id"))
             if nid !== nothing
                 qualified = string("models/", model_name, "/", path)
                 if haskey(nodes, nid)
-                    throw(ReferenceResolutionError(
-                        E_REF_DUPLICATE_NODE_ID,
-                        "duplicate expression-node id '$(nid)' in document " *
-                        "(at $(qualified) and $(nodes[nid].path))"))
+                    throw(
+                        ReferenceResolutionError(
+                            E_REF_DUPLICATE_NODE_ID,
+                            "duplicate expression-node id '$(nid)' in document " *
+                                "(at $(qualified) and $(nodes[nid].path))"
+                        )
+                    )
                 end
                 nodes[nid] = _RefNode(nid, qualified, _as_str(_get(value, "op")))
             end
@@ -536,7 +573,7 @@ DOCUMENT-wide requirement: a duplicate `id` anywhere in the document is
 `E_REF_DUPLICATE_NODE_ID`.
 """
 function _collect_document_node_ids(document::AbstractDict)
-    nodes = OrderedDict{String,_RefNode}()
+    nodes = OrderedDict{String, _RefNode}()
     models = _as_dict(_get(document, "models"))
     models === nothing && return nodes
     for name in _str_keys(models)
@@ -553,11 +590,13 @@ end
 # Union of the document-scoped registry and any model-nested one, with the
 # model's entries taking precedence. Returns `nothing` when neither exists, so
 # the "no registry at all" branches below stay unchanged.
-function _merge_index_sets(model_sets::Union{Nothing,AbstractDict},
-                           doc_sets::Union{Nothing,AbstractDict})
+function _merge_index_sets(
+        model_sets::Union{Nothing, AbstractDict},
+        doc_sets::Union{Nothing, AbstractDict}
+    )
     doc_sets === nothing && return model_sets
     model_sets === nothing && return doc_sets
-    merged = OrderedDict{String,Any}()
+    merged = OrderedDict{String, Any}()
     for k in _str_keys(doc_sets)
         merged[k] = _get(doc_sets, k)
     end
@@ -597,17 +636,21 @@ model gets that model as its own document, which is the right answer for a
 one-model document; [`resolve_references`](@ref) is the document-scoped entry
 point and resolves against every model's nodes.
 """
-function build_reference_graph(model::AbstractDict, model_name::AbstractString = "",
-                               index_sets::Union{Nothing,AbstractDict} = nothing)
+function build_reference_graph(
+        model::AbstractDict, model_name::AbstractString = "",
+        index_sets::Union{Nothing, AbstractDict} = nothing
+    )
     return _build_reference_graph(model, model_name, index_sets, nothing)
 end
 
 # `build_reference_graph`, plus the document-wide `from_faq` scope.
 # `document_nodes` is the map `_collect_document_node_ids` builds over every
 # model; when it is `nothing` the model's own nodes are the scope.
-function _build_reference_graph(model::AbstractDict, model_name::AbstractString,
-                                index_sets::Union{Nothing,AbstractDict},
-                                document_nodes::Union{Nothing,OrderedDict{String,_RefNode}})
+function _build_reference_graph(
+        model::AbstractDict, model_name::AbstractString,
+        index_sets::Union{Nothing, AbstractDict},
+        document_nodes::Union{Nothing, OrderedDict{String, _RefNode}}
+    )
     g = ReferenceGraph(model_name)
     # Merge the document-scoped registry (v0.8.0+) with any model-nested one
     # (pre-0.8.0); model-level entries win a key collision, matching Rust and
@@ -619,8 +662,11 @@ function _build_reference_graph(model::AbstractDict, model_name::AbstractString,
     # Pass 1 — register declared index sets as vertices.
     if index_sets !== nothing
         for name in _str_keys(index_sets)
-            _ensure_vertex!(g, ReferenceVertex(
-                _index_set_key(name), REF_VERTEX_INDEX_SET, name, nothing, nothing, nothing))
+            _ensure_vertex!(
+                g, ReferenceVertex(
+                    _index_set_key(name), REF_VERTEX_INDEX_SET, name, nothing, nothing, nothing
+                )
+            )
         end
     end
 
@@ -633,7 +679,7 @@ function _build_reference_graph(model::AbstractDict, model_name::AbstractString,
     # an `on` column polymorphic over. See `_join_binder_class`.
     variables = _as_dict(_get(model, "variables"))
 
-    id_to_addr = OrderedDict{String,_RefNode}()
+    id_to_addr = OrderedDict{String, _RefNode}()
     for root in _WALK_ROOTS
         v = _get(model, root)
         v === nothing || _walk!(g, v, root, model_name, index_sets, variables, id_to_addr)
@@ -650,19 +696,25 @@ function _build_reference_graph(model::AbstractDict, model_name::AbstractString,
             _as_str(_get(entry, "kind")) == "derived" || continue
             faq = _as_str(_get(entry, "from_faq"))
             if faq === nothing || !haskey(faq_scope, faq)
-                throw(ReferenceResolutionError(
-                    E_REF_UNKNOWN_FAQ_NODE,
-                    "derived index set '$(name)' references from_faq " *
-                    "'$(faq === nothing ? "" : faq)', which is not the id of any " *
-                    "expression node in the document"))
+                throw(
+                    ReferenceResolutionError(
+                        E_REF_UNKNOWN_FAQ_NODE,
+                        "derived index set '$(name)' references from_faq " *
+                            "'$(faq === nothing ? "" : faq)', which is not the id of any " *
+                            "expression node in the document"
+                    )
+                )
             end
             target = faq_scope[faq]
             # The producer may belong to another model; give this graph a vertex
             # for it so the edge has a real endpoint. `_ensure_vertex!` is
             # idempotent: a local producer was already registered in pass 2.
-            _ensure_vertex!(g, ReferenceVertex(
-                _node_key(target.addr), REF_VERTEX_NODE, target.addr,
-                target.op, faq, target.path))
+            _ensure_vertex!(
+                g, ReferenceVertex(
+                    _node_key(target.addr), REF_VERTEX_NODE, target.addr,
+                    target.op, faq, target.path
+                )
+            )
             _add_edge!(g, _index_set_key(name), _node_key(target.addr), REF_EDGE_FROM_FAQ)
         end
     end
@@ -685,7 +737,7 @@ Node ids are collected from EVERY model first, so a derived index set's
 id anywhere in the document is an error.
 """
 function resolve_references(document::AbstractDict)
-    out = OrderedDict{String,ReferenceGraph}()
+    out = OrderedDict{String, ReferenceGraph}()
     models = _as_dict(_get(document, "models"))
     models === nothing && return out
     doc_index_sets = _as_dict(_get(document, "index_sets"))
@@ -695,8 +747,11 @@ function resolve_references(document::AbstractDict)
         model === nothing && continue
         g = _build_reference_graph(model, name, doc_index_sets, document_nodes)
         cyc = detect_cycle(g)
-        cyc !== nothing && throw(ReferenceResolutionError(
-            E_REF_CYCLE, "reference cycle in model '$(name)': " * join(cyc, " -> "), cyc))
+        cyc !== nothing && throw(
+            ReferenceResolutionError(
+                E_REF_CYCLE, "reference cycle in model '$(name)': " * join(cyc, " -> "), cyc
+            )
+        )
         out[name] = g
     end
     return out

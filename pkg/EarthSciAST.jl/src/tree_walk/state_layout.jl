@@ -88,11 +88,11 @@ one `_ArrayBlock` per array variable. Accessors: [`_layout_block`](@ref),
 [`_slot_key`](@ref), [`_layout_extend`](@ref). As an `AbstractDict` it answers
 `get`/`getindex`/`haskey`/`length`/iteration over the element names.
 """
-struct StateLayout <: AbstractDict{String,Int}
+struct StateLayout <: AbstractDict{String, Int}
     scalar_names::Vector{String}          # slot order
-    scalars::Dict{String,Int}
+    scalars::Dict{String, Int}
     blocks::Vector{_ArrayBlock}           # slot order, contiguous after the scalars
-    block_of::Dict{String,Int}            # array name → position in `blocks`
+    block_of::Dict{String, Int}            # array name → position in `blocks`
     n::Int
 end
 
@@ -102,15 +102,19 @@ end
 `scalar_names` take slots `1:length(scalar_names)` in the given order; `arrays`
 is a vector of `name => (lo, hi)` pairs laid out after them, in the given order.
 """
-function StateLayout(scalar_names::Vector{String},
-                     arrays::AbstractVector{<:Pair{String,<:Tuple{Vector{Int},Vector{Int}}}})
-    scalars = Dict{String,Int}()
+function StateLayout(
+        scalar_names::Vector{String},
+        arrays::AbstractVector{<:Pair{String, <:Tuple{Vector{Int}, Vector{Int}}}}
+    )
+    scalars = Dict{String, Int}()
     sizehint!(scalars, length(scalar_names))
     for (i, s) in enumerate(scalar_names)
         scalars[s] = i
     end
-    L = StateLayout(scalar_names, scalars, _ArrayBlock[], Dict{String,Int}(),
-                    length(scalar_names))
+    L = StateLayout(
+        scalar_names, scalars, _ArrayBlock[], Dict{String, Int}(),
+        length(scalar_names)
+    )
     return _layout_extend(L, arrays)
 end
 
@@ -121,8 +125,10 @@ A new layout holding every slot of `L` plus one block per `name => (lo, hi)` of
 `arrays`, appended after `L`'s last slot in the given order. `L` is unchanged
 and shares its scalar table with the result.
 """
-function _layout_extend(L::StateLayout,
-                        arrays::AbstractVector{<:Pair{String,<:Tuple{Vector{Int},Vector{Int}}}})
+function _layout_extend(
+        L::StateLayout,
+        arrays::AbstractVector{<:Pair{String, <:Tuple{Vector{Int}, Vector{Int}}}}
+    )
     isempty(arrays) && return L
     blocks = copy(L.blocks)
     block_of = copy(L.block_of)
@@ -269,7 +275,7 @@ Base.haskey(L::StateLayout, key) = get(L, key, 0) != 0
 Base.length(L::StateLayout) = L.n
 Base.isempty(L::StateLayout) = L.n == 0
 
-function Base.iterate(L::StateLayout, slot::Int=1)
+function Base.iterate(L::StateLayout, slot::Int = 1)
     slot > L.n && return nothing
     return (_slot_key(L, slot) => slot, slot + 1)
 end
@@ -310,18 +316,22 @@ field-`ic` fold visits the cells themselves, in lexicographic order
 """
 mutable struct _DiscoveredCells
     rank::Int                                  # -1 until the first cell
-    boxes::Vector{Tuple{Vector{Int},Vector{Int}}}
+    boxes::Vector{Tuple{Vector{Int}, Vector{Int}}}
     points::Vector{Int}
     npoints::Int
 end
-_DiscoveredCells() = _DiscoveredCells(-1, Tuple{Vector{Int},Vector{Int}}[], Int[], 0)
+_DiscoveredCells() = _DiscoveredCells(-1, Tuple{Vector{Int}, Vector{Int}}[], Int[], 0)
 
 Base.isempty(cs::_DiscoveredCells) = isempty(cs.boxes) && cs.npoints == 0
 
 function _cellset_rank!(cs::_DiscoveredCells, r::Int, name::AbstractString)
     cs.rank == -1 && (cs.rank = r)
-    cs.rank == r || throw(TreeWalkError("E_TREEWALK_UNSUPPORTED_SHAPE",
-        "array variable '$(name)' is indexed with $(cs.rank) and with $(r) subscripts"))
+    cs.rank == r || throw(
+        TreeWalkError(
+            "E_TREEWALK_UNSUPPORTED_SHAPE",
+            "array variable '$(name)' is indexed with $(cs.rank) and with $(r) subscripts"
+        )
+    )
     return nothing
 end
 
@@ -428,15 +438,15 @@ as arrays and read as the per-cell keys `u[1]`, `u[2,3]`, … they stand for,
 without a key per cell. `explicit` holds every other entry verbatim; a per-cell
 key written there wins over the profile's value for that cell.
 """
-struct _InlineICs <: AbstractDict{String,Any}
-    explicit::Dict{String,Any}
-    arrays::Vector{Pair{String,Array{Float64}}}
-    array_of::Dict{String,Int}
+struct _InlineICs <: AbstractDict{String, Any}
+    explicit::Dict{String, Any}
+    arrays::Vector{Pair{String, Array{Float64}}}
+    array_of::Dict{String, Int}
     n::Int
 end
 
-function _InlineICs(explicit::Dict{String,Any}, arrays::Vector{Pair{String,Array{Float64}}})
-    array_of = Dict{String,Int}(first(p) => i for (i, p) in enumerate(arrays))
+function _InlineICs(explicit::Dict{String, Any}, arrays::Vector{Pair{String, Array{Float64}}})
+    array_of = Dict{String, Int}(first(p) => i for (i, p) in enumerate(arrays))
     n = length(explicit)
     for (_, v) in arrays
         n += length(v)
@@ -450,7 +460,7 @@ end
 
 # `(array position, CartesianIndex)` when `key` is exactly `_cell_key(name, I)`
 # for a cell `I` of one of the profiles; `nothing` otherwise.
-function _inline_ic_cell(array_of::Dict{String,Int}, arrays, key::AbstractString)
+function _inline_ic_cell(array_of::Dict{String, Int}, arrays, key::AbstractString)
     k = String(key)
     n = ncodeunits(k)
     (n >= 4 && codeunit(k, n) == UInt8(']')) || return nothing
@@ -489,7 +499,7 @@ Base.length(ics::_InlineICs) = ics.n
 
 # Iteration: the explicit entries, then each profile's cells (column-major) that
 # no explicit key shadows.
-function Base.iterate(ics::_InlineICs, state=(1, nothing, 0))
+function Base.iterate(ics::_InlineICs, state = (1, nothing, 0))
     phase, it, ai = state
     if phase == 1
         r = it === nothing ? iterate(ics.explicit) : iterate(ics.explicit, it)
@@ -583,8 +593,8 @@ way a copy of `base` with `extra`'s entries written in would, without copying
 `base`. `extra` holds only sentinel names (they start with a NUL byte), never an
 array cell's key, so a cell lookup goes straight to `base`.
 """
-struct _VarMapOverlay{M<:AbstractDict{String,Int}} <: AbstractDict{String,Int}
-    extra::Dict{String,Int}
+struct _VarMapOverlay{M <: AbstractDict{String, Int}} <: AbstractDict{String, Int}
+    extra::Dict{String, Int}
     base::M
 end
 
@@ -599,7 +609,7 @@ end
 Base.haskey(o::_VarMapOverlay, key) = haskey(o.extra, key) || haskey(o.base, key)
 Base.length(o::_VarMapOverlay) =
     length(o.base) + count(k -> !haskey(o.base, k), keys(o.extra))
-function Base.iterate(o::_VarMapOverlay, state=(true, nothing))
+function Base.iterate(o::_VarMapOverlay, state = (true, nothing))
     first_phase, it = state
     if first_phase
         r = it === nothing ? iterate(o.extra) : iterate(o.extra, it)
@@ -612,6 +622,7 @@ function Base.iterate(o::_VarMapOverlay, state=(true, nothing))
         haskey(o.extra, first(r[1])) && (it = r[2]; continue)
         return (r[1], (false, r[2]))
     end
+    return
 end
 @inline _vm_slot(o::_VarMapOverlay, name::AbstractString, idx) = _vm_slot(o.base, name, idx)
 _vm_block(o::_VarMapOverlay, name::AbstractString) = _vm_block(o.base, name)

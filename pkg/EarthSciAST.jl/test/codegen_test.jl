@@ -17,8 +17,8 @@ const _CG = EarthSciAST
                     "Test Model";
                     description = "A test model for code generation"
                 );
-                models = Dict{String,Model}(),
-                reaction_systems = Dict{String,ReactionSystem}()
+                models = Dict{String, Model}(),
+                reaction_systems = Dict{String, ReactionSystem}()
             )
 
             code = to_julia_code(file)
@@ -46,18 +46,18 @@ const _CG = EarthSciAST
                             ),
                             "k1" => ModelVariable(
                                 ParameterVariable;
-                                default = 1e-3
+                                default = 1.0e-3
                             )
                         ),
                         [
                             Equation(
                                 OpExpr("D", EarthSciAST.ASTExpr[VarExpr("O3")]),
                                 OpExpr("*", EarthSciAST.ASTExpr[VarExpr("k1"), VarExpr("O3")])
-                            )
+                            ),
                         ]
                     )
                 ),
-                reaction_systems = Dict{String,ReactionSystem}()
+                reaction_systems = Dict{String, ReactionSystem}()
             )
 
             code = to_julia_code(file)
@@ -119,7 +119,7 @@ const _CG = EarthSciAST
                             Equation(
                                 OpExpr("D", E[VarExpr("x")]),
                                 OpExpr("*", E[OpExpr("+", E[VarExpr("p"), VarExpr("q")]), VarExpr("x")])
-                            )
+                            ),
                         ]
                     )
                 )
@@ -149,7 +149,7 @@ const _CG = EarthSciAST
             species = [Species("A")]
             rate = OpExpr("*", EarthSciAST.ASTExpr[VarExpr("k_fast"), VarExpr("A")])
             rxn = Reaction("r1", [SE("A", 1)], nothing, rate)
-            sys = ReactionSystem(species, [rxn]; parameters=[Parameter("k_fast", 1.0)])
+            sys = ReactionSystem(species, [rxn]; parameters = [Parameter("k_fast", 1.0)])
 
             lines = _CG.generate_reaction_system_code("S", sys)
             joined = join(lines, "\n")
@@ -163,26 +163,39 @@ const _CG = EarthSciAST
         # The expression emitters have no `apply_expression_template` arm (the
         # generic fallback would emit `apply_expression_template()`, dropping
         # name and bindings), so `_generate_script` must expand at its boundary.
-        doc = Dict{String,Any}(
+        doc = Dict{String, Any}(
             "esm" => "0.9.0",
-            "metadata" => Dict{String,Any}("name" => "codegen_tpl"),
-            "models" => Dict{String,Any}("M" => Dict{String,Any}(
-                "expression_templates" => Dict{String,Any}("scale" => Dict{String,Any}(
-                    "params" => Any["x"],
-                    "body" => Dict{String,Any}("op" => "*", "args" => Any["k", "x"]))),
-                "variables" => Dict{String,Any}(
-                    "k" => Dict{String,Any}("type" => "parameter", "default" => 0.5),
-                    "y" => Dict{String,Any}("type" => "unknown", "default" => 1.0),
-                    "z" => Dict{String,Any}("type" => "unknown", "default" => 2.0)),
-                "equations" => Any[
-                    Dict{String,Any}(
-                        "lhs" => Dict{String,Any}("op" => "D", "args" => Any["y"], "wrt" => "t"),
-                        "rhs" => Dict{String,Any}("op" => "apply_expression_template",
-                            "args" => Any[], "name" => "scale",
-                            "bindings" => Dict{String,Any}("x" => "z"))),
-                    Dict{String,Any}(
-                        "lhs" => Dict{String,Any}("op" => "D", "args" => Any["z"], "wrt" => "t"),
-                        "rhs" => Dict{String,Any}("op" => "-", "args" => Any["z"]))])))
+            "metadata" => Dict{String, Any}("name" => "codegen_tpl"),
+            "models" => Dict{String, Any}(
+                "M" => Dict{String, Any}(
+                    "expression_templates" => Dict{String, Any}(
+                        "scale" => Dict{String, Any}(
+                            "params" => Any["x"],
+                            "body" => Dict{String, Any}("op" => "*", "args" => Any["k", "x"])
+                        )
+                    ),
+                    "variables" => Dict{String, Any}(
+                        "k" => Dict{String, Any}("type" => "parameter", "default" => 0.5),
+                        "y" => Dict{String, Any}("type" => "unknown", "default" => 1.0),
+                        "z" => Dict{String, Any}("type" => "unknown", "default" => 2.0)
+                    ),
+                    "equations" => Any[
+                        Dict{String, Any}(
+                            "lhs" => Dict{String, Any}("op" => "D", "args" => Any["y"], "wrt" => "t"),
+                            "rhs" => Dict{String, Any}(
+                                "op" => "apply_expression_template",
+                                "args" => Any[], "name" => "scale",
+                                "bindings" => Dict{String, Any}("x" => "z")
+                            )
+                        ),
+                        Dict{String, Any}(
+                            "lhs" => Dict{String, Any}("op" => "D", "args" => Any["z"], "wrt" => "t"),
+                            "rhs" => Dict{String, Any}("op" => "-", "args" => Any["z"])
+                        ),
+                    ]
+                )
+            )
+        )
         file = _CG.load_string(IOBuffer(JSON3.write(doc)))
         @test file.component_templates !== nothing       # the reference survived load
         code = to_julia_code(file)

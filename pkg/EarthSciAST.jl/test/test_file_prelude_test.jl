@@ -58,7 +58,7 @@
 using Test
 
 const _PRELUDE_TEST_DIR = @__DIR__
-const _PRELUDE_PKG_DIR  = normpath(joinpath(_PRELUDE_TEST_DIR, ".."))
+const _PRELUDE_PKG_DIR = normpath(joinpath(_PRELUDE_TEST_DIR, ".."))
 
 # ---------------------------------------------------------------------------
 # AST walk. `Meta.parseall` reads a file without running it, so the scan sees
@@ -86,12 +86,12 @@ What one test file imports, uses and defines.
   * `symbols`   — every symbol anywhere in the tree, for the testutils check.
 """
 function _prelude_facts(path::AbstractString)
-    bound     = Set{Symbol}()
-    macros    = Set{Symbol}()
+    bound = Set{Symbol}()
+    macros = Set{Symbol}()
     qualified = Set{Symbol}()
-    includes  = Set{String}()
-    defined   = Set{Symbol}()
-    symbols   = Set{Symbol}()
+    includes = Set{String}()
+    defined = Set{Symbol}()
+    symbols = Set{Symbol}()
 
     # `Expr(:., :M)` inside a using/import clause; `Expr(:as, clause, :N)`.
     function modname(e)
@@ -108,7 +108,7 @@ function _prelude_facts(path::AbstractString)
             return
         end
         m = modname(e)
-        m === nothing || push!(bound, m)
+        return m === nothing || push!(bound, m)
     end
     function def_name(x)
         x isa Symbol && return x
@@ -129,13 +129,15 @@ function _prelude_facts(path::AbstractString)
         elseif e.head === :macrocall && !isempty(e.args) && e.args[1] isa Symbol
             push!(macros, e.args[1])
         elseif e.head === :. && length(e.args) == 2 &&
-               e.args[1] isa Symbol && e.args[2] isa QuoteNode
+                e.args[1] isa Symbol && e.args[2] isa QuoteNode
             push!(qualified, e.args[1])
         elseif e.head === :call && !isempty(e.args) && e.args[1] === :include &&
-               length(e.args) >= 2 && e.args[2] isa AbstractString
+                length(e.args) >= 2 && e.args[2] isa AbstractString
             push!(includes, String(e.args[2]))
-        elseif e.head in (:function, :macro, :(=), :const, :struct, :abstract,
-                          :global, :local)
+        elseif e.head in (
+                :function, :macro, :(=), :const, :struct, :abstract,
+                :global, :local,
+            )
             n = def_name(isempty(e.args) ? nothing : e.args[1])
             n === nothing || push!(defined, n)
         end
@@ -257,8 +259,10 @@ end
 
 The lines `path` should carry and does not, each spelled as the line to add.
 """
-function _missing_prelude(path::AbstractString, tu_names::Set{Symbol},
-                          tu_gives::Set{Symbol}, pkgs::Set{Symbol})
+function _missing_prelude(
+        path::AbstractString, tu_names::Set{Symbol},
+        tu_gives::Set{Symbol}, pkgs::Set{Symbol}
+    )
     f = _prelude_facts(path)
     has_tu = "testutils.jl" in f.includes
     missing_lines = String[]
@@ -269,16 +273,20 @@ function _missing_prelude(path::AbstractString, tu_names::Set{Symbol},
     elseif has_tu
         ut, itu = _prelude_lines(path)
         ut === nothing || itu === nothing || ut < itu ||
-            push!(missing_lines,
-                  "using Test   # MOVE it above the testutils.jl include on " *
-                  "line $(itu); the include expands a `@test_skip`")
+            push!(
+            missing_lines,
+            "using Test   # MOVE it above the testutils.jl include on " *
+                "line $(itu); the include expands a `@test_skip`"
+        )
     end
 
     # (3) a name testutils.jl defines, without the include that defines it.
     borrowed = sort!(String.(collect(setdiff(intersect(f.symbols, tu_names), f.defined))))
     isempty(borrowed) || has_tu ||
-        push!(missing_lines,
-              "include(\"testutils.jl\")   # uses " * join(borrowed, ", "))
+        push!(
+        missing_lines,
+        "include(\"testutils.jl\")   # uses " * join(borrowed, ", ")
+    )
 
     # (4) `SomeModule.something` for a package this project declares, unless the
     #     file imports it or the prelude it includes already did.
@@ -292,28 +300,35 @@ end
 @testset "every test file carries the prelude it uses" begin
     tu_names = _testutils_exports()
     tu_gives = _testutils_provides()
-    pkgs     = _declared_packages()
+    pkgs = _declared_packages()
     @test :TESTUTILS_REPO_ROOT in tu_names && :_require_fixture in tu_names
     @test :JSON3 in tu_gives && :Test ∉ tu_gives
     @test :Test in pkgs && :EarthSciAST in pkgs   # Project.toml was really read
 
-    files = sort!(filter(f -> endswith(f, ".jl") && f != "runtests.jl",
-                         readdir(_PRELUDE_TEST_DIR)))
+    files = sort!(
+        filter(
+            f -> endswith(f, ".jl") && f != "runtests.jl",
+            readdir(_PRELUDE_TEST_DIR)
+        )
+    )
     @test length(files) > 100                      # the sweep is not vacuous
 
     offenders = String[]
     for f in files
-        lines = _missing_prelude(joinpath(_PRELUDE_TEST_DIR, f),
-                                 tu_names, tu_gives, pkgs)
+        lines = _missing_prelude(
+            joinpath(_PRELUDE_TEST_DIR, f),
+            tu_names, tu_gives, pkgs
+        )
         isempty(lines) && continue
         push!(offenders, "  $(f)\n" * join(("      add: " * l for l in lines), "\n"))
     end
 
     @test isempty(offenders) || error(
         "$(length(offenders)) test file(s) use a name they do not import, so " *
-        "they run only under runtests.jl and fail standalone " *
-        "(testutils.jl documents that both must work). Add the line named:\n" *
-        join(offenders, "\n"))
+            "they run only under runtests.jl and fail standalone " *
+            "(testutils.jl documents that both must work). Add the line named:\n" *
+            join(offenders, "\n")
+    )
 end
 
 # ── …and runtests.jl names every test file ──────────────────────────────────
@@ -338,6 +353,7 @@ end
     orphans = [f for f in files if !(f in named)]
     @test isempty(orphans) || error(
         "$(length(orphans)) test file(s) are never included by runtests.jl, so " *
-        "`Pkg.test()` — and therefore CI — never runs them:\n" *
-        join(("  " * f for f in orphans), "\n"))
+            "`Pkg.test()` — and therefore CI — never runs them:\n" *
+            join(("  " * f for f in orphans), "\n")
+    )
 end

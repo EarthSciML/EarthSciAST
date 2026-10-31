@@ -29,39 +29,48 @@ _idx(arr::AbstractString, idxs...) =
 
 # Build a 1-D `faq` node with a single range declaration `i in lo:hi`.
 function _faq1d(body::ESM2.ASTExpr, idx_name::AbstractString, lo::Int, hi::Int)
-    return ESM2.OpExpr("faq", ESM2.ASTExpr[];
-        output_idx=Any[String(idx_name)],
-        expr_body=body,
-        ranges=Dict{String,Vector{Int}}(String(idx_name) => [lo, hi]))
+    return ESM2.OpExpr(
+        "faq", ESM2.ASTExpr[];
+        output_idx = Any[String(idx_name)],
+        expr_body = body,
+        ranges = Dict{String, Vector{Int}}(String(idx_name) => [lo, hi])
+    )
 end
 
 # Build a 2-D `faq` node with ranges `i in 1:M, j in 1:N` — output shape
 # is `(M, N)` when both indices appear in `output_idx`.
-function _faq2d(body::ESM2.ASTExpr,
-                    i_name::AbstractString, ilo::Int, ihi::Int,
-                    j_name::AbstractString, jlo::Int, jhi::Int)
-    return ESM2.OpExpr("faq", ESM2.ASTExpr[];
-        output_idx=Any[String(i_name), String(j_name)],
-        expr_body=body,
-        ranges=Dict{String,Vector{Int}}(
+function _faq2d(
+        body::ESM2.ASTExpr,
+        i_name::AbstractString, ilo::Int, ihi::Int,
+        j_name::AbstractString, jlo::Int, jhi::Int
+    )
+    return ESM2.OpExpr(
+        "faq", ESM2.ASTExpr[];
+        output_idx = Any[String(i_name), String(j_name)],
+        expr_body = body,
+        ranges = Dict{String, Vector{Int}}(
             String(i_name) => [ilo, ihi],
-            String(j_name) => [jlo, jhi]))
+            String(j_name) => [jlo, jhi]
+        )
+    )
 end
 
 # Build a `D(u[i], t)` node for use inside a `faq` body.
 _d_index(arr::AbstractString, idxs...) =
-    _op("D", _idx(arr, idxs...); wrt="t")
+    _op("D", _idx(arr, idxs...); wrt = "t")
 
 # Build a scalar state variable with an initial value.
-_state(default) = ESM2.ModelVariable(ESM2.UnknownVariable; default=default)
+_state(default) = ESM2.ModelVariable(ESM2.UnknownVariable; default = default)
 
 # Solve an ESM Model and return (sol, compiled_system).
-function _build_and_solve(model::ESM2.Model, name::Symbol,
-                          u0_map::AbstractVector, tspan::Tuple{Float64,Float64})
-    sys = MTK2.System(model; name=name)
+function _build_and_solve(
+        model::ESM2.Model, name::Symbol,
+        u0_map::AbstractVector, tspan::Tuple{Float64, Float64}
+    )
+    sys = MTK2.System(model; name = name)
     simp = MTK2.mtkcompile(sys)
     prob = MTK2.ODEProblem(simp, u0_map, tspan)
-    sol = OrdinaryDiffEqTsit5.solve(prob, OrdinaryDiffEqTsit5.Tsit5(); reltol=1e-8, abstol=1e-10)
+    sol = OrdinaryDiffEqTsit5.solve(prob, OrdinaryDiffEqTsit5.Tsit5(); reltol = 1.0e-8, abstol = 1.0e-10)
     return sol, simp
 end
 
@@ -117,32 +126,35 @@ function _effective_tolerance(model_tol, test_tol, assertion_tol)
 end
 
 # Execute a single schema-level Test against a compiled MTK system.
-function _run_fixture_test(simp, model_name::Symbol,
-                           model_tolerance, t)
+function _run_fixture_test(
+        simp, model_name::Symbol,
+        model_tolerance, t
+    )
     # Build a Dict keyed by symbolic handles — MTK11 accepts this form
     # uniformly, whereas a Vector{Any} of Pair{Num,Float64} gets copied
     # into Memory{Real} and fails at the element-conversion step.
-    u0_map = Dict{Any,Float64}()
+    u0_map = Dict{Any, Float64}()
     for (spec, val) in t.initial_conditions
         handle = _resolve_on_simp(simp, model_name, spec)
         u0_map[handle] = Float64(val)
     end
     tspan = (t.time_span.start, t.time_span.stop)
     prob = MTK2.ODEProblem(simp, u0_map, tspan)
-    sol = OrdinaryDiffEqTsit5.solve(prob, OrdinaryDiffEqTsit5.Tsit5(); reltol=1e-10, abstol=1e-12)
+    sol = OrdinaryDiffEqTsit5.solve(prob, OrdinaryDiffEqTsit5.Tsit5(); reltol = 1.0e-10, abstol = 1.0e-12)
     @test sol.retcode == ModelingToolkit.SciMLBase.ReturnCode.Success
     for a in t.assertions
         handle = _resolve_on_simp(simp, model_name, a.variable)
         rel, abs_ = _effective_tolerance(model_tolerance, t.tolerance, a.tolerance)
-        actual = sol(a.time, idxs=handle)
+        actual = sol(a.time, idxs = handle)
         if abs_ > 0 && iszero(a.expected)
-            @test isapprox(actual, a.expected; atol=abs_)
+            @test isapprox(actual, a.expected; atol = abs_)
         elseif rel > 0
-            @test isapprox(actual, a.expected; rtol=rel, atol=abs_)
+            @test isapprox(actual, a.expected; rtol = rel, atol = abs_)
         else
-            @test isapprox(actual, a.expected; atol=abs_)
+            @test isapprox(actual, a.expected; atol = abs_)
         end
     end
+    return
 end
 
 # Build the MTK system for ONE model of a fixture file.
@@ -155,11 +167,13 @@ end
 # CARRIES the real one. Namespacing is unchanged (`<model name>.<var>`), so
 # every `_arr` lookup below resolves exactly as before.
 function _fixture_system(file, mname::AbstractString, model)
-    one_model = EarthSciAST.EsmFile(file.esm, file.metadata;
-        models=Dict{String,EarthSciAST.Model}(String(mname) => model),
-        index_sets=file.index_sets,
-        function_tables=file.function_tables)
-    return MTK2.System(EarthSciAST.flatten(one_model); name=Symbol(mname))
+    one_model = EarthSciAST.EsmFile(
+        file.esm, file.metadata;
+        models = Dict{String, EarthSciAST.Model}(String(mname) => model),
+        index_sets = file.index_sets,
+        function_tables = file.function_tables
+    )
+    return MTK2.System(EarthSciAST.flatten(one_model); name = Symbol(mname))
 end
 
 # Run every inline test inside every model found in the given .esm file.
@@ -176,6 +190,7 @@ function _run_fixture(path::AbstractString)
             end
         end
     end
+    return
 end
 
 @testset "Array-op runtime (gt-vt3 Phases 1-4)" begin
@@ -187,7 +202,7 @@ end
     # ================================================================
     @testset "1. Pure ODE N=5 analytical" begin
         N = 5
-        vars = Dict{String,ESM2.ModelVariable}(
+        vars = Dict{String, ESM2.ModelVariable}(
             "u" => ESM2.ModelVariable(ESM2.UnknownVariable),
         )
         lhs = _faq1d(_d_index("u", _var("i")), "i", 1, N)
@@ -195,16 +210,16 @@ end
         eq = ESM2.Equation(lhs, rhs)
         model = ESM2.Model(vars, ESM2.Equation[eq])
 
-        sys = MTK2.System(model; name=:PureODE)
+        sys = MTK2.System(model; name = :PureODE)
         simp = MTK2.mtkcompile(sys)
         @test length(MTK2.unknowns(simp)) == N
 
         u_handle = _arr(simp, :PureODE, "u")
         u0 = [u_handle[i] => Float64(i) for i in 1:N]
         prob = MTK2.ODEProblem(simp, u0, (0.0, 1.0))
-        sol = OrdinaryDiffEqTsit5.solve(prob, OrdinaryDiffEqTsit5.Tsit5(); reltol=1e-8, abstol=1e-10)
+        sol = OrdinaryDiffEqTsit5.solve(prob, OrdinaryDiffEqTsit5.Tsit5(); reltol = 1.0e-8, abstol = 1.0e-10)
         for i in 1:N
-            @test sol[u_handle[i]][end] ≈ Float64(i) * exp(-1.0) rtol=1e-6
+            @test sol[u_handle[i]][end] ≈ Float64(i) * exp(-1.0) rtol = 1.0e-6
         end
     end
 
@@ -213,30 +228,32 @@ end
     # ================================================================
     @testset "2. Mixed ODE + algebraic (v eliminated)" begin
         N = 5
-        vars = Dict{String,ESM2.ModelVariable}(
+        vars = Dict{String, ESM2.ModelVariable}(
             "u" => ESM2.ModelVariable(ESM2.UnknownVariable),
             "v" => ESM2.ModelVariable(ESM2.UnknownVariable),
         )
         # D(u[i]) = v[i]
         eq_ode = ESM2.Equation(
             _faq1d(_d_index("u", _var("i")), "i", 1, N),
-            _faq1d(_idx("v", _var("i")), "i", 1, N))
+            _faq1d(_idx("v", _var("i")), "i", 1, N)
+        )
         # v[i] = -u[i]
         eq_alg = ESM2.Equation(
             _faq1d(_idx("v", _var("i")), "i", 1, N),
-            _faq1d(_op("-", _idx("u", _var("i"))), "i", 1, N))
+            _faq1d(_op("-", _idx("u", _var("i"))), "i", 1, N)
+        )
         model = ESM2.Model(vars, ESM2.Equation[eq_ode, eq_alg])
 
-        sys = MTK2.System(model; name=:MixedODEAlg)
+        sys = MTK2.System(model; name = :MixedODEAlg)
         simp = MTK2.mtkcompile(sys)
         @test length(MTK2.unknowns(simp)) == N  # v eliminated
 
         u_handle = _arr(simp, :MixedODEAlg, "u")
         u0 = [u_handle[i] => Float64(i) for i in 1:N]
         prob = MTK2.ODEProblem(simp, u0, (0.0, 1.0))
-        sol = OrdinaryDiffEqTsit5.solve(prob, OrdinaryDiffEqTsit5.Tsit5(); reltol=1e-8, abstol=1e-10)
+        sol = OrdinaryDiffEqTsit5.solve(prob, OrdinaryDiffEqTsit5.Tsit5(); reltol = 1.0e-8, abstol = 1.0e-10)
         for i in 1:N
-            @test sol[u_handle[i]][end] ≈ Float64(i) * exp(-1.0) rtol=1e-6
+            @test sol[u_handle[i]][end] ≈ Float64(i) * exp(-1.0) rtol = 1.0e-6
         end
     end
 
@@ -249,42 +266,46 @@ end
     # ================================================================
     @testset "3. 1D diffusion stencil N=10 vs scalar ref" begin
         N = 10
-        vars = Dict{String,ESM2.ModelVariable}(
+        vars = Dict{String, ESM2.ModelVariable}(
             "u" => ESM2.ModelVariable(ESM2.UnknownVariable),
         )
         # interior faq (1-based output range, offsets baked into body)
-        body = _op("+",
+        body = _op(
+            "+",
             _idx("u", _var("i")),
             _op("*", _num(-2), _idx("u", _op("+", _var("i"), _num(1)))),
-            _idx("u", _op("+", _var("i"), _num(2))))
-        lint = _faq1d(_d_index("u", _op("+", _var("i"), _num(1))), "i", 1, N-2)
-        rint = _faq1d(body, "i", 1, N-2)
+            _idx("u", _op("+", _var("i"), _num(2)))
+        )
+        lint = _faq1d(_d_index("u", _op("+", _var("i"), _num(1))), "i", 1, N - 2)
+        rint = _faq1d(body, "i", 1, N - 2)
         eq_int = ESM2.Equation(lint, rint)
 
         # Scalar BCs
         eq_bc1 = ESM2.Equation(
-            _op("D", _idx("u", 1); wrt="t"),
-            _op("-", _idx("u", 2), _idx("u", 1)))
+            _op("D", _idx("u", 1); wrt = "t"),
+            _op("-", _idx("u", 2), _idx("u", 1))
+        )
         eq_bcN = ESM2.Equation(
-            _op("D", _idx("u", N); wrt="t"),
-            _op("-", _idx("u", N-1), _idx("u", N)))
+            _op("D", _idx("u", N); wrt = "t"),
+            _op("-", _idx("u", N - 1), _idx("u", N))
+        )
 
         model = ESM2.Model(vars, ESM2.Equation[eq_int, eq_bc1, eq_bcN])
 
-        sys = MTK2.System(model; name=:Diff1D)
+        sys = MTK2.System(model; name = :Diff1D)
         simp = MTK2.mtkcompile(sys)
         @test length(MTK2.unknowns(simp)) == N
 
         u_handle = _arr(simp, :Diff1D, "u")
         u0 = [u_handle[i] => (i == 5 ? 1.0 : 0.0) for i in 1:N]
         prob = MTK2.ODEProblem(simp, u0, (0.0, 0.5))
-        sol = OrdinaryDiffEqTsit5.solve(prob, OrdinaryDiffEqTsit5.Tsit5(); reltol=1e-8, abstol=1e-10)
+        sol = OrdinaryDiffEqTsit5.solve(prob, OrdinaryDiffEqTsit5.Tsit5(); reltol = 1.0e-8, abstol = 1.0e-10)
         @test sol.retcode == ModelingToolkit.SciMLBase.ReturnCode.Success
 
         # Mass conservation sanity: diffusion preserves the total.
         total_start = sum(sol[u_handle[i]][1] for i in 1:N)
         total_end = sum(sol[u_handle[i]][end] for i in 1:N)
-        @test total_end ≈ total_start rtol=1e-6
+        @test total_end ≈ total_start rtol = 1.0e-6
     end
 
     # ================================================================
@@ -295,34 +316,38 @@ end
     # ================================================================
     @testset "6. Rearranged algebraic (v buried in LHS sum)" begin
         N = 5
-        vars = Dict{String,ESM2.ModelVariable}(
+        vars = Dict{String, ESM2.ModelVariable}(
             "u" => ESM2.ModelVariable(ESM2.UnknownVariable),
             "v" => ESM2.ModelVariable(ESM2.UnknownVariable),
         )
         # D(u[i]) = v[i]
         eq_ode = ESM2.Equation(
             _faq1d(_d_index("u", _var("i")), "i", 1, N),
-            _faq1d(_idx("v", _var("i")), "i", 1, N))
+            _faq1d(_idx("v", _var("i")), "i", 1, N)
+        )
 
         # Algebraic: (-1 - 0.5*sin(u[i]) + v[i]) ~ (v[i] - v[i])
-        lhs_alg_body = _op("+",
+        lhs_alg_body = _op(
+            "+",
             _num(-1.0),
             _op("*", _num(-0.5), _op("sin", _idx("u", _var("i")))),
-            _idx("v", _var("i")))
+            _idx("v", _var("i"))
+        )
         rhs_alg_body = _op("-", _idx("v", _var("i")), _idx("v", _var("i")))
         eq_alg = ESM2.Equation(
             _faq1d(lhs_alg_body, "i", 1, N),
-            _faq1d(rhs_alg_body, "i", 1, N))
+            _faq1d(rhs_alg_body, "i", 1, N)
+        )
 
         model = ESM2.Model(vars, ESM2.Equation[eq_ode, eq_alg])
-        sys = MTK2.System(model; name=:Rearranged)
+        sys = MTK2.System(model; name = :Rearranged)
         simp = MTK2.mtkcompile(sys)
         @test length(MTK2.unknowns(simp)) == N  # v eliminated
 
         u_handle = _arr(simp, :Rearranged, "u")
         u0 = [u_handle[i] => Float64(i) for i in 1:N]
         prob = MTK2.ODEProblem(simp, u0, (0.0, 1.0))
-        sol = OrdinaryDiffEqTsit5.solve(prob, OrdinaryDiffEqTsit5.Tsit5(); reltol=1e-8, abstol=1e-10)
+        sol = OrdinaryDiffEqTsit5.solve(prob, OrdinaryDiffEqTsit5.Tsit5(); reltol = 1.0e-8, abstol = 1.0e-10)
         @test sol.retcode == ModelingToolkit.SciMLBase.ReturnCode.Success
     end
 
@@ -332,26 +357,30 @@ end
     # ================================================================
     @testset "8. 2D ArrayOp (M,N)=(4,3) analytical" begin
         M, Nd = 4, 3
-        vars = Dict{String,ESM2.ModelVariable}(
+        vars = Dict{String, ESM2.ModelVariable}(
             "u" => ESM2.ModelVariable(ESM2.UnknownVariable),
         )
-        lhs = _faq2d(_op("D", _idx("u", _var("i"), _var("j")); wrt="t"),
-                         "i", 1, M, "j", 1, Nd)
-        rhs = _faq2d(_op("-", _idx("u", _var("i"), _var("j"))),
-                         "i", 1, M, "j", 1, Nd)
+        lhs = _faq2d(
+            _op("D", _idx("u", _var("i"), _var("j")); wrt = "t"),
+            "i", 1, M, "j", 1, Nd
+        )
+        rhs = _faq2d(
+            _op("-", _idx("u", _var("i"), _var("j"))),
+            "i", 1, M, "j", 1, Nd
+        )
         eq = ESM2.Equation(lhs, rhs)
         model = ESM2.Model(vars, ESM2.Equation[eq])
 
-        sys = MTK2.System(model; name=:ODE2D)
+        sys = MTK2.System(model; name = :ODE2D)
         simp = MTK2.mtkcompile(sys)
         @test length(MTK2.unknowns(simp)) == M * Nd
 
         u_handle = _arr(simp, :ODE2D, "u")
         u0 = [u_handle[i, j] => Float64(i + j) for i in 1:M for j in 1:Nd]
         prob = MTK2.ODEProblem(simp, u0, (0.0, 1.0))
-        sol = OrdinaryDiffEqTsit5.solve(prob, OrdinaryDiffEqTsit5.Tsit5(); reltol=1e-8, abstol=1e-10)
+        sol = OrdinaryDiffEqTsit5.solve(prob, OrdinaryDiffEqTsit5.Tsit5(); reltol = 1.0e-8, abstol = 1.0e-10)
         for i in 1:M, j in 1:Nd
-            @test sol[u_handle[i, j]][end] ≈ Float64(i + j) * exp(-1.0) rtol=1e-6
+            @test sol[u_handle[i, j]][end] ≈ Float64(i + j) * exp(-1.0) rtol = 1.0e-6
         end
     end
 
@@ -360,12 +389,16 @@ end
     # ================================================================
     @testset "Parse/serialize round trip for all 7 array ops" begin
         # faq
-        node1 = ESM2.OpExpr("faq", ESM2.ASTExpr[_var("A"), _var("B")];
-            output_idx=Any["i", "j"],
-            expr_body=_op("*",
+        node1 = ESM2.OpExpr(
+            "faq", ESM2.ASTExpr[_var("A"), _var("B")];
+            output_idx = Any["i", "j"],
+            expr_body = _op(
+                "*",
                 _op("index", _var("A"), _var("i"), _var("k")),
-                _op("index", _var("B"), _var("k"), _var("j"))),
-            reduce="+")
+                _op("index", _var("B"), _var("k"), _var("j"))
+            ),
+            reduce = "+"
+        )
         j1 = ESM2.serialize_expression(node1)
         @test j1["op"] == "faq"
         @test j1["output_idx"] == Any["i", "j"]
@@ -377,9 +410,11 @@ end
         @test rt1.expr_body isa ESM2.OpExpr
 
         # makearray
-        node2 = ESM2.OpExpr("makearray", ESM2.ASTExpr[];
-            regions=[[[1, 2]], [[3, 3]]],
-            values=ESM2.ASTExpr[_var("x"), _num(0)])
+        node2 = ESM2.OpExpr(
+            "makearray", ESM2.ASTExpr[];
+            regions = [[[1, 2]], [[3, 3]]],
+            values = ESM2.ASTExpr[_var("x"), _num(0)]
+        )
         j2 = ESM2.serialize_expression(node2)
         rt2 = ESM2.expression_from_json(j2)
         @test rt2.regions == [[[1, 2]], [[3, 3]]]
@@ -393,22 +428,22 @@ end
         @test length(rt3.args) == 3
 
         # broadcast
-        node4 = ESM2.OpExpr("broadcast", ESM2.ASTExpr[_var("A"), _var("B")]; fn="+")
+        node4 = ESM2.OpExpr("broadcast", ESM2.ASTExpr[_var("A"), _var("B")]; fn = "+")
         rt4 = ESM2.expression_from_json(ESM2.serialize_expression(node4))
         @test rt4.fn == "+"
 
         # reshape
-        node5 = ESM2.OpExpr("reshape", ESM2.ASTExpr[_var("A")]; shape=Any[1, 9])
+        node5 = ESM2.OpExpr("reshape", ESM2.ASTExpr[_var("A")]; shape = Any[1, 9])
         rt5 = ESM2.expression_from_json(ESM2.serialize_expression(node5))
         @test rt5.shape == Any[1, 9]
 
         # transpose
-        node6 = ESM2.OpExpr("transpose", ESM2.ASTExpr[_var("T")]; perm=[2, 0, 1])
+        node6 = ESM2.OpExpr("transpose", ESM2.ASTExpr[_var("T")]; perm = [2, 0, 1])
         rt6 = ESM2.expression_from_json(ESM2.serialize_expression(node6))
         @test rt6.perm == [2, 0, 1]
 
         # concat
-        node7 = ESM2.OpExpr("concat", ESM2.ASTExpr[_var("A"), _var("B")]; axis=1)
+        node7 = ESM2.OpExpr("concat", ESM2.ASTExpr[_var("A"), _var("B")]; axis = 1)
         rt7 = ESM2.expression_from_json(ESM2.serialize_expression(node7))
         @test rt7.axis == 1
     end
@@ -419,34 +454,44 @@ end
     @testset "infer_array_shapes" begin
         # Scalar-only: empty dict.
         eq_scalar = ESM2.Equation(
-            _op("D", _var("x"); wrt="t"),
-            _op("-", _var("x")))
+            _op("D", _var("x"); wrt = "t"),
+            _op("-", _var("x"))
+        )
         @test isempty(infer_array_shapes([eq_scalar]))
 
         # 1D: u[i] over i in 1:5 → u has shape [1:5].
         eq_arr = ESM2.Equation(
             _faq1d(_d_index("u", _var("i")), "i", 1, 5),
-            _faq1d(_op("-", _idx("u", _var("i"))), "i", 1, 5))
+            _faq1d(_op("-", _idx("u", _var("i"))), "i", 1, 5)
+        )
         shapes = infer_array_shapes([eq_arr])
         @test haskey(shapes, "u")
         @test shapes["u"] == [1:5]
 
         # 1D with offset: u[i] + u[i+2] where i in 1:8 → u has shape [1:10].
-        body = _op("+",
+        body = _op(
+            "+",
             _idx("u", _var("i")),
-            _idx("u", _op("+", _var("i"), _num(2))))
+            _idx("u", _op("+", _var("i"), _num(2)))
+        )
         eq_off = ESM2.Equation(
             _faq1d(_d_index("u", _op("+", _var("i"), _num(1))), "i", 1, 8),
-            _faq1d(body, "i", 1, 8))
+            _faq1d(body, "i", 1, 8)
+        )
         shapes_off = infer_array_shapes([eq_off])
         @test shapes_off["u"] == [1:10]
 
         # 2D: u[i,j] over i in 1:4, j in 1:3 → shape [1:4, 1:3].
         eq_2d = ESM2.Equation(
-            _faq2d(_op("D", _idx("u", _var("i"), _var("j")); wrt="t"),
-                       "i", 1, 4, "j", 1, 3),
-            _faq2d(_op("-", _idx("u", _var("i"), _var("j"))),
-                       "i", 1, 4, "j", 1, 3))
+            _faq2d(
+                _op("D", _idx("u", _var("i"), _var("j")); wrt = "t"),
+                "i", 1, 4, "j", 1, 3
+            ),
+            _faq2d(
+                _op("-", _idx("u", _var("i"), _var("j"))),
+                "i", 1, 4, "j", 1, 3
+            )
+        )
         shapes_2d = infer_array_shapes([eq_2d])
         @test shapes_2d["u"] == [1:4, 1:3]
     end
@@ -468,9 +513,11 @@ end
         # requires each subscript to be a function of a single symbolic variable;
         # generalized-einsum fixtures whose stencil body mixes output and contracted
         # indices in one subscript (e.g. u[i+1+k]) violate that constraint.
-        mtk_skip = Set([
-            "19_einsum_1d_stencil.esm",  # stencil index i+1+k has two symbolics
-        ])
+        mtk_skip = Set(
+            [
+                "19_einsum_1d_stencil.esm",  # stencil index i+1+k has two symbolics
+            ]
+        )
 
         for fname in fixture_files
             if fname in mtk_skip
@@ -520,19 +567,22 @@ end
         @test MTKExt._range_bounds_int(ref, Dict("x" => 4)) == (1, 4)
         # Unresolvable set, ragged (`of`-parented) set, and a form that is
         # neither a dense array nor an index-set reference.
-        @test_throws ArgumentError MTKExt._range_bounds_int(ref, Dict{String,Int}())
+        @test_throws ArgumentError MTKExt._range_bounds_int(ref, Dict{String, Int}())
         @test_throws ArgumentError MTKExt._range_bounds_int(
-            EarthSciAST.IndexSetRef("x"; of=["p"]), Dict("x" => 4))
+            EarthSciAST.IndexSetRef("x"; of = ["p"]), Dict("x" => 4)
+        )
         @test_throws ArgumentError MTKExt._range_bounds_int(:not_a_range)
 
         mname = "CumulativePrefixReduction"
-        path = joinpath(@__DIR__, "..", "..", "..", "tests", "fixtures",
-                        "faq", "25_cumulative_prefix_reduction.esm")
+        path = joinpath(
+            @__DIR__, "..", "..", "..", "tests", "fixtures",
+            "faq", "25_cumulative_prefix_reduction.esm"
+        )
         file = EarthSciAST.load_path(path)
         model = file.models[mname]
 
         # No registry reachable from a bare `Model` ⇒ ArgumentError, not MethodError.
-        @test_throws ArgumentError MTK2.System(model; name=Symbol(mname))
+        @test_throws ArgumentError MTK2.System(model; name = Symbol(mname))
 
         # ---- 2. admitted window: MTK RHS ≡ tree-walk RHS, cell by cell ----
         # Exactly-representable summands (powers of two), no cancellation, so
@@ -550,8 +600,10 @@ end
         prob.f(du_mtk, prob.u0, prob.p, 0.0)
         @test length(unk) == length(du_tw)
         for (k, u) in enumerate(unk)
-            name = replace(string(u), "(t)" => "", "$(mname)_" => "",
-                           "(" => "", ")" => "")
+            name = replace(
+                string(u), "(t)" => "", "$(mname)_" => "",
+                "(" => "", ")" => ""
+            )
             @test haskey(vm, name)
             @test du_mtk[k] == du_tw[vm[name]]   # bit-identical, not approx
         end
@@ -564,27 +616,51 @@ end
         # esm 1.0.0 §6.3: `u` is an `unknown` DEFINED by the bare-variable-LHS
         # equation `u ~ makearray(...)` — no variable-level `expression`.
         cancel = EarthSciAST.Model(
-            Dict("u" => EarthSciAST.ModelVariable(EarthSciAST.UnknownVariable;
-                     shape=["x"]),
-                 "c" => EarthSciAST.ModelVariable(EarthSciAST.UnknownVariable;
-                     shape=["x"], default=0.0)),
-            [EarthSciAST.Equation(_var("u"),
-                _op("makearray";
-                    regions=[[[1, 1]], [[2, 2]], [[3, 3]], [[4, 4]]],
-                    values=EarthSciAST.ASTExpr[_num(1e16), _num(1.0),
-                                               _num(-1e16), _num(1.0)])),
-             EarthSciAST.Equation(
-                _op("faq"; output_idx=Any["i"],
-                    expr_body=_op("D", _idx("c", _var("i")); wrt="t"),
-                    ranges=Dict("i" => EarthSciAST.IndexSetRef("x"))),
-                _op("faq", _var("u"); output_idx=Any["i"], reduce="+",
-                    ranges=Dict("i" => EarthSciAST.IndexSetRef("x"),
-                                "j" => EarthSciAST.IndexSetRef("x")),
-                    filter=_op("<=", _var("j"), _var("i")),
-                    expr_body=_idx("u", _var("j"))))])
-        cfile = EarthSciAST.EsmFile(file.esm, file.metadata;
-            models=Dict{String,EarthSciAST.Model}("Cancel" => cancel),
-            index_sets=Dict("x" => EarthSciAST.IndexSet("interval"; size=4)))
+            Dict(
+                "u" => EarthSciAST.ModelVariable(
+                    EarthSciAST.UnknownVariable;
+                    shape = ["x"]
+                ),
+                "c" => EarthSciAST.ModelVariable(
+                    EarthSciAST.UnknownVariable;
+                    shape = ["x"], default = 0.0
+                )
+            ),
+            [
+                EarthSciAST.Equation(
+                    _var("u"),
+                    _op(
+                        "makearray";
+                        regions = [[[1, 1]], [[2, 2]], [[3, 3]], [[4, 4]]],
+                        values = EarthSciAST.ASTExpr[
+                            _num(1.0e16), _num(1.0),
+                            _num(-1.0e16), _num(1.0),
+                        ]
+                    )
+                ),
+                EarthSciAST.Equation(
+                    _op(
+                        "faq"; output_idx = Any["i"],
+                        expr_body = _op("D", _idx("c", _var("i")); wrt = "t"),
+                        ranges = Dict("i" => EarthSciAST.IndexSetRef("x"))
+                    ),
+                    _op(
+                        "faq", _var("u"); output_idx = Any["i"], reduce = "+",
+                        ranges = Dict(
+                            "i" => EarthSciAST.IndexSetRef("x"),
+                            "j" => EarthSciAST.IndexSetRef("x")
+                        ),
+                        filter = _op("<=", _var("j"), _var("i")),
+                        expr_body = _idx("u", _var("j"))
+                    )
+                ),
+            ]
+        )
+        cfile = EarthSciAST.EsmFile(
+            file.esm, file.metadata;
+            models = Dict{String, EarthSciAST.Model}("Cancel" => cancel),
+            index_sets = Dict("x" => EarthSciAST.IndexSet("interval"; size = 4))
+        )
 
         cf!, cu0, cp, _cts, cvm = EarthSciAST._build_evaluator(cfile)
         fill!(cu0, 0.0)
@@ -599,9 +675,13 @@ end
         cprob = MTK2.ODEProblem(csimp, Dict(u => 0.0 for u in cunk), (0.0, 1.0))
         cdu_mtk = similar(cprob.u0)
         cprob.f(cdu_mtk, cprob.u0, cprob.p, 0.0)
-        cell = Dict(replace(string(u), "(t)" => "", "Cancel_" => "",
-                            "(" => "", ")" => "") => k
-                    for (k, u) in enumerate(cunk))
+        cell = Dict(
+            replace(
+                string(u), "(t)" => "", "Cancel_" => "",
+                "(" => "", ")" => ""
+            ) => k
+                for (k, u) in enumerate(cunk)
+        )
         # Cells 1-2: nothing has cancelled, so the orders still coincide.
         @test cdu_mtk[cell["c[1]"]] == cdu_tw[cvm["c[1]"]]
         @test cdu_mtk[cell["c[2]"]] == cdu_tw[cvm["c[2]"]]

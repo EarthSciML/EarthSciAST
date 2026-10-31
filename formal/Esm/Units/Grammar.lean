@@ -179,7 +179,7 @@ def startsTerm : List Tok → Bool
 mutual
 def pAtom : Nat → List Tok → Except Err (UExpr × List Tok)
   | 0, _ => .error .fuel
-  | _ + 1, .num lit v _ :: ts => if lit = "1" then .ok (.one, ts) else .error (.scalingFactor lit)
+  | _ + 1, .num lit _ _ :: ts => if lit = "1" then .ok (.one, ts) else .error (.scalingFactor lit)
   | _ + 1, .sym s :: ts => .ok (.sym s, ts)
   | n + 1, .lp :: ts =>
     match pUnit n ts with

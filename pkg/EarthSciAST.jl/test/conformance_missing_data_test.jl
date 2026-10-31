@@ -16,7 +16,7 @@ using EarthSciAST
 
 include("testutils.jl")  # TESTUTILS_REPO_ROOT
 
-const _MD_CAT_DIR  = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "missing_data")
+const _MD_CAT_DIR = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "missing_data")
 const _MD_MANIFEST = joinpath(_MD_CAT_DIR, "manifest.json")
 
 # A row-major nested JSON array as a Julia array indexed the same way
@@ -25,13 +25,15 @@ function _md_dense(v)
     v isa Number && return Float64(v)
     all(e -> e isa Number, v) && return Float64.(collect(v))
     rows = [_md_dense(e) for e in v]
-    return permutedims(cat((reshape(r, 1, size(r)...) for r in rows)...; dims = 1),
-                       (1, (2:ndims(rows[1]) + 1)...))
+    return permutedims(
+        cat((reshape(r, 1, size(r)...) for r in rows)...; dims = 1),
+        (1, (2:(ndims(rows[1]) + 1))...)
+    )
 end
 
 function _md_rhs(prob)
     n = length(prob.u0)
-    u = [1 + 0.1 * sin(0.37 * k) for k in 0:n-1]
+    u = [1 + 0.1 * sin(0.37 * k) for k in 0:(n - 1)]
     du = zeros(n)
     prob.f!(du, u, prob.p, 0.0)
     return du
@@ -62,25 +64,33 @@ end
                     @test err isa EarthSciAST.TreeWalkError
                     @test err isa EarthSciAST.TreeWalkError && err.code == want
                     msg = err === nothing ? "" : sprint(showerror, err)
-                    @test any(m -> occursin("'$(String(m))'", msg) ||
-                                   occursin("'$(last(split(String(m), '.')))'", msg),
-                              case.missing)
+                    @test any(
+                        m -> occursin("'$(String(m))'", msg) ||
+                            occursin("'$(last(split(String(m), '.')))'", msg),
+                        case.missing
+                    )
                 end
             end
         end
         supply = get(case, :supply, nothing)
         case.const_arrays === nothing && supply === nothing && continue
-        arrays = case.const_arrays === nothing ? Dict{String,Any}() :
-                 Dict{String,Any}(String(k) => _md_dense(v) for (k, v) in pairs(case.const_arrays))
-        p = Dict{String,Float64}(String(k) => Float64(v)
-                                 for (k, v) in pairs(something(get(something(supply, Dict()), :p, nothing), Dict())))
-        u0 = Dict{String,Float64}(String(k) => Float64(v)
-                                  for (k, v) in pairs(something(get(something(supply, Dict()), :u0, nothing), Dict())))
-        answers = Dict{String,Vector{Float64}}()
+        arrays = case.const_arrays === nothing ? Dict{String, Any}() :
+            Dict{String, Any}(String(k) => _md_dense(v) for (k, v) in pairs(case.const_arrays))
+        p = Dict{String, Float64}(
+            String(k) => Float64(v)
+                for (k, v) in pairs(something(get(something(supply, Dict()), :p, nothing), Dict()))
+        )
+        u0 = Dict{String, Float64}(
+            String(k) => Float64(v)
+                for (k, v) in pairs(something(get(something(supply, Dict()), :u0, nothing), Dict()))
+        )
+        answers = Dict{String, Vector{Float64}}()
         for compiler in manifest.compilers
             @testset "$(case.id) [$(compiler)] with data" begin
-                prob = esm_problem(fixture, (0.0, 1.0); compiler = Symbol(compiler),
-                                   const_arrays = arrays, p = p, u0 = u0)
+                prob = esm_problem(
+                    fixture, (0.0, 1.0); compiler = Symbol(compiler),
+                    const_arrays = arrays, p = p, u0 = u0
+                )
                 if case.rhs
                     du = _md_rhs(prob)
                     @test all(isfinite, du)

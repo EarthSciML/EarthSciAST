@@ -42,7 +42,7 @@ BINS records into cells with a containment / overlap predicate
 (`E[c] = Σ_r [contains(cell_c, pt_r)] · …`) — so `E`'s support is the distinct
 cells that contain ≥1 record, derivable at const time.
 """
-function desugar_pushdown(esm::AbstractDict; model_name=nothing)
+function desugar_pushdown(esm::AbstractDict; model_name = nothing)
     # IDEMPOTENCY GUARD: a document that already carries the rewrite's
     # provenance record (`metadata.x_esd.pushdown`) has been desugared — the
     # generated constructs (compact E over the derived set, cell-gather rect
@@ -81,10 +81,10 @@ corpus. Empty for a document that already carries the rewrite record, for one
 with no model selected, and — deliberately — for one that simply is NOT
 join-shaped: "no join here" is not a defect.
 """
-function pushdown_diagnostics(esm::AbstractDict; model_name=nothing)
-    _pushdown_record(esm) === nothing || return Dict{String,Any}[]
+function pushdown_diagnostics(esm::AbstractDict; model_name = nothing)
+    _pushdown_record(esm) === nothing || return Dict{String, Any}[]
     an = _pd_analyze(esm, model_name)
-    return an === nothing ? Dict{String,Any}[] : an.diagnostics
+    return an === nothing ? Dict{String, Any}[] : an.diagnostics
 end
 
 # The ONE detection entry point shared by `desugar_pushdown` (which then emits)
@@ -121,8 +121,10 @@ function _pushdown_record(doc::AbstractDict)
 end
 
 _pd_model_name(file, model_name) = model_name !== nothing ? String(model_name) :
-    (file.models !== nothing && length(file.models) == 1 ?
-     String(first(keys(file.models))) : nothing)
+    (
+        file.models !== nothing && length(file.models) == 1 ?
+        String(first(keys(file.models))) : nothing
+    )
 
 # ---- detection-time template-reference expansion (esm-spec §9.6.4 rule 2) --
 #
@@ -199,12 +201,12 @@ function _pd_detection_defs(model::Model, reg)
     defs = observed_definitions(model)
     reg === nothing && return defs
     any(_pd_has_apply, values(defs)) || return defs
-    out = Dict{String,ASTExpr}(defs)
+    out = Dict{String, ASTExpr}(defs)
     # Shared expansion memo: two sites with the same (template, bindings) reuse
     # one expansion. Rule 2 requires exactly that they be structurally identical
     # with bit-equal constants, and this walk is read-only, so the sharing is
     # unobservable — the same guarantee `_expand_model_refs!` relies on.
-    memo = Dict{Tuple{String,String},OpExpr}()
+    memo = Dict{Tuple{String, String}, OpExpr}()
     for (name, ex) in defs
         _pd_has_apply(ex) || continue
         lowered = try
@@ -257,8 +259,10 @@ A cell-axis array indexed WITHOUT the cell symbol is deliberately left alone: it
 still reads the full-grid array at a full-grid position, which the rewrite does
 not disturb.
 """
-function _pd_cell_factors!(e, c_sym::AbstractString, vars::AbstractDict,
-                           C::AbstractString, out::AbstractDict, bad::AbstractDict)
+function _pd_cell_factors!(
+        e, c_sym::AbstractString, vars::AbstractDict,
+        C::AbstractString, out::AbstractDict, bad::AbstractDict
+    )
     e isa OpExpr || return nothing
     if e.op == "index" && length(e.args) >= 2
         F = _pd_varname(e.args[1])
@@ -299,7 +303,7 @@ function _pd_subscript_sketch(e)
     e isa OpExpr || return "?"
     if e.op == "index"
         return _pd_subscript_sketch(e.args[1]) * "[" *
-               join((_pd_subscript_sketch(a) for a in e.args[2:end]), ", ") * "]"
+            join((_pd_subscript_sketch(a) for a in e.args[2:end]), ", ") * "]"
     end
     return String(e.op) * "(" * join((_pd_subscript_sketch(a) for a in e.args), ", ") * ")"
 end
@@ -333,8 +337,10 @@ end
 # `c_sym` is the contracted index and `out_syms` the ordered output indices. This
 # is a PURE STRUCTURAL check on index symbols; it neither inspects factor values
 # nor the semiring (callers apply the additive `(+,0)` semiring guard themselves).
-function _pd_matvec_factors(body, c_sym::AbstractString,
-                            out_syms::AbstractVector{<:AbstractString})
+function _pd_matvec_factors(
+        body, c_sym::AbstractString,
+        out_syms::AbstractVector{<:AbstractString}
+    )
     (body isa OpExpr && body.op == "*" && length(body.args) == 2) || return nothing
     isempty(out_syms) && return nothing
     parts = Any[_pd_index_syms(a) for a in body.args]
@@ -357,7 +363,11 @@ end
 
 # (⊕ spelling, 0̄) for an aggregate node, or `nothing` on an unknown semiring.
 _pd_oplus(agg::OpExpr) =
-    try _aggregate_oplus_identity(agg.semiring, agg.reduce) catch; nothing end
+try
+    _aggregate_oplus_identity(agg.semiring, agg.reduce)
+catch
+    nothing
+end
 
 _pd_flip(op) = op == "<" ? ">" : op == "<=" ? ">=" : op == ">" ? "<" : "<="
 
@@ -410,7 +420,7 @@ end
 function _pd_parse_containment(pred, c_sym::AbstractString, r_sym::AbstractString)
     pred isa OpExpr || return nothing
     comps = pred.op in ("and", "*") ? pred.args : ASTExpr[pred]
-    bounds = Dict{String,Dict{Symbol,String}}()
+    bounds = Dict{String, Dict{Symbol, String}}()
     rec_order = String[]
     for cmp in comps
         (cmp isa OpExpr && cmp.op in ("<", "<=", ">", ">=") && length(cmp.args) == 2) || return nothing
@@ -427,16 +437,20 @@ function _pd_parse_containment(pred, c_sym::AbstractString, r_sym::AbstractStrin
         end
         opn = cell_on_left ? cmp.op : _pd_flip(cmp.op)   # normalise to `Fc <opn> Fp`
         kind = opn in ("<", "<=") ? :min : :max          # Fc is a lower/upper bound of Fp
-        haskey(bounds, Fp) || (push!(rec_order, Fp); bounds[Fp] = Dict{Symbol,String}())
+        haskey(bounds, Fp) || (push!(rec_order, Fp); bounds[Fp] = Dict{Symbol, String}())
         haskey(bounds[Fp], kind) && return nothing       # one bound of each kind per factor
         bounds[Fp][kind] = Fc
     end
     nbound(P) = length(bounds[P])
     if length(rec_order) == 2 && all(P -> nbound(P) == 2, rec_order)
         Px, Py = rec_order[1], rec_order[2]
-        return (src_env = String[Px, Py],
-                tgt_env = String[bounds[Px][:min], bounds[Py][:min],
-                                 bounds[Px][:max], bounds[Py][:max]])
+        return (
+            src_env = String[Px, Py],
+            tgt_env = String[
+                bounds[Px][:min], bounds[Py][:min],
+                bounds[Px][:max], bounds[Py][:max],
+            ],
+        )
     elseif length(rec_order) == 4 && all(P -> nbound(P) == 1, rec_order)
         # A record factor carrying a LOWER cell bound (`cmin ≤ r`) is that
         # axis's record MAXIMUM, and vice versa — the AABB test compares each
@@ -444,9 +458,13 @@ function _pd_parse_containment(pred, c_sym::AbstractString, r_sym::AbstractStrin
         his = String[P for P in rec_order if haskey(bounds[P], :min)]
         los = String[P for P in rec_order if haskey(bounds[P], :max)]
         (length(his) == 2 && length(los) == 2) || return nothing
-        return (src_env = String[los[1], los[2], his[1], his[2]],
-                tgt_env = String[bounds[his[1]][:min], bounds[his[2]][:min],
-                                 bounds[los[1]][:max], bounds[los[2]][:max]])
+        return (
+            src_env = String[los[1], los[2], his[1], his[2]],
+            tgt_env = String[
+                bounds[his[1]][:min], bounds[his[2]][:min],
+                bounds[los[1]][:max], bounds[los[2]][:max],
+            ],
+        )
     end
     return nothing
 end
@@ -476,9 +494,11 @@ end
 # supplied by the caller from `observed_definitions`: from esm 1.0.0 a variable
 # carries no expression of its own, so a non-observed variable simply has no
 # definition to pass and never reaches here.
-function _pd_detect_binning(ev::ModelVariable, agg::Union{ASTExpr,Nothing},
-                            out_set::AbstractString;
-                            out_is_cell::Union{Bool,Nothing}=nothing)
+function _pd_detect_binning(
+        ev::ModelVariable, agg::Union{ASTExpr, Nothing},
+        out_set::AbstractString;
+        out_is_cell::Union{Bool, Nothing} = nothing
+    )
     (ev.shape !== nothing && length(ev.shape) == 1 && ev.shape[1] == out_set) || return nothing
     (agg isa OpExpr && _is_faq_op(agg.op)) || return nothing
     oz = _pd_oplus(agg); oz === nothing && return nothing
@@ -486,12 +506,16 @@ function _pd_detect_binning(ev::ModelVariable, agg::Union{ASTExpr,Nothing},
     oi = agg.output_idx
     (oi !== nothing && length(oi) == 1) || return nothing
     out_sym = String(oi[1])
-    ranges = agg.ranges === nothing ? Dict{String,Any}() : agg.ranges
+    ranges = agg.ranges === nothing ? Dict{String, Any}() : agg.ranges
     length(ranges) == 2 || return nothing
-    (haskey(ranges, out_sym) && ranges[out_sym] isa IndexSetRef &&
-     ranges[out_sym].from == out_set) || return nothing
+    (
+        haskey(ranges, out_sym) && ranges[out_sym] isa IndexSetRef &&
+            ranges[out_sym].from == out_set
+    ) || return nothing
     in_sym = nothing
-    for k in keys(ranges); k == out_sym && continue; in_sym = k; end
+    for k in keys(ranges)
+        k == out_sym && continue; in_sym = k
+    end
     (in_sym !== nothing && ranges[in_sym] isa IndexSetRef) || return nothing
     in_set = String(ranges[in_sym].from)
     body = agg.expr_body
@@ -509,15 +533,19 @@ function _pd_detect_binning(ev::ModelVariable, agg::Union{ASTExpr,Nothing},
     # unhinted call) the out-as-cell reading is preferred, as before.
     if out_is_cell !== false
         env = _pd_parse_containment(pred, out_sym, in_sym)
-        env === nothing || return (c_sym = out_sym, r_sym = in_sym,
-                                   C = String(out_set), R = in_set, out_is_cell = true,
-                                   src_env = env.src_env, tgt_env = env.tgt_env)
+        env === nothing || return (
+            c_sym = out_sym, r_sym = in_sym,
+            C = String(out_set), R = in_set, out_is_cell = true,
+            src_env = env.src_env, tgt_env = env.tgt_env,
+        )
     end
     out_is_cell === true && return nothing
     env = _pd_parse_containment(pred, in_sym, out_sym)
     env === nothing && return nothing
-    return (c_sym = in_sym, r_sym = out_sym, C = in_set, R = String(out_set),
-            out_is_cell = false, src_env = env.src_env, tgt_env = env.tgt_env)
+    return (
+        c_sym = in_sym, r_sym = out_sym, C = in_set, R = String(out_set),
+        out_is_cell = false, src_env = env.src_env, tgt_env = env.tgt_env,
+    )
 end
 
 # ---- residual diagnostics --------------------------------------------------
@@ -573,8 +601,10 @@ Otherwise `(reason, template)`:
     did not read as a containment — point-in-rect or envelope
     overlap — in EITHER orientation.
 """
-function _pd_binning_refusal(ev::ModelVariable, agg::Union{ASTExpr,Nothing},
-                             out_set::AbstractString)
+function _pd_binning_refusal(
+        ev::ModelVariable, agg::Union{ASTExpr, Nothing},
+        out_set::AbstractString
+    )
     (ev.shape !== nothing && length(ev.shape) == 1 && ev.shape[1] == out_set) || return nothing
     (agg isa OpExpr && _is_faq_op(agg.op)) || return nothing
     oz = _pd_oplus(agg); oz === nothing && return nothing
@@ -582,12 +612,16 @@ function _pd_binning_refusal(ev::ModelVariable, agg::Union{ASTExpr,Nothing},
     oi = agg.output_idx
     (oi !== nothing && length(oi) == 1) || return nothing
     out_sym = String(oi[1])
-    ranges = agg.ranges === nothing ? Dict{String,Any}() : agg.ranges
+    ranges = agg.ranges === nothing ? Dict{String, Any}() : agg.ranges
     length(ranges) == 2 || return nothing
-    (haskey(ranges, out_sym) && ranges[out_sym] isa IndexSetRef &&
-     ranges[out_sym].from == out_set) || return nothing
+    (
+        haskey(ranges, out_sym) && ranges[out_sym] isa IndexSetRef &&
+            ranges[out_sym].from == out_set
+    ) || return nothing
     in_sym = nothing
-    for k in keys(ranges); k == out_sym && continue; in_sym = k; end
+    for k in keys(ranges)
+        k == out_sym && continue; in_sym = k
+    end
     (in_sym !== nothing && ranges[in_sym] isa IndexSetRef) || return nothing
     body = agg.expr_body
     body isa OpExpr || return nothing
@@ -616,11 +650,11 @@ function _pd_diagnostic_message(d::AbstractDict)
         "containment (four cell-indexed rect bounds against two record-indexed " *
         "point coordinates) nor as an envelope-overlap one (four bounds on each side)"
     return "projection-pushdown desugar: '$(d["variable"])' is join-shaped — it bins " *
-           "records into the cells of index set '$(d["index_set"])' and feeds the " *
-           "provider-backed array '$(d["array"])' through '$(d["consumer"])' — but " *
-           why * ", so the rewrite does NOT fire for it and " *
-           _PD_UNGATED_CONSEQUENCE * ". Bind the containment's factors through the " *
-           "template's params, or write the predicate longhand."
+        "records into the cells of index set '$(d["index_set"])' and feeds the " *
+        "provider-backed array '$(d["array"])' through '$(d["consumer"])' — but " *
+        why * ", so the rewrite does NOT fire for it and " *
+        _PD_UNGATED_CONSEQUENCE * ". Bind the containment's factors through the " *
+        "template's params, or write the predicate longhand."
 end
 
 # The MIRRORED-orientation binning aggregates of a model: per-RECORD observeds
@@ -631,13 +665,15 @@ end
 # A mirror needs NOTHING but the gate — see the note on the mirrored arm in
 # `_pd_apply`. Its cell axis stays the FULL `C`, so its envelope factors are the
 # document's own const-array rects, unrewritten.
-function _pd_mirror_specs(model::Model, obs_defs::AbstractDict,
-                          C::AbstractString, R::AbstractString, forward_names)
-    out = Tuple{String,Vector{String},Vector{String}}[]
+function _pd_mirror_specs(
+        model::Model, obs_defs::AbstractDict,
+        C::AbstractString, R::AbstractString, forward_names
+    )
+    out = Tuple{String, Vector{String}, Vector{String}}[]
     for (name, defn) in obs_defs
         name in forward_names && continue
         v = model.variables[name]
-        bind = _pd_detect_binning(v, defn, R; out_is_cell=false)
+        bind = _pd_detect_binning(v, defn, R; out_is_cell = false)
         bind === nothing && continue
         (!bind.out_is_cell && bind.C == C && bind.R == R) || continue
         # Never stack a second gate on an aggregate that already declares a join.
@@ -658,17 +694,17 @@ end
 # (see `_pd_binning_refusal`).
 function _pd_detect(model::Model, obs_defs::AbstractDict, index_sets::AbstractDict)
     vars = model.variables
-    diags = Dict{String,Any}[]
-    conc_specs = Tuple{String,String}[]        # (conc name, reduction symbol)
+    diags = Dict{String, Any}[]
+    conc_specs = Tuple{String, String}[]        # (conc name, reduction symbol)
     A_names = String[]                          # provider-backed arrays to gate
     # (E name, cell output symbol, gate src_env, gate tgt_env)
-    E_specs = Tuple{String,String,Vector{String},Vector{String}}[]
+    E_specs = Tuple{String, String, Vector{String}, Vector{String}}[]
     # EVERY array any binning body reads on the cell axis, name => declared
     # shape, and the ungatherable ones. The envelope factors are a SUBSET: a
     # binning body is free to read the cell's geometry, its area, its ring
     # stack, and all of them ride the same re-pointing (`_pd_cell_factors!`).
-    cell_factors = OrderedDict{String,Vector{String}}()
-    cell_bad = OrderedDict{String,String}()
+    cell_factors = OrderedDict{String, Vector{String}}()
+    cell_bad = OrderedDict{String, String}()
     C = nothing; rcv_set = nothing; R = nothing
     src_env = nothing; tgt_env = nothing
     rep_ename = nothing; rep_csym = nothing; rep_rsym = nothing
@@ -680,11 +716,13 @@ function _pd_detect(model::Model, obs_defs::AbstractDict, index_sets::AbstractDi
         oi = agg.output_idx
         (oi !== nothing && length(oi) == 1) || continue
         rcv_sym = String(oi[1])
-        ranges = agg.ranges === nothing ? Dict{String,Any}() : agg.ranges
+        ranges = agg.ranges === nothing ? Dict{String, Any}() : agg.ranges
         length(ranges) == 2 || continue
         haskey(ranges, rcv_sym) || continue
         s_sym = nothing
-        for k in keys(ranges); k == rcv_sym && continue; s_sym = k; end
+        for k in keys(ranges)
+            k == rcv_sym && continue; s_sym = k
+        end
         s_sym === nothing && continue
         (ranges[s_sym] isa IndexSetRef && ranges[rcv_sym] isa IndexSetRef) || continue
         c_set = ranges[s_sym].from; r_set = ranges[rcv_sym].from
@@ -692,8 +730,10 @@ function _pd_detect(model::Model, obs_defs::AbstractDict, index_sets::AbstractDi
         facs === nothing && continue
         Aname, Ename = facs
         av = get(vars, Aname, nothing)
-        (av !== nothing && av.type == ParameterVariable && av.shape !== nothing &&
-         length(av.shape) == 2 && av.shape[1] == c_set && av.shape[2] == r_set) || continue
+        (
+            av !== nothing && av.type == ParameterVariable && av.shape !== nothing &&
+                length(av.shape) == 2 && av.shape[1] == c_set && av.shape[2] == r_set
+        ) || continue
         ev = get(vars, Ename, nothing); ev === nothing && continue
         edef = get(obs_defs, Ename, nothing)
         bind = _pd_detect_binning(ev, edef, c_set)
@@ -704,12 +744,15 @@ function _pd_detect(model::Model, obs_defs::AbstractDict, index_sets::AbstractDi
             # unpruned fetch that surfaces hours later as a memory failure.
             if bind === nothing
                 why = _pd_binning_refusal(ev, edef, String(c_set))
-                why === nothing || push!(diags, Dict{String,Any}(
-                    "code" => "pushdown_join_unrecognised",
-                    "variable" => String(Ename), "consumer" => String(cname),
-                    "array" => String(Aname), "index_set" => String(c_set),
-                    "reason" => why[1], "template" => why[2],
-                    "consequence" => _PD_UNGATED_CONSEQUENCE))
+                why === nothing || push!(
+                    diags, Dict{String, Any}(
+                        "code" => "pushdown_join_unrecognised",
+                        "variable" => String(Ename), "consumer" => String(cname),
+                        "array" => String(Aname), "index_set" => String(c_set),
+                        "reason" => why[1], "template" => why[2],
+                        "consequence" => _PD_UNGATED_CONSEQUENCE
+                    )
+                )
             end
             continue
         end
@@ -730,8 +773,10 @@ function _pd_detect(model::Model, obs_defs::AbstractDict, index_sets::AbstractDi
             # its longhand twin (esm-spec §9.6.4 rule 2). Emission still edits
             # the authored body / call-site bindings, and
             # `_pd_assert_rects_rebound` proves the substitution landed.
-            _pd_cell_factors!(edef, bind.c_sym, vars, String(c_set),
-                              cell_factors, cell_bad)
+            _pd_cell_factors!(
+                edef, bind.c_sym, vars, String(c_set),
+                cell_factors, cell_bad
+            )
         end
     end
     # Deterministic, deduplicated diagnostic order: `vars` is a hash-ordered
@@ -751,13 +796,19 @@ function _pd_detect(model::Model, obs_defs::AbstractDict, index_sets::AbstractDi
     # MIRRORED-orientation binning aggregates (`P[r] = Σ_c […]`) over the SAME
     # cell/record sets. They are collected only once the forward pattern has
     # fixed `C`/`R`: the mirror is a rider on the rewrite, never its trigger.
-    mirror_specs = _pd_mirror_specs(model, obs_defs, C, R,
-                                    Set{String}(e[1] for e in E_specs))
-    return ((C = C, rcv_set = rcv_set, R = R, conc_specs = conc_specs,
-             A_names = A_names, E_specs = E_specs, mirror_specs = mirror_specs,
-             src_env = src_env, tgt_env = tgt_env,
-             cell_factors = cell_factors, cell_bad = cell_bad,
-             rep_ename = rep_ename, rep_csym = rep_csym, rep_rsym = rep_rsym), diags)
+    mirror_specs = _pd_mirror_specs(
+        model, obs_defs, C, R,
+        Set{String}(e[1] for e in E_specs)
+    )
+    return (
+        (
+            C = C, rcv_set = rcv_set, R = R, conc_specs = conc_specs,
+            A_names = A_names, E_specs = E_specs, mirror_specs = mirror_specs,
+            src_env = src_env, tgt_env = tgt_env,
+            cell_factors = cell_factors, cell_bad = cell_bad,
+            rep_ename = rep_ename, rep_csym = rep_csym, rep_rsym = rep_rsym,
+        ), diags,
+    )
 end
 
 # ---- dict-form emission ----------------------------------------------------
@@ -780,7 +831,7 @@ function _pd_rewrite_rects!(node, rectmap::AbstractDict)
         if get(node, "op", nothing) == "index"
             a = get(node, "args", nothing)
             if a isa AbstractVector && !isempty(a) && a[1] isa AbstractString &&
-               haskey(rectmap, a[1])
+                    haskey(rectmap, a[1])
                 a[1] = rectmap[a[1]]
             end
         end
@@ -824,16 +875,19 @@ function _pd_dict_find_ifelse_cond(node)
     return nothing
 end
 
-_pd_ix(f, idx...) = Dict{String,Any}("op" => "index", "args" => Any[f, idx...])
+_pd_ix(f, idx...) = Dict{String, Any}("op" => "index", "args" => Any[f, idx...])
 
 # One dict-form `join.overlap` clause (§5.5.6 wire form). `eps` is always 0.0:
 # the rewrite derives the envelopes from an EXACT rectangle-containment
 # predicate that stays on as the narrow `filter`, so no FP slack is wanted.
 _pd_overlap_clause(src_env, tgt_env) =
-    Dict{String,Any}("overlap" => Dict{String,Any}(
+    Dict{String, Any}(
+    "overlap" => Dict{String, Any}(
         "src_env" => Any[String(f) for f in src_env],
         "tgt_env" => Any[String(f) for f in tgt_env],
-        "eps" => 0.0))
+        "eps" => 0.0
+    )
+)
 
 # Collect into `out` every factor name `F ∈ keys(rectmap)` that still appears in
 # an `index(F, …)` position of a dict-form subtree — i.e. every occurrence
@@ -843,7 +897,7 @@ function _pd_collect_stale_rects!(node, rectmap::AbstractDict, out::Set{String})
         if get(node, "op", nothing) == "index"
             a = get(node, "args", nothing)
             if a isa AbstractVector && !isempty(a) && a[1] isa AbstractString &&
-               haskey(rectmap, a[1])
+                    haskey(rectmap, a[1])
                 push!(out, String(a[1]))
             end
         end
@@ -878,24 +932,29 @@ remedy is the one `flatten.jl`'s
 `template_body_references_coupling_rewritten_variable` already prescribes: bind
 the value through the template's params.
 """
-function _pd_assert_rects_rebound(expr, Ename::AbstractString,
-                                  rectmap::AbstractDict, reg)
+function _pd_assert_rects_rebound(
+        expr, Ename::AbstractString,
+        rectmap::AbstractDict, reg
+    )
     isempty(rectmap) && return
     view = reg === nothing ? expr :
         _expand_all(_to_ordered(deepcopy(expr)), reg, "pushdown_rewrite")
     stale = _pd_collect_stale_rects!(view, rectmap, Set{String}())
     isempty(stale) && return
     names = sort!(collect(stale))
-    throw(ExpressionTemplateError(
-        ERROR_CODES.TEMPLATE_BODY_REFERENCES_PUSHDOWN_REWRITTEN_VARIABLE,
-        "projection-pushdown desugar: the binning aggregate '$(Ename)' still reads " *
-        "'$(join(names, "', '"))' after its reduction axis was re-pointed onto the " *
-        "generated derived support set. Those references live in an expression-template " *
-        "BODY, not in the call site's `bindings`, so the rewrite — which edits call " *
-        "sites only, to keep the template body shared and singly-lowered " *
-        "(esm-spec §9.6.4 Option B) — cannot re-point them, and they would index the " *
-        "compact per-support cell gathers with full-grid positions. Bind the value " *
-        "through the template's params, or write the binning body longhand."))
+    throw(
+        ExpressionTemplateError(
+            ERROR_CODES.TEMPLATE_BODY_REFERENCES_PUSHDOWN_REWRITTEN_VARIABLE,
+            "projection-pushdown desugar: the binning aggregate '$(Ename)' still reads " *
+                "'$(join(names, "', '"))' after its reduction axis was re-pointed onto the " *
+                "generated derived support set. Those references live in an expression-template " *
+                "BODY, not in the call site's `bindings`, so the rewrite — which edits call " *
+                "sites only, to keep the template body shared and singly-lowered " *
+                "(esm-spec §9.6.4 Option B) — cannot re-point them, and they would index the " *
+                "compact per-support cell gathers with full-grid positions. Bind the value " *
+                "through the template's params, or write the binning body longhand."
+        )
+    )
 end
 
 """
@@ -911,7 +970,7 @@ it used to reach into the declaration. The FIRST definition of a name wins,
 matching the classification.
 """
 function _pd_definitions(eqs)
-    idx = Dict{String,Int}()
+    idx = Dict{String, Int}()
     eqs isa AbstractVector || return idx
     for (i, eq) in enumerate(eqs)
         eq isa AbstractDict || continue
@@ -928,11 +987,13 @@ end
 The defining right-hand side of `name`, erroring with the desugar's own message
 rather than a bare `KeyError` when the model does not define it.
 """
-function _pd_defining_rhs(eqs, defs::Dict{String,Int}, name::AbstractString)
+function _pd_defining_rhs(eqs, defs::Dict{String, Int}, name::AbstractString)
     i = get(defs, String(name), nothing)
-    i === nothing && error("pushdown desugar: '$(name)' has no defining equation " *
-                           "(an observed unknown is defined by a bare-variable-LHS " *
-                           "equation, esm-spec 6.3.1)")
+    i === nothing && error(
+        "pushdown desugar: '$(name)' has no defining equation " *
+            "(an observed unknown is defined by a bare-variable-LHS " *
+            "equation, esm-spec 6.3.1)"
+    )
     return eqs[i]["rhs"]
 end
 
@@ -954,7 +1015,7 @@ function _pd_canonicalize_equations!(model::AbstractDict)
     eqs = get(model, "equations", nothing)
     eqs isa AbstractVector || return model
     others = Any[]
-    defs = Tuple{String,Any}[]
+    defs = Tuple{String, Any}[]
     for eq in eqs
         lhs = eq isa AbstractDict ? get(eq, "lhs", nothing) : nothing
         if lhs isa AbstractString
@@ -990,26 +1051,32 @@ loop symbols are named `pd_t0…` rather than reusing the document's own, becaus
 the gather is generated in its own scope and a collision with an authored symbol
 would be a silent capture.
 """
-function _pd_gather_defn(F::AbstractString, shape::AbstractVector,
-                         setname::AbstractString, mfactor::AbstractString,
-                         index_sets, C::AbstractString)
-    decl = Dict{String,Any}("type" => "unknown",
-                            "shape" => Any[setname; Any[String(t) for t in shape[2:end]]...])
+function _pd_gather_defn(
+        F::AbstractString, shape::AbstractVector,
+        setname::AbstractString, mfactor::AbstractString,
+        index_sets, C::AbstractString
+    )
+    decl = Dict{String, Any}(
+        "type" => "unknown",
+        "shape" => Any[setname; Any[String(t) for t in shape[2:end]]...]
+    )
     syms = String["pd_t" * string(i - 1) for i in 1:(length(shape) - 1)]
-    ranges = Dict{String,Any}("c" => Dict{String,Any}("from" => setname))
+    ranges = Dict{String, Any}("c" => Dict{String, Any}("from" => setname))
     for (sym, t) in zip(syms, shape[2:end])
         (index_sets isa AbstractDict && haskey(index_sets, String(t))) || error(
             "projection-pushdown desugar: cannot gather '$(F)' onto the derived " *
-            "support set of '$(C)'. Its declared shape is $(shape), whose trailing " *
-            "entry '$(t)' is not a named index set, so the generated gather has no " *
-            "range to iterate it over. Declare the array's trailing axes as index " *
-            "sets, or keep the value off the cell axis.")
-        ranges[sym] = Dict{String,Any}("from" => String(t))
+                "support set of '$(C)'. Its declared shape is $(shape), whose trailing " *
+                "entry '$(t)' is not a named index set, so the generated gather has no " *
+                "range to iterate it over. Declare the array's trailing axes as index " *
+                "sets, or keep the value off the cell axis."
+        )
+        ranges[sym] = Dict{String, Any}("from" => String(t))
     end
-    defn = Dict{String,Any}(
+    defn = Dict{String, Any}(
         "op" => "faq", "output_idx" => Any[Any["c"]; Any[s for s in syms]...],
         "ranges" => ranges, "args" => Any[F, mfactor],
-        "expr" => _pd_ix(F, _pd_ix(mfactor, "c"), syms...))
+        "expr" => _pd_ix(F, _pd_ix(mfactor, "c"), syms...)
+    )
     return (decl, defn)
 end
 
@@ -1024,18 +1091,22 @@ an aggregate reading a cell-axis array at `c+1` cannot be gated at all without
 renumbering arithmetic the compact axis does not admit, and emitting the rewrite
 anyway is the silent-wrong-numbers failure this pass exists to prevent.
 """
-function _pd_refuse_ungatherable(bad::AbstractDict, C::AbstractString,
-                                 setname::AbstractString)
+function _pd_refuse_ungatherable(
+        bad::AbstractDict, C::AbstractString,
+        setname::AbstractString
+    )
     isempty(bad) && return nothing
     detail = join(("'$(F)' at [$(bad[F])]" for F in sort(collect(keys(bad)))), "; ")
-    error("projection-pushdown desugar: the binning aggregate reads a cell-axis " *
-          "array at a COMPUTED cell position ($(detail)). The rewrite re-points the " *
-          "reduction onto the derived support set '$(setname)', which renumbers " *
-          "'$(C)' — support position i is grid cell member_factor[i], and no " *
-          "arithmetic on i survives that renumbering. A gather can carry `F[c]`, " *
-          "and `F[c, …]`, but not `F[f(c)]`. Index the array with the bare cell " *
-          "symbol, or move the value off the '$(C)' axis (declare it over the axis " *
-          "it is really indexed by, so it stays full-grid and is left alone).")
+    error(
+        "projection-pushdown desugar: the binning aggregate reads a cell-axis " *
+            "array at a COMPUTED cell position ($(detail)). The rewrite re-points the " *
+            "reduction onto the derived support set '$(setname)', which renumbers " *
+            "'$(C)' — support position i is grid cell member_factor[i], and no " *
+            "arithmetic on i survives that renumbering. A gather can carry `F[c]`, " *
+            "and `F[c, …]`, but not `F[f(c)]`. Index the array with the bare cell " *
+            "symbol, or move the value off the '$(C)' axis (declare it over the axis " *
+            "it is really indexed by, so it stays full-grid and is left alone)."
+    )
 end
 
 # Apply the desugar to the raw document, returning a NEW mutable dict tree.
@@ -1043,12 +1114,12 @@ end
 # no surviving `apply_expression_template` references) — needed to read the
 # containment predicate out of a body that was factored through a template, and
 # to discharge the `_pd_assert_rects_rebound` post-condition.
-function _pd_apply(esm, mname::AbstractString, plan, reg=nothing)
+function _pd_apply(esm, mname::AbstractString, plan, reg = nothing)
     d = _to_ordered(esm)                        # fresh, mutable, string-keyed
     C = plan.C
     setname = "pd_support__" * C
-    faqid   = "pd_faq__" * C
-    memvar  = "pd_members__" * C
+    faqid = "pd_faq__" * C
+    memvar = "pd_members__" * C
     mfactor = "pd_member_factor__" * C
     cellgath(F) = "pd_cell__" * C * "__" * F
 
@@ -1059,14 +1130,19 @@ function _pd_apply(esm, mname::AbstractString, plan, reg=nothing)
     cell_shapes = plan.cell_factors
     _pd_refuse_ungatherable(plan.cell_bad, C, setname)
     rects = String[]                            # rect factors, [xmin,ymin,xmax,ymax] order
-    for F in plan.tgt_env; F in rects || push!(rects, F); end
-    for F in sort(collect(keys(cell_shapes))); F in rects || push!(rects, F); end
-    rectmap = Dict{String,String}(F => cellgath(F) for F in rects)
+    for F in plan.tgt_env
+        F in rects || push!(rects, F)
+    end
+    for F in sort(collect(keys(cell_shapes)))
+        F in rects || push!(rects, F)
+    end
+    rectmap = Dict{String, String}(F => cellgath(F) for F in rects)
 
     # --- derived index set ---
-    haskey(d, "index_sets") || (d["index_sets"] = OrderedDict{String,Any}())
-    d["index_sets"][setname] = Dict{String,Any}(
-        "kind" => "derived", "from_faq" => faqid, "member_factor" => mfactor)
+    haskey(d, "index_sets") || (d["index_sets"] = OrderedDict{String, Any}())
+    d["index_sets"][setname] = Dict{String, Any}(
+        "kind" => "derived", "from_faq" => faqid, "member_factor" => mfactor
+    )
 
     mv = d["models"][mname]["variables"]
 
@@ -1092,18 +1168,22 @@ function _pd_apply(esm, mname::AbstractString, plan, reg=nothing)
         # untouched. Template-free documents never reach this branch, so their
         # emitted filter is byte-identical to before.
         ifcond = reg === nothing ? nothing :
-            _pd_dict_find_ifelse_cond(_expand_all(_to_ordered(deepcopy(get(repexpr, "expr", nothing))),
-                                                  reg, "pushdown_rewrite"))
+            _pd_dict_find_ifelse_cond(
+                _expand_all(
+                    _to_ordered(deepcopy(get(repexpr, "expr", nothing))),
+                    reg, "pushdown_rewrite"
+                )
+            )
     end
     ifcond === nothing && error("pushdown desugar: representative E lost its containment ifelse")
     comps = get(ifcond, "op", nothing) in ("and", "*") ? ifcond["args"] : Any[ifcond]
-    prod_filter = Dict{String,Any}("op" => "*", "args" => Any[_to_ordered(c) for c in comps])
+    prod_filter = Dict{String, Any}("op" => "*", "args" => Any[_to_ordered(c) for c in comps])
 
     # --- member unknown + member_factor param ---
     # The member buffer is an `unknown`: the generated producer equation below
     # DEFINES it, and that equation is what makes it one (esm-spec §6.3.1).
-    mv[memvar]  = Dict{String,Any}("type" => "unknown", "shape" => Any[setname])
-    mv[mfactor] = Dict{String,Any}("type" => "parameter", "default" => 0.0, "shape" => Any[setname])
+    mv[memvar] = Dict{String, Any}("type" => "unknown", "shape" => Any[setname])
+    mv[mfactor] = Dict{String, Any}("type" => "parameter", "default" => 0.0, "shape" => Any[setname])
 
     # --- per-rect cell-gather observeds: cell_F[c] = index(F, index(member_factor, c)) ---
     # Declaration and DEFINING EQUATION, emitted in sorted name order so the
@@ -1115,10 +1195,12 @@ function _pd_apply(esm, mname::AbstractString, plan, reg=nothing)
             shape = (sh isa AbstractDict && get(sh, "shape", nothing) isa AbstractVector) ?
                 String[String(x) for x in sh["shape"]] : String[C]
         end
-        decl, defn = _pd_gather_defn(F, shape, setname, mfactor,
-                                     get(d, "index_sets", nothing), C)
+        decl, defn = _pd_gather_defn(
+            F, shape, setname, mfactor,
+            get(d, "index_sets", nothing), C
+        )
         mv[cellgath(F)] = decl
-        push!(eqs, Dict{String,Any}("lhs" => cellgath(F), "rhs" => defn))
+        push!(eqs, Dict{String, Any}("lhs" => cellgath(F), "rhs" => defn))
     end
 
     # --- gate the provider-backed arrays onto the derived axis ---
@@ -1151,8 +1233,13 @@ function _pd_apply(esm, mname::AbstractString, plan, reg=nothing)
         _pd_rewrite_rects!(expr, rectmap)
         haskey(expr, "args") && (expr["args"] = Any[get(rectmap, string(s), s) for s in expr["args"]])
         mv[Ename]["shape"] = Any[setname]
-        haskey(expr, "join") || (expr["join"] = Any[_pd_overlap_clause(
-            e_src, String[get(rectmap, F, F) for F in e_tgt])])
+        haskey(expr, "join") || (
+            expr["join"] = Any[
+                _pd_overlap_clause(
+                    e_src, String[get(rectmap, F, F) for F in e_tgt]
+                ),
+            ]
+        )
         _pd_assert_rects_rebound(expr, Ename, rectmap, reg)
     end
 
@@ -1178,20 +1265,25 @@ function _pd_apply(esm, mname::AbstractString, plan, reg=nothing)
     end
 
     # --- generated `distinct` producer (reuses E's containment + geometry) ---
-    producer = Dict{String,Any}(
+    producer = Dict{String, Any}(
         "lhs" => _pd_ix(memvar, "m"),
-        "rhs" => Dict{String,Any}(
+        "rhs" => Dict{String, Any}(
             "op" => "faq", "output_idx" => Any["m"],
-            "ranges" => Dict{String,Any}(
-                plan.rep_rsym => Dict{String,Any}("from" => plan.R),
-                plan.rep_csym => Dict{String,Any}("from" => C)),
-            "expr" => Dict{String,Any}("op" => "true", "args" => Any[]),
+            "ranges" => Dict{String, Any}(
+                plan.rep_rsym => Dict{String, Any}("from" => plan.R),
+                plan.rep_csym => Dict{String, Any}("from" => C)
+            ),
+            "expr" => Dict{String, Any}("op" => "true", "args" => Any[]),
             "distinct" => true, "semiring" => "bool_and_or", "id" => faqid,
             "join" => Any[_pd_overlap_clause(plan.src_env, plan.tgt_env)],
             "filter" => prod_filter,
-            "key" => Dict{String,Any}("op" => "skolem", "label" => "cell",
-                                      "args" => Any[plan.rep_csym]),
-            "args" => Any[unique(vcat(plan.src_env, plan.tgt_env))...]))
+            "key" => Dict{String, Any}(
+                "op" => "skolem", "label" => "cell",
+                "args" => Any[plan.rep_csym]
+            ),
+            "args" => Any[unique(vcat(plan.src_env, plan.tgt_env))...]
+        )
+    )
     pushfirst!(eqs, producer)
     _pd_canonicalize_equations!(d["models"][mname])
 
@@ -1203,14 +1295,16 @@ function _pd_apply(esm, mname::AbstractString, plan, reg=nothing)
     # provider is built from (see `provider_gate_spec`): the runtime gate for
     # this model's provider-backed arrays, gating the cell axis by the derived
     # support set.
-    md = get!(d, "metadata", OrderedDict{String,Any}())
-    xesd = get!(md, "x_esd", OrderedDict{String,Any}())
-    xesd["pushdown"] = Dict{String,Any}(
+    md = get!(d, "metadata", OrderedDict{String, Any}())
+    xesd = get!(md, "x_esd", OrderedDict{String, Any}())
+    xesd["pushdown"] = Dict{String, Any}(
         "derived_set" => setname, "producer_id" => faqid,
         "member_factor" => mfactor, "member_var" => memvar,
-        "gated_select" => Dict{String,Any}(
+        "gated_select" => Dict{String, Any}(
             "gated_by" => setname, "applies_to" => Any[plan.A_names...],
-            "gated_axis" => 0))
+            "gated_axis" => 0
+        )
+    )
     return d
 end
 
@@ -1249,7 +1343,7 @@ Empty when `doc` carries no record, no provider key names a gated array, or
 provider outside it falls back to `provider_gate_spec`.
 """
 function _pushdown_provider_gates(doc::AbstractDict, providers)
-    gates = Dict{String,Any}()
+    gates = Dict{String, Any}()
     providers === nothing && return gates
     rec = _pushdown_record(doc)
     rec === nothing && return gates
@@ -1271,7 +1365,7 @@ function _pushdown_provider_gates(doc::AbstractDict, providers)
         local_name = String(split(k, '.')[end])
         local_name in applies || continue
         axes = _pushdown_gate_axes(doc, bound[k], gset, gaxis, mrank)
-        gates[k] = Dict{String,Any}("axes" => axes, "applies_to" => Any[local_name])
+        gates[k] = Dict{String, Any}("axes" => axes, "applies_to" => Any[local_name])
     end
     return gates
 end
@@ -1280,7 +1374,7 @@ end
 # (esm-spec §8.5). Walks `models` and their `subsystems` under the same dotted
 # prefixes `flatten` builds.
 function _pushdown_data_bindings(doc::AbstractDict)
-    out = Dict{String,String}()
+    out = Dict{String, String}()
     function walk(models, prefix::String)
         models isa AbstractDict || return
         for (mname0, m) in models
@@ -1336,8 +1430,10 @@ end
 # `gaxis` among the non-fixed axes, or the record and template disagree about
 # which native axis is gated); else a rank-`mrank` all-axes gate with
 # `gated_by` at `gaxis`.
-function _pushdown_gate_axes(doc::AbstractDict, loader::AbstractString,
-                             gset::AbstractString, gaxis::Int, mrank::Int)
+function _pushdown_gate_axes(
+        doc::AbstractDict, loader::AbstractString,
+        gset::AbstractString, gaxis::Int, mrank::Int
+    )
     tpl = nothing
     loaders = get(doc, "data_sources", nothing)
     if loaders isa AbstractDict
@@ -1355,28 +1451,34 @@ function _pushdown_gate_axes(doc::AbstractDict, loader::AbstractString,
         gpos = -1
         for ax in tpl
             if ax isa AbstractDict && haskey(ax, "gated_by")
-                push!(axes, Dict{String,Any}("gated_by" => String(gset)))
+                push!(axes, Dict{String, Any}("gated_by" => String(gset)))
                 gpos = nonfixed
                 nonfixed += 1
             elseif ax isa AbstractDict && haskey(ax, "fixed")
                 fx = ax["fixed"]
                 fi = fx isa AbstractVector ? Int(first(fx)) : Int(fx)
-                push!(axes, Dict{String,Any}("fixed" => Any[fi]))
+                push!(axes, Dict{String, Any}("fixed" => Any[fi]))
             else
                 push!(axes, "all")
                 nonfixed += 1
             end
         end
-        gpos == gaxis || throw(RefreshError(
-            "data_sources.$loader gated_select template puts the gated axis at " *
-            "non-fixed position $gpos, but the rewrite record gates model axis " *
-            "$gaxis — the loader template and the rewritten arrays disagree"))
+        gpos == gaxis || throw(
+            RefreshError(
+                "data_sources.$loader gated_select template puts the gated axis at " *
+                    "non-fixed position $gpos, but the rewrite record gates model axis " *
+                    "$gaxis — the loader template and the rewritten arrays disagree"
+            )
+        )
         return axes
     end
-    (0 <= gaxis < mrank) || throw(RefreshError(
-        "rewrite record gated_axis $gaxis out of range for rank-$mrank gated arrays"))
+    (0 <= gaxis < mrank) || throw(
+        RefreshError(
+            "rewrite record gated_axis $gaxis out of range for rank-$mrank gated arrays"
+        )
+    )
     axes = Any[fill("all", mrank)...]
-    axes[gaxis + 1] = Dict{String,Any}("gated_by" => String(gset))
+    axes[gaxis + 1] = Dict{String, Any}("gated_by" => String(gset))
     return axes
 end
 
@@ -1400,8 +1502,10 @@ authored name (`"src_W"`) must ALSO resolve under:
 
 Existing keys are never overwritten.
 """
-function _inject_pushdown_aliases!(dst::AbstractDict, run_doc::AbstractDict,
-                                   coupling_pairs::AbstractVector)
+function _inject_pushdown_aliases!(
+        dst::AbstractDict, run_doc::AbstractDict,
+        coupling_pairs::AbstractVector
+    )
     for (frm, to) in coupling_pairs
         haskey(dst, frm) && !haskey(dst, to) && (dst[to] = dst[frm])
     end
@@ -1428,7 +1532,7 @@ end
 # The coupling `variable_map` (from ⇒ to) pairs of a raw document — captured
 # BEFORE `_prepare_run_doc` flattens them away, for `_inject_pushdown_aliases!`.
 function _pushdown_coupling_pairs(doc::AbstractDict)
-    out = Pair{String,String}[]
+    out = Pair{String, String}[]
     cp = get(doc, "coupling", nothing)
     cp isa AbstractVector || return out
     for c in cp

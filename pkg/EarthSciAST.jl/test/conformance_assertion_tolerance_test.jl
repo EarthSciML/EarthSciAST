@@ -29,8 +29,10 @@ using EarthSciAST
 
 include("testutils.jl")  # TESTUTILS_REPO_ROOT
 
-const _ATOL_CAT_DIR = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance",
-                               "assertion_tolerance")
+const _ATOL_CAT_DIR = joinpath(
+    TESTUTILS_REPO_ROOT, "tests", "conformance",
+    "assertion_tolerance"
+)
 const _ATOL_MANIFEST = joinpath(_ATOL_CAT_DIR, "manifest.json")
 const _ATOL_GOLDEN = joinpath(_ATOL_CAT_DIR, "golden", "predicate_verdicts.json")
 
@@ -45,8 +47,10 @@ function _atol_number(v, case_id::AbstractString, field::AbstractString)
         s == "+inf" && return Inf
         s == "-inf" && return -Inf
         s == "nan" && return NaN
-        error("$(case_id): $(field) is the string \"$(s)\"; the golden's encoding " *
-              "admits only \"+inf\", \"-inf\" and \"nan\"")
+        error(
+            "$(case_id): $(field) is the string \"$(s)\"; the golden's encoding " *
+                "admits only \"+inf\", \"-inf\" and \"nan\""
+        )
     end
     error("$(case_id): $(field) is $(v), expected a number or a string")
 end
@@ -79,14 +83,17 @@ end
 
         got = EarthSciAST._check_assertion(a, e, rel, atol)
         if got != want
-            push!(failures,
-                  "$(cid): _check_assertion($(a), $(e), rtol=$(rel), atol=$(atol)) = " *
-                  "$(got), golden says $(want) — $(String(case.why))")
+            push!(
+                failures,
+                "$(cid): _check_assertion($(a), $(e), rtol=$(rel), atol=$(atol)) = " *
+                    "$(got), golden says $(want) — $(String(case.why))"
+            )
         end
     end
     @test isempty(failures) || error(
         "$(length(failures)) of $(length(cases)) §6.6.3 predicate cases disagree " *
-        "with the golden:\n" * join(failures, "\n"))
+            "with the golden:\n" * join(failures, "\n")
+    )
     # Non-vacuity: a golden of one verdict would be satisfied by a constant.
     @test 0 < n_pass < length(cases)
 

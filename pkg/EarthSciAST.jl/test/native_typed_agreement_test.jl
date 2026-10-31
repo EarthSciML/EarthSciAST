@@ -56,7 +56,7 @@ function _nta_corpus()
             endswith(f, ".esm") || continue
             p = joinpath(r, f)
             d = try
-                JSON3.read(read(p, String), Dict{String,Any})
+                JSON3.read(read(p, String), Dict{String, Any})
             catch
                 continue
             end
@@ -71,21 +71,29 @@ end
 function _nta_resolve(path::AbstractString, native::Bool)
     raw = EarthSciAST._read_json_document(read(path, String))
     try
-        f = EarthSciAST._load_document(raw, dirname(path); native_subsystem_refs=native)
-        return (:ok, JSON3.read(JSON3.write(EarthSciAST.serialize_esm_file(f)), Dict{String,Any}))
+        f = EarthSciAST._load_document(raw, dirname(path); native_subsystem_refs = native)
+        return (:ok, JSON3.read(JSON3.write(EarthSciAST.serialize_esm_file(f)), Dict{String, Any}))
     catch e
         se = EarthSciAST.load_failure_structural_error(e)
-        se === nothing && return (:error, Dict{String,Any}("type" => string(typeof(e)),
-                                                          "message" => sprint(showerror, e)))
-        return (:error, Dict{String,Any}("path" => se.path, "code" => se.error_type,
-                                         "message" => se.message, "details" => se.details))
+        se === nothing && return (
+            :error, Dict{String, Any}(
+                "type" => string(typeof(e)),
+                "message" => sprint(showerror, e)
+            ),
+        )
+        return (
+            :error, Dict{String, Any}(
+                "path" => se.path, "code" => se.error_type,
+                "message" => se.message, "details" => se.details
+            ),
+        )
     end
 end
 
 _nta_ops(doc, op) = count(m -> true, eachmatch(Regex("\"op\":\"$(op)\""), JSON3.write(doc)))
 
 # The documents allowed to differ, and the only way each may.
-const _NTA_EXPECTED = Dict{String,Tuple{Symbol,String}}(
+const _NTA_EXPECTED = Dict{String, Tuple{Symbol, String}}(
     # esm-spec §4.7 / §9.7.10, issue #311: a rule reaches a rewrite-target inside a
     # mounted component only when the mount is spliced in before the fixpoint.
     "tests/fixtures/mount_edge_injection_nested/nested_self_import.esm" =>

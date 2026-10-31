@@ -4177,6 +4177,59 @@ pub fn solve(prob: &EsmProblem, opts: &SolveOptions) -> Result<Solution, Simulat
     }
 }
 
+/// The initial state `prob` integrates from, one value per state element,
+/// aligned with [`EsmProblem::state_variable_names`].
+///
+/// This is the state every solve of `prob` starts from at `tspan.0`, built
+/// the same way: per element, the first of the Problem's `u0` override
+/// ([`ProblemOptions::u0`]), an initialization equation (esm-spec §6.2), an
+/// `ic` equation or field initial condition (§11.4, §11.4.1; a scoped or
+/// coordinate-expression `ic` included), and the variable's declared
+/// `default`, with the Problem's parameters ([`ProblemOptions::p`], else
+/// their defaults) bound in every initial condition's scope (§6.6.5).
+/// [`crate::RhsProgram::default_state`] is the declared defaults alone.
+///
+/// Nothing is integrated, and the result does not depend on `tspan` or on any
+/// solver option. A field initial condition reads the provider forcing as
+/// construction bound it, without the discrete-cadence fields a solve
+/// refreshes from `tspan.0` on, so calling this before or after a solve gives
+/// the same state. Julia's equivalent is the `prob.u0` field, indexed through
+/// `prob.var_map`.
+///
+/// # Errors
+///
+/// [`SimulateError::NotDynamic`] for a Problem with no right-hand side to
+/// integrate, and [`crate::compile_error::CompileError::Float32Unsupported`]
+/// for a Float32 document that integrates (the answers [`solve`] gives them),
+/// and every error building the initial state raises in a solve:
+/// [`SimulateError::InvalidInitialCondition`] for an element none of the four
+/// sources values, and the error of an initial condition that cannot be
+/// evaluated.
+#[cfg(feature = "solve")]
+pub fn initial_state(prob: &EsmProblem) -> Result<Vec<f64>, SimulateError> {
+    // Re-arm the document's working precision for the duration of this call
+    // (`domain.element_type`, esm-spec §11.3); a no-op for a Float64 document.
+    let _precision_guard = prob.precision.enter();
+    reject_f32_integration(prob)?;
+    // The discrete-cadence fields the solve's own refresh would write: none
+    // when the Problem holds no executor (a `remake`), as in `solve`.
+    let none = std::collections::HashSet::new();
+    #[cfg(not(target_arch = "wasm32"))]
+    let discrete_forcing = if prob.refresh.is_some() {
+        &prob.discrete_forcing
+    } else {
+        &none
+    };
+    #[cfg(target_arch = "wasm32")]
+    let discrete_forcing = &none;
+    match &*prob.backend {
+        Backend::Static(reason) => Err(SimulateError::NotDynamic {
+            details: reason.clone(),
+        }),
+        Backend::Array(compiled) => compiled.initial_state(&prob.p, &prob.u0, discrete_forcing),
+    }
+}
+
 /// Run the esm-spec §2.2.2 tolerance chain against `prob`'s `solver` block and
 /// return `opts` with both tolerances made CONCRETE.
 ///

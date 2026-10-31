@@ -69,9 +69,13 @@ function _lc_queries(ax::Vector{Float64})
     for x in ax
         push!(qs, prevfloat(x), x, nextfloat(x))
     end
-    append!(qs, [ax[1] - 1.0, ax[end] + 1.0, ax[1] - 1e-9, ax[end] + 1e-9,
-                 -Inf, Inf, NaN, 0.0, -0.0,
-                 0.5 * (ax[1] + ax[end])])
+    append!(
+        qs, [
+            ax[1] - 1.0, ax[end] + 1.0, ax[1] - 1.0e-9, ax[end] + 1.0e-9,
+            -Inf, Inf, NaN, 0.0, -0.0,
+            0.5 * (ax[1] + ax[end]),
+        ]
+    )
     return qs
 end
 
@@ -93,7 +97,7 @@ end
 function _lc_withmode(mode::String, body)
     old = get(ENV, "ESS_RX_LOCATE", nothing)
     ENV["ESS_RX_LOCATE"] = mode
-    try
+    return try
         body()
     finally
         old === nothing ? delete!(ENV, "ESS_RX_LOCATE") : (ENV["ESS_RX_LOCATE"] = old)
@@ -104,24 +108,24 @@ end
 # verbatim — the two that were reducing over 61 and 23 knots at every one of the
 # 18 bands; `sigma2`/`sigma3` are its cross-section TEMPERATURE axes, the shape
 # 180 of its 198 interp call sites actually have (a reduce over two elements).
-const _LC_AXES = Dict{String,Vector{Float64}}(
+const _LC_AXES = Dict{String, Vector{Float64}}(
     "flux_x (61, uniform 0.02)" => collect(range(-0.2; step = 0.02, length = 61)),
     "flux_y (23, uniform 4500)" => collect(range(1000.0; step = 4500.0, length = 23)),
-    "sigma2 (2 knots)"          => [223.0, 298.0],
-    "sigma3 (3, uniform)"       => [218.0, 258.0, 298.0],
-    "sigma3 (3, NON-uniform)"   => [190.0, 230.0, 298.0],
-    "months (12, integers)"     => collect(1.0:12.0),
-    "hours (24, integers)"      => collect(1.0:24.0),
-    "big NON-uniform (40)"      => Float64[exp(0.11k) + 0.3sin(k) for k in 1:40],
-    "big uniform (40)"          => collect(range(-3.5; step = 0.25, length = 40)),
-    "ties (7, with a repeat)"   => [0.0, 1.0, 1.0, 2.0, 3.0, 3.0, 4.0],
+    "sigma2 (2 knots)" => [223.0, 298.0],
+    "sigma3 (3, uniform)" => [218.0, 258.0, 298.0],
+    "sigma3 (3, NON-uniform)" => [190.0, 230.0, 298.0],
+    "months (12, integers)" => collect(1.0:12.0),
+    "hours (24, integers)" => collect(1.0:24.0),
+    "big NON-uniform (40)" => Float64[exp(0.11k) + 0.3sin(k) for k in 1:40],
+    "big uniform (40)" => collect(range(-3.5; step = 0.25, length = 40)),
+    "ties (7, with a repeat)" => [0.0, 1.0, 1.0, 2.0, 3.0, 3.0, 4.0],
 )
 
 @testset "traced count-locate emits no reduction and stays bit-exact" begin
 
     @testset "every tier ≡ the host ladder, bit for bit" begin
         for mode in ("auto", "ladder", "reduce"), (nm, ax) in _LC_AXES,
-            cmp in (<=, <)
+                cmp in (<=, <)
             # `ladder` on a 61-knot axis is a deliberate stress of the tier, not
             # something `auto` would ever pick.
             qs = _lc_normal(_lc_queries(ax))
@@ -155,7 +159,7 @@ const _LC_AXES = Dict{String,Vector{Float64}}(
             isempty(qs) && continue
             base = _lc_withmode("reduce", () -> _lc_traced(ax, qs, cmp))
             @test _lc_withmode("ladder", () -> _lc_traced(ax, qs, cmp)) == base
-            @test _lc_withmode("auto",   () -> _lc_traced(ax, qs, cmp)) == base
+            @test _lc_withmode("auto", () -> _lc_traced(ax, qs, cmp)) == base
             # ...and the disagreement really is only where the flush bites: the
             # flushed query gets the count of ±0.0.
             @test base == Float64[_lc_ref(ax, 0.0, cmp) for _ in qs]
@@ -189,10 +193,12 @@ const _LC_AXES = Dict{String,Vector{Float64}}(
         # THE REGRESSION. Every Fast-JX / NEI axis must locate without a
         # reduction under the default settings; the reduce tier is reachable
         # only for an axis no tier can serve (kept, and pinned, below).
-        for nm in ("flux_x (61, uniform 0.02)", "flux_y (23, uniform 4500)",
-                   "sigma2 (2 knots)", "sigma3 (3, uniform)",
-                   "sigma3 (3, NON-uniform)", "months (12, integers)",
-                   "hours (24, integers)", "big uniform (40)")
+        for nm in (
+                "flux_x (61, uniform 0.02)", "flux_y (23, uniform 4500)",
+                "sigma2 (2 knots)", "sigma3 (3, uniform)",
+                "sigma3 (3, NON-uniform)", "months (12, integers)",
+                "hours (24, integers)", "big uniform (40)",
+            )
             ax = _LC_AXES[nm]
             hlo = _lc_withmode("auto", () -> _lc_hlo(ax, _lc_queries(ax), <=))
             @test !occursin("stablehlo.reduce", hlo)
@@ -205,7 +211,7 @@ const _LC_AXES = Dict{String,Vector{Float64}}(
         @test occursin("stablehlo.reduce", hlo)
         qs = _lc_normal(_lc_queries(ax))
         @test _lc_withmode("auto", () -> _lc_traced(ax, qs, <=)) ==
-              Float64[_lc_ref(ax, q, <=) for q in qs]
+            Float64[_lc_ref(ax, q, <=) for q in qs]
     end
 
     @testset "the affine fit is a proof obligation, not a guess" begin
@@ -250,8 +256,10 @@ const _LC_AXES = Dict{String,Vector{Float64}}(
         # and the gathered compare is there to repair.
         ax = _LC_AXES["flux_x (61, uniform 0.02)"]
         a, b = RXE._rx_affine_fit(ax, <=)
-        off = count(k -> RXE._rx_affine_guess(a, b, length(ax), ax[k]) != Float64(k),
-                    eachindex(ax))
+        off = count(
+            k -> RXE._rx_affine_guess(a, b, length(ax), ax[k]) != Float64(k),
+            eachindex(ax)
+        )
         @test off > 0
     end
 
@@ -264,11 +272,16 @@ const _LC_AXES = Dict{String,Vector{Float64}}(
                 "D == 1 (one shared axis)" =>
                     [fill(x, L) for x in _LC_AXES["flux_y (23, uniform 4500)"]],
                 "D == 2 (two lane axes)" =>
-                    [Float64[l <= 3 ? x : x + 0.5 for l in 1:L]
-                     for x in _LC_AXES["big uniform (40)"]],
+                    [
+                    Float64[l <= 3 ? x : x + 0.5 for l in 1:L]
+                        for x in _LC_AXES["big uniform (40)"]
+                ],
                 "D == 2, small (ladder)" =>
-                    [Float64[l <= 3 ? x : 2x for l in 1:L]
-                     for x in _LC_AXES["sigma3 (3, uniform)"]])
+                    [
+                    Float64[l <= 3 ? x : 2x for l in 1:L]
+                        for x in _LC_AXES["sigma3 (3, uniform)"]
+                ],
+            )
             for mode in ("auto", "ladder", "reduce"), cmp in (<=, <)
                 # (a) a lane VECTOR query.
                 qs = Float64[(-1.0)^l * 1000l + 220.0 for l in 1:L]
@@ -277,11 +290,13 @@ const _LC_AXES = Dict{String,Vector{Float64}}(
                 @test got == ref
                 # (b) a lane-INVARIANT scalar query still yields L lanes — the
                 # `Lq` trap: the result's lane axis comes from the KNOTS here.
-                gs = _lc_withmode(mode, () -> begin
-                    f = x -> ESM._knot_count(cols, x, cmp)
-                    qr = RX.ConcreteRNumber(2200.0)
-                    Array((RX.@compile sync = true f(qr))(qr))
-                end)
+                gs = _lc_withmode(
+                    mode, () -> begin
+                        f = x -> ESM._knot_count(cols, x, cmp)
+                        qr = RX.ConcreteRNumber(2200.0)
+                        Array((RX.@compile sync = true f(qr))(qr))
+                    end
+                )
                 @test length(gs) == L
                 @test gs == ESM._knot_count(cols, 2200.0, cmp)
             end
@@ -299,34 +314,42 @@ const _LC_AXES = Dict{String,Vector{Float64}}(
         h = ESM._InterpLinearSpec(tbl, copy(ax))
         qs = _lc_normal(_lc_queries(ax))
         ref = Float64[ESM._interp_linear_core(tbl, ax, q) for q in qs]
-        got = _lc_withmode("auto", () -> begin
-            f = x -> ESM._interp_linear_lanes(h, x)
-            qr = RX.ConcreteRArray(qs)
-            Array((RX.@compile sync = true f(qr))(qr))
-        end)
+        got = _lc_withmode(
+            "auto", () -> begin
+                f = x -> ESM._interp_linear_lanes(h, x)
+                qr = RX.ConcreteRArray(qs)
+                Array((RX.@compile sync = true f(qr))(qr))
+            end
+        )
         for (g, r) in zip(got, ref)
-            @test (isnan(g) && isnan(r)) || isapprox(g, r; rtol = 1e-14, atol = 0.0)
+            @test (isnan(g) && isnan(r)) || isapprox(g, r; rtol = 1.0e-14, atol = 0.0)
         end
         # ON a knot the answer is the table entry EXACTLY (no blend runs), which
         # is the case a wrong locate silently turns into `t_{k-1} + 1·Δ`.
-        onknot = _lc_withmode("auto", () -> begin
-            f = x -> ESM._interp_linear_lanes(h, x)
-            qr = RX.ConcreteRArray(copy(ax))
-            Array((RX.@compile sync = true f(qr))(qr))
-        end)
+        onknot = _lc_withmode(
+            "auto", () -> begin
+                f = x -> ESM._interp_linear_lanes(h, x)
+                qr = RX.ConcreteRArray(copy(ax))
+                Array((RX.@compile sync = true f(qr))(qr))
+            end
+        )
         @test onknot == tbl
 
         # searchsorted: an integer-valued result, so `==` is the right assertion.
         xs = _LC_AXES["hours (24, integers)"]
         s = ESM._InterpSearchsortedSpec(copy(xs))
         sq = _lc_normal(_lc_queries(xs))
-        sref = Float64[ESM._interp_searchsorted_core("interp.searchsorted", q, xs)
-                       for q in sq]
-        sgot = _lc_withmode("auto", () -> begin
-            f = x -> ESM._interp_searchsorted_lanes(s, x)
-            qr = RX.ConcreteRArray(sq)
-            Array((RX.@compile sync = true f(qr))(qr))
-        end)
+        sref = Float64[
+            ESM._interp_searchsorted_core("interp.searchsorted", q, xs)
+                for q in sq
+        ]
+        sgot = _lc_withmode(
+            "auto", () -> begin
+                f = x -> ESM._interp_searchsorted_lanes(s, x)
+                qr = RX.ConcreteRArray(sq)
+                Array((RX.@compile sync = true f(qr))(qr))
+            end
+        )
         @test sgot == sref
     end
 end

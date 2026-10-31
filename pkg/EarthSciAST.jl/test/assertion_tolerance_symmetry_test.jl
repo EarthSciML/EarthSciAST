@@ -74,7 +74,7 @@ using EarthSciAST
     # abs/rel interaction, both directions. An `abs` bound never narrows what
     # `rel` already admits — the predicate takes the MAX of the two — so a tiny
     # `abs` must not turn the overshoot case red:
-    @test chk(1.6, 1.0, 0.5, 1e-12)
+    @test chk(1.6, 1.0, 0.5, 1.0e-12)
     # and `abs` admits what the symmetric `rel` rejects (same inputs as the
     # `!chk(3.0, 1.0, 0.5, 0.0)` rejection above):
     @test chk(3.0, 1.0, 0.5, 2.5)

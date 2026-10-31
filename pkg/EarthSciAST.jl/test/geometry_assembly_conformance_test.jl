@@ -64,8 +64,10 @@ const ESS = EarthSciAST
 include("testutils.jl")  # TESTUTILS_REPO_ROOT
 
 const _ASM_REPO_ROOT = TESTUTILS_REPO_ROOT
-const _ASM_FIXTURE = joinpath(_ASM_REPO_ROOT, "tests", "valid", "geometry",
-                              "conservative_regrid_assembly.esm")
+const _ASM_FIXTURE = joinpath(
+    _ASM_REPO_ROOT, "tests", "valid", "geometry",
+    "conservative_regrid_assembly.esm"
+)
 
 const _REP_I, _REP_J = 2, 1   # representative fractional pair: src 2 ∩ tgt 1 = 0.5
 
@@ -78,7 +80,7 @@ _asm_vars(raw) = raw["models"]["ConservativeRegridAssembly"]["variables"]
 # fixture's defining right-hand sides are read out of `equations`, not off the
 # variable. `_asm_defs` is the raw-JSON twin of `observed_definitions`.
 function _asm_defs(raw)
-    defs = Dict{String,Any}()
+    defs = Dict{String, Any}()
     for eq in raw["models"]["ConservativeRegridAssembly"]["equations"]
         lhs = eq["lhs"]
         lhs isa AbstractString || continue
@@ -91,13 +93,13 @@ function _const_rings(defs, name)
     v = defs[name]["value"]
     nv = length(v[1])
     nc = length(v[1][1])
-    [[Float64(v[i][k][c]) for k in 1:nv, c in 1:nc] for i in 1:length(v)]
+    return [[Float64(v[i][k][c]) for k in 1:nv, c in 1:nc] for i in 1:length(v)]
 end
 _const_vec(defs, name) = [Float64(x) for x in defs[name]["value"]]
 _param_default(vars, name) = Float64(vars[name]["default"])
 
 # Collect every expression node with op == `opname` under `node`.
-function _find_ops(node, opname, acc=Any[])
+function _find_ops(node, opname, acc = Any[])
     if node isa JSON3.Object || node isa AbstractDict
         get(node, "op", nothing) == opname && push!(acc, node)
         for (_, v) in node
@@ -120,7 +122,7 @@ end
 _bin_key(lon, lat, dx, dy) = (floor(Int, lon / dx), floor(Int, lat / dy))
 
 function _candidate_pairs(src_bins, tgt_bins)
-    pairs = Tuple{Int,Int}[]
+    pairs = Tuple{Int, Int}[]
     for i in eachindex(src_bins), j in eachindex(tgt_bins)
         src_bins[i] == tgt_bins[j] && push!(pairs, (i, j))
     end
@@ -146,39 +148,57 @@ _native(x) = ESS.Cadence.to_native(x)
 # regardless — the join is a candidate-set narrowing, not a correctness gate for
 # the geometric area itself).
 function _aij_extract_esm(defs)
-    ix(a...) = Dict{String,Any}("op" => "index", "args" => collect(Any, a))
+    ix(a...) = Dict{String, Any}("op" => "index", "args" => collect(Any, a))
     nv = length(defs["src_poly"]["value"][1])
     nc = length(defs["src_poly"]["value"][1][1])
     nS = length(defs["src_poly"]["value"])
     nT = length(defs["tgt_poly"]["value"])
-    agg(oidx, body) = Dict{String,Any}("op" => "faq", "output_idx" => collect(Any, oidx),
-        "ranges" => Dict{String,Any}("i" => Dict{String,Any}("from" => "src_cells"),
-                                     "j" => Dict{String,Any}("from" => "tgt_cells")),
-        "expr" => body)
+    agg(oidx, body) = Dict{String, Any}(
+        "op" => "faq", "output_idx" => collect(Any, oidx),
+        "ranges" => Dict{String, Any}(
+            "i" => Dict{String, Any}("from" => "src_cells"),
+            "j" => Dict{String, Any}("from" => "tgt_cells")
+        ),
+        "expr" => body
+    )
     # esm 1.0.0: src_poly / tgt_poly / A_ij are plain `unknown`s DEFINED by
     # bare-variable-LHS equations carrying the fixture's own right-hand sides.
-    model = Dict{String,Any}("variables" => Dict{String,Any}(
-            "src_poly" => Dict{String,Any}("type" => "unknown",
-                "shape" => Any["src_cells", "cell_verts", "coord"]),
-            "tgt_poly" => Dict{String,Any}("type" => "unknown",
-                "shape" => Any["tgt_cells", "cell_verts", "coord"]),
-            "A_ij" => Dict{String,Any}("type" => "unknown",
-                "shape" => Any["src_cells", "tgt_cells"]),
-            "A_ex" => Dict{String,Any}("type" => "unknown", "shape" => Any["src_cells", "tgt_cells"])),
+    model = Dict{String, Any}(
+        "variables" => Dict{String, Any}(
+            "src_poly" => Dict{String, Any}(
+                "type" => "unknown",
+                "shape" => Any["src_cells", "cell_verts", "coord"]
+            ),
+            "tgt_poly" => Dict{String, Any}(
+                "type" => "unknown",
+                "shape" => Any["tgt_cells", "cell_verts", "coord"]
+            ),
+            "A_ij" => Dict{String, Any}(
+                "type" => "unknown",
+                "shape" => Any["src_cells", "tgt_cells"]
+            ),
+            "A_ex" => Dict{String, Any}("type" => "unknown", "shape" => Any["src_cells", "tgt_cells"])
+        ),
         "equations" => Any[
-            Dict{String,Any}("lhs" => "src_poly", "rhs" => _native(defs["src_poly"])),
-            Dict{String,Any}("lhs" => "tgt_poly", "rhs" => _native(defs["tgt_poly"])),
-            Dict{String,Any}("lhs" => "A_ij", "rhs" => _native(defs["A_ij"])),
-            Dict{String,Any}(
-            "lhs" => agg(["i", "j"], Dict{String,Any}("op" => "D", "args" => Any[ix("A_ex", "i", "j")], "wrt" => "t")),
-            "rhs" => agg(["i", "j"], ix("A_ij", "i", "j")))])
-    Dict{String,Any}("esm" => "0.8.0", "metadata" => Dict{String,Any}("name" => "aij_extract"),
-        "index_sets" => Dict{String,Any}(
-            "coord" => Dict{String,Any}("kind" => "interval", "size" => nc),
-            "cell_verts" => Dict{String,Any}("kind" => "interval", "size" => nv),
-            "src_cells" => Dict{String,Any}("kind" => "interval", "size" => nS),
-            "tgt_cells" => Dict{String,Any}("kind" => "interval", "size" => nT)),
-        "models" => Dict{String,Any}("AijExtract" => model))
+            Dict{String, Any}("lhs" => "src_poly", "rhs" => _native(defs["src_poly"])),
+            Dict{String, Any}("lhs" => "tgt_poly", "rhs" => _native(defs["tgt_poly"])),
+            Dict{String, Any}("lhs" => "A_ij", "rhs" => _native(defs["A_ij"])),
+            Dict{String, Any}(
+                "lhs" => agg(["i", "j"], Dict{String, Any}("op" => "D", "args" => Any[ix("A_ex", "i", "j")], "wrt" => "t")),
+                "rhs" => agg(["i", "j"], ix("A_ij", "i", "j"))
+            ),
+        ]
+    )
+    return Dict{String, Any}(
+        "esm" => "0.8.0", "metadata" => Dict{String, Any}("name" => "aij_extract"),
+        "index_sets" => Dict{String, Any}(
+            "coord" => Dict{String, Any}("kind" => "interval", "size" => nc),
+            "cell_verts" => Dict{String, Any}("kind" => "interval", "size" => nv),
+            "src_cells" => Dict{String, Any}("kind" => "interval", "size" => nS),
+            "tgt_cells" => Dict{String, Any}("kind" => "interval", "size" => nT)
+        ),
+        "models" => Dict{String, Any}("AijExtract" => model)
+    )
 end
 
 # Build the overlap-area matrix A_ij by driving the fixture's OWN whole-mesh fused-
@@ -207,8 +227,10 @@ function _build_Aij_via_evaluator()
 
     nS, nT = length(SRC), length(TGT)
     ics = Dict("A_ex[$i,$j]" => 0.0 for i in 1:nS, j in 1:nT)
-    f!, u0, p, _, vmap = EarthSciAST._build_evaluator(_aij_extract_esm(defs);
-        model_name="AijExtract", initial_conditions=ics)
+    f!, u0, p, _, vmap = EarthSciAST._build_evaluator(
+        _aij_extract_esm(defs);
+        model_name = "AijExtract", initial_conditions = ics
+    )
     du = similar(u0); f!(du, u0, p, 0.0)
     A = [du[vmap["A_ex[$i,$j]"]] for i in 1:nS, j in 1:nT]   # whole-mesh fused-leaf A_ij
     return A, F_SRC, pairs
@@ -224,7 +246,7 @@ end
 # Returns (A_j, F_tgt).
 function _build_fixture_end_to_end()
     raw = _asm_raw()
-    f!, u0, p, _, vmap = EarthSciAST._build_evaluator(raw; model_name="ConservativeRegridAssembly")
+    f!, u0, p, _, vmap = EarthSciAST._build_evaluator(raw; model_name = "ConservativeRegridAssembly")
     du = similar(u0); f!(du, u0, p, 0.0)
     n = 4
     A_j = [du[vmap["A_j_check[$j]"]] for j in 1:n]
@@ -255,46 +277,68 @@ end
 # and the sub-atol sliver filter. Driven with the GEOMETRY-DERIVED A_ij so the
 # evaluator runs exactly the assembly the fixture declares.
 function _apply_only_esm()
-    ix(a...) = Dict{String,Any}("op" => "index", "args" => collect(Any, a))
-    joinij = Any[Dict{String,Any}("on" => Any[Any["i", "j"]])]
-    filt = Dict{String,Any}("op" => ">", "args" => Any[ix("A_ij", "i", "j"), "atol"])
-    Dlhs(sv) = Dict{String,Any}("op" => "faq", "args" => Any[], "output_idx" => Any["j"],
-        "expr" => Dict{String,Any}("op" => "D", "args" => Any[ix(sv, "j")], "wrt" => "t"),
-        "ranges" => Dict{String,Any}("j" => Any[1, 4]))
-    aj_rhs = Dict{String,Any}("op" => "faq", "semiring" => "sum_product", "output_idx" => Any["j"],
-        "ranges" => Dict{String,Any}("i" => Dict{String,Any}("from" => "src_cells"), "j" => Dict{String,Any}("from" => "tgt_cells")),
-        "join" => joinij, "filter" => filt, "args" => Any["A_ij"], "expr" => ix("A_ij", "i", "j"))
-    ft_rhs = Dict{String,Any}("op" => "faq", "semiring" => "sum_product", "output_idx" => Any["j"],
-        "ranges" => Dict{String,Any}("i" => Dict{String,Any}("from" => "src_cells"), "j" => Dict{String,Any}("from" => "tgt_cells")),
+    ix(a...) = Dict{String, Any}("op" => "index", "args" => collect(Any, a))
+    joinij = Any[Dict{String, Any}("on" => Any[Any["i", "j"]])]
+    filt = Dict{String, Any}("op" => ">", "args" => Any[ix("A_ij", "i", "j"), "atol"])
+    Dlhs(sv) = Dict{String, Any}(
+        "op" => "faq", "args" => Any[], "output_idx" => Any["j"],
+        "expr" => Dict{String, Any}("op" => "D", "args" => Any[ix(sv, "j")], "wrt" => "t"),
+        "ranges" => Dict{String, Any}("j" => Any[1, 4])
+    )
+    aj_rhs = Dict{String, Any}(
+        "op" => "faq", "semiring" => "sum_product", "output_idx" => Any["j"],
+        "ranges" => Dict{String, Any}("i" => Dict{String, Any}("from" => "src_cells"), "j" => Dict{String, Any}("from" => "tgt_cells")),
+        "join" => joinij, "filter" => filt, "args" => Any["A_ij"], "expr" => ix("A_ij", "i", "j")
+    )
+    ft_rhs = Dict{String, Any}(
+        "op" => "faq", "semiring" => "sum_product", "output_idx" => Any["j"],
+        "ranges" => Dict{String, Any}("i" => Dict{String, Any}("from" => "src_cells"), "j" => Dict{String, Any}("from" => "tgt_cells")),
         "join" => joinij, "filter" => filt, "args" => Any["A_ij", "F_src", "dst_areas"],
-        "expr" => Dict{String,Any}("op" => "/", "args" => Any[
-            Dict{String,Any}("op" => "*", "args" => Any[ix("A_ij", "i", "j"), ix("F_src", "i")]), ix("dst_areas", "j")]))
-    vars = Dict{String,Any}(
-        "A_ij" => Dict{String,Any}("type" => "parameter", "shape" => Any["src_cells", "tgt_cells"]),
-        "F_src" => Dict{String,Any}("type" => "parameter", "shape" => Any["src_cells"]),
-        "dst_areas" => Dict{String,Any}("type" => "parameter", "shape" => Any["tgt_cells"]),
-        "atol" => Dict{String,Any}("type" => "parameter", "default" => 1e-12),
-        "A_j" => Dict{String,Any}("type" => "unknown", "shape" => Any["tgt_cells"]),
-        "F_tgt" => Dict{String,Any}("type" => "unknown", "shape" => Any["tgt_cells"]))
-    Dict{String,Any}("esm" => "0.8.0", "metadata" => Dict{String,Any}("name" => "apply_only"),
-        "index_sets" => Dict{String,Any}(
-            "src_cells" => Dict{String,Any}("kind" => "categorical", "members" => Any["b0", "b0", "b1", "b1"]),
-            "tgt_cells" => Dict{String,Any}("kind" => "categorical", "members" => Any["b0", "b0", "b1", "b1"])),
-        "models" => Dict{String,Any}("ApplyOnly" => Dict{String,Any}("variables" => vars,
-            "equations" => Any[Dict{String,Any}("lhs" => Dlhs("A_j"), "rhs" => aj_rhs),
-                               Dict{String,Any}("lhs" => Dlhs("F_tgt"), "rhs" => ft_rhs)])))
+        "expr" => Dict{String, Any}(
+            "op" => "/", "args" => Any[
+                Dict{String, Any}("op" => "*", "args" => Any[ix("A_ij", "i", "j"), ix("F_src", "i")]), ix("dst_areas", "j"),
+            ]
+        )
+    )
+    vars = Dict{String, Any}(
+        "A_ij" => Dict{String, Any}("type" => "parameter", "shape" => Any["src_cells", "tgt_cells"]),
+        "F_src" => Dict{String, Any}("type" => "parameter", "shape" => Any["src_cells"]),
+        "dst_areas" => Dict{String, Any}("type" => "parameter", "shape" => Any["tgt_cells"]),
+        "atol" => Dict{String, Any}("type" => "parameter", "default" => 1.0e-12),
+        "A_j" => Dict{String, Any}("type" => "unknown", "shape" => Any["tgt_cells"]),
+        "F_tgt" => Dict{String, Any}("type" => "unknown", "shape" => Any["tgt_cells"])
+    )
+    return Dict{String, Any}(
+        "esm" => "0.8.0", "metadata" => Dict{String, Any}("name" => "apply_only"),
+        "index_sets" => Dict{String, Any}(
+            "src_cells" => Dict{String, Any}("kind" => "categorical", "members" => Any["b0", "b0", "b1", "b1"]),
+            "tgt_cells" => Dict{String, Any}("kind" => "categorical", "members" => Any["b0", "b0", "b1", "b1"])
+        ),
+        "models" => Dict{String, Any}(
+            "ApplyOnly" => Dict{String, Any}(
+                "variables" => vars,
+                "equations" => Any[
+                    Dict{String, Any}("lhs" => Dlhs("A_j"), "rhs" => aj_rhs),
+                    Dict{String, Any}("lhs" => Dlhs("F_tgt"), "rhs" => ft_rhs),
+                ]
+            )
+        )
+    )
 end
 
 # Drive the apply/normalize FAQ from the geometry-derived A_ij; du = f!(u0) at the
 # zero IC IS the assembled value for each constant-RHS D-equation.
-function _eval_assembly(A_ij::Matrix{Float64}, dst_areas::Vector{Float64}, F_src::Vector{Float64};
-                        atol::Float64=1e-12)
+function _eval_assembly(
+        A_ij::Matrix{Float64}, dst_areas::Vector{Float64}, F_src::Vector{Float64};
+        atol::Float64 = 1.0e-12
+    )
     n = length(dst_areas)
     ics = Dict(("A_j[$j]" => 0.0 for j in 1:n)..., ("F_tgt[$j]" => 0.0 for j in 1:n)...)
     f!, u0, p, _, vmap = EarthSciAST._build_evaluator(
-        _apply_only_esm(); model_name="ApplyOnly", initial_conditions=ics,
-        const_arrays=Dict("A_ij" => A_ij, "F_src" => F_src, "dst_areas" => dst_areas),
-        parameter_overrides=Dict("atol" => atol))
+        _apply_only_esm(); model_name = "ApplyOnly", initial_conditions = ics,
+        const_arrays = Dict("A_ij" => A_ij, "F_src" => F_src, "dst_areas" => dst_areas),
+        parameter_overrides = Dict("atol" => atol)
+    )
     du = similar(u0); f!(du, u0, p, 0.0)
     A_j = [du[vmap["A_j[$j]"]] for j in 1:n]
     F_tgt = [du[vmap["F_tgt[$j]"]] for j in 1:n]
@@ -307,8 +351,8 @@ end
     # leaf over the bin-skolem candidate set, driven by build_evaluator from the
     # fixture's own geometry.
     A_ij, F_src, candidate_pairs = _build_Aij_via_evaluator()
-    dst_areas = vec(sum(A_ij; dims=1))   # column sums = A_j = dst_areas
-    src_areas = vec(sum(A_ij; dims=2))   # row sums = source cell areas
+    dst_areas = vec(sum(A_ij; dims = 1))   # column sums = A_j = dst_areas
+    src_areas = vec(sum(A_ij; dims = 2))   # row sums = source cell areas
 
     @testset "fixture loads (schema + structural)" begin
         @test isfile(_ASM_FIXTURE)
@@ -365,17 +409,23 @@ end
     # Definitionally cross-checked against the standalone intersect_polygon+polygon_area
     # kernels (§8.6.1: the fused leaf equals them).
     @testset "narrow phase A_ij (whole-mesh fused-leaf aggregate) is the expected sparse matrix" begin
-        @test A_ij ≈ [1.0 0.0 0.0 0.0;
-                      0.5 0.5 0.0 0.0;
-                      0.0 0.0 1.0 0.0;
-                      0.0 0.0 0.5 0.5]
+        @test A_ij ≈ [
+            1.0 0.0 0.0 0.0;
+            0.5 0.5 0.0 0.0;
+            0.0 0.0 1.0 0.0;
+            0.0 0.0 0.5 0.5
+        ]
         @test src_areas ≈ [1.0, 1.0, 1.0, 1.0]
         @test dst_areas ≈ [1.5, 0.5, 1.5, 0.5]
         # representative fractional clip src 2 ∩ tgt 1 = 0.5 (the clip demo pair).
-        @test isapprox(A_ij[_REP_I, _REP_J], 0.5; atol=1e-12)
+        @test isapprox(A_ij[_REP_I, _REP_J], 0.5; atol = 1.0e-12)
         # the candidate set (broad phase) is exactly the two within-bin blocks.
-        @test Set(candidate_pairs) == Set([(1, 1), (1, 2), (2, 1), (2, 2),
-                                           (3, 3), (3, 4), (4, 3), (4, 4)])
+        @test Set(candidate_pairs) == Set(
+            [
+                (1, 1), (1, 2), (2, 1), (2, 2),
+                (3, 3), (3, 4), (4, 3), (4, 4),
+            ]
+        )
         # fused-leaf-through-evaluator == standalone clip+area oracle (definitional).
         @test A_ij ≈ _build_Aij_standalone_oracle()
     end
@@ -402,10 +452,10 @@ end
         @test A_j_e2e ≈ [1.5, 0.5, 1.5, 0.5]
         @test F_tgt_e2e ≈ [40.0 / 3, 20.0, 100.0 / 3, 40.0]
         # conservation Σ_j A_j·F_tgt = Σ_i A_i·F_src = 100, straight from the fixture.
-        @test isapprox(sum(A_j_e2e .* F_tgt_e2e), 100.0; rtol=1e-12)
+        @test isapprox(sum(A_j_e2e .* F_tgt_e2e), 100.0; rtol = 1.0e-12)
         # partition-of-unity Σ_i W_ij = Σ_i A_ij / A_j = 1 for every target cell.
         for j in 1:4
-            @test isapprox(sum(A_ij[i, j] for i in 1:4) / A_j_e2e[j], 1.0; rtol=1e-12, atol=1e-12)
+            @test isapprox(sum(A_ij[i, j] for i in 1:4) / A_j_e2e[j], 1.0; rtol = 1.0e-12, atol = 1.0e-12)
         end
     end
 
@@ -416,8 +466,8 @@ end
         A_j, F_tgt = _eval_assembly(A_ij, dst_areas, F_src)
         mass_tgt = sum(A_j .* F_tgt)
         mass_src = sum(src_areas .* F_src)
-        @test isapprox(mass_tgt, mass_src; rtol=1e-12, atol=1e-12)
-        @test isapprox(mass_tgt, 100.0; rtol=1e-12)
+        @test isapprox(mass_tgt, mass_src; rtol = 1.0e-12, atol = 1.0e-12)
+        @test isapprox(mass_tgt, 100.0; rtol = 1.0e-12)
     end
 
     # ACCEPTANCE INVARIANT 2 — PARTITION-OF-UNITY (§5.8.3): W_ij = A_ij/A_j sum to
@@ -427,7 +477,7 @@ end
         A_j, _ = _eval_assembly(A_ij, dst_areas, F_src)
         for j in 1:4
             w_sum = sum(A_ij[i, j] for i in 1:4) / A_j[j]
-            @test isapprox(w_sum, 1.0; rtol=1e-12, atol=1e-12)
+            @test isapprox(w_sum, 1.0; rtol = 1.0e-12, atol = 1.0e-12)
         end
     end
 
@@ -439,9 +489,9 @@ end
         contaminated = copy(A_ij)
         contaminated[1, 3] = 99.0     # src cell 1 (b0) × tgt cell 3 (b1): cross-bin
         A_j, F_tgt = _eval_assembly(contaminated, dst_areas, F_src)
-        @test isapprox(A_j[3], 1.5; rtol=1e-12)               # 99.0 excluded, not 100.5
-        @test isapprox(F_tgt[3], 100.0 / 3; rtol=1e-12)       # apply unaffected too
-        @test isapprox(sum(A_j .* F_tgt), 100.0; rtol=1e-12)  # conservation holds
+        @test isapprox(A_j[3], 1.5; rtol = 1.0e-12)               # 99.0 excluded, not 100.5
+        @test isapprox(F_tgt[3], 100.0 / 3; rtol = 1.0e-12)       # apply unaffected too
+        @test isapprox(sum(A_j .* F_tgt), 100.0; rtol = 1.0e-12)  # conservation holds
     end
 
     # The ZERO-AREA FILTER is load-bearing: filter A_ij > atol drops sub-atol
@@ -450,10 +500,10 @@ end
     # below atol must be dropped.
     @testset "zero-area filter drops sub-atol within-bin slivers (surviving set)" begin
         slivered = copy(A_ij)
-        slivered[1, 2] = 1e-6         # src 1 (b0) × tgt 2 (b0): within-bin sliver
-        A_j, _ = _eval_assembly(slivered, dst_areas, F_src; atol=1e-3)
-        @test isapprox(A_j[2], 0.5; rtol=1e-12)               # atol above ⇒ dropped
-        A_j_admit, _ = _eval_assembly(slivered, dst_areas, F_src; atol=1e-12)
-        @test isapprox(A_j_admit[2], 0.5 + 1e-6; rtol=1e-9)   # atol below ⇒ admitted
+        slivered[1, 2] = 1.0e-6         # src 1 (b0) × tgt 2 (b0): within-bin sliver
+        A_j, _ = _eval_assembly(slivered, dst_areas, F_src; atol = 1.0e-3)
+        @test isapprox(A_j[2], 0.5; rtol = 1.0e-12)               # atol above ⇒ dropped
+        A_j_admit, _ = _eval_assembly(slivered, dst_areas, F_src; atol = 1.0e-12)
+        @test isapprox(A_j_admit[2], 0.5 + 1.0e-6; rtol = 1.0e-9)   # atol below ⇒ admitted
     end
 end

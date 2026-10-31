@@ -14,31 +14,55 @@ function _rrt_doc(nx::Int, ny::Int)
     u(i, j) = Dict("op" => "index", "args" => Any["u", i, j])
     plus(a, b) = Dict("op" => "+", "args" => Any[a, b])
     minus(a, b) = Dict("op" => "-", "args" => Any[a, b])
-    lap(w, e) = Dict("op" => "+", "args" => Any[u(w, "j"), u(e, "j"),
-                                                u("i", minus("j", 1)), u("i", plus("j", 1)),
-                                                Dict("op" => "*", "args" => Any[-4, u("i", "j")])])
-    ma = Dict("op" => "makearray", "args" => Any[],
-              "regions" => Any[Any[Any[1, nx], Any[1, ny]], Any[Any[1, 1], Any[1, ny]],
-                               Any[Any[nx, nx], Any[1, ny]]],
-              "values" => Any[lap(minus("i", 1), plus("i", 1)), lap(nx, plus("i", 1)),
-                              lap(minus("i", 1), 1)])
-    faq(e) = Dict("op" => "faq", "args" => Any[], "output_idx" => Any["i", "j"],
-                  "ranges" => Dict("i" => Dict("from" => "x"), "j" => Dict("from" => "y")),
-                  "expr" => e)
+    lap(w, e) = Dict(
+        "op" => "+", "args" => Any[
+            u(w, "j"), u(e, "j"),
+            u("i", minus("j", 1)), u("i", plus("j", 1)),
+            Dict("op" => "*", "args" => Any[-4, u("i", "j")]),
+        ]
+    )
+    ma = Dict(
+        "op" => "makearray", "args" => Any[],
+        "regions" => Any[
+            Any[Any[1, nx], Any[1, ny]], Any[Any[1, 1], Any[1, ny]],
+            Any[Any[nx, nx], Any[1, ny]],
+        ],
+        "values" => Any[
+            lap(minus("i", 1), plus("i", 1)), lap(nx, plus("i", 1)),
+            lap(minus("i", 1), 1),
+        ]
+    )
+    faq(e) = Dict(
+        "op" => "faq", "args" => Any[], "output_idx" => Any["i", "j"],
+        "ranges" => Dict("i" => Dict("from" => "x"), "j" => Dict("from" => "y")),
+        "expr" => e
+    )
     lhs = faq(Dict("op" => "D", "args" => Any[u("i", "j")], "wrt" => "t"))
-    rhs = faq(Dict("op" => "*", "args" => Any["k",
-                   Dict("op" => "index", "args" => Any[ma, "i", "j"])]))
-    return Dict{String,Any}(
+    rhs = faq(
+        Dict(
+            "op" => "*", "args" => Any[
+                "k",
+                Dict("op" => "index", "args" => Any[ma, "i", "j"]),
+            ]
+        )
+    )
+    return Dict{String, Any}(
         "esm" => "1.2.0",
         "metadata" => Dict("name" => "rrt"),
-        "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => nx),
-                             "y" => Dict("kind" => "interval", "size" => ny)),
+        "index_sets" => Dict(
+            "x" => Dict("kind" => "interval", "size" => nx),
+            "y" => Dict("kind" => "interval", "size" => ny)
+        ),
         "models" => Dict(
             "Diff" => Dict(
                 "variables" => Dict(
                     "u" => Dict("type" => "unknown", "shape" => ["x", "y"], "default" => 1.0),
-                    "k" => Dict("type" => "parameter", "default" => 0.25)),
-                "equations" => Any[Dict("lhs" => lhs, "rhs" => rhs)])))
+                    "k" => Dict("type" => "parameter", "default" => 0.25)
+                ),
+                "equations" => Any[Dict("lhs" => lhs, "rhs" => rhs)]
+            )
+        )
+    )
 end
 
 _rrt_bits(x) = reinterpret(UInt64, x)
@@ -51,27 +75,46 @@ function _rrt_flux_doc(nx::Int)
     ix(v, i) = Dict("op" => "index", "args" => Any[v, i])
     sub(a, b) = Dict("op" => "-", "args" => Any[a, b])
     add(a, b) = Dict("op" => "+", "args" => Any[a, b])
-    flux(c, w) = sub(Dict("op" => "*", "args" => Any[0.5, ix("u", c)]),
-                     Dict("op" => "*", "args" => Any[0.25, ix("u", w)]))
-    faq(e) = Dict("op" => "faq", "args" => Any[], "output_idx" => Any["i"],
-                  "ranges" => Dict("i" => Dict("from" => "x")), "expr" => e)
-    ma(regions, values) = Dict("op" => "makearray", "args" => Any[], "regions" => regions,
-                               "values" => values)
+    flux(c, w) = sub(
+        Dict("op" => "*", "args" => Any[0.5, ix("u", c)]),
+        Dict("op" => "*", "args" => Any[0.25, ix("u", w)])
+    )
+    faq(e) = Dict(
+        "op" => "faq", "args" => Any[], "output_idx" => Any["i"],
+        "ranges" => Dict("i" => Dict("from" => "x")), "expr" => e
+    )
+    ma(regions, values) = Dict(
+        "op" => "makearray", "args" => Any[], "regions" => regions,
+        "values" => values
+    )
     F = faq(flux("i", sub("i", 1)))
-    du = faq(ix(ma(Any[Any[Any[1, nx - 1]], Any[Any[nx, nx]]],
-                   Any[sub(ix("F", add("i", 1)), ix("F", "i")), sub(ix("F", 1), ix("F", nx))]),
-                "i"))
+    du = faq(
+        ix(
+            ma(
+                Any[Any[Any[1, nx - 1]], Any[Any[nx, nx]]],
+                Any[sub(ix("F", add("i", 1)), ix("F", "i")), sub(ix("F", 1), ix("F", nx))]
+            ),
+            "i"
+        )
+    )
     lhs = faq(Dict("op" => "D", "args" => Any[ix("u", "i")], "wrt" => "t"))
-    return Dict{String,Any}(
+    return Dict{String, Any}(
         "esm" => "1.2.0",
         "metadata" => Dict("name" => "rrt_flux"),
         "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => nx)),
-        "models" => Dict("Flux" => Dict(
-            "variables" => Dict(
-                "u" => Dict("type" => "unknown", "shape" => ["x"], "default" => 1.0),
-                "F" => Dict("type" => "unknown", "shape" => ["x"])),
-            "equations" => Any[Dict("lhs" => "F", "rhs" => F),
-                               Dict("lhs" => lhs, "rhs" => du)])))
+        "models" => Dict(
+            "Flux" => Dict(
+                "variables" => Dict(
+                    "u" => Dict("type" => "unknown", "shape" => ["x"], "default" => 1.0),
+                    "F" => Dict("type" => "unknown", "shape" => ["x"])
+                ),
+                "equations" => Any[
+                    Dict("lhs" => "F", "rhs" => F),
+                    Dict("lhs" => lhs, "rhs" => du),
+                ]
+            )
+        )
+    )
 end
 
 # A 1-D diffusion on `nx` cells (zero ghosts) plus `Σ_k W[i,k]·k` over a
@@ -82,25 +125,40 @@ function _rrt_table_doc(nx::Int)
     add(a, b) = Dict("op" => "+", "args" => Any[a, b])
     sub(a, b) = Dict("op" => "-", "args" => Any[a, b])
     mul(a...) = Dict("op" => "*", "args" => Any[a...])
-    agg = Dict("op" => "faq", "args" => Any[], "output_idx" => Any[],
-               "ranges" => Dict("k" => Any[1, 3]),
-               "expr" => mul(Dict("op" => "index", "args" => Any["W", "i", "k"]), "k"))
-    faq(e) = Dict("op" => "faq", "args" => Any[], "output_idx" => Any["i"],
-                  "ranges" => Dict("i" => Dict("from" => "x")), "expr" => e)
+    agg = Dict(
+        "op" => "faq", "args" => Any[], "output_idx" => Any[],
+        "ranges" => Dict("k" => Any[1, 3]),
+        "expr" => mul(Dict("op" => "index", "args" => Any["W", "i", "k"]), "k")
+    )
+    faq(e) = Dict(
+        "op" => "faq", "args" => Any[], "output_idx" => Any["i"],
+        "ranges" => Dict("i" => Dict("from" => "x")), "expr" => e
+    )
     lhs = faq(Dict("op" => "D", "args" => Any[u("i")], "wrt" => "t"))
     rhs = faq(add(mul(0.25, add(u(sub("i", 1)), add(mul(-2, u("i")), u(add("i", 1))))), agg))
-    return Dict{String,Any}(
+    return Dict{String, Any}(
         "esm" => "1.2.0",
         "metadata" => Dict("name" => "rrt_table"),
-        "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => nx),
-                             "kk" => Dict("kind" => "interval", "size" => 3)),
-        "models" => Dict("Tbl" => Dict(
-            "variables" => Dict(
-                "u" => Dict("type" => "unknown", "shape" => ["x"], "default" => 1.0),
-                "W" => Dict("type" => "parameter", "shape" => ["x", "kk"],
-                            "default" => [[sin(1.7 * i * k) + 0.05 * i for k in 1:3]
-                                          for i in 1:nx])),
-            "equations" => Any[Dict("lhs" => lhs, "rhs" => rhs)])))
+        "index_sets" => Dict(
+            "x" => Dict("kind" => "interval", "size" => nx),
+            "kk" => Dict("kind" => "interval", "size" => 3)
+        ),
+        "models" => Dict(
+            "Tbl" => Dict(
+                "variables" => Dict(
+                    "u" => Dict("type" => "unknown", "shape" => ["x"], "default" => 1.0),
+                    "W" => Dict(
+                        "type" => "parameter", "shape" => ["x", "kk"],
+                        "default" => [
+                            [sin(1.7 * i * k) + 0.05 * i for k in 1:3]
+                                for i in 1:nx
+                        ]
+                    )
+                ),
+                "equations" => Any[Dict("lhs" => lhs, "rhs" => rhs)]
+            )
+        )
+    )
 end
 
 # A 1-D document whose tile build takes every path that could cost the whole
@@ -111,33 +169,58 @@ function _rrt_paths_doc(nx::Int)
     ix(v, a...) = Dict("op" => "index", "args" => Any[v, a...])
     op(o, a...) = Dict("op" => o, "args" => Any[a...])
     u(i) = ix("u", i)
-    agg = Dict("op" => "faq", "args" => Any[], "output_idx" => Any[],
-               "ranges" => Dict("k" => Any[1, 3]),
-               "expr" => op("*", ix("W", "i", "k"), "k"))
-    faq(e) = Dict("op" => "faq", "args" => Any[], "output_idx" => Any["i"],
-                  "ranges" => Dict("i" => Dict("from" => "x")), "expr" => e)
-    lap = op("+", u(op("max", op("-", "i", 1), 1)), op("*", -2, u("i")),
-             u(op("min", op("+", "i", 1), nx)))
-    rhs = faq(op("+", op("*", 0.25, lap), agg, ix("c", op("max", "i", 2)), ix("S", "i"),
-                 op("ifelse", op("<", "i", nx), ix("g", op("+", "i", 1)), 0)))
+    agg = Dict(
+        "op" => "faq", "args" => Any[], "output_idx" => Any[],
+        "ranges" => Dict("k" => Any[1, 3]),
+        "expr" => op("*", ix("W", "i", "k"), "k")
+    )
+    faq(e) = Dict(
+        "op" => "faq", "args" => Any[], "output_idx" => Any["i"],
+        "ranges" => Dict("i" => Dict("from" => "x")), "expr" => e
+    )
+    lap = op(
+        "+", u(op("max", op("-", "i", 1), 1)), op("*", -2, u("i")),
+        u(op("min", op("+", "i", 1), nx))
+    )
+    rhs = faq(
+        op(
+            "+", op("*", 0.25, lap), agg, ix("c", op("max", "i", 2)), ix("S", "i"),
+            op("ifelse", op("<", "i", nx), ix("g", op("+", "i", 1)), 0)
+        )
+    )
     lhs = faq(Dict("op" => "D", "args" => Any[u("i")], "wrt" => "t"))
-    return Dict{String,Any}(
+    return Dict{String, Any}(
         "esm" => "1.2.0",
         "metadata" => Dict("name" => "rrt_paths"),
-        "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => nx),
-                             "kk" => Dict("kind" => "interval", "size" => 3)),
-        "models" => Dict("Paths" => Dict(
-            "variables" => Dict(
-                "u" => Dict("type" => "unknown", "shape" => ["x"], "default" => 1.0),
-                "W" => Dict("type" => "parameter", "shape" => ["x", "kk"],
-                            "default" => [[sin(1.7 * i * k) + 0.05 * i for k in 1:3]
-                                          for i in 1:nx]),
-                "c" => Dict("type" => "parameter", "shape" => ["x"],
-                            "default" => [cos(0.3 * i) for i in 1:nx]),
-                "g" => Dict("type" => "parameter", "shape" => ["x"],
-                            "default" => [0.01 * i for i in 1:nx]),
-                "S" => Dict("type" => "parameter", "shape" => ["x"], "default" => 2.0)),
-            "equations" => Any[Dict("lhs" => lhs, "rhs" => rhs)])))
+        "index_sets" => Dict(
+            "x" => Dict("kind" => "interval", "size" => nx),
+            "kk" => Dict("kind" => "interval", "size" => 3)
+        ),
+        "models" => Dict(
+            "Paths" => Dict(
+                "variables" => Dict(
+                    "u" => Dict("type" => "unknown", "shape" => ["x"], "default" => 1.0),
+                    "W" => Dict(
+                        "type" => "parameter", "shape" => ["x", "kk"],
+                        "default" => [
+                            [sin(1.7 * i * k) + 0.05 * i for k in 1:3]
+                                for i in 1:nx
+                        ]
+                    ),
+                    "c" => Dict(
+                        "type" => "parameter", "shape" => ["x"],
+                        "default" => [cos(0.3 * i) for i in 1:nx]
+                    ),
+                    "g" => Dict(
+                        "type" => "parameter", "shape" => ["x"],
+                        "default" => [0.01 * i for i in 1:nx]
+                    ),
+                    "S" => Dict("type" => "parameter", "shape" => ["x"], "default" => 2.0)
+                ),
+                "equations" => Any[Dict("lhs" => lhs, "rhs" => rhs)]
+            )
+        )
+    )
 end
 
 # An outflow along x on an `nx × ny` grid as three equations, one per region
@@ -150,34 +233,56 @@ function _rrt_faces_doc(nx::Int, ny::Int)
     ix(v, i) = Dict("op" => "index", "args" => Any[v, i, "j"])
     fx(i) = Dict("op" => "index", "args" => Any["u", i, 1])
     op(o, a...) = Dict("op" => o, "args" => Any[a...])
-    faq(lo, hi, e) = Dict("op" => "faq", "args" => Any[], "output_idx" => Any["i", "j"],
-                          "ranges" => Dict("i" => Any[lo, hi], "j" => Any[1, ny]), "expr" => e)
+    faq(lo, hi, e) = Dict(
+        "op" => "faq", "args" => Any[], "output_idx" => Any["i", "j"],
+        "ranges" => Dict("i" => Any[lo, hi], "j" => Any[1, ny]), "expr" => e
+    )
     D(lo, hi) = faq(lo, hi, Dict("op" => "D", "args" => Any[ix("u", "i")], "wrt" => "t"))
-    F = Dict("op" => "faq", "args" => Any[], "output_idx" => Any["i", "j"],
-             "ranges" => Dict("i" => Dict("from" => "x"), "j" => Dict("from" => "y")),
-             "expr" => op("-", op("*", 0.5, ix("u", "i")),
-                          op("*", 0.25, ix("u", op("-", "i", 1)))))
-    return Dict{String,Any}(
+    F = Dict(
+        "op" => "faq", "args" => Any[], "output_idx" => Any["i", "j"],
+        "ranges" => Dict("i" => Dict("from" => "x"), "j" => Dict("from" => "y")),
+        "expr" => op(
+            "-", op("*", 0.5, ix("u", "i")),
+            op("*", 0.25, ix("u", op("-", "i", 1)))
+        )
+    )
+    return Dict{String, Any}(
         "esm" => "1.2.0",
         "metadata" => Dict("name" => "rrt_faces"),
-        "index_sets" => Dict("x" => Dict("kind" => "interval", "size" => nx),
-                             "y" => Dict("kind" => "interval", "size" => ny)),
-        "models" => Dict("Faces" => Dict(
-            "variables" => Dict(
-                "u" => Dict("type" => "unknown", "shape" => ["x", "y"], "default" => 1.0),
-                "F" => Dict("type" => "unknown", "shape" => ["x", "y"])),
-            "equations" => Any[
-                Dict("lhs" => "F", "rhs" => F),
-                Dict("lhs" => D(1, 1),
-                     "rhs" => faq(1, 1, op("-", ix("F", op("+", "i", 1)), op("*", 2, ix("F", "i"))))),
-                Dict("lhs" => D(2, nx - 1),
-                     "rhs" => faq(2, nx - 1, op("-", ix("F", op("+", "i", 1)), ix("F", "i")))),
-                Dict("lhs" => D(nx, nx),
-                     "rhs" => faq(nx, nx, op("-", op("*", fx(1), fx(2)), ix("F", "i"))))])))
+        "index_sets" => Dict(
+            "x" => Dict("kind" => "interval", "size" => nx),
+            "y" => Dict("kind" => "interval", "size" => ny)
+        ),
+        "models" => Dict(
+            "Faces" => Dict(
+                "variables" => Dict(
+                    "u" => Dict("type" => "unknown", "shape" => ["x", "y"], "default" => 1.0),
+                    "F" => Dict("type" => "unknown", "shape" => ["x", "y"])
+                ),
+                "equations" => Any[
+                    Dict("lhs" => "F", "rhs" => F),
+                    Dict(
+                        "lhs" => D(1, 1),
+                        "rhs" => faq(1, 1, op("-", ix("F", op("+", "i", 1)), op("*", 2, ix("F", "i"))))
+                    ),
+                    Dict(
+                        "lhs" => D(2, nx - 1),
+                        "rhs" => faq(2, nx - 1, op("-", ix("F", op("+", "i", 1)), ix("F", "i")))
+                    ),
+                    Dict(
+                        "lhs" => D(nx, nx),
+                        "rhs" => faq(nx, nx, op("-", op("*", fx(1), fx(2)), ix("F", "i")))
+                    ),
+                ]
+            )
+        )
+    )
 end
 
-const _RRT_FIXTURES = joinpath(@__DIR__, "..", "..", "..", "tests", "conformance",
-                               "range_restricted_rhs", "fixtures")
+const _RRT_FIXTURES = joinpath(
+    @__DIR__, "..", "..", "..", "tests", "conformance",
+    "range_restricted_rhs", "fixtures"
+)
 
 # A whole-domain or tile program evaluated at a state that depends only on the
 # slot, so two programs with one layout are fed the same state.
@@ -217,7 +322,7 @@ function _rrt_generated(x, acc = Set{String}(), seen = Set{UInt}())
 end
 
 # How many numbers a program holds (its tables, its geometry, its constants).
-function _rrt_data(x, n = Ref(0), seen = IdDict{Any,Nothing}())
+function _rrt_data(x, n = Ref(0), seen = IdDict{Any, Nothing}())
     (x isa Module || x isa DataType || x isa String || x isa Symbol || isbits(x)) && return n[]
     haskey(seen, x) && return n[]
     seen[x] = nothing
@@ -243,8 +348,10 @@ function _rrt_tile_code(prog, p, o, st; ny = nothing)
     g(c) = ny === nothing ? c[1] : (c[2] - 1) * nx + c[1]
     val(c) = 0.5 + g(c) / (n + 1)
     box(r) = ny === nothing ? ("x" => r,) : ("x" => r, "y" => 1:ny)
-    tdec = Decomposition(axes = ny === nothing ? ["x" => (period = nothing,)] :
-                                ["x" => (period = nothing,), "y" => (period = nothing,)])
+    tdec = Decomposition(
+        axes = ny === nothing ? ["x" => (period = nothing,)] :
+            ["x" => (period = nothing,), "y" => (period = nothing,)]
+    )
     t = restrict(prog, tdec; owned = box(o), storage = box(st))
     b = only(tile_layout(t).u)
     uS = fill(NaN, tile_layout(t).n_u)
@@ -256,8 +363,10 @@ function _rrt_tile_code(prog, p, o, st; ny = nothing)
     uW = [val(Tuple(c)) for c in CartesianIndices(Tuple(only(tile_layout(prog).u).storage))]
     W = fill(NaN, n)
     rhs!(W, prog, rhs_workspace(prog), vec(uW), Float64[], p, 0.0, default_forcing_set(prog))
-    @test all(c -> _rrt_bits(duS[RRT._tile_slot(b, Tuple(c))]) == _rrt_bits(W[g(c)]),
-              CartesianIndices(Tuple(b.owned)))
+    @test all(
+        c -> _rrt_bits(duS[RRT._tile_slot(b, Tuple(c))]) == _rrt_bits(W[g(c)]),
+        CartesianIndices(Tuple(b.owned))
+    )
     return _rrt_generated(t.f!)
 end
 
@@ -289,8 +398,10 @@ end
         seen = zeros(Int, L.n_u)
         for (xo, yo) in ((1:4, 1:3), (5:10, 1:3), (1:4, 4:6), (5:10, 4:6))
             xs, ys = (first(xo) - 1):(last(xo) + 1), (first(yo) - 1):(last(yo) + 1)
-            tile = restrict(prog, dec; owned = ("x" => xo, "y" => yo),
-                            storage = ("x" => xs, "y" => ys))
+            tile = restrict(
+                prog, dec; owned = ("x" => xo, "y" => yo),
+                storage = ("x" => xs, "y" => ys)
+            )
             T = tile_layout(tile)
             b = only(T.u)
             uS = fill(NaN, T.n_u)
@@ -329,8 +440,10 @@ end
         codes = Set{String}[]
         for (xo, yo) in ((2:4, 1:3), (5:9, 4:6), (3:3, 2:5))
             xs, ys = (first(xo) - 1):(last(xo) + 1), (first(yo) - 1):(last(yo) + 1)
-            tile = restrict(prog, dec; owned = ("x" => xo, "y" => yo),
-                            storage = ("x" => xs, "y" => ys))
+            tile = restrict(
+                prog, dec; owned = ("x" => xo, "y" => yo),
+                storage = ("x" => xs, "y" => ys)
+            )
             push!(codes, _rrt_generated(tile.f!))
             b = only(tile_layout(tile).u)
             uS = fill(NaN, tile_layout(tile).n_u)
@@ -339,11 +452,13 @@ end
                 uS[RRT._tile_slot(b, (c[1], c[2]))] = u[(c[2] - 1) * nx + c[1]]
             end
             duS = fill(NaN, length(uS))
-            rhs!(duS, tile, rhs_workspace(tile), uS, Float64[], prob.p, 0.0,
-                 default_forcing_set(tile))
+            rhs!(
+                duS, tile, rhs_workspace(tile), uS, Float64[], prob.p, 0.0,
+                default_forcing_set(tile)
+            )
             for c in CartesianIndices(Tuple(b.owned))
                 @test _rrt_bits(duS[RRT._tile_slot(b, (c[1], c[2]))]) ==
-                      _rrt_bits(G[(c[2] - 1) * nx + c[1]])
+                    _rrt_bits(G[(c[2] - 1) * nx + c[1]])
             end
         end
         @test !isempty(codes[1]) && all(==(codes[1]), codes)
@@ -370,8 +485,10 @@ end
         # which stores them.
         fprob = esm_problem(_rrt_faces_doc(10, 4), (0.0, 1.0))
         fprog = rhs_program(fprob)
-        codes = [_rrt_tile_code(fprog, fprob.p, o, st; ny = 4)
-                 for (o, st) in ((1:3, 0:4), (4:7, 3:8))]
+        codes = [
+            _rrt_tile_code(fprog, fprob.p, o, st; ny = 4)
+                for (o, st) in ((1:3, 0:4), (4:7, 3:8))
+        ]
         @test all(==(codes[1]), codes)
     end
 
@@ -405,8 +522,12 @@ end
             tprog = rhs_program(tprob)
             tx == 40 ? _rrt_tile_code(tprog, tprob.p, 11:14, 10:15) :
                 restrict(tprog, tdec; owned = ("x" => 11:14,), storage = ("x" => 10:15,))
-            push!(alloc, @allocated restrict(tprog, tdec; owned = ("x" => 11:14,),
-                                             storage = ("x" => 10:15,)))
+            push!(
+                alloc, @allocated restrict(
+                    tprog, tdec; owned = ("x" => 11:14,),
+                    storage = ("x" => 10:15,)
+                )
+            )
         end
         @test alloc[2] - alloc[1] < 8 * (1000 - 40)
     end
@@ -445,13 +566,19 @@ end
         iprob = esm_problem(_rrt_doc(nx, ny), (0.0, 1.0); compiler = :interpreter)
         iprog = rhs_program(iprob)
         du = fill(NaN, L.n_u)
-        rhs!(du, iprog, rhs_workspace(iprog), u, Float64[], iprob.p, 0.0,
-             default_forcing_set(iprog))
+        rhs!(
+            du, iprog, rhs_workspace(iprog), u, Float64[], iprob.p, 0.0,
+            default_forcing_set(iprog)
+        )
         @test _rrt_bits.(du) == _rrt_bits.(G)
-        for f in (() -> halo(iprog, dec),
-                  () -> restrict(iprog, dec; owned = ("x" => 1:4, "y" => 1:6),
-                                 storage = ("x" => 0:5, "y" => 0:7)),
-                  () -> lanes(iprog, :cells, ["x", "y"]))
+        for f in (
+                () -> halo(iprog, dec),
+                () -> restrict(
+                    iprog, dec; owned = ("x" => 1:4, "y" => 1:6),
+                    storage = ("x" => 0:5, "y" => 0:7)
+                ),
+                () -> lanes(iprog, :cells, ["x", "y"]),
+            )
             err = try
                 f()
             catch e
@@ -492,22 +619,40 @@ end
     end
 
     @testset "rhs ranges clip by position when the index names differ" begin
-        lhs = RRT.OpExpr("faq", RRT.ASTExpr[]; output_idx = Any["_mo0", "_mo1"],
-                         ranges = Dict{String,Any}("_mo0" => Any[1, nx], "_mo1" => Any[1, ny]),
-                         expr_body = RRT.OpExpr("D", RRT.ASTExpr[RRT.OpExpr("index",
-                             RRT.ASTExpr[RRT.VarExpr("w"), RRT.VarExpr("_mo0"),
-                                         RRT.VarExpr("_mo1")])]; wrt = "t"))
-        body = RRT.OpExpr("index", RRT.ASTExpr[RRT.VarExpr("u"), RRT.VarExpr("a"),
-                                                RRT.VarExpr("b")])
-        rhs = RRT.OpExpr("faq", RRT.ASTExpr[]; output_idx = Any["b", "a"],
-                         ranges = Dict{String,Any}("a" => Any[1, ny], "b" => Any[1, nx]),
-                         expr_body = body)
-        clips = Dict{String,Any}("_mo0" => Any[3, 5], "_mo1" => Any[2, 2])
+        lhs = RRT.OpExpr(
+            "faq", RRT.ASTExpr[]; output_idx = Any["_mo0", "_mo1"],
+            ranges = Dict{String, Any}("_mo0" => Any[1, nx], "_mo1" => Any[1, ny]),
+            expr_body = RRT.OpExpr(
+                "D", RRT.ASTExpr[
+                    RRT.OpExpr(
+                        "index",
+                        RRT.ASTExpr[
+                            RRT.VarExpr("w"), RRT.VarExpr("_mo0"),
+                            RRT.VarExpr("_mo1"),
+                        ]
+                    ),
+                ]; wrt = "t"
+            )
+        )
+        body = RRT.OpExpr(
+            "index", RRT.ASTExpr[
+                RRT.VarExpr("u"), RRT.VarExpr("a"),
+                RRT.VarExpr("b"),
+            ]
+        )
+        rhs = RRT.OpExpr(
+            "faq", RRT.ASTExpr[]; output_idx = Any["b", "a"],
+            ranges = Dict{String, Any}("a" => Any[1, ny], "b" => Any[1, nx]),
+            expr_body = body
+        )
+        clips = Dict{String, Any}("_mo0" => Any[3, 5], "_mo1" => Any[2, 2])
         out = RRT._clip_rhs_ranges(rhs, ["_mo0", "_mo1"], clips)
         @test out.ranges["b"] == Any[3, 5] && out.ranges["a"] == Any[2, 2]
         # A lower-rank right-hand side keeps the left-hand loops it names.
-        low = RRT.OpExpr("faq", RRT.ASTExpr[]; output_idx = Any["_mo1"],
-                         ranges = Dict{String,Any}("_mo1" => Any[1, ny]), expr_body = body)
+        low = RRT.OpExpr(
+            "faq", RRT.ASTExpr[]; output_idx = Any["_mo1"],
+            ranges = Dict{String, Any}("_mo1" => Any[1, ny]), expr_body = body
+        )
         out = RRT._clip_rhs_ranges(low, ["_mo0", "_mo1"], clips)
         @test out.ranges["_mo1"] == Any[2, 2]
     end
@@ -521,16 +666,16 @@ end
         adv = select(sp; terms = [TO(component = "Adv")])
         # terms intersect: {Chem, Adv} ∩ {Chem} is Chem, Adv ∩ Chem is nothing.
         @test _rrt_bits.(_rrt_eval(select(both; terms = [TO(component = "Chem")]), sprob.p)) ==
-              _rrt_bits.(_rrt_eval(chem, sprob.p))
+            _rrt_bits.(_rrt_eval(chem, sprob.p))
         @test all(==(0.0), _rrt_eval(select(adv; terms = [TO(component = "Chem")]), sprob.p))
         @test _rrt_bits.(_rrt_eval(select(adv; terms = :all), sprob.p)) ==
-              _rrt_bits.(_rrt_eval(adv, sprob.p))
+            _rrt_bits.(_rrt_eval(adv, sprob.p))
         # writes = :all is the program's own writes.
         no2 = select(sp; writes = ["Chem.NO2"], terms = [TO(coupling = 0)])
         @test [b.name for b in tile_layout(no2).aux] == ["Chem.O3"]
         @test [b.name for b in tile_layout(select(no2)).u] == ["Chem.NO2"]
         @test _rrt_bits.(_rrt_eval(select(no2), sprob.p)) ==
-              _rrt_bits.(_rrt_eval(no2, sprob.p))
+            _rrt_bits.(_rrt_eval(no2, sprob.p))
         # A variable the program only reads cannot be written.
         err = _rrt_err(() -> select(no2; writes = ["Chem.O3"]))
         @test err isa SimulateError && occursin("Chem.O3", err.msg)
@@ -542,15 +687,23 @@ end
     end
 
     @testset "workspaces share nothing mutable" begin
-        tile = restrict(prog, dec; owned = ("x" => 1:4, "y" => 1:6),
-                        storage = ("x" => 0:5, "y" => 0:7))
+        tile = restrict(
+            prog, dec; owned = ("x" => 1:4, "y" => 1:6),
+            storage = ("x" => 0:5, "y" => 0:7)
+        )
         w1, w2 = rhs_workspace(tile), rhs_workspace(tile)
         @test w1.f! !== tile.f! && w2.f! !== w1.f!
-        other = restrict(prog, dec; owned = ("x" => 5:10, "y" => 1:6),
-                         storage = ("x" => 4:11, "y" => 0:7))
+        other = restrict(
+            prog, dec; owned = ("x" => 5:10, "y" => 1:6),
+            storage = ("x" => 4:11, "y" => 0:7)
+        )
         T = tile_layout(tile)
-        err = _rrt_err(() -> rhs!(zeros(T.n_u), tile, rhs_workspace(other), zeros(T.n_u),
-                                  Float64[], prob.p, 0.0, default_forcing_set(tile)))
+        err = _rrt_err(
+            () -> rhs!(
+                zeros(T.n_u), tile, rhs_workspace(other), zeros(T.n_u),
+                Float64[], prob.p, 0.0, default_forcing_set(tile)
+            )
+        )
         @test err isa ArgumentError
 
         # Lanes: concurrent calls through one workspace per task agree bitwise
@@ -564,8 +717,10 @@ end
         function run!(ws, k)
             cells = batches[mod1(k, length(batches))]
             du = fill(NaN, LL.n_u * 8)
-            rhs!(du, lp, ws, state(8, LL.n_u, k), state(8, LL.n_aux, k), lprob.p, 0.0,
-                 default_forcing_set(lp), cells, 7)
+            rhs!(
+                du, lp, ws, state(8, LL.n_u, k), state(8, LL.n_aux, k), lprob.p, 0.0,
+                default_forcing_set(lp), cells, 7
+            )
             return du
         end
         ws0 = rhs_workspace(lp)
@@ -589,12 +744,16 @@ end
         BL = tile_layout(bprog)
         bu = 0.5 .+ (1:BL.n_u) ./ BL.n_u
         BG = fill(NaN, BL.n_u)
-        rhs!(BG, bprog, rhs_workspace(bprog), bu, Float64[], bprob.p, 0.0,
-             default_forcing_set(bprog))
+        rhs!(
+            BG, bprog, rhs_workspace(bprog), bu, Float64[], bprob.p, 0.0,
+            default_forcing_set(bprog)
+        )
         bdec = Decomposition(axes = ["x" => (period = bx,), "y" => (period = nothing,)])
-        for (xo, xs) in ((1:4, 0:5), (bx - 3:bx, (bx - 4):(bx + 1)), (1:2, -1:3))
-            tile = restrict(bprog, bdec; owned = ("x" => xo, "y" => 1:ny),
-                            storage = ("x" => xs, "y" => 0:(ny + 1)))
+        for (xo, xs) in ((1:4, 0:5), ((bx - 3):bx, (bx - 4):(bx + 1)), (1:2, -1:3))
+            tile = restrict(
+                bprog, bdec; owned = ("x" => xo, "y" => 1:ny),
+                storage = ("x" => xs, "y" => 0:(ny + 1))
+            )
             # One slot per in-domain storage cell: the cells past the seam are
             # a block of their own, not the rest of the axis.
             @test length(tile.internal) == length(xs) * ny
@@ -606,12 +765,14 @@ end
                 uS[RRT._tile_slot(b, (c[1], c[2]))] = bu[(c[2] - 1) * bx + mod1(c[1], bx)]
             end
             duS = fill(NaN, T.n_u)
-            rhs!(duS, tile, rhs_workspace(tile), uS, Float64[], bprob.p, 0.0,
-                 default_forcing_set(tile))
+            rhs!(
+                duS, tile, rhs_workspace(tile), uS, Float64[], bprob.p, 0.0,
+                default_forcing_set(tile)
+            )
             ok = true
             for c in CartesianIndices(Tuple(b.owned))
                 ok &= _rrt_bits(duS[RRT._tile_slot(b, (c[1], c[2]))]) ==
-                      _rrt_bits(BG[(c[2] - 1) * bx + c[1]])
+                    _rrt_bits(BG[(c[2] - 1) * bx + c[1]])
             end
             @test ok
         end
@@ -624,8 +785,10 @@ end
         FL = tile_layout(fprog)
         fu = 0.5 .+ (1:FL.n_u) ./ (FL.n_u + 7)
         FG = fill(NaN, FL.n_u)
-        rhs!(FG, fprog, rhs_workspace(fprog), fu, Float64[], fprob.p, 0.0,
-             default_forcing_set(fprog))
+        rhs!(
+            FG, fprog, rhs_workspace(fprog), fu, Float64[], fprob.p, 0.0,
+            default_forcing_set(fprog)
+        )
         fdec = Decomposition(axes = ["x" => (period = fx,)])
         @test halo(fprog, fdec) == Dict(("Flux.u", "x") => (1, 1))
         seen = zeros(Int, fx)
@@ -635,17 +798,21 @@ end
             b = only(tile_layout(tile).u)
             uS = [fu[mod1(c, fx)] for c in xs]
             duS = fill(NaN, length(xs))
-            rhs!(duS, tile, rhs_workspace(tile), uS, Float64[], fprob.p, 0.0,
-                 default_forcing_set(tile))
+            rhs!(
+                duS, tile, rhs_workspace(tile), uS, Float64[], fprob.p, 0.0,
+                default_forcing_set(tile)
+            )
             for c in xo
                 seen[c] += _rrt_bits(duS[RRT._tile_slot(b, (c,))]) == _rrt_bits(FG[c])
             end
         end
         @test all(==(1), seen)
         # The last tile reads `F[1]`, and through it `u[1]`, past the seam.
-        hi = restrict(fprog, fdec; owned = ("x" => (fx - 3):fx,),
-                      storage = ("x" => (fx - 4):(fx + 1),))
+        hi = restrict(
+            fprog, fdec; owned = ("x" => (fx - 3):fx,),
+            storage = ("x" => (fx - 4):(fx + 1),)
+        )
         @test [(b.name, b.lo, b.hi) for b in RRT._layout_blocks(hi.internal)] ==
-              [("Flux.u", [fx - 4], [fx]), ("__seam_1__Flux.u", [1], [1])]
+            [("Flux.u", [fx - 4], [fx]), ("__seam_1__Flux.u", [1], [1])]
     end
 end

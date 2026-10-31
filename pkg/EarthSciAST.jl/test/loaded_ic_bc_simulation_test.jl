@@ -48,22 +48,22 @@ const _ESS_IC = EarthSciAST
 # than by `<Loader>.<var>` (esm-spec §8.5).
 # ---------------------------------------------------------------------------- #
 struct _StubLoaderProvider
-    fields::Dict{String,Array{Float64}}
+    fields::Dict{String, Array{Float64}}
 end
 _ESS_IC.provider_refresh_times(::_StubLoaderProvider) = Float64[]           # CONST
 _ESS_IC.provider_sample(p::_StubLoaderProvider, ::Real) = p.fields
 
-const _LOADED_PROVIDER_FIELDS = Dict{String,Array{Float64}}(
+const _LOADED_PROVIDER_FIELDS = Dict{String, Array{Float64}}(
     # Initial-condition fields — RHS of the scoped-reference `ic` equations.
-    "ChemistryICs.O3_init"  => [38.0 42.0; 39.0 43.0; 41.0 45.0; 43.0 47.0],
-    "ChemistryICs.NO_init"  => [0.10 0.12; 0.11 0.13; 0.09 0.14; 0.12 0.15],
+    "ChemistryICs.O3_init" => [38.0 42.0; 39.0 43.0; 41.0 45.0; 43.0 47.0],
+    "ChemistryICs.NO_init" => [0.1 0.12; 0.11 0.13; 0.09 0.14; 0.12 0.15],
     "ChemistryICs.NO2_init" => [1.0  1.2;  1.1  1.3;  0.9  1.4;  1.2  1.5],
     # Wind field: the Advection model's own parameter, read from Meteorology.
     "Advection.u_wind" => [2.0 2.2; 2.1 2.3; 2.2 2.4; 2.3 2.5],
     # Per-species western-inflow fields (over the lat boundary): Advection's own
     # parameters, read from BoundaryConditions (spec §11.5 "BCs from data").
-    "Advection.O3_inflow"  => [35.0, 36.0],
-    "Advection.NO_inflow"  => [0.20, 0.25],
+    "Advection.O3_inflow" => [35.0, 36.0],
+    "Advection.NO_inflow" => [0.2, 0.25],
     "Advection.NO2_inflow" => [1.5, 1.6],
 )
 
@@ -71,7 +71,7 @@ const _LOADED_PROVIDER_FIELDS = Dict{String,Array{Float64}}(
 # stub object backs every variable; it is sampled once per variable at build time.
 function _loaded_providers()
     stub = _StubLoaderProvider(_LOADED_PROVIDER_FIELDS)
-    return Dict{String,Any}(k => stub for k in keys(_LOADED_PROVIDER_FIELDS))
+    return Dict{String, Any}(k => stub for k in keys(_LOADED_PROVIDER_FIELDS))
 end
 
 # Resolve (rel, abs) precedence: assertion → test → model (unset field = 0).
@@ -89,14 +89,16 @@ end
 # assertion times so a stored point exists).
 function _time_index(times::Vector{Float64}, t::Float64)
     for (i, tv) in enumerate(times)
-        isapprox(tv, t; atol = 1e-9) && return i
+        isapprox(tv, t; atol = 1.0e-9) && return i
     end
     error("no saved time point at t=$t (saved: $times)")
 end
 
 @testset "advection_reaction_loaded_ic_bc.esm — scoped-ref ic + loaded BC simulation (provider)" begin
-    fixture = joinpath(@__DIR__, "..", "..", "..", "tests", "valid",
-                       "advection_reaction_loaded_ic_bc.esm")
+    fixture = joinpath(
+        @__DIR__, "..", "..", "..", "tests", "valid",
+        "advection_reaction_loaded_ic_bc.esm"
+    )
     @test isfile(fixture)
 
     file = _ESS_IC.load_path(fixture)
@@ -114,9 +116,11 @@ end
             atimes = sort!(unique(Float64[a.time for a in t.assertions]))
             tspan = (t.time_span.start, t.time_span.stop)
 
-            prob = _ESS_IC.esm_problem(fixture, tspan;
-                                       providers = _loaded_providers())
-            r = solve(prob, Tsit5(); reltol = 1e-9, abstol = 1e-11, saveat = atimes)
+            prob = _ESS_IC.esm_problem(
+                fixture, tspan;
+                providers = _loaded_providers()
+            )
+            r = solve(prob, Tsit5(); reltol = 1.0e-9, abstol = 1.0e-11, saveat = atimes)
             @test SciMLBase.successful_retcode(r)
 
             for a in t.assertions

@@ -35,11 +35,15 @@ const ESM = EarthSciAST
 # Build under `compiler`. `codegen=false` puts the primary emission's node
 # budget at zero — a retained tuning threshold — so nothing is emitted away and
 # the merged kernels stay introspectable on `kernel_section.kernels`.
-function _lti_build(model, ics; codegen::Bool=true, compiler::Symbol=:native,
-                    form::Symbol=:inplace)
-    withenv("ESS_CODEGEN_NODE_BUDGET" => (codegen ? nothing : "0")) do
-        ESM._build_evaluator_impl(model; initial_conditions=ics, form=form,
-                                  compiler=compiler)
+function _lti_build(
+        model, ics; codegen::Bool = true, compiler::Symbol = :native,
+        form::Symbol = :inplace
+    )
+    return withenv("ESS_CODEGEN_NODE_BUDGET" => (codegen ? nothing : "0")) do
+        ESM._build_evaluator_impl(
+            model; initial_conditions = ics, form = form,
+            compiler = compiler
+        )
     end
 end
 
@@ -55,12 +59,12 @@ _lti_probe(n, k) =
 # introspectable — same route as codegen_lanespec_test.jl).
 function _lti_lanespecs(f!, ::Type{LaneT}) where {LaneT}
     out = LaneT[]
-    seen = IdDict{Any,Nothing}()
+    seen = IdDict{Any, Nothing}()
     function visit(nd)
         haskey(seen, nd) && return
         seen[nd] = nothing
         if nd.kind === ESM._NK_OP && nd.op === :fn &&
-           nd.payload isa Tuple{String,LaneT}
+                nd.payload isa Tuple{String, LaneT}
             h = nd.payload[2]
             any(x -> x === h, out) || push!(out, h)
         end
@@ -81,10 +85,14 @@ end
 _lti_nuniq(specs) = length(unique(map(objectid, specs)))
 
 _lti_vars(names...) =
-    Dict{String,ESM.ModelVariable}(n => ESM.ModelVariable(ESM.UnknownVariable)
-                                   for n in names)
-_lti_eq(x, body, N) = ESM.Equation(_ao1(_Didx(x, _v("i")), "i", 1, N),
-                                   _ao1(body, "i", 1, N))
+    Dict{String, ESM.ModelVariable}(
+    n => ESM.ModelVariable(ESM.UnknownVariable)
+        for n in names
+)
+_lti_eq(x, body, N) = ESM.Equation(
+    _ao1(_Didx(x, _v("i")), "i", 1, N),
+    _ao1(body, "i", 1, N)
+)
 _lti_ics(names, N) =
     Dict("$x[$k]" => 2.0 + sin(0.3k + 0.1j) for (j, x) in enumerate(names), k in 1:N)
 
@@ -97,58 +105,76 @@ _lti_ics(names, N) =
 # (one mint per member; each member's own lanes already shared its mint),
 # interned it holds 2 — one per DISTINCT CONTENT, a property of the document.
 
-const _LTI_AX  = [0.0, 1.0, 2.0, 3.0, 4.0]
-const _LTI_TA  = [10.0, 20.0, 40.0, 80.0, 160.0]
+const _LTI_AX = [0.0, 1.0, 2.0, 3.0, 4.0]
+const _LTI_TA = [10.0, 20.0, 40.0, 80.0, 160.0]
 const _LTI_TAi = [10, 20, 40, 80, 160]
-const _LTI_TB  = [-3.0, 5.0, -11.0, 17.0, -23.0]
+const _LTI_TB = [-3.0, 5.0, -11.0, 17.0, -23.0]
 const _LTI_TBi = [-3, 5, -11, 17, -23]
 
 function _lti_linear_model(N)
-    body(x, tbl) = _op("+",
-        _op("fn", _const(tbl), _const(_LTI_AX), _idx(x, _v("i")); name="interp.linear"),
-        _op("*", _n(-0.5), _idx(x, _v("i"))))
-    ESM.Model(_lti_vars("a1", "a2", "a3", "b1", "b2", "b3"),
-              [_lti_eq("a1", body("a1", _LTI_TA), N),
-               _lti_eq("a2", body("a2", _LTI_TAi), N),
-               _lti_eq("a3", body("a3", copy(_LTI_TA)), N),
-               _lti_eq("b1", body("b1", _LTI_TB), N),
-               _lti_eq("b2", body("b2", _LTI_TBi), N),
-               _lti_eq("b3", body("b3", copy(_LTI_TB)), N)])
+    body(x, tbl) = _op(
+        "+",
+        _op("fn", _const(tbl), _const(_LTI_AX), _idx(x, _v("i")); name = "interp.linear"),
+        _op("*", _n(-0.5), _idx(x, _v("i")))
+    )
+    return ESM.Model(
+        _lti_vars("a1", "a2", "a3", "b1", "b2", "b3"),
+        [
+            _lti_eq("a1", body("a1", _LTI_TA), N),
+            _lti_eq("a2", body("a2", _LTI_TAi), N),
+            _lti_eq("a3", body("a3", copy(_LTI_TA)), N),
+            _lti_eq("b1", body("b1", _LTI_TB), N),
+            _lti_eq("b2", body("b2", _LTI_TBi), N),
+            _lti_eq("b3", body("b3", copy(_LTI_TB)), N),
+        ]
+    )
 end
 
 const _LTI_BAX = [0.0, 1.0, 2.0]
-const _LTI_BTA  = Any[Any[1.0, 2.0, 3.0], Any[4.0, 5.0, 6.0], Any[7.0, 8.0, 9.0]]
+const _LTI_BTA = Any[Any[1.0, 2.0, 3.0], Any[4.0, 5.0, 6.0], Any[7.0, 8.0, 9.0]]
 const _LTI_BTAi = Any[Any[1, 2, 3], Any[4, 5, 6], Any[7, 8, 9]]
-const _LTI_BTB  = Any[Any[-9.0, 3.0, -1.0], Any[2.5, -4.0, 0.5], Any[-0.25, 8.0, -6.0]]
+const _LTI_BTB = Any[Any[-9.0, 3.0, -1.0], Any[2.5, -4.0, 0.5], Any[-0.25, 8.0, -6.0]]
 
 function _lti_bilinear_model(N)
-    body(x, tbl) = _op("fn", _const(tbl), _const(_LTI_BAX), _const(_LTI_BAX),
-                       _idx(x, _v("i")), _idx(x, _op("+", _v("i"), _i(1)));
-                       name="interp.bilinear")
-    ESM.Model(_lti_vars("u", "v", "w"),
-              [_lti_eq("u", body("u", _LTI_BTA), N),
-               _lti_eq("v", body("v", _LTI_BTAi), N),
-               _lti_eq("w", body("w", _LTI_BTB), N)])
+    body(x, tbl) = _op(
+        "fn", _const(tbl), _const(_LTI_BAX), _const(_LTI_BAX),
+        _idx(x, _v("i")), _idx(x, _op("+", _v("i"), _i(1)));
+        name = "interp.bilinear"
+    )
+    return ESM.Model(
+        _lti_vars("u", "v", "w"),
+        [
+            _lti_eq("u", body("u", _LTI_BTA), N),
+            _lti_eq("v", body("v", _LTI_BTAi), N),
+            _lti_eq("w", body("w", _LTI_BTB), N),
+        ]
+    )
 end
 
-const _LTI_SSA  = [1.0, 2.0, 3.0, 4.0]
+const _LTI_SSA = [1.0, 2.0, 3.0, 4.0]
 const _LTI_SSAi = [1, 2, 3, 4]
-const _LTI_SSB  = [0.5, 1.5, 1.5, 3.5]
+const _LTI_SSB = [0.5, 1.5, 1.5, 3.5]
 
 function _lti_searchsorted_model(N)
-    body(x, xs) = _op("fn", _idx(x, _v("i")), _const(xs); name="interp.searchsorted")
-    ESM.Model(_lti_vars("u", "v", "w"),
-              [_lti_eq("u", body("u", _LTI_SSA), N),
-               _lti_eq("v", body("v", _LTI_SSAi), N),
-               _lti_eq("w", body("w", _LTI_SSB), N)])
+    body(x, xs) = _op("fn", _idx(x, _v("i")), _const(xs); name = "interp.searchsorted")
+    return ESM.Model(
+        _lti_vars("u", "v", "w"),
+        [
+            _lti_eq("u", body("u", _LTI_SSA), N),
+            _lti_eq("v", body("v", _LTI_SSAi), N),
+            _lti_eq("w", body("w", _LTI_SSB), N),
+        ]
+    )
 end
 
 # One flavour's sharing + differential pins. `members` is the merge-class
 # member count, `ncontent` the distinct table-content count.
-function _lti_flavour(model, ics, ::Type{LaneT}; members::Int, ncontent::Int,
-                      N::Int, jacobian::Bool=true) where {LaneT}
+function _lti_flavour(
+        model, ics, ::Type{LaneT}; members::Int, ncontent::Int,
+        N::Int, jacobian::Bool = true
+    ) where {LaneT}
     # Introspection build (zero primary budget, so the kernel list is retained).
-    fon, u0, p, _, _, don = _lti_build(model, ics; codegen=false)
+    fon, u0, p, _, _, don = _lti_build(model, ics; codegen = false)
 
     # The fixture is real: the class merge fired (it left fewer kernels than it
     # was handed) and minted a lane spec.
@@ -181,7 +207,7 @@ function _lti_flavour(model, ics, ::Type{LaneT}; members::Int, ncontent::Int,
     # interpreter has no intern pool, no class merge, no affine tier and no
     # codegen, so agreeing with it covers every tier this file touches at once.
     fc, uc, pc, _, _, _ = _lti_build(model, ics)
-    fs, us, ps, _, _, _ = _lti_build(model, ics; compiler=:interpreter)
+    fs, us, ps, _, _, _ = _lti_build(model, ics; compiler = :interpreter)
     @test uc == us && uc == u0
     for k in 1:4, t in (0.0, 0.7, 3.25)
         u = k == 1 ? copy(uc) : _lti_probe(length(uc), k)
@@ -201,21 +227,27 @@ end
 @testset "build-time lane-table interning" begin
 
     @testset "interp.linear: 6 members, 2 contents (N=$N)" for N in (5, 16)
-        _lti_flavour(_lti_linear_model(N),
-                     _lti_ics(("a1", "a2", "a3", "b1", "b2", "b3"), N),
-                     ESM._InterpLinearLaneSpec; members=6, ncontent=2, N=N)
+        _lti_flavour(
+            _lti_linear_model(N),
+            _lti_ics(("a1", "a2", "a3", "b1", "b2", "b3"), N),
+            ESM._InterpLinearLaneSpec; members = 6, ncontent = 2, N = N
+        )
     end
 
     @testset "interp.bilinear: 3 members, 2 contents (N=$N)" for N in (6,)
-        _lti_flavour(_lti_bilinear_model(N), _lti_ics(("u", "v", "w"), N),
-                     ESM._InterpBilinearLaneSpec; members=3, ncontent=2, N=N)
+        _lti_flavour(
+            _lti_bilinear_model(N), _lti_ics(("u", "v", "w"), N),
+            ESM._InterpBilinearLaneSpec; members = 3, ncontent = 2, N = N
+        )
     end
 
     @testset "interp.searchsorted: 3 members, 2 contents (N=$N)" for N in (6,)
         # Piecewise-constant: Jacobian partials are trivially zero — values
         # are still pinned through the Dual path.
-        _lti_flavour(_lti_searchsorted_model(N), _lti_ics(("u", "v", "w"), N),
-                     ESM._InterpSearchsortedLaneSpec; members=3, ncontent=2, N=N)
+        _lti_flavour(
+            _lti_searchsorted_model(N), _lti_ics(("u", "v", "w"), N),
+            ESM._InterpSearchsortedLaneSpec; members = 3, ncontent = 2, N = N
+        )
     end
 
     @testset "mint-site interning: content-equal scalar specs share one object" begin
@@ -224,14 +256,20 @@ end
         # itself must already share — pin `_build_interp_spec` through the
         # pool directly under an installed pool.
         prev = ESM._LANE_INTERN_POOL[]
-        ESM._LANE_INTERN_POOL[] = Dict{ESM._LaneInternKey,Any}()
+        ESM._LANE_INTERN_POOL[] = Dict{ESM._LaneInternKey, Any}()
         try
-            s1 = ESM._build_interp_spec("interp.linear",
-                                        Any[_LTI_TA, _LTI_AX])
-            s2 = ESM._build_interp_spec("interp.linear",
-                                        Any[_LTI_TAi, copy(_LTI_AX)])
-            s3 = ESM._build_interp_spec("interp.linear",
-                                        Any[_LTI_TB, _LTI_AX])
+            s1 = ESM._build_interp_spec(
+                "interp.linear",
+                Any[_LTI_TA, _LTI_AX]
+            )
+            s2 = ESM._build_interp_spec(
+                "interp.linear",
+                Any[_LTI_TAi, copy(_LTI_AX)]
+            )
+            s3 = ESM._build_interp_spec(
+                "interp.linear",
+                Any[_LTI_TB, _LTI_AX]
+            )
             @test s1 === s2
             @test s1 !== s3
         finally
@@ -272,18 +310,25 @@ end
     # unmerged kernel would have made for that lane — which is exactly the
     # identity the kernel-class merge is defined by. Comparison is `===`, so a
     # NaN pins as NaN and a signed zero does not pass for its opposite.
-    _lti_bilin_ref(h, xs, ys) = [ESM._interp_bilinear_core(
+    _lti_bilin_ref(h, xs, ys) = [
+        ESM._interp_bilinear_core(
             h.specs[l].table, h.specs[l].axis_x, h.specs[l].axis_y,
             xs isa AbstractVector ? xs[l] : xs,
-            ys isa AbstractVector ? ys[l] : ys) for l in eachindex(h.specs)]
-    _lti_lin_ref(h, xs) = [ESM._interp_linear_core(
+            ys isa AbstractVector ? ys[l] : ys
+        ) for l in eachindex(h.specs)
+    ]
+    _lti_lin_ref(h, xs) = [
+        ESM._interp_linear_core(
             h.specs[l].table, h.specs[l].axis,
-            xs isa AbstractVector ? xs[l] : xs) for l in eachindex(h.specs)]
+            xs isa AbstractVector ? xs[l] : xs
+        ) for l in eachindex(h.specs)
+    ]
 
     @testset "branch-free bilinear ≡ per-lane cores under the bound collapse" begin
         band(b) = ESM._InterpBilinearSpec(
             [Float64[b + 0.01j + 0.1i for j in 0:2] for i in 0:2],
-            copy(_LTI_BAX), copy(_LTI_BAX))
+            copy(_LTI_BAX), copy(_LTI_BAX)
+        )
         # 2 bands × 5 cells: shared axis content across all 10 lanes (the
         # collapse fires on all four bounds), tables differing per band.
         specs = ESM._InterpBilinearSpec[band(Float64(1 + (l - 1) ÷ 5)) for l in 1:10]
@@ -318,8 +363,10 @@ end
         # every one of the four edge reads collapses to a scalar — the
         # maximally collapsible case — while the result must keep 6 lanes.
         sp = ESM._InterpLinearSpec(copy(_LTI_TA), copy(_LTI_AX))
-        h1 = ESM._InterpLinearLaneSpec(ESM._InterpLinearSpec[sp for _ in 1:6],
-                                       1, 0, 0, 1)
+        h1 = ESM._InterpLinearLaneSpec(
+            ESM._InterpLinearSpec[sp for _ in 1:6],
+            1, 0, 0, 1
+        )
         xs = Float64[-2.0, 0.0, 1.5, 3.99, 4.0, 6.3]
         @test all(ESM._interp_linear_lanes(h1, xs) .=== _lti_lin_ref(h1, xs))
         g1 = ESM._interp_linear_lanes(h1, 2.25)
@@ -329,7 +376,8 @@ end
         # the program is still `===` the cores — clamp arms included.
         sp2 = ESM._InterpLinearSpec(copy(_LTI_TB), [0.5, 1.0, 2.0, 3.0, 3.5])
         h2 = ESM._InterpLinearLaneSpec(
-            ESM._InterpLinearSpec[l <= 3 ? sp : sp2 for l in 1:6], 1, 0, 0, 1)
+            ESM._InterpLinearSpec[l <= 3 ? sp : sp2 for l in 1:6], 1, 0, 0, 1
+        )
         xs2 = Float64[-2.0, 0.4, 5.0, 0.6, 3.6, NaN]
         @test all(ESM._interp_linear_lanes(h2, xs2) .=== _lti_lin_ref(h2, xs2))
     end

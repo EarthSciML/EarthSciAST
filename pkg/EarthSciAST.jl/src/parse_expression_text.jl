@@ -84,9 +84,11 @@ only the token set and associativity live here. `^` is the sole
 right-associative operator (mirrors display.jl's non-associative-right
 handling).
 """
-const _TP_INFIX = Set{String}([
-    "or", "and", "==", "!=", "<", ">", "<=", ">=", "+", "-", "*", "/", "^",
-])
+const _TP_INFIX = Set{String}(
+    [
+        "or", "and", "==", "!=", "<", ">", "<=", ">=", "+", "-", "*", "/", "^",
+    ]
+)
 const _TP_RIGHT_ASSOC = Set{String}(["^"])
 
 # Prefix operand minimum-precedences, sourced from the registry:
@@ -125,7 +127,7 @@ to a default `reduce` when no explicit `[semiring=…]` supersedes it; `sum` and
 const _TP_AGG_SYMS = Set{String}(["sum", "prod", "max", "min", "any"])
 """Arg-witness reductions (`format_arg_witness`): `argmin[g] (expr) where {…}`."""
 const _TP_ARGWITNESS_SYMS = Set{String}(["argmin", "argmax"])
-const _TP_REDUCE_BY_SYM = Dict{String,Union{String,Nothing}}(
+const _TP_REDUCE_BY_SYM = Dict{String, Union{String, Nothing}}(
     "sum" => nothing,
     "prod" => "*",
     "max" => "max",
@@ -148,7 +150,7 @@ end
 # Single-character punctuation → token kind. `:` separates range bounds
 # (`lo:hi`), `;` separates aggregate join clauses, `{`/`}` delimit an aggregate
 # `where { … }` clause.
-const _TP_PUNCT = Dict{Char,Symbol}(
+const _TP_PUNCT = Dict{Char, Symbol}(
     '(' => :lparen, ')' => :rparen,
     '[' => :lbracket, ']' => :rbracket,
     '{' => :lbrace, '}' => :rbrace,
@@ -198,7 +200,7 @@ function _tp_num_len(chars::Vector{Char}, i::Int)
             end
         end
     elseif chars[j] == '.'
-        (i + 1 <= n && _tp_isdigit(chars[i+1])) || return 0
+        (i + 1 <= n && _tp_isdigit(chars[i + 1])) || return 0
         j = i + 1
         while j <= n && _tp_isdigit(chars[j])
             j += 1
@@ -241,7 +243,7 @@ function _tp_tokenize(src::AbstractString)
             continue
         end
         if i < n
-            two = string(c, chars[i+1])
+            two = string(c, chars[i + 1])
             if two in _TP_MULTI_OPS
                 push!(toks, _TPTok(:op, two, i - 1))
                 i += 2
@@ -262,7 +264,7 @@ function _tp_tokenize(src::AbstractString)
         if c == '.' || _tp_isdigit(c)
             len = _tp_num_len(chars, i)
             if len > 0
-                push!(toks, _TPTok(:num, parse(Float64, String(chars[i:i+len-1])), i - 1))
+                push!(toks, _TPTok(:num, parse(Float64, String(chars[i:(i + len - 1)])), i - 1))
                 i += len
                 continue
             end
@@ -272,7 +274,7 @@ function _tp_tokenize(src::AbstractString)
             while j <= n && _tp_name_cont(chars[j])
                 j += 1
             end
-            v = String(chars[i:j-1])
+            v = String(chars[i:(j - 1)])
             push!(toks, _TPTok(v in _TP_WORD_OPS ? :op : :name, v, i - 1))
             i = j
             continue
@@ -283,8 +285,11 @@ function _tp_tokenize(src::AbstractString)
         # surface uses the words `sum`/`where`/`in`/`join`/`if` and `{ }` `:`
         # `;`, all handled above; `∂`/`∇` are name-constituents just above.)
         if UInt32(c) > 127
-            throw(ExpressionParseError(
-                "unicode operator syntax (\"$c\") — use the ascii text form", i - 1))
+            throw(
+                ExpressionParseError(
+                    "unicode operator syntax (\"$c\") — use the ascii text form", i - 1
+                )
+            )
         end
         throw(ExpressionParseError("Unexpected character \"$c\"", i - 1))
     end
@@ -300,7 +305,7 @@ mutable struct _TPParser
 end
 _TPParser(toks::Vector{_TPTok}) = _TPParser(toks, 1)
 
-_tp_peek(ps::_TPParser, k::Int=0) = ps.toks[min(ps.p + k, length(ps.toks))]
+_tp_peek(ps::_TPParser, k::Int = 0) = ps.toks[min(ps.p + k, length(ps.toks))]
 
 # Consume and return the next token. Clamped at the trailing `:eof` sentinel so
 # an over-consuming error path reports at eof instead of raising BoundsError.
@@ -340,7 +345,7 @@ end
 # `IntExpr(10000)`); everything else is a `NumExpr`.
 function _tp_number(x::Float64)
     if isfinite(x) && isinteger(x) &&
-       typemin(Int64) <= x <= typemax(Int64) && Float64(Int64(x)) == x
+            typemin(Int64) <= x <= typemax(Int64) && Float64(Int64(x)) == x
         return IntExpr(Int64(x))
     end
     return NumExpr(x)
@@ -419,7 +424,7 @@ function _tp_parse_postfix(ps::_TPParser)
             if length(nm) > 1 && first(nm) == 'D'
                 _tp_next!(ps)  # '/'
                 _tp_next!(ps)  # 'D<var>'
-                return OpExpr("D", node.args; wrt=String(nm[nextind(nm, 1):end]))
+                return OpExpr("D", node.args; wrt = String(nm[nextind(nm, 1):end]))
             end
         end
     end
@@ -436,7 +441,7 @@ function _tp_parse_atom(ps::_TPParser)
     end
     # A leading `[` is a const array literal (`[1, 2, 3]`, `[[1, 2], [3, 4]]`).
     t.kind === :lbracket &&
-        return OpExpr("const", ASTExpr[]; value=_tp_parse_array_rest(ps))
+        return OpExpr("const", ASTExpr[]; value = _tp_parse_array_rest(ps))
     if t.kind === :name
         name = t.val::String
         (name == "true" || name == "false") && return OpExpr(name, ASTExpr[])
@@ -453,25 +458,27 @@ function _tp_parse_atom(ps::_TPParser)
         lt = _tp_peek(ps)
         lt1 = _tp_peek(ps, 1)
         if lt.kind === :op && lt.val == "<" &&
-           ((lt1.kind === :op && lt1.val == ">") ||
-            (lt1.kind === :name && _tp_peek(ps, 2).kind === :eq))
+                (
+                (lt1.kind === :op && lt1.val == ">") ||
+                    (lt1.kind === :name && _tp_peek(ps, 2).kind === :eq)
+            )
             return _tp_parse_template(ps, name)
         end
         # Aggregate reduction `sym[out_idx] (expr) where {…} …`. Only when the
         # bracket is followed (past its match) by `(` — otherwise `sym[i]` is an
         # ordinary index into a variable that happens to be named `sum`/`max`/….
         if name in _TP_AGG_SYMS && _tp_peek(ps).kind === :lbracket &&
-           _tp_aggregate_ahead(ps)
+                _tp_aggregate_ahead(ps)
             return _tp_parse_aggregate(ps, name)
         end
         # Arg-witness reduction `argmin[g] (expr) where {…}` (same `[…] (` shape).
         if name in _TP_ARGWITNESS_SYMS && _tp_peek(ps).kind === :lbracket &&
-           _tp_aggregate_ahead(ps)
+                _tp_aggregate_ahead(ps)
             return _tp_parse_arg_witness(ps, name)
         end
         return VarExpr(name)  # bare variable / species / qualified reference
     end
-    _tp_fail_at(t, "Expected a number, name, '(', or '['")
+    return _tp_fail_at(t, "Expected a number, name, '(', or '['")
 end
 
 """
@@ -505,7 +512,7 @@ end
 function _tp_parse_call(ps::_TPParser, name::AbstractString)
     _tp_next!(ps)  # '('
     args = ASTExpr[]
-    named = Dict{String,ASTExpr}()
+    named = Dict{String, ASTExpr}()
     order = String[]
     if _tp_peek(ps).kind !== :rparen
         while true
@@ -546,7 +553,7 @@ function _tp_aggregate_ahead(ps::_TPParser)
         elseif k === :rbracket
             depth -= 1
             if depth == 0
-                return i + 1 <= length(ps.toks) && ps.toks[i+1].kind === :lparen
+                return i + 1 <= length(ps.toks) && ps.toks[i + 1].kind === :lparen
             end
         end
     end
@@ -585,7 +592,7 @@ function _tp_parse_aggregate(ps::_TPParser, sym::AbstractString)
     body = _tp_parse_expr(ps, 0)
     _tp_expect!(ps, :rparen, "')' after the aggregate body")
 
-    ranges = Dict{String,Any}()
+    ranges = Dict{String, Any}()
     if _tp_at_word(ps, "where")
         _tp_next!(ps)
         ranges = _tp_parse_ranges(ps)
@@ -629,19 +636,23 @@ function _tp_parse_aggregate(ps::_TPParser, sym::AbstractString)
     (semiring === nothing && !isempty(joins)) && (semiring = "sum_product")
 
     reduce = semiring === nothing ? _TP_REDUCE_BY_SYM[String(sym)] : nothing
-    return OpExpr("faq",
-        ASTExpr[VarExpr(n) for n in
-                _tp_derive_aggregate_args(body, joins, filt, key)];
-        output_idx=output_idx,
-        reduce=reduce,
-        semiring=semiring,
-        ranges=ranges,
-        join=isempty(joins) ? nothing : joins,
-        filter=filt,
-        distinct=distinct ? true : nothing,
-        key=key,
-        id=id,
-        expr_body=body)
+    return OpExpr(
+        "faq",
+        ASTExpr[
+            VarExpr(n) for n in
+                _tp_derive_aggregate_args(body, joins, filt, key)
+        ];
+        output_idx = output_idx,
+        reduce = reduce,
+        semiring = semiring,
+        ranges = ranges,
+        join = isempty(joins) ? nothing : joins,
+        filter = filt,
+        distinct = distinct ? true : nothing,
+        key = key,
+        id = id,
+        expr_body = body
+    )
 end
 
 """
@@ -658,7 +669,7 @@ function _tp_parse_arg_witness(ps::_TPParser, op::AbstractString)
     _tp_expect!(ps, :lparen, "'(' before the arg-witness body")
     body = _tp_parse_expr(ps, 0)
     _tp_expect!(ps, :rparen, "')' after the arg-witness body")
-    ranges = Dict{String,Any}()
+    ranges = Dict{String, Any}()
     if _tp_at_word(ps, "where")
         _tp_next!(ps)
         ranges = _tp_parse_ranges(ps)
@@ -677,12 +688,16 @@ function _tp_parse_arg_witness(ps::_TPParser, op::AbstractString)
     # `id=<name>` (RFC §6.1 node identity), emitted by `format_arg_witness`
     # after the filter. Mirrors the aggregate tail.
     id = _tp_parse_id_clause!(ps)
-    return OpExpr(String(op),
-        ASTExpr[VarExpr(n) for n in
-                _tp_derive_aggregate_args(body, joins, filt, nothing)];
-        arg=at.val::String, ranges=ranges,
-        join=isempty(joins) ? nothing : joins, filter=filt,
-        id=id, expr_body=body)
+    return OpExpr(
+        String(op),
+        ASTExpr[
+            VarExpr(n) for n in
+                _tp_derive_aggregate_args(body, joins, filt, nothing)
+        ];
+        arg = at.val::String, ranges = ranges,
+        join = isempty(joins) ? nothing : joins, filter = filt,
+        id = id, expr_body = body
+    )
 end
 
 """
@@ -708,7 +723,7 @@ so the reconstructed `axes` map reprints identically.
 """
 function _tp_parse_table_lookup(ps::_TPParser, table::AbstractString)
     _tp_expect!(ps, :lbracket, "'['")
-    axes = Dict{String,ASTExpr}()
+    axes = Dict{String, ASTExpr}()
     while true
         nm = _tp_next!(ps)
         nm.kind === :name || _tp_fail_at(nm, "Expected an axis name in table[axis=…]")
@@ -730,14 +745,16 @@ function _tp_parse_table_lookup(ps::_TPParser, table::AbstractString)
             _tp_fail_at(out, "Expected an integer output index after table[…]:")
         output = Int(out.val::Float64)
     end
-    return OpExpr("table_lookup", ASTExpr[];
-        table=String(table), table_axes=axes, output=output)
+    return OpExpr(
+        "table_lookup", ASTExpr[];
+        table = String(table), table_axes = axes, output = output
+    )
 end
 
 """Parse a `{ k in <rhs>, … }` where-body into a ranges map."""
 function _tp_parse_ranges(ps::_TPParser)
     _tp_expect!(ps, :lbrace, "'{' after where")
-    ranges = Dict{String,Any}()
+    ranges = Dict{String, Any}()
     if _tp_peek(ps).kind !== :rbrace
         while true
             kt = _tp_next!(ps)
@@ -772,15 +789,15 @@ function _tp_parse_range_rhs(ps::_TPParser)
     bound isa VarExpr && return IndexSetRef(bound.name)
     # `k in set(of1, of2)` prints as a generic call → {from, of}.
     if bound isa OpExpr && !isempty(bound.op) &&
-       (first(bound.op) == '_' || isletter(first(bound.op)))
+            (first(bound.op) == '_' || isletter(first(bound.op)))
         of = String[]
         for a in bound.args
             a isa VarExpr || _tp_fail(ps, "range set arguments must be names")
             push!(of, a.name)
         end
-        return IndexSetRef(bound.op; of=of)
+        return IndexSetRef(bound.op; of = of)
     end
-    _tp_fail(ps, "malformed range (expected a set name, set(of…), or lo:hi)")
+    return _tp_fail(ps, "malformed range (expected a set name, set(of…), or lo:hi)")
 end
 
 """
@@ -811,7 +828,7 @@ function _tp_parse_join_clause(ps::_TPParser)
         _tp_next!(ps)  # 'overlap'
         return _tp_parse_overlap(ps)
     end
-    pairs = Tuple{String,String}[]
+    pairs = Tuple{String, String}[]
     syms = nothing
     while true
         a = _tp_next!(ps)
@@ -851,14 +868,18 @@ function _tp_parse_overlap(ps::_TPParser)
         _tp_expect!(ps, :eq, "'=' after $kv in overlap(…)")
         if kv == "src" && src === nothing
             src = _tp_parse_name_list(ps, kv)
-            _valid_env_arity(length(src)) || _tp_fail_at(k,
+            _valid_env_arity(length(src)) || _tp_fail_at(
+                k,
                 "overlap src=[…] must name 1 (rings), 2 (point [x,y]), or 4 " *
-                "(rect [xmin,ymin,xmax,ymax]) factors; got $(length(src))")
+                    "(rect [xmin,ymin,xmax,ymax]) factors; got $(length(src))"
+            )
         elseif kv == "tgt" && tgt === nothing
             tgt = _tp_parse_name_list(ps, kv)
-            _valid_env_arity(length(tgt)) || _tp_fail_at(k,
+            _valid_env_arity(length(tgt)) || _tp_fail_at(
+                k,
                 "overlap tgt=[…] must name 1 (rings), 2 (point [x,y]), or 4 " *
-                "(rect [xmin,ymin,xmax,ymax]) factors; got $(length(tgt))")
+                    "(rect [xmin,ymin,xmax,ymax]) factors; got $(length(tgt))"
+            )
         elseif kv == "eps" && eps === nothing
             v = _tp_parse_expr(ps, 0)
             ((v isa IntExpr || v isa NumExpr) && v.value >= 0) ||
@@ -902,7 +923,7 @@ end
 """Parse `name<binding = value, …>` (or empty `name<>`) → apply_expression_template."""
 function _tp_parse_template(ps::_TPParser, name::AbstractString)
     _tp_next!(ps)  # '<'
-    bindings = Dict{String,ASTExpr}()
+    bindings = Dict{String, ASTExpr}()
     while !(_tp_peek(ps).kind === :op && _tp_peek(ps).val == ">")
         kt = _tp_next!(ps)
         kt.kind === :name || _tp_fail_at(kt, "Expected a binding name in <…>")
@@ -915,8 +936,10 @@ function _tp_parse_template(ps::_TPParser, name::AbstractString)
         break
     end
     _tp_expect_op!(ps, ">", "'>' to close a template application")
-    return OpExpr("apply_expression_template", ASTExpr[];
-        name=String(name), bindings=bindings)
+    return OpExpr(
+        "apply_expression_template", ASTExpr[];
+        name = String(name), bindings = bindings
+    )
 end
 
 """
@@ -945,8 +968,12 @@ function _tp_parse_makearray(ps::_TPParser)
                     lo = _tp_parse_expr(ps, 0)
                     _tp_expect!(ps, :colon, "':' between a region's lo:hi bounds")
                     hi = _tp_parse_expr(ps, 0)
-                    push!(region, Any[_tp_bound_value(_tp_flatten(lo)),
-                        _tp_bound_value(_tp_flatten(hi))])
+                    push!(
+                        region, Any[
+                            _tp_bound_value(_tp_flatten(lo)),
+                            _tp_bound_value(_tp_flatten(hi)),
+                        ]
+                    )
                     if _tp_peek(ps).kind === :comma
                         _tp_next!(ps)
                         continue
@@ -966,8 +993,10 @@ function _tp_parse_makearray(ps::_TPParser)
         end
     end
     _tp_expect!(ps, :rparen, "')' to close makearray(...)")
-    return OpExpr("makearray", ASTExpr[];
-        regions=Vector{Vector{Vector{Any}}}(regions), values=values)
+    return OpExpr(
+        "makearray", ASTExpr[];
+        regions = Vector{Vector{Vector{Any}}}(regions), values = values
+    )
 end
 
 # --- call reconstruction -----------------------------------------------------
@@ -980,8 +1009,10 @@ function _tp_array_literal(e::ASTExpr, pos::Int)
     throw(ExpressionParseError("expected an array literal [ ... ]", pos))
 end
 
-function _tp_no_named(named::Dict{String,ASTExpr}, order::Vector{String},
-    name::AbstractString, pos::Int)
+function _tp_no_named(
+        named::Dict{String, ASTExpr}, order::Vector{String},
+        name::AbstractString, pos::Int
+    )
     isempty(order) && return nothing
     throw(ExpressionParseError("unexpected $(order[1])=… in $name(...)", pos))
 end
@@ -994,8 +1025,11 @@ function _tp_shape_entry(x, pos::Int)
     (x isa Integer && !(x isa Bool)) && return Int(x)
     (x isa Real && !(x isa Bool) && isfinite(x) && isinteger(x)) && return Int(x)
     x isa AbstractString && return String(x)
-    throw(ExpressionParseError(
-        "reshape(...) shape entries must be integers or dimension names", pos))
+    throw(
+        ExpressionParseError(
+            "reshape(...) shape entries must be integers or dimension names", pos
+        )
+    )
 end
 
 # An integer-valued literal argument (`concat(..., axis=0)`, a `transpose` perm
@@ -1007,39 +1041,53 @@ function _tp_int_literal(x, what::AbstractString, pos::Int)
     throw(ExpressionParseError("$what must be an integer literal", pos))
 end
 
-function _tp_make_call(name::String, args::Vector{ASTExpr},
-    named::Dict{String,ASTExpr}, order::Vector{String}, pos::Int)
+function _tp_make_call(
+        name::String, args::Vector{ASTExpr},
+        named::Dict{String, ASTExpr}, order::Vector{String}, pos::Int
+    )
     # A dotted callee is a closed function — an `fn` node carrying the name.
     if occursin('.', name)
         _tp_no_named(named, order, name, pos)
-        return OpExpr("fn", args; name=name)
+        return OpExpr("fn", args; name = name)
     end
     # Call-shaped structural ops: reconstruct their non-`args` fields from the
     # positional / named arguments `to_ascii` renders.
     if name == "integral" && length(args) == 4 && args[2] isa VarExpr
         _tp_no_named(named, order, name, pos)
-        return OpExpr("integral", ASTExpr[args[1]];
-            int_var=(args[2]::VarExpr).name, lower=args[3], upper=args[4])
+        return OpExpr(
+            "integral", ASTExpr[args[1]];
+            int_var = (args[2]::VarExpr).name, lower = args[3], upper = args[4]
+        )
     end
     if name == "reshape" && length(args) == 2
         _tp_no_named(named, order, name, pos)
-        return OpExpr("reshape", ASTExpr[args[1]];
-            shape=Any[_tp_shape_entry(x, pos)
-                      for x in _tp_array_literal(args[2], pos)])
+        return OpExpr(
+            "reshape", ASTExpr[args[1]];
+            shape = Any[
+                _tp_shape_entry(x, pos)
+                    for x in _tp_array_literal(args[2], pos)
+            ]
+        )
     end
     if name == "transpose" && (length(args) == 1 || length(args) == 2)
         _tp_no_named(named, order, name, pos)
         length(args) == 1 && return OpExpr("transpose", ASTExpr[args[1]])
-        return OpExpr("transpose", ASTExpr[args[1]];
-            perm=Int[_tp_int_literal(x, "a transpose perm entry", pos)
-                     for x in _tp_array_literal(args[2], pos)])
+        return OpExpr(
+            "transpose", ASTExpr[args[1]];
+            perm = Int[
+                _tp_int_literal(x, "a transpose perm entry", pos)
+                    for x in _tp_array_literal(args[2], pos)
+            ]
+        )
     end
     if name == "concat"
         axis = get(named, "axis", nothing)
         axis === nothing &&
             throw(ExpressionParseError("concat(...) requires axis=<n>", pos))
-        return OpExpr("concat", args;
-            axis=_tp_int_literal(axis, "concat(...) axis", pos))
+        return OpExpr(
+            "concat", args;
+            axis = _tp_int_literal(axis, "concat(...) axis", pos)
+        )
     end
     # Geometry ops `polygon_intersection_area(a, b, manifold=<name>)` and
     # `intersect_polygon(a, b, manifold=<name>[, id=<name>])`. `id` (RFC §6.1
@@ -1056,9 +1104,11 @@ function _tp_make_call(name::String, args::Vector{ASTExpr},
         if idv !== nothing && !(idv isa VarExpr)
             throw(ExpressionParseError("$name(...) id=… must be a name", pos))
         end
-        return OpExpr(name, args;
-            manifold=(manifold::VarExpr).name,
-            id=idv === nothing ? nothing : (idv::VarExpr).name)
+        return OpExpr(
+            name, args;
+            manifold = (manifold::VarExpr).name,
+            id = idv === nothing ? nothing : (idv::VarExpr).name
+        )
     end
     # `skolem(a, b, label=<name>)` — the documentary relation tag.
     if name == "skolem" && haskey(named, "label")
@@ -1069,12 +1119,15 @@ function _tp_make_call(name::String, args::Vector{ASTExpr},
         lbl = named["label"]
         lbl isa VarExpr ||
             throw(ExpressionParseError("skolem(...) label=… must be a name", pos))
-        return OpExpr("skolem", args; label=(lbl::VarExpr).name)
+        return OpExpr("skolem", args; label = (lbl::VarExpr).name)
     end
     _tp_no_named(named, order, name, pos)
     if name in _TP_STRUCTURAL_OPS
-        throw(ExpressionParseError(
-            "'$name' is not yet expressible in the text form", pos))
+        throw(
+            ExpressionParseError(
+                "'$name' is not yet expressible in the text form", pos
+            )
+        )
     end
     if name == "D"
         # Friendly form D(expr, t) — wrt as an explicit second arg — in addition
@@ -1083,7 +1136,7 @@ function _tp_make_call(name::String, args::Vector{ASTExpr},
         # conditions) that the printer emits via the generic call fallback; keep
         # it a generic call.
         if length(args) == 2 && args[2] isa VarExpr
-            return OpExpr("D", ASTExpr[args[1]]; wrt=(args[2]::VarExpr).name)
+            return OpExpr("D", ASTExpr[args[1]]; wrt = (args[2]::VarExpr).name)
         end
         length(args) == 1 && return OpExpr("D", args)
     end
@@ -1102,8 +1155,10 @@ in first-appearance order. This is reprint-neutral (the printer ignores it) and 
 dependency superset (safe for graph/dead-code analysis); an editor holding the
 symbol table should recompute it on save.
 """
-function _tp_derive_aggregate_args(body::ASTExpr, joins::Vector{Any},
-    filt::Union{ASTExpr,Nothing}, key::Union{ASTExpr,Nothing})
+function _tp_derive_aggregate_args(
+        body::ASTExpr, joins::Vector{Any},
+        filt::Union{ASTExpr, Nothing}, key::Union{ASTExpr, Nothing}
+    )
     out = String[]
     _tp_bases!(out, body)
     add(n) = (n in out || push!(out, n))
@@ -1246,7 +1301,7 @@ function parse_equation(src::AbstractString)::Equation
         elseif t.kind === :rparen || t.kind === :rbracket || t.kind === :rbrace
             depth -= 1
         elseif t.kind === :op && t.val == "<" && i + 2 <= ntok &&
-               toks[i+1].kind === :name && toks[i+2].kind === :eq
+                toks[i + 1].kind === :name && toks[i + 2].kind === :eq
             angle += 1
         elseif t.kind === :op && t.val == ">" && angle > 0
             angle -= 1
@@ -1259,8 +1314,8 @@ function parse_equation(src::AbstractString)::Equation
     end
     split == 0 &&
         throw(ExpressionParseError("Expected 'lhs = rhs'", length(collect(src))))
-    lhs_toks = vcat(toks[1:split-1], _TPTok(:eof, nothing, toks[split].pos))
-    rhs_toks = toks[split+1:end]
+    lhs_toks = vcat(toks[1:(split - 1)], _TPTok(:eof, nothing, toks[split].pos))
+    rhs_toks = toks[(split + 1):end]
     lhs = _tp_parse_entry(_TPParser(lhs_toks))
     rhs = _tp_parse_entry(_TPParser(rhs_toks))
     return Equation(lhs, rhs)

@@ -60,7 +60,7 @@ theorem conv_le {t u w L : ℝ} (ht : |t| ≤ L) (hu : |u| ≤ L) (hw0 : 0 ≤ w
   calc |(1 - w) * t + w * u| ≤ |(1 - w) * t| + |w * u| := abs_add_le _ _
     _ = (1 - w) * |t| + w * |u| := by
       rw [abs_mul, abs_mul, abs_of_nonneg (by linarith : (0 : ℝ) ≤ 1 - w), abs_of_nonneg hw0]
-    _ ≤ (1 - w) * L + w * L := by gcongr <;> linarith
+    _ ≤ (1 - w) * L + w * L := by gcongr
     _ = L := by ring
 
 /-- One blend with inputs bounded by `B = 2^(e+53)`: the subtraction errs by
@@ -183,7 +183,7 @@ theorem bilinear_errs (t00 t10 t01 t11 wx wy : ℝ) (h00 : Repr t00) (h10 : Repr
     calc _ ≤ |(1 - wy) * (R0 - V0)| + |wy * (R1 - V1)| := abs_add_le _ _
       _ = (1 - wy) * |R0 - V0| + wy * |R1 - V1| := by
         rw [abs_mul, abs_mul, abs_of_nonneg (by linarith : (0 : ℝ) ≤ 1 - wy), abs_of_nonneg hy0]
-      _ ≤ (1 - wy) * δ + wy * δ := by gcongr <;> linarith
+      _ ≤ (1 - wy) * δ + wy * δ := by gcongr
       _ = δ := by ring
   rw [hg]
   constructor

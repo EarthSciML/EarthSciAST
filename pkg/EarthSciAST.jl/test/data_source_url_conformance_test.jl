@@ -24,7 +24,7 @@ include("testutils.jl")   # TESTUTILS_REPO_ROOT
         manifest.fixtures[hit]
     end
     _expected(pin) = haskey(pin, :verbatim) ? String(pin.verbatim) :
-                     "file://" * normpath(joinpath(TESTUTILS_REPO_ROOT, String(pin.repo_path)))
+        "file://" * normpath(joinpath(TESTUTILS_REPO_ROOT, String(pin.repo_path)))
 
     @testset "every pinned form resolves as the shared manifest says" begin
         f = _fixture("relative_catalog")
@@ -34,7 +34,7 @@ include("testutils.jl")   # TESTUTILS_REPO_ROOT
             @test src.url_template == _expected(pin.url_template)
             if haskey(pin, :mirrors)
                 @test collect(something(src.mirrors, String[])) ==
-                      [_expected(m) for m in pin.mirrors]
+                    [_expected(m) for m in pin.mirrors]
             end
         end
     end
@@ -52,7 +52,7 @@ include("testutils.jl")   # TESTUTILS_REPO_ROOT
             for (name, ds) in pairs(first.data_sources)
                 @test second.data_sources[name].source.url_template == ds.source.url_template
                 @test collect(something(second.data_sources[name].source.mirrors, String[])) ==
-                      collect(something(ds.source.mirrors, String[]))
+                    collect(something(ds.source.mirrors, String[]))
             end
         end
     end
@@ -89,6 +89,6 @@ include("testutils.jl")   # TESTUTILS_REPO_ROOT
         @test EarthSciAST.resolve_source_url("./a/../b/./c.nc", "/x/y") == "file:///x/y/b/c.nc"
         @test EarthSciAST.resolve_source_url("/../c.nc", "/x/y") == "file:///c.nc"
         @test EarthSciAST.resolve_source_url("{archive_root}/x.nc", "/x/y") ==
-              "{archive_root}/x.nc"
+            "{archive_root}/x.nc"
     end
 end

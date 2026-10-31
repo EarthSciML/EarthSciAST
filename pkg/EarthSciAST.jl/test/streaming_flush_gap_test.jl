@@ -25,7 +25,7 @@ import Blosc            # activates EarthSciIOBloscExt so the Zarr writer can co
     bases = ["Chem.a", "Chem.b"]
 
     # species-major flat layout: all of "Chem.a"'s cells, then all of "Chem.b"'s.
-    var_map = Dict{String,Int}()
+    var_map = Dict{String, Int}()
     k = 0
     for nm in bases, j in 1:NY, i in 1:NX
         k += 1
@@ -51,12 +51,18 @@ import Blosc            # activates EarthSciIOBloscExt so the Zarr writer can co
     for flush_every in (1, 3, 5, 8)
         dir = mktempdir()
         base_url = "file://" * joinpath(dir, "flush.zarr")
-        sink = build_zarr_sink(var_map, base_url; output_times = times,
-                               records_per_shard = 8)
+        sink = build_zarr_sink(
+            var_map, base_url; output_times = times,
+            records_per_shard = 8
+        )
         sink_open!(sink)
         for r in 1:NREC
-            sink_write!(sink, StateSnapshot(times[r], [(_state(r), (1:N,))],
-                                            Dict{String,Array}()))
+            sink_write!(
+                sink, StateSnapshot(
+                    times[r], [(_state(r), (1:N,))],
+                    Dict{String, Array}()
+                )
+            )
             r % flush_every == 0 && sink_flush!(sink)
         end
         man = sink_close!(sink)
@@ -70,13 +76,17 @@ import Blosc            # activates EarthSciIOBloscExt so the Zarr writer can co
         @test length(man.time_shards) == cld(NREC, 8)
         @test [s.index for s in man.time_shards] == collect(0:(cld(NREC, 8) - 1))
 
-        cache = EarthSciIO.Cache(EarthSciIO.LocalStore(joinpath(dir, "cache"));
-                                 offline = false)
-        nds = EarthSciIO.read_store(EarthSciIO.ZarrReader(), cache, base_url;
-                                    variables = String[bases..., "time"])
+        cache = EarthSciIO.Cache(
+            EarthSciIO.LocalStore(joinpath(dir, "cache"));
+            offline = false
+        )
+        nds = EarthSciIO.read_store(
+            EarthSciIO.ZarrReader(), cache, base_url;
+            variables = String[bases..., "time"]
+        )
 
         # the time axis is exactly the records written, in order — no fill slots
-        @test isapprox(nds.variables["time"].data, times; atol = 1e-9)
+        @test isapprox(nds.variables["time"].data, times; atol = 1.0e-9)
 
         grid = derive_output_gridding(var_map)
         for (s, g) in enumerate(grid)

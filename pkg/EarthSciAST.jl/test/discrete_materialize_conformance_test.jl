@@ -36,7 +36,7 @@ const _ESS_DM = EarthSciAST
 # `ScheduledProvider` / Python provider stub). No network — the CI contract.
 mutable struct _DMConfProvider
     times::Vector{Float64}
-    fields::Dict{Float64,Dict{String,Vector{Float64}}}
+    fields::Dict{Float64, Dict{String, Vector{Float64}}}
 end
 _ESS_DM.provider_refresh_times(p::_DMConfProvider) = p.times
 _ESS_DM.provider_sample(p::_DMConfProvider, t::Real) = p.fields[Float64(t)]
@@ -47,12 +47,16 @@ _ESS_DM.provider_sample(p::_DMConfProvider, t::Real) = p.fields[Float64(t)]
     golden_path = joinpath(root, "golden", "discrete_materialize_contraction.json")
     if _require_fixture(fixture) && _require_fixture(golden_path)
         golden = JSON3.read(read(golden_path, String))
-        ics = Dict{String,Float64}("c[1]" => 0.0, "c[2]" => 0.0, "c[3]" => 0.0)
-        anchors = sort!(Float64[parse(Float64, String(k))
-                                for k in keys(golden["forcing"]["M.src"]["by_anchor"])])
+        ics = Dict{String, Float64}("c[1]" => 0.0, "c[2]" => 0.0, "c[3]" => 0.0)
+        anchors = sort!(
+            Float64[
+                parse(Float64, String(k))
+                    for k in keys(golden["forcing"]["M.src"]["by_anchor"])
+            ]
+        )
         src_at(t) = Float64.(golden["forcing"]["M.src"]["by_anchor"][Symbol(string(t))])
         g_at(t) = Float64.(golden["discrete_field"]["M.g"]["by_anchor"][Symbol(string(t))])
-        field_atol = 1e-9
+        field_atol = 1.0e-9
 
         # (a) flatten: W/g/k are observeds (materialized/inlined), not ODE state
         # slots — only `M.c` is a state.
@@ -71,14 +75,18 @@ _ESS_DM.provider_sample(p::_DMConfProvider, t::Real) = p.fields[Float64(t)]
         # interpreter's per-cell fill is the oracle it must equal bit for bit.
         srcbuf = copy(src_at(0.0))
         dm = _ESS_DM.DiscreteMaterializer()
-        f!, u0, p, _ts, vm = _ESS_DM._build_evaluator(_ESS_DM.load_path(fixture);
+        f!, u0, p, _ts, vm = _ESS_DM._build_evaluator(
+            _ESS_DM.load_path(fixture);
             initial_conditions = ics, param_arrays = Dict("src" => srcbuf),
-            materialize_out = dm)
+            materialize_out = dm
+        )
         srcbuf_i = copy(src_at(0.0))
         dm_i = _ESS_DM.DiscreteMaterializer()
-        _ESS_DM._build_evaluator(_ESS_DM.load_path(fixture);
+        _ESS_DM._build_evaluator(
+            _ESS_DM.load_path(fixture);
             initial_conditions = ics, param_arrays = Dict("src" => srcbuf_i),
-            compiler = :interpreter, materialize_out = dm_i)
+            compiler = :interpreter, materialize_out = dm_i
+        )
         @test haskey(dm.caches, "g")     # forcing-tainted, state-free -> DISCRETE cache
         @test !haskey(dm.caches, "k")    # const/parameter-fed -> CONST-cadence (regression guard)
         for t in anchors
@@ -94,30 +102,35 @@ _ESS_DM.provider_sample(p::_DMConfProvider, t::Real) = p.fields[Float64(t)]
         # frozen per segment -> RHS pure -> closed form matched to solver tol.
         srcbuf2 = copy(src_at(0.0))
         dm2 = _ESS_DM.DiscreteMaterializer()
-        f2!, u02, p2, _ts2, vm2 = _ESS_DM._build_evaluator(_ESS_DM.load_path(fixture);
+        f2!, u02, p2, _ts2, vm2 = _ESS_DM._build_evaluator(
+            _ESS_DM.load_path(fixture);
             initial_conditions = ics, param_arrays = Dict("src" => srcbuf2),
-            materialize_out = dm2)
+            materialize_out = dm2
+        )
         interior = [t for t in anchors if t > 0.0]
         prov = _DMConfProvider(interior, Dict(t => Dict("src" => src_at(t)) for t in interior))
         cb, tstops = _ESS_DM.build_refresh_callback(;
             providers = Dict("src" => prov),
             buffers = _ESS_DM.RefreshBuffers(Dict("src" => srcbuf2)),  # SAME buffer object
-            post_refresh = dm2.materialize!)
+            post_refresh = dm2.materialize!
+        )
         @test tstops == interior
 
         tspan = (Float64(golden["cadence"]["tspan"][1]), Float64(golden["cadence"]["tspan"][2]))
         traj = golden["trajectory"]
         atimes = sort!(Float64[parse(Float64, String(k)) for k in keys(traj) if String(k) != "comment"])
         prob = ODE.ODEProblem(f2!, u02, tspan, p2)
-        sol = ODE.solve(prob, ODE.Tsit5(); callback = cb, tstops = tstops,
-                        saveat = atimes, reltol = 1e-10, abstol = 1e-12)
+        sol = ODE.solve(
+            prob, ODE.Tsit5(); callback = cb, tstops = tstops,
+            saveat = atimes, reltol = 1.0e-10, abstol = 1.0e-12
+        )
         @test sol.retcode == ODE.SciMLBase.ReturnCode.Success
 
-        rtol = 1e-4; atol = 1e-6
+        rtol = 1.0e-4; atol = 1.0e-6
         for tk in keys(traj)
             String(tk) == "comment" && continue
             t = parse(Float64, String(tk))
-            ti = findfirst(x -> isapprox(x, t; atol = 1e-9), sol.t)
+            ti = findfirst(x -> isapprox(x, t; atol = 1.0e-9), sol.t)
             @test ti !== nothing
             for (jj, cell) in enumerate(("M.c[1]", "M.c[2]", "M.c[3]"))
                 want = Float64(traj[tk][Symbol(cell)])

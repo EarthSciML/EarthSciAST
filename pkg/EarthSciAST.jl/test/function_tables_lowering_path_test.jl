@@ -31,8 +31,12 @@ import OrdinaryDiffEqTsit5: Tsit5
 
 const _FTP = EarthSciAST
 
-const FT_PATH_FIXTURES_ROOT = abspath(joinpath(@__DIR__, "..", "..", "..",
-    "tests", "conformance", "function_tables"))
+const FT_PATH_FIXTURES_ROOT = abspath(
+    joinpath(
+        @__DIR__, "..", "..", "..",
+        "tests", "conformance", "function_tables"
+    )
+)
 
 _ft_path_fixture(name) = joinpath(FT_PATH_FIXTURES_ROOT, name, "fixture.esm")
 
@@ -69,7 +73,7 @@ _ft_path_fixture(name) = joinpath(FT_PATH_FIXTURES_ROOT, name, "fixture.esm")
         @test lowered.op == "fn"
         @test lowered.name == "interp.linear"
         @test lowered.args[1].value ==
-              [1.10e-17, 1.00e-17, 9.50e-18, 8.70e-18, 7.90e-18, 7.00e-18, 6.10e-18, 5.20e-18]
+            [1.1e-17, 1.0e-17, 9.5e-18, 8.7e-18, 7.9e-18, 7.0e-18, 6.1e-18, 5.2e-18]
         @test lowered.args[2].value == Float64[1, 2, 3, 4, 5, 6, 7, 8]
         @test (lowered.args[3]::VarExpr).name == "lambda"
         # Idempotent, and identity-preserving: a tree with no `table_lookup`
@@ -82,7 +86,8 @@ _ft_path_fixture(name) = joinpath(FT_PATH_FIXTURES_ROOT, name, "fixture.esm")
         bil = _FTP.load_path(_ft_path_fixture("bilinear"))
         btables = bil.function_tables
         by_name = _FTP._lower_expr_table_lookups(
-            bil.models["M"].equations[1].rhs, btables)::OpExpr
+            bil.models["M"].equations[1].rhs, btables
+        )::OpExpr
         @test by_name.name == "interp.bilinear"
         @test by_name.args[1].value == [[1.0, 1.5, 2.0], [1.1, 1.6, 2.1], [1.2, 1.7, 2.2]]
         @test by_name.args[2].value == [10.0, 100.0, 1000.0]
@@ -90,14 +95,15 @@ _ft_path_fixture(name) = joinpath(FT_PATH_FIXTURES_ROOT, name, "fixture.esm")
         @test (by_name.args[4]::VarExpr).name == "P_atm"
         @test (by_name.args[5]::VarExpr).name == "cos_sza"
         by_index = _FTP._lower_expr_table_lookups(
-            bil.models["M"].equations[2].rhs, btables)::OpExpr
+            bil.models["M"].equations[2].rhs, btables
+        )::OpExpr
         @test by_index.args[1].value == [[2.0, 2.5, 3.0], [2.1, 2.6, 3.1], [2.2, 2.7, 3.2]]
     end
 
     @testset "malformed lookups raise their §9.5.5 code" begin
         tables = _FTP.load_path(_ft_path_fixture("linear")).function_tables
         lookup(; kwargs...) = OpExpr("table_lookup", EarthSciAST.ASTExpr[]; kwargs...)
-        axes_ok = Dict{String,EarthSciAST.ASTExpr}("lambda_idx" => VarExpr("lambda"))
+        axes_ok = Dict{String, EarthSciAST.ASTExpr}("lambda_idx" => VarExpr("lambda"))
         code(e::OpExpr) = try
             _FTP._lower_expr_table_lookups(e, tables)
             ""
@@ -106,56 +112,76 @@ _ft_path_fixture(name) = joinpath(FT_PATH_FIXTURES_ROOT, name, "fixture.esm")
             err.code
         end
 
-        @test code(lookup(table="nope", table_axes=axes_ok)) ==
-              ERROR_CODES.TABLE_LOOKUP_UNKNOWN_TABLE
-        @test code(lookup(table="sigma_O3_298",
-                          table_axes=Dict{String,EarthSciAST.ASTExpr}(
-                              "wrong" => VarExpr("lambda")))) ==
-              ERROR_CODES.TABLE_LOOKUP_AXIS_NAME_MISMATCH
-        @test code(lookup(table="sigma_O3_298", table_axes=axes_ok, output=3)) ==
-              ERROR_CODES.TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE
-        @test code(lookup(table="sigma_O3_298", table_axes=axes_ok, output="NO2")) ==
-              ERROR_CODES.TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE
+        @test code(lookup(table = "nope", table_axes = axes_ok)) ==
+            ERROR_CODES.TABLE_LOOKUP_UNKNOWN_TABLE
+        @test code(
+            lookup(
+                table = "sigma_O3_298",
+                table_axes = Dict{String, EarthSciAST.ASTExpr}(
+                    "wrong" => VarExpr("lambda")
+                )
+            )
+        ) ==
+            ERROR_CODES.TABLE_LOOKUP_AXIS_NAME_MISMATCH
+        @test code(lookup(table = "sigma_O3_298", table_axes = axes_ok, output = 3)) ==
+            ERROR_CODES.TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE
+        @test code(lookup(table = "sigma_O3_298", table_axes = axes_ok, output = "NO2")) ==
+            ERROR_CODES.TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE
         # `Bool <: Integer` in Julia, so an untyped `true` selector would
         # otherwise resolve to output 1 instead of being refused — the trap the
         # other four bindings guard against explicitly. §9.5.2 admits an
         # integer or an output NAME, and a boolean is neither.
-        @test code(lookup(table="sigma_O3_298", table_axes=axes_ok, output=true)) ==
-              ERROR_CODES.TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE
-        @test code(lookup(table="sigma_O3_298", table_axes=axes_ok, output=false)) ==
-              ERROR_CODES.TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE
+        @test code(lookup(table = "sigma_O3_298", table_axes = axes_ok, output = true)) ==
+            ERROR_CODES.TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE
+        @test code(lookup(table = "sigma_O3_298", table_axes = axes_ok, output = false)) ==
+            ERROR_CODES.TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE
         # A single-output table (no `outputs`) has only output 0: 1 and any
         # string are out of range, 0 and an omitted `output` are the table.
-        @test code(lookup(table="sigma_O3_298", table_axes=axes_ok, output=1)) ==
-              ERROR_CODES.TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE
-        @test code(lookup(table="sigma_O3_298", table_axes=axes_ok, output=0)) == ""
-        @test code(lookup(table="sigma_O3_298", table_axes=axes_ok)) == ""
+        @test code(lookup(table = "sigma_O3_298", table_axes = axes_ok, output = 1)) ==
+            ERROR_CODES.TABLE_LOOKUP_OUTPUT_OUT_OF_RANGE
+        @test code(lookup(table = "sigma_O3_298", table_axes = axes_ok, output = 0)) == ""
+        @test code(lookup(table = "sigma_O3_298", table_axes = axes_ok)) == ""
 
         # §9.5.2: `args` MUST be empty; an absent `args` is `[]`. A node built
         # in memory skips the schema's `maxItems`, so the lowering refuses it.
-        @test code(OpExpr("table_lookup", EarthSciAST.ASTExpr[VarExpr("lambda")];
-                          table="sigma_O3_298", table_axes=axes_ok)) ==
-              ERROR_CODES.TABLE_LOOKUP_ARGS_NONEMPTY
+        @test code(
+            OpExpr(
+                "table_lookup", EarthSciAST.ASTExpr[VarExpr("lambda")];
+                table = "sigma_O3_298", table_axes = axes_ok
+            )
+        ) ==
+            ERROR_CODES.TABLE_LOOKUP_ARGS_NONEMPTY
         # The expression parser (which a document reaches only after the
         # schema's `maxItems` has refused it) carries the same code.
         perr = try
-            _FTP.expression_from_json(Dict{String,Any}("op" => "table_lookup",
-                "table" => "sigma_O3_298", "axes" => Dict("lambda_idx" => "lambda"),
-                "args" => Any["lambda"]))
+            _FTP.expression_from_json(
+                Dict{String, Any}(
+                    "op" => "table_lookup",
+                    "table" => "sigma_O3_298", "axes" => Dict("lambda_idx" => "lambda"),
+                    "args" => Any["lambda"]
+                )
+            )
             nothing
         catch err
             err
         end
         @test perr isa _FTP.ParseError &&
-              perr.code == ERROR_CODES.TABLE_LOOKUP_ARGS_NONEMPTY
+            perr.code == ERROR_CODES.TABLE_LOOKUP_ARGS_NONEMPTY
 
         # §9.5.5: NaN is checked over the whole axis before monotonicity.
-        with_axis(vals) = Dict("t" => _FTP.FunctionTable(
-            [_FTP.FunctionTableAxis("p", Float64.(vals))], Any[1.0, 2.0, 3.0]))
+        with_axis(vals) = Dict(
+            "t" => _FTP.FunctionTable(
+                [_FTP.FunctionTableAxis("p", Float64.(vals))], Any[1.0, 2.0, 3.0]
+            )
+        )
         acode(vals) = try
-            _FTP._lower_expr_table_lookups(lookup(table="t",
-                table_axes=Dict{String,EarthSciAST.ASTExpr}("p" => VarExpr("x"))),
-                with_axis(vals))
+            _FTP._lower_expr_table_lookups(
+                lookup(
+                    table = "t",
+                    table_axes = Dict{String, EarthSciAST.ASTExpr}("p" => VarExpr("x"))
+                ),
+                with_axis(vals)
+            )
             ""
         catch err
             err isa _FTP.TableLookupError || rethrow()
@@ -171,8 +197,10 @@ _ft_path_fixture(name) = joinpath(FT_PATH_FIXTURES_ROOT, name, "fixture.esm")
     @testset "lowering with D: the whole data, or data[i] with outputs (§9.5.3)" begin
         file = _FTP.load_path(_ft_path_fixture("lookup_defaults"))
         tables = file.function_tables
-        rhs = Dict((eq.lhs isa VarExpr ? eq.lhs.name : "") => eq.rhs
-                   for eq in file.models[only(keys(file.models))].equations)
+        rhs = Dict(
+            (eq.lhs isa VarExpr ? eq.lhs.name : "") => eq.rhs
+                for eq in file.models[only(keys(file.models))].equations
+        )
         low(n) = _FTP._lower_expr_table_lookups(rhs[n], tables)::OpExpr
         # Single-output: the whole `data`, whether `output` is omitted or 0.
         @test low("s_omitted").args[1].value == [5.0, 7.0, 11.0]
@@ -191,20 +219,33 @@ _ft_path_fixture(name) = joinpath(FT_PATH_FIXTURES_ROOT, name, "fixture.esm")
         lowered = _FTP._lower_expr_table_lookups(rhs["n_tie_2_4"], file.function_tables)
         # Op for op and operand for operand the fixture's hand-spelled lowering.
         @test _FTP.serialize_expression(lowered) ==
-              _FTP.serialize_expression(rhs["n_tie_2_4_hand"])
+            _FTP.serialize_expression(rhs["n_tie_2_4_hand"])
         # Evaluated by both tree-walk compilers on a non-uniform axis: ties
         # low, clamped outside the axis, NaN -> NaN.
-        doc = Dict{String,Any}("esm" => "1.1.0",
+        doc = Dict{String, Any}(
+            "esm" => "1.1.0",
             "metadata" => Dict("name" => "N", "authors" => Any["a"]),
-            "function_tables" => Dict("t" => Dict(
-                "axes" => Any[Dict("name" => "p", "values" => [1.0, 2.0, 4.0, 8.0])],
-                "interpolation" => "nearest", "data" => [10.0, 20.0, 40.0, 80.0])),
-            "models" => Dict("M" => Dict(
-                "variables" => Dict("x" => Dict("type" => "unknown", "default" => 1.0)),
-                "equations" => Any[Dict(
-                    "lhs" => Dict("op" => "D", "args" => Any["x"], "wrt" => "t"),
-                    "rhs" => Dict("op" => "table_lookup", "table" => "t",
-                                  "axes" => Dict("p" => "x"), "args" => Any[]))])))
+            "function_tables" => Dict(
+                "t" => Dict(
+                    "axes" => Any[Dict("name" => "p", "values" => [1.0, 2.0, 4.0, 8.0])],
+                    "interpolation" => "nearest", "data" => [10.0, 20.0, 40.0, 80.0]
+                )
+            ),
+            "models" => Dict(
+                "M" => Dict(
+                    "variables" => Dict("x" => Dict("type" => "unknown", "default" => 1.0)),
+                    "equations" => Any[
+                        Dict(
+                            "lhs" => Dict("op" => "D", "args" => Any["x"], "wrt" => "t"),
+                            "rhs" => Dict(
+                                "op" => "table_lookup", "table" => "t",
+                                "axes" => Dict("p" => "x"), "args" => Any[]
+                            )
+                        ),
+                    ]
+                )
+            )
+        )
         for compiler in (:interpreter, :native)
             prob = _FTP.esm_problem(doc, (0.0, 1.0); compiler = compiler)
             ix = prob.var_map["M.x"]
@@ -212,10 +253,12 @@ _ft_path_fixture(name) = joinpath(FT_PATH_FIXTURES_ROOT, name, "fixture.esm")
                 u = copy(prob.u0); u[ix] = x
                 du = zero(u); prob.f!(du, u, prob.p, 0.0); du[ix]
             end
-            for (x, want) in ((0.0, 10.0), (1.0, 10.0), (1.5, 10.0), (2.9, 20.0),
-                              (3.0, 20.0), (3.1, 40.0), (4.0, 40.0), (6.0, 40.0),
-                              (6.5, 80.0), (8.0, 80.0), (100.0, 80.0), (-Inf, 10.0),
-                              (Inf, 80.0))
+            for (x, want) in (
+                    (0.0, 10.0), (1.0, 10.0), (1.5, 10.0), (2.9, 20.0),
+                    (3.0, 20.0), (3.1, 40.0), (4.0, 40.0), (6.0, 40.0),
+                    (6.5, 80.0), (8.0, 80.0), (100.0, 80.0), (-Inf, 10.0),
+                    (Inf, 80.0),
+                )
                 @test ev(x) == want
             end
             @test isnan(ev(NaN))
@@ -230,7 +273,7 @@ _ft_path_fixture(name) = joinpath(FT_PATH_FIXTURES_ROOT, name, "fixture.esm")
     #      operator: table_lookup") while `z` answered 25.
     @testset "inline_test fixture: all three assertions pass (#188)" begin
         dir = joinpath(FT_PATH_FIXTURES_ROOT, "inline_test")
-        results, exit_code = _FTP.run_esm_tests([dir]; root=dir, verbose=false)
+        results, exit_code = _FTP.run_esm_tests([dir]; root = dir, verbose = false)
         @test length(results) == 3
         by = Dict(r.variable => r for r in results)
         for (name, expected) in ("y" => 25.0, "z" => 25.0, "w" => 40.0)
@@ -238,7 +281,7 @@ _ft_path_fixture(name) = joinpath(FT_PATH_FIXTURES_ROOT, name, "fixture.esm")
             @test r !== nothing
             r === nothing && continue
             @test r.status == _FTP.PASS
-            @test r.actual ≈ expected rtol = 1e-12
+            @test r.actual ≈ expected rtol = 1.0e-12
         end
         # §9.5's central promise: the lowered lookup and the hand-written
         # inline-const one are the SAME computation, not merely close.
@@ -252,9 +295,11 @@ _ft_path_fixture(name) = joinpath(FT_PATH_FIXTURES_ROOT, name, "fixture.esm")
         @testset "$(name) fixture through the inline-test runner" begin
             dir = joinpath(FT_PATH_FIXTURES_ROOT, name)
             doc = JSON3.read(read(_ft_path_fixture(name), String))
-            want = Dict(String(a.variable) => Float64(a.expected)
-                        for m in values(doc.models) for t in m.tests for a in t.assertions)
-            results, exit_code = _FTP.run_esm_tests([dir]; root=dir, verbose=false)
+            want = Dict(
+                String(a.variable) => Float64(a.expected)
+                    for m in values(doc.models) for t in m.tests for a in t.assertions
+            )
+            results, exit_code = _FTP.run_esm_tests([dir]; root = dir, verbose = false)
             @test length(results) == length(want)
             for r in results
                 @test r.status == _FTP.PASS
@@ -268,19 +313,19 @@ _ft_path_fixture(name) = joinpath(FT_PATH_FIXTURES_ROOT, name, "fixture.esm")
         # `linear`: D(k_O3) ~ table_lookup(sigma_O3_298, lambda_idx = lambda),
         # lambda = 4.5 ⇒ the midpoint of the [4, 5] knots. A constant tendency,
         # so k_O3(1) is that value exactly.
-        expected = 8.70e-18 + 0.5 * (7.90e-18 - 8.70e-18)
+        expected = 8.7e-18 + 0.5 * (7.9e-18 - 8.7e-18)
         path = _ft_path_fixture("linear")
         prob = _FTP.esm_problem(path, (0.0, 1.0))
-        sol = solve(prob, Tsit5(); reltol=1e-12, abstol=1e-20)
-        @test sol.u[end][prob.var_map["M.k_O3"]] ≈ expected rtol = 1e-9
+        sol = solve(prob, Tsit5(); reltol = 1.0e-12, abstol = 1.0e-20)
+        @test sol.u[end][prob.var_map["M.k_O3"]] ≈ expected rtol = 1.0e-9
 
         # The same hook, reached by the OTHER carrier: a caller who flattened
         # for themselves hands `esm_problem` a `FlattenedSystem`, which carries
         # `function_tables` for exactly this reason.
         flat = _FTP.flatten(_FTP.load_path(path))
         fprob = _FTP.esm_problem(flat, (0.0, 1.0))
-        fsol = solve(fprob, Tsit5(); reltol=1e-12, abstol=1e-20)
-        @test fsol.u[end][fprob.var_map["M.k_O3"]] ≈ expected rtol = 1e-9
+        fsol = solve(fprob, Tsit5(); reltol = 1.0e-12, abstol = 1.0e-20)
+        @test fsol.u[end][fprob.var_map["M.k_O3"]] ≈ expected rtol = 1.0e-9
     end
 
     @testset "out_of_bounds: \"error\" raises outside the axis (§9.5.1)" begin
@@ -304,37 +349,58 @@ _ft_path_fixture(name) = joinpath(FT_PATH_FIXTURES_ROOT, name, "fixture.esm")
         catch err
             err
         end
-        doc = JSON3.read(read(path, String), Dict{String,Any})
+        doc = JSON3.read(read(path, String), Dict{String, Any})
         # The array equation below is a `faq`, which arrives at esm 1.1.0.
         doc["esm"] = "1.1.0"
         # A state reads the strict table through a scalar lookup and a lookup in
         # an array equation (the array tiers), and a bilinear one on each axis.
-        doc["function_tables"]["bi_tab"] = Dict{String,Any}(
-            "axes" => Any[Dict("name" => "a", "values" => [0.0, 1.0]),
-                          Dict("name" => "b", "values" => [0.0, 2.0, 4.0])],
+        doc["function_tables"]["bi_tab"] = Dict{String, Any}(
+            "axes" => Any[
+                Dict("name" => "a", "values" => [0.0, 1.0]),
+                Dict("name" => "b", "values" => [0.0, 2.0, 4.0]),
+            ],
             "interpolation" => "bilinear", "out_of_bounds" => "error",
-            "data" => [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
-        lk(tab, ax) = Dict{String,Any}("op" => "table_lookup", "table" => tab,
-                                       "axes" => ax, "args" => Any[])
-        ix(v, i) = Dict{String,Any}("op" => "index", "args" => Any[v, i])
+            "data" => [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]
+        )
+        lk(tab, ax) = Dict{String, Any}(
+            "op" => "table_lookup", "table" => tab,
+            "axes" => ax, "args" => Any[]
+        )
+        ix(v, i) = Dict{String, Any}("op" => "index", "args" => Any[v, i])
         m = doc["models"]["M"]
-        m["variables"]["x"] = Dict{String,Any}("type" => "unknown", "default" => 2.5)
-        m["variables"]["z"] = Dict{String,Any}("type" => "unknown", "default" => 2.0)
-        m["variables"]["v"] = Dict{String,Any}("type" => "unknown", "shape" => Any["i"])
-        m["variables"]["w"] = Dict{String,Any}("type" => "unknown", "shape" => Any["i"])
-        doc["index_sets"] = Dict{String,Any}("i" => Dict("kind" => "interval", "size" => 3))
-        faq(body) = Dict{String,Any}("op" => "faq", "args" => Any[], "output_idx" => Any["i"],
-                                     "ranges" => Dict("i" => Any[1, 3]), "expr" => body)
-        dD(x) = Dict{String,Any}("op" => "D", "args" => Any[x], "wrt" => "t")
-        append!(m["equations"], Any[
-            Dict("lhs" => dD("x"), "rhs" => lk("strict_tab", Dict("p" => "x"))),
-            Dict("lhs" => dD("z"), "rhs" => Dict("op" => "+", "args" => Any[
-                lk("bi_tab", Dict("a" => 0.5, "b" => "z")),
-                lk("bi_tab", Dict("a" => Dict("op" => "*", "args" => Any[0.25, "z"]),
-                                  "b" => 1.0))])),
-            Dict("lhs" => dD("w"), "rhs" => 0.0),
-            Dict("lhs" => faq(dD(ix("v", "i"))),
-                 "rhs" => faq(lk("strict_tab", Dict("p" => ix("w", "i")))))])
+        m["variables"]["x"] = Dict{String, Any}("type" => "unknown", "default" => 2.5)
+        m["variables"]["z"] = Dict{String, Any}("type" => "unknown", "default" => 2.0)
+        m["variables"]["v"] = Dict{String, Any}("type" => "unknown", "shape" => Any["i"])
+        m["variables"]["w"] = Dict{String, Any}("type" => "unknown", "shape" => Any["i"])
+        doc["index_sets"] = Dict{String, Any}("i" => Dict("kind" => "interval", "size" => 3))
+        faq(body) = Dict{String, Any}(
+            "op" => "faq", "args" => Any[], "output_idx" => Any["i"],
+            "ranges" => Dict("i" => Any[1, 3]), "expr" => body
+        )
+        dD(x) = Dict{String, Any}("op" => "D", "args" => Any[x], "wrt" => "t")
+        append!(
+            m["equations"], Any[
+                Dict("lhs" => dD("x"), "rhs" => lk("strict_tab", Dict("p" => "x"))),
+                Dict(
+                    "lhs" => dD("z"), "rhs" => Dict(
+                        "op" => "+", "args" => Any[
+                            lk("bi_tab", Dict("a" => 0.5, "b" => "z")),
+                            lk(
+                                "bi_tab", Dict(
+                                    "a" => Dict("op" => "*", "args" => Any[0.25, "z"]),
+                                    "b" => 1.0
+                                )
+                            ),
+                        ]
+                    )
+                ),
+                Dict("lhs" => dD("w"), "rhs" => 0.0),
+                Dict(
+                    "lhs" => faq(dD(ix("v", "i"))),
+                    "rhs" => faq(lk("strict_tab", Dict("p" => ix("w", "i"))))
+                ),
+            ]
+        )
         du_at(prob, set) = begin
             u = copy(prob.u0)
             for (k, val) in set
@@ -344,14 +410,18 @@ _ft_path_fixture(name) = joinpath(FT_PATH_FIXTURES_ROOT, name, "fixture.esm")
             prob.f!(du, u, prob.p, 0.0)
             du
         end
-        inrange = Dict("M.x" => 1.0, "M.z" => 2.0, "M.w[1]" => 1.5, "M.w[2]" => 4.0,
-                       "M.w[3]" => 3.25)
-        answers = Dict{Symbol,Any}()
+        inrange = Dict(
+            "M.x" => 1.0, "M.z" => 2.0, "M.w[1]" => 1.5, "M.w[2]" => 4.0,
+            "M.w[3]" => 3.25
+        )
+        answers = Dict{Symbol, Any}()
         for compiler in (:interpreter, :native)
             # The test drives every state itself (`du_at`), so the starting
             # values the build requires (esm-spec §11.4) are placeholders.
-            prob = _FTP.esm_problem(doc, (0.0, 1.0); compiler = compiler,
-                                    u0 = Dict("M.w" => 0.0, "M.v" => 0.0))
+            prob = _FTP.esm_problem(
+                doc, (0.0, 1.0); compiler = compiler,
+                u0 = Dict("M.w" => 0.0, "M.v" => 0.0)
+            )
             du = du_at(prob, inrange)
             # In range (an end knot included) the answer is the clamp answer.
             @test du[prob.var_map["M.x"]] == 10.0
@@ -364,12 +434,14 @@ _ft_path_fixture(name) = joinpath(FT_PATH_FIXTURES_ROOT, name, "fixture.esm")
             # Strictly outside the axis, every lookup raises by name.
             # z = 4.5 leaves the second axis; z = -1 leaves both, and the first
             # axis (through 0.25 z) is checked first.
-            for bad in (Dict("M.x" => 0.5), Dict("M.x" => 4.25), Dict("M.z" => 4.5),
-                        Dict("M.z" => -1.0), Dict("M.w[2]" => 4.000001))
+            for bad in (
+                    Dict("M.x" => 0.5), Dict("M.x" => 4.25), Dict("M.z" => 4.5),
+                    Dict("M.z" => -1.0), Dict("M.w[2]" => 4.000001),
+                )
                 e = raised(() -> du_at(prob, merge(inrange, bad)))
                 @test e isa _FTP.TableLookupError
                 @test e isa _FTP.TableLookupError &&
-                      e.code == ERROR_CODES.TABLE_LOOKUP_OUT_OF_BOUNDS
+                    e.code == ERROR_CODES.TABLE_LOOKUP_OUT_OF_BOUNDS
             end
         end
         @test all(answers[:native] .=== answers[:interpreter])
@@ -382,18 +454,26 @@ _ft_path_fixture(name) = joinpath(FT_PATH_FIXTURES_ROOT, name, "fixture.esm")
         e3 = raised(() -> _FTP.esm_problem(path, (0.0, 1.0); compiler = :mtk))
         @test e3 isa _FTP.TableLookupError
         @test e3 isa _FTP.TableLookupError &&
-              e3.code == ERROR_CODES.TABLE_OUT_OF_BOUNDS_UNSUPPORTED
+            e3.code == ERROR_CODES.TABLE_OUT_OF_BOUNDS_UNSUPPORTED
     end
 
     @testset "out_of_bounds: \"error\" on a nearest table (§9.5.3)" begin
-        doc = JSON3.read(read(_ft_path_fixture("out_of_bounds_error"), String),
-                         Dict{String,Any})
+        doc = JSON3.read(
+            read(_ft_path_fixture("out_of_bounds_error"), String),
+            Dict{String, Any}
+        )
         doc["function_tables"]["strict_tab"]["interpolation"] = "nearest"
         m = doc["models"]["M"]
-        m["variables"]["x"] = Dict{String,Any}("type" => "unknown", "default" => 2.5)
-        push!(m["equations"], Dict("lhs" => Dict("op" => "D", "args" => Any["x"], "wrt" => "t"),
-            "rhs" => Dict("op" => "table_lookup", "table" => "strict_tab",
-                          "axes" => Dict("p" => "x"), "args" => Any[])))
+        m["variables"]["x"] = Dict{String, Any}("type" => "unknown", "default" => 2.5)
+        push!(
+            m["equations"], Dict(
+                "lhs" => Dict("op" => "D", "args" => Any["x"], "wrt" => "t"),
+                "rhs" => Dict(
+                    "op" => "table_lookup", "table" => "strict_tab",
+                    "axes" => Dict("p" => "x"), "args" => Any[]
+                )
+            )
+        )
         raised(f) = try
             f(); nothing
         catch err
@@ -416,11 +496,11 @@ _ft_path_fixture(name) = joinpath(FT_PATH_FIXTURES_ROOT, name, "fixture.esm")
             for bad in (0.999, 4.001)
                 e = raised(() -> du_at(bad))
                 @test e isa _FTP.TableLookupError &&
-                      e.code == ERROR_CODES.TABLE_LOOKUP_OUT_OF_BOUNDS
+                    e.code == ERROR_CODES.TABLE_LOOKUP_OUT_OF_BOUNDS
             end
         end
         e3 = raised(() -> _FTP.esm_problem(doc, (0.0, 1.0); compiler = :mtk))
         @test e3 isa _FTP.TableLookupError &&
-              e3.code == ERROR_CODES.TABLE_OUT_OF_BOUNDS_UNSUPPORTED
+            e3.code == ERROR_CODES.TABLE_OUT_OF_BOUNDS_UNSUPPORTED
     end
 end

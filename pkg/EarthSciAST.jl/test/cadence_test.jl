@@ -52,9 +52,9 @@ const CADENCE_MANIFEST = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "
         @test r.event_handler_empty == fx["event_handler_empty"]
 
         # (c) CONST-folded buffers serialize byte-for-byte to the golden.
-        cf = get(fx, "const_fold", Dict{String,Any}())
-        inputs = get(cf, "inputs", Dict{String,Any}())
-        for (label, spec) in get(cf, "expected", Dict{String,Any}())
+        cf = get(fx, "const_fold", Dict{String, Any}())
+        inputs = get(cf, "inputs", Dict{String, Any}())
+        for (label, spec) in get(cf, "expected", Dict{String, Any}())
             bytes = _CadPass.canonical_serialize(_CadPass.compute_fold(label, spec, inputs))
             @test bytes == spec["serialized"]
         end
@@ -66,20 +66,23 @@ const CADENCE_MANIFEST = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "
     @testset "gather rule splits the stencil (§5.7.3)" begin
         model = _Cadence.load_model_json(
             joinpath(TESTUTILS_REPO_ROOT, "tests", "valid", "cadence", "mixed_stencil.esm"),
-            "MixedStencilDiffusion")
+            "MixedStencilDiffusion"
+        )
         # index(u, index(nbr,i,k)): outer value load is CONTINUOUS, while the
         # inner topology selection index(nbr,i,k) is CONST — classed
         # independently of the array.
-        inner = Dict{String,Any}("op" => "index", "args" => Any["nbr", "i", "k"])
-        outer = Dict{String,Any}("op" => "index", "args" => Any["u", inner])
+        inner = Dict{String, Any}("op" => "index", "args" => Any["nbr", "i", "k"])
+        outer = Dict{String, Any}("op" => "index", "args" => Any["u", inner])
         @test _Cadence.classify(inner, model) == "const"
         @test _Cadence.classify(outer, model) == "continuous"
         # Kdiff (discrete variable) gather is DISCRETE; a state load is CONTINUOUS.
-        @test _Cadence.classify(Dict{String,Any}("op" => "index", "args" => Any["Kdiff", "i"]), model) == "discrete"
-        @test _Cadence.classify(Dict{String,Any}("op" => "index", "args" => Any["u", "i"]), model) == "continuous"
+        @test _Cadence.classify(Dict{String, Any}("op" => "index", "args" => Any["Kdiff", "i"]), model) == "discrete"
+        @test _Cadence.classify(Dict{String, Any}("op" => "index", "args" => Any["u", "i"]), model) == "continuous"
         # the analytic continuous-t forcing stays CONTINUOUS, not DISCRETE.
-        @test _Cadence.classify(Dict{String,Any}("op" => "*", "args" => Any["omega", "t"]),
-            Dict{String,Any}("variables" => Dict{String,Any}("omega" => Dict{String,Any}("type" => "parameter")))) == "continuous"
+        @test _Cadence.classify(
+            Dict{String, Any}("op" => "*", "args" => Any["omega", "t"]),
+            Dict{String, Any}("variables" => Dict{String, Any}("omega" => Dict{String, Any}("type" => "parameter")))
+        ) == "continuous"
     end
 
     @testset "source-seeded cadence: temporal -> discrete, no temporal -> const (§5.7.2)" begin
@@ -89,32 +92,44 @@ const CADENCE_MANIFEST = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "
         # a non-temporal one. Only the spelling changed in esm 1.0.0 — a
         # `discrete` variable with a `data_ingest` refresh is now a PARAMETER
         # with a `data` update.
-        variables = Dict{String,Any}(
-            "c" => Dict{String,Any}("type" => "unknown", "shape" => Any["cells"]),
-            "bc" => Dict{String,Any}("type" => "parameter", "shape" => Any["cells"],
-                "update" => Dict{String,Any}("kind" => "data", "source" => "bc_loader",
-                    "from" => Dict{String,Any}("file_variable" => "bc"))))
-        bc = Dict{String,Any}("op" => "index", "args" => Any["bc", "i"])
+        variables = Dict{String, Any}(
+            "c" => Dict{String, Any}("type" => "unknown", "shape" => Any["cells"]),
+            "bc" => Dict{String, Any}(
+                "type" => "parameter", "shape" => Any["cells"],
+                "update" => Dict{String, Any}(
+                    "kind" => "data", "source" => "bc_loader",
+                    "from" => Dict{String, Any}("file_variable" => "bc")
+                )
+            )
+        )
+        bc = Dict{String, Any}("op" => "index", "args" => Any["bc", "i"])
 
         # Source WITH temporal -> DISCRETE (refreshes on each ingest).
-        with_temporal = Dict{String,Any}("variables" => variables,
-            "data_sources" => Dict{String,Any}("bc_loader" =>
-                Dict{String,Any}("kind" => "grid", "temporal" => Dict{String,Any}("frequency" => "PT6H"))))
+        with_temporal = Dict{String, Any}(
+            "variables" => variables,
+            "data_sources" => Dict{String, Any}(
+                "bc_loader" =>
+                    Dict{String, Any}("kind" => "grid", "temporal" => Dict{String, Any}("frequency" => "PT6H"))
+            )
+        )
         @test _Cadence.classify(bc, with_temporal) == "discrete"
 
         # Source WITHOUT temporal -> CONST (non-time-varying, folds at bind).
-        no_temporal = Dict{String,Any}("variables" => variables,
-            "data_sources" => Dict{String,Any}("bc_loader" => Dict{String,Any}("kind" => "static")))
+        no_temporal = Dict{String, Any}(
+            "variables" => variables,
+            "data_sources" => Dict{String, Any}("bc_loader" => Dict{String, Any}("kind" => "static"))
+        )
         @test _Cadence.classify(bc, no_temporal) == "const"
 
         # No sources attached / unresolvable source -> keeps the DISCRETE seed.
-        @test _Cadence.classify(bc, Dict{String,Any}("variables" => variables)) == "discrete"
+        @test _Cadence.classify(bc, Dict{String, Any}("variables" => variables)) == "discrete"
 
         # load_model_json attaches the document's top-level data_sources so the
         # refinement can resolve the named source.
         m = _Cadence.load_model_json(
             joinpath(TESTUTILS_REPO_ROOT, "tests", "valid", "cadence", "loader_temporal_seed.esm"),
-            "LoaderTemporalSeed")
+            "LoaderTemporalSeed"
+        )
         @test haskey(m, "data_sources") && haskey(m["data_sources"], "bc_loader")
     end
 
@@ -123,8 +138,11 @@ const CADENCE_MANIFEST = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "
         # observed unknown's definition moved out of `variables[v].expression`
         # and into `equations`. Both wrong answers are discriminated here.
         m = _Cadence.load_model_json(
-            joinpath(TESTUTILS_REPO_ROOT, "tests", "valid", "cadence",
-                     "observed_leaf_seeds.esm"), "ObservedLeafSeeds")
+            joinpath(
+                TESTUTILS_REPO_ROOT, "tests", "valid", "cadence",
+                "observed_leaf_seeds.esm"
+            ), "ObservedLeafSeeds"
+        )
 
         # A state-free observed folds (seeding every unknown CONTINUOUS would
         # stop it), one reading the state does not (seeding an observed CONST —
@@ -143,8 +161,11 @@ const CADENCE_MANIFEST = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "
         # shell `faq{i}(wf[i]) ~ …` and the bare-index `wb[i] ~ …` both define
         # an observed, while `faq{i}(D(u[i]))` stays a tendency of the state.
         a = _Cadence.load_model_json(
-            joinpath(TESTUTILS_REPO_ROOT, "tests", "valid", "cadence",
-                     "arrayed_observed_seeds.esm"), "ArrayedObservedSeeds")
+            joinpath(
+                TESTUTILS_REPO_ROOT, "tests", "valid", "cadence",
+                "arrayed_observed_seeds.esm"
+            ), "ArrayedObservedSeeds"
+        )
         @test _Cadence.seed_leaf("wf", a) == "const"
         @test _Cadence.seed_leaf("wb", a) == "const"
         @test _Cadence.seed_leaf("ws", a) == "continuous"
@@ -152,15 +173,22 @@ const CADENCE_MANIFEST = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "
         @test sort!(collect(keys(_Cadence._observed_definitions(a)))) == ["wb", "wf", "ws"]
 
         # A definition CYCLE is reported, not silently seeded.
-        cyc = Dict{String,Any}(
-            "variables" => Dict{String,Any}(
-                "a" => Dict{String,Any}("type" => "unknown"),
-                "b" => Dict{String,Any}("type" => "unknown")),
+        cyc = Dict{String, Any}(
+            "variables" => Dict{String, Any}(
+                "a" => Dict{String, Any}("type" => "unknown"),
+                "b" => Dict{String, Any}("type" => "unknown")
+            ),
             "equations" => Any[
-                Dict{String,Any}("lhs" => "a",
-                    "rhs" => Dict{String,Any}("op" => "*", "args" => Any["b", 2.0])),
-                Dict{String,Any}("lhs" => "b",
-                    "rhs" => Dict{String,Any}("op" => "*", "args" => Any["a", 2.0]))])
+                Dict{String, Any}(
+                    "lhs" => "a",
+                    "rhs" => Dict{String, Any}("op" => "*", "args" => Any["b", 2.0])
+                ),
+                Dict{String, Any}(
+                    "lhs" => "b",
+                    "rhs" => Dict{String, Any}("op" => "*", "args" => Any["a", 2.0])
+                ),
+            ]
+        )
         @test_throws _Cadence.CadenceError _Cadence.seed_leaf("a", cyc)
     end
 
@@ -168,9 +196,11 @@ const CADENCE_MANIFEST = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "
 
     @testset "neg: wrong expect_cadence is flagged (guard 3)" begin
         # A CONST gather mis-annotated as CONTINUOUS must be caught.
-        model = Dict{String,Any}("variables" => Dict{String,Any}("p" => Dict{String,Any}("type" => "parameter")))
-        bad = Dict{String,Any}("op" => "index", "args" => Any["p", "i"],
-            "expect_cadence" => "continuous")
+        model = Dict{String, Any}("variables" => Dict{String, Any}("p" => Dict{String, Any}("type" => "parameter")))
+        bad = Dict{String, Any}(
+            "op" => "index", "args" => Any["p", "i"],
+            "expect_cadence" => "continuous"
+        )
         problems = String[]
         _Cadence.check_expect_cadence!(bad, model, problems)
         @test !isempty(problems)
@@ -178,15 +208,19 @@ const CADENCE_MANIFEST = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "
 
     @testset "neg: continuous relational rejected (guard 2)" begin
         # A distinct aggregate whose key reads state u classifies CONTINUOUS.
-        model = Dict{String,Any}(
-            "variables" => Dict{String,Any}("u" => Dict{String,Any}("type" => "unknown")),
-            "index_sets" => Dict{String,Any}("faces" => Dict{String,Any}("kind" => "interval", "size" => 4)))
-        rhs = Dict{String,Any}(
+        model = Dict{String, Any}(
+            "variables" => Dict{String, Any}("u" => Dict{String, Any}("type" => "unknown")),
+            "index_sets" => Dict{String, Any}("faces" => Dict{String, Any}("kind" => "interval", "size" => 4))
+        )
+        rhs = Dict{String, Any}(
             "op" => "faq", "distinct" => true, "semiring" => "bool_and_or",
-            "output_idx" => Any["e"], "ranges" => Dict{String,Any}("f" => Dict{String,Any}("from" => "faces")),
-            "key" => Dict{String,Any}("op" => "skolem", "label" => "edge",
-                "args" => Any[Dict{String,Any}("op" => "index", "args" => Any["u", "f"])]),
-            "expr" => Dict{String,Any}("op" => "true", "args" => Any[]))
+            "output_idx" => Any["e"], "ranges" => Dict{String, Any}("f" => Dict{String, Any}("from" => "faces")),
+            "key" => Dict{String, Any}(
+                "op" => "skolem", "label" => "edge",
+                "args" => Any[Dict{String, Any}("op" => "index", "args" => Any["u", "f"])]
+            ),
+            "expr" => Dict{String, Any}("op" => "true", "args" => Any[])
+        )
         @test _Cadence.classify(rhs, model) == "continuous"
         @test_throws _Cadence.CadenceError _Cadence.assert_no_continuous_relational(rhs, model)
     end
@@ -203,22 +237,33 @@ const CADENCE_MANIFEST = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance", "
     end
 
     @testset "neg: from_faq cycle rejected (guard 1)" begin
-        cyclic = Dict{String,Any}(
-            "variables" => Dict{String,Any}(),
-            "index_sets" => Dict{String,Any}(
-                "setA" => Dict{String,Any}("kind" => "derived", "from_faq" => "nodeA"),
-                "setB" => Dict{String,Any}("kind" => "derived", "from_faq" => "nodeB")),
+        cyclic = Dict{String, Any}(
+            "variables" => Dict{String, Any}(),
+            "index_sets" => Dict{String, Any}(
+                "setA" => Dict{String, Any}("kind" => "derived", "from_faq" => "nodeA"),
+                "setB" => Dict{String, Any}("kind" => "derived", "from_faq" => "nodeB")
+            ),
             "equations" => Any[
-                Dict{String,Any}("lhs" => Dict{String,Any}("op" => "index", "args" => Any["a", "x"]),
-                    "rhs" => Dict{String,Any}("op" => "faq", "id" => "nodeA", "distinct" => true,
+                Dict{String, Any}(
+                    "lhs" => Dict{String, Any}("op" => "index", "args" => Any["a", "x"]),
+                    "rhs" => Dict{String, Any}(
+                        "op" => "faq", "id" => "nodeA", "distinct" => true,
                         "semiring" => "bool_and_or", "output_idx" => Any["x"],
-                        "ranges" => Dict{String,Any}("y" => Dict{String,Any}("from" => "setB")),
-                        "expr" => Dict{String,Any}("op" => "true", "args" => Any[]))),
-                Dict{String,Any}("lhs" => Dict{String,Any}("op" => "index", "args" => Any["b", "x"]),
-                    "rhs" => Dict{String,Any}("op" => "faq", "id" => "nodeB", "distinct" => true,
+                        "ranges" => Dict{String, Any}("y" => Dict{String, Any}("from" => "setB")),
+                        "expr" => Dict{String, Any}("op" => "true", "args" => Any[])
+                    )
+                ),
+                Dict{String, Any}(
+                    "lhs" => Dict{String, Any}("op" => "index", "args" => Any["b", "x"]),
+                    "rhs" => Dict{String, Any}(
+                        "op" => "faq", "id" => "nodeB", "distinct" => true,
                         "semiring" => "bool_and_or", "output_idx" => Any["x"],
-                        "ranges" => Dict{String,Any}("y" => Dict{String,Any}("from" => "setA")),
-                        "expr" => Dict{String,Any}("op" => "true", "args" => Any[])))])
+                        "ranges" => Dict{String, Any}("y" => Dict{String, Any}("from" => "setA")),
+                        "expr" => Dict{String, Any}("op" => "true", "args" => Any[])
+                    )
+                ),
+            ]
+        )
         @test_throws _Cadence.CadenceError _Cadence.assert_acyclic_index_sets(cyclic)
     end
 

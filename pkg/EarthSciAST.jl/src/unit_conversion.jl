@@ -44,15 +44,21 @@ as it did before this existed.
 """
 function parse_unit_conversion(raw; variable_name::AbstractString)
     raw === nothing && return nothing
-    raw isa Bool && throw(UnitConversionError(
-        "variable '$(variable_name)' unit_conversion must be a number or an " *
-        "Expression object, got a boolean"))
+    raw isa Bool && throw(
+        UnitConversionError(
+            "variable '$(variable_name)' unit_conversion must be a number or an " *
+                "Expression object, got a boolean"
+        )
+    )
     raw isa Real && return Float64(raw)
     raw isa ASTExpr && return raw
     raw isa AbstractDict && return expression_from_json(raw)
-    throw(UnitConversionError(
-        "variable '$(variable_name)' unit_conversion must be a number or an " *
-        "Expression object, got $(typeof(raw))"))
+    throw(
+        UnitConversionError(
+            "variable '$(variable_name)' unit_conversion must be a number or an " *
+                "Expression object, got $(typeof(raw))"
+        )
+    )
 end
 
 # The constant scale `conversion` reduces to, or `nothing` when it is an OPEN
@@ -61,12 +67,15 @@ function _unit_conversion_scale(conversion, variable_name::AbstractString)
     conversion isa Real && return Float64(conversion)
     isempty(free_variables(conversion)) || return nothing
     try
-        node = _compile(conversion, Dict{String,Int}(), Set{Symbol}(), Dict{String,Any}())
+        node = _compile(conversion, Dict{String, Int}(), Set{Symbol}(), Dict{String, Any}())
         return _eval_node(node, Float64[], NamedTuple(), 0.0)
     catch e
-        throw(UnitConversionError(
-            "variable '$(variable_name)' unit_conversion is a constant expression " *
-            "but did not evaluate: $(sprint(showerror, e))"))
+        throw(
+            UnitConversionError(
+                "variable '$(variable_name)' unit_conversion is a constant expression " *
+                    "but did not evaluate: $(sprint(showerror, e))"
+            )
+        )
     end
 end
 
@@ -82,8 +91,10 @@ a multiply. An open expression is COMPILED ONCE and then evaluated per element
 with the raw value bound to its single free variable; more than one free variable
 is an error, since there is no second column to bind it to.
 """
-function apply_unit_conversion!(values::AbstractVector{Float64}, conversion;
-                                variable_name::AbstractString)
+function apply_unit_conversion!(
+        values::AbstractVector{Float64}, conversion;
+        variable_name::AbstractString
+    )
     conversion === nothing && return values
     scale = _unit_conversion_scale(conversion, variable_name)
     if scale !== nothing
@@ -94,11 +105,14 @@ function apply_unit_conversion!(values::AbstractVector{Float64}, conversion;
         return values
     end
     free = sort!(collect(free_variables(conversion)))
-    length(free) == 1 || throw(UnitConversionError(
-        "variable '$(variable_name)' unit_conversion must depend on at most one " *
-        "free variable, got $(free)"))
+    length(free) == 1 || throw(
+        UnitConversionError(
+            "variable '$(variable_name)' unit_conversion must depend on at most one " *
+                "free variable, got $(free)"
+        )
+    )
     sym = Symbol(free[1])
-    node = _compile(conversion, Dict{String,Int}(), Set{Symbol}([sym]), Dict{String,Any}())
+    node = _compile(conversion, Dict{String, Int}(), Set{Symbol}([sym]), Dict{String, Any}())
     @inbounds for i in eachindex(values)
         values[i] = _eval_node(node, Float64[], NamedTuple{(sym,)}((values[i],)), 0.0)
     end
@@ -111,8 +125,10 @@ end
 Non-mutating [`apply_unit_conversion!`](@ref): returns a converted copy, or
 `values` itself when there is nothing to apply.
 """
-function apply_unit_conversion(values::AbstractArray, conversion;
-                               variable_name::AbstractString)
+function apply_unit_conversion(
+        values::AbstractArray, conversion;
+        variable_name::AbstractString
+    )
     conversion === nothing && return values
     out = Array{Float64}(undef, size(values))
     copyto!(out, values)

@@ -28,8 +28,10 @@ import OrdinaryDiffEqTsit5
 
 include("testutils.jl")  # TESTUTILS_REPO_ROOT
 
-const _ANF_CAT_DIR  = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance",
-                               "assertion_nonfinite")
+const _ANF_CAT_DIR = joinpath(
+    TESTUTILS_REPO_ROOT, "tests", "conformance",
+    "assertion_nonfinite"
+)
 const _ANF_MANIFEST = joinpath(_ANF_CAT_DIR, "manifest.json")
 
 _anf_class(v) = isnan(v) ? "nan" : (v == Inf ? "+inf" : (v == -Inf ? "-inf" : "finite"))
@@ -49,9 +51,11 @@ _anf_class(v) = isnan(v) ? "nan" : (v == Inf ? "+inf" : (v == -Inf ? "-inf" : "f
         @testset "$(id)" begin
             esm_path = joinpath(_ANF_CAT_DIR, String(fixture.path))
             @test isfile(esm_path)
-            results = run_inline_tests(esm_path; model_name=String(fixture.model),
-                                    alg=OrdinaryDiffEqTsit5.Tsit5(),
-                                    reltol=1e-12, abstol=1e-14)
+            results = run_inline_tests(
+                esm_path; model_name = String(fixture.model),
+                alg = OrdinaryDiffEqTsit5.Tsit5(),
+                reltol = 1.0e-12, abstol = 1.0e-14
+            )
             @test length(results) == length(fixture.cases)
             by_key = Dict((r.test_id, r.assertion_idx) => r for r in results)
             for case in fixture.cases
@@ -64,7 +68,7 @@ _anf_class(v) = isnan(v) ? "nan" : (v == Inf ? "+inf" : (v == -Inf ? "-inf" : "f
                 # The verdict IS the contract.
                 @test r.passed == Bool(case.passed)
                 if haskey(case, :actual)
-                    @test isapprox(Float64(r.actual), Float64(case.actual); rtol=1e-9)
+                    @test isapprox(Float64(r.actual), Float64(case.actual); rtol = 1.0e-9)
                 end
             end
         end
@@ -74,13 +78,13 @@ end
 # The predicate itself, at the boundary the fixture cannot spell: JSON has no
 # infinite literal, so `expected = ±Inf` is only reachable through the API.
 @testset "assertion predicate: finiteness before tolerance (§6.6.3)" begin
-    for (rtol, atol) in ((1e-9, 0.0), (0.0, 1e300), (1e-9, 1e300), (0.0, 0.0))
+    for (rtol, atol) in ((1.0e-9, 0.0), (0.0, 1.0e300), (1.0e-9, 1.0e300), (0.0, 0.0))
         @test !EarthSciAST._check_assertion(Inf, 42.0, rtol, atol)
         @test !EarthSciAST._check_assertion(Inf, 0.0, rtol, atol)
         @test !EarthSciAST._check_assertion(-Inf, -42.0, rtol, atol)
         @test !EarthSciAST._check_assertion(NaN, 0.0, rtol, atol)
         @test !EarthSciAST._check_assertion(NaN, NaN, rtol, atol)
-        @test !EarthSciAST._check_assertion(1e300, Inf, rtol, atol)
+        @test !EarthSciAST._check_assertion(1.0e300, Inf, rtol, atol)
         # The one legitimate non-finite match, and only with the same sign.
         @test EarthSciAST._check_assertion(Inf, Inf, rtol, atol)
         @test EarthSciAST._check_assertion(-Inf, -Inf, rtol, atol)
@@ -88,8 +92,8 @@ end
         @test !EarthSciAST._check_assertion(-Inf, Inf, rtol, atol)
     end
     # Unchanged for finite values, signed zero included.
-    @test EarthSciAST._check_assertion(1.0, 1.0 + 1e-12, 1e-9, 0.0)
-    @test !EarthSciAST._check_assertion(1.0, 1.1, 1e-9, 0.0)
+    @test EarthSciAST._check_assertion(1.0, 1.0 + 1.0e-12, 1.0e-9, 0.0)
+    @test !EarthSciAST._check_assertion(1.0, 1.1, 1.0e-9, 0.0)
     @test EarthSciAST._check_assertion(-0.0, 0.0, 0.0, 0.0)
     @test EarthSciAST._check_assertion(2.0, 2.0, 0.0, 0.0)
     @test !EarthSciAST._check_assertion(2.0, 2.0000001, 0.0, 0.0)

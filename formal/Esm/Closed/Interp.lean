@@ -1111,13 +1111,12 @@ theorem validateLinear_rank (t ax : Arg Num) :
         (∃ t', t = .const1 t') ∧ ∀ a', ax ≠ .const1 a') := by
   cases t <;> cases ax <;>
     simp only [validateLinear, Codes.interpTableNotConst, Codes.interpAxisNotConst,
-      ne_eq, reduceCtorEq, not_false_eq_true, implies_true, forall_const, true_iff,
-      exists_false, false_and, iff_true, and_true, exists_eq', true_and] <;>
+      ne_eq, reduceCtorEq, not_false_eq_true, implies_true, true_iff,
+      exists_false, false_and, and_true, true_and] <;>
     first
     | (split_ifs <;> simp [Codes.interpTooShort, Codes.interpLengthMismatch,
         Codes.interpNaNInAxis, Codes.interpNonMonotonic])
     | simp
-    | decide
 
 /-- §9.2 + Q-4: on rank-1 `const` arguments every rejection names a violated
 condition: `interp_axis_too_short` (axis shorter than 2),
@@ -1250,14 +1249,13 @@ theorem validateBilinear_rank (T ax ay : Arg Num) :
         (∃ T', T = .const2 T') ∧ ¬ ((∃ a', ax = .const1 a') ∧ ∃ b', ay = .const1 b')) := by
   cases T <;> cases ax <;> cases ay <;>
     simp only [validateBilinear, Codes.interpTableNotConst, Codes.interpAxisNotConst,
-      ne_eq, reduceCtorEq, not_false_eq_true, implies_true, forall_const, true_iff,
-      exists_false, false_and, and_false, iff_true, and_true, exists_eq', true_and,
-      not_true_eq_false, iff_false, not_and, not_exists] <;>
+      ne_eq, reduceCtorEq, not_false_eq_true, implies_true, true_iff,
+      exists_false, false_and, and_false, and_true, true_and,
+      iff_false, not_and, not_exists] <;>
     first
     | (split_ifs <;> simp [Codes.interpTooShort, Codes.interpLengthMismatch,
         Codes.interpNaNInAxis, Codes.interpNonMonotonic])
     | simp
-    | decide
 
 /-- §9.2 + Q-108: an empty `xs` passes every check, and every query against it,
 NaN included, returns `N + 1 = 1`. -/

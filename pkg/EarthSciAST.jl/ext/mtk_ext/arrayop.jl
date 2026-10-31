@@ -28,11 +28,12 @@ end
 # BEHAVIOR (only these four reducers are supported); the name→function
 # mapping is delegated to the op registry, same pattern as `_BROADCAST_FNS`
 # in lowering.jl.
-const _REDUCE_FNS = Dict{String,Function}(
+const _REDUCE_FNS = Dict{String, Function}(
     name => EarthSciAST._op_spec(name).scalar_fn
-    for name in ("+", "*", "max", "min"))
+        for name in ("+", "*", "max", "min")
+)
 
-function _reduce_fn(name::Union{Nothing,AbstractString})
+function _reduce_fn(name::Union{Nothing, AbstractString})
     name === nothing && return +
     fn = get(_REDUCE_FNS, String(name), nothing)
     fn === nothing && throw(ArgumentError("Unsupported arrayop reduce: $name"))
@@ -65,7 +66,7 @@ end
 # a per-output-cell gather table for an indexed read.
 struct _GatherCtx
     # output index var name => (pool var, physical-index lo, length N_d)
-    out_vars::Dict{String,Tuple{Any,Int,Int}}
+    out_vars::Dict{String, Tuple{Any, Int, Int}}
     # ordered output var names (defines the table axis order = pool var order)
     out_order::Vector{String}
 end
@@ -97,14 +98,14 @@ const _GATHER_CTX_KEY = "__esm_arrayop_gather_ctx__"
 # `ArgumentError` from `_range_bounds_int`.
 const _INDEX_EXTENTS_KEY = "__esm_index_set_extents__"
 
-_extents(dim_dict::Dict{String,Any}) =
+_extents(dim_dict::Dict{String, Any}) =
     get(dim_dict, _INDEX_EXTENTS_KEY, _NO_EXTENTS)::AbstractDict
 
 # The reduce semiring's additive identity — what a combination REJECTED by an
 # aggregate's `filter` contributes (esm-spec §4.3.1: "a combination for which
 # the predicate is false contributes the additive identity"; an all-rejected
 # window therefore yields the identity itself and is not an error).
-function _reduce_identity(name::Union{Nothing,AbstractString})
+function _reduce_identity(name::Union{Nothing, AbstractString})
     n = name === nothing ? "+" : String(name)
     n == "+"   && return 0.0
     n == "*"   && return 1.0
@@ -127,7 +128,7 @@ _gate_by_filter(pred, body, identity_val) = ifelse(pred, body, identity_val)
 # from the output vars alone (e.g. it references a reduction var, a parameter,
 # or a non-affine/function term — in which case the read is NOT gather-eligible
 # and the caller falls back to the symbolic-offset path).
-function _eval_index_arg_int(e::EsmExpr, binding::Dict{String,Int})
+function _eval_index_arg_int(e::EsmExpr, binding::Dict{String, Int})
     if e isa IntExpr
         return Int(e.value)
     elseif e isa NumExpr
@@ -166,7 +167,7 @@ function _index_args_gatherable(idx_args::Vector{<:EsmExpr}, ctx::_GatherCtx)
     # Probe with the lower-corner physical indices; `_eval_index_arg_int`
     # returns `nothing` structurally (independent of the concrete values) when
     # a non-output symbol or unsupported op appears, so one probe suffices.
-    binding = Dict{String,Int}(name => lo for (name, (_, lo, _)) in ctx.out_vars)
+    binding = Dict{String, Int}(name => lo for (name, (_, lo, _)) in ctx.out_vars)
     for a in idx_args
         _eval_index_arg_int(a, binding) === nothing && return false
     end
@@ -187,19 +188,21 @@ function _build_gather_read(arr, idx_args::Vector{<:EsmExpr}, ctx::_GatherCtx)
     table = Array{Any}(undef, dims...)
     for cell in CartesianIndices(dims)
         # Physical index value for each output var at this cell.
-        binding = Dict{String,Int}()
+        binding = Dict{String, Int}()
         for d in 1:ndim_out
             name = ctx.out_order[d]
             lo = ctx.out_vars[name][2]
             binding[name] = lo + cell[d] - 1
         end
         # Resolve each axis index of the read.
-        resolved = ntuple(k -> _eval_index_arg_int(idx_args[k], binding)::Int,
-                          length(idx_args))
+        resolved = ntuple(
+            k -> _eval_index_arg_int(idx_args[k], binding)::Int,
+            length(idx_args)
+        )
         inbounds = length(resolved) == length(sz) &&
-                   all(1 <= resolved[k] <= sz[k] for k in 1:length(resolved))
+            all(1 <= resolved[k] <= sz[k] for k in 1:length(resolved))
         table[cell] = inbounds ? Symbolics.unwrap(getindex(arr, resolved...)) :
-                                 Symbolics.unwrap(Symbolics.Num(0))
+            Symbolics.unwrap(Symbolics.Num(0))
     end
 
     pool_idx = Any[ctx.out_vars[ctx.out_order[d]][1] for d in 1:ndim_out]
@@ -215,21 +218,29 @@ end
 # Stencil neighbor reads that can leave the field bounds at a boundary cell are
 # materialized as numeric gather tables (see `_build_gather_read` above) so no
 # symbolic out-of-bounds index ever reaches the scalarizer.
-function _build_arrayop_sym(expr::OpExpr, var_dict::Dict{String,Any},
-                             t_sym, dim_dict::Dict{String,Any})
+function _build_arrayop_sym(
+        expr::OpExpr, var_dict::Dict{String, Any},
+        t_sym, dim_dict::Dict{String, Any}
+    )
     output_idx = expr.output_idx === nothing ? Any[] : expr.output_idx
     body = expr.expr_body
     body === nothing && throw(ArgumentError("arrayop node missing 'expr' body"))
     reduce_fn = _reduce_fn(expr.reduce)
 
-    expr.ranges === nothing && throw(ArgumentError(
-        "arrayop without explicit 'ranges' is not supported — all index " *
-        "variables must declare a concrete range"))
-    expr.join === nothing && expr.join_gates === nothing || throw(ArgumentError(
-        "relational `join` clauses on an aggregate are not supported by the " *
-        "MTK evaluator path — use the tree-walk evaluator (`esm_problem`)"))
+    expr.ranges === nothing && throw(
+        ArgumentError(
+            "arrayop without explicit 'ranges' is not supported — all index " *
+                "variables must declare a concrete range"
+        )
+    )
+    expr.join === nothing && expr.join_gates === nothing || throw(
+        ArgumentError(
+            "relational `join` clauses on an aggregate are not supported by the " *
+                "MTK evaluator path — use the tree-walk evaluator (`esm_problem`)"
+        )
+    )
     extents = _extents(dim_dict)
-    ranges = Dict{String,UnitRange{Int}}()
+    ranges = Dict{String, UnitRange{Int}}()
     for (name, r) in expr.ranges
         lo, hi = _range_bounds_int(r, extents)
         ranges[name] = lo:hi
@@ -251,9 +262,11 @@ function _build_arrayop_sym(expr::OpExpr, var_dict::Dict{String,Any},
     # Pure scalar output (empty output_idx or all singletons): pre-scalarize
     # via integer iteration (rare path, not in current simulation fixtures).
     if isempty(output_names)
-        return _arrayop_scalar_reduce(body, var_dict, t_sym, dim_dict, ranges,
-                                      reduce_fn, expr.filter,
-                                      _reduce_identity(expr.reduce))
+        return _arrayop_scalar_reduce(
+            body, var_dict, t_sym, dim_dict, ranges,
+            reduce_fn, expr.filter,
+            _reduce_identity(expr.reduce)
+        )
     end
 
     # Draw symbolic integer index vars from the shared pool.
@@ -268,8 +281,8 @@ function _build_arrayop_sym(expr::OpExpr, var_dict::Dict{String,Any},
     # substituting pool[k] = 1..N. For non-1-based ranges (e.g. i ∈ 2:4),
     # we inject pool[k] + offset into the body so that when pool[k] = 1..3
     # the body sees 2..4 (the actual physical indices).
-    idx_sym = Dict{String,Any}()
-    idx_body = Dict{String,Any}()
+    idx_sym = Dict{String, Any}()
+    idx_body = Dict{String, Any}()
     for (k, name) in enumerate(all_named)
         r = ranges[name]
         idx_sym[name] = pool[k]
@@ -286,7 +299,7 @@ function _build_arrayop_sym(expr::OpExpr, var_dict::Dict{String,Any},
     # keeps boundary/ghost reads within `1:N`. Reads referencing reduction-only
     # index vars are not gatherable and fall back to the symbolic-offset path
     # below (correct for in-bounds contractions, which was already passing).
-    out_vars = Dict{String,Tuple{Any,Int,Int}}()
+    out_vars = Dict{String, Tuple{Any, Int, Int}}()
     out_order = String[]
     for entry in output_idx
         entry isa AbstractString || continue
@@ -300,9 +313,11 @@ function _build_arrayop_sym(expr::OpExpr, var_dict::Dict{String,Any},
     # Inject OFFSET-ADJUSTED index vars into var_dict and evaluate the body.
     # Also install the gather context so `_build_index` can intercept
     # gather-eligible reads. Both are restored in the `finally`.
-    saved = Dict{String,Any}()
+    saved = Dict{String, Any}()
     for (k, v) in idx_body
-        if haskey(var_dict, k); saved[k] = var_dict[k]; end
+        if haskey(var_dict, k)
+            saved[k] = var_dict[k]
+        end
         var_dict[k] = v
     end
     saved_ctx = get(dim_dict, _GATHER_CTX_KEY, nothing)
@@ -348,7 +363,11 @@ function _build_arrayop_sym(expr::OpExpr, var_dict::Dict{String,Any},
         b
     finally
         for k in keys(idx_body)
-            if haskey(saved, k); var_dict[k] = saved[k]; else; delete!(var_dict, k); end
+            if haskey(saved, k)
+                var_dict[k] = saved[k]
+            else
+                delete!(var_dict, k)
+            end
         end
         if saved_ctx === nothing
             delete!(dim_dict, _GATHER_CTX_KEY)
@@ -372,7 +391,7 @@ function _build_arrayop_sym(expr::OpExpr, var_dict::Dict{String,Any},
 
     # Ranges dict keyed by RAW pool vars, all 1-based (shape = 1:length(r)).
     # The body uses idx_body (offset-adjusted) so physical index values are correct.
-    ranges_sym = Dict{Any,Any}()
+    ranges_sym = Dict{Any, Any}()
     for (name, r) in ranges
         ranges_sym[idx_sym[name]] = StepRange(1, 1, length(r))
     end
@@ -386,22 +405,28 @@ function _build_arrayop_sym(expr::OpExpr, var_dict::Dict{String,Any},
     if !(body_unwrapped isa SymUtils.BasicSymbolic)
         body_unwrapped = ConstSR(body_unwrapped)
     end
-    arr_op = SymUtils.ArrayOp{SymReal}(output_idx_syms, body_unwrapped,
-        reduce_fn, nothing, ranges_sym)
+    arr_op = SymUtils.ArrayOp{SymReal}(
+        output_idx_syms, body_unwrapped,
+        reduce_fn, nothing, ranges_sym
+    )
     return Symbolics.wrap(arr_op)
 end
 
 # Scalar-output fallback: iterate all ranges and reduce. Used only when
 # output_idx is empty or all-singleton (no named output dimensions).
-function _arrayop_scalar_reduce(body, var_dict, t_sym, dim_dict, ranges, reduce_fn,
-                                filt=nothing, identity_val=0.0)
+function _arrayop_scalar_reduce(
+        body, var_dict, t_sym, dim_dict, ranges, reduce_fn,
+        filt = nothing, identity_val = 0.0
+    )
     all_names = collect(keys(ranges))
     range_tuple = Tuple(ranges[n] for n in all_names)
     acc = nothing
     for vals in Iterators.product(range_tuple...)
-        saved = Dict{String,Any}()
+        saved = Dict{String, Any}()
         for (k, v) in zip(all_names, vals)
-            if haskey(var_dict, k); saved[k] = var_dict[k]; end
+            if haskey(var_dict, k)
+                saved[k] = var_dict[k]
+            end
             var_dict[k] = Int(v)
         end
         contrib = try
@@ -413,7 +438,11 @@ function _arrayop_scalar_reduce(body, var_dict, t_sym, dim_dict, ranges, reduce_
             b
         finally
             for k in all_names
-                if haskey(saved, k); var_dict[k] = saved[k]; else; delete!(var_dict, k); end
+                if haskey(saved, k)
+                    var_dict[k] = saved[k]
+                else
+                    delete!(var_dict, k)
+                end
             end
         end
         acc = acc === nothing ? contrib : reduce_fn(acc, contrib)
@@ -433,9 +462,11 @@ end
 #   3. index(u, k1, k2, ...) — direct indexed LHS
 #
 # The resulting shape is the union of all such contributions per variable.
-function _lhs_arrayop_shapes(equations::Vector{Equation},
-                             extents::AbstractDict=_NO_EXTENTS)
-    shapes = Dict{String,Vector{UnitRange{Int}}}()
+function _lhs_arrayop_shapes(
+        equations::Vector{Equation},
+        extents::AbstractDict = _NO_EXTENTS
+    )
+    shapes = Dict{String, Vector{UnitRange{Int}}}()
     for eq in equations
         lhs = eq.lhs
         lhs isa OpExpr || continue
@@ -455,8 +486,10 @@ function _lhs_arrayop_shapes(equations::Vector{Equation},
             body isa OpExpr || continue
             vname = if body.op == "D" && !isempty(body.args)
                 inner = body.args[1]
-                (inner isa OpExpr && inner.op == "index" &&
-                 !isempty(inner.args) && inner.args[1] isa VarExpr) ?
+                (
+                        inner isa OpExpr && inner.op == "index" &&
+                        !isempty(inner.args) && inner.args[1] isa VarExpr
+                    ) ?
                     inner.args[1].name : nothing
             elseif body.op == "index"
                 (!isempty(body.args) && body.args[1] isa VarExpr) ?
@@ -470,7 +503,9 @@ function _lhs_arrayop_shapes(equations::Vector{Equation},
             for entry in lhs.output_idx
                 entry isa AbstractString || continue
                 r = get(lhs.ranges, String(entry), nothing)
-                if r === nothing; all_found = false; break; end
+                if r === nothing
+                    all_found = false; break
+                end
                 lo, hi = _range_bounds_int(r, extents)
                 push!(axis_ranges, lo:hi)
             end
@@ -516,9 +551,11 @@ function _concrete_index_ranges(args)
     return isempty(axis_ranges) ? nothing : axis_ranges
 end
 
-function _merge_lhs_shape!(shapes::Dict{String,Vector{UnitRange{Int}}},
-                            vname::String, axis_ranges::Vector{UnitRange{Int}})
-    if haskey(shapes, vname)
+function _merge_lhs_shape!(
+        shapes::Dict{String, Vector{UnitRange{Int}}},
+        vname::String, axis_ranges::Vector{UnitRange{Int}}
+    )
+    return if haskey(shapes, vname)
         ex = shapes[vname]
         length(ex) == length(axis_ranges) || return
         for (d, r) in enumerate(axis_ranges)
@@ -541,11 +578,14 @@ end
 #
 # Anything else is rejected with an `ArgumentError` naming the offending form —
 # never a `MethodError`.
-const _NO_EXTENTS = Dict{String,Int}()
+const _NO_EXTENTS = Dict{String, Int}()
 
-function _range_bounds_int(r::AbstractVector, extents::AbstractDict=_NO_EXTENTS)
-    all(x -> x isa Integer, r) || throw(ArgumentError(
-        "expression-valued range bounds are not supported by the MTK evaluator path"))
+function _range_bounds_int(r::AbstractVector, extents::AbstractDict = _NO_EXTENTS)
+    all(x -> x isa Integer, r) || throw(
+        ArgumentError(
+            "expression-valued range bounds are not supported by the MTK evaluator path"
+        )
+    )
     if length(r) == 2
         return Int(r[1]), Int(r[2])
     elseif length(r) == 3
@@ -554,25 +594,39 @@ function _range_bounds_int(r::AbstractVector, extents::AbstractDict=_NO_EXTENTS)
     throw(ArgumentError("range must have 2 or 3 entries, got $(length(r))"))
 end
 
-function _range_bounds_int(r::EarthSciAST.IndexSetRef,
-                           extents::AbstractDict=_NO_EXTENTS)
-    isempty(r.of) || throw(ArgumentError(
-        "ragged index-set range `{from: \"$(r.from)\", of: $(r.of)}` is not " *
-        "supported by the MTK evaluator path — its extent varies with its " *
-        "parent index, so it has no single rectangular bound"))
+function _range_bounds_int(
+        r::EarthSciAST.IndexSetRef,
+        extents::AbstractDict = _NO_EXTENTS
+    )
+    isempty(r.of) || throw(
+        ArgumentError(
+            "ragged index-set range `{from: \"$(r.from)\", of: $(r.of)}` is not " *
+                "supported by the MTK evaluator path — its extent varies with its " *
+                "parent index, so it has no single rectangular bound"
+        )
+    )
     n = get(extents, r.from, nothing)
-    n === nothing && throw(ArgumentError(
-        "cannot resolve the extent of index set '$(r.from)' in the MTK " *
-        "evaluator path: it is not in the flattened system's index-set " *
-        "registry. Build the system from a `FlattenedSystem` whose " *
-        "`index_sets` carry it (`flatten(::EsmFile)`); `flatten(::Model)` " *
-        "wraps the model in a synthetic file with an EMPTY registry"))
-    n < 1 && throw(ArgumentError(
-        "index set '$(r.from)' has non-positive size $(n)"))
+    n === nothing && throw(
+        ArgumentError(
+            "cannot resolve the extent of index set '$(r.from)' in the MTK " *
+                "evaluator path: it is not in the flattened system's index-set " *
+                "registry. Build the system from a `FlattenedSystem` whose " *
+                "`index_sets` carry it (`flatten(::EsmFile)`); `flatten(::Model)` " *
+                "wraps the model in a synthetic file with an EMPTY registry"
+        )
+    )
+    n < 1 && throw(
+        ArgumentError(
+            "index set '$(r.from)' has non-positive size $(n)"
+        )
+    )
     return 1, Int(n)
 end
 
-_range_bounds_int(r, extents::AbstractDict=_NO_EXTENTS) = throw(ArgumentError(
-    "unsupported `ranges` entry of type $(typeof(r)): the MTK evaluator path " *
-    "accepts a dense `[lo, hi]`/`[lo, step, hi]` array or an index-set " *
-    "reference `{from: <index set>}`"))
+_range_bounds_int(r, extents::AbstractDict = _NO_EXTENTS) = throw(
+    ArgumentError(
+        "unsupported `ranges` entry of type $(typeof(r)): the MTK evaluator path " *
+            "accepts a dense `[lo, hi]`/`[lo, step, hi]` array or an index-set " *
+            "reference `{from: <index set>}`"
+    )
+)

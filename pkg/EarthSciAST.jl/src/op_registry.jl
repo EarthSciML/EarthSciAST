@@ -57,12 +57,12 @@ Fields:
 """
 struct _OpSpec
     name::String
-    arity::Union{UnitRange{Int},Nothing}
+    arity::Union{UnitRange{Int}, Nothing}
     category::Symbol
-    scalar_fn::Union{Function,Nothing}
-    dim_class::Union{Symbol,Nothing}
-    display_prec::Union{Int,Nothing}
-    infix_sep::Union{NTuple{3,String},Nothing}
+    scalar_fn::Union{Function, Nothing}
+    dim_class::Union{Symbol, Nothing}
+    display_prec::Union{Int, Nothing}
+    infix_sep::Union{NTuple{3, String}, Nothing}
     ws4_foldable::Bool
     cse_opaque::Bool
     stencil_elementwise::Bool
@@ -76,17 +76,21 @@ end
 
 # Compact row constructor for `_OP_TABLE` (keyword flags keep the table
 # readable; every flag defaults to false).
-_op(name::String; arity=nothing, category::Symbol, fn=nothing,
-    dimclass::Union{Symbol,Nothing}=nothing,
-    prec::Union{Int,Nothing}=nothing,
-    sep::Union{NTuple{3,String},Nothing}=nothing,
-    ws4::Bool=false, cse::Bool=false, stencil::Bool=false,
-    geo::Bool=false, known::Bool=false,
-    arrprod::Bool=false, selfidx::Bool=false,
-    builtin::Bool=false, xcse::Bool=false) =
-    _OpSpec(name, arity, category, fn, dimclass, prec, sep,
-            ws4, cse, stencil, geo, known,
-            arrprod, selfidx, builtin, xcse)
+_op(
+    name::String; arity = nothing, category::Symbol, fn = nothing,
+    dimclass::Union{Symbol, Nothing} = nothing,
+    prec::Union{Int, Nothing} = nothing,
+    sep::Union{NTuple{3, String}, Nothing} = nothing,
+    ws4::Bool = false, cse::Bool = false, stencil::Bool = false,
+    geo::Bool = false, known::Bool = false,
+    arrprod::Bool = false, selfidx::Bool = false,
+    builtin::Bool = false, xcse::Bool = false
+) =
+    _OpSpec(
+    name, arity, category, fn, dimclass, prec, sep,
+    ws4, cse, stencil, geo, known,
+    arrprod, selfidx, builtin, xcse
+)
 
 """
     _OP_FLAG_NAMES
@@ -104,8 +108,10 @@ The membership-flag fields of [`_OpSpec`](@ref), one per derived const set:
 - `:xcse_expensive`     → `_XCSE_EXPENSIVE_OPS`           (tree_walk/xcse.jl)
 """
 const _OP_FLAG_NAMES =
-    (:ws4_foldable, :cse_opaque, :stencil_elementwise, :geo_eval, :mtk_known,
-     :array_producer, :self_indexed, :builtin_fn, :xcse_expensive)
+    (
+    :ws4_foldable, :cse_opaque, :stencil_elementwise, :geo_eval, :mtk_known,
+    :array_producer, :self_indexed, :builtin_fn, :xcse_expensive,
+)
 
 """
     _OP_TABLE
@@ -169,40 +175,66 @@ const _OP_TABLE = _OpSpec[
     #    Display: `+`/`<`/`>` have a precedence but no `sep` (uniform
     #    separator handled directly in `_format_infix_op`), `/` renders
     #    `\frac`, `^` superscripts; `pow`/`neg` render as function calls.
-    _op("+";   arity=1:typemax(Int), category=:arithmetic, fn=(+), prec=4,
-        ws4=true, stencil=true, geo=true, known=true),
-    _op("-";   arity=1:2,            category=:arithmetic, fn=(-), prec=4,
-        sep=(" - ", " − ", " - "),
-        ws4=true, stencil=true, geo=true, known=true),
-    _op("*";   arity=1:typemax(Int), category=:arithmetic, fn=(*), prec=5,
-        sep=(" * ", "·", " \\cdot "),
-        ws4=true, stencil=true, geo=true, known=true),
-    _op("/";   arity=2:2,            category=:arithmetic, fn=(/), prec=5,
-        ws4=true, stencil=true, geo=true, known=true),
-    _op("^";   arity=2:2,            category=:arithmetic, fn=(^), prec=7,
-        ws4=true, stencil=true, geo=true, known=true, xcse=true),
-    _op("pow"; arity=2:2,            category=:arithmetic, fn=(^),
-        ws4=true, stencil=true, xcse=true),
-    _op("neg"; arity=1:1,            category=:arithmetic, fn=(-),
-        ws4=true, stencil=true),
+    _op(
+        "+"; arity = 1:typemax(Int), category = :arithmetic, fn = (+), prec = 4,
+        ws4 = true, stencil = true, geo = true, known = true
+    ),
+    _op(
+        "-"; arity = 1:2, category = :arithmetic, fn = (-), prec = 4,
+        sep = (" - ", " − ", " - "),
+        ws4 = true, stencil = true, geo = true, known = true
+    ),
+    _op(
+        "*"; arity = 1:typemax(Int), category = :arithmetic, fn = (*), prec = 5,
+        sep = (" * ", "·", " \\cdot "),
+        ws4 = true, stencil = true, geo = true, known = true
+    ),
+    _op(
+        "/"; arity = 2:2, category = :arithmetic, fn = (/), prec = 5,
+        ws4 = true, stencil = true, geo = true, known = true
+    ),
+    _op(
+        "^"; arity = 2:2, category = :arithmetic, fn = (^), prec = 7,
+        ws4 = true, stencil = true, geo = true, known = true, xcse = true
+    ),
+    _op(
+        "pow"; arity = 2:2, category = :arithmetic, fn = (^),
+        ws4 = true, stencil = true, xcse = true
+    ),
+    _op(
+        "neg"; arity = 1:1, category = :arithmetic, fn = (-),
+        ws4 = true, stencil = true
+    ),
 
     # ── Comparisons → 1.0/0.0 (spec comparison semantics) ──
-    _op("<";  arity=2:2, category=:comparison, fn=(<),  dimclass=:comparison,
-        prec=3, stencil=true, geo=true, known=true),
-    _op("<="; arity=2:2, category=:comparison, fn=(<=), dimclass=:comparison,
-        prec=3, sep=(" <= ",  " ≤ ", " \\leq "),
-        stencil=true, geo=true, known=true),
-    _op(">";  arity=2:2, category=:comparison, fn=(>),  dimclass=:comparison,
-        prec=3, stencil=true, geo=true, known=true),
-    _op(">="; arity=2:2, category=:comparison, fn=(>=), dimclass=:comparison,
-        prec=3, sep=(" >= ",  " ≥ ", " \\geq "),
-        stencil=true, geo=true, known=true),
-    _op("=="; arity=2:2, category=:comparison, fn=(==), dimclass=:comparison,
-        prec=3, sep=(" == ",  " = ", " = "),
-        stencil=true, geo=true, known=true),
-    _op("!="; arity=2:2, category=:comparison, fn=(!=), dimclass=:comparison,
-        prec=3, sep=(" != ",  " ≠ ", " \\neq "),
-        stencil=true, geo=true, known=true),
+    _op(
+        "<"; arity = 2:2, category = :comparison, fn = (<), dimclass = :comparison,
+        prec = 3, stencil = true, geo = true, known = true
+    ),
+    _op(
+        "<="; arity = 2:2, category = :comparison, fn = (<=), dimclass = :comparison,
+        prec = 3, sep = (" <= ", " ≤ ", " \\leq "),
+        stencil = true, geo = true, known = true
+    ),
+    _op(
+        ">"; arity = 2:2, category = :comparison, fn = (>), dimclass = :comparison,
+        prec = 3, stencil = true, geo = true, known = true
+    ),
+    _op(
+        ">="; arity = 2:2, category = :comparison, fn = (>=), dimclass = :comparison,
+        prec = 3, sep = (" >= ", " ≥ ", " \\geq "),
+        stencil = true, geo = true, known = true
+    ),
+    _op(
+        "=="; arity = 2:2, category = :comparison, fn = (==), dimclass = :comparison,
+        prec = 3, sep = (" == ", " = ", " = "),
+        stencil = true, geo = true, known = true
+    ),
+    _op(
+        "!="; arity = 2:2, category = :comparison, fn = (!=), dimclass = :comparison,
+        prec = 3, sep = (" != ", " ≠ ", " \\neq "),
+        stencil = true, geo = true, known = true
+    ),
 
     # ── Logical (n-ary and/or fold in child order; no single Base scalar fn —
     #    the arms carry the 0.0/1.0 truth-value convention) ──
@@ -212,19 +244,29 @@ const _OP_TABLE = _OpSpec[
     # binning body (the shape the pushdown's own conformance corpus uses) could
     # not compile at all. The runtime ladder these lower to already has the
     # `:and` / `:or` / `:not` arms; only the vocabulary gate was missing.
-    _op("and"; arity=2:typemax(Int), category=:logical, dimclass=:boolean,
-        prec=2, sep=(" and ", " ∧ ", " \\land "), stencil=true, geo=true),
-    _op("or";  arity=2:typemax(Int), category=:logical, dimclass=:boolean,
-        prec=1, sep=(" or ",  " ∨ ", " \\lor "), stencil=true, geo=true),
-    _op("not"; arity=1:1,            category=:logical, dimclass=:boolean,
-        prec=6, stencil=true, geo=true),  # prec 6: unary, binds tighter than infix
+    _op(
+        "and"; arity = 2:typemax(Int), category = :logical, dimclass = :boolean,
+        prec = 2, sep = (" and ", " ∧ ", " \\land "), stencil = true, geo = true
+    ),
+    _op(
+        "or"; arity = 2:typemax(Int), category = :logical, dimclass = :boolean,
+        prec = 1, sep = (" or ", " ∨ ", " \\lor "), stencil = true, geo = true
+    ),
+    _op(
+        "not"; arity = 1:1, category = :logical, dimclass = :boolean,
+        prec = 6, stencil = true, geo = true
+    ),  # prec 6: unary, binds tighter than infix
 
     # ── Control (`ifelse` tests its condition `!= 0`; `Pre` is the MTK
     #    previous-value marker, a pass-through on the tree-walk path) ──
-    _op("ifelse"; arity=3:3, category=:control, ws4=true,
-        stencil=true, geo=true, known=true, builtin=true),
-    _op("Pre";    arity=1:1, category=:control, stencil=true, known=true,
-        builtin=true),
+    _op(
+        "ifelse"; arity = 3:3, category = :control, ws4 = true,
+        stencil = true, geo = true, known = true, builtin = true
+    ),
+    _op(
+        "Pre"; arity = 1:1, category = :control, stencil = true, known = true,
+        builtin = true
+    ),
 
     # ── Elementary functions, in `_eval_node_op` / `_eval_acc_op` ladder-arm
     #    order (the derived `_UNARY_ELEMENTWISE_OPS` table preserves this
@@ -235,74 +277,120 @@ const _OP_TABLE = _OpSpec[
     #    one, transcendentals demand a dimensionless argument; `sqrt` (halves
     #    its dimension) and the dimension-preserving `abs`/`sign`/`floor`/
     #    `ceil`/`min`/`max` have bespoke rules, not a class (units.jl).
-    _op("sin";   arity=1:1, category=:elementary, fn=sin,
-        dimclass=:circular, builtin=true,
-        ws4=true, stencil=true, geo=true, known=true, xcse=true),
-    _op("cos";   arity=1:1, category=:elementary, fn=cos,
-        dimclass=:circular, builtin=true,
-        ws4=true, stencil=true, geo=true, known=true, xcse=true),
-    _op("tan";   arity=1:1, category=:elementary, fn=tan,
-        dimclass=:circular, builtin=true,
-        ws4=true, stencil=true, known=true, xcse=true),
-    _op("asin";  arity=1:1, category=:elementary, fn=asin,
-        dimclass=:inverse_circular, builtin=true,
-        ws4=true, stencil=true, known=true, xcse=true),
-    _op("acos";  arity=1:1, category=:elementary, fn=acos,
-        dimclass=:inverse_circular, builtin=true,
-        ws4=true, stencil=true, known=true, xcse=true),
-    _op("atan";  arity=1:2, category=:elementary, fn=atan,
-        dimclass=:inverse_circular, builtin=true,
-        ws4=true, stencil=true, known=true, xcse=true),
-    _op("atan2"; arity=2:2, category=:elementary, fn=atan,
-        dimclass=:inverse_circular, builtin=true,
-        stencil=true, geo=true, xcse=true),
-    _op("sinh";  arity=1:1, category=:elementary, fn=sinh,
-        dimclass=:transcendental, builtin=true,
-        ws4=true, stencil=true, known=true, xcse=true),
-    _op("cosh";  arity=1:1, category=:elementary, fn=cosh,
-        dimclass=:transcendental, builtin=true,
-        ws4=true, stencil=true, known=true, xcse=true),
-    _op("tanh";  arity=1:1, category=:elementary, fn=tanh,
-        dimclass=:transcendental, builtin=true,
-        ws4=true, stencil=true, known=true, xcse=true),
-    _op("asinh"; arity=1:1, category=:elementary, fn=asinh,
-        dimclass=:transcendental, builtin=true, stencil=true, xcse=true),
-    _op("acosh"; arity=1:1, category=:elementary, fn=acosh,
-        dimclass=:transcendental, builtin=true, stencil=true, xcse=true),
-    _op("atanh"; arity=1:1, category=:elementary, fn=atanh,
-        dimclass=:transcendental, builtin=true, stencil=true, xcse=true),
-    _op("exp";   arity=1:1, category=:elementary, fn=exp,
-        dimclass=:transcendental, builtin=true,
-        ws4=true, stencil=true, known=true, xcse=true),
-    _op("log";   arity=1:1, category=:elementary, fn=log,
-        dimclass=:transcendental, builtin=true,
-        ws4=true, stencil=true, known=true, xcse=true),
-    _op("log10"; arity=1:1, category=:elementary, fn=log10,
-        dimclass=:transcendental, builtin=true,
-        ws4=true, stencil=true, known=true, xcse=true),
-    _op("sqrt";  arity=1:1, category=:elementary, fn=sqrt, builtin=true,
-        ws4=true, stencil=true, geo=true, known=true, xcse=true),
-    _op("abs";   arity=1:1, category=:elementary, fn=abs, builtin=true,
-        ws4=true, stencil=true, geo=true, known=true),
-    _op("sign";  arity=1:1, category=:elementary, fn=sign, builtin=true,
-        ws4=true, stencil=true),
-    _op("floor"; arity=1:1, category=:elementary, fn=floor, builtin=true,
-        ws4=true, stencil=true, geo=true),
-    _op("ceil";  arity=1:1, category=:elementary, fn=ceil, builtin=true,
-        ws4=true, stencil=true, geo=true),
-    _op("min"; arity=2:typemax(Int), category=:elementary, fn=min,
-        builtin=true, ws4=true, stencil=true, geo=true, known=true),
-    _op("max"; arity=2:typemax(Int), category=:elementary, fn=max,
-        builtin=true, ws4=true, stencil=true, geo=true, known=true),
+    _op(
+        "sin"; arity = 1:1, category = :elementary, fn = sin,
+        dimclass = :circular, builtin = true,
+        ws4 = true, stencil = true, geo = true, known = true, xcse = true
+    ),
+    _op(
+        "cos"; arity = 1:1, category = :elementary, fn = cos,
+        dimclass = :circular, builtin = true,
+        ws4 = true, stencil = true, geo = true, known = true, xcse = true
+    ),
+    _op(
+        "tan"; arity = 1:1, category = :elementary, fn = tan,
+        dimclass = :circular, builtin = true,
+        ws4 = true, stencil = true, known = true, xcse = true
+    ),
+    _op(
+        "asin"; arity = 1:1, category = :elementary, fn = asin,
+        dimclass = :inverse_circular, builtin = true,
+        ws4 = true, stencil = true, known = true, xcse = true
+    ),
+    _op(
+        "acos"; arity = 1:1, category = :elementary, fn = acos,
+        dimclass = :inverse_circular, builtin = true,
+        ws4 = true, stencil = true, known = true, xcse = true
+    ),
+    _op(
+        "atan"; arity = 1:2, category = :elementary, fn = atan,
+        dimclass = :inverse_circular, builtin = true,
+        ws4 = true, stencil = true, known = true, xcse = true
+    ),
+    _op(
+        "atan2"; arity = 2:2, category = :elementary, fn = atan,
+        dimclass = :inverse_circular, builtin = true,
+        stencil = true, geo = true, xcse = true
+    ),
+    _op(
+        "sinh"; arity = 1:1, category = :elementary, fn = sinh,
+        dimclass = :transcendental, builtin = true,
+        ws4 = true, stencil = true, known = true, xcse = true
+    ),
+    _op(
+        "cosh"; arity = 1:1, category = :elementary, fn = cosh,
+        dimclass = :transcendental, builtin = true,
+        ws4 = true, stencil = true, known = true, xcse = true
+    ),
+    _op(
+        "tanh"; arity = 1:1, category = :elementary, fn = tanh,
+        dimclass = :transcendental, builtin = true,
+        ws4 = true, stencil = true, known = true, xcse = true
+    ),
+    _op(
+        "asinh"; arity = 1:1, category = :elementary, fn = asinh,
+        dimclass = :transcendental, builtin = true, stencil = true, xcse = true
+    ),
+    _op(
+        "acosh"; arity = 1:1, category = :elementary, fn = acosh,
+        dimclass = :transcendental, builtin = true, stencil = true, xcse = true
+    ),
+    _op(
+        "atanh"; arity = 1:1, category = :elementary, fn = atanh,
+        dimclass = :transcendental, builtin = true, stencil = true, xcse = true
+    ),
+    _op(
+        "exp"; arity = 1:1, category = :elementary, fn = exp,
+        dimclass = :transcendental, builtin = true,
+        ws4 = true, stencil = true, known = true, xcse = true
+    ),
+    _op(
+        "log"; arity = 1:1, category = :elementary, fn = log,
+        dimclass = :transcendental, builtin = true,
+        ws4 = true, stencil = true, known = true, xcse = true
+    ),
+    _op(
+        "log10"; arity = 1:1, category = :elementary, fn = log10,
+        dimclass = :transcendental, builtin = true,
+        ws4 = true, stencil = true, known = true, xcse = true
+    ),
+    _op(
+        "sqrt"; arity = 1:1, category = :elementary, fn = sqrt, builtin = true,
+        ws4 = true, stencil = true, geo = true, known = true, xcse = true
+    ),
+    _op(
+        "abs"; arity = 1:1, category = :elementary, fn = abs, builtin = true,
+        ws4 = true, stencil = true, geo = true, known = true
+    ),
+    _op(
+        "sign"; arity = 1:1, category = :elementary, fn = sign, builtin = true,
+        ws4 = true, stencil = true
+    ),
+    _op(
+        "floor"; arity = 1:1, category = :elementary, fn = floor, builtin = true,
+        ws4 = true, stencil = true, geo = true
+    ),
+    _op(
+        "ceil"; arity = 1:1, category = :elementary, fn = ceil, builtin = true,
+        ws4 = true, stencil = true, geo = true
+    ),
+    _op(
+        "min"; arity = 2:typemax(Int), category = :elementary, fn = min,
+        builtin = true, ws4 = true, stencil = true, geo = true, known = true
+    ),
+    _op(
+        "max"; arity = 2:typemax(Int), category = :elementary, fn = max,
+        builtin = true, ws4 = true, stencil = true, geo = true, known = true
+    ),
 
     # ── Niladic constants (`true`/`false` appear only in the geometry-setup
     #    vocabulary — `_geo_compile` folds them to literals; the scalar
     #    ladders don't speak them) ──
-    _op("pi";    arity=0:0, category=:constant, stencil=true),
-    _op("π";     arity=0:0, category=:constant, stencil=true),
-    _op("e";     arity=0:0, category=:constant, stencil=true),
-    _op("true";  arity=0:0, category=:constant, geo=true),
-    _op("false"; arity=0:0, category=:constant, geo=true),
+    _op("pi"; arity = 0:0, category = :constant, stencil = true),
+    _op("π"; arity = 0:0, category = :constant, stencil = true),
+    _op("e"; arity = 0:0, category = :constant, stencil = true),
+    _op("true"; arity = 0:0, category = :constant, geo = true),
+    _op("false"; arity = 0:0, category = :constant, geo = true),
 
     # ── Closed functions & the retired v0.2.x closure marker (esm-spec §9.2) ──
     #    `fn` is NOT `cse_opaque`: a closed-function call is a pure, deterministic
@@ -313,12 +401,12 @@ const _OP_TABLE = _OpSpec[
     #    `interp.*` lookup (FastJX actinic-flux bands over `Solar.cos_zenith`) was
     #    re-walked once per occurrence — see `_CSE_OPAQUE_OPS` (tree_walk/compile.jl).
     #    `call` stays opaque: it was removed in v0.3.0 and always throws at compile.
-    _op("fn";   category=:function, known=true, xcse=true),
-    _op("call"; category=:function, cse=true, known=true),
+    _op("fn"; category = :function, known = true, xcse = true),
+    _op("call"; category = :function, cse = true, known = true),
 
     # ── Const data / enum markers ──
-    _op("const"; category=:data, cse=true),
-    _op("enum";  category=:data, cse=true),
+    _op("const"; category = :data, cse = true),
+    _op("enum"; category = :data, cse = true),
 
     # ── Calculus / initial-condition markers (resolved or rejected at build
     #    time; never scalar-evaluated) ──
@@ -355,43 +443,49 @@ const _OP_TABLE = _OpSpec[
     #    of the scheme, not of the format — and they carry no evaluator
     #    semantics, since a spatial `D` is never evaluated directly. Declaring
     #    the range makes that union EXPLICIT instead of leaving it to `nothing`.
-    _op("D";         arity=1:typemax(Int), category=:calculus, cse=true, known=true),
-    _op("ic";        category=:calculus, cse=true, known=true),
-    _op("grad";      category=:calculus),
-    _op("div";       category=:calculus),
-    _op("laplacian"; category=:calculus),
+    _op("D"; arity = 1:typemax(Int), category = :calculus, cse = true, known = true),
+    _op("ic"; category = :calculus, cse = true, known = true),
+    _op("grad"; category = :calculus),
+    _op("div"; category = :calculus),
+    _op("laplacian"; category = :calculus),
 
     # ── Array producers / gathers / reshapes ──
-    _op("index";     category=:array, cse=true, geo=true, known=true,
-        selfidx=true),
-    _op("makearray"; category=:array, cse=true, known=true,
-        arrprod=true, selfidx=true),
-    _op("broadcast"; category=:array, cse=true, known=true),
-    _op("reshape";   category=:array, cse=true, known=true),
-    _op("transpose"; category=:array, cse=true, known=true),
-    _op("concat";    category=:array, cse=true, known=true),
+    _op(
+        "index"; category = :array, cse = true, geo = true, known = true,
+        selfidx = true
+    ),
+    _op(
+        "makearray"; category = :array, cse = true, known = true,
+        arrprod = true, selfidx = true
+    ),
+    _op("broadcast"; category = :array, cse = true, known = true),
+    _op("reshape"; category = :array, cse = true, known = true),
+    _op("transpose"; category = :array, cse = true, known = true),
+    _op("concat"; category = :array, cse = true, known = true),
 
     # ── Functional Aggregate Query (semiring FAQ; RFC §5.3/§7.2) ──
-    _op("faq";       category=:aggregate, cse=true, geo=true, known=true,
-        arrprod=true, selfidx=true),
+    _op(
+        "faq"; category = :aggregate, cse = true, geo = true, known = true,
+        arrprod = true, selfidx = true
+    ),
 
     # ── Geometry kernel leaves (RFC §8.1) & value invention (RFC §5.5) ──
-    _op("intersect_polygon";         category=:geometry, geo=true),
-    _op("polygon_intersection_area"; category=:geometry, geo=true),
-    _op("skolem";                    category=:value_invention, geo=true),
+    _op("intersect_polygon"; category = :geometry, geo = true),
+    _op("polygon_intersection_area"; category = :geometry, geo = true),
+    _op("skolem"; category = :value_invention, geo = true),
     # The rest of the §4.2 value-invention family. Registered so they are read as
     # evaluable-core ops rather than open-tier rewrite targets (`_op_in_T`): the
     # tree-walk evaluator has no rule for any of them, so one reaching the build
     # is refused with `unevaluable_operator`, not `unlowered_operator`.
-    _op("rank";                      category=:value_invention),
-    _op("distinct";                  category=:value_invention),
-    _op("argmin";                    category=:value_invention),
-    _op("argmax";                    category=:value_invention),
+    _op("rank"; category = :value_invention),
+    _op("distinct"; category = :value_invention),
+    _op("argmin"; category = :value_invention),
+    _op("argmax"; category = :value_invention),
 ]
 
 # Name → spec lookup (load-time derived; ops are unique by construction —
 # duplicate names would silently shadow, so the ctor loop asserts uniqueness).
-const _OP_INDEX = let idx = Dict{String,_OpSpec}()
+const _OP_INDEX = let idx = Dict{String, _OpSpec}()
     for s in _OP_TABLE
         haskey(idx, s.name) && error("op_registry: duplicate op '$(s.name)'")
         idx[s.name] = s
@@ -416,8 +510,12 @@ Called once per derived const at include time; never on a hot path.
 """
 function _ops_with(flag::Symbol)::Set{String}
     flag in _OP_FLAG_NAMES ||
-        throw(ArgumentError("op_registry: unknown flag $flag (expected one of " *
-                            "$(join(_OP_FLAG_NAMES, ", "))"))
+        throw(
+        ArgumentError(
+            "op_registry: unknown flag $flag (expected one of " *
+                "$(join(_OP_FLAG_NAMES, ", "))"
+        )
+    )
     return Set{String}(s.name for s in _OP_TABLE if getfield(s, flag))
 end
 
@@ -446,8 +544,12 @@ never on a hot path.
 """
 function _ops_with_dim_class(class::Symbol)::Set{String}
     class in _DIM_CLASSES ||
-        throw(ArgumentError("op_registry: unknown dim class $class (expected " *
-                            "one of $(join(_DIM_CLASSES, ", "))"))
+        throw(
+        ArgumentError(
+            "op_registry: unknown dim class $class (expected " *
+                "one of $(join(_DIM_CLASSES, ", "))"
+        )
+    )
     return Set{String}(s.name for s in _OP_TABLE if s.dim_class === class)
 end
 
@@ -520,24 +622,30 @@ cross-binding `invalid_broadcast_fn` registered in esm-spec §9.6.6.
 """
 function _broadcast_fn_problem(fn, nargs::Int)
     if fn === nothing || (fn isa AbstractString && isempty(fn))
-        return (kind = :missing,
-                message = "'broadcast' requires an 'fn' field naming a scalar " *
-                          "operator (esm-spec §4.3.4)")
+        return (
+            kind = :missing,
+            message = "'broadcast' requires an 'fn' field naming a scalar " *
+                "operator (esm-spec §4.3.4)",
+        )
     end
     name = String(fn)
     spec = _op_spec(name)
     if spec === nothing || !(spec.category in _SCALAR_OP_CATEGORIES)
-        return (kind = spec === nothing ? :unknown : :non_scalar,
-                message = "'broadcast' fn '$name' does not name a scalar " *
-                          "operator (esm-spec §4.3.4)")
+        return (
+            kind = spec === nothing ? :unknown : :non_scalar,
+            message = "'broadcast' fn '$name' does not name a scalar " *
+                "operator (esm-spec §4.3.4)",
+        )
     end
     ar = spec.arity
     if ar !== nothing && !(nargs in ar)
         want = first(ar) == last(ar) ? "$(first(ar))" :
-               (last(ar) == typemax(Int) ? "$(first(ar))+" : "$(first(ar))-$(last(ar))")
-        return (kind = :arity,
-                message = "'broadcast' fn '$name' takes $want operand(s) but " *
-                          "the node has $nargs (esm-spec §4.3.4)")
+            (last(ar) == typemax(Int) ? "$(first(ar))+" : "$(first(ar))-$(last(ar))")
+        return (
+            kind = :arity,
+            message = "'broadcast' fn '$name' takes $want operand(s) but " *
+                "the node has $nargs (esm-spec §4.3.4)",
+        )
     end
     return nothing
 end
@@ -560,8 +668,9 @@ added to `_OP_TABLE` grows every arm at once.
 """
 const _UNARY_ELEMENTWISE_OPS = Tuple(
     (name = s.name, sym = Symbol(s.name), fn = s.scalar_fn::Function)
-    for s in _OP_TABLE
-    if s.category === :elementary && s.arity == 1:1 && s.scalar_fn !== nothing)
+        for s in _OP_TABLE
+        if s.category === :elementary && s.arity == 1:1 && s.scalar_fn !== nothing
+)
 
 # The row shape shared by the three generated-ladder tables below. `sym` is the
 # op symbol the ladder arm MATCHES (`OpExpr.op` as a Symbol); `fnsym` is the
@@ -572,8 +681,10 @@ const _UNARY_ELEMENTWISE_OPS = Tuple(
 # / broadcast fusion in the access-kernel/oop consumers is unchanged. `fn` is kept
 # so load-time guards can assert `fnsym` still resolves to it in module scope.
 _ladder_row(s::_OpSpec) =
-    (name = s.name, sym = Symbol(s.name),
-     fnsym = nameof(s.scalar_fn::Function), fn = s.scalar_fn::Function)
+    (
+    name = s.name, sym = Symbol(s.name),
+    fnsym = nameof(s.scalar_fn::Function), fn = s.scalar_fn::Function,
+)
 
 """
     _COMPARISON_ELEMENTWISE_OPS
@@ -587,7 +698,8 @@ ternary, `@.` blend, broadcast blend) lives with each generator. Consumers:
 `_comparison` (scalar_ops.jl), `_eval_acc_comparison` (access_kernel.jl).
 """
 const _COMPARISON_ELEMENTWISE_OPS = Tuple(
-    _ladder_row(s) for s in _OP_TABLE if s.category === :comparison)
+    _ladder_row(s) for s in _OP_TABLE if s.category === :comparison
+)
 
 """
     _BINARY_ELEMENTWISE_OPS
@@ -604,8 +716,9 @@ did. Same four consumers as [`_COMPARISON_ELEMENTWISE_OPS`](@ref).
 """
 const _BINARY_ELEMENTWISE_OPS = Tuple(
     _ladder_row(s) for s in _OP_TABLE
-    if (s.category === :arithmetic || s.category === :elementary) &&
-       s.arity == 2:2 && s.scalar_fn !== nothing)
+        if (s.category === :arithmetic || s.category === :elementary) &&
+        s.arity == 2:2 && s.scalar_fn !== nothing
+)
 
 """
     _NARY_MINMAX_OPS
@@ -619,7 +732,8 @@ four consumers as [`_COMPARISON_ELEMENTWISE_OPS`](@ref).
 """
 const _NARY_MINMAX_OPS = Tuple(
     _ladder_row(s) for s in _OP_TABLE
-    if s.category === :elementary && s.arity == 2:typemax(Int))
+        if s.category === :elementary && s.arity == 2:typemax(Int)
+)
 
 # Load-time guard for the symbol-spliced generated arms: each recorded function
 # name must resolve, in THIS module's scope, to the registry's recorded
@@ -629,7 +743,9 @@ const _NARY_MINMAX_OPS = Tuple(
 for _t in (_COMPARISON_ELEMENTWISE_OPS, _BINARY_ELEMENTWISE_OPS, _NARY_MINMAX_OPS)
     for _row in _t
         getfield(@__MODULE__, _row.fnsym) === _row.fn ||
-            error("op_registry: generated-ladder op '$(_row.name)' does not " *
-                  "resolve to its recorded scalar function in module scope")
+            error(
+            "op_registry: generated-ladder op '$(_row.name)' does not " *
+                "resolve to its recorded scalar function in module scope"
+        )
     end
 end

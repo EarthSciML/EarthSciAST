@@ -36,20 +36,22 @@ const _CLS = ClassificationConformanceAdapter
 
         for (mname, wmodel) in pairs(want)
             gmodel = got[String(mname)]
-            for key in ("ode_states", "observed_unknowns", "algebraic_unknowns",
-                        "brownian_parameters", "discrete_parameters",
-                        "sampled_parameters", "constant_parameters")
+            for key in (
+                    "ode_states", "observed_unknowns", "algebraic_unknowns",
+                    "brownian_parameters", "discrete_parameters",
+                    "sampled_parameters", "constant_parameters",
+                )
                 @test (String(mname), key, gmodel[key]) ==
-                      (String(mname), key, String[String(x) for x in wmodel[key]])
+                    (String(mname), key, String[String(x) for x in wmodel[key]])
             end
             @test (String(mname), gmodel["system_kind"]) ==
-                  (String(mname), String(wmodel["system_kind"]))
+                (String(mname), String(wmodel["system_kind"]))
             # `declared_system_kind` is absent from a golden that does not pin
             # it; where present, `null` means the model omits the field.
             if haskey(wmodel, "declared_system_kind")
                 w = wmodel["declared_system_kind"]
                 @test gmodel["declared_system_kind"] ==
-                      (w === nothing ? nothing : String(w))
+                    (w === nothing ? nothing : String(w))
             end
         end
     end
@@ -81,8 +83,10 @@ const _CLS = ClassificationConformanceAdapter
         # equation as a `faq` whose body is `D(index(u,i))`. A binding
         # that only recognises a bare `D(u)` LHS misses the state entirely and
         # then reports every unknown as algebraic.
-        path = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid", "cadence",
-                        "observed_leaf_seeds.esm")
+        path = joinpath(
+            TESTUTILS_REPO_ROOT, "tests", "valid", "cadence",
+            "observed_leaf_seeds.esm"
+        )
         if _require_fixture(path)
             m = EarthSciAST.load_path(path).models["ObservedLeafSeeds"]
             @test ode_states(m) == ["u"]
@@ -130,7 +134,8 @@ const _CLS = ClassificationConformanceAdapter
     # the mismatch itself is still a `validate` finding.
     @testset "declared / derived / effective system kind" begin
         variants = EarthSciAST.load_path(
-            joinpath(_CLS_DIR, "fixtures", "system_kind_variants.esm"))
+            joinpath(_CLS_DIR, "fixtures", "system_kind_variants.esm")
+        )
 
         # `Declared` carries a field that AGREES with the derivation.
         declared_model = variants.models["Declared"]
@@ -146,15 +151,19 @@ const _CLS = ClassificationConformanceAdapter
 
         # A CONTRADICTING field: `declared` and `system_kind` disagree, and
         # `effective` takes the declaration — the author committed to it.
-        wrong = Model(sde.variables, sde.equations; system_kind="ode")
+        wrong = Model(sde.variables, sde.equations; system_kind = "ode")
         @test declared_system_kind(wrong) == "ode"
         @test system_kind(wrong) == "sde"
         @test effective_system_kind(wrong) == "ode"
 
         # The disagreement is reported by `validate`, which is the channel it
         # was always reported through.
-        errs = validate_structural(EsmFile("1.0.0", Metadata("M");
-                                           models=Dict("Wrong" => wrong)))
+        errs = validate_structural(
+            EsmFile(
+                "1.0.0", Metadata("M");
+                models = Dict("Wrong" => wrong)
+            )
+        )
         @test any(e -> e.error_type == "system_kind_mismatch", errs)
         mism = only(filter(e -> e.error_type == "system_kind_mismatch", errs))
         @test mism.details["declared"] == "ode"
@@ -168,7 +177,8 @@ const _CLS = ClassificationConformanceAdapter
     # `unknown_names` / `parameter_names` stay as exported aliases.
     @testset "unknowns / parameters and their *_names aliases" begin
         variants = EarthSciAST.load_path(
-            joinpath(_CLS_DIR, "fixtures", "system_kind_variants.esm"))
+            joinpath(_CLS_DIR, "fixtures", "system_kind_variants.esm")
+        )
         m = variants.models["Sde"]
         @test unknowns(m) == unknown_names(m)
         @test parameters(m) == parameter_names(m)
@@ -180,7 +190,8 @@ const _CLS = ClassificationConformanceAdapter
 
     @testset "a distribution alone is NOT Brownian; an update alone is not either" begin
         m = EarthSciAST.load_path(
-            joinpath(_CLS_DIR, "fixtures", "parameter_cadences.esm")).models["M"]
+            joinpath(_CLS_DIR, "fixtures", "parameter_cadences.esm")
+        ).models["M"]
         # The two easy mistakes the fixture is built to catch.
         @test !("p_sampled" in brownian_parameters(m))
         @test !("p_uniform_sampled" in brownian_parameters(m))
@@ -222,18 +233,20 @@ const _CLS_IDX_DIR =
 
         for (mname, wmodel) in pairs(want)
             gmodel = got[String(mname)]
-            for key in ("ode_states", "observed_unknowns", "algebraic_unknowns",
-                        "brownian_parameters", "discrete_parameters",
-                        "sampled_parameters", "constant_parameters")
+            for key in (
+                    "ode_states", "observed_unknowns", "algebraic_unknowns",
+                    "brownian_parameters", "discrete_parameters",
+                    "sampled_parameters", "constant_parameters",
+                )
                 @test (String(mname), key, gmodel[key]) ==
-                      (String(mname), key, String[String(x) for x in wmodel[key]])
+                    (String(mname), key, String[String(x) for x in wmodel[key]])
             end
             @test (String(mname), gmodel["system_kind"]) ==
-                  (String(mname), String(wmodel["system_kind"]))
+                (String(mname), String(wmodel["system_kind"]))
             if haskey(wmodel, "declared_system_kind")
                 w = wmodel["declared_system_kind"]
                 @test gmodel["declared_system_kind"] ==
-                      (w === nothing ? nothing : String(w))
+                    (w === nothing ? nothing : String(w))
             end
         end
     end
@@ -250,10 +263,13 @@ const _CLS_IDX_DIR =
         if haskey(golden, "flatten_buckets")
             want = golden["flatten_buckets"]
             flat = EarthSciAST.flatten(
-                EarthSciAST.load_path(joinpath(_CLS_IDX_DIR, String(fx["fixture"]))))
-            for (key, got) in (("state_variables", collect(keys(flat.state_variables))),
-                               ("observed_variables", collect(keys(flat.observed_variables))),
-                               ("algebraic_variables", collect(keys(flat.algebraic_variables))))
+                EarthSciAST.load_path(joinpath(_CLS_IDX_DIR, String(fx["fixture"])))
+            )
+            for (key, got) in (
+                    ("state_variables", collect(keys(flat.state_variables))),
+                    ("observed_variables", collect(keys(flat.observed_variables))),
+                    ("algebraic_variables", collect(keys(flat.algebraic_variables))),
+                )
                 @test (key, got) == (key, String[String(x) for x in want[key]])
             end
         end
@@ -265,7 +281,8 @@ const _CLS_IDX_DIR =
     # `ode_states` and calls them observed.
     @testset "an aggregate over a D stays a TENDENCY, not a definition" begin
         m = EarthSciAST.load_path(
-            joinpath(_CLS_IDX_DIR, "fixtures", "observed_indexed_lhs.esm")).models["M"]
+            joinpath(_CLS_IDX_DIR, "fixtures", "observed_indexed_lhs.esm")
+        ).models["M"]
         @test ode_states(m) == ["u", "v"]
         @test observed_unknowns(m) == ["sc", "wb", "wf", "ws"]
         @test algebraic_unknowns(m) == ["im"]

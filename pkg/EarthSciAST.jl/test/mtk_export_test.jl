@@ -17,51 +17,68 @@ const MTK = ModelingToolkit
 Construct a 3-equation toy ODESystem via MTK macros (analogous to what a
 per-model migration would touch). Returns the parent system.
 """
-function _toy_ode_system(name::Symbol=:ToyDecay)
+function _toy_ode_system(name::Symbol = :ToyDecay)
     # Build an ESM Model first and lower it to MTK.System — same approach
     # as the existing real_mtk_integration_test and simulate_e2e_test. MTK
     # v11 doesn't accept the short `System(eqs, iv; defaults=...)` path.
-    vars = Dict{String,ESM.ModelVariable}(
-        "x" => ESM.ModelVariable(ESM.UnknownVariable; default=1.0),
-        "y" => ESM.ModelVariable(ESM.UnknownVariable; default=0.0),
-        "z" => ESM.ModelVariable(ESM.UnknownVariable; default=0.0),
-        "k1" => ESM.ModelVariable(ESM.ParameterVariable; default=0.5),
-        "k2" => ESM.ModelVariable(ESM.ParameterVariable; default=0.3),
-        "k3" => ESM.ModelVariable(ESM.ParameterVariable; default=0.1),
+    vars = Dict{String, ESM.ModelVariable}(
+        "x" => ESM.ModelVariable(ESM.UnknownVariable; default = 1.0),
+        "y" => ESM.ModelVariable(ESM.UnknownVariable; default = 0.0),
+        "z" => ESM.ModelVariable(ESM.UnknownVariable; default = 0.0),
+        "k1" => ESM.ModelVariable(ESM.ParameterVariable; default = 0.5),
+        "k2" => ESM.ModelVariable(ESM.ParameterVariable; default = 0.3),
+        "k3" => ESM.ModelVariable(ESM.ParameterVariable; default = 0.1),
     )
     eqs = ESM.Equation[
         ESM.Equation(
-            OpExpr("D", ESM.ASTExpr[VarExpr("x")], wrt="t"),
-            OpExpr("*", ESM.ASTExpr[OpExpr("-", ESM.ASTExpr[VarExpr("k1")]),
-                                 VarExpr("x")])),
+            OpExpr("D", ESM.ASTExpr[VarExpr("x")], wrt = "t"),
+            OpExpr(
+                "*", ESM.ASTExpr[
+                    OpExpr("-", ESM.ASTExpr[VarExpr("k1")]),
+                    VarExpr("x"),
+                ]
+            )
+        ),
         ESM.Equation(
-            OpExpr("D", ESM.ASTExpr[VarExpr("y")], wrt="t"),
-            OpExpr("-", ESM.ASTExpr[
-                OpExpr("*", ESM.ASTExpr[VarExpr("k1"), VarExpr("x")]),
-                OpExpr("*", ESM.ASTExpr[VarExpr("k2"), VarExpr("y")])])),
+            OpExpr("D", ESM.ASTExpr[VarExpr("y")], wrt = "t"),
+            OpExpr(
+                "-", ESM.ASTExpr[
+                    OpExpr("*", ESM.ASTExpr[VarExpr("k1"), VarExpr("x")]),
+                    OpExpr("*", ESM.ASTExpr[VarExpr("k2"), VarExpr("y")]),
+                ]
+            )
+        ),
         ESM.Equation(
-            OpExpr("D", ESM.ASTExpr[VarExpr("z")], wrt="t"),
-            OpExpr("-", ESM.ASTExpr[
-                OpExpr("*", ESM.ASTExpr[VarExpr("k2"), VarExpr("y")]),
-                OpExpr("*", ESM.ASTExpr[VarExpr("k3"), VarExpr("z")])])),
+            OpExpr("D", ESM.ASTExpr[VarExpr("z")], wrt = "t"),
+            OpExpr(
+                "-", ESM.ASTExpr[
+                    OpExpr("*", ESM.ASTExpr[VarExpr("k2"), VarExpr("y")]),
+                    OpExpr("*", ESM.ASTExpr[VarExpr("k3"), VarExpr("z")]),
+                ]
+            )
+        ),
     ]
     model = ESM.Model(vars, eqs)
-    return MTK.System(model; name=name)
+    return MTK.System(model; name = name)
 end
 
-function _toy_catalyst_system(name::Symbol=:ToyReactions)
+function _toy_catalyst_system(name::Symbol = :ToyReactions)
     # Build via ESM → Catalyst so we don't depend on Catalyst's
     # `@species`/`@variables` re-exports (which have moved between versions).
-    species = [ESM.Species("A"; default=1.0),
-               ESM.Species("B"; default=0.0)]
-    params = [ESM.Parameter("k1", 1.0),
-              ESM.Parameter("k2", 0.5)]
+    species = [
+        ESM.Species("A"; default = 1.0),
+        ESM.Species("B"; default = 0.0),
+    ]
+    params = [
+        ESM.Parameter("k1", 1.0),
+        ESM.Parameter("k2", 0.5),
+    ]
     rxns = ESM.Reaction[
         ESM.Reaction(Dict("A" => 1), Dict("B" => 1), VarExpr("k1")),
         ESM.Reaction(Dict("B" => 1), Dict("A" => 1), VarExpr("k2")),
     ]
-    esm_rsys = ESM.ReactionSystem(species, rxns; parameters=params)
-    return Catalyst.ReactionSystem(esm_rsys; name=name)
+    esm_rsys = ESM.ReactionSystem(species, rxns; parameters = params)
+    return Catalyst.ReactionSystem(esm_rsys; name = name)
 end
 
 # ---------------------------------------------------------------------
@@ -105,13 +122,15 @@ end
 
 @testset "mtk2esm: metadata kwargs pass through" begin
     sys = _toy_ode_system(:Tagged)
-    out = mtk2esm(sys; metadata=(;
-        description="toy decay chain",
-        tags=["migration", "toy"],
-        source_ref="earthsciml/UnitTests.jl@abc123",
-        authors=["migrator"],
-        version="0.2.0",
-    ))
+    out = mtk2esm(
+        sys; metadata = (;
+            description = "toy decay chain",
+            tags = ["migration", "toy"],
+            source_ref = "earthsciml/UnitTests.jl@abc123",
+            authors = ["migrator"],
+            version = "0.2.0",
+        )
+    )
 
     @test out["metadata"]["name"] == "Tagged"
     @test out["metadata"]["description"] == "toy decay chain"
@@ -187,20 +206,28 @@ end
 
     # And confirm the full mtk2esm emits TODO_GAP in reference.notes when
     # a brownian-declared system is exported (uses the SDESystem path gap).
-    vars = Dict{String,ESM.ModelVariable}(
-        "u" => ESM.ModelVariable(ESM.UnknownVariable; default=1.0),
-        "k" => ESM.ModelVariable(ESM.ParameterVariable; default=0.5),
+    vars = Dict{String, ESM.ModelVariable}(
+        "u" => ESM.ModelVariable(ESM.UnknownVariable; default = 1.0),
+        "k" => ESM.ModelVariable(ESM.ParameterVariable; default = 0.5),
     )
     eqs = ESM.Equation[
         ESM.Equation(
-            OpExpr("D", ESM.ASTExpr[VarExpr("u")], wrt="t"),
-            OpExpr("*", ESM.ASTExpr[OpExpr("-", ESM.ASTExpr[VarExpr("k")]),
-                                 VarExpr("u")])),
+            OpExpr("D", ESM.ASTExpr[VarExpr("u")], wrt = "t"),
+            OpExpr(
+                "*", ESM.ASTExpr[
+                    OpExpr("-", ESM.ASTExpr[VarExpr("k")]),
+                    VarExpr("u"),
+                ]
+            )
+        ),
     ]
     model = ESM.Model(vars, eqs)
-    ode_sys = MTK.System(model; name=:GapSys)
-    out = mtk2esm(ode_sys; metadata=(;
-        source_ref="fake/ref", description="probe"))
+    ode_sys = MTK.System(model; name = :GapSys)
+    out = mtk2esm(
+        ode_sys; metadata = (;
+            source_ref = "fake/ref", description = "probe",
+        )
+    )
     model_dict = out["models"]["GapSys"]
     @test haskey(model_dict, "reference")
     @test occursin("source_ref: fake/ref", model_dict["reference"]["notes"])
@@ -218,7 +245,7 @@ end
     tmpfile = tempname() * ".esm"
     try
         open(tmpfile, "w") do io
-            write(io, JSON3.write(out; indent=2))
+            write(io, JSON3.write(out; indent = 2))
         end
 
         reloaded = ESM.load_path(tmpfile)
@@ -228,7 +255,7 @@ end
         @test haskey(reloaded.models, "RoundTrip")
 
         # The loaded Model must be buildable back into an MTK System.
-        rt_sys = MTK.System(reloaded.models["RoundTrip"]; name=:RoundTripBack)
+        rt_sys = MTK.System(reloaded.models["RoundTrip"]; name = :RoundTripBack)
         @test rt_sys isa MTK.AbstractSystem
 
         simp = MTK.mtkcompile(rt_sys)
@@ -249,22 +276,26 @@ end
     tmpfile = tempname() * ".esm"
     try
         open(tmpfile, "w") do io
-            write(io, JSON3.write(out; indent=2))
+            write(io, JSON3.write(out; indent = 2))
         end
         reloaded = ESM.load_path(tmpfile)
-        rt_sys = MTK.System(reloaded.models["NumRT"]; name=:NumRTBack)
+        rt_sys = MTK.System(reloaded.models["NumRT"]; name = :NumRTBack)
 
         # Simulate original
         simp_a = MTK.mtkcompile(sys)
-        prob_a = MTK.ODEProblem(simp_a, Dict{Any,Any}(), (0.0, 5.0))
-        sol_a = OrdinaryDiffEqTsit5.solve(prob_a, OrdinaryDiffEqTsit5.Tsit5();
-            reltol=1e-10, abstol=1e-12)
+        prob_a = MTK.ODEProblem(simp_a, Dict{Any, Any}(), (0.0, 5.0))
+        sol_a = OrdinaryDiffEqTsit5.solve(
+            prob_a, OrdinaryDiffEqTsit5.Tsit5();
+            reltol = 1.0e-10, abstol = 1.0e-12
+        )
 
         # Simulate round-tripped
         simp_b = MTK.mtkcompile(rt_sys)
-        prob_b = MTK.ODEProblem(simp_b, Dict{Any,Any}(), (0.0, 5.0))
-        sol_b = OrdinaryDiffEqTsit5.solve(prob_b, OrdinaryDiffEqTsit5.Tsit5();
-            reltol=1e-10, abstol=1e-12)
+        prob_b = MTK.ODEProblem(simp_b, Dict{Any, Any}(), (0.0, 5.0))
+        sol_b = OrdinaryDiffEqTsit5.solve(
+            prob_b, OrdinaryDiffEqTsit5.Tsit5();
+            reltol = 1.0e-10, abstol = 1.0e-12
+        )
 
         # Compare x, y, z at a few time points. Match unknowns by suffix.
         for state in ("x", "y", "z")
@@ -285,8 +316,10 @@ end
             @test u_a !== nothing
             @test u_b !== nothing
             for t in (0.0, 1.0, 2.5, 5.0)
-                @test isapprox(sol_a(t, idxs=u_a), sol_b(t, idxs=u_b);
-                               atol=1e-6, rtol=1e-6)
+                @test isapprox(
+                    sol_a(t, idxs = u_a), sol_b(t, idxs = u_b);
+                    atol = 1.0e-6, rtol = 1.0e-6
+                )
             end
         end
     finally
@@ -311,28 +344,32 @@ end
 
 @testset "mtk2esm: min/max operators round-trip" begin
     # Build a system with min/max clamping equations
-    vars = Dict{String,ESM.ModelVariable}(
-        "u" => ESM.ModelVariable(ESM.UnknownVariable; default=0.5),
-        "k" => ESM.ModelVariable(ESM.ParameterVariable; default=0.1),
+    vars = Dict{String, ESM.ModelVariable}(
+        "u" => ESM.ModelVariable(ESM.UnknownVariable; default = 0.5),
+        "k" => ESM.ModelVariable(ESM.ParameterVariable; default = 0.1),
     )
     # D(u) ~ -k * min(max(u, 0.0), 1.0)  — clamped decay
     eqs = ESM.Equation[
         ESM.Equation(
-            OpExpr("D", ESM.ASTExpr[VarExpr("u")], wrt="t"),
-            OpExpr("*", ESM.ASTExpr[
-                OpExpr("-", ESM.ASTExpr[VarExpr("k")]),
-                OpExpr("min", ESM.ASTExpr[
-                    OpExpr("max", ESM.ASTExpr[VarExpr("u"), NumExpr(0.0)]),
-                    NumExpr(1.0)
-                ])
-            ])
+            OpExpr("D", ESM.ASTExpr[VarExpr("u")], wrt = "t"),
+            OpExpr(
+                "*", ESM.ASTExpr[
+                    OpExpr("-", ESM.ASTExpr[VarExpr("k")]),
+                    OpExpr(
+                        "min", ESM.ASTExpr[
+                            OpExpr("max", ESM.ASTExpr[VarExpr("u"), NumExpr(0.0)]),
+                            NumExpr(1.0),
+                        ]
+                    ),
+                ]
+            )
         ),
     ]
     model = ESM.Model(vars, eqs)
-    sys = MTK.System(model; name=:MinMaxClamp)
+    sys = MTK.System(model; name = :MinMaxClamp)
 
     # Export to ESM
-    out = mtk2esm(sys; metadata=(; source_ref="test/minmax"))
+    out = mtk2esm(sys; metadata = (; source_ref = "test/minmax"))
 
     @test out["esm"] == ESM.SCHEMA_VERSION
     @test haskey(out["models"], "MinMaxClamp")
@@ -348,8 +385,10 @@ end
     eq = model_dict["equations"][1]
     rhs = eq["rhs"]
     @test rhs["op"] == "*"
-    min_idx = findfirst(a -> a isa AbstractDict && get(a, "op", nothing) == "min",
-                        rhs["args"])
+    min_idx = findfirst(
+        a -> a isa AbstractDict && get(a, "op", nothing) == "min",
+        rhs["args"]
+    )
     @test min_idx !== nothing
     min_node = rhs["args"][min_idx]
     @test min_node["args"][1]["op"] == "max"
@@ -366,7 +405,7 @@ end
             write(io, s)
         end
         reloaded = ESM.load_path(tmpfile)
-        rt_sys = MTK.System(reloaded.models["MinMaxClamp"]; name=:MinMaxClampRT)
+        rt_sys = MTK.System(reloaded.models["MinMaxClamp"]; name = :MinMaxClampRT)
         @test rt_sys isa MTK.AbstractSystem
     finally
         isfile(tmpfile) && rm(tmpfile)
@@ -375,25 +414,29 @@ end
 
 @testset "mtk2esm: n-ary min/max (nested)" begin
     # Test that min(a, b, c) is represented as nested min(a, min(b, c))
-    vars = Dict{String,ESM.ModelVariable}(
-        "x" => ESM.ModelVariable(ESM.UnknownVariable; default=1.0),
-        "y" => ESM.ModelVariable(ESM.UnknownVariable; default=2.0),
-        "z" => ESM.ModelVariable(ESM.UnknownVariable; default=3.0),
+    vars = Dict{String, ESM.ModelVariable}(
+        "x" => ESM.ModelVariable(ESM.UnknownVariable; default = 1.0),
+        "y" => ESM.ModelVariable(ESM.UnknownVariable; default = 2.0),
+        "z" => ESM.ModelVariable(ESM.UnknownVariable; default = 3.0),
     )
     # D(x) ~ -min(x, y, z) — nested min
     eqs = ESM.Equation[
         ESM.Equation(
-            OpExpr("D", ESM.ASTExpr[VarExpr("x")], wrt="t"),
-            OpExpr("-", ESM.ASTExpr[
-                OpExpr("min", ESM.ASTExpr[
-                    VarExpr("x"),
-                    OpExpr("min", ESM.ASTExpr[VarExpr("y"), VarExpr("z")])
-                ])
-            ])
+            OpExpr("D", ESM.ASTExpr[VarExpr("x")], wrt = "t"),
+            OpExpr(
+                "-", ESM.ASTExpr[
+                    OpExpr(
+                        "min", ESM.ASTExpr[
+                            VarExpr("x"),
+                            OpExpr("min", ESM.ASTExpr[VarExpr("y"), VarExpr("z")]),
+                        ]
+                    ),
+                ]
+            )
         ),
     ]
     model = ESM.Model(vars, eqs)
-    sys = MTK.System(model; name=:NaryMinMax)
+    sys = MTK.System(model; name = :NaryMinMax)
 
     out = mtk2esm(sys)
     @test out["esm"] == ESM.SCHEMA_VERSION

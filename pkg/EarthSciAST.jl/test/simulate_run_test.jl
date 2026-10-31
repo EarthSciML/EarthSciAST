@@ -17,13 +17,17 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (idempotent; standalone runs too)
 # EsmFile), so every name below is the flattener's namespaced one — `"M.y"`, not
 # `"y"`. Only a `FlattenedSystem` skips the flattener.
 @testset "esm_problem + solve run entry" begin
-    _D(v) = Dict{String,Any}("op" => "D", "args" => Any[v], "wrt" => "t")
-    _idx(v, i) = Dict{String,Any}("op" => "index", "args" => Any[v, i])
-    scalar_esm(rhs) = Dict{String,Any}(
-        "esm" => "1.0.0", "metadata" => Dict{String,Any}("name" => "S"),
-        "models" => Dict{String,Any}("M" => Dict{String,Any}(
-            "variables" => Dict{String,Any}("y" => Dict{String,Any}("type" => "unknown")),
-            "equations" => Any[Dict{String,Any}("lhs" => _D("y"), "rhs" => rhs)])))
+    _D(v) = Dict{String, Any}("op" => "D", "args" => Any[v], "wrt" => "t")
+    _idx(v, i) = Dict{String, Any}("op" => "index", "args" => Any[v, i])
+    scalar_esm(rhs) = Dict{String, Any}(
+        "esm" => "1.0.0", "metadata" => Dict{String, Any}("name" => "S"),
+        "models" => Dict{String, Any}(
+            "M" => Dict{String, Any}(
+                "variables" => Dict{String, Any}("y" => Dict{String, Any}("type" => "unknown")),
+                "equations" => Any[Dict{String, Any}("lhs" => _D("y"), "rhs" => rhs)]
+            )
+        )
+    )
 
     # Chemistry `A --k1--> B` plus an additive `couple` edge Sink.k → Chem.A folding
     # `(-k)*A` ONTO that tendency, so D(Chem.A) ~ -k1*A - k*A and A(t) = A0*exp(-(k1+k)t).
@@ -35,44 +39,76 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (idempotent; standalone runs too)
     # An empty `reactions` list would leave the RHS at 0 and make all three identical —
     # and is schema-invalid besides (`reactions` has minItems: 1).
     K1, KSINK, A0 = 0.3, 0.1, 2.0
-    additive_couple_esm() = Dict{String,Any}(
-        "esm" => "1.0.0", "metadata" => Dict{String,Any}("name" => "AdditiveCouple"),
-        "reaction_systems" => Dict{String,Any}("Chem" => Dict{String,Any}(
-            "species" => Dict{String,Any}(
-                "A" => Dict{String,Any}("default" => A0, "units" => "mol/mol"),
-                "B" => Dict{String,Any}("default" => 0.0, "units" => "mol/mol")),
-            "parameters" => Dict{String,Any}(),
-            "reactions" => Any[Dict{String,Any}(
-                "id" => "R1",
-                "substrates" => Any[Dict{String,Any}("stoichiometry" => 1, "species" => "A")],
-                "products" => Any[Dict{String,Any}("stoichiometry" => 1, "species" => "B")],
-                "rate" => K1)])),
-        "models" => Dict{String,Any}("Sink" => Dict{String,Any}(
-            "variables" => Dict{String,Any}("k" =>
-                Dict{String,Any}("type" => "parameter", "default" => KSINK)),
-            "equations" => Any[])),
-        "coupling" => Any[Dict{String,Any}(
-            "type" => "couple", "systems" => Any["Chem", "Sink"],
-            "connector" => Dict{String,Any}("equations" => Any[Dict{String,Any}(
-                "from" => "Sink.k", "to" => "Chem.A", "transform" => "additive",
-                "expression" => Dict{String,Any}("op" => "*", "args" => Any[
-                    Dict{String,Any}("op" => "-", "args" => Any["Sink.k"]),
-                    "Chem.A"]))]))])
+    additive_couple_esm() = Dict{String, Any}(
+        "esm" => "1.0.0", "metadata" => Dict{String, Any}("name" => "AdditiveCouple"),
+        "reaction_systems" => Dict{String, Any}(
+            "Chem" => Dict{String, Any}(
+                "species" => Dict{String, Any}(
+                    "A" => Dict{String, Any}("default" => A0, "units" => "mol/mol"),
+                    "B" => Dict{String, Any}("default" => 0.0, "units" => "mol/mol")
+                ),
+                "parameters" => Dict{String, Any}(),
+                "reactions" => Any[
+                    Dict{String, Any}(
+                        "id" => "R1",
+                        "substrates" => Any[Dict{String, Any}("stoichiometry" => 1, "species" => "A")],
+                        "products" => Any[Dict{String, Any}("stoichiometry" => 1, "species" => "B")],
+                        "rate" => K1
+                    ),
+                ]
+            )
+        ),
+        "models" => Dict{String, Any}(
+            "Sink" => Dict{String, Any}(
+                "variables" => Dict{String, Any}(
+                    "k" =>
+                        Dict{String, Any}("type" => "parameter", "default" => KSINK)
+                ),
+                "equations" => Any[]
+            )
+        ),
+        "coupling" => Any[
+            Dict{String, Any}(
+                "type" => "couple", "systems" => Any["Chem", "Sink"],
+                "connector" => Dict{String, Any}(
+                    "equations" => Any[
+                        Dict{String, Any}(
+                            "from" => "Sink.k", "to" => "Chem.A", "transform" => "additive",
+                            "expression" => Dict{String, Any}(
+                                "op" => "*", "args" => Any[
+                                    Dict{String, Any}("op" => "-", "args" => Any["Sink.k"]),
+                                    "Chem.A",
+                                ]
+                            )
+                        ),
+                    ]
+                )
+            ),
+        ]
+    )
 
     @testset "scalar ODE D(y)=1 over [0,2] → 2" begin
-        r = solve(ESM_S.esm_problem(scalar_esm(1.0), (0.0, 2.0);
-                           u0 = Dict("M.y" => 0.0)), Tsit5())
+        r = solve(
+            ESM_S.esm_problem(
+                scalar_esm(1.0), (0.0, 2.0);
+                u0 = Dict("M.y" => 0.0)
+            ), Tsit5()
+        )
         @test r.retcode == ReturnCode.Success && successful_retcode(r)
-        @test isapprox(r[Symbol("M.y")][end], 2.0; atol = 1e-6)
+        @test isapprox(r[Symbol("M.y")][end], 2.0; atol = 1.0e-6)
         @test length(r.t) == length(r.u)
     end
 
     @testset "parameter override D(y)=k, k=2.5, [0,3] → 7.5" begin
         esm = scalar_esm("k")
-        esm["models"]["M"]["variables"]["k"] = Dict{String,Any}("type" => "parameter", "default" => 1.0)
-        r = solve(ESM_S.esm_problem(esm, (0.0, 3.0);
-                           p = Dict("M.k" => 2.5), u0 = Dict("M.y" => 0.0)), Tsit5())
-        @test isapprox(r[Symbol("M.y")][end], 7.5; atol = 1e-5)
+        esm["models"]["M"]["variables"]["k"] = Dict{String, Any}("type" => "parameter", "default" => 1.0)
+        r = solve(
+            ESM_S.esm_problem(
+                esm, (0.0, 3.0);
+                p = Dict("M.k" => 2.5), u0 = Dict("M.y" => 0.0)
+            ), Tsit5()
+        )
+        @test isapprox(r[Symbol("M.y")][end], 7.5; atol = 1.0e-5)
     end
 
     # The bug this guards: `build_evaluator` runs ONE model and never reads
@@ -92,10 +128,10 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (idempotent; standalone runs too)
         # …and §2.5.7: the solution is indexed by NAME, through
         # SymbolicIndexingInterface, not by position in the state vector.
         @test Set(SciMLBase.SymbolicIndexingInterface.variable_symbols(r)) ==
-              Set([Symbol("Chem.A"), Symbol("Chem.B")])
+            Set([Symbol("Chem.A"), Symbol("Chem.B")])
         # ...and the coupling edge was applied: A decays at K1 + KSINK, not K1 alone.
-        @test isapprox(r[Symbol("Chem.A")][end], A0 * exp(-(K1 + KSINK)); rtol = 1e-4)
-        @test !isapprox(r[Symbol("Chem.A")][end], A0 * exp(-K1); rtol = 1e-2)
+        @test isapprox(r[Symbol("Chem.A")][end], A0 * exp(-(K1 + KSINK)); rtol = 1.0e-4)
+        @test !isapprox(r[Symbol("Chem.A")][end], A0 * exp(-K1); rtol = 1.0e-2)
 
         # Same document, every carrier: a Dict, a file, and an EsmFile are one
         # document and must give one system.
@@ -113,41 +149,67 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (idempotent; standalone runs too)
     # gate that a `reactions: []` fixture (schema `minItems: 1`) must not pass.
     @testset "a schema-invalid Dict is rejected, not silently run" begin
         bad = scalar_esm(1.0)
-        bad["models"]["M"]["variables"]["y"] = Dict{String,Any}("type" => "not_a_type")
+        bad["models"]["M"]["variables"]["y"] = Dict{String, Any}("type" => "not_a_type")
         @test_throws ESM_S.SchemaValidationError solve(ESM_S.esm_problem(bad, (0.0, 1.0)), Tsit5())
     end
 
     @testset "array state with seed_ic! + element IC override" begin
-        esm = Dict{String,Any}(
-            "esm" => "1.1.0", "metadata" => Dict{String,Any}("name" => "A"),
-            "index_sets" => Dict{String,Any}("n" => Dict{String,Any}("kind" => "interval", "size" => 3)),
-            "models" => Dict{String,Any}("M" => Dict{String,Any}(
-                "variables" => Dict{String,Any}("u" => Dict{String,Any}("type" => "unknown", "shape" => Any["n"])),
-                "equations" => Any[Dict{String,Any}(
-                    "lhs" => Dict{String,Any}("op" => "faq", "output_idx" => Any["i"],
-                        "ranges" => Dict{String,Any}("i" => Dict{String,Any}("from" => "n")), "args" => Any[], "expr" => _D(_idx("u", "i"))),
-                    "rhs" => Dict{String,Any}("op" => "faq", "output_idx" => Any["i"],
-                        "ranges" => Dict{String,Any}("i" => Dict{String,Any}("from" => "n")), "args" => Any[], "expr" => _idx("u", "i")))])))
+        esm = Dict{String, Any}(
+            "esm" => "1.1.0", "metadata" => Dict{String, Any}("name" => "A"),
+            "index_sets" => Dict{String, Any}("n" => Dict{String, Any}("kind" => "interval", "size" => 3)),
+            "models" => Dict{String, Any}(
+                "M" => Dict{String, Any}(
+                    "variables" => Dict{String, Any}("u" => Dict{String, Any}("type" => "unknown", "shape" => Any["n"])),
+                    "equations" => Any[
+                        Dict{String, Any}(
+                            "lhs" => Dict{String, Any}(
+                                "op" => "faq", "output_idx" => Any["i"],
+                                "ranges" => Dict{String, Any}("i" => Dict{String, Any}("from" => "n")), "args" => Any[], "expr" => _D(_idx("u", "i"))
+                            ),
+                            "rhs" => Dict{String, Any}(
+                                "op" => "faq", "output_idx" => Any["i"],
+                                "ranges" => Dict{String, Any}("i" => Dict{String, Any}("from" => "n")), "args" => Any[], "expr" => _idx("u", "i")
+                            )
+                        ),
+                    ]
+                )
+            )
+        )
         seed! = (u0, vm) -> (u0[vm["M.u[2]"]] = 2.0; u0[vm["M.u[3]"]] = 3.0)
-        r = solve(ESM_S.esm_problem(esm, (0.0, 1.0);
-                           u0 = Dict("M.u[1]" => 1.0), seed_ic! = seed!), Tsit5())
+        r = solve(
+            ESM_S.esm_problem(
+                esm, (0.0, 1.0);
+                u0 = Dict("M.u[1]" => 1.0), seed_ic! = seed!
+            ), Tsit5()
+        )
         got = [r[Symbol("M.u[1]")][end], r[Symbol("M.u[2]")][end], r[Symbol("M.u[3]")][end]]
-        @test all(isapprox.(got, [1.0, 2.0, 3.0] .* exp(1); rtol = 1e-3))
+        @test all(isapprox.(got, [1.0, 2.0, 3.0] .* exp(1); rtol = 1.0e-3))
     end
 
     @testset "seed_expression_ic! over a grid" begin
         # u[i] state on a 4-cell axis; seed u(x) = x^2 at coords [10,20,30,40].
-        esm = Dict{String,Any}(
-            "esm" => "1.1.0", "metadata" => Dict{String,Any}("name" => "G"),
-            "index_sets" => Dict{String,Any}("n" => Dict{String,Any}("kind" => "interval", "size" => 4)),
-            "models" => Dict{String,Any}("M" => Dict{String,Any}(
-                "variables" => Dict{String,Any}("u" => Dict{String,Any}("type" => "unknown", "shape" => Any["n"])),
-                "equations" => Any[Dict{String,Any}(
-                    "lhs" => Dict{String,Any}("op" => "faq", "output_idx" => Any["i"],
-                        "ranges" => Dict{String,Any}("i" => Dict{String,Any}("from" => "n")), "args" => Any[], "expr" => _D(_idx("u", "i"))),
-                    "rhs" => Dict{String,Any}("op" => "faq", "output_idx" => Any["i"],
-                        "ranges" => Dict{String,Any}("i" => Dict{String,Any}("from" => "n")), "args" => Any[], "expr" => 0.0))])))
-        expr = expression_from_json(Dict{String,Any}("op" => "*", "args" => Any["x", "x"]))
+        esm = Dict{String, Any}(
+            "esm" => "1.1.0", "metadata" => Dict{String, Any}("name" => "G"),
+            "index_sets" => Dict{String, Any}("n" => Dict{String, Any}("kind" => "interval", "size" => 4)),
+            "models" => Dict{String, Any}(
+                "M" => Dict{String, Any}(
+                    "variables" => Dict{String, Any}("u" => Dict{String, Any}("type" => "unknown", "shape" => Any["n"])),
+                    "equations" => Any[
+                        Dict{String, Any}(
+                            "lhs" => Dict{String, Any}(
+                                "op" => "faq", "output_idx" => Any["i"],
+                                "ranges" => Dict{String, Any}("i" => Dict{String, Any}("from" => "n")), "args" => Any[], "expr" => _D(_idx("u", "i"))
+                            ),
+                            "rhs" => Dict{String, Any}(
+                                "op" => "faq", "output_idx" => Any["i"],
+                                "ranges" => Dict{String, Any}("i" => Dict{String, Any}("from" => "n")), "args" => Any[], "expr" => 0.0
+                            )
+                        ),
+                    ]
+                )
+            )
+        )
+        expr = expression_from_json(Dict{String, Any}("op" => "*", "args" => Any["x", "x"]))
         seed! = (u0, vm) -> seed_expression_ic!(u0, vm, "M.u", expr, ["x" => [10.0, 20.0, 30.0, 40.0]])
         r = solve(ESM_S.esm_problem(esm, (0.0, 1.0); seed_ic! = seed!), Tsit5())   # D(u)=0 → IC preserved
         @test [r[Symbol("M.u[$i]")][end] for i in 1:4] == [100.0, 400.0, 900.0, 1600.0]
@@ -157,7 +219,8 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (idempotent; standalone runs too)
         # The state's starting value is supplied (esm-spec §11.4), so what is
         # refused is the missing algorithm.
         @test_throws ESM_S.SimulateError solve(
-            ESM_S.esm_problem(scalar_esm(1.0), (0.0, 1.0); u0 = Dict("y" => 0.0)), nothing)
+            ESM_S.esm_problem(scalar_esm(1.0), (0.0, 1.0); u0 = Dict("y" => 0.0)), nothing
+        )
     end
 
     @testset "additive couple connector adds -k*A to a species ODE (esm-spec §10.3)" begin
@@ -175,13 +238,13 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (idempotent; standalone runs too)
         @test successful_retcode(r)
 
         A_end = r[Symbol("Chem.A")][end]
-        @test isapprox(A_end, A0 * exp(-(K1 + KSINK) * 1.0); rtol = 1e-4)
+        @test isapprox(A_end, A0 * exp(-(K1 + KSINK) * 1.0); rtol = 1.0e-4)
         # The coupling term was ADDED, not dropped: strictly faster decay than chemistry alone.
-        @test A_end < A0 * exp(-K1 * 1.0) - 1e-3
+        @test A_end < A0 * exp(-K1 * 1.0) - 1.0e-3
         # ...and the chemistry term survived: this is not `replacement` semantics.
-        @test !isapprox(A_end, A0 * exp(-KSINK * 1.0); rtol = 1e-2)
+        @test !isapprox(A_end, A0 * exp(-KSINK * 1.0); rtol = 1.0e-2)
         # The reaction really ran (B is fed by chemistry only; the couple never touches it).
-        @test r[Symbol("Chem.B")][end] > 1e-3
+        @test r[Symbol("Chem.B")][end] > 1.0e-3
     end
 
     @testset "default (compile-once tier) == Expand-at-load solve, bit-identical" begin
@@ -194,12 +257,16 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT (idempotent; standalone runs too)
         # (provider-free, self-contained bench fixture). This is the reseact.esm
         # Stage-C build path: 321 PPM references survive, the doc is ~277x
         # smaller, and the tier build replaces a ~200M-node-lowering fused build.
-        fix = joinpath(TESTUTILS_REPO_ROOT, "tests", "bench",
-                       "transport_3axis_7cubed_fullrank.esm")
+        fix = joinpath(
+            TESTUTILS_REPO_ROOT, "tests", "bench",
+            "transport_3axis_7cubed_fullrank.esm"
+        )
         fatload = ESM_S.expanded_file(ESM_S.load_path(fix))
         rf = solve(ESM_S.esm_problem(fatload, (0.0, 0.5)), Tsit5(); saveat = [0.0, 0.5])
-        rt = solve(ESM_S.esm_problem(ESM_S.load_path(fix), (0.0, 0.5)), Tsit5();
-                            saveat = [0.0, 0.5])
+        rt = solve(
+            ESM_S.esm_problem(ESM_S.load_path(fix), (0.0, 0.5)), Tsit5();
+            saveat = [0.0, 0.5]
+        )
         @test successful_retcode(rf) && successful_retcode(rt)
         @test length(rf.u[end]) == 343
         @test rf.u[end] == rt.u[end]        # exact ==, no tolerance

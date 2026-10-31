@@ -27,11 +27,15 @@ _probe_states(n) = (
 )
 
 # Build `model` under `env` and return (du probes, u0, p, var_map).
-function _intern_probe_model(model; compiler=:native,
-                             ics=Dict{String,Float64}(), const_arrays=Dict())
-    f, u0, p, _, vmap = ESM._build_evaluator(model; initial_conditions=ics,
-                                            const_arrays=const_arrays,
-                                            compiler=compiler)
+function _intern_probe_model(
+        model; compiler = :native,
+        ics = Dict{String, Float64}(), const_arrays = Dict()
+    )
+    f, u0, p, _, vmap = ESM._build_evaluator(
+        model; initial_conditions = ics,
+        const_arrays = const_arrays,
+        compiler = compiler
+    )
     dus = Vector{Float64}[]
     for (ti, u) in zip((0.0, 0.7, 3.25), _probe_states(length(u0)))
         du = similar(u0)
@@ -42,12 +46,18 @@ function _intern_probe_model(model; compiler=:native,
 end
 
 # The differential for one model: the interning compiler vs the interpreter.
-function _intern_oracle(model; ics=Dict{String,Float64}(),
-                        const_arrays=Dict())
-    on = _intern_probe_model(model; compiler=:native,
-                             ics=ics, const_arrays=const_arrays)
-    off = _intern_probe_model(model; compiler=:interpreter,
-                              ics=ics, const_arrays=const_arrays)
+function _intern_oracle(
+        model; ics = Dict{String, Float64}(),
+        const_arrays = Dict()
+    )
+    on = _intern_probe_model(
+        model; compiler = :native,
+        ics = ics, const_arrays = const_arrays
+    )
+    off = _intern_probe_model(
+        model; compiler = :interpreter,
+        ics = ics, const_arrays = const_arrays
+    )
     @test on[4] == off[4]                    # identical state map
     @test on[2] == off[2]                    # identical u0 (bitwise: Float64 ==)
     @test on[3] === off[3] || isequal(on[3], off[3])   # identical params
@@ -61,42 +71,66 @@ end
 # ---- gridded fixture builders (mirrors stencil_affine_diff_test.jl) ----
 
 function _int_stencil2d_model(N)
-    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable; shape=["i", "j"]))
-    body = _op("+",
+    vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable; shape = ["i", "j"]))
+    body = _op(
+        "+",
         _idx("u", _op("-", _v("i"), _i(1)), _v("j")),
         _op("*", _n(-4.0), _idx("u", _v("i"), _v("j"))),
         _idx("u", _op("+", _v("i"), _i(1)), _v("j")),
         _idx("u", _v("i"), _op("-", _v("j"), _i(1))),
-        _idx("u", _v("i"), _op("+", _v("j"), _i(1))))
-    lhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i", "j"],
-        expr_body=_Didx("u", _v("i"), _v("j")), ranges=Dict("i" => [1, N], "j" => [1, N]))
-    rhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i", "j"],
-        expr_body=body, ranges=Dict("i" => [1, N], "j" => [1, N]))
-    ESM.Model(vars, [ESM.Equation(lhs, rhs)])
+        _idx("u", _v("i"), _op("+", _v("j"), _i(1)))
+    )
+    lhs = ESM.OpExpr(
+        "faq", ESM.ASTExpr[]; output_idx = Any["i", "j"],
+        expr_body = _Didx("u", _v("i"), _v("j")), ranges = Dict("i" => [1, N], "j" => [1, N])
+    )
+    rhs = ESM.OpExpr(
+        "faq", ESM.ASTExpr[]; output_idx = Any["i", "j"],
+        expr_body = body, ranges = Dict("i" => [1, N], "j" => [1, N])
+    )
+    return ESM.Model(vars, [ESM.Equation(lhs, rhs)])
 end
 
 function _int_makearray_region_model(N)
     vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
     fwd = _op("-", _idx("u", _op("+", _v("i"), _i(1))), _idx("u", _v("i")))
-    ctr = _op("+", _idx("u", _op("-", _v("i"), _i(1))),
-                   _op("*", _n(-2.0), _idx("u", _v("i"))),
-                   _idx("u", _op("+", _v("i"), _i(1))))
+    ctr = _op(
+        "+", _idx("u", _op("-", _v("i"), _i(1))),
+        _op("*", _n(-2.0), _idx("u", _v("i"))),
+        _idx("u", _op("+", _v("i"), _i(1)))
+    )
     bwd = _op("-", _idx("u", _v("i")), _idx("u", _op("-", _v("i"), _i(1))))
-    mk = ESM.OpExpr("makearray", ESM.ASTExpr[];
-        regions=[[[1, 1]], [[2, N - 1]], [[N, N]]],
-        values=ESM.ASTExpr[fwd, ctr, bwd])
-    ESM.Model(vars, [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
-                                  _ao1(_op("index", mk, _v("i")), "i", 1, N))])
+    mk = ESM.OpExpr(
+        "makearray", ESM.ASTExpr[];
+        regions = [[[1, 1]], [[2, N - 1]], [[N, N]]],
+        values = ESM.ASTExpr[fwd, ctr, bwd]
+    )
+    return ESM.Model(
+        vars, [
+            ESM.Equation(
+                _ao1(_Didx("u", _v("i")), "i", 1, N),
+                _ao1(_op("index", mk, _v("i")), "i", 1, N)
+            ),
+        ]
+    )
 end
 
 function _int_const_coef_model(N)
     vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
-    lap = _op("+", _idx("u", _op("-", _v("i"), _i(1))),
-                   _op("*", _n(-2.0), _idx("u", _v("i"))),
-                   _idx("u", _op("+", _v("i"), _i(1))))
+    lap = _op(
+        "+", _idx("u", _op("-", _v("i"), _i(1))),
+        _op("*", _n(-2.0), _idx("u", _v("i"))),
+        _idx("u", _op("+", _v("i"), _i(1)))
+    )
     body = _op("*", _idx("K", _v("i")), lap)
-    ESM.Model(vars, [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
-                                  _ao1(body, "i", 1, N))])
+    return ESM.Model(
+        vars, [
+            ESM.Equation(
+                _ao1(_Didx("u", _v("i")), "i", 1, N),
+                _ao1(body, "i", 1, N)
+            ),
+        ]
+    )
 end
 
 # Observed-chain model: two observeds share a subtree, one feeds the other, and
@@ -108,18 +142,25 @@ function _int_observed_model()
     # esm 1.0.0 (esm-spec §6.3.1): `w1` / `w2` are plain unknowns carrying no
     # `expression`; each is DEFINED by its bare-variable-LHS equation below.
     vars = Dict(
-        "u" => ESM.ModelVariable(ESM.UnknownVariable; default=1.25),
-        "v" => ESM.ModelVariable(ESM.UnknownVariable; default=0.5),
-        "k" => ESM.ModelVariable(ESM.ParameterVariable; default=2.0),
+        "u" => ESM.ModelVariable(ESM.UnknownVariable; default = 1.25),
+        "v" => ESM.ModelVariable(ESM.UnknownVariable; default = 0.5),
+        "k" => ESM.ModelVariable(ESM.ParameterVariable; default = 2.0),
         "w1" => ESM.ModelVariable(ESM.UnknownVariable),
-        "w2" => ESM.ModelVariable(ESM.UnknownVariable))
-    eqs = [ESM.Equation(_v("w1"), kuv),
-           ESM.Equation(_v("w2"),
-               _op("+", _op("*", _v("k"), _op("+", _v("u"), _v("v"))),
-                   _op("sin", _v("w1")))),
-           ESM.Equation(_D("u"), _op("-", _v("w2"), _v("u"))),
-           ESM.Equation(_D("v"), _op("*", _n(-0.5), _v("w1")))]
-    ESM.Model(vars, eqs)
+        "w2" => ESM.ModelVariable(ESM.UnknownVariable)
+    )
+    eqs = [
+        ESM.Equation(_v("w1"), kuv),
+        ESM.Equation(
+            _v("w2"),
+            _op(
+                "+", _op("*", _v("k"), _op("+", _v("u"), _v("v"))),
+                _op("sin", _v("w1"))
+            )
+        ),
+        ESM.Equation(_D("u"), _op("-", _v("w2"), _v("u"))),
+        ESM.Equation(_D("v"), _op("*", _n(-0.5), _v("w1"))),
+    ]
+    return ESM.Model(vars, eqs)
 end
 
 @testset "intern differential oracle (A1)" begin
@@ -139,34 +180,40 @@ end
         z2 = _intern_expr(_op("+", _v("x"), _n(-0.0)), ctx)
         @test z1 !== z2
         # const-op payload type discrimination (Int 1 vs Float 1.0 on the wire)
-        c1 = _intern_expr(ESM.OpExpr("const", ESM.ASTExpr[]; value=1), ctx)
-        c2 = _intern_expr(ESM.OpExpr("const", ESM.ASTExpr[]; value=1.0), ctx)
-        c3 = _intern_expr(ESM.OpExpr("const", ESM.ASTExpr[]; value=1), ctx)
+        c1 = _intern_expr(ESM.OpExpr("const", ESM.ASTExpr[]; value = 1), ctx)
+        c2 = _intern_expr(ESM.OpExpr("const", ESM.ASTExpr[]; value = 1.0), ctx)
+        c3 = _intern_expr(ESM.OpExpr("const", ESM.ASTExpr[]; value = 1), ctx)
         @test c1 !== c2
         @test c1 === c3
         # nested const arrays merge by content, split by content
-        v1 = _intern_expr(ESM.OpExpr("const", ESM.ASTExpr[]; value=Any[1, 2, 3]), ctx)
-        v2 = _intern_expr(ESM.OpExpr("const", ESM.ASTExpr[]; value=Any[1, 2, 3]), ctx)
-        v3 = _intern_expr(ESM.OpExpr("const", ESM.ASTExpr[]; value=Any[1, 2, 4]), ctx)
+        v1 = _intern_expr(ESM.OpExpr("const", ESM.ASTExpr[]; value = Any[1, 2, 3]), ctx)
+        v2 = _intern_expr(ESM.OpExpr("const", ESM.ASTExpr[]; value = Any[1, 2, 3]), ctx)
+        v3 = _intern_expr(ESM.OpExpr("const", ESM.ASTExpr[]; value = Any[1, 2, 4]), ctx)
         @test v1 === v2
         @test v1 !== v3
         # non-child field discrimination: wrt, output_idx, ranges, filter
-        @test _intern_expr(_op("D", _v("u"); wrt="t"), ctx) !==
-              _intern_expr(_op("D", _v("u"); wrt="x"), ctx)
-        @test _intern_expr(_op("D", _v("u"); wrt="t"), ctx) ===
-              _intern_expr(_op("D", _v("u"); wrt="t"), ctx)
+        @test _intern_expr(_op("D", _v("u"); wrt = "t"), ctx) !==
+            _intern_expr(_op("D", _v("u"); wrt = "x"), ctx)
+        @test _intern_expr(_op("D", _v("u"); wrt = "t"), ctx) ===
+            _intern_expr(_op("D", _v("u"); wrt = "t"), ctx)
         r1 = _intern_expr(_ao1(_v("i"), "i", 1, 7), ctx)
         r2 = _intern_expr(_ao1(_v("i"), "i", 1, 8), ctx)
         r3 = _intern_expr(_ao1(_v("i"), "i", 1, 7), ctx)
         @test r1 !== r2
         @test r1 === r3
         # expression-valued range bounds are interned and discriminated
-        d1 = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i"],
-            expr_body=_v("i"), ranges=Dict{String,Any}("i" => Any[1, _op("+", _v("n"), _i(1))]))
-        d2 = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i"],
-            expr_body=_v("i"), ranges=Dict{String,Any}("i" => Any[1, _op("+", _v("n"), _i(1))]))
-        d3 = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i"],
-            expr_body=_v("i"), ranges=Dict{String,Any}("i" => Any[1, _op("+", _v("n"), _i(2))]))
+        d1 = ESM.OpExpr(
+            "faq", ESM.ASTExpr[]; output_idx = Any["i"],
+            expr_body = _v("i"), ranges = Dict{String, Any}("i" => Any[1, _op("+", _v("n"), _i(1))])
+        )
+        d2 = ESM.OpExpr(
+            "faq", ESM.ASTExpr[]; output_idx = Any["i"],
+            expr_body = _v("i"), ranges = Dict{String, Any}("i" => Any[1, _op("+", _v("n"), _i(1))])
+        )
+        d3 = ESM.OpExpr(
+            "faq", ESM.ASTExpr[]; output_idx = Any["i"],
+            expr_body = _v("i"), ranges = Dict{String, Any}("i" => Any[1, _op("+", _v("n"), _i(2))])
+        )
         @test _intern_expr(d1, ctx) === _intern_expr(d2, ctx)
         @test _intern_expr(d1, ctx) !== _intern_expr(d3, ctx)
         # the model pass does not mutate the input model
@@ -184,25 +231,27 @@ end
 
     @testset "1D second-difference stencil (N=$N)" for N in (8, 33)
         ics = Dict("u[$k]" => sin(0.3k) + 0.1k for k in 1:N)
-        _intern_oracle(_stencil_model(N); ics=ics)
+        _intern_oracle(_stencil_model(N); ics = ics)
     end
 
     @testset "2D 5-point Laplacian (N=$N)" for N in (5, 16)
-        ics = Dict("u[$i,$j]" => sin(0.2i) * cos(0.3j) + 0.05i * j
-                   for i in 1:N, j in 1:N)
-        _intern_oracle(_int_stencil2d_model(N); ics=ics)
+        ics = Dict(
+            "u[$i,$j]" => sin(0.2i) * cos(0.3j) + 0.05i * j
+                for i in 1:N, j in 1:N
+        )
+        _intern_oracle(_int_stencil2d_model(N); ics = ics)
     end
 
     @testset "makearray region stencil (N=$N)" for N in (8, 32)
         ics = Dict("u[$k]" => 0.3 + sin(0.4k)^2 for k in 1:N)
-        _intern_oracle(_int_makearray_region_model(N); ics=ics)
+        _intern_oracle(_int_makearray_region_model(N); ics = ics)
     end
 
     @testset "const-coefficient diffusion" begin
         N = 16
         ics = Dict("u[$k]" => cos(0.2k) + 0.1k for k in 1:N)
         K = Dict("K" => Float64[0.5 + 0.1 * sin(0.9k) for k in 1:N])
-        _intern_oracle(_int_const_coef_model(N); ics=ics, const_arrays=K)
+        _intern_oracle(_int_const_coef_model(N); ics = ics, const_arrays = K)
     end
 
     @testset "observed chain (splice + slots)" begin
@@ -215,15 +264,17 @@ end
         # on both sides of the cascade at once.
         N = 8
         ics = Dict("u[$k]" => sin(0.3k) + 0.1k for k in 1:N)
-        _intern_oracle(_stencil_model(N); ics=ics)
+        _intern_oracle(_stencil_model(N); ics = ics)
     end
 
     @testset "compile-once template fixture (7³, references)" begin
-        FIX = joinpath(TESTUTILS_REPO_ROOT, "tests", "bench",
-                       "transport_3axis_7cubed_fullrank.esm")
+        FIX = joinpath(
+            TESTUTILS_REPO_ROOT, "tests", "bench",
+            "transport_3axis_7cubed_fullrank.esm"
+        )
         function bp(compiler)
             flat = ESM.flatten(ESM.load_path(FIX))
-            f, u0, p, _, vmap = ESM._build_evaluator(flat; compiler=compiler)
+            f, u0, p, _, vmap = ESM._build_evaluator(flat; compiler = compiler)
             dus = Vector{Float64}[]
             for (ti, u) in zip((0.0, 0.7, 3.25), _probe_states(length(u0)))
                 du = similar(u0)

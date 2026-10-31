@@ -19,8 +19,10 @@ const ESM = EarthSciAST
 
 function _fnk_build(model, ics; affine::Bool)
     f!, u0, p, _tspan, vm, diag =
-        ESM._build_evaluator_impl(model; initial_conditions=ics, form=:inplace,
-                                  compiler = affine ? :native : :interpreter)
+        ESM._build_evaluator_impl(
+        model; initial_conditions = ics, form = :inplace,
+        compiler = affine ? :native : :interpreter
+    )
     return (f!, u0, p, diag)
 end
 _fnk_du(f!, u0, p, t) = (du = zero(u0); f!(du, u0, p, t); du)
@@ -45,14 +47,20 @@ _fnk_ai() = Int64[0, 1, 2, 3, 4]
 # MUST-NOT-share control. The interp query is cell-varying (a neighbour gather),
 # so sharing lands in the per-cell CSE tier: one fn value number occurring twice
 # ⇒ a recipe slot per kernel, where the split key yields two singletons ⇒ zero.
-function _fnk_twin_model(N; perturb::Int=0)
+function _fnk_twin_model(N; perturb::Int = 0)
     vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
     x = _idx("u", _op("+", _v("i"), _i(1)))
-    itp1 = _op("fn", _const(copy(_FNK_T)), _const(copy(_FNK_A)), x; name="interp.linear")
-    itp2 = _op("fn", _const(_fnk_ti(perturb)), _const(_fnk_ai()), x; name="interp.linear")
+    itp1 = _op("fn", _const(copy(_FNK_T)), _const(copy(_FNK_A)), x; name = "interp.linear")
+    itp2 = _op("fn", _const(_fnk_ti(perturb)), _const(_fnk_ai()), x; name = "interp.linear")
     body = _op("+", itp1, itp2, _idx("u", _op("-", _v("i"), _i(1))))
-    ESM.Model(vars, [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
-                                  _ao1(body, "i", 1, N))])
+    return ESM.Model(
+        vars, [
+            ESM.Equation(
+                _ao1(_Didx("u", _v("i")), "i", 1, N),
+                _ao1(body, "i", 1, N)
+            ),
+        ]
+    )
 end
 
 # D(u[i]) = (interp(T,A,g/h) + interp(Tᵢ,Aᵢ,g/h))·u[i] — the interp query is a
@@ -60,17 +68,24 @@ end
 # tier, which mints a slot per invariant OP vn REGARDLESS of count: content-equal
 # tables collapse two fn vns into one, so the twin build carries exactly one inv
 # slot FEWER than the perturbed build (same spine shape otherwise).
-function _fnk_inv_model(N; perturb::Int=0)
-    vars = Dict{String,ESM.ModelVariable}(
+function _fnk_inv_model(N; perturb::Int = 0)
+    vars = Dict{String, ESM.ModelVariable}(
         "u" => ESM.ModelVariable(ESM.UnknownVariable),
-        "g" => ESM.ModelVariable(ESM.ParameterVariable; default=3.0),
-        "h" => ESM.ModelVariable(ESM.ParameterVariable; default=7.0))
+        "g" => ESM.ModelVariable(ESM.ParameterVariable; default = 3.0),
+        "h" => ESM.ModelVariable(ESM.ParameterVariable; default = 7.0)
+    )
     q = _op("/", _v("g"), _v("h"))
-    itp1 = _op("fn", _const(copy(_FNK_T)), _const(copy(_FNK_A)), q; name="interp.linear")
-    itp2 = _op("fn", _const(_fnk_ti(perturb)), _const(_fnk_ai()), q; name="interp.linear")
+    itp1 = _op("fn", _const(copy(_FNK_T)), _const(copy(_FNK_A)), q; name = "interp.linear")
+    itp2 = _op("fn", _const(_fnk_ti(perturb)), _const(_fnk_ai()), q; name = "interp.linear")
     body = _op("*", _op("+", itp1, itp2), _idx("u", _v("i")))
-    ESM.Model(vars, [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
-                                  _ao1(body, "i", 1, N))])
+    return ESM.Model(
+        vars, [
+            ESM.Equation(
+                _ao1(_Didx("u", _v("i")), "i", 1, N),
+                _ao1(body, "i", 1, N)
+            ),
+        ]
+    )
 end
 
 # D(u[i]) = (doy(t) − doy(t))·u[i], the two `datetime.day_of_year` calls built as
@@ -80,18 +95,24 @@ end
 # tier holds exactly two slots: the shared fn, and the `-` above it.
 function _fnk_dt_model(N)
     vars = Dict("u" => ESM.ModelVariable(ESM.UnknownVariable))
-    d1 = _op("fn", _v("t"); name="datetime.day_of_year")
-    d2 = _op("fn", _v("t"); name="datetime.day_of_year")
+    d1 = _op("fn", _v("t"); name = "datetime.day_of_year")
+    d2 = _op("fn", _v("t"); name = "datetime.day_of_year")
     body = _op("*", _op("-", d1, d2), _idx("u", _v("i")))
-    ESM.Model(vars, [ESM.Equation(_ao1(_Didx("u", _v("i")), "i", 1, N),
-                                  _ao1(body, "i", 1, N))])
+    return ESM.Model(
+        vars, [
+            ESM.Equation(
+                _ao1(_Didx("u", _v("i")), "i", 1, N),
+                _ao1(body, "i", 1, N)
+            ),
+        ]
+    )
 end
 
 @testset "fn spec content keying in per-kernel CSE (ess-affine)" begin
     @testset "content-equal tables share a per-cell slot (N=$N)" for N in (8, 32)
         ics = Dict("u[$k]" => 2.0 + sin(0.3k) for k in 1:N)
-        fa, u0, pa, d = _fnk_build(_fnk_twin_model(N), ics; affine=true)
-        fr, ur, pr, _ = _fnk_build(_fnk_twin_model(N), ics; affine=false)
+        fa, u0, pa, d = _fnk_build(_fnk_twin_model(N), ics; affine = true)
+        fr, ur, pr, _ = _fnk_build(_fnk_twin_model(N), ics; affine = false)
         @test d.n_acc_kernels >= 1          # affine path fired
         @test d.n_acc_cse_slots >= 1        # the twin fn calls SHARED
         @test _fnk_du(fa, u0, pa, 0.0) == _fnk_du(fr, ur, pr, 0.0)   # bit-identical
@@ -100,8 +121,8 @@ end
     @testset "one-element table difference must NOT share (and not throw)" begin
         N = 16
         ics = Dict("u[$k]" => 2.0 + sin(0.3k) for k in 1:N)
-        fa, u0, pa, d = _fnk_build(_fnk_twin_model(N; perturb=1), ics; affine=true)
-        fr, ur, pr, _ = _fnk_build(_fnk_twin_model(N; perturb=1), ics; affine=false)
+        fa, u0, pa, d = _fnk_build(_fnk_twin_model(N; perturb = 1), ics; affine = true)
+        fr, ur, pr, _ = _fnk_build(_fnk_twin_model(N; perturb = 1), ics; affine = false)
         @test d.n_acc_cse_slots == 0        # split key ⇒ two singleton vns ⇒ no slot
         @test _fnk_du(fa, u0, pa, 0.0) == _fnk_du(fr, ur, pr, 0.0)
     end
@@ -109,9 +130,9 @@ end
     @testset "invariant tier: shared fn vn ⇒ one slot fewer than perturbed" begin
         N = 16
         ics = Dict("u[$k]" => 0.5 + 0.1k for k in 1:N)
-        fa, u0, pa, dt = _fnk_build(_fnk_inv_model(N), ics; affine=true)
-        fr, ur, pr, _  = _fnk_build(_fnk_inv_model(N), ics; affine=false)
-        _,  _,  _,  dp = _fnk_build(_fnk_inv_model(N; perturb=1), ics; affine=true)
+        fa, u0, pa, dt = _fnk_build(_fnk_inv_model(N), ics; affine = true)
+        fr, ur, pr, _ = _fnk_build(_fnk_inv_model(N), ics; affine = false)
+        _, _, _, dp = _fnk_build(_fnk_inv_model(N; perturb = 1), ics; affine = true)
         @test dt.n_acc_inv_slots >= 1                       # hoist fired at all
         @test dt.n_acc_inv_slots == dp.n_acc_inv_slots - 1  # twin fns fused ONE vn
         @test _fnk_du(fa, u0, pa, 0.0) == _fnk_du(fr, ur, pr, 0.0)
@@ -120,8 +141,8 @@ end
     @testset "boxed datetime payload (Tuple{String,Nothing}) keys on the name" begin
         N = 8
         ics = Dict("u[$k]" => 1.0 + 0.1k for k in 1:N)
-        fa, u0, pa, d = _fnk_build(_fnk_dt_model(N), ics; affine=true)
-        fr, ur, pr, _ = _fnk_build(_fnk_dt_model(N), ics; affine=false)
+        fa, u0, pa, d = _fnk_build(_fnk_dt_model(N), ics; affine = true)
+        fr, ur, pr, _ = _fnk_build(_fnk_dt_model(N), ics; affine = false)
         @test d.n_acc_inv_slots == 2        # shared doy vn + the `-` above it
         for t in (0.0, 86_400.0 * 200.5)
             @test _fnk_du(fa, u0, pa, t) == _fnk_du(fr, ur, pr, t)
@@ -131,7 +152,7 @@ end
     @testset "slot counts are N-independent" begin
         counts = map((8, 32, 128)) do N
             ics = Dict("u[$k]" => 2.0 + 0.01k for k in 1:N)
-            _fnk_build(_fnk_twin_model(N), ics; affine=true)[4].n_acc_cse_slots
+            _fnk_build(_fnk_twin_model(N), ics; affine = true)[4].n_acc_cse_slots
         end
         @test all(==(counts[1]), counts)
         @test counts[1] >= 1

@@ -7,9 +7,11 @@
 # asinh/… this arm never accepted, and excludes the 1-or-2-ary `atan` this
 # arm has always treated as unary), and deliberately wider than the Catalyst
 # rate interpreter's set — membership is behavior, so it stays explicit.
-const _MTK_UNARY_SCALAR_OPS = ("exp", "log", "log10", "sin", "cos", "tan",
-                               "sinh", "cosh", "tanh", "asin", "acos", "atan",
-                               "sqrt", "abs")
+const _MTK_UNARY_SCALAR_OPS = (
+    "exp", "log", "log10", "sin", "cos", "tan",
+    "sinh", "cosh", "tanh", "asin", "acos", "atan",
+    "sqrt", "abs",
+)
 
 """
 Build a Symbolics.jl expression from an ESM `ASTExpr` tree, using the given
@@ -21,14 +23,18 @@ The extension-independent scalar arms live in the shared
 specific — calculus/control/comparison ops and the array vocabulary — is
 handled by `_mtk_extended_op` below.
 """
-function _esm_to_symbolic(expr::EsmExpr, var_dict::Dict{String,Any},
-                          t_sym, dim_dict::Dict{String,Any})
-    return _esm_to_symbolic_core(expr,
+function _esm_to_symbolic(
+        expr::EsmExpr, var_dict::Dict{String, Any},
+        t_sym, dim_dict::Dict{String, Any}
+    )
+    return _esm_to_symbolic_core(
+        expr,
         a -> _esm_to_symbolic(a, var_dict, t_sym, dim_dict);
         number_value = _int_promoted_number,
         resolve_var = name -> _resolve_lowering_var(name, var_dict, dim_dict),
         unary_ops = _MTK_UNARY_SCALAR_OPS,
-        extended_op = (op, e) -> _mtk_extended_op(op, e, var_dict, t_sym, dim_dict))
+        extended_op = (op, e) -> _mtk_extended_op(op, e, var_dict, t_sym, dim_dict)
+    )
 end
 
 # Integer-valued NumExpr is promoted to Int so arrayop index
@@ -48,8 +54,10 @@ end
 # declared (state/parameter/observed dictionaries or a known dimension) —
 # THROW otherwise. The Catalyst rate lowering auto-creates instead; the
 # divergence is live behavior (see ext/shared/esm_to_symbolic.jl).
-function _resolve_lowering_var(name::String, var_dict::Dict{String,Any},
-                               dim_dict::Dict{String,Any})
+function _resolve_lowering_var(
+        name::String, var_dict::Dict{String, Any},
+        dim_dict::Dict{String, Any}
+    )
     if haskey(var_dict, name)
         return var_dict[name]
     elseif haskey(dim_dict, name)
@@ -63,9 +71,11 @@ end
 # comparisons, the array/aggregate vocabulary, and registered closed
 # functions. Reached from `_esm_to_symbolic_core` for every op outside the
 # shared scalar arms.
-function _mtk_extended_op(op::AbstractString, expr::OpExpr,
-                          var_dict::Dict{String,Any}, t_sym,
-                          dim_dict::Dict{String,Any})
+function _mtk_extended_op(
+        op::AbstractString, expr::OpExpr,
+        var_dict::Dict{String, Any}, t_sym,
+        dim_dict::Dict{String, Any}
+    )
     if op == "neg"
         # The CANONICAL unary minus (`src/canonicalize.jl` rewrites `{"op":"-"}`
         # with one argument to it), so every canonicalized document that negates
@@ -78,7 +88,7 @@ function _mtk_extended_op(op::AbstractString, expr::OpExpr,
         # `pow(a, b)` is the registry's named spelling of `a ^ b` (op_registry
         # `_op("pow"; fn=(^))`), the twin of the `neg`/`-` pair above.
         return _esm_to_symbolic(expr.args[1], var_dict, t_sym, dim_dict) ^
-               _esm_to_symbolic(expr.args[2], var_dict, t_sym, dim_dict)
+            _esm_to_symbolic(expr.args[2], var_dict, t_sym, dim_dict)
     elseif op == "D"
         arg = _esm_to_symbolic(expr.args[1], var_dict, t_sym, dim_dict)
         wrt_name = expr.wrt === nothing ? "t" : expr.wrt
@@ -118,12 +128,12 @@ function _mtk_extended_op(op::AbstractString, expr::OpExpr,
     elseif op in (">", "<", ">=", "<=", "==", "!=")
         l = _esm_to_symbolic(expr.args[1], var_dict, t_sym, dim_dict)
         r = _esm_to_symbolic(expr.args[2], var_dict, t_sym, dim_dict)
-        return op == ">"  ? l > r  :
-               op == "<"  ? l < r  :
-               op == ">=" ? l >= r :
-               op == "<=" ? l <= r :
-               op == "==" ? l == r :
-                            l != r
+        return op == ">" ? l > r :
+            op == "<" ? l < r :
+            op == ">=" ? l >= r :
+            op == "<=" ? l <= r :
+            op == "==" ? l == r :
+            l != r
     elseif op == "faq"
         return _build_arrayop_sym(expr, var_dict, t_sym, dim_dict)
     elseif op == "makearray"
@@ -150,8 +160,12 @@ function _mtk_extended_op(op::AbstractString, expr::OpExpr,
         # extracted at its call site by `_build_fn`.
         expr.value isa Real && return expr.value
         expr.value isa AbstractVector && return EarthSciAST._const_op_to_array(expr.value)
-        throw(ArgumentError("`const` with a $(typeof(expr.value)) value has no " *
-              "MTK lowering (esm-spec §9.2)"))
+        throw(
+            ArgumentError(
+                "`const` with a $(typeof(expr.value)) value has no " *
+                    "MTK lowering (esm-spec §9.2)"
+            )
+        )
     else
         throw(ArgumentError("Unsupported operator: $op"))
     end
@@ -162,7 +176,7 @@ end
 # match, or `nothing` if none is present. Used by the ODE-path
 # `ModelingToolkit.System` constructor to enforce the canonical pipeline
 # contract (esm-i7b).
-function _find_spatial_op(expr::EsmExpr)::Union{String,Nothing}
+function _find_spatial_op(expr::EsmExpr)::Union{String, Nothing}
     if expr isa OpExpr
         if expr.op == "grad" || expr.op == "div" || expr.op == "laplacian"
             return expr.op
@@ -194,11 +208,14 @@ end
 #
 # Regions are 1-based and may overlap; later regions in the sequence
 # override earlier ones, matching both the schema contract and the
-# `@makearray` runtime semantics. Each region's value is currently a
-# scalar expression that is broadcast across the region; array-valued
-# region fills (not used by any fixture) would need additional handling.
-function _build_makearray(expr::OpExpr, var_dict::Dict{String,Any},
-                          t_sym, dim_dict::Dict{String,Any})
+# `@makearray` runtime semantics. A scalar region value is broadcast across
+# the region; an array-valued one (an interior-stencil `faq`, say) fills it
+# element by element and must match the region's shape once singleton
+# dimensions are dropped (esm-spec §4.3.2).
+function _build_makearray(
+        expr::OpExpr, var_dict::Dict{String, Any},
+        t_sym, dim_dict::Dict{String, Any}
+    )
     expr.regions === nothing && throw(ArgumentError("makearray node missing 'regions'"))
     expr.values === nothing && throw(ArgumentError("makearray node missing 'values'"))
     length(expr.regions) == length(expr.values) ||
@@ -218,13 +235,36 @@ function _build_makearray(expr::OpExpr, var_dict::Dict{String,Any},
     fill!(result, Symbolics.Num(0))
     for (region, val_expr) in zip(expr.regions, expr.values)
         v = _esm_to_symbolic(val_expr, var_dict, t_sym, dim_dict)
-        v_num = v isa Symbolics.Num ? v : Symbolics.Num(v)
         region_axes = Tuple(pair[1]:pair[2] for pair in region)
-        for idx in Iterators.product(region_axes...)
-            result[idx...] = v_num
+        if v isa Symbolics.Arr || v isa AbstractArray
+            _fill_makearray_region!(result, region_axes, v)
+        else
+            v_num = v isa Symbolics.Num ? v : Symbolics.Num(v)
+            for idx in Iterators.product(region_axes...)
+                result[idx...] = v_num
+            end
         end
     end
     return result
+end
+
+# Copy an array-valued region fill into `result`, element by element in
+# column-major order, after checking its non-singleton extents match the
+# region's.
+function _fill_makearray_region!(result, region_axes, v)
+    vals = collect(Symbolics.scalarize(v))
+    squeeze(dims) = filter(!=(1), collect(dims))
+    region_size = map(length, region_axes)
+    squeeze(size(vals)) == squeeze(region_size) || throw(
+        ArgumentError(
+            "makearray region of size $(region_size) cannot take an " *
+                "array value of size $(size(vals))"
+        )
+    )
+    for (idx, val) in zip(Iterators.product(region_axes...), vals)
+        result[idx...] = val isa Symbolics.Num ? val : Symbolics.Num(val)
+    end
+    return nothing
 end
 
 # ---- Const-array gathers (esm-spec §9.2, CONFORMANCE_SPEC §5.5.5) ----
@@ -244,8 +284,8 @@ const _CONST_ARRAYS_KEY = "__esm_const_array_observeds__"
 
 # Record every observed defined by a `const` array so a gather on its name
 # reads the literal data rather than the symbolic array variable.
-function _register_const_array_observeds!(dim_dict::Dict{String,Any}, flat)
-    registry = Dict{String,Array{Float64}}()
+function _register_const_array_observeds!(dim_dict::Dict{String, Any}, flat)
+    registry = Dict{String, Array{Float64}}()
     for eq in flat.equations
         (eq.lhs isa VarExpr && eq.rhs isa OpExpr) || continue
         rhs = eq.rhs::OpExpr
@@ -257,7 +297,7 @@ function _register_const_array_observeds!(dim_dict::Dict{String,Any}, flat)
 end
 
 # `(table, name)` when `base` is a const-array gather base, else `(nothing, "")`.
-function _const_index_base(base::EsmExpr, dim_dict::Dict{String,Any})
+function _const_index_base(base::EsmExpr, dim_dict::Dict{String, Any})
     if base isa OpExpr && base.op == "const" && base.value isa AbstractVector
         return EarthSciAST._const_op_to_array(base.value), "inline const"
     elseif base isa VarExpr
@@ -279,7 +319,7 @@ function _esm_const_gather(table::Matrix{Float64}, name::String, i::Real, j::Rea
     return table[ri, rj]
 end
 
-function _esm_const_gather(table::Array{Float64,3}, name::String, i::Real, j::Real, k::Real)::Float64
+function _esm_const_gather(table::Array{Float64, 3}, name::String, i::Real, j::Real, k::Real)::Float64
     ri = EarthSciAST._resolve_const_index(table, name, 1, round(Int, i), size(table, 1))
     rj = EarthSciAST._resolve_const_index(table, name, 2, round(Int, j), size(table, 2))
     rk = EarthSciAST._resolve_const_index(table, name, 3, round(Int, k), size(table, 3))
@@ -288,37 +328,52 @@ end
 
 @register_symbolic _esm_const_gather(table::Vector{Float64}, name::String, i) false
 @register_symbolic _esm_const_gather(table::Matrix{Float64}, name::String, i, j) false
-@register_symbolic _esm_const_gather(table::Array{Float64,3}, name::String, i, j, k) false
+@register_symbolic _esm_const_gather(table::Array{Float64, 3}, name::String, i, j, k) false
 # See the `interp.*` registrations: a rebuilt call must stay a real scalar.
 Symbolics.SymbolicUtils.promote_symtype(::typeof(_esm_const_gather), args...) = Real
 
-function _build_const_gather(table::Array{Float64}, name::String,
-                             idx_args::AbstractVector, var_dict::Dict{String,Any},
-                             t_sym, dim_dict::Dict{String,Any})
+function _build_const_gather(
+        table::Array{Float64}, name::String,
+        idx_args::AbstractVector, var_dict::Dict{String, Any},
+        t_sym, dim_dict::Dict{String, Any}
+    )
     length(idx_args) == ndims(table) ||
-        throw(EarthSciAST.TreeWalkError("E_TREEWALK_CONSTARRAY_NDIM",
-              "const array '$(name)' is $(ndims(table))D but got " *
-              "$(length(idx_args)) indices"))
+        throw(
+        EarthSciAST.TreeWalkError(
+            "E_TREEWALK_CONSTARRAY_NDIM",
+            "const array '$(name)' is $(ndims(table))D but got " *
+                "$(length(idx_args)) indices"
+        )
+    )
     idxs = Any[]
     for a in idx_args
         v = _esm_to_symbolic(a, var_dict, t_sym, dim_dict)
         # `Num <: Real`, so test the unwrapped value: only a NUMBER resolves now.
         n = Symbolics.value(v)
         if n isa Real
-            isinteger(n) || throw(ArgumentError(
-                "index argument must be an integer, got $(n)"))
+            isinteger(n) || throw(
+                ArgumentError(
+                    "index argument must be an integer, got $(n)"
+                )
+            )
             v = Int(n)
         end
         push!(idxs, v)
     end
     if all(i -> i isa Integer, idxs)
-        resolved = ntuple(d -> EarthSciAST._resolve_const_index(
-            table, name, d, idxs[d], size(table, d)), ndims(table))
+        resolved = ntuple(
+            d -> EarthSciAST._resolve_const_index(
+                table, name, d, idxs[d], size(table, d)
+            ), ndims(table)
+        )
         return table[resolved...]
     end
-    ndims(table) <= 3 || throw(ArgumentError(
-        "MTK lowering gathers a const array of at most 3 dimensions at a " *
-        "run-time index; '$(name)' has $(ndims(table))"))
+    ndims(table) <= 3 || throw(
+        ArgumentError(
+            "MTK lowering gathers a const array of at most 3 dimensions at a " *
+                "run-time index; '$(name)' has $(ndims(table))"
+        )
+    )
     return _esm_const_gather(table, name, idxs...)
 end
 
@@ -348,8 +403,11 @@ function _push_lowered_equation!(eqs::AbstractVector, lhs, rhs)
     # `Array{Float64}`, not `AbstractArray{<:Real}`: a `makearray` lowers to an
     # `Array{Num}` (`Num <: Real`) and keeps its whole-array equation.
     if rhs isa Array{Float64}
-        size(lhs) == size(rhs) || throw(ArgumentError(
-            "`const` array of size $(size(rhs)) defines a variable of size $(size(lhs))"))
+        size(lhs) == size(rhs) || throw(
+            ArgumentError(
+                "`const` array of size $(size(rhs)) defines a variable of size $(size(lhs))"
+            )
+        )
         for I in CartesianIndices(rhs)
             push!(eqs, lhs[I] ~ rhs[I])
         end
@@ -379,14 +437,18 @@ end
 # or `u[N+1,j]` reference cells outside the interior domain. The underlying
 # Symbolics.Arr is 1-based and would raise BoundsError without this guard.
 # Out-of-bounds periodic reads return 0 (zero-ghost convention).
-function _build_index(expr::OpExpr, var_dict::Dict{String,Any},
-                      t_sym, dim_dict::Dict{String,Any})
+function _build_index(
+        expr::OpExpr, var_dict::Dict{String, Any},
+        t_sym, dim_dict::Dict{String, Any}
+    )
     # A const-array gather (CONFORMANCE_SPEC §5.5.5) never takes the zero ghost
     # below, so it is routed before the operand is lowered.
     table, table_name = _const_index_base(expr.args[1], dim_dict)
     table === nothing ||
-        return _build_const_gather(table, table_name, expr.args[2:end],
-                                   var_dict, t_sym, dim_dict)
+        return _build_const_gather(
+        table, table_name, expr.args[2:end],
+        var_dict, t_sym, dim_dict
+    )
 
     arr = _esm_to_symbolic(expr.args[1], var_dict, t_sym, dim_dict)
     idx_args = expr.args[2:end]
@@ -398,7 +460,7 @@ function _build_index(expr::OpExpr, var_dict::Dict{String,Any},
     # the 1:N field, so the scalarizer never sees an out-of-bounds index.
     ctx = get(dim_dict, _GATHER_CTX_KEY, nothing)
     if ctx isa _GatherCtx && arr isa AbstractArray && !isempty(idx_args) &&
-       _index_args_gatherable(idx_args, ctx)
+            _index_args_gatherable(idx_args, ctx)
         return _build_gather_read(arr, idx_args, ctx)
     end
 
@@ -410,8 +472,11 @@ function _build_index(expr::OpExpr, var_dict::Dict{String,Any},
             # Fixtures sometimes encode whole-number indices as floats;
             # anything fractional is a malformed index, so fail with a
             # descriptive error instead of an InexactError from Int().
-            isinteger(a.value) || throw(ArgumentError(
-                "index argument must be an integer, got $(a.value)"))
+            isinteger(a.value) || throw(
+                ArgumentError(
+                    "index argument must be an integer, got $(a.value)"
+                )
+            )
             push!(idxs, Int(a.value))
         else
             push!(idxs, _esm_to_symbolic(a, var_dict, t_sym, dim_dict))
@@ -443,13 +508,16 @@ end
 # not the spec's 1.0/0.0 comparison value, and `and`/`or`/`not`/`ifelse`/`Pre`
 # record no single Base scalar function at all — so admitting them here would
 # silently diverge from the evaluator rather than extend it.
-const _BROADCAST_FNS = Dict{String,Function}(
+const _BROADCAST_FNS = Dict{String, Function}(
     s.name => s.scalar_fn for s in EarthSciAST._OP_TABLE
-    if s.scalar_fn !== nothing &&
-       (s.category === :arithmetic || s.category === :elementary))
+        if s.scalar_fn !== nothing &&
+        (s.category === :arithmetic || s.category === :elementary)
+)
 
-function _build_broadcast(expr::OpExpr, var_dict::Dict{String,Any},
-                          t_sym, dim_dict::Dict{String,Any})
+function _build_broadcast(
+        expr::OpExpr, var_dict::Dict{String, Any},
+        t_sym, dim_dict::Dict{String, Any}
+    )
     # The §4.3.4 `fn` contract, from the SAME predicate `validate()` reports as
     # `invalid_broadcast_fn` and the tree-walk build enforces: a missing /
     # unregistered / structural `fn`, or an operand count outside the named op's
@@ -463,8 +531,10 @@ function _build_broadcast(expr::OpExpr, var_dict::Dict{String,Any},
     return Base.materialize(Base.broadcasted(fn, operands...))
 end
 
-function _build_reshape(expr::OpExpr, var_dict::Dict{String,Any},
-                        t_sym, dim_dict::Dict{String,Any})
+function _build_reshape(
+        expr::OpExpr, var_dict::Dict{String, Any},
+        t_sym, dim_dict::Dict{String, Any}
+    )
     expr.shape === nothing && throw(ArgumentError("reshape node missing 'shape'"))
     arr = _esm_to_symbolic(expr.args[1], var_dict, t_sym, dim_dict)
     dims = Int[]
@@ -478,8 +548,10 @@ function _build_reshape(expr::OpExpr, var_dict::Dict{String,Any},
     return Symbolics.reshape(arr, dims...)
 end
 
-function _build_transpose(expr::OpExpr, var_dict::Dict{String,Any},
-                          t_sym, dim_dict::Dict{String,Any})
+function _build_transpose(
+        expr::OpExpr, var_dict::Dict{String, Any},
+        t_sym, dim_dict::Dict{String, Any}
+    )
     arr = _esm_to_symbolic(expr.args[1], var_dict, t_sym, dim_dict)
     if expr.perm !== nothing
         # Schema perm is 0-based; Julia permutedims expects 1-based axes.
@@ -489,11 +561,13 @@ function _build_transpose(expr::OpExpr, var_dict::Dict{String,Any},
     return transpose(arr)
 end
 
-function _build_concat(expr::OpExpr, var_dict::Dict{String,Any},
-                       t_sym, dim_dict::Dict{String,Any})
+function _build_concat(
+        expr::OpExpr, var_dict::Dict{String, Any},
+        t_sym, dim_dict::Dict{String, Any}
+    )
     expr.axis === nothing && throw(ArgumentError("concat node missing 'axis'"))
     arrs = [_esm_to_symbolic(a, var_dict, t_sym, dim_dict) for a in expr.args]
-    return cat(arrs...; dims=expr.axis + 1)
+    return cat(arrs...; dims = expr.axis + 1)
 end
 
 # ========================================
@@ -520,24 +594,34 @@ end
 # 1-D linear interp registered op. The `table` and `axis` arguments are
 # concrete vectors; `x` is the symbolic query that MTK's tracer flows.
 function _esm_interp_linear(table::Vector{Float64}, axis::Vector{Float64}, x::Real)::Float64
-    return EarthSciAST.evaluate_closed_function("interp.linear",
-        Any[table, axis, Float64(x)])::Float64
+    return EarthSciAST.evaluate_closed_function(
+        "interp.linear",
+        Any[table, axis, Float64(x)]
+    )::Float64
 end
 
 # `interp.searchsorted` registered op: the 1-based index as a Float64, so it
 # flows through symbolic arithmetic; `_esm_const_gather` rounds it back.
 function _esm_interp_searchsorted(xs::Vector{Float64}, x::Real)::Float64
-    return Float64(EarthSciAST.evaluate_closed_function("interp.searchsorted",
-        Any[Float64(x), xs]))
+    return Float64(
+        EarthSciAST.evaluate_closed_function(
+            "interp.searchsorted",
+            Any[Float64(x), xs]
+        )
+    )
 end
 
 # 2-D bilinear interp registered op. The `table` is a row-major nested
 # vector (`table[i][j]` at `(axis_x[i], axis_y[j])`).
-function _esm_interp_bilinear(table::Vector{Vector{Float64}},
-                              axis_x::Vector{Float64}, axis_y::Vector{Float64},
-                              x::Real, y::Real)::Float64
-    return EarthSciAST.evaluate_closed_function("interp.bilinear",
-        Any[table, axis_x, axis_y, Float64(x), Float64(y)])::Float64
+function _esm_interp_bilinear(
+        table::Vector{Vector{Float64}},
+        axis_x::Vector{Float64}, axis_y::Vector{Float64},
+        x::Real, y::Real
+    )::Float64
+    return EarthSciAST.evaluate_closed_function(
+        "interp.bilinear",
+        Any[table, axis_x, axis_y, Float64(x), Float64(y)]
+    )::Float64
 end
 
 # Register both with `@register_symbolic` so MTK treats each call as a
@@ -586,55 +670,88 @@ end
 # Pull a `const`-op array value out of an AST argument node, or raise the
 # esm-spec §9.2 `interp_table_not_const` / `interp_axis_not_const` code (`code`)
 # as the `ClosedFunctionError` the tree-walk build raises for the same node.
-function _extract_const_array_node(arg::EsmExpr, fname::String, label::String,
-                                   code::String)
+function _extract_const_array_node(
+        arg::EsmExpr, fname::String, label::String,
+        code::String
+    )
     if arg isa OpExpr && arg.op == "const" && arg.value isa AbstractVector
         return arg.value
     end
-    throw(EarthSciAST.ClosedFunctionError(code,
-        "$(fname): `$(label)` argument must be a `const`-op array " *
-        "(esm-spec §9.2); got $(arg isa OpExpr ? "a `$(arg.op)` node" : typeof(arg))"))
+    throw(
+        EarthSciAST.ClosedFunctionError(
+            code,
+            "$(fname): `$(label)` argument must be a `const`-op array " *
+                "(esm-spec §9.2); got $(arg isa OpExpr ? "a `$(arg.op)` node" : typeof(arg))"
+        )
+    )
 end
 
-function _build_fn(expr::OpExpr, var_dict::Dict{String,Any},
-                   t_sym, dim_dict::Dict{String,Any})
+function _build_fn(
+        expr::OpExpr, var_dict::Dict{String, Any},
+        t_sym, dim_dict::Dict{String, Any}
+    )
     fname = expr.name
     fname === nothing && throw(ArgumentError("`fn` op missing required `name` field (esm-spec §4.4)"))
     # A lookup lowered from an `out_of_bounds: "error"` table (lower_table_lookup.jl)
     # must raise for a query outside its axis; the registered symbolic `interp.*`
     # functions clamp, and a solve has no channel for the error, so the lookup is
     # refused rather than answered in the mode the author did not declare.
-    expr.table === nothing || throw(EarthSciAST.TableLookupError(
-        EarthSciAST.ERROR_CODES.TABLE_OUT_OF_BOUNDS_UNSUPPORTED,
-        "table `$(expr.table)` declares `out_of_bounds: \"error\"`, which the " *
-        "ModelingToolkit lowering does not implement; it would answer with " *
-        "clamping semantics (esm-spec §9.5.3a)"))
+    expr.table === nothing || throw(
+        EarthSciAST.TableLookupError(
+            EarthSciAST.ERROR_CODES.TABLE_OUT_OF_BOUNDS_UNSUPPORTED,
+            "table `$(expr.table)` declares `out_of_bounds: \"error\"`, which the " *
+                "ModelingToolkit lowering does not implement; it would answer with " *
+                "clamping semantics (esm-spec §9.5.3a)"
+        )
+    )
     if fname == "interp.linear"
         length(expr.args) == 3 ||
             throw(ArgumentError("interp.linear expects 3 args, got $(length(expr.args))"))
-        table = _to_float64_vector(_extract_const_array_node(expr.args[1], fname, "table",
-            EarthSciAST.ERROR_CODES.INTERP_TABLE_NOT_CONST))
-        axis  = _to_float64_vector(_extract_const_array_node(expr.args[2], fname, "axis",
-            EarthSciAST.ERROR_CODES.INTERP_AXIS_NOT_CONST))
+        table = _to_float64_vector(
+            _extract_const_array_node(
+                expr.args[1], fname, "table",
+                EarthSciAST.ERROR_CODES.INTERP_TABLE_NOT_CONST
+            )
+        )
+        axis = _to_float64_vector(
+            _extract_const_array_node(
+                expr.args[2], fname, "axis",
+                EarthSciAST.ERROR_CODES.INTERP_AXIS_NOT_CONST
+            )
+        )
         x_sym = _esm_to_symbolic(expr.args[3], var_dict, t_sym, dim_dict)
         return _esm_interp_linear(table, axis, x_sym)
     elseif fname == "interp.bilinear"
         length(expr.args) == 5 ||
             throw(ArgumentError("interp.bilinear expects 5 args, got $(length(expr.args))"))
-        table  = _to_float64_table_2d(_extract_const_array_node(expr.args[1], fname, "table",
-            EarthSciAST.ERROR_CODES.INTERP_TABLE_NOT_CONST))
-        axis_x = _to_float64_vector(_extract_const_array_node(expr.args[2], fname, "axis_x",
-            EarthSciAST.ERROR_CODES.INTERP_AXIS_NOT_CONST))
-        axis_y = _to_float64_vector(_extract_const_array_node(expr.args[3], fname, "axis_y",
-            EarthSciAST.ERROR_CODES.INTERP_AXIS_NOT_CONST))
-        x_sym  = _esm_to_symbolic(expr.args[4], var_dict, t_sym, dim_dict)
-        y_sym  = _esm_to_symbolic(expr.args[5], var_dict, t_sym, dim_dict)
+        table = _to_float64_table_2d(
+            _extract_const_array_node(
+                expr.args[1], fname, "table",
+                EarthSciAST.ERROR_CODES.INTERP_TABLE_NOT_CONST
+            )
+        )
+        axis_x = _to_float64_vector(
+            _extract_const_array_node(
+                expr.args[2], fname, "axis_x",
+                EarthSciAST.ERROR_CODES.INTERP_AXIS_NOT_CONST
+            )
+        )
+        axis_y = _to_float64_vector(
+            _extract_const_array_node(
+                expr.args[3], fname, "axis_y",
+                EarthSciAST.ERROR_CODES.INTERP_AXIS_NOT_CONST
+            )
+        )
+        x_sym = _esm_to_symbolic(expr.args[4], var_dict, t_sym, dim_dict)
+        y_sym = _esm_to_symbolic(expr.args[5], var_dict, t_sym, dim_dict)
         return _esm_interp_bilinear(table, axis_x, axis_y, x_sym, y_sym)
     elseif fname == "interp.searchsorted"
         length(expr.args) == 2 ||
             throw(ArgumentError("interp.searchsorted expects 2 args, got $(length(expr.args))"))
-        xs_raw = _extract_const_array_node(expr.args[2], fname, "xs",
-            EarthSciAST.ERROR_CODES.INTERP_AXIS_NOT_CONST)
+        xs_raw = _extract_const_array_node(
+            expr.args[2], fname, "xs",
+            EarthSciAST.ERROR_CODES.INTERP_AXIS_NOT_CONST
+        )
         # Validate at build, as the tree-walk build does: the registered call is
         # opaque, so a bad table would otherwise surface mid-solve. BEFORE the
         # Float64 coercion, so a nested `xs` is `interp_axis_not_const` and not
@@ -645,12 +762,16 @@ function _build_fn(expr::OpExpr, var_dict::Dict{String,Any},
         return _esm_interp_searchsorted(xs, x_sym)
     end
     # The datetime.* closed functions are not exposed as registered symbolic ops.
-    throw(ArgumentError("Unsupported `fn` name in MTK lowering: `$(fname)`. " *
-          "Only `interp.linear`, `interp.bilinear` and `interp.searchsorted` are " *
-          "registered as @register_symbolic operators (esm-94w)."))
+    throw(
+        ArgumentError(
+            "Unsupported `fn` name in MTK lowering: `$(fname)`. " *
+                "Only `interp.linear`, `interp.bilinear` and `interp.searchsorted` are " *
+                "registered as @register_symbolic operators (esm-94w)."
+        )
+    )
 end
 
-function _get_or_make_dim(dim_dict::Dict{String,Any}, name::AbstractString)
+function _get_or_make_dim(dim_dict::Dict{String, Any}, name::AbstractString)
     if haskey(dim_dict, name)
         return dim_dict[name]
     end

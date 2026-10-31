@@ -25,11 +25,12 @@ _pointer_token(key::AbstractString) = replace(replace(key, "~" => "~0"), "/" => 
 # `shape` (empty when absent): a model's `variables`, or a reaction system's
 # `species` (which carry no shape) and `parameters`.
 function _test_target_shapes(model::Model)
-    return Dict{String,Vector{String}}(
-        name => (v.shape === nothing ? String[] : v.shape) for (name, v) in model.variables)
+    return Dict{String, Vector{String}}(
+        name => (v.shape === nothing ? String[] : v.shape) for (name, v) in model.variables
+    )
 end
 function _test_target_shapes(rs::ReactionSystem)
-    shapes = Dict{String,Vector{String}}(sp.name => String[] for sp in rs.species)
+    shapes = Dict{String, Vector{String}}(sp.name => String[] for sp in rs.species)
     for p in rs.parameters
         shapes[p.name] = p.shape === nothing ? String[] : p.shape
     end
@@ -56,6 +57,7 @@ function _declared_override_names(file::EsmFile)
         for (sub_name, sub) in component.subsystems
             walk("$prefix.$sub_name", sub)
         end
+        return
     end
     file.models === nothing || for (name, model) in file.models
         walk(String(name), model)
@@ -74,7 +76,7 @@ function _override_key_matches(key::AbstractString, names::Set{String}, namespac
     key in names && return true
     parts = split(key, '.')
     for i in 2:length(parts)
-        if join(parts[i:end], '.') in names && all(p -> String(p) in namespaces, parts[1:i-1])
+        if join(parts[i:end], '.') in names && all(p -> String(p) in namespaces, parts[1:(i - 1)])
             return true
         end
     end
@@ -82,51 +84,67 @@ function _override_key_matches(key::AbstractString, names::Set{String}, namespac
     return any(n -> endswith(n, tail), names)
 end
 
-function _check_inline_tests!(errors::Vector{StructuralError}, tests, component_path::String,
-                              shapes::Dict{String,Vector{String}}, names, namespaces, complete)
+function _check_inline_tests!(
+        errors::Vector{StructuralError}, tests, component_path::String,
+        shapes::Dict{String, Vector{String}}, names, namespaces, complete
+    )
     for (ti, test) in enumerate(tests)
-        base = "$component_path/tests/$(ti-1)"
+        base = "$component_path/tests/$(ti - 1)"
         if complete
-            for (field, overrides) in (("initial_conditions", test.initial_conditions),
-                                       ("parameter_overrides", test.parameter_overrides))
+            for (field, overrides) in (
+                    ("initial_conditions", test.initial_conditions),
+                    ("parameter_overrides", test.parameter_overrides),
+                )
                 for key in sort!(collect(keys(overrides)))
                     bare_key, _ = _strip_element_suffix(key)
                     _override_key_matches(bare_key, names, namespaces) && continue
-                    push!(errors, StructuralError(
-                        "$base/$field/$(_pointer_token(key))",
-                        "Override key \"$key\" in $field matches no declared name",
-                        ERROR_CODES.UNKNOWN_OVERRIDE_KEY,
-                        Dict{String,Any}("key" => key, "field" => field)))
+                    push!(
+                        errors, StructuralError(
+                            "$base/$field/$(_pointer_token(key))",
+                            "Override key \"$key\" in $field matches no declared name",
+                            ERROR_CODES.UNKNOWN_OVERRIDE_KEY,
+                            Dict{String, Any}("key" => key, "field" => field)
+                        )
+                    )
                 end
             end
         end
         for (ai, assertion) in enumerate(test.assertions)
             bare, is_element = _strip_element_suffix(assertion.variable)
             occursin('.', bare) && continue
-            pointer = "$base/assertions/$(ai-1)"
+            pointer = "$base/assertions/$(ai - 1)"
             if !haskey(shapes, bare)
-                push!(errors, StructuralError(
-                    "$pointer/variable",
-                    "Variable \"$bare\" referenced in assertion variable but not declared",
-                    ERROR_CODES.UNDEFINED_VARIABLE,
-                    Dict{String,Any}("variable" => bare)))
+                push!(
+                    errors, StructuralError(
+                        "$pointer/variable",
+                        "Variable \"$bare\" referenced in assertion variable but not declared",
+                        ERROR_CODES.UNDEFINED_VARIABLE,
+                        Dict{String, Any}("variable" => bare)
+                    )
+                )
                 continue
             end
             is_element && continue
             shape = shapes[bare]
             selects = assertion.coords !== nothing || assertion.reduce !== nothing
             if !isempty(shape) && !selects
-                push!(errors, StructuralError(
-                    pointer,
-                    "Assertion on shaped variable \"$bare\" selects no scalar (give coords, reduce, or an element name)",
-                    ERROR_CODES.ASSERTION_RANK_MISMATCH,
-                    Dict{String,Any}("variable" => bare, "shape" => shape)))
+                push!(
+                    errors, StructuralError(
+                        pointer,
+                        "Assertion on shaped variable \"$bare\" selects no scalar (give coords, reduce, or an element name)",
+                        ERROR_CODES.ASSERTION_RANK_MISMATCH,
+                        Dict{String, Any}("variable" => bare, "shape" => shape)
+                    )
+                )
             elseif isempty(shape) && selects
-                push!(errors, StructuralError(
-                    pointer,
-                    "Assertion on scalar variable \"$bare\" carries coords or reduce",
-                    ERROR_CODES.ASSERTION_RANK_MISMATCH,
-                    Dict{String,Any}("variable" => bare, "shape" => String[])))
+                push!(
+                    errors, StructuralError(
+                        pointer,
+                        "Assertion on scalar variable \"$bare\" carries coords or reduce",
+                        ERROR_CODES.ASSERTION_RANK_MISMATCH,
+                        Dict{String, Any}("variable" => bare, "shape" => String[])
+                    )
+                )
             end
         end
     end
@@ -141,15 +159,19 @@ function _validate_inline_tests(file::EsmFile)::Vector{StructuralError}
     if file.models !== nothing
         for name in sort!(collect(keys(file.models)))
             model = file.models[name]
-            _check_inline_tests!(errors, model.tests, "/models/$name",
-                                 _test_target_shapes(model), names, namespaces, complete)
+            _check_inline_tests!(
+                errors, model.tests, "/models/$name",
+                _test_target_shapes(model), names, namespaces, complete
+            )
         end
     end
     if file.reaction_systems !== nothing
         for name in sort!(collect(keys(file.reaction_systems)))
             rs = file.reaction_systems[name]
-            _check_inline_tests!(errors, rs.tests, "/reaction_systems/$name",
-                                 _test_target_shapes(rs), names, namespaces, complete)
+            _check_inline_tests!(
+                errors, rs.tests, "/reaction_systems/$name",
+                _test_target_shapes(rs), names, namespaces, complete
+            )
         end
     end
     return errors

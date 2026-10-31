@@ -26,15 +26,21 @@ const ESM_OC = EarthSciAST
 
 # A one-model document over an `interval` index set `steps`, so array-shaped
 # declarations in these tests resolve exactly as they do in the fixtures.
-_oc_file(vars::AbstractDict, eqs::Vector; subsystems=OrderedDict{String,ESM_OC.SubsystemNode}()) =
-    ESM_OC.EsmFile("1.0.0", ESM_OC.Metadata("ObsCycle");
-        models=Dict("M" => ESM_OC.Model(vars, ESM_OC.Equation[eqs...];
-                                        subsystems=subsystems)),
-        index_sets=OrderedDict("steps" => ESM_OC.IndexSet("interval"; size=4)))
+_oc_file(vars::AbstractDict, eqs::Vector; subsystems = OrderedDict{String, ESM_OC.SubsystemNode}()) =
+    ESM_OC.EsmFile(
+    "1.0.0", ESM_OC.Metadata("ObsCycle");
+    models = Dict(
+        "M" => ESM_OC.Model(
+            vars, ESM_OC.Equation[eqs...];
+            subsystems = subsystems
+        )
+    ),
+    index_sets = OrderedDict("steps" => ESM_OC.IndexSet("interval"; size = 4))
+)
 
-_oc_scalar() = ESM_OC.ModelVariable(ESM_OC.UnknownVariable; units="1")
-_oc_array() = ESM_OC.ModelVariable(ESM_OC.UnknownVariable; shape=Any["steps"], units="1")
-_oc_param() = ESM_OC.ModelVariable(ESM_OC.ParameterVariable; units="1", default=1.0)
+_oc_scalar() = ESM_OC.ModelVariable(ESM_OC.UnknownVariable; units = "1")
+_oc_array() = ESM_OC.ModelVariable(ESM_OC.UnknownVariable; shape = Any["steps"], units = "1")
+_oc_param() = ESM_OC.ModelVariable(ESM_OC.ParameterVariable; units = "1", default = 1.0)
 
 @testset "Observed dependency cycles (§4.9.6)" begin
 
@@ -57,15 +63,19 @@ _oc_param() = ESM_OC.ModelVariable(ESM_OC.ParameterVariable; units="1", default=
     # what the materialization walk happened to try first after the cycle
     # stalled. A binding that names it has misattributed the defect.
     @testset "tests/invalid/observed_cycle_array_elementwise.esm is rejected" begin
-        path = joinpath(TESTUTILS_REPO_ROOT, "tests", "invalid",
-                        "observed_cycle_array_elementwise.esm")
+        path = joinpath(
+            TESTUTILS_REPO_ROOT, "tests", "invalid",
+            "observed_cycle_array_elementwise.esm"
+        )
         if _require_fixture(path)
             res = validate_path(path)
             @test !res.is_valid
             @test isempty(res.schema_errors)   # the defect is structural, not schematic
 
-            found = [e for e in res.structural_errors
-                     if e.error_type == EarthSciAST.ERROR_CODES.OBSERVED_CYCLE]
+            found = [
+                e for e in res.structural_errors
+                    if e.error_type == EarthSciAST.ERROR_CODES.OBSERVED_CYCLE
+            ]
             @test length(found) == 1
             err = found[1]
             @test err.path == "/models/YSU"
@@ -91,7 +101,7 @@ _oc_param() = ESM_OC.ModelVariable(ESM_OC.ParameterVariable; units="1", default=
             # confuse the author about which one to fix — least of all one
             # against a bystander, which is the whole defect being fixed.
             @test Set(e.error_type for e in res.structural_errors) ==
-                  Set([EarthSciAST.ERROR_CODES.OBSERVED_CYCLE])
+                Set([EarthSciAST.ERROR_CODES.OBSERVED_CYCLE])
         end
     end
 
@@ -100,8 +110,11 @@ _oc_param() = ESM_OC.ModelVariable(ESM_OC.ParameterVariable; units="1", default=
     @testset "a two-variable scalar cycle a -> b -> a" begin
         file = _oc_file(
             Dict("a" => _oc_scalar(), "b" => _oc_scalar()),
-            [ESM_OC.Equation(_v("a"), _op("+", _v("b"), _n(1.0))),
-             ESM_OC.Equation(_v("b"), _op("+", _v("a"), _n(1.0)))])
+            [
+                ESM_OC.Equation(_v("a"), _op("+", _v("b"), _n(1.0))),
+                ESM_OC.Equation(_v("b"), _op("+", _v("a"), _n(1.0))),
+            ]
+        )
         errs = ESM_OC.validate_observed_cycles(file)
         @test length(errs) == 1
         @test errs[1].error_type == "observed_cycle"
@@ -116,10 +129,15 @@ _oc_param() = ESM_OC.ModelVariable(ESM_OC.ParameterVariable; units="1", default=
         # second is usually the same defect from another entry point, and the
         # author fixes them one at a time regardless.
         file = _oc_file(
-            Dict("a" => _oc_scalar(), "b" => _oc_scalar(),
-                 "c" => _oc_scalar(), "d" => _oc_scalar()),
-            [ESM_OC.Equation(_v("a"), _v("b")), ESM_OC.Equation(_v("b"), _v("a")),
-             ESM_OC.Equation(_v("c"), _v("d")), ESM_OC.Equation(_v("d"), _v("c"))])
+            Dict(
+                "a" => _oc_scalar(), "b" => _oc_scalar(),
+                "c" => _oc_scalar(), "d" => _oc_scalar()
+            ),
+            [
+                ESM_OC.Equation(_v("a"), _v("b")), ESM_OC.Equation(_v("b"), _v("a")),
+                ESM_OC.Equation(_v("c"), _v("d")), ESM_OC.Equation(_v("d"), _v("c")),
+            ]
+        )
         errs = ESM_OC.validate_observed_cycles(file)
         @test length(errs) == 1
         @test errs[1].details["cycle"] == ["a", "b", "a"]
@@ -132,8 +150,10 @@ _oc_param() = ESM_OC.ModelVariable(ESM_OC.ParameterVariable; units="1", default=
     # recurrence CANDIDATE — silently drops both of these.
 
     @testset "a scalar self-reference x ~ x + 1 is a cycle of length one" begin
-        file = _oc_file(Dict("x" => _oc_scalar()),
-                        [ESM_OC.Equation(_v("x"), _op("+", _v("x"), _n(1.0)))])
+        file = _oc_file(
+            Dict("x" => _oc_scalar()),
+            [ESM_OC.Equation(_v("x"), _op("+", _v("x"), _n(1.0)))]
+        )
         errs = ESM_OC.validate_observed_cycles(file)
         @test length(errs) == 1
         @test errs[1].error_type == "observed_cycle"
@@ -149,8 +169,10 @@ _oc_param() = ESM_OC.ModelVariable(ESM_OC.ParameterVariable; units="1", default=
         # Array-shaped, so the shape half of candidacy holds — but the
         # self-reference is BARE, never through `index`, so it is not a
         # candidate and keeps the cycle diagnosis it has always had.
-        file = _oc_file(Dict("s" => _oc_array()),
-                        [ESM_OC.Equation(_v("s"), _op("+", _v("s"), _n(1.0)))])
+        file = _oc_file(
+            Dict("s" => _oc_array()),
+            [ESM_OC.Equation(_v("s"), _op("+", _v("s"), _n(1.0)))]
+        )
         errs = ESM_OC.validate_observed_cycles(file)
         @test length(errs) == 1
         @test errs[1].details["cycle"] == ["s", "s"]
@@ -159,8 +181,10 @@ _oc_param() = ESM_OC.ModelVariable(ESM_OC.ParameterVariable; units="1", default=
     # ── The recurrence self-edge is NOT one of these edges ─────────────────
 
     @testset "tests/valid/recurrence_causal_self_reference.esm still validates clean" begin
-        path = joinpath(TESTUTILS_REPO_ROOT, "tests", "valid",
-                        "recurrence_causal_self_reference.esm")
+        path = joinpath(
+            TESTUTILS_REPO_ROOT, "tests", "valid",
+            "recurrence_causal_self_reference.esm"
+        )
         if _require_fixture(path)
             res = validate_path(path)
             @test isempty(res.structural_errors)
@@ -172,10 +196,14 @@ _oc_param() = ESM_OC.ModelVariable(ESM_OC.ParameterVariable; units="1", default=
     @testset "a well-founded recurrence candidate has its self-edge dropped" begin
         # `s[k] = ifelse(k <= 1, 1.0, 2 * s[k-1])` — the canonical §4.3.1.1
         # spelling, array-shaped with an `index` self-read, so a CANDIDATE.
-        body = _op("ifelse", _op("<=", _v("k"), _i(1)), _n(1.0),
-                   _op("*", _idx("s", _op("-", _v("k"), _i(1))), _n(2.0)))
-        rhs = _op("faq"; output_idx=Any["k"], expr_body=body, reduce="+",
-                  ranges=Dict{String,Any}("k" => ESM_OC.IndexSetRef("steps")))
+        body = _op(
+            "ifelse", _op("<=", _v("k"), _i(1)), _n(1.0),
+            _op("*", _idx("s", _op("-", _v("k"), _i(1))), _n(2.0))
+        )
+        rhs = _op(
+            "faq"; output_idx = Any["k"], expr_body = body, reduce = "+",
+            ranges = Dict{String, Any}("k" => ESM_OC.IndexSetRef("steps"))
+        )
         file = _oc_file(Dict("s" => _oc_array()), [ESM_OC.Equation(_v("s"), rhs)])
         @test isempty(ESM_OC.validate_observed_cycles(file))
     end
@@ -188,8 +216,10 @@ _oc_param() = ESM_OC.ModelVariable(ESM_OC.ParameterVariable; units="1", default=
         # Gating on the verdict instead would collapse this document to one
         # cycle error and lose that name (CONFORMANCE_SPEC §5.19.5).
         body = _op("*", _idx("s", _op("+", _v("k"), _i(1))), _n(2.0))
-        rhs = _op("faq"; output_idx=Any["k"], expr_body=body, reduce="+",
-                  ranges=Dict{String,Any}("k" => ESM_OC.IndexSetRef("steps")))
+        rhs = _op(
+            "faq"; output_idx = Any["k"], expr_body = body, reduce = "+",
+            ranges = Dict{String, Any}("k" => ESM_OC.IndexSetRef("steps"))
+        )
         file = _oc_file(Dict("s" => _oc_array()), [ESM_OC.Equation(_v("s"), rhs)])
         @test isempty(ESM_OC.validate_observed_cycles(file))
         rec = ESM_OC.validate_recurrence_semantics(file)
@@ -203,11 +233,16 @@ _oc_param() = ESM_OC.ModelVariable(ESM_OC.ParameterVariable; units="1", default=
         # c -> b -> a, three levels deep and read twice per level, which is the
         # shape a naive "any repeated name" check trips over.
         file = _oc_file(
-            Dict("a" => _oc_scalar(), "b" => _oc_scalar(),
-                 "c" => _oc_scalar(), "p" => _oc_param()),
-            [ESM_OC.Equation(_v("a"), _op("*", _v("p"), _n(2.0))),
-             ESM_OC.Equation(_v("b"), _op("+", _v("a"), _v("a"))),
-             ESM_OC.Equation(_v("c"), _op("+", _v("b"), _op("*", _v("b"), _v("a"))))])
+            Dict(
+                "a" => _oc_scalar(), "b" => _oc_scalar(),
+                "c" => _oc_scalar(), "p" => _oc_param()
+            ),
+            [
+                ESM_OC.Equation(_v("a"), _op("*", _v("p"), _n(2.0))),
+                ESM_OC.Equation(_v("b"), _op("+", _v("a"), _v("a"))),
+                ESM_OC.Equation(_v("c"), _op("+", _v("b"), _op("*", _v("b"), _v("a")))),
+            ]
+        )
         @test isempty(ESM_OC.validate_observed_cycles(file))
     end
 
@@ -220,7 +255,7 @@ _oc_param() = ESM_OC.ModelVariable(ESM_OC.ParameterVariable; units="1", default=
         # the graph walker directly: building a 20 000-equation `Model` to reach
         # it would measure the constructors, not the walk.
         n = 20_000
-        adj = Dict{String,Vector{String}}("x$(n - 1)" => String[])
+        adj = Dict{String, Vector{String}}("x$(n - 1)" => String[])
         for i in 0:(n - 2)
             adj["x$i"] = ["x$(i + 1)"]
         end
@@ -238,13 +273,18 @@ _oc_param() = ESM_OC.ModelVariable(ESM_OC.ParameterVariable; units="1", default=
         # `y`'s aggregate binds the loop symbol `i`, and the model ALSO declares
         # an observed named `i` that reads `y`. Without binder subtraction the
         # loop symbol reads as a reference and closes a phantom `y -> i -> y`.
-        agg = _op("faq"; output_idx=Any["i"],
-                  expr_body=_op("*", _v("p"), _v("i")), reduce="+",
-                  ranges=Dict{String,Any}("i" => ESM_OC.IndexSetRef("steps")))
+        agg = _op(
+            "faq"; output_idx = Any["i"],
+            expr_body = _op("*", _v("p"), _v("i")), reduce = "+",
+            ranges = Dict{String, Any}("i" => ESM_OC.IndexSetRef("steps"))
+        )
         file = _oc_file(
             Dict("y" => _oc_array(), "i" => _oc_scalar(), "p" => _oc_param()),
-            [ESM_OC.Equation(_v("y"), agg),
-             ESM_OC.Equation(_v("i"), _idx("y", _i(1)))])
+            [
+                ESM_OC.Equation(_v("y"), agg),
+                ESM_OC.Equation(_v("i"), _idx("y", _i(1))),
+            ]
+        )
         @test isempty(ESM_OC.validate_observed_cycles(file))
     end
 
@@ -254,7 +294,8 @@ _oc_param() = ESM_OC.ModelVariable(ESM_OC.ParameterVariable; units="1", default=
         # this test pins that it keeps doing it.
         file = _oc_file(
             Dict("x" => _oc_scalar(), "k" => _oc_param()),
-            [ESM_OC.Equation(_D("x"), _op("*", _op("-", _v("k")), _v("x")))])
+            [ESM_OC.Equation(_D("x"), _op("*", _op("-", _v("k")), _v("x")))]
+        )
         @test isempty(ESM_OC.validate_observed_cycles(file))
     end
 
@@ -263,10 +304,15 @@ _oc_param() = ESM_OC.ModelVariable(ESM_OC.ParameterVariable; units="1", default=
     @testset "a cycle inside a subsystem is reported at the subsystem's path" begin
         inner = ESM_OC.Model(
             Dict("a" => _oc_scalar(), "b" => _oc_scalar()),
-            ESM_OC.Equation[ESM_OC.Equation(_v("a"), _v("b")),
-                            ESM_OC.Equation(_v("b"), _v("a"))])
-        file = _oc_file(Dict("p" => _oc_param()), ESM_OC.Equation[];
-                        subsystems=OrderedDict{String,ESM_OC.SubsystemNode}("S" => inner))
+            ESM_OC.Equation[
+                ESM_OC.Equation(_v("a"), _v("b")),
+                ESM_OC.Equation(_v("b"), _v("a")),
+            ]
+        )
+        file = _oc_file(
+            Dict("p" => _oc_param()), ESM_OC.Equation[];
+            subsystems = OrderedDict{String, ESM_OC.SubsystemNode}("S" => inner)
+        )
         errs = ESM_OC.validate_observed_cycles(file)
         @test length(errs) == 1
         @test errs[1].path == "/models/M/subsystems/S"
@@ -278,7 +324,8 @@ _oc_param() = ESM_OC.ModelVariable(ESM_OC.ParameterVariable; units="1", default=
     @testset "validate_structural runs the check" begin
         file = _oc_file(
             Dict("a" => _oc_scalar(), "b" => _oc_scalar()),
-            [ESM_OC.Equation(_v("a"), _v("b")), ESM_OC.Equation(_v("b"), _v("a"))])
+            [ESM_OC.Equation(_v("a"), _v("b")), ESM_OC.Equation(_v("b"), _v("a"))]
+        )
         codes = Set(e.error_type for e in EarthSciAST.validate_structural(file))
         @test "observed_cycle" in codes
     end

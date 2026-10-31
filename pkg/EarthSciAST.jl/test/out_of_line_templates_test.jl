@@ -25,18 +25,20 @@ function _ool_defrhs(model, name::AbstractString)
 end
 
 @testset "out-of-line expression templates (Option B, esm-spec §9.6.4)" begin
-    conf(parts...) = joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance",
-                              "expression_templates", parts...)
+    conf(parts...) = joinpath(
+        TESTUTILS_REPO_ROOT, "tests", "conformance",
+        "expression_templates", parts...
+    )
 
     # Load a fixture under Option B (references preserved), returning the raw
     # loaded document view.
-    function _load(dir, fixture="fixture.esm")
+    function _load(dir, fixture = "fixture.esm")
         fp = conf(dir, fixture)
         raw = JSON3.read(read(fp, String))
         resolved = resolve_template_machinery(raw, dirname(fp))
         return lower_expression_templates(resolved === nothing ? raw : resolved)
     end
-    _emit(dir, fixture="fixture.esm") = begin
+    _emit(dir, fixture = "fixture.esm") = begin
         fp = conf(dir, fixture)
         emit_esm_string(emit_document(JSON3.read(read(fp, String)), dirname(fp)))
     end
@@ -48,9 +50,11 @@ end
     # are NOT regenerated — they are the Option-A image `Expand` must reproduce.
     # -----------------------------------------------------------------------
     @testset "bridge: Expand(load) == expanded oracle (21 goldens)" begin
-        _core(d) = Dict(k => _normj(get(d, k, nothing))
-                        for k in ("models", "reaction_systems", "coupling", "index_sets")
-                        if haskey(d, k))
+        _core(d) = Dict(
+            k => _normj(get(d, k, nothing))
+                for k in ("models", "reaction_systems", "coupling", "index_sets")
+                if haskey(d, k)
+        )
         # (dir, fixture, golden) — the raw-pipeline goldens (the two scope-
         # injection + metaparameter goldens go through the typed load path and
         # are pinned by scope_injection_test.jl / template_imports_test.jl).
@@ -123,8 +127,12 @@ end
         interior = adv["equations"][1]["rhs"]["args"][2]["values"][1]
         @test _isapply(interior) && interior["name"] == "central_D_lon_interior"
         # idempotency (§9.6.4 rule 5 / RFC gate 2)
-        s2 = emit_esm_string(emit_document(JSON3.read(s),
-                    dirname(conf("emit_materialized_registry", "emitted.esm"))))
+        s2 = emit_esm_string(
+            emit_document(
+                JSON3.read(s),
+                dirname(conf("emit_materialized_registry", "emitted.esm"))
+            )
+        )
         @test s2 == s
     end
 
@@ -157,7 +165,7 @@ end
         @test _isapply(dsurv["args"][1]) && dsurv["args"][1]["name"] == "scale_c"
         # Emit golden.
         @test _emit("eager_target_bearing") ==
-              read(conf("eager_target_bearing", "emitted.esm"), String)
+            read(conf("eager_target_bearing", "emitted.esm"), String)
     end
 
     # -----------------------------------------------------------------------
@@ -172,7 +180,7 @@ end
         @test _isapply(flux["args"][1])            # its arg is the surviving reference
         @test flux["args"][1]["name"] == "flux_prod"
         @test _emit("opacity_negative") ==
-              read(conf("opacity_negative", "emitted.esm"), String)
+            read(conf("opacity_negative", "emitted.esm"), String)
     end
 
     # -----------------------------------------------------------------------
@@ -189,7 +197,7 @@ end
         @test _isapply(flux["args"][2])            # reference bound WHOLE by metavariable f
         @test flux["args"][2]["name"] == "flux_prod"
         @test _emit("opacity_priority_shadowing") ==
-              read(conf("opacity_priority_shadowing", "emitted.esm"), String)
+            read(conf("opacity_priority_shadowing", "emitted.esm"), String)
     end
 
     # -----------------------------------------------------------------------
@@ -245,8 +253,12 @@ end
         _names(x) = EarthSciAST._collect_apply_names!(String[], x)
         loaded = _load(dir)
         root, merged = flatten_template_registries(loaded)
-        @test Set(keys(merged)) == Set(["A.interior_stencil", "A.outer_stencil",
-                                        "B.interior_stencil", "B.outer_stencil"])
+        @test Set(keys(merged)) == Set(
+            [
+                "A.interior_stencil", "A.outer_stencil",
+                "B.interior_stencil", "B.outer_stencil",
+            ]
+        )
         # Each owner's wrapper reaches its OWN leaf, never the other model's.
         @test _names(merged["A.outer_stencil"]["body"]) == ["A.interior_stencil"]
         @test _names(merged["B.outer_stencil"]["body"]) == ["B.interior_stencil"]
@@ -279,21 +291,27 @@ end
             for lib in ("stencil_lib.esm", "rule_lib.esm")
                 cp(conf(dir, lib), joinpath(d, lib))
             end
-            doc = Dict{String,Any}(String(k) => v for (k, v) in pairs(raw))
+            doc = Dict{String, Any}(String(k) => v for (k, v) in pairs(raw))
             # B becomes a byte-identical twin of A: nothing distinguishes the two
             # registries until component scoping runs.
-            doc["models"] = Dict{String,Any}("A" => raw["models"]["A"],
-                                             "B" => raw["models"]["A"])
+            doc["models"] = Dict{String, Any}(
+                "A" => raw["models"]["A"],
+                "B" => raw["models"]["A"]
+            )
             path = joinpath(d, "twins.esm")
             open(io -> JSON3.write(io, doc), path, "w")
             flat = EarthSciAST.flatten(EarthSciAST.load_path(path))
             @test Set(keys(flat.template_registry)) ==
-                  Set(["A.interior_stencil", "A.outer_stencil",
-                       "B.interior_stencil", "B.outer_stencil"])
+                Set(
+                [
+                    "A.interior_stencil", "A.outer_stencil",
+                    "B.interior_stencil", "B.outer_stencil",
+                ]
+            )
             expanded = EarthSciAST.expand_flattened_refs(flat)
             # Twin models ⇒ twin equation sets, modulo the namespace prefix.
             _ser(eq) = JSON3.write(EarthSciAST.serialize_expression(eq.lhs)) * "~" *
-                       JSON3.write(EarthSciAST.serialize_expression(eq.rhs))
+                JSON3.write(EarthSciAST.serialize_expression(eq.rhs))
             eqs = Set(_ser(eq) for eq in expanded.equations)
             a_eqs = [s for s in eqs if occursin("A.", s)]
             @test !isempty(a_eqs)
@@ -343,8 +361,12 @@ end
         # every surviving reference resolves against the carried registry.
         flat = EarthSciAST.flatten(EarthSciAST.load_path(conf(dir, "fixture_twins.esm")))
         @test Set(keys(flat.template_registry)) ==
-              Set(["A.interior_stencil", "A.outer_stencil",
-                   "B.interior_stencil", "B.outer_stencil"])
+            Set(
+            [
+                "A.interior_stencil", "A.outer_stencil",
+                "B.interior_stencil", "B.outer_stencil",
+            ]
+        )
         @test EarthSciAST.expand_flattened_refs(flat) isa EarthSciAST.FlattenedSystem
     end
 
@@ -352,9 +374,11 @@ end
     # Idempotency property over every new emit fixture (RFC §12 gate 2).
     # -----------------------------------------------------------------------
     @testset "emit ∘ load byte-wise fixed point (all emit fixtures)" begin
-        for dir in ["emit_materialized_registry", "emit_rename_dotted_keys",
-                    "eager_target_bearing", "opacity_negative",
-                    "opacity_priority_shadowing"]
+        for dir in [
+                "emit_materialized_registry", "emit_rename_dotted_keys",
+                "eager_target_bearing", "opacity_negative",
+                "opacity_priority_shadowing",
+            ]
             s1 = _emit(dir)
             s2 = emit_esm_string(emit_document(JSON3.read(s1), conf(dir)))
             @test s1 == s2
@@ -370,14 +394,19 @@ end
     # carries the surviving references (not the Expand-stripped form).
     # -----------------------------------------------------------------------
     @testset "typed save is reference-preserving, byte-identical to emit_document" begin
-        for dir in ["emit_materialized_registry", "emit_rename_dotted_keys",
-                    "eager_target_bearing", "opacity_negative",
-                    "opacity_priority_shadowing"]
+        for dir in [
+                "emit_materialized_registry", "emit_rename_dotted_keys",
+                "eager_target_bearing", "opacity_negative",
+                "opacity_priority_shadowing",
+            ]
             f = EarthSciAST.load_path(conf(dir, "fixture.esm"))
             @test f.component_templates !== nothing        # registries survive into typed IR
             typed_bytes = emit_esm_string(serialize_esm_file(f))
-            raw_bytes = emit_esm_string(emit_document(
-                JSON3.read(read(conf(dir, "fixture.esm"), String)), conf(dir)))
+            raw_bytes = emit_esm_string(
+                emit_document(
+                    JSON3.read(read(conf(dir, "fixture.esm"), String)), conf(dir)
+                )
+            )
             golden = read(conf(dir, "emitted.esm"), String)
             @test typed_bytes == raw_bytes            # typed save == raw emit
             @test typed_bytes == golden               # == the committed golden
@@ -430,7 +459,8 @@ end
             end
             # And bit-identical to the per-cell reference evaluator.
             f3!, u03, p3, _t3, _vm3 = EarthSciAST._build_evaluator(
-                flat_fast; compiler=:interpreter)
+                flat_fast; compiler = :interpreter
+            )
             u = _probe(1)
             du1 = zeros(n); du3 = zeros(n)
             f1!(du1, u, p1, 0.3); f3!(du3, u, p3, 0.3)
@@ -455,52 +485,87 @@ end
         # own registry is empty, so everything under test is injected below.
         base = mktempdir() do d
             path = joinpath(d, "trivial.esm")
-            open(io -> JSON3.write(io, Dict{String,Any}(
-                "esm" => "1.0.0",
-                "metadata" => Dict{String,Any}("name" => "trivial"),
-                "models" => Dict{String,Any}("m" => Dict{String,Any}(
-                    "variables" => Dict{String,Any}(
-                        "c" => Dict{String,Any}("type" => "unknown", "units" => "1",
-                                                "default" => 1.0)),
-                    "equations" => Any[Dict{String,Any}(
-                        "lhs" => Dict{String,Any}("op" => "D", "args" => Any["c"],
-                                                  "wrt" => "t"),
-                        "rhs" => Dict{String,Any}("op" => "-", "args" => Any["c"]))])))),
-                path, "w")
+            open(
+                io -> JSON3.write(
+                    io, Dict{String, Any}(
+                        "esm" => "1.0.0",
+                        "metadata" => Dict{String, Any}("name" => "trivial"),
+                        "models" => Dict{String, Any}(
+                            "m" => Dict{String, Any}(
+                                "variables" => Dict{String, Any}(
+                                    "c" => Dict{String, Any}(
+                                        "type" => "unknown", "units" => "1",
+                                        "default" => 1.0
+                                    )
+                                ),
+                                "equations" => Any[
+                                    Dict{String, Any}(
+                                        "lhs" => Dict{String, Any}(
+                                            "op" => "D", "args" => Any["c"],
+                                            "wrt" => "t"
+                                        ),
+                                        "rhs" => Dict{String, Any}("op" => "-", "args" => Any["c"])
+                                    ),
+                                ]
+                            )
+                        )
+                    )
+                ),
+                path, "w"
+            )
             EarthSciAST.flatten(EarthSciAST.load_path(path))
         end
         @test isempty(base.template_registry)
 
-        reg = Dict{String,Any}("scale" => Dict{String,Any}(
-            "params" => Any["a"],
-            "body" => Dict{String,Any}("op" => "*", "args" => Any["a", 2])))
-        _apply(v) = EarthSciAST.OpExpr("apply_expression_template",
+        reg = Dict{String, Any}(
+            "scale" => Dict{String, Any}(
+                "params" => Any["a"],
+                "body" => Dict{String, Any}("op" => "*", "args" => Any["a", 2])
+            )
+        )
+        _apply(v) = EarthSciAST.OpExpr(
+            "apply_expression_template",
             EarthSciAST.ASTExpr[]; name = "scale",
-            bindings = Dict{String,EarthSciAST.ASTExpr}("a" => EarthSciAST.VarExpr(v)))
+            bindings = Dict{String, EarthSciAST.ASTExpr}("a" => EarthSciAST.VarExpr(v))
+        )
         # A parameter whose update carries the reference in its VALUE form, and
         # one that carries it in the `when` TRIGGER: both are Expression
         # positions and both must be expanded.
-        _pvar(u; kw...) = EarthSciAST.ModelVariable(EarthSciAST.ParameterVariable;
-                                                    update = u, kw...)
-        upd_expr = EarthSciAST.ParameterUpdate("condition";
-            when = EarthSciAST.VarExpr("m.c"), expression = _apply("m.c"))
-        upd_when = EarthSciAST.ParameterUpdate("condition";
-            when = _apply("m.c"), expression = EarthSciAST.VarExpr("m.c"))
+        _pvar(u; kw...) = EarthSciAST.ModelVariable(
+            EarthSciAST.ParameterVariable;
+            update = u, kw...
+        )
+        upd_expr = EarthSciAST.ParameterUpdate(
+            "condition";
+            when = EarthSciAST.VarExpr("m.c"), expression = _apply("m.c")
+        )
+        upd_when = EarthSciAST.ParameterUpdate(
+            "condition";
+            when = _apply("m.c"), expression = EarthSciAST.VarExpr("m.c")
+        )
 
-        flat = EarthSciAST.FlattenedSystem(base;
+        flat = EarthSciAST.FlattenedSystem(
+            base;
             template_registry = reg,
-            parameters = OD{String,EarthSciAST.ModelVariable}(
+            parameters = OD{String, EarthSciAST.ModelVariable}(
                 "m.p" => _pvar(upd_expr),
-                "m.d" => _pvar(upd_when; shape = Any["x"])),
+                "m.d" => _pvar(upd_when; shape = Any["x"])
+            ),
             equations = EarthSciAST.Equation[
-                EarthSciAST.Equation(base.equations[1].lhs, _apply("m.c"))])
+                EarthSciAST.Equation(base.equations[1].lhs, _apply("m.c")),
+            ]
+        )
 
         _hasapply(e) = e === nothing ? false : begin
-            hit = false
-            EarthSciAST.foreach_subexpr(x -> (hit |= x isa EarthSciAST.OpExpr &&
-                                              x.op == "apply_expression_template"), e)
-            hit
-        end
+                hit = false
+                EarthSciAST.foreach_subexpr(
+                    x -> (
+                        hit |= x isa EarthSciAST.OpExpr &&
+                        x.op == "apply_expression_template"
+                    ), e
+                )
+                hit
+            end
         _updapply(v) = v.update === nothing ? false :
             any(r -> _hasapply(r.when) || _hasapply(r.expression), v.update)
 
@@ -511,7 +576,7 @@ end
         @test _hasapply(flat.equations[1].rhs)
 
         _buckets(f) = (f.state_variables, f.parameters, f.observed_variables)
-        for memo in (nothing, Dict{Tuple{String,String},EarthSciAST.OpExpr}())
+        for memo in (nothing, Dict{Tuple{String, String}, EarthSciAST.OpExpr}())
             ex = EarthSciAST.expand_flattened_refs(flat; memo = memo)
             for b in _buckets(ex), (_, v) in b
                 @test !_updapply(v)
@@ -519,7 +584,7 @@ end
             @test !_hasapply(ex.equations[1].rhs)
             # …and each expansion is the template body with `a := m.c`.
             @test EarthSciAST.serialize_expression(ex.parameters["m.p"].update[1].expression) ==
-                  EarthSciAST.serialize_expression(ex.parameters["m.d"].update[1].when)
+                EarthSciAST.serialize_expression(ex.parameters["m.d"].update[1].when)
             # Non-expression fields survive the rebuild.
             @test ex.parameters["m.d"].type == EarthSciAST.ParameterVariable
             @test ex.parameters["m.d"].shape == Any["x"]
@@ -527,13 +592,22 @@ end
             # A variable with nothing to expand is passed through BY IDENTITY.
             @test ex.state_variables["m.c"] === base.state_variables["m.c"]
         end
-        _serupd(v) = Any[[EarthSciAST.serialize_expression(r.when),
-                          EarthSciAST.serialize_expression(r.expression)]
-                         for r in (v.update === nothing ? [] : v.update)]
-        _ser(f) = JSON3.write(Any[Any[[k, _serupd(v)] for (k, v) in b] for b in _buckets(f)]
-            ) * "~" * JSON3.write(Any[EarthSciAST.serialize_expression(eq.rhs)
-                                      for eq in f.equations])
+        _serupd(v) = Any[
+            [
+                EarthSciAST.serialize_expression(r.when),
+                EarthSciAST.serialize_expression(r.expression),
+            ]
+                for r in (v.update === nothing ? [] : v.update)
+        ]
+        _ser(f) = JSON3.write(
+            Any[Any[[k, _serupd(v)] for (k, v) in b] for b in _buckets(f)]
+        ) * "~" * JSON3.write(
+            Any[
+                EarthSciAST.serialize_expression(eq.rhs)
+                    for eq in f.equations
+            ]
+        )
         @test _ser(EarthSciAST.expand_flattened_refs(flat; memo = nothing)) ==
-              _ser(EarthSciAST.expand_flattened_refs(flat))
+            _ser(EarthSciAST.expand_flattened_refs(flat))
     end
 end

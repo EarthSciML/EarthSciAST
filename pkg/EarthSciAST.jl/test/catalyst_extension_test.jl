@@ -8,19 +8,25 @@ import Symbolics
 import Catalyst
 
 # Helper: strip "(t)" suffix that Catalyst appends to species names.
-_strip_time_suffix(s::AbstractString) = endswith(s, "(t)") ? s[1:end-3] : s
+_strip_time_suffix(s::AbstractString) = endswith(s, "(t)") ? s[1:(end - 3)] : s
 
 @testset "Catalyst Extension Integration" begin
 
     @testset "Loading Catalyst activates both extensions" begin
-        mtk_ext = Base.get_extension(EarthSciAST,
-                                     :EarthSciASTMTKExt)
-        cat_ext = Base.get_extension(EarthSciAST,
-                                     :EarthSciASTCatalystExt)
+        mtk_ext = Base.get_extension(
+            EarthSciAST,
+            :EarthSciASTMTKExt
+        )
+        cat_ext = Base.get_extension(
+            EarthSciAST,
+            :EarthSciASTCatalystExt
+        )
         @test mtk_ext !== nothing
         @test cat_ext !== nothing
-        @test hasmethod(Catalyst.ReactionSystem,
-                        Tuple{EarthSciAST.ReactionSystem})
+        @test hasmethod(
+            Catalyst.ReactionSystem,
+            Tuple{EarthSciAST.ReactionSystem}
+        )
     end
 
     @testset "Catalyst.ReactionSystem(::ESM ReactionSystem) builds a real ReactionSystem" begin
@@ -31,23 +37,31 @@ _strip_time_suffix(s::AbstractString) = endswith(s, "(t)") ? s[1:end-3] : s
         ]
         params = [EarthSciAST.Parameter("k", 1.8e-12)]
         rxn_list = EarthSciAST.Reaction[
-            EarthSciAST.Reaction(Dict("NO" => 1, "O3" => 1),
-                                           Dict("NO2" => 1),
-                                           VarExpr("k")),
+            EarthSciAST.Reaction(
+                Dict("NO" => 1, "O3" => 1),
+                Dict("NO2" => 1),
+                VarExpr("k")
+            ),
         ]
-        esm_rsys = EarthSciAST.ReactionSystem(species, rxn_list;
-                                                        parameters=params)
+        esm_rsys = EarthSciAST.ReactionSystem(
+            species, rxn_list;
+            parameters = params
+        )
 
-        cat_rsys = Catalyst.ReactionSystem(esm_rsys; name=:OzonePhoto)
+        cat_rsys = Catalyst.ReactionSystem(esm_rsys; name = :OzonePhoto)
         @test occursin("ReactionSystem", string(typeof(cat_rsys)))
 
-        species_names = Set(string(Catalyst.getname(s))
-                            for s in Catalyst.species(cat_rsys))
+        species_names = Set(
+            string(Catalyst.getname(s))
+                for s in Catalyst.species(cat_rsys)
+        )
         @test "NO(t)" in species_names || "NO" in species_names
         @test "O3(t)" in species_names || "O3" in species_names
 
-        param_names = Set(string(Catalyst.getname(p))
-                          for p in Catalyst.parameters(cat_rsys))
+        param_names = Set(
+            string(Catalyst.getname(p))
+                for p in Catalyst.parameters(cat_rsys)
+        )
         @test "k" in param_names
     end
 
@@ -58,12 +72,16 @@ _strip_time_suffix(s::AbstractString) = endswith(s, "(t)") ? s[1:end-3] : s
         ]
         params = [EarthSciAST.Parameter("k", 1.0)]
         rxns = EarthSciAST.Reaction[
-            EarthSciAST.Reaction(Dict("A" => 1), Dict("B" => 1),
-                                           VarExpr("k")),
+            EarthSciAST.Reaction(
+                Dict("A" => 1), Dict("B" => 1),
+                VarExpr("k")
+            ),
         ]
-        esm_rsys = EarthSciAST.ReactionSystem(species, rxns;
-                                                        parameters=params)
-        cat_rsys = Catalyst.ReactionSystem(esm_rsys; name=:AB)
+        esm_rsys = EarthSciAST.ReactionSystem(
+            species, rxns;
+            parameters = params
+        )
+        cat_rsys = Catalyst.ReactionSystem(esm_rsys; name = :AB)
         recovered = EarthSciAST.ReactionSystem(cat_rsys)
         @test length(recovered.species) == 2
         @test length(recovered.parameters) == 1
@@ -81,13 +99,17 @@ _strip_time_suffix(s::AbstractString) = endswith(s, "(t)") ? s[1:end-3] : s
         ]
         params = [EarthSciAST.Parameter("k", 1.0e-13)]
         rxns = EarthSciAST.Reaction[
-            EarthSciAST.Reaction(Dict("CH3O2" => 2.0),
-                                           Dict("CH2O" => 2.0, "HO2" => 0.8),
-                                           VarExpr("k")),
+            EarthSciAST.Reaction(
+                Dict("CH3O2" => 2.0),
+                Dict("CH2O" => 2.0, "HO2" => 0.8),
+                VarExpr("k")
+            ),
         ]
-        esm_rsys = EarthSciAST.ReactionSystem(species, rxns;
-                                                        parameters=params)
-        cat_rsys = Catalyst.ReactionSystem(esm_rsys; name=:FracStoich)
+        esm_rsys = EarthSciAST.ReactionSystem(
+            species, rxns;
+            parameters = params
+        )
+        cat_rsys = Catalyst.ReactionSystem(esm_rsys; name = :FracStoich)
         recovered = EarthSciAST.ReactionSystem(cat_rsys)
         @test length(recovered.reactions) == 1
         rxn = recovered.reactions[1]
@@ -104,19 +126,23 @@ _strip_time_suffix(s::AbstractString) = endswith(s, "(t)") ? s[1:end-3] : s
         # metadata on @species). The reverse direction recovers them as ESM
         # species with constant=true rather than as ordinary parameters.
         species = [
-            EarthSciAST.Species("O2"; constant=true),
-            EarthSciAST.Species("CH4"; constant=true),
+            EarthSciAST.Species("O2"; constant = true),
+            EarthSciAST.Species("CH4"; constant = true),
             EarthSciAST.Species("OH"),
         ]
-        params = [EarthSciAST.Parameter("k", 1e-14)]
+        params = [EarthSciAST.Parameter("k", 1.0e-14)]
         rxns = EarthSciAST.Reaction[
-            EarthSciAST.Reaction(Dict("CH4" => 1, "OH" => 1),
-                                           Dict("O2" => 1),
-                                           VarExpr("k")),
+            EarthSciAST.Reaction(
+                Dict("CH4" => 1, "OH" => 1),
+                Dict("O2" => 1),
+                VarExpr("k")
+            ),
         ]
-        esm_rsys = EarthSciAST.ReactionSystem(species, rxns;
-                                                        parameters=params)
-        cat_rsys = Catalyst.ReactionSystem(esm_rsys; name=:Reservoir)
+        esm_rsys = EarthSciAST.ReactionSystem(
+            species, rxns;
+            parameters = params
+        )
+        cat_rsys = Catalyst.ReactionSystem(esm_rsys; name = :Reservoir)
 
         # Check that O2 and CH4 are constant species (metadata-tagged
         # parameters in Catalyst), while OH remains a state species.
@@ -128,8 +154,10 @@ _strip_time_suffix(s::AbstractString) = endswith(s, "(t)") ? s[1:end-3] : s
         end
         @test "O2" in constant_names
         @test "CH4" in constant_names
-        species_names = Set(_strip_time_suffix(string(Catalyst.getname(s)))
-                            for s in Catalyst.species(cat_rsys))
+        species_names = Set(
+            _strip_time_suffix(string(Catalyst.getname(s)))
+                for s in Catalyst.species(cat_rsys)
+        )
         @test "OH" in species_names
         @test !("O2" in species_names)
         @test !("CH4" in species_names)
@@ -137,9 +165,9 @@ _strip_time_suffix(s::AbstractString) = endswith(s, "(t)") ? s[1:end-3] : s
         # Reverse: recover constant flag from Catalyst metadata.
         recovered = EarthSciAST.ReactionSystem(cat_rsys)
         by_name = Dict(s.name => s for s in recovered.species)
-        @test haskey(by_name, "O2")  && by_name["O2"].constant  === true
+        @test haskey(by_name, "O2")  && by_name["O2"].constant === true
         @test haskey(by_name, "CH4") && by_name["CH4"].constant === true
-        @test haskey(by_name, "OH")  && by_name["OH"].constant  !== true
+        @test haskey(by_name, "OH")  && by_name["OH"].constant !== true
         @test length(recovered.parameters) == 1
     end
 
@@ -166,8 +194,10 @@ _strip_time_suffix(s::AbstractString) = endswith(s, "(t)") ? s[1:end-3] : s
             Catalyst.Reaction(k * A, [A], [B]),
             Catalyst.Reaction(300.0 * k, [A], [B]),
         ]
-        cat_rsys = Catalyst.ReactionSystem(rxs, t, [A, B], [k];
-                                            name=:RateASTRegression)
+        cat_rsys = Catalyst.ReactionSystem(
+            rxs, t, [A, B], [k];
+            name = :RateASTRegression
+        )
         recovered = EarthSciAST.ReactionSystem(cat_rsys)
         @test length(recovered.reactions) == 2
 
@@ -248,21 +278,31 @@ _strip_time_suffix(s::AbstractString) = endswith(s, "(t)") ? s[1:end-3] : s
         ]
         params = [EarthSciAST.Parameter("k", 1.0)]
         # Rate 1: max(k, 0.0) — the clamp pattern from geoschem_fullchem.
-        rate_max = OpExpr("max",
-            EarthSciAST.ASTExpr[VarExpr("k"), NumExpr(0.0)])
+        rate_max = OpExpr(
+            "max",
+            EarthSciAST.ASTExpr[VarExpr("k"), NumExpr(0.0)]
+        )
         # Rate 2: min(k, 5.0) — symmetric coverage for the other primitive.
-        rate_min = OpExpr("min",
-            EarthSciAST.ASTExpr[VarExpr("k"), NumExpr(5.0)])
+        rate_min = OpExpr(
+            "min",
+            EarthSciAST.ASTExpr[VarExpr("k"), NumExpr(5.0)]
+        )
         rxns = EarthSciAST.Reaction[
-            EarthSciAST.Reaction(Dict("A" => 1), Dict("B" => 1),
-                                           rate_max),
-            EarthSciAST.Reaction(Dict("A" => 1), Dict("B" => 1),
-                                           rate_min),
+            EarthSciAST.Reaction(
+                Dict("A" => 1), Dict("B" => 1),
+                rate_max
+            ),
+            EarthSciAST.Reaction(
+                Dict("A" => 1), Dict("B" => 1),
+                rate_min
+            ),
         ]
-        esm_rsys = EarthSciAST.ReactionSystem(species, rxns;
-                                                        parameters=params)
+        esm_rsys = EarthSciAST.ReactionSystem(
+            species, rxns;
+            parameters = params
+        )
 
-        cat_rsys = Catalyst.ReactionSystem(esm_rsys; name=:MaxMinClamp)
+        cat_rsys = Catalyst.ReactionSystem(esm_rsys; name = :MaxMinClamp)
         @test occursin("ReactionSystem", string(typeof(cat_rsys)))
 
         recovered = EarthSciAST.ReactionSystem(cat_rsys)
@@ -294,17 +334,23 @@ _strip_time_suffix(s::AbstractString) = endswith(s, "(t)") ? s[1:end-3] : s
         avogadro = 6.022e23
         @test avogadro == floor(avogadro)
         @test avogadro > typemax(Int)
-        rate = OpExpr("*",
-            EarthSciAST.ASTExpr[VarExpr("k"), NumExpr(avogadro)])
+        rate = OpExpr(
+            "*",
+            EarthSciAST.ASTExpr[VarExpr("k"), NumExpr(avogadro)]
+        )
         rxns = EarthSciAST.Reaction[
-            EarthSciAST.Reaction(Dict("A" => 1), Dict("B" => 1),
-                                           rate),
+            EarthSciAST.Reaction(
+                Dict("A" => 1), Dict("B" => 1),
+                rate
+            ),
         ]
-        esm_rsys = EarthSciAST.ReactionSystem(species, rxns;
-                                                        parameters=params)
+        esm_rsys = EarthSciAST.ReactionSystem(
+            species, rxns;
+            parameters = params
+        )
 
         # Should not raise InexactError.
-        cat_rsys = Catalyst.ReactionSystem(esm_rsys; name=:AvogadroRate)
+        cat_rsys = Catalyst.ReactionSystem(esm_rsys; name = :AvogadroRate)
         @test occursin("ReactionSystem", string(typeof(cat_rsys)))
     end
 end

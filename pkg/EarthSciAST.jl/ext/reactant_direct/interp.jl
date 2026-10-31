@@ -84,7 +84,7 @@
 # result to the whole tensor, so the emitted program is the calendar's ~35
 # arithmetic ops regardless of how many lanes the vector carries — never a
 # per-lane loop, and never a per-lane call.
-_de_fn_lanes(k::F, x::TracedRArray{Float64,1}) where {F} = k.(x)
+_de_fn_lanes(k::F, x::TracedRArray{Float64, 1}) where {F} = k.(x)
 
 _de_fn(ctx::_DECtx, nd::_E._Node, ev::F) where {F} =
     _de_fn_pl(ctx, nd.payload, _DEVal[ev(ch) for ch in nd.children])
@@ -99,40 +99,59 @@ function _de_fn_pl(ctx::_DECtx, pl, args::Vector{_DEVal})::_DEVal
     isempty(sid) || _de_refuse(
         "a lookup into the `out_of_bounds: \"error\"` table `$(sid)`",
         "a compiled XLA program has no channel to raise the run-time " *
-        "`table_lookup_out_of_bounds` error, and answering with the clamp result " *
-        "would be the mode the author did not declare (esm-spec §9.5.1).")
-    if pl isa Tuple{String,_E._InterpLinearSpec} ||
-       pl isa Tuple{String,_E._InterpLinearLaneSpec}
+            "`table_lookup_out_of_bounds` error, and answering with the clamp result " *
+            "would be the mode the author did not declare (esm-spec §9.5.1)."
+    )
+    if pl isa Tuple{String, _E._InterpLinearSpec} ||
+            pl isa Tuple{String, _E._InterpLinearLaneSpec}
         _de_tally!(ctx, :interp_linear)
-        return _de_untraced(Reactant.call_with_reactant(
-            _E._interp_linear_lanes, pl[2], q(1)))
-    elseif pl isa Tuple{String,_E._InterpBilinearSpec} ||
-           pl isa Tuple{String,_E._InterpBilinearLaneSpec}
+        return _de_untraced(
+            Reactant.call_with_reactant(
+                _E._interp_linear_lanes, pl[2], q(1)
+            )
+        )
+    elseif pl isa Tuple{String, _E._InterpBilinearSpec} ||
+            pl isa Tuple{String, _E._InterpBilinearLaneSpec}
         _de_tally!(ctx, :interp_bilinear)
         x = q(1); y = q(2)
-        return _de_untraced(Reactant.call_with_reactant(
-            _E._interp_bilinear_lanes, pl[2], x, y))
-    elseif pl isa Tuple{String,_E._InterpSearchsortedSpec} ||
-           pl isa Tuple{String,_E._InterpSearchsortedLaneSpec}
+        return _de_untraced(
+            Reactant.call_with_reactant(
+                _E._interp_bilinear_lanes, pl[2], x, y
+            )
+        )
+    elseif pl isa Tuple{String, _E._InterpSearchsortedSpec} ||
+            pl isa Tuple{String, _E._InterpSearchsortedLaneSpec}
         _de_tally!(ctx, :interp_searchsorted)
-        return _de_untraced(Reactant.call_with_reactant(
-            _E._interp_searchsorted_lanes, pl[2], q(1)))
-    elseif pl isa Tuple{String,_E._FnTypedCoreSpec}
+        return _de_untraced(
+            Reactant.call_with_reactant(
+                _E._interp_searchsorted_lanes, pl[2], q(1)
+            )
+        )
+    elseif pl isa Tuple{String, _E._FnTypedCoreSpec}
         spec = pl[2]
         (spec.arity == 1 && length(ch) == 1) ||
-            _de_refuse("the closed function `$(pl[1])` with $(length(ch)) argument(s)",
-                "this backend lowers the UNARY typed-core form, which is the whole " *
-                "v0.3.0 all-scalar set; a wider row needs its own lowering here.")
+            _de_refuse(
+            "the closed function `$(pl[1])` with $(length(ch)) argument(s)",
+            "this backend lowers the UNARY typed-core form, which is the whole " *
+                "v0.3.0 all-scalar set; a wider row needs its own lowering here."
+        )
         _de_tally!(ctx, :closed_scalar)
-        return _de_untraced(Reactant.call_with_reactant(
-            _de_fn_lanes, _E._fn_typed_core_kernel(spec.id), q(1)))
-    elseif pl isa Tuple{String,Nothing}
-        _de_refuse("the closed function `$(pl[1])`",
+        return _de_untraced(
+            Reactant.call_with_reactant(
+                _de_fn_lanes, _E._fn_typed_core_kernel(spec.id), q(1)
+            )
+        )
+    elseif pl isa Tuple{String, Nothing}
+        _de_refuse(
+            "the closed function `$(pl[1])`",
             "it has no typed scalar core and no interp specification, so the " *
-            "interpreter calls it once per lane through an opaque Julia " *
-            "callee; there is no StableHLO form of that.")
+                "interpreter calls it once per lane through an opaque Julia " *
+                "callee; there is no StableHLO form of that."
+        )
     end
-    _de_refuse("a `:fn` node with a payload of type $(typeof(pl))",
+    return _de_refuse(
+        "a `:fn` node with a payload of type $(typeof(pl))",
         "it is neither a typed interp specification tuple nor a " *
-        "`(name, nothing)` closed-function pair.")
+            "`(name, nothing)` closed-function pair."
+    )
 end

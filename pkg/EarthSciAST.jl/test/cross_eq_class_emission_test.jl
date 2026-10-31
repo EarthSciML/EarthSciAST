@@ -61,12 +61,16 @@ const _XQ_TB = [0.0, -100.0, -200.0, -300.0]
 _xq_khi() = _op("-", _op("+", _v("i"), _i(2)), _v("i"))
 
 function _xq_percell_eq(x::String, body, N::Int)
-    lhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i"],
-        expr_body=_Didx(x, _v("i")), ranges=Dict("i" => [1, N]))
-    rhs = ESM.OpExpr("faq", ESM.ASTExpr[]; output_idx=Any["i"],
-        expr_body=body, ranges=Dict("i" => [1, N], "k" => Any[_i(1), _xq_khi()]),
-        reduce="+")
-    ESM.Equation(lhs, rhs)
+    lhs = ESM.OpExpr(
+        "faq", ESM.ASTExpr[]; output_idx = Any["i"],
+        expr_body = _Didx(x, _v("i")), ranges = Dict("i" => [1, N])
+    )
+    rhs = ESM.OpExpr(
+        "faq", ESM.ASTExpr[]; output_idx = Any["i"],
+        expr_body = body, ranges = Dict("i" => [1, N], "k" => Any[_i(1), _xq_khi()]),
+        reduce = "+"
+    )
+    return ESM.Equation(lhs, rhs)
 end
 
 # Twin per-cell INTERP equations: same shape (4-knot interp.linear), each
@@ -75,26 +79,40 @@ end
 # per-equation emitter alone mints NO lane table; only pooling across the
 # equations (or the repair pass) can produce the class kernel.
 function _xq_twin_interp_model(N)
-    vars = Dict{String,ESM.ModelVariable}(
+    vars = Dict{String, ESM.ModelVariable}(
         "u" => ESM.ModelVariable(ESM.UnknownVariable),
-        "v" => ESM.ModelVariable(ESM.UnknownVariable))
-    body(x, tbl) = _op("*",
-        _op("fn", _const(tbl), _const(_XQ_AX), _idx(x, _v("i"));
-            name="interp.linear"),
-        _v("k"))
-    ESM.Model(vars, [_xq_percell_eq("u", body("u", _XQ_TA), N),
-                     _xq_percell_eq("v", body("v", _XQ_TB), N)])
+        "v" => ESM.ModelVariable(ESM.UnknownVariable)
+    )
+    body(x, tbl) = _op(
+        "*",
+        _op(
+            "fn", _const(tbl), _const(_XQ_AX), _idx(x, _v("i"));
+            name = "interp.linear"
+        ),
+        _v("k")
+    )
+    return ESM.Model(
+        vars, [
+            _xq_percell_eq("u", body("u", _XQ_TA), N),
+            _xq_percell_eq("v", body("v", _XQ_TB), N),
+        ]
+    )
 end
 
 # Twin per-cell PLAIN equations (no interp): the cross-equation class is pure
 # state-slot variation — the merged kernel carries state tables, no lane spec.
 function _xq_twin_plain_model(N)
-    vars = Dict{String,ESM.ModelVariable}(
+    vars = Dict{String, ESM.ModelVariable}(
         "u" => ESM.ModelVariable(ESM.UnknownVariable),
-        "v" => ESM.ModelVariable(ESM.UnknownVariable))
+        "v" => ESM.ModelVariable(ESM.UnknownVariable)
+    )
     body(x) = _op("*", _op("*", _n(-0.5), _idx(x, _v("i"))), _v("k"))
-    ESM.Model(vars, [_xq_percell_eq("u", body("u"), N),
-                     _xq_percell_eq("v", body("v"), N)])
+    return ESM.Model(
+        vars, [
+            _xq_percell_eq("u", body("u"), N),
+            _xq_percell_eq("v", body("v"), N),
+        ]
+    )
 end
 
 # Twin AFFINE-BOX equations: a Laplacian stencil (interior + boundary boxes)
@@ -103,23 +121,32 @@ end
 # `:affine_subtree_tbl`) materializes it as per-box value tables. Two states
 # ⇒ box-kernel classes across equations AND across ghost patterns.
 function _xq_afbox_model(N)
-    vars = Dict{String,ESM.ModelVariable}(
+    vars = Dict{String, ESM.ModelVariable}(
         "u" => ESM.ModelVariable(ESM.UnknownVariable),
-        "v" => ESM.ModelVariable(ESM.UnknownVariable))
-    lap(x) = _op("+", _idx(x, _op("-", _v("i"), _i(1))),
-                      _op("*", _n(-2.0), _idx(x, _v("i"))),
-                      _idx(x, _op("+", _v("i"), _i(1))))
+        "v" => ESM.ModelVariable(ESM.UnknownVariable)
+    )
+    lap(x) = _op(
+        "+", _idx(x, _op("-", _v("i"), _i(1))),
+        _op("*", _n(-2.0), _idx(x, _v("i"))),
+        _idx(x, _op("+", _v("i"), _i(1)))
+    )
     term = _op("*", _idx("W", _v("i"), _v("k")), _v("k"))
-    agg() = ESM.OpExpr("faq", ESM.ASTExpr[]; expr_body=term,
-        ranges=Dict{String,Any}("k" => Any[1, 3]), reduce="+")
-    mkeq(x) = ESM.Equation(_ao1(_Didx(x, _v("i")), "i", 1, N),
-                           _ao1(_op("+", lap(x), agg()), "i", 1, N))
-    ESM.Model(vars, [mkeq("u"), mkeq("v")])
+    agg() = ESM.OpExpr(
+        "faq", ESM.ASTExpr[]; expr_body = term,
+        ranges = Dict{String, Any}("k" => Any[1, 3]), reduce = "+"
+    )
+    mkeq(x) = ESM.Equation(
+        _ao1(_Didx(x, _v("i")), "i", 1, N),
+        _ao1(_op("+", lap(x), agg()), "i", 1, N)
+    )
+    return ESM.Model(vars, [mkeq("u"), mkeq("v")])
 end
 _xq_W(N) = Float64[sin(1.7i * k) + 0.05i for i in 1:N, k in 1:3]
 
-_xq_ics(N) = merge(Dict("u[$k]" => 0.4 + 1.5 * (k / N) for k in 1:N),
-                   Dict("v[$k]" => 0.9 + 1.1 * ((N - k) / N) for k in 1:N))
+_xq_ics(N) = merge(
+    Dict("u[$k]" => 0.4 + 1.5 * (k / N) for k in 1:N),
+    Dict("v[$k]" => 0.9 + 1.1 * ((N - k) / N) for k in 1:N)
+)
 _xq_probe(n, k) = Float64[1.0 + 0.9 * sin(1.3i + 0.7k) for i in 1:n]
 
 # ---- builders ---------------------------------------------------------------
@@ -132,28 +159,32 @@ _xq_probe(n, k) = Float64[1.0 + 0.9 * sin(1.3i + 0.7k) for i in 1:n]
 # The default build is `native`'s tier plan with `strict` off: a strict
 # `native` refuses the in-place per-cell build this file is about (it grows with
 # the array), so a non-strict plan is the one that still takes it.
-const _XQ_NATIVE = ESM._plan_with(ESM._compiler_plan(:native); strict=false)
-function _xq_build(model, ics; codegen::Bool=true, compiler=_XQ_NATIVE,
-                   const_arrays=Dict{String,Any}())
-    withenv("ESS_CODEGEN_NODE_BUDGET" => (codegen ? nothing : "0")) do
+const _XQ_NATIVE = ESM._plan_with(ESM._compiler_plan(:native); strict = false)
+function _xq_build(
+        model, ics; codegen::Bool = true, compiler = _XQ_NATIVE,
+        const_arrays = Dict{String, Any}()
+    )
+    return withenv("ESS_CODEGEN_NODE_BUDGET" => (codegen ? nothing : "0")) do
         ESM._reset_cascade_tally!()
-        f, u0, p, _t, vm, diag = ESM._build_evaluator_impl(model;
-            initial_conditions=ics, const_arrays=const_arrays,
-            compiler=compiler)
-        (f=f, u0=u0, p=p, vm=vm, diag=diag, tally=copy(ESM._CASCADE_TALLY))
+        f, u0, p, _t, vm, diag = ESM._build_evaluator_impl(
+            model;
+            initial_conditions = ics, const_arrays = const_arrays,
+            compiler = compiler
+        )
+        (f = f, u0 = u0, p = p, vm = vm, diag = diag, tally = copy(ESM._CASCADE_TALLY))
     end
 end
 
 _xq_du(f!, u, p, t) = (d = similar(u); fill!(d, 0.0); f!(d, u, p, t); d)
 _xq_bitsame(a, b) = size(a) == size(b) && all(a .=== b)
 _xq_repair(t) = get(t, :classmerge_round1_merge, 0) +
-                get(t, :classmerge_round2_merge, 0)
+    get(t, :classmerge_round2_merge, 0)
 _xq_directmerge(t) = get(t, :direct_classmerge_round1_merge, 0) +
-                     get(t, :direct_classmerge_round2_merge, 0)
+    get(t, :direct_classmerge_round2_merge, 0)
 
 # Does any `:fn` node reachable from K carry a per-lane spec?
 function _xq_has_lanespec(K)
-    seen = IdDict{Any,Nothing}()
+    seen = IdDict{Any, Nothing}()
     visit(nd) = begin
         haskey(seen, nd) && return false
         seen[nd] = nothing
@@ -187,14 +218,15 @@ _xq_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
     end
 
     @testset "(a) cross-equation classes: one kernel, zero repair — $name" for
-            (name, mkmodel, want_lanespec) in (
+        (name, mkmodel, want_lanespec) in (
             ("interp twins", _xq_twin_interp_model, true),
-            ("plain twins", _xq_twin_plain_model, false))
+            ("plain twins", _xq_twin_plain_model, false),
+        )
         N = 6
         model = mkmodel(N)
         ics = _xq_ics(N)
-        ron  = _xq_build(model, ics; codegen=false)                 # everything on
-        rref = _xq_build(model, ics; compiler=:interpreter)         # the reference
+        ron = _xq_build(model, ics; codegen = false)                 # everything on
+        rref = _xq_build(model, ics; compiler = :interpreter)         # the reference
 
         # The fixture really takes the per-cell path, once per equation. Under
         # `native`'s tiers those cells merge into access kernels (`:percell_acc`);
@@ -227,8 +259,8 @@ _xq_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
         N = 8
         model = _xq_afbox_model(N)
         ics = _xq_ics(N)
-        ca = Dict{String,Any}("W" => _xq_W(N))
-        ron  = _xq_build(model, ics; codegen=false, const_arrays=ca)
+        ca = Dict{String, Any}("W" => _xq_W(N))
+        ron = _xq_build(model, ics; codegen = false, const_arrays = ca)
 
         # The affine path owned both equations, and the subtree-table rescue
         # fired (the LANE_EXPRTBL per-box tables are really in play).
@@ -247,15 +279,16 @@ _xq_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
     end
 
     @testset "(d) bit-identity vs the scalar reference — $name" for (name, mk) in (
-            ("interp twins", N -> (_xq_twin_interp_model(N), Dict{String,Any}())),
-            ("plain twins", N -> (_xq_twin_plain_model(N), Dict{String,Any}())),
-            ("affine-box twins", N -> (_xq_afbox_model(N), Dict{String,Any}("W" => _xq_W(N)))))
+            ("interp twins", N -> (_xq_twin_interp_model(N), Dict{String, Any}())),
+            ("plain twins", N -> (_xq_twin_plain_model(N), Dict{String, Any}())),
+            ("affine-box twins", N -> (_xq_afbox_model(N), Dict{String, Any}("W" => _xq_W(N)))),
+        )
         N = 7                                     # odd: asymmetric probes
         model, consts = mk(N)
         ics = _xq_ics(N)
-        ron   = _xq_build(model, ics; const_arrays=consts)              # + codegen
-        roni  = _xq_build(model, ics; const_arrays=consts, codegen=false)
-        rref  = _xq_build(model, ics; const_arrays=consts, compiler=:interpreter)
+        ron = _xq_build(model, ics; const_arrays = consts)              # + codegen
+        roni = _xq_build(model, ics; const_arrays = consts, codegen = false)
+        rref = _xq_build(model, ics; const_arrays = consts, compiler = :interpreter)
         @test ron.u0 == roni.u0 == rref.u0
         for k in 1:3, t in (0.0, 0.7, 3.25)
             u = k == 1 ? copy(ron.u0) : _xq_probe(2N, k)
@@ -266,22 +299,30 @@ _xq_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
 
         # ForwardDiff Duals: values AND partials bit-identical through the
         # cross-equation / affine-box class kernels.
-        Jn = ForwardDiff.jacobian((du, u) -> ron.f(du, u, ron.p, 0.4),
-                                  zero(ron.u0), ron.u0)
-        Jr = ForwardDiff.jacobian((du, u) -> rref.f(du, u, rref.p, 0.4),
-                                  zero(rref.u0), rref.u0)
+        Jn = ForwardDiff.jacobian(
+            (du, u) -> ron.f(du, u, ron.p, 0.4),
+            zero(ron.u0), ron.u0
+        )
+        Jr = ForwardDiff.jacobian(
+            (du, u) -> rref.f(du, u, rref.p, 0.4),
+            zero(rref.u0), rref.u0
+        )
         @test _xq_bitsame(Jn, Jr)
     end
 
     @testset "(c) grid independence of the pooled emitter" begin
         N1, N2 = 8, 24
-        A = _xq_build(_xq_twin_interp_model(N1), _xq_ics(N1); codegen=false)
-        B = _xq_build(_xq_twin_interp_model(N2), _xq_ics(N2); codegen=false)
+        A = _xq_build(_xq_twin_interp_model(N1), _xq_ics(N1); codegen = false)
+        B = _xq_build(_xq_twin_interp_model(N2), _xq_ics(N2); codegen = false)
 
         # Structural counters identical at 3x the grid (mirror
         # grid_invariance_test: drop the one documented O(cells) field).
-        drop(d) = (; [k => getfield(d, k) for k in keys(d)
-                      if k !== :n_mat_array_cells]...)
+        drop(d) = (;
+            [
+                k => getfield(d, k) for k in keys(d)
+                    if k !== :n_mat_array_cells
+            ]...,
+        )
         @test drop(A.diag) == drop(B.diag)
         @test A.diag.n_acc_kernels == 1
 
@@ -297,7 +338,7 @@ _xq_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
         # counts — grows EXACTLY linearly (3x cells ⇒ 3x data).
         function lanes(K)
             n = Ref(0)
-            seen = IdDict{Any,Nothing}()
+            seen = IdDict{Any, Nothing}()
             visit(nd) = begin
                 haskey(seen, nd) && return
                 seen[nd] = nothing
@@ -314,9 +355,11 @@ _xq_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
             foreach(visit, K.cse.inv_recipes)
             return n[]
         end
-        data(ks) = sum(length(K.cells.outs) + lanes(K) +
-                       sum(length(d.arr) + length(d.conn) for d in K.acc; init=0)
-                       for K in ks; init=0)
+        data(ks) = sum(
+            length(K.cells.outs) + lanes(K) +
+                sum(length(d.arr) + length(d.conn) for d in K.acc; init = 0)
+                for K in ks; init = 0
+        )
         dA, dB = data(_xq_kernels(A.f)), data(_xq_kernels(B.f))
         @test dA > 0
         @test dA * N2 == dB * N1
@@ -331,8 +374,10 @@ _xq_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
     # claim no fixture can make on its own — that across the whole corpus the
     # repair pass performs no merge, because every class was emitted directly.
     @testset "(e) fixture-corpus zero repair tallies" begin
-        roots = [joinpath(TESTUTILS_REPO_ROOT, "tests", "valid"),
-                 joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance")]
+        roots = [
+            joinpath(TESTUTILS_REPO_ROOT, "tests", "valid"),
+            joinpath(TESTUTILS_REPO_ROOT, "tests", "conformance"),
+        ]
         esms = String[]
         for r in roots
             isdir(r) || continue
@@ -347,8 +392,8 @@ _xq_kernels(f!) = getfield(getfield(f!, :kernel_section), :kernels)
             withenv("ESS_CODEGEN_NODE_BUDGET" => "0") do
                 ESM._reset_cascade_tally!()
                 try
-                    f!, u0, p, _t, _vm = ESM._build_evaluator(file; model_name=name)
-                    return (f=f!, u0=u0, p=p, tally=copy(ESM._CASCADE_TALLY))
+                    f!, u0, p, _t, _vm = ESM._build_evaluator(file; model_name = name)
+                    return (f = f!, u0 = u0, p = p, tally = copy(ESM._CASCADE_TALLY))
                 catch e
                     corpus_is_resource_error(e) && rethrow()
                     return nothing

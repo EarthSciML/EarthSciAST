@@ -70,23 +70,29 @@ end
 # byte-identical output, `acc` table included. The memo is per top-level
 # call; `_lower_subcall` re-enters through this entry so a variant body gets
 # its own memo for its own `lane_repl`.
-function _lower_to_access(tmpl::_Node, lane_repl::Vector{<:_LaneRepl},
-                          acc::Vector{_AccDesc},
-                          subcalls::Vector{_SubCallSite}=_SubCallSite[])::_Node
-    return _lower_to_access(tmpl, lane_repl, acc, subcalls, IdDict{_Node,_Node}())
+function _lower_to_access(
+        tmpl::_Node, lane_repl::Vector{<:_LaneRepl},
+        acc::Vector{_AccDesc},
+        subcalls::Vector{_SubCallSite} = _SubCallSite[]
+    )::_Node
+    return _lower_to_access(tmpl, lane_repl, acc, subcalls, IdDict{_Node, _Node}())
 end
-function _lower_to_access(tmpl::_Node, lane_repl::Vector{<:_LaneRepl},
-                          acc::Vector{_AccDesc}, subcalls::Vector{_SubCallSite},
-                          memo::IdDict{_Node,_Node})::_Node
+function _lower_to_access(
+        tmpl::_Node, lane_repl::Vector{<:_LaneRepl},
+        acc::Vector{_AccDesc}, subcalls::Vector{_SubCallSite},
+        memo::IdDict{_Node, _Node}
+    )::_Node
     cached = get(memo, tmpl, nothing)
     cached === nothing || return cached
     result = _lower_to_access_node(tmpl, lane_repl, acc, subcalls, memo)
     memo[tmpl] = result
     return result
 end
-function _lower_to_access_node(tmpl::_Node, lane_repl::Vector{<:_LaneRepl},
-                               acc::Vector{_AccDesc}, subcalls::Vector{_SubCallSite},
-                               memo::IdDict{_Node,_Node})::_Node
+function _lower_to_access_node(
+        tmpl::_Node, lane_repl::Vector{<:_LaneRepl},
+        acc::Vector{_AccDesc}, subcalls::Vector{_SubCallSite},
+        memo::IdDict{_Node, _Node}
+    )::_Node
     k = tmpl.kind
     if k === _NK_STATE
         if tmpl.idx < 0
@@ -116,9 +122,11 @@ function _lower_to_access_node(tmpl::_Node, lane_repl::Vector{<:_LaneRepl},
         # concrete `(fname, spec)` tuple for an interp `:fn` — the access evaluator's
         # `:fn` arm reads it exactly as `_eval_node_op` does. The fn's scalar query
         # args are ordinary children, lowered like any lane subtree.
-        ch = _Node[_lower_to_access(c, lane_repl, acc, subcalls, memo)
-                   for c in tmpl.children]
-        return _mknode(kind=_NK_OP, op=tmpl.op, children=ch, payload=tmpl.payload)
+        ch = _Node[
+            _lower_to_access(c, lane_repl, acc, subcalls, memo)
+                for c in tmpl.children
+        ]
+        return _mknode(kind = _NK_OP, op = tmpl.op, children = ch, payload = tmpl.payload)
     end
     throw(_StencilFallback("affine lowering: unhandled node kind $(Int(k))"))
 end
@@ -138,10 +146,12 @@ function _lower_subcall(site::_SubCallSite, lane_repl::Vector{<:_LaneRepl})::_No
         a = _AccDesc[]
         raw = _lower_to_access(variant.tmpl, seg, a, variant.subcalls)
         sp, cse = _build_acc_cse(raw, a)
-        _AccKernel(_contig_cells(0), sp, a, _FixedBound(0), 0.0, cse,
-                   _collect_subkernels(sp, cse))
+        _AccKernel(
+            _contig_cells(0), sp, a, _FixedBound(0), 0.0, cse,
+            _collect_subkernels(sp, cse)
+        )
     end
-    return _mknode(kind=_NK_SUBCALL, payload=sub)
+    return _mknode(kind = _NK_SUBCALL, payload = sub)
 end
 
 # Distinct sub-kernels reachable from a lowered spine + its CSE recipes
@@ -149,7 +159,7 @@ end
 # tier once per call. Dedup by payload identity: a shared body appears once.
 function _collect_subkernels(spine::_Node, cse::_AccCSE)::Vector{_AccKernel}
     out = _AccKernel[]
-    seen = IdDict{Any,Bool}()
+    seen = IdDict{Any, Bool}()
     _collect_subkernels!(out, seen, spine)
     for r in cse.recipes
         _collect_subkernels!(out, seen, r)
@@ -159,7 +169,7 @@ function _collect_subkernels(spine::_Node, cse::_AccCSE)::Vector{_AccKernel}
     end
     return out
 end
-function _collect_subkernels!(out::Vector{_AccKernel}, seen::IdDict{Any,Bool}, n::_Node)
+function _collect_subkernels!(out::Vector{_AccKernel}, seen::IdDict{Any, Bool}, n::_Node)
     if n.kind === _NK_SUBCALL
         S = n.payload::_AccKernel
         haskey(seen, S) && return
@@ -178,6 +188,7 @@ function _collect_subkernels!(out::Vector{_AccKernel}, seen::IdDict{Any,Bool}, n
     for c in n.children
         _collect_subkernels!(out, seen, c)
     end
+    return
 end
 
 # ========================================================================
@@ -226,7 +237,7 @@ function _affine_int_coeffs(e::ASTExpr, idx_names::Vector{String})
     e isa OpExpr || return nothing
     o = e::OpExpr
     _affine_idx_expr(o, idx_names) || return nothing
-    parts = Tuple{Int,Vector{Int}}[]
+    parts = Tuple{Int, Vector{Int}}[]
     for a in o.args
         r = _affine_int_coeffs(a, idx_names)
         r === nothing && return nothing
@@ -317,58 +328,64 @@ end
 
 # One lane read's guards, outermost first: each a condition node of the branch
 # template and the truth value the read needs it to have.
-const _GuardPath = Vector{Tuple{_Node,Bool}}
+const _GuardPath = Vector{Tuple{_Node, Bool}}
 
 # Reusable caches for the per-cell signature (branch template memo + branch-key
 # guard memo + a scratch IOBuffer), shared across the whole equation's sweep.
 mutable struct _AffineSig
-    branch_cache::Dict{String,_StencilBranch}
-    bmemo::IdDict{OpExpr,Bool}
+    branch_cache::Dict{String, _StencilBranch}
+    bmemo::IdDict{OpExpr, Bool}
     bio::IOBuffer
     state_scratch::Vector{Int}   # reused per `_cell_ckey!` for the state-lane slots
     # LANE-AFFINE key support, per branch key: for every lane recipe, which of
     # its index arguments are NOT structurally affine in the loop indices and
     # therefore have to be differenced per keyed cell. Classified once per
     # branch; see `_lane_nonaffine_args!`.
-    lane_ref::Dict{String,Vector{Vector{Bool}}}
+    lane_ref::Dict{String, Vector{Vector{Bool}}}
     back_scratch::Vector{Int}    # reused per keyed cell for the backward probe
     # Per branch key, each state lane's compiled evaluator (`_lane_evaluator`)
     # or `nothing`, so a keyed cell does not walk the subscripts through the
     # Dict environment; and the visited set `_branch_key!` clears per keyed cell.
-    lane_evals::Dict{String,Any}
-    bseen::IdDict{OpExpr,Nothing}
+    lane_evals::Dict{String, Any}
+    bseen::IdDict{OpExpr, Nothing}
     # Per body: whether it holds an indexed array producer (`makearray` or a
     # `faq`), the only nodes `_branch_key!` prints. A body without one has the
     # empty branch key at every cell.
-    bkey_sites::IdDict{Any,Bool}
+    bkey_sites::IdDict{Any, Bool}
     # A number per branch key, the first entry of a scan key (`_cell_ckey!`).
-    bkey_ids::Dict{String,Int}
+    bkey_ids::Dict{String, Int}
     # Per branch key, every lane's compiled evaluator for the box processor
     # (`_box_lane_evals!`); the equation's compiled output subscripts.
-    box_evals::Dict{String,Vector{Union{Nothing,_LaneEval}}}
-    lhs_ix::Union{Nothing,Vector{Union{Nothing,_IdxNode}}}
+    box_evals::Dict{String, Vector{Union{Nothing, _LaneEval}}}
+    lhs_ix::Union{Nothing, Vector{Union{Nothing, _IdxNode}}}
     # The scan key in closed form (`_FastKey`), `false` where the body has none,
     # `nothing` until the first keyed cell decides.
-    fast_key::Union{Nothing,Bool,_FastKey}
+    fast_key::Union{Nothing, Bool, _FastKey}
     # Per branch key, the guard paths each lane is read under
     # (`_lane_guard_paths`), built only when a lane is out of range somewhere.
-    lane_guards::Dict{String,Vector{Vector{_GuardPath}}}
+    lane_guards::Dict{String, Vector{Vector{_GuardPath}}}
 end
-_AffineSig() = _AffineSig(Dict{String,_StencilBranch}(), IdDict{OpExpr,Bool}(), IOBuffer(), Int[],
-                          Dict{String,Vector{Vector{Bool}}}(), Int[], Dict{String,Any}(),
-                          IdDict{OpExpr,Nothing}(), IdDict{Any,Bool}(), Dict{String,Int}(),
-                          Dict{String,Vector{Union{Nothing,_LaneEval}}}(), nothing, nothing,
-                          Dict{String,Vector{Vector{_GuardPath}}}())
+_AffineSig() = _AffineSig(
+    Dict{String, _StencilBranch}(), IdDict{OpExpr, Bool}(), IOBuffer(), Int[],
+    Dict{String, Vector{Vector{Bool}}}(), Int[], Dict{String, Any}(),
+    IdDict{OpExpr, Nothing}(), IdDict{Any, Bool}(), Dict{String, Int}(),
+    Dict{String, Vector{Union{Nothing, _LaneEval}}}(), nothing, nothing,
+    Dict{String, Vector{Vector{_GuardPath}}}()
+)
 
 # Whether `e` reaches an `index` of a `makearray` or `faq` producer, through the
 # same children `_branch_key!` descends into.
-function _has_indexed_producer(e, seen::IdDict{OpExpr,Nothing}=IdDict{OpExpr,Nothing}())
+function _has_indexed_producer(e, seen::IdDict{OpExpr, Nothing} = IdDict{OpExpr, Nothing}())
     e isa OpExpr || return false
     haskey(seen, e) && return false
     seen[e] = nothing
     if e.op == "index" && !isempty(e.args)
         fa = e.args[1]
         fa isa OpExpr && (fa.op == "makearray" || _is_faq_op(fa.op)) && return true
+        # A gather pushed through an elementwise producer (`index(a + b, i)`)
+        # indexes the producers among its operands (`_branch_key_pushdown!`).
+        fa isa OpExpr && _is_scalar_op(fa.op) && _reaches_indexable_producer(fa) &&
+            return true
     end
     for a in e.args
         _has_indexed_producer(a, seen) && return true
@@ -431,9 +448,11 @@ function _affine_idx_expr(e::ASTExpr, idxset)::Bool
     e isa VarExpr && return ((e::VarExpr).name in idxset)
     e isa OpExpr || return false
     o = e::OpExpr
-    (o.ranges === nothing && o.output_idx === nothing && o.bindings === nothing &&
-     o.expr_body === nothing && o.lower === nothing && o.upper === nothing &&
-     o.filter === nothing && o.key === nothing && o.values === nothing) || return false
+    (
+        o.ranges === nothing && o.output_idx === nothing && o.bindings === nothing &&
+            o.expr_body === nothing && o.lower === nothing && o.upper === nothing &&
+            o.filter === nothing && o.key === nothing && o.values === nothing
+    ) || return false
     if o.op == "+" || o.op == "-"
         return all(a -> _affine_idx_expr(a, idxset), o.args)
     elseif o.op == "neg"
@@ -465,8 +484,10 @@ end
 # at a reference cell and keyed the deviation from it — which silently poisons
 # the scan when the reference happens to sit on the clamped side of the very
 # transition being looked for, and then keys a change at EVERY cell).
-function _lane_nonaffine_args!(sig::_AffineSig, bkey::String,
-                               recipes::Vector{_LaneRecipe}, idxset)
+function _lane_nonaffine_args!(
+        sig::_AffineSig, bkey::String,
+        recipes::Vector{_LaneRecipe}, idxset
+    )
     cached = get(sig.lane_ref, bkey, nothing)
     cached === nothing || return cached
     ref = Vector{Vector{Bool}}(undef, length(recipes))
@@ -479,9 +500,17 @@ function _lane_nonaffine_args!(sig::_AffineSig, bkey::String,
 end
 
 @inline _set_env!(env, idx_names, loop) =
-    (for d in eachindex(idx_names); env[idx_names[d]] = loop[d]; end; env)
+    (
+    for d in eachindex(idx_names)
+        env[idx_names[d]] = loop[d]
+    end; env
+)
 @inline _box_oln(base, strides, loop, D) =
-    (o = base; @inbounds for d in 1:D; o += loop[d]*strides[d]; end; o)
+    (
+    o = base; @inbounds for d in 1:D
+        o += loop[d] * strides[d]
+    end; o
+)
 
 # Output slot of a cell via the ACTUAL state layout (var_map) — the ground truth
 # the affine map is verified against. `lhs_idx_args` map loop indices → the LHS
@@ -499,15 +528,17 @@ end
 # (irregular / holey grid) fails here → whole-equation fallback.
 function _derive_output_affine(lhs_var, lhs_idx_args, idx_names, ranges, var_map)
     D = length(idx_names)
-    env = Dict{String,Int}()
+    env = Dict{String, Int}()
     rep = Int[first(ranges[d]) for d in 1:D]
     oln_rep = _oln_via_varmap(lhs_var, lhs_idx_args, _set_env!(env, idx_names, rep), var_map)
     strides = zeros(Int, D)
     for d in 1:D
         if length(ranges[d]) >= 2
             l2 = copy(rep); l2[d] += 1
-            strides[d] = _oln_via_varmap(lhs_var, lhs_idx_args,
-                             _set_env!(env, idx_names, l2), var_map) - oln_rep
+            strides[d] = _oln_via_varmap(
+                lhs_var, lhs_idx_args,
+                _set_env!(env, idx_names, l2), var_map
+            ) - oln_rep
         end
     end
     base = oln_rep - _box_oln(0, strides, rep, D)
@@ -528,8 +559,10 @@ function _recipe_const_lin(rec::_LaneRecipe, idx_env, const_arrays)
     n = length(rec.idx_args)
     inds = Vector{Int}(undef, n)
     @inbounds for d in 1:n
-        inds[d] = _resolve_const_index(arr, rec.var_name, d,
-                      _eval_const_int(rec.idx_args[d], idx_env, const_arrays), size(arr, d))
+        inds[d] = _resolve_const_index(
+            arr, rec.var_name, d,
+            _eval_const_int(rec.idx_args[d], idx_env, const_arrays), size(arr, d)
+        )
     end
     return LinearIndices(size(arr))[inds...]
 end
@@ -556,15 +589,19 @@ end
 # `_process_affine_box!` needs. Split out of `_cell_ckey!` (perf) so the per-box
 # call skips the scan-only gather-delta key it would otherwise BUILD AND DISCARD
 # (the state-recipe evals of lines below + a second `String`).
-function _cell_bkey!(sig::_AffineSig, loop, idx_names, body, ctx_proto,
-                     var_map, param_sym_set, reg_funcs)
+function _cell_bkey!(
+        sig::_AffineSig, loop, idx_names, body, ctx_proto,
+        var_map, param_sym_set, reg_funcs
+    )
     env = ctx_proto.idx_env
     empty!(env)
     _set_env!(env, idx_names, loop)
     if get!(() -> _has_indexed_producer(body), sig.bkey_sites, body)
         empty!(sig.bseen)
-        _branch_key!(sig.bio, body, ctx_proto.idxset, env, ctx_proto.const_arrays, sig.bmemo,
-                     sig.bseen)
+        _branch_key!(
+            sig.bio, body, ctx_proto.idxset, env, ctx_proto.const_arrays, sig.bmemo,
+            sig.bseen
+        )
     end
     bkey = String(take!(sig.bio))
     branch = get(sig.branch_cache, bkey, nothing)
@@ -577,21 +614,26 @@ end
 # The state lanes' slots at the keyed cell: each recipe's compiled evaluator
 # where it answers (the same integer arithmetic and slot map as `_eval_recipe`),
 # `_eval_recipe` itself otherwise, so every error is the per-cell resolution's.
-function _ckey_state_slots!(state_vals::Vector{Int}, sig::_AffineSig, bkey::String,
-                            recipes, state_ks, loop, idx_names, env, var_map,
-                            const_arrays)
+function _ckey_state_slots!(
+        state_vals::Vector{Int}, sig::_AffineSig, bkey::String,
+        recipes, state_ks, loop, idx_names, env, var_map,
+        const_arrays
+    )
     evs = get!(sig.lane_evals, bkey) do
         compiled = loop isa Vector{Int} && idx_names isa Vector{String}
-        Union{Nothing,_LaneEval{typeof(var_map)}}[
+        Union{Nothing, _LaneEval{typeof(var_map)}}[
             compiled ? _lane_evaluator(recipes[k], idx_names, var_map, const_arrays) : nothing
-            for k in state_ks]
+                for k in state_ks
+        ]
     end
     _ckey_fill_slots!(state_vals, evs, recipes, state_ks, loop, env, var_map, const_arrays)
     return state_vals
 end
 
-function _ckey_fill_slots!(state_vals::Vector{Int}, evs::Vector{Union{Nothing,E}}, recipes,
-                           state_ks, loop, env, var_map, const_arrays) where {E}
+function _ckey_fill_slots!(
+        state_vals::Vector{Int}, evs::Vector{Union{Nothing, E}}, recipes,
+        state_ks, loop, env, var_map, const_arrays
+    ) where {E}
     @inbounds for i in eachindex(state_ks)
         le = evs[i]
         if le !== nothing
@@ -606,26 +648,32 @@ function _ckey_fill_slots!(state_vals::Vector{Int}, evs::Vector{Union{Nothing,E}
     return state_vals
 end
 
-function _cell_ckey!(key::Vector{Int}, sig::_AffineSig, loop, idx_names, body, ctx_proto,
-                     var_map, param_sym_set, reg_funcs,
-                     okey::Union{Nothing,Tuple{Int,Vector{Int}}}=nothing,
-                     ranges::Union{Nothing,Vector{UnitRange{Int}}}=nothing)
+function _cell_ckey!(
+        key::Vector{Int}, sig::_AffineSig, loop, idx_names, body, ctx_proto,
+        var_map, param_sym_set, reg_funcs,
+        okey::Union{Nothing, Tuple{Int, Vector{Int}}} = nothing,
+        ranges::Union{Nothing, Vector{UnitRange{Int}}} = nothing
+    )
     _BENCH_ON[] && (_BENCH_PHASE_N[:cell_ckey] = get(_BENCH_PHASE_N, :cell_ckey, 0) + 1)
     # The closed form gives the same key wherever it applies; the lane-affine
     # key off keys slot deltas instead, which it does not model.
     fk = sig.fast_key
     fk isa _FastKey && (okey === nothing || !fk.lane_affine_key_off) &&
         loop isa Vector{Int} && return _fast_ckey!(key, fk, loop)
-    bkey, branch = _cell_bkey!(sig, loop, idx_names, body, ctx_proto,
-                               var_map, param_sym_set, reg_funcs)
+    bkey, branch = _cell_bkey!(
+        sig, loop, idx_names, body, ctx_proto,
+        var_map, param_sym_set, reg_funcs
+    )
     env = ctx_proto.idx_env    # left populated with `loop` by _cell_bkey! (branch_key restores its temp binds)
     _tmpl, recipes, state_ks, _subcalls = branch
     # Only the STATE lanes feed the gather key; evaluate just those into a reused
     # Vector{Int} (no Vector{Any}, no boxing, and no wasted non-state recipe evals).
     state_vals = sig.state_scratch
     resize!(state_vals, length(state_ks))
-    _ckey_state_slots!(state_vals, sig, bkey, recipes, state_ks, loop, idx_names, env,
-                       var_map, ctx_proto.const_arrays)
+    _ckey_state_slots!(
+        state_vals, sig, bkey, recipes, state_ks, loop, idx_names, env,
+        var_map, ctx_proto.const_arrays
+    )
     # The key is a vector of integers. Its first entry numbers the branch key;
     # everything after it has a length and a layout fixed by the branch (its
     # lanes, their subscripts, its policy-bearing const lanes), so two cells'
@@ -671,7 +719,9 @@ function _cell_ckey!(key::Vector{Int}, sig::_AffineSig, loop, idx_names, body, c
                 # a total integer function of the loop, so evaluating there is
                 # always safe (unlike a slot, which can be a ghost).
                 for d in 1:D
-                    @inbounds for dd in 1:D; back[dd] = loop[dd]; end
+                    @inbounds for dd in 1:D
+                        back[dd] = loop[dd]
+                    end
                     # CLAMPED to the dim's own range. A subscript is NOT a total
                     # function of an out-of-range loop point: an unstructured
                     # gather (`index(cells_on_cell, i, n)`) resolves through a
@@ -681,7 +731,7 @@ function _cell_ckey!(key::Vector{Int}, sig::_AffineSig, loop, idx_names, body, c
                     # unconditionally, and the scan compares `lo` only against
                     # `lo + 1`.
                     back[d] = ranges === nothing ? loop[d] - 1 :
-                              max(first(ranges[d]), loop[d] - 1)
+                        max(first(ranges[d]), loop[d] - 1)
                     vb = _eval_const_int(a, _set_env!(env, idx_names, back), ca)
                     push!(key, v - vb)
                 end
@@ -691,8 +741,12 @@ function _cell_ckey!(key::Vector{Int}, sig::_AffineSig, loop, idx_names, body, c
     end
     _const_fold_key!(key, recipes, env, ctx_proto.const_arrays)
     fk === nothing && (okey === nothing || !_lane_affine_key_disabled()) &&
-        (sig.fast_key = _fast_key_model(sig, body, branch, key[1], idx_names,
-                                        ctx_proto.idxset))
+        (
+        sig.fast_key = _fast_key_model(
+            sig, body, branch, key[1], idx_names,
+            ctx_proto.idxset
+        )
+    )
     return key
 end
 
@@ -705,8 +759,10 @@ end
 # `E_TREEWALK_CONSTARRAY_OOB`). Plain const arrays (no declared policy)
 # contribute nothing: in-range indices have one class, and an out-of-range one
 # throws identically on every path.
-function _const_fold_key!(key::Vector{Int}, recipes::Vector{_LaneRecipe}, env,
-                          const_arrays)
+function _const_fold_key!(
+        key::Vector{Int}, recipes::Vector{_LaneRecipe}, env,
+        const_arrays
+    )
     for rec in recipes
         rec.kind == LANE_CONST || continue
         arr = rec.arr
@@ -734,61 +790,200 @@ end
 # Probe values for a range: low / mid / high (deduplicated).
 function _probe_values(rng::UnitRange{Int})
     lo, hi = first(rng), last(rng)
-    unique(Int[lo, (lo + hi) ÷ 2, hi])
+    return unique(Int[lo, (lo + hi) ÷ 2, hi])
 end
 
 # Structural cut candidates: a per-cell signature changes at a makearray REGION
 # boundary (`_select_region`), and — unlike a ghost transition — that boundary can
 # sit anywhere in the range, including mid-domain, so the edge-inward scan cannot
 # be relied on to reach it. Harvest every region boundary from the body up front
-# (O(#regions), grid-independent) so it is probed explicitly. A boundary is mapped
-# to an output dim only when its makearray is indexed by a BARE loop var there
-# (the region-tiling case, e.g. PPM's seven columns and any hemisphere split);
-# anything fancier is left to the edge scan + per-box corner verification.
-function _collect_makearray_bounds!(cands::Vector{Set{Int}}, mk::OpExpr,
-                                    kargs::Vector{ASTExpr}, idx_names::Vector{String})
-    regions = mk.regions
-    if regions !== nothing
-        for (j, ka) in enumerate(kargs)
-            ka isa VarExpr || continue
-            d = findfirst(==(ka.name), idx_names)
-            d === nothing && continue
-            for region in regions
-                j <= length(region) && length(region[j]) >= 2 || continue
-                push!(cands[d], region[j][1]); push!(cands[d], region[j][2] + 1)
+# (O(#regions), grid-independent) so it is probed explicitly.
+#
+# A box takes the template of its first cell (`_process_affine_box!`) and nothing
+# checks the region selections of the rest of it, so a boundary the harvest and
+# the edge scans both miss is a box spanning two regions that silently computes
+# the first one's value everywhere. The harvest therefore follows each
+# makearray subscript back to the loop indices, through every name that binds
+# one, and answers for every subscript it meets:
+#
+#   * a loop index plus a constant, `i + c` — directly, or through the output
+#     index of an `faq` gathered at one (`index(faq(index(makearray, i), i),
+#     _lp0)`, the lifted form of a whole-array equation): the region bounds,
+#     shifted by `c`, are the candidates;
+#   * any other function of ONE loop index (a clamp, a `mod`, a contracted index
+#     added to it): every cell of that index is a candidate, which costs a key
+#     per cell along it and finds every change;
+#   * a function of two or more loop indices: no set of per-dim cuts describes
+#     where its selection changes, so the tier declines the equation.
+#
+# Region selection reached through an elementwise producer (`index(a + b, i)`)
+# is followed into its operands, as `_stencilize_index` pushes the gather.
+#
+# Returns the candidate starts per dim and, per dim, whether every cell of it is
+# a candidate.
+function _region_cut_candidates(body, idx_names::Vector{String})
+    D = length(idx_names)
+    cands = [Set{Int}() for _ in 1:D]
+    full = falses(D)
+    # What a name is in terms of the loop indices: `(d, c)` for `loop[d] + c`, a
+    # `Vector{Int}` of the dims it depends on otherwise. A name absent from the
+    # map depends on none (a constant, a contracted index, a variable).
+    alias0 = Dict{String, Any}(idx_names[d] => (d, 0) for d in 1:D)
+    # Deduped per (node, alias map CONTENT) (ESS-0hh): a Set-collector over the
+    # region bounds is path-multiplicity-insensitive, so entering each distinct
+    # node once per distinct binding collects exactly the same candidate sets,
+    # and a template gathered along many paths at the same subscripts is walked
+    # once, not once per path.
+    alias_ids = Dict{Vector{Pair{String, Any}}, Int}()
+    aid_of = IdDict{Dict{String, Any}, Int}()
+    aid(a) = get!(aid_of, a) do
+        get!(alias_ids, sort!(collect(a); by = first), length(alias_ids) + 1)
+    end
+    seen = Set{Tuple{UInt, Int}}()
+    iseen = Set{Tuple{UInt, Vector{Any}, Int}}()
+    lit(x) = x isa IntExpr || (x isa NumExpr && isinteger((x::NumExpr).value))
+    litval(x) = x isa IntExpr ? Int((x::IntExpr).value) : Int((x::NumExpr).value)
+    function deps!(acc::Set{Int}, e, alias)
+        if e isa VarExpr
+            v = get(alias, (e::VarExpr).name, nothing)
+            v isa Tuple && push!(acc, v[1])
+            v isa Vector{Int} && union!(acc, v)
+        elseif e isa OpExpr
+            foreach(c -> deps!(acc, c, alias), child_exprs(e::OpExpr))
+        end
+        return acc
+    end
+    # A subscript as `nothing` (no loop dependence), `(d, c)` or a dim vector.
+    function sub(e, alias)
+        e isa VarExpr && return get(alias, (e::VarExpr).name, nothing)
+        if e isa OpExpr && ((e::OpExpr).op == "+" || (e::OpExpr).op == "-")
+            o = e::OpExpr
+            if o.op == "+" || length(o.args) == 2
+                aff = nothing; c = 0; ok = true
+                for (k, a) in enumerate(o.args)
+                    sgn = (o.op == "-" && k == 2) ? -1 : 1
+                    if lit(a)
+                        c += sgn * litval(a)
+                        continue
+                    end
+                    s = sub(a, alias)
+                    s === nothing && (ok = false; break)
+                    (s isa Tuple && aff === nothing && sgn == 1) || (ok = false; break)
+                    aff = s
+                end
+                ok && aff !== nothing && return (aff[1], aff[2] + c)
             end
         end
+        d = deps!(Set{Int}(), e, alias)
+        isempty(d) && return nothing
+        return sort!(collect(d))
     end
-    # A region's value may itself be a makearray; it inherits the same k-args.
-    if mk.values !== nothing
-        for v in mk.values
-            v isa OpExpr && v.op == "makearray" &&
-                _collect_makearray_bounds!(cands, v, kargs, idx_names)
+    function mark!(s, lo_hi)
+        s === nothing && return
+        return if s isa Tuple
+            d, c = s
+            lo = _ma_region_bound(lo_hi[1]); hi = _ma_region_bound(lo_hi[2])
+            if lo === nothing || hi === nothing
+                full[d] = true
+            else
+                push!(cands[d], lo - c); push!(cands[d], hi + 1 - c)
+            end
+        elseif length(s) == 1
+            full[s[1]] = true
+        else
+            throw(
+                _StencilFallback(
+                    "makearray region selected by a subscript of " *
+                        "several loop indices; no box cut describes it"
+                )
+            )
         end
     end
-end
-function _region_cut_candidates(body, idx_names::Vector{String})
-    cands = [Set{Int}() for _ in idx_names]
-    # Identity-deduped (ESS-0hh): a Set-collector over the region bounds is
-    # path-multiplicity-insensitive, so entering each distinct node once
-    # collects exactly the same candidate sets — O(nodes) on a structurally-
-    # shared body instead of once per path.
-    seen = IdDict{OpExpr,Nothing}()
-    walk(n) = begin
+    # A producer gathered at subscripts `subs` (one analysis per axis).
+    function indexed!(p, subs, alias)
+        p isa OpExpr || return
+        pe = p::OpExpr
+        ikey = (objectid(pe), subs, aid(alias))
+        ikey in iseen && return
+        push!(iseen, ikey)
+        return if pe.op == "makearray"
+            regions = pe.regions === nothing ? Vector{Vector{Vector{Any}}}() : pe.regions
+            values = pe.values === nothing ? ASTExpr[] : pe.values
+            for region in regions
+                length(region) == length(subs) || continue
+                for j in eachindex(subs)
+                    length(region[j]) >= 2 && mark!(subs[j], region[j])
+                end
+            end
+            for (r, v) in enumerate(values)
+                if _is_array_producer(v)
+                    ve = v::OpExpr
+                    rank = ve.op == "makearray" ?
+                        (
+                            (ve.regions === nothing || isempty(ve.regions)) ? 0 :
+                            length(ve.regions[1])
+                        ) :
+                        count(s -> s isa AbstractString, ve.output_idx)
+                    vs = subs
+                    if rank != length(subs) && r <= length(regions)
+                        reg = regions[r]
+                        ns = [
+                            j for j in eachindex(subs)
+                                if j <= length(reg) && reg[j][1] != reg[j][2]
+                        ]
+                        vs = subs[ns]
+                    end
+                    length(vs) == rank ? indexed!(ve, vs, alias) : walk(ve, alias)
+                else
+                    walk(v, alias)
+                end
+            end
+        elseif _is_faq_op(pe.op)
+            oi = String[
+                String(s) for s in something(pe.output_idx, Any[])
+                    if s isa AbstractString
+            ]
+            inner = copy(alias)
+            pe.ranges === nothing || foreach(k -> delete!(inner, String(k)), keys(pe.ranges))
+            for (d, n) in enumerate(oi)
+                s = d <= length(subs) ? subs[d] : nothing
+                s === nothing ? delete!(inner, n) : (inner[n] = s)
+            end
+            pe.expr_body === nothing || walk(pe.expr_body, inner)
+            pe.filter === nothing || walk(pe.filter, inner)
+        elseif _is_scalar_op(pe.op)
+            for a in pe.args
+                indexed!(a, subs, alias)
+            end
+        else
+            walk(pe, alias)
+        end
+    end
+    function walk(n, alias)
         n isa OpExpr || return
-        haskey(seen, n) && return
-        seen[n] = nothing
-        if n.op == "index" && !isempty(n.args) &&
-           n.args[1] isa OpExpr && (n.args[1]::OpExpr).op == "makearray"
-            _collect_makearray_bounds!(cands, n.args[1]::OpExpr,
-                                       ASTExpr[a for a in n.args[2:end]], idx_names)
+        o = n::OpExpr
+        key = (objectid(o), aid(alias))
+        key in seen && return
+        push!(seen, key)
+        if o.op == "index" && !isempty(o.args) && o.args[1] isa OpExpr
+            for k in 2:length(o.args)
+                walk(o.args[k], alias)
+            end
+            indexed!(o.args[1], Any[sub(k, alias) for k in o.args[2:end]], alias)
+            return
         end
-        for a in n.args; walk(a); end
-        n.expr_body !== nothing && walk(n.expr_body)
-        n.values !== nothing && (for v in n.values; walk(v); end)
+        inner = alias
+        if o.ranges !== nothing || o.output_idx !== nothing
+            # A binder outside a gather: its names are not loop indices here.
+            inner = copy(alias)
+            o.ranges === nothing || foreach(k -> delete!(inner, String(k)), keys(o.ranges))
+            o.output_idx === nothing ||
+                foreach(s -> s isa AbstractString && delete!(inner, String(s)), o.output_idx)
+        end
+        return foreach(c -> walk(c, inner), child_exprs(o))
     end
-    walk(body)
-    return cands
+    walk(body, alias0)
+    return cands, full
 end
 
 # How many consecutive identical per-cell signatures certify that the interior of
@@ -832,18 +1027,27 @@ const _AFFINE_MAX_DELTA_SEGS = 16
 # lanes by their Δ (wrap boxes), falling back to the base key when the Δ-keyed
 # segment count exceeds `_AFFINE_MAX_DELTA_SEGS` (unstructured gather → the
 # indirect-table derivation owns it instead).
-function _affine_cut_points(sig::_AffineSig, body, idx_names, ranges, ctx_proto,
-                            var_map, param_sym_set, reg_funcs,
-                            okey::Union{Nothing,Tuple{Int,Vector{Int}}}=nothing)
+function _affine_cut_points(
+        sig::_AffineSig, body, idx_names, ranges, ctx_proto,
+        var_map, param_sym_set, reg_funcs,
+        okey::Union{Nothing, Tuple{Int, Vector{Int}}} = nothing
+    )
     D = length(idx_names)
     cuts = Vector{Vector{Int}}(undef, D)
-    region_cands = _region_cut_candidates(body, idx_names)
+    region_cands, full = _region_cut_candidates(body, idx_names)
     for d in 1:D
-        starts = _scan_dim_cuts(sig, body, idx_names, ranges, ctx_proto, var_map,
-                                param_sym_set, reg_funcs, region_cands, d, okey)
+        full[d] && union!(region_cands[d], (first(ranges[d]) + 1):last(ranges[d]))
+    end
+    for d in 1:D
+        starts = _scan_dim_cuts(
+            sig, body, idx_names, ranges, ctx_proto, var_map,
+            param_sym_set, reg_funcs, region_cands, d, okey
+        )
         if okey !== nothing && length(starts) > _AFFINE_MAX_DELTA_SEGS
-            starts = _scan_dim_cuts(sig, body, idx_names, ranges, ctx_proto, var_map,
-                                    param_sym_set, reg_funcs, region_cands, d, nothing)
+            starts = _scan_dim_cuts(
+                sig, body, idx_names, ranges, ctx_proto, var_map,
+                param_sym_set, reg_funcs, region_cands, d, nothing
+            )
         end
         cuts[d] = sort!(collect(starts))
     end
@@ -852,9 +1056,11 @@ end
 
 # One dim's edge-inward signature scan (see `_affine_cut_points`). Returns the
 # set of segment-start indices for dim `d` under the signature strength `okey`.
-function _scan_dim_cuts(sig::_AffineSig, body, idx_names, ranges, ctx_proto,
-                        var_map, param_sym_set, reg_funcs, region_cands, d::Int,
-                        okey::Union{Nothing,Tuple{Int,Vector{Int}}})
+function _scan_dim_cuts(
+        sig::_AffineSig, body, idx_names, ranges, ctx_proto,
+        var_map, param_sym_set, reg_funcs, region_cands, d::Int,
+        okey::Union{Nothing, Tuple{Int, Vector{Int}}}
+    )
     D = length(idx_names)
     rng = ranges[d]; lo, hi = first(rng), last(rng)
     starts = Set{Int}(); push!(starts, lo)
@@ -864,9 +1070,13 @@ function _scan_dim_cuts(sig::_AffineSig, body, idx_names, ranges, ctx_proto,
     loop = Vector{Int}(undef, D)
     # Two key buffers, alternated: `ck` fills the one `prev` does not hold.
     kb1 = Int[]; kb2 = Int[]
-    ck(iv, prev) = (loop[d] = iv;
-                    _cell_ckey!(prev === kb1 ? kb2 : kb1, sig, loop, idx_names, body,
-                                ctx_proto, var_map, param_sym_set, reg_funcs, okey, ranges))
+    ck(iv, prev) = (
+        loop[d] = iv;
+        _cell_ckey!(
+            prev === kb1 ? kb2 : kb1, sig, loop, idx_names, body,
+            ctx_proto, var_map, param_sym_set, reg_funcs, okey, ranges
+        )
+    )
     # Region boundaries in this dim, kept only where they open a real segment
     # (lo < C ≤ hi). Each is confirmed below by comparing C-1 to C.
     cand_d = sort!(Int[c for c in region_cands[d] if lo < c <= hi])
@@ -876,7 +1086,9 @@ function _scan_dim_cuts(sig::_AffineSig, body, idx_names, ranges, ctx_proto,
     # stabilizes long before `mid`, so the deep interior is never scanned.
     mid = (lo + hi) ÷ 2
     for probe in probesets
-        for (ii, dd) in enumerate(otherdims); loop[dd] = probe[ii]; end
+        for (ii, dd) in enumerate(otherdims)
+            loop[dd] = probe[ii]
+        end
         # Over-cap early exit for a Δ-keyed scan: an unstructured gather changes
         # Δ at EVERY cell, so without this the fronts would never stabilize and
         # the scan would walk the whole range before the caller's cap fallback.
@@ -889,7 +1101,9 @@ function _scan_dim_cuts(sig::_AffineSig, body, idx_names, ranges, ctx_proto,
                 if cur != prev
                     push!(starts, iv); stable = 0
                     overcap() && break
-                else; stable += 1; stable >= _AFFINE_STABLE_GUARD && break; end
+                else
+                    stable += 1; stable >= _AFFINE_STABLE_GUARD && break
+                end
             end
             prev = cur; iv += 1
         end
@@ -902,7 +1116,9 @@ function _scan_dim_cuts(sig::_AffineSig, body, idx_names, ranges, ctx_proto,
                 if cur != prev
                     push!(starts, iv + 1); stable = 0
                     overcap() && break
-                else; stable += 1; stable >= _AFFINE_STABLE_GUARD && break; end
+                else
+                    stable += 1; stable >= _AFFINE_STABLE_GUARD && break
+                end
             end
             prev = cur; iv -= 1
         end
@@ -930,7 +1146,7 @@ end
 function _segments(starts::Vector{Int}, rng::UnitRange{Int})
     segs = UnitRange{Int}[]
     for i in eachindex(starts)
-        e = i < length(starts) ? starts[i+1] - 1 : last(rng)
+        e = i < length(starts) ? starts[i + 1] - 1 : last(rng)
         push!(segs, starts[i]:e)
     end
     return segs
@@ -951,10 +1167,10 @@ end
 # string.
 function _desc_key(d::_AccDesc)
     k = d.kind
-    k === _AK_STATE_AFFINE && return (0x1, UInt64(0), d.delta, d.idx, 0, 0)
-    k === _AK_LOOP_IDX     && return (0x2, UInt64(0), d.dim, 0, 0, 0)
+    k === _AK_STATE_AFFINE && return (0x01, UInt64(0), d.delta, d.idx, 0, 0)
+    k === _AK_LOOP_IDX     && return (0x02, UInt64(0), d.dim, 0, 0, 0)
     if k === _AK_CONST_BOX || k === _AK_FORCING_BOX || k === _AK_STATE_TBL_BOX
-        tag = k === _AK_CONST_BOX ? 0x3 : k === _AK_FORCING_BOX ? 0x4 : 0x5
+        tag = k === _AK_CONST_BOX ? 0x03 : k === _AK_FORCING_BOX ? 0x04 : 0x05
         id = objectid(k === _AK_STATE_TBL_BOX ? d.conn : d.arr)
         # A box of rank above 3 appends the strides of its dims past the third,
         # so the key stays exact at every rank (and unchanged at rank ≤ 3).
@@ -1019,13 +1235,21 @@ end
 
 # One recipe value per cell of `run` (see `_box_table_addr`) in the table's
 # addressing, every other entry zero, with the table's strides and offset.
-function _box_table(::Type{T}, rec::_LaneRecipe, idx_names, box, run, D, var_map,
-                    const_arrays) where {T}
+function _box_table(
+        ::Type{T}, rec::_LaneRecipe, idx_names, box, run, D, var_map,
+        const_arrays
+    ) where {T}
     s, off, len = _box_table_addr(box, run, D)
-    run === box && return (_fill_box_table!(Vector{T}(undef, len), rec, idx_names, box, D,
-                                            var_map, const_arrays), s, off)
-    vals = _fill_box_table!(Vector{T}(undef, prod(d -> length(run[d]), 1:D; init = 1)),
-                            rec, idx_names, run, D, var_map, const_arrays)
+    run === box && return (
+        _fill_box_table!(
+            Vector{T}(undef, len), rec, idx_names, box, D,
+            var_map, const_arrays
+        ), s, off,
+    )
+    vals = _fill_box_table!(
+        Vector{T}(undef, prod(d -> length(run[d]), 1:D; init = 1)),
+        rec, idx_names, run, D, var_map, const_arrays
+    )
     tbl = zeros(T, len)
     j = 0
     for I in CartesianIndices(ntuple(d -> UnitRange{Int}(run[d]), D))
@@ -1090,18 +1314,24 @@ end
 # One recipe value per cell of `box`, in box-local (first index fastest) order:
 # the compiled lane evaluator where it answers, `_eval_recipe` where it does
 # not (see "Compiled lane evaluation", stencil.jl).
-function _fill_box_table!(tbl::Vector, rec::_LaneRecipe, idx_names, box, D,
-                          var_map, const_arrays)
+function _fill_box_table!(
+        tbl::Vector, rec::_LaneRecipe, idx_names, box, D,
+        var_map, const_arrays
+    )
     le = _lane_evaluator(rec, collect(String, idx_names), var_map, const_arrays)
-    _fill_box_table_nt!(tbl, rec, le, idx_names, ntuple(d -> UnitRange{Int}(box[d]), D),
-                        var_map, const_arrays)
+    _fill_box_table_nt!(
+        tbl, rec, le, idx_names, ntuple(d -> UnitRange{Int}(box[d]), D),
+        var_map, const_arrays
+    )
     return tbl
 end
 
-function _fill_box_table_nt!(tbl::Vector{T}, rec::_LaneRecipe, le, idx_names,
-                             rngs::NTuple{N,UnitRange{Int}}, var_map,
-                             const_arrays) where {T,N}
-    env = Dict{String,Int}()
+function _fill_box_table_nt!(
+        tbl::Vector{T}, rec::_LaneRecipe, le, idx_names,
+        rngs::NTuple{N, UnitRange{Int}}, var_map,
+        const_arrays
+    ) where {T, N}
+    env = Dict{String, Int}()
     loop = Vector{Int}(undef, N)
     j = 0
     for I in CartesianIndices(rngs)
@@ -1116,8 +1346,10 @@ function _fill_box_table_nt!(tbl::Vector{T}, rec::_LaneRecipe, le, idx_names,
                 continue
             end
         end
-        tbl[j] = _eval_recipe(rec, _set_env!(env, idx_names, loop), var_map,
-                              const_arrays)::T
+        tbl[j] = _eval_recipe(
+            rec, _set_env!(env, idx_names, loop), var_map,
+            const_arrays
+        )::T
     end
     return tbl
 end
@@ -1130,15 +1362,19 @@ end
 # it is bit-identical by construction and O(box) — the same order as the
 # connectivity input, and strictly smaller than the per-cell fallback's
 # per-lane slot vectors.
-function _materialize_state_tbl(rec::_LaneRecipe, idx_names, box, D,
-                                var_map, const_arrays, run=box)
+function _materialize_state_tbl(
+        rec::_LaneRecipe, idx_names, box, D,
+        var_map, const_arrays, run = box
+    )
     _t0 = time_ns()
     r = _materialize_state_tbl_inner(rec, idx_names, box, D, var_map, const_arrays, run)
     _bench_phase!(:mat_state_tbl, _t0)
     return r
 end
-function _materialize_state_tbl_inner(rec::_LaneRecipe, idx_names, box, D,
-                                var_map, const_arrays, run=box)
+function _materialize_state_tbl_inner(
+        rec::_LaneRecipe, idx_names, box, D,
+        var_map, const_arrays, run = box
+    )
     tbl, s, off = _box_table(Int, rec, idx_names, box, run, D, var_map, const_arrays)
     return _AccRepl(_AccStateTblBox(tbl, s, off))
 end
@@ -1166,15 +1402,19 @@ _obsref_disabled() = !_compiler_plan_now().obsref
 # `_AccForcingBox` liveness contract, and the same descriptor kind the
 # per-cell merge (`_acc_merge_nodes`) already emits for divergent forcing
 # reads. Bit-identical by construction; O(box) build cost.
-function _materialize_pgather_tbl(rec::_LaneRecipe, idx_names, box, D,
-                                var_map, const_arrays, run=box)
+function _materialize_pgather_tbl(
+        rec::_LaneRecipe, idx_names, box, D,
+        var_map, const_arrays, run = box
+    )
     _t0 = time_ns()
     r = _materialize_pgather_tbl_inner(rec, idx_names, box, D, var_map, const_arrays, run)
     _bench_phase!(:mat_pgather_tbl, _t0)
     return r
 end
-function _materialize_pgather_tbl_inner(rec::_LaneRecipe, idx_names, box, D,
-                                  var_map, const_arrays, run=box)
+function _materialize_pgather_tbl_inner(
+        rec::_LaneRecipe, idx_names, box, D,
+        var_map, const_arrays, run = box
+    )
     pg = rec.arr::_PGatherArray
     tbl, s, off = _box_table(Int, rec, idx_names, box, run, D, var_map, const_arrays)
     return _AccRepl(_AccArrTblBox(pg.flat, tbl, s, off))
@@ -1194,15 +1434,19 @@ end
 # argument; the LANE_CONST fast path below derives it from the index instead.
 # A tile that shares its code keeps the table: it evaluates only its own cells
 # (`run`), so it could not make the decision every tile makes.
-function _materialize_const_box(rec::_LaneRecipe, idx_names, box, D,
-                                var_map, const_arrays, run=box)
+function _materialize_const_box(
+        rec::_LaneRecipe, idx_names, box, D,
+        var_map, const_arrays, run = box
+    )
     _t0 = time_ns()
     r = _materialize_const_box_inner(rec, idx_names, box, D, var_map, const_arrays, run)
     _bench_phase!(:mat_const_box, _t0)
     return r
 end
-function _materialize_const_box_inner(rec::_LaneRecipe, idx_names, box, D,
-                                var_map, const_arrays, run=box)
+function _materialize_const_box_inner(
+        rec::_LaneRecipe, idx_names, box, D,
+        var_map, const_arrays, run = box
+    )
     vals, s, off = _box_table(Float64, rec, idx_names, box, run, D, var_map, const_arrays)
     if !_range_shared_code(_range_spec_now())
         v1 = vals[1]
@@ -1233,26 +1477,34 @@ end
 # `le` is the lane's compiled evaluator (`_lane_evaluator`) or `nothing`; a STATE
 # lane is evaluated through it wherever it answers, which is the same slot
 # `_eval_recipe` returns there.
-function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
-                           oln_rep, base, strides, D, var_map, const_arrays,
-                           flat_cache, box,
-                           structural::Bool =
-                               all(a -> _affine_idx_expr(a, idx_names), rec.idx_args);
-                           le::Union{Nothing,_LaneEval}=nothing, run=box)
-    env = Dict{String,Int}()
+function _derive_lane_repl(
+        rec::_LaneRecipe, idx_names, rep, corners, thin,
+        oln_rep, base, strides, D, var_map, const_arrays,
+        flat_cache, box,
+        structural::Bool =
+            all(a -> _affine_idx_expr(a, idx_names), rec.idx_args);
+        le::Union{Nothing, _LaneEval} = nothing, run = box
+    )
+    env = Dict{String, Int}()
     ev(loop) = _ev_lane(le, rec, loop, env, idx_names, var_map, const_arrays)
     if rec.kind == LANE_STATE
         slot_rep = ev(rep)
         if slot_rep == 0                              # ghost → literal 0.0
             for cn in corners
                 ev(cn) == 0 ||
-                    return _materialize_state_tbl(rec, idx_names, box, D,
-                                                  var_map, const_arrays, run)
+                    return _materialize_state_tbl(
+                    rec, idx_names, box, D,
+                    var_map, const_arrays, run
+                )
             end
-            _ghost_box(rec, idx_names, corners, structural, box, D, ev,
-                       const_arrays, le, run) ||
-                return _materialize_state_tbl(rec, idx_names, box, D,
-                                              var_map, const_arrays, run)
+            _ghost_box(
+                rec, idx_names, corners, structural, box, D, ev,
+                const_arrays, le, run
+            ) ||
+                return _materialize_state_tbl(
+                rec, idx_names, box, D,
+                var_map, const_arrays, run
+            )
             return _LitRepl(0.0)
         end
         Δ = slot_rep - oln_rep
@@ -1264,11 +1516,15 @@ function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
                 break
             end
         end
-        uniform && (structural || _box_holds(box, run, D,
-                                             () -> _lane_box_key(:offset, rec, idx_names, box)) do l
-            sc = ev(l)
-            sc != 0 && sc - _box_oln(base, strides, l, D) == Δ
-        end) && return _AccRepl(_AccStateAffine(Δ))
+        uniform && (
+            structural || _box_holds(
+                box, run, D,
+                () -> _lane_box_key(:offset, rec, idx_names, box)
+            ) do l
+                sc = ev(l)
+                sc != 0 && sc - _box_oln(base, strides, l, D) == Δ
+            end
+        ) && return _AccRepl(_AccStateAffine(Δ))
         # Not at a constant offset from the output slot. Before paying for a
         # dense per-box table, try the lane's OWN affine map (see the LANE-AFFINE
         # STATE BOX note above): finite-difference the slot across a unit step in
@@ -1326,8 +1582,11 @@ function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
                         end
                     end
                 end
-                ok && return _AccRepl(_AccStateTblBox(
-                    _state_slot_identity(lo0, hi0), ls, o))
+                ok && return _AccRepl(
+                    _AccStateTblBox(
+                        _state_slot_identity(lo0, hi0), ls, o
+                    )
+                )
             end
         end
         return _materialize_state_tbl(rec, idx_names, box, D, var_map, const_arrays, run)
@@ -1378,7 +1637,7 @@ function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
         # and for an affine subscript it costs the same O(2^D) corner evals as
         # before: no per-cell work is added on the fast path.
         val_rep = ev(rep)
-        lenv = Dict{String,Int}()
+        lenv = Dict{String, Int}()
         clin(loop) = _recipe_const_lin(rec, _set_env!(lenv, idx_names, loop), const_arrays)
         lin_rep = clin(rep)
         s = zeros(Int, max(D, 3))
@@ -1388,17 +1647,23 @@ function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
                 s[d] = clin(l2) - lin_rep
             end
         end
-        off = lin_rep - sum((rep[d]-1)*s[d] for d in 1:D)
+        off = lin_rep - sum((rep[d] - 1) * s[d] for d in 1:D)
         for cn in corners
-            (off + sum((cn[d]-1)*s[d] for d in 1:D)) == clin(cn) ||
-                return _materialize_const_box(rec, idx_names, box, D,
-                                              var_map, const_arrays, run)
+            (off + sum((cn[d] - 1) * s[d] for d in 1:D)) == clin(cn) ||
+                return _materialize_const_box(
+                rec, idx_names, box, D,
+                var_map, const_arrays, run
+            )
         end
-        structural || _box_holds(box, run, D,
-                                 () -> _lane_box_key(:const, rec, idx_names, box)) do l
-            (off + sum((l[d]-1)*s[d] for d in 1:D)) == clin(l)
-        end || return _materialize_const_box(rec, idx_names, box, D,
-                                             var_map, const_arrays, run)
+        structural || _box_holds(
+            box, run, D,
+            () -> _lane_box_key(:const, rec, idx_names, box)
+        ) do l
+            (off + sum((l[d] - 1) * s[d] for d in 1:D)) == clin(l)
+        end || return _materialize_const_box(
+            rec, idx_names, box, D,
+            var_map, const_arrays, run
+        )
         # Index verified affine over the box; a zero stride in every dim means it
         # is the SAME element for every cell (thin dims contribute nothing — the
         # box is one cell wide there), so the read is genuinely loop-invariant
@@ -1406,7 +1671,9 @@ function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
         # _eval_recipe(...)` (see `_recipe_const_lin`), so `val_rep` is that
         # element and the fold is bit-identical.
         all(iszero, s) && return _LitRepl(Float64(val_rep))
-        arr_flat = get!(flat_cache, rec.arr) do; _const_flat(rec.arr); end
+        arr_flat = get!(flat_cache, rec.arr) do;
+            _const_flat(rec.arr)
+        end
         return _AccRepl(_AccConstBox(arr_flat, s, off))
     else  # LANE_PGATHER — LIVE forcing gather
         # `_eval_recipe` returns the flat LINEAR INDEX into the forcing buffer (its
@@ -1425,26 +1692,32 @@ function _derive_lane_repl(rec::_LaneRecipe, idx_names, rep, corners, thin,
                 s[d] = ev(l2) - lin_rep
             end
         end
-        off = lin_rep - sum((rep[d]-1)*s[d] for d in 1:D)
+        off = lin_rep - sum((rep[d] - 1) * s[d] for d in 1:D)
         for cn in corners
-            if (off + sum((cn[d]-1)*s[d] for d in 1:D)) != ev(cn)
+            if (off + sum((cn[d] - 1) * s[d] for d in 1:D)) != ev(cn)
                 # Clamped/folded forcing subscript (non-affine across the box):
                 # materialize the per-box index table (perf-plan A2). The kill
                 # switch restores the pre-A2 whole-equation per-cell fallback.
                 _obsref_disabled() &&
                     throw(_StencilFallback("pgather index non-affine in box"))
-                return _materialize_pgather_tbl(rec, idx_names, box, D,
-                                                var_map, const_arrays, run)
+                return _materialize_pgather_tbl(
+                    rec, idx_names, box, D,
+                    var_map, const_arrays, run
+                )
             end
         end
-        if !structural && !_box_holds(box, run, D,
-                                      () -> _lane_box_key(:forcing, rec, idx_names, box)) do l
-                (off + sum((l[d]-1)*s[d] for d in 1:D)) == ev(l)
+        if !structural && !_box_holds(
+                box, run, D,
+                () -> _lane_box_key(:forcing, rec, idx_names, box)
+            ) do l
+                (off + sum((l[d] - 1) * s[d] for d in 1:D)) == ev(l)
             end
             _obsref_disabled() &&
                 throw(_StencilFallback("pgather index non-affine in box"))
-            return _materialize_pgather_tbl(rec, idx_names, box, D,
-                                            var_map, const_arrays, run)
+            return _materialize_pgather_tbl(
+                rec, idx_names, box, D,
+                var_map, const_arrays, run
+            )
         end
         return _AccRepl(_AccForcingBox(pg.flat, s, off))
     end
@@ -1452,8 +1725,10 @@ end
 
 # One lane's `_eval_recipe` at `loop`, through its compiled evaluator `le` where
 # that answers (a STATE lane at a `Vector{Int}` cell).
-@inline function _ev_lane(le, rec::_LaneRecipe, loop, env, idx_names, var_map,
-                          const_arrays)
+@inline function _ev_lane(
+        le, rec::_LaneRecipe, loop, env, idx_names, var_map,
+        const_arrays
+    )
     if le !== nothing && rec.kind == LANE_STATE && loop isa Vector{Int}
         v, ok = _lane_eval_state(le, loop)
         ok && return v
@@ -1463,8 +1738,10 @@ end
 
 # `_eval_const_int` of the lane's `d`-th subscript at `loop`, through the
 # compiled subscript where it answers.
-@inline function _ev_subscript(le, rec::_LaneRecipe, d::Int, loop, env, idx_names,
-                               const_arrays)
+@inline function _ev_subscript(
+        le, rec::_LaneRecipe, d::Int, loop, env, idx_names,
+        const_arrays
+    )
     if le !== nothing && loop isa Vector{Int} && d <= length(le.args)
         v, ok = _ix_eval(le.args[d], loop)
         ok && return v
@@ -1500,26 +1777,28 @@ _is_const_oob(err) = err isa TreeWalkError && err.code == "E_TREEWALK_CONSTARRAY
 # has unknown guards, which `_lane_guard_at` treats as a run-time guard.
 function _lane_guard_paths(tmpl::_Node, nlanes::Int)
     paths = [_GuardPath[] for _ in 1:nlanes]
-    stack = Tuple{_Node,Bool}[]
-    seen = Set{Tuple{UInt,UInt}}()
+    stack = Tuple{_Node, Bool}[]
+    seen = Set{Tuple{UInt, UInt}}()
     budget = Ref(1_000_000)
     function visit(n::_Node)
         (budget[] -= 1) < 0 && return
-        key = (objectid(n), hash(Tuple{UInt,Bool}[(objectid(c), b) for (c, b) in stack]))
+        key = (objectid(n), hash(Tuple{UInt, Bool}[(objectid(c), b) for (c, b) in stack]))
         key in seen && return
         push!(seen, key)
         if n.kind === _NK_STATE && n.idx < 0
             r = -n.idx
             if r < _SUBCALL_SENT_BASE && r <= nlanes
                 p = copy(stack)
-                any(q -> length(q) == length(p) &&
-                         all(i -> q[i][1] === p[i][1] && q[i][2] == p[i][2], eachindex(p)),
-                    paths[r]) || push!(paths[r], p)
+                any(
+                    q -> length(q) == length(p) &&
+                        all(i -> q[i][1] === p[i][1] && q[i][2] == p[i][2], eachindex(p)),
+                    paths[r]
+                ) || push!(paths[r], p)
             end
             return
         end
         ch = n.children
-        if n.kind === _NK_OP && n.op === :ifelse && length(ch) == 3
+        return if n.kind === _NK_OP && n.op === :ifelse && length(ch) == 3
             visit(ch[1])
             push!(stack, (ch[1], true)); visit(ch[2]); pop!(stack)
             push!(stack, (ch[1], false)); visit(ch[3]); pop!(stack)
@@ -1528,7 +1807,9 @@ function _lane_guard_paths(tmpl::_Node, nlanes::Int)
                 visit(c)
                 push!(stack, (c, n.op === :and))
             end
-            for _ in ch; pop!(stack); end
+            for _ in ch
+                pop!(stack)
+            end
         else
             for c in ch
                 visit(c)
@@ -1557,7 +1838,7 @@ function _guard_at_cell(n::_Node, recipes, env, var_map, const_arrays)
             (err isa TreeWalkError || err isa _StencilFallback) && return nothing
             rethrow()
         end
-        return _mknode(kind=_NK_LITERAL, literal=Float64(v))
+        return _mknode(kind = _NK_LITERAL, literal = Float64(v))
     elseif k === _NK_OP || k === _NK_CONST_GATHER
         ch = Vector{_Node}(undef, length(n.children))
         for i in eachindex(ch)
@@ -1565,8 +1846,10 @@ function _guard_at_cell(n::_Node, recipes, env, var_map, const_arrays)
             c === nothing && return nothing
             ch[i] = c
         end
-        return _mknode(kind=k, op=n.op, literal=n.literal, idx=n.idx, sym=n.sym,
-                       payload=n.payload, children=ch)
+        return _mknode(
+            kind = k, op = n.op, literal = n.literal, idx = n.idx, sym = n.sym,
+            payload = n.payload, children = ch
+        )
     end
     return nothing
 end
@@ -1583,10 +1866,10 @@ function _lane_guard_at(paths::Vector{_GuardPath}, recipes, env, var_map, const_
             v = g === nothing ? nothing :
                 try
                     _eval_node(g, Float64[], NamedTuple(), 0.0)
-                catch err
+            catch err
                     err isa TreeWalkError || rethrow()
                     nothing
-                end
+            end
             if v === nothing
                 st = :unknown
             elseif (v != 0) != want
@@ -1607,14 +1890,16 @@ end
 # in-range value (so a lane uniform where it is read still folds to a
 # literal), a state lane's ghost slot 0. Over the cells `run` a program runs,
 # as `_box_table` builds it.
-function _guarded_lane_repl(rec::_LaneRecipe, paths::Vector{_GuardPath}, recipes,
-                            idx_names, box, D, var_map, const_arrays, run=box)
+function _guarded_lane_repl(
+        rec::_LaneRecipe, paths::Vector{_GuardPath}, recipes,
+        idx_names, box, D, var_map, const_arrays, run = box
+    )
     s, off, len = _box_table_addr(box, run, D)
     state = rec.kind == LANE_STATE
     tbl = state ? zeros(Int, len) : zeros(Float64, len)
     unread = falses(len)
     le = _lane_evaluator(rec, collect(String, idx_names), var_map, const_arrays)
-    env = Dict{String,Int}()
+    env = Dict{String, Int}()
     loop = Vector{Int}(undef, D)
     for I in CartesianIndices(ntuple(d -> UnitRange{Int}(run[d]), D))
         j = off
@@ -1636,8 +1921,11 @@ function _guarded_lane_repl(rec::_LaneRecipe, paths::Vector{_GuardPath}, recipes
             _is_const_oob(err) || rethrow()
             g = _lane_guard_at(paths, recipes, env, var_map, const_arrays)
             g === :taken && rethrow()
-            g === :unknown && throw(_StencilFallback(
-                "a const subscript is out of range under a run-time guard"))
+            g === :unknown && throw(
+                _StencilFallback(
+                    "a const subscript is out of range under a run-time guard"
+                )
+            )
             unread[j] = true
             nothing
         end
@@ -1678,20 +1966,26 @@ end
 # program's own build and raised again by every tile that shares its code,
 # whichever of the box's cells it runs, so the tiles lower the box alike
 # (`_box_holds`).
-function _guarded_box_repl(rec::_LaneRecipe, paths, recipes, idx_names, box, D, var_map,
-                           const_arrays, run)
+function _guarded_box_repl(
+        rec::_LaneRecipe, paths, recipes, idx_names, box, D, var_map,
+        const_arrays, run
+    )
     spec = _range_spec_now()
     memo = _range_memo(spec)
-    memo === nothing && return _guarded_lane_repl(rec, paths, recipes, idx_names, box, D,
-                                                  var_map, const_arrays, run)
+    memo === nothing && return _guarded_lane_repl(
+        rec, paths, recipes, idx_names, box, D,
+        var_map, const_arrays, run
+    )
     key = _lane_box_key(:guarded, rec, idx_names, box)
     if run !== box
         got = lock(() -> get(memo.verdicts, key, nothing), memo.lock)
         got isa Exception && throw(got)
     end
     try
-        return _guarded_lane_repl(rec, paths, recipes, idx_names, box, D, var_map,
-                                  const_arrays, run)
+        return _guarded_lane_repl(
+            rec, paths, recipes, idx_names, box, D, var_map,
+            const_arrays, run
+        )
     catch err
         (err isa _StencilFallback && run === box && _range_memo_records(spec)) &&
             lock(() -> get!(memo.verdicts, key, err), memo.lock)
@@ -1757,8 +2051,10 @@ end
 
 # The key of a box check of lane `rec` at `site` (`_box_holds`).
 _lane_box_key(site::Symbol, rec::_LaneRecipe, idx_names, box) =
-    (site, rec.kind, rec.var_name, string(rec.idx_args), copy(rec.lo), copy(rec.hi),
-     String[String(x) for x in idx_names], Tuple{Int,Int}[(first(r), last(r)) for r in box])
+    (
+    site, rec.kind, rec.var_name, string(rec.idx_args), copy(rec.lo), copy(rec.hi),
+    String[String(x) for x in idx_names], Tuple{Int, Int}[(first(r), last(r)) for r in box],
+)
 
 # Is EVERY cell of the box a ghost read (some subscript outside the variable's
 # bounds), given that every corner is? Not implied: a ghost corner can be out of
@@ -1767,10 +2063,12 @@ _lane_box_key(site::Symbol, rec::_LaneRecipe, idx_names, box) =
 # extremes at the corners, so the box is all-ghost when ONE subscript is below
 # its lower bound at every corner, or above its upper bound at every corner.
 # Otherwise (and always for a non-affine subscript) every cell is checked.
-function _ghost_box(rec::_LaneRecipe, idx_names, corners, structural, box, D,
-                    ev, const_arrays, le::Union{Nothing,_LaneEval}=nothing, run=box)
+function _ghost_box(
+        rec::_LaneRecipe, idx_names, corners, structural, box, D,
+        ev, const_arrays, le::Union{Nothing, _LaneEval} = nothing, run = box
+    )
     if structural
-        env = Dict{String,Int}()
+        env = Dict{String, Int}()
         for d in eachindex(rec.idx_args)
             below = above = true
             for cn in corners
@@ -1781,8 +2079,10 @@ function _ghost_box(rec::_LaneRecipe, idx_names, corners, structural, box, D,
             (below || above) && return true
         end
     end
-    return _box_holds(l -> ev(l) == 0, box, run, D,
-                      () -> _lane_box_key(:ghost, rec, idx_names, box))
+    return _box_holds(
+        l -> ev(l) == 0, box, run, D,
+        () -> _lane_box_key(:ghost, rec, idx_names, box)
+    )
 end
 
 # All 2^D corners of a box, as loop vectors, the first dim varying fastest (the
@@ -1790,7 +2090,7 @@ end
 function _box_corners(box)
     D = length(box)
     out = Vector{Vector{Int}}(undef, 1 << D)
-    for c in 0:(1 << D) - 1
+    for c in 0:((1 << D) - 1)
         cn = Vector{Int}(undef, D)
         @inbounds for d in 1:D
             cn[d] = (c >> (d - 1)) & 1 == 0 ? first(box[d]) : last(box[d])
@@ -1818,23 +2118,27 @@ end
 # corner's output slot ignores them): the lanes are derived over the whole
 # box, and the kernel loops only the output dims, its spine the `_NK_AREDUCE`
 # fold of the lowered body over the contracted ones.
-function _process_affine_box!(kernels, spine_cache, flat_cache, box, idx_names,
-                              body, ctx_proto, var_map, const_arrays,
-                              param_sym_set, reg_funcs, base, strides,
-                              lhs_var, lhs_idx_args, sig::_AffineSig,
-                              reduce::Union{Nothing,_AffineReduce}=nothing;
-                              out_ranges=nothing, cbox=box, view=nothing)
+function _process_affine_box!(
+        kernels, spine_cache, flat_cache, box, idx_names,
+        body, ctx_proto, var_map, const_arrays,
+        param_sym_set, reg_funcs, base, strides,
+        lhs_var, lhs_idx_args, sig::_AffineSig,
+        reduce::Union{Nothing, _AffineReduce} = nothing;
+        out_ranges = nothing, cbox = box, view = nothing
+    )
     D = length(box)
     nout = reduce === nothing ? D : D - length(reduce.names)
     rep = Int[first(box[d]) for d in 1:D]
     thin = Bool[length(box[d]) == 1 for d in 1:D]
     corners = _box_corners(box)
-    bkey, branch = _cell_bkey!(sig, rep, idx_names, body, ctx_proto,
-                               var_map, param_sym_set, reg_funcs)
+    bkey, branch = _cell_bkey!(
+        sig, rep, idx_names, body, ctx_proto,
+        var_map, param_sym_set, reg_funcs
+    )
     tmpl, recipes, _state_ks, subcalls = branch
 
     # verify the output slot map on this box against var_map (catches a bad omap)
-    denv = Dict{String,Int}()
+    denv = Dict{String, Int}()
     lhs_ix = _lhs_ix_compile(sig, lhs_idx_args, idx_names, const_arrays)
     for cn in corners
         _box_oln(base, strides, cn, D) ==
@@ -1855,16 +2159,22 @@ function _process_affine_box!(kernels, spine_cache, flat_cache, box, idx_names,
     lane_repl = Vector{_LaneRepl}(undef, length(recipes))
     for k in eachindex(recipes)
         lane_repl[k] = try
-            @_bench :lane_repl _derive_lane_repl(recipes[k], idx_names, rep, corners, thin,
-                                                 oln_rep, base, strides, D, var_map,
-                                                 const_arrays, flat_cache, box,
-                                                 !any(nonaff[k]); le=evs[k], run=run)
+            @_bench :lane_repl _derive_lane_repl(
+                recipes[k], idx_names, rep, corners, thin,
+                oln_rep, base, strides, D, var_map,
+                const_arrays, flat_cache, box,
+                !any(nonaff[k]); le = evs[k], run = run
+            )
         catch err
             (_is_const_oob(err) && recipes[k].kind in (LANE_CONST, LANE_STATE)) || rethrow()
-            paths = get!(() -> _lane_guard_paths(tmpl, length(recipes)),
-                         sig.lane_guards, bkey)[k]
-            _guarded_box_repl(recipes[k], paths, recipes, idx_names, box, D,
-                              var_map, const_arrays, run)
+            paths = get!(
+                () -> _lane_guard_paths(tmpl, length(recipes)),
+                sig.lane_guards, bkey
+            )[k]
+            _guarded_box_repl(
+                recipes[k], paths, recipes, idx_names, box, D,
+                var_map, const_arrays, run
+            )
         end
     end
 
@@ -1873,44 +2183,59 @@ function _process_affine_box!(kernels, spine_cache, flat_cache, box, idx_names,
         a = _AccDesc[]
         raw = _lower_to_access(tmpl, lane_repl, a, subcalls)
         if reduce !== nothing
-            raw = _mknode(kind=_NK_AREDUCE, op=reduce.op, literal=reduce.zerobar,
-                          payload=_AReduceSpec(collect(nout+1:D),
-                                               UnitRange{Int}[box[d] for d in nout+1:D]),
-                          children=_Node[raw])
+            raw = _mknode(
+                kind = _NK_AREDUCE, op = reduce.op, literal = reduce.zerobar,
+                payload = _AReduceSpec(
+                    collect((nout + 1):D),
+                    UnitRange{Int}[box[d] for d in (nout + 1):D]
+                ),
+                children = _Node[raw]
+            )
         end
         cs_spine, cse = _build_acc_cse(raw, a)   # per-cell CSE (shared subtrees → scratch)
         (cs_spine, a, cse, _collect_subkernels(cs_spine, cse))
     end
     slab = out_ranges === nothing ? Bool[] :
-           Bool[length(box[d]) == 1 && (first(box[d]) == first(out_ranges[d]) ||
-                                        last(box[d]) == last(out_ranges[d]))
-                for d in 1:nout]
-    cs = _CellSet(Int[strides[d] for d in 1:nout],
-                  UnitRange{Int}[cbox[d] for d in 1:nout],
-                  base - (view === nothing ? 0 : view.shift), Int[], slab)
-    push!(kernels, _AccKernel(cs, spine, acc, _FixedBound(0), 0.0, cse, subs))
+        Bool[
+            length(box[d]) == 1 && (
+                first(box[d]) == first(out_ranges[d]) ||
+                last(box[d]) == last(out_ranges[d])
+            )
+            for d in 1:nout
+        ]
+    cs = _CellSet(
+        Int[strides[d] for d in 1:nout],
+        UnitRange{Int}[cbox[d] for d in 1:nout],
+        base - (view === nothing ? 0 : view.shift), Int[], slab
+    )
+    return push!(kernels, _AccKernel(cs, spine, acc, _FixedBound(0), 0.0, cse, subs))
 end
 
 # Every lane recipe's compiled evaluator (`nothing` where it has none), per
 # branch key: what `_derive_lane_repl` evaluates a state lane through.
-function _box_lane_evals!(sig::_AffineSig, bkey::String, recipes, idx_names, var_map,
-                          const_arrays)
+function _box_lane_evals!(
+        sig::_AffineSig, bkey::String, recipes, idx_names, var_map,
+        const_arrays
+    )
     return get!(sig.box_evals, bkey) do
         compiled = idx_names isa Vector{String}
-        Union{Nothing,_LaneEval}[
+        Union{Nothing, _LaneEval}[
             compiled && rec.kind == LANE_STATE ?
                 _lane_evaluator(rec, idx_names, var_map, const_arrays) : nothing
-            for rec in recipes]
-    end::Vector{Union{Nothing,_LaneEval}}
+                for rec in recipes
+        ]
+    end::Vector{Union{Nothing, _LaneEval}}
 end
 
 # The output subscripts compiled once per equation (`nothing` for one that has
 # no compiled form), for `_oln_via_ix`.
 function _lhs_ix_compile(sig::_AffineSig, lhs_idx_args, idx_names, const_arrays)
     sig.lhs_ix === nothing || return sig.lhs_ix
-    ix = Union{Nothing,_IdxNode}[idx_names isa Vector{String} ?
-                                     _ix_compile(a, idx_names, const_arrays) : nothing
-                                 for a in lhs_idx_args]
+    ix = Union{Nothing, _IdxNode}[
+        idx_names isa Vector{String} ?
+            _ix_compile(a, idx_names, const_arrays) : nothing
+            for a in lhs_idx_args
+    ]
     sig.lhs_ix = ix
     return ix
 end
@@ -1948,15 +2273,17 @@ function _mark_box_covered!(covered, box, base, strides, D, lhs_var, lhs_idx_arg
         rngs = ntuple(d -> UnitRange{Int}(box[d]), D)
         _mark_box_runs!(covered, rngs, base, strides) && return nothing
     end
-    _mark_box_cells!(covered, box, base, strides, D, lhs_var, lhs_idx_args, idx_names)
+    return _mark_box_cells!(covered, box, base, strides, D, lhs_var, lhs_idx_args, idx_names)
 end
 
 # `false`, with `covered` untouched, when a slot of the box is already set. A
 # box whose slots are one contiguous run (each dim wider than one cell steps by
 # the number of slots the dims before it span) is checked and claimed as that
 # run.
-function _mark_box_runs!(covered::_Covered, rngs::NTuple{N,UnitRange{Int}}, base::Int,
-                         strides) where {N}
+function _mark_box_runs!(
+        covered::_Covered, rngs::NTuple{N, UnitRange{Int}}, base::Int,
+        strides
+    ) where {N}
     st = ntuple(d -> Int(strides[d]), N)
     r1 = rngs[1]
     span = 1
@@ -1971,11 +2298,15 @@ function _mark_box_runs!(covered::_Covered, rngs::NTuple{N,UnitRange{Int}}, base
             lo += first(rngs[d]) * st[d]
         end
         _cover_any(covered, lo, lo + span - 1) && return false
-        _cover_fill!(covered, lo, lo + span - 1; run=true)
+        _cover_fill!(covered, lo, lo + span - 1; run = true)
         return true
     end
     outer = CartesianIndices(Base.tail(rngs))
-    run_start(J) = (o = base + first(r1); @inbounds for d in 2:N; o += J[d-1] * st[d]; end; o)
+    run_start(J) = (
+        o = base + first(r1); @inbounds for d in 2:N
+            o += J[d - 1] * st[d]
+        end; o
+    )
     for J in outer
         lo = run_start(J)
         _cover_any(covered, lo, lo + length(r1) - 1) && return false
@@ -2005,8 +2336,8 @@ function _bits_any(B::BitVector, lo::Int, hi::Int)
 end
 
 function _mark_box_cells!(covered, box, base, strides, D, lhs_var, lhs_idx_args, idx_names)
-    env = Dict{String,Int}()
-    @inbounds for loop in Iterators.product((box[d] for d in 1:D)...)
+    env = Dict{String, Int}()
+    return @inbounds for loop in Iterators.product((box[d] for d in 1:D)...)
         o = _box_oln(base, strides, loop, D)
         if covered[o]
             du_inds = Int[_eval_const_int(a, _set_env!(env, idx_names, collect(Int, loop))) for a in lhs_idx_args]
@@ -2026,28 +2357,32 @@ end
 # (`_NK_AREDUCE`). A contracted dim that the scan cuts (a ghost or region
 # transition along it) is declined, so the caller can unroll instead: one
 # kernel's fold must walk its contracted range in one piece to keep the order.
-function _try_affine_stencil(rhs_body::ASTExpr, idx_names::Vector{String},
-                             range_iters, lhs_body::OpExpr,
-                             resolved_obs::Dict{String,ASTExpr},
-                             array_var_info, var_map::AbstractDict{String,Int},
-                             const_arrays::AbstractDict, pgather::AbstractDict,
-                             param_sym_set, reg_funcs, covered::_Covered;
-                             template_sites::Union{Nothing,IdDict{OpExpr,OpExpr}}=nothing,
-                             # A3: the per-BUILD cross-equation store (variant +
-                             # bound-body caches, shared obs-inline memo).
-                             # `nothing` is the per-equation caches
-                             # (cross-equation variants off / storeless callers).
-                             xeq::Union{Nothing,_XEqStore}=nothing,
-                             reduce::Union{Nothing,_AffineReduce}=nothing,
-                             # A tile's lowering (`_RangeAffineView`, range_hooks.jl):
-                             # `range_iters` are then the equation's whole-domain
-                             # ranges, `run_iters` the ones the tile computes, and
-                             # every name/slot lookup goes through `view`.
-                             view=nothing, run_iters=nothing)
-    (lhs_body.op == "D" && !isempty(lhs_body.args) &&
-     lhs_body.args[1] isa OpExpr && (lhs_body.args[1]::OpExpr).op == "index" &&
-     !isempty((lhs_body.args[1]::OpExpr).args) &&
-     (lhs_body.args[1]::OpExpr).args[1] isa VarExpr) || return nothing
+function _try_affine_stencil(
+        rhs_body::ASTExpr, idx_names::Vector{String},
+        range_iters, lhs_body::OpExpr,
+        resolved_obs::Dict{String, ASTExpr},
+        array_var_info, var_map::AbstractDict{String, Int},
+        const_arrays::AbstractDict, pgather::AbstractDict,
+        param_sym_set, reg_funcs, covered::_Covered;
+        template_sites::Union{Nothing, IdDict{OpExpr, OpExpr}} = nothing,
+        # A3: the per-BUILD cross-equation store (variant +
+        # bound-body caches, shared obs-inline memo).
+        # `nothing` is the per-equation caches
+        # (cross-equation variants off / storeless callers).
+        xeq::Union{Nothing, _XEqStore} = nothing,
+        reduce::Union{Nothing, _AffineReduce} = nothing,
+        # A tile's lowering (`_RangeAffineView`, range_hooks.jl):
+        # `range_iters` are then the equation's whole-domain
+        # ranges, `run_iters` the ones the tile computes, and
+        # every name/slot lookup goes through `view`.
+        view = nothing, run_iters = nothing
+    )
+    (
+        lhs_body.op == "D" && !isempty(lhs_body.args) &&
+            lhs_body.args[1] isa OpExpr && (lhs_body.args[1]::OpExpr).op == "index" &&
+            !isempty((lhs_body.args[1]::OpExpr).args) &&
+            (lhs_body.args[1]::OpExpr).args[1] isa VarExpr
+    ) || return nothing
 
     D = length(idx_names)
     D >= 1 || return nothing
@@ -2076,7 +2411,7 @@ function _try_affine_stencil(rhs_body::ASTExpr, idx_names::Vector{String},
         memo = xeq === nothing ? _SubMemo() : _xeq_obs_memo(xeq, resolved_obs)
         body = _sub_preserving(rhs_body, resolved_obs, memo)
         if sites !== nothing
-            translated = IdDict{OpExpr,OpExpr}()
+            translated = IdDict{OpExpr, OpExpr}()
             for (root, ap) in sites
                 nr = get(memo, root, root)
                 nr isa OpExpr && (translated[nr] = ap)
@@ -2095,29 +2430,35 @@ function _try_affine_stencil(rhs_body::ASTExpr, idx_names::Vector{String},
     Dall = length(all_names)
 
     tctx = sites === nothing ? nothing :
-           _TemplateCtx(sites, var_map, param_sym_set, reg_funcs;
-                        idxkey=_idxset_key(all_names), store=xeq)
-    ctx_proto = _StencilCtx(Set{String}(all_names), _LaneRecipe[], Dict{String,Int}(),
-                            array_var_info, const_arrays, pgather, tctx)
+        _TemplateCtx(
+            sites, var_map, param_sym_set, reg_funcs;
+            idxkey = _idxset_key(all_names), store = xeq
+        )
+    ctx_proto = _StencilCtx(
+        Set{String}(all_names), _LaneRecipe[], Dict{String, Int}(),
+        array_var_info, const_arrays, pgather, tctx
+    )
     sig = _AffineSig()
     try
         base, strides = _derive_output_affine(lhs_var, lhs_idx_args, idx_names, ranges, var_map)
         # The output slot does not move along a contracted dim.
         all_strides = reduce === nothing ? strides : vcat(strides, zeros(Int, Dall - D))
-        cuts = @_bench :affine_cuts _affine_cut_points(sig, body, all_names, all_ranges, ctx_proto,
-                                  var_map, param_sym_set, reg_funcs,
-                                  (base, all_strides))
-        for d in D+1:Dall
+        cuts = @_bench :affine_cuts _affine_cut_points(
+            sig, body, all_names, all_ranges, ctx_proto,
+            var_map, param_sym_set, reg_funcs,
+            (base, all_strides)
+        )
+        for d in (D + 1):Dall
             length(cuts[d]) == 1 ||
                 throw(_StencilFallback("affine reduction: contracted axis is cut"))
         end
         segs = [_segments(cuts[d], ranges[d]) for d in 1:D]
         run = run_iters === nothing ? nothing :
-              UnitRange{Int}[first(r):last(r) for r in run_iters]
+            UnitRange{Int}[first(r):last(r) for r in run_iters]
         shift = view === nothing ? 0 : view.shift
         kernels = _AccKernel[]
-        spine_cache = Dict{String,Tuple{_Node,Vector{_AccDesc},_AccCSE,Vector{_AccKernel}}}()
-        flat_cache = IdDict{Any,Vector{Float64}}()
+        spine_cache = Dict{String, Tuple{_Node, Vector{_AccDesc}, _AccCSE, Vector{_AccKernel}}}()
+        flat_cache = IdDict{Any, Vector{Float64}}()
         boxes = Vector{UnitRange{Int}}[]
         for segtuple in Iterators.product(segs...)
             box = UnitRange{Int}[segtuple[d] for d in 1:D]
@@ -2126,13 +2467,17 @@ function _try_affine_stencil(rhs_body::ASTExpr, idx_names::Vector{String},
             # share (possibly none; the box is then derived and emitted all
             # the same, and runs no cell).
             cbox = run === nothing ? box :
-                   UnitRange{Int}[d <= D ? _clip_run(box[d], run[d]) : box[d]
-                                  for d in eachindex(box)]
-            @_bench :affine_box _process_affine_box!(kernels, spine_cache, flat_cache, box, all_names,
-                                 body, ctx_proto, var_map, const_arrays,
-                                 param_sym_set, reg_funcs, base, all_strides,
-                                 lhs_var, lhs_idx_args, sig, reduce;
-                                 out_ranges=ranges, cbox=cbox, view=view)
+                UnitRange{Int}[
+                    d <= D ? _clip_run(box[d], run[d]) : box[d]
+                    for d in eachindex(box)
+                ]
+            @_bench :affine_box _process_affine_box!(
+                kernels, spine_cache, flat_cache, box, all_names,
+                body, ctx_proto, var_map, const_arrays,
+                param_sym_set, reg_funcs, base, all_strides,
+                lhs_var, lhs_idx_args, sig, reduce;
+                out_ranges = ranges, cbox = cbox, view = view
+            )
             all(d -> !isempty(cbox[d]), 1:D) && push!(boxes, cbox[1:D])
         end
         # Only after every box is verified: mark covered (untouched on fallback).

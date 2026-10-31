@@ -30,24 +30,29 @@ Pkg.activate("/tmp/claude-1111265/scanad-env"; io = devnull)
 using Reactant, ForwardDiff, Printf
 const Enzyme = Reactant.Enzyme
 const RX = Reactant
-try; RX.set_default_backend("cpu"); catch; end
+try
+    RX.set_default_backend("cpu")
+catch
+end
 say(s) = (println(s); flush(stdout))
 ok(t, g, m) = say(@sprintf("  [%s] %-22s %s", g ? "PASS" : "FAIL", t, m))
 err1(e) = first(split(sprint(showerror, e), '\n'))
 
 # One scalar parameter `k`, one array input held Const, scalar output. `href` is
 # the SAME algorithm on the host, differentiated with ForwardDiff.
-function check(tag, f, u0::Vector{Float64}, k0::Float64, href; rtol = 1e-8)
+function check(tag, f, u0::Vector{Float64}, k0::Float64, href; rtol = 1.0e-8)
     gref = ForwardDiff.derivative(href, k0)
-    try
+    return try
         ur = RX.ConcreteRArray(u0); kr = RX.ConcreteRNumber(k0)
         g = (u, k) -> Enzyme.gradient(Enzyme.Reverse, f, Enzyme.Const(u), k)[2]
         t0 = time()
         xg = RX.@compile sync = true g(ur, kr)
         tc = time() - t0
         got = Float64(xg(ur, kr))
-        ok(tag, isapprox(got, gref; rtol = rtol),
-           @sprintf("got %.12g want %.12g  (compile %.1f s)", got, gref, tc))
+        ok(
+            tag, isapprox(got, gref; rtol = rtol),
+            @sprintf("got %.12g want %.12g  (compile %.1f s)", got, gref, tc)
+        )
     catch e
         ok(tag, false, err1(e))
     end
@@ -61,16 +66,22 @@ k0 = 0.7
 say("=== bare Reactant shapes ===")
 
 # G1 stablehlo.reduce
-check("G1 reduce(sum)", (u, k) -> sum(k .* u .^ 2), u0, k0,
-      kk -> sum(kk .* u0 .^ 2))
+check(
+    "G1 reduce(sum)", (u, k) -> sum(k .* u .^ 2), u0, k0,
+    kk -> sum(kk .* u0 .^ 2)
+)
 
 # G2 stablehlo.reduce with a max body -- a NON-additive combiner region.
-check("G2 reduce(max)", (u, k) -> mapreduce(x -> k * x^2, max, u), u0, k0,
-      kk -> mapreduce(x -> kk * x^2, max, u0))
+check(
+    "G2 reduce(max)", (u, k) -> mapreduce(x -> k * x^2, max, u), u0, k0,
+    kk -> mapreduce(x -> kk * x^2, max, u0)
+)
 
 # G3 stablehlo.reduce_window -- the associative prefix scan.
-check("G3 reduce_window(cumsum)", (u, k) -> sum(cumsum(k .* u .^ 2)), u0, k0,
-      kk -> sum(cumsum(kk .* u0 .^ 2)))
+check(
+    "G3 reduce_window(cumsum)", (u, k) -> sum(cumsum(k .* u .^ 2)), u0, k0,
+    kk -> sum(cumsum(kk .* u0 .^ 2))
+)
 
 # G6 @trace for over a STATIC range. Emits a while region (measured), so this is
 # the control: a compile-time-known trip count is NOT what makes reverse work.
@@ -78,10 +89,16 @@ function g6(u, k)
     RX.@trace track_numbers = false for _ in 1:5
         u = u .+ k .* u .* H
     end
-    sum(u)
+    return sum(u)
 end
-check("G6 @trace for(static)", g6, u0, k0,
-      kk -> (u = copy(u0); for _ in 1:5; u = u .+ kk .* u .* H; end; sum(u)))
+check(
+    "G6 @trace for(static)", g6, u0, k0,
+    kk -> (
+        u = copy(u0); for _ in 1:5
+            u = u .+ kk .* u .* H
+        end; sum(u)
+    )
+)
 
 # G7 @trace if -- a BRANCH region, not a loop. The adaptive controller's
 # accept/reject is a branch; worth knowing separately from the loop.
@@ -93,7 +110,7 @@ function g7(u, k)
     else
         r = k * s * 2
     end
-    r
+    return r
 end
 check("G7 @trace if", g7, u0, k0, kk -> (s = sum(u0); s > 1.0 ? kk * s : kk * s * 2))
 
@@ -115,7 +132,7 @@ function g8(u, k)
         u = u .+ k .* u .* hh
         t = t + hh
     end
-    sum(u)
+    return sum(u)
 end
 function g8_host(kk)
     u = copy(u0); t = 0.0; tlim = 1.0
@@ -126,17 +143,19 @@ function g8_host(kk)
         u = u .+ kk .* u .* hh
         t = t + hh
     end
-    sum(u)
+    return sum(u)
 end
-check("G8 masked unroll x$NMAX", g8, u0, k0, g8_host; rtol = 1e-6)
+check("G8 masked unroll x$NMAX", g8, u0, k0, g8_host; rtol = 1.0e-6)
 
 say("")
 say("=== EarthSciAST emitter sites ===")
 using EarthSciAST
 const ESM = EarthSciAST
 _sf(nlanes, len; inclusive = true, oplus = :+, zerobar = 0.0) =
-    ESM._ScanFold(Int[(l - 1) * len + k for l in 1:nlanes for k in 1:len],
-                  len, oplus, zerobar, inclusive)
+    ESM._ScanFold(
+    Int[(l - 1) * len + k for l in 1:nlanes for k in 1:len],
+    len, oplus, zerobar, inclusive
+)
 
 # G4 the prefix scan fold. Scale the input by `k` so there is something to
 # differentiate w.r.t.; the fold itself is what reverse has to cross.
@@ -149,29 +168,45 @@ let nl = 4, len = 17
 end
 
 # G5 the :oop RHS with a runtime contraction loop.
-_cl_doc(M::Int) = Dict{String,Any}(
+_cl_doc(M::Int) = Dict{String, Any}(
     "esm" => "0.8.0",
     "metadata" => Dict("name" => "contraction_loop_repro"),
-    "models" => Dict("Repro" => Dict{String,Any}(
-        "variables" => Dict("x" => Dict("type" => "state"),
-                            "s" => Dict("type" => "state")),
-        "equations" => Any[
-            Dict("lhs" => Dict("op" => "D", "args" => Any["x"], "wrt" => "t"),
-                 "rhs" => 0.0),
-            Dict("lhs" => Dict("op" => "D", "args" => Any["s"], "wrt" => "t"),
-                 "rhs" => Dict("op" => "faq", "semiring" => "sum_product",
-                               "args" => Any[], "output_idx" => Any[],
-                               "ranges" => Dict("k" => Any[0, M]),
-                               "expr" => Dict("op" => "*", "args" => Any["k", "x"]))),
-        ],
-    )),
+    "models" => Dict(
+        "Repro" => Dict{String, Any}(
+            "variables" => Dict(
+                "x" => Dict("type" => "state"),
+                "s" => Dict("type" => "state")
+            ),
+            "equations" => Any[
+                Dict(
+                    "lhs" => Dict("op" => "D", "args" => Any["x"], "wrt" => "t"),
+                    "rhs" => 0.0
+                ),
+                Dict(
+                    "lhs" => Dict("op" => "D", "args" => Any["s"], "wrt" => "t"),
+                    "rhs" => Dict(
+                        "op" => "faq", "semiring" => "sum_product",
+                        "args" => Any[], "output_idx" => Any[],
+                        "ranges" => Dict("k" => Any[0, M]),
+                        "expr" => Dict("op" => "*", "args" => Any["k", "x"])
+                    )
+                ),
+            ],
+        )
+    ),
 )
 let M = 64
-    f, uc, p, _, _ = withenv("ESS_CONTRACTION_LOOP" => "1",
-                             "ESS_CONTRACTION_LOOP_MIN" => "8") do
-        ESM.build_evaluator(_cl_doc(M); initial_conditions = Dict("x" => 2.0,
-                                                                 "s" => 0.0),
-                            form = :oop)
+    f, uc, p, _, _ = withenv(
+        "ESS_CONTRACTION_LOOP" => "1",
+        "ESS_CONTRACTION_LOOP_MIN" => "8"
+    ) do
+        ESM.build_evaluator(
+            _cl_doc(M); initial_conditions = Dict(
+                "x" => 2.0,
+                "s" => 0.0
+            ),
+            form = :oop
+        )
     end
     uv = collect(Float64, uc)
     # Scale the state by `k`: du[s] = k*x0*M(M+1)/2, so d/dk is exact and known.

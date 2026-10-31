@@ -9,13 +9,13 @@ function _de_bin(ctx::_DECtx, f::F, a::_DEVal, b::_DEVal)::_DEVal where {F}
     L = max(a.len, b.len)
     a = _de_bcast(ctx, a, L); b = _de_bcast(ctx, b, L)
     _de_tally!(ctx, :arith)
-    op = f(a.v, b.v; result=_de_ty(L), location=_de_loc())
+    op = f(a.v, b.v; result = _de_ty(L), location = _de_loc())
     return _DEVal(_de_res(op), L)
 end
 
 function _de_un(ctx::_DECtx, f::F, a::_DEVal)::_DEVal where {F}
     _de_tally!(ctx, :arith)
-    op = f(a.v; result=_de_ty(a.len), location=_de_loc())
+    op = f(a.v; result = _de_ty(a.len), location = _de_loc())
     return _DEVal(_de_res(op), a.len)
 end
 
@@ -23,17 +23,20 @@ function _de_pred(ctx::_DECtx, dir::String, a::_DEVal, b::_DEVal)
     L = max(a.len, b.len)
     a = _de_bcast(ctx, a, L); b = _de_bcast(ctx, b, L)
     _de_tally!(ctx, :compare)
-    op = _hlo.compare(a.v, b.v; result_0=_de_ty_i1(L),
-                      comparison_direction=_MLIR.API.stablehloComparisonDirectionAttrGet(
-                          _MLIR.IR.current_context(), dir),
-                      location=_de_loc())
+    op = _hlo.compare(
+        a.v, b.v; result_0 = _de_ty_i1(L),
+        comparison_direction = _MLIR.API.stablehloComparisonDirectionAttrGet(
+            _MLIR.IR.current_context(), dir
+        ),
+        location = _de_loc()
+    )
     return (_de_res(op), L)
 end
 
 function _de_select(ctx::_DECtx, pred, L::Int, a::_DEVal, b::_DEVal)::_DEVal
     a = _de_bcast(ctx, a, L); b = _de_bcast(ctx, b, L)
     _de_tally!(ctx, :select)
-    op = _hlo.select(pred, a.v, b.v; result=_de_ty(L), location=_de_loc())
+    op = _hlo.select(pred, a.v, b.v; result = _de_ty(L), location = _de_loc())
     return _DEVal(_de_res(op), L)
 end
 
@@ -44,7 +47,7 @@ end
 
 _de_nonzero(ctx::_DECtx, a::_DEVal) = _de_pred(ctx, "NE", a, _de_const(ctx, 0.0))
 
-const _DE_UNARY = Dict{Symbol,Any}(
+const _DE_UNARY = Dict{Symbol, Any}(
     :cos => _hlo.cosine, :sin => _hlo.sine, :exp => _hlo.exponential, :log => _hlo.log,
     :sqrt => _hlo.sqrt, :abs => _hlo.abs, :tanh => _hlo.tanh, :tan => _hlo.tan,
     :expm1 => _hlo.exponential_minus_one, :log1p => _hlo.log_plus_one,
@@ -61,20 +64,22 @@ const _DE_UNARY = Dict{Symbol,Any}(
 # carries. Emitted as a divide rather than a multiply by `log10(ℯ)` because a
 # division rounds once where the reciprocal rounds twice.
 function _de_log10(ctx::_DECtx, a::_DEVal)::_DEVal
-    return _de_bin(ctx, _hlo.divide, _de_un(ctx, _hlo.log, a),
-                   _de_const(ctx, log(10.0)))
+    return _de_bin(
+        ctx, _hlo.divide, _de_un(ctx, _hlo.log, a),
+        _de_const(ctx, log(10.0))
+    )
 end
 
 # The transcendentals StableHLO itself does not carry. CHLO is the
 # decomposition dialect the StableHLO pipeline already expands for `Ops.asin`
 # and friends, so these lower to the same programs Reactant's own builders
 # reach — not to a hand-rolled series here.
-const _DE_UNARY_CHLO = Dict{Symbol,Any}(
+const _DE_UNARY_CHLO = Dict{Symbol, Any}(
     :asin => _chlo.asin, :acos => _chlo.acos, :atan => _chlo.atan,
     :asinh => _chlo.asinh, :acosh => _chlo.acosh, :atanh => _chlo.atanh,
     :sinh => _chlo.sinh, :cosh => _chlo.cosh, :erf => _chlo.erf,
 )
-const _DE_COMPARE = Dict{Symbol,String}(
+const _DE_COMPARE = Dict{Symbol, String}(
     :< => "LT", :<= => "LE", :> => "GT", :>= => "GE", :(==) => "EQ", :!= => "NE",
 )
 
@@ -95,8 +100,10 @@ function _de_semiring_fn(op::Symbol)
     op === :* && return _hlo.multiply
     op === :max && return _hlo.maximum
     op === :min && return _hlo.minimum
-    _de_refuse("the semiring operator `$op`",
-        "only `+`, `*`, `max` and `min` have a StableHLO reduction form here.")
+    return _de_refuse(
+        "the semiring operator `$op`",
+        "only `+`, `*`, `max` and `min` have a StableHLO reduction form here."
+    )
 end
 
 _de_semiring_jl(op::Symbol) =
@@ -107,8 +114,10 @@ _de_semiring_jl(op::Symbol) =
 # concatenated into a `tensor<(L*n)xf64>`, reshaped to `(L, n)` — column `j` is
 # term `j`, which is exactly what the concatenation laid down in column-major —
 # and reduced along the term axis.
-function _de_reduce_terms(ctx::_DECtx, op::Symbol, zbar::Float64,
-                          terms::Vector{_DEVal}, L::Int)::_DEVal
+function _de_reduce_terms(
+        ctx::_DECtx, op::Symbol, zbar::Float64,
+        terms::Vector{_DEVal}, L::Int
+    )::_DEVal
     n = length(terms)
     flat = _de_concat(ctx, _DEVal[_de_bcast(ctx, x, L) for x in terms])
     x2 = Reactant.Ops.reshape(_de_traced(flat), L, n)
@@ -131,8 +140,10 @@ function _de_chain(ctx::_DECtx, f::F, c::Vector{_DEVal})::_DEVal where {F}
 end
 
 # The SEEDED ⊕-fold a semiring contraction takes, seeded from the node's own 0̄.
-function _de_fold_terms(ctx::_DECtx, op::Symbol, zbar::Float64,
-                        terms::Vector{_DEVal})::_DEVal
+function _de_fold_terms(
+        ctx::_DECtx, op::Symbol, zbar::Float64,
+        terms::Vector{_DEVal}
+    )::_DEVal
     isempty(terms) && return _de_const(ctx, zbar)
     L = maximum(x.len for x in terms)
     if length(terms) >= ctx.reduce_min
@@ -197,20 +208,28 @@ function _de_op(ctx::_DECtx, op::Symbol, c::Vector{_DEVal})::_DEVal
         # The registry spells the two-argument form both ways.
         return _de_bin(ctx, _hlo.atan2, c[1], c[2])
     elseif op === :log10
-        n == 1 || _de_refuse("unary `log10` with $n arguments",
-                             "`log10` takes exactly one argument.")
+        n == 1 || _de_refuse(
+            "unary `log10` with $n arguments",
+            "`log10` takes exactly one argument."
+        )
         return _de_log10(ctx, c[1])
     elseif haskey(_DE_UNARY, op)
-        n == 1 || _de_refuse("unary `$op` with $n arguments",
-                             "`$op` takes exactly one argument.")
+        n == 1 || _de_refuse(
+            "unary `$op` with $n arguments",
+            "`$op` takes exactly one argument."
+        )
         return _de_un(ctx, _DE_UNARY[op], c[1])
     elseif haskey(_DE_UNARY_CHLO, op)
-        n == 1 || _de_refuse("unary `$op` with $n arguments",
-                             "`$op` takes exactly one argument.")
+        n == 1 || _de_refuse(
+            "unary `$op` with $n arguments",
+            "`$op` takes exactly one argument."
+        )
         return _de_un(ctx, _DE_UNARY_CHLO[op], c[1])
     elseif haskey(_DE_COMPARE, op)
-        n == 2 || _de_refuse("comparison `$op` with $n arguments",
-                             "a comparison is binary.")
+        n == 2 || _de_refuse(
+            "comparison `$op` with $n arguments",
+            "a comparison is binary."
+        )
         return _de_cmp(ctx, _DE_COMPARE[op], c[1], c[2])
     elseif op === :ifelse
         n == 3 || _de_refuse("`ifelse` with $n arguments", "`ifelse` takes three.")
@@ -251,11 +270,13 @@ function _de_op(ctx::_DECtx, op::Symbol, c::Vector{_DEVal})::_DEVal
     # this StableHLO ladder has not been taught. That is a backend-coverage gap,
     # not a document-level refusal, so it reports the emitter's own
     # `DirectEmitError` (`E_DIRECT_EMIT_UNSUPPORTED`) with the rule breadcrumb.
-    _de_refuse("the operator `$op`",
+    return _de_refuse(
+        "the operator `$op`",
         "it is not in the direct-emission op ladder. Add it to `_de_op` " *
-        "(ext/reactant_direct/ops.jl) with the StableHLO op that matches the " *
-        "interpreter's arm for it (`_eval_node_op`), or lower it away before " *
-        "the backend.")
+            "(ext/reactant_direct/ops.jl) with the StableHLO op that matches the " *
+            "interpreter's arm for it (`_eval_node_op`), or lower it away before " *
+            "the backend."
+    )
 end
 
 # ---- host const-fold ---------------------------------------------------------
@@ -307,10 +328,14 @@ function _de_static_uncached(ctx::_DECtx, nd::_E._Node)::Bool
         # this file's contract to reproduce, and the interp lowering below is
         # already O(1).
         nd.op === :fn && return false
-        (haskey(_DE_UNARY, nd.op) || haskey(_DE_COMPARE, nd.op) ||
-         haskey(_DE_UNARY_CHLO, nd.op) ||
-         nd.op in (:+, :*, :-, :neg, :/, :^, :pow, :max, :min, :ifelse, :not,
-                   :and, :or, :pi, :π, :e, :Pre, :atan, :atan2, :log10)) || return false
+        (
+            haskey(_DE_UNARY, nd.op) || haskey(_DE_COMPARE, nd.op) ||
+                haskey(_DE_UNARY_CHLO, nd.op) ||
+                nd.op in (
+                :+, :*, :-, :neg, :/, :^, :pow, :max, :min, :ifelse, :not,
+                :and, :or, :pi, :π, :e, :Pre, :atan, :atan2, :log10,
+            )
+        ) || return false
         return all(ch -> _de_static(ctx, ch), nd.children)
     end
     return false
@@ -358,7 +383,7 @@ function _de_hostval(ctx::_DECtx, nd::_E._Node)::Float64
 end
 
 # Fold if we can; `nothing` if the subtree is not host data.
-function _de_try_fold(ctx::_DECtx, nd::_E._Node)::Union{Nothing,_DEVal}
+function _de_try_fold(ctx::_DECtx, nd::_E._Node)::Union{Nothing, _DEVal}
     nd.kind === _E._NK_LITERAL && return nothing   # already one constant
     _de_static(ctx, nd) || return nothing
     _de_tally!(ctx, :const_folded)

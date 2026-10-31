@@ -72,7 +72,7 @@ theorem fexp_ratCast (q : ℚ) : fexp (q : ℝ) = fexp q := by
   have : ((q : ℝ) = 0) ↔ q = 0 := Rat.cast_eq_zero
   by_cases h : q = 0
   · simp [h]
-  · rw [if_neg (by exact_mod_cast h), if_neg h, ← Rat.cast_abs, log2_ratCast]
+  · rw [ite_eq_right (by exact_mod_cast h), ite_eq_right h, ← Rat.cast_abs, log2_ratCast]
 
 theorem rne_ratCast (q : ℚ) : rne (q : ℝ) = rne q := by
   unfold rne
@@ -83,11 +83,11 @@ theorem rne_ratCast (q : ℚ) : rne (q : ℝ) = rne q := by
   have h2 : (1 / 2 < (q : ℝ) - ⌊q⌋) ↔ (1 / 2 < q - ⌊q⌋) := by
     rw [e, show (1 / 2 : ℝ) = ((1 / 2 : ℚ) : ℝ) by norm_num, Rat.cast_lt]
   by_cases a : q - ⌊q⌋ < 1 / 2
-  · rw [if_pos (h1.mpr a), if_pos a]
-  · rw [if_neg (fun h => a (h1.mp h)), if_neg a]
+  · rw [ite_eq_left (h1.mpr a), ite_eq_left a]
+  · rw [ite_eq_right (fun h => a (h1.mp h)), ite_eq_right a]
     by_cases b : 1 / 2 < q - ⌊q⌋
-    · rw [if_pos (h2.mpr b), if_pos b]
-    · rw [if_neg (fun h => b (h2.mp h)), if_neg b]
+    · rw [ite_eq_left (h2.mpr b), ite_eq_left b]
+    · rw [ite_eq_right (fun h => b (h2.mp h)), ite_eq_right b]
 
 theorem rn_ratCast (q : ℚ) : rn (q : ℝ) = ((rn q : ℚ) : ℝ) := by
   unfold rn

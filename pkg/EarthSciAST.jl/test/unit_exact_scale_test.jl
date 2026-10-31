@@ -17,7 +17,7 @@ using Unitful
             a = Unitful.absoluteunit(u)
             want = Float64(Unitful.ustrip(Unitful.upreferred(1.0 * a)))
             got = Float64(EarthSciAST._exact_scale(u))
-            @test isapprox(got, want; rtol = 1e-12) || (@info "exact scale disagrees" sym got want; false)
+            @test isapprox(got, want; rtol = 1.0e-12) || (@info "exact scale disagrees" sym got want; false)
         end
     end
 
@@ -36,8 +36,11 @@ using Unitful
         units = Dict("x" => "m", "y" => "km", "z" => "m", "flag" => "1")
         @test !isempty(EarthSciAST.expression_unit_findings(_op("+", _v("x"), _v("y")), units))
         @test isempty(EarthSciAST.expression_unit_findings(_op("+", _v("x"), _v("z")), units))
-        @test !isempty(EarthSciAST.expression_unit_findings(
-            _op("ifelse", _v("flag"), _v("x"), _v("y")), units))
+        @test !isempty(
+            EarthSciAST.expression_unit_findings(
+                _op("ifelse", _v("flag"), _v("x"), _v("y")), units
+            )
+        )
     end
 
     @testset "a conversion carried by a quantity's units cancels exactly" begin

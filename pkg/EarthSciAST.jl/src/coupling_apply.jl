@@ -111,6 +111,7 @@ function _collect_explicit_derivative_lhs!(acc::Set{String}, model::Model, prefi
         sub isa Model || continue
         _collect_explicit_derivative_lhs!(acc, sub, "$(prefix).$(sub_name)")
     end
+    return
 end
 
 function _collect_reaction_species!(acc::Set{String}, rsys::ReactionSystem, prefix::String)
@@ -124,6 +125,7 @@ function _collect_reaction_species!(acc::Set{String}, rsys::ReactionSystem, pref
     for (sub_name, sub) in rsys.subsystems
         _collect_reaction_species!(acc, sub, "$(prefix).$(sub_name)")
     end
+    return
 end
 
 # ========================================
@@ -178,10 +180,12 @@ rather than an unknown. `tests/valid/scoped_refs_coupling.esm` maps
 `param_to_var` onto a declared unknown, and tightening that is a separate
 question from whether the endpoint resolves at all.
 """
-function _check_variable_map_endpoints(file::EsmFile,
-                                       states::AbstractDict{String, ModelVariable},
-                                       params::AbstractDict{String, ModelVariable},
-                                       observeds::AbstractDict{String, ModelVariable})
+function _check_variable_map_endpoints(
+        file::EsmFile,
+        states::AbstractDict{String, ModelVariable},
+        params::AbstractDict{String, ModelVariable},
+        observeds::AbstractDict{String, ModelVariable}
+    )
     isempty(file.coupling) && return
     declared = Set{String}()
     for tbl in (states, params, observeds)
@@ -354,14 +358,16 @@ SILENTLY — which is the one outcome a coupling mis-specification must not have
     if it is now owned by the variable's own system, not by the operator that
     happened to author the surviving clone.
 """
-function _apply_operator_compose!(equations::Vector{Equation},
-                                  contribs::Vector{Vector{Contribution}},
-                                  entry::CouplingOperatorCompose,
-                                  states::OrderedDict{String, ModelVariable},
-                                  observeds::OrderedDict{String, ModelVariable},
-                                  owners::Vector{String};
-                                  renames::AbstractDict=OrderedDict{String,String}())
-    length(entry.systems) >= 2 || return OrderedDict{String,String}()
+function _apply_operator_compose!(
+        equations::Vector{Equation},
+        contribs::Vector{Vector{Contribution}},
+        entry::CouplingOperatorCompose,
+        states::OrderedDict{String, ModelVariable},
+        observeds::OrderedDict{String, ModelVariable},
+        owners::Vector{String};
+        renames::AbstractDict = OrderedDict{String, String}()
+    )
+    length(entry.systems) >= 2 || return OrderedDict{String, String}()
     a_name = entry.systems[1]
     b_names = Set{String}(entry.systems[2:end])
     # `owners` is parallel to `equations` and records the COMPONENT THAT
@@ -390,7 +396,8 @@ function _apply_operator_compose!(equations::Vector{Equation},
     # already deleted: an earlier entry may have consumed either the A-side or
     # the B-side spelling this one names (issue #230).
     inv_translate = _retarget_translate(
-        _inverse_translate(entry.translate, a_name, entry.systems[2]), renames)
+        _inverse_translate(entry.translate, a_name, entry.systems[2]), renames
+    )
 
     # Step 3: expand each `_var` template where it stands, so that a clone which
     # matches nothing keeps B's document position (step 5). Only a template
@@ -409,10 +416,18 @@ function _apply_operator_compose!(equations::Vector{Equation},
         dep = lhs_dependent_variable(eq.lhs)
         if dep !== nothing && is_placeholder(dep) && owner in b_names
             for var in target_vars
-                cs = Contribution[Contribution(_substitute_placeholder(c.expr, dep, var),
-                                               c.origins) for c in contribs[i]]
-                push!(expanded, _equation_from(eq, cs;
-                                               lhs=_substitute_placeholder(eq.lhs, dep, var)))
+                cs = Contribution[
+                    Contribution(
+                        _substitute_placeholder(c.expr, dep, var),
+                        c.origins
+                    ) for c in contribs[i]
+                ]
+                push!(
+                    expanded, _equation_from(
+                        eq, cs;
+                        lhs = _substitute_placeholder(eq.lhs, dep, var)
+                    )
+                )
                 push!(expanded_contribs, cs)
                 push!(new_owners, owner)
             end
@@ -499,8 +514,12 @@ function _apply_operator_compose!(equations::Vector{Equation},
             # what keeps the merged system from carrying an unknown that nothing
             # defines. On a direct or placeholder match this rewrite is the
             # identity, which is why it is guarded rather than unconditional.
-            b_contribs = Contribution[Contribution(_rename_variable(c.expr, b_dep, target),
-                                                   c.origins) for c in b_contribs]
+            b_contribs = Contribution[
+                Contribution(
+                    _rename_variable(c.expr, b_dep, target),
+                    c.origins
+                ) for c in b_contribs
+            ]
             merged_away[b_dep] = target
             is_bare_match && (bare_matches[b_dep] = target)
         end
@@ -509,15 +528,23 @@ function _apply_operator_compose!(equations::Vector{Equation},
             # `factor * (b1 + b2 + …)` whose origins are their union: the
             # factor multiplies the whole sum, and distributing it would change
             # the arithmetic.
-            b_contribs = Contribution[Contribution(OpExpr("*", ASTExpr[NumExpr(factor),
-                                                                      _fold_contributions(b_contribs)]),
-                                                  _union_origins(b_contribs))]
+            b_contribs = Contribution[
+                Contribution(
+                    OpExpr(
+                        "*", ASTExpr[
+                            NumExpr(factor),
+                            _fold_contributions(b_contribs),
+                        ]
+                    ),
+                    _union_origins(b_contribs)
+                ),
+            ]
         end
         append!(get!(extra, a_index[target], Contribution[]), b_contribs)
         a_lhs = expanded[a_index[target]].lhs
         if !(a_lhs isa OpExpr && a_lhs.op == "D") && eq.lhs isa OpExpr && eq.lhs.op == "D"
             d_lhs[a_index[target]] = target == b_dep ? eq.lhs :
-                                     _rename_variable(eq.lhs, b_dep, target)
+                _rename_variable(eq.lhs, b_dep, target)
         end
         consumed[i] = true
     end
@@ -541,7 +568,7 @@ function _apply_operator_compose!(equations::Vector{Equation},
         for (j, b_contribs) in extra
             eq = expanded[j]
             merged = Contribution[expanded_contribs[j]; b_contribs]
-            expanded[j] = _equation_from(eq, merged; lhs=get(d_lhs, j, eq.lhs))
+            expanded[j] = _equation_from(eq, merged; lhs = get(d_lhs, j, eq.lhs))
             expanded_contribs[j] = merged
             # A merged equation is no longer A's authored contribution — it is
             # the composed tendency of its dependent variable, and a LATER
@@ -578,13 +605,16 @@ function _apply_operator_compose!(equations::Vector{Equation},
     # pointed the other way — the loser of an ownership decision is merged away
     # exactly like the loser of a translation match.
     renames_made = isempty(inverted) ? merged_away :
-                   OrderedDict{String, String}(merge(merged_away, inverted))
+        OrderedDict{String, String}(merge(merged_away, inverted))
     if !isempty(renames_made)
         for (i, eq) in enumerate(expanded)
             renamed, expanded_contribs[i] = _rewrite_contributions(
-                e -> _rename_variables(e, renames_made), eq, expanded_contribs[i], false)
-            expanded[i] = Equation(_rename_variables(eq.lhs, renames_made), renamed.rhs;
-                                   _comment=eq._comment)
+                e -> _rename_variables(e, renames_made), eq, expanded_contribs[i], false
+            )
+            expanded[i] = Equation(
+                _rename_variables(eq.lhs, renames_made), renamed.rhs;
+                _comment = eq._comment
+            )
         end
         for gone in keys(renames_made)
             delete!(states, gone)
@@ -611,7 +641,7 @@ later one merges `A.x` onto `C.x`, a document that still names `B.x` must land
 on `C.x` — so the accumulated map's VALUES are retargeted through the new map
 before the new pairs are added.
 """
-function _compose_renames!(acc::OrderedDict{String,String}, made::AbstractDict)
+function _compose_renames!(acc::OrderedDict{String, String}, made::AbstractDict)
     isempty(made) && return acc
     for (gone, survivor) in acc
         acc[gone] = get(made, survivor, survivor)
@@ -662,15 +692,17 @@ function _retarget_pending_entry(entry::CouplingCouple, renames::AbstractDict)
     raw = get(entry.connector, "equations", nothing)
     raw isa AbstractVector || return entry
     rewritten = Any[_retarget_connector_equation(item, renames) for item in raw]
-    connector = Dict{String,Any}(entry.connector)
+    connector = Dict{String, Any}(entry.connector)
     connector["equations"] = rewritten
-    return CouplingCouple(entry.systems, connector;
-                          description=entry.description, lifting=entry.lifting)
+    return CouplingCouple(
+        entry.systems, connector;
+        description = entry.description, lifting = entry.lifting
+    )
 end
 
 function _retarget_connector_equation(item, renames::AbstractDict)
     item isa AbstractDict || return item
-    out = Dict{String,Any}(String(k) => v for (k, v) in item)
+    out = Dict{String, Any}(String(k) => v for (k, v) in item)
     for side in ("from", "to")
         name = get(out, side, nothing)
         name isa AbstractString || continue
@@ -685,12 +717,14 @@ function _retarget_pending_entry(entry::CouplingVariableMap, renames::AbstractDi
     isempty(renames) && return entry
     transform = entry.transform isa ASTExpr ?
         _rename_variables(entry.transform, renames) : entry.transform
-    return CouplingVariableMap(get(renames, entry.from, entry.from),
-                               get(renames, entry.to, entry.to),
-                               transform;
-                               factor=entry.factor,
-                               description=entry.description,
-                               lifting=entry.lifting)
+    return CouplingVariableMap(
+        get(renames, entry.from, entry.from),
+        get(renames, entry.to, entry.to),
+        transform;
+        factor = entry.factor,
+        description = entry.description,
+        lifting = entry.lifting
+    )
 end
 
 """
@@ -722,23 +756,28 @@ deletes one of the two names, so the question is which of them survives:
   * **Neither is** — no initial condition is at stake either way; the incumbent
     (`systems[1]`'s spelling) stands, as before.
 """
-function _bare_name_owner(states::OrderedDict{String, ModelVariable},
-                          entry::CouplingOperatorCompose,
-                          a_name::AbstractString,
-                          b_name::AbstractString,
-                          b_dep::AbstractString,
-                          target::AbstractString)::String
+function _bare_name_owner(
+        states::OrderedDict{String, ModelVariable},
+        entry::CouplingOperatorCompose,
+        a_name::AbstractString,
+        b_name::AbstractString,
+        b_dep::AbstractString,
+        target::AbstractString
+    )::String
     b_state = haskey(states, b_dep)
     a_state = haskey(states, target)
     if b_state && a_state
-        throw(OperatorComposeAmbiguousBareNameError(
-            "operator_compose_ambiguous_bare_name: operator_compose($(a_name) + " *
-            "$(b_name)) matched '$(b_dep)' to '$(target)' on their shared local " *
-            "name alone, but BOTH are state variables and the merge keeps only " *
-            "one. Each carries its own initial condition, so the choice decides " *
-            "which the flattened system integrates from, and the document does " *
-            "not express it. Name the surviving spelling with a `translate` " *
-            "entry ({'$(target)': '$(b_dep)'}), or rename one of them."))
+        throw(
+            OperatorComposeAmbiguousBareNameError(
+                "operator_compose_ambiguous_bare_name: operator_compose($(a_name) + " *
+                    "$(b_name)) matched '$(b_dep)' to '$(target)' on their shared local " *
+                    "name alone, but BOTH are state variables and the merge keeps only " *
+                    "one. Each carries its own initial condition, so the choice decides " *
+                    "which the flattened system integrates from, and the document does " *
+                    "not express it. Name the surviving spelling with a `translate` " *
+                    "entry ({'$(target)': '$(b_dep)'}), or rename one of them."
+            )
+        )
     end
     return b_state ? String(b_dep) : String(target)
 end
@@ -772,11 +811,13 @@ alongside the ones it does merge, and the format cannot tell the two apart.
 standalone-contributing operator. It is a DECLARATION, not a default: an absent
 flag means "I have not said", which is why it is the case that errors.
 """
-function _report_operator_compose_merge(entry::CouplingOperatorCompose,
-                                        a_name::AbstractString,
-                                        b_name::AbstractString,
-                                        authored::Int,
-                                        unmatched::Vector{String})
+function _report_operator_compose_merge(
+        entry::CouplingOperatorCompose,
+        a_name::AbstractString,
+        b_name::AbstractString,
+        authored::Int,
+        unmatched::Vector{String}
+    )
     (authored == 0 || isempty(unmatched)) && return
     # The author has declared a standalone-contributing operator. Nothing to
     # report: an unmatched equation is what they said to expect.
@@ -785,27 +826,33 @@ function _report_operator_compose_merge(entry::CouplingOperatorCompose,
     where = "operator_compose($(a_name) + $(b_name))"
     names = join(unmatched, ", ")
     if entry.require_match === true
-        throw(OperatorComposeRequireMatchError(
-            "operator_compose_require_match_unmatched: $(where) declares " *
-            "`require_match` and merged $(merged) of $(authored) equations " *
-            "'$(b_name)' authored; no equation of '$(a_name)' matches: $(names)"))
+        throw(
+            OperatorComposeRequireMatchError(
+                "operator_compose_require_match_unmatched: $(where) declares " *
+                    "`require_match` and merged $(merged) of $(authored) equations " *
+                    "'$(b_name)' authored; no equation of '$(a_name)' matches: $(names)"
+            )
+        )
     end
     if merged == 0
-        throw(OperatorComposeNoMergeError(
-            "operator_compose_no_merge: $(where) merged NONE of the $(authored) " *
-            "equations '$(b_name)' authored; no equation of '$(a_name)' matches: " *
-            "$(names). The entry is indistinguishable from one that is not there " *
-            "— '$(b_name)' would integrate decoupled from its own defaults and " *
-            "'$(a_name)' would receive no contribution. If '$(b_name)' really does " *
-            "contribute only states of its own, declare it with " *
-            "`require_match: false` on this entry."))
+        throw(
+            OperatorComposeNoMergeError(
+                "operator_compose_no_merge: $(where) merged NONE of the $(authored) " *
+                    "equations '$(b_name)' authored; no equation of '$(a_name)' matches: " *
+                    "$(names). The entry is indistinguishable from one that is not there " *
+                    "— '$(b_name)' would integrate decoupled from its own defaults and " *
+                    "'$(a_name)' would receive no contribution. If '$(b_name)' really does " *
+                    "contribute only states of its own, declare it with " *
+                    "`require_match: false` on this entry."
+            )
+        )
     end
     @warn "operator_compose_partial_merge: $(where) merged $(merged) of $(authored) " *
-          "equations '$(b_name)' authored; unmatched dependent variable(s): $(names). " *
-          "The unmatched equations are preserved unchanged (esm-libraries-spec " *
-          "§4.7.1 step 5), so they integrate DECOUPLED from '$(a_name)'. Set " *
-          "`require_match: true` if they were meant to be contributions, or " *
-          "`require_match: false` if they were not."
+        "equations '$(b_name)' authored; unmatched dependent variable(s): $(names). " *
+        "The unmatched equations are preserved unchanged (esm-libraries-spec " *
+        "§4.7.1 step 5), so they integrate DECOUPLED from '$(a_name)'. Set " *
+        "`require_match: true` if they were meant to be contributions, or " *
+        "`require_match: false` if they were not."
     return
 end
 
@@ -825,9 +872,11 @@ collection and the compose either APPENDS (a `couple` connector equation, a
 `variable_map`'s derived-value definition) or replaces in place, so padding at
 the end is always the correct resync.
 """
-function _attribute_equations!(owners::Vector{String},
-                               equations::Vector{Equation},
-                               name::AbstractString)
+function _attribute_equations!(
+        owners::Vector{String},
+        equations::Vector{Equation},
+        name::AbstractString
+    )
     while length(owners) < length(equations)
         push!(owners, String(name))
     end
@@ -873,8 +922,10 @@ never namespaced; a value of `"B._var"` is the redundant spelling §10.2 require
 to stay harmless, and it stays harmless because placeholder expansion has by
 then made that equation a DIRECT match, which takes precedence over this map.
 """
-function _qualify_translate_endpoint(name::AbstractString,
-                                     system::AbstractString)::String
+function _qualify_translate_endpoint(
+        name::AbstractString,
+        system::AbstractString
+    )::String
     isempty(name) && return String(name)
     is_placeholder(name) && return String(name)
     (occursin('.', name) || isempty(system)) && return String(name)
@@ -902,8 +953,10 @@ Both endpoints are put into namespaced form on the way in; see
 [`_qualify_translate_endpoint`](@ref) for why a bare one otherwise matches
 nothing.
 """
-function _inverse_translate(translate, a_system::AbstractString="",
-                            b_system::AbstractString="")::Dict{String, Tuple{String, Float64}}
+function _inverse_translate(
+        translate, a_system::AbstractString = "",
+        b_system::AbstractString = ""
+    )::Dict{String, Tuple{String, Float64}}
     out = Dict{String, Tuple{String, Float64}}()
     translate === nothing && return out
     for (a_var, v) in translate
@@ -929,8 +982,10 @@ variables, operators, every non-expression field — untouched. This is §4.7.1
 step 4's dependent-variable rewrite, which is deliberately NOT a general
 substitution: B's parameters and observeds keep their own names.
 """
-function _rename_variable(expr::ASTExpr, from::AbstractString,
-                          to::AbstractString)::ASTExpr
+function _rename_variable(
+        expr::ASTExpr, from::AbstractString,
+        to::AbstractString
+    )::ASTExpr
     if expr isa VarExpr
         return expr.name == from ? VarExpr(String(to)) : expr
     elseif expr isa OpExpr
@@ -952,8 +1007,10 @@ over every equation in the flattened pool: a system that is neither A nor B may
 still reference `B.x` by its scoped name, and that reference has to follow the
 quantity to A's spelling before B's declaration is pruned.
 """
-function _rename_variables(expr::ASTExpr,
-                           renames::AbstractDict{String, String})::ASTExpr
+function _rename_variables(
+        expr::ASTExpr,
+        renames::AbstractDict{String, String}
+    )::ASTExpr
     isempty(renames) && return expr
     if expr isa VarExpr
         to = get(renames, expr.name, nothing)
@@ -966,8 +1023,10 @@ function _rename_variables(expr::ASTExpr,
         # deleted. §4.7.5 step 2 namespaces those strings like any other
         # reference, so §4.7.1 step 4 has to rename them like any other
         # reference too (CONFORMANCE_SPEC §5.5.6, §5.35).
-        return _rename_join_clauses(map_children(x -> _rename_variables(x, renames), expr),
-                                    renames)
+        return _rename_join_clauses(
+            map_children(x -> _rename_variables(x, renames), expr),
+            renames
+        )
     end
     return expr
 end
@@ -983,43 +1042,58 @@ what a renaming merge deletes — an affect still writing `B.x` writes to an
 unknown the flattened system no longer declares, which the solver reports far
 downstream, if at all.
 """
-function _rename_event_names!(events::Vector{ContinuousEvent},
-                              renames::AbstractDict{String, String})
+function _rename_event_names!(
+        events::Vector{ContinuousEvent},
+        renames::AbstractDict{String, String}
+    )
     isempty(renames) && return events
     for (i, ev) in enumerate(events)
         events[i] = ContinuousEvent(
             ASTExpr[_rename_variables(c, renames) for c in ev.conditions],
             _rename_affects(ev.affects, renames);
-            affect_neg=(ev.affect_neg === nothing ? nothing :
-                        _rename_affects(ev.affect_neg, renames)),
-            root_find=ev.root_find, reinitialize=ev.reinitialize,
-            description=ev.description, name=ev.name)
+            affect_neg = (
+                ev.affect_neg === nothing ? nothing :
+                    _rename_affects(ev.affect_neg, renames)
+            ),
+            root_find = ev.root_find, reinitialize = ev.reinitialize,
+            description = ev.description, name = ev.name
+        )
     end
     return events
 end
 
-function _rename_event_names!(events::Vector{DiscreteEvent},
-                              renames::AbstractDict{String, String})
+function _rename_event_names!(
+        events::Vector{DiscreteEvent},
+        renames::AbstractDict{String, String}
+    )
     isempty(renames) && return events
     for (i, ev) in enumerate(events)
         # Only a `ConditionTrigger` carries an expression; a periodic / times
         # trigger is pure data.
         trigger = ev.trigger isa ConditionTrigger ?
-                  ConditionTrigger(_rename_variables(ev.trigger.expression, renames)) :
-                  ev.trigger
-        events[i] = DiscreteEvent(trigger, _rename_affects(ev.affects, renames);
-            reinitialize=ev.reinitialize, description=ev.description, name=ev.name)
+            ConditionTrigger(_rename_variables(ev.trigger.expression, renames)) :
+            ev.trigger
+        events[i] = DiscreteEvent(
+            trigger, _rename_affects(ev.affects, renames);
+            reinitialize = ev.reinitialize, description = ev.description, name = ev.name
+        )
     end
     return events
 end
 
 _rename_affects(affects::Vector{AffectEquation}, renames::AbstractDict{String, String}) =
-    AffectEquation[AffectEquation(get(renames, a.lhs, a.lhs),
-                                  _rename_variables(a.rhs, renames)) for a in affects]
+    AffectEquation[
+    AffectEquation(
+        get(renames, a.lhs, a.lhs),
+        _rename_variables(a.rhs, renames)
+    ) for a in affects
+]
 
-function _substitute_placeholder(expr::ASTExpr,
-                                 placeholder::Union{String, Nothing},
-                                 target::String)::ASTExpr
+function _substitute_placeholder(
+        expr::ASTExpr,
+        placeholder::Union{String, Nothing},
+        target::String
+    )::ASTExpr
     placeholder === nothing && return expr
     if expr isa NumExpr || expr isa IntExpr
         return expr
@@ -1059,14 +1133,16 @@ see the entry was skipped. The spec taxonomy (§4.7.6, 8 error types for
 cross-language parity) has no matching typed error, and adding a ninth is
 forbidden — the opaque-refs channel is the designated fallback.
 """
-function _apply_couple!(equations::Vector{Equation},
-                        contribs::Vector{Vector{Contribution}},
-                        entry::CouplingCouple,
-                        opaque_refs::Vector{String};
-                        index::Int,
-                        owners::Vector{String},
-                        states::AbstractDict,
-                        components::Vector{String})
+function _apply_couple!(
+        equations::Vector{Equation},
+        contribs::Vector{Vector{Contribution}},
+        entry::CouplingCouple,
+        opaque_refs::Vector{String};
+        index::Int,
+        owners::Vector{String},
+        states::AbstractDict,
+        components::Vector{String}
+    )
     raw = get(entry.connector, "equations", nothing)
     raw isa AbstractVector || return
     # The expression a connector writes is authored by this ENTRY: its
@@ -1084,21 +1160,26 @@ function _apply_couple!(equations::Vector{Equation},
         # (esm-spec §10.3) is discriminated by its `transform` key, which the
         # plain `{lhs, rhs}` form never carries.
         if _has_field(item, :transform)
-            _apply_connector_transform!(equations, contribs, item, entry, opaque_refs;
-                                        origin=origin, owners=owners, states=states,
-                                        components=components)
+            _apply_connector_transform!(
+                equations, contribs, item, entry, opaque_refs;
+                origin = origin, owners = owners, states = states,
+                components = components
+            )
             continue
         end
         lhs = get(item, "lhs", nothing)
         rhs = get(item, "rhs", nothing)
         if lhs isa ASTExpr && rhs isa ASTExpr
-            push!(equations, Equation(lhs, rhs; _comment="couple"))
+            push!(equations, Equation(lhs, rhs; _comment = "couple"))
             push!(contribs, _authored(rhs, origin))
             push!(owners, "")
         else
-            push!(opaque_refs, string(
-                "couple:unparsed_connector_equation:",
-                join(entry.systems, "<->")))
+            push!(
+                opaque_refs, string(
+                    "couple:unparsed_connector_equation:",
+                    join(entry.systems, "<->")
+                )
+            )
         end
     end
     return
@@ -1135,23 +1216,28 @@ definition:
 `to`/`expression`, or a non-string `transform`) is recorded on `opaque_refs`
 rather than misapplied — the same fallback the plain-equation arm uses.
 """
-function _apply_connector_transform!(equations::Vector{Equation},
-                                     contribs::Vector{Vector{Contribution}},
-                                     item::AbstractDict,
-                                     entry::CouplingCouple,
-                                     opaque_refs::Vector{String};
-                                     origin::TermOrigin,
-                                     owners::Vector{String},
-                                     states::AbstractDict,
-                                     components::Vector{String})
+function _apply_connector_transform!(
+        equations::Vector{Equation},
+        contribs::Vector{Vector{Contribution}},
+        item::AbstractDict,
+        entry::CouplingCouple,
+        opaque_refs::Vector{String};
+        origin::TermOrigin,
+        owners::Vector{String},
+        states::AbstractDict,
+        components::Vector{String}
+    )
     transform_raw = _get_field(item, :transform, nothing)
     to_raw = _get_field(item, :to, nothing)
     expr_raw = _get_field(item, :expression, nothing)
 
     if !(transform_raw isa AbstractString) || to_raw === nothing || expr_raw === nothing
-        push!(opaque_refs, string(
-            "couple:unparsed_connector_equation:",
-            join(entry.systems, "<->")))
+        push!(
+            opaque_refs, string(
+                "couple:unparsed_connector_equation:",
+                join(entry.systems, "<->")
+            )
+        )
         return
     end
     transform = String(transform_raw)
@@ -1159,22 +1245,32 @@ function _apply_connector_transform!(equations::Vector{Equation},
     expression = expr_raw isa ASTExpr ? expr_raw : expression_from_json(expr_raw)
 
     if transform == "additive"
-        _combine_tendency_term!(equations, contribs, to, expression, "+", origin;
-                                owners=owners, states=states, components=components)
+        _combine_tendency_term!(
+            equations, contribs, to, expression, "+", origin;
+            owners = owners, states = states, components = components
+        )
     elseif transform == "multiplicative"
-        _combine_tendency_term!(equations, contribs, to, expression, "*", origin;
-                                owners=owners, states=states, components=components)
+        _combine_tendency_term!(
+            equations, contribs, to, expression, "*", origin;
+            owners = owners, states = states, components = components
+        )
     elseif transform == "replacement"
-        throw(ArgumentError(
-            "couple connector transform 'replacement' (esm-spec §10.3) is not " *
-            "implemented: its \"replace the variable value entirely\" semantics is " *
-            "ambiguous between replacing '$(to)'s tendency and making it algebraic. " *
-            "Use 'additive'/'multiplicative', or an explicit {lhs, rhs} connector " *
-            "equation."))
+        throw(
+            ArgumentError(
+                "couple connector transform 'replacement' (esm-spec §10.3) is not " *
+                    "implemented: its \"replace the variable value entirely\" semantics is " *
+                    "ambiguous between replacing '$(to)'s tendency and making it algebraic. " *
+                    "Use 'additive'/'multiplicative', or an explicit {lhs, rhs} connector " *
+                    "equation."
+            )
+        )
     else
-        throw(ArgumentError(
-            "invalid couple connector transform '$(transform)': must be one of " *
-            "additive, multiplicative, replacement (esm-spec §10.3)."))
+        throw(
+            ArgumentError(
+                "invalid couple connector transform '$(transform)': must be one of " *
+                    "additive, multiplicative, replacement (esm-spec §10.3)."
+            )
+        )
     end
     return
 end
@@ -1192,18 +1288,23 @@ end
 #                      segment names (where that component's equation list ends);
 #                      a parameter, or a name no component owns, is skipped;
 #   * multiplicative — there is no existing tendency to scale, which is an error.
-function _combine_tendency_term!(equations::Vector{Equation},
-                                 contribs::Vector{Vector{Contribution}},
-                                 to::String, expression::ASTExpr, combine::String,
-                                 origin::TermOrigin;
-                                 owners::Vector{String},
-                                 states::AbstractDict,
-                                 components::Vector{String})
+function _combine_tendency_term!(
+        equations::Vector{Equation},
+        contribs::Vector{Vector{Contribution}},
+        to::String, expression::ASTExpr, combine::String,
+        origin::TermOrigin;
+        owners::Vector{String},
+        states::AbstractDict,
+        components::Vector{String}
+    )
     if combine == "*"
         idx = findlast(eq -> differential_lhs_variable(eq.lhs) == to, equations)
-        idx === nothing && throw(ArgumentError(
-            "couple connector 'multiplicative' transform targets '$(to)', which " *
-            "has no tendency (`D($(to))`) to multiply (esm-spec §10.3)."))
+        idx === nothing && throw(
+            ArgumentError(
+                "couple connector 'multiplicative' transform targets '$(to)', which " *
+                    "has no tendency (`D($(to))`) to multiply (esm-spec §10.3)."
+            )
+        )
     else
         idx = findlast(eq -> lhs_dependent_variable(eq.lhs) == to, equations)
     end
@@ -1214,17 +1315,24 @@ function _combine_tendency_term!(equations::Vector{Equation},
         upto = Set{String}(components[1:pos])
         last = findlast(o -> o in upto, owners)
         at = last === nothing ? 1 : last + 1
-        insert!(equations, at, Equation(
-            OpExpr("D", ASTExpr[VarExpr(to)], wrt="t"), expression;
-            _comment="couple:additive"))
+        insert!(
+            equations, at, Equation(
+                OpExpr("D", ASTExpr[VarExpr(to)], wrt = "t"), expression;
+                _comment = "couple:additive"
+            )
+        )
         insert!(contribs, at, _authored(expression, origin))
         insert!(owners, at, root)
         return
     end
     existing = equations[idx]
     merged = if combine == "*"
-        Contribution[Contribution(OpExpr("*", ASTExpr[_fold_contributions(contribs[idx]), expression]),
-                                  _union_origins(contribs[idx], origin))]
+        Contribution[
+            Contribution(
+                OpExpr("*", ASTExpr[_fold_contributions(contribs[idx]), expression]),
+                _union_origins(contribs[idx], origin)
+            ),
+        ]
     else
         Contribution[contribs[idx]; Contribution(expression, TermOrigin[origin])]
     end
@@ -1247,12 +1355,14 @@ is no loader-producer arm here any more: a loaded field IS a parameter of the
 consuming model, declared with its own `shape` and its own `update`, and needs
 no shape transfer from a `param_to_var` edge.
 """
-function _apply_variable_map!(equations::Vector{Equation},
-                              contribs::Vector{Vector{Contribution}},
-                              params::OrderedDict{String, ModelVariable},
-                              entry::CouplingVariableMap;
-                              observeds::Union{OrderedDict{String, ModelVariable},Nothing}=nothing,
-                              index::Int)
+function _apply_variable_map!(
+        equations::Vector{Equation},
+        contribs::Vector{Vector{Contribution}},
+        params::OrderedDict{String, ModelVariable},
+        entry::CouplingVariableMap;
+        observeds::Union{OrderedDict{String, ModelVariable}, Nothing} = nothing,
+        index::Int
+    )
     if entry.transform isa ASTExpr
         _apply_expression_transform!(equations, contribs, params, observeds, entry, index)
         return
@@ -1271,12 +1381,14 @@ end
 # variable reference inside the transform is (by contract) a fully-scoped
 # reference, so no namespacing is applied; the expression MUST reference
 # the entry's `from` variable — it is the data-flow edge the entry declares.
-function _apply_expression_transform!(equations::Vector{Equation},
-                                      contribs::Vector{Vector{Contribution}},
-                                      params::OrderedDict{String, ModelVariable},
-                                      observeds::Union{OrderedDict{String, ModelVariable},Nothing},
-                                      entry::CouplingVariableMap,
-                                      index::Int)
+function _apply_expression_transform!(
+        equations::Vector{Equation},
+        contribs::Vector{Vector{Contribution}},
+        params::OrderedDict{String, ModelVariable},
+        observeds::Union{OrderedDict{String, ModelVariable}, Nothing},
+        entry::CouplingVariableMap,
+        index::Int
+    )
     from = entry.from
     to = entry.to
     transform = entry.transform::ASTExpr
@@ -1284,20 +1396,25 @@ function _apply_expression_transform!(equations::Vector{Equation},
     # aggregate bodies, filter predicates, bounds, table-lookup axes — so
     # the reference check is not blind to nested aggregate transforms.
     if !contains(transform, from)
-        throw(ArgumentError(
-            "variable_map($(from) -> $(to)): expression transform does not " *
-            "reference the entry's 'from' variable '$(from)' (esm-spec §10.4)"))
+        throw(
+            ArgumentError(
+                "variable_map($(from) -> $(to)): expression transform does not " *
+                    "reference the entry's 'from' variable '$(from)' (esm-spec §10.4)"
+            )
+        )
     end
     to_var = get(params, to, nothing)
     if to_var !== nothing
         delete!(params, to)
     end
     if observeds !== nothing
-        observeds[to] = ModelVariable(UnknownVariable;
-            units=to_var === nothing ? nothing : to_var.units,
-            description=to_var === nothing ? nothing : to_var.description,
-            shape=to_var === nothing ? nothing : to_var.shape,
-            element_type=to_var === nothing ? nothing : to_var.element_type)
+        observeds[to] = ModelVariable(
+            UnknownVariable;
+            units = to_var === nothing ? nothing : to_var.units,
+            description = to_var === nothing ? nothing : to_var.description,
+            shape = to_var === nothing ? nothing : to_var.shape,
+            element_type = to_var === nothing ? nothing : to_var.element_type
+        )
     end
     # The defining equation (`to ~ transform`) is what MAKES `to` an observed
     # unknown from esm 1.0.0 — the declaration carries no expression, so this
@@ -1312,9 +1429,11 @@ end
 # flattened equation. Every named transform is a replacement (§4.7.3), so the
 # substitution applies inside each contribution and adds no origin: it changes
 # an input of a term, not who wrote it.
-function _substitute_variable_map!(equations::Vector{Equation},
-                                   contribs::Vector{Vector{Contribution}},
-                                   entry::CouplingVariableMap)
+function _substitute_variable_map!(
+        equations::Vector{Equation},
+        contribs::Vector{Vector{Contribution}},
+        entry::CouplingVariableMap
+    )
     # Build replacement ASTExpr. `factor` is a scaling coefficient (schema restricts
     # it to the scaling transforms — additive / multiplicative / conversion_factor;
     # a bare param_to_var / identity may not carry one). Apply it uniformly here
@@ -1323,8 +1442,10 @@ function _substitute_variable_map!(equations::Vector{Equation},
     # Python applied it. A factor of 1.0 is a no-op and left unwrapped.
     replacement::ASTExpr = VarExpr(entry.from)
     if entry.factor !== nothing && entry.factor != 1.0
-        replacement = OpExpr("*",
-            ASTExpr[NumExpr(entry.factor::Float64), VarExpr(entry.from)])
+        replacement = OpExpr(
+            "*",
+            ASTExpr[NumExpr(entry.factor::Float64), VarExpr(entry.from)]
+        )
     end
 
     bindings = Dict{String, ASTExpr}(entry.to => replacement)
@@ -1332,8 +1453,10 @@ function _substitute_variable_map!(equations::Vector{Equation},
     rewrite(e) = _rename_join_names(substitute(e, bindings), join_renames)
     for (i, eq) in enumerate(equations)
         rewritten, contribs[i] = _rewrite_contributions(rewrite, eq, contribs[i], false)
-        equations[i] = Equation(substitute(eq.lhs, bindings), rewritten.rhs;
-                                _comment=eq._comment)
+        equations[i] = Equation(
+            substitute(eq.lhs, bindings), rewritten.rhs;
+            _comment = eq._comment
+        )
     end
     return
 end
@@ -1358,8 +1481,10 @@ end
 _rename_join_names(expr::ASTExpr, ::AbstractDict{String, String}) = expr
 function _rename_join_names(expr::OpExpr, renames::AbstractDict{String, String})
     isempty(renames) && return expr
-    return _rename_join_clauses(map_children(x -> _rename_join_names(x, renames), expr),
-                                renames)
+    return _rename_join_clauses(
+        map_children(x -> _rename_join_names(x, renames), expr),
+        renames
+    )
 end
 
 # ONE node's join clauses, without recursing — the recursion belongs to the
@@ -1369,19 +1494,23 @@ _rename_join_clauses(expr::ASTExpr, ::AbstractDict{String, String}) = expr
 function _rename_join_clauses(expr::OpExpr, renames::AbstractDict{String, String})
     (expr.join === nothing || isempty(renames)) && return expr
     ren(n) = get(renames, String(n), String(n))
-    renclause(c::_OverlapJoinSpec) = _OverlapJoinSpec(String[ren(n) for n in c.src_env],
-                                                      String[ren(n) for n in c.tgt_env], c.eps,
-                                                      c.eps_given)
+    renclause(c::_OverlapJoinSpec) = _OverlapJoinSpec(
+        String[ren(n) for n in c.src_env],
+        String[ren(n) for n in c.tgt_env], c.eps,
+        c.eps_given
+    )
     # As in `namespacing.jl`: rename the key COLUMNS, never the clause's `syms`,
     # which are binders of the node rather than variable references.
-    renclause(c) = _with_pairs(c, Tuple{String,String}[(ren(l), ren(r)) for (l, r) in c])
-    return reconstruct(expr; join=Any[renclause(c) for c in expr.join])
+    renclause(c) = _with_pairs(c, Tuple{String, String}[(ren(l), ren(r)) for (l, r) in c])
+    return reconstruct(expr; join = Any[renclause(c) for c in expr.join])
 end
 
 # For param_to_var / conversion_factor, remove the target param from the
 # parameter list — it is now driven by `from`.
-function _promote_variable_map_param!(params::OrderedDict{String, ModelVariable},
-                                      entry::CouplingVariableMap)
+function _promote_variable_map_param!(
+        params::OrderedDict{String, ModelVariable},
+        entry::CouplingVariableMap
+    )
     (entry.transform == "param_to_var" || entry.transform == "conversion_factor") ||
         return
     haskey(params, entry.to) || return
@@ -1409,11 +1538,13 @@ _with_coupling_description(desc::String, description) =
 
 describe_coupling_entry(entry::CouplingOperatorCompose)::String =
     _with_coupling_description(
-        "operator_compose($(join(entry.systems, " + ")))", entry.description)
+    "operator_compose($(join(entry.systems, " + ")))", entry.description
+)
 
 describe_coupling_entry(entry::CouplingCouple)::String =
     _with_coupling_description(
-        "couple($(join(entry.systems, " <-> ")))", entry.description)
+    "couple($(join(entry.systems, " <-> ")))", entry.description
+)
 
 function describe_coupling_entry(entry::CouplingVariableMap)::String
     transform_str = entry.transform isa ASTExpr ?

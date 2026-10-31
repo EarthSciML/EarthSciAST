@@ -32,7 +32,7 @@ include("testutils.jl")  # TESTUTILS_REPO_ROOT + _require_fixture (idempotent)
 
 # Recursively convert a parsed JSON3 tree into a mutable nested Dict/Vector so the
 # loader-fed `discrete` declarations can be stripped for the simulate view.
-_rg_mutable(x::JSON3.Object) = Dict{String,Any}(String(k) => _rg_mutable(v) for (k, v) in x)
+_rg_mutable(x::JSON3.Object) = Dict{String, Any}(String(k) => _rg_mutable(v) for (k, v) in x)
 _rg_mutable(x::JSON3.Array) = Any[_rg_mutable(v) for v in x]
 _rg_mutable(x) = x
 
@@ -40,7 +40,7 @@ _rg_mutable(x) = x
 # the golden's `native_fields` (the 6-cell native grid). No network.
 mutable struct _RGConfProvider
     times::Vector{Float64}
-    fields::Dict{Float64,Dict{String,Vector{Float64}}}
+    fields::Dict{Float64, Dict{String, Vector{Float64}}}
 end
 _ESS_RG.provider_refresh_times(p::_RGConfProvider) = p.times
 _ESS_RG.provider_sample(p::_RGConfProvider, t::Real) = p.fields[Float64(t)]
@@ -57,9 +57,13 @@ _ESS_RG.provider_sample(p::_RGConfProvider, t::Real) = p.fields[Float64(t)]
         fsrc_anchor(t) = Float64.(golden["native_fields"]["M.F_src"]["by_anchor"][Symbol(string(t))])
         ftgt_anchor(t) = Float64.(golden["regridded_fields"]["M.F_tgt"]["by_anchor"][Symbol(string(t))])
         scale_tgt_want = Float64.(golden["regridded_fields"]["M.scale_tgt"])
-        anchors = sort!(Float64[parse(Float64, String(k))
-                                for k in keys(golden["native_fields"]["M.F_src"]["by_anchor"])])
-        field_atol = 1e-9
+        anchors = sort!(
+            Float64[
+                parse(Float64, String(k))
+                    for k in keys(golden["native_fields"]["M.F_src"]["by_anchor"])
+            ]
+        )
+        field_atol = 1.0e-9
 
         # Simulate view: strip the loader-fed `discrete` declarations (+ the
         # `data_sources` block) so the typed RHS resolves F_src/scale_src as
@@ -71,7 +75,7 @@ _ESS_RG.provider_sample(p::_RGConfProvider, t::Real) = p.fields[Float64(t)]
         end
         delete!(sim_doc, "data_sources")
 
-        ics = Dict{String,Float64}()
+        ics = Dict{String, Float64}()
         for s in ("c", "d"), j in 1:3
             ics["$s[$j]"] = 0.0
         end
@@ -81,18 +85,22 @@ _ESS_RG.provider_sample(p::_RGConfProvider, t::Real) = p.fields[Float64(t)]
         # cache; scale_tgt reads only const data -> build-once.
         fsrc_buf = copy(fsrc_anchor(0.0))
         dm = _ESS_RG.DiscreteMaterializer()
-        f!, u0, p, _ts, vm = _ESS_RG._build_evaluator(sim_doc;
+        f!, u0, p, _ts, vm = _ESS_RG._build_evaluator(
+            sim_doc;
             initial_conditions = ics,
             const_arrays = Dict("scale_src" => scale_native),
             param_arrays = Dict("F_src" => fsrc_buf),
-            materialize_out = dm)
+            materialize_out = dm
+        )
         # The interpreter's per-cell fill: the oracle the compiled one must equal.
         fsrc_buf_i = copy(fsrc_anchor(0.0))
         dm_i = _ESS_RG.DiscreteMaterializer()
-        _ESS_RG._build_evaluator(sim_doc; initial_conditions = ics,
+        _ESS_RG._build_evaluator(
+            sim_doc; initial_conditions = ics,
             const_arrays = Dict("scale_src" => scale_native),
             param_arrays = Dict("F_src" => fsrc_buf_i),
-            compiler = :interpreter, materialize_out = dm_i)
+            compiler = :interpreter, materialize_out = dm_i
+        )
 
         # (b) regrid band — the in-model regrid reproduces the golden regridded
         # fields. F_tgt (DISCRETE cache) at each anchor; scale_tgt (CONST) once.
@@ -118,32 +126,37 @@ _ESS_RG.provider_sample(p::_RGConfProvider, t::Real) = p.fields[Float64(t)]
         # provider, no tstop). Forcing frozen per segment -> closed form to tol.
         fsrc_buf2 = copy(fsrc_anchor(0.0))
         dm2 = _ESS_RG.DiscreteMaterializer()
-        f2!, u02, p2, _ts2, vm2 = _ESS_RG._build_evaluator(sim_doc;
+        f2!, u02, p2, _ts2, vm2 = _ESS_RG._build_evaluator(
+            sim_doc;
             initial_conditions = ics,
             const_arrays = Dict("scale_src" => scale_native),
             param_arrays = Dict("F_src" => fsrc_buf2),
-            materialize_out = dm2)
+            materialize_out = dm2
+        )
         interior = [t for t in anchors if t > 0.0]
         prov = _RGConfProvider(interior, Dict(t => Dict("F_src" => fsrc_anchor(t)) for t in interior))
         cb, tstops = _ESS_RG.build_refresh_callback(;
             providers = Dict("F_src" => prov),
             buffers = _ESS_RG.RefreshBuffers(Dict("F_src" => fsrc_buf2)),  # SAME buffer object
-            post_refresh = dm2.materialize!)
+            post_refresh = dm2.materialize!
+        )
         @test tstops == interior
 
         tspan = (Float64(golden["cadence"]["tspan"][1]), Float64(golden["cadence"]["tspan"][2]))
         traj = golden["trajectory"]
         atimes = sort!(Float64[parse(Float64, String(k)) for k in keys(traj) if String(k) != "comment"])
         prob = ODE.ODEProblem(f2!, u02, tspan, p2)
-        sol = ODE.solve(prob, ODE.Tsit5(); callback = cb, tstops = tstops,
-                        saveat = atimes, reltol = 1e-10, abstol = 1e-12)
+        sol = ODE.solve(
+            prob, ODE.Tsit5(); callback = cb, tstops = tstops,
+            saveat = atimes, reltol = 1.0e-10, abstol = 1.0e-12
+        )
         @test sol.retcode == ODE.SciMLBase.ReturnCode.Success
 
-        rtol = 1e-4; atol = 1e-6
+        rtol = 1.0e-4; atol = 1.0e-6
         for tk in keys(traj)
             String(tk) == "comment" && continue
             t = parse(Float64, String(tk))
-            ti = findfirst(x -> isapprox(x, t; atol = 1e-9), sol.t)
+            ti = findfirst(x -> isapprox(x, t; atol = 1.0e-9), sol.t)
             @test ti !== nothing
             for s in ("c", "d"), j in 1:3
                 want = Float64(traj[tk][Symbol("M.$s[$j]")])

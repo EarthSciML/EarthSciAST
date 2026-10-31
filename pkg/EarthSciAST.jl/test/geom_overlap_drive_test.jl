@@ -56,23 +56,33 @@ catch
 end
 
 # ---- small JSON AST builders ----
-_op(o, args...) = Dict{String,Any}("op" => o, "args" => Any[args...])
-_ix(f, args...) = Dict{String,Any}("op" => "index", "args" => Any[f, args...])
+_op(o, args...) = Dict{String, Any}("op" => o, "args" => Any[args...])
+_ix(f, args...) = Dict{String, Any}("op" => "index", "args" => Any[f, args...])
 function _agg(output_idx, ranges, expr; kw...)
-    d = Dict{String,Any}("op" => "faq", "output_idx" => collect(output_idx),
-                         "ranges" => Dict{String,Any}(
-                             k => (v isa AbstractString ? Dict{String,Any}("from" => v) : v)
-                             for (k, v) in ranges),
-                         "args" => Any[], "expr" => expr)
+    d = Dict{String, Any}(
+        "op" => "faq", "output_idx" => collect(output_idx),
+        "ranges" => Dict{String, Any}(
+            k => (v isa AbstractString ? Dict{String, Any}("from" => v) : v)
+                for (k, v) in ranges
+        ),
+        "args" => Any[], "expr" => expr
+    )
     for (k, v) in kw
         d[String(k)] = v
     end
     return d
 end
-_ovj(src, tgt; eps = 1e-9) = Any[Dict{String,Any}("overlap" => Dict{String,Any}(
-    "src_env" => Any[src...], "tgt_env" => Any[tgt...], "eps" => eps))]
-_pia(a, b) = Dict{String,Any}("op" => "polygon_intersection_area",
-                              "manifold" => "planar", "args" => Any[a, b])
+_ovj(src, tgt; eps = 1.0e-9) = Any[
+    Dict{String, Any}(
+        "overlap" => Dict{String, Any}(
+            "src_env" => Any[src...], "tgt_env" => Any[tgt...], "eps" => eps
+        )
+    ),
+]
+_pia(a, b) = Dict{String, Any}(
+    "op" => "polygon_intersection_area",
+    "manifold" => "planar", "args" => Any[a, b]
+)
 
 # One axis-aligned square ring at `(x, y)` with side `w`, CCW from the SW corner.
 function sq!(R, p, x, y, w)
@@ -96,15 +106,17 @@ const TGT = let R = zeros(Float64, 2, 4, 2)
     sq!(R, 1, 0.0, 0.0, 1.0); sq!(R, 2, 2.0, 0.0, 1.0)
     R
 end
-const IDX = Dict{String,Int}("S" => 4, "T" => 2, "K" => 3)
-const SHAPES = Dict{String,Vector{String}}(
+const IDX = Dict{String, Int}("S" => 4, "T" => 2, "K" => 3)
+const SHAPES = Dict{String, Vector{String}}(
     "src_poly" => ["S", "V", "C"], "tgt_poly" => ["T", "V", "C"],
-    "F_src" => ["S"], "A_j" => ["T"], "kk" => ["K"])
-const ENV0 = Dict{String,Any}(
-    "src_poly" => SRC, "tgt_poly" => TGT, "atol" => 1e-12,
+    "F_src" => ["S"], "A_j" => ["T"], "kk" => ["K"]
+)
+const ENV0 = Dict{String, Any}(
+    "src_poly" => SRC, "tgt_poly" => TGT, "atol" => 1.0e-12,
     "F_src" => Float64[1.0, -2.0, 3.5, -0.0],
-    "A_j"   => Float64[1.0, 1.0],
-    "kk"    => Float64[1.0, 2.0, 3.0])
+    "A_j" => Float64[1.0, 1.0],
+    "kk" => Float64[1.0, 2.0, 3.0]
+)
 
 # Materialize `json` with the broad phase applied and, separately, with
 # `compiler=:interpreter` taking the ungated dense sweep.
@@ -112,7 +124,7 @@ const ENV0 = Dict{String,Any}(
 function both_ways(json, env = ENV0, idx = IDX)
     rhs = EA.expression_from_json(json)
     d0, g0, n0 = EA._GEOM_OVERLAP_DRIVE[], EA._GEOM_OVERLAP_GATE_ONLY[],
-                 EA._GEOM_OVERLAP_NONE[]
+        EA._GEOM_OVERLAP_NONE[]
     got = EA._materialize_geom_array(rhs, copy(env), nothing, idx, SHAPES)
     dd = EA._GEOM_OVERLAP_DRIVE[] - d0
     dg = EA._GEOM_OVERLAP_GATE_ONLY[] - g0
@@ -145,9 +157,11 @@ function gate_changes_values(json, env = ENV0, idx = IDX)
     return !bitsame(got, ref)
 end
 
-const A_IJ = _agg(["i", "j"], ["i" => "S", "j" => "T"],
-                  _pia(_ix("src_poly", "i"), _ix("tgt_poly", "j"));
-                  join = _ovj(["src_poly"], ["tgt_poly"]))
+const A_IJ = _agg(
+    ["i", "j"], ["i" => "S", "j" => "T"],
+    _pia(_ix("src_poly", "i"), _ix("tgt_poly", "j"));
+    join = _ovj(["src_poly"], ["tgt_poly"])
+)
 
 @testset "setup-time overlap broad phase" begin
 
@@ -168,16 +182,28 @@ const A_IJ = _agg(["i", "j"], ["i" => "S", "j" => "T"],
         # The `conservative_overlap_apply_gated` shape: contract over the source
         # index, gated by the same overlap clause, with the sliver filter on top.
         # `F_src` carries a negative and a `-0.0` so the fold is not sign-trivial.
-        env = merge(copy(ENV0), Dict{String,Any}(
-            "A_ij" => EA._materialize_geom_array(EA.expression_from_json(A_IJ),
-                                                 copy(ENV0), nothing, IDX, SHAPES)))
-        body = _op("/", _op("*", _ix("A_ij", "i", "j"), _ix("F_src", "i")),
-                        _ix("A_j", "j"))
-        for (nm, extra) in ("filtered" => Dict{String,Any}(
-                                "filter" => _op(">", _ix("A_ij", "i", "j"), "atol")),
-                            "unfiltered" => Dict{String,Any}())
-            j = _agg(["j"], ["i" => "S", "j" => "T"], body;
-                     join = _ovj(["src_poly"], ["tgt_poly"]))
+        env = merge(
+            copy(ENV0), Dict{String, Any}(
+                "A_ij" => EA._materialize_geom_array(
+                    EA.expression_from_json(A_IJ),
+                    copy(ENV0), nothing, IDX, SHAPES
+                )
+            )
+        )
+        body = _op(
+            "/", _op("*", _ix("A_ij", "i", "j"), _ix("F_src", "i")),
+            _ix("A_j", "j")
+        )
+        for (nm, extra) in (
+                "filtered" => Dict{String, Any}(
+                    "filter" => _op(">", _ix("A_ij", "i", "j"), "atol")
+                ),
+                "unfiltered" => Dict{String, Any}(),
+            )
+            j = _agg(
+                ["j"], ["i" => "S", "j" => "T"], body;
+                join = _ovj(["src_poly"], ["tgt_poly"])
+            )
             merge!(j, extra)
             got, ref, dd, dg, dn = both_ways(j, env)
             @test (nm, dd, dg, dn) == (nm, 1, 0, 0)
@@ -188,13 +214,17 @@ const A_IJ = _agg(["i", "j"], ["i" => "S", "j" => "T"],
     end
 
     @testset "additive folds stay neutral; sum_product too" begin
-        for (nm, extra) in ("plus" => Dict{String,Any}("reduce" => "+"),
-                            "sum" => Dict{String,Any}("reduce" => "sum"),
-                            "semiring" => Dict{String,Any}("semiring" => "sum_product"),
-                            "max" => Dict{String,Any}("reduce" => "max"))
-            j = _agg(["j"], ["i" => "S", "j" => "T"],
-                     _pia(_ix("src_poly", "i"), _ix("tgt_poly", "j"));
-                     join = _ovj(["src_poly"], ["tgt_poly"]))
+        for (nm, extra) in (
+                "plus" => Dict{String, Any}("reduce" => "+"),
+                "sum" => Dict{String, Any}("reduce" => "sum"),
+                "semiring" => Dict{String, Any}("semiring" => "sum_product"),
+                "max" => Dict{String, Any}("reduce" => "max"),
+            )
+            j = _agg(
+                ["j"], ["i" => "S", "j" => "T"],
+                _pia(_ix("src_poly", "i"), _ix("tgt_poly", "j"));
+                join = _ovj(["src_poly"], ["tgt_poly"])
+            )
             merge!(j, extra)
             got, ref, dd, _, _ = both_ways(j)
             @test (nm, dd) == (nm, 1)
@@ -212,9 +242,11 @@ const A_IJ = _agg(["i", "j"], ["i" => "S", "j" => "T"],
         # gated value is the one RFC §5.3 specifies. This is a REAL behaviour
         # change for such a document and is recorded, not smoothed over.
         for (nm, red) in ("min" => "min", "prod" => "prod")
-            j = _agg(["j"], ["i" => "S", "j" => "T"],
-                     _pia(_ix("src_poly", "i"), _ix("tgt_poly", "j"));
-                     join = _ovj(["src_poly"], ["tgt_poly"]))
+            j = _agg(
+                ["j"], ["i" => "S", "j" => "T"],
+                _pia(_ix("src_poly", "i"), _ix("tgt_poly", "j"));
+                join = _ovj(["src_poly"], ["tgt_poly"])
+            )
             j["reduce"] = red
             got, ref, dd, _, _ = both_ways(j)
             @test (nm, dd) == (nm, 1)
@@ -232,7 +264,7 @@ const A_IJ = _agg(["i", "j"], ["i" => "S", "j" => "T"],
     @testset "the interpreter takes the ungated dense sweep" begin
         rhs = EA.expression_from_json(A_IJ)
         d0, g0, n0 = EA._GEOM_OVERLAP_DRIVE[], EA._GEOM_OVERLAP_GATE_ONLY[],
-                     EA._GEOM_OVERLAP_NONE[]
+            EA._GEOM_OVERLAP_NONE[]
         EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
             EA._materialize_geom_array(rhs, copy(ENV0), nothing, IDX, SHAPES)
         end
@@ -248,34 +280,46 @@ const A_IJ = _agg(["i", "j"], ["i" => "S", "j" => "T"],
         # set, full-product cost — and the values must still match the gated
         # meaning, so compare against the DRIVEN A_ij row-sum rather than the
         # ungated sweep.
-        j = _agg(["k"], ["i" => "S", "j" => "T", "k" => "K"],
-                 _op("*", _pia(_ix("src_poly", "i"), _ix("tgt_poly", "j")),
-                          _ix("kk", "k"));
-                 join = _ovj(["src_poly"], ["tgt_poly"]))
+        j = _agg(
+            ["k"], ["i" => "S", "j" => "T", "k" => "K"],
+            _op(
+                "*", _pia(_ix("src_poly", "i"), _ix("tgt_poly", "j")),
+                _ix("kk", "k")
+            );
+            join = _ovj(["src_poly"], ["tgt_poly"])
+        )
         rhs = EA.expression_from_json(j)
         d0, g0 = EA._GEOM_OVERLAP_DRIVE[], EA._GEOM_OVERLAP_GATE_ONLY[]
         got = EA._materialize_geom_array(rhs, copy(ENV0), nothing, IDX, SHAPES)
         @test EA._GEOM_OVERLAP_DRIVE[] - d0 == 0
         @test EA._GEOM_OVERLAP_GATE_ONLY[] - g0 == 1
         # Total overlap area is 4 × 0.04; scaled by kk = [1,2,3].
-        total = sum(EA._materialize_geom_array(EA.expression_from_json(A_IJ),
-                                               copy(ENV0), nothing, IDX, SHAPES))
-        @test all(k -> isapprox(got[k], total * ENV0["kk"][k]; atol = 1e-12), 1:3)
+        total = sum(
+            EA._materialize_geom_array(
+                EA.expression_from_json(A_IJ),
+                copy(ENV0), nothing, IDX, SHAPES
+            )
+        )
+        @test all(k -> isapprox(got[k], total * ENV0["kk"][k]; atol = 1.0e-12), 1:3)
         @test length(unique(got)) > 1
     end
 
     @testset "an unresolvable clause declines to the ungated sweep" begin
         # Envelope factor not in `env` ⇒ no gate at all, and the historic values.
-        j = _agg(["i", "j"], ["i" => "S", "j" => "T"],
-                 _pia(_ix("src_poly", "i"), _ix("tgt_poly", "j"));
-                 join = _ovj(["not_a_factor"], ["tgt_poly"]))
+        j = _agg(
+            ["i", "j"], ["i" => "S", "j" => "T"],
+            _pia(_ix("src_poly", "i"), _ix("tgt_poly", "j"));
+            join = _ovj(["not_a_factor"], ["tgt_poly"])
+        )
         got, ref, dd, dg, dn = both_ways(j)
         @test (dd, dg, dn) == (0, 0, 1)
         @test bitsame(got, ref)
         # ... and so does a factor whose shape names no loop var of this sweep.
-        j2 = _agg(["i", "j"], ["i" => "S", "j" => "T"],
-                  _pia(_ix("src_poly", "i"), _ix("tgt_poly", "j"));
-                  join = _ovj(["kk"], ["tgt_poly"]))
+        j2 = _agg(
+            ["i", "j"], ["i" => "S", "j" => "T"],
+            _pia(_ix("src_poly", "i"), _ix("tgt_poly", "j"));
+            join = _ovj(["kk"], ["tgt_poly"])
+        )
         got2, ref2, dd2, dg2, dn2 = both_ways(j2)
         @test (dd2, dg2, dn2) == (0, 0, 1)
         @test bitsame(got2, ref2)
@@ -283,17 +327,21 @@ const A_IJ = _agg(["i", "j"], ["i" => "S", "j" => "T"],
         # a `[pos, verts, coord]` ring stack; handing the Phase-3a primitive a
         # 1-D array there would throw, so the gate declines instead and a
         # document that used to build still builds.
-        env3 = merge(copy(ENV0), Dict{String,Any}("flat_src" => Float64[1, 2, 3, 4]))
+        env3 = merge(copy(ENV0), Dict{String, Any}("flat_src" => Float64[1, 2, 3, 4]))
         sh3 = copy(SHAPES); sh3["flat_src"] = ["S"]
-        j3 = _agg(["i", "j"], ["i" => "S", "j" => "T"],
-                  _pia(_ix("src_poly", "i"), _ix("tgt_poly", "j"));
-                  join = _ovj(["flat_src"], ["tgt_poly"]))
+        j3 = _agg(
+            ["i", "j"], ["i" => "S", "j" => "T"],
+            _pia(_ix("src_poly", "i"), _ix("tgt_poly", "j"));
+            join = _ovj(["flat_src"], ["tgt_poly"])
+        )
         rhs3 = EA.expression_from_json(j3)
         d3, g3, n3 = EA._GEOM_OVERLAP_DRIVE[], EA._GEOM_OVERLAP_GATE_ONLY[],
-                     EA._GEOM_OVERLAP_NONE[]
+            EA._GEOM_OVERLAP_NONE[]
         got3 = EA._materialize_geom_array(rhs3, env3, nothing, IDX, sh3)
-        @test (EA._GEOM_OVERLAP_DRIVE[] - d3, EA._GEOM_OVERLAP_GATE_ONLY[] - g3,
-               EA._GEOM_OVERLAP_NONE[] - n3) == (0, 0, 1)
+        @test (
+            EA._GEOM_OVERLAP_DRIVE[] - d3, EA._GEOM_OVERLAP_GATE_ONLY[] - g3,
+            EA._GEOM_OVERLAP_NONE[] - n3,
+        ) == (0, 0, 1)
         ref3 = EA._with_compiler_plan(EA._compiler_plan(:interpreter)) do
             EA._materialize_geom_array(rhs3, env3, nothing, IDX, sh3)
         end
@@ -301,8 +349,10 @@ const A_IJ = _agg(["i", "j"], ["i" => "S", "j" => "T"],
     end
 
     @testset "a document with no overlap clause is untouched" begin
-        j = _agg(["i", "j"], ["i" => "S", "j" => "T"],
-                 _pia(_ix("src_poly", "i"), _ix("tgt_poly", "j")))
+        j = _agg(
+            ["i", "j"], ["i" => "S", "j" => "T"],
+            _pia(_ix("src_poly", "i"), _ix("tgt_poly", "j"))
+        )
         got, ref, dd, dg, dn = both_ways(j)
         @test (dd, dg, dn) == (0, 0, 1)   # resolution declines before it starts
         @test bitsame(got, ref)
@@ -314,7 +364,7 @@ const A_IJ = _agg(["i", "j"], ["i" => "S", "j" => "T"],
         # repeated clause — that is what stops a six-species regrid from
         # rebuilding the STRtree (and its adjacency views) six times.
         clause = EA.expression_from_json(A_IJ).join[1]
-        cache = Dict{Tuple{Vector{String},Vector{String},Float64},EA._OverlapIndex}()
+        cache = Dict{Tuple{Vector{String}, Vector{String}, Float64}, EA._OverlapIndex}()
         a = EA._geo_overlap_index(clause, ENV0, cache)
         b = EA._geo_overlap_index(clause, ENV0, cache)
         @test a === b

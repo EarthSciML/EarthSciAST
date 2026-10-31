@@ -33,12 +33,14 @@ Base.showerror(io::IO, e::EditError) = print(io, "EditError: ", e.msg)
 # being silently dropped/reset. Private to edit.jl.
 # ----------------------------------------------------------------------------
 
-function _rebuild(model::Model;
-                  variables = model.variables,
-                  equations = model.equations,
-                  discrete_events = model.discrete_events,
-                  continuous_events = model.continuous_events,
-                  subsystems = model.subsystems)
+function _rebuild(
+        model::Model;
+        variables = model.variables,
+        equations = model.equations,
+        discrete_events = model.discrete_events,
+        continuous_events = model.continuous_events,
+        subsystems = model.subsystems
+    )
     return Model(
         variables, equations, discrete_events, continuous_events, subsystems;
         tolerance = model.tolerance,
@@ -51,9 +53,11 @@ function _rebuild(model::Model;
     )
 end
 
-function _rebuild(system::ReactionSystem;
-                  species = system.species,
-                  reactions = system.reactions)
+function _rebuild(
+        system::ReactionSystem;
+        species = system.species,
+        reactions = system.reactions
+    )
     return ReactionSystem(
         species, reactions;
         parameters = system.parameters,
@@ -68,14 +72,16 @@ function _rebuild(system::ReactionSystem;
     )
 end
 
-function _rebuild(file::EsmFile;
-                  esm = file.esm,
-                  metadata = file.metadata,
-                  models = file.models,
-                  reaction_systems = file.reaction_systems,
-                  data_sources = file.data_sources,
-                  coupling = file.coupling,
-                  domain = file.domain)
+function _rebuild(
+        file::EsmFile;
+        esm = file.esm,
+        metadata = file.metadata,
+        models = file.models,
+        reaction_systems = file.reaction_systems,
+        data_sources = file.data_sources,
+        coupling = file.coupling,
+        domain = file.domain
+    )
     return EsmFile(
         esm, metadata;
         models = models,
@@ -118,7 +124,7 @@ function add_variable(model::Model, name::String, variable::ModelVariable)::Mode
 
     new_variables[name] = variable
 
-    return _rebuild(model; variables=new_variables)
+    return _rebuild(model; variables = new_variables)
 end
 
 """
@@ -153,7 +159,7 @@ function remove_variable(model::Model, name::String)::Model
 
     delete!(new_variables, name)
 
-    return _rebuild(model; variables=new_variables)
+    return _rebuild(model; variables = new_variables)
 end
 
 """
@@ -186,10 +192,10 @@ function rename_variable(model::Model, old_name::String, new_name::String)::Mode
             substitute(eq.lhs, substitution),
             substitute(eq.rhs, substitution)
         )
-        for eq in model.equations
+            for eq in model.equations
     ]
 
-    return _rebuild(model; variables=new_variables, equations=new_equations)
+    return _rebuild(model; variables = new_variables, equations = new_equations)
 end
 
 # Equation operations (Section 4.2)
@@ -205,7 +211,7 @@ function add_equation(model::Model, equation::Equation)::Model
     new_equations = copy(model.equations)
     push!(new_equations, equation)
 
-    return _rebuild(model; equations=new_equations)
+    return _rebuild(model; equations = new_equations)
 end
 
 """
@@ -226,7 +232,7 @@ function remove_equation(model::Model, index::Int)::Model
     new_equations = copy(model.equations)
     deleteat!(new_equations, index)
 
-    return _rebuild(model; equations=new_equations)
+    return _rebuild(model; equations = new_equations)
 end
 
 function remove_equation(model::Model, lhs_pattern::ASTExpr)::Model
@@ -253,10 +259,10 @@ function substitute_in_equations(model::Model, bindings::Dict{String, ASTExpr}):
             substitute(eq.lhs, bindings),
             substitute(eq.rhs, bindings)
         )
-        for eq in model.equations
+            for eq in model.equations
     ]
 
-    return _rebuild(model; equations=new_equations)
+    return _rebuild(model; equations = new_equations)
 end
 
 # Reaction operations (Section 4.3)
@@ -270,7 +276,7 @@ function add_reaction(system::ReactionSystem, reaction::Reaction)::ReactionSyste
     new_reactions = copy(system.reactions)
     push!(new_reactions, reaction)
 
-    return _rebuild(system; reactions=new_reactions)
+    return _rebuild(system; reactions = new_reactions)
 end
 
 """
@@ -287,7 +293,7 @@ function remove_reaction(system::ReactionSystem, id::String)::ReactionSystem
         throw(EditError("No reaction found with id: $id"))
     end
 
-    return _rebuild(system; reactions=new_reactions)
+    return _rebuild(system; reactions = new_reactions)
 end
 
 """
@@ -310,7 +316,7 @@ function add_species(system::ReactionSystem, name::String, species::Species)::Re
 
     push!(new_species, species)
 
-    return _rebuild(system; species=new_species)
+    return _rebuild(system; species = new_species)
 end
 
 """
@@ -345,7 +351,7 @@ function remove_species(system::ReactionSystem, name::String)::ReactionSystem
     # Remove species
     new_species = filter(s -> s.name != name, system.species)
 
-    return _rebuild(system; species=new_species)
+    return _rebuild(system; species = new_species)
 end
 
 # Event operations (Section 4.4)
@@ -359,7 +365,7 @@ function add_continuous_event(model::Model, event::ContinuousEvent)::Model
     new_events = copy(model.continuous_events)
     push!(new_events, event)
 
-    return _rebuild(model; continuous_events=new_events)
+    return _rebuild(model; continuous_events = new_events)
 end
 
 """
@@ -371,7 +377,7 @@ function add_discrete_event(model::Model, event::DiscreteEvent)::Model
     new_events = copy(model.discrete_events)
     push!(new_events, event)
 
-    return _rebuild(model; discrete_events=new_events)
+    return _rebuild(model; discrete_events = new_events)
 end
 
 """
@@ -394,11 +400,11 @@ function remove_event(model::Model, description::String)::Model
     new_discrete = filter(e -> (e.description !== nothing ? e.description : "") != description, discrete_events)
 
     if length(new_continuous) == length(continuous_events) &&
-       length(new_discrete) == length(discrete_events)
+            length(new_discrete) == length(discrete_events)
         throw(EditError("Event with description '$description' not found"))
     end
 
-    return _rebuild(model; discrete_events=new_discrete, continuous_events=new_continuous)
+    return _rebuild(model; discrete_events = new_discrete, continuous_events = new_continuous)
 end
 
 # Coupling operations (Section 4.5)
@@ -412,7 +418,7 @@ function add_coupling(file::EsmFile, entry::CouplingEntry)::EsmFile
     new_coupling = copy(file.coupling)
     push!(new_coupling, entry)
 
-    return _rebuild(file; coupling=new_coupling)
+    return _rebuild(file; coupling = new_coupling)
 end
 
 """
@@ -429,7 +435,7 @@ function remove_coupling(file::EsmFile, index::Int)::EsmFile
     new_coupling = copy(file.coupling)
     deleteat!(new_coupling, index)
 
-    return _rebuild(file; coupling=new_coupling)
+    return _rebuild(file; coupling = new_coupling)
 end
 
 """
@@ -450,8 +456,10 @@ variable reference `from` into `to`. `transform` names the transform function
 (e.g. `"identity"`, `"affine"`) or is an `ASTExpr` operator node evaluated on the
 source value (esm-spec §10.4 expression transform).
 """
-function map_variable(file::EsmFile, from::String, to::String;
-                      transform::Union{String,ASTExpr}="identity")::EsmFile
+function map_variable(
+        file::EsmFile, from::String, to::String;
+        transform::Union{String, ASTExpr} = "identity"
+    )::EsmFile
     coupling_entry = CouplingVariableMap(from, to, transform)
     return add_coupling(file, coupling_entry)
 end
@@ -488,14 +496,16 @@ function Base.merge(file_a::EsmFile, file_b::EsmFile)::EsmFile
     # Merge other fields (file_b takes precedence)
     merged_metadata = file_b.metadata
 
-    return _rebuild(file_b;
-        esm=file_b.esm,  # Use file_b's version
-        metadata=merged_metadata,
-        models=merged_models,
-        reaction_systems=merged_reaction_systems,
-        data_sources=merged_data_sources,
-        coupling=merged_coupling,
-        domain=merged_domain)
+    return _rebuild(
+        file_b;
+        esm = file_b.esm,  # Use file_b's version
+        metadata = merged_metadata,
+        models = merged_models,
+        reaction_systems = merged_reaction_systems,
+        data_sources = merged_data_sources,
+        coupling = merged_coupling,
+        domain = merged_domain
+    )
 end
 
 """
@@ -508,9 +518,9 @@ coupling entries that reference it. Throws [`EditError`](@ref) if the
 component does not exist.
 """
 function extract(file::EsmFile, component_name::String)::EsmFile
-    extracted_models = Dict{String,Model}()
-    extracted_reaction_systems = Dict{String,ReactionSystem}()
-    extracted_data_sources = Dict{String,DataSource}()
+    extracted_models = Dict{String, Model}()
+    extracted_reaction_systems = Dict{String, ReactionSystem}()
+    extracted_data_sources = Dict{String, DataSource}()
 
     found = false
     if file.models !== nothing && haskey(file.models, component_name)
@@ -542,7 +552,7 @@ function extract(file::EsmFile, component_name::String)::EsmFile
             from_parts = split(coupling.from, ".")
             to_parts = split(coupling.to, ".")
             involves_component = (length(from_parts) > 0 && from_parts[1] == component_name) ||
-                                (length(to_parts) > 0 && to_parts[1] == component_name)
+                (length(to_parts) > 0 && to_parts[1] == component_name)
         elseif coupling isa CouplingOperatorApply
             involves_component = (coupling.operator == component_name)
         end
@@ -552,9 +562,11 @@ function extract(file::EsmFile, component_name::String)::EsmFile
         end
     end
 
-    return _rebuild(file;
-        models=extracted_models,
-        reaction_systems=extracted_reaction_systems,
-        data_sources=extracted_data_sources,
-        coupling=relevant_coupling)
+    return _rebuild(
+        file;
+        models = extracted_models,
+        reaction_systems = extracted_reaction_systems,
+        data_sources = extracted_data_sources,
+        coupling = relevant_coupling
+    )
 end

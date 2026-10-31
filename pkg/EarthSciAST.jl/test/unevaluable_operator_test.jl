@@ -13,18 +13,23 @@ using JSON3
 const _UO = EarthSciAST
 
 const _UO_FIXTURE = JSON3.read(
-    read(joinpath(@__DIR__, "..", "..", "..", "tests", "conformance",
-                  "unevaluable_operator", "cases.json"), String),
-    Dict{String,Any})
+    read(
+        joinpath(
+            @__DIR__, "..", "..", "..", "tests", "conformance",
+            "unevaluable_operator", "cases.json"
+        ), String
+    ),
+    Dict{String, Any}
+)
 
 # `D(u) = rhs` with `u` a state and `p` a parameter, built through the public
 # `build_evaluator`.
 function _uo_build(rhs::_UO.ASTExpr)
-    vars = Dict{String,ModelVariable}(
-        "u" => ModelVariable(UnknownVariable; default=1.0),
-        "p" => ModelVariable(ParameterVariable; default=2.0),
+    vars = Dict{String, ModelVariable}(
+        "u" => ModelVariable(UnknownVariable; default = 1.0),
+        "p" => ModelVariable(ParameterVariable; default = 2.0),
     )
-    eq = _UO.Equation(OpExpr("D", _UO.ASTExpr[VarExpr("u")]; wrt="t"), rhs)
+    eq = _UO.Equation(OpExpr("D", _UO.ASTExpr[VarExpr("u")]; wrt = "t"), rhs)
     return EarthSciAST._build_evaluator(_UO.Model(vars, _UO.Equation[eq]))
 end
 
@@ -36,7 +41,7 @@ catch e
 end
 
 _uo_compile(e::_UO.ASTExpr) =
-    _UO._compile(e, Dict{String,Int}(), Set{Symbol}(), Dict{String,Any}())
+    _UO._compile(e, Dict{String, Int}(), Set{Symbol}(), Dict{String, Any}())
 
 @testset "unevaluable_operator (esm-spec §9.6.6)" begin
 
@@ -48,15 +53,18 @@ _uo_compile(e::_UO.ASTExpr) =
             @test err isa _UO.TreeWalkError && occursin("'$(c["op"])'", err.detail)
         end
         f!, u0, p, _tspan, vm = _uo_build(
-            _UO.expression_from_json(_UO_FIXTURE["control"]["expression"]))
+            _UO.expression_from_json(_UO_FIXTURE["control"]["expression"])
+        )
         du = similar(u0)
         f!(du, u0, p, 0.0)
         @test du[vm["u"]] == _UO_FIXTURE["control"]["expected"]
     end
 
     @testset "a core op with no rule is refused when compiled" begin
-        for op in ("rank", "distinct", "argmin", "argmax", "skolem",
-                   "reshape", "transpose", "concat")
+        for op in (
+                "rank", "distinct", "argmin", "argmax", "skolem",
+                "reshape", "transpose", "concat",
+            )
             err = _uo_refusal(() -> _uo_compile(OpExpr(op, _UO.ASTExpr[NumExpr(1.0)])))
             @test err isa _UO.TreeWalkError && err.code == "unevaluable_operator"
             @test err isa _UO.TreeWalkError && occursin("'$op'", err.detail)
@@ -67,8 +75,10 @@ _uo_compile(e::_UO.ASTExpr) =
         # A subexpression that occurs twice is a CSE candidate. `skolem` and
         # `apply_expression_template` are not rewrite targets, so hoisting used to
         # route them into a generic CSE node that failed only at the first RHS call.
-        for node in (OpExpr("skolem", _UO.ASTExpr[VarExpr("u")]),
-                     OpExpr("rank", _UO.ASTExpr[VarExpr("u")]))
+        for node in (
+                OpExpr("skolem", _UO.ASTExpr[VarExpr("u")]),
+                OpExpr("rank", _UO.ASTExpr[VarExpr("u")]),
+            )
             rhs = OpExpr("+", _UO.ASTExpr[node, node])
             err = _uo_refusal(() -> _uo_build(rhs))
             @test err isa _UO.TreeWalkError && err.code == "unevaluable_operator"
@@ -77,9 +87,12 @@ _uo_compile(e::_UO.ASTExpr) =
         # document's registry, and refused BY NAME when none reached the build
         # (`E_TREEWALK_UNRESOLVED_TEMPLATE_REF`); what this pins is that it is
         # no longer a hoist candidate that could slip past `_compile_op`.
-        tmpl = _UO.expression_from_json(Dict{String,Any}(
-            "op" => "apply_expression_template", "args" => Any[], "name" => "tmpl",
-            "bindings" => Dict{String,Any}()))
+        tmpl = _UO.expression_from_json(
+            Dict{String, Any}(
+                "op" => "apply_expression_template", "args" => Any[], "name" => "tmpl",
+                "bindings" => Dict{String, Any}()
+            )
+        )
         @test !_UO._cse_hoistable(tmpl)
         @test !_UO._cse_hoistable(OpExpr("skolem", _UO.ASTExpr[VarExpr("u")]))
     end
