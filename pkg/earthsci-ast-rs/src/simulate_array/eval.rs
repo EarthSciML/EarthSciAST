@@ -3191,6 +3191,15 @@ pub(super) fn reduce_contraction(
             eval(body, ctx).as_scalar().unwrap_or(f64::NAN)
         };
     }
+    // A ragged dim whose parent is itself CONTRACTED (esm-spec §4.3.1 "Ragged
+    // ranges"): its bound is not known until the parent is bound, so the box is
+    // not a Cartesian product. Walk it as a nest, parent outer to child.
+    if static_ranges.is_none() && has_contracted_ragged_parent(contract_names, contract_dims) {
+        let order = parent_first_order(contract_names, contract_dims);
+        let mut acc = reduce.identity();
+        fold_dependent_nest(spec, contract_dims, &order, 0, &mut acc, ctx);
+        return acc;
+    }
     // Resolve each contracted dim to a concrete (lo, hi). When every dim is
     // static (the common case) the caller passes the bounds it computed ONCE
     // outside the output loop — they are cell-independent — so we skip the
@@ -4908,6 +4917,81 @@ pub(super) fn run_prefix_scan(
             let term = term_at(i, ctx);
             acc = reduce.combine(acc, term);
         }
+    }
+}
+
+/// Does any ragged contracted dim name another CONTRACTED index among its
+/// parents? Its bound then depends on that index's current value, which only a
+/// nested walk binds in time.
+pub(super) fn has_contracted_ragged_parent(
+    contract_names: &[String],
+    contract_dims: &[ContractDim],
+) -> bool {
+    contract_dims.iter().any(|d| match d {
+        ContractDim::Ragged { of, .. } => of.iter().any(|p| contract_names.contains(p)),
+        _ => false,
+    })
+}
+
+/// The contracted dims' visit order for a nest: the node's usual order (first
+/// listed outermost, as [`CartesianTuples`] walks it), except that a ragged dim
+/// is moved after every contracted parent it reads, stably. Its bound depends
+/// on the parent, so the parent must be outer (esm-spec §4.3.1).
+pub(super) fn parent_first_order(
+    contract_names: &[String],
+    contract_dims: &[ContractDim],
+) -> SmallVec<[usize; 4]> {
+    let n = contract_names.len();
+    let parents = |i: usize| -> SmallVec<[usize; 2]> {
+        match &contract_dims[i] {
+            ContractDim::Ragged { of, .. } => of
+                .iter()
+                .filter_map(|p| contract_names.iter().position(|c| c == p))
+                .filter(|&j| j != i)
+                .collect(),
+            _ => SmallVec::new(),
+        }
+    };
+    let mut order: SmallVec<[usize; 4]> = SmallVec::new();
+    let mut placed = vec![false; n];
+    while order.len() < n {
+        // The first unplaced dim whose contracted parents are all placed; a
+        // cycle (never valid) falls back to the first unplaced dim.
+        let next = (0..n)
+            .find(|&i| !placed[i] && parents(i).iter().all(|&j| placed[j]))
+            .or_else(|| (0..n).find(|&i| !placed[i]))
+            .expect("an unplaced dim remains");
+        placed[next] = true;
+        order.push(next);
+    }
+    order
+}
+
+/// Fold the contraction as a nest over `order[depth..]`, resolving each dim's
+/// bound only once every outer dim is bound, ascending at every level (the left
+/// fold of the terms in visit order). A filtered-out point is skipped, exactly
+/// as the Cartesian walk in [`reduce_contraction`] skips it.
+fn fold_dependent_nest(
+    spec: &ReduceSpec,
+    contract_dims: &[ContractDim],
+    order: &[usize],
+    depth: usize,
+    acc: &mut f64,
+    ctx: &mut EvalCtx,
+) {
+    if depth == order.len() {
+        if filter_excludes(spec.filter, spec.cell, ctx) {
+            return;
+        }
+        let term = eval(spec.body, ctx).as_scalar().unwrap_or(f64::NAN);
+        *acc = spec.reduce.combine(*acc, term);
+        return;
+    }
+    let d = order[depth];
+    let (lo, hi) = contract_dims[d].concrete(ctx);
+    for v in lo..=hi {
+        set_bind(&mut ctx.loop_binds, &spec.contract_names[d], v);
+        fold_dependent_nest(spec, contract_dims, order, depth + 1, acc, ctx);
     }
 }
 

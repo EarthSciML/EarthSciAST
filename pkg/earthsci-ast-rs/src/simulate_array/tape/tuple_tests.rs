@@ -748,3 +748,110 @@ fn an_all_negative_zero_ragged_row_sums_to_positive_zero() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// A ragged range whose parent is itself contracted (esm-spec §4.3.1).
+// ---------------------------------------------------------------------------
+
+/// `v'[d] = Σ_z Σ_{k ∈ nz(z)} w[z, k] · g[cols[z, k]] · v[d]`: the ragged
+/// symbol's parent `z` is contracted, not an output index, so `k`'s bound is
+/// read under each `z` and `z` runs outer to `k` (although `k` sorts first).
+/// `out` adds a free output index, or leaves the node rank-0 into a scalar.
+fn contracted_parent_doc(free_output: bool) -> Value {
+    let body = json!({"op": "*", "args": [
+        {"op": "index", "args": ["w", "z", "k"]},
+        {"op": "index", "args": ["g", {"op": "index", "args": ["cols", "z", "k"]}]}]});
+    let (lhs, rhs, v_shape) = if free_output {
+        (
+            json!({"op": "faq", "args": [], "output_idx": ["d"],
+                   "expr": {"op": "D", "args": [{"op": "index", "args": ["v", "d"]}], "wrt": "t"},
+                   "ranges": {"d": {"from": "dd"}}}),
+            json!({"op": "faq", "args": [], "output_idx": ["d"],
+                   "ranges": {"d": {"from": "dd"}, "z": {"from": "rows"}, "k": {"from": "nz", "of": ["z"]}},
+                   "expr": {"op": "*", "args": [body, {"op": "index", "args": ["v", "d"]}]}}),
+            json!(["dd"]),
+        )
+    } else {
+        (
+            json!({"op": "D", "args": ["v"], "wrt": "t"}),
+            json!({"op": "faq", "args": [], "output_idx": [],
+                   "ranges": {"z": {"from": "rows"}, "k": {"from": "nz", "of": ["z"]}},
+                   "expr": body}),
+            json!([]),
+        )
+    };
+    json!({
+        "esm": "1.1.0",
+        "metadata": {"name": "ragged_contracted_parent", "authors": ["tape tests"]},
+        "index_sets": {
+            "rows": {"kind": "interval", "size": 4},
+            "maxnz": {"kind": "interval", "size": 3},
+            "members": {"kind": "interval", "size": 5},
+            "dd": {"kind": "interval", "size": 2},
+            "nz": {"kind": "ragged", "of": ["rows"], "offsets": "cnt", "values": "cols"}
+        },
+        "models": {"M": {
+            "variables": {
+                "cnt": {"type": "unknown", "units": "1", "shape": ["rows"]},
+                "cols": {"type": "unknown", "units": "1", "shape": ["rows", "maxnz"]},
+                "w": {"type": "unknown", "units": "1", "shape": ["rows", "maxnz"]},
+                "g": {"type": "unknown", "units": "1", "shape": ["members"]},
+                "v": {"type": "unknown", "units": "1", "shape": v_shape, "default": 1.0}
+            },
+            "equations": [
+                {"lhs": "cnt", "rhs": cnst(json!(CP_CNT))},
+                {"lhs": "cols", "rhs": cnst(json!(CP_COLS))},
+                {"lhs": "w", "rhs": cnst(json!(CP_W))},
+                {"lhs": "g", "rhs": cnst(json!(CP_G))},
+                {"lhs": lhs, "rhs": rhs}
+            ]
+        }}
+    })
+}
+
+const CP_CNT: [f64; 4] = [2.0, 0.0, 3.0, 1.0];
+const CP_COLS: [[f64; 3]; 4] = [
+    [4.0, 1.0, 0.0],
+    [0.0, 0.0, 0.0],
+    [2.0, 5.0, 3.0],
+    [3.0, 0.0, 0.0],
+];
+const CP_W: [[f64; 3]; 4] = [
+    [1e16, 1.5, 0.0],
+    [0.0, 0.0, 0.0],
+    [-1e16, 0.125, 7.0],
+    [-3.25, 0.0, 0.0],
+];
+const CP_G: [f64; 5] = [1.0, 0.5, 3.0, 1.0, 2.0];
+
+/// The naive nest: `z` outer, `k` ascending, one left fold from `+0.0`.
+fn contracted_parent_sum() -> f64 {
+    let mut acc = 0.0;
+    for z in 0..4 {
+        for k in 0..CP_CNT[z] as usize {
+            acc += CP_W[z][k] * CP_G[CP_COLS[z][k] as usize - 1];
+        }
+    }
+    acc
+}
+
+#[test]
+fn a_ragged_range_whose_parent_is_contracted_folds_the_parent_outer() {
+    let want = contracted_parent_sum();
+    // Cancelling magnitudes: any other visit order shows in the bits.
+    assert_ne!(want, 0.0);
+    for free_output in [false, true] {
+        let doc = contracted_parent_doc(free_output);
+        let prog = ab_check(doc.clone(), -2.0, 2.0);
+        assert_eq!(count(&prog, "SegReduce"), 1, "free output: {free_output}");
+        let compiled = super::array_tests::compile(doc);
+        let state: Vec<f64> = if free_output {
+            vec![1.0, -2.0]
+        } else {
+            vec![1.0]
+        };
+        let (dy, _) = compiled.debug_eval_rhs(&state, 0.0, &HashMap::new(), false);
+        let expect: Vec<f64> = state.iter().map(|&v| want * v).collect();
+        assert_eq!(dy, expect, "free output: {free_output}");
+    }
+}

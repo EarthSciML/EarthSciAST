@@ -21,17 +21,17 @@
 //!
 //! The map from points to cells is computed here, at build time, so `e` must
 //! be build-time data: index names, literals, baked parameters, build-time
-//! scalars and gathers of build-time arrays, combined by arithmetic and
-//! comparisons ([`IxNode`]), each evaluated with the interpreter's own scalar
-//! kernels. An `e` that reads a run-time value (a state, a tunable parameter,
+//! scalars and gathers of build-time arrays, combined by arithmetic,
+//! `floor`, `ceil`, `abs`, `sign` and comparisons ([`IxNode`]), each
+//! evaluated with the interpreter's own scalar kernels. An `e` that reads a run-time value (a state, a tunable parameter,
 //! the time) is declined, and the contraction keeps its dense lowering. A
 //! remaining conjunct the build cannot evaluate stays in the filter the tuple
 //! list lowers as a run-time mask, which skips a term exactly as the
 //! interpreter's `continue` does.
 
-use super::tuples::{DimBound, TupleList, TupleSpec, ragged_bound};
+use super::tuples::{DimBound, TupleList, TupleSpec, parent_first_order, walk_nest};
 use super::*;
-use crate::simulate_array::eval::{apply_binary, fold_scalar};
+use crate::simulate_array::eval::{apply_binary, apply_unary, fold_scalar};
 use std::rc::Rc;
 
 /// The most points one scatter's build-time walk visits: a bound on build
@@ -45,6 +45,8 @@ enum IxNode {
     /// A loop symbol: its position in the point's value vector.
     Sym(usize),
     Neg(Box<IxNode>),
+    /// `floor`, `ceil`, `abs`, `sign`: `eval_unary`'s kernel.
+    Un(&'static str, Box<IxNode>),
     /// An n-ary `+ - * / and or`, folded as `eval_arith` folds it.
     Fold(&'static str, Vec<IxNode>),
     /// A two-operand comparison, `eval_binary`'s kernel.
@@ -68,6 +70,7 @@ impl IxNode {
             IxNode::Lit(x) => *x,
             IxNode::Sym(k) => pt[*k],
             IxNode::Neg(a) => -a.eval(pt)?,
+            IxNode::Un(op, a) => apply_unary(op, a.eval(pt)?),
             IxNode::Fold(op, args) => {
                 let mut vs: SmallVec<[f64; 4]> = SmallVec::with_capacity(args.len());
                 for a in args {
@@ -176,6 +179,18 @@ impl TapeBuilder<'_> {
                     ">" => ">",
                     ">=" => ">=",
                     "index" => return self.ix_compile_index(n, syms),
+                    "floor" | "ceil" | "abs" | "sign" => {
+                        let op: &'static str = match n.op.as_str() {
+                            "floor" => "floor",
+                            "ceil" => "ceil",
+                            "abs" => "abs",
+                            _ => "sign",
+                        };
+                        let [a] = &n.args[..] else {
+                            return None;
+                        };
+                        return Some(IxNode::Un(op, Box::new(self.ix_compile(a, syms)?)));
+                    }
                     _ => return None,
                 };
                 if n.args.is_empty() {
@@ -263,15 +278,18 @@ impl TapeBuilder<'_> {
         if pins.iter().all(Option::is_none) {
             return Ok(None);
         }
-        // The contracted box. A ragged bound may vary only with a free
-        // output index: a pinned cell is not known until its point is.
+        // The contracted ranges. A ragged bound may read a free output index
+        // or a contracted one, never a pinned output index: a pinned cell is
+        // not known until its point is.
         for d in contract_dims {
             match d {
                 ContractDim::Ragged { of, .. } => {
                     for p in of {
                         match idx_names.iter().position(|n| n == p) {
-                            Some(k) if pins[k].is_none() => {}
-                            _ => return Ok(None),
+                            Some(k) if pins[k].is_some() => return Ok(None),
+                            Some(_) => {}
+                            None if contract_names.contains(p) => {}
+                            None => return Ok(None),
                         }
                     }
                 }
@@ -281,7 +299,7 @@ impl TapeBuilder<'_> {
                 _ => {}
             }
         }
-        let Ok(bounds) = self.tuple_dim_bounds(idx_names, contract_dims) else {
+        let Ok(bounds) = self.tuple_dim_bounds(idx_names, contract_names, contract_dims) else {
             return Ok(None);
         };
         let Ok(combine_op) = self.array_combine_op(reduce, "contracted") else {
@@ -341,95 +359,80 @@ impl TapeBuilder<'_> {
         }
         let prec = crate::precision::active();
         // The walk: the free cells row-major, and in each one the contracted
-        // box in the interpreter's odometer order (the last name fastest).
-        // Each admitted point is recorded as its cell and contracted values.
+        // names in the interpreter's order — an odometer, the last name
+        // fastest, or, when a ragged bound reads a contracted index, the
+        // nest that binds each parent before the ranges it bounds
+        // (`reduce_contraction`, [`walk_nest`]). Each admitted point is
+        // recorded as its cell and contracted values.
+        let order: Vec<usize> = if bounds.iter().any(DimBound::reads_contracted) {
+            parent_first_order(&bounds)
+        } else {
+            (0..nc).collect()
+        };
         let mut cell_of: Vec<u32> = Vec::new();
         let mut at: Vec<i64> = Vec::new();
         let mut visits: u64 = 0;
+        let mut declined = false;
         let mut pt: Vec<f64> = vec![0.0; nr + nc];
         let mut cell_ix: Vec<i64> = vec![0; nr];
+        let mut cur: Vec<i64> = vec![0; nc];
         let mut fdig: SmallVec<[usize; 4]> = SmallVec::from_elem(0, free.len());
-        let mut clo: SmallVec<[i64; 4]> = SmallVec::from_elem(0, nc);
-        let mut cn: SmallVec<[usize; 4]> = SmallVec::from_elem(0, nc);
-        let mut cdig: SmallVec<[usize; 4]> = SmallVec::from_elem(0, nc);
         for _ in 0..n_free {
             for (k, &d) in free.iter().enumerate() {
                 cell_ix[d] = lo[d] + fdig[k] as i64;
                 pt[d] = cell_ix[d] as f64;
             }
-            // This free cell's contracted bounds (`ContractDim::concrete`).
-            for (k, b) in bounds.iter().enumerate() {
-                let (l, h) = match b {
-                    DimBound::Static(l, h) => (*l, *h),
-                    DimBound::Ragged {
-                        shape: osh,
-                        vals,
-                        parents,
-                    } => (1, ragged_bound(osh, vals, parents, &cell_ix)),
-                };
-                clo[k] = l;
-                cn[k] = (h - l + 1).max(0) as usize;
-            }
-            let n_box: usize = cn.iter().product();
-            visits += n_box as u64;
-            if visits > MAX_SCATTER_VISITS {
-                return Ok(None);
-            }
-            cdig.iter_mut().for_each(|x| *x = 0);
-            for _ in 0..n_box {
+            let mut point = |c: &[i64]| -> bool {
+                visits += 1;
+                if visits > MAX_SCATTER_VISITS {
+                    declined = true;
+                    return false;
+                }
                 for k in 0..nc {
-                    pt[nr + k] = (clo[k] + cdig[k] as i64) as f64;
+                    pt[nr + k] = c[k] as f64;
                 }
                 let mut cell = 0usize;
-                let mut keep = true;
                 for d in 0..nr {
                     if let Some(node) = &pin_nodes[d] {
                         let Ok(v) = node.eval(&pt) else {
-                            return Ok(None);
+                            declined = true;
+                            return false;
                         };
                         let off = v - lo[d] as f64;
                         if !(v.fract() == 0.0 && off >= 0.0 && off < shape[d] as f64) {
-                            keep = false;
-                            break;
+                            return true;
                         }
                         pt[d] = v;
                     }
                     cell += (pt[d] as i64 - lo[d]) as usize * strides[d];
                 }
-                if keep {
-                    for n in &static_rest {
-                        let Ok(v) = n.eval(&pt) else {
-                            return Ok(None);
-                        };
-                        // `fold_scalar`'s `and`: nonzero at the working
-                        // precision; a bare conjunct, the filter's own
-                        // `== 0.0` test.
-                        let held = if is_and {
-                            prec.round(v) != 0.0
-                        } else {
-                            v != 0.0
-                        };
-                        if !held {
-                            keep = false;
-                            break;
-                        }
+                for n in &static_rest {
+                    let Ok(v) = n.eval(&pt) else {
+                        declined = true;
+                        return false;
+                    };
+                    // `fold_scalar`'s `and`: nonzero at the working
+                    // precision; a bare conjunct, the filter's own
+                    // `== 0.0` test.
+                    let held = if is_and {
+                        prec.round(v) != 0.0
+                    } else {
+                        v != 0.0
+                    };
+                    if !held {
+                        return true;
                     }
                 }
-                if keep {
-                    if cell_of.len() >= MAX_PROMOTED_ELEMS {
-                        return Ok(None);
-                    }
-                    cell_of.push(cell as u32);
-                    at.extend((0..nc).map(|k| clo[k] + cdig[k] as i64));
+                if cell_of.len() >= MAX_PROMOTED_ELEMS {
+                    declined = true;
+                    return false;
                 }
-                // Next contracted point, the last name fastest.
-                for k in (0..nc).rev() {
-                    cdig[k] += 1;
-                    if cdig[k] < cn[k] {
-                        break;
-                    }
-                    cdig[k] = 0;
-                }
+                cell_of.push(cell as u32);
+                at.extend_from_slice(c);
+                true
+            };
+            if !walk_nest(&bounds, &order, 0, &cell_ix, &mut cur, &mut point) || declined {
+                return Ok(None);
             }
             for k in (0..free.len()).rev() {
                 fdig[k] += 1;
