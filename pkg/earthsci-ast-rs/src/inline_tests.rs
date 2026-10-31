@@ -2470,12 +2470,18 @@ fn asserted_data_fields(
 /// DATA-FED parameter (`update: {kind: "data"}`, esm-spec §5.4), whose field is
 /// the provider's values (finding F43). Never a state, and never an ordinary
 /// parameter — a value the build did not materialize is not guessed at.
+///
+/// On wasm32 there is no build pipeline and so no ingested field: only the
+/// observed half applies.
 fn is_build_field_variable(model: &crate::types::Model, variable: &str) -> bool {
-    model
+    #[cfg(not(target_arch = "wasm32"))]
+    let data_fed = model
         .variables
         .get(variable)
-        .is_some_and(|v| v.update.as_ref().is_some_and(crate::data_fed::is_data_fed))
-        || crate::classification::Classification::of(model).is_observed(variable)
+        .is_some_and(|v| v.update.as_ref().is_some_and(crate::data_fed::is_data_fed));
+    #[cfg(target_arch = "wasm32")]
+    let data_fed = false;
+    data_fed || crate::classification::Classification::of(model).is_observed(variable)
 }
 
 /// Run every inline test of one COMPONENT, appending per-assertion results.
