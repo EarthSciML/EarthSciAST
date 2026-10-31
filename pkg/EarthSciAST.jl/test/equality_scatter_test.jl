@@ -405,6 +405,29 @@ const _SX_CANCEL = (1.0e16, 1.0, -1.0e16, 1.0)
         _sx_check(doc, _sx_ics([n], i -> _SX_CANCEL[mod1(i, 4)] * i); form = :shift)
     end
 
+    @testset "a ragged range whose parent is contracted is left to the nest" begin
+        # `pm[j] = Σ_{r, k ∈ row r : j == block(rowMem[r,k])}`: `k`'s range reads
+        # the contracted `r`, so the terms are a nest (parent outer), not the
+        # product the scatter walks. The scatter declines it and the nest's
+        # table form takes it, equal to the interpreter.
+        path = joinpath(
+            @__DIR__, "..", "..", "..", "tests", "conformance", "faq_equality_scatter",
+            "fixtures", "ragged_contracted_parent.esm"
+        )
+        doc = JSON3.read(read(path, String), Dict{String, Any})
+        dus = map((:native, :interpreter)) do c
+            ESX._reset_cascade_tally!()
+            f!, u0, p, _t, vm = ESX._build_evaluator(doc; model_name = "Scatter", compiler = c)
+            tally = copy(ESX._CASCADE_TALLY)
+            du = fill(NaN, length(u0))
+            f!(du, u0, p, 0.0)
+            names = sort!(collect(keys(vm)))
+            (Float64[du[vm[nm]] for nm in names], tally)
+        end
+        @test _sx_bits(dus[1][1]) == _sx_bits(dus[2][1])
+        @test _sx_fired(dus[1][2]) == 0
+    end
+
     @testset "EarthSciASTDiff product documents" begin
         # Copied from EarthSciASTDiff's tests/goldens (68fe059): Jᵀλ and hvp
         # products spelled as whole-array sums of equality-filtered faqs over

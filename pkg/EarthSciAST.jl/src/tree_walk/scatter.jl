@@ -102,6 +102,10 @@ function _detect_equality_scatter(
         push!(rest, c)
     end
     isempty(pins) && return nothing
+    # A ragged range whose parent is another CONTRACTED index is walked as a
+    # nest, parent outer (`_contract_nest`, resolve.jl), not as the product
+    # this pass enumerates; that shape is left to the nest's table form.
+    _contracted_parent_deps(contract_names, contract_ranges) === nothing || return nothing
     # A ragged contracted range is laid out per combination of the FREE output
     # indices, so its bound must read no pinned one.
     pinned_names = Set{String}(idx_names[p] for (p, _) in pins)
