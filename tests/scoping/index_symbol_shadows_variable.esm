@@ -1,0 +1,77 @@
+{
+  "esm": "1.1.0",
+  "metadata": {
+    "name": "IndexSymbolShadowsVariable",
+    "description": "A faq loop symbol spelled like a variable of the model that holds the equation (esm-spec §4.3, §4.7.5). The model declares parameters `j` and `k`. In the first equation the outer faq binds `j`, so inside it `j` is the loop index and `k` is the parameter; the nested faq binds `k`, so inside it `k` is the loop index. In the second equation nothing binds `j`, so it is the parameter. Flattening must prefix exactly the parameter references: Shadow.k and Shadow.j outside a binder, never the bound `j` or `k`. EarthSciAST.jl 0.6.0 prefixed the loop symbols too, turning u[j] into u[Shadow.j].",
+    "authors": [
+      "ESM Test Suite"
+    ],
+    "tags": [
+      "scoping",
+      "faq",
+      "index-symbols",
+      "shadowing"
+    ]
+  },
+  "index_sets": {
+    "cell": {
+      "kind": "interval",
+      "size": 3
+    }
+  },
+  "models": {
+    "Shadow": {
+      "variables": {
+        "u": {
+          "type": "unknown",
+          "shape": ["cell"],
+          "default": 1.0,
+          "description": "Arrayed state"
+        },
+        "y": {
+          "type": "unknown",
+          "default": 1.0,
+          "description": "Scalar state"
+        },
+        "j": {
+          "type": "parameter",
+          "default": 0.5,
+          "description": "Parameter spelled like the outer loop symbol"
+        },
+        "k": {
+          "type": "parameter",
+          "default": 2.0,
+          "description": "Parameter spelled like the nested loop symbol"
+        }
+      },
+      "equations": [
+        {
+          "lhs": {"op": "D", "args": ["u"], "wrt": "t"},
+          "rhs": {
+            "op": "faq",
+            "args": [],
+            "output_idx": ["j"],
+            "ranges": {"j": [1, 3]},
+            "expr": {
+              "op": "-",
+              "args": [
+                {"op": "*", "args": ["k", {"op": "index", "args": ["u", "j"]}]},
+                {
+                  "op": "faq",
+                  "args": [],
+                  "output_idx": [],
+                  "ranges": {"k": [1, 3]},
+                  "expr": {"op": "index", "args": ["u", "k"]}
+                }
+              ]
+            }
+          }
+        },
+        {
+          "lhs": {"op": "D", "args": ["y"], "wrt": "t"},
+          "rhs": {"op": "*", "args": [{"op": "-", "args": ["j"]}, "y"]}
+        }
+      ]
+    }
+  }
+}

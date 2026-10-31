@@ -50,15 +50,25 @@ function namespace_expr(expr::VarExpr, prefix::String,
 end
 
 # Identity-memoized recursion arms: prefixing is a pure function of the node
-# (prefix and local_names are traversal-constant), so a subtree shared under
-# many parents — template expansion stores expanded ASTs as shared DAGs — is
-# rewritten ONCE and the shared result respliced. Without the memo a rewrite
-# that touches every leaf (the common case here: every local reference gets
-# the prefix) re-materializes a shared DAG as an exponential tree.
-_namespace_expr(e::NumExpr, ::String, ::Set{String}, ::IdDict{OpExpr,ASTExpr}) = e
-_namespace_expr(e::IntExpr, ::String, ::Set{String}, ::IdDict{OpExpr,ASTExpr}) = e
+# and the names in scope, so a subtree shared under many parents — template
+# expansion stores expanded ASTs as shared DAGs — is rewritten ONCE per scope
+# and the shared result respliced. Without the memo a rewrite that touches
+# every leaf (the common case here: every local reference gets the prefix)
+# re-materializes a shared DAG as an exponential tree.
+#
+# The scope is not traversal-constant: a node that binds loop symbols removes
+# them from `local_names` for its children (see `_namespace_expr(::OpExpr, …)`).
+# One subtree can therefore be rewritten differently inside and outside such a
+# node, so there is one memo per distinct `local_names` set, kept in `memos`
+# and passed down as `memo` for the current scope. Only a node whose binders
+# actually shadow a local opens a new scope (and pays for the lookup), which a
+# document without that collision never does.
+const _NsMemo = IdDict{OpExpr,ASTExpr}
+const _NsMemos = Dict{Set{String},_NsMemo}
+_namespace_expr(e::NumExpr, ::String, ::Set{String}, ::_NsMemo, ::_NsMemos) = e
+_namespace_expr(e::IntExpr, ::String, ::Set{String}, ::_NsMemo, ::_NsMemos) = e
 _namespace_expr(e::VarExpr, prefix::String, local_names::Set{String},
-                ::IdDict{OpExpr,ASTExpr}) =
+                ::_NsMemo, ::_NsMemos) =
     namespace_expr(e, prefix, local_names)
 
 # Namespace a value-equality `join`'s key-column names (RFC §5.3). A join column
@@ -110,14 +120,40 @@ end
 
 function namespace_expr(expr::OpExpr, prefix::String,
                         local_names::Set{String})::ASTExpr
-    return _namespace_expr(expr, prefix, local_names, IdDict{OpExpr,ASTExpr}())
+    memo = _NsMemo()
+    return _namespace_expr(expr, prefix, local_names, memo,
+                           _NsMemos(local_names => memo))
 end
 
 function _namespace_expr(expr::OpExpr, prefix::String,
                          local_names::Set{String},
-                         memo::IdDict{OpExpr,ASTExpr})::ASTExpr
+                         memo::_NsMemo, memos::_NsMemos)::ASTExpr
     r = get(memo, expr, nothing)
     r === nothing || return r
+    # The binder set is THIS node's own loop symbols: its `output_idx` entries
+    # and `ranges` keys. `output_idx` may hold literal singleton dimensions
+    # (Int 1) alongside symbols; only the Strings are binders.
+    binders = Set{String}()
+    if expr.output_idx !== nothing
+        for s in expr.output_idx
+            s isa AbstractString && push!(binders, String(s))
+        end
+    end
+    expr.ranges === nothing || union!(binders, keys(expr.ranges))
+    # A loop symbol is local to the node that binds it and shadows any variable
+    # of the same name throughout that node's children (esm-spec §4.3: "Index
+    # symbols are local to the enclosing `faq` node"; §4.7.5 step 1). Inside
+    # `faq(output_idx=[j], expr=index(u, j))` in a model that also declares a
+    # parameter `j`, the `j` in the body is the loop index and must stay `j`;
+    # prefixing it to `<prefix>.j` silently turns the loop into a constant
+    # subscript read from the parameter. So the children are rewritten with the
+    # binders removed from `local_names`. A nested node that does not rebind a
+    # name sees the outer binding; one that rebinds it shadows it again.
+    child_locals, child_memo = local_names, memo
+    if !isempty(binders) && !isdisjoint(binders, local_names)
+        child_locals = setdiff(local_names, binders)
+        child_memo = get!(_NsMemo, memos, child_locals)
+    end
     # Recurse into EVERY variable-bearing sub-expression via the shared
     # field-preserving rewrite so prefix rewrites reach faq / makearray
     # bodies, filter predicates (M2 §7.2), integral bounds (`lower`/`upper`),
@@ -133,7 +169,8 @@ function _namespace_expr(expr::OpExpr, prefix::String,
     # manifold, …) — earlier this rebuild hand-listed keywords and silently
     # dropped int_var/lower/upper/table/table_axes/output.
     result = map_children(
-        x -> _namespace_expr(x, prefix, local_names, memo), expr)::OpExpr
+        x -> _namespace_expr(x, prefix, child_locals, child_memo, memos),
+        expr)::OpExpr
     # `map_children` recurses into expression-bearing fields only. One field
     # carries plain-name identifiers that also need namespacing: a `join.on` key
     # column may name a component-local bin buffer (see `_namespace_join`).
@@ -141,18 +178,9 @@ function _namespace_expr(expr::OpExpr, prefix::String,
     # byte-identical to before (and skip the reconstruct copy). Index-set
     # identifier fields (`id`, `ranges[*].from`) are document-scoped (v0.8.0)
     # and never prefixed.
-    # The binder set is THIS node's own loop symbols. A join column is resolved
-    # against this node's `ranges`, so its own binders are the exact shadowing
-    # set — and a node-local set is what lets every binding implement one rule.
-    # `output_idx` may hold literal singleton dimensions (Int 1) alongside
-    # symbols; only the Strings are binders.
-    binders = Set{String}()
-    if expr.output_idx !== nothing
-        for s in expr.output_idx
-            s isa AbstractString && push!(binders, String(s))
-        end
-    end
-    expr.ranges === nothing || union!(binders, keys(expr.ranges))
+    # A join column is resolved against this node's `ranges`, so its own
+    # binders (computed above) are the exact shadowing set — and a node-local
+    # set is what lets every binding implement one rule.
     nj = _namespace_join(expr.join, binders, prefix, local_names)
     res = nj === expr.join ? result : reconstruct(result; join=nj)
     memo[expr] = res

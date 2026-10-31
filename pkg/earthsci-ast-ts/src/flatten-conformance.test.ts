@@ -168,8 +168,10 @@ describe('flatten conformance corpus (esm-libraries-spec §4.7.5 step 4)', () =>
     // flatten used to drop — and the three right-hand-side `D` resolution cases,
     // plus the thirteen `term_provenance` cases (one per row of §4.7.5's
     // per-term provenance table, and the multiplicative couple whose target
-    // also has a later bare algebraic equation).
-    expect(corpus.cases.length).toBe(43)
+    // also has a later bare algebraic equation), plus
+    // `index_symbol_shadows_variable` — faq loop symbols spelled like the
+    // model's own parameters, which must stay bare (esm-spec §4.3).
+    expect(corpus.cases.length).toBe(44)
     // 4 = template_import_lib, couple_multiplicative_no_tendency, the
     // nonterminating rewrite, and `coupling_resolution_edge_cases`, whose EDGE
     // CASE 10 maps onto a target the document declares nowhere.

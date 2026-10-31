@@ -3929,6 +3929,117 @@
       "lifted_shapes": {}
     },
     {
+      "id": "index_symbol_shadows_variable",
+      "tier": "arrayed",
+      "fixture": "scoping/index_symbol_shadows_variable.esm",
+      "system_kind": "ode",
+      "independent_variables": [
+        "t"
+      ],
+      "state_variables": [
+        {
+          "name": "Shadow.u",
+          "role": "state",
+          "units": null,
+          "default": 1.0,
+          "shape": [
+            "cell"
+          ],
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Shadow"
+        },
+        {
+          "name": "Shadow.y",
+          "role": "state",
+          "units": null,
+          "default": 1.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Shadow"
+        }
+      ],
+      "parameters": [
+        {
+          "name": "Shadow.j",
+          "role": "parameter",
+          "units": null,
+          "default": 0.5,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Shadow"
+        },
+        {
+          "name": "Shadow.k",
+          "role": "parameter",
+          "units": null,
+          "default": 2.0,
+          "shape": null,
+          "update_kinds": [],
+          "distribution_kind": null,
+          "source_system": "Shadow"
+        }
+      ],
+      "observed_variables": [],
+      "algebraic_variables": [],
+      "brownian_parameters": [],
+      "discrete_parameters": [],
+      "equation_count": 2,
+      "equations": [
+        {
+          "lhs": "D(Shadow.u)/Dt",
+          "rhs": "sum[j] (Shadow.k * Shadow.u[j] - sum[] (Shadow.u[k]) where {k in 1:3}) where {j in 1:3}",
+          "source_system": "Shadow",
+          "contributions": [
+            {
+              "rhs": "sum[j] (Shadow.k * Shadow.u[j] - sum[] (Shadow.u[k]) where {k in 1:3}) where {j in 1:3}",
+              "origins": [
+                {
+                  "component": "Shadow"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "lhs": "D(Shadow.y)/Dt",
+          "rhs": "(-Shadow.j) * Shadow.y",
+          "source_system": "Shadow",
+          "contributions": [
+            {
+              "rhs": "(-Shadow.j) * Shadow.y",
+              "origins": [
+                {
+                  "component": "Shadow"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "continuous_events": [],
+      "discrete_events": [],
+      "domain": null,
+      "metadata": {
+        "source_systems": [
+          "Shadow"
+        ],
+        "coupling_rules": [],
+        "operator_applies": [],
+        "callbacks": []
+      },
+      "index_sets": [
+        "cell"
+      ],
+      "function_tables": [],
+      "template_registry": [],
+      "field_ics": [],
+      "loader_fields": [],
+      "lifted_shapes": {}
+    },
+    {
       "id": "function_tables_linear",
       "tier": "function_tables",
       "fixture": "conformance/function_tables/linear/fixture.esm",

@@ -629,6 +629,48 @@ end
         @test !_uses_var(eq.rhs, "Sub.x")
     end
 
+    @testset "9c. Loop symbols shadow same-named variables (esm-spec §4.3)" begin
+        # A faq binder (`output_idx` entry or `ranges` key) spelled like a
+        # variable of the model holding the equation is the loop index inside
+        # the node and the variable outside it. EarthSciAST.jl 0.6.0 prefixed the
+        # bound occurrences too, so `u[j]` became `u[M.j]`, a constant
+        # subscript (found by EarthSciIntegrator's planner, PR #34).
+        E = EarthSciAST
+        locals_ = Set(["u", "y", "j", "k"])
+        # One subtree object, shared inside and outside the binder: the memo
+        # must not hand the inside rewrite to the outside occurrence.
+        shared = _op("index", _V("u"), _V("j"))
+        inner = E.OpExpr("faq", E.ASTExpr[]; output_idx=Any[],
+            ranges=Dict{String,Any}("k" => Any[1, 3]),
+            expr_body=_op("index", _V("u"), _V("k")))
+        outer = E.OpExpr("faq", E.ASTExpr[]; output_idx=Any["j"],
+            ranges=Dict{String,Any}("j" => Any[1, 3]),
+            expr_body=_op("-", _op("*", _V("k"), shared), inner),
+            filter=_op(">", _V("j"), _V("k")))
+        out = E.namespace_expr(_op("+", outer, shared), "M", locals_)
+        o = out.args[1]
+        # The binder fields themselves are untouched.
+        @test o.output_idx == Any["j"] && haskey(o.ranges, "j")
+        # Inside the outer faq: `j` is the index, `k` is still the parameter.
+        @test to_ascii(o.expr_body.args[1]) == "M.k * M.u[j]"
+        @test to_ascii(o.filter) == "j > M.k"
+        # The nested faq rebinds `k`, so inside it `k` is the index again.
+        @test to_ascii(o.expr_body.args[2].expr_body) == "M.u[k]"
+        # Outside the binder the same subtree reads the parameter.
+        @test to_ascii(out.args[2]) == "M.u[M.j]"
+
+        # End to end through `flatten`, on the shared conformance fixture.
+        flat = flatten(EarthSciAST.load_path(joinpath(TESTUTILS_REPO_ROOT,
+            "tests", "scoping", "index_symbol_shadows_variable.esm")))
+        eq_u = _find_eq(flat, "Shadow.u")
+        @test eq_u !== nothing
+        @test to_ascii(eq_u.rhs) == "sum[j] (Shadow.k * Shadow.u[j] - " *
+            "sum[] (Shadow.u[k]) where {k in 1:3}) where {j in 1:3}"
+        @test !_uses_var(eq_u.rhs, "Shadow.j")
+        eq_y = _find_eq(flat, "Shadow.y")
+        @test eq_y !== nothing && _uses_var(eq_y.rhs, "Shadow.j")
+    end
+
     @testset "14. §4.7.6 DomainUnitMismatchError from real variable_map flatten" begin
         # A variable_map with transform="identity" between two variables
         # carrying DIFFERENT declared units MUST raise DomainUnitMismatchError.

@@ -318,6 +318,15 @@
       "note": "A value-invention key column is admitted iff it is a constant factor (including x ~ const([…])); otherwise derived_index_set_unmaterialized or relational_node_in_continuous."
     },
     {
+      "id": "spec.4.3.loop-symbol-shadows-declaration",
+      "section": "4.3",
+      "quote": "Every transform that resolves names against a component's declarations MUST honor this, flattening's dot-namespacing (esm-libraries-spec §4.7.5 step 2) in particular",
+      "class": "semantic",
+      "phase": 5,
+      "area": "flatten",
+      "note": "A faq binder (output_idx entry or ranges key) shadows a same-named component variable throughout the binding node's children; flatten prefixes only the free occurrences. Pinned by tests/scoping/index_symbol_shadows_variable.esm in the flatten conformance corpus."
+    },
+    {
       "id": "spec.4.3.1.ragged-values-not-gathered",
       "section": "4.3.1",
       "quote": "MUST be rejected by `validate()` with `ragged_values_not_gathered` (§9.6.6)",
