@@ -965,6 +965,7 @@ func buildUnitRegistry() map[string]Unit {
 	r["Pa"] = r["N"].Divide(r["m"].Power(2))
 	r["J"] = r["N"].Multiply(r["m"])
 	r["kJ"] = Unit{Dim: r["J"].Dim, Scale: 1000, Exact: exactPow10(3)}
+	r["MJ"] = Unit{Dim: r["J"].Dim, Scale: 1e6, Exact: exactPow10(6)}
 	r["cal"] = Unit{Dim: r["J"].Dim, Scale: 4.184, Exact: exactDecimal("4.184")}
 	r["kcal"] = Unit{Dim: r["J"].Dim, Scale: 4184, Exact: exactInteger(4184)}
 	r["W"] = r["J"].Divide(r["s"])

@@ -3379,6 +3379,7 @@ fn build_base_units() -> HashMap<String, Unit> {
         ("umol", "mol", -6),
         ("nmol", "mol", -9),
         ("kW", "W", 3),
+        ("MJ", "J", 6),
         ("MW", "W", 6),
         ("hPa", "Pa", 2),
         ("kPa", "Pa", 3),

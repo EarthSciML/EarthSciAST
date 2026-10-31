@@ -231,6 +231,27 @@
       "why": "esm-spec 4.8.1: exactly 1000 cal."
     },
     {
+      "canonical": "J",
+      "scale_exact": "1000000",
+      "scale_to_canonical": 1000000.0,
+      "units": "MJ",
+      "why": "esm-spec 4.8.1: the megajoule, exactly 1e6 J. A flat-table entry, not `M` composed with `J`: `M` alone is MOLAR."
+    },
+    {
+      "canonical": "m^2/s^2",
+      "scale_exact": "1000000",
+      "scale_to_canonical": 1000000.0,
+      "units": "MJ/kg",
+      "why": "EPA MOVES tabulates fuel energy content in MJ/kg. Without `MJ` a document must either declare a wrong unit or carry a hidden factor of 1000 through `kJ`."
+    },
+    {
+      "canonical": "m^2/s^2",
+      "scale_exact": "1000000000000",
+      "scale_to_canonical": 1000000000000.0,
+      "units": "MJ/kg/ppm",
+      "why": "A MOVES fuel-property sensitivity: energy content per ppm. The left-to-right solidus (4.8.2) reads it as (MJ/kg)/ppm, so the scale is 1e6 / 1e-6 = 1e12 EXACTLY -- dividing by `ppm` multiplies by 1e6."
+    },
+    {
       "canonical": "1",
       "scale_exact": "1/1000000",
       "scale_to_canonical": 1e-06,
@@ -397,6 +418,22 @@
     {
       "units": "pound",
       "why": "As `mile`: the mass is spelled `lb` and there is deliberately one spelling."
+    },
+    {
+      "units": "GJ",
+      "why": "`MJ` and `MW` are flat-table entries, not a mega-/giga- prefix mechanism (4.8.1). A binding that resolves `MJ` through its units library's prefix rules (Unitful, pint, uom) would accept this too."
+    },
+    {
+      "units": "MPa",
+      "why": "As `GJ`: `M` composes with nothing. `Pa`, `hPa` and `kPa` are the pressure keys."
+    },
+    {
+      "units": "MWh",
+      "why": "As `GJ`: `Wh` and `kWh` are table keys and `MWh` is not, so a prefix leak on `Wh` shows up here."
+    },
+    {
+      "units": "Mmol",
+      "why": "`M` alone is MOLAR (4.8.1), which is exactly why `MJ` is a table entry and not mega- times `J`. A prefix rule would read this as megamole."
     },
     {
       "units": "  ",
