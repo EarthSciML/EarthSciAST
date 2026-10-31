@@ -55,7 +55,7 @@ pub(in crate::simulate_array::tape) struct TupleFrame {
 }
 
 /// One contracted dimension's bound, before an output cell is chosen.
-enum DimBound {
+pub(super) enum DimBound {
     Static(i64, i64),
     /// `[1, offsets[parent...]]`: the offsets factor's row-major values and
     /// shape (empty for a scalar), and where each parent is bound.
@@ -70,7 +70,7 @@ enum DimBound {
 /// the whole cell) or another contracted dim (bound by an outer level of the
 /// cell's nest, esm-spec §4.3.1 "Ragged ranges").
 #[derive(Clone, Copy)]
-enum Parent {
+pub(super) enum Parent {
     Output(usize),
     Contracted(usize),
 }
@@ -78,14 +78,14 @@ enum Parent {
 impl DimBound {
     /// Does this bound read a contracted dim, so it is only known once that
     /// dim is bound?
-    fn reads_contracted(&self) -> bool {
+    pub(super) fn reads_contracted(&self) -> bool {
         matches!(self, DimBound::Ragged { parents, .. }
             if parents.iter().any(|p| matches!(p, Parent::Contracted(_))))
     }
 
     /// The bound under the output `cell` and the contracted values `cur`
     /// bound so far.
-    fn at(&self, cell: &[i64], cur: &[i64]) -> (i64, i64) {
+    pub(super) fn at(&self, cell: &[i64], cur: &[i64]) -> (i64, i64) {
         match self {
             DimBound::Static(l, h) => (*l, *h),
             DimBound::Ragged {
@@ -109,7 +109,7 @@ struct EqCand<'a> {
 }
 
 /// A join gate resolved from build-time data.
-struct BuiltGate {
+pub(super) struct BuiltGate {
     sym_src: String,
     sym_tgt: String,
     index: OverlapIndex,
@@ -123,10 +123,10 @@ struct BuiltGate {
 }
 
 /// The admitted tuple list: per output cell a contiguous run.
-struct TupleList {
-    rows: Vec<u32>,
+pub(super) struct TupleList {
+    pub(super) rows: Vec<u32>,
     /// One column per loop symbol (output names, then contracted names).
-    cols: Vec<Vec<f64>>,
+    pub(super) cols: Vec<Vec<f64>>,
 }
 
 impl TupleList {
@@ -159,19 +159,19 @@ enum Src<'a> {
 /// [`TapeBuilder::lower_tuple_list`] lowers, and what
 /// [`TapeBuilder::fold_tuple_contraction`] folds a sub-box of at a time.
 #[derive(Clone, Copy)]
-struct TupleSpec<'a> {
-    idx_names: &'a [String],
-    ranges: &'a [(i64, i64)],
-    body: &'a Expr,
-    contract_names: &'a [String],
-    bounds: &'a [DimBound],
-    gates: &'a [BuiltGate],
-    reduce: ReduceKind,
-    filter: Option<&'a Expr>,
+pub(super) struct TupleSpec<'a> {
+    pub(super) idx_names: &'a [String],
+    pub(super) ranges: &'a [(i64, i64)],
+    pub(super) body: &'a Expr,
+    pub(super) contract_names: &'a [String],
+    pub(super) bounds: &'a [DimBound],
+    pub(super) gates: &'a [BuiltGate],
+    pub(super) reduce: ReduceKind,
+    pub(super) filter: Option<&'a Expr>,
     /// What each cell's fold starts from: the semiring's identity, or the
     /// accumulator the previous window of the same cell's run left
     /// ([`TapeBuilder::fold_cell_in_windows`]).
-    init: f64,
+    pub(super) init: f64,
 }
 
 /// The default [`tuple_list_budget`]: about a million tuples. A tuple list
@@ -311,7 +311,7 @@ impl TapeBuilder<'_> {
     /// The tuple-list form itself (module docs): lower the filter and the
     /// body once over the 1-D box of `list`, `spec`'s admitted tuples, and
     /// fold each cell's run with one [`Instr::SegReduce`].
-    fn lower_tuple_list(
+    pub(super) fn lower_tuple_list(
         &mut self,
         spec: &TupleSpec<'_>,
         list: TupleList,
@@ -764,7 +764,7 @@ impl TapeBuilder<'_> {
 
     /// Resolve each contracted dimension's bound: a static interval as it
     /// stands, a ragged one against its offsets factor's build-time values.
-    fn tuple_dim_bounds(
+    pub(super) fn tuple_dim_bounds(
         &mut self,
         idx_names: &[String],
         contract_names: &[String],
@@ -1461,7 +1461,7 @@ fn next_cell(cell: &mut [i64], ranges: &[(i64, i64)]) {
 /// The contracted dims' nest order: the odometer's own order (first dim
 /// outermost), except that a ragged dim moves after every contracted parent
 /// it reads, stably — the interpreter's `parent_first_order`.
-fn parent_first_order(bounds: &[DimBound]) -> Vec<usize> {
+pub(super) fn parent_first_order(bounds: &[DimBound]) -> Vec<usize> {
     let n = bounds.len();
     let parents_of = |i: usize| -> Vec<usize> {
         match &bounds[i] {
@@ -1492,7 +1492,7 @@ fn parent_first_order(bounds: &[DimBound]) -> Vec<usize> {
 /// once every outer level is bound, ascending at every level: the order the
 /// interpreter's `fold_dependent_nest` visits. `cur` stays indexed by
 /// contracted position, so the tuple's columns keep their usual order.
-fn walk_nest(
+pub(super) fn walk_nest(
     bounds: &[DimBound],
     order: &[usize],
     depth: usize,
@@ -1750,7 +1750,7 @@ fn intersect(slot: &mut Option<Vec<i64>>, parts: &[i64]) -> bool {
 /// parents' values (from the output `cell` or the contracted values `cur`),
 /// rounded; `0` for a parent below 1 or out of range, or for a factor whose
 /// rank is not the parent count.
-fn ragged_bound(
+pub(super) fn ragged_bound(
     shape: &[usize],
     vals: &[f64],
     parents: &[Parent],

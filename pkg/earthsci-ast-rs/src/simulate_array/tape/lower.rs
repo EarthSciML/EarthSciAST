@@ -93,6 +93,7 @@ fn tape_index(n: usize, table: &str) -> LResult<u32> {
 
 type LResult<T> = Result<T, Bail>;
 
+mod scatter;
 mod standalone;
 mod tuples;
 
@@ -608,6 +609,11 @@ pub(crate) struct TapeBuilder<'m> {
     /// Nested conditional-branch buffers (top = innermost).
     branch_bufs: Vec<Vec<Tagged>>,
     hoist: FxHashMap<(BoxKey, VnKey), LV>,
+    /// Expressions the builder synthesized and lowered (the equality
+    /// scatter's rewritten bodies and filters). Value numbering keys a node by
+    /// its address, so each is held as long as the builder is: a freed node's
+    /// address reused by another would otherwise hit its stale entry.
+    held_exprs: Vec<Expr>,
     /// Hoist insertions of the CURRENT rule (rollback on bail).
     hoist_journal: Vec<(BoxKey, VnKey)>,
     /// Observed values defined so far, in rule order.
@@ -891,6 +897,7 @@ impl<'m> TapeBuilder<'m> {
             scope_frames: Vec::new(),
             branch_bufs: Vec::new(),
             hoist: FxHashMap::default(),
+            held_exprs: Vec::new(),
             hoist_journal: Vec::new(),
             obs_defined: FxHashMap::default(),
             fault_first: None,
@@ -5120,6 +5127,27 @@ impl<'m> TapeBuilder<'m> {
                 body,
                 reduce,
             );
+        }
+        // A filter that pins an output index by equality: one pass over the
+        // contracted box, each admitted term scattered into its cell
+        // (esm-spec §4.3.1, [`scatter`]). A body the tuple-list form cannot
+        // lower keeps the dense lowering below.
+        if !contract_names.is_empty() && filter.is_some() {
+            let txn = self.sub_txn();
+            match self.lower_equality_scatter(
+                idx_names,
+                &lo,
+                &shape,
+                body,
+                contract_names,
+                contract_dims,
+                reduce,
+                filter,
+            ) {
+                Ok(Some(v)) => return Ok(v),
+                Ok(None) => {}
+                Err(_) => self.sub_rollback(txn),
+            }
         }
         self.push_scope();
         let v = if contract_names.is_empty() {
