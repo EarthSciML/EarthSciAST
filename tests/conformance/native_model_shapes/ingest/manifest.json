@@ -45,6 +45,15 @@
     "cells_table": "data/cells.parquet"
    },
    "note": "An overlap-gated containment binning over ingested cell envelopes (every isrm E_* rule)."
+  },
+  {
+   "id": "assert_ingested_parameter",
+   "path": "assert_ingested_parameter.esm",
+   "model": "AssertIngestedParameter",
+   "url_overrides": {
+    "rows_table": "data/rows.parquet"
+   },
+   "note": "An inline assertion naming the data-fed parameter itself, and a state integrating it (moves finding F43)."
   }
  ]
 }
