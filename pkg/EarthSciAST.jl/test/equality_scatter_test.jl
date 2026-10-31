@@ -155,6 +155,65 @@ _sx_rt(e) = _sx("+", e, "zp")
 
 const _SX_CANCEL = (1.0e16, 1.0, -1.0e16, 1.0)
 
+# A scatter whose box is a NEST: `D(c[j(, m)]) = ⊕_{p, k ∈ members(p) : j == key}`,
+# `k` ranging over the ragged `members` of the contracted parent `p` (row `p`'s
+# members are `rows[p]`, stored as the offsets `rowLen` and the padded values
+# `rowMem`). The body reads `u` at the member; `keyf(member)` is the key.
+function _sx_ragged_doc(
+        ncell::Int, rows::Vector{Vector{Int}}; pname = "r", cname = "k",
+        keyf = m -> m, nfree = 0, reduce = "+", child_first = true, extra = nothing,
+        rt = false
+    )
+    nrow = length(rows)
+    nmem = max(1, maximum(r -> isempty(r) ? 0 : maximum(r), rows; init = 0), ncell)
+    maxlen = max(1, maximum(length, rows; init = 0))
+    mem = [vcat(r, zeros(Int, maxlen - length(r))) for r in rows]
+    outs = nfree > 0 ? ["j", "m"] : ["j"]
+    osets = nfree > 0 ? ["O1", "F"] : ["O1"]
+    isets = Dict{String, Any}(
+        "O1" => Dict("kind" => "interval", "size" => ncell),
+        "U1" => Dict("kind" => "interval", "size" => nmem),
+        "rows" => Dict("kind" => "interval", "size" => nrow),
+        "maxLen" => Dict("kind" => "interval", "size" => maxlen),
+        "members" => Dict(
+            "kind" => "ragged", "of" => ["rows"], "offsets" => "rowLen", "values" => "rowMem"
+        ),
+    )
+    nfree > 0 && (isets["F"] = Dict("kind" => "interval", "size" => nfree))
+    vars = Dict{String, Any}(
+        "u" => Dict("type" => "unknown", "shape" => ["U1"], "default" => 0.0),
+        "c" => Dict("type" => "unknown", "shape" => osets, "default" => 0.0),
+        "rowLen" => Dict("type" => "unknown", "shape" => ["rows"]),
+        "rowMem" => Dict("type" => "unknown", "shape" => ["rows", "maxLen"]),
+        "zp" => Dict("type" => "parameter", "default" => 0.0),
+    )
+    member = _sxi("rowMem", pname, cname)
+    e = keyf(member)
+    filt = _sx("==", "j", rt ? _sx_rt(e) : e)
+    extra === nothing || (filt = _sx("and", filt, extra))
+    body = _sx("*", _sxi("u", member), _sx("+", 1.0, _sx("*", 0.0, pname)))
+    nfree > 0 && (body = _sx("*", body, _sx("+", "m", 0.5)))
+    cr = cname => Dict("from" => "members", "of" => [pname])
+    pr = pname => Dict("from" => "rows")
+    rng = Pair{String, Any}[(child_first ? (cr, pr) : (pr, cr))...]
+    for (o, s) in zip(outs, osets)
+        push!(rng, o => Dict("from" => s))
+    end
+    rhs = _sx("faq"; output_idx = Any[outs...], expr = body, reduce = reduce, filter = filt, ranges = Dict{String, Any}(rng))
+    eqs = Any[
+        Dict("lhs" => _sx_lhs("u", ["a"], ["U1"]), "rhs" => _sx("faq"; output_idx = Any["a"], expr = 0.0, ranges = Dict("a" => Dict("from" => "U1")))),
+        Dict("lhs" => "rowLen", "rhs" => _sxk(Int[length(r) for r in rows])),
+        Dict("lhs" => "rowMem", "rhs" => _sxk(mem)),
+        Dict("lhs" => _sx_lhs("c", outs, osets), "rhs" => rhs),
+    ]
+    return Dict{String, Any}(
+        "esm" => "1.2.0", "metadata" => Dict("name" => "sxr"), "index_sets" => isets,
+        "models" => Dict("M" => Dict{String, Any}("variables" => vars, "equations" => eqs))
+    )
+end
+
+_sx_ragged_ics(uval) = Dict{String, Any}("u[$i]" => v for (i, v) in enumerate(uval))
+
 @testset "one-pass equality scatter (scatter.jl)" begin
 
     @testset "+ on cancelling data keeps the visit order" begin
@@ -405,11 +464,10 @@ const _SX_CANCEL = (1.0e16, 1.0, -1.0e16, 1.0)
         _sx_check(doc, _sx_ics([n], i -> _SX_CANCEL[mod1(i, 4)] * i); form = :shift)
     end
 
-    @testset "a ragged range whose parent is contracted is left to the nest" begin
+    @testset "a ragged range whose parent is contracted" begin
         # `pm[j] = Σ_{r, k ∈ row r : j == block(rowMem[r,k])}`: `k`'s range reads
-        # the contracted `r`, so the terms are a nest (parent outer), not the
-        # product the scatter walks. The scatter declines it and the nest's
-        # table form takes it, equal to the interpreter.
+        # the contracted `r`, so the box is a nest (parent outer), not a
+        # product. The scatter walks that nest in its own order.
         path = joinpath(
             @__DIR__, "..", "..", "..", "tests", "conformance", "faq_equality_scatter",
             "fixtures", "ragged_contracted_parent.esm"
@@ -425,7 +483,74 @@ const _SX_CANCEL = (1.0e16, 1.0, -1.0e16, 1.0)
             (Float64[du[vm[nm]] for nm in names], tally)
         end
         @test _sx_bits(dus[1][1]) == _sx_bits(dus[2][1])
-        @test _sx_fired(dus[1][2]) == 0
+        @test get(dus[1][2], :equality_scatter_table, 0) == 1
+        @test _sx_fired(dus[2][2]) == 0
+
+        # Two cancelling pairs into cell 1 from two different parents (rows 1
+        # and 2): `((1e16 + 1) - 1e16) + 1` is 1.0 only in the nest's order.
+        # Members 5, 6 of row 3 go to cells 2 and 3; row 4 is empty.
+        rows = [[1, 2], [3, 4], [5, 6], Int[]]
+        cmap = [1, 1, 1, 1, 2, 3]
+        uval = [1.0e16, 1.0, -1.0e16, 1.0, 2.5, -0.0]
+        key(m) = _sxi(_sxk(cmap), m)
+        for rt in (false, true), pname in ("r", "a"), child_first in (true, false)
+            # `r` sorts after the child `k`, `a` before it; the child range is
+            # declared first or last.
+            d = _sx_ragged_doc(3, rows; keyf = key, rt = rt, pname = pname, child_first = child_first)
+            a, _ = _sx_check(d, _sx_ragged_ics(uval); form = rt ? :pass : :table)
+            @test a.du == [1.0, 2.5, 0.0]
+        end
+        # max and min with a NaN in a cell's window; and *.
+        uvn = [1.0, NaN, 3.0, -2.0, 5.0, 0.5]
+        for red in ("+", "*", "max", "min"), rt in (false, true)
+            d = _sx_ragged_doc(3, rows; keyf = key, rt = rt, reduce = red)
+            _sx_check(d, _sx_ragged_ics(uvn); form = rt ? :pass : :table)
+        end
+        # A free output index stays an outer loop.
+        for rt in (false, true)
+            d = _sx_ragged_doc(3, rows; keyf = key, rt = rt, nfree = 3)
+            _sx_check(d, _sx_ragged_ics(uval); form = rt ? :pass : :table)
+        end
+        # Keys outside the axis or not an integer are skipped.
+        bad = [1, 0, 7, 2, -1, 3]
+        for rt in (false, true), kf in (m -> _sxi(_sxk(bad), m), m -> _sx("/", _sxi(_sxk(cmap), m), 2))
+            d = _sx_ragged_doc(3, rows; keyf = kf, rt = rt)
+            _sx_check(d, _sx_ragged_ics(uval); form = rt ? :pass : :table)
+        end
+        # A remaining conjunct that reads the parent.
+        for rt in (false, true)
+            d = _sx_ragged_doc(3, rows; keyf = key, rt = rt, extra = _sx("<=", "r", 2))
+            _sx_check(d, _sx_ragged_ics(uval); form = rt ? :pass : :table)
+        end
+    end
+
+    @testset "a ragged nest scatter: the call allocates nothing and scales linearly" begin
+        for rt in (false, true)
+            times = Float64[]
+            builds = Float64[]
+            for n in (10_000, 100_000)
+                # About five members per row, one row per cell, each cell
+                # reached from several rows. The members stay near their row,
+                # so the timing measures the pass and not cache misses.
+                rows = [Int[mod1(r + 7 * q, n) for q in 1:(3 + r % 5)] for r in 1:n]
+                d = _sx_ragged_doc(n, rows; rt = rt)
+                ESX._reset_cascade_tally!()
+                bt = @elapsed (f!, u0, p, _t, vm) = ESX._build_evaluator(d; compiler = :native)
+                t = copy(ESX._CASCADE_TALLY)
+                @test _sx_fired(t) == 1
+                u = Float64[sin(1.3 * i) for i in eachindex(u0)]
+                du = similar(u)
+                f!(du, u, p, 0.0)
+                f!(du, u, p, 0.0)
+                @test (@allocated f!(du, u, p, 0.0)) == 0
+                push!(times, minimum(@elapsed(f!(du, u, p, 0.0)) for _ in 1:5))
+                push!(builds, bt)
+            end
+            # Ten times the cells and points: far from the hundredfold a
+            # per-cell walk of the whole nest costs.
+            @test times[2] / times[1] < 30.0
+            @test builds[2] < 120.0
+        end
     end
 
     @testset "EarthSciASTDiff product documents" begin

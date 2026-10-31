@@ -551,7 +551,16 @@ function _contract_nest(
         contract_names, rspecs, deps, idx_env::Dict{String, Int},
         const_arrays::AbstractDict
     )
-    nc = length(contract_names)
+    tuples = Vector{Int}[]
+    _walk_contract_nest(contract_names, rspecs, deps, idx_env, const_arrays) do cur
+        push!(tuples, copy(cur))
+    end
+    return _ContractNest(tuples)
+end
+
+# The nest's levels, outermost first (see `_contract_nest`).
+function _contract_nest_order(deps)
+    nc = length(deps)
     order = Int[]
     placed = falses(nc)
     while length(order) < nc
@@ -566,24 +575,41 @@ function _contract_nest(
         placed[nxt] = true
         push!(order, nxt)
     end
+    return order
+end
+
+# Walk the nest, calling `emit(cur)` with each contracted tuple (in
+# `contract_names` order; `cur` is reused, so copy it to keep it) in the order
+# `_contract_nest` lists them. Every visitor of a nest goes through here, so the
+# one-pass scatter (scatter.jl) and the per-cell expansion see the same order.
+function _walk_contract_nest(
+        emit::F, contract_names, rspecs, deps, idx_env::Dict{String, Int},
+        const_arrays::AbstractDict
+    ) where {F}
+    order = _contract_nest_order(deps)
     env = Dict{String, Int}(idx_env)
-    cur = zeros(Int, nc)
-    tuples = Vector{Int}[]
-    function walk(depth)
-        if depth > nc
-            push!(tuples, copy(cur))
-            return nothing
-        end
-        d = order[depth]
-        for v in _expand_contract_range(rspecs[d], env, const_arrays)
-            cur[d] = v
-            env[contract_names[d]] = v
-            walk(depth + 1)
-        end
+    cur = zeros(Int, length(contract_names))
+    _walk_contract_nest_level(emit, 1, order, cur, env, contract_names, rspecs, const_arrays)
+    return nothing
+end
+
+function _walk_contract_nest_level(
+        emit::F, depth::Int, order::Vector{Int}, cur::Vector{Int},
+        env::Dict{String, Int}, contract_names, rspecs, const_arrays
+    ) where {F}
+    if depth > length(order)
+        emit(cur)
         return nothing
     end
-    walk(1)
-    return _ContractNest(tuples)
+    d = order[depth]
+    for v in _expand_contract_range(rspecs[d], env, const_arrays)
+        cur[d] = v
+        env[contract_names[d]] = v
+        _walk_contract_nest_level(
+            emit, depth + 1, order, cur, env, contract_names, rspecs, const_arrays
+        )
+    end
+    return nothing
 end
 
 # The contracted iterators of one cell under `idx_env`: each range expanded
