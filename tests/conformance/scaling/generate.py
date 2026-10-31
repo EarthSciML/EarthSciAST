@@ -471,6 +471,57 @@ def makearray_nested_sum(n):
     }
 
 
+def band_transpose(n):
+    """A tridiagonal transpose product spelled as two equality-scatter faqs.
+
+    D(u[j]) = -(L[j] + U[j] + c[j] u[j]) with L[j] = sum_{i : i + 1 == j} a[i] u[i]
+    and U[j] = sum_{i : j == i - 1} b[i] u[i] (both spellings of the equality
+    conjunct, esm-spec 4.3.1): the transpose of the band d/du[i+1] = a[i],
+    d/du[i-1] = b[i], the shape of an EarthSciASTDiff J^T lambda (issue #613).
+    Evaluated literally each scatter is N^2 filter tests; one pass over i is
+    O(N). a, b and c are non-uniform formulas of their index, observeds a
+    compiler must materialize and read on every call.
+    """
+    ri = {"i": {"from": "x"}}
+    rj = {"j": {"from": "x"}}
+    rji = {"j": {"from": "x"}, "i": {"from": "x"}}
+    model = {
+        "variables": {
+            "u": {"type": "unknown", "units": "1", "shape": ["x"], "default": 1.0},
+            "a": {"type": "unknown", "units": "1", "shape": ["x"]},
+            "b": {"type": "unknown", "units": "1", "shape": ["x"]},
+            "c": {"type": "unknown", "units": "1", "shape": ["x"]},
+            "L": {"type": "unknown", "units": "1", "shape": ["x"]},
+            "U": {"type": "unknown", "units": "1", "shape": ["x"]},
+        },
+        "equations": [
+            {"lhs": "a", "rhs": faq(op("*", 0.001, op("+", 1, op("*", 0.5, op("sin", "i")))), ["i"], ri)},
+            {"lhs": "b", "rhs": faq(op("*", 0.002, op("+", 1, op("*", 0.25, op("sin", op("*", 2, "i"))))), ["i"], ri)},
+            {"lhs": "c", "rhs": faq(op("*", 0.003, op("+", 1, op("*", 0.5, op("sin", op("*", 3, "i"))))), ["i"], ri)},
+            {
+                "lhs": "L",
+                "rhs": faq(op("*", ix("a", "i"), ix("u", "i")), ["j"], rji, reduce="+",
+                           filter=op("==", op("+", "i", 1), "j")),
+            },
+            {
+                "lhs": "U",
+                "rhs": faq(op("*", ix("b", "i"), ix("u", "i")), ["j"], rji, reduce="+",
+                           filter=op("==", "j", op("-", "i", 1))),
+            },
+            {
+                "lhs": faq_lhs("u", ["j"], rj),
+                "rhs": faq(
+                    op("-", op("+", ix("L", "j"), ix("U", "j"), op("*", ix("c", "j"), ix("u", "j")))),
+                    ["j"],
+                    rj,
+                ),
+            },
+        ],
+    }
+    desc = f"tridiagonal transpose product by two equality-scatter faqs over {n} cells"
+    return doc("band_transpose", desc, {"x": n}, {"Band": model}), {"cells": n, "states": n}
+
+
 def regrid(n):
     """Conservative regrid of a decaying source field onto a shifted target strip grid.
 
@@ -1228,6 +1279,7 @@ FAMILIES = {
     "suffix_scan": suffix_scan,
     "ragged_contraction": ragged_contraction,
     "makearray_nested_sum": makearray_nested_sum,
+    "band_transpose": band_transpose,
 }
 
 

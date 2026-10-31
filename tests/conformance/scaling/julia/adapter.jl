@@ -318,6 +318,8 @@ function canonical_names(fam, entry)
         return _rowmajor("Mesh.u", (n,))
     elseif fam == "makearray_nested_sum"
         return vcat(_rowmajor("Band.u", (n,)), _rowmajor("Band.J", (n,)))
+    elseif fam == "band_transpose"
+        return _rowmajor("Band.u", (n,))
     elseif fam == "scalar_chemistry"
         return ["Boxes." * s * "_" * string(b) for b in 1:sh("boxes") for s in POLLU_SPECIES]
     end

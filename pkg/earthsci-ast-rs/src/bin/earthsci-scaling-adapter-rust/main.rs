@@ -217,7 +217,8 @@ fn canonical_vars(family: &str, doc: &Value) -> Result<Vec<CanonVar>, String> {
         | "join_keyed"
         | "makearray_scan"
         | "suffix_scan"
-        | "ragged_contraction" => vec!["u"],
+        | "ragged_contraction"
+        | "band_transpose" => vec!["u"],
         "transport_3d" => vec!["q"],
         "source_receptor" => vec!["c", "e"],
         "makearray_nested_sum" => vec!["u", "J"],
@@ -472,6 +473,18 @@ fn build_hand_loop(family: &str, doc: &Value, shape: &Value) -> Result<HandLoop,
             n: set_size("x"),
             kd: param_default(doc, "kd")?,
         },
+        "band_transpose" => {
+            let formula = |scale: f64, amp: f64, k: f64| {
+                (1..=set_size("x"))
+                    .map(|i| scale * (1.0 + amp * (k * i as f64).sin()))
+                    .collect()
+            };
+            HandLoop::BandTranspose {
+                a: formula(0.001, 0.5, 1.0),
+                b: formula(0.002, 0.25, 2.0),
+                c: formula(0.003, 0.5, 3.0),
+            }
+        }
         other => return Err(format!("no hand loop for family {other:?}")),
     })
 }

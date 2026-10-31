@@ -888,3 +888,36 @@ end
 end
 
 HAND_LOOPS["makearray_nested_sum"] = HandLoop(_mns_setup, _mns_row!)
+
+# ---------------------------------------------------------------------------
+# Band transpose: D(u[j]) = -((a[j-1] u[j-1] + b[j+1] u[j+1]) + c[j] u[j]),
+# a[i] = 0.001 (1 + 0.5 sin(i)), b[i] = 0.002 (1 + 0.25 sin(2i)),
+# c[i] = 0.003 (1 + 0.5 sin(3i))
+# ---------------------------------------------------------------------------
+#
+# The document spells the two off-diagonal terms as equality-scatter faqs
+# (L[j] = sum_{i : i+1 == j} a[i] u[i], U[j] = sum_{i : j == i-1} b[i] u[i]);
+# each cell receives one term from each, so the loop reads them as gathers, one
+# pass over the cells. A missing neighbour's term is 0.
+
+function _band_setup(prob, doc, entry)
+    n = Int(entry["n_cells"])
+    o = _block_offset(prob.var_map, "Band.u", (n,))
+    a = [0.001 * (1 + 0.5 * sin(i)) for i in 1:n]
+    b = [0.002 * (1 + 0.25 * sin(2i)) for i in 1:n]
+    c = [0.003 * (1 + 0.5 * sin(3i)) for i in 1:n]
+    return (; o, n, a, b, c, nrows = n)
+end
+
+@inline function _band_row!(du, u, t, st, r)
+    (; o, n, a, b, c) = st
+    j = r
+    @inbounds begin
+        lower = j > 1 ? a[j - 1] * u[o + j - 1] : 0.0
+        upper = j < n ? b[j + 1] * u[o + j + 1] : 0.0
+        du[o + j] = -((lower + upper) + c[j] * u[o + j])
+    end
+    return nothing
+end
+
+HAND_LOOPS["band_transpose"] = HandLoop(_band_setup, _band_row!)
