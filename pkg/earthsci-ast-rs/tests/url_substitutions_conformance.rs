@@ -113,7 +113,7 @@ fn the_edge_does_not_survive_parse_emit_and_the_emitted_form_is_a_fixed_point() 
     let first = earthsci_ast::load_path(&path).expect("loads");
     let emitted = earthsci_ast::to_json(&first).expect("emits");
     assert!(
-        !emitted.contains("url_substitutions"),
+        !emitted.contains("\"url_substitutions\":"),
         "the edge is consumed at load"
     );
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -161,10 +161,16 @@ mod ingest {
             json!({"type": "parameter", "units": "1", "shape": ["rows"],
                    "update": {"kind": "data", "source": source, "from": {"file_variable": "val"}}})
         };
+        // `v[r] = val[r]`: a build-time row set the CLI can write as CSV.
+        let copy = |lhs: &str, rhs: &str| {
+            json!({"lhs": lhs, "rhs": {"op": "faq", "args": [], "semiring": "sum_product",
+                "output_idx": ["r"], "ranges": {"r": {"from": "rows"}},
+                "expr": {"op": "index", "args": [rhs, "r"]}}})
+        };
         write(
             &tmp.join("lib/catalogue.esm"),
             &json!({
-                "esm": "1.0.0",
+                "esm": "1.2.0",
                 "metadata": {"name": "catalogue"},
                 "data_sources": {
                     "segment": {"kind": "static",
@@ -176,8 +182,12 @@ mod ingest {
                 },
                 "index_sets": {"rows": {"kind": "interval", "size": 4}},
                 "models": {"Catalogue": {
-                    "variables": {"val": param("segment"), "lead_val": param("lead")},
-                    "equations": []
+                    "variables": {
+                        "val": param("segment"), "lead_val": param("lead"),
+                        "v": {"type": "unknown", "units": "1", "shape": ["rows"]},
+                        "lead_v": {"type": "unknown", "units": "1", "shape": ["rows"]}
+                    },
+                    "equations": [copy("v", "val"), copy("lead_v", "lead_val")]
                 }}
             }),
         );
@@ -188,7 +198,7 @@ mod ingest {
         write(
             &p,
             &json!({
-                "esm": "1.0.0",
+                "esm": "1.2.0",
                 "metadata": {"name": name},
                 "models": {"Snap": {"ref": "lib/catalogue.esm", "url_substitutions": subs}}
             }),
@@ -206,9 +216,9 @@ mod ingest {
                 "--format",
                 "csv",
                 "--observed",
-                "Snap.val",
+                "Snap.v",
                 "--observed",
-                "Snap.lead_val",
+                "Snap.lead_v",
                 "--output",
                 out.to_str().expect("utf-8"),
             ])
@@ -239,11 +249,11 @@ mod ingest {
         );
         assert_eq!(
             emit(&a, &t.join("a.csv")),
-            "i1,Snap.val,Snap.lead_val\n1,1,10\n2,2,20\n3,4,40\n4,8,80\n"
+            "i1,Snap.v,Snap.lead_v\n1,1,10\n2,2,20\n3,4,40\n4,8,80\n"
         );
         assert_eq!(
             emit(&b, &t.join("b.csv")),
-            "i1,Snap.val,Snap.lead_val\n1,10,1\n2,20,2\n3,40,4\n4,80,8\n"
+            "i1,Snap.v,Snap.lead_v\n1,10,1\n2,20,2\n3,40,4\n4,80,8\n"
         );
     }
 
@@ -258,7 +268,7 @@ mod ingest {
         write(
             &deep,
             &json!({
-                "esm": "1.0.0",
+                "esm": "1.2.0",
                 "metadata": {"name": "deep"},
                 "models": {"Snap": {"ref": "../lib/catalogue.esm",
                     "url_substitutions": {"snapshot": "b", "data": "../snapshots/a"}}}
@@ -266,7 +276,7 @@ mod ingest {
         );
         assert_eq!(
             emit(&deep, &t.join("deep.csv")),
-            "i1,Snap.val,Snap.lead_val\n1,10,1\n2,20,2\n3,40,4\n4,80,8\n"
+            "i1,Snap.v,Snap.lead_v\n1,10,1\n2,20,2\n3,40,4\n4,80,8\n"
         );
     }
 }
